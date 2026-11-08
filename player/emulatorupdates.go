@@ -4,19 +4,23 @@ package main
 //
 // Two different things live here, because the hardware forces the distinction:
 //
-//   - libretro cores. The buildbot publishes a an aarch64 index and one zip
-//     per core. JukaHub compares the CRC32 the index states with the CRC32 of
-//     the installed binary and, when they differ, installs the newer build into
-//     the existing core pool (data/performance/cores/<core>/<date>/). This pass
-//     only fills the pool; runInstalledCoreUpdates is what makes a build active,
-//     and it keeps the binary it replaces as a .bak (pruned to maxCoreBackups).
-//     The Emulators page does that on a press, and startCoreAutoUpdate does it
-//     by itself once a day on the handheld — see emulatorautoupdate.go.
-//   - standalone emulators (PPSSPP, mGBA, Flycast). Their upstream releases are
-//     built for desktop Linux, not for this firmware's userspace and launcher
-//     scripts, so they are fetched to data/emulator-updates/<app>/<tag>/ and
-//     reported, never dropped over an installed emulator. Nothing here can
-//     break a working install in the background.
+//   - libretro cores. The buildbot publishes one index and one zip per core for
+//     each platform: aarch64 shared objects for the handheld, x86_64 DLLs for a
+//     portable RetroArch on Windows (emuCoreIndexURL picks the channel). JukaHub
+//     compares the CRC32 the index states with the CRC32 of the installed binary
+//     and, when they differ, installs the newer build into the existing core
+//     pool (data/performance/cores/<core>/<date>/). This pass only fills the
+//     pool; runInstalledCoreUpdates is what makes a build active, and it keeps
+//     the binary it replaces as a .bak (pruned to maxCoreBackups). The Emulators
+//     page does that on a press, and startCoreAutoUpdate does it by itself once a
+//     day on the handheld — see emulatorautoupdate.go.
+//   - standalone emulators on the handheld (PPSSPP, mGBA, Flycast). Their
+//     upstream releases are built for desktop Linux, not for this firmware's
+//     userspace and launcher scripts, so they are fetched to
+//     data/emulator-updates/<app>/<tag>/ and reported, never dropped over an
+//     installed emulator. Nothing here can break a working install in the
+//     background. (Windows installs its standalone emulators for real, from
+//     their GitHub releases — see emuwininstall.go.)
 //
 // The index is a plain listing, not a signed document: its CRC is a corruption
 // check, not proof of authorship. An activation — on a press or automatic — is
@@ -47,23 +51,53 @@ const (
 	// retroArchCoreIndexURL is the ARM64 buildbot index RetroArch's own core
 	// updater reads. There is no stable aarch64 tree, so this is the nightly
 	// channel; a build can be newer and still be worse than what is installed,
-	// which is why activation stays manual.
+	// which is why every activation keeps the build it replaced.
 	retroArchCoreIndexURL = "https://buildbot.libretro.com/nightly/linux/aarch64/latest/.index-extended"
 	retroArchCoreBaseURL  = "https://buildbot.libretro.com/nightly/linux/aarch64/latest/"
-	coreUpdateMaxDownload = 96 << 20
-	standaloneMaxDownload = 256 << 20
+	// retroArchWinCoreIndexURL is the same listing for the x86_64 DLLs a
+	// portable Windows RetroArch loads: RetroArch's own Windows core updater
+	// reads this tree.
+	retroArchWinCoreIndexURL = "https://buildbot.libretro.com/nightly/windows/x86_64/latest/.index-extended"
+	retroArchWinCoreBaseURL  = "https://buildbot.libretro.com/nightly/windows/x86_64/latest/"
+	coreUpdateMaxDownload    = 96 << 20
+	standaloneMaxDownload    = 256 << 20
 )
 
-// The URLs are variables so tests can point the checker at a local server.
+// The URLs are variables so tests can point the checker at a local server. An
+// empty index or base URL means "this platform's channel" (emuCoreIndexURL).
 var (
-	coreUpdateIndexURL = retroArchCoreIndexURL
-	coreUpdateBaseURL  = retroArchCoreBaseURL
+	coreUpdateIndexURL = ""
+	coreUpdateBaseURL  = ""
 	standaloneAPIBase  = "https://api.github.com"
 	// emulatorUpdateValidateURL is the host policy for everything this file
 	// downloads. It defaults to the app's single allowlist and is a variable so
 	// tests can point at a loopback server.
 	emulatorUpdateValidateURL = validatePatchURL
 )
+
+// emuCoreIndexURL is the build index this platform's RetroArch updates from:
+// aarch64 shared objects on the handheld, x86_64 DLLs on Windows. A test
+// override wins.
+func emuCoreIndexURL() string {
+	if coreUpdateIndexURL != "" {
+		return coreUpdateIndexURL
+	}
+	if IsWindows() {
+		return retroArchWinCoreIndexURL
+	}
+	return retroArchCoreIndexURL
+}
+
+// emuCoreBaseURL is the folder the index's archives are served from.
+func emuCoreBaseURL() string {
+	if coreUpdateBaseURL != "" {
+		return coreUpdateBaseURL
+	}
+	if IsWindows() {
+		return retroArchWinCoreBaseURL
+	}
+	return retroArchCoreBaseURL
+}
 
 // fetchUpdateBytes is fetchBounded's counterpart for the buildbot: same size
 // limit and headers, but it validates against the emulator-update policy rather
@@ -129,8 +163,9 @@ type standaloneUpdate struct {
 }
 
 // parseCoreIndex reads the buildbot index. It skips anything that is not a
-// "<date> <crc32> <core>_libretro.so.zip" line rather than failing the whole
-// check over one odd entry, and the last line for a core wins.
+// "<date> <crc32> <core>_libretro.so.zip" line (or the Windows tree's
+// "<core>_libretro.dll.zip") rather than failing the whole check over one odd
+// entry, and the last line for a core wins.
 func parseCoreIndex(text string) []coreIndexEntry {
 	byCore := make(map[string]coreIndexEntry)
 	for _, line := range strings.Split(text, "\n") {
@@ -145,10 +180,7 @@ func parseCoreIndex(text string) []coreIndexEntry {
 		if !validCoreIndexDate(date) || len(crc) != 8 || !isHex(crc) {
 			continue
 		}
-		if !strings.HasSuffix(file, "_libretro.so.zip") {
-			continue
-		}
-		core := strings.TrimSuffix(strings.TrimSuffix(file, ".zip"), "_libretro.so")
+		core := coreIndexFileCore(file)
 		if core == "" || strings.ContainsAny(core, "/\\") {
 			continue
 		}
@@ -160,6 +192,37 @@ func parseCoreIndex(text string) []coreIndexEntry {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Core < out[j].Core })
 	return out
+}
+
+// coreIndexFileCore is the core an index archive name carries, or "" when the
+// name is not a core archive: "mgba_libretro.so.zip" (the handheld tree) and
+// "mgba_libretro.dll.zip" (the Windows tree) are both "mgba".
+func coreIndexFileCore(file string) string {
+	if !strings.HasSuffix(file, ".zip") {
+		return ""
+	}
+	binary := strings.TrimSuffix(file, ".zip")
+	for _, suffix := range []string{"_libretro.so", "_libretro.dll"} {
+		if strings.HasSuffix(binary, suffix) {
+			return strings.TrimSuffix(binary, suffix)
+		}
+	}
+	return ""
+}
+
+// coreUpdateBinary is the file name a core archive must hold: the name the
+// index published it under (…_libretro.so on the handheld, …_libretro.dll on
+// Windows), or the shared-object name when the URL does not say.
+func coreUpdateBinary(upd coreUpdate) string {
+	name := upd.URL
+	if i := strings.LastIndexAny(name, "/\\"); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.TrimSuffix(name, ".zip")
+	if name == upd.Core+"_libretro.so" || name == upd.Core+"_libretro.dll" {
+		return name
+	}
+	return upd.Core + "_libretro.so"
 }
 
 // validCoreIndexDate reports whether a buildbot index date is a real
@@ -207,7 +270,9 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 		if !ok || build.Path == "" {
 			continue
 		}
-		sum, err := coreCRC32File(build.Path)
+		// The checksum cache is keyed by size and modification time, so a core
+		// read by the last check (or the Core builds page) is not read again.
+		sum, err := emuCachedCRC32(build.Path)
 		if err != nil || sum == entry.CRC32 {
 			continue
 		}
@@ -215,7 +280,7 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 			Core:    entry.Core,
 			Date:    entry.Date,
 			CRC32:   entry.CRC32,
-			URL:     coreUpdateBaseURL + entry.File,
+			URL:     emuCoreBaseURL() + entry.File,
 			Current: build.Version,
 		})
 	}
@@ -224,7 +289,7 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 
 // fetchCoreIndex downloads and parses the buildbot index.
 func fetchCoreIndex(ctx context.Context, client *http.Client) ([]coreIndexEntry, error) {
-	data, err := fetchUpdateBytes(ctx, client, coreUpdateIndexURL, patchMaxMetadata)
+	data, err := fetchUpdateBytes(ctx, client, emuCoreIndexURL(), patchMaxMetadata)
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +312,9 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	if err != nil {
 		return coreBuild{}, fmt.Errorf("core archive is not a zip: %w", err)
 	}
-	// The buildbot only publishes Linux shared objects, even when JukaHub itself
-	// is running on Windows for a test: the .dll name is the local convention,
-	// not the release's.
-	want := upd.Core + "_libretro.so"
+	// The archive holds the binary under the name the index published: a
+	// shared object from the handheld tree, a DLL from the Windows tree.
+	want := coreUpdateBinary(upd)
 	var payload []byte
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
@@ -573,6 +637,12 @@ func runEmulatorUpdates(ctx context.Context, client *http.Client) emulatorUpdate
 		}
 	}
 
+	// The staged standalone builds are aarch64 Linux archives for the handheld.
+	// On Windows the Emulators page installs real Windows releases instead
+	// (emuwininstall.go), so staging an ARM build there would only fill a folder.
+	if IsWindows() {
+		return report
+	}
 	installBarPhase(installPhaseResolving)
 	installBarDetail("Checking standalone emulators")
 	standalones, errs := fetchStandaloneUpdates(ctx, client)
@@ -614,6 +684,10 @@ func newEmulatorUpdateClient() *http.Client {
 // startEmulatorUpdates runs the check off the event thread and reports through
 // the install bar and a toast, the same way the other download actions do.
 func startEmulatorUpdates() {
+	if !IsOnline() {
+		ShowToast("No internet connection — connect to check for emulator builds", ToastKindWarning)
+		return
+	}
 	if !tryBeginPatchOp() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return

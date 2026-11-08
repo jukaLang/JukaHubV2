@@ -159,27 +159,31 @@ func TestVideoSnapsRowFitsTheSettingsPage(t *testing.T) {
 	}
 }
 
-// TestVideoSnapsRowRenders draws the page: the row's label has to be on
-// screen, not just in the config, and a switched-off feature draws the off
-// state in the same place.
+// TestVideoSnapsRowRenders draws the page. Settings is the hub now (setui.go):
+// the switch is the "Video snaps" row of Games & emulators, and it has to be on
+// screen whole — the old button ran out of its cell on the 960 canvas — in
+// both states, with the switch showing the state the library obeys. The
+// legacy row's substituted value follows along for anything that reads it.
 func TestVideoSnapsRowRenders(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")
 	}
-	config := widgetRenderConfig(t)
+	setSkipUnlessDefaultTextSize(t)
+	config := setRenderConfig(t)
 	row := snapSettingRow(t, config)
-	f, _ := renderNamedScene(t, config, "SettingsGeneral")
-	if got := brightPixelsIn(f, *row, config); got < 40 {
-		t.Fatalf("the row drew %d bright pixels: its label is missing", got)
-	}
-
-	applySnapPreviewEnabled(config, false)
-	f, _ = renderNamedScene(t, config, "SettingsGeneral")
-	if got := brightPixelsIn(f, *row, config); got < 40 {
-		t.Fatalf("the off state drew %d bright pixels", got)
+	p := setNewHubProbe(t)
+	for _, on := range []bool{true, false} {
+		applySnapPreviewEnabled(config, on)
+		for _, w := range setTestCanvases {
+			p.open(config, "games", w, 720)
+			i := p.assertRowWhole("snaps")
+			if setHub.views[i].on != on {
+				t.Errorf("%dpx: the switch shows %v, the library reads %v", w, setHub.views[i].on, on)
+			}
+		}
 	}
 	if got := substituteVars(row.Text, config.Variables.Custom); got != "Video snaps · Off" {
-		t.Fatalf("row renders %q after the switch, want \"Video snaps · Off\"", got)
+		t.Fatalf("the old row renders %q after the switch, want \"Video snaps · Off\"", got)
 	}
 }
 

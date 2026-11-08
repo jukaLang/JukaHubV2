@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -23,11 +22,15 @@ type logBuffer struct {
 	bytes    int
 	max      int
 	maxBytes int
+	// version changes on every write and clear, so the Logs screen re-reads
+	// the buffer only when there is something new (systool_logs.go).
+	version uint64
 }
 
 func (b *logBuffer) Write(p []byte) (int, error) {
 	line := strings.TrimRight(string(p), "\n")
 	b.mu.Lock()
+	b.version++
 	b.lines = append(b.lines, line)
 	b.bytes += len(line) + 1
 	if b.max <= 0 {
@@ -68,7 +71,25 @@ func (b *logBuffer) Clear() {
 	b.mu.Lock()
 	b.lines = nil
 	b.bytes = 0
+	b.version++
 	b.mu.Unlock()
+}
+
+// Version reports a number that changes whenever the buffer does.
+func (b *logBuffer) Version() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.version
+}
+
+// Snapshot copies the buffered lines, oldest first, with the version they
+// were read at.
+func (b *logBuffer) Snapshot() ([]string, uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, len(b.lines))
+	copy(out, b.lines)
+	return out, b.version
 }
 
 var appLog = &logBuffer{max: 2000, maxBytes: logBufferMaxBytes}
@@ -147,27 +168,21 @@ func cpuTempValueC() (float64, bool) {
 	return 0, false
 }
 
+// getDiskInfo reports the volume JukaHub lives on (the SD card on the
+// handheld). It used to run `df -k /` — a process every five seconds, the
+// root filesystem instead of the card, and nothing at all on Windows, which
+// has no df. statfs / GetDiskFreeSpaceEx answer directly (systool_disk.go).
 func getDiskInfo() (total, used int64, pct int) {
-	out, err := exec.Command("df", "-k", "/").Output()
-	if err != nil {
+	t, f, err := sysToolVolumeUsage(sysToolAppVolumePath())
+	if err != nil || t == 0 {
 		return 0, 0, 0
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) < 2 {
-		return 0, 0, 0
+	if f > t {
+		f = t
 	}
-	fields := strings.Fields(lines[1])
-	if len(fields) < 5 {
-		return 0, 0, 0
-	}
-	totalK, _ := strconv.ParseInt(fields[1], 10, 64)
-	usedK, _ := strconv.ParseInt(fields[2], 10, 64)
-	total = totalK * 1024
-	used = usedK * 1024
-	if totalK > 0 {
-		pct = int(usedK * 100 / totalK)
-	}
-	return
+	total, used = int64(t), int64(t-f)
+	pct = int(used * 100 / total)
+	return total, used, pct
 }
 
 // ---------------------------------------------------------------------------

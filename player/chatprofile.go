@@ -590,8 +590,11 @@ func activateChatProfileAction(kind string, config *Config) {
 		if token := chatProfileSearchText(profile); token != "" {
 			closeChatProfile()
 			closeChatMembers()
+			// A mention belongs in the community channel, whichever tab the
+			// card was opened from.
+			chatSelectTab(chatTabCommunity)
 			chatInputText += token
-			vkOpenChat()
+			chatOpenKeyboard()
 		}
 	case "jump":
 		jumpToMemberLatest(profile)
@@ -609,25 +612,22 @@ func activateChatProfileAction(kind string, config *Config) {
 // newest message, selecting it so the next press acts on it. It is how a
 // profile answers "what did they say?" without leaving the chat.
 func jumpToMemberLatest(p chatMemberProfile) bool {
-	chatMutex.Lock()
+	msgs := chatTabMessages(chatTabCommunity)
 	index := -1
-	for i := len(chatMessages) - 1; i >= 0; i-- {
-		if chatMemberKey(chatMessages[i]) == p.Key {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if chatMemberKey(msgs[i]) == p.Key {
 			index = i
 			break
 		}
 	}
-	total := len(chatMessages)
-	chatMutex.Unlock()
 	if index < 0 {
 		showToast("No messages from "+p.Name+" in this history", ToastWarn())
 		return false
 	}
 	closeChatProfile()
 	closeChatMembers()
-	chatScrollOffset = clampIndex(total-1-index, total)
-	selectChatMessage(index)
-	chatEnsureSelectionVisible()
+	chatSelectTab(chatTabCommunity)
+	chatFocusMessage(msgs, index, chatAnchorBottom)
 	return true
 }
 
@@ -699,11 +699,21 @@ func (l chatMembersLayout) rowRect(i int) sdl.Rect {
 		H: max32(0, min32(l.rowH-SpaceXS, bottom-y-SpaceXS))}
 }
 
-// drawChatScrim dims the scene behind a card so the card reads as foreground.
+// drawChatScrim dims the scene behind a card so the card reads as foreground:
+// the shared overlay scrim, in the backdrop's own tone.
 func drawChatScrim(renderer *sdl.Renderer) {
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 120)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
+}
+
+// chatCardButtonStyle is a profile or member card's action pill: Home's glass
+// with its focus ring.
+func chatCardButtonStyle(font *ttf.Font) UIButtonStyle {
+	return UIButtonStyle{
+		Variant:  UIButtonSecondary,
+		Font:     font,
+		Pill:     true,
+		NoShadow: true,
+	}
 }
 
 // renderChatProfile draws the profile card. It is called by the shared render
@@ -724,12 +734,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 	r := chatProfileCardRect()
 	chatProfile.rect = r
 	drawChatScrim(renderer)
-	UICard(renderer, r, UICardStyle{
-		Fill:   sdl.Color{R: 16, G: 20, B: 30, A: 248},
-		Border: ColorBorder,
-		Radius: RadiusLG,
-		Shadow: 110,
-	})
+	drawOverlayCard(renderer, r)
 
 	p := chatProfile.profile
 	details := chatDetailsFor(p.UserID)
@@ -753,7 +758,9 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 		textW = 80
 	}
 	nameCol := ColorTextPrimary()
-	renderText(renderer, config, titleFont, ellipsize(titleFont, displayName, textW), nameCol, textX, ay+2)
+	// Names and messages are what people wrote, so they are drawn without the
+	// config's $variable substitution.
+	chatText(renderer, config, titleFont, ellipsize(titleFont, sanitizeCached(titleFont, displayName), textW), nameCol, textX, ay+2)
 	handle := ""
 	if p.Handle != "" {
 		handle = "@" + p.Handle
@@ -763,7 +770,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 		handle = "Answers run on Groq"
 	}
 	if handle != "" {
-		renderText(renderer, config, font, ellipsize(font, handle, textW), ColorTextSecondary(), textX, ay+2+int32(titleFont.Height())+2)
+		chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, handle), textW), ColorTextSecondary(), textX, ay+2+int32(titleFont.Height())+2)
 	}
 
 	// Badges: BOT / YOU / AI, drawn after the handle so they never collide.
@@ -779,16 +786,17 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 	}
 	badgeY := ay + 2 + int32(titleFont.Height()) + 2 + int32(font.Height()) + 4
 	for _, label := range badges {
-		bw, _, _ := font.SizeUTF8(label)
+		bw, _ := measureText(font, label)
 		bw += 14
-		fillRoundedRect(renderer, textX, badgeY, int32(bw), int32(font.Height())+6, (int32(font.Height())+6)/2, WithAlpha(ColorInfo, 45))
-		renderText(renderer, config, font, label, InfoInk(), textX+7, badgeY+3)
-		textX += int32(bw) + 6
+		bh := int32(font.Height()) + 6
+		chatFillRound(renderer, sdl.Rect{X: textX, Y: badgeY, W: bw, H: bh}, bh/2, WithAlpha(glassAccent(), 45))
+		chatText(renderer, config, font, label, InfoInk(), textX+7, badgeY+3)
+		textX += bw + 6
 	}
 
 	// Divider under the identity block.
 	dividerY := r.Y + pad + avatarSize + 12
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 90)
+	setDrawColor(renderer, glassHairline())
 	renderer.FillRect(&sdl.Rect{X: r.X + pad, Y: dividerY, W: r.W - pad*2, H: 1})
 
 	rowY := dividerY + 10
@@ -805,7 +813,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 
 	if len(details.roles) > 0 {
 		label := "Roles: " + strings.Join(details.roles, ", ")
-		renderText(renderer, config, font, ellipsize(font, label, metaW), ColorTextSecondary(), r.X+pad, rowY)
+		chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, label), metaW), ColorTextSecondary(), r.X+pad, rowY)
 		rowY += lineH + 4
 	}
 
@@ -813,7 +821,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 	// most useful thing a profile can show before the player jumps there.
 	if p.LastText != "" {
 		last := "Last: " + chatQuoteSummary(p.LastText, 160)
-		renderText(renderer, config, font, ellipsize(font, last, metaW), ColorTextSecondary(), r.X+pad, rowY)
+		chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, last), metaW), ColorTextSecondary(), r.X+pad, rowY)
 		rowY += lineH + 4
 	}
 
@@ -851,17 +859,8 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 			bx = r.X + pad
 			buttonY += buttonH + SpaceSM
 		}
-		action.rect = UIButton(renderer, config, sdl.Rect{X: bx, Y: buttonY, W: w, H: buttonH}, action.label, UIButtonStyle{
-			Variant:    UIButtonCustom,
-			Fill:       WithAlpha(ColorSurfaceAlt, 230),
-			HoverFill:  ColorCardHover,
-			FocusFill:  ColorCardFocus,
-			Border:     WithAlpha(ColorBorder, 160),
-			LabelColor: ColorTextPrimary(),
-			Font:       font,
-			Pill:       true,
-			NoShadow:   true,
-		}, UIButtonState{Focused: i == chatProfile.focus})
+		action.rect = UIButton(renderer, config, sdl.Rect{X: bx, Y: buttonY, W: w, H: buttonH}, action.label,
+			chatCardButtonStyle(font), UIButtonState{Focused: i == chatProfile.focus})
 		bx += w + SpaceSM
 	}
 }
@@ -883,12 +882,7 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 	r := layout.rect
 	chatMembers.rect = r
 	drawChatScrim(renderer)
-	UICard(renderer, r, UICardStyle{
-		Fill:   sdl.Color{R: 16, G: 20, B: 30, A: 248},
-		Border: ColorBorder,
-		Radius: RadiusLG,
-		Shadow: 110,
-	})
+	drawOverlayCard(renderer, r)
 
 	pad := int32(16)
 	renderText(renderer, config, font, "Members", ColorTextPrimary(), r.X+pad, r.Y+14)
@@ -896,7 +890,7 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 	countW, _, _ := font.SizeUTF8(count)
 	renderText(renderer, config, font, count, ColorTextTertiary(), r.X+r.W-pad-int32(countW), r.Y+14)
 
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 90)
+	setDrawColor(renderer, glassHairline())
 	renderer.FillRect(&sdl.Rect{X: r.X + pad, Y: r.Y + layout.headerH - 8, W: r.W - pad*2, H: 1})
 
 	for i := chatMembers.scroll; i < len(chatMembers.rows) && i < chatMembers.scroll+layout.visible; i++ {
@@ -927,7 +921,7 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 			}
 			textY := rowRect.Y + max32(0, (rowRect.H-2*int32(font.Height()))/2)
 			if nameW > 0 {
-				renderText(renderer, config, font, ellipsize(font, row.Name, nameW), ColorTextPrimary(), nameX, textY)
+				chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, row.Name), nameW), ColorTextPrimary(), nameX, textY)
 			}
 			meta := fmt.Sprintf("%d msg", row.Messages)
 			if !row.LastSeen.IsZero() {
@@ -940,9 +934,10 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 				tw, _, _ := font.SizeUTF8(tag)
 				chipW := int32(tw) + 12
 				chipX := rowRect.X + rowRect.W - chipW - 8
-				chipY := rowRect.Y + (rowRect.H-(int32(font.Height())+4))/2
-				fillRoundedRect(renderer, chipX, chipY, chipW, int32(font.Height())+4, (int32(font.Height())+4)/2, WithAlpha(ColorInfo, 45))
-				renderText(renderer, config, font, tag, InfoInk(), chipX+6, chipY+2)
+				chipH := int32(font.Height()) + 4
+				chipY := rowRect.Y + (rowRect.H-chipH)/2
+				chatFillRound(renderer, sdl.Rect{X: chipX, Y: chipY, W: chipW, H: chipH}, chipH/2, WithAlpha(glassAccent(), 45))
+				chatText(renderer, config, font, tag, InfoInk(), chipX+6, chipY+2)
 			}
 		})
 	}
@@ -959,21 +954,4 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 	hint = ellipsize(font, hint, max32(1, r.W-2*pad))
 	hintW, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, ColorTextTertiary(), r.X+(r.W-int32(hintW))/2, r.Y+r.H-layout.footerH+10)
-}
-
-// drawChatMembersChip draws the header chip that opens the member list. It is
-// shared by the chat header so the rect it records is the one clicks use.
-func drawChatMembersChip(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y int32, count int) sdl.Rect {
-	if font == nil || count <= 0 {
-		return sdl.Rect{}
-	}
-	label := fmt.Sprintf("Members %d", count)
-	w, _, _ := font.SizeUTF8(label)
-	chipW := int32(w) + 18
-	h := int32(font.Height()) + 8
-	rect := sdl.Rect{X: x, Y: y, W: chipW, H: h}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, WithAlpha(ColorSurfaceAlt, 220))
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, 1, WithAlpha(ColorBorder, 160))
-	renderText(renderer, config, font, label, ColorTextSecondary(), rect.X+9, rect.Y+4)
-	return rect
 }

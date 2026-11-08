@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -113,6 +114,7 @@ func (s *partyServer) Invite() string {
 
 func (s *partyServer) handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/party", s.guard(s.handleLanding))
 	mux.HandleFunc("/api/party/join", s.guard(s.handleJoin))
 	mux.HandleFunc("/api/party/state", s.guard(s.handleState))
 	mux.HandleFunc("/api/party/queue", s.guard(s.handleQueue))
@@ -162,6 +164,49 @@ func partyError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	}
 	http.Error(w, err.Error(), status)
+}
+
+// handleLanding is what the invite QR code opens on a phone: a plain page that
+// says how to join from a handheld. The room's name and code are only shown to
+// a link that already carries the code, so the page reveals nothing a scan of
+// the screen did not.
+func (s *partyServer) handleLanding(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	snap := s.room.Snapshot()
+	known := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("code")), snap.Code)
+	var body strings.Builder
+	body.WriteString("<!doctype html><html><head><meta charset=\"utf-8\">")
+	body.WriteString("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
+	body.WriteString("<title>JukaHub Watch Party</title><style>")
+	body.WriteString("body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:32px}")
+	body.WriteString(".card{max-width:420px;margin:auto;background:#1e293b;border-radius:20px;padding:24px}")
+	body.WriteString(".code{font-size:40px;letter-spacing:6px;font-weight:700;color:#55d8ff}p{line-height:1.5}")
+	body.WriteString("</style></head><body><div class=\"card\"><h1>Watch Party</h1>")
+	if known {
+		room := snap.Name
+		if room == "" {
+			room = "JukaHub"
+		}
+		body.WriteString("<p>Room <b>" + html.EscapeString(room) + "</b> hosted by <b>" +
+			html.EscapeString(partyHostName(snap)) + "</b>.</p>")
+		body.WriteString("<p class=\"code\">" + html.EscapeString(snap.Code) + "</p>")
+		body.WriteString("<p>On a JukaHub handheld on this Wi-Fi, open <b>Tools → Watch Party</b>: the room is listed under " +
+			"<b>Nearby rooms</b>, or choose <b>Join with a code</b> and enter the code above.</p>")
+		if snap.HostAddr != "" {
+			body.WriteString("<p>Host address: " + html.EscapeString(snap.HostAddr) + "</p>")
+		}
+	} else {
+		body.WriteString("<p>A JukaHub Watch Party is running on this device. Ask the host for the room code.</p>")
+	}
+	body.WriteString("</div></body></html>")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body.String())
 }
 
 func (s *partyServer) handleJoin(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +370,9 @@ type partyClient struct {
 
 	last     partySnapshot
 	received time.Time
+	// lastOK is the last successful poll, so the screen can tell a host that
+	// went away from one slow answer.
+	lastOK time.Time
 
 	lastErr  string
 	inFlight bool
@@ -382,19 +430,19 @@ func partyParseInvite(invite string) (baseURL, code string, err error) {
 	}
 	code = strings.ToUpper(fields[len(fields)-1])
 	if len(fields) == 1 {
-		// A bare host without a code is accepted so the user can be told what
-		// is missing rather than getting a generic parse error.
-		if !partyCodeValid(code) {
-			return "", "", errors.New("the invite also needs the 5-character code")
+		// One word is either a bare host (the code is missing) or a bare code
+		// (the host is missing). A bare code used to be taken for a host name,
+		// "http://ABCD2:8318", and the join failed with "missing its code". The
+		// Watch Party screen looks a bare code up among the nearby rooms before
+		// it ever gets here.
+		if partyCodeValid(code) {
+			return "", "", errors.New("add the host address too, e.g. 192.168.1.5 " + code)
 		}
-		code = ""
+		return "", "", errors.New("the invite also needs the 5-character code")
 	} else if !partyCodeValid(code) {
 		return "", "", errors.New("the room code is 5 characters")
 	}
 	hostPart := strings.Join(fields[:len(fields)-1], " ")
-	if len(fields) == 1 {
-		hostPart = fields[0]
-	}
 	baseURL, err = partyNormalizeBase(hostPart)
 	if err != nil {
 		return "", "", err
@@ -449,11 +497,23 @@ func (c *partyClient) store(snap partySnapshot) {
 		snap.Queue = snap.Queue[:partyMaxQueue]
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Polls and button presses travel in parallel, so an answer can arrive
+	// after a newer one: a slow poll landing after "play" used to roll the
+	// queue and the playhead back for a second. The room's version only grows,
+	// so an older version from the same room is dropped.
+	if c.last.Code != "" && c.last.Code == snap.Code {
+		if snap.Version < c.last.Version ||
+			(snap.Version == c.last.Version && snap.ServerTime < c.last.ServerTime) {
+			c.lastErr = ""
+			return
+		}
+	}
 	c.last = snap
 	c.received = time.Now()
 	c.lastErr = ""
-	c.inFlight = false
-	c.mu.Unlock()
+	// inFlight belongs to Poll: a button press finishing while a poll is out
+	// used to clear it and let a second poll start beside the first.
 }
 
 // Poll refreshes the snapshot and sends the watch seconds observed since the
@@ -491,7 +551,11 @@ func (c *partyClient) Poll(watch float64) bool {
 	c.inFlight = false
 	c.mu.Unlock()
 	if resp.StatusCode != http.StatusOK {
-		c.fail(errors.New(strings.TrimSpace(string(data))))
+		msg := strings.TrimSpace(string(data))
+		if msg == "" {
+			msg = resp.Status
+		}
+		c.fail(errors.New(msg))
 		return true
 	}
 	var snap partySnapshot
@@ -500,6 +564,9 @@ func (c *partyClient) Poll(watch float64) bool {
 		return true
 	}
 	c.store(snap)
+	c.mu.Lock()
+	c.lastOK = time.Now()
+	c.mu.Unlock()
 	return true
 }
 
@@ -565,6 +632,9 @@ var partySession struct {
 
 	server *partyServer
 	client *partyClient
+	// beacon answers LAN discovery for a room this device hosts (nil when
+	// joining, or when the discovery port could not be opened).
+	beacon *partyBeacon
 
 	snapshot partySnapshot
 	received time.Time
@@ -598,11 +668,34 @@ func partyHost(name string) error {
 	if err := srv.Start(); err != nil {
 		return err
 	}
+	// Discovery is best effort: a second JukaHub on the same PC may hold the
+	// port, and the room still works by address and code without it.
+	beacon, err := startPartyBeacon(func() (partyBeaconInfo, bool) {
+		if !partyDiscoverable.Load() {
+			return partyBeaconInfo{}, false
+		}
+		snap := room.Snapshot()
+		return partyBeaconInfo{
+			V:       1,
+			App:     "JukaHub",
+			Code:    snap.Code,
+			Room:    snap.Name,
+			Host:    partyHostName(snap),
+			Port:    srv.Port(),
+			Members: len(snap.Members),
+			Title:   snap.Playback.Title,
+		}, true
+	})
+	if err != nil {
+		logPatch("[party] discovery beacon unavailable: %v", err)
+		beacon = nil
+	}
 	client := newPartyClient("http://127.0.0.1:"+strconv.Itoa(srv.Port()), room.Code(), hostID)
 	snap := room.Snapshot()
 
 	partySession.mu.Lock()
 	partySession.server = srv
+	partySession.beacon = beacon
 	partySession.client = client
 	partySession.snapshot = snap
 	partySession.received = time.Now()
@@ -651,11 +744,15 @@ func partyJoin(invite, name string) error {
 		return errors.New("the host returned an unreadable answer")
 	}
 	client.memberID = joined.MemberID
+	// The first snapshot goes through the same size limits as every poll: it
+	// comes off the network too.
+	client.store(joined.Snapshot)
+	first, _, _ := client.Snapshot()
 
 	partySession.mu.Lock()
 	partySession.client = client
 	partySession.server = nil
-	partySession.snapshot = joined.Snapshot
+	partySession.snapshot = first
 	partySession.received = time.Now()
 	partySession.hasState = true
 	partySession.invite = strings.TrimSpace(invite)
@@ -672,8 +769,10 @@ func partyLeaveSession() {
 	partySession.mu.Lock()
 	client := partySession.client
 	srv := partySession.server
+	beacon := partySession.beacon
 	partySession.client = nil
 	partySession.server = nil
+	partySession.beacon = nil
 	partySession.hasState = false
 	partySession.snapshot = partySnapshot{}
 	partySession.received = time.Time{}
@@ -686,6 +785,9 @@ func partyLeaveSession() {
 
 	if client != nil {
 		go client.Leave()
+	}
+	if beacon != nil {
+		beacon.Stop()
 	}
 	if srv != nil {
 		srv.Stop()
@@ -736,8 +838,10 @@ func partyIsHosting() bool {
 // round trip runs on its own goroutine.
 func partyTick(config *Config) {
 	// Network work finishes on its own goroutine; the result is applied here so
-	// the UI state is only ever written from the main loop.
-	partyDrainAsync()
+	// the UI state is only ever written from the main loop. The tool screens
+	// share the queue, so an install or a submission finishing while another
+	// screen is up still lands.
+	tbxDrainUI()
 
 	defer partyHistorySync()
 
@@ -1027,6 +1131,84 @@ func partyRemoveItem(id int) error {
 	}
 	_, err := client.Remove(id)
 	return err
+}
+
+// partyResumeRemote forgets that the user left the room's video, so the next
+// tick starts it again at the room's position.
+func partyResumeRemote() {
+	partySession.mu.Lock()
+	partySession.dismissed = ""
+	partySession.mu.Unlock()
+}
+
+// partyWatchingRemote reports whether the local player shows the room's video.
+func partyWatchingRemote(snap partySnapshot) bool {
+	return snap.Playback.URL != "" && currentPlaybackURL == snap.Playback.URL &&
+		snapshotVideoState().phase != "idle"
+}
+
+// partyInviteURL is what the invite QR code carries: the host's landing page,
+// which tells a phone how to join from a handheld.
+func partyInviteURL(snap partySnapshot) string {
+	addr := strings.TrimSpace(snap.HostAddr)
+	if addr == "" || snap.Code == "" {
+		return ""
+	}
+	return "http://" + addr + "/party?code=" + url.QueryEscape(snap.Code)
+}
+
+// partyHostUnreachableFor is how long the polls have failed in a row; zero
+// while they succeed. A joiner whose host left sees this grow and is offered a
+// way out instead of a room frozen on its last state.
+func partyHostUnreachableFor() time.Duration {
+	partySession.mu.Lock()
+	client := partySession.client
+	hosting := partySession.hosting
+	partySession.mu.Unlock()
+	if client == nil || hosting {
+		return 0
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.lastErr == "" {
+		return 0
+	}
+	since := client.lastOK
+	if since.IsZero() {
+		since = client.received
+	}
+	if since.IsZero() {
+		return 0
+	}
+	return time.Since(since)
+}
+
+// partyServerPort is the TCP port of the room this device hosts, or 0.
+func partyServerPort() int {
+	partySession.mu.Lock()
+	srv := partySession.server
+	partySession.mu.Unlock()
+	if srv == nil {
+		return 0
+	}
+	return srv.Port()
+}
+
+// partyStatusLine is a one-line summary for the Tools hub tile.
+func partyStatusLine() string {
+	snap, _, ok, _ := partyState()
+	if !ok {
+		return "Not in a room"
+	}
+	n := len(snap.Members)
+	who := fmt.Sprintf("%d watching", n)
+	if n == 1 {
+		who = "Just you so far"
+	}
+	if partyIsHosting() {
+		return "Hosting " + snap.Code + " · " + who
+	}
+	return "In " + snap.Code + " · " + who
 }
 
 // partyLastError reports the transport error shown under the room header.

@@ -1,0 +1,14 @@
+{
+  "name": "neontheme",
+  "title": "Neon Grid theme",
+  "version": "1.0.0",
+  "description": "A theme plugin: lime light on a deep teal night. Pick Neon Grid in Settings › Display & theme › Theme presets.",
+  "author": "JukaHub",
+  "entry": "neontheme.sh",
+  "icon": "theme",
+  "enabled": true,
+  "actions": [
+    {"id": "about", "label": "About the theme"}
+  ],
+  "themes": ["neon-grid.json"]
+}

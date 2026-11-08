@@ -5,8 +5,12 @@
 //
 // Run from the repo root (CI does):
 //   tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs \
-//     script.js builder-device.js builder-gallery.js gallery/layouts.js
+//     builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
 import globals from 'globals';
+
+// builder-icons.js loads first; every other builder script draws its icons
+// with these.
+const sharedFromIcons = ['BUILDER_ICONS', 'iconSvg', 'createIcon', 'hydrateIcons'];
 
 // builder-device.js and builder-gallery.js load as classic scripts after
 // script.js and share its top-level scope, so these names are real globals.
@@ -41,6 +45,12 @@ export default [
       // script.js deliberately wraps loadScene, loadJukaApp and clearAll after
       // defining them, so reassigning a function declaration is intended.
       'no-func-assign': 'off',
+    },
+  },
+  {
+    files: ['**/script.js', '**/builder-device.js', '**/builder-gallery.js'],
+    languageOptions: {
+      globals: Object.fromEntries(sharedFromIcons.map(n => [n, 'readonly'])),
     },
   },
   {

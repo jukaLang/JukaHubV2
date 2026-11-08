@@ -132,6 +132,7 @@ func TestKeyboardCloseButtonIsTapSized(t *testing.T) {
 
 // Every cap label must fit its key at the smallest supported screen.
 func TestKeyboardLabelsFitKeys(t *testing.T) {
+	_ = newProbeFrame(t) // SDL_ttf must be up to measure the labels
 	resetKeyboardState(t)
 	withScreen(t, 800, 480)
 	vkTarget = vkTargetChat

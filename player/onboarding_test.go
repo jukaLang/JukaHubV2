@@ -72,13 +72,12 @@ func TestOnboardingActionLabels(t *testing.T) {
 func TestTourToolsStepRenders(t *testing.T) {
 	prevW, prevH := screenWidth, screenHeight
 	prevOnboarding := onboarding
-	prevTools, prevQS := toolsPanel, qs
+	prevQS, prevTour := qs, toolsHubTourScene
 	t.Cleanup(func() {
 		screenWidth, screenHeight = prevW, prevH
 		onboarding = prevOnboarding
-		toolsPanel, qs = prevTools, prevQS
+		qs, toolsHubTourScene = prevQS, prevTour
 	})
-	toolsPanel.open = false
 	onboardingStart()
 	onboarding.step = len(onboardingSteps) - 1
 	cfg := onboardingTestConfig()
@@ -96,17 +95,21 @@ func TestTourToolsStepRenders(t *testing.T) {
 }
 
 // TestTourPointsAtToolsPages: the tour ends on the two Tools pages a new user
-// cannot guess. The step names both, reports their live state (so the panel's
-// install count and posture are visible before it is opened), and its action
-// opens the Tools panel instead of describing it.
+// cannot guess. The step names both, reports their live state (so the
+// install count and posture are visible before Tools is opened), and its
+// action opens the Tools hub instead of describing it.
 func TestTourPointsAtToolsPages(t *testing.T) {
 	prevOnboarding := onboarding
-	prevTools := toolsPanel
-	prevQS := qs
+	prevQS, prevTour := qs, toolsHubTourScene
+	prevConfig := appConfig
+	prevScene, prevPending, prevPhase := currentSceneIndex, pendingSceneIndex, transitionPhase
+	prevHistory := append([]int(nil), sceneHistory...)
 	t.Cleanup(func() {
 		onboarding = prevOnboarding
-		toolsPanel = prevTools
-		qs = prevQS
+		qs, toolsHubTourScene = prevQS, prevTour
+		appConfig = prevConfig
+		currentSceneIndex, pendingSceneIndex, transitionPhase = prevScene, prevPending, prevPhase
+		sceneHistory = prevHistory
 	})
 
 	step := -1
@@ -127,32 +130,42 @@ func TestTourPointsAtToolsPages(t *testing.T) {
 		}
 	}
 
-	// Recorded rather than assumed: the package's other probes may leave a
-	// modal open, and this test only owns the one it opens itself.
-	coveredBefore := onboardingCoveredByOverlay()
-
+	// The tour is drawn over Home; Tools is a scene of its own.
 	cfg := onboardingTestConfig()
+	cfg.Scenes = []SceneConfig{{Name: "Main", Layout: "home"}}
+	appConfig = cfg
+	currentSceneIndex, pendingSceneIndex, transitionPhase = 0, -1, "none"
+	sceneHistory = nil
+
 	status := onboardingStatus(cfg, "tools")
 	if !strings.Contains(status, "Toolbox: ") || !strings.Contains(status, "Security: ") {
 		t.Errorf("tools status = %q, want both pages", status)
 	}
 
 	onboardingStart()
+	// Recorded rather than assumed: the package's other probes may leave a
+	// modal open, and this test only owns the page it opens itself.
+	coveredBefore := onboardingCoveredByOverlay()
 	onboarding.step = step
 	onboardingPerformAction(cfg)
-	if !toolsPanel.open {
-		t.Fatal("the tools step's action did not open the Tools panel")
+	hub := sceneIndexExact(cfg, toolsHubSceneName)
+	if hub < 0 || pendingSceneIndex != hub || transitionPhase != "fade-out" {
+		t.Fatalf("the tools step's action started phase %q to scene %d, want the Tools hub (%d)",
+			transitionPhase, pendingSceneIndex, hub)
 	}
-	// The panel is a modal, so the tour must step aside while it is open and
-	// come back to the same step afterwards.
+
+	// Arrive on the hub: the tour steps aside while the user is there, the way
+	// it does under a modal panel...
+	currentSceneIndex, pendingSceneIndex, transitionPhase = hub, -1, "none"
 	if !onboardingCoveredByOverlay() {
-		t.Fatal("an open Tools panel did not cover the tour")
+		t.Fatal("the Tools hub did not cover the tour")
 	}
-	toolsPanel.open = false
+	// ...and comes back on the same step when they return to Home.
+	currentSceneIndex = 0
 	if got := onboardingCoveredByOverlay(); got != coveredBefore {
-		t.Fatal("the tour is still covered after the Tools panel closed")
+		t.Fatal("the tour is still covered after coming back from Tools")
 	}
 	if onboarding.step != step || !onboarding.active {
-		t.Fatal("closing Tools did not leave the tour on its tools step")
+		t.Fatal("coming back from Tools did not leave the tour on its tools step")
 	}
 }

@@ -14,9 +14,16 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// renderPlaytimeProbe draws the real Playtime screen over a flat background with
-// the given snapshot installed and returns the captured frame.
+// renderPlaytimeProbe draws the real Playtime screen (the trophy room, on its
+// Trophies tab) over a flat background with the given snapshot installed and
+// returns the captured frame.
 func renderPlaytimeProbe(t *testing.T, data playtimeData) *probeFrame {
+	t.Helper()
+	return renderPlaytimeTabProbe(t, data, trophyTabTrophies)
+}
+
+// renderPlaytimeTabProbe is renderPlaytimeProbe on a chosen tab of the room.
+func renderPlaytimeTabProbe(t *testing.T, data playtimeData, tab int) *probeFrame {
 	t.Helper()
 	if _, err := os.Stat("jukaconfig.json"); err != nil {
 		t.Fatalf("jukaconfig.json ships next to the tests: %v", err)
@@ -40,6 +47,14 @@ func renderPlaytimeProbe(t *testing.T, data playtimeData) *probeFrame {
 	t.Cleanup(func() { playtime.data, playtime.loaded = prevData, prevLoaded })
 	playtime.data = data
 	playtime.loaded = true
+	// The room rebuilds its list when the snapshot's revision moves.
+	playtime.rev++
+	trophyRoomSyncVisit()
+	trophyRoom.tab = tab
+	t.Cleanup(func() {
+		trophyRoom = trophyRoomState{}
+		playtimeScrollFor = -2
+	})
 
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
@@ -85,33 +100,33 @@ func fullWindowData(now time.Time) playtimeData {
 }
 
 // A played window must light the grid, an empty one must stay on the track, and
-// the grid must sit inside the card instead of running off it.
+// the grid must sit inside the card instead of running off it. The grid lives on
+// the trophy room's Playtime tab.
 func TestPlaytimeInsightsGridRendersPlayedDays(t *testing.T) {
-	const (
-		cardX, cardY = int32(504), int32(194)
-		cardW, cardH = int32(748), int32(238)
-	)
 	now := time.Now()
 
-	played := renderPlaytimeProbe(t, fullWindowData(now))
+	played := renderPlaytimeTabProbe(t, fullWindowData(now), trophyTabStats)
 	heat := playtimeHeatRect
+	card := trophyRoom.heatCard
 	if heat.W <= 0 || heat.H <= 0 {
 		t.Fatal("the insights card drew no grid")
 	}
-	if heat.X < cardX || heat.Y < cardY || heat.X+heat.W > cardX+cardW || heat.Y+heat.H > cardY+cardH {
-		t.Fatalf("grid %+v escapes its card %+v", heat,
-			sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH})
+	if card.W <= 0 || card.H <= 0 {
+		t.Fatal("the insights card was not laid out")
+	}
+	if heat.X < card.X || heat.Y < card.Y || heat.X+heat.W > card.X+card.W || heat.Y+heat.H > card.Y+card.H {
+		t.Fatalf("grid %+v escapes its card %+v", heat, card)
 	}
 	lit := accentPixelsIn(played, heat)
 	if lit < 500 {
 		t.Fatalf("a fully played window lit only %d grid pixels", lit)
 	}
 
-	// Nothing in the gap between this card and the achievements card below it:
-	// that band is what content overflow looked like the last time a card grew.
-	gap := sdl.Rect{X: cardX, Y: cardY + cardH, W: cardW, H: 16}
-	for y := gap.Y; y < gap.Y+gap.H; y++ {
-		for x := gap.X; x < gap.X+gap.W; x++ {
+	// Nothing in the gap between this card and the card below it: that band is
+	// what content overflow looked like the last time a card grew.
+	gap := sdl.Rect{X: card.X, Y: card.Y + card.H + 1, W: card.W, H: 12}
+	for y := gap.Y; y < gap.Y+gap.H && y < probeH; y++ {
+		for x := gap.X; x < gap.X+gap.W && x < probeW; x++ {
 			c := played.at(x, y)
 			if int(c.R)+int(c.G)+int(c.B) > 420 {
 				t.Fatalf("bright pixel %+v at (%d,%d) in the gap under the insights card", c, x, y)
@@ -121,7 +136,7 @@ func TestPlaytimeInsightsGridRendersPlayedDays(t *testing.T) {
 }
 
 func TestPlaytimeInsightsGridStaysEmptyWithoutPlay(t *testing.T) {
-	empty := renderPlaytimeProbe(t, newPlaytimeData())
+	empty := renderPlaytimeTabProbe(t, newPlaytimeData(), trophyTabStats)
 	heat := playtimeHeatRect
 	if heat.W <= 0 {
 		t.Fatal("the insights card drew no grid")

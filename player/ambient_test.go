@@ -1,8 +1,9 @@
 package main
 
 // Tests for dock & ambient mode: the auto-entry rule, the photo folder, the
-// sleep-timer cycle, the screen-off state machine, and an offscreen render that
-// proves the clock, photo and chips really reach the panel.
+// sleep-timer cycle, the screen-off state machine, the Play button, and an
+// offscreen render that proves the clock, photo and buttons really reach the
+// panel.
 
 import (
 	"image"
@@ -373,6 +374,179 @@ func TestAmbientWeatherDefaultsOn(t *testing.T) {
 	if desc != "Clear" || !strings.Contains(temps, "20") {
 		t.Errorf("dock weather = %q %q, want today's forecast", desc, temps)
 	}
+	// A clear sky gets the sun by day and the moon at night; anything else a
+	// cloud.
+	noon := time.Date(2026, 11, 8, 12, 0, 0, 0, time.Local)
+	midnight := time.Date(2026, 11, 8, 23, 30, 0, 0, time.Local)
+	wxMutex.Lock()
+	weatherDaily = []WeatherDay{{Date: noon.Format("2006-01-02"), TMax: 20, TMin: 10, Code: 0}}
+	wxMutex.Unlock()
+	if got := saverDockWeatherIcon(noon); got != "sun" {
+		t.Errorf("clear day icon = %q, want sun", got)
+	}
+	if got := saverDockWeatherIcon(midnight); got != "moon" {
+		t.Errorf("clear night icon = %q, want moon", got)
+	}
+	wxMutex.Lock()
+	weatherDaily = []WeatherDay{{Date: noon.Format("2006-01-02"), TMax: 20, TMin: 10, Code: 63}}
+	wxMutex.Unlock()
+	if got := saverDockWeatherIcon(noon); got != "cloud" {
+		t.Errorf("rain icon = %q, want cloud", got)
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// The Play button
+// ──────────────────────────────────────────────────────────────────────
+
+// saverStubMusic replaces the playlist and the track starter for one test, so
+// no decoder process is ever spawned, and reports which track was started.
+func saverStubMusic(t *testing.T) *[]int {
+	t.Helper()
+	music.mu.Lock()
+	prevTracks, prevCurrent, prevCursor := music.tracks, music.current, music.cursor
+	prevPlaying, prevPaused, prevDir := music.playing, music.paused, music.dir
+	music.tracks, music.current, music.cursor = nil, -1, 0
+	music.playing, music.paused, music.dir = false, false, ""
+	music.mu.Unlock()
+	prevHook := musicPlayTrackHook
+	started := &[]int{}
+	musicPlayTrackHook = func(i int) { *started = append(*started, i) }
+	prevConfig := appConfig
+	t.Cleanup(func() {
+		musicPlayTrackHook = prevHook
+		appConfig = prevConfig
+		music.mu.Lock()
+		music.tracks, music.current, music.cursor = prevTracks, prevCurrent, prevCursor
+		music.playing, music.paused, music.dir = prevPlaying, prevPaused, prevDir
+		music.mu.Unlock()
+	})
+	return started
+}
+
+// The dock's Play button used to start only the Files root's own audio files,
+// and silently did nothing on a device whose music lives one folder down — the
+// "Play doesn't work" report. It now finds the music folder.
+func TestAmbientPlayFindsTheMusicFolder(t *testing.T) {
+	started := saverStubMusic(t)
+	root := t.TempDir()
+	album := filepath.Join(root, "Music", "Album")
+	if err := os.MkdirAll(album, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"02 two.mp3", "01 one.mp3", "cover.jpg"} {
+		if err := os.WriteFile(filepath.Join(album, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := &Config{}
+	config.Variables.FileExplorerRoot = root
+	appConfig = config
+
+	if got := saverFindMusicDir(config); got != album {
+		t.Fatalf("music folder = %q, want the album folder %q", got, album)
+	}
+	ambientTogglePlayback()
+	if len(*started) != 1 || (*started)[0] != 0 {
+		t.Fatalf("Play started %v, want the first track", *started)
+	}
+	music.mu.Lock()
+	n := len(music.tracks)
+	music.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("playlist has %d tracks, want the two audio files", n)
+	}
+}
+
+// With a playlist loaded but stopped, Play starts the highlighted track rather
+// than reloading a folder from the top.
+func TestAmbientPlayResumesTheLoadedList(t *testing.T) {
+	started := saverStubMusic(t)
+	music.mu.Lock()
+	music.tracks = []musicTrack{{Path: "/m/a.mp3", Name: "a.mp3"}, {Path: "/m/b.mp3", Name: "b.mp3"}}
+	music.cursor = 1
+	music.mu.Unlock()
+	ambientTogglePlayback()
+	if len(*started) != 1 || (*started)[0] != 1 {
+		t.Fatalf("Play started %v, want the highlighted track 1", *started)
+	}
+
+	// A stopped current track is played again.
+	*started = (*started)[:0]
+	music.mu.Lock()
+	music.current = 0
+	music.mu.Unlock()
+	ambientTogglePlayback()
+	if len(*started) != 1 || (*started)[0] != 0 {
+		t.Fatalf("Play started %v, want the current track 0", *started)
+	}
+}
+
+// Nothing to play anywhere is an answer, not a crash or a silent no-op.
+func TestAmbientPlayWithNoMusicSaysSo(t *testing.T) {
+	started := saverStubMusic(t)
+	config := &Config{}
+	config.Variables.FileExplorerRoot = t.TempDir()
+	appConfig = config
+	// The home folder's Music is a candidate too; point it at an empty one.
+	empty := t.TempDir()
+	t.Setenv("HOME", empty)
+	t.Setenv("USERPROFILE", empty)
+	if _, err := os.Stat("/mnt/SDCARD/Music"); err == nil {
+		t.Skip("this machine has a real SD-card music folder")
+	}
+	if got := saverFindMusicDir(config); got != "" {
+		t.Fatalf("found music in %q on an empty card", got)
+	}
+	ambientTogglePlayback()
+	if len(*started) != 0 {
+		t.Fatalf("Play started %v with no music anywhere", *started)
+	}
+}
+
+// Every route — pad, keyboard, mouse — reaches the same dock action.
+func TestAmbientButtonsAnswerEveryInput(t *testing.T) {
+	resetAmbientState(t)
+	started := saverStubMusic(t)
+	music.mu.Lock()
+	music.tracks = []musicTrack{{Path: "/m/a.mp3", Name: "a.mp3"}, {Path: "/m/b.mp3", Name: "b.mp3"}}
+	music.mu.Unlock()
+	config := &Config{}
+	ambientEnter(config)
+
+	if !ambientHandleController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_A}) {
+		t.Fatal("the dock did not take A")
+	}
+	if len(*started) != 1 {
+		t.Fatalf("pad A started %v, want one track", *started)
+	}
+	if saverDockFlash.action != ambientActionPlayPause || saverDockFlash.at.IsZero() {
+		t.Error("pad A did not show the Play button pressed")
+	}
+
+	*started = (*started)[:0]
+	if !ambientHandleKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_RETURN}}, config) {
+		t.Fatal("the dock did not take Enter")
+	}
+	if len(*started) != 1 {
+		t.Fatalf("Enter started %v, want one track", *started)
+	}
+
+	// A tap on the Play button's rect is the same press.
+	*started = (*started)[:0]
+	ambientButtons = []ambientButton{{action: ambientActionPlayPause, rect: sdl.Rect{X: 100, Y: 600, W: 120, H: 46}}}
+	if !ambientHandleClick(130, 620) {
+		t.Fatal("the dock did not take the tap")
+	}
+	if len(*started) != 1 {
+		t.Fatalf("a tap on Play started %v, want one track", *started)
+	}
+
+	// And B, from the pad, leaves.
+	ambientHandleController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_B})
+	if ambientIsActive() {
+		t.Fatal("B did not leave the dock")
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -398,7 +572,9 @@ func writeAmbientPhoto(t *testing.T, dir, name string, c color.RGBA) string {
 	return file.Name()
 }
 
-func renderAmbientProbe(t *testing.T, config *Config) *probeFrame {
+// ambientProbeRenderer creates one offscreen renderer for a whole test, so the
+// textures the dock uploads on one frame are still its own on the next.
+func ambientProbeRenderer(t *testing.T) (*sdl.Renderer, *probeFrame) {
 	t.Helper()
 	f := newProbeFrame(t)
 	if err := img.Init(img.INIT_PNG | img.INIT_JPG); err != nil {
@@ -408,39 +584,22 @@ func renderAmbientProbe(t *testing.T, config *Config) *probeFrame {
 	if err != nil {
 		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
-	// A previous test's scene renderer has been destroyed, so the shared
-	// gradient/scrim cache may hold handles SDL has already freed. Drop the
-	// references without calling Destroy on them (that would be a use-after-free
-	// and corrupts later SDL allocations); renderAmbient rebuilds what it needs
-	// on this renderer.
-	gradientTexture = nil
-	gradientSceneKey = ""
-	gradientOverlayKey = sdl.Color{}
-	ambientScrim.texture = nil
-	ambientScrim.w, ambientScrim.h = 0, 0
-
 	// Cleanups run last-registered-first: drop textures created for this probe
 	// before its renderer is destroyed, so no later test sees a stale handle.
 	t.Cleanup(func() { destroyTestRenderer(renderer) })
 	t.Cleanup(func() {
 		ambientFreePhoto()
-		if ambientScrim.texture != nil {
-			ambientScrim.texture.Destroy()
-			ambientScrim.texture = nil
-			ambientScrim.w, ambientScrim.h = 0, 0
-		}
-		if gradientTexture != nil {
-			gradientTexture.Destroy()
-			gradientTexture = nil
-			gradientSceneKey = ""
-			gradientOverlayKey = sdl.Color{}
-		}
+		releaseScreenlockTexture()
 	})
-
 	prevW, prevH := screenWidth, screenHeight
 	screenWidth, screenHeight = probeW, probeH
 	t.Cleanup(func() { screenWidth, screenHeight = prevW, prevH })
+	return renderer, f
+}
 
+// renderAmbientOn draws one dock frame on renderer and captures it into f.
+func renderAmbientOn(t *testing.T, renderer *sdl.Renderer, f *probeFrame, config *Config) *probeFrame {
+	t.Helper()
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
 	renderAmbient(renderer, config)
@@ -451,9 +610,9 @@ func renderAmbientProbe(t *testing.T, config *Config) *probeFrame {
 	return f
 }
 
-// TestRenderAmbientFrame draws one real frame with a photo behind it and
-// checks the three things a broken screen would lose: the clock text, the
-// action chips, and the slideshow (including skipping a corrupt file).
+// TestRenderAmbientFrame draws real frames with a photo behind them and checks
+// the three things a broken screen would lose: the clock text, the action
+// buttons, and the slideshow (including skipping a corrupt file).
 func TestRenderAmbientFrame(t *testing.T) {
 	resetAmbientState(t)
 	// Initialise SDL video and SDL_ttf before asking for a font; getCachedFont
@@ -462,6 +621,9 @@ func TestRenderAmbientFrame(t *testing.T) {
 	if font, _ := getCachedFont(&Config{}, "big"); font == nil {
 		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
+	saverPinWifiForTest(t)
+	saverPicReset()
+	t.Cleanup(saverPicReset)
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a-broken.png"), []byte("not a png"), 0o644); err != nil {
@@ -472,20 +634,28 @@ func TestRenderAmbientFrame(t *testing.T) {
 	config.Variables.Custom = map[string]interface{}{"ambientPhotos": dir}
 
 	ambientEnter(config)
-	now := time.Now()
-	ambientRefreshPhotos(config, now)
+	ambientRefreshPhotos(config, time.Now())
 	if len(ambientPhotos.files) != 2 {
 		t.Fatalf("slideshow found %d photos, want 2", len(ambientPhotos.files))
 	}
-	// Skip the fade so this frame is fully opaque.
-	ambientPhotos.changedAt = now.Add(-2 * ambientPhotoFade)
 
-	f := renderAmbientProbe(t, config)
-
-	// The corrupt first file must be skipped for the good one.
+	renderer, f := ambientProbeRenderer(t)
+	// Photos are decoded off the render thread: draw frames until the good
+	// photo is up. The corrupt first file must be skipped on the way.
+	deadline := time.Now().Add(10 * time.Second)
+	for filepath.Base(ambientPhotos.texturePath) != "b-dock.png" && time.Now().Before(deadline) {
+		renderAmbientOn(t, renderer, f, config)
+		time.Sleep(10 * time.Millisecond)
+	}
 	if filepath.Base(ambientPhotos.texturePath) != "b-dock.png" {
 		t.Fatalf("did not fall through the corrupt photo: %q", ambientPhotos.texturePath)
 	}
+	if !ambientPhotos.failed[filepath.Join(dir, "a-broken.png")] {
+		t.Error("the corrupt photo was not remembered as broken")
+	}
+	// Skip the cross-fade so this frame is fully opaque.
+	ambientPhotos.changedAt = time.Now().Add(-2 * ambientPhotoFade)
+	renderAmbientOn(t, renderer, f, config)
 
 	// The clock lives in the top-left. Its antialiased glyphs must produce
 	// bright pixels there; a blank or crashed frame would not.
@@ -502,21 +672,70 @@ func TestRenderAmbientFrame(t *testing.T) {
 		t.Errorf("clock area has only %d bright pixels, want the time text drawn", bright)
 	}
 
-	// The blue photo must dominate the dark scrim away from the cards.
+	// The blue photo must dominate the scrim away from the cards.
 	if c := f.at(probeW/2, probeH/3); c.B <= c.R+40 || c.B <= c.G+20 {
 		t.Errorf("photo not drawn: pixel %+v", c)
 	}
 
 	if len(ambientButtons) != 6 {
-		t.Fatalf("got %d chips, want 6", len(ambientButtons))
+		t.Fatalf("got %d buttons, want 6", len(ambientButtons))
 	}
+	seen := map[ambientAction]bool{}
 	for _, b := range ambientButtons {
-		if b.rect.W <= 0 || b.rect.H <= 0 {
-			t.Errorf("chip %v has an empty hit rect", b.action)
+		if b.rect.W < 44 || b.rect.H < 30 {
+			t.Errorf("button %v has a %dx%d hit rect, too small to tap", b.action, b.rect.W, b.rect.H)
 		}
-		if b.rect.X < 0 || b.rect.X+b.rect.W > probeW {
-			t.Errorf("chip %v at x=%d w=%d is off screen", b.action, b.rect.X, b.rect.W)
+		if b.rect.X < 0 || b.rect.X+b.rect.W > probeW || b.rect.Y+b.rect.H > probeH {
+			t.Errorf("button %v at %+v is off screen", b.action, b.rect)
 		}
+		seen[b.action] = true
+	}
+	for _, a := range []ambientAction{ambientActionPlayPause, ambientActionPrev, ambientActionNext, ambientActionSleep, ambientActionScreenOff, ambientActionExit} {
+		if !seen[a] {
+			t.Errorf("no button for action %v", a)
+		}
+	}
+	for i := 1; i < len(ambientButtons); i++ {
+		a, b := ambientButtons[i-1].rect, ambientButtons[i].rect
+		if a.X+a.W > b.X {
+			t.Errorf("buttons %d and %d overlap: %+v %+v", i-1, i, a, b)
+		}
+	}
+}
+
+// The lock-screen picture chosen in Files is the dock's backdrop too: the dock
+// is the default idle screen, and it used to ignore the setting, which is why
+// "set as lock screen" seemed to do nothing.
+func TestAmbientDrawsTheLockScreenPicture(t *testing.T) {
+	resetAmbientState(t)
+	resetScreenlockCache(t)
+	newProbeFrame(t)
+	saverPinWifiForTest(t)
+	saverPicReset()
+	t.Cleanup(saverPicReset)
+
+	picture := writeTestPNG(t, "lock.png", color.RGBA{R: 230, G: 30, B: 30, A: 255})
+	config := screenlockTestConfig("")
+	if err := setScreenlockImage(config, picture); err != nil {
+		t.Fatalf("setScreenlockImage: %v", err)
+	}
+	ambientEnter(config)
+	renderer, f := ambientProbeRenderer(t)
+	deadline := time.Now().Add(10 * time.Second)
+	for ssImage.texture == nil && time.Now().Before(deadline) {
+		renderAmbientOn(t, renderer, f, config)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ssImage.texture == nil {
+		t.Fatal("the dock never drew the lock-screen picture")
+	}
+	ssImage.shownAt = time.Time{} // skip the fade-in
+	renderAmbientOn(t, renderer, f, config)
+	if c := f.at(probeW/2, probeH/2); c.R <= c.B+60 || c.R <= c.G+60 {
+		t.Fatalf("the middle of the dock is %+v, want the red lock picture", c)
+	}
+	if len(ambientPhotos.files) != 0 {
+		t.Error("the slideshow was scanned although a lock picture is set")
 	}
 }
 
@@ -541,16 +760,11 @@ func TestAmbientEmptyStatesStayOffTheDock(t *testing.T) {
 		}
 	}
 
-	if lines := ambientStatusLines(ambientStatus{battery: -1}, 0, 0, 0); len(lines) != 0 {
-		t.Fatalf("unknown battery drew %d line(s): %+v", len(lines), lines)
+	if lines := ambientStatusLines(0, 0, 0); len(lines) != 0 {
+		t.Fatalf("an idle dock drew %d status line(s): %+v", len(lines), lines)
 	}
-	lines := ambientStatusLines(ambientStatus{battery: -1, charging: true}, 0, 0, 0)
-	if len(lines) != 1 || lines[0].text != "Charging" {
-		t.Fatalf("charging without a percentage = %+v, want one Charging line", lines)
-	}
-
-	lines = ambientStatusLines(ambientStatus{battery: 82, charging: true}, 90*time.Second, 2, 5)
-	want := []string{"Battery 82% · Charging", "Sleep in 1:30", "Photo 3/5"}
+	lines := ambientStatusLines(90*time.Second, 2, 5)
+	want := []string{"Sleep in 1:30", "Photo 3/5"}
 	if len(lines) != len(want) {
 		t.Fatalf("column = %+v, want %d lines", lines, len(want))
 	}
@@ -558,6 +772,20 @@ func TestAmbientEmptyStatesStayOffTheDock(t *testing.T) {
 		if lines[i].text != text {
 			t.Fatalf("line %d = %q, want %q", i, lines[i].text, text)
 		}
+	}
+
+	// The battery moved to its chip: no reading means no chip at all.
+	if got := saverBatteryLabel(-1, false); got != "" {
+		t.Fatalf("unknown battery label = %q, want no chip", got)
+	}
+	if got := saverBatteryLabel(-1, true); got != "Charging" {
+		t.Fatalf("charging without a level = %q", got)
+	}
+	if got := saverBatteryLabel(82, true); got != "82% · Charging" {
+		t.Fatalf("charging label = %q", got)
+	}
+	if got := saverBatteryLabel(82, false); got != "82%" {
+		t.Fatalf("battery label = %q", got)
 	}
 }
 

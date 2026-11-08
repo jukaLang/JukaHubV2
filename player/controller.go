@@ -28,9 +28,23 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return false
 	}
 
+	// A ringing alarm is above everything, including the enlarged QR code: it
+	// owns the pad until it is snoozed or dismissed.
+	if alarmHandleController(e) {
+		return true
+	}
+
 	// An enlarged QR code sits above every panel: any button dismisses it, and
 	// nothing underneath may react to the press that does.
 	if ctrlQRZoom(e) {
+		return true
+	}
+
+	// The active control profile (inmap_runtime.go) comes next: it rewrites a
+	// press into a fresh queued one, runs a named action, or holds it back for
+	// a hold, a double tap or a chord (and the Select + R1 profile switch).
+	// Its own queued presses come back through here untouched.
+	if inmapHandleButtonDown(e, config) {
 		return true
 	}
 
@@ -75,14 +89,6 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 		return ctrlFileEditor(e, config)
 	}
-	// The Wi-Fi picker is modal. While its password keyboard is up the
-	// controller belongs to the keyboard, which runs after these overlays.
-	if wifiPanel.open {
-		if virtualKeyboardActive {
-			return false
-		}
-		return ctrlWiFi(e, config)
-	}
 	// Update prompt is the topmost modal.
 	if updatePrompt.open {
 		return ctrlUpdatePrompt(e, config)
@@ -98,6 +104,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// And the saved-page picker, where A opens and X removes.
 	if browserBookmarkPanel.open {
 		return ctrlBrowserBookmarks(e, config)
+	}
+	// And the browser's site-info sheet (connection, certificate, headers).
+	if brwInfo.open {
+		return brwInfoController(e, config)
 	}
 	// The Phone Companion QR card is modal, and B is how a phone closes it
 	// after pairing: the phone's remote pushes a real B event.
@@ -115,13 +125,12 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 		return true
 	}
-	// Watch Party is modal: nothing underneath may react while it is open.
-	if partyUI.open {
-		return partyHandleController(e, config)
-	}
 	// Community hub is the topmost modal when open.
 	if communityPanel.open {
 		return ctrlCommunity(e, config)
+	}
+	if themeCommunityPanel.open {
+		return ctrlThemeCommunity(e, config)
 	}
 	// Developer / power-user tools sit above the regular overlays.
 	if powerTools.open {
@@ -185,10 +194,6 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// PortMaster Ports is modal too.
 	if portsPanel.open {
 		return ctrlPortsPanel(e)
-	}
-	// Tools is modal: nothing underneath may react while it is open.
-	if toolsPanel.open {
-		return ctrlToolsPanel(e, config)
 	}
 	// LAN play is modal over the game library.
 	if netplayPanel.open {
@@ -277,6 +282,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if !virtualKeyboardActive && chatSelectionOwnsInput(config) && ctrlChatSelection(e, config) {
 		return true
 	}
+	// A handoff offer or a pairing code floats over Home and owns the pad while
+	// it is up; Start still opens the menu (hoffcard.go).
+	if hoffCardController(e, config) {
+		return true
+	}
 
 	// The Now Playing chip is the pad-accessible anchor for the floating
 	// video. Keep X local to that focus so scene actions remain available.
@@ -294,6 +304,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 			retryHelperToolInstall(tool)
 			return true
 		}
+	}
+	// In Chat, Start sends what is typed; with nothing typed it falls through
+	// to the Start menu like everywhere else.
+	if e.Button == sdl.CONTROLLER_BUTTON_START && chatStartSendsDraft(config) {
+		return true
 	}
 	// Start opens the menu from every ordinary screen. Scenes that bind Start
 	// themselves (the arcade pause menu, Ambient) keep it, and no panel is
@@ -331,24 +346,15 @@ func ctrlShortcuts(e *sdl.ControllerButtonEvent) bool {
 func ctrlClipboard(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if clipCursorIdx > 0 {
-			clipCursorIdx--
-		}
+		// The overlay's helpers (clipboard.go) walk the list as shown, so a
+		// filtered list copies and removes the entry that is highlighted.
+		vkClipMove(-1)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if clipCursorIdx < len(clipHistory)-1 {
-			clipCursorIdx++
-		}
+		vkClipMove(1)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
-		if clipCursorIdx >= 0 && clipCursorIdx < len(clipHistory) {
-			if err := copyTextToClipboard(clipHistory[clipCursorIdx].text, "History"); err != nil {
-				ShowToast("Could not copy: "+err.Error(), ToastKindWarning)
-			} else {
-				ShowToast("Copied to clipboard", ToastKindSuccess)
-			}
-			clipSearchOpen = false
-			clipSearchBuf = ""
+		if vkClipCopyFocused() {
 			PlayActivateSound()
 		}
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
@@ -360,11 +366,7 @@ func ctrlClipboard(e *sdl.ControllerButtonEvent) bool {
 		clipSearchBuf = ""
 		PlayBackSound()
 	case sdl.CONTROLLER_BUTTON_X:
-		if clipCursorIdx >= 0 && clipCursorIdx < len(clipHistory) {
-			clipHistory = append(clipHistory[:clipCursorIdx], clipHistory[clipCursorIdx+1:]...)
-			if clipCursorIdx >= len(clipHistory) {
-				clipCursorIdx = len(clipHistory) - 1
-			}
+		if vkClipDeleteFocused() {
 			PlayNavSound()
 		}
 	}
@@ -374,47 +376,10 @@ func ctrlClipboard(e *sdl.ControllerButtonEvent) bool {
 // ── Global search ──
 
 func ctrlGlobalSearch(e *sdl.ControllerButtonEvent, config *Config) bool {
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if gsCursor > 0 {
-			gsCursor--
-		} else if len(gsResults) > 0 {
-			gsCursor = len(gsResults) - 1
-		}
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if gsCursor < len(gsResults)-1 {
-			gsCursor++
-		} else {
-			gsCursor = 0
-		}
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_A:
-		if gsCursor >= 0 && gsCursor < len(gsResults) && gsResults[gsCursor].Action != nil {
-			gsResults[gsCursor].Action(config)
-			gsQuery = ""
-			gsResults = nil
-			globalSearchOpen = false
-			PlayActivateSound()
-		}
-	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		globalSearchShoulder(padL1)
-	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		globalSearchShoulder(padR1)
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		gsQuery = ""
-		gsResults = nil
-		globalSearchOpen = false
-		PlayBackSound()
-	case sdl.CONTROLLER_BUTTON_X:
-		if len(gsQuery) > 0 {
-			gsQuery = ""
-			gsResults = gsSearch("")
-			gsCursor = 0
-			PlayNavSound()
-		}
-	}
-	return true
+	// The Home search sheet owns its bindings (globalsearch.go). It declines
+	// while its on-screen keyboard is up, so the main loop hands the press to
+	// the keyboard, which types into the query.
+	return homeSearchController(e, config)
 }
 
 // ── Quick Settings ──
@@ -536,28 +501,9 @@ func ctrlSocialNotif(e *sdl.ControllerButtonEvent) bool {
 // ── Image viewer ──
 
 func ctrlImageViewer(e *sdl.ControllerButtonEvent, config *Config) bool {
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_A:
-		closeImageViewer()
-		PlayBackSound()
-	case sdl.CONTROLLER_BUTTON_X:
-		// Keep the picture on the lock screen, or take it back if it already
-		// is the backdrop. A remote (chat) image has no file in Files, so the
-		// button stays inert for it.
-		if !imageViewerRemote {
-			toggleScreenlockFromViewer(config)
-			PlayActivateSound()
-		}
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		imageViewerStep(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		imageViewerStep(1)
-	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		imageViewerStep(-1)
-	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		imageViewerStep(1)
-	}
-	return true
+	// The viewer's whole pad map (zoom, pan, fit modes, lock screen) lives
+	// with it in imageviewer.go.
+	return imgvController(e, config)
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -572,6 +518,10 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	switch e.Axis {
 	case sdl.CONTROLLER_AXIS_TRIGGERLEFT:
 		if triggerPressedEdge(0, e.Value) {
+			// A control profile may map the trigger (inmap_runtime.go).
+			if inmapTriggerPress(inmapBtnL2, config) {
+				return true
+			}
 			if triggerOwnedByOverlay() {
 				return true
 			}
@@ -580,12 +530,19 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 		return false
 	case sdl.CONTROLLER_AXIS_TRIGGERRIGHT:
 		if triggerPressedEdge(1, e.Value) {
+			if inmapTriggerPress(inmapBtnR2, config) {
+				return true
+			}
 			if triggerOwnedByOverlay() {
 				return true
 			}
 			return handleShoulderPress(padR2, config)
 		}
 		return false
+	}
+	// The right stick scrolls the Chat history freely (chatinput.go).
+	if e.Axis == sdl.CONTROLLER_AXIS_RIGHTY && chatSceneStick(config, e.Value) {
+		return true
 	}
 	// Left stick X axis → left/right
 	if e.Axis == sdl.CONTROLLER_AXIS_LEFTX {

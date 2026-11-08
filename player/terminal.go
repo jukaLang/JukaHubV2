@@ -1,5 +1,22 @@
 package main
 
+// terminal.go — the built-in terminal: its session, the commands it runs and
+// the way a pad, a keyboard and a mouse drive it. Drawing lives in
+// terminal_ui.go, history and completion in terminal_history.go, and the
+// platform shell in terminal_windows.go / terminal_other.go.
+//
+// The controls are the ones every other screen has. B (pad) and Escape
+// (keyboard) leave whenever the on-screen keyboard is closed — B closes the
+// keyboard first when it is open — and no arrow can strand the user: on the pad
+// Up/Down scroll the output and Up at the oldest line steps onto the top bar,
+// exactly like any other page. Left/Right move the caret, A opens the keyboard,
+// Start runs the line, X clears it (or stops a running command), Y opens the
+// command history and L1/R1 page the output. A keyboard types straight into
+// the prompt: Enter runs, Up/Down recall history, PgUp/PgDn page, Tab
+// completes, Ctrl+R opens the history, Ctrl+U clears the line, Ctrl+C stops a
+// command and Ctrl+L clears the screen. The mouse wheel scrolls and a click
+// puts the caret where it lands.
+
 import (
 	"context"
 	"errors"
@@ -9,33 +26,79 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/shirou/gopsutil/v4/host"
+	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
-// ──────────────────────────────────────────────────────────────────────
-// Terminal emulator
-// ──────────────────────────────────────────────────────────────────────
+const (
+	// termMaxLines bounds the scrollback. Lines keep their wrapped rows
+	// cached, so a few hundred is a few hundred kilobytes at most.
+	termMaxLines = 400
+	termPrompt   = "juka> "
+	// termCaretBlink is the caret's half period: 530 ms on, 530 ms off, the
+	// rhythm desktop text fields use. Every edit restarts it, so the caret
+	// stays solid while someone is typing.
+	termCaretBlink = 530 * time.Millisecond
+	// termMaxInput bounds the command line (a pasted log must not become a
+	// 2 MB prompt that is measured on every frame).
+	termMaxInput = 4096
+	// termScrollStep is how many lines one D-pad press or wheel notch moves.
+	termScrollStep = 3
+	// termListMax caps the built-in ls: a folder of 20k ROMs must not flood
+	// the scrollback.
+	termListMax = 500
+)
 
 const (
-	termMaxLines    = 200
-	termPrompt      = "juka> "
-	termCursorBlink = 500 // ms
-	termLineH       = int32(20)
+	// termCommandTimeout bounds an external command. It runs off the event
+	// thread, can be stopped at any time with X / Ctrl+C / the Stop button,
+	// and ends when the user leaves the screen; the timeout only catches the
+	// command nobody is watching any more.
+	termCommandTimeout = 5 * time.Minute
+	// termJobMaxPending bounds the output a command may queue between frames.
+	termJobMaxPending = 2000
+	// termCatMaxBytes bounds `cat`: os.ReadFile on /dev/zero or a disc image
+	// read until the handheld ran out of memory.
+	termCatMaxBytes = 256 << 10
+)
+
+// termLineKind is what a scrollback line is, which is what its colour says.
+type termLineKind uint8
+
+const (
+	termKindOutput termLineKind = iota
+	termKindError
+	termKindEcho   // the prompt line a command was typed on
+	termKindSystem // banners, help text and status notes from the terminal itself
 )
 
 type termLine struct {
 	text  string
 	isErr bool
+	kind  termLineKind
+	// rows is text wrapped to the console for one font and width; the
+	// renderer re-wraps a line only when either changes.
+	rows     []string
+	rowsFont *ttf.Font
+	rowsW    int32
 }
 
 type terminalState struct {
-	lines   []termLine
-	input   string
-	cursor  int
+	lines []termLine
+	input string
+	// cursor is a byte offset into input, always on a rune boundary, so a
+	// caret after "café" sits after the é and not inside it.
+	cursor int
+	// scrollY counts lines back from the newest; 0 follows new output.
 	scrollY int
 	started time.Time
 	history []string
@@ -44,22 +107,29 @@ type terminalState struct {
 	// os.Chdir, which moved the whole app: every relative path JukaHub writes
 	// (jukauser.json, alarms, notes, history) then landed in whatever folder
 	// the user had wandered into, and the settings seemed to vanish.
-	cwd string
+	cwd     string
+	prevCwd string
 	// job is the external command running in the background, if any.
 	job *termJob
+	// unseen counts lines that arrived while the user was reading older
+	// output; the console offers a jump back down to them.
+	unseen int
+	// fitTop is how many lines from the top of the buffer fill the console,
+	// as measured by the last frame (0 = never drawn).
+	fitTop int
+	// pageLines is how many lines the last frame showed, for L1/R1 paging.
+	pageLines int
+	// caretAt is the last edit: the caret is solid for one blink after it.
+	caretAt time.Time
+	// liveLine is the unfinished last line of a running command — a progress
+	// bar redrawn with \r — shown under the output until it completes.
+	liveLine string
+	// inputScroll is the prompt's horizontal scroll in pixels, so the caret
+	// stays visible in a command longer than the field.
+	inputScroll int32
 }
 
-const (
-	// termCommandTimeout bounds an external command: `ping` or `top` used to
-	// run on the event thread until they ended on their own, freezing the
-	// whole UI with them. Ctrl+C (or B on the pad) stops one sooner.
-	termCommandTimeout = 60 * time.Second
-	// termJobMaxPending bounds the output a command may queue between frames.
-	termJobMaxPending = 2000
-	// termCatMaxBytes bounds `cat`: os.ReadFile on /dev/zero or a disc image
-	// read until the handheld ran out of memory.
-	termCatMaxBytes = 256 << 10
-)
+var term terminalState
 
 // termJob is one external command running off the event thread. Its output is
 // collected here and moved into the terminal by termDrainJob on the render
@@ -72,6 +142,15 @@ type termJob struct {
 	done    bool
 	err     error
 	cancel  context.CancelFunc
+	// started and command describe the run for the header read-out.
+	started time.Time
+	command string
+	// stopped is set by Stop; left when leaving the screen ended the run;
+	// timedOut when termCommandTimeout did.
+	stopped  bool
+	left     bool
+	timedOut bool
+	exitCode int
 }
 
 func (j *termJob) Write(p []byte) (int, error) {
@@ -89,9 +168,80 @@ func (j *termJob) Write(p []byte) (int, error) {
 			j.dropped++
 			continue
 		}
-		j.pending = append(j.pending, termLine{text: strings.TrimRight(line, "\r")})
+		j.pending = append(j.pending, termLine{text: termCleanOutput(line)})
 	}
 	return len(p), nil
+}
+
+// termCleanOutput turns one line of program output into something the screen
+// can draw: a carriage-return progress bar keeps only its last frame, colour
+// escape codes are removed, tabs become spaces and invalid UTF-8 (a Windows
+// tool writing in its OEM code page) becomes "?" instead of breaking the font.
+func termCleanOutput(s string) string {
+	s = strings.ToValidUTF8(s, "?")
+	s = strings.TrimRight(s, "\r")
+	if i := strings.LastIndexByte(s, '\r'); i >= 0 {
+		s = s[i+1:]
+	}
+	if strings.IndexByte(s, 0x1b) >= 0 {
+		s = termStripANSI(s)
+	}
+	if strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteString("    ")
+		case r < 0x20 || r == 0x7f:
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// termStripANSI removes terminal escape sequences (colours, cursor moves and
+// window titles) that tools print when they think they own a real terminal.
+func termStripANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != 0x1b {
+			b.WriteByte(c)
+			continue
+		}
+		if i+1 >= len(s) {
+			break
+		}
+		switch s[i+1] {
+		case '[': // CSI: parameters, then one final byte in 0x40..0x7e
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			i = j
+		case ']': // OSC: ends with BEL or ESC \
+			j := i + 2
+			for j < len(s) {
+				if s[j] == 0x07 {
+					break
+				}
+				if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
+					j++
+					break
+				}
+				j++
+			}
+			i = j
+		default: // a two-byte escape
+			i++
+		}
+	}
+	return b.String()
 }
 
 // termDrainJob moves a running command's output into the terminal and reports
@@ -106,67 +256,197 @@ func termDrainJob() {
 	j.pending = nil
 	dropped := j.dropped
 	j.dropped = 0
-	done, err := j.done, j.err
-	partial := ""
+	done := j.done
+	partial := j.partial
 	if done {
-		partial = j.partial
 		j.partial = ""
 	}
+	err, stopped, left, timedOut, code := j.err, j.stopped, j.left, j.timedOut, j.exitCode
 	j.mu.Unlock()
 	for _, l := range lines {
-		termPushLine(l.text, false)
+		termAppend(l.text, termKindOutput)
 	}
 	if dropped > 0 {
-		termPushLine(fmt.Sprintf("... %d line(s) of output skipped", dropped), true)
+		termAppend(fmt.Sprintf("… %d line(s) of output skipped", dropped), termKindSystem)
 	}
 	if !done {
+		term.liveLine = termCleanOutput(partial)
 		return
 	}
-	if strings.TrimSpace(partial) != "" {
-		termPushLine(strings.TrimRight(partial, "\r"), false)
+	term.liveLine = ""
+	if s := termCleanOutput(partial); strings.TrimSpace(s) != "" {
+		termAppend(s, termKindOutput)
 	}
-	if err != nil {
-		termPushLine(fmt.Sprintf("Error: %v", err), true)
+	switch {
+	case left:
+		termAppend("Stopped: the Terminal was closed while the command ran.", termKindSystem)
+	case stopped:
+		// Stop already said so when it was pressed.
+	case timedOut:
+		termAppend("Stopped after "+termDurationText(termCommandTimeout)+".", termKindError)
+	case err != nil && code > 0:
+		termAppend(fmt.Sprintf("Exited with code %d.", code), termKindError)
+	case err != nil:
+		termAppend("Error: "+firstLine(err.Error()), termKindError)
 	}
 	term.job = nil
 }
 
-// termStopJob is Ctrl+C: it ends the running command, if there is one.
+// termDurationText says a duration the way a person would.
+func termDurationText(d time.Duration) string {
+	if d >= time.Minute && d%time.Minute == 0 {
+		if m := int(d / time.Minute); m != 1 {
+			return fmt.Sprintf("%d minutes", m)
+		}
+		return "1 minute"
+	}
+	return d.Round(time.Second).String()
+}
+
+// termStopJob ends the running command, if there is one. It is Ctrl+C, the
+// pad's X while a command runs and the prompt's Stop button.
 func termStopJob() bool {
-	if term.job == nil {
+	j := term.job
+	if j == nil {
 		return false
 	}
-	term.job.cancel()
-	termPushLine("^C", true)
+	j.mu.Lock()
+	already := j.stopped || j.done
+	j.stopped = true
+	j.mu.Unlock()
+	if !already {
+		termAppend("Stopped.", termKindError)
+	}
+	j.cancel()
 	return true
 }
 
-// termStartJob runs an external command in term.cwd without blocking the UI.
-func termStartJob(binPath string, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), termCommandTimeout)
-	cmd := exec.CommandContext(ctx, binPath, args...)
-	cmd.Dir = term.cwd
-	job := &termJob{cancel: cancel}
+// termJobParent is the context a new command runs under: the Terminal's scene
+// scope while the Terminal is the screen, so leaving it stops the command the
+// way leaving any screen stops its work (scenetasks.go).
+func termJobParent() context.Context {
+	if currentSceneWorkName() == "Terminal" {
+		if ctx := sceneWorkContext(); ctx.Err() == nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+// termLaunch starts cmd in the background and makes it the terminal's job.
+func termLaunch(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, label string) {
+	job := &termJob{cancel: cancel, started: time.Now(), command: label}
 	cmd.Stdout = job
 	cmd.Stderr = job
-	// Its own process group, killed whole on timeout or Ctrl+C, and a bounded
-	// wait for output pipes a stray grandchild still holds.
+	// Its own process group (POSIX) or a process tree (Windows), stopped whole
+	// on Stop, on leave or on timeout, and a bounded wait for output pipes a
+	// stray grandchild still holds.
 	screenChildGroupConfigure(cmd)
-	cmd.Cancel = func() error { return screenChildKill(cmd) }
+	cmd.Cancel = func() error { return termKillTree(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 	term.job = job
+	term.liveLine = ""
 	go func() {
 		defer cancel()
 		err := cmd.Run()
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			err = fmt.Errorf("stopped after %s", termCommandTimeout)
-		} else if errors.Is(ctx.Err(), context.Canceled) {
-			err = nil // Ctrl+C already said so
-		}
 		job.mu.Lock()
+		defer job.mu.Unlock()
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			job.timedOut = true
+		case errors.Is(ctx.Err(), context.Canceled):
+			if !job.stopped {
+				job.left = true
+			}
+			err = nil
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			job.exitCode = exitErr.ExitCode()
+		}
 		job.done, job.err = true, err
-		job.mu.Unlock()
 	}()
+}
+
+// termRunExternal runs a command line outside the app: through the platform
+// shell (sh / cmd.exe), so pipes, quotes, wildcards and the shell's own
+// commands work, or directly when the system has no shell to ask.
+func termRunExternal(line string) {
+	if term.job != nil {
+		termAppend("A command is still running — press X (or Ctrl+C) to stop it first.", termKindError)
+		return
+	}
+	ctx, cancel := context.WithTimeout(termJobParent(), termCommandTimeout)
+	cmd := termShellCommand(ctx, line)
+	if cmd == nil {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			cancel()
+			return
+		}
+		// A name with a slash (./run.sh, bin/tool) is a path, and paths are
+		// the terminal's: resolved against the directory `cd` chose, not the
+		// app's, which LookPath would otherwise check.
+		lookup := fields[0]
+		if strings.ContainsAny(lookup, `/\`) {
+			resolved, err := termPath(lookup)
+			if err != nil {
+				cancel()
+				termAppend("Error: "+err.Error(), termKindError)
+				return
+			}
+			lookup = resolved
+		}
+		binPath, err := exec.LookPath(lookup)
+		if err != nil {
+			cancel()
+			termAppend("Command not found: "+fields[0], termKindError)
+			return
+		}
+		cmd = exec.CommandContext(ctx, binPath, fields[1:]...)
+	}
+	cmd.Dir = term.cwd
+	cmd.Env = append(os.Environ(), "TERM=dumb")
+	termLaunch(ctx, cancel, cmd, line)
+}
+
+// termShellMetaChars are the characters that only mean something to a shell:
+// a line containing one goes to the shell even when its first word is one of
+// the terminal's own commands (`ls | grep sav`, `echo $HOME > f`).
+func termShellMetaChars() string {
+	if runtime.GOOS == "windows" {
+		return "|&<>^%\""
+	}
+	return "|&;<>()$`*?\"'\\"
+}
+
+// termHasProgram reports whether name is a real program on PATH.
+func termHasProgram(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+// termWantsShell decides whether one of the terminal's convenience commands
+// (ls, cat, date, ...) should run as the real program instead: when the line
+// uses shell syntax, or passes flags the built-in does not know and the system
+// has the real tool. A plain `ls` or `cat notes.txt` stays built in, because
+// the built-ins work the same on Windows and on the handheld.
+func termWantsShell(command string, args []string, line string) bool {
+	if strings.ContainsAny(line, termShellMetaChars()) {
+		return true
+	}
+	switch command {
+	case "echo":
+		return false
+	case "date", "whoami", "hostname", "uptime":
+		return len(args) > 0 && termHasProgram(command)
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return termHasProgram(command)
+		}
+	}
+	return false
 }
 
 // termPath resolves a path the user typed against the terminal's directory.
@@ -186,71 +466,237 @@ func termPath(p string) (string, error) {
 	return filepath.Clean(clean), nil
 }
 
-// termMaxScroll is how far the output can scroll back.
+// ── Scrollback ───────────────────────────────────────────────────────────
+
+// termMaxScroll is how far the output can scroll back: until the oldest line
+// is at the top of the console. fitTop is measured by the last frame; before
+// the first frame a screenful is taken to be 12 lines.
 func termMaxScroll() int {
-	if m := len(term.lines) - 12; m > 0 {
+	fit := term.fitTop
+	if fit <= 0 {
+		fit = 12
+	}
+	if m := len(term.lines) - fit; m > 0 {
 		return m
 	}
 	return 0
 }
 
-var term terminalState
-
-// Mouse hitboxes for the terminal chrome, in logical screen coordinates. They
-// are filled in every frame by renderTerminal so clicks always match the
-// current layout.
-var (
-	termBackRect     sdl.Rect
-	termKeyboardRect sdl.Rect
-	termInputRect    sdl.Rect
-)
-
-func termInit() {
-	term.input = ""
-	term.cursor = 0
-	term.scrollY = 0
-	term.histIdx = -1
-	if term.cwd == "" {
-		term.cwd, _ = os.Getwd()
+// termAppend adds one line to the scrollback. At the bottom the view follows
+// new output; while the user is reading older output the view stays exactly
+// where it is and the new lines are counted for the "new output" pill.
+func termAppend(text string, kind termLineKind) {
+	term.lines = append(term.lines, termLine{text: text, isErr: kind == termKindError, kind: kind})
+	if term.scrollY > 0 {
+		term.scrollY++
+		term.unseen++
 	}
-	// Keep the session across visits: leaving the terminal and coming back
-	// should not wipe what the user was reading.
-	// Commands survive a restart: the history file is small, read once, and
-	// shared with Tab completion.
-	if len(term.history) == 0 {
-		term.history = termLoadHistory()
-	}
-	if len(term.lines) == 0 {
-		term.started = time.Now()
-		term.lines = []termLine{
-			{text: "JukaHub Terminal v1.0", isErr: false},
-			{text: fmt.Sprintf("Platform: %s/%s | %s", runtime.GOOS, runtime.GOARCH, P().Name()), isErr: false},
-			{text: "Type 'help' for available commands.", isErr: false},
-			{text: "", isErr: false},
+	if over := len(term.lines) - termMaxLines; over > 0 {
+		copy(term.lines, term.lines[over:])
+		for i := len(term.lines) - over; i < len(term.lines); i++ {
+			term.lines[i] = termLine{}
 		}
+		term.lines = term.lines[:len(term.lines)-over]
+	}
+	if max := termMaxScroll(); term.scrollY > max {
+		term.scrollY = max
 	}
 }
 
+// termPushLine appends plain output, or an error line.
 func termPushLine(text string, isErr bool) {
-	term.lines = append(term.lines, termLine{text: text, isErr: isErr})
-	if len(term.lines) > termMaxLines {
-		term.lines = term.lines[len(term.lines)-termMaxLines:]
+	kind := termKindOutput
+	if isErr {
+		kind = termKindError
 	}
-	// Auto-scroll to bottom.
-	term.scrollY = 0
+	termAppend(text, kind)
 }
 
 // termScroll moves the output viewport by delta lines (positive = older
 // output), clamped to the available history.
 func termScroll(delta int) {
-	maxScroll := termMaxScroll()
 	term.scrollY += delta
 	if term.scrollY < 0 {
 		term.scrollY = 0
 	}
-	if term.scrollY > maxScroll {
-		term.scrollY = maxScroll
+	if max := termMaxScroll(); term.scrollY > max {
+		term.scrollY = max
 	}
+	if term.scrollY == 0 {
+		term.unseen = 0
+	}
+}
+
+// termFollow jumps back to the newest output and keeps following it.
+func termFollow() {
+	term.scrollY = 0
+	term.unseen = 0
+}
+
+// termPageSize is one L1/R1 or PgUp/PgDn step: a screenful less one line, so
+// the line at the edge stays in view as context.
+func termPageSize() int {
+	if term.pageLines > 2 {
+		return term.pageLines - 1
+	}
+	return 10
+}
+
+// termClearScreen empties the scrollback (clear, cls, Ctrl+L).
+func termClearScreen() {
+	term.lines = nil
+	term.liveLine = ""
+	termFollow()
+}
+
+// ── Prompt editing ───────────────────────────────────────────────────────
+
+// termClampCursor keeps a byte offset inside the input and on a rune boundary.
+func termClampCursor(pos int) int {
+	if pos < 0 {
+		return 0
+	}
+	if pos > len(term.input) {
+		return len(term.input)
+	}
+	for pos > 0 && pos < len(term.input) && !utf8.RuneStart(term.input[pos]) {
+		pos--
+	}
+	return pos
+}
+
+// termSetCursor moves the caret and restarts its blink.
+func termSetCursor(pos int) {
+	term.cursor = termClampCursor(pos)
+	term.caretAt = time.Now()
+}
+
+func termCursorLeft() {
+	term.cursor = termClampCursor(term.cursor)
+	if term.cursor > 0 {
+		_, size := utf8.DecodeLastRuneInString(term.input[:term.cursor])
+		term.cursor -= size
+	}
+	term.caretAt = time.Now()
+}
+
+func termCursorRight() {
+	term.cursor = termClampCursor(term.cursor)
+	if term.cursor < len(term.input) {
+		_, size := utf8.DecodeRuneInString(term.input[term.cursor:])
+		term.cursor += size
+	}
+	term.caretAt = time.Now()
+}
+
+// termWordStart is where the word before pos begins (Ctrl+Left, Ctrl+Backspace).
+func termWordStart(s string, pos int) int {
+	for pos > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:pos])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		pos -= size
+	}
+	for pos > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:pos])
+		if unicode.IsSpace(r) {
+			break
+		}
+		pos -= size
+	}
+	return pos
+}
+
+// termWordEnd is where the word after pos ends (Ctrl+Right).
+func termWordEnd(s string, pos int) int {
+	for pos < len(s) {
+		r, size := utf8.DecodeRuneInString(s[pos:])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		pos += size
+	}
+	for pos < len(s) {
+		r, size := utf8.DecodeRuneInString(s[pos:])
+		if unicode.IsSpace(r) {
+			break
+		}
+		pos += size
+	}
+	return pos
+}
+
+func termBackspace() {
+	term.cursor = termClampCursor(term.cursor)
+	if term.cursor == 0 {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(term.input[:term.cursor])
+	term.input = term.input[:term.cursor-size] + term.input[term.cursor:]
+	term.cursor -= size
+	term.caretAt = time.Now()
+}
+
+func termDeleteRight() {
+	term.cursor = termClampCursor(term.cursor)
+	if term.cursor >= len(term.input) {
+		return
+	}
+	_, size := utf8.DecodeRuneInString(term.input[term.cursor:])
+	term.input = term.input[:term.cursor] + term.input[term.cursor+size:]
+	term.caretAt = time.Now()
+}
+
+func termDeleteWordLeft() {
+	term.cursor = termClampCursor(term.cursor)
+	start := termWordStart(term.input, term.cursor)
+	term.input = term.input[:start] + term.input[term.cursor:]
+	term.cursor = start
+	term.caretAt = time.Now()
+}
+
+// termClearLine empties the prompt (the pad's X, Ctrl+U).
+func termClearLine() {
+	term.input = ""
+	term.cursor = 0
+	term.inputScroll = 0
+	term.histIdx = -1
+	term.caretAt = time.Now()
+}
+
+// termInsertText inserts text at the caret. Typed input (SDL text events),
+// clipboard paste (Ctrl+V) and termOpenWithCommand all take this one path:
+// control characters are dropped, any printable character — "café", "Música",
+// "ё" — is kept whole, and the caret moves past what was inserted rather than
+// the text landing at the end of the line.
+func termInsertText(text string) {
+	if text == "" {
+		return
+	}
+	var b strings.Builder
+	for _, r := range text {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	add := b.String()
+	room := termMaxInput - len(term.input)
+	if room <= 0 || add == "" {
+		return
+	}
+	if len(add) > room {
+		cut := room
+		for cut > 0 && !utf8.RuneStart(add[cut]) {
+			cut--
+		}
+		add = add[:cut]
+	}
+	term.cursor = termClampCursor(term.cursor)
+	term.input = term.input[:term.cursor] + add + term.input[term.cursor:]
+	term.cursor += len(add)
+	term.caretAt = time.Now()
 }
 
 func termHistoryStep(delta int) {
@@ -268,235 +714,457 @@ func termHistoryStep(delta int) {
 		term.histIdx = -1
 		term.input = ""
 		term.cursor = 0
+		term.caretAt = time.Now()
 		return
 	}
 	term.input = term.history[term.histIdx]
 	term.cursor = len(term.input)
+	term.caretAt = time.Now()
 }
+
+// termRunInput runs what is in the prompt and clears it.
+func termRunInput() {
+	line := term.input
+	term.input = ""
+	term.cursor = 0
+	term.inputScroll = 0
+	term.caretAt = time.Now()
+	termExecute(line)
+}
+
+// ── Opening ──────────────────────────────────────────────────────────────
+
+// termPendingCommand is the command termOpenWithCommand pre-types. The scene's
+// entry hook (termInit) moves it into the prompt; it is never run on its own.
+var termPendingCommand string
+
+// termOpenWithCommand opens the Terminal with command typed into the prompt but
+// not run, so the user reads (and can edit) it before running it. Tools and the
+// Toolbox call it (cross-area contract).
+func termOpenWithCommand(config *Config, command string) {
+	command = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, command))
+	idx := sceneIndexExact(config, "Terminal")
+	if idx < 0 {
+		showToast("Terminal is not available", ToastWarn())
+		return
+	}
+	if idx == currentSceneIndex {
+		termClearLine()
+		termInsertText(command)
+		termFocusPrompt()
+		return
+	}
+	termPendingCommand = command
+	changeSceneTo(config, idx)
+	if pendingSceneIndex != idx {
+		// Another transition was already running; do not leave the command
+		// waiting for some later visit.
+		termPendingCommand = ""
+	}
+}
+
+// termInit runs when the Terminal scene is entered. The session — scrollback,
+// directory, history — survives leaving and coming back.
+func termInit() {
+	term.input = ""
+	term.cursor = 0
+	term.inputScroll = 0
+	term.histIdx = -1
+	term.caretAt = time.Now()
+	termFollow()
+	termHistoryClose()
+	if termPendingCommand != "" {
+		termInsertText(termPendingCommand)
+		termPendingCommand = ""
+	}
+	if term.cwd == "" {
+		term.cwd, _ = os.Getwd()
+	}
+	// Commands survive a restart: the history file is small, read once, and
+	// shared with Tab completion and the history picker.
+	if len(term.history) == 0 {
+		term.history = termLoadHistory()
+	}
+	if len(term.lines) == 0 {
+		term.started = time.Now()
+		termAppend("JukaHub Terminal", termKindSystem)
+		termAppend(fmt.Sprintf("%s · %s/%s · shell: %s", P().Name(), runtime.GOOS, runtime.GOARCH, termShellName()), termKindSystem)
+		termAppend("Type help for the commands. A opens the keyboard, Y the history, B leaves.", termKindSystem)
+		termAppend("", termKindSystem)
+	}
+}
+
+// termShellName names the shell external commands run in.
+func termShellName() string {
+	if runtime.GOOS == "windows" {
+		return "cmd.exe"
+	}
+	if termHasProgram("sh") {
+		return "sh"
+	}
+	return "none (programs run directly)"
+}
+
+// ── Commands ─────────────────────────────────────────────────────────────
 
 func termExecute(input string) {
 	termRecordHistory(input)
 	term.histIdx = -1
-	termPushLine(termPrompt+input, false)
-	cmd := strings.TrimSpace(input)
-	if cmd == "" {
+	// Running something is the moment the user wants to see its output.
+	termFollow()
+	termAppend(termPrompt+input, termKindEcho)
+	cmdline := strings.TrimSpace(input)
+	if cmdline == "" {
 		return
 	}
 
-	parts := strings.Fields(cmd)
-	command := parts[0]
+	parts := strings.Fields(cmdline)
+	command := strings.ToLower(parts[0])
 	args := parts[1:]
 
 	switch command {
-	case "help":
-		termPushLine("Available commands:", false)
-		termPushLine("  help        Show this help", false)
-		termPushLine("  ls/dir      List files in current directory", false)
-		termPushLine("  pwd         Print working directory", false)
-		termPushLine("  cd <dir>    Change directory", false)
-		termPushLine("  cat <file>  Print file contents", false)
-		termPushLine("  echo <text> Print text", false)
-		termPushLine("  date        Show current date/time", false)
-		termPushLine("  uptime      Show system uptime", false)
-		termPushLine("  whoami      Show current user", false)
-		termPushLine("  hostname    Show hostname", false)
-		termPushLine("  history     Show recent commands (saved across restarts)", false)
-		termPushLine("  clear       Clear the terminal (Ctrl+L)", false)
-		termPushLine("  sysinfo     Show system information", false)
-		termPushLine("  neofetch    System info with ASCII art", false)
-		termPushLine("  calc <expr> Evaluate a math expression", false)
-		termPushLine("  ssh [on|off|status]  SFTP server for PC file access", false)
-		termPushLine("  exit        Return to home", false)
+	case "help", "?":
+		termHelp()
 
 	case "ls", "dir":
-		entries, err := os.ReadDir(term.cwd)
-		if err != nil {
-			termPushLine(fmt.Sprintf("Error: %v", err), true)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
 			return
 		}
-		for _, e := range entries {
-			prefix := "  "
-			if e.IsDir() {
-				prefix = "[+] "
-			} else {
-				prefix = "[d] "
-			}
-			termPushLine(prefix+e.Name(), false)
-		}
+		termList(args)
 
 	case "pwd":
-		termPushLine(term.cwd, false)
+		termAppend(term.cwd, termKindOutput)
 
 	case "cd":
-		target := ""
-		if len(args) == 0 {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				termPushLine(fmt.Sprintf("Error: %v", err), true)
-				return
-			}
-			target = home
-		} else {
-			dir, pathErr := termPath(args[0])
-			if pathErr != nil {
-				termPushLine("Error: "+pathErr.Error(), true)
-				return
-			}
-			target = dir
-		}
-		// The terminal's directory only; the app's own stays where it is.
-		info, err := os.Stat(target)
-		if err != nil {
-			termPushLine(fmt.Sprintf("Error: %v", err), true)
-			return
-		}
-		if !info.IsDir() {
-			termPushLine("Error: not a directory: "+target, true)
-			return
-		}
-		term.cwd = target
+		termChangeDir(args)
 
-	case "cat":
-		if len(args) == 0 {
-			termPushLine("Usage: cat <filename>", true)
+	case "cat", "type":
+		if command == "type" && runtime.GOOS != "windows" {
+			termRunExternal(cmdline)
 			return
 		}
-		// The terminal is an intentional user shell: `cat` reads the path the
-		// user typed. Reject malformed paths (empty/NUL) before the OS call.
-		file, pathErr := termPath(args[0])
-		if pathErr != nil {
-			termPushLine("Error: "+pathErr.Error(), true)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
 			return
 		}
-		f, err := os.Open(file)
-		if err != nil {
-			termPushLine(fmt.Sprintf("Error: %v", err), true)
-			return
-		}
-		data, err := io.ReadAll(io.LimitReader(f, termCatMaxBytes+1))
-		f.Close()
-		if err != nil {
-			termPushLine(fmt.Sprintf("Error: %v", err), true)
-			return
-		}
-		truncated := len(data) > termCatMaxBytes
-		if truncated {
-			data = data[:termCatMaxBytes]
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			termPushLine(line, false)
-		}
-		if truncated {
-			termPushLine(fmt.Sprintf("... stopped after %d KB", termCatMaxBytes>>10), true)
-		}
+		termCat(args)
 
 	case "echo":
-		termPushLine(strings.Join(args, " "), false)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
+			return
+		}
+		termAppend(strings.Join(args, " "), termKindOutput)
 
 	case "date":
-		termPushLine(time.Now().Format("Mon Jan 2 15:04:05 MST 2006"), false)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
+			return
+		}
+		termAppend(time.Now().Format("Mon Jan 2 15:04:05 MST 2006"), termKindOutput)
 
 	case "uptime":
-		uptime := time.Since(term.started)
-		h := int(uptime.Hours())
-		m := int(uptime.Minutes()) % 60
-		s := int(uptime.Seconds()) % 60
-		termPushLine(fmt.Sprintf("up %dh %dm %ds", h, m, s), false)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
+			return
+		}
+		termAppend(termUptimeText(), termKindOutput)
 
 	case "whoami":
-		if runtime.GOOS == "windows" {
-			termPushLine(os.Getenv("USERNAME"), false)
-		} else {
-			termPushLine(os.Getenv("USER"), false)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
+			return
 		}
+		termAppend(termUserName(), termKindOutput)
 
 	case "hostname":
-		host, _ := os.Hostname()
-		termPushLine(host, false)
+		if termWantsShell(command, args, cmdline) {
+			termRunExternal(cmdline)
+			return
+		}
+		name, _ := os.Hostname()
+		termAppend(name, termKindOutput)
 
 	case "history":
 		if len(term.history) == 0 {
-			termPushLine("No commands yet.", false)
+			termAppend("No commands yet.", termKindSystem)
 			return
 		}
 		for i, h := range term.history {
-			termPushLine(fmt.Sprintf("%4d  %s", i+1, h), false)
+			termAppend(fmt.Sprintf("%4d  %s", i+1, h), termKindOutput)
 		}
+		termAppend("Y (or Ctrl+R) opens the history picker.", termKindSystem)
 
 	case "clear", "cls":
-		term.lines = term.lines[:0]
-		term.scrollY = 0
+		termClearScreen()
 
 	case "sysinfo":
-		termPushLine("=== System Info ===", false)
-		termPushLine(fmt.Sprintf("OS:       %s", runtime.GOOS), false)
-		termPushLine(fmt.Sprintf("Arch:     %s", runtime.GOARCH), false)
-		termPushLine(fmt.Sprintf("CPUs:     %d", runtime.NumCPU()), false)
-		termPushLine(fmt.Sprintf("Platform: %s", P().Name()), false)
-		if runtime.GOOS == "linux" {
-			if data, err := os.ReadFile("/proc/meminfo"); err == nil {
-				for _, line := range strings.Split(string(data), "\n") {
-					if strings.HasPrefix(line, "MemTotal:") || strings.HasPrefix(line, "MemAvailable:") {
-						termPushLine("  "+line, false)
-					}
-				}
-			}
-		}
+		termSysInfo()
 
 	case "neofetch":
-		termPushLine("       .--.        JukaHub Terminal", false)
-		termPushLine("      |o_o |       -----------------", false)
-		termPushLine("      |:_/ |       OS:       "+runtime.GOOS, false)
-		termPushLine("     //   \\ \\      Arch:     "+runtime.GOARCH, false)
-		termPushLine("    (|     | )     Platform: "+P().Name(), false)
-		termPushLine("   /'\\_   _/`\\    CPUs:     "+fmt.Sprintf("%d", runtime.NumCPU()), false)
-		termPushLine("   \\___)=(___/    Uptime:   just started", false)
+		termNeofetch()
 
 	case "calc":
 		if len(args) == 0 {
-			termPushLine("Usage: calc <expression> (e.g. calc 2+2*3)", true)
+			termAppend("Usage: calc <expression> (e.g. calc 2+2*3)", termKindError)
 			return
 		}
-		expr := strings.Join(args, "")
-		val, err := calcEvalExpr(expr)
+		val, err := calcEvalExpr(strings.Join(args, ""))
 		if err != nil {
-			termPushLine(fmt.Sprintf("Error: %v", err), true)
+			termAppend(fmt.Sprintf("Error: %v", err), termKindError)
 		} else {
-			termPushLine(fmt.Sprintf("= %g", val), false)
+			termAppend(fmt.Sprintf("= %g", val), termKindOutput)
 		}
 
 	case "ssh":
 		termSSHCommand(args)
 
 	case "exit", "quit":
-		goBackScene(appConfig)
+		termLeave(appConfig)
 
 	default:
-		// Try running as external command.
-		if term.job != nil {
-			termPushLine("A command is still running — Ctrl+C (or B) stops it.", true)
-			return
-		}
-		// A name with a slash (./run.sh, bin/tool) is a path, and paths are
-		// the terminal's: resolved against the directory `cd` chose, not the
-		// app's, which LookPath would otherwise check (and the run would then
-		// use a different file than the one checked).
-		lookup := command
-		if strings.ContainsAny(command, "/\\") {
-			resolved, perr := termPath(command)
-			if perr != nil {
-				termPushLine("Error: "+perr.Error(), true)
-				return
-			}
-			lookup = resolved
-		}
-		binPath, err := exec.LookPath(lookup)
+		termRunExternal(cmdline)
+	}
+}
+
+func termHelp() {
+	for _, line := range []string{
+		"Built-in commands:",
+		"  help               this list",
+		"  ls / dir [folder]  list a folder (folders end in /)",
+		"  cd <folder>        change folder (cd - goes back, cd alone goes home)",
+		"  pwd                print the current folder",
+		"  cat <file>         show a text file",
+		"  echo <text>        print text",
+		"  history            recent commands (Y opens the picker)",
+		"  clear              clear the screen (Ctrl+L)",
+		"  date · uptime · whoami · hostname · sysinfo · neofetch",
+		"  calc <expression>  evaluate maths, e.g. calc 2+2*3",
+		"  ssh [on|off|status]  SFTP server for PC file access",
+		"  exit               leave the Terminal",
+		"Anything else runs in the system shell (" + termShellName() + ") for up to " + termDurationText(termCommandTimeout) + ".",
+		"Pad: A keyboard · Start run · X clear / stop · Y history · L1/R1 page · B back",
+		"Keyboard: Enter run · Up/Down history · Tab complete · PgUp/PgDn scroll · Esc back",
+	} {
+		termAppend(line, termKindSystem)
+	}
+}
+
+// termList is the built-in ls: folders first, each with a trailing slash.
+func termList(args []string) {
+	target := term.cwd
+	if len(args) > 0 {
+		dir, err := termPath(args[0])
 		if err != nil {
-			termPushLine(fmt.Sprintf("Command not found: %s", command), true)
+			termAppend("Error: "+err.Error(), termKindError)
 			return
 		}
-		termPushLine(fmt.Sprintf("$ %s %s", command, strings.Join(args, " ")), false)
-		termStartJob(binPath, args)
+		target = dir
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		termAppend(fmt.Sprintf("Error: %v", err), termKindError)
+		return
+	}
+	if len(entries) == 0 {
+		termAppend("(empty folder)", termKindSystem)
+		return
+	}
+	type item struct {
+		name string
+		dir  bool
+	}
+	items := make([]item, 0, len(entries))
+	for _, e := range entries {
+		dir := e.IsDir()
+		if !dir && e.Type()&os.ModeSymlink != 0 {
+			// A link to a folder is listed as a folder, like ls -p does.
+			if info, statErr := os.Stat(filepath.Join(target, e.Name())); statErr == nil && info.IsDir() {
+				dir = true
+			}
+		}
+		items = append(items, item{name: e.Name(), dir: dir})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].dir != items[j].dir {
+			return items[i].dir
+		}
+		return strings.ToLower(items[i].name) < strings.ToLower(items[j].name)
+	})
+	for i, it := range items {
+		if i >= termListMax {
+			termAppend(fmt.Sprintf("… and %d more", len(items)-termListMax), termKindSystem)
+			break
+		}
+		if it.dir {
+			termAppend(it.name+"/", termKindOutput)
+		} else {
+			termAppend(it.name, termKindOutput)
+		}
+	}
+}
+
+// termChangeDir moves the terminal's own directory; the app's stays put.
+func termChangeDir(args []string) {
+	target := ""
+	switch {
+	case len(args) == 0:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			termAppend(fmt.Sprintf("Error: %v", err), termKindError)
+			return
+		}
+		target = home
+	case args[0] == "-":
+		if term.prevCwd == "" {
+			termAppend("No previous folder yet.", termKindError)
+			return
+		}
+		target = term.prevCwd
+	default:
+		dir, err := termPath(strings.Join(args, " "))
+		if err != nil {
+			termAppend("Error: "+err.Error(), termKindError)
+			return
+		}
+		target = dir
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		termAppend(fmt.Sprintf("Error: %v", err), termKindError)
+		return
+	}
+	if !info.IsDir() {
+		termAppend("Error: not a directory: "+target, termKindError)
+		return
+	}
+	if target != term.cwd {
+		term.prevCwd = term.cwd
+	}
+	term.cwd = target
+}
+
+// termCat is the built-in cat: one bounded read of a file the user named.
+func termCat(args []string) {
+	if len(args) == 0 {
+		termAppend("Usage: cat <filename>", termKindError)
+		return
+	}
+	// The terminal is an intentional user shell: `cat` reads the path the
+	// user typed. Reject malformed paths (empty/NUL) before the OS call.
+	file, pathErr := termPath(strings.Join(args, " "))
+	if pathErr != nil {
+		termAppend("Error: "+pathErr.Error(), termKindError)
+		return
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		termAppend(fmt.Sprintf("Error: %v", err), termKindError)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(f, termCatMaxBytes+1))
+	f.Close()
+	if err != nil {
+		termAppend(fmt.Sprintf("Error: %v", err), termKindError)
+		return
+	}
+	truncated := len(data) > termCatMaxBytes
+	if truncated {
+		data = data[:termCatMaxBytes]
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		termAppend(termCleanOutput(line), termKindOutput)
+	}
+	if truncated {
+		termAppend(fmt.Sprintf("… stopped after %d KB", termCatMaxBytes>>10), termKindSystem)
+	}
+}
+
+// termUptimeText is the system's uptime, or the app's when the system will
+// not say.
+func termUptimeText() (out string) {
+	defer func() {
+		// gopsutil can panic on odd kernels; uptime is never worth a crash.
+		if r := recover(); r != nil {
+			out = "JukaHub has been running for " + termDurationText(time.Since(term.started).Round(time.Second))
+		}
+	}()
+	secs, err := host.Uptime()
+	if err != nil || secs == 0 {
+		return "JukaHub has been running for " + termDurationText(time.Since(term.started).Round(time.Second))
+	}
+	up := time.Duration(secs) * time.Second
+	days := int(up.Hours()) / 24
+	return fmt.Sprintf("up %dd %dh %dm", days, int(up.Hours())%24, int(up.Minutes())%60)
+}
+
+// termUserName is the account the app runs as.
+func termUserName() string {
+	for _, key := range []string{"USER", "USERNAME", "LOGNAME"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
+	}
+	return "unknown"
+}
+
+// termMemoryText is "used / total" RAM, or "" when the system will not say.
+func termMemoryText() (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = ""
+		}
+	}()
+	vm, err := mem.VirtualMemory()
+	if err != nil || vm == nil || vm.Total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s / %s (%.0f%%)", formatBytes(vm.Used), formatBytes(vm.Total), vm.UsedPercent)
+}
+
+func termSysInfo() {
+	termAppend("System", termKindSystem)
+	termAppend("  OS:       "+runtime.GOOS+"/"+runtime.GOARCH, termKindOutput)
+	termAppend(fmt.Sprintf("  CPUs:     %d", runtime.NumCPU()), termKindOutput)
+	termAppend("  Platform: "+P().Name(), termKindOutput)
+	if m := termMemoryText(); m != "" {
+		termAppend("  Memory:   "+m, termKindOutput)
+	}
+	termAppend("  Uptime:   "+termUptimeText(), termKindOutput)
+}
+
+func termNeofetch() {
+	hostname, _ := os.Hostname()
+	memory := termMemoryText()
+	if memory == "" {
+		memory = "n/a"
+	}
+	art := []string{
+		"     .--.    ",
+		"    |o_o |   ",
+		"    |:_/ |   ",
+		"   //   \\ \\  ",
+		"  (|     | ) ",
+		" /'\\_   _/`\\ ",
+		" \\___)=(___/ ",
+	}
+	info := []string{
+		termUserName() + "@" + hostname,
+		"OS:       " + runtime.GOOS + "/" + runtime.GOARCH,
+		"Platform: " + P().Name(),
+		fmt.Sprintf("CPUs:     %d", runtime.NumCPU()),
+		"Memory:   " + memory,
+		"Uptime:   " + termUptimeText(),
+		"Shell:    " + termShellName(),
+	}
+	for i := range art {
+		termAppend(art[i]+"  "+info[i], termKindOutput)
 	}
 }
 
@@ -561,330 +1229,264 @@ func termSSHCommand(args []string) {
 	termPushLine("  Accepts the sftp subsystem only (no shell or tunnels).", false)
 }
 
+// ── Input ────────────────────────────────────────────────────────────────
+
+// termPromptFocused reports whether typing lands in the prompt: the history
+// picker is closed and the pad has not stepped up onto the top bar. The caret
+// is only drawn while this holds.
+func termPromptFocused() bool {
+	return !termHist.open && chromeTier(focusEngine.ElementIndex()) == 0
+}
+
+// termFocusPrompt brings focus back to the prompt from the top bar.
+func termFocusPrompt() {
+	if chromeTier(focusEngine.ElementIndex()) != 0 {
+		focusEngine.ClearFocus()
+		selectedButtonIndex = -1
+	}
+	term.caretAt = time.Now()
+}
+
+// termLeave is B / Escape / exit: a running command stops with the screen.
+func termLeave(config *Config) {
+	termHistoryClose()
+	if term.job != nil {
+		term.job.cancel()
+	}
+	goBackScene(config)
+}
+
 // handleTermInput processes physical keyboard input for the terminal.
 func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return
 	}
+	if termHist.open {
+		termHistoryKey(e)
+		return
+	}
+	ctrl := e.Keysym.Mod&sdl.KMOD_CTRL != 0
 	switch e.Keysym.Sym {
+	case sdl.K_ESCAPE:
+		termLeave(config)
 	case sdl.K_RETURN, sdl.K_KP_ENTER:
-		input := term.input
-		term.input = ""
-		term.cursor = 0
-		termExecute(input)
+		termFocusPrompt()
+		termRunInput()
 	case sdl.K_BACKSPACE:
-		if term.cursor > 0 {
-			term.input = term.input[:term.cursor-1] + term.input[term.cursor:]
-			term.cursor--
+		if ctrl {
+			termDeleteWordLeft()
+		} else {
+			termBackspace()
 		}
 	case sdl.K_DELETE:
-		if term.cursor < len(term.input) {
-			term.input = term.input[:term.cursor] + term.input[term.cursor+1:]
-		}
+		termDeleteRight()
 	case sdl.K_LEFT:
-		if term.cursor > 0 {
-			term.cursor--
+		if ctrl {
+			termSetCursor(termWordStart(term.input, termClampCursor(term.cursor)))
+		} else {
+			termCursorLeft()
 		}
 	case sdl.K_RIGHT:
-		if term.cursor < len(term.input) {
-			term.cursor++
+		if ctrl {
+			termSetCursor(termWordEnd(term.input, termClampCursor(term.cursor)))
+		} else {
+			termCursorRight()
 		}
 	case sdl.K_HOME:
-		term.cursor = 0
+		if ctrl {
+			term.scrollY = termMaxScroll()
+		} else {
+			termSetCursor(0)
+		}
 	case sdl.K_END:
-		term.cursor = len(term.input)
+		if ctrl {
+			termFollow()
+		} else {
+			termSetCursor(len(term.input))
+		}
 	case sdl.K_UP:
-		termHistoryStep(-1)
+		if ctrl {
+			termScroll(1)
+		} else {
+			termHistoryStep(-1)
+		}
 	case sdl.K_DOWN:
-		termHistoryStep(1)
+		if ctrl {
+			termScroll(-1)
+		} else {
+			termHistoryStep(1)
+		}
 	case sdl.K_PAGEUP:
-		termScroll(10)
+		termScroll(termPageSize())
 	case sdl.K_PAGEDOWN:
-		termScroll(-10)
+		termScroll(-termPageSize())
 	case sdl.K_TAB:
 		// Tab completes what is typed. On an empty line it still opens the
 		// on-screen keyboard: the handheld has no hardware keyboard, so that
-		// remains the only way to start typing.
+		// remains a way to start typing.
 		termComplete()
+	case sdl.K_F7:
+		termHistoryOpen()
+	case sdl.K_r:
+		if ctrl {
+			termHistoryOpen()
+		}
 	case sdl.K_l:
-		if e.Keysym.Mod&sdl.KMOD_CTRL != 0 {
-			term.lines = term.lines[:0]
-			term.scrollY = 0
+		if ctrl {
+			termClearScreen()
+		}
+	case sdl.K_u:
+		if ctrl {
+			termClearLine()
 		}
 	case sdl.K_c:
-		if e.Keysym.Mod&sdl.KMOD_CTRL != 0 {
+		if ctrl {
 			termStopJob()
 		}
-	case sdl.K_ESCAPE:
-		goBackScene(config)
 	}
 }
 
 // handleTermTextInput processes text input for the terminal.
 func handleTermTextInput(e *sdl.TextInputEvent) {
-	termInsertText(e.GetText())
-}
-
-// termInsertText inserts text at the prompt cursor. It is shared by typed
-// input (SDL text events) and clipboard paste (Ctrl+V), so pasted text takes
-// exactly the path typed text does — the same printable-ASCII filter, the
-// same cursor arithmetic, nothing appended at the end when the cursor sits
-// mid-command.
-func termInsertText(text string) {
-	for _, r := range text {
-		if r >= 32 && r <= 126 {
-			term.input = term.input[:term.cursor] + string(r) + term.input[term.cursor:]
-			term.cursor++
-		}
-	}
-}
-
-// handleTermMouseClick routes clicks on the terminal chrome. Selecting the
-// keyboard pill or the prompt row opens the on-screen keyboard; Back leaves the
-// scene. Every click on the terminal is consumed so the config-driven elements
-// (a leftover chat field in jukaconfig) cannot steal it.
-func handleTermMouseClick(mx, my int32, config *Config) bool {
-	switch {
-	case pointInRect(mx, my, termKeyboardRect), pointInRect(mx, my, termInputRect):
-		vkOpenTerminal()
-	case pointInRect(mx, my, termBackRect):
-		goBackScene(config)
-	}
-	return true
-}
-
-// handleTermWheel scrolls the output with the mouse wheel.
-func handleTermWheel(dy int32) bool {
-	if dy == 0 {
-		return false
-	}
-	termScroll(int(dy) * 3)
-	return true
-}
-
-// ── Rendering ────────────────────────────────────────────────────────────────
-
-func renderTerminal(renderer *sdl.Renderer, config *Config) {
-	// Home's backdrop, the one every screen stands on (ui_glass.go).
-	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
-
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
+	text := e.GetText()
+	if termHist.open {
+		termHistoryType(text)
 		return
 	}
-	medium, _ := getCachedFont(config, "medium")
-	if medium == nil {
-		medium = font
-	}
-
-	barH := headerBarHeight()
-	padX := int32(28)
-	secondary := ColorTextSecondary()
-
-	// ── Header ──────────────────────────────────────────────────────────
-	// The app's one bar, exactly as Home and every scene draw it: wordmark,
-	// "Terminal" in the caption, the shared Back and Menu pills, the update
-	// offer and the system cluster. The terminal used to draw its own dark
-	// strip with a "< BACK" text pill, which left it as the only screen whose
-	// Back was not the app's Back.
-	renderStatusBar(renderer, config)
-	// The working directory is the terminal's own read-out, so it sits under
-	// the bar as a quiet line rather than taking the title slot.
-	// A background command's output joins the scrollback before it is drawn.
-	termDrainJob()
-	cwd := term.cwd
-	cwdLineH := int32(0)
-	if cwd != "" {
-		cwdFont := headerCaptionFont(config)
-		if cwdFont == nil {
-			cwdFont = font
-		}
-		if cwdFont != nil {
-			label := fitTextWidth(renderer, config, cwdFont, cwd, screenWidth-padX*2)
-			renderText(renderer, config, cwdFont, label, secondary, padX, barH+6)
-			cwdLineH = int32(cwdFont.Height()) + 6
-		}
-	}
-
-	// The keyboard chip is the terminal's own chrome beside the app menu, so it
-	// keeps the bar's pill height and type instead of inventing a third size.
-	termKeyboardRect = sdl.Rect{}
-	if chipFont := headerCaptionFont(config); chipFont != nil && tb.startRect.W > 0 {
-		label := "Keyboard"
-		chipW, _, _ := chipFont.SizeUTF8(label)
-		chipH := headerPillHeight()
-		pad := int32(12)
-		keyX := tb.startRect.X + tb.startRect.W + SpaceSM
-		keyY := (barH - chipH) / 2
-		accent := headerAccent()
-		termKeyboardRect = sdl.Rect{X: keyX, Y: keyY, W: int32(chipW) + pad*2, H: chipH}
-		fillRoundedRect(renderer, keyX, keyY, termKeyboardRect.W, chipH, chipH/2, WithAlpha(accent, 40))
-		strokeRoundedRect(renderer, keyX, keyY, termKeyboardRect.W, chipH, chipH/2, 1, WithAlpha(accent, 150))
-		renderText(renderer, config, chipFont, label, accent,
-			keyX+pad, keyY+(chipH-int32(chipFont.Height()))/2)
-	}
-
-	// The generic chrome-bar click and focus paths own the Back pill now; the
-	// terminal only has to remember where it was drawn.
-	termBackRect = sceneTitleBackRect
-
-	// ── Output ──────────────────────────────────────────────────────────
-	outputTop := barH + 14 + cwdLineH
-	inputY := screenHeight - 84
-	contentW := screenWidth - padX*2
-	maxLines := int((inputY - 18 - outputTop) / termLineH)
-	if maxLines < 3 {
-		maxLines = 3
-	}
-
-	totalLines := len(term.lines)
-	startLine := totalLines - maxLines - term.scrollY
-	if startLine < 0 {
-		startLine = 0
-	}
-	endLine := startLine + maxLines
-	if endLine > totalLines {
-		endLine = totalLines
-	}
-
-	y := outputTop
-	for i := startLine; i < endLine; i++ {
-		line := term.lines[i]
-		// Theme inks, not fixed light colours: the terminal stands on the app
-		// backdrop now, which is light on a light preset.
-		col := WithAlpha(ColorTextSecondary(), 235)
-		if line.isErr {
-			col = WithAlpha(DangerInk(), 235)
-		}
-		if strings.HasPrefix(line.text, termPrompt) {
-			col = WithAlpha(SuccessInk(), 240)
-		}
-		displayLine := fitTextWidth(renderer, config, font, line.text, contentW-20)
-		renderText(renderer, config, font, displayLine, col, padX, y)
-		y += termLineH
-	}
-
-	// Scrollbar: a thin thumb on the right when the buffer overflows.
-	if totalLines > maxLines {
-		trackX := screenWidth - padX + 6
-		trackTop := outputTop
-		trackH := inputY - 18 - outputTop
-		renderer.SetDrawColor(70, 90, 120, 70)
-		renderer.FillRect(&sdl.Rect{X: trackX, Y: trackTop, W: 2, H: trackH})
-		thumbH := int32(float64(trackH) * float64(maxLines) / float64(totalLines))
-		if thumbH < 18 {
-			thumbH = 18
-		}
-		frac := 0.0
-		if totalLines > maxLines {
-			frac = float64(term.scrollY) / float64(totalLines-maxLines)
-		}
-		thumbY := trackTop + int32(float64(trackH-thumbH)*(1-frac))
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 180)
-		renderer.FillRect(&sdl.Rect{X: trackX, Y: thumbY, W: 2, H: thumbH})
-	}
-
-	// ── Prompt row ──────────────────────────────────────────────────────
-	rowH := int32(44)
-	rowX := padX - 12
-	rowW := screenWidth - (padX-12)*2
-	rowY := inputY - 9
-	termInputRect = sdl.Rect{X: rowX, Y: rowY, W: rowW, H: rowH}
-	fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 10, sdl.Color{R: 13, G: 19, B: 31, A: 255})
-	strokeRoundedRect(renderer, rowX, rowY, rowW, rowH, 10, 1, sdl.Color{R: 42, G: 58, B: 84, A: 200})
-	// A faint accent edge on the left marks the active input line.
-	fillRoundedRect(renderer, rowX, rowY, 3, rowH, 2, WithAlpha(accentColor, 200))
-
-	textY := rowY + (rowH-int32(font.Height()))/2
-	promptCol := sdl.Color{R: 120, G: 214, B: 160, A: 245}
-	renderText(renderer, config, font, termPrompt, promptCol, rowX+16, textY)
-
-	promptW, _, _ := font.SizeUTF8(termPrompt)
-	inputX := rowX + 16 + int32(promptW)
-
-	// Keep the caret in view when the command is longer than the row.
-	const maxVisible = 82
-	inputStart := 0
-	if len(term.input) > maxVisible {
-		inputStart = len(term.input) - maxVisible
-	}
-	visible := term.input[inputStart:]
-	renderText(renderer, config, font, visible, ColorTextPrimary(), inputX, textY)
-
-	cursorRel := term.cursor - inputStart
-	if cursorRel < 0 {
-		cursorRel = 0
-	}
-	if cursorRel > len(visible) {
-		cursorRel = len(visible)
-	}
-	cw, _, _ := font.SizeUTF8(visible[:cursorRel])
-	cursorX := inputX + int32(cw)
-	if int(time.Now().UnixMilli()/termCursorBlink)%2 == 0 {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
-		renderer.FillRect(&sdl.Rect{X: cursorX, Y: textY - 2, W: 8, H: int32(font.Height()) + 4})
-	}
-
-	// ── Footer hints ────────────────────────────────────────────────────
-	hintStr := hintLine(FooterHint{"Enter", "Run"}, FooterHint{"Tab", "Complete (empty: keyboard)"},
-		FooterHint{"PgUp / PgDn", "Scroll"}, FooterHint{"Esc", "Back"})
-	hw, _, _ := font.SizeUTF8(hintStr)
-	renderText(renderer, config, font, hintStr,
-		sdl.Color{R: 96, G: 116, B: 146, A: 190},
-		(screenWidth-int32(hw))/2, screenHeight-26)
+	termFocusPrompt()
+	termInsertText(text)
 }
 
-// Scene controller mapping, moved here from controller.go so the scene owns
-// its own input.
-
-func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_A:
-		if term.input != "" {
-			input := term.input
-			term.input = ""
-			term.cursor = 0
-			termExecute(input)
+// handleTermMouseClick routes clicks on the terminal's body: the Run/Stop and
+// keyboard buttons, the "new output" pill, the prompt (which takes the caret to
+// the click) and the console (which focuses the prompt). Clicks elsewhere —
+// the top bar above all — are left to the shared handlers.
+func handleTermMouseClick(mx, my int32, config *Config) bool {
+	if termHist.open {
+		return termHistoryClick(mx, my)
+	}
+	switch {
+	case termRunRect.W > 0 && pointInRect(mx, my, termRunRect):
+		termFocusPrompt()
+		if term.job != nil {
+			if termStopJob() {
+				PlayBackSound()
+			}
+		} else if strings.TrimSpace(term.input) != "" {
+			PlayActivateSound()
+			termRunInput()
 		}
-	case sdl.CONTROLLER_BUTTON_Y, sdl.CONTROLLER_BUTTON_X:
-		// Open the on-screen keyboard: without it a controller-only device
-		// cannot type a command at all.
+	case termKeyboardRect.W > 0 && pointInRect(mx, my, termKeyboardRect):
+		termFocusPrompt()
+		PlayActivateSound()
 		vkOpenTerminal()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		// B stops a running command first (the pad's Ctrl+C); with nothing
-		// running it leaves. goBackScene plays the back sound itself.
-		if e.Button == sdl.CONTROLLER_BUTTON_B && termStopJob() {
-			PlayBackSound()
-			break
+	case termNewRect.W > 0 && pointInRect(mx, my, termNewRect):
+		termFollow()
+		PlayNavSound()
+	case termInputRect.W > 0 && pointInRect(mx, my, termInputRect):
+		termFocusPrompt()
+		termSetCursor(termCursorAtX(mx))
+		if P().IsHandheld() {
+			// No hardware keyboard on the handheld: a tap on the prompt is
+			// a request to type.
+			vkOpenTerminal()
 		}
-		goBackScene(config)
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		// scrollY counts lines back from the newest, so "nothing older" is
-		// the maximum, not zero: the old test released every Up at the
-		// bottom of the output, and the pad could never scroll back at all.
-		if term.scrollY >= termMaxScroll() {
-			// The output is already at its oldest line: release the press so
-			// Up steps onto the top bar rather than scrolling into nothing.
-			return false
-		}
-		termScroll(3)
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		termScroll(-3)
-	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		termScroll(10)
-	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		termScroll(-10)
+	case termConsoleRect.W > 0 && pointInRect(mx, my, termConsoleRect):
+		termFocusPrompt()
 	default:
 		return false
 	}
 	return true
 }
 
-// Scene registration. Terminal has no key branch of its own: typing is handled
-// by the terminal widget before scene routing, so handleKey stays false.
+// handleTermWheel scrolls the output (or the history picker) with the wheel.
+func handleTermWheel(dy int32) bool {
+	if dy == 0 {
+		return false
+	}
+	if termHist.open {
+		termHistoryMove(-int(dy))
+		return true
+	}
+	termScroll(int(dy) * termScrollStep)
+	return true
+}
+
+// ctrlTerminal is the pad. B always leaves (the on-screen keyboard, when it is
+// open, takes the pad before this runs and closes on B), and Up at the oldest
+// line hands the press to the top bar instead of doing nothing.
+func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if termHist.open {
+		return termHistoryPad(e)
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		termLeave(config)
+	case sdl.CONTROLLER_BUTTON_A:
+		// A is how a pad types: without the on-screen keyboard a
+		// controller-only device cannot enter a command at all.
+		termFocusPrompt()
+		PlayActivateSound()
+		vkOpenTerminal()
+	case sdl.CONTROLLER_BUTTON_START:
+		termFocusPrompt()
+		if strings.TrimSpace(term.input) == "" {
+			return true
+		}
+		PlayActivateSound()
+		termRunInput()
+	case sdl.CONTROLLER_BUTTON_X:
+		// X is Stop while a command runs (the pad's Ctrl+C) and clears the
+		// line otherwise; the footer says which.
+		if term.job != nil {
+			if termStopJob() {
+				PlayBackSound()
+			}
+		} else if term.input != "" {
+			termClearLine()
+			PlayNavSound()
+		}
+	case sdl.CONTROLLER_BUTTON_Y:
+		termHistoryOpen()
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		// scrollY counts lines back from the newest, so "nothing older" is
+		// the maximum. At the oldest line Up belongs to the top bar, the way
+		// it does on every screen, so the arrows always lead somewhere.
+		if term.scrollY >= termMaxScroll() {
+			return focusChromeBar()
+		}
+		termScroll(termScrollStep)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		termScroll(-termScrollStep)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		termFocusPrompt()
+		termCursorLeft()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		termFocusPrompt()
+		termCursorRight()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		termScroll(termPageSize())
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		termScroll(-termPageSize())
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration. The Terminal draws its whole screen and owns its keys,
+// pad and clicks.
 type terminalScene struct{ sceneBase }
 
 func (terminalScene) render(r *sdl.Renderer, c *Config) bool { renderTerminal(r, c); return true }
+
+func (terminalScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	if e == nil || e.Type != sdl.KEYDOWN {
+		return false
+	}
+	handleTermInput(e, c)
+	return true
+}
 
 func (terminalScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
 	return ctrlTerminal(e, c)

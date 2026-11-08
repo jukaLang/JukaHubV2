@@ -161,13 +161,84 @@ func appGridEntries(config *Config, element Element) []FileEntry {
 }
 
 // appGridDisplayName strips the "(built-in)" suffix the list used to spell out
-// in the row. Tiles carry the same information as a small dot instead.
+// in the row. Tiles carry the same information as the Juka badge instead.
 func appGridDisplayName(name string) string {
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(name), "(built-in)"))
 }
 
 func appGridIsBuiltin(name string) bool {
 	return strings.HasSuffix(strings.TrimSpace(name), "(built-in)")
+}
+
+// homeAppIsBuiltin reports whether a launcher row is one of JukaHub's own apps
+// (a built-in scene or panel such as JukaLand or the Browser) rather than a
+// program installed on the device. The scene:/action: path is the authority;
+// the "(built-in)" suffix older lists spelled out is accepted too.
+func homeAppIsBuiltin(entry FileEntry) bool {
+	return strings.HasPrefix(entry.Path, builtinScenePrefix) ||
+		strings.HasPrefix(entry.Path, builtinActionPrefix) ||
+		appGridIsBuiltin(entry.Name)
+}
+
+// appJukaBadgeSize is the type size of the Juka badge on a launcher tile: the
+// smallest size that still reads on the compact 960-wide canvas once
+// uiScaleFontSize has scaled it down.
+const appJukaBadgeSize = 13
+
+// homeAppJukaBadgeRect lays out the Juka badge in a tile's top-right corner,
+// clear of the artwork in the top-left. withGlyph is false when the tile is too
+// narrow for the leading glyph; an empty rect means not even the word fits.
+func homeAppJukaBadgeRect(cell sdl.Rect, textW, textH int32) (badge sdl.Rect, withGlyph bool) {
+	pad := appTilePad(cell)
+	padX := int32(7)
+	h := textH + 4
+	glyph := h - 6
+	art := appTileIconRect(cell)
+	minX := art.X + art.W + 4
+	right := cell.X + cell.W - pad
+	w := textW + 2*padX
+	if glyph >= 9 && right-(w+glyph+4) >= minX {
+		return sdl.Rect{X: right - (w + glyph + 4), Y: cell.Y + pad, W: w + glyph + 4, H: h}, true
+	}
+	if right-w >= minX {
+		return sdl.Rect{X: right - w, Y: cell.Y + pad, W: w, H: h}, false
+	}
+	return sdl.Rect{}, false
+}
+
+// homeDrawJukaBadge marks a launcher tile as one of JukaHub's own apps: an
+// accent-tinted glass pill reading "JUKA", led by the Juka glyph when the tile
+// has room. A tile too narrow for the word keeps the old accent dot.
+func homeDrawJukaBadge(r *sdl.Renderer, config *Config, cell sdl.Rect) {
+	if r == nil {
+		return
+	}
+	if config == nil {
+		config = &Config{}
+	}
+	accent := glassAccent()
+	font := getFontSized(config, "small", appJukaBadgeSize)
+	if font == nil {
+		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 3, WithAlpha(accent, 220))
+		return
+	}
+	const label = "JUKA"
+	tw, th := measureText(font, label)
+	badge, withGlyph := homeAppJukaBadgeRect(cell, tw, th)
+	if badge.W <= 0 {
+		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 3, WithAlpha(accent, 220))
+		return
+	}
+	_ = r.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(r, badge.X, badge.Y, badge.W, badge.H, badge.H/2, WithAlpha(accent, 52))
+	strokeRoundedRect(r, badge.X, badge.Y, badge.W, badge.H, badge.H/2, 1, WithAlpha(accent, 170))
+	x := badge.X + 7
+	if withGlyph {
+		glyph := badge.H - 6
+		drawHomeGlyphTinted(r, "juka", sdl.Rect{X: x, Y: badge.Y + 3, W: glyph, H: glyph}, accent)
+		x += glyph + 4
+	}
+	drawText(r, font, label, x, badge.Y+(badge.H-th)/2, accent, textAlignLeft)
 }
 
 // appGridGlyph is the letter drawn in a tile's badge: the first letter of the
@@ -287,6 +358,11 @@ func appGridKey(sym sdl.Keycode, config *Config) bool {
 		appGridMove(config, scene, 1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		appGridActivate(config)
+	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
+		// B is back on a desktop keyboard too. The grid holds no text field, so
+		// the letter cannot mean a character here, and Escape alone left a
+		// keyboard user hunting for the way out.
+		goBackScene(config)
 	default:
 		return false
 	}
@@ -310,6 +386,11 @@ func appGridController(button uint8, config *Config) bool {
 		appGridMove(config, scene, 1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		appGridActivate(config)
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		// The grid owns the pad while it has focus, so it has to answer B itself:
+		// before this, leaving Apps needed Escape, which a handheld pad cannot
+		// send, and the press was swallowed here.
+		goBackScene(config)
 	default:
 		return false
 	}
@@ -467,10 +548,11 @@ func drawAppTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry
 	name := appGridDisplayName(entry.Name)
 	drawAppTileIcon(r, config, cell, entry, name, focused, medium)
 
-	// A small accent dot marks JukaHub's own applets; external programs get no
-	// marker, because their tile already carries the program's own icon.
-	if appGridIsBuiltin(entry.Name) {
-		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 3, WithAlpha(glassAccent(), 220))
+	// JukaHub's own apps (JukaLand, the Browser, Remote Play …) carry the Juka
+	// badge; external programs get no marker, because their tile already shows
+	// the program's own icon.
+	if homeAppIsBuiltin(entry) {
+		homeDrawJukaBadge(r, config, cell)
 	}
 
 	// The name is anchored to the bottom-left corner, at the largest size that

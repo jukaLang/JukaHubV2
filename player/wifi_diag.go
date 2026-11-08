@@ -359,15 +359,14 @@ func wifiDiagBundleFacts() string {
 
 // ── Opening, closing, refreshing ───────────────────────────────────────────
 
-// openWiFiDiagnostics shows the sheet and starts collecting. It works whatever
-// the picker's own state is: a panel that could not reach a backend is the case
-// the sheet exists for.
+// openWiFiDiagnostics marks the sheet open and starts collecting. It works
+// whatever the page's own state is: a page that could not reach a backend is
+// the case the sheet exists for.
 func openWiFiDiagnostics() {
 	if wifiPanel.diagOpen {
 		return
 	}
 	wifiPanel.diagOpen = true
-	wifiPanel.diagScroll = 0
 	// A report older than the auto-refresh window is replaced by the worker
 	// below; a fresh one is reused so opening the sheet twice is instant.
 	if wifiPanel.diag.At.IsZero() || time.Since(wifiPanel.diag.At) > wifiAutoRefresh {
@@ -376,14 +375,13 @@ func openWiFiDiagnostics() {
 	PlayActivateSound()
 }
 
-// closeWiFiDiagnostics returns to the network list. It never closes the panel:
-// the sheet sits inside it, and B means "back one level" everywhere else.
+// closeWiFiDiagnostics returns to the network list. It never leaves the page:
+// the sheet sits on it, and B means "back one level" everywhere else.
 func closeWiFiDiagnostics() {
 	if !wifiPanel.diagOpen {
 		return
 	}
 	wifiPanel.diagOpen = false
-	wifiPanel.diagScroll = 0
 	PlayBackSound()
 }
 
@@ -422,23 +420,10 @@ func wifiDiagCopyReport() {
 	}
 }
 
-// wifiDiagScroll moves the sheet by rows, clamped to what was last rendered.
-func wifiDiagScroll(delta int) {
-	wifiPanel.diagScroll += delta
-	maxScroll := wifiDiagRowsTotal - wifiDiagRowsShown
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if wifiPanel.diagScroll > maxScroll {
-		wifiPanel.diagScroll = maxScroll
-	}
-	if wifiPanel.diagScroll < 0 {
-		wifiPanel.diagScroll = 0
-	}
-	PlayNavSound()
-}
-
 // ── Rendering ──────────────────────────────────────────────────────────────
+//
+// The Wi-Fi page draws the sheet (wifiscreen.go); these turn the report into
+// its rows.
 
 // wifiDiagRow is one drawn line: the label, the value and the color. A value
 // that wraps leaves the label blank on its continuation lines.
@@ -447,13 +432,6 @@ type wifiDiagRow struct {
 	value string
 	color sdl.Color
 }
-
-var (
-	// wifiDiagRowsTotal and wifiDiagRowsShown are what the last frame drew, so
-	// scrolling clamps to the list actually on screen.
-	wifiDiagRowsTotal int
-	wifiDiagRowsShown int
-)
 
 // wifiDiagColor maps a row's state onto the palette.
 func wifiDiagColor(s wifiDiagState) sdl.Color {
@@ -488,101 +466,6 @@ func wifiDiagSubtitleColor() sdl.Color {
 		return ColorToastWarn
 	}
 	return ColorTextSecondary()
-}
-
-// renderWiFiDiagnostics draws the sheet over the scene. The list is drawn by
-// renderWiFiPanel; this replaces it while the sheet is open.
-func renderWiFiDiagnostics(renderer *sdl.Renderer, config *Config) {
-	if renderer == nil {
-		return
-	}
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
-	smallH := int32(font.Height())
-	const padX = OverlayPadX
-
-	panelW := int32(820)
-	if panelW > screenWidth-48 {
-		panelW = screenWidth - 48
-	}
-	panelH := screenHeight - 40
-	panelX := (screenWidth - panelW) / 2
-	panelY := (screenHeight - panelH) / 2
-	wifiPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-	// The sheet has no rows; a stale row rect would be a tap target on the list
-	// that is not drawn.
-	wifiRowRects = wifiRowRects[:0]
-
-	drawOverlayScrim(renderer)
-
-	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
-
-	header := UIPanelHeader("Wi-Fi diagnostics", wifiDiagSubtitle(), "settings")
-	header.SubtitleColor = StatusInk(wifiDiagSubtitleColor())
-	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-	headerH := UIPanelHeaderBand(config, header, 14)
-	UIPageHeaderDraw(renderer, config, header)
-
-	footerH := 20 + smallH
-	actionH := smallH + 18
-	rowH := smallH + 10
-
-	labelW := int32(168)
-	if labelW > panelW/3 {
-		labelW = panelW / 3
-	}
-	valueX := panelX + padX + labelW
-	valueW := panelX + panelW - padX - valueX
-
-	listTop := panelY + headerH
-	listBottom := panelY + panelH - footerH - actionH
-	fits := int((listBottom - listTop) / rowH)
-	if fits < 1 {
-		fits = 1
-	}
-
-	rows := wifiDiagRenderRows(font, wifiPanel.diag.Entries, valueW)
-	maxScroll := len(rows) - fits
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if wifiPanel.diagScroll > maxScroll {
-		wifiPanel.diagScroll = maxScroll
-	}
-	wifiDiagRowsTotal, wifiDiagRowsShown = len(rows), fits
-
-	if len(rows) == 0 {
-		empty := "Reading Wi-Fi state…"
-		if wifiPanel.err != "" {
-			empty = wifiPanel.err
-		}
-		renderText(renderer, config, font, ellipsize(font, empty, panelW-2*padX),
-			ColorTextTertiary(), panelX+padX, listTop+8)
-	} else {
-		y := listTop
-		for i := wifiPanel.diagScroll; i < len(rows) && i < wifiPanel.diagScroll+fits; i++ {
-			row := rows[i]
-			if row.label != "" {
-				renderText(renderer, config, font, row.label, ColorTextTertiary(), panelX+padX, y)
-			}
-			renderText(renderer, config, font, row.value, row.color, valueX, y)
-			y += rowH
-		}
-	}
-
-	wifiPanelActionBar(renderer, config, font, panelX,
-		panelY+panelH-footerH-actionH, panelW, actionH, smallH)
-
-	footer := hintLine(FooterHint{"A", "Refresh"}, FooterHint{"Y", "Copy"}, FooterHint{"B", "Back"})
-	if len(rows) > fits {
-		footer = hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"A", "Refresh"}, FooterHint{"Y", "Copy"}, FooterHint{"B", "Back"})
-	}
-	fw, _, _ := font.SizeUTF8(footer)
-	renderText(renderer, config, font, footer, ColorTextTertiary(),
-		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+4)
 }
 
 // wifiDiagRenderRows turns the report into drawable lines, wrapping each value

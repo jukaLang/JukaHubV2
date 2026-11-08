@@ -22,6 +22,7 @@ func hintLabel(hints []FooterHint, button string) (string, bool) {
 // "X Search" pointed at a key that did nothing on Tube itself.
 func TestFooterHintsMatchTheHandlers(t *testing.T) {
 	withScreen(t, probeW, probeH)
+	resetChatTestState(t)
 	for name, config := range loadAuditConfigs(t) {
 		for _, scene := range config.Scenes {
 			if scene.Layout == "home" {
@@ -33,11 +34,17 @@ func TestFooterHintsMatchTheHandlers(t *testing.T) {
 			}
 			switch scene.Name {
 			case "Chat":
+				// Browsing the community tab with nothing typed (the state
+				// resetChatTestState leaves): A types, the shoulders switch
+				// tabs, Y opens the people list and X renames.
 				if label, _ := hintLabel(hints, "A"); label != "Type" {
 					t.Errorf("%s / %s: A hint is %q, but A opens the keyboard", name, scene.Name, label)
 				}
-				if label, ok := hintLabel(hints, "Y"); !ok || label != "Ask AI" {
-					t.Errorf("%s / %s: Y hint is %q, want \"Ask AI\"", name, scene.Name, label)
+				if label, ok := hintLabel(hints, "L1/R1"); !ok || label != "Tabs" {
+					t.Errorf("%s / %s: L1/R1 hint is %q, want \"Tabs\"", name, scene.Name, label)
+				}
+				if label, ok := hintLabel(hints, "Y"); !ok || label != "People" {
+					t.Errorf("%s / %s: Y hint is %q, want \"People\"", name, scene.Name, label)
 				}
 				if label, ok := hintLabel(hints, "X"); !ok || label != "Rename" {
 					t.Errorf("%s / %s: X hint is %q, want \"Rename\"", name, scene.Name, label)

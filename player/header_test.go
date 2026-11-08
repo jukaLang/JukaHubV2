@@ -311,14 +311,12 @@ func TestEveryScreenDrawsTheSharedBar(t *testing.T) {
 		if tb.startRect.W == 0 || tb.startRect.H != pillH {
 			t.Errorf("%s: the shared bar drew no Menu pill (rect %+v, want %dpx tall)", scene.Name, tb.startRect, pillH)
 		}
-		// JukaLand's B is a game action, so the bar deliberately omits Back
-		// there; every other scene has to carry it.
-		if scene.Name != "JukaLand" {
-			if sceneTitleBackRect.W == 0 {
-				t.Errorf("%s: no Back pill was drawn", scene.Name)
-			} else if sceneTitleBackRect.H != backH {
-				t.Errorf("%s: Back is %dpx tall, want the shared %d", scene.Name, sceneTitleBackRect.H, backH)
-			}
+		// Every scene carries Back, JukaLand included: B leaves the game like
+		// it leaves every other screen.
+		if sceneTitleBackRect.W == 0 {
+			t.Errorf("%s: no Back pill was drawn", scene.Name)
+		} else if sceneTitleBackRect.H != backH {
+			t.Errorf("%s: Back is %dpx tall, want the shared %d", scene.Name, sceneTitleBackRect.H, backH)
 		}
 		if updatePrompt.badge.W == 0 {
 			t.Errorf("%s: no release offer was drawn while one is available", scene.Name)
@@ -513,10 +511,11 @@ func TestHomeHeaderControlsDrawFocus(t *testing.T) {
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
 			t.Fatalf("ReadPixels failed for focused Home %s: %v", target, err)
 		}
+		// Every header control, launcher pills included, marks focus with the
+		// same accent ring (homelayout.drawHeader). The launchers used to paint
+		// a near-white edge of their own, so this check only looked for white
+		// and reported "no focus" once the ring was unified.
 		isFocusColor := func(c sdl.Color) bool {
-			if target == HomeFocusPS4 || target == HomeFocusPS5 {
-				return c.R > 200 && c.G > 210 && c.B > 220
-			}
 			return nearColor(c, accentColor, 35)
 		}
 		pixels := 0

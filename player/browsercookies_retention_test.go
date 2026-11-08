@@ -240,45 +240,26 @@ func TestEnsureCookieRetentionSettingIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestCookieRetentionRowRenders checks the row on the real Settings page: the
-// label resolves and draws, the row clears the footer, and it does not sit on
-// top of another control. The page has no free space left, so this is the test
-// that notices when the geometry is chosen badly.
+// TestCookieRetentionRowRenders checks the row on the real Settings page — the
+// "Keep browser sign-ins" carousel of the hub's Privacy & data section: it
+// shows the window in force, sits inside the pane above the footer, and draws
+// its label, its session line and its value whole on both canvases. The old
+// page had no free space left for it; the hub's rows are measured instead.
 func TestCookieRetentionRowRenders(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")
 	}
-	config := widgetRenderConfig(t)
-	frame, scene := renderNamedScene(t, config, "SettingsGeneral")
-
-	var row *Element
-	for i := range scene.Elements {
-		if scene.Elements[i].Trigger == "cycle_cookie_retention" {
-			row = &scene.Elements[i]
-			break
+	setSkipUnlessDefaultTextSize(t)
+	useTempBrowserCookiePath(t)
+	config := setRenderConfig(t)
+	config.Variables.Custom["cookieRetentionDays"] = 30
+	p := setNewHubProbe(t)
+	for _, w := range setTestCanvases {
+		p.open(config, "privacy", w, 720)
+		i := p.assertRowWhole("cookies")
+		if got := setHub.views[i].value; got != "30 days" {
+			t.Errorf("%dpx: the carousel shows %q, want the 30-day window", w, got)
 		}
-	}
-	if row == nil {
-		t.Fatal("Settings → General has no cookie retention row")
-	}
-	// The content panel ends 16px above the 48px footer.
-	if row.Y+44 > 656 {
-		t.Fatalf("row bottom at y=%d runs into the footer", row.Y+44)
-	}
-	rowW, rowH := resolveElementDimensions(*row, 320, 44)
-	for _, other := range scene.Elements {
-		if other.Trigger == "cycle_cookie_retention" || other.Type == "label" {
-			continue
-		}
-		otherW, otherH := resolveElementDimensions(other, 320, 44)
-		overlapsX := row.X < other.X+otherW && other.X < row.X+rowW
-		overlapsY := row.Y < other.Y+otherH && other.Y < row.Y+rowH
-		if overlapsX && overlapsY {
-			t.Fatalf("row overlaps %q (%s) at %d,%d", other.Text, other.Type, other.X, other.Y)
-		}
-	}
-	if got := brightPixelsIn(frame, *row, config); got < 40 {
-		t.Fatalf("row drew %d bright pixels: the label is missing or clipped", got)
 	}
 }
 

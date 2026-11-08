@@ -556,11 +556,16 @@ func savePatchState() error {
 // startup or prevents JukaHub from launching.
 func InitPatchModule() {
 	loadPatchState()
+	// A swap the helper committed keeps what it replaced as a saved version
+	// (uhist.go). It must run before the journal check purges those backups.
+	uhistAdoptCommittedSwaps()
 	checkInterruptedJournal()
 	confirmAppliedUpdate()
 	pruneStaleUpdateAdvertisement()
 	clearStaleRestartMarkers()
 	ensureDefaultRepo()
+	// The offline update channel's cache index (upch.go).
+	upchStartup()
 }
 
 // ---------------------------------------------------------------------------

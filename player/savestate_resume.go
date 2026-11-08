@@ -105,6 +105,15 @@ func retroArchLauncher(launcher string) bool {
 // missing key is appended, because RetroArch uses its built-in default when the
 // line is absent.
 func setRetroArchConfigBool(cfg, key string) (string, bool) {
+	return setRetroArchConfigBoolTo(cfg, key, "true")
+}
+
+// setRetroArchConfigBoolTo is the general form: it writes one boolean value,
+// keeping the indentation and any trailing comment. A missing key is appended,
+// because RetroArch uses its built-in default when the line is absent. One
+// father for both, so the OSD presets and the save-state switches cannot drift
+// apart in how they edit the file.
+func setRetroArchConfigBoolTo(cfg, key, value string) (string, bool) {
 	newline := "\n"
 	if strings.Contains(cfg, "\r\n") {
 		newline = "\r\n"
@@ -130,11 +139,11 @@ func setRetroArchConfigBool(cfg, key string) (string, bool) {
 			comment = " " + strings.TrimSpace(rest[hash:])
 			rest = strings.TrimSpace(rest[:hash])
 		}
-		if strings.EqualFold(strings.Trim(rest, `"'`), "true") {
+		if strings.EqualFold(strings.Trim(rest, `"'`), value) {
 			continue
 		}
 		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		lines[i] = indent + key + ` = "true"` + comment
+		lines[i] = indent + key + ` = "` + value + `"` + comment
 		changed = true
 	}
 	if found {
@@ -146,7 +155,7 @@ func setRetroArchConfigBool(cfg, key string) (string, bool) {
 	if cfg != "" && !strings.HasSuffix(cfg, "\n") {
 		cfg += newline
 	}
-	return cfg + key + ` = "true"` + newline, true
+	return cfg + key + ` = "` + value + `"` + newline, true
 }
 
 // ensureSavestateResume is the pure edit: both switches on, everything else

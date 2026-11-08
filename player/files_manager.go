@@ -190,6 +190,11 @@ func feFocusEntry(config *Config) (FileEntry, bool) {
 // marked used to remove the whole folder above — every ROM next to the one
 // the user was looking at.
 func feSelectionTargets(config *Config) []FileEntry {
+	// A Locations row is a whole drive or the card: never a target for Copy,
+	// Cut, Rename or Delete.
+	if filesNav.atLocations {
+		return nil
+	}
 	entries := feEntriesOf(config)
 	var targets []FileEntry
 	if feSelectionCount() > 0 {
@@ -209,6 +214,9 @@ func feSelectionTargets(config *Config) []FileEntry {
 // feSelectablePaths lists the entries "Select all" marks: everything except the
 // ".." row, which is a way out of the folder rather than a thing in it.
 func feSelectablePaths(config *Config) []string {
+	if filesNav.atLocations {
+		return nil
+	}
 	var paths []string
 	for _, entry := range feEntriesOf(config) {
 		if entry.Name == ".." {
@@ -668,7 +676,8 @@ func feRootLabel(root string) string {
 		if volume := filepath.VolumeName(clean); volume != "" {
 			return volume
 		}
-		return "Files"
+		// The filesystem root, reached from the Locations list.
+		return "System"
 	}
 	return base
 }
@@ -677,8 +686,33 @@ func feRootLabel(root string) string {
 // The root is always the first crumb so there is one click back to the top
 // whatever the depth.
 func feCrumbs(config *Config) []feCrumb {
-	root := feRoot(config)
-	current := feCurrentPath(config)
+	return filesCrumbsFor(feRoot(config), feCurrentPath(config))
+}
+
+// filesCrumbCache keeps the crumbs of the listing on screen: the bar is drawn
+// every frame, but its folder only changes when a folder is listed.
+var filesCrumbCache struct {
+	root, path string
+	crumbs     []feCrumb
+}
+
+// filesCrumbsListed is feCrumbs for the frame. It builds the crumbs from the
+// folder and root the last listing recorded, so drawing the bar costs no disk
+// access (feCurrentPath validates fe_path against the disk on every call).
+func filesCrumbsListed(config *Config) []feCrumb {
+	root, path := filesNav.listedRoot, filesNav.listedPath
+	if root == "" || path == "" {
+		return feCrumbs(config)
+	}
+	if filesCrumbCache.crumbs == nil || filesCrumbCache.root != root || filesCrumbCache.path != path {
+		filesCrumbCache.root, filesCrumbCache.path = root, path
+		filesCrumbCache.crumbs = filesCrumbsFor(root, path)
+	}
+	return filesCrumbCache.crumbs
+}
+
+// filesCrumbsFor builds the crumbs from root down to current.
+func filesCrumbsFor(root, current string) []feCrumb {
 	crumbs := []feCrumb{{Label: feRootLabel(root), Path: root}}
 	rel, err := filepath.Rel(root, current)
 	if err != nil || rel == "." || rel == "" {
@@ -760,16 +794,17 @@ func feGoToPath(config *Config, path string) bool {
 	}
 	dir, err := existingDirWithin(feRoot(config), path)
 	if err != nil {
-		showToast("Cannot open that folder: "+err.Error(), ToastError())
+		showToast("Cannot open that folder: "+filesFriendlyError(err), ToastError())
 		return false
 	}
-	config.Variables.Custom["fe_path"] = dir
-	focusedFileIndex = 0
-	feSelectionClear()
-	feListDirectory(config)
+	filesNavigate(config, dir, "")
 	PlayNavSound()
 	return true
 }
+
+// filesLocationsCrumbRect is the "Locations" chip at the head of the breadcrumb
+// bar: the click target that steps up to the Locations list from any depth.
+var filesLocationsCrumbRect sdl.Rect
 
 // handleFilesChromeMouse handles clicks on the breadcrumb bar and the sort chip,
 // which are drawn above the list element and would otherwise fall through as
@@ -777,6 +812,12 @@ func feGoToPath(config *Config, path string) bool {
 func handleFilesChromeMouse(mx, my int32, config *Config) bool {
 	if !feSceneActive(config) {
 		return false
+	}
+	if filesLocationsCrumbRect.W > 0 && pointInRect(mx, my, filesLocationsCrumbRect) {
+		if !filesNav.atLocations {
+			filesShowLocations(config)
+		}
+		return true
 	}
 	for _, hit := range feCrumbHits {
 		if pointInRect(mx, my, hit.Rect) {
@@ -805,9 +846,10 @@ func feToggleSelectionOnFocused(config *Config) bool {
 		return false
 	}
 	// The ".." row is the way out, not a thing in the folder (it is the
-	// parent), so X steps over it without marking it.
+	// parent), so X steps over it without marking it; a Locations row is a
+	// whole drive and is never marked either.
 	selected := false
-	if entry.Name != ".." {
+	if entry.Name != ".." && !filesNav.atLocations {
 		selected = feSelectionToggle(entry.Path)
 	}
 	if selected {
@@ -846,9 +888,13 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	sortTextW := int32(sortW)
 	chip := sdl.Rect{X: bar.X + bar.W - sortTextW - 28, Y: bar.Y + 9, W: sortTextW + 22, H: bar.H - 18}
 	feSortChipRect = chip
-	fillRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, sdl.Color{R: 255, G: 255, B: 255, A: 16})
-	strokeRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, 1, sdl.Color{R: 255, G: 255, B: 255, A: 26})
+	fillRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, glassChipFill())
+	strokeRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, 1, glassA(26))
 	renderText(renderer, config, font, sortText, ColorTextSecondary(), chip.X+11, chip.Y+(chip.H-lineH)/2)
+	// The listing's cursor is remembered per folder from here, once per frame,
+	// so coming back to Files (or up from a sub-folder) finds the same row.
+	filesNoteFocus(config)
+	filesDrawListNotice(renderer, config, element, elemW)
 
 	// Totals between the crumbs and the chip: how much is in this folder, and
 	// how much room is left on the card under it.
@@ -871,28 +917,21 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	// The crumbs get what is left, with the middle giving way first. Each one
 	// is its own chip with its own hit box, so a deep folder is one press from
 	// the top instead of five B presses.
-	avail := totalsX - bar.X - 24
-	if avail < 200 {
-		avail = 200
-	}
-	crumbs := feCrumbFit(font, feCrumbs(config), avail)
-	feCrumbHits = feCrumbHits[:0]
 	chipH := bar.H - 18
 	chipY := bar.Y + 9
 	textY := chipY + (chipH-lineH)/2
 	x := bar.X + 10
-	for i, crumb := range crumbs {
-		if i > 0 {
-			sepW, _, _ := font.SizeUTF8(feCrumbSep)
-			renderText(renderer, config, font, feCrumbSep, ColorTextTertiary(), x, textY)
-			x += int32(sepW) + feCrumbSepGap
-		}
-		labelW, _, _ := font.SizeUTF8(crumb.Label)
-		crumbW := int32(labelW) + 2*feCrumbPad
-		current := i == len(crumbs)-1
+	feCrumbHits = feCrumbHits[:0]
+
+	// "Locations" leads the bar: one press from any depth back to the list of
+	// places (the card, Home, the system root, every drive). On the list itself
+	// it is the crumb that reads as "here".
+	drawCrumb := func(label string, current bool) int32 {
+		labelW, _ := measureText(font, label)
+		crumbW := labelW + 2*feCrumbPad
 		ink := ColorTextSecondary()
-		fill := sdl.Color{R: 255, G: 255, B: 255, A: 10}
-		edge := sdl.Color{R: 255, G: 255, B: 255, A: 22}
+		fill := glassA(10)
+		edge := glassA(22)
 		if current {
 			// The folder on screen is the one that reads as "here".
 			ink = ColorTextPrimary()
@@ -901,7 +940,30 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 		}
 		fillRoundedRect(renderer, x, chipY, crumbW, chipH, 7, fill)
 		strokeRoundedRect(renderer, x, chipY, crumbW, chipH, 7, 1, edge)
-		renderText(renderer, config, font, crumb.Label, ink, x+feCrumbPad, textY)
+		renderText(renderer, config, font, label, ink, x+feCrumbPad, textY)
+		return crumbW
+	}
+	const locationsLabel = "Locations"
+	locW := drawCrumb(locationsLabel, filesNav.atLocations)
+	filesLocationsCrumbRect = sdl.Rect{X: x, Y: chipY, W: locW, H: chipH}
+	x += locW
+	if filesNav.atLocations {
+		return
+	}
+	sepW, _ := measureText(font, feCrumbSep)
+
+	// The crumbs get what is left, with the middle giving way first. Each one
+	// is its own chip with its own hit box, so a deep folder is one press from
+	// the top instead of five B presses.
+	avail := totalsX - x - sepW - feCrumbSepGap - 24
+	if avail < 160 {
+		avail = 160
+	}
+	crumbs := feCrumbFit(font, filesCrumbsListed(config), avail)
+	for i, crumb := range crumbs {
+		renderText(renderer, config, font, feCrumbSep, ColorTextTertiary(), x+feCrumbSepGap/2, textY)
+		x += sepW + feCrumbSepGap
+		crumbW := drawCrumb(crumb.Label, i == len(crumbs)-1)
 		if crumb.Path != "" {
 			feCrumbHits = append(feCrumbHits, struct {
 				Path string
@@ -912,15 +974,62 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	}
 }
 
+// filesDrawListNotice explains a listing that has nothing to open under its
+// ".." row: a folder the app may not read, an empty folder, or one whose only
+// entries are hidden. The ".." row stays above it, so the way back is on
+// screen while the reason is read.
+func filesDrawListNotice(renderer *sdl.Renderer, config *Config, element Element, elemW int32) {
+	if filesNav.atLocations {
+		return
+	}
+	// A listing with no rows at all (an empty filesystem root) gets the list's
+	// own empty state; this covers the folder whose one row is the way back.
+	entries := feEntriesOf(config)
+	if len(entries) != 1 || entries[0].Name != ".." {
+		return
+	}
+	title, body := "", ""
+	switch {
+	case filesNav.listErr != nil:
+		title, body = filesListErrorText(filesNav.listErr)
+	case filesNav.hiddenCount > 0:
+		title = "Only hidden items here"
+		body = fmt.Sprintf("%s hidden · Y → Show hidden files", feItemCountLabel(filesNav.hiddenCount))
+	default:
+		title, body = "This folder is empty", "Press B to go back up"
+	}
+	top := element.Y + dynamicListListOffset(element) + dynamicListRowH + 8
+	elemH := getElementHeight(element, 500)
+	rect := sdl.Rect{X: element.X, Y: top, W: elemW, H: element.Y + elemH - top - 8}
+	if rect.H < 80 {
+		return
+	}
+	if filesNav.listErr != nil {
+		UIErrorState(renderer, config, rect, "@warning", title, body)
+		return
+	}
+	UIEmptyState(renderer, config, rect, "@folder", title, body)
+}
+
 // feFolderTotalsLabel is the bar's middle reading: what this folder holds, how
 // many rows are marked, and how much room is left on the card beneath it.
 func feFolderTotalsLabel(config *Config) string {
+	if filesNav.atLocations {
+		n := len(filesNav.locations)
+		if n == 1 {
+			return "1 place"
+		}
+		return fmt.Sprintf("%d places", n)
+	}
 	count, bytes := feDirTotals(feEntriesOf(config))
 	label := fmt.Sprintf("%d items · %s", count, humanBytes(bytes))
 	if count == 0 {
 		label = "empty folder"
 	} else if count == 1 {
 		label = "1 item · " + humanBytes(bytes)
+	}
+	if filesNav.hiddenCount > 0 {
+		label += fmt.Sprintf(" · %d hidden", filesNav.hiddenCount)
 	}
 	if free := feFreeSpaceLabel(feDisplayPath(config)); free != "" {
 		label += " · " + free
@@ -951,41 +1060,46 @@ func renderFilesRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, entr
 		renderer.FillRect(&sdl.Rect{X: rowX + 2, Y: rowY + 7, W: 3, H: rowH - 14})
 	}
 
-	badge, badgeInk := feEntryBadge(entry)
+	_, badgeInk := feEntryBadge(entry)
 	chipW := int32(46)
 	chipH := int32(20)
 	chipX := rowX + 12
 	chipY := rowY + (rowH-chipH)/2
-	if selected {
+	loc, isLocation := filesLocationOf(entry)
+	switch {
+	case isLocation:
+		filesDrawIconBadge(renderer, chipX, rowY, chipW, rowH, filesLocationIcon(loc), glassAccent())
+	case selected:
 		// The chip is what the eye lands on first, so a marked row gets the tick
 		// in its place instead of a second mark elsewhere on the row.
 		fillRoundedRect(renderer, chipX, chipY, chipW, chipH, 5,
 			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 235})
 		drawFeTick(renderer, chipX+chipW/2, chipY+chipH/2, sdl.Color{R: 12, G: 16, B: 26, A: 255})
-	} else if entry.IsDir && entry.Name != ".." {
+	case entry.IsDir && entry.Name != "..":
 		fillRoundedRect(renderer, chipX, chipY, chipW, chipH, 5, sdl.Color{R: badgeInk.R, G: badgeInk.G, B: badgeInk.B, A: 40})
 		drawFeFolderIcon(renderer, chipX, chipY, badgeInk)
-	} else if tex := feFileThumbnail(renderer, entry); tex != nil {
-		// A picture and a video frame replace the type chip in the same slot:
-		// the thumbnail is what makes a row recognisable before it is opened,
-		// and keeping the chip's footprint leaves the name column where it was.
-		drawFeThumbnail(renderer, entry, tex, chipX, rowY+(rowH-feThumbH)/2)
-	} else {
-		fillRoundedRect(renderer, chipX, chipY, chipW, chipH, 5, sdl.Color{R: badgeInk.R, G: badgeInk.G, B: badgeInk.B, A: 40})
-		if w, _, err := font.SizeUTF8(badge); err == nil {
-			renderText(renderer, config, font, badge, badgeInk, chipX+(chipW-int32(w))/2, textY)
+	default:
+		if tex := feFileThumbnail(renderer, entry); tex != nil {
+			// A picture and a video frame replace the type chip in the same slot:
+			// the thumbnail is what makes a row recognisable before it is opened,
+			// and keeping the chip's footprint leaves the name column where it was.
+			drawFeThumbnail(renderer, entry, tex, chipX, rowY+(rowH-feThumbH)/2)
+		} else {
+			// Every other row carries its type as a glyph in a tinted glass
+			// badge (the Home icon set), not three letters squeezed into a chip.
+			filesDrawIconBadge(renderer, chipX, rowY, chipW, rowH, filesEntryIcon(entry), badgeInk)
 		}
 	}
 
 	meta := feEntryMeta(entry)
+	if isLocation {
+		// A long mount path gives way before the place's name does.
+		meta = ellipsize(font, filesLocationMeta(loc), rowW*45/100)
+	}
 	metaW := int32(0)
 	if meta != "" {
-		if w, _, err := font.SizeUTF8(meta); err == nil {
-			metaW = int32(w)
-		}
-	}
-	if meta != "" {
-		renderText(renderer, config, font, meta, ColorTextTertiary(), rowX+rowW-metaW-16, textY)
+		metaW, _ = measureText(font, meta)
+		filesDrawPlainText(renderer, config, font, meta, ColorTextTertiary(), rowX+rowW-metaW-16, textY)
 	}
 
 	nameX := chipX + chipW + 12
@@ -997,7 +1111,79 @@ func renderFilesRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, entr
 	if entry.Name == ".." {
 		nameInk = ColorTextSecondary()
 	}
-	renderText(renderer, config, font, ellipsize(font, feEntryTitle(entry), nameAvail), nameInk, nameX, textY)
+	// File names are the user's text: drawn as they are, never with the
+	// $variable substitution renderText applies to the app's own labels.
+	filesDrawPlainText(renderer, config, font, ellipsize(font, feEntryTitle(entry), nameAvail), nameInk, nameX, textY)
+}
+
+// filesDrawPlainText draws text that came from the user's files (a name, a
+// line of a document) exactly as it is: renderText would expand "$name" tokens
+// against the config's variables, which turns a script line or a file called
+// "$HOME.txt" into something else.
+func filesDrawPlainText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text string, color sdl.Color, x, y int32) (int32, int32) {
+	if renderer == nil || font == nil || text == "" {
+		return 0, 0
+	}
+	return drawTextRun(renderer, config, font, sanitizeCached(font, text), color, x, y)
+}
+
+// filesDrawIconBadge paints a row's type glyph in a glass badge tinted with the
+// type's colour, centred in the slot the type chip and the thumbnails use, so
+// the name column lines up whatever leads the row.
+func filesDrawIconBadge(renderer *sdl.Renderer, slotX, rowY, slotW, rowH int32, icon string, tint sdl.Color) {
+	if renderer == nil {
+		return
+	}
+	size := rowH - 8
+	if size > 30 {
+		size = 30
+	}
+	if size < 16 {
+		size = 16
+	}
+	badge := sdl.Rect{X: slotX + (slotW-size)/2, Y: rowY + (rowH-size)/2, W: size, H: size}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, 8, sdl.Color{R: tint.R, G: tint.G, B: tint.B, A: 52})
+	strokeRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, 8, 1, sdl.Color{R: tint.R, G: tint.G, B: tint.B, A: 110})
+	glyph := size * 2 / 3
+	DrawHomeIcon(renderer, icon, sdl.Rect{X: badge.X + (size-glyph)/2, Y: badge.Y + (size-glyph)/2, W: glyph, H: glyph}, false)
+}
+
+// filesEntryIcon names the Home-icon glyph for a row's type.
+func filesEntryIcon(entry FileEntry) string {
+	if entry.Name == ".." {
+		return "folder-up"
+	}
+	if entry.IsDir {
+		return "folder"
+	}
+	ext := strings.ToLower(filepath.Ext(entry.Name))
+	switch {
+	case isImageExtension(ext):
+		return "image"
+	case isAudioFile(entry.Name):
+		return "music"
+	case isMediaFile(entry.Name) || hasMediaExtension(entry.Path):
+		return "video"
+	case ext == ".pdf":
+		return "pdf"
+	case ext == ".epub" || ext == ".mobi" || ext == ".azw3":
+		return "text"
+	case ext == ".zip" || ext == ".tar" || ext == ".gz" || ext == ".xz" || ext == ".7z" || ext == ".rar":
+		if filesROMSystem(entry.Path) != "" {
+			return "gamepad"
+		}
+		return "packages"
+	case ext == ".sh" || ext == ".bash" || ext == ".bat" || ext == ".cmd" || ext == ".ps1":
+		return "terminal"
+	case ext == ".html" || ext == ".htm" || ext == ".js" || ext == ".css" || ext == ".json" || ext == ".go" || ext == ".py" || ext == ".c" || ext == ".h" || ext == ".lua":
+		return "code"
+	case ext == ".apk" || ext == ".exe" || ext == ".msi":
+		return "apps"
+	case filesROMSystem(entry.Path) != "":
+		return "gamepad"
+	}
+	return "text"
 }
 
 // drawFeFolderIcon paints a folder in the 46×20 type-chip slot.
@@ -1043,6 +1229,9 @@ const (
 	feActSort
 	feActConnect
 	feActRemote
+	feActHidden
+	feActLocations
+	feActSystemOpen
 )
 
 // feAction is one row of the sheet. Detail is the line's right-hand summary
@@ -1057,9 +1246,35 @@ type feAction struct {
 }
 
 func feActions(config *Config) []feAction {
+	hiddenDetail := "Off"
+	if filesShowHidden(config) {
+		hiddenDetail = "On"
+	}
+	remoteDetail := "not connected"
+	remoteEnabled := feRemoteConnected()
+	if feRemotePanel.tgt.Host != "" {
+		remoteDetail = feRemotePanel.tgt.key()
+		remoteEnabled = true
+	}
+	if filesNav.atLocations {
+		// The Locations rows are whole drives and the card: nothing here can be
+		// renamed, cut or deleted, so the sheet offers what still applies.
+		return []feAction{
+			{Kind: feActHidden, Label: "Show hidden files", Detail: hiddenDetail, Enabled: true},
+			{Kind: feActConnect, Label: "Connect to device", Detail: feRemoteAddressHint(), Enabled: true},
+			{Kind: feActRemote, Label: "Remote files", Detail: remoteDetail, Enabled: remoteEnabled},
+		}
+	}
 	targets := feSelectionTargets(config)
-	folder := filepath.Base(feCurrentPath(config))
+	listed := filesNav.listedPath
+	if listed == "" {
+		listed = feCurrentPath(config)
+	}
+	folder := filepath.Base(listed)
 	newFolderDetail := "in " + folder
+	if filesNav.systemFolder {
+		newFolderDetail = "system folder · asks first"
+	}
 	renameDetail := "nothing selected"
 	renameEnabled := false
 	if len(targets) == 1 && targets[0].Name != ".." {
@@ -1084,20 +1299,16 @@ func feActions(config *Config) []feAction {
 		switch {
 		case targets[0].IsDir:
 			editDetail = "folders cannot be edited"
-		case fileEditorCanEdit(targets[0].Path):
+		case fileEditorCanEdit(targets[0].Path) || !filesHasDedicatedViewer(targets[0].Path):
+			// Anything without a viewer of its own opens in the editor anyway;
+			// the sheet's row is the way to the text of a script or a page too.
 			editDetail = targets[0].Name
 			editEnabled = true
 		default:
-			editDetail = "not a text file"
+			editDetail = "opens in its own viewer"
 		}
 	}
-	remoteDetail := "not connected"
-	remoteEnabled := feRemoteConnected()
-	if feRemotePanel.tgt.Host != "" {
-		remoteDetail = feRemotePanel.tgt.key()
-		remoteEnabled = true
-	}
-	return []feAction{
+	actions := []feAction{
 		{Kind: feActNewFolder, Label: "New folder", Detail: newFolderDetail, Enabled: true},
 		{Kind: feActEdit, Label: "Edit text", Detail: editDetail, Enabled: editEnabled},
 		{Kind: feActRename, Label: "Rename", Detail: renameDetail, Enabled: renameEnabled},
@@ -1107,9 +1318,22 @@ func feActions(config *Config) []feAction {
 		{Kind: feActDelete, Label: "Delete", Detail: targetDetail, Enabled: len(targets) > 0, Dangerous: true},
 		{Kind: feActSelectAll, Label: "Select all", Detail: feItemCountLabel(len(feSelectablePaths(config))), Enabled: true},
 		{Kind: feActSort, Label: "Sort", Detail: feSortLabel(feSortModeOf(config)), Enabled: true},
-		{Kind: feActConnect, Label: "Connect to device", Detail: feRemoteAddressHint(), Enabled: true},
-		{Kind: feActRemote, Label: "Remote files", Detail: remoteDetail, Enabled: remoteEnabled},
+		{Kind: feActHidden, Label: "Show hidden files", Detail: hiddenDetail, Enabled: true},
+		{Kind: feActLocations, Label: "All locations", Detail: "card, Home, system, drives", Enabled: true},
 	}
+	if filesSystemOpenAvailable() {
+		systemDetail := "pick one file"
+		systemEnabled := false
+		if len(targets) == 1 && targets[0].Name != ".." {
+			systemDetail = targets[0].Name
+			systemEnabled = true
+		}
+		actions = append(actions, feAction{Kind: feActSystemOpen, Label: "Open with Windows", Detail: systemDetail, Enabled: systemEnabled})
+	}
+	return append(actions,
+		feAction{Kind: feActConnect, Label: "Connect to device", Detail: feRemoteAddressHint(), Enabled: true},
+		feAction{Kind: feActRemote, Label: "Remote files", Detail: remoteDetail, Enabled: remoteEnabled},
+	)
 }
 
 // feArmWindow is how long an armed destructive press stays armed. It matches
@@ -1194,6 +1418,10 @@ func feSheetActivate(config *Config) {
 	}
 	switch action.Kind {
 	case feActNewFolder:
+		// In a system folder every change asks twice (files_locations.go).
+		if !filesSystemConfirm(action.Label) {
+			return
+		}
 		filesKeyboard = filesEditNewFolder
 		filesInputBuffer = ""
 		closeFeSheetKeepKeyboard()
@@ -1214,6 +1442,9 @@ func feSheetActivate(config *Config) {
 			showToast("Rename works on one item at a time", ToastInfo())
 			return
 		}
+		if !filesSystemConfirm(action.Label) {
+			return
+		}
 		filesRenamePath = targets[0].Path
 		closeFeSheetKeepKeyboard()
 		vkOpenFilesInput(filesEditRename, targets[0].Name)
@@ -1227,6 +1458,11 @@ func feSheetActivate(config *Config) {
 		PlayActivateSound()
 		showToast("Copied "+feItemCountLabel(len(paths))+" — Paste into a folder", ToastSuccess())
 	case feActCut:
+		// A cut removes the originals when it is pasted, so taking files out of
+		// a system folder is confirmed here, where the folder is on screen.
+		if !filesSystemConfirm(action.Label) {
+			return
+		}
 		targets := feSelectionTargets(config)
 		paths := make([]string, 0, len(targets))
 		for _, t := range targets {
@@ -1236,6 +1472,9 @@ func feSheetActivate(config *Config) {
 		PlayActivateSound()
 		showToast("Cut "+feItemCountLabel(len(paths))+" — Paste where it belongs", ToastSuccess())
 	case feActPaste:
+		if !filesSystemConfirm(action.Label) {
+			return
+		}
 		done, err := fePaste(config)
 		switch {
 		case err != nil && done == 0:
@@ -1252,7 +1491,11 @@ func feSheetActivate(config *Config) {
 			feSheet.armed = "delete"
 			feSheet.armedAt = time.Now()
 			PlayNavSound()
-			showToast("Press again to delete "+feItemCountLabel(len(feSelectionTargets(config))), ToastWarn())
+			prompt := "Press again to delete "
+			if filesNav.systemFolder {
+				prompt = "System folder — press again to delete "
+			}
+			showToast(prompt+feItemCountLabel(len(feSelectionTargets(config))), ToastWarn())
 			return
 		}
 		feSheet.armed = ""
@@ -1289,6 +1532,20 @@ func feSheetActivate(config *Config) {
 		mode := feCycleSort(config)
 		showToast("Sorted by "+strings.ToLower(feSortLabel(mode)), ToastInfo())
 		closeFeSheet()
+	case feActHidden:
+		filesToggleHidden(config)
+		closeFeSheet()
+	case feActLocations:
+		feSheetForget()
+		filesShowLocations(config)
+	case feActSystemOpen:
+		targets := feSelectionTargets(config)
+		if len(targets) != 1 {
+			showToast("Open one file at a time", ToastInfo())
+			return
+		}
+		closeFeSheet()
+		filesOpenWithSystem(targets[0].Path)
 	case feActConnect:
 		closeFeSheetKeepKeyboard()
 		openFeRemoteAddressEntry(config)
@@ -1375,13 +1632,23 @@ func feFilesKey(key sdl.Keycode, config *Config) bool {
 		return true
 	case sdl.K_x:
 		return feToggleSelectionOnFocused(config)
+	case sdl.K_h, sdl.K_PERIOD:
+		// Ctrl+H / "." are how desktop file managers show dotfiles; plain H
+		// does it here, the handheld has the sheet's row.
+		filesToggleHidden(config)
+		return true
+	case sdl.K_HOME:
+		return filesPageList(config, -1<<20)
+	case sdl.K_END:
+		return filesPageList(config, 1<<20)
 	}
 	return false
 }
 
 // handleFilesController takes the Files screen's Y and X before the generic
 // scene dispatch reaches them, so the two buttons behind the footer hints
-// cannot be claimed by a focused element.
+// cannot be claimed by a focused element. L1/R1 page the list: the list's own
+// pad branch never reached the shoulder handler, so they did nothing here.
 func handleFilesController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || virtualKeyboardActive || !feSceneActive(config) {
 		return false
@@ -1392,8 +1659,37 @@ func handleFilesController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return true
 	case sdl.CONTROLLER_BUTTON_X:
 		return feToggleSelectionOnFocused(config)
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		return filesPageList(config, -filesListPageRows(config))
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		return filesPageList(config, filesListPageRows(config))
 	}
 	return false
+}
+
+// filesListPageRows is one screenful of the Files list.
+func filesListPageRows(config *Config) int {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return 10
+	}
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok {
+		return dynamicListMaxVisible(el)
+	}
+	return 10
+}
+
+// filesPageList moves the cursor by delta rows, clamped to the list.
+func filesPageList(config *Config, delta int) bool {
+	entries := feEntriesOf(config)
+	if len(entries) == 0 {
+		return false
+	}
+	next := clampIndex(focusedFileIndex+delta, len(entries))
+	if next != focusedFileIndex {
+		focusedFileIndex = next
+		PlayNavSound()
+	}
+	return true
 }
 
 // renderFeSheet draws the action sheet.
@@ -1426,6 +1722,13 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 	if armed := feSheet.armed == "delete" && feSheetArmed("delete"); armed {
 		subtitle = "Press A again to delete " + feItemCountLabel(len(feSelectionTargets(config)))
 		subtitleInk = WarningInk()
+	} else if strings.HasPrefix(feSheet.armed, "sys:") && feSheetArmed(feSheet.armed) {
+		subtitle = "System folder — press A again to " + strings.ToLower(strings.TrimPrefix(feSheet.armed, "sys:"))
+		subtitleInk = WarningInk()
+	} else if filesNav.atLocations {
+		subtitle = fmt.Sprintf("%d places", len(filesNav.locations))
+	} else if filesNav.systemFolder {
+		subtitle = "System folder · changes ask twice · " + subtitle
 	}
 	header := UIPanelHeader("Files", subtitle, "files")
 	header.SubtitleColor = subtitleInk

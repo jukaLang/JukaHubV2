@@ -23,7 +23,7 @@ package main
 //	chatAvatars               chat.go            entries + bytes  (new)     768 KB, fixed 64px
 //	thumbnailDataCache        thumbstore.go      entries + bytes  (new)     512 × up to 16 MB
 //	conditionalCache bodies   httpcache.go       entries + bytes  (new)     64 × 1 MiB = 64 MB
-//	iconAtlas                 iconatlas.go       one fixed strip            ok (1024×64 = 256 KB)
+//	iconAtlas                 iconatlas.go       one texture, grows once    ok (512² = 1 MB, at most 1024² = 4 MB)
 //	ambientGlowCache          backgroundfx.go    one fixed texture          ok (256 KB)
 //	video overlay/UI layer    vkeyboard.go       one layer per canvas       ok (freed with renderer)
 //	textBrowserWrapCache      textbrowser.go     exactly one page           ok (no growth)

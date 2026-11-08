@@ -325,33 +325,3 @@ func TestFTPListAcceptsFlags(t *testing.T) {
 		t.Fatalf("LIST -la did not list the share:\n%s", listing)
 	}
 }
-
-func TestEnsureToolsMenuEntry(t *testing.T) {
-	cfg := &Config{
-		Height: 720,
-		Scenes: []SceneConfig{{
-			Name: "Misc",
-			Elements: []Element{
-				{Type: "button", Text: "Terminal", X: 24, Y: 72, Height: "55", Width: "296"},
-			},
-		}},
-	}
-	ensureToolsMenuEntry(cfg)
-	if len(cfg.Scenes[0].Elements) != 2 {
-		t.Fatalf("Misc elements = %d, want the Terminal button plus FTP & IP", len(cfg.Scenes[0].Elements))
-	}
-	added := cfg.Scenes[0].Elements[1]
-	if added.Trigger != "tools_open" || added.Text != "FTP & IP" {
-		t.Errorf("added element = %+v", added)
-	}
-	if added.Y < 72+55 {
-		t.Errorf("added button overlaps the existing grid (y=%d)", added.Y)
-	}
-	// Idempotent: a reload must not keep adding buttons.
-	ensureToolsMenuEntry(cfg)
-	if len(cfg.Scenes[0].Elements) != 2 {
-		t.Errorf("ensureToolsMenuEntry is not idempotent: %d elements", len(cfg.Scenes[0].Elements))
-	}
-	// No Misc scene: nothing to do and no panic.
-	ensureToolsMenuEntry(&Config{Height: 720, Scenes: []SceneConfig{{Name: "Main"}}})
-}

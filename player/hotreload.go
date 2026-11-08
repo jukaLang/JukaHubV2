@@ -284,15 +284,28 @@ func applyConfigReload(prev, next *Config) *Config {
 	mergeUserConfig(next, reloadUserConfigFromDisk())
 	applyDeviceUIProfile(next)
 	ensureWeatherUnitSetting(next)
-	ensureTasksRefreshLabel(next)
+	sysToolMigrateScenes(next)
 	ensureAlarmScene(next)
+	vkEnsureSettingsScene(next)
+	tbxEnsureScenes(next)
 	ensureSettingsWidgets(next)
 	ensureOnboardingEntry(next)
 	ensureMusicScene(next)
 	ensureGamesScene(next)
+	pdfvEnsureScene(next)
 	ensurePlaytimeScene(next)
 	ensurePlaytimeEntry(next)
+	ensureToolsHubScene(next)
+	peerEnsureScenes(next)
+	ensureRommScene(next)
 	ensureBrowserScene(next)
+	// Control profiles and Local play, and the chosen profile, its switches
+	// and the D-pad modes as the reloaded settings say.
+	inmapEnsureScenes(next)
+	inmapLoadSettings(next)
+	// Experience packs, Config and Backup & restore, and the pack in force's
+	// scenes, theme file and wallpaper, before the preset below (xpack.go).
+	xpackEnsure(next)
 	if presetName, ok := next.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
 		ApplyThemeColors(GetThemePreset(presetName))
 	}
@@ -328,6 +341,9 @@ func applyConfigReload(prev, next *Config) *Config {
 	// Vibration row and its saved value are re-applied here.
 	hapticsBind(next)
 	ensureHapticsSetting(next)
+	// The UI-sound settings' live value comes from the new config too
+	// (sound.go; the switch is the Settings hub's row).
+	bootSfxBind(next)
 	showToast("Config reloaded", ColorToastSuccess)
 	return next
 }

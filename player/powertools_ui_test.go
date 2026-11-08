@@ -81,13 +81,15 @@ func TestPowerToolsMenuRows(t *testing.T) {
 		syncTarget: "nas:/backup",
 	})
 	rows := powerToolRows(&Config{})
-	if len(rows) != 8 {
-		t.Fatalf("menu rows = %d, want the eight tools and no Close row", len(rows))
+	// The Audit toolkit is a screen of its own under Tools now (auditscene.go),
+	// so the menu lists the seven power tools and no Close row.
+	if len(rows) != 7 {
+		t.Fatalf("menu rows = %d, want the seven tools and no Close row", len(rows))
 	}
 	want := []powerAction{
 		powerActionOpenFiles, powerActionOpenScripts,
 		powerActionOpenSync, powerActionOpenConfigs, powerActionOpenBench,
-		powerActionOpenMemory, powerActionOpenCtrlDiag, powerActionOpenAudit,
+		powerActionOpenMemory, powerActionOpenCtrlDiag,
 	}
 	for i, action := range want {
 		if rows[i].action != action {

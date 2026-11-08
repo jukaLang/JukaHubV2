@@ -1,7 +1,8 @@
 package main
 
 // community.go — the in-app community hub: release notes shown after an
-// update, a prefilled GitHub bug report, and the anonymous telemetry switch.
+// update, the way into Report a bug (bugrep.go), and the anonymous telemetry
+// switch.
 //
 // It is an overlay (like Tools and Quick Settings) rather than a scene so it
 // works on every config, including configs that never define an About scene.
@@ -9,7 +10,6 @@ package main
 // page opens itself once after an update.
 
 import (
-	"net/url"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -109,8 +109,8 @@ func communityRows(config *Config) []communityRow {
 		},
 		{
 			label:  "Report a bug",
-			value:  "GitHub issue",
-			detail: "Opens a prefilled report with redacted diagnostics",
+			value:  "Describe the problem",
+			detail: "Anonymous; you review the redacted diagnostics before sending",
 			hint:   hintLine(FooterHint{"A", "Open"}),
 			action: communityActionReportBug,
 		},
@@ -190,8 +190,10 @@ func communityPanelActivate(config *Config) {
 		communityPanel.scroll = 0
 		PlayActivateSound()
 	case communityActionReportBug:
+		// The form is a full screen of its own now (bugrep.go).
 		communityPanel.open = false
-		reportBugFromUI(config)
+		PlayActivateSound()
+		bugrepOpenScreen(config)
 	case communityActionTelemetry:
 		on := !telemetryOptedIn()
 		if err := setTelemetryOptedIn(config, on); err != nil {
@@ -208,23 +210,6 @@ func communityPanelActivate(config *Config) {
 	case communityActionClose:
 		closeCommunityPanel()
 	}
-}
-
-// reportBugFromUI writes a diagnostics copy, copies it to the clipboard and
-// opens a prefilled GitHub issue. It runs off the render thread because opening
-// a browser can block on some handheld desktops.
-func reportBugFromUI(config *Config) {
-	path, err := ReportBug(config)
-	if err != nil {
-		ShowToast("Couldn't open a browser — diagnostics copied to the clipboard", ToastKindWarning)
-		logPatch("bug report: open failed: %v", err)
-		return
-	}
-	if path != "" {
-		ShowToast("GitHub issue opened — diagnostics copied and saved", ToastKindSuccess)
-		return
-	}
-	ShowToast("GitHub issue opened — diagnostics copied", ToastKindSuccess)
 }
 
 func prepareCommunityDiagnosticsQR(config *Config) {
@@ -260,37 +245,11 @@ func prepareCommunityDiagnosticsQR(config *Config) {
 	communityDiagnosticQR.qr = code.Bitmap()
 }
 
-// ── Bug report ──────────────────────────────────────────────────────────────
+// ── Links ───────────────────────────────────────────────────────────────────
 
+// jukaHubIssuesNew is where a bug report filed through the phone path lands
+// (bugrepIssueURL).
 const jukaHubIssuesNew = "https://github.com/jukaLang/JukaHubV2/issues/new"
-
-// BugReportURL builds the prefilled issue. The body carries the same redacted
-// diagnostics the Patch export writes; no config values, tokens or paths are
-// included. The body is trimmed so the whole URL stays inside what browsers
-// and GitHub accept.
-func BugReportURL(config *Config) string {
-	diag := DiagnosticsText(config)
-	if len(diag) > 5000 {
-		diag = diag[:5000] + "\n… (truncated)\n"
-	}
-	body := "### What happened?\n" +
-		"<!-- Describe the problem and what you expected instead. -->\n\n" +
-		"### Steps to reproduce\n" +
-		"1. \n2. \n3. \n\n" +
-		"### Expected\n\n\n" +
-		"### Diagnostics (redacted)\n" +
-		"```\n" + strings.TrimRight(diag, "\n") + "\n```\n"
-	return jukaHubIssuesNew +
-		"?title=" + url.QueryEscape("[Bug] ") +
-		"&body=" + url.QueryEscape(body)
-}
-
-// ReportBug saves a diagnostics file, copies the report and opens the issue.
-func ReportBug(config *Config) (string, error) {
-	path, _ := ExportDiagnostics(config)
-	_ = copyTextToClipboard(DiagnosticsText(config), "Diagnostics")
-	return path, openExternalURL(BugReportURL(config))
-}
 
 // openExternalURL hands a URL to the desktop without going through a shell.
 func openExternalURL(raw string) error {

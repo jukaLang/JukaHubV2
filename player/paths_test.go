@@ -102,7 +102,12 @@ func TestFileExplorerNavigation(t *testing.T) {
 	cfg.Variables.Custom = map[string]interface{}{}
 	installGraph(t, cfg, 0)
 	previousFocus := focusedFileIndex
-	t.Cleanup(func() { focusedFileIndex = previousFocus })
+	previousNav := filesNav
+	t.Cleanup(func() {
+		focusedFileIndex = previousFocus
+		filesNav = previousNav
+	})
+	filesNav = filesNavState{}
 	focusedFileIndex = 0
 	feListDirectory(cfg)
 	if !feListAction(cfg, ActionNavigateDown) || focusedFileIndex != 1 {
@@ -114,7 +119,17 @@ func TestFileExplorerNavigation(t *testing.T) {
 	if !feFocusList(cfg) || selectedButtonIndex != 0 {
 		t.Fatal("could not return to list")
 	}
-	focusedFileIndex = 0
+	// The root lists a ".." row first now (it leads to the folders around the
+	// Files root), so the folder is found by name.
+	focusedFileIndex = -1
+	for i, entry := range feEntriesOf(cfg) {
+		if entry.Name == "folder" {
+			focusedFileIndex = i
+		}
+	}
+	if focusedFileIndex < 0 {
+		t.Fatalf("the folder is not listed: %v", feEntriesOf(cfg))
+	}
 	if !feListAction(cfg, ActionConfirm) || feCurrentPath(cfg) != filepath.Join(root, "folder") {
 		t.Fatal("confirm did not enter selected folder")
 	}

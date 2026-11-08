@@ -52,7 +52,7 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 
 # Builder scripts the browser smoke test loads; `node --check` catches syntax
 # errors without starting anything.
-WEB_SCRIPTS := script.js builder-device.js builder-gallery.js gallery/layouts.js
+WEB_SCRIPTS := builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build run test test-web e2e vet fmt fmt-check lint bench web \
         release clean check coverage workflows test-scripts

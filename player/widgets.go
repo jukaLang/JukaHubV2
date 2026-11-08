@@ -421,25 +421,13 @@ func ensureSettingsWidgets(config *Config) {
 	ensureSmartSettingsScene(config)
 	ensureSmartSettingsEntry(config)
 	ensureWeatherUnitSetting(config)
-	ensureTasksRefreshLabel(config)
+	// The Terminal, Scheduled tasks and the tool screens draw their own
+	// controls; their old config buttons go (systool.go).
+	sysToolMigrateScenes(config)
 	ensureScreensaverTimeoutSetting(config)
 	ensureCookieRetentionSetting(config)
 	ensureSnapPreviewSetting(config)
-}
-
-// Older configs call the scheduled-task rescan "Load". Label that existing
-// action Refresh without moving it or changing custom button labels.
-func ensureTasksRefreshLabel(config *Config) {
-	scene := sceneByName(config, "Cron")
-	if scene == nil {
-		return
-	}
-	for i := range scene.Elements {
-		elem := &scene.Elements[i]
-		if elem.Type == "button" && elem.Trigger == "cron_load" && elem.Text == "Load" {
-			elem.Text = "Refresh"
-		}
-	}
+	ensureOSDPresetSetting(config)
 }
 
 // Replace the old free-text weather unit field in existing designs as well as
@@ -736,6 +724,11 @@ func widgetToggleSideEffect(config *Config, variable string, on bool) bool {
 		if on {
 			playHaptic(hapticTogglePulse)
 		}
+		return false
+	case "weatherenabled":
+		// The switch used to stop at the config: the poller kept fetching and
+		// the forecast stayed on every screen. weather_toggle.go makes it live.
+		weatherApplyEnabled(on)
 		return false
 	case "timeofdaytheme":
 		// Re-evaluate from scratch so turning it on applies the preset for this

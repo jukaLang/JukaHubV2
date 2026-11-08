@@ -29,6 +29,7 @@ const (
 	msRowBackground
 	msRowBitPerfect
 	msRowPEQ
+	msRowPlaylists
 	msRowShortcuts
 )
 
@@ -62,6 +63,7 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowBackground, "Background playback", "Keep playing when you leave the player. In the player, Y + Left toggles it too."},
 		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser and tempo so decoded samples reach the DAC unprocessed."},
 		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz. Open it with G in the player."},
+		{msRowPlaylists, "Playlists", "Left/right picks a saved list, A plays it, X saves the current queue under a name."},
 		{msRowShortcuts, "Keyboard shortcuts", "Show every key and controller binding."},
 	}
 }
@@ -110,6 +112,11 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 		return "Off"
 	case msRowPEQ:
 		return musicPEQStatus()
+	case msRowPlaylists:
+		if pl, ok := musicSelectedPlaylist(); ok {
+			return fmt.Sprintf("%s (%d)", pl.Name, len(pl.Tracks))
+		}
+		return "None yet"
 	}
 	return ""
 }
@@ -163,6 +170,12 @@ func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 	case msRowPEQ:
 		musicSetPEQEnabled(!musicEQ.enabled, config)
 		showToast("PEQ: "+onOff(musicEQ.enabled), ToastInfo())
+	case msRowPlaylists:
+		if pl, ok := musicCyclePlaylistSelection(dir); ok {
+			showToast(fmt.Sprintf("Playlist: %s (%d tracks)", pl.Name, len(pl.Tracks)), ToastInfo())
+		} else {
+			showToast("No saved playlists yet — X saves the queue", ToastInfo())
+		}
 	default:
 		return false
 	}
@@ -183,6 +196,21 @@ func onOff(on bool) string {
 func musicSettingsActivate(row musicSettingsRow, config *Config) {
 	if row.kind == msRowShortcuts {
 		shortcutsOpen = true
+		PlayActivateSound()
+		return
+	}
+	if row.kind == msRowPlaylists {
+		if pl, ok := musicSelectedPlaylist(); ok {
+			if musicPlaySavedPlaylist(config, pl.Name) {
+				showToast("Playing "+pl.Name, ToastSuccess())
+			} else {
+				showToast("That playlist has no playable tracks", ToastWarn())
+			}
+			PlayActivateSound()
+			return
+		}
+		// Nothing saved yet: A starts the same flow X does.
+		vkOpenPlaylistName()
 		PlayActivateSound()
 		return
 	}
@@ -252,6 +280,9 @@ func handleMusicSettingsKey(e *sdl.KeyboardEvent, config *Config) bool {
 		musicSettingsAdjust(rows[cur], 1, config)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		musicSettingsActivate(rows[cur], config)
+	case sdl.K_x:
+		// Save the current queue under a name typed on the on-screen keyboard.
+		vkOpenPlaylistName()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_k:
 		closeMusicSettingsPanel()
 	}

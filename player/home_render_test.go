@@ -138,13 +138,23 @@ func TestHomeHasNoSeparateClockButton(t *testing.T) {
 func TestHomeExitChipVisibleOnFooter(t *testing.T) {
 	snapshotHomeGlobals(t)
 	frame := renderHomeFrame(t, false)
-	// Blank area inside the Exit chip pill (rect 8,678,116x36), right of its
-	// glyph and label, on top of the footer band (y 672..720).
-	c := frame.at(115, 696)
-	want := ColorIconSurface
-	if c.R != want.R || c.G != want.G || c.B != want.B {
-		t.Errorf("Exit chip not visible on the footer: pixel=(%d,%d,%d) want ColorIconSurface=(%d,%d,%d)",
-			c.R, c.G, c.B, want.R, want.G, want.B)
+	// The chip's geometry comes from the layout: it now starts at the frame
+	// margin (x=48) rather than the old 8px inset, and the fixed sample point
+	// this check used to read had moved onto the label's antialiased edge — it
+	// reported a blend of the glyph ink as "no chip" long after the chip was
+	// drawn.
+	exit := homeLayout.Items[HomeFocusExit].Rect
+	if exit.W <= 0 || exit.H <= 0 {
+		t.Fatalf("Exit chip has no geometry: %+v", exit)
+	}
+	// Blank pill surface below the label's baseline.
+	if c := frame.at(exit.X+exit.W/2, exit.Y+exit.H-6); !nearColor(c, ColorIconSurface, 4) {
+		t.Errorf("Exit chip surface = %+v, want ColorIconSurface %+v", c, ColorIconSurface)
+	}
+	// The band beside it is still footer, which is what makes the chip visible:
+	// the bug this pins was the chip disappearing behind that band.
+	if c := frame.at(exit.X+exit.W+8, exit.Y+exit.H-6); nearColor(c, ColorIconSurface, 10) {
+		t.Errorf("the footer band beside Exit reads as the chip surface: %+v", c)
 	}
 }
 
@@ -158,8 +168,13 @@ func TestHomeClockReachableAndTogglesCalendar(t *testing.T) {
 	if got := homeLayout.Move(FocusRight); got != HomeFocusMedia {
 		t.Fatalf("Right from Continue = %s, want media", got)
 	}
+	// Up from Media crosses the Remote Play launcher in the header band, then
+	// reaches the clock.
+	if got := homeLayout.Move(FocusUp); got != HomeFocusPS5 {
+		t.Fatalf("Up from Media = %s, want the PS5 launcher above it", got)
+	}
 	if got := homeLayout.Move(FocusUp); got != HomeFocusClock {
-		t.Fatalf("Up from Media = %s, want clock (the clock must be reachable by keys)", got)
+		t.Fatalf("Up from the launcher = %s, want clock (the clock must be reachable by keys)", got)
 	}
 
 	homeCalendarOpen = false
@@ -203,14 +218,19 @@ func TestHomeWiFiMeterSelectableWithDpad(t *testing.T) {
 	snapshotHomeGlobals(t)
 	prevActive := homeLayoutActive
 	homeLayoutActive = true
-	prevWifi := wifiPanel
+	prevWifi, prevFresh := wifiPanel, wifiScr.fresh
+	prevPending, prevPhase := pendingSceneIndex, transitionPhase
+	prevHistory := append([]int(nil), sceneHistory...)
 	t.Cleanup(func() {
 		homeLayoutActive = prevActive
-		// The click below opens the picker; leaving that modal open would leak
-		// into every later test in the package.
-		wifiPanel = prevWifi
+		// The click below starts the move to the Wi-Fi page; none of it may
+		// leak into the later tests in the package.
+		wifiPanel, wifiScr.fresh = prevWifi, prevFresh
+		pendingSceneIndex, transitionPhase = prevPending, prevPhase
+		sceneHistory = prevHistory
 	})
 	config := &Config{Scenes: []SceneConfig{{Name: "Main", Layout: "home"}}}
+	currentSceneIndex, pendingSceneIndex, transitionPhase = 0, -1, "none"
 
 	// Before the first frame the placeholder must already be the meter, not a
 	// chip drawn on top of it: the update offer shares this band.
@@ -236,12 +256,16 @@ func TestHomeWiFiMeterSelectableWithDpad(t *testing.T) {
 			t.Fatalf("home did not consume controller button %v", button)
 		}
 	}
-	if !homeLayout.Focus.Set(HomeFocusSettings) {
-		t.Fatal("cannot focus the Settings card")
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus the Media card")
 	}
 	press(sdl.CONTROLLER_BUTTON_DPAD_UP)
+	if homeLayout.Focus.Current() == HomeFocusPS5 {
+		// The Remote Play launcher sits between Media and the status row.
+		press(sdl.CONTROLLER_BUTTON_DPAD_UP)
+	}
 	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
-		t.Fatalf("Up from Settings focused %q, want the clock", got)
+		t.Fatalf("Up from Media focused %q, want the clock", got)
 	}
 	press(sdl.CONTROLLER_BUTTON_DPAD_LEFT)
 	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
@@ -254,8 +278,10 @@ func TestHomeWiFiMeterSelectableWithDpad(t *testing.T) {
 	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
 		t.Fatalf("click on the meter selected %q", got)
 	}
-	if !wifiPanel.open {
-		t.Fatal("clicking the meter did not open the Wi-Fi picker")
+	// The meter opens the Wi-Fi page, a scene of its own, not a picker over Home.
+	if want := sceneIndexExact(config, wifiScrSceneName); want < 0 || pendingSceneIndex != want || transitionPhase != "fade-out" {
+		t.Fatalf("clicking the meter started phase %q to scene %d, want the Wi-Fi page (%d)",
+			transitionPhase, pendingSceneIndex, want)
 	}
 }
 

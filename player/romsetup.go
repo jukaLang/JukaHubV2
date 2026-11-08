@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,32 @@ var romSystemAliases = map[string]romSystem{
 	"dc":                          {"Dreamcast", "Sega - Dreamcast"},
 	"dreamcast":                   {"Dreamcast", "Sega - Dreamcast"},
 	"sega - dreamcast":            {"Dreamcast", "Sega - Dreamcast"},
+	"xbox":                        {"Xbox", "Microsoft - Xbox"},
+	"xbox1":                       {"Xbox", "Microsoft - Xbox"},
+	"microsoft - xbox":            {"Xbox", "Microsoft - Xbox"},
+	// Consoles the ROM manager (romm_detect.go) files games for, under the
+	// folder names TrimUI's firmware and CrossMix use.
+	"ms":                              {"Master System", "Sega - Master System - Mark III"},
+	"sms":                             {"Master System", "Sega - Master System - Mark III"},
+	"mastersystem":                    {"Master System", "Sega - Master System - Mark III"},
+	"sega - master system - mark iii": {"Master System", "Sega - Master System - Mark III"},
+	"gg":                              {"Game Gear", "Sega - Game Gear"},
+	"gamegear":                        {"Game Gear", "Sega - Game Gear"},
+	"sega - game gear":                {"Game Gear", "Sega - Game Gear"},
+	"pce":                             {"PC Engine", "NEC - PC Engine - TurboGrafx 16"},
+	"pcengine":                        {"PC Engine", "NEC - PC Engine - TurboGrafx 16"},
+	"tg16":                            {"PC Engine", "NEC - PC Engine - TurboGrafx 16"},
+	"nec - pc engine - turbografx 16": {"PC Engine", "NEC - PC Engine - TurboGrafx 16"},
+	"ps2":                             {"PlayStation 2", "Sony - PlayStation 2"},
+	"sony - playstation 2":            {"PlayStation 2", "Sony - PlayStation 2"},
+	"neogeo":                          {"Neo Geo", "SNK - Neo Geo"},
+	"snk - neo geo":                   {"Neo Geo", "SNK - Neo Geo"},
+	"gc":                              {"GameCube", "Nintendo - GameCube"},
+	"gamecube":                        {"GameCube", "Nintendo - GameCube"},
+	"ngc":                             {"GameCube", "Nintendo - GameCube"},
+	"nintendo - gamecube":             {"GameCube", "Nintendo - GameCube"},
+	"wii":                             {"Wii", "Nintendo - Wii"},
+	"nintendo - wii":                  {"Wii", "Nintendo - Wii"},
 }
 
 var romFileExtensions = map[string]bool{
@@ -74,7 +101,9 @@ var romFileExtensions = map[string]bool{
 	".7z": true, ".gen": true, ".iso": true, ".md": true, ".nds": true, ".nes": true,
 	".n64": true, ".pbp": true, ".pce": true, ".rom": true, ".sfc": true,
 	".smc": true, ".z64": true, ".zip": true, ".v64": true, ".ndd": true,
-	".cdi": true, ".gdi": true, ".m3u": true,
+	".cdi": true, ".gdi": true, ".m3u": true, ".xiso": true,
+	".sms": true, ".gg": true, ".smd": true, ".fds": true, ".cso": true, ".rvz": true, ".wbfs": true,
+	".unf": true, ".unif": true, ".swc": true, ".fig": true,
 }
 
 // romSheetMaxBytes bounds how much of a .cue, .gdi or .m3u is read: real sheets
@@ -577,6 +606,18 @@ func artworkTitleVariants(title string) []string {
 		add(trimArtworkArticle(name))
 	}
 
+	// Spelling guesses come after every structural one: a title that only
+	// differs by accent, numeral or punctuation still names the same game, but
+	// it is a guess, and a truncated or reordered title is a worse one.
+	for _, name := range append([]string(nil), spaced...) {
+		if alias, ok := artworkAliasFor(name); ok {
+			add(alias)
+		}
+		for _, variant := range artworkSpellingVariants(name) {
+			add(variant)
+		}
+	}
+
 	out := make([]string, 0, len(spaced)*2)
 	seen := make(map[string]bool, len(spaced)*2)
 	push := func(name string) {
@@ -589,6 +630,203 @@ func artworkTitleVariants(title string) []string {
 	for _, name := range spaced {
 		push(name)
 		push(strings.ReplaceAll(name, " ", "_"))
+	}
+	return out
+}
+
+// ── Title normalisation ──
+//
+// The reference set spells a title its own way, and a ROM on the card spells it
+// the user's. Before this table the only guesses were "drop the tags", "cut the
+// subtitle" and "drop the article", so a title that differed by an accent, a
+// Roman numeral, "&" instead of "and", or a dash where the reference has a
+// colon was recorded as not found for a month.
+//
+// These guesses are appended after the structural ones and are all single-step
+// rewrites, so a wrong guess asks for one extra file that 404s; it never picks a
+// different game's cover unless that game happens to carry the exact rewritten
+// name.
+
+// artworkAliasTitles is the manual half: a normalised local name mapped to the
+// reference title when the two differ by more than spelling. Keys go through
+// artworkNormalizeTitle, so "Zelda II (USA)" and "zelda ii" share the entry.
+// Keep entries factual — one wrong alias costs a request and can pick a cover
+// for another game.
+var artworkAliasTitles = map[string]string{
+	// The reference set keeps the subtitle; a ROM trimmed to "Zelda II" cannot
+	// grow one back by rewriting, which is why this needs a table at all.
+	"zelda ii": "Zelda II - The Adventure of Link",
+	"zelda 2":  "Zelda II - The Adventure of Link",
+}
+
+// artworkAliasFor looks a name up in the alias table, ignoring dump tags,
+// punctuation and case.
+func artworkAliasFor(name string) (string, bool) {
+	alias, ok := artworkAliasTitles[artworkNormalizeTitle(name)]
+	return alias, ok && alias != ""
+}
+
+// artworkNormalizeTitle reduces a title to a comparable key: no dump tags, no
+// accents, lower case, and punctuation folded to spaces (apostrophes dropped).
+func artworkNormalizeTitle(s string) string {
+	s = stripArtworkTagGroups(s)
+	s = artworkFoldDiacritics(s)
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\'', '\u2019', '\u2018':
+			// Dropped, not spaced: "Kirby's" and "Kirbys" are one title.
+			continue
+		case '-', '_', ':', '.', ',', '!', '?':
+			b.WriteRune(' ')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.Join(strings.Fields(strings.ToLower(b.String())), " ")
+}
+
+// artworkDiacritics folds the accented letters the reference set uses into the
+// plain letters a ROM folder usually has. The reverse (adding an accent back) is
+// not a rewrite a program can make safely, so a title that needs its accent
+// restored belongs in the alias table instead.
+var artworkDiacritics = map[rune]string{
+	'à': "a", 'á': "a", 'â': "a", 'ã': "a", 'ä': "a", 'å': "a",
+	'ç': "c", 'è': "e", 'é': "e", 'ê': "e", 'ë': "e",
+	'ì': "i", 'í': "i", 'î': "i", 'ï': "i", 'ñ': "n",
+	'ò': "o", 'ó': "o", 'ô': "o", 'õ': "o", 'ö': "o", 'ø': "o",
+	'ù': "u", 'ú': "u", 'û': "u", 'ü': "u", 'ý': "y", 'ÿ': "y",
+	'À': "A", 'Á': "A", 'Â': "A", 'Ã': "A", 'Ä': "A", 'Å': "A",
+	'Ç': "C", 'È': "E", 'É': "E", 'Ê': "E", 'Ë': "E",
+	'Ì': "I", 'Í': "I", 'Î': "I", 'Ï': "I", 'Ñ': "N",
+	'Ò': "O", 'Ó': "O", 'Ô': "O", 'Õ': "O", 'Ö': "O", 'Ø': "O",
+	'Ù': "U", 'Ú': "U", 'Û': "U", 'Ü': "U", 'Ý': "Y",
+}
+
+func artworkFoldDiacritics(s string) string {
+	needsFold := false
+	for _, r := range s {
+		if _, ok := artworkDiacritics[r]; ok {
+			needsFold = true
+			break
+		}
+	}
+	if !needsFold {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if folded, ok := artworkDiacritics[r]; ok {
+			b.WriteString(folded)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// artworkRomanValues covers the numerals a game title realistically carries.
+// "I" is included even though "I, Robot" would be rewritten: the guess costs a
+// 404 and is only asked for after the real name.
+var artworkRomanValues = map[string]int{
+	"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7,
+	"VIII": 8, "IX": 9, "X": 10, "XI": 11, "XII": 12, "XIII": 13,
+	"XIV": 14, "XV": 15, "XVI": 16, "XVII": 17, "XVIII": 18,
+	"XIX": 19, "XX": 20,
+}
+
+var artworkArabicNumerals = map[int]string{
+	2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII",
+	9: "IX", 10: "X", 11: "XI", 12: "XII", 13: "XIII", 14: "XIV",
+	15: "XV", 16: "XVI", 17: "XVII", 18: "XVIII", 19: "XIX", 20: "XX",
+}
+
+// artworkSwapNumerals rewrites a standalone Roman numeral as its number and a
+// standalone number 2–20 as its Roman numeral: "Zelda II" ↔ "Zelda 2", the
+// documented mismatch between a trimmed folder name and the reference title.
+func artworkSwapNumerals(name string) string {
+	words := strings.Fields(name)
+	changed := false
+	for i, word := range words {
+		if value, ok := artworkRomanValues[strings.ToUpper(word)]; ok {
+			words[i] = strconv.Itoa(value)
+			changed = true
+			continue
+		}
+		if n, err := strconv.Atoi(word); err == nil {
+			if roman, ok := artworkArabicNumerals[n]; ok {
+				words[i] = roman
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return name
+	}
+	return strings.Join(words, " ")
+}
+
+// artworkSwapAnd rewrites "&" as "and" and a standalone "and" as "&", the two
+// spellings the reference set and a ROM folder disagree about.
+func artworkSwapAnd(name string) string {
+	if strings.Contains(name, "&") {
+		return strings.Join(strings.Fields(strings.ReplaceAll(name, "&", "and")), " ")
+	}
+	words := strings.Fields(name)
+	changed := false
+	for i, word := range words {
+		if strings.EqualFold(word, "and") {
+			words[i] = "&"
+			changed = true
+		}
+	}
+	if !changed {
+		return name
+	}
+	return strings.Join(words, " ")
+}
+
+// artworkSwapSubtitleSeparator rewrites the first subtitle separator: the
+// reference set writes "Series - Subtitle" while a local name often says
+// "Series: Subtitle" (and the other way round).
+func artworkSwapSubtitleSeparator(name string) string {
+	if i := strings.Index(name, " - "); i > 0 {
+		return name[:i] + ": " + name[i+3:]
+	}
+	if i := strings.Index(name, ": "); i > 0 {
+		return name[:i] + " - " + name[i+2:]
+	}
+	return name
+}
+
+// artworkSpellingVariants lists the same title written differently. Each entry
+// is one rewrite of the whole name, not a chain, so the list stays small and
+// every guess is attributable.
+func artworkSpellingVariants(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	var out []string
+	add := func(v string) {
+		v = strings.Join(strings.Fields(v), " ")
+		if v == "" || v == name {
+			return
+		}
+		for _, have := range out {
+			if have == v {
+				return
+			}
+		}
+		out = append(out, v)
+	}
+	add(artworkFoldDiacritics(name))
+	add(artworkSwapNumerals(name))
+	add(artworkSwapAnd(name))
+	add(artworkSwapSubtitleSeparator(name))
+	if trimmed := strings.TrimRight(name, " .,:;!"); trimmed != name {
+		add(trimmed)
 	}
 	return out
 }

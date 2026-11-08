@@ -33,6 +33,14 @@ func downloadsTestReset(t *testing.T) {
 	downloadRunner = func(context.Context, downloadJob, func(downloadProgress)) (downloadResult, error) {
 		return downloadResult{}, errors.New("this test did not install a runner")
 	}
+	// A finished row would be filed in the Downloads library on a goroutine
+	// that outlives the test and writes into its temporary folder
+	// (dl_library.go); the queue's tests leave the library alone.
+	prevFilingOff := dlLibraryFilingOff.Load()
+	dlLibraryFilingOff.Store(true)
+	t.Cleanup(func() {
+		dlLibraryFilingOff.Store(prevFilingOff)
+	})
 	t.Cleanup(func() {
 		// Stop whatever the test left running before the globals are restored.
 		downloadSetPaused(true)

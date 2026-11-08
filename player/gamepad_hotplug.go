@@ -19,10 +19,15 @@ import (
 // handleControllerDevice opens a newly attached controller when none is
 // usable, and lets go of the open one when it is unplugged — falling back to
 // any other controller that is still attached. Main thread only.
+//
+// Local play hears about every change once the main pad is settled
+// (hotseat.go): it opens a newly attached pad while its lobby is up, lets go
+// of one that left, and announces when two or more are connected.
 func handleControllerDevice(e *sdl.ControllerDeviceEvent) {
 	if e == nil {
 		return
 	}
+	defer hotseatDeviceChanged(e)
 	switch e.Type {
 	case sdl.CONTROLLERDEVICEADDED:
 		if gameController != nil && gameController.Attached() {

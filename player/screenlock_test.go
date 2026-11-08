@@ -9,9 +9,11 @@ package main
 import (
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -58,6 +60,23 @@ func screenlockTestConfig(path string) *Config {
 	return config
 }
 
+// screenlockTextureWait asks for the picture until the backdrop worker has
+// produced it: the decode runs off the render thread, so the first frames of
+// an idle screen draw the default backdrop.
+func screenlockTextureWait(t *testing.T, renderer *sdl.Renderer, config *Config) *sdl.Texture {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if texture, _, _ := screenlockTexture(renderer, config); texture != nil {
+			return texture
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestValidateScreenlockImageRejectsNonImages(t *testing.T) {
 	if _, err := validateScreenlockImage(""); err == nil {
 		t.Error("an empty path was accepted")
@@ -73,6 +92,16 @@ func TestValidateScreenlockImageRejectsNonImages(t *testing.T) {
 		t.Error("a missing picture was accepted")
 	}
 
+	// A renamed text file has the right extension and no picture in it: it is
+	// refused with a reason instead of silently drawing the default screen.
+	fake := filepath.Join(t.TempDir(), "holiday.png")
+	if err := os.WriteFile(fake, []byte("<html>not a picture</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateScreenlockImage(fake); err == nil || !strings.Contains(err.Error(), "holiday.png") {
+		t.Errorf("a fake png was not refused by name: %v", err)
+	}
+
 	picture := writeTestPNG(t, "photo.png", color.RGBA{R: 220, G: 40, B: 40, A: 255})
 	got, err := validateScreenlockImage(picture)
 	if err != nil {
@@ -80,6 +109,48 @@ func TestValidateScreenlockImageRejectsNonImages(t *testing.T) {
 	}
 	if !filepath.IsAbs(got) {
 		t.Errorf("stored path %q is not absolute, so a directory change would redirect it", got)
+	}
+
+	// Upper-case extensions and JPEGs are pictures too.
+	photo := filepath.Join(t.TempDir(), "CAMERA.JPG")
+	file, err := os.Create(photo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(file, image.NewRGBA(image.Rect(0, 0, 8, 6)), nil); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	if _, err := validateScreenlockImage(photo); err != nil {
+		t.Errorf("a real JPEG with an upper-case extension was rejected: %v", err)
+	}
+}
+
+// A picture chosen through a relative path (Files can hand one over) is stored
+// absolute, so it still resolves after the working directory changes, and is
+// recognised as the current backdrop from either spelling.
+func TestScreenlockRelativePathIsStoredAbsolute(t *testing.T) {
+	resetScreenlockCache(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "rel.png"), saverTestPNGBytes(t, color.RGBA{R: 10, G: 200, B: 90, A: 255}), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config := screenlockTestConfig("")
+	if err := setScreenlockImage(config, "rel.png"); err != nil {
+		t.Fatalf("setScreenlockImage(relative): %v", err)
+	}
+	stored, _ := config.Variables.Custom[screenlockImageKey].(string)
+	if !filepath.IsAbs(stored) || filepath.Base(stored) != "rel.png" {
+		t.Fatalf("stored %q, want an absolute path to rel.png", stored)
+	}
+	if !screenlockImageIsCurrent(config, "rel.png") || !screenlockImageIsCurrent(config, stored) {
+		t.Error("the backdrop was not recognised from its relative or absolute path")
+	}
+	// Moving elsewhere does not move the backdrop.
+	t.Chdir(t.TempDir())
+	if got := screenlockImagePath(config); got != stored {
+		t.Errorf("after a directory change the backdrop is %q, want %q", got, stored)
 	}
 }
 
@@ -136,7 +207,12 @@ func TestMissingScreenlockImageFallsBackToDefault(t *testing.T) {
 	if texture != nil || w != 0 || h != 0 {
 		t.Fatalf("a missing picture produced texture=%v %dx%d", texture, w, h)
 	}
-	drawScreenlockImage(renderer, config, 255)
+	if drawScreenlockImage(renderer, config, 255) {
+		t.Fatal("a missing picture reported itself drawn")
+	}
+	if saverLockShowing(config) {
+		t.Fatal("a missing picture still hid the default screen")
+	}
 
 	// The failure is remembered for a while, so the idle screen does not stat
 	// (and log) the same missing file on every frame.
@@ -150,8 +226,9 @@ func TestMissingScreenlockImageFallsBackToDefault(t *testing.T) {
 	}
 }
 
-// The picture really is painted: a bright red photo over the dark idle page
-// changes the pixels, and removing it afterwards goes back to no backdrop.
+// The picture really is painted, full screen: a bright red photo over the dark
+// idle page changes the pixels in the middle and in the corners, and removing
+// it afterwards goes back to no backdrop.
 func TestScreenlockImageDrawsAsIdleBackdrop(t *testing.T) {
 	resetScreenlockCache(t)
 	newProbeFrame(t)
@@ -162,22 +239,30 @@ func TestScreenlockImageDrawsAsIdleBackdrop(t *testing.T) {
 	picture := writeTestPNG(t, "bright.png", color.RGBA{R: 230, G: 30, B: 30, A: 255})
 	config := screenlockTestConfig(picture)
 
-	texture, w, h := screenlockTexture(renderer, config)
-	if texture == nil || w == 0 || h == 0 {
-		t.Fatalf("a valid png was not decoded: texture=%v %dx%d", texture, w, h)
+	texture := screenlockTextureWait(t, renderer, config)
+	if texture == nil {
+		t.Fatal("a valid png was not decoded")
 	}
+	if _, _, w, h, err := texture.Query(); err != nil || w != 320 || h != 200 {
+		t.Fatalf("the picture was uploaded at %dx%d (%v), want the 320x200 screen", w, h, err)
+	}
+	ssImage.shownAt = time.Time{} // skip the fade-in
 
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.Clear()
-	drawScreenlockImage(renderer, config, 255)
+	if !drawScreenlockImage(renderer, config, 255) {
+		t.Fatal("the picture was not drawn")
+	}
 
 	frame := &probeFrame{buf: make([]byte, probeW*probeH*4)}
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
 		t.Fatalf("cannot read the test frame: %v", err)
 	}
-	c := frame.at(screenWidth/2, screenHeight/2)
-	if int(c.R)+int(c.G)+int(c.B) < 120 {
-		t.Fatalf("the idle backdrop stayed dark (%v); the picture was not drawn", c)
+	for _, p := range [][2]int32{{screenWidth / 2, screenHeight / 2}, {2, 2}, {screenWidth - 3, screenHeight - 3}} {
+		c := frame.at(p[0], p[1])
+		if int(c.R) < int(c.G)+40 || int(c.R) < 60 {
+			t.Fatalf("pixel %v is %v; the picture does not cover the whole screen", p, c)
+		}
 	}
 
 	// Removing the file drops the backdrop on the next recheck rather than
@@ -206,7 +291,7 @@ func TestClearScreenlockImageRestoresDefaultLook(t *testing.T) {
 	if err := setScreenlockImage(config, picture); err != nil {
 		t.Fatalf("setScreenlockImage: %v", err)
 	}
-	if texture, _, _ := screenlockTexture(renderer, config); texture == nil {
+	if texture := screenlockTextureWait(t, renderer, config); texture == nil {
 		t.Fatal("the picture was not decoded before it was cleared")
 	}
 
@@ -242,6 +327,39 @@ func TestClearScreenlockImageRestoresDefaultLook(t *testing.T) {
 	}
 	if err := clearScreenlockImage(nil); err == nil {
 		t.Error("clearing with no configuration loaded reported success")
+	}
+}
+
+// Replacing the file on disk is picked up on the next check, with the new
+// picture decoded instead of the old one served from the cache.
+func TestScreenlockReplacedFileIsRedecoded(t *testing.T) {
+	resetScreenlockCache(t)
+	newProbeFrame(t)
+	renderer := newKeyboardTestRenderer(t)
+	t.Cleanup(releaseScreenlockTexture)
+	withScreen(t, 64, 40)
+
+	picture := writeTestPNG(t, "swap.png", color.RGBA{R: 200, G: 20, B: 20, A: 255})
+	config := screenlockTestConfig(picture)
+	if screenlockTextureWait(t, renderer, config) == nil {
+		t.Fatal("the first version was not decoded")
+	}
+	first := ssImage.stamp
+
+	// A different size and a later time make a new stamp.
+	if err := os.WriteFile(picture, saverTestPNGBytes(t, color.RGBA{R: 20, G: 20, B: 200, A: 255}), 0644); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(picture, later, later); err != nil {
+		t.Fatal(err)
+	}
+	ssImage.checked = time.Now().Add(-2 * screenlockRetryInterval)
+	if screenlockTextureWait(t, renderer, config) == nil {
+		t.Fatal("the replaced picture was not decoded")
+	}
+	if ssImage.stamp == first {
+		t.Fatal("the replaced file kept the old version's stamp")
 	}
 }
 

@@ -203,6 +203,10 @@ jobs:
           cp player/config.json JukaHub-Trimui/
           cp player/background.jpg JukaHub-Trimui/
           cp player/JukaPlayer.png JukaHub-Trimui/
+          # Tools -> Security & trust opens SECURITY.md from next to the binary.
+          if [ -f SECURITY.md ]; then
+            cp SECURITY.md JukaHub-Trimui/
+          fi
           # Release stamp: the app shows this date and the auto updater uses it
           # to decide whether a newer release exists.
           printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui/release-info.json
@@ -313,6 +317,10 @@ jobs:
           cd player
           cp jukaconfig.json Inter-Regular.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
           cd ..
+          # Tools -> Security & trust opens SECURITY.md from next to the binary.
+          if [ -f SECURITY.md ]; then
+            cp SECURITY.md JukaHub-Trimui-Windows/
+          fi
           # Release stamp: shown in the UI and used by the auto updater.
           printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui-Windows/release-info.json
           zip -r JukaHub-Windows.zip JukaHub-Trimui-Windows/

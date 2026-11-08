@@ -44,6 +44,14 @@ mkdir -p "$OUT"
 echo "Building Windows x64..."
 GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/JukaHub.exe" .
 (cd "$OUT" && zip -q -r "JukaHub-win-x64.zip" JukaHub.exe)
+# Tools -> Security & trust opens SECURITY.md from next to the binary (the app
+# falls back to a short built-in summary when it is missing). -j stores it at
+# the root of the zip without copying it into dist/.
+WINDOWS_FILES_JSON="\"JukaHub.exe\""
+if [ -f ../SECURITY.md ]; then
+    zip -q -j "$OUT/JukaHub-win-x64.zip" ../SECURITY.md
+    WINDOWS_FILES_JSON+=", \"SECURITY.md\""
+fi
 WINDOWS_SHA="$(sha256sum "$OUT/JukaHub-win-x64.zip" | cut -d' ' -f1)"
 WINDOWS_SIZE="$(stat -c %s "$OUT/JukaHub-win-x64.zip")"
 
@@ -62,6 +70,11 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     # because they need the TG5050 SDK and chiaki-ng's sources; a release without
     # them still runs, and the panel reports the helper as missing.
     PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png)
+    # SECURITY.md sits next to the binary for Tools -> Security & trust's reader.
+    if [ -f ../SECURITY.md ]; then
+        cp ../SECURITY.md "$TARGET_DIR/SECURITY.md"
+        PKG_FILES+=(SECURITY.md)
+    fi
     if [ -x native/bin/chiaki-stream ] && [ -x native/bin/chiaki-regist ]; then
         mkdir -p "$TARGET_DIR/bin"
         cp native/bin/chiaki-stream native/bin/chiaki-regist "$TARGET_DIR/bin/"
@@ -103,7 +116,7 @@ cat > "$OUT/manifest.json" <<EOF
   "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "targets": [
 ${TARGETS_JSON},
-    {"device": "dev-build", "os": "windows", "arch": "amd64", "asset": "JukaHub-win-x64.zip", "sha256": "${WINDOWS_SHA}", "size": ${WINDOWS_SIZE}, "files": ["JukaHub.exe"]}
+    {"device": "dev-build", "os": "windows", "arch": "amd64", "asset": "JukaHub-win-x64.zip", "sha256": "${WINDOWS_SHA}", "size": ${WINDOWS_SIZE}, "files": [${WINDOWS_FILES_JSON}]}
   ]
 }
 EOF

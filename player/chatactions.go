@@ -2,15 +2,15 @@ package main
 
 // chatactions.go — the message-level interactions of the chat screen.
 //
-// Messages are selectable (shoulders on the controller, left/right on a
-// keyboard, a click with a pointer), and a selected message offers what a chat
-// needs: reply with a quote, copy the text, hand it to Juka AI, open the
-// sender's profile, or delete your own message. Replies carry a quote header in
-// the bubble and become real Discord replies when the original came from
-// Discord.
+// The pad walks the history message by message (chatinput.go); A on a message
+// turns the composer into its action bar, and a click on a bubble does the
+// same. A message offers what a chat needs on a handheld: enlarge its picture,
+// open or play its link, reply with a quote, copy, ask Juka about it, keep it
+// in Saved, open the sender's profile, retry a message that did not go out,
+// and delete. Replies carry a quote header in the bubble and become real
+// Discord replies when the original came from Discord.
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -18,7 +18,7 @@ import (
 	"github.com/veandco/go-sdl2/ttf"
 )
 
-// chatMessageHit is one drawn message, in panel coordinates. The body rect
+// chatMessageHit is one drawn message, in screen coordinates. The body rect
 // selects the message; the avatar and name rects open the sender's profile.
 type chatMessageHit struct {
 	index      int
@@ -30,8 +30,8 @@ type chatMessageHit struct {
 	ownMessage bool
 }
 
-// chatSelection is the message context bar (the little action row that takes
-// the composer's place while a message is selected).
+// chatSelection is the message action bar (the row of actions that takes the
+// composer's place while it is open).
 type chatSelection struct {
 	open    bool
 	index   int
@@ -44,26 +44,19 @@ var (
 	chatMessageHits  []chatMessageHit
 	chatSelectionBar chatSelection
 
-	// chatSelected is the selected message index, -1 when nothing is selected.
-	// chatSelectedID pins the selection to one message when the list shifts.
+	// chatSelected is the focused message of the tab on screen, -1 for the
+	// composer. chatSelectedID pins it to one message when the list shifts.
 	chatSelected   = -1
 	chatSelectedID string
 
-	// chatReplyTo is the message the composer is currently quoting.
+	// chatReplyTo is the community message the composer is quoting.
 	chatReplyTo *ChatQuote
 
-	// Header/composer hit targets owned by the chat screen.
+	// Hit targets owned by the chat screen.
 	chatHeaderMembersRect sdl.Rect
 	chatJumpRect          sdl.Rect
 	chatReplyCancelRect   sdl.Rect
 	chatReplyStrip        sdl.Rect
-
-	// Unread tracking: chatSeenCount is the number of messages the reader had
-	// reached, chatUnread is how many arrived since while scrolled back.
-	chatSeenCount   int
-	chatUnread      int
-	chatOldestShown int
-	chatNewestShown int
 )
 
 // ChatQuote is the message a reply answers. ID is only set for Discord messages,
@@ -99,16 +92,29 @@ func ellipsizeRunes(text string, max int) string {
 
 // --- Selection -----------------------------------------------------------
 
-// chatClampSelection keeps the selection valid across trims and reloads.
+// chatClampSelection keeps the selection on its message across trims, merges
+// and reloads: the index follows the id, and a message that is gone drops the
+// selection.
 func chatClampSelection() {
 	chatMutex.Lock()
 	defer chatMutex.Unlock()
 	if chatSelected < 0 {
 		return
 	}
-	if chatSelected >= len(chatMessages) || (chatSelectedID != "" && chatMessages[chatSelected].ID != chatSelectedID) {
-		clearChatSelectionLocked()
+	list := *chatTabSliceLocked(chatActiveTabID())
+	if chatSelected < len(list) && (chatSelectedID == "" || list[chatSelected].ID == chatSelectedID) {
+		return
 	}
+	if chatSelectedID != "" {
+		for i := range list {
+			if list[i].ID == chatSelectedID {
+				chatSelected = i
+				chatSelectionBar.index = i
+				return
+			}
+		}
+	}
+	clearChatSelectionLocked()
 }
 
 func clearChatSelectionLocked() {
@@ -124,41 +130,76 @@ func clearChatSelection() {
 	chatSelectionBar = chatSelection{}
 }
 
-// selectChatMessage highlights one message and opens its action bar.
+// selectChatMessage highlights one message of the tab on screen and opens its
+// action bar.
 func selectChatMessage(index int) {
-	chatMutex.Lock()
-	if index < 0 || index >= len(chatMessages) {
-		chatMutex.Unlock()
+	msgs := chatActiveMessages()
+	if index < 0 || index >= len(msgs) {
 		return
 	}
-	id := chatMessages[index].ID
-	chatMutex.Unlock()
-	chatSelected, chatSelectedID = index, id
+	chatStopInlineTyping()
+	chatSuggestFocus = -1
+	chatSelected, chatSelectedID = index, msgs[index].ID
 	chatSelectionBar = chatSelection{open: true, index: index, focus: 0}
 	chatSelectionBar.buttons = chatSelectionActions(index)
 	PlayNavSound()
 }
 
-// chatSelectionActions lists the bar buttons for a message.
+// chatFirstLink is the first link of a message, and whether it plays in the
+// media player rather than opening in the browser.
+func chatFirstLink(msg ChatMessage) (string, bool) {
+	links := chatMessageLinks(msg.Text)
+	if len(links) == 0 {
+		return "", false
+	}
+	return links[0], chatLinkOpensInPlayer(links[0])
+}
+
+// chatSelectionActions lists the action bar buttons for a message of the tab
+// on screen.
 func chatSelectionActions(index int) []chatProfileAction {
-	chatMutex.Lock()
-	own := index >= 0 && index < len(chatMessages) && chatMessages[index].Own
-	hasPicture := index >= 0 && index < len(chatMessages) && chatMessageImageURL(chatMessages[index]) != ""
-	chatMutex.Unlock()
-	actions := make([]chatProfileAction, 0, 6)
+	msgs := chatActiveMessages()
+	if index < 0 || index >= len(msgs) {
+		return []chatProfileAction{{label: "Close", kind: "close"}}
+	}
+	msg := msgs[index]
+	tab := chatActiveTabID()
+	own := chatIsOwn(msg)
+	actions := make([]chatProfileAction, 0, 8)
 	// A picture is the one part of a message that cannot be read at bubble
-	// size, so enlarging it is the first thing the bar offers when there is
-	// one; every other entry is about the message's text.
-	if hasPicture {
+	// size, and a link is the one that does nothing until it is opened, so
+	// those lead; every other entry is about the message as a whole.
+	if chatMessageImageURL(msg) != "" {
 		actions = append(actions, chatProfileAction{label: "Enlarge", kind: "image"})
 	}
-	actions = append(actions,
-		chatProfileAction{label: "Reply", kind: "reply"},
-		chatProfileAction{label: "Copy", kind: "copy"},
-		chatProfileAction{label: "Ask AI", kind: "ask"},
-		chatProfileAction{label: "Profile", kind: "profile"},
-	)
-	if own {
+	if link, plays := chatFirstLink(msg); link != "" {
+		if plays {
+			actions = append(actions, chatProfileAction{label: "Play", kind: "play"})
+		} else {
+			actions = append(actions, chatProfileAction{label: "Open link", kind: "open"})
+		}
+	}
+	if own && msg.Error != "" {
+		actions = append(actions, chatProfileAction{label: "Retry", kind: "retry"})
+	}
+	if tab == chatTabCommunity {
+		actions = append(actions, chatProfileAction{label: "Reply", kind: "reply"})
+	}
+	if strings.TrimSpace(msg.Text) != "" {
+		actions = append(actions, chatProfileAction{label: "Copy", kind: "copy"})
+	}
+	if tab != chatTabAI && strings.TrimSpace(msg.Text) != "" {
+		actions = append(actions, chatProfileAction{label: "Ask Juka", kind: "ask"})
+	}
+	if tab != chatTabSaved {
+		actions = append(actions, chatProfileAction{label: "Save", kind: "save"})
+	}
+	if tab == chatTabCommunity && !own {
+		actions = append(actions, chatProfileAction{label: "Profile", kind: "profile"})
+	}
+	// The community channel is shared: only this device's own messages can be
+	// removed (from this device). The other tabs are this device's alone.
+	if own || tab != chatTabCommunity {
 		actions = append(actions, chatProfileAction{label: "Delete", kind: "delete"})
 	}
 	return append(actions, chatProfileAction{label: "Close", kind: "close"})
@@ -166,72 +207,57 @@ func chatSelectionActions(index int) []chatProfileAction {
 
 // selectedChatMessage returns the selected message, if the selection is live.
 func selectedChatMessage() (ChatMessage, int, bool) {
-	chatMutex.Lock()
-	defer chatMutex.Unlock()
-	if chatSelected < 0 || chatSelected >= len(chatMessages) {
+	msgs := chatActiveMessages()
+	if chatSelected < 0 || chatSelected >= len(msgs) {
 		return ChatMessage{}, -1, false
 	}
-	return chatMessages[chatSelected], chatSelected, true
+	return msgs[chatSelected], chatSelected, true
 }
 
-// moveChatSelection walks the history with the shoulders. A selection is
-// created on the newest message when nothing is selected yet.
+// moveChatSelection walks the selection by delta messages (a selection starts
+// on the newest message), without opening the action bar.
 func moveChatSelection(delta int) bool {
-	chatMutex.Lock()
-	count := len(chatMessages)
-	chatMutex.Unlock()
-	if count == 0 {
+	msgs := chatActiveMessages()
+	if len(msgs) == 0 {
 		return false
 	}
 	next := chatSelected
-	if next < 0 || next >= count {
-		next = count - 1
+	if next < 0 || next >= len(msgs) {
+		next = len(msgs) - 1
 	} else {
 		next += delta
 	}
-	next = clampIndex(next, count)
+	next = clampIndex(next, len(msgs))
 	if next == chatSelected {
 		return false
 	}
-	chatMutex.Lock()
-	id := chatMessages[next].ID
-	chatMutex.Unlock()
-	chatSelected, chatSelectedID = next, id
-	chatSelectionBar.open = false
-	chatSelectionBar.index = next
-	chatSelectionBar.focus = 0
-	chatSelectionBar.buttons = chatSelectionActions(next)
-	chatEnsureSelectionVisible()
-	PlayNavSound()
+	mode := chatAnchorTop
+	if delta < 0 {
+		mode = chatAnchorBottom
+	}
+	chatFocusMessage(msgs, next, mode)
 	return true
 }
 
-// chatEnsureSelectionVisible scrolls the panel so the selected message is on
-// screen. The visible range comes from the last frame, which knows how many
-// messages actually fit.
+// chatEnsureSelectionVisible asks the next frame to bring the selected message
+// on screen.
 func chatEnsureSelectionVisible() {
-	chatMutex.Lock()
-	count := len(chatMessages)
-	chatMutex.Unlock()
-	if chatSelected < 0 || count == 0 {
+	msgs := chatActiveMessages()
+	if chatSelected < 0 || chatSelected >= len(msgs) {
 		return
 	}
-	if chatSelected > chatNewestShown || chatSelected < chatOldestShown || chatNewestShown == 0 {
-		chatScrollOffset = clampIndex(count-1-chatSelected, count)
-	}
+	chatScrollToIndex(chatSelected)
 }
 
 // --- Reply ---------------------------------------------------------------
 
-// setChatReply quotes the selected message in the composer.
+// setChatReply quotes a community message in the composer.
 func setChatReply(index int) bool {
-	chatMutex.Lock()
-	if index < 0 || index >= len(chatMessages) {
-		chatMutex.Unlock()
+	msgs := chatTabMessages(chatTabCommunity)
+	if index < 0 || index >= len(msgs) {
 		return false
 	}
-	msg := chatMessages[index]
-	chatMutex.Unlock()
+	msg := msgs[index]
 	chatReplyTo = &ChatQuote{Author: msg.Sender, Text: msg.Text, ID: discordQuoteID(msg)}
 	clearChatSelection()
 	showToast("Replying to "+msg.Sender, ToastInfo())
@@ -268,7 +294,7 @@ func chatReplyStripHeight(font *ttf.Font) int32 {
 	if chatReplyTo == nil || font == nil {
 		return 0
 	}
-	return int32(font.Height()) + 20
+	return int32(font.Height()) + chatPx(18)
 }
 
 // drawChatReplyStrip draws the "Replying to …" strip above the composer and
@@ -278,70 +304,76 @@ func drawChatReplyStrip(renderer *sdl.Renderer, config *Config, font *ttf.Font, 
 		return
 	}
 	chatReplyStrip = rect
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusSM, WithAlpha(ColorInfo, 26))
-	fillRoundedRect(renderer, rect.X, rect.Y+4, 3, rect.H-8, 2, WithAlpha(ColorInfo, 200))
+	accent := glassAccent()
+	chatFillRound(renderer, rect, rect.H/2, WithAlpha(accent, 26))
+	chatFillRound(renderer, sdl.Rect{X: rect.X + chatPx(12), Y: rect.Y + chatPx(6), W: chatPx(3), H: rect.H - chatPx(12)}, chatPx(2), accent)
 
-	pad := int32(10)
 	cancelLabel := "Cancel"
-	cancelW, _, _ := font.SizeUTF8(cancelLabel)
-	cancelW += 18
-	chatReplyCancelRect = sdl.Rect{
-		X: rect.X + rect.W - int32(cancelW) - SpaceSM,
-		Y: rect.Y + (rect.H-(int32(font.Height())+6))/2,
-		W: int32(cancelW),
-		H: int32(font.Height()) + 6,
+	cancelW, _ := measureText(font, cancelLabel)
+	cancelW += chatPx(24)
+	ch := rect.H - chatPx(8)
+	chatReplyCancelRect = sdl.Rect{X: rect.X + rect.W - cancelW - chatPx(4), Y: rect.Y + (rect.H-ch)/2, W: cancelW, H: ch}
+	fill := glassA(16)
+	if chatHover(chatReplyCancelRect) {
+		fill = glassA(26)
 	}
-	fillRoundedRect(renderer, chatReplyCancelRect.X, chatReplyCancelRect.Y, chatReplyCancelRect.W, chatReplyCancelRect.H,
-		chatReplyCancelRect.H/2, WithAlpha(ColorSurfaceAlt, 230))
-	renderText(renderer, config, font, cancelLabel, ColorTextSecondary(), chatReplyCancelRect.X+9, chatReplyCancelRect.Y+3)
+	chatFillRound(renderer, chatReplyCancelRect, ch/2, fill)
+	chatTextCentered(renderer, config, font, cancelLabel, ColorTextSecondary(), chatReplyCancelRect.X+chatPx(12), chatReplyCancelRect)
 
+	pad := chatPx(24)
 	head := "Replying to " + chatReplyTo.Author
-	headW, _, _ := font.SizeUTF8(head)
-	renderText(renderer, config, font, head, InfoInk(), rect.X+pad, rect.Y+3)
-
-	textX := rect.X + pad + int32(headW) + SpaceSM
-	textW := chatReplyCancelRect.X - textX - SpaceSM
-	if textW > 40 {
-		preview := chatReplyTo.summary(120)
-		renderText(renderer, config, font, ellipsize(font, preview, textW), ColorTextTertiary(), textX, rect.Y+3)
+	headW := chatTextCentered(renderer, config, font, head, InfoInk(), rect.X+pad, rect)
+	textX := rect.X + pad + headW + chatPx(10)
+	if textW := chatReplyCancelRect.X - textX - chatPx(10); textW > chatPx(40) {
+		chatTextCentered(renderer, config, font, ellipsize(font, sanitizeCached(font, chatReplyTo.summary(120)), textW), ColorTextTertiary(), textX, rect)
 	}
 }
 
 // --- Action bar ----------------------------------------------------------
 
-// drawChatSelectionBar replaces the composer while a message is selected.
+// drawChatSelectionBar replaces the composer while a message's actions are
+// open: glass pills, the focused one with Home's ring.
 func drawChatSelectionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect) {
 	if font == nil || rect.W <= 0 {
 		return
 	}
 	chatSelectionBar.rect = rect
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, WithAlpha(ColorSurfacePanel, 245))
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, 1, WithAlpha(accentColor, 140))
+	chatFillRound(renderer, rect, rect.H/2, glassA(14))
+	chatStrokeRound(renderer, rect, rect.H/2, WithAlpha(glassAccent(), 120))
 
-	label := "Message"
-	labelW, _, _ := font.SizeUTF8(label)
-	renderText(renderer, config, font, label, ColorTextPrimary(), rect.X+12, rect.Y+(rect.H-int32(font.Height()))/2)
-
-	bx := rect.X + 12 + int32(labelW) + SpaceMD
+	h := rect.H - chatPx(14)
+	gap := chatPx(8)
+	pad := chatPx(18)
+	x := rect.X + chatPx(10)
+	right := rect.X + rect.W - chatPx(10)
 	for i := range chatSelectionBar.buttons {
 		button := &chatSelectionBar.buttons[i]
-		bw, _, _ := font.SizeUTF8(button.label)
-		w := int32(bw) + 20
-		if bx+w > rect.X+rect.W-SpaceSM {
+		lw, _ := measureText(font, button.label)
+		w := lw + 2*pad
+		button.rect = sdl.Rect{}
+		if x+w > right {
 			break
 		}
-		button.rect = UIButton(renderer, config, sdl.Rect{X: bx, Y: rect.Y + (rect.H-30)/2, W: w, H: 30}, button.label, UIButtonStyle{
-			Variant:    UIButtonCustom,
-			Fill:       WithAlpha(ColorSurfaceAlt, 235),
-			HoverFill:  ColorCardHover,
-			FocusFill:  ColorCardFocus,
-			Border:     WithAlpha(ColorBorder, 150),
-			LabelColor: ColorTextPrimary(),
-			Font:       font,
-			Pill:       true,
-			NoShadow:   true,
-		}, UIButtonState{Focused: i == chatSelectionBar.focus})
-		bx += w + SpaceSM
+		r := sdl.Rect{X: x, Y: rect.Y + (rect.H-h)/2, W: w, H: h}
+		button.rect = r
+		focused := i == chatSelectionBar.focus
+		if focused {
+			drawGlassFocusGlow(renderer, r)
+		}
+		fill := glassA(16)
+		if chatHover(r) {
+			fill = glassA(26)
+		}
+		chatFillRound(renderer, r, h/2, fill)
+		if focused {
+			drawGlassFocusRing(renderer, r, h/2)
+		}
+		col := ColorTextPrimary()
+		if button.kind == "delete" {
+			col = DangerInk()
+		}
+		chatTextCentered(renderer, config, font, button.label, col, r.X+pad, r)
+		x += w + gap
 	}
 }
 
@@ -357,6 +389,7 @@ func activateChatSelectionAction(kind string, config *Config) {
 		clearChatSelection()
 		return
 	}
+	tab := chatActiveTabID()
 	switch kind {
 	case "image":
 		// The viewer owns the screen once it opens, so the bar is dropped
@@ -369,6 +402,23 @@ func activateChatSelectionAction(kind string, config *Config) {
 			return
 		}
 		openImageViewerURL(url)
+	case "open", "play":
+		link, plays := chatFirstLink(msg)
+		clearChatSelection()
+		if link == "" {
+			return
+		}
+		PlayActivateSound()
+		if plays {
+			playSmartURL(config, link)
+		} else {
+			openBrowserAtURL(config, link)
+		}
+	case "retry":
+		clearChatSelection()
+		if chatRetryMessage(tab, msg.ID) {
+			PlayActivateSound()
+		}
 	case "reply":
 		setChatReply(index)
 	case "copy":
@@ -380,7 +430,16 @@ func activateChatSelectionAction(kind string, config *Config) {
 		clearChatSelection()
 	case "ask":
 		clearChatSelection()
-		sendGroqChatMessage("About this message from " + msg.Sender + ": \"" + chatQuoteSummary(msg.Text, 600) + "\"")
+		question := "About this message from " + msg.Sender + ": \"" + chatQuoteSummary(msg.Text, 600) + "\""
+		if chatHasGroqKey() {
+			chatSelectTab(chatTabAI)
+		}
+		if chatAskAI(question) {
+			chatJumpToLatest()
+		}
+	case "save":
+		clearChatSelection()
+		chatSaveCopy(msg)
 	case "profile":
 		clearChatSelection()
 		openChatProfile(msg.Sender, msg.UserID)
@@ -399,38 +458,41 @@ func chatQuoteSummary(text string, limit int) string {
 	return text
 }
 
-// deleteChatMessage removes one of the user's own messages from the history.
+// deleteChatMessage removes a message from the tab on screen: in the shared
+// community channel only this device's own messages, anywhere else any.
 func deleteChatMessage(id string) {
+	tab := chatActiveTabID()
 	chatMutex.Lock()
-	kept := chatMessages[:0]
-	removed := false
-	for _, msg := range chatMessages {
-		if !removed && msg.ID == id && msg.Own {
-			removed = true
-			continue
+	allowed := true
+	if tab == chatTabCommunity {
+		allowed = false
+		for _, msg := range chatMessages {
+			if msg.ID == id {
+				allowed = chatIsOwn(msg)
+				break
+			}
 		}
-		kept = append(kept, msg)
 	}
-	chatMessages = kept
+	removed := allowed && chatRemoveLocked(tab, id)
 	chatMutex.Unlock()
+	clearChatSelection()
 	if !removed {
 		showToast("Only your own messages can be deleted", ToastWarn())
-		clearChatSelection()
 		return
 	}
-	clearChatSelection()
-	saveChatMessages()
+	chatDirty.Store(true)
+	PlayActivateSound()
 	showToast("Message deleted", ToastInfo())
 }
 
 // --- Input ---------------------------------------------------------------
 
 // chatSelectionOwnsInput reports whether the message action bar should take
-// the pad and the keys. The bar is drawn inside the chat panel, so it only has
-// a meaning while that panel is the scene on screen; a bar left open by a
-// scene change is stale and drops itself here instead of swallowing the next
-// press on the screen underneath (it used to eat X on Home's Now Playing chip,
-// which is how the floating video is closed).
+// the pad and the keys. The bar is drawn inside the chat, so it only has a
+// meaning while that scene is on screen; a bar left open by a scene change is
+// stale and drops itself here instead of swallowing the next press on the
+// screen underneath (it used to eat X on Home's Now Playing chip, which is how
+// the floating video is closed).
 func chatSelectionOwnsInput(config *Config) bool {
 	if !chatSelectionBar.open {
 		return false
@@ -453,7 +515,7 @@ func handleChatSelectionKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		clearChatSelection()
+		chatSelectionBar.open = false
 		PlayBackSound()
 	case sdl.K_LEFT, sdl.K_a:
 		chatSelectionBar.focus = clampIndex(chatSelectionBar.focus-1, len(chatSelectionBar.buttons))
@@ -475,10 +537,10 @@ func ctrlChatSelection(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return false
 	}
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		chatSelectionBar.focus = clampIndex(chatSelectionBar.focus-1, len(chatSelectionBar.buttons))
 		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		chatSelectionBar.focus = clampIndex(chatSelectionBar.focus+1, len(chatSelectionBar.buttons))
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
@@ -486,16 +548,17 @@ func ctrlChatSelection(e *sdl.ControllerButtonEvent, config *Config) bool {
 			activateChatSelectionAction(chatSelectionBar.buttons[chatSelectionBar.focus].kind, config)
 		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		clearChatSelection()
+		// The bar closes and the message keeps the focus, so the next B
+		// leaves the chat as usual.
+		chatSelectionBar.open = false
 		PlayBackSound()
 	}
 	return true
 }
 
-// chatMessageClick handles a click on any chat-owned target: the member chip,
-// the unread pill, the reply strip, the action bar, a sender's avatar/name and
-// a message body. It reports whether the click was consumed, so the generic
-// "click the panel to type" handler does not also fire.
+// chatMessageClick handles a click on any chat-owned target: the people chip,
+// the jump pill, the reply strip, the action bar, a sender's avatar or name
+// and a message body. It reports whether the click was consumed.
 func chatMessageClick(mx, my int32, config *Config) bool {
 	if chatProfile.open || chatMembers.open {
 		return false
@@ -505,10 +568,8 @@ func chatMessageClick(mx, my int32, config *Config) bool {
 		return true
 	}
 	if pointInRect(mx, my, chatJumpRect) {
-		chatScrollOffset = 0
-		chatMutex.Lock()
-		chatSeenCount = len(chatMessages)
-		chatMutex.Unlock()
+		clearChatSelection()
+		chatJumpToLatest()
 		PlayNavSound()
 		return true
 	}
@@ -519,7 +580,7 @@ func chatMessageClick(mx, my int32, config *Config) bool {
 	}
 	if chatSelectionBar.open {
 		for _, button := range chatSelectionBar.buttons {
-			if pointInRect(mx, my, button.rect) {
+			if button.rect.W > 0 && pointInRect(mx, my, button.rect) {
 				activateChatSelectionAction(button.kind, config)
 				return true
 			}
@@ -555,22 +616,19 @@ func chatMessageClick(mx, my int32, config *Config) bool {
 // openChatActionsForSelected opens the action bar for the selection, creating
 // one on the newest message when nothing is selected.
 func openChatActionsForSelected() bool {
-	if msg, index, ok := selectedChatMessage(); ok {
+	if _, index, ok := selectedChatMessage(); ok {
 		chatSelectionBar = chatSelection{open: true, index: index, focus: 0, buttons: chatSelectionActions(index)}
-		_ = msg
 		return true
 	}
-	chatMutex.Lock()
-	count := len(chatMessages)
-	chatMutex.Unlock()
-	if count == 0 {
+	msgs := chatActiveMessages()
+	if len(msgs) == 0 {
 		return false
 	}
-	selectChatMessage(count - 1)
+	selectChatMessage(len(msgs) - 1)
 	return true
 }
 
-// --- Drawing helpers used by renderChat ----------------------------------
+// --- Grouping helpers ----------------------------------------------------
 
 // chatDayLabel names the day of a message the way a chat reader expects.
 func chatDayLabel(t time.Time) string {
@@ -602,70 +660,38 @@ func chatContinuesGroup(messages []ChatMessage, i int) bool {
 		return false
 	}
 	prev, cur := messages[i-1], messages[i]
-	if !strings.EqualFold(prev.Sender, cur.Sender) || prev.UserID != cur.UserID {
+	if chatIsSystem(prev) || !strings.EqualFold(prev.Sender, cur.Sender) || prev.UserID != cur.UserID {
 		return false
 	}
-	if cur.Quote != nil || !chatSameDay(prev.Timestamp, cur.Timestamp) {
+	if cur.Quote != nil || !chatSameDay(prev.Timestamp.Local(), cur.Timestamp.Local()) {
 		return false
 	}
 	gap := cur.Timestamp.Sub(prev.Timestamp)
 	return gap >= 0 && gap <= chatGroupWindow
 }
 
-// drawChatDayDivider draws the "Today" / date separator. unread switches it to
-// the accent colour and the "NEW MESSAGES" label.
-func drawChatDayDivider(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, w, y int32, label string, unread bool) {
-	if font == nil || w <= 0 {
-		return
-	}
-	col := WithAlpha(ColorBorder, 150)
-	labelCol := ColorTextTertiary()
-	if unread {
-		col = WithAlpha(accentColor, 170)
-		labelCol = accentColor
-	}
-	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
-	renderer.FillRect(&sdl.Rect{X: x, Y: y + int32(font.Height())/2, W: w, H: 1})
-	lw, _, _ := font.SizeUTF8(label)
-	labelX := x + (w-int32(lw))/2
-	fillRoundedRect(renderer, labelX-8, y, int32(lw)+16, int32(font.Height()), int32(font.Height())/2, WithAlpha(ColorSurfacePanel, 250))
-	renderText(renderer, config, font, label, labelCol, labelX, y)
-}
-
-// drawChatJumpPill shows how many messages arrived while the reader is scrolled
-// back, and jumps to them when clicked.
-func drawChatJumpPill(renderer *sdl.Renderer, config *Config, font *ttf.Font, anchorX, anchorY, panelW int32) {
-	if chatUnread <= 0 || font == nil {
-		return
-	}
-	label := fmt.Sprintf("%d new message", chatUnread)
-	if chatUnread != 1 {
-		label += "s"
-	}
-	label += " · Jump to latest"
-	w, _, _ := font.SizeUTF8(label)
-	pillW := int32(w) + 24
-	pillH := int32(font.Height()) + 10
-	x := anchorX + (panelW-pillW)/2
-	if x < anchorX {
-		x = anchorX
-	}
-	chatJumpRect = sdl.Rect{X: x, Y: anchorY - pillH - SpaceXS, W: pillW, H: pillH}
-	fillRoundedRect(renderer, chatJumpRect.X, chatJumpRect.Y, chatJumpRect.W, chatJumpRect.H, pillH/2, WithAlpha(accentColor, 220))
-	renderText(renderer, config, font, label, ColorTextInverse(), chatJumpRect.X+12, chatJumpRect.Y+5)
-}
-
-// drawChatQuoteBlock draws the quote header inside a reply bubble.
+// drawChatQuoteBlock draws the quote header inside a reply bubble and returns
+// its height (chatQuoteHeight). A quote without text — a note kept in Saved
+// from someone else — is a one-line "From …" header.
 func drawChatQuoteBlock(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w int32, quote *ChatQuote) int32 {
-	if quote == nil || font == nil {
+	if quote == nil || font == nil || w <= 0 {
 		return 0
 	}
+	h := chatQuoteHeight(font, quote)
 	lineH := int32(font.Height())
-	h := lineH*2 + 6
-	fillRoundedRect(renderer, x, y, w, h, RadiusSM, WithAlpha(ColorSurfaceAlt, 200))
-	fillRoundedRect(renderer, x, y+3, 3, h-6, 2, WithAlpha(ColorInfo, 190))
-	author := "↳ " + quote.Author
-	renderText(renderer, config, font, ellipsize(font, author, w-16), InfoInk(), x+10, y+2)
-	renderText(renderer, config, font, ellipsize(font, quote.summary(90), w-16), ColorTextTertiary(), x+10, y+2+lineH)
+	chatFillRound(renderer, sdl.Rect{X: x, Y: y, W: w, H: h}, chatPx(10), glassA(12))
+	chatFillRound(renderer, sdl.Rect{X: x + chatPx(4), Y: y + chatPx(4), W: chatPx(3), H: h - chatPx(8)}, chatPx(2), WithAlpha(glassAccent(), 200))
+	textX := x + chatPx(14)
+	textW := w - chatPx(20)
+	if textW <= 0 {
+		return h
+	}
+	if strings.TrimSpace(quote.Text) == "" {
+		chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, "From "+quote.Author), textW), InfoInk(), textX, y+(h-lineH)/2)
+		return h
+	}
+	top := y + (h-2*lineH)/2
+	chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, quote.Author), textW), InfoInk(), textX, top)
+	chatText(renderer, config, font, ellipsize(font, sanitizeCached(font, quote.summary(90)), textW), ColorTextTertiary(), textX, top+lineH)
 	return h
 }

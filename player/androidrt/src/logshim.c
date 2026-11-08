@@ -1,9 +1,14 @@
-/* logshim.c — liblog.so: __android_log_* to stderr.
+/* logshim.c — liblog: __android_log_* to stderr.
  *
  * Every game calls these; every launch log becomes readable in
  * data/game-profiles/logs/<id>.log because the profile launcher already
  * captures the child's stderr. Priorities are rendered with the same
- * letters logcat prints so grepping stays familiar.
+ * letters logcat prints so grepping stays familiar:
+ *
+ *   [game][<tag>][<letter>] <message>
+ *
+ * ANDROID_LOG_FATAL and __android_log_assert abort, as on Android.
+ * ANDROIDPAK_LOG_LEVEL=V|D|I|W|E|F|S sets the minimum priority (default V).
  */
 
 #define _GNU_SOURCE
@@ -27,6 +32,9 @@ enum {
     ANDROID_LOG_SILENT,
 };
 
+static int g_minPriority = -1;
+static const char *g_defaultTag = "game";
+
 static const char *letterFor(int prio) {
     switch (prio) {
         case ANDROID_LOG_VERBOSE: return "V";
@@ -40,43 +48,71 @@ static const char *letterFor(int prio) {
     }
 }
 
-static void emit(int prio, const char *tag, const char *fmt, va_list args) {
-    const char *letter = letterFor(prio);
-    if (fmt) {
-        vfprintf(stderr, fmt, args);
-        /* __android_log_print messages end with their own newline usually;
-         * keep one so log lines never glue together. */
-        fputc('\n', stderr);
-        (void)tag;
-        (void)letter;
+static int minPriority(void) {
+    if (g_minPriority < 0) {
+        const char *v = getenv("ANDROIDPAK_LOG_LEVEL");
+        static const char letters[] = "VDIWEFS";
+        const char *hit = v && *v ? strchr(letters, v[0]) : NULL;
+        g_minPriority = hit ? ANDROID_LOG_VERBOSE + (int)(hit - letters) : ANDROID_LOG_VERBOSE;
     }
+    return g_minPriority;
+}
+
+static int loggable(int prio) { return prio >= minPriority() || prio == ANDROID_LOG_FATAL; }
+
+/* One line per message: the text is formatted first, then written with its
+ * prefix in a single call so lines from game threads never interleave. */
+static void emit(int prio, const char *tag, const char *text) {
+    size_t len = text ? strlen(text) : 0;
+    while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) len--;
+    fprintf(stderr, "[game][%s][%s] %.*s\n", tag ? tag : g_defaultTag, letterFor(prio), (int)len, text ? text : "");
+    if (prio == ANDROID_LOG_FATAL) fflush(stderr);
+}
+
+static void emitv(int prio, const char *tag, const char *fmt, va_list args) {
+    char stackBuf[1024];
+    char *buf = stackBuf;
+    va_list copy;
+    int n;
+    va_copy(copy, args);
+    n = vsnprintf(stackBuf, sizeof stackBuf, fmt ? fmt : "", copy);
+    va_end(copy);
+    if (n >= (int)sizeof stackBuf) {
+        buf = (char *)malloc((size_t)n + 1);
+        if (buf) vsnprintf(buf, (size_t)n + 1, fmt, args);
+        else buf = stackBuf;
+    }
+    emit(prio, tag, buf);
+    if (buf != stackBuf) free(buf);
 }
 
 ANDROIDRT_EXPORT int __android_log_write(int prio, const char *tag, const char *text) {
-    if (!text) return 1;
-    fprintf(stderr, "[game][%s][%s] %s\n", tag ? tag : "game", letterFor(prio), text);
+    if (!loggable(prio)) return 0;
+    emit(prio, tag, text);
     return 1;
 }
 
 ANDROIDRT_EXPORT int __android_log_print(int prio, const char *tag, const char *fmt, ...) {
     va_list args;
+    if (!loggable(prio)) return 0;
     va_start(args, fmt);
-    fprintf(stderr, "[game][%s][%s] ", tag ? tag : "game", letterFor(prio));
-    emit(prio, tag, fmt, args);
+    emitv(prio, tag, fmt, args);
     va_end(args);
     return 1;
 }
 
 ANDROIDRT_EXPORT int __android_log_vprint(int prio, const char *tag, const char *fmt, va_list args) {
-    fprintf(stderr, "[game][%s][%s] ", tag ? tag : "game", letterFor(prio));
-    emit(prio, tag, fmt, args);
+    if (!loggable(prio)) return 0;
+    emitv(prio, tag, fmt, args);
     return 1;
 }
 
 ANDROIDRT_EXPORT int __android_log_buf_print(int bufID, int prio, const char *tag, const char *fmt, ...) {
     va_list args;
+    int rc;
+    (void)bufID;
     va_start(args, fmt);
-    int rc = __android_log_vprint(prio, tag, fmt, args);
+    rc = __android_log_vprint(prio, tag, fmt, args);
     va_end(args);
     return rc;
 }
@@ -86,11 +122,67 @@ ANDROIDRT_EXPORT int __android_log_buf_write(int bufID, int prio, const char *ta
     return __android_log_write(prio, tag, text);
 }
 
+/* __android_log_assert is __noreturn: `cond` is the stringified condition
+ * of an assertion that has ALREADY failed (or NULL for LOG_ALWAYS_FATAL). */
 ANDROIDRT_EXPORT void __android_log_assert(const char *cond, const char *tag, const char *fmt, ...) {
-    if (cond) return;
-    va_list args;
-    va_start(args, fmt);
-    __android_log_vprint(ANDROID_LOG_FATAL, tag ? tag : "assert", fmt ? fmt : "assertion failed", args);
-    va_end(args);
+    char msg[1024];
+    if (fmt) {
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(msg, sizeof msg, fmt, args);
+        va_end(args);
+    } else if (cond) {
+        snprintf(msg, sizeof msg, "Assertion failed: %s", cond);
+    } else {
+        snprintf(msg, sizeof msg, "Unspecified assertion failed");
+    }
+    emit(ANDROID_LOG_FATAL, tag ? tag : "assert", msg);
+    fflush(stderr);
+    abort();
+}
+
+ANDROIDRT_EXPORT int __android_log_is_loggable(int prio, const char *tag, int defaultPrio) {
+    (void)tag;
+    (void)defaultPrio;
+    return loggable(prio);
+}
+
+ANDROIDRT_EXPORT int __android_log_is_loggable_len(int prio, const char *tag, size_t len, int defaultPrio) {
+    (void)tag;
+    (void)len;
+    (void)defaultPrio;
+    return loggable(prio);
+}
+
+ANDROIDRT_EXPORT int32_t __android_log_set_minimum_priority(int32_t priority) {
+    int32_t old = minPriority();
+    g_minPriority = priority;
+    return old;
+}
+
+ANDROIDRT_EXPORT int32_t __android_log_get_minimum_priority(void) { return minPriority(); }
+
+ANDROIDRT_EXPORT void __android_log_set_default_tag(const char *tag) {
+    if (tag) g_defaultTag = tag;
+}
+
+/* API 30 logger structs are passed by pointer; the message is what matters. */
+struct ApakLogMessage {
+    size_t structSize;
+    int32_t bufferId;
+    int32_t priority;
+    const char *tag;
+    const char *file;
+    uint32_t line;
+    const char *message;
+};
+
+ANDROIDRT_EXPORT void __android_log_write_log_message(struct ApakLogMessage *m) {
+    if (m && loggable(m->priority)) emit(m->priority, m->tag, m->message);
+}
+
+ANDROIDRT_EXPORT void __android_log_call_aborter(const char *abortMessage) {
+    fprintf(stderr, "[androidrt] abort: %s\n", abortMessage ? abortMessage : "(no message)");
+    fflush(stderr);
     abort();
 }

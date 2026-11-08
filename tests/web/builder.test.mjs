@@ -10,8 +10,8 @@ import { JSDOM, VirtualConsole, requestInterceptor } from 'jsdom';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 // The page is served from http://localhost/ (so localStorage works) but its
-// files are read from the repo; CDN fonts and icons are skipped so the suite is
-// offline-safe.
+// files are read from the repo; the builder loads nothing from elsewhere, and
+// anything off-origin would get an empty reply so the suite stays offline-safe.
 const ORIGIN = 'http://localhost/';
 const MIME = { '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.html': 'text/html', '.png': 'image/png', '.jpg': 'image/jpeg' };
 
@@ -30,16 +30,22 @@ const localOnly = requestInterceptor(async request => {
     }
     return new Response('', { status: 404 });
   }
-  // CDN fonts and icon CSS: an empty stylesheet keeps the suite offline-safe.
+  // Off-origin: nothing should ask, and an empty reply keeps the suite offline.
   return new Response('', { headers: { 'Content-Type': 'text/css' } });
 });
 
 let dom;
 const pageErrors = [];
+// builder-icons.js warns once per icon name it does not draw.
+const iconWarnings = [];
 
 before(async () => {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', err => pageErrors.push(err));
+  virtualConsole.on('warn', (...args) => {
+    const text = args.map(String).join(' ');
+    if (text.startsWith('builder-icons:')) iconWarnings.push(text);
+  });
   dom = await JSDOM.fromFile(path.join(root, 'index.html'), {
     url: ORIGIN,
     runScripts: 'dangerously',
@@ -393,66 +399,76 @@ test('the exported schemaVersion matches the player ConfigSchemaVersion', () => 
   assert.equal(exported.schemaVersion, playerVersion, 'builder export carries the player schema version');
 });
 
-// The canvas draws tiles with Font Awesome and the player draws them with SDL
-// primitives, so the two can only agree on which picture a name means. They did
-// not: the canvas searched the label in its own order and ignored an explicit
-// `icon`, which made the Tools card a grid here and sliders on the device, and
-// drew Exit as a door where the player draws a power ring. These cases come from
-// player/homelayout.go (drawHomeIconShapes, the home scene) and
+// The canvas draws tiles with builder-icons.js and the player draws them with
+// SDL primitives, so the two can only agree on which picture a name means. They
+// did not: the canvas searched the label in its own order and ignored an
+// explicit `icon`, which made the Tools card a grid here and sliders on the
+// device, and drew Exit as a door where the player draws a power ring. These
+// cases come from player/homelayout.go (drawHomeIconShapes, the home scene) and
 // player/launcher.go (explicitTileIcon, tileIconKind, drawTileIcon).
 test('tile icons follow the player home and launcher vocabularies', () => {
   const { window } = dom;
   const iconFor = (icon, text, trigger, layout) => window.eval(
-    `tileIconClass(${JSON.stringify(icon)}, ${JSON.stringify(text)}, ${JSON.stringify(trigger)}, ${JSON.stringify(layout)})`
+    `tileIconName(${JSON.stringify(icon)}, ${JSON.stringify(text)}, ${JSON.stringify(trigger)}, ${JSON.stringify(layout)})`
   );
 
   // Home scene: the name alone decides what is drawn.
   const home = {
-    continue: 'fa-play',
-    media: 'fa-play',
-    files: 'fa-folder',
-    packages: 'fa-box',
-    apps: 'fa-table-cells-large',
-    favorites: 'fa-star',
-    browser: 'fa-globe',
-    chat: 'fa-comment',
-    tools: 'fa-sliders',
-    settings: 'fa-gear',
-    clock: 'fa-clock',
-    emulator: 'fa-gamepad',
-    exit: 'fa-power-off'
+    continue: 'media',
+    media: 'media',
+    files: 'folder',
+    packages: 'package',
+    apps: 'apps',
+    favorites: 'star',
+    browser: 'globe',
+    chat: 'chat',
+    tools: 'sliders',
+    settings: 'settings',
+    clock: 'clock',
+    emulator: 'gamepad',
+    play: 'play',
+    exit: 'power',
+    back: 'back'
   };
   for (const [name, glyph] of Object.entries(home)) {
-    assert.ok(iconFor(name, '', '', 'home').includes(glyph), `home tile ${name} should draw ${glyph}`);
+    assert.equal(iconFor(name, '', '', 'home'), glyph, `home tile ${name} should draw ${glyph}`);
   }
   // A home tile without its own icon keeps the card's built-in one.
-  assert.ok(iconFor('', 'Tools', 'change_scene:Misc', 'home').includes('fa-sliders'));
-  assert.ok(iconFor('not-a-glyph', 'Media', 'change_scene:Tube', 'home').includes('fa-circle'), 'unknown home name falls back to a ring, like drawHomeIconShapes');
+  assert.equal(iconFor('', 'Tools', 'change_scene:Misc', 'home'), 'sliders');
+  assert.equal(iconFor('not-a-glyph', 'Media', 'change_scene:Tube', 'home'), 'ring', 'unknown home name falls back to a ring, like drawHomeIconShapes');
+  // Names every object has are not icon names (a plain lookup returned Object's
+  // constructor here).
+  assert.equal(iconFor('constructor', '', '', 'home'), 'ring');
+  assert.equal(iconFor('', 'toString', '', 'home'), 'ring');
+  assert.equal(iconFor('hasOwnProperty', 'Nothing in particular', '', ''), 'apps');
 
   // Ordinary scene: an explicit glyph name wins over what the label suggests.
-  assert.ok(iconFor('disk', 'Disk Space', 'change_scene:DiskSpace', '').includes('fa-hard-drive'));
-  assert.ok(iconFor('cache', 'Clear Cache', 'cache_clear', '').includes('fa-broom'));
-  assert.ok(iconFor('logs', 'Log Exporter', 'change_scene:LogExporter', '').includes('fa-file-lines'));
+  assert.equal(iconFor('disk', 'Disk Space', 'change_scene:DiskSpace', ''), 'disk');
+  assert.equal(iconFor('cache', 'Clear Cache', 'cache_clear', ''), 'broom');
+  assert.equal(iconFor('logs', 'Log Exporter', 'change_scene:LogExporter', ''), 'logs');
 
   // Otherwise the label and trigger are searched in tileIconKind's order:
   // apps/tools comes before anything else tool-like, and continue is last.
-  assert.ok(iconFor('', 'Tools', 'change_scene:Misc', '').includes('fa-table-cells-large'));
-  assert.ok(iconFor('', 'Continue', 'change_scene:Tube', '').includes('fa-play'));
-  assert.ok(iconFor('', 'Weather', '', '').includes('fa-cloud'));
-  assert.ok(iconFor('', 'Nothing in particular', '', '').includes('fa-table-cells-large'));
+  assert.equal(iconFor('', 'Tools', 'change_scene:Misc', ''), 'apps');
+  assert.equal(iconFor('', 'Continue', 'change_scene:Tube', ''), 'play');
+  assert.equal(iconFor('', 'Weather', '', ''), 'cloud');
+  assert.equal(iconFor('', 'Nothing in particular', '', ''), 'apps');
 
-  // The tile the canvas builds carries the glyph, not just the helper: a home
+  // The tile the canvas builds carries the drawing, not just the helper: a home
   // card and an ordinary tools tile must end up with different pictures.
   const tileIcon = (data, layout) => {
     window.eval(`window.__tile = createElementFromData(${JSON.stringify(data)}, ${JSON.stringify(layout)})`);
-    const cls = window.eval("window.__tile.querySelector('.tile-icon i').className");
+    const svg = window.eval("window.__tile.querySelector('.tile-icon svg.ico')");
+    const name = svg ? svg.getAttribute('data-icon') : null;
+    const shapes = svg ? svg.querySelectorAll('path, circle, rect').length : 0;
     window.eval("window.__tile.remove(); delete window.__tile;");
-    return cls;
+    assert.ok(shapes > 0, `the ${name} tile icon draws nothing`);
+    return name;
   };
   const tile = { type: 'button', style: 'tile', x: 0, y: 0, width: '120', height: '120' };
-  assert.ok(tileIcon({ ...tile, icon: 'tools', text: 'Tools', trigger: 'change_scene:Misc' }, 'home').includes('fa-sliders'), 'a home Tools card draws sliders');
-  assert.ok(tileIcon({ ...tile, icon: 'tools', text: 'Tools', trigger: 'change_scene:Misc' }, '').includes('fa-table-cells-large'), 'a Tools tile outside the home scene draws the app grid');
-  assert.ok(tileIcon({ ...tile, icon: 'disk', text: 'Disk Space', trigger: 'change_scene:DiskSpace' }, '').includes('fa-hard-drive'), 'a tile with an explicit glyph name keeps it');
+  assert.equal(tileIcon({ ...tile, icon: 'tools', text: 'Tools', trigger: 'change_scene:Misc' }, 'home'), 'sliders', 'a home Tools card draws sliders');
+  assert.equal(tileIcon({ ...tile, icon: 'tools', text: 'Tools', trigger: 'change_scene:Misc' }, ''), 'apps', 'a Tools tile outside the home scene draws the app grid');
+  assert.equal(tileIcon({ ...tile, icon: 'disk', text: 'Disk Space', trigger: 'change_scene:DiskSpace' }, ''), 'disk', 'a tile with an explicit glyph name keeps it');
 });
 
 // The shipped config's home screen is applied card by card, keyed on the tile's
@@ -481,10 +497,10 @@ test('every home tile in the shipped configs is a card the player draws', () => 
         cardTitles.some(title => title.toLowerCase() === text.toLowerCase() || text.toLowerCase().includes('tools') && title === 'Tools'),
         `${file}: home tile ${JSON.stringify(text)} names no home card in player/homelayout.go`
       );
-      const cls = window.eval(
-        `tileIconClass(${JSON.stringify(el.icon || '')}, ${JSON.stringify(text)}, ${JSON.stringify(el.trigger || '')}, 'home')`
+      const glyph = window.eval(
+        `tileIconName(${JSON.stringify(el.icon || '')}, ${JSON.stringify(text)}, ${JSON.stringify(el.trigger || '')}, 'home')`
       );
-      assert.ok(!cls.includes('fa-circle'), `${file}: home tile ${text} would draw the unknown-icon ring`);
+      assert.notEqual(glyph, 'ring', `${file}: home tile ${text} would draw the unknown-icon ring`);
     }
   }
 });
@@ -895,4 +911,170 @@ test('AI keys are session-only, legacy keys are removed and providers do not sha
     provider.value = 'free';
     provider.dispatchEvent(new window.Event('change'));
   }
+});
+
+test('design check lints for the handheld panel, not the desktop canvas', () => {
+  const result = dom.window.validateProject({
+    scenes: [{
+      name: 'Home',
+      elements: [
+        { type: 'label', text: 'tiny', x: 200, y: 200, width: 260, height: 40, font: 'small' },
+        { type: 'button', text: 'Edge', x: 4, y: 4, width: 120, height: 48 },
+      ],
+    }],
+    variables: { fontSizes: { small: 10, medium: 24 } },
+  });
+  const codes = result.issues.map(issue => issue.code);
+  assert.ok(codes.includes('handheld-type'), `expected a handheld-type warning, got ${codes.join(', ')}`);
+  assert.ok(codes.includes('safe-area'), `expected a safe-area warning, got ${codes.join(', ')}`);
+});
+
+test('a legible, inset design raises no handheld lint warnings', () => {
+  const result = dom.window.validateProject({
+    scenes: [{
+      name: 'Home',
+      elements: [{ type: 'button', text: 'Play', x: 120, y: 120, width: 220, height: 48 }],
+    }],
+    variables: { fontSizes: { medium: 24 } },
+  });
+  const offenders = result.issues.filter(issue => ['handheld-type', 'safe-area', 'scene-density'].includes(issue.code));
+  // The issue list is a page-realm array, so compare its length rather than
+  // deep-comparing across realms.
+  assert.equal(offenders.length, 0, `unexpected warnings: ${offenders.map(issue => issue.code).join(', ')}`);
+});
+
+test('a crowded scene says it will scroll on the handheld', () => {
+  const elements = Array.from({ length: 26 }, (_, i) => ({
+    type: 'button', text: `Row ${i + 1}`, x: 120, y: 40 + (i % 12) * 50, width: 220, height: 40,
+  }));
+  const result = dom.window.validateProject({ scenes: [{ name: 'Home', elements }] });
+  assert.ok(result.issues.some(issue => issue.code === 'scene-density'), 'expected a scene-density warning');
+});
+
+// Icons are inline SVG drawn by builder-icons.js; Font Awesome is gone. Every
+// placeholder the page ships must be drawn once the builder is up, as real SVG
+// elements, and nothing may still carry an icon-font class.
+test('every icon on the page is drawn from builder-icons.js', () => {
+  const { document } = dom.window;
+  assert.equal(document.querySelectorAll('i').length, 0, 'an <i> icon element is still in the page');
+  const faClassed = [...document.querySelectorAll('[class]')]
+    .filter(el => [...el.classList].some(cls => /^fa[srb]?$|^fa-/.test(cls)))
+    .map(el => el.outerHTML.slice(0, 80));
+  assert.deepEqual(faClassed, []);
+  const icons = [...document.querySelectorAll('svg.ico')];
+  assert.ok(icons.length >= 100, `only ${icons.length} icons on the page`);
+  const blank = icons.filter(svg => !svg.querySelector('path, circle, rect')).map(svg => svg.outerHTML.slice(0, 80));
+  assert.deepEqual(blank, [], 'icons left undrawn');
+  for (const svg of icons) {
+    assert.equal(svg.getAttribute('aria-hidden'), 'true', 'icons are decorative');
+    assert.equal(svg.getAttribute('viewBox'), '0 0 24 24');
+    assert.equal(svg.firstElementChild.namespaceURI, 'http://www.w3.org/2000/svg', 'icon shapes must be SVG elements, not HTML ones');
+  }
+});
+
+test('the tables that pick icons only name drawings builder-icons.js has', () => {
+  const { window } = dom;
+  const known = new Set(window.eval('Object.keys(BUILDER_ICONS)'));
+  const named = window.eval(`[
+    ...Object.values(HOME_ICON_NAMES), ...Object.values(TILE_ICON_NAMES),
+    ...TILE_ICON_NEEDLES.map(entry => entry[1]), TILE_ICON_FALLBACK, HOME_ICON_FALLBACK,
+    ...MOBILE_COMPONENTS.map(component => component.icon),
+    ...Object.values(TEXT_BROWSER_SOURCES).map(source => source.icon), textBrowserSource('web').icon,
+    ...Object.values(LEGACY_FA_ICONS)
+  ]`);
+  assert.deepEqual([...new Set(named)].filter(name => !known.has(name)), []);
+});
+
+test('iconSvg keeps markup inert and draws nothing for a name it does not know', () => {
+  const { window } = dom;
+  const holder = window.document.createElement('template');
+  holder.innerHTML = window.iconSvg('close', 'extra" onload="alert(1)');
+  const svg = holder.content.firstElementChild;
+  assert.deepEqual([...svg.classList], ['ico', 'extra', 'onloadalert1']);
+  assert.equal(svg.getAttribute('onload'), null);
+  assert.equal(svg.getAttribute('data-icon'), 'close');
+
+  const before = iconWarnings.length;
+  holder.innerHTML = window.iconSvg('no-such-icon');
+  const empty = holder.content.firstElementChild;
+  assert.equal(empty.getAttribute('data-icon'), null);
+  assert.equal(empty.childElementCount, 0);
+  assert.equal(window.createIcon('no-such-icon').childElementCount, 0);
+  assert.deepEqual(iconWarnings.slice(before), ['builder-icons: no icon named "no-such-icon"'], 'an unknown name is reported once');
+  iconWarnings.splice(before);
+});
+
+// Inter has no U+2715, no emoji and no U+2192: the remove badge, the Text
+// Browser label and a few strings used to come out in a fallback font.
+test('canvas badges and Text Browser labels draw icons, not fallback-font glyphs', () => {
+  const { window } = dom;
+  const el = window.addElement('textbrowser', 40, 40, false);
+  try {
+    const icon = el.querySelector('.tb-source-icon');
+    assert.ok(icon, 'the Text Browser draws its source');
+    assert.equal(icon.getAttribute('data-icon'), 'monitor');
+    assert.equal(el.querySelector('.text-content').textContent, 'System');
+    assert.equal(window.synthesizedTextFor(el), 'System');
+    window.setTextBrowserLabel(el, 'json');
+    assert.equal(el.querySelectorAll('.tb-source-icon').length, 1, 'switching the source replaces the icon');
+    assert.equal(el.querySelector('.tb-source-icon').getAttribute('data-icon'), 'clipboard');
+    assert.equal(el.querySelector('.text-content').textContent, 'JSON');
+    const badge = el.querySelector('.remove-button');
+    assert.ok(badge.querySelector('svg.ico[data-icon="close"]'), 'the remove badge draws the close icon');
+    assert.equal(badge.textContent.trim(), '', 'no text glyph left in the badge');
+  } finally {
+    el.remove();
+    window.eval('scenes[currentScene].pop()');
+  }
+
+  // Imported: the label is the canvas's, so the export keeps the config's text.
+  const imported = window.createElementFromData({ type: 'textbrowser', x: 0, y: 0, width: 300, height: 200, source: 'zeroconf', text: 'Peers' }, '');
+  assert.equal(imported.querySelector('.tb-source-icon').getAttribute('data-icon'), 'search');
+  assert.equal(imported.querySelector('.text-content').textContent, 'Zeroconf');
+  assert.equal(window.elementToConfig(imported).text, 'Peers');
+
+  // Both states of the icon-only toggles.
+  const toggle = window.document.getElementById('darkModeToggle');
+  window.setThemeToggleLabel(true);
+  assert.equal(toggle.querySelector('svg.ico').getAttribute('data-icon'), 'sun');
+  window.setThemeToggleLabel(false);
+  assert.equal(toggle.querySelector('svg.ico').getAttribute('data-icon'), 'moon');
+  const preview = window.document.getElementById('previewToggle');
+  window.setPreviewButtonLabel(true);
+  assert.equal(preview.querySelector('svg.ico').getAttribute('data-icon'), 'close');
+  window.setPreviewButtonLabel(false);
+  assert.equal(preview.querySelector('svg.ico').getAttribute('data-icon'), 'eye');
+});
+
+// The builder only restores an autosave when the shipped config cannot load,
+// but such a save can still hold markup from the Font Awesome build.
+test('an autosave from the Font Awesome build comes back with drawn icons', () => {
+  const { window } = dom;
+  const tile = window.parseSavedElement(
+    '<div class="element is-tile selected" data-type="button">' +
+    '<span class="tile-icon" aria-hidden="true"><i class="fa-solid fa-play"></i></span>' +
+    '<span class="text-content">Media</span><span class="remove-button">✕</span></div>');
+  assert.equal(tile.querySelector('i'), null);
+  assert.equal(tile.querySelector('.tile-icon svg.ico').getAttribute('data-icon'), 'play');
+  assert.ok(tile.querySelector('.remove-button svg.ico[data-icon="close"]'));
+  assert.equal(tile.querySelector('.text-content').textContent, 'Media');
+  assert.ok(!tile.classList.contains('selected'));
+
+  const browser = window.parseSavedElement(
+    '<div class="element" data-type="textbrowser" data-source="zeroconf">' +
+    '<span class="text-content">\u{1F50D} Zeroconf</span><span class="remove-button">✕</span></div>');
+  assert.equal(browser.querySelector('.tb-source-icon').getAttribute('data-icon'), 'search');
+  assert.equal(browser.querySelector('.text-content').textContent, 'Zeroconf');
+
+  // A label the designer wrote stays as written.
+  const custom = window.parseSavedElement(
+    '<div class="element" data-type="textbrowser" data-source="json"><span class="text-content">My feed</span></div>');
+  assert.equal(custom.querySelector('.text-content').textContent, 'My feed');
+  assert.equal(custom.querySelector('.tb-source-icon'), null);
+});
+
+// Last on purpose: every test above builds icons, so any name builder-icons.js
+// does not draw has had its chance to warn by now.
+test('nothing asked builder-icons.js for an icon it does not draw', () => {
+  assert.deepEqual(iconWarnings, []);
 });

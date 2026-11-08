@@ -1,10 +1,10 @@
 package main
 
-// The Playtime screen is a 100-badge page now, so two things need pinning that
-// the six-badge screen never could: that the list really is 100 complete badges,
-// and that every one of them is reachable by scrolling. The ordering rule —
-// earned badges first — is checked here too, because it decides what a player
-// sees before they touch anything.
+// The Playtime screen is the trophy room now: 100 trophies and a platinum in a
+// scrolling grid with a chip row above it. These tests pin that the set is
+// complete and honest, that every trophy can be reached with the pad and the
+// keys, that a fresh visit starts at the top, and that the top bar still gets
+// the Up at the top of the page.
 
 import (
 	"strings"
@@ -19,65 +19,104 @@ func nowMinusDays(n int) string {
 	return time.Now().AddDate(0, 0, -n).Format(wrappedDayKey)
 }
 
-// withPlaytimeViewport gives a test the wide canvas and restores the scroll
-// state afterwards, so a scroll test cannot move the frame a later render test
-// measures.
-func withPlaytimeViewport(t *testing.T, w, h int32) {
+// withTrophyRoom gives a test the wide canvas, a fresh room, a snapshot and an
+// availability that offers every trophy, and restores them afterwards.
+func withTrophyRoom(t *testing.T, data playtimeData) {
 	t.Helper()
-	withScreen(t, w, h)
+	withScreen(t, probeW, probeH)
+	prevData, prevLoaded := playtime.data, playtime.loaded
 	prevScroll, prevFor := playtimeScroll, playtimeScrollFor
-	playtimeScroll, playtimeScrollFor = 0, currentSceneIndex
-	t.Cleanup(func() { playtimeScroll, playtimeScrollFor = prevScroll, prevFor })
+	t.Cleanup(func() {
+		playtime.data, playtime.loaded = prevData, prevLoaded
+		playtime.rev++
+		trophyRoom = trophyRoomState{}
+		playtimeScroll, playtimeScrollFor = prevScroll, prevFor
+		trophyAvail.known = false
+		trophyAvail.cfg = nil
+	})
+	playtime.data = data
+	playtime.loaded = true
+	playtime.rev++
+	trophyRoom = trophyRoomState{}
+	playtimeScroll, playtimeScrollFor = 0, -2
+	trophyAvail.known = false
+	trophyAvail.cfg = nil
 }
 
-func TestPlaytimeHasOneHundredAchievements(t *testing.T) {
+// roomKey sends one key press to the room's module.
+func roomKey(sym sdl.Keycode) bool {
+	return playtimeScene{}.handleKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sym}}, &Config{})
+}
+
+// roomPad sends one controller press to the room's module.
+func roomPad(button uint8) bool {
+	return playtimeScene{}.handleController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}, &Config{})
+}
+
+func TestPlaytimeHasAHundredTrophiesAndAPlatinum(t *testing.T) {
 	if got := len(playtimeAchievements); got != playtimeAchievementCount {
-		t.Fatalf("badge set has %d achievements, want %d", got, playtimeAchievementCount)
+		t.Fatalf("the set has %d trophies, want %d", got, playtimeAchievementCount)
 	}
-	if playtimeAchievementCount != 100 {
-		t.Fatalf("the published count is %d, want 100", playtimeAchievementCount)
+	if playtimeAchievementCount != 101 {
+		t.Fatalf("the published count is %d, want the 100 trophies plus the platinum", playtimeAchievementCount)
 	}
 
 	seenID := map[string]bool{}
 	seenIcon := map[string]bool{}
 	seenTitle := map[string]bool{}
+	platinums := 0
 	for i, a := range playtimeAchievements {
-		if a.ID == "" || a.Title == "" || a.Desc == "" {
-			t.Errorf("badge %d is incomplete: %+v", i, a)
+		if a.ID == "" || a.Title == "" || a.Desc == "" || a.Group == "" {
+			t.Errorf("trophy %d is incomplete: %+v", i, a)
 		}
 		if a.Check == nil {
-			t.Errorf("badge %q has no check, so it can never unlock", a.ID)
+			t.Errorf("trophy %q has no check, so it can never unlock", a.ID)
+		}
+		if a.Metric == trophyMetricScene && a.Scene == "" {
+			t.Errorf("screen trophy %q names no screen", a.ID)
+		}
+		if a.Metric != trophyMetricPlatinum && a.Goal <= 0 {
+			t.Errorf("trophy %q has no goal", a.ID)
 		}
 		if seenID[a.ID] {
-			t.Errorf("badge id %q appears twice", a.ID)
+			t.Errorf("trophy id %q appears twice", a.ID)
 		}
 		seenID[a.ID] = true
 		if a.Icon == "" || seenIcon[a.Icon] {
-			t.Errorf("badge %q has icon %q, which is empty or repeated", a.ID, a.Icon)
+			t.Errorf("trophy %q has number %q, which is empty or repeated", a.ID, a.Icon)
 		}
 		seenIcon[a.Icon] = true
 		if seenTitle[strings.ToLower(a.Title)] {
-			t.Errorf("badge title %q appears twice", a.Title)
+			t.Errorf("trophy title %q appears twice", a.Title)
 		}
 		seenTitle[strings.ToLower(a.Title)] = true
+		if a.Tier == trophyPlatinum {
+			platinums++
+			if i != len(playtimeAchievements)-1 || a.Metric != trophyMetricPlatinum {
+				t.Errorf("the platinum %q must be the last trophy and count the others", a.ID)
+			}
+		}
+	}
+	if platinums != 1 {
+		t.Fatalf("the set has %d platinum trophies, want exactly one", platinums)
 	}
 }
 
 // TestPlaytimeAchievementChecksAreHonest runs every check against an empty
 // snapshot and a full one. An empty snapshot must unlock nothing (so a fresh
-// install does not open on 40 badges), and no check may panic on the nil maps an
-// old save can carry.
+// install does not open on 40 trophies), and no check may panic on the nil maps
+// an old save can carry.
 func TestPlaytimeAchievementChecksAreHonest(t *testing.T) {
 	empty := playtimeData{}
 	for _, a := range playtimeAchievements {
 		if a.Check(empty) {
-			t.Errorf("badge %q unlocks on an empty snapshot", a.ID)
+			t.Errorf("trophy %q unlocks on an empty snapshot", a.ID)
 		}
 	}
 
-	// Fill everything: 40 hours in every screen, a solid month of days, and the
-	// badge that counts badges is excluded from the expectation because it reads
-	// the unlock map, which this snapshot has not filled.
+	// Fill everything: 200 hours in three screens and a solid quarter of days.
+	// The trophies that count trophies (and the platinum) are excluded: they
+	// read the unlock map, which this snapshot has not filled.
 	full := newPlaytimeData()
 	full.Total = 2000 * 3600
 	for _, scene := range []string{"Games", "MusicPlayer", "Tube"} {
@@ -88,23 +127,23 @@ func TestPlaytimeAchievementChecksAreHonest(t *testing.T) {
 	}
 	unlocked := 0
 	for _, a := range playtimeAchievements {
-		if strings.HasPrefix(a.ID, "badges_") {
+		if strings.HasPrefix(a.ID, "badges_") || a.Metric == trophyMetricPlatinum {
 			continue
 		}
 		if a.Check(full) {
 			unlocked++
 		}
 	}
-	// The scene badges for screens the fixture never used are the only ones that
-	// may stay locked; everything else describes data the fixture has.
+	// The screen trophies for screens the fixture never used are the only ones
+	// that may stay locked; everything else describes data the fixture has.
 	if unlocked < 40 {
-		t.Fatalf("a full snapshot unlocked only %d badges; the checks are too strict to be reachable", unlocked)
+		t.Fatalf("a full snapshot unlocked only %d trophies; the checks are too strict to be reachable", unlocked)
 	}
 }
 
-// TestPlaytimeAchievementsAreAchievedFirst pins the display order: earned badges
-// first, in their definition order, then the rest, also in definition order. The
-// icon number must not move with the sort — it is the badge's identity.
+// TestPlaytimeAchievementsAreAchievedFirst pins the default order: earned
+// trophies first, in their definition order, then the rest, also in definition
+// order. The number on a trophy must not move with the sort.
 func TestPlaytimeAchievementsAreAchievedFirst(t *testing.T) {
 	data := newPlaytimeData()
 	earned := map[string]bool{"one_hour": true, "gamer": true, "explorer": true}
@@ -114,236 +153,220 @@ func TestPlaytimeAchievementsAreAchievedFirst(t *testing.T) {
 
 	ordered := playtimeAchievementsOrdered(data)
 	if len(ordered) != len(playtimeAchievements) {
-		t.Fatalf("ordering returned %d badges, want %d", len(ordered), len(playtimeAchievements))
+		t.Fatalf("ordering returned %d trophies, want %d", len(ordered), len(playtimeAchievements))
 	}
-
-	// Find the first locked badge; nothing earned may come after it.
-	firstLocked := -1
 	for i, a := range ordered {
-		_, done := earned[a.ID]
-		if !done {
-			firstLocked = i
-			break
+		if i < len(earned) && !earned[a.ID] {
+			t.Fatalf("locked trophy %q sits at %d, among the earned ones", a.ID, i)
 		}
-		if firstLocked >= 0 {
-			t.Fatalf("earned badge %q sits at %d, after the locked badge at %d", a.ID, i, firstLocked)
+		if i >= len(earned) && earned[a.ID] {
+			t.Fatalf("earned trophy %q sits at %d, after the locked ones", a.ID, i)
 		}
-	}
-	if firstLocked != len(earned) {
-		t.Fatalf("earned badges end at %d, want %d (one per unlocked badge)", firstLocked, len(earned))
 	}
 
-	// Within each half the definition order holds.
 	defPos := map[string]int{}
 	for i, a := range playtimeAchievements {
 		defPos[a.ID] = i
 	}
 	for i := 1; i < len(ordered); i++ {
-		prevDone := earned[ordered[i-1].ID]
-		curDone := earned[ordered[i].ID]
-		if prevDone != curDone {
+		if earned[ordered[i-1].ID] != earned[ordered[i].ID] {
 			continue
 		}
 		if defPos[ordered[i].ID] < defPos[ordered[i-1].ID] {
-			t.Fatalf("%q moved ahead of %q although both are in the same half",
-				ordered[i].ID, ordered[i-1].ID)
+			t.Fatalf("%q moved ahead of %q although both are in the same half", ordered[i].ID, ordered[i-1].ID)
 		}
 	}
-
-	// The icon is the badge's number in the fixed set, whatever its row.
 	for _, a := range ordered {
-		want := playtimeAchievements[defPos[a.ID]].Icon
-		if a.Icon != want {
-			t.Fatalf("badge %q shows icon %q after sorting, want %q", a.ID, a.Icon, want)
+		if want := playtimeAchievements[defPos[a.ID]].Icon; a.Icon != want {
+			t.Fatalf("trophy %q shows number %q after sorting, want %q", a.ID, a.Icon, want)
 		}
 	}
 }
 
-// TestPlaytimePageScrollsToTheLastBadge: the page must be taller than the
-// screen, scroll in bounded steps, and put the final badge fully on screen at
-// the bottom of the range. This is the check that would have caught the old
-// "break once the card is full" behaviour, where 94 badges were simply never
-// drawn.
-func TestPlaytimePageScrollsToTheLastBadge(t *testing.T) {
-	withPlaytimeViewport(t, probeW, probeH)
+// TestTrophyRoomGridReachesTheLastTrophy: the grid is taller than the screen,
+// End lands on the last trophy with the grid scrolled to its end, every card
+// has an offset that shows it, and Home comes back to the top.
+func TestTrophyRoomGridReachesTheLastTrophy(t *testing.T) {
+	withTrophyRoom(t, newPlaytimeData())
 
-	viewport := playtimeViewportHeight()
-	if viewport <= 0 {
-		t.Fatalf("viewport height = %d", viewport)
+	if !roomKey(sdl.K_DOWN) || trophyRoom.zone != trophyZoneGrid {
+		t.Fatal("Down from the chip row did not enter the grid")
 	}
-	if playtimeContentHeight() <= viewport {
-		t.Fatalf("100 badges fit a %dpx viewport (content %dpx): the page is not scrollable",
-			viewport, playtimeContentHeight())
+	roomKey(sdl.K_END)
+	n := len(trophyRoom.list)
+	if n != len(playtimeAchievements) {
+		t.Fatalf("the room lists %d trophies, want all %d", n, len(playtimeAchievements))
 	}
-	max := playtimeMaxScroll()
-	if max <= 0 {
-		t.Fatalf("max scroll = %d with content %d and viewport %d", max, playtimeContentHeight(), viewport)
+	if trophyRoom.cursor != n-1 {
+		t.Fatalf("End focused %d, want the last trophy %d", trophyRoom.cursor, n-1)
 	}
-
-	// Up at the top and Down at the bottom are both no-ops.
-	playtimeScroll = 0
-	playtimeScrollBy(-playtimeScrollStep)
-	if playtimeScroll != 0 {
-		t.Fatalf("scrolling up from the top left the page at %d", playtimeScroll)
+	limit := trophyRoomMaxScroll()
+	if limit <= 0 {
+		t.Fatal("a hundred trophies fit the viewport: the grid is not scrollable")
 	}
-	playtimeScroll = max
-	playtimeScrollBy(playtimeScrollStep)
-	if playtimeScroll != max {
-		t.Fatalf("scrolling past the bottom left the page at %d, want %d", playtimeScroll, max)
+	if playtimeScroll != limit {
+		t.Fatalf("End left the grid at %d, want the end %d", playtimeScroll, limit)
 	}
-
-	// The last badge is visible at the bottom of the range and not invisible at
-	// the top of it (the two ends must differ, or scrolling is pointless).
-	last := playtimeBadgeCell(len(playtimeAchievements)-1, probeW-56, playtimeAchY)
-	viewportBottom := screenHeight - 8
-	if bottom := last.Y + last.H - max; bottom > viewportBottom {
-		t.Fatalf("last badge ends at y=%d when fully scrolled, past the viewport at %d", bottom, viewportBottom)
-	}
-	if top := last.Y - max; top < playtimePageY {
-		t.Fatalf("last badge starts at y=%d when fully scrolled, above the page top %d", top, playtimePageY)
-	}
-	if last.Y < viewportBottom {
-		t.Fatalf("last badge is already on screen unscrolled (y=%d): the layout is too short", last.Y)
-	}
-
-	// Every badge has a scroll position that shows it: walk the list and require
-	// each cell to be reachable inside the viewport window.
-	for i := range playtimeAchievements {
-		cell := playtimeBadgeCell(i, probeW-56, playtimeAchY)
-		lowest := cell.Y + cell.H - viewportBottom
-		if lowest < 0 {
-			lowest = 0
+	cols, cardH, gap, viewH := trophyRoomMetrics()
+	for pos := 0; pos < n; pos++ {
+		top := int32(pos/cols) * (cardH + gap)
+		if top+cardH-viewH > limit {
+			t.Fatalf("card %d can never be scrolled fully into view", pos)
 		}
-		highest := cell.Y - playtimePageY
-		if highest > max {
-			highest = max
-		}
-		if lowest > highest {
-			t.Fatalf("badge %d (cell %+v) has no scroll offset that shows it", i, cell)
-		}
+	}
+
+	roomKey(sdl.K_HOME)
+	if trophyRoom.cursor != 0 || playtimeScroll != 0 {
+		t.Fatalf("Home left the focus at %d and the grid at %d", trophyRoom.cursor, playtimeScroll)
 	}
 }
 
-// TestPlaytimeWheelAndKeysMoveThePage: the wheel, the D-pad and the page keys all
-// drive the same clamp.
-func TestPlaytimeWheelAndKeysMoveThePage(t *testing.T) {
-	withPlaytimeViewport(t, probeW, probeH)
-	playtimeScroll = 0
+// TestTrophyRoomRendersTheLastTrophy is the pixel half: scrolled to the end,
+// the focused last card is drawn whole inside the grid's viewport.
+func TestTrophyRoomRendersTheLastTrophy(t *testing.T) {
+	withTrophyRoom(t, newPlaytimeData())
+	roomKey(sdl.K_DOWN)
+	roomKey(sdl.K_END)
+
+	frame := renderPlaytimeProbe(t, newPlaytimeData())
+	last := len(trophyRoom.list) - 1
+	found := false
+	for k := 0; k < trophyRoom.cardN; k++ {
+		if trophyRoom.cardPos[k] != last {
+			continue
+		}
+		found = true
+		card := trophyRoom.cardRects[k]
+		if card.H < trophyRoom.cardH-1 {
+			t.Fatalf("the last card is cut to %dpx of %dpx at the bottom of the grid", card.H, trophyRoom.cardH)
+		}
+		if got := paintedPixelsIn(frame, card); got < 40 {
+			t.Fatalf("the last card painted only %d pixels", got)
+		}
+	}
+	if !found {
+		t.Fatalf("the last trophy (%d) was not drawn with the grid at its end", last)
+	}
+	// The bar is still at the top: the page scrolls under it.
+	title := sdl.Rect{X: 0, Y: 0, W: probeW, H: headerBarHeight()}
+	if got := paintedPixelsIn(frame, title); got < 100 {
+		t.Fatalf("the top bar painted only %d pixels", got)
+	}
+}
+
+// TestTrophyRoomKeysPadAndWheel: the keys, the pad and the wheel drive the same
+// room — the chip row filters as the focus moves, Down enters the grid, Up from
+// its first row returns, L1/R1 switch tabs and the wheel scrolls.
+func TestTrophyRoomKeysPadAndWheel(t *testing.T) {
+	data := newPlaytimeData()
+	data.Unlocked["first_steps"] = "2026-03-02T20:11:00Z"
+	withTrophyRoom(t, data)
+
+	if !roomKey(sdl.K_RIGHT) || trophyRoom.filter != trophyFilterEarned {
+		t.Fatalf("Right on the chip row left the filter at %d, want Earned", trophyRoom.filter)
+	}
+	if len(trophyRoom.list) != 1 || playtimeAchievements[trophyRoom.list[0]].ID != "first_steps" {
+		t.Fatalf("the Earned filter lists %v", trophyRoom.list)
+	}
+	roomKey(sdl.K_LEFT)
+	if trophyRoom.filter != trophyFilterAll {
+		t.Fatalf("Left did not return to All (filter %d)", trophyRoom.filter)
+	}
+
+	cols, _, _, _ := trophyRoomMetrics()
+	roomPad(sdl.CONTROLLER_BUTTON_DPAD_DOWN)
+	roomPad(sdl.CONTROLLER_BUTTON_DPAD_RIGHT)
+	roomPad(sdl.CONTROLLER_BUTTON_DPAD_DOWN)
+	if trophyRoom.cursor != 1+cols {
+		t.Fatalf("Down, Right, Down focused %d, want %d", trophyRoom.cursor, 1+cols)
+	}
+	roomPad(sdl.CONTROLLER_BUTTON_DPAD_UP)
+	roomPad(sdl.CONTROLLER_BUTTON_DPAD_UP)
+	if trophyRoom.zone != trophyZoneChips {
+		t.Fatal("Up from the grid's first row did not return to the chip row")
+	}
+	if roomPad(sdl.CONTROLLER_BUTTON_DPAD_UP) {
+		t.Fatal("Up at the top of the page was not handed to the top bar")
+	}
+
+	roomPad(sdl.CONTROLLER_BUTTON_RIGHTSHOULDER)
+	if trophyRoom.tab != trophyTabStats {
+		t.Fatal("R1 did not open the Playtime tab")
+	}
+	if roomKey(sdl.K_UP) {
+		t.Fatal("Up on the Playtime tab must reach the top bar")
+	}
+	roomKey(sdl.K_TAB)
+	if trophyRoom.tab != trophyTabTrophies {
+		t.Fatal("Tab did not return to the Trophies tab")
+	}
+
+	before := trophyRoom.sort
+	roomPad(sdl.CONTROLLER_BUTTON_X)
+	if trophyRoom.sort == before {
+		t.Fatal("X did not change the sort")
+	}
 
 	if handlePlaytimeWheel(0) {
 		t.Fatal("a zero wheel delta must not be consumed")
 	}
-	// SDL reports a positive wheel delta when the wheel turns away from the
-	// user, which is "scroll up" here.
-	if !handlePlaytimeWheel(3) {
-		t.Fatal("a wheel-up event was not consumed")
-	}
+	playtimeScroll = 0
+	handlePlaytimeWheel(2)
 	if playtimeScroll != 0 {
-		t.Fatalf("wheel up at the top moved the page to %d", playtimeScroll)
+		t.Fatalf("wheel up at the top moved the grid to %d", playtimeScroll)
 	}
 	handlePlaytimeWheel(-3)
 	if playtimeScroll <= 0 {
-		t.Fatalf("wheel down did not move the page (scroll=%d)", playtimeScroll)
-	}
-	before := playtimeScroll
-	handlePlaytimeWheel(1)
-	if playtimeScroll >= before {
-		t.Fatalf("wheel up did not move the page back (%d -> %d)", before, playtimeScroll)
-	}
-
-	// End jumps to the bottom, Home returns to the top.
-	playtimeScene{}.handleKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_END}}, &Config{})
-	if playtimeScroll != playtimeMaxScroll() {
-		t.Fatalf("End left the page at %d, want %d", playtimeScroll, playtimeMaxScroll())
-	}
-	playtimeScene{}.handleKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_HOME}}, &Config{})
-	if playtimeScroll != 0 {
-		t.Fatalf("Home left the page at %d", playtimeScroll)
-	}
-
-	// The pad's Down moves it too, and its Up comes back.
-	playtimeScene{}.handleController(&sdl.ControllerButtonEvent{
-		Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_DOWN,
-	}, &Config{})
-	if playtimeScroll <= 0 {
-		t.Fatalf("pad Down did not scroll (scroll=%d)", playtimeScroll)
-	}
-	playtimeScene{}.handleController(&sdl.ControllerButtonEvent{
-		Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_UP,
-	}, &Config{})
-	if playtimeScroll != 0 {
-		t.Fatalf("pad Up did not return to the top (scroll=%d)", playtimeScroll)
+		t.Fatalf("wheel down did not move the grid (scroll %d)", playtimeScroll)
 	}
 }
 
-// TestPlaytimeRendersTheBottomOfThePage is the pixel half: after scrolling to
-// the end, the last badge's cells paint something, and the pinned title band is
-// still there. Without this the geometry could be right and the list still blank.
-func TestPlaytimeRendersTheBottomOfThePage(t *testing.T) {
-	withPlaytimeViewport(t, probeW, probeH)
-	prevAccent := accentColor
-	SetAccentColor(ColorAccent)
-	t.Cleanup(func() { SetAccentColor(prevAccent) })
-
-	max := playtimeMaxScroll()
-	if max <= 0 {
-		t.Fatalf("max scroll = %d; nothing to scroll", max)
+// TestTrophyRoomDetailsSheet: A opens the focused trophy, Left/Right step
+// through the list, B closes it and leaves the room's focus where it was.
+func TestTrophyRoomDetailsSheet(t *testing.T) {
+	withTrophyRoom(t, newPlaytimeData())
+	roomKey(sdl.K_DOWN)
+	roomKey(sdl.K_RIGHT)
+	roomKey(sdl.K_RETURN)
+	if !trophyRoom.sheet {
+		t.Fatal("A on a card did not open its details")
 	}
-
-	// Land at the bottom first; the render clamps to the same value.
-	playtimeScroll = max
-	frame := renderPlaytimeProbe(t, newPlaytimeData())
-	if playtimeScroll != max {
-		t.Fatalf("render clamped the scroll to %d, want %d", playtimeScroll, max)
+	if trophyRoom.sheetIdx != trophyRoom.list[1] {
+		t.Fatalf("the sheet shows trophy %d, want the focused %d", trophyRoom.sheetIdx, trophyRoom.list[1])
 	}
-
-	// The last badge row is on screen and painted.
-	last := playtimeBadgeCell(len(playtimeAchievements)-1, probeW-56, playtimeAchY)
-	cell := sdl.Rect{X: last.X, Y: last.Y - playtimeScroll, W: last.W, H: last.H}
-	if cell.Y < playtimePageY || cell.Y+cell.H > screenHeight-8 {
-		t.Fatalf("last badge cell %+v is not inside the viewport", cell)
+	roomKey(sdl.K_RIGHT)
+	if trophyRoom.sheetIdx != trophyRoom.list[2] || trophyRoom.cursor != 2 {
+		t.Fatal("Right in the sheet did not step to the next trophy")
 	}
-	if got := paintedPixelsIn(frame, cell); got < 40 {
-		t.Fatalf("the last badge row painted only %d pixels at the bottom of the page", got)
+	if !roomKey(sdl.K_ESCAPE) || trophyRoom.sheet {
+		t.Fatal("B did not close the sheet")
 	}
-
-	// The title band is pinned: it still has ink while the page is at its end.
-	title := sdl.Rect{X: 0, Y: 0, W: probeW, H: playtimePageY}
-	if got := paintedPixelsIn(frame, title); got < 100 {
-		t.Fatalf("the pinned title band painted only %d pixels", got)
-	}
-
-	// And the scrollbar thumb sits near the bottom of its track.
-	if playtimeScrollbarRect.W == 0 {
-		t.Fatal("a scrollable page drew no scrollbar")
-	}
-	if playtimeScrollbarRect.Y < screenHeight/2 {
-		t.Fatalf("scrollbar thumb at y=%d did not follow the page to the bottom", playtimeScrollbarRect.Y)
+	if trophyRoom.zone != trophyZoneGrid || trophyRoom.cursor != 2 {
+		t.Fatal("closing the sheet lost the grid focus")
 	}
 }
 
-// TestPlaytimeEntersAtTheTop: a second visit starts at the top rather than where
-// the last one stopped, and a fresh render of the same visit keeps the offset.
-func TestPlaytimeEntersAtTheTop(t *testing.T) {
-	withPlaytimeViewport(t, probeW, probeH)
-	renderPlaytimeProbe(t, newPlaytimeData())
-	if playtimeScroll != 0 {
-		t.Fatalf("a fresh visit started at %d", playtimeScroll)
+// TestTrophyRoomEntersAtTheTop: a second visit starts fresh, a re-render of the
+// same visit keeps the state.
+func TestTrophyRoomEntersAtTheTop(t *testing.T) {
+	withTrophyRoom(t, newPlaytimeData())
+	prevIdx := currentSceneIndex
+	t.Cleanup(func() { currentSceneIndex = prevIdx })
+	currentSceneIndex = 5
+
+	trophyRoomSyncVisit()
+	trophyRoom.zone, trophyRoom.cursor, trophyRoom.tab = trophyZoneGrid, 7, trophyTabStats
+	playtimeScroll = 300
+	trophyRoomSyncVisit()
+	if trophyRoom.cursor != 7 || playtimeScroll != 300 || trophyRoom.tab != trophyTabStats {
+		t.Fatal("the same visit lost its place")
 	}
 
-	// Same scene, scrolled: a re-render must keep the offset.
-	playtimeScroll = 200
-	renderPlaytimeProbe(t, newPlaytimeData())
-	if playtimeScroll != 200 {
-		t.Fatalf("re-render moved the page to %d, want 200", playtimeScroll)
-	}
-
-	// A different scene index means the screen was left and entered again.
-	playtimeScroll = 400
 	playtimeScrollFor = currentSceneIndex + 1
-	renderPlaytimeProbe(t, newPlaytimeData())
-	if playtimeScroll != 0 {
-		t.Fatalf("re-entering the screen kept the offset at %d", playtimeScroll)
+	trophyRoomSyncVisit()
+	if trophyRoom.zone != trophyZoneChips || trophyRoom.cursor != 0 || playtimeScroll != 0 || trophyRoom.tab != trophyTabTrophies {
+		t.Fatalf("re-entering kept zone %d, cursor %d, scroll %d, tab %d",
+			trophyRoom.zone, trophyRoom.cursor, playtimeScroll, trophyRoom.tab)
 	}
 }
 
@@ -365,62 +388,49 @@ func TestPlaytimeUnlockLabel(t *testing.T) {
 	}
 }
 
-// TestEarnedBadgesShowTheirUnlockDate is the pixel half: the third line of an
-// earned badge carries the date, and a locked badge's row leaves that line
-// empty. Without the second half a layout bug could paint the date on every
-// row, including badges that have never been earned.
-func TestEarnedBadgesShowTheirUnlockDate(t *testing.T) {
-	withPlaytimeViewport(t, probeW, probeH)
-	prevAccent := accentColor
-	SetAccentColor(ColorAccent)
-	t.Cleanup(func() { SetAccentColor(prevAccent) })
-
+// TestEarnedTrophyShowsItsMetal: an earned card carries the cup in its tier's
+// metal and the date it was earned; a locked card is a grey silhouette.
+func TestEarnedTrophyShowsItsMetal(t *testing.T) {
+	withTrophyRoom(t, newPlaytimeData())
 	data := newPlaytimeData()
-	first := playtimeAchievements[0]
-	data.Unlocked[first.ID] = "2026-03-02T20:11:00Z"
-
-	playtimeScroll = playtimeAchY - playtimePageY
-	playtimeScrollFor = currentSceneIndex
+	data.Unlocked["first_steps"] = "2026-03-02T20:11:00Z"
 	frame := renderPlaytimeProbe(t, data)
 
-	cardW := probeW - 56
-	dateBand := func(i int) sdl.Rect {
-		cell := playtimeBadgeCell(i, cardW, playtimeAchY)
-		return sdl.Rect{
-			X: cell.X + 48,
-			Y: cell.Y - playtimeScroll + 2 + 2*playtimeBadgeLinePitch,
-			W: cell.W - 58,
-			H: playtimeBadgeLinePitch,
+	idx := trophyIndexByID("first_steps")
+	if got := trophyRoom.rows[idx].when; got != "Earned 2 Mar 2026" {
+		t.Fatalf("the earned card's date line is %q", got)
+	}
+	medal := func(pos int) sdl.Rect {
+		for k := 0; k < trophyRoom.cardN; k++ {
+			if trophyRoom.cardPos[k] == pos {
+				c := trophyRoom.cardRects[k]
+				return sdl.Rect{X: c.X + 12, Y: c.Y + 8, W: 62, H: c.H - 16}
+			}
 		}
+		t.Fatalf("card %d was not drawn", pos)
+		return sdl.Rect{}
 	}
-	// Badge 0 is the earned one (earned first), badge 1 is locked.
-	if earned := accentishPixels(frame, dateBand(0)); earned < 30 {
-		t.Fatalf("the earned badge's date line painted only %d accent pixels", earned)
+	if trophyRoom.list[0] != idx {
+		t.Fatalf("the earned trophy is not first (list starts with %d)", trophyRoom.list[0])
 	}
-	if locked := accentishPixels(frame, dateBand(1)); locked > 0 {
-		t.Fatalf("a locked badge painted %d pixels on the date line", locked)
+	if got := bronzePixelsIn(frame, medal(0)); got < 60 {
+		t.Fatalf("the earned bronze trophy painted only %d bronze pixels", got)
 	}
-
-	// The date line must fit inside the row: three lines of text plus the
-	// top inset have to stay under the cell height, or the row below clips it.
-	if need, have := 2+3*playtimeBadgeLinePitch, playtimeAchRowH-8; need > have {
-		t.Fatalf("three badge lines need %dpx but a row is %dpx tall", need, have)
+	if got := bronzePixelsIn(frame, medal(1)); got > 0 {
+		t.Fatalf("a locked trophy painted %d bronze pixels; it must be a grey silhouette", got)
 	}
 }
 
-// accentishPixels counts cyan text pixels: the unlock date is the only
-// accent-coloured text on a badge row, and it is drawn to the right of the
-// badge's number tile. The channel spread matters — the grey description text
-// next to it is bluish too, so "bright blue" alone would count it.
-func accentishPixels(f *probeFrame, r sdl.Rect) int {
+// bronzePixelsIn counts warm metal pixels: red well above blue, green between.
+func bronzePixelsIn(f *probeFrame, r sdl.Rect) int {
 	n := 0
-	for y := r.Y; y < r.Y+r.H; y++ {
-		for x := r.X; x < r.X+r.W; x++ {
-			if x < 0 || y < 0 || x >= probeW || y >= probeH {
+	for y := r.Y; y < r.Y+r.H && y < probeH; y++ {
+		for x := r.X; x < r.X+r.W && x < probeW; x++ {
+			if x < 0 || y < 0 {
 				continue
 			}
 			c := f.at(x, y)
-			if int(c.B) > 90 && int(c.G)-int(c.R) > 50 && int(c.B)-int(c.R) > 60 {
+			if int(c.R) > 110 && int(c.R)-int(c.B) > 70 && c.G < c.R && c.G > c.B {
 				n++
 			}
 		}
@@ -428,24 +438,23 @@ func accentishPixels(f *probeFrame, r sdl.Rect) int {
 	return n
 }
 
-// TestPlaytimePageKeepsThePadFromTheTopBar pins the routing bug that made the
-// badge list unscrollable: the Playtime screen has no config elements, so the
-// only nodes in its focus graph were the top-bar buttons, focus started on the
-// back pill, and handleChromeKey swallowed every arrow before the page saw it.
+// TestPlaytimePageKeepsThePadFromTheTopBar pins the routing: the Playtime
+// screen has no config elements, so the top bar's buttons are the only nodes in
+// its focus graph. The focus must not start on them, Down must reach the room
+// (into its grid), and Up at the top of the room must reach the bar.
 func TestPlaytimePageKeepsThePadFromTheTopBar(t *testing.T) {
-	withPlaytimeViewport(t, probeW, probeH)
+	withTrophyRoom(t, newPlaytimeData())
 	useTopChrome(t)
 
 	config := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
 	ensurePlaytimeScene(config)
-	idx := findSceneIndex(config, playtimeSceneName)
+	idx := sceneIndexExact(config, playtimeSceneName)
 	if idx < 0 {
 		t.Fatal("the Playtime scene was not injected")
 	}
 	prevIdx, prevSel := currentSceneIndex, selectedButtonIndex
 	t.Cleanup(func() { currentSceneIndex, selectedButtonIndex = prevIdx, prevSel })
 	currentSceneIndex = idx
-	playtimeScroll = 0
 
 	focusEngine.Clear()
 	focusEngine.SetGraph(playtimeSceneName, focusEngine.BuildGraph(config.Scenes[idx]))
@@ -459,11 +468,20 @@ func TestPlaytimePageKeepsThePadFromTheTopBar(t *testing.T) {
 	if handleChromeKey(down, config) {
 		t.Fatal("the top bar consumed Down on the Playtime page")
 	}
-	if m, ok := lookupScene(playtimeSceneName); !ok || !m.handleKey(down, config) {
-		t.Fatal("the Playtime page did not take Down")
+	m, ok := lookupScene(playtimeSceneName)
+	if !ok || !m.handleKey(down, config) {
+		t.Fatal("the room did not take Down")
 	}
-	if playtimeScroll <= 0 {
-		t.Fatalf("Down did not scroll the badge page (scroll=%d)", playtimeScroll)
+	if trophyRoom.zone != trophyZoneGrid {
+		t.Fatal("Down did not move the focus into the trophy grid")
+	}
+	up := &sdl.KeyboardEvent{Type: sdl.KEYDOWN}
+	up.Keysym.Sym = sdl.K_UP
+	if !m.handleKey(up, config) || trophyRoom.zone != trophyZoneChips {
+		t.Fatal("Up from the grid's first row did not return to the chip row")
+	}
+	if m.handleKey(up, config) {
+		t.Fatal("Up at the top of the room was swallowed instead of reaching the top bar")
 	}
 }
 

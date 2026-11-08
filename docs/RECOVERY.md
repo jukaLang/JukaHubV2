@@ -57,7 +57,8 @@ JukaHub now treats those stops as a normal quit:
 
 - `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` become the same exit request the
   Exit button uses, so favourites, playtime and LEDs are handled and the
-  farewell is skipped (the caller is waiting for the process, not watching it).
+  teardown card is skipped (the caller is waiting for the process, not watching
+  it).
   A second signal quits immediately.
 - A running game, emulator, port or Wine app is asked to quit (2 s), then
   killed, so nothing is left owning the display. Music and video decoders are

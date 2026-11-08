@@ -1,8 +1,13 @@
 {
   "name": "hello",
-  "version": "1.0.0",
-  "description": "Example greeting plugin for JukaHub.",
+  "title": "Hello",
+  "version": "1.1.0",
+  "description": "Example greeting plugin for JukaHub. Set the custom variable plugin_name to be greeted by name.",
   "author": "JukaHub",
   "entry": "hello.sh",
-  "enabled": true
+  "icon": "sparkles",
+  "enabled": true,
+  "actions": [
+    {"id": "greet", "label": "Say hello"}
+  ]
 }

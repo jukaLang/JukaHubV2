@@ -51,6 +51,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	// The library's video snap would otherwise keep decoding under the game:
 	// the parked main loop no longer runs the code that stops it.
 	snapPreviewHalt()
+	// The same goes for a video left playing (or floating) behind the launch.
+	mediaStopForScreenChild()
 	if cmd == nil {
 		return
 	}

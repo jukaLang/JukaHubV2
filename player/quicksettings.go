@@ -152,6 +152,9 @@ func qsInit() {
 			{Label: "Screensaver", Icon: "[T]", Value: 25},
 			{Label: "Power Mode", Icon: "[P]", Value: qsPowerModeRowIndex()},
 			{Label: "LED Mode", Icon: "[R]", Value: ledPolicyIndex(ledPolicyFromConfig(nil))},
+			// The experience pack in force; Left/Right apply the next one at
+			// once (xpack.go).
+			{Label: "Experience", Icon: "[X]"},
 		},
 		// -1 means "nothing written yet", so the first move always applies.
 		lastVolume:     -1,
@@ -278,6 +281,7 @@ const (
 	qsCycleScreensaverRow = 0
 	qsCycleRowPowerMode   = 1
 	qsCycleRowLED         = 2
+	qsCycleRowXPack       = 3
 )
 
 // qsSyncFromConfig refreshes the rows whose truth lives in the config, then
@@ -499,7 +503,8 @@ func qsOpenLink(l qsLink) {
 	}
 	switch l.Action {
 	case qsLinkWiFi:
-		openWiFiPanel()
+		// The Wi-Fi page replaces the panel (wifiScrOpen closes it).
+		wifiScrOpen(appConfig)
 	case qsLinkControls:
 		// The legend is a modal of its own: the panel steps aside so two
 		// cards are never stacked.
@@ -719,6 +724,14 @@ func qsStepCycle(row, dir int) {
 		return
 	}
 	switch row {
+	case qsCycleRowXPack:
+		// Each step applies the next experience pack at once; it saves itself,
+		// and the gallery's Undo puts the previous setup back (xpack.go).
+		if appConfig != nil {
+			xpackQSStep(appConfig, dir)
+		}
+		PlayNavSound()
+		return
 	case qsCycleRowLED:
 		if appConfig == nil {
 			return
@@ -852,12 +865,13 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// The panel grows with the row list and shrinks the rows before it would
-	// run off a 480p screen.
+	// run off a 480p screen. The floor of 30 keeps all seventeen rows on a
+	// 720-line panel.
 	rows := qsRowCount()
 	itemH := int32(44)
 	panelH := qsPanelHeight(rows, itemH)
 	maxH := screenHeight - 24
-	for panelH > maxH && itemH > 32 {
+	for panelH > maxH && itemH > 30 {
 		itemH--
 		panelH = qsPanelHeight(rows, itemH)
 	}
@@ -1095,6 +1109,9 @@ func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row 
 	valCol := WithAlpha(ColorTextSecondary(), 220)
 	if row == qsCycleRowLED {
 		value = ledPolicyLabel(ledPolicyOrder[c.Value].key)
+	}
+	if row == qsCycleRowXPack {
+		value = xpackQSLabel()
 	}
 	if row == qsCycleRowPowerMode {
 		value = powerModeLabel(powerModeOrder[c.Value])

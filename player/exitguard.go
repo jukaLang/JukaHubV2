@@ -53,18 +53,33 @@ var (
 	// forceExitAction is what the watchdog runs. Swapped by tests only.
 	forceExitAction = forceExit
 	// exitRequestedBySignal is raised when the process was asked to stop from
-	// outside (signal), so the exit path can skip the farewell animation: the
-	// caller is waiting for the process, not watching it.
+	// outside (signal), so the exit path can skip the teardown card: the caller
+	// is waiting for the process, not watching it.
 	exitRequestedBySignal atomic.Bool
+	// exitRequested is set from the render thread (Exit button, config trigger)
+	// as well as the signal handler below, and is read by the main loop, so it
+	// is atomic. It used to live in goodbye.go; the request outlived the
+	// farewell animation that file was named after.
+	exitRequested atomic.Bool
+	// exitHandled guards the exit request so the loop leaves once instead of
+	// re-entering the teardown on every frame it is still running.
+	exitHandled bool
 	// exitDeadlineOnce arms the watchdog once per process.
 	exitDeadlineOnce sync.Once
 	// exitForcingOnce makes sure a force-exit runs its work exactly once.
 	exitForcingOnce sync.Once
 )
 
+// requestAppExit asks the main loop to leave and run the teardown. External
+// callers (a stop signal, the firmware's power handling) land here too, which is
+// what keeps every exit on the same cleanup path.
+func requestAppExit() {
+	exitRequested.Store(true)
+}
+
 // installExitSignalHandler turns the stop signals into an ordinary exit
 // request. Without it Go's default action terminates the process immediately:
-// no LED reset, no favourites flush, no farewell, and any running game child
+// no LED reset, no favourites flush, no teardown, and any running game child
 // stays alive over the display.
 //
 // A second signal means the first one is not being honoured quickly enough, so
@@ -111,16 +126,42 @@ func armExitDeadline(grace time.Duration) {
 
 // forceExit stops the process even if cleanup is wedged. Everything it does is
 // bounded and allocation-light: kill the children that own the screen, drop
-// the LEDs, write down what the goroutines were waiting on, and leave. The
-// launcher script sees the exit and brings the stock UI back.
+// the LEDs, write down what the goroutines were waiting on, give the machine
+// back its CPU governor and speaker level, and leave. The launcher script sees
+// the exit and brings the stock UI back.
 func forceExit(reason string) {
 	exitForcingOnce.Do(func() {
 		log.Printf("[exit] forcing quit: %s", reason)
 		dumpGoroutines()
 		killScreenChildren()
 		_ = SetLEDSync(false)
+		exitLastChanceRestore(exitLastChanceGrace)
 		os.Exit(0)
 	})
+}
+
+// exitLastChanceGrace bounds the restores a forced exit still attempts.
+const exitLastChanceGrace = 600 * time.Millisecond
+
+// exitLastChanceRestore puts back the CPU governor and ceiling the machine
+// booted with and the mixer level an alarm raised, waiting at most grace: a
+// forced exit is already late, and a device left on the performance governor
+// (or at 100% volume) after JukaHub is gone is the kind of damage that outlives
+// the app. Both are fast sysfs/mixer writes; the bound is for a wedged one.
+func exitLastChanceRestore(grace time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := restoreBootCPUSettings(); err != nil {
+			log.Printf("[exit] CPU restore on the forced exit: %v", err)
+		}
+		alarmVolumeRestoreWait(grace)
+	}()
+	select {
+	case <-done:
+	case <-time.After(grace):
+		log.Printf("[exit] restores did not finish within %s", grace)
+	}
 }
 
 // dumpGoroutines writes every goroutine stack to the log. When a shutdown

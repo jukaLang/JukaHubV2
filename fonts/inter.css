@@ -1,0 +1,13 @@
+/* Inter, vendored so the builder never waits on a font CDN.
+ *
+ * The latin variable face covers weights 100–900 from one file; the rest of the
+ * language subsets are omitted to keep the repository small, and the browser
+ * falls back through the system stack in style.css for glyphs it lacks.
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./inter-latin-wght-normal.woff2') format('woff2');
+}

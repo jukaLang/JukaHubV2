@@ -7,9 +7,10 @@ package main
 // NDK games: the APK's Java layer is thin glue that merely calls into a
 // native lib/*.so main entry. Those games can run as ordinary native
 // processes if something loads their bionic-linked .so files on glibc — the
-// bionic translation runtime (the ATL project's bionic_translation loader)
-// plus small shims for liblog/libandroid/OpenSL ES. JukaHub's job here is
-// not to reimplement that runtime; it is to:
+// AndroidRT runtime in player/androidrt (its own bionic loader, a bionic
+// compatibility layer and liblog/libandroid/OpenSL ES/EGL shims, in the
+// spirit of the ATL project's bionic_translation). JukaHub's job here is
+// not to run that runtime in-process; it is to:
 //
 //   1. TRIAGE — inspect an APK read-only and report which ABIs it ships
 //      (arm64-v8a first, matching the A133P), which .so is the native entry,
@@ -494,9 +495,20 @@ func androidPakPlanCheck(p GameProfile, apkPath string, lookPath func(string) (s
 	return nil
 }
 
+// androidPakDataDir is an AndroidPak game's persistent data directory: the
+// runner hands it to the game as internalDataPath/externalDataPath (files/,
+// external/, obb/ and cache/ inside), so saves and settings survive the
+// tmpfs stage being cleaned up after the game exits.
+func androidPakDataDir(id string) string {
+	if id == "" {
+		id = "default"
+	}
+	return filepath.Join(gameProfilesDir(), "androidpak-data", id)
+}
+
 // androidPakDirExists reports whether path is a readable directory; the
-// shims-dir probe in buildAndroidPakCommand uses it to stay optional (a
-// runtime without shims still launches — launch.sh prints the same warning).
+// shims-dir probe in buildAndroidPakCommand uses it to stay optional (current
+// runtimes are one self-contained `loader`; only older layouts ship shims/).
 func androidPakDirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
@@ -521,13 +533,17 @@ func buildAndroidPakCommand(p GameProfile, apkPath, stageDir string, libs androi
 		env["ANDROIDPAK_MAINLIB"] = libs.MainLib
 		env["ANDROIDPAK_ABIS"] = strings.Join(libs.Abis, ",")
 		env["ANDROIDPAK_RT"] = rt
+		// Saves must outlive the tmpfs stage, which is deleted after every
+		// exit; a profile's own env may point somewhere else.
+		if strings.TrimSpace(env["ANDROIDPAK_DATA"]) == "" {
+			env["ANDROIDPAK_DATA"] = androidPakDataDir(p.ID)
+		}
 	}
-	// The launch.sh form arranges its own library paths and shims dir, but
-	// a runtime that ships only the `loader` binary gets it from here: the
-	// runner preloads <rt>/shims (ANDROIDPAK_SHIMS) and glibc resolves the
-	// game's DT_NEEDED entries (liblog.so, libandroid.so, ...) through the
-	// staged lib dir and the shims dir put first on LD_LIBRARY_PATH — the
-	// device's own GL userspace stays last so the PowerVR EGL always wins.
+	// Current runtimes load the game with their own bionic loader and need
+	// no search paths. An older runtime layout with a shims/ directory gets
+	// what it relied on: ANDROIDPAK_SHIMS (preloaded by that runner) and the
+	// staged lib dir plus shims put first on LD_LIBRARY_PATH — the device's
+	// own GL userspace stays last so the PowerVR EGL always wins.
 	if env != nil {
 		if shims := filepath.Join(rt, "shims"); androidPakDirExists(shims) {
 			env["ANDROIDPAK_SHIMS"] = shims
@@ -545,56 +561,147 @@ func buildAndroidPakCommand(p GameProfile, apkPath, stageDir string, libs androi
 	return command, args, nil
 }
 
-// androidPakFirstRunSymbol scans a profile's launch log for the AndroidRT
-// loader's first-run failure line — the run exits 2 before any onCreate
-// because glibc could not resolve a bionic symbol in the staged main lib.
-// The line looks like:
+// androidPakRunReport is what the AndroidRT runner printed about the run that
+// just ended. The runner's own bionic loader lists every undefined symbol
+// before any game code runs and binds missing functions to traps:
 //
-//	[androidrt] could not load /stage/lib/arm64-v8a/libgame.so: \
-//	...: undefined symbol: ATrace_beginSection
+//	[androidrt] undefined symbols: 2 (1 functions abort when called, 1 data zero-filled)
+//	[androidrt] undefined symbol: AChoreographer_getInstance (func, needed by libgame.so, from libandroid.so@LIBANDROID)
+//	[androidrt] trap: libgame.so called unimplemented AChoreographer_getInstance — aborting (...)
+//	[androidrt] refusing to start: 2 undefined symbols and ANDROIDPAK_MISSING=strict
+//	[androidrt] could not load /stage/lib/armeabi-v7a/libgame.so: 32-bit ELF (ELFCLASS32): ...
 //
-// and returns only the undefined symbol's name ("" when the run failed for
-// a different reason: exit status, no ANativeActivity_onCreate, wall time).
-func androidPakFirstRunSymbol(id string) string {
+// Older runtimes (glibc dlopen) printed "could not load <lib>: ...: undefined
+// symbol: NAME" instead; that line still parses into Symbol.
+type androidPakRunReport struct {
+	Trap        string   // unimplemented function the game called; the run aborted there
+	Undefined   []string // every undefined symbol the loader listed, in log order
+	Refused     bool     // ANDROIDPAK_MISSING=strict refused to start
+	LoadFailure string   // why the game library never loaded, when it did not
+	Symbol      string   // the undefined symbol of a legacy dlopen failure
+}
+
+// androidPakLastRunLog returns the part of a profile's launch log the most
+// recent run wrote ("" without a log). The log is appended to on every
+// launch; reading from the top named the oldest failure in the file, so a
+// symbol already shimmed kept being reported after the rebuild.
+func androidPakLastRunLog(id string) string {
 	data, err := os.ReadFile(filepath.Join(gameProfilesLogsDir(), id+".log"))
 	if err != nil {
 		return ""
 	}
-	// The log is appended to on every launch; only the run that just ended
-	// counts. Reading from the top named the oldest failure in the file, so a
-	// symbol already shimmed kept being reported after the rebuild.
 	text := string(data)
 	if i := strings.LastIndex(text, "=== "+id+" start "); i >= 0 {
 		text = text[i:]
 	}
+	return text
+}
+
+// androidPakLeadingToken is s up to its first space, comma or parenthesis
+// ("memcpy, version LIBC" → "memcpy").
+func androidPakLeadingToken(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, " ,("); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// parseAndroidPakRunReport reads the runner's report lines out of one run's
+// launch log.
+func parseAndroidPakRunReport(text string) androidPakRunReport {
+	var r androidPakRunReport
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.Contains(line, "[androidrt] could not load") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "[androidrt] ")
+		if !ok {
 			continue
 		}
-		if _, symbol, found := strings.Cut(line, " undefined symbol: "); found {
-			return strings.TrimSpace(symbol)
+		switch {
+		case strings.HasPrefix(rest, "trap: "):
+			if _, name, found := strings.Cut(rest, " called unimplemented "); found && r.Trap == "" {
+				r.Trap = androidPakLeadingToken(name)
+			}
+		case strings.HasPrefix(rest, "undefined symbol: "):
+			if name := androidPakLeadingToken(strings.TrimPrefix(rest, "undefined symbol: ")); name != "" {
+				r.Undefined = append(r.Undefined, name)
+			}
+		case strings.HasPrefix(rest, "refusing to start: "):
+			r.Refused = true
+		case strings.HasPrefix(rest, "could not load "):
+			if _, name, found := strings.Cut(rest, " undefined symbol: "); found {
+				if r.Symbol == "" {
+					r.Symbol = androidPakLeadingToken(name)
+				}
+			} else if _, reason, found := strings.Cut(rest, ": "); found && r.LoadFailure == "" {
+				r.LoadFailure = strings.TrimSpace(reason)
+			}
 		}
-		return ""
+	}
+	return r
+}
+
+// androidPakFirstRunSymbol names the bionic symbol that stopped the last run:
+// the unimplemented function the game called, the legacy loader's undefined
+// symbol, or the first symbol a strict run refused over. "" when the run
+// failed for another reason (exit status, no ANativeActivity_onCreate, crash).
+func androidPakFirstRunSymbol(id string) string {
+	r := parseAndroidPakRunReport(androidPakLastRunLog(id))
+	switch {
+	case r.Trap != "":
+		return r.Trap
+	case r.Symbol != "":
+		return r.Symbol
+	case r.Refused && len(r.Undefined) > 0:
+		return r.Undefined[0]
 	}
 	return ""
 }
 
+// androidPakClip shortens s to at most n runes with an ellipsis.
+func androidPakClip(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
+}
+
+// androidPakRunMessage words a failed run's report for the toast and the
+// JukaHub log. toast is false when the launch log has nothing more specific
+// to say than "it failed".
+func androidPakRunMessage(id string, r androidPakRunReport, logPath string) (string, bool) {
+	more := ""
+	if n := len(r.Undefined); n > 1 {
+		more = fmt.Sprintf(" (%d undefined symbols listed in the log)", n)
+	}
+	switch {
+	case r.Trap != "":
+		return fmt.Sprintf("AndroidPak: the game called %s, which AndroidRT does not implement yet%s — log: %s", r.Trap, more, logPath), true
+	case r.Symbol != "":
+		return fmt.Sprintf("AndroidPak stopped on undefined symbol: %s — add it to an AndroidRT shim, rebuild, retry (log: %s)", r.Symbol, logPath), true
+	case r.Refused && len(r.Undefined) > 0:
+		return fmt.Sprintf("AndroidPak refused to start: %d undefined symbols (first: %s) with ANDROIDPAK_MISSING=strict — log: %s", len(r.Undefined), r.Undefined[0], logPath), true
+	case r.LoadFailure != "":
+		return fmt.Sprintf("AndroidPak could not load the game: %s (log: %s)", androidPakClip(r.LoadFailure, 160), logPath), true
+	}
+	if n := len(r.Undefined); n > 0 {
+		return fmt.Sprintf("%s first run failed (%d undefined symbols listed); loader output is in %s", id, n, logPath), false
+	}
+	return fmt.Sprintf("%s first run failed; loader output is in %s", id, logPath), false
+}
+
 // androidPakFirstRunReport runs in the launch reaper goroutine after an
-// AndroidPak profile exits: when the run failed, the first-run undefined
-// symbol is read back out of the launch log and named — the toast is the
-// "next shim" answer, the JukaHub log line is where file paths go.
+// AndroidPak profile exits: when the run failed, the runner's report is read
+// back out of the launch log — the toast names what to implement next, the
+// JukaHub log line is where file paths go.
 func androidPakFirstRunReport(id string, exitErr error) {
 	if exitErr == nil {
 		return
 	}
-	symbol := androidPakFirstRunSymbol(id)
 	logPath := filepath.Join(gameProfilesLogsDir(), id+".log")
-	if symbol == "" {
-		log.Printf("[androidpak] %s first run failed; loader output is in %s", id, logPath)
-		return
-	}
-	message := fmt.Sprintf("AndroidPak stopped on undefined symbol: %s — add it to an AndroidRT shim, rebuild, retry (log: %s)", symbol, logPath)
+	message, toast := androidPakRunMessage(id, parseAndroidPakRunReport(androidPakLastRunLog(id)), logPath)
 	log.Printf("[androidpak] %s", message)
-	ShowToast(message, ToastKindError)
+	if toast {
+		ShowToast(message, ToastKindError)
+	}
 }

@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 func withPartyHistoryTempFile(t *testing.T) string {
@@ -224,73 +222,19 @@ func TestPartyHistoryPersistsAndRebuildsRows(t *testing.T) {
 		t.Fatalf("reloaded re-poll duplicated time: %+v", report.People[0])
 	}
 
-	prevHistory := partyUI.history
-	prevOpen := partyUI.open
-	partyUI.history = true
-	partyUI.open = true
-	t.Cleanup(func() {
-		partyUI.history = prevHistory
-		partyUI.open = prevOpen
-	})
-	rows := partyHistoryRows()
-	if len(rows) < 4 {
-		t.Fatalf("history rows = %+v, want leaderboard and friend rows", rows)
-	}
-	var labels []string
-	for _, row := range rows {
-		labels = append(labels, row.label)
-	}
-	joined := strings.Join(labels, "|")
-	for _, want := range []string{"ALL-TIME WATCH LEADERBOARD", "FRIEND HISTORY", "Alice", "Movie Night", "Back to watch party"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("history rows missing %q: %v", want, labels)
+	// The Watch Party screen shows the same report in its history sheet.
+	text := partyHistoryText(partyHistoryReport())
+	for _, want := range []string{"All-time watch leaderboard", "Friend history", "Alice", "Movie Night", "ABCD2"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("history text missing %q:\n%s", want, text)
 		}
-	}
-	if rows[len(rows)-1].kind != partyRowHistoryBack {
-		t.Errorf("last history row = %+v, want Back", rows[len(rows)-1])
 	}
 }
 
-func TestPartyHistoryOverlayRenders(t *testing.T) {
+func TestPartyHistoryTextWhenEmpty(t *testing.T) {
 	withPartyHistoryTempFile(t)
-	snap := partyHistoryTestSnapshot("ABCD2", "Movie Night", "192.168.1.5:8318", "Alice", "Dune",
-		partyLeaderRow{Name: "Alice", WatchSecs: 3600},
-	)
-	partyHistoryObserve(snap, "192.168.1.5:8318 ABCD2")
-
-	cfg := &Config{}
-	f := newProbeFrame(t)
-	if font, _ := getCachedFont(cfg, "small"); font == nil {
-		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
-	}
-	prevW, prevH := screenWidth, screenHeight
-	prevOpen, prevHistory := partyUI.open, partyUI.history
-	screenWidth, screenHeight = probeW, probeH
-	partyUI.open = true
-	partyUI.history = true
-	partyUI.cursor = 0
-	t.Cleanup(func() {
-		screenWidth, screenHeight = prevW, prevH
-		partyUI.open = prevOpen
-		partyUI.history = prevHistory
-		partyRowRects = nil
-		partyPanelRect = sdl.Rect{}
-	})
-
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
-	}
-	defer destroyTestRenderer(renderer)
-	ClearTextCache()
-	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
-	renderer.Clear()
-	partyRender(renderer, cfg)
-
-	if partyPanelRect.W < 400 || partyPanelRect.H < 300 {
-		t.Fatalf("panel rect = %+v, want a readable modal", partyPanelRect)
-	}
-	if len(partyRowRects) < 4 {
-		t.Fatalf("history rows drawn = %d, want several", len(partyRowRects))
+	text := partyHistoryText(partyHistoryReport())
+	if !strings.Contains(text, "No watch time recorded yet") || !strings.Contains(text, "No parties yet") {
+		t.Fatalf("empty history text = %q", text)
 	}
 }

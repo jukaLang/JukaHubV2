@@ -1,0 +1,13 @@
+{
+  "alarms": [
+    {
+      "hour": 10,
+      "minute": 29,
+      "label": "kmk",
+      "enabled": true,
+      "fired_on": "2026-11-05",
+      "rang_on": "2026-11-05",
+      "id": 1
+    }
+  ]
+}

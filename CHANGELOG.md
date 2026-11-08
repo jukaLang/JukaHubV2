@@ -11,7 +11,181 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The handheld's Appearance page has the clock row again.** The desktop
+  config grew a Clock label and the 12-hour toggle, and the TrimUI config did
+  not, so the handheld shipped an Appearance page two rows shorter and no way to
+  switch the clock format ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json)).
+
+- **The gallery dialog uses the screen.** `.gallery-content` asked for 1080px
+  but inherited `.guide-content`'s 620px cap, so every layout stacked in a single
+  column on a desktop and the thumbnails grew taller than the panel. It is
+  1080px now (96vw on a small screen) and the grid lays out three cards per row
+  ([style.css](style.css)).
+
+- **Home's grid matches the cards again.** Left from Packages stepped over the
+  Files card to the Continue hero, and Down from the full-width Media card
+  skipped Files for Packages, so the tile that opens the file browser was the
+  hardest thing to reach. Up/Down/Left/Right now follow the drawn rows, the
+  Continue card's focus ring is four pixels outside a dark hairline so it reads
+  over its own thumbnail, and a test pins the graph to the geometry
+  ([player/homefocus.go](player/homefocus.go),
+  [player/homelayout.go](player/homelayout.go);
+  `player/homefocus_grid_test.go`).
+
+- **B leaves Apps and Favorites.** The launcher grid and the favorites list take
+  the pad while they are focused, and neither answered B, so on a handheld the
+  only way out was a key the pad cannot send. `b` now works on a desktop
+  keyboard too, where the grid has no text field to type into
+  ([player/appgrid.go](player/appgrid.go), [player/favorites.go](player/favorites.go)).
+
+### Changed
+
+- **The goodbye scene's leftovers are gone.** The farewell animation was already
+  replaced by the glass teardown, but the exit request still lived in
+  `goodbye.go` and the README and controls docs still promised a "goodbye
+  screen". The request now sits with the signal guard in
+  [player/exitguard.go](player/exitguard.go), that file is deleted, and every
+  comment and doc describes the teardown card that actually runs.
+
+- **Startup and shutdown are one glass card each.** The boot splash was a PS2
+  starfield that looked like a different app, and its bar filled on the
+  animation's own clock. It is Home's glass sheet now, and the bar is the boot
+  queue: every row is a step that actually ran, with its own result — including a
+  write probe on the card and the helper-tool inventory, whose missing tools
+  start downloading during the splash instead of after the first frame. The card
+  ends as soon as the queue is empty, so a fast boot gets a shorter splash. The
+  farewell animation is gone with it: shutdown draws the teardown while it
+  performs it — children and playback stopped, playtime, favorites, notes and the
+  pending settings flushed, the CPU governor and frequency ceiling put back the
+  way the firmware had them, and the shared cache and texture caches closed
+  ([player/splash.go](player/splash.go), [player/stageui.go](player/stageui.go),
+  [player/bootwork.go](player/bootwork.go), [player/bootchecks.go](player/bootchecks.go),
+  [player/shutdown.go](player/shutdown.go), [player/powerprofile.go](player/powerprofile.go);
+  tests in [player/bootstage_test.go](player/bootstage_test.go),
+  [player/shutdown_test.go](player/shutdown_test.go) and
+  [player/powerprofile_boot_test.go](player/powerprofile_boot_test.go)).
+
+- **Button sounds are a soft thump.** Navigation, activate, back and toggle were
+  flat beeps (880 Hz and up) with a linear envelope, which the handheld speaker
+  rendered as a hard click. They are now short falling-pitch thumps with an
+  exponential decay, so a tap reads as a body knock rather than a beep
+  ([player/sound.go](player/sound.go)).
+
+- **The legacy log is silent unless asked for.** Every colour pushed while a
+  theme applies, and every parsed page, wrote a `[legacy] ... [DEBUG]` line to
+  stderr, where it buried the boot log. Set `JUKAHUB_DEBUG=1` for a support
+  session to get it back ([player/logging.go](player/logging.go)).
+
 ### Added
+
+- **Screens that need the internet say so before the press.** Launched before
+  WiFi is joined, Live TV, Podcasts, Shorts, Tickers, video search and the
+  internet diagnostics used to open and then fail somewhere inside with a raw
+  dial error. Those tiles are now drawn dimmed with an **Offline** tag, the Start
+  menu marks its network scenes the same way, and pressing one explains itself
+  ("Offline — Live TV needs WiFi") instead of navigating. Local apps are
+  untouched — JukaLand still plays, the Browser still shows cached and local
+  pages, and FTP/SSH/companion/netplay stay live because they only need the LAN,
+  not the internet. Separately, resolver and route failures are rewritten to
+  "No internet connection — connect WiFi and try again" in the Browser error
+  card, the JSON browser, the Downloads panel and the network tools, instead of
+  "dial tcp: lookup … no such host"
+  ([player/offlineaware.go](player/offlineaware.go),
+  [player/menutiles.go](player/menutiles.go), [player/startmenu.go](player/startmenu.go),
+  [player/core.go](player/core.go); tests in
+  [player/offlineaware_test.go](player/offlineaware_test.go)).
+
+- **A ringing alarm takes over the screen.** The alarm was a three-second
+  arpeggio and a toast that any open panel or game could paint over, which is
+  not a clock you can sleep through. A due alarm now owns the screen: a red wash
+  blinking over everything, the time it is ringing for, its label and ringtone,
+  and two buttons — **Snooze 9 min** and **Dismiss** — that are the only things
+  the pad, the keyboard and a finger can press while it rings (A/X snooze, B/Esc
+  dismiss, left/right choose, S and D shortcuts, taps on the buttons). The sound
+  is a loop with a louder peak than any UI sound and keeps ringing until one of
+  the buttons is pressed; snooze re-arms the same alarm without touching
+  tomorrow's schedule, and dismiss clears the snooze. Each alarm also picks its
+  own synthesized ringtone (Classic Chime, Brass Bell, Digital Pulse, Sunrise,
+  Loud Buzz, Morning Birds) on a new **Ringtone** row in the editor, previewed as
+  it cycles ([player/alarmring.go](player/alarmring.go),
+  [player/alarm.go](player/alarm.go), [player/sound.go](player/sound.go);
+  tests in [player/alarm_ring_test.go](player/alarm_ring_test.go)).
+
+- **Community theme library.** The theme gallery on Settings → Appearance has a
+  **C** shortcut (**Y** on a gamepad) now: it opens a browser of the community
+  themes published in the generator's gallery index. The index is fetched in the
+  background, cached
+  beside the other app data so the list still browses offline, and **A** installs
+  an entry as `themes/<id>.json` — the same format a hand-made theme uses — then
+  applies it. Bad entries are skipped instead of hiding the library, and an entry
+  whose id matches a built-in palette is refused
+  ([player/themecatalog.go](player/themecatalog.go),
+  [player/themecommunity.go](player/themecommunity.go)).
+
+- **The web gallery reads a shared community index.** `gallery/community.json`
+  now carries community layouts as well as themes, and the builder merges its
+  `layouts` into the bundled ones when the Gallery opens — so publishing a design
+  is a pull request against one JSON file, not an edit to `layouts.js`
+  ([gallery/README.md](gallery/README.md)).
+
+- **Continue now includes podcasts.** Starting an episode puts it on the same
+  timeline as videos and games, so the Continue card answers "what was I in the
+  middle of?" across every media type; opening it returns to the Podcasts player
+  with the saved position. Episodes de-duplicate by audio link and the row is
+  labelled as a Podcast, not a video
+  ([player/favorites.go](player/favorites.go), [player/recent.go](player/recent.go);
+  tests in [player/recent_podcast_test.go](player/recent_podcast_test.go)).
+
+- **Saved playlists for music.** Audio Settings has a **Playlists** row: X names
+  and saves the current queue ("Road Trip", "Relaxing"), left/right picks a
+  saved list and A plays it. Names are case-insensitive, saving the same name
+  replaces the list, and the store is plain JSON next to the other app data with
+  atomic writes and a 40-playlist / 500-track bound
+  ([player/musicplaylists.go](player/musicplaylists.go); tests in
+  [player/musicplaylists_test.go](player/musicplaylists_test.go)).
+
+- **In-game OSD presets.** Settings → Smart Widgets has an **In-game OSD** row
+that cycles *leave as is* (the default), *quiet*, *notifications* and
+*notifications + stats*, writing RetroArch's own display switches — the message
+font, menu widgets, FPS/framecount/memory counters — before a RetroArch launch,
+with the original config kept once as `retroarch.cfg.jukahub-backup`. It never
+touches a hotkey: those are numeric button codes that differ per firmware, so a
+guess would break controls ([player/osdpreset.go](player/osdpreset.go); tests in
+[player/osdpreset_test.go](player/osdpreset_test.go)).
+
+- **Box art finds more of your library.** A cover lookup now also tries the same
+title spelled the other way: accents folded (`Pokémon` → `Pokemon`), Roman
+numerals as numbers and back (`Zelda II` ↔ `Zelda 2`), `&` for `and`, a colon
+where the folder used a dash, and no trailing period — plus a small alias table
+for the names that differ by more than spelling, starting with `Zelda II` →
+`Zelda II - The Adventure of Link`. The exact name is still asked for first, and
+the guesses come after every structural one
+([player/romsetup.go](player/romsetup.go); tests in
+[player/artwork_aliases_test.go](player/artwork_aliases_test.go)).
+
+- **A 12-hour clock, if you want one.** Settings → Appearance has a **12-hour
+  clock** switch: the status cluster, the dock clock, the saver, the clock app
+  and the alarm list then read `3:04 PM` (and `12:05 AM` at midnight) instead of
+  `15:04`, and every clock keeps working as the button it already was — the
+  header still finds the clock and opens the calendar. Unset, everything stays
+  24-hour, so existing configs and screenshots do not change
+  ([player/clockformat.go](player/clockformat.go),
+  [player/config.go](player/config.go); tests in
+  [player/clockformat_test.go](player/clockformat_test.go)).
+
+- **The web builder ships its own fonts.** Inter and the Font Awesome faces the
+  markup uses now live in `fonts/` instead of a CDN, so the builder opens on
+  a handheld's own hotspot and never waits on a third-party request; the shipped
+  policy no longer has to allow those hosts (`index.html`, `_headers`;
+  `tests/web/selfhost.test.mjs`).
+
+- **The design check lints for the handheld panel.** Saving a design that will
+  run at 1280×720 on a five-inch screen now warns about text under 14 px, a
+  control inside the rounded-corner margin the panel clips, and a scene with more
+  than 24 controls that will scroll — alongside the existing contrast and
+  tap-target checks (`script.js`; `tests/web/builder.test.mjs`).
 
 - **The idle screen can take its own backdrop photo away.** The starfield sleep
   screen is the only place the photo is drawn, so it is also where it can be

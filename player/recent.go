@@ -77,6 +77,8 @@ func recentItemIcon(it FavoriteItem) string {
 		return "files"
 	case "game":
 		return "game"
+	case "podcast":
+		return "play"
 	default:
 		return "play"
 	}
@@ -237,9 +239,10 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		// Type tag under label: for games this names the console, which is the
 		// piece of context the title alone does not carry.
 		typeName := map[string]string{
-			"video": "Video",
-			"iptv":  "Channel",
-			"file":  filepath.Base(recentItemLabel(items[i])),
+			"video":   "Video",
+			"iptv":    "Channel",
+			"podcast": "Podcast",
+			"file":    filepath.Base(recentItemLabel(items[i])),
 		}[items[i].Type]
 		if typeName == "" {
 			typeName = "Item"

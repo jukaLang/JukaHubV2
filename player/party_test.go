@@ -16,8 +16,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 func partyTestRoom(t *testing.T) (*partyRoom, string, time.Time) {
@@ -497,54 +495,81 @@ func TestPartyFriendsAreCapped(t *testing.T) {
 	}
 }
 
-func TestPartyOverlayRenders(t *testing.T) {
-	withPartyFriendsTempFile(t)
-	cfg := &Config{}
-	// The probe initialises SDL/TTF; fonts cannot load before it.
-	f := newProbeFrame(t)
-	if font, _ := getCachedFont(cfg, "small"); font == nil {
-		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
+// A bare room code is looked up among the nearby rooms by the screen; the
+// invite parser must not mistake it for a host name. It used to become
+// "http://ABCD2:8318" and fail later with "the invite is missing its code".
+func TestPartyParseInviteBareWords(t *testing.T) {
+	if _, _, err := partyParseInvite("ABCD2"); err == nil || !strings.Contains(err.Error(), "host address") {
+		t.Fatalf("bare code error = %v, want a request for the host address", err)
 	}
-	prevW, prevH := screenWidth, screenHeight
-	prevOpen := partyUI.open
-	screenWidth, screenHeight = probeW, probeH
-	partyUI.open = true
-	t.Cleanup(func() {
-		screenWidth, screenHeight = prevW, prevH
-		partyUI.open = prevOpen
-		partyRowRects = nil
-		partyPanelRect = sdl.Rect{}
-	})
+	if _, _, err := partyParseInvite("192.168.1.5"); err == nil || !strings.Contains(err.Error(), "code") {
+		t.Fatalf("bare host error = %v, want a request for the code", err)
+	}
+}
 
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
+// A slow poll that lands after a newer answer must not roll the room back:
+// the client keeps the higher room version.
+func TestPartyClientKeepsTheNewestSnapshot(t *testing.T) {
+	c := newPartyClient("http://127.0.0.1:1", "ABCD2", "m1")
+	c.store(partySnapshot{Code: "ABCD2", Version: 5, ServerTime: 2000, Current: 1})
+	c.store(partySnapshot{Code: "ABCD2", Version: 4, ServerTime: 3000, Current: 0})
+	snap, _, _ := c.Snapshot()
+	if snap.Version != 5 || snap.Current != 1 {
+		t.Fatalf("an older version replaced the newer one: %+v", snap)
 	}
-	defer destroyTestRenderer(renderer)
-	ClearTextCache()
-	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
-	renderer.Clear()
-	partyRender(renderer, cfg)
+	c.store(partySnapshot{Code: "ABCD2", Version: 5, ServerTime: 1000, Current: 2})
+	if snap, _, _ = c.Snapshot(); snap.Current != 1 {
+		t.Fatalf("an older read of the same version replaced the newer one: %+v", snap)
+	}
+	c.store(partySnapshot{Code: "ABCD2", Version: 6, ServerTime: 4000, Current: 3})
+	if snap, _, _ = c.Snapshot(); snap.Current != 3 {
+		t.Fatalf("a newer version was dropped: %+v", snap)
+	}
+	// A different room (the host restarted) is always taken.
+	c.store(partySnapshot{Code: "WXYZ3", Version: 1})
+	if snap, _, _ = c.Snapshot(); snap.Code != "WXYZ3" {
+		t.Fatalf("a new room's first snapshot was dropped: %+v", snap)
+	}
+	// store must leave the poll guard alone: a button press finishing while a
+	// poll is out used to clear it.
+	c.mu.Lock()
+	c.inFlight = true
+	c.mu.Unlock()
+	c.store(partySnapshot{Code: "WXYZ3", Version: 2})
+	c.mu.Lock()
+	inFlight := c.inFlight
+	c.mu.Unlock()
+	if !inFlight {
+		t.Fatal("store cleared the in-flight poll guard")
+	}
+}
 
-	if partyPanelRect.W < 400 || partyPanelRect.H < 300 {
-		t.Fatalf("panel rect = %+v, want a readable modal", partyPanelRect)
-	}
-	if len(partyRowRects) < 2 {
-		t.Fatalf("rows drawn = %d, want host/join rows", len(partyRowRects))
-	}
-	colored := 0
-	for y := partyPanelRect.Y; y < partyPanelRect.Y+partyPanelRect.H; y += 3 {
-		for x := partyPanelRect.X; x < partyPanelRect.X+partyPanelRect.W; x += 3 {
-			c := f.at(x, y)
-			if c.R != f.bg.R || c.G != f.bg.G || c.B != f.bg.B {
-				colored++
-			}
+// The landing page a phone opens from the invite QR code only names the room
+// for a link that carries its code.
+func TestPartyLandingPage(t *testing.T) {
+	room, _, _ := partyTestRoom(t)
+	srv := newPartyServer(room)
+	ts := httptest.NewServer(srv.handler())
+	defer ts.Close()
+
+	get := func(path string) string {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer resp.Body.Close()
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, resp.StatusCode)
+		}
+		return buf.String()
 	}
-	if colored < 500 {
-		t.Fatalf("panel has only %d coloured pixels", colored)
+	if body := get("/party"); strings.Contains(body, room.Code()) {
+		t.Fatal("the landing page without the code revealed it")
 	}
-	if strings.TrimSpace(partyUI.flash) != "" {
-		t.Errorf("unexpected flash %q", partyUI.flash)
+	body := get("/party?code=" + room.Code())
+	if !strings.Contains(body, room.Code()) || !strings.Contains(body, "Watch Party") {
+		t.Fatalf("the landing page with the code does not show the room:\n%s", body)
 	}
 }

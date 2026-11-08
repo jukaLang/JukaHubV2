@@ -22,6 +22,7 @@ package main
 // per launch and restored once per exit.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -521,6 +522,9 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 		if !last || !switchable {
 			return
 		}
+		// Whatever the restore manages, the launch is over: its crash marker
+		// must not make a later boot "restore" values from before this one.
+		defer bootCPUMarkerClear()
 		restoreFrequencyCeiling(ceiling)
 		// Without a configured battery governor the hub gets back exactly the
 		// governor it ran before the launch. Writing the "battery" pick instead
@@ -569,6 +573,9 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	launchPowerProfile.ceiling = ceiling
 	launchPowerProfile.governors = governors
 	launchPowerProfile.mu.Unlock()
+	// If the hub dies while the game holds the performance profile, the next
+	// start puts these values back before it records the boot settings.
+	bootCPUMarkerWrite(governors, ceiling)
 	if ceilingErr != nil {
 		logPatch("power profile: %v", ceilingErr)
 	} else if ceilingKHz > 0 {
@@ -602,4 +609,224 @@ func powerProfileLine(config *Config) string {
 		return "performance on launch · battery on return"
 	}
 	return line + " · performance on launch"
+}
+
+// bootCPUSettings remembers the governor and frequency ceiling the machine
+// booted with. beginGamePowerProfile puts the firmware back after a game; this
+// is the same promise for the hub's own exit, which also covers a child that
+// died holding a performance profile and a shell that had already raised a
+// governor before the hub was started.
+var bootCPUSettings struct {
+	mu        sync.Mutex
+	captured  bool
+	governors []cpuGovernorSave
+	ceilings  []cpuFrequencySave
+}
+
+// captureBootCPUSettings records the governor of every CPU and each policy's
+// scaling_max_freq. All-or-nothing per file: a value that cannot be read is
+// simply not restored, rather than guessed.
+func captureBootCPUSettings() {
+	bootCPUSettings.mu.Lock()
+	defer bootCPUSettings.mu.Unlock()
+	if bootCPUSettings.captured {
+		return
+	}
+	bootCPUSettings.captured = true
+	// A previous run that died during a game left the performance profile
+	// behind: undo it first, so what is recorded next is the firmware's.
+	bootCPUMarkerRecover()
+
+	paths := cpuGovernorPaths(cpufreqRoot)
+	if len(paths) == 0 {
+		return // a desktop or a CI runner: nothing to restore, nothing to log
+	}
+	bootCPUSettings.governors = readGovernorSaves(paths)
+	for _, dir := range cpufreqDirs(cpufreqRoot) {
+		path := filepath.Join(dir, "scaling_max_freq")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if value := strings.TrimSpace(string(raw)); value != "" {
+			bootCPUSettings.ceilings = append(bootCPUSettings.ceilings, cpuFrequencySave{path: path, value: value})
+		}
+	}
+}
+
+// restoreBootCPUSettings puts the boot governor and ceiling back. It returns the
+// line the teardown card shows and the first refusal, if any. A machine with no
+// cpufreq says so instead of pretending it restored something.
+func restoreBootCPUSettings() (string, error) {
+	bootCPUSettings.mu.Lock()
+	governors := bootCPUSettings.governors
+	ceilings := bootCPUSettings.ceilings
+	bootCPUSettings.mu.Unlock()
+
+	if len(governors) == 0 && len(ceilings) == 0 {
+		return "no cpufreq on this device", nil
+	}
+
+	var first error
+	// Lift the ceiling after the governor, not before: writing a ceiling while
+	// the governor is still performance would be clamped back by the policy.
+	if err := restoreGovernors(governors); err != nil {
+		first = err
+	}
+	for _, save := range ceilings {
+		if save.value == "" {
+			continue
+		}
+		if err := os.WriteFile(save.path, []byte(save.value+"\n"), 0o644); err != nil && first == nil {
+			first = err
+		}
+	}
+	if first != nil {
+		return "", first
+	}
+	// The firmware's values are back, so what a launch recorded to undo is
+	// moot: left behind by a game still holding the profile at exit, the
+	// marker would make the next start "restore" that launch's old values.
+	bootCPUMarkerClear()
+
+	detail := ""
+	if len(governors) > 0 {
+		detail = fmt.Sprintf("%d CPUs on %s", len(governors), governors[0].value)
+	}
+	if len(ceilings) > 0 {
+		if detail != "" {
+			detail += " · "
+		}
+		detail += "ceiling restored"
+	}
+	logPatch("power profile: %s", detail)
+	return detail, nil
+}
+
+// resetBootCPUSettings clears the capture. Tests switch cpufreqRoot between
+// cases; the app never needs to forget what the firmware booted with.
+func resetBootCPUSettings() {
+	bootCPUSettings.mu.Lock()
+	bootCPUSettings.captured = false
+	bootCPUSettings.governors = nil
+	bootCPUSettings.ceilings = nil
+	bootCPUSettings.mu.Unlock()
+}
+
+// ── The launch profile's crash marker ────────────────────────────────────
+//
+// While a game holds the performance profile, the values it replaced are kept
+// in a small marker in the temp directory (RAM on the handheld, so a reboot —
+// which resets the CPU anyway — clears it). A hub that dies mid-game leaves the
+// marker behind, and the next start puts those values back before it records
+// what the firmware "booted with"; without it, that record was the crashed
+// launch's performance governor, restored faithfully on every later exit. The
+// idle screen's own marker (saver_power.go) follows the same rule.
+//
+// The temp directory is shared, so a marker is never trusted blindly: only a
+// scaling_governor or scaling_max_freq file inside cpufreqRoot is written, and
+// only with a governor name or a frequency.
+
+// bootCPUMarkerPath is where the marker lives; a variable for tests.
+var bootCPUMarkerPath = func() string {
+	return filepath.Join(os.TempDir(), "jukahub-launch-cpufreq.json")
+}
+
+// bootCPUMarkerEnabled gates the marker to the real cpufreq tree, so a test
+// pointing cpufreqRoot at a fake one never writes into the shared temp
+// directory unless it asks to.
+var bootCPUMarkerEnabled = func() bool { return cpufreqRoot == "/sys/devices/system/cpu" }
+
+type bootCPUMarkerEntry struct {
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+type bootCPUMarkerFile struct {
+	Governors []bootCPUMarkerEntry `json:"governors"`
+	Ceilings  []bootCPUMarkerEntry `json:"ceilings"`
+}
+
+// bootCPUMarkerWrite records what a launch replaced.
+func bootCPUMarkerWrite(governors []cpuGovernorSave, ceilings []cpuFrequencySave) {
+	if !bootCPUMarkerEnabled() || (len(governors) == 0 && len(ceilings) == 0) {
+		return
+	}
+	var marker bootCPUMarkerFile
+	for _, g := range governors {
+		marker.Governors = append(marker.Governors, bootCPUMarkerEntry{Path: g.path, Value: g.value})
+	}
+	for _, c := range ceilings {
+		marker.Ceilings = append(marker.Ceilings, bootCPUMarkerEntry{Path: c.path, Value: c.value})
+	}
+	data, err := json.Marshal(marker)
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(bootCPUMarkerPath(), data, 0o600); err != nil {
+		logPatch("power profile: could not record the values to restore (%v)", err)
+	}
+}
+
+// bootCPUMarkerClear removes the marker once a launch has given the CPU back.
+func bootCPUMarkerClear() {
+	if !bootCPUMarkerEnabled() {
+		return
+	}
+	if err := os.Remove(bootCPUMarkerPath()); err != nil && !os.IsNotExist(err) {
+		logPatch("power profile: could not remove the crash marker (%v)", err)
+	}
+}
+
+// bootCPUMarkerRecover puts back what a launch that never finished left
+// behind, and removes the marker. It reports how many values it wrote.
+func bootCPUMarkerRecover() int {
+	if !bootCPUMarkerEnabled() {
+		return 0
+	}
+	data, err := os.ReadFile(bootCPUMarkerPath())
+	if err != nil {
+		return 0
+	}
+	defer bootCPUMarkerClear()
+	var marker bootCPUMarkerFile
+	if json.Unmarshal(data, &marker) != nil {
+		return 0
+	}
+	written := 0
+	// Ceiling first, then the governor: the order the launch's own release
+	// puts them back in.
+	for _, c := range marker.Ceilings {
+		if bootCPUMarkerSafe(c, "scaling_max_freq") && os.WriteFile(c.Path, []byte(c.Value+"\n"), 0o644) == nil {
+			written++
+		}
+	}
+	for _, g := range marker.Governors {
+		if bootCPUMarkerSafe(g, "scaling_governor") && writeGovernor(g.Path, g.Value) == nil {
+			written++
+		}
+	}
+	if written > 0 {
+		logPatch("power profile: restored %d CPU setting(s) an interrupted launch left raised", written)
+	}
+	return written
+}
+
+// bootCPUMarkerSafe reports whether a marker entry names the expected cpufreq
+// file inside cpufreqRoot and carries a plausible value for it.
+func bootCPUMarkerSafe(e bootCPUMarkerEntry, file string) bool {
+	if filepath.Base(e.Path) != file || e.Value == "" || len(e.Value) > 32 {
+		return false
+	}
+	rel, err := filepath.Rel(cpufreqRoot, e.Path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return false
+	}
+	for _, r := range e.Value {
+		ok := (r >= '0' && r <= '9') || (file == "scaling_governor" && ((r >= 'a' && r <= 'z') || r == '_' || r == '-'))
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

@@ -48,6 +48,9 @@ type biosDoctorReport struct {
 	Roots   []string
 	Systems []biosSystemStatus
 	Files   []biosFileFingerprint
+	// Xbox is xemu's checklist (emuxbox.go), filled on Windows only: the
+	// handheld cannot run xemu, so it has nothing to check there.
+	Xbox *emuXboxReport
 }
 
 var biosFilenameGroups = []struct {
@@ -183,6 +186,10 @@ func biosScanStart() {
 	biosScan.Unlock()
 	go func() {
 		report := scanBIOSRoots(biosDoctorRoots())
+		if IsWindows() {
+			xbox := emuXboxScan()
+			report.Xbox = &xbox
+		}
 		biosScan.Lock()
 		biosScan.report = &report
 		biosScan.running = false
@@ -196,6 +203,40 @@ func biosScanSnapshot() (*biosDoctorReport, bool) {
 	biosScan.Lock()
 	defer biosScan.Unlock()
 	return biosScan.report, biosScan.running
+}
+
+// biosDoctorXboxLines is the Xbox block of the doctor's page: xemu's checklist
+// with what was found where, and where the missing files go. Nothing on the
+// handheld, which has no Xbox report.
+func biosDoctorXboxLines(xbox *emuXboxReport) []string {
+	if xbox == nil {
+		return nil
+	}
+	status := "Xbox (xemu) · ready"
+	if missing := xbox.missing(); len(missing) > 0 {
+		status = "Xbox (xemu) · missing " + strings.Join(missing, ", ")
+	} else if !xbox.Configured {
+		status = "Xbox (xemu) · files found · apply them from the xemu tile (Y Setup)"
+	}
+	lines := []string{status}
+	for _, f := range xbox.Files {
+		switch {
+		case f.ok():
+			line := "  " + f.Label + "  " + f.Path
+			if f.Note != "" {
+				line += "  (" + f.Note + ")"
+			}
+			lines = append(lines, line)
+		case f.Problem != "":
+			lines = append(lines, "  "+f.Label+"  "+f.Path+"  — "+f.Problem)
+		case f.Required:
+			lines = append(lines, "  "+f.Label+"  missing · "+f.Want)
+		}
+	}
+	if xbox.Folder != "" {
+		lines = append(lines, "  Put the Xbox files in "+xbox.Folder)
+	}
+	return append(lines, "")
 }
 
 func biosDoctorSummary(report biosDoctorReport) string {
@@ -236,6 +277,7 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 		}
 		lines = append(lines, "")
 	}
+	lines = append(lines, biosDoctorXboxLines(report.Xbox)...)
 	if len(report.Files) > 0 {
 		lines = append(lines, "Other files found:")
 		known := make(map[string]bool)

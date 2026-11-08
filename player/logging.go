@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -102,7 +103,15 @@ func LogSceneOp(scene, op string) *slog.Logger {
 }
 
 // Ensure backward compatibility with existing log.Printf calls.
+//
+// The stdlib logger is the app's legacy channel and is silent by default: on a
+// handheld its stderr goes nowhere, and the [legacy] DEBUG lines (one per colour
+// pushed while a theme applies, one per parsed page) buried the boot log that a
+// support session actually needs. JUKAHUB_DEBUG=1 turns it back on.
 func init() {
 	log.SetPrefix("[legacy] ")
 	log.SetFlags(log.Ltime | log.Lshortfile)
+	if os.Getenv("JUKAHUB_DEBUG") == "" {
+		log.SetOutput(io.Discard)
+	}
 }

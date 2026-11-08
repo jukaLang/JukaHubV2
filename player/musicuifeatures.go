@@ -227,7 +227,7 @@ func musicLeavePlayer(config *Config) {
 // ──────────────────────────────────────────────────────────────────────
 
 // musicSetExitTimer arms (or cancels) closing the app after d. Playback stops
-// first so the goodbye animation is not competing with an audio decoder, and
+// first so the teardown is not competing with an audio decoder, and
 // the timer is cancelled by leaving the player? No: it deliberately survives,
 // like the sleep timer, because "close after this album" is the point.
 func musicSetExitTimer(d time.Duration) {

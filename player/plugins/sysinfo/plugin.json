@@ -1,8 +1,14 @@
 {
   "name": "sysinfo",
-  "version": "1.0.0",
+  "title": "System info",
+  "version": "1.1.0",
   "description": "Reports free memory, free disk space and battery level.",
   "author": "JukaHub",
   "entry": "sysinfo.sh",
-  "enabled": true
+  "icon": "cpu",
+  "enabled": true,
+  "actions": [
+    {"id": "status", "label": "Memory and disk"},
+    {"id": "power", "label": "Battery"}
+  ]
 }

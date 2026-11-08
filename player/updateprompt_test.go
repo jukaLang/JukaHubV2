@@ -129,68 +129,34 @@ func TestUpdateBadgeClickStartsInstall(t *testing.T) {
 	}
 }
 
-func TestToolsRowsPatchAndCalculator(t *testing.T) {
+// The Tools hub's Updates tile calls out an available release, and the
+// Calculator tile is there whenever the config has the screen. A screen the
+// config lacks gets no tile at all rather than one that leads nowhere.
+func TestToolsHubUpdatesAndCalculatorTiles(t *testing.T) {
 	withAvailableUpdate(t, "v9.9.9")
-	config := &Config{Scenes: []SceneConfig{
-		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
-	}}
-	rows := toolsRows(config)
-	var patchRow, calcRow *toolsRow
-	for i := range rows {
-		switch rows[i].action {
-		case toolsActionPatch:
-			patchRow = &rows[i]
-		case toolsActionCalculator:
-			calcRow = &rows[i]
+	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Patch"}, {Name: "Calculator"}}}
+	tiles := toolsHubBuildTiles(config, toolsHubNet{ip: "192.168.1.20", online: true}, toolsHubSlowValues{}, "")
+
+	updates := toolsHubIndexOf(tiles, "updates")
+	if updates < 0 {
+		t.Fatalf("no Updates tile in %+v", tiles)
+	}
+	if !strings.HasPrefix(tiles[updates].value, "Update ") || tiles[updates].tone != toolsHubToneWarn {
+		t.Fatalf("Updates tile = %+v, want the available update called out", tiles[updates])
+	}
+	calc := toolsHubIndexOf(tiles, "calculator")
+	if calc < 0 {
+		t.Fatalf("no Calculator tile in %+v", tiles)
+	}
+	if tiles[calc].blocked != "" {
+		t.Fatalf("Calculator tile = %+v, want it usable without a network", tiles[calc])
+	}
+
+	bare := toolsHubBuildTiles(&Config{}, toolsHubNet{}, toolsHubSlowValues{}, "")
+	for _, id := range []string{"updates", "calculator", "terminal", "netspeed"} {
+		if toolsHubIndexOf(bare, id) >= 0 {
+			t.Errorf("a config without the screen still got the %q tile", id)
 		}
-	}
-	if patchRow == nil {
-		t.Fatalf("no Patch row in %+v", rows)
-	}
-	if !strings.HasPrefix(patchRow.value, "Update ") {
-		t.Fatalf("Patch row value = %q, want the available update", patchRow.value)
-	}
-	if calcRow == nil {
-		t.Fatalf("no Calculator row in %+v", rows)
-	}
-	if calcRow.value != "Open" || calcRow.hint != "A Open" {
-		t.Fatalf("Calculator row = %+v", calcRow)
-	}
-}
-
-// Thirty-one tiles across the five sections (sharing, probes, lookups, this
-// device, party, Updates, power tools, toolbox, security, disc helpers,
-// Calculator, Community, Classic Tools) plus the SFTP credentials line must
-// render on a 720p panel: the tile grid scrolls instead of shrinking rows, and
-// the credentials line survives both.
-func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
-	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
-	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start SSH: %v", err)
-	}
-	defer sshSrv.Stop()
-	if err := ftpSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start FTP: %v", err)
-	}
-	defer ftpSrv.Stop()
-
-	config := &Config{Scenes: []SceneConfig{
-		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
-	}}
-	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 32 {
-		t.Fatalf("tile rects = %d, want 32 with Patch and Calculator", len(rects))
-	}
-	layout := toolsPanelMetrics(config, toolsRows(config))
-	if panel.H > probeH-40 {
-		t.Fatalf("panel is %dpx tall with screen %d", panel.H, probeH)
-	}
-	if len(layout.info) == 0 {
-		t.Fatal("dense layout dropped the SFTP credentials")
-	}
-	// The cursor starts at the top, so the first tiles are the ones on screen.
-	if rects[0].W == 0 {
-		t.Fatal("the first tile should be visible at scroll 0")
 	}
 }
 

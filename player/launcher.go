@@ -16,11 +16,17 @@ var tileAnimMap = make(map[int]float64)
 // (the Tools tiles do) must get exactly that glyph: the substring mapping below
 // would otherwise pick a different family for, say, "Disk Space".
 func explicitTileIcon(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	switch key {
 	case "play", "chat", "files", "tv", "box", "mic", "chart", "star", "cloud",
 		"gear", "palette", "chip", "terminal", "game", "resume",
 		"clock", "speed", "disk", "logs", "cache", "update", "network":
-		return strings.ToLower(strings.TrimSpace(name))
+		return key
+	}
+	// Any name of the shared icon set (icondefs.go) is a glyph name too. One
+	// letter is a monogram, never a glyph, even where an alias would match.
+	if len(key) > 1 && iconKnown(key) {
+		return key
 	}
 	return ""
 }
@@ -68,269 +74,20 @@ func tileIconKind(elem Element) string {
 	}
 }
 
-// drawTileIcon renders a monochrome line icon centered in a box of the given
-// size using pure SDL primitives (no external art assets required).
-// bg is the tile surface color used for filled icon backings so the icon reads
-// as a clean line drawing; fg is the icon stroke/highlight color.
+// drawTileIcon renders a tile's glyph from the shared vector icon set
+// (icondefs.go), centred on (cx, cy) in a size×size box, in fg. kind is any
+// icon name or one of the launcher's legacy kinds ("box", "chart", "gear",
+// "chip", "game", "resume", "cache"), which icondefs.go aliases; an unknown
+// kind draws the Apps grid, as it always has. bg used to back the old line
+// drawings; the vector glyphs carry their own translucent body instead.
 func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, fg, bg sdl.Color) {
-	u := size / 12
-	if u < 1 {
-		u = 1
+	if size <= 0 {
+		return
 	}
-	s := size / 3
-
-	switch kind {
-	case "media", "video":
-		kind = "play"
+	if !iconKnown(kind) {
+		kind = "apps"
 	}
-
-	switch kind {
-	case "play":
-		// play triangle inside a subtle circle
-		r := int32(4)
-		fillRoundedRect(renderer, cx-size/2, cy-size/2, size, size, r, bg)
-		strokeRoundedRect(renderer, cx-size/2, cy-size/2, size, size, r, 2, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		a := pt{cx - s/2, cy - s/2 + 2}
-		b := pt{cx - s/2, cy + s/2 - 2}
-		cc := pt{cx + s/2 - 1, cy}
-		renderer.DrawLine(a.x, a.y, b.x, b.y)
-		renderer.DrawLine(b.x, b.y, cc.x, cc.y)
-		renderer.DrawLine(cc.x, cc.y, a.x, a.y)
-	case "chat":
-		bw := size - size/4
-		bh := size - size/4
-		bx := cx - bw/2
-		by := cy - bh/2 + size/10
-		fillRoundedRect(renderer, bx, by, bw, bh, 8, bg)
-		strokeRoundedRect(renderer, bx, by, bw, bh, 8, 2, fg)
-		// tail
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(bx+size/8, by+bh-1, bx+size/8+4, by+bh+size/8)
-		renderer.DrawLine(bx+size/8+4, by+bh+size/8, bx+size/5, by+bh-2)
-		// dots
-		dotR := u
-		fillCircle(renderer, bx+bw/2-4*u, by+bh/2, dotR, fg)
-		fillCircle(renderer, bx+bw/2, by+bh/2, dotR, fg)
-		fillCircle(renderer, bx+bw/2+4*u, by+bh/2, dotR, fg)
-	case "files":
-		// folder outline
-		top := cy - size/3
-		bot := cy + size/3
-		fillRoundedRect(renderer, cx-size/2, top, size, bot-top, 4, bg)
-		strokeRoundedRect(renderer, cx-size/2, top, size, bot-top, 4, 2, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx-size/2+2, top, cx-size/2+size/4, top-4)
-		renderer.DrawLine(cx-size/2+size/4, top-4, cx-size/2+size/2, top-4)
-	case "tv":
-		w := size
-		h := size - size/4
-		x := cx - w/2
-		y := cy - h/2 + size/12
-		fillRoundedRect(renderer, x, y, w, h, 5, bg)
-		strokeRoundedRect(renderer, x, y, w, h, 5, 2, fg)
-		// stand
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx, y+h, cx, y+h+size/6)
-		renderer.DrawLine(cx-size/5, y+h+size/6+2, cx+size/5, y+h+size/6+2)
-		// screen accent
-		strokeRoundedRect(renderer, x+6, y+5, w-12, h-12, 2, 2, fg)
-	case "box":
-		w := size - size/6
-		h := size - size/6
-		x := cx - w/2
-		y := cy - h/2 + size/12
-		fillRoundedRect(renderer, x, y, w, h, 3, bg)
-		strokeRoundedRect(renderer, x, y, w, h, 3, 2, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(x, y+h/3, x+w, y+h/3)
-		renderer.DrawLine(cx, y, cx, y+h/3)
-		// down arrow on the flap
-		renderer.DrawLine(cx, y+h/3+2, cx-u, y+h/3+2+2*u)
-		renderer.DrawLine(cx, y+h/3+2, cx+u, y+h/3+2+2*u)
-	case "mic":
-		// capsule body
-		bw := size / 3
-		bh := size - size/4
-		bx := cx - bw/2
-		by := cy - bh/2 + size/10
-		fillRoundedRect(renderer, bx, by, bw, bh, bw/2, bg)
-		strokeRoundedRect(renderer, bx, by, bw, bh, bw/2, 2, fg)
-		// stand
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx, by+bh, cx, by+bh+size/8)
-		renderer.DrawLine(cx-size/4, by+bh+size/8, cx+size/4, by+bh+size/8)
-	case "chart":
-		// trending line chart
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx-size/2+4, cy+size/3-4, cx-size/8, cy-size/12)
-		renderer.DrawLine(cx-size/8, cy-size/12, cx+size/8, cy+size/6)
-		renderer.DrawLine(cx+size/8, cy+size/6, cx+size/2-4, cy-size/3+4)
-		// arrow head
-		renderer.DrawLine(cx+size/2-4, cy-size/3+4, cx+size/2-size/6, cy-size/3+4)
-		renderer.DrawLine(cx+size/2-4, cy-size/3+4, cx+size/2-4, cy-size/3+size/6)
-	case "star":
-		// 5-point star (outline only, no fill background)
-		cx2, cy2 := float64(cx), float64(cy)
-		outer := float64(size) / 2
-		inner := outer * 0.45
-		var pts []pt
-		for i := 0; i < 10; i++ {
-			r := outer
-			if i%2 == 1 {
-				r = inner
-			}
-			ang := -90.0 + float64(i)*36.0
-			rad := ang * 3.14159265 / 180.0
-			pts = append(pts, pt{x: int32(cx2 + r*cos64(rad)), y: int32(cy2 + r*sin64(rad))})
-		}
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		for i := 0; i < len(pts); i++ {
-			n := (i + 1) % len(pts)
-			renderer.DrawLine(pts[i].x, pts[i].y, pts[n].x, pts[n].y)
-		}
-	case "cloud":
-		// cloud: overlapping circles + base (no fill background)
-		fillCircle(renderer, cx-size/6, cy-size/8, size/7, bg)
-		fillCircle(renderer, cx+size/8, cy-size/6, size/6, bg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		strokeCircle(renderer, cx, cy, size/3, fg)
-	case "palette":
-		// Appearance: two overlapping swatch cards, so it reads as "colours"
-		// rather than as another gear or another picture frame.
-		cw := size * 2 / 3
-		ch := size * 2 / 3
-		fillRoundedRect(renderer, cx-size/2+2, cy-size/3, cw, ch, 4, bg)
-		strokeRoundedRect(renderer, cx-size/2+2, cy-size/3, cw, ch, 4, 2, fg)
-		fillRoundedRect(renderer, cx-cw/2+size/6, cy-ch/2+size/6, cw, ch, 4, bg)
-		strokeRoundedRect(renderer, cx-cw/2+size/6, cy-ch/2+size/6, cw, ch, 4, 2, fg)
-		fillCircle(renderer, cx+cw/2-size/6, cy-ch/2+size/4, max32(2, size/12), fg)
-	case "gear":
-		// gear: circle + spokes (no fill background)
-		// inner circle cutout
-		gr := size / 4
-		fillCircle(renderer, cx, cy, gr/2, bg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		for i := 0; i < 8; i++ {
-			ang := float64(i) * 45.0 * 3.14159265 / 180.0
-			grf := float64(gr)
-			gr2f := float64(gr + size/9)
-			x1 := int32(float64(cx) + grf*cos64(ang))
-			y1 := int32(float64(cy) + grf*sin64(ang))
-			x2 := int32(float64(cx) + gr2f*cos64(ang))
-			y2 := int32(float64(cy) + gr2f*sin64(ang))
-			renderer.DrawLine(x1, y1, x2, y2)
-		}
-	case "chip":
-		sq := size - size/3
-		x := cx - sq/2
-		y := cy - sq/2
-		fillRoundedRect(renderer, x, y, sq, sq, 4, bg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: sq, H: sq})
-		// pins
-		pin := size / 8
-		for i := 0; i < 3; i++ {
-			py := y + sq/4 + int32(i)*sq/4
-			renderer.DrawLine(x-pin/2, py, x, py)
-			renderer.DrawLine(x+sq, py, x+sq+pin/2, py)
-		}
-		renderer.DrawRect(&sdl.Rect{X: x + 4, Y: y + 4, W: sq - 8, H: sq - 8})
-	case "terminal":
-		// command prompt box with >_
-		bw := size - size/6
-		bh := size - size/6
-		bx := cx - bw/2
-		by := cy - bh/2
-		fillRoundedRect(renderer, bx, by, bw, bh, 4, bg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: bw, H: bh})
-		renderer.DrawLine(bx+size/6, by+bh/2, bx+size/3, by+bh/2)
-		renderer.DrawLine(bx+size/3, by+bh/2, bx+size/3+size/8, by+bh/2-size/8)
-		renderer.DrawLine(bx+size/2, by+bh/2, bx+size/2+size/6, by+bh/2)
-	case "game":
-		// gamepad silhouette
-		w := size
-		h := size - size/3
-		x := cx - w/2
-		y := cy - h/2 + size/8
-		fillRoundedRect(renderer, x, y, w, h, h/2, bg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
-		fillCircle(renderer, cx-w/4, cy+size/10, u, fg)
-		fillCircle(renderer, cx+w/4, cy+size/10, u, fg)
-	case "resume":
-		// play in circle (outline only)
-		fillCircle(renderer, cx, cy, size/2, bg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		a := pt{cx - size/8, cy - size/6}
-		b := pt{cx - size/8, cy + size/6}
-		cc := pt{cx + size/5, cy}
-		fillTriangleFilled(renderer, a, b, cc, fg)
-	case "clock":
-		// Schedule: a ring with two hands.
-		strokeCircle(renderer, cx, cy, size*9/20, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx, cy, cx, cy-size*7/20)
-		renderer.DrawLine(cx, cy, cx+size*4/20, cy+size/20)
-	case "speed":
-		// Bandwidth: a gauge half-ring with a needle.
-		arc(renderer, cx, cy+size/6, size*9/20, 200, 140, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx, cy+size/6, cx+size/5, cy-size/8)
-		fillCircle(renderer, cx, cy+size/6, max32(2, size/20), fg)
-	case "disk":
-		// Storage: a drive body with a divider and an activity dot, so it reads
-		// as a disk and not as another list.
-		body := sdl.Rect{X: cx - size/2 + 3, Y: cy - size/2 + 3, W: size - 6, H: size - 6}
-		strokeRoundedRect(renderer, body.X, body.Y, body.W, body.H, 4, 2, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(body.X+2, cy-size/8, body.X+body.W-2, cy-size/8)
-		fillCircle(renderer, body.X+body.W/4, cy+size/8, max32(2, size/14), fg)
-	case "logs":
-		// Logs: a page with ruled lines.
-		strokeRoundedRect(renderer, cx-size/3, cy-size/2+2, size*2/3, size-4, 3, 2, fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		for i := int32(0); i < 3; i++ {
-			y := cy - size/5 + i*size/5
-			renderer.DrawLine(cx-size/5, y, cx+size/5, y)
-		}
-	case "cache":
-		// Cache: an open bin with a lid, the shape people read as "empty it".
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx-size/3, cy-size/4, cx+size/3, cy-size/4)
-		renderer.DrawLine(cx-size/8, cy-size/2+2, cx-size/8, cy-size/4)
-		renderer.DrawLine(cx+size/8, cy-size/2+2, cx+size/8, cy-size/4)
-		strokeRoundedRect(renderer, cx-size/4, cy-size/4, size/2, size*3/5, 3, 2, fg)
-	case "update":
-		// Update: an arrow dropping onto a shelf.
-		fillTriangleFilled(renderer,
-			pt{x: cx - size/5, y: cy - size/4},
-			pt{x: cx + size/5, y: cy - size/4},
-			pt{x: cx, y: cy + size/12}, fg)
-		fillRoundedRect(renderer, cx-2, cy-size/2+2, 4, size/4, 2, fg)
-		fillRoundedRect(renderer, cx-size/3, cy+size/3, size*2/3, max32(2, size/16), 1, fg)
-	case "network":
-		// Transfer: the device linked to two peers.
-		fillCircle(renderer, cx, cy, max32(3, size/8), fg)
-		fillCircle(renderer, cx-size/3, cy-size/4, max32(2, size/12), fg)
-		fillCircle(renderer, cx+size/3, cy+size/4, max32(2, size/12), fg)
-		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-		renderer.DrawLine(cx-size/8, cy-size/12, cx-size/3+size/12, cy-size/4+size/12)
-		renderer.DrawLine(cx+size/8, cy+size/12, cx+size/3-size/12, cy+size/4-size/12)
-	default:
-		// app grid
-		gap := size / 4
-		for i := int32(0); i < 2; i++ {
-			for j := int32(0); j < 2; j++ {
-				gx := cx - gap - 3 + i*(gap+6)
-				gy := cy - gap - 3 + j*(gap+6)
-				fillRoundedRect(renderer, gx, gy, gap, gap, 3, bg)
-				renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
-				renderer.DrawRect(&sdl.Rect{X: gx, Y: gy, W: gap, H: gap})
-			}
-		}
-	}
+	iconDraw(renderer, kind, sdl.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size}, fg)
 }
 
 func cos64(a float64) float64 { return math.Cos(a) }

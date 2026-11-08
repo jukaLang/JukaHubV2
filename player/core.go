@@ -212,16 +212,6 @@ var (
 	touchPinchDist   float64
 	touchPinchActive bool
 
-	// JukaLand gamepad state
-	jukalandMoveX       float64
-	jukalandMoveY       float64
-	jukalandBtnBreak    bool
-	jukalandBtnPlace    bool
-	jukalandBtnJump     bool
-	jukalandBtnInteract bool
-	jukalandBtnCraft    bool
-	jukalandBtnExit     bool
-
 	// Unit converter state
 	unitCategory    string = "length"
 	unitFrom        string = "m"
@@ -737,9 +727,6 @@ func finalizeConfig(config *Config) {
 	// a user file that updates keep, so this is the only way the new Home
 	// reaches a device that already had one (home_migrate.go).
 	migrateLegacyHomeLayout(config)
-	// Make the network/FTP tools reachable from the classic Tools (Misc)
-	// screen without editing configs on disk.
-	ensureToolsMenuEntry(config)
 	// Give the Hardware screen its interactive process list entry point.
 	ensureHardwareProcessEntry(config)
 	// And the Wi-Fi picker, beside it on the Hardware action row.
@@ -784,12 +771,14 @@ func boolString(b bool) string {
 var fontCache = make(map[string]*ttf.Font)
 
 func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
-	// Resolve the path and size for this logical font name.
-	fontPath := "Inter-Regular.ttf"
+	// Resolve the path and size for this logical font name. A role may name a
+	// file, but only an Inter one is honoured (homeUIFontPath): the UI is drawn
+	// in the bundled Inter everywhere.
+	fontPath := homeUIFontFile
 	size := 24
 	for k, p := range config.Variables.Fonts {
 		if strings.EqualFold(k, fontName) {
-			fontPath = p
+			fontPath = homeUIFontPath(p)
 			break
 		}
 	}
@@ -818,10 +807,10 @@ func getFontSized(config *Config, fontName string, size int) *ttf.Font {
 // skips the accessibility multiplier because callers use it to step through
 // sizes themselves; loadCachedFont still shares the cache and fallback chain.
 func loadRoleFont(config *Config, fontName string, size int) *ttf.Font {
-	fontPath := "Inter-Regular.ttf"
+	fontPath := homeUIFontFile
 	for k, p := range config.Variables.Fonts {
 		if strings.EqualFold(k, fontName) {
-			fontPath = p
+			fontPath = homeUIFontPath(p)
 			break
 		}
 	}
@@ -920,6 +909,10 @@ func resetButtonFitCache() {
 // loadCachedFont opens path at size (already accessibility-scaled) and caches it
 // by the pair, so the same face at different sizes is cached separately.
 func loadCachedFont(fontPath string, size int) *ttf.Font {
+	// Inter is the only UI face: a path naming any other font is read as the
+	// bundled Inter before it reaches the cache, so the cache key, the file
+	// opened and the cmap registered below all agree.
+	fontPath = homeUIFontPath(fontPath)
 	key := fontPath + "\n" + strconv.Itoa(size)
 	if font, ok := fontCache[key]; ok {
 		return font
@@ -927,16 +920,13 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 
 	opened := fontPath
 	font, err := ttf.OpenFont(resolvePath(fontPath), size)
-	if err != nil {
-		// Fall back to a chain of likely-present fonts so text always renders.
-		for _, candidate := range []string{"Inter-Regular.ttf", "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "arial.ttf", "Roboto-Black.ttf"} {
-			if candidate == "" || candidate == fontPath {
-				continue
-			}
-			if f, e2 := ttf.OpenFont(resolvePath(candidate), size); e2 == nil {
-				font, err, opened = f, nil, candidate
-				break
-			}
+	if err != nil && fontPath != homeUIFontFile {
+		// A missing Inter weight falls back to the bundled regular cut. There
+		// is deliberately no chain past it: DejaVu, Arial and Roboto are not
+		// shipped, and borrowing a system face made every device draw a
+		// different UI.
+		if f, e2 := ttf.OpenFont(resolvePath(homeUIFontFile), size); e2 == nil {
+			font, err, opened = f, nil, homeUIFontFile
 		}
 	}
 	if err != nil {
@@ -2687,6 +2677,12 @@ func planMediaSearchTrigger(config *Config, trigger, target, value string) (medi
 }
 
 func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
+	// The Media screen runs its own searches (media_hub.go): offline it looks
+	// through the downloads instead of dialling, and online it asks for a full
+	// grid page.
+	if mediaHubInterceptSearch(config, trigger) {
+		return true
+	}
 	plan, handled := planMediaSearchTrigger(config, trigger, target, value)
 	if !handled {
 		return false
@@ -3870,6 +3866,10 @@ func sceneWithVideoElement(config *Config) int {
 // audio only, which looked like Continue doing nothing after backing out of a
 // video. It reports whether a scene change was started.
 func ensureVideoScene(config *Config) bool {
+	// Every Play routes through here, so this is where the screen a video was
+	// started from is recorded (media_hub.go): Back from a file opened in Files
+	// returns to Files, Back from Media's own player stays in Media.
+	mediaNotePlayOrigin(config)
 	idx := sceneWithVideoElement(config)
 	if idx < 0 || idx == currentSceneIndex {
 		return false
@@ -4253,6 +4253,12 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 				if e.Type != sdl.KEYDOWN {
 					continue
 				}
+				// Caret keys, Delete, Ctrl+A/C/X/V/Z and an open accent popup
+				// (vkedit.go), the same as in the main loop.
+				if vkHandlePhysicalKey(e, config) {
+					exitInput = !virtualKeyboardActive
+					continue
+				}
 				switch e.Keysym.Sym {
 				case sdl.K_ESCAPE:
 					vkCloseKeyboard()
@@ -4302,21 +4308,10 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 				}
 			case *sdl.MouseButtonEvent:
 				if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
+					// The keyboard routes the click (tools, strip, field, keys,
+					// or the dimmed content behind it, which closes it).
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
-					if vkCloseHit(mx, my) {
-						vkCloseKeyboard()
-						exitInput = true
-						break
-					}
-					if row, col, ok := vkHitTest(mx, my); ok {
-						if vkHandleKeyClick(row, col, config) {
-							exitInput = true
-						}
-						break
-					}
-					// Clicking the dimmed content behind the panel closes it.
-					if vkOutsidePanel(mx, my) {
-						vkCloseKeyboard()
+					if vkHandlePointerDown(mx, my, vkHoldMouse, config) {
 						exitInput = true
 					}
 				}
@@ -4499,18 +4494,37 @@ func handleMultiGesture(e *sdl.MultiGestureEvent, config *Config) {
 }
 
 func handleSwipe(direction string, config *Config) {
+	// JukaLand (its screen, or played on the browser's offline page) owns the
+	// touch screen: a drag across the world is not "change the scene".
+	if jlandKeysCaptured(config) {
+		return
+	}
 	if imageViewerPath != "" {
+		// A swipe pans a zoomed picture and browses an unzoomed one
+		// (imageviewer.go); the picture follows the finger.
 		switch direction {
-		case "up", "down":
-			imageViewerZoom += 0.2
-			if imageViewerZoom > 5.0 {
-				imageViewerZoom = 5.0
-			}
+		case "up":
+			imgvPanBy(0, -screenHeight/5)
+		case "down":
+			imgvPanBy(0, screenHeight/5)
 		case "left":
-			imageViewerPanX += 40
+			if imgvZoomed() {
+				imgvPanBy(-screenWidth/5, 0)
+			} else {
+				imageViewerStep(1)
+			}
 		case "right":
-			imageViewerPanX -= 40
+			if imgvZoomed() {
+				imgvPanBy(screenWidth/5, 0)
+			} else {
+				imageViewerStep(-1)
+			}
 		}
+		return
+	}
+	// The Media screen uses swipes for its own tabs and lists (media_hub_input.go)
+	// instead of letting them change the whole scene.
+	if mediaHubSwipe(direction, config) {
 		return
 	}
 	switch direction {
@@ -4545,16 +4559,11 @@ func handlePinch(direction string, config *Config) {
 	if imageViewerPath == "" {
 		return
 	}
+	// Fingers spreading zoom in around the screen centre (imageviewer.go).
 	if direction == "out" {
-		imageViewerZoom += 0.1
-		if imageViewerZoom > 5.0 {
-			imageViewerZoom = 5.0
-		}
+		imgvZoomBy(1, screenWidth/2, screenHeight/2)
 	} else {
-		imageViewerZoom -= 0.1
-		if imageViewerZoom < 0.5 {
-			imageViewerZoom = 0.5
-		}
+		imgvZoomBy(-1, screenWidth/2, screenHeight/2)
 	}
 }
 
@@ -4628,6 +4637,7 @@ func applyVariableOverrides(config *Config) {
 	setStr("powerMode", &config.Variables.PowerMode)
 	setBool("dynamicBg", &config.Variables.DynamicBg)
 	setBool("socialNotifs", &config.Variables.SocialNotifs)
+	setBool("clock12", &config.Variables.Clock12)
 	setStr("weatherUnit", &config.Variables.WeatherUnit)
 	setStr("tspUsername", &config.Variables.TSPUsername)
 	setStr("playbackResolution", &config.Variables.PlaybackResolution)
@@ -4705,6 +4715,11 @@ func inputVariableValue(config *Config, variable string) string {
 			return "true"
 		}
 		return "false"
+	case "clock12":
+		if config.Variables.Clock12 {
+			return "true"
+		}
+		return "false"
 	case "buttonColor", "labelColor", "inputColor":
 		return rgbHex(effectiveThemeColor(config, v))
 	}
@@ -4717,6 +4732,12 @@ func inputVariableValue(config *Config, variable string) string {
 func renderInputField(renderer *sdl.Renderer, config *Config, element Element, sceneIdx, elemIdx int) {
 	width, height := resolveElementDimensions(element, 200, 40)
 	isActive := (sceneIdx == activeSceneIndex && elemIdx == activeElementIndex)
+	// A field the D-pad rests on (but is not typing into) wore no mark at all:
+	// only an active keyboard drew the ring, so stepping onto a colour field in
+	// Settings → Appearance looked like the focus had vanished. It now takes
+	// Home's 3px ring on its own edge, the way a focused list row does.
+	isFocused := !isActive && sceneIdx == currentSceneIndex && elemIdx == selectedButtonIndex &&
+		chromeTier(focusEngine.ElementIndex()) == 0
 
 	// Home's glass, a step recessed: the field is a darker pane than a button
 	// (the author's or the theme's input colour kept as a wash under it), with
@@ -4735,9 +4756,12 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 		}
 	}
 	fillRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, glassA(10))
-	if isActive {
+	switch {
+	case isActive:
 		strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, 2, glassAccent())
-	} else {
+	case isFocused:
+		drawGlassFocusRing(renderer, field, r)
+	default:
 		strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, 1, glassA(26))
 	}
 
@@ -4766,8 +4790,11 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 		sx := element.X + 10
 		sy := element.Y + (height-size)/2
 		radius := size / 4
-		// A light outer ring keeps dark picks visible on the dark panel.
-		strokeRoundedRect(renderer, sx-1, sy-1, size+2, size+2, radius+1, 1, sdl.Color{R: 255, G: 255, B: 255, A: 46})
+		// Two hairlines, dark outside and light inside, so the chip's edge reads
+		// on a light theme as well as a dark one whatever colour it holds: the
+		// single light ring vanished on the light presets.
+		strokeRoundedRect(renderer, sx-2, sy-2, size+4, size+4, radius+2, 1, sdl.Color{R: 0, G: 0, B: 0, A: 110})
+		strokeRoundedRect(renderer, sx-1, sy-1, size+2, size+2, radius+1, 1, sdl.Color{R: 255, G: 255, B: 255, A: 120})
 		if ok {
 			fillRoundedRect(renderer, sx, sy, size, size, radius, col)
 			fillRoundedRect(renderer, sx, sy, size, size/2, radius, sdl.Color{R: 255, G: 255, B: 255, A: 18})
@@ -5051,7 +5078,7 @@ func themeGalleryTabWidth(i int) int32 {
 	// when nothing has been loaded yet.
 	var font *ttf.Font
 	if appConfig != nil {
-		font, _ = getCachedFont(appConfig, "small")
+		font = themeGalleryTabFont(appConfig)
 	}
 	if font == nil {
 		return int32(24 + 9*len(themeGalleryTabs[i].Label))
@@ -5242,15 +5269,18 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		// Accent strip along the preview's bottom edge.
 		fillRoundedRect(renderer, prevX, prevY+prevH-7, prevW, 7, 3, hexRGBA(p.Info))
 
-		// Current badge on the preview corner.
+		// Current badge on the preview corner, sized from its word (setwidgets.go):
+		// a fixed 74x20 box under the theme's "small" font — 24px when a config
+		// does not set it — was smaller than the label it carried.
 		if name == current {
-			badgeW := int32(74)
-			badgeH := int32(20)
-			badgeX := prevX + prevW - badgeW - 8
-			badgeY := prevY + 6
-			fillRoundedRect(renderer, badgeX, badgeY, badgeW, badgeH, badgeH/2, hexRGBA(p.Info))
-			drawText(renderer, small, "Current", badgeX+badgeW/2, badgeY+(badgeH-int32(small.Height()))/2,
-				contrastText(hexRGBA(p.Info)), textAlignCenter)
+			badgeFont := getFontSized(config, "small", 14)
+			if badgeFont == nil {
+				badgeFont = small
+			}
+			badgeW, _ := setPillSize(badgeFont, "Current")
+			badgeFill := hexRGBA(p.Info)
+			badgeFill.A = 255
+			setPillDraw(renderer, badgeFont, "Current", prevX+prevW-badgeW-8, prevY+6, badgeFill, contrastText(badgeFill))
 		}
 
 		// Theme name below the preview.
@@ -5293,7 +5323,7 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 // one filled with the accent. Colour and "Total conversion" are different
 // promises, so they are different tabs rather than one long list.
 func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Element) {
-	font, _ := getCachedFont(config, "small")
+	font := themeGalleryTabFont(config)
 	if font == nil {
 		return
 	}
@@ -5314,6 +5344,17 @@ func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Elem
 		tw, th, _ := font.SizeUTF8(tab.Label)
 		drawText(renderer, font, tab.Label, rect.X+(rect.W-int32(tw))/2,
 			rect.Y+(rect.H-int32(th))/2, ink, textAlignLeft)
+	}
+	// The community library is the one thing on this screen that is not a
+	// preset, so its key is named on the band rather than left to the controls
+	// legend. It is dropped on a narrow element instead of crowding the tabs.
+	last := themeGalleryTabRect(element, len(themeGalleryTabs)-1)
+	hint := "C/Y · community themes"
+	hintW, hintH, _ := font.SizeUTF8(hint)
+	hintX := element.X + getElementWidth(element, 1160) - int32(hintW) - 4
+	if hintX > last.X+last.W+16 {
+		drawText(renderer, font, hint, hintX, last.Y+(last.H-int32(hintH))/2,
+			ColorTextSecondary(), textAlignLeft)
 	}
 }
 
@@ -6161,6 +6202,13 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	switch element.Trigger {
 	case "change_scene":
 		target := element.TriggerTarget
+		// Every entry point (home card, menu tile, in-scene button) ends here,
+		// so this is the one place an offline screen is refused. The tile is
+		// already dimmed; the press has to say why it does nothing.
+		if reason, blocked := offlineSceneBlock(target); blocked {
+			showToast(reason, ToastWarn())
+			return
+		}
 		for i, scene := range config.Scenes {
 			if scene.Name == target {
 				changeSceneTo(config, i)
@@ -6222,9 +6270,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			log.Printf("play_focused: no focused video to play")
 		}
 	case "exit":
-		// Play the goodbye sequence and quit gracefully via the main loop,
-		// which persists favorites and runs the deferred cleanup on the way
-		// out (a hard os.Exit would skip that cleanup).
+		// Quit gracefully via the main loop, which persists favorites, runs the
+		// glass teardown and the deferred cleanup on the way out (a hard
+		// os.Exit would skip that cleanup).
 		requestAppExit()
 	case "external_app":
 		if element.ExternalAppPath == "" {
@@ -6408,16 +6456,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			items[favoritesFocusIndex].Play(config)
 		}
 	case "fav_remove":
-		items := getCurrentFavorites()
-		if favoritesFocusIndex >= 0 && favoritesFocusIndex < len(items) {
-			removeFavoriteAt(favoritesCurrentTab, favoritesFocusIndex)
-			saveFavorites()
-			items2 := getCurrentFavorites()
-			if favoritesFocusIndex >= len(items2) && favoritesFocusIndex > 0 {
-				favoritesFocusIndex--
-			}
-			showToast("Removed from favorites", ToastError())
-		}
+		// The same removal as X on a row (favorites.go): an Undo bar, and the
+		// offer to delete the downloaded file when the video has one.
+		favoritesRemoveFocused(config)
 	case "canvas_run":
 		canvasCode = inputTextBuffer
 		if canvasSurface != nil {
@@ -6473,19 +6514,14 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			inputTextBuffer = ""
 		}
 	case "discord_connect":
-		go func() {
-			if err := discordConnect(); err != nil {
-				discordStatus = "Discord: " + err.Error()
-			} else {
-				discordStatus = "Discord: connected"
-			}
-			saveUserConfig(userConfigFromVariables(config))
-		}()
+		// The chat's sender loop owns the connection (chatsync.go): this hands
+		// it fresh credentials and asks it to connect now, past any backoff.
+		saveUserConfig(userConfigFromVariables(config))
+		chatRefreshCreds(config, time.Now(), true)
+		chatDiscordRetryNow()
 	case "chat_clear":
-		chatMutex.Lock()
-		chatMessages = []ChatMessage{}
-		chatMutex.Unlock()
-		saveChatMessages()
+		// Clears the chat tab on screen, as the button beside it promises.
+		chatClearTab(chatActiveTabID())
 	case "groq_chat":
 		if inputTextBuffer != "" {
 			sendGroqChatMessage(inputTextBuffer)
@@ -6528,14 +6564,16 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			} else if ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".js" || ext == ".html" {
 				// The row comes from a dynamic list, not from the filesystem:
 				// resolve it under the explorer root before reading.
+				// A file that cannot be read is this device's problem, so it is
+				// a toast here rather than a "System" line in the shared chat.
 				resolved, resolveErr := resolveExplorerEntry(config, entry.Path)
 				if resolveErr != nil {
-					sendChatMessage("System", "Cannot read file: "+resolveErr.Error())
+					showToast("Can't read "+entry.Name, ToastWarn())
 					break
 				}
 				data, err := os.ReadFile(resolved)
 				if err != nil {
-					sendChatMessage("System", "Failed to read file: "+err.Error())
+					showToast("Can't read "+entry.Name, ToastWarn())
 				} else {
 					content := truncateRunesSuffix(string(data), 500, "...")
 					sendChatMessage(chatDisplayName(), content)
@@ -6598,6 +6636,12 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			msg += " · " + strconv.Itoa(pruned) + " removed"
 		}
 		showToast(msg, ToastInfo())
+	case "community_themes":
+		// Browse the community theme repository from a config button.
+		openThemeCommunityPanel(config)
+	case "cycle_osd_preset":
+		// The emulator's own OSD: display switches only, never a hotkey bind.
+		showToast("In-game OSD: "+cycleOSDPreset(config), ToastInfo())
 	case "forget_saved_cookies":
 		// Beside the retention row: the age policy says how long a session is
 		// kept, and this drops the one on the card now. Same two-press rule as
@@ -6618,8 +6662,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "plugin_action":
 		if element.TriggerTarget != "" {
-			result := ExecutePluginAction(element.TriggerTarget, element.TriggerValue, snapshotVars(config))
-			showToast(result, ToastInfo())
+			// Off the event thread, like the Plugins page (plugcatalog.go): a
+			// slow script no longer freezes the screen.
+			plugRunTrigger(element.TriggerTarget, element.TriggerValue, snapshotVars(config))
 		}
 	case "plugin_refresh":
 		LoadPlugins(config)
@@ -6636,7 +6681,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		config.Variables.Custom["plugin_list"] = strings.Join(list, "\n")
 	case "packages_refresh":
-		runSceneTask(func(ctx context.Context) { fetchPackagesContext(ctx, config) })
+		// Older configs still bind a Refresh button to this; the store
+		// refreshes itself on arrival and on X now (pkgstate.go).
+		pkgRequestRefresh(config)
 	case "browser_back":
 		browserBack(config)
 	case "browser_forward":
@@ -6675,6 +6722,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if elem, ok := findBrowserElement(config); ok {
 			openBrowserFind(renderer, config, elem)
 		}
+	case "browser_site_info":
+		// The page's connection, certificate and security headers (the
+		// padlock, `i` and R3 open the same sheet).
+		brwInfoOpenFor(config)
 	case "browser_search":
 		// The Search chip and the Y button both open the query keyboard.
 		if elem, ok := findBrowserElement(config); ok {
@@ -6806,13 +6857,13 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			showToast("Cache cleared", ToastInfo())
 		}
 	case "tools_open":
-		openToolsPanel()
+		toolsHubOpen(config)
 	case "companion_open":
 		toggleCompanionOverlay()
 	case "processes_open":
 		openProcessPanel()
 	case "wifi_open":
-		openWiFiPanel()
+		wifiScrOpen(config)
 	case "ip_open":
 		openIPStreamPanel()
 	case "ip_add":
@@ -7017,6 +7068,9 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	// and a back chirp for a scene the user did not press B on would be a lie.
 	browserCookiePageForget()
 	browserBookmarkPickerForget()
+	// The browser's site-info sheet closes too, JukaLand played on its offline
+	// page stops, and a JukaLand world is saved however its screen was left.
+	brwSceneDeparture(config)
 	feSheetForget()
 	// The editor's card names one file on the screen being left, and its keys
 	// would otherwise keep answering on the next scene.
@@ -7064,9 +7118,6 @@ func completeSceneTransition(config *Config) {
 
 	focusedResultIndex = -1
 	resetResultActions()
-	// Package selection and its row menu belong to the scene being left.
-	closePackageActions()
-	packageRepoFocused = false
 	focusedFileIndex = 0
 	scrollY = 0
 	textBrowserScrollY = 0
@@ -7081,14 +7132,10 @@ func completeSceneTransition(config *Config) {
 		browserEnsureHome(config)
 	}
 
-	// The Hardware screen shows a live snapshot: load it synchronously on
-	// entry so the very first frame already has content. getHardwareInfo only
-	// reads /proc and gopsutil snapshots, near-instant even on the handheld;
-	// the earlier goroutine made the screen draw blank until the publish won
-	// the race with the first render.
-	if scene.Name == "Hardware" {
-		publishCustom("hw_text", getHardwareInfo())
-	}
+	// The Hardware screen is a live monitor now (systool_hw.go): its sampler
+	// starts below with the other tool screens, off the render thread. The
+	// old synchronous getHardwareInfo here enumerated every process on the
+	// event thread at each entry.
 	// The disk pie's poller skips hidden screens, so the chart takes a fresh
 	// reading on the way in instead of opening with a reading from whenever the
 	// scene was last up.
@@ -7096,6 +7143,9 @@ func completeSceneTransition(config *Config) {
 		refreshDiskPie()
 	}
 	resetNetSpeedOnSceneEntry(config, scene)
+	// The Terminal, Scheduled tasks and the system tool screens start their
+	// own work as they open, inside this visit's task scope (systool.go).
+	sysToolSceneEnter(config, scene.Name)
 	// Settings → General's Video snaps row reports how many of the card's games
 	// have a clip. The library scan is started here, on the scene's goroutine,
 	// so the row can show a count without the page ever walking the card.
@@ -7108,7 +7158,14 @@ func completeSceneTransition(config *Config) {
 		refreshCookieRetentionRow(config)
 	}
 
-	if sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+	// The Media screen loads its own rows on the way in, and dials nothing at
+	// all while offline (media_hub.go); the generic results fetch below would
+	// start a Trending search into the hidden results element.
+	mediaOwned := mediaHubOwnsScene(scene.Name)
+	if mediaOwned {
+		mediaHubEnter(config)
+	}
+	if !mediaOwned && sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
 		queryVar := ""
 		for _, e := range config.Scenes[currentSceneIndex].Elements {
 			if e.Type == "input" {
@@ -7130,7 +7187,9 @@ func completeSceneTransition(config *Config) {
 	if dl, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok {
 		switch dl.Variable {
 		case "fe_entries":
-			feListDirectory(config)
+			// Lists the folder and puts the cursor back on the row it was left
+			// on (the reset above is for every other list).
+			filesSceneEntered(config)
 			feFocusList(config)
 		case "iptv_entries":
 			loadIPTV(config)
@@ -7176,6 +7235,10 @@ func completeSceneTransition(config *Config) {
 	// opens the file, then navigates here.
 	if config.Scenes[currentSceneIndex].Name == "PDFReader" {
 		pdfSceneEnter()
+	} else {
+		// Any other scene: the reader's page tiles (megabytes at a high
+		// zoom) are released instead of waiting for the next document.
+		pdfvSceneLeft()
 	}
 	// Prepare the audio player when entering. An active playlist is kept, so
 	// coming back from Files does not restart the song.
@@ -7186,6 +7249,9 @@ func completeSceneTransition(config *Config) {
 	if config.Scenes[currentSceneIndex].Name == "Notes" {
 		notesInit()
 	}
+	// The Tools hub, Network tools and Wi-Fi pages load what they show as
+	// they open (values, the probes that need no input, the Wi-Fi scan).
+	toolsScenesEnter(config, config.Scenes[currentSceneIndex].Name)
 	// The Benchmark screen measures as it opens.
 	benchmarkAutoStartOnOpen(config, config.Scenes[currentSceneIndex])
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
@@ -7198,33 +7264,12 @@ func completeSceneTransition(config *Config) {
 				publishCustom("weather_screen_text", weatherScreenText(config))
 			})
 		}
-		if e.Type == "chat" {
-			loadChatMessages()
-			go func() {
-				if err := discordConnect(); err != nil {
-					log.Printf("[discord] connect failed: %v", err)
-					// "not configured" is a setup state, not something to
-					// interrupt the user about every time chat opens.
-					if !strings.HasPrefix(err.Error(), "discord not configured") && discordStatus != "" {
-						showToast(discordStatus, ColorToastWarn)
-					}
-				}
-			}()
-		}
 	}
-	// Auto-focus the chat composer when entering the Chat scene. The terminal
-	// draws its own prompt row (see terminal.go) and must not route typing
-	// through the chat element its config still carries.
-	if config.Scenes[currentSceneIndex].Name == "Chat" {
-		for i, e := range config.Scenes[currentSceneIndex].Elements {
-			if e.Type == "chat" {
-				selectedButtonIndex = i
-				chatInputActive = true
-				sdl.StartTextInput()
-				break
-			}
-		}
-	}
+	// Chat loads its history and connects from its own lifecycle (chatTick and
+	// chatSceneEnter in chatstate.go). Entering it no longer switches the
+	// composer on — that typed "b" into the draft instead of going back — and
+	// the Terminal, whose config also carries a "chat" element, no longer
+	// opens a Discord connection or a raw-error toast on the way in.
 	// Auto-fetch YouTube Shorts when entering the Shorts scene.
 	if config.Scenes[currentSceneIndex].Name == "Shorts" {
 		shortsMutex.Lock()
@@ -7237,14 +7282,18 @@ func completeSceneTransition(config *Config) {
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "favorites" {
 			favoritesFocusIndex = 0
+			// Removing a favourite offers to delete its download too, so the
+			// Downloads library is read (in the background) on the way in.
+			dlLibraryEnsureLoaded()
 			break
 		}
 	}
+	// The package store shows its cached list at once and refreshes itself in
+	// the background (pkgstate.go); the sheet and press of the last visit
+	// were dropped on departure (packageActionsForget).
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "packagelist" {
-			if _, ok := config.Variables.Custom["packages_list"]; !ok {
-				runSceneTask(func(ctx context.Context) { fetchPackagesContext(ctx, config) })
-			}
+			pkgOnSceneEnter(config)
 			break
 		}
 	}
@@ -7428,10 +7477,10 @@ func activateChromeFocus(config *Config) bool {
 		openNowPlaying(config)
 		return true
 	case ChromeWiFiIndex:
-		// The signal meter is the Wi-Fi button: it opens the same network
-		// picker a tap on the meter does.
+		// The signal meter is the Wi-Fi button: it opens the same Wi-Fi page
+		// a tap on the meter does.
 		PlayActivateSound()
-		openWiFiPanel()
+		wifiScrOpen(config)
 		return true
 	}
 	return false
@@ -7443,36 +7492,37 @@ func activateChromeFocus(config *Config) bool {
 func handleChromeBarClick(mx, my int32, config *Config) bool {
 	// The update badge sits in the status cluster, left of the bell, and starts
 	// the install directly — the same action as the D-pad and the home chip.
-	if updatePrompt.badge.W > 0 && pointInRect(mx, my, updatePrompt.badge) {
+	// Every bar control is hit-tested through the shared touch target: the
+	// pills are 28–36 px tall by design, and a fingertip that lands a few pixels
+	// above one used to hit nothing. The drawn geometry does not move.
+	if updatePrompt.badge.W > 0 && hitTouchTarget(updatePrompt.badge, mx, my) {
 		PlayActivateSound()
 		startHeaderUpdate()
 		return true
 	}
-	if sceneTitleBackRect.W > 0 && mx >= sceneTitleBackRect.X && mx <= sceneTitleBackRect.X+sceneTitleBackRect.W &&
-		my >= sceneTitleBackRect.Y && my <= sceneTitleBackRect.Y+sceneTitleBackRect.H {
+	if sceneTitleBackRect.W > 0 && hitTouchTarget(sceneTitleBackRect, mx, my) {
 		goBackScene(config)
 		return true
 	}
-	if statusClockRect.W > 0 && mx >= statusClockRect.X && mx <= statusClockRect.X+statusClockRect.W &&
-		my >= statusClockRect.Y && my <= statusClockRect.Y+statusClockRect.H {
+	if statusClockRect.W > 0 && hitTouchTarget(statusClockRect, mx, my) {
 		toggleCalendarPopover()
 		return true
 	}
-	if weatherStatusRect.W > 0 && pointInRect(mx, my, weatherStatusRect) {
+	if weatherStatusRect.W > 0 && hitTouchTarget(weatherStatusRect, mx, my) {
 		toggleWeatherPopover()
 		return true
 	}
 	// The Wi-Fi meter opens the network picker (scan, connect, enter a
 	// password) instead of a popover: the picker already owns that flow.
-	if statusWiFiRect.W > 0 && pointInRect(mx, my, statusWiFiRect) {
+	if statusWiFiRect.W > 0 && hitTouchTarget(statusWiFiRect, mx, my) {
 		PlayActivateSound()
-		openWiFiPanel()
+		wifiScrOpen(config)
 		return true
 	}
 	// The now-playing chip is a button too: a tap returns to the player. While
 	// it names an idle output device it is a reading, so the tap falls through
 	// instead of opening nothing.
-	if statusMediaRect.W > 0 && nowPlayingChipIsButton() && pointInRect(mx, my, statusMediaRect) {
+	if statusMediaRect.W > 0 && nowPlayingChipIsButton() && hitTouchTarget(statusMediaRect, mx, my) {
 		PlayActivateSound()
 		openNowPlaying(config)
 		return true
@@ -7780,10 +7830,14 @@ func moveHomeSelection(config *Config, dx, dy int) {
 }
 
 // handleVirtualKeyboardInput bridges physical keys to the on-screen keyboard
-// while it is open: arrows/Tab move the highlight, Enter activates a key,
+// while it is open: Left/Right/Home/End move the caret and Ctrl+A/X/Z edit
+// (vkHandlePhysicalKey), Up/Down/Tab move the highlight, Enter submits,
 // Backspace deletes, Esc closes. Printable characters are delivered by SDL's
 // text-input event so nothing is inserted twice.
 func handleVirtualKeyboardInput(e *sdl.KeyboardEvent, config *Config) {
+	if vkHandlePhysicalKey(e, config) {
+		return
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		vkMoveFocus(0, -1)

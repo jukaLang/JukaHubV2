@@ -245,14 +245,17 @@ func drawAppBackdrop(renderer *sdl.Renderer, config *Config, w, h int32) {
 	setDrawColor(renderer, base)
 	_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: w, H: h})
 	blob := scaleX(900, w)
+	// The bloom colours come from the theme (themegallery.go): the accent and
+	// Home's violet unless a preset — a total conversion — names its own pair.
+	bloom, bloom2 := themeBackdropBlooms(config)
 	homeGlowBlob(renderer, sdl.Rect{
 		X: scaleX(60, w) - blob/2, Y: scaleY(300, h) - blob/2,
 		W: blob, H: blob,
-	}, ColorAccent, 44)
+	}, bloom, 44)
 	homeGlowBlob(renderer, sdl.Rect{
 		X: w - blob/2 - scaleX(60, w), Y: h - blob/2,
 		W: blob, H: blob,
-	}, sdl.Color{R: 124, G: 58, B: 237, A: 255}, 36)
+	}, bloom2, 36)
 	if config != nil && config.Variables.DynamicBg {
 		renderDynamicBackground(renderer)
 	} else {

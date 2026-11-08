@@ -284,3 +284,132 @@ func TestCoreBuildsMouseActivatesTheClickedRow(t *testing.T) {
 		t.Fatal("a click outside the panel did not close it")
 	}
 }
+
+// TestCoreBuildsInstalledListShowsCoresAndFilters is the page's new first
+// list: every installed core with its system, narrowed by family, with Y
+// jumping to a core's own kept builds and B coming back.
+func TestCoreBuildsInstalledListShowsCoresAndFilters(t *testing.T) {
+	coreBuildsFixture(t,
+		"mgba_libretro.so",
+		"pcsx_rearmed_libretro.so",
+		"snes9x_libretro.so",
+		"mgba_libretro.so.jukahub-20260102-120000.bak",
+	)
+	openCoreBuildsPanel(true)
+	if kbPanel.tab != coreBuildsTabCores {
+		t.Fatalf("tab = %d, want the Installed list when cores are installed", kbPanel.tab)
+	}
+	if len(kbPanel.cores) != 3 {
+		t.Fatalf("cores = %+v, want three", kbPanel.cores)
+	}
+	first := kbPanel.cores[0]
+	if first.Core != "mgba" || first.System != "Game Boy Advance" || first.Family != emuFamilyNintendo || first.Kept != 1 {
+		t.Fatalf("first core = %+v, want mGBA (GBA, Nintendo, 1 kept)", first)
+	}
+	if got := coreBuildsFamilies(); len(got) != 2 || got[0] != emuFamilyNintendo || got[1] != emuFamilyPlayStation {
+		t.Fatalf("families = %v, want Nintendo and PlayStation", got)
+	}
+	coreBuildsShiftFilter(1)
+	if kbPanel.filter != emuFamilyNintendo || len(coreBuildsVisibleCores()) != 2 {
+		t.Fatalf("filter %q shows %d cores, want the two Nintendo ones", kbPanel.filter, len(coreBuildsVisibleCores()))
+	}
+	coreBuildsShiftFilter(1)
+	if kbPanel.filter != emuFamilyPlayStation || len(coreBuildsVisibleCores()) != 1 {
+		t.Fatalf("filter %q shows %d cores, want PCSX-ReARMed alone", kbPanel.filter, len(coreBuildsVisibleCores()))
+	}
+	coreBuildsShiftFilter(1)
+	if kbPanel.filter != "" || len(coreBuildsVisibleCores()) != 3 {
+		t.Fatalf("filter %q after a full turn, want All", kbPanel.filter)
+	}
+
+	// Y on mGBA opens its kept builds; B returns to the Installed list.
+	kbPanel.cursor = 0
+	coreBuildsAlt()
+	if backup, ok := coreBuildsSelected(); kbPanel.tab != coreBuildsTabKept || !ok || backup.Core != "mgba" {
+		t.Fatalf("Y on mGBA: tab %d, selected %+v (%v); want mGBA's kept build", kbPanel.tab, backup, ok)
+	}
+	coreBuildsBack()
+	if !kbPanel.open || kbPanel.tab != coreBuildsTabCores {
+		t.Fatalf("B on the Kept list: open=%v tab=%d, want the Installed list again", kbPanel.open, kbPanel.tab)
+	}
+
+	renderer := probeRenderer(t)
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.Clear()
+	renderCoreBuildsPanel(renderer, layoutTestConfig(t))
+	if len(coreBuildsRowHits) != 3 {
+		t.Fatalf("row hits = %d, want one per installed core", len(coreBuildsRowHits))
+	}
+	if len(coreBuildsChipHits) < 2 {
+		t.Fatalf("chip hits = %d, want the two list tabs at least", len(coreBuildsChipHits))
+	}
+}
+
+// TestCoreBuildsDateComesFromThePool: a core activated from the pool is dated
+// by the nightly it came from, not by the day it was copied.
+func TestCoreBuildsDateComesFromThePool(t *testing.T) {
+	root := t.TempDir()
+	cores := filepath.Join(root, "cores")
+	pool := filepath.Join(root, "pool")
+	writeCompatTestFile(t, filepath.Join(cores, "mgba_libretro.so"), "nightly build bytes")
+	writeCompatTestFile(t, filepath.Join(pool, "mgba", "2026-10-24", "mgba_libretro.so"), "nightly build bytes")
+	writeCompatTestFile(t, filepath.Join(pool, "mgba", "2026-10-30", "mgba_libretro.so"), "a different, longer build")
+	writeCompatTestFile(t, filepath.Join(cores, "snes9x_libretro.so"), "hand-copied core")
+	setCompatTestDirs(t, filepath.Join(root, "perf"), nil, []string{cores}, pool)
+
+	got, total := coreBuildsLoadCores(nil)
+	if len(got) != 2 || total <= 0 {
+		t.Fatalf("cores = %+v (total %d)", got, total)
+	}
+	for _, c := range got {
+		switch c.Core {
+		case "mgba":
+			if !c.Built || c.Date != "2026-10-24" {
+				t.Errorf("mGBA dated %q (built=%v), want the 2026-10-24 nightly", c.Date, c.Built)
+			}
+		case "snes9x":
+			if c.Built || c.Date == "" {
+				t.Errorf("Snes9x dated %q (built=%v), want its install day", c.Date, c.Built)
+			}
+		}
+	}
+	if meta := coreBuildsCoreMeta(got[0]); !strings.Contains(meta, "build 2026-10-24") || !strings.Contains(meta, "Game Boy Advance") {
+		t.Errorf("mGBA detail = %q", meta)
+	}
+}
+
+// TestCoreBuildsStatusReadsTheLastCheck: the pill says what the background
+// check found, and why there is no answer when there is none.
+func TestCoreBuildsStatusReadsTheLastCheck(t *testing.T) {
+	emuUpdateState.mu.Lock()
+	prevCores, prevCurrent, prevIndexed, prevAt := emuUpdateState.cores, emuUpdateState.current, emuUpdateState.indexed, emuUpdateState.checkedAt
+	emuUpdateState.cores = map[string]coreIndexEntry{"mgba": {Core: "mgba", Date: "2026-11-07"}}
+	emuUpdateState.current = map[string]bool{"snes9x": true}
+	emuUpdateState.indexed = map[string]coreIndexEntry{"mgba": {Core: "mgba"}, "snes9x": {Core: "snes9x"}}
+	emuUpdateState.checkedAt = time.Now()
+	emuUpdateState.mu.Unlock()
+	t.Cleanup(func() {
+		emuUpdateState.mu.Lock()
+		emuUpdateState.cores, emuUpdateState.current, emuUpdateState.indexed, emuUpdateState.checkedAt = prevCores, prevCurrent, prevIndexed, prevAt
+		emuUpdateState.mu.Unlock()
+	})
+	cases := []struct {
+		core string
+		want string
+	}{
+		{"mgba", "Update · 2026-11-07"},
+		{"snes9x", "Up to date"},
+		{"custom_core", "Not published"},
+	}
+	for _, tc := range cases {
+		if got, _ := coreBuildsCoreStatus(coreBuildsCore{Core: tc.core, Name: tc.core}, false, false); got != tc.want {
+			t.Errorf("%s status = %q, want %q", tc.core, got, tc.want)
+		}
+	}
+	if got, _ := coreBuildsCoreStatus(coreBuildsCore{Core: "custom_core"}, true, false); got != "Checking…" {
+		t.Errorf("status while checking = %q", got)
+	}
+	if !emuTileUpdateKnown(emuEntry{Name: "GBA", Status: emuAvailable, Launch: "/emus/GBA/launch.sh"}) {
+		t.Error("the GBA tile does not show mGBA's known update")
+	}
+}

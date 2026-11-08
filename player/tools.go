@@ -45,13 +45,14 @@ var allowedToolRepos = map[string]bool{
 	"sharkdp/fd":         true,
 	"jgm/pandoc":         true,
 	"filosottile/age":    true,
-	// Network scanners (Toolbox → naabu, httpx, dnsx). Same trust rule as the
-	// rest: the releases are read from GitHub over TLS without a hash, so this
-	// list is the boundary. Their runs also sit behind the one-time
-	// authorized-use acknowledgement in toolboxAuthorizedUseGate.
-	"projectdiscovery/naabu": true,
-	"projectdiscovery/httpx": true,
-	"projectdiscovery/dnsx":  true,
+	// Network scanners (Toolbox → naabu, httpx, dnsx) and the Audit toolkit's
+	// Nuclei. Same trust rule as the rest, plus the release's own checksum list
+	// when it publishes one (toolboxVerifyDownload). Their runs also sit behind
+	// the one-time authorized-use acknowledgement (tbxScanConsent).
+	"projectdiscovery/naabu":  true,
+	"projectdiscovery/httpx":  true,
+	"projectdiscovery/dnsx":   true,
+	"projectdiscovery/nuclei": true,
 }
 
 func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {

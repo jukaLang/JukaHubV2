@@ -285,6 +285,11 @@ func releaseIsNewerThanInstalled(rel *githubRelease) bool {
 	if installedReleaseTagIs(rel.TagName) {
 		return false
 	}
+	// The release this device was rolled back from is not offered again; the
+	// next release after it is (uhist.go).
+	if uhistSkipped(rel.TagName) {
+		return false
+	}
 	installed, known := installedReleaseTime()
 	if !known {
 		return true
@@ -417,6 +422,9 @@ func advertisedUpdateIsStale() bool {
 	if installedReleaseTagIs(availableUpdateTag()) {
 		return true
 	}
+	if uhistSkipped(availableUpdateTag()) {
+		return true
+	}
 	advertised, ok := advertisedReleaseTime()
 	if !ok {
 		return false // cannot prove it stale: keep advertising
@@ -450,6 +458,16 @@ var errAlreadyUpToDate = errors.New("already up to date")
 // It runs only after the user confirms in the Patch scene; nothing in the
 // background path calls it.
 func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
+	// A verified copy already in the update cache installs with no network at
+	// all (upch.go): always when the device is offline, and online when it is
+	// the release on offer. A release newer than the cached one is downloaded.
+	if entry, ok := upchBestReady(); ok {
+		if adv := availableUpdateTag(); adv == "" || strings.EqualFold(adv, entry.Tag) || !IsOnline() {
+			return upchInstallEntry(ctx, config, entry)
+		}
+	}
+	// The download below wants the connection to itself.
+	upchCancelBackground()
 	rel, err := FetchLatestJukaHubRelease(ctx)
 	if err != nil {
 		return fmt.Errorf("checking JukaHub releases: %w", err)
@@ -503,12 +521,17 @@ func announceAvailableUpdate() {
 // Patch scene asks the user before anything is downloaded. Offline launches and
 // API failures are logged, never surfaced as startup errors.
 func startAutoUpdateCheck(config *Config) {
+	// The deferred startup queue runs on the main thread, the only place the
+	// settings may be read; the goroutines below read the mirrors.
+	upchLoadPrefs(config)
 	go func() {
 		time.Sleep(autoUpdateStartupDelay)
 		if strings.TrimSpace(os.Getenv("JUKAHUB_NO_AUTOUPDATE")) != "" {
 			logPatch("auto-update: disabled by JUKAHUB_NO_AUTOUPDATE")
 			return
 		}
+		// The offline update channel's background download (upch.go).
+		upchStartScheduler()
 		logPatch("auto-update: startup check")
 		// A pending offer the running build already satisfies is dropped before
 		// it can be announced: the check below needs the network, and a handheld
@@ -577,6 +600,9 @@ func checkForUpdateOnce(config *Config) error {
 	if !alreadyOffered {
 		announceAvailableUpdate()
 	}
+	// The offline channel may fetch it now, so the install needs no network
+	// later (upch.go decides whether this is a good moment).
+	upchNudge()
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }
@@ -687,26 +713,54 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 		return fmt.Errorf("download failed: %w", err)
 	}
 	patchRowStatus(ComponentApp, StatusVerified)
+	return stageJukaHubArchive(ctx, rel, archivePath, target.Asset)
+}
 
-	staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(rel.TagName))
+// stageJukaHubArchive unpacks a verified release archive that is already on
+// this device into the staging area and records it as the staged update. The
+// download above, the update cache and Install from file (upch*.go) all stage
+// through it, so an offline install is the same install.
+func stageJukaHubArchive(ctx context.Context, rel *githubRelease, archivePath, asset string) error {
+	if rel == nil {
+		return errors.New("missing release metadata")
+	}
+	staging, err := stagingDirFor(rel.TagName)
+	if err != nil {
+		return err
+	}
 	if err := stageDownloadedRelease(ctx, rel, archivePath, staging); err != nil {
 		patchRowStatus(ComponentApp, StatusFailed)
 		return err
 	}
+	recordStagedRelease(rel, asset)
+	return nil
+}
+
+// stagingDirFor is where a release's staged tree lives.
+func stagingDirFor(tag string) (string, error) {
+	dir, err := PatchStateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag)), nil
+}
+
+// recordStagedRelease marks rel as the staged update OpApplyStagedSwap
+// applies.
+func recordStagedRelease(rel *githubRelease, asset string) {
 	stamp := releaseInfo{Tag: rel.TagName, Date: releaseStampISO(rel), Version: versionString(nil)}
 
 	patchStateMu.Lock()
 	patchState.LastUpdateVer = rel.TagName
 	patchState.LastUpdateAt = time.Now().UTC().Format(time.RFC3339)
 	patchState.LastUpdatePublishedAt = stamp.Date
-	patchState.LastUpdateAsset = target.Asset
+	patchState.LastUpdateAsset = asset
 	patchStateMu.Unlock()
 	_ = savePatchState()
 
 	// Refresh the staged marker on disk so a cancelled staging is not mistaken
 	// for a complete one: release-info.json is the "ready" marker.
 	patchRowStatus(ComponentApp, StatusStaged)
-	return nil
 }
 
 // stageDownloadedRelease unpacks a downloaded release archive into the staging
@@ -742,6 +796,16 @@ func stageDownloadedRelease(ctx context.Context, rel *githubRelease, archivePath
 		}
 	} else {
 		logPatch("reusing staged release %s", rel.TagName)
+	}
+	return finishStagedRelease(rel, staging)
+}
+
+// finishStagedRelease checks an unpacked staging tree, stamps it with rel and
+// writes the ready marker. A tree rebuilt from a delta or unpacked from a file
+// the user picked (upch*.go) is finished exactly like a downloaded one.
+func finishStagedRelease(rel *githubRelease, staging string) error {
+	if rel == nil {
+		return errors.New("missing release metadata")
 	}
 	newBin := findStagedBinary(staging)
 	if newBin == "" {

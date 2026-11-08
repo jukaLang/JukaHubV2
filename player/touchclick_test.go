@@ -110,8 +110,10 @@ func clearChromeRects() {
 }
 
 // TestLogsBackPillIsSelectableAndLeaves drives the real Logs scene from
-// jukaconfig.json: Up from the action row must focus the top-bar back pill, and
-// Enter there must start a transition back to the previous scene.
+// jukaconfig.json. The screen draws its own controls (systool_logs.go), so its
+// config carries none and nothing starts focused; Up from the top of its list
+// must focus the top-bar back pill, and Enter there must start a transition
+// back to the previous scene.
 func TestLogsBackPillIsSelectableAndLeaves(t *testing.T) {
 	config, err := loadConfig("jukaconfig.json")
 	if err != nil {
@@ -129,14 +131,26 @@ func TestLogsBackPillIsSelectableAndLeaves(t *testing.T) {
 	t.Cleanup(func() { homeLayoutActive = prevHomeActive })
 	clearChromeRects()
 	t.Cleanup(clearChromeRects)
+	prevLogs := sysToolLogs
+	t.Cleanup(func() { sysToolLogs = prevLogs })
+	sysToolLogs.view, sysToolLogs.cursor, sysToolLogs.sheet = nil, 0, false
 	sceneTitleBackRect = sdl.Rect{X: 300, Y: 17, W: 30, H: 22}
 	statusClockRect = sdl.Rect{X: 1150, Y: 10, W: 100, H: 36}
 	focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
+	if got := focusEngine.ElementIndex(); got != -1 {
+		t.Fatalf("the Logs screen started with element %d focused; its config must carry no controls", got)
+	}
 
-	// Up from the action buttons must land on the back pill.
-	moveSelection(cfg, ActionNavigateUp)
+	// Up with nothing above it belongs to the bar, and lands on the back pill.
+	m, ok := lookupScene(scene.Name)
+	if !ok {
+		t.Fatal("the Logs screen is not a registered module")
+	}
+	if !m.handleKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_UP}}, cfg) {
+		t.Fatal("Up at the top of the Logs list was not handled")
+	}
 	if got := focusEngine.ElementIndex(); got != ChromeBackIndex {
-		t.Fatalf("Up from the Logs action row focused element %d, want the back pill (%d)", got, ChromeBackIndex)
+		t.Fatalf("Up from the top of the Logs list focused element %d, want the back pill (%d)", got, ChromeBackIndex)
 	} // Enter on the pill is owned by the chrome handler and starts the exit.
 	// A second scene gives the back navigation somewhere to go.
 	cfg.Scenes = append(cfg.Scenes, SceneConfig{Name: "Misc"})

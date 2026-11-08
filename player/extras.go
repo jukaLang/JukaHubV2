@@ -218,6 +218,7 @@ func userConfigFromVariables(config *Config) *UserConfig {
 		DynamicBg:          config.Variables.DynamicBg,
 		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
 		SocialNotifs:       config.Variables.SocialNotifs,
+		Clock12:            config.Variables.Clock12,
 		ReducedMotion:      config.Variables.ReducedMotion,
 		LowPower:           config.Variables.LowPower,
 		PowerMode:          config.Variables.PowerMode,
@@ -298,9 +299,14 @@ var (
 )
 
 func startWeather(config *Config) {
+	// Adopt the Settings switch first (weather_toggle.go): with weather off
+	// nothing is restored or fetched, and the forecast stays off every screen.
+	weatherSyncEnabled(config)
 	// Put the last saved forecast on screen before the first network attempt:
 	// an offline boot then shows weather instead of "unavailable".
-	restoreWeatherCache(time.Now())
+	if weatherIsEnabled() {
+		restoreWeatherCache(time.Now())
+	}
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
@@ -309,8 +315,14 @@ func startWeather(config *Config) {
 		for {
 			// Ten minutes is a long time to sit out while a game owns the screen; a
 			// wake when JukaHub is back refreshes the header immediately instead
-			// of leaving yesterday's forecast up. See backgroundwork.go.
-			if !waitForPoll(ticker.C, wake) {
+			// of leaving yesterday's forecast up. See backgroundwork.go. The
+			// Settings switch kicks the loop too when weather is turned back on.
+			select {
+			case <-ticker.C:
+			case <-wake:
+			case <-weatherKick:
+			}
+			if backgroundPaused() || !weatherIsEnabled() {
 				continue
 			}
 			fetchWeatherOnce()
@@ -466,6 +478,11 @@ func fetchWeatherOnce() {
 // the weather screen's fetch stops when the screen is left. The 20-second bound
 // still applies to the background ticker, which has no scene to cancel it.
 func fetchWeatherOnceContext(parent context.Context) {
+	// Weather switched off in Settings: no geolocation, no forecast request.
+	// Every caller (the poller, the popover, the Weather screen) comes here.
+	if !weatherIsEnabled() {
+		return
+	}
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -533,6 +550,11 @@ func fetchWeatherOnceContext(parent context.Context) {
 		}
 		days = append(days, d)
 	}
+	// The switch may have been turned off while the request was in flight; a
+	// late answer must not put the forecast back on screen.
+	if !weatherIsEnabled() {
+		return
+	}
 	wxMutex.Lock()
 	weatherDaily = days
 	weatherReady = len(days) > 0
@@ -551,6 +573,17 @@ func fetchWeatherOnceContext(parent context.Context) {
 // sceneDisplayName maps internal scene identifiers to human-readable labels
 // shown in the header. The UI never prints a raw config/enum identifier.
 func sceneDisplayName(name string) string {
+	if label := tbxDisplayName(name); label != "" {
+		return label
+	}
+	// Control profiles and Local play (inmap_ui.go).
+	if label := inmapSceneDisplayName(name); label != "" {
+		return label
+	}
+	// Experience packs, Config and Backup & restore (xpackroute.go).
+	if label := xpackDisplayName(name); label != "" {
+		return label
+	}
 	switch name {
 	case "FileExplorer":
 		return "Files"
@@ -569,7 +602,7 @@ func sceneDisplayName(name string) string {
 	case "LogExporter":
 		return "Logs"
 	case "NetSpeed":
-		return "Network"
+		return "Speed test"
 	case "DiskSpace":
 		return "Storage"
 	case "Hardware":
@@ -587,9 +620,11 @@ func sceneDisplayName(name string) string {
 	case "LiveTV":
 		return "Live TV"
 	case "Cron":
-		return "Tasks"
-	case "Misc":
-		return "Tools"
+		return "Scheduled tasks"
+	case netToolsSceneName:
+		return "Network tools"
+	case wifiScrSceneName:
+		return "Wi-Fi"
 	case "Apps":
 		return "Apps"
 	case "Patch":
@@ -605,9 +640,13 @@ func sceneDisplayName(name string) string {
 	case "Calculator":
 		return "Calculator"
 	case "Playtime":
-		return "Playtime"
+		return "Trophies"
 	case "PDFReader":
 		return "Reader"
+	case vkSettingsSceneName:
+		return "Keyboard"
+	case rommSceneName:
+		return "ROM manager"
 	default:
 		return name
 	}
@@ -690,9 +729,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 
 	// The Back control is the bar's loudest button: larger than the rest, in
 	// the accent colour, which it swaps for a solid fill (and dark type) while
-	// the D-pad holds it. Home is the root and has nowhere to go back to, and
-	// JukaLand's B is a game action, so neither draws one.
-	if scene.Layout != "home" && scene.Name != "" && scene.Name != "JukaLand" {
+	// the D-pad holds it. Home is the root and has nowhere to go back to, so it
+	// draws none. (JukaLand used to skip it too, when B broke blocks; B leaves
+	// the game now like every other screen.)
+	if scene.Layout != "home" && scene.Name != "" {
 		sceneTitleBackRect = drawHeaderBack(renderer, config, nextX, barH,
 			focusEngine.ElementIndex() == ChromeBackIndex)
 		if sceneTitleBackRect.W > 0 {
@@ -957,7 +997,7 @@ func headerStatusParts(config *Config) []string {
 		hi, lo := weatherTemp(today.TMax, unit), weatherTemp(today.TMin, unit)
 		parts = append(parts, safeStatusText(fmt.Sprintf("%d%s / %d%s", int(hi), unit, int(lo), unit)))
 	}
-	parts = append(parts, safeStatusText(time.Now().Format("15:04")))
+	parts = append(parts, safeStatusText(clockDigits(config, time.Now())))
 	if bat := statusBatteryPercent(); bat >= 0 {
 		parts = append(parts, safeStatusText(fmt.Sprintf("%d%%", bat)))
 	}
@@ -982,11 +1022,38 @@ func headerStatusFont() *ttf.Font {
 // from the drawing code so the audit tests can check each label against what
 // the input handlers really do.
 func footerHints(config *Config, scene SceneConfig) []FooterHint {
+	// The Terminal, Scheduled tasks and the system tool screens describe their
+	// own state-dependent bindings (systool.go).
+	if hints, ok := sysToolFooterHints(scene.Name); ok {
+		return hints
+	}
+	// Watch Party, Toolbox, Audit toolkit, Security & trust and Report a bug
+	// follow their focused control and open sheet (tbxui.go).
+	if hints, ok := tbxFooterHints(config, scene.Name); ok {
+		return hints
+	}
+	// Settings and Plugins name what the focused row or button does
+	// (setui.go, plugui.go).
+	if hints, ok := setFooterHints(scene); ok {
+		return hints
+	}
+	// Control profiles and Local play follow their focus, their sheet and
+	// their view (inmap_ui.go, hotseat_ui.go).
+	if hints, ok := inmapScenesFooterHints(scene.Name); ok {
+		return hints
+	}
+	// Experience packs, Config and Backup & restore follow their focus, their
+	// tab and their open sheet (xpackroute.go).
+	if hints, ok := xpackRouteFooterHints(scene); ok {
+		return hints
+	}
 	// The File Explorer's B binding climbs the directory tree, so it is
-	// advertised as "Parent" inside a folder and "Back" at the root.
+	// advertised as "Up" inside a folder, "Locations" at a location's root and
+	// "Back" on the Locations list (filesBackLabel reads the cached listing,
+	// not the card).
 	backLabel := "Back"
-	if scene.Name == "FileExplorer" && feCurrentPath(config) != feRoot(config) {
-		backLabel = "Parent"
+	if scene.Name == "FileExplorer" {
+		backLabel = filesBackLabel(config)
 	}
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Navigate"},
@@ -1012,13 +1079,26 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 				{Button: "X", Label: "Address"},
 				{Button: "B", Label: "Up"},
 			}
+		} else if filesNav.atLocations {
+			hints = append(hints, FooterHint{Button: "Y", Label: "Options"})
 		} else {
 			hints = append(hints,
 				FooterHint{Button: "Y", Label: "Actions"},
 				FooterHint{Button: "X", Label: "Mark"},
+				FooterHint{Button: "L1/R1", Label: "Page"},
 			)
 		}
+	case "JukaLand":
+		// The game names its own controls, for the pad or the keyboard,
+		// whichever was used last (jland_input.go).
+		hints = jlandSceneHints()
 	case "Browser":
+		// The offline card and JukaLand played on it name their own keys
+		// while they own the page area (brw_offline.go).
+		if own, ok := brwFooterHints(); ok {
+			hints = own
+			break
+		}
 		// The browser has its own D-pad model: links on the page, the address
 		// bar on A, the search keyboard on Y and the full link list on X. The
 		// triggers zoom the reader text — the same action the toolbar chip
@@ -1033,37 +1113,24 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			FooterHint{Button: "X", Label: "Links"},
 		)
 	case "Chat":
-		// A opens the on-screen keyboard (Return inside it sends); Y sends the
-		// draft straight to the assistant and X renames the local user.
-		hints[1] = FooterHint{Button: "A", Label: "Type"}
-		hints = append(hints,
-			FooterHint{Button: "Y", Label: "Ask AI"},
-			FooterHint{Button: "X", Label: "Rename"},
-		)
+		// The chat's row follows its state: browsing, a focused message, the
+		// action bar or inline typing (chatinput.go).
+		hints = chatFooterHints()
 	case "Tube":
-		// Shoulders page the results, triggers fetch the next page: the chip in
-		// the corner advertises the same action.
-		hints = append(hints,
-			FooterHint{Button: "X", Label: "Search"},
-			FooterHint{Button: "Y", Label: "Shorts"},
-			FooterHint{Button: "L1/R1", Label: "Page"},
-			FooterHint{Button: "R2", Label: "More"},
-		)
+		// The Media screen's row follows what has the focus: the browser, the
+		// Downloads list, the player, or its details sheet (media_hub.go).
+		hints = mediaHubFooterHints(hints)
+	case "Favorites":
+		// X removes the focused row, Y takes the last removal back
+		// (favorites.go).
+		hints = favoritesFooterHints(hints)
 	case "Apps":
 		// The launcher is a tile grid: A starts the focused app.
 		hints[1] = FooterHint{Button: "A", Label: "Launch"}
 	case "Packages":
-		// A row's action menu takes A (choose) and B (close) while it is
-		// open; the footer follows it instead of advertising Open/Back.
-		if packageActionsOpen {
-			hints[1] = FooterHint{Button: "A", Label: "Select"}
-			hints[2] = FooterHint{Button: "B", Label: "Close"}
-		} else if packageRepoFocused {
-			hints[1] = FooterHint{Button: "A", Label: "Open source"}
-			hints[2] = FooterHint{Button: "B", Label: "List"}
-		} else {
-			hints = append(hints, FooterHint{Button: "Right", Label: "Source"})
-		}
+		// The store names the keys of whatever holds the pad: the details
+		// sheet, the filter chips or the shelves (pkginput.go).
+		hints = pkgFooterHints()
 	case "Patch":
 		// Patch is modal-aware and lists the keys the open dialog takes.
 		if patchHints, ok := patchFooterHints(); ok {
@@ -1096,27 +1163,25 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			FooterHint{Button: "R1", Label: "Delete"},
 		)
 	case "PDFReader":
-		// A book turns chapters on the shoulders; a chapterless PDF turns pages
-		// with them, which is what the same buttons did before.
-		chapterLabel := "Page"
-		if len(pdf.doc.Chapters) > 0 {
-			chapterLabel = "Chapter"
-		}
-		hints = []FooterHint{
-			{Button: "D-Pad", Label: "Scroll"},
-			{Button: "L1/R1", Label: chapterLabel},
-			{Button: "B", Label: "Back"},
-		}
+		// The reader draws its own footer with these (pdfreader.go): pages
+		// or chapters on the shoulders, zoom on the triggers, fit, text view.
+		hints = pdfvFooterHints()
 	case "Alarm":
 		// The list and the editor take different keys, so the footer follows the
 		// open tab instead of advertising "Open" while a time is being set.
-		if alarmUI.tab == 0 {
+		if alarmUI.pickOpen {
+			// The music picker sheet owns the pad while it is open.
+			hints = []FooterHint{{"D-Pad", "Move"}, {"L1/R1", "Page"}, {"A", "Choose"}, {"B", "Back"}}
+		} else if alarmUI.tab == 0 {
 			hints[1] = FooterHint{Button: "A", Label: "Edit"}
 			hints = append(hints,
 				FooterHint{Button: "X", Label: "Toggle"},
 				FooterHint{Button: "Y", Label: "Add"},
 				FooterHint{Button: "L1", Label: "Delete"},
 			)
+		} else if alarmUI.tab == 4 {
+			// The ringtone row: X opens the music picker (alarmpick.go).
+			hints = []FooterHint{{"D-Pad", "Change"}, {"X", "Music"}, {"A", "Save"}, {"B", "Back"}}
 		} else {
 			hints = []FooterHint{{"D-Pad", "Change"}, {"A", "Next"}, {"B", "Back"}}
 		}
@@ -1127,6 +1192,17 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			FooterHint{Button: "X", Label: "Skip"},
 			FooterHint{Button: "Y", Label: "Reset"},
 		)
+	case toolsHubSceneName, netToolsSceneName, wifiScrSceneName:
+		// The tools pages follow their focus and their open sheet, the way
+		// Patch follows its dialog.
+		hints = toolsScenesFooterHints(scene.Name, hints)
+	case playtimeSceneName:
+		// The trophy room's keys follow its tab, its focus and its sheet.
+		hints = trophyRoomFooterHints()
+	case rommSceneName:
+		// The ROM manager names what A does on the focused control, and its
+		// sheet's keys while one is up (romm_ui.go).
+		hints = rommFooterHints(config)
 	}
 	return hints
 }
@@ -1398,6 +1474,7 @@ type UserVariables struct {
 	DynamicBg          bool   `json:"dynamicBg"`
 	ScreensaverTimeout int    `json:"screensaverTimeout"`
 	SocialNotifs       bool   `json:"socialNotifs"`
+	Clock12            bool   `json:"clock12"`
 	// NetPlayEnabled is a pointer in the user file so an upgrade from a build
 	// that predates the switch keeps the shipped default instead of reading a
 	// missing key as "off".
@@ -1675,6 +1752,7 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	// launch came up in Default (and the next save wrote that over the choice).
 	config.Variables.PowerMode = normalizePowerMode(user.Variables.PowerMode)
 	config.Variables.LEDSync = user.Variables.LedSync
+	config.Variables.Clock12 = user.Variables.Clock12
 	if user.Variables.NetPlayEnabled != nil {
 		config.Variables.NetPlayEnabled = *user.Variables.NetPlayEnabled
 	}
@@ -1693,6 +1771,9 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 			}
 			config.Variables.Custom["screensaverTimeoutMigrated"] = true
 		}
+	}
+	if config.Variables.Custom == nil && len(user.Variables.Custom) > 0 {
+		config.Variables.Custom = make(map[string]interface{}, len(user.Variables.Custom))
 	}
 	for k, v := range user.Variables.Custom {
 		if !volatileCustomVars[k] {

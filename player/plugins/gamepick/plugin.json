@@ -1,0 +1,14 @@
+{
+  "name": "gamepick",
+  "title": "Random game",
+  "version": "1.0.0",
+  "description": "Can't decide what to play? Picks one game at random from your Roms folders (custom variable gamepick_dir points elsewhere).",
+  "author": "JukaHub",
+  "entry": "gamepick.sh",
+  "icon": "gamepad",
+  "enabled": true,
+  "actions": [
+    {"id": "pick", "label": "Pick a game"},
+    {"id": "count", "label": "Count games"}
+  ]
+}

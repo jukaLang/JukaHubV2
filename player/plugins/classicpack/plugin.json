@@ -1,0 +1,14 @@
+{
+  "name": "classicpack",
+  "title": "Pocket Classic pack",
+  "version": "1.0.0",
+  "description": "An experience-pack plugin: the Game Boy palette, the hero-tile Home, the Gaming controls and an Arcade Corner screen. Apply it in Tools › Experience packs.",
+  "author": "JukaHub",
+  "entry": "classicpack.sh",
+  "icon": "sparkles",
+  "enabled": true,
+  "actions": [
+    {"id": "about", "label": "What it changes"}
+  ],
+  "packs": ["pocket-classic.json"]
+}

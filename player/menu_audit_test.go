@@ -398,6 +398,7 @@ func startupInjectScenes(config *Config) {
 	ensureGamesScene(config)
 	ensurePlaytimeScene(config)
 	ensurePlaytimeEntry(config)
+	ensureToolsHubScene(config)
 }
 
 // TestAppsMenuRowsResolve builds the Apps list the way the app does (with the
@@ -527,6 +528,10 @@ func TestHomeCardsResolve(t *testing.T) {
 		// The browser scene is injected into memory on demand, so the shipped
 		// config never declares it; homeActivate handles the card directly.
 		HomeFocusBrowser: true,
+		// The search pill opens the search sheet, and the Tools card the Tools
+		// hub (toolsHubOpen), before any scene lookup.
+		HomeFocusSearch: true,
+		HomeFocusTools:  true,
 	}
 	for name, config := range loadAuditConfigs(t) {
 		layout := layoutForHome(t, config)

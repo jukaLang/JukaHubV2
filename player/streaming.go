@@ -911,6 +911,26 @@ func (o playbackOutcome) Tried() bool { return o != playbackNotTried }
 // (playVideoInfo) and the quality switch, which re-resolves the same stream at a
 // new ceiling.
 func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, config *Config, url string, startSec float64, logLabel string) playbackOutcome {
+	// A file on the card (a download played from Media, a resumed Continue
+	// card) needs the decoder only. Resolving yt-dlp first made a downloaded
+	// video unplayable offline whenever the extractor was not installed yet.
+	if mediaPageIsLocalFile(url) {
+		if _, err := helperToolPathCtx(prepareCtx, "ffmpeg", config); err != nil {
+			finishVideoPrepare(prepareSeq)
+			if prepareCtx.Err() != nil {
+				return playbackNotTried
+			}
+			log.Printf("[ERROR] %s: ffmpeg unavailable: %v", logLabel, err)
+			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
+			return playbackNotTried
+		}
+		finishVideoPrepare(prepareSeq)
+		if prepareCtx.Err() != nil {
+			return playbackNotTried
+		}
+		startEmbeddedPlayback(config, url, startSec, false)
+		return playbackStarted
+	}
 	ytDlpPath, missing, err := resolvePlaybackTools(prepareCtx, config)
 	if err != nil {
 		finishVideoPrepare(prepareSeq)

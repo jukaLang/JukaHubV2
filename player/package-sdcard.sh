@@ -98,6 +98,11 @@ cp -f trimui/Apps/$APP_DIR_NAME/icon.png     "$PKG/icon.png"
 cp -f trimui/jukaconfig.device.json          "$PKG/jukaconfig.json"
 cp -f Inter-Regular.ttf                      "$PKG/Inter-Regular.ttf"
 cp -f background.jpg                         "$PKG/background.jpg"
+# Tools -> Security & trust opens SECURITY.md in its reader; without the file it
+# shows a short built-in summary instead, so a missing copy is not fatal.
+if [ -f ../SECURITY.md ]; then
+    cp -f ../SECURITY.md "$PKG/SECURITY.md"
+fi
 chmod +x "$PKG/launch.sh" "$PKG/$APP_NAME"
 
 # ------------------------------------------------------------------ 3. tools

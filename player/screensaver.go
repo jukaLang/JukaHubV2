@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"math"
 	"math/rand"
@@ -16,6 +15,12 @@ import (
 
 // ──────────────────────────────────────────────────────────────────────
 // Screensaver: constellation particles + rotating quotes
+//
+// The starfield is the classic idle screen (the dock in ambient.go replaces it
+// by default). It is a lock screen in Home's language: the time and date in the
+// top-left, the Wi-Fi and battery chips in the top-right (saver_status.go), the
+// picture chosen in Files as a full-screen backdrop when there is one, and
+// whatever is still playing in a card in the middle.
 // ──────────────────────────────────────────────────────────────────────
 
 // ssChatNote is one message that arrived while the device was idle. The
@@ -95,6 +100,11 @@ const (
 	// drawn over the idle screen — no toast layer reaches here — so this line is
 	// the whole receipt for the photo having been forgotten.
 	ssBackdropNoticeTTL = 3 * time.Second
+
+	// saverNodeSpeed scales the constellation drift. It is applied per second of
+	// real time, so the low-power frame rate slows the animation's cadence,
+	// not its speed.
+	saverNodeSpeed = 1.0
 )
 
 var screensaverQuotes = []string{
@@ -136,6 +146,7 @@ type screensaverState struct {
 	fadingIn        bool
 	fadeAlpha       uint8
 	startTick       uint64
+	lastTick        uint64
 	lastQuoteChange time.Time
 	quoteIndex      int
 	stars           []ssStar
@@ -440,8 +451,18 @@ func screensaverBackdropPress(config *Config, now time.Time) bool {
 	return true
 }
 
+// saverStarfieldClockSize is the starfield clock: large enough to read from a
+// desk, small enough that the clock and date stay above the media card.
+func saverStarfieldClockSize() int {
+	return int(saverScaled(88, 40))
+}
+
 // renderScreensaver draws one frame of the screensaver. Returns true while
 // active so the caller skips normal UI rendering.
+//
+// Every layer is drawn at full strength and the fade-in is one veil of the dark
+// base laid over the finished frame: fading each label separately made every
+// fade step a new cached text texture.
 func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool {
 	if !ss.inited {
 		initScreensaver()
@@ -460,19 +481,83 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 			ss.fadeAlpha = uint8(255 * float64(elapsed) / float64(ssFadeInDuration))
 		}
 	}
+	now := time.Now()
 
-	renderer.SetDrawColor(6, 8, 14, 255)
+	renderer.SetDrawColor(saverBackdropBase.R, saverBackdropBase.G, saverBackdropBase.B, 255)
 	renderer.Clear()
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	// A picture chosen in Files is the backdrop; a missing or undecodable file
-	// simply leaves the default starfield exposed.
-	drawScreenlockImage(renderer, config, ss.fadeAlpha)
+	// A picture chosen in Files is the backdrop, scaled once to fill the
+	// screen. A missing or undecodable file leaves the starfield exposed.
+	drawScreenlockImage(renderer, config, 255)
+	photo := saverLockShowing(config)
+	if !photo {
+		saverDrawStarfield(renderer, tickNow)
+	}
+
+	// Whatever is still playing owns the middle of the screen: the live video
+	// frame, or the track's cover art with equaliser bars. The quote only shows
+	// when nothing is running and no photo is up, so nothing stacks on it.
+	media := screensaverNowPlaying()
+	drawScreensaverMedia(renderer, config, media, 255)
+	if now.Sub(ss.lastQuoteChange) > ssQuoteInterval {
+		ss.quoteIndex = (ss.quoteIndex + 1) % len(screensaverQuotes)
+		ss.lastQuoteChange = now
+	}
+	if media.kind == saverMediaNone && !photo {
+		if font, _ := getCachedFont(config, "small"); font != nil {
+			q := ellipsize(font, screensaverQuotes[ss.quoteIndex], screenWidth-2*saverScaled(64, 24))
+			qw, _ := measureText(font, q)
+			renderText(renderer, config, font, q, saverInkSoft, (screenWidth-qw)/2, screenHeight/2+30)
+		}
+	}
+
+	// The time and date top-left, the status chips top-right: one glance says
+	// what time it is, whether the device is online and whether it needs
+	// charging.
+	margin := saverScaled(48, 20)
+	top := saverScaled(34, 14)
+	saverDrawClock(renderer, config, margin, top, saverStarfieldClockSize(), now)
+	saverDrawStatusRow(renderer, config, screenWidth-margin, top, now)
+	m := saverChipSize()
+	alarmRight := screenWidth - margin
+	if next := alarmNextUpcoming(); next != nil {
+		font := saverChipFont(config)
+		if font != nil {
+			saverDrawLabelChip(renderer, font, "alarm", "Alarm "+clockDigitsHM(config, next.Hour, next.Minute), alarmRight, top+m.h+saverScaled(10, 6))
+		}
+	}
+
+	drawScreensaverChat(renderer, config, now)
+	saverDrawWakeHints(renderer, config, tickNow, now)
+
+	// The fade-in: the finished frame emerges from the dark base.
+	if ss.fadeAlpha < 255 {
+		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		renderer.SetDrawColor(saverBackdropBase.R, saverBackdropBase.G, saverBackdropBase.B, 255-ss.fadeAlpha)
+		renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	}
+	return true
+}
+
+// saverDrawStarfield draws the twinkling stars and the drifting
+// constellations. Drift is per second of real time, so the slower low-power
+// frame rate does not slow the sky down.
+func saverDrawStarfield(renderer *sdl.Renderer, tick uint64) {
+	dt := 0.016
+	if ss.lastTick > 0 && tick > ss.lastTick {
+		dt = float64(tick-ss.lastTick) / 1000
+		if dt > 0.25 {
+			dt = 0.25
+		}
+	}
+	ss.lastTick = tick
 
 	// Stars.
 	for i := range ss.stars {
 		s := &ss.stars[i]
-		twinkle := math.Sin(float64(tickNow)*0.001*s.speed + s.twinkle)
-		alpha := uint8(float64(s.bright) * (0.5 + 0.5*twinkle) * float64(ss.fadeAlpha) / 255.0)
+		twinkle := math.Sin(float64(tick)*0.001*s.speed + s.twinkle)
+		alpha := uint8(s.bright * (0.5 + 0.5*twinkle) * 255)
 		if alpha == 0 {
 			continue
 		}
@@ -488,7 +573,6 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 	}
 
 	// Constellation connections.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	for _, c := range ss.connections {
 		n1 := &ss.nodes[c[0]]
 		n2 := &ss.nodes[c[1]]
@@ -496,7 +580,7 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 		if dist > 200 {
 			continue
 		}
-		alpha := uint8(40 * (1 - dist/200) * float64(ss.fadeAlpha) / 255.0)
+		alpha := uint8(40 * (1 - dist/200))
 		if alpha == 0 {
 			continue
 		}
@@ -507,8 +591,8 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 	// Constellation nodes.
 	for i := range ss.nodes {
 		n := &ss.nodes[i]
-		n.x += n.vx * 0.016
-		n.y += n.vy * 0.016
+		n.x += n.vx * dt * saverNodeSpeed
+		n.y += n.vy * dt * saverNodeSpeed
 		if n.x < -20 {
 			n.x = float64(screenWidth) + 20
 		} else if n.x > float64(screenWidth)+20 {
@@ -519,121 +603,74 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 		} else if n.y > float64(screenHeight)+20 {
 			n.y = -20
 		}
-		pulse := 0.7 + 0.3*math.Sin(float64(tickNow)*0.002+n.phase)
-		alpha := uint8(n.bright * pulse * float64(ss.fadeAlpha) / 255.0)
+		pulse := 0.7 + 0.3*math.Sin(float64(tick)*0.002+n.phase)
+		alpha := uint8(n.bright * pulse * 255)
 		if alpha == 0 {
 			continue
 		}
 		drawParticle(renderer, int32(n.x), int32(n.y), int32(n.size),
 			n.r, n.g, n.b, alpha)
 	}
+}
 
-	// Whatever is still playing owns the middle of the screen: the live video
-	// frame, or the track's cover art with equaliser bars. The quote only shows
-	// when nothing is running, so the two never stack on one line.
-	media := screensaverNowPlaying()
-	drawScreensaverMedia(renderer, config, media, ss.fadeAlpha)
-
-	now := time.Now()
-	if now.Sub(ss.lastQuoteChange) > ssQuoteInterval {
-		ss.quoteIndex = (ss.quoteIndex + 1) % len(screensaverQuotes)
-		ss.lastQuoteChange = now
+// saverDrawWakeHints draws the bottom of the screen: the backdrop's clear
+// button (or its receipt) as a chip, and the wake hint under it. The hint's
+// pulse is stepped, so it reuses a handful of cached text textures instead of
+// rendering a new one for every frame's alpha.
+func saverDrawWakeHints(renderer *sdl.Renderer, config *Config, tick uint64, now time.Time) {
+	hintFont, _ := getCachedFont(config, "small")
+	if hintFont == nil {
+		return
 	}
-	font, _ := getCachedFont(config, "small")
-	if media.kind == saverMediaNone && font != nil && ss.fadeAlpha > 60 {
-		q := screensaverQuotes[ss.quoteIndex]
-		qw, _, _ := font.SizeUTF8(q)
-		qx := (screenWidth - int32(qw)) / 2
-		qy := screenHeight/2 + 30
-		alpha := uint8(float64(ss.fadeAlpha) * 0.8)
-		if alpha > 180 {
-			alpha = 180
-		}
-		renderText(renderer, config, font, q,
-			sdl.Color{R: 140, G: 160, B: 200, A: alpha}, qx, qy)
+	hint := "Press any key to wake"
+	hw, hh := measureText(hintFont, hint)
+	hy := screenHeight - 50
+	pulse := 0.55 + 0.35*math.Sin(float64(tick)*0.003)
+	step := math.Round(pulse*6) / 6
+	ink := saverInkSoft
+	ink.A = uint8(255 * step)
+	renderText(renderer, config, hintFont, hint, ink, (screenWidth-hw)/2, hy)
+
+	// The backdrop's clear button, on its own chip above the wake hint and
+	// steady rather than pulsing: it is an action. Green while the receipt is
+	// up, amber once the first press has armed it, the glass ink while it is
+	// still an offer — so the armed line does not read as the same sentence.
+	line := screensaverBackdropHint(config, now)
+	if line == "" {
+		return
 	}
-
-	// Clock in top-right, with the battery right under it so the saver is also
-	// a glanceable status screen.
-	timeFont, _ := getCachedFont(config, "medium")
-	if timeFont != nil && ss.fadeAlpha > 80 {
-		timeStr := time.Now().Format("15:04")
-		tw, _, _ := timeFont.SizeUTF8(timeStr)
-		tx := screenWidth - int32(tw) - 40
-		ty := int32(40)
-		alpha := uint8(float64(ss.fadeAlpha) * 0.9)
-		if alpha > 200 {
-			alpha = 200
-		}
-		renderText(renderer, config, timeFont, timeStr,
-			sdl.Color{R: 200, G: 210, B: 230, A: alpha}, tx, ty)
-
-		if small, _ := getCachedFont(config, "small"); small != nil {
-			line := "Battery unknown"
-			if pct := getBatteryPercent(); pct >= 0 {
-				line = fmt.Sprintf("%d%%", pct)
-				if getBatteryCharging() {
-					line += " charging"
-				}
-			}
-			lw, _, _ := small.SizeUTF8(line)
-			lineAlpha := uint8(float64(ss.fadeAlpha) * 0.65)
-			if lineAlpha > 170 {
-				lineAlpha = 170
-			}
-			lineY := ty + int32(timeFont.Height()) + 6
-			renderText(renderer, config, small, line,
-				sdl.Color{R: 160, G: 175, B: 198, A: lineAlpha},
-				screenWidth-int32(lw)-40, lineY)
-			// The link state sits with the battery: one glance answers "is this
-			// thing online, and does it need charging".
-			drawScreensaverWifi(renderer, screenWidth-int32(lw)-40-30, lineY+1, ss.fadeAlpha)
-		}
+	g := saverGlassStyle()
+	icon := "image"
+	lineInk := g.ink
+	switch {
+	case screensaverBackdropNotice(now):
+		icon = "check"
+		lineInk = sdl.Color{R: 96, G: 206, B: 140, A: 255}
+	case screensaverBackdropArmed(now):
+		icon = "warning"
+		lineInk = sdl.Color{R: 236, G: 178, B: 74, A: 255}
 	}
-
-	drawScreensaverChat(renderer, config, time.Now())
-
-	// Hint at bottom.
-	if ss.fadeAlpha > 120 {
-		hintFont, _ := getCachedFont(config, "small")
-		if hintFont != nil {
-			hint := "Press any key to wake"
-			hw, _, _ := hintFont.SizeUTF8(hint)
-			hx := (screenWidth - int32(hw)) / 2
-			hy := screenHeight - 50
-			pulse := 0.4 + 0.3*math.Sin(float64(tickNow)*0.003)
-			a := uint8(float64(ss.fadeAlpha) * pulse * 0.5)
-			renderText(renderer, config, hintFont, hint,
-				sdl.Color{R: 120, G: 130, B: 150, A: a}, hx, hy)
-
-			// The backdrop's clear button, on its own line above the wake hint
-			// and steady rather than pulsing: it is an action, and the line
-			// below already pulses. Green while the confirmation is up, amber
-			// once the first press has armed it, blue while it is still an
-			// offer — so the armed line does not read as the same sentence.
-			if line := screensaverBackdropHint(config, now); line != "" {
-				col := sdl.Color{R: 150, G: 190, B: 240}
-				if screensaverBackdropNotice(now) {
-					col = sdl.Color{R: 150, G: 220, B: 170}
-				} else if screensaverBackdropArmed(now) {
-					col = sdl.Color{R: 235, G: 200, B: 130}
-				}
-				col.A = uint8(float64(ss.fadeAlpha) * 0.8)
-				lw, _, _ := hintFont.SizeUTF8(line)
-				renderText(renderer, config, hintFont, line, col,
-					(screenWidth-int32(lw))/2, hy-int32(hintFont.Height())-10)
-			}
-		}
+	m := saverChipSize()
+	font := saverChipFont(config)
+	if font == nil {
+		return
 	}
-
-	return true
+	lw, lh := measureText(font, line)
+	w := m.pad + m.icon + m.gap + lw + m.pad
+	rect := sdl.Rect{X: (screenWidth - w) / 2, Y: hy - m.h - 6, W: w, H: m.h}
+	if hh > 0 && rect.Y+rect.H > hy+hh/3 {
+		rect.Y = hy + hh/3 - rect.H
+	}
+	saverDrawChipBody(renderer, rect, g)
+	saverDrawIcon(renderer, icon, sdl.Rect{X: rect.X + m.pad, Y: rect.Y + (m.h-m.icon)/2, W: m.icon, H: m.icon}, false, g)
+	drawText(renderer, font, line, rect.X+m.pad+m.icon+m.gap, rect.Y+(m.h-lh)/2, lineInk, textAlignLeft)
 }
 
 // drawScreensaverChat paints the newest incoming messages as a quiet card in
 // the lower-left corner, above the wake hint.
 func drawScreensaverChat(renderer *sdl.Renderer, config *Config, now time.Time) {
 	notes := screensaverChatNotes(now, ssChatShown)
-	if len(notes) == 0 || ss.fadeAlpha < 60 {
+	if len(notes) == 0 {
 		return
 	}
 	font, _ := getCachedFont(config, "small")
@@ -642,7 +679,7 @@ func drawScreensaverChat(renderer *sdl.Renderer, config *Config, now time.Time) 
 	}
 	lineH := int32(font.Height()) + 6
 	cardH := int32(38) + lineH*int32(len(notes))
-	drawChatCard(renderer, config, notes, ss.fadeAlpha, 40, screenHeight-92-cardH)
+	drawChatCard(renderer, config, notes, 255, saverScaled(48, 20), screenHeight-112-cardH)
 }
 
 // drawChatCard paints the newest incoming messages in the lower-left area of an
@@ -660,13 +697,18 @@ func drawChatCard(renderer *sdl.Renderer, config *Config, notes []ssChatNote, al
 	}
 	cardH := int32(38) + lineH*int32(len(notes))
 
+	g := saverGlassStyle()
 	a := float64(alpha) / 255.0
-	fillRoundedRect(renderer, x, y, cardW, cardH, 12, sdl.Color{R: 12, G: 16, B: 26, A: uint8(170 * a)})
-	strokeRoundedRect(renderer, x, y, cardW, cardH, 12, 1, sdl.Color{R: 255, G: 255, B: 255, A: uint8(30 * a)})
-	fillRoundedRect(renderer, x, y, 4, cardH, 2, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: uint8(220 * a)})
+	scale := func(c sdl.Color) sdl.Color {
+		c.A = uint8(float64(c.A) * a)
+		return c
+	}
+	accent := glassAccent()
+	fillRoundedRect(renderer, x, y, cardW, cardH, 16, scale(g.fill))
+	strokeRoundedRect(renderer, x, y, cardW, cardH, 16, 1, scale(g.edge))
+	fillRoundedRect(renderer, x+8, y+12, 4, cardH-24, 2, scale(accent))
 
-	renderText(renderer, config, font, "NEW CHAT",
-		sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: uint8(230 * a)}, x+18, y+10)
+	renderText(renderer, config, font, "NEW CHAT", scale(accent), x+22, y+10)
 	lineY := y + 34
 	for _, note := range notes {
 		sender := note.sender
@@ -674,27 +716,28 @@ func drawChatCard(renderer *sdl.Renderer, config *Config, notes []ssChatNote, al
 			sender = "Chat"
 		}
 		label := sender + ": "
-		sw, _, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label,
-			sdl.Color{R: 206, G: 220, B: 240, A: uint8(215 * a)}, x+18, lineY)
-		textW := cardW - 36 - int32(sw)
+		sw, _ := measureText(font, label)
+		renderText(renderer, config, font, label, scale(g.ink), x+22, lineY)
+		textW := cardW - 40 - sw
 		if textW > 0 {
-			renderText(renderer, config, font, ellipsize(font, note.text, textW),
-				sdl.Color{R: 160, G: 175, B: 198, A: uint8(200 * a)}, x+18+int32(sw), lineY)
+			renderText(renderer, config, font, ellipsize(font, note.text, textW), scale(g.muted), x+22+sw, lineY)
 		}
 		lineY += lineH
 	}
 }
 
-// deactivateScreensaver starts the fade-out and returns to normal UI.
+// deactivateScreensaver ends the screensaver and returns to normal UI.
 func deactivateScreensaver() {
+	// The low-power state ends first, so the frame drawn next — the first
+	// awake one — already runs at the full clock.
+	saverPowerWake()
 	ss.active = false
 	ss.fadingIn = false
 	// Waking is not the first half of a clear: the next sleep starts with the
 	// clear button at rest, whatever this session left armed.
 	ss.backdropArmedAt = time.Time{}
-	// A full-screen photo is several megabytes; it is decoded again when the
-	// saver next appears instead of sitting in memory behind the whole UI.
+	// The uploaded photo is several megabytes of texture; its scaled rendition
+	// stays cached, so the next idle screen uploads it again without decoding.
 	releaseScreenlockTexture()
 }
 
@@ -739,8 +782,10 @@ const screensaverAutoCheckInterval = time.Second
 var screensaverLastCheck time.Time
 
 // screensaverAutoTick starts the screensaver once the device has been quiet for
-// the configured timeout and nothing is using the panel.
+// the configured timeout and nothing is using the panel. It also drives the
+// idle screens' low-power state, which the dock needs as much as the saver.
 func screensaverAutoTick(config *Config, now time.Time) {
+	saverPowerTick(now)
 	if config == nil || ss.active {
 		return
 	}
@@ -826,10 +871,14 @@ func activateScreensaver() {
 	ss.fadingIn = true
 	ss.fadeAlpha = 0
 	ss.startTick = sdl.GetTicks64()
+	ss.lastTick = 0
 	// Each appearance offers the clear afresh: an old arm must not let a single
 	// stray press clear the photo minutes later.
 	ss.backdropArmedAt = time.Time{}
 	ss.backdropClearedAt = time.Time{}
+	// The status chips are re-read as the screen appears, not a full refresh
+	// interval later.
+	saverWifiInvalidate()
 }
 
 // applyScreensaverTimeout sets the idle timeout everywhere it is needed: the

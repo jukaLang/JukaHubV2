@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -214,6 +215,9 @@ func TestScreensaverPaintsTheClearHint(t *testing.T) {
 	_ = newProbeFrame(t) // SDL video and TTF up
 	resetScreensaverBackdrop(t)
 	resetScreenlockCache(t)
+	// The status chips read a fixed Wi-Fi answer, so no probe runs on the
+	// test machine and the two captures cannot differ in the corner.
+	saverPinWifiForTest(t)
 
 	config := &Config{}
 	prevActive, prevFading, prevAlpha, prevInited := ss.active, ss.fadingIn, ss.fadeAlpha, ss.inited
@@ -256,6 +260,56 @@ func TestScreensaverPaintsTheClearHint(t *testing.T) {
 	}
 	if diff < 50 {
 		t.Fatalf("only %d pixels changed in the hint band, so the confirmation was not drawn", diff)
+	}
+}
+
+// The picture chosen in Files fills the whole starfield screen, the stars stay
+// out of its way, and the status chips are drawn over it.
+func TestScreensaverDrawsTheLockPictureFullScreen(t *testing.T) {
+	_ = newProbeFrame(t)
+	resetScreensaverBackdrop(t)
+	resetScreenlockCache(t)
+	saverPinWifiForTest(t)
+	saverPicReset()
+	t.Cleanup(saverPicReset)
+	withScreen(t, probeW, probeH)
+
+	picture := writeTestPNG(t, "starfield.png", color.RGBA{R: 30, G: 200, B: 60, A: 255})
+	config := screenlockTestConfig("")
+	if err := setScreenlockImage(config, picture); err != nil {
+		t.Fatalf("setScreenlockImage: %v", err)
+	}
+	prevActive, prevFading, prevAlpha, prevInited := ss.active, ss.fadingIn, ss.fadeAlpha, ss.inited
+	t.Cleanup(func() {
+		ss.active, ss.fadingIn, ss.fadeAlpha, ss.inited = prevActive, prevFading, prevAlpha, prevInited
+	})
+	if !ss.inited {
+		initScreensaver()
+	}
+	ss.active, ss.fadingIn, ss.fadeAlpha = true, false, 255
+
+	// One renderer for the whole test: SDL allows one per window.
+	renderer := newKeyboardTestRenderer(t)
+	t.Cleanup(releaseScreenlockTexture)
+	if screenlockTextureWait(t, renderer, config) == nil {
+		t.Fatal("the lock picture was never decoded for the starfield")
+	}
+	ssImage.shownAt = time.Time{} // skip the fade-in
+	if !saverLockShowing(config) {
+		t.Fatal("a decoded lock picture does not count as the backdrop")
+	}
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.Clear()
+	renderScreensaver(renderer, config, sdl.GetTicks64())
+	f := &probeFrame{buf: make([]byte, probeW*probeH*4)}
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+		t.Fatalf("cannot read the test frame: %v", err)
+	}
+	for _, p := range [][2]int32{{probeW / 2, probeH * 2 / 5}, {probeW / 8, probeH / 2}, {probeW - probeW/8, probeH / 2}} {
+		c := f.at(p[0], p[1])
+		if int(c.G) < int(c.R)+60 || int(c.G) < int(c.B)+60 {
+			t.Fatalf("pixel %v is %+v, want the green lock picture across the screen", p, c)
+		}
 	}
 }
 

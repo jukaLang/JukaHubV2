@@ -35,9 +35,15 @@ func (f FavoriteItem) MarshalJSON() ([]byte, error) {
 		} else {
 			dataBytes, err = json.Marshal(f.Data)
 		}
-	case "file", "iptv":
+	case "file", "iptv", "audio":
 		if fe, ok := f.Data.(FileEntry); ok {
 			dataBytes, err = json.Marshal(fe)
+		} else {
+			dataBytes, err = json.Marshal(f.Data)
+		}
+	case "podcast":
+		if ep, ok := f.Data.(podcastEpisode); ok {
+			dataBytes, err = json.Marshal(ep)
 		} else {
 			dataBytes, err = json.Marshal(f.Data)
 		}
@@ -76,10 +82,16 @@ func (f *FavoriteItem) UnmarshalJSON(data []byte) error {
 			f.Data = v
 			return nil
 		}
-	case "file", "iptv":
+	case "file", "iptv", "audio":
 		var fe FileEntry
 		if err := json.Unmarshal(aux.Data, &fe); err == nil {
 			f.Data = fe
+			return nil
+		}
+	case "podcast":
+		var ep podcastEpisode
+		if err := json.Unmarshal(aux.Data, &ep); err == nil {
+			f.Data = ep
 			return nil
 		}
 	}
@@ -111,9 +123,22 @@ func (f *FavoriteItem) Label() string {
 		if fe, ok := f.Data.(FileEntry); ok {
 			return fe.Name
 		}
+	case "audio":
+		// A track recorded by the Continue card (home_continue.go) carries its
+		// display title as the entry name.
+		if fe, ok := f.Data.(FileEntry); ok {
+			return fe.Name
+		}
 	case "iptv":
 		if fe, ok := f.Data.(FileEntry); ok {
 			return fe.Name
+		}
+	case "podcast":
+		if ep, ok := f.Data.(podcastEpisode); ok {
+			if ep.Title != "" {
+				return ep.Title
+			}
+			return ep.URL
 		}
 	case "game":
 		if g, ok := f.Data.(recentGame); ok {
@@ -155,6 +180,17 @@ func (f *FavoriteItem) Play(config *Config) {
 	case "game":
 		if g, ok := f.Data.(recentGame); ok {
 			playRecentGame(g)
+		}
+	case "podcast":
+		if ep, ok := f.Data.(podcastEpisode); ok {
+			if strings.TrimSpace(ep.URL) == "" {
+				ShowToast("That episode has no audio link", ToastKindWarning)
+				return
+			}
+			// The audio player resumes a long episode from the saved position
+			// and continues through the show's queue, exactly as the Podcasts
+			// panel does.
+			openAudioPlayer(config, ep.URL)
 		}
 	}
 }
@@ -317,6 +353,32 @@ func addRecentIPTV(ch FileEntry) {
 	defer favoritesMutex.Unlock()
 	favoritesStore.IPTV = removeDuplicateFavorite(favoritesStore.IPTV, ch.Path, "iptv", ch)
 	favoritesStore.IPTV = append([]FavoriteItem{{Type: "iptv", Data: ch, Timestamp: time.Now()}}, favoritesStore.IPTV...)
+}
+
+// addRecentPodcast puts a started episode on the same timeline as videos and
+// games, so Continue answers "what was I in the middle of?" across every media
+// type instead of only the ones that live in this store.
+func addRecentPodcast(ep podcastEpisode) {
+	url := strings.TrimSpace(ep.URL)
+	if url == "" {
+		return
+	}
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	kept := favoritesStore.Recent[:0]
+	for _, item := range favoritesStore.Recent {
+		if item.Type == "podcast" {
+			if old, ok := item.Data.(podcastEpisode); ok && strings.TrimSpace(old.URL) == url {
+				continue
+			}
+		}
+		kept = append(kept, item)
+	}
+	favoritesStore.Recent = append([]FavoriteItem{{Type: "podcast", Data: ep, Timestamp: time.Now()}}, kept...)
+	const maxRecent = 20
+	if len(favoritesStore.Recent) > maxRecent {
+		favoritesStore.Recent = favoritesStore.Recent[:maxRecent]
+	}
 }
 
 func removeDuplicateFavorite(list []FavoriteItem, key string, itemType string, data interface{}) []FavoriteItem {
@@ -942,8 +1004,9 @@ func favoriteProgress(it FavoriteItem) (position, duration float64) {
 
 // drawFavoriteRow paints one library card. The artwork is a 16:9 frame for a
 // video and a drawn tile for a stream, so a row is recognisable before its
-// title is read.
-func drawFavoriteRow(renderer *sdl.Renderer, config *Config, rect sdl.Rect, it FavoriteItem, focused bool, titleFont, metaFont *ttf.Font) {
+// title is read. reserve keeps the row's right edge free for the focused row's
+// Remove button, so the title never runs under it.
+func drawFavoriteRow(renderer *sdl.Renderer, config *Config, rect sdl.Rect, it FavoriteItem, focused bool, titleFont, metaFont *ttf.Font, reserve int32) {
 	// The shared list row: Home's glass, and the accent wash and ring when
 	// selected.
 	UIListRow(renderer, rect, 12, focused, false)
@@ -972,7 +1035,7 @@ func drawFavoriteRow(renderer *sdl.Renderer, config *Config, rect sdl.Rect, it F
 	}
 
 	textX := thumb.X + thumb.W + 14
-	textW := rect.X + rect.W - 14 - textX
+	textW := rect.X + rect.W - 14 - textX - reserve
 	if textW < 40 {
 		textW = 40
 	}
@@ -1092,6 +1155,10 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	if len(items) == 0 {
 		glyph, title, body := favoritesEmptyState(favoritesCurrentTab)
 		UIEmptyState(renderer, config, layout.list, glyph, title, body)
+		// Removing the last item still offers it back.
+		favoritesRemoveHit = sdl.Rect{}
+		drawFavoritesUndoBar(renderer, config, layout.list)
+		drawFavoritesDeletePrompt(renderer, config, layout.panel)
 		return
 	}
 
@@ -1099,6 +1166,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	lines := favoritesLines(groups, layout.list)
 	shift := favoritesScrollShift(lines, favoritesFocusIndex, layout.list)
 
+	favoritesRemoveHit = sdl.Rect{}
 	renderWithClip(renderer, layout.list.X, layout.list.Y, layout.list.W, layout.list.H, func(r *sdl.Renderer) {
 		for _, ln := range lines {
 			y := ln.y - shift
@@ -1113,10 +1181,22 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			if ln.item < 0 || ln.item >= len(items) {
 				continue
 			}
-			drawFavoriteRow(r, config, rect, items[ln.item], ln.item == favoritesFocusIndex, titleFont, font)
+			focused := ln.item == favoritesFocusIndex
+			reserve := int32(0)
+			if focused {
+				reserve = favoritesRemoveButtonW + 12
+			}
+			drawFavoriteRow(r, config, rect, items[ln.item], focused, titleFont, font, reserve)
 			favoritesRowHits = append(favoritesRowHits, favoritesRowHit{index: ln.item, rect: rect})
+			if focused {
+				// Removing is one obvious button on the row it acts on, not a
+				// key the user has to know about.
+				favoritesRemoveHit = drawFavoritesRemoveButton(r, config, rect)
+			}
 		}
 	})
+	drawFavoritesUndoBar(renderer, config, layout.list)
+	drawFavoritesDeletePrompt(renderer, config, layout.panel)
 
 	// Scrollbar: the viewport only moves when the list is taller than it.
 	contentBottom := int32(0)
@@ -1180,32 +1260,309 @@ func favoritesPlayFocused(config *Config) {
 	items[favoritesFocusIndex].Play(config)
 }
 
+// --- Removing, with Undo ---
+//
+// Removing a favourite used to be a key nobody saw (X) and a toast; a slip
+// lost the entry for good. The focused row now carries a Remove button, the
+// removal is offered back for a few seconds in an Undo bar (Y, U, Ctrl+Z or a
+// click), and a video that is also downloaded asks whether the file should go
+// too — the favourite and the download are separate things the user may want
+// to keep apart.
+
+const (
+	// favoritesUndoWindow is how long a removal can be taken back.
+	favoritesUndoWindow = 6 * time.Second
+	// favoritesRemoveButtonW is the Remove button's width on the focused row.
+	favoritesRemoveButtonW = int32(116)
+)
+
+// favoritesUndoState is the last removal. index is the item's place in its
+// store list, so Undo puts it back exactly where it was; label is the bar's
+// text, built once.
+type favoritesUndoState struct {
+	item  FavoriteItem
+	tab   int
+	index int
+	title string
+	label string
+	at    time.Time
+}
+
+var favoritesUndo favoritesUndoState
+
+// favoritesDeletePrompt asks whether a removed favourite's download goes too.
+var favoritesDeletePrompt struct {
+	open  bool
+	libID string
+	body  string
+	size  int64
+	focus int // 0 = keep the file, 1 = delete it
+	keep  sdl.Rect
+	del   sdl.Rect
+}
+
+// The click targets drawn this frame.
+var (
+	favoritesRemoveHit sdl.Rect
+	favoritesUndoHit   sdl.Rect
+)
+
+// favoritesUndoActive reports whether the last removal can still be undone.
+func favoritesUndoActive() bool {
+	return !favoritesUndo.at.IsZero() && time.Since(favoritesUndo.at) <= favoritesUndoWindow
+}
+
+// favoritesStoreIndex is an item's position in the store list its tab draws
+// from, or -1.
+func favoritesStoreIndex(tab int, it FavoriteItem) int {
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	list := favoritesStore.Recent
+	if tab == favTabVideos {
+		list = favoritesStore.Videos
+	}
+	for i, cur := range list {
+		if sameFavorite(cur, it) {
+			return i
+		}
+	}
+	return -1
+}
+
+// favoritesInsertAt puts it back at index (the end when the list got shorter),
+// unless an equal entry came back in the meantime.
+func favoritesInsertAt(list []FavoriteItem, index int, it FavoriteItem) []FavoriteItem {
+	for _, cur := range list {
+		if sameFavorite(cur, it) {
+			return list
+		}
+	}
+	if index < 0 || index > len(list) {
+		index = len(list)
+	}
+	out := make([]FavoriteItem, 0, len(list)+1)
+	out = append(out, list[:index]...)
+	out = append(out, it)
+	out = append(out, list[index:]...)
+	return out
+}
+
 func favoritesRemoveFocused(config *Config) {
 	items := getCurrentFavorites()
 	if favoritesFocusIndex < 0 || favoritesFocusIndex >= len(items) {
 		return
 	}
-	removed := removeFavoriteItem(favoritesCurrentTab, items[favoritesFocusIndex])
-	if !removed {
+	it := items[favoritesFocusIndex]
+	tab := favoritesCurrentTab
+	storeIndex := favoritesStoreIndex(tab, it)
+	if !removeFavoriteItem(tab, it) {
 		return
-	}
-	if favoritesCurrentTab == favTabStreams {
-		ShowToast("Removed from saved streams", ToastKindWarning)
-	} else {
-		ShowToast("Removed from favorites", ToastKindWarning)
 	}
 	PlayBackSound()
 	if remaining := len(getCurrentFavorites()); favoritesFocusIndex >= remaining && favoritesFocusIndex > 0 {
 		favoritesFocusIndex = remaining - 1
 	}
+	if tab == favTabStreams {
+		// A stream lives in the IP-stream library, which keeps its own list;
+		// it is not offered back here.
+		favoritesUndo = favoritesUndoState{}
+		ShowToast("Removed from saved streams", ToastKindWarning)
+		return
+	}
+	title := it.Label()
+	favoritesUndo = favoritesUndoState{item: it, tab: tab, index: storeIndex, title: title,
+		label: "Removed “" + title + "”", at: time.Now()}
+	if v, ok := it.Data.(VideoInfo); ok && tab == favTabVideos {
+		if e, found := dlLibraryFindSource(v.GetURL(), true); found {
+			favoritesDeletePrompt.open = true
+			favoritesDeletePrompt.libID = e.ID
+			favoritesDeletePrompt.size = e.Size
+			favoritesDeletePrompt.focus = 0
+			favoritesDeletePrompt.body = "“" + dlFirstNonEmpty(e.Title, title) + "” is downloaded on this device (" +
+				humanBytes(e.Size) + "). Delete the file to free the space, or keep it in Downloads."
+		}
+	}
+}
+
+// favoritesUndoRemove puts the last removed favourite back where it was.
+func favoritesUndoRemove() bool {
+	if !favoritesUndoActive() {
+		return false
+	}
+	u := favoritesUndo
+	favoritesUndo = favoritesUndoState{}
+	favoritesMutex.Lock()
+	if u.tab == favTabVideos {
+		favoritesStore.Videos = favoritesInsertAt(favoritesStore.Videos, u.index, u.item)
+	} else {
+		favoritesStore.Recent = favoritesInsertAt(favoritesStore.Recent, u.index, u.item)
+	}
+	favoritesMutex.Unlock()
+	saveFavorites()
+	PlayActivateSound()
+	ShowToast("Restored "+dlShortTitle(u.title, 48), ToastKindSuccess)
+	return true
+}
+
+// favoritesDeletePromptAnswer closes the prompt: deleting frees the file, keeping
+// leaves it in Downloads.
+func favoritesDeletePromptAnswer(deleteFile bool) {
+	p := favoritesDeletePrompt
+	favoritesDeletePrompt.open = false
+	if !deleteFile {
+		PlayBackSound()
+		return
+	}
+	mediaHubStopIfPlaying(p.libID)
+	if e, ok := dlLibraryRemove(p.libID); ok {
+		PlayBackSound()
+		ShowToast("Deleted the download · freed "+humanBytes(e.Size), ToastKindSuccess)
+	}
+}
+
+// drawFavoritesRemoveButton paints the focused row's Remove button and returns
+// its rect.
+func drawFavoritesRemoveButton(renderer *sdl.Renderer, config *Config, row sdl.Rect) sdl.Rect {
+	h := int32(34)
+	if h > row.H-12 {
+		h = row.H - 12
+	}
+	btn := sdl.Rect{X: row.X + row.W - favoritesRemoveButtonW - 12, Y: row.Y + (row.H-h)/2, W: favoritesRemoveButtonW, H: h}
+	ink := DangerInk()
+	fillRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, h/2, WithAlpha(ink, 36))
+	strokeRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, h/2, 1, WithAlpha(ink, 170))
+	glyph := h - 16
+	DrawHomeIcon(renderer, "trash", sdl.Rect{X: btn.X + 12, Y: btn.Y + 8, W: glyph, H: glyph}, false)
+	if font := getFontSized(config, "small", 15); font != nil {
+		label := "Remove"
+		_, th := measureText(font, label)
+		drawText(renderer, font, label, btn.X+12+glyph+8, btn.Y+(btn.H-th)/2, ink, textAlignLeft)
+	}
+	return btn
+}
+
+// drawFavoritesUndoBar paints the "Removed … · Undo" bar along the bottom of the
+// list while the removal can still be taken back.
+func drawFavoritesUndoBar(renderer *sdl.Renderer, config *Config, list sdl.Rect) {
+	favoritesUndoHit = sdl.Rect{}
+	if !favoritesUndoActive() || favoritesDeletePrompt.open {
+		return
+	}
+	font := getFontSized(config, "small", 16)
+	if font == nil {
+		return
+	}
+	w := list.W - 40
+	if w > 640 {
+		w = 640
+	}
+	h := int32(46)
+	bar := sdl.Rect{X: list.X + (list.W-w)/2, Y: list.Y + list.H - h - 6, W: w, H: h}
+	drawGlassSheet(renderer, bar, glassRaisedFill())
+	btnLabel := "Undo"
+	bw, bh := measureText(font, btnLabel)
+	btn := sdl.Rect{X: bar.X + bar.W - bw - 70, Y: bar.Y + 7, W: bw + 56, H: bar.H - 14}
+	fillRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, btn.H/2, WithAlpha(glassAccent(), 60))
+	strokeRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, btn.H/2, 1, glassAccent())
+	drawText(renderer, font, btnLabel, btn.X+16, btn.Y+(btn.H-bh)/2, ColorTextPrimary(), textAlignLeft)
+	if small := getFontSized(config, "small", 13); small != nil {
+		yw, yh := measureText(small, "Y")
+		drawText(renderer, small, "Y", btn.X+btn.W-16-yw, btn.Y+(btn.H-yh)/2, ColorTextTertiary(), textAlignLeft)
+	}
+	text := ellipsize(font, favoritesUndo.label, btn.X-bar.X-36)
+	_, th := measureText(font, text)
+	drawText(renderer, font, text, bar.X+18, bar.Y+(bar.H-th)/2, ColorTextSecondary(), textAlignLeft)
+	favoritesUndoHit = btn
+}
+
+// drawFavoritesDeletePrompt paints the "also delete the download?" card.
+func drawFavoritesDeletePrompt(renderer *sdl.Renderer, config *Config, panel sdl.Rect) {
+	p := &favoritesDeletePrompt
+	if !p.open {
+		return
+	}
+	titleFont := getFontSized(config, "small", 19)
+	bodyFont := getFontSized(config, "small", 15)
+	if titleFont == nil || bodyFont == nil {
+		return
+	}
+	drawOverlayScrim(renderer)
+	w := panel.W - 80
+	if w > 560 {
+		w = 560
+	}
+	pad := int32(22)
+	body := mediaConfirmLines(bodyFont, p.body, w-2*pad)
+	h := pad + int32(titleFont.Height()) + 10 + int32(len(body))*int32(bodyFont.Height()) + 22 + 44 + pad
+	card := sdl.Rect{X: panel.X + (panel.W-w)/2, Y: panel.Y + (panel.H-h)/2, W: w, H: h}
+	drawGlassSheet(renderer, card, glassSheetFill())
+	drawOverlayCardAccent(renderer, card.X, card.Y, card.W)
+	y := card.Y + pad
+	drawText(renderer, titleFont, "Also delete the download?", card.X+pad, y, ColorTextPrimary(), textAlignLeft)
+	y += int32(titleFont.Height()) + 10
+	for _, line := range body {
+		drawText(renderer, bodyFont, line, card.X+pad, y, ColorTextSecondary(), textAlignLeft)
+		y += int32(bodyFont.Height())
+	}
+	bw := (w - 2*pad - 14) / 2
+	by := card.Y + h - pad - 44
+	p.keep = sdl.Rect{X: card.X + pad, Y: by, W: bw, H: 44}
+	p.del = sdl.Rect{X: p.keep.X + bw + 14, Y: by, W: bw, H: 44}
+	UIButton(renderer, nil, p.keep, "Keep file", UIButtonStyle{Variant: UIButtonSecondary, Font: bodyFont},
+		UIButtonState{Focused: p.focus == 0})
+	UIButton(renderer, nil, p.del, "Delete file", UIButtonStyle{Variant: UIButtonDanger, Font: bodyFont},
+		UIButtonState{Focused: p.focus == 1})
+}
+
+// favoritesFooterHints is the Favorites footer: what X and Y do here, and the
+// prompt's own keys while it is up.
+func favoritesFooterHints(hints []FooterHint) []FooterHint {
+	if favoritesDeletePrompt.open {
+		return []FooterHint{{Button: "Left/Right", Label: "Choose"}, {Button: "A", Label: "Confirm"}, {Button: "B", Label: "Keep file"}}
+	}
+	if len(hints) > 1 {
+		hints[1] = FooterHint{Button: "A", Label: "Play"}
+	}
+	hints = append(hints, FooterHint{Button: "X", Label: "Remove"})
+	if favoritesUndoActive() {
+		hints = append(hints, FooterHint{Button: "Y", Label: "Undo"})
+	}
+	return append(hints, FooterHint{Button: "Left/Right", Label: "Tabs"})
+}
+
+// favoritesPromptInput drives the delete prompt; it owns every press while up.
+func favoritesPromptInput(left, right, confirm, back bool) {
+	switch {
+	case left:
+		if favoritesDeletePrompt.focus != 0 {
+			favoritesDeletePrompt.focus = 0
+			PlayNavSound()
+		}
+	case right:
+		if favoritesDeletePrompt.focus != 1 {
+			favoritesDeletePrompt.focus = 1
+			PlayNavSound()
+		}
+	case confirm:
+		favoritesDeletePromptAnswer(favoritesDeletePrompt.focus == 1)
+	case back:
+		favoritesDeletePromptAnswer(false)
+	}
 }
 
 // handleFavoritesController gives the pad the same model as the keyboard: the
-// tab strip on Left/Right, rows on Up/Down, A plays what is highlighted and X
-// removes it.
+// tab strip on Left/Right, rows on Up/Down, A plays what is highlighted, X
+// removes it and Y takes the removal back.
 func handleFavoritesController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil {
 		return false
+	}
+	if favoritesDeletePrompt.open {
+		favoritesPromptInput(e.Button == sdl.CONTROLLER_BUTTON_DPAD_LEFT || e.Button == sdl.CONTROLLER_BUTTON_DPAD_UP,
+			e.Button == sdl.CONTROLLER_BUTTON_DPAD_RIGHT || e.Button == sdl.CONTROLLER_BUTTON_DPAD_DOWN,
+			e.Button == sdl.CONTROLLER_BUTTON_A,
+			e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK)
+		return true
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -1220,6 +1577,8 @@ func handleFavoritesController(e *sdl.ControllerButtonEvent, config *Config) boo
 		favoritesPlayFocused(config)
 	case sdl.CONTROLLER_BUTTON_X:
 		favoritesRemoveFocused(config)
+	case sdl.CONTROLLER_BUTTON_Y:
+		favoritesUndoRemove()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		goBackScene(config)
 	default:
@@ -1229,6 +1588,18 @@ func handleFavoritesController(e *sdl.ControllerButtonEvent, config *Config) boo
 }
 
 func handleFavoritesInput(e *sdl.KeyboardEvent, config *Config) {
+	if favoritesDeletePrompt.open {
+		sym := e.Keysym.Sym
+		favoritesPromptInput(sym == sdl.K_LEFT || sym == sdl.K_UP,
+			sym == sdl.K_RIGHT || sym == sdl.K_DOWN,
+			sym == sdl.K_RETURN || sym == sdl.K_SPACE || sym == sdl.K_KP_ENTER,
+			sym == sdl.K_ESCAPE || sym == sdl.K_BACKSPACE || sym == sdl.K_b)
+		return
+	}
+	if e.Keysym.Sym == sdl.K_z && e.Keysym.Mod&sdl.KMOD_CTRL != 0 {
+		favoritesUndoRemove()
+		return
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_LEFT:
 		favoritesSelectTab(favoritesCurrentTab - 1)
@@ -1242,12 +1613,34 @@ func handleFavoritesInput(e *sdl.KeyboardEvent, config *Config) {
 		favoritesPlayFocused(config)
 	case sdl.K_x, sdl.K_d, sdl.K_DELETE:
 		favoritesRemoveFocused(config)
-	case sdl.K_BACKSPACE, sdl.K_ESCAPE:
+	case sdl.K_y, sdl.K_u:
+		favoritesUndoRemove()
+	case sdl.K_BACKSPACE, sdl.K_ESCAPE, sdl.K_b:
+		// The list has no text field, so B is the back key here too. On a
+		// desktop keyboard Escape was the only way out, which the pad maps to
+		// nowhere.
 		goBackScene(config)
 	}
 }
 
 func handleFavoritesMouseClick(mx, my int32, config *Config) {
+	if favoritesDeletePrompt.open {
+		switch {
+		case pointInRect(mx, my, favoritesDeletePrompt.del):
+			favoritesDeletePromptAnswer(true)
+		case pointInRect(mx, my, favoritesDeletePrompt.keep):
+			favoritesDeletePromptAnswer(false)
+		}
+		return
+	}
+	if favoritesUndoHit.W > 0 && pointInRect(mx, my, favoritesUndoHit) {
+		favoritesUndoRemove()
+		return
+	}
+	if favoritesRemoveHit.W > 0 && pointInRect(mx, my, favoritesRemoveHit) {
+		favoritesRemoveFocused(config)
+		return
+	}
 	for i, rect := range favTabRects {
 		if rect.W > 0 && pointInRect(mx, my, rect) {
 			favoritesSelectTab(i)

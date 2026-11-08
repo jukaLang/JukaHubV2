@@ -200,6 +200,11 @@ func weatherDayFor(days []WeatherDay, now time.Time) (WeatherDay, bool) {
 // live fetch already stored: startup calls it first, and a fetch that lands
 // during the read wins.
 func restoreWeatherCache(now time.Time) bool {
+	// Weather switched off in Settings: the saved forecast stays on the card
+	// for when it is switched back on, but it does not go on screen.
+	if !weatherIsEnabled() {
+		return false
+	}
 	path := weatherCachePath()
 	days, savedAt, ok := readWeatherCache(path, now)
 	if !ok {

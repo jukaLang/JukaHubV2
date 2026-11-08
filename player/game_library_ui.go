@@ -99,7 +99,9 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 var libraryArtworkRoot = romArtworkDir
 
 func currentGameSystems() []librarySystem {
-	return filterLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), gameLib.query)
+	// The tag filter (L3 / T, gmeta_ui.go) narrows what the search leaves; it
+	// returns the list untouched when no tag is chosen.
+	return gmetaFilterSystems(filterLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), gameLib.query))
 }
 
 // normalizeGameSearch folds a query the way the matcher compares it: case does
@@ -209,6 +211,9 @@ func openGameLibraryPanel() {
 	gameLib.scroll = 0
 	gameLib.query = ""
 	resetGameRandomPicker()
+	// A fresh visit shows every game, and the per-game data loads in the
+	// background so a game's page opens without a read.
+	gmetaLibraryOpened()
 	gameLib.artSeen = artworkFetchGeneration()
 	gameLib.systemHits = nil
 	gameLib.gameHits = nil
@@ -231,6 +236,9 @@ func closeGameLibraryPanel() {
 	gameOptsUI.open = false
 	gameOptsUI.rowHits = nil
 	resetGameRandomPicker()
+	// So can a game's page, its tag sheet and the tag filter's chooser; the
+	// page's screenshots are textures and go with it.
+	gmetaCloseAll()
 	gameLib.open = false
 	closeGameLibraryArt()
 	PlayBackSound()
@@ -275,6 +283,13 @@ func refreshGameLibrary() {
 }
 
 func gameLibraryStatus() string {
+	if tag := gmetaFilterTag(); tag != "" && gameLib.query == "" {
+		games := 0
+		for _, system := range currentGameSystems() {
+			games += len(system.Games)
+		}
+		return "Showing " + tag + " · " + itoa(games) + " game(s) — B shows every game"
+	}
 	if query := gameLib.query; query != "" {
 		games, systems := 0, 0
 		for _, system := range currentGameSystems() {
@@ -455,6 +470,10 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if gameRandomUI.open {
 		return handleGameRandomKey(e)
 	}
+	// A game's page, its tag sheet and the tag filter (gmeta_ui.go).
+	if gmetaSheetOpen() {
+		return gmetaHandleKey(e, config)
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		gameLibraryMove(0, -1)
@@ -465,7 +484,11 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_RIGHT:
 		gameLibraryMove(1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
-		launchSelectedGame()
+		// A game opens its page (box art, details, tags, save states) with
+		// Play focused; a console opens its list.
+		gmetaOpenSelected()
+	case sdl.K_t:
+		gmetaOpenFilterPicker()
 	case sdl.K_e:
 		if game, ok := selectedLibraryGame(); ok {
 			openGameLibraryHandoff(game)
@@ -490,6 +513,10 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 			setGameLibraryQuery("")
 			return true
 		}
+		// The same for a tag filter.
+		if gmetaClearFilter() {
+			return true
+		}
 		closeGameLibraryPanel()
 	}
 	return true
@@ -499,11 +526,21 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil {
 		return false
 	}
+	// The on-screen keyboard (the search, a game's description or notes, a new
+	// tag) takes the pad while it is up: the overlay router asks the library
+	// first, and the library used to keep the D-pad and A from it.
+	if virtualKeyboardActive {
+		return false
+	}
 	if gameOptsUI.open {
 		return ctrlGameOptions(e)
 	}
 	if gameRandomUI.open {
 		return ctrlGameRandom(e)
+	}
+	// A game's page, its tag sheet and the tag filter (gmeta_ui.go).
+	if gmetaSheetOpen() {
+		return gmetaHandlePad(e, config)
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -515,7 +552,11 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		gameLibraryMove(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
-		launchSelectedGame()
+		gmetaOpenSelected()
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
+		// L3 chooses a tag to show (Favorites, Backlog …); the stick click is
+		// free here, like R3 for the random pick.
+		gmetaOpenFilterPicker()
 	case sdl.CONTROLLER_BUTTON_X:
 		openNetplayForSelectedGame()
 	case sdl.CONTROLLER_BUTTON_START:
@@ -539,6 +580,9 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 			setGameLibraryQuery("")
 			return true
 		}
+		if gmetaClearFilter() {
+			return true
+		}
 		closeGameLibraryPanel()
 	default:
 		return false
@@ -558,6 +602,9 @@ func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	if gameRandomUI.open {
 		return handleGameRandomMouse(mx, my)
 	}
+	if gmetaSheetOpen() {
+		return gmetaHandleMouse(mx, my, config)
+	}
 	for _, hit := range gameLib.systemHits {
 		if pointInRect(mx, my, hit.rect) {
 			gameLib.focus = 0
@@ -571,7 +618,7 @@ func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 		if pointInRect(mx, my, hit.rect) {
 			gameLib.focus = 1
 			gameLib.cursor = hit.index
-			launchSelectedGame()
+			gmetaOpenSelected()
 			return true
 		}
 	}
@@ -1008,6 +1055,9 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		if query := gameLib.query; query != "" {
 			message = "No match for \"" + query + "\""
 			detail = "Press S to change the search, or B to clear it and browse."
+		} else if tag := gmetaFilterTag(); tag != "" {
+			message = "No game is tagged " + tag
+			detail = "Open a game (A) and choose Tags · B shows every game again."
 		}
 		renderText(renderer, config, medium, message, ColorTextSecondary(), gameX, bodyY+8)
 		renderText(renderer, config, font, detail, ColorTextTertiary(), gameX, bodyY+8+medH+8)
@@ -1079,7 +1129,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	// X is only advertised while LAN Play is on: a footer that offers a
 	// switched-off feature teaches a button that answers with a toast.
-	hints := []FooterHint{{"A", "Play"}, {"R / R3", "Random"},
+	hints := []FooterHint{{"A", "Open"}, {"L3 / T", "Tags"}, {"R / R3", "Random"},
 		{"Start / O", "Options"}, {"S / R1", "Search"}}
 	if netplayEnabled(config) {
 		hints = append(hints, FooterHint{"X", "LAN Play"})
@@ -1089,11 +1139,21 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if gameLib.lib.Total == 0 {
 		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	}
-	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+pad, panelY+panelH-footerH+4)
-	if artW > 0 && len(gameLib.lib.Roots) > 0 {
-		root := ellipsize(font, gameLib.lib.Roots[0], panelW-pad*2-260)
-		renderText(renderer, config, font, root, ColorTextTertiary(), panelX+pad+260, panelY+panelH-footerH+4)
+	// The hints and the library folder share the footer line: the folder
+	// takes what the hints leave, right-aligned, instead of being drawn
+	// across them.
+	footerY := panelY + panelH - footerH + 4
+	hint = ellipsize(font, hint, panelW-2*pad)
+	hintW, _ := measureText(font, hint)
+	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+pad, footerY)
+	if avail := panelW - 2*pad - hintW - 24; artW > 0 && len(gameLib.lib.Roots) > 0 && avail > 120 {
+		root := ellipsize(font, gameLib.lib.Roots[0], avail)
+		rootW, _ := measureText(font, root)
+		renderText(renderer, config, font, root, ColorTextTertiary(), panelX+panelW-pad-rootW, footerY)
 	}
+	// A game's page, its tag sheet and the tag filter's chooser sit on the
+	// library, under the random and options sheets they can open.
+	gmetaRender(renderer, config)
 	renderGameRandomPicker(renderer, config)
 	renderGameOptionsPanel(renderer, config)
 }

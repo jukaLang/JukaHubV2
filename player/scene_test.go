@@ -24,9 +24,18 @@ func TestRegisteredScenesReportTheirOwnName(t *testing.T) {
 // navigation.
 func TestCustomScenesAreRegistered(t *testing.T) {
 	wanted := []string{
-		"About", "Alarm", "Calculator", "Dashboard", "Dictionary", "Games",
+		"About", "Alarm", "Calculator", "Chat", "Dashboard", "Dictionary", "Games",
 		"JukaLand", "MusicPlayer", "Notes", "PDFReader", "Patch", "Pomodoro",
-		"Terminal",
+		"Terminal", "Tube", toolsHubSceneName, netToolsSceneName, wifiScrSceneName,
+		// The Settings hub draws Settings and the pages it replaced (setui.go),
+		// and the Plugins page is its own module (plugui.go).
+		"Settings", "SettingsGeneral", "SettingsAppearance", "SettingsSmart", plugSceneName,
+		// Scheduled tasks and the system tool screens draw their own pages
+		// (sched.go, systool_*.go).
+		schedSceneName, "NetSpeed", "Benchmark", "Hardware", "DiskSpace", "LogExporter",
+		// Experience packs, Config and Backup & restore (xpackui.go,
+		// cfgdocui.go, bkupui.go).
+		xpackSceneName, cfgdocSceneName, bkupSceneName,
 	}
 	for _, name := range wanted {
 		if _, ok := lookupScene(name); !ok {
@@ -38,10 +47,11 @@ func TestCustomScenesAreRegistered(t *testing.T) {
 // The config-driven screens must stay unregistered, or the generic renderer and
 // element navigation would never run for them.
 func TestConfigDrivenScenesStayGeneric(t *testing.T) {
+	// Tube (Media), Chat and Settings are registered modules now (media_hub.go,
+	// chatinput.go, setui.go); their config elements stay as data only.
 	for _, name := range []string{
-		"Main", "Tube", "Shorts", "Apps", "Favorites", "Chat", "Misc",
-		"Emulator", "Settings", "SettingsGeneral", "SettingsAppearance",
-		"ThemePresets", "LogExporter", "Exit", "FileExplorer", "Hardware",
+		"Main", "Shorts", "Apps", "Favorites", "Emulator",
+		"ThemePresets", "Exit", "FileExplorer",
 	} {
 		if _, ok := lookupScene(name); ok {
 			t.Errorf("scene %q is registered but should use the generic path", name)

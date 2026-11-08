@@ -10,14 +10,8 @@ import (
 // so a failing test cannot leak a step into the next one.
 func resetBootWork(t *testing.T) {
 	t.Helper()
-	bootWork.mu.Lock()
-	bootWork.pending = nil
-	bootWork.mu.Unlock()
-	t.Cleanup(func() {
-		bootWork.mu.Lock()
-		bootWork.pending = nil
-		bootWork.mu.Unlock()
-	})
+	bootWorkReset()
+	t.Cleanup(bootWorkReset)
 }
 
 func TestBootWorkRunsInOrderExactlyOnce(t *testing.T) {

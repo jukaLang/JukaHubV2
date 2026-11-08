@@ -56,8 +56,12 @@ func setupVideoMiniTest(t *testing.T, scene int) *Config {
 	videoSettingsOpen = false
 	videoControlFocus = vcNone
 	videoMiniClear()
+	// The play origin decides Back on the Media scene (videomini.go): a test
+	// that played from Tube earlier must not make these sessions Media's.
+	mediaForgetPlayOrigin()
 
 	t.Cleanup(func() {
+		mediaForgetPlayOrigin()
 		videoMiniClear()
 		embeddedPlayer.mu.Lock()
 		embeddedPlayer.phase = prevPhase

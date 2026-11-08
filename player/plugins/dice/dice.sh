@@ -32,6 +32,11 @@ one_between() {
     case "$seed" in
         ''|*[!0-9]*) seed=$(date +%s) ;;
     esac
+    # Keep the last nine digits: awk holds numbers as doubles, and a full
+    # nanosecond stamp loses exactly the digits two quick presses differ in.
+    if [ "${#seed}" -gt 9 ]; then
+        seed=${seed#"${seed%?????????}"}
+    fi
     awk -v n="$n" -v s="$seed" 'BEGIN { srand(s); printf "%d\n", int(rand() * n) + 1 }'
 }
 

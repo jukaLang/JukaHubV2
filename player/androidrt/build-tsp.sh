@@ -3,11 +3,12 @@
 # aarch64) into the runtime layout the AndroidPak profile runtime resolves:
 #
 #   AndroidRT/
-#     loader                  ← the runner executable
-#     launch.sh               ← the launcher form
-#     shims/liblog.so         ← logshim.c
-#     shims/libandroid.so     ← androidshim.c + inputshim.c
-#     shims/libOpenSLES.so    ← openslessim.c
+#     loader                  the runner: bionic loader + compat layer + the
+#                             liblog/libandroid/OpenSL ES/EGL-present shims,
+#                             all in one executable (src/*.c)
+#     launch.sh               the launcher form
+#     surface-probe           the milestone-3 GPU stack measurement
+#     props.txt.example       ro.* property overrides (copy to props.txt)
 #
 # Set CROSS to an aarch64-linux-gnu- prefixed toolchain (SDK or distro
 # cross-gcc); unset CROSS tries plain aarch64-linux-gnu-gcc on PATH.
@@ -19,72 +20,62 @@ SRC="$HERE/src"
 
 if [ -n "${CROSS:-}" ]; then
     CC="${CROSS}gcc"
+    READELF="${CROSS}readelf"
 elif command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
     CC="aarch64-linux-gnu-gcc"
+    READELF="aarch64-linux-gnu-readelf"
 elif [ -n "${SDK_ROOT:-}" ] && [ -x "$SDK_ROOT/host/bin/aarch64-none-linux-gnu-gcc" ]; then
     CC="$SDK_ROOT/host/bin/aarch64-none-linux-gnu-gcc"
+    READELF="$SDK_ROOT/host/bin/aarch64-none-linux-gnu-readelf"
 else
     echo "build-tsp.sh: no aarch64 cross compiler found." >&2
     echo "  set CROSS=<prefix> (with <prefix>gcc on PATH) or SDK_ROOT like the TG5050 SDK" >&2
     exit 1
 fi
 
-CFLAGS="-O2 -g0 -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fvisibility=hidden"
-LDFLAGS="-shared -Wl,-z,relro,-z,now"
-
-# A shim preloaded RTLD_GLOBAL only satisfies a game's DT_NEEDED when its
-# SONAME matches the bionic library name the APK references (liblog.so, ...).
-# Without it, glibc searches LD_LIBRARY_PATH for a file with that name and
-# may resolve DT_NEEDED to a different bionic copy than the preloaded shim,
-# so every shim is linked with -Wl,-soname,<its exact name>.
-SHIM_SONAME() { printf %s "-Wl,-soname,$1"; }
+# -fvisibility=hidden + --export-dynamic: the runner exports exactly the
+# ANDROIDRT_EXPORT functions (the game-facing Android ABI), which is what the
+# bionic loader binds a game's liblog/libandroid/libOpenSLES imports to.
+CFLAGS="-O2 -g0 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fvisibility=hidden"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/shims"
+mkdir -p "$OUT"
 
 echo "== AndroidRT → $OUT (CC=$CC) =="
 
-# The runner (loader). Exported API must surface through the -rdynamic-free
-# default visibility: main()/runOneActivity live in different objects, so
-# keep -fvisibility=hidden off the runner link.
-$CC -O2 -g0 -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
-    -DJUKAHUB_EVDEV \
-    -I"$SRC" \
-    "$SRC/runner.c" "$SRC/activity.c" "$SRC/androidshim.c" "$SRC/inputshim.c" \
-    "$SRC/evdev.c" "$SRC/logshim.c" \
-    "$SRC/openslessim.c" "$SRC/surface.c" "$SRC/dlport.c" \
-    -o "$OUT/loader" \
-    -pthread -ldl
+$CC $CFLAGS -DJUKAHUB_EVDEV -I"$SRC" \
+    "$SRC/runner.c" "$SRC/activity.c" "$SRC/androidshim.c" "$SRC/inputshim.c" "$SRC/looper.c" \
+    "$SRC/jnistub.c" "$SRC/evdev.c" "$SRC/logshim.c" "$SRC/openslessim.c" "$SRC/surface.c" "$SRC/eglpresent.c" \
+    "$SRC/dlport.c" "$SRC/elfdyn.c" "$SRC/bionicld.c" "$SRC/bioniccompat.c" "$SRC/bionicpthread.c" \
+    "$SRC/bionicjmp.S" "$SRC/sysprops.c" \
+    -o "$OUT/loader" -pthread -ldl -lm -Wl,--export-dynamic
 echo "  loader"
 
-# One shared object per shimmed Android library, with the
-# exact DT_NEEDED names games reference.
-build_shim() {
-    name="$1"; src="$2"; extra="${3:-}"
-    $CC $CFLAGS -I"$SRC" -c "$SRC/$src" -o "$OUT/shims/$name.o"
-    $CC $LDFLAGS "$(SHIM_SONAME "$name")" "$OUT/shims/$name.o" -o "$OUT/shims/$name" $extra
-    rm -f "$OUT/shims/$name.o"
-    echo "  shims/$name"
-}
+$CC $CFLAGS -DSURFACE_PROBE_MAIN -I"$SRC" "$SRC/surface.c" "$SRC/dlport.c" -o "$OUT/surface-probe" -ldl
+echo "  surface-probe"
 
-# androidshim is compiled twice: once linked into the runner (all symbols,
-# default visibility) and once as shims/libandroid.so (hidden exports, only
-# the Android ABI surface marked default via actbridge's declaration).
-# libandroid.so carries inputshim.c too: the AInputEvent/AInputQueue
-# functions are part of libandroid's ABI, so a game's DT_NEEDED resolves
-# them out of the same file it resolves the rest of the shim from.
-$CC $CFLAGS -DJUKAHUB_SHIM_SO -DJUKAHUB_SHIM_ANDROID -I"$SRC" \
-    -c "$SRC/androidshim.c" -o "$OUT/shims/.androidshim_so.o"
-$CC $LDFLAGS -I"$SRC" -c "$SRC/inputshim.c" -o "$OUT/shims/.inputshim_so.o"
-$CC $LDFLAGS "$(SHIM_SONAME libandroid.so)" -pthread "$OUT/shims/.androidshim_so.o" "$OUT/shims/.inputshim_so.o" \
-    -o "$OUT/shims/libandroid.so" -ldl
-rm -f "$OUT/shims/.androidshim_so.o" "$OUT/shims/.inputshim_so.o"
-echo "  shims/libandroid.so"
+cp "$HERE/launch.sh" "$OUT/launch.sh"
+cat > "$OUT/props.txt.example" <<'EOF'
+# Copy to props.txt (next to `loader`) to override what games read through
+# __system_property_get. One key=value per line; defaults describe the Smart
+# Pro as an Android 9 (SDK 28) arm64 handheld with GLES 3.2.
+#ro.product.model=Smart Pro
+#ro.build.version.sdk=28
+#persist.sys.locale=en-US
+EOF
+chmod +x "$OUT/loader" "$OUT/launch.sh" "$OUT/surface-probe"
 
-build_shim liblog.so  logshim.c    ""
-build_shim libOpenSLES.so openslessim.c "-ldl"
-
-chmod +x "$OUT/launch.sh" "$OUT/loader"
-chmod +x "$OUT/shims/"*.so 2>/dev/null || true
+# NDK clang reads the stack-protector canary at tpidr_el0 + 0x28; the runner
+# pins that slot with apak_tls, which must be the first (only) object of its
+# static TLS block. Check it while the symbol table is still there.
+if command -v "$READELF" >/dev/null 2>&1; then
+    off=$("$READELF" -sW "$OUT/loader" | awk '$NF == "apak_tls" { print $2; exit }')
+    case "$off" in
+        0000000000000000) echo "  TLS: apak_tls at offset 0 of the TLS block (canary slot = tpidr_el0+0x28)" ;;
+        "") echo "  TLS: apak_tls not found in the symbol table — cannot verify the canary slot" >&2 ;;
+        *) echo "build-tsp.sh: apak_tls is at TLS offset 0x$off, not 0 — another __thread variable was linked first" >&2
+           exit 1 ;;
+    esac
+fi
 
 echo "done."

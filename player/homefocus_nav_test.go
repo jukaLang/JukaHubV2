@@ -30,28 +30,33 @@ func TestHomeClockSelectableWithArrows(t *testing.T) {
 	useHomeAsCurrent(t)
 	config := &Config{}
 
-	for _, start := range []HomeFocusID{HomeFocusMedia, HomeFocusSettings} {
-		if !homeLayout.Focus.Set(start) {
-			t.Fatalf("cannot focus %q", start)
-		}
-		homeKey(t, config, sdl.K_UP)
-		if got := homeLayout.Focus.Current(); got != HomeFocusClock {
-			t.Errorf("Up from %q focused %q, want clock", start, got)
-		}
-	}
-
-	// Files sits under the launcher, so Up reaches the launcher first and a
-	// second Up continues to the clock.
+	// The launcher sits in the header band over the Media card, so Up from
+	// Media reaches the launcher first and a second Up continues to the clock.
+	// Files is under Media, one more step down the same column.
 	if !homeLayout.Focus.Set(HomeFocusFiles) {
 		t.Fatal("cannot focus files")
 	}
 	homeKey(t, config, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusMedia {
+		t.Fatalf("Up from files focused %q, want media (drawn directly above it)", got)
+	}
+	homeKey(t, config, sdl.K_UP)
 	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
-		t.Fatalf("Up from files focused %q, want the PS5 launcher", got)
+		t.Fatalf("Up from media focused %q, want the PS5 launcher", got)
 	}
 	homeKey(t, config, sdl.K_UP)
 	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
 		t.Fatalf("Up from the PS5 launcher focused %q, want clock", got)
+	}
+
+	// With the launcher hidden, Up from Media goes straight to the clock.
+	homeLayout.Focus.SetEnabled(HomeFocusPS5, false)
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus media")
+	}
+	homeKey(t, config, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
+		t.Errorf("Up from media with the launcher hidden focused %q, want clock", got)
 	}
 }
 
@@ -60,13 +65,13 @@ func TestHomeClockSelectableWithArrows(t *testing.T) {
 func TestHomePS5LauncherFocusFallsThroughWhenHidden(t *testing.T) {
 	useHomeAsCurrent(t)
 	homeLayout.Focus.SetEnabled(HomeFocusPS5, false)
-	homeLayout.Focus.SetTileLink(HomeFocusFiles)
-	if !homeLayout.Focus.Set(HomeFocusFiles) {
-		t.Fatal("cannot focus files")
+	homeLayout.Focus.SetTileLink(HomeFocusMedia)
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus media")
 	}
 	homeKey(t, &Config{}, sdl.K_UP)
 	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
-		t.Fatalf("Up from files with the launcher hidden focused %q, want clock", got)
+		t.Fatalf("Up from media with the launcher hidden focused %q, want clock", got)
 	}
 }
 
@@ -76,15 +81,7 @@ func TestHomePS5LauncherFocusFallsThroughWhenHidden(t *testing.T) {
 func TestHomePS5LauncherTileLinkFollowsTheTile(t *testing.T) {
 	useHomeAsCurrent(t)
 
-	if !homeLayout.Focus.Set(HomeFocusFiles) {
-		t.Fatal("cannot focus files")
-	}
-	homeKey(t, &Config{}, sdl.K_UP)
-	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
-		t.Fatalf("Up from files focused %q, want the PS5 launcher", got)
-	}
-
-	// A wide status cluster pushes the launcher over Media instead.
+	// The shipped layout puts the launcher over Media.
 	homeLayout.Focus.SetTileLink(HomeFocusMedia)
 	if !homeLayout.Focus.Set(HomeFocusMedia) {
 		t.Fatal("cannot focus media")
@@ -98,14 +95,29 @@ func TestHomePS5LauncherTileLinkFollowsTheTile(t *testing.T) {
 		t.Fatalf("Down from the launcher focused %q, want media", got)
 	}
 
+	// A layout that puts the launcher over another card (Files, say) re-points
+	// both edges at that card.
+	homeLayout.Focus.SetTileLink(HomeFocusFiles)
+	if !homeLayout.Focus.Set(HomeFocusFiles) {
+		t.Fatal("cannot focus files")
+	}
+	homeKey(t, &Config{}, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
+		t.Fatalf("Up from files with the launcher over it focused %q, want the PS5 launcher", got)
+	}
+	homeKey(t, &Config{}, sdl.K_DOWN)
+	if got := homeLayout.Focus.Current(); got != HomeFocusFiles {
+		t.Fatalf("Down from the launcher focused %q, want files", got)
+	}
+
 	// Clearing the link (the tile is hidden) restores the static graph.
 	homeLayout.Focus.SetTileLink("")
 	if !homeLayout.Focus.Set(HomeFocusPS5) {
 		t.Fatal("cannot focus the launcher")
 	}
 	homeKey(t, &Config{}, sdl.K_DOWN)
-	if got := homeLayout.Focus.Current(); got != HomeFocusFiles {
-		t.Fatalf("Down from the launcher without a link focused %q, want files", got)
+	if got := homeLayout.Focus.Current(); got != HomeFocusMedia {
+		t.Fatalf("Down from the launcher without a link focused %q, want media", got)
 	}
 	homeLayout.Focus.SetEnabled(HomeFocusPS5, false)
 	if !homeLayout.Focus.Set(HomeFocusMedia) {
@@ -125,15 +137,15 @@ func TestHomePS5LauncherIsReachableWithDpad(t *testing.T) {
 	closePSPanelAfterTest(t)
 	useHomeAsCurrent(t)
 
-	if !homeLayout.Focus.Set(HomeFocusFiles) {
-		t.Fatal("cannot focus files")
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus media")
 	}
 	up := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_UP}
 	if !handleHomeController(up, &Config{}) {
 		t.Fatal("D-pad Up was not handled on home")
 	}
 	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
-		t.Fatalf("D-pad Up from files focused %q, want the PS5 launcher", got)
+		t.Fatalf("D-pad Up from media focused %q, want the PS5 launcher", got)
 	}
 
 	// A must press it. Where the native client cannot run the press is refused,
@@ -193,8 +205,14 @@ func TestHomeBellSelectableWithDpad(t *testing.T) {
 		t.Fatal("cannot focus the bell")
 	}
 	homeKey(t, &Config{}, sdl.K_DOWN)
-	if got := homeLayout.Focus.Current(); got != HomeFocusSettings {
-		t.Fatalf("Down from the bell focused %q, want settings", got)
+	// Down leaves the status row for what is drawn under its right end: the
+	// Remote Play launcher, or the Media card when the launcher is hidden.
+	want := HomeFocusPS5
+	if !homeLayout.Focus.IsEnabled(HomeFocusPS5) {
+		want = HomeFocusMedia
+	}
+	if got := homeLayout.Focus.Current(); got != want {
+		t.Fatalf("Down from the bell focused %q, want %q", got, want)
 	}
 
 	// A opens the notification center, the same as clicking the bell.

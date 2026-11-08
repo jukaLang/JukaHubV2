@@ -342,7 +342,7 @@ func activateVideoControl() {
 	}
 	switch videoControlFocus {
 	case vcStop:
-		StopEmbeddedPlayback()
+		mediaEndSession(appConfig)
 	case vcSeekBack:
 		PlayNavSound()
 		seekVideoBySeconds(state, -10)
@@ -363,9 +363,10 @@ func activateVideoControl() {
 		toggleVideoFullscreen()
 	case vcClose:
 		// Close ends the session on the spot: the video stops and the screen
-		// under it stays, with no window left behind.
+		// under it stays, with no window left behind (a file opened from
+		// Files returns to Files, see mediaEndSession).
 		PlayBackSound()
-		StopEmbeddedPlayback()
+		mediaEndSession(appConfig)
 	case vcBack:
 		PlayActivateSound()
 		videoBackOut(appConfig)
@@ -411,6 +412,19 @@ type playbackSession struct {
 	source   string
 	pageURL  string
 	tempFile bool
+	// local is true when the page itself is a file on the card (a video opened
+	// from Files or the Downloads library) rather than a stream link. Leaving
+	// the player ends a local session; a stream floats into the mini window.
+	local bool
+	// shown is raised the first time the player draws this session, so the
+	// orphan check never closes a file the user has not seen yet (a scene
+	// change that could not run left it behind another screen).
+	shown atomic.Bool
+	// ended is raised with playbackEnded when this session's decoder ran to
+	// the end of the file. Such a session is closed by the render thread
+	// (videoSyncPlaybackEnd), which hands off to the next Short, Up Next or
+	// the screen that opened the file; finish() must not close it first.
+	ended atomic.Bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -435,7 +449,28 @@ var (
 	// the phase used to stay "playing" forever, leaving a frozen last frame and
 	// a player that kept swallowing input over the scene underneath it.
 	playbackEnded atomic.Bool
+
+	// mediaRetiredFrames holds frame textures a stopped session left behind,
+	// guarded by embeddedPlayer.mu. The texture used to stay allocated after
+	// Stop (about 1.4 MB of video memory for a 720p frame) until the next video
+	// happened to replace it.
+	mediaRetiredFrames []*sdl.Texture
 )
+
+// mediaReleaseRetiredFrames destroys the frame textures stopped sessions left
+// behind. It runs on the render thread from the main loop, the only goroutine
+// allowed to destroy a texture of the live renderer.
+func mediaReleaseRetiredFrames() {
+	embeddedPlayer.mu.Lock()
+	retired := mediaRetiredFrames
+	mediaRetiredFrames = nil
+	embeddedPlayer.mu.Unlock()
+	for _, tex := range retired {
+		if tex != nil {
+			tex.Destroy()
+		}
+	}
+}
 
 // waitForVideoDecoders waits until every playback goroutine has returned,
 // bounded by timeout. It is used by tests that tear down a renderer.
@@ -454,12 +489,18 @@ func waitForVideoDecoders(timeout time.Duration) bool {
 }
 
 func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSession {
+	// A new session (a seek, the next video) supersedes an end the render
+	// thread has not handled yet: that flag belongs to the session being
+	// replaced and must not stop this one.
+	playbackEnded.Store(false)
 	persistSessionProgress(playbackCurrentSession())
+	// Decided once per session, before the lock: it is a stat of the page path.
+	local := !tempFile && mediaPageIsLocalFile(pageURL)
 
 	playbackMu.Lock()
 	prev := playbackCurrent
 	playbackSeq++
-	s := &playbackSession{id: playbackSeq, source: source, pageURL: pageURL, tempFile: tempFile}
+	s := &playbackSession{id: playbackSeq, source: source, pageURL: pageURL, tempFile: tempFile, local: local}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	playbackCurrent = s
 	playbackMu.Unlock()
@@ -467,10 +508,39 @@ func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSessio
 	if prev != nil {
 		prev.stop()
 		if prev.tempFile && !samePlaybackSource(prev.source, source) {
-			removeTempVideo(prev.source)
+			if tempFile && dlSamePage(prev.pageURL, pageURL) {
+				// The same video fetched again (another quality, a retry):
+				// the new download replaces this one, and only the copy being
+				// watched is worth keeping.
+				removeTempVideo(prev.source)
+			} else {
+				// The finished download is kept for offline play when the
+				// setting allows it (dl_library.go); otherwise it is deleted
+				// as before.
+				dlReleaseTempPlayback(prev.source, prev.pageURL)
+			}
 		}
 	}
 	return s
+}
+
+// mediaPageIsLocalFile reports whether a session's page is a file on disk: no
+// URL scheme and a regular file at that path. A stream that had to be
+// downloaded first keeps its web page URL, so it is still a stream.
+func mediaPageIsLocalFile(page string) bool {
+	page = strings.TrimSpace(page)
+	if page == "" || strings.Contains(page, "://") {
+		return false
+	}
+	info, err := os.Stat(page)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// mediaSessionIsLocal reports whether the session on screen plays a file
+// from the card rather than a stream.
+func mediaSessionIsLocal() bool {
+	s := playbackCurrentSession()
+	return s != nil && s.local
 }
 
 func playbackCurrentSession() *playbackSession {
@@ -561,6 +631,13 @@ func (s *playbackSession) stop() {
 
 func (s *playbackSession) finish() {
 	if !s.isCurrent() {
+		return
+	}
+	// A session that reached the end of its file is left to the render
+	// thread: stopping it here cleared playbackEnded before the main loop saw
+	// it, so the end-of-video hand-offs only ran when the render thread won a
+	// race of a few microseconds.
+	if s.ended.Load() && playbackEnded.Load() {
 		return
 	}
 	StopEmbeddedPlayback()
@@ -1053,6 +1130,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	// end of stream; only a decoder that ran to EOF raises the flag.
 	if sess.ctx.Err() == nil && playbackCurrentSession() == sess && frameCount > 0 {
 		log.Printf("[VIDEO] Reached end of stream after %d frames", frameCount)
+		sess.ended.Store(true)
 		playbackEnded.Store(true)
 	}
 }
@@ -1308,7 +1386,10 @@ func StopEmbeddedPlayback() {
 		persistSessionProgress(sess)
 		sess.stop()
 		if sess.tempFile {
-			removeTempVideo(sess.source)
+			// A download that played to here is a whole file: it is kept in
+			// the Downloads library when the setting allows it, otherwise
+			// removed (dlReleaseTempPlayback, dl_library.go).
+			dlReleaseTempPlayback(sess.source, sess.pageURL)
 		}
 	}
 	ClearVideoAudioQueue()
@@ -1324,6 +1405,13 @@ func StopEmbeddedPlayback() {
 	embeddedPlayer.frameSeq = 0
 	embeddedPlayer.uploadedSeq = 0
 	embeddedPlayer.downloadSpeed = 0
+	// The frame texture is retired, not destroyed: Stop runs on decoder
+	// goroutines too, and a texture may only be destroyed on the render thread
+	// (mediaReleaseRetiredFrames, called from the main loop).
+	if embeddedPlayer.current != nil {
+		mediaRetiredFrames = append(mediaRetiredFrames, embeddedPlayer.current)
+		embeddedPlayer.current = nil
+	}
 	embeddedPlayer.mu.Unlock()
 
 	if prevPhase != "idle" {
@@ -1334,6 +1422,8 @@ func StopEmbeddedPlayback() {
 	// stream the moment the poll sees it again.
 	partyNoteStop(currentPlaybackURL)
 	currentPlaybackURL = ""
+	// The next session records where it was started from afresh.
+	mediaForgetPlayOrigin()
 	// Nothing is playing any more, so the top bar drops its now-playing slot.
 	forgetVideoPage()
 	// Leaving playback also leaves full screen, the settings sheet and the
@@ -1355,6 +1445,21 @@ func StopEmbeddedPlayback() {
 }
 
 func stopVideoPlayback() {
+	StopEmbeddedPlayback()
+}
+
+// mediaStopForScreenChild ends playback when a game or an external app takes
+// the screen: the parked main loop no longer draws the player, and the video's
+// audio would otherwise go on over the game. It is safe off the render thread,
+// like every other Stop caller (the decoder's own finish).
+func mediaStopForScreenChild() {
+	// The Library's scan would run ffmpeg and ffprobe beside the game; the
+	// next visit to the Library carries on where it stopped.
+	mlibCancelScan()
+	if playerPhase() == "idle" {
+		return
+	}
+	log.Printf("[VIDEO] a game or app took the screen; stopping playback")
 	StopEmbeddedPlayback()
 }
 
@@ -1637,10 +1742,22 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 // the repaint all happen in one place, and it is called from the main loop so a
 // video that finished while its scene was off screen still releases the player.
 func videoSyncPlaybackEnd() {
+	// A session nothing on screen draws any more (the scene was left without
+	// Back: the BACK/Menu button, the header's back pill, Home, the Start menu)
+	// gets a visible home or ends here, once per frame, whatever path left it.
+	if mediaSessionOrphaned(appConfig) {
+		mediaResolveOrphan(appConfig)
+	}
 	if !playbackEnded.Swap(false) {
 		return
 	}
 	if playerPhase() == "idle" {
+		return
+	}
+	// The flag is for the session that reached its end. One that replaced it
+	// in the meantime (raised a moment before a seek or the next video began)
+	// is not over.
+	if sess := playbackCurrentSession(); sess != nil && !sess.ended.Load() {
 		return
 	}
 	log.Printf("[VIDEO] Playback finished; returning to the scene")
@@ -1653,7 +1770,13 @@ func videoSyncPlaybackEnd() {
 		// player this video is releasing is idle again.
 		upNextAdvancePending = true
 	}
+	// A file opened from Files was shown on the Media scene only because that
+	// scene owns the video element; when it ends the user goes back to Files.
+	returnToOpener := mediaReturnsToOpener(appConfig)
 	StopEmbeddedPlayback()
+	if returnToOpener {
+		goBackScene(appConfig)
+	}
 }
 
 func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
@@ -1661,6 +1784,9 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	state := snapshotVideoState()
 	if state.phase == "idle" {
 		return
+	}
+	if sess := playbackCurrentSession(); sess != nil {
+		sess.shown.Store(true)
 	}
 
 	// Full-screen loader shown during video download.
@@ -1762,12 +1888,43 @@ func renderVideoFullscreen(renderer *sdl.Renderer, config *Config) {
 // so playback never looks like a dead black rectangle.
 func drawVideoFrameArea(renderer *sdl.Renderer, currentTex *sdl.Texture, x, y, w, h int32) {
 	if currentTex != nil {
-		renderer.Copy(currentTex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
+		// The picture keeps its own shape: a Short (9:16) or a 4:3 clip used
+		// to be stretched to the width of the player, which on the Media
+		// screen's wide element squashed every face.
+		dst := sdl.Rect{X: x, Y: y, W: w, H: h}
+		embeddedPlayer.mu.Lock()
+		vw, vh := embeddedPlayer.width, embeddedPlayer.height
+		embeddedPlayer.mu.Unlock()
+		if fit := mediaFitRect(dst, vw, vh); fit != dst {
+			renderer.SetDrawColor(0, 0, 0, 255)
+			renderer.FillRect(&dst)
+			dst = fit
+		}
+		renderer.Copy(currentTex, nil, &dst)
 		return
 	}
 	renderer.SetDrawColor(8, 10, 16, 220)
 	renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 	renderSpinner(renderer, x+w/2, y+h/2, 40, ColorTextPrimary())
+}
+
+// mediaFitRect letterboxes a vw×vh picture inside box, keeping its aspect
+// ratio. An unknown size keeps the whole box, as before, and a difference of a
+// couple of pixels is rounding rather than a reason to draw bars.
+func mediaFitRect(box sdl.Rect, vw, vh int32) sdl.Rect {
+	if vw <= 0 || vh <= 0 || box.W <= 0 || box.H <= 0 {
+		return box
+	}
+	w := box.W
+	h := int32(int64(box.W) * int64(vh) / int64(vw))
+	if h > box.H {
+		h = box.H
+		w = int32(int64(box.H) * int64(vw) / int64(vh))
+	}
+	if box.W-w <= 2 && box.H-h <= 2 {
+		return box
+	}
+	return sdl.Rect{X: box.X + (box.W-w)/2, Y: box.Y + (box.H-h)/2, W: w, H: h}
 }
 
 // drawVideoOverlayStatic draws the part of the overlay that never changes while
@@ -2249,6 +2406,13 @@ func HandleVideoControlClick(mx, my int32) bool {
 	if videoMiniVisible() {
 		return false
 	}
+	// Nothing on screen draws this session: its last layout's hit rects are
+	// stale, and the tap belongs to the scene. The session is given a visible
+	// home (or closed) first.
+	if mediaSessionOrphaned(appConfig) {
+		mediaResolveOrphan(appConfig)
+		return false
+	}
 
 	// In full screen a tap anywhere brings the controls back first.
 	if videoFullscreen && !videoChromeVisible() {
@@ -2311,7 +2475,7 @@ func HandleVideoControlClick(mx, my int32) bool {
 		videoControlFocus = vcPlayPause
 		ToggleVideoPlayback()
 	} else if pointInRect(mx, my, videoControlRects.stop) {
-		StopEmbeddedPlayback()
+		mediaEndSession(appConfig)
 	} else if pointInRect(mx, my, videoControlRects.seekBack) {
 		videoControlFocus = vcSeekBack
 		seekVideoBySeconds(state, -10)
@@ -2331,7 +2495,7 @@ func HandleVideoControlClick(mx, my int32) bool {
 	} else if pointInRect(mx, my, videoControlRects.close) {
 		videoControlFocus = vcClose
 		PlayBackSound()
-		StopEmbeddedPlayback()
+		mediaEndSession(appConfig)
 	} else if pointInRect(mx, my, videoControlRects.back) {
 		// Backing out keeps the video: full screen steps down to the window,
 		// and the window steps down to the floating mini player.
@@ -2535,6 +2699,13 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 	if videoMiniVisible() {
 		return false
 	}
+	// A player nothing draws must not keep the keyboard: that was the "glitch"
+	// after leaving a video opened from Files — arrows changed the volume of
+	// an invisible video instead of moving the file list.
+	if mediaSessionOrphaned(appConfig) {
+		mediaResolveOrphan(appConfig)
+		return false
+	}
 
 	// The settings sheet is modal over the player while it is open.
 	if videoSettingsOpen {
@@ -2599,7 +2770,7 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		// floating mini player on the previous screen.
 		videoBackOut(appConfig)
 	case sdl.K_q:
-		StopEmbeddedPlayback()
+		mediaEndSession(appConfig)
 	case sdl.K_n:
 		// Next / previous video of the list that launched this one. Plain keys,
 		// so one press skips a short without a chord; the pad does the same on
@@ -2642,6 +2813,11 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 	if videoMiniVisible() {
 		return false
 	}
+	// Nor may an invisible player keep it (see HandleVideoKeyInput).
+	if mediaSessionOrphaned(appConfig) {
+		mediaResolveOrphan(appConfig)
+		return false
+	}
 
 	if videoSettingsOpen {
 		switch e.Button {
@@ -2667,9 +2843,13 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
 		activateVideoControl()
-	case sdl.CONTROLLER_BUTTON_B:
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_GUIDE:
 		// B steps down a size (full screen -> window -> mini player) instead
-		// of stopping; the Stop control still ends playback.
+		// of stopping; the Stop control still ends playback. The handheld's
+		// Menu/Select button (BACK, and GUIDE before it is normalised) is the
+		// same Back: it used to fall through to the scene underneath, which
+		// left the Media screen with the video still playing and nothing
+		// drawing it.
 		videoBackOut(appConfig)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		moveVideoControlFocus(-1)

@@ -1,0 +1,15 @@
+{
+  "name": "worldclock",
+  "title": "World clock",
+  "version": "1.0.0",
+  "description": "The time in Tokyo, Berlin, London, New York and more, daylight saving included. Works offline.",
+  "author": "JukaHub",
+  "entry": "worldclock.sh",
+  "icon": "globe",
+  "enabled": true,
+  "actions": [
+    {"id": "cities", "label": "Around the world"},
+    {"id": "pacific", "label": "Pacific"},
+    {"id": "utc", "label": "UTC"}
+  ]
+}

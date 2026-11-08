@@ -228,9 +228,10 @@ func TestBenchProgressTextNamesTheStep(t *testing.T) {
 	}
 }
 
-// The shipped configs offer a single button, so no screen can ask for half a
-// measurement again.
-func TestBenchmarkScreenHasOneRunButton(t *testing.T) {
+// The Benchmark screen measures as it opens and runs again on X, so the shipped
+// configs carry no Run button at all; the benchmark_text panel stays, because
+// it is what starts the measurement on entry (benchmarkAutoStartOnOpen).
+func TestBenchmarkScreenHasNoRunButton(t *testing.T) {
 	for _, path := range []string{"jukaconfig.json", "trimui/jukaconfig.device.json"} {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -244,18 +245,11 @@ func TestBenchmarkScreenHasOneRunButton(t *testing.T) {
 		if idx < 0 {
 			t.Fatalf("%s does not ship the Benchmark scene", path)
 		}
-		var triggers []string
-		for _, el := range cfg.Scenes[idx].Elements {
-			if el.Type == "button" {
-				triggers = append(triggers, el.Trigger)
-			}
-		}
-		if len(triggers) != 1 || triggers[0] != "benchmark_run" {
-			t.Errorf("%s: benchmark buttons = %v, want the single %q", path, triggers, "benchmark_run")
-		}
-		// The log panel still has to be there: it is where the numbers land.
 		var hasLog bool
 		for _, el := range cfg.Scenes[idx].Elements {
+			if el.Type == "button" {
+				t.Errorf("%s: the Benchmark scene still ships a %q button (%s)", path, el.Text, el.Trigger)
+			}
 			if el.Type == "textlog" && el.Variable == "benchmark_text" {
 				hasLog = true
 			}
@@ -266,29 +260,22 @@ func TestBenchmarkScreenHasOneRunButton(t *testing.T) {
 	}
 }
 
-// shippedBenchmarkRun loads a shipped config and returns the Benchmark screen's
-// Run button, failing when the scene or the button is missing.
-func shippedBenchmarkRun(t *testing.T, path string) Element {
+// legacyBenchmarkRun is the Run button older configs (and hand-made scenes)
+// still carry. The Benchmark screen has none now, but the trigger and its busy
+// face keep working for a config-driven panel that uses it.
+func legacyBenchmarkRun(t *testing.T) Element {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+	return Element{
+		Type:    "button",
+		Text:    "Run",
+		Trigger: "benchmark_run",
+		Color:   "$labelColor",
+		BgColor: "$buttonColor",
+		X:       60,
+		Y:       611,
+		Width:   "140",
+		Height:  "45",
 	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	idx := sceneIndexExact(&cfg, "Benchmark")
-	if idx < 0 {
-		t.Fatalf("%s does not ship the Benchmark scene", path)
-	}
-	for _, el := range cfg.Scenes[idx].Elements {
-		if el.Type == "button" && el.Trigger == "benchmark_run" {
-			return el
-		}
-	}
-	t.Fatalf("%s: the Benchmark scene has no benchmark_run button", path)
-	return Element{}
 }
 
 // While a measurement runs, the screen's one Run button says so and is drawn
@@ -296,7 +283,7 @@ func shippedBenchmarkRun(t *testing.T, path string) Element {
 // pass. The screen starts measuring as it opens, so without this the only
 // control on it looked live for the whole of a slow card's 100 MB pass.
 func TestBenchmarkRunButtonIsBusyWhileMeasuring(t *testing.T) {
-	runBtn := shippedBenchmarkRun(t, "jukaconfig.json")
+	runBtn := legacyBenchmarkRun(t)
 	if label, busy := benchmarkButtonFace(runBtn); busy || label != runBtn.Text {
 		t.Fatalf("idle Run button = %q busy=%v, want its own label %q and no busy mark", label, busy, runBtn.Text)
 	}

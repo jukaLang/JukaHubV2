@@ -471,6 +471,62 @@ func downloadRemove(id int64) bool {
 	return true
 }
 
+// dlCancelTransfer is Media's cancel. It removes a row that has not finished
+// (stopping it when it is the running one) and reports done for a row that
+// finished meanwhile, which it leaves alone: the details sheet that asked can
+// be older than the transfer, and a cancel must never delete the file that
+// just landed in the library. The status check and the removal happen under
+// one lock, so the worker cannot finish the row in between.
+func dlCancelTransfer(id int64) (removed, done bool) {
+	downloads.mu.Lock()
+	idx := -1
+	for i, it := range downloads.items {
+		if it.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		downloads.mu.Unlock()
+		return false, false
+	}
+	it := downloads.items[idx]
+	if it.Status == downloadDone {
+		downloads.mu.Unlock()
+		return false, true
+	}
+	cancel := downloads.cancel
+	active := it.Status == downloadActive
+	downloads.items = append(downloads.items[:idx], downloads.items[idx+1:]...)
+	downloads.mu.Unlock()
+
+	if active && cancel != nil {
+		cancel()
+	}
+	// Nothing was saved yet: the staging folder is all there is to clean.
+	os.RemoveAll(downloadsPartDir(id))
+	return true, false
+}
+
+// dlForgetQueuePath drops the saved rows that point at a file the Downloads
+// library just deleted, so the queue panel cannot offer to play it.
+func dlForgetQueuePath(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	key := dlPathKey(path)
+	downloads.mu.Lock()
+	kept := downloads.items[:0]
+	for _, it := range downloads.items {
+		if it.Status == downloadDone && it.Path != "" && dlPathKey(it.Path) == key {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	downloads.items = kept
+	downloads.mu.Unlock()
+}
+
 // downloadFocused returns one row's copy, for the UI's Play/Retry paths.
 func downloadFocused(id int64) (downloadItem, bool) {
 	downloads.mu.Lock()
@@ -573,6 +629,7 @@ func downloadsWorker() {
 			continue
 		}
 		justSaved := false
+		var saved downloadItem
 		switch {
 		case err != nil && (errors.Is(err, context.Canceled) || downloads.paused):
 			// A pause is not a failure: the row waits for Resume.
@@ -597,6 +654,7 @@ func downloadsWorker() {
 				cur.Source = res.Source
 			}
 			justSaved = true
+			saved = *cur
 		}
 		title := cur.displayTitle()
 		downloads.mu.Unlock()
@@ -604,6 +662,9 @@ func downloadsWorker() {
 		if justSaved {
 			ShowToast("Saved "+title, ToastKindSuccess)
 			noteAwayDownloadSaved(title)
+			// The queue forgets its rows on exit; the library keeps the file
+			// listed, with its artwork, for offline play (dl_library.go).
+			dlLibraryNoteSaved(saved)
 		}
 	}
 }

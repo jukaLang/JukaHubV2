@@ -411,6 +411,8 @@ log.
 | `game-options.json` | per-game overrides: CPU ceiling, core, launch flags |
 | `game-recents.json` | the Continue row |
 | `musicfavorites.json` | starred tracks |
+| `music-playlists.json` | named playlists saved from the audio player |
+| `theme-catalog.json` | cached copy of the community theme index, so the Theme library browses offline |
 | `audioresume.json` | audiobook/podcast positions and playback speed |
 | `ipstreams.json` | the IPTV library you added |
 | `tvfavorites.json` | starred channels |

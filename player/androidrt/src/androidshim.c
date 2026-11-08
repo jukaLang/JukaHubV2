@@ -1,32 +1,41 @@
-/* androidshim.c — libandroid.so for Tier 1: the subset NativeActivity
- * NDK games actually touch from a native entry —
- *   ANativeActivity_finish / getWindow
- *   ANativeWindow_* queries and buffer geometry
- *   ALooper_prepare / pollAll / pollOnce / wake
- *   AAssetManager_* reading the staged assets/ tree
+/* androidshim.c — libandroid for Tier 1: the subset NativeActivity NDK
+ * games touch from a native entry —
+ *   ANativeActivity_finish / getWindow / window-flag calls
+ *   ANativeWindow_* queries, buffer geometry, software lock/post
+ *   AAssetManager_* / AAsset_* / AAssetDir_* over the staged assets/ tree
+ *   AConfiguration_* describing the Smart Pro (1280x720 landscape, xhdpi,
+ *     d-pad navigation, no touch, SDK 28)
+ *   ASensorManager_* (a device without sensors), ATrace_* (no tracing)
+ * ALooper/AChoreographer live in looper.c, AInputQueue in inputshim.c.
  * Everything camera/identity/privacy-shaped is deliberately absent.
  *
- * The window here is a handle, not a surface: games draw through EGL on the
- * device's PowerVR userspace (that part stays unshimmed), and a Tier-1
- * backend that hands games a real AHardwareBuffer-backed ANativeWindow is
- * the next milestone behind android_windowBackend in window.c.
+ * The window is a handle, not a surface: games draw through EGL on the
+ * device's glibc GPU userspace, and the present layer (eglpresent.c) turns
+ * this handle into the native window that userspace understands.
  */
 
 #define _GNU_SOURCE
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "actbridge.h"
 
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0 /* MinGW smoke builds */
+#endif
+
 /* ── window ──────────────────────────────────────────────────────────── */
 
-/* AHardwareBuffer_format values games ask for via window_setBuffersGeometry. */
 enum {
     WINDOW_FORMAT_RGBA_8888 = 1,
     WINDOW_FORMAT_RGBX_8888 = 2,
@@ -34,22 +43,39 @@ enum {
 };
 
 typedef struct NativeWindow {
-    int32_t width;
+    int32_t width;          /* buffer size (setBuffersGeometry, else panel) */
     int32_t height;
     int32_t format;
     int32_t refcount;
+    int32_t panelWidth;     /* the window itself                          */
+    int32_t panelHeight;
+    void *swBits;           /* ANativeWindow_lock buffer                  */
+    int32_t swStride;
+    int32_t swFormat;
 } NativeWindow;
+
+typedef struct ANativeWindow_Buffer {
+    int32_t width;
+    int32_t height;
+    int32_t stride;
+    int32_t format;
+    void *bits;
+    uint32_t reserved[6];
+} ANativeWindow_Buffer;
 
 static NativeWindow *asWindow(ANativeWindow *w) { return (NativeWindow *)w; }
 
 static NativeWindow *g_window; /* the one window this runner drives */
-
 static pthread_mutex_t g_window_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* activity→shim window plumbing (see actbridge.h) */
+/* Software-rendering present hook (eglpresent.c installs one when it can
+ * scan out a CPU buffer); NULL = lock/unlockAndPost work but show nothing. */
+typedef int (*SoftwarePresentFn)(const void *bits, int width, int height, int stride, int format);
+static SoftwarePresentFn g_swPresent;
+void android_setSoftwarePresent(SoftwarePresentFn fn);
+void android_setSoftwarePresent(SoftwarePresentFn fn) { g_swPresent = fn; }
+
 void android_activitySetWindow(ANativeActivity *activity, ANativeWindow *window) {
-    /* activity->window is NDK tail-field ordering (see actbridge.h); games
-     * read it directly, so it mirrors the shim's global. */
     if (activity) activity->window = window;
     pthread_mutex_lock(&g_window_lock);
     g_window = (NativeWindow *)window;
@@ -57,7 +83,7 @@ void android_activitySetWindow(ANativeActivity *activity, ANativeWindow *window)
 }
 
 void android_activityClearWindow(ANativeActivity *activity, ANativeWindow *window) {
-    (void)activity;
+    if (activity && activity->window == window) activity->window = NULL;
     if (!window) return;
     pthread_mutex_lock(&g_window_lock);
     if (g_window == (NativeWindow *)window) g_window = NULL;
@@ -65,17 +91,18 @@ void android_activityClearWindow(ANativeActivity *activity, ANativeWindow *windo
 }
 
 ANativeWindow *android_currentWindow(void) {
+    ANativeWindow *w;
     pthread_mutex_lock(&g_window_lock);
-    ANativeWindow *w = (ANativeWindow *)g_window;
+    w = (ANativeWindow *)g_window;
     pthread_mutex_unlock(&g_window_lock);
     return w;
 }
 
 static NativeWindow *windowCreate(int32_t width, int32_t height, int32_t format) {
-    NativeWindow *w = calloc(1, sizeof(*w));
+    NativeWindow *w = (NativeWindow *)calloc(1, sizeof(*w));
     if (w) {
-        w->width = width;
-        w->height = height;
+        w->width = w->panelWidth = width;
+        w->height = w->panelHeight = height;
         w->format = format ? format : WINDOW_FORMAT_RGBA_8888;
         w->refcount = 1;
     }
@@ -83,36 +110,42 @@ static NativeWindow *windowCreate(int32_t width, int32_t height, int32_t format)
 }
 
 ANDROIDRT_EXPORT int32_t ANativeWindow_getWidth(ANativeWindow *window) {
+    int32_t width;
     pthread_mutex_lock(&g_window_lock);
-    int32_t width = window && asWindow(window) ? asWindow(window)->width : 0;
+    width = window ? asWindow(window)->width : 0;
     pthread_mutex_unlock(&g_window_lock);
     return width;
 }
 
 ANDROIDRT_EXPORT int32_t ANativeWindow_getHeight(ANativeWindow *window) {
+    int32_t height;
     pthread_mutex_lock(&g_window_lock);
-    int32_t height = window && asWindow(window) ? asWindow(window)->height : 0;
+    height = window ? asWindow(window)->height : 0;
     pthread_mutex_unlock(&g_window_lock);
     return height;
 }
 
 ANDROIDRT_EXPORT int32_t ANativeWindow_getFormat(ANativeWindow *window) {
+    int32_t format;
     pthread_mutex_lock(&g_window_lock);
-    int32_t format = window && asWindow(window) ? asWindow(window)->format : 0;
+    format = window ? asWindow(window)->format : 0;
     pthread_mutex_unlock(&g_window_lock);
     return format;
 }
 
-ANDROIDRT_EXPORT int32_t ANativeWindow_setBuffersGeometry(ANativeWindow *window, int32_t width, int32_t height, int32_t format) {
-    if (!window) return -22; /* the NDK's -EINVAL failure code */
-
-    pthread_mutex_lock(&g_window_lock);
+/* width/height 0 = back to the window size; format 0 = keep. The format a
+ * game passes is often EGL_NATIVE_VISUAL_ID (a DRM fourcc on GBM stacks),
+ * not a WINDOW_FORMAT_*: it is recorded as is. */
+ANDROIDRT_EXPORT int32_t ANativeWindow_setBuffersGeometry(ANativeWindow *window, int32_t width, int32_t height,
+                                                         int32_t format) {
     NativeWindow *w = asWindow(window);
-    if (width > 0)  w->width = width;
-    if (height > 0) w->height = height;
-    if (format > 0) w->format = format;
+    if (!w || width < 0 || height < 0 || (width == 0) != (height == 0)) return -22; /* -EINVAL */
+    pthread_mutex_lock(&g_window_lock);
+    w->width = width ? width : w->panelWidth;
+    w->height = height ? height : w->panelHeight;
+    if (format) w->format = format;
     pthread_mutex_unlock(&g_window_lock);
-    return 0; /* API's 0 = success */
+    return 0;
 }
 
 ANDROIDRT_EXPORT void ANativeWindow_acquire(ANativeWindow *window) {
@@ -122,43 +155,112 @@ ANDROIDRT_EXPORT void ANativeWindow_acquire(ANativeWindow *window) {
     pthread_mutex_unlock(&g_window_lock);
 }
 
+static void windowReleaseLocked(NativeWindow *w) {
+    if (!w) return;
+    if (--w->refcount <= 0) {
+        free(w->swBits);
+        free(w);
+    }
+}
+
 ANDROIDRT_EXPORT void ANativeWindow_release(ANativeWindow *window) {
     if (!window) return;
     pthread_mutex_lock(&g_window_lock);
-    if (--asWindow(window)->refcount == 0) {
-        asWindow(window)->refcount = 0;
-        free(window);
-    }
+    windowReleaseLocked(asWindow(window));
     pthread_mutex_unlock(&g_window_lock);
 }
 
-/* The backend hook: creates the actual surface + EGL on the device. Until
- * window.c implements it, games see a surface-less stub window; their own
- * code paths still run, which is enough for the symbol-measurement loop
- * the runner prints. */
+ANDROIDRT_EXPORT int32_t ANativeWindow_lock(ANativeWindow *window, ANativeWindow_Buffer *out, ARect *dirty) {
+    NativeWindow *w = asWindow(window);
+    int bpp;
+    if (!w || !out) return -22;
+    pthread_mutex_lock(&g_window_lock);
+    bpp = w->format == WINDOW_FORMAT_RGB_565 ? 2 : 4;
+    if (!w->swBits || w->swStride != w->width || w->swFormat != w->format) {
+        free(w->swBits);
+        w->swBits = calloc((size_t)w->width * (size_t)w->height, (size_t)bpp);
+        w->swStride = w->width;
+        w->swFormat = w->format;
+    }
+    out->width = w->width;
+    out->height = w->height;
+    out->stride = w->swStride;
+    out->format = w->format == WINDOW_FORMAT_RGB_565 ? WINDOW_FORMAT_RGB_565 : WINDOW_FORMAT_RGBA_8888;
+    out->bits = w->swBits;
+    memset(out->reserved, 0, sizeof out->reserved);
+    pthread_mutex_unlock(&g_window_lock);
+    if (dirty) {
+        dirty->left = dirty->top = 0;
+        dirty->right = out->width;
+        dirty->bottom = out->height;
+    }
+    return out->bits ? 0 : -12; /* -ENOMEM */
+}
+
+ANDROIDRT_EXPORT int32_t ANativeWindow_unlockAndPost(ANativeWindow *window) {
+    NativeWindow *w = asWindow(window);
+    static int warned;
+    if (!w) return -22;
+    if (g_swPresent) return g_swPresent(w->swBits, w->width, w->height, w->swStride, w->swFormat);
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr, "[androidrt] window: software rendering (ANativeWindow_lock/unlockAndPost) has no scanout path yet — frames are dropped\n");
+    }
+    return 0;
+}
+
+ANDROIDRT_EXPORT int32_t ANativeWindow_setBuffersTransform(ANativeWindow *window, int32_t transform) {
+    (void)window;
+    (void)transform;
+    return 0;
+}
+ANDROIDRT_EXPORT int32_t ANativeWindow_setBuffersDataSpace(ANativeWindow *window, int32_t dataSpace) {
+    (void)window;
+    (void)dataSpace;
+    return 0;
+}
+ANDROIDRT_EXPORT int32_t ANativeWindow_getBuffersDataSpace(ANativeWindow *window) {
+    (void)window;
+    return 0;
+}
+ANDROIDRT_EXPORT int32_t ANativeWindow_setFrameRate(ANativeWindow *window, float frameRate, int8_t compatibility) {
+    (void)window;
+    (void)frameRate;
+    (void)compatibility;
+    return 0;
+}
+ANDROIDRT_EXPORT void ANativeWindow_tryAllocateBuffers(ANativeWindow *window) { (void)window; }
+ANDROIDRT_EXPORT ANativeWindow *ANativeWindow_fromSurface(void *env, void *surface) {
+    ANativeWindow *w = android_currentWindow();
+    (void)env;
+    (void)surface;
+    if (w) ANativeWindow_acquire(w);
+    return w;
+}
+
+/* The backend hook: issues the window the lifecycle hands the game. The
+ * EGL present layer (eglpresent.c) turns it into a real scanout surface
+ * when the game creates its EGL window surface. */
 ANDROIDRT_EXPORT int android_windowBackend(int width, int height) {
     NativeWindow *w = windowCreate(width, height, WINDOW_FORMAT_RGBA_8888);
     pthread_mutex_lock(&g_window_lock);
-    ANativeWindow_release((ANativeWindow *)g_window);
+    windowReleaseLocked(g_window);
     g_window = w;
     pthread_mutex_unlock(&g_window_lock);
-    fprintf(stderr,
-            "[androidrt] window backend issued %dx%d RGBA (surface-less "
-            "stub; the EGL stack itself is measured by android_surfaceProbe)\n",
-            width, height);
+    fprintf(stderr, "[androidrt] window backend issued %dx%d\n", width, height);
 #ifndef JUKAHUB_SHIM_SO
-    /* ANDROIDPAK_SURFACE triggers the surface.c measurement — the
-     * milestone-3 question of whether this firmware's glibc GPU stack can
-     * hand a game a real EGL window surface. A probe failure never breaks
-     * the run: the window stub stays, only the measurement prints. */
-    const char *surfaceProbe = getenv("ANDROIDPAK_SURFACE");
-    if (surfaceProbe && strcmp(surfaceProbe, "0") != 0) {
-        extern int android_surfaceProbe(int width, int height, int *works);
-        int works = 0;
-        if (android_surfaceProbe(width, height, &works) != 0) {
-            fprintf(stderr, "[androidrt][surface] probe could not complete — the stub window stays, the log above says which layer died\n");
-        } else if (!works) {
-            fprintf(stderr, "[androidrt][surface] probe completed: stack not usable yet (see log above)\n");
+    /* ANDROIDPAK_SURFACE=1 also runs the surface.c measurement: which layer
+     * of this firmware's GPU stack works. A probe failure never breaks the
+     * run — only the measurement prints. */
+    {
+        const char *surfaceProbe = getenv("ANDROIDPAK_SURFACE");
+        if (surfaceProbe && strcmp(surfaceProbe, "0") != 0) {
+            extern int android_surfaceProbe(int width, int height, int *works);
+            int works = 0;
+            if (android_surfaceProbe(width, height, &works) != 0)
+                fprintf(stderr, "[androidrt][surface] probe could not complete — the log above says which layer died\n");
+            else if (!works)
+                fprintf(stderr, "[androidrt][surface] probe completed: GBM stack not usable (see log above)\n");
         }
     }
 #endif /* !JUKAHUB_SHIM_SO */
@@ -179,55 +281,68 @@ void android_activityInit(ANativeActivity *activity, ActivityRunner *runner) {
 
 ANDROIDRT_EXPORT ANativeWindow *ANativeActivity_getWindow(ANativeActivity *activity) {
     (void)activity;
-    pthread_mutex_lock(&g_window_lock);
-    ANativeWindow *w = (ANativeWindow *)g_window;
-    pthread_mutex_unlock(&g_window_lock);
-    return w;
+    return android_currentWindow();
 }
 
 ANDROIDRT_EXPORT void ANativeActivity_finish(ANativeActivity *activity) {
     (void)activity;
+    fprintf(stderr, "[androidrt] lifecycle: ANativeActivity_finish requested by the game\n");
     runner_requestExit(g_activity.runner, 0);
 }
 
-/* ── looper ──────────────────────────────────────────────────────────── */
+ANDROIDRT_EXPORT void ANativeActivity_setWindowFormat(ANativeActivity *activity, int32_t format) {
+    (void)activity;
+    (void)format;
+}
+ANDROIDRT_EXPORT void ANativeActivity_setWindowFlags(ANativeActivity *activity, uint32_t addFlags, uint32_t removeFlags) {
+    (void)activity;
+    (void)addFlags;
+    (void)removeFlags;
+}
+ANDROIDRT_EXPORT void ANativeActivity_showSoftInput(ANativeActivity *activity, uint32_t flags) {
+    (void)activity;
+    (void)flags;
+}
+ANDROIDRT_EXPORT void ANativeActivity_hideSoftInput(ANativeActivity *activity, uint32_t flags) {
+    (void)activity;
+    (void)flags;
+}
+ANDROIDRT_EXPORT int32_t ANativeActivity_nativeWindowFormat(ANativeActivity *activity) {
+    (void)activity;
+    return WINDOW_FORMAT_RGBA_8888;
+}
 
-/* NDK glue calls ALooper_pollAll(-1, &fd, &events, (void**)&source) with a
- * timeout of -1 forever. Our queue is the androidshim's condvar; events the
- * runner delivers in activity.c arrive through android_deliverEvent. */
+/* ── the runner's main-thread wait (not a game looper: looper.c) ────── */
+
 static pthread_mutex_t g_looper_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_looper_cond = PTHREAD_COND_INITIALIZER;
 static int g_looper_pending;
 
-enum {
-    ALOOPER_POLL_WAKE   = -1,
-    ALOOPER_POLL_TIMEOUT = -2,
-    ALOOPER_POLL_ERROR  = -3,
-};
-
-/* Wake polling glue asks for with pollAll. */
+/* Sleep up to timeoutMs (16 ms when negative) unless woken. 1 = woken. */
 int android_pollOnce(int timeoutMs) {
+    struct timespec deadline;
+    int woke;
     pthread_mutex_lock(&g_looper_lock);
     if (g_looper_pending) {
         g_looper_pending = 0;
         pthread_mutex_unlock(&g_looper_lock);
-        return ALOOPER_POLL_WAKE;
+        return 1;
     }
-    struct timespec deadline;
+    if (timeoutMs < 0) timeoutMs = 16;
     clock_gettime(CLOCK_REALTIME, &deadline);
-    deadline.tv_sec += timeoutMs >= 0 ? timeoutMs / 1000 : 0;
-    deadline.tv_nsec += (int64_t)(timeoutMs >= 0 ? (timeoutMs % 1000) * 1000000LL : 16 /* small tick */ * 1000000LL);
-    if (deadline.tv_nsec >= 1000000000LL) {
+    deadline.tv_sec += timeoutMs / 1000;
+    deadline.tv_nsec += (long)(timeoutMs % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
         deadline.tv_sec++;
-        deadline.tv_nsec -= 1000000000LL;
+        deadline.tv_nsec -= 1000000000L;
     }
-    int rc = pthread_cond_timedwait(&g_looper_cond, &g_looper_lock, &deadline);
-    int woke = g_looper_pending;
+    while (!g_looper_pending) {
+        if (pthread_cond_timedwait(&g_looper_cond, &g_looper_lock, &deadline) != 0) break;
+    }
+    woke = g_looper_pending;
     g_looper_pending = 0;
     pthread_mutex_unlock(&g_looper_lock);
-    if (woke) return ALOOPER_POLL_WAKE;
-    if (rc == 0) return ALOOPER_POLL_WAKE;
-    return ALOOPER_POLL_TIMEOUT;
+    return woke;
 }
 
 void android_wakeLooper(void) {
@@ -237,60 +352,24 @@ void android_wakeLooper(void) {
     pthread_mutex_unlock(&g_looper_lock);
 }
 
-ANDROIDRT_EXPORT int ALooper_pollOnce(int timeoutMs, int *outFd, int *outEvents, void **outData) {
-    if (outFd) *outFd = -1;
-    if (outEvents) *outEvents = 0;
-    if (outData) *outData = NULL;
-    /* Input queues ride the ident, not an fd: returning LOOPER_ID_INPUT
-     * with the queue as user data is the exact shape android_native_app_glue
-     * dispatches on (computed from AInputQueue_attachLooper's registration
-     * on Android; here the pending-set check in inputshim.c stands in). */
-    if (android_inputHasEvents()) {
-        if (outData) *outData = android_inputQueueCurrent();
-        return 2 /* LOOPER_ID_INPUT, android/looper.h */;
-    }
-    int rc = android_pollOnce(timeoutMs);
-    if (rc != ALOOPER_POLL_WAKE) return rc;
-    if (android_inputHasEvents()) {
-        if (outData) *outData = android_inputQueueCurrent();
-        return 2; /* the producer woke us mid-wait */
-    }
-    return ALOOPER_POLL_WAKE;
-}
-
-ANDROIDRT_EXPORT int ALooper_pollAll(int timeoutMs, int *outFd, int *outEvents, void **outData) {
-    return ALooper_pollOnce(timeoutMs, outFd, outEvents, outData);
-}
-
-ANDROIDRT_EXPORT void *ALooper_prepare(int opts) { (void)opts; return NULL; }
-ANDROIDRT_EXPORT void ALooper_wake(void) { android_wakeLooper(); }
-ANDROIDRT_EXPORT void ALooper_acquire(void *looper) { (void)looper; }
-ANDROIDRT_EXPORT void ALooper_release(void *looper) { (void)looper; }
-
 /* ── assets ──────────────────────────────────────────────────────────── */
 
-/* AAsset is a stdio FILE* over the staged tree — no mmap games need yet. */
-typedef struct AAsset {
-    FILE *fp;
-    long size;
-} AAsset;
-
-ANDROIDRT_EXPORT AAssetManager *AAssetManager_fromJava(void *env, void *assetManager) {
-    (void)env;
-    (void)assetManager;
-    return android_openAssetManager(getenv("ANDROIDPAK_STAGED"));
-}
-
-struct AssetFileStream {
-    FILE *fp;
-    long size;
-    long offset;
-};
-
-typedef struct AssetFileStream AssetFile;
 typedef struct AssetManager {
     char root[1024];
 } AssetManager;
+
+typedef struct AAsset {
+    FILE *fp;
+    long size;
+    void *buffer;
+    char path[2048];
+} AssetFile;
+
+typedef struct AAssetDir {
+    DIR *dir;
+    char path[2048];
+    char current[512];
+} AssetDir;
 
 AAssetManager *android_openAssetManager(const char *stagedRoot) {
     static AssetManager mgr;
@@ -298,72 +377,372 @@ AAssetManager *android_openAssetManager(const char *stagedRoot) {
     return (AAssetManager *)&mgr;
 }
 
-ANDROIDRT_EXPORT AAsset *AAssetManager_open(AAssetManager *mgr, const char *fileName, int mode) {
-    (void)mode;
+ANDROIDRT_EXPORT AAssetManager *AAssetManager_fromJava(void *env, void *assetManager) {
+    (void)env;
+    (void)assetManager;
+    return android_openAssetManager(getenv("ANDROIDPAK_STAGED"));
+}
+
+/* Asset names are relative ("textures/a.png"); tolerate "./" and "/". */
+static const char *assetName(const char *name) {
+    if (!name) return "";
+    while (name[0] == '.' && name[1] == '/') name += 2;
+    while (name[0] == '/') name++;
+    return name;
+}
+
+ANDROIDRT_EXPORT AssetFile *AAssetManager_open(AAssetManager *mgr, const char *fileName, int mode) {
     AssetManager *m = (AssetManager *)mgr;
+    AssetFile *asset;
+    FILE *fp;
+    struct stat st;
     char path[2048];
-    snprintf(path, sizeof(path), "%s/%s", m->root, fileName ? fileName : "");
-    FILE *fp = fopen(path, "rb");
+    (void)mode;
+    if (!m) return NULL;
+    snprintf(path, sizeof(path), "%s/%s", m->root, assetName(fileName));
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return NULL;
+    fp = fopen(path, "rb");
     if (!fp) return NULL;
-    AssetFile *asset = calloc(1, sizeof(*asset));
+    asset = (AssetFile *)calloc(1, sizeof(*asset));
     if (!asset) {
         fclose(fp);
         return NULL;
     }
-    fseek(fp, 0, SEEK_END);
-    asset->size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
     asset->fp = fp;
-    return (AAsset *)asset;
+    asset->size = (long)st.st_size;
+    snprintf(asset->path, sizeof asset->path, "%s", path);
+    return asset;
 }
 
-ANDROIDRT_EXPORT int AAsset_read(AAsset *asset, void *buf, size_t count) {
-    if (!asset || !buf) return 0;
-    return (int)fread(buf, 1, count, ((AssetFile *)asset)->fp);
+ANDROIDRT_EXPORT int AAsset_read(AssetFile *asset, void *buf, size_t count) {
+    if (!asset || !buf) return -1;
+    return (int)fread(buf, 1, count, asset->fp);
 }
 
-ANDROIDRT_EXPORT int AAsset_seek(AAsset *asset, off64_t offset, int whence) {
-    if (!asset) return -1;
-    return fseek(((AssetFile *)asset)->fp, (long)offset, whence) == 0 ? 0 : -1;
+/* NDK: returns the new position, or (off_t)-1 on error. */
+ANDROIDRT_EXPORT off_t AAsset_seek(AssetFile *asset, off_t offset, int whence) {
+    if (!asset || fseeko(asset->fp, offset, whence) != 0) return (off_t)-1;
+    return ftello(asset->fp);
 }
-
-ANDROIDRT_EXPORT off64_t AAsset_getLength(AAsset *asset) {
-    return asset ? ((AssetFile *)asset)->size : 0;
+ANDROIDRT_EXPORT off64_t AAsset_seek64(AssetFile *asset, off64_t offset, int whence) {
+    return (off64_t)AAsset_seek(asset, (off_t)offset, whence);
 }
-
-ANDROIDRT_EXPORT off64_t AAsset_getRemainingLength(AAsset *asset) {
+ANDROIDRT_EXPORT off_t AAsset_getLength(AssetFile *asset) { return asset ? (off_t)asset->size : 0; }
+ANDROIDRT_EXPORT off64_t AAsset_getLength64(AssetFile *asset) { return asset ? (off64_t)asset->size : 0; }
+ANDROIDRT_EXPORT off_t AAsset_getRemainingLength(AssetFile *asset) {
+    off_t cur;
     if (!asset) return 0;
-    AssetFile *a = (AssetFile *)asset;
-    long cur = ftell(a->fp);
-    return a->size - cur;
+    cur = ftello(asset->fp);
+    return cur < 0 ? 0 : (off_t)asset->size - cur;
+}
+ANDROIDRT_EXPORT off64_t AAsset_getRemainingLength64(AssetFile *asset) {
+    return (off64_t)AAsset_getRemainingLength(asset);
 }
 
-ANDROIDRT_EXPORT void AAsset_close(AAsset *asset) {
+ANDROIDRT_EXPORT void AAsset_close(AssetFile *asset) {
     if (!asset) return;
-    fclose(((AssetFile *)asset)->fp);
+    fclose(asset->fp);
+    free(asset->buffer);
     free(asset);
 }
 
-ANDROIDRT_EXPORT const void *AAsset_getBuffer(AAsset *asset) {
-    (void)asset;
-    return NULL; /* mmap support comes with the window backend */
+/* The whole asset in RAM, read on first request (engines map shaders and
+ * small files this way). The position is left where it was. */
+ANDROIDRT_EXPORT const void *AAsset_getBuffer(AssetFile *asset) {
+    off_t pos;
+    if (!asset) return NULL;
+    if (asset->buffer) return asset->buffer;
+    asset->buffer = malloc(asset->size > 0 ? (size_t)asset->size : 1);
+    if (!asset->buffer) return NULL;
+    pos = ftello(asset->fp);
+    if (fseeko(asset->fp, 0, SEEK_SET) != 0 ||
+        fread(asset->buffer, 1, (size_t)asset->size, asset->fp) != (size_t)asset->size) {
+        free(asset->buffer);
+        asset->buffer = NULL;
+    }
+    fseeko(asset->fp, pos < 0 ? 0 : pos, SEEK_SET);
+    return asset->buffer;
 }
 
-ANDROIDRT_EXPORT int AAsset_openFileDescriptor(AAsset *asset, off64_t *outStart, off64_t *outLength) {
-    (void)asset;
-    (void)outStart;
-    (void)outLength;
-    return -1; /* AASSET_MODE_UNKNOWN fds unused */
+ANDROIDRT_EXPORT int AAsset_isAllocated(AssetFile *asset) { return asset && asset->buffer ? 1 : 0; }
+
+/* Staged assets are plain files, so a real descriptor works (FMOD and media
+ * players read assets this way): start 0, the whole file. */
+ANDROIDRT_EXPORT int AAsset_openFileDescriptor(AssetFile *asset, off_t *outStart, off_t *outLength) {
+    int fd;
+    if (!asset) return -1;
+    fd = open(asset->path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    if (outStart) *outStart = 0;
+    if (outLength) *outLength = (off_t)asset->size;
+    return fd;
+}
+ANDROIDRT_EXPORT int AAsset_openFileDescriptor64(AssetFile *asset, off64_t *outStart, off64_t *outLength) {
+    off_t s = 0, l = 0;
+    int fd = AAsset_openFileDescriptor(asset, &s, &l);
+    if (fd >= 0) {
+        if (outStart) *outStart = s;
+        if (outLength) *outLength = l;
+    }
+    return fd;
 }
 
-/* ── misc ────────────────────────────────────────────────────────────── */
+/* AAssetDir lists the FILES of one asset directory (never subdirectories,
+ * like Android's). */
+ANDROIDRT_EXPORT AssetDir *AAssetManager_openDir(AAssetManager *mgr, const char *dirName) {
+    AssetManager *m = (AssetManager *)mgr;
+    AssetDir *d;
+    if (!m) return NULL;
+    d = (AssetDir *)calloc(1, sizeof(*d));
+    if (!d) return NULL;
+    snprintf(d->path, sizeof d->path, "%s/%s", m->root, assetName(dirName));
+    d->dir = opendir(d->path);
+    return d; /* Android returns an empty dir, not NULL, for a missing path */
+}
 
-ANDROIDRT_EXPORT void AConfiguration_fromAssetManager(AAssetManager *mgr, AConfiguration *config) { (void)mgr; (void)config; }
-ANDROIDRT_EXPORT void AConfiguration_delete(AConfiguration *config) { (void)config; }
-ANDROIDRT_EXPORT int32_t AConfiguration_getDensity(AConfiguration *config) { (void)config; return 320; }
-ANDROIDRT_EXPORT int32_t AConfiguration_getScreenWidthDp(AConfiguration *config) { (void)config; return 790; }
-ANDROIDRT_EXPORT int32_t AConfiguration_getScreenHeightDp(AConfiguration *config) { (void)config; return 300; }
-ANDROIDRT_EXPORT int32_t ANativeActivity_nativeWindowFormat(ANativeActivity *activity) {
-    (void)activity;
-    return WINDOW_FORMAT_RGBA_8888;
+ANDROIDRT_EXPORT const char *AAssetDir_getNextFileName(AssetDir *d) {
+    struct dirent *e;
+    if (!d || !d->dir) return NULL;
+    while ((e = readdir(d->dir)) != NULL) {
+        char full[2600];
+        struct stat st;
+        if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+            continue;
+        snprintf(full, sizeof full, "%s/%s", d->path, e->d_name);
+        if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        snprintf(d->current, sizeof d->current, "%s", e->d_name);
+        return d->current;
+    }
+    return NULL;
+}
+
+ANDROIDRT_EXPORT void AAssetDir_rewind(AssetDir *d) {
+    if (d && d->dir) rewinddir(d->dir);
+}
+
+ANDROIDRT_EXPORT void AAssetDir_close(AssetDir *d) {
+    if (!d) return;
+    if (d->dir) closedir(d->dir);
+    free(d);
+}
+
+/* ── AConfiguration: the Smart Pro as Android would describe it ──────── */
+
+typedef struct ApakConfig {
+    int32_t mcc, mnc;
+    char language[2], country[2];
+    int32_t orientation, touchscreen, density, keyboard, navigation, keysHidden, navHidden;
+    int32_t sdkVersion, screenSize, screenLong, screenRound, uiModeType, uiModeNight;
+    int32_t screenWidthDp, screenHeightDp, smallestScreenWidthDp, layoutDirection;
+} ApakConfig;
+
+static void configDefaults(ApakConfig *c) {
+    int w = 1280, h = 720, pw = 0, ph = 0;
+    const char *win = getenv("ANDROIDRT_WINDOW");
+    if (win && sscanf(win, "%dx%d", &pw, &ph) == 2 && pw > 0 && ph > 0) {
+        w = pw;
+        h = ph;
+    }
+    memset(c, 0, sizeof *c);
+    memcpy(c->language, "en", 2);
+    memcpy(c->country, "US", 2);
+    c->orientation = w >= h ? 2 : 1;  /* ACONFIGURATION_ORIENTATION_LAND/PORT */
+    c->touchscreen = 1;               /* NOTOUCH: buttons and sticks only     */
+    c->density = 320;                 /* DENSITY_XHIGH                        */
+    c->keyboard = 1;                  /* NOKEYS                               */
+    c->navigation = 2;                /* DPAD                                 */
+    c->keysHidden = 2;                /* YES (no hardware keyboard)           */
+    c->navHidden = 1;                 /* NO: the d-pad is always there        */
+    c->sdkVersion = ANDROIDRT_SDK_VERSION;
+    c->screenSize = 2;                /* NORMAL                               */
+    c->screenLong = 2;                /* YES (16:9)                           */
+    c->screenRound = 1;               /* NO                                   */
+    c->uiModeType = 1;                /* NORMAL                               */
+    c->uiModeNight = 1;               /* NO                                   */
+    c->screenWidthDp = w * 160 / c->density;
+    c->screenHeightDp = h * 160 / c->density;
+    c->smallestScreenWidthDp = (w < h ? w : h) * 160 / c->density;
+    c->layoutDirection = 1;           /* LTR                                  */
+}
+
+#define CFG(c) ((ApakConfig *)(c))
+
+ANDROIDRT_EXPORT AConfiguration *AConfiguration_new(void) {
+    ApakConfig *c = (ApakConfig *)calloc(1, sizeof *c);
+    if (c) configDefaults(c);
+    return c;
+}
+ANDROIDRT_EXPORT void AConfiguration_delete(AConfiguration *config) { free(config); }
+ANDROIDRT_EXPORT void AConfiguration_fromAssetManager(AConfiguration *out, AAssetManager *am) {
+    (void)am;
+    if (out) configDefaults(CFG(out));
+}
+ANDROIDRT_EXPORT void AConfiguration_copy(AConfiguration *dest, AConfiguration *src) {
+    if (dest && src) memcpy(dest, src, sizeof(ApakConfig));
+}
+ANDROIDRT_EXPORT void AConfiguration_getLanguage(AConfiguration *config, char *out) {
+    if (config && out) memcpy(out, CFG(config)->language, 2);
+}
+ANDROIDRT_EXPORT void AConfiguration_setLanguage(AConfiguration *config, const char *language) {
+    if (config && language) memcpy(CFG(config)->language, language, 2);
+}
+ANDROIDRT_EXPORT void AConfiguration_getCountry(AConfiguration *config, char *out) {
+    if (config && out) memcpy(out, CFG(config)->country, 2);
+}
+ANDROIDRT_EXPORT void AConfiguration_setCountry(AConfiguration *config, const char *country) {
+    if (config && country) memcpy(CFG(config)->country, country, 2);
+}
+
+#define CONFIG_FIELD(Name, field) \
+    ANDROIDRT_EXPORT int32_t AConfiguration_get##Name(AConfiguration *config) { \
+        return config ? CFG(config)->field : 0; \
+    } \
+    ANDROIDRT_EXPORT void AConfiguration_set##Name(AConfiguration *config, int32_t value) { \
+        if (config) CFG(config)->field = value; \
+    }
+
+CONFIG_FIELD(Mcc, mcc)
+CONFIG_FIELD(Mnc, mnc)
+CONFIG_FIELD(Orientation, orientation)
+CONFIG_FIELD(Touchscreen, touchscreen)
+CONFIG_FIELD(Density, density)
+CONFIG_FIELD(Keyboard, keyboard)
+CONFIG_FIELD(Navigation, navigation)
+CONFIG_FIELD(KeysHidden, keysHidden)
+CONFIG_FIELD(NavHidden, navHidden)
+CONFIG_FIELD(SdkVersion, sdkVersion)
+CONFIG_FIELD(ScreenSize, screenSize)
+CONFIG_FIELD(ScreenLong, screenLong)
+CONFIG_FIELD(ScreenRound, screenRound)
+CONFIG_FIELD(UiModeType, uiModeType)
+CONFIG_FIELD(UiModeNight, uiModeNight)
+CONFIG_FIELD(ScreenWidthDp, screenWidthDp)
+CONFIG_FIELD(ScreenHeightDp, screenHeightDp)
+CONFIG_FIELD(SmallestScreenWidthDp, smallestScreenWidthDp)
+CONFIG_FIELD(LayoutDirection, layoutDirection)
+
+ANDROIDRT_EXPORT int32_t AConfiguration_diff(AConfiguration *a, AConfiguration *b) {
+    return (a && b && memcmp(a, b, sizeof(ApakConfig)) != 0) ? 0x7fffffff : 0;
+}
+ANDROIDRT_EXPORT int32_t AConfiguration_match(AConfiguration *base, AConfiguration *requested) {
+    (void)base;
+    (void)requested;
+    return 1;
+}
+ANDROIDRT_EXPORT int32_t AConfiguration_isBetterThan(AConfiguration *base, AConfiguration *test, AConfiguration *req) {
+    (void)base;
+    (void)test;
+    (void)req;
+    return 0;
+}
+
+/* ── sensors: the Smart Pro reports none ─────────────────────────────── */
+
+static int g_sensorManager, g_sensorQueue;
+static const void *const g_noSensors[1] = { NULL };
+
+ANDROIDRT_EXPORT void *ASensorManager_getInstance(void) { return &g_sensorManager; }
+ANDROIDRT_EXPORT void *ASensorManager_getInstanceForPackage(const char *packageName) {
+    (void)packageName;
+    return &g_sensorManager;
+}
+ANDROIDRT_EXPORT int ASensorManager_getSensorList(void *manager, const void *const **list) {
+    (void)manager;
+    if (list) *list = g_noSensors;
+    return 0;
+}
+ANDROIDRT_EXPORT const void *ASensorManager_getDefaultSensor(void *manager, int type) {
+    (void)manager;
+    (void)type;
+    return NULL;
+}
+ANDROIDRT_EXPORT const void *ASensorManager_getDefaultSensorEx(void *manager, int type, int wakeUp) {
+    (void)manager;
+    (void)type;
+    (void)wakeUp;
+    return NULL;
+}
+ANDROIDRT_EXPORT void *ASensorManager_createEventQueue(void *manager, ALooper *looper, int ident,
+                                                       ALooper_callbackFunc callback, void *data) {
+    (void)manager;
+    (void)looper;
+    (void)ident;
+    (void)callback;
+    (void)data;
+    return &g_sensorQueue;
+}
+ANDROIDRT_EXPORT int ASensorManager_destroyEventQueue(void *manager, void *queue) {
+    (void)manager;
+    (void)queue;
+    return 0;
+}
+ANDROIDRT_EXPORT int ASensorEventQueue_enableSensor(void *queue, const void *sensor) {
+    (void)queue;
+    return sensor ? 0 : -22;
+}
+ANDROIDRT_EXPORT int ASensorEventQueue_disableSensor(void *queue, const void *sensor) {
+    (void)queue;
+    (void)sensor;
+    return 0;
+}
+ANDROIDRT_EXPORT int ASensorEventQueue_setEventRate(void *queue, const void *sensor, int32_t usec) {
+    (void)queue;
+    (void)sensor;
+    (void)usec;
+    return 0;
+}
+ANDROIDRT_EXPORT int ASensorEventQueue_registerSensor(void *queue, const void *sensor, int32_t period,
+                                                      int64_t latency) {
+    (void)queue;
+    (void)period;
+    (void)latency;
+    return sensor ? 0 : -22;
+}
+ANDROIDRT_EXPORT int ASensorEventQueue_hasEvents(void *queue) {
+    (void)queue;
+    return 0;
+}
+ANDROIDRT_EXPORT ssize_t ASensorEventQueue_getEvents(void *queue, void *events, size_t count) {
+    (void)queue;
+    (void)events;
+    (void)count;
+    return 0;
+}
+ANDROIDRT_EXPORT const char *ASensor_getName(const void *sensor) {
+    (void)sensor;
+    return "none";
+}
+ANDROIDRT_EXPORT const char *ASensor_getVendor(const void *sensor) {
+    (void)sensor;
+    return "AndroidRT";
+}
+ANDROIDRT_EXPORT int ASensor_getType(const void *sensor) {
+    (void)sensor;
+    return 0;
+}
+ANDROIDRT_EXPORT float ASensor_getResolution(const void *sensor) {
+    (void)sensor;
+    return 0.0f;
+}
+ANDROIDRT_EXPORT int ASensor_getMinDelay(const void *sensor) {
+    (void)sensor;
+    return 0;
+}
+
+/* ── ATrace: no systrace here ────────────────────────────────────────── */
+
+ANDROIDRT_EXPORT void ATrace_beginSection(const char *name) { (void)name; }
+ANDROIDRT_EXPORT void ATrace_endSection(void) {}
+ANDROIDRT_EXPORT int ATrace_isEnabled(void) { return 0; }
+ANDROIDRT_EXPORT void ATrace_beginAsyncSection(const char *name, int32_t cookie) {
+    (void)name;
+    (void)cookie;
+}
+ANDROIDRT_EXPORT void ATrace_endAsyncSection(const char *name, int32_t cookie) {
+    (void)name;
+    (void)cookie;
+}
+ANDROIDRT_EXPORT void ATrace_setCounter(const char *name, int64_t value) {
+    (void)name;
+    (void)value;
 }

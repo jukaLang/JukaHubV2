@@ -65,6 +65,10 @@ func buildAndroidPakCommandTestRT(t *testing.T) (rt, apk, stage string) {
 
 func TestAndroidPakCommandAndEnvHandoff(t *testing.T) {
 	rt, apk, stage := buildAndroidPakCommandTestRT(t)
+	profilesDir := t.TempDir()
+	prevDir := gameProfilesDirOverride
+	gameProfilesDirOverride = profilesDir
+	t.Cleanup(func() { gameProfilesDirOverride = prevDir })
 	profile := GameProfile{
 		ID:      "tier1",
 		Title:   "Tier 1 Game",
@@ -92,6 +96,9 @@ func TestAndroidPakCommandAndEnvHandoff(t *testing.T) {
 		{"ANDROIDPAK_MAINLIB", libs.MainLib},
 		{"ANDROIDPAK_ABIS", libs.Abis[0]},
 		{"ANDROIDPAK_RT", rt},
+		// Saves live with the profile catalog, never in the tmpfs stage
+		// that is deleted after every exit.
+		{"ANDROIDPAK_DATA", filepath.Join(profilesDir, "androidpak-data", "tier1")},
 	}
 	for _, c := range checks {
 		if env[c.key] != c.value {
@@ -101,6 +108,15 @@ func TestAndroidPakCommandAndEnvHandoff(t *testing.T) {
 	// The profile's own env must survive next to the handoff keys.
 	if env["SOME_GAME_VAR"] != "1" {
 		t.Error("profile env was dropped")
+	}
+
+	// A profile that points its data elsewhere keeps that choice.
+	custom := map[string]string{"ANDROIDPAK_DATA": "/mnt/SDCARD/Saves/tier1"}
+	if _, _, err := buildAndroidPakCommand(profile, apk, stage, libs, custom); err != nil {
+		t.Fatalf("buildAndroidPakCommand with custom data dir: %v", err)
+	}
+	if custom["ANDROIDPAK_DATA"] != "/mnt/SDCARD/Saves/tier1" {
+		t.Errorf("ANDROIDPAK_DATA = %q, want the profile's own value", custom["ANDROIDPAK_DATA"])
 	}
 }
 
@@ -203,6 +219,116 @@ func TestAndroidPakFirstRunSymbolCapturedFromLaunchLog(t *testing.T) {
 		"[androidrt] could not load /stage/libgame.so: undefined symbol: AChoreographer_getInstance\nexit: exit status 1\n")
 	if got := androidPakFirstRunSymbol("rerun"); got != "AChoreographer_getInstance" {
 		t.Errorf("symbol = %q, want the latest run's AChoreographer_getInstance", got)
+	}
+
+	// The runner's own loader: the trap names the function the game really
+	// called, out of everything the report listed.
+	writeLog("trap", "=== trap start 2026-11-08T10:00:00Z ===\n"+
+		"[androidrt] undefined symbols: 2 (2 functions abort when called, 0 data zero-filled)\n"+
+		"[androidrt] undefined symbol: ASensorManager_getInstanceForPackage (func, needed by libgame.so, from libandroid.so@LIBANDROID)\n"+
+		"[androidrt] undefined symbol: AChoreographer_postVsyncCallback (func, needed by libgame.so, from libandroid.so@LIBANDROID)\n"+
+		"[androidrt] trap: libgame.so called unimplemented AChoreographer_postVsyncCallback — aborting (ANDROIDPAK_MISSING=zero returns 0 instead)\n"+
+		"exit: signal: aborted\n")
+	if got := androidPakFirstRunSymbol("trap"); got != "AChoreographer_postVsyncCallback" {
+		t.Errorf("symbol = %q, want the trapped AChoreographer_postVsyncCallback", got)
+	}
+
+	// A strict run that refused to start names the first missing symbol.
+	writeLog("strict", "[androidrt] undefined symbol: AImageDecoder_create (func, needed by libgame.so)\n"+
+		"[androidrt] refusing to start: 1 undefined symbols and ANDROIDPAK_MISSING=strict\n"+
+		"[androidrt] could not load /stage/lib/arm64-v8a/libgame.so: 1 undefined symbols and ANDROIDPAK_MISSING=strict\n")
+	if got := androidPakFirstRunSymbol("strict"); got != "AImageDecoder_create" {
+		t.Errorf("symbol = %q, want AImageDecoder_create from the strict refusal", got)
+	}
+
+	// Symbols listed but never called do not explain a crash elsewhere.
+	writeLog("listed", "[androidrt] undefined symbol: AImageDecoder_create (func, needed by libgame.so)\n"+
+		"exit: signal: segmentation fault\n")
+	if got := androidPakFirstRunSymbol("listed"); got != "" {
+		t.Errorf("symbol = %q, want empty: nothing proves the listed symbol stopped the run", got)
+	}
+}
+
+func TestParseAndroidPakRunReport(t *testing.T) {
+	cases := []struct {
+		name string
+		log  string
+		want androidPakRunReport
+	}{
+		{
+			name: "clean run",
+			log:  "[androidrt] undefined symbols: 0 — every import resolved\n[androidrt] lifecycle: done, exit status 0\n",
+		},
+		{
+			name: "listed and trapped",
+			log: "[androidrt] undefined symbol: A_one (func, needed by libgame.so)\n" +
+				"  [androidrt] undefined symbol: B_data (data, needed by libfmod.so, from libc.so@LIBC)\n" +
+				"[androidrt] trap: libgame.so called unimplemented A_one — aborting\n" +
+				"[androidrt] trap: libgame.so called unimplemented B_two — aborting\n",
+			want: androidPakRunReport{Trap: "A_one", Undefined: []string{"A_one", "B_data"}},
+		},
+		{
+			name: "legacy glibc dlerror with a version",
+			log:  "[androidrt] could not load /s/libgame.so: /s/libgame.so: undefined symbol: memcpy, version LIBC\n",
+			want: androidPakRunReport{Symbol: "memcpy"},
+		},
+		{
+			name: "32-bit library",
+			log:  "[androidrt] could not load /s/lib/armeabi-v7a/libgame.so: libgame.so: 32-bit ELF (ELFCLASS32): this runner loads 64-bit (arm64-v8a) libraries only\n",
+			want: androidPakRunReport{LoadFailure: "libgame.so: 32-bit ELF (ELFCLASS32): this runner loads 64-bit (arm64-v8a) libraries only"},
+		},
+		{
+			name: "strict refusal",
+			log: "[androidrt] undefined symbol: X (func, needed by libgame.so)\n" +
+				"[androidrt] refusing to start: 1 undefined symbols and ANDROIDPAK_MISSING=strict\n" +
+				"[androidrt] could not load /s/libgame.so: 1 undefined symbols and ANDROIDPAK_MISSING=strict\n",
+			want: androidPakRunReport{Undefined: []string{"X"}, Refused: true, LoadFailure: "1 undefined symbols and ANDROIDPAK_MISSING=strict"},
+		},
+		{
+			name: "game log lines are not runner lines",
+			log:  "[game][Tag][I] [androidrt] undefined symbol: fake\n",
+		},
+	}
+	for _, c := range cases {
+		got := parseAndroidPakRunReport(c.log)
+		if got.Trap != c.want.Trap || got.Refused != c.want.Refused || got.LoadFailure != c.want.LoadFailure ||
+			got.Symbol != c.want.Symbol || strings.Join(got.Undefined, ",") != strings.Join(c.want.Undefined, ",") {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAndroidPakRunMessage(t *testing.T) {
+	cases := []struct {
+		name      string
+		report    androidPakRunReport
+		wantToast bool
+		wantIn    []string
+	}{
+		{"trap", androidPakRunReport{Trap: "A_one", Undefined: []string{"A_one", "B"}}, true,
+			[]string{"the game called A_one", "2 undefined symbols listed", "game.log"}},
+		{"legacy", androidPakRunReport{Symbol: "memcpy"}, true, []string{"undefined symbol: memcpy"}},
+		{"strict", androidPakRunReport{Refused: true, Undefined: []string{"X", "Y"}}, true,
+			[]string{"refused to start: 2 undefined symbols (first: X)"}},
+		{"load failure", androidPakRunReport{LoadFailure: strings.Repeat("r", 400)}, true,
+			[]string{"could not load the game: rrrr", "…"}},
+		{"crash with listed symbols", androidPakRunReport{Undefined: []string{"X"}}, false,
+			[]string{"tier1 first run failed (1 undefined symbols listed)"}},
+		{"nothing known", androidPakRunReport{}, false, []string{"tier1 first run failed; loader output is in"}},
+	}
+	for _, c := range cases {
+		msg, toast := androidPakRunMessage("tier1", c.report, "/data/game-profiles/logs/game.log")
+		if toast != c.wantToast {
+			t.Errorf("%s: toast = %v, want %v", c.name, toast, c.wantToast)
+		}
+		for _, want := range c.wantIn {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: message %q lacks %q", c.name, msg, want)
+			}
+		}
+		if len([]rune(msg)) > 320 {
+			t.Errorf("%s: message is %d runes; a toast must stay readable", c.name, len([]rune(msg)))
+		}
 	}
 }
 

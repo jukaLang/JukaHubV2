@@ -1,7 +1,7 @@
 # JukaHubV2 Modernization Plan
 
 Status of the roadmap items below, checked against the code in this tree on
-**2026-10-29**. For a concise overview of progress and improvement priorities,
+**2026-11-04**. For a concise overview of progress and improvement priorities,
 start at [the project status page](../docs/PROJECT_STATUS.md); this is the detailed
 evidence and phase checklist. “Partial” describes implementation state, not an
 assigned owner or a promise that work is actively underway. The current Windows
@@ -37,12 +37,12 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 | Phase | Done | Partial | Not started |
 |-------|------|---------|-------------|
 | 1. UI/UX fixes | 7 | 0 | 0 |
-| 2. Architecture | 32 | 2 | 0 |
+| 2. Architecture | 34 | 0 | 0 |
 | 3. Async & performance | 18 | 2 | 1 |
 | 4. Reliability | 26 | 0 | 1 |
 | 5. Features | 14 | 2 | 2 |
 | 6. Testing | 13 | 0 | 0 |
-| 7. Web builder | 10 | 2 | 5 |
+| 7. Web builder | 13 | 1 | 3 |
 | 8. Handheld polish | 14 | 2 | 4 |
 | 8b. GPU offload | 6 | 0 | 3 |
 | 9. Browser & handheld input | 12 | 0 | 1 |
@@ -150,7 +150,7 @@ already exists, not a task list, so it is not counted here.
 - [x] ✅ Format all Go files
 
 ### Phase 2: Architecture Refactoring
-**Status**: 🟡 Mostly complete (32 shipped, 2 partial, 0 not started)
+**Status**: ✅ Complete (34 shipped, 0 partial, 0 not started)
 
 #### 2.1 Design System
 
@@ -195,8 +195,14 @@ already exists, not a task list, so it is not counted here.
       the page's card colour would disappear. The home/Apps grid still has its
       own renderer with the same colours — it also handles badges and per-tile
       geometry the component does not own yet.
-- [ ] 🟡 `IconButton` — icon geometry helpers exist (`launcher.go`), but buttons are
-      still drawn inline per scene.
+- [x] ✅ `IconButton` — `UIIconButton` / `UIIconButtonDraw` in `components.go`:
+      the surface, the outside focus ring, the open state, the inset glyph box and
+      a corner badge with one placement rule (`uiIconButtonBadgeRect`). The
+      notification bell (`drawNotifBell`, `notifications.go`) draws through it, so
+      the home header and the scene status bar share the recipe instead of two
+      hand-drawn copies. `iconbutton_test.go` measures the pill, the ring outside
+      the chip and the red badge on real pixels, and pins that the bell still
+      records its rect.
 - [x] ✅ `AppBar` — `UIPageHeader` / `UIPageHeaderDraw` in `components.go`:
       optional glyph well, title, subtitle and a right-aligned status read-out,
       plus a centred form for a brand block. The Tools overlay, the Tools page
@@ -220,8 +226,14 @@ already exists, not a task list, so it is not counted here.
 - [x] ✅ Reduced-motion mode — config flag, animation gates, battery-saver test.
 - [x] ✅ Controller test screen — `ctrldiag.go`, opened from Power tools; see
       [../docs/CONTROLLER_TEST.md](../docs/CONTROLLER_TEST.md).
-- [ ] 🟡 `Focusable` interface — behavior is centralized in `FocusEngine`, but
-      there is no Go interface implemented by element types.
+- [x] ✅ `Focusable` interface — `focus.go` defines `Focusable`
+      (`FocusRect`/`FocusType`/`FocusLabel`), implemented by both `Element` and
+      the measured `FocusNode` with compile-time assertions. `BuildGraph` adapts
+      each element through `focusNodeFrom` instead of reading its fields, so the
+      geometry an element reports and the geometry the graph navigates are one
+      definition. `focusable_test.go` compares every node against its element's
+      own answers and pins the default rect (1100×200) and the type-as-label
+      fallback.
 - [x] ✅ Input remapping screen — the Accessibility panel's per-button rows
       (`a11yRows`, `player/a11y.go`).
 - [x] ✅ Header focus visibility audit — every drawn header control that accepts
@@ -694,8 +706,8 @@ persistence and harness gaps closed
       suffix on `LookPath` (with the Linux side pinned to NOT add one).
 
 ### Phase 7: Web Builder
-**Status**: 🟡 Mostly complete (10 shipped, 2 partial, 5 not started) — a module
-split and the CSP are still missing
+**Status**: 🟡 Mostly complete (13 shipped, 1 partial, 3 not started) — a module
+split and the PWA are still missing; the CSP was already shipped in `_headers`
 
 - [x] ✅ Semantic design tokens — `style.css` (`--canvas-*`, surfaces, spacing).
 - [x] ✅ State previews — preview mode (`script.js`, Ctrl+P).
@@ -704,17 +716,33 @@ split and the CSP are still missing
 - [x] ✅ Production export — JSON/XML export with round-trip loaders.
 - [ ] 🟡 Reusable components — shared CSS classes exist; element markup is still
       assembled per type.
-- [ ] 🟡 Trimui performance linting — font-size/asset checks partly covered by
-      the loader warnings.
+- [x] ✅ Trimui performance linting — `validateProject` (`script.js`) now warns
+      when text is below the handheld's 14 px legible floor (`handheld-type`),
+      when a button/input/menu/toggle sits in the 32 px rounded-corner margin the
+      panel clips (`safe-area`), and when one scene carries more than 24 controls
+      and will scroll (`scene-density`), on top of the existing 36 px tap-target,
+      contrast, overflow and font-role checks. `tests/web/builder.test.mjs` pins
+      the three new codes and that a legible, inset design raises none of them.
 - [x] ✅ Stylesheet repair and end-to-end coverage — `style.css` parses at brace
       depth 0 with no orphan declarations, the AI panel and four destroyed hover
       rules are back, and the Playwright suite (drop-at-scale, zoom round-trip,
       AI panel visible) guards them.
 - [ ] ⬜ Split `script.js` into modules — the largest single-file risk in the
       repository.
-- [ ] ⬜ Content-Security-Policy, once the allow-list exists for inline styles and
-      the LAN device pushes over `http:`.
-- [ ] ⬜ Self-hosted fonts instead of the CDN.
+- [x] ✅ Content-Security-Policy — shipped in [`_headers`](../_headers):
+      `default-src 'self'`, `script-src 'self'`, `object-src 'none'`,
+      `frame-ancestors 'none'`, with `style-src` allowing inline style attributes
+      and `connect-src` allowing the LAN device and the user's AI provider over
+      http/https. `tests/e2e/csp.spec.js` runs the builder under the same header,
+      and `tests/web/selfhost.test.mjs` asserts the policy allows only
+      same-origin styles and fonts. The row was stale: it was written before the
+      header landed and never re-checked.
+- [x] ✅ Self-hosted fonts — Inter (latin + latin-ext, weights 300/400/500/700)
+      and the Font Awesome faces the markup uses are vendored under
+      `fonts/` (928 KB); `index.html` links only those stylesheets and the
+      CDN preconnects are gone. `tests/web/selfhost.test.mjs` fails if a link
+      goes back to a CDN, if a stylesheet references a face that is not vendored,
+      or if the policy re-allows the old font hosts.
 - [ ] ⬜ PWA / service worker — only with a stale-cache recovery story, and the
       favicon is currently below the installable minimum.
 - [x] ✅ Snap-to-grid — the builder workspace has an opt-in 8-pixel grid
@@ -787,15 +815,20 @@ Open:
       accessibility slow-repeat setting doubles both intervals. Covered by
       `navrepeat_test.go` (cadence, direction change, release, press queue,
       diagonal preference, keyboard suppression, slow repeat).
-- [ ] 🟡 Touch-target audit — the Exit-chip half is done: `growTouchTarget`
-      (`touchtarget.go`) grows a drawn control's hit area to a 44px minimum,
-      centred on what is drawn, so the 36px Exit pill absorbs a near-miss tap
-      without its drawn geometry moving. `HomeLayout.FocusAt` now hit-tests
-      against the grown rect, and `touchtarget_test.go` pins the enlargement, the
-      centre-preserving growth, the near-miss, and that a degenerate rect never
-      grows into a phantom target. Still open: applying the same growth to the
-      remaining interactive controls scene by scene, and the safe-area insets so
-      cards and footer chips clear the panel's rounded corners.
+- [ ] 🟡 Touch-target audit — `growTouchTarget` (`touchtarget.go`) grows a
+      drawn control's hit area to a 44px minimum, centred on what is drawn, so a
+      compact pill absorbs a near-miss tap without its drawn geometry moving.
+      Adopted by the home grid (`HomeLayout.FocusAt`), the whole top-bar chrome
+      (`handleChromeBarClick`: the update badge, Back pill, clock, weather, Wi-Fi
+      meter and now-playing chip), the notification bell
+      (`notifIsPointInBell`) and the browser toolbar chips (address, search,
+      filter, mode, zoom), which previously compared raw rectangles. The Exit
+      chip and the browser's own chrome already used it. `touchtarget_test.go`
+      pins the enlargement, the centre-preserving growth, the near-miss and that a
+      degenerate rect never grows into a phantom target. Still open: the remaining
+      scene-specific panels, and the safe-area insets so cards and footer chips
+      clear the panel's rounded corners (the builder now warns about controls in
+      that 32px margin).
 - [x] ✅ Cached ambient glow — verified stale: `backgroundfx.go` bakes one
       256×256 radial glow texture once and per frame is four tinted `Copy` calls
       with `SetColorMod`/`SetAlphaMod`, not four per-pixel blends. The item was
@@ -1799,6 +1832,46 @@ core, seven updates leaving exactly five backups and five pool builds, the two
 pruning rules (sparing another core's build, a foreign `.bak`, and the build
 just fetched), and the bar's update title. The backup test fails without the
 prune (`kept 7 backups`), which is the guard this pass needed.
+
+## Audit log — 2026-11-04 (icon button, Focusable, self-hosted builder assets)
+
+Re-read the open items and worked the ones that are desktop-verifiable and
+self-contained. Two stale rows were corrected rather than re-implemented, and
+three shipped items are now recorded with the code and the check that pins them.
+
+- **Phase 2 is complete.** `UIIconButton` is the shared icon-chip recipe (surface,
+  outside focus ring, open ring, inset glyph box, corner badge) and the
+  notification bell draws through it; `Focusable` is the interface the graph
+  reads, implemented by `Element` and `FocusNode` with `BuildGraph` adapting
+  through `focusNodeFrom`. New `iconbutton_test.go` and `focusable_test.go`
+  measure the pixels and compare node geometry against the element's own answers.
+- **The CSP row was stale.** [`_headers`](../_headers) has shipped the policy for
+  a while (and `tests/e2e/csp.spec.js` runs the builder under it); the plan still
+  listed it as not started. Marked shipped, and the self-hosted-font change let
+  the policy drop the two font CDNs from `style-src`/`font-src`.
+- **Self-hosted fonts.** Inter and Font Awesome are vendored under `fonts/`
+  (928 KB), `index.html` no longer preconnects to a CDN, and
+  `tests/web/selfhost.test.mjs` fails on a CDN link, a missing face or a policy
+  that re-allows the old hosts.
+- **Handheld linting.** The design check gained `handheld-type` (text under
+  14 px), `safe-area` (an interactive control in the 32 px clipped margin) and
+  `scene-density` (more than 24 controls in one scene), with tests for each and
+  a negative case.
+- **Touch targets widened, not finished.** The top-bar chips, the bell and the
+  browser toolbar now hit-test through `hitTouchTarget`; the scene-specific
+  panels and the safe-area insets remain.
+- **Still out of reach here:** the on-device items (cold start, RSS, transition
+  frame time, Wi-Fi picker on both stock images, LAN Play handshake, browser
+  touch accuracy, the render-pipeline reading, CedarX/VPU and OpenCL probes) need
+  a hardware session, and the web builder module split / PWA / focus-order editor
+  are still open.
+- **Checks after the changes:** `gofmt -l` clean on every touched Go file,
+  `go vet .` exit 0, `go build ./...` exit 0, the affected focus, chrome, header,
+  touch, bell, status-bar and component suites pass
+  (`go test -run 'TestFocus|TestChrome|TestHeader|TestTouch|TestBell|TestNotif|TestStatusBar|TestComponent|TestIconButton|TestDpad|TestEveryFocusable|TestEveryGenericScene|TestFocusGraphEdges'`),
+  and `npm test` in `tests/web` is green (41 tests). A full
+  `go test -count=1 .` run was started but did not finish inside the five-minute
+  tool budget, so the wider package suite remains unverified for this pass.
 
 ## Notes
 

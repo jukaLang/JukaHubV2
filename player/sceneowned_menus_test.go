@@ -323,31 +323,34 @@ func TestBrowserLinkPickerClosesWithItsScene(t *testing.T) {
 	}
 }
 
-// TestPackageRowMenuClosesWithItsScene: the Reinstall/Remove menu acts on the
-// package that opened it, and it used to be cleared only once the next scene
-// arrived. Input is not gated during the fade, so a press in that window still
-// reached the menu; the departure has to take it down.
+// TestPackageRowMenuClosesWithItsScene: the package details sheet (which
+// replaced the old Reinstall/Remove row menu) acts on the package that opened
+// it. Input is not gated during the fade, so a press in that window would still
+// reach a sheet left open; the departure has to take it down, together with a
+// half-finished pointer press, so the release cannot open a card either.
 func TestPackageRowMenuClosesWithItsScene(t *testing.T) {
-	prevOpen, prevFocus, prevPkg := packageActionsOpen, packageActionsFocus, packageActionsPkg
+	prevSheet, prevPress, prevEntered := pkgUI.sheet, pkgUI.press, pkgUI.entered
 	t.Cleanup(func() {
-		packageActionsOpen, packageActionsFocus, packageActionsPkg = prevOpen, prevFocus, prevPkg
+		pkgUI.sheet, pkgUI.press, pkgUI.entered = prevSheet, prevPress, prevEntered
 	})
 
-	openPackageActions(Package{Name: "RetroArch"})
-	if !packageActionsOpen {
-		t.Fatal("the row menu did not open")
-	}
+	pkgUI.sheet = pkgSheet{open: true, key: "RetroArch"}
+	pkgUI.press = pkgPress{active: true, hit: pkgHit{Kind: pkgHitCard, Key: "RetroArch", Rect: sdl.Rect{W: 10, H: 10}}}
+	pkgUI.entered = true
 
-	config := switchAwayFromScene(t, "Packages", "Main")
+	switchAwayFromScene(t, "Packages", "Main")
 
-	if packageActionsOpen {
-		t.Error("the package row menu outlived its scene")
+	if pkgUI.sheet.open {
+		t.Error("the package details sheet outlived its scene")
 	}
-	if packageActionsPkg.Name != "" {
-		t.Errorf("the menu still held %q after leaving the scene", packageActionsPkg.Name)
+	if pkgUI.sheet.key != "" {
+		t.Errorf("the sheet still held %q after leaving the scene", pkgUI.sheet.key)
 	}
-	if packageActionsController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_A}, config) {
-		t.Error("a pad press meant for the next screen still reached the row menu")
+	if pkgUI.press.active {
+		t.Error("a press on a package card survived the scene switch")
+	}
+	if pkgUI.entered {
+		t.Error("the store still counts as entered: the next visit would skip its refresh")
 	}
 }
 

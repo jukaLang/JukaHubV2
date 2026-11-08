@@ -248,32 +248,26 @@ func TestEnsureHapticsSetting(t *testing.T) {
 	}
 }
 
-// The switch must actually draw where it was injected, inside the content panel
-// and above the footer, with its label visible.
+// The switch must actually draw: Settings is the hub now (setui.go), and with a
+// motor present the Vibration switch and its strength carousel are rows of
+// Sound & haptics, inside the pane, above the footer, labels whole, on both
+// canvases. Without a motor they are not offered (see the next test for the
+// injected config row; setmodel.go hides the hub's rows the same way).
 func TestVibrationSwitchRenders(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	setSkipUnlessDefaultTextSize(t)
 	installFakeHaptics(t, &fakeHaptics{})
-	config := widgetRenderConfig(t)
-	ensureOnboardingEntry(config)
-	ensureHapticsSetting(config)
-
-	f, scene := renderNamedScene(t, config, "SettingsGeneral")
-	var row *Element
-	for i := range scene.Elements {
-		if scene.Elements[i].Variable == hapticsVariable {
-			row = &scene.Elements[i]
-			break
+	config := setRenderConfig(t)
+	p := setNewHubProbe(t)
+	for _, w := range setTestCanvases {
+		p.open(config, "sound", w, 720)
+		i := p.assertRowWhole("vibration")
+		if !setHub.views[i].on {
+			t.Errorf("%dpx: vibration is on by default, but the switch shows it off", w)
 		}
-	}
-	if row == nil {
-		t.Fatal("no Vibration row in Settings → General")
-	}
-	// The content panel ends 16px above the 48px footer, so y+48 must stay
-	// above 656.
-	if row.Y+48 > 656 {
-		t.Fatalf("Vibration row bottom at y=%d runs into the footer", row.Y+48)
-	}
-	if got := brightPixelsIn(f, *row, config); got < 40 {
-		t.Errorf("Vibration row drew %d bright pixels: its label is missing", got)
+		p.assertRowWhole("vibrationLevel")
 	}
 }
 

@@ -1,17 +1,18 @@
 package main
 
-// nettools.go — the extra network rows in Tools → FTP & IP.
+// nettools.go — probes behind Tools → Network tools (nettoolsscreen.go).
 //
-// The panel already answered "is this thing on the network?" with ping,
-// traceroute, port scans and DNS. These four answer the questions that came
-// next in practice:
+// The page answers "is this thing on the network?" with ping, traceroute,
+// port scans and DNS. These answer the questions that come next in practice:
 //
 //   - Public IP:  what the internet sees, and which edge it lands on.
 //   - LAN neighbours: the devices the router has already talked to, read from
 //     the kernel's neighbour table without probing anything.
 //   - Listening ports: what this device itself has open, which is the first
 //     thing to check when a phone cannot reach the FTP or SSH server.
-//   - HTTP check: status, time, server and certificate expiry for one URL.
+//   - HTTP check: status, time, server and certificate expiry for one URL. It
+//     left the Tools pages for the Browser's site information, which calls
+//     httpCheckSummary with the page it shows.
 //
 // Everything is read-only. The parsers are separate from the platform calls so
 // they can be tested against captured output, the same way the Wi-Fi and netsh
@@ -89,29 +90,39 @@ func parseCloudflareTrace(body string) publicIPInfo {
 // publicIPSummary fetches the trace and formats it. A network failure is
 // reported with the reason rather than as an empty card.
 func publicIPSummary() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, netToolsTraceURL, nil)
+	info, err := publicIPLookup(context.Background())
 	if err != nil {
 		return "", err
 	}
+	return formatPublicIP(info), nil
+}
+
+// publicIPLookup asks the trace endpoint what address the internet sees. The
+// request ends with ctx, so leaving the page stops it.
+func publicIPLookup(ctx context.Context) (publicIPInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, netToolsTraceURL, nil)
+	if err != nil {
+		return publicIPInfo{}, err
+	}
 	resp, err := netToolsHTTPClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("no answer from %s: %w", "the trace service", err)
+		return publicIPInfo{}, fmt.Errorf("no answer from %s: %w", "the trace service", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	if err != nil {
-		return "", err
+		return publicIPInfo{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("trace service answered %s", resp.Status)
+		return publicIPInfo{}, fmt.Errorf("trace service answered %s", resp.Status)
 	}
 	info := parseCloudflareTrace(string(body))
 	if info.IP == "" {
-		return "", errors.New("the trace service did not report an address")
+		return publicIPInfo{}, errors.New("the trace service did not report an address")
 	}
-	return formatPublicIP(info), nil
+	return info, nil
 }
 
 // formatPublicIP is the text the output pane shows.
@@ -285,27 +296,36 @@ func formatNeighbours(list []lanNeighbour) string {
 // lanNeighbourSummary reads the platform's table. Reading it costs nothing and
 // touches no radio: it is what the router conversation already left behind.
 func lanNeighbourSummary() (string, error) {
-	if runtime.GOOS == "windows" {
+	list, err := lanNeighbourList()
+	if err != nil {
+		return "", err
+	}
+	return formatNeighbours(list), nil
+}
+
+// lanNeighbourList is the platform's neighbour table, sorted.
+func lanNeighbourList() ([]lanNeighbour, error) {
+	var list []lanNeighbour
+	switch {
+	case runtime.GOOS == "windows":
 		out, err := exec.Command("arp", "-a").Output()
 		if err != nil {
-			return "", fmt.Errorf("arp -a: %w", err)
+			return nil, fmt.Errorf("arp -a: %w", err)
 		}
-		list := parseWindowsARP(string(out))
-		sortNeighbours(list)
-		return formatNeighbours(list), nil
+		list = parseWindowsARP(string(out))
+	default:
+		if data, err := os.ReadFile("/proc/net/arp"); err == nil {
+			list = parseProcNetARP(string(data))
+			break
+		}
+		out, err := exec.Command("ip", "neigh", "show").Output()
+		if err != nil {
+			return nil, errors.New("no neighbour table on this device (no /proc/net/arp and no ip command)")
+		}
+		list = parseIPNeigh(string(out))
 	}
-	if data, err := os.ReadFile("/proc/net/arp"); err == nil {
-		list := parseProcNetARP(string(data))
-		sortNeighbours(list)
-		return formatNeighbours(list), nil
-	}
-	out, err := exec.Command("ip", "neigh", "show").Output()
-	if err != nil {
-		return "", errors.New("no neighbour table on this device (no /proc/net/arp and no ip command)")
-	}
-	list := parseIPNeigh(string(out))
 	sortNeighbours(list)
-	return formatNeighbours(list), nil
+	return list, nil
 }
 
 // ── Listening ports ────────────────────────────────────────────────────────
@@ -462,12 +482,21 @@ func formatListeningPorts(list []listeningPort) string {
 
 // listeningPortsSummary reads this device's socket table.
 func listeningPortsSummary() (string, error) {
+	list, err := listeningPortList()
+	if err != nil {
+		return "", err
+	}
+	return formatListeningPorts(list), nil
+}
+
+// listeningPortList is this device's listening TCP sockets, one row per port.
+func listeningPortList() ([]listeningPort, error) {
 	if runtime.GOOS == "windows" {
 		out, err := exec.Command("netstat", "-ano", "-p", "tcp").Output()
 		if err != nil {
-			return "", fmt.Errorf("netstat: %w", err)
+			return nil, fmt.Errorf("netstat: %w", err)
 		}
-		return formatListeningPorts(parseNetstatListen(string(out))), nil
+		return dedupeListening(parseNetstatListen(string(out))), nil
 	}
 	var list []listeningPort
 	read := false
@@ -482,11 +511,11 @@ func listeningPortsSummary() (string, error) {
 	if !read {
 		out, err := exec.Command("netstat", "-ltn").Output()
 		if err != nil {
-			return "", errors.New("no socket table on this device (no /proc/net/tcp and no netstat)")
+			return nil, errors.New("no socket table on this device (no /proc/net/tcp and no netstat)")
 		}
-		return formatListeningPorts(parseNetstatListen(string(out))), nil
+		list = parseNetstatListen(string(out))
 	}
-	return formatListeningPorts(list), nil
+	return dedupeListening(list), nil
 }
 
 // ── HTTP check ─────────────────────────────────────────────────────────────
@@ -635,24 +664,19 @@ func calendarDaysBetween(from, to time.Time) int {
 	return int(end.Sub(start).Hours() / 24)
 }
 
-// ── Rows ───────────────────────────────────────────────────────────────────
+// ── The HTTP check's keyboard ──────────────────────────────────────────────
+//
+// The Tools pages no longer offer the HTTP check (the Browser's site
+// information runs httpCheckSummary on the page it shows), but the keyboard
+// still knows the target, so a check typed there keeps working.
 
-// toolsLastURL is the URL the HTTP check row remembers, so checking again is a
+// toolsLastURL is the URL the HTTP check remembers, so checking again is a
 // correction instead of a retype. Touched on the UI thread only.
 var toolsLastURL string
 
 // toolsURLBuffer is the keyboard's working copy; the remembered URL above only
 // changes when the field is submitted.
 var toolsURLBuffer string
-
-// toolsURLRowValue is what the HTTP row shows. Before the first check it says
-// so instead of showing an example address, which read as a saved target.
-func toolsURLRowValue() string {
-	if url := strings.TrimSpace(toolsLastURL); url != "" {
-		return url
-	}
-	return "Not checked yet"
-}
 
 // toolsHTTPCheckSubmit validates the typed URL before starting the check. A
 // URL that cannot be parsed reopens the keyboard with the text still there.
@@ -668,34 +692,4 @@ func toolsHTTPCheckSubmit(raw string) {
 		text, err := httpCheckSummary(value)
 		return powerAsyncResult{text: text, err: err}
 	})
-}
-
-// powerProbePublicIP asks the trace endpoint what address the internet sees.
-func powerProbePublicIP(config *Config) {
-	powerRunFromTools(config, "Public IP", "Asking the trace service…", func() powerAsyncResult {
-		text, err := publicIPSummary()
-		return powerAsyncResult{text: text, err: err}
-	})
-}
-
-// powerProbeLANNeighbours reads the neighbour table without probing.
-func powerProbeLANNeighbours(config *Config) {
-	powerRunFromTools(config, "LAN neighbours", "Reading the neighbour table…", func() powerAsyncResult {
-		text, err := lanNeighbourSummary()
-		return powerAsyncResult{text: text, err: err}
-	})
-}
-
-// powerProbeListeningPorts lists this device's own open TCP ports.
-func powerProbeListeningPorts(config *Config) {
-	powerRunFromTools(config, "Listening ports", "Reading the socket table…", func() powerAsyncResult {
-		text, err := listeningPortsSummary()
-		return powerAsyncResult{text: text, err: err}
-	})
-}
-
-// toolsUIURLPrompt is the HTTP check row's A action: ask for the URL, then
-// check it. It lives here so toolsui.go stays a layout file.
-func toolsUIURLPrompt() {
-	vkOpenToolsURL("")
 }

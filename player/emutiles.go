@@ -3,17 +3,21 @@ package main
 // emutiles.go — the Emulators page: one tile per emulator, with its picture.
 //
 // emulators.go owns the catalog (what exists and whether it can launch). This
-// file owns the page: a full-screen grid of tiles, each showing the emulator's
-// own icon when the install ships one — the icon inside a TrimUI Emus/ folder,
-// or the shell icon of a Windows executable — and a gamepad glyph otherwise.
+// file owns the page: a full-screen grid of glass tiles, each showing the
+// emulator's own icon when the install ships one — the icon inside a TrimUI
+// Emus/ folder, or the shell icon of a Windows executable — and otherwise the
+// shared vector icon of what it emulates (emu-psp, emu-xbox, …).
 //
 // Status is spelled out, not implied: every usable-or-not tile carries a pill
-// at its bottom edge reading "Available", "Unavailable" or "Not installed", and
-// the picture of an unusable emulator is dimmed. A 4px corner dot was there
-// before and it was the one thing people could not read from a metre away, which
-// is exactly the distance a handheld is held at. The footer still spells out the
-// highlighted entry and its path, so a long launcher path never has to fit
-// inside a tile.
+// at its bottom edge reading "Available", "Unavailable", "Not installed" or
+// "Not supported" — or "Update" when a newer build is known, "Installing…"
+// with a progress track while one is being installed — and the picture of an
+// unusable emulator is dimmed. A 4px corner dot was there before and it was the
+// one thing people could not read from a metre away, which is exactly the
+// distance a handheld is held at. The footer spells out the highlighted entry
+// (version, kept build, path) and its actions as Home's glass hint badges, and
+// every badge is also a click/tap target, so the mouse and a touchscreen reach
+// Install, Update, Roll back and the rest the same way the pad does.
 
 import (
 	"encoding/json"
@@ -90,11 +94,12 @@ func emuPageRect() sdl.Rect {
 }
 
 // emuPageHeader is the header the page opens with: the shared page bar, with
-// the catalog's own summary under the title and its count opposite. Every
-// caller builds it here, so the band the grid reserves and the bar that is
-// drawn are one measurement.
+// the catalog's own summary under the title and its count opposite — or
+// "Offline" in amber, because every install and update needs the connection.
+// Every caller builds it here, so the band the grid reserves and the bar that
+// is drawn are one measurement.
 func emuPageHeader(entries []emuEntry, count string) UIPageHeader {
-	h := UIPanelHeader("Emulators", emuSummary(entries), "gamepad")
+	h := UIPanelHeader("Emulators", emuSummary(entries), "emulator")
 	h.Status = count
 	h.StatusColor = ColorTextSecondary()
 	return h
@@ -243,6 +248,7 @@ func emuFolderIcon(folder string) string {
 // emuEntryIconPath is the image to draw for a tile, or "" when the tile should
 // fall back to its glyph. The lookup stays cheap: the scan already found folder
 // icons, and only Windows needs the per-frame cache probe for extracted icons.
+// A real picture wins over the vector glyph: it is the emulator's own logo.
 func emuEntryIconPath(entry emuEntry) string {
 	if entry.IconPath != "" {
 		return entry.IconPath
@@ -321,16 +327,20 @@ func emuStatusChipRect(cell sdl.Rect, font *ttf.Font, label string) sdl.Rect {
 }
 
 // emuStatusChipColors is the pill body and its label: a tint of the status
-// colour so the three states read at a glance, not just by their wording.
+// colour so the states read at a glance, not just by their wording. The tint is
+// strong enough to stand off a focused tile's brighter glass.
 func emuStatusChipColors(status emuStatus) (fill, text sdl.Color) {
-	text = ColorTextTertiary()
+	text = ColorTextSecondary()
 	switch status {
 	case emuAvailable:
 		text = ToastSuccessInk()
-		return WithAlpha(text, 38), text
+		return WithAlpha(text, 46), text
 	case emuBroken:
 		text = ToastErrorInk()
-		return WithAlpha(text, 40), text
+		return WithAlpha(text, 48), text
+	case emuUnsupported:
+		text = ToastWarnInk()
+		return WithAlpha(text, 42), text
 	}
 	return WithAlpha(text, 34), text
 }
@@ -342,10 +352,26 @@ func emuStatusVeilAlpha(status emuStatus) uint8 {
 	switch status {
 	case emuBroken:
 		return 70
-	case emuMissing:
+	case emuMissing, emuUnsupported:
 		return 135
 	}
 	return 0
+}
+
+// emuTileChip is the pill a tile shows: its status, or the state that matters
+// more right now — an install running for it, or a newer build waiting.
+func emuTileChip(entry emuEntry) (label string, fill, text sdl.Color) {
+	if name := emuInstallingName(); name != "" && strings.EqualFold(name, entry.Name) {
+		ink := glassAccent()
+		return "Installing…", WithAlpha(ink, 50), ink
+	}
+	if emuTileUpdateKnown(entry) {
+		ink := glassAccent()
+		return "Update", WithAlpha(ink, 50), ink
+	}
+	label, _ = emuStatusLabel(entry.Status)
+	fill, text = emuStatusChipColors(entry.Status)
+	return label, fill, text
 }
 
 // drawEmuTileStatus draws the pill at the bottom of a tile. Rows that are
@@ -364,14 +390,45 @@ func drawEmuTileStatus(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emu
 	if font == nil {
 		return sdl.Rect{}
 	}
-	label, _ := emuStatusLabel(entry.Status)
+	label, fill, text := emuTileChip(entry)
 	chip := emuStatusChipRect(cell, font, label)
 	if lineH > 0 && chip.Y-4-nameTop < lineH {
 		return sdl.Rect{}
 	}
-	fill, text := emuStatusChipColors(entry.Status)
+	if r == nil {
+		return chip
+	}
 	drawChip(r, config, chip, label, fill, text, font)
+	// A hairline in the status ink gives the pill an edge of its own, so it
+	// still reads on a focused tile, whose glass is brighter.
+	strokeRoundedRect(r, chip.X, chip.Y, chip.W, chip.H, chip.H/2, 1, WithAlpha(text, 110))
+	if label == "Installing…" {
+		emuDrawInstallTrack(r, cell, chip)
+	}
 	return chip
+}
+
+// emuDrawInstallTrack is the thin progress line under an installing tile's
+// pill, fed by the install bar's own byte counts.
+func emuDrawInstallTrack(r *sdl.Renderer, cell, chip sdl.Rect) {
+	visible, _, _, _, done, total, _, _, ending := installBarSnapshot()
+	if !visible || ending {
+		return
+	}
+	track := sdl.Rect{X: cell.X + 14, Y: chip.Y + chip.H + 3, W: cell.W - 28, H: 3}
+	if track.Y+track.H > cell.Y+cell.H-1 {
+		track.Y = cell.Y + cell.H - 1 - track.H
+	}
+	fillRoundedRect(r, track.X, track.Y, track.W, track.H, 1, glassA(30))
+	if total > 0 && done > 0 {
+		w := int32(int64(track.W) * done / total)
+		if w > track.W {
+			w = track.W
+		}
+		if w > 2 {
+			fillRoundedRect(r, track.X, track.Y, w, track.H, 1, glassAccent())
+		}
+	}
 }
 
 // emuTileIconSize is the height of the icon well. It is emuIconBox normally and
@@ -397,7 +454,7 @@ func emuTileIconSize(cell sdl.Rect, labelFont *ttf.Font, chipH int32) int32 {
 }
 
 // drawEmuTileIcon draws the emulator's picture fitted inside the square well,
-// or the entry's glyph on a tinted well when there is no picture.
+// or the entry's vector glyph on a tinted well when there is no picture.
 func drawEmuTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry, focused bool, box int32) {
 	x := cell.X + (cell.W-box)/2
 	y := cell.Y + 12
@@ -426,9 +483,9 @@ func drawEmuTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEn
 	strokeRoundedRect(r, x, y, box, box, 16, 1, WithAlpha(tint, 150))
 	glyph := strings.TrimSpace(entry.Glyph)
 	if glyph == "" {
-		glyph = "gamepad"
+		glyph = "emu-generic"
 	}
-	inner := max32(20, box*48/100)
+	inner := max32(20, box*56/100)
 	DrawHomeIcon(r, glyph, sdl.Rect{
 		X: x + (box-inner)/2,
 		Y: y + (box-inner)/2,
@@ -485,20 +542,20 @@ func drawEmuTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry,
 		maxLines = 2
 	}
 	nameColor := ColorTextPrimary()
-	if entry.Status == emuMissing {
+	if entry.Status == emuMissing || entry.Status == emuUnsupported {
 		nameColor = ColorTextSecondary()
 	}
 	lines := wrapTextLines(labelFont, name, cell.W-18, maxLines)
 	for i, line := range lines {
-		lw, _, _ := labelFont.SizeUTF8(line)
+		lw, _ := measureText(labelFont, line)
 		renderText(r, config, labelFont, line, nameColor,
-			cell.X+(cell.W-int32(lw))/2, textTop+int32(i)*lineH)
+			cell.X+(cell.W-lw)/2, textTop+int32(i)*lineH)
 	}
 }
 
-// renderEmuPanel draws the Emulators page: header, tile grid, footer detail.
-// The name is kept from the old list panel so every entry point and test that
-// already opened the Emulators screen keeps working.
+// renderEmuPanel draws the Emulators page: header, tile grid, footer detail
+// and the action badges. The name is kept from the old list panel so every
+// entry point and test that already opened the Emulators screen keeps working.
 func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	if !emuPanel.open || renderer == nil {
 		return
@@ -509,7 +566,7 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 			Name:   "No emulators found",
 			Detail: "Nothing was found on this device",
 			Status: emuMissing,
-			Glyph:  "gamepad",
+			Glyph:  "emu-generic",
 		}}
 	}
 	if emuPanel.cursor >= len(entries) {
@@ -541,10 +598,10 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	drawOverlayCard(renderer, layout.page)
 	drawOverlayCardAccent(renderer, layout.page.X, layout.page.Y, layout.page.W)
 
-	// The page opens with the shared header every other page uses — a tinted
-	// glyph well, the title, a one-line summary under it and the count
-	// opposite — placed by the same inset and reserved with the same measured
-	// band, so the grid starts exactly where the header ends.
+	// The page opens with the shared header every other page uses — a glass
+	// glyph badge, the title, a one-line summary under it and the count (or
+	// "Offline") opposite — placed by the same inset and reserved with the same
+	// measured band, so the grid starts exactly where the header ends.
 	count := itoa(len(entries)) + " emulators"
 	if len(entries) == 1 {
 		count = "1 emulator"
@@ -553,12 +610,17 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	if totalRows > layout.rows {
 		count = itoa(emuPanel.cursor+1) + " / " + itoa(len(entries))
 	}
-	header := overlayHeaderOnCard(emuPageHeader(entries, count), layout.page)
+	header := emuPageHeader(entries, count)
+	if !IsOnline() {
+		header.Status = "Offline · installs need Wi-Fi"
+		header.StatusColor = ToastWarnInk()
+	}
+	header = overlayHeaderOnCard(header, layout.page)
 	UIPageHeaderDraw(renderer, config, header)
 
 	// ── Tiles ───────────────────────────────────────────────────────────
 	hovered := -1
-	if pointInRect(mouseX, mouseY, layout.body) {
+	if pointInRect(mouseX, mouseY, layout.body) && !emuXboxSheetOpen() {
 		hovered = emuTileIndexAt(layout, len(entries), firstRow)
 	}
 	emuRowHits = emuRowHits[:0]
@@ -584,46 +646,145 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 			layout.body.H-emuTileGap, thumbFrac, scrollFrac)
 	}
 
-	// ── Footer: the highlighted entry, then the controls ────────────────
+	// ── Footer: the highlighted entry, then its actions ─────────────────
 	footerY := layout.page.Y + layout.page.H - emuPageFooterH
-	renderer.SetDrawColor(ColorBorderDefault.R, ColorBorderDefault.G, ColorBorderDefault.B, 70)
+	setDrawColor(renderer, glassHairline())
 	renderer.DrawLine(layout.body.X, footerY, layout.body.X+layout.body.W, footerY)
 
 	selected := entries[emuPanel.cursor]
-	statusLabel, statusColor := emuStatusLabel(selected.Status)
-	nameLine := emuTileDisplayName(selected.Name)
-	renderText(renderer, config, font, nameLine, ColorTextPrimary(),
-		layout.body.X, footerY+12)
-	nameW, _, _ := font.SizeUTF8(nameLine)
-	statusEnd := layout.body.X + int32(nameW)
-	renderText(renderer, config, font, " · "+statusLabel, statusColor,
-		statusEnd, footerY+12)
-	statusW, _, _ := font.SizeUTF8(" · " + statusLabel)
-	statusEnd += int32(statusW)
-	// A kept build is worth naming: it is the reference point R1 restores, and
-	// a date here says which build that is without opening anything.
-	if backup, ok := emuEntryBackup(selected); ok {
-		backupLabel := " · backup " + backup.Stamp.Format("2006-01-02")
-		renderText(renderer, config, font, backupLabel, ColorTextTertiary(),
-			statusEnd, footerY+12)
-		bw, _, _ := font.SizeUTF8(backupLabel)
-		statusEnd += int32(bw)
-	}
-	detailX := statusEnd + 12
-	if selected.Detail != "" {
-		rest := layout.body.W - (detailX - layout.body.X)
-		if rest > 40 {
-			renderText(renderer, config, font, ellipsize(font, selected.Detail, rest),
-				ColorTextTertiary(), detailX, footerY+12)
-		}
-	}
+	emuDrawFooterDetail(renderer, config, font, selected, layout.body, footerY+12)
 
 	hints := emuFooterHints(selected, retroAchievementsSupported())
-	// The line is measured against the body instead of hoping it fits: the page
-	// is one card wide, and a hint that runs under the page border is
-	// unreadable.
-	renderText(renderer, config, font, emuFooterLine(font, hints, layout.body.W),
-		ColorTextSecondary(), layout.body.X, footerY+12+smallH+8)
+	emuDrawFooterHints(renderer, config, hints, layout.body.X, footerY+12+smallH+8, layout.body.W)
+
+	// The Xbox setup sheet sits over the page while it is open.
+	renderEmuXboxSheet(renderer, config, layout.page)
+}
+
+// emuFooterSegment is one coloured part of the footer's detail line.
+type emuFooterSegment struct {
+	text  string
+	color sdl.Color
+}
+
+// emuDrawFooterDetail is the footer's first line: the highlighted entry's
+// name, its status, the installed version and the kept build, then the detail
+// ellipsized into what is left of the width.
+func emuDrawFooterDetail(renderer *sdl.Renderer, config *Config, font *ttf.Font, selected emuEntry, body sdl.Rect, y int32) {
+	statusLabel, statusColor := emuStatusLabel(selected.Status)
+	statusColor = StatusInk(statusColor)
+	if selected.Status == emuMissing {
+		statusColor = ColorTextTertiary()
+	}
+	x := body.X
+	nameLine := ellipsize(font, emuTileDisplayName(selected.Name), body.W/2)
+	renderText(renderer, config, font, nameLine, ColorTextPrimary(), x, y)
+	nameW, _ := measureText(font, nameLine)
+	x += nameW
+	segments := []emuFooterSegment{{" · " + statusLabel, statusColor}}
+	if emuTileUpdateKnown(selected) {
+		segments = append(segments, emuFooterSegment{" · update available", glassAccent()})
+	}
+	if selected.Version != "" {
+		segments = append(segments, emuFooterSegment{" · " + selected.Version, ColorTextSecondary()})
+	}
+	// A kept build is worth naming: it is the reference point R1 restores, and
+	// a date here says which build that is without opening anything.
+	if selected.KeptVersion != "" {
+		segments = append(segments, emuFooterSegment{" · kept " + selected.KeptVersion, ColorTextTertiary()})
+	} else if backup, ok := emuEntryBackup(selected); ok {
+		segments = append(segments, emuFooterSegment{" · backup " + backup.Stamp.Format("2006-01-02"), ColorTextTertiary()})
+	}
+	for _, seg := range segments {
+		w, _ := measureText(font, seg.text)
+		if x+w > body.X+body.W {
+			break
+		}
+		renderText(renderer, config, font, seg.text, seg.color, x, y)
+		x += w
+	}
+	detail := selected.Detail
+	if selected.Status == emuUnsupported && selected.Note != "" {
+		detail = selected.Note
+	}
+	if detail != "" {
+		detailX := x + 12
+		if rest := body.W - (detailX - body.X); rest > 40 {
+			renderText(renderer, config, font, ellipsize(font, detail, rest), ColorTextTertiary(), detailX, y)
+		}
+	}
+}
+
+// emuHintHit maps a drawn hint badge back to the button it names, so a click
+// or tap on it runs the same action as the press (emuHintPress).
+type emuHintHit struct {
+	button string
+	rect   sdl.Rect
+}
+
+// emuHintHits are the badges the last frame drew. Only touched on the
+// render/event thread.
+var emuHintHits []emuHintHit
+
+// emuFittedHints trims a hint set to the width the page has, the way
+// emuFooterLine trims the text form: the D-pad hint goes first, then the
+// optional page keys from the right, and Back is always the last one standing.
+func emuFittedHints(config *Config, hints []FooterHint, width int32) footerPlan {
+	plan := planFooterHints(config, hints, width)
+	if len(plan.hints) == len(hints) || len(hints) <= 2 {
+		return plan
+	}
+	trimmed := hints
+	if strings.EqualFold(strings.TrimSpace(trimmed[0].Button), "D-Pad") {
+		trimmed = trimmed[1:]
+		if plan = planFooterHints(config, trimmed, width); len(plan.hints) == len(trimmed) {
+			return plan
+		}
+	}
+	for len(trimmed) > 2 {
+		trimmed = append(append([]FooterHint(nil), trimmed[:len(trimmed)-2]...), trimmed[len(trimmed)-1])
+		if plan = planFooterHints(config, trimmed, width); len(plan.hints) == len(trimmed) {
+			return plan
+		}
+	}
+	return plan
+}
+
+// emuDrawFooterHints draws the controls as Home's glass hint badges, left to
+// right from x, and records each badge as a click target.
+func emuDrawFooterHints(renderer *sdl.Renderer, config *Config, hints []FooterHint, x, y, width int32) {
+	emuHintHits = emuDrawHintRow(renderer, config, hints, x, y, width, emuHintHits[:0])
+}
+
+// emuDrawHintRow draws a fitted row of glass hint badges and appends a click
+// target for every badge that names a button to hits. The Core builds page
+// draws its footer with it too.
+func emuDrawHintRow(renderer *sdl.Renderer, config *Config, hints []FooterHint, x, y, width int32, hits []emuHintHit) []emuHintHit {
+	plan := emuFittedHints(config, hints, width)
+	if plan.font == nil {
+		return hits
+	}
+	textY := y + (plan.badgeH-plan.fontHeight)/2
+	for i, hint := range plan.hints {
+		labelX := x
+		start := x
+		if plan.badgeW[i] > 0 {
+			badge := sdl.Rect{X: x, Y: y, W: plan.badgeW[i], H: plan.badgeH}
+			labelX = badge.X + badge.W + plan.badgeGap
+			drawGlassHintBadge(renderer, config, plan.font, badge, hint.Button, hint.Label, labelX, textY)
+		} else {
+			drawGlassText(renderer, config, plan.font, hint.Label, ColorTextMuted(), labelX, textY)
+		}
+		end := labelX + plan.labelW[i]
+		if hint.Button != "" && hint.Button != "D-Pad" {
+			hits = append(hits, emuHintHit{
+				button: hint.Button,
+				rect:   sdl.Rect{X: start - 4, Y: y - 4, W: end - start + 8, H: plan.badgeH + 8},
+			})
+		}
+		x = end + plan.groupGap
+	}
+	return hits
 }
 
 // emuFooterLine fits the control hints into the width the page has. The widest
@@ -674,11 +835,23 @@ func emuEntryBackup(e emuEntry) (coreBackup, bool) {
 	return emuNewestCoreBackup(core)
 }
 
+// emuAnyManaged reports whether the catalog holds a Windows emulator JukaHub
+// installed (and Update all can therefore update).
+func emuAnyManaged() bool {
+	for _, e := range emulatorEntries() {
+		if e.Managed {
+			return true
+		}
+	}
+	return false
+}
+
 // emuFooterHints is the control line the page draws. The A label follows what a
 // press really does on the highlighted tile — the page installs an emulator
 // where it used to print "no emulator found" — and X only appears when there is
-// a core on the card to update, so no hint promises a file that is not there.
-// R1 appears only when there is a kept build to restore.
+// something on the card to update, so no hint promises a file that is not
+// there. R1 appears only when there is a kept build to restore; Y is the Xbox
+// setup on xemu's tile.
 func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
 	hints := []FooterHint{{Button: "D-Pad", Label: "Navigate"}}
 	if label := emuInstallHintLabel(e); label != "" {
@@ -690,15 +863,17 @@ func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
 	if label := emuRollbackHintLabel(e); label != "" {
 		hints = append(hints, FooterHint{Button: "R1", Label: label})
 	}
-	if len(emuInstalledCoreSet()) > 0 {
+	if len(emuInstalledCoreSet()) > 0 || (IsWindows() && emuAnyManaged()) {
 		hints = append(hints, FooterHint{Button: "L1", Label: "Update all"})
 	}
-	// R2 opens the full list of kept builds. It only appears when there is
-	// something to review, so no hint promises an empty page.
+	// R2 opens the Core builds page. It only appears when there is something to
+	// review, so no hint promises an empty page.
 	if label := emuKeptBuildsHint(); label != "" {
 		hints = append(hints, FooterHint{Button: "R2", Label: label})
 	}
-	if achievements {
+	if emuXboxSetupAvailable(e) {
+		hints = append(hints, FooterHint{Button: "Y", Label: "Setup"})
+	} else if achievements {
 		hints = append(hints, FooterHint{Button: "Y", Label: "Achievements"})
 	}
 	return append(hints, FooterHint{Button: "B", Label: "Back"})

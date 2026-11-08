@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestToolboxCatalogIsAllowlisted(t *testing.T) {
@@ -300,76 +301,73 @@ func TestToolboxInstalledUsesToolsDir(t *testing.T) {
 	}
 }
 
-// TestPowerToolboxRows drives the page the Tools panel opens: one row per
-// catalog tool, Install while missing and Run once installed.
-func TestPowerToolboxRows(t *testing.T) {
+// TestToolboxModelRows drives the Toolbox screen's rows: every catalog tool is
+// listed, "Install" while missing, "Installed" (in the installed group) once
+// the binary is there.
+func TestToolboxModelRows(t *testing.T) {
 	dir := t.TempDir()
 	old := toolboxToolsDirOverride
 	toolboxToolsDirOverride = dir
-	defer func() { toolboxToolsDirOverride = old }()
+	prevBusy := tbxScreen.busy
+	tbxScreen.busy = nil
+	t.Cleanup(func() {
+		toolboxToolsDirOverride = old
+		tbxScreen.busy = prevBusy
+	})
 
-	withPowerToolsState(t, powerToolsState{page: powerPageToolbox})
-	rows := powerToolRows(&Config{})
-	if len(rows) != len(toolboxCatalog()) {
-		t.Fatalf("toolbox rows = %d, want one per catalog entry (%d)", len(rows), len(toolboxCatalog()))
+	m := tbxBuildModel(time.Now())
+	if len(m.installed) != 0 || len(m.available) != len(toolboxCatalog()) {
+		t.Fatalf("rows = %d installed / %d available, want every tool available", len(m.installed), len(m.available))
 	}
-	for _, row := range rows {
-		if row.action != powerActionToolboxInstall || !row.enabled {
-			t.Fatalf("missing row = %+v, want an install action", row)
+	for _, row := range m.available {
+		if row.spec.pill != "Install" && row.spec.pill != "Not for this device" {
+			t.Fatalf("missing tool %s shows %q", row.id, row.spec.pill)
 		}
-		if row.value != "Not installed" {
-			t.Fatalf("row value = %q, want Not installed", row.value)
+		if row.spec.title == "" || row.spec.subtitle == "" {
+			t.Fatalf("row %s is missing its title or summary", row.id)
 		}
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, toolboxExeNameOf("jq")), []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rows = powerToolRows(&Config{})
-	installed := 0
-	for _, row := range rows {
-		if row.action == powerActionToolboxRun {
-			installed++
-			if !strings.Contains(row.value, "Installed") {
-				t.Fatalf("installed row value = %q", row.value)
-			}
-			if !strings.Contains(row.hint, "X Arguments") {
-				t.Fatalf("installed row hint = %q, want the argument editor", row.hint)
-			}
-		}
+	m = tbxBuildModel(time.Now())
+	if len(m.installed) != 1 || m.installed[0].id != "jq" || m.installed[0].spec.pill != "Installed" {
+		t.Fatalf("installed rows = %+v, want jq marked Installed", m.installed)
 	}
-	if installed != 1 {
-		t.Fatalf("installed rows = %d, want 1", installed)
+	if !strings.Contains(m.header.Status, "1 of ") {
+		t.Fatalf("header status = %q, want the installed count", m.header.Status)
 	}
 }
 
-// TestPowerSecurityPage renders the posture page from the live config: every
-// row is informational, and a plaintext secret shows up as a warning value.
-func TestPowerSecurityPage(t *testing.T) {
+// TestSecurityTrustModel builds the Security & trust rows from the live
+// config: one row per posture line, each one pressable, and a plaintext secret
+// shows as an amber row.
+func TestSecurityTrustModel(t *testing.T) {
 	cfg := &Config{}
 	cfg.Variables.Custom = map[string]interface{}{"groq_api_key": "gsk_real_token"}
-	withPowerToolsState(t, powerToolsState{page: powerPageSecurity})
-	rows := powerToolRows(cfg)
-	if len(rows) != len(securityPostureRows(cfg)) {
-		t.Fatalf("security rows = %d, want %d", len(rows), len(securityPostureRows(cfg)))
+	m := sectrustBuildModel(cfg, time.Now())
+	if len(m.rows) != len(securityPostureRows(cfg)) {
+		t.Fatalf("rows = %d, want %d", len(m.rows), len(securityPostureRows(cfg)))
 	}
-	for _, row := range rows {
-		if row.enabled || row.action != 0 {
-			t.Fatalf("posture row should be informational only: %+v", row)
+	seen := map[string]bool{}
+	for _, row := range m.rows {
+		if row.id == "" || seen[row.id] {
+			t.Fatalf("row id %q is empty or repeated", row.id)
 		}
-		if row.label == "" || row.detail == "" {
-			t.Fatalf("posture row is missing its label or detail: %+v", row)
+		seen[row.id] = true
+		if row.spec.title == "" || row.spec.subtitle == "" || row.spec.pill == "" {
+			t.Fatalf("row %s is missing its title, detail or value: %+v", row.id, row.spec)
+		}
+		if what, _, _ := sectrustExplain(row.id); what == "" {
+			t.Fatalf("row %s has no explanation for its sheet", row.id)
 		}
 	}
-	if rows[0].label != "Config secrets" || !strings.Contains(rows[0].value, "plaintext") || !strings.HasSuffix(rows[0].value, "·") {
-		t.Fatalf("first posture row = %+v, want the plaintext warning marker", rows[0])
+	if m.rows[0].id != "secrets" || m.rows[0].spec.tone != tbxToneWarn || !strings.Contains(m.rows[0].spec.pill, "plaintext") {
+		t.Fatalf("first row = %+v, want the amber plaintext warning", m.rows[0])
 	}
-
-	// The panel draws both new pages without pushing the footer off screen.
-	renderPowerProbe(t, cfg, powerPageSecurity, 0)
-	renderPowerProbe(t, cfg, powerPageToolbox, 0)
-	if len(powerRowRects) == 0 {
-		t.Fatal("the toolbox page drew no rows")
+	if m.warnings == 0 {
+		t.Fatal("the summary does not count the warning")
 	}
 }
 
@@ -492,6 +490,173 @@ func TestPlaceholderSecretKeepsTheWarningAlive(t *testing.T) {
 	}
 	if !warned {
 		t.Fatal("a real-looking key in the config must produce a plaintext warning")
+	}
+}
+
+// The checksum file for a download is the per-file side-car when there is one,
+// else the release's SHA-256 list — never a SHA-512 list.
+func TestToolboxChecksumAssetPicksThePublishedList(t *testing.T) {
+	archive := "ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz"
+	assets := []releaseAsset{
+		{Name: archive, URL: "archive"},
+		{Name: archive + ".sha256", URL: "side"},
+		{Name: "naabu_2.6.1_checksums.txt", URL: "list"},
+	}
+	if sum, single, ok := toolboxChecksumAsset(assets, archive); !ok || !single || sum.URL != "side" {
+		t.Fatalf("side-car = %+v single=%v ok=%v", sum, single, ok)
+	}
+	if sum, single, ok := toolboxChecksumAsset(assets, "naabu_2.6.1_linux_arm64.zip"); !ok || single || sum.URL != "list" {
+		t.Fatalf("list = %+v single=%v ok=%v", sum, single, ok)
+	}
+	for _, name := range []string{"SHA256SUMS", "sha256sum.txt", "checksums.txt"} {
+		if _, single, ok := toolboxChecksumAsset([]releaseAsset{{Name: "x.zip"}, {Name: name}}, "x.zip"); !ok || single {
+			t.Errorf("%s was not taken as the checksum list", name)
+		}
+	}
+	if _, _, ok := toolboxChecksumAsset([]releaseAsset{{Name: "x.zip"}, {Name: "x_checksums_sha512.txt"}}, "x.zip"); ok {
+		t.Fatal("a SHA-512 list was taken for SHA-256")
+	}
+	if _, _, ok := toolboxChecksumAsset([]releaseAsset{{Name: "x.zip"}}, "x.zip"); ok {
+		t.Fatal("a release without checksums produced one")
+	}
+}
+
+func TestToolboxParseChecksum(t *testing.T) {
+	hashA := strings.Repeat("a", 64)
+	hashB := strings.Repeat("B", 64)
+	list := "-----BEGIN PGP SIGNED MESSAGE-----\n" +
+		hashA + "  rclone-v1.70.1-linux-arm64.zip\r\n" +
+		hashB + " *./rclone-v1.70.1-windows-amd64.zip\n" +
+		"not-a-hash  other.zip\n"
+	if got, ok := toolboxParseChecksum(list, "rclone-v1.70.1-linux-arm64.zip", false); !ok || got != hashA {
+		t.Fatalf("linux sum = %q %v", got, ok)
+	}
+	if got, ok := toolboxParseChecksum(list, "RCLONE-v1.70.1-windows-amd64.zip", false); !ok || got != strings.ToLower(hashB) {
+		t.Fatalf("binary-mode sum = %q %v, want it lower-cased", got, ok)
+	}
+	if _, ok := toolboxParseChecksum(list, "missing.zip", false); ok {
+		t.Fatal("a file the list does not name was found")
+	}
+	// A side-car may hold the hash alone; a shared list may not.
+	if got, ok := toolboxParseChecksum(hashA+"\n", "x.tar.gz", true); !ok || got != hashA {
+		t.Fatalf("bare side-car = %q %v", got, ok)
+	}
+	if _, ok := toolboxParseChecksum(hashA+"\n", "x.tar.gz", false); ok {
+		t.Fatal("a bare hash in a shared list was taken for this file")
+	}
+	if toolboxIsSHA256(strings.Repeat("g", 64)) || toolboxIsSHA256(hashA[:63]) || !toolboxIsSHA256(hashB) {
+		t.Fatal("toolboxIsSHA256 misjudged a value")
+	}
+}
+
+// A different published hash stops the install; a list that does not name the
+// file installs unverified rather than failing.
+func TestToolboxMatchChecksum(t *testing.T) {
+	sum := strings.Repeat("c", 64)
+	list := sum + "  tool.zip\n"
+	if ok, err := toolboxMatchChecksum(strings.ToUpper(sum), list, "tool.zip", false); !ok || err != nil {
+		t.Fatalf("matching sum = %v %v", ok, err)
+	}
+	if ok, err := toolboxMatchChecksum(strings.Repeat("d", 64), list, "tool.zip", false); ok || err == nil {
+		t.Fatalf("a mismatch must be an error, got %v %v", ok, err)
+	}
+	if ok, err := toolboxMatchChecksum(sum, list, "other.zip", false); ok || err != nil {
+		t.Fatalf("an unlisted file = %v %v, want unverified without an error", ok, err)
+	}
+}
+
+// An update replaces the old binary without leaving the aside copy behind.
+func TestToolboxPlaceReplaces(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tool")
+	staged := filepath.Join(dir, "staged")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staged, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := toolboxPlace(staged, target, true); err != nil {
+		t.Fatalf("place: %v", err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "new" {
+		t.Fatalf("target = %q %v, want the new binary", data, err)
+	}
+	if _, err := os.Stat(target + ".old"); err == nil {
+		t.Fatal("the old copy was left beside the new one")
+	}
+	if _, err := os.Stat(staged); err == nil {
+		t.Fatal("the staged file was left behind")
+	}
+	first := filepath.Join(dir, "first")
+	if err := os.WriteFile(first, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(dir, "fresh-tool")
+	if err := toolboxPlace(first, fresh, false); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if data, _ := os.ReadFile(fresh); string(data) != "v1" {
+		t.Fatalf("first install = %q", data)
+	}
+}
+
+// The install record survives a reload of the manifest, and an update is only
+// offered when the recorded tag and the latest tag are both known and differ.
+func TestToolboxRecordsAndUpdates(t *testing.T) {
+	dir := t.TempDir()
+	old := toolboxToolsDirOverride
+	toolboxToolsDirOverride = dir
+	t.Cleanup(func() {
+		toolboxToolsDirOverride = old
+		toolboxLatest.mu.Lock()
+		delete(toolboxLatest.tags, "jq")
+		toolboxLatest.mu.Unlock()
+	})
+	toolboxLatest.mu.Lock()
+	delete(toolboxLatest.tags, "jq")
+	toolboxLatest.mu.Unlock()
+
+	toolboxSaveRecord("jq", toolboxRecord{Tag: "jq-1.7.1", Asset: "jq-linux-arm64", Verified: true})
+	toolboxManifest.mu.Lock()
+	toolboxManifest.loaded = false
+	toolboxManifest.mu.Unlock()
+	rec, ok := toolboxRecordFor("jq")
+	if !ok || rec.Tag != "jq-1.7.1" || !rec.Verified {
+		t.Fatalf("record after reload = %+v %v", rec, ok)
+	}
+	if got := toolboxUpdateAvailable("jq"); got != "" {
+		t.Fatalf("an update was offered before any check: %q", got)
+	}
+	toolboxLatestSet("jq", "jq-1.7.1")
+	if got := toolboxUpdateAvailable("jq"); got != "" {
+		t.Fatalf("the installed release was offered as an update: %q", got)
+	}
+	toolboxLatestSet("jq", "jq-1.8.0")
+	if got := toolboxUpdateAvailable("jq"); got != "jq-1.8.0" {
+		t.Fatalf("update = %q, want jq-1.8.0", got)
+	}
+	toolboxForgetRecord("jq")
+	if _, ok := toolboxRecordFor("jq"); ok {
+		t.Fatal("the record survived being forgotten")
+	}
+	if got := toolboxUpdateAvailable("jq"); got != "" {
+		t.Fatalf("a removed tool was offered an update: %q", got)
+	}
+}
+
+// The Terminal opens with the installed path, quoted when it has spaces, and
+// the typed or example arguments; nothing runs until Enter.
+func TestToolboxTerminalCommand(t *testing.T) {
+	tool, ok := toolboxFind("jq")
+	if !ok {
+		t.Fatal("jq missing")
+	}
+	if got := toolboxTerminalCommand(tool, "/mnt/SDCARD/Tools/jq", ""); got != "/mnt/SDCARD/Tools/jq --version" {
+		t.Fatalf("default = %q", got)
+	}
+	if got := toolboxTerminalCommand(tool, `C:\Juka Hub\tools\jq.exe`, `.[0] "a b"`); got != `"C:\Juka Hub\tools\jq.exe" .[0] "a b"` {
+		t.Fatalf("typed = %q", got)
 	}
 }
 

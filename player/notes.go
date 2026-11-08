@@ -445,13 +445,6 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return

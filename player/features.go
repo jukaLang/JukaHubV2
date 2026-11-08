@@ -189,29 +189,15 @@ func isMediaFile(name string) bool {
 	return false
 }
 
-// feRoot uses the configured directory when present. On TrimUI, an unset
-// root starts at the SD card rather than the application's own directory.
+// feRoot is the root of the tree being browsed: the location picked from the
+// Files Locations list (files_locations.go), else the configured directory —
+// on TrimUI, an unset root starts at the SD card rather than the application's
+// own directory. Every containment check in Files is made against it.
 func feRoot(config *Config) string {
-	root := ""
-	if config != nil {
-		root = strings.TrimSpace(config.Variables.FileExplorerRoot)
+	if loc := filesActiveLocation(); loc != "" {
+		return loc
 	}
-	if root == "" && IsTrimuiDevice() {
-		root = defaultTrimuiSDRoot()
-		if root == "" {
-			root = "/mnt/SDCARD"
-		}
-	}
-	if root == "" {
-		root = "."
-	}
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
-		root = "."
-	}
-	if absolute, err := filepath.Abs(root); err == nil {
-		return filepath.Clean(absolute)
-	}
-	return filepath.Clean(root)
+	return filesDefaultRoot(config)
 }
 
 // resolveExplorerEntry validates a FileEntry path selected from a scene list:
@@ -243,52 +229,46 @@ func feCurrentPath(config *Config) string {
 	return root
 }
 
-// feListDirectory reads the current path and stores its entries in fe_entries.
+// feListDirectory reads the current path and stores its entries in fe_entries:
+// a ".." row first (every folder but a filesystem root has one, the Files root
+// included — it leads to the folders around the card), then folders and files
+// in the chosen sort order. While the Locations list is up it lists those
+// instead (files_locations.go).
 func feListDirectory(config *Config) {
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = map[string]interface{}{}
 	}
-	path := feCurrentPath(config)
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		log.Printf("File Explorer: cannot read %q: %v", path, err)
-		showToast("Cannot read folder: "+err.Error(), ToastError())
-		config.Variables.Custom["fe_entries"] = []FileEntry{}
-		config.Variables.Custom["fe_path"] = path
+	if filesNav.atLocations {
+		filesListLocations(config)
 		return
 	}
-
-	var dirs, files []FileEntry
-	for _, e := range entries {
-		full := filepath.Join(path, e.Name())
-		fe := FileEntry{Name: e.Name(), Path: full, IsDir: e.IsDir()}
-		if e.IsDir() {
-			dirs = append(dirs, fe)
-		} else {
-			// Size and date are what the file manager's rows show on the right.
-			// Info() costs one lstat per entry, paid once when the folder is
-			// read rather than on every frame.
-			if info, err := e.Info(); err == nil {
-				fe.Size = info.Size()
-				fe.Mod = info.ModTime()
-			}
-			files = append(files, fe)
-		}
+	path := feCurrentPath(config)
+	changed := !filesSamePath(path, filesNav.listedPath)
+	list, hidden, err := filesReadFolder(config, path)
+	if err != nil {
+		// The folder stays on screen with its ".." row and a sentence saying
+		// why it is empty, rather than a raw error toast over an empty panel.
+		log.Printf("File Explorer: cannot read %q: %v", path, err)
 	}
-
-	// ".." entry to navigate up, unless we are already at the configured root.
-	parent := filepath.Dir(path)
-	if path != feRoot(config) && parent != path {
-		dirs = append([]FileEntry{{Name: "..", Path: parent, IsDir: true}}, dirs...)
-	}
-
-	list := append(dirs, files...)
+	feSortEntries(list, feSortModeOf(config))
 	config.Variables.Custom["fe_entries"] = list
 	config.Variables.Custom["fe_path"] = path
+	filesNav.listedPath = path
+	filesNav.listedRoot = feRoot(config)
+	filesNav.listErr = err
+	filesNav.hiddenCount = hidden
+	if changed || filesNav.userAreas == nil {
+		filesNav.userAreas = filesComputeUserAreas(config)
+	}
+	filesNav.systemFolder = filesIsSystemPath(path, filesNav.userAreas)
 	// The bar's free-space reading, refreshed with the listing rather than per
 	// frame: this is the one place a new folder makes it stale.
 	feRefreshFreeSpace(path)
 
+	if filesNav.restore {
+		filesNav.restore = false
+		filesRestoreFocus(path, list)
+	}
 	if focusedFileIndex < 0 && len(list) > 0 {
 		focusedFileIndex = 0
 	}
@@ -325,29 +305,28 @@ func feDisplayPath(config *Config) string {
 	return path
 }
 
-// feBack handles B/Escape in the File Explorer: inside a directory it goes up
-// one level; at the root it returns to the previous scene/Home. It never
+// feBack handles B/Escape in the File Explorer: inside a folder it goes up one
+// level, at the root of a location it steps up to the Locations list, and on
+// the Locations list it returns to the previous scene/Home. It never
 // terminates the application.
 func feBack(config *Config) {
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-		config.Scenes[currentSceneIndex].Name == "FileExplorer" &&
-		feCurrentPath(config) != feRoot(config) {
+		config.Scenes[currentSceneIndex].Name == "FileExplorer" && !filesNav.atLocations {
+		if filesAtLocationRoot(config) {
+			filesShowLocations(config)
+			return
+		}
 		feUp(config)
 		return
 	}
 	goBackScene(config)
 }
 
-// feUp moves one directory up.
+// feUp moves one directory up (the ".." row and the fe_up trigger). Above a
+// location's root it keeps climbing into the system folders around it; a
+// filesystem root has no parent and steps up to the Locations list.
 func feUp(config *Config) {
-	path := feCurrentPath(config)
-	parent := filepath.Dir(path)
-	if parent == path || parent == "" {
-		parent = feRoot(config)
-	}
-	config.Variables.Custom["fe_path"] = parent
-	focusedFileIndex = 0
-	feListDirectory(config)
+	filesGoParent(config)
 }
 
 // feEnterFocused acts on the highlighted entry of the current scene's
@@ -372,16 +351,22 @@ func feEnterFocused(config *Config) {
 		playSmartURL(config, entry.Path)
 		return
 	}
-	if entry.IsDir {
-		// Only a directory that really lives below the explorer root is entered.
-		dir, err := existingDirWithin(feRoot(config), entry.Path)
-		if err != nil {
-			showToast("Cannot open folder: "+err.Error(), ToastError())
+	// Files: a Locations row opens that place, and ".." climbs to the real
+	// parent folder (files_locations.go).
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" {
+		if loc, ok := filesLocationAt(focusedFileIndex); ok {
+			filesEnterLocation(config, loc)
 			return
 		}
-		config.Variables.Custom["fe_path"] = dir
-		focusedFileIndex = 0
-		feListDirectory(config)
+		if entry.Name == ".." {
+			filesGoParent(config)
+			return
+		}
+	}
+	if entry.IsDir {
+		// Only a directory that really lives below the active location's root
+		// is entered; one that cannot be read opens with the reason shown.
+		filesEnterDir(config, entry)
 		return
 	}
 	if strings.EqualFold(filepath.Ext(entry.Path), ".sh") {
@@ -393,6 +378,11 @@ func feEnterFocused(config *Config) {
 		return
 	}
 	if strings.EqualFold(filepath.Ext(entry.Path), ".zip") {
+		// A zipped game in a console folder (Roms/GBA/game.zip) is a game, not
+		// an archive to unpack beside itself.
+		if filesOpenROM(config, entry) {
+			return
+		}
 		if err := unzipFile(entry.Path); err != nil {
 			log.Printf("Unzip error: %v", err)
 		} else {
@@ -409,19 +399,11 @@ func feEnterFocused(config *Config) {
 			// was browsing when the image was picked.
 			chatAttachmentRoot = feRoot(config)
 			config.Variables.Custom["chat_attach_image"] = ""
-			// Create a ChatMessage with ImageURL set to the file path. It is the
-			// local user's own message, so it can be selected, quoted and deleted
-			// like one typed in the composer.
-			chatMessages = append(chatMessages, ChatMessage{
-				ID:        newChatMessageID(),
-				Sender:    chatDisplayName(),
-				Text:      "",
-				Timestamp: time.Now(),
-				ImageURL:  entry.Path,
-				Own:       true,
-			})
-			saveChatMessages()
-			showToast("Image attached to chat", ToastSuccess())
+			// The picture becomes the local user's own message in the chat tab
+			// that asked for it, so it can be enlarged, saved and deleted like
+			// anything typed in the composer.
+			chatAttachLocalImage(entry.Path)
+			showToast("Picture added to the chat", ToastSuccess())
 			return
 		}
 		imagePath, err := resolveExplorerEntry(config, entry.Path)
@@ -437,10 +419,9 @@ func feEnterFocused(config *Config) {
 		return
 	}
 	if ext == ".pdf" || ext == ".epub" {
-		pdfOpenFile(entry.Path)
-		if idx := findSceneIndex(config, "PDFReader"); idx >= 0 {
-			changeSceneTo(config, idx)
-		}
+		// findSceneIndex answers 0 (Home) for a scene the config lacks, and no
+		// shipped config has the reader, so this used to land on Home.
+		pdfvOpenDocument(config, entry.Path)
 		return
 	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
@@ -455,13 +436,11 @@ func feEnterFocused(config *Config) {
 			return
 		}
 		playSmartURL(config, entry.Path)
-	} else if fileEditorAutoOpens(entry.Path) {
-		// A text file used to answer "No handler for …", which left the device
-		// with no way to read or change a config, a JSON index or a note.
-		fileEditorOpen(entry.Path)
-	} else {
-		log.Printf("[DEBUG] File Explorer: unsupported file: %s", entry.Name)
-		showToast("No handler for "+entry.Name, ToastInfo())
+	} else if !filesOpenROM(config, entry) {
+		// Everything without a viewer of its own opens in the built-in editor;
+		// binary data opens in its read-only hex view (files_open.go). A file
+		// used to answer "No handler for …" here.
+		filesOpenDefault(config, entry)
 	}
 }
 
@@ -533,11 +512,13 @@ func feKeyAction(key sdl.Keycode) (Action, bool) {
 		return ActionNavigateUp, true
 	case sdl.K_DOWN:
 		return ActionNavigateDown, true
+	case sdl.K_LEFT:
+		return ActionNavigateLeft, true
 	case sdl.K_RIGHT:
 		return ActionNavigateRight, true
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		return ActionConfirm, true
-	case sdl.K_ESCAPE, sdl.K_b:
+	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		return ActionBack, true
 	}
 	return 0, false
@@ -549,6 +530,8 @@ func feControllerAction(button uint8) (Action, bool) {
 		return ActionNavigateUp, true
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		return ActionNavigateDown, true
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		return ActionNavigateLeft, true
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		return ActionNavigateRight, true
 	case sdl.CONTROLLER_BUTTON_A:
@@ -584,11 +567,27 @@ func feListAction(config *Config, action Action) bool {
 		}
 	case ActionNavigateRight:
 		// The list is wider than the button row, so spatial Right has no
-		// neighbor. Enter the first action explicitly.
+		// neighbor. Enter the first action explicitly; a screen with no action
+		// row (the shipped one) opens the focused folder instead, the way a
+		// column browser does.
 		for i, el := range scene.Elements {
 			if el.Type == "button" && focusEngine.SetByElementIndex(i) {
 				selectedButtonIndex = i
-				break
+				return true
+			}
+		}
+		if focusedFileIndex >= 0 && focusedFileIndex < len(entries) {
+			if entry := entries[focusedFileIndex]; entry.IsDir && entry.Name != ".." {
+				feEnterFocused(config)
+			}
+		}
+	case ActionNavigateLeft:
+		// Left climbs one folder, like the ".." row; it never leaves Files.
+		if !filesNav.atLocations {
+			if filesAtLocationRoot(config) {
+				filesShowLocations(config)
+			} else {
+				filesGoParent(config)
 			}
 		}
 	case ActionConfirm:
@@ -706,7 +705,10 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		glyph := "@media"
 		if isFileExplorer {
 			glyph = "@files"
-			title, body = "This folder is empty", "Pick another folder with Up, or refresh the list."
+			title, body = "This folder is empty", "Press B to go back up."
+			if filesNav.listErr != nil {
+				title, body = filesListErrorText(filesNav.listErr)
+			}
 		}
 		if element.Variable == tvEntriesVar {
 			// The empty list has a button that fills it, so the block names it

@@ -44,9 +44,13 @@ func setWindowMinimised(minimised bool) {
 
 // backgroundPaused reports whether JukaHub is behind something else: a game,
 // emulator, port or external app owns the framebuffer, or the desktop window is
-// minimised. Pollers skip their work while this is true.
+// minimised. Pollers skip their work while this is true. An idle screen in its
+// low-power state (saver_power.go) parks them too: nobody is reading a forecast
+// refresh or watching an LED animation on a sleeping handheld. That pause ends
+// without a wake, so waking the screen does not refetch everything at once; the
+// next tick of each poller picks up where it left off.
 func backgroundPaused() bool {
-	return gameScreenSuspended() || windowMinimised()
+	return gameScreenSuspended() || windowMinimised() || saverPausesBackground()
 }
 
 // foregroundWake is the subscriber list for "JukaHub is on screen again". Each

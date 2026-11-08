@@ -1,0 +1,14 @@
+{
+  "name": "padprofiles",
+  "title": "Pad profiles",
+  "version": "1.0.0",
+  "description": "A control-profile plugin: adds Couch remote, for playing docked on a TV. Choose it in Settings › Controls, or hold Select and press R1.",
+  "author": "JukaHub",
+  "entry": "padprofiles.sh",
+  "icon": "gamepad",
+  "enabled": true,
+  "actions": [
+    {"id": "about", "label": "What it maps"}
+  ],
+  "inputProfiles": ["couch-remote.jkinput"]
+}

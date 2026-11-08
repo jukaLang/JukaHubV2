@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +109,12 @@ func clipboardPasteIntoActiveField(config *Config) bool {
 	default:
 		return false
 	}
+	if virtualKeyboardActive {
+		// The keyboard's own Paste: at the caret, line breaks folded into
+		// spaces (every keyboard field is one line).
+		vkPaste(config)
+		return true
+	}
 	text, err := pasteTextFromClipboard()
 	if err != nil {
 		ShowToast("Clipboard is unavailable: "+err.Error(), ToastKindWarning)
@@ -132,18 +139,12 @@ func clipboardPasteIntoActiveField(config *Config) bool {
 func clipboardCopyFromActiveField(config *Config) bool {
 	switch {
 	case virtualKeyboardActive:
-		text := vkCurrentText()
-		if text == "" {
+		// The keyboard's own Copy (vkedit.go): the field, named for the
+		// history, and never a password.
+		if vkCurrentText() == "" {
 			return true
 		}
-		source := "Input"
-		switch vkTarget {
-		case vkTargetChat:
-			source = "Chat"
-		case vkTargetTerm:
-			source = "Terminal"
-		}
-		copyWithToast(text, source, "Copied to clipboard")
+		vkCopy()
 	case chatInputActive:
 		if chatInputText == "" {
 			return true
@@ -195,15 +196,199 @@ func clipPush(text, source string) {
 	if text == "" {
 		return
 	}
-	// Don't duplicate the most recent entry
-	if len(clipHistory) > 0 && clipHistory[0].text == text {
-		clipHistory[0].timestamp = time.Now()
-		return
+	// A text that is already in the history moves to the top instead of
+	// appearing twice; copying an entry back from the overlay is the usual
+	// case, and it used to leave a second copy of the same entry.
+	for i := range clipHistory {
+		if clipHistory[i].text == text {
+			clipHistory = append(clipHistory[:i], clipHistory[i+1:]...)
+			break
+		}
 	}
 	entry := clipEntry{text: text, timestamp: time.Now(), source: source}
 	clipHistory = append([]clipEntry{entry}, clipHistory...)
 	if len(clipHistory) > clipMaxHistory {
 		clipHistory = clipHistory[:clipMaxHistory]
+	}
+	vkClipGen++
+}
+
+// ── History overlay (Ctrl+Shift+V) ───────────────────────────────────────
+//
+// The overlay is a glass card over the dimmed screen: a search field that
+// filters as you type, the entries (newest first, two-line preview, age and
+// source on the right) and the hint badges for the pad or the keyboard. A row
+// is picked with A, Enter or a click and goes back on the clipboard.
+
+// vkClipGen changes whenever clipHistory does, so the overlay's view is
+// rebuilt only then.
+var vkClipGen int
+
+// vkClipView is what the overlay shows: the entries the search keeps (indices
+// into clipHistory, newest first) with their age labels, the subtitle, the
+// rows' click targets and the footer plan. A steady frame filters, formats and
+// measures nothing.
+var vkClipView struct {
+	ok        bool
+	gen       int
+	n         int
+	search    string
+	idx       []int
+	subtitle  string
+	agoAt     time.Time
+	ago       []string
+	top       int
+	card      sdl.Rect
+	rows      []sdl.Rect
+	planOK    bool
+	planCfg   *Config
+	planW     int32
+	planPad   bool
+	planScale float64
+	plan      footerPlan
+}
+
+// vkClipPadHints and vkClipKeyHints are the overlay's footer for a pad and for
+// a keyboard.
+var (
+	vkClipPadHints = [...]FooterHint{
+		{Button: "D-Pad", Label: "Choose"},
+		{Button: "A", Label: "Copy"},
+		{Button: "X", Label: "Remove"},
+		{Button: "B", Label: "Close"},
+	}
+	vkClipKeyHints = [...]FooterHint{
+		{Button: "↑↓", Label: "Choose"},
+		{Button: "Enter", Label: "Copy"},
+		{Button: "Del", Label: "Remove"},
+		{Button: "Esc", Label: "Close"},
+	}
+)
+
+// vkClipVisible returns the entries the search keeps, as indices into
+// clipHistory, newest first.
+func vkClipVisible() []int {
+	v := &vkClipView
+	if v.ok && v.gen == vkClipGen && v.n == len(clipHistory) && v.search == clipSearchBuf {
+		return v.idx
+	}
+	v.ok, v.gen, v.n, v.search = true, vkClipGen, len(clipHistory), clipSearchBuf
+	v.idx = v.idx[:0]
+	q := strings.ToLower(strings.TrimSpace(clipSearchBuf))
+	for i := range clipHistory {
+		e := &clipHistory[i]
+		if q == "" || strings.Contains(strings.ToLower(e.text), q) || strings.Contains(strings.ToLower(e.source), q) {
+			v.idx = append(v.idx, i)
+		}
+	}
+	switch n := len(v.idx); {
+	case q != "" && n == 0:
+		v.subtitle = "No matches"
+	case q != "":
+		v.subtitle = strconv.Itoa(n) + " of " + strconv.Itoa(len(clipHistory)) + " entries"
+	case n == 1:
+		v.subtitle = "1 entry"
+	case n > 1:
+		v.subtitle = strconv.Itoa(n) + " entries"
+	default:
+		v.subtitle = "Recent copies"
+	}
+	v.agoAt = time.Time{}
+	return v.idx
+}
+
+// vkClipAgo is an entry's age for the list: "just now", "5m ago".
+func vkClipAgo(t time.Time) string {
+	if time.Since(t) < time.Minute {
+		return "just now"
+	}
+	return timeSince(t) + " ago"
+}
+
+// vkClipFocused is the clipHistory index of the highlighted entry, or -1.
+func vkClipFocused() int {
+	vis := vkClipVisible()
+	if clipCursorIdx < 0 || clipCursorIdx >= len(vis) {
+		return -1
+	}
+	return vis[clipCursorIdx]
+}
+
+// vkClipMove moves the highlight by delta through the entries the search
+// keeps.
+func vkClipMove(delta int) {
+	clipCursorIdx = clampIndex(clipCursorIdx+delta, len(vkClipVisible()))
+}
+
+// vkClipClose closes the overlay and forgets the search.
+func vkClipClose() {
+	clipSearchOpen = false
+	clipSearchBuf = ""
+}
+
+// vkClipCopyFocused puts the highlighted entry back on the clipboard (it moves
+// to the top of the history) and closes the overlay. It reports whether an
+// entry was highlighted. The pad, the keyboard and a click all come here, so
+// a filtered list copies the entry that is shown, not the one at the same
+// position in the full history.
+func vkClipCopyFocused() bool {
+	i := vkClipFocused()
+	if i < 0 {
+		return false
+	}
+	if err := copyTextToClipboard(clipHistory[i].text, "History"); err != nil {
+		ShowToast("Could not copy: "+err.Error(), ToastKindWarning)
+	} else {
+		ShowToast("Copied to clipboard", ToastKindSuccess)
+	}
+	vkClipClose()
+	return true
+}
+
+// vkClipDeleteFocused removes the highlighted entry from the history.
+func vkClipDeleteFocused() bool {
+	i := vkClipFocused()
+	if i < 0 {
+		return false
+	}
+	clipHistory = append(clipHistory[:i], clipHistory[i+1:]...)
+	vkClipGen++
+	clipCursorIdx = clampIndex(clipCursorIdx, len(vkClipVisible()))
+	return true
+}
+
+// vkClipLines splits an entry for its two-line preview without allocating:
+// the first line and the one after it.
+func vkClipLines(text string) (string, string) {
+	first, rest := text, ""
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		first, rest = text[:i], text[i+1:]
+	}
+	rest = strings.TrimSpace(rest)
+	if j := strings.IndexByte(rest, '\n'); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(first), strings.TrimSpace(rest)
+}
+
+// vkClipHandleClick answers a click or tap while the history is open: a row
+// copies its entry back and a click outside the card closes it. The overlay is
+// modal, so the click never reaches the screen behind it.
+func vkClipHandleClick(mx, my int32) {
+	v := &vkClipView
+	if !pointInRect(mx, my, v.card) {
+		vkClipClose()
+		PlayBackSound()
+		return
+	}
+	for k, r := range v.rows {
+		if pointInRect(mx, my, r) {
+			clipCursorIdx = v.top + k
+			if vkClipCopyFocused() {
+				PlayActivateSound()
+			}
+			return
+		}
 	}
 }
 
@@ -211,195 +396,230 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 	if !clipSearchOpen {
 		return
 	}
+	v := &vkClipView
+	vis := vkClipVisible()
+	clipCursorIdx = clampIndex(clipCursorIdx, len(vis))
 
-	cardW := int32(700)
-	cardH := int32(520)
-	cardX := (screenWidth - cardW) / 2
-	cardY := (screenHeight - cardH) / 2
-	card := sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}
+	cardW, cardH := int32(720), int32(540)
+	if cardW > screenWidth-40 {
+		cardW = screenWidth - 40
+	}
+	if cardH > screenHeight-40 {
+		cardH = screenHeight - 40
+	}
+	card := sdl.Rect{X: (screenWidth - cardW) / 2, Y: (screenHeight - cardH) / 2, W: cardW, H: cardH}
+	v.card = card
 	drawOverlayScrim(renderer)
 	drawOverlayCard(renderer, card)
+	drawOverlayCardAccent(renderer, card.X, card.Y, card.W)
+	header := overlayPageHeader(card, "Clipboard", v.subtitle, "copy")
+	top := UIPageHeaderDraw(renderer, config, header) + 12
+	vkSetFontsFor(config)
+	innerX, innerW := card.X+OverlayPadX, card.W-2*OverlayPadX
 
-	// Filter entries first: the header's subtitle counts what the search left.
-	filtered := clipHistory
-	if clipSearchBuf != "" {
-		q := strings.ToLower(clipSearchBuf)
-		filtered = nil
-		for _, e := range clipHistory {
-			if strings.Contains(strings.ToLower(e.text), q) || strings.Contains(strings.ToLower(e.source), q) {
-				filtered = append(filtered, e)
-			}
-		}
-	}
-
-	subtitle := "Recent copies"
-	if len(filtered) == 1 {
-		subtitle = "1 entry"
-	} else if len(filtered) > 1 {
-		subtitle = fmt.Sprintf("%d entries", len(filtered))
-	}
-	header := overlayPageHeader(card, "Clipboard", subtitle, "files")
-	headerH := UIPanelHeaderBand(config, header, 10)
-	UIPageHeaderDraw(renderer, config, header)
-
-	// Search bar
-	searchY := cardY + headerH
-	drawRoundedRect(renderer, &sdl.Rect{X: cardX + OverlayPadX, Y: searchY, W: cardW - 2*OverlayPadX, H: 32}, RadiusSM, 35, 35, 45, 255)
-	searchFont := getBodyFont(config, 14)
-	searchPlaceholder := "[Search] Type to search..."
-	if clipSearchBuf != "" {
-		drawText(renderer, searchFont, clipSearchBuf+"_", cardX+OverlayPadX+8, searchY+8, colorNew(200, 200, 215, 255), textAlignLeft)
-	} else {
-		drawText(renderer, searchFont, searchPlaceholder, cardX+OverlayPadX+8, searchY+8, colorNew(100, 100, 115, 255), textAlignLeft)
-	}
-	// Clamp cursor
-	if len(filtered) == 0 {
-		clipCursorIdx = 0
-	} else if clipCursorIdx >= len(filtered) {
-		clipCursorIdx = len(filtered) - 1
-	}
-
-	// Entry list: it stops above the footer, which sits on the card's own
-	// bottom margin.
-	footerY := cardY + cardH - 28
-	listY := searchY + 42
-	listH := footerY - 8 - listY
-	entryFont := getBodyFont(config, 13)
-	smallFont := getBodyFont(config, 11)
-	entryH := int32(58)
-	maxVisible := int(listH / entryH)
-
-	startIdx := 0
-	if clipCursorIdx >= maxVisible {
-		startIdx = clipCursorIdx - maxVisible + 1
-	}
-	endIdx := startIdx + maxVisible
-	if endIdx > len(filtered) {
-		endIdx = len(filtered)
-	}
-
-	for i := startIdx; i < endIdx; i++ {
-		e := filtered[i]
-		y := listY + int32(i-startIdx)*entryH
-		isFocused := i == clipCursorIdx
-
-		// Entry background
-		if isFocused {
-			drawRoundedRect(renderer, &sdl.Rect{X: cardX + OverlayPadX, Y: y, W: cardW - 2*OverlayPadX, H: entryH - 4}, RadiusSM, 40, 40, 55, 255)
-		}
-
-		// Text preview (truncate to 1-2 lines)
-		text := e.text
-		text = truncateRunesSuffix(text, 80, "...")
-		lines := strings.SplitN(text, "\n", 2)
-
-		textX := cardX + OverlayPadX + 8
-		if isFocused {
-			drawText(renderer, entryFont, lines[0], textX, y+6, colorNew(220, 220, 235, 255), textAlignLeft)
+	// The search field: a recessed glass control; typing filters the list.
+	search := sdl.Rect{X: innerX, Y: top, W: innerW, H: 40}
+	fillRoundedRect(renderer, search.X, search.Y, search.W, search.H, glassControlRadius, glassMix(overlayCardFill(), ColorBackground, 0.5))
+	strokeRoundedRect(renderer, search.X, search.Y, search.W, search.H, glassControlRadius, 1, glassA(34))
+	icon := int32(18)
+	drawHomeGlyphTinted(renderer, "search", sdl.Rect{X: search.X + 14, Y: search.Y + (search.H-icon)/2, W: icon, H: icon}, ColorTextTertiary())
+	if f := vkSetFonts.body; f != nil {
+		tx := search.X + 14 + icon + 10
+		th := int32(f.Height())
+		ty := search.Y + (search.H-th)/2
+		caretX := tx
+		if clipSearchBuf == "" {
+			drawText(renderer, f, "Type to filter", tx+8, ty, ColorTextTertiary(), textAlignLeft)
 		} else {
-			drawText(renderer, entryFont, lines[0], textX, y+6, colorNew(180, 180, 195, 255), textAlignLeft)
+			shown := ellipsize(f, clipSearchBuf, search.X+search.W-14-tx)
+			drawText(renderer, f, shown, tx, ty, ColorTextPrimary(), textAlignLeft)
+			w, _ := measureText(f, shown)
+			caretX = tx + w + 2
 		}
-
-		if len(lines) > 1 {
-			sub := lines[1]
-			sub = truncateRunesSuffix(sub, 60, "...")
-			drawText(renderer, smallFont, sub, textX, y+24, colorNew(110, 110, 125, 255), textAlignLeft)
-		}
-
-		// Timestamp
-		ts := fmt.Sprintf("%s ago", timeSince(e.timestamp))
-		tsW, _, _ := smallFont.SizeUTF8(ts)
-		tsX := cardX + cardW - OverlayPadX - int32(tsW)
-		drawText(renderer, smallFont, ts, tsX, y+6, colorNew(100, 100, 115, 255), textAlignLeft)
-
-		// Source tag
-		if e.source != "" {
-			drawText(renderer, smallFont, e.source, tsX, y+22, getAccentColor(config), textAlignLeft)
+		if (sdl.GetTicks64()/530)%2 == 0 {
+			fillRoundedRect(renderer, caretX, ty+2, 2, th-4, 1, glassAccent())
 		}
 	}
 
-	if len(filtered) == 0 {
-		emptyFont := getBodyFont(config, 16)
-		emptyText := "No clipboard entries"
-		ew, _, _ := emptyFont.SizeUTF8(emptyText)
-		drawText(renderer, emptyFont, emptyText, cardX+(cardW-int32(ew))/2, listY+80, colorNew(100, 100, 115, 255), textAlignLeft)
+	// The list stops above the footer, which sits on the card's bottom margin.
+	band := sdl.Rect{X: innerX, Y: card.Y + card.H - 46, W: innerW, H: 32}
+	list := sdl.Rect{X: innerX, Y: search.Y + search.H + 12, W: innerW, H: 0}
+	list.H = band.Y - 10 - list.Y
+	vkClipDrawList(renderer, config, list, vis)
+	fillRoundedRect(renderer, innerX, band.Y-6, innerW, 1, 0, glassHairline())
+	vkClipDrawFooter(renderer, config, band)
+}
+
+// vkClipDrawList draws the entries the search keeps, keeping the highlight in
+// view, and records each row's click target.
+func vkClipDrawList(renderer *sdl.Renderer, config *Config, list sdl.Rect, vis []int) {
+	v := &vkClipView
+	v.rows = v.rows[:0]
+	if list.H <= 0 {
+		return
 	}
-
-	// Footer
-	footerFont := getBodyFont(config, 12)
-	footer := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"Enter", "Copy"},
-		FooterHint{"Del", "Clear"}, FooterHint{"Esc", "Close"})
-	fw, _, _ := footerFont.SizeUTF8(footer)
-	drawText(renderer, footerFont, footer, cardX+(cardW-int32(fw))/2, footerY, colorNew(100, 100, 120, 255), textAlignLeft)
-
-	// Scrollbar
-	if len(filtered) > maxVisible {
-		scrollBarH := listH - 4
-		knobH := scrollBarH * int32(maxVisible) / int32(len(filtered))
-		knobY := listY + scrollBarH*int32(clipCursorIdx)/int32(len(filtered))
-		scrollX := cardX + cardW - 14
-		drawRoundedRect(renderer, &sdl.Rect{X: scrollX, Y: listY, W: 4, H: scrollBarH}, 2, 35, 35, 45, 120)
-		drawRoundedRect(renderer, &sdl.Rect{X: scrollX, Y: knobY, W: 4, H: knobH}, 2, 80, 80, 100, 255)
+	if len(vis) == 0 {
+		title, body := "Nothing copied yet", "Copies from any text field land here"
+		if strings.TrimSpace(v.search) != "" {
+			title, body = "No matches", "Backspace widens the search"
+		}
+		UIEmptyState(renderer, config, list, "@copy", title, body)
+		return
+	}
+	// The ages are rebuilt once a second, not per frame.
+	if v.agoAt.IsZero() || time.Since(v.agoAt) >= time.Second || len(v.ago) != len(vis) {
+		v.ago = v.ago[:0]
+		for _, i := range vis {
+			v.ago = append(v.ago, vkClipAgo(clipHistory[i].timestamp))
+		}
+		v.agoAt = time.Now()
+	}
+	rowH, gap := int32(58), int32(6)
+	if vkScreenSmall() {
+		rowH = 50
+	}
+	shown := int((list.H + gap) / (rowH + gap))
+	if shown < 1 {
+		shown = 1
+	}
+	if clipCursorIdx < v.top {
+		v.top = clipCursorIdx
+	}
+	if clipCursorIdx >= v.top+shown {
+		v.top = clipCursorIdx - shown + 1
+	}
+	if maxTop := len(vis) - shown; v.top > maxTop {
+		v.top = maxTop
+	}
+	if v.top < 0 {
+		v.top = 0
+	}
+	title, detail, small := vkSetFonts.title, vkSetFonts.detail, vkSetFonts.badge
+	for k := 0; k < shown && v.top+k < len(vis); k++ {
+		pos := v.top + k
+		e := &clipHistory[vis[pos]]
+		row := sdl.Rect{X: list.X, Y: list.Y + int32(k)*(rowH+gap), W: list.W - 10, H: rowH}
+		v.rows = append(v.rows, row)
+		UIListRow(renderer, row, glassRowRadius, pos == clipCursorIdx, false)
+		pad := int32(16)
+		right := row.X + row.W - pad
+		// The age above the source, right-aligned.
+		if small != nil && pos < len(v.ago) {
+			aw, ah := measureText(small, v.ago[pos])
+			colW := aw
+			lines := ah
+			if e.source != "" {
+				sw, sh := measureText(small, e.source)
+				if sw > colW {
+					colW = sw
+				}
+				lines += sh + 2
+			}
+			y := row.Y + (row.H-lines)/2
+			drawText(renderer, small, v.ago[pos], right-aw, y, ColorTextTertiary(), textAlignLeft)
+			if e.source != "" {
+				sw, _ := measureText(small, e.source)
+				drawText(renderer, small, e.source, right-sw, y+ah+2, ColorTextAccent(), textAlignLeft)
+			}
+			right -= colW + 16
+		}
+		if title == nil {
+			continue
+		}
+		first, rest := vkClipLines(e.text)
+		x := row.X + pad
+		avail := right - x
+		if avail < 40 {
+			avail = 40
+		}
+		th := int32(title.Height())
+		dh := int32(0)
+		if detail != nil && rest != "" {
+			dh = int32(detail.Height())
+		}
+		ty := row.Y + (row.H-th-dh)/2
+		drawText(renderer, title, ellipsize(title, first, avail), x, ty, ColorTextPrimary(), textAlignLeft)
+		if dh > 0 {
+			drawText(renderer, detail, ellipsize(detail, rest, avail), x, ty+th, ColorTextSecondary(), textAlignLeft)
+		}
+	}
+	// A thin scrollbar says there is more.
+	if len(vis) > shown {
+		trackX := list.X + list.W - 4
+		fillRoundedRect(renderer, trackX, list.Y, 3, list.H, 1, glassHairline())
+		thumbH := list.H * int32(shown) / int32(len(vis))
+		if thumbH < 24 {
+			thumbH = 24
+		}
+		thumbY := list.Y + (list.H-thumbH)*int32(v.top)/int32(len(vis)-shown)
+		fillRoundedRect(renderer, trackX, thumbY, 3, thumbH, 1, glassA(90))
 	}
 }
 
+// vkClipDrawFooter draws the hint badges for the pad or the keyboard; the plan
+// is measured once per width and type size.
+func vkClipDrawFooter(renderer *sdl.Renderer, config *Config, band sdl.Rect) {
+	v := &vkClipView
+	onPad := P().IsHandheld()
+	if !v.planOK || v.planCfg != config || v.planW != band.W || v.planPad != onPad || v.planScale != a11y.fontScale {
+		hints := vkClipKeyHints[:]
+		if onPad {
+			hints = vkClipPadHints[:]
+		}
+		v.plan = planFooterHints(config, hints, band.W)
+		v.planOK, v.planCfg, v.planW, v.planPad, v.planScale = true, config, band.W, onPad, a11y.fontScale
+	}
+	vkDrawHintPlan(renderer, config, v.plan, band)
+}
+
+// handleClipboardInput is the history overlay's keyboard: it owns every key
+// while it is open. Enter copies the highlighted entry of the list as shown
+// (it used to copy the entry at the same position in the unfiltered history).
 func handleClipboardInput(event *sdl.KeyboardEvent) bool {
 	if !clipSearchOpen {
 		return false
 	}
-	if event.Type == sdl.KEYDOWN {
-		switch event.Keysym.Sym {
-		case sdl.K_ESCAPE:
-			clipSearchOpen = false
+	if event.Type != sdl.KEYDOWN {
+		return true
+	}
+	switch event.Keysym.Sym {
+	case sdl.K_ESCAPE:
+		vkClipClose()
+	case sdl.K_UP:
+		vkClipMove(-1)
+	case sdl.K_DOWN:
+		vkClipMove(1)
+	case sdl.K_PAGEUP:
+		vkClipMove(-5)
+	case sdl.K_PAGEDOWN:
+		vkClipMove(5)
+	case sdl.K_HOME:
+		clipCursorIdx = 0
+	case sdl.K_END:
+		vkClipMove(len(clipHistory))
+	case sdl.K_RETURN, sdl.K_KP_ENTER:
+		vkClipCopyFocused()
+	case sdl.K_DELETE:
+		vkClipDeleteFocused()
+	case sdl.K_BACKSPACE:
+		clipSearchBuf = trimLastRune(clipSearchBuf)
+		clipCursorIdx = 0
+	case sdl.K_u:
+		if event.Keysym.Mod&sdl.KMOD_CTRL != 0 {
 			clipSearchBuf = ""
-			return true
-		case sdl.K_UP:
-			if clipCursorIdx > 0 {
-				clipCursorIdx--
-			}
-			return true
-		case sdl.K_DOWN:
-			if clipCursorIdx < len(clipHistory)-1 {
-				clipCursorIdx++
-			}
-			return true
-		case sdl.K_RETURN, sdl.K_KP_ENTER:
-			if clipCursorIdx >= 0 && clipCursorIdx < len(clipHistory) {
-				if err := copyTextToClipboard(clipHistory[clipCursorIdx].text, "History"); err != nil {
-					ShowToast("Could not copy: "+err.Error(), ToastKindWarning)
-				} else {
-					ShowToast("Copied to clipboard", ToastKindSuccess)
-				}
-				clipSearchOpen = false
-				clipSearchBuf = ""
-			}
-			return true
-		case sdl.K_DELETE:
-			if clipCursorIdx >= 0 && clipCursorIdx < len(clipHistory) {
-				clipHistory = append(clipHistory[:clipCursorIdx], clipHistory[clipCursorIdx+1:]...)
-				if clipCursorIdx >= len(clipHistory) {
-					clipCursorIdx = len(clipHistory) - 1
-				}
-			}
-			return true
-		case sdl.K_BACKSPACE:
-			clipSearchBuf = trimLastRune(clipSearchBuf)
-			return true
-		case sdl.K_u:
-			if event.Keysym.Mod&sdl.KMOD_CTRL != 0 {
-				clipSearchBuf = ""
-				return true
-			}
+			clipCursorIdx = 0
 		}
 	}
 	return true
 }
 
+// handleClipboardTextInput types into the overlay's search; control bytes are
+// dropped and the search is kept short.
 func handleClipboardTextInput(text string) {
 	if !clipSearchOpen {
 		return
 	}
-	clipSearchBuf += text
+	clipSearchBuf = vkTruncateUTF8(clipSearchBuf+vkSanitizeInsert(text), 120)
 	clipCursorIdx = 0
 }
 

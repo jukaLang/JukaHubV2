@@ -1,18 +1,18 @@
 package main
 
-// partyui.go — the Watch Party overlay.
+// partyui.go — Watch Party's keyboard fields and the entry points other
+// screens call.
 //
-// It is a modal like Tools, reachable with F8 or the Tools row, so it works on
-// every config without adding a scene. The panel covers three states: not in a
-// party (host or join), waiting for a join/link submission, and in a room with
-// the shared queue, presence list and watch-time leaderboard.
+// Watch Party used to be a modal panel drawn over whatever screen opened it.
+// It is a full-screen scene now (partyscene.go). What stays here is the glue to
+// the on-screen keyboard: the keyboard's "party" target edits partyUI.input,
+// and submitting it lands in partySubmitInput. The same target also serves the
+// other tool screens' text fields (a bug report's title and description)
+// through tbxOpenPrompt, so those fields need no keyboard target of their own.
 
 import (
 	"fmt"
-	"sort"
 	"strings"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 type partyInputMode int
@@ -21,355 +21,72 @@ const (
 	partyInputNone partyInputMode = iota
 	partyInputJoin
 	partyInputQueue
+	// partyInputPrompt is a field described by tbxOpenPrompt.
+	partyInputPrompt
 )
 
-type partyRowKind int
-
-const (
-	partyRowHost partyRowKind = iota
-	partyRowJoin
-	partyRowAdd
-	partyRowQueue
-	partyRowSaveFriend
-	partyRowFriend
-	partyRowCopy
-	partyRowLeave
-	partyRowClose
-	partyRowHistory
-	partyRowHistoryBack
-	partyRowInfo
-	partyRowSection
-)
-
-type partyRow struct {
-	label  string
-	detail string
-	kind   partyRowKind
-	index  int
-	id     int
-	invite string
-}
-
+// partyUIState is what the keyboard edits for the party target.
 type partyUIState struct {
-	open      bool
-	cursor    int
 	inputMode partyInputMode
 	input     string
-	busy      bool
-	flash     string
-	history   bool // showing the durable all-time/friend report
 }
 
 var partyUI partyUIState
 
-// partyPanelRect / partyRowRects are recomputed while rendering and used for
-// hit testing. Only touched on the render/event thread.
-var partyPanelRect sdl.Rect
-var partyRowRects []sdl.Rect
-
-// partyRowStart is the absolute index of partyRowRects[0]; the list scrolls, so
-// a click has to add it back to find the row the user actually sees.
-var partyRowStart int
-
-// partyAsyncResults carries the outcome of a LAN request back to the render
-// thread. UI state is never written from a network goroutine.
-var partyAsyncResults = make(chan string, 8)
-
-func partyRunAsync(work func() (string, error)) {
-	if partyUI.busy {
-		return
-	}
-	partyUI.busy = true
-	go func() {
-		msg, err := work()
-		if err != nil {
-			partyAsyncResults <- firstLine(err.Error())
-			return
-		}
-		if msg == "" {
-			msg = "Done"
-		}
-		partyAsyncResults <- msg
-	}()
+// tbxPrompt describes the field the keyboard edits in prompt mode.
+var tbxPrompt struct {
+	title       string
+	placeholder string
+	submit      func(string)
 }
 
-// partyDrainAsync applies completed network work on the UI thread. Called once
-// per frame while the panel is open.
-func partyDrainAsync() {
-	for {
-		select {
-		case msg := <-partyAsyncResults:
-			partyUI.busy = false
-			partyUI.flash = msg
-		default:
-			return
-		}
-	}
+// tbxOpenPrompt opens the on-screen keyboard for one text field of a tool
+// screen. seed fills the field, so an edit is a correction instead of a
+// retype; submit receives the trimmed text (possibly empty, which clears the
+// field) on the main loop.
+func tbxOpenPrompt(title, placeholder, seed string, submit func(string)) {
+	tbxPrompt.title = title
+	tbxPrompt.placeholder = placeholder
+	tbxPrompt.submit = submit
+	partyUI.inputMode = partyInputPrompt
+	partyUI.input = seed
+	vkOpenPartyInput()
 }
 
-func partyDeviceName() string {
-	name := strings.TrimSpace(chatDisplayName())
-	if name == "" {
-		return "Handheld"
+// partyVKTitle is the keyboard's field title for the party target.
+func partyVKTitle() string {
+	switch partyUI.inputMode {
+	case partyInputPrompt:
+		return strings.ToUpper(tbxPrompt.title)
+	case partyInputQueue:
+		return "SHARE A LINK"
 	}
-	return name
+	return "ROOM CODE OR INVITE"
 }
 
-// ── Panel actions ───────────────────────────────────────────────────────────
-
-func partyOpenPanel() {
-	qs.open = false
-	if toolsPanel.open {
-		toolsPanel.open = false
+// partyVKPlaceholder is the hint shown in the empty field.
+func partyVKPlaceholder() string {
+	switch partyUI.inputMode {
+	case partyInputPrompt:
+		return tbxPrompt.placeholder
+	case partyInputQueue:
+		return "https://…"
 	}
-	if companion.open {
-		closeCompanionOverlay()
-	}
-	partyUI.open = true
-	partyUI.cursor = 0
-	partyUI.flash = ""
-	partyUI.busy = false
-	partyUI.history = false
-	partyPanelRect = sdl.Rect{}
-	partyRowRects = nil
-	partyRowStart = 0
-	PlayActivateSound()
+	return "ABCD2  or  192.168.1.5:8318 ABCD2"
 }
 
-func partyClosePanel() {
-	partyUI.open = false
-	partyUI.inputMode = partyInputNone
-	partyUI.history = false
-	PlayBackSound()
+// partyOpenJoinPrompt asks for a room code (or a full invite).
+func partyOpenJoinPrompt() {
+	partyUI.inputMode = partyInputJoin
+	partyUI.input = ""
+	vkOpenPartyInput()
 }
 
-func partyTogglePanel() {
-	if partyUI.open {
-		partyClosePanel()
-		return
-	}
-	partyOpenPanel()
-}
-
-func partyRowCount() int { return len(partyRows()) }
-
-func partyMoveCursor(delta int) {
-	n := partyRowCount()
-	if n == 0 {
-		return
-	}
-	partyUI.cursor = (partyUI.cursor + delta + n) % n
-	PlayNavSound()
-}
-
-// partyRows builds the actionable rows for the current state. Queue rows carry
-// their shared index so selecting one starts it for the whole room.
-func partyRows() []partyRow {
-	if partyUI.history {
-		return partyHistoryRows()
-	}
-	snapshot, _, active, _ := partyState()
-	if !active {
-		rows := []partyRow{
-			{label: "Host a watch party", detail: "This device serves the room on the LAN", kind: partyRowHost},
-			{label: "Join a watch party", detail: "Paste the host address and 5-character code", kind: partyRowJoin},
-		}
-		for _, friend := range partyFriends() {
-			rows = append(rows, partyRow{
-				label:  "Join " + friend.Name,
-				detail: friend.Invite,
-				kind:   partyRowFriend,
-				invite: friend.Invite,
-			})
-		}
-		rows = append(rows,
-			partyRow{label: "All-time & friend history", detail: "Leaderboard and rooms across many parties", kind: partyRowHistory},
-			partyRow{label: "Close", detail: "Back to the app", kind: partyRowClose},
-		)
-		return rows
-	}
-	rows := []partyRow{{label: "Add a link to the queue", detail: "Everyone can watch it", kind: partyRowAdd}}
-	for i, item := range snapshot.Queue {
-		label := item.Title
-		if label == "" {
-			label = partyTitleFromURL(item.URL)
-		}
-		detail := "by " + item.AddedBy
-		if i == snapshot.Current {
-			detail = "now playing · " + detail
-		}
-		rows = append(rows, partyRow{label: label, detail: detail, kind: partyRowQueue, index: i, id: item.ID})
-	}
-	rows = append(rows,
-		partyRow{label: "Save room to friends", detail: "Rejoin it without retyping the code", kind: partyRowSaveFriend},
-		partyRow{label: "Copy invite", detail: "Address and room code as one line", kind: partyRowCopy},
-		partyRow{label: "All-time & friend history", detail: "This party plus every earlier room", kind: partyRowHistory},
-		partyRow{label: "Leave the party", detail: "The room stays open for the others", kind: partyRowLeave},
-		partyRow{label: "Close", detail: "Keep watching together", kind: partyRowClose},
-	)
-	return rows
-}
-
-// partyHistoryRows turns the durable report into the same scrollable row list
-// the rest of the panel uses, so D-pad, touch and mouse need no extra input
-// paths. Section rows are labels; only Back is actionable.
-func partyHistoryRows() []partyRow {
-	report := partyHistoryReport()
-	rows := []partyRow{{label: "ALL-TIME WATCH LEADERBOARD", kind: partyRowSection}}
-	if len(report.People) == 0 {
-		rows = append(rows, partyRow{label: "No watch time recorded yet", detail: "Join or host a party to start", kind: partyRowInfo})
-	} else {
-		shown := len(report.People)
-		if shown > partyLeaderboardLimit {
-			shown = partyLeaderboardLimit
-		}
-		for i := 0; i < shown; i++ {
-			person := report.People[i]
-			rooms := "rooms"
-			if person.Rooms == 1 {
-				rooms = "room"
-			}
-			rows = append(rows, partyRow{
-				label:  fmt.Sprintf("%d. %s", i+1, person.Name),
-				detail: partyFormatWatch(person.WatchSecs) + fmt.Sprintf(" · %d %s", person.Rooms, rooms),
-				kind:   partyRowInfo,
-			})
-		}
-	}
-
-	rows = append(rows, partyRow{label: "FRIEND HISTORY", kind: partyRowSection})
-	if len(report.Friends) == 0 {
-		rows = append(rows, partyRow{label: "No parties yet", detail: "Hosted and joined rooms appear here", kind: partyRowInfo})
-	} else {
-		for _, friend := range report.Friends {
-			roomCount := 0
-			for _, room := range report.Rooms {
-				if room.Host == friend.Host {
-					roomCount++
-				}
-			}
-			roomsWord := "rooms"
-			if roomCount == 1 {
-				roomsWord = "room"
-			}
-			label := friend.Name
-			if label == "" {
-				label = friend.Host
-			}
-			rows = append(rows, partyRow{
-				label:  label,
-				detail: fmt.Sprintf("%d %s · %s · %s", roomCount, roomsWord, partyFormatWatch(friend.WatchSecs), partyHistoryWhen(friend.LastSeen)),
-				kind:   partyRowInfo,
-			})
-			shown := 0
-			for _, room := range report.Rooms {
-				if room.Host != friend.Host || shown >= partyHistoryFriendRooms {
-					continue
-				}
-				name := room.Name
-				if name == "" {
-					name = room.Code
-				}
-				detail := room.Code + " · " + partyFormatWatch(room.WatchSecs)
-				if room.Title != "" {
-					detail += " · " + room.Title
-				}
-				rows = append(rows, partyRow{
-					label:  "   " + name,
-					detail: detail,
-					kind:   partyRowInfo,
-				})
-				shown++
-			}
-		}
-	}
-	return append(rows, partyRow{label: "Back to watch party", detail: "Return to rooms and friends", kind: partyRowHistoryBack})
-}
-
-func partyActivateRow(config *Config) {
-	rows := partyRows()
-	if partyUI.cursor < 0 || partyUI.cursor >= len(rows) {
-		return
-	}
-	row := rows[partyUI.cursor]
-	switch row.kind {
-	case partyRowHost:
-		if !IsOnline() {
-			partyUI.flash = "Connect to WiFi first — the party needs a LAN address"
-			return
-		}
-		if err := partyHost(partyDeviceName()); err != nil {
-			partyUI.flash = "Could not start the room: " + firstLine(err.Error())
-			return
-		}
-		partyUI.cursor = 0
-		partyUI.flash = "Party open — share the invite"
-		PlaySuccessSound()
-	case partyRowFriend:
-		invite := row.invite
-		partyRunAsync(func() (string, error) {
-			if err := partyJoin(invite, partyDeviceName()); err != nil {
-				return "", err
-			}
-			return "Joined " + invite, nil
-		})
-	case partyRowSaveFriend:
-		snapshot, _, _, _ := partyState()
-		if err := partyFriendAdd(partyHostName(snapshot), partyInviteText()); err != nil {
-			partyUI.flash = "Could not save this room"
-			return
-		}
-		partyUI.flash = "Saved " + partyHostName(snapshot) + " to friends"
-		PlaySuccessSound()
-	case partyRowJoin:
-		partyUI.inputMode = partyInputJoin
-		partyUI.input = ""
-		if invite := partyInviteText(); invite != "" {
-			partyUI.input = invite
-		}
-		vkOpenPartyInput()
-	case partyRowAdd:
-		partyUI.inputMode = partyInputQueue
-		partyUI.input = ""
-		vkOpenPartyInput()
-	case partyRowQueue:
-		index := row.index
-		partyRunAsync(func() (string, error) {
-			if err := partySelectItem(index); err != nil {
-				return "", err
-			}
-			return "Starting for everyone", nil
-		})
-		PlayActivateSound()
-	case partyRowCopy:
-		invite := partyInviteText()
-		if invite == "" {
-			partyUI.flash = "No invite yet"
-			return
-		}
-		if err := copyTextToClipboard(invite, "Party"); err != nil {
-			partyUI.flash = "Could not copy the invite"
-			return
-		}
-		partyUI.flash = "Copied " + invite
-		PlaySuccessSound()
-	case partyRowLeave:
-		partyLeaveSession()
-		partyUI.cursor = 0
-		partyUI.flash = "Left the party"
-		PlayBackSound()
-	case partyRowHistory:
-		partyUI.history = true
-		partyUI.cursor = 0
-		partyUI.flash = ""
-		PlayActivateSound()
-	case partyRowHistoryBack:
-		partyUI.history = false
-		partyUI.cursor = 0
-		PlayBackSound()
-	case partyRowClose:
-		partyClosePanel()
-	}
+// partyOpenLinkPrompt asks for a link to add to the shared queue.
+func partyOpenLinkPrompt() {
+	partyUI.inputMode = partyInputQueue
+	partyUI.input = ""
+	vkOpenPartyInput()
 }
 
 // partySubmitInput receives the keyboard's submitted text.
@@ -378,350 +95,118 @@ func partySubmitInput(text string) {
 	partyUI.inputMode = partyInputNone
 	partyUI.input = ""
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
 	switch mode {
+	case partyInputPrompt:
+		fn := tbxPrompt.submit
+		tbxPrompt.submit = nil
+		if fn != nil {
+			fn(text)
+		}
 	case partyInputJoin:
-		go func() {
-			err := partyJoin(text, partyDeviceName())
-			if err != nil {
-				partyAsyncResults <- firstLine(err.Error())
-				return
-			}
-			partyAsyncResults <- "Joined " + partyInviteText()
-		}()
-		partyUI.busy = true
+		if text != "" {
+			partyJoinFlow(text)
+		}
 	case partyInputQueue:
-		partyRunAsync(func() (string, error) {
-			if err := partyQueueURL(text, ""); err != nil {
-				return "", err
-			}
-			return "Added to the queue", nil
-		})
+		if text != "" {
+			partyQueueFlow(text, "")
+		}
 	}
 }
 
-// partyDeleteSelected removes the queue row under the cursor.
-func partyDeleteSelected() {
-	rows := partyRows()
-	if partyUI.cursor < 0 || partyUI.cursor >= len(rows) {
+// partyDeviceName is the name this device shows in a room: the chat name.
+func partyDeviceName() string {
+	name := strings.TrimSpace(chatDisplayName())
+	if name == "" {
+		return "Handheld"
+	}
+	return name
+}
+
+// partyOpenPanel is the old overlay's entry point, kept for callers that have
+// not moved to partyOpenScreen: it opens the Watch Party screen.
+func partyOpenPanel() {
+	partyOpenScreen(appConfig)
+}
+
+// partyTogglePanel is F8: it opens Watch Party, or leaves it when it is the
+// screen on display.
+func partyTogglePanel() {
+	if tbxCurrentScene(appConfig) == partySceneName {
+		goBackScene(appConfig)
 		return
 	}
-	row := rows[partyUI.cursor]
-	if row.kind == partyRowFriend {
-		partyFriendRemove(row.invite)
-		partyUI.flash = "Removed " + row.label
-		if partyUI.cursor >= partyRowCount() {
-			partyUI.cursor = partyRowCount() - 1
-		}
-		if partyUI.cursor < 0 {
-			partyUI.cursor = 0
-		}
-		return
-	}
-	if row.kind != partyRowQueue {
-		return
-	}
-	id := row.id
-	partyRunAsync(func() (string, error) {
-		if err := partyRemoveItem(id); err != nil {
-			return "", err
-		}
-		return "Removed from the queue", nil
-	})
+	partyOpenScreen(appConfig)
 }
 
-// ── Input ───────────────────────────────────────────────────────────────────
-
-// partyHandleKey consumes every key while the panel is open so the scene below
-// never reacts to it.
-func partyHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
-	if e == nil || e.Type != sdl.KEYDOWN || !partyUI.open {
-		return false
-	}
-	switch e.Keysym.Sym {
-	case sdl.K_UP:
-		partyMoveCursor(-1)
-	case sdl.K_DOWN:
-		partyMoveCursor(1)
-	case sdl.K_RETURN, sdl.K_SPACE:
-		partyActivateRow(config)
-	case sdl.K_DELETE, sdl.K_x:
-		partyDeleteSelected()
-	case sdl.K_ESCAPE, sdl.K_b:
-		if partyUI.history {
-			partyUI.history = false
-			partyUI.cursor = 0
-			PlayBackSound()
-		} else {
-			partyClosePanel()
-		}
-	}
-	return true
-}
-
-func partyHandleController(e *sdl.ControllerButtonEvent, config *Config) bool {
-	if e == nil || !partyUI.open {
-		return false
-	}
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		partyMoveCursor(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		partyMoveCursor(1)
-	case sdl.CONTROLLER_BUTTON_A:
-		partyActivateRow(config)
-	case sdl.CONTROLLER_BUTTON_X:
-		partyDeleteSelected()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		if partyUI.history {
-			partyUI.history = false
-			partyUI.cursor = 0
-			PlayBackSound()
-		} else {
-			partyClosePanel()
-		}
-	}
-	return true
-}
-
-func partyHandleMouse(mx, my int32, config *Config) bool {
-	if !partyUI.open {
-		return false
-	}
-	for i, r := range partyRowRects {
-		if r.W > 0 && pointInRect(mx, my, r) {
-			partyUI.cursor = partyRowStart + i
-			partyActivateRow(config)
-			return true
-		}
-	}
-	if partyPanelRect.W > 0 && !pointInRect(mx, my, partyPanelRect) {
-		if partyUI.history {
-			partyUI.history = false
-			partyUI.cursor = 0
-		} else {
-			partyClosePanel()
-		}
-	}
-	return true
-}
-
-// ── Rendering ───────────────────────────────────────────────────────────────
-
+// partyFormatWatch is a watch time for a row: "42s", "12m 05s", "3h 20m".
 func partyFormatWatch(seconds float64) string {
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", int(seconds+0.5))
 	}
+	if seconds >= 3600 {
+		return fmt.Sprintf("%dh %02dm", int(seconds)/3600, (int(seconds)%3600)/60)
+	}
 	return fmt.Sprintf("%dm %02ds", int(seconds)/60, int(seconds)%60)
 }
 
-func partyRender(renderer *sdl.Renderer, config *Config) {
-	if !partyUI.open {
-		return
-	}
-
-	titleFont, _ := getCachedFont(config, "large")
-	if titleFont == nil {
-		titleFont, _ = getCachedFont(config, "medium")
-	}
-	font, _ := getCachedFont(config, "medium")
-	if font == nil {
-		font = titleFont
-	}
-	small, _ := getCachedFont(config, "small")
-	if small == nil {
-		small = font
-	}
-	if font == nil || titleFont == nil {
-		return
-	}
-
-	w := screenWidth - 120
-	if w > 980 {
-		w = 980
-	}
-	h := screenHeight - 120
-	if h > 560 {
-		h = 560
-	}
-	x := (screenWidth - w) / 2
-	y := (screenHeight - h) / 2
-	card := sdl.Rect{X: x, Y: y, W: w, H: h}
-	partyPanelRect = card
-	drawOverlayScrim(renderer)
-	drawOverlayCard(renderer, card)
-
-	pad := OverlayPadX
-	history := partyUI.history
-	stateLine := "LAN · same stream, same moment"
-	title := "Watch Party"
-	if history {
-		title = "Watch Party · History"
-		stateLine = "All-time · kept on this handheld"
-	} else if partyActive() {
-		stateLine = "Live · " + partyDeviceName()
-	}
-
-	// The sheet opens with the shared page header: the room state that used to
-	// float right-aligned under a hand-set title is the subtitle now, so it
-	// moves with the same band every other page reserves.
-	header := overlayPageHeader(card, title, stateLine, "chat")
-	band := UIPanelHeaderBand(config, header, 3)
-	UIPageHeaderDraw(renderer, config, header)
-
-	snapshot, _, active, errText := partyState()
-	listTop := y + band
-
-	if history {
-		intro := "Cumulative watch time and the rooms behind it, across every party on this device."
-		renderText(renderer, config, small, ellipsize(small, intro, w-2*pad), ColorTextSecondary(), x+pad, listTop)
-		listTop += int32(small.Height()) + 14
-	} else if active {
-		code := snapshot.Code
-		if code == "" {
-			code = "—"
-		}
-		renderText(renderer, config, titleFont, code, sdl.Color{
-			R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255,
-		}, x+pad, listTop)
-		addr := snapshot.HostAddr
-		if addr == "" {
-			addr = partyInviteText()
-		}
-		if addr == "" {
-			addr = "address hidden"
-		}
-		renderText(renderer, config, small, "Invite: "+addr, ColorTextSecondary(), x+pad, listTop+int32(titleFont.Height())+6)
-
-		members := make([]string, 0, len(snapshot.Members))
-		for _, m := range snapshot.Members {
-			name := m.Name
-			if m.Host {
-				name += " (host)"
-			}
-			members = append(members, name)
-		}
-		sort.Strings(members)
-		presence := "Waiting for friends…"
-		if len(members) > 0 {
-			presence = "Online: " + strings.Join(members, ", ")
-		}
-		presence = ellipsize(small, presence, w-2*pad)
-		renderText(renderer, config, small, presence, ColorTextTertiary(), x+pad, listTop+int32(titleFont.Height())+6+int32(small.Height())+6)
-		listTop += int32(titleFont.Height()) + 6 + int32(small.Height()) + 6 + int32(small.Height()) + 12
+// partyHistoryText is the history sheet's body: the all-time leaderboard and
+// the rooms behind it, grouped by host.
+func partyHistoryText(report partyHistoryView) string {
+	var sb strings.Builder
+	sb.WriteString("## All-time watch leaderboard\n")
+	if len(report.People) == 0 {
+		sb.WriteString("No watch time recorded yet. Join or host a party to start.\n")
 	} else {
-		intro := "Host on this handheld, or join a friend's room on the same WiFi."
-		renderText(renderer, config, font, ellipsize(font, intro, w-2*pad), ColorTextSecondary(), x+pad, listTop)
-		listTop += int32(font.Height()) + 18
-	}
-
-	rows := partyRows()
-	rowH := int32(48)
-	rowsBottom := y + h - 52
-	leftW := w - 2*pad
-	if active && !history {
-		leftW = int32(float64(w-2*pad) * 0.62)
-	}
-	visible := int((rowsBottom - listTop) / rowH)
-	if visible < 1 {
-		visible = 1
-	}
-	start := 0
-	if partyUI.cursor >= visible {
-		start = partyUI.cursor - visible + 1
-	}
-	if start > len(rows)-visible {
-		start = len(rows) - visible
-	}
-	if start < 0 {
-		start = 0
-	}
-	end := start + visible
-	if end > len(rows) {
-		end = len(rows)
-	}
-
-	partyRowRects = partyRowRects[:0]
-	partyRowStart = start
-	for i := start; i < end; i++ {
-		row := rows[i]
-		rowY := listTop + int32(i-start)*rowH
-		rect := sdl.Rect{X: x + pad, Y: rowY, W: leftW, H: rowH - 6}
-		if i == partyUI.cursor {
-			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, WithAlpha(ColorCardFocus, 255))
+		shown := len(report.People)
+		if shown > partyLeaderboardLimit {
+			shown = partyLeaderboardLimit
 		}
-		labelColor := ColorTextPrimary()
-		textFont := font
-		labelY := rect.Y + 6
-		if row.kind == partyRowSection {
-			labelColor = ColorTextTertiary()
-			textFont = small
-			labelY = rect.Y + 12
-		} else if row.kind == partyRowInfo {
-			labelColor = ColorTextSecondary()
-			if i == partyUI.cursor {
-				labelColor = ColorTextPrimary()
+		for i := 0; i < shown; i++ {
+			p := report.People[i]
+			rooms := "rooms"
+			if p.Rooms == 1 {
+				rooms = "room"
 			}
-		} else if row.kind == partyRowClose && i != partyUI.cursor {
-			labelColor = ColorTextSecondary()
+			sb.WriteString(fmt.Sprintf("• %d. %s — %s · %d %s\n", i+1, p.Name, partyFormatWatch(p.WatchSecs), p.Rooms, rooms))
 		}
-		renderText(renderer, config, textFont, ellipsize(textFont, row.label, leftW-24), labelColor, rect.X+14, labelY)
-		if row.detail != "" {
-			renderText(renderer, config, small, ellipsize(small, row.detail, leftW-24), ColorTextTertiary(), rect.X+14, rect.Y+8+int32(font.Height()))
-		}
-		partyRowRects = append(partyRowRects, rect)
 	}
-
-	// Leaderboard column, only meaningful once the room has members.
-	if active && !history {
-		lx := x + pad + leftW + 22
-		lw := x + w - pad - lx
-		renderText(renderer, config, small, "WATCH LEADERBOARD", ColorTextTertiary(), lx, listTop)
-		ly := listTop + int32(small.Height()) + 12
-		if len(snapshot.Leaderboard) == 0 {
-			renderText(renderer, config, small, "Scores appear as you watch.", ColorTextTertiary(), lx, ly)
-		}
-		for i, entry := range snapshot.Leaderboard {
-			if ly+int32(font.Height()) > rowsBottom {
-				break
+	sb.WriteString("\n## Friend history\n")
+	if len(report.Friends) == 0 {
+		sb.WriteString("No parties yet. Hosted and joined rooms appear here.\n")
+		return sb.String()
+	}
+	for _, friend := range report.Friends {
+		count := 0
+		for _, room := range report.Rooms {
+			if room.Host == friend.Host {
+				count++
 			}
-			num := fmt.Sprintf("%d.", i+1)
-			renderText(renderer, config, font, num, ColorTextTertiary(), lx, ly)
-			nameColor := ColorTextSecondary()
-			if entry.Online {
-				nameColor = ColorTextPrimary()
+		}
+		word := "rooms"
+		if count == 1 {
+			word = "room"
+		}
+		name := friend.Name
+		if name == "" {
+			name = friend.Host
+		}
+		sb.WriteString(fmt.Sprintf("• %s — %d %s · %s · %s\n", name, count, word, partyFormatWatch(friend.WatchSecs), partyHistoryWhen(friend.LastSeen)))
+		shown := 0
+		for _, room := range report.Rooms {
+			if room.Host != friend.Host || shown >= partyHistoryFriendRooms {
+				continue
 			}
-			name := ellipsize(font, entry.Name, lw-90)
-			renderText(renderer, config, font, name, nameColor, lx+28, ly)
-			secs := partyFormatWatch(entry.WatchSecs)
-			secW, _, _ := small.SizeUTF8(secs)
-			renderText(renderer, config, small, secs, ColorTextTertiary(), lx+lw-int32(secW), ly+4)
-			ly += int32(font.Height()) + 10
+			label := room.Name
+			if label == "" {
+				label = room.Code
+			}
+			line := "  " + label + " (" + room.Code + ") · " + partyFormatWatch(room.WatchSecs)
+			if room.Title != "" {
+				line += " · " + room.Title
+			}
+			sb.WriteString(line + "\n")
+			shown++
 		}
 	}
-
-	// Status and footer.
-	footer := hintLine(FooterHint{"Enter", "Select"}, FooterHint{"A", "Add"},
-		FooterHint{"X", "Remove"}, FooterHint{"B", "Close"})
-	if history {
-		footer = hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"B", "Back"})
-	} else if !active {
-		footer = hintLine(FooterHint{"Enter", "Select"}, FooterHint{"B", "Close"})
-	}
-	fw, _, _ := small.SizeUTF8(footer)
-	renderText(renderer, config, small, footer, sdl.Color{R: 110, G: 125, B: 150, A: 180},
-		x+w-pad-int32(fw), y+h-32)
-
-	status := partyUI.flash
-	if status == "" {
-		status = errText
-	}
-	if partyUI.busy {
-		status = "Working…"
-	}
-	if status != "" {
-		renderText(renderer, config, small, ellipsize(small, status, w-2*pad-260), ColorTextSecondary(), x+pad, y+h-32)
-	}
+	return sb.String()
 }

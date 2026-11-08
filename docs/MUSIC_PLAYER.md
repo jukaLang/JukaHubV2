@@ -35,7 +35,7 @@ about capability, not code: nothing here is copied from it.
 | Browsing | All / folders / artists / albums, search, sort, saved index | One folder at a time | **High** — a library index with metadata is the biggest missing piece |
 | Queue | Add, play next, reorder | Play next + count in the status line | Medium — reordering and a queue view |
 | Favorites | Toggle, list, use as a playlist | Toggle + row marker | Medium — a favorites view |
-| Playlists | Create, rename, reorder, delete, M3U/M3U8 import/export | none | **High** — M3U8 read/write is cheap and portable |
+| Playlists | Create, rename, reorder, delete, M3U/M3U8 import/export | Named lists saved as JSON, played from Audio settings | M3U8 import/export, rename and reorder |
 | Modes | Shuffle, repeat off/one/all | Same | Done |
 | Transitions | Gapless, crossfade with duration | Track-by-track decoder start | Low — gapless needs a decoder that keeps the PCM stream open |
 | Lyrics | LRC, bilingual translation, word timing, offset, full screen | Line-level LRC in the artwork tile | Medium — offset and a full-screen view are local; translation needs a provider |
@@ -56,9 +56,10 @@ Work is ordered by value per day, and each phase is independently shippable.
    artist, album and duration; incremental refresh; browse by folder, artist,
    album and all tracks; search and natural sort. The cache belongs in the app
    data folder, not in the config.
-2. **Playlists and favorites view** — M3U8 import/export (the format every
-   other player already writes), named playlists in one JSON file, and a
-   favorites filter on the current list.
+2. **Playlists and favorites view** — named playlists in one JSON file are done
+   (**Playlists** in Audio settings; **X** saves the queue under a name). What
+   remains is M3U8 import/export (the format every other player already writes)
+   and a favorites filter on the current list.
 3. **EQ** — a five-band biquad equalizer applied to the PCM blocks the player
    already mixes before queueing them, with presets and an on/off that is
    remembered. Keep a "bypass" path so a bug in the filter cannot silence

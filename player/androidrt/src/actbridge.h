@@ -13,9 +13,12 @@
 
 #define ANDROIDRT_SDK_VERSION 28 /* plays as Android 9: covers GLES3 assets */
 
-/* Symbol export for shim .so builds (they compile with
- * -fvisibility=hidden and everything not marked leaks nothing).  On Windows
- * smoke builds of the fake game this becomes __declspec(dllexport). */
+/* Symbol export for the runner's game-facing ABI. The runner is built with
+ * -fvisibility=hidden and -Wl,--export-dynamic, so exactly these symbols are
+ * visible to the bionic loader's dlsym(RTLD_DEFAULT) — the game's liblog /
+ * libandroid / libOpenSLES imports bind to the runner itself (one copy of
+ * every shim's state). On Windows smoke builds of the fake game this
+ * becomes __declspec(dllexport). */
 #if defined(_WIN32)
 #define ANDROIDRT_EXPORT __declspec(dllexport)
 #else
@@ -32,10 +35,10 @@ typedef void AConfiguration;
  * compiled against the real header binary-compatible. */
 typedef void AInputEvent;
 typedef void ALooper;
-typedef void (*ALooper_callbackFunc)(int fd, int events, void *data);
+/* android/looper.h: return 1 to keep receiving events, 0 to unregister. */
+typedef int (*ALooper_callbackFunc)(int fd, int events, void *data);
 
-/* ARect is a value type in the real NDK (four int32s) — the layout, not just
- * the pointer, matters because ANativeActivity embeds one. */
+/* ARect is a value type in the real NDK (four int32s). */
 typedef struct ARect {
     int32_t left;
     int32_t top;
@@ -43,7 +46,8 @@ typedef struct ARect {
     int32_t bottom;
 } ARect;
 
-/* ANativeActivity — layout fixed by the NDK (android/native_activity.h). */
+/* ANativeActivity — layout fixed by the NDK (android/native_activity.h)
+ * up to and including obbPath. */
 typedef struct ANativeActivity {
     struct ANativeActivityCallbacks *callbacks;
     void *vm;                     /* JavaVM*  — always NULL here          */
@@ -52,16 +56,15 @@ typedef struct ANativeActivity {
     const char *internalDataPath;
     const char *externalDataPath;
     int32_t sdkVersion;
-    void *instance;               /* the runner's own state               */
+    void *instance;               /* the game's (glue: struct android_app*) */
     AAssetManager *assetManager;
-    const char *obbPath;          /* unused, ""                            */
-    /* Everything below is a byte-exact append of the NDK's tail fields, in
-     * NDK order. Games built against the real header reach these by offset,
-     * so appending (not interleaving) is what keeps older-compiled callers
-     * aligned. */
-    AInputQueue *inputQueue;      /* owned by the input shim (inputshim.c) */
-    ANativeWindow *window;        /* the current window, as Android keeps   */
-    ARect contentRect;            /* only the changed callback uses it      */
+    const char *obbPath;
+    /* Runner-private extension fields: the NDK struct ends at obbPath, the
+     * framework allocates it, and games never read past it — so these are
+     * free for AndroidRT's own bookkeeping. */
+    AInputQueue *inputQueue;
+    ANativeWindow *window;
+    ARect contentRect;
 } ANativeActivity;
 
 typedef struct ANativeActivityCallbacks {
@@ -92,17 +95,28 @@ typedef void (*ANativeActivity_onCreate_t)(ANativeActivity *activity,
                                            void *savedState,
                                            size_t savedStateSize);
 
-/* The runner's own loop state, handed to games as ANativeActivity.instance. */
+/* The runner's own loop state. */
 typedef struct ActivityRunner {
     volatile int running;    /* cleared when the app should stop          */
     int exitCode;            /* filled on shutdown                        */
     const char *stagedRoot;  /* ANDROIDPAK_STAGED                         */
     const char *mainLib;     /* ANDROIDPAK_MAINLIB                        */
     const char *apkPath;     /* ANDROIDPAK_APK                            */
+    const char *internalDataPath; /* persistent: <ANDROIDPAK_DATA>/files  */
+    const char *externalDataPath; /* persistent: <ANDROIDPAK_DATA>/external */
+    const char *obbPath;          /* <ANDROIDPAK_DATA>/obb                */
 } ActivityRunner;
 
+/* ── jnistub.c: the JavaVM / JNIEnv / activity object handed to games
+ * (NULL when ANDROIDPAK_JNI=off) ─────────────────────────────────────── */
+void *apak_jniVM(void);
+void *apak_jniEnv(void);
+void *apak_jniActivityObject(void);
+
 /* ── activity.c exports (used by the android shim and the runner) ────── */
-void runOneActivity(ActivityRunner *runner, void *onCreate, void *gameHandle);
+/* onFrame is the smoke game's optional per-iteration hook (NULL for real
+ * games, which drive their own loop through ALooper_pollAll). */
+void runOneActivity(ActivityRunner *runner, void *onCreate, void *onFrame);
 void runner_requestExit(ActivityRunner *runner, int code);
 
 /* ── android shim exports (libandroid.so) used by the runner ─────────── */
@@ -118,13 +132,10 @@ int android_windowBackend(int width, int height);
 /* Device-side input producer (evdev.c): reads /dev/input/event*, translates
  * BTN/ABS evdev codes to Android keycodes/axes (linux/input-event-codes.h)
  * and feeds android_inputInject*. Guarded by JUKAHUB_EVDEV: the device
- * cross build compiles it and only the runner calls this; the host smoke
- * build never does (no /dev/input on Windows). */
+ * cross build compiles it and only the runner calls this. */
 void android_inputStartEvdev(void);
 
-/* ── input shim bridge (inputshim.c; compiled into the runner build and
- * into shims/libandroid.so alike — the AInputEvent/AInputQueue functions
- * themselves are ANDROIDRT_EXPORT, i.e. the game-facing ABI) ────────── */
+/* ── input shim bridge (inputshim.c) ────────────────────────────────── */
 AInputQueue *android_inputQueueCreate(void);
 void android_inputQueueDestroy(AInputQueue *queue);
 int android_inputHasEvents(void);
@@ -187,7 +198,14 @@ void AInputQueue_attachLooper(AInputQueue *queue, ALooper *looper, int ident,
                               ALooper_callbackFunc callback, void *data);
 void AInputQueue_detachLooper(AInputQueue *queue);
 
-/* ALooper surface the glue path uses alongside the queue (androidshim.c). */
+/* ALooper (looper.c) — the NDK API. */
+ALooper *ALooper_forThread(void);
+ALooper *ALooper_prepare(int opts);
+void ALooper_acquire(ALooper *looper);
+void ALooper_release(ALooper *looper);
+void ALooper_wake(ALooper *looper);
+int ALooper_addFd(ALooper *looper, int fd, int ident, int events, ALooper_callbackFunc callback, void *data);
+int ALooper_removeFd(ALooper *looper, int fd);
 int ALooper_pollOnce(int timeoutMs, int *outFd, int *outEvents, void **outData);
 int ALooper_pollAll(int timeoutMs, int *outFd, int *outEvents, void **outData);
 

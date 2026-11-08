@@ -128,7 +128,8 @@ had nothing to go back to.
 
 The TrimUI's **Select** button is the one the app sees as **Back**. Holding
 **Select + Start** together quits the app the way every other launcher on the
-card does: JukaHub saves, plays its goodbye screen, then exits. The pair is
+card does: JukaHub saves, shows its teardown card while it stops what is
+running, then exits. The pair is
 read from the physical buttons before any panel sees it, so it also works from
 a video, a settings panel or the on-screen keyboard — you never need the Home
 screen or a mouse to leave the app.
@@ -783,11 +784,17 @@ number and the title.
 | Background playback | On keeps the music running when you leave the player |
 | Bit-perfect DAC output | Bypasses the PEQ and the tempo filter |
 | 31-band PEQ | On / off; the curve is edited with **G** in the player |
+| Playlists | Left/right picks a saved list, **A** plays it, **X** saves the current queue under a typed name |
 | Keyboard shortcuts | Opens the shortcuts reference |
 
 Both layouts share the same hitboxes, so touch, keyboard and pad work the same
 in either one. The choice and the opacity live in the config (`musicNowPlayingLayout`,
 `musicArtOpacity`) and survive updates.
+
+Saved playlists are named lists of the queue — "Road Trip", "Relaxing" — that
+survive restarts and folder changes; they store paths, so a moved file is
+skipped rather than breaking the list. Saving the same name again replaces that
+list, and names are matched without regard to case.
 
 A `.lrc` file next to the track (same file name) is loaded automatically; its
 timed lines appear inside the artwork square and the current line is
@@ -1113,13 +1120,28 @@ screen like any other key.
 | Up / Down | Move through alarms and fields |
 | A | Select / save |
 | X | Toggle the focused alarm |
-| Y | New alarm |
-| L1 | Delete the focused alarm |
+| Y | New alarm || L1 | Delete the focused alarm |
 | B | Back |
 
-## Calculator
+### When an alarm rings
+
+A due alarm takes over the screen: a red wash blinks over everything — every
+panel, a darkened display, even a game's own UI — and the sound loops until you
+answer it. Nothing behind the card reacts while it rings.
 
 | Button | Action |
+|--------|--------|
+| Left / Right (or Tab) | Choose Snooze or Dismiss |
+| A / Enter / Space | Press the chosen button |
+| S | Snooze 9 minutes |
+| D / Esc | Dismiss |
+
+Snooze silences it and rings again 9 minutes later, leaving tomorrow's schedule
+alone; Dismiss ends it until the next scheduled ring. Tapping the two buttons
+works too. The editor's **Ringtone** row cycles the six synthesized sounds with
+Left / Right and previews each one as it lands.
+
+## Calculator | Button | Action |
 |--------|--------|
 | D-pad | Move over the keypad |
 | A | Press the focused key |

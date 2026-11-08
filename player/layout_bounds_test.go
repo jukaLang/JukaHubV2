@@ -25,8 +25,9 @@ func TestHomeLayoutFitsViewport(t *testing.T) {
 		t.Run(size.name, func(t *testing.T) {
 			h := NewHomeLayout(size.w, size.h)
 			// 14 cards plus the update download chip, the Wi-Fi meter, the
-			// now-playing chip and the notification bell in the header band.
-			if got, want := len(h.Order), 18; got != want {
+			// now-playing chip and the notification bell in the header band,
+			// and the search pill under the greeting.
+			if got, want := len(h.Order), 19; got != want {
 				t.Fatalf("items = %d, want %d", got, want)
 			}
 			for _, problem := range h.BoundsViolations() {

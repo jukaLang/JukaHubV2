@@ -1061,6 +1061,25 @@ func pdfExtractText(path string) pdfDoc {
 // keeps the file read and the explorer guard out of the extractor tests.
 func pdfExtractTextFromBytes(data []byte, path string) pdfDoc {
 	doc := pdfDoc{Path: path, Format: "PDF", Loaded: true}
+	// The full reader (pdfv_doc.go) first: it unpacks object streams, follows
+	// fonts' ToUnicode maps and opens files protected without a password,
+	// which is most of what this extractor read as "no text".
+	if pages, title, author, err := pdfvExtract(data); err == nil {
+		for _, text := range pages {
+			if strings.TrimSpace(text) != "" {
+				doc.Title, doc.Author = title, author
+				doc.Pages = make([]pdfPage, 0, len(pages))
+				for _, t := range pages {
+					doc.Pages = append(doc.Pages, pdfPage{Text: t, Width: 612, Height: 792})
+				}
+				doc.NumPages = len(doc.Pages)
+				if doc.Title == "" {
+					doc.Title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+				}
+				return doc
+			}
+		}
+	}
 	if m := rePDFTitle.FindSubmatch(data); m != nil {
 		doc.Title = strings.TrimSpace(pdfDecodeTextBytes(pdfUnescapeLiteral(m[1])))
 	}

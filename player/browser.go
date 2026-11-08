@@ -58,6 +58,9 @@ type browserPage struct {
 	Doc *webDocument
 	// Blocked is how many ad/tracker subresource requests the load skipped.
 	Blocked int
+	// Fail is set when the load produced no page: the browser draws its card
+	// (brw_offline.go) instead of the text above.
+	Fail *brwFailure
 }
 
 var browserState = struct {
@@ -138,6 +141,10 @@ func ensureBrowserScene(config *Config) {
 		// Find searches the page already on screen. A long issue or release
 		// page is otherwise a minute of D-pad paging to reach one paragraph.
 		{"Find", "browser_find"},
+		// Info opens Site info for the page: its connection, certificate and
+		// security headers (brw_siteinfo.go). The padlock in the address bar,
+		// `i` and R3 open the same sheet.
+		{"Info", "browser_site_info"},
 	}
 	// The chips share the content width, but not equally: each one is as wide
 	// as its own word needs to be at this panel's size — measured with the font
@@ -734,6 +741,9 @@ func resetBrowserStateForTest() {
 	browserFindReset()
 	// Reading positions are per session; a fresh browser starts at the top.
 	browserScrollReset()
+	// The offline card, JukaLand in the page and the site-info sheet belong to
+	// the session that showed them.
+	brwResetForTest()
 	resetBrowserDocumentsForTest()
 	resetBrowserAdBlockViewsForTest()
 	resetBrowserAdBlockCount()
@@ -1446,6 +1456,10 @@ func browserOpenFocusedPageLink(config *Config, elem Element) bool {
 	// A play card is activated, not navigated: the URL streams through
 	// yt-dlp inside the embedded player, exactly like a search result.
 	if layout.Links[cursor].Video {
+		if !IsOnline() {
+			ShowToast("You're offline — videos need an internet connection", ToastKindWarning)
+			return true
+		}
 		PlayActivateSound()
 		playSmartURL(config, target)
 		return true
@@ -1872,7 +1886,21 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		textBrowserElementSource(elem) != textBrowserSourceWeb {
 		return false
 	}
+	// JukaLand in the page owns every key; the offline card owns the arrows,
+	// Tab and Enter (brw_offline.go).
+	if brwGame.active && brwGame.variable == elem.Variable {
+		brwGameKey(config, elem, e)
+		return true
+	}
+	if brwCardKey(config, elem, e) {
+		return true
+	}
 	switch e.Keysym.Sym {
+	case sdl.K_i:
+		// Site info: the connection, certificate and security headers of the
+		// page on screen (brw_siteinfo.go).
+		brwInfoOpenFor(config)
+		return true
 	case sdl.K_TAB:
 		browserToggleNavMode()
 		return true
@@ -2049,7 +2077,21 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 	if e == nil || config == nil || textBrowserElementSource(elem) != textBrowserSourceWeb {
 		return false
 	}
+	// JukaLand in the page owns the pad (B leaves it); the offline card owns
+	// the D-pad and A (brw_offline.go).
+	if brwGame.active && brwGame.variable == elem.Variable {
+		brwGamePad(config, elem, e)
+		return true
+	}
+	if brwCardPad(config, elem, e) {
+		return true
+	}
 	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// Site info (F2 on a Brick, whose front keys report as the stick
+		// clicks; the browser keeps both, see brickkeys.go).
+		brwInfoOpenFor(config)
+		return true
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		if browserFind.active {
 			browserFindClear()
@@ -2182,6 +2224,10 @@ func browserTapPageVideo(config *Config, elem Element, mx, my int32) bool {
 			showToast("That video cannot be played here", ToastInfo())
 			return true
 		}
+		if !IsOnline() {
+			ShowToast("You're offline — videos need an internet connection", ToastKindWarning)
+			return true
+		}
 		PlayActivateSound()
 		playSmartURL(config, target)
 		return true
@@ -2193,6 +2239,11 @@ func browserTapPageVideo(config *Config, elem Element, mx, my int32) bool {
 // links: it fails when the tap is not on one, so the caller can keep the
 // click for whatever else wants it.
 func browserTapPageLink(renderer *sdl.Renderer, config *Config, elem Element, mx, my int32) bool {
+	// The offline card's buttons, and JukaLand when it is being played, own
+	// taps on the page area (brw_offline.go).
+	if brwPageTap(config, elem, mx, my) {
+		return true
+	}
 	layout := browserPageLayout(config, elem)
 	if layout == nil || len(layout.Links) == 0 {
 		return false

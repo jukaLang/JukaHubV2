@@ -103,6 +103,9 @@ type Variables struct {
 	DynamicBg          bool `json:"dynamicBg"`
 	ScreensaverTimeout int  `json:"screensaverTimeout"`
 	SocialNotifs       bool `json:"socialNotifs"`
+	// Clock12 prints times with an AM/PM suffix. The zero value is the
+	// 24-hour clock every earlier build rendered.
+	Clock12 bool `json:"clock12"`
 
 	// Optional feature toggles (future-facing). These are persisted as first-class
 	// config fields so the app can be configured on the device without requiring a
@@ -241,6 +244,7 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"searchWidth":        true,
 		"dynamicBg":          true,
 		"screensaverTimeout": true, "socialNotifs": true,
+		"clock12":       true,
 		"reducedMotion": true,
 		"lowPower":      true,
 		"powerMode":     true,

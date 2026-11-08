@@ -269,24 +269,42 @@ func TestCategoryTileDrawsInsideItsRect(t *testing.T) {
 	}
 }
 
-// The page header is one recipe now, so the two Tools screens and About must
-// report the same band for the same title: a difference here is the drift the
-// component exists to prevent.
+// The page header is one recipe now, so the Tools hub, the Network tools page,
+// the Settings page and About must report the same band for the same shape: a
+// difference here is the drift the component exists to prevent.
 func TestPageHeaderIsSharedAcrossScreens(t *testing.T) {
 	config := &Config{}
 	newProbeFrame(t)
-	scene := SceneConfig{Name: "Tools"}
-	overlay := toolsHeader(config, 24, 40, 800)
-	page := menuTilesHeader(config, scene, 24, 40, 800)
-	if overlay.Title != page.Title {
-		t.Fatalf("overlay title %q, page title %q", overlay.Title, page.Title)
+	page := menuTilesHeader(config, SceneConfig{Name: "Settings"}, 24, 40, 800)
+	if page.Glyph == nil {
+		t.Fatal("the Settings header is missing its glyph well")
 	}
-	if overlay.Glyph == nil || page.Glyph == nil {
-		t.Fatal("a header is missing its glyph well")
-	}
-	om, pm := uiPageHeaderMetricsFor(config, overlay), uiPageHeaderMetricsFor(config, page)
-	if om.Height != pm.Height || om.WellBox != pm.WellBox {
-		t.Fatalf("the two Tools headers measure differently: %+v vs %+v", om, pm)
+	pm := uiPageHeaderMetricsFor(config, page)
+	// Offline, on a LAN without internet and fully online: the subtitle
+	// changes with the network, the band must not.
+	for _, net := range []toolsHubNet{{}, {ip: "192.168.1.20"}, {ip: "192.168.1.20", online: true}} {
+		headers := []struct {
+			title string
+			h     UIPageHeader
+		}{
+			{"Tools", toolsHubHeader(net)},
+			{"Network tools", netToolsHeader(net)},
+		}
+		for _, c := range headers {
+			if c.h.Title != c.title {
+				t.Fatalf("header title %q, want %q", c.h.Title, c.title)
+			}
+			if c.h.Glyph == nil {
+				t.Fatalf("the %s header is missing its glyph well", c.title)
+			}
+			if c.h.Subtitle == "" {
+				t.Fatalf("the %s header has no subtitle for %+v", c.title, net)
+			}
+			hm := uiPageHeaderMetricsFor(config, c.h)
+			if hm.Height != pm.Height || hm.WellBox != pm.WellBox {
+				t.Fatalf("the %s header measures differently from Settings: %+v vs %+v", c.title, hm, pm)
+			}
+		}
 	}
 
 	// About uses the same component in its centred form: every line has to be

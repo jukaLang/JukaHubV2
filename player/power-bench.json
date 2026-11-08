@@ -2,6 +2,22 @@
   {
     "device": "Development build",
     "kind": "sequential",
+    "write": 1210.270568491617,
+    "read": 5085.4842620883655,
+    "at": "2026-11-05T19:23:26Z",
+    "version": "0.4.0"
+  },
+  {
+    "device": "Development build",
+    "kind": "sequential",
+    "write": 1150.248791147072,
+    "read": 4819.177880726524,
+    "at": "2026-11-05T19:23:21Z",
+    "version": "0.4.0"
+  },
+  {
+    "device": "Development build",
+    "kind": "sequential",
     "write": 866.2552562227895,
     "read": 3976.5783805102997,
     "at": "2026-10-30T20:49:34Z",

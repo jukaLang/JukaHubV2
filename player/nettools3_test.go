@@ -1,17 +1,16 @@
 package main
 
-// nettools3_test.go — the four recon rows added to the Tools panel. Every check
-// here runs against a listener this test starts, or against the string the
-// codec was given: nothing reaches the network.
+// nettools3_test.go — the certificate and header reports (the Browser's site
+// information uses them) and the encode / decode tool on the Network tools
+// page. Every check here runs against a listener this test starts, or against
+// the string the codec was given: nothing reaches the network.
 
 import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestNetTargetHostPortFillsTheDefaultPort(t *testing.T) {
@@ -83,94 +82,6 @@ func TestCertSummaryReadsATLSServer(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("report is missing %q\n%s", want, text)
 		}
-	}
-}
-
-func TestServerBannerIsReadWithoutWritingAnything(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	greeting := "SSH-2.0-OpenSSH_9.6\r\n"
-	written := make(chan string, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_, _ = conn.Write([]byte(greeting))
-		// Whatever the client sends would land here; the row must never send
-		// anything, so nothing should ever arrive.
-		_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-		buf := make([]byte, 64)
-		n, _ := conn.Read(buf)
-		written <- string(buf[:n])
-	}()
-
-	text, err := bannerSummary(ln.Addr().String())
-	if err != nil {
-		t.Fatalf("bannerSummary failed against a live listener: %v", err)
-	}
-	if !strings.Contains(text, "SSH-2.0-OpenSSH_9.6") {
-		t.Errorf("banner missing from the report:\n%s", text)
-	}
-	if !strings.Contains(text, "Open:   yes") {
-		t.Errorf("report does not say the port answered:\n%s", text)
-	}
-	if sent := <-written; sent != "" {
-		t.Errorf("the banner row wrote %q to the socket; it must only read", sent)
-	}
-}
-
-func TestBannerSummaryReportsASilentService(t *testing.T) {
-	// No defer: the helper registers its own cleanup, and deferring the call
-	// would shorten the window only after the row had already run.
-	restoreBannerWindow(t, 150*time.Millisecond)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		// Hold the connection open without speaking: HTTP and most databases
-		// behave exactly like this.
-		time.Sleep(400 * time.Millisecond)
-		conn.Close()
-	}()
-
-	text, err := bannerSummary(ln.Addr().String())
-	if err != nil {
-		t.Fatalf("a silent service is a result, not an error: %v", err)
-	}
-	if !strings.Contains(text, "Banner: none") {
-		t.Errorf("report does not say there was no banner:\n%s", text)
-	}
-	if !strings.Contains(text, "never spoke first") {
-		t.Errorf("report does not explain a silent service:\n%s", text)
-	}
-}
-
-func TestBannerSummaryReportsAClosedPort(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	text, err := bannerSummary(addr)
-	if err != nil {
-		t.Fatalf("a closed port returned an error instead of a result: %v", err)
-	}
-	if !strings.Contains(text, "Open:   no") || !strings.Contains(text, "nothing is listening") {
-		t.Errorf("report does not describe a refused port:\n%s", text)
 	}
 }
 
@@ -315,7 +226,9 @@ func TestCodecSummaryKeepsBinaryOnOneLine(t *testing.T) {
 	}
 }
 
-func TestNetPromptTitlesForTheReconRows(t *testing.T) {
+// The three prompts the Network tools page still opens (Port check, Domain
+// whois, Encode / decode) keep their titles and examples on the keyboard.
+func TestNetPromptTitlesForTheTypedTools(t *testing.T) {
 	defer resetKeyboardState(t)
 	resetKeyboardState(t)
 	vkTarget = vkTargetNetwork
@@ -327,9 +240,6 @@ func TestNetPromptTitlesForTheReconRows(t *testing.T) {
 	}{
 		{netPromptPort, "PORT CHECK", "192.168.1.7:22"},
 		{netPromptWhois, "WHOIS LOOKUP", "example.com"},
-		{netPromptCert, "TLS CERTIFICATE", "example.com or example.com:8443"},
-		{netPromptBanner, "SERVICE BANNER", "192.168.1.7:22"},
-		{netPromptHeaders, "SECURITY HEADERS", "example.com or https://…"},
 		{netPromptCodec, "ENCODE / DECODE", "paste a token, a URL or hex"},
 	}
 	for _, c := range cases {
@@ -343,41 +253,29 @@ func TestNetPromptTitlesForTheReconRows(t *testing.T) {
 	}
 }
 
-// TestReconRowsAreInTheToolsPanel keeps the four new rows reachable: a row that
-// no longer exists is a feature the docs promise and the panel does not show.
-func TestReconRowsAreInTheToolsPanel(t *testing.T) {
-	rows := toolsRows(&Config{Width: 1024, Height: 600})
-	want := map[toolsAction]string{
-		toolsActionCert:    "TLS certificate",
-		toolsActionBanner:  "Service banner",
-		toolsActionHeaders: "Security headers",
-		toolsActionCodec:   "Encode / decode",
+// TestNetworkToolsPageCarriesTheCodecNotTheWebChecks keeps the move honest:
+// Encode / decode is a tile of the Network tools page, while the Service
+// banner was removed and the HTTP check, TLS certificate and Security headers
+// belong to the Browser's site information, not to a tile.
+func TestNetworkToolsPageCarriesTheCodecNotTheWebChecks(t *testing.T) {
+	spec, ok := netToolsSpecFor("codec")
+	if !ok {
+		t.Fatal("Encode / decode is missing from the Network tools page")
 	}
-	seen := map[toolsAction]bool{}
-	for _, row := range rows {
-		if label, ok := want[row.action]; ok {
-			if row.label != label {
-				t.Errorf("row %d labelled %q, want %q", row.action, row.label, label)
+	if spec.label != "Encode / decode" || spec.mode != netToolsModeInput {
+		t.Errorf("codec tile = %+v, want the typed Encode / decode tool", spec)
+	}
+	if spec.need != toolsHubNeedNothing {
+		t.Errorf("codec tile needs %v; decoding a string needs no network", spec.need)
+	}
+	for _, spec := range netToolsSpecs {
+		lower := strings.ToLower(spec.id + " " + spec.label)
+		for _, gone := range []string{"banner", "certificate", "header", "http check", "httpcheck"} {
+			if strings.Contains(lower, gone) {
+				t.Errorf("tile %q (%s) is back on the Network tools page", spec.label, spec.id)
 			}
-			if !row.enabled {
-				t.Errorf("%q row is disabled: it needs only a typed target", label)
-			}
-			seen[row.action] = true
 		}
 	}
-	for action, label := range want {
-		if !seen[action] {
-			t.Errorf("%q is missing from the Tools panel", label)
-		}
-	}
-}
-
-// restoreBannerWindow puts the shared read window back after a test shortens it.
-func restoreBannerWindow(t *testing.T, window time.Duration) {
-	t.Helper()
-	original := bannerReadWindow
-	bannerReadWindow = window
-	t.Cleanup(func() { bannerReadWindow = original })
 }
 
 func TestTLSVersionNameCoversTheSeveritiesPeopleSee(t *testing.T) {
@@ -401,30 +299,5 @@ func TestHeaderLineValueFitsOneLine(t *testing.T) {
 	got := headerLineValue(long)
 	if len([]rune(got)) > 65 || !strings.HasSuffix(got, "…") {
 		t.Errorf("headerLineValue left a %d-rune value: %q", len(got), got)
-	}
-}
-
-func TestBannerPrintableKeepsOnlyTheHead(t *testing.T) {
-	input := strings.Repeat("A", 40) + "\x00\x07\r\nsecond\nthird\nfourth"
-	got := bannerPrintable(input)
-	if strings.ContainsAny(got, "\x00\x07") {
-		t.Errorf("control characters survived: %q", got)
-	}
-	if !strings.Contains(got, "second") || strings.Contains(got, "fourth") {
-		t.Errorf("bannerPrintable kept the wrong lines: %q", got)
-	}
-	if strings.Contains(got, "\n") {
-		t.Errorf("bannerPrintable left a newline in %q", got)
-	}
-}
-
-func TestBannerSummaryRejectsATargetWithoutAPort(t *testing.T) {
-	if _, err := bannerSummary("example.com"); err == nil {
-		t.Fatal("a banner needs a port; example.com must be refused")
-	} else if !strings.Contains(err.Error(), "host:port") {
-		t.Fatalf("error = %q, want it to ask for host:port", err)
-	}
-	if _, _, err := netPortParseTarget(":" + strconv.Itoa(70000)); err == nil {
-		t.Fatal("an out-of-range port must be refused")
 	}
 }

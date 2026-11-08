@@ -28,8 +28,8 @@ function designShape(config) {
 const canvasElements = () => document.querySelectorAll("#canvas .element").length;
 
 test.beforeEach(async ({ page }) => {
-  // The builder loads fonts and icons from CDNs; a blocked font must not turn
-  // the page load into a timeout, so fail only on the app's own scripts.
+  // Any uncaught error in the builder's own scripts fails the test. (Inter and
+  // the icons ship with the page, so there is no third-party load to wait on.)
   page.on("pageerror", (error) => {
     throw new Error(`uncaught page error: ${error.message}`);
   });

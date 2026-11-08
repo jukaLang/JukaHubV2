@@ -92,27 +92,41 @@ func TestTaskSchedulerCSV(t *testing.T) {
 	}
 }
 
-func TestTasksRefreshButton(t *testing.T) {
+// TestScheduledTasksScreenHasNoLoadButtons pins the screen that loads itself:
+// the shipped configs carry no Load / Startup buttons and no second "Startup
+// Items" panel, and an older config that still has them is cleaned in memory
+// (twice is the same as once).
+func TestScheduledTasksScreenHasNoLoadButtons(t *testing.T) {
 	for path, config := range loadAuditConfigs(t) {
-		ensureTasksRefreshLabel(config)
-		ensureTasksRefreshLabel(config)
-		scene := sceneByName(config, "Cron")
+		scene := sceneByName(config, schedSceneName)
 		if scene == nil {
-			t.Fatalf("%s: missing Tasks scene", path)
+			t.Fatalf("%s: missing the Scheduled tasks scene", path)
 		}
-		found := false
 		for _, elem := range scene.Elements {
-			if elem.Trigger == "cron_load" {
-				found = true
-				if elem.Text != "Refresh" {
-					t.Errorf("%s: refresh button says %q", path, elem.Text)
-				}
+			if elem.Type == "button" || elem.Trigger == "cron_load" || elem.Trigger == "cron_startup" {
+				t.Errorf("%s: the Scheduled tasks scene still ships a %q button (%s)", path, elem.Text, elem.Trigger)
 			}
 		}
-		if !found {
-			t.Errorf("%s: no refresh action", path)
-		}
 	}
+
+	old := &Config{Scenes: []SceneConfig{{Name: schedSceneName, Elements: []Element{
+		{Type: "textlog", Variable: "cron_text"},
+		{Type: "label", Text: "Startup Items"},
+		{Type: "textlog", Variable: cronStartupVar},
+		{Type: "button", Text: "Load", Trigger: "cron_load"},
+		{Type: "button", Text: "Startup", Trigger: "cron_startup"},
+	}}}}
+	sysToolMigrateScenes(old)
+	sysToolMigrateScenes(old)
+	got := old.Scenes[0].Elements
+	if len(got) != 1 || got[0].Type != "textlog" || got[0].Variable != "cron_text" {
+		t.Fatalf("migrated Scheduled tasks scene = %+v, want only the cron_text panel", got)
+	}
+}
+
+// TestLegacyCronLoadTrigger keeps the old cron_load trigger working for a
+// hand-made scene that still uses it: on Windows it reports Task Scheduler.
+func TestLegacyCronLoadTrigger(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		return
 	}

@@ -3,11 +3,12 @@ package main
 // ambient.go — the dock and ambient screen.
 //
 // A handheld that is charging or left alone should not sit on the launcher.
-// This mode turns it into a bedside/dock display: a large clock, today's
-// weather, the track that is playing and a slideshow of photos, all drawn over
-// one calm screen. It is entered automatically while charging (after a short
-// quiet period) or after the normal idle timeout, and can be opened from the
-// Start menu at any time.
+// This mode turns it into a bedside/dock display: a large clock, the Wi-Fi and
+// battery chips, today's weather, the track that is playing and a full-screen
+// picture — the lock-screen picture chosen in Files, or a slideshow of photos —
+// all drawn over one calm screen. It is entered automatically while charging
+// (after a short quiet period) or after the normal idle timeout, and can be
+// opened from the Start menu at any time.
 //
 // Two things make it useful beyond a pretty screen:
 //
@@ -17,8 +18,13 @@ package main
 //     decoding. The main loop draws nothing at all in that state, so the only
 //     work left is the audio thread — the point of leaving music on overnight.
 //
+// While the dock is up the device also drops into the idle low-power state
+// (saver_power.go): a lower CPU ceiling, a slow frame rate that still answers a
+// press at once, and parked background pollers.
+//
 // SDL is not thread-safe, so the auto-entry monitor only flips flags under a
-// mutex; every texture and pixel is touched on the render thread.
+// mutex; every texture and pixel is touched on the render thread. Pictures are
+// decoded and scaled by the worker in saver_backdrop.go and only uploaded here.
 
 import (
 	"fmt"
@@ -29,7 +35,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
 )
@@ -41,7 +46,7 @@ const (
 	ambientDockIdleTimeout = 45 * time.Second
 	// ambientPhotoInterval is the dwell time for one slideshow photo.
 	ambientPhotoInterval = 20 * time.Second
-	// ambientPhotoFade is how long a newly shown photo takes to fade in.
+	// ambientPhotoFade is how long a newly shown photo takes to cross-fade in.
 	ambientPhotoFade = 900 * time.Millisecond
 	// ambientPhotoRescan bounds directory scans so a slideshow never turns into
 	// constant SD-card traffic.
@@ -50,6 +55,9 @@ const (
 	ambientStatusRefresh = 5 * time.Second
 	// ambientPhotoLimit caps how many files are listed from one folder.
 	ambientPhotoLimit = 300
+	// saverDockFlashTTL is how long a button shows it was pressed, so a press
+	// from the pad or the keyboard is visibly answered on the dock too.
+	saverDockFlashTTL = 220 * time.Millisecond
 )
 
 // ambientSleepOptions is the order the sleep chip steps through.
@@ -83,12 +91,16 @@ var ambient ambientState
 type ambientPhotoState struct {
 	files       []string
 	index       int
-	changedAt   time.Time
+	changedAt   time.Time // when the photo on screen appeared; its fade starts here
 	texture     *sdl.Texture
 	texturePath string
+	prev        *sdl.Texture  // the photo fading out under a new one
+	owner       *sdl.Renderer // the renderer both textures belong to
 	failed      map[string]bool
 	scannedAt   time.Time
 	scanDir     string
+	wantPath    string // the photo the worker is producing
+	wantStamp   string
 }
 
 var ambientPhotos ambientPhotoState
@@ -110,6 +122,16 @@ type ambientButton struct {
 }
 
 var ambientButtons []ambientButton
+
+// saverDockCardRect is the now-playing card's hit area: a tap on the card is the
+// same as the Play button, the way a media widget behaves.
+var saverDockCardRect sdl.Rect
+
+// saverDockFlash remembers the last action, for the pressed look of its button.
+var saverDockFlash struct {
+	action ambientAction
+	at     time.Time
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Settings and entry decisions
@@ -243,8 +265,8 @@ func ambientIsScreenOff() bool {
 	return ambient.active && ambient.screenOff
 }
 
-// ambientEnter opens the dock screen. It is safe to call from the monitor
-// goroutine: nothing here touches SDL.
+// ambientEnter opens the dock screen. It runs on the event thread (the auto
+// tick and the Start menu): leaving the starfield frees its texture.
 func ambientEnter(config *Config) {
 	ambient.mu.Lock()
 	if ambient.active {
@@ -261,9 +283,12 @@ func ambientEnter(config *Config) {
 	// question; never let both be on.
 	deactivateScreensaver()
 	noteUserInputTime(time.Now())
+	saverDockFlash.at = time.Time{}
+	// The status chips are re-read as the dock appears.
+	saverWifiInvalidate()
 }
 
-// ambientLeave returns to the normal UI and drops the photo texture.
+// ambientLeave returns to the normal UI and drops the photo textures.
 func ambientLeave() {
 	ambient.mu.Lock()
 	if !ambient.active {
@@ -277,8 +302,15 @@ func ambientLeave() {
 	ambient.sleepUntil = time.Time{}
 	ambient.mu.Unlock()
 
+	// The CPU comes back before the first awake frame is drawn.
+	saverPowerWake()
 	ambientFreePhoto()
+	// The slideshow's renditions go with it; the lock picture's stays, so the
+	// next idle screen has it at once.
+	saverPicForget(screenlockImagePath(appConfig))
+	releaseScreenlockTexture()
 	ambientButtons = nil
+	saverDockCardRect = sdl.Rect{}
 	noteUserInputTime(time.Now())
 }
 
@@ -481,6 +513,7 @@ func ambientRefreshPhotos(config *Config, now time.Time) {
 	ambientPhotos.scannedAt = now
 	ambientPhotos.files = ambientPhotoFiles(dir)
 	ambientPhotos.failed = make(map[string]bool)
+	ambientPhotos.wantPath = ""
 	if len(ambientPhotos.files) == 0 {
 		ambientPhotos.index = 0
 		ambientPhotos.changedAt = now
@@ -492,55 +525,80 @@ func ambientRefreshPhotos(config *Config, now time.Time) {
 	ambientPhotos.changedAt = now
 }
 
-// ambientPhotoTexture returns the texture for the current photo, advancing the
-// slideshow on schedule and fading each new photo in. It must be called on the
-// render thread.
+// ambientPhotoTexture returns the texture of the photo on screen, advancing the
+// slideshow on schedule. Photos are produced by the backdrop worker: the old
+// photo stays up while the next one decodes, then the new one cross-fades in.
+// It must be called on the render thread.
 func ambientPhotoTexture(renderer *sdl.Renderer, now time.Time) *sdl.Texture {
 	if renderer == nil || len(ambientPhotos.files) == 0 {
 		return nil
 	}
-	if ambientPhotos.index >= len(ambientPhotos.files) || ambientPhotos.index < 0 {
-		ambientPhotos.index = 0
+	if ambientPhotos.owner != nil && ambientPhotos.owner != renderer {
+		// Another renderer's textures are dropped, never destroyed here.
+		ambientPhotos.texture, ambientPhotos.prev, ambientPhotos.owner = nil, nil, nil
+		ambientPhotos.texturePath = ""
 	}
-	if !ambientPhotos.changedAt.IsZero() && now.Sub(ambientPhotos.changedAt) >= ambientPhotoInterval {
-		ambientPhotos.index = (ambientPhotos.index + 1) % len(ambientPhotos.files)
-		ambientPhotos.changedAt = now
+	n := len(ambientPhotos.files)
+	if ambientPhotos.index >= n || ambientPhotos.index < 0 {
+		ambientPhotos.index = 0
 	}
 	if ambientPhotos.changedAt.IsZero() {
 		ambientPhotos.changedAt = now
 	}
-
-	// Loading can fail (a corrupt JPEG, a codec missing from the runtime). Walk
-	// on to the next photo instead of retrying the same broken file every frame.
-	for attempts := 0; attempts < len(ambientPhotos.files); attempts++ {
+	// The dwell time counts from when a photo actually appeared, so a slow
+	// decode never shortens the next photo's turn.
+	if ambientPhotos.texture != nil && ambientPhotos.texturePath == ambientPhotos.files[ambientPhotos.index] &&
+		now.Sub(ambientPhotos.changedAt) >= ambientPhotoInterval {
+		ambientPhotos.index = (ambientPhotos.index + 1) % n
+	}
+	if ambientPhotos.failed == nil {
+		ambientPhotos.failed = make(map[string]bool)
+	}
+	w, h := int(screenWidth), int(screenHeight)
+	for attempts := 0; attempts < n; attempts++ {
 		path := ambientPhotos.files[ambientPhotos.index]
 		if ambientPhotos.texture != nil && ambientPhotos.texturePath == path {
 			return ambientPhotos.texture
 		}
 		if ambientPhotos.failed[path] {
-			ambientPhotos.index = (ambientPhotos.index + 1) % len(ambientPhotos.files)
+			ambientPhotos.index = (ambientPhotos.index + 1) % n
 			continue
 		}
-		if ambientPhotos.texture != nil {
-			ambientPhotos.texture.Destroy()
-			ambientPhotos.texture = nil
-			ambientPhotos.texturePath = ""
+		if ambientPhotos.wantPath != path {
+			// One stat per photo, when it becomes the one wanted.
+			ambientPhotos.wantPath = path
+			ambientPhotos.wantStamp = screenlockStamp(path)
 		}
-		texture, err := img.LoadTexture(renderer, path)
-		if err != nil {
-			if ambientPhotos.failed == nil {
-				ambientPhotos.failed = make(map[string]bool)
-			}
+		if ambientPhotos.wantStamp == "" {
 			ambientPhotos.failed[path] = true
-			ambientPhotos.index = (ambientPhotos.index + 1) % len(ambientPhotos.files)
+			ambientPhotos.index = (ambientPhotos.index + 1) % n
 			continue
 		}
-		_ = texture.SetBlendMode(sdl.BLENDMODE_BLEND)
-		ambientPhotos.texture = texture
-		ambientPhotos.texturePath = path
-		return texture
+		pix, done, err := saverPicRequest(saverPicKey{path: path, stamp: ambientPhotos.wantStamp, w: w, h: h})
+		if !done {
+			return ambientPhotos.texture
+		}
+		var tex *sdl.Texture
+		if err == nil {
+			tex, err = saverPicTexture(renderer, pix)
+		}
+		if err != nil {
+			// A corrupt JPEG or a codec missing from the runtime: walk on to
+			// the next photo instead of retrying this one every frame.
+			ambientPhotos.failed[path] = true
+			ambientPhotos.index = (ambientPhotos.index + 1) % n
+			continue
+		}
+		if ambientPhotos.prev != nil {
+			ambientPhotos.prev.Destroy()
+		}
+		ambientPhotos.prev = ambientPhotos.texture
+		ambientPhotos.texture, ambientPhotos.texturePath = tex, path
+		ambientPhotos.owner = renderer
+		ambientPhotos.changedAt = now
+		return tex
 	}
-	return nil
+	return ambientPhotos.texture
 }
 
 func ambientFreePhoto() {
@@ -548,12 +606,19 @@ func ambientFreePhoto() {
 		ambientPhotos.texture.Destroy()
 		ambientPhotos.texture = nil
 	}
+	if ambientPhotos.prev != nil {
+		ambientPhotos.prev.Destroy()
+		ambientPhotos.prev = nil
+	}
+	ambientPhotos.owner = nil
 	ambientPhotos.texturePath = ""
 	ambientPhotos.files = nil
 	ambientPhotos.index = 0
 	ambientPhotos.failed = nil
 	ambientPhotos.scannedAt = time.Time{}
 	ambientPhotos.scanDir = ""
+	ambientPhotos.wantPath = ""
+	ambientPhotos.wantStamp = ""
 }
 
 // ambientPhotoAlpha is the fade-in alpha for a photo that changed at changedAt.
@@ -571,6 +636,12 @@ func ambientPhotoAlpha(changedAt, now time.Time) uint8 {
 	return uint8(255 * elapsed / ambientPhotoFade)
 }
 
+// saverDockPhotoFading reports whether a photo is cross-fading right now, which
+// is when the idle frame budget gives way to the normal one.
+func saverDockPhotoFading(now time.Time) bool {
+	return ambientPhotos.texture != nil && ambientPhotoAlpha(ambientPhotos.changedAt, now) < 255
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Read-only data for the screen
 // ──────────────────────────────────────────────────────────────────────
@@ -586,6 +657,23 @@ func ambientNowPlaying() (title string, position, duration float64, playing, pau
 	}
 	position, duration = music.position, music.duration
 	return
+}
+
+// saverDockTrackPath is the current track's file, for its cover art.
+func saverDockTrackPath() string {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	if music.current >= 0 && music.current < len(music.tracks) {
+		return music.tracks[music.current].Path
+	}
+	return ""
+}
+
+// saverDockHasPlaylist reports whether Prev and Next have anything to step to.
+func saverDockHasPlaylist() bool {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	return len(music.tracks) > 0
 }
 
 // ambientProgressFraction is the played fraction for the progress bar (0 when
@@ -631,6 +719,25 @@ func ambientWeather(config *Config) (string, string) {
 	return weatherCodeDesc(day.Code), formatAmbientTemps(day, weatherUnit(config))
 }
 
+// saverDockWeatherIcon is the glyph for today's forecast: the sun (or the moon
+// after dark) for a clear sky, a cloud for anything else.
+func saverDockWeatherIcon(now time.Time) string {
+	wxMutex.Lock()
+	day, ok := weatherDayFor(weatherDaily, now)
+	ready := weatherReady
+	wxMutex.Unlock()
+	if !ready || !ok {
+		return "cloud"
+	}
+	if day.Code <= 1 {
+		if h := now.Hour(); h < 6 || h >= 20 {
+			return "moon"
+		}
+		return "sun"
+	}
+	return "cloud"
+}
+
 type ambientStatus struct {
 	battery  int
 	charging bool
@@ -642,7 +749,8 @@ var ambientStatusCache struct {
 	last ambientStatus
 }
 
-// ambientReadStatus reads the battery at most every ambientStatusRefresh.
+// ambientReadStatus reads the battery at most every ambientStatusRefresh. Both
+// idle screens' battery chips read it.
 func ambientReadStatus(now time.Time) ambientStatus {
 	ambientStatusCache.mu.Lock()
 	defer ambientStatusCache.mu.Unlock()
@@ -663,7 +771,7 @@ func ambientReadStatus(now time.Time) ambientStatus {
 
 // ambientHandleKey consumes keyboard input while the dock screen is up. The
 // first key after the panel was darkened only wakes it; the rest act on the
-// visible chips.
+// visible buttons.
 func ambientHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || !ambientIsActive() {
 		return false
@@ -677,21 +785,21 @@ func ambientHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		ambientLeave()
-	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a, sdl.K_p:
-		ambientTogglePlayback()
+		ambientActivate(ambientActionExit)
+	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a, sdl.K_p:
+		ambientActivate(ambientActionPlayPause)
 	case sdl.K_LEFT:
-		musicPrev()
+		ambientActivate(ambientActionPrev)
 	case sdl.K_RIGHT:
-		musicNext()
+		ambientActivate(ambientActionNext)
 	case sdl.K_UP:
 		musicAdjustVolume(0.05)
 	case sdl.K_DOWN:
 		musicAdjustVolume(-0.05)
 	case sdl.K_y, sdl.K_s:
-		ambientCycleSleep()
+		ambientActivate(ambientActionSleep)
 	case sdl.K_x:
-		ambientDarken()
+		ambientActivate(ambientActionScreenOff)
 	case sdl.K_n:
 		ambientNextPhoto()
 	}
@@ -703,22 +811,115 @@ func ambientNextPhoto() {
 		return
 	}
 	ambientPhotos.index = (ambientPhotos.index + 1) % len(ambientPhotos.files)
-	ambientPhotos.changedAt = time.Now()
 }
 
+// ambientTogglePlayback is the dock's Play button. It always does something:
+// pause or resume the current track, replay a stopped one, start a loaded list,
+// or find the music on the card and start that. The old button only knew the
+// first two, and on a device whose Files root held no audio files of its own it
+// silently did nothing.
 func ambientTogglePlayback() {
 	_, _, _, playing, paused := ambientNowPlaying()
-	if !playing && !paused {
-		// Nothing loaded: start the user's music folder so the chip is not a
-		// dead end on a fresh device.
-		if dir := musicDefaultDir(appConfig); dir != "" {
-			if idx := musicLoadPlaylist(dir, ""); idx >= 0 {
-				musicPlayTrack(idx)
-			}
-		}
+	if playing || paused {
+		musicTogglePause()
 		return
 	}
-	musicTogglePause()
+	music.mu.Lock()
+	hasCurrent := music.current >= 0 && music.current < len(music.tracks)
+	count := len(music.tracks)
+	cursor := music.cursor
+	music.mu.Unlock()
+	if hasCurrent {
+		// musicTogglePause plays a stopped current track from where it was.
+		musicTogglePause()
+		return
+	}
+	if count > 0 {
+		if cursor < 0 || cursor >= count {
+			cursor = 0
+		}
+		musicPlayTrack(cursor)
+		return
+	}
+	dir := saverFindMusicDir(appConfig)
+	if dir == "" {
+		showToast("No music found — copy songs into a Music folder to play them here", ToastInfo())
+		return
+	}
+	idx := musicLoadPlaylist(dir, "")
+	musicPlayTrack(idx)
+}
+
+// saverMusicDirCandidates are the folders the dock looks in for music when
+// nothing has been played yet, most specific first.
+func saverMusicDirCandidates(config *Config) []string {
+	var dirs []string
+	if dir := strings.TrimSpace(musicCurrentDir()); dir != "" && dir != "." {
+		dirs = append(dirs, dir)
+	}
+	if config != nil {
+		if root := strings.TrimSpace(config.Variables.FileExplorerRoot); root != "" {
+			dirs = append(dirs, filepath.Join(root, "Music"), filepath.Join(root, "music"), root)
+		}
+	}
+	dirs = append(dirs, "/mnt/SDCARD/Music", "/mnt/SDCARD/music", "/mnt/SDCARD/MUSIC")
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		dirs = append(dirs, filepath.Join(home, "Music"))
+	}
+	return dirs
+}
+
+// saverFindMusicDir returns the first candidate folder that holds audio
+// files, looking one level into album folders as well.
+func saverFindMusicDir(config *Config) string {
+	seen := make(map[string]bool)
+	for _, dir := range saverMusicDirCandidates(config) {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if found := saverMusicIn(dir, 1); found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
+// saverMusicIn returns dir when it holds audio files, else the first subfolder
+// (in name order, depth levels down) that does. The walk is bounded: it runs
+// on a button press, not in a frame, but a card can hold thousands of folders.
+func saverMusicIn(dir string, depth int) string {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	if len(audioFilesIn(dir)) > 0 {
+		return dir
+	}
+	if depth <= 0 {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	checked := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		if !e.IsDir() && e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		checked++
+		if checked > 64 {
+			break
+		}
+		if found := saverMusicIn(filepath.Join(dir, e.Name()), depth-1); found != "" {
+			return found
+		}
+	}
+	return ""
 }
 
 // ambientHandleController consumes controller input while the dock screen is up.
@@ -732,46 +933,57 @@ func ambientHandleController(e *sdl.ControllerButtonEvent) bool {
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
-		ambientTogglePlayback()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		ambientLeave()
+		ambientActivate(ambientActionPlayPause)
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+		ambientActivate(ambientActionExit)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		musicPrev()
+		ambientActivate(ambientActionPrev)
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		musicNext()
+		ambientActivate(ambientActionNext)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		musicAdjustVolume(0.05)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		musicAdjustVolume(-0.05)
 	case sdl.CONTROLLER_BUTTON_X:
-		ambientDarken()
+		ambientActivate(ambientActionScreenOff)
 	case sdl.CONTROLLER_BUTTON_Y:
-		ambientCycleSleep()
-	case sdl.CONTROLLER_BUTTON_START:
-		ambientLeave()
+		ambientActivate(ambientActionSleep)
 	}
 	return true
 }
 
+// ambientActivate runs one dock action. Pad, keyboard, mouse and touch all come
+// through here, so every route gets the same sound and the same pressed look.
 func ambientActivate(action ambientAction) {
+	saverDockFlash.action = action
+	saverDockFlash.at = time.Now()
 	switch action {
 	case ambientActionPlayPause:
 		ambientTogglePlayback()
 	case ambientActionPrev:
+		if saverDockHasPlaylist() {
+			PlayNavSound()
+		}
 		musicPrev()
 	case ambientActionNext:
+		if saverDockHasPlaylist() {
+			PlayNavSound()
+		}
 		musicNext()
 	case ambientActionSleep:
+		PlayActivateSound()
 		ambientCycleSleep()
 	case ambientActionScreenOff:
 		ambientDarken()
 	case ambientActionExit:
+		PlayBackSound()
 		ambientLeave()
 	}
 }
 
-// ambientHandleClick handles taps on the dock screen: chips act, anything else
-// only wakes a darked panel. It reports whether the click was consumed.
+// ambientHandleClick handles taps on the dock screen: buttons act, a tap on the
+// now-playing card plays or pauses, anything else only wakes a darked panel. It
+// reports whether the click was consumed.
 func ambientHandleClick(mx, my int32) bool {
 	if !ambientIsActive() {
 		return false
@@ -786,12 +998,18 @@ func ambientHandleClick(mx, my int32) bool {
 			return true
 		}
 	}
+	if saverDockCardRect.W > 0 && pointInRect(mx, my, saverDockCardRect) {
+		ambientActivate(ambientActionPlayPause)
+	}
 	return true
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // Rendering
 // ──────────────────────────────────────────────────────────────────────
+
+// saverDockMargin is the dock's frame margin.
+func saverDockMargin() int32 { return saverScaled(56, 20) }
 
 // renderAmbient draws one frame of the dock screen. It returns true while
 // active so the caller can skip the scene; the screen-off state is handled
@@ -802,156 +1020,85 @@ func renderAmbient(renderer *sdl.Renderer, config *Config) bool {
 	}
 	now := time.Now()
 	ambientButtons = ambientButtons[:0]
-	ambientRefreshPhotos(config, now)
-	ambientDrawBackdrop(renderer, config, now)
+	saverDockCardRect = sdl.Rect{}
+	photo := ambientDrawBackdrop(renderer, config, now)
 
-	// The dock clock is sized to the panel rather than to a config role: it has
-	// to be readable across a room, and "big" is only 52 px on a Smart Pro.
-	clockFont := getFontSized(config, "big", ambientClockSize())
-	mediumFont, _ := getCachedFont(config, "medium")
-	smallFont, _ := getCachedFont(config, "small")
-	if mediumFont == nil {
-		mediumFont = smallFont
-	}
-	if smallFont == nil {
-		smallFont = mediumFont
-	}
+	margin := saverDockMargin()
+	right := screenWidth - saverScaled(40, 16)
 
-	// Clock and date, top-left.
-	labelY := int32(36)
-	if clockFont != nil {
-		clock := now.Format("15:04")
-		_, clockH := renderText(renderer, config, clockFont, clock,
-			sdl.Color{R: 245, G: 248, B: 255, A: 255}, 56, 20)
-		labelY = 20 + clockH + 8
-	}
-	if smallFont != nil {
-		date := now.Format("Monday, 2 January")
-		renderText(renderer, config, smallFont, date, sdl.Color{R: 176, G: 190, B: 214, A: 220}, 60, labelY)
-		if next := alarmNextUpcoming(); next != nil {
-			label := fmt.Sprintf("Alarm %02d:%02d", next.Hour, next.Minute)
-			renderText(renderer, config, smallFont, label, sdl.Color{R: 150, G: 200, B: 160, A: 200}, 60, labelY+28)
-		}
-	}
+	// Clock, date and the next alarm, top-left. The dock clock is sized to the
+	// panel rather than to a config role: it has to be readable across a room.
+	below := saverDrawClock(renderer, config, margin, saverScaled(20, 8), ambientClockSize(), now)
+	saverDrawAlarmChip(renderer, config, margin+saverScaled(4, 2), below+saverScaled(12, 6))
 
-	// Weather, top-right.
-	if mediumFont != nil {
-		desc, temps := ambientWeather(config)
-		if desc != "" {
-			dw, _, _ := mediumFont.SizeUTF8(desc)
-			renderText(renderer, config, mediumFont, desc, sdl.Color{R: 228, G: 236, B: 250, A: 235},
-				screenWidth-56-int32(dw), 44)
-			if smallFont != nil {
-				tw, _, _ := smallFont.SizeUTF8(temps)
-				renderText(renderer, config, smallFont, temps, sdl.Color{R: 168, G: 184, B: 210, A: 210},
-					screenWidth-56-int32(tw), 76)
-			}
-		}
-	}
+	// Wi-Fi and battery, top-right, and today's weather under them.
+	top := saverScaled(28, 12)
+	saverDrawStatusRow(renderer, config, right, top, now)
+	m := saverChipSize()
+	saverDockDrawWeather(renderer, config, right, top+m.h+saverScaled(10, 6), now)
 
-	ambientDrawNowPlaying(renderer, config, smallFont, mediumFont)
-	ambientDrawStatus(renderer, config, smallFont, now)
-	// Messages that arrive while the dock is up are readable here too, the same
-	// card the starfield saver shows.
-	ambientDrawChat(renderer, config, now)
-	ambientDrawButtons(renderer, config, smallFont)
-
+	// The bottom: the button row, the now-playing card above it on the left,
+	// the timer and photo lines on the right, and new chat above the card.
+	rowTop := ambientDrawButtons(renderer, config, now)
+	cardBottom := rowTop - saverScaled(18, 8)
+	cardTop := ambientDrawNowPlaying(renderer, config, cardBottom)
+	ambientDrawStatus(renderer, config, right, cardBottom, photo)
+	ambientDrawChat(renderer, config, now, cardTop-saverScaled(14, 8))
 	return true
 }
 
-// ambientDrawBackdrop paints the photo (cover-fit, fading in) or the theme
-// gradient, then a scrim so the text stays readable over bright pictures.
-func ambientDrawBackdrop(renderer *sdl.Renderer, config *Config, now time.Time) {
+// ambientDrawBackdrop paints the dock's backdrop: the lock-screen picture when
+// one is set, else the photo slideshow, else Home's dark backdrop. It reports
+// whether the slideshow is what is showing (for the photo counter).
+func ambientDrawBackdrop(renderer *sdl.Renderer, config *Config, now time.Time) bool {
+	saverDockDrawBase(renderer)
+	if screenlockImagePath(config) != "" {
+		if drawScreenlockImage(renderer, config, 255) || saverLockShowing(config) {
+			// The chosen picture wins over the slideshow; while it is still
+			// decoding, the base backdrop stands in rather than a photo that
+			// would then be replaced.
+			return false
+		}
+	}
+	ambientRefreshPhotos(config, now)
 	texture := ambientPhotoTexture(renderer, now)
-	drewPhoto := false
-	if texture != nil {
-		if _, _, tw, th, err := texture.Query(); err == nil && tw > 0 && th > 0 {
-			scale := float64(screenWidth) / float64(tw)
-			if s := float64(screenHeight) / float64(th); s > scale {
-				scale = s
-			}
-			dw := int32(float64(tw) * scale)
-			dh := int32(float64(th) * scale)
-			dst := sdl.Rect{X: (screenWidth - dw) / 2, Y: (screenHeight - dh) / 2, W: dw, H: dh}
-			_ = texture.SetAlphaMod(ambientPhotoAlpha(ambientPhotos.changedAt, now))
-			if err := renderer.Copy(texture, nil, &dst); err == nil {
-				drewPhoto = true
-			}
-			_ = texture.SetAlphaMod(255)
+	if texture == nil {
+		return false
+	}
+	full := sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}
+	alpha := ambientPhotoAlpha(ambientPhotos.changedAt, now)
+	if ambientPhotos.prev != nil {
+		if alpha < 255 {
+			_ = ambientPhotos.prev.SetAlphaMod(255)
+			renderer.Copy(ambientPhotos.prev, nil, &full)
+		} else {
+			ambientPhotos.prev.Destroy()
+			ambientPhotos.prev = nil
 		}
 	}
-
-	if !drewPhoto {
-		renderer.SetDrawColor(7, 9, 16, 255)
-		renderer.Clear()
-		ensureGradientTexture(renderer, config, ColorBackground)
-		if gradientTexture != nil {
-			_ = renderer.Copy(gradientTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		}
-		// A soft accent wash gives the empty backdrop some depth without an
-		// animation loop the device has to keep feeding.
-		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 16)
-		renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth / 2, H: screenHeight / 2})
-	}
-
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(5, 7, 12, 110)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	// A cached fade under the chips, instead of a hard band: the controls need
-	// contrast, but the photo must not appear to end in a straight line across
-	// the panel. Building it costs one surface at startup-size changes only.
-	if scrim := ambientScrimTexture(renderer); scrim != nil {
-		bandH := screenHeight * 2 / 5
-		_ = renderer.Copy(scrim, nil, &sdl.Rect{X: 0, Y: screenHeight - bandH, W: screenWidth, H: bandH})
-	}
+	_ = texture.SetAlphaMod(alpha)
+	renderer.Copy(texture, nil, &full)
+	_ = texture.SetAlphaMod(255)
+	return true
 }
 
-// ambientScrim caches the vertical fade under the chips. Rebuilding it every
-// frame would be both slower and noisier (banding) than one texture.
-var ambientScrim struct {
-	texture *sdl.Texture
-	w, h    int32
+// saverDockDrawBase is Home's backdrop, kept dark on every theme: a navy
+// base with the cyan bloom behind the clock and the violet one in the far
+// corner. It costs a clear and two copies of one cached glow, and it is static,
+// so the low-power frame rate shows no stepping.
+func saverDockDrawBase(renderer *sdl.Renderer) {
+	base := ColorBackground
+	if glassLightTheme() {
+		base = sdl.Color{R: 11, G: 15, B: 23, A: 255}
+	}
+	renderer.SetDrawColor(base.R, base.G, base.B, 255)
+	renderer.Clear()
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	w, h := screenWidth, screenHeight
+	blob := scaleX(900, w)
+	homeGlowBlob(renderer, sdl.Rect{X: scaleX(60, w) - blob/2, Y: scaleY(300, h) - blob/2, W: blob, H: blob}, ColorAccent, 44)
+	homeGlowBlob(renderer, sdl.Rect{X: w - blob/2 - scaleX(60, w), Y: h - blob/2, W: blob, H: blob}, sdl.Color{R: 124, G: 58, B: 237, A: 255}, 36)
 }
-
-func ambientScrimTexture(renderer *sdl.Renderer) *sdl.Texture {
-	bandH := screenHeight * 2 / 5
-	if bandH < 8 {
-		bandH = 8
-	}
-	if ambientScrim.texture != nil && ambientScrim.w == screenWidth && ambientScrim.h == bandH {
-		return ambientScrim.texture
-	}
-	if ambientScrim.texture != nil {
-		ambientScrim.texture.Destroy()
-		ambientScrim.texture = nil
-	}
-	surface, err := sdl.CreateRGBSurfaceWithFormat(0, screenWidth, bandH, 32, sdl.PIXELFORMAT_RGBA8888)
-	if err != nil {
-		return nil
-	}
-	defer surface.Free()
-	for y := int32(0); y < bandH; y++ {
-		t := float64(y) / float64(bandH)
-		a := uint32(190 * t * t) // ease-in keeps the top edge invisible
-		c := uint32(5) | uint32(7)<<8 | uint32(12)<<16 | a<<24
-		surface.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1}, c)
-	}
-	texture, err := renderer.CreateTextureFromSurface(surface)
-	if err != nil {
-		return nil
-	}
-	_ = texture.SetBlendMode(sdl.BLENDMODE_BLEND)
-	ambientScrim.texture = texture
-	ambientScrim.w, ambientScrim.h = screenWidth, bandH
-	return texture
-}
-
-// ambientDockLift raises the bottom furniture — the now-playing card, the
-// status column beside it and the chat card above it — clear of the chip row.
-// At 720p the old offsets left the card sitting on the chips; the lift keeps
-// every element moving together so the bottom row stays one composition.
-const ambientDockLift = int32(48)
 
 // ambientClockSize scales the dock clock to the panel, bounded so it still fits
 // above the now-playing card on a short screen.
@@ -966,6 +1113,24 @@ func ambientClockSize() int {
 	return size
 }
 
+// saverDockDrawWeather draws today's forecast as a chip, right-aligned at right.
+func saverDockDrawWeather(renderer *sdl.Renderer, config *Config, right, y int32, now time.Time) {
+	desc, temps := ambientWeather(config)
+	if desc == "" {
+		return
+	}
+	font := saverChipFont(config)
+	if font == nil {
+		return
+	}
+	label := desc
+	if temps != "" {
+		label += " · " + temps
+	}
+	label = ellipsize(font, label, saverScaled(380, 200))
+	saverDrawLabelChip(renderer, font, saverDockWeatherIcon(now), label, right, y)
+}
+
 // ambientShowNowPlaying decides whether the dock has a now-playing card at all.
 // With no track loaded the card would be an empty box reading "Nothing playing"
 // with a 0:00 clock, which looks like a broken panel rather than a screen saver,
@@ -974,66 +1139,103 @@ func ambientShowNowPlaying(title string, playing, paused bool) bool {
 	return title != "" || playing || paused
 }
 
-// ambientDrawNowPlaying draws the dock's now-playing card.
-func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, smallFont, mediumFont *ttf.Font) {
-	if smallFont == nil {
-		return
-	}
+// ambientDrawNowPlaying draws the now-playing card with its bottom edge at
+// bottom and returns its top (bottom itself when there is no card).
+func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, bottom int32) int32 {
 	title, pos, dur, playing, paused := ambientNowPlaying()
 	if !ambientShowNowPlaying(title, playing, paused) {
-		return
+		return bottom
 	}
-	cardW := int32(430)
-	if cardW > screenWidth-112 {
-		cardW = screenWidth - 112
+	title = strings.TrimSuffix(title, filepath.Ext(title))
+	margin := saverDockMargin()
+	w := saverScaled(480, 260)
+	if limit := screenWidth - 2*margin - saverScaled(240, 120); w > limit {
+		w = limit
 	}
-	cardH := int32(92)
-	cardX := int32(56)
-	cardY := screenHeight - 176 - ambientDockLift
+	h := saverScaled(100, 72)
+	rect := sdl.Rect{X: margin, Y: bottom - h, W: w, H: h}
+	saverDockCardRect = rect
 
-	fillRoundedRect(renderer, cardX, cardY, cardW, cardH, 16, sdl.Color{R: 12, G: 16, B: 26, A: 190})
-	strokeRoundedRect(renderer, cardX, cardY, cardW, cardH, 16, 1, sdl.Color{R: 255, G: 255, B: 255, A: 28})
+	g := saverGlassStyle()
+	radius := saverScaled(20, 14)
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, g.fill)
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, g.edge)
 
-	if title != "" && mediumFont != nil {
-		renderText(renderer, config, mediumFont, truncateRunes(title, 34),
-			sdl.Color{R: 238, G: 243, B: 252, A: 240}, cardX+18, cardY+12)
+	pad := saverScaled(14, 8)
+	art := rect.H - 2*pad
+	artRect := sdl.Rect{X: rect.X + pad, Y: rect.Y + pad, W: art, H: art}
+	drewArt := false
+	if cover := musicCoverArtPath(saverDockTrackPath()); cover != "" {
+		if tex := artTexture(renderer, cover); tex != nil {
+			if _, _, tw, th, err := tex.Query(); err == nil && tw > 0 && th > 0 {
+				dst := saverCoverRect(tw, th, artRect)
+				renderWithClip(renderer, artRect.X, artRect.Y, artRect.W, artRect.H, func(rr *sdl.Renderer) {
+					rr.Copy(tex, nil, &dst)
+				})
+				drewArt = true
+			}
+		}
 	}
-	state := ""
+	if !drewArt {
+		fillRoundedRect(renderer, artRect.X, artRect.Y, artRect.W, artRect.H, saverScaled(12, 8), g.raised)
+		glyph := art / 2
+		saverDrawIcon(renderer, "music", sdl.Rect{X: artRect.X + (art-glyph)/2, Y: artRect.Y + (art-glyph)/2, W: glyph, H: glyph}, false, g)
+	}
+
+	textX := artRect.X + art + pad
+	textW := rect.X + rect.W - pad - textX
+	if textW <= 0 {
+		return rect.Y
+	}
+	titleFont := getFontSized(config, "small", int(saverScaled(22, 15)))
+	smallFont := saverChipFont(config)
+	y := rect.Y + pad - 2
+	if titleFont != nil && title != "" {
+		line := ellipsize(titleFont, title, textW)
+		_, th := measureText(titleFont, line)
+		drawText(renderer, titleFont, line, textX, y, g.ink, textAlignLeft)
+		y += th + 2
+	}
+	state := "Stopped"
 	switch {
 	case paused:
 		state = "Paused"
 	case playing:
 		state = "Playing"
 	}
-	if state != "" {
-		sw, _, _ := smallFont.SizeUTF8(state)
-		renderText(renderer, config, smallFont, state, sdl.Color{R: 140, G: 170, B: 255, A: 210},
-			cardX+cardW-18-int32(sw), cardY+14)
-	}
-
-	// Progress bar and time. Without a known length there is nothing to draw
-	// along, so the row is skipped rather than showing an empty 0:00 track.
-	if dur <= 0 {
-		return
-	}
-	barX := cardX + 18
-	barY := cardY + 54
-	barW := cardW - 36
-	barH := int32(5)
-	fillRoundedRect(renderer, barX, barY, barW, barH, barH/2, sdl.Color{R: 255, G: 255, B: 255, A: 30})
-	if frac := ambientProgressFraction(pos, dur); frac > 0 {
-		w := int32(float64(barW) * frac)
-		if w < barH {
-			w = barH
-		}
-		fillRoundedRect(renderer, barX, barY, w, barH, barH/2,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 230})
-	}
 	if smallFont != nil {
-		timing := fmt.Sprintf("%s / %s", ambientTimeText(pos), ambientTimeText(dur))
-		renderText(renderer, config, smallFont, timing, sdl.Color{R: 150, G: 162, B: 184, A: 190},
-			barX, barY+12)
+		drawText(renderer, smallFont, state, textX, y, g.muted, textAlignLeft)
 	}
+	// Progress along the bottom of the text column. Without a known length
+	// there is nothing to draw along, so the bar is left out.
+	if dur > 0 && smallFont != nil {
+		timing := ambientTimeText(pos) + " / " + ambientTimeText(dur)
+		tw, tth := measureText(smallFont, timing)
+		barH := saverScaled(5, 4)
+		barY := rect.Y + rect.H - pad - tth/2 - barH/2
+		barW := textW - tw - saverScaled(12, 6)
+		if barW > 20 {
+			fillRoundedRect(renderer, textX, barY, barW, barH, barH/2, saverTrackColor(g))
+			if frac := ambientProgressFraction(pos, dur); frac > 0 {
+				fw := int32(float64(barW) * frac)
+				if fw < barH {
+					fw = barH
+				}
+				fillRoundedRect(renderer, textX, barY, fw, barH, barH/2, glassAccent())
+			}
+		}
+		drawText(renderer, smallFont, timing, rect.X+rect.W-pad-tw, rect.Y+rect.H-pad-tth, g.muted, textAlignLeft)
+	}
+	return rect.Y
+}
+
+// saverTrackColor is a progress track that reads on either glass: the glass
+// ink at a low alpha.
+func saverTrackColor(g saverGlass) sdl.Color {
+	c := g.ink
+	c.A = 46
+	return c
 }
 
 func ambientTimeText(seconds float64) string {
@@ -1050,24 +1252,24 @@ func ambientTimeText(seconds float64) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
-func ambientDrawStatus(renderer *sdl.Renderer, config *Config, smallFont *ttf.Font, now time.Time) {
-	if smallFont == nil {
+// ambientDrawStatus draws the dock's bottom-right column — the sleep timer and
+// the photo counter — right-aligned at right, its last line ending at bottom.
+func ambientDrawStatus(renderer *sdl.Renderer, config *Config, right, bottom int32, slideshow bool) {
+	font := saverChipFont(config)
+	if font == nil {
 		return
 	}
-	status := ambientReadStatus(now)
-
-	// The column is built from the lines that actually have something to say
-	// and stacked from the bottom of the dock upwards. A device that reports no
-	// battery used to get "Battery unknown" in the corner, which reads as a
-	// failure rather than a screen saver, so that line is simply absent; if the
-	// charge state is known without a percentage, that is still worth a word.
-	lines := ambientStatusLines(status, ambientSleepRemaining(), ambientPhotos.index, len(ambientPhotos.files))
-	y := screenHeight - 176 - ambientDockLift
+	photoTotal := 0
+	if slideshow {
+		photoTotal = len(ambientPhotos.files)
+	}
+	lines := ambientStatusLines(ambientSleepRemaining(), ambientPhotos.index, photoTotal)
+	lineH := int32(font.Height()) + saverScaled(6, 3)
+	y := bottom - lineH*int32(len(lines))
 	for _, line := range lines {
-		lw, _, _ := smallFont.SizeUTF8(line.text)
-		renderText(renderer, config, smallFont, line.text, line.color,
-			screenWidth-56-int32(lw), y)
-		y += 26
+		lw, _ := measureText(font, line.text)
+		renderText(renderer, config, font, line.text, line.color, right-lw, y)
+		y += lineH
 	}
 }
 
@@ -1078,35 +1280,24 @@ type ambientStatusLine struct {
 }
 
 // ambientStatusLines builds that column from the lines that actually have
-// something to say. A device that reports no battery used to get "Battery
-// unknown" in the corner, which reads as a failure rather than a screen saver,
-// so that line is simply absent; a known charge state is still worth a word.
-func ambientStatusLines(status ambientStatus, sleepLeft time.Duration, photoIndex, photoTotal int) []ambientStatusLine {
+// something to say: the sleep timer while one is armed, and the slideshow's
+// position while one runs. The battery lives in its chip at the top now, next
+// to the Wi-Fi chip, so the column never repeats it.
+func ambientStatusLines(sleepLeft time.Duration, photoIndex, photoTotal int) []ambientStatusLine {
 	var lines []ambientStatusLine
-	batteryCol := sdl.Color{R: 184, G: 196, B: 216, A: 215}
-	switch {
-	case status.battery >= 0 && status.charging:
-		lines = append(lines, ambientStatusLine{fmt.Sprintf("Battery %d%% · Charging", status.battery), batteryCol})
-	case status.battery >= 0:
-		lines = append(lines, ambientStatusLine{fmt.Sprintf("Battery %d%%", status.battery), batteryCol})
-	case status.charging:
-		lines = append(lines, ambientStatusLine{"Charging", batteryCol})
-	}
 	if sleepLeft > 0 {
 		lines = append(lines, ambientStatusLine{"Sleep in " + ambientTimeText(sleepLeft.Round(time.Second).Seconds()),
-			sdl.Color{R: 190, G: 170, B: 140, A: 210}})
+			sdl.Color{R: 236, G: 200, B: 140, A: 235}})
 	}
 	if photoTotal > 0 {
-		lines = append(lines, ambientStatusLine{fmt.Sprintf("Photo %d/%d", photoIndex+1, photoTotal),
-			sdl.Color{R: 140, G: 152, B: 174, A: 160}})
+		lines = append(lines, ambientStatusLine{fmt.Sprintf("Photo %d/%d", photoIndex+1, photoTotal), saverInkSoft})
 	}
 	return lines
 }
 
-// ambientDrawChat keeps the newest incoming messages visible on the dock. It
-// sits above the now-playing card so the two never overlap, and fades with the
-// dock's own text rather than the saver's fade-in.
-func ambientDrawChat(renderer *sdl.Renderer, config *Config, now time.Time) {
+// ambientDrawChat keeps the newest incoming messages visible on the dock, with
+// the card's bottom edge at bottom (above the now-playing card).
+func ambientDrawChat(renderer *sdl.Renderer, config *Config, now time.Time, bottom int32) {
 	notes := screensaverChatNotes(now, ssChatShown)
 	if len(notes) == 0 {
 		return
@@ -1117,56 +1308,186 @@ func ambientDrawChat(renderer *sdl.Renderer, config *Config, now time.Time) {
 	}
 	lineH := int32(font.Height()) + 6
 	cardH := int32(38) + lineH*int32(len(notes))
-	drawChatCard(renderer, config, notes, 255, 56, screenHeight-192-cardH-ambientDockLift)
+	drawChatCard(renderer, config, notes, 255, saverDockMargin(), bottom-cardH)
 }
 
-// ambientDrawButtons lays out the bottom chip row and records the hit rects.
-func ambientDrawButtons(renderer *sdl.Renderer, config *Config, font *ttf.Font) {
+// saverDockChip is one button of the dock's bottom row.
+type saverDockChip struct {
+	action  ambientAction
+	badge   string // the pad button that presses it
+	icon    string // shared glyph name; "" for the drawn skip glyphs
+	label   string
+	enabled bool
+}
+
+// ambientDrawButtons lays out the bottom button row, records the hit rects and
+// returns the row's top edge. Each button is glass with the pad button that
+// presses it, its glyph and its name; on a narrow screen the badges go first,
+// then the secondary labels, so a button is never cut.
+func ambientDrawButtons(renderer *sdl.Renderer, config *Config, now time.Time) int32 {
+	h := saverScaled(46, 32)
+	top := screenHeight - h - saverScaled(22, 8)
+	font := saverChipFont(config)
 	if font == nil {
-		return
+		return top
 	}
 	_, _, _, playing, paused := ambientNowPlaying()
-	playLabel := "A Play"
+	hasList := saverDockHasPlaylist()
+	playIcon, playLabel := "play", "Play"
 	if playing {
-		playLabel = "A Pause"
+		playIcon, playLabel = "pause", "Pause"
 	} else if paused {
-		playLabel = "A Resume"
+		playLabel = "Resume"
 	}
-	sleepLabel := "Y Sleep off"
+	sleepLabel := "Sleep off"
 	if remaining := ambientSleepRemaining(); remaining > 0 {
-		sleepLabel = "Y Sleep " + ambientDurationText(remaining)
+		sleepLabel = "Sleep " + ambientDurationText(remaining)
 	}
-	chips := []struct {
-		action ambientAction
-		label  string
-	}{
-		{ambientActionPlayPause, playLabel},
-		{ambientActionPrev, "Prev"},
-		{ambientActionNext, "Next"},
-		{ambientActionSleep, sleepLabel},
-		{ambientActionScreenOff, "X Screen off"},
-		{ambientActionExit, "B Exit"},
+	chips := [6]saverDockChip{
+		{ambientActionPlayPause, "A", playIcon, playLabel, true},
+		{ambientActionPrev, "L1", "", "Prev", hasList},
+		{ambientActionNext, "R1", "", "Next", hasList},
+		{ambientActionSleep, "Y", "clock", sleepLabel, true},
+		{ambientActionScreenOff, "X", "moon", "Screen off", true},
+		{ambientActionExit, "B", "back", "Exit", true},
 	}
 
-	y := screenHeight - 56
-	x := int32(40)
-	pad := int32(16)
-	gap := int32(10)
-	for _, chip := range chips {
-		tw, th, _ := font.SizeUTF8(chip.label)
-		w := int32(tw) + pad*2
-		h := int32(th) + 14
-		rect := sdl.Rect{X: x, Y: y - (h-30)/2, W: w, H: h}
-		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, sdl.Color{R: 16, G: 21, B: 33, A: 190})
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, 1, sdl.Color{R: 255, G: 255, B: 255, A: 34})
-		renderText(renderer, config, font, chip.label, sdl.Color{R: 214, G: 224, B: 240, A: 225},
-			rect.X+pad, rect.Y+(h-int32(th))/2)
-		ambientButtons = append(ambientButtons, ambientButton{action: chip.action, rect: rect})
-		x += w + gap
-		if x > screenWidth-40 {
+	pad := saverScaled(14, 8)
+	gap := saverScaled(8, 5)
+	iconSize := saverScaled(20, 14)
+	spacing := saverScaled(10, 6)
+	badgeH := h - saverScaled(18, 12)
+	badgePad := saverScaled(12, 8)
+	avail := screenWidth - 2*saverScaled(40, 12)
+	// Measure each layout, richest first, and keep the first that fits: with
+	// badges, then without, then with only Play keeping its label.
+	var widths [6]int32
+	var total int32
+	var badges, labels bool
+	for mode := 0; mode < 3; mode++ {
+		badges, labels = mode == 0, mode < 2
+		total = spacing * int32(len(chips)-1)
+		for i, c := range chips {
+			w := pad + iconSize + pad
+			if badges {
+				bw, _ := measureText(font, c.badge)
+				w += bw + badgePad + gap
+			}
+			if labels || i == 0 {
+				lw, _ := measureText(font, c.label)
+				w += gap + lw
+			}
+			widths[i] = w
+			total += w
+		}
+		if total <= avail {
 			break
 		}
 	}
+	x := (screenWidth - total) / 2
+	if x < 0 {
+		x = 0
+	}
+	g := saverGlassStyle()
+	flashing := !saverDockFlash.at.IsZero() && now.Sub(saverDockFlash.at) < saverDockFlashTTL
+	for i, c := range chips {
+		rect := sdl.Rect{X: x, Y: top, W: widths[i], H: h}
+		pressed := flashing && saverDockFlash.action == c.action
+		hovered := pointInRect(mouseX, mouseY, rect)
+		saverDockDrawButton(renderer, font, rect, c, g, saverDockButtonLook{
+			badge: badges, label: labels || i == 0, pressed: pressed, hovered: hovered,
+			badgeH: badgeH, badgePad: badgePad, pad: pad, gap: gap, icon: iconSize,
+		})
+		ambientButtons = append(ambientButtons, ambientButton{action: c.action, rect: rect})
+		x += widths[i] + spacing
+	}
+	return top
+}
+
+// saverDockButtonLook is how one bottom-row button is drawn this frame.
+type saverDockButtonLook struct {
+	badge, label     bool
+	pressed, hovered bool
+	badgeH, badgePad int32
+	pad, gap, icon   int32
+}
+
+// saverDockDrawButton paints one bottom-row button: glass, the accent while it
+// shows a press, a lighter glass under the mouse.
+func saverDockDrawButton(renderer *sdl.Renderer, font *ttf.Font, rect sdl.Rect, c saverDockChip, g saverGlass, look saverDockButtonLook) {
+	radius := rect.H / 2
+	fill, edge := g.fill, g.edge
+	switch {
+	case look.pressed:
+		fill = glassAccent()
+		fill.A = 110
+		edge = glassAccent()
+	case look.hovered:
+		fill = g.raised
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, fill)
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, edge)
+
+	ink := g.ink
+	if !c.enabled {
+		ink = g.muted
+	}
+	x := rect.X + look.pad
+	cy := rect.Y + rect.H/2
+	if look.badge {
+		bw, bh := measureText(font, c.badge)
+		pill := sdl.Rect{X: x, Y: cy - look.badgeH/2, W: bw + look.badgePad, H: look.badgeH}
+		pillFill := g.ink
+		pillFill.A = 34
+		fillRoundedRect(renderer, pill.X, pill.Y, pill.W, pill.H, pill.H/2, pillFill)
+		drawText(renderer, font, c.badge, pill.X+(pill.W-bw)/2, cy-bh/2, g.muted, textAlignLeft)
+		x += pill.W + look.gap
+	}
+	iconRect := sdl.Rect{X: x, Y: cy - look.icon/2, W: look.icon, H: look.icon}
+	switch c.action {
+	case ambientActionPrev:
+		saverDrawSkipGlyph(renderer, iconRect, false, ink)
+	case ambientActionNext:
+		saverDrawSkipGlyph(renderer, iconRect, true, ink)
+	default:
+		saverDrawIcon(renderer, c.icon, iconRect, !c.enabled, g)
+	}
+	x += look.icon
+	if look.label {
+		lw, lh := measureText(font, c.label)
+		if x+look.gap+lw <= rect.X+rect.W-look.pad+1 {
+			drawText(renderer, font, c.label, x+look.gap, cy-lh/2, ink, textAlignLeft)
+		}
+	}
+}
+
+// saverDrawSkipGlyph draws a previous/next-track glyph — two triangles and a
+// bar — in rect. The shared icon set has play and pause but no skip glyphs.
+func saverDrawSkipGlyph(renderer *sdl.Renderer, rect sdl.Rect, forward bool, ink sdl.Color) {
+	if rect.W < 6 || rect.H < 6 {
+		return
+	}
+	h := rect.H * 2 / 3
+	tw := rect.W * 3 / 8
+	top := rect.Y + (rect.H-h)/2
+	mid := top + h/2
+	bar := rect.W / 8
+	if bar < 2 {
+		bar = 2
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	if forward {
+		x := rect.X + (rect.W-(2*tw+bar))/2
+		fillTriangleFilled(renderer, pt{x: x, y: top}, pt{x: x, y: top + h}, pt{x: x + tw, y: mid}, ink)
+		fillTriangleFilled(renderer, pt{x: x + tw, y: top}, pt{x: x + tw, y: top + h}, pt{x: x + 2*tw, y: mid}, ink)
+		fillRoundedRect(renderer, x+2*tw, top, bar, h, 1, ink)
+		return
+	}
+	x := rect.X + (rect.W-(2*tw+bar))/2
+	fillRoundedRect(renderer, x, top, bar, h, 1, ink)
+	fillTriangleFilled(renderer, pt{x: x + bar + tw, y: top}, pt{x: x + bar + tw, y: top + h}, pt{x: x + bar, y: mid}, ink)
+	fillTriangleFilled(renderer, pt{x: x + bar + 2*tw, y: top}, pt{x: x + bar + 2*tw, y: top + h}, pt{x: x + bar + tw, y: mid}, ink)
 }
 
 func ambientDurationText(d time.Duration) string {

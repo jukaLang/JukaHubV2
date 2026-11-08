@@ -1,0 +1,21 @@
+{
+  "name": "retroformats",
+  "title": "Retro formats",
+  "version": "1.0.0",
+  "description": "Teaches the game library six formats it does not know out of the box: Pokémon mini, Watara Supervision, Vectrex, Atari Lynx, Arduboy and WASM-4.",
+  "author": "JukaHub",
+  "entry": "retroformats.sh",
+  "icon": "rom",
+  "enabled": true,
+  "actions": [
+    {"id": "list", "label": "Formats it adds"}
+  ],
+  "romParsers": [
+    {"name": "Pokémon mini", "system": "pokemini", "extensions": [".min"]},
+    {"name": "Watara Supervision", "system": "supervision", "extensions": [".sv"]},
+    {"name": "Vectrex", "system": "vectrex", "extensions": [".vec", ".gam"], "magic": "672047434520"},
+    {"name": "Atari Lynx", "system": "lynx", "extensions": [".lnx"], "magic": "4C594E58"},
+    {"name": "Arduboy", "system": "arduboy", "extensions": [".arduboy"], "magic": "504B0304"},
+    {"name": "WASM-4", "system": "wasm4", "extensions": [".wasm"], "magic": "0061736D"}
+  ]
+}

@@ -66,9 +66,12 @@
   /* Measured in JS: the pinned footer's height, so floating controls clear it. */
   --footer-height: 0px;
 
-  /* Typography */
-  --font-sans: 'Inter', Arial, sans-serif;
-  --font-mono: 'Courier New', monospace;
+  /* Typography. Inter (fonts/inter.css) is the only typeface; the generic
+     families after it only stand in for a glyph its latin subset lacks.
+     Code-like fields use Inter as well, with tabular figures, rather than a
+     second, monospaced font. */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: var(--font-sans);
   --text-xs: 0.7rem;
   --text-sm: 0.8rem;
   --text-base: 0.9rem;
@@ -229,6 +232,20 @@ textarea {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Icons. builder-icons.js draws each one as an inline SVG on a 24-unit grid
+   with 2-unit round strokes in currentColor, so an icon takes the colour of
+   the text beside it and sits a little larger than that text, the way the old
+   icon font did. Clicks go to the control around it, never to the drawing. */
+.ico {
+  display: inline-block;
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.2em;
+  overflow: visible;
+  pointer-events: none;
 }
 
 :focus-visible {
@@ -670,7 +687,7 @@ textarea {
   background: var(--sidebar-bg);
 }
 
-.search-box i {
+.search-box .ico {
   position: absolute;
   left: var(--space-md);
   top: 50%;
@@ -792,7 +809,7 @@ textarea {
   box-shadow: var(--shadow-sm);
 }
 
-.left-sidebar .element i {
+.left-sidebar .element .ico {
   font-size: 1.05rem;
   color: var(--primary);
 }
@@ -883,6 +900,7 @@ textarea {
   white-space: nowrap;
   color: var(--text-muted);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 0.66rem;
 }
 
@@ -1213,7 +1231,7 @@ body.preview-mode .preview-toggle {
   border-color: var(--primary);
 }
 
-body.preview-mode .preview-toggle i {
+body.preview-mode .preview-toggle .ico {
   font-size: 1em;
 }
 
@@ -1223,7 +1241,7 @@ body.preview-mode .preview-toggle i {
   cursor: not-allowed;
 }
 
-.reload-button.spinning i {
+.reload-button.spinning .ico {
   animation: spin 1s linear infinite;
 }
 
@@ -1293,7 +1311,7 @@ body.preview-mode .element:hover {
   letter-spacing: 0.01em;
 }
 
-.status-device i {
+.status-device .ico {
   font-size: 0.85em;
   opacity: 0.75;
 }
@@ -1369,7 +1387,7 @@ body.preview-mode .element:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.zoom-fit i {
+.zoom-fit .ico {
   font-size: 0.58rem;
   opacity: 0.7;
 }
@@ -1533,9 +1551,9 @@ body:not(.element-selected) #elementProperties > :not(.no-selection) {
   color: var(--text-muted);
 }
 
-.control-group > label i,
-.input-group > label i,
-.size-group > label i {
+.control-group > label .ico,
+.input-group > label .ico,
+.size-group > label .ico {
   color: var(--primary);
   margin-right: var(--space-xs);
 }
@@ -1648,15 +1666,16 @@ textarea:focus {
   line-height: 1.5;
 }
 
-.no-selection i {
-  display: inline-grid;
-  place-items: center;
+/* The padding is the tile around the drawing: an SVG paints into its content
+   box, so a 48 px tile holds a 24 px icon. */
+.no-selection .ico {
   width: 48px;
   height: 48px;
+  padding: 12px;
+  vertical-align: middle;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--primary) 12%, var(--surface-raised));
   color: var(--primary);
-  font-size: 1.25rem;
 }
 
 .no-selection h3 {
@@ -1727,7 +1746,7 @@ textarea:focus {
   color: var(--text-main);
 }
 
-.inspector-subtitle i {
+.inspector-subtitle .ico {
   color: var(--primary);
 }
 
@@ -1975,7 +1994,7 @@ body.ai-open .ai-panel {
   color: var(--text-main);
 }
 
-.ai-panel-header h2 .fa-wand-magic-sparkles {
+.ai-panel-header h2 .ico {
   color: var(--primary);
   margin-right: var(--space-xs);
 }
@@ -2118,15 +2137,22 @@ body.ai-open .ai-panel {
   display: none;
 }
 
+/* A chevron drawn with two borders: the triangle character it replaced is not
+   in Inter's latin subset, so it rendered in a fallback font. */
 .ai-json > summary::before {
-  content: '\25B8';
+  content: '';
   display: inline-block;
-  margin-right: var(--space-xs);
+  width: 0.38em;
+  height: 0.38em;
+  margin: 0 calc(var(--space-xs) + 0.1em) 0.1em 0.1em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
   transition: transform var(--transition-fast);
 }
 
 .ai-json[open] > summary::before {
-  transform: rotate(90deg);
+  transform: rotate(45deg);
 }
 
 .ai-json > summary:hover {
@@ -2142,7 +2168,8 @@ body.ai-open .ai-panel {
   border-radius: var(--radius-sm);
   background: var(--app-bg);
   color: var(--text-muted);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   line-height: 1.5;
   white-space: pre;
@@ -2473,6 +2500,12 @@ body.is-resizing * {
   transition: transform var(--transition-fast);
 }
 
+.remove-button .ico {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.5;
+}
+
 .element:hover .remove-button {
   display: flex;
 }
@@ -2553,6 +2586,11 @@ body.is-resizing * {
 #canvas .element[data-type="textbrowser"] {
   border: 2px dashed rgba(124, 92, 255, 0.4);
   background: rgba(124, 92, 255, 0.04);
+}
+
+/* The data source beside a Text Browser's label (setTextBrowserLabel). */
+.element .tb-source-icon {
+  color: var(--tb-system);
 }
 
 /* === Guide Modal === */
@@ -2724,6 +2762,7 @@ body.is-resizing * {
   border: 1px solid var(--border);
   border-radius: 4px;
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   color: var(--text-main);
   line-height: 1.6;
@@ -2805,6 +2844,7 @@ body.is-resizing * {
   border-radius: var(--radius-sm);
   color: var(--text-main);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
 }
 
@@ -3277,7 +3317,7 @@ body.is-resizing * {
   flex-shrink: 0;
 }
 
-.ai-toggle-button .ai-toggle-icon i {
+.ai-toggle-button .ai-toggle-icon .ico {
   font-size: 11px;
 }
 
@@ -3513,11 +3553,11 @@ body.element-selected #elementPropertiesPanel {
     font-size: 0; /* hides the text label while keeping the icon */
   }
 
-  .sidebar.collapsed .panel-header h2 i {
+  .sidebar.collapsed .panel-header h2 .ico {
     font-size: var(--text-md);
   }
 
-  .sidebar.collapsed .panel-toggle i {
+  .sidebar.collapsed .panel-toggle .ico {
     transform: rotate(180deg);
   }
 
@@ -3933,6 +3973,7 @@ body:not(.element-selected) .element:focus {
 
 .device-code-input {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   letter-spacing: 0.25em;
   font-size: 1.1rem;
 }
@@ -3991,6 +4032,9 @@ body:not(.element-selected) .element:focus {
 /* === Community gallery =================================================== */
 .gallery-content {
   width: min(1080px, 96vw);
+  /* .guide-content caps every dialog at 620px, which left the grid one card
+     wide on a desktop. The gallery is the one dialog that wants the width. */
+  max-width: min(1080px, 96vw);
   max-height: min(88vh, 900px);
   display: flex;
   flex-direction: column;
@@ -4249,6 +4293,13 @@ body:not(.element-selected) .element:focus {
   line-height: 1;
 }
 
+/* createElementFromData sets the tile's font size to the player's glyph size,
+   so the drawing is exactly one em here, not the inline 1.15. */
+.element.is-tile .tile-icon .ico {
+  width: 1em;
+  height: 1em;
+}
+
 .element.is-tile .text-content {
   position: absolute;
   left: 16px;
@@ -4293,8 +4344,10 @@ body:not(.element-selected) .element:focus {
   color: var(--player-text-dim);
 }
 
-.element.is-recent .recent-empty i {
+.element.is-recent .recent-empty .ico {
   font-size: 32px;
+  width: 1em;
+  height: 1em;
   color: var(--player-text-dim);
 }
 

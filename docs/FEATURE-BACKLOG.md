@@ -20,15 +20,21 @@ which part cannot work. Ideas with no design sketch at all live in
 JukaHub cannot draw over an emulator: the emulator owns the framebuffer and
 JukaHub is blocked waiting for it to exit, so an "in-game OSD from the hub"
 would never appear. The working design is to configure the emulator's own OSD,
-and the recording half of that already ships (RetroArch's
-`recording_output_directory` → the **Recordings** screen; see
+and the display half of that now ships: **Settings → Smart Widgets → In-game
+OSD** cycles *leave as is / quiet / notifications / notifications + stats*, which
+writes `video_font_enable`, `menu_enable_widgets`, `fps_show`,
+`framecount_show` and `memory_show` to `retroarch.cfg` just before a RetroArch
+launch — the same line-based edit with a one-time
+`retroarch.cfg.jukahub-backup` the save-state switches use
+([osdpreset.go](../player/osdpreset.go)). The recording half already ships
+(RetroArch's `recording_output_directory` → the **Recordings** screen; see
 [RECORDINGS.md](RECORDINGS.md) for why a hub-drawn overlay cannot exist).
 
-Still open: a JukaHub-managed overlay preset and the hotkey bindings
-(`input_menu_toggle`, `input_screenshot`, `input_toggle_fast_forward`).
-Deliberately not written yet — the binds are numeric button codes, and a guess
-breaks controls on a device whose mapping nobody measured. The overlay also
-needs art the repo does not ship. What is left is assets plus a profile per
+Still open, and deliberately so: the hotkey bindings (`input_menu_toggle`,
+`input_screenshot`, `input_toggle_fast_forward`, plus the enable-hotkey
+modifier). The binds are numeric button codes, and a guess breaks controls on a
+device whose mapping nobody measured, so the manager never writes an `input_*`
+key — a test fails if one appears. What is left is a measured profile per
 device, not more plumbing.
 
 ## 2. Simple mode with a PIN
@@ -45,11 +51,16 @@ updates and network work after a failed boot, with no PIN).
 
 ## 3. Box art: the quality of the match
 
-The fetch, the per-title not-found cache and the completeness ring are shipped.
-What is still open is how well a title matches: names the libretro set spells
-differently (`Zelda II` vs `Zelda II - The Adventure of Link`) are recorded as
-not found. A manual "choose image" action and a title-normalisation table are the
-next step; neither needs a new downloader.
+The fetch, the per-title not-found cache and the completeness ring are shipped,
+and so is the title-normalisation half of the matching problem: the lookup now
+also tries the same title with its accent folded, its Roman numeral written as a
+number (and back), `&` for `and`, a colon where the folder used a dash, and no
+trailing period, plus a small alias table for names that differ by more than
+spelling (`Zelda II` → `Zelda II - The Adventure of Link`).
+
+What is still open is the manual half: a "choose image" action for the titles
+normalisation cannot rescue, and an alias editor so a user can add their own
+pair without a rebuild. Neither needs a new downloader.
 
 Descriptions, genres, release dates and screenshots are a separate source
 problem: libretro only publishes images, so that data needs a provider with an

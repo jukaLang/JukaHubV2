@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "pocket-classic",
+  "name": "Pocket Classic",
+  "description": "The four-shade Game Boy palette, the hero-tile Home, clicky menus, the Gaming controls and an Arcade Corner screen of its own.",
+  "author": "JukaHub",
+  "version": "1.0.0",
+  "theme": "dmg",
+  "homeLayout": "grid",
+  "wallpaper": "none",
+  "sounds": {"enabled": true, "level": 70},
+  "startScene": "Games",
+  "pinned": ["Arcade Corner", "Games", "Playtime"],
+  "inputProfile": "Gaming",
+  "screensaver": "stars",
+  "scenes": [
+    {
+      "name": "Arcade Corner",
+      "icon": "AC",
+      "description": "Games, trophies and music, one press away",
+      "elements": [
+        {"type": "label", "text": "Arcade Corner", "x": 80, "y": 120, "font": "big", "color": "$labelColor"},
+        {"type": "label", "text": "Pick up a game, check your trophies or put some music on.", "x": 80, "y": 196, "color": "$labelColor"},
+        {"type": "button", "text": "Games", "x": 80, "y": 260, "width": "340", "height": "72", "trigger": "change_scene:Games", "color": "$labelColor", "bgColor": "$buttonColor"},
+        {"type": "button", "text": "Trophies", "x": 470, "y": 260, "width": "340", "height": "72", "trigger": "change_scene:Playtime", "color": "$labelColor", "bgColor": "$buttonColor"},
+        {"type": "button", "text": "Music", "x": 860, "y": 260, "width": "340", "height": "72", "trigger": "change_scene:MusicPlayer", "color": "$labelColor", "bgColor": "$buttonColor"}
+      ]
+    }
+  ]
+}

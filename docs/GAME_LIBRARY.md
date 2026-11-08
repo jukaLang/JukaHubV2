@@ -203,7 +203,10 @@ is plain JSON if you want to clear it.
 
 The Home screen's **Continue** card reads the same file: games and media
 recents are merged into one timeline, newest first, and the card names the
-console ("Game Boy Advance · 2h ago"). Pressing it relaunches the game through
+console ("Game Boy Advance · 2h ago"). The same timeline carries YouTube,
+local video, Live TV and podcast rows — a started episode is labelled
+**Podcast** and reopens the audio player at its saved position, so "pick up
+where I left off" does not stop at games. Pressing it relaunches the game through
 the same launcher resolution as the library — a configured override first, then
 a detected emulator — and reports a missing ROM or emulator as a toast instead
 of doing nothing.

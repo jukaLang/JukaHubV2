@@ -72,12 +72,8 @@ func sessionChatLine(i int) string {
 // real ones and no request leaves the machine.
 func runChatSession(t *testing.T, renderer *sdl.Renderer, config *Config) {
 	t.Helper()
-	prevMessages, prevOffset := chatMessages, chatScrollOffset
+	resetChatTestState(t)
 	t.Cleanup(func() {
-		chatMutex.Lock()
-		chatMessages = prevMessages
-		chatMutex.Unlock()
-		chatScrollOffset = prevOffset
 		chatImageDLMutex.Lock()
 		for url := range chatImageDownloads {
 			delete(chatImageDownloads, url)
@@ -142,12 +138,19 @@ func runChatSession(t *testing.T, renderer *sdl.Renderer, config *Config) {
 	// between, and their avatars would never be asked for.
 	element := Element{Type: "chat", X: 0, Y: 0, Width: "1240", Height: "640", Font: "small"}
 	for offset := 0; offset < sessionChatMessages; offset += 3 {
-		chatScrollOffset = offset
-		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
-		renderer.Clear()
-		renderChat(renderer, config, element)
+		chatScrollToIndex(len(messages) - 1 - offset)
+		// The first frame brings the message into view (it moves the scroll
+		// target); the second lands on it: the smooth scroll is snapped by
+		// pretending no frame came before, since the test reads, it does not
+		// watch.
+		for pass := 0; pass < 2; pass++ {
+			chatView.lastTicks = 0
+			renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
+			renderer.Clear()
+			renderChat(renderer, config, element)
+		}
 	}
-	chatScrollOffset = 0
+	chatJumpToLatest()
 }
 
 // sessionImagePNG is one page picture as a data URI. Each one is its own image

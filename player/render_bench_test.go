@@ -140,8 +140,10 @@ func BenchmarkMenuPageFrame720p(b *testing.B) {
 // repeats this every ~120 ms, so it must stay far below a frame.
 func BenchmarkHomeNavigation720p(b *testing.B) {
 	_, config := benchmarkHomeScreen(b)
-	if !homeLayout.Focus.Set(HomeFocusMedia) {
-		b.Fatal("the 720p home layout has no Media card to start from")
+	// Continue <-> Media is a Right/Left pair on the grid; Media is the right
+	// edge of its row, so starting there would time a press that goes nowhere.
+	if !homeLayout.Focus.Set(HomeFocusContinue) {
+		b.Fatal("the 720p home layout has no Continue card to start from")
 	}
 	right := &sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_RIGHT}}
 	left := &sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_LEFT}}

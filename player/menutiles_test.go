@@ -1,9 +1,11 @@
 package main
 
-// The classic Tools menu renders as a launcher page (menutiles.go): a title,
-// section headings and icon tiles. These tests pin the parts that are easy to
-// get subtly wrong — the grid must fit the panel, the grouping must be stable,
-// and a config save must not persist the generated geometry.
+// A menu scene renders as a launcher page (menutiles.go): a title, section
+// headings and icon tiles. The Settings menu is the page that uses it now (the
+// classic Tools page, the "Misc" scene, became the Go-owned Tools hub). These
+// tests pin the parts that are easy to get subtly wrong — the grid must fit the
+// panel, the grouping must be stable, and a config save must not persist the
+// generated geometry.
 
 import (
 	"strings"
@@ -13,56 +15,45 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// miscSceneIndex finds the Tools/Misc scene in a loaded config.
-func miscSceneIndex(t *testing.T, config *Config) int {
+// menuTestPage adds a Settings menu long enough to need several rows of tiles
+// and returns its index, so the tests do not depend on how many rows the
+// shipped Settings scene carries. It has two sections: APPEARANCE (elements
+// 1-3), then SYSTEM (0 and 4-8).
+func menuTestPage(t *testing.T, config *Config) int {
 	t.Helper()
-	for i, scene := range config.Scenes {
-		if scene.Name == "Misc" || scene.Name == "Tools" {
-			return i
-		}
+	rows := []struct{ text, trigger string }{
+		{"General", "change_scene:SettingsGeneral"},
+		{"Appearance", "change_scene:SettingsAppearance"},
+		{"Theme Presets", "change_scene:ThemePresets"},
+		{"Wallpaper", "change_scene:Wallpaper"},
+		{"Plugins", "change_scene:Plugins"},
+		{"Storage", "change_scene:Storage"},
+		{"Updates", "change_scene:Updates"},
+		{"Accessibility", "change_scene:Accessibility"},
+		{"About", "change_scene:About"},
 	}
-	t.Fatal("the config has no Misc/Tools scene")
-	return -1
-}
-
-// withRuntimeRows adds the shortcuts the running app injects into the scene
-// (FTP & IP and Playtime), so the layout is measured against the menu a device
-// actually shows. Both are idempotent: a config that already has them keeps
-// one copy each.
-func withRuntimeRows(config *Config, idx int) {
-	rows := []struct{ text, trigger, scene string }{
-		{"FTP & IP", "tools_open", ""},
-		{"Playtime & Achievements", "change_scene:Playtime", "Playtime"},
-	}
-	for _, row := range rows {
-		found := false
-		for _, elem := range config.Scenes[idx].Elements {
-			if strings.EqualFold(elem.Text, row.text) {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		config.Scenes[idx].Elements = append(config.Scenes[idx].Elements, Element{
+	scene := SceneConfig{Name: "Settings"}
+	for i, row := range rows {
+		scene.Elements = append(scene.Elements, Element{
 			Type:    "button",
 			Text:    row.text,
 			Trigger: row.trigger,
-			X:       24,
-			Y:       347,
+			X:       int32(24 + (i%3)*312),
+			Y:       int32(72 + (i/3)*65),
 			Width:   "296",
 			Height:  "55",
 		})
 	}
+	config.Scenes = append(config.Scenes, scene)
+	return len(config.Scenes) - 1
 }
 
 func TestMenuTilesSceneEligibility(t *testing.T) {
 	buttons := []Element{
-		{Type: "button", Text: "Terminal", Trigger: "change_scene:Terminal"},
-		{Type: "button", Text: "Cron / Tasks", Trigger: "change_scene:Cron"},
-		{Type: "button", Text: "Patch", Trigger: "change_scene:Patch"},
-		{Type: "button", Text: "FTP & IP", Trigger: "tools_open"},
+		{Type: "button", Text: "General", Trigger: "change_scene:SettingsGeneral"},
+		{Type: "button", Text: "Appearance", Trigger: "change_scene:SettingsAppearance"},
+		{Type: "button", Text: "Plugins", Trigger: "change_scene:Plugins"},
+		{Type: "button", Text: "About", Trigger: "change_scene:About"},
 	}
 
 	cases := []struct {
@@ -70,19 +61,20 @@ func TestMenuTilesSceneEligibility(t *testing.T) {
 		scene SceneConfig
 		want  bool
 	}{
-		{"tools menu", SceneConfig{Name: "Misc", Elements: buttons}, true},
-		{"renamed menu", SceneConfig{Name: "Tools", Elements: buttons}, true},
-		{"too short", SceneConfig{Name: "Misc", Elements: buttons[:3]}, false},
-		{"carries a list", SceneConfig{Name: "Misc", Elements: append(buttons,
+		{"settings menu", SceneConfig{Name: "Settings", Elements: buttons}, true},
+		{"too short", SceneConfig{Name: "Settings", Elements: buttons[:3]}, false},
+		{"carries a list", SceneConfig{Name: "Settings", Elements: append(buttons,
 			Element{Type: "textlog"})}, false},
-		{"built from labels", SceneConfig{Name: "Misc", Elements: []Element{
-			{Type: "label", Text: "Utilities"},
+		{"built from labels", SceneConfig{Name: "Settings", Elements: []Element{
+			{Type: "label", Text: "Preferences"},
 			buttons[0], buttons[1], buttons[2],
 		}}, false},
-		{"tile home layout", SceneConfig{Name: "Misc", Layout: "home", Elements: buttons}, false},
-		{"settings menu", SceneConfig{Name: "Settings", Elements: buttons}, true},
+		{"tile home layout", SceneConfig{Name: "Settings", Layout: "home", Elements: buttons}, false},
+		// The classic Tools page is retired: the Tools hub draws itself.
+		{"retired tools menu", SceneConfig{Name: "Misc", Elements: buttons}, false},
+		{"tools hub", SceneConfig{Name: toolsHubSceneName, Elements: buttons}, false},
 		{"another menu", SceneConfig{Name: "FanControl", Elements: buttons}, false},
-		{"button with no trigger", SceneConfig{Name: "Misc", Elements: []Element{
+		{"button with no trigger", SceneConfig{Name: "Settings", Elements: []Element{
 			buttons[0], buttons[1], buttons[2], {Type: "button", Text: "Dead"},
 		}}, false},
 	}
@@ -93,51 +85,20 @@ func TestMenuTilesSceneEligibility(t *testing.T) {
 	}
 }
 
-func TestMenuTilesGroupsAndIcons(t *testing.T) {
-	cases := []struct {
-		elem  Element
-		group string
-		icon  string
-	}{
-		{Element{Text: "Terminal", Trigger: "change_scene:Terminal"}, menuTilesSystem, "terminal"},
-		{Element{Text: "Cron / Tasks", Trigger: "change_scene:Cron"}, menuTilesSystem, "clock"},
-		{Element{Text: "Log Exporter", Trigger: "change_scene:LogExporter"}, menuTilesSystem, "logs"},
-		{Element{Text: "Clear Cache", Trigger: "cache_clear"}, menuTilesSystem, "cache"},
-		{Element{Text: "Playtime & Achievements", Trigger: "change_scene:Playtime"}, menuTilesSystem, "star"},
-		{Element{Text: "Net Speed", Trigger: "change_scene:NetSpeed"}, menuTilesDiagnostics, "speed"},
-		{Element{Text: "Benchmark", Trigger: "change_scene:Benchmark"}, menuTilesDiagnostics, "chart"},
-		{Element{Text: "Hardware Monitor", Trigger: "change_scene:Hardware"}, menuTilesDiagnostics, "chip"},
-		{Element{Text: "Disk Space", Trigger: "change_scene:DiskSpace"}, menuTilesDiagnostics, "disk"},
-		{Element{Text: "Patch", Trigger: "change_scene:Patch"}, menuTilesUpdates, "update"},
-		{Element{Text: "FTP & IP", Trigger: "tools_open"}, menuTilesUpdates, "network"},
-		// A tool nobody anticipated still gets a home on the page.
-		{Element{Text: "Fan Control", Trigger: "change_scene:Fan"}, menuTilesMore, ""},
-	}
-	for _, tc := range cases {
-		if got := toolsMenuGroup(tc.elem); got != tc.group {
-			t.Errorf("%q: group = %q, want %q", tc.elem.Text, got, tc.group)
-		}
-		if got := toolsMenuIcon(tc.elem); got != tc.icon {
-			t.Errorf("%q: icon = %q, want %q", tc.elem.Text, got, tc.icon)
-		}
-	}
-}
-
 func TestMenuTilesLayoutFitsThePanel(t *testing.T) {
 	config := layoutTestConfig(t)
-	idx := miscSceneIndex(t, config)
-	withRuntimeRows(config, idx)
+	idx := menuTestPage(t, config)
 	scene := config.Scenes[idx]
 
 	layout, ok := menuTilesLayoutFor(config, scene, scene.Elements)
 	if !ok {
-		t.Fatal("the real Tools menu did not lay out")
+		t.Fatal("the test menu did not lay out")
 	}
 	if len(layout.rects) != len(scene.Elements) {
 		t.Fatalf("placed %d of %d buttons", len(layout.rects), len(scene.Elements))
 	}
-	if len(layout.sections) != 3 {
-		t.Fatalf("expected the three sections, got %d: %+v", len(layout.sections), layout.sections)
+	if len(layout.sections) != 2 {
+		t.Fatalf("expected the two sections, got %d: %+v", len(layout.sections), layout.sections)
 	}
 
 	// Every section is present, in display order, and every tile is accounted
@@ -190,15 +151,18 @@ func TestMenuTilesLayoutFitsThePanel(t *testing.T) {
 		}
 	}
 
-	// The menu reads in sections, so the first tile of the page is Terminal
-	// (SYSTEM) and the update tools sit below the diagnostics.
-	terminal := layout.rects[0]
-	patch := layout.rects[8]
-	if terminal.Y >= patch.Y {
-		t.Errorf("Terminal (y=%d) is not above Patch (y=%d)", terminal.Y, patch.Y)
+	// The menu reads in sections, not in config order: Appearance (element 1)
+	// opens the page above General (element 0), which sits in SYSTEM.
+	appearance := layout.rects[1]
+	general := layout.rects[0]
+	if appearance.Y >= general.Y {
+		t.Errorf("Appearance (y=%d) is not above General (y=%d)", appearance.Y, general.Y)
 	}
-	if layout.sections[0].title != menuTilesSystem {
-		t.Errorf("first section is %q, want %q", layout.sections[0].title, menuTilesSystem)
+	if first != appearance {
+		t.Errorf("the page's first tile is %+v, want Appearance %+v", first, appearance)
+	}
+	if layout.sections[0].title != menuSettingsAppearance {
+		t.Errorf("first section is %q, want %q", layout.sections[0].title, menuSettingsAppearance)
 	}
 }
 
@@ -207,8 +171,7 @@ func TestMenuTilesLayoutFitsThePanel(t *testing.T) {
 // instead of drawing tiles over the footer.
 func TestMenuTilesSizesCoverTheDevices(t *testing.T) {
 	config := layoutTestConfig(t)
-	idx := miscSceneIndex(t, config)
-	withRuntimeRows(config, idx)
+	idx := menuTestPage(t, config)
 	scene := config.Scenes[idx]
 
 	cases := []struct {
@@ -218,8 +181,7 @@ func TestMenuTilesSizesCoverTheDevices(t *testing.T) {
 		{1280, 720, true}, // Smart Pro
 		{1024, 768, true}, // Brick
 		{1280, 800, true}, // a taller panel still fits
-		{960, 544, false}, // too short for three sections
-		{640, 480, false}, // too short and too narrow
+		{480, 320, false}, // too short for a page at all
 	}
 	for _, tc := range cases {
 		withScreen(t, tc.w, tc.h)
@@ -245,16 +207,17 @@ func TestMenuTilesSizesCoverTheDevices(t *testing.T) {
 // taken from, not to a scene index that a reload can reuse.
 func TestMenuTilesSnapshotDoesNotLeakAcrossReloads(t *testing.T) {
 	before := layoutTestConfig(t)
-	idx := miscSceneIndex(t, before)
-	withRuntimeRows(before, idx)
+	idx := menuTestPage(t, before)
 	t.Cleanup(func() { menuTilesSnapshot.valid = false })
 	menuTilesApply(before, idx)
+	if !menuTilesSnapshot.valid {
+		t.Fatal("the test page was not laid out, so there is no snapshot to leak")
+	}
 
 	// A reload parses the file again, so the scene is a fresh slice with the
-	// geometry the author wrote.
+	// geometry the author wrote (at the same index).
 	after := layoutTestConfig(t)
-	idx = miscSceneIndex(t, after)
-	withRuntimeRows(after, idx)
+	idx = menuTestPage(t, after)
 	want := after.Scenes[idx].Elements
 	wantY := want[5].Y
 	wantStyle := want[5].Style
@@ -270,8 +233,7 @@ func TestMenuTilesSnapshotDoesNotLeakAcrossReloads(t *testing.T) {
 // authored button positions.
 func TestMenuTilesNavigationFollowsTheGrid(t *testing.T) {
 	config := layoutTestConfig(t)
-	idx := miscSceneIndex(t, config)
-	withRuntimeRows(config, idx)
+	idx := menuTestPage(t, config)
 	t.Cleanup(func() { menuTilesSnapshot.valid = false })
 	menuTilesApply(config, idx)
 
@@ -287,26 +249,30 @@ func TestMenuTilesNavigationFollowsTheGrid(t *testing.T) {
 	})
 
 	scene := config.Scenes[idx]
+	if scene.Elements[1].Style != menuTilesStyle {
+		t.Fatal("the test page was not laid out as tiles")
+	}
 	fe := NewFocusEngine()
 	fe.SetGraph(scene.Name, fe.BuildGraph(scene))
-	if !fe.SetByElementIndex(0) {
-		t.Fatal("could not focus the first tool")
+	if !fe.SetByElementIndex(1) {
+		t.Fatal("could not focus Appearance")
 	}
 
-	// Right walks the SYSTEM row: Terminal → Cron / Tasks.
-	if got := fe.Navigate(ActionNavigateRight); got != 1 {
-		t.Errorf("right from Terminal focused element %d, want 1 (Cron / Tasks)", got)
+	// Right walks the APPEARANCE row: Appearance → Theme Presets.
+	if got := fe.Navigate(ActionNavigateRight); got != 2 {
+		t.Errorf("right from Appearance focused element %d, want 2 (Theme Presets)", got)
 	}
-	// Down drops into the diagnostics row under the same column: Cron / Tasks
-	// (column 2) → Benchmark.
-	if got := fe.Navigate(ActionNavigateDown); got != 3 {
-		t.Errorf("down from Cron / Tasks focused element %d, want 3 (Benchmark)", got)
+	// Down drops into SYSTEM under the same column: Theme Presets (column 2)
+	// → Plugins, the second SYSTEM tile. In config order the next row would
+	// have been Wallpaper, so this proves the drawn grid is what is walked.
+	if got := fe.Navigate(ActionNavigateDown); got != 4 {
+		t.Errorf("down from Theme Presets focused element %d, want 4 (Plugins)", got)
 	}
-	if got := fe.Navigate(ActionNavigateLeft); got != 2 {
-		t.Errorf("left from Benchmark focused element %d, want 2 (Net Speed)", got)
+	if got := fe.Navigate(ActionNavigateLeft); got != 0 {
+		t.Errorf("left from Plugins focused element %d, want 0 (General)", got)
 	}
-	if got := fe.Navigate(ActionNavigateUp); got != 0 {
-		t.Errorf("up from Net Speed focused element %d, want 0 (Terminal)", got)
+	if got := fe.Navigate(ActionNavigateUp); got != 1 {
+		t.Errorf("up from General focused element %d, want 1 (Appearance)", got)
 	}
 }
 
@@ -316,10 +282,9 @@ func overlapsRect(a, b sdl.Rect) bool {
 
 func TestMenuTilesApplyLeavesOtherScenesAlone(t *testing.T) {
 	config := layoutTestConfig(t)
-	idx := miscSceneIndex(t, config)
 	t.Cleanup(func() { menuTilesSnapshot.valid = false })
 
-	// A menu that is not a Tools page keeps the geometry the author placed.
+	// A menu that is not a launcher page keeps the geometry the author placed.
 	other := len(config.Scenes)
 	config.Scenes = append(config.Scenes, SceneConfig{Name: "FanControl", Elements: []Element{
 		{Type: "button", Text: "Low", Trigger: "fan_low", X: 10, Y: 20, Width: "100", Height: "40"},
@@ -330,19 +295,17 @@ func TestMenuTilesApplyLeavesOtherScenesAlone(t *testing.T) {
 	menuTilesApply(config, other)
 	for i, elem := range config.Scenes[other].Elements {
 		if elem.Style == menuTilesStyle {
-			t.Errorf("element %d was restyled outside the Tools menu", i)
+			t.Errorf("element %d was restyled outside a launcher page", i)
 		}
 	}
 	if config.Scenes[other].Elements[1].Y != 70 {
 		t.Errorf("the authored geometry changed: %+v", config.Scenes[other].Elements[1])
 	}
-	_ = idx
 }
 
 func TestMenuTilesApplyAndSaveRoundTrip(t *testing.T) {
 	config := layoutTestConfig(t)
-	idx := miscSceneIndex(t, config)
-	withRuntimeRows(config, idx)
+	idx := menuTestPage(t, config)
 	t.Cleanup(func() { menuTilesSnapshot.valid = false })
 
 	authored := make([]Element, len(config.Scenes[idx].Elements))
@@ -403,8 +366,7 @@ func TestMenuTilesRenderProbe(t *testing.T) {
 		t.Skip("render probe skipped in -short mode")
 	}
 	config := layoutTestConfig(t)
-	idx := miscSceneIndex(t, config)
-	withRuntimeRows(config, idx)
+	idx := menuTestPage(t, config)
 	t.Cleanup(func() { menuTilesSnapshot.valid = false })
 	t.Cleanup(ClearTextCache)
 

@@ -31,6 +31,9 @@ func resetKeyboardState(t *testing.T) {
 	prevActive := virtualKeyboardActive
 	prevAnim := vkAnimStart
 	prevRepeat, prevPressed, prevPressedUntil := vkNavRepeat, vkPressedRect, vkPressedUntil
+	prevZone, prevZoneIndex, prevCaret := vkFocusZone, vkZoneIndex, vkCaret
+	prevCaps, prevShiftAt, prevSelected := vkCapsLock, vkLastShiftAt, vkTextSelected
+	prevPadHeld := vkPadHeld
 	t.Cleanup(func() {
 		vkTarget, vkLayer = prevTarget, prevLayer
 		keyboardUpper = prevUpper
@@ -41,6 +44,10 @@ func resetKeyboardState(t *testing.T) {
 		virtualKeyboardActive = prevActive
 		vkAnimStart = prevAnim
 		vkNavRepeat, vkPressedRect, vkPressedUntil = prevRepeat, prevPressed, prevPressedUntil
+		vkFocusZone, vkZoneIndex, vkCaret = prevZone, prevZoneIndex, prevCaret
+		vkCapsLock, vkLastShiftAt, vkTextSelected = prevCaps, prevShiftAt, prevSelected
+		vkPadHeld = prevPadHeld
+		vkResetEditState()
 		vkLayoutSig = ""
 	})
 	vkLayoutSig = ""
@@ -55,6 +62,11 @@ func resetKeyboardState(t *testing.T) {
 	vkAnimStart = 0
 	vkNavRepeat = navRepeatTracker{}
 	vkClearPressFlash()
+	// The keyboard's own editing state: keys zone, caret at the end, no
+	// popup, hold, recording or caps lock, and no pad held (tests have none).
+	vkResetEditState()
+	vkCapsLock, vkLastShiftAt, vkTextSelected = false, 0, false
+	vkPadHeld = func(uint8) bool { return false }
 }
 
 func rowIndex(rows [][]string, label string) (int, int) {
@@ -395,9 +407,10 @@ func TestGroqCandidatesFallBack(t *testing.T) {
 }
 
 func TestGroqMessagesCarryContext(t *testing.T) {
-	prevMessages := chatMessages
-	t.Cleanup(func() { chatMessages = prevMessages })
-	chatMessages = []ChatMessage{
+	// The assistant's conversation is its own chat tab (chatstate.go).
+	prevMessages := chatAIMessages
+	t.Cleanup(func() { chatAIMessages = prevMessages })
+	chatAIMessages = []ChatMessage{
 		{Sender: "System", Text: "Discord: connected"},
 		{Sender: "You", Text: "what is jukahub"},
 		{Sender: "Juka AI", Text: "A handheld media launcher."},
@@ -487,9 +500,9 @@ func containsFold(haystack, needle string) bool {
 	return false
 }
 
-// TestKeyboardRendersLikeTheTheme checks the panel, keys and focus fill on real
-// pixels: it must use theme surfaces (not the old neon palette) and the
-// focused key must be the only accent-filled one.
+// TestKeyboardRendersLikeTheTheme checks the sheet, keys and focus on real
+// pixels: Home's glass sheet and caps (theme-derived, not the old neon
+// palette), the focused cap lifted and brighter, and a label on every key.
 func TestKeyboardRendersLikeTheTheme(t *testing.T) {
 	f := newProbeFrame(t)
 	resetKeyboardState(t)
@@ -516,12 +529,13 @@ func TestKeyboardRendersLikeTheTheme(t *testing.T) {
 	if vkPanelRect.W == 0 {
 		t.Fatal("panel was not laid out")
 	}
-	// Panel body uses the themed panel surface (alpha 250 over the content).
+	// The sheet is Home's glass sheet, opaque.
 	got := f.at(vkPanelRect.X+8, vkPanelRect.Y+8)
-	if !closeColor(got, ColorSurfacePanel, 16) {
-		t.Fatalf("panel pixel %v is not the themed surface %v", got, ColorSurfacePanel)
+	if !closeColor(got, vkSheetFill(), 16) {
+		t.Fatalf("sheet pixel %v is not the glass sheet %v", got, vkSheetFill())
 	}
-	// A normal key is the input surface, the focused key is the accent fill.
+	// A letter key is the glass cap; the focused key is the brighter focus cap
+	// inside Home's accent ring.
 	row, col := rowIndex(keyboard, "q")
 	keyRect := keyRectFor(row, col)
 	if keyRect == nil {
@@ -529,13 +543,18 @@ func TestKeyboardRendersLikeTheTheme(t *testing.T) {
 	}
 	// Sample near the key corner so the label glyph does not skew the colour.
 	keyPixel := f.at(keyRect.X+6, keyRect.Y+6)
-	if !closeColor(keyPixel, ColorIconSurface, 16) {
-		t.Fatalf("unfocused key pixel %v is not the input surface %v", keyPixel, ColorIconSurface)
+	if !closeColor(keyPixel, vkCapFill(), 16) {
+		t.Fatalf("unfocused key pixel %v is not the glass cap %v", keyPixel, vkCapFill())
 	}
 	focusRect := keyRectFor(0, 0)
 	focusPixel := f.at(focusRect.X+6, focusRect.Y+6)
-	if !closeColor(focusPixel, vkFocusColor(), 24) {
-		t.Fatalf("focused key pixel %v is not the keyboard highlight %v", focusPixel, vkFocusColor())
+	if !closeColor(focusPixel, vkCapFocusFill(), 16) {
+		t.Fatalf("focused key pixel %v is not the focus cap %v", focusPixel, vkCapFocusFill())
+	}
+	// The ring sits on the lifted cap's edge: 2px outside the resting cap.
+	ringPixel := f.at(focusRect.X+focusRect.W/2, focusRect.Y-1)
+	if !closeColor(ringPixel, vkFocusColor(), 40) {
+		t.Fatalf("focus ring pixel %v is not the accent %v", ringPixel, vkFocusColor())
 	}
 	// Every key must draw a label (catches missing glyphs and blank keys).
 	for i, r := range keyboardRects {
@@ -546,8 +565,9 @@ func TestKeyboardRendersLikeTheTheme(t *testing.T) {
 		for y := r.Y + r.H/4; y < r.Y+3*r.H/4; y++ {
 			for x := r.X + r.W/4; x < r.X+3*r.W/4; x++ {
 				c := f.at(x, y)
-				if !closeColor(c, ColorIconSurface, 18) &&
-					!closeColor(c, ColorSurfaceRaised, 18) &&
+				if !closeColor(c, vkCapFill(), 18) &&
+					!closeColor(c, vkCapUtilFill(), 18) &&
+					!closeColor(c, vkCapFocusFill(), 18) &&
 					!closeColor(c, vkFocusColor(), 30) {
 					nonFill++
 				}
@@ -574,11 +594,15 @@ func TestKeyboardRendersLikeTheTheme(t *testing.T) {
 
 	// The old Miami palette (0,220,255 / 255,0,200 / saturated purple) must be
 	// gone. Detect saturated neon by chroma, not brightness, so white text and
-	// the theme accent do not count.
+	// the theme accent (the action key, the focus ring) do not count.
 	neon := 0
+	accent := vkFocusColor()
 	for y := int32(0); y < probeH; y += 3 {
 		for x := int32(0); x < probeW; x += 3 {
 			c := f.at(x, y)
+			if closeColor(c, accent, 48) {
+				continue
+			}
 			r, g, b := int(c.R), int(c.G), int(c.B)
 			max, min := r, r
 			for _, v := range []int{g, b} {

@@ -120,7 +120,13 @@ func TestKeyboardControllerButtonsDriveTheGrid(t *testing.T) {
 	if !vkHandleControllerButton(uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER), cfg) || !keyboardUpper {
 		t.Fatal("L1 did not shift the letters")
 	}
+	// A second L1 after a pause turns Shift off again (a quick one locks caps,
+	// see TestKeyboardShiftDoubleTapLocksCaps).
+	vkShiftArmed = false
 	vkHandleControllerButton(uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER), cfg)
+	if keyboardUpper || vkCapsLock {
+		t.Fatal("a second L1 did not release Shift")
+	}
 
 	vkEnsureLayout()
 	keyboardPosY, keyboardPosX = rowIndex(vkRows(), "q")
@@ -129,11 +135,44 @@ func TestKeyboardControllerButtonsDriveTheGrid(t *testing.T) {
 		t.Fatalf("A typed %q, want q", unitInputValue)
 	}
 
-	if vkHandleControllerButton(uint8(sdl.CONTROLLER_BUTTON_X), cfg) {
-		t.Fatal("an unassigned button was reported as consumed")
+	// X is delete, like the console keyboards.
+	if !vkHandleControllerButton(uint8(sdl.CONTROLLER_BUTTON_X), cfg) || unitInputValue != "" {
+		t.Fatalf("X did not delete: field %q", unitInputValue)
 	}
 	if !vkHandleControllerButton(uint8(sdl.CONTROLLER_BUTTON_B), cfg) || virtualKeyboardActive {
 		t.Fatal("B did not close the keyboard")
+	}
+}
+
+// A quick double tap on Shift locks caps; the next tap releases it. Plain
+// Shift is one-shot: it drops after a letter.
+func TestKeyboardShiftDoubleTapLocksCaps(t *testing.T) {
+	resetKeyboardState(t)
+	withScreen(t, probeW, probeH)
+	vkTarget = vkTargetScene
+	cfg := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	prevScene, prevElem := activeSceneIndex, activeElementIndex
+	activeSceneIndex, activeElementIndex = -1, -1
+	t.Cleanup(func() { activeSceneIndex, activeElementIndex = prevScene, prevElem })
+	vkEnsureLayout()
+
+	toggleKeyboardCase()
+	vkInsertText("H", cfg)
+	if keyboardUpper {
+		t.Fatal("one-shot Shift stayed on after a letter")
+	}
+	toggleKeyboardCase()
+	toggleKeyboardCase()
+	if !vkCapsLock || !keyboardUpper {
+		t.Fatal("a double tap did not lock caps")
+	}
+	vkInsertText("I", cfg)
+	if !keyboardUpper {
+		t.Fatal("caps lock dropped after a letter")
+	}
+	toggleKeyboardCase()
+	if vkCapsLock || keyboardUpper {
+		t.Fatal("a tap with caps locked did not release it")
 	}
 }
 

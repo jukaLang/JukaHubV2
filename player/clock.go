@@ -102,7 +102,7 @@ func renderAnalogClock(renderer *sdl.Renderer, config *Config) {
 	// Digital time below the clock face.
 	font, _ := getCachedFont(config, "small")
 	if font != nil {
-		timeStr := now.Format("15:04:05")
+		timeStr := clockDigitsSeconds(config, now)
 		tw, _, _ := font.SizeUTF8(timeStr)
 		tx := cx - int32(tw)/2
 		ty := cy + r + 10

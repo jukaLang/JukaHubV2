@@ -299,7 +299,7 @@ func TestEmuStatusChipFitsEveryTile(t *testing.T) {
 		t.Fatalf("no font available in this build: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	cell := sdl.Rect{X: 100, Y: 100, W: emuTileMinW, H: emuTileH}
-	for _, status := range []emuStatus{emuAvailable, emuBroken, emuMissing} {
+	for _, status := range []emuStatus{emuAvailable, emuBroken, emuMissing, emuUnsupported} {
 		label, _ := emuStatusLabel(status)
 		if label == "" {
 			t.Fatalf("status %d has no label", status)

@@ -100,12 +100,13 @@ func TestKeyboardCachedLayerKeepsPanelChrome(t *testing.T) {
 			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 	}
-	// Ink differs from the panel surface, whether the theme is light or dark.
+	// Ink differs from the glass sheet, whether the theme is light or dark.
+	sheet := vkSheetFill()
 	inkPixels := func(x0, y0, x1, y1 int32) int {
 		n := 0
 		for y := y0; y <= y1; y++ {
 			for x := x0; x <= x1; x++ {
-				if !closeColor(frame.at(x, y), ColorSurfacePanel, 24) {
+				if !closeColor(frame.at(x, y), sheet, 24) {
 					n++
 				}
 			}
@@ -114,8 +115,8 @@ func TestKeyboardCachedLayerKeepsPanelChrome(t *testing.T) {
 	}
 
 	draw()
-	if got := frame.at(vkPanelRect.X+8, vkPanelRect.Y+8); !closeColor(got, ColorSurfacePanel, 16) {
-		t.Fatalf("cached panel pixel %v is not the panel surface %v", got, ColorSurfacePanel)
+	if got := frame.at(vkPanelRect.X+8, vkPanelRect.Y+8); !closeColor(got, sheet, 16) {
+		t.Fatalf("cached sheet pixel %v is not the glass sheet %v", got, sheet)
 	}
 	if n := inkPixels(vkPanelRect.X+12, vkPanelRect.Y+8, vkCloseRect.X-12, vkFieldRect.Y-6); n < 10 {
 		t.Fatalf("header text missing from the cached layer (ink pixels=%d)", n)
@@ -137,8 +138,8 @@ func TestKeyboardCachedLayerKeepsPanelChrome(t *testing.T) {
 		t.Fatalf("vkAnimOffset is %d right after starting the open animation; the slide has no frame to draw", off)
 	}
 	draw()
-	if got := frame.at(vkPanelRect.X+8, vkPanelRect.Y+8+off); !closeColor(got, ColorSurfacePanel, 16) {
-		t.Fatalf("moved panel pixel %v is not the panel surface %v", got, ColorSurfacePanel)
+	if got := frame.at(vkPanelRect.X+8, vkPanelRect.Y+8+off); !closeColor(got, sheet, 16) {
+		t.Fatalf("moved sheet pixel %v is not the glass sheet %v", got, sheet)
 	}
 }
 
@@ -226,7 +227,9 @@ func TestKeyboardFocusDrawsOverCachedLayer(t *testing.T) {
 
 	renderer := newKeyboardTestRenderer(t)
 	frame := newProbeFrame(t)
-	highlight := vkFocusColor()
+	// The focused cap is the brighter focus glass inside the accent ring.
+	highlight := vkCapFocusFill()
+	resting := vkCapFill()
 
 	renderAt := func(row, col int) {
 		keyboardPosY, keyboardPosX = row, col
@@ -256,14 +259,14 @@ func TestKeyboardFocusDrawsOverCachedLayer(t *testing.T) {
 	if got := sample(qRect); !closeColor(got, highlight, 4) {
 		t.Fatalf("focused key corner = %v, want highlight %v", got, highlight)
 	}
-	if got := sample(wRect); !closeColor(got, ColorIconSurface, 4) {
-		t.Fatalf("unfocused key corner = %v, want surface %v", got, ColorIconSurface)
+	if got := sample(wRect); !closeColor(got, resting, 4) {
+		t.Fatalf("unfocused key corner = %v, want the glass cap %v", got, resting)
 	}
 
-	// Move the cursor: the old key must return to its surface colour and the
+	// Move the cursor: the old key must return to its resting colour and the
 	// new key must be highlighted, all from the cached layer + focused key.
 	renderAt(wRow, wCol)
-	if got := sample(qRect); !closeColor(got, ColorIconSurface, 4) {
+	if got := sample(qRect); !closeColor(got, resting, 4) {
 		t.Fatalf("old focused key still highlighted: %v", got)
 	}
 	if got := sample(wRect); !closeColor(got, highlight, 4) {

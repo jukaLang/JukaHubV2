@@ -1,14 +1,14 @@
 package main
 
-// nettools2.go — four more rows for Tools → FTP & IP: a single-port check, a
-// domain registration lookup, a clock check against NTP, and this device's own
-// subnet plan.
+// nettools2.go — four more probes for Tools → Network tools: a single-port
+// check, a domain registration lookup, a clock check against NTP, and this
+// device's own subnet plan.
 //
-// The rows sit next to the earlier four because they answer the follow-up
-// questions those leave: "is this one port open", "who owns this domain", "is
-// the handheld's clock right" (a wrong clock breaks TLS), and "what range is
-// this device on". Everything is read-only; the parsers are split from the
-// platform calls so they can be tested against captured data.
+// They answer the follow-up questions the first probes leave: "is this one port
+// open", "who owns this domain", "is the handheld's clock right" (a wrong clock
+// breaks TLS), and "what range is this device on". Everything is read-only;
+// the parsers are split from the platform calls so they can be tested against
+// captured data.
 
 import (
 	"context"
@@ -77,14 +77,21 @@ func portCheckText(host string, port int, addr string, open bool, latency time.D
 
 // portCheckSummary dials one port and reports what happened.
 func portCheckSummary(raw string) (string, error) {
+	text, _, err := portCheckRun(context.Background(), raw)
+	return text, err
+}
+
+// portCheckRun dials one port within ctx and reports the text and whether the
+// port answered.
+func portCheckRun(ctx context.Context, raw string) (string, bool, error) {
 	host, port, err := netPortParseTarget(raw)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dialer := net.Dialer{Timeout: 4 * time.Second}
 	start := time.Now()
-	conn, err := dialer.Dial("tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	elapsed := time.Since(start)
 	if err != nil {
 		reason := err.Error()
@@ -96,14 +103,14 @@ func portCheckSummary(raw string) (string, error) {
 		case strings.Contains(reason, "no such host"):
 			reason = "that name does not resolve"
 		}
-		return portCheckText(host, port, "", false, elapsed, reason), nil
+		return portCheckText(host, port, "", false, elapsed, reason), false, nil
 	}
 	resolved := ""
 	if remote, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		resolved = remote.IP.String()
 	}
 	conn.Close()
-	return portCheckText(host, port, resolved, true, elapsed, ""), nil
+	return portCheckText(host, port, resolved, true, elapsed, ""), true, nil
 }
 
 // ── Domain registration lookup ─────────────────────────────────────────────
@@ -273,37 +280,46 @@ func whoisText(domain string, info rdapDomain, registrar string) string {
 
 // whoisSummary asks RDAP for a domain.
 func whoisSummary(raw string) (string, error) {
-	domain, err := netParseDomain(raw)
+	domain, info, err := whoisQuery(context.Background(), raw)
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	return whoisText(domain, info, rdapRegistrar(info.Entities)), nil
+}
+
+// whoisQuery asks RDAP for a domain within ctx and returns the parsed answer.
+func whoisQuery(ctx context.Context, raw string) (string, rdapDomain, error) {
+	domain, err := netParseDomain(raw)
+	if err != nil {
+		return "", rdapDomain{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://rdap.org/domain/"+url.PathEscape(domain), nil)
 	if err != nil {
-		return "", err
+		return "", rdapDomain{}, err
 	}
 	req.Header.Set("Accept", "application/rdap+json")
 	resp, err := netToolsHTTPClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("no answer from RDAP: %w", err)
+		return "", rdapDomain{}, fmt.Errorf("no answer from RDAP: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", rdapDomain{}, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("no registration is published for %s", domain)
+		return "", rdapDomain{}, fmt.Errorf("no registration is published for %s", domain)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("RDAP answered %s", resp.Status)
+		return "", rdapDomain{}, fmt.Errorf("RDAP answered %s", resp.Status)
 	}
 	var info rdapDomain
 	if err := json.Unmarshal(body, &info); err != nil {
-		return "", fmt.Errorf("RDAP answer could not be read: %w", err)
+		return "", rdapDomain{}, fmt.Errorf("RDAP answer could not be read: %w", err)
 	}
-	return whoisText(domain, info, rdapRegistrar(info.Entities)), nil
+	return domain, info, nil
 }
 
 // ── Clock check ────────────────────────────────────────────────────────────
@@ -372,39 +388,66 @@ func clockText(device, server time.Time, offset, rtt time.Duration, stratum int)
 // clockOffsetSummary asks a public NTP server for the time and compares it with
 // this device's clock.
 func clockOffsetSummary() (string, error) {
-	conn, err := net.DialTimeout("udp", "pool.ntp.org:123", 4*time.Second)
+	r, err := clockMeasure(context.Background())
 	if err != nil {
-		return "", fmt.Errorf("no NTP server reachable: %w", err)
+		return "", err
+	}
+	return clockText(r.device, r.server, r.offset, r.rtt, r.stratum), nil
+}
+
+// clockReading is one SNTP comparison.
+type clockReading struct {
+	device, server time.Time
+	offset, rtt    time.Duration
+	stratum        int
+}
+
+// clockMeasure runs one SNTP exchange with pool.ntp.org within ctx.
+func clockMeasure(ctx context.Context) (clockReading, error) {
+	dialer := net.Dialer{Timeout: 4 * time.Second}
+	conn, err := dialer.DialContext(ctx, "udp", "pool.ntp.org:123")
+	if err != nil {
+		return clockReading{}, fmt.Errorf("no NTP server reachable: %w", err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(4 * time.Second)); err != nil {
-		return "", err
+	deadline := time.Now().Add(4 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return clockReading{}, err
 	}
 	start := time.Now()
 	if _, err := conn.Write(netNTPRequest()); err != nil {
-		return "", err
+		return clockReading{}, err
 	}
 	packet := make([]byte, 48)
 	n, err := conn.Read(packet)
 	if err != nil {
-		return "", fmt.Errorf("no NTP answer: %w", err)
+		return clockReading{}, fmt.Errorf("no NTP answer: %w", err)
 	}
 	received := time.Now()
 	if n < 48 {
-		return "", errors.New("the NTP answer was too short to read")
+		return clockReading{}, errors.New("the NTP answer was too short to read")
 	}
 	server, ok := netNTPTimestamp(packet, 40)
 	if !ok {
-		return "", errors.New("the NTP answer carried no time")
+		return clockReading{}, errors.New("the NTP answer carried no time")
 	}
 	stratum := netNTPStratum(packet)
 	if stratum == 0 || stratum > 15 {
-		return "", errors.New("the NTP server refused to answer with a usable time")
+		return clockReading{}, errors.New("the NTP server refused to answer with a usable time")
 	}
 	// The server's time corresponds to the middle of the round trip, so compare
 	// it with the same midpoint on this device.
 	midpoint := start.Add(received.Sub(start) / 2)
-	return clockText(midpoint, server, server.Sub(midpoint), received.Sub(start), stratum), nil
+	return clockReading{
+		device:  midpoint,
+		server:  server,
+		offset:  server.Sub(midpoint),
+		rtt:     received.Sub(start),
+		stratum: stratum,
+	}, nil
 }
 
 // ── Subnet plan ────────────────────────────────────────────────────────────
@@ -466,9 +509,19 @@ func subnetText(iface string, ip net.IP, mask net.IPMask) (string, error) {
 
 // subnetSummary reads the first up, non-loopback IPv4 interface.
 func subnetSummary() (string, error) {
-	ifaces, err := net.Interfaces()
+	iface, ipnet, err := subnetInterface()
 	if err != nil {
 		return "", err
+	}
+	return subnetText(iface, ipnet.IP, ipnet.Mask)
+}
+
+// subnetInterface is the first up, non-loopback interface with an IPv4
+// address, and that address with its mask.
+func subnetInterface() (string, *net.IPNet, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", nil, err
 	}
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
@@ -483,23 +536,24 @@ func subnetSummary() (string, error) {
 			if !ok || ipnet.IP.To4() == nil {
 				continue
 			}
-			return subnetText(iface.Name, ipnet.IP, ipnet.Mask)
+			return iface.Name, ipnet, nil
 		}
 	}
-	return "", errors.New("no IPv4 address on this device: connect Wi-Fi first")
+	return "", nil, errors.New("no IPv4 address on this device: connect Wi-Fi first")
 }
 
-// ── Rows ───────────────────────────────────────────────────────────────────
+// ── The keyboard's targets ─────────────────────────────────────────────────
 
-// netPromptKind says which row asked for text on the keyboard.
+// netPromptKind says which tool asked for text on the keyboard.
 type netPromptKind int
 
 const (
 	netPromptPort netPromptKind = iota
 	netPromptWhois
-	// The rows added with the recon set: what a port presents, what it says,
-	// which hardening headers a site sends, and the codec for the strings those
-	// turn up. All four are read-only; see nettools3.go.
+	// Cert, Banner and Headers were Tools rows. The banner read is gone and the
+	// certificate and header checks moved to the Browser's site information;
+	// the kinds stay because the keyboard's title and seed tables still name
+	// them, and nothing opens the keyboard with them any more.
 	netPromptCert
 	netPromptBanner
 	netPromptHeaders
@@ -519,53 +573,11 @@ var (
 	netLastCodec    string
 )
 
-// netPortRowValue and netWhoisRowValue are what the tiles show.
-func netPortRowValue() string {
-	if netLastPort != "" {
-		return netLastPort
-	}
-	// An example address here read as a remembered target; say what the row
-	// needs instead.
-	return "Not checked yet"
-}
-
-func netWhoisRowValue() string {
-	if netLastDomain != "" {
-		return netLastDomain
-	}
-	return "Not looked up yet"
-}
-
-func netCertRowValue() string {
-	if netLastCert != "" {
-		return netLastCert
-	}
-	return "Not inspected yet"
-}
-
-func netBannerRowValue() string {
-	if netLastBanner != "" {
-		return netLastBanner
-	}
-	return "Not read yet"
-}
-
-func netHeadersRowValue() string {
-	if netLastHeaders != "" {
-		return netLastHeaders
-	}
-	return "Not checked yet"
-}
-
-func netCodecRowValue() string {
-	if netLastCodec != "" {
-		return netLastCodec
-	}
-	return "Nothing decoded yet"
-}
-
-// netPromptSubmit validates and runs the row that opened the keyboard.
+// netPromptSubmit validates what the keyboard submitted for the tool that
+// opened it and runs the tool on the Network tools page. Text that does not
+// parse reopens the keyboard with it still there, so a typo is an edit.
 func netPromptSubmit(raw string) {
+	value := strings.TrimSpace(raw)
 	switch netPrompt {
 	case netPromptPort:
 		if _, _, err := netPortParseTarget(raw); err != nil {
@@ -573,92 +585,23 @@ func netPromptSubmit(raw string) {
 			vkOpenNetPrompt(netPromptPort, raw)
 			return
 		}
-		netLastPort = strings.TrimSpace(raw)
-		value := netLastPort
-		powerRunFromTools(appConfig, "Port · "+value, "Connecting to "+value+"…", func() powerAsyncResult {
-			text, err := portCheckSummary(value)
-			return powerAsyncResult{text: text, err: err}
-		})
+		netLastPort = value
+		netToolsSubmit("portcheck", value)
 	case netPromptWhois:
 		if _, err := netParseDomain(raw); err != nil {
 			ShowToast(err.Error(), ToastKindWarning)
 			vkOpenNetPrompt(netPromptWhois, raw)
 			return
 		}
-		netLastDomain = strings.TrimSpace(raw)
-		value := netLastDomain
-		powerRunFromTools(appConfig, "WHOIS · "+value, "Asking RDAP about "+value+"…", func() powerAsyncResult {
-			text, err := whoisSummary(value)
-			return powerAsyncResult{text: text, err: err}
-		})
-	case netPromptCert:
-		if _, _, err := netTargetHostPort(raw, 443); err != nil {
-			ShowToast(err.Error(), ToastKindWarning)
-			vkOpenNetPrompt(netPromptCert, raw)
-			return
-		}
-		netLastCert = strings.TrimSpace(raw)
-		value := netLastCert
-		powerRunFromTools(appConfig, "TLS · "+value, "Reading the certificate…", func() powerAsyncResult {
-			text, err := certSummary(value)
-			return powerAsyncResult{text: text, err: err}
-		})
-	case netPromptBanner:
-		if _, _, err := netPortParseTarget(raw); err != nil {
-			ShowToast(err.Error(), ToastKindWarning)
-			vkOpenNetPrompt(netPromptBanner, raw)
-			return
-		}
-		netLastBanner = strings.TrimSpace(raw)
-		value := netLastBanner
-		powerRunFromTools(appConfig, "Banner · "+value, "Waiting for "+value+"…", func() powerAsyncResult {
-			text, err := bannerSummary(value)
-			return powerAsyncResult{text: text, err: err}
-		})
-	case netPromptHeaders:
-		if _, err := netToolsParseURL(raw); err != nil {
-			ShowToast(err.Error(), ToastKindWarning)
-			vkOpenNetPrompt(netPromptHeaders, raw)
-			return
-		}
-		netLastHeaders = strings.TrimSpace(raw)
-		value := netLastHeaders
-		powerRunFromTools(appConfig, "Headers · "+value, "Fetching "+value+"…", func() powerAsyncResult {
-			text, err := headerAuditSummary(value)
-			return powerAsyncResult{text: text, err: err}
-		})
+		netLastDomain = value
+		netToolsSubmit("whois", value)
 	case netPromptCodec:
-		if strings.TrimSpace(raw) == "" {
-			ShowToast("type or paste a string first", ToastKindWarning)
+		if value == "" {
+			ShowToast("Type or paste a string first", ToastKindWarning)
 			vkOpenNetPrompt(netPromptCodec, raw)
 			return
 		}
-		netLastCodec = strings.TrimSpace(raw)
-		value := netLastCodec
-		powerRunFromTools(appConfig, "Codec", "Decoding…", func() powerAsyncResult {
-			text, err := codecSummary(value)
-			return powerAsyncResult{text: text, err: err}
-		})
+		netLastCodec = value
+		netToolsSubmit("codec", value)
 	}
-}
-
-// powerProbePortCheck and powerProbeWhois are the tiles' A actions.
-func powerProbePortCheck() { vkOpenNetPrompt(netPromptPort, "") }
-func powerProbeWhois()     { vkOpenNetPrompt(netPromptWhois, "") }
-func powerProbeCert()      { vkOpenNetPrompt(netPromptCert, "") }
-func powerProbeBanner()    { vkOpenNetPrompt(netPromptBanner, "") }
-func powerProbeHeaders()   { vkOpenNetPrompt(netPromptHeaders, "") }
-func powerProbeCodec()     { vkOpenNetPrompt(netPromptCodec, "") }
-func powerProbeClock(config *Config) {
-	powerRunFromTools(config, "Clock check", "Asking pool.ntp.org…", func() powerAsyncResult {
-		text, err := clockOffsetSummary()
-		return powerAsyncResult{text: text, err: err}
-	})
-}
-
-func powerProbeSubnet(config *Config) {
-	powerRunFromTools(config, "Subnet plan", "Reading this device's address…", func() powerAsyncResult {
-		text, err := subnetSummary()
-		return powerAsyncResult{text: text, err: err}
-	})
 }

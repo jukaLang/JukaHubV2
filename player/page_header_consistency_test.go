@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"testing"
-	"time"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -318,17 +317,6 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			rect:   func() sdl.Rect { return musicSettings.panelRect },
 		},
 		{
-			name: "Watch Party",
-			begin: func() func() {
-				prev, prevRect := partyUI, partyPanelRect
-				partyUI.open = true
-				partyUI.history = false
-				return func() { partyUI, partyPanelRect = prev, prevRect }
-			},
-			render: partyRender,
-			rect:   func() sdl.Rect { return partyPanelRect },
-		},
-		{
 			name: "Music PEQ",
 			begin: func() func() {
 				prev := musicEQ.panel
@@ -341,42 +329,49 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			rect:   func() sdl.Rect { return musicPEQPanelRect() },
 		},
 		{
-			name: "Tools",
+			// The Tools pages are full-screen scenes now; what they open over
+			// themselves (a probe's result, a server's or a network's details,
+			// the Wi-Fi diagnostics) is one shared sheet on the shared card.
+			name: "Network tools / result sheet",
 			begin: func() func() {
-				prev, prevRect := toolsPanel, toolsPanelRect
-				toolsPanel.open = true
-				toolsPanel.cursor = 0
-				return func() { toolsPanel, toolsPanelRect = prev, prevRect }
+				prev := netTools.sheet
+				netTools.sheet = toolsHubSheet{
+					open:     true,
+					title:    "Public IP",
+					subtitle: "Updated just now",
+					icon:     "public-ip",
+					text:     "Public IP: 203.0.113.9\nCountry:   AU\nEdge:      SYD",
+					pills: []toolsHubPill{
+						{id: "run", label: "Run again", accent: true},
+						{id: "copy", label: "Copy"},
+						{id: "close", label: "Close"},
+					},
+				}
+				return func() { netTools.sheet = prev }
 			},
-			render: renderToolsPanel,
-			rect:   func() sdl.Rect { return toolsPanelRect },
+			render: func(r *sdl.Renderer, c *Config) { toolsHubDrawSheet(r, c, &netTools.sheet) },
+			rect:   func() sdl.Rect { return netTools.sheet.card },
 		},
 		{
-			name: "Wi-Fi",
+			name: "Wi-Fi / network details",
 			begin: func() func() {
-				prev, prevRect := wifiPanel, wifiPanelRect
-				wifiPanel.open = true
-				wifiPanel.diagOpen = false
-				// No backend in the probe: the panel draws its "no adapter" state
-				// instead of kicking off a scan goroutine.
-				wifiPanel.available = false
-				return func() { wifiPanel, wifiPanelRect = prev, prevRect }
+				prev := wifiScr.sheet
+				wifiScr.sheet = toolsHubSheet{
+					open:     true,
+					title:    "HomeNet",
+					subtitle: "Connected",
+					icon:     "wifi",
+					text:     "Status:     Connected\nSignal:     -47 dBm · excellent signal\nIP address: 192.168.1.20",
+					pills: []toolsHubPill{
+						{id: "reconnect", label: "Reconnect", accent: true},
+						{id: "forget", label: "Forget", danger: true},
+						{id: "close", label: "Close"},
+					},
+				}
+				return func() { wifiScr.sheet = prev }
 			},
-			render: renderWiFiPanel,
-			rect:   func() sdl.Rect { return wifiPanelRect },
-		},
-		{
-			name: "Wi-Fi diagnostics",
-			begin: func() func() {
-				prev, prevRect := wifiPanel, wifiPanelRect
-				wifiPanel.open = true
-				wifiPanel.diagOpen = true
-				// A fresh probe stamp keeps the async reader from firing mid-frame.
-				wifiPanel.diag.At = time.Now()
-				return func() { wifiPanel, wifiPanelRect = prev, prevRect }
-			},
-			render: renderWiFiPanel,
-			rect:   func() sdl.Rect { return wifiPanelRect },
+			render: func(r *sdl.Renderer, c *Config) { toolsHubDrawSheet(r, c, &wifiScr.sheet) },
+			rect:   func() sdl.Rect { return wifiScr.sheet.card },
 		},
 		{
 			name: "Accessibility",

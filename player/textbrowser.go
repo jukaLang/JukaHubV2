@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	htmlstd "html"
 	"io"
@@ -294,6 +295,13 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	// A page that is still on the wire has no document yet; the renderer
 	// shows a loading card instead of a one-line text stub.
 	loading := source == textBrowserSourceWeb && strings.HasPrefix(text, "Loading ")
+	// A failed load (the offline card) or JukaLand owns the page area: the
+	// header then has no line count to report (brw_offline.go).
+	pageOwned := false
+	if source == textBrowserSourceWeb {
+		_, failed := brwFailureFor(element.Variable)
+		pageOwned = failed || (brwGame.active && brwGame.variable == element.Variable)
+	}
 	if source == textBrowserSourceWeb {
 		webWidth := elemW - 14
 		styledDoc = browserDocumentFor(element.Variable)
@@ -354,7 +362,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		// A zoomed page names its scale on the toolbar chip (see the zoom
 		// chip below), which is the one place the reader both reads and
 		// changes it. The header stays free for the page's own status.
-		if text != "" && totalLines > 0 && !loading {
+		if text != "" && totalLines > 0 && !loading && !pageOwned {
 			lineInfo := ""
 			if totalLines > maxLines {
 				startLine := int(textBrowserScrollY) + 1
@@ -417,7 +425,14 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			address = styledDoc.URL // the final URL after redirects, not the requested URL
 		}
 		if labelFont != nil {
+			// The padlock opens Site info (brw_siteinfo.go): a lock for https,
+			// an open lock for http, an info mark while nothing is loaded.
+			lock := brwPadlockRect(config, element)
+			brwDrawPadlock(renderer, lock, styledDoc)
 			icon := sdl.Rect{X: addressRect.X + 6, Y: addressRect.Y + (addressRect.H-20)/2, W: 20, H: 20}
+			if lock.W > 0 {
+				icon.X = lock.X + lock.W + 6
+			}
 			drawBrowserFavicon(renderer, config, styledDoc, icon)
 			textX := icon.X + icon.W + 6
 			avail := addressRect.X + addressRect.W - textX - 8
@@ -538,6 +553,13 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 	if startIdx < 0 {
 		startIdx = 0
+	}
+
+	// The offline card (or JukaLand, played from it) takes the whole page area
+	// and the cookie strip under it; nothing of the page is drawn under them.
+	if source == textBrowserSourceWeb && brwDrawPageState(renderer, config, element,
+		sdl.Rect{X: element.X + 7, Y: contentTop + 4, W: elemW - 14, H: contentH}, cookieStripH) {
+		return
 	}
 
 	loading = styledLayout == nil && loading
@@ -669,49 +691,52 @@ func browserDrawFindStatus(renderer *sdl.Renderer, config *Config, element Eleme
 }
 
 // drawTextBrowserLoading paints the placeholder shown while a page is still on
-// the wire: a small card with pulsing dots, so a slow page reads as work in
-// progress instead of an empty panel with one line of text in the corner.
+// the wire: a glass card naming the address, with three breathing dots and a
+// sweeping bar, so a slow page reads as work in progress instead of an empty
+// panel. Everything moves off the frame clock, so nothing has to be updated
+// from the network goroutine.
 func drawTextBrowserLoading(renderer *sdl.Renderer, config *Config, element Element, top, height int32, accent sdl.Color) {
 	if renderer == nil || height < 90 {
 		return
 	}
-	panelW := getElementWidth(element, 1100) - 80
-	if panelW > 560 {
-		panelW = 560
-	}
-	if panelW < 240 {
-		panelW = 240
-	}
 	fullW := getElementWidth(element, 1100)
+	panelW := min(max(fullW-80, int32(240)), int32(560))
 	x := element.X + (fullW-panelW)/2
-	cardH := int32(104)
+	cardH := int32(112)
 	y := top + (height-cardH)/2
 
-	fillRoundedRect(renderer, x, y, panelW, cardH, 10, ColorPanelRaised)
-	strokeRoundedRect(renderer, x, y, panelW, cardH, 10, 1, ColorDivider)
-	// Accent rail: the card reads as the browser's own surface rather than a
-	// floating dialog.
-	fillRoundedRect(renderer, x, y, 4, cardH, 2, accent)
+	fillRoundedRect(renderer, x, y, panelW, cardH, 20, glassSheetFill())
+	strokeRoundedRect(renderer, x, y, panelW, cardH, 20, 1, glassSheetEdge())
+	drawOverlayCardAccent(renderer, x, y, panelW)
 
-	// Three accent dots breathe in sequence; the phase comes from the frame
-	// clock, so there is nothing to update from the network goroutine.
-	phase := float64(sdl.GetTicks64()%1200) / 1200.0 * 2 * math.Pi
-	dotX := x + panelW - 74
-	dotY := y + 26
+	now := sdl.GetTicks64()
+	phase := float64(now%1200) / 1200.0 * 2 * math.Pi
+	dotX := x + panelW - 72
 	for i := 0; i < 3; i++ {
 		pulse := 0.5 + 0.5*math.Sin(phase-float64(i)*0.7)
-		alpha := uint8(90 + 150*pulse)
-		fillRoundedRect(renderer, dotX+int32(i*16), dotY, 10, 10, 5, sdl.Color{R: accent.R, G: accent.G, B: accent.B, A: alpha})
+		fillRoundedRect(renderer, dotX+int32(i*16), y+24, 10, 10, 5, WithAlpha(accent, uint8(90+150*pulse)))
 	}
 
-	labelFont, _ := getCachedFont(config, "small")
-	if labelFont == nil {
+	// An indeterminate bar along the bottom: a short accent segment sweeping
+	// across a hairline track.
+	track := sdl.Rect{X: x + 22, Y: y + cardH - 18, W: panelW - 44, H: 4}
+	fillRoundedRect(renderer, track.X, track.Y, track.W, track.H, 2, glassA(22))
+	seg := track.W / 4
+	sweep := float64(now%1500) / 1500.0
+	segX := track.X - seg + int32(sweep*float64(track.W+seg))
+	left, right := max(segX, track.X), min(segX+seg, track.X+track.W)
+	if right > left {
+		fillRoundedRect(renderer, left, track.Y, right-left, track.H, 2, accent)
+	}
+
+	titleFont := getFontSized(config, "small", 19)
+	labelFont := getFontSized(config, "small", 15)
+	if titleFont == nil || labelFont == nil {
 		return
 	}
-	renderText(renderer, config, labelFont, "LOADING PAGE", accent, x+20, y+16)
-	address := ellipsize(labelFont, textBrowserAddress(config), panelW-40)
-	renderText(renderer, config, labelFont, address, ColorTextPrimary(), x+20, y+46)
-	renderText(renderer, config, labelFont, "Rendering text as soon as the page arrives", ColorTextSecondary(), x+20, y+72)
+	renderText(renderer, config, titleFont, "Loading page", ColorTextPrimary(), x+22, y+18)
+	address := ellipsize(labelFont, textBrowserAddress(config), panelW-44)
+	renderText(renderer, config, labelFont, address, ColorTextSecondary(), x+22, y+18+int32(titleFont.Height())+6)
 }
 
 // findTextBrowserVariable returns the variable name of the first textbrowser
@@ -1082,6 +1107,10 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	if outputVariable == "" {
 		outputVariable = findTextBrowserVariable(config)
 	}
+	// Try again on the offline card has to reach the network even while the
+	// monitor still says offline; the pass is good for this one load.
+	bypassOffline := brwRetryBypass
+	brwRetryBypass = false
 	address, err := normalizeTextBrowserURL(rawURL)
 	if err != nil {
 		config.Variables.Custom[outputVariable] = "Browser error: " + err.Error()
@@ -1123,6 +1152,11 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	requestID := textBrowserRequestSequence[outputVariable]
 	textBrowserRequestMutex.Unlock()
 
+	// A new load replaces whatever owned the page area: the last failure's
+	// card, and JukaLand if it was being played from it.
+	brwSetFailure(outputVariable, nil)
+	brwGameEnd(config)
+
 	if useCache {
 		if page, ok := browserCachedPage(address); ok {
 			showBrowserPage(config, outputVariable, page)
@@ -1131,6 +1165,20 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 			}
 			return
 		}
+	}
+
+	// Known to be offline: show the offline card now instead of waiting for
+	// a name lookup to fail. A cached page (above) still opens.
+	if !IsOnline() && !bypassOffline {
+		fail := brwNewFailure(brwFailOffline, address, "")
+		config.Variables.Custom[outputVariable] = fail.text()
+		setBrowserLinks(outputVariable, nil)
+		setBrowserDocument(outputVariable, nil)
+		brwSetFailure(outputVariable, &fail)
+		if recordHistory {
+			browserRecordURL(address)
+		}
+		return
 	}
 
 	config.Variables.Custom[outputVariable] = "Loading " + address + " ..."
@@ -1157,6 +1205,9 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 				isCurrent := textBrowserRequestSequence[variable] == id
 				textBrowserRequestMutex.Unlock()
 				if isCurrent {
+					fail := brwNewFailure(brwFailOther, pageURL, "The reader hit an internal error on this page.")
+					fail.Title = "This page could not be shown"
+					brwSetFailure(variable, &fail)
 					publishCustom(variable, "This page could not be shown: the reader hit an internal error on it.")
 				}
 			}
@@ -1188,6 +1239,8 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		})
 		setBrowserLinks(variable, page.Links)
 		setBrowserDocument(variable, page.Doc)
+		// A failure draws its card (brw_offline.go); a page clears the last one.
+		brwSetFailure(variable, page.Fail)
 		publishCustom(variable, page.Text)
 	}(outputVariable, address, requestID)
 }
@@ -1202,6 +1255,7 @@ func showBrowserPage(config *Config, variable string, page browserPage) {
 	})
 	setBrowserLinks(variable, page.Links)
 	setBrowserDocument(variable, page.Doc)
+	brwSetFailure(variable, nil)
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = map[string]interface{}{}
 	}
@@ -1277,7 +1331,9 @@ func browseWebPageResult(rawURL string) browserPage {
 	resetBrowserAdBlockCount()
 	address, err := normalizeTextBrowserURL(rawURL)
 	if err != nil {
-		return browserPage{Text: "Browser error: " + err.Error()}
+		f := brwNewFailure(brwFailOther, strings.TrimSpace(rawURL), "That address can't be opened: "+err.Error()+".")
+		f.Title = "Can't open that address"
+		return browserPage{Text: "Browser error: " + err.Error(), Fail: &f}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), textBrowserFetchTimeout)
 	defer cancel()
@@ -1288,7 +1344,13 @@ func browseWebPageResult(rawURL string) browserPage {
 	client.CheckRedirect = textBrowserRedirectPolicy
 	fetched, err := fetchTextBrowserDocument(ctx, client, address)
 	if err != nil {
-		return browserPage{Text: err.Error()}
+		var fetchErr *brwFetchError
+		if errors.As(err, &fetchErr) {
+			f := fetchErr.fail
+			return browserPage{Text: err.Error(), Fail: &f}
+		}
+		f := brwNewFailure(brwFailOther, address, brwFriendlyNetError(err))
+		return browserPage{Text: f.text(), Fail: &f}
 	}
 	body, truncated, pageURL := fetched.Body, fetched.Truncated, fetched.URL
 	// Ad and tracker scripts are removed before the script pass: there is no
@@ -1408,35 +1470,47 @@ func fetchTextBrowserDocument(ctx context.Context, client *http.Client, address 
 // fetchTextBrowserOnce is one request and body read, with the wording the error
 // card shows.
 func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address string) (textBrowserDocument, error) {
+	fail := func(kind brwFailKind, detail string) (textBrowserDocument, error) {
+		return textBrowserDocument{}, &brwFetchError{fail: brwNewFailure(kind, address, detail)}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return textBrowserDocument{}, fmt.Errorf("Browser error: %w", err)
+		return fail(brwFailOther, "That address can't be opened.")
 	}
 	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
 	resp, err := client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return textBrowserDocument{}, fmt.Errorf("Could not load %s\nTimed out after %s. Check Wi-Fi, then press Reload (or Y to search).",
-				address, textBrowserFetchTimeout)
+		// Nothing below shows the transport error itself: a resolver failure
+		// is "offline" or "site not found", never "dial tcp: lookup …". A
+		// failed lookup is the one error offline and a mistyped host share,
+		// so it gets a quick look at whether the internet answers at all.
+		timedOut := ctx.Err() != nil
+		online := IsOnline()
+		if online && !timedOut && brwLooksLikeResolverFailure(err) && !brwProbeOnline() {
+			online = false
 		}
-		return textBrowserDocument{}, fmt.Errorf("Could not load %s\n%s", address, err.Error())
+		return textBrowserDocument{}, &brwFetchError{fail: brwClassifyError(address, err, timedOut, online)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		// The client follows every redirect it can, so a 3xx here is a reply
 		// with no Location to follow. Say that instead of a bare status code.
-		return textBrowserDocument{}, fmt.Errorf("Could not load %s\nHTTP %s — the redirect named no usable target", address, resp.Status)
+		return fail(brwFailHTTP, "HTTP "+resp.Status+" — the redirect named no usable target")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return textBrowserDocument{}, fmt.Errorf("Could not load %s\nHTTP %s", address, resp.Status)
+		return fail(brwFailHTTP, "HTTP "+resp.Status)
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if contentType != "" && !strings.Contains(contentType, "html") {
-		return textBrowserDocument{}, fmt.Errorf("This page is not HTML (%s).\nTry a website that serves readable HTML.", contentType)
+		kind := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+		return fail(brwFailContent, "This address is a "+kind+" file, not a web page.")
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, textBrowserMaxPageBytes+1))
 	if err != nil {
-		return textBrowserDocument{}, fmt.Errorf("Could not read %s\n%s", address, err.Error())
+		if ctx.Err() != nil {
+			return fail(brwFailTimeout, "")
+		}
+		return fail(brwFailConnect, "The page stopped arriving halfway. Try again.")
 	}
 	body, truncated := truncateTextBrowserBody(body, textBrowserMaxPageBytes)
 	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated}, nil
@@ -2046,7 +2120,7 @@ func browseJSONContent(element Element) (result string) {
 	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
 		data, err := fetchURL(url, 10*time.Second)
 		if err != nil {
-			return fmt.Sprintf("Failed to fetch URL:\n%s\n%s", url, err.Error())
+			return fmt.Sprintf("Failed to fetch URL:\n%s\n%s", url, plainNetworkError(err))
 		}
 		jsonData = data
 		sb.WriteString(fmt.Sprintf("Source: %s\n\n", url))

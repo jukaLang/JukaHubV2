@@ -692,26 +692,31 @@ func TestWiFiMeterClickOpensPicker(t *testing.T) {
 		}
 		return "OK\n", nil
 	})
-	prevPanel, prevRects := wifiPanel, wifiRowRects
+	config := toolsHubTestNav(t)
 	prevRect := statusWiFiRect
-	t.Cleanup(func() {
-		wifiPanel, wifiRowRects = prevPanel, prevRects
-		statusWiFiRect = prevRect
-	})
+	t.Cleanup(func() { statusWiFiRect = prevRect })
 
 	wifiPanel = wifiPanelState{}
 	statusWiFiRect = sdl.Rect{X: 900, Y: 8, W: 40, H: 30}
 
 	// A click outside the meter stays unhandled.
-	if handleChromeBarClick(500, 500, &Config{}) {
+	if handleChromeBarClick(500, 500, config) {
 		t.Fatal("a click far from the status cluster was consumed")
 	}
-	if !handleChromeBarClick(statusWiFiRect.X+4, statusWiFiRect.Y+4, &Config{}) {
+	if !handleChromeBarClick(statusWiFiRect.X+4, statusWiFiRect.Y+4, config) {
 		t.Fatal("a click on the Wi-Fi meter was not handled")
 	}
-	if !wifiPanel.open {
-		t.Fatal("the Wi-Fi picker did not open from the meter")
+	page := sceneIndexExact(config, wifiScrSceneName)
+	if pendingSceneIndex != page || transitionPhase != "fade-out" {
+		t.Fatalf("the meter started phase %q to scene %d, want the Wi-Fi page (%d)", transitionPhase, pendingSceneIndex, page)
 	}
+
+	// Arriving on the page starts a visit, and the visit scans.
+	currentSceneIndex, pendingSceneIndex, transitionPhase = page, -1, "none"
+	toolsScenesEnter(config, wifiScrSceneName)
 	waitForWiFiIdle(t)
-	closeWiFiPanel()
+	if len(wifiPanel.networks) == 0 || wifiPanel.networks[0].SSID != "HomeNet" {
+		t.Fatalf("the page did not scan on arrival: %+v (err %q)", wifiPanel.networks, wifiPanel.err)
+	}
+	wifiScrEndVisit()
 }

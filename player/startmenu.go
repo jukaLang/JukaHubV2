@@ -79,11 +79,25 @@ func startMenuSceneEntries(config *Config) []startMenuEntry {
 		return nil
 	}
 	preferOrder := []string{
-		"Main", "Tube", "LiveTV", "FileExplorer", "Chat", "Calculator",
+		"Main", "Tube", "LiveTV", "FileExplorer", "Chat", toolsHubSceneName, "Calculator",
 		"Pomodoro", "Alarm", "Dashboard", "Cron", "Settings",
 		"JukaLand", "CanvasSandbox", "Favorites", "Terminal",
 		"Dictionary", "PDFReader", "MusicPlayer", "Notes",
 		"Games", "Browser", "TextBrowser", "Apps", "Packages", "Shorts",
+	}
+	// The experience pack in force lists the screens it pins first (xpack.go).
+	if pins := xpackPinnedScenes(); len(pins) > 0 {
+		order := append([]string(nil), pins...)
+		for _, name := range preferOrder {
+			pinned := false
+			for _, pin := range pins {
+				pinned = pinned || pin == name
+			}
+			if !pinned {
+				order = append(order, name)
+			}
+		}
+		preferOrder = order
 	}
 	seen := make(map[string]bool)
 	var entries []startMenuEntry
@@ -146,6 +160,7 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	}
 
 	tools := []startMenuEntry{
+		{name: "Network tools", icon: "N", action: func(c *Config) { netToolsOpen(c) }},
 		{name: "Downloads", icon: "D", action: func(*Config) { openDownloadsPanel() }},
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
@@ -159,7 +174,7 @@ func startMenuGroups(config *Config) []startMenuGroup {
 
 	device := []startMenuEntry{
 		{name: "Quick Settings", icon: "Q", action: func(*Config) { qsToggleOpen() }},
-		{name: "Wi-Fi Networks", icon: "N", action: func(*Config) { openWiFiPanel() }},
+		{name: "Wi-Fi Networks", icon: "W", action: func(c *Config) { wifiScrOpen(c) }},
 		{name: "Screenshot", icon: "S", action: func(*Config) { requestScreenshot() }},
 		{name: "Sleep Screen", icon: "Z", action: func(*Config) { activateScreensaver() }},
 		{name: "Ambient", icon: "D", action: func(c *Config) { ambientEnter(c) }},
@@ -173,6 +188,16 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	// the picker is the control that turns it on, so the row stays.
 	if !IsWindows() && !wifiEntryReachable() {
 		device = withoutStartMenuEntry(device, "Wi-Fi Networks")
+	}
+	// Handoff: send what is on screen to a paired device, which offers it on
+	// its Home (hoff.go). Listed first, and only while devices are paired.
+	if targets := hoffSendTargets(); len(targets) > 0 {
+		sends := make([]startMenuEntry, 0, len(targets)+len(device))
+		for _, p := range targets {
+			id := p.ID
+			sends = append(sends, startMenuEntry{name: "Send to " + p.Name, icon: ">", action: func(c *Config) { hoffSendTo(c, id) }})
+		}
+		device = append(sends, device...)
 	}
 
 	// A config may carry its own scene for something the menu already offers as
@@ -474,8 +499,15 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 			if focused {
 				iconCol = ColorTextPrimary()
 			}
+			label := entry.name
+			if _, blocked := offlineSceneBlock(entry.scene); blocked {
+				// Dimmed and marked, so the menu says what will not work before
+				// the press says it again.
+				iconCol, nameCol = ColorTextTertiary(), ColorTextTertiary()
+				label = ellipsize(font, entry.name+"  · "+offlineTileTag, rect.W-56)
+			}
 			renderText(renderer, config, font, entry.icon, iconCol, rect.X+12, rect.Y+6)
-			renderText(renderer, config, font, ellipsize(font, entry.name, rect.W-56), nameCol, rect.X+46, rect.Y+6)
+			renderText(renderer, config, font, ellipsize(font, label, rect.W-56), nameCol, rect.X+46, rect.Y+6)
 		}
 
 		// ── Footer ─────────────────────────────────────────────────────
@@ -642,8 +674,20 @@ func startMenuActivate(config *Config) {
 	curationRowHits = nil
 	if app.action != nil {
 		app.action(config)
+	} else if app.scene == toolsHubSceneName {
+		// The hub opens at its top through its own entry point, like the Home
+		// card does.
+		toolsHubOpen(config)
 	} else if app.scene != "" {
-		if idx := findSceneIndex(config, app.scene); idx >= 0 {
+		// The exact name: findSceneIndex falls back to Home for a scene the
+		// config lost, which read as the menu doing nothing.
+		if idx := sceneIndexExact(config, app.scene); idx >= 0 {
+			// The row is dimmed already; pressing it names the missing link
+			// instead of opening a screen that would fail on its first fetch.
+			if reason, blocked := offlineSceneBlock(app.scene); blocked {
+				showToast(reason, ToastWarn())
+				return
+			}
 			changeSceneTo(config, idx)
 		}
 	}
@@ -651,11 +695,12 @@ func startMenuActivate(config *Config) {
 }
 
 // sceneClaimsStart lists the scenes whose own controller handler already uses
-// Start (pause menu, replay, JukaLand's craft menu). Start must not hijack
-// those: JukaLand's footer offers "Start Craft", but the menu took the press.
+// Start (pause menu, replay, JukaLand's craft menu, the Terminal's Run). Start
+// must not hijack those: JukaLand's footer offers "Start Craft", but the menu
+// took the press.
 func sceneClaimsStart(name string) bool {
 	switch name {
-	case "Games", "Ambient", "JukaLand":
+	case "Games", "Ambient", "JukaLand", "Terminal":
 		return true
 	}
 	return false

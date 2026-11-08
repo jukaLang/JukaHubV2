@@ -161,17 +161,18 @@ func TestEmbeddedPlayerDecodesFrames(t *testing.T) {
 	if !waitForVideoDecoders(3 * time.Second) {
 		t.Error("decoder goroutine did not exit after StopEmbeddedPlayback")
 	}
-	// Drop the last texture before the renderer that owns it is destroyed;
-	// leaving it in the global player state gives the next test a dangling
-	// SDL_Texture to overwrite.
+	// Stop retires the frame texture (videoplayer.go). Release it before the
+	// renderer that owns it is destroyed, the way the main loop does, so the
+	// next test never inherits a dangling SDL_Texture.
 	embeddedPlayer.mu.Lock()
-	tex = embeddedPlayer.current
-	embeddedPlayer.current = nil
+	retired := len(mediaRetiredFrames)
+	stillCurrent := embeddedPlayer.current != nil
 	embeddedPlayer.uploadedSeq = 0
 	embeddedPlayer.mu.Unlock()
-	if tex != nil {
-		tex.Destroy()
+	if stillCurrent || retired == 0 {
+		t.Errorf("stop left the frame texture current (retired %d); it must be retired for the render thread", retired)
 	}
+	mediaReleaseRetiredFrames()
 	if got := playerPhase(); got != "idle" {
 		t.Fatalf("phase after stop = %q, want idle", got)
 	}

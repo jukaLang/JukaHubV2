@@ -261,7 +261,16 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 	if len(files) == 0 {
 		return errors.New("staged update contains no files")
 	}
+	return swapInstallFiles(tag, files, staging, exePath, uhistReasonUpdate)
+}
 
+// swapInstallFiles journals every destination, notes what the swap replaces
+// for the version history, and hands the copy to the detached helper, which
+// restarts JukaHub. An update and a rollback (uhist.go) both end here, so an
+// interrupted rollback is recovered at the next start exactly like an
+// interrupted update. scriptDir is where the helper script is written.
+func swapInstallFiles(tag string, files []stagedInstallFile, scriptDir, exePath, reason string) error {
+	exeDir := filepath.Dir(exePath)
 	patchRowStatus(ComponentApp, StatusBackingUp)
 	journal := newJournal("juka-update", tag)
 	for _, f := range files {
@@ -270,6 +279,9 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 			return err
 		}
 	}
+	// The journal has just copied every file this swap overwrites. If the
+	// helper commits, the next start keeps that copy as a saved version.
+	uhistNoteSwap(journal, exeDir, tag, reason)
 	// Also back up the user config separately (never replaced by an update).
 	if _, err := os.Stat(P().UserConfigPath()); err == nil {
 		if _, _, err := CreateBackupSet("pre-juka-update", []string{P().UserConfigPath()}); err != nil {
@@ -278,7 +290,7 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 	}
 
 	patchRowStatus(ComponentApp, StatusApplying)
-	script := swapScriptPath(staging)
+	script := swapScriptPath(scriptDir)
 	// Written before the helper starts, so it exists when the app exits and the
 	// launcher looks at what to do next.
 	restartMarker := prepareLauncherRestart(exeDir)
@@ -286,6 +298,7 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 		if restartMarker != "" {
 			_ = os.Remove(restartMarker)
 		}
+		uhistForgetSwap(journal)
 		_ = journal.rollback()
 		return err
 	}
@@ -305,6 +318,7 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 		if restartMarker != "" {
 			_ = os.Remove(restartMarker)
 		}
+		uhistForgetSwap(journal)
 		_ = journal.rollback()
 		return fmt.Errorf("starting swap helper: %w", err)
 	}

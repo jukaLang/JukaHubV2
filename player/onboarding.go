@@ -142,6 +142,7 @@ func onboardingStart() {
 	onboarding.setupRows = nil
 	onboarding.setupHits = nil
 	onboarding.setupAt = 0
+	toolsHubTourReset()
 }
 
 func onboardingFinish(config *Config, skipped bool) {
@@ -192,9 +193,11 @@ func onboardingStepIsSetup() bool {
 
 // onboardingCoveredByOverlay reports whether a modal panel is on top of the
 // tour. The checklist opens those panels, so the tour stops drawing and stops
-// consuming input while one is open instead of covering it.
+// consuming input while one is open instead of covering it. The Wi-Fi and Tools
+// rows open pages rather than panels; the tour steps aside the same way until
+// the user is back on the screen it was drawn over (toolsHubTourAway).
 func onboardingCoveredByOverlay() bool {
-	return modalPanelBlocksShoulders()
+	return modalPanelBlocksShoulders() || toolsHubTourAway()
 }
 
 // onboardingSetupRefresh rebuilds the checklist from live device state. The
@@ -243,6 +246,9 @@ func onboardingSetupActivate(config *Config) {
 		return
 	}
 	if action := rows[onboarding.setupCursor].Action; action != nil {
+		// A row that opens a page (Wi-Fi, Tools) moves to another scene; the
+		// tour remembers where it was drawn and waits there.
+		toolsHubTourMark()
 		action()
 	}
 	// The panels change the state the row reports (an RA key was saved, a
@@ -401,14 +407,13 @@ func onboardingPerformAction(config *Config) {
 			onboarding.info = "An artwork fetch is already running."
 		}
 	case "tools":
-		// The Tools panel is a modal, so the tour steps aside while it is open
-		// (onboardingCoveredByOverlay) and comes back to this step when the
-		// panel closes — the same handoff the "Get set up" checklist uses.
-		// openToolsPanel plays its own activate sound, so this case returns
-		// instead of falling through to the shared one.
-		openToolsPanel()
-		onboarding.info = "Tools is open: Toolbox and Security & trust are under SYSTEM & UPDATES."
-		return
+		// Tools is a page: the tour steps aside while the user is on it
+		// (onboardingCoveredByOverlay) and comes back to this step on the
+		// screen it was drawn over — the same handoff the "Get set up"
+		// checklist uses.
+		toolsHubTourMark()
+		toolsHubOpen(config)
+		onboarding.info = "Tools is open: Toolbox and Security & trust are under TOOLKITS."
 	}
 	PlayActivateSound()
 }

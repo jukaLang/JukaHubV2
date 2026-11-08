@@ -362,6 +362,22 @@ func createSaveSnapshot(roots []saveRoot, label string) (saveSnapshot, error) {
 // snapshots named in keep as well as the new one: a restore's safety snapshot
 // must not delete the snapshot that restore is about to read.
 func createSaveSnapshotKeeping(roots []saveRoot, label string, keep ...string) (saveSnapshot, error) {
+	return createSaveSnapshotFiltered(roots, label, nil, keep...)
+}
+
+// createSaveSnapshotOf is createSaveSnapshot limited to the files only accepts
+// (the folder's path as listed in roots, and the slash-separated path inside
+// it). Save sync (ssync.go) keeps exactly the saves it is about to overwrite
+// this way, instead of copying every save folder before each sync. Restoring
+// it writes those files back and leaves every other save alone. A filter that
+// matches nothing returns errSaveManagerEmpty.
+func createSaveSnapshotOf(roots []saveRoot, label string, only func(rootPath, rel string) bool) (saveSnapshot, error) {
+	return createSaveSnapshotFiltered(roots, label, only)
+}
+
+// createSaveSnapshotFiltered is the snapshot itself; a nil only takes every
+// save file.
+func createSaveSnapshotFiltered(roots []saveRoot, label string, only func(rootPath, rel string) bool, keep ...string) (saveSnapshot, error) {
 	if err := ensureSaveManagerLayout(); err != nil {
 		return saveSnapshot{}, err
 	}
@@ -422,6 +438,9 @@ func createSaveSnapshotKeeping(roots []saveRoot, label string, keep ...string) (
 			}
 			rel, err := filepath.Rel(root.Path, path)
 			if err != nil || strings.HasPrefix(rel, "..") {
+				return nil
+			}
+			if only != nil && !only(root.Path, filepath.ToSlash(rel)) {
 				return nil
 			}
 			info, err := d.Info()

@@ -299,9 +299,10 @@ and tertiary actions, **L1/R1** move between sections and pages, **Start** opens
 the Start menu — scenes in one group, games, tools and device actions in the
 others, so switching screen or taking a screenshot is two presses away.
 
-To leave the app, hold **Select + Start** together. JukaHub saves and plays its
-goodbye screen, then returns to the stock launcher — this works from any screen,
-including while a video is playing or a panel is open.
+To leave the app, hold **Select + Start** together. JukaHub saves, shows a
+teardown card while it stops games, servers and caches, then returns to the
+stock launcher — this works from any screen, including while a video is playing
+or a panel is open.
 
 Press **F1** on a desktop build for the full list as an in-app overlay. Per-screen
 tables (Live TV, video player, on-screen keyboard, music player, Pomodoro,

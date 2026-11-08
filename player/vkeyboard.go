@@ -2,13 +2,18 @@ package main
 
 // On-screen keyboard.
 //
-// Design goals (Xbox-style):
-//   * one bottom-anchored panel that never covers the whole screen,
-//   * a real 10-column grid with a digits row, punctuation, shift and a
-//     dedicated primary action key,
-//   * flat keys on themed surfaces with a single high-contrast focus fill,
-//   * a large readable text field with a blinking caret instead of the old
-//     "text plus underscore" preview.
+// Design goals (a phone keyboard in Home's glass, driven by a pad):
+//   * one bottom sheet flush with the screen edge that never covers the whole
+//     screen: a header with the field's name and a tool row (Copy, Paste, Cut,
+//     Select all, Clear, the language globe, the mic, Close), the text field
+//     with a real caret, a suggestion strip and the key grid,
+//   * a digits row, the letter rows of the chosen language (vklayouts.go),
+//     punctuation, Shift (tap = one letter, double tap = caps lock) and an
+//     accent-coloured action key named for what it does (Send, Search, Done),
+//   * rounded glass keys with Home's 3px accent focus ring and a short press
+//     animation; holding a letter offers its accents,
+//   * word suggestions from an embedded English list plus the words the user
+//     taught it (vkdict.go), and voice typing through Groq (vkvoice.go).
 //
 // Behaviour goals:
 //   * typing always lands in exactly one target (scene input, chat or unit
@@ -23,10 +28,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
 )
 
 type vkLayerKind int
@@ -65,6 +70,8 @@ const (
 	vkTargetToolsURL   // Tools: URL or host for the HTTP check
 	vkTargetNetwork    // Tools: host:port or domain for the port/whois rows
 	vkTargetIPStream   // stream menu: the Find row's filter
+	vkTargetPlaylist   // audio player: name for a saved queue
+	vkTargetGroqKey    // Keyboard settings: the Groq API key voice typing uses
 )
 
 // podcastFeedInput holds the feed URL while it is being typed. It is only read
@@ -83,6 +90,10 @@ var dnsQueryBuffer string
 // vkNameBuffer holds the chat display name while it is being edited; it is
 // committed to the user config when the keyboard submits.
 var vkNameBuffer string
+
+// vkPlaylistNameBuffer holds a playlist name while it is typed; the playlist is
+// only written when the keyboard submits.
+var vkPlaylistNameBuffer string
 
 // wifiPassphraseBuffer holds a Wi-Fi password while it is typed. It is cleared
 // when the keyboard closes or submits, so the secret does not outlive the
@@ -126,27 +137,12 @@ const (
 // resolves to something that contrasts the panel surface.
 func uiHighlightColor() sdl.Color { return installHighlight() }
 
-// vkFocusColor is the fill for the focused key and the primary action key.
-// installHighlight() falls back to pure white on dark accents, which turned one
-// key into a white blob in the middle of the keyboard; lifting the accent
-// instead keeps the keyboard on-theme and still readable.
+// vkFocusColor is the keyboard's accent: Home's focus ring, the caret, the
+// action key and an active Shift. It is glassAccent, which already falls back
+// to a visible focus colour when a theme's accent is as dark as its
+// background, made opaque so a filled key never turns translucent.
 func vkFocusColor() sdl.Color {
-	base := ColorIconSurface // the unfocused key cap
-	lum := func(c sdl.Color) int { return int(colorLuma(c)) }
-	h := accentColor
-	if vkAbsDiff(lum(h), lum(base)) < 60 {
-		// Blend toward the theme's info colour: a dark accent lifted straight
-		// to grey made the focused key look disabled.
-		h = lerpColor(accentColor, ColorInfo, 0.65)
-	}
-	if vkAbsDiff(lum(h), lum(base)) < 45 {
-		h = ColorInfo
-	}
-	if vkAbsDiff(lum(h), lum(base)) < 45 {
-		h = sdl.Color{R: 96, G: 165, B: 250, A: 255}
-	}
-	// The focus fill must be opaque: with alpha 0 the cap under the ring would
-	// stay transparent and the whole key would read as the ring colour.
+	h := glassAccent()
 	h.A = 255
 	return h
 }
@@ -195,55 +191,64 @@ func vkOpenProgressAt(now uint64) float64 {
 
 // vkRows returns the labels for the current layer. Labels double as the
 // inserted value for printable keys; named labels (SPACE, BACK, ...) map to
-// actions in vkKeyValue / vkActivateFocused.
+// actions in vkKeyValue / vkActivateFocused. The letter rows come from the
+// current layout (vklayouts.go); the digits row and the bottom row are shared.
 func vkRows() [][]string {
 	chat := vkTarget == vkTargetChat
 	action := "ENTER"
 	if chat {
 		action = "SEND"
 	}
-	bottom := []string{"123", ",", "SPACE", ".", action}
+	layout := vkCurrentLayout()
+	bottom := []string{"123"}
 	if vkLayer == vkLayerSymbols {
 		bottom[0] = "ABC"
 	}
+	// The globe joins the bottom row once there is a second language to
+	// switch to, beside 123 the way a phone keyboard has it.
+	if len(vkEnabledLayouts()) > 1 {
+		bottom = append(bottom, "GLOBE")
+	}
+	bottom = append(bottom, ",", "SPACE", ".", action)
 	if chat {
 		bottom = append(bottom, "ASK_AI")
 	}
 
+	digits := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}
 	if vkLayer == vkLayerSymbols {
+		currency := "$"
+		if layout != nil && layout.Currency != "" {
+			currency = layout.Currency
+		}
 		return [][]string{
-			{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
-			{"!", "@", "#", "$", "%", "&", "*", "(", ")", "-"},
+			digits,
+			{"!", "@", "#", currency, "%", "&", "*", "(", ")", "-"},
 			{"+", "=", "/", "?", ":", ";", "_", "\"", "'", "`"},
 			{"~", "<", ">", "[", "]", "{", "}", "\\", "|", "BACK"},
 			bottom,
 		}
 	}
 
-	letters := []string{"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"}
-	middle := []string{"a", "s", "d", "f", "g", "h", "j", "k", "l"}
-	lower := []string{"z", "x", "c", "v", "b", "n", "m"}
-	if keyboardUpper {
-		for i := range letters {
-			letters[i] = strings.ToUpper(letters[i])
+	letterRows := vkLayoutRows(layout)
+	rows := make([][]string, 0, 5)
+	rows = append(rows, digits)
+	for i, src := range letterRows {
+		row := make([]string, 0, len(src)+2)
+		if i == 2 {
+			row = append(row, "⇧")
 		}
-		for i := range middle {
-			middle[i] = strings.ToUpper(middle[i])
+		for _, k := range src {
+			if keyboardUpper {
+				k = vkUpperKey(layout, k)
+			}
+			row = append(row, k)
 		}
-		for i := range lower {
-			lower[i] = strings.ToUpper(lower[i])
+		if i == 2 {
+			row = append(row, "BACK")
 		}
+		rows = append(rows, row)
 	}
-	third := append([]string{"⇧"}, lower...)
-	third = append(third, "BACK")
-
-	return [][]string{
-		{"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
-		letters,
-		middle,
-		third,
-		bottom,
-	}
+	return append(rows, bottom)
 }
 
 // vkKeyUnits is the key width in grid units (1 unit = one letter key).
@@ -253,6 +258,8 @@ func vkKeyUnits(key string) float64 {
 		return 3
 	case "⇧", "BACK", "123", "ABC":
 		return 1.4
+	case "GLOBE":
+		return 1.2
 	case "ENTER":
 		return 2.2
 	case "SEND", "ASK_AI":
@@ -261,31 +268,77 @@ func vkKeyUnits(key string) float64 {
 	return 1
 }
 
-// vkKeyLabel is the text drawn on a key. Action keys get friendly words
-// instead of internal identifiers; glyph-only labels are avoided because not
-// every bundled font has them.
+// vkKeyLabel is the text drawn on a key. Shift and delete use Inter's own
+// arrow glyphs (the bundled font draws them); the action key says what it
+// does for this field; the space bar names the language once there is more
+// than one.
 func vkKeyLabel(key string) string {
 	switch key {
 	case "SPACE":
+		if len(vkEnabledLayouts()) > 1 {
+			return vkCurrentLayout().Native
+		}
 		return "space"
 	case "BACK":
-		return "DEL"
+		return "⌫"
 	case "ENTER":
-		return "Done"
+		return vkActionLabel()
 	case "SEND":
 		return "Send"
 	case "ASK_AI":
 		return "Ask AI"
 	case "⇧":
-		return "SHIFT"
+		if vkCapsLock {
+			return "⇪"
+		}
+		return "⇧"
+	case "GLOBE":
+		return vkCurrentLayout().Short
 	}
 	return key
+}
+
+// vkActionLabel names the action key for the field it submits, the way a
+// phone keyboard shows Search, Go or Join instead of a generic Done.
+func vkActionLabel() string {
+	switch vkTarget {
+	case vkTargetTerm:
+		return "Run"
+	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget:
+		return "Search"
+	case vkTargetWiFi, vkTargetNetplay:
+		return "Join"
+	case vkTargetDNS:
+		return "Look up"
+	case vkTargetToolsURL, vkTargetNetwork:
+		return "Check"
+	case vkTargetPSRemote:
+		if psPanelEditField == psEditPIN {
+			return "Pair"
+		}
+		return "Save"
+	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetGameArgs, vkTargetFileLine,
+		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey:
+		return "Save"
+	case vkTargetScene:
+		switch {
+		case textBrowserAddressEditing:
+			return "Go"
+		case textBrowserSearchEditing, textBrowserFindEditing:
+			return "Search"
+		}
+		if appConfig != nil && currentSceneIndex >= 0 && currentSceneIndex < len(appConfig.Scenes) &&
+			sceneHasSearchResults(appConfig.Scenes[currentSceneIndex]) {
+			return "Search"
+		}
+	}
+	return "Done"
 }
 
 // vkKeyValue returns the text inserted by a printable key.
 func vkKeyValue(key string) (string, bool) {
 	switch key {
-	case "⇧", "BACK", "ENTER", "SEND", "ASK_AI", "123", "ABC":
+	case "⇧", "BACK", "ENTER", "SEND", "ASK_AI", "123", "ABC", "GLOBE":
 		return "", false
 	case "SPACE":
 		return " ", true
@@ -297,6 +350,7 @@ func vkKeyValue(key string) (string, bool) {
 // Submitting can open a follow-up prompt, such as the PS Remote pairing PIN.
 func vkHandleKeyClick(row, col int, config *Config) bool {
 	keyboardPosY, keyboardPosX = row, col
+	vkFocusZone = vkZoneKeys
 	vkActivateFocused(config)
 	return !virtualKeyboardActive
 }
@@ -305,56 +359,77 @@ func vkHandleKeyClick(row, col int, config *Config) bool {
 
 func vkScreenSmall() bool { return screenHeight < 640 || screenWidth < 900 }
 
+// vkLayoutKey is everything the key grid and the sheet's bands depend on. It is
+// compared every frame, so it is a plain struct rather than a formatted string
+// (the old signature allocated a string per frame).
+type vkLayoutKey struct {
+	w, h   int32
+	layer  vkLayerKind
+	target vkTargetKind
+	upper  bool
+	caps   bool
+	layout *vkLayout
+	langs  int
+	strip  vkStripMode
+}
+
+var vkLayoutKeyBuilt vkLayoutKey
+
+// vkGeom holds the sheet's measured bands. The renderer, the hit tests and the
+// D-pad all read it, so a tap always lands on what is drawn.
+var vkGeom struct {
+	content sdl.Rect // the column every band is aligned to
+	header  sdl.Rect
+	title   sdl.Rect // room left of the tool row for the field's name
+	tools   [vkToolCount]sdl.Rect
+	compact bool // short tool labels on a narrow sheet
+	strip   sdl.Rect
+	cells   [5]sdl.Rect
+	nCells  int
+	footer  sdl.Rect
+	keyH    int32
+}
+
 // vkEnsureLayout rebuilds the key grid and its rectangles when the layer, case,
-// target or screen size changed. Geometry is font-independent, which keeps it
-// testable without a renderer.
+// layout, target or screen size changed. Geometry is font-independent, which
+// keeps it testable without a renderer. Setting vkLayoutSig to "" (several
+// open paths do) forces a rebuild.
 func vkEnsureLayout() {
-	target := 0
-	switch vkTarget {
-	case vkTargetChat:
-		target = 1
-	case vkTargetUnit:
-		target = 2
-	case vkTargetTV:
-		target = 3
-	case vkTargetParty:
-		target = 4
-	case vkTargetRA:
-		target = 5
-	case vkTargetMusic:
-		target = 6
-	case vkTargetPSRemote:
-		target = 7
-	case vkTargetGameSearch:
-		target = 8
-	case vkTargetDownloads:
-		target = 9
-	case vkTargetGameArgs:
-		target = 10
-	case vkTargetToolArgs:
-		target = 11
-	case vkTargetPodcast:
-		target = 12
-	case vkTargetFiles:
-		target = 13
-	case vkTargetDNS:
-		target = 14
-	case vkTargetFileLine:
-		target = 15
-	case vkTargetToolsURL:
-		target = 16
-	case vkTargetNetwork:
-		target = 17
-	case vkTargetIPStream:
-		target = 18
+	key := vkLayoutKey{
+		w: screenWidth, h: screenHeight,
+		layer: vkLayer, target: vkTarget,
+		upper: keyboardUpper, caps: vkCapsLock,
+		layout: vkCurrentLayout(), langs: len(vkEnabledLayouts()),
+		strip: vkStripModeNow(),
 	}
-	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
-	if sig == vkLayoutSig && len(keyboardRects) > 0 {
+	if vkLayoutSig != "" && key == vkLayoutKeyBuilt && len(keyboardRects) > 0 {
 		return
 	}
 	keyboard = vkRows()
-	vkLayoutSig = sig
+	vkLayoutKeyBuilt = key
+	vkLayoutSig = "built"
 	vkBuildGeometry()
+}
+
+// vkToolDesignWidth is a tool chip's width in design pixels; the globe carries
+// its icon and the layout code, the mic and Close are square.
+func vkToolDesignWidth(t vkTool, compact bool) int32 {
+	wide := [vkToolCount]int32{72, 76, 60, 100, 70, 78, 44, 0}
+	narrow := [vkToolCount]int32{58, 62, 48, 46, 56, 64, 36, 0}
+	if compact {
+		return narrow[t]
+	}
+	return wide[t]
+}
+
+// vkToolRowWidth is the width the chips (not Close) need.
+func vkToolRowWidth(compact bool, gap int32) int32 {
+	w := int32(0)
+	for t := vkTool(0); t < vkToolClose; t++ {
+		w += vkToolDesignWidth(t, compact) + gap
+	}
+	// A wider gap separates the edit tools from the globe and the mic.
+	return w + gap
 }
 
 func vkBuildGeometry() {
@@ -368,30 +443,33 @@ func vkBuildGeometry() {
 	}
 
 	small := vkScreenSmall()
-	pad := int32(20)
-	gap := int32(10)
-	keyH := int32(52)
-	fieldH := int32(50)
+	pad := int32(16)
+	gap := int32(8)
+	keyH := int32(50)
 	headerH := int32(40)
-	topGap := int32(14)
-	footerGap := int32(14)
-	footerH := int32(24)
-	marginX := int32(34)
-	marginY := int32(20)
+	fieldH := int32(48)
+	stripH := int32(40)
+	footerH := int32(26)
+	vgap := int32(10)
+	marginX := scaleX(homeSideMargin, screenWidth)
 	if small {
-		pad = 14
-		gap = 8
-		keyH = 42
-		fieldH = 42
+		pad = 12
+		gap = 6
+		keyH = 40
 		headerH = 32
-		topGap = 10
-		footerGap = 10
+		fieldH = 38
+		stripH = 32
 		footerH = 20
-		marginX = 18
-		marginY = 12
+		vgap = 6
+		marginX = 12
+	}
+	stripMode := vkStripModeNow()
+	if stripMode == vkStripHidden {
+		stripH = 0
 	}
 
-	availW := screenWidth - 2*marginX
+	sheetW := screenWidth - 2*marginX
+	availW := sheetW - 2*pad
 	if availW > 1080 {
 		availW = 1080
 	}
@@ -441,39 +519,96 @@ func vkBuildGeometry() {
 		}
 	}
 
-	panelW := innerW + 2*pad
-	keysH := int32(len(rows))*keyH + int32(len(rows)-1)*gap
-	panelH := pad + headerH + fieldH + topGap + keysH + footerGap + footerH + pad
-	panelX := (screenWidth - panelW) / 2
-	panelY := screenHeight - marginY - panelH
-	if panelY < marginY {
-		panelY = marginY
+	// Every band shares one centred column: the key rows' width, but never so
+	// narrow that the header cannot hold the field's name beside the tools.
+	toolGap := int32(6)
+	compact := small
+	contentW := innerW
+	if need := vkToolRowWidth(false, toolGap) + headerH + 220; !compact && contentW < need {
+		if need <= availW {
+			contentW = need
+		} else {
+			compact = true
+		}
+	}
+	if need := vkToolRowWidth(true, toolGap) + headerH + 120; compact && contentW < need {
+		contentW = need
+	}
+	if contentW > availW {
+		contentW = availW
 	}
 
-	vkPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-	vkFieldRect = sdl.Rect{
-		X: panelX + pad,
-		Y: panelY + pad + headerH,
-		W: innerW,
-		H: fieldH,
+	keysH := int32(len(rows))*keyH + int32(len(rows)-1)*gap
+	sheetH := pad + headerH + vgap + fieldH + vgap + keysH + vgap + footerH + pad/2
+	if stripH > 0 {
+		sheetH += stripH + vgap
 	}
-	closeSize := headerH
-	if closeSize < 32 {
-		closeSize = 32
+	sheetY := screenHeight - sheetH
+	if sheetY < 0 {
+		sheetY = 0
 	}
-	vkCloseRect = sdl.Rect{
-		X: panelX + panelW - pad - closeSize,
-		Y: panelY + pad + (headerH-closeSize)/2,
-		W: closeSize,
-		H: closeSize,
+	vkPanelRect = sdl.Rect{X: marginX, Y: sheetY, W: sheetW, H: sheetH}
+	contentX := marginX + (sheetW-contentW)/2
+	vkGeom.content = sdl.Rect{X: contentX, Y: sheetY, W: contentW, H: sheetH}
+	vkGeom.compact = compact
+	vkGeom.keyH = keyH
+
+	y := sheetY + pad
+	vkGeom.header = sdl.Rect{X: contentX, Y: y, W: contentW, H: headerH}
+	// The tool row is right-aligned: Close at the edge, then the mic and the
+	// globe, then (after a wider gap) the edit tools.
+	right := contentX + contentW
+	vkGeom.tools[vkToolClose] = sdl.Rect{X: right - headerH, Y: y, W: headerH, H: headerH}
+	vkCloseRect = vkGeom.tools[vkToolClose]
+	x := right - headerH - toolGap*2
+	chipH := headerH - 6
+	for t := vkToolMic; t >= vkToolCopy; t-- {
+		w := vkToolDesignWidth(t, compact)
+		if small {
+			w = w * 9 / 10
+		}
+		x -= w
+		vkGeom.tools[t] = sdl.Rect{X: x, Y: y + (headerH-chipH)/2, W: w, H: chipH}
+		x -= toolGap
+		if t == vkToolGlobe {
+			x -= toolGap // the separator between the edit tools and globe/mic
+		}
+	}
+	vkGeom.title = sdl.Rect{X: contentX, Y: y, W: vkGeom.tools[vkToolCopy].X - 12 - contentX, H: headerH}
+	if vkGeom.title.W < 0 {
+		vkGeom.title.W = 0
+	}
+	y += headerH + vgap
+
+	vkFieldRect = sdl.Rect{X: contentX, Y: y, W: contentW, H: fieldH}
+	y += fieldH + vgap
+
+	vkGeom.strip = sdl.Rect{}
+	vkGeom.nCells = 0
+	if stripH > 0 {
+		vkGeom.strip = sdl.Rect{X: contentX, Y: y, W: contentW, H: stripH}
+		n := 3
+		if stripMode == vkStripQuickURL || stripMode == vkStripQuickHost {
+			n = len(vkQuickChips(stripMode))
+		}
+		if n > len(vkGeom.cells) {
+			n = len(vkGeom.cells)
+		}
+		cellGap := int32(6)
+		cellW := (contentW - int32(n-1)*cellGap) / int32(n)
+		for i := 0; i < n; i++ {
+			vkGeom.cells[i] = sdl.Rect{X: contentX + int32(i)*(cellW+cellGap), Y: y, W: cellW, H: stripH}
+		}
+		vkGeom.nCells = n
+		y += stripH + vgap
 	}
 
 	keyboardRects = make([]sdl.Rect, 0, 64)
 	keyboardKeys = make([]string, 0, 64)
 	keyboardRowCol = make([][2]int, 0, 64)
-	keysTop := vkFieldRect.Y + fieldH + topGap
+	keysTop := y
 	for r, row := range rows {
-		rx := panelX + pad + (innerW-rowWidths[r])/2
+		rx := contentX + (contentW-rowWidths[r])/2
 		ky := keysTop + int32(r)*(keyH+gap)
 		for c := range row {
 			w := widths[r][c]
@@ -482,6 +617,11 @@ func vkBuildGeometry() {
 			keyboardRowCol = append(keyboardRowCol, [2]int{r, c})
 			rx += w + gap
 		}
+	}
+	vkGeom.footer = sdl.Rect{X: contentX, Y: keysTop + keysH + vgap, W: contentW, H: footerH}
+
+	if vkPopup.open {
+		vkLayoutPopup()
 	}
 
 	// Keep the focus inside the new grid.
@@ -533,27 +673,144 @@ func vkOutsidePanel(mx, my int32) bool {
 	return !pointInRect(mx, my, vkPanelRect)
 }
 
-// vkHandleTouchEvent turns a tap on the keyboard into the same action as a
-// click. Touch used to be ignored entirely while the keyboard was open (and
-// swipes changed the scene behind it), so the panel was unusable on touch-only
-// devices and easy to dismiss by accident.
-func vkHandleTouchEvent(e *sdl.TouchFingerEvent, config *Config) {
-	if e == nil || e.Type != sdl.FINGERDOWN {
-		return
+// vkToolHit returns the tool chip under a logical point, or -1.
+func vkToolHit(mx, my int32) int {
+	vkEnsureLayout()
+	my -= vkAnimOffset()
+	for t := vkTool(0); t < vkToolCount; t++ {
+		if r := vkGeom.tools[t]; r.W > 0 && pointInRect(mx, my, r) {
+			return int(t)
+		}
 	}
-	mx := int32(float64(e.X) * float64(screenWidth))
-	my := int32(float64(e.Y) * float64(screenHeight))
-	if vkCloseHit(mx, my) {
-		vkCloseKeyboard()
-		return
+	return -1
+}
+
+// vkStripHit returns the strip cell under a logical point, or -1.
+func vkStripHit(mx, my int32) int {
+	vkEnsureLayout()
+	my -= vkAnimOffset()
+	for i := 0; i < vkGeom.nCells; i++ {
+		if pointInRect(mx, my, vkGeom.cells[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// vkFieldHit reports whether a logical point is on the text field.
+func vkFieldHit(mx, my int32) bool {
+	vkEnsureLayout()
+	return vkFieldRect.W > 0 && pointInRect(mx, my-vkAnimOffset(), vkFieldRect)
+}
+
+// vkHandlePointerDown routes a click or a tap at a logical point: the popup,
+// the tool row (Close included), the strip, the field (places the caret), a
+// key, or the dimmed screen outside the sheet (dismiss). source says what is
+// pressing, so a long press can be followed. It reports whether the keyboard
+// closed. The main loop, the modal input loop and touch all come through here.
+func vkHandlePointerDown(mx, my int32, source vkHoldSource, config *Config) bool {
+	vkSyncSession()
+	vkEnsureLayout()
+	if vkPopup.open {
+		if i := vkPopupHit(mx, my); i >= 0 {
+			vkPopupPick(i, config)
+		} else {
+			vkPopupClose()
+		}
+		return !virtualKeyboardActive
+	}
+	if vkVoiceHandlePointer(mx, my, config) {
+		return !virtualKeyboardActive
+	}
+	if t := vkToolHit(mx, my); t >= 0 {
+		tool := vkTool(t)
+		vkFocusZone, vkZoneIndex = vkZoneTools, t
+		vkFlashPressedRect(vkGeom.tools[t])
+		if tool == vkToolGlobe {
+			vkGlobeAction(source, vkGeom.tools[t], config)
+		} else if vkToolEnabled(tool) {
+			vkActivateTool(tool, config)
+		}
+		return !virtualKeyboardActive
+	}
+	if i := vkStripHit(mx, my); i >= 0 {
+		if text, _ := vkStripCellText(i); text != "" {
+			vkFocusZone, vkZoneIndex = vkZoneStrip, i
+			vkFlashPressedRect(vkGeom.cells[i])
+			vkActivateStrip(i, config)
+		}
+		return !virtualKeyboardActive
+	}
+	if vkFieldHit(mx, my) {
+		vkFocusZone = vkZoneField
+		vkTextSelected = false
+		vkSetCaret(vkCurrentText(), vkFieldIndexAt(mx))
+		vkAfterCaretMove()
+		return false
 	}
 	if row, col, ok := vkHitTest(mx, my); ok {
-		vkHandleKeyClick(row, col, config)
-		return
+		vkFocusZone = vkZoneKeys
+		keyboardPosY, keyboardPosX = row, col
+		key := vkFocusedKey()
+		rect := sdl.Rect{}
+		if i := vkFocusedRectIndex(); i >= 0 && i < len(keyboardRects) {
+			rect = keyboardRects[i]
+		}
+		if key == "GLOBE" {
+			vkFlashPressedRect(rect)
+			vkGlobeAction(source, rect, config)
+			return false
+		}
+		closed := vkHandleKeyClick(row, col, config)
+		if !closed {
+			vkHoldBegin(source, key, rect)
+		}
+		return closed
 	}
 	if vkOutsidePanel(mx, my) {
 		vkCloseKeyboard()
+		return true
 	}
+	return false
+}
+
+// vkGlobeAction is a press on the globe: a tap switches language, a long press
+// lists them. With no way to follow the press (a keyboard Enter, a phone's
+// synthetic button) it switches at once.
+func vkGlobeAction(source vkHoldSource, rect sdl.Rect, config *Config) {
+	if source == vkHoldNone {
+		vkGlobePressed(config)
+		return
+	}
+	vkHold.source = source
+	vkHold.start = sdl.GetTicks64()
+	vkHold.key = "GLOBE"
+	vkHold.rect = rect
+	vkHold.fired = false
+}
+
+// vkHandleTouchEvent turns a tap on the keyboard into the same action as a
+// click. Touch used to be ignored entirely while the keyboard was open (and
+// swipes changed the scene behind it), so the panel was unusable on touch-only
+// devices and easy to dismiss by accident. The finger's lift is tracked too,
+// so a long press can open accents and a quick tap on the globe can switch
+// language.
+func vkHandleTouchEvent(e *sdl.TouchFingerEvent, config *Config) {
+	if e == nil {
+		return
+	}
+	switch e.Type {
+	case sdl.FINGERUP:
+		vkTouchDown = false
+		return
+	case sdl.FINGERDOWN:
+	default:
+		return
+	}
+	vkTouchDown = true
+	mx := int32(float64(e.X) * float64(screenWidth))
+	my := int32(float64(e.Y) * float64(screenHeight))
+	vkHandlePointerDown(mx, my, vkHoldTouch, config)
 }
 
 // --- Target / text routing --------------------------------------------------
@@ -565,12 +822,14 @@ func vkCurrentText() string {
 		return chatInputText
 	case vkTargetName:
 		return vkNameBuffer
+	case vkTargetPlaylist:
+		return vkPlaylistNameBuffer
 	case vkTargetUnit:
 		return unitInputValue
 	case vkTargetTerm:
 		return term.input
 	case vkTargetTV:
-		return tvQuery()
+		return vkLiveQuery(vkTVSearchRaw, tvQuery())
 	case vkTargetParty:
 		return partyUI.input
 	case vkTargetRA:
@@ -586,7 +845,7 @@ func vkCurrentText() string {
 	case vkTargetMemory:
 		return memValueBuffer
 	case vkTargetGameSearch:
-		return gameLibraryQuery()
+		return vkLiveQuery(vkGameSearchRaw, gameLibraryQuery())
 	case vkTargetIPStream:
 		return ipPanelQuery
 	case vkTargetDownloads:
@@ -607,6 +866,10 @@ func vkCurrentText() string {
 		return toolsURLBuffer
 	case vkTargetNetwork:
 		return netPromptBuffer
+	case homeSearchVKTarget:
+		return homeSearchText()
+	case vkTargetGroqKey:
+		return vkGroqKeyBuffer
 	}
 	return inputTextBuffer
 }
@@ -617,6 +880,8 @@ func vkSetText(text string, config *Config) {
 		chatInputText = text
 	case vkTargetName:
 		vkNameBuffer = text
+	case vkTargetPlaylist:
+		vkPlaylistNameBuffer = text
 	case vkTargetUnit:
 		unitInputValue = text
 	case vkTargetTerm:
@@ -626,6 +891,7 @@ func vkSetText(text string, config *Config) {
 	case vkTargetTV:
 		// The list re-filters on every keystroke, so the user sees matches
 		// appear while typing instead of after submitting.
+		vkTVSearchRaw = text
 		tvSetQuery(text)
 	case vkTargetParty:
 		partyUI.input = text
@@ -646,6 +912,7 @@ func vkSetText(text string, config *Config) {
 	case vkTargetGameSearch:
 		// The library re-filters on every keystroke, so matches appear while
 		// the query is typed instead of after submitting.
+		vkGameSearchRaw = text
 		setGameLibraryQuery(text)
 	case vkTargetIPStream:
 		// The stream menu stays open behind the keyboard and narrows on every
@@ -654,6 +921,10 @@ func vkSetText(text string, config *Config) {
 		ipPanelQuery = text
 		ipPanelTab = 0
 		ipPanelCursorToFirstChannel()
+	case homeSearchVKTarget:
+		// The Home search sheet re-runs its query on every key, so results
+		// fill in above the keyboard while the words are typed.
+		homeSearchSetQuery(text)
 	case vkTargetDownloads:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
@@ -687,6 +958,10 @@ func vkSetText(text string, config *Config) {
 		// One buffer for all four Files fields; filesKeyboard says which one is
 		// being edited, and nothing reaches the disk or the network until submit.
 		filesInputBuffer = text
+	case vkTargetGroqKey:
+		// The key is saved on submit only, so a half-pasted key never replaces
+		// a working one.
+		vkGroqKeyBuffer = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -695,24 +970,32 @@ func vkSetText(text string, config *Config) {
 
 const vkMaxTextLen = 2000
 
-// vkInsertText appends text to the active target exactly once. Control
-// characters other than newline and tab are dropped: an SDL text event carries
-// a fixed-size C buffer, and letting its NUL padding into the field made the
-// renderer truncate at the first key (and backspace delete invisible bytes).
+// vkGameSearchRaw and vkTVSearchRaw hold what was typed into the game library
+// and Live TV searches. Both libraries trim their query, so a typed space used
+// to vanish at once and glue the next word on ("super mario" became
+// "supermario"); the keyboard keeps the raw text for as long as it still is
+// the library's query.
+var vkGameSearchRaw, vkTVSearchRaw string
+
+// vkLiveQuery is raw when it is query with its spaces, else query itself (the
+// search was changed from elsewhere, or a new session started).
+func vkLiveQuery(raw, query string) string {
+	if raw == "" || strings.TrimSpace(raw) != query {
+		return query
+	}
+	return raw
+}
+
+// vkInsertText inserts text at the caret of the active target exactly once.
+// Control characters other than newline and tab are dropped: an SDL text event
+// carries a fixed-size C buffer, and letting its NUL padding into the field
+// made the renderer truncate at the first key (and backspace delete invisible
+// bytes). An insert never grows the field past vkMaxTextLen.
 func vkInsertText(text string, config *Config) {
 	if text == "" {
 		return
 	}
-	if strings.IndexByte(text, 0) >= 0 || strings.IndexFunc(text, func(r rune) bool {
-		return r < 0x20 && r != '\n' && r != '\t'
-	}) >= 0 {
-		text = strings.Map(func(r rune) rune {
-			if r < 0x20 && r != '\n' && r != '\t' {
-				return -1
-			}
-			return r
-		}, text)
-	}
+	text = vkSanitizeInsert(text)
 	if text == "" {
 		return
 	}
@@ -721,26 +1004,58 @@ func vkInsertText(text string, config *Config) {
 	if vkTextSelected {
 		vkSetText("", config)
 		vkTextSelected = false
+		vkCaret = -1
 	}
 	current := vkCurrentText()
-	if len(current) >= vkMaxTextLen {
+	room := vkMaxTextLen - len(current)
+	if room <= 0 {
 		return
 	}
-	vkSetText(current+text, config)
+	text = vkTruncateUTF8(text, room)
+	if text == "" {
+		return
+	}
+	pos := vkCaretIndex(current)
+	off := vkRuneOffset(current, pos)
+	if off == len(current) {
+		vkSetText(current+text, config)
+	} else {
+		vkSetText(current[:off]+text+current[off:], config)
+		if vkCaret >= 0 {
+			vkCaret = pos + utf8.RuneCountInString(text)
+		}
+	}
+	vkAfterEdit(text)
 }
 
-// vkBackspace removes the last rune (not byte) so multi-byte text survives.
+// vkBackspace removes the rune (not byte) before the caret, so multi-byte
+// text survives; a selection is removed whole.
 func vkBackspace(config *Config) {
 	if vkTextSelected {
 		vkSetText("", config)
 		vkTextSelected = false
+		vkCaret = -1
+		vkAfterEdit("")
 		return
 	}
 	current := vkCurrentText()
 	if current == "" {
 		return
 	}
-	vkSetText(trimLastRune(current), config)
+	pos := vkCaretIndex(current)
+	if pos == 0 {
+		return
+	}
+	if pos >= utf8.RuneCountInString(current) {
+		vkSetText(trimLastRune(current), config)
+	} else {
+		start := vkRuneOffset(current, pos-1)
+		end := vkRuneOffset(current, pos)
+		next := current[:start] + current[end:]
+		vkSetText(next, config)
+		vkSetCaret(next, pos-1)
+	}
+	vkAfterEdit("")
 }
 
 // vkTitle / vkPlaceholder describe the field for the active target.
@@ -760,10 +1075,9 @@ func vkTitle() string {
 	case vkTargetTV:
 		return "CHANNEL SEARCH"
 	case vkTargetParty:
-		if partyUI.inputMode == partyInputQueue {
-			return "SHARE A LINK"
-		}
-		return "PARTY INVITE"
+		// The party target also carries the tool screens' text fields (a bug
+		// report's title and description); partyui.go names the field.
+		return partyVKTitle()
 	case vkTargetRA:
 		if raPanel.edit == raEditAPIKey {
 			return "WEB API KEY"
@@ -775,6 +1089,8 @@ func vkTitle() string {
 		return "SEARCH GAMES"
 	case vkTargetIPStream:
 		return "FIND STREAMS"
+	case homeSearchVKTarget:
+		return "SEARCH JUKAHUB"
 	case vkTargetDownloads:
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
@@ -833,6 +1149,8 @@ func vkTitle() string {
 			return "RENAME"
 		}
 		return "DEVICE ADDRESS"
+	case vkTargetGroqKey:
+		return "GROQ API KEY"
 	}
 	if textBrowserSearchEditing {
 		return "SEARCH WEB"
@@ -866,10 +1184,7 @@ func vkPlaceholder() string {
 	case vkTargetTV:
 		return "Search channels"
 	case vkTargetParty:
-		if partyUI.inputMode == partyInputQueue {
-			return "https://…"
-		}
-		return "192.168.1.5:8318 ABCDE"
+		return partyVKPlaceholder()
 	case vkTargetRA:
 		if raPanel.edit == raEditAPIKey {
 			return "32 letters or digits"
@@ -881,6 +1196,8 @@ func vkPlaceholder() string {
 		return "Title, console or file: zelda"
 	case vkTargetIPStream:
 		return "Name, group or link: news"
+	case homeSearchVKTarget:
+		return "Apps, settings, files or the web"
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
@@ -944,6 +1261,8 @@ func vkPlaceholder() string {
 			return "New name"
 		}
 		return "user@192.168.1.7:2222/roms"
+	case vkTargetGroqKey:
+		return "Paste your key from console.groq.com"
 	}
 	if textBrowserSearchEditing {
 		return browserSearchPrompt
@@ -975,7 +1294,9 @@ func vkHints() string {
 	case vkTargetMusic:
 		return hintLine(FooterHint{Label: "Type Initials"}, FooterHint{"A / Y", "Search"}, FooterHint{"B / Esc", "Close"})
 	case vkTargetNetplay:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Start", "Join"}, FooterHint{"B / Esc", "Close"})
+		// Y joins; Start closes the keyboard like B (the old "Start Join" hint
+		// promised an action Start never had).
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Join"}, FooterHint{"B / Esc", "Close"})
 	case vkTargetMemory:
 		return hintLine(FooterHint{"ENTER", "Use Value"}, FooterHint{"123", "Digits"}, FooterHint{"B / Esc", "Cancel"})
 	case vkTargetGameSearch:
@@ -992,6 +1313,8 @@ func vkHints() string {
 		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Save Line"}, FooterHint{"B / Esc", "Cancel"})
 	case vkTargetIPStream:
 		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
+	case homeSearchVKTarget:
+		return hintLine(FooterHint{Label: "Live Results"}, FooterHint{"Y / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
 	}
 	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
@@ -1022,6 +1345,23 @@ func vkOpenName() {
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
 	vkNameBuffer = chatDisplayName()
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenPlaylistName opens the keyboard for a playlist name. It is seeded with
+// the next free default so a single Return saves the queue, and the name can be
+// edited into "Road Trip" without retyping.
+func vkOpenPlaylistName() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetPlaylist
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	vkPlaylistNameBuffer = fmt.Sprintf("Playlist %d", len(musicPlaylistsSnapshot())+1)
 	virtualKeyboardActive = true
 	vkAnimStart = sdl.GetTicks64()
 	sdl.StartTextInput()
@@ -1420,6 +1760,7 @@ func vkCloseKeyboard() {
 	vkAnimStart = 0
 	vkResetNavRepeat()
 	vkClearPressFlash()
+	vkEndSession()
 	if vkTarget == vkTargetWiFi {
 		// A dismissed password field must not keep the secret around.
 		wifiPassphraseBuffer = ""
@@ -1440,6 +1781,10 @@ func vkCloseKeyboard() {
 	}
 	if vkTarget == vkTargetNetwork {
 		netPromptBuffer = ""
+	}
+	if vkTarget == vkTargetGroqKey {
+		// A pasted key must not outlive the field that asked for it.
+		vkGroqKeyBuffer = ""
 	}
 	if vkTarget == vkTargetRA {
 		// The API-key field starts in uppercase; do not leak that into the
@@ -1464,7 +1809,49 @@ func vkFocusedKey() string {
 	return row[keyboardPosX]
 }
 
+// vkActivateFocused presses whatever the highlight is on: a popup cell, a
+// strip cell, the field (select all), a tool chip or a key.
 func vkActivateFocused(config *Config) {
+	vkSyncSession()
+	if vkPopup.open {
+		vkPopupPick(vkPopup.focus, config)
+		return
+	}
+	switch vkFocusZone {
+	case vkZoneStrip:
+		if vkVoiceActive() {
+			// The voice bar covers the strip: A answers the bar, never a
+			// suggestion hidden under it.
+			switch vkVoice.phase {
+			case vkVoiceRecording:
+				vkVoiceStop(config)
+			case vkVoiceMessage:
+				if vkVoice.action != vkVoiceNoAction {
+					vkVoiceRunAction(config)
+				} else {
+					vkVoice.phase = vkVoiceIdle
+				}
+			}
+			return
+		}
+		if vkZoneIndex >= 0 && vkZoneIndex < vkGeom.nCells {
+			vkFlashPressedRect(vkGeom.cells[vkZoneIndex])
+		}
+		vkActivateStrip(vkZoneIndex, config)
+		return
+	case vkZoneField:
+		vkToggleSelectAll()
+		return
+	case vkZoneTools:
+		t := vkTool(vkZoneIndex)
+		if t >= 0 && t < vkToolCount {
+			vkFlashPressedRect(vkGeom.tools[t])
+			if vkToolEnabled(t) {
+				vkActivateTool(t, config)
+			}
+		}
+		return
+	}
 	if keyboardPosY < 0 || keyboardPosY >= len(keyboard) {
 		return
 	}
@@ -1484,18 +1871,29 @@ func vkActivateFocused(config *Config) {
 		toggleKeyboardCase()
 	case "123", "ABC":
 		vkToggleLayer()
+	case "GLOBE":
+		vkGlobePressed(config)
 	case "BACK":
 		vkBackspace(config)
 	case "ENTER", "SEND":
+		vkPlay(PlayActivateSound)
 		vkSubmit(config, false)
 	case "ASK_AI":
+		vkPlay(PlayActivateSound)
 		vkSubmit(config, true)
 	default:
 		if value, ok := vkKeyValue(key); ok {
 			vkInsertText(value, config)
 		}
 	}
-	vkEnsureLayout()
+	switch key {
+	case "ENTER", "SEND", "ASK_AI", "GLOBE":
+	default:
+		vkKeySound()
+	}
+	if virtualKeyboardActive {
+		vkEnsureLayout()
+	}
 }
 
 // vkFocusedRectIndex returns the index of the highlighted cap in keyboardRects.
@@ -1567,7 +1965,38 @@ func vkHoverFromPointer() int {
 // vkHandleControllerButton applies one controller button to the open keyboard,
 // so the main loop and the modal input loop (the text browser's address bar)
 // behave identically. It reports whether the keyboard consumed the button.
+//
+//	D-pad      move (in the field: move the caret)
+//	A          press; hold on a letter for its accents, on the globe for languages
+//	B / Back   close (an open popup or a recording first)
+//	Start      close
+//	X          delete (hold to repeat)
+//	Y          submit (Ask AI in chat)
+//	L1         Shift (twice quickly: caps lock)
+//	R1         letters / symbols; with L1 held: next language
+//	L1 + X/Y   copy / paste
 func vkHandleControllerButton(button uint8, config *Config) bool {
+	vkSyncSession()
+	if vkVoiceHandleButton(button, config) {
+		return true
+	}
+	if vkPopup.open {
+		switch sdl.GameControllerButton(button) {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			vkPopupMove(-1, 0)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			vkPopupMove(1, 0)
+		case sdl.CONTROLLER_BUTTON_A:
+			vkPopupPick(vkPopup.focus, config)
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+			vkPopupClose()
+			vkPlay(PlayBackSound)
+		}
+		return true
+	}
+	if vkHandleChord(button, config) {
+		return true
+	}
 	switch sdl.GameControllerButton(button) {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		vkMoveFocus(0, -1)
@@ -1578,15 +2007,38 @@ func vkHandleControllerButton(button uint8, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		vkMoveFocus(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
-		vkActivateFocused(config)
+		vkPadPress(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		vkCloseKeyboard()
+		vkPlay(PlayBackSound)
+	case sdl.CONTROLLER_BUTTON_X:
+		vkBackspace(config)
+		vkKeySound()
+		if i := vkKeyIndex("BACK"); i >= 0 {
+			vkFlashPressedRect(keyboardRects[i])
+			vkHoldBegin(vkHoldPadX, "BACK", keyboardRects[i])
+		} else {
+			vkHoldBegin(vkHoldPadX, "BACK", sdl.Rect{})
+		}
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		vkL1ShiftBefore, vkL1CapsBefore = keyboardUpper, vkCapsLock
+		vkL1ChordArmed = true
+		vkL1DownAt = sdl.GetTicks64()
 		toggleKeyboardCase()
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		vkToggleLayer()
+		if vkPadHeld(sdl.CONTROLLER_BUTTON_LEFTSHOULDER) {
+			if vkL1ChordArmed {
+				vkL1ChordArmed = false
+				keyboardUpper, vkCapsLock = vkL1ShiftBefore, vkL1CapsBefore
+				vkLayoutSig = ""
+			}
+			vkGlobePressed(config)
+		} else {
+			vkToggleLayer()
+		}
 	case sdl.CONTROLLER_BUTTON_Y:
 		// Y is the secondary submit: Ask AI in chat, Done everywhere else.
+		vkPlay(PlayActivateSound)
 		vkSubmit(config, vkTarget == vkTargetChat)
 	default:
 		return false
@@ -1594,22 +2046,120 @@ func vkHandleControllerButton(button uint8, config *Config) bool {
 	return true
 }
 
-// vkMoveFocus moves the highlight by (dx, dy) with clamping.
+// vkPadPress is A: press the focused element and follow the button for a long
+// press (accents on a letter, the language list on the globe).
+func vkPadPress(config *Config) {
+	if vkFocusZone == vkZoneTools && vkTool(vkZoneIndex) == vkToolGlobe {
+		vkFlashPressedRect(vkGeom.tools[vkToolGlobe])
+		vkGlobeAction(vkHoldPadA, vkGeom.tools[vkToolGlobe], config)
+		return
+	}
+	if vkFocusZone == vkZoneKeys && !vkPopup.open {
+		key := vkFocusedKey()
+		rect := sdl.Rect{}
+		if i := vkFocusedRectIndex(); i >= 0 && i < len(keyboardRects) {
+			rect = keyboardRects[i]
+		}
+		if key == "GLOBE" {
+			vkFlashPressedRect(rect)
+			vkGlobeAction(vkHoldPadA, rect, config)
+			return
+		}
+		vkActivateFocused(config)
+		if virtualKeyboardActive {
+			// A letter with accents waits for a long press, delete repeats.
+			vkHoldBegin(vkHoldPadA, key, rect)
+		}
+		return
+	}
+	vkActivateFocused(config)
+}
+
+// vkKeyIndex is the index of a key label in the current grid, or -1.
+func vkKeyIndex(key string) int {
+	for i, k := range keyboardKeys {
+		if k == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// vkMoveFocus moves the highlight by (dx, dy). Up from the top key row walks
+// into the strip, the field and the tool row; in the field Left/Right move the
+// caret. Moving between key rows keeps to the key under the old one's centre,
+// so Up from the wide space bar lands above it, not at its column index.
 func vkMoveFocus(dx, dy int) {
+	if vkPopup.open {
+		vkPopupMove(dx, dy)
+		return
+	}
 	if len(keyboard) == 0 {
 		return
 	}
 	vkEnsureLayout()
+	switch vkFocusZone {
+	case vkZoneStrip:
+		switch {
+		case dy > 0:
+			vkFocusKeysFrom(vkGeom.cells[vkClampIndex(vkZoneIndex, vkGeom.nCells)], 0)
+		case dy < 0:
+			vkFocusZone = vkZoneField
+		case dx != 0 && !vkVoiceActive():
+			// While the voice bar covers the strip there are no cells to walk.
+			vkZoneIndex = vkNextStripCell(vkZoneIndex, dx)
+		}
+		return
+	case vkZoneField:
+		switch {
+		case dx != 0:
+			vkMoveCaret(dx)
+		case dy > 0:
+			if vkGeom.nCells > 0 && vkStripHasContent() {
+				vkFocusZone = vkZoneStrip
+				vkZoneIndex = vkNextStripCell(-1, 1)
+			} else {
+				vkFocusKeysFrom(vkFieldRect, 0)
+			}
+		case dy < 0:
+			vkFocusZone = vkZoneTools
+			vkZoneIndex = int(vkToolClose)
+			for t := vkToolCopy; t < vkToolClose; t++ {
+				if vkToolEnabled(t) {
+					vkZoneIndex = int(t)
+					break
+				}
+			}
+		}
+		return
+	case vkZoneTools:
+		switch {
+		case dy > 0:
+			vkFocusZone = vkZoneField
+		case dx != 0:
+			vkZoneIndex = vkNextTool(vkZoneIndex, dx)
+		}
+		return
+	}
+
 	if keyboardPosY < 0 || keyboardPosY >= len(keyboard) {
 		keyboardPosY, keyboardPosX = 0, 0
+	}
+	if dy < 0 && keyboardPosY == 0 {
+		if vkGeom.nCells > 0 && vkStripHasContent() {
+			vkFocusZone = vkZoneStrip
+			vkZoneIndex = vkNearestCell(vkFocusedKeyCenterX())
+		} else {
+			vkFocusZone = vkZoneField
+		}
+		return
 	}
 	if dy != 0 {
 		ny := keyboardPosY + dy
 		if ny >= 0 && ny < len(keyboard) {
+			cx := vkFocusedKeyCenterX()
 			keyboardPosY = ny
-			if keyboardPosX >= len(keyboard[ny]) {
-				keyboardPosX = len(keyboard[ny]) - 1
-			}
+			keyboardPosX = vkNearestKeyInRow(ny, cx)
 		}
 	}
 	if dx != 0 {
@@ -1618,13 +2168,110 @@ func vkMoveFocus(dx, dy int) {
 			keyboardPosX = nx
 		}
 	}
+	if keyboardPosX >= len(keyboard[keyboardPosY]) {
+		keyboardPosX = len(keyboard[keyboardPosY]) - 1
+	}
 	if keyboardPosX < 0 {
 		keyboardPosX = 0
 	}
 }
 
+func vkClampIndex(i, n int) int {
+	if i >= n {
+		i = n - 1
+	}
+	if i < 0 {
+		i = 0
+	}
+	return i
+}
+
+// vkFocusedKeyCenterX is the horizontal centre of the highlighted key.
+func vkFocusedKeyCenterX() int32 {
+	if i := vkFocusedRectIndex(); i >= 0 && i < len(keyboardRects) {
+		r := keyboardRects[i]
+		return r.X + r.W/2
+	}
+	return vkFieldRect.X + vkFieldRect.W/2
+}
+
+// vkNearestKeyInRow is the column of the key in row whose centre is nearest x.
+func vkNearestKeyInRow(row int, x int32) int {
+	best, bestD := 0, int32(1<<30)
+	for i, rc := range keyboardRowCol {
+		if rc[0] != row || i >= len(keyboardRects) {
+			continue
+		}
+		r := keyboardRects[i]
+		d := r.X + r.W/2 - x
+		if d < 0 {
+			d = -d
+		}
+		if d < bestD {
+			best, bestD = rc[1], d
+		}
+	}
+	return best
+}
+
+// vkFocusKeysFrom moves the highlight onto key row `row`, under rect's centre.
+func vkFocusKeysFrom(rect sdl.Rect, row int) {
+	vkFocusZone = vkZoneKeys
+	if row >= len(keyboard) {
+		row = len(keyboard) - 1
+	}
+	keyboardPosY = row
+	keyboardPosX = vkNearestKeyInRow(row, rect.X+rect.W/2)
+}
+
+// vkNearestCell is the strip cell nearest x that has something in it.
+func vkNearestCell(x int32) int {
+	best, bestD := 0, int32(1<<30)
+	for i := 0; i < vkGeom.nCells; i++ {
+		if t, _ := vkStripCellText(i); t == "" {
+			continue
+		}
+		r := vkGeom.cells[i]
+		d := r.X + r.W/2 - x
+		if d < 0 {
+			d = -d
+		}
+		if d < bestD {
+			best, bestD = i, d
+		}
+	}
+	return best
+}
+
+// vkNextStripCell steps from cell i in direction dir to the next filled cell
+// (staying put at either end).
+func vkNextStripCell(i, dir int) int {
+	for j := i + dir; j >= 0 && j < vkGeom.nCells; j += dir {
+		if t, _ := vkStripCellText(j); t != "" {
+			return j
+		}
+	}
+	if i < 0 {
+		return 0
+	}
+	return i
+}
+
+// vkNextTool steps the tool-row highlight, skipping chips that cannot act.
+func vkNextTool(i, dir int) int {
+	for j := i + dir; j >= 0 && j < int(vkToolCount); j += dir {
+		if vkToolEnabled(vkTool(j)) {
+			return j
+		}
+	}
+	return i
+}
+
 // vkSubmit commits the active target and closes the keyboard.
 func vkSubmit(config *Config, askAI bool) {
+	// The last word has no space after it to commit it; learn it before the
+	// field is cleared.
+	vkLearnLastWord()
 	text := strings.TrimSpace(vkCurrentText())
 	switch vkTarget {
 	case vkTargetUnit:
@@ -1635,6 +2282,15 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetGameSearch:
 		// Same here: the library narrowed as the query was typed.
 		vkCloseKeyboard()
+	case vkTargetGroqKey:
+		// Read before closing: closing clears the buffer.
+		vkCloseKeyboard()
+		vkSaveGroqKey(config, text)
+	case homeSearchVKTarget:
+		// The Home search results are already live: Done drops the keyboard
+		// and hands the highlight to the first result.
+		vkCloseKeyboard()
+		homeSearchKeyboardDone()
 	case vkTargetDownloads:
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.
@@ -1650,6 +2306,13 @@ func vkSubmit(config *Config, askAI bool) {
 		vkCloseKeyboard()
 		if text != "" {
 			termExecute(text)
+		}
+	case vkTargetPlaylist:
+		vkCloseKeyboard()
+		if pl, err := musicSaveQueueAsPlaylist(text); err != nil {
+			ShowToast("Playlist: "+err.Error(), ToastKindWarning)
+		} else {
+			ShowToast(fmt.Sprintf("Saved %s · %d tracks", pl.Name, len(pl.Tracks)), ToastKindSuccess)
 		}
 	case vkTargetName:
 		// Empty input resets to the default name ("You").
@@ -1742,12 +2405,9 @@ func vkSubmit(config *Config, askAI bool) {
 		// that finished, which looked like the keyboard ignoring the button.
 		vkCloseKeyboard()
 		if text != "" {
-			if askAI {
-				// sendGroqChatMessage records the user bubble itself.
-				sendGroqChatMessage(text)
-			} else {
-				sendChatMessage(chatDisplayName(), text)
-			}
+			// The chat sends to the tab on screen (community, Juka AI or
+			// Saved); Ask AI hands the text to Juka AI instead (chatstate.go).
+			chatSubmitComposer(text, askAI)
 		}
 	default:
 		if ipPromptPending {
@@ -1811,9 +2471,23 @@ func vkTriggerSceneSearch(config *Config) {
 	executeYouTubeSearch(config, ytSearchCmd(config), "search_results", snapshotVars(config))
 }
 
-// toggleKeyboardCase flips letter case without losing the focused key.
+// toggleKeyboardCase is Shift, without losing the focused key: a tap shifts
+// the next letter, a second tap within vkCapsDoubleTapMs locks caps, and a tap
+// with caps locked turns it off.
 func toggleKeyboardCase() {
-	keyboardUpper = !keyboardUpper
+	now := sdl.GetTicks64()
+	switch {
+	case vkCapsLock:
+		vkCapsLock = false
+		keyboardUpper = false
+	case keyboardUpper && vkShiftArmed && now-vkLastShiftAt <= vkCapsDoubleTapMs:
+		vkCapsLock = true
+	default:
+		keyboardUpper = !keyboardUpper
+	}
+	// Two Shift taps in a row (nothing typed between them) can lock caps.
+	vkShiftArmed = !vkCapsLock
+	vkLastShiftAt = now
 	vkLayoutSig = ""
 	vkEnsureLayout()
 }
@@ -1881,16 +2555,23 @@ func vkControllerNavDirection() (int, int) {
 }
 
 // vkTickNavRepeat advances the held-D-pad state. The main loop and the modal
-// input loop call it once per frame while the keyboard is open.
+// input loop call it once per frame while the keyboard is open, so it is also
+// the keyboard's frame tick: long presses, the voice recorder and the deferred
+// save of learned words run from here.
 func vkTickNavRepeat() {
 	if !virtualKeyboardActive {
 		vkNavRepeat = navRepeatTracker{}
 		return
 	}
+	vkSyncSession()
+	now := sdl.GetTicks64()
 	dx, dy := vkControllerNavDirection()
-	if stepX, stepY := vkNavRepeat.step(sdl.GetTicks64(), dx, dy); stepX != 0 || stepY != 0 {
+	if stepX, stepY := vkNavRepeat.step(now, dx, dy); stepX != 0 || stepY != 0 {
 		vkMoveFocus(stepX, stepY)
 	}
+	vkTickHold(now, appConfig)
+	vkVoiceTick(appConfig)
+	vkLearnedMaybeSave(time.Now())
 }
 
 // vkResetNavRepeat forgets the held direction, so a repeat does not survive the
@@ -1920,17 +2601,22 @@ func vkEaseOut(t float64) float64 {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Static layer cache (panel, header, footer, keys)
+// Static layer caches (keyboard sheet, chat panel, video overlay)
 // ──────────────────────────────────────────────────────────────────────
 
-// Only the focused key changes while navigating. Redrawing the panel, header,
+// Only the focused key changes while navigating. Redrawing the sheet, header,
 // footer and all ~40 key caps every frame was the most expensive part of typing
 // on the handheld, so the static layer is rendered once into a texture and
-// reused until the layout, screen, theme or header/footer text changes. A
-// full-screen texture is
-// used so the cached pixels live in the same coordinate space as the renderer's
-// logical size (a smaller target would be scaled by SDL's logical-size
-// transform). The text field stays live because it follows typing.
+// reused until the layout, screen, theme or header text changes (vkui.go). A
+// full-screen texture is used so the cached pixels live in the same coordinate
+// space as the renderer's logical size (a smaller target would be scaled by
+// SDL's logical-size transform). The field, the strip and the focus stay live
+// because they follow typing.
+//
+// vkStaticLayerState keys the chat panel and video overlay caches below. It
+// is compared every frame, so it holds only colours and a rect: the keyboard's
+// title and hint strings it used to carry were rebuilt (and allocated) on
+// every frame of video playback for no reason.
 type vkStaticLayerState struct {
 	layout    string
 	panel     sdl.Rect
@@ -1943,14 +2629,12 @@ type vkStaticLayerState struct {
 	text3     sdl.Color
 	border    sdl.Color
 	highlight sdl.Color
-	title     string
-	hints     string
 }
 
 var (
 	vkStaticTex    *sdl.Texture
 	vkStaticOwner  *sdl.Renderer
-	vkStaticState  vkStaticLayerState
+	vkStaticState  vkSheetState
 	vkStaticValid  bool
 	vkStaticBroken bool // renderer has no render-target support: draw live
 	vkStaticBuilds int  // rebuild count, used by tests and diagnostics
@@ -1969,8 +2653,6 @@ func vkStaticLayerStateNow(panel sdl.Rect) vkStaticLayerState {
 		text3:     ColorTextTertiary(),
 		border:    ColorBorderSubtle,
 		highlight: vkFocusColor(),
-		title:     vkTitle(),
-		hints:     vkHints(),
 	}
 }
 
@@ -2209,129 +2891,8 @@ func vkEnsureChatCache(renderer *sdl.Renderer, config *Config, listX, listY, lis
 	return tex
 }
 
-func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont *ttf.Font) *sdl.Texture {
-	vkForgetForeignTexture(renderer, &vkStaticTex, &vkStaticOwner, &vkStaticValid)
-	state := vkStaticLayerStateNow(vkPanelRect)
-	if vkStaticValid && vkStaticTex != nil && vkStaticState == state {
-		return vkStaticTex
-	}
-	// Checked before the destroy below (which clears the flag): a renderer
-	// without render-target support must not retry and log every frame.
-	if vkStaticBroken || screenWidth <= 0 || screenHeight <= 0 {
-		return nil
-	}
-	DestroyVKStaticCache()
-
-	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, screenWidth, screenHeight)
-	if err != nil || tex == nil {
-		vkStaticBroken = true
-		log.Printf("[vk] keyboard cache disabled: %v", err)
-		return nil
-	}
-	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
-		tex.Destroy()
-		vkStaticBroken = true
-		log.Printf("[vk] keyboard cache blend mode: %v", err)
-		return nil
-	}
-
-	prevTarget := renderer.GetRenderTarget()
-	var prevBlend sdl.BlendMode
-	_ = renderer.GetDrawBlendMode(&prevBlend)
-	if err := renderer.SetRenderTarget(tex); err != nil {
-		tex.Destroy()
-		vkStaticBroken = true
-		log.Printf("[vk] keyboard cache target: %v", err)
-		return nil
-	}
-	// The keyboard is drawn last, so no clip should be active; make sure the
-	// cached layer is not clipped by a leftover scene rect.
-	_ = renderer.SetClipRect(nil)
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 0)
-	renderer.Clear()
-	// Panel, header and footer never change while navigating, and every cap is
-	// rendered in its resting state: focus is an overlay.
-	vkDrawPanel(renderer, vkPanelRect)
-	vkDrawHeader(renderer, config, smallFont, vkPanelRect, vkCloseRect)
-	vkDrawKeys(renderer, config, font, 0, false)
-	vkDrawFooter(renderer, config, smallFont, vkPanelRect)
-
-	_ = renderer.SetRenderTarget(prevTarget)
-	_ = renderer.SetDrawBlendMode(prevBlend)
-	vkStaticTex = tex
-	vkStaticOwner = renderer
-	vkStaticState = state
-	vkStaticValid = true
-	vkStaticBuilds++
-	return tex
-}
-
-// renderKeyboard draws the panel when the keyboard is open.
-func renderKeyboard(renderer *sdl.Renderer, config *Config) {
-	if !virtualKeyboardActive {
-		return
-	}
-	vkEnsureLayout()
-
-	// Short rise-in animation (120ms) so the panel slides up from the edge.
-	offset := vkAnimOffset()
-
-	panel := vkPanelRect
-	panel.Y += offset
-	field := vkFieldRect
-	field.Y += offset
-	closeBtn := vkCloseRect
-	closeBtn.Y += offset
-
-	// Dim the content behind the panel, fading in with the slide so the screen
-	// does not go dark a frame before the panel arrives.
-	progress := vkOpenProgress()
-	fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, WithAlpha(ColorBackground, uint8(float64(190)*progress)))
-	fillRoundedRect(renderer, 0, 0, screenWidth, panel.Y, 0, WithAlpha(ColorBackground, uint8(float64(60)*progress)))
-
-	font, _ := getCachedFont(config, "medium")
-	if font == nil {
-		font, _ = getCachedFont(config, "small")
-	}
-	smallFont, _ := getCachedFont(config, "small")
-	if smallFont == nil {
-		smallFont = font
-	}
-
-	if cache := vkEnsureStaticLayer(renderer, config, font, smallFont); cache != nil {
-		// Once per navigation frame: copy the cached layer, then draw only the
-		// field (typing) and the cap that moved. The layer is offset as a whole
-		// so the slide-in animation also moves panel, header and footer.
-		src := sdl.Rect{X: vkPanelRect.X, Y: vkPanelRect.Y, W: vkPanelRect.W, H: vkPanelRect.H}
-		dst := sdl.Rect{X: panel.X, Y: panel.Y, W: panel.W, H: panel.H}
-		_ = renderer.Copy(cache, &src, &dst)
-		vkDrawField(renderer, config, font, field)
-		// Mouse affordance: show which cap a click would press. The focused cap
-		// keeps its own fill, so hover never competes with it.
-		if hover := vkHoverFromPointer(); hover >= 0 && hover != vkFocusedRectIndex() && hover < len(keyboardRects) {
-			r := keyboardRects[hover]
-			r.Y += offset
-			vkDrawHoverKey(renderer, r)
-		}
-		vkDrawFocusedKey(renderer, config, font, offset)
-		// Press feedback on top of everything: the cap the finger just touched
-		// reads as pushed in even though the highlight already moved on.
-		if pressed, ok := vkPressedRectAt(sdl.GetTicks64()); ok {
-			pressed.Y += offset
-			vkDrawPressedKey(renderer, pressed)
-		}
-	} else {
-		vkDrawPanel(renderer, panel)
-		vkDrawHeader(renderer, config, smallFont, panel, closeBtn)
-		vkDrawField(renderer, config, font, field)
-		vkDrawKeys(renderer, config, font, offset, true)
-		vkDrawFooter(renderer, config, smallFont, panel)
-	}
-}
-
-// vkDrawPanel paints the panel shadow, body, sheen and hairline borders. It is
-// shared by the live path and the cached-layer build so both look identical.
+// vkDrawPanel paints the chat cache's header band: the overlay sheet's shape
+// on the theme's panel surface. (The keyboard itself draws vkDrawSheet.)
 func vkDrawPanel(renderer *sdl.Renderer, panel sdl.Rect) {
 	// The overlay sheet's shape — the shared corner radius and glass hairline,
 	// with the glass edge highlight along the top — on the theme's panel
@@ -2340,333 +2901,4 @@ func vkDrawPanel(renderer *sdl.Renderer, panel sdl.Rect) {
 	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, OverlayCardRadius, WithAlpha(ColorSurfacePanel, 250))
 	strokeRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, OverlayCardRadius, 1, glassSheetEdge())
 	drawOverlayCardAccent(renderer, panel.X, panel.Y, panel.W)
-}
-
-func vkDrawHeader(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel, closeBtn sdl.Rect) {
-	if font == nil {
-		return
-	}
-	title := vkTitle()
-	x := panel.X + 20
-	y := panel.Y + 20
-	// Small accent bar + label, the same visual language as section headers.
-	fillRoundedRect(renderer, x, y+3, 3, 12, 2, vkFocusColor())
-	renderText(renderer, config, font, title, ColorTextTertiary(), x+10, y)
-
-	// Layer/case indicator, right-aligned before the close button. It used to
-	// share the footer with the hints and the two collided on small screens.
-	mode := "ABC"
-	if vkLayer == vkLayerSymbols {
-		mode = "123"
-	}
-	if keyboardUpper {
-		mode += " · SHIFT"
-	}
-	if mw, _, err := font.SizeUTF8(mode); err == nil {
-		modeX := closeBtn.X - 12 - int32(mw)
-		if modeX > x+10+int32(mustTextWidth(font, title))+12 {
-			renderText(renderer, config, font, mode, WithAlpha(ColorTextTertiary(), 200), modeX, y+3)
-		}
-	}
-
-	// Close button: a full-size tap target with a drawn X. The old 26px dotted
-	// cross was both hard to hit and easy to mistake for decoration.
-	UIButton(renderer, config, closeBtn, "", UIButtonStyle{
-		Variant:  UIButtonCustom,
-		Fill:     ColorSurfaceRaised,
-		Border:   WithAlpha(ColorBorderSubtle, 140),
-		Font:     font,
-		Radius:   RadiusSM,
-		NoShadow: true,
-	}, UIButtonState{})
-	cx := closeBtn.X + closeBtn.W/2
-	cy := closeBtn.Y + closeBtn.H/2
-	// Two passes give the X a 2px stroke so it reads at handheld distance.
-	iconCol := WithAlpha(ColorTextSecondary(), 230)
-	drawCloseIcon(renderer, cx, cy, closeBtn.W/3, iconCol)
-	drawCloseIcon(renderer, cx+1, cy, closeBtn.W/3, iconCol)
-}
-
-func vkDrawField(renderer *sdl.Renderer, config *Config, font *ttf.Font, field sdl.Rect) {
-	fillRoundedRect(renderer, field.X, field.Y, field.W, field.H, RadiusMD, ColorIconSurface)
-	// Focus ring: accent hairline plus a soft outer glow.
-	focus := vkFocusColor()
-	renderer.SetDrawColor(focus.R, focus.G, focus.B, 70)
-	renderer.DrawRect(&sdl.Rect{X: field.X - 1, Y: field.Y - 1, W: field.W + 2, H: field.H + 2})
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 160)
-	renderer.DrawRect(&sdl.Rect{X: field.X, Y: field.Y, W: field.W, H: field.H})
-
-	if font == nil {
-		return
-	}
-	textH := int32(font.Height())
-	padX := int32(16)
-	textY := field.Y + (field.H-textH)/2
-	maxW := field.W - 2*padX - 8
-	text := vkCurrentText()
-
-	if text == "" {
-		// A steady caret marks the focused field before the first character;
-		// once there is text the caret blinks behind it instead. The placeholder
-		// moves aside so the two never overlap.
-		caretY := field.Y + field.H/2 - textH/2 + 2
-		fillRoundedRect(renderer, field.X+padX, caretY, 2, textH-4, 1, vkFocusColor())
-		renderText(renderer, config, font, vkPlaceholder(), ColorTextTertiary(), field.X+padX+10, textY)
-	} else {
-		display := text
-		if (vkTarget == vkTargetRA && raPanel.edit == raEditAPIKey) || vkTarget == vkTargetWiFi {
-			// Do not leave the Web API key or a Wi-Fi password readable on the
-			// handheld screen while it is being typed or corrected.
-			display = strings.Repeat("•", utf8.RuneCountInString(text))
-		}
-		visible, w := vkFitTail(font, display, maxW)
-		if vkTextSelected {
-			// The whole value is selected: the first key typed replaces it. The
-			// fill says so before the user finds out the hard way.
-			fillRoundedRect(renderer, field.X+padX-3, textY-2, w+6, textH+2, 3, WithAlpha(vkFocusColor(), 110))
-		}
-		renderText(renderer, config, font, visible, ColorTextPrimary(), field.X+padX, textY)
-		if !vkTextSelected && uint32(sdl.GetTicks64()/530)%2 == 0 {
-			cx := field.X + padX + w + 2
-			if cx > field.X+field.W-padX {
-				cx = field.X + field.W - padX
-			}
-			fillRoundedRect(renderer, cx, field.Y+field.H/2-textH/2+2, 2, textH-4, 1, vkFocusColor())
-		}
-	}
-
-	// Right-hand hint: remaining characters before the cap. A masked secret
-	// gets no counter; its limit is the WPA rule, not the field cap.
-	remaining := vkMaxTextLen - len(text)
-	if vkTarget != vkTargetWiFi && remaining < 200 && remaining >= 0 {
-		smallFont, _ := getCachedFont(config, "small")
-		if smallFont != nil {
-			label := fmt.Sprintf("%d", remaining)
-			w, _, _ := smallFont.SizeUTF8(label)
-			renderText(renderer, config, smallFont, label, ColorTextTertiary(),
-				field.X+field.W-padX-int32(w), textY+(textH-int32(smallFont.Height()))/2)
-		}
-	}
-}
-
-// vkFitTail returns the longest suffix of text that fits maxW, so the caret
-// and the newest characters stay visible while typing long queries.
-func vkFitTail(font *ttf.Font, text string, maxW int32) (string, int32) {
-	if font == nil {
-		return text, 0
-	}
-	w, _, _ := font.SizeUTF8(text)
-	if int32(w) <= maxW {
-		return text, int32(w)
-	}
-	// Grow the suffix from the end until it stops fitting, so the cost is
-	// proportional to the visible runes rather than the whole buffer.
-	runes := []rune(text)
-	start := len(runes)
-	var lastW int32
-	for start > 0 {
-		cw, _, _ := font.SizeUTF8(string(runes[start-1:]))
-		if int32(cw) > maxW {
-			break
-		}
-		lastW = int32(cw)
-		start--
-	}
-	if start >= len(runes) {
-		// A single glyph is wider than the field: show its last rune.
-		if len(runes) > 0 {
-			return string(runes[len(runes)-1:]), 0
-		}
-		return "", 0
-	}
-	return string(runes[start:]), lastW
-}
-
-// vkKeyStyle is the per-key drawing state that depends only on the label and
-// the current layer/shift state, not on focus.
-type vkKeyStyle struct {
-	primary   bool
-	secondary bool
-	shiftOn   bool
-	layerOn   bool
-	utility   bool
-}
-
-func vkStyleForKey(key string) vkKeyStyle {
-	return vkKeyStyle{
-		primary:   key == "ENTER" || key == "SEND",
-		secondary: key == "ASK_AI",
-		shiftOn:   key == "⇧" && keyboardUpper,
-		layerOn:   (key == "123" && vkLayer == vkLayerSymbols) || (key == "ABC" && vkLayer == vkLayerLetters),
-		utility:   key == "⇧" || key == "BACK" || key == "123" || key == "ABC",
-	}
-}
-
-// vkDrawSingleKey draws one cap. focused selects the highlight fill; every
-// other property comes from the current layout.
-func vkDrawSingleKey(renderer *sdl.Renderer, config *Config, font *ttf.Font, r sdl.Rect, key, label string, focused bool) {
-	highlight := vkFocusColor()
-	highlightText := contrastText(highlight)
-	ring := WithAlpha(highlight, 200)
-	style := vkStyleForKey(key)
-
-	radius := RadiusMD
-	// Base surface.
-	base := ColorIconSurface
-	if style.utility {
-		base = ColorSurfaceRaised
-	}
-	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, base)
-
-	// Top sheen and a shadowed bottom edge give keys a crisp, slightly raised
-	// look without a gradient; both are cheap enough for the cached layer.
-	renderer.SetDrawColor(255, 255, 255, 10)
-	renderer.FillRect(&sdl.Rect{X: r.X + 6, Y: r.Y + 1, W: r.W - 12, H: 1})
-	renderer.SetDrawColor(0, 0, 0, 44)
-	renderer.FillRect(&sdl.Rect{X: r.X + 6, Y: r.Y + r.H - 2, W: r.W - 12, H: 1})
-	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 110)
-	renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-
-	textColor := ColorTextPrimary()
-	switch {
-	case focused || style.primary:
-		// Focus ring behind the filled key.
-		fillRoundedRect(renderer, r.X-2, r.Y-2, r.W+4, r.H+4, radius+2, ring)
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, highlight)
-		textColor = highlightText
-	case style.secondary:
-		renderer.SetDrawColor(highlight.R, highlight.G, highlight.B, 160)
-		renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-		textColor = highlight
-	case style.shiftOn || style.layerOn:
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, WithAlpha(highlight, 70))
-		renderer.SetDrawColor(highlight.R, highlight.G, highlight.B, 180)
-		renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-		textColor = highlight
-	case style.utility:
-		textColor = ColorTextSecondary()
-	}
-
-	if font == nil || label == "" {
-		return
-	}
-	// Multi-letter caps ("SHIFT", "space", "Done") must never spill over
-	// the key edge, and single letters should use the larger face.
-	labelFont, fitted := vkLabelFont(config, label, r.W-14)
-	if labelFont == nil || fitted == "" {
-		return
-	}
-	w, h, _ := labelFont.SizeUTF8(fitted)
-	tx := r.X + (r.W-int32(w))/2
-	ty := r.Y + (r.H-int32(h))/2
-	renderText(renderer, config, labelFont, fitted, textColor, tx, ty)
-}
-
-// vkDrawKeys draws the key layer. With drawFocus=false every key is drawn in
-// its resting state, which is the focus-independent layer that gets cached;
-// the highlighted cap is then drawn on top each frame.
-func vkDrawKeys(renderer *sdl.Renderer, config *Config, font *ttf.Font, offset int32, drawFocus bool) {
-	for i, rect := range keyboardRects {
-		row, col := 0, 0
-		if i < len(keyboardRowCol) {
-			row, col = keyboardRowCol[i][0], keyboardRowCol[i][1]
-		}
-		focused := drawFocus && row == keyboardPosY && col == keyboardPosX
-		key := ""
-		if i < len(keyboardKeys) {
-			key = keyboardKeys[i]
-		}
-		r := rect
-		r.Y += offset
-		vkDrawSingleKey(renderer, config, font, r, key, vkKeyLabel(key), focused)
-	}
-}
-
-// vkDrawHoverKey tints the cap under the mouse pointer.
-func vkDrawHoverKey(renderer *sdl.Renderer, r sdl.Rect) {
-	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, RadiusMD, WithAlpha(vkFocusColor(), 30))
-	renderer.SetDrawColor(vkFocusColor().R, vkFocusColor().G, vkFocusColor().B, 110)
-	renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-}
-
-// vkDrawPressedKey makes a cap look pushed in: the face darkens and an inner
-// line takes the place of the top sheen.
-func vkDrawPressedKey(renderer *sdl.Renderer, r sdl.Rect) {
-	if r.W <= 4 || r.H <= 4 {
-		return
-	}
-	fillRoundedRect(renderer, r.X+1, r.Y+1, r.W-2, r.H-2, RadiusMD-1, sdl.Color{R: 0, G: 0, B: 0, A: 52})
-	renderer.SetDrawColor(0, 0, 0, 90)
-	renderer.DrawRect(&sdl.Rect{X: r.X + 2, Y: r.Y + 2, W: r.W - 4, H: r.H - 4})
-}
-
-// vkDrawFocusedKey redraws only the highlighted cap on top of the cached layer.
-func vkDrawFocusedKey(renderer *sdl.Renderer, config *Config, font *ttf.Font, offset int32) {
-	for i, rect := range keyboardRects {
-		row, col := 0, 0
-		if i < len(keyboardRowCol) {
-			row, col = keyboardRowCol[i][0], keyboardRowCol[i][1]
-		}
-		if row != keyboardPosY || col != keyboardPosX {
-			continue
-		}
-		key := ""
-		if i < len(keyboardKeys) {
-			key = keyboardKeys[i]
-		}
-		r := rect
-		r.Y += offset
-		vkDrawSingleKey(renderer, config, font, r, key, vkKeyLabel(key), true)
-		return
-	}
-}
-
-// vkLabelFont picks a font whose label fits the key cap and ellipsizes only as
-// a last resort, so keys stay legible at every supported screen size.
-func vkLabelFont(config *Config, label string, maxW int32) (*ttf.Font, string) {
-	if maxW < 8 {
-		maxW = 8
-	}
-	for _, name := range []string{"medium", "small"} {
-		f, _ := getCachedFont(config, name)
-		if f == nil {
-			continue
-		}
-		if w, _, err := f.SizeUTF8(label); err == nil && int32(w) <= maxW {
-			return f, label
-		}
-	}
-	f, _ := getCachedFont(config, "small")
-	if f == nil {
-		return nil, ""
-	}
-	return f, ellipsize(f, label, maxW)
-}
-
-func vkDrawFooter(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel sdl.Rect) {
-	if font == nil {
-		return
-	}
-	hint := vkHints()
-	maxW := panel.W - 40
-	if w, _, _ := font.SizeUTF8(hint); int32(w) > maxW {
-		hint = ellipsize(font, hint, maxW)
-	}
-	w, _, _ := font.SizeUTF8(hint)
-	x := panel.X + (panel.W-int32(w))/2
-	// Sit inside the reserved footer band instead of a fixed 20px offset, which
-	// overlapped the last key row on 800x480.
-	y := panel.Y + panel.H - int32(14) - int32(font.Height())
-	renderText(renderer, config, font, hint, ColorTextTertiary(), x, y)
-}
-
-func mustTextWidth(font *ttf.Font, text string) int {
-	if font == nil {
-		return 0
-	}
-	w, _, err := font.SizeUTF8(text)
-	if err != nil {
-		return 0
-	}
-	return w
 }

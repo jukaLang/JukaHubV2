@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestPlainReleaseNotes(t *testing.T) {
@@ -80,13 +81,39 @@ func TestDiagnosticsTextRedactsConfigValues(t *testing.T) {
 	}
 }
 
-func TestBugReportURLBundlesRedactedDiagnostics(t *testing.T) {
+// The bug report carries the redacted diagnostics and the user's words, and
+// nothing that must stay on the device; the phone path's issue link is short
+// enough for a QR code and still names the build.
+func TestBugReportBundlesRedactedDiagnostics(t *testing.T) {
 	config := &Config{
 		Version:        "1.2.3",
 		ChannelProfile: ChannelProfileConfig{Token: "channel-secret"},
 		Variables:      Variables{Custom: map[string]interface{}{"apiKey": "sk-live-secret"}},
 	}
-	raw := BugReportURL(config)
+	form := bugrepForm{
+		Category:    0,
+		Title:       `Crash opening C:\Users\Alice\Videos\clip.mp4`,
+		Description: "It froze. token=abc123def456 at 192.168.1.20 — mail me at alice@example.com",
+		Diagnostics: true,
+	}
+	r := bugrepBuild(config, form, time.Now())
+	if r.Category != "crash" || r.Kind != "bug_report" || !bugrepRefValid(r.ID) {
+		t.Fatalf("report header = %+v", r)
+	}
+	if !strings.Contains(r.Diagnostics, "1.2.3") {
+		t.Fatalf("diagnostics missing from the report:\n%s", r.Diagnostics)
+	}
+	whole := r.Title + "\n" + r.Description + "\n" + r.Diagnostics + "\n" + r.Log
+	for _, secret := range []string{"channel-secret", "sk-live-secret", "abc123def456", "192.168.1.20", "alice@example.com", `\Users\Alice`} {
+		if strings.Contains(whole, secret) {
+			t.Fatalf("the report leaked %q:\n%s", secret, whole)
+		}
+	}
+
+	raw := bugrepIssueURL(r, 900)
+	if len(raw) > 900 {
+		t.Fatalf("issue link is %d bytes, want it to fit the QR budget", len(raw))
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -94,17 +121,11 @@ func TestBugReportURLBundlesRedactedDiagnostics(t *testing.T) {
 	if parsed.Host != "github.com" || !strings.HasPrefix(parsed.Path, "/jukaLang/JukaHubV2/issues/new") {
 		t.Fatalf("unexpected issue URL: %s", raw)
 	}
-	body := parsed.Query().Get("body")
-	if !strings.Contains(body, "Diagnostics (redacted)") || !strings.Contains(body, "1.2.3") {
-		t.Fatalf("diagnostics missing from issue body:\n%s", body)
-	}
-	for _, secret := range []string{"channel-secret", "sk-live-secret"} {
-		if strings.Contains(raw, secret) || strings.Contains(body, secret) {
-			t.Fatalf("issue report leaked %q", secret)
-		}
-	}
-	if !strings.Contains(parsed.Query().Get("title"), "Bug") {
+	if !strings.Contains(parsed.Query().Get("title"), "[Bug]") {
 		t.Fatalf("issue title was not prefilled: %q", parsed.Query().Get("title"))
+	}
+	if body := parsed.Query().Get("body"); !strings.Contains(body, "1.2.3") || !strings.Contains(body, r.ID) {
+		t.Fatalf("issue body lost the build or the reference:\n%s", body)
 	}
 }
 

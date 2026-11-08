@@ -262,6 +262,169 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 	return rect
 }
 
+// ── Icon button ──────────────────────────────────────────────────────────
+
+// UIIconButtonStyle is the visual recipe for a chip that is only an icon: the
+// notification bell, a close cross, a toolbar control. The caller keeps the
+// geometry; this owns the surface, the focus treatment, the glyph box and the
+// badge, which every hand-drawn icon button used to re-implement.
+type UIIconButtonStyle struct {
+	// Surface is the resting pill colour. OpenSurface replaces it while the
+	// control's panel is open; the zero value keeps Surface.
+	Surface     sdl.Color
+	OpenSurface sdl.Color
+	// Ring is the accent the focused/open outline is drawn in.
+	Ring sdl.Color
+	// Icon is the glyph ink.
+	Icon sdl.Color
+	// IconInset is the total padding the glyph gives up inside the chip.
+	IconInset int32
+	// Radius overrides the pill (0 = fully rounded).
+	Radius int32
+	// RingWidth is the focused outline's width (0 = 2) and RingOutset how far
+	// outside the chip it sits (0 = 2).
+	RingWidth  int32
+	RingOutset int32
+	// Glyph paints the icon inside box. tint is Icon, already resolved for the
+	// disabled state.
+	Glyph func(renderer *sdl.Renderer, box sdl.Rect, tint sdl.Color)
+}
+
+// UIIconButtonState is one icon button's interaction flags.
+type UIIconButtonState struct {
+	Focused  bool
+	Hovered  bool
+	Pressed  bool
+	Open     bool
+	Disabled bool
+}
+
+// UIIconButton is one icon chip draw: geometry, recipe, state and an optional
+// unread badge.
+type UIIconButton struct {
+	Rect  sdl.Rect
+	Style UIIconButtonStyle
+	State UIIconButtonState
+	// Badge is the count drawn on the chip's top-right corner. Empty draws
+	// nothing; a nil BadgeFont leaves it undrawn because the pill must be
+	// measured before it can be placed.
+	Badge      string
+	BadgeFont  *ttf.Font
+	BadgeColor sdl.Color
+	BadgeInk   sdl.Color
+	// BadgeOffsetX/Y move the badge off the shared corner placement.
+	BadgeOffsetX int32
+	BadgeOffsetY int32
+}
+
+// uiIconButtonBadgeRect hangs a count on an icon chip's top-right corner. It
+// is the shared placement the notification bell's badge already used, so a
+// second icon button with a count cannot put the pill somewhere else.
+func uiIconButtonBadgeRect(font *ttf.Font, chip sdl.Rect, label string, offX, offY int32) sdl.Rect {
+	if font == nil || label == "" {
+		return sdl.Rect{}
+	}
+	tw, th, err := font.SizeUTF8(label)
+	if err != nil {
+		return sdl.Rect{}
+	}
+	bh := int32(th) + 3
+	bw := int32(tw) + SpaceXS*2
+	if bw < bh {
+		bw = bh
+	}
+	return sdl.Rect{
+		X: chip.X + chip.W - bw + SpaceXS + offX,
+		Y: chip.Y - bh/2 + offY,
+		W: bw,
+		H: bh,
+	}
+}
+
+// UIIconButtonDraw paints an icon chip and returns its rect, so a caller can
+// record the hit target in the same expression. The focus ring sits outside
+// the chip (the bloom the header's labelled buttons wear), an open control
+// wears the same accent on its own edge, and the glyph is drawn inside the
+// inset box through Glyph — so the bell, a cross or a future toolbar chip all
+// get one focus and badge recipe.
+func UIIconButtonDraw(renderer *sdl.Renderer, b UIIconButton) sdl.Rect {
+	rect := b.Rect
+	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
+		return rect
+	}
+	radius := b.Style.Radius
+	if radius <= 0 {
+		radius = rect.H / 2
+	}
+	fill := b.Style.Surface
+	if b.State.Disabled {
+		fill = WithAlpha(fill, 110)
+	} else if b.State.Pressed {
+		fill = darken(fill, 14)
+	} else if b.State.Hovered {
+		fill = lighten(fill, 8)
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, fill)
+
+	ring := b.Style.Ring
+	if ring.A == 0 {
+		ring = accentColor
+	}
+	if b.State.Open {
+		if open := b.Style.OpenSurface; open.A > 0 && !b.State.Disabled {
+			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, open)
+		}
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, ring)
+	}
+	if b.State.Focused && !b.State.Disabled {
+		width := b.Style.RingWidth
+		if width <= 0 {
+			width = 2
+		}
+		outset := b.Style.RingOutset
+		if outset <= 0 {
+			outset = 2
+		}
+		strokeRoundedRect(renderer, rect.X-outset, rect.Y-outset, rect.W+2*outset, rect.H+2*outset, radius+outset, width, ring)
+	}
+
+	ink := b.Style.Icon
+	if ink.A == 0 {
+		ink = ColorTextPrimary()
+	}
+	if b.State.Disabled {
+		ink = WithAlpha(ColorTextTertiary(), 160)
+	}
+	if b.Style.Glyph != nil {
+		box := rect
+		if b.Style.IconInset > 0 {
+			box = insetRect(rect, b.Style.IconInset/2)
+		}
+		if box.W > 0 && box.H > 0 {
+			b.Style.Glyph(renderer, box, ink)
+		}
+	}
+
+	if b.Badge != "" {
+		badge := uiIconButtonBadgeRect(b.BadgeFont, rect, b.Badge, b.BadgeOffsetX, b.BadgeOffsetY)
+		if badge.W > 0 && badge.H > 0 {
+			bg := b.BadgeColor
+			if bg.A == 0 {
+				bg = sdl.Color{R: 220, G: 60, B: 60, A: 240}
+			}
+			fg := b.BadgeInk
+			if fg.A == 0 {
+				fg = sdl.Color{R: 255, G: 255, B: 255, A: 255}
+			}
+			tw, th, _ := b.BadgeFont.SizeUTF8(b.Badge)
+			fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, bg)
+			drawText(renderer, b.BadgeFont, b.Badge, badge.X+(badge.W-int32(tw))/2, badge.Y+(badge.H-int32(th))/2, fg, textAlignLeft)
+		}
+	}
+	return rect
+}
+
 // UIBadgeSize measures a count badge before drawing it, so callers can align
 // it to an edge.
 func UIBadgeSize(config *Config, text string) (int32, int32) {

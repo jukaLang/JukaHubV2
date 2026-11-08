@@ -223,7 +223,7 @@ func renderChatWithAvatar(t *testing.T, avatarURL string, pngBytes []byte) int {
 		chatAvatarDLMutex.Unlock()
 	}
 
-	prevMessages, prevOffset := chatMessages, chatScrollOffset
+	resetChatTestState(t)
 	chatMutex.Lock()
 	chatMessages = []ChatMessage{{
 		Sender:    "Steppa",
@@ -232,13 +232,6 @@ func renderChatWithAvatar(t *testing.T, avatarURL string, pngBytes []byte) int {
 		AvatarURL: avatarURL,
 	}}
 	chatMutex.Unlock()
-	chatScrollOffset = 0
-	t.Cleanup(func() {
-		chatMutex.Lock()
-		chatMessages = prevMessages
-		chatMutex.Unlock()
-		chatScrollOffset = prevOffset
-	})
 
 	if err := renderer.SetDrawColor(0, 0, 0, 255); err != nil {
 		t.Fatalf("could not create the offscreen renderer: %v (SDL video is already up, so this is a defect, not an environment gate)", err)

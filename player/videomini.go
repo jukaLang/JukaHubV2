@@ -14,6 +14,7 @@ package main
 // control) still end the session.
 
 import (
+	"log"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -45,6 +46,10 @@ var (
 	videoMiniOn    bool
 	videoMiniScene = -1
 	videoMiniHits  videoMiniHitRects
+	// mediaMiniOnOwner keeps the window up on its owner scene too: the Media
+	// screen floats its own video over the browser instead of leaving the
+	// screen, the way a phone's video app minimises the player.
+	mediaMiniOnOwner bool
 )
 
 // videoMiniActive reports whether the video is being drawn in the floating
@@ -78,11 +83,26 @@ func videoMiniShow() {
 	videoMiniMu.Lock()
 	videoMiniOn = true
 	videoMiniScene = owner
+	mediaMiniOnOwner = false
 	videoMiniMu.Unlock()
 
 	videoFullscreen = false
 	videoSettingsOpen = false
 	videoControlFocus = vcNone
+}
+
+// mediaMiniShowInPlace floats the video over the scene that owns it: the Media
+// screen's own Back, which returns to the browser with the video still
+// playing in the corner rather than leaving Media.
+func mediaMiniShowInPlace() {
+	videoMiniShow()
+	if !videoMiniActive() {
+		return
+	}
+	videoMiniMu.Lock()
+	videoMiniScene = currentSceneIndex
+	mediaMiniOnOwner = true
+	videoMiniMu.Unlock()
 }
 
 // videoMiniClear forgets the window. Playback ending or a new session starting
@@ -91,18 +111,102 @@ func videoMiniClear() {
 	videoMiniMu.Lock()
 	videoMiniOn = false
 	videoMiniScene = -1
+	mediaMiniOnOwner = false
 	videoMiniMu.Unlock()
 	videoMiniHits = videoMiniHitRects{}
 }
 
 // videoMiniVisible reports whether the floating window should be drawn. While
 // the scene that owns the video element is on screen that element already
-// draws the same frames, so the window would be a second copy.
+// draws the same frames, so the window would be a second copy — unless that
+// scene floated the video itself (mediaMiniShowInPlace).
 func videoMiniVisible() bool {
 	if !videoMiniActive() || videoFullscreen || playerPhase() == "idle" {
 		return false
 	}
+	videoMiniMu.Lock()
+	onOwner := mediaMiniOnOwner
+	videoMiniMu.Unlock()
+	if onOwner {
+		return true
+	}
 	return currentSceneIndex != videoMiniOwnerScene()
+}
+
+// mediaSceneHasPlayer reports whether a scene draws the embedded player: it
+// carries a video element.
+func mediaSceneHasPlayer(scene SceneConfig) bool {
+	for _, el := range scene.Elements {
+		if el.Type == "video" {
+			return true
+		}
+	}
+	return false
+}
+
+// mediaSessionOrphaned reports a session nothing on screen draws: not in full
+// screen, not floating in the mini window, and the scene on screen has no
+// video element. That is the state the Files bug left behind — the audio went
+// on with no picture while the invisible player kept answering the D-pad.
+// Only a real session counts (tests that only set the phase are left alone),
+// and nothing is decided while a scene change is still fading.
+func mediaSessionOrphaned(config *Config) bool {
+	if config == nil || playbackCurrentSession() == nil || playerPhase() == "idle" {
+		return false
+	}
+	if videoFullscreen || videoMiniActive() || transitionPhase != "none" {
+		return false
+	}
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	return !mediaSceneHasPlayer(config.Scenes[currentSceneIndex])
+}
+
+// mediaResolveOrphan gives an orphaned session a visible home or ends it. A
+// file the user was watching is closed — they left it, the way leaving the
+// picture viewer closes the picture — and a stream keeps playing in the
+// floating window over the screen they went to, exactly as Back does.
+func mediaResolveOrphan(config *Config) {
+	sess := playbackCurrentSession()
+	if sess == nil {
+		return
+	}
+	if sess.local && sess.shown.Load() {
+		log.Printf("[VIDEO] left the player without Back; closing %s", sanitizeLogURL(sess.pageURL))
+		StopEmbeddedPlayback()
+		return
+	}
+	if playbackQueue.shorts {
+		shortsAutoplay = false
+	}
+	videoMiniShow()
+}
+
+// mediaReturnsToOpener reports whether ending the current session should also
+// leave the Media scene: a file opened from another screen (Files, a dropped
+// file) is shown there only because Media owns the video element, so closing
+// it returns to the screen it came from. Playback started inside Media stays.
+func mediaReturnsToOpener(config *Config) bool {
+	if config == nil || !mediaSessionIsLocal() || mediaHubOwnsPlayback() || videoMiniActive() {
+		return false
+	}
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	return mediaSceneHasPlayer(config.Scenes[currentSceneIndex])
+}
+
+// mediaEndSession is what Close and Stop do: playback ends where it stands,
+// and a file opened from another screen also returns there (see
+// mediaReturnsToOpener), so closing a clip from Files lands back in Files
+// instead of on the Media browser.
+func mediaEndSession(config *Config) {
+	back := mediaReturnsToOpener(config)
+	StopEmbeddedPlayback()
+	if back {
+		goBackScene(config)
+	}
 }
 
 // videoBackOut is what Back means while a video plays: full screen steps back
@@ -110,6 +214,23 @@ func videoMiniVisible() bool {
 // window over the previous screen. Only the Stop control ends playback.
 func videoBackOut(config *Config) {
 	if playerPhase() == "idle" {
+		return
+	}
+	// A file from the card is closed by Back, like a picture in the viewer,
+	// even from full screen: there is nothing to keep watching "behind" a clip
+	// the user opened from Files, and a floating window over the file list was
+	// how a video kept playing out of sight.
+	if mediaSessionIsLocal() {
+		videoFullscreen = false
+		videoSettingsOpen = false
+		if mediaReturnsToOpener(config) {
+			StopEmbeddedPlayback()
+			// goBackScene plays the back sound itself.
+			goBackScene(config)
+			return
+		}
+		PlayBackSound()
+		StopEmbeddedPlayback()
 		return
 	}
 	if videoFullscreen {
@@ -127,6 +248,14 @@ func videoBackOut(config *Config) {
 	if playbackQueue.shorts {
 		shortsAutoplay = false
 	}
+	// Media's own player: Back returns to the Media browser with the video in
+	// the corner, instead of leaving the screen the user was browsing.
+	if mediaHubOwnsPlayback() && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		mediaHubOwnsScene(config.Scenes[currentSceneIndex].Name) {
+		mediaMiniShowInPlace()
+		PlayBackSound()
+		return
+	}
 	videoMiniShow()
 	// goBackScene plays the back sound itself and leaves the window visible on
 	// whatever screen it lands on.
@@ -137,6 +266,11 @@ func videoBackOut(config *Config) {
 // its own video element again.
 func videoMiniExpand(config *Config) {
 	owner := videoMiniOwnerScene()
+	if config != nil && (owner < 0 || owner >= len(config.Scenes)) {
+		// No recorded owner (a session that started away from any player
+		// scene): the scene with the video element is where it can be shown.
+		owner = sceneWithVideoElement(config)
+	}
 	if config == nil || owner < 0 || owner >= len(config.Scenes) {
 		return
 	}

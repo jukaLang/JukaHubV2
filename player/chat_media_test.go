@@ -209,15 +209,13 @@ func TestChatLinksRenderAsClickableCards(t *testing.T) {
 	withScreen(t, probeW, probeH)
 
 	links := []string{"https://example.com/story", "https://github.com/jukaLang/JukaHubV2/issues/12", "https://youtu.be/dQw4w9WgXcQ"}
-	prevMsgs := chatMessages
-	prevOffset := chatScrollOffset
+	resetChatTestState(t)
 	chatMutex.Lock()
 	chatMessages = []ChatMessage{
 		{Sender: "Juka AI", Text: "Story: " + links[0] + " and issue " + links[1], Timestamp: time.Now()},
 		{Sender: "Juka AI", Text: "Video " + links[2], Timestamp: time.Now()},
 	}
 	chatMutex.Unlock()
-	chatScrollOffset = 0
 	resetChatAttachmentState(t, ".")
 	// Layout is what is under test; claim each preview fetch so the test never
 	// reaches the network.
@@ -229,10 +227,6 @@ func TestChatLinksRenderAsClickableCards(t *testing.T) {
 	}
 	chatImageDLMutex.Unlock()
 	t.Cleanup(func() {
-		chatMutex.Lock()
-		chatMessages = prevMsgs
-		chatMutex.Unlock()
-		chatScrollOffset = prevOffset
 		chatLinkRects = nil
 		chatTextLinkRects = nil
 	})

@@ -64,7 +64,8 @@ func downloadLinkSubmit(raw string) {
 		return
 	}
 	if _, err := downloadEnqueue(link); err != nil {
-		ShowToast(err.Error(), ToastKindWarning)
+		// Resolver chatter means "you are offline", which the toast can say.
+		ShowToast(plainNetworkError(err), ToastKindWarning)
 		return
 	}
 	// The row is already on screen and names itself once yt-dlp resolves the

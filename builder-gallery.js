@@ -8,7 +8,7 @@
 (function () {
   'use strict';
 
-  const layouts = Array.isArray(window.JUKA_LAYOUTS) ? window.JUKA_LAYOUTS.slice() : [];
+  let layouts = Array.isArray(window.JUKA_LAYOUTS) ? window.JUKA_LAYOUTS.slice() : [];
   let activeTag = 'All';
   let query = '';
   let initialized = false;
@@ -107,7 +107,9 @@
     const body = document.createElement('div');
     body.className = 'gallery-card-body';
     const title = document.createElement('h3');
-    title.textContent = layout.name;
+    // A community entry can arrive without a name; show its id rather than the
+    // literal "undefined" the gallery used to print.
+    title.textContent = layout.name || layout.id || 'Community layout';
     const byline = document.createElement('p');
     byline.className = 'gallery-byline';
     byline.textContent = (layout.author || 'community') + ' · ' + (layout.tags || []).join(' / ');
@@ -121,13 +123,13 @@
     const fork = document.createElement('button');
     fork.type = 'button';
     fork.className = 'action-button';
-    fork.innerHTML = '<i class="fas fa-code-branch" aria-hidden="true"></i> Fork';
+    fork.innerHTML = iconSvg('fork') + ' Fork';
     fork.setAttribute('aria-label', 'Fork ' + layout.name + ' into the editor');
     fork.addEventListener('click', () => forkLayout(layout));
     const apply = document.createElement('button');
     apply.type = 'button';
     apply.className = 'action-button primary';
-    apply.innerHTML = '<i class="fas fa-bolt" aria-hidden="true"></i> Apply';
+    apply.innerHTML = iconSvg('bolt') + ' Apply';
     apply.setAttribute('aria-label', 'Apply ' + layout.name + ' to the handheld');
     apply.title = 'Load this layout and push it to the connected device';
     apply.addEventListener('click', () => applyLayout(layout, apply));
@@ -146,13 +148,18 @@
   function render() {
     const grid = el('galleryGrid');
     if (!grid) return;
-    if (cards.size === 0 && layouts.length) {
+    // Cards are built once each, the first time they are needed; filtering only
+    // shows and hides them. Only the missing ones are built now that a community
+    // index can arrive after the bundled layouts were already drawn.
+    let added = false;
+    layouts.forEach(layout => {
+      if (cards.has(layout)) return;
+      cards.set(layout, makeCard(layout));
+      added = true;
+    });
+    if (added) {
       const fragment = document.createDocumentFragment();
-      layouts.forEach(layout => {
-        const card = makeCard(layout);
-        cards.set(layout, card);
-        fragment.appendChild(card);
-      });
+      layouts.forEach(layout => fragment.appendChild(cards.get(layout)));
       grid.textContent = '';
       grid.appendChild(fragment);
     }
@@ -238,11 +245,42 @@
     if (ok) showToast('“' + layout.name + '” is live on the device', 'success');
   }
 
+  // loadCommunity merges gallery/community.json into the grid: the index the
+  // handheld app also reads. The bundled layouts draw first, so the gallery
+  // works offline and a slow index never leaves an empty panel.
+  let communityLoaded = false;
+  async function loadCommunity() {
+    if (communityLoaded) return;
+    communityLoaded = true;
+    let data;
+    try {
+      const response = await fetch('gallery/community.json', { cache: 'no-cache' });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      data = await response.json();
+    } catch (err) {
+      communityLoaded = false;
+      status('Community layouts could not be loaded: ' + err.message);
+      return;
+    }
+    const known = new Set(layouts.map(layout => layout.id));
+    (Array.isArray(data.layouts) ? data.layouts : []).forEach(layout => {
+      if (!layout || !layout.id || !layout.config || known.has(layout.id)) return;
+      known.add(layout.id);
+      // A name-less entry still reaches the card title, the fork toast and the
+      // push toast; none of them should read "undefined".
+      if (!layout.name) layout.name = layout.id;
+      layouts.push(layout);
+    });
+    renderTags();
+    render();
+  }
+
   function openGallery() {
     const panel = el('galleryPanel');
     if (!panel) return;
     if (!initialized) init();
     render();
+    loadCommunity();
     panel.removeAttribute('hidden');
     panel.setAttribute('aria-hidden', 'false');
     const search = el('gallerySearch');

@@ -70,7 +70,11 @@ checkpoint milestone in [CHECKPOINTS.md](CHECKPOINTS.md).
 - **Kernel, suspend and radio policy.** BrickOS owns the firmware services; we
   inherit them, so their suspend and power fixes do not translate.
 - **The 12-hour clock fix.** We render 24-hour time everywhere, so there is no
-  AM/PM bug to fix. Adding a 12-hour option is a feature, not a correction.
+  AM/PM bug to fix. The option itself is now a feature of ours rather than a
+  correction of theirs: Settings → Appearance → **12-hour clock** switches the
+  status cluster, the dock, the saver, the clock app and the alarm list to
+  `3:04 PM`, and an untouched config keeps 24-hour time
+  ([clockformat.go](../player/clockformat.go)).
 
 ## Web builder pass (October 2026)
 

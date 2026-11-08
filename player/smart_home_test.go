@@ -722,7 +722,7 @@ func TestRefreshAndToggleEndToEnd(t *testing.T) {
 // started", so Tailscale and WireGuard never read any status.
 func TestRunCommandTimeoutReturnsOutput(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("no sh on this host")
+		t.Skip("POSIX sh is not available on this host")
 	}
 	out, err := runCommandTimeout(5*time.Second, "sh", "-c", "echo hi")
 	if err != nil || string(out) != "hi\n" {

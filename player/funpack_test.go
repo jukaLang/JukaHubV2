@@ -246,11 +246,21 @@ func TestPlaytimeRendersBars(t *testing.T) {
 		screenWidth, screenHeight = prevW, prevH
 		setAccentColorRaw(prevAccent)
 		playtime = playtimeState{}
+		trophyRoom = trophyRoomState{}
+		playtimeScrollFor = -2
+		trophyResetForTest()
 	})
+	// The day bars are on the trophy room's Playtime tab; today's bar is the
+	// solid accent one.
+	trophyRoomSyncVisit()
+	trophyRoom.tab = trophyTabStats
 
 	f := renderFunProbe(t, func(r *sdl.Renderer) { renderPlaytime(r, &Config{}) })
-	bar := accentColor
-	if got := f.countColor(bar, 244, 240, 440, 430); got < 40 {
+	bars := trophyRoom.barsRect
+	if bars.W <= 0 || bars.H <= 0 {
+		t.Fatal("the week card drew no bar area")
+	}
+	if got := f.countColor(glassAccent(), bars.X, bars.Y, bars.X+bars.W-1, bars.Y+bars.H-1); got < 40 {
 		t.Fatalf("playtime bars painted only %d accent pixels", got)
 	}
 }

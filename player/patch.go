@@ -77,6 +77,8 @@ func patchActions() []patchAction {
 		{ID: "components", Label: "Component versions", Sub: "App, launcher, tools and packages with SHA-256 digests"},
 		{ID: "diagnostics", Label: "Export diagnostics", Sub: "Report + recent log for support · redacted, component digests"},
 	}
+	// The offline update channel leads the list (upch_ui.go).
+	actions = append(upchPatchActions(), actions...)
 	if patchState.LastUpdateVer != "" {
 		actions = append(actions, patchAction{ID: "apply", Label: "Apply staged update", Sub: patchState.LastUpdateVer + " is staged and verified"})
 	} else if updateAvailable() {
@@ -190,6 +192,9 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	if !patchInitDone {
 		patchSnap = BuildPatchSnapshot(config)
 		patchInitDone = true
+		// Even in safe mode, where the startup check never ran: the swap reads
+		// the version-history limit from the mirror this fills.
+		upchLoadPrefs(config)
 	}
 	if sdl.GetTicks64()-patchLastRefresh > 2000 {
 		patchSnap = BuildPatchSnapshot(config)
@@ -378,6 +383,10 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 			_ = row
 		}
 	})
+	// The update channel's row (always the first) carries its download's bar.
+	if len(patchRowRects) > 0 {
+		upchDrawChannelProgress(renderer, patchRowRects[0], listTop, listH)
+	}
 
 	// Right-side status text for focused row (drawn after rows so it stays crisp).
 	for i, row := range rows {
@@ -409,6 +418,8 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 		fillRoundedRect(renderer, screenWidth-12, barY, 4, barH, 2, WithAlpha(ColorAccent, 140))
 	}
 
+	// The update channel's sheets, under the modal that confirms their actions.
+	upchRenderSheet(renderer, config)
 	// Modal overlay (drawn last, on top of everything in the scene).
 	renderPatchModal(renderer, config, font, medium)
 }
@@ -612,6 +623,9 @@ func handlePatchMouse(mx, my int32, config *Config) bool {
 		}
 		return true
 	}
+	if upchSheetOpen() {
+		return upchSheetMouse(mx, my)
+	}
 	for i, r := range patchRowRects {
 		if r.W <= 0 || !pointInRect(mx, my, r) {
 			continue
@@ -658,12 +672,22 @@ func handlePatchKey(e *sdl.KeyboardEvent, config *Config) bool {
 			return true
 		case sdl.K_RETURN, sdl.K_SPACE:
 			if patchModal.HighRisk {
-				return true // must hold A
+				// Enter holds like the pad's A: the press starts the
+				// hold-to-confirm, which completes on its own. Without it a
+				// keyboard could never confirm an install or a rollback.
+				if !patchHoldActive {
+					patchHoldActive = true
+					patchHoldStart = sdl.GetTicks64()
+				}
+				return true
 			}
 			patchConfirmModal()
 			return true
 		}
 		return true
+	}
+	if upchSheetOpen() {
+		return upchSheetKey(e)
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
@@ -726,6 +750,9 @@ func handlePatchController(e *sdl.ControllerButtonEvent, config *Config) bool {
 			return true
 		}
 		return true
+	}
+	if upchSheetOpen() {
+		return upchSheetController(e)
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -855,6 +882,9 @@ func patchConfirmModal() {
 		})
 	case "confirm-rollback":
 		RunPatchOp("Rolling back transaction", func(ctx context.Context) error { return OpRollbackTx(ctx, appConfig) })
+	default:
+		// Confirmations raised by the update channel's sheets (upch_ui.go).
+		upchModalConfirmed(m.ID)
 	}
 }
 
@@ -916,7 +946,12 @@ func patchActivate(config *Config) {
 		action := strings.TrimPrefix(id, "action:")
 		switch action {
 		case "check":
-			RunPatchOp("Checking for updates", func(ctx context.Context) error { return OpCheckUpdates(ctx, config) })
+			RunPatchOp("Checking for updates", func(ctx context.Context) error {
+				err := OpCheckUpdates(ctx, config)
+				// A release found now may be downloaded ahead (upch.go).
+				upchNudge()
+				return err
+			})
 		case "refresh":
 			RunPatchOp("Refreshing repository", func(ctx context.Context) error { return OpRefreshSignedRepo(ctx, config) })
 		case "history":
@@ -955,6 +990,9 @@ func patchActivate(config *Config) {
 					HighRisk: true,
 				}
 			}
+		default:
+			// The update channel's rows (upch_ui.go).
+			upchActivateAction(config, action)
 		}
 	case strings.HasPrefix(id, "row:"):
 		comp := PatchComponent(strings.TrimPrefix(id, "row:"))
@@ -1112,6 +1150,9 @@ func patchDrainEvents() {
 // hold-to-confirm progress only advances while Patch owns the modal.
 func PatchSceneFrame() {
 	patchDrainEvents()
+	// The update channel's background results and sheet upkeep (upch_ui.go):
+	// they never pile up while Patch is not drawn.
+	upchSceneFrame()
 }
 
 // patchFooterHints returns the footer hint override for Patch (nil, false
@@ -1128,6 +1169,9 @@ func patchFooterHints() ([]FooterHint, bool) {
 			{Button: "A", Label: "OK"},
 			{Button: "B", Label: "Cancel"},
 		}, true
+	}
+	if hints, ok := upchSheetFooterHints(); ok {
+		return hints, true
 	}
 	return nil, false
 }

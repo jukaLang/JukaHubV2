@@ -261,15 +261,11 @@ func drawBellIcon(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color) {
 // drawNotifBell paints the bell pill, focus/open ring, icon and unread badge.
 // Every screen (home header and the scene status bar) funnels through here, so
 // the control cannot drift between the home screen and the rest of the app.
+// The pixels come from the shared icon-button component, which is the recipe
+// every icon-only chip should use.
 func drawNotifBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect) {
 	if renderer == nil || font == nil || rect.W <= 0 || rect.H <= 0 {
 		return
-	}
-
-	// Background pill in the active theme's input surface.
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, ColorIconSurface)
-	if nc.open {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, accentColor)
 	}
 
 	// Focus ring when the D-pad/arrows sit on the bell. Home has its own focus
@@ -280,34 +276,39 @@ func drawNotifBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect 
 	if homeLayoutActive && homeLayout != nil && homeLayout.Focus != nil {
 		focused = focused || homeLayout.Focus.Current() == HomeFocusBell
 	}
-	if focused {
-		strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, (rect.H+4)/2, 2, accentColor)
-	}
 
-	// Bell icon: primary text colour so it reads as a control, with the accent
-	// ring already marking focus/open state. The glyph is inset from the chip so
-	// the silhouette never touches the pill's edge at handheld sizes.
-	icon := rect.H - notifBellIconInset
-	if icon < 12 {
-		icon = 12
+	badgeFont := notifBadgeFont(config)
+	if badgeFont == nil {
+		badgeFont = font
 	}
-	drawBellIcon(renderer, rect.X+rect.W/2, rect.Y+rect.H/2, icon, ColorTextPrimary())
-
-	// Unread count badge, on its own small font so the count sits inside the
-	// corner instead of towering over the chip.
+	button := UIIconButton{
+		Rect: rect,
+		Style: UIIconButtonStyle{
+			// Background pill in the active theme's input surface.
+			Surface:     ColorIconSurface,
+			OpenSurface: ColorIconSurface,
+			Ring:        accentColor,
+			// Bell icon: primary text colour so it reads as a control, with the
+			// accent ring already marking focus/open state. The glyph is inset from
+			// the chip so the silhouette never touches the pill's edge at handheld
+			// sizes.
+			Icon:      ColorTextPrimary(),
+			IconInset: notifBellIconInset,
+			Glyph: func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+				icon := box.W
+				if icon < 12 {
+					icon = 12
+				}
+				drawBellIcon(r, box.X+box.W/2, box.Y+box.H/2, icon, tint)
+			},
+		},
+		State:     UIIconButtonState{Focused: focused, Open: nc.open},
+		BadgeFont: badgeFont,
+	}
 	if unread := notifUnreadCount(); unread > 0 {
-		numStr := fmt.Sprintf("%d", unread)
-		badgeFont := notifBadgeFont(config)
-		if badgeFont == nil {
-			badgeFont = font
-		}
-		badge := notifBadgeRect(badgeFont, rect, numStr)
-		tw, th, _ := badgeFont.SizeUTF8(numStr)
-		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2,
-			sdl.Color{R: 220, G: 60, B: 60, A: 240})
-		drawText(renderer, badgeFont, numStr, badge.X+(badge.W-int32(tw))/2, badge.Y+(badge.H-int32(th))/2,
-			sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
+		button.Badge = fmt.Sprintf("%d", unread)
 	}
+	UIIconButtonDraw(renderer, button)
 
 	nc.bellRect = rect
 }
@@ -740,10 +741,14 @@ func notifIsPointInDrop(x, y int32) bool {
 		y >= nc.dropRect.Y && y <= nc.dropRect.Y+nc.dropRect.H
 }
 
-// notifIsPointInBell tests if a point is inside the bell icon.
+// notifIsPointInBell tests if a point is inside the bell icon. The chip is a
+// header pill (24–30 px tall), so the hit area is the shared 44 px touch
+// target centred on it; the drawn bell does not move.
 func notifIsPointInBell(x, y int32) bool {
-	return x >= nc.bellRect.X && x <= nc.bellRect.X+nc.bellRect.W &&
-		y >= nc.bellRect.Y && y <= nc.bellRect.Y+nc.bellRect.H
+	if nc.bellRect.W <= 0 || nc.bellRect.H <= 0 {
+		return false
+	}
+	return hitTouchTarget(nc.bellRect, x, y)
 }
 
 // notifHandleClick consumes clicks on the open dropdown: the header's "Clear

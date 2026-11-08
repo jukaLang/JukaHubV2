@@ -1,14 +1,15 @@
 package main
 
-// nettools3.go — the Tools rows that identify what is behind a port rather than
-// whether the port is open: the TLS certificate a service presents, the greeting
-// a service sends on connect, the security headers a web server returns, and a
-// small codec for the strings those checks turn up.
+// nettools3.go — the checks that identify what is behind a port rather than
+// whether the port is open: the TLS certificate a service presents and the
+// security headers a web server returns (the Browser's site information calls
+// certSummary and headerAuditSummary for the page it shows), and the codec the
+// Network tools page offers for the strings those checks turn up.
 //
-// All four are read-only. The certificate row makes two handshakes (one to read
-// an untrusted certificate, one to see whether the device would trust it); the
-// banner row connects and reads without writing; the headers row makes one GET
-// and keeps none of the body; the codec touches nothing but its own argument.
+// All three are read-only. The certificate check makes two handshakes (one to
+// read an untrusted certificate, one to see whether the device would trust
+// it); the headers check makes one GET and keeps none of the body; the codec
+// touches nothing but its own argument.
 
 import (
 	"context"
@@ -219,129 +220,6 @@ func certExpiryText(notAfter, now time.Time) string {
 		return notAfter.UTC().Format("2006-01-02") + " (today)"
 	}
 	return fmt.Sprintf("%s (%d day%s left)", notAfter.UTC().Format("2006-01-02"), days, pluralS(days))
-}
-
-// ── Service banner ─────────────────────────────────────────────────────────
-
-// bannerReadWindow bounds how long the row waits for a greeting. A service that
-// waits for the client to speak first (HTTP, most databases) sends nothing, and
-// that reads as a result rather than as a failure after this long.
-var bannerReadWindow = 3 * time.Second
-
-// bannerLimit bounds the greeting that is kept: a prompt is a line or two, and
-// a server that streams on connect must not be able to fill memory here.
-const bannerLimit = 512
-
-// bannerSummary connects to host:port and reports what the service says before
-// it is asked anything. Nothing is written to the socket.
-func bannerSummary(raw string) (string, error) {
-	host, port, err := netPortParseTarget(raw)
-	if err != nil {
-		return "", err
-	}
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	start := time.Now()
-	conn, err := dialer.Dial("tcp", addr)
-	elapsed := time.Since(start)
-	if err != nil {
-		return bannerText(host, port, elapsed, false, "", dialReason(err)), nil
-	}
-	defer conn.Close()
-	_ = conn.SetReadDeadline(time.Now().Add(bannerReadWindow))
-	buf := make([]byte, bannerLimit)
-	n, readErr := conn.Read(buf)
-	if n == 0 && readErr != nil {
-		return bannerText(host, port, elapsed, true, "", bannerSilentReason(readErr)), nil
-	}
-	return bannerText(host, port, elapsed, true, bannerPrintable(string(buf[:n])), ""), nil
-}
-
-// bannerText is the report one banner read produces. A port that refuses or
-// stays silent is still a result: it says what is (not) there.
-func bannerText(host string, port int, elapsed time.Duration, open bool, banner, note string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Target: %s:%d\n", host, port)
-	if !open {
-		fmt.Fprintf(&b, "Open:   no · %s\n", note)
-		b.WriteString("\nRead-only: one TCP connect; nothing was written to the socket.\n")
-		return b.String()
-	}
-	fmt.Fprintf(&b, "Open:   yes · answered in %d ms\n", elapsed.Milliseconds())
-	if banner == "" {
-		b.WriteString("Banner: none\n")
-		b.WriteString("Note:   " + note + "\n")
-	} else {
-		fmt.Fprintf(&b, "Banner: %s\n", banner)
-	}
-	b.WriteString("\nRead-only: one TCP connect and one read; nothing was written to the socket.\n")
-	return b.String()
-}
-
-// bannerSilentReason explains the common cases of a connection that opened and
-// said nothing.
-func bannerSilentReason(err error) string {
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return fmt.Sprintf("the service waited %s and never spoke first — HTTP, SSH after KEX and most databases greet only after the client starts",
-			bannerReadWindow.Round(time.Millisecond))
-	}
-	if errors.Is(err, io.EOF) {
-		return "the service closed the connection without saying anything"
-	}
-	return "the read ended without a banner: " + firstLine(err.Error())
-}
-
-// dialReason rewrites the three dial errors that actually happen into what they
-// mean on a handheld.
-func dialReason(err error) string {
-	reason := err.Error()
-	switch {
-	case strings.Contains(reason, "refused"):
-		return "nothing is listening on that port"
-	case strings.Contains(reason, "timeout"), strings.Contains(reason, "i/o timeout"):
-		return "no answer within 5s — filtered, or the host is down"
-	case strings.Contains(reason, "no such host"):
-		return "that name does not resolve"
-	case errors.Is(err, io.EOF):
-		return "the host closed the connection immediately"
-	}
-	return firstLine(reason)
-}
-
-// bannerPrintable keeps a banner on one readable line: control characters in a
-// greeting (or a binary protocol) become dots, and CR/LF become the separator
-// between the lines that are kept.
-func bannerPrintable(raw string) string {
-	const maxLines = 3
-	const maxRunes = 240
-	lines := make([]string, 0, maxLines)
-	for _, line := range strings.Split(raw, "\n") {
-		var b strings.Builder
-		for _, r := range line {
-			switch {
-			case r == '\r' || r == '\t':
-				b.WriteRune(' ')
-			case r < 0x20 || r == 0x7f:
-				b.WriteRune('.')
-			default:
-				b.WriteRune(r)
-			}
-		}
-		text := strings.TrimSpace(b.String())
-		if text != "" {
-			lines = append(lines, text)
-		}
-		if len(lines) == maxLines {
-			break
-		}
-	}
-	out := strings.Join(lines, " ⏎ ")
-	runes := []rune(out)
-	if len(runes) > maxRunes {
-		out = string(runes[:maxRunes]) + "…"
-	}
-	return out
 }
 
 // ── Security headers ───────────────────────────────────────────────────────

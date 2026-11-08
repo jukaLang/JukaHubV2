@@ -176,7 +176,7 @@ func coverPercent(withArt, total int) int {
 // firmware gives its launchers. Names are compared after normalisation, so
 // "mGBA" and "mgba" are the same candidate.
 var systemLauncherAliases = map[string][]string{
-	"NES":                  {"nes", "fc", "fceux", "famicom"},
+	"NES":                  {"nes", "fc", "fceux", "fceumm", "famicom"},
 	"SNES":                 {"snes", "sfc", "snes9x", "bsnes"},
 	"Game Boy":             {"gb", "gameboy", "gambatte"},
 	"Game Boy Color":       {"gbc", "gameboycolor"},
@@ -184,10 +184,18 @@ var systemLauncherAliases = map[string][]string{
 	"Nintendo DS":          {"nds", "melonds", "drastic", "desmume"},
 	"Nintendo 64":          {"n64", "mupen64plus", "mupen64"},
 	"Mega Drive":           {"md", "megadrive", "genesis", "genesisplusgx"},
-	"Saturn":               {"sat", "saturn", "yabause", "kronos"},
+	"Saturn":               {"sat", "saturn", "yabause", "kronos", "beetlesaturn"},
 	"Dreamcast":            {"dc", "dreamcast", "flycast"},
 	"PlayStation":          {"ps", "psx", "pcsxrearmed", "duckstation", "pcsx"},
 	"PlayStation Portable": {"psp", "ppsspp"},
+	"Xbox":                 {"xbox", "xemu"},
+	"Master System":        {"ms", "sms", "mastersystem", "smsplus", "gearsystem"},
+	"Game Gear":            {"gg", "gamegear"},
+	"PC Engine":            {"pce", "pcengine", "tg16", "turbografx16"},
+	"PlayStation 2":        {"ps2", "pcsx2", "aethersx2", "nethersx2"},
+	"Neo Geo":              {"neogeo", "fbneo", "fbalpha"},
+	"GameCube":             {"gc", "gamecube", "ngc", "dolphin"},
+	"Wii":                  {"wii", "dolphin"},
 }
 
 func normaliseLauncherName(s string) string {
@@ -366,8 +374,17 @@ func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []
 		name, args = "sh", []string{launcher, romPath}
 	case ".bat", ".cmd":
 		name, args = "cmd", []string{"/c", launcher, romPath}
+	case ".dll":
+		// A libretro core on Windows (the Emulators page installs RetroArch
+		// and its cores): the RetroArch beside it loads it with -L.
+		name, args = emuRetroArchForCore(launcher), []string{"-L", launcher, romPath}
 	default:
 		name, args = launcher, []string{romPath}
+		// xemu boots a disc image only through -dvd_path (its documented
+		// command line); a bare path is handed to QEMU and ignored.
+		if emuIsXemuLauncher(launcher) {
+			args = []string{"-dvd_path", romPath}
+		}
 	}
 	if len(extra) == 0 {
 		return name, args
@@ -395,13 +412,23 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// writes captures to, so the Recordings screen can list them. Standalone
 	// emulators are left alone.
 	prepareSavestateResume(launcher)
+	// The in-game OSD is the emulator's, so its preset is written to the same
+	// config just before the launch, beside the save-state switches.
+	prepareOSDPreset(launcher)
 	prepareRecordings(launcher)
 	// Per-game options are read here, at launch time, so an edit made in the
 	// options sheet applies to the very next start without a rescan.
 	options := gameOptionsFor(game.Path)
-	name, args := gameLaunchCommandArgs(launcher, game.Path, parseGameArgs(options.Args))
+	// With two or more players in Local play, a RetroArch launch gets their
+	// controller order as a one-launch --appendconfig (hotseat.go).
+	extra := hotseatLaunchArgs(launcher, parseGameArgs(options.Args))
+	name, args := gameLaunchCommandArgs(launcher, game.Path, extra)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(launcher)
+	if strings.EqualFold(filepath.Ext(launcher), ".dll") && name != "" {
+		// A Windows core starts the RetroArch beside it: run from its folder.
+		cmd.Dir = filepath.Dir(name)
+	}
 	// Own process group: a stock launch.sh that starts RetroArch and returns
 	// must not hand the framebuffer back while the game is still drawing.
 	screenChildGroupConfigure(cmd)
@@ -421,6 +448,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		restoreProfile()
 		recorder.Stop()
 	}()
+	// Before the recents learn about it: a game that is not there yet is
+	// starting for the first time, which is a milestone (gmeta_store.go).
+	gmetaNoteLaunch(game)
 	recordGameLaunch(game)
 	return nil
 }

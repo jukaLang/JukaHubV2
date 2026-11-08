@@ -81,7 +81,7 @@ func TestTerminalCdKeepsTheAppWorkingDirectory(t *testing.T) {
 func TestTerminalExternalCommandRunsInTheBackground(t *testing.T) {
 	bin, err := exec.LookPath("printf")
 	if err != nil {
-		t.Skip("no printf on this host")
+		t.Skip("POSIX sh is not available, so printf cannot run here")
 	}
 	_ = bin
 	withTerminalState(t, t.TempDir())

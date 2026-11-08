@@ -81,9 +81,9 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	// the binding, so it is not a hidden combination; the buffer is unsaved
 	// until Y, which is the same safety the keyboard's Delete key has.
 	if fileEditor.open && !virtualKeyboardActive {
-		if s == padR2 {
-			fileEditorDeleteLine()
-		}
+		// The text page owns all four: R2 deletes a line of an editable file
+		// (fileeditor.go), and on a read-only one L2/R2 jump to the top/end.
+		fileEditorShoulder(s)
 		return true
 	}
 	if handleVideoShoulder(s, config) {
@@ -102,6 +102,12 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	// Panels that draw their own modal list own the pad; a trigger must not
 	// page the scene behind them.
 	if modalPanelBlocksShoulders() {
+		return true
+	}
+	// The reader has no list element: its triggers zoom and its shoulders turn
+	// pages (pdfreader.go).
+	if pdfvSceneActive(config) && !virtualKeyboardActive {
+		pdfvShoulder(s)
 		return true
 	}
 	if handleListShoulder(s, config) {
@@ -172,12 +178,9 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 		socialNotifShoulder(s)
 		return true
 	case imageViewerPath != "":
-		// The viewer's shoulders step one image; the triggers jump ten.
-		if s == padL2 {
-			imageViewerStep(-10)
-		} else if s == padR2 {
-			imageViewerStep(10)
-		}
+		// The viewer's shoulders zoom; the triggers step to the previous or
+		// next picture at any zoom (imageviewer.go).
+		imgvShoulder(s)
 		return true
 	case shortcutsOpen:
 		return true
@@ -199,7 +202,7 @@ func triggerOwnedByOverlay() bool {
 		onboarding.active && !onboardingCoveredByOverlay():
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
-		browserCookiePanel.open, browserBookmarkPanel.open, homeCalendarOpen:
+		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, homeCalendarOpen:
 		return true
 	}
 	return false
@@ -227,7 +230,6 @@ func modalPanelBlockReason() string {
 		{"update prompt", updatePrompt.open},
 		{"browser link panel", browserLinkPanel.open},
 		{"companion", companion.open},
-		{"party panel", partyUI.open},
 		{"community panel", communityPanel.open},
 		{"power tools", powerTools.open},
 		{"achievements panel", raPanel.open},
@@ -327,9 +329,9 @@ func clipShoulder(s padShoulder) {
 	case padL2:
 		clipCursorIdx = 0
 	case padR2:
-		clipCursorIdx = len(clipHistory) - 1
+		clipCursorIdx = len(vkClipVisible()) - 1
 	}
-	clipCursorIdx = clampIndex(clipCursorIdx, len(clipHistory))
+	clipCursorIdx = clampIndex(clipCursorIdx, len(vkClipVisible()))
 	PlayNavSound()
 }
 
@@ -423,6 +425,17 @@ func handleListShoulder(s padShoulder, config *Config) bool {
 		return false
 	}
 	scene := config.Scenes[currentSceneIndex]
+
+	// The Media screen pages its own tabs and grids (media_hub_input.go); its
+	// results element is data only.
+	if mediaHubOwnsScene(scene.Name) {
+		return mediaHubShoulder(s, config)
+	}
+	// Chat draws its own tabs and history (chatinput.go); its chat element is
+	// data only, so the shoulders do not depend on which element has focus.
+	if scene.Name == chatSceneName {
+		return chatSceneShoulder(s, config)
+	}
 
 	if sr, ok := sceneSearchResultsElement(scene); ok {
 		if videos, ok := config.Variables.Custom[sr.Variable].([]VideoInfo); ok && len(videos) > 0 {
@@ -521,32 +534,10 @@ func dynamicListShoulder(s padShoulder, config *Config, scene SceneConfig, eleme
 	return true
 }
 
+// packageListShoulder pages the package store: shelves, grid rows or list
+// rows, or the details sheet's text while it is open (pkginput.go).
 func packageListShoulder(s padShoulder) bool {
-	// While a row's action menu is open the pad belongs to it: paging the
-	// list would move the rows away from the package the menu is acting on.
-	if packageActionsOpen {
-		return true
-	}
-	packagesMutex.Lock()
-	count := len(packagesList)
-	packagesMutex.Unlock()
-	if count == 0 {
-		return false
-	}
-	packageRepoFocused = false
-	switch s {
-	case padL1:
-		packagesFocusIndex -= 8
-	case padR1:
-		packagesFocusIndex += 8
-	case padL2:
-		packagesFocusIndex = 0
-	case padR2:
-		packagesFocusIndex = count - 1
-	}
-	packagesFocusIndex = clampIndex(packagesFocusIndex, count)
-	PlayNavSound()
-	return true
+	return pkgShoulder(s)
 }
 
 func favoritesShoulder(s padShoulder) bool {
@@ -596,29 +587,11 @@ func shortsListShoulder(s padShoulder, config *Config) bool {
 	return true
 }
 
-// chatShoulder maps the triggers onto the history: L2 jumps to the oldest
-// message, R2 back to the newest. The bumpers walk the message selection and
-// are handled with the chat element's own buttons, so they are left alone here.
+// chatShoulder maps the shoulders on the Chat scene (chatinput.go): the
+// bumpers switch tabs, L2 jumps to the oldest message and R2 back to the
+// newest.
 func chatShoulder(s padShoulder, config *Config) bool {
-	switch s {
-	case padL2, padR2:
-		chatMutex.Lock()
-		count := len(chatMessages)
-		chatMutex.Unlock()
-		if count == 0 {
-			return false
-		}
-		clearChatSelection()
-		if s == padL2 {
-			chatScrollOffset = count - 1
-		} else {
-			chatScrollOffset = 0
-			chatSeenCount = count
-		}
-		PlayNavSound()
-		return true
-	}
-	return false
+	return chatSceneShoulder(s, config)
 }
 
 func textBrowserShoulder(s padShoulder, element Element) bool {

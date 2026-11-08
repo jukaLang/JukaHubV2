@@ -122,7 +122,9 @@ func toggleWeatherPopover() {
 		wxMutex.Lock()
 		stale := !weatherReady || len(weatherDaily) == 0
 		wxMutex.Unlock()
-		if stale {
+		// With the Settings switch off there is nothing to fetch: the card
+		// says where to turn it on instead (renderWeatherPopover).
+		if stale && weatherIsEnabled() {
 			setWeatherPopoverFetching(true)
 			go func() {
 				defer setWeatherPopoverFetching(false)
@@ -210,7 +212,10 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 
 	if !ready || len(days) == 0 {
 		title, body := "Weather unavailable", "Connect to the internet, then try again."
-		if weatherPopoverIsFetching() {
+		switch {
+		case !weatherIsEnabled():
+			title, body = "Weather is off", "Turn it on in Settings › General."
+		case weatherPopoverIsFetching():
 			title, body = "Fetching local weather", "This needs an internet connection."
 		}
 		UIEmptyState(renderer, config,

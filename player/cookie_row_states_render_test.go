@@ -1,45 +1,37 @@
 package main
 
-// cookie_row_states_render_test.go — the Settings → General cookie row as the
-// user meets it, in each state it can hold. The value is substituted by the
-// page itself; these renders pin that a state's date label survives the draw
-// (the scene-entry re-seed must not clobber it), that the row paints its
-// label rather than an empty cell, and — with JUKAHUB_COOKIE_ROW_DUMP
-// pointing at a directory — write each frame plus one stacked strip of the
-// five labels, doubled so a 360px cell's text is legible without a zoom.
+// cookie_row_states_render_test.go — the Settings cookie row as the user meets
+// it, in each state it can hold. Settings is the hub now (setui.go): the row is
+// the "Keep browser sign-ins" carousel of Privacy & data, its value the window
+// in force and its line under the label the day the saved session began. These
+// renders pin that every window, with and without a session, draws whole on
+// both canvases — the old 360px cell is what cut the date off — and, with
+// JUKAHUB_COOKIE_ROW_DUMP pointing at a directory, write each frame plus one
+// stacked strip of the row in every state, doubled so the text is legible
+// without a zoom.
 
 import (
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
-)
 
-// cookieRowStates are the states the row's value can read, in the order the
-// visual pass wants them: the shipped default with no session, the default
-// with one, a window on its own (what the row reads right after Forget), the
-// documented value, and the widest stop with a single-digit day.
-var cookieRowStates = []struct {
-	slug  string
-	value string
-}{
-	{"keep", "Keep"},
-	{"keep_since", "Keep · since Oct 12"},
-	{"30d", "30d"},
-	{"30d_since", "30d · since Oct 12"},
-	{"90d_since", "90d · since Sep 5"},
-}
+	"github.com/veandco/go-sdl2/sdl"
+)
 
 func TestCookieRowRendersInEveryState(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")
 	}
-	config := widgetRenderConfig(t)
-	row := cookieAgeRow(t, config)
+	setSkipUnlessDefaultTextSize(t)
+	useTempBrowserCookiePath(t)
+	config := setRenderConfig(t)
 	dumpDir := os.Getenv("JUKAHUB_COOKIE_ROW_DUMP")
 	if dumpDir != "" {
 		if err := os.MkdirAll(dumpDir, 0o755); err != nil {
@@ -47,33 +39,49 @@ func TestCookieRowRendersInEveryState(t *testing.T) {
 		}
 	}
 
-	strips := make([]*image.RGBA, 0, len(cookieRowStates))
-	for _, state := range cookieRowStates {
-		config.Variables.Custom[cookieRowLabelKey] = state.value
-		f, _ := renderNamedScene(t, config, "SettingsGeneral")
+	p := setNewHubProbe(t)
+	var strips []*image.RGBA
+	for _, session := range []bool{false, true} {
+		if session {
+			browserCookies().SetCookies(mustURL(t, "https://example.com/"), []*http.Cookie{
+				{Name: "session", Value: "abc", Path: "/"},
+			})
+		}
+		for _, days := range cookieRetentionSteps {
+			config.Variables.Custom["cookieRetentionDays"] = days
+			want := cookieRetentionLabel(days)
+			if days <= 0 {
+				want = "Until I forget them"
+			}
+			for _, w := range setTestCanvases {
+				p.open(config, "privacy", w, 720)
+				i := p.assertRowWhole("cookies")
+				state := strconv.Itoa(days) + "d"
+				if session {
+					state += "_session"
+				}
+				if got := setHub.views[i].value; got != want {
+					t.Errorf("%dpx %s: the carousel shows %q, want %q", w, state, got, want)
+				}
+				detail := setHub.views[i].detail
+				if dated := strings.HasPrefix(detail, "The saved session began "); dated != session {
+					t.Errorf("%dpx %s: the line under the row reads %q", w, state, detail)
+				}
 
-		// The value the page draws is the state's own: nothing between the
-		// set and the screen may have re-seeded the row from the jar.
-		if got := substituteVars(row.Text, config.Variables.Custom); !strings.Contains(got, state.value) {
-			t.Errorf("%s: row reads %q, want it to carry %q", state.slug, got, state.value)
+				if dumpDir == "" {
+					continue
+				}
+				path := filepath.Join(dumpDir, "cookie_row_"+state+"_"+strconv.Itoa(int(w))+".png")
+				if err := writeFramePNG(path, p.frame.buf); err != nil {
+					t.Errorf("%s: write frame: %v", state, err)
+					continue
+				}
+				t.Log(path)
+				strips = append(strips, cookieRowStrip(p.frame, setHub.rowRects[i]))
+			}
 		}
-		// The row painted a label rather than an empty cell.
-		if bright := brightPixelsIn(f, *row, config); bright < 40 {
-			t.Errorf("%s: the row drew %d bright pixels, want its label on screen", state.slug, bright)
-		}
-
-		if dumpDir == "" {
-			continue
-		}
-		path := filepath.Join(dumpDir, "cookie_row_"+state.slug+".png")
-		if err := writeFramePNG(path, f.buf); err != nil {
-			t.Errorf("%s: write frame: %v", state.slug, err)
-			continue
-		}
-		t.Log(path)
-		strips = append(strips, cookieRowStrip(t, f, row))
 	}
-	if dumpDir != "" && len(strips) == len(cookieRowStates) {
+	if dumpDir != "" && len(strips) > 0 {
 		path := filepath.Join(dumpDir, "cookie_row_states.png")
 		if err := writeStackedPNG(path, strips); err != nil {
 			t.Errorf("write the stacked strip: %v", err)
@@ -81,53 +89,15 @@ func TestCookieRowRendersInEveryState(t *testing.T) {
 			t.Log(path)
 		}
 	}
-
-	// The helper line under the Screensaver button is ~616px wide — wider
-	// than the space beside this row — so it used to run under the row at
-	// y576 and was cut mid-word by the button. It now sits below the row's
-	// band; pin that clearance geometrically, on every canvas, rather than
-	// trusting two coordinates to travel together when either slot moves.
-	var helper *Element
-	for i := range settingsGeneralScene(config).Elements {
-		if strings.Contains(settingsGeneralScene(config).Elements[i].Text, "Idle time before") {
-			helper = &settingsGeneralScene(config).Elements[i]
-			break
-		}
-	}
-	if helper == nil {
-		t.Fatal("the page has no screensaver helper line to keep clear of the row")
-	}
-	font, _ := getCachedFont(config, helper.Font)
-	if font == nil {
-		t.Fatalf("no font available for the helper line's geometry: the shipped Inter-Regular.ttf did not load, so this check cannot run")
-	}
-	textW, _, _ := font.SizeUTF8(substituteVars(helper.Text, config.Variables.Custom))
-	rowW, rowH := resolveElementDimensions(*row, 320, 48)
-	helperRight, helperBottom := helper.X+int32(textW), helper.Y+int32(font.Height())
-	if helper.X < row.X+rowW && row.X < helperRight &&
-		helper.Y < row.Y+rowH && row.Y < helperBottom {
-		t.Errorf("the screensaver helper (%d..%d x %d..%d) runs under the cookie row (%d..%d x %d..%d)",
-			helper.X, helperRight, helper.Y, helperBottom,
-			row.X, row.X+rowW, row.Y, row.Y+rowH)
-	}
 }
 
 // cookieRowStrip crops the row's own band out of a rendered frame and doubles
-// it, so the label a 360px cell draws is readable without a zoom. The margins
-// take in the cell's border and a little of the page around it, which is what
-// tells the crop apart from a screenshot of text.
-func cookieRowStrip(t *testing.T, f *probeFrame, row *Element) *image.RGBA {
-	t.Helper()
-	w := getElementWidth(*row, 0)
-	if w <= 0 {
-		t.Fatalf("the row reports a %dpx box to crop", w)
-	}
-	h := getElementHeight(*row, probeH)
-	if h <= 0 {
-		h = 48
-	}
+// it, so the row's text is readable without a zoom. The margins take in the
+// row's glass edge and a little of the page around it, which is what tells the
+// crop apart from a screenshot of text.
+func cookieRowStrip(f *probeFrame, row sdl.Rect) *image.RGBA {
 	x0, y0 := int(row.X)-16, int(row.Y)-8
-	x1, y1 := int(row.X+w)+16, int(row.Y+h)+8
+	x1, y1 := int(row.X+row.W)+16, int(row.Y+row.H)+8
 	if x0 < 0 {
 		x0 = 0
 	}
@@ -139,6 +109,9 @@ func cookieRowStrip(t *testing.T, f *probeFrame, row *Element) *image.RGBA {
 	}
 	if y1 > int(probeH) {
 		y1 = int(probeH)
+	}
+	if x1 <= x0 || y1 <= y0 {
+		return image.NewRGBA(image.Rect(0, 0, 1, 1))
 	}
 
 	const scale = 2
@@ -156,7 +129,7 @@ func cookieRowStrip(t *testing.T, f *probeFrame, row *Element) *image.RGBA {
 
 // writeStackedPNG lays the strips one under the other with a dark rule
 // between, in state order, so one image answers "what does each state look
-// like" without five near-identical pages to flip between.
+// like" without a page per state to flip between.
 func writeStackedPNG(path string, strips []*image.RGBA) error {
 	const sep = 4
 	width, height := 0, 0

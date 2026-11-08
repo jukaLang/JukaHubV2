@@ -32,6 +32,20 @@ const (
 	HomeActionNotifications  HomeAction = "toggle_notifications"
 	HomeActionNowPlaying     HomeAction = "now_playing"
 	HomeActionWiFi           HomeAction = "toggle_wifi"
+	HomeActionSearch         HomeAction = "search"
+)
+
+// The search pill's place in the design grid (1280x720 canvas units): under
+// the greeting, as wide as the greeting column, ending 12px above the cards.
+// The greeting moved up to make room; the pill replaced the old "What do you
+// want to do?" line, which is now a field the user can answer.
+const (
+	homeGreetingY     int32 = 64
+	homeSearchPillX   int32 = 32
+	homeSearchPillY   int32 = 110
+	homeSearchPillW   int32 = 448
+	homeSearchPillH   int32 = 38
+	homeSearchPillGap int32 = 16 // minimum gap to the header launchers on its right
 )
 
 type HomeFonts struct {
@@ -56,6 +70,23 @@ type HomeContinueState struct {
 	// Remaining is the "2:34 left" label next to the progress line. Empty when
 	// the length of the item is unknown, in which case only the bar is drawn.
 	Remaining string
+	// Kind is what the card previews: "video" (a frame), "music" (an audio
+	// graph), "game" (box art) or "" (the ambient artwork).
+	Kind string
+	// Chip is the label in the top-left chip ("Continue watching", "Now
+	// playing"); Action is the pill's verb ("Resume", "Play", "Open player").
+	// Both fall back to the card's defaults when empty.
+	Chip   string
+	Action string
+	// Preview says how to make the video frame or box art (home_continue.go);
+	// it is built off the render thread and drawn once it is ready.
+	Preview homePreviewJob
+	// Wave is the track's audio graph; WaveReal is false while it is still a
+	// stand-in pattern, and Live animates it while the track plays.
+	Wave     [homeWaveBars]float32
+	HasWave  bool
+	WaveReal bool
+	Live     bool
 }
 
 type HomeViewData struct {
@@ -117,13 +148,17 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 		Height: height,
 		Motion: true,
 		Focus:  NewHomeFocusController(),
-		Items:  make(map[HomeFocusID]HomeItem, 11),
+		Items:  make(map[HomeFocusID]HomeItem, 19),
+		// The search pill comes after the cards: its grown touch target reaches
+		// a few pixels toward the Continue card, and a tap on the card's own
+		// edge must stay the card's.
 		Order: []HomeFocusID{
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusUpdate, HomeFocusWiFi, HomeFocusWeather,
-			HomeFocusClock, HomeFocusNowPlaying, HomeFocusBell, HomeFocusExit,
+			HomeFocusSettings, HomeFocusSearch, HomeFocusUpdate, HomeFocusWiFi,
+			HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying, HomeFocusBell,
+			HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -308,6 +343,10 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 854, Y: 496, W: 189, H: 152})
 	card(HomeFocusSettings, "Settings", "Device and design", "settings", HomeActionSettings,
 		sdl.Rect{X: 1059, Y: 496, W: 189, H: 152})
+	// The search pill under the greeting. It is a control, not a menu card, so
+	// a config tile cannot move it (homeConfigOverlayables).
+	card(HomeFocusSearch, "Search", "Apps, settings, files and the web", "search", HomeActionSearch,
+		sdl.Rect{X: homeSearchPillX, Y: homeSearchPillY, W: homeSearchPillW, H: homeSearchPillH})
 	// Exit sits on the footer band, inset by the frame margin like the rest of
 	// the grid; the design sheet puts it at the band's left end.
 	card(HomeFocusExit, "Exit", "Power down", "exit", HomeActionExit,
@@ -346,6 +385,8 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 		HomeFocusWiFi:       false,
 		HomeFocusPS4:        false,
 		HomeFocusPS5:        false,
+		// The search pill is a fixed control under the greeting.
+		HomeFocusSearch: false,
 		// The menu cards + the Exit chip are fully config-driven.
 		HomeFocusContinue:  true,
 		HomeFocusMedia:     true,
@@ -562,6 +603,8 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawMediaCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
+		case HomeFocusSearch:
+			h.drawSearchPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift, data.Subtitle)
 		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
@@ -699,7 +742,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		// Level with the code beside it rather than with the band's top edge.
 		groupY = companionHeaderRect.Y + (companionHeaderRect.H-bandH)/2
 	}
-	if group, p4, p5 := psPillRects(fonts, groupRight, groupY, bandH); group.W > 0 && group.X >= scaleX(480, h.Width) {
+	// The launchers share the band with the search pill under the greeting, so
+	// they are dropped rather than drawn over it on a canvas too narrow for both.
+	minGroupX := scaleX(480, h.Width)
+	if pill := h.Items[HomeFocusSearch].Rect; pill.W > 0 {
+		minGroupX = max32(minGroupX, pill.X+pill.W+scaleX(homeSearchPillGap, h.Width))
+	}
+	if group, p4, p5 := psPillRects(fonts, groupRight, groupY, bandH); group.W > 0 && group.X >= minGroupX {
 		renderPSPillGroup(renderer, fonts, group, p4, p5, psPillVisual{
 			PS4On:   ps4TileCurrentState() == ps4TileLaunch,
 			PS5On:   ps5TileCurrentState() == ps5TileLaunch,
@@ -819,7 +868,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	for _, id := range h.Order {
 		switch id {
 		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell,
-			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit:
+			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate:
 			continue
 		}
 		item, ok := h.Items[id]
@@ -835,28 +884,6 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 		}
 	}
 	return best
-}
-
-// isClockStatusPart reports whether a header status part is the clock text
-// ("15:04"). The clock is the home screen's calendar button, so the header
-// must know which of the status parts is the clock.
-func isClockStatusPart(s string) bool {
-	s = strings.TrimSpace(s)
-	if len(s) < 4 || len(s) > 5 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if i == len(s)-3 {
-			if s[i] != ':' {
-				return false
-			}
-			continue
-		}
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // renderHomeBell draws the notification bell in the home header's top-right
@@ -876,12 +903,108 @@ func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data 
 	if greeting == "" {
 		greeting = defaultGreeting(time.Now())
 	}
-	subtitle := strings.TrimSpace(data.Subtitle)
-	if subtitle == "" {
-		subtitle = "What do you want to do?"
+	// The greeting heads the column the search pill sits in, so it is cut to
+	// the pill's width: a long user name must not run under the launchers.
+	if fonts.Greeting != nil {
+		greeting = ellipsize(fonts.Greeting, greeting, scaleX(homeSearchPillW, h.Width))
 	}
-	drawText(renderer, fonts.Greeting, greeting, scaleX(32, h.Width), scaleY(78, h.Height), ColorTextPrimary(), textAlignLeft)
-	drawText(renderer, fonts.Subtitle, subtitle, scaleX(32, h.Width), scaleY(119, h.Height), ColorTextMuted(), textAlignLeft)
+	drawText(renderer, fonts.Greeting, greeting, scaleX(homeSearchPillX, h.Width), scaleY(homeGreetingY, h.Height), ColorTextPrimary(), textAlignLeft)
+}
+
+// homeSearchHints are the search pill's placeholder, longest first: the pill
+// shows the first one that fits, so the compact canvas reads "Search apps,
+// settings and files" instead of an ellipsized sentence.
+var homeSearchHints = []string{
+	"Search apps, settings, files and the web",
+	"Search apps, settings and files",
+	"Search JukaHub",
+	"Search",
+}
+
+// homeSearchHintFor returns the placeholder for a pill whose text column is
+// maxW wide. A caller-supplied hint (HomeViewData.Subtitle) wins; otherwise the
+// longest built-in hint that fits.
+func homeSearchHintFor(font *ttf.Font, custom string, maxW int32) string {
+	if font == nil || maxW <= 0 {
+		return ""
+	}
+	if c := strings.TrimSpace(custom); c != "" {
+		return ellipsize(font, c, maxW)
+	}
+	for _, hint := range homeSearchHints {
+		if w, _ := measureText(font, hint); w <= maxW {
+			return hint
+		}
+	}
+	return ellipsize(font, homeSearchHints[len(homeSearchHints)-1], maxW)
+}
+
+// drawSearchPill paints the search field under the greeting, the way a phone
+// launcher's search bar looks: a glass pill with the search glyph, a muted
+// placeholder and, at the right end, the pad shortcut that opens it from
+// anywhere on Home. It is a button — A, Enter or a tap opens the search sheet
+// (globalsearch.go) — and takes Home's one focus treatment: bloom, lift, ring.
+func (h *HomeLayout) drawSearchPill(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth, lift float64, hint string) {
+	font := fonts.Helper
+	if font == nil {
+		font = fonts.Small
+	}
+	if font == nil || item.Rect.W <= 0 || item.Rect.H <= 0 {
+		return
+	}
+	draw := scaleHomeCard(item.Rect, lift)
+	draw.Y += homePressOffset(pressDepth, h.Height)
+	radius := item.Rect.H / 2
+	if focused {
+		drawHomeFocusGlow(renderer, draw)
+	}
+	fill, edge := homeGlass(18), homeGlass(36)
+	switch {
+	case pressed:
+		fill = homeGlass(30)
+	case focused:
+		fill = homeGlass(26)
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRectAt(renderer, item.Rect, draw, radius, fill)
+	if focused {
+		strokeRoundedRectAt(renderer, item.Rect, draw, radius, 3, ColorAccent)
+	} else {
+		strokeRoundedRectAt(renderer, item.Rect, draw, radius, 1, edge)
+	}
+
+	// The glyph sits in the rounded end like the magnifier of a phone search
+	// bar; the placeholder follows it in the muted ink.
+	glyph := min32(draw.H-scaleY(16, h.Height), scaleY(22, h.Height))
+	if glyph < 12 {
+		glyph = 12
+	}
+	padX := draw.H / 2
+	icon := sdl.Rect{X: draw.X + padX - glyph/3, Y: draw.Y + (draw.H-glyph)/2, W: glyph, H: glyph}
+	DrawHomeIcon(renderer, "search", icon, false)
+
+	// The shortcut badge: "Y" in a glass chip, like the footer's hint badges.
+	right := draw.X + draw.W - padX/2
+	if small := fonts.Small; small != nil {
+		const key = "Y"
+		kw, _ := measureText(small, key)
+		badgeH := draw.H - scaleY(14, h.Height)
+		badgeW := max32(badgeH, kw+scaleX(12, h.Width))
+		if badgeH >= 14 {
+			badge := sdl.Rect{X: draw.X + draw.W - scaleX(10, h.Width) - badgeW, Y: draw.Y + (draw.H-badgeH)/2, W: badgeW, H: badgeH}
+			fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, homeGlass(16))
+			strokeRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, 1, homeGlass(45))
+			drawText(renderer, small, key, badge.X+badge.W/2, badge.Y+(badge.H-int32(small.Height()))/2, homeGlass(210), textAlignCenter)
+			right = badge.X
+		}
+	}
+
+	textX := icon.X + icon.W + scaleX(10, h.Width)
+	text := homeSearchHintFor(font, hint, right-scaleX(10, h.Width)-textX)
+	if text == "" {
+		return
+	}
+	drawText(renderer, font, text, textX, draw.Y+(draw.H-int32(font.Height()))/2, ColorTextMuted(), textAlignLeft)
 }
 
 // fitHomeTitle picks the largest of the card fonts that prints the whole title
@@ -1068,14 +1191,9 @@ func scaleHomeCard(rect sdl.Rect, lift float64) sdl.Rect {
 	return sdl.Rect{X: rect.X - grow, Y: rect.Y - grow, W: rect.W + grow*2, H: rect.H + grow*2}
 }
 
-// homeCardStacksIcon reports whether an action card is too narrow for the
-// side-by-side icon/label layout. Under roughly 120px of label column the
-// title no longer fits and would render as an ellipsis, so the card switches
-// to a stacked icon-over-text composition instead.
-// homeActionIconTile returns the single icon tile an action card draws, plus
-// whether the card uses the stacked (icon above label) composition. ok is
-// false when the card is too small to hold an icon at all, in which case the
-// caller draws no icon rather than a clipped one.
+// drawContinueCard paints the hero card: the preview of what Play resumes (a
+// video frame, box art or the ambient artwork, with an audio graph for music),
+// the chip naming the action, the play button, title, progress and the pill.
 func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth float64, state HomeContinueState, lift float64) {
 	if fonts.Small == nil || fonts.Card == nil {
 		return
@@ -1086,9 +1204,25 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	if focused {
 		drawHomeFocusGlow(renderer, draw)
 	}
-	drawContinueThumb(renderer, draw)
+	// The artwork: the video's frame or the game's box art once the worker has
+	// made it (home_continue.go), the ambient blooms until then. The preview is
+	// sized to the settled card and already carries its rounded corners.
+	homeRequestPreview(state.Preview, item.Rect.W, item.Rect.H)
+	if art, _, _ := homePreviewTexture(renderer, state.Preview, item.Rect.W, item.Rect.H); art != nil {
+		_ = renderer.Copy(art, nil, &draw)
+		// A scrim from the middle down keeps the labels readable over any
+		// frame, the same ramp the ambient artwork uses.
+		fillVerticalScrim(renderer, draw, draw.Y+draw.H/3,
+			sdl.Color{R: 0, G: 0, B: 0, A: 0}, sdl.Color{R: 0, G: 0, B: 0, A: 215})
+	} else {
+		drawContinueThumb(renderer, draw)
+	}
 	if focused {
-		drawHomeFocusRing(renderer, item.Rect, draw, homeTileRadius)
+		// The hero card is large and its thumbnail is bright, so the standard
+		// 3px accent ring read as part of the artwork. Four pixels outside a
+		// dark inner hairline keeps the selection obvious on every theme.
+		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius, 4, ColorAccent)
+		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius-1, 1, WithAlpha(ColorIconDark, 120))
 	} else {
 		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius, 1, homeCardEdge())
 	}
@@ -1097,6 +1231,9 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 
 	// Continue chip, top-left: the card says what pressing it will do.
 	chipText := "Continue watching"
+	if c := strings.TrimSpace(state.Chip); c != "" {
+		chipText = c
+	}
 	if !state.HasRecent {
 		chipText = "Ready when you are"
 	}
@@ -1129,6 +1266,9 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	action := "Open Media"
 	if state.HasRecent {
 		action = "Resume"
+		if a := strings.TrimSpace(state.Action); a != "" {
+			action = a
+		}
 		if title == "" {
 			title = "Continue playing"
 		}
@@ -1164,6 +1304,20 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		// meta line rather than letting the title run into the chip.
 		titleY = chip.Y + chip.H + scaleY(8, h.Height)
 		metaY = titleY + titleH + scaleY(6, h.Height)
+	}
+	// Music shows its audio graph in the band between the play button and the
+	// title: the track's own levels, breathing while it plays.
+	if state.HasWave {
+		graphTop := play.Y + play.H + scaleY(12, h.Height)
+		graphBottom := titleY - scaleY(12, h.Height)
+		if graphBottom-graphTop >= scaleY(24, h.Height) {
+			graph := sdl.Rect{X: draw.X + pad, Y: graphTop, W: draw.W - 2*pad, H: graphBottom - graphTop}
+			ink := WithAlpha(ColorAccent, 170)
+			if !state.WaveReal {
+				ink = WithAlpha(ColorAccent, 110)
+			}
+			drawHomeAudioGraph(renderer, graph, &state.Wave, state.Live, ink)
+		}
 	}
 	drawText(renderer, fonts.Card, titleText, draw.X+pad, titleY, ColorTextPrimary(), textAlignLeft)
 	if metaText != "" && metaY+metaH <= progressY {
@@ -1276,16 +1430,12 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 		return
 	}
 
-	hints := []footerHint{
-		{button: "D-Pad", label: "Navigate"},
-		{button: "A", label: "Open"},
-	}
+	// The hint sets are fixed arrays: slicing one costs nothing, where building
+	// the list with append allocated on every frame Home was on screen.
+	hints := homeFooterHintsStart[:]
 	if showBack {
-		hints = append(hints, footerHint{button: "B", label: "Back"})
-	} else {
-		hints = append(hints, footerHint{button: "Start", label: "Menu"})
+		hints = homeFooterHintsBack[:]
 	}
-	hints = append(hints, footerHint{button: "L2/R2", label: "Sections"})
 
 	// Right-aligned hint groups: a circular glyph badge and its label.
 	itemGap := scaleX(18, h.Width)
@@ -1293,37 +1443,66 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	badgeGap := scaleX(7, h.Width)
 	fh := int32(fonts.Small.Height())
 
-	type group struct {
-		badgeW int32
-		w      int32
-	}
-	groups := make([]group, 0, len(hints))
+	var badgeWs, groupWs [len(homeFooterHintsStart)]int32
 	total := int32(0)
-	for _, g := range hints {
+	for i, g := range hints {
 		bw, _ := measureText(fonts.Small, g.button)
 		lw, _ := measureText(fonts.Small, g.label)
-		badgeW := max32(badgeD, bw+scaleX(12, h.Width))
-		w := badgeW + badgeGap + lw
-		groups = append(groups, group{badgeW: badgeW, w: w})
-		total += w
+		badgeWs[i] = max32(badgeD, bw+scaleX(12, h.Width))
+		groupWs[i] = badgeWs[i] + badgeGap + lw
+		total += groupWs[i]
 	}
-	if len(groups) > 1 {
-		total += itemGap * int32(len(groups)-1)
+	if len(hints) > 1 {
+		total += itemGap * int32(len(hints)-1)
+	}
+	// The hints must stay clear of the Exit pill at the band's left end: on a
+	// narrow canvas the least specific hint (the D-pad) is dropped first.
+	limit := footer.X + scaleX(16, h.Width)
+	if exit := h.Items[HomeFocusExit].Rect; exit.W > 0 {
+		limit = exit.X + exit.W + scaleX(16, h.Width)
+	}
+	right := footer.X + footer.W - scaleX(16, h.Width)
+	first := 0
+	for first < len(hints)-1 && right-total < limit {
+		total -= groupWs[first] + itemGap
+		first++
 	}
 
-	x := footer.X + footer.W - scaleX(16, h.Width) - total
+	x := right - total
 	textY := footer.Y + (footer.H-fh)/2
 	badgeY := footer.Y + (footer.H-badgeD)/2
-	for i, g := range hints {
-		badge := sdl.Rect{X: x, Y: badgeY, W: groups[i].badgeW, H: badgeD}
+	for i := first; i < len(hints); i++ {
+		g := hints[i]
+		badge := sdl.Rect{X: x, Y: badgeY, W: badgeWs[i], H: badgeD}
 		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, homeGlass(16))
 		strokeRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, 1, homeGlass(45))
 		drawText(renderer, fonts.Small, g.button, badge.X+badge.W/2,
 			badge.Y+(badge.H-fh)/2, homeGlass(210), textAlignCenter)
 		drawText(renderer, fonts.Small, g.label, badge.X+badge.W+badgeGap, textY, ColorTextMuted(), textAlignLeft)
-		x += groups[i].w + itemGap
+		x += groupWs[i] + itemGap
 	}
 }
+
+// homeFooterHintsStart is Home's footer: Home is the root scene, so B has
+// nothing to go back to and the footer names Start, the menu that reaches
+// every other screen. homeFooterHintsBack is the same row for a layout that
+// does have somewhere to go back to. Both must stay the same length.
+var (
+	homeFooterHintsStart = [...]footerHint{
+		{button: "D-Pad", label: "Navigate"},
+		{button: "A", label: "Open"},
+		{button: "Y", label: "Search"},
+		{button: "Start", label: "Menu"},
+		{button: "L2/R2", label: "Sections"},
+	}
+	homeFooterHintsBack = [len(homeFooterHintsStart)]footerHint{
+		{button: "D-Pad", label: "Navigate"},
+		{button: "A", label: "Open"},
+		{button: "Y", label: "Search"},
+		{button: "B", label: "Back"},
+		{button: "L2/R2", label: "Sections"},
+	}
+)
 
 func defaultGreeting(now time.Time) string {
 	hour := now.Hour()
@@ -1580,209 +1759,9 @@ func DrawHomeCardSurfaceAt(renderer *sdl.Renderer, base, rect sdl.Rect, focused,
 	drawGlassTile(renderer, base, rect, focused, pressed)
 }
 
-// DrawHomeIcon renders one monochrome geometric glyph inside the given glyph
-// box (32x32 at native size). Every glyph is built from filled shapes and
-// 3px-equivalent strokes so the set reads with one consistent visual weight.
-//
-// The glyph is served from the icon atlas: each (name, focused) pair is drawn
-// once at the canonical 32px and later occurrences are Copy-blits of that
-// strip's sub-rect — one texture bind for the frame's icons instead of one
-// bind per primitive. Renderers without render targets, and degenerate boxes,
-// paint the primitives directly under the same painter.
-func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bool) {
-	// Icon keys may arrive from several sources; normalize so a card can
-	// never silently miss its glyph.
-	name = strings.ToLower(strings.TrimSpace(name))
-
-	if homeIconAtlas.blit(renderer, name, focused, rect) {
-		return
-	}
-	homeIconAtlas.directPaint()
-	drawHomeIconShapes(renderer, name, rect.X, rect.Y, rect.W, rect.H, focused)
-}
-
-// drawHomeIconShapes paints the named glyph directly with renderer primitives
-// at (x, y), inside a w×h box. DrawHomeIcon calls it as the atlas fallback, and
-// the atlas calls it to bake a glyph into the strip. The colour context is
-// theme state plus `focused`, so the strip's pixels are exactly what the direct
-// painter produced.
-func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, focused bool) {
-	color := ColorTextPrimary()
-	tileBG := ColorIconSurface
-	if focused {
-		color = ColorIconDark
-		tileBG = ColorAccent
-	}
-	paintHomeIcon(renderer, name, x, y, w, h, color, tileBG)
-}
-
-// drawHomeGlyphTinted paints a glyph in an explicit colour: the accent tiles
-// (Media, the Continue play button) carry their icon on a dark badge, where the
-// theme's body-text colour would be wrong.
-func drawHomeGlyphTinted(renderer *sdl.Renderer, name string, rect sdl.Rect, color sdl.Color) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	paintHomeIcon(renderer, name, rect.X, rect.Y, rect.W, rect.H, color,
-		sdl.Color{R: 6, G: 32, B: 42, A: 255})
-}
-
-// paintHomeIcon is the glyph painter itself: every case is built from filled
-// shapes and 3px-equivalent strokes so the set reads with one visual weight.
-// color is the ink; tileBG is what shows through the knocked-out shapes.
-func paintHomeIcon(renderer *sdl.Renderer, name string, x, y, w, h int32, color, tileBG sdl.Color) {
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	setDrawColor(renderer, color)
-
-	cx := x + w/2
-	cy := y + h/2
-
-	// Keep detail visible on both light glyphs and the dark focused glyph.
-	shadeTarget := sdl.Color{R: 0, G: 0, B: 0, A: color.A}
-	if int(color.R)*299+int(color.G)*587+int(color.B)*114 < 128000 {
-		shadeTarget = sdl.Color{R: 255, G: 255, B: 255, A: color.A}
-	}
-	shade := lerpColor(color, shadeTarget, 0.25)
-	deepShade := lerpColor(color, shadeTarget, 0.42)
-
-	switch name {
-	case "media", "continue":
-		// Play triangle inside a rounded frame.
-		strokeRoundedRect(renderer, x, y, w, h, 7, 3, color)
-		fillTriangleFilled(renderer,
-			pt{x: cx - w/5, y: cy - h/4},
-			pt{x: cx - w/5, y: cy + h/4},
-			pt{x: cx + w/4, y: cy}, color)
-	case "files":
-		// A connected folder silhouette with a raised tab and a clean front flap.
-		fillRoundedRect(renderer, x+w/8, y+h/6, w*3/8, h/4, max32(2, w/12), shade)
-		fillRoundedRect(renderer, x+w/8, y+h/4, w*3/4, h*5/8, max32(2, w/10), shade)
-		fillRoundedRect(renderer, x+w/8, y+h*7/16, w*3/4, h*7/16, max32(2, w/10), color)
-		// A small label gives the front plane detail without crowding the tab.
-		fillRoundedRect(renderer, x+w/4, y+h*5/8, w/4, max32(2, h/16), 1, deepShade)
-	case "packages":
-		// Three distinct planes form a parcel; the seam and tape remain visible
-		// in both the normal and focused palette, including at 32px.
-		top := pt{x: cx, y: y + h/12}
-		left := pt{x: x + w/8, y: y + h/3}
-		middle := pt{x: cx, y: y + h*13/24}
-		right := pt{x: x + w*7/8, y: y + h/3}
-		bottom := pt{x: cx, y: y + h*11/12}
-		fillQuad(renderer, top, right, middle, left, color)
-		fillQuad(renderer, left, middle, bottom, pt{x: left.x, y: y + h*3/4}, shade)
-		fillQuad(renderer, middle, right, pt{x: right.x, y: y + h*3/4}, bottom, deepShade)
-		// A short tape strip follows the top plane toward the front edge.
-		fillQuad(renderer,
-			pt{x: x + w*3/8, y: y + h*5/24},
-			pt{x: x + w*7/16, y: y + h*4/24},
-			pt{x: x + w*11/16, y: y + h*9/24},
-			pt{x: x + w*5/8, y: y + h*10/24}, deepShade)
-	case "apps":
-		// Four filled rounded squares in a 2x2 grid: 10px cells with 5px gaps
-		// and a 3px corner radius, optically centered in the glyph box so the
-		// group survives integer scaling on the device.
-		cell := max32(6, w/3) // 10 at native size
-		gap := max32(5, w/8)  // 5 at native size
-		total := cell*2 + gap
-		startX := x + (w-total)/2
-		startY := y + (h-total)/2
-		for row := int32(0); row < 2; row++ {
-			for col := int32(0); col < 2; col++ {
-				r := sdl.Rect{
-					X: startX + col*(cell+gap),
-					Y: startY + row*(cell+gap),
-					W: cell, H: cell,
-				}
-				fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 3, color)
-			}
-		}
-	case "favorites":
-		fillStar(renderer, cx, cy, min32(w, h)/2-1, color)
-	case "browser":
-		// Globe: an outlined circle with the equator and two meridians, which
-		// still reads at the 40px stacked-tile size.
-		r := min32(w, h)/2 - 1
-		strokeCircle(renderer, cx, cy, r, color)
-		renderer.SetDrawColor(color.R, color.G, color.B, color.A)
-		renderer.DrawLine(cx-r, cy, cx+r, cy)
-		for _, dx := range []int32{-r / 2, r / 2} {
-			steps := max32(8, r)
-			for i := int32(0); i < steps; i++ {
-				t := float64(i)/float64(steps)*2 - 1
-				yy := int32(float64(r) * t)
-				wid := int32(math.Sqrt(float64(r*r - yy*yy)))
-				px := cx + dx*wid/r
-				renderer.DrawPoint(px, cy+yy)
-			}
-		}
-	case "chat":
-		// Filled speech bubble with a tail.
-		bubble := sdl.Rect{X: x + w/10, Y: y + h/8, W: w - w/5, H: h / 2}
-		fillRoundedRect(renderer, bubble.X, bubble.Y, bubble.W, bubble.H, 7, color)
-		tailTop := bubble.Y + bubble.H - 3
-		fillTriangleFilled(renderer,
-			pt{x: cx - w/8, y: tailTop},
-			pt{x: cx - w/8 - w/6, y: y + h - h/8},
-			pt{x: cx + w/10, y: tailTop}, color)
-	case "tools":
-		// Three filled slider tracks with knobs.
-		trackW := w - w/4
-		trackX := x + w/8
-		tracks := []int32{cy - h/4, cy, cy + h/4}
-		knobs := []int32{trackX + trackW*2/5, trackX + trackW*3/5, trackX + trackW/4}
-		for i, ty := range tracks {
-			fillRoundedRect(renderer, trackX, ty-1, trackW, 3, 1, color)
-			fillCircle(renderer, knobs[i], ty, 4, color)
-		}
-	case "settings":
-		// Solid gear: center circle plus eight rounded teeth.
-		fillCircle(renderer, cx, cy, 6, color)
-		for i := 0; i < 8; i++ {
-			a := float64(i) * math.Pi / 4
-			tx := cx + int32(float64(w/3)*math.Cos(a))
-			ty := cy + int32(float64(w/3)*math.Sin(a))
-			fillCircle(renderer, tx, ty, 3, color)
-		}
-	case "clock":
-		// Clock face with hour and minute hands.
-		strokeCircle(renderer, cx, cy, w/2-1, color)
-		drawClockHand(renderer, cx, cy, -math.Pi/2+0.7, w/4, 2, color)
-		drawClockHand(renderer, cx, cy, -math.Pi/2+2.4, w/3, 2, color)
-		fillCircle(renderer, cx, cy, 2, color)
-	case "gamepad", "emulator", "emulators", "controller":
-		// A single controller silhouette with rounded grips and clear controls.
-		body := sdl.Rect{X: x + w/8, Y: y + h/4, W: w * 3 / 4, H: h / 2}
-		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, max32(3, h/5), color)
-		fillCircle(renderer, x+w/4, y+h*11/16, max32(2, w/8), color)
-		fillCircle(renderer, x+w*3/4, y+h*11/16, max32(2, w/8), color)
-		unit := max32(2, w/12)
-		dx, dy := x+w/3, y+h*7/16
-		fillRoundedRect(renderer, dx-unit*2, dy, unit*4, unit, 1, deepShade)
-		fillRoundedRect(renderer, dx-unit/2, dy-unit*3/2, unit, unit*4, 1, deepShade)
-		fillCircle(renderer, x+w*2/3, y+h*3/8, max32(1, w/24), deepShade)
-		fillCircle(renderer, x+w*3/4, y+h/2, max32(1, w/24), deepShade)
-	case "play":
-		fillTriangleFilled(renderer,
-			pt{x: x + w/5, y: y + h/8},
-			pt{x: x + w/5, y: y + h*7/8},
-			pt{x: x + w*9/10, y: cy}, color)
-	case "exit":
-		// Power icon: a ring with a vertical bar through the top.
-		fillCircle(renderer, cx, cy, w/3, color)
-		fillCircle(renderer, cx, cy, w/6, tileBG)
-		fillRoundedRect(renderer, cx-2, y, 4, h/2, 2, color)
-	case "back":
-		// Left-pointing arrow head.
-		fillTriangleFilled(renderer,
-			pt{x: x + w/5, y: cy},
-			pt{x: cx + w/8, y: cy - h/3},
-			pt{x: cx + w/8, y: cy + h/3}, color)
-	default:
-		// Safe visible fallback for any unknown non-empty icon name: a filled
-		// ring inside the glyph box. An unrecognized key must never render an
-		// empty tile, so this always draws something substantial.
-		fillCircle(renderer, cx, cy, w/3, color)
-		fillCircle(renderer, cx, cy, w/6, tileBG)
-	}
-}
+// The shared icon painters (DrawHomeIcon, drawHomeGlyphTinted,
+// drawHomeIconShapes) live in icondraw.go; the glyphs themselves are vector
+// definitions in icondefs.go.
 
 // fillStar fills a five-point star by fanning triangles from its center.
 func fillStar(renderer *sdl.Renderer, cx, cy, radius int32, color sdl.Color) {

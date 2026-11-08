@@ -224,13 +224,14 @@ func TestFileEditorRefusesBinaryAndHugeFiles(t *testing.T) {
 	}
 
 	big := filepath.Join(t.TempDir(), "huge.log")
-	// A real write, not a sparse truncate: the check is about the file's size,
-	// and zero bytes are text until the size rule refuses them.
+	// An oversized file of NUL bytes is binary data, so Edit text refuses it
+	// like the small one above. (An oversized text file opens read-only and
+	// paged instead: TestFileViewerOpensLargeFilesPaged.)
 	if err := os.WriteFile(big, make([]byte, fileEditorMaxBytes+1), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if fileEditorOpen(big) {
-		t.Fatal("an oversized file was opened")
+		t.Fatal("an oversized binary file was opened as editable text")
 	}
 	if !strings.Contains(fileEditorTooLargeText(fileEditorMaxBytes+1), "editor stops") {
 		t.Errorf("oversize message = %q", fileEditorTooLargeText(fileEditorMaxBytes+1))

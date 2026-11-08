@@ -64,9 +64,9 @@ var setupActionsFor = defaultSetupActions
 
 func defaultSetupActions() setupActions {
 	return setupActions{
-		WiFi:              openWiFiPanel,
+		WiFi:              func() { wifiScrOpen(appConfig) },
 		RetroAchievements: openRetroAchievementsPanel,
-		MediaTools:        openToolsPanel,
+		MediaTools:        func() { toolsHubOpen(appConfig) },
 		RemotePlay:        openChiakiPanel,
 		Companion:         openCompanionOverlay,
 	}

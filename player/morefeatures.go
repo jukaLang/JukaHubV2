@@ -701,12 +701,19 @@ func runBenchmark(config *Config) {
 		return
 	}
 	started := runSceneTask(func(ctx context.Context) {
+		// The Benchmark screen draws the same run from structured progress
+		// (systool_bench.go); the text below is for a config-driven panel.
+		// The end is reported after the run flag is free, so Run again works
+		// the moment the screen says the run is over.
+		benchRun := sysToolBenchBegin()
+		defer func() { sysToolBenchEnd(benchRun, ctx.Err() != nil) }()
 		defer benchRunActive.Store(false)
 		var lastPublish time.Time
 		ctx = withBenchProgress(ctx, func(p benchProgress) {
 			if ctx.Err() != nil {
 				return
 			}
+			sysToolBenchStep(p)
 			// The panel is a string in the text cache: repainting it on every
 			// megabyte would miss the cache dozens of times a second. Four
 			// updates per second read as live and cost almost nothing to draw.
@@ -723,6 +730,7 @@ func runBenchmark(config *Config) {
 		if ctx.Err() != nil {
 			return
 		}
+		sysToolBenchPhase(true, seq, err)
 		if err != nil {
 			lines = append(lines, "Sequential: "+err.Error())
 		} else {
@@ -738,6 +746,7 @@ func runBenchmark(config *Config) {
 		if ctx.Err() != nil {
 			return
 		}
+		sysToolBenchPhase(false, rnd, err)
 		if err != nil {
 			lines = append(lines, "Random: "+err.Error())
 		} else {
@@ -841,6 +850,8 @@ func queryWindowsTasks(ctx context.Context) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "schtasks", "/query", "/fo", "CSV", "/nh")
+	// No console window flashing over the UI (sched_windows.go).
+	schedHideWindow(cmd)
 	var output taskOutputBuffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Run(); err != nil {
@@ -1042,6 +1053,10 @@ func weatherScreenText(config *Config) string {
 	days := append([]WeatherDay(nil), weatherDaily...)
 	wxMutex.Unlock()
 	if !ready || len(days) == 0 {
+		// Switched off in Settings is not the same as offline: say which.
+		if !weatherIsEnabled() {
+			return weatherOffMessage
+		}
 		return "Weather unavailable (offline?)"
 	}
 	unit := weatherUnit(config)

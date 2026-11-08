@@ -288,8 +288,13 @@ func TestMusicSettingsRowsHaveValues(t *testing.T) {
 			t.Errorf("row %q has no value", row.label)
 		}
 	}
-	if len(musicSettingsRows()) != 7 {
-		t.Errorf("got %d rows, want 7", len(musicSettingsRows()))
+	if len(musicSettingsRows()) != 8 {
+		t.Errorf("got %d rows, want 8", len(musicSettingsRows()))
+	}
+	// Saved playlists are a panel row too: with the store empty the value must
+	// still be readable text, and it must name the list once one exists.
+	if got := musicSettingsValue(musicSettingsRow{kind: msRowPlaylists}, config); got != "None yet" {
+		t.Errorf("empty playlist row value = %q", got)
 	}
 }
 

@@ -1,340 +1,547 @@
 package main
 
+// globalsearch.go — the search sheet behind Home's search pill.
+//
+// The pill on Home (A, a tap or Y), "/" on Home and F2 anywhere open one sheet:
+// a search field on top and the results under it, grouped as Screens &
+// settings, Apps & games, Files, Media history and a final "Search the web"
+// row (homesearch_index.go decides what matches; homesearch_render.go draws).
+// Selecting a result goes straight there: a settings page, an app, a file in
+// the right viewer, the video at its saved position, or the Browser.
+//
+// The sheet replaces the old F2 overlay, which searched only scene names, read
+// the working directory for "files", drew text glyphs such as "[N]" for icons
+// and let a typed "b" close it. It keeps that overlay's switches
+// (globalSearchOpen, gsCursor, gsResults) because the overlay chains in main.go,
+// controller.go, shoulders.go and ambient.go already route around it.
+//
+// Typing: a physical keyboard types straight into the field (handleTextInput
+// routes to the sheet first). With a pad, or on the handheld, the on-screen
+// keyboard opens under the sheet aimed at the query (homeSearchVKTarget); the
+// results filter on every key, Y / Done closes the keyboard and puts the focus
+// on the first result, and X reopens it to edit the query.
+
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// ──────────────────────────────────────────────────────────────────────
-// Global Search — F2 overlay to search apps, notes, settings, files
-// ──────────────────────────────────────────────────────────────────────
+var (
+	// globalSearchOpen is the sheet's visibility. The overlay chains test it,
+	// so it keeps the old overlay's name.
+	globalSearchOpen bool
+	// gsQuery is the text in the field.
+	gsQuery string
+	// gsCursor is the highlighted row in gsResults (-1 = the field itself).
+	gsCursor int
+	// gsResults are the selectable rows in display order; the group headers
+	// are drawn between them wherever Category changes.
+	gsResults []gsResult
+)
 
-var globalSearchOpen bool
-var gsQuery string
-var gsCursor int
-var gsResults []gsResult
-var gsApps []gsApp
-
+// gsResult is one row of the sheet.
 type gsResult struct {
 	Title    string
 	Subtitle string
-	Icon     string
-	Category string
+	Icon     string // shared glyph name (DrawHomeIcon)
+	Category string // the group header the row sits under
 	Action   func(*Config)
+	// Dimmed rows are listed but cannot work right now (offline); Blocked is
+	// what a press on one says instead of running Action. Badge is the short
+	// tag drawn at the row's right end ("Juka", "Needs internet").
+	Dimmed  bool
+	Blocked string
+	Badge   string
+	// Keep rows stay on the sheet when pressed: a recent search refills the
+	// field with Fill instead of navigating away.
+	Keep bool
+	Fill string
 }
 
-func handleGlobalSearchTextInput(text string) {
+// homeSearchVKTarget aims the on-screen keyboard at the search field. It is a
+// target of its own rather than one of vkeyboard.go's iota values, so the
+// keyboard's switch statements carry one case per hook (see vkCurrentText,
+// vkSetText, vkTitle, vkPlaceholder, vkHints, vkSubmit).
+const homeSearchVKTarget vkTargetKind = 64
+
+// homeSearchMaxQuery bounds the field; nothing worth finding needs more.
+const homeSearchMaxQuery = 96
+
+// homeSearchSession is the open sheet's state.
+type homeSearchSession struct {
+	config  *Config
+	screens []homeSearchScreen
+	history []string // recent queries this session, newest first
+	gen     uint64   // index generation the results were built from
+	scroll  int      // first visible display row
+	// skipText is the text event of the key that opened the sheet ("/" on
+	// Home): SDL sends it right after the key press, and it must not become the
+	// first character of the query.
+	skipText string
+	// Geometry recorded by the last draw, shared with the mouse handler so a
+	// tap resolves the row that was actually painted.
+	sheet sdl.Rect
+	field sdl.Rect
+	clear sdl.Rect
+	hits  []homeSearchHit
+}
+
+// homeSearchHit is one drawn result row and the result it shows.
+type homeSearchHit struct {
+	index int
+	rect  sdl.Rect
+}
+
+var homeSearch homeSearchSession
+
+// homeSearchOpen shows the sheet (or, when it is already open, just brings up
+// the keyboard). withKeyboard opens the on-screen keyboard aimed at the field:
+// a pad press or the handheld, where there is nothing else to type on.
+func homeSearchOpen(config *Config, withKeyboard bool) {
+	if config == nil {
+		config = appConfig
+	}
+	if !globalSearchOpen {
+		homeSearchBegin(config)
+	}
+	if withKeyboard && !homeSearchKeyboardUp() {
+		homeSearchOpenKeyboard()
+	}
+}
+
+// homeSearchBegin resets the sheet for a new search. Other floating panels
+// close first: two overlays fighting over the same keys is how a press ends up
+// in the wrong one.
+func homeSearchBegin(config *Config) {
+	globalSearchOpen = true
+	shortcutsOpen = false
+	clipSearchOpen = false
+	tb.startOpen = false
+	homeCalendarOpen = false
+	if nc.open {
+		notifDismiss()
+	}
+	gsQuery = ""
+	gsCursor = 0
+	homeSearch.config = config
+	homeSearch.scroll = 0
+	homeSearch.hits = homeSearch.hits[:0]
+	homeSearch.screens = homeSearchScreens(config)
+	homeSearchRefreshIndex(config)
+	homeSearchRun()
+}
+
+// homeSearchClose hides the sheet and drops its keyboard. The session history
+// stays (homeSearchActivate records a query that led somewhere), so the next
+// search can repeat it.
+func homeSearchClose() {
+	if homeSearchKeyboardUp() {
+		vkCloseKeyboard()
+	}
+	globalSearchOpen = false
+	gsQuery = ""
+	gsResults = nil
+	gsCursor = 0
+	homeSearch.scroll = 0
+	homeSearch.hits = homeSearch.hits[:0]
+	homeSearch.config = nil
+}
+
+// homeSearchToggle is F2: open the sheet anywhere, or close it.
+func homeSearchToggle(config *Config) {
+	if globalSearchOpen {
+		homeSearchClose()
+		PlayBackSound()
+		return
+	}
+	PlayActivateSound()
+	homeSearchOpen(config, homeOnHandheld())
+}
+
+// homeSearchKeyboardUp reports whether the on-screen keyboard is typing into
+// the search field.
+func homeSearchKeyboardUp() bool {
+	return virtualKeyboardActive && vkTarget == homeSearchVKTarget
+}
+
+// homeSearchOpenKeyboard opens the on-screen keyboard on the query, the same
+// way the other live-filter fields open it (vkOpenTVSearch).
+func homeSearchOpenKeyboard() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = homeSearchVKTarget
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// homeSearchKeyboardDone is the keyboard's Done (Y / Enter): the keyboard has
+// closed, and the focus moves to the first result so A opens it.
+func homeSearchKeyboardDone() {
 	if !globalSearchOpen {
 		return
 	}
-	for _, r := range text {
-		if r >= 32 && r <= 126 {
-			gsQuery += string(r)
-		}
-	}
-	gsResults = gsSearch(gsQuery)
 	gsCursor = 0
+	if len(gsResults) == 0 {
+		gsCursor = -1
+	}
+	homeSearch.scroll = 0
 }
 
-type gsApp struct {
-	Name  string
-	Icon  string
-	Scene string
-	Desc  string
+// homeSearchText is the field's text for the keyboard (vkCurrentText).
+func homeSearchText() string {
+	return gsQuery
 }
 
-// gsPopulateApps lazily fills gsApps from the loaded config.
-func gsPopulateApps() {
-	if len(gsApps) > 0 || appConfig == nil {
+// homeSearchSetQuery replaces the query and re-runs the search. Both keyboards
+// end here, so the results follow every key.
+func homeSearchSetQuery(text string) {
+	if utf8.RuneCountInString(text) > homeSearchMaxQuery {
+		runes := []rune(text)
+		text = string(runes[:homeSearchMaxQuery])
+	}
+	if text == gsQuery {
 		return
 	}
-	gsApps = gsBuildApps(appConfig)
+	gsQuery = text
+	gsCursor = 0
+	homeSearch.scroll = 0
+	homeSearchRun()
 }
 
-func gsSearch(query string) []gsResult {
-	gsPopulateApps()
-	var results []gsResult
-	q := strings.ToLower(strings.TrimSpace(query))
-
-	if q == "" {
-		for _, app := range gsApps {
-			results = append(results, gsResult{
-				Title:    app.Name,
-				Subtitle: app.Desc,
-				Icon:     app.Icon,
-				Category: "Apps",
-				Action:   gsMakeLauncher(app.Scene),
-			})
-		}
-		return results
+// homeSearchRun rebuilds the result rows from the current query.
+func homeSearchRun() {
+	config := homeSearch.config
+	if config == nil {
+		config = appConfig
 	}
-
-	for _, app := range gsApps {
-		if strings.Contains(strings.ToLower(app.Name), q) || strings.Contains(strings.ToLower(app.Desc), q) {
-			results = append(results, gsResult{
-				Title:    app.Name,
-				Subtitle: app.Desc,
-				Icon:     app.Icon,
-				Category: "Apps",
-				Action:   gsMakeLauncher(app.Scene),
-			})
+	indexedApps, indexedGames, indexedFiles := homeSearchIndexSnapshot()
+	src := homeSearchSources{
+		screens: homeSearch.screens,
+		files:   indexedFiles,
+		recent:  getRecentItems(),
+		history: homeSearch.history,
+		online:  IsOnline(),
+	}
+	// The launcher's own list wins when the Apps screen has been opened (it
+	// knows which rows failed to start); otherwise the background scan plus
+	// the built-in applets stand in for it.
+	if config != nil {
+		if entries, ok := config.Variables.Custom[appsEntriesVar].([]FileEntry); ok && len(entries) > 0 {
+			src.apps = entries
 		}
 	}
-
-	if len(notes.store.Notes) > 0 {
-		for _, n := range notes.store.Notes {
-			if strings.Contains(strings.ToLower(n.Title), q) || strings.Contains(strings.ToLower(n.Content), q) {
-				note := n
-				results = append(results, gsResult{
-					Title:    note.Title,
-					Subtitle: "Note • " + note.UpdatedAt.Format("Jan 2"),
-					Icon:     "[N]",
-					Category: "Notes",
-					Action: func(c *Config) {
-						if idx := findSceneIndex(c, "Notes"); idx >= 0 {
-							changeSceneTo(c, idx)
-						}
-					},
-				})
-			}
-		}
+	if len(src.apps) == 0 {
+		src.apps = append(append([]FileEntry(nil), indexedApps...), builtinAppEntries(config)...)
 	}
-
-	if len(q) >= 2 {
-		entries, _ := os.ReadDir(".")
-		count := 0
-		for _, e := range entries {
-			if count >= 8 {
-				break
-			}
-			name := strings.ToLower(e.Name())
-			if strings.Contains(name, q) {
-				icon := "[d]"
-				if e.IsDir() {
-					icon = "[+]"
-				}
-				results = append(results, gsResult{
-					Title:    e.Name(),
-					Subtitle: filepath.Clean(e.Name()),
-					Icon:     icon,
-					Category: "Files",
-					Action:   gsMakeLauncher(""),
-				})
-				count++
-			}
-		}
+	src.games = append(recentGames(), indexedGames...)
+	gsResults = homeSearchResults(gsQuery, src)
+	homeSearch.gen = homeSearchIdx.gen.Load()
+	if gsCursor >= len(gsResults) {
+		gsCursor = len(gsResults) - 1
 	}
-
-	return results
 }
 
-// gsBuildApps builds the global search app list from config.
-func gsBuildApps(config *Config) []gsApp {
-	var apps []gsApp
-	seen := make(map[string]bool)
-	for _, sc := range config.Scenes {
-		if sc.Icon == "" || sc.Name == "Exit" || sc.Name == "Patch" {
-			continue
-		}
-		if strings.HasPrefix(sc.Name, "Settings") || strings.HasPrefix(sc.Name, "Theme") {
-			continue
-		}
-		apps = append(apps, gsApp{
-			Name:  sceneDisplayName(sc.Name),
-			Icon:  sc.Icon,
-			Scene: sc.Name,
-			Desc:  sc.Description,
-		})
-		seen[sc.Name] = true
+// homeSearchRefreshIfIndexed re-runs the query when a background scan has
+// published since the rows were built, keeping the highlight on the same row.
+func homeSearchRefreshIfIndexed() {
+	if homeSearchIdx.gen.Load() == homeSearch.gen {
+		return
 	}
-	apps = append(apps, gsApp{Name: "Wallpapers", Icon: "P", Scene: "Wallpapers", Desc: "Set custom wallpaper"})
-	apps = append(apps, gsApp{Name: "Quick Settings", Icon: "Q", Scene: "QuickSettings", Desc: "Quick toggles"})
-	return apps
-}
-
-func gsMakeLauncher(scene string) func(*Config) {
-	return func(c *Config) {
-		if scene == "" || scene == "Main" {
-			if idx := findSceneIndex(c, "Main"); idx >= 0 {
-				changeSceneTo(c, idx)
-			}
+	title := ""
+	if gsCursor >= 0 && gsCursor < len(gsResults) {
+		title = gsResults[gsCursor].Title
+	}
+	homeSearchRun()
+	for i, r := range gsResults {
+		if title != "" && r.Title == title {
+			gsCursor = i
 			return
 		}
-		if idx := findSceneIndex(c, scene); idx >= 0 {
-			changeSceneTo(c, idx)
-		}
 	}
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Rendering
-// ──────────────────────────────────────────────────────────────────────
-
-func renderGlobalSearch(renderer *sdl.Renderer, config *Config) {
-	if !globalSearchOpen {
+// homeSearchRemember puts a query that led somewhere at the top of the
+// session's history.
+func homeSearchRemember(query string) {
+	q := strings.TrimSpace(query)
+	if q == "" {
 		return
 	}
-
-	// Dim background
-	drawRect(renderer, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}, 0, 0, 0, 180)
-
-	// Card
-	cardW := int32(640)
-	cardH := int32(520)
-	cardX := (screenWidth - cardW) / 2
-	cardY := (screenHeight - cardH) / 2
-	drawRoundedRect(renderer, &sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, 20, 22, 22, 28, 245)
-
-	// Search input
-	inputH := int32(44)
-	inputX := cardX + 16
-	inputY := cardY + 16
-	inputW := cardW - 32
-	drawRoundedRect(renderer, &sdl.Rect{X: inputX, Y: inputY, W: inputW, H: inputH}, 12, 28, 32, 42, 255)
-
-	searchFont := getDisplayFont(config, 18)
-	if gsQuery == "" {
-		drawText(renderer, searchFont, "[Search] Search apps, notes, files...", inputX+12, inputY+10, colorNew(90, 100, 120, 150), textAlignLeft)
-	} else {
-		drawText(renderer, searchFont, gsQuery, inputX+12, inputY+10, colorNew(230, 235, 250, 255), textAlignLeft)
-		// Blinking cursor
-		if int64(sdl.GetTicks64())%1000 < 500 {
-			cw, _, _ := searchFont.SizeUTF8(gsQuery)
-			cursorX := inputX + 12 + int32(cw)
-			ac := getAccentColor(config)
-			renderer.SetDrawColor(byte(ac.R), byte(ac.G), byte(ac.B), 200)
-			renderer.FillRect(&sdl.Rect{X: cursorX, Y: inputY + 10, W: 2, H: inputH - 20})
+	next := make([]string, 0, homeSearchMaxRecent)
+	next = append(next, q)
+	for _, h := range homeSearch.history {
+		if strings.EqualFold(h, q) {
+			continue
 		}
-	}
-
-	// Hint
-	hintFont := getBodyFont(config, 11)
-	hint := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"Enter", "Select"}, FooterHint{"Esc", "Close"})
-	hw, _, _ := hintFont.SizeUTF8(hint)
-	drawText(renderer, hintFont, hint, inputX+inputW-int32(hw)-4, inputY+14, colorNew(80, 90, 110, 120), textAlignLeft)
-
-	// Results
-	resultsY := inputY + inputH + 8
-	resultsH := cardH - inputH - 32
-	lineH := int32(44)
-	maxVisible := int(resultsH / lineH)
-
-	bodyFont := getBodyFont(config, 13)
-	titleFont := getBodyFont(config, 15)
-
-	// Clamp cursor
-	if len(gsResults) == 0 {
-		gsCursor = 0
-	} else if gsCursor >= len(gsResults) {
-		gsCursor = 0
-	}
-
-	currentCat := ""
-	resultCount := 0
-	for i, r := range gsResults {
-		if resultCount >= maxVisible {
+		if len(next) >= homeSearchMaxRecent {
 			break
 		}
-		// Category header
-		if r.Category != currentCat {
-			currentCat = r.Category
-			hy := resultsY + int32(resultCount)*lineH
-			if hy+20 > cardY+cardH {
-				break
-			}
-			drawText(renderer, bodyFont, strings.ToUpper(currentCat), inputX+8, hy+4, getAccentColor(config), textAlignLeft)
-			resultCount++
-		}
-		if resultCount >= maxVisible {
-			break
-		}
-
-		ry := resultsY + int32(resultCount)*lineH
-		focused := i == gsCursor
-
-		if focused {
-			drawRoundedRect(renderer, &sdl.Rect{X: inputX, Y: ry, W: inputW, H: lineH - 2}, 8, 30, 36, 50, 220)
-		}
-
-		// Icon
-		drawText(renderer, titleFont, r.Icon, inputX+12, ry+6, colorNew(200, 210, 230, 220), textAlignLeft)
-
-		// Title
-		titleCol := colorNew(210, 220, 240, 240)
-		if focused {
-			titleCol = colorNew(255, 255, 255, 255)
-		}
-		drawText(renderer, titleFont, r.Title, inputX+44, ry+6, titleCol, textAlignLeft)
-
-		// Subtitle
-		if r.Subtitle != "" {
-			sub := truncateRunesSuffix(r.Subtitle, 48, "...")
-			drawText(renderer, bodyFont, sub, inputX+44, ry+26, colorNew(120, 135, 160, 180), textAlignLeft)
-		}
-
-		resultCount++
+		next = append(next, h)
 	}
-
-	// No results
-	if len(gsResults) == 0 && gsQuery != "" {
-		emptyFont := getBodyFont(config, 16)
-		empty := fmt.Sprintf("No results for \"%s\"", gsQuery)
-		ew, _, _ := emptyFont.SizeUTF8(empty)
-		drawText(renderer, emptyFont, empty, inputX+(cardW-32-int32(ew))/2, resultsY+80, colorNew(140, 155, 180, 200), textAlignLeft)
-	}
-
-	// Result count
-	countStr := fmt.Sprintf("%d results", len(gsResults))
-	cw, _, _ := bodyFont.SizeUTF8(countStr)
-	drawText(renderer, bodyFont, countStr, inputX+inputW-int32(cw)-8, cardY+cardH-28, colorNew(80, 90, 110, 120), textAlignLeft)
+	homeSearch.history = next
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Input handling
-// ──────────────────────────────────────────────────────────────────────
-
-func handleGSInput(e *sdl.KeyboardEvent, config *Config) {
-	if !globalSearchOpen {
+// homeSearchActivate runs the result at index i: a recent search refills the
+// field, a dimmed row says why it cannot open, anything else closes the sheet
+// and goes there.
+func homeSearchActivate(config *Config, i int) {
+	if i < 0 || i >= len(gsResults) {
 		return
 	}
-	if e.Type != sdl.KEYDOWN {
+	r := gsResults[i]
+	if r.Keep {
+		PlayNavSound()
+		homeSearchSetQuery(r.Fill)
 		return
 	}
-	switch e.Keysym.Sym {
-	case sdl.K_UP:
-		if gsCursor > 0 {
-			gsCursor--
-		} else if len(gsResults) > 0 {
-			gsCursor = len(gsResults) - 1
-		}
-	case sdl.K_DOWN:
-		if gsCursor < len(gsResults)-1 {
-			gsCursor++
-		} else {
-			gsCursor = 0
-		}
-	case sdl.K_RETURN, sdl.K_KP_ENTER:
-		if gsCursor >= 0 && gsCursor < len(gsResults) && gsResults[gsCursor].Action != nil {
-			gsResults[gsCursor].Action(config)
-			gsQuery = ""
-			gsResults = nil
-			globalSearchOpen = false
-			PlayActivateSound()
-		}
-	case sdl.K_ESCAPE, sdl.K_b:
-		gsQuery = ""
-		gsResults = nil
-		globalSearchOpen = false
+	if r.Blocked != "" {
 		PlayBackSound()
-	case sdl.K_BACKSPACE:
-		if gsQuery != "" {
-			gsQuery = trimLastRune(gsQuery)
-			gsResults = gsSearch(gsQuery)
-			gsCursor = 0
+		showToast(r.Blocked, ToastWarn())
+		return
+	}
+	homeSearchRemember(gsQuery)
+	homeSearchClose()
+	PlayActivateSound()
+	if r.Action != nil {
+		if config == nil {
+			config = appConfig
+		}
+		r.Action(config)
+	}
+}
+
+// homeSearchMove steps the highlight; Up from the first row returns to the
+// field (-1), where A opens the keyboard.
+func homeSearchMove(delta int) {
+	if len(gsResults) == 0 {
+		gsCursor = -1
+		return
+	}
+	next := gsCursor + delta
+	if next < -1 {
+		next = -1
+	}
+	if next >= len(gsResults) {
+		next = len(gsResults) - 1
+	}
+	if next != gsCursor {
+		gsCursor = next
+		PlayNavSound()
+	}
+}
+
+// homeSearchJumpGroup moves the highlight to the first row of the next (or
+// previous) group, so L1/R1 and Page keys hop over a long group.
+func homeSearchJumpGroup(dir int) {
+	if len(gsResults) == 0 {
+		return
+	}
+	i := gsCursor
+	if i < 0 {
+		i = 0
+	}
+	cat := gsResults[i].Category
+	if dir > 0 {
+		for j := i + 1; j < len(gsResults); j++ {
+			if gsResults[j].Category != cat {
+				gsCursor = j
+				PlayNavSound()
+				return
+			}
+		}
+		return
+	}
+	// Back to the start of this group, or to the previous group's start when
+	// the highlight is already on this group's first row.
+	start := i
+	for start > 0 && gsResults[start-1].Category == cat {
+		start--
+	}
+	if start == i && start > 0 {
+		start--
+		prev := gsResults[start].Category
+		for start > 0 && gsResults[start-1].Category == prev {
+			start--
 		}
 	}
+	if start != gsCursor {
+		gsCursor = start
+		PlayNavSound()
+	}
+}
+
+// ── Input ────────────────────────────────────────────────────────────────
+
+// handleGlobalSearchTextInput types physical-keyboard text into the field.
+func handleGlobalSearchTextInput(text string) {
+	if !globalSearchOpen || text == "" {
+		return
+	}
+	if skip := homeSearch.skipText; skip != "" {
+		homeSearch.skipText = ""
+		if text == skip && gsQuery == "" {
+			return
+		}
+	}
+	clean := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, text)
+	if clean == "" {
+		return
+	}
+	homeSearchSetQuery(gsQuery + clean)
+}
+
+// handleGSInput handles a physical key while the sheet is open. A real
+// keyboard needs no on-screen one, so the first key closes it.
+func handleGSInput(e *sdl.KeyboardEvent, config *Config) {
+	if !globalSearchOpen || e == nil || e.Type != sdl.KEYDOWN {
+		return
+	}
+	homeSearch.skipText = ""
+	if homeSearchKeyboardUp() {
+		vkCloseKeyboard()
+		if e.Keysym.Sym == sdl.K_ESCAPE {
+			return
+		}
+	}
+	ctrl := e.Keysym.Mod&sdl.KMOD_CTRL != 0
+	switch e.Keysym.Sym {
+	case sdl.K_ESCAPE, sdl.K_F2:
+		// F2 opened the sheet, so it closes it too: while the sheet is open
+		// every key reaches this handler before main.go's F2 toggle.
+		homeSearchClose()
+		PlayBackSound()
+	case sdl.K_UP:
+		homeSearchMove(-1)
+	case sdl.K_DOWN:
+		homeSearchMove(1)
+	case sdl.K_PAGEDOWN, sdl.K_TAB:
+		homeSearchJumpGroup(1)
+	case sdl.K_PAGEUP:
+		homeSearchJumpGroup(-1)
+	case sdl.K_RETURN, sdl.K_KP_ENTER:
+		i := gsCursor
+		if i < 0 && len(gsResults) > 0 {
+			// Enter in the field opens the best match, like a launcher.
+			i = 0
+		}
+		homeSearchActivate(config, i)
+	case sdl.K_BACKSPACE:
+		if ctrl {
+			homeSearchSetQuery("")
+		} else if gsQuery != "" {
+			homeSearchSetQuery(trimLastRune(gsQuery))
+		}
+	case sdl.K_DELETE:
+		homeSearchSetQuery("")
+	}
+}
+
+// homeSearchController handles a pad button while the sheet is open. It
+// returns false while the on-screen keyboard is up, so the main loop hands the
+// button to the keyboard (which types into the query through
+// homeSearchVKTarget).
+func homeSearchController(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if e == nil {
+		return false
+	}
+	if homeSearchKeyboardUp() {
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		homeSearchMove(-1)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		homeSearchMove(1)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		homeSearchJumpGroup(-1)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		homeSearchJumpGroup(1)
+	case sdl.CONTROLLER_BUTTON_A:
+		if gsCursor < 0 {
+			PlayActivateSound()
+			homeSearchOpenKeyboard()
+			return true
+		}
+		homeSearchActivate(config, gsCursor)
+	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
+		// X / Y edit the query: the keyboard comes back with the text in it.
+		PlayActivateSound()
+		homeSearchOpenKeyboard()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+		homeSearchClose()
+		PlayBackSound()
+	}
+	return true
+}
+
+// homeSearchMouseDown handles a click or tap while the sheet is open. A press
+// on the on-screen keyboard is left to it; a result opens; the field brings
+// the keyboard up on a handheld; anywhere outside the sheet closes it. Every
+// other press is swallowed so nothing behind the sheet reacts.
+func homeSearchMouseDown(mx, my int32, config *Config) bool {
+	if !globalSearchOpen {
+		return false
+	}
+	if homeSearchKeyboardUp() && !vkOutsidePanel(mx, my) {
+		return false
+	}
+	if homeSearch.clear.W > 0 && pointInRect(mx, my, homeSearch.clear) {
+		PlayNavSound()
+		homeSearchSetQuery("")
+		return true
+	}
+	if homeSearch.field.W > 0 && pointInRect(mx, my, homeSearch.field) {
+		gsCursor = -1
+		if homeOnHandheld() && !homeSearchKeyboardUp() {
+			PlayActivateSound()
+			homeSearchOpenKeyboard()
+		}
+		return true
+	}
+	for _, hit := range homeSearch.hits {
+		if pointInRect(mx, my, hit.rect) {
+			if homeSearchKeyboardUp() {
+				vkCloseKeyboard()
+			}
+			gsCursor = hit.index
+			homeSearchActivate(config, hit.index)
+			return true
+		}
+	}
+	if homeSearch.sheet.W > 0 && !pointInRect(mx, my, homeSearch.sheet) {
+		homeSearchClose()
+		PlayBackSound()
+		return true
+	}
+	if homeSearchKeyboardUp() {
+		// A tap on the sheet's empty space dismisses the keyboard, the way a
+		// tap on the dimmed content behind it does everywhere else.
+		vkCloseKeyboard()
+	}
+	return true
+}
+
+// homeSearchWheel scrolls the result list by whole rows.
+func homeSearchWheel(dy int32) bool {
+	if !globalSearchOpen || dy == 0 {
+		return false
+	}
+	if dy > 0 {
+		homeSearchMove(-1)
+	} else {
+		homeSearchMove(1)
+	}
+	return true
 }

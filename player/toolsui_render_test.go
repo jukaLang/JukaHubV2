@@ -1,58 +1,23 @@
 package main
 
-// Offscreen checks for the Tools panel. The panel is drawn with the software
-// renderer against a known background so the geometry, the focused-row
-// highlight and the "only when the config has a Misc scene" rule are verified
-// on real pixels instead of by inspection.
+// Offscreen checks for the Tools pages: the hub and the Network tools page are
+// drawn with the software renderer, and their geometry and touch targets are
+// checked on the frame they produce. The report layout behind every result
+// sheet is checked here too, against the real Inter face.
 
 import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
-func renderToolsProbe(t *testing.T, config *Config, cursor int) (*probeFrame, *sdl.Rect, []sdl.Rect) {
-	t.Helper()
-	f := newProbeFrame(t)
-	if font, _ := getCachedFont(config, "small"); font == nil {
-		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
-	}
-
-	prevW, prevH := screenWidth, screenHeight
-	prevOpen, prevCursor := toolsPanel.open, toolsPanel.cursor
-	screenWidth, screenHeight = probeW, probeH
-	toolsPanel.open = true
-	toolsPanel.cursor = cursor
-	t.Cleanup(func() {
-		screenWidth, screenHeight = prevW, prevH
-		toolsPanel.open, toolsPanel.cursor = prevOpen, prevCursor
-		toolsRowRects = nil
-	})
-
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
-	}
-	defer destroyTestRenderer(renderer)
-	// Cached text textures belong to the renderer that created them; each probe
-	// makes a fresh renderer, so drop the previous probe's textures.
-	ClearTextCache()
-
-	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
-	renderer.Clear()
-	renderToolsPanel(renderer, config)
-	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
-	}
-
-	panel := toolsPanelRect
-	rects := append([]sdl.Rect(nil), toolsRowRects...)
-	return f, &panel, rects
-}
-
+// bandLuma averages the brightness of a band near a rect's top-right corner;
+// the render tests of several panels compare a focused row with a resting one.
 func bandLuma(f *probeFrame, r sdl.Rect) int {
 	if r.W <= 0 || r.H <= 0 {
 		return 0
@@ -71,297 +36,337 @@ func bandLuma(f *probeFrame, r sdl.Rect) int {
 	return sum / n
 }
 
-func TestToolsPanelRenderLayout(t *testing.T) {
-	prevAccent := accentColor
-	accentColor = ColorAccent
-	t.Cleanup(func() { accentColor = prevAccent })
+// toolsHubTestFrame draws one frame of the current scene's page and reads the
+// pixels back.
+func toolsHubTestFrame(t *testing.T, renderer *sdl.Renderer, draw func(*sdl.Renderer)) *probeFrame {
+	t.Helper()
+	f := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: sdl.Color{R: 9, G: 14, B: 25, A: 255}}
+	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
+	renderer.Clear()
+	draw(renderer)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
+	}
+	return f
+}
 
-	config := &Config{}
-	f, panel, rects := renderToolsProbe(t, config, 0)
+// TestToolsHubRendersThePage draws the hub at the canvases the app runs on: the
+// chip sits in the header's top-right corner clear of every tile, the tiles stay
+// inside the body, Watch Party spans the row, and every visible tile is a
+// painted card.
+func TestToolsHubRendersThePage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	config := toolsHubTestNav(t)
+	renderer := probeRenderer(t)
+	prevEngine := focusEngine
+	focusEngine = NewFocusEngine()
+	t.Cleanup(func() { focusEngine = prevEngine })
+	toolsHubPinIP(t, "192.168.1.20")
+	toolsHubPinOnline(t, true)
+	currentSceneIndex = sceneIndexExact(config, toolsHubSceneName)
+	// The slow values are read: drawing must not wait on the disk.
+	toolsHub.slow = toolsHubSlowValues{toolbox: "2 installed", audit: "0 of 9 installed", security: "Looks good", at: time.Now()}
 
-	if panel.W != 880 {
-		t.Fatalf("panel width = %d, want 880 on a 1280px screen", panel.W)
-	}
-	if panel.X != (probeW-panel.W)/2 {
-		t.Fatalf("panel is not horizontally centred: x=%d w=%d screen=%d", panel.X, panel.W, probeW)
-	}
-	if panel.Y < 0 || panel.Y+panel.H > probeH {
-		t.Fatalf("panel vertically out of bounds: y=%d h=%d screen=%d", panel.Y, panel.H, probeH)
-	}
+	for _, size := range []struct{ w, h int32 }{{probeW, probeH}, {1024, 768}, {960, 720}} {
+		withScreen(t, size.w, size.h)
+		toolsHub.tiles = nil
+		toolsHub.page = newToolsHubPage()
+		f := toolsHubTestFrame(t, renderer, func(r *sdl.Renderer) { renderToolsHub(r, config) })
 
-	// The grid scrolls, so only the window that fits is drawn and the rest
-	// keep zero rects. The drawn tiles form columns, so instead of a vertical
-	// no-overlap walk like a list, every tile is checked to stay inside its
-	// row lane and the panel.
-	rows := toolsRows(config)
-	if len(rects) != len(rows) {
-		t.Fatalf("drew %d tile rects for %d rows", len(rects), len(rows))
-	}
-	drawn := 0
-	for i, r := range rects {
-		if r.W == 0 && r.H == 0 {
-			// Off screen: the grid scrolls, so only the window in the body is
-			// drawn and the rest keep zero rects.
-			continue
+		p := &toolsHub.page
+		// The page stands on Home's backdrop, so a drawn card is told apart
+		// from it by its glass: the card's middle differs from the side margin
+		// level with it.
+		if size.w == probeW {
+			hero := p.tileRects[0]
+			inside := f.at(hero.X+hero.W/2, hero.Y+hero.H/2)
+			outside := f.at(hero.X-4, hero.Y+hero.H/2)
+			if inside == outside {
+				t.Errorf("Watch Party's card is not drawn: its middle %+v matches the margin beside it %+v", inside, outside)
+			}
 		}
-		drawn++
-		if r.X < panel.X || r.X+r.W > panel.X+panel.W ||
-			r.Y < panel.Y || r.Y+r.H > panel.Y+panel.H {
-			t.Fatalf("tile %d %+v escapes panel %+v", i, r, *panel)
+		chip := p.chipRect
+		if chip.W <= 0 || chip.X+chip.W > size.w || chip.Y < headerBarHeight() || chip.Y+chip.H > p.view.Y {
+			t.Fatalf("%dx%d: chip %+v is not in the header's corner (body starts at %d)", size.w, size.h, chip, p.view.Y)
 		}
-	}
-	if drawn == 0 {
-		t.Fatal("no tiles were drawn")
-	}
-
-	// The selected tile must be visibly highlighted against its neighbours.
-	if lit, plain := bandLuma(f, rects[0]), bandLuma(f, rects[1]); lit <= plain {
-		t.Fatalf("focused tile is not highlighted: focused luma %d <= unfocused %d", lit, plain)
-	}
-
-	// The panel body is opaque over the dimmed scene.
-	body := f.at(panel.X+panel.W/2, panel.Y+panel.H-4)
-	if body.R == f.bg.R && body.G == f.bg.G && body.B == f.bg.B {
-		t.Fatal("panel body is transparent")
-	}
-}
-
-// The tile grid is taller than the panel, so moving the cursor to the last
-// tile has to scroll the window and keep the focused tile fully in view.
-func TestToolsPanelScrollsToTheCursor(t *testing.T) {
-	config := &Config{}
-	rows := toolsRows(config)
-	if len(rows) < 2 {
-		// The scroll behaviour is the subject; a one-row Tools list cannot
-		// exercise it, and a skip would hide that the list stopped growing.
-		t.Fatalf("the Tools list has %d row(s); the scroll test needs at least two", len(rows))
-	}
-	prevCursor, prevScroll := toolsPanel.cursor, toolsPanel.scroll
-	t.Cleanup(func() { toolsPanel.cursor, toolsPanel.scroll = prevCursor, prevScroll })
-	m := toolsPanelMetrics(config, rows)
-	g := toolsGridBuild(rows, m)
-	if g.bodyH <= m.tileH {
-		t.Fatalf("the Tools grid is %dpx tall in a %dpx body; there is nothing to scroll", g.bodyH, m.tileH)
-	}
-	// One lane in view is the tightest scroll a small panel can give.
-	viewH := m.tileH
-
-	toolsPanel.cursor, toolsPanel.scroll = len(rows)-1, 0
-	scroll := toolsGridEnsureVisible(g, toolsPanel.cursor, viewH)
-	if scroll == 0 {
-		t.Fatalf("cursor at the last of %d tiles did not scroll the grid", len(rows))
-	}
-	last := g.rects[toolsPanel.cursor]
-	if last.Y-scroll < 0 || last.Y+last.H-scroll > viewH {
-		t.Fatalf("window %d..%d does not cover the focused tile %+v", scroll, scroll+viewH, last)
-	}
-
-	// Walking back up keeps the focused tile fully in view; at this tight
-	// one-lane view that lands at the tile's own offset, not at zero.
-	toolsPanel.cursor = 0
-	scroll = toolsGridEnsureVisible(g, toolsPanel.cursor, viewH)
-	first := g.rects[toolsPanel.cursor]
-	if first.Y-scroll < 0 || first.Y+first.H-scroll > viewH {
-		t.Fatalf("window %d..%d does not cover the focused tile %+v", scroll, scroll+viewH, first)
-	}
-}
-
-// A near-black theme accent must not turn the selected row into a hole.
-func TestToolsPanelFocusVisibleWithDarkAccent(t *testing.T) {
-	prevAccent := accentColor
-	accentColor = sdl.Color{R: 30, G: 41, B: 59, A: 255}
-	t.Cleanup(func() { accentColor = prevAccent })
-
-	f, _, rects := renderToolsProbe(t, &Config{}, 0)
-	if len(rects) < 2 {
-		t.Fatalf("row rects = %d", len(rects))
-	}
-	if lit, plain := bandLuma(f, rects[0]), bandLuma(f, rects[1]); lit <= plain {
-		t.Fatalf("focused row is darker than the others: focused luma %d <= unfocused %d", lit, plain)
-	}
-}
-
-// While the share is open the panel must say so and show the LAN warning
-// without pushing the last row or the footer off the panel.
-func TestToolsPanelRunningFTP(t *testing.T) {
-	if err := ftpSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start FTP: %v", err)
-	}
-	defer ftpSrv.Stop()
-
-	rows := toolsRows(&Config{})
-	ftp := toolsRowByAction(rows, toolsActionFTP)
-	if ftp == nil {
-		t.Fatal("no FTP row")
-	}
-	if ftp.value != "Running" {
-		t.Fatalf("FTP row value = %q, want Running", ftp.value)
-	}
-	if ftp.hint != "A Stop" {
-		t.Fatalf("FTP row hint = %q, want A Stop", ftp.hint)
-	}
-	if !strings.HasPrefix(ftp.detail, "ftp://") {
-		t.Fatalf("FTP row detail = %q, want the ftp:// address", ftp.detail)
-	}
-
-	f, panel, rects := renderToolsProbe(t, &Config{}, 0)
-	if len(rects) == 0 {
-		t.Fatal("no rows drawn")
-	}
-	// The warning line is pinned above the footer, so it is checked where the
-	// layout puts it rather than under the last row: the list scrolls now.
-	layout := toolsPanelMetrics(&Config{}, toolsRows(&Config{}))
-	warnTop := panel.Y + panel.H - layout.footH - layout.infoH + 2
-	warnBottom := panel.Y + panel.H - layout.footH
-	if warnBottom <= warnTop {
-		t.Fatalf("no room for the warning: top=%d bottom=%d", warnTop, warnBottom)
-	}
-	if n := f.countColor(ColorToastWarn, panel.X+24, warnTop, panel.X+panel.W-24, warnBottom); n < 20 {
-		t.Fatalf("warning text missing above the footer (only %d accent pixels)", n)
-	}
-}
-
-func TestToolsRowsWithoutMiscScene(t *testing.T) {
-	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
-	rows := toolsRows(config)
-	if len(rows) != 29 {
-		t.Fatalf("rows = %d, want the twenty-two FTP & IP rows, party, power tools, toolbox, audit, security, disc helpers and community only", len(rows))
-	}
-	want := []toolsAction{
-		toolsActionCopyIP, toolsActionFTP, toolsActionCompanion, toolsActionSSH,
-		toolsActionGatewayScan, toolsActionClipboardScan, toolsActionBanner, toolsActionPing,
-		toolsActionTraceroute, toolsActionDNSLookup, toolsActionWiFiSignal,
-		toolsActionLANDevices,
-		toolsActionPublicIP, toolsActionHTTPCheck, toolsActionCert, toolsActionHeaders,
-		toolsActionPortCheck, toolsActionWhois, toolsActionCodec,
-		toolsActionListeningPorts, toolsActionClockCheck, toolsActionSubnet,
-		toolsActionParty, toolsActionPowerTools, toolsActionToolbox,
-		toolsActionAudit, toolsActionSecurity,
-		toolsActionDiscHelpers, toolsActionCommunity,
-	}
-	for i, action := range want {
-		if rows[i].action != action {
-			t.Fatalf("row %d = %v, want %v (order: %+v)", i, rows[i].action, action, rows)
+		if len(p.tileRects) != len(toolsHub.tiles) || len(toolsHub.tiles) == 0 {
+			t.Fatalf("%dx%d: %d tile targets for %d tiles", size.w, size.h, len(p.tileRects), len(toolsHub.tiles))
+		}
+		hero := p.tileRects[0]
+		if hero.W != p.view.W {
+			t.Errorf("%dx%d: Watch Party is %dpx wide in a %dpx body", size.w, size.h, hero.W, p.view.W)
+		}
+		visible := 0
+		for i, r := range p.tileRects {
+			if r.W == 0 {
+				continue
+			}
+			visible++
+			if r.X < p.view.X || r.X+r.W > p.view.X+p.view.W || r.Y < p.view.Y || r.Y+r.H > p.view.Y+p.view.H {
+				t.Errorf("%dx%d: tile %q %+v leaves the body %+v", size.w, size.h, toolsHub.tiles[i].id, r, p.view)
+			}
+			if overlapsRect(r, chip) {
+				t.Errorf("%dx%d: tile %q overlaps the chip", size.w, size.h, toolsHub.tiles[i].id)
+			}
+		}
+		if visible < 4 {
+			t.Errorf("%dx%d: only %d tiles visible on the first screen", size.w, size.h, visible)
 		}
 	}
-	// Most-used first: the copyable address, then the transfer tools and the
-	// network probes they go with.
-	// Three bands inside the transfer tools, then the two older groups: an
-	// eighteen-tile heading was the wall this split removed.
-	if rows[0].section != "SERVERS & SHARING" || rows[4].section != "NETWORK PROBES" ||
-		rows[12].section != "LOOKUPS & CHECKS" || rows[19].section != "THIS DEVICE" ||
-		rows[22].section != "WATCH TOGETHER" || rows[23].section != "SYSTEM & UPDATES" {
-		t.Fatalf("section headings are wrong: %q %q %q %q %q %q",
-			rows[0].section, rows[4].section, rows[11].section, rows[15].section, rows[18].section, rows[19].section)
+
+	// Offline the chip says so, Watch Party is dimmed with its tag, and the
+	// page still draws every tile.
+	withScreen(t, probeW, probeH)
+	toolsHubPinIP(t, "")
+	toolsHubPinOnline(t, false)
+	toolsHub.tiles = nil
+	toolsHubTestFrame(t, renderer, func(r *sdl.Renderer) { renderToolsHub(r, config) })
+	if party := toolsHub.tiles[toolsHubIndexOf(toolsHub.tiles, "party")]; party.blocked != toolsHubTagWiFi {
+		t.Fatalf("offline Watch Party = %+v, want it dimmed for Wi-Fi", party)
 	}
-	// The probes came out of Power tools; each one must still carry its action
-	// hint so the panel reads like the rest of the list.
-	for _, action := range want[4:22] {
-		row := toolsRowByAction(rows, action)
-		if row == nil || row.hint == "" {
-			t.Fatalf("probe row %v = %+v, want an action hint", action, row)
+	if toolsHub.page.chipRect.W <= 0 {
+		t.Fatal("offline the chip disappeared; it should read No Wi-Fi")
+	}
+
+	// A tap on the chip copies (or explains); a tap on a tile focuses and opens.
+	clearToastAfterTest(t)
+	c := toolsHub.page.chipRect
+	if !toolsHubClick(c.X+c.W/2, c.Y+c.H/2, config) || !toolsHub.page.chip {
+		t.Fatal("a tap on the chip was not taken")
+	}
+	if !strings.Contains(currentToast.Message, "Wi-Fi") {
+		t.Fatalf("a tap on the offline chip said %q", currentToast.Message)
+	}
+	party := toolsHub.page.tileRects[0]
+	if !toolsHubClick(party.X+party.W/2, party.Y+party.H/2, config) || toolsHub.page.chip || toolsHub.page.cursor != 0 {
+		t.Fatal("a tap on Watch Party did not take the focus")
+	}
+	if transitionPhase != "none" {
+		t.Fatal("a tap on a dimmed tile navigated")
+	}
+	if toolsHubClick(2, probeH-2, config) {
+		t.Fatal("a tap on nothing was taken")
+	}
+}
+
+// TestNetToolsRendersThePageAndTheSheet draws the Network tools page and a
+// result sheet: every tile has a target inside the body, and the sheet's
+// report and pills sit on its card.
+func TestNetToolsRendersThePageAndTheSheet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	config := toolsHubTestNav(t)
+	netToolsTestJobs(t)
+	renderer := probeRenderer(t)
+	t.Setenv("JUKAHUB_GATEWAY", "192.168.1.1")
+	toolsHubPinIP(t, "192.168.1.20")
+	toolsHubPinOnline(t, true)
+	currentSceneIndex = sceneIndexExact(config, netToolsSceneName)
+	netTools.tiles = nil
+	netTools.page = newToolsHubPage()
+	netTools.sheet = toolsHubSheet{}
+
+	for _, size := range []struct{ w, h int32 }{{probeW, probeH}, {960, 720}} {
+		withScreen(t, size.w, size.h)
+		toolsHubTestFrame(t, renderer, func(r *sdl.Renderer) { renderNetTools(r, config) })
+		p := &netTools.page
+		if len(p.tileRects) != len(netToolsSpecs) {
+			t.Fatalf("%dx%d: %d tile targets for %d tools", size.w, size.h, len(p.tileRects), len(netToolsSpecs))
+		}
+		for i, r := range p.tileRects {
+			if r.W == 0 {
+				continue
+			}
+			if r.X < p.view.X || r.X+r.W > p.view.X+p.view.W || r.Y < p.view.Y || r.Y+r.H > p.view.Y+p.view.H {
+				t.Errorf("%dx%d: tile %q %+v leaves the body %+v", size.w, size.h, netTools.tiles[i].id, r, p.view)
+			}
+		}
+		if netTools.gateway != "192.168.1.1" {
+			t.Errorf("the page did not read the router's address (%q)", netTools.gateway)
 		}
 	}
-	ftp := toolsRowByAction(rows, toolsActionFTP)
-	if ftp == nil || ftp.value != "Stopped" {
-		t.Fatalf("FTP row = %+v, want Stopped", ftp)
+
+	withScreen(t, probeW, probeH)
+	netToolsSetResult("listening", netToolsResult{
+		text: "22      0.0.0.0, ::            -\n8080    127.0.0.1              4242\n\n2 TCP ports listening",
+		at:   time.Now(),
+	})
+	netToolsShowSheet("listening")
+	toolsHubTestFrame(t, renderer, func(r *sdl.Renderer) { renderNetTools(r, config) })
+	s := &netTools.sheet
+	if s.card.W <= 0 || s.card.X < 0 || s.card.X+s.card.W > probeW || s.card.Y+s.card.H > probeH {
+		t.Fatalf("sheet card %+v leaves the screen", s.card)
 	}
-	ssh := toolsRowByAction(rows, toolsActionSSH)
-	if ssh == nil || ssh.value != "Stopped" || ssh.hint != "A Start" {
-		t.Fatalf("SSH row = %+v, want stopped with a start hint", ssh)
+	if len(s.lines) == 0 || s.fits <= 0 {
+		t.Fatalf("the sheet laid out %d lines with room for %d", len(s.lines), s.fits)
 	}
-	companion := toolsRowByAction(rows, toolsActionCompanion)
-	if companion == nil || companion.value != "Scan to connect" || companion.hint != "A Show QR Code" {
-		t.Fatalf("companion row = %+v, want the idle QR hint", companion)
+	if len(s.pillRects) != len(s.pills) || len(s.pills) < 2 {
+		t.Fatalf("%d pill targets for %d pills", len(s.pillRects), len(s.pills))
+	}
+	for i, r := range s.pillRects {
+		if !pointInRect(r.X, r.Y, s.card) || !pointInRect(r.X+r.W-1, r.Y+r.H-1, s.card) || r.H < 36 {
+			t.Errorf("pill %q %+v is not a target on the card %+v", s.pills[i].id, r, s.card)
+		}
+	}
+	closeRect := s.pillRects[len(s.pillRects)-1]
+	if !netToolsClick(closeRect.X+closeRect.W/2, closeRect.Y+closeRect.H/2, config) || s.open {
+		t.Fatal("tapping Close did not close the sheet")
 	}
 }
 
-func TestToolsRowsWithMiscScene(t *testing.T) {
-	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
-	rows := toolsRows(config)
-	if len(rows) != 30 {
-		t.Fatalf("rows = %d, want a Classic Tools row too", len(rows))
+// toolsHubTestFont is the report face the sheets use.
+func toolsHubTestFont(t *testing.T) *ttf.Font {
+	t.Helper()
+	newProbeFrame(t)
+	font := toolsHubSheetFont(&Config{})
+	if font == nil {
+		t.Fatal("no usable font: the shipped Inter face did not load, so the layout cannot be measured")
 	}
-	if rows[len(rows)-1].action != toolsActionUtilities {
-		t.Fatalf("last row = %v, want the Classic Tools row", rows[len(rows)-1].action)
+	return font
+}
+
+// TestToolsHubClassifyReadsTheReports: the reports are written for a terminal;
+// the classifier finds the pairs, the tables and the prose in them.
+func TestToolsHubClassifyReadsTheReports(t *testing.T) {
+	text := "Public IP: 203.0.113.9\nName servers: a.example\n    b.example\n\n" +
+		"IP               MAC                 DEVICE\n192.168.1.1      a4:2b:8c:00:11:22   wlan0\n" +
+		"64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.3 ms\nRead-only: nothing was changed."
+	raw := toolsHubClassify(text)
+	want := []toolsHubLineKind{
+		toolsHubLineKV, toolsHubLineKV, toolsHubLineCont, toolsHubLineBlank,
+		toolsHubLineTable, toolsHubLineTable, toolsHubLinePara, toolsHubLineKV,
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("classified %d lines, want %d: %+v", len(raw), len(want), raw)
+	}
+	for i := range want {
+		if raw[i].kind != want[i] {
+			t.Errorf("line %d kind = %d, want %d (%+v)", i, raw[i].kind, want[i], raw[i])
+		}
+	}
+	if raw[0].label != "Public IP" || raw[0].value != "203.0.113.9" {
+		t.Errorf("pair = %+v", raw[0])
+	}
+	if raw[2].value != "b.example" {
+		t.Errorf("continuation = %+v", raw[2])
+	}
+	if !toolsHubIsHeaderRow(raw[4].cells) || toolsHubIsHeaderRow(raw[5].cells) {
+		t.Error("the table header was not told apart from its rows")
+	}
+	if len(toolsHubClassify("")) != 1 {
+		t.Error("an empty report is not one blank line")
 	}
 }
 
-func TestEnsureToolsMenuEntryRespectsTrigger(t *testing.T) {
-	config := &Config{
-		Height: 720,
-		Scenes: []SceneConfig{{
-			Name: "Misc",
-			Elements: []Element{
-				{Type: "button", Text: "Terminal", Y: 100, Height: "55"},
-				{Type: "button", Text: "Network", Y: 200, Height: "55", Trigger: "tools_open"},
-			},
-		}},
+// TestToolsHubLayoutAlignsAndWraps: pairs share a value column, table cells
+// line up, and nothing runs past the width — not even a token with no spaces.
+func TestToolsHubLayoutAlignsAndWraps(t *testing.T) {
+	font := toolsHubTestFont(t)
+	const width = int32(420)
+
+	lines := toolsHubLayoutReport(font, "Status: Running\nAddress: ftp://192.168.1.20:2121\nSign in: any user name", width)
+	if len(lines) != 3 {
+		t.Fatalf("pairs laid out as %d lines", len(lines))
 	}
-	ensureToolsMenuEntry(config)
-	if got := len(config.Scenes[0].Elements); got != 2 {
-		t.Fatalf("elements = %d, want an existing tools_open entry to be left alone", got)
+	valueX := lines[0].runs[1].x
+	for i, line := range lines {
+		if len(line.runs) != 2 || line.runs[1].x != valueX {
+			t.Errorf("pair %d does not share the value column: %+v", i, line.runs)
+		}
+	}
+
+	table := toolsHubLayoutReport(font, "PORT    ADDRESS      PID\n22      0.0.0.0      -\n8080    127.0.0.1    4242", width)
+	if len(table) != 3 {
+		t.Fatalf("table laid out as %d lines", len(table))
+	}
+	for c := 0; c < 3; c++ {
+		if table[0].runs[c].x != table[1].runs[c].x || table[1].runs[c].x != table[2].runs[c].x {
+			t.Errorf("column %d does not line up: %d %d %d", c, table[0].runs[c].x, table[1].runs[c].x, table[2].runs[c].x)
+		}
+	}
+	if table[0].runs[0].color != ColorTextTertiary() {
+		t.Error("the header row is not drawn in the label ink")
+	}
+
+	token := strings.Repeat("QUJDREVGR0hJSktMTU5PUA", 8)
+	pieces := toolsHubWrap(font, token, 150)
+	if len(pieces) < 2 || strings.Join(pieces, "") != token {
+		t.Fatalf("a long token was cut into %d pieces that do not rebuild it", len(pieces))
+	}
+	for _, piece := range pieces {
+		if w := toolsHubTextWidth(font, piece); w > 150 {
+			t.Errorf("token piece %q is %dpx, past 150px", piece, w)
+		}
+	}
+	words := strings.TrimSpace(strings.Repeat("the quick brown fox ", 12))
+	wrapped := toolsHubWrap(font, words, width)
+	if len(wrapped) < 2 || strings.Join(wrapped, " ") != words {
+		t.Fatalf("prose wrapped into %d lines that do not rebuild it", len(wrapped))
+	}
+	for _, line := range wrapped {
+		if w := toolsHubTextWidth(font, line); w > width {
+			t.Errorf("line %q is %dpx, past %dpx", line, w, width)
+		}
+	}
+	if got := toolsHubWrap(nil, "no font", 10); len(got) != 1 || got[0] != "no font" {
+		t.Errorf("wrap without a font = %v", got)
+	}
+	if got := toolsHubWrap(font, "   ", 100); len(got) != 1 || got[0] != "" {
+		t.Errorf("wrap of blanks = %q", got)
 	}
 }
 
-// While SFTP is running the row and the credentials line must reflect it.
-func TestToolsRowsRunningSSH(t *testing.T) {
-	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
-	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start SSH: %v", err)
+// TestToolsHubSheetControls: the sheet scrolls within what the last frame
+// could show, walks its pills without wrapping, and hit-tests them.
+func TestToolsHubSheetControls(t *testing.T) {
+	s := toolsHubSheet{
+		lines: make([]toolsHubTextLine, 10),
+		fits:  4,
+		pills: []toolsHubPill{{id: "run"}, {id: "copy"}, {id: "close"}},
 	}
-	defer sshSrv.Stop()
+	if !s.scrollBy(3) || s.scroll != 3 {
+		t.Fatalf("scroll = %d", s.scroll)
+	}
+	if !s.scrollBy(50) || s.scroll != 6 {
+		t.Fatalf("scroll past the end = %d, want 6", s.scroll)
+	}
+	if s.scrollBy(1) {
+		t.Fatal("scrolling at the end reported movement")
+	}
+	if !s.scrollBy(-50) || s.scroll != 0 {
+		t.Fatalf("scroll past the top = %d", s.scroll)
+	}
+	s.movePill(-1)
+	if s.focus != 0 {
+		t.Fatalf("Left from the first pill moved to %d", s.focus)
+	}
+	s.movePill(1)
+	s.movePill(1)
+	s.movePill(1)
+	if s.focus != 2 || s.focusedPill() != "close" {
+		t.Fatalf("Right past the last pill: focus %d (%q)", s.focus, s.focusedPill())
+	}
+	s.pillRects = []sdl.Rect{{X: 0, Y: 0, W: 80, H: 40}, {X: 100, Y: 0, W: 80, H: 40}, {X: 200, Y: 0, W: 80, H: 40}}
+	if got := s.hitPill(140, 20); got != "copy" {
+		t.Fatalf("hit = %q, want copy", got)
+	}
+	if got := s.hitPill(140, 300); got != "" {
+		t.Fatalf("a tap far below the pills hit %q", got)
+	}
 
-	rows := toolsRows(&Config{})
-	ssh := toolsRowByAction(rows, toolsActionSSH)
-	if ssh == nil || ssh.value != "Running" || ssh.hint != "A Stop" {
-		t.Fatalf("SSH row = %+v, want running with a stop hint", ssh)
+	// Replacing the text drops the old layout; the same text keeps it.
+	s.setText("A: b")
+	s.lines = []toolsHubTextLine{{}}
+	s.setText("A: b")
+	if s.lines == nil {
+		t.Fatal("setting the same text threw the layout away")
 	}
-	if !strings.HasPrefix(ssh.detail, "sftp://") {
-		t.Fatalf("SSH row detail = %q, want an sftp:// address", ssh.detail)
-	}
-
-	info := toolsInfoLines()
-	if len(info) == 0 || !strings.Contains(info[0].text, sshSrv.Password()) {
-		t.Fatalf("credentials line missing the generated password: %+v", info)
-	}
-	if len(info) > 1 {
-		t.Fatalf("info lines = %d, want the single compact line", len(info))
-	}
-}
-
-// FTP and SFTP running together is the worst case for the panel's height:
-// two info lines and a full grid must still leave the footer its space.
-func TestToolsPanelRunningBothServersFits(t *testing.T) {
-	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
-	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start SSH: %v", err)
-	}
-	defer sshSrv.Stop()
-	if err := ftpSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start FTP: %v", err)
-	}
-	defer ftpSrv.Stop()
-
-	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
-	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 30 {
-		t.Fatalf("tile rects = %d, want 30 with the Misc scene", len(rects))
-	}
-	if font, _ := getCachedFont(config, "small"); font == nil {
-		t.Fatalf("no usable font: the shipped Inter-Regular.ttf did not load, so this check cannot run")
-	}
-	layout := toolsPanelMetrics(config, toolsRows(config))
-	if panel.H > probeH-40 {
-		t.Fatalf("panel is %dpx tall on a %dpx screen", panel.H, probeH)
-	}
-	// The grid is longer than the panel, so it scrolls; what has to hold is
-	// that the body still shows tiles and that the credentials line survives.
-	if layout.tileH < 96 {
-		t.Fatalf("a tile is %dpx, shorter than its minimum height", layout.tileH)
-	}
-	if len(layout.info) == 0 {
-		t.Fatal("compact layout dropped the SFTP credentials line")
+	s.setText("C: d")
+	if s.lines != nil || s.text != "C: d" {
+		t.Fatal("new text kept the old layout")
 	}
 }
 
@@ -390,104 +395,30 @@ func TestPublishSSHStateOmitsPassword(t *testing.T) {
 	}
 }
 
-func TestToolsRowsOfflineHint(t *testing.T) {
-	// Force the monitor offline rather than hanging the check off whatever the
-	// host's connection happens to be: the CI runner is always online, so the
-	// skip this replaced meant the offline hint was never tested there at all.
-	netMon.mu.Lock()
-	prevOnline, prevChecked, prevReason := netMon.online, netMon.checked, netMon.reason
-	netMon.online, netMon.checked, netMon.reason = false, true, "test"
-	netMon.mu.Unlock()
-	t.Cleanup(func() {
-		netMon.mu.Lock()
-		netMon.online, netMon.checked, netMon.reason = prevOnline, prevChecked, prevReason
-		netMon.mu.Unlock()
-	})
-	if IsOnline() {
-		t.Fatal("the offline condition could not be forced; the row check would assert nothing")
+// The SFTP sheet shows the session's password on the device, which is where
+// the user needs it, and the address to type.
+func TestNetToolsSSHSheetShowsTheSession(t *testing.T) {
+	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
+	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start SSH: %v", err)
 	}
-	rows := toolsRows(&Config{})
-	ip := toolsRowByAction(rows, toolsActionCopyIP)
-	if ip == nil || ip.detail != "Offline — connect WiFi first" {
-		t.Fatalf("offline IP row = %+v", ip)
-	}
-	if ip.status != toolsStatusWarn {
-		t.Fatalf("offline IP status = %v, want warn", ip.status)
-	}
-}
+	defer sshSrv.Stop()
+	prev := netTools.sheet
+	prevID, prevKey := netTools.sheetID, netTools.sheetKey
+	t.Cleanup(func() { netTools.sheet, netTools.sheetID, netTools.sheetKey = prev, prevID, prevKey })
 
-// toolsRowByAction finds one row by what it does, so tests do not depend on the
-// order of unrelated rows.
-func toolsRowByAction(rows []toolsRow, action toolsAction) *toolsRow {
-	for i := range rows {
-		if rows[i].action == action {
-			return &rows[i]
+	netToolsShowSheet("ssh")
+	s := &netTools.sheet
+	for _, want := range []string{"Status:   Running", "Password: " + sshSrv.Password(), "User:     " + sshSrv.User()} {
+		if !strings.Contains(s.text, want) {
+			t.Errorf("SFTP sheet is missing %q:\n%s", want, s.text)
 		}
 	}
-	return nil
-}
-
-// Every section heading gets a glyph for its group, and a group this build has
-// never seen still gets one, so adding a section can never leave a bare
-// heading behind.
-func TestToolsSectionGlyphPerGroup(t *testing.T) {
-	cases := map[string]toolsAction{
-		"SERVERS & SHARING": toolsActionFTP,
-		"Network probes":    toolsActionPing,
-		"LOOKUPS & CHECKS":  toolsActionDNSLookup,
-		"FTP & IP":          toolsActionFTP,
-		"WATCH TOGETHER":    toolsActionParty,
-		"System & updates":  toolsActionPatch,
-		"":                  toolsActionPowerTools,
-		"Something new":     toolsActionPowerTools,
+	ids := make([]string, len(s.pills))
+	for i, p := range s.pills {
+		ids[i] = p.id
 	}
-	for title, want := range cases {
-		if got := toolsSectionGlyph(title); got != want {
-			t.Errorf("toolsSectionGlyph(%q) = %v, want %v", title, got, want)
-		}
-	}
-}
-
-// The header and each section heading open with an icon now: the title has to
-// clear the header's glyph well, and the heading chips must carry real glyph
-// ink rather than an empty tinted box.
-func TestToolsPanelDrawsHeaderAndSectionGlyphs(t *testing.T) {
-	prevAccent := accentColor
-	accentColor = ColorAccent
-	t.Cleanup(func() { accentColor = prevAccent })
-
-	config := &Config{}
-	medium, _ := getCachedFont(config, "medium")
-	if medium == nil {
-		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
-	}
-	f, panel, _ := renderToolsProbe(t, config, 0)
-	box := int32(medium.Height()) + 10
-
-	// Header: the glyph lives in the well left of the title.
-	hdrX, hdrY := panel.X+24, panel.Y+12
-	if n := f.countColor(ColorTextPrimary(), hdrX, hdrY, hdrX+box, hdrY+box); n < 12 {
-		t.Fatalf("header icon has %d glyph pixels, want the Tools glyph", n)
-	}
-
-	// The title starts right of the well instead of on the panel pad.
-	titleX := panel.X + 24 + box + 14
-	if n := f.countColor(ColorTextPrimary(), titleX, panel.Y+12, titleX+140, panel.Y+12+box); n == 0 {
-		t.Fatal("panel title is missing to the right of the header icon")
-	}
-
-	// The first section heading opens with its chip at the left of its band.
-	rows := toolsRows(config)
-	m := toolsPanelMetrics(config, rows)
-	g := toolsGridBuild(rows, m)
-	if len(g.lines) == 0 || g.lines[0].heading == "" {
-		t.Fatal("first grid line has no section heading")
-	}
-	headTop := panel.Y + m.headerH + g.lines[0].headingY
-	// Section glyphs are drawn in the secondary ink on a glass chip, like
-	// Home's monochrome badges.
-	tint := ColorTextSecondary()
-	if n := f.countColor(tint, panel.X+24, headTop, panel.X+64, headTop+m.sectionH); n < 8 {
-		t.Fatalf("section heading %q has %d glyph pixels, want its chip icon", g.lines[0].heading, n)
+	if got := strings.Join(ids, ","); got != "toggle,copyaddr,close" || s.pills[0].label != "Stop server" || !s.pills[0].danger {
+		t.Fatalf("running server pills = %s (%q)", got, s.pills[0].label)
 	}
 }

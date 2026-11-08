@@ -20,11 +20,16 @@ package main
 //     compatibility panel's activation uses, so an update can always be undone
 //     by renaming one file.
 //
-// What this deliberately does not do: no Emus/<system>/ folder is written. Those
-// folders are the firmware's launcher scripts, and the standalone emulators
-// upstream publishes are desktop Linux builds that would install a launcher
-// that cannot start. A core is a single file in a folder RetroArch owns, which
-// is why it is the one thing safe to install from inside JukaHub.
+// What this deliberately does not do on the handheld: no Emus/<system>/ folder
+// is written. Those folders are the firmware's launcher scripts, and the
+// standalone emulators upstream publishes are desktop Linux builds that would
+// install a launcher that cannot start. A core is a single file in a folder
+// RetroArch owns, which is why it is the one thing safe to install there.
+//
+// Windows has no such firmware: the same page installs a portable RetroArch
+// (then the core, from the buildbot's windows/x86_64 tree) and the standalone
+// emulators themselves — see emuwininstall.go. startEmulatorInstall routes a
+// tile to whichever applies.
 
 import (
 	"context"
@@ -66,16 +71,32 @@ func (a emuInstallAction) verb() string {
 	}
 }
 
-// emuCoreInstallPlatform is the shipped policy: the buildbot publishes aarch64
-// shared objects for the handheld's firmware, while a desktop Windows RetroArch
-// loads .dll files from its own installer, so writing a Linux core there would
-// only add a file nothing can load. It is a variable so the panel tests can
-// drive the handheld path on a desktop run.
-var emuCoreInstallPlatform = func() bool { return !IsWindows() }
+// emuCoreInstallPlatform is the shipped policy: every platform installs cores,
+// each from its own buildbot channel (emuCoreIndexURL) — aarch64 shared objects
+// for the handheld's firmware, x86_64 DLLs for the portable RetroArch the
+// Windows page installs first when there is none. It is a variable so the
+// panel tests can stand the installer down.
+var emuCoreInstallPlatform = func() bool { return true }
 
 // emuCoreInstallSupported reports whether this build can install libretro
 // cores.
 func emuCoreInstallSupported() bool { return emuCoreInstallPlatform() }
+
+// emuWinStandaloneFor names the Windows emulator a tile installs: the tile's
+// own emulator ("PPSSPP"), or the one a desktop-only system needs (Roms/XBOX →
+// xemu). Core rows, pinned tools and handheld tiles have none.
+func emuWinStandaloneFor(e emuEntry) string {
+	if e.Pinned || strings.TrimSpace(e.Core) != "" {
+		return ""
+	}
+	if via := strings.TrimSpace(e.Via); via != "" {
+		return via
+	}
+	if spec, ok := emuWinSpecFor(e.Name); ok {
+		return spec.Name
+	}
+	return ""
+}
 
 // emuCoreForEntry resolves the libretro core that provides a tile's system, or
 // "" when the tile is not something a core can cover.
@@ -141,7 +162,7 @@ func planEmuInstall(e emuEntry, inv coreInventory, index []coreIndexEntry) emuIn
 		return plan
 	}
 	plan.Current = active.Version
-	if sum, err := coreCRC32File(active.Path); err == nil && sum == entry.CRC32 {
+	if sum, err := emuCachedCRC32(active.Path); err == nil && sum == entry.CRC32 {
 		plan.Action = emuInstallCurrent
 		plan.Reason = coreConfigDisplayName(plan.Core) + " core is already the " + entry.Date + " build"
 		return plan
@@ -162,14 +183,15 @@ func applyEmuInstallPlan(ctx context.Context, client *http.Client, plan emuInsta
 		Core:    plan.Core,
 		Date:    plan.Index.Date,
 		CRC32:   plan.Index.CRC32,
-		URL:     coreUpdateBaseURL + plan.Index.File,
+		URL:     emuCoreBaseURL() + plan.Index.File,
 		Current: plan.Current,
 	}
 	build, err := fetchCoreUpdate(ctx, client, upd, poolRoot)
 	if err != nil {
 		return coreBuild{}, "", err
 	}
-	_, backup, err := activateCoreBuild(build)
+	target, backup, err := activateCoreBuild(build)
+	emuCRCForget(target)
 	if err != nil {
 		return build, "", err
 	}
@@ -241,38 +263,84 @@ func (r emuInstallReport) summary() string {
 	return strings.Join(parts, " · ")
 }
 
-// startEmulatorInstall installs or updates the core that provides one tile. It
-// runs off the event thread and reports through the install bar and a toast,
-// the same way every other download action does.
+// startEmulatorInstall installs or updates what one tile needs: on Windows the
+// emulator itself when the tile is (or needs) a standalone emulator, otherwise
+// the libretro core that provides the tile's system — after a portable
+// RetroArch when Windows has none yet. It runs off the event thread and
+// reports through the install bar and a toast, the same way every other
+// download action does.
 func startEmulatorInstall(e emuEntry) {
-	if !emuCoreInstallSupported() {
-		ShowToast("Core installs are a handheld action — RetroArch on the desktop manages its own", ToastKindInfo)
+	if e.Status == emuUnsupported {
+		PlayNavSound()
+		ShowToast(e.Name+" is not supported here — "+e.Note, ToastKindInfo)
 		return
 	}
-	if emuCoreForEntry(e) == "" {
+	if IsWindows() {
+		if name := emuWinStandaloneFor(e); name != "" {
+			if e.Status == emuAvailable && !e.Managed && strings.EqualFold(name, e.Name) {
+				ShowToast(e.Name+" was installed outside JukaHub — update it the way it was installed", ToastKindInfo)
+				return
+			}
+			spec, _ := emuWinSpecFor(name)
+			emuWinStartInstall(spec)
+			return
+		}
+	}
+	if !emuCoreInstallSupported() {
+		ShowToast("Core installs are switched off in this build", ToastKindInfo)
+		return
+	}
+	core := emuCoreForEntry(e)
+	if core == "" {
 		ShowToast(e.Name+": no emulator is published for this system", ToastKindWarning)
+		return
+	}
+	if !IsOnline() {
+		ShowToast("No internet connection — connect to install "+coreConfigDisplayName(core), ToastKindWarning)
 		return
 	}
 	if !tryBeginPatchOp() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	installBarBegin("Emulator install")
+	// A Windows core needs a RetroArch to load it. Installing one first is the
+	// whole of what "Install" means for a system on a fresh PC.
+	needRetroArch := IsWindows() && emuWinExe("RetroArch") == ""
+	if needRetroArch {
+		installBarBeginLabelled("RetroArch", "Installing RetroArch and the "+coreConfigDisplayName(core)+" core")
+	} else {
+		installBarBegin(coreConfigDisplayName(core) + " core")
+	}
 	installBarPhase(installPhaseResolving)
-	ShowToast("Checking the core index for "+e.Name+"…", ToastKindInfo)
+	emuSetInstalling(e.Name)
 	go func() {
 		defer endPatchOp()
+		defer emuSetInstalling("")
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
-		ctx, cancel := context.WithTimeout(installBarRunContext(), 10*time.Minute)
+		timeout := 10 * time.Minute
+		if needRetroArch {
+			timeout = emuWinInstallTimeout
+		}
+		ctx, cancel := context.WithTimeout(installBarRunContext(), timeout)
 		defer cancel()
 		client := newEmulatorUpdateClient()
 
+		if needRetroArch {
+			retroArch, _ := emuWinSpecFor("RetroArch")
+			if _, err := emuWinInstall(ctx, emuWinClient(), retroArch, emuInstallBarReport); err != nil {
+				installBarFail(installCardDetail(emuFriendlyError(err)))
+				ShowToast("RetroArch: "+emuFriendlyError(err), ToastKindError)
+				return
+			}
+			invalidateEmulatorCache()
+			installBarResetProgress()
+		}
+
 		index, err := fetchCoreIndex(ctx, client)
 		if err != nil {
-			installBarPhase(installPhaseDone)
-			installBarDone()
-			ShowToast("Core index: "+err.Error(), ToastKindError)
+			installBarFail(installCardDetail(emuFriendlyError(err)))
+			ShowToast("Core index: "+emuFriendlyError(err), ToastKindError)
 			return
 		}
 		plan := planEmuInstall(e, scanCoreInventory(), index)
@@ -285,6 +353,7 @@ func startEmulatorInstall(e emuEntry) {
 		case emuInstallCurrent:
 			installBarPhase(installPhaseDone)
 			installBarDone()
+			emuForgetUpdate(plan.Core)
 			ShowToast(plan.Reason, ToastKindInfo)
 			return
 		}
@@ -292,16 +361,19 @@ func startEmulatorInstall(e emuEntry) {
 		installBarPhase(installPhaseDownload)
 		installBarDetail(coreConfigDisplayName(plan.Core) + " " + plan.Index.Date)
 		build, backup, err := applyEmuInstallPlan(ctx, client, plan, compatCorePoolDir())
-		installBarPhase(installPhaseDone)
-		installBarDone()
 		if err != nil {
-			ShowToast(coreConfigDisplayName(plan.Core)+": "+err.Error(), ToastKindError)
+			installBarFail(installCardDetail(emuFriendlyError(err)))
+			ShowToast(coreConfigDisplayName(plan.Core)+": "+emuFriendlyError(err), ToastKindError)
 			return
 		}
+		installBarPhase(installPhaseDone)
+		installBarDone()
 		// The tile list and the compatibility panel both read the cores folder,
 		// so both caches are dropped rather than waiting for the next open.
 		invalidateEmulatorCache()
 		invalidateCompatCache()
+		emuForgetUpdate(plan.Core)
+		coreBuildsRequestReload()
 		// Say "installed" only when RetroArch's own folder now holds the build
 		// that was downloaded: an unwritable cores folder is reported here
 		// instead of as a game that will not start.
@@ -311,7 +383,11 @@ func startEmulatorInstall(e emuEntry) {
 		}
 		PlaySuccessSound()
 		if plan.Action == emuInstallNew {
-			ShowToast(coreConfigDisplayName(plan.Core)+" core installed · "+build.Version, ToastKindSuccess)
+			note := coreConfigDisplayName(plan.Core) + " core installed · " + build.Version
+			if needRetroArch {
+				note = "RetroArch and the " + note
+			}
+			ShowToast(note, ToastKindSuccess)
 			return
 		}
 		note := coreConfigDisplayName(plan.Core) + " core updated · " + build.Version
@@ -361,7 +437,9 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 			report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
 			continue
 		}
-		if _, _, err := activateCoreBuild(build); err != nil {
+		target, _, err := activateCoreBuild(build)
+		emuCRCForget(target)
+		if err != nil {
 			report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
 			continue
 		}
@@ -374,33 +452,90 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 	return report
 }
 
+// emuWinManagedSpecs lists the Windows emulators JukaHub installed and can
+// therefore update.
+func emuWinManagedSpecs() []emuWinSpec {
+	var out []emuWinSpec
+	for _, spec := range emuWinSpecs {
+		if !spec.installable() {
+			continue
+		}
+		if _, _, ok := emuWinManaged(spec.Name); ok {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
 // startEmulatorUpdateInstalled updates every installed core the index has a
-// newer build of, so a card full of emulators is brought forward in one press
-// instead of one tile at a time. Cores that are not installed are left alone:
-// this action updates, it does not add.
+// newer build of — and, on Windows, every emulator JukaHub installed — so a
+// card full of emulators is brought forward in one press instead of one tile at
+// a time. Nothing that is not installed is added: this action updates.
 func startEmulatorUpdateInstalled() {
 	if !emuCoreInstallSupported() {
-		ShowToast("Core updates are a handheld action — RetroArch on the desktop manages its own", ToastKindInfo)
+		ShowToast("Core updates are switched off in this build", ToastKindInfo)
+		return
+	}
+	if !IsOnline() {
+		ShowToast("No internet connection — connect to update emulators", ToastKindWarning)
+		return
+	}
+	var standalone []emuWinSpec
+	if IsWindows() {
+		standalone = emuWinManagedSpecs()
+	}
+	if len(emuInstalledCoreSet()) == 0 && len(standalone) == 0 {
+		ShowToast("Nothing installed to update yet", ToastKindInfo)
 		return
 	}
 	if !tryBeginPatchOp() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	installBarBeginLabelled("Emulator cores", "Updating emulator cores")
+	if len(standalone) > 0 {
+		installBarBeginLabelled("Emulators", "Updating emulators")
+	} else {
+		installBarBeginLabelled("Emulator cores", "Updating emulator cores")
+	}
 	ShowToast("Checking installed emulators…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
-		ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
+		timeout := 20 * time.Minute
+		if len(standalone) > 0 {
+			timeout = emuWinInstallTimeout
+		}
+		ctx, cancel := context.WithTimeout(installBarRunContext(), timeout)
 		defer cancel()
-		report := runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
+		var report emuInstallReport
+		if len(emuInstalledCoreSet()) > 0 {
+			report = runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
+		}
+		for _, spec := range standalone {
+			if ctx.Err() != nil {
+				break
+			}
+			installBarResetProgress()
+			installBarDetail(spec.Name)
+			result, err := emuWinInstall(ctx, emuWinClient(), spec, emuInstallBarReport)
+			switch {
+			case err != nil:
+				report.Errors = append(report.Errors, spec.Name+": "+emuFriendlyError(err))
+			case result.Current:
+				report.Current++
+			default:
+				report.Updated = append(report.Updated, spec.Name)
+				emuForgetUpdate(spec.Name)
+			}
+		}
 		installBarPhase(installPhaseDone)
 		installBarDone()
 		if len(report.Updated) > 0 {
 			invalidateEmulatorCache()
 			invalidateCompatCache()
+			emuForgetAllUpdates()
+			coreBuildsRequestReload()
 			PlaySuccessSound()
 		}
 		kind := ToastKindSuccess
@@ -414,27 +549,43 @@ func startEmulatorUpdateInstalled() {
 }
 
 // emuInstallHintLabel is the A hint for a tile: the page installs an emulator
-// where it used to dead-end, so the label has to say which one it is.
+// where it used to dead-end, so the label has to say which one it is. A
+// Windows emulator with no download JukaHub can install says "Get" (it opens
+// the official page), and a console this device cannot run says "Details".
 func emuInstallHintLabel(e emuEntry) string {
 	switch {
 	case e.Pinned:
 		return "Open"
+	case e.Status == emuUnsupported:
+		return "Details"
 	case e.Status == emuAvailable && e.Launch != "":
 		return "Launch"
 	case e.Status == emuAvailable:
 		// A core row is already the install; A only says where it is used from,
 		// so the footer does not advertise an install that would replace it.
 		return ""
-	case emuCoreInstallSupported() && emuCoreForEntry(e) != "":
+	}
+	if IsWindows() {
+		if name := emuWinStandaloneFor(e); name != "" {
+			if spec, ok := emuWinSpecFor(name); ok && spec.installable() {
+				return "Install"
+			}
+			return "Get"
+		}
+	}
+	if emuCoreInstallSupported() && emuCoreForEntry(e) != "" {
 		return "Install"
 	}
 	return ""
 }
 
 // emuUpdateHintLabel is the X hint for a tile: Update when a core is on the
-// card (whether it is stale needs the index), and nothing when there is no core
-// to update.
+// card (whether it is stale needs the index) or the tile is a Windows emulator
+// JukaHub installed, and nothing when there is nothing to update.
 func emuUpdateHintLabel(e emuEntry) string {
+	if IsWindows() && e.Managed && e.Status == emuAvailable {
+		return "Update"
+	}
 	if !emuCoreInstallSupported() {
 		return ""
 	}
@@ -443,6 +594,25 @@ func emuUpdateHintLabel(e emuEntry) string {
 		return ""
 	}
 	return "Update"
+}
+
+// emuTileUpdateKnown reports whether the last background check found a newer
+// build for a tile: its core's, or its own Windows release.
+func emuTileUpdateKnown(e emuEntry) bool {
+	if e.Pinned || e.Status != emuAvailable {
+		return false
+	}
+	if e.Managed {
+		if _, ok := emuWinUpdateKnown(e.Name); ok {
+			return true
+		}
+	}
+	core := emuCoreForEntry(e)
+	if core == "" {
+		return false
+	}
+	_, ok := emuCoreUpdateKnown(core)
+	return ok
 }
 
 // ── Rolling a core back ──────────────────────────────────────────────────────
@@ -730,8 +900,10 @@ func rollbackCoreBuild(b coreBackup) (coreBuild, error) {
 	if _, err := existingRegularFile(b.Path); err != nil {
 		return coreBuild{}, err
 	}
-	if _, err := installCoreFile(b.Path, b.Target); err != nil {
-		return coreBuild{}, err
+	_, installErr := installCoreFile(b.Path, b.Target)
+	emuCRCForget(b.Target)
+	if installErr != nil {
+		return coreBuild{}, installErr
 	}
 	if err := os.Remove(b.Path); err != nil {
 		// The rollback itself succeeded; a leftover copy is only a stale entry
@@ -752,6 +924,9 @@ func rollbackCoreBuild(b coreBackup) (coreBuild, error) {
 // it is offered on every platform — the install policy is about what the
 // buildbot serves, not about restoring a file the card already has.
 func emuRollbackHintLabel(e emuEntry) string {
+	if e.Managed && e.KeptVersion != "" {
+		return "Roll back"
+	}
 	core := emuCoreForEntry(e)
 	if core == "" {
 		return ""
@@ -763,14 +938,23 @@ func emuRollbackHintLabel(e emuEntry) string {
 }
 
 // startEmulatorRollback restores the newest backup of the highlighted tile's
-// core. It runs on the event thread: the whole action is one small file copy on
-// the card, and the user needs the result before the next press.
+// core, or the kept previous version of a Windows emulator JukaHub installed.
+// It runs on the event thread: a core rollback is one small file copy on the
+// card, and the user needs the result before the next press.
 func startEmulatorRollback() {
 	entries := emulatorEntries()
 	if emuPanel.cursor < 0 || emuPanel.cursor >= len(entries) {
 		return
 	}
 	e := entries[emuPanel.cursor]
+	if e.Managed {
+		if e.KeptVersion == "" {
+			ShowToast("No previous "+e.Name+" version is kept — one is kept after the next update", ToastKindInfo)
+			return
+		}
+		emuWinStartRollback(e.Name)
+		return
+	}
 	core := emuCoreForEntry(e)
 	if core == "" {
 		ShowToast(e.Name+": no emulator core is known for this system", ToastKindWarning)
@@ -790,6 +974,8 @@ func startEmulatorRollback() {
 	// read the cores folder; drop them together.
 	invalidateEmulatorCache()
 	invalidateCompatCache()
+	emuForgetUpdate(build.Core)
+	coreBuildsRequestReload()
 	PlaySuccessSound()
 	ShowToast(coreConfigDisplayName(build.Core)+" rolled back · "+
 		backup.Stamp.Format("2006-01-02 15:04")+" build restored · the replaced build is kept",

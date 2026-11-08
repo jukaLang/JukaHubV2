@@ -66,94 +66,74 @@ func renderNamedScene(t *testing.T, config *Config, name string) (*probeFrame, *
 	return f, &config.Scenes[idx]
 }
 
+// TestSmartWidgetsPageRenders: the Smart Widgets page is drawn by the Settings
+// hub now (setui.go), which opens SettingsSmart on Power & battery. Its two
+// device switches are rows there and its other two moved to the sections they
+// belong to; every one of the four draws whole, with its switch showing the
+// state its variable holds.
 func TestSmartWidgetsPageRenders(t *testing.T) {
-	config := widgetRenderConfig(t)
-	f, scene := renderNamedScene(t, config, smartSettingsScene)
-
-	// Every toggle must paint its pill in the state its variable holds, and fit
-	// above the footer.
-	toggles := 0
-	for _, el := range scene.Elements {
-		if el.Type != "toggle" {
-			continue
-		}
-		toggles++
-		on := toggleValue(config, el)
-		want := ColorIconSurface
-		if on {
-			want = ColorAccent
-		}
-		cardW, cardH := resolveElementDimensions(el, 320, 48)
-		pillX := el.X + cardW - 14 - 76
-		pillY := el.Y + (cardH-32)/2
-		matched := 0
-		for y := pillY; y < pillY+32; y++ {
-			for x := pillX; x < pillX+76; x++ {
-				if colourNear(f.at(x, y), want, 6) {
-					matched++
-				}
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	setSkipUnlessDefaultTextSize(t)
+	config := setRenderConfig(t)
+	p := setNewHubProbe(t)
+	for _, w := range setTestCanvases {
+		for _, c := range []struct {
+			section, row, variable string
+			on                     func(*Config) bool
+		}{
+			{"power", "batterySaver", "batterySaver", batterySaverEnabled},
+			{"power", "lowBattery", "lowBatteryGuard", lowBatteryGuardEnabled},
+			{"display", "timeTheme", "timeOfDayTheme", timeOfDayThemeEnabled},
+			{"general", "autostart", "autoStart", autoStartEnabled},
+		} {
+			p.open(config, c.section, w, 720)
+			i := p.assertRowWhole(c.row)
+			if got, want := setHub.views[i].on, c.on(config); got != want {
+				t.Errorf("%dpx %s: the switch shows %v, the setting is %v", w, c.variable, got, want)
 			}
 		}
-		// The pill is 76x32 with rounded ends and centred text, so a good part
-		// of it must be the state colour.
-		if matched < 500 {
-			t.Errorf("%s: pill has %d px of its %v state colour (on=%v)", el.Variable, matched, want, on)
-		}
-		if el.Y+52 > 660 {
-			t.Errorf("%s: row at y=%d runs into the footer", el.Variable, el.Y)
-		}
-	}
-	if toggles != 4 {
-		t.Fatalf("%d toggles on the page, want 4", toggles)
 	}
 
-	// Labels must draw visible text and stay inside the content panel
-	// (x 24..1256).
-	for _, el := range scene.Elements {
-		if el.Type != "label" {
-			continue
-		}
-		if got := brightPixelsIn(f, el, config); got < 40 {
-			t.Errorf("label %q drew %d bright pixels: the text is missing", el.Text, got)
-		}
+	// The old page itself still opens, on the section its switches lead.
+	idx := sceneIndexExact(config, smartSettingsScene)
+	if idx < 0 {
+		t.Fatalf("no %s scene to open", smartSettingsScene)
+	}
+	p.config, p.scene, p.section = config, idx, "power"
+	currentSceneIndex = idx
+	setHub = setHubState{viewSection: -1}
+	p.draw()
+	if got := setSections()[setHub.section].ID; got != "power" {
+		t.Fatalf("%s opened the %q section, want power", smartSettingsScene, got)
 	}
 }
 
-// The Settings → General entry button must be visible inside the content panel
-// and clear of the Save button.
+// TestSmartWidgetsEntryRenders: the old pages' "Smart Widgets" entry button is
+// not needed any more — the four switches are rows of their sections, each one
+// press from the rail — but the scene it opened still answers, so an old
+// config's button lands on them rather than on nothing.
 func TestSmartWidgetsEntryRenders(t *testing.T) {
 	config := widgetRenderConfig(t)
-	f, scene := renderNamedScene(t, config, "SettingsGeneral")
-
-	var entry *Element
-	for i := range scene.Elements {
-		if scene.Elements[i].TriggerTarget == smartSettingsScene {
-			entry = &scene.Elements[i]
-			break
+	general := settingsGeneralScene(config)
+	if general == nil {
+		t.Fatal("no Settings → General scene")
+	}
+	found := false
+	for _, el := range general.Elements {
+		if el.TriggerTarget == smartSettingsScene {
+			found = true
 		}
 	}
-	if entry == nil {
-		t.Fatal("no entry button in Settings → General")
+	if !found {
+		t.Fatal("the old page lost its Smart Widgets entry, which old configs still carry")
 	}
-	// The content panel ends 16px above the 48px footer, so y+48 must stay
-	// above 656.
-	if entry.Y+48 > 656 {
-		t.Fatalf("entry button bottom at y=%d runs into the footer", entry.Y+48)
+	if !setIsHubScene(smartSettingsScene) {
+		t.Fatalf("%s is not drawn by the Settings hub", smartSettingsScene)
 	}
-	for _, other := range scene.Elements {
-		if other.TriggerTarget == smartSettingsScene {
-			continue
-		}
-		otherW, otherH := resolveElementDimensions(other, 320, 48)
-		entryW, entryH := resolveElementDimensions(*entry, 320, 48)
-		overlapsX := entry.X < other.X+otherW && other.X < entry.X+entryW
-		overlapsY := entry.Y < other.Y+otherH && other.Y < entry.Y+entryH
-		if overlapsX && overlapsY && other.Type != "label" {
-			t.Fatalf("entry button overlaps %q (%s) at %d,%d", other.Text, other.Type, other.X, other.Y)
-		}
-	}
-	if got := brightPixelsIn(f, *entry, config); got < 40 {
-		t.Errorf("entry button drew %d bright pixels: its label is missing", got)
+	if setSectionIndex(setLegacySection(smartSettingsScene)) < 0 {
+		t.Fatalf("%s does not open a section", smartSettingsScene)
 	}
 }
 

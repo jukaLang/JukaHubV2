@@ -196,48 +196,25 @@ func TestSettingsForgetRowIsInjectedOnce(t *testing.T) {
 	}
 }
 
-// TestSettingsForgetRowRenders draws the real page: the press has to be on
-// screen, above the footer, and its whole label has to fit — a "Forget now"
-// ellipsized to "Forget…" would read as a different control.
+// TestSettingsForgetRowRenders draws the real page. Settings is the hub now
+// (setui.go), and the press is the "Forget browser sign-ins now" row of
+// Privacy & data: it has to be on screen inside the pane, above the footer,
+// with its label, its warning line and the count it would drop all whole — a
+// label cut to "Forget browser…" would read as a different control — on the
+// 1280-wide canvas and on the Brick's 960.
 func TestSettingsForgetRowRenders(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")
 	}
-	config := widgetRenderConfig(t)
-	frame, scene := renderNamedScene(t, config, "SettingsGeneral")
-
-	var row *Element
-	for i := range scene.Elements {
-		if scene.Elements[i].Trigger == "forget_saved_cookies" {
-			row = &scene.Elements[i]
-			break
+	setSkipUnlessDefaultTextSize(t)
+	useTempBrowserCookiePath(t)
+	config := setRenderConfig(t)
+	p := setNewHubProbe(t)
+	for _, w := range setTestCanvases {
+		p.open(config, "privacy", w, 720)
+		i := p.assertRowWhole("forgetCookies")
+		if got := setHub.views[i].value; got != "None saved" {
+			t.Errorf("%dpx: with an empty jar the row reads %q, want \"None saved\"", w, got)
 		}
-	}
-	if row == nil {
-		t.Fatal("Settings → General has no Forget now press")
-	}
-	// The content panel ends 16px above the 48px footer.
-	if row.Y+48 > 656 {
-		t.Fatalf("the press bottom at y=%d runs into the footer", row.Y+48)
-	}
-
-	font, _ := getCachedFont(config, row.Font)
-	if font == nil {
-		t.Fatal("no font for the press")
-	}
-	label := substituteVars(row.Text, config.Variables.Custom)
-	if label != "Forget now" {
-		t.Fatalf("the press reads %q, want \"Forget now\"", label)
-	}
-	textW, _, err := font.SizeUTF8(label)
-	if err != nil {
-		t.Fatalf("cannot measure the label: %v", err)
-	}
-	boxW, _ := resolveElementDimensions(*row, 320, 48)
-	if int32(textW) > boxW-2*SpaceXS {
-		t.Fatalf("the label needs %dpx in a %dpx button: it would be ellipsized", textW, boxW)
-	}
-	if got := brightPixelsIn(frame, *row, config); got < 40 {
-		t.Fatalf("the press drew %d bright pixels: the label is missing", got)
 	}
 }

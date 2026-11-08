@@ -1,0 +1,425 @@
+{
+  "version": 1,
+  "themes": [
+    {
+      "id": "terminal-amber",
+      "name": "Terminal Amber",
+      "author": "@pixel_rune",
+      "description": "Amber phosphor on near-black, for people who miss their VT220.",
+      "tags": ["Dark", "Retro", "High contrast"],
+      "theme": {
+        "name": "Terminal Amber",
+        "background": "#0a0805",
+        "buttonColor": "#1c1508",
+        "labelColor": "#ffb000",
+        "inputColor": "#14100a",
+        "surface": "#0d0a06",
+        "surfaceAlt": "#171207",
+        "surfaceRaised": "#241b0a",
+        "textPrimary": "#ffc65c",
+        "textSecondary": "#d79a3a",
+        "textTertiary": "#96703a",
+        "borderSubtle": "#ffb00018",
+        "borderDefault": "#ffb00033",
+        "borderFocus": "#ffb000",
+        "success": "#6ed47a",
+        "warning": "#ffc65c",
+        "danger": "#e05252",
+        "info": "#59b6e8",
+        "overlay": "#0a0805cc"
+      }
+    },
+    {
+      "id": "seafoam",
+      "name": "Seafoam",
+      "author": "@mika",
+      "description": "A light palette with cool teal accents that stays readable outdoors.",
+      "tags": ["Light", "Calm", "Low glare"],
+      "theme": {
+        "name": "Seafoam",
+        "background": "#eef7f4",
+        "buttonColor": "#ffffff",
+        "labelColor": "#0f3d3a",
+        "inputColor": "#dceee9",
+        "surface": "#ffffff",
+        "surfaceAlt": "#f4fbf9",
+        "surfaceRaised": "#ffffff",
+        "textPrimary": "#0d2f2c",
+        "textSecondary": "#2f5d57",
+        "textTertiary": "#5c827c",
+        "borderSubtle": "#0f3d3a14",
+        "borderDefault": "#0f3d3a24",
+        "borderFocus": "#0f766e",
+        "success": "#14866d",
+        "warning": "#b7791f",
+        "danger": "#b42318",
+        "info": "#1d6fb8",
+        "overlay": "#eef7f4cc"
+      }
+    },
+    {
+      "id": "rosewood-dashboard",
+      "name": "Rosewood",
+      "author": "@retro_dan",
+      "description": "Warm maroon and copper, tuned to sit under a dock without glare.",
+      "tags": ["Dark", "Warm", "Dashboard"],
+      "theme": {
+        "name": "Rosewood",
+        "background": "#170d0f",
+        "buttonColor": "#2a161a",
+        "labelColor": "#f3c9b1",
+        "inputColor": "#201114",
+        "surface": "#1a0f11",
+        "surfaceAlt": "#241417",
+        "surfaceRaised": "#33201f",
+        "textPrimary": "#f7e3d7",
+        "textSecondary": "#d3ab97",
+        "textTertiary": "#a48274",
+        "borderSubtle": "#f3c9b118",
+        "borderDefault": "#f3c9b133",
+        "borderFocus": "#e08b5f",
+        "success": "#7ac79b",
+        "warning": "#e5b567",
+        "danger": "#d9534f",
+        "info": "#7fb3d5",
+        "overlay": "#170d0fcc"
+      }
+    },
+    {
+      "id": "nord-frost",
+      "name": "Nord Frost",
+      "author": "@mika",
+      "description": "Cool slate blues with a frost-blue focus edge: the quietest dark palette here.",
+      "tags": ["Dark", "Cool", "Slate"],
+      "theme": {
+        "name": "Nord Frost",
+        "background": "#0f1720",
+        "buttonColor": "#1b2632",
+        "labelColor": "#dbe7f3",
+        "inputColor": "#151f2a",
+        "surface": "#121b24",
+        "surfaceAlt": "#1a242f",
+        "surfaceRaised": "#243140",
+        "textPrimary": "#eaf2fa",
+        "textSecondary": "#b9cadb",
+        "textTertiary": "#8496a8",
+        "borderSubtle": "#9fc3e514",
+        "borderDefault": "#9fc3e526",
+        "borderFocus": "#88c0d0",
+        "success": "#a3be8c",
+        "warning": "#ebcb8b",
+        "danger": "#bf616a",
+        "info": "#81a1c1",
+        "overlay": "#0f1720cc"
+      }
+    },
+    {
+      "id": "sakura-dusk",
+      "name": "Sakura Dusk",
+      "author": "@pixel_rune",
+      "description": "Plum dark with blossom-pink highlights for evening sessions in bed.",
+      "tags": ["Dark", "Warm", "Pink"],
+      "theme": {
+        "name": "Sakura Dusk",
+        "background": "#1a1116",
+        "buttonColor": "#2a1a22",
+        "labelColor": "#f6d9e4",
+        "inputColor": "#221520",
+        "surface": "#1d1319",
+        "surfaceAlt": "#271a22",
+        "surfaceRaised": "#35242f",
+        "textPrimary": "#fbeaf1",
+        "textSecondary": "#d9b3c4",
+        "textTertiary": "#a8879a",
+        "borderSubtle": "#f6d9e418",
+        "borderDefault": "#f6d9e430",
+        "borderFocus": "#e58fae",
+        "success": "#8ed1a8",
+        "warning": "#e8c07d",
+        "danger": "#d95f76",
+        "info": "#9ab8e8",
+        "overlay": "#1a1116cc"
+      }
+    },
+    {
+      "id": "daybreak",
+      "name": "Daybreak",
+      "author": "@mika",
+      "description": "Warm paper-white with burnt-orange accents, built for daylight and low glare.",
+      "tags": ["Light", "Warm", "Daylight"],
+      "theme": {
+        "name": "Daybreak",
+        "background": "#f7f4ee",
+        "buttonColor": "#ffffff",
+        "labelColor": "#2b2b2b",
+        "inputColor": "#ece6da",
+        "surface": "#ffffff",
+        "surfaceAlt": "#fbf8f2",
+        "surfaceRaised": "#ffffff",
+        "textPrimary": "#23201b",
+        "textSecondary": "#4f4a42",
+        "textTertiary": "#7c766b",
+        "borderSubtle": "#23201b14",
+        "borderDefault": "#23201b26",
+        "borderFocus": "#b4652a",
+        "success": "#2f7d5c",
+        "warning": "#a86a12",
+        "danger": "#a83232",
+        "info": "#2a6f9e",
+        "overlay": "#f7f4eecc"
+      }
+    },
+    {
+      "id": "moss-ink",
+      "name": "Moss Ink",
+      "author": "@retro_dan",
+      "description": "Deep forest green that keeps album art and box art looking saturated.",
+      "tags": ["Dark", "Green", "Media"],
+      "theme": {
+        "name": "Moss Ink",
+        "background": "#0c1512",
+        "buttonColor": "#16241f",
+        "labelColor": "#d8ece3",
+        "inputColor": "#111d19",
+        "surface": "#0f1a16",
+        "surfaceAlt": "#16241f",
+        "surfaceRaised": "#20332c",
+        "textPrimary": "#e8f5ef",
+        "textSecondary": "#b3cdc2",
+        "textTertiary": "#7f9a8e",
+        "borderSubtle": "#a7d8c314",
+        "borderDefault": "#a7d8c328",
+        "borderFocus": "#6fbf9a",
+        "success": "#79c98f",
+        "warning": "#d9b36a",
+        "danger": "#cf6b5f",
+        "info": "#6fb2c9",
+        "overlay": "#0c1512cc"
+      }
+    },
+    {
+      "id": "cobalt-night",
+      "name": "Cobalt Night",
+      "author": "@pixel_rune",
+      "description": "Saturated cobalt with electric blue focus, for a console-like splash of colour.",
+      "tags": ["Dark", "Blue", "Vivid"],
+      "theme": {
+        "name": "Cobalt Night",
+        "background": "#06111f",
+        "buttonColor": "#0e1e33",
+        "labelColor": "#cfe4ff",
+        "inputColor": "#0a1728",
+        "surface": "#081524",
+        "surfaceAlt": "#0f2033",
+        "surfaceRaised": "#16304a",
+        "textPrimary": "#e6f0ff",
+        "textSecondary": "#adc6e6",
+        "textTertiary": "#7997bd",
+        "borderSubtle": "#7fb6ff18",
+        "borderDefault": "#7fb6ff2e",
+        "borderFocus": "#4c9bff",
+        "success": "#5fd39a",
+        "warning": "#f0c463",
+        "danger": "#ff6b6b",
+        "info": "#59b6e8",
+        "overlay": "#06111fcc"
+      }
+    }
+  ],
+  "layouts": [
+    {
+      "id": "sunset-dock",
+      "name": "Sunset Dock",
+      "author": "@mika",
+      "description": "A single dock row over a warm gradient, with the clock where your thumb lands.",
+      "tags": ["Home", "Dock", "Warm"],
+      "accent": "#e08b5f",
+      "config": {
+        "AppName": "JukaHub",
+        "Version": "0.4.0",
+        "Width": 1280,
+        "Height": 720,
+        "title": "Sunset Dock",
+        "author": "mika",
+        "description": "Dock layout with a warm sunset backdrop.",
+        "variables": { "fontSizes": { "title": 46, "big": 30, "medium": 24, "small": 18 } },
+        "scenes": [
+          {
+            "name": "Home",
+            "background": "#2A1520",
+            "elements": [
+              { "type": "label", "text": "18:42", "x": 48, "y": 36, "width": 400, "height": 72, "font": "title", "color": "#F7E3D7" },
+              { "type": "label", "text": "JukaHub · TrimUI Smart Pro", "x": 48, "y": 112, "width": 520, "height": 32, "font": "small", "color": "#C08B78" },
+              { "type": "button", "text": "Games", "x": 48, "y": 396, "width": 224, "height": 140, "font": "big", "color": "#170D0F", "bgColor": "#E08B5F", "trigger": "change_scene", "sceneChange": "Apps" },
+              { "type": "button", "text": "Media", "x": 288, "y": 396, "width": 224, "height": 140, "font": "big", "color": "#F7E3D7", "bgColor": "#4A2531" },
+              { "type": "button", "text": "Files", "x": 528, "y": 396, "width": 224, "height": 140, "font": "big", "color": "#F7E3D7", "bgColor": "#4A2531" },
+              { "type": "button", "text": "Tools", "x": 768, "y": 396, "width": 224, "height": 140, "font": "big", "color": "#F7E3D7", "bgColor": "#4A2531" },
+              { "type": "button", "text": "Settings", "x": 1008, "y": 396, "width": 224, "height": 140, "font": "big", "color": "#F7E3D7", "bgColor": "#4A2531" },
+              { "type": "label", "text": "A / select    B / back", "x": 48, "y": 630, "width": 520, "height": 32, "font": "small", "color": "#A48274" }
+            ]
+          },
+          {
+            "name": "Apps",
+            "background": "#2A1520",
+            "elements": [
+              { "type": "label", "text": "Apps", "x": 48, "y": 40, "width": 420, "height": 64, "font": "title", "color": "#F7E3D7" },
+              { "type": "button", "text": "Favourites", "x": 48, "y": 160, "width": 360, "height": 200, "font": "big", "color": "#170D0F", "bgColor": "#E08B5F" },
+              { "type": "button", "text": "Recently played", "x": 448, "y": 160, "width": 360, "height": 200, "font": "big", "color": "#F7E3D7", "bgColor": "#4A2531" },
+              { "type": "button", "text": "All games", "x": 848, "y": 160, "width": 368, "height": 200, "font": "big", "color": "#F7E3D7", "bgColor": "#4A2531" },
+              { "type": "button", "text": "Back", "x": 48, "y": 424, "width": 220, "height": 72, "font": "medium", "color": "#F7E3D7", "bgColor": "#33201F", "trigger": "change_scene", "sceneChange": "Home" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ambient-hub",
+      "name": "Ambient Hub",
+      "author": "@mika",
+      "description": "A clock-first home with four wide launchers and a quiet media shelf behind it.",
+      "tags": ["Home", "Clock", "Calm"],
+      "accent": "#7fb3d5",
+      "config": {
+        "AppName": "JukaHub",
+        "Version": "0.4.0",
+        "Width": 1280,
+        "Height": 720,
+        "title": "Ambient Hub",
+        "author": "mika",
+        "description": "Clock-first home with wide launchers.",
+        "variables": { "fontSizes": { "title": 56, "big": 30, "medium": 24, "small": 18 } },
+        "scenes": [
+          {
+            "name": "Home",
+            "background": "#0B1118",
+            "elements": [
+              { "type": "label", "text": "21:14", "x": 64, "y": 64, "width": 700, "height": 92, "font": "title", "color": "#EAF2FA" },
+              { "type": "label", "text": "Friday · 8 November · 18° outside", "x": 64, "y": 168, "width": 760, "height": 34, "font": "small", "color": "#8496A8" },
+              { "type": "button", "text": "Media", "x": 64, "y": 288, "width": 560, "height": 116, "font": "big", "color": "#0B1118", "bgColor": "#7FB3D5", "trigger": "change_scene", "sceneChange": "Media" },
+              { "type": "button", "text": "Music", "x": 656, "y": 288, "width": 560, "height": 116, "font": "big", "color": "#EAF2FA", "bgColor": "#1B2632" },
+              { "type": "button", "text": "Files", "x": 64, "y": 428, "width": 560, "height": 116, "font": "big", "color": "#EAF2FA", "bgColor": "#1B2632" },
+              { "type": "button", "text": "Settings", "x": 656, "y": 428, "width": 560, "height": 116, "font": "big", "color": "#EAF2FA", "bgColor": "#1B2632" },
+              { "type": "label", "text": "A / open    B / back    Start / menu", "x": 64, "y": 618, "width": 620, "height": 32, "font": "small", "color": "#6C7C8C" }
+            ]
+          },
+          {
+            "name": "Media",
+            "background": "#0B1118",
+            "elements": [
+              { "type": "label", "text": "Media", "x": 64, "y": 56, "width": 500, "height": 76, "font": "title", "color": "#EAF2FA" },
+              { "type": "label", "text": "Pick up where you left off", "x": 64, "y": 140, "width": 620, "height": 32, "font": "small", "color": "#8496A8" },
+              { "type": "button", "text": "Continue", "x": 64, "y": 200, "width": 360, "height": 190, "font": "big", "color": "#0B1118", "bgColor": "#7FB3D5" },
+              { "type": "button", "text": "Movies", "x": 448, "y": 200, "width": 360, "height": 190, "font": "big", "color": "#EAF2FA", "bgColor": "#1B2632" },
+              { "type": "button", "text": "Podcasts", "x": 832, "y": 200, "width": 384, "height": 190, "font": "big", "color": "#EAF2FA", "bgColor": "#1B2632" },
+              { "type": "button", "text": "Back", "x": 64, "y": 432, "width": 220, "height": 72, "font": "medium", "color": "#EAF2FA", "bgColor": "#243140", "trigger": "change_scene", "sceneChange": "Home" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "arcade-shelf",
+      "name": "Arcade Shelf",
+      "author": "@retro_dan",
+      "description": "Six chunky shelf tiles under a marquee header, with a library scene one press away.",
+      "tags": ["Home", "Grid", "Arcade"],
+      "accent": "#ff4d9d",
+      "config": {
+        "AppName": "JukaHub",
+        "Version": "0.4.0",
+        "Width": 1280,
+        "Height": 720,
+        "title": "Arcade Shelf",
+        "author": "retro_dan",
+        "description": "Marquee header over a six-tile shelf.",
+        "variables": { "fontSizes": { "title": 52, "big": 32, "medium": 24, "small": 18 } },
+        "scenes": [
+          {
+            "name": "Shelf",
+            "background": "#0A0614",
+            "elements": [
+              { "type": "label", "text": "THE SHELF", "x": 48, "y": 36, "width": 700, "height": 72, "font": "title", "color": "#FF4D9D" },
+              { "type": "label", "text": "Six ways in", "x": 48, "y": 106, "width": 400, "height": 30, "font": "small", "color": "#7DE2FF" },
+              { "type": "button", "text": "Continue", "x": 48, "y": 160, "width": 384, "height": 200, "font": "big", "color": "#0A0614", "bgColor": "#7DE2FF", "trigger": "change_scene", "sceneChange": "Library" },
+              { "type": "button", "text": "Favourites", "x": 456, "y": 160, "width": 384, "height": 200, "font": "big", "color": "#F8FAFC", "bgColor": "#3B1D5E" },
+              { "type": "button", "text": "All games", "x": 864, "y": 160, "width": 368, "height": 200, "font": "big", "color": "#0A0614", "bgColor": "#FF4D9D", "trigger": "change_scene", "sceneChange": "Library" },
+              { "type": "button", "text": "Music", "x": 48, "y": 384, "width": 384, "height": 200, "font": "big", "color": "#F8FAFC", "bgColor": "#1D3B5E" },
+              { "type": "button", "text": "Files", "x": 456, "y": 384, "width": 384, "height": 200, "font": "big", "color": "#F8FAFC", "bgColor": "#3B1D5E" },
+              { "type": "button", "text": "Settings", "x": 864, "y": 384, "width": 368, "height": 200, "font": "big", "color": "#F8FAFC", "bgColor": "#1D3B5E" },
+              { "type": "label", "text": "A / start    B / back", "x": 48, "y": 630, "width": 520, "height": 32, "font": "small", "color": "#8C7BAA" }
+            ]
+          },
+          {
+            "name": "Library",
+            "background": "#0A0614",
+            "elements": [
+              { "type": "label", "text": "LIBRARY", "x": 48, "y": 44, "width": 600, "height": 72, "font": "title", "color": "#7DE2FF" },
+              { "type": "button", "text": "Recently played", "x": 48, "y": 160, "width": 500, "height": 190, "font": "big", "color": "#F8FAFC", "bgColor": "#3B1D5E" },
+              { "type": "button", "text": "By system", "x": 584, "y": 160, "width": 500, "height": 190, "font": "big", "color": "#F8FAFC", "bgColor": "#1D3B5E" },
+              { "type": "button", "text": "Surprise me", "x": 48, "y": 384, "width": 1036, "height": 120, "font": "big", "color": "#0A0614", "bgColor": "#FF4D9D" },
+              { "type": "button", "text": "Back", "x": 48, "y": 528, "width": 220, "height": 72, "font": "medium", "color": "#0A0614", "bgColor": "#7DE2FF", "trigger": "change_scene", "sceneChange": "Shelf" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "workbench",
+      "name": "Workbench",
+      "author": "@pixel_rune",
+      "description": "Files first: one big browser tile, three compact tools beside it, and a tools scene.",
+      "tags": ["Home", "Files", "Utility"],
+      "accent": "#6fbf9a",
+      "config": {
+        "AppName": "JukaHub",
+        "Version": "0.4.0",
+        "Width": 1280,
+        "Height": 720,
+        "title": "Workbench",
+        "author": "pixel_rune",
+        "description": "Files-focused home with a compact tools column.",
+        "variables": { "fontSizes": { "title": 50, "big": 30, "medium": 24, "small": 18 } },
+        "scenes": [
+          {
+            "name": "Home",
+            "background": "#0C1512",
+            "elements": [
+              { "type": "label", "text": "Workbench", "x": 48, "y": 40, "width": 640, "height": 72, "font": "title", "color": "#E8F5EF" },
+              { "type": "label", "text": "SD card · 128 GB · 41 GB free", "x": 48, "y": 112, "width": 640, "height": 30, "font": "small", "color": "#7F9A8E" },
+              { "type": "button", "text": "Files", "x": 48, "y": 168, "width": 720, "height": 216, "font": "big", "color": "#0C1512", "bgColor": "#6FBF9A", "trigger": "change_scene", "sceneChange": "Files" },
+              { "type": "button", "text": "Tools", "x": 792, "y": 168, "width": 440, "height": 100, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C", "trigger": "change_scene", "sceneChange": "Tools" },
+              { "type": "button", "text": "Packages", "x": 792, "y": 284, "width": 440, "height": 100, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Settings", "x": 48, "y": 404, "width": 360, "height": 100, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Terminal", "x": 432, "y": 404, "width": 360, "height": 100, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Playtime", "x": 816, "y": 404, "width": 416, "height": 100, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "label", "text": "A / open    B / back", "x": 48, "y": 630, "width": 520, "height": 32, "font": "small", "color": "#6B8579" }
+            ]
+          },
+          {
+            "name": "Files",
+            "background": "#0C1512",
+            "elements": [
+              { "type": "label", "text": "Files", "x": 48, "y": 44, "width": 420, "height": 68, "font": "title", "color": "#E8F5EF" },
+              { "type": "button", "text": "Roms", "x": 48, "y": 150, "width": 360, "height": 180, "font": "big", "color": "#0C1512", "bgColor": "#6FBF9A" },
+              { "type": "button", "text": "Media", "x": 448, "y": 150, "width": 360, "height": 180, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Saves", "x": 848, "y": 150, "width": 368, "height": 180, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Back", "x": 48, "y": 396, "width": 220, "height": 72, "font": "medium", "color": "#E8F5EF", "bgColor": "#16241F", "trigger": "change_scene", "sceneChange": "Home" }
+            ]
+          },
+          {
+            "name": "Tools",
+            "background": "#0C1512",
+            "elements": [
+              { "type": "label", "text": "Tools", "x": 48, "y": 44, "width": 420, "height": 68, "font": "title", "color": "#E8F5EF" },
+              { "type": "button", "text": "Network", "x": 48, "y": 150, "width": 560, "height": 120, "font": "big", "color": "#0C1512", "bgColor": "#6FBF9A" },
+              { "type": "button", "text": "Diagnostics", "x": 48, "y": 296, "width": 560, "height": 120, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Downloads", "x": 640, "y": 150, "width": 576, "height": 120, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Patch", "x": 640, "y": 296, "width": 576, "height": 120, "font": "big", "color": "#E8F5EF", "bgColor": "#20332C" },
+              { "type": "button", "text": "Back", "x": 48, "y": 450, "width": 220, "height": 72, "font": "medium", "color": "#E8F5EF", "bgColor": "#16241F", "trigger": "change_scene", "sceneChange": "Home" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

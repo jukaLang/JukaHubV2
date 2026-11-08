@@ -425,14 +425,19 @@ func TestWiFiPanelKeyboardOwnsPassphrase(t *testing.T) {
 			wifiPassphraseBuffer, wifiPendingSSID)
 	}
 
-	wifiPanel = wifiPanelState{open: true}
+	// On the Wi-Fi page the password keyboard keeps its keys; once it closes,
+	// the page answers again.
+	config := toolsHubTestNav(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
+	sceneHistory = []int{0}
+	wifiPanel = wifiPanelState{}
 	virtualKeyboardActive = true
-	if handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_DOWN}}, &Config{}) {
-		t.Fatal("the panel consumed a key while its keyboard was open")
+	if wifiScrKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_DOWN}}, config) {
+		t.Fatal("the page consumed a key while its keyboard was open")
 	}
 	virtualKeyboardActive = false
-	if !handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}}, &Config{}) {
-		t.Fatal("the panel did not consume a key while it was the active modal")
+	if !wifiScrKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}}, config) || pendingSceneIndex != 0 {
+		t.Fatal("the page did not take Escape once the keyboard had closed")
 	}
 }
 
@@ -507,9 +512,9 @@ func waitForWiFiIdle(t *testing.T) {
 	}
 }
 
-// TestWiFiPanelJoinFlow walks the real UI path: open the picker, scan, choose a
-// secured network, type the password on the keyboard, submit, and see the
-// connected status. Only wpa_cli itself is stubbed.
+// TestWiFiPanelJoinFlow walks the real UI path: arrive on the Wi-Fi page, scan,
+// choose a secured network, type the password on the keyboard, submit, and see
+// the connected status. Only wpa_cli itself is stubbed.
 func TestWiFiPanelJoinFlow(t *testing.T) {
 	_ = newProbeFrame(t)
 	withScreen(t, probeW, probeH)
@@ -564,9 +569,11 @@ func TestWiFiPanelJoinFlow(t *testing.T) {
 
 	wifiGeneration++
 	wifiDrainDiscarded()
-	openWiFiPanel()
+	// Arriving on the page starts a visit: the interface is looked up and a
+	// scan starts.
+	wifiScrBeginVisit()
 	if !wifiPanel.available {
-		t.Fatalf("stubbed picker reported unavailable: %s", wifiPanel.detail)
+		t.Fatalf("stubbed page reported Wi-Fi unavailable: %s", wifiPanel.detail)
 	}
 	waitForWiFiIdle(t)
 	if wifiPanel.err != "" {
@@ -628,29 +635,18 @@ func TestShippedConfigHardwareGetsWiFiEntry(t *testing.T) {
 	}
 }
 
-// TestWiFiPanelRenders is a layout smoke test: the modal must fit both the
-// 1280x720 panel and a 480p handheld, and draw one rect per visible row.
+// TestWiFiPanelRenders is a layout smoke test: the Wi-Fi page must fit both
+// the 1280x720 panel and a 480p handheld, and keep one target per network row.
 func TestWiFiPanelRenders(t *testing.T) {
-	_ = newProbeFrame(t)
-	r, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
-	}
-	defer destroyTestRenderer(r)
-
-	prev := wifiPanel
-	t.Cleanup(func() {
-		wifiPanel = prev
-		wifiRowRects = nil
-		ClearTextCache()
-	})
+	config := toolsHubTestNav(t)
+	r := probeRenderer(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
 
 	for _, size := range []struct {
 		w, h int32
 	}{{probeW, probeH}, {800, 480}} {
 		withScreen(t, size.w, size.h)
 		wifiPanel = wifiPanelState{
-			open:      true,
 			available: true,
 			loadedAt:  time.Now(),
 			status: wifiStatus{
@@ -664,28 +660,32 @@ func TestWiFiPanelRenders(t *testing.T) {
 				{SSID: "Cafe", BSSID: "aa:bb:cc:dd:ee:03", Signal: -82},
 			},
 		}
+		wifiScr.follow = true
 		r.SetDrawColor(9, 14, 25, 255)
 		r.Clear()
-		renderWiFiPanel(r, &Config{})
+		renderWiFiScr(r, config)
 
-		if wifiPanelRect.W <= 0 || wifiPanelRect.H <= 0 {
-			t.Fatalf("%dx%d: panel was not laid out", size.w, size.h)
+		v := wifiScr.view
+		if v.W <= 0 || v.H <= 0 {
+			t.Fatalf("%dx%d: the list was not laid out", size.w, size.h)
 		}
-		if wifiPanelRect.X < 0 || wifiPanelRect.Y < 0 ||
-			wifiPanelRect.X+wifiPanelRect.W > size.w || wifiPanelRect.Y+wifiPanelRect.H > size.h {
-			t.Fatalf("%dx%d: panel %+v leaves the screen", size.w, size.h, wifiPanelRect)
+		if v.X < 0 || v.Y < 0 || v.X+v.W > size.w || v.Y+v.H > size.h {
+			t.Fatalf("%dx%d: list %+v leaves the screen", size.w, size.h, v)
 		}
-		if len(wifiRowRects) != len(wifiPanel.networks) {
-			t.Fatalf("%dx%d: drew %d row rects for %d networks",
-				size.w, size.h, len(wifiRowRects), len(wifiPanel.networks))
+		if len(wifiScr.rowRects) != len(wifiPanel.networks) {
+			t.Fatalf("%dx%d: drew %d row targets for %d networks",
+				size.w, size.h, len(wifiScr.rowRects), len(wifiPanel.networks))
 		}
 	}
 
 	// An unavailable backend still renders its explanation instead of an empty
 	// frame, and must not leave clickable rows behind.
-	wifiPanel = wifiPanelState{open: true, available: false, detail: "No wireless network interface on this device"}
-	renderWiFiPanel(r, &Config{})
-	if len(wifiRowRects) != 0 {
-		t.Fatalf("unavailable panel drew %d rows", len(wifiRowRects))
+	wifiPanel = wifiPanelState{available: false, detail: "No wireless network interface on this device"}
+	renderWiFiScr(r, config)
+	if len(wifiScr.rowRects) != 0 {
+		t.Fatalf("unavailable page drew %d rows", len(wifiScr.rowRects))
+	}
+	if wifiScr.emptyAction == "" {
+		t.Fatal("unavailable page offers nothing to do")
 	}
 }

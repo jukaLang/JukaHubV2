@@ -26,7 +26,14 @@ type alarmEntry struct {
 	FiredOn string `json:"fired_on,omitempty"`
 	// RangOn is the date it last actually rang, which is what the list marks.
 	RangOn string `json:"rang_on,omitempty"`
-	ID     int    `json:"id"`
+	// Sound is the ringtone id (alarmtone.go): a synthesised tone, or "file:"
+	// and a track from the user's music. Empty means the default, which is
+	// what alarms saved before the picker existed carry.
+	Sound string `json:"sound,omitempty"`
+	// SnoozeUntil is when a snoozed alarm rings again (RFC3339). While it is in
+	// the future the alarm stays quiet even though it already rang today.
+	SnoozeUntil string `json:"snooze_until,omitempty"`
+	ID          int    `json:"id"`
 }
 
 // alarmDate is the key FiredOn is compared with.
@@ -44,7 +51,23 @@ const alarmCatchUp = 5 * time.Minute
 // alarmDue reports whether a ring is owed now: enabled, not rung today, and
 // now inside [the alarm's time today, alarmCatchUp later).
 func alarmDue(a alarmEntry, now time.Time) bool {
-	if !a.Enabled || a.firedToday(now) {
+	if !a.Enabled {
+		return false
+	}
+	// A snoozed alarm is quiet until its snooze ends, then rings once more on
+	// the same day even though it already rang. A snooze the device slept
+	// through is not replayed hours later: only the catch-up window counts.
+	if a.SnoozeUntil != "" {
+		if until, err := time.Parse(time.RFC3339, a.SnoozeUntil); err == nil {
+			if now.Before(until) {
+				return false
+			}
+			if now.Sub(until) < alarmCatchUp {
+				return true
+			}
+		}
+	}
+	if a.firedToday(now) {
 		return false
 	}
 	at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
@@ -54,6 +77,7 @@ func alarmDue(a alarmEntry, now time.Time) bool {
 // alarmArmFrom marks an alarm set (or reset) at now: a time already past today
 // starts tomorrow instead of ringing at once through the catch-up window.
 func alarmArmFrom(a *alarmEntry, now time.Time) {
+	a.SnoozeUntil = ""
 	at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
 	if now.Before(at) {
 		a.FiredOn = ""
@@ -105,12 +129,23 @@ func alarmSave() {
 
 type alarmScene struct {
 	cursor    int // which row is focused
-	tab       int // 0=list, 1=set-hour, 2=set-min, 3=set-label, 4=set-save
+	tab       int // 0=list, 1=hour, 2=minute, 3=label, 4=ringtone, 5=confirm delete
 	editHour  int
 	editMin   int
 	editLabel string
+	editSound string    // ringtone id, chosen on the editor's sound row
 	editID    int       // -1 = new, >=0 = editing existing
 	now       time.Time // cached current time (updated each frame)
+	// The music picker on the ringtone row: open, its focused row, its first
+	// visible row, and when the focused track's preview is due (zero = none).
+	pickOpen    bool
+	pickCursor  int
+	pickScroll  int
+	pickPreview time.Time
+	// skipText drops the character of the key that just moved the focus onto
+	// the label (Space on the minute row, B back from the ringtone): SDL sends
+	// it after the key, and it would type into the field the key opened.
+	skipText bool
 }
 
 var alarmUI alarmScene
@@ -153,6 +188,7 @@ func alarmInitUI() {
 		editHour:  now.Hour(),
 		editMin:   now.Minute(),
 		editLabel: "",
+		editSound: alarmDefaultSound,
 		editID:    -1,
 		now:       now,
 	}
@@ -207,7 +243,7 @@ func alarmNavigate(dr int) {
 			alarmUI.cursor = 0
 		}
 		PlayNavSound()
-	} else if alarmUI.tab >= 1 && alarmUI.tab <= 3 {
+	} else if alarmUI.tab >= 1 && alarmUI.tab <= 4 {
 		// Edit mode: adjust value
 		switch alarmUI.tab {
 		case 1: // hour
@@ -216,6 +252,8 @@ func alarmNavigate(dr int) {
 		case 2: // minute
 			alarmUI.editMin = (alarmUI.editMin + dr + 60) % 60
 			PlayNavSound()
+		case 4: // ringtone
+			alarmSoundStep(dr)
 		}
 	}
 }
@@ -236,6 +274,7 @@ func alarmSelect() {
 			alarmUI.editHour = a.Hour
 			alarmUI.editMin = a.Minute
 			alarmUI.editLabel = a.Label
+			alarmUI.editSound = alarmSoundByID(a.Sound).ID
 			alarmUI.editID = a.ID
 			alarmUI.tab = 1
 			PlayActivateSound()
@@ -247,11 +286,19 @@ func alarmSelect() {
 		alarmUI.tab = 3
 		alarmUI.cursor = 0 // label character cursor
 		PlayActivateSound()
-	case 3: // Label → save
+	case 3: // Label → ringtone
+		alarmUI.tab = 4
+		PlayActivateSound()
+	case 4: // Ringtone → save, or pick a track first on "Choose from music…"
+		if alarmUI.editSound == alarmMusicPickID {
+			alarmPickOpen(appConfig)
+			return
+		}
+		alarmPlayStop()
 		alarmSaveAlarm()
 		alarmUI.tab = 0
 		PlaySuccessSound()
-	case 4: // Confirm delete
+	case 5: // Confirm delete
 		alarmDeleteFocused()
 		alarmUI.tab = 0
 		PlayActivateSound()
@@ -259,7 +306,14 @@ func alarmSelect() {
 }
 
 func alarmBack() {
-	if alarmUI.tab > 0 && alarmUI.tab < 4 {
+	if alarmUI.pickOpen {
+		alarmPickClose()
+		return
+	}
+	if alarmUI.tab > 0 && alarmUI.tab < 5 {
+		if alarmUI.tab == 4 {
+			alarmPlayStop() // a ringtone preview ends with its row
+		}
 		alarmUI.tab--
 		PlayBackSound()
 	} else if alarmUI.tab == 0 {
@@ -277,6 +331,7 @@ func alarmStartNew(now time.Time) {
 	alarmUI.editHour = soon.Hour()
 	alarmUI.editMin = soon.Minute()
 	alarmUI.editLabel = ""
+	alarmUI.editSound = alarmDefaultSound
 	alarmUI.editID = -1
 }
 
@@ -339,6 +394,7 @@ func alarmSaveAlarm() {
 				alarmStore.Alarms[i].Hour = alarmUI.editHour
 				alarmStore.Alarms[i].Minute = alarmUI.editMin
 				alarmStore.Alarms[i].Label = alarmUI.editLabel
+				alarmStore.Alarms[i].Sound = alarmSoundByID(alarmUI.editSound).ID
 				alarmArmFrom(&alarmStore.Alarms[i], time.Now())
 				break
 			}
@@ -350,6 +406,7 @@ func alarmSaveAlarm() {
 			Hour:    alarmUI.editHour,
 			Minute:  alarmUI.editMin,
 			Label:   alarmUI.editLabel,
+			Sound:   alarmSoundByID(alarmUI.editSound).ID,
 			Enabled: true,
 			ID:      alarmNextID,
 		}
@@ -368,36 +425,38 @@ func alarmSaveAlarm() {
 
 // --- Alarm check (called from main loop) ---
 
-func alarmCheck(now time.Time) {
+func alarmCheck(config *Config, now time.Time) {
+	// This is the main loop's once-a-second tick on every path (parked under
+	// a game, dark panel, normal frame), so the UI-sound settings are re-read
+	// here: a switch flipped in Settings applies within a second (sound.go).
+	bootSfxBind(config)
+	// A ring in progress keeps the idle screens away and ends itself if nobody
+	// answers it.
+	alarmRingTick(now)
 	for i := range alarmStore.Alarms {
 		a := &alarmStore.Alarms[i]
 		if alarmDue(*a, now) {
-			a.FiredOn = alarmDate(now)
-			a.RangOn = a.FiredOn
+			alarmMarkRang(a, now)
 			alarmSave()
-			// A darked ambient panel is the common way to sleep with an alarm
-			// armed, so the alarm has to bring the screen back with it.
-			ambientNotifyInput()
-			// Play alarm sound: ascending arpeggio
-			go alarmRing()
-			label := a.Label
-			if label == "" {
-				label = fmt.Sprintf("%02d:%02d", a.Hour, a.Minute)
-			}
-			showToast("[!] Alarm: "+label, ToastSuccess())
+			// The ring takes over the screen (alarmring.go), not a toast under
+			// whatever was open: an alarm painted over by a game is not an alarm.
+			// One that comes due during another's ring takes that ring over.
+			alarmTrigger(config, *a)
 		}
 	}
 }
 
-func alarmRing() {
-	// Play a pleasant ascending arpeggio, 3 repetitions.
-	for rep := 0; rep < 3; rep++ {
-		for _, freq := range []float64{523.25, 659.25, 783.99, 1046.5} {
-			playTone(freq, 180, 0.5)
-			time.Sleep(220 * time.Millisecond)
-		}
-		time.Sleep(400 * time.Millisecond)
+// alarmMarkRang records that a rings at now. FiredOn closes today's own ring,
+// so it is only set once today's time has come: a snooze re-ring that lands
+// after midnight (23:58 snoozed to 00:07) must not close the evening's 23:58
+// ring. The snooze has done its job either way.
+func alarmMarkRang(a *alarmEntry, now time.Time) {
+	at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
+	if !now.Before(at) {
+		a.FiredOn = alarmDate(now)
 	}
+	a.RangOn = alarmDate(now)
+	a.SnoozeUntil = ""
 }
 
 // --- Rendering ---
@@ -424,7 +483,7 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	// --- Large current time display ---
 	timeBottom := barH + 10
 	if bigFont != nil {
-		timeStr := alarmUI.now.Format("15:04:05")
+		timeStr := clockDigitsSeconds(config, alarmUI.now)
 		tw, th, _ := bigFont.SizeUTF8(timeStr)
 		tx := cx - int32(tw)/2
 		ty := barH + 10
@@ -484,6 +543,8 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	renderStatusBar(renderer, config)
 	renderFooter(renderer, config)
 	alarmBackRect = sceneTitleBackRect
+	// The music picker is modal over the editor.
+	renderAlarmPicker(renderer, config)
 }
 
 func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
@@ -531,7 +592,7 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 		}
 
 		// Time
-		timeStr := fmt.Sprintf("%02d:%02d", a.Hour, a.Minute)
+		timeStr := clockDigitsHM(config, a.Hour, a.Minute)
 		timeCol := ColorTextPrimary()
 		if !a.Enabled {
 			timeCol = WithAlpha(ColorTextTertiary(), 150)
@@ -581,20 +642,27 @@ func renderAlarmAddRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x
 // handleAlarmMouseClick handles taps on the alarm screen: the Back pill, the
 // alarm rows and the "+ Add Alarm" row. It reports whether the click was used.
 func handleAlarmMouseClick(mx, my int32, config *Config) bool {
+	// The music picker is modal: it takes every click while it is open.
+	if alarmUI.pickOpen {
+		alarmPickClick(mx, my)
+		return true
+	}
 	if alarmBackRect.W > 0 && pointInRect(mx, my, alarmBackRect) {
 		alarmBack()
+		return true
+	}
+	if alarmUI.tab == 4 && alarmRingtoneClick(config, mx, my) {
 		return true
 	}
 	if alarmUI.tab != 0 {
 		return false
 	}
 	if alarmAddRect.W > 0 && pointInRect(mx, my, alarmAddRect) {
-		now := time.Now()
-		alarmUI.tab = 1
-		alarmUI.editHour = now.Hour()
-		alarmUI.editMin = (now.Minute() + 5) % 60
-		alarmUI.editLabel = ""
-		alarmUI.editID = -1
+		// The same new alarm the pad's Y starts — five minutes from now, the
+		// hour carried — on the default ringtone, not the one the alarm edited
+		// last happened to preview. (The tap used to take (minute+5)%60 alone,
+		// which set 10:58 to 10:03.)
+		alarmStartNew(time.Now())
 		PlayActivateSound()
 		return true
 	}
@@ -708,7 +776,20 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 			WithAlpha(ColorTextSecondary(), 220), x+32, editY+8)
 	}
 
+	// Clear the label field the block above drew at editY before starting the
+	// next row; without this the picker would paint over the input.
 	editY += 60
+
+	// Ringtone: the list cycles in place, the way the hour does, because a
+	// handheld has no dropdown, and every step previews the sound it lands on.
+	// The stop after the synthesised tones is music: X (or A on "Choose from
+	// music…") opens the picker.
+	if smallFont != nil {
+		renderText(renderer, config, smallFont, "Ringtone:",
+			WithAlpha(ColorTextSecondary(), 200), x+20, editY)
+		alarmDrawRingtoneRow(renderer, config, font, smallFont, sdl.Rect{X: x + 20, Y: editY + 24, W: w - 40, H: 44})
+		editY += 84
+	}
 
 	// Day of week indicators
 	if smallFont != nil {
@@ -884,6 +965,34 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return
 	}
+	// A key's text event follows it before the next key, so the skip is armed
+	// by this key or by none. Only the two keys that both open the label and
+	// type a character arm it — Space from the minute row, B back from the
+	// ringtone row; Enter and Esc type nothing.
+	alarmUI.skipText = false
+	fromTab := alarmUI.tab
+	defer func() {
+		if alarmUI.tab == 3 && fromTab != 3 && (e.Keysym.Sym == sdl.K_SPACE || e.Keysym.Sym == sdl.K_b) {
+			alarmUI.skipText = true
+		}
+	}()
+	if alarmUI.pickOpen {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			alarmPickMove(-1)
+		case sdl.K_DOWN:
+			alarmPickMove(1)
+		case sdl.K_PAGEUP:
+			alarmPickMove(-alarmPickMaxRows)
+		case sdl.K_PAGEDOWN:
+			alarmPickMove(alarmPickMaxRows)
+		case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
+			alarmPickChoose()
+		case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
+			alarmPickClose()
+		}
+		return
+	}
 	switch alarmUI.tab {
 	case 0: // List
 		switch e.Keysym.Sym {
@@ -935,7 +1044,20 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 		case sdl.K_BACKSPACE:
 			alarmUI.editLabel = trimLastRune(alarmUI.editLabel)
 		}
-	case 4: // Confirm delete
+	case 4: // Ringtone
+		switch e.Keysym.Sym {
+		case sdl.K_LEFT, sdl.K_UP:
+			alarmSoundStep(-1)
+		case sdl.K_RIGHT, sdl.K_DOWN:
+			alarmSoundStep(1)
+		case sdl.K_RETURN, sdl.K_SPACE:
+			alarmSelect()
+		case sdl.K_x, sdl.K_m:
+			alarmPickOpen(config)
+		case sdl.K_ESCAPE, sdl.K_b:
+			alarmBack()
+		}
+	case 5: // Confirm delete
 		switch e.Keysym.Sym {
 		case sdl.K_RETURN, sdl.K_SPACE:
 			alarmSelect()
@@ -951,6 +1073,14 @@ func handleAlarmTextInput(e *sdl.TextInputEvent) {
 	if alarmUI.tab != 3 {
 		return
 	}
+	if alarmUI.skipText {
+		alarmUI.skipText = false
+		// Only that key's own character is dropped: text that arrives without
+		// a key of its own (the phone companion's) is typed as usual.
+		if t := e.GetText(); t == " " || t == "b" || t == "B" {
+			return
+		}
+	}
 	for _, r := range e.GetText() {
 		if r >= 32 && r <= 126 && len(alarmUI.editLabel) < 40 {
 			alarmUI.editLabel += string(r)
@@ -962,19 +1092,47 @@ func handleAlarmTextInput(e *sdl.TextInputEvent) {
 // its own input.
 
 func ctrlAlarm(e *sdl.ControllerButtonEvent) bool {
+	// The music picker is modal: it owns the pad while it is open.
+	if alarmUI.pickOpen {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			alarmPickMove(-1)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			alarmPickMove(1)
+		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER, sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			alarmPickMove(-alarmPickMaxRows)
+		case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			alarmPickMove(alarmPickMaxRows)
+		case sdl.CONTROLLER_BUTTON_A:
+			alarmPickChoose()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			alarmPickClose()
+		}
+		return true
+	}
+	// Each handler below plays its own feedback sound; the extra Play* calls
+	// this mapping used to add made every press tick twice.
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		alarmNavigate(-1)
-		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		alarmNavigate(1)
-		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		// Only the ringtone row uses left/right; elsewhere the scene's own
+		// element navigation owns the direction, so let it through.
+		if alarmUI.tab == 4 {
+			if e.Button == sdl.CONTROLLER_BUTTON_DPAD_LEFT {
+				alarmSoundStep(-1)
+			} else {
+				alarmSoundStep(1)
+			}
+			return true
+		}
+		return false
 	case sdl.CONTROLLER_BUTTON_A:
 		alarmSelect()
-		PlayActivateSound()
 	case sdl.CONTROLLER_BUTTON_B:
 		alarmBack()
-		PlayBackSound()
 	case sdl.CONTROLLER_BUTTON_Y:
 		// Y is "New alarm" — the legend and the empty list both say so; it
 		// used to reset the screen instead.
@@ -983,8 +1141,13 @@ func ctrlAlarm(e *sdl.ControllerButtonEvent) bool {
 			PlayActivateSound()
 		}
 	case sdl.CONTROLLER_BUTTON_X:
-		alarmToggleFocused()
-		PlayNavSound()
+		// X toggles an alarm on the list, and opens the music picker on the
+		// ringtone row.
+		if alarmUI.tab == 4 {
+			alarmPickOpen(appConfig)
+		} else {
+			alarmToggleFocused()
+		}
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		alarmRequestDelete()
 	default:

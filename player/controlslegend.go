@@ -49,6 +49,10 @@ func systemLegendRows() []FooterHint {
 		{Button: "Start", Label: "Start menu"},
 		{Button: "Select + Start", Label: "Quit JukaHub"},
 	}
+	// Hold Select, press R1: the next control profile (inmap_runtime.go).
+	if inmapHotkeyEnabled() {
+		rows = append(rows, FooterHint{Button: "Select + R1", Label: "Next control profile"})
+	}
 	if controlsLegend.brick {
 		// On a Brick "F1" is a key on the device, not the keyboard's: it opens
 		// this card, F2 opens Quick Settings, and Menu goes back like B.

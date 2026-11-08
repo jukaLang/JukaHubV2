@@ -45,6 +45,9 @@ const (
 	// needs its own entry for the D-pad; it is enabled only while the meter is
 	// drawn (the cluster drops the network slot first when space is short).
 	HomeFocusWiFi HomeFocusID = "wifi"
+	// HomeFocusSearch is the search pill under the greeting, above the Continue
+	// card. A opens the search sheet (globalsearch.go).
+	HomeFocusSearch HomeFocusID = "search"
 )
 
 // FocusDirection indicates the direction to move focus.
@@ -67,41 +70,58 @@ type homeNeighbors struct {
 
 // homeFocusGraph maps each HomeFocusID to its focus neighbors for D-pad/controller navigation.
 var homeFocusGraph = map[HomeFocusID]homeNeighbors{
+	// The search pill sits under the greeting, above the Continue card: Down
+	// drops into Continue, and Right crosses the header band to the Remote Play
+	// launchers (and on to the clock when they are hidden).
+	HomeFocusSearch: {
+		Up: HomeFocusSearch, Down: HomeFocusContinue,
+		Left: HomeFocusSearch, Right: HomeFocusPS4,
+	},
 	HomeFocusContinue: {
-		Up: HomeFocusContinue, Down: HomeFocusFavorites,
+		Up: HomeFocusSearch, Down: HomeFocusFavorites,
 		Left: HomeFocusContinue, Right: HomeFocusMedia,
 	},
 	HomeFocusMedia: {
-		Up: HomeFocusClock, Down: HomeFocusPackages,
-		Left: HomeFocusContinue, Right: HomeFocusFiles,
+		// Media spans the whole right column, so Down belongs to the first tile
+		// under it: Files. It used to skip Files and land on Packages. Up is the
+		// PS5 launcher drawn over it in the header band; the layout re-points
+		// that edge at whichever card the tile really sits over (SetTileLink),
+		// and with the launcher hidden Move falls through to the clock.
+		Up: HomeFocusPS5, Down: HomeFocusFiles,
+		Left: HomeFocusContinue, Right: HomeFocusMedia,
 	},
 	HomeFocusFiles: {
-		// Up lands on the PS5 launcher, which sits above the top-right cards in
-		// the header band. The layout re-points this edge at whichever card the
-		// tile actually sits over (see SetTileLink), so the D-pad and the tile
-		// can never disagree. When the tile is hidden the PS5 entry is disabled
-		// and Move falls through to the PS5 entry's own Up neighbour, the clock,
-		// which is what Files did before the launcher existed.
-		Up: HomeFocusPS5, Down: HomeFocusApps,
-		Left: HomeFocusMedia, Right: HomeFocusSettings,
+		// Files is the first tile of the row under Media, so Up is Media. It
+		// used to point at the PS5 launcher two rows up, which made Up from
+		// Files skip the card drawn directly above it.
+		Up: HomeFocusMedia, Down: HomeFocusTools,
+		Left: HomeFocusContinue, Right: HomeFocusPackages,
 	},
 	// The Remote Play launchers are header tiles: Up reaches the header clock,
-	// Down returns to the card below them, and Left/Right step between the two
-	// tiles instead of wandering into a card that is not beside them.
+	// Down returns to the card below them (Media, or whichever card the layout
+	// links), Left steps toward the search pill on the same band and Right
+	// toward the clock.
 	HomeFocusPS4: {
-		Up: HomeFocusClock, Down: HomeFocusFiles,
-		Left: HomeFocusPS4, Right: HomeFocusPS5,
+		Up: HomeFocusClock, Down: HomeFocusMedia,
+		Left: HomeFocusSearch, Right: HomeFocusPS5,
 	},
 	HomeFocusPS5: {
-		Up: HomeFocusClock, Down: HomeFocusFiles,
+		Up: HomeFocusClock, Down: HomeFocusMedia,
 		Left: HomeFocusPS4, Right: HomeFocusClock,
 	},
 	HomeFocusPackages: {
-		Up: HomeFocusMedia, Down: HomeFocusTools,
-		Left: HomeFocusContinue, Right: HomeFocusApps,
+		// Left is the Files card beside it. It used to jump over Files to the
+		// Continue hero, which is why Files (and its browser) felt unreachable
+		// from the right half of the grid. Up is the Media card drawn over the
+		// whole row, not Files beside it.
+		Up: HomeFocusMedia, Down: HomeFocusEmulator,
+		Left: HomeFocusFiles, Right: HomeFocusApps,
 	},
 	HomeFocusApps: {
-		Up: HomeFocusFiles, Down: HomeFocusEmulator,
+		// Apps sits under the right end of the Media card and above the
+		// Settings column; it used to point Up at Files and Down at Emulator,
+		// neither of which is beside it.
+		Up: HomeFocusMedia, Down: HomeFocusSettings,
 		Left: HomeFocusPackages, Right: HomeFocusApps,
 	},
 	HomeFocusFavorites: {
@@ -115,35 +135,43 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Left: HomeFocusFavorites, Right: HomeFocusChat,
 	},
 	HomeFocusChat: {
-		Up: HomeFocusContinue, Down: HomeFocusChat,
+		// Chat's centre sits under the Files card (the Continue hero ends left
+		// of it), so Up is Files, the card drawn above most of the tile.
+		Up: HomeFocusFiles, Down: HomeFocusChat,
 		Left: HomeFocusBrowser, Right: HomeFocusTools,
 	},
 	HomeFocusTools: {
-		Up: HomeFocusPackages, Down: HomeFocusTools,
+		Up: HomeFocusFiles, Down: HomeFocusTools,
 		Left: HomeFocusChat, Right: HomeFocusEmulator,
 	},
 	HomeFocusEmulator: {
-		Up: HomeFocusApps, Down: HomeFocusEmulator,
-		Left: HomeFocusTools, Right: HomeFocusEmulator,
+		Up: HomeFocusPackages, Down: HomeFocusEmulator,
+		Left: HomeFocusTools, Right: HomeFocusSettings,
 	},
+	// Settings is the last tile of the bottom row, under Apps. Its edges still
+	// pointed at the top-right corner it was drawn in before the six-tile row
+	// (Up the clock, Down Apps, Left Files), so the row's right end could not
+	// be walked to and Up from Settings jumped over Apps.
 	HomeFocusSettings: {
-		Up: HomeFocusClock, Down: HomeFocusApps,
-		Left: HomeFocusFiles, Right: HomeFocusSettings,
+		Up: HomeFocusApps, Down: HomeFocusSettings,
+		Left: HomeFocusEmulator, Right: HomeFocusSettings,
 	},
-	// The Clock is the header time in the top-right corner: the top-right
-	// cards reach it Up and it drops back Down to Settings.
+	// The header chips sit in the status row above the Remote Play launchers,
+	// so Down from any of them lands on the launcher under that end of the bar
+	// (and falls through to the Media card when the launchers are hidden).
 	// The weather chip sits between the signal meter and the clock.
 	HomeFocusWeather: {
-		Up: HomeFocusWeather, Down: HomeFocusSettings,
+		Up: HomeFocusWeather, Down: HomeFocusPS4,
 		Left: HomeFocusWiFi, Right: HomeFocusClock,
 	},
-	// The signal meter is the Wi-Fi button: Left leaves the bar for the cards,
-	// Right reads the weather text, Down the settings column. The release offer
-	// is drawn at the other end of the bar, beside the bell, so the meter does
-	// not point at it: the pad used to jump from here to a pill on the far right.
+	// The signal meter is the Wi-Fi button: Left leaves the bar for the search
+	// pill, the next control toward the left edge, and Right reads the weather
+	// text. The release offer is drawn at the other end of the bar, beside the
+	// bell, so the meter does not point at it: the pad used to jump from here to
+	// a pill on the far right.
 	HomeFocusWiFi: {
-		Up: HomeFocusWiFi, Down: HomeFocusSettings,
-		Left: HomeFocusMedia, Right: HomeFocusWeather,
+		Up: HomeFocusWiFi, Down: HomeFocusPS4,
+		Left: HomeFocusSearch, Right: HomeFocusWeather,
 	},
 	// The update download chip is a header button drawn immediately left of the
 	// notification bell, right of the now-playing chip. Its neighbours are the
@@ -156,26 +184,26 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	// Move keeps walking their own neighbour chains, so clock -> bell still
 	// works with the chip hidden and bell -> clock still works with it shown.
 	HomeFocusUpdate: {
-		Up: HomeFocusUpdate, Down: HomeFocusSettings,
+		Up: HomeFocusUpdate, Down: HomeFocusPS5,
 		Left: HomeFocusNowPlaying, Right: HomeFocusBell,
 	},
 	// The now-playing chip sits right of the clock and names the running
 	// player. Disabled while nothing plays, so Right from the clock falls
 	// through to the release offer (or the bell when none is offered).
 	HomeFocusNowPlaying: {
-		Up: HomeFocusNowPlaying, Down: HomeFocusSettings,
+		Up: HomeFocusNowPlaying, Down: HomeFocusPS5,
 		Left: HomeFocusClock, Right: HomeFocusUpdate,
 	},
 	HomeFocusClock: {
-		Up: HomeFocusClock, Down: HomeFocusSettings,
+		Up: HomeFocusClock, Down: HomeFocusPS5,
 		Left: HomeFocusWeather, Right: HomeFocusNowPlaying,
 	},
 	// The bell is the last control in the header, right of the clock. Left
 	// crosses the release offer when it is drawn (skipping it when it is not);
-	// Right stays put at the screen edge and Down drops into the Settings
-	// column under it.
+	// Right stays put at the screen edge and Down drops to the launcher under
+	// the right end of the bar, or the Media card when it is hidden.
 	HomeFocusBell: {
-		Up: HomeFocusBell, Down: HomeFocusSettings,
+		Up: HomeFocusBell, Down: HomeFocusPS5,
 		Left: HomeFocusUpdate, Right: HomeFocusBell,
 	},
 	// Exit sits on the footer's left end; Favorites drops down to it.
@@ -346,10 +374,10 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 func (f *HomeFocusController) firstEnabled() HomeFocusID {
 	order := []HomeFocusID{
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
-		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
-		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying, HomeFocusUpdate,
-		HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
+		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
+		HomeFocusChat, HomeFocusTools, HomeFocusEmulator, HomeFocusSettings,
+		HomeFocusSearch, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
+		HomeFocusUpdate, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

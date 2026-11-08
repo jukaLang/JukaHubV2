@@ -1,12 +1,13 @@
 package main
 
-// menutiles.go — the classic menu scenes drawn as launcher pages.
+// menutiles.go — the config's menu scenes drawn as launcher pages.
 //
-// The config's "Misc" scene (shown as "Tools") and its "Settings" scene are
-// menus of shortcuts: every element is a button that opens another screen.
-// Rendered as authored they were a wall of wide, ragged buttons with no icons
-// and no title, which reads as a leftover from an older shell next to the Home
-// and Apps grids.
+// The config's "Settings" scene is a menu of shortcuts: every element is a
+// button that opens another screen. Rendered as authored it was a wall of
+// wide, ragged buttons with no icons and no title, which reads as a leftover
+// from an older shell next to the Home and Apps grids. (The classic Tools page,
+// the "Misc" scene, used the same treatment until it was replaced by the
+// Go-owned Tools hub in toolshub.go.)
 //
 // Instead of asking every config author to hand-place tiles, the scene is laid
 // out here, once, when it is entered: grouped into sections, sized to the
@@ -36,13 +37,6 @@ const (
 	// menuTilesStyle marks the buttons this file re-laid out as tiles.
 	menuTilesStyle = "menutile"
 
-	// Section titles, in display order. A menu that contains only one kind of
-	// tool shows only that section.
-	menuTilesSystem      = "SYSTEM"
-	menuTilesDiagnostics = "DIAGNOSTICS"
-	menuTilesUpdates     = "UPDATES & TRANSFER"
-	menuTilesMore        = "MORE"
-
 	// Tile sizing. A tile narrower than menuTilesMinW cannot hold a two-line
 	// label at the theme's tile font; below menuTilesMinH the icon well and the
 	// label collide.
@@ -60,16 +54,8 @@ const (
 	menuTilesMaxCols = 6
 )
 
-var menuTilesSectionOrder = []string{
-	menuTilesSystem,
-	menuTilesDiagnostics,
-	menuTilesUpdates,
-	menuTilesMore,
-}
-
-// The Settings menu is the same page of shortcuts as Tools, so it uses the same
-// layout and only needs its own grouping: its rows are categories of settings,
-// not tools.
+// The Settings menu's sections: its rows are categories of settings, grouped
+// by what each one changes.
 const (
 	menuSettingsAppearance = "APPEARANCE"
 	menuSettingsSound      = "SOUND"
@@ -160,8 +146,6 @@ func menuPageProfileFor(scene SceneConfig) (menuPageProfile, bool) {
 // whether or not its body qualifies yet, so the two lookups are separate.
 func menuPageProfileNamed(name string) (menuPageProfile, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "misc", "tools":
-		return toolsMenuPage, true
 	case "settings":
 		return settingsMenuPage, true
 	}
@@ -174,19 +158,7 @@ func menuTilesScene(scene SceneConfig) bool {
 	return ok
 }
 
-// toolsMenuPage is the Tools page: system tools, diagnostics, transfers.
-var toolsMenuPage = menuPageProfile{
-	sections:        menuTilesSectionOrder,
-	group:           toolsMenuGroup,
-	icon:            toolsMenuIcon,
-	sectionIcon:     menuTilesSectionGlyph,
-	subtitle:        "Diagnostics, system tools and transfers",
-	offlineSubtitle: "Offline — connect to WiFi to transfer files",
-	glyph:           "tools",
-	status:          toolsPageStatus,
-}
-
-// settingsMenuPage is the Settings menu: the same page, grouped by what each
+// settingsMenuPage is the Settings menu: a page of tiles, grouped by what each
 // category changes.
 var settingsMenuPage = menuPageProfile{
 	sections:    menuSettingsSectionOrder,
@@ -195,42 +167,6 @@ var settingsMenuPage = menuPageProfile{
 	sectionIcon: settingsSectionGlyph,
 	subtitle:    "Appearance, connectivity and system preferences",
 	glyph:       "settings",
-}
-
-// toolsPageStatus is the Tools header's read-out: whether transfers can reach
-// the device at all, and where.
-func toolsPageStatus() (string, sdl.Color) {
-	if ip := toolsIPAddress(); ip != "" {
-		return "WiFi · " + ip, ColorTextTertiary()
-	}
-	return "Offline", ColorToastWarn
-}
-
-// toolsMenuGroup sorts a tool into a section by what it does, not by where it
-// happens to sit in the config. The keywords are matched against the label and
-// the trigger so a custom menu ("Fan Control" → change_scene:Fan) still lands
-// somewhere sensible instead of being dropped.
-func toolsMenuGroup(elem Element) string {
-	key := strings.ToLower(elem.Text + " " + elem.Trigger + " " + elem.TriggerTarget)
-	has := func(words ...string) bool {
-		for _, w := range words {
-			if strings.Contains(key, w) {
-				return true
-			}
-		}
-		return false
-	}
-	switch {
-	case has("terminal", "cron", "task", "playtime", "achievement", "log", "cache", "clean", "setting"):
-		return menuTilesSystem
-	case has("hardware", "monitor", "chip", "cpu", "temperature", "disk", "storage", "space",
-		"speed", "benchmark", "bench", "memory", "process", "battery"):
-		return menuTilesDiagnostics
-	case has("patch", "update", "ftp", " ip", "share", "transfer", "ssh", "companion",
-		"package", "netplay", "download"):
-		return menuTilesUpdates
-	}
-	return menuTilesMore
 }
 
 // settingsMenuGroup sorts a settings row by what it changes. The fallback is
@@ -258,9 +194,8 @@ func settingsMenuGroup(elem Element) string {
 	return menuSettingsSystem
 }
 
-// settingsMenuIcon names the glyph a settings category draws. Unlike the Tools
-// page there is no empty answer: a settings row always reads as a gear at
-// worst.
+// settingsMenuIcon names the glyph a settings category draws. There is no empty
+// answer: a settings row always reads as a gear at worst.
 func settingsMenuIcon(elem Element) string {
 	key := strings.ToLower(elem.Text + " " + elem.Trigger + " " + elem.TriggerTarget)
 	has := func(words ...string) bool {
@@ -308,55 +243,6 @@ func settingsSectionGlyph(title string) string {
 		return "network"
 	}
 	return "gear"
-}
-
-// toolsMenuIcon names the glyph a tool draws in its tile. An empty result lets
-// the launcher's own label/trigger mapping decide.
-func toolsMenuIcon(elem Element) string {
-	key := strings.ToLower(elem.Text + " " + elem.Trigger + " " + elem.TriggerTarget)
-	has := func(words ...string) bool {
-		for _, w := range words {
-			if strings.Contains(key, w) {
-				return true
-			}
-		}
-		return false
-	}
-	switch {
-	case has("terminal"):
-		return "terminal"
-	case has("cron", "task", "schedul"):
-		return "clock"
-	case has("speed", "bandwidth", "latency"):
-		return "speed"
-	case has("benchmark", "bench", "score"):
-		return "chart"
-	case has("hardware", "monitor", "chip", "cpu", "temperature"):
-		return "chip"
-	case has("disk", "storage", "space"):
-		return "disk"
-	case has("log"):
-		return "logs"
-	case has("cache", "clean"):
-		return "cache"
-	case has("patch", "update", "upgrade"):
-		return "update"
-	case has("playtime", "achievement"):
-		return "star"
-	case has("ftp", " ip", "share", "transfer", "ssh", "network", "net"):
-		return "network"
-	case has("setting"):
-		return "gear"
-	case has("package", "store"):
-		return "box"
-	case has("file", "explorer"):
-		return "files"
-	case has("chat", "community", "support"):
-		return "chat"
-	case has("tv", "stream", "media", "video", "play"):
-		return "tv"
-	}
-	return ""
 }
 
 // menuTilesLayoutFor measures the page. It is deterministic: the same scene and
@@ -703,20 +589,6 @@ func renderMenuTilesDecor(renderer *sdl.Renderer, config *Config, scene SceneCon
 	}
 }
 
-// menuTilesSectionGlyph pairs a section with a representative glyph, so a
-// heading is recognisable before its small label is read.
-func menuTilesSectionGlyph(title string) string {
-	switch strings.ToUpper(strings.TrimSpace(title)) {
-	case menuTilesSystem:
-		return "terminal"
-	case menuTilesDiagnostics:
-		return "chip"
-	case menuTilesUpdates:
-		return "network"
-	}
-	return "apps"
-}
-
 // renderMenuTile draws one shortcut tile through the shared category-tile
 // component: the icon in a tinted well, the tool's name wrapped underneath, the
 // focus ring the rest of the shell uses, and the same eased press dip as every
@@ -731,15 +603,42 @@ func renderMenuTile(renderer *sdl.Renderer, config *Config, elem Element, select
 		return
 	}
 	kind := tileIconKind(elem)
+	// A tool that needs the internet is dimmed with a tag instead of looking
+	// pressable: the press gate below explains it in full.
+	_, blocked := offlineTileBlocked(elem)
+	rect := sdl.Rect{X: elem.X, Y: elem.Y, W: w, H: h}
 	UICategoryTileDraw(renderer, config, UICategoryTile{
-		Rect:          sdl.Rect{X: elem.X, Y: elem.Y, W: w, H: h},
+		Rect:          rect,
 		Label:         elem.Text,
 		Focused:       selected,
 		Hovered:       hovered,
 		Pressed:       pressed,
+		Disabled:      blocked,
 		HoverProgress: hoverProgress,
 		Glyph: func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
 			drawTileIcon(r, box.X+box.W/2, box.Y+box.H/2, box.W, kind, tint, WithAlpha(tint, 40))
 		},
 	})
+	if blocked {
+		drawOfflineTileTag(renderer, config, rect)
+	}
+}
+
+// drawOfflineTileTag puts the reason a tile is dimmed on the tile itself: a
+// small warning pill, because a grey tile alone reads as a rendering bug.
+func drawOfflineTileTag(renderer *sdl.Renderer, config *Config, rect sdl.Rect) {
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	tw, th := measureText(font, offlineTileTag)
+	padX, padY := int32(8), int32(3)
+	pill := sdl.Rect{
+		X: rect.X + rect.W - tw - 2*padX - 8,
+		Y: rect.Y + 8,
+		W: tw + 2*padX,
+		H: th + 2*padY,
+	}
+	fillRoundedRect(renderer, pill.X, pill.Y, pill.W, pill.H, pill.H/2, WithAlpha(ToastWarn(), 40))
+	renderText(renderer, config, font, offlineTileTag, ToastWarn(), pill.X+padX, pill.Y+padY)
 }

@@ -35,6 +35,66 @@ type FocusNode struct {
 	Label string   // display text for debugging/logging
 }
 
+// Focusable is the contract the focus system needs from anything it can land
+// on: where it is, what kind of control it is, and what a log line should call
+// it. A scene element and a measured node are two shapes of the same idea, so
+// BuildGraph reads them through this interface instead of reaching into their
+// fields — an overlay target, a synthetic chrome node or a future control only
+// has to answer these three questions to join the graph.
+type Focusable interface {
+	FocusRect() sdl.Rect
+	FocusType() string
+	FocusLabel() string
+}
+
+var (
+	_ Focusable = Element{}
+	_ Focusable = FocusNode{}
+)
+
+// FocusRect is the element's configured rectangle with the graph's own default
+// size for an element that leaves width or height out. It is the single
+// definition of that geometry: BuildGraph used to repeat the numbers inline.
+func (el Element) FocusRect() sdl.Rect {
+	return sdl.Rect{
+		X: el.X,
+		Y: el.Y,
+		W: getElementWidth(el, 1100),
+		H: getElementHeight(el, 200),
+	}
+}
+
+func (el Element) FocusType() string { return el.Type }
+
+// FocusLabel is the text the element shows, falling back to its type so a
+// button with no label still names itself in a log line.
+func (el Element) FocusLabel() string {
+	if el.Text != "" {
+		return el.Text
+	}
+	return el.Type
+}
+
+func (n FocusNode) FocusRect() sdl.Rect { return n.Rect }
+func (n FocusNode) FocusType() string   { return n.Type }
+func (n FocusNode) FocusLabel() string {
+	if n.Label != "" {
+		return n.Label
+	}
+	return n.Type
+}
+
+// focusNodeFrom adapts a scene element to a graph node through Focusable, so
+// the graph never reads element fields directly.
+func focusNodeFrom(el Element) FocusNode {
+	var f Focusable = el
+	return FocusNode{
+		Rect:  f.FocusRect(),
+		Type:  f.FocusType(),
+		Label: f.FocusLabel(),
+	}
+}
+
 // Chrome focus indices identify the buttons that are not config elements: the
 // top-bar back pill, status-bar clock, Apps pill and notification bell. They
 // join the focus graph so the D-pad and arrow keys can reach every button on
@@ -103,16 +163,9 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		if !isFocusableElement(el) {
 			continue
 		}
-		label := el.Text
-		if label == "" {
-			label = el.Type
-		}
-		nodes = append(nodes, FocusNode{
-			Index: i,
-			Rect:  sdl.Rect{X: el.X, Y: el.Y, W: getElementWidth(el, 1100), H: getElementHeight(el, 200)},
-			Type:  el.Type,
-			Label: label,
-		})
+		node := focusNodeFrom(el)
+		node.Index = i
+		nodes = append(nodes, node)
 	}
 	// Sort by Y then X for stable ordering.
 	sort.Slice(nodes, func(i, j int) bool {
@@ -366,6 +419,15 @@ func (fe *FocusEngine) Navigate(action Action) int {
 
 	if fe.graph == nil || fe.current < 0 || fe.current >= len(fe.graph.Nodes) {
 		return -1
+	}
+
+	// A D-pad mode chosen in Settings → Controls walks the screen's own
+	// controls (navmode.go); Classic, the top bar and Home keep the graph.
+	if next, handled := fe.navmodeNavigate(action); handled {
+		if next >= 0 {
+			fe.current = next
+		}
+		return fe.graph.Nodes[fe.current].Index
 	}
 
 	neighbors := fe.graph.Edges[fe.current]

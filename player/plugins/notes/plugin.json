@@ -1,8 +1,15 @@
 {
   "name": "notes",
-  "version": "1.0.0",
-  "description": "Keeps short notes in a text file and shows the newest one.",
+  "title": "Quick notes",
+  "version": "1.1.0",
+  "description": "Keeps short notes in a text file beside the script: shows the newest one and how many are saved. Add one with the custom variable notes_text.",
   "author": "JukaHub",
   "entry": "notes.sh",
-  "enabled": true
+  "icon": "edit",
+  "enabled": true,
+  "actions": [
+    {"id": "last", "label": "Newest note"},
+    {"id": "count", "label": "Count notes"},
+    {"id": "add", "label": "Add note", "hint": "Saves the text in the notes_text variable"}
+  ]
 }

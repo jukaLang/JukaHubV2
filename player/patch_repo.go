@@ -106,7 +106,7 @@ func ensureDefaultRepo() {
 				ID:          "jukahub-assets",
 				Name:        "JukaHub bundled assets",
 				Version:     versionString(nil),
-				Description: "Restore/update JukaHub's bundled fonts, background and default config from this install.",
+				Description: "Restore/update JukaHub's bundled Inter font, background and default config from this install.",
 				Root:        mustExecutableDir(),
 				Files: []PackageFile{
 					{Src: "Inter-Regular.ttf", Dest: "/Inter-Regular.ttf", SHA256: "", Executable: false},

@@ -147,91 +147,66 @@ func TestMoveSelectionEveryButtonReachable(t *testing.T) {
 	}
 }
 
-// TestRealToolsSceneEveryButtonReachable checks the actual Tools ("Misc")
-// scene from the live jukaconfig.json against the user-visible contract: every
-// button must be selectable with the keyboard. It pins the two reported moves
-// (Down from Terminal must reach Hardware Monitor, Right must reach the button
-// beside it) and then proves every button is reachable through key actions.
+// TestRealToolsSceneEveryButtonReachable checks the Tools hub built from the
+// live jukaconfig.json against the user-visible contract: every tool must be
+// selectable with the D-pad. (The hub replaced the config's "Misc" page, whose
+// buttons this test used to walk.) It pins the moves people make first — Down
+// from Watch Party lands on Local play, the next tile of the Together section,
+// Down again on the first toolkit, Right walks the toolkits and Up climbs back
+// row by row — and then proves every tile is reachable through the four
+// directions, dimmed tiles included.
 func TestRealToolsSceneEveryButtonReachable(t *testing.T) {
 	config, err := loadConfig("jukaconfig.json")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	idx := findSceneIndex(config, "Misc")
-	if idx < 0 {
-		t.Fatal("scene Misc (Tools) not found in jukaconfig.json")
+	ensureToolsHubScene(config)
+	if sceneIndexExact(config, "Misc") >= 0 {
+		t.Fatal("the retired Misc page is still in the loaded config")
 	}
-	scene := config.Scenes[idx]
+	for _, net := range []toolsHubNet{{}, {ip: "192.168.1.20", online: true}} {
+		tiles := toolsHubBuildTiles(config, net, toolsHubSlowValues{}, "")
+		for _, cols := range []int{3, 4, 6} {
+			g := toolsHubLayoutGrid(tiles, toolsHubGridSpec{width: 1216, cols: cols, tileH: 120, gap: 14, headingH: 38, sectionGap: 6})
+			center := func(i int) int32 { return g.rects[i].X + g.rects[i].W/2 }
 
-	var buttons []int
-	for i, el := range scene.Elements {
-		if el.Type == "button" {
-			buttons = append(buttons, i)
-		}
-	}
-	if len(buttons) < 2 {
-		t.Fatalf("Tools scene has %d buttons, want at least 2", len(buttons))
-	}
-
-	useNavScene(t, scene)
-	build := func() { focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene)) }
-
-	// Regression pair from the bug report: from the top-left button, Down must
-	// reach the button directly below and Right the button directly beside it.
-	build()
-	start := focusEngine.ElementIndex()
-	// Installing a graph preserves focus across reinstalls (by design), so
-	// pin the walk's starting node explicitly.
-	refocus := func() {
-		build()
-		if !focusEngine.SetByElementIndex(start) {
-			t.Fatalf("cannot focus start button %d", start)
-		}
-	}
-	startEl := scene.Elements[start]
-	below, right := -1, -1
-	for _, b := range buttons {
-		el := scene.Elements[b]
-		if el.X == startEl.X && el.Y > startEl.Y && (below < 0 || el.Y < scene.Elements[below].Y) {
-			below = b
-		}
-		if el.Y == startEl.Y && el.X > startEl.X && (right < 0 || el.X < scene.Elements[right].X) {
-			right = b
-		}
-	}
-	if below < 0 || right < 0 {
-		t.Fatalf("Tools scene is not a grid: below=%d right=%d", below, right)
-	}
-	refocus()
-	if got := focusEngine.Navigate(ActionNavigateDown); got != below {
-		t.Errorf("Down from %q selects %q, want %q", startEl.Text, scene.Elements[got].Text, scene.Elements[below].Text)
-	}
-	refocus()
-	if got := focusEngine.Navigate(ActionNavigateRight); got != right {
-		t.Errorf("Right from %q selects %q, want %q", startEl.Text, scene.Elements[got].Text, scene.Elements[right].Text)
-	}
-
-	// Every button must be reachable from the initial focus through key actions.
-	refocus()
-	reached := map[int]bool{focusEngine.ElementIndex(): true}
-	queue := []int{focusEngine.ElementIndex()}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, act := range []Action{ActionNavigateUp, ActionNavigateDown, ActionNavigateLeft, ActionNavigateRight} {
-			if !focusEngine.SetByElementIndex(cur) {
-				continue
+			// The page's own walk, from a fresh visit: focus starts on Watch Party.
+			toolbox, audit := toolsHubIndexOf(tiles, "toolbox"), toolsHubIndexOf(tiles, "audit")
+			localPlay := toolsHubIndexOf(tiles, "localplay")
+			p := newToolsHubPage()
+			p.grid = g
+			if !p.move(tiles, 0, 1) || p.cursor != localPlay {
+				t.Errorf("%d cols: Down from Watch Party selects %d, want Local play (%d)", cols, p.cursor, localPlay)
 			}
-			if next := focusEngine.Navigate(act); next >= 0 && !reached[next] {
-				reached[next] = true
-				queue = append(queue, next)
+			if !p.move(tiles, 0, 1) || p.cursor != toolbox {
+				t.Errorf("%d cols: Down from Local play selects %d, want Toolbox (%d)", cols, p.cursor, toolbox)
 			}
-		}
-	}
-	for _, b := range buttons {
-		if !reached[b] {
-			t.Errorf("button %q at (%d,%d) is not selectable with the keyboard",
-				scene.Elements[b].Text, scene.Elements[b].X, scene.Elements[b].Y)
+			if !p.move(tiles, 1, 0) || p.cursor != audit {
+				t.Errorf("%d cols: Right from Toolbox selects %d, want Audit toolkit (%d)", cols, p.cursor, audit)
+			}
+			// Up climbs into the Together row, then onto Watch Party.
+			p.move(tiles, 0, -1)
+			if !p.move(tiles, 0, -1) || p.cursor != 0 {
+				t.Errorf("%d cols: Up twice from the toolkits selects %d, want Watch Party (0)", cols, p.cursor)
+			}
+
+			reached := map[int]bool{0: true}
+			queue := []int{0}
+			for len(queue) > 0 {
+				cur := queue[0]
+				queue = queue[1:]
+				for _, d := range [][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}} {
+					if next, ok := toolsHubGridMove(g, cur, d[0], d[1], center(cur)); ok && !reached[next] {
+						reached[next] = true
+						queue = append(queue, next)
+					}
+				}
+			}
+			for i, tile := range tiles {
+				if !reached[i] {
+					t.Errorf("%d cols, net %+v: tile %q is not selectable with the D-pad", cols, net, tile.label)
+				}
+			}
 		}
 	}
 }

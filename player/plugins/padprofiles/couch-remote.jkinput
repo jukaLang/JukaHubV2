@@ -1,0 +1,10 @@
+# Couch remote: a control profile from the Pad profiles plugin.
+# Duplicate it on the Control profiles screen to make your own version.
+profile: Couch remote
+description: Docked on a TV: the shoulders page through lists, hold Y to search, hold Start for Quick Settings
+map:
+  l1               -> action:page_up
+  r1               -> action:page_down
+  y hold 600ms     -> action:search
+  start hold 600ms -> action:quick_settings
+  select double    -> action:screenshot

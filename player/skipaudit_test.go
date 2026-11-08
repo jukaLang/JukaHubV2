@@ -63,6 +63,11 @@ var skipGates = []string{
 	"this machine has the handheld SD card mount",
 	"this device manages startup apps itself",
 
+	// AF_UNIX datagram sockets are POSIX-only. The wpa_supplicant control
+	// interface is one, so the Windows build has no such backend and the probe
+	// cannot open the datagram server it talks to.
+	"unixgram",
+
 	// Network: no listener, no route, or the loopback port is already taken.
 	"no LAN address on this machine",
 	"cannot listen",

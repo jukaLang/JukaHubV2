@@ -356,12 +356,13 @@ func TestClipboardCopyFromOpenKeyboard(t *testing.T) {
 	}
 }
 
-// pasted text in the terminal obeys the terminal's printable-ASCII typing
-// rule, whatever the system clipboard held.
+// pasted text in the terminal obeys the terminal's typing rule, whatever the
+// system clipboard held: printable characters (accents included) are kept
+// whole, control characters such as the trailing newline are dropped.
 func TestClipboardPasteRespectsTerminalTypingRule(t *testing.T) {
 	resetTerm(t)
 	termInsertText("café\n")
-	if term.input != "caf" || term.cursor != 3 {
-		t.Fatalf("termInsertText produced %q (cursor %d), want \"caf\"", term.input, term.cursor)
+	if term.input != "café" || term.cursor != len("café") {
+		t.Fatalf("termInsertText produced %q (cursor %d), want \"café\"", term.input, term.cursor)
 	}
 }

@@ -1,8 +1,15 @@
 {
   "name": "clock",
-  "version": "1.0.0",
+  "title": "Clock",
+  "version": "1.1.0",
   "description": "Shows the time, the date or the device uptime in a toast.",
   "author": "JukaHub",
   "entry": "clock.sh",
-  "enabled": true
+  "icon": "clock",
+  "enabled": true,
+  "actions": [
+    {"id": "both", "label": "Date and time"},
+    {"id": "now", "label": "Time"},
+    {"id": "uptime", "label": "Uptime"}
+  ]
 }

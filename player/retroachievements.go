@@ -792,7 +792,9 @@ func raRunFetch(id int, creds raCredentials) {
 		return
 	}
 	raState.loading = false
+	var previous raCache
 	if err == nil {
+		previous = raState.cache
 		raState.cache = cache
 		raState.loaded = true
 		raState.err = ""
@@ -803,6 +805,11 @@ func raRunFetch(id int, creds raCredentials) {
 	raState.mu.Unlock()
 
 	if err == nil {
+		// Unlocks this sync brought celebrate like JukaHub's own trophies
+		// (trophy_celebrate.go); the overlay waits until JukaHub is on screen.
+		for _, a := range trophyRANewUnlocks(previous, cache) {
+			trophyCelebrateRA(a.Title, a.GameTitle, a.Points)
+		}
 		if saveErr := raSaveCache(cache); saveErr != nil {
 			logRA("cannot write cache: %v", saveErr)
 		}

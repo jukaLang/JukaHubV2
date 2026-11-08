@@ -1,37 +1,39 @@
 package main
 
-// wifi_ui.go — the Wi-Fi network picker.
+// wifi_ui.go — the Wi-Fi state machine behind the Wi-Fi page (wifiscreen.go).
 //
-// The panel is the first-party replacement for the firmware's settings screen:
+// The page is the first-party replacement for the firmware's settings screen:
 // scan, join (passphrase typed on the on-screen keyboard), reconnect a saved
-// network without retyping its password, disconnect, and forget. It is modal
-// and controller-first, matching the rest of the app's overlays.
+// network without retyping its password, disconnect, forget, and switch the
+// radio. This file holds what the page shows and the work behind it; the page
+// owns the drawing and the input.
 //
-// Everything that touches wpa_cli runs on a worker goroutine, exactly like the
-// Quick Settings probe: a wedged supplicant must not freeze the render thread.
-// Results are handed back through a one-slot channel that the render loop
-// drains, so the panel's state is only ever written from the event thread.
+// Everything that touches wpa_cli (or netsh on Windows) runs on a worker
+// goroutine, exactly like the Quick Settings probe: a wedged supplicant must
+// not freeze the render thread. Results are handed back through a one-slot
+// channel that the page drains every frame, so the state is only ever written
+// from the event thread.
 
 import (
 	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
 )
 
 const (
-	// wifiForgetConfirmWindow is how long the first SELECT press stays armed.
+	// wifiForgetConfirmWindow is how long the first Forget press stays armed.
 	wifiForgetConfirmWindow = 5 * time.Second
-	// wifiPanelMaxRows keeps the list readable on a 720p screen.
-	wifiPanelMaxRows = 9
-	// wifiAutoRefresh re-reads status while the panel is open, so a drop or a
+	// wifiAutoRefresh re-reads status while the page is open, so a drop or a
 	// connection made elsewhere is reflected without a manual rescan. It never
 	// triggers a scan: that would cost battery for no extra information.
 	wifiAutoRefresh = 15 * time.Second
 )
 
 type wifiPanelState struct {
+	// open is the retired picker overlay's flag. The picker is the Wi-Fi page
+	// now and nothing sets it; it stays false and is kept only because the
+	// modal audits (ambient.go, shoulders.go, updateprompt.go) still list it.
 	open      bool
 	cursor    int
 	networks  []wifiNetwork
@@ -41,7 +43,7 @@ type wifiPanelState struct {
 	radioOK   bool
 	available bool
 	// startable: no backend yet, but this image has a radio and a switch, so
-	// the panel opens in "turn Wi-Fi on" mode instead of refusing. The Brick's
+	// the page opens in "turn Wi-Fi on" mode instead of refusing. The Brick's
 	// image starts its supplicant from the firmware's own Wi-Fi menu, so a
 	// device that never had Wi-Fi on there has no control socket to find and
 	// the one control that could create it used to be unreachable.
@@ -59,51 +61,14 @@ type wifiPanelState struct {
 	confirmForget string
 	confirmAt     time.Time
 
-	// diagOpen shows the diagnostics sheet instead of the network list. It is a
-	// sub-view, not a second panel: B steps back to the list, and the sheet is
-	// reachable while the list itself cannot load — the state it diagnoses.
-	diagOpen   bool
-	diagScroll int
-	diag       wifiDiagReport
+	// diagOpen is true while the diagnostics sheet is open on the page. The
+	// sheet is reachable while the list itself cannot load — the state it
+	// diagnoses.
+	diagOpen bool
+	diag     wifiDiagReport
 }
 
 var wifiPanel wifiPanelState
-
-// wifiRowRects maps a tap back to a row; only touched on the event thread.
-var wifiRowRects []sdl.Rect
-
-// wifiRowFirst is the network index of wifiRowRects[0]. The list scrolls with
-// the cursor, so a tapped slot is first+slot; using the slot alone joined (or
-// asked a password for) a network further up the list.
-var wifiRowFirst int
-
-var wifiPanelRect sdl.Rect
-
-// wifiActionID is one tappable row of action pills at the bottom of the panel.
-// The picker is reachable by touch from the status bar, so every action the pad
-// can perform (rescan, reconnect, disconnect, forget, close) also needs a
-// button: the footer hints alone are not usable with a finger.
-type wifiActionID int
-
-const (
-	wifiActionRescan wifiActionID = iota
-	wifiActionReconnect
-	wifiActionDisconnect
-	wifiActionForget
-	wifiActionDiag
-	wifiActionDiagRefresh
-	wifiActionDiagCopy
-	wifiActionDiagBack
-	wifiActionClose
-)
-
-type wifiActionHit struct {
-	id   wifiActionID
-	rect sdl.Rect
-}
-
-// wifiActionRects is rebuilt on every frame, like wifiRowRects.
-var wifiActionRects []wifiActionHit
 
 // wifiPendingSSID is the network whose password the keyboard is typing.
 var wifiPendingSSID string
@@ -139,13 +104,13 @@ type wifiUpdate struct {
 var (
 	wifiUpdates     = make(chan wifiUpdate, 1)
 	wifiWorkPending bool
-	// wifiGeneration invalidates results from a previous visit to the panel
+	// wifiGeneration invalidates results from a previous visit to the page
 	// (or from a scan superseded by a newer one). A stale worker must not
 	// overwrite the list the user is looking at.
 	wifiGeneration uint64
 )
 
-// wifiStartWork runs fn off the event thread and marks the panel busy. A
+// wifiStartWork runs fn off the event thread and marks the page busy. A
 // second request while one is in flight is ignored: scanning twice at once
 // just makes both slower.
 func wifiStartWork(label string, fn func() wifiUpdate) {
@@ -159,23 +124,23 @@ func wifiStartWork(label string, fn func() wifiUpdate) {
 	go func() {
 		u := fn()
 		u.gen = gen
-		// Block rather than drop: a dropped result would leave the panel busy
+		// Block rather than drop: a dropped result would leave the page busy
 		// forever (the flag is only cleared by the drain), and a newer worker
 		// would silently lose its result to a stale one already in the slot.
-		// The render loop drains once per frame, and closing the panel drains
-		// the slot too, so the wait is bounded.
+		// The page drains once per frame, and a new visit drains the slot
+		// too, so the wait is bounded.
 		wifiUpdates <- u
 	}()
 }
 
-// wifiDrainUpdates applies finished work. Called from the render loop.
+// wifiDrainUpdates applies finished work. Called from the page's render.
 func wifiDrainUpdates() {
 	for {
 		select {
 		case u := <-wifiUpdates:
 			if u.gen != wifiGeneration {
-				// A worker from a closed or superseded visit: discard it without
-				// touching the busy flag owned by the current one.
+				// A worker from an ended or superseded visit: discard it
+				// without touching the busy flag owned by the current one.
 				continue
 			}
 			wifiWorkPending = false
@@ -235,7 +200,7 @@ func wifiApplySnapshot(snap wifiSnapshot) {
 	wifiPanel.networks = snap.Networks
 	wifiPanel.radioOn = snap.RadioOn
 	wifiPanel.radioOK = snap.RadioOK
-	// A snapshot that could be read is proof the backend answers, so a panel
+	// A snapshot that could be read is proof the backend answers, so a page
 	// opened in "turn Wi-Fi on" mode promotes itself to the real list.
 	wifiPanel.available = true
 	wifiPanel.startable = false
@@ -259,21 +224,23 @@ func wifiApplySnapshot(snap wifiSnapshot) {
 	}
 }
 
-// ── Opening / closing ──────────────────────────────────────────────────────
+// ── Visits ────────────────────────────────────────────────────────────────
 
-// openWiFiPanel shows the picker and starts a scan. Other modals are closed so
-// two lists never stack on each other.
+// openWiFiPanel opens the Wi-Fi page. It is the picker overlay's old name,
+// kept so callers written against it still land on the page; new code calls
+// wifiScrOpen with its config.
 func openWiFiPanel() {
-	qs.open = false
-	processPanel.open = false
-	toolsPanel.open = false
-	wifiRowRects = nil
-	wifiActionRects = nil
-	wifiPanel = wifiPanelState{open: true}
-	// Anything still in flight belongs to the previous visit.
+	wifiScrOpen(appConfig)
+}
+
+// wifiScrBeginVisit starts a fresh visit: anything still in flight belongs to
+// the previous one, the interface is looked up again and a scan starts.
+func wifiScrBeginVisit() {
+	diag := wifiPanel.diag
+	wifiPanel = wifiPanelState{diag: diag}
 	wifiGeneration++
 	wifiWorkPending = false
-	// Opening the panel is the moment a person would have plugged an adapter
+	// Opening the page is the moment a person would have plugged an adapter
 	// in, so the supplicant is asked again instead of trusting a cached answer
 	// for the rest of its minute.
 	resetWiFiInterfaceCache()
@@ -284,21 +251,30 @@ func openWiFiPanel() {
 	wifiPanel.startable = !wifiPanel.available && wifiEntryReachable()
 	if !wifiPanel.available {
 		if wifiPanel.startable {
-			// The picker can still switch the radio on and start the supplicant,
-			// so it opens on that instead of turning the user away.
+			// The page can still switch the radio on and start the
+			// supplicant, so it opens on that instead of turning the user away.
 			wifiPanel.radioOn, wifiPanel.radioOK = wifiRadioState()
-			PlayActivateSound()
 			return
 		}
 		wifiPanel.err = detail
-		PlayBackSound()
 		return
 	}
-	PlayActivateSound()
 	// Discard anything a previous visit left behind before asking for fresh
 	// state, so an old list cannot appear as the result of this scan.
 	wifiDrainDiscarded()
 	wifiRefreshAsync(true)
+}
+
+// wifiScrEndVisit ends a visit: in-flight work is invalidated, so its toast
+// cannot appear over the screen the user went back to, and a typed but
+// unsubmitted password is dropped.
+func wifiScrEndVisit() {
+	wifiPanel.confirmForget = ""
+	wifiPanel.diagOpen = false
+	wifiPendingSSID = ""
+	wifiPassphraseBuffer = ""
+	wifiGeneration++
+	wifiDrainDiscarded()
 }
 
 // wifiDrainDiscarded empties the result channel without applying it.
@@ -319,20 +295,6 @@ func wifiSupport() (bool, string) {
 		return true, ""
 	}
 	return false, wifiUnavailableReason()
-}
-
-func closeWiFiPanel() {
-	wifiPanel.open = false
-	wifiRowRects = nil
-	wifiActionRects = nil
-	wifiPanel.confirmForget = ""
-	wifiPendingSSID = ""
-	wifiPassphraseBuffer = ""
-	// Invalidate in-flight work: its toast must not appear over the scene the
-	// user returned to.
-	wifiGeneration++
-	wifiDrainDiscarded()
-	PlayBackSound()
 }
 
 // wifiRefreshAsync reloads the list. scan also asks the supplicant for a new
@@ -360,7 +322,7 @@ func wifiRefreshAsync(scan bool) {
 			}
 			return wifiUpdate{err: firstLine(err.Error())}
 		}
-		// A refused scan costs the list, not the panel: the connected network
+		// A refused scan costs the list, not the page: the connected network
 		// and the saved entries are still the truth about this device.
 		return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanErr: scanErr, scanned: true}
 	})
@@ -372,6 +334,7 @@ func wifiMove(delta int) {
 	if len(wifiPanel.networks) == 0 {
 		return
 	}
+	before := wifiPanel.cursor
 	wifiPanel.cursor += delta
 	if wifiPanel.cursor < 0 {
 		wifiPanel.cursor = 0
@@ -380,7 +343,9 @@ func wifiMove(delta int) {
 		wifiPanel.cursor = len(wifiPanel.networks) - 1
 	}
 	wifiPanel.confirmForget = ""
-	PlayNavSound()
+	if wifiPanel.cursor != before {
+		PlayNavSound()
+	}
 }
 
 func wifiSelected() *wifiNetwork {
@@ -422,8 +387,8 @@ func wifiActivate() {
 		return
 	}
 	if n.Active && wifiPanel.status.Connected {
-		// Tapping the row that already shows CONNECTED reconnects it. The
-		// common case (it says connected but nothing loads) is a stale
+		// Pressing the network that already shows Connected reconnects it.
+		// The common case (it says connected but nothing loads) is a stale
 		// association, and a touch user has no other way to ask for a retry.
 		wifiReconnectAsync(n.SSID)
 		return
@@ -456,7 +421,7 @@ func wifiSubmitPassphrase(pass string) {
 }
 
 // wifiEnableRadioAsync turns the radio on off the event thread: nmcli and
-// rfkill can each take seconds on a slow boot, and a frozen panel would look
+// rfkill can each take seconds on a slow boot, and a frozen page would look
 // like the A press did nothing.
 func wifiEnableRadioAsync() {
 	if wifiPanel.busy {
@@ -472,6 +437,22 @@ func wifiEnableRadioAsync() {
 		// Give the interface a moment to come up before scanning.
 		time.Sleep(600 * time.Millisecond)
 		return wifiBackendUpdate("Wi-Fi on")
+	})
+}
+
+// wifiDisableRadioAsync switches the radio off, the page's header switch. The
+// supplicant stops answering once the radio is down, so the result is built
+// here instead of read back.
+func wifiDisableRadioAsync() {
+	if wifiPanel.busy {
+		return
+	}
+	wifiStartWork("Turning Wi-Fi off…", func() wifiUpdate {
+		if err := setWifiEnabled(false); err != nil {
+			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
+		}
+		snap := wifiSnapshot{RadioOn: false, RadioOK: true}
+		return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanned: true, msg: "Wi-Fi off"}
 	})
 }
 
@@ -497,7 +478,7 @@ func wifiBackendUpdate(msg string) wifiUpdate {
 		ensureWifiBackend()
 	}
 	if !wifiControlAvailable() {
-		// No route still: report the reason the picker knows, so a radio that
+		// No route still: report the reason the page knows, so a radio that
 		// refused to come up says why instead of looking like a dead button.
 		return wifiUpdate{kind: wifiUpdateState, err: firstLine(wifiUnavailableReason())}
 	}
@@ -555,7 +536,7 @@ func wifiSelectSavedAsync(id int) {
 
 // wifiPasswordRejected marks the one join failure the user can fix by
 // retyping: a stored password the router no longer accepts. Without this the
-// panel only toasted the error forever, and selecting the row again retried
+// page only toasted the error forever, and selecting the network again retried
 // the same rejected key with no way to enter a new one.
 func wifiPasswordRejected(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "password was rejected")
@@ -574,7 +555,7 @@ func wifiJoinMessage(res wifiJoinResult) string {
 }
 
 // wifiReconnectSelected re-establishes the current connection with the saved
-// key. It backs the Reconnect pill and the reconnect on the active row.
+// key. It backs the details sheet's Reconnect.
 func wifiReconnectSelected() {
 	if wifiPanel.busy || !wifiPanel.available {
 		return
@@ -645,8 +626,8 @@ func wifiForgetSelected() {
 		wifiPanel.confirmForget = n.SSID
 		wifiPanel.confirmAt = time.Now()
 		PlayNavSound()
-		// "Press again" rather than "Press SELECT": the same action is a touch
-		// pill now, and the second tap is the confirmation either way.
+		// "Press again" rather than a button name: the same action is a touch
+		// pill too, and the second tap is the confirmation either way.
 		ShowToast("Press again to forget "+n.SSID, ToastKindWarning)
 		return
 	}
@@ -664,178 +645,10 @@ func wifiForgetSelected() {
 	})
 }
 
-// ── Input ──────────────────────────────────────────────────────────────────
+// ── Status ─────────────────────────────────────────────────────────────────
 
-// handleWiFiKey consumes every key while the panel is open. The password
-// keyboard is handled earlier in the chain, so it keeps its keys.
-func handleWiFiKey(e *sdl.KeyboardEvent, config *Config) bool {
-	if e == nil || e.Type != sdl.KEYDOWN || !wifiPanel.open || virtualKeyboardActive {
-		return false
-	}
-	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
-		wifiPanel.confirmForget = ""
-	}
-	// The diagnostics sheet owns the keys while it is open: it scrolls, it
-	// refreshes, and B steps back to the list instead of closing the picker.
-	if wifiPanel.diagOpen {
-		switch e.Keysym.Sym {
-		case sdl.K_UP:
-			wifiDiagScroll(-1)
-		case sdl.K_DOWN:
-			wifiDiagScroll(1)
-		case sdl.K_PAGEUP:
-			wifiDiagScroll(-5)
-		case sdl.K_PAGEDOWN:
-			wifiDiagScroll(5)
-		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_r, sdl.K_y:
-			wifiDiagRefreshAsync()
-		case sdl.K_c:
-			wifiDiagCopyReport()
-		case sdl.K_i, sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-			closeWiFiDiagnostics()
-		}
-		return true
-	}
-	switch e.Keysym.Sym {
-	case sdl.K_UP:
-		wifiMove(-1)
-	case sdl.K_DOWN:
-		wifiMove(1)
-	case sdl.K_PAGEUP:
-		wifiMove(-5)
-	case sdl.K_PAGEDOWN:
-		wifiMove(5)
-	case sdl.K_RETURN, sdl.K_SPACE:
-		wifiActivate()
-	case sdl.K_y, sdl.K_r:
-		wifiRefreshAsync(true)
-	case sdl.K_x, sdl.K_d:
-		wifiDisconnectSelected()
-	case sdl.K_c:
-		wifiReconnectSelected()
-	case sdl.K_f:
-		wifiForgetSelected()
-	case sdl.K_i:
-		openWiFiDiagnostics()
-	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		wifiPanelBack()
-	}
-	return true
-}
-
-// wifiPanelBack is B / Escape. With a forget armed the footer reads
-// "B Cancel", so the first press disarms it instead of closing the panel.
-func wifiPanelBack() {
-	if wifiPanel.confirmForget != "" {
-		wifiPanel.confirmForget = ""
-		PlayBackSound()
-		return
-	}
-	closeWiFiPanel()
-}
-
-// ctrlWiFi is called before every other controller overlay.
-func ctrlWiFi(e *sdl.ControllerButtonEvent, config *Config) bool {
-	if e == nil || !wifiPanel.open || virtualKeyboardActive {
-		return false
-	}
-	if wifiPanel.diagOpen {
-		switch e.Button {
-		case sdl.CONTROLLER_BUTTON_DPAD_UP:
-			wifiDiagScroll(-1)
-		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-			wifiDiagScroll(1)
-		case sdl.CONTROLLER_BUTTON_A:
-			wifiDiagRefreshAsync()
-		case sdl.CONTROLLER_BUTTON_Y:
-			wifiDiagCopyReport()
-		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-			closeWiFiDiagnostics()
-		}
-		return true
-	}
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		wifiMove(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		wifiMove(1)
-	case sdl.CONTROLLER_BUTTON_A:
-		wifiActivate()
-	case sdl.CONTROLLER_BUTTON_Y:
-		wifiRefreshAsync(true)
-	case sdl.CONTROLLER_BUTTON_X:
-		wifiDisconnectSelected()
-	case sdl.CONTROLLER_BUTTON_BACK:
-		wifiForgetSelected()
-	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		// The shoulder is free in this panel and is the pad's way in: the
-		// Diagnostics pill below the list is touch-only.
-		openWiFiDiagnostics()
-	case sdl.CONTROLLER_BUTTON_B:
-		wifiPanelBack()
-	}
-	return true
-}
-
-// wifiRunAction is the single entry point for the panel's actions, shared by
-// the tappable pills and the keyboard/controller handlers.
-func wifiRunAction(id wifiActionID) {
-	switch id {
-	case wifiActionRescan:
-		wifiRefreshAsync(true)
-	case wifiActionReconnect:
-		wifiReconnectSelected()
-	case wifiActionDisconnect:
-		wifiDisconnectSelected()
-	case wifiActionForget:
-		wifiForgetSelected()
-	case wifiActionDiag:
-		openWiFiDiagnostics()
-	case wifiActionDiagRefresh:
-		wifiDiagRefreshAsync()
-	case wifiActionDiagCopy:
-		wifiDiagCopyReport()
-	case wifiActionDiagBack:
-		closeWiFiDiagnostics()
-	case wifiActionClose:
-		closeWiFiPanel()
-	}
-}
-
-// handleWiFiMouse selects and activates a row, presses an action pill, or
-// closes the panel when the click lands outside it.
-func handleWiFiMouse(mx, my int32, config *Config) bool {
-	if !wifiPanel.open {
-		return false
-	}
-	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
-		wifiPanel.confirmForget = ""
-	}
-	// Pills first: they sit below the list, but a tap that hits one must never
-	// be read as a row click if the two ever get close.
-	for _, hit := range wifiActionRects {
-		if hit.rect.W > 0 && pointInRect(mx, my, hit.rect) {
-			wifiRunAction(hit.id)
-			return true
-		}
-	}
-	for i, r := range wifiRowRects {
-		if r.W > 0 && pointInRect(mx, my, r) {
-			wifiPanel.cursor = wifiRowFirst + i
-			wifiActivate()
-			return true
-		}
-	}
-	if wifiPanelRect.W > 0 && !pointInRect(mx, my, wifiPanelRect) {
-		closeWiFiPanel()
-	}
-	return true
-}
-
-// ── Rendering ──────────────────────────────────────────────────────────────
-
-// wifiStatusLine is the header's one-line truth: backend problem first, then
-// work in flight, then the connection.
+// wifiStatusLine is the page header's one-line truth: backend problem first,
+// then work in flight, then the connection.
 func wifiStatusLine() (string, sdl.Color) {
 	switch {
 	case wifiPanel.startable && wifiPanel.radioOK && !wifiPanel.radioOn:
@@ -864,12 +677,6 @@ func wifiStatusLine() (string, sdl.Color) {
 	return "Not connected", ColorTextSecondary()
 }
 
-// wifiRowTag is one right-aligned state label on a network row.
-type wifiRowTag struct {
-	text  string
-	color sdl.Color
-}
-
 func wifiSignalColor(bars int) sdl.Color {
 	switch {
 	case bars >= 4:
@@ -882,7 +689,8 @@ func wifiSignalColor(bars int) sdl.Color {
 	return sdl.Color{R: 220, G: 120, B: 100, A: 235}
 }
 
-// drawWiFiBars draws four ascending bars filled to the signal's strength.
+// drawWiFiBars draws four ascending bars filled to the signal's strength; the
+// unlit bars are the glass ink, so they read on light and dark themes alike.
 func drawWiFiBars(renderer *sdl.Renderer, x, cy int32, bars int) {
 	if bars < 1 {
 		bars = 1
@@ -897,286 +705,9 @@ func drawWiFiBars(renderer *sdl.Renderer, x, cy int32, bars int) {
 		by := cy + 9 - h
 		c := col
 		if i >= bars {
-			c = sdl.Color{R: 70, G: 78, B: 96, A: 170}
+			c = glassA(52)
 		}
 		fillRoundedRect(renderer, bx, by, 6, h, 1, c)
-	}
-}
-
-// renderWiFiPanel draws the picker over the current scene.
-func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
-	if !wifiPanel.open || renderer == nil {
-		return
-	}
-	wifiDrainUpdates()
-	// Rebuilt below; clearing here keeps a pill from staying tappable on a
-	// frame where the bar is not drawn (the backend became unavailable).
-	wifiActionRects = wifiActionRects[:0]
-	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
-		wifiPanel.confirmForget = ""
-	}
-	if wifiPanel.diagOpen {
-		// The sheet has its own probes to keep current, and it must refresh even
-		// when the list cannot load, so it does not go through the list's
-		// available check.
-		if !wifiWorkPending && !wifiPanel.busy &&
-			(wifiPanel.diag.At.IsZero() || time.Since(wifiPanel.diag.At) > wifiAutoRefresh) {
-			wifiDiagRefreshAsync()
-		}
-		renderWiFiDiagnostics(renderer, config)
-		return
-	}
-	if wifiPanel.available && !wifiPanel.busy && !wifiWorkPending &&
-		(wifiPanel.loadedAt.IsZero() || time.Since(wifiPanel.loadedAt) > wifiAutoRefresh) {
-		wifiRefreshAsync(false)
-	}
-
-	font, _ := getCachedFont(config, "small")
-	medium, _ := getCachedFont(config, "medium")
-	if font == nil {
-		return
-	}
-	if medium == nil {
-		medium = font
-	}
-	smallH := int32(font.Height())
-	const padX = OverlayPadX
-
-	rowH := smallH + 22
-
-	// The title band is the shared page header, built before the card is sized so
-	// the panel and the bar that fills it measure the same height. The status line
-	// keeps its own ink: a dead radio still warns in amber under the title.
-	line, lineColor := wifiStatusLine()
-	header := UIPanelHeader("Wi-Fi", line, "settings")
-	header.SubtitleColor = StatusInk(lineColor)
-	headerH := UIPanelHeaderBand(config, header, 14)
-	footerH := 20 + smallH
-	// Touch users need visible buttons for rescan/reconnect/disconnect/forget;
-	// the hint line below stays for the pad. The bar is always reserved, because
-	// Diagnostics must stay reachable when no backend answered — that is the
-	// state the sheet exists for.
-	actionH := smallH + 18
-
-	// Fit the list to the screen before laying the panel out: on a 480p
-	// handheld the same panel must still show its header, actions and footer.
-	maxListH := screenHeight - headerH - footerH - actionH - 48
-	visible := len(wifiPanel.networks)
-	if visible < 1 {
-		visible = 1
-	}
-	if visible > wifiPanelMaxRows {
-		visible = wifiPanelMaxRows
-	}
-	for visible > 1 && int32(visible)*rowH > maxListH {
-		visible--
-	}
-
-	panelW := int32(820)
-	if panelW > screenWidth-48 {
-		panelW = screenWidth - 48
-	}
-	panelH := headerH + int32(visible)*rowH + actionH + footerH
-	if panelH > screenHeight-40 {
-		panelH = screenHeight - 40
-	}
-	panelX := (screenWidth - panelW) / 2
-	panelY := (screenHeight - panelH) / 2
-	wifiPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-
-	drawOverlayScrim(renderer)
-
-	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
-
-	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-	UIPageHeaderDraw(renderer, config, header)
-
-	// List window: keep the cursor in view without moving a short list.
-	first := 0
-	if wifiPanel.cursor >= visible {
-		first = wifiPanel.cursor - visible + 1
-	}
-	listY := panelY + headerH
-	wifiRowRects = wifiRowRects[:0]
-	wifiRowFirst = first
-	if len(wifiPanel.networks) == 0 {
-		empty := "Press Y to scan for nearby networks"
-		switch {
-		case !wifiPanel.available:
-			empty = wifiPanel.detail
-			if wifiPanel.startable && wifiPanel.radioOK && !wifiPanel.radioOn {
-				empty = "Turn Wi-Fi on to see nearby networks"
-			}
-		case wifiPanel.radioOK && !wifiPanel.radioOn:
-			empty = "Turn Wi-Fi on to see nearby networks"
-		}
-		renderText(renderer, config, font, ellipsize(font, empty, panelW-2*padX),
-			ColorTextTertiary(), panelX+padX, listY+10)
-	} else {
-		focusColor := installHighlight()
-		rowW := panelW - 2*padX
-		rowY := listY
-		for i := 0; i < visible; i++ {
-			idx := first + i
-			if idx >= len(wifiPanel.networks) {
-				break
-			}
-			n := wifiPanel.networks[idx]
-			rect := sdl.Rect{X: panelX + padX, Y: rowY, W: rowW, H: rowH - 4}
-			wifiRowRects = append(wifiRowRects, rect)
-			focused := idx == wifiPanel.cursor
-			if focused {
-				fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(focusColor, 46))
-				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, focusColor)
-			}
-			textColor := ColorTextSecondary()
-			if focused {
-				textColor = ColorTextPrimary()
-			}
-			cy := rect.Y + rect.H/2
-			// statusWiFiSignal is the meter's own source chain, so the connected
-			// row cannot disagree with the corner it was opened from.
-			drawWiFiBars(renderer, rect.X+12, cy, wifiRowBars(n, statusWiFiSignal))
-			ssidX := rect.X + 52
-			tagW := int32(0)
-			tags := make([]wifiRowTag, 0, 3)
-			if n.Active {
-				tags = append(tags, wifiRowTag{"CONNECTED", accentColor})
-			}
-			if n.Saved {
-				tags = append(tags, wifiRowTag{"SAVED", ColorTextTertiary()})
-			}
-			if n.Secured {
-				tags = append(tags, wifiRowTag{"SECURE", ColorTextTertiary()})
-			}
-			for _, tag := range tags {
-				tw, _, _ := font.SizeUTF8(tag.text)
-				tagW += int32(tw) + 14
-			}
-			nameW := rect.X + rect.W - 16 - tagW - ssidX
-			if nameW < 40 {
-				nameW = 40
-			}
-			renderText(renderer, config, font, ellipsize(font, n.SSID, nameW),
-				textColor, ssidX, rect.Y+(rect.H-smallH)/2)
-			tagX := rect.X + rect.W - 14
-			for i := len(tags) - 1; i >= 0; i-- {
-				tag := tags[i]
-				tw, _, _ := font.SizeUTF8(tag.text)
-				tagX -= int32(tw)
-				renderText(renderer, config, font, tag.text, tag.color,
-					tagX, rect.Y+(rect.H-smallH)/2)
-				tagX -= 14
-			}
-			rowY += rowH
-		}
-	}
-
-	if actionH > 0 {
-		wifiPanelActionBar(renderer, config, font, panelX,
-			panelY+panelH-footerH-actionH, panelW, actionH, smallH)
-	}
-
-	footer := hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Disconnect"},
-		FooterHint{"Y", "Rescan"}, FooterHint{"Select", "Forget"}, FooterHint{"B", "Close"})
-	// The diagnostics hint is added only when the row still fits: on the 4:3
-	// canvas one more hint runs the line off both edges of the panel.
-	withDiag := hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Disconnect"},
-		FooterHint{"Y", "Rescan"}, FooterHint{"L1", "Info"}, FooterHint{"B", "Close"})
-	if dw, _, _ := font.SizeUTF8(withDiag); int32(dw) <= panelW-2*padX {
-		footer = withDiag
-	}
-	footerColor := ColorTextTertiary()
-	switch {
-	case wifiPanel.confirmForget != "":
-		footer = hintLine(FooterHint{Label: "Select again to forget " + wifiPanel.confirmForget},
-			FooterHint{"B", "Cancel"})
-		footerColor = ColorToastWarn
-	case !wifiPanel.available:
-		footer = hintLine(FooterHint{"L1", "Info"}, FooterHint{"B", "Close"})
-	}
-	fw, _, _ := font.SizeUTF8(footer)
-	renderText(renderer, config, font, footer, footerColor,
-		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+4)
-}
-
-// wifiPanelActionBar draws the tappable actions and records their rects. The
-// set follows the state: a disconnected radio has nothing to reconnect or
-// disconnect, and an unsaved row has nothing to forget, so those pills are not
-// drawn at all rather than greyed out and clickable-looking.
-func wifiPanelActionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font,
-	x, y, w, h, textH int32) {
-	wifiActionRects = wifiActionRects[:0]
-	if renderer == nil || font == nil || h <= 0 || w <= 0 {
-		return
-	}
-	type pill struct {
-		id    wifiActionID
-		label string
-	}
-	var pills []pill
-	if wifiPanel.diagOpen {
-		pills = []pill{{wifiActionDiagRefresh, "Refresh"}, {wifiActionDiagCopy, "Copy"}, {wifiActionDiagBack, "Back"}}
-	} else {
-		if wifiPanel.available {
-			pills = append(pills, pill{wifiActionRescan, "Rescan"})
-			if wifiPanel.status.Connected {
-				pills = append(pills,
-					pill{wifiActionReconnect, "Reconnect"},
-					pill{wifiActionDisconnect, "Disconnect"})
-			}
-			if n := wifiSelected(); n != nil && n.Saved {
-				label := "Forget"
-				if wifiPanel.confirmForget == n.SSID {
-					// The second press is the confirmation, so the pill says so.
-					label = "Forget?"
-				}
-				pills = append(pills, pill{wifiActionForget, label})
-			}
-		}
-		// Diagnostics is offered in every state: with no backend there is
-		// nothing else this panel can do, and the sheet says why.
-		pills = append(pills, pill{wifiActionDiag, "Diagnostics"}, pill{wifiActionClose, "Close"})
-	}
-
-	const gap = int32(8)
-	padX := int32(14)
-	// A 4:3 handheld has less room than the 1280 canvas, so tighten the pills
-	// rather than letting the row spill out of the panel.
-	widths := make([]int32, len(pills))
-	total := int32(0)
-	for i, p := range pills {
-		tw, _, _ := font.SizeUTF8(p.label)
-		widths[i] = int32(tw) + 2*padX
-		total += widths[i]
-	}
-	total += gap * int32(len(pills)-1)
-	if total > w-16 {
-		padX = 8
-		total = 0
-		for i, p := range pills {
-			tw, _, _ := font.SizeUTF8(p.label)
-			widths[i] = int32(tw) + 2*padX
-			total += widths[i]
-		}
-		total += gap * int32(len(pills)-1)
-	}
-
-	pillH := textH + 10
-	if pillH > h-2 {
-		pillH = h - 2
-	}
-	px := x + (w-total)/2
-	py := y + (h-pillH)/2
-	for i, p := range pills {
-		r := sdl.Rect{X: px, Y: py, W: widths[i], H: pillH}
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, ColorIconSurface)
-		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, 1, ColorBorder)
-		renderText(renderer, config, font, p.label, ColorTextSecondary(),
-			r.X+padX, r.Y+(r.H-textH)/2)
-		wifiActionRects = append(wifiActionRects, wifiActionHit{id: p.id, rect: r})
-		px += r.W + gap
 	}
 }
 

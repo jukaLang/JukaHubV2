@@ -60,7 +60,7 @@ func TestExitSignalRequestsQuitAndArmsTheDeadline(t *testing.T) {
 		t.Fatal("a stop signal must arm the exit request the main loop watches")
 	}
 	if !exitRequestedBySignal.Load() {
-		t.Fatal("the exit must be marked as signal-initiated so the farewell is skipped")
+		t.Fatal("the exit must be marked as signal-initiated so the teardown card is skipped")
 	}
 
 	// The deadline is armed once: the post-loop call with a much longer grace

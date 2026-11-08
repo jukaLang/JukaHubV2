@@ -21,6 +21,11 @@ func destroyTestRenderer(r *sdl.Renderer) {
 	// backdrop, header band and focus bloom draws through it: a new probe
 	// renderer allocated at the freed address would get the dead texture back.
 	DropAmbientGlowForRenderer(r)
+	// The boot and teardown's liquid-glass textures are keyed by renderer the
+	// same way (bootliquid.go).
+	bootLiquidDropForRenderer(r)
+	// JukaLand's tile atlas is renderer-owned too (jland_render.go).
+	jlandDropAtlasForRenderer(r)
 	clearHomeTextCache()
 	clearAppIconCache()
 	// Avatar textures are cached by URL across frames; freeing them here keeps
@@ -42,5 +47,8 @@ func destroyTestRenderer(r *sdl.Renderer) {
 	DestroyVKStaticCache()
 	DestroyVKChatCache()
 	DestroyVKVideoOverlayCache()
+	// A stopped video's frame texture waits for the render thread in
+	// mediaRetiredFrames (videoplayer.go); free it with its renderer.
+	mediaReleaseRetiredFrames()
 	r.Destroy()
 }

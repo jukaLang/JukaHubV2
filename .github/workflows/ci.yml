@@ -37,7 +37,7 @@ jobs:
           node-version: "22"
       - name: Syntax check builder scripts
         run: |
-          for f in script.js builder-device.js builder-gallery.js gallery/layouts.js; do
+          for f in builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js; do
             node --check "$f"
           done
       - name: Browser-free smoke and security tests (jsdom)
@@ -48,13 +48,14 @@ jobs:
       - name: Lint builder scripts (undefined names, duplicate keys, unreachable code)
         run: >
           tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs
-          script.js builder-device.js builder-gallery.js gallery/layouts.js
+          builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
       - name: Audit test dependencies
         working-directory: tests/web
         # Advisory, like staticcheck: an advisory in jsdom's own tree should be
         # visible on every run but must not block a release of the player. The
-        # builder ships no npm dependencies at runtime (it is plain ES modules
-        # plus CDN fonts), so this covers the test harness, not shipping code.
+        # builder ships no npm dependencies at runtime (plain scripts, a vendored
+        # Inter and inline SVG icons), so this covers the test harness, not
+        # shipping code.
         continue-on-error: true
         run: npm audit --audit-level=high
       - name: Config files are valid JSON

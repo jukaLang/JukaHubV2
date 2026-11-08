@@ -3,53 +3,74 @@ package main
 import "testing"
 
 // TestChatSelectionActionsLeadWithEnlarge checks the action bar's order: a
-// message that carries a picture offers Enlarge as its first entry, and a
-// text-only message keeps the bar it always had.
+// message that carries a picture offers Enlarge as its first entry, a link
+// comes next, and the rest is the community bar every message has.
 func TestChatSelectionActionsLeadWithEnlarge(t *testing.T) {
-	prev := chatMessages
+	resetChatTestState(t)
 	chatMessages = []ChatMessage{
 		{ID: "1", Sender: "Ada", Text: "look at this", ImageURL: "https://example.com/cat.png"},
 		{ID: "2", Sender: "Ada", Text: "see https://example.com/dog.png"},
 		{ID: "3", Sender: "Ada", Text: "no picture here"},
 	}
-	t.Cleanup(func() { chatMessages = prev })
 
+	common := []string{"reply", "copy", "ask", "save", "profile", "close"}
 	cases := []struct {
 		index int
-		pic   bool
+		want  []string
 	}{
-		{0, true},
-		{1, true},
-		{2, false},
+		{0, append([]string{"image"}, common...)},
+		{1, append([]string{"image", "open"}, common...)},
+		{2, common},
 	}
 	for _, tc := range cases {
 		actions := chatSelectionActions(tc.index)
-		if len(actions) == 0 {
-			t.Fatalf("message %d: no actions", tc.index)
-		}
-		hasEnlarge := actions[0].kind == "image"
-		if hasEnlarge != tc.pic {
-			t.Fatalf("message %d: first action = %q, want picture action = %v", tc.index, actions[0].kind, tc.pic)
-		}
-		if hasEnlarge && actions[0].label != "Enlarge" {
-			t.Fatalf("message %d: picture action is labelled %q, want %q", tc.index, actions[0].label, "Enlarge")
-		}
-		want := []string{"reply", "copy", "ask", "profile", "close"}
 		got := make([]string, 0, len(actions))
-		for i, a := range actions {
-			if i == 0 && hasEnlarge {
-				continue
-			}
+		for _, a := range actions {
 			got = append(got, a.kind)
 		}
-		if len(got) != len(want) {
-			t.Fatalf("message %d: actions after the picture = %v, want %v", tc.index, got, want)
+		if len(got) != len(tc.want) {
+			t.Fatalf("message %d: actions = %v, want %v", tc.index, got, tc.want)
 		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("message %d: actions after the picture = %v, want %v", tc.index, got, want)
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("message %d: actions = %v, want %v", tc.index, got, tc.want)
 			}
 		}
+		if tc.want[0] == "image" && actions[0].label != "Enlarge" {
+			t.Fatalf("message %d: picture action is labelled %q, want %q", tc.index, actions[0].label, "Enlarge")
+		}
+	}
+}
+
+// The tabs that belong to this device offer Delete on every message, and the
+// community channel only on this device's own.
+func TestChatSelectionActionsFollowTheTab(t *testing.T) {
+	resetChatTestState(t)
+	chatMessages = []ChatMessage{{ID: "1", Sender: "Ada", Text: "hi"}}
+	chatAIMessages = []ChatMessage{{ID: "2", Sender: chatAISender, Text: "Hello!"}}
+	chatSavedMessages = []ChatMessage{{ID: "3", Sender: "You", Text: "note", Own: true}}
+
+	has := func(kind string) bool {
+		for _, a := range chatSelectionActions(0) {
+			if a.kind == kind {
+				return true
+			}
+		}
+		return false
+	}
+	if has("delete") {
+		t.Error("someone else's community message offers Delete")
+	}
+	if !has("profile") || !has("reply") {
+		t.Error("a community message lost Reply or Profile")
+	}
+	chatActiveTab.Store(int32(chatTabAI))
+	if !has("delete") || has("ask") || has("reply") {
+		t.Error("the Juka AI tab offers the wrong actions")
+	}
+	chatActiveTab.Store(int32(chatTabSaved))
+	if !has("delete") || has("save") || has("profile") {
+		t.Error("the Saved tab offers the wrong actions")
 	}
 }
 

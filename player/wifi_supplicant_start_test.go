@@ -265,8 +265,9 @@ func TestWiFiRadioSwitchUsesTheRightRfkillVerb(t *testing.T) {
 	}
 }
 
-// The picker must open on a device whose supplicant is not running: that is the
-// state it exists to fix, and hiding the entry left the radio switch unreachable.
+// The Wi-Fi page must open on a device whose supplicant is not running: that is
+// the state it exists to fix, and hiding the entry left the radio switch
+// unreachable. wifiScrBeginVisit is what arriving on the page runs.
 func TestWiFiPanelOpensOnADeviceWithNoSupplicantYet(t *testing.T) {
 	_ = newProbeFrame(t)
 	withScreen(t, probeW, probeH)
@@ -288,11 +289,14 @@ func TestWiFiPanelOpensOnADeviceWithNoSupplicantYet(t *testing.T) {
 
 	wifiGeneration++
 	wifiDrainDiscarded()
-	openWiFiPanel()
+	wifiScrBeginVisit()
 
-	if !wifiPanel.open || !wifiPanel.startable || wifiPanel.available {
-		t.Fatalf("panel state = open:%v startable:%v available:%v, want it open to turn Wi-Fi on",
-			wifiPanel.open, wifiPanel.startable, wifiPanel.available)
+	if !wifiPanel.startable || wifiPanel.available {
+		t.Fatalf("page state = startable:%v available:%v, want it ready to turn Wi-Fi on",
+			wifiPanel.startable, wifiPanel.available)
+	}
+	if _, _, _, button, action := wifiScrEmptyState(); action != "radio" || button == "" {
+		t.Fatalf("empty state offers %q (%q), want the turn-on button", button, action)
 	}
 	if line, _ := wifiStatusLine(); !strings.Contains(line, "press A") {
 		t.Fatalf("status line = %q, want the turn-it-on instruction", line)

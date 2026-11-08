@@ -12,6 +12,25 @@ import (
 // themeDir holds user-supplied theme files (one JSON file per theme).
 var themeDir = "themes"
 
+// builtinThemeIDs is the set of palettes compiled into the app, captured by the
+// first LoadThemeFiles call — before any file is registered. It is what tells a
+// contribution apart from a shipped palette across restarts: themePresets alone
+// cannot, because a theme installed on an earlier run is registered there too.
+var builtinThemeIDs map[string]bool
+
+// captureBuiltinThemeIDs records the compiled palettes once, so a later load of
+// themes/*.json cannot make an installed theme look built-in.
+func captureBuiltinThemeIDs() {
+	if builtinThemeIDs != nil {
+		return
+	}
+	ids := make(map[string]bool, len(themePresets))
+	for id := range themePresets {
+		ids[id] = true
+	}
+	builtinThemeIDs = ids
+}
+
 // themeLoaderColorPattern accepts #rrggbb and #rrggbbaa colours.
 var themeLoaderColorPattern = regexp.MustCompile(`^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
 
@@ -41,6 +60,10 @@ type themeFile struct {
 	// An unknown or "custom" value is ignored rather than stored.
 	Summary     string `json:"summary"`
 	Arrangement string `json:"arrangement"`
+	// Bloom and Bloom2 tint the backdrop's two glows (#rrggbb). Both are
+	// optional; a file without them keeps the shipped glows.
+	Bloom  string `json:"bloom,omitempty"`
+	Bloom2 string `json:"bloom2,omitempty"`
 }
 
 // toPreset validates every colour and converts the file into a ThemePreset.
@@ -64,12 +87,24 @@ func (f themeFile) toPreset() (ThemePreset, error) {
 			return ThemePreset{}, fmt.Errorf("%s: %q is not #rrggbb or #rrggbbaa", key, value)
 		}
 	}
+	// The glows are optional, but one that is given must be a plain colour:
+	// the backdrop paints them opaque, so an alpha channel would be ignored.
+	for key, value := range map[string]string{"bloom": f.Bloom, "bloom2": f.Bloom2} {
+		if value == "" {
+			continue
+		}
+		if _, ok := parseHexColor(value); !ok || !strings.HasPrefix(value, "#") {
+			return ThemePreset{}, fmt.Errorf("%s: %q is not #rrggbb", key, value)
+		}
+	}
 	// Written out rather than converted: the preset carries the gallery's own
 	// fields (kind, arrangement) that a theme file does not set directly, and
 	// a field added to one type alone must be a decision, not a silent zero.
 	preset := ThemePreset{
 		Name:          f.Name,
 		Summary:       strings.TrimSpace(f.Summary),
+		Bloom:         f.Bloom,
+		Bloom2:        f.Bloom2,
 		Background:    f.Background,
 		ButtonColor:   f.ButtonColor,
 		LabelColor:    f.LabelColor,
@@ -105,6 +140,7 @@ func (f themeFile) toPreset() (ThemePreset, error) {
 // extension) is the preset id. Built-in presets win on a collision, and invalid
 // files are skipped. It returns the ids that were added and per-file errors.
 func LoadThemeFiles(dir string) ([]string, map[string]error) {
+	captureBuiltinThemeIDs()
 	added := []string{}
 	failed := map[string]error{}
 	entries, err := os.ReadDir(dir)

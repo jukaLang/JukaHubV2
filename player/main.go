@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"runtime/debug"
-	"strings"
 	"time"
 )
 
@@ -138,6 +137,13 @@ func main() {
 	// startup (in-memory, never written back) so the status-bar clock and the
 	// Start menu can open it on every config. The loader stays pure.
 	ensureAlarmScene(config)
+	// Keyboard settings (languages, suggestions, voice typing) is a Go-owned
+	// screen reached from Settings and the keyboard's globe (vksettings.go).
+	vkEnsureSettingsScene(config)
+	// Watch Party, Toolbox, Audit toolkit, Security & trust and Report a bug
+	// are Go-owned screens reached from the Tools hub (tbxui.go); no shipped
+	// config defines them, so they are added in memory the same way.
+	tbxEnsureScenes(config)
 	// Contextual widget toggles (start at login, battery saver, time-of-day
 	// theme) live on the Smart Widgets page, reached from Settings → General.
 	// Injected in memory like the alarm scene, so no shipped config is edited.
@@ -150,10 +156,31 @@ func main() {
 	// even on configs created before those scenes existed.
 	ensureMusicScene(config)
 	ensureGamesScene(config)
+	// The PDF/EPUB reader has no scene in either shipped config; Files opens
+	// documents into this injected one.
+	pdfvEnsureScene(config)
 	// Playtime stats and badges have their own screen under Tools.
 	ensurePlaytimeScene(config)
 	ensurePlaytimeEntry(config)
 	playtimeInit(config)
+	// The Tools hub, its Network tools and Wi-Fi pages (and the Calculator
+	// they link to) are Go-owned scenes injected in memory; the classic "Misc"
+	// page an older config still carries is retired here, before the first
+	// scene is chosen, and its buttons are pointed at the hub.
+	ensureToolsHubScene(config)
+	// Devices, Save sync and Nearby (your other JukaHubs on this Wi-Fi) are
+	// Go-owned pages injected the same way (peer.go).
+	peerEnsureScenes(config)
+	// The ROM manager (Tools → ROM manager) is a Go-owned page injected the
+	// same way (romm_ui.go).
+	ensureRommScene(config)
+	// Control profiles and Local play are Go-owned screens reached from Tools
+	// and Settings → Controls, injected in memory the same way.
+	inmapEnsureScenes(config)
+	// Experience packs, Config and Backup & restore (Tools → Your setup) are
+	// injected the same way, and the pack in force gets back its own scenes,
+	// theme file and wallpaper before the theme below is applied (xpack.go).
+	xpackEnsure(config)
 	// Apply the saved "Start JukaHub at login" setting to the platform's
 	// startup folder (only ever our own launcher file).
 	reconcileAutoStart(config)
@@ -190,6 +217,9 @@ func main() {
 	// Accessibility settings load before the first frame so a saved text size is
 	// already in effect on the splash screen, not applied later.
 	a11yInit(config)
+	// The chosen control profile, its switches, the D-pad modes and the
+	// user's profile files (inmap_profiles.go), before the first press.
+	inmapInit(config)
 	// The reader's text zoom is a saved preference too, loaded before the first
 	// browser frame so a page opens at the size the reader left it.
 	browserZoomLoad(config)
@@ -212,9 +242,10 @@ func main() {
 	// Tool readiness: check whether the helper tools (yt-dlp, ffmpeg, ffprobe)
 	// are present and auto-install the missing ones, showing the install bar
 	// while they download. This is non-fatal: offline launches stay usable and
-	// retry on the next run.
+	// retry on the next run. The boot card's tool check usually starts the
+	// install during the splash; this pass then stands down (bootchecks.go).
 	if safeModeAllows(SafeFeatureToolInstall) {
-		deferStartupTask("tool-health", startToolHealthCheck)
+		deferStartupTask("tool-health", bootDeferredToolHealth)
 	}
 
 	// Patch module: load persisted state and roll back any interrupted update
@@ -258,16 +289,24 @@ func main() {
 	// packages that matter, and waiting for someone to open the Emulators page
 	// and press Update is how a card ends up running a nightly from months ago.
 	// It downloads and activates in the background and reports through the same
-	// install bar, so the progress is visible from any screen.
-	if safeModeAllows(SafeFeatureUpdates) {
-		deferStartupTask("core-update", func() { startCoreAutoUpdate(config) })
-	}
+	// install bar, so the progress is visible from any screen. Its scheduler is
+	// started once, by the boot card's "cores" step (bootEnqueueChecks), which
+	// reports it on the splash.
 
 	// Expired thumbnail and feed entries leave jukahub.cache two minutes in,
 	// after boot's own reads.
 	deferStartupTask("cache-sweep", func() { sweepSharedCacheLater(2 * time.Minute) })
 	// Temp video downloads a crash or power cut left on the card.
 	deferStartupTask("temp-videos", func() { go sweepTempVideos() })
+	// Plugins can add themes, ROM formats, control profiles and experience
+	// packs (plugx.go), so their folder is scanned once after the first frame
+	// rather than only when the Plugins page opens; safe mode skips the scan.
+	deferStartupTask("plugins", func() { LoadPlugins(config) })
+	// The experience pack's start screen, the weekly backup when it is due and
+	// the check for newly shipped defaults (Tools → Your setup).
+	deferStartupTask("xpack-start", func() { xpackOpenStartScene(config) })
+	deferStartupTask("bkup-auto", func() { bkupMaybeAutoBackup(config) })
+	deferStartupTask("cfgdoc-upstream", cfgdocCheckUpstreamAsync)
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
@@ -312,6 +351,11 @@ func main() {
 		ticker := time.NewTicker(time.Second / 60)
 		defer ticker.Stop()
 		for range ticker.C {
+			// A ringing alarm pauses the mini-games under its takeover, the
+			// way it pauses a running emulator (alarmvol.go).
+			if alarmFiringActive() {
+				continue
+			}
 			tickActiveGame()
 		}
 	}()
@@ -429,7 +473,7 @@ func main() {
 	// background image instead of painting opaque.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	// Boot splash: the starfield warp in splash.go, played for whatever is left
+	// Boot splash: the glass boot card in splash.go, played for whatever is left
 	// of the two-second boot budget. A warm launch skips it entirely — the
 	// greeting is for a cold start, and a relaunch has the card's caches warm.
 	// A cold card with nothing left opens the UI directly (see startup.go).
@@ -448,6 +492,11 @@ func main() {
 	// (bootwork.go). The cache handle is the one piece that must not block a
 	// frame at all, so it opens on its own goroutine while the warp runs.
 	bootWarmCacheInBackground()
+	// The checks the boot card reports are real, and they go first so they run
+	// beside everything below: settings health, a write probe on the card, the
+	// helper-tool inventory (missing tools start downloading during the splash),
+	// the emulator-core updater and the UI sounds (bootchecks.go).
+	bootEnqueueChecks(config)
 
 	// Create placeholder texture for missing thumbnails
 	bootEnqueue("placeholder-texture", func() {
@@ -538,6 +587,15 @@ func main() {
 	// press, so nothing about the volume itself changes.
 	bootEnqueue("volume-buttons", startVolumeButtonWatcher)
 
+	// An idle screen that died in its low-power state (saver_power.go) left
+	// the CPU clocked down: put it back first, so the values recorded next are
+	// the firmware's and not the crashed idle screen's.
+	saverPowerRecover()
+	// Remember the governor and ceiling the machine booted with, so the teardown
+	// can put the firmware back exactly as it was found even if a child died
+	// holding a performance profile.
+	captureBootCPUSettings()
+
 	ShowSplash(renderer, config, allotment)
 	startupMarkNow("splash")
 	// Whatever did not fit between frames runs now — and on a warm start, where
@@ -611,8 +669,10 @@ func main() {
 		// cannot fill and a quit request still stops the app, keep the
 		// widgets tick running (the low-battery guard must still save and
 		// suspend mid-game, and the battery saver via toastText), and let the
-		// child have the framebuffer to itself.
-		if gameScreenSuspended() {
+		// child have the framebuffer to itself. A ringing alarm is the one
+		// exception: it paused the game (alarmvol.go) and takes the screen
+		// until it is snoozed or dismissed.
+		if gameScreenSuspended() && !alarmFiringActive() {
 			whileAwayWasActive = true
 			for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 				if _, quit := event.(*sdl.QuitEvent); quit {
@@ -622,12 +682,12 @@ func main() {
 			widgetsTick(config)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
-				alarmCheck(now)
+				alarmCheck(config, now)
 			}
 			// An exit request while a game owns the screen (power-key shutdown,
 			// the Exit button reached from the companion, a signal) used to be
 			// ignored here, because this branch continues before the request is
-			// checked below. The farewell cannot be drawn over the game, but the
+			// checked below. The teardown card cannot be drawn over the game, but
 			// app still has to quit: the shutdown path stops the child first.
 			if exitRequested.Load() {
 				running = false
@@ -638,8 +698,9 @@ func main() {
 			continue
 		}
 		// The game handed the screen back. One summary replaces the burst of
-		// toasts that piled up while no frame was being presented.
-		if whileAwayWasActive {
+		// toasts that piled up while no frame was being presented. (An alarm
+		// drawn over a paused game is not the game handing it back.)
+		if whileAwayWasActive && !gameScreenSuspended() {
 			whileAwayWasActive = false
 			whileAwayNotify()
 		}
@@ -653,17 +714,11 @@ func main() {
 		// and applied here, on the main loop, so a phone keypress takes the same
 		// path as the handheld's own input.
 		drainCompanionQueue(config)
-		// Exit request (home Exit button or config "exit" trigger): play the
-		// farewell sequence, then shut down through the deferred cleanup below
-		// (persist favorites, free textures/fonts, sdl.Quit).
-		if exitRequested.Load() && !goodbyePlayed {
-			goodbyePlayed = true
-			// A stop request from outside gets no farewell: whatever sent the
-			// signal is waiting for this process to be gone, and the animation
-			// would only delay the handoff back to the stock launcher.
-			if !exitRequestedBySignal.Load() {
-				ShowGoodbye(renderer, config)
-			}
+		// Exit request (home Exit button or config "exit" trigger): leave the
+		// loop, then run the glass teardown below (stop children, persist, restore
+		// the CPU, close files) before the deferred SDL cleanup.
+		if exitRequested.Load() && !exitHandled {
+			exitHandled = true
 			running = false
 			continue
 		}
@@ -707,6 +762,14 @@ func main() {
 				}
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
+					// A ringing alarm owns the keyboard: snooze and dismiss are the
+					// only actions it accepts, and nothing behind the card reacts —
+					// not even to the key's text, which SDL sends after the key,
+					// once the ring it answered is already over.
+					if alarmHandleKey(e) {
+						wakeSwallowedText = true
+						continue
+					}
 					// The idle screen's own backdrop-clear button answers without
 					// waking it, so the photo can be taken away from the screen
 					// that shows it instead of a trip to Files. With nothing to
@@ -825,17 +888,16 @@ func main() {
 					if ctrldiag.open && handleCtrldiagKey(e, config) {
 						continue
 					}
-					// The Wi-Fi picker is modal. Its password keyboard is handled at
-					// the bottom of the chain, so the panel yields while it is up.
-					if wifiPanel.open && handleWiFiKey(e, config) {
-						continue
-					}
 					// Update prompt is the topmost modal.
 					if updatePrompt.open && handleUpdatePromptKey(e, config) {
 						continue
 					}
 					// Community hub is above the other overlays.
 					if communityPanel.open && handleCommunityKey(e, config) {
+						continue
+					}
+					// Community theme library is modal when open.
+					if themeCommunityPanel.open && handleThemeCommunityKey(e, config) {
 						continue
 					}
 					// Power tools are above the app chrome while open.
@@ -845,11 +907,6 @@ func main() {
 					// RetroAchievements is modal. While the keyboard is editing a
 					// username or API key the keyboard owns the keys instead.
 					if raPanel.open && !virtualKeyboardActive && handleRetroAchievementsKey(e, config) {
-						continue
-					}
-					// Watch Party is modal too, but the on-screen keyboard owns the
-					// keys while it is typing an invite or a link.
-					if partyUI.open && !virtualKeyboardActive && partyHandleKey(e, config) {
 						continue
 					}
 					// Game Profiles is modal and consumes all keys while open.
@@ -906,16 +963,16 @@ func main() {
 					if browserBookmarkPanel.open && handleBrowserBookmarksKey(e, config) {
 						continue
 					}
+					// And the browser's site-info sheet.
+					if brwInfo.open && brwInfoKey(e, config) {
+						continue
+					}
 					// The stick calibration wizard is modal while it runs.
 					if calibrationPanel.open && handleStickCalibrationKey(e, config) {
 						continue
 					}
 					// Smart Home is modal too.
 					if smartHomePanel.open && handleSmartHomeKey(e, config) {
-						continue
-					}
-					// Tools is modal and consumes all keys while open.
-					if toolsPanel.open && handleToolsKey(e, config) {
 						continue
 					}
 					// LAN play is modal over the library. The address field is typed
@@ -993,6 +1050,11 @@ func main() {
 						if handleLogShortcut(e, config, inTerminalScene) {
 							continue
 						}
+						// A handoff offer or a pairing code floats over Home and owns
+						// the keys while it is up (hoffcard.go).
+						if hoffCardKey(e, config) {
+							continue
+						}
 						// Home scene uses the dedicated focus graph + activation.
 						if homeLayoutActive && handleHomeKey(e, config) {
 							continue
@@ -1018,6 +1080,11 @@ func main() {
 						if HandleVideoKeyInput(e) {
 							continue
 						}
+						// The Media screen draws its own layout and owns its keys
+						// (media_hub_input.go); its config elements are data only.
+						if mediaHubHandleKey(e, config) {
+							continue
+						}
 						// Media scenes keep the search field reachable from anywhere:
 						// X opens the keyboard even while the results grid has focus,
 						// which is the state after playing a video. Without this the
@@ -1027,6 +1094,13 @@ func main() {
 							if openSearchShortcut(config) {
 								continue
 							}
+						}
+						// The Tools hub, Network tools and Wi-Fi pages draw their own
+						// tiles and sheets, so like Patch they own their keys before
+						// the element dispatch (they step aside while the top bar
+						// holds the focus).
+						if toolsScenesHandleKey(e, config) {
+							continue
 						}
 						// Top-bar chrome (back pill, status clock) is focusable on
 						// non-home scenes; while it holds focus it owns the keys so
@@ -1047,6 +1121,12 @@ func main() {
 							if feFilesKey(e.Keysym.Sym, config) {
 								continue
 							}
+						}
+						// The Chat scene owns its keys before the element dispatch: its
+						// "chat" element used to take Escape (it only cleared the draft)
+						// and type "b" into the message, so B never left Chat on Windows.
+						if chatSceneKey(e, config) {
+							continue
 						}
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
@@ -1182,6 +1262,9 @@ func main() {
 								if themeGalleryIndex >= 0 && themeGalleryIndex < len(presets) {
 									ApplyThemePreset(config, presets[themeGalleryIndex])
 								}
+							case sdl.K_c:
+								// Browse the community repository without leaving the gallery.
+								openThemeCommunityPanel(config)
 							case sdl.K_ESCAPE:
 								moveSelection(config, ActionNavigateUp)
 							}
@@ -1201,18 +1284,14 @@ func main() {
 						} else if curElem.Type == "unitconverter" {
 							handleUnitInput(e, config)
 						} else if curElem.Type == "chat" {
-							// Pressing A/Enter/Space opens the virtual keyboard
-							// with chat routing (works for both controller and keyboard).
-							// With a message selected, the same key opens its actions,
-							// which is how the profile of a speaker is reached.
-							if e.Keysym.Sym == sdl.K_RETURN || e.Keysym.Sym == sdl.K_SPACE || e.Keysym.Sym == sdl.K_a {
-								if _, _, ok := selectedChatMessage(); ok {
-									openChatActionsForSelected()
-								} else {
-									vkOpenChat()
-								}
-							} else {
-								handleChatInput(e, config)
+							// The Chat scene handled its keys above (chatSceneKey). A
+							// "chat" element on any other scene opens the keyboard on
+							// Enter; Escape and B fall through to the shared Back.
+							switch e.Keysym.Sym {
+							case sdl.K_RETURN, sdl.K_KP_ENTER:
+								vkOpenChat()
+							case sdl.K_ESCAPE, sdl.K_b:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "shortslist" {
 							handleShortsInput(e, config)
@@ -1331,8 +1410,9 @@ func main() {
 						}
 						focusEngine.SyncSelected()
 						// Scene switching keys — not in the terminal, where q/e are
-						// ordinary characters in a command.
-						if !inTerminal {
+						// ordinary characters in a command, and not while JukaLand
+						// owns the keyboard (E builds there).
+						if !inTerminal && !jlandKeysCaptured(config) {
 							switch e.Keysym.Sym {
 							case sdl.K_q:
 								changeScene(config, -1)
@@ -1364,8 +1444,8 @@ func main() {
 							continue
 						}
 						if e.Keysym.Sym == sdl.K_F2 {
-							globalSearchOpen = !globalSearchOpen
 							shortcutsOpen = false
+							homeSearchToggle(config)
 							continue
 						}
 						if e.Keysym.Sym == sdl.K_F12 {
@@ -1405,12 +1485,20 @@ func main() {
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
 				mouseX, mouseY = physicalToLogical(int32(e.X), int32(e.Y))
+				// A ringing alarm is modal: the pointer moves, hovers and drags
+				// nothing behind its takeover.
+				if alarmFiringActive() {
+					continue
+				}
+				// A held press on the package store drags its shelves and
+				// lists (a no-op unless the store recorded the press).
+				pkgPointerMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0)
 				// Hovering a home card focuses it so mouse users get the same
 				// highlight as D-pad navigation. A deliberate click remembers
 				// the card for restore-on-return (see handleHomeMouseClick).
 				if homeLayoutActive && homeLayout != nil {
 					homeLayout.FocusAt(mouseX, mouseY)
-				} else {
+				} else if !mediaHubHover(config, mouseX, mouseY) {
 					focusMediaResultAt(config, mouseX, mouseY)
 				}
 				if isDraggingSeekBar {
@@ -1426,11 +1514,36 @@ func main() {
 					}
 					SeekVideo(fraction)
 				}
+				// Dragging a zoomed picture pans it (imageviewer.go); dragging a
+				// PDF page pans the page.
+				filesMouseMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0)
 			case *sdl.MouseWheelEvent:
 				// Scrolling is input too: the wheel used to leave the idle clock
 				// running, so a long read with the wheel ended in the screensaver.
 				frameRateCtrl.NotifyInput()
+				// A ringing alarm is modal: nothing behind it scrolls.
+				if alarmFiringActive() {
+					continue
+				}
 				if screensaverWakeOnPress() {
+					continue
+				}
+				// The Home search sheet floats above every screen, so its result
+				// list takes the wheel first (globalsearch.go).
+				if homeSearchWheel(e.Y) {
+					continue
+				}
+				// The Files viewers own the wheel while they are up: the picture
+				// zooms, the text page and the reader scroll, the list pages.
+				if filesHandleWheel(config, e.Y) {
+					continue
+				}
+				// The Media screen scrolls its rows and grids a row per notch.
+				if mediaHubWheel(config, e.Y) {
+					continue
+				}
+				// The Chat history scrolls smoothly under the wheel.
+				if chatSceneWheel(config, e.Y) {
 					continue
 				}
 				if powerTools.open && handlePowerToolsWheel(e.Y) {
@@ -1439,15 +1552,62 @@ func main() {
 				if communityPanel.open && handleCommunityWheel(e.Y) {
 					continue
 				}
+				// Watch Party, Toolbox, Audit toolkit, Security & trust and
+				// Report a bug scroll their list, reader or open sheet.
+				if tbxSceneWheel(e.Y, config) {
+					continue
+				}
+				if brwInfo.open && brwInfoWheel(e.Y) {
+					continue
+				}
+				// The Core builds list and the Emulators grid scroll with the wheel
+				// the way their D-pad does.
+				if kbPanel.open && handleCoreBuildsWheel(e.Y) {
+					continue
+				}
+				if emuPanel.open && handleEmuWheel(e.Y) {
+					continue
+				}
 				// Playtime is a long, scrolling page on a config-driven canvas: the
 				// wheel and a touchpad drag move it like the D-pad does.
 				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
 					config.Scenes[currentSceneIndex].Name == playtimeSceneName && handlePlaytimeWheel(e.Y) {
 					continue
 				}
-				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-					config.Scenes[currentSceneIndex].Name == "Terminal" {
-					handleTermWheel(e.Y)
+				// Keyboard settings scrolls its list, or its open sheet.
+				if !virtualKeyboardActive && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+					config.Scenes[currentSceneIndex].Name == vkSettingsSceneName && vkSettingsHandleWheel(e.Y) {
+					continue
+				}
+				// The Tools hub, Network tools and Wi-Fi pages scroll their
+				// tiles, list or open sheet.
+				if toolsScenesWheel(config, e.Y) {
+					continue
+				}
+				// Devices, Save sync and Nearby scroll their list or open sheet.
+				if peerScenesWheel(config, e.Y) {
+					continue
+				}
+				// Control profiles and Local play scroll their own lists.
+				if inmapScenesWheel(config, e.Y) {
+					continue
+				}
+				// The ROM manager scrolls its plan, or its open sheet.
+				if !virtualKeyboardActive && rommSceneWheel(config, e.Y) {
+					continue
+				}
+				// Experience packs, Config and Backup & restore scroll their
+				// lists or open sheet (xpackroute.go).
+				if !virtualKeyboardActive && xpackRouteWheel(e.Y, config) {
+					continue
+				}
+				// Settings scrolls its rows (or its open list), Plugins its list.
+				if !virtualKeyboardActive && setSceneWheel(e.Y, config) {
+					continue
+				}
+				// The Terminal, Scheduled tasks and the system tool screens
+				// scroll their own lists and output (systool.go).
+				if sysToolHandleWheel(e.Y, config) {
 					continue
 				}
 				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
@@ -1467,24 +1627,10 @@ func main() {
 							}
 						}
 						if elem.Type == "packagelist" {
-							elemW := getElementWidth(elem, 1160)
-							elemH := getElementHeight(elem, 500)
-							if mouseX >= elem.X && mouseX <= elem.X+elemW && mouseY >= elem.Y && mouseY <= elem.Y+elemH {
-								packagesMutex.Lock()
-								n := len(packagesList)
-								packagesMutex.Unlock()
-								step := 3
-								if e.Y < 0 {
-									packagesFocusIndex -= step
-								} else {
-									packagesFocusIndex += step
-								}
-								if packagesFocusIndex < 0 {
-									packagesFocusIndex = 0
-								}
-								if packagesFocusIndex >= n {
-									packagesFocusIndex = n - 1
-								}
+							// The store scrolls what is under the pointer: the
+							// page, a shelf (horizontal wheel), the grid, the
+							// list or the details sheet (pkginput.go).
+							if pkgHandleWheel(config, elem, mouseX, mouseY, e.X, e.Y) {
 								break
 							}
 						}
@@ -1499,6 +1645,21 @@ func main() {
 						continue
 					}
 				} else if wakeSwallowRelease(wakeInputMouse, int32(e.Button)) {
+					continue
+				}
+				if alarmFiringActive() {
+					// The alarm is drawn above every panel, including the dock and
+					// the tour; a tap either presses one of its two buttons or is
+					// swallowed by the red wash.
+					if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
+						mx, my := physicalToLogical(int32(e.X), int32(e.Y))
+						alarmHandleMouse(mx, my)
+					}
+					// A seek drag under way when the ring began ends with this
+					// release, instead of seeking on the first move after it.
+					if e.Type == sdl.MOUSEBUTTONUP {
+						isDraggingSeekBar = false
+					}
 					continue
 				}
 				if ambientIsActive() {
@@ -1535,21 +1696,24 @@ func main() {
 						if handleCompanionMouse(mx, my) {
 							break
 						}
+						// The clipboard history is modal: a click picks an entry or
+						// closes it, never the screen behind (clipboard.go).
+						if clipSearchOpen {
+							vkClipHandleClick(mx, my)
+							break
+						}
+						// The Home search sheet sits above the scene with its own
+						// keyboard under it: a tap on a result opens it, a tap on
+						// the keyboard is left to the keyboard (globalsearch.go).
+						if globalSearchOpen && homeSearchMouseDown(mx, my, config) {
+							break
+						}
 						if virtualKeyboardActive {
+							// The keyboard routes the click itself: its popups, the
+							// tool row and Close, the strip, the field (caret), the
+							// keys, or the dimmed screen behind it (dismiss).
 							kmx, kmy := physicalToLogical(int32(e.X), int32(e.Y))
-							if vkCloseHit(kmx, kmy) {
-								vkCloseKeyboard()
-								break
-							}
-							if row, col, ok := vkHitTest(kmx, kmy); ok {
-								vkHandleKeyClick(row, col, config)
-								break
-							}
-							// A click on the dimmed content behind the panel dismisses it.
-							if vkOutsidePanel(kmx, kmy) {
-								vkCloseKeyboard()
-								break
-							}
+							vkHandlePointerDown(kmx, kmy, vkHoldMouse, config)
 							break
 						}
 
@@ -1596,11 +1760,6 @@ func main() {
 							handleCtrldiagMouse(mx, my, config)
 							break
 						}
-						// Wi-Fi picker is modal the same way.
-						if wifiPanel.open {
-							handleWiFiMouse(mx, my, config)
-							break
-						}
 						// Update prompt is modal and above every other overlay.
 						if updatePrompt.open {
 							handleUpdatePromptMouse(mx, my, config)
@@ -1609,6 +1768,11 @@ func main() {
 						// Community hub is modal and above every other overlay.
 						if communityPanel.open {
 							handleCommunityMouse(mx, my, config)
+							break
+						}
+						// Community theme library sits above the app while open.
+						if themeCommunityPanel.open {
+							handleThemeCommunityMouse(mx, my, config)
 							break
 						}
 						// Power tools replace the app while open.
@@ -1620,11 +1784,6 @@ func main() {
 						// that launch it.
 						if raPanel.open {
 							handleRetroAchievementsMouse(mx, my, config)
-							break
-						}
-						// Watch Party panel is modal the same way.
-						if partyUI.open {
-							partyHandleMouse(mx, my, config)
 							break
 						}
 						// Game Profiles is modal the same way.
@@ -1697,6 +1856,11 @@ func main() {
 							handleBrowserBookmarksMouse(mx, my, config)
 							break
 						}
+						// And the browser's site-info sheet.
+						if brwInfo.open {
+							brwInfoMouse(mx, my, config)
+							break
+						}
 						// The calibration wizard is modal the same way.
 						if calibrationPanel.open {
 							handleStickCalibrationMouse(mx, my, config)
@@ -1705,12 +1869,6 @@ func main() {
 						// Smart Home is modal the same way.
 						if smartHomePanel.open {
 							handleSmartHomeMouse(mx, my, config)
-							break
-						}
-						// Tools panel is modal: a click selects a row, a click outside
-						// closes it, and nothing reaches the scene underneath.
-						if toolsPanel.open {
-							handleToolsMouse(mx, my, config)
 							break
 						}
 						// LAN play is modal over the game library.
@@ -1773,12 +1931,11 @@ func main() {
 							handleAlarmMouseClick(mx, my, config)
 							break
 						}
-						// The terminal owns every click on its screen: its Back and
-						// Keyboard controls are drawn by the terminal renderer, not by
-						// config elements.
-						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-							config.Scenes[currentSceneIndex].Name == "Terminal" {
-							handleTermMouseClick(mx, my, config)
+						// The Terminal, Scheduled tasks and the system tool screens
+						// draw their own controls, so they own the clicks on their
+						// body; a click on the top bar (or with its menus open)
+						// falls through to the shared handlers below (systool.go).
+						if sysToolHandleClick(mx, my, config) {
 							break
 						}
 						// Check if clicking on seek bar for dragging
@@ -1788,15 +1945,11 @@ func main() {
 							fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
 							SeekVideo(fraction)
 						}
-						// Image viewer overlay: the lock button keeps the picture as
-						// the idle screen; any other click closes it, matching the
-						// tap-to-open / tap-to-close gesture.
+						// Image viewer: its chips (close, zoom, fit, lock screen) act;
+						// any other press starts a drag that pans a zoomed picture, and
+						// a tap that does not move hides or shows the controls.
 						if imageViewerPath != "" {
-							if imageViewerLockBtn.W > 0 && pointInRect(mx, my, imageViewerLockBtn) {
-								toggleScreenlockFromViewer(config)
-							} else {
-								closeImageViewer()
-							}
+							imgvMouseDown(mx, my, config)
 							break
 						}
 
@@ -1846,6 +1999,11 @@ func main() {
 						if handleTVFilterMouse(mx, my, config) {
 							break
 						}
+						// A handoff offer or a pairing code over Home is modal: it
+						// takes the taps before the cards under it (hoffcard.go).
+						if hoffCardClick(mx, my, config) {
+							break
+						}
 						// Home cards: select + activate on click.
 						if homeLayoutActive && handleHomeMouseClick(mx, my, config) {
 							break
@@ -1868,24 +2026,57 @@ func main() {
 							handlePlaytimeMouse(mx, my) {
 							break
 						}
-						// Chat names, avatars, message bodies and the composer action bar
-						// own their clicks: a name or picture opens that speaker's
-						// profile, a body selects the message.
-						// A picture is checked before the bubble that holds it:
-						// the body hit rect covers the preview, so selection
-						// would otherwise swallow every click on the picture.
+						// Keyboard settings draws its own rows, row buttons and sheets.
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == vkSettingsSceneName &&
+							vkSettingsHandleClick(mx, my, config) {
+							break
+						}
+						// Watch Party, Toolbox, Audit toolkit, Security & trust and
+						// Report a bug draw their own rows, buttons and sheets.
+						if tbxSceneMouse(mx, my, config) {
+							break
+						}
+						// JukaLand takes clicks and taps on its world and its pause
+						// sheet (a finger's tap only ever arrives as this click).
+						if jlandSceneClick(mx, my, config) {
+							break
+						}
+						// The Tools hub, Network tools and Wi-Fi pages draw their own
+						// tiles, list and sheets, so they own the taps on them.
+						if toolsScenesClick(mx, my, config) {
+							break
+						}
+						// Devices, Save sync and Nearby draw their own rows and
+						// sheets (peerui.go).
+						if peerScenesClick(mx, my, config) {
+							break
+						}
+						// Control profiles and Local play draw their own rows,
+						// slots, buttons and sheets (inmap_ui.go, hotseat_ui.go).
+						if inmapScenesClick(mx, my, config) {
+							break
+						}
+						// The ROM manager draws its own card, rows and sheets.
+						if rommSceneClick(mx, my, config) {
+							break
+						}
+						// The Chat scene owns every click inside it: tabs, banner,
+						// pictures, links, names and avatars, message bodies, the
+						// action bar and the composer (chatinput.go).
+						if chatSceneClick(mx, my, config) {
+							break
+						}
+						// A "chat" element on another scene keeps its own targets.
 						if currentSceneHasChat(config) && handleChatImageClick(mx, my) {
+							break
+						}
+						if currentSceneHasChat(config) && handleChatLinkClick(mx, my, config) {
 							break
 						}
 						if currentSceneHasChat(config) && chatMessageClick(mx, my, config) {
 							break
 						}
-						// Chat link cards play media links or open web pages in the
-						// built-in browser.
-						if currentSceneHasChat(config) && handleChatLinkClick(mx, my, config) {
-							break
-						}
-						// Composer hitboxes belong only to a visible chat scene.
 						if handleChatComposerMouse(mx, my, config) {
 							break
 						}
@@ -1912,6 +2103,22 @@ func main() {
 						if HandleVideoControlClick(mx, my) {
 							break
 						}
+						// The Media screen draws its own body (media_hub_render.go) and
+						// takes every click on it, so none reaches its hidden elements.
+						if mediaHubClick(mx, my, config) {
+							break
+						}
+						// Experience packs, Config and Backup & restore draw their
+						// own cards, rows, buttons and sheets (xpackroute.go).
+						if xpackRouteMouse(mx, my, config) {
+							break
+						}
+						// Settings and Plugins draw their own rows (setui.go,
+						// plugui.go) and take every click on them, so none reaches
+						// the config buttons the pages no longer draw.
+						if setSceneMouse(mx, my, config) {
+							break
+						}
 						// Patch's list and modals are drawn by the scene renderer, so
 						// they need their own click routing (rows used to be keyboard
 						// only on a touch-capable device).
@@ -1920,6 +2127,11 @@ func main() {
 							if handlePatchMouse(mx, my, config) {
 								break
 							}
+						}
+						// The reader draws its own toolbar and page: chips act, and a
+						// press on the page starts a drag that scrolls it (pdfv_view.go).
+						if pdfvMouseDown(mx, my, config) {
+							break
 						}
 						// Files: the action sheet and the remote transfer browser are
 						// modal over the list, and the breadcrumb bar and sort chip sit
@@ -2115,15 +2327,18 @@ func main() {
 											browserBack(config)
 										} else if pointInRect(mx, my, textBrowserTouchTarget(forwardRect)) {
 											browserForward(config)
-										} else if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
+										} else if brwPadlockTap(config, elem, mx, my) {
+											// The padlock at the start of the address field
+											// opens Site info (brw_siteinfo.go).
+										} else if hitTouchTarget(addressRect, mx, my) {
 											handleTextBrowserAddressInput(renderer, config, elem)
-										} else if searchRect.W > 0 && mx >= searchRect.X && mx <= searchRect.X+searchRect.W && my >= searchRect.Y && my <= searchRect.Y+searchRect.H {
+										} else if searchRect.W > 0 && hitTouchTarget(searchRect, mx, my) {
 											openBrowserSearch(renderer, config, elem)
-										} else if filterRect.W > 0 && mx >= filterRect.X && mx <= filterRect.X+filterRect.W && my >= filterRect.Y && my <= filterRect.Y+filterRect.H {
+										} else if filterRect.W > 0 && hitTouchTarget(filterRect, mx, my) {
 											browserToggleAdFilter(config)
-										} else if modeRect.W > 0 && mx >= modeRect.X && mx <= modeRect.X+modeRect.W && my >= modeRect.Y && my <= modeRect.Y+modeRect.H {
+										} else if modeRect.W > 0 && hitTouchTarget(modeRect, mx, my) {
 											browserToggleNavMode()
-										} else if zoomRect.W > 0 && mx >= zoomRect.X && mx <= zoomRect.X+zoomRect.W && my >= zoomRect.Y && my <= zoomRect.Y+zoomRect.H {
+										} else if zoomRect.W > 0 && hitTouchTarget(zoomRect, mx, my) {
 											// The chip steps the reader's text scale, wrapping so a
 											// tap always does something.
 											browserZoomCycle(config, elem)
@@ -2143,6 +2358,12 @@ func main() {
 						}
 					} else if e.Type == sdl.MOUSEBUTTONUP {
 						isDraggingSeekBar = false
+						// A press on a package card opens it on release, unless
+						// it turned into a drag (pkginput.go).
+						pkgPointerUp(config, mx, my)
+						// A picture or PDF page drag ends; a tap that never moved
+						// toggles the viewer's controls.
+						filesMouseUp(config)
 					}
 				}
 				focusEngine.SyncSelected()
@@ -2151,6 +2372,13 @@ func main() {
 				// navigating with the D-pad sat at the idle cadence and every
 				// press felt late (the frame rate never woke up).
 				frameRateCtrl.NotifyInput()
+				// A ringing alarm owns the pad before anything else: the dock, the
+				// first-run tour, a video's spinner and the wake filter below all
+				// used to see the press first (alarmring.go).
+				if alarmFiringActive() {
+					alarmHandleController(e)
+					continue
+				}
 				// The pad's version of that same clear button, matched to the hint
 				// the idle screen draws. It has to be answered before the wake
 				// below, which would take the screen away mid-action.
@@ -2190,8 +2418,16 @@ func main() {
 				// before the overlay router or the scene sees the event. A chord
 				// modifier press is consumed: it arms the next direction instead of
 				// firing its own action. A queued hold-to-repeat press is already
-				// the remapped direction (padRepeatWhich).
-				if e.Which != padRepeatWhich && a11yRemapEvent(e) {
+				// the remapped direction (padRepeatWhich), and so is a press a
+				// control profile queued (inmapSynthWhich).
+				if e.Which != padRepeatWhich && e.Which != inmapSynthWhich && a11yRemapEvent(e) {
+					continue
+				}
+				// Control profiles see every release here, before anything below
+				// can drop one: a press they rewrote is released as what it
+				// became, and one they held back for a hold, a double tap or the
+				// Select + R1 switch is settled (inmap_runtime.go).
+				if e.Type == sdl.CONTROLLERBUTTONUP && inmapButtonUp(e, config) {
 					continue
 				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN && ambientHandleController(e) {
@@ -2391,6 +2627,12 @@ func main() {
 								if themeGalleryIndex >= 0 && themeGalleryIndex < len(presets) {
 									ApplyThemePreset(config, presets[themeGalleryIndex])
 								}
+							case sdl.CONTROLLER_BUTTON_Y:
+								// The community library is a keyboard C on a desktop; a
+								// handheld has no keyboard, so Y opens it from the pad.
+								// Consumed here so no later handler re-reads the press.
+								openThemeCommunityPanel(config)
+								continue
 							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 								goBackScene(config)
 							}
@@ -2471,50 +2713,12 @@ func main() {
 						} else if curElem.Type == "packagelist" {
 							packageListController(e, config)
 						} else if curElem.Type == "chat" {
-							switch e.Button {
-							case sdl.CONTROLLER_BUTTON_DPAD_UP:
-								chatScrollOffset++
-							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-								if chatScrollOffset > 0 {
-									chatScrollOffset--
-								}
-							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-								moveChatSelection(-1)
-							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-								moveChatSelection(1)
-							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-								moveChatSelection(-1)
-							case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-								moveChatSelection(1)
-							case sdl.CONTROLLER_BUTTON_A:
-								// A opens the actions for a selected message (Profile is
-								// one of them); with nothing selected it types a message.
-								if _, _, ok := selectedChatMessage(); ok {
-									openChatActionsForSelected()
-								} else {
-									vkOpenChat()
-								}
-							case sdl.CONTROLLER_BUTTON_Y:
-								if strings.TrimSpace(chatInputText) != "" {
-									sendGroqChatMessage(chatInputText)
-									chatInputText = ""
-								} else {
-									// An empty composer makes Y the member list: the
-									// controller way to pick a person by name.
-									openChatMembers()
-								}
-							case sdl.CONTROLLER_BUTTON_X:
-								// X renames the local chat user.
-								vkOpenName()
-							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-								// B first drops the message selection, then leaves the
-								// chat on the next press, the same two-step as Escape.
-								if _, _, ok := selectedChatMessage(); ok {
-									clearChatSelection()
-									PlayBackSound()
-								} else {
-									goBackScene(config)
-								}
+							// The Chat scene's module owned the pad before this point
+							// (chatSceneController). A "chat" element elsewhere — the
+							// Terminal keeps one for its prompt row — only opens the
+							// keyboard; the Terminal binds A itself, so it never gets here.
+							if e.Button == sdl.CONTROLLER_BUTTON_A && !isTerminalScene() {
+								vkOpenChat()
 							}
 						} else {
 							// Normal button/input navigation
@@ -2576,6 +2780,11 @@ func main() {
 					}
 				}
 			case *sdl.ControllerAxisEvent:
+				// A ringing alarm is modal: the stick must not move the focus of
+				// the screen behind it (its two buttons answer the D-pad).
+				if alarmFiringActive() {
+					continue
+				}
 				// Only a deliberate deflection is input (axisDeflected): a
 				// drifting stick kept the screen awake and the frame rate up.
 				// The controller test still sees every value.
@@ -2685,11 +2894,15 @@ func main() {
 				renderer.Present()
 				ambientMarkBlackFrameDrawn()
 			}
+			// The dark dock is the idle screen too: its low-power state keeps
+			// following it (saver_power.go), e.g. dropping to the quiet profile
+			// when the sleep timer stops the music.
+			saverPowerTick(time.Now())
 			sdl.Delay(200)
 			frameCount++
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
-				alarmCheck(now)
+				alarmCheck(config, now)
 			}
 			continue
 		}
@@ -2701,6 +2914,11 @@ func main() {
 		// when its scene is not the one on screen (the flag used to wait for a
 		// repaint of a scene the user had already left).
 		videoSyncPlaybackEnd()
+		// Frame textures a stopped video left behind are destroyed here, on the
+		// render thread (videoplayer.go).
+		mediaReleaseRetiredFrames()
+		// The Media screen follows connectivity and its background loads.
+		mediaHubTick(config)
 		// Shorts feed: start the download- pending first short, then keep the
 		// feed rolling after each one finishes.
 		drainShortsAutoplay(config)
@@ -2708,6 +2926,9 @@ func main() {
 		// after drainShortsAutoplay has had the first say over a Shorts feed.
 		drainUpNextAutoplay(config)
 		playtimeTick(config)
+		// Per-game milestones (1, 5 and 10 hours) follow the playtime ledger;
+		// a cheap compare unless a game's time just moved (gmeta_ui.go).
+		gmetaTick(config)
 		// Dock and ambient screen: clock, weather, now-playing and photos when the
 		// device is charging or idle (see ambient.go). Runs here, on the event
 		// thread, because its entry check reads modal flags.
@@ -2812,18 +3033,22 @@ func main() {
 		if padTickRepeat() && frameRateCtrl != nil {
 			frameRateCtrl.NotifyInput()
 		}
+		// Control profiles decide their held-back presses here — a hold that
+		// reached its time, a lone tap whose double-tap window closed — and
+		// follow the screen for per-screen profiles; the pass-and-play turn
+		// timer runs from here too (inmap_runtime.go, hotseat.go).
+		if inmapTick(config) && frameRateCtrl != nil {
+			frameRateCtrl.NotifyInput()
+		}
 		// SDL text input stays enabled for the whole session: the on-screen
 		// keyboard, the chat composer and the unit converter all depend on
 		// text-input events, and the keyboard target decides where each
 		// character lands. Toggling it per frame used to swallow keystrokes.
 		if !virtualKeyboardActive {
-			chatFocused := currentSceneIndex >= 0 && selectedButtonIndex >= 0 &&
-				selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) &&
-				config.Scenes[currentSceneIndex].Elements[selectedButtonIndex].Type == "chat" &&
-				// The terminal's prompt row is not the chat composer, even though
-				// its scene config still contains a chat element.
-				!isTerminalScene()
-			chatInputActive = chatFocused
+			// The chat composer takes typed text only while it is typing inline
+			// (Enter started it). It used to be on whenever the chat element had
+			// focus, which typed "b" into the draft instead of going back.
+			chatInputActive = chatComposerTakesText(config)
 		}
 
 		// Patch scene: drain worker events and apply hold-to-confirm progress.
@@ -2831,6 +3056,16 @@ func main() {
 		// Watch Party polling and remote playhead correction. It never blocks:
 		// the HTTP request runs on its own goroutine.
 		partyTick(config)
+		// Chat: load the history, notice the scene opening and closing, start
+		// the sender for queued messages, persist what arrived (chatstate.go).
+		chatTick(config)
+		// Bug reports queued while offline go out on their own once the
+		// device is back online (bugrepsend.go); this is a cheap check.
+		bugrepOutboxTick()
+		// Nearby devices: the listener follows its switch, and handoff samples
+		// what is on screen and asks the paired devices when Home comes up
+		// (peer.go, hoff.go). The per-frame cost is a clock read.
+		peerTick(config)
 		if appRestartRequested.Load() {
 			// A staged update was handed to the swap helper; quit so it can
 			// replace the executable and relaunch JukaHub.
@@ -2846,16 +3081,6 @@ func main() {
 			renderQuickSettings(renderer, config)
 		}
 
-		// Watch Party overlay (LAN shared queue + synced playback).
-		if partyUI.open {
-			partyRender(renderer, config)
-		}
-
-		// Tools overlay (IP address + FTP server).
-		if toolsPanel.open {
-			renderToolsPanel(renderer, config)
-		}
-
 		// Smart Home overlay (Home Assistant, Pi-hole, Tailscale, WireGuard).
 		if smartHomePanel.open {
 			renderSmartHomePanel(renderer, config)
@@ -2869,6 +3094,11 @@ func main() {
 		// Community hub (changelog, bug report, telemetry consent).
 		if communityPanel.open {
 			renderCommunityPanel(renderer, config)
+		}
+
+		// Community theme library (browse and install palettes from the gallery).
+		if themeCommunityPanel.open {
+			renderThemeCommunityPanel(renderer, config)
 		}
 
 		// Developer / power-user tools overlay.
@@ -2904,11 +3134,6 @@ func main() {
 		// Controller test (raw axes, drift verdicts, button chips).
 		if ctrldiag.open {
 			renderCtrldiagPanel(renderer, config)
-		}
-
-		// Wi-Fi network picker (scan, join, disconnect, forget).
-		if wifiPanel.open {
-			renderWiFiPanel(renderer, config)
 		}
 
 		// Podcast library overlay (shows, episodes and their resume marks).
@@ -3016,6 +3241,11 @@ func main() {
 			renderBrowserBookmarkPanel(renderer, config)
 		}
 
+		// Site info for the page on screen (connection, certificate, headers).
+		if brwInfo.open {
+			brwInfoRender(renderer, config)
+		}
+
 		// RetroAchievements overlay (recent unlocks + game progress).
 		if raPanel.open {
 			renderRetroAchievementsPanel(renderer, config)
@@ -3097,6 +3327,15 @@ func main() {
 		// every scene the way the toasts are, and it can echo the card's own
 		// operation when the card is under it (see activity.go).
 		renderActivityStrip(renderer, config)
+		// A trophy unlock celebrates above every scene and panel (card, confetti,
+		// chime); only a ringing alarm, drawn next, covers it. trophy_celebrate.go.
+		trophyRenderOverlay(renderer, config)
+		// A ringing alarm covers everything: the toasts, the installer card, the
+		// first-run tour and any panel under them. It is the one thing on screen
+		// that cannot wait for the user to finish what they were doing.
+		if alarmFiringActive() {
+			renderAlarmRing(renderer, config)
+		}
 
 		// Companion screen view: capture on the render thread only when the
 		// phone asked for a frame (see companion_screen.go).
@@ -3129,10 +3368,13 @@ func main() {
 
 		// Adaptive frame rate: faster while interacting/animating, slower when
 		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
-		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating()
+		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
+			trophyOverlayActive()
 		frameRateCtrl.SetAnimationActive(animating)
 		applyPowerMode(config)
-		sdl.Delay(frameRateCtrl.Delay())
+		// The idle screens' low-power state stretches this sleep to their idle
+		// cadence, but ends it the moment a press is queued (saver_power.go).
+		saverFrameSleep(frameRateCtrl.Delay())
 
 		frameCount++
 		// Periodic memory pressure check (every ~10 frames on TSP). The
@@ -3148,7 +3390,7 @@ func main() {
 		// Check alarms every second, independent of the frame cadence.
 		if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 			lastAlarmCheck = now
-			alarmCheck(now)
+			alarmCheck(config, now)
 		}
 	}
 
@@ -3158,50 +3400,18 @@ func main() {
 	// half of the "app locked" report, and the watchdog is what bounds it.
 	armExitDeadline(exitShutdownGrace)
 
-	// Stop what owns the screen or the speaker before the SDL teardown. A game
-	// child outliving JukaHub keeps the framebuffer and a stopped stock
-	// launcher behind it, which is a frozen picture no input can leave; an
-	// ffmpeg music or video decoder outliving it keeps the audio device.
-	stopScreenChildren(exitChildGrace)
-	musicStopIfPlaying()
-	StopEmbeddedPlayback()
-
-	// Persist favorites and resume positions on every graceful quit path
-	// (window close, exit button, scene-exit trigger).
-	// Blank the LEDs first so they do not stay lit on the last audio frame.
-	_ = SetLEDSync(false)
-	playtimeFlush(config)
-	partyHistoryFlush()
-	saveFavorites()
-	// A note open in the editor is written now; it used to be saved only on
-	// the way out of the editor, so quitting (or the power key) from inside
-	// a note lost what had been typed since it was opened.
-	notesFlushOnExit()
-	// The settings save is debounced by a second; a change made just before
-	// quitting sat in the pending slot and never reached jukauser.json.
-	flushPendingUserConfig()
-	// A boot that reached the cleanup was healthy bootguard-wise: the crash-loop
-	// counter resets, so the next boot starts from zero.
-	clearBootGuard()
-	ClearTextCache()
-	ClearShapeCache()
-	ClearIconAtlas()
-	ClearBgGradientCache()
-	DestroyVKStaticCache()
-	clearThumbnailCache()
-	DestroyVKVideoOverlayCache()
-	DestroyVKChatCache()
-	clearHomeTextCache()
-	// The remaining texture and byte caches, so a shutdown leaves no texture
-	// alive past its renderer.
-	clearAppIconCache()
-	clearChatImageCache()
-	clearChatAvatarCache()
-	clearThumbnailDataCache()
-	conditionalCache.clear()
+	// The glass teardown: stop what owns the screen and the speaker, persist
+	// state, put the CPU back the way the firmware had it, close the files and
+	// caches — each row is the real step, not decoration over a sleep. Every
+	// graceful exit lands here (window close, Exit button, scene trigger, stop
+	// signal).
+	ShowShutdown(renderer, config)
+	// The fonts the card itself used close after its last frame, so a glyph
+	// texture is never freed under a frame that is about to draw with it.
 	for _, font := range fontCache {
 		font.Close()
 	}
+	closeSplashFonts()
 }
 
 // textInputBlockedByOverlay reports whether a panel drawn above the scene owns
@@ -3220,6 +3430,11 @@ func textInputBlockedByOverlay() bool {
 // would.
 func handleTextInputEvent(e *sdl.TextInputEvent, config *Config) {
 	if e == nil {
+		return
+	}
+	// A ringing alarm owns the keyboard: its S/D/Space keys also arrive as
+	// text, which a note or a terminal behind it would otherwise receive.
+	if alarmFiringActive() {
 		return
 	}
 	// SDL fills Text with a NUL-terminated C string padded with zero bytes.
@@ -3245,6 +3460,12 @@ func handleTextInputEvent(e *sdl.TextInputEvent, config *Config) {
 		return
 	}
 	if textInputBlockedByOverlay() {
+		return
+	}
+	// The Chat composer typing inline owns the text outright, whatever target
+	// the on-screen keyboard was last aimed at.
+	if chatComposerTakesText(config) {
+		chatComposerInsert(text)
 		return
 	}
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {

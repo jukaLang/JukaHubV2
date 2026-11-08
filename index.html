@@ -18,10 +18,10 @@
     <meta name="twitter:description" content="Design your handheld interface visually, push it to the device over Wi-Fi, and share it as a link.">
     <meta name="twitter:image" content="https://generate.jukalang.com/background.jpg">
     <link data-rh="true" rel="icon" href="/favicon.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&display=swap">
+    <!-- Inter is the only font and it ships in fonts/; the icons are drawn as
+         inline SVG by builder-icons.js. Nothing is fetched from a third party,
+         so the builder also works on a handheld's own hotspot. -->
+    <link rel="stylesheet" href="fonts/inter.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="theme-dark">
@@ -45,60 +45,60 @@
             <div class="app-bar-actions">
                 <div class="tool-group tool-group--joined" role="group" aria-label="Edit history">
                     <button id="undoBtn" class="app-bar-button icon-button" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>
-                        <i class="fas fa-undo" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="undo" aria-hidden="true"></svg>
                     </button>
                     <button id="redoBtn" class="app-bar-button icon-button" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>
-                        <i class="fas fa-redo" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="redo" aria-hidden="true"></svg>
                     </button>
                 </div>
                 <button id="validateBtn" class="app-bar-button validate-button" type="button" aria-label="Check design for problems" title="Check design (Ctrl+Shift+K)">
-                    <i class="fas fa-circle-check" aria-hidden="true"></i> <span class="btn-label">Check</span>
+                    <svg class="ico" data-icon="check-circle" aria-hidden="true"></svg> <span class="btn-label">Check</span>
                     <span id="validateCount" class="validate-count" aria-hidden="true" hidden>0</span>
                 </button>
                 <span class="bar-divider" aria-hidden="true"></span>
                 <div class="tool-group tool-group--modes" role="group" aria-label="Build modes">
                     <button id="deviceBtn" class="app-bar-button device-button compact" type="button" aria-label="Live builder device" aria-haspopup="dialog" title="Push this design to the handheld over Wi-Fi">
                         <span id="deviceDot" class="device-dot" aria-hidden="true"></span>
-                        <i class="fas fa-wifi" aria-hidden="true"></i> <span class="bar-label">Device</span>
+                        <svg class="ico" data-icon="wifi" aria-hidden="true"></svg> <span class="bar-label">Device</span>
                     </button>
                     <button id="galleryBtn" class="app-bar-button gallery-button compact" type="button" aria-label="Community layout gallery" aria-haspopup="dialog" title="Fork a community layout">
-                        <i class="fas fa-table-cells-large" aria-hidden="true"></i> <span class="bar-label">Gallery</span>
+                        <svg class="ico" data-icon="grid" aria-hidden="true"></svg> <span class="bar-label">Gallery</span>
                     </button>
                     <button id="aiToggleBtn" class="app-bar-button ai-toggle-button" type="button" aria-label="Toggle AI assistant" aria-expanded="false" aria-controls="aiPanel" title="AI assistant">
-                        <span class="ai-toggle-icon"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span> <span class="bar-label">AI</span>
+                        <span class="ai-toggle-icon"><svg class="ico" data-icon="wand" aria-hidden="true"></svg></span> <span class="bar-label">AI</span>
                     </button>
                 </div>
                 <span class="bar-divider" aria-hidden="true"></span>
                 <div class="tool-group tool-group--utility" role="group" aria-label="Project tools">
                     <button id="toggleGuide" class="app-bar-button icon-button" type="button" aria-label="Getting Started Guide" title="Getting Started Guide">
-                        <i class="fas fa-question-circle" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="help" aria-hidden="true"></svg>
                     </button>
                     <button id="darkModeToggle" class="app-bar-button icon-button dark-mode-toggle" type="button" aria-label="Switch to light theme" title="Switch to light theme">
-                        <i class="fas fa-moon" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="moon" aria-hidden="true"></svg>
                     </button>
                     <label for="loadFile" class="app-bar-button icon-button load-button" title="Load a jukaconfig.json or XML file">
-                        <i class="fas fa-upload" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="upload" aria-hidden="true"></svg>
                     </label>
                     <input type="file" id="loadFile" accept=".json,.xml,application/json,application/xml,text/xml" class="sr-only" aria-label="Load jukaconfig.json or jukaconfig.xml">
                     <button id="reloadConfigBtn" class="app-bar-button icon-button reload-button" type="button" title="Restore the last loaded config" aria-label="Reload imported config" disabled>
-                        <i class="fas fa-sync-alt" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="refresh" aria-hidden="true"></svg>
                     </button>
                     <button id="remixSharedBtn" class="app-bar-button remix-button" type="button" title="Load a copy of the shared design" hidden>
-                        <i class="fas fa-code-branch" aria-hidden="true"></i> <span class="btn-label">Remix</span>
+                        <svg class="ico" data-icon="fork" aria-hidden="true"></svg> <span class="btn-label">Remix</span>
                     </button>
                     <button id="shareDesignBtn" class="app-bar-button share-button" type="button" title="Share this theme and layout as a link" aria-label="Share this design">
-                        <i class="fas fa-share-nodes" aria-hidden="true"></i> <span class="btn-label">Share</span>
+                        <svg class="ico" data-icon="share" aria-hidden="true"></svg> <span class="btn-label">Share</span>
                     </button>
                 </div>
                 <div class="export-dropdown-wrapper">
                     <button class="app-bar-button export-button" type="button" id="headerExportBtn" aria-label="Export design" title="Export as JSON or XML" aria-haspopup="true" aria-expanded="false" aria-controls="headerExportDropdown">
-                        <i class="fas fa-download" aria-hidden="true"></i> <span class="btn-label">Export</span>
-                        <i class="fas fa-caret-down export-caret" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="download" aria-hidden="true"></svg> <span class="btn-label">Export</span>
+                        <svg class="ico export-caret" data-icon="caret-down" aria-hidden="true"></svg>
                     </button>
                     <div class="export-dropdown" id="headerExportDropdown">
-                        <button type="button" data-click="exportConfig"><i class="fab fa-js export-icon-json" aria-hidden="true"></i> Export as JSON</button>
-                        <button type="button" data-click="copyConfigJson"><i class="fas fa-copy export-icon-copy" aria-hidden="true"></i> Copy JSON</button>
-                        <button type="button" data-click="exportConfigXml"><i class="fas fa-code export-icon-xml" aria-hidden="true"></i> Export as XML</button>
+                        <button type="button" data-click="exportConfig"><svg class="ico export-icon-json" data-icon="braces" aria-hidden="true"></svg> Export as JSON</button>
+                        <button type="button" data-click="copyConfigJson"><svg class="ico export-icon-copy" data-icon="copy" aria-hidden="true"></svg> Copy JSON</button>
+                        <button type="button" data-click="exportConfigXml"><svg class="ico export-icon-xml" data-icon="code" aria-hidden="true"></svg> Export as XML</button>
                     </div>
                 </div>
             </div>
@@ -110,11 +110,11 @@
             <div class="guide-content share-content">
                 <div class="guide-header">
                     <div>
-                        <h2 id="shareTitle"><i class="fas fa-share-nodes" aria-hidden="true"></i> Share this design</h2>
+                        <h2 id="shareTitle"><svg class="ico" data-icon="share" aria-hidden="true"></svg> Share this design</h2>
                         <p class="guide-subtitle">Theme, fonts and layout travel in one link.</p>
                     </div>
                     <button class="close-button" type="button" data-close-share aria-label="Close share dialog">
-                        <i class="fas fa-times" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="close" aria-hidden="true"></svg>
                     </button>
                 </div>
                 <div class="guide-body share-body">
@@ -123,11 +123,11 @@
                     <div class="share-url-row">
                         <input id="shareUrl" class="share-url" type="text" readonly spellcheck="false" aria-label="Shared design link">
                         <button id="copyShareLink" class="action-button primary" type="button">
-                            <i class="fas fa-copy" aria-hidden="true"></i> Copy link
+                            <svg class="ico" data-icon="copy" aria-hidden="true"></svg> Copy link
                         </button>
                     </div>
                     <p id="shareSizeNote" class="share-size-note"></p>
-                    <p class="share-note share-note-muted">Very large projects can exceed what a chat app accepts in a URL. In that case use <strong>Export → JSON</strong> and send the file.</p>
+                    <p class="share-note share-note-muted">Very large projects can exceed what a chat app accepts in a URL. In that case use <strong>Export › Export as JSON</strong> and send the file.</p>
                 </div>
             </div>
         </div>
@@ -137,18 +137,18 @@
             <div class="guide-content remix-content">
                 <div class="guide-header">
                     <div>
-                        <h2 id="remixTitle"><i class="fas fa-code-branch" aria-hidden="true"></i> A shared design is ready</h2>
+                        <h2 id="remixTitle"><svg class="ico" data-icon="fork" aria-hidden="true"></svg> A shared design is ready</h2>
                         <p class="guide-subtitle" id="remixMeta">Open it as your own copy.</p>
                     </div>
                     <button class="close-button" type="button" data-close-remix aria-label="Dismiss shared design">
-                        <i class="fas fa-times" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="close" aria-hidden="true"></svg>
                     </button>
                 </div>
                 <div class="guide-body remix-body">
                     <p class="share-note">This link carries someone else's theme and layout. Remixing makes a fresh copy in your workspace; the original stays untouched. Your current design is only replaced when you choose Remix.</p>
                     <div class="remix-actions">
                         <button id="remixDesignBtn" class="action-button primary" type="button">
-                            <i class="fas fa-code-branch" aria-hidden="true"></i> Remix this design
+                            <svg class="ico" data-icon="fork" aria-hidden="true"></svg> Remix this design
                         </button>
                         <button id="keepDesignBtn" class="action-button" type="button" data-close-remix>Keep my design</button>
                     </div>
@@ -162,30 +162,30 @@
             <div class="guide-content">
                 <div class="guide-header">
                     <div class="guide-heading">
-                        <h2 id="guideTitle"><i class="fas fa-lightbulb" aria-hidden="true"></i> Welcome to JukaHub</h2>
+                        <h2 id="guideTitle"><svg class="ico" data-icon="bulb" aria-hidden="true"></svg> Welcome to JukaHub</h2>
                         <p class="guide-subtitle">A drag-and-drop GUI builder for your TrimUI handheld.</p>
                     </div>
                     <button id="closeGuide" class="close-button" type="button" aria-label="Close guide">
-                        <i class="fas fa-times" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="close" aria-hidden="true"></svg>
                     </button>
                 </div>
                 <div class="guide-body">
                     <h3 class="guide-section-title">Quick start</h3>
                     <div class="welcome-quick-starts">
                         <button type="button" class="welcome-card welcome-card-demo" data-start="demo">
-                            <span class="welcome-card-title"><i class="fas fa-gamepad" aria-hidden="true"></i> 60-second demo</span>
+                            <span class="welcome-card-title"><svg class="ico" data-icon="gamepad" aria-hidden="true"></svg> 60-second demo</span>
                             <span class="welcome-card-desc">See the shell running now — arrow keys act as the D-pad, no handheld needed.</span>
                         </button>
                         <button type="button" class="welcome-card" data-start="blank">
-                            <span class="welcome-card-title"><i class="fas fa-file" aria-hidden="true"></i> Start blank</span>
+                            <span class="welcome-card-title"><svg class="ico" data-icon="file" aria-hidden="true"></svg> Start blank</span>
                             <span class="welcome-card-desc">Build a fresh interface from scratch on this device.</span>
                         </button>
                         <button type="button" class="welcome-card" data-start="template">
-                            <span class="welcome-card-title"><i class="fas fa-layer-group" aria-hidden="true"></i> Start from template</span>
+                            <span class="welcome-card-title"><svg class="ico" data-icon="layers" aria-hidden="true"></svg> Start from template</span>
                             <span class="welcome-card-desc">Load a ready-made multi-scene project to remix.</span>
                         </button>
                         <button type="button" class="welcome-card" data-start="load">
-                            <span class="welcome-card-title"><i class="fas fa-upload" aria-hidden="true"></i> Load config</span>
+                            <span class="welcome-card-title"><svg class="ico" data-icon="upload" aria-hidden="true"></svg> Load config</span>
                             <span class="welcome-card-desc">Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</span>
                         </button>
                     </div>
@@ -236,14 +236,14 @@
             <!-- Left Sidebar - Component Library -->
             <aside id="leftSidebar" class="sidebar left-sidebar" aria-label="Component library">
                 <div class="panel-header">
-                    <h2><i class="fas fa-shapes" aria-hidden="true"></i> Components</h2>
+                    <h2><svg class="ico" data-icon="shapes" aria-hidden="true"></svg> Components</h2>
                     <button id="leftSidebarToggle" class="panel-toggle" type="button" aria-label="Collapse library" aria-expanded="true" aria-controls="leftSidebarContent">
-                        <i class="fas fa-chevron-left" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="chevron-left" aria-hidden="true"></svg>
                     </button>
                 </div>
                 <div id="leftSidebarContent" class="sidebar-content">
                     <div class="search-box">
-                        <i class="fas fa-search" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="search" aria-hidden="true"></svg>
                         <input type="search" id="componentSearch" placeholder="Filter components..." aria-label="Filter components">
                     </div>
                     <p id="componentSearchEmpty" class="component-search-empty" role="status" hidden>No components found. Try another search.</p>
@@ -251,19 +251,19 @@
                         <h3 class="component-section-title">Basic</h3>
                         <div class="elements-container">
                             <div class="element" draggable="true" data-type="button" title="Button" role="button" tabindex="0" aria-label="Add Button to canvas">
-                                <i class="fas fa-square" aria-hidden="true"></i> <span>Button</span>
+                                <svg class="ico" data-icon="button" aria-hidden="true"></svg> <span>Button</span>
                             </div>
                             <div class="element" draggable="true" data-type="label" title="Label" role="button" tabindex="0" aria-label="Add Label to canvas">
-                                <i class="fas fa-font" aria-hidden="true"></i> <span>Label</span>
+                                <svg class="ico" data-icon="type" aria-hidden="true"></svg> <span>Label</span>
                             </div>
                             <div class="element" draggable="true" data-type="image" title="Image" role="button" tabindex="0" aria-label="Add Image to canvas">
-                                <i class="fas fa-image" aria-hidden="true"></i> <span>Image</span>
+                                <svg class="ico" data-icon="image" aria-hidden="true"></svg> <span>Image</span>
                             </div>
                             <div class="element" draggable="true" data-type="input" title="Input" role="button" tabindex="0" aria-label="Add Input to canvas">
-                                <i class="fas fa-edit" aria-hidden="true"></i> <span>Input</span>
+                                <svg class="ico" data-icon="edit" aria-hidden="true"></svg> <span>Input</span>
                             </div>
                             <div class="element" draggable="true" data-type="menu-element" title="Menu" role="button" tabindex="0" aria-label="Add Menu to canvas">
-                                <i class="fa-solid fa-bars-progress" aria-hidden="true"></i> <span>Menu</span>
+                                <svg class="ico" data-icon="menu-bar" aria-hidden="true"></svg> <span>Menu</span>
                             </div>
                         </div>
                     </div>
@@ -271,13 +271,13 @@
                         <h3 class="component-section-title">Data</h3>
                         <div class="elements-container">
                             <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List" role="button" tabindex="0" aria-label="Add Dynamic List to canvas">
-                                <i class="fas fa-list" aria-hidden="true"></i> <span>Dynamic List</span>
+                                <svg class="ico" data-icon="list" aria-hidden="true"></svg> <span>Dynamic List</span>
                             </div>
                             <div class="element" draggable="true" data-type="textlog" title="Text Log" role="button" tabindex="0" aria-label="Add Text Log to canvas">
-                                <i class="fas fa-align-left" aria-hidden="true"></i> <span>Text Log</span>
+                                <svg class="ico" data-icon="align-left" aria-hidden="true"></svg> <span>Text Log</span>
                             </div>
                             <div class="element" draggable="true" data-type="textbrowser" title="Text Browser" role="button" tabindex="0" aria-label="Add Text Browser to canvas">
-                                <i class="fas fa-globe" aria-hidden="true"></i> <span>Text Browser</span>
+                                <svg class="ico" data-icon="globe" aria-hidden="true"></svg> <span>Text Browser</span>
                             </div>
                         </div>
                     </div>
@@ -285,7 +285,7 @@
                         <h3 class="component-section-title">Advanced</h3>
                         <div class="elements-container">
                             <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results" role="button" tabindex="0" aria-label="Add Search Results to canvas">
-                                <i class="fas fa-th-large" aria-hidden="true"></i> <span>Search Results</span>
+                                <svg class="ico" data-icon="grid" aria-hidden="true"></svg> <span>Search Results</span>
                             </div>
                         </div>
                     </div>
@@ -293,9 +293,9 @@
 
                 <div class="variables-panel">
                     <div class="panel-header variables-header">
-                        <h2><i class="fas fa-code" aria-hidden="true"></i> Variables</h2>
+                        <h2><svg class="ico" data-icon="code" aria-hidden="true"></svg> Variables</h2>
                         <button id="addVariableButton" class="action-button small" type="button" aria-label="Add variable">
-                            <i class="fas fa-plus" aria-hidden="true"></i>
+                            <svg class="ico" data-icon="plus" aria-hidden="true"></svg>
                         </button>
                     </div>
                     <div id="variablesList" class="variables-list" aria-live="polite">
@@ -311,32 +311,32 @@
                     <div class="canvas-controls">
                         <div class="scene-controls">
                             <button class="action-button" type="button" data-click="addScene" aria-label="Add scene">
-                                <i class="fas fa-plus" aria-hidden="true"></i> <span>Add Scene</span>
+                                <svg class="ico" data-icon="plus" aria-hidden="true"></svg> <span>Add Scene</span>
                             </button>
                             <select id="sceneSelector" aria-label="Current scene" data-change="changeScene"></select>
                             <button class="action-button" type="button" data-click="renameScene" aria-label="Rename scene">
-                                <i class="fas fa-edit" aria-hidden="true"></i>
+                                <svg class="ico" data-icon="edit" aria-hidden="true"></svg>
                             </button>
                             <button class="action-button danger" type="button" data-click="deleteScene" aria-label="Delete scene">
-                                <i class="fas fa-trash" aria-hidden="true"></i>
+                                <svg class="ico" data-icon="trash" aria-hidden="true"></svg>
                             </button>
                             <button class="action-button" type="button" data-click="duplicateScene" aria-label="Duplicate scene">
-                                <i class="fas fa-copy" aria-hidden="true"></i>
+                                <svg class="ico" data-icon="copy" aria-hidden="true"></svg>
                             </button>
                         </div>
                         <div class="file-controls">
                             <button id="clearButton" class="action-button danger" type="button" aria-label="Clear all scenes, elements and variables" title="Clear all — removes every scene, element and variable; Undo restores the previous project">
-                                <i class="fas fa-broom" aria-hidden="true"></i> <span>Clear All</span>
+                                <svg class="ico" data-icon="broom" aria-hidden="true"></svg> <span>Clear All</span>
                             </button>
                             <div class="export-dropdown-wrapper">
                                 <button class="action-button primary" type="button" id="canvasExportBtn" aria-label="Export design" aria-haspopup="true" aria-expanded="false" aria-controls="canvasExportDropdown">
-                                    <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
-                                    <i class="fas fa-caret-down canvas-export-caret" aria-hidden="true"></i>
+                                    <svg class="ico" data-icon="download" aria-hidden="true"></svg> <span>Export</span>
+                                    <svg class="ico canvas-export-caret" data-icon="caret-down" aria-hidden="true"></svg>
                                 </button>
                                 <div class="export-dropdown" id="canvasExportDropdown">
-                                    <button type="button" data-click="exportConfig"><i class="fab fa-js export-icon-json" aria-hidden="true"></i> Export as JSON</button>
-                                    <button type="button" data-click="copyConfigJson"><i class="fas fa-copy export-icon-copy" aria-hidden="true"></i> Copy JSON</button>
-                                    <button type="button" data-click="exportConfigXml"><i class="fas fa-code export-icon-xml" aria-hidden="true"></i> Export as XML</button>
+                                    <button type="button" data-click="exportConfig"><svg class="ico export-icon-json" data-icon="braces" aria-hidden="true"></svg> Export as JSON</button>
+                                    <button type="button" data-click="copyConfigJson"><svg class="ico export-icon-copy" data-icon="copy" aria-hidden="true"></svg> Copy JSON</button>
+                                    <button type="button" data-click="exportConfigXml"><svg class="ico export-icon-xml" data-icon="code" aria-hidden="true"></svg> Export as XML</button>
                                 </div>
                             </div>
                         </div>
@@ -356,7 +356,7 @@
                     </div>
                 </div>
                 <div class="workspace-status">
-                    <span class="status-device"><i class="fas fa-mobile-screen-button" aria-hidden="true"></i> <span id="canvasSizeReadout">1280 × 720</span></span>
+                    <span class="status-device"><svg class="ico" data-icon="handheld" aria-hidden="true"></svg> <span id="canvasSizeReadout">1280 × 720</span></span>
                     <div class="workspace-guides" role="group" aria-label="Canvas guides">
                         <button id="snapGridBtn" class="zoom-button" type="button" aria-pressed="false" title="Snap dragged elements to an 8-pixel grid">Snap to grid</button>
                         <button id="alignmentGuidesBtn" class="zoom-button" type="button" aria-pressed="false" title="Show alignment guides while dragging">Alignment guides</button>
@@ -364,14 +364,14 @@
                     </div>
                     <div class="zoom-controls" role="group" aria-label="Canvas zoom">
                         <button id="zoomOutBtn" class="zoom-button" type="button" aria-label="Zoom out" title="Zoom out">
-                            <i class="fas fa-minus" aria-hidden="true"></i>
+                            <svg class="ico" data-icon="minus" aria-hidden="true"></svg>
                         </button>
                         <button id="zoomFitBtn" class="zoom-button zoom-fit" type="button" title="Fit the device to the window">
                             <span id="zoomReadout" class="zoom-readout">100%</span>
-                            <i class="fas fa-expand" aria-hidden="true"></i>
+                            <svg class="ico" data-icon="expand" aria-hidden="true"></svg>
                         </button>
                         <button id="zoomInBtn" class="zoom-button" type="button" aria-label="Zoom in" title="Zoom in">
-                            <i class="fas fa-plus" aria-hidden="true"></i>
+                            <svg class="ico" data-icon="plus" aria-hidden="true"></svg>
                         </button>
                     </div>
                 </div>
@@ -380,9 +380,9 @@
             <!-- Right Sidebar - Properties -->
             <aside id="rightSidebar" class="sidebar right-sidebar" aria-label="Inspector">
                 <div class="panel-header">
-                    <h2><i class="fas fa-sliders-h" aria-hidden="true"></i> Inspector</h2>
+                    <h2><svg class="ico" data-icon="sliders" aria-hidden="true"></svg> Inspector</h2>
                     <button id="rightSidebarToggle" class="panel-toggle" type="button" aria-label="Collapse inspector" aria-expanded="true" aria-controls="rightSidebarContent">
-                        <i class="fas fa-chevron-right" aria-hidden="true"></i>
+                        <svg class="ico" data-icon="chevron-right" aria-hidden="true"></svg>
                     </button>
                 </div>
                 <div id="rightSidebarContent" class="sidebar-content">
@@ -395,7 +395,7 @@
                     <div id="elementPropertiesPanel" class="properties-panel" role="tabpanel" aria-label="Element properties">
                         <div id="elementProperties" class="element-properties">
                             <div class="no-selection" id="noSelection">
-                                <i class="fas fa-mouse-pointer" aria-hidden="true"></i>
+                                <svg class="ico" data-icon="pointer" aria-hidden="true"></svg>
                                 <h3>Nothing selected</h3>
                                 <p>Select an element on the canvas to edit its properties.</p>
                                 <ul class="empty-hints">
@@ -407,19 +407,19 @@
                             <div class="position-controls">
                                 <h3 class="element-section-title">Position &amp; size</h3>
                                 <div class="control-group">
-                                    <label for="datax"><i class="fas fa-arrows-alt-h" aria-hidden="true"></i> X</label>
+                                    <label for="datax"><svg class="ico" data-icon="arrows-h" aria-hidden="true"></svg> X</label>
                                     <input type="number" id="datax" class="coordinate-input">
                                 </div>
                                 <div class="control-group">
-                                    <label for="datay"><i class="fas fa-arrows-alt-v" aria-hidden="true"></i> Y</label>
+                                    <label for="datay"><svg class="ico" data-icon="arrows-v" aria-hidden="true"></svg> Y</label>
                                     <input type="number" id="datay" class="coordinate-input">
                                 </div>
                                 <div class="control-group">
-                                    <label for="dataWidth"><i class="fas fa-arrows-alt-h" aria-hidden="true"></i> Width</label>
+                                    <label for="dataWidth"><svg class="ico" data-icon="arrows-h" aria-hidden="true"></svg> Width</label>
                                     <input type="number" id="dataWidth" class="coordinate-input">
                                 </div>
                                 <div class="control-group">
-                                    <label for="dataHeight"><i class="fas fa-arrows-alt-v" aria-hidden="true"></i> Height</label>
+                                    <label for="dataHeight"><svg class="ico" data-icon="arrows-v" aria-hidden="true"></svg> Height</label>
                                     <input type="number" id="dataHeight" class="coordinate-input">
                                 </div>
                             </div>
@@ -427,15 +427,15 @@
                             <div class="style-controls">
                                 <h3 class="element-section-title">Appearance</h3>
                                 <div class="control-group">
-                                    <label for="colorPicker"><i class="fas fa-palette" aria-hidden="true"></i> Text Color</label>
+                                    <label for="colorPicker"><svg class="ico" data-icon="palette" aria-hidden="true"></svg> Text Color</label>
                                     <input type="color" id="colorPicker" class="color-picker" value="#000000">
                                 </div>
                                 <div class="control-group">
-                                    <label for="bgColorPicker"><i class="fas fa-fill" aria-hidden="true"></i> BG Color</label>
+                                    <label for="bgColorPicker"><svg class="ico" data-icon="fill" aria-hidden="true"></svg> BG Color</label>
                                     <input type="color" id="bgColorPicker" class="bg-color-picker" value="#ffffff">
                                 </div>
                                 <div class="control-group">
-                                    <label for="fontSizePicker"><i class="fas fa-text-height" aria-hidden="true"></i> Font Size</label>
+                                    <label for="fontSizePicker"><svg class="ico" data-icon="text-size" aria-hidden="true"></svg> Font Size</label>
                                     <select id="fontSizePicker" class="font-size-picker">
                                         <option value="title">Title</option>
                                         <option value="big">Big</option>
@@ -444,7 +444,7 @@
                                     </select>
                                 </div>
                                 <div class="control-group">
-                                    <label for="opacitySlider"><i class="fas fa-adjust" aria-hidden="true"></i> Opacity</label>
+                                    <label for="opacitySlider"><svg class="ico" data-icon="contrast" aria-hidden="true"></svg> Opacity</label>
                                     <div class="range-row">
                                         <input type="range" id="opacitySlider" min="0" max="100" value="100" class="opacity-slider">
                                         <span id="opacityValue">100%</span>
@@ -454,7 +454,7 @@
 
                             <div class="trigger-controls">
                                 <div class="control-group">
-                                    <label for="triggerSelector"><i class="fas fa-bolt" aria-hidden="true"></i> Trigger</label>
+                                    <label for="triggerSelector"><svg class="ico" data-icon="bolt" aria-hidden="true"></svg> Trigger</label>
                                     <select id="triggerSelector" class="trigger-selector">
                                         <option value="">None</option>
                                         <option value="change_scene">Change Scene</option>
@@ -514,38 +514,38 @@
 
                             <div class="searchresults-properties" style="display: none;">
                                 <div class="control-group">
-                                    <label for="resultsVariable"><i class="fas fa-code" aria-hidden="true"></i> Results Variable</label>
+                                    <label for="resultsVariable"><svg class="ico" data-icon="code" aria-hidden="true"></svg> Results Variable</label>
                                     <input type="text" id="resultsVariable" class="results-variable-input" placeholder="search_results">
                                 </div>
                                 <div class="control-group">
-                                    <label for="gridColumns"><i class="fas fa-columns" aria-hidden="true"></i> Columns</label>
+                                    <label for="gridColumns"><svg class="ico" data-icon="columns" aria-hidden="true"></svg> Columns</label>
                                     <input type="number" id="gridColumns" class="grid-columns-input" min="1" max="8" placeholder="2">
                                 </div>
                                 <div class="control-group">
-                                    <label for="gridRows"><i class="fas fa-th-list" aria-hidden="true"></i> Rows</label>
+                                    <label for="gridRows"><svg class="ico" data-icon="rows" aria-hidden="true"></svg> Rows</label>
                                     <input type="number" id="gridRows" class="grid-rows-input" min="1" max="12" placeholder="6">
                                 </div>
                             </div>
 
                             <div class="dynamic-list-properties" style="display: none;">
                                 <div class="control-group">
-                                    <label for="dynamicVariable"><i class="fas fa-code" aria-hidden="true"></i> Variable</label>
+                                    <label for="dynamicVariable"><svg class="ico" data-icon="code" aria-hidden="true"></svg> Variable</label>
                                     <select id="dynamicVariable" class="dynamic-variable-selector"></select>
                                 </div>
                                 <div class="control-group">
-                                    <label for="dynamicCommand"><i class="fas fa-terminal" aria-hidden="true"></i> Command Path</label>
+                                    <label for="dynamicCommand"><svg class="ico" data-icon="terminal" aria-hidden="true"></svg> Command Path</label>
                                     <input type="text" id="dynamicCommand" class="dynamic-command-input" placeholder="Path to executable">
                                 </div>
                             </div>
 
                             <div class="textbrowser-properties" style="display: none;">
                                 <div class="control-group">
-                                    <label for="textBrowserVariable"><i class="fas fa-code" aria-hidden="true"></i> Output Variable</label>
+                                    <label for="textBrowserVariable"><svg class="ico" data-icon="code" aria-hidden="true"></svg> Output Variable</label>
                                     <select id="textBrowserVariable" class="dynamic-variable-selector"></select>
                                     <small class="field-help">Variable that stores the loaded text so other elements can show it.</small>
                                 </div>
                                 <div class="control-group">
-                                    <label for="textBrowserSource"><i class="fas fa-globe" aria-hidden="true"></i> Data Source</label>
+                                    <label for="textBrowserSource"><svg class="ico" data-icon="globe" aria-hidden="true"></svg> Data Source</label>
                                     <select id="textBrowserSource" class="textbrowser-source-selector">
                                         <option value="system">System Info (gopsutil)</option>
                                         <option value="zeroconf">Zeroconf / mDNS</option>
@@ -561,7 +561,7 @@
                                     <small class="field-help">Where the text browser reads its content from. System and Zeroconf are local; JSON parses a path from the output; Web fetches a readable page.</small>
                                 </div>
                                 <div class="control-group" id="textBrowserJsonPathGroup" style="display: none;">
-                                    <label for="textBrowserJsonPath"><i class="fas fa-project-diagram" aria-hidden="true"></i> JSON Path (gjson)</label>
+                                    <label for="textBrowserJsonPath"><svg class="ico" data-icon="diagram" aria-hidden="true"></svg> JSON Path (gjson)</label>
                                     <input type="text" id="textBrowserJsonPath" class="textbrowser-json-path" placeholder="e.g. .data.items or $.path">
                                     <small class="help-text">Use gjson syntax: .key, .array[0], or $.path. Only used when the source is JSON.</small>
                                 </div>
@@ -574,14 +574,14 @@
                                 </div>
                                 <div class="control-group">
                                     <small class="help-text">
-                                        <i class="fas fa-keyboard" aria-hidden="true"></i> Runtime shortcuts: ↑↓ scroll • PgUp/PgDn page • Home/End jump • Shoulders page scroll
+                                        <svg class="ico" data-icon="keyboard" aria-hidden="true"></svg> Runtime shortcuts: ↑↓ scroll • PgUp/PgDn page • Home/End jump • Shoulders page scroll
                                     </small>
                                 </div>
                             </div>
 
                             <div class="input-properties" style="display: none;">
                                 <div class="control-group">
-                                    <label for="inputVariable"><i class="fas fa-code" aria-hidden="true"></i> Variable (config key for typed text)</label>
+                                    <label for="inputVariable"><svg class="ico" data-icon="code" aria-hidden="true"></svg> Variable (config key for typed text)</label>
                                     <input type="text" id="inputVariable" class="input-variable-input" placeholder="e.g. terminal_cmd">
                                 </div>
                             </div>
@@ -595,19 +595,19 @@
                             <section class="inspector-section" aria-labelledby="sectionGeneral">
                                 <h3 class="inspector-section-title" id="sectionGeneral">General</h3>
                                 <div class="input-group">
-                                    <label for="title"><i class="fas fa-heading" aria-hidden="true"></i> Title</label>
+                                    <label for="title"><svg class="ico" data-icon="heading" aria-hidden="true"></svg> Title</label>
                                     <input type="text" id="title" placeholder="App Title">
                                 </div>
                                 <div class="input-group">
-                                    <label for="author"><i class="fas fa-user" aria-hidden="true"></i> Author</label>
+                                    <label for="author"><svg class="ico" data-icon="user" aria-hidden="true"></svg> Author</label>
                                     <input type="text" id="author" placeholder="Your Name">
                                 </div>
                                 <div class="input-group">
-                                    <label for="description"><i class="fas fa-align-left" aria-hidden="true"></i> Description</label>
+                                    <label for="description"><svg class="ico" data-icon="align-left" aria-hidden="true"></svg> Description</label>
                                     <input type="text" id="description" placeholder="App description">
                                 </div>
                                 <div class="input-group">
-                                    <label for="canvasSize"><i class="fas fa-mobile-alt" aria-hidden="true"></i> Device</label>
+                                    <label for="canvasSize"><svg class="ico" data-icon="handheld" aria-hidden="true"></svg> Device</label>
                                     <select id="canvasSize">
                                         <option value="1280x720">TSP (1280 &times; 720)</option>
                                         <option value="1024x768">Brick (1024 &times; 768)</option>
@@ -627,7 +627,7 @@
                                     </div>
                                 </div>
                                 <div class="input-group">
-                                    <label for="backgroundPathInput"><i class="fas fa-image" aria-hidden="true"></i> Background Image Path</label>
+                                    <label for="backgroundPathInput"><svg class="ico" data-icon="image" aria-hidden="true"></svg> Background Image Path</label>
                                     <input type="text" id="backgroundPathInput" placeholder="background.jpg">
                                 </div>
                                 <input type="file" id="backgroundFile" accept="image/*" class="sr-only" aria-label="Background image file">
@@ -636,7 +636,7 @@
                             <section class="inspector-section" aria-labelledby="sectionDisplay">
                                 <h3 class="inspector-section-title" id="sectionDisplay">Display</h3>
                                 <div class="font-size-controls">
-                                    <h4 class="inspector-subtitle"><i class="fas fa-text-height" aria-hidden="true"></i> Font sizes</h4>
+                                    <h4 class="inspector-subtitle"><svg class="ico" data-icon="text-size" aria-hidden="true"></svg> Font sizes</h4>
                                     <div class="size-inputs">
                                         <div class="size-group">
                                             <label for="titleSize">Title</label>
@@ -662,7 +662,7 @@
                                     <small class="field-help">Font roles map to the player's font system. Title is for the app name, Big for card headers, Medium for body text, Small for captions.</small>
                                 </div>
                                 <div class="theme-controls">
-                                    <h4 class="inspector-subtitle"><i class="fas fa-palette" aria-hidden="true"></i> Theme &amp; colors</h4>
+                                    <h4 class="inspector-subtitle"><svg class="ico" data-icon="palette" aria-hidden="true"></svg> Theme &amp; colors</h4>
                                     <div class="size-inputs">
                                         <div class="size-group">
                                             <label for="buttonColorPicker">Button Color</label>
@@ -680,7 +680,7 @@
                             <section class="inspector-section" aria-labelledby="sectionPaths">
                                 <h3 class="inspector-section-title" id="sectionPaths">Paths</h3>
                                 <div class="input-group">
-                                    <label for="toolsPath"><i class="fas fa-folder" aria-hidden="true"></i> Tools Path</label>
+                                    <label for="toolsPath"><svg class="ico" data-icon="folder" aria-hidden="true"></svg> Tools Path</label>
                                     <input type="text" id="toolsPath" placeholder="./required" value="./required">
                                 </div>
                                 <small class="field-help">Folder where JukaHub looks for external tools such as terminal commands and media helpers. Leave as <code>./required</code> unless you moved the tools bundle.</small>
@@ -695,7 +695,7 @@
                                     </div>
                                 </div>
                                 <div class="input-group">
-                                    <label for="fileExplorerRoot"><i class="fas fa-hdd" aria-hidden="true"></i> File Explorer Root</label>
+                                    <label for="fileExplorerRoot"><svg class="ico" data-icon="disk" aria-hidden="true"></svg> File Explorer Root</label>
                                     <input type="text" id="fileExplorerRoot" placeholder="/mnt">
                                 </div>
                                 <div class="size-inputs">
@@ -743,21 +743,21 @@
         </div>
 
         <footer class="app-footer">
-            <p>Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG" target="_blank" rel="noopener noreferrer"><i class="fab fa-discord" aria-hidden="true"></i> Discord</a>.
-            Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank" rel="noopener noreferrer"><i class="fab fa-github" aria-hidden="true"></i> GitHub</a></p>
+            <p>Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG" target="_blank" rel="noopener noreferrer"><svg class="ico" data-icon="chat" aria-hidden="true"></svg> Discord</a>.
+            Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank" rel="noopener noreferrer"><svg class="ico" data-icon="fork" aria-hidden="true"></svg> GitHub</a></p>
         </footer>
     </div>
 
     <div id="aiPanel" class="ai-panel" role="dialog" aria-label="AI assistant" aria-hidden="true" hidden>
         <div class="panel-header ai-panel-header">
-            <h2><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI Assistant</h2>
+            <h2><svg class="ico" data-icon="wand" aria-hidden="true"></svg> AI Assistant</h2>
             <button id="aiPanelToggle" class="panel-toggle" type="button" aria-label="Close AI assistant" title="Close AI assistant">
-                <i class="fas fa-times" aria-hidden="true"></i>
+                <svg class="ico" data-icon="close" aria-hidden="true"></svg>
             </button>
         </div>
 
         <details class="ai-settings">
-            <summary><i class="fas fa-sliders-h" aria-hidden="true"></i> Settings</summary>
+            <summary><svg class="ico" data-icon="sliders" aria-hidden="true"></svg> Settings</summary>
             <div class="ai-settings-body">
                 <div class="ai-provider-row">
                     <label for="aiProvider">Provider</label>
@@ -774,7 +774,7 @@
                     <label for="aiApiKey">API key <span class="ai-hint">(this page only; cleared on reload)</span></label>
                     <div class="ai-key-input-row">
                         <input type="password" id="aiApiKey" class="ai-input" placeholder="Paste your API key" autocomplete="off" autocapitalize="off" spellcheck="false">
-                        <button id="aiKeyClearBtn" class="action-button small" type="button" title="Clear API key" aria-label="Clear API key"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+                        <button id="aiKeyClearBtn" class="action-button small" type="button" title="Clear API key" aria-label="Clear API key"><svg class="ico" data-icon="close" aria-hidden="true"></svg></button>
                     </div>
                 </div>
 
@@ -784,7 +784,7 @@
 
                 <div class="ai-voice-row">
                     <button id="aiMicBtn" class="action-button small" type="button" title="Start voice input">
-                        <i class="fa-solid fa-microphone" aria-hidden="true"></i> <span>Voice</span>
+                        <svg class="ico" data-icon="mic" aria-hidden="true"></svg> <span>Voice</span>
                     </button>
                     <label class="ai-toggle-label" title="Enable or disable voice input">
                         <input type="checkbox" id="aiVoiceToggle">
@@ -806,14 +806,14 @@
                 <textarea id="aiPrompt" class="ai-textarea" rows="2" placeholder="Ask the assistant… e.g. Add a Media tile and a search bar at the top"></textarea>
                 <div class="ai-actions">
                     <button id="aiSuggestBtn" class="action-button primary" type="button">
-                        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Suggest
+                        <svg class="ico" data-icon="wand" aria-hidden="true"></svg> Suggest
                     </button>
                     <button id="aiGenerateBtn" class="action-button primary" type="button">
-                        <i class="fa-solid fa-file-code" aria-hidden="true"></i> Generate
+                        <svg class="ico" data-icon="file-code" aria-hidden="true"></svg> Generate
                     </button>
-                    <button id="aiCopyBtn" class="action-button small" type="button" title="Copy the last reply"><i class="fa-regular fa-copy" aria-hidden="true"></i></button>
-                    <button id="aiApplyBtn" class="action-button small primary" type="button" title="Apply the last suggestion"><i class="fa-regular fa-hand-pointer" aria-hidden="true"></i></button>
-                    <button id="aiClearBtn" class="action-button small" type="button" title="Clear the conversation"><i class="fas fa-eraser" aria-hidden="true"></i></button>
+                    <button id="aiCopyBtn" class="action-button small" type="button" title="Copy the last reply"><svg class="ico" data-icon="copy" aria-hidden="true"></svg></button>
+                    <button id="aiApplyBtn" class="action-button small primary" type="button" title="Apply the last suggestion"><svg class="ico" data-icon="click" aria-hidden="true"></svg></button>
+                    <button id="aiClearBtn" class="action-button small" type="button" title="Clear the conversation"><svg class="ico" data-icon="eraser" aria-hidden="true"></svg></button>
                 </div>
             </div>
         </div>
@@ -821,13 +821,13 @@
 
     <!-- Element Context Menu -->
     <div id="contextMenu" class="context-menu" style="display:none">
-        <button type="button" data-action="duplicate"><i class="fas fa-copy" aria-hidden="true"></i> Duplicate</button>
-        <button type="button" data-action="delete"><i class="fas fa-trash" aria-hidden="true"></i> Delete</button>
+        <button type="button" data-action="duplicate"><svg class="ico" data-icon="copy" aria-hidden="true"></svg> Duplicate</button>
+        <button type="button" data-action="delete"><svg class="ico" data-icon="trash" aria-hidden="true"></svg> Delete</button>
         <div class="context-menu-sep" aria-hidden="true"></div>
-        <button type="button" data-action="bring-front"><i class="fas fa-arrow-up" aria-hidden="true"></i> Bring to Front</button>
-        <button type="button" data-action="send-back"><i class="fas fa-arrow-down" aria-hidden="true"></i> Send to Back</button>
+        <button type="button" data-action="bring-front"><svg class="ico" data-icon="arrow-up" aria-hidden="true"></svg> Bring to Front</button>
+        <button type="button" data-action="send-back"><svg class="ico" data-icon="arrow-down" aria-hidden="true"></svg> Send to Back</button>
         <div class="context-menu-sep" aria-hidden="true"></div>
-        <button type="button" data-action="edit-text"><i class="fas fa-pen" aria-hidden="true"></i> Edit Text</button>
+        <button type="button" data-action="edit-text"><svg class="ico" data-icon="pen" aria-hidden="true"></svg> Edit Text</button>
     </div>
 
     <!-- Live builder: push this design to a running JukaHub over Wi-Fi. -->
@@ -836,11 +836,11 @@
         <div class="guide-content device-content">
             <div class="guide-header">
                 <div>
-                    <h2 id="deviceTitle"><i class="fas fa-wifi" aria-hidden="true"></i> Live builder</h2>
+                    <h2 id="deviceTitle"><svg class="ico" data-icon="wifi" aria-hidden="true"></svg> Live builder</h2>
                     <p class="guide-subtitle">Push this design straight to the handheld. No SD card, no copying files.</p>
                 </div>
                 <button class="close-button" type="button" data-close-device aria-label="Close live builder">
-                    <i class="fas fa-times" aria-hidden="true"></i>
+                    <svg class="ico" data-icon="close" aria-hidden="true"></svg>
                 </button>
             </div>
             <div class="guide-body device-body">
@@ -867,16 +867,16 @@
                 </label>
 
                 <div class="device-actions">
-                    <button id="deviceConnectBtn" class="action-button" type="button"><i class="fas fa-plug" aria-hidden="true"></i> Connect</button>
-                    <button id="devicePullBtn" class="action-button" type="button" disabled><i class="fas fa-cloud-arrow-down" aria-hidden="true"></i> Pull from device</button>
-                    <button id="devicePushBtn" class="action-button primary" type="button" disabled><i class="fas fa-cloud-arrow-up" aria-hidden="true"></i> Push to device</button>
+                    <button id="deviceConnectBtn" class="action-button" type="button"><svg class="ico" data-icon="plug" aria-hidden="true"></svg> Connect</button>
+                    <button id="devicePullBtn" class="action-button" type="button" disabled><svg class="ico" data-icon="cloud-down" aria-hidden="true"></svg> Pull from device</button>
+                    <button id="devicePushBtn" class="action-button primary" type="button" disabled><svg class="ico" data-icon="cloud-up" aria-hidden="true"></svg> Push to device</button>
                 </div>
 
                 <p class="device-meta" id="deviceMeta">Tip: keep this page open while you design. Pushes are validated on the device and reload in place.</p>
                 <p class="device-warning" id="deviceWarning" hidden></p>
             </div>
             <div class="device-footer">
-                <button id="devicePageBtn" class="action-button small" type="button" disabled><i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i> Open device page</button>
+                <button id="devicePageBtn" class="action-button small" type="button" disabled><svg class="ico" data-icon="external" aria-hidden="true"></svg> Open device page</button>
                 <button class="action-button primary" type="button" data-close-device>Done</button>
             </div>
         </div>
@@ -888,16 +888,16 @@
         <div class="guide-content gallery-content">
             <div class="guide-header">
                 <div>
-                    <h2 id="galleryTitle"><i class="fas fa-table-cells-large" aria-hidden="true"></i> Community layouts</h2>
+                    <h2 id="galleryTitle"><svg class="ico" data-icon="grid" aria-hidden="true"></svg> Community layouts</h2>
                     <p class="guide-subtitle">Fork one into the editor, or apply it to the handheld in one click.</p>
                 </div>
                 <button class="close-button" type="button" data-close-gallery aria-label="Close layout gallery">
-                    <i class="fas fa-times" aria-hidden="true"></i>
+                    <svg class="ico" data-icon="close" aria-hidden="true"></svg>
                 </button>
             </div>
             <div class="gallery-toolbar">
                 <div class="search-box gallery-search">
-                    <i class="fas fa-search" aria-hidden="true"></i>
+                    <svg class="ico" data-icon="search" aria-hidden="true"></svg>
                     <input type="search" id="gallerySearch" placeholder="Search layouts" aria-label="Search community layouts">
                 </div>
                 <div class="gallery-tags" id="galleryTags" role="group" aria-label="Filter by category"></div>
@@ -919,19 +919,19 @@
         <div class="guide-content validate-content">
             <div class="guide-header">
                 <div>
-                    <h2 id="validateTitle"><i class="fas fa-circle-check" aria-hidden="true"></i> Check design</h2>
+                    <h2 id="validateTitle"><svg class="ico" data-icon="check-circle" aria-hidden="true"></svg> Check design</h2>
                     <p class="guide-subtitle" id="validateSummary">Checks the same fields the player reads on the handheld.</p>
                 </div>
                 <button class="close-button" type="button" data-close-validate aria-label="Close design check">
-                    <i class="fas fa-times" aria-hidden="true"></i>
+                    <svg class="ico" data-icon="close" aria-hidden="true"></svg>
                 </button>
             </div>
             <div class="guide-body validate-body">
                 <ul id="validateList" class="validate-list"></ul>
-                <p id="validateEmpty" class="validate-empty" hidden><i class="fas fa-circle-check" aria-hidden="true"></i> No problems found — this design will load on the device.</p>
+                <p id="validateEmpty" class="validate-empty" hidden><svg class="ico" data-icon="check-circle" aria-hidden="true"></svg> No problems found — this design will load on the device.</p>
             </div>
             <div class="validate-actions">
-                <button id="validateRecheck" class="action-button" type="button"><i class="fas fa-rotate" aria-hidden="true"></i> Re-check</button>
+                <button id="validateRecheck" class="action-button" type="button"><svg class="ico" data-icon="refresh" aria-hidden="true"></svg> Re-check</button>
                 <button id="validateExportAnyway" class="action-button danger" type="button" hidden>Export anyway</button>
                 <button class="action-button primary" type="button" data-close-validate>Done</button>
             </div>
@@ -943,29 +943,30 @@
         <div class="preview-bar-info">
             <span class="preview-chip" id="previewDevice">1280 × 720</span>
             <span class="preview-chip preview-hint" title="A · select · B · Backspace · Start/Select+Shift arrows: scene">
-                <i class="fas fa-gamepad" aria-hidden="true"></i> D-pad: arrows · A: Enter · B: Backspace
+                <svg class="ico" data-icon="gamepad" aria-hidden="true"></svg> D-pad: arrows · A: Enter · B: Backspace
             </span>
             <span id="previewSceneLabel" class="preview-scene-label" aria-live="polite">Scene 1</span>
             <span id="previewScale" class="preview-scale">100%</span>
         </div>
         <div class="preview-bar-actions">
             <button id="previewPrev" class="action-button small" type="button" aria-label="Previous scene">
-                <i class="fas fa-chevron-left" aria-hidden="true"></i>
+                <svg class="ico" data-icon="chevron-left" aria-hidden="true"></svg>
             </button>
             <button id="previewNext" class="action-button small" type="button" aria-label="Next scene">
-                <i class="fas fa-chevron-right" aria-hidden="true"></i>
+                <svg class="ico" data-icon="chevron-right" aria-hidden="true"></svg>
             </button>
             <button id="previewExit" class="action-button small primary" type="button">
-                <i class="fas fa-pen" aria-hidden="true"></i> Back to editor
+                <svg class="ico" data-icon="pen" aria-hidden="true"></svg> Back to editor
             </button>
         </div>
     </div>
 
     <!-- Preview Mode Toggle -->
     <button id="previewToggle" class="preview-toggle" type="button" title="Preview Mode (Ctrl+Shift+P)" aria-label="Preview" aria-pressed="false">
-        <i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>
+        <svg class="ico" data-icon="eye" aria-hidden="true"></svg><span>Preview</span>
     </button>
 
+    <script src="builder-icons.js"></script>
     <script src="gallery/layouts.js"></script>
     <script src="script.js"></script>
     <script src="builder-device.js"></script>

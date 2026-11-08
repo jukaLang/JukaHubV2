@@ -425,12 +425,27 @@ func TestEmulatorHintLineFitsBothCanvases(t *testing.T) {
 	}
 }
 
-// TestCoreInstallsAreHandheldOnly pins the shipped policy: the buildbot serves
-// aarch64 shared objects, so a Windows build must not write them into a
-// RetroArch folder that loads .dll files.
-func TestCoreInstallsAreHandheldOnly(t *testing.T) {
-	if emuCoreInstallPlatform() == IsWindows() {
-		t.Fatalf("emuCoreInstallPlatform() = %v on windows=%v", emuCoreInstallPlatform(), IsWindows())
+// TestCoreInstallsFollowThePlatformChannel pins the shipped policy: every
+// platform installs cores, each from the buildbot tree its RetroArch loads —
+// aarch64 shared objects on the handheld, x86_64 DLLs on Windows — so a
+// Windows build never writes a Linux core into a RetroArch that loads .dll
+// files. With the installer stood down no tile offers an install or update.
+func TestCoreInstallsFollowThePlatformChannel(t *testing.T) {
+	if !emuCoreInstallPlatform() {
+		t.Fatal("core installs are off by default")
+	}
+	prevIndex, prevBase := coreUpdateIndexURL, coreUpdateBaseURL
+	coreUpdateIndexURL, coreUpdateBaseURL = "", ""
+	t.Cleanup(func() { coreUpdateIndexURL, coreUpdateBaseURL = prevIndex, prevBase })
+	wantTree := "linux/aarch64"
+	if IsWindows() {
+		wantTree = "windows/x86_64"
+	}
+	if got := emuCoreIndexURL(); !strings.Contains(got, wantTree) || !strings.HasSuffix(got, ".index-extended") {
+		t.Fatalf("core index = %q, want the %s tree", got, wantTree)
+	}
+	if got := emuCoreBaseURL(); !strings.Contains(got, wantTree) {
+		t.Fatalf("core base = %q, want the %s tree", got, wantTree)
 	}
 	withCoreInstallsAllowed(t, false)
 	if got := emuInstallHintLabel(emuEntry{Name: "PSP", Status: emuMissing}); got != "" {

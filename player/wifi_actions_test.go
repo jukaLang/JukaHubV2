@@ -79,27 +79,35 @@ func TestWiFiReconnectNeedsASavedNetwork(t *testing.T) {
 	}
 }
 
-// TestWiFiPanelActionsAreTappable renders the picker and checks that every
-// action it offers has a touch target inside the panel, then presses Close
-// through the same mouse path a finger uses.
+// TestWiFiPanelActionsAreTappable renders the Wi-Fi page and checks that every
+// action it offers has a finger-sized touch target: the header's Scan and
+// Diagnostics, each row's details button, and the details sheet's pills —
+// Reconnect, Disconnect and Forget for the connected network — then presses
+// Close through the same click path a finger uses.
 func TestWiFiPanelActionsAreTappable(t *testing.T) {
-	_ = newProbeFrame(t)
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
-	}
-	defer destroyTestRenderer(renderer)
-
-	prevPanel, prevActions, prevRows := wifiPanel, wifiActionRects, wifiRowRects
+	config := toolsHubTestNav(t)
+	renderer := probeRenderer(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
+	// A details read counts as running, so opening the connected network's
+	// sheet does not start a real one.
+	wifiScrDetails.mu.Lock()
+	prevBusy := wifiScrDetails.busy
+	wifiScrDetails.busy = true
+	wifiScrDetails.mu.Unlock()
 	t.Cleanup(func() {
-		wifiPanel, wifiActionRects, wifiRowRects = prevPanel, prevActions, prevRows
-		ClearTextCache()
+		wifiScrDetails.mu.Lock()
+		wifiScrDetails.busy = prevBusy
+		wifiScrDetails.mu.Unlock()
 	})
 
+	frame := func() {
+		renderer.SetDrawColor(9, 14, 25, 255)
+		renderer.Clear()
+		renderWiFiScr(renderer, config)
+	}
 	for _, size := range []struct{ w, h int32 }{{probeW, probeH}, {800, 480}} {
 		withScreen(t, size.w, size.h)
 		wifiPanel = wifiPanelState{
-			open:      true,
 			available: true,
 			radioOn:   true,
 			loadedAt:  time.Now(),
@@ -109,57 +117,70 @@ func TestWiFiPanelActionsAreTappable(t *testing.T) {
 				{SSID: "Cafe", Signal: -78},
 			},
 		}
-		renderer.SetDrawColor(9, 14, 25, 255)
-		renderer.Clear()
-		renderWiFiPanel(renderer, &Config{})
+		wifiScr.sheet = toolsHubSheet{}
+		wifiScr.follow = true
+		frame()
 
-		got := map[wifiActionID]sdl.Rect{}
-		for _, hit := range wifiActionRects {
-			got[hit.id] = hit.rect
-			r := hit.rect
-			if r.W <= 0 || r.H <= 0 {
-				t.Fatalf("%dx%d: action %v has an empty rect", size.w, size.h, hit.id)
-			}
-			if !pointInRect(r.X, r.Y, wifiPanelRect) || !pointInRect(r.X+r.W-1, r.Y+r.H-1, wifiPanelRect) {
-				t.Fatalf("%dx%d: action %v rect %+v leaves the panel %+v",
-					size.w, size.h, hit.id, r, wifiPanelRect)
-			}
-			if r.H < 24 {
-				t.Fatalf("%dx%d: action %v is only %dpx tall, too small for a finger",
-					size.w, size.h, hit.id, r.H)
+		ids := map[string]bool{}
+		for _, c := range wifiScr.ctrls {
+			ids[c.id] = true
+			if c.rect.W <= 0 || c.rect.H < 24 || c.rect.X < 0 || c.rect.X+c.rect.W > size.w {
+				t.Fatalf("%dx%d: header control %q at %+v is not a usable target", size.w, size.h, c.id, c.rect)
 			}
 		}
-		for _, id := range []wifiActionID{wifiActionRescan, wifiActionReconnect, wifiActionDisconnect, wifiActionClose} {
+		if !ids["scan"] || !ids["diag"] {
+			t.Fatalf("%dx%d: header controls %v, want Scan and Diagnostics", size.w, size.h, ids)
+		}
+		info := wifiScr.infoRects[0]
+		if info.W < 24 || info.H < 24 {
+			t.Fatalf("%dx%d: the details button %+v is too small for a finger", size.w, size.h, info)
+		}
+		if !wifiScrClick(info.X+info.W/2, info.Y+info.H/2, config) || !wifiScr.sheet.open {
+			t.Fatalf("%dx%d: tapping the details button did not open the sheet", size.w, size.h)
+		}
+		frame()
+		s := &wifiScr.sheet
+		got := map[string]sdl.Rect{}
+		for i, r := range s.pillRects {
+			got[s.pills[i].id] = r
+			if r.W <= 0 || r.H < 24 {
+				t.Fatalf("%dx%d: pill %q %+v is too small for a finger", size.w, size.h, s.pills[i].id, r)
+			}
+			if !pointInRect(r.X, r.Y, s.card) || !pointInRect(r.X+r.W-1, r.Y+r.H-1, s.card) {
+				t.Fatalf("%dx%d: pill %q %+v leaves the card %+v", size.w, size.h, s.pills[i].id, r, s.card)
+			}
+		}
+		for _, id := range []string{"reconnect", "disconnect", "forget", "close"} {
 			if _, ok := got[id]; !ok {
-				t.Fatalf("%dx%d: no touch target for action %v (have %d pills)", size.w, size.h, id, len(got))
+				t.Fatalf("%dx%d: no touch target for %q (have %d pills)", size.w, size.h, id, len(got))
 			}
 		}
-
-		closeRect := got[wifiActionClose]
-		if !handleWiFiMouse(closeRect.X+closeRect.W/2, closeRect.Y+closeRect.H/2, &Config{}) {
+		closeRect := got["close"]
+		if !wifiScrClick(closeRect.X+closeRect.W/2, closeRect.Y+closeRect.H/2, config) {
 			t.Fatalf("%dx%d: tap on Close was not handled", size.w, size.h)
 		}
-		if wifiPanel.open {
-			t.Fatalf("%dx%d: tap on Close left the panel open", size.w, size.h)
+		if s.open || transitionPhase != "none" {
+			t.Fatalf("%dx%d: tap on Close left the sheet open or left the page", size.w, size.h)
 		}
 	}
 
-	// Nothing to disconnect or forget on a disconnected picker: those pills are
-	// not drawn rather than drawn and inert.
+	// Nothing to disconnect or forget on a network that is not the connection
+	// and not saved: those pills are not drawn rather than drawn and inert.
 	withScreen(t, probeW, probeH)
 	wifiPanel = wifiPanelState{
-		open:      true,
 		available: true,
 		radioOn:   true,
 		loadedAt:  time.Now(),
 		status:    wifiStatus{State: "DISCONNECTED"},
 		networks:  []wifiNetwork{{SSID: "Cafe", Signal: -70}},
 	}
-	renderer.Clear()
-	renderWiFiPanel(renderer, &Config{})
-	for _, hit := range wifiActionRects {
-		if hit.id == wifiActionReconnect || hit.id == wifiActionDisconnect || hit.id == wifiActionForget {
-			t.Fatalf("disconnected picker still offers action %v", hit.id)
+	frame()
+	info := wifiScr.infoRects[0]
+	wifiScrClick(info.X+info.W/2, info.Y+info.H/2, config)
+	frame()
+	for _, p := range wifiScr.sheet.pills {
+		if p.id == "reconnect" || p.id == "disconnect" || p.id == "forget" {
+			t.Fatalf("an unsaved, unconnected network still offers %q", p.id)
 		}
 	}
 }
@@ -189,15 +210,17 @@ func TestStatusWiFiTapTargetIsFingerSized(t *testing.T) {
 		t.Fatalf("meter hit area %+v overlaps the clock %+v", statusWiFiRect, statusClockRect)
 	}
 
-	prevPanel, prevRects := wifiPanel, wifiRowRects
+	prevPanel, prevFresh := wifiPanel, wifiScr.fresh
+	prevScene, prevPending, prevPhase := currentSceneIndex, pendingSceneIndex, transitionPhase
+	prevHistory := append([]int(nil), sceneHistory...)
 	t.Cleanup(func() {
-		// Opening the picker starts a scan; let it land in the channel before
-		// the panel state is restored, or its result outlives this test and
-		// blocks the next one's hand-written update.
 		wifiSettleForTest()
-		wifiPanel, wifiRowRects = prevPanel, prevRects
+		wifiPanel, wifiScr.fresh = prevPanel, prevFresh
+		currentSceneIndex, pendingSceneIndex, transitionPhase = prevScene, prevPending, prevPhase
+		sceneHistory = prevHistory
 	})
 	wifiPanel = wifiPanelState{}
+	currentSceneIndex, pendingSceneIndex, transitionPhase = 0, -1, "none"
 
 	// The padded edge is outside the drawn bars but inside the target: that is
 	// the whole point of growing it.
@@ -206,10 +229,9 @@ func TestStatusWiFiTapTargetIsFingerSized(t *testing.T) {
 	if !handleChromeBarClick(tapX, tapY, config) {
 		t.Fatalf("tap at (%d,%d) near the meter's edge was not handled", tapX, tapY)
 	}
-	if !wifiPanel.open {
-		t.Fatal("the tap did not open the Wi-Fi picker")
+	if want := sceneIndexExact(config, wifiScrSceneName); want < 0 || pendingSceneIndex != want || transitionPhase != "fade-out" {
+		t.Fatalf("the tap started phase %q to scene %d, want the Wi-Fi page (%d)", transitionPhase, pendingSceneIndex, want)
 	}
-	wifiPanel.open = false
 }
 
 // TestWiFiStatusLineNamesTheScanProblem: a scan the supplicant refuses must say

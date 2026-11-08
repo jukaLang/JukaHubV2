@@ -923,6 +923,12 @@ func retroArchCoreDirs() []string {
 			filepath.Join(filepath.Dir(exe), "retroarch", "cores"),
 		)
 	}
+	// A portable RetroArch on Windows keeps its cores beside retroarch.exe —
+	// the copy the Emulators page installs, or the user's own. It comes first,
+	// so a core install lands where the RetroArch tile will load it.
+	if IsWindows() {
+		candidates = append(emuWinRetroArchCoreDirs(), candidates...)
+	}
 	seen := map[string]bool{}
 	var out []string
 	for _, candidate := range candidates {

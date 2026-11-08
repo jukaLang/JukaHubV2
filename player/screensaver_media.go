@@ -4,11 +4,11 @@ package main
 //
 // The starfield used to show only the clock, the battery and a quote. That left
 // the panel useless at a glance: no link state, and nothing about the music or
-// video still running underneath it. Now the saver is also a status panel — wifi
-// next to the battery, and a card in the middle showing the live video frame
-// when a video plays, or the track's cover art when music does, with equaliser
-// bars when the track has no artwork to show (or across the bottom of the art
-// when it has).
+// video still running underneath it. Now the saver is also a status panel — the
+// Wi-Fi and battery chips (saver_status.go), and a card in the middle showing
+// the live video frame when a video plays, or the track's cover art when music
+// does, with equaliser bars when the track has no artwork to show (or across the
+// bottom of the art when it has).
 
 import (
 	"math"
@@ -193,28 +193,38 @@ func forgetCoverArtLookups() {
 }
 
 // saverMediaCard is the rect the media sits in. Video keeps 16:9; artwork is a
-// square. Both are centred a little above the middle so the title and the quote
-// hint below do not crowd the bottom edge.
+// square. Both sit in the band between the clock block at the top (a quarter
+// of the screen) and the title, subtitle and hints at the bottom (about the same
+// again), centred in it, so nothing on the lock screen overlaps.
 func saverMediaCard(kind screensaverMediaKind, sw, sh int32) sdl.Rect {
 	if sw <= 0 || sh <= 0 || kind == saverMediaNone {
 		return sdl.Rect{}
 	}
+	top := sh / 4
+	avail := sh - top - sh*6/25
+	if avail < sh/5 {
+		avail = sh / 5
+	}
 	var w, h int32
 	switch kind {
 	case saverMediaVideo:
-		w = int32(float64(sw) * 0.62)
-		if maxW := int32(float64(sh) * 0.56 * 16 / 9); w > maxW {
-			w = maxW
-		}
+		w = int32(float64(sw) * 0.56)
 		h = w * 9 / 16
+		if h > avail {
+			h = avail
+			w = h * 16 / 9
+		}
 	case saverMediaMusic:
 		side := int32(float64(sh) * 0.44)
 		if maxSide := int32(float64(sw) * 0.30); side > maxSide {
 			side = maxSide
 		}
+		if side > avail {
+			side = avail
+		}
 		w, h = side, side
 	}
-	return sdl.Rect{X: (sw - w) / 2, Y: (sh-h)/2 - sh/10, W: w, H: h}
+	return sdl.Rect{X: (sw - w) / 2, Y: top + (avail-h)/2, W: w, H: h}
 }
 
 // saverFitRect fits a source size inside dst, preserving its aspect ratio.
@@ -262,9 +272,12 @@ func drawScreensaverMedia(renderer *sdl.Renderer, config *Config, media screensa
 	}
 
 	// Glass plate behind the media so the artwork or frame reads as a card and
-	// the stars do not show through it.
-	fillRoundedRect(renderer, card.X+4, card.Y+8, card.W, card.H, 18, WithAlpha(sdl.Color{R: 0, G: 0, B: 0}, saverFade(fade, 90)))
-	fillRoundedRect(renderer, card.X, card.Y, card.W, card.H, 18, WithAlpha(ColorSurfacePanel, saverFade(fade, 235)))
+	// the stars do not show through it. The plate is opaque: a translucent one
+	// let the starfield twinkle through letterboxed video.
+	g := saverGlassStyle()
+	plate := g.raised
+	plate.A = 255
+	fillRoundedRect(renderer, card.X, card.Y, card.W, card.H, 18, WithAlpha(plate, saverFade(fade, 255)))
 
 	switch media.kind {
 	case saverMediaVideo:
@@ -285,28 +298,27 @@ func drawScreensaverMedia(renderer *sdl.Renderer, config *Config, media screensa
 		}
 	}
 
-	strokeRoundedRect(renderer, card.X, card.Y, card.W, card.H, 18, 1, WithAlpha(ColorBorderDefault, saverFade(fade, 190)))
+	strokeRoundedRect(renderer, card.X, card.Y, card.W, card.H, 18, 1, WithAlpha(g.edge, saverFade(fade, 255)))
 
-	// Title under the card, two lines at most.
+	// Title under the card, on the idle screen's own dark backdrop: the light
+	// inks, whatever the theme (saver_status.go).
 	title, _ := getCachedFont(config, "medium")
-	sub, _ := getCachedFont(config, "small")
+	sub := saverChipFont(config)
 	if title == nil || strings.TrimSpace(media.title) == "" {
 		return
 	}
-	line := ellipsize(title, media.title, card.W+48)
-	tw, _, _ := title.SizeUTF8(line)
-	renderText(renderer, config, title, line,
-		WithAlpha(ColorTextPrimary(), saverFade(fade, 225)),
-		(screenWidth-int32(tw))/2, card.Y+card.H+18)
+	line := ellipsize(title, media.title, card.W+96)
+	tw, th := measureText(title, line)
+	renderText(renderer, config, title, line, WithAlpha(saverInkClock, saverFade(fade, 240)),
+		(screenWidth-tw)/2, card.Y+card.H+14)
 	if sub != nil && media.subtitle != "" {
 		label := media.subtitle
 		if media.kind == saverMediaMusic && media.coverPath == "" && media.playing {
 			label += " · no artwork"
 		}
-		sw2, _, _ := sub.SizeUTF8(label)
-		renderText(renderer, config, sub, label,
-			sdl.Color{R: 140, G: 160, B: 200, A: saverFade(fade, 170)},
-			(screenWidth-int32(sw2))/2, card.Y+card.H+18+int32(title.Height())+6)
+		sw2, _ := measureText(sub, label)
+		renderText(renderer, config, sub, label, WithAlpha(saverInkSoft, saverFade(fade, 230)),
+			(screenWidth-sw2)/2, card.Y+card.H+14+th+4)
 	}
 }
 
@@ -339,7 +351,7 @@ func drawSaverVideo(renderer *sdl.Renderer, config *Config, card sdl.Rect, fade 
 		cx, cy := card.X+card.W/2, card.Y+card.H/2
 		fillCircle(renderer, cx, cy, 26, sdl.Color{R: 0, G: 0, B: 0, A: saverFade(fade, 150)})
 		s := int32(11)
-		fillTriangleFilled(renderer, pt{x: cx - s + 2, y: cy - s}, pt{x: cx - s + 2, y: cy + s}, pt{x: cx + s - 1, y: cy}, ColorTextPrimary())
+		fillTriangleFilled(renderer, pt{x: cx - s + 2, y: cy - s}, pt{x: cx - s + 2, y: cy + s}, pt{x: cx + s - 1, y: cy}, saverInkClock)
 	}
 }
 
@@ -400,14 +412,4 @@ func drawSaverEqualizer(renderer *sdl.Renderer, rect sdl.Rect, bars int, fade ui
 		x := rect.X + int32(i)*(barW+gap)
 		fillRoundedRect(renderer, x, baseY-h, barW, h, barW/2, WithAlpha(accentColor, alpha))
 	}
-}
-
-// drawScreensaverWifi puts the signal meter next to the battery readout, drawn
-// from the same source chain as the status bar so the two never disagree.
-func drawScreensaverWifi(renderer *sdl.Renderer, x, y int32, fade uint8) {
-	if renderer == nil || fade < 80 {
-		return
-	}
-	level := readWiFiSignalLevel()
-	drawStatusSignalBars(renderer, x, y, 22, 15, level, sdl.Color{R: 160, G: 175, B: 198, A: saverFade(fade, 220)})
 }

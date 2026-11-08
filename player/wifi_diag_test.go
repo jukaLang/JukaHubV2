@@ -153,72 +153,76 @@ func TestWiFiDiagnosticsShowsTheSupplicantStart(t *testing.T) {
 	}
 }
 
-// The sheet opens with the key the footer advertises, scrolls, and B goes back
-// to the list instead of closing the picker — including while the list has no
-// backend, which is the case the sheet exists for.
+// The sheet opens with the key and the button the footer advertises, scrolls
+// safely before it is drawn, and B goes back to the list instead of leaving
+// the page — including while the list has no backend, which is the case the
+// sheet exists for.
 func TestWiFiDiagnosticsKeyAndPadReach(t *testing.T) {
-	prev := wifiPanel
-	t.Cleanup(func() { wifiPanel = prev })
-	wifiPanel = wifiPanelState{open: true, available: false, detail: "No wireless network interface on this device"}
-
-	if !handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_i}}, &Config{}) {
-		t.Fatal("I was not consumed by the picker")
+	config := toolsHubTestNav(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
+	sceneHistory = []int{0}
+	// A fresh (empty) report: opening the sheet does not start a probe.
+	wifiPanel = wifiPanelState{available: false, detail: "No wireless network interface on this device",
+		diag: wifiDiagReport{At: time.Now()}}
+	key := func(sym sdl.Keycode) bool {
+		return wifiScrKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sym}}, config)
 	}
-	if !wifiPanel.diagOpen {
+
+	if !key(sdl.K_i) {
+		t.Fatal("I was not consumed by the page")
+	}
+	if !wifiPanel.diagOpen || !wifiScr.sheet.open || wifiScr.sheetMode != wifiScrSheetDiag {
 		t.Fatal("I did not open the diagnostics sheet")
 	}
 	// Scrolling with nothing rendered yet must not panic or go negative.
-	wifiDiagScroll(-3)
-	if wifiPanel.diagScroll != 0 {
-		t.Fatalf("scroll went to %d, want 0", wifiPanel.diagScroll)
+	wifiScr.sheet.scrollBy(-3)
+	if wifiScr.sheet.scroll != 0 {
+		t.Fatalf("scroll went to %d, want 0", wifiScr.sheet.scroll)
 	}
-	if !handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}}, &Config{}) {
+	if !key(sdl.K_ESCAPE) {
 		t.Fatal("Escape was not consumed by the sheet")
 	}
-	if wifiPanel.diagOpen || !wifiPanel.open {
-		t.Fatalf("Escape left diag=%v panel=%v, want the list still open", wifiPanel.diagOpen, wifiPanel.open)
+	if wifiPanel.diagOpen || wifiScr.sheet.open || transitionPhase != "none" {
+		t.Fatalf("Escape left diag=%v sheet=%v phase=%q, want the list still on screen",
+			wifiPanel.diagOpen, wifiScr.sheet.open, transitionPhase)
 	}
-	if !handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}}, &Config{}) || wifiPanel.open {
-		t.Fatal("Escape on the list did not close the panel")
+	if !key(sdl.K_ESCAPE) || pendingSceneIndex != 0 || transitionPhase != "fade-out" {
+		t.Fatal("Escape on the list did not leave the page")
 	}
 
-	// Pad: L1 opens the sheet, B backs out to the list, a second B closes.
-	wifiPanel = wifiPanelState{open: true, available: false}
-	ctrlWiFi(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_LEFTSHOULDER}, &Config{})
+	// Pad: Select opens the sheet, B backs out to the list, a second B leaves.
+	transitionPhase, pendingSceneIndex = "none", -1
+	sceneHistory = []int{0}
+	wifiPanel = wifiPanelState{diag: wifiDiagReport{At: time.Now()}}
+	pad := func(button uint8) bool {
+		return wifiScrPad(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}, config)
+	}
+	pad(sdl.CONTROLLER_BUTTON_BACK)
 	if !wifiPanel.diagOpen {
-		t.Fatal("L1 did not open the diagnostics sheet")
+		t.Fatal("Select did not open the diagnostics sheet")
 	}
-	ctrlWiFi(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_B}, &Config{})
-	if wifiPanel.diagOpen || !wifiPanel.open {
-		t.Fatalf("B left diag=%v panel=%v, want the list still open", wifiPanel.diagOpen, wifiPanel.open)
+	pad(sdl.CONTROLLER_BUTTON_B)
+	if wifiPanel.diagOpen || wifiScr.sheet.open || transitionPhase != "none" {
+		t.Fatalf("B left diag=%v sheet=%v phase=%q, want the list still on screen",
+			wifiPanel.diagOpen, wifiScr.sheet.open, transitionPhase)
 	}
-	ctrlWiFi(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_B}, &Config{})
-	if wifiPanel.open {
-		t.Fatal("B on the list did not close the panel")
+	pad(sdl.CONTROLLER_BUTTON_B)
+	if pendingSceneIndex != 0 || transitionPhase != "fade-out" {
+		t.Fatal("B on the list did not leave the page")
 	}
 }
 
-// The sheet is drawable at both canvas sizes, its pills are touch targets inside
-// the panel, and it leaves no stale list row behind (a row rect would be a tap
-// target on a list that is not on screen).
+// The sheet is drawable at both canvas sizes, its pills are touch targets on
+// its card, and the page under it leaves no list row behind (a row rect would
+// be a tap target on a list that has nothing in it).
 func TestWiFiDiagnosticsRendersItsActions(t *testing.T) {
-	_ = newProbeFrame(t)
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v", err)
-	}
-	defer destroyTestRenderer(renderer)
-
-	prevPanel, prevActions, prevRows := wifiPanel, wifiActionRects, wifiRowRects
-	t.Cleanup(func() {
-		wifiPanel, wifiActionRects, wifiRowRects = prevPanel, prevActions, prevRows
-		ClearTextCache()
-	})
+	config := toolsHubTestNav(t)
+	renderer := probeRenderer(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
 
 	for _, size := range []struct{ w, h int32 }{{probeW, probeH}, {800, 480}} {
 		withScreen(t, size.w, size.h)
-		wifiPanel = wifiPanelState{open: true, available: false, diagOpen: true,
-			detail: "No wireless network interface on this device"}
+		wifiPanel = wifiPanelState{available: false, detail: "No wireless network interface on this device"}
 		wifiPanel.diag = wifiDiagReport{
 			At: time.Now(),
 			Entries: []wifiDiagEntry{
@@ -227,64 +231,63 @@ func TestWiFiDiagnosticsRendersItsActions(t *testing.T) {
 				{Label: "Last error", Value: "wpa_cli did not answer (exit status 255) · 12s ago", State: wifiDiagErr},
 			},
 		}
+		wifiScr.sheet = toolsHubSheet{}
+		wifiScrOpenDiag()
 		renderer.SetDrawColor(9, 14, 25, 255)
 		renderer.Clear()
-		renderWiFiPanel(renderer, &Config{})
+		renderWiFiScr(renderer, config)
 
-		if len(wifiRowRects) != 0 {
-			t.Fatalf("%dx%d: the sheet left %d list row targets behind", size.w, size.h, len(wifiRowRects))
+		if len(wifiScr.rowRects) != 0 {
+			t.Fatalf("%dx%d: the page left %d list row targets behind", size.w, size.h, len(wifiScr.rowRects))
 		}
-		got := map[wifiActionID]sdl.Rect{}
-		for _, hit := range wifiActionRects {
-			got[hit.id] = hit.rect
-			if hit.rect.W <= 0 || hit.rect.H <= 0 {
-				t.Fatalf("%dx%d: action %v has no size", size.w, size.h, hit.id)
+		s := &wifiScr.sheet
+		got := map[string]sdl.Rect{}
+		for i, r := range s.pillRects {
+			got[s.pills[i].id] = r
+			if r.W <= 0 || r.H <= 0 {
+				t.Fatalf("%dx%d: pill %q has no size", size.w, size.h, s.pills[i].id)
 			}
-			if !pointInRect(hit.rect.X+hit.rect.W/2, hit.rect.Y+hit.rect.H/2, wifiPanelRect) {
-				t.Fatalf("%dx%d: action %v %+v is outside the panel %+v",
-					size.w, size.h, hit.id, hit.rect, wifiPanelRect)
+			if !pointInRect(r.X+r.W/2, r.Y+r.H/2, s.card) {
+				t.Fatalf("%dx%d: pill %q %+v is outside the card %+v", size.w, size.h, s.pills[i].id, r, s.card)
 			}
 		}
-		for _, want := range []wifiActionID{wifiActionDiagRefresh, wifiActionDiagBack} {
+		for _, want := range []string{"refresh", "copy", "close"} {
 			if _, ok := got[want]; !ok {
-				t.Fatalf("%dx%d: the sheet did not draw action %v", size.w, size.h, want)
+				t.Fatalf("%dx%d: the sheet did not draw %q", size.w, size.h, want)
 			}
 		}
+		if len(s.lines) < len(wifiPanel.diag.Entries) {
+			t.Fatalf("%dx%d: the sheet laid out %d rows for %d facts", size.w, size.h, len(s.lines), len(wifiPanel.diag.Entries))
+		}
+		wifiScrCloseSheet()
 	}
 }
 
-// The list keeps Diagnostics reachable when no backend answered; without that
-// pill the one state the sheet is for could not open it on a touch screen.
+// The page keeps Diagnostics reachable when no backend answered; without it
+// the one state the sheet is for could not open it on a touch screen.
 func TestWiFiListDrawsTheDiagnosticsPillWithoutABackend(t *testing.T) {
-	_ = newProbeFrame(t)
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v", err)
-	}
-	defer destroyTestRenderer(renderer)
+	config := toolsHubTestNav(t)
+	renderer := probeRenderer(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
 
-	prevPanel, prevActions := wifiPanel, wifiActionRects
-	t.Cleanup(func() {
-		wifiPanel, wifiActionRects = prevPanel, prevActions
-		ClearTextCache()
-	})
-
-	withScreen(t, probeW, probeH)
-	wifiPanel = wifiPanelState{open: true, available: false, loadedAt: time.Now(),
+	wifiPanel = wifiPanelState{available: false, loadedAt: time.Now(),
 		detail: "Wi-Fi control needs wpa_cli or a wpa_supplicant control socket, and this image has neither"}
 	renderer.SetDrawColor(9, 14, 25, 255)
 	renderer.Clear()
-	renderWiFiPanel(renderer, &Config{})
+	renderWiFiScr(renderer, config)
 
-	seen := map[wifiActionID]bool{}
-	for _, hit := range wifiActionRects {
-		seen[hit.id] = true
+	if wifiScr.emptyRect.W == 0 || wifiScr.emptyAction != "diag" {
+		t.Fatalf("empty state button %+v does %q, want Diagnostics", wifiScr.emptyRect, wifiScr.emptyAction)
 	}
-	if !seen[wifiActionDiag] || !seen[wifiActionClose] {
-		t.Fatalf("list actions = %v, want Diagnostics and Close", seen)
+	seen := map[string]bool{}
+	for _, c := range wifiScr.ctrls {
+		seen[c.id] = c.rect.W > 0
 	}
-	if seen[wifiActionRescan] {
-		t.Fatal("an unavailable picker offered Rescan")
+	if !seen["diag"] {
+		t.Fatalf("header controls = %v, want Diagnostics", seen)
+	}
+	if _, ok := seen["scan"]; ok {
+		t.Fatal("a page with no backend offered Scan")
 	}
 }
 
@@ -384,23 +387,27 @@ func TestWiFiDiagCopyWaitsForTheReport(t *testing.T) {
 // The sheet's pills, key and pad all reach Copy, so the action is not
 // touch-only on a device whose owner is holding a controller.
 func TestWiFiDiagCopyReachableFromKeyAndPad(t *testing.T) {
-	prev := wifiPanel
-	t.Cleanup(func() { wifiPanel = prev })
-	wifiPanel = wifiPanelState{open: true, diagOpen: true}
+	config := toolsHubTestNav(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
+	wifiPanel = wifiPanelState{diag: wifiDiagReport{At: time.Now()}}
+	wifiScrOpenDiag()
+	if wifiScrPills() != "refresh,copy,close" {
+		t.Fatalf("diagnostics pills = %s, want Copy among them", wifiScrPills())
+	}
 
 	// With no report yet Copy stays inert, which is the path the key and pad
 	// handlers take; the point here is that they do not fall through to the
 	// list's actions or back out of the sheet.
-	if !handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_c}}, &Config{}) {
+	if !wifiScrKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_c}}, config) {
 		t.Fatal("C was not consumed by the sheet")
 	}
-	if !wifiPanel.diagOpen {
+	if !wifiPanel.diagOpen || !wifiScr.sheet.open {
 		t.Fatal("C left the sheet")
 	}
-	if !ctrlWiFi(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_Y}, &Config{}) {
+	if !wifiScrPad(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_Y}, config) {
 		t.Fatal("Y was not consumed by the sheet")
 	}
-	if !wifiPanel.diagOpen {
+	if !wifiPanel.diagOpen || !wifiScr.sheet.open {
 		t.Fatal("Y left the sheet")
 	}
 }

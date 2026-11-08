@@ -274,8 +274,46 @@ function parseSavedElement(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
   const node = tmp.firstChild;
-  if (node && node.classList) node.classList.remove('selected');
+  if (node && node.classList) {
+    node.classList.remove('selected');
+    upgradeSavedIcons(node);
+  }
   return node;
+}
+
+// Font Awesome classes an older build saved inside canvas elements (tile
+// glyphs, the Continue card, the collapsed-list marker), as builder-icons.js
+// names. Only reached when the shipped config cannot load and an old autosave
+// is restored instead.
+const LEGACY_FA_ICONS = {
+  'fa-play': 'play', 'fa-folder': 'folder', 'fa-box': 'package', 'fa-table-cells-large': 'apps',
+  'fa-th-large': 'grid', 'fa-star': 'star', 'fa-globe': 'globe', 'fa-comment': 'chat',
+  'fa-sliders': 'sliders', 'fa-gear': 'settings', 'fa-clock': 'clock', 'fa-gamepad': 'gamepad',
+  'fa-power-off': 'power', 'fa-arrow-left': 'back', 'fa-circle': 'ring', 'fa-tv': 'tv',
+  'fa-microphone': 'mic', 'fa-chart-line': 'chart', 'fa-cloud': 'cloud', 'fa-palette': 'palette',
+  'fa-microchip': 'cpu', 'fa-terminal': 'terminal', 'fa-gauge-high': 'speed', 'fa-hard-drive': 'disk',
+  'fa-file-lines': 'logs', 'fa-broom': 'broom', 'fa-download': 'download', 'fa-network-wired': 'network',
+  'fa-photo-film': 'media-stack', 'fa-bars': 'menu'
+};
+
+// upgradeSavedIcons redraws icons in element markup saved by a build that used
+// Font Awesome and text glyphs: those classes have no stylesheet any more, and
+// the remove badge's U+2715 and the Text Browser emoji are not in Inter.
+function upgradeSavedIcons(node) {
+  node.querySelectorAll('i[class*="fa-"]').forEach(old => {
+    const legacy = [...old.classList].find(cls => Object.prototype.hasOwnProperty.call(LEGACY_FA_ICONS, cls));
+    const fresh = createIcon(legacy ? LEGACY_FA_ICONS[legacy] : 'ring');
+    if (old.style.marginRight) fresh.style.marginRight = old.style.marginRight;
+    old.replaceWith(fresh);
+  });
+  node.querySelectorAll('.remove-button').forEach(badge => {
+    if (!badge.querySelector('svg')) badge.innerHTML = iconSvg('close');
+  });
+  const label = node.querySelector('.text-content');
+  if (node.getAttribute('data-type') === 'textbrowser' && label && !node.querySelector('.tb-source-icon') &&
+    /^\s*(?:\u{1F5A5}\u{FE0F}?|\u{1F50D}|\u{1F4CB}|\u{1F310})/u.test(label.textContent)) {
+    setTextBrowserLabel(node, node.getAttribute('data-source') || 'system');
+  }
 }
 
 function restoreSnapshot(snapshot) {
@@ -699,8 +737,8 @@ function setPreviewButtonLabel(active) {
   btn.setAttribute('aria-label', active ? 'Exit preview and return to editor' : 'Preview');
   btn.setAttribute('title', active ? 'Exit preview (Esc)' : 'Preview Mode (Ctrl+P)');
   btn.innerHTML = active
-    ? '<i class="fas fa-times" aria-hidden="true"></i><span>Exit preview</span>'
-    : '<i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>';
+    ? iconSvg('close') + '<span>Exit preview</span>'
+    : iconSvg('eye') + '<span>Preview</span>';
 }
 
 function togglePreviewMode() {
@@ -1831,9 +1869,7 @@ function setupEventListeners() {
 function setThemeToggleLabel(isLight) {
   if (!darkModeToggle) return;
   const label = isLight ? 'Switch to dark theme' : 'Switch to light theme';
-  darkModeToggle.innerHTML = isLight
-    ? '<i class="fas fa-sun" aria-hidden="true"></i>'
-    : '<i class="fas fa-moon" aria-hidden="true"></i>';
+  darkModeToggle.innerHTML = iconSvg(isLight ? 'sun' : 'moon');
   darkModeToggle.setAttribute('aria-label', label);
   darkModeToggle.title = label;
 }
@@ -2238,26 +2274,17 @@ function addElement(type, x, y, recordHistory = true) {
   if (type === 'dynamiclist') {
     el.innerHTML = `
       <span class="text-content">Dynamic List</span>
-      <span class="remove-button">✕</span>
+      <span class="remove-button">${iconSvg('close')}</span>
   `;
     el.setAttribute('data-command', '');
     el.setAttribute('data-variable', '');
     setupDynamicListExecution(el);
   } else if (type === 'textbrowser') {
-    const sourceIcons = {
-      'system': '🖥️',
-      'zeroconf': '🔍',
-      'json': '📋'
-    };
-    const sourceNames = {
-      'system': 'System',
-      'zeroconf': 'Zeroconf',
-      'json': 'JSON'
-    };
     el.innerHTML = `
-      <span class="text-content">${sourceIcons['system'] || '🌐'} ${sourceNames['system'] || 'Text Browser'}</span>
-      <span class="remove-button">✕</span>
+      <span class="text-content"></span>
+      <span class="remove-button">${iconSvg('close')}</span>
     `;
+    setTextBrowserLabel(el, 'system');
     el.setAttribute('data-variable', '');
     el.setAttribute('data-source', 'system');
   } else if (type === 'menu') {
@@ -2266,7 +2293,7 @@ function addElement(type, x, y, recordHistory = true) {
     el.innerHTML = `
                     <div class="menu-scene-buttons"></div>
                     <div class="menu-clock">00:00</div>
-                    <span class="remove-button">✕</span>
+                    <span class="remove-button">${iconSvg('close')}</span>
                 `; // Removed the language button
     el.style.fontSize = '16px';
     el.setAttribute('data-type', 'menu');
@@ -2286,7 +2313,7 @@ function addElement(type, x, y, recordHistory = true) {
     el.appendChild(textSpan);
 
     const removeButton = document.createElement('span');
-    removeButton.textContent = '✕';
+    removeButton.innerHTML = iconSvg('close');
     removeButton.className = 'remove-button';
     el.appendChild(removeButton);
 
@@ -2317,8 +2344,7 @@ function addElement(type, x, y, recordHistory = true) {
 
     // Update the addElement function
     if (type === 'collapsedlist') {
-      const listIcon = document.createElement('i');
-      listIcon.className = 'fas fa-bars';
+      const listIcon = createIcon('menu');
       listIcon.style.marginRight = '8px';
       textSpan.prepend(listIcon);
 
@@ -2607,7 +2633,8 @@ function setupElementEvents(el) {
   // toggle left screen readers announcing the App Info tab as current.
   el.addEventListener('click', (e) => {
     if (previewMode) return;
-    if (e.target.classList.contains('remove-button') ||
+    // closest(): the badge holds an SVG, which can be the event target.
+    if (e.target.closest('.remove-button') ||
       e.target.classList.contains('menu-scene-button') ||
       e.target.classList.contains('menu-language') ||
       e.target.classList.contains('element-input')) {
@@ -2748,20 +2775,7 @@ function showElementProperties(el) {
     tbSource.value = el.getAttribute('data-source') || 'system';
     tbSource.onchange = () => {
       el.setAttribute('data-source', tbSource.value);
-      const sourceIcons = {
-        'system': '🖥️',
-        'zeroconf': '🔍',
-        'json': '📋'
-      };
-      const sourceNames = {
-        'system': 'System',
-        'zeroconf': 'Zeroconf',
-        'json': 'JSON'
-      };
-      const textContent = el.querySelector('.text-content');
-      if (textContent) {
-        textContent.textContent = `${sourceIcons[tbSource.value] || '🌐'} ${sourceNames[tbSource.value] || 'Text Browser'}`;
-      }
+      setTextBrowserLabel(el, tbSource.value);
       const jsonPathGroup = document.getElementById('textBrowserJsonPathGroup');
       if (jsonPathGroup) {
         jsonPathGroup.style.display = tbSource.value === 'json' ? 'block' : 'none';
@@ -3534,15 +3548,40 @@ function setElementRawData(el, data) {
   } catch (e) { /* ignore oversized/unserialisable payloads */ }
 }
 
+// A Text Browser on the canvas names its data source. The label used to start
+// with an emoji (a desktop computer before "System"), which Inter does not
+// draw, so it came out in the platform's emoji font; the source is a drawn icon
+// beside the name now.
+const TEXT_BROWSER_SOURCES = {
+  system: { name: 'System', icon: 'monitor' },
+  zeroconf: { name: 'Zeroconf', icon: 'search' },
+  json: { name: 'JSON', icon: 'clipboard' }
+};
+
+function textBrowserSource(source) {
+  return Object.prototype.hasOwnProperty.call(TEXT_BROWSER_SOURCES, source)
+    ? TEXT_BROWSER_SOURCES[source]
+    : { name: 'Text Browser', icon: 'globe' };
+}
+
+// setTextBrowserLabel shows `source` on a canvas Text Browser. The icon sits
+// beside .text-content rather than inside it, so the text that the export and
+// the variable highlighter read is the bare name.
+function setTextBrowserLabel(el, source) {
+  const entry = textBrowserSource(source);
+  const textSpan = el.querySelector('.text-content');
+  if (!textSpan) return;
+  textSpan.textContent = entry.name;
+  const icon = createIcon(entry.icon, 'tb-source-icon');
+  const previous = el.querySelector('.tb-source-icon');
+  if (previous) previous.replaceWith(icon);
+  else textSpan.before(icon);
+}
+
 // The label the canvas paints for an element that carries no text of its own.
 function synthesizedTextFor(el) {
   const type = (el.getAttribute('data-type') || '').toLowerCase();
-  if (type === 'textbrowser') {
-    const source = el.getAttribute('data-source') || 'system';
-    const icons = { system: '🖥️', zeroconf: '🔍', json: '📋' };
-    const names = { system: 'System', zeroconf: 'Zeroconf', json: 'JSON' };
-    return `${icons[source] || '🌐'} ${names[source] || 'Text Browser'}`;
-  }
+  if (type === 'textbrowser') return textBrowserSource(el.getAttribute('data-source') || 'system').name;
   return type ? type.charAt(0).toUpperCase() + type.slice(1) : '';
 }
 
@@ -3871,7 +3910,9 @@ function normalizeImportedConfig(raw) {
     }
     const requested = typeof rawScene.name === 'string' ? rawScene.name.trim() : '';
     const name = uniqueSceneName(requested || `Scene ${index + 1}`, takenNames);
-    if (requested && name !== requested) report.renamedScenes.push(`${requested} → ${name}`);
+    // Words, not an arrow: the vendored Inter subset has no U+2192, so an arrow
+    // would come out in a fallback font.
+    if (requested && name !== requested) report.renamedScenes.push(`${requested} as ${name}`);
     takenNames.add(name);
 
     const elementsInput = Array.isArray(rawScene.elements) ? rawScene.elements : [];
@@ -4166,6 +4207,24 @@ function validateProject(config) {
       if (['button', 'input', 'menu'].includes(type) && w && h && (w < 36 || h < 36)) {
         add('warning', 'tap-target', `This ${type} is only ${w}×${h} px — hard to hit on a handheld.`, 'Make touch controls at least 36×36 px.', where, target);
       }
+
+      // Handheld linting. The same design is read at 1280×720 on a five-inch
+      // panel, so a size that reads fine in the desktop editor can be
+      // unreadable, or sit under the panel's rounded corner, on the device.
+      // These stay warnings: the builder still exports the design.
+      if (text.trim() && !PLAYER_SELF_PAINTING_TYPES.includes(type)) {
+        const role = String(el.font || 'medium').toLowerCase();
+        const px = toIntOrNull(fontSizes[role]) || toIntOrNull(fontSizes.medium) || 24;
+        if (px < 14) {
+          add('warning', 'handheld-type', `Text at ${px} px is below the handheld's 14 px legible floor.`, 'Raise this role in App Info › Font sizes.', where, target);
+        }
+      }
+      if (['button', 'input', 'menu', 'toggle'].includes(type) && x !== null && y !== null && w && h) {
+        const inset = 32;
+        if (x < inset || y < inset || x + w > canvasW - inset || y + h > canvasH - inset) {
+          add('warning', 'safe-area', 'This control sits in the rounded-corner margin the handheld clips.', 'Keep controls 32 px inside the canvas edge.', where, target);
+        }
+      }
       if (['button', 'label'].includes(type) && !text.trim() && !el.variable && type !== 'label') {
         add('warning', 'empty-text', 'This button has no text.', 'Double-click it on the canvas to add a label.', where, target);
       }
@@ -4232,6 +4291,13 @@ function validateProject(config) {
         }
       }
     });
+
+    // A scene is one screenful on the handheld. Past a couple of dozen
+    // controls the list scrolls, and a D-pad walk to the bottom is the cost.
+    const controls = elements.filter(el => ['button', 'input', 'toggle'].includes(String(el.type || '').toLowerCase())).length;
+    if (controls > 24) {
+      add('warning', 'scene-density', `${controls} controls in one scene will scroll on the handheld.`, 'Split them across scenes or use a list element.', whereScene, { sceneIndex });
+    }
   });
 
   const errors = issues.filter(issue => issue.severity === 'error').length;
@@ -4290,7 +4356,7 @@ function renderValidationPanel(result, report) {
     button.className = `validate-issue is-${issue.severity}`;
     button.setAttribute('aria-label', `${issue.severity}: ${issue.message}. ${issue.fix}`);
     button.innerHTML = `
-      <i class="fas ${issue.severity === 'error' ? 'fa-circle-exclamation' : 'fa-triangle-exclamation'} validate-icon" aria-hidden="true"></i>
+      ${iconSvg(issue.severity === 'error' ? 'alert-circle' : 'warning', 'validate-icon')}
       <span class="validate-issue-body">
         <span class="validate-issue-where">${escapeHtml(issue.where || 'Design')}</span>
         <span>${escapeHtml(issue.message)}</span>
@@ -4320,21 +4386,18 @@ function createVariableItem(key, val) {
 
   const actions = document.createElement('div');
   actions.className = 'variable-actions';
-  const makeButton = (verb, iconClass, handler) => {
+  const makeButton = (verb, iconName, handler) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.setAttribute('aria-label', `${verb} ${key}`);
     btn.title = `${verb} ${key}`;
-    const icon = document.createElement('i');
-    icon.className = iconClass;
-    icon.setAttribute('aria-hidden', 'true');
-    btn.appendChild(icon);
+    btn.appendChild(createIcon(iconName));
     btn.addEventListener('click', () => handler(String(key)));
     return btn;
   };
   actions.append(
-    makeButton('Edit', 'fas fa-edit', name => editVariable(name)),
-    makeButton('Delete', 'fas fa-trash', name => deleteVariable(name))
+    makeButton('Edit', 'edit', name => editVariable(name)),
+    makeButton('Delete', 'trash', name => deleteVariable(name))
   );
 
   item.append(info, actions);
@@ -5216,7 +5279,7 @@ function loadJukaApp(input) {
   }
   if (!variables.Custom) variables.Custom = {};
 
-  // Settings section of the App Info panel ← the values the device resolves
+  // Settings section of the App Info panel <- the values the device resolves
   // (Custom keys beat typed fields, exactly like cfg syncVariableOverrides).
   applyConfigSettingsToControls();
 
@@ -5265,7 +5328,7 @@ function loadJukaApp(input) {
   applyEditorVariablePaint();
 }
 
-// --- Settings ↔ jukaconfig.json sync -----------------------------------------
+// --- Settings <-> jukaconfig.json sync ---------------------------------------
 // The App Info panel's settings section edits exactly the values the player
 // resolves out of jukaconfig.json: variables.Custom first (case-insensitive,
 // strings win — customValueJs mirrors customValue in player/core.go), then the
@@ -5494,28 +5557,30 @@ function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif
 //    label and the trigger for a known word in a fixed order, and falls back to
 //    the app grid; drawTileIcon paints the result.
 //
-// The tables below mirror both, name for name and in the player's order.
+// The tables below mirror both, name for name and in the player's order, and
+// map each name onto a drawing in builder-icons.js.
 // tests/web/builder.test.mjs checks them against the shipped jukaconfig.json, so
 // a glyph the player gains without a picture here fails the suite instead of
 // shipping a tile that looks one way on the web and another on the handheld.
-const HOME_ICON_CLASSES = {
-  media: 'fa-solid fa-play',
-  continue: 'fa-solid fa-play',
-  files: 'fa-solid fa-folder',
-  packages: 'fa-solid fa-box',
-  apps: 'fa-solid fa-table-cells-large',
-  favorites: 'fa-solid fa-star',
-  browser: 'fa-solid fa-globe',
-  chat: 'fa-solid fa-comment',
-  tools: 'fa-solid fa-sliders',
-  settings: 'fa-solid fa-gear',
-  clock: 'fa-solid fa-clock',
-  gamepad: 'fa-solid fa-gamepad',
-  emulator: 'fa-solid fa-gamepad',
-  emulators: 'fa-solid fa-gamepad',
-  controller: 'fa-solid fa-gamepad',
-  exit: 'fa-solid fa-power-off',
-  back: 'fa-solid fa-arrow-left'
+const HOME_ICON_NAMES = {
+  media: 'media',
+  continue: 'media',
+  files: 'folder',
+  packages: 'package',
+  apps: 'apps',
+  favorites: 'star',
+  browser: 'globe',
+  chat: 'chat',
+  tools: 'sliders',
+  settings: 'settings',
+  clock: 'clock',
+  gamepad: 'gamepad',
+  emulator: 'gamepad',
+  emulators: 'gamepad',
+  controller: 'gamepad',
+  play: 'play',
+  exit: 'power',
+  back: 'back'
 };
 
 // A home card's built-in icon, so a tile without its own `icon` still shows the
@@ -5538,53 +5603,55 @@ const HOME_TITLE_ICONS = {
 };
 
 // explicitTileIcon: the names a config may put in `icon` to mean one shape.
-const TILE_ICON_CLASSES = {
-  play: 'fa-solid fa-play',
-  chat: 'fa-solid fa-comment',
-  files: 'fa-solid fa-folder',
-  tv: 'fa-solid fa-tv',
-  box: 'fa-solid fa-box',
-  mic: 'fa-solid fa-microphone',
-  chart: 'fa-solid fa-chart-line',
-  star: 'fa-solid fa-star',
-  cloud: 'fa-solid fa-cloud',
-  gear: 'fa-solid fa-gear',
-  palette: 'fa-solid fa-palette',
-  chip: 'fa-solid fa-microchip',
-  terminal: 'fa-solid fa-terminal',
-  game: 'fa-solid fa-gamepad',
-  resume: 'fa-solid fa-play',
-  clock: 'fa-solid fa-clock',
-  speed: 'fa-solid fa-gauge-high',
-  disk: 'fa-solid fa-hard-drive',
-  logs: 'fa-solid fa-file-lines',
-  cache: 'fa-solid fa-broom',
-  update: 'fa-solid fa-download',
-  network: 'fa-solid fa-network-wired'
+const TILE_ICON_NAMES = {
+  play: 'play',
+  chat: 'chat',
+  files: 'folder',
+  tv: 'tv',
+  box: 'package',
+  mic: 'mic',
+  chart: 'chart',
+  star: 'star',
+  cloud: 'cloud',
+  gear: 'settings',
+  palette: 'palette',
+  chip: 'cpu',
+  terminal: 'terminal',
+  game: 'gamepad',
+  resume: 'play',
+  clock: 'clock',
+  speed: 'speed',
+  disk: 'disk',
+  logs: 'logs',
+  cache: 'broom',
+  update: 'download',
+  network: 'network'
 };
 
 // tileIconKind's word list, in its order. The order is the point: "Tools" hits
 // apps/tools before it can be read as a tool of its own, and "Continue" is last.
 const TILE_ICON_NEEDLES = [
-  [['youtube', 'media', 'play'], 'fa-solid fa-play'],
-  [['chat', 'discord'], 'fa-solid fa-comment'],
-  [['file', 'explorer'], 'fa-solid fa-folder'],
-  [['live', 'tv', 'stream'], 'fa-solid fa-tv'],
-  [['package', 'store'], 'fa-solid fa-box'],
-  [['podcast', 'shorts'], 'fa-solid fa-microphone'],
-  [['ticker'], 'fa-solid fa-chart-line'],
-  [['favorite'], 'fa-solid fa-star'],
-  [['weather'], 'fa-solid fa-cloud'],
-  [['setting'], 'fa-solid fa-gear'],
-  [['misc', 'apps', 'tools'], 'fa-solid fa-table-cells-large'],
-  [['hardware', 'device', 'system'], 'fa-solid fa-microchip'],
-  [['terminal', 'cron', 'task'], 'fa-solid fa-terminal'],
-  [['jukaland', 'game'], 'fa-solid fa-gamepad'],
-  [['continue', 'recent'], 'fa-solid fa-play']
+  [['youtube', 'media', 'play'], 'play'],
+  [['chat', 'discord'], 'chat'],
+  [['file', 'explorer'], 'folder'],
+  [['live', 'tv', 'stream'], 'tv'],
+  [['package', 'store'], 'package'],
+  [['podcast', 'shorts'], 'mic'],
+  [['ticker'], 'chart'],
+  [['favorite'], 'star'],
+  [['weather'], 'cloud'],
+  [['setting'], 'settings'],
+  [['misc', 'apps', 'tools'], 'apps'],
+  [['hardware', 'device', 'system'], 'cpu'],
+  [['terminal', 'cron', 'task'], 'terminal'],
+  [['jukaland', 'game'], 'gamepad'],
+  [['continue', 'recent'], 'play']
 ];
 
-const TILE_ICON_FALLBACK = 'fa-solid fa-table-cells-large';
-const HOME_ICON_FALLBACK = 'fa-solid fa-circle';
+// The launcher's app grid, and the ring drawHomeIconShapes paints for a name it
+// does not know.
+const TILE_ICON_FALLBACK = 'apps';
+const HOME_ICON_FALLBACK = 'ring';
 
 // sceneLayout is the loaded scene's `layout` field ("home" or ""). The player
 // switches the whole screen onto its home card renderer on that field, so the
@@ -5595,31 +5662,29 @@ function sceneLayout(name) {
   return extras.layout.trim().toLowerCase();
 }
 
-// tileIconClass picks the glyph for one tile from its icon name, label and
-// trigger, the way the player does for the scene that holds it.
-function tileIconClass(icon, text, trigger, layout) {
+// tileIconName picks the glyph (a builder-icons.js name) for one tile from its
+// icon name, label and trigger, the way the player does for the scene that
+// holds it.
+function tileIconName(icon, text, trigger, layout) {
   const name = String(icon || '').trim().toLowerCase();
   const title = String(text || '').trim().toLowerCase();
+  const own = (table, key) => (Object.prototype.hasOwnProperty.call(table, key) ? table[key] : '');
 
   if (layout === 'home') {
     // An icon name in the config replaces the card's own glyph outright, so an
     // unknown name draws the ring the player's fallback paints instead of
     // guessing from the title.
-    if (name) return HOME_ICON_CLASSES[name] || HOME_ICON_FALLBACK;
+    if (name) return own(HOME_ICON_NAMES, name) || HOME_ICON_FALLBACK;
     // With no icon of its own the card keeps the one rebuildItems gave it, and
     // configItemFor finds that card by title (or by any title naming tools).
-    const card = Object.prototype.hasOwnProperty.call(HOME_TITLE_ICONS, title)
-      ? HOME_TITLE_ICONS[title]
-      : title.includes('tools') ? 'tools' : '';
-    return HOME_ICON_CLASSES[card] || HOME_ICON_FALLBACK;
+    const card = own(HOME_TITLE_ICONS, title) || (title.includes('tools') ? 'tools' : '');
+    return own(HOME_ICON_NAMES, card) || HOME_ICON_FALLBACK;
   }
 
-  if (name && Object.prototype.hasOwnProperty.call(TILE_ICON_CLASSES, name)) {
-    return TILE_ICON_CLASSES[name];
-  }
+  if (name && own(TILE_ICON_NAMES, name)) return TILE_ICON_NAMES[name];
   const key = (title + ' ' + name + ' ' + String(trigger || '').toLowerCase()).toLowerCase();
-  for (const [needles, cls] of TILE_ICON_NEEDLES) {
-    if (needles.some(needle => key.includes(needle))) return cls;
+  for (const [needles, glyph] of TILE_ICON_NEEDLES) {
+    if (needles.some(needle => key.includes(needle))) return glyph;
   }
   return TILE_ICON_FALLBACK;
 }
@@ -5668,7 +5733,7 @@ function createElementFromData(elementData, layout) {
     el.innerHTML = `
             <div class="menu-scene-buttons"></div>
             <div class="menu-clock">00:00</div>
-            <span class="remove-button">✕</span>
+            <span class="remove-button">${iconSvg('close')}</span>
         `;
 
     // Scene buttons and clock (the remove button is wired by setupElementEvents)
@@ -5728,7 +5793,7 @@ function createElementFromData(elementData, layout) {
     const icon = document.createElement('span');
     icon.className = 'tile-icon';
     icon.setAttribute('aria-hidden', 'true');
-    icon.innerHTML = `<i class="${tileIconClass(elementData.icon, elementData.text, elementData.trigger, layout)}"></i>`;
+    icon.innerHTML = iconSvg(tileIconName(elementData.icon, elementData.text, elementData.trigger, layout));
     // The player sizes the glyph at a third of the tile, clamped to 44..64 px.
     icon.style.fontSize = Math.min(64, Math.max(44, Math.round(width / 3))) + 'px';
     el.insertBefore(icon, textSpan);
@@ -5755,7 +5820,7 @@ function createElementFromData(elementData, layout) {
     card.className = 'recent-card';
     card.innerHTML = '<span class="recent-title">Continue</span>' +
       '<span class="recent-empty">' +
-      '<i class="fa-solid fa-photo-film" aria-hidden="true"></i>' +
+      iconSvg('media-stack') +
       '<span class="recent-empty-title">Nothing played recently</span>' +
       '<span class="recent-empty-hint">Play a game or open Media to start</span>' +
       '</span>';
@@ -5772,7 +5837,7 @@ function createElementFromData(elementData, layout) {
 
   // Add remove button
   const removeButton = document.createElement('span');
-  removeButton.textContent = '✕';
+  removeButton.innerHTML = iconSvg('close');
   removeButton.className = 'remove-button';
   el.appendChild(removeButton);
 
@@ -5787,21 +5852,9 @@ function createElementFromData(elementData, layout) {
     el.setAttribute('data-source', elementData.source || 'system');
     el.setAttribute('data-json-path', elementData.jsonPath || '');
     el.setAttribute('data-auto-refresh', elementData.autoRefresh ? 'true' : 'false');
-    const sourceIcons = {
-      'system': '🖥️',
-      'zeroconf': '🔍',
-      'json': '📋'
-    };
-    const sourceNames = {
-      'system': 'System',
-      'zeroconf': 'Zeroconf',
-      'json': 'JSON'
-    };
-    const textContent = el.querySelector('.text-content');
-    if (textContent) {
+    if (el.querySelector('.text-content')) {
       el.setAttribute('data-text-auto', '1');
-      const source = elementData.source || 'system';
-      textContent.textContent = `${sourceIcons[source] || '🌐'} ${sourceNames[source] || 'Text Browser'}`;
+      setTextBrowserLabel(el, elementData.source || 'system');
     }
   }
   // The canvas needs concrete colours and a font size to draw, but a default it
@@ -5851,15 +5904,15 @@ function createElementFromData(elementData, layout) {
 // inline styles named CSS variables that do not exist (--surface,
 // --border-radius-md), so it rendered with no background or rounding.
 const MOBILE_COMPONENTS = [
-  { type: 'button', icon: 'fas fa-square', name: 'Button' },
-  { type: 'label', icon: 'fas fa-font', name: 'Label' },
-  { type: 'image', icon: 'fas fa-image', name: 'Image' },
-  { type: 'input', icon: 'fas fa-edit', name: 'Input' },
-  { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
-  { type: 'dynamiclist', icon: 'fas fa-list', name: 'Dynamic List' },
-  { type: 'textlog', icon: 'fas fa-align-left', name: 'Text Log' },
-  { type: 'textbrowser', icon: 'fas fa-globe', name: 'Text Browser' },
-  { type: 'searchresults', icon: 'fas fa-th-large', name: 'Search Results' }
+  { type: 'button', icon: 'button', name: 'Button' },
+  { type: 'label', icon: 'type', name: 'Label' },
+  { type: 'image', icon: 'image', name: 'Image' },
+  { type: 'input', icon: 'edit', name: 'Input' },
+  { type: 'menu', icon: 'menu-bar', name: 'Menu' },
+  { type: 'dynamiclist', icon: 'list', name: 'Dynamic List' },
+  { type: 'textlog', icon: 'align-left', name: 'Text Log' },
+  { type: 'textbrowser', icon: 'globe', name: 'Text Browser' },
+  { type: 'searchresults', icon: 'grid', name: 'Search Results' }
 ];
 
 function setMobileElementMenuOpen(open) {
@@ -5880,7 +5933,7 @@ function setupMobileElementAdding() {
   mobileAddButton.setAttribute('aria-haspopup', 'true');
   mobileAddButton.setAttribute('aria-expanded', 'false');
   mobileAddButton.setAttribute('aria-controls', 'mobileElementMenu');
-  mobileAddButton.innerHTML = '<i class="fas fa-plus" aria-hidden="true"></i>';
+  mobileAddButton.innerHTML = iconSvg('plus');
 
   const mobileMenu = document.createElement('div');
   mobileMenu.id = 'mobileElementMenu';
@@ -5892,7 +5945,7 @@ function setupMobileElementAdding() {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'mobile-menu-item';
-    item.innerHTML = `<i class="${escapeHtml(component.icon)}" aria-hidden="true"></i> ${escapeHtml(component.name)}`;
+    item.innerHTML = `${iconSvg(component.icon)} ${escapeHtml(component.name)}`;
     item.addEventListener('click', () => {
       setMobileElementMenuOpen(false);
       // Add element to center of canvas
@@ -5985,7 +6038,7 @@ function showDynamicListItems(el, items, variable) {
 
   // Add remove button
   const removeButton = document.createElement('span');
-  removeButton.textContent = '✕';
+  removeButton.innerHTML = iconSvg('close');
   removeButton.className = 'remove-button';
   removeButton.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -6905,7 +6958,7 @@ const AI = (() => {
 
       const removeButton = document.createElement('span');
       removeButton.className = 'remove-button';
-      removeButton.textContent = '\u2715';
+      removeButton.innerHTML = iconSvg('close');
       el.appendChild(removeButton);
 
       el.setAttribute('data-type', type);
@@ -7048,7 +7101,7 @@ const AI = (() => {
 
       const removeButton = document.createElement('span');
       removeButton.className = 'remove-button';
-      removeButton.textContent = '\u2715';
+      removeButton.innerHTML = iconSvg('close');
       el.appendChild(removeButton);
 
       el.setAttribute('data-type', type);

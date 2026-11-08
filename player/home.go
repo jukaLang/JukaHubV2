@@ -24,7 +24,19 @@ var (
 
 	homeFontsOnce  sync.Once
 	homeFontsCache HomeFonts
+
+	// homeActivateFromPad is set while homeActivate runs for a controller
+	// press: the search pill opens the on-screen keyboard for a pad, never for
+	// a desktop click or Enter, where a physical keyboard is already there.
+	homeActivateFromPad bool
 )
+
+// homeOnHandheld reports whether JukaHub runs on a handheld with no physical
+// keyboard, where every text field needs the on-screen keyboard. It is the
+// same device test the cache budgets use (cachebudget.go).
+func homeOnHandheld() bool {
+	return IsTrimuiDevice() || P().IsHandheld()
+}
 
 // homePressDuration is the visual "pressed" feedback window before the action
 // takes effect (spec: 70-100 ms). The scene transition begins right after, so
@@ -184,7 +196,7 @@ func homeSceneTarget(config *Config, id HomeFocusID) string {
 	case HomeFocusChat:
 		return "Chat"
 	case HomeFocusTools:
-		return "Misc"
+		return toolsHubSceneName
 	case HomeFocusEmulator:
 		return "Emulator"
 	case HomeFocusSettings:
@@ -344,6 +356,13 @@ func homeActivate(config *Config) {
 		startHeaderUpdate()
 		return
 	}
+	// The search pill opens the search sheet. The on-screen keyboard comes up
+	// with it when there is no physical keyboard to type on: a pad press, or
+	// any press on the handheld.
+	if id == HomeFocusSearch {
+		homeSearchOpen(config, homeActivateFromPad || homeOnHandheld())
+		return
+	}
 	// The now-playing chip names a running session; A opens that player, the
 	// same as a tap on the chip or on the chrome control of any other scene.
 	if id == HomeFocusNowPlaying {
@@ -351,14 +370,13 @@ func homeActivate(config *Config) {
 		return
 	}
 	if id == HomeFocusContinue {
-		if items := getRecentItems(); len(items) > 0 {
-			items[0].Play(config)
+		if homeContinueResume(config) {
 			return
 		}
 		id = HomeFocusMedia
 	}
-	// Exit powers down: stop any embedded playback, then run the goodbye
-	// sequence and quit through the main loop's clean shutdown.
+	// Exit powers down: stop any embedded playback, then quit through the main
+	// loop's clean shutdown, which draws the glass teardown.
 	if id == HomeFocusExit {
 		if snapshotVideoState().phase != "idle" {
 			StopEmbeddedPlayback()
@@ -367,9 +385,9 @@ func homeActivate(config *Config) {
 		return
 	}
 	// Header chips never map to a scene: their dedicated triggers run before
-	// the scene lookup.
+	// the scene lookup. The meter opens the Wi-Fi screen (toolshub.go).
 	if id == HomeFocusWiFi {
-		openWiFiPanel()
+		wifiScrOpen(config)
 		return
 	}
 	if id == HomeFocusWeather {
@@ -394,21 +412,23 @@ func homeActivate(config *Config) {
 		openBrowserHome(config)
 		return
 	}
+	// The Tools card opens the Tools hub, which replaced the classic Misc
+	// scene and the tools overlay (toolshub.go owns where that lands).
+	if id == HomeFocusTools {
+		toolsHubOpen(config)
+		return
+	}
 	target := homeSceneTarget(config, id)
 	if target == "" {
 		return
 	}
 	// findSceneIndex falls back to 0 when the scene is missing, so check the
-	// exact name here: a build without the classic "Misc" scene (the handheld
-	// config) must still open Tools instead of quietly returning to Home.
+	// exact name here: a card whose screen this config lacks must not quietly
+	// return to Home.
 	idx := sceneIndexExact(config, target)
 	log.Printf("[home] %s -> scene %q (index %d)", id, target, idx)
 	if idx >= 0 {
 		changeSceneTo(config, idx)
-		return
-	}
-	if id == HomeFocusTools {
-		openToolsPanel()
 	}
 }
 
@@ -446,6 +466,12 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
 		homeActivate(config)
+	case sdl.K_SLASH:
+		// "/" is the keyboard's search key on Home (F2 opens search anywhere).
+		// Its text event follows the key press and must not type a "/".
+		PlayActivateSound()
+		homeSearchOpen(config, false)
+		homeSearch.skipText = "/"
 	case sdl.K_ESCAPE:
 		// Escape dismisses the calendar popover first.
 		if homeCalendarOpen {
@@ -487,7 +513,14 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 			PlayNavSound()
 		}
 	case sdl.CONTROLLER_BUTTON_A:
+		homeActivateFromPad = true
 		homeActivate(config)
+		homeActivateFromPad = false
+	case sdl.CONTROLLER_BUTTON_Y:
+		// Y opens search from anywhere on Home, like a phone launcher's search
+		// key; the pill and the footer show the same badge.
+		PlayActivateSound()
+		homeSearchOpen(config, true)
 	case sdl.CONTROLLER_BUTTON_X:
 		if homeLayout.Focus.Current() != HomeFocusNowPlaying || !closeFocusedMiniVideo() {
 			return false
@@ -572,9 +605,10 @@ func homeGreeting(name string) string {
 func homeViewData(config *Config) HomeViewData {
 	// Home is the root scene, so B has nothing to go back to there: the footer
 	// names Start instead, the menu that reaches every other screen.
+	// Subtitle stays empty: the line under the greeting is the search pill,
+	// which picks the longest placeholder that fits its width.
 	data := HomeViewData{
 		Greeting:     homeGreeting(""),
-		Subtitle:     "What do you want to do?",
 		Version:      versionDisplayString(config),
 		StatusParts:  headerStatusParts(config),
 		Pressed:      homePressedID,
@@ -595,27 +629,12 @@ func homeViewData(config *Config) HomeViewData {
 		data.Greeting = homeGreeting(name)
 	}
 
-	if items := getRecentItems(); len(items) > 0 {
-		it := items[0]
-		data.Continue = HomeContinueState{
-			HasRecent: true,
-			Title:     it.Label(),
-			Subtitle:  recentSourceLabel(it),
-			Progress:  homeRecentProgress(it),
-		}
-		// Show the saved watch position on the subtitle so the resume point
-		// is readable at a glance, e.g. "Video · 2h ago · 12:34 / 45:00".
-		if it.Type == "video" {
-			if v, ok := it.Data.(VideoInfo); ok && v.Duration > 0 && v.Position > 0 {
-				pos := v.Position
-				if pos > v.Duration {
-					pos = v.Duration
-				}
-				data.Continue.Subtitle = fmt.Sprintf("%s · %s / %s", data.Continue.Subtitle, formatTime(pos), formatTime(v.Duration))
-				data.Continue.Remaining = formatTime(v.Duration-pos) + " left"
-			}
-		}
-	}
+	// The Continue card shows exactly what A on it resumes (home_continue.go):
+	// the music session when a track is loaded, otherwise the newest item on
+	// the timeline. The snapshot is rebuilt a few times a second, not on every
+	// frame: copying and sorting the timeline and formatting its labels per
+	// frame was allocation the handheld paid for nothing.
+	data.Continue = homeContinueSnapshot()
 	return data
 }
 
@@ -721,11 +740,14 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	if homeCalendarOpen {
 		renderCalendarPopover(renderer, config)
 	}
+	// A paired device's activity to continue here, or a pairing code to
+	// compare: a modal glass card over the layout (hoffcard.go).
+	hoffRenderCard(renderer, config)
 }
 
-// loadHomeFonts opens the bundled Inter font at the home-screen sizes,
-// falling back to DejaVu when Inter is unavailable. Fonts are cached so the
-// render loop never allocates per frame.
+// loadHomeFonts opens the bundled Inter font at the home-screen sizes. Inter
+// is the only face Home draws with (home_fonts.go); there is no second font to
+// fall back to. Fonts are cached so the render loop never allocates per frame.
 func loadHomeFonts() HomeFonts {
 	homeFontsOnce.Do(func() {
 		// The compact 4:3 canvas keeps the 720 height but loses a quarter of the
@@ -753,15 +775,10 @@ func resetHomeFonts() {
 	homeFontsOnce = sync.Once{}
 }
 
+// openHomeFont opens the bundled Inter at one home-screen size. It goes through
+// the shared font cache, so the shutdown path closes the face, the cmap is
+// registered for character substitution (fonts.go), and a size Home shares
+// with a scene role is opened once instead of twice.
 func openHomeFont(size int) *ttf.Font {
-	for _, candidate := range []string{"Inter-Regular.ttf", "DejaVuSans.ttf", "DejaVuSans-Bold.ttf"} {
-		if f, err := ttf.OpenFont(resolvePath(candidate), size); err == nil {
-			// Register in fontCache so the shutdown path closes it, and record
-			// its path so unsupported characters can be substituted (fonts.go).
-			fontCache["home_"+candidate+fmt.Sprint(size)] = f
-			registerFontPath(f, candidate)
-			return f
-		}
-	}
-	return nil
+	return loadCachedFont(homeUIFontFile, size)
 }

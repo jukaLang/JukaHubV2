@@ -14,36 +14,13 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// resetChatProfileState isolates the chat globals for one test.
+// resetChatProfileState isolates the chat globals for one test. The action
+// bar is part of the selection state: a test that selects a message leaves it
+// open, and an open bar takes the pad before the scene underneath, so
+// resetChatTestState restores it with everything else.
 func resetChatProfileState(t *testing.T) {
 	t.Helper()
-	chatMutex.Lock()
-	prevMessages := chatMessages
-	chatMessages = nil
-	chatMutex.Unlock()
-	prevOffset, prevSelected, prevSelectedID := chatScrollOffset, chatSelected, chatSelectedID
-	prevProfile, prevMembers := chatProfile, chatMembers
-	prevBar := chatSelectionBar
-	chatScrollOffset = 0
-	chatSelected, chatSelectedID = -1, ""
-	chatProfile = chatProfileCard{}
-	chatMembers = chatMembersPanel{}
-	// The action bar is part of the selection state: a test that selects a
-	// message leaves it open, and an open bar takes the pad before the scene
-	// underneath, so restoring the highlight alone would leak into the next
-	// test's controller checks.
-	chatSelectionBar = chatSelection{}
-	chatMessageHits = nil
-	t.Cleanup(func() {
-		chatMutex.Lock()
-		chatMessages = prevMessages
-		chatMutex.Unlock()
-		chatScrollOffset = prevOffset
-		chatSelected, chatSelectedID = prevSelected, prevSelectedID
-		chatProfile, chatMembers = prevProfile, prevMembers
-		chatSelectionBar = prevBar
-		chatMessageHits = nil
-	})
+	resetChatTestState(t)
 }
 
 func TestChatMessageFromDiscordCarriesTheAccount(t *testing.T) {
@@ -610,20 +587,18 @@ func TestProfileLatestJumpsToTheMessage(t *testing.T) {
 	if !ok || index != 2 || msg.Text != "new" {
 		t.Fatalf("selected %+v (index %d, ok=%v), want Alex's newest message", msg, index, ok)
 	}
-	if chatScrollOffset != 0 {
-		t.Errorf("scroll offset = %d, want 0 for the newest message", chatScrollOffset)
+	// The next frame brings the message into view.
+	if got := chatViews[chatTabCommunity].anchorID; got != "3" {
+		t.Errorf("view anchor = %q, want the jumped-to message", got)
 	}
 }
 
-// Short outgoing bubbles must not push their longer header beyond the panel.
-// Long sender names yield space to the time and keep their profile hit target.
+// A bubble and its header stay inside the panel at any width: an outgoing
+// message is right-aligned with only its time above it, and an incoming one
+// keeps a (possibly ellipsized) name that still opens the speaker's profile.
 func TestChatMessageHeaderFitsPanel(t *testing.T) {
 	resetChatProfileState(t)
 	config := layoutTestConfig(t)
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		t.Fatal("missing chat status font")
-	}
 	for _, tc := range []struct {
 		name   string
 		width  int32
@@ -635,31 +610,30 @@ func TestChatMessageHeaderFitsPanel(t *testing.T) {
 		{"long incoming", 500, strings.Repeat("RemoteName", 20), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			chatMutex.Lock()
 			chatMessages = []ChatMessage{{ID: "1", Sender: tc.sender, Text: "test", Own: tc.own, Timestamp: time.Date(2026, 11, 2, 23, 21, 0, 0, time.UTC)}}
+			chatMutex.Unlock()
 			elem := Element{Type: "chat", X: 0, Y: 0, Width: StringOrInt(fmt.Sprint(tc.width)), Height: "640", Font: "small"}
 			componentFrame(t, func(r *sdl.Renderer) { renderChat(r, config, elem) })
 			if len(chatMessageHits) != 1 {
 				t.Fatalf("message hits = %d", len(chatMessageHits))
 			}
 			hit := chatMessageHits[0]
-			left := int32(elem.X) + SpaceMD + SpaceSM
-			right := int32(elem.X) + tc.width - SpaceMD - SpaceSM
-			name, suffix, x, nameW := chatMessageHeader(font, tc.sender, "23:21", hit.body.X, hit.body.W, left, right, tc.own)
-			if !strings.HasSuffix(suffix, "23:21") {
-				t.Fatalf("timestamp missing: %q", suffix)
+			left, right := elem.X, elem.X+tc.width
+			if hit.body.X < left || hit.body.X+hit.body.W > right {
+				t.Fatalf("bubble %+v outside the panel %d..%d", hit.body, left, right)
 			}
-			timeW, _, err := font.SizeUTF8(suffix)
-			if err != nil {
-				t.Fatal(err)
+			if tc.own {
+				if hit.name.W != 0 {
+					t.Fatalf("an outgoing message drew a name header: %+v", hit.name)
+				}
+				if gap := right - (hit.body.X + hit.body.W); gap > chatPx(24) {
+					t.Fatalf("outgoing bubble %+v is not right-aligned (%dpx from the edge)", hit.body, gap)
+				}
+				return
 			}
-			if x < left || x+nameW+int32(timeW) > right {
-				t.Fatalf("header at %d..%d outside %d..%d", x, x+nameW+int32(timeW), left, right)
-			}
-			if tc.own && x+nameW+int32(timeW) != hit.body.X+hit.body.W {
-				t.Fatalf("own header does not align with bubble: %+v", hit)
-			}
-			if hit.name.X != x || hit.name.W != nameW || name == "" {
-				t.Fatalf("name hit %+v does not match %q at %d width %d", hit.name, name, x, nameW)
+			if hit.name.W <= 0 || hit.name.X < left || hit.name.X+hit.name.W > right {
+				t.Fatalf("name hit %+v outside the panel %d..%d", hit.name, left, right)
 			}
 			if !chatMessageClick(hit.name.X+2, hit.name.Y+2, config) || !chatProfile.open || chatProfile.profile.Name != tc.sender {
 				t.Fatal("sender name no longer opens the correct profile")
@@ -672,15 +646,10 @@ func TestChatMessageHeaderFitsPanel(t *testing.T) {
 // Chat hitboxes survive a scene switch but must not steal the Hardware buttons.
 func TestChatComposerHitboxesStayOnChatScene(t *testing.T) {
 	resetKeyboardState(t)
+	resetChatTestState(t)
 	withScreen(t, 1280, 720)
 	previousScene := currentSceneIndex
-	oldName, oldInput := chatNameRect, chatInputRect
-	oldSend, oldAI, oldAttach := chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect
-	t.Cleanup(func() {
-		currentSceneIndex = previousScene
-		chatNameRect, chatInputRect = oldName, oldInput
-		chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect = oldSend, oldAI, oldAttach
-	})
+	t.Cleanup(func() { currentSceneIndex = previousScene })
 	config := &Config{Width: 1280, Height: 720, Variables: Variables{Custom: map[string]interface{}{}}, Scenes: []SceneConfig{
 		{Name: "Chat", Elements: []Element{{Type: "chat"}}},
 		{Name: "Hardware", Elements: []Element{{Type: "button", Text: "Refresh", X: 60, Y: 611, Width: "140", Height: "45"}}},
@@ -695,12 +664,13 @@ func TestChatComposerHitboxesStayOnChatScene(t *testing.T) {
 		testedButtons++
 		w, h := buttonHitSize(button, nil)
 		mx, my := button.X+w/2, button.Y+h/2
-		for _, target := range []*sdl.Rect{&chatNameRect, &chatInputRect, &chatSendBtnRect, &chatAskAIBtnRect, &chatAttachBtnRect} {
-			chatNameRect, chatInputRect, chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+		for _, target := range []*sdl.Rect{&chatNameRect, &chatInputRect, &chatSendBtnRect, &chatAttachBtnRect, &chatView.tabs[chatTabAI]} {
+			chatNameRect, chatInputRect, chatSendBtnRect, chatAttachBtnRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+			chatView = chatViewState{}
 			*target = sdl.Rect{X: mx - 5, Y: my - 5, W: 10, H: 10}
 			currentSceneIndex = 1
 			virtualKeyboardActive = false
-			if handleChatComposerMouse(mx, my, config) || virtualKeyboardActive {
+			if handleChatComposerMouse(mx, my, config) || virtualKeyboardActive || chatActiveTabID() != chatTabCommunity {
 				t.Fatalf("stale chat target stole %s click", button.Text)
 			}
 		}
@@ -710,7 +680,8 @@ func TestChatComposerHitboxesStayOnChatScene(t *testing.T) {
 		t.Fatalf("tested %d Hardware buttons, want Processes and Wi-Fi", testedButtons)
 	}
 	currentSceneIndex = 0
-	chatNameRect, chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	chatNameRect, chatSendBtnRect, chatAttachBtnRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	chatView = chatViewState{}
 	chatInputRect = sdl.Rect{X: 20, Y: 30, W: 100, H: 40}
 	virtualKeyboardActive = false
 	if !handleChatComposerMouse(30, 40, config) || !virtualKeyboardActive || vkTarget != vkTargetChat {
@@ -723,4 +694,10 @@ func TestChatComposerHitboxesStayOnChatScene(t *testing.T) {
 		t.Fatal("the chat name did not open its keyboard on the chat scene")
 	}
 	vkCloseKeyboard()
+	// A tab is a target too: a click switches to it.
+	chatNameRect = sdl.Rect{}
+	chatView.tabs[chatTabSaved] = sdl.Rect{X: 20, Y: 30, W: 100, H: 40}
+	if !handleChatComposerMouse(30, 40, config) || chatActiveTabID() != chatTabSaved {
+		t.Fatal("a click on a tab did not switch to it")
+	}
 }

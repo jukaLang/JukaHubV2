@@ -105,7 +105,8 @@ func TestHomeUpdateChipHiddenWithoutRelease(t *testing.T) {
 	}
 
 	// The old weather path must survive: with the chip disabled, Left from the
-	// weather text falls through to Media.
+	// weather text walks on toward the left edge — through the signal meter when
+	// it is drawn, to the search pill under the greeting when it is not.
 	homeLayout = layout
 	homeLayoutActive = true
 	if !layout.Focus.Set(HomeFocusClock) {
@@ -116,8 +117,12 @@ func TestHomeUpdateChipHiddenWithoutRelease(t *testing.T) {
 		t.Fatalf("Left from the clock focused %q, want weather", got)
 	}
 	homeKey(t, &Config{}, sdl.K_LEFT)
-	if got := layout.Focus.Current(); got != HomeFocusMedia {
-		t.Fatalf("Left from weather without a release focused %q, want media", got)
+	want := HomeFocusSearch
+	if layout.Focus.IsEnabled(HomeFocusWiFi) {
+		want = HomeFocusWiFi
+	}
+	if got := layout.Focus.Current(); got != want {
+		t.Fatalf("Left from weather without a release focused %q, want %q", got, want)
 	}
 }
 
@@ -189,10 +194,11 @@ func TestHomeUpdateChipSelectableWithArrows(t *testing.T) {
 	if got := homeLayout.Focus.Current(); got != HomeFocusUpdate {
 		t.Fatalf("Right from the clock focused %q, want the update chip", got)
 	}
-	// Down must not strand the user in the header.
+	// Down must not strand the user in the header: it drops to the Remote Play
+	// launcher drawn under that end of the bar.
 	homeKey(t, &Config{}, sdl.K_DOWN)
-	if got := homeLayout.Focus.Current(); got != HomeFocusSettings {
-		t.Fatalf("Down from the update chip focused %q, want settings", got)
+	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
+		t.Fatalf("Down from the update chip focused %q, want the PS5 launcher", got)
 	}
 	// Left leaves through the now-playing slot (when it is drawn) and stays on
 	// the header either way: it must never jump to a card below the bar.

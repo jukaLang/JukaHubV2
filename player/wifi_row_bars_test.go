@@ -55,22 +55,13 @@ func TestWiFiPickerDrawsTheMeterLevelOnTheConnectedRow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")
 	}
-	_ = newProbeFrame(t)
-	r, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
-	}
-	defer destroyTestRenderer(r)
-
-	prevPanel, prevRows, prevSignal := wifiPanel, wifiRowRects, statusWiFiSignal
-	t.Cleanup(func() {
-		wifiPanel, wifiRowRects, statusWiFiSignal = prevPanel, prevRows, prevSignal
-		ClearTextCache()
-	})
-	withScreen(t, probeW, probeH)
+	config := toolsHubTestNav(t)
+	r := probeRenderer(t)
+	currentSceneIndex = sceneIndexExact(config, wifiScrSceneName)
+	prevSignal := statusWiFiSignal
+	t.Cleanup(func() { statusWiFiSignal = prevSignal })
 
 	wifiPanel = wifiPanelState{
-		open:      true,
 		available: true,
 		loadedAt:  time.Now(),
 		status:    wifiStatus{State: wifiCompleteState, SSID: "HomeNet", Connected: true},
@@ -84,23 +75,24 @@ func TestWiFiPickerDrawsTheMeterLevelOnTheConnectedRow(t *testing.T) {
 	// pixel that proves which source drew the row.
 	draw := func(level int) []sdl.Color {
 		statusWiFiSignal = func() int { return level }
-		wifiRowRects = wifiRowRects[:0]
+		wifiScr.follow = true
 		r.SetDrawColor(9, 14, 25, 255)
 		r.Clear()
-		renderWiFiPanel(r, &Config{})
-		if len(wifiRowRects) != 2 {
-			t.Fatalf("drew %d row rects, want 2", len(wifiRowRects))
+		renderWiFiScr(r, config)
+		if len(wifiScr.rowRects) != 2 || wifiScr.rowRects[1].W == 0 {
+			t.Fatalf("drew %d row targets, want both rows", len(wifiScr.rowRects))
 		}
 		buf := make([]byte, probeW*probeH*4)
 		if err := r.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
 			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		frame := &probeFrame{buf: buf, bg: sdl.Color{R: 9, G: 14, B: 25, A: 255}}
-		out := make([]sdl.Color, len(wifiRowRects))
-		for i, rect := range wifiRowRects {
-			// Bars start 12px into the row; the fourth bar begins at 21px and
-			// spans 6, so its middle is 24px in. cy is inside every bar.
-			out[i] = frame.at(rect.X+12+24, rect.Y+rect.H/2)
+		out := make([]sdl.Color, len(wifiScr.rowRects))
+		for i, rect := range wifiScr.rowRects {
+			// Bars start 20px into the row and step 7px; the fourth begins at
+			// 41px and spans 6, so its middle is 44px in. The row's middle is
+			// inside every bar.
+			out[i] = frame.at(rect.X+44, rect.Y+rect.H/2)
 		}
 		return out
 	}

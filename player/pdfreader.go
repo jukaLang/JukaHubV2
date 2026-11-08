@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -10,13 +11,17 @@ import (
 )
 
 // ──────────────────────────────────────────────────────────────────────
-// Reader — PDF and EPUB, one paper page at a time
+// Reader — PDF and EPUB
 // ──────────────────────────────────────────────────────────────────────
 //
 // The scene keeps its historical name ("PDFReader") because favourites, the
-// scene list and the playtime achievements reference it, but it reads both
-// formats now. pdfReaderText (reader.go) does the parsing; this file owns the
-// state, the input and the paper UI.
+// Start menu and the playtime achievements reference it. It reads both
+// formats: a PDF is drawn as pages (pdfv_doc.go reads it, pdfv_view.go draws
+// it) with zoom, fit width / fit page and page N of M, and its text can be
+// reflowed instead (X); an EPUB is paginated text (reader.go). Opening runs off
+// the render thread, so a large document shows a loading page instead of a
+// frozen screen. This file owns the reader's state, the page chrome and the
+// input.
 
 type pdfPage struct {
 	Text   string
@@ -34,7 +39,10 @@ type pdfDoc struct {
 	Subject  string
 	NumPages int
 	Loaded   bool
-	Error    string
+	// Loading is true from the moment a document is picked until the
+	// background open has finished (then Loaded or Error is set).
+	Loading bool
+	Error   string
 }
 
 type pdfState struct {
@@ -54,12 +62,60 @@ func pdfInit() {
 
 // pdfSceneEnter runs when the scene is entered. It only resets an empty reader:
 // Files opens a document and then navigates here, so wiping the state on entry
-// would throw away the file that was just opened.
+// would throw away the file that was just opened (or is still opening).
 func pdfSceneEnter() {
-	if pdf.doc.Loaded || pdf.doc.Error != "" {
+	if pdf.doc.Loaded || pdf.doc.Error != "" || pdf.doc.Loading {
 		return
 	}
 	pdfInit()
+}
+
+// pdfvSceneName is the reader's scene. The name is historical (favourites, the
+// Start menu and the playtime achievements all spell it this way).
+const pdfvSceneName = "PDFReader"
+
+// pdfvEnsureScene gives the reader a scene in memory when the loaded config has
+// none — and neither shipped config has one. Opening a PDF from Files used to
+// look the scene up with findSceneIndex, which answers 0 (the Home scene) for a
+// name it cannot find, so every PDF "opened" by dropping the user on Home. Like
+// the Alarm and Browser scenes it is injected, never written back.
+func pdfvEnsureScene(config *Config) {
+	if config == nil || sceneIndexExact(config, pdfvSceneName) >= 0 {
+		return
+	}
+	config.Scenes = append(config.Scenes, SceneConfig{
+		Name:        pdfvSceneName,
+		Icon:        "R",
+		Description: "Read PDF and EPUB documents",
+		Background:  "#0B0F17",
+	})
+}
+
+// pdfvOpenDocument opens a PDF or EPUB and shows it in the reader. It reports
+// whether the reader is on its way; the scene is found by its exact name, so a
+// config without it can never send the user somewhere else.
+func pdfvOpenDocument(config *Config, path string) bool {
+	if config == nil || !pdfIsDocumentPath(path) {
+		return false
+	}
+	pdfvEnsureScene(config)
+	idx := sceneIndexExact(config, pdfvSceneName)
+	if idx < 0 {
+		showToast("The reader is not available", ToastError())
+		return false
+	}
+	pdfOpenFile(path)
+	if idx != currentSceneIndex {
+		changeSceneTo(config, idx)
+	}
+	return true
+}
+
+// pdfvSceneLeft releases the reader's textures when another scene takes over:
+// a zoomed page holds several megabytes of tiles.
+func pdfvSceneLeft() {
+	pdfvReleaseTextures()
+	pdfvView.menu.open = false
 }
 
 // pdfIsDocumentPath reports whether a path is one the reader can open.
@@ -68,21 +124,64 @@ func pdfIsDocumentPath(path string) bool {
 	return strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".epub")
 }
 
-// pdfOpenFile opens a PDF or EPUB from the File Explorer. Both loaders resolve
-// the path against the explorer root before reading it.
+// pdfOpenFile opens a PDF or EPUB from the File Explorer. The path is resolved
+// against the explorer root first; the reading itself happens in the
+// background and the reader shows "Opening…" until it lands.
 func pdfOpenFile(path string) {
 	if !pdfIsDocumentPath(path) {
 		return
 	}
 	pdfInit()
-	lower := strings.ToLower(path)
-	if strings.HasSuffix(lower, ".epub") {
-		pdf.doc = epubOpenFile(path)
+	pdfvReleaseTextures()
+	textSize := pdfvView.textSize
+	pdfvView = pdfvViewState{textSize: textSize}
+	format := "PDF"
+	epub := strings.HasSuffix(strings.ToLower(path), ".epub")
+	if epub {
+		format = "EPUB"
+	}
+	resolved, err := resolveExplorerEntry(appConfig, path)
+	if err != nil {
+		pdfvStopLoad()
+		pdf.doc = pdfDoc{Path: path, Format: format, Loaded: true, Error: "Cannot open file: " + filesFriendlyError(err)}
+		return
+	}
+	pdf.doc = pdfDoc{
+		Path:    resolved,
+		Format:  format,
+		Title:   strings.TrimSuffix(filepath.Base(resolved), filepath.Ext(resolved)),
+		Loading: true,
+	}
+	if epub {
+		pdfvLoadEPUB(resolved)
 	} else {
-		pdf.doc = pdfExtractText(path)
+		pdfvStartLoad(resolved)
 	}
 	pdf.page = 1
 	pdf.scrollY = 0
+}
+
+// pdfvLoadEPUB reads a book in the background and hands it over through the
+// same slot a PDF uses.
+func pdfvLoadEPUB(path string) {
+	pdfvStopLoad()
+	pdfvDoc.mu.Lock()
+	gen := pdfvDoc.gen
+	pdfvDoc.mu.Unlock()
+	go func() {
+		var doc pdfDoc
+		data, err := os.ReadFile(path)
+		if err != nil {
+			doc = pdfDoc{Path: path, Format: "EPUB", Loaded: true, Error: "Cannot open file: " + filesFriendlyError(err)}
+		} else {
+			doc = epubParseBytes(data, path)
+		}
+		pdfvDoc.mu.Lock()
+		if pdfvDoc.gen == gen {
+			pdfvDoc.loaded = &doc
+		}
+		pdfvDoc.mu.Unlock()
+	}()
 }
 
 // ── Navigation ─────────────────────────────────────────────────────────────
@@ -110,10 +209,8 @@ func pdfGoToPage(page int) bool {
 	}
 	pdf.page = page
 	pdf.scrollY = 0
-	// Snap the scroll position back only; the page itself is what moved.
-	if pdf.page > 0 {
-		PlayNavSound()
-	}
+	pdfvView.scrollY = 0
+	PlayNavSound()
 	return true
 }
 
@@ -145,11 +242,32 @@ func pdfJumpChapter(delta int) bool {
 	return pdfGoToPage(pdf.doc.Chapters[target].FirstPage)
 }
 
-// pdfScrollBy moves the paper's text and stops at the top.
+// pdfScrollBy moves the text view and stops at the top.
 func pdfScrollBy(delta float64) {
 	pdf.scrollY += delta
 	if pdf.scrollY < 0 {
 		pdf.scrollY = 0
+	}
+}
+
+// pdfvTextMaxScroll is how far the text view's page scrolls (set by the last
+// frame that drew it).
+var pdfvTextMaxScroll float64
+
+// pdfScrollText scrolls the text view and turns the page at either end.
+func pdfScrollText(delta float64) {
+	switch {
+	case delta > 0 && pdf.scrollY >= pdfvTextMaxScroll-0.5:
+		pdfNextPage()
+	case delta < 0 && pdf.scrollY <= 0.5:
+		if pdfPrevPage() {
+			pdf.scrollY = 1 << 30
+		}
+	default:
+		pdfScrollBy(delta)
+		if pdf.scrollY > pdfvTextMaxScroll {
+			pdf.scrollY = pdfvTextMaxScroll
+		}
 	}
 }
 
@@ -180,224 +298,207 @@ func pdfChapterLabel() string {
 // ── Rendering ──────────────────────────────────────────────────────────────
 
 func renderPDFReader(renderer *sdl.Renderer, config *Config) {
-	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	// Home's backdrop, the one every screen stands on (ui_glass.go). The
+	// reader is a full-screen page with its own header, so the shared bar's
+	// click targets from the screen before are cleared rather than left to
+	// answer a tap here.
 	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
+	sceneTitleBackRect, statusClockRect, statusWiFiRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	weatherStatusRect, statusMediaRect = sdl.Rect{}, sdl.Rect{}
+	tb.startRect = sdl.Rect{}
+	pdfvPollLoaded()
+	doc := pdf.doc
 
-	font, _ := getCachedFont(config, "small")
-	medFont, _ := getCachedFont(config, "medium")
+	margin := scaleX(homeSideMargin, screenWidth)
+	top := int32(14)
+	paged := pdfvIsPagedPDF() && !pdfvView.textMode
+	chips := pdfvView.chips[:0]
+	if doc.Loaded && doc.Error == "" && pdfPageCount() > 1 {
+		chips = append(chips, filesChip{ID: "prev", Label: "‹"}, filesChip{ID: "next", Label: "›"})
+	}
+	if doc.Loaded && doc.Error == "" {
+		chips = append(chips, filesChip{ID: "zoomout", Label: "−"}, filesChip{ID: "zoomin", Label: "+"})
+		if paged {
+			chips = append(chips, filesChip{ID: "fit", Label: pdfvFitLabel()})
+		}
+		if doc.Format == "PDF" {
+			label := "Text"
+			if pdfvView.textMode {
+				label = "Page"
+			}
+			chips = append(chips, filesChip{ID: "text", Label: label, On: pdfvView.textMode})
+		}
+		chips = append(chips, filesChip{ID: "options", Label: "Options"})
+	} else if doc.Error != "" && filesSystemOpenAvailable() && doc.Path != "" {
+		chips = append(chips, filesChip{ID: "system", Label: "Open with Windows"})
+	}
+	chips = append(chips, filesChip{ID: "back", Label: "Back"})
+	chips, toolbarX := filesDrawToolbar(renderer, config, chips, screenWidth-margin, top+4, 34)
+	pdfvView.chips = chips
+
+	title := pdfDocumentTitle(doc)
+	if title == "" {
+		title = "Reader"
+	}
+	glyph := "pdf"
+	if doc.Format == "EPUB" {
+		glyph = "text"
+	}
+	y := filesDrawHeader(renderer, config, glyph, title, pdfvSubtitle(), margin, top, toolbarX-margin-24, sdl.Color{})
+	y += 10
+	footerTop := filesDrawFooter(renderer, config, pdfvFooterHints())
+	view := sdl.Rect{X: margin, Y: y, W: screenWidth - 2*margin, H: footerTop - 10 - y}
+	if view.H < 80 {
+		view.H = 80
+	}
+	pdfvView.viewport = view
+
+	caption := FontForRole(config, TypeCaption)
+	fitBody := func(s string) string {
+		if caption == nil {
+			return s
+		}
+		return ellipsize(caption, s, view.W-48)
+	}
+	switch {
+	case doc.Loading:
+		UIEmptyState(renderer, config, view, "@"+glyph, "Opening "+title+"…", "A large document takes a moment")
+	case !doc.Loaded:
+		UIEmptyState(renderer, config, view, "@pdf", "No document open", "Open a PDF or EPUB from Files")
+	case doc.Error != "":
+		body := doc.Error
+		if filesSystemOpenAvailable() {
+			body += " · Open with Windows is above"
+		}
+		UIErrorState(renderer, config, view, "@warning", "This document cannot be shown", fitBody(body))
+	case paged:
+		pdfvRenderPages(renderer, config, view)
+	default:
+		pdfvRenderText(renderer, config, view)
+	}
+	filesMenuRender(renderer, config, &pdfvView.menu)
+}
+
+// pdfvSubtitle is the header's status line: where the reader is.
+func pdfvSubtitle() string {
+	doc := pdf.doc
+	switch {
+	case doc.Loading:
+		return "Opening…"
+	case !doc.Loaded || doc.Error != "":
+		return doc.Format
+	}
+	parts := []string{fmt.Sprintf("Page %d of %d", pdf.page, pdfPageCount())}
+	if chapter := pdfChapterLabel(); chapter != "" && len(doc.Chapters) > 1 {
+		parts = append([]string{chapter}, parts...)
+	}
+	if pdfvIsPagedPDF() && !pdfvView.textMode {
+		parts = append(parts, pdfvFitLabel())
+	} else if doc.Format == "PDF" {
+		parts = append(parts, "Text view")
+	}
+	if author := strings.TrimSpace(doc.Author); author != "" {
+		parts = append(parts, author)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// pdfvFooterHints are the reader's keys in its current view.
+func pdfvFooterHints() []FooterHint {
+	if !pdf.doc.Loaded || pdf.doc.Error != "" {
+		return []FooterHint{{Button: "B", Label: "Back"}}
+	}
+	pageLabel := "Page"
+	if len(pdf.doc.Chapters) > 0 {
+		pageLabel = "Chapter"
+	}
+	hints := []FooterHint{
+		{Button: "D-Pad", Label: "Scroll"},
+		{Button: "L1/R1", Label: pageLabel},
+	}
+	if pdfvIsPagedPDF() && !pdfvView.textMode {
+		hints = append(hints,
+			FooterHint{Button: "L2/R2", Label: "Zoom"},
+			FooterHint{Button: "A", Label: "Fit"},
+			FooterHint{Button: "X", Label: "Text"},
+		)
+	} else {
+		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Text size"})
+		if pdf.doc.Format == "PDF" {
+			hints = append(hints, FooterHint{Button: "X", Label: "Page view"})
+		}
+	}
+	return append(hints,
+		FooterHint{Button: "Y", Label: "Options"},
+		FooterHint{Button: "B", Label: "Back"},
+	)
+}
+
+// pdfvRenderText draws the current page's text on a paper card that scrolls
+// inside the viewport: a book's page, or a PDF page reflowed.
+func pdfvRenderText(renderer *sdl.Renderer, config *Config, view sdl.Rect) {
+	size := pdfvView.textSize
+	if size == 0 {
+		size = 22
+	}
+	font := getFontSized(config, "small", size)
 	if font == nil {
 		return
 	}
-
-	doc := pdf.doc
-	hasChapters := len(doc.Chapters) > 1
-
-	// The app's one bar owns the top of the screen. The document's own title
-	// sits under it as a quiet line, with the page count at its right edge: the
-	// bar's caption already names the screen, so the file being read gets its
-	// own read-out instead of a second header.
-	barH := headerBarHeight()
-	contentY := barH + 8
-	if titleFont := headerCaptionFont(config); titleFont != nil {
-		if title := pdfDocumentTitle(doc); title != "" {
-			label := fitTextWidth(renderer, config, titleFont, title, screenWidth-32-220)
-			renderText(renderer, config, titleFont, label, ColorTextSecondary(), 16, contentY)
+	text := ""
+	if pdf.doc.Format == "PDF" {
+		pdfvRequest(pdf.page - 1)
+		if content := pdfvPageContentFor(pdf.page - 1); content != nil {
+			text = content.text
+		} else {
+			UIEmptyState(renderer, config, view, "@pdf", "Reading page "+filesNumberString(int64(pdf.page))+"…", "")
+			return
 		}
-		if doc.Loaded && pdfPageCount() > 0 {
-			pageStr := fmt.Sprintf("Page %d / %d", pdf.page, pdfPageCount())
-			if doc.Format != "" {
-				pageStr = doc.Format + " · " + pageStr
-			}
-			pw, _ := measureText(titleFont, pageStr)
-			renderText(renderer, config, titleFont, pageStr, ColorTextTertiary(),
-				screenWidth-pw-16, contentY)
-		}
-		contentY += int32(titleFont.Height()) + 4
-
-		// The chapter read-out is its own quiet line: a book's chapter name is
-		// long, and sharing the title line ellipsised both of them.
-		if doc.Loaded && doc.Error == "" && hasChapters {
-			if chapter := pdfChapterLabel(); chapter != "" {
-				chapter = fitTextWidth(renderer, config, titleFont, chapter, screenWidth-32)
-				renderText(renderer, config, titleFont, chapter, ColorTextTertiary(), 16, contentY)
-				contentY += int32(titleFont.Height()) + 4
-			}
-		}
-		contentY += 4
+	} else if page, ok := pdfCurrentPage(); ok {
+		text = page.Text
 	}
-
-	// Navigation rows sit just above the shared footer rather than on top of it,
-	// so both stay readable. A book gets a second row for chapters.
-	navH := int32(32)
-	if hasChapters {
-		navH = 68
-	}
-	navY := screenHeight - footerBarHeight() - navH - 10
-
-	if !doc.Loaded {
-		// No document loaded.
-		if medFont != nil {
-			msg := "No document open"
-			mw, _, _ := medFont.SizeUTF8(msg)
-			renderText(renderer, config, medFont, msg,
-				sdl.Color{R: 140, G: 155, B: 180, A: 200},
-				(screenWidth-int32(mw))/2, contentY+60)
-
-			hint := "Open a PDF or EPUB from Files"
-			hw, _, _ := font.SizeUTF8(hint)
-			renderText(renderer, config, font, hint,
-				sdl.Color{R: 100, G: 110, B: 130, A: 150},
-				(screenWidth-int32(hw))/2, contentY+90)
+	if strings.TrimSpace(text) == "" {
+		body := "It may be a scanned picture."
+		if pdf.doc.Format == "PDF" {
+			body = "It may be a scanned picture — X shows the page itself."
 		}
-	} else if doc.Error != "" {
-		if medFont != nil {
-			// Loader errors name the file and the cause; wrap them so the
-			// reason is not pushed off the right edge.
-			lines := pdfWordWrap(medFont, doc.Error, screenWidth-120)
-			if len(lines) > 4 {
-				lines = lines[:4]
-			}
-			y := contentY + 40
-			for _, line := range lines {
-				lw, _, _ := medFont.SizeUTF8(line)
-				renderText(renderer, config, medFont, line,
-					sdl.Color{R: 200, G: 120, B: 100, A: 220},
-					(screenWidth-int32(lw))/2, y)
-				y += int32(medFont.Height()) + 2
-			}
-		}
-	} else {
-		// Page content.
-		if page, ok := pdfCurrentPage(); ok {
-			// Page card (simulated paper). Its height is whatever is left
-			// between the title lines and the page buttons, so the sheet always
-			// fits on screen instead of running under the footer.
-			pageW := int32(520)
-			if pageW > screenWidth-32 {
-				pageW = screenWidth - 32
-			}
-			pageH := navY - contentY - 8
-			if pageH < 200 {
-				pageH = 200
-			}
-			pageX := (screenWidth - pageW) / 2
-			pageY := contentY
-
-			// Paper shadow.
-			fillRoundedRect(renderer, pageX+4, pageY+4, pageW, pageH, 8,
-				sdl.Color{R: 0, G: 0, B: 0, A: 60})
-
-			// Paper background.
-			fillRoundedRect(renderer, pageX, pageY, pageW, pageH, 8,
-				sdl.Color{R: 240, G: 238, B: 232, A: 255})
-
-			// Text content.
-			if textFont, _ := getCachedFont(config, "small"); textFont != nil {
-				text := page.Text
-				if text == "" {
-					if doc.Format == "PDF" {
-						text = "(This page has no extractable text — it may be a scanned image.)"
-					} else {
-						text = "(This page could not be read.)"
-					}
-				}
-
-				// Word wrap and render. One line box per line and a line count
-				// taken from the clipped inner height: at a fixed 18px spacing the
-				// 30px text ran through itself and the last line was cut in half
-				// against the paper's bottom edge. Blank source lines keep their
-				// paragraph gaps instead of collapsing into the next paragraph.
-				lines := pdfWrapLines(textFont, text, pageW-48)
-				lineH := int32(textFont.Height())
-				if lineH < 18 {
-					lineH = 18
-				}
-				startLine := int(pdf.scrollY / float64(lineH))
-				maxLines := int((pageH - 48) / lineH)
-				if startLine > len(lines) {
-					startLine = len(lines)
-				}
-
-				renderWithClip(renderer, pageX+24, pageY+24, pageW-48, pageH-48,
-					func(r *sdl.Renderer) {
-						for i := startLine; i < len(lines) && i < startLine+maxLines; i++ {
-							if lines[i] == "" {
-								continue
-							}
-							ly := pageY + 24 + int32(i-startLine)*lineH
-							// Dark text on light background.
-							renderText(renderer, config, textFont, lines[i],
-								sdl.Color{R: 30, G: 30, B: 35, A: 255},
-								pageX+24, ly)
-						}
-					})
-			}
-		}
-	}
-
-	// Navigation controls at bottom.
-	if doc.Loaded && doc.Error == "" && pdfPageCount() > 1 {
-		ctrlW := int32(360)
-		ctrlX := (screenWidth - ctrlW) / 2
-		ctrlY := screenHeight - footerBarHeight() - 32 - 10
-
-		if hasChapters {
-			ctrlY -= 36
-			renderPDFChapterRow(renderer, config, font, ctrlX, ctrlY, ctrlW)
-		}
-		renderPDFPageRow(renderer, config, font, ctrlX, ctrlY, ctrlW)
-	}
-
-	// The shared bars last, exactly as every other screen draws them.
-	renderStatusBar(renderer, config)
-	renderFooter(renderer, config)
-}
-
-// renderPDFPageRow draws Prev / page count / Next.
-func renderPDFPageRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, ctrlX, ctrlY, ctrlW int32) {
-	const btnW = int32(108)
-	const btnH = int32(32)
-	count := pdfPageCount()
-
-	// Glass buttons (Home's secondary recipe); the end of the book dims them.
-	UIButton(renderer, config, sdl.Rect{X: ctrlX, Y: ctrlY, W: btnW, H: btnH}, "< Prev", UIButtonStyle{
-		Variant: UIButtonSecondary,
-		Font:    font,
-		Radius:  RadiusSM,
-	}, UIButtonState{Disabled: pdf.page <= 1})
-
-	numStr := fmt.Sprintf("%d / %d", pdf.page, count)
-	nw, _, _ := font.SizeUTF8(numStr)
-	renderText(renderer, config, font, numStr, ColorTextSecondary(),
-		ctrlX+(ctrlW-int32(nw))/2, ctrlY+8)
-
-	UIButton(renderer, config, sdl.Rect{X: ctrlX + ctrlW - btnW, Y: ctrlY, W: btnW, H: btnH}, "Next >", UIButtonStyle{
-		Variant: UIButtonSecondary,
-		Font:    font,
-		Radius:  RadiusSM,
-	}, UIButtonState{Disabled: pdf.page >= count})
-}
-
-// renderPDFChapterRow draws ‹ Chapter / name / Chapter › for a book.
-func renderPDFChapterRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, ctrlX, ctrlY, ctrlW int32) {
-	if len(pdf.doc.Chapters) == 0 {
+		UIEmptyState(renderer, config, view, "@text", "This page has no text", body)
 		return
 	}
-	const btnW = int32(108)
-	const btnH = int32(28)
-	_, idx := pdfChapterForPage(pdf.page)
-
-	chapterStyle := UIButtonStyle{Variant: UIButtonSecondary, Font: font, Radius: RadiusSM}
-	UIButton(renderer, config, sdl.Rect{X: ctrlX, Y: ctrlY, W: btnW, H: btnH}, "< Chapter", chapterStyle,
-		UIButtonState{Disabled: idx <= 0})
-
-	chapterStr := fmt.Sprintf("Chapter %d / %d", idx+1, len(pdf.doc.Chapters))
-	cw, _, _ := font.SizeUTF8(chapterStr)
-	renderText(renderer, config, font, chapterStr, ColorTextSecondary(),
-		ctrlX+(ctrlW-int32(cw))/2, ctrlY+6)
-
-	UIButton(renderer, config, sdl.Rect{X: ctrlX + ctrlW - btnW, Y: ctrlY, W: btnW, H: btnH}, "Chapter >", chapterStyle,
-		UIButtonState{Disabled: idx < 0 || idx >= len(pdf.doc.Chapters)-1})
+	paperW := view.W - 48
+	if paperW > 900 {
+		paperW = 900
+	}
+	paper := sdl.Rect{X: view.X + (view.W-paperW)/2, Y: view.Y, W: paperW, H: view.H}
+	// Paper: the page reads as a page in either theme.
+	fillRoundedRect(renderer, paper.X+3, paper.Y+3, paper.W, paper.H, 10, sdl.Color{R: 0, G: 0, B: 0, A: 50})
+	fillRoundedRect(renderer, paper.X, paper.Y, paper.W, paper.H, 10, sdl.Color{R: 246, G: 244, B: 238, A: 255})
+	lines := pdfvTextWrapped(font, pdf.page, text, paper.W-56)
+	lineH := int32(font.Height()) + 4
+	inner := paper.H - 40
+	pdfvTextMaxScroll = float64(int32(len(lines))*lineH - inner)
+	if pdfvTextMaxScroll < 0 {
+		pdfvTextMaxScroll = 0
+	}
+	if pdf.scrollY > pdfvTextMaxScroll {
+		pdf.scrollY = pdfvTextMaxScroll
+	}
+	first := int(pdf.scrollY / float64(lineH))
+	offset := int32(pdf.scrollY) - int32(first)*lineH
+	ink := sdl.Color{R: 28, G: 30, B: 36, A: 255}
+	renderWithClip(renderer, paper.X+28, paper.Y+20, paper.W-56, inner, func(r *sdl.Renderer) {
+		y := paper.Y + 20 - offset
+		for i := first; i < len(lines) && y < paper.Y+20+inner; i++ {
+			if lines[i] != "" {
+				filesDrawPlainText(r, config, font, lines[i], ink, paper.X+28, y)
+			}
+			y += lineH
+		}
+	})
+	if pdfvTextMaxScroll > 0 {
+		thumb := float64(inner) / float64(int32(len(lines))*lineH)
+		drawScrollbar(renderer, paper.X+paper.W-10, paper.Y+20, 3, inner, thumb, pdf.scrollY/pdfvTextMaxScroll)
+	}
 }
 
 // pdfDocumentTitle is the title line under the bar: the document's own title
@@ -467,62 +568,60 @@ func pdfWrapLines(font *ttf.Font, text string, maxWidth int32) []string {
 
 // ── Input ──────────────────────────────────────────────────────────────────
 
+// pdfvVertical is Up/Down: scroll the page (or its text), turning the page at
+// either end.
+func pdfvVertical(dir int) {
+	if pdfvIsPagedPDF() && !pdfvView.textMode {
+		pdfvScroll(float64(dir) * float64(pdfvView.viewport.H) / 5)
+		return
+	}
+	pdfScrollText(float64(dir) * 90)
+}
+
+// pdfvShoulder answers L1/R1 (page, or chapter in a book) and L2/R2 (zoom, or
+// the text size in the text view).
+func pdfvShoulder(s padShoulder) {
+	switch s {
+	case padL1:
+		if len(pdf.doc.Chapters) > 0 {
+			pdfJumpChapter(-1)
+		} else {
+			pdfPrevPage()
+		}
+	case padR1:
+		if len(pdf.doc.Chapters) > 0 {
+			pdfJumpChapter(1)
+		} else {
+			pdfNextPage()
+		}
+	case padL2:
+		pdfvZoomStep(-1)
+	case padR2:
+		pdfvZoomStep(1)
+	}
+}
+
 func handlePDFInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return
 	}
-
-	// Pages with more text than the paper shows scroll first, then turn: a key
-	// press on a long page should not skip the half of it that was off screen.
-	scrolled := func(delta float64) bool {
-		page, ok := pdfCurrentPage()
-		if !ok {
-			return false
-		}
-		font, _ := getCachedFont(config, "small")
-		if font == nil {
-			return false
-		}
-		lineH := int32(font.Height())
-		if lineH < 18 {
-			lineH = 18
-		}
-		lines := pdfWrapLines(font, page.Text, int32(520)-48)
-		visible := int((screenHeight - footerBarHeight() - 60) / lineH)
-		maxScroll := float64((len(lines) - visible) * int(lineH))
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if delta > 0 && pdf.scrollY+delta > maxScroll {
-			return false
-		}
-		if delta < 0 && pdf.scrollY <= 0 {
-			return false
-		}
-		pdf.scrollY += delta
-		if pdf.scrollY < 0 {
-			pdf.scrollY = 0
-		}
-		return true
+	if pdfvView.menu.open {
+		pdfvMenuApply(filesMenuKey(&pdfvView.menu, e.Keysym.Sym))
+		return
 	}
-
 	switch e.Keysym.Sym {
 	case sdl.K_LEFT:
-		pdfPrevPage()
+		pdfvSide(-1)
 	case sdl.K_RIGHT:
-		pdfNextPage()
-	case sdl.K_PAGEUP:
-		if !scrolled(-240) {
-			pdfPrevPage()
-		}
-	case sdl.K_PAGEDOWN:
-		if !scrolled(240) {
-			pdfNextPage()
-		}
+		pdfvSide(1)
 	case sdl.K_UP:
-		pdfScrollBy(-60)
+		pdfvVertical(-1)
 	case sdl.K_DOWN:
-		pdfScrollBy(60)
+		pdfvVertical(1)
+	case sdl.K_PAGEUP:
+		pdfPrevPage()
+	case sdl.K_PAGEDOWN, sdl.K_SPACE:
+		pdfNextPage()
 	case sdl.K_HOME:
 		pdfGoToPage(1)
 	case sdl.K_END:
@@ -531,38 +630,58 @@ func handlePDFInput(e *sdl.KeyboardEvent, config *Config) {
 		pdfJumpChapter(-1)
 	case sdl.K_RIGHTBRACKET:
 		pdfJumpChapter(1)
-	case sdl.K_ESCAPE, sdl.K_b:
+	case sdl.K_PLUS, sdl.K_EQUALS, sdl.K_KP_PLUS:
+		pdfvZoomStep(1)
+	case sdl.K_MINUS, sdl.K_KP_MINUS:
+		pdfvZoomStep(-1)
+	case sdl.K_0, sdl.K_f, sdl.K_a:
+		if pdfvIsPagedPDF() && !pdfvView.textMode {
+			pdfvCycleFit()
+		}
+	case sdl.K_t, sdl.K_x:
+		pdfvToggleText()
+	case sdl.K_o, sdl.K_y, sdl.K_TAB:
+		if pdf.doc.Loaded && pdf.doc.Error == "" {
+			pdfvOpenMenu()
+		}
+	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		goBackScene(config)
-		PlayBackSound()
 	}
 }
 
-// Scene controller mapping, moved here from controller.go so the scene owns
-// its own input.
-
+// ctrlPDFReader is the reader's pad map; the scene owns its own input.
 func ctrlPDFReader(e *sdl.ControllerButtonEvent) bool {
+	if e == nil {
+		return false
+	}
+	if pdfvView.menu.open {
+		pdfvMenuApply(filesMenuController(&pdfvView.menu, e.Button))
+		return true
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		pdfScrollBy(-60)
+		pdfvVertical(-1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		pdfScrollBy(60)
+		pdfvVertical(1)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		pdfPrevPage()
+		pdfvSide(-1)
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		pdfNextPage()
+		pdfvSide(1)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		// A book's shoulders turn chapters; a PDF has no chapters, so they turn
-		// pages there and nothing feels dead.
-		if len(pdf.doc.Chapters) > 0 {
-			pdfJumpChapter(-1)
-		} else {
-			pdfPrevPage()
-		}
+		pdfvShoulder(padL1)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		if len(pdf.doc.Chapters) > 0 {
-			pdfJumpChapter(1)
-		} else {
-			pdfNextPage()
+		pdfvShoulder(padR1)
+	case sdl.CONTROLLER_BUTTON_A:
+		if pdfvIsPagedPDF() && !pdfvView.textMode {
+			pdfvCycleFit()
+		}
+	case sdl.CONTROLLER_BUTTON_X:
+		pdfvToggleText()
+	case sdl.CONTROLLER_BUTTON_Y:
+		if pdf.doc.Loaded && pdf.doc.Error == "" {
+			pdfvOpenMenu()
+		} else if pdf.doc.Error != "" && filesSystemOpenAvailable() {
+			filesOpenWithSystem(pdf.doc.Path)
 		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		goBackScene(appConfig)

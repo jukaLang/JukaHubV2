@@ -50,7 +50,8 @@ static char g_err[256];
 const char *rt_dlerror(void) { return g_err[0] ? g_err : "no error"; }
 
 void *rt_dlopen(const char *path, int isGlobal) {
-    int flags = isGlobal ? RTLD_GLOBAL : RTLD_LOCAL;
+    /* glibc rejects a mode without RTLD_NOW or RTLD_LAZY ("invalid mode"). */
+    int flags = RTLD_NOW | (isGlobal ? RTLD_GLOBAL : RTLD_LOCAL);
     void *h = dlopen(path, flags);
     if (!h) {
         const char *msg = dlerror();

@@ -31,6 +31,10 @@ func TestArtworkTitleVariantsOrder(t *testing.T) {
 				"Zelda_II_-_The_Adventure_of_Link",
 				"Zelda II",
 				"Zelda_II",
+				// Spelling guesses come last, after every structural one: the
+				// Roman numeral is the same title, but it is still a guess.
+				"Zelda 2 - The Adventure of Link (USA)",
+				"Zelda_2_-_The_Adventure_of_Link_(USA)",
 			},
 		},
 		{

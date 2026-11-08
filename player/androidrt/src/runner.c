@@ -1,34 +1,49 @@
 /* runner.c — the AndroidRT "loader" executable.
  *
- * This is the binary the AndroidPak game-profile runtime launches as
- *   <AndroidRT>/loader <apk>
- * with the staged tree and triage result handed over through ANDROIDPAK_*
- * environment variables (see ../ .. in the parent Go tree).
+ *   loader <apk> [args]            run a staged game (ANDROIDPAK_* env, set by
+ *                                  the AndroidPak profile runtime)
+ *   loader --scan <lib.so> [dir]   print the import report of a bionic library
+ *                                  and its bundled dependencies, run nothing
+ *                                  (exit 0 = everything resolves, 2 = undefined
+ *                                  symbols listed, 1 = unreadable)
  *
- * What it does:
- *   1. validates the ANDROIDPAK_* environment,
- *   2. dlopens every shim in <AndroidRT>/shims so the game's DT_NEEDED
- *      entries resolve to liblog.so / libandroid.so / libOpenSLES.so,
- *   3. dlopens the game's main .so from the staged tree,
- *   4. resolves ANativeActivity_onCreate and drives the lifecycle:
- *      onCreate → onStart → onResume → onNativeWindowCreated →
- *      ... game loop ... → onDestroy → exit.
+ * Profile mode, Linux (the device):
+ *   1. validates the ANDROIDPAK_* environment and prepares the persistent
+ *      data directory (ANDROIDPAK_DATA: files/, external/, obb/, cache/);
+ *   2. loads the game's main library with the runner's own bionic loader
+ *      (bionicld.c) — every import bound through the compat resolver, the
+ *      complete undefined-symbol list printed before any game code runs;
+ *   3. resolves ANativeActivity_onCreate (or $ANDROIDPAK_ENTRY), searching
+ *      the other staged libraries when the main one does not export it;
+ *   4. drives the lifecycle (activity.c) and _exit()s with its status —
+ *      Android kills app processes, it never runs their static destructors.
  *
- * It is intentionally the simplest honest harness: a bionic-linked game .so
- * will usually fail dlopen on glibc with an undefined symbol. When it does,
- * this prints the exact missing name — which is precisely what shims are
- * built against: add the symbol to a shim, rebuild, retry. That measurement
- * loop, not a full bionic-translation port, is this file's purpose today.
+ * Windows smoke builds keep the original dlopen/LoadLibrary path (dlport.c):
+ * there is no ELF to load there.
  */
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 #include "actbridge.h"
 #include "dlport.h"
+
+#if defined(__linux__)
+#define ANDROIDRT_BIONIC_LOADER 1
+#include "bioniccompat.h"
+#include "bionicld.h"
+/* eglpresent.c */
+void apak_presentInit(void);
+void apak_presentShutdown(void);
+#endif
 
 static const char *require_env(const char *name) {
     const char *value = getenv(name);
@@ -41,55 +56,178 @@ static const char *require_env(const char *name) {
     return value;
 }
 
-/* dlopen every .so in the shims directory with RTLD_GLOBAL. */
-static void preload_shims(void) {
-    const char *shimDir = getenv("ANDROIDPAK_SHIMS");
-    if (!shimDir || !*shimDir) {
-        fprintf(stderr, "[androidrt] warn: ANDROIDPAK_SHIMS not set — no shims preloaded\n");
+#if ANDROIDRT_BIONIC_LOADER
+
+static void dirName(const char *path, char *out, size_t cap) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        snprintf(out, cap, ".");
         return;
     }
-    DIR *dir = opendir(shimDir);
-    if (!dir) {
-        fprintf(stderr, "[androidrt] warn: shims dir not readable: %s\n", shimDir);
+    if ((size_t)(slash - path) >= cap) {
+        out[0] = '\0';
         return;
     }
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        size_t len = strlen(entry->d_name);
-        if (len <= 3 || strcmp(entry->d_name + len - 3, ".so") != 0) {
-            continue;
-        }
-        char path[4096];
-        snprintf(path, sizeof(path), "%s/%s", shimDir, entry->d_name);
-        void *handle = rt_dlopen(path, 1);
-        if (!handle) {
-            fprintf(stderr, "[androidrt] shim %s did not load: %s\n", path, rt_dlerror());
-        } else {
-            fprintf(stderr, "[androidrt] shim loaded: %s\n", path);
-        }
-    }
-    closedir(dir);
+    memcpy(out, path, (size_t)(slash - path));
+    out[slash - path] = '\0';
+    if (!out[0]) snprintf(out, cap, "/");
 }
+
+static int missingPolicy(void) {
+    const char *v = getenv("ANDROIDPAK_MISSING");
+    if (!v || !*v || strcmp(v, "trap") == 0) return APAK_MISSING_TRAP;
+    if (strcmp(v, "zero") == 0) return APAK_MISSING_ZERO;
+    if (strcmp(v, "strict") == 0) return APAK_MISSING_STRICT;
+    fprintf(stderr, "[androidrt] warn: ANDROIDPAK_MISSING=%s is not trap|zero|strict — using trap\n", v);
+    return APAK_MISSING_TRAP;
+}
+
+static int mkdirs(const char *path) {
+    char buf[4096];
+    size_t i, len = strlen(path);
+    if (len == 0 || len >= sizeof buf) return -1;
+    memcpy(buf, path, len + 1);
+    for (i = 1; i <= len; i++) {
+        if (buf[i] == '/' || buf[i] == '\0') {
+            char saved = buf[i];
+            buf[i] = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+            buf[i] = saved;
+        }
+    }
+    return 0;
+}
+
+static int scanMain(int argc, char **argv) {
+    const char *lib = argv[2];
+    char dir[4096];
+    int missing;
+    if (argc >= 4) snprintf(dir, sizeof dir, "%s", argv[3]);
+    else dirName(lib, dir, sizeof dir);
+    apak_compatInit();
+    apak_ldConfigure(dir, APAK_MISSING_TRAP);
+    missing = apak_ldScan(lib);
+    if (missing < 0) {
+        fprintf(stderr, "[androidrt] could not load %s: %s\n", lib, apak_ldLastError());
+        return 1;
+    }
+    return missing ? 2 : 0;
+}
+
+#endif /* ANDROIDRT_BIONIC_LOADER */
 
 int main(int argc, char **argv) {
     ActivityRunner runner;
-    memset(&runner, 0, sizeof(runner));
+    char libPath[4096];
+    void *game, *onCreate, *onFrame = NULL;
+    const char *entry = getenv("ANDROIDPAK_ENTRY");
+#if ANDROIDRT_BIONIC_LOADER
+    static char dataFiles[4096], dataExternal[4096], dataObb[4096];
+    char libDir[4096], dataRoot[3072], cacheDir[4096];
+    const char *data;
+#endif
 
+#if ANDROIDRT_BIONIC_LOADER
+    if (argc >= 3 && strcmp(argv[1], "--scan") == 0) return scanMain(argc, argv);
+#endif
+    if (!entry || !*entry) entry = "ANativeActivity_onCreate";
+
+    memset(&runner, 0, sizeof(runner));
     runner.apkPath = require_env("ANDROIDPAK_APK");
     runner.stagedRoot = require_env("ANDROIDPAK_STAGED");
     runner.mainLib = require_env("ANDROIDPAK_MAINLIB");
 
-    if (getenv("ANDROIDPAK_DEBUG")) {
-        fprintf(stderr, "[androidrt] apk=%s staged=%s mainlib=%s\n",
-                runner.apkPath, runner.stagedRoot, runner.mainLib);
+    if (getenv("ANDROIDPAK_DEBUG"))
+        fprintf(stderr, "[androidrt] apk=%s staged=%s mainlib=%s\n", runner.apkPath, runner.stagedRoot,
+                runner.mainLib);
+
+    /* The game library lives at <staged>/<ANDROIDPAK_MAINLIB>. */
+    snprintf(libPath, sizeof(libPath), "%s/%s", runner.stagedRoot, runner.mainLib);
+
+#if ANDROIDRT_BIONIC_LOADER
+    /* Saves must outlive the tmpfs stage, which JukaHub deletes after exit. */
+    data = getenv("ANDROIDPAK_DATA");
+    if (data && *data) {
+        snprintf(dataRoot, sizeof dataRoot, "%s", data);
+    } else {
+        snprintf(dataRoot, sizeof dataRoot, "%s/data", runner.stagedRoot);
+        fprintf(stderr, "[androidrt] warn: ANDROIDPAK_DATA not set — game data goes to %s and is lost when the stage is cleaned\n",
+                dataRoot);
+    }
+    snprintf(dataFiles, sizeof dataFiles, "%s/files", dataRoot);
+    snprintf(dataExternal, sizeof dataExternal, "%s/external", dataRoot);
+    snprintf(dataObb, sizeof dataObb, "%s/obb", dataRoot);
+    snprintf(cacheDir, sizeof cacheDir, "%s/cache", dataRoot);
+    if (mkdirs(dataFiles) != 0 || mkdirs(dataExternal) != 0 || mkdirs(dataObb) != 0 || mkdirs(cacheDir) != 0)
+        fprintf(stderr, "[androidrt] warn: cannot create the data directories under %s: %s\n", dataRoot,
+                strerror(errno));
+    runner.internalDataPath = dataFiles;
+    runner.externalDataPath = dataExternal;
+    runner.obbPath = dataObb;
+    if (!getenv("TMPDIR")) setenv("TMPDIR", cacheDir, 1);
+
+    if (!apak_tlsSlotCheck())
+        fprintf(stderr, "[androidrt] WARNING: the stack-guard TLS slot is not at tpidr_el0+0x28 — NDK code built "
+                        "with -fstack-protector will abort; another __thread variable was linked before apak_tls\n");
+
+    dirName(libPath, libDir, sizeof libDir);
+    apak_compatInit();
+    apak_ldConfigure(libDir, missingPolicy());
+    apak_ldSetArgs(argc, argv);
+    /* Before the game loads: its EGL imports must bind to the present layer. */
+    apak_presentInit();
+
+    if (getenv("ANDROIDPAK_SCAN") && strcmp(getenv("ANDROIDPAK_SCAN"), "0") != 0) {
+        int missing = apak_ldScan(libPath);
+        if (missing < 0) fprintf(stderr, "[androidrt] could not load %s: %s\n", libPath, apak_ldLastError());
+        return missing < 0 ? 2 : missing ? 2 : 0;
     }
 
-    preload_shims();
+    game = apak_ldOpen(libPath);
+    if (!game) {
+        fprintf(stderr, "[androidrt] could not load %s: %s\n", libPath, apak_ldLastError());
+        return 2;
+    }
+    onCreate = apak_ldSymSelf(game, entry);
+    if (!onCreate) {
+        char other[4096];
+        if (apak_ldFindExporter(entry, other, sizeof other) && strcmp(other, libPath) != 0) {
+            fprintf(stderr, "[androidrt] %s exports no %s; %s does — loading it as the entry library\n",
+                    runner.mainLib, entry, other);
+            game = apak_ldOpen(other);
+            onCreate = game ? apak_ldSymSelf(game, entry) : NULL;
+        }
+    }
+    if (game) onFrame = apak_ldSymSelf(game, "ANativeActivity_onFrame");
+#else
+    /* Legacy path (Windows smoke builds): the platform loader. */
+    {
+        const char *shimDir = getenv("ANDROIDPAK_SHIMS");
+        (void)shimDir;
+    }
+    game = rt_dlopen(libPath, 1);
+    if (!game) {
+        const char *err = rt_dlerror();
+        fprintf(stderr, "[androidrt] could not load %s: %s\n", libPath, err ? err : "unknown dlerror");
+        return 2;
+    }
+    onCreate = rt_dlsym(game, entry);
+    onFrame = rt_dlsym(game, "ANativeActivity_onFrame");
+#endif
+
+    if (!onCreate) {
+        fprintf(stderr,
+                "[androidrt] %s exports no %s\n"
+                "[androidrt] hint: a library without it is a JNI library for dex code, not a NativeActivity "
+                "entry — out of Tier 1 scope\n",
+                libPath, entry);
+        return 3;
+    }
 
 #ifdef JUKAHUB_EVDEV
-    /* Controller input: the evdev reader (evdev.c) starts once the shims
-     * are up so events can never arrive into an uncreated queue. OFF via
-     * ANDROIDPAK_INPUT=off, mirroring the mem/surface opt-outs. */
+    /* Controller input: the evdev reader (evdev.c) starts once the game is
+     * loaded, so events never arrive into an uncreated queue. OFF via
+     * ANDROIDPAK_INPUT=off. */
     {
         const char *inputOpt = getenv("ANDROIDPAK_INPUT");
         if (!inputOpt || strcmp(inputOpt, "off") != 0) android_inputStartEvdev();
@@ -97,34 +235,15 @@ int main(int argc, char **argv) {
     }
 #endif
 
-    /* The game library lives at <staged>/<ANDROIDPAK_MAINLIB>. */
-    char libPath[4096];
-    snprintf(libPath, sizeof(libPath), "%s/%s", runner.stagedRoot, runner.mainLib);
-
-    void *game = rt_dlopen(libPath, 1);
-    if (!game) {
-        /* The useful failure: the exact missing symbol is the next shim. */
-        const char *err = rt_dlerror();
-        fprintf(stderr,
-                "[androidrt] could not load %s: %s\n"
-                "[androidrt] hint: undefined bionic symbols belong in a shim "
-                "(shims/*.so), rebuilt with build-tsp.sh\n",
-                libPath, err ? err : "unknown dlerror");
-        return 2;
-    }
-
-    void *onCreate = rt_dlsym(game, "ANativeActivity_onCreate");
-    if (!onCreate) {
-        fprintf(stderr,
-                "[androidrt] %s exports no ANativeActivity_onCreate\n"
-                "[androidrt] hint: a libgame.so without it is a JNI library "
-                "for dex code, not a NativeActivity entry — out of Tier 1 "
-                "scope\n",
-                libPath);
-        return 3;
-    }
-
     runner.running = 1;
-    runOneActivity(&runner, onCreate, game);
+    runOneActivity(&runner, onCreate, onFrame);
+    fprintf(stderr, "[androidrt] lifecycle: done, exit status %d\n", runner.exitCode);
+#if ANDROIDRT_BIONIC_LOADER
+    apak_presentShutdown();
+    fflush(stdout);
+    fflush(stderr);
+    _exit(runner.exitCode);
+#else
     return runner.exitCode;
+#endif
 }

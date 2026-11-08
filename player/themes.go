@@ -31,6 +31,11 @@ type ThemePreset struct {
 	// homeArrangementCustom and friends). Empty means "leave the layout alone",
 	// which is what every colour preset does.
 	Arrangement string
+	// Bloom and Bloom2 are the backdrop's two glows (#rrggbb): one behind the
+	// content, one in the far corner (themeBackdropBlooms). Empty keeps the
+	// shipped pair, the accent and Home's violet.
+	Bloom  string
+	Bloom2 string
 
 	Background    string
 	ButtonColor   string
@@ -672,21 +677,261 @@ var themePresets = map[string]ThemePreset{
 		Info:          "#ff71ce",
 		Overlay:       "#140b26cc",
 	},
+	// The palettes below carry their own backdrop glows (Bloom/Bloom2), and each
+	// has a total conversion of the same name. Every one clears the readability
+	// floors in themes_test.go and the stricter ones in themes_conversion_test.go.
+	//
+	// aurora: deep space navy, a console-blue accent and the northern lights —
+	// teal and violet — glowing behind the cards.
+	"aurora": {
+		Name:          "Aurora",
+		Bloom:         "#2bd9c1",
+		Bloom2:        "#8b5cf6",
+		Background:    "#070a18",
+		ButtonColor:   "#1b2340",
+		LabelColor:    "#eef2ff",
+		InputColor:    "#10162b",
+		Surface:       "#0d1326",
+		SurfaceAlt:    "#141c36",
+		SurfaceRaised: "#1c2647",
+		TextPrimary:   "#f2f5ff",
+		TextSecondary: "#b9c3e6",
+		TextTertiary:  "#8e9ac4",
+		BorderSubtle:  "#ffffff12",
+		BorderDefault: "#2a3560",
+		BorderFocus:   "#6aa8ff",
+		Success:       "#3fe0a8",
+		Warning:       "#ffc861",
+		Danger:        "#ff6b8b",
+		Info:          "#6aa8ff",
+		Overlay:       "#070a18cc",
+	},
+	// segablue: a late-90s console blue with the swirl's orange as the accent.
+	"segablue": {
+		Name:          "Sega Blue",
+		Bloom:         "#1f6bff",
+		Bloom2:        "#ff7a1a",
+		Background:    "#06122e",
+		ButtonColor:   "#12306e",
+		LabelColor:    "#f4f7ff",
+		InputColor:    "#0b1c45",
+		Surface:       "#0a1a40",
+		SurfaceAlt:    "#10255a",
+		SurfaceRaised: "#173173",
+		TextPrimary:   "#f5f8ff",
+		TextSecondary: "#b8c8ee",
+		TextTertiary:  "#93a7d6",
+		BorderSubtle:  "#ffffff12",
+		BorderDefault: "#234a9a",
+		BorderFocus:   "#ff7a1a",
+		Success:       "#3ddc97",
+		Warning:       "#ffc24b",
+		Danger:        "#ff5a5a",
+		Info:          "#ff7a1a",
+		Overlay:       "#06122ecc",
+	},
+	// dmg: the original handheld's four greens, darkest as the page and the
+	// pale pea green for text, so it reads like a lit DMG screen at night.
+	"dmg": {
+		Name:          "Game Boy",
+		Bloom:         "#8bac0f",
+		Bloom2:        "#306230",
+		Background:    "#0f380f",
+		ButtonColor:   "#306230",
+		LabelColor:    "#e0f8d0",
+		InputColor:    "#174617",
+		Surface:       "#144214",
+		SurfaceAlt:    "#1b4d1b",
+		SurfaceRaised: "#245a24",
+		TextPrimary:   "#e0f8d0",
+		TextSecondary: "#b8d878",
+		TextTertiary:  "#9bbc0f",
+		BorderSubtle:  "#9bbc0f20",
+		BorderDefault: "#306230",
+		BorderFocus:   "#c4f04a",
+		Success:       "#c4f04a",
+		Warning:       "#e8f070",
+		Danger:        "#ff8a5c",
+		Info:          "#c4f04a",
+		Overlay:       "#0f380fcc",
+	},
+	// synthwave: a violet night under a pink-and-orange sunset.
+	"synthwave": {
+		Name:          "Synthwave",
+		Bloom:         "#ff4fd8",
+		Bloom2:        "#ff9e3d",
+		Background:    "#14071f",
+		ButtonColor:   "#34124f",
+		LabelColor:    "#fff0fb",
+		InputColor:    "#1d0b2e",
+		Surface:       "#1d0b2e",
+		SurfaceAlt:    "#2a1042",
+		SurfaceRaised: "#391659",
+		TextPrimary:   "#fff2fb",
+		TextSecondary: "#ffb3e1",
+		TextTertiary:  "#d394e0",
+		BorderSubtle:  "#ff4fd81c",
+		BorderDefault: "#4a1d72",
+		BorderFocus:   "#ff4fd8",
+		Success:       "#36f1cd",
+		Warning:       "#ffd166",
+		Danger:        "#ff5470",
+		Info:          "#ff4fd8",
+		Overlay:       "#14071fcc",
+	},
+	// solarized-light: the classic cream base with its blue accent, the inks
+	// nudged a step darker so body text clears WCAG AA on the cream.
+	"solarized-light": {
+		Name:          "Solarized Light",
+		Bloom:         "#e8c35a",
+		Bloom2:        "#6fb2e6",
+		Background:    "#fdf6e3",
+		ButtonColor:   "#eee8d5",
+		LabelColor:    "#073642",
+		InputColor:    "#f5efdc",
+		Surface:       "#fffbf0",
+		SurfaceAlt:    "#eee8d5",
+		SurfaceRaised: "#e6dfc8",
+		TextPrimary:   "#073642",
+		TextSecondary: "#3d5a63",
+		TextTertiary:  "#526870",
+		BorderSubtle:  "#00000010",
+		BorderDefault: "#d9cfb4",
+		BorderFocus:   "#268bd2",
+		Success:       "#5f7a00",
+		Warning:       "#946f00",
+		Danger:        "#c42b28",
+		Info:          "#1f74b0",
+		Overlay:       "#fdf6e399",
+	},
+	// paper: an e-ink page — warm grey paper, ink-black type and an ink focus
+	// ring, with no colour anywhere it is not needed.
+	"paper": {
+		Name:          "Paper",
+		Bloom:         "#d6cfbd",
+		Bloom2:        "#bdb4a0",
+		Background:    "#f2efe6",
+		ButtonColor:   "#e2ddd0",
+		LabelColor:    "#1c1c1a",
+		InputColor:    "#ebe7dc",
+		Surface:       "#faf8f2",
+		SurfaceAlt:    "#ebe7dc",
+		SurfaceRaised: "#e2ddd0",
+		TextPrimary:   "#1c1c1a",
+		TextSecondary: "#44423d",
+		TextTertiary:  "#5b5850",
+		BorderSubtle:  "#00000012",
+		BorderDefault: "#cfc9b9",
+		BorderFocus:   "#2b2b28",
+		Success:       "#2f6b3f",
+		Warning:       "#7f5900",
+		Danger:        "#a23a2a",
+		Info:          "#2b2b28",
+		Overlay:       "#f2efe699",
+	},
+	// forest: a pine-dark page, moss and lichen greens, a gold glow at dusk.
+	"forest": {
+		Name:          "Forest",
+		Bloom:         "#3fa66b",
+		Bloom2:        "#d9a441",
+		Background:    "#0b1510",
+		ButtonColor:   "#183324",
+		LabelColor:    "#eefaf0",
+		InputColor:    "#102018",
+		Surface:       "#0f1d15",
+		SurfaceAlt:    "#15281d",
+		SurfaceRaised: "#1c3527",
+		TextPrimary:   "#effaf1",
+		TextSecondary: "#b5d4bd",
+		TextTertiary:  "#8db39a",
+		BorderSubtle:  "#9be3a51a",
+		BorderDefault: "#24452f",
+		BorderFocus:   "#8fd694",
+		Success:       "#8fd694",
+		Warning:       "#e8c25a",
+		Danger:        "#f07a6a",
+		Info:          "#8fd694",
+		Overlay:       "#0b1510cc",
+	},
+	// amber: a monochrome amber-phosphor CRT on true black.
+	"amber": {
+		Name:          "Amber CRT",
+		Bloom:         "#ff9d00",
+		Bloom2:        "#ff5e00",
+		Background:    "#0c0700",
+		ButtonColor:   "#2a1a02",
+		LabelColor:    "#ffc45a",
+		InputColor:    "#140c01",
+		Surface:       "#140c01",
+		SurfaceAlt:    "#1c1102",
+		SurfaceRaised: "#261703",
+		TextPrimary:   "#ffc861",
+		TextSecondary: "#e8a845",
+		TextTertiary:  "#c48a38",
+		BorderSubtle:  "#ffb00020",
+		BorderDefault: "#3d2705",
+		BorderFocus:   "#ffb000",
+		Success:       "#ffd27a",
+		Warning:       "#ffe08a",
+		Danger:        "#ff6a3d",
+		Info:          "#ffb000",
+		Overlay:       "#0c0700cc",
+	},
+	// oceanglass: deep water under frosted glass, cyan on teal-black.
+	"oceanglass": {
+		Name:          "Ocean Glass",
+		Bloom:         "#00b8d9",
+		Bloom2:        "#1e5bff",
+		Background:    "#031821",
+		ButtonColor:   "#0d3442",
+		LabelColor:    "#e9fbff",
+		InputColor:    "#072431",
+		Surface:       "#062430",
+		SurfaceAlt:    "#0a2f3d",
+		SurfaceRaised: "#0f3b4b",
+		TextPrimary:   "#ecfcff",
+		TextSecondary: "#a9d9e3",
+		TextTertiary:  "#7fb3c0",
+		BorderSubtle:  "#5ee7ff1a",
+		BorderDefault: "#145063",
+		BorderFocus:   "#3ee0d0",
+		Success:       "#3ee0a0",
+		Warning:       "#ffd166",
+		Danger:        "#ff6b7a",
+		Info:          "#3ee0d0",
+		Overlay:       "#031821cc",
+	},
 }
 
 // themeConversionSpecs are the total conversions: a palette the catalogue
 // already has, plus the home arrangement the conversion installs. They are
 // derived rather than written out again, so a conversion cannot drift from the
 // palette it claims to use.
+//
+// bloom and bloom2 recolour the backdrop's glows for the conversion only; empty
+// keeps the palette's own pair. A conversion is the whole look — palette,
+// glows and the home arrangement — so applying one changes all three at once.
 var themeConversionSpecs = []struct {
 	key         string
 	name        string
 	palette     string
 	arrangement string
 	summary     string
+	bloom       string
+	bloom2      string
 }{
-	{"convert-dashboard", "Dashboard", "dark", homeArrangementDashboard, "Dashboard · deep slate"},
-	{"convert-grid", "Hero grid", "sand", homeArrangementGrid, "Hero tile · warm paper"},
+	{"convert-dashboard", "Dashboard", "dark", homeArrangementDashboard, "Dashboard · deep slate", "", ""},
+	{"convert-grid", "Hero grid", "sand", homeArrangementGrid, "Hero tile · warm paper", "", ""},
+	{"convert-aurora", "Aurora", "aurora", homeArrangementDashboard, "Dashboard · northern lights", "", ""},
+	{"convert-segablue", "Sega Blue", "segablue", homeArrangementGrid, "Hero tile · swirl orange", "", ""},
+	{"convert-dmg", "Game Boy", "dmg", homeArrangementGrid, "Hero tile · four greens", "", ""},
+	{"convert-synthwave", "Synthwave", "synthwave", homeArrangementDashboard, "Dashboard · neon sunset", "", ""},
+	{"convert-nord", "Nord Frost", "nord", homeArrangementGrid, "Hero tile · arctic frost", "#88c0d0", "#b48ead"},
+	{"convert-solarized", "Solarized", "solarized-light", homeArrangementDashboard, "Dashboard · cream and blue", "", ""},
+	{"convert-paper", "Paper", "paper", homeArrangementGrid, "Hero tile · e-ink page", "", ""},
+	{"convert-forest", "Forest", "forest", homeArrangementDashboard, "Dashboard · moss and gold", "", ""},
+	{"convert-amber", "Amber CRT", "amber", homeArrangementGrid, "Hero tile · amber phosphor", "", ""},
+	{"convert-oceanglass", "Ocean Glass", "oceanglass", homeArrangementDashboard, "Dashboard · deep water", "", ""},
 }
 
 func init() {
@@ -696,6 +941,12 @@ func init() {
 		preset.Kind = themeKindConversion
 		preset.Arrangement = spec.arrangement
 		preset.Summary = spec.summary
+		if spec.bloom != "" {
+			preset.Bloom = spec.bloom
+		}
+		if spec.bloom2 != "" {
+			preset.Bloom2 = spec.bloom2
+		}
 		themePresets[spec.key] = preset
 	}
 }
@@ -968,10 +1219,16 @@ var themePresetOrder = []string{
 	"anime", "cute", "girly",
 	"sakura", "lavender", "sand", "nord", "gruvbox", "dracula", "matrix",
 	"fallout", "cyberpunk", "mono", "vaporwave",
+	// The palettes that bring their own backdrop glows.
+	"aurora", "segablue", "dmg", "synthwave", "solarized-light", "paper",
+	"forest", "amber", "oceanglass",
 	// Total conversions last: they are their own tab, and a list built from
 	// the whole catalogue (onboarding, a config referencing a preset) still
 	// reads colours first.
 	"convert-dashboard", "convert-grid",
+	"convert-aurora", "convert-segablue", "convert-dmg", "convert-synthwave",
+	"convert-nord", "convert-solarized", "convert-paper", "convert-forest",
+	"convert-amber", "convert-oceanglass",
 }
 
 // themeGalleryTab is one tab of the theme gallery.
