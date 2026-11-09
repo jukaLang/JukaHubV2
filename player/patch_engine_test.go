@@ -853,19 +853,6 @@ func TestConfigMigrationPreservesUnknownFields(t *testing.T) {
 	_ = origCfgPath
 }
 
-// --- Offline behavior ---
-
-func TestOfflineCheckFailsSafely(t *testing.T) {
-	// Point at an unreachable address; the check must return an error
-	// (not panic) and leave no files behind.
-	ctx := context.Background()
-	client := newPatchClient()
-	_, err := fetchBounded(ctx, client, "https://127.0.0.1:1/", 4096)
-	if err == nil {
-		t.Skip("unreachable address unexpectedly reachable")
-	}
-}
-
 // --- Helpers ---
 
 func mustWrite(t *testing.T, path, content string) {

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 )
@@ -102,7 +101,6 @@ type Variables struct {
 	SearchWidth        int  `json:"searchWidth"`
 	DynamicBg          bool `json:"dynamicBg"`
 	ScreensaverTimeout int  `json:"screensaverTimeout"`
-	SocialNotifs       bool `json:"socialNotifs"`
 	// Clock12 prints times with an AM/PM suffix. The zero value is the
 	// 24-hour clock every earlier build rendered.
 	Clock12 bool `json:"clock12"`
@@ -216,7 +214,7 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		if !errors.As(err, &typeErr) {
 			return err
 		}
-		log.Printf("[config] variables: %v; that setting keeps its default", err)
+		logWarn("config", "variables: %v; that setting keeps its default", err)
 	}
 
 	var raw map[string]json.RawMessage
@@ -243,13 +241,13 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"gridColumns":        true,
 		"searchWidth":        true,
 		"dynamicBg":          true,
-		"screensaverTimeout": true, "socialNotifs": true,
-		"clock12":       true,
-		"reducedMotion": true,
-		"lowPower":      true,
-		"powerMode":     true,
-		"ledSync":       true,
-		"custom":        true,
+		"screensaverTimeout": true,
+		"clock12":            true,
+		"reducedMotion":      true,
+		"lowPower":           true,
+		"powerMode":          true,
+		"ledSync":            true,
+		"custom":             true,
 
 		// First-class feature-toggle and device-hint fields. These live in the struct
 		// now so jukaconfig.json stays a readable catalog; keep them known here so the
@@ -270,6 +268,10 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		// instead of parking them in Custom where they would be re-saved forever.
 		"audioBackend": true,
 		"AudioBackend": true,
+		// The social notification generator was invented content, not a real
+		// feed; the feature is gone and the key along with it.
+		"socialNotifs": true,
+		"SocialNotifs": true,
 	}
 	v.Custom = make(map[string]interface{})
 	for k, val := range raw {

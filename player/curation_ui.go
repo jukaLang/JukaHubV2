@@ -768,7 +768,7 @@ func curationPageSubtitle(panel *curationPanelState) string {
 		if panel.scanning {
 			return "Scanning the ROM library · ports already listed"
 		}
-		return "Mark what needs testing · A toggles a vote"
+		return hintSentence("Mark what needs testing · %s toggles a vote", "A", "Vote")
 	}
 	return "Curated for " + panel.device.Label + " · " + curationFeedLabel()
 }
@@ -781,7 +781,7 @@ func renderCurationPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	rows := curationRows(config)
 	if len(rows) == 0 {
-		rows = []curationRow{{label: "Nothing here yet", detail: "Press B to close.", enabled: false}}
+		rows = []curationRow{{label: "Nothing here yet", detail: hintSentence("Press %s to close.", "B", "Close"), enabled: false}}
 	}
 	clampCurationCursor()
 

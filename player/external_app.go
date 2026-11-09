@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -27,6 +26,13 @@ func runExplicitExternalApp(path string) error {
 		return fmt.Errorf("external_app trigger has no path")
 	}
 
+	// Trust boundary (SEC-12): command is the external_app path of a config
+	// trigger — written by whoever authored the scene (jukaconfig.json, the
+	// user's own jukauser.json, a Patch package or a design the live builder
+	// pushed; pushed designs carrying this trigger wait in quarantine until
+	// accepted on the device, SEC-3). It is a command line by design
+	// (arguments, pipes, redirects), so it goes to the platform shell whole.
+	// Nothing typed or received at run time is appended to it.
 	var cmd *exec.Cmd
 	if IsWindows() {
 		cmd = exec.Command("cmd", "/c", command)
@@ -35,14 +41,14 @@ func runExplicitExternalApp(path string) error {
 	}
 	cmd.Env = append(os.Environ(), "JUKAHUB_EXTERNAL_APP=1")
 
-	log.Printf("[EXTERNAL] running: %s (%s)", command, runtime.GOOS)
+	logDebug("external", "running: %s (%s)", command, runtime.GOOS)
 	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
-		log.Printf("[EXTERNAL] output: %s", strings.TrimSpace(string(out)))
+		logDebug("external", "output: %s", strings.TrimSpace(string(out)))
 	}
 	if err != nil {
 		return fmt.Errorf("external app failed: %w", err)
 	}
-	log.Printf("[EXTERNAL] finished: %s", command)
+	logDebug("external", "finished: %s", command)
 	return nil
 }

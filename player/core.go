@@ -12,8 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
 	"math"
 	"net"
 	"net/http"
@@ -112,8 +110,7 @@ var (
 	}
 
 	// Home screen layout state (shared between render and mouse hit-testing)
-	homeLayoutActive     bool
-	homeTileElementIndex []int // slot -> scene element index
+	homeLayoutActive bool
 
 	// Focus engine (scene-level focus graph with persistence)
 	focusEngine = NewFocusEngine()
@@ -192,8 +189,6 @@ var (
 	pressDuration      uint64 = 150
 
 	// Loading overlay
-	loadingAlpha uint8 = 0
-	loadingText  string
 
 	// Image viewer state
 	imageViewerPath    string
@@ -417,15 +412,6 @@ func resolveButtonDimensions(e Element, width, height int32) (int32, int32) {
 	return width, height
 }
 
-// parseNonNegFloat safely parses the given text as a non-negative float64.
-func parseNonNegFloat(text string) (float64, bool) {
-	f, err := strconv.ParseFloat(text, 64)
-	if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, false
-	}
-	return f, true
-}
-
 // --- Helper functions ---
 func loadConfig(filename string) (*Config, error) {
 	if filename == "" {
@@ -491,16 +477,16 @@ func substituteVars(text string, vars map[string]interface{}) string {
 }
 
 var (
-	ytSearchKeyPattern = regexp.MustCompile(`"ytsearch\d+:[^"]+"`)
-	ffmpegFlagPattern  = regexp.MustCompile(`-f "[^"]*"`)
-	spaceRunPattern    = regexp.MustCompile(`\s+`)
+	ytSearchKeyPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`"ytsearch\d+:[^"]+"`) })
+	ffmpegFlagPattern  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`-f "[^"]*"`) })
+	spaceRunPattern    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\s+`) })
 )
 
 func normalizeCacheKey(raw string) string {
 	s := strings.ToLower(raw)
-	s = ytSearchKeyPattern.ReplaceAllString(s, `"ytsearch:QUERY"`)
-	s = ffmpegFlagPattern.ReplaceAllString(s, "")
-	s = spaceRunPattern.ReplaceAllString(s, " ")
+	s = ytSearchKeyPattern().ReplaceAllString(s, `"ytsearch:QUERY"`)
+	s = ffmpegFlagPattern().ReplaceAllString(s, "")
+	s = spaceRunPattern().ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }
 
@@ -790,17 +776,19 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 	}
 	// The compact canvas squeezes the 1280-wide design into 960, so type is
 	// scaled with it; then accessibility scaling applies here, at the one place
-	// every logical font is resolved, so no screen is left behind.
-	size = a11yScaleFontSize(uiScaleFontSize(size))
+	// every logical font is resolved, so no screen is left behind. The
+	// legibility floor (design.go) keeps a theme's tiny role readable.
+	size = a11yScaleFontSize(uiLegibleFontSize(size))
 	return loadCachedFont(fontPath, size), size
 }
 
 // getFontSized opens a logical font at a pixel size the caller chooses, for
 // displays that need a size no config role defines (the ambient clock). It
 // shares the cache, fallback chain and accessibility scaling with
-// getCachedFont.
+// getCachedFont. Captions authored under the legibility floor are opened at
+// the floor (uiLegibleFontSize, design.go).
 func getFontSized(config *Config, fontName string, size int) *ttf.Font {
-	return loadRoleFont(config, fontName, a11yScaleFontSize(uiScaleFontSize(size)))
+	return loadRoleFont(config, fontName, a11yScaleFontSize(uiLegibleFontSize(size)))
 }
 
 // loadRoleFont opens a logical font role at an already-scaled pixel size. It
@@ -827,7 +815,7 @@ func fontRoleSize(config *Config, fontName string) int {
 			break
 		}
 	}
-	return uiScaleFontSize(size)
+	return uiLegibleFontSize(size)
 }
 
 // buttonLabelFont fits a button's label inside its width. A fixed-width button
@@ -930,7 +918,7 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 		}
 	}
 	if err != nil {
-		log.Printf("Error loading font %s: %v", fontPath, err)
+		logWarn("core", "Error loading font %s: %v", fontPath, err)
 		return nil
 	}
 	// Remember where this font was opened so renderText can read its cmap and
@@ -992,19 +980,6 @@ func drawTextRun(renderer *sdl.Renderer, config *Config, font *ttf.Font, process
 	}
 	cache.Put(font, processed, color, texture, w, h)
 	return w, h
-}
-
-// renderTextWithFallback renders text with a fallback color if the original color is invalid.
-func renderTextWithFallback(renderer *sdl.Renderer, config *Config, font *ttf.Font, text string, color sdl.Color, fallbackColor sdl.Color, x, y int32) {
-	// Use fallback color if the original color has invalid alpha or is fully transparent.
-	if color.A == 0 {
-		color = fallbackColor
-	}
-	w, _ := renderText(renderer, config, font, text, color, x, y)
-	// If rendering failed, render with fallback color
-	if w == 0 && font != nil {
-		renderText(renderer, config, font, text, fallbackColor, x, y)
-	}
 }
 
 // --- Visual theme helpers ---------------------------------------------------
@@ -1095,7 +1070,7 @@ func ensureBackgroundTexture(renderer *sdl.Renderer, config *Config) {
 	if tex, err := img.LoadTexture(renderer, p); err == nil {
 		bgTexture = fitBackgroundTexture(renderer, tex)
 		bgImageFailed = ""
-		log.Printf("Background image loaded: %s", p)
+		logDebug("core", "Background image loaded: %s", p)
 		return
 	} else if surface, err2 := img.Load(p); err2 == nil {
 		// Fallback: load as a surface and upload manually.
@@ -1103,13 +1078,13 @@ func ensureBackgroundTexture(renderer *sdl.Renderer, config *Config) {
 			bgTexture = fitBackgroundTexture(renderer, tex2)
 			bgImageFailed = ""
 			surface.Free()
-			log.Printf("Background image loaded (surface): %s", p)
+			logDebug("core", "Background image loaded (surface): %s", p)
 			return
 		}
 		surface.Free()
-		log.Printf("Background image load failed (%s): %v", path, err2)
+		logWarn("core", "Background image load failed (%s): %v", path, err2)
 	} else {
-		log.Printf("Background image load failed (%s): %v", path, err)
+		logWarn("core", "Background image load failed (%s): %v", path, err)
 	}
 	bgImageFailed = path
 	bgImageFailedAt = time.Now()
@@ -1176,45 +1151,6 @@ func fitBackgroundTexture(renderer *sdl.Renderer, tex *sdl.Texture) *sdl.Texture
 	_ = static.SetBlendMode(sdl.BLENDMODE_NONE)
 	tex.Destroy()
 	return static
-}
-
-func ensureGradientTexture(renderer *sdl.Renderer, config *Config, bg sdl.Color) {
-	key := fmt.Sprintf("%s-%d-%d-%d", config.Title, bg.R, bg.G, bg.B)
-	if gradientTexture != nil && gradientSceneKey == key && gradientOverlayKey == overlayColor {
-		return
-	}
-	if gradientTexture != nil {
-		gradientTexture.Destroy()
-		gradientTexture = nil
-	}
-	gradientSceneKey = key
-	gradientOverlayKey = overlayColor
-
-	surface, err := sdl.CreateRGBSurfaceWithFormat(0, screenWidth, screenHeight, 32, sdl.PIXELFORMAT_RGBA8888)
-	if err != nil {
-		return
-	}
-	defer surface.Free()
-
-	for y := int32(0); y < screenHeight; y++ {
-		t := float32(y) / float32(screenHeight)
-		// Blend the theme background toward a slightly lighter shade so the
-		// gradient always matches the active theme (instead of a fixed dark
-		// overlay that made light themes look dark).
-		end := lighten(bg, 12)
-		r := uint8(float32(bg.R) + t*float32(end.R-bg.R))
-		g := uint8(float32(bg.G) + t*float32(end.G-bg.G))
-		b := uint8(float32(bg.B) + t*float32(end.B-bg.B))
-		c := uint32(r) | uint32(g)<<8 | uint32(b)<<16 | 0xFF000000
-		rect := &sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1}
-		surface.FillRect(rect, c)
-	}
-
-	tex, err := renderer.CreateTextureFromSurface(surface)
-	if err != nil {
-		return
-	}
-	gradientTexture = tex
 }
 
 func lighten(c sdl.Color, amt int) sdl.Color {
@@ -1475,13 +1411,6 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 				layout.usageX, layout.usageY+int32(i)*(layout.lineHeight+4))
 		}
 	}
-}
-
-// renderCircleSector fills the annular sector between innerR and outerR
-// spanning from angleStart to angleEnd (radians, clockwise from top).
-// Uses a dense line fan so the sector reads as a filled shape at render time.
-func renderCircleSector(renderer *sdl.Renderer, cx, cy, outerR, innerR int32, angleStart, angleEnd float64) {
-	renderCircleSectorColor(renderer, cx, cy, outerR, innerR, angleStart, angleEnd, accentColor)
 }
 
 // renderCircleSectorColor is renderCircleSector with an explicit color.
@@ -1748,61 +1677,6 @@ func drawRoundedStrokeRows(renderer *sdl.Renderer, ox, oy, w, h, r, thickness in
 	}
 }
 
-// gradientRoundedRect draws a smooth vertical gradient inside a rounded rect.
-// The gradient is rendered per scanline so it interpolates top→bottom without
-// a visible banding seam, and the rounded corners are preserved exactly.
-func gradientRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, top, bottom sdl.Color) {
-	if r > w/2 {
-		r = w / 2
-	}
-	if r > h/2 {
-		r = h / 2
-	}
-	if r < 1 {
-		renderVerticalGradient(renderer, x, y, w, h, top, bottom)
-		return
-	}
-	for dy := int32(0); dy < h; dy++ {
-		var inset int32
-		if dy < r {
-			inset = r - int32(math.Sqrt(float64(2*r*dy-dy*dy)))
-		} else if d := dy - (h - r); d > 0 {
-			inset = r - int32(math.Sqrt(float64(2*r*d-d*d)))
-		}
-		x0 := x + inset
-		x1 := x + w - inset
-		if x1 <= x0 {
-			continue
-		}
-		c := lerpColor(top, bottom, float32(dy)/float32(h-1))
-		renderer.SetDrawColor(c.R, c.G, c.B, c.A)
-		renderer.FillRect(&sdl.Rect{X: x0, Y: y + dy, W: x1 - x0, H: 1})
-	}
-}
-
-// renderVerticalGradient draws a plain vertical gradient (no rounding).
-func renderVerticalGradient(renderer *sdl.Renderer, x, y, w, h int32, top, bottom sdl.Color) {
-	if h <= 1 {
-		renderer.SetDrawColor(top.R, top.G, top.B, top.A)
-		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
-		return
-	}
-	for dy := int32(0); dy < h; dy++ {
-		c := lerpColor(top, bottom, float32(dy)/float32(h-1))
-		renderer.SetDrawColor(c.R, c.G, c.B, c.A)
-		renderer.FillRect(&sdl.Rect{X: x, Y: y + dy, W: w, H: 1})
-	}
-}
-
-// drawRectOutline draws a 2px border around the given rect.
-func drawRectOutline(renderer *sdl.Renderer, x, y, w, h int32, c sdl.Color) {
-	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
-	renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: w, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: x, Y: y + h - 1, W: w, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: 1, H: h})
-	renderer.DrawRect(&sdl.Rect{X: x + w - 1, Y: y, W: 1, H: h})
-}
-
 // drawPanel renders a content container — a list's or a text log's frame — in
 // Home's glass: a translucent pane with a hairline edge and Home's 20px
 // corners. The callers' fills were a translucent slate, which is what the
@@ -2018,23 +1892,6 @@ func renderLabelShadowed(renderer *sdl.Renderer, config *Config, elem Element) {
 	renderText(renderer, config, font, text, color, elem.X, elem.Y)
 }
 
-// isMissingDLL reports whether err indicates the process failed to start
-// because a required DLL could not be found. On Windows this is
-// STATUS_DLL_NOT_FOUND (exit code 0xc0000135).
-func isMissingDLL(err error) bool {
-	if err == nil {
-		return false
-	}
-	if ee, ok := err.(*exec.ExitError); ok {
-		code := ee.ExitCode()
-		if code == 0xC0000135 || code == -1073741515 {
-			return true
-		}
-	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "0xc0000135") || strings.Contains(s, "c0000135") || strings.Contains(s, "status_dll_not_found")
-}
-
 // --- Tool path resolution ---
 func getToolPath(tool string, config *Config) string {
 	exeName := tool
@@ -2115,14 +1972,6 @@ func helperExecutable(name string, config *Config) (string, error) {
 	return "", fmt.Errorf("%s is not installed", name)
 }
 
-// --- Quote path if it contains spaces ---
-func quotePath(path string) string {
-	if strings.ContainsAny(path, " ") {
-		return `"` + path + `"`
-	}
-	return path
-}
-
 // decryptCustomString attempts to decrypt a custom config value if it is encrypted.
 // If the value is missing, not a string, not encrypted, or cannot be decrypted, it
 // returns "" and logs the failure. Callers that need to distinguish "not encrypted"
@@ -2140,7 +1989,7 @@ func decryptCustomString(config *Config, key string) string {
 	}
 	decrypted, err := DecryptAPIToken(v, key)
 	if err != nil {
-		log.Printf("[SECURITY] Failed to decrypt %s: %v", key, err)
+		logWarn("core", "security: Failed to decrypt %s: %v", key, err)
 		return ""
 	}
 	return decrypted
@@ -2235,7 +2084,7 @@ func ytDlpExtraArgs(config *Config) string {
 	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || !strings.Contains(err.Error(), "not encrypted") && !strings.Contains(err.Error(), "missing") {
 		// Only log when the value was encrypted but could not be decrypted.
 		// "not encrypted" and "missing" are not actionable failures here.
-		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
+		logWarn("core", "security: yt-dlp API key unavailable: %v", err)
 	}
 	// Cookies file path - not encrypted (it's a file path, not a secret).
 	// Normalize it and require a real regular file; helper args are resolved
@@ -2272,7 +2121,7 @@ func ytDlpExtraArgsSlice(config *Config) []string {
 			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
 		}
 	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || (!strings.Contains(err.Error(), "not encrypted") && !strings.Contains(err.Error(), "missing")) {
-		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
+		logWarn("core", "security: yt-dlp API key unavailable: %v", err)
 	}
 	// Cookies file path - not encrypted (it's a file path, not a secret).
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
@@ -2364,69 +2213,6 @@ var requestDeduper = struct {
 		body []byte
 		err  error
 	}),
-}
-
-// DedupFetch performs an HTTP GET, deduplicating concurrent requests for the same URL.
-// If another goroutine is already fetching the same URL, waits for and returns that result.
-func DedupFetch(url string, timeout time.Duration) ([]byte, error) {
-	requestDeduper.mu.Lock()
-	if ch, exists := requestDeduper.requests[url]; exists {
-		requestDeduper.mu.Unlock()
-		// Wait for existing request
-		result := <-ch
-		return result.body, result.err
-	}
-
-	// Create channel for this request
-	ch := make(chan struct {
-		body []byte
-		err  error
-	}, 1)
-	requestDeduper.requests[url] = ch
-	requestDeduper.mu.Unlock()
-
-	// Perform the request (non-blocking for other waiters)
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		ch <- struct {
-			body []byte
-			err  error
-		}{nil, err}
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "JukaHub/1.0")
-	resp, err := client.Do(req)
-	if err != nil {
-		ch <- struct {
-			body []byte
-			err  error
-		}{nil, err}
-		return nil, err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		ch <- struct {
-			body []byte
-			err  error
-		}{nil, err}
-		return nil, err
-	}
-
-	ch <- struct {
-		body []byte
-		err  error
-	}{data, nil}
-	return data, nil
-}
-
-// RemoveRequest removes a URL from the deduplication map after its result is consumed.
-// Call this when you're done with a deduplicated request to prevent memory leaks.
-func RemoveRequest(url string) {
-	requestDeduper.mu.Lock()
-	delete(requestDeduper.requests, url)
-	requestDeduper.mu.Unlock()
 }
 
 func loadThumbnail(renderer *sdl.Renderer, url string) *sdl.Texture {
@@ -2731,7 +2517,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		parent = context.Background()
 	}
 	if parent.Err() != nil {
-		log.Printf("[STREAM] search for %s skipped: scene scope already cancelled", resultVar)
+		logDebug("stream", "search for %s skipped: scene scope already cancelled", resultVar)
 		return
 	}
 	gen := beginMediaSearch(config, resultVar)
@@ -2792,7 +2578,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	}
 	publishVideos := func(videos []VideoInfo) {
 		if stale() {
-			log.Printf("[STREAM] dropping superseded search results for %s", resultVar)
+			logDebug("stream", "dropping superseded search results for %s", resultVar)
 			return
 		}
 		if appendMode && len(videos) == 0 {
@@ -2809,7 +2595,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		if stalePainted {
 			// The grid already shows the last page for this search: a refresh
 			// that failed must not replace readable results with an error line.
-			log.Printf("[STREAM] refresh for %s failed: %s", resultVar, msg)
+			logWarn("stream", "refresh for %s failed: %s", resultVar, msg)
 			return
 		}
 		if appendMode {
@@ -2844,7 +2630,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// written to the log.
 	tokens := splitShellArgs(cmdWithVars)
 	if len(tokens) == 0 {
-		log.Printf("[ERROR] Empty command after substitution")
+		logError("core", "Empty command after substitution")
 		publishSearchError("Empty search command")
 		publishVideos([]VideoInfo{})
 		return
@@ -2857,7 +2643,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		// The tool name comes from the configured command text, so it goes
 		// through the same redactor as the extractor's stderr: a command line
 		// that embedded a credential must not put it in the log either.
-		log.Printf("[SECURITY] executeYouTubeSearch: refusing tool %q", redactDiagnosticText(tool))
+		logWarn("core", "security: executeYouTubeSearch: refusing tool %q", redactDiagnosticText(tool))
 		publishSearchError("Unsupported search command")
 		publishVideos([]VideoInfo{})
 		return
@@ -2882,7 +2668,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		rememberMediaPaging(resultVar, fullCommand)
 	}
 	if err := rejectYtDlpExecFlags(args); err != nil {
-		log.Printf("[SECURITY] executeYouTubeSearch: %v", err)
+		logWarn("core", "security: executeYouTubeSearch: %v", err)
 		publishSearchError("Unsupported search command")
 		publishVideos([]VideoInfo{})
 		return
@@ -2950,7 +2736,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			return
 		}
 		if !nativeSearchSkipped(nativeErr) {
-			log.Printf("[YouTube] native search unavailable, using yt-dlp: %v", nativeErr)
+			logWarn("youtube", "native search unavailable, using yt-dlp: %v", nativeErr)
 		}
 	}
 
@@ -2961,7 +2747,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	if toolErr != nil {
 		go func() {
 			if err := EnsureHelperTool("yt-dlp", config); err != nil {
-				log.Printf("[ERROR] yt-dlp install failed: %v", err)
+				logError("core", "yt-dlp install failed: %v", err)
 				showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
 				return
 			}
@@ -2969,7 +2755,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			noteAwayToolInstalled("yt-dlp")
 			refreshToolHealth()
 		}()
-		log.Printf("[WARN] yt-dlp is not installed yet; install started")
+		logWarn("core", "yt-dlp is not installed yet; install started")
 		publishSearchError("yt-dlp is being installed — try the search again in a moment.")
 		publishVideos([]VideoInfo{})
 		showToast("Installing yt-dlp…", ToastInfo())
@@ -2987,11 +2773,11 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	err := cmd.Run()
 	if ctx.Err() == context.Canceled {
 		// A newer search owns the results variable now; say nothing.
-		log.Printf("[STREAM] search for %s cancelled", resultVar)
+		logDebug("stream", "search for %s cancelled", resultVar)
 		return
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		log.Printf("[ERROR] yt-dlp search timed out after %v", mediaSearchTimeout)
+		logError("core", "yt-dlp search timed out after %v", mediaSearchTimeout)
 		reason := "Search timed out — check the connection and try again"
 		publishSearchError(reason)
 		publishVideos([]VideoInfo{})
@@ -2999,11 +2785,11 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		return
 	}
 	if err != nil {
-		log.Printf("[ERROR] yt-dlp execution error: %v", err)
+		logError("core", "yt-dlp execution error: %v", err)
 		// Redacted: the extractor receives the decrypted API key and the cookies
 		// path as its own arguments, so its stderr is the one log line that can
 		// carry a credential verbatim.
-		log.Printf("[ERROR] stderr: %s", redactDiagnosticText(stderr.String()))
+		logError("stderr", "%s", redactDiagnosticText(stderr.String()))
 		reason := ytDlpFailureReason(stderr.String(), err, fullToolPath)
 		publishSearchError(reason)
 		publishVideos([]VideoInfo{})
@@ -3019,7 +2805,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	}
 
 	if stdout.Len() == 0 {
-		log.Printf("[WARN] yt-dlp returned empty stdout")
+		logWarn("core", "yt-dlp returned empty stdout")
 		publishSearchError("yt-dlp returned no data. Check your query or network.")
 		publishVideos([]VideoInfo{})
 		showToast("No results found.", ToastWarn())
@@ -3040,7 +2826,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			videos = playlist.Entries
 		} else {
 			parseErr = err
-			log.Printf("[ERROR] Failed to parse single JSON: %v", err)
+			logError("core", "Failed to parse single JSON: %v", err)
 		}
 	}
 
@@ -3053,7 +2839,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			}
 			var vi VideoInfo
 			if err := json.Unmarshal([]byte(line), &vi); err != nil {
-				log.Printf("[ERROR] Failed to parse line as JSON: %v\nLine: %s", err, line)
+				logError("core", "Failed to parse line as JSON: %v\nLine: %s", err, line)
 				continue
 			}
 			videos = append(videos, vi)
@@ -3073,17 +2859,17 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		}
 	}
 	videos = unique
-	log.Printf("[DEBUG] Parsed %d unique videos (from %d total entries)", len(videos), len(unique))
+	logDebug("core", "Parsed %d unique videos (from %d total entries)", len(videos), len(unique))
 
 	if ctx.Err() != nil {
 		// The scene was left (or a newer search took the variable) while the
 		// output was being parsed: publish nothing into the next screen.
-		log.Printf("[STREAM] dropping parsed search results for %s: run cancelled", resultVar)
+		logDebug("stream", "dropping parsed search results for %s: run cancelled", resultVar)
 		return
 	}
 
 	if len(videos) == 0 {
-		log.Printf("[ERROR] No videos could be parsed from yt-dlp output")
+		logError("core", "No videos could be parsed from yt-dlp output")
 		publishSearchError("No videos found. Try a different query.")
 	}
 
@@ -3131,16 +2917,6 @@ func formatViewCount(v int64) string {
 		return fmt.Sprintf("%.1fM views", float64(v)/1_000_000)
 	}
 	return fmt.Sprintf("%.1fB views", float64(v)/1_000_000_000)
-}
-
-func formatUploadDate(s string) string {
-	if len(s) != 8 {
-		return ""
-	}
-	year := s[0:4]
-	month := s[4:6]
-	day := s[6:8]
-	return fmt.Sprintf("%s-%s-%s", year, month, day)
 }
 
 // --- Rendering for search results (2 columns Ã— 6 rows) ---
@@ -3786,7 +3562,7 @@ var currentPlaybackURL string
 // records a real title and resume position.
 func playVideoURL(config *Config, url string) {
 	if url == "" {
-		log.Printf("playVideoURL: empty URL, nothing to play")
+		logDebug("core", "playVideoURL: empty URL, nothing to play")
 		return
 	}
 	playVideoInfo(config, VideoInfo{URL: url})
@@ -3884,7 +3660,7 @@ func ensureVideoScene(config *Config) bool {
 func playVideoInfo(config *Config, v VideoInfo) {
 	url := v.GetURL()
 	if url == "" {
-		log.Printf("playVideoInfo: empty URL, nothing to play")
+		logDebug("core", "playVideoInfo: empty URL, nothing to play")
 		return
 	}
 	// Starting any video leaves the Shorts feed unless the caller re-arms it
@@ -3930,22 +3706,6 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	}()
 }
 
-// videoFormatSelector returns the yt-dlp format selector used for playback.
-// The ceiling comes from variables.playbackResolution (Settings → Playback
-// resolution) so slow devices such as the Trimui Smart Pro can request 360p
-// instead of always asking for 720p.
-func videoFormatSelector(config *Config) string {
-	maxHeight := 720
-	if config != nil {
-		if res := strings.TrimSpace(config.Variables.PlaybackResolution); res != "" && res != "best" {
-			if h, err := strconv.Atoi(res); err == nil && h > 0 {
-				maxHeight = h
-			}
-		}
-	}
-	return fmt.Sprintf("best[height<=%d]/best", maxHeight)
-}
-
 // videoFormatSelectorFor is videoFormatSelector aware of one video: the
 // per-video ceiling (Quality row in the player settings) wins over the global
 // playbackResolution when it is pinned to this source.
@@ -3963,7 +3723,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	// The caller's spinner covers the download; every way out of here has to
 	// clear it, including failures, or the media screen stays blocked.
 	defer finishVideoPrepare(prepareSeq)
-	log.Printf("[DEBUG] playWithTempFile: downloading to temp file for %s (resume %.1fs)", sanitizeLogURL(url), startSec)
+	logDebug("core", "playWithTempFile: downloading to temp file for %s (resume %.1fs)", sanitizeLogURL(url), startSec)
 
 	videoPlaybackMutex.Lock()
 	videoPlaybackPhase = "downloading"
@@ -4008,7 +3768,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	dlCmd.Stderr = stderrBuf
 
 	if err := dlCmd.Start(); err != nil {
-		log.Printf("[ERROR] playWithTempFile: download failed to start: %v", err)
+		logError("core", "playWithTempFile: download failed to start: %v", err)
 		showToast("Download failed to start.", ToastError())
 		videoPlaybackMutex.Lock()
 		videoPlaybackPhase = "error"
@@ -4031,17 +3791,17 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 				if ctx.Err() != nil {
 					// Cancelled by B / Esc (or the 5-minute cap): not a network
 					// failure, so no error toast and no half-download left behind.
-					log.Printf("[STREAM] download cancelled for %s", sanitizeLogURL(url))
+					logDebug("stream", "download cancelled for %s", sanitizeLogURL(url))
 					removeTempVideoArtifacts(tempPath)
 					return false
 				}
 				// A failed fetch leaves its partial pieces too; each attempt has
 				// a new name, so nothing would ever reuse or remove them.
 				removeTempVideoArtifacts(tempPath)
-				log.Printf("[ERROR] playWithTempFile: download failed: %v", err)
+				logError("core", "playWithTempFile: download failed: %v", err)
 				// Same redaction as the search path: these arguments include the
 				// decrypted API key.
-				log.Printf("[ERROR] playWithTempFile: stderr: %s", redactDiagnosticText(stderrBuf.String()))
+				logError("core", "playWithTempFile: stderr: %s", redactDiagnosticText(stderrBuf.String()))
 				if !IsOnline() {
 					showToast("Download failed — offline, connect WiFi", ToastWarn())
 				} else {
@@ -4062,7 +3822,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	}
 
 	if ctx.Err() != nil {
-		log.Printf("[STREAM] download cancelled after it finished for %s", sanitizeLogURL(url))
+		logDebug("stream", "download cancelled after it finished for %s", sanitizeLogURL(url))
 		removeTempVideoArtifacts(tempPath)
 		return false
 	}
@@ -4074,7 +3834,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		if info != nil {
 			size = info.Size()
 		}
-		log.Printf("[ERROR] playWithTempFile: downloaded file is missing or empty (size=%d)", size)
+		logError("core", "playWithTempFile: downloaded file is missing or empty (size=%d)", size)
 		showToast("Download failed. File is empty.", ToastError())
 		videoPlaybackMutex.Lock()
 		videoPlaybackPhase = "error"
@@ -4093,7 +3853,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	// tempFile=true: this session owns the downloaded copy and removes it when
 	// playback ends. User media files are never deleted.
 	startEmbeddedPlayback(config, tempPath, startSec, true)
-	log.Printf("[DEBUG] playWithTempFile: embedded playback started for %s (resume %.1fs)", tempPath, startSec)
+	logDebug("core", "playWithTempFile: embedded playback started for %s (resume %.1fs)", tempPath, startSec)
 	return true
 }
 
@@ -4155,57 +3915,6 @@ func handleInputSelection(renderer *sdl.Renderer, config *Config, sceneIdx, elem
 	vkOpenSceneInput(config, sceneIdx, elemIdx)
 }
 
-// keysymToChar maps an SDL keycode to its character, honouring Shift. This is
-// used so physical-keyboard typing works deterministically in the input modal
-// without depending on SDL text-input events.
-func keysymToChar(sym sdl.Keycode, shifted bool) (string, bool) {
-	if sym >= sdl.K_a && sym <= sdl.K_z {
-		c := byte('a' + (int(sym) - int(sdl.K_a)))
-		if shifted {
-			c = byte('A' + (int(sym) - int(sdl.K_a)))
-		}
-		return string(c), true
-	}
-	if sym >= sdl.K_0 && sym <= sdl.K_9 {
-		return string(byte('0' + (int(sym) - int(sdl.K_0)))), true
-	}
-	switch sym {
-	case sdl.K_SPACE:
-		return " ", true
-	case sdl.K_MINUS:
-		if shifted {
-			return "_", true
-		}
-		return "-", true
-	case sdl.K_EQUALS:
-		if shifted {
-			return "+", true
-		}
-		return "=", true
-	case sdl.K_SLASH:
-		if shifted {
-			return "?", true
-		}
-		return "/", true
-	case sdl.K_BACKSLASH:
-		return "\\", true
-	case sdl.K_PERIOD:
-		return ".", true
-	case sdl.K_COMMA:
-		return ",", true
-	case sdl.K_SEMICOLON:
-		if shifted {
-			return ":", true
-		}
-		return ";", true
-	case sdl.K_LEFTBRACKET:
-		return "[", true
-	case sdl.K_RIGHTBRACKET:
-		return "]", true
-	}
-	return "", false
-}
-
 // runInputModal blocks until the keyboard closes. Only the text-browser address
 // bar uses it: it needs the submitted value before it can load the page.
 func runInputModal(renderer *sdl.Renderer, config *Config) {
@@ -4250,6 +3959,11 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 				// Closing the window while typing used to be swallowed here.
 				quit = true
 			case *sdl.KeyboardEvent:
+				// The browser key that opened this keyboard (/, Y, F, Space,
+				// A) may still be held: its repeats neither type nor act.
+				if browserTextOpenerRepeat(e) {
+					continue
+				}
 				if e.Type != sdl.KEYDOWN {
 					continue
 				}
@@ -4404,9 +4118,9 @@ var touchTapSink = pushTapClick
 // understood only as a swipe, so on the handheld a tap on the top-bar back
 // pill - or on any other on-screen control - did nothing at all.
 func pushTapClick(px, py int32) {
-	sdl.PushEvent(&sdl.MouseMotionEvent{Type: sdl.MOUSEMOTION, X: px, Y: py})
-	sdl.PushEvent(&sdl.MouseButtonEvent{Type: sdl.MOUSEBUTTONDOWN, Button: sdl.BUTTON_LEFT, State: sdl.PRESSED, Clicks: 1, X: px, Y: py})
-	sdl.PushEvent(&sdl.MouseButtonEvent{Type: sdl.MOUSEBUTTONUP, Button: sdl.BUTTON_LEFT, State: sdl.RELEASED, Clicks: 1, X: px, Y: py})
+	_ = pushSyntheticMouseMotion(px, py)
+	_ = pushSyntheticMouseButton(sdl.BUTTON_LEFT, sdl.PRESSED, px, py)
+	_ = pushSyntheticMouseButton(sdl.BUTTON_LEFT, sdl.RELEASED, px, py)
 }
 
 // disableSyntheticTouchMouse turns off SDL's built-in touch-to-mouse mapping
@@ -4420,7 +4134,7 @@ func pushTapClick(px, py int32) {
 // and this is safe to call more than once.
 func disableSyntheticTouchMouse() {
 	if !sdl.SetHint("SDL_TOUCH_MOUSE_EVENTS", "0") {
-		log.Printf("[DEBUG] disableSyntheticTouchMouse: SDL_TOUCH_MOUSE_EVENTS hint was not set")
+		logDebug("core", "disableSyntheticTouchMouse: SDL_TOUCH_MOUSE_EVENTS hint was not set")
 	}
 }
 
@@ -4636,7 +4350,6 @@ func applyVariableOverrides(config *Config) {
 	setBool("lowPower", &config.Variables.LowPower)
 	setStr("powerMode", &config.Variables.PowerMode)
 	setBool("dynamicBg", &config.Variables.DynamicBg)
-	setBool("socialNotifs", &config.Variables.SocialNotifs)
 	setBool("clock12", &config.Variables.Clock12)
 	setStr("weatherUnit", &config.Variables.WeatherUnit)
 	setStr("tspUsername", &config.Variables.TSPUsername)
@@ -4710,11 +4423,6 @@ func inputVariableValue(config *Config, variable string) string {
 		return "false"
 	case "screensaverTimeout":
 		return strconv.Itoa(config.Variables.ScreensaverTimeout)
-	case "socialNotifs":
-		if config.Variables.SocialNotifs {
-			return "true"
-		}
-		return "false"
 	case "clock12":
 		if config.Variables.Clock12 {
 			return "true"
@@ -4948,7 +4656,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		case "toggle":
 			renderToggleElement(renderer, config, elem, i == selectedButtonIndex)
 		default:
-			log.Printf("Unknown element type: %s", elem.Type)
+			logWarn("core", "Unknown element type: %s", elem.Type)
 		}
 	}
 
@@ -4987,18 +4695,6 @@ func renderTopBarOverlays(renderer *sdl.Renderer, config *Config) {
 	renderWeatherPopover(renderer, config)
 	renderStartMenu(renderer, config)
 	renderNotifDropdown(renderer, config)
-}
-
-// sceneHasBackButton reports whether the scene still declares a body-level
-// Back button. Back navigation is universal now (B/Escape + the header back
-// pill), so no scene should declare one; the helper guards the assertion.
-func sceneHasBackButton(scene SceneConfig) bool {
-	for _, el := range scene.Elements {
-		if el.Type == "button" && strings.EqualFold(strings.TrimSpace(el.Text), "back") {
-			return true
-		}
-	}
-	return false
 }
 
 // themeGalleryIndex is the focused card in a themegallery element.
@@ -5468,7 +5164,7 @@ func applyButtonSwap(config *Config, event sdl.Event) {
 		if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 			scene = config.Scenes[currentSceneIndex].Name
 		}
-		log.Printf("[input] pad button raw=%d mapped=%d scene=%q", raw, ce.Button, scene)
+		logDebug("input", "pad button raw=%d mapped=%d scene=%q", raw, ce.Button, scene)
 	}
 }
 
@@ -5588,24 +5284,11 @@ func abs(x int) int {
 	return x
 }
 
-// easeOutCubic applies cubic easing-out to t (0..1).
-// Returns 0 when t=0, 1 when t=1, with ease-out curve in between.
-// Useful for smooth animations that decelerate toward the end.
-func easeOutCubic(t float64) float64 {
-	return 1 - math.Pow(1-t, 3)
-}
-
 // lerp linearly interpolates from a to b by factor t (typically 0..1).
 // When t=0 returns a, when t=1 returns b, linearly in between.
 // t may be outside [0,1] for extrapolation.
 func lerp(a, b, t float64) float64 {
 	return a + (b-a)*t
-}
-
-// lerpInt32 linearly interpolates between two int32 values.
-// The result is rounded toward zero.
-func lerpInt32(a, b int32, t float64) int32 {
-	return int32(lerp(float64(a), float64(b), t))
 }
 
 // ToastKind classifies toast severity; it drives both the severity accent and
@@ -5680,7 +5363,9 @@ func ShowToast(message string, kind ToastKind) {
 	if msg == "" || kind == ToastKindSwitch {
 		return
 	}
-	notifRecord(msg, toastKindPriority(kind))
+	// Confirmations the user just saw are filed read; warnings and errors
+	// raise the bell's count (notifRecordToast, notifications.go).
+	notifRecordToast(msg, kind)
 }
 
 // showToastPrimitive renders a toast without touching the notification
@@ -5984,88 +5669,6 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
 }
 
-func renderPlaybackOverlay(renderer *sdl.Renderer, config *Config) {
-	videoPlaybackMutex.Lock()
-	phase := videoPlaybackPhase
-	phaseAt := videoPlaybackPhaseAt
-	progress := videoPlaybackProgress
-	speed := videoPlaybackSpeed
-	eta := videoPlaybackETA
-	errMsg := videoPlaybackError
-	videoPlaybackMutex.Unlock()
-
-	if phase == "idle" {
-		return
-	}
-
-	// An error must never linger on screen as a permanent black box: the
-	// message is delivered through the toast system, so the overlay expires
-	// itself after a short window and returns to idle.
-	if phase == "error" && sdl.GetTicks64()-phaseAt > 5000 {
-		videoPlaybackMutex.Lock()
-		videoPlaybackPhase = "idle"
-		videoPlaybackPhaseAt = sdl.GetTicks64()
-		videoPlaybackError = ""
-		videoPlaybackMutex.Unlock()
-		return
-	}
-	// Guard against a hung download goroutine leaving the overlay forever
-	// (the normal path is bounded by its own 5-minute context timeout).
-	if phase == "downloading" && sdl.GetTicks64()-phaseAt > 6*60*1000 {
-		videoPlaybackMutex.Lock()
-		videoPlaybackPhase = "idle"
-		videoPlaybackPhaseAt = sdl.GetTicks64()
-		videoPlaybackMutex.Unlock()
-		return
-	}
-
-	var title string
-	switch phase {
-	case "downloading":
-		title = "Downloading video..."
-	case "playing":
-		title = "Playing..."
-	case "error":
-		title = "Playback error"
-	}
-
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
-
-	barW := int32(400)
-	barH := int32(36)
-	barX := (screenWidth - barW) / 2
-	barY := screenHeight - 80
-
-	// Compact status card on a dark neutral surface with a thin border —
-	// never an opaque black box with a detached shadow.
-	fillRoundedRect(renderer, barX, barY, barW, barH, 10, ColorCard)
-	strokeRoundedRect(renderer, barX, barY, barW, barH, 10, 1, ColorBorder)
-
-	renderText(renderer, config, font, title, sdl.Color{R: 220, G: 235, B: 255, A: 255}, barX+12, barY+8)
-
-	if phase == "downloading" && progress > 0 {
-		fillW := int32(float64(barW-24) * progress)
-		if fillW > 0 {
-			fillRoundedRect(renderer, barX+12, barY+28, fillW, 4, 2, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200})
-		}
-		status := fmt.Sprintf("%.0f%%", progress*100)
-		if speed != "" {
-			status += "  " + speed
-		}
-		if eta != "" {
-			status += "  " + eta
-		}
-		renderText(renderer, config, font, status, sdl.Color{R: 180, G: 192, B: 210, A: 255}, barX+12, barY+38)
-	}
-
-	if phase == "error" && errMsg != "" {
-		renderText(renderer, config, font, errMsg, sdl.Color{R: 248, G: 113, B: 113, A: 255}, barX+12, barY+28)
-	}
-}
-
 func renderSpinner(renderer *sdl.Renderer, x, y int32, radius int32, color sdl.Color) {
 	t := float64(sdl.GetTicks64()) / 1000.0
 	angle := t * 4.0
@@ -6087,57 +5690,6 @@ func cosF(f float64) float64 {
 }
 func sinF(f float64) float64 {
 	return math.Sin(f)
-}
-
-// renderLoadingScreen draws a polished loading screen with the JukaHub logo,
-// an animated spinner, and a progress bar. ticks is the current SDL tick
-// count for animation; pass 0 for the initial static frame.
-func renderLoadingScreen(renderer *sdl.Renderer, config *Config, ticks uint64) {
-	renderer.SetDrawColor(15, 17, 21, 255)
-	renderer.Clear()
-
-	cx, cy := screenWidth/2, screenHeight/2
-
-	// Animated spinner ring
-	renderSpinner(renderer, cx, cy, 50, sdl.Color{R: 100, G: 180, B: 255, A: 255})
-
-	// Inner spinner ring (smaller, slower, different color)
-	if ticks > 0 {
-		t := float64(ticks) / 1000.0
-		innerAngle := t * -2.0
-		renderer.SetDrawColor(140, 200, 255, 120)
-		for a := innerAngle; a < innerAngle+math.Pi; a += 0.2 {
-			px := cx + int32(float32(math.Cos(a))*30)
-			py := cy + int32(float32(math.Sin(a))*30)
-			renderer.DrawPoint(px, py)
-		}
-	}
-
-	// Title
-	if font, _ := getCachedFont(config, "big"); font != nil {
-		tw, th, _ := font.SizeUTF8("JukaHub")
-		renderText(renderer, config, font, "JukaHub", sdl.Color{R: 220, G: 235, B: 255, A: 255}, cx-int32(tw)/2, cy-80-int32(th)/2)
-	}
-
-	// Loading text
-	if sf, _ := getCachedFont(config, "medium"); sf != nil {
-		lw, lh, _ := sf.SizeUTF8("Loading...")
-		renderText(renderer, config, sf, "Loading...", sdl.Color{R: 180, G: 200, B: 220, A: 255}, cx-int32(lw)/2, cy+60-int32(lh)/2)
-	}
-
-	// Animated progress bar
-	if ticks > 0 {
-		barW := int32(200)
-		barH := int32(4)
-		barX := cx - barW/2
-		barY := cy + 130
-		fillRoundedRect(renderer, barX, barY, barW, barH, 2, sdl.Color{R: 40, G: 50, B: 70, A: 255})
-		progress := float64(ticks%3000) / 3000.0
-		fillW := int32(float64(barW) * progress)
-		if fillW > 0 {
-			fillRoundedRect(renderer, barX, barY, fillW, barH, 2, sdl.Color{R: 100, G: 180, B: 255, A: 200})
-		}
-	}
 }
 
 // --- Image / Video element rendering ---
@@ -6177,7 +5729,7 @@ func renderVideoElement(renderer *sdl.Renderer, config *Config, elem Element) {
 func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[trigger] recovered panic: %v", r)
+			logError("trigger", "recovered panic: %v", r)
 		}
 	}()
 	if element.Trigger == "" {
@@ -6215,7 +5767,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 				return
 			}
 		}
-		log.Printf("change_scene: scene not found: %s", target)
+		logWarn("core", "change_scene: scene not found: %s", target)
 	case "yt_search", "youtube_search", "youtube_smart":
 		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
 	case "youtube_trending":
@@ -6232,12 +5784,12 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		case plan.result >= 0:
 			playVideoInfo(config, videos[plan.result])
 		case plan.url != "":
-			log.Printf("youtube_play: playing the typed link")
+			logDebug("core", "youtube_play: playing the typed link")
 			playVideoURL(config, plan.url)
 		case plan.askURL:
 			// No result and no link yet: ask for one instead of failing the
 			// press. Submitting the keyboard plays what was typed.
-			log.Printf("youtube_play: asking for a link")
+			logDebug("core", "youtube_play: asking for a link")
 			if !openMediaPlayLink(config) {
 				ShowToast("This scene has no link field", ToastKindInfo)
 			}
@@ -6257,7 +5809,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 				playVideoInfo(config, videos[focusedResultIndex])
 				return
 			} else {
-				log.Printf("Cannot play: %s not found", element.TriggerTarget)
+				logWarn("core", "Cannot play: %s not found", element.TriggerTarget)
 				return
 			}
 		}
@@ -6267,7 +5819,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
 			playVideoInfo(config, videos[focusedResultIndex])
 		} else {
-			log.Printf("play_focused: no focused video to play")
+			logDebug("core", "play_focused: no focused video to play")
 		}
 	case "exit":
 		// Quit gracefully via the main loop, which persists favorites, runs the
@@ -6276,7 +5828,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		requestAppExit()
 	case "external_app":
 		if element.ExternalAppPath == "" {
-			log.Printf("external_app trigger has no path")
+			logDebug("core", "external_app trigger has no path")
 			break
 		}
 		// External apps are powerful: they can run arbitrary binaries, read/write
@@ -6326,7 +5878,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if url != "" {
 			playSmartURL(config, url)
 		} else {
-			log.Printf("custom_link: no URL in custom_link_url")
+			logDebug("core", "custom_link: no URL in custom_link_url")
 		}
 	case "iptv_load":
 		reloadIPTV(config)
@@ -6754,7 +6306,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		go func(v string, el Element) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[textbrowser] zeroconf goroutine recovered: %v", r)
+					logDebug("textbrowser", "zeroconf goroutine recovered: %v", r)
 					publishCustom(v, fmt.Sprintf("Zeroconf error: %v", r))
 				}
 			}()
@@ -6784,7 +6336,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[textbrowser] network trigger recovered: %v", r)
+					logDebug("textbrowser", "network trigger recovered: %v", r)
 					tbVar := findTextBrowserVariable(config)
 					config.Variables.Custom[tbVar] = fmt.Sprintf("Network error: %v", r)
 				}
@@ -6897,20 +6449,23 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			showToast("SSH/SFTP server stopped", ToastInfo())
 		}
 	default:
-		if strings.HasPrefix(element.Trigger, "http://") || strings.HasPrefix(element.Trigger, "https://") {
+		if link, ok := externalURLAllowed(element.Trigger); ok &&
+			(strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://")) {
+			// No shell: the URL reaches the desktop handler as one argument, so
+			// "&", "|" and "^" in a query string cannot become cmd.exe syntax.
 			go func(url string) {
 				var cmd *exec.Cmd
 				if IsWindows() {
-					cmd = exec.Command("cmd", "/c", "start", "", url)
+					cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 				} else {
 					cmd = exec.Command("xdg-open", url)
 				}
 				if err := cmd.Run(); err != nil {
-					log.Printf("open url error: %v", err)
+					logWarn("core", "open url error: %v", err)
 				}
-			}(element.Trigger)
+			}(link)
 		} else {
-			log.Printf("Unhandled trigger: %s", element.Trigger)
+			logWarn("core", "Unhandled trigger: %s", element.Trigger)
 		}
 	}
 }
@@ -7054,6 +6609,9 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	startMenuDismiss()
 	notifDismiss()
 	dismissWeatherPopover()
+	// Home's "Exit JukaHub?" card (home_power.go) must not wait behind a scene
+	// change and greet the next return to Home with Exit focused.
+	homePowerClose()
 	// The browser link picker belongs to the page that opened it; it must not
 	// float over the next scene.
 	browserLinkPanel = browserLinkPanelState{}
@@ -7313,6 +6871,11 @@ func changeScene(config *Config, direction int) {
 	// Brief toast naming the destination scene so a scene switch is visible
 	// even without a permanent menu bar.
 	if scene := config.Scenes[target].Name; scene != "" {
+		// The toast names the screen, not its internal scene ID: switching to
+		// Settings → General showed a toast reading "SettingsGeneral".
+		if label := sceneDisplayName(scene); label != "" {
+			scene = label
+		}
 		ShowToast(scene, ToastKindSwitch)
 	}
 }
@@ -7693,8 +7256,21 @@ func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 			startMenuFocusItems(config)
 		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 			startMenuActivate(config)
+		case sdl.K_x:
+			// The menu's power key, as on the pad (startMenuPower).
+			startMenuPower(config)
 		case sdl.K_ESCAPE, sdl.K_b:
 			startMenuDismiss()
+		case sdl.K_F10:
+			// F10 is the keyboard's Start (startMenuKeyOpen): it closes the
+			// menu it opened, like the pad's Start does. A held F10's repeats
+			// do not, or holding it would open and shut the menu.
+			if e.Repeat == 0 {
+				startMenuDismiss()
+			}
+		case sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END:
+			// The keyboard twins of L1/R1/L2/R2 (inputhints.go).
+			startMenuShoulder(keyShoulder(e.Keysym.Sym), config)
 		}
 		return true
 	}
@@ -7704,6 +7280,8 @@ func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 			notifNavigate(-1)
 		case sdl.K_DOWN:
 			notifNavigate(1)
+		case sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END:
+			notifShoulder(keyShoulder(e.Keysym.Sym))
 		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a, sdl.K_ESCAPE, sdl.K_b:
 			notifDismiss()
 		}

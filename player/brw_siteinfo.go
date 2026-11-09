@@ -655,7 +655,8 @@ func brwInfoRender(r *sdl.Renderer, config *Config) {
 		brwInfo.wifi = brwInfoNotice(r, config, area, "wifi-off", "Needs internet",
 			"Connect to Wi-Fi to check this site. The checks start by themselves once you're online.", "Wi-Fi settings")
 	case res.State == brwInfoFailed:
-		brwInfoNotice(r, config, area, "warning", "Couldn't check this site", res.Err+" Press Y to try again.", "")
+		// "Y / R": the keyboard re-checks with R (brwInfoKey).
+		brwInfoNotice(r, config, area, "warning", "Couldn't check this site", res.Err+" "+hintSentence("Press %s to try again.", "Y / R", "Retry"), "")
 	case res.State == brwInfoLoading || res.State == brwInfoIdle:
 		brwInfoSkeleton(r, area)
 	default:

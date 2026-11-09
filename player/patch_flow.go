@@ -258,21 +258,6 @@ func OpRepair(ctx context.Context, config *Config) error {
 	return nil
 }
 
-// OpListBackups refreshes the snapshot (backups are listed there).
-func OpListBackups(ctx context.Context, config *Config) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	snap := BuildPatchSnapshot(config)
-	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: snap})
-	if len(snap.Backups) == 0 {
-		patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "No backups yet"})
-	}
-	return nil
-}
-
 // OpRestoreBackup restores the newest backup set.
 func OpRestoreBackup(ctx context.Context, config *Config, name string) error {
 	select {
@@ -589,23 +574,6 @@ func opRemoveSigned(ctx context.Context, config *Config, idx *SignedRepoIndex, i
 	return nil
 }
 
-// OpRefreshRepo reloads packages.json into the snapshot.
-func OpRefreshRepo(ctx context.Context, config *Config) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	if _, err := LoadPackageRepo(); err != nil {
-		return fmt.Errorf("packages.json: %w", err)
-	}
-	// The index may describe different versions now, so every cached package
-	// state is out of date.
-	invalidatePackageStatus("")
-	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
-	return nil
-}
-
 // OpRollbackTx rolls back the most recent committed transaction with a backup
 // set, restoring the pre-transaction file state.
 func OpRollbackTx(ctx context.Context, config *Config) error {
@@ -654,39 +622,6 @@ func OpRefreshSignedRepo(ctx context.Context, config *Config) error {
 		return fmt.Errorf("repository index rejected: %w", err)
 	}
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
-	return nil
-}
-
-// OpVerifyPackages hashes every installed managed file and reports damage.
-func OpVerifyPackages(ctx context.Context, config *Config) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	var damaged []string
-	patchDBMu.Lock()
-	for _, p := range patchDB.Installed {
-		for _, f := range p.Files {
-			if _, err := os.Stat(f.Path); err != nil {
-				damaged = append(damaged, "missing: "+f.Path)
-				continue
-			}
-			if f.SHA256 != "" && !strings.EqualFold(checksumFile(f.Path), f.SHA256) {
-				damaged = append(damaged, "modified: "+f.Path)
-			}
-		}
-	}
-	patchDBMu.Unlock()
-	if len(damaged) == 0 {
-		patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "All managed files verified"})
-		return nil
-	}
-	patchEventSafe(PatchEvent{Kind: PatchEventModal, Modal: &PatchModalRequest{
-		ID: "verify-report", Title: "Verification report",
-		Body:    strings.Join(damaged, "\n"),
-		Confirm: "OK",
-	}})
 	return nil
 }
 

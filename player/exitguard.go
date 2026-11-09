@@ -27,7 +27,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"runtime/pprof"
@@ -73,8 +72,15 @@ var (
 // requestAppExit asks the main loop to leave and run the teardown. External
 // callers (a stop signal, the firmware's power handling) land here too, which is
 // what keeps every exit on the same cleanup path.
+//
+// The first request also marks the boot record: a start asked to stop is not
+// a failed start, even when the stop is forced before the loop is reached
+// (bootGuardNoteStop). On its own goroutine: this may be the render thread or
+// the signal handler, and the record is a synced write.
 func requestAppExit() {
-	exitRequested.Store(true)
+	if !exitRequested.Swap(true) {
+		go bootGuardNoteStop()
+	}
 }
 
 // installExitSignalHandler turns the stop signals into an ordinary exit
@@ -102,7 +108,7 @@ func handleExitSignal(sig os.Signal) {
 		forceExitAction("second signal: " + sig.String())
 		return
 	}
-	log.Printf("[exit] %v received: asking the main loop to quit", sig)
+	logInfo("exit", "%v received: asking the main loop to quit", sig)
 	requestAppExit()
 	// The deadline covers both halves of the exit: reaching the end of the
 	// loop, and the cleanup that runs after it.
@@ -127,16 +133,37 @@ func armExitDeadline(grace time.Duration) {
 // forceExit stops the process even if cleanup is wedged. Everything it does is
 // bounded and allocation-light: kill the children that own the screen, drop
 // the LEDs, write down what the goroutines were waiting on, give the machine
-// back its CPU governor and speaker level, and leave. The launcher script sees
-// the exit and brings the stock UI back.
+// back its CPU governor and speaker level, see a stop request into the boot
+// record, and leave. The launcher script sees the exit and brings the stock UI
+// back.
 func forceExit(reason string) {
 	exitForcingOnce.Do(func() {
-		log.Printf("[exit] forcing quit: %s", reason)
+		logError("exit", "forcing quit: %s", reason)
+		// After a stop request this is still that stop: the boot record must say
+		// so before the process ends, or the next start counts a failed one
+		// (bootguard.go). Started first so it overlaps the work below, and
+		// waited for within the restores' grace. Without a request nothing is
+		// noted: a forced exit nobody asked for stays a failed start.
+		noted := bootGuardNoteStopAsync()
+		notedBy := time.Now().Add(exitLastChanceGrace)
 		dumpGoroutines()
 		killScreenChildren()
 		_ = SetLEDSync(false)
 		exitLastChanceRestore(exitLastChanceGrace)
-		os.Exit(0)
+		select {
+		case <-noted:
+		default:
+			wait := time.NewTimer(time.Until(notedBy))
+			select {
+			case <-noted:
+			case <-wait.C:
+				logWarn("exit", "the stop did not reach the boot record within %s", exitLastChanceGrace)
+			}
+			wait.Stop()
+		}
+		// 0 for a quit that only took too long; 2 once a crash is in progress
+		// (crashreport.go), so launch.sh still tells a crash from a quit.
+		os.Exit(processExitCode())
 	})
 }
 
@@ -153,14 +180,14 @@ func exitLastChanceRestore(grace time.Duration) {
 	go func() {
 		defer close(done)
 		if _, err := restoreBootCPUSettings(); err != nil {
-			log.Printf("[exit] CPU restore on the forced exit: %v", err)
+			logWarn("exit", "CPU restore on the forced exit: %v", err)
 		}
 		alarmVolumeRestoreWait(grace)
 	}()
 	select {
 	case <-done:
 	case <-time.After(grace):
-		log.Printf("[exit] restores did not finish within %s", grace)
+		logWarn("exit", "restores did not finish within %s", grace)
 	}
 }
 
@@ -172,8 +199,8 @@ func dumpGoroutines() {
 	if profile == nil {
 		return
 	}
-	log.Print("[exit] goroutine dump follows: the blocked shutdown is in here")
+	logError("exit", "goroutine dump follows: the blocked shutdown is in here")
 	if err := profile.WriteTo(os.Stderr, 2); err != nil {
-		log.Printf("[exit] goroutine dump failed: %v", err)
+		logWarn("exit", "goroutine dump failed: %v", err)
 	}
 }

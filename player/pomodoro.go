@@ -286,8 +286,12 @@ func handlePomodoroInput(e *sdl.KeyboardEvent, config *Config) {
 		} else {
 			pomodoroTogglePause()
 		}
-	case sdl.K_b, sdl.K_ESCAPE:
+	case sdl.K_x:
+		// X skips the phase and Esc goes back, as on the pad (ctrlPomodoro) and
+		// as the footer says; Esc used to skip, leaving no key to leave by.
 		pomodoroSkip()
+	case sdl.K_b, sdl.K_ESCAPE:
+		goBackScene(config)
 	case sdl.K_y:
 		pomodoroReset()
 	}

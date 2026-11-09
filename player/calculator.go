@@ -825,7 +825,8 @@ func handleCalcInput(e *sdl.KeyboardEvent) {
 		calcNavigate(0, 1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		calcSelect()
-	case sdl.K_g:
+	case sdl.K_g, sdl.K_y:
+		// Y as well as G: the footer's "Y Graph" names the pad's key.
 		calcToggleGraph()
 	case sdl.K_x:
 		calcInsertX()
@@ -833,6 +834,10 @@ func handleCalcInput(e *sdl.KeyboardEvent) {
 		calcClear()
 	case sdl.K_BACKSPACE, sdl.K_DELETE:
 		calcBackspace()
+	case sdl.K_ESCAPE:
+		// The footer's Back (B on the pad, Esc on a keyboard): the scene's
+		// handleKey consumes every key, so nothing else would leave.
+		goBackScene(appConfig)
 	}
 }
 

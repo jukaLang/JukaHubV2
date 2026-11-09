@@ -361,14 +361,12 @@ static int regularFile(const char *path) {
 static int locateBundled(const char *name, char *out, size_t cap) {
     int i;
     if (strchr(name, '/')) {
-        if (regularFile(name)) {
-            snprintf(out, cap, "%s", name);
-            return 1;
-        }
+        if (regularFile(name) && snprintf(out, cap, "%s", name) < (int)cap) return 1;
         name = baseName(name); /* an Android path (/data/app/...) that does not exist here */
     }
     for (i = 0; i < g_nLibDirs; i++) {
-        snprintf(out, cap, "%s/%s", g_libDirs[i], name);
+        int n = snprintf(out, cap, "%s/%s", g_libDirs[i], name);
+        if (n < 0 || (size_t)n >= cap) continue; /* a cut path could name another file */
         if (regularFile(out)) return 1;
     }
     return 0;
@@ -390,6 +388,40 @@ static int coreVirtual(const VirtualLib *v) {
     return strcmp(v->name, "libz.so") != 0 && strcmp(v->name, "libvulkan.so") != 0;
 }
 
+/* Host libraries chosen by another layer (the EGL present layer binds the
+ * game's libEGL.so/libGLESv2.so to the exact stack it drives). */
+static struct {
+    char name[64];
+    void *handle;
+    char label[PATH_MAX];
+} g_hostLibs[8];
+static int g_nhostLibs;
+
+void apak_ldSetHostLib(const char *virtualName, void *handle, const char *label) {
+    int i;
+    if (!virtualName || !handle) return;
+    pthread_mutex_lock(&g_ldLock);
+    for (i = 0; i < g_nhostLibs; i++)
+        if (strcmp(g_hostLibs[i].name, virtualName) == 0) break;
+    if (i == g_nhostLibs && g_nhostLibs < (int)(sizeof g_hostLibs / sizeof g_hostLibs[0])) g_nhostLibs++;
+    if (i < g_nhostLibs) {
+        apak_strcpy(g_hostLibs[i].name, sizeof g_hostLibs[i].name, virtualName);
+        g_hostLibs[i].handle = handle;
+        apak_strcpy(g_hostLibs[i].label, sizeof g_hostLibs[i].label, label ? label : virtualName);
+    }
+    pthread_mutex_unlock(&g_ldLock);
+}
+
+static void *registeredHostLib(const char *virtualName, char *label, size_t cap) {
+    int i;
+    for (i = 0; i < g_nhostLibs; i++)
+        if (strcmp(g_hostLibs[i].name, virtualName) == 0) {
+            apak_strcpy(label, cap, g_hostLibs[i].label);
+            return g_hostLibs[i].handle;
+        }
+    return NULL;
+}
+
 static ApakObj *newVirtual(const char *name, const VirtualLib *v) {
     ApakObj *o = (ApakObj *)calloc(1, sizeof *o);
     if (!o) return NULL;
@@ -399,11 +431,20 @@ static ApakObj *newVirtual(const char *name, const VirtualLib *v) {
     snprintf(o->name, sizeof o->name, "%s", baseName(name));
     if (v) {
         o->vkind = v->vkind;
-        if (v->vkind == VK_HOST) {
+        if (v->vkind == VK_HOST && (o->host = registeredHostLib(v->name, o->hostName, sizeof o->hostName)) != NULL) {
+            /* bound to the present layer's stack */
+        } else if (v->vkind == VK_HOST) {
             const char *host = v->hostEnv ? getenv(v->hostEnv) : NULL;
             if (!host || !*host) host = v->host;
             snprintf(o->hostName, sizeof o->hostName, "%s", host);
             o->host = dlopen(host, RTLD_NOW | RTLD_LOCAL);
+            if (!o->host && strchr(host, '.') && !getenv(v->hostEnv ? v->hostEnv : "")) {
+                /* stock firmwares ship unversioned names (/usr/lib/libGLESv2.so) */
+                char plain[PATH_MAX];
+                snprintf(plain, sizeof plain, "%s", v->name);
+                o->host = dlopen(plain, RTLD_NOW | RTLD_LOCAL);
+                if (o->host) snprintf(o->hostName, sizeof o->hostName, "%s", plain);
+            }
             if (!o->host) {
                 const char *why = dlerror();
                 o->vkind = VK_MISSING;
@@ -1111,6 +1152,44 @@ void *apak_ldSymSelf(void *handle, const char *name) {
     return i >= 0 ? symAddr(o, (size_t)i, 0) : NULL;
 }
 
+/* An export of any loaded game library (Java_* natives, JNI_OnLoad ...):
+ * bundled bionic objects first, then glibc-built game libraries. */
+void *apak_ldSymBundled(const char *name) {
+    ApakObj *o;
+    void *p = NULL;
+    if (!name) return NULL;
+    pthread_mutex_lock(&g_ldLock);
+    for (o = g_objs; o && !p; o = o->next) {
+        long i;
+        if (o->kind != OBJ_BUNDLED || !o->mapped) continue;
+        i = apak_elfLookup(&o->elf, name);
+        if (i >= 0 && APAK_ST_TYPE(o->elf.syms[i].st_info) != APAK_STT_TLS) p = symAddr(o, (size_t)i, 0);
+    }
+    for (o = g_objs; o && !p; o = o->next)
+        if (o->kind == OBJ_VIRTUAL && o->vkind == VK_HOST && o->host && o->path[0] == '/') p = dlsym(o->host, name);
+    pthread_mutex_unlock(&g_ldLock);
+    return p;
+}
+
+static void visitInitOrder(ApakObj *o, unsigned gen, void (*fn)(const char *, void *, void *), void *ud, int depth) {
+    size_t i;
+    if (!o || depth > 64 || o->batchGen == gen) return;
+    o->batchGen = gen;
+    for (i = 0; i < o->ndeps; i++) visitInitOrder(o->deps[i], gen, fn, ud, depth + 1);
+    if (o->kind == OBJ_BUNDLED || (o->kind == OBJ_VIRTUAL && o->vkind == VK_HOST && o->path[0] == '/'))
+        fn(o->name, o, ud);
+}
+
+/* The game's own libraries reachable from root, dependencies first (the
+ * order System.loadLibrary would have run their JNI_OnLoad). */
+void apak_ldForEachInitOrder(void *root, void (*fn)(const char *name, void *handle, void *ud), void *ud) {
+    if (!isValidObj(root) || !fn) return;
+    pthread_mutex_lock(&g_ldLock);
+    g_batchGen++;
+    visitInitOrder((ApakObj *)root, g_batchGen, fn, ud, 0);
+    pthread_mutex_unlock(&g_ldLock);
+}
+
 int apak_ldFindExporter(const char *symbol, char *out, size_t cap) {
     int d;
     for (d = 0; d < g_nLibDirs; d++) {
@@ -1125,7 +1204,7 @@ int apak_ldFindExporter(const char *symbol, char *out, size_t cap) {
             int fd, found = 0;
             ApakElf e;
             if (len < 4 || strcmp(ent->d_name + len - 3, ".so") != 0) continue;
-            snprintf(path, sizeof path, "%s/%s", g_libDirs[d], ent->d_name);
+            if (snprintf(path, sizeof path, "%s/%s", g_libDirs[d], ent->d_name) >= (int)sizeof path) continue;
             fd = open(path, O_RDONLY | O_CLOEXEC);
             if (fd < 0) continue;
             if (fstat(fd, &st) != 0 || st.st_size <= 0) {

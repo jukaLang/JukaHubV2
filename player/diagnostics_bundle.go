@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,21 +34,21 @@ var (
 	// diagnosticSecret matches "key: value" pairs whose name says the value is
 	// a credential. The value runs to whitespace, a comma or a semicolon, which
 	// is how these appear in log lines: "token=abc123," or "api_key: sk-...".
-	diagnosticSecret = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|authorization|token|secret|password|passwd)\b(\s*[:=]\s*)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s,;]+)`)
+	diagnosticSecret = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|authorization|token|secret|password|passwd)\b(\s*[:=]\s*)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s,;]+)`) })
 	// diagnosticBearer catches the credential in "Authorization: Bearer <x>"
 	// even when the header name was already scrubbed.
-	diagnosticBearer = regexp.MustCompile(`(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}`)
+	diagnosticBearer = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}`) })
 	// diagnosticURLKey covers the query-string spelling of the same credential:
 	// yt-dlp echoes the extractor arguments it was given, and a YouTube media
 	// URL carries the key as "?key=<value>". The value stops at the next
 	// parameter so the rest of the URL stays readable in the report.
-	diagnosticURLKey = regexp.MustCompile(`(?i)([?&](?:api[_-]?)?key=)[^&\s"']+`)
+	diagnosticURLKey = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)([?&](?:api[_-]?)?key=)[^&\s"']+`) })
 	// diagnosticURLUser strips "user:password@" from a URL before it is shared.
-	diagnosticURLUser = regexp.MustCompile(`://[^/\s:@]+:[^/\s@]+@`)
+	diagnosticURLUser = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`://[^/\s:@]+:[^/\s@]+@`) })
 	// diagnosticHomeUnix and diagnosticHomeWin remove the account name from a
 	// home directory so a report does not publish who the device belongs to.
-	diagnosticHomeUnix = regexp.MustCompile(`(?:/home/|/Users/)[^/\s]+`)
-	diagnosticHomeWin  = regexp.MustCompile(`(?i)[A-Z]:\\Users\\[^\\\s]+`)
+	diagnosticHomeUnix = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?:/home/|/Users/)[^/\s]+`) })
+	diagnosticHomeWin  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)[A-Z]:\\Users\\[^\\\s]+`) })
 )
 
 // redactDiagnosticText removes credentials and account names from text that is
@@ -58,14 +59,14 @@ var (
 // folders, network names and addresses, which is why the bundle says so and the
 // user is expected to read the file before sharing it.
 func redactDiagnosticText(text string) string {
-	text = diagnosticURLKey.ReplaceAllString(text, "${1}[redacted]")
-	text = diagnosticURLUser.ReplaceAllString(text, "://[credentials]@")
+	text = diagnosticURLKey().ReplaceAllString(text, "${1}[redacted]")
+	text = diagnosticURLUser().ReplaceAllString(text, "://[credentials]@")
 	// The named field runs before the bare bearer token: "Authorization: Bearer
 	// <jwt>" must become one [redacted], not "[redacted] [redacted]".
-	text = diagnosticSecret.ReplaceAllString(text, "${1}${2}[redacted]")
-	text = diagnosticBearer.ReplaceAllString(text, "${1} [redacted]")
-	text = diagnosticHomeUnix.ReplaceAllString(text, "~")
-	text = diagnosticHomeWin.ReplaceAllString(text, `C:\Users\[user]`)
+	text = diagnosticSecret().ReplaceAllString(text, "${1}${2}[redacted]")
+	text = diagnosticBearer().ReplaceAllString(text, "${1} [redacted]")
+	text = diagnosticHomeUnix().ReplaceAllString(text, "~")
+	text = diagnosticHomeWin().ReplaceAllString(text, `C:\Users\[user]`)
 	return text
 }
 

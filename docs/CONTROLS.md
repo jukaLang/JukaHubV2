@@ -85,8 +85,112 @@ closes it.
 **Local weather** is modal: **A**/**B**/Esc closes it, a tap outside dismisses
 it, and the D-pad does not move the screen underneath while it is open.
 
-All bindings below are also listed in-app: press **F1** anywhere for the
-shortcuts overlay, **B** or **F1** to close it.
+All bindings below are also listed in-app. On a keyboard, **F1** opens the
+Controls card for the screen you are on, written in keyboard keys, and **F1**
+again on that card opens the full shortcut list; **Esc** closes either. On a
+controller the same card is the **?** row in Quick Settings (and the front
+**F1** key on a Brick).
+
+### Keyboard or controller: what the hints name
+
+The hint bar, the Controls card, the on-screen keyboard's footer and the hint
+lines inside panels name the controls you actually have
+([player/inputhints.go](../player/inputhints.go)). On a PC without a game
+controller every hint names keyboard keys: **Enter** where a pad would say A,
+**Esc** for B, the arrow keys for the D-pad. Plug a controller in and the
+hints switch to its buttons (a short message says so); press a key and they
+switch back, press a button and they follow the pad again. On a TrimUI the
+hints name the pad's buttons until a USB or Bluetooth keyboard is connected;
+from then on they name its keys, and they go back to the buttons when the
+D-pad is used or the keyboard is unplugged. The device's own power and volume
+keys and a key mapper's virtual keyboard do not count as a keyboard.
+
+**Settings → Controls → Button hints** overrides this: **Auto** follows the
+rule above, **Controller** always names the pad's buttons, **Keyboard** always
+names the keyboard's keys. The row's second line says what Auto is showing
+and why.
+
+| Pad | Keyboard |
+|-----|----------|
+| A | Enter (Space works too) |
+| B, Select, Menu | Esc |
+| D-pad | Arrow keys |
+| X, Y | The X and Y keys |
+| Start (the Start menu) | F10, which also closes it |
+| L1 / R1 where they page a list | PgUp / PgDn |
+| L2 / R2 where they jump to the first / last row | Home / End |
+| L1 / R1 where they switch tabs | Tab (Shift+Tab goes back) |
+| Select + Start (quit) | Alt+F4 on a PC; the pad's chord on a TrimUI |
+| Quick Settings | Ctrl+Q, which also closes it |
+| Search | F2 anywhere, **/** on Home |
+| L2 / R2 on Home (sections) | Q / E |
+
+A shoulder that does something else on a screen (seeks a video, clears the
+calculator) keeps its pad name in the hint rather than promise a key that
+does something different there.
+
+Where a screen's key differs from these twins, its hint carries both, pad
+button first (`X / C`, `L1/R1 / Tab`), and shows only the half you can press:
+**C** on a keyboard, **X** on the pad. A held button reads the same way: Patch's
+**Hold A** is **Hold Enter** on a keyboard.
+
+Hints also follow **Accessibility** (Start → Tools → Accessibility): with the
+Nintendo layout, an A/B or X/Y swap or a per-button remap, every hint names the
+physical button that now does the job — **B Open** instead of **A Open** when A
+and B are swapped — and the same goes for sentences that name a button. Keyboard
+keys are never remapped, so keyboard hints do not change. Two things keep the
+printed names on purpose: the **Select + Start** quit chord and the controller
+test both read the physical buttons. An action no button sends any more (its
+button switched off, or remapped onto another job with nothing in its place)
+shows **—** instead of a button that now does something else or nothing.
+
+### Keyboard keys, screen by screen
+
+What each screen's footer buttons are on a keyboard, beyond the twins above
+(checked against each screen's key handler, November 2026). A pad button that
+no footer names may have no key.
+
+| Screen | Pad | Keyboard |
+|--------|-----|----------|
+| Everywhere | A · B · D-pad · Start · Select + Start | Enter (or Space) · Esc · arrows · F10 · Alt+F4 on a PC |
+| Home | L2 / R2 sections · Y search | Q / E · **/** (F2 anywhere) |
+| Start menu | L1 / R1 · L2 / R2 · X power | PgUp / PgDn · Home / End · X |
+| Notification centre | L1 / R1 · L2 / R2 | PgUp / PgDn · Home / End |
+| Media | L1 / R1 tabs · R2 more · X search · Y details | Tab or [ / ] · PgDn · X or **/** · Y or I; U undo, Del remove |
+| Favorites | Left / Right tabs · X remove · Y undo | Left / Right · X, D or Del · Y or U |
+| Live TV | X search · Y favourite | X · Y or F |
+| Browser | L1 / R1 scroll · L2 / R2 zoom · X links · Y search · L3 mode | PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info |
+| Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
+| Chat | L1 / R1 tabs · Start send · X rename · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab |
+| On-screen keyboard | A type · B close · X delete · Y submit · L1 / R1 shift / layer | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V |
+| Settings | L1 / R1 sections · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · arrows (Left / Right page the sheet) |
+| Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
+| Wi-Fi | X details · Y scan · Select diagnostics · L1 / R1 page | X · Y or R · I · PgUp / PgDn; D disconnect, C reconnect, F forget |
+| Files | Y actions · X mark · L1 / R1 page | Y · X · PgUp / PgDn; H hidden files |
+| Image viewer | L1 / R1 zoom · L2 / R2 previous / next · Y fit · X lock | - / + · PgUp / PgDn · Y or F · X or L |
+| PDF reader | L1 / R1 page (or chapter) · L2 / R2 zoom or text size · X text · Y options | PgUp / PgDn (or [ / ]) · - / + · X or T · Y, O or Tab |
+| Playtime & achievements | L1 / R1 tabs · X sort · Y RetroAchievements | Tab / Shift+Tab · X · Y |
+| Game details | Start options · X favourite · Y look up again | O · X or F · Y |
+| Local play | L1 / R1 move a player · Y remove · X end game | PgUp / PgDn · Y or Del · X |
+| Keyboard languages | L1 / R1 move · X remove · Y add | [ / ] · X or Del · Y |
+| Config inspector | L1 / R1 view · X reset · Y export | Tab / Shift+Tab · X or Del · Y or E |
+| Emulators | X install · Y alternative · L1 update · R1 roll back · R2 core builds | X · Y · U · R · K or C |
+| Smart Pro Compatibility | Left / Right tab · X revert · Y rescan | Left / Right or Tab · X · Y or R; U updates |
+| Downloads | Left / Right tabs · X remove · Y pause | Left / Right or Tab · X · Y |
+| Save manager | X delete | X or Del |
+| Curation Hub | X · Y | X or Del · Y; R refreshes |
+| Game profiles, Windows apps | X · Y | X · Y or R |
+| Power tools, Memory scanner | X · Y | X · Y (R picks the target in the scanner) |
+| Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
+| Calculator | X insert x · Y graph · L1 clear · R1 delete | X · Y or G · C · Backspace |
+| Pomodoro | A start / pause · X skip · Y reset | Enter · X · Y |
+| Alarm | X toggle · Y new · L1 delete (press twice) | X · Y or N · Del |
+| Ambient | Y sleep timer · X screen off | Y or S · X; N next photo |
+| Patch | Hold A to confirm a risky step | Hold Enter |
+| Controller test | Hold Select closes | Esc closes, Enter or R resets |
+| JukaLand | its own footer | A / D move, Space jump, F mine, E build, 1–0 block, P pause, Esc back |
+
+
 
 ### TrimUI Brick
 
@@ -158,7 +262,7 @@ behaves the same in a menu as it does in a media grid.
 | Text browser | Scroll a page | Zoom the page text out / in |
 | Wallpaper picker | Five wallpapers | First / last wallpaper |
 | Image viewer | Previous / next image | Jump ten images back / forward |
-| Notification centre, clipboard history, global search, social notifications | One window of rows | First / last row |
+| Notification centre, clipboard history, global search | One window of rows | First / last row |
 | Quick Settings | Five rows, or ±5 on a slider | First / last row |
 | Start menu | One window of the open group | First / last row of the open group |
 | Home | — | Previous / next section |
@@ -308,11 +412,11 @@ A text web browser for GitHub issues, release notes and documentation. See
 |--------|--------|
 | Up / Down | In scroll mode, scroll the page; at the top/bottom the focus goes to the header and the button row. In link mode, move to the nearest link on the row above/below |
 | L1 / R1 | Scroll by a page |
-| L2 / R2 (or the toolbar **zoom** chip) | Zoom the page text out / in (75%–160%); the chip shows the scale, lights up off 100%, and steps up on a tap |
+| L2 / R2 (keyboard **-** / **+**, or the toolbar **zoom** chip) | Zoom the page text out / in (75%–160%); the chip shows the scale, lights up off 100%, and steps up on a tap |
 | Left / Right | Walk the links in reading order, scrolling them into view |
 | **Tab** (keyboard) or **L3** (left stick click) | Switch between scrolling the page and walking its links |
 | A | Open the highlighted link, work the highlighted form control (type into a field, step a list, tick a box, send a form), or edit the address bar when nothing is picked |
-| Y | Search the web (opens the keyboard); the **SEARCH** chip does the same |
+| Y (keyboard **Y** or **/**) | Search the web (opens the keyboard); the **SEARCH** chip does the same |
 | X | Open the full link list for the page |
 | B | Leave the browser (in link mode, the first press returns to scroll mode) |
 | `f` · **Find** chip | Find on the page; `n` / `p` step to the next / previous match, **Esc** clears the search |
@@ -358,12 +462,15 @@ how that folder is chosen and what recording itself looks like.
 
 ## Video player
 
-The control bar is a focus ring: **Left / Right** walk it from stop through
-rewind, play/pause, fast-forward, speed, subtitles, settings and full screen, and
-on to the two corner buttons, and **A** presses the highlighted button.
+The control bar is a focus ring: **Left / Right** walk it from the volume
+(mute) button through rewind, play/pause and fast-forward — with previous and
+next around them when the video came from a list — to speed, captions, settings
+and full screen, and on to the two corner buttons; **A** presses the highlighted
+button. With a mouse, the level bar beside the speaker sets the volume and the
+seek row takes a click anywhere along the track.
 
 The corners are two separate actions: **Close** (the X) ends playback and leaves
-the video, and the chevron beside it steps the player down a size without
+the video, and the downward chevron beside it steps the player down a size without
 ending it — the same thing **B** does, and the way to reach the floating window
 from a pad. On a touch screen the windowed player's controls take taps now, and
 a tap anywhere else on the scene still belongs to the scene.
@@ -373,8 +480,8 @@ a tap anywhere else on the scene still belongs to the scene.
 | Left / Right | Move the selection along the control bar |
 | A | Press the selected control (play/pause when nothing is selected) |
 | Up / Down | Volume |
-| X | Subtitles on / off |
-| Y | Video settings sheet |
+| X (keyboard **X** or **C**) | Subtitles on / off |
+| Y (keyboard **Y** or **S**) | Video settings sheet |
 | L1 / R1 | Skip −10 / +10 seconds |
 | L2 / R2 | Previous / next video in the list that launched this one (search results or the Shorts feed) |
 | B | Close the settings sheet, then step down: leave full screen, then float the video and go back |
@@ -500,7 +607,7 @@ entry and its path.
 | **X** | Install the highlighted system's emulator, or check its installed core and update it |
 | **L1** | Update every installed emulator the buildbot has a newer build of |
 | **R1** | Put back the build the last update replaced (only offered when one is kept) |
-| **Y** | RetroAchievements |
+| **Y** | The Xbox setup sheet on the Xbox tile (handheld) or xemu's tile (Windows); RetroAchievements on every other tile |
 | **B** / Esc | Back |
 | Touch / mouse | Tap a tile to select and open it |
 
@@ -529,12 +636,61 @@ leaves the card exactly as it was. R1 is offered wherever a backup exists,
 including Windows: the install policy is about what the buildbot serves, not
 about restoring a file the card already holds.
 
-No `Emus/<system>/` folder is ever written — those launcher scripts belong to
-the firmware, and the standalone emulators upstream publishes are desktop
-builds that would install a launcher that cannot start. On the Windows build the
-install and update keys are not offered at all: the buildbot's aarch64 shared
-object is not something a desktop RetroArch loads. R1 is the exception, because
-it only ever restores a file the card already has.
+Apart from the Xbox tile below, no `Emus/<system>/` folder is ever written —
+those launcher scripts belong to the firmware, and the standalone emulators
+upstream publishes are desktop builds that would install a launcher that cannot
+start. On Windows the same keys install and update a portable RetroArch, its
+cores from the buildbot's Windows tree, and the standalone emulators from their
+official releases.
+
+### Xbox (hakuX on the Smart Pro)
+
+The **Xbox** tile is always on the page. What it offers depends on the device:
+
+| Device | Xbox tile |
+|---|---|
+| Smart Pro (TG5040) | Installs the experimental [hakuX port](https://github.com/ToastedFrog2/hakux-trimui-smart-pro) |
+| Brick Pro | The same install, marked untested: same A133P chip, GPU and sticks, but the port is built for the Smart Pro |
+| Brick, Hammer | Not supported: the port is built for the Smart Pro, and Xbox games need two analog sticks the Brick does not have |
+| Smart Pro S | Not supported: the port is built for the Smart Pro's A133P and PowerVR GPU; no build exists for the A523 |
+| Windows | xemu, installed from its official release; **Y** on its tile opens the BIOS checklist |
+
+On the handheld tile, **X** installs or updates hakuX, **A** opens the Xbox
+games in the Games Library (before the install, the setup sheet), **Y** opens
+the setup sheet and **R1** rolls the last update back; **L1** includes hakuX
+when JukaHub installed it. The install:
+
+1. asks GitHub for the newest release (pre-releases included, since an
+   experimental port may publish nothing else) and takes its
+   `xbox-trimui-smart-pro-v<version>.zip`;
+2. checks the download against GitHub's SHA-256 digest for that file, and
+   against a checksum file attached to the release when there is one; the
+   download's SHA-256 is recorded either way;
+3. unpacks it into `Apps/JukaHub/data/hakux/stage/` on the same card and only
+   then merges the package's `Data/` and `Emus/` folders into the card's root,
+   file by file. Files the package does not ship (saves, shader caches,
+   settings) are never touched; a file it replaces is kept in
+   `Apps/JukaHub/data/hakux/backup/`, which is what **R1** restores; a merge
+   that fails half way puts back everything it moved;
+4. writes `Emus/XBOX/.jukahub-hakux.json`: the release, the asset URL, the
+   digest, how the download was verified and every file laid down.
+
+Games go in `Roms/XBOX` as `.iso` (XISO) images and start through the
+package's own `Emus/XBOX/launch.sh`, like any other system. In a game,
+**Menu** opens hakuX's settings (per-game settings, LAN, screenshots to
+`Screenshots/XBOX`), and holding **Start + Select** for about 1.2 seconds
+exits.
+
+hakuX 1.0 and later run games on their own Xbox kernel and need no BIOS, MCPX
+ROM or HDD image; the xemu-based builds before them did, and the port does not
+say which core it was built from. So the setup sheet and the BIOS Doctor read
+the installed build's own settings and list any firmware file they name, with
+whether it is there; when they name none, the sheet says so.
+
+Set expectations accordingly: this is an experimental port on a handheld with
+1 GB of RAM. Not every game boots, 30 fps is a target rather than a promise, and
+some games show graphics glitches. JukaHub installs the published package;
+rebuilding it from the port's source is not automated.
 
 ## Game profiles
 
@@ -1120,7 +1276,8 @@ screen like any other key.
 | Up / Down | Move through alarms and fields |
 | A | Select / save |
 | X | Toggle the focused alarm |
-| Y | New alarm || L1 | Delete the focused alarm |
+| Y | New alarm |
+| L1 (keyboard **Del**) | Delete the focused alarm (press twice) |
 | B | Back |
 
 ### When an alarm rings
@@ -1141,7 +1298,9 @@ alone; Dismiss ends it until the next scheduled ring. Tapping the two buttons
 works too. The editor's **Ringtone** row cycles the six synthesized sounds with
 Left / Right and previews each one as it lands.
 
-## Calculator | Button | Action |
+## Calculator
+
+| Button | Action |
 |--------|--------|
 | D-pad | Move over the keypad |
 | A | Press the focused key |

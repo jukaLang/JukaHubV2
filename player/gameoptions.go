@@ -21,7 +21,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,7 +233,7 @@ func loadGameOptionsFile(path string) map[string]gameOptions {
 	var file gameOptionsFile
 	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[library] ignoring %s: %v", path, err)
+			logWarn("library", "ignoring %s: %v", path, err)
 		}
 		return out
 	}
@@ -318,7 +317,7 @@ func setGameOptions(path string, opts gameOptions) error {
 	gameOptionsMu.Unlock()
 
 	if err := saveGameOptionsFile(gameOptionsPath(), next); err != nil {
-		log.Printf("[library] cannot save game options: %v", err)
+		logWarn("library", "cannot save game options: %v", err)
 		return err
 	}
 	return nil

@@ -63,6 +63,8 @@ func TestMain(m *testing.M) {
 		gmetaStorePath = func() string { return filepath.Join(gmetaDir, "games.json") }
 		gmetaDatDir = func() string { return filepath.Join(gmetaDir, "libretro") }
 		rommJournalPath = func() string { return filepath.Join(gmetaDir, "rom-journal.json") }
+		// Core replacements in the suite note their builds (corebuilds_history.go).
+		coreHistoryPathFn = func() string { return filepath.Join(gmetaDir, "core-history.json") }
 	}
 	gmetaSyncWrites = true
 	gmetaCelebrations = false
@@ -70,6 +72,9 @@ func TestMain(m *testing.M) {
 	gmetaBackgroundLoads = false
 	rommScanEnabled = false
 	code := m.Run()
+	// Core replacements queue their history writes (corebuilds_history.go);
+	// they land before the folder goes, so none can recreate it afterwards.
+	coreHistoryFlush()
 	if gmetaErr == nil {
 		os.RemoveAll(gmetaDir)
 	}

@@ -64,16 +64,6 @@ func musicTitleInitials(name string) string {
 	return musicInitials(strings.TrimSuffix(name, filepath.Ext(name)))
 }
 
-// musicSearchMatch reports whether query is a prefix of the title's initials.
-// Empty queries match nothing, so the panel does not list the whole playlist.
-func musicSearchMatch(title, query string) bool {
-	q := musicSearchNormalize(query)
-	if q == "" {
-		return false
-	}
-	return strings.HasPrefix(musicTitleInitials(title), q)
-}
-
 // musicSearchHits returns the matching track indexes: exact-length initialisms
 // first (the most likely intent), then the rest in playlist order. Duplicate
 // titles are kept because they are different files.

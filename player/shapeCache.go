@@ -19,7 +19,6 @@ package main
 
 import (
 	"container/list"
-	"log"
 	"os"
 	"sync"
 
@@ -98,26 +97,6 @@ func newShapeCache() *shapeCache {
 
 func (sc *shapeCache) budget() int64 {
 	return shapeCacheBudgetBytes()
-}
-
-// dropForRenderer forgets every entry owned by r without Destroy: when the
-// renderer is gone, its textures are gone with it. Used on renderer switches
-// and from the test renderer teardown, which creates a fresh renderer per case.
-func (sc *shapeCache) dropForRenderer(r *sdl.Renderer) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-	for key, entry := range sc.entries {
-		if key.renderer == r {
-			delete(sc.entries, key)
-			sc.order.Remove(entry.element)
-		}
-	}
-	if sc.current == r {
-		sc.current = nil
-	}
-	sc.totalBytes = 0
-	sc.textureDraws = 0
-	sc.fallbackDraws = 0
 }
 
 // Get returns the cached texture for the key, moving it to the front and
@@ -263,13 +242,13 @@ func drawShapeCachedAt(renderer *sdl.Renderer, kind int32, baseW, baseH int32, d
 	}
 	if tex := shapeTextures.Get(key); tex != nil {
 		if err := tex.SetAlphaMod(c.A); err != nil && debugShapeErrors() {
-			log.Printf("[shape] SetAlphaMod(%d) failed: %v", c.A, err)
+			logWarn("shape", "SetAlphaMod(%d) failed: %v", c.A, err)
 		}
 		dest := sdl.Rect{X: x, Y: y, W: w, H: h}
 		if err := renderer.Copy(tex, nil, &dest); err == nil {
 			return
 		} else if debugShapeErrors() {
-			log.Printf("[shape] copy kind=%d %dx%d failed: %v", kind, w, h, err)
+			logWarn("shape", "copy kind=%d %dx%d failed: %v", kind, w, h, err)
 		}
 		// Copy failed; fall through and paint directly this frame.
 	}
@@ -332,25 +311,4 @@ func drawShapeCachedAt(renderer *sdl.Renderer, kind int32, baseW, baseH int32, d
 // shutdown.
 func ClearShapeCache() {
 	shapeTextures.Clear()
-}
-
-// DropShapeCacheForRenderer forgets textures owned by a renderer that is about
-// to be destroyed, without destroying them itself.
-func DropShapeCacheForRenderer(r *sdl.Renderer) {
-	if r == nil {
-		return
-	}
-	shapeTargetUnsupportedMu.Lock()
-	delete(shapeTargetUnsupported, r)
-	shapeTargetUnsupportedMu.Unlock()
-	shapeTextures.dropForRenderer(r)
-}
-
-// ShapeCacheStats reports how the cache split draws between Copy-blits and
-// direct painting, and the texture memory held. Diagnostics.
-func ShapeCacheStats() (cached, fallback int64, bytes int64) {
-	sc := shapeTextures
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-	return sc.textureDraws, sc.fallbackDraws, sc.totalBytes
 }

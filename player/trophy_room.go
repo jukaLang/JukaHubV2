@@ -1974,7 +1974,8 @@ func trophyRoomFooterHints() []FooterHint {
 		return append(hints, FooterHint{Button: "B", Label: "Close"})
 	}
 	if r.tab == trophyTabStats {
-		hints := []FooterHint{{Button: "L1/R1", Label: "Trophies"}, {Button: "B", Label: "Back"}}
+		// "/ Tab": the keyboard switches the tab with Tab (trophyRoomKeyAction).
+		hints := []FooterHint{{Button: "L1/R1 / Tab", Label: "Trophies"}, {Button: "B", Label: "Back"}}
 		if retroAchievementsSupported() {
 			hints = append(hints, FooterHint{Button: "Y", Label: "RetroAchievements"})
 		}
@@ -1995,7 +1996,7 @@ func trophyRoomFooterHints() []FooterHint {
 		{Button: "D-Pad", Label: "Navigate"},
 		{Button: "A", Label: confirm},
 		{Button: "B", Label: "Back"},
-		{Button: "L1/R1", Label: "Playtime"},
+		{Button: "L1/R1 / Tab", Label: "Playtime"},
 		{Button: "X", Label: "Sort"},
 	}
 	if retroAchievementsSupported() {

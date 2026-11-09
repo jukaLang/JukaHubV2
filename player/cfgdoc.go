@@ -869,7 +869,7 @@ var cfgdocPersistedTyped = map[string]bool{
 	"fileExplorerRoot": true, "weatherEnabled": true, "weatherUnit": true, "tspUsername": true,
 	"playbackResolution": true, "subtitleLanguage": true, "reducedMotion": true, "lowPower": true,
 	"powerMode": true, "ledSync": true, "gridColumns": true, "searchWidth": true, "dynamicBg": true,
-	"screensaverTimeout": true, "socialNotifs": true, "clock12": true, "netPlayEnabled": true,
+	"screensaverTimeout": true, "clock12": true, "netPlayEnabled": true,
 	"tools_path": true,
 }
 

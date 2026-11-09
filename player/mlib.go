@@ -32,7 +32,6 @@ import (
 	"image"
 	"image/jpeg"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,20 +208,28 @@ func mlibArtDir() string { return filepath.Join(mlibDir(), "art") }
 var (
 	// mlibEpisodeSE finds "S01E02" in any case, with or without a separator
 	// between the numbers; what precedes it is the show.
-	mlibEpisodeSE = regexp.MustCompile(`(?i)^(.*?)(?:^|[\s._\-\[(]+)s(\d{1,2})[\s._\-]?e(\d{1,3})(\D.*)?$`)
+	mlibEpisodeSE = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)^(.*?)(?:^|[\s._\-\[(]+)s(\d{1,2})[\s._\-]?e(\d{1,3})(\D.*)?$`)
+	})
 	// mlibEpisodeX finds "1x02". A separator (or the start) must come before
 	// it and no digit after it, so 1920x1080 is not an episode.
-	mlibEpisodeX = regexp.MustCompile(`(?i)^(.*?)(?:^|[\s._\-\[(]+)(\d{1,2})x(\d{1,3})(\D.*)?$`)
+	mlibEpisodeX = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)^(.*?)(?:^|[\s._\-\[(]+)(\d{1,2})x(\d{1,3})(\D.*)?$`)
+	})
 	// mlibSeasonDir is a season folder: "Season 2", "S02", "Staffel 2".
-	mlibSeasonDir = regexp.MustCompile(`(?i)^(?:season|series|staffel|saison|temporada|s)[\s._\-]*(\d{1,2})$`)
+	mlibSeasonDir = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)^(?:season|series|staffel|saison|temporada|s)[\s._\-]*(\d{1,2})$`)
+	})
 	// mlibDiscDir is a disc folder inside an album: "CD1", "Disc 2".
-	mlibDiscDir = regexp.MustCompile(`(?i)^(?:cd|disc|disk)[\s._\-]*\d{1,2}$`)
+	mlibDiscDir = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)^(?:cd|disc|disk)[\s._\-]*\d{1,2}$`) })
 	// mlibYearToken is a release year between separators.
-	mlibYearToken = regexp.MustCompile(`(?:^|[\s._\-(\[])((?:19|20)\d\d)(?:[\s._\-)\]]|$)`)
+	mlibYearToken = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?:^|[\s._\-(\[])((?:19|20)\d\d)(?:[\s._\-)\]]|$)`) })
 	// mlibTrackPrefix is a song's leading track number: "01 Song", "01 - Song",
 	// "1. Song", "1-03 Song". A bare number before a space ("7 Years") is
 	// part of the title.
-	mlibTrackPrefix = regexp.MustCompile(`^(?:\d-)?(?:(0\d{1,2})[\s._\-]+|(\d{1,3})\s*[.\-][\s._\-]*)(\S.*)$`)
+	mlibTrackPrefix = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^(?:\d-)?(?:(0\d{1,2})[\s._\-]+|(\d{1,3})\s*[.\-][\s._\-]*)(\S.*)$`)
+	})
 	// mlibSeparators turns the dots and underscores of a file name into spaces.
 	mlibSeparators = strings.NewReplacer(".", " ", "_", " ")
 )
@@ -291,9 +298,9 @@ func mlibExtraEpisode(word string) bool {
 // the season, the episode, and the episode's own title after it. ok is false
 // for a name with no episode number.
 func mlibParseEpisode(name string) (show string, season, episode int, title string, ok bool) {
-	m := mlibEpisodeSE.FindStringSubmatch(name)
+	m := mlibEpisodeSE().FindStringSubmatch(name)
 	if m == nil {
-		m = mlibEpisodeX.FindStringSubmatch(name)
+		m = mlibEpisodeX().FindStringSubmatch(name)
 	}
 	if m == nil {
 		return "", 0, 0, "", false
@@ -312,7 +319,7 @@ func mlibParseEpisode(name string) (show string, season, episode int, title stri
 // "Heat.1995.1080p" is Heat (1995). A year at the very start belongs to the
 // title ("2001.A.Space.Odyssey.1968" is 2001 A Space Odyssey, 1968).
 func mlibMovieTitle(name string) (string, int) {
-	for _, loc := range mlibYearToken.FindAllStringSubmatchIndex(name, -1) {
+	for _, loc := range mlibYearToken().FindAllStringSubmatchIndex(name, -1) {
 		if loc[0] <= 0 {
 			continue
 		}
@@ -330,7 +337,7 @@ func mlibMovieTitle(name string) (string, int) {
 // "03 - Song" is track 3, Song.
 func mlibSongTitle(name string) (int, string) {
 	name = strings.TrimSpace(strings.ReplaceAll(name, "_", " "))
-	m := mlibTrackPrefix.FindStringSubmatch(name)
+	m := mlibTrackPrefix().FindStringSubmatch(name)
 	if m == nil {
 		return 0, name
 	}
@@ -362,7 +369,7 @@ func mlibNameItem(it *mlibItem, root string) {
 	if !it.Video {
 		it.Track, it.Title = mlibSongTitle(name)
 		album, artist := folder, above
-		if above != "" && mlibDiscDir.MatchString(folder) {
+		if above != "" && mlibDiscDir().MatchString(folder) {
 			// Artist/Album/CD1/song: the disc folder is part of the album.
 			album, artist = above, ""
 			if top := filepath.Dir(upper); dlPathKey(top) != rootKey && isPathWithin(top, root) {
@@ -388,7 +395,7 @@ func mlibNameItem(it *mlibItem, root string) {
 		it.Season, it.Episode, it.Title = season, episode, title
 		if show == "" {
 			switch {
-			case folder != "" && mlibSeasonDir.MatchString(folder):
+			case folder != "" && mlibSeasonDir().MatchString(folder):
 				show = mlibCleanName(above)
 			case folder != "":
 				show = mlibCleanName(folder)
@@ -432,7 +439,7 @@ func mlibNewItem(f mlibFile) mlibItem {
 // mlibSkipDir reports the folders a walk never enters: hidden folders, the
 // trash and system folders, NAS thumbnail stores.
 func mlibSkipDir(name string) bool {
-	if strings.HasPrefix(name, ".") {
+	if skipScanEntryName(name) {
 		return true
 	}
 	switch strings.ToLower(name) {
@@ -480,7 +487,7 @@ func mlibWalkRoot(ctx context.Context, root string, known map[string]mlibDirStat
 						}
 						continue
 					}
-					if strings.HasPrefix(name, ".") || !e.Type().IsRegular() {
+					if skipScanEntryName(name) || !e.Type().IsRegular() {
 						continue
 					}
 					video, ok := mlibMediaKind(name)
@@ -805,7 +812,7 @@ func mlibLoad() {
 	var file mlibIndexFile
 	if _, err := readJSONWithBackup(mlibIndexPath(), &file); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[library] the index could not be read; scanning afresh: %v", err)
+			logWarn("library", "the index could not be read; scanning afresh: %v", err)
 		}
 		file = mlibIndexFile{}
 	}
@@ -1182,7 +1189,7 @@ func (j *mlibArtJob) fromFrame(ctx context.Context, it mlibItem) string {
 // folder, else the episode's own folder.
 func mlibShowDir(path string) string {
 	dir := filepath.Dir(path)
-	if mlibSeasonDir.MatchString(filepath.Base(dir)) {
+	if mlibSeasonDir().MatchString(filepath.Base(dir)) {
 		return filepath.Dir(dir)
 	}
 	return dir
@@ -1437,11 +1444,11 @@ func mlibWriteIndex(file mlibIndexFile) {
 	}
 	data, err := json.Marshal(file)
 	if err != nil {
-		log.Printf("[library] index: %v", err)
+		logWarn("library", "index: %v", err)
 		return
 	}
 	if err := AtomicWrite(mlibIndexPath(), data, 0o644); err != nil {
-		log.Printf("[library] could not save the index: %v", err)
+		logWarn("library", "could not save the index: %v", err)
 	}
 }
 

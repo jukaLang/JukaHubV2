@@ -39,7 +39,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
 	"math/big"
 	"net"
 	"os"
@@ -344,7 +343,7 @@ func peerLoadIdentity(dir string) (peerIdentity, error) {
 	}
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[peer] identity unreadable, making a new one: %v", err)
+			logWarn("peer", "identity unreadable, making a new one: %v", err)
 		}
 		seed = make([]byte, ed25519.SeedSize)
 		if _, rerr := rand.Read(seed); rerr != nil {
@@ -381,7 +380,7 @@ func peerEnsureLoadedLocked() error {
 	self, err := peerLoadIdentity(peerDataDir())
 	if err != nil {
 		peerState.loadErr = err
-		log.Printf("[peer] identity: %v", err)
+		logWarn("peer", "identity: %v", err)
 		return err
 	}
 	peerState.self = self
@@ -565,7 +564,7 @@ func peerLoadPeers(dir string) []peerRecord {
 func peerSavePeersLocked() {
 	file := peerStoreFile{Version: 1, Peers: append([]peerRecord(nil), peerState.peers...)}
 	if err := peerWriteJSONFile(filepath.Join(peerDataDir(), "peers.json"), file); err != nil {
-		log.Printf("[peer] could not save the paired devices: %v", err)
+		logWarn("peer", "could not save the paired devices: %v", err)
 	}
 	peerState.peersSaved = time.Now()
 }
@@ -841,7 +840,7 @@ func peerNoteClone(addr string) {
 	peerState.mu.Lock()
 	defer peerState.mu.Unlock()
 	if peerState.clone != addr {
-		log.Printf("[peer] another device at %s uses this device's identity", addr)
+		logDebug("peer", "another device at %s uses this device's identity", addr)
 	}
 	peerState.clone = addr
 	peerState.cloneAt = time.Now()
@@ -975,21 +974,6 @@ func peerCurrentScene(config *Config) string {
 	switch name := config.Scenes[currentSceneIndex].Name; name {
 	case peerSceneName, ssyncSceneName, nearbySceneName:
 		return name
-	}
-	return ""
-}
-
-// peerSceneDisplayName is what the window title, the status bar and the
-// controls legend call the three pages; it is meant for extras.go's
-// sceneDisplayName, beside the other features' hooks there.
-func peerSceneDisplayName(name string) string {
-	switch name {
-	case peerSceneName:
-		return "Devices"
-	case ssyncSceneName:
-		return "Save sync"
-	case nearbySceneName:
-		return "Nearby"
 	}
 	return ""
 }

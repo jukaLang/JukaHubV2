@@ -10,6 +10,9 @@ package main
 //   * --safe-mode / -safe-mode on the command line
 //   * JUKAHUB_SAFE_MODE=1 (also true/yes/on)
 //   * a "safe-mode.flag" file next to the app (easy to create over USB/FTP)
+//   * the recovery chord held at boot (safeboot.go)
+//   * three failed starts in a row, or a one-shot request from the recovery
+//     card (bootguard.go); those last for one launch only
 //
 // While active, plugins are not loaded, the updater and tool installer do not
 // start, and background network work (weather, connectivity probes) is skipped.
@@ -70,6 +73,20 @@ func initSafeMode() {
 
 // safeModeActive reports whether this launch is running in safe mode.
 func safeModeActive() bool { return safeMode.Active }
+
+// safeModeLeaveHint says how this launch's safe mode ends, for the cards and
+// toasts that announce it.
+func safeModeLeaveHint() string {
+	switch safeMode.Reason {
+	case "command line":
+		return "Start JukaHub without --safe-mode to leave it."
+	case "JUKAHUB_SAFE_MODE":
+		return "Unset JUKAHUB_SAFE_MODE to leave it."
+	case safeModeFlagPath:
+		return "Delete " + safeModeFlagPath + " next to JukaHub to leave it."
+	}
+	return "Safe mode lasts for this launch only: quit and open JukaHub again to leave it."
+}
 
 // safeModeAllows reports whether a capability may run this launch.
 func safeModeAllows(f SafeFeature) bool {

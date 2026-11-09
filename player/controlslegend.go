@@ -2,10 +2,9 @@ package main
 
 // controlslegend.go — the controller legend.
 //
-// The "controller legend on first launch" idea, shipped (inventoried in
-// MODERNIZATION.md §5.5): a first-run card built from the footerHints registry
-// instead of a second hardcoded list, and the same card reachable any time as
-// the "?" row in Quick Settings (qsLinkControls in quicksettings.go).
+// A first-run card built from the footerHints registry instead of a second
+// hardcoded list, and the same card reachable any time as the "?" row in Quick
+// Settings (qsLinkControls in quicksettings.go).
 //
 // Content: the bindings of the scene it opened over — footerHints already
 // mirrors what each scene's input handlers really do, so the legend and the
@@ -45,6 +44,18 @@ var controlsLegend controlsLegendState
 // The keyboard overlay keeps its own much longer list; this row only points
 // at it, so there is still exactly one full list in the app.
 func systemLegendRows() []FooterHint {
+	if hintsUseKeyboard() {
+		// The keyboard's own globals (main.go): F10 is Start, Ctrl+Q Quick
+		// Settings, F2 search, F1 this card and then the full list. The pad
+		// chords (profile switch) have no keyboard twin and are left out.
+		return []FooterHint{
+			{Button: "F10", Label: "Start menu"},
+			{Button: "Ctrl+Q", Label: "Quick Settings"},
+			{Button: "F2", Label: "Search"},
+			{Button: hintQuitKeys(), Label: "Quit JukaHub"},
+			{Button: "F1", Label: "All keyboard shortcuts"},
+		}
+	}
 	rows := []FooterHint{
 		{Button: "Start", Label: "Start menu"},
 		{Button: "Select + Start", Label: "Quit JukaHub"},
@@ -112,15 +123,18 @@ func closeControlsLegend() {
 
 // handleControlsLegendKey consumes every key while the legend is up. F1 keeps
 // the discoverability of the keyboard overlay: it dismisses the legend and
-// opens the full shortcuts reference (the F1 toggle later in main.go's
-// keyboard chain sits behind this handler, so the legend owns the key).
+// opens the full shortcuts reference (handleGlobalKeys opened the legend; while
+// it is up this handler sees every key first). Esc closes; B does not, because
+// its letter would be typed into a terminal or chat field behind the card.
+// Held keys' repeats are ignored, or holding F1 would cycle card → sheet →
+// closed.
 func handleControlsLegendKey(e *sdl.KeyboardEvent) bool {
 	if !controlsLegend.open {
 		return false
 	}
-	if e != nil && e.Type == sdl.KEYDOWN {
+	if e != nil && e.Type == sdl.KEYDOWN && e.Repeat == 0 {
 		switch e.Keysym.Sym {
-		case sdl.K_ESCAPE, sdl.K_b:
+		case sdl.K_ESCAPE:
 			closeControlsLegend()
 		case sdl.K_F1:
 			controlsLegend.open = false
@@ -200,7 +214,12 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	// The legend opens with the shared page header, centered because the card
 	// is: one band geometry for a title and its scene line, measured before the
 	// card is sized so the rows start where the header ends.
-	header := UIPanelHeader("Controller", sub, "")
+	// The card names the device the hints speak for (inputhints.go).
+	title := "Controller"
+	if hintsUseKeyboard() {
+		title = "Keyboard"
+	}
+	header := UIPanelHeader(title, sub, "")
 	header.Centered = true
 	headerH := UIPanelHeaderBand(config, header, 8)
 
@@ -230,7 +249,7 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	buttonColMax := buttonCol
 	for _, s := range sections {
 		for _, h := range s.Rows {
-			if w, _, err := font.SizeUTF8(h.Button); err == nil && buttonCol+int32(w) > buttonColMax {
+			if w, _, err := font.SizeUTF8(hintKeyFor(h.Button, h.Label)); err == nil && buttonCol+int32(w) > buttonColMax {
 				buttonColMax = buttonCol + int32(w)
 			}
 		}
@@ -245,7 +264,7 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, font, s.Title, getAccentColor(config), x, y)
 		y += sectionH
 		for _, h := range s.Rows {
-			renderText(renderer, config, font, h.Button, accentColor, x, y)
+			renderText(renderer, config, font, hintKeyFor(h.Button, h.Label), accentColor, x, y)
 			renderText(renderer, config, font, ellipsize(font, h.Label, labelW),
 				sdl.Color{R: 200, G: 210, B: 230, A: 220}, labelX, y)
 			y += rowH
@@ -253,7 +272,7 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	}
 
 	hint := hintLine(FooterHint{"B", "Close"}, FooterHint{"F1", "Keyboard shortcuts"})
-	if controlsLegend.brick {
+	if controlsLegend.brick && !hintsUseKeyboard() {
 		hint = hintLine(FooterHint{"B / F1", "Close"})
 	}
 	hw, _, _ := font.SizeUTF8(hint)

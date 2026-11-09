@@ -386,12 +386,6 @@ func drawStatusBatteryChip(renderer *sdl.Renderer, font *ttf.Font, part string, 
 	return statusClusterPartWidth(font, part)
 }
 
-// isStatusIconPart reports whether the part is drawn by one of the gauges
-// rather than as plain text.
-func isStatusIconPart(part string) bool {
-	return isWiFiStatusPart(part) || isBatteryStatusPart(part)
-}
-
 // drawStatusClusterPart paints one part of the shared cluster and returns the
 // width it used, so the caller can advance exactly as it measured.
 func drawStatusClusterPart(renderer *sdl.Renderer, font *ttf.Font, part string, x, textTop int32, draw statusTextDrawer) int32 {
@@ -528,16 +522,6 @@ func wifiMeterBarsForRSSI(rssi int) int {
 		return statusWiFiUnknown
 	}
 	return wifiSignalBars(rssi)
-}
-
-// resetWiFiSignalPollForTest clears the supplicant cache. Tests call it so one
-// case's answer cannot leak into the next.
-func resetWiFiSignalPollForTest() {
-	wifiPollMu.Lock()
-	defer wifiPollMu.Unlock()
-	wifiPollBars = statusWiFiUnknown
-	wifiPollKnocked = time.Time{}
-	wifiPollBusy = false
 }
 
 // wifiLinkIsUp reports whether a wireless interface is up, which is how the

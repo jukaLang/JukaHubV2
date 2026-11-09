@@ -24,7 +24,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -312,7 +311,7 @@ func applyCookieRetention(config *Config, days int) int {
 	}
 	pruned := browserPruneStaleCookies(days)
 	if pruned > 0 {
-		log.Printf("[browser] retention %s removed %d cookie(s)", cookieRetentionLabel(days), pruned)
+		logDebug("browser", "retention %s removed %d cookie(s)", cookieRetentionLabel(days), pruned)
 	}
 	// The prune can drop the session's oldest cookie, moving the start date the
 	// row quotes, so the label follows the jar rather than the press.

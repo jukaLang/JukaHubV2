@@ -26,7 +26,6 @@ package main
 // atomic load.
 
 import (
-	"log"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -119,7 +118,7 @@ const (
 // settle. Call this instead of noteGameChildExited from the reaper goroutine.
 func screenChildReaped(cmd *exec.Cmd) {
 	if screenChildGroupAlive(cmd) {
-		log.Printf("[handover] launcher %d exited but its process group is still running; keeping the screen parked", cmd.Process.Pid)
+		logDebug("handover", "launcher %d exited but its process group is still running; keeping the screen parked", cmd.Process.Pid)
 		deadline := time.Now().Add(screenGroupWatch)
 		for screenChildGroupAlive(cmd) && time.Now().Before(deadline) {
 			time.Sleep(screenGroupPoll)
@@ -169,7 +168,7 @@ func stopScreenChildren(grace time.Duration) int {
 	if len(cmds) == 0 {
 		return 0
 	}
-	log.Printf("[exit] stopping %d running child process(es) before handing the screen back", len(cmds))
+	logInfo("exit", "stopping %d running child process(es) before handing the screen back", len(cmds))
 	for _, cmd := range cmds {
 		// Interrupt is what emulators treat as save-and-quit. Delivered to the
 		// group so a wrapper's backgrounded emulator receives it too; not every
@@ -185,7 +184,7 @@ func stopScreenChildren(grace time.Duration) int {
 	}
 	for _, cmd := range liveScreenChildren() {
 		if cmd.Process != nil {
-			log.Printf("[exit] child %d ignored the quit request; killing its group", cmd.Process.Pid)
+			logInfo("exit", "child %d ignored the quit request; killing its group", cmd.Process.Pid)
 			_ = screenChildKill(cmd)
 		}
 	}

@@ -12,11 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"math"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -155,29 +152,6 @@ func latestReleaseAssets(repo, apiToken string) ([]releaseAsset, error) {
 		out = append(out, releaseAsset{Name: a.Name, URL: a.BrowserDownloadURL, Size: a.Size})
 	}
 	return out, nil
-}
-
-// resolveToolURLMatching returns the first asset whose name contains every
-// token of one of the wanted groups, trying the groups in order. Release asset
-// names embed the version (`rclone-v1.68.1-linux-arm64.zip`), so an exact-name
-// lookup would break on every upstream release; matching on the stable parts of
-// the name does not. The repo must still be on the approved list.
-func resolveToolURLMatching(repo, apiToken string, wanted ...[]string) (releaseAsset, error) {
-	if len(wanted) == 0 {
-		return releaseAsset{}, fmt.Errorf("resolveToolURLMatching called without any wanted asset patterns")
-	}
-	assets, err := latestReleaseAssets(repo, apiToken)
-	if err != nil {
-		return releaseAsset{}, err
-	}
-	if a, ok := pickToolAsset(assets, wanted); ok {
-		return a, nil
-	}
-	groups := make([]string, 0, len(wanted))
-	for _, tokens := range wanted {
-		groups = append(groups, strings.Join(tokens, "+"))
-	}
-	return releaseAsset{}, fmt.Errorf("no asset in %s matched %s", repo, strings.Join(groups, ", "))
 }
 
 // pickToolAsset returns the first asset that matches one of the token groups,
@@ -416,7 +390,7 @@ func extractToolFilesCtx(ctx context.Context, archivePath, destDir string, names
 			return found, err
 		}
 		if err := os.Chmod(src, PermExec); err != nil {
-			log.Printf("[tools] warn: cannot chmod staged %s: %v", base, err)
+			logWarn("tools", "warn: cannot chmod staged %s: %v", base, err)
 		}
 		if err := os.Rename(src, dst); err != nil {
 			// Different filesystem (should not happen: both live in destDir's
@@ -740,93 +714,6 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func runCmd(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(out))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// ensureDirPath is a no-op helper that normalizes paths across platforms.
-func ensureDirPath(dir string) string {
-	dir = filepath.Clean(dir)
-	if dir == "" {
-		dir = "."
-	}
-	return dir
-}
-
-// safeInt converts a string to int32 without silent truncation. If the value
-// is too large or not a valid integer, it returns the fallback value.
-func safeInt(text string, fallback int32) int32 {
-	v, ok := parsePosInt(text)
-	if !ok {
-		return fallback
-	}
-	return v
-}
-
-// parsePositiveSize parses a WxH string (e.g. "1280x720") into (width, height).
-// Non-numeric or missing parts fall back to 1280 and 720, and values are capped
-// to sane maximums to avoid runaway allocations.
-func parsePositiveSize(raw string) (int32, int32) {
-	parts := strings.SplitN(strings.TrimSpace(raw), "x", 2)
-	width := int32(1280)
-	height := int32(720)
-	if len(parts) == 2 {
-		w, ok := parsePosInt(strings.TrimSpace(parts[0]))
-		if ok && w > 0 {
-			width = w
-			if width > 7680 {
-				width = 7680
-			}
-		}
-		h, ok := parsePosInt(strings.TrimSpace(parts[1]))
-		if ok && h > 0 {
-			height = h
-			if height > 4320 {
-				height = 4320
-			}
-		}
-	}
-	return width, height
-}
-
-// firstExisting returns the first candidate path that exists on disk.
-func firstExisting(candidates ...string) string {
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		if info, err := os.Stat(c); err == nil && !info.IsDir() {
-			return c
-		}
-	}
-	return ""
-}
-
-// retryDo retries fn up to maxAttempts times on transient errors.
-func retryDo(maxAttempts int, fn func() error) error {
-	var err error
-	for i := 0; i < maxAttempts; i++ {
-		err = fn()
-		if err == nil {
-			return nil
-		}
-		if i < maxAttempts-1 {
-			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
-		}
-	}
-	return fmt.Errorf("failed after %d attempts: %w", maxAttempts, err)
-}
-
-// containsIgnoreCase reports whether substr appears in s, ignoring case.
-func containsIgnoreCase(s, substr string) bool {
-	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
-}
-
 // clampInt32 clamps v into [min, max].
 func clampInt32(v, min, max int32) int32 {
 	if v < min {
@@ -836,152 +723,6 @@ func clampInt32(v, min, max int32) int32 {
 		return max
 	}
 	return v
-}
-
-// clampFloat64 clamps v into [min, max].
-func clampFloat64(v, min, max float64) float64 {
-	if v < min {
-		return min
-	}
-	if v > max {
-		return max
-	}
-	return v
-}
-
-// roundToInt rounds f to the nearest int32.
-func roundToInt(f float64) int32 {
-	return int32(math.Round(f))
-}
-
-// floorToInt floors f to the nearest int32.
-func floorToInt(f float64) int32 {
-	return int32(math.Floor(f))
-}
-
-// ceilToInt ceilings f to the nearest int32.
-func ceilToInt(f float64) int32 {
-	return int32(math.Ceil(f))
-}
-
-// modI returns a % b with a non-negative result when b > 0.
-func modI(a, b int32) int32 {
-	if b <= 0 {
-		return a
-	}
-	m := a % b
-	if m < 0 {
-		m += b
-	}
-	return m
-}
-
-// clampAngle normalizes an angle into [0, 360).
-func clampAngle(deg float64) float64 {
-	deg = math.Mod(deg, 360)
-	if deg < 0 {
-		deg += 360
-	}
-	return deg
-}
-
-// lerpFloat64 linearly interpolates between a and b by t in [0,1].
-func lerpFloat64(a, b, t float64) float64 {
-	if t <= 0 {
-		return a
-	}
-	if t >= 1 {
-		return b
-	}
-	return a + (b-a)*t
-}
-
-// scaleDown scales a value down by factor while keeping it >= 1.
-func scaleDown(v, factor int32) int32 {
-	if factor <= 1 {
-		return v
-	}
-	n := int64(v) * int64(100) / int64(factor)
-	if n < 1 {
-		return 1
-	}
-	if n > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	return int32(n) / 100
-}
-
-// roundedScale scales v by ratio and rounds to nearest int32, with bounds.
-func roundedScale(v int32, ratio float64) int32 {
-	f := float64(v) * ratio
-	if f < 1 {
-		return 0
-	}
-	if f > float64(math.MaxInt32) {
-		return math.MaxInt32
-	}
-	return int32(math.Round(f))
-}
-
-// splitLines splits text into non-empty trimmed lines.
-func splitLines(text string) []string {
-	var out []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-// uniqueStrings returns a deduplicated copy of strs, preserving order.
-func uniqueStrings(strs []string) []string {
-	seen := make(map[string]struct{}, len(strs))
-	var out []string
-	for _, s := range strs {
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
-}
-
-// joinNonEmpty joins the string slice, skipping empty entries.
-func joinNonEmpty(strs []string, sep string) string {
-	var b strings.Builder
-	for i, s := range strs {
-		if s == "" {
-			continue
-		}
-		if i > 0 {
-			b.WriteString(sep)
-		}
-		b.WriteString(s)
-	}
-	return b.String()
-}
-
-// safeLower returns strings.ToLower(s) with a guard against huge input.
-func safeLower(s string) string {
-	if len(s) > 1024*1024 {
-		s = s[:1024*1024]
-	}
-	return strings.ToLower(s)
-}
-
-// safeTrimSpace returns strings.TrimSpace(s) with a guard against huge input.
-func safeTrimSpace(s string) string {
-	if len(s) > 10*1024*1024 {
-		s = s[:10*1024*1024]
-	}
-	return strings.TrimSpace(s)
 }
 
 // httpsGetBytes fetches url with the given timeout and returns the body bytes.
@@ -1005,46 +746,6 @@ func httpsGetBytes(url string, timeout time.Duration) ([]byte, error) {
 	return data, nil
 }
 
-// readFileTrimmed reads path and returns its trimmed content, or "".
-func readFileTrimmed(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-// ensureParentDir ensures the parent directory of path exists.
-func ensureParentDir(path string) error {
-	return os.MkdirAll(filepath.Dir(path), 0o755)
-}
-
-// writeFile writes data to path with 0o600 permissions.
-func writeFile(path string, data []byte) error {
-	if err := ensureParentDir(path); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
-}
-
-// readJSONFile reads and unmarshals a JSON file.
-func readJSONFile(path string, v interface{}) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-// writeJSONFile marshals v to JSON and writes it to path with 0o600.
-func writeJSONFile(path string, v interface{}) error {
-	data, err := json.MarshalIndent(v, "", "\t")
-	if err != nil {
-		return err
-	}
-	return writeFile(path, data)
-}
-
 // fileExists reports whether path exists.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -1062,173 +763,12 @@ func ensureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-// removePath removes path (file or empty dir).
-func removePath(path string) error {
-	return os.Remove(path)
-}
-
-// removeAll removes path and everything under it.
-func removeAll(path string) error {
-	return os.RemoveAll(path)
-}
-
-// copyRecursive copies srcDir into dstDir.
-func copyRecursive(srcDir, dstDir string) error {
-	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		dest := filepath.Join(dstDir, rel)
-		if d.IsDir() {
-			return ensureDir(dest)
-		}
-		return copyFile(path, dest)
-	})
-}
-
-// listFiles returns the names of all files (not dirs) in dir.
-func listFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		out = append(out, e.Name())
-	}
-	return out, nil
-}
-
-// listDirs returns the names of all directories in dir.
-func listDirs(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() {
-			out = append(out, e.Name())
-		}
-	}
-	return out, nil
-}
-
-// latestFile returns the most recently modified file in dir matching filter.
-func latestFile(dir, filter string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", err
-	}
-	var best os.DirEntry
-	found := false
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if !strings.HasSuffix(strings.ToLower(e.Name()), strings.ToLower(filter)) {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if !found {
-			best = e
-			found = true
-			continue
-		}
-		if bestInfo, berr := best.Info(); berr == nil && info.ModTime().After(bestInfo.ModTime()) {
-			best = e
-			found = true
-		}
-	}
-	if !found {
-		return "", fmt.Errorf("no file matching %q in %s", filter, dir)
-	}
-	return filepath.Join(dir, best.Name()), nil
-}
-
-// newestModifyTime returns the latest ModTime among entries in dir.
-func newestModifyTime(dir string) (time.Time, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return time.Time{}, err
-	}
-	var best time.Time
-	found := false
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if !found || info.ModTime().After(best) {
-			best = info.ModTime()
-			found = true
-		}
-	}
-	if !found {
-		return time.Time{}, fmt.Errorf("no entries in %s", dir)
-	}
-	return best, nil
-}
-
-// relativeTo returns a path relative to base, or the cleaned path on failure.
-func relativeTo(path, base string) string {
-	rel, err := filepath.Rel(base, path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return rel
-}
-
-// nearestExisting walks up from path to the root looking for name.
-func nearestExisting(path, name string) string {
-	for {
-		candidate := filepath.Join(path, name)
-		if fileExists(candidate) {
-			return candidate
-		}
-		parent := filepath.Dir(path)
-		if parent == path {
-			break
-		}
-		path = parent
-	}
-	return ""
-}
-
-// isAbsolute reports whether path is absolute for the current OS.
-func isAbsolute(path string) bool {
-	return filepath.IsAbs(path)
-}
-
 // absPath returns the absolute form of path.
 func absPath(path string) (string, error) {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path), nil
 	}
 	return filepath.Abs(path)
-}
-
-// walkFiles walks root and calls fn for each file (not dir).
-func walkFiles(root string, fn func(path string) error) error {
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		return fn(path)
-	})
 }
 
 // fileSize returns the size of path in bytes, or -1 on error.
@@ -1238,18 +778,4 @@ func fileSize(path string) int64 {
 		return -1
 	}
 	return info.Size()
-}
-
-// readFirstLine reads the first line of path, or "".
-func readFirstLine(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for i, b := range data {
-		if b == '\n' {
-			return strings.TrimSpace(string(data[:i]))
-		}
-	}
-	return strings.TrimSpace(string(data))
 }

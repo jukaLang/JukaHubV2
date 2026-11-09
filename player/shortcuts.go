@@ -7,8 +7,10 @@ import (
 )
 
 // ──────────────────────────────────────────────────────────────────────
-// Keyboard Shortcuts Reference — overlay showing all keybindings
-// Toggle with F1 from any scene
+// Keyboard Shortcuts Reference — the full keyboard list. F1 opens the
+// Controls card for the screen on display (controlslegend.go, in keyboard
+// keys while the hints name keys); F1 again on that card opens this sheet.
+// The pad has no route here: it is the keyboard's reference.
 // ──────────────────────────────────────────────────────────────────────
 
 type shortcutEntry struct {
@@ -23,198 +25,320 @@ var shortcutCategories = []struct {
 	items []shortcutEntry
 }{
 	{
-		title: "Navigation",
+		title: "Everywhere",
 		items: []shortcutEntry{
-			{"← → ^ v", "Navigate / scroll"},
-			{"A / Enter", "Select / confirm"},
-			{"B / Esc", "Back / cancel"},
-			{"X", "Secondary action (delete, toggle)"},
-			{"Y", "Create / new"},
-		},
-	},
-	{
-		title: "Media & video",
-		items: []shortcutEntry{
-			{"L1 / R1", "Page lists; skip -10/+10 s in the player"},
-			{"L2 / R2", "Results page; previous / next video"},
-			{"N / P", "Next / previous video (Shorts feed too)"},
-			{"PgUp/PgDn", "Previous / next results page"},
-			{"Shift+Left/Right", "Skip -10 / +10 s"},
-		},
-	},
-	{
-		title: "Browser",
-		items: []shortcutEntry{
-			{"← →", "Walk links on the page"},
-			{"A", "Open the link / edit the address"},
-			{"Y", "Search the web"},
-			{"X", "Full link list"},
-			{"L1 / R1", "Scroll a page"},
-			{"Up / Down at the ends", "Reach the header and the button row"},
+			{"Arrows", "Move the selection / scroll"},
+			{"Enter / Space", "Open / confirm"},
+			{"Esc", "Back / cancel"},
+			{"X / Y", "The screen's second and third action"},
+			{"PgUp / PgDn", "Page a list"},
+			{"Home / End", "First / last row"},
+			{"Tab", "Next tab (Shift+Tab: previous)"},
+			{"Q / E", "Previous / next screen"},
 		},
 	},
 	{
 		title: "Global",
 		items: []shortcutEntry{
-			{"Select + Start", "Quit JukaHub (TrimUI)"},
-			{"F1", "Keyboard shortcuts"},
+			{"F1", "Controls for this screen, then this list"},
+			{"F10", "Start menu"},
 			{"F2", "Search"},
-			{"F5", "Refresh"},
-			{"F11", "Toggle fullscreen"},
-			{"Ctrl+Q", "Quick settings"},
-			{"Ctrl+Shift+S", "Shorts feed (Media)"},
+			{"Ctrl+Q", "Quick Settings"},
+			{"Ctrl+K", "Media search"},
+			{"Ctrl+Shift+S", "Shorts feed"},
+			{"Ctrl+Shift+V", "Clipboard history"},
 			{"Ctrl+L", "Log viewer"},
-			{"PgUp/PgDn", "Page up / down"},
+			{"F8", "Watch Party"},
+			{"F11 / Alt+Enter", "Full screen"},
+			{"F12", "Screenshot"},
+			{"Alt+F4", "Quit JukaHub (PC)"},
 		},
 	},
 	{
-		title: "Home Screen",
+		title: "Home",
 		items: []shortcutEntry{
-			{"A", "Open focused tile"},
-			{"B", "Show settings"},
-			{"Y", "Toggle theme"},
-			{"X", "Favorites menu"},
-			{"J U K A", "Easter egg fireworks!"},
+			{"Enter", "Open the focused card"},
+			{"/", "Search"},
+			{"Q / E", "Previous / next section"},
+			{"Esc", "Close the calendar or the playing video"},
+			{"J U K A", "Fireworks"},
+		},
+	},
+	{
+		title: "Video player",
+		items: []shortcutEntry{
+			{"Enter / Space", "Press the selected control"},
+			{"← / →", "Walk the control bar"},
+			{"Shift+← / →", "Skip -10 / +10 s"},
+			{"N / P", "Next / previous video (Shorts too)"},
+			{"C or X", "Subtitles on / off"},
+			{"S or Y", "Video settings"},
+			{"F", "Full screen"},
+			{"Esc", "Step down a size"},
+			{"Q", "End playback"},
+		},
+	},
+	{
+		title: "Music player",
+		items: []shortcutEntry{
+			{"Enter", "Play the highlighted track"},
+			{"P", "Play / pause"},
+			{"N / B", "Next / previous track"},
+			{"← / →", "Seek -10 / +10 s"},
+			{"- / +", "Volume"},
+			{"L / V", "Lyrics / visualizer"},
+			{"M / R", "Shuffle / repeat"},
+			{"T", "Sleep timer"},
+			{"G", "Equalizer"},
+			{"/ or F2", "Search the library"},
+		},
+	},
+	{
+		title: "Browser",
+		items: []shortcutEntry{
+			{"Tab", "Scroll mode / link mode"},
+			{"← / →", "Walk the links on the page"},
+			{"Enter", "Open the link / edit the address"},
+			{"PgUp / PgDn", "Scroll a page"},
+			{"/ or Y", "Search the web"},
+			{"- / +", "Zoom the text"},
+			{"F", "Find on the page (N / P: next / previous)"},
 		},
 	},
 	{
 		title: "Terminal",
 		items: []shortcutEntry{
-			{"Type command", "Run any command"},
-			{"Tab", "Auto-complete"},
-			{"^ / v", "Command history"},
-			{"PgUp/PgDn", "Scroll output"},
-			{"help", "Built-in commands"},
+			{"Enter", "Run the command"},
+			{"Tab", "Complete"},
+			{"↑ / ↓", "Command history"},
+			{"F7 / Ctrl+R", "Search the history"},
+			{"PgUp / PgDn", "Scroll the output"},
+			{"Ctrl+C", "Stop the running command"},
+			{"Ctrl+L / Ctrl+U", "Clear the screen / the line"},
 		},
 	},
 	{
-		title: "Music Player",
+		title: "Tools",
 		items: []shortcutEntry{
-			{"A", "Play highlighted track"},
-			{"X / Y", "Play / pause"},
-			{"← →", "Seek −10 s / +10 s"},
-			{"L1 / R1", "Previous / next track"},
-			{"L3 / R3", "Lyrics / sleep timer"},
-		},
-	},
-	{
-		title: "Watch Party",
-		items: []shortcutEntry{
-			{"F8", "Open / close the LAN room"},
-			{"A / Enter", "Host, join or play a queued item"},
-			{"X", "Remove the highlighted queue item"},
-			{"B / Esc", "Close the panel"},
-		},
-	},
-	{
-		title: "Community & support",
-		items: []shortcutEntry{
-			{"Tools → Community", "Changelog, bug report, diagnostics switch"},
-			{"A / Enter", "Select a row or go back from the changelog"},
-			{"↑ / ↓", "Move or scroll"},
-			{"B / Esc", "Close"},
-		},
-	},
-	{
-		title: "Pomodoro",
-		items: []shortcutEntry{
-			{"A", "Start / pause"},
-			{"B", "Skip to break"},
-			{"Y", "Reset session"},
-		},
-	},
-	{
-		title: "Alarm Clock",
-		items: []shortcutEntry{
-			{"A", "Select / save"},
-			{"Y", "New alarm"},
-			{"X", "Toggle alarm"},
-			{"L1 twice", "Delete alarm"},
-			{"^ v", "Adjust time"},
+			{"Notes", "N or Y new, X delete, F folder, S search"},
+			{"Calculator", "G or Y graph, X insert x, C clear"},
+			{"Pomodoro", "Enter start / pause, X skip, Y reset"},
+			{"Alarm", "Y new alarm, X on / off, Del delete, ↑ ↓ adjust"},
+			{"Watch Party", "Enter host / join / play, X remove"},
 		},
 	},
 }
 
+// handleGlobalKeys runs the keyboard keys that hold on every screen before the
+// screen sees them: F1 (the Controls card for this screen, then this list), F2
+// (search), F12 (screenshot) and Ctrl+Q (Quick Settings). They used to be read
+// after the scene's own dispatch, which a screen that consumes every key
+// (Notes, the calculator, Pomodoro) or has nothing focusable never reached, so
+// keys the Controls card lists under "Every screen" did nothing there. The
+// music player keeps F2 for its own library search. Key repeats are ignored,
+// so a held key does not open and close a panel over and over.
+func handleGlobalKeys(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Config) bool {
+	if e == nil || e.Type != sdl.KEYDOWN || e.Repeat != 0 {
+		return false
+	}
+	switch {
+	case e.Keysym.Sym == sdl.K_F1:
+		globalSearchOpen = false
+		openControlsLegend()
+		if !controlsLegend.open {
+			shortcutsOpen = !shortcutsOpen
+		}
+		return true
+	case e.Keysym.Sym == sdl.K_F2:
+		if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+			config.Scenes[currentSceneIndex].Name == "MusicPlayer" {
+			return false
+		}
+		shortcutsOpen = false
+		homeSearchToggle(config)
+		return true
+	case e.Keysym.Sym == sdl.K_F12:
+		captureScreenshot(renderer)
+		return true
+	case e.Keysym.Sym == sdl.K_q && e.Keysym.Mod&sdl.KMOD_CTRL != 0:
+		qsToggleOpen()
+		return true
+	}
+	return false
+}
+
+// The sheet scrolls: its categories are taller than the card on a 720-line
+// canvas. These are written by the renderer (the measured layout) and read by
+// the key handlers. Main thread only.
+var (
+	shortcutsScroll    int32
+	shortcutsScrollMax int32
+	shortcutsRowStep   int32 = 22
+	shortcutsPageStep  int32 = 400
+)
+
+// shortcutsScrollBy moves the sheet and keeps it inside its content.
+func shortcutsScrollBy(d int32) {
+	shortcutsScroll += d
+	if shortcutsScroll > shortcutsScrollMax {
+		shortcutsScroll = shortcutsScrollMax
+	}
+	if shortcutsScroll < 0 {
+		shortcutsScroll = 0
+	}
+}
+
+// renderShortcutsOverlay draws the sheet in the glass overlay style: the
+// shared page header, then the categories in two columns, each category
+// placed in the shorter column. Every row is a key chip and its action. The
+// content scrolls under the header (Up/Down, PgUp/PgDn, Home/End). The old
+// sheet never advanced a row, so each category's entries were drawn on top of
+// one another, and it cut off what did not fit.
 func renderShortcutsOverlay(renderer *sdl.Renderer, config *Config) {
 	if !shortcutsOpen {
 		return
 	}
-
-	cardW := screenWidth - 200
-	cardH := screenHeight - 120
-	cardX := (screenWidth - cardW) / 2
-	cardY := (screenHeight - cardH) / 2
-	card := sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}
+	cardW := screenWidth - 160
+	if cardW > 1100 {
+		cardW = 1100
+	}
+	cardH := screenHeight - 80
+	card := sdl.Rect{X: (screenWidth - cardW) / 2, Y: (screenHeight - cardH) / 2, W: cardW, H: cardH}
 	drawOverlayScrim(renderer)
 	drawOverlayCard(renderer, card)
 
-	// The sheet opens with the shared page header, like every other panel, so
-	// the closing hint belongs in its subtitle instead of a second title line.
-	header := overlayPageHeader(card, "Keyboard shortcuts", "F1 or B closes this sheet", "settings")
-	headerH := UIPanelHeaderBand(config, header, 14)
+	subtitle := "F1 or Esc closes this sheet"
+	if shortcutsScrollMax > 0 {
+		subtitle += " · Up / Down scroll"
+	}
+	header := overlayPageHeader(card, "Keyboard shortcuts", subtitle, "settings")
+	headerH := UIPanelHeaderBand(config, header, 10)
 	UIPageHeaderDraw(renderer, config, header)
 
-	// Column layout
-	closeFont := getBodyFont(config, 14)
-	colW := (cardW - 3*OverlayPadX) / 2
-	startY := cardY + headerH
-	cols := []int32{cardX + OverlayPadX, cardX + 2*OverlayPadX + colW}
-
-	keyFont := getBodyFont(config, 13)
-	descFont := getBodyFont(config, 13)
-
-	itemIdx := 0
+	font := getFontSized(config, "small", 14)
+	if font == nil {
+		return
+	}
+	fh := int32(font.Height())
+	rowH := fh + 8
+	titleH := fh + 6
+	colGap := OverlayPadX
+	colW := (card.W - 2*OverlayPadX - colGap) / 2
+	keyW := int32(0)
 	for _, cat := range shortcutCategories {
-		col := itemIdx % 2
-		colX := cols[col]
-
-		// Calculate column Y offset by counting items before this in the same column
-		colY := startY
-		for _, prevCat := range shortcutCategories {
-			if prevCat.title == cat.title {
-				break
+		for _, it := range cat.items {
+			if w, _ := measureText(font, it.keys); w > keyW {
+				keyW = w
 			}
-			for j := 0; j < len(prevCat.items); j++ {
-				if itemIdx%2 == col {
-					colY += 22
-				}
-				itemIdx++
-			}
-			itemIdx++ // category header
-		}
-
-		// Category title
-		drawText(renderer, keyFont, strings.ToUpper(cat.title), colX, colY, getAccentColor(config), textAlignLeft)
-		colY += 22
-
-		for _, item := range cat.items {
-			if colY+22 > cardY+cardH-40 {
-				break
-			}
-			// Key badge
-			drawRoundedRect(renderer, &sdl.Rect{X: colX, Y: colY, W: 140, H: 18}, 4, 35, 35, 45, 255)
-			drawText(renderer, keyFont, item.keys, colX+6, colY+2, colorNew(180, 180, 200, 255), textAlignLeft)
-			// Description
-			drawText(renderer, descFont, item.desc, colX+150, colY+2, colorNew(200, 200, 215, 255), textAlignLeft)
 		}
 	}
+	keyW += 16
+	if keyW > colW*2/5 {
+		keyW = colW * 2 / 5
+	}
+	top := card.Y + headerH
+	bottom := card.Y + card.H - 16
+	if bottom <= top {
+		return
+	}
 
-	// Footer
-	footerText := "F1 / Esc / B to close"
-	footerW, _, _ := closeFont.SizeUTF8(footerText)
-	drawText(renderer, closeFont, footerText, cardX+(cardW-int32(footerW))/2, cardY+cardH-30, colorNew(120, 120, 135, 255), textAlignLeft)
+	// Lay out first (content coordinates from 0), so the scroll range is known
+	// before anything is drawn.
+	type placed struct {
+		cat  int
+		x, y int32
+	}
+	var places [16]placed
+	n := 0
+	colX := [2]int32{card.X + OverlayPadX, card.X + OverlayPadX + colW + colGap}
+	colY := [2]int32{0, 0}
+	for i, cat := range shortcutCategories {
+		if n == len(places) {
+			break
+		}
+		c := 0
+		if colY[1] < colY[0] {
+			c = 1
+		}
+		places[n] = placed{cat: i, x: colX[c], y: colY[c]}
+		n++
+		colY[c] += titleH + int32(len(cat.items))*rowH + 12
+	}
+	content := colY[0]
+	if colY[1] > content {
+		content = colY[1]
+	}
+	view := bottom - top
+	shortcutsScrollMax = content - view
+	if shortcutsScrollMax < 0 {
+		shortcutsScrollMax = 0
+	}
+	shortcutsRowStep = rowH
+	shortcutsPageStep = view - rowH
+	if shortcutsPageStep < rowH {
+		shortcutsPageStep = rowH
+	}
+	shortcutsScrollBy(0)
+
+	clip := sdl.Rect{X: card.X, Y: top, W: card.W, H: view}
+	_ = renderer.SetClipRect(&clip)
+	accent := getAccentColor(config)
+	for _, pl := range places[:n] {
+		cat := shortcutCategories[pl.cat]
+		x, y := pl.x, top+pl.y-shortcutsScroll
+		if y+titleH > top && y < bottom {
+			drawGlassText(renderer, config, font, strings.ToUpper(cat.title), accent, x, y)
+		}
+		y += titleH
+		for _, it := range cat.items {
+			if y+rowH > top && y < bottom {
+				chip := sdl.Rect{X: x, Y: y, W: keyW, H: rowH - 4}
+				fillRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, chip.H/2, glassChipFill())
+				strokeRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, chip.H/2, 1, glassChipEdge())
+				keys := ellipsize(font, it.keys, keyW-12)
+				kw, _ := measureText(font, keys)
+				textY := chip.Y + (chip.H-fh)/2
+				drawGlassText(renderer, config, font, keys, glassChipInk(), chip.X+(chip.W-kw)/2, textY)
+				drawGlassText(renderer, config, font, ellipsize(font, it.desc, colW-keyW-12), ColorTextSecondary(), x+keyW+12, textY)
+			}
+			y += rowH
+		}
+	}
+	_ = renderer.SetClipRect(nil)
+	if shortcutsScrollMax > 0 && content > 0 {
+		drawScrollbar(renderer, card.X+card.W-8, top, 3, view,
+			float64(view)/float64(content), float64(shortcutsScroll)/float64(shortcutsScrollMax))
+	}
 }
 
+// handleShortcutsInput owns every key while the sheet is up: F1 or Esc closes
+// it (B does not — its letter would be typed into a field behind the sheet),
+// Up/Down/PgUp/PgDn/Home/End scroll it.
 func handleShortcutsInput(event *sdl.KeyboardEvent) bool {
 	if !shortcutsOpen {
 		return false
 	}
-	if event.Type == sdl.KEYDOWN {
-		switch event.Keysym.Sym {
-		case sdl.K_F1, sdl.K_ESCAPE, sdl.K_b:
+	if event == nil || event.Type != sdl.KEYDOWN {
+		return true
+	}
+	switch event.Keysym.Sym {
+	case sdl.K_F1, sdl.K_ESCAPE:
+		if event.Repeat == 0 {
 			shortcutsOpen = false
-			return true
+			shortcutsScroll = 0
 		}
+	case sdl.K_UP:
+		shortcutsScrollBy(-shortcutsRowStep)
+	case sdl.K_DOWN:
+		shortcutsScrollBy(shortcutsRowStep)
+	case sdl.K_PAGEUP:
+		shortcutsScrollBy(-shortcutsPageStep)
+	case sdl.K_PAGEDOWN:
+		shortcutsScrollBy(shortcutsPageStep)
+	case sdl.K_HOME:
+		shortcutsScroll = 0
+	case sdl.K_END:
+		shortcutsScroll = shortcutsScrollMax
 	}
 	return true // consume all input while open
 }

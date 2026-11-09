@@ -47,15 +47,6 @@ type browserPendingScroll struct {
 
 var browserPending browserPendingScroll
 
-// browserScrollReset drops every remembered position and any armed restore. It
-// runs on a test reset so one test's reading position cannot leak into another's
-// page.
-func browserScrollReset() {
-	browserScrollMemory.rows = map[string]int32{}
-	browserScrollMemory.order = nil
-	browserPending = browserPendingScroll{}
-}
-
 // browserScrollMemorySave records the reading row for an address. Storing 0 is
 // meaningful — it says "this page was left at the top" — so a page that was read
 // from the start returns there rather than to a stale row.

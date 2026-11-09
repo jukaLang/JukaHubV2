@@ -48,8 +48,8 @@ type biosDoctorReport struct {
 	Roots   []string
 	Systems []biosSystemStatus
 	Files   []biosFileFingerprint
-	// Xbox is xemu's checklist (emuxbox.go), filled on Windows only: the
-	// handheld cannot run xemu, so it has nothing to check there.
+	// Xbox is the Xbox checklist (emuxbox.go): xemu's on Windows, hakuX's on
+	// a handheld the port is offered on, nil elsewhere.
 	Xbox *emuXboxReport
 }
 
@@ -186,7 +186,7 @@ func biosScanStart() {
 	biosScan.Unlock()
 	go func() {
 		report := scanBIOSRoots(biosDoctorRoots())
-		if IsWindows() {
+		if IsWindows() || hakuxOffered() {
 			xbox := emuXboxScan()
 			report.Xbox = &xbox
 		}
@@ -205,18 +205,27 @@ func biosScanSnapshot() (*biosDoctorReport, bool) {
 	return biosScan.report, biosScan.running
 }
 
-// biosDoctorXboxLines is the Xbox block of the doctor's page: xemu's checklist
-// with what was found where, and where the missing files go. Nothing on the
-// handheld, which has no Xbox report.
+// biosDoctorXboxLines is the Xbox block of the doctor's page: the emulator's
+// checklist (xemu on Windows, hakuX on the Smart Pro) with what was found
+// where, and where the missing files go. Nothing on a handheld with no Xbox
+// report.
 func biosDoctorXboxLines(xbox *emuXboxReport) []string {
 	if xbox == nil {
 		return nil
 	}
-	status := "Xbox (xemu) · ready"
-	if missing := xbox.missing(); len(missing) > 0 {
-		status = "Xbox (xemu) · missing " + strings.Join(missing, ", ")
-	} else if !xbox.Configured {
-		status = "Xbox (xemu) · files found · apply them from the xemu tile (Y Setup)"
+	name := "Xbox"
+	if xbox.Emulator != "" {
+		name += " (" + xbox.Emulator + ")"
+	}
+	status := name + " · ready"
+	missing := xbox.missing()
+	switch {
+	case xbox.Emulator == hakuxName && !xbox.Installed:
+		status = name + " · not installed — the Xbox tile in Emulators installs it (experimental)"
+	case len(missing) > 0:
+		status = name + " · missing " + strings.Join(missing, ", ")
+	case !xbox.Configured:
+		status = name + " · files found · apply them from the xemu tile (Y Setup)"
 	}
 	lines := []string{status}
 	for _, f := range xbox.Files {
@@ -231,24 +240,18 @@ func biosDoctorXboxLines(xbox *emuXboxReport) []string {
 			lines = append(lines, "  "+f.Label+"  "+f.Path+"  — "+f.Problem)
 		case f.Required:
 			lines = append(lines, "  "+f.Label+"  missing · "+f.Want)
+		case f.Note != "":
+			// An informational row: firmware this build does not ask for.
+			lines = append(lines, "  "+f.Label+"  "+f.Note+" · "+f.Want)
 		}
 	}
 	if xbox.Folder != "" {
 		lines = append(lines, "  Put the Xbox files in "+xbox.Folder)
 	}
-	return append(lines, "")
-}
-
-func biosDoctorSummary(report biosDoctorReport) string {
-	parts := make([]string, 0, len(report.Systems))
-	for _, system := range report.Systems {
-		if system.Ready {
-			parts = append(parts, system.Name+" ready")
-		} else {
-			parts = append(parts, system.Name+" missing "+strings.Join(system.Missing, ", "))
-		}
+	for _, line := range xbox.Notes {
+		lines = append(lines, "  "+line)
 	}
-	return strings.Join(parts, ", ")
+	return append(lines, "")
 }
 
 func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf.Font,

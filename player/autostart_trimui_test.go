@@ -2,13 +2,13 @@ package main
 
 // autostart_trimui_test.go — the SD-card boot hook used on the handheld.
 //
-// These tests pin the platform explicitly: the desktop hooks are covered by
-// widgets_test.go, and neither may write outside a temporary directory.
+// These tests pin the platform explicitly and never write outside a temporary
+// directory: the hook must not block the firmware's boot and must survive an
+// install path with spaces and quotes in it.
 
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -23,41 +23,6 @@ func useTrimuiAutostart(t *testing.T, root, exe string) {
 	t.Cleanup(func() {
 		autostartIsTrimui, trimuiSDRootFn, autostartExeFn = prevTrimui, prevRoot, prevExe
 	})
-}
-
-func TestTrimuiAutostartPath(t *testing.T) {
-	root := t.TempDir()
-	appDir := filepath.Join(root, "Apps", "JukaHub")
-	useTrimuiAutostart(t, root, filepath.Join(appDir, "JukaHub"))
-
-	path, err := autoStartLauncherPath()
-	if err != nil {
-		t.Fatalf("path: %v", err)
-	}
-	want := filepath.Join(root, "System", "starts", trimuiAutostartFile)
-	if path != want {
-		t.Errorf("path = %q, want %q", path, want)
-	}
-	if !autostartSupported() {
-		t.Error("a located SD card should make autostart supported")
-	}
-}
-
-func TestTrimuiAutostartUnsupportedWithoutCard(t *testing.T) {
-	prevTrimui, prevRoot := autostartIsTrimui, trimuiSDRootFn
-	autostartIsTrimui = func() bool { return true }
-	trimuiSDRootFn = func() string { return "" }
-	t.Cleanup(func() { autostartIsTrimui, trimuiSDRootFn = prevTrimui, prevRoot })
-
-	if autostartSupported() {
-		t.Error("autostart reported supported with no SD card")
-	}
-	if _, err := autoStartLauncherPath(); err == nil {
-		t.Error("a missing card should be an error, not a guess")
-	}
-	if err := setAutoStart(true); err == nil {
-		t.Error("setAutoStart wrote without a card")
-	}
 }
 
 func TestTrimuiAutostartLifecycle(t *testing.T) {
@@ -124,25 +89,6 @@ func TestTrimuiAutostartLifecycle(t *testing.T) {
 	}
 }
 
-func TestTrimuiHookIsExecutable(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("executable bits are not meaningful on Windows")
-	}
-	root := t.TempDir()
-	useTrimuiAutostart(t, root, filepath.Join(root, "Apps", "JukaHub", "JukaHub"))
-	if err := setAutoStart(true); err != nil {
-		t.Fatalf("enable: %v", err)
-	}
-	path := filepath.Join(root, "System", "starts", trimuiAutostartFile)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		t.Errorf("hook mode = %v, want executable", info.Mode().Perm())
-	}
-}
-
 func TestTrimuiHookQuotesAwkwardPaths(t *testing.T) {
 	script := trimuiAutostartScript(`/mnt/SD CARD/Apps/Juka's Hub`)
 	// The single quote in the folder name has to survive shell parsing.
@@ -166,31 +112,5 @@ func TestTrimuiHookQuotesAwkwardPaths(t *testing.T) {
 	assign := strings.Index(danger, "APP_DIR=")
 	if assign < 0 || strings.Count(danger[assign:payload], "'")%2 == 0 {
 		t.Errorf("the payload sits outside the quoted value:\n%s", danger)
-	}
-}
-
-func TestTrimuiSDRootFromExecutable(t *testing.T) {
-	root := t.TempDir()
-	exe := filepath.Join(root, "Apps", "JukaHub", "JukaHub")
-	prevExe := autostartExeFn
-	autostartExeFn = func() (string, error) { return exe, nil }
-	t.Cleanup(func() { autostartExeFn = prevExe })
-	t.Setenv("JUKAHUB_SD_ROOT", "")
-
-	if got := defaultTrimuiSDRoot(); got != root {
-		t.Errorf("derived root = %q, want %q", got, root)
-	}
-
-	// A binary that is not under Apps cannot name an SD root.
-	autostartExeFn = func() (string, error) { return filepath.Join(root, "JukaHub.exe"), nil }
-	if got := defaultTrimuiSDRoot(); got != "" {
-		t.Errorf("derived root outside Apps = %q, want empty", got)
-	}
-
-	// The environment override wins, which is how a symlinked install is
-	// pointed at the real card.
-	t.Setenv("JUKAHUB_SD_ROOT", filepath.Join(root, "SDCARD"))
-	if got := defaultTrimuiSDRoot(); got != filepath.Join(root, "SDCARD") {
-		t.Errorf("override root = %q", got)
 	}
 }

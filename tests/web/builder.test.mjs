@@ -979,8 +979,7 @@ test('the tables that pick icons only name drawings builder-icons.js has', () =>
     ...Object.values(HOME_ICON_NAMES), ...Object.values(TILE_ICON_NAMES),
     ...TILE_ICON_NEEDLES.map(entry => entry[1]), TILE_ICON_FALLBACK, HOME_ICON_FALLBACK,
     ...MOBILE_COMPONENTS.map(component => component.icon),
-    ...Object.values(TEXT_BROWSER_SOURCES).map(source => source.icon), textBrowserSource('web').icon,
-    ...Object.values(LEGACY_FA_ICONS)
+    ...Object.values(TEXT_BROWSER_SOURCES).map(source => source.icon), textBrowserSource('web').icon
   ]`);
   assert.deepEqual([...new Set(named)].filter(name => !known.has(name)), []);
 });
@@ -1046,31 +1045,149 @@ test('canvas badges and Text Browser labels draw icons, not fallback-font glyphs
   assert.equal(preview.querySelector('svg.ico').getAttribute('data-icon'), 'eye');
 });
 
-// The builder only restores an autosave when the shipped config cannot load,
-// but such a save can still hold markup from the Font Awesome build.
-test('an autosave from the Font Awesome build comes back with drawn icons', () => {
+test('the live builder sends the code as a header and reports a held design as waiting', async () => {
   const { window } = dom;
-  const tile = window.parseSavedElement(
-    '<div class="element is-tile selected" data-type="button">' +
-    '<span class="tile-icon" aria-hidden="true"><i class="fa-solid fa-play"></i></span>' +
-    '<span class="text-content">Media</span><span class="remove-button">✕</span></div>');
-  assert.equal(tile.querySelector('i'), null);
-  assert.equal(tile.querySelector('.tile-icon svg.ico').getAttribute('data-icon'), 'play');
-  assert.ok(tile.querySelector('.remove-button svg.ico[data-icon="close"]'));
-  assert.equal(tile.querySelector('.text-content').textContent, 'Media');
-  assert.ok(!tile.classList.contains('selected'));
+  const doc = window.document;
+  const live = window.JukaLiveBuilder;
+  assert.ok(live, 'the live builder module is loaded');
+  const design = {
+    AppName: 'JukaHub', Width: 1280, Height: 720,
+    scenes: [{ name: 'Main', elements: [{ type: 'label', text: 'Hi', x: 10, y: 10, width: 200, height: 40 }] }],
+  };
+  const originalFetch = window.fetch;
+  const calls = [];
+  let pushAnswer = { status: 202, body: { ok: true, quarantined: true, message: 'This design waits for approval on the device.', details: ['“Play” on Main runs the program “sh x”'] } };
+  window.fetch = async (url, options) => {
+    const target = String(url);
+    calls.push({ url: target, options: options || {} });
+    if (target.endsWith('/api/health')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, service: 'jukahub-live-builder', device: 'Smart Pro', schemaVersion: 1, pushes: 0 }) };
+    }
+    const answer = pushAnswer;
+    return { ok: answer.status >= 200 && answer.status < 300, status: answer.status, json: async () => answer.body };
+  };
+  try {
+    doc.getElementById('deviceUrl').value = '192.168.1.50:8422';
+    doc.getElementById('deviceCode').value = '123456';
+    assert.equal(await live.connect({ silent: true }), true);
+    const before = live.getState().lastHash;
 
-  const browser = window.parseSavedElement(
-    '<div class="element" data-type="textbrowser" data-source="zeroconf">' +
-    '<span class="text-content">\u{1F50D} Zeroconf</span><span class="remove-button">✕</span></div>');
-  assert.equal(browser.querySelector('.tb-source-icon').getAttribute('data-icon'), 'search');
-  assert.equal(browser.querySelector('.text-content').textContent, 'Zeroconf');
+    assert.equal(await live.pushConfig(design, { silent: true }), true);
+    const post = calls.find(c => c.options.method === 'POST');
+    assert.ok(post, 'the design was posted');
+    assert.equal(post.url, 'http://192.168.1.50:8422/api/design');
+    assert.equal(post.options.headers['X-Live-Builder-Code'], '123456');
+    assert.ok(calls.every(c => !/[?&]code=/.test(c.url)), 'the code never travels in the URL');
+    assert.match(doc.getElementById('deviceStateText').textContent, /Waiting for approval/);
+    assert.match(doc.getElementById('deviceMeta').textContent, /runs the program/);
+    assert.equal(live.getState().lastHash, before, 'a held design does not count as synced');
 
-  // A label the designer wrote stays as written.
-  const custom = window.parseSavedElement(
-    '<div class="element" data-type="textbrowser" data-source="json"><span class="text-content">My feed</span></div>');
-  assert.equal(custom.querySelector('.text-content').textContent, 'My feed');
-  assert.equal(custom.querySelector('.tb-source-icon'), null);
+    pushAnswer = { status: 409, body: { error: 'a design is already waiting for approval on the device — accept or reject it there first' } };
+    assert.equal(await live.pushConfig(design, { silent: true }), false);
+    assert.match(doc.getElementById('deviceStateText').textContent, /waiting on the handheld/);
+    assert.match(doc.getElementById('deviceMeta').textContent, /already waiting/);
+
+    pushAnswer = { status: 429, body: { error: 'too many wrong pairing codes — try again in 5 minutes' } };
+    assert.equal(await live.pushConfig(design, { silent: true }), false);
+    assert.match(doc.getElementById('deviceStateText').textContent, /Too many wrong codes/);
+    assert.match(doc.getElementById('deviceMeta').textContent, /5 minutes/);
+  } finally {
+    window.fetch = originalFetch;
+    window.localStorage.removeItem('jukahub-live-device');
+  }
+});
+
+test('a link can suggest a device address but never receives the saved pairing code', async () => {
+  const { window } = dom;
+  const doc = window.document;
+  const live = window.JukaLiveBuilder;
+  const originalFetch = window.fetch;
+  const calls = [];
+  window.fetch = async (url, options) => {
+    calls.push({ url: String(url), options: options || {} });
+    return { ok: true, status: 200, json: async () => ({ ok: true, service: 'jukahub-live-builder', device: 'Smart Pro', schemaVersion: 1, pushes: 0 }) };
+  };
+  try {
+    doc.getElementById('deviceUrl').value = '192.168.1.50:8422';
+    doc.getElementById('deviceCode').value = '123456';
+    assert.equal(await live.connect({ silent: true }), true);
+    const saved = live.getState();
+    assert.equal(saved.code, '123456');
+    calls.length = 0;
+
+    // A shared link names another host: nothing is saved and nothing connects.
+    assert.equal(live.suggestFromLink('?device=https://attacker.example&code=999999'), 'https://attacker.example:8422');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(calls.length, 0, 'a link alone contacts nothing');
+    assert.equal(live.getState().url, saved.url);
+    assert.equal(live.getState().code, '123456', 'a code in a link is ignored');
+
+    // The panel offers the suggestion; Connect goes there, but without the
+    // code saved for the other device.
+    live.openPanel();
+    assert.equal(doc.getElementById('deviceUrl').value, 'attacker.example:8422');
+    calls.length = 0;
+    assert.equal(await live.connect({ silent: true }), true);
+    const toLink = calls.filter(c => c.url.includes('//attacker.example:8422/'));
+    assert.ok(toLink.length > 0, 'Connect used the address in the field');
+    assert.ok(calls.every(c => !(c.options.headers || {})['X-Live-Builder-Code']), 'the saved code was not sent');
+    assert.equal(live.getState().code, '');
+    assert.equal(doc.getElementById('deviceCode').value, '');
+    live.closePanel();
+  } finally {
+    window.fetch = originalFetch;
+    window.localStorage.removeItem('jukahub-live-device');
+  }
+});
+
+test('a pairing code stays with the address it was saved for, even past an invalid one', async () => {
+  const { window } = dom;
+  const doc = window.document;
+  const live = window.JukaLiveBuilder;
+  const originalFetch = window.fetch;
+  const calls = [];
+  window.fetch = async (url, options) => {
+    calls.push({ url: String(url), options: options || {} });
+    return { ok: true, status: 200, json: async () => ({ ok: true, service: 'jukahub-live-builder', device: 'Smart Pro', schemaVersion: 1, pushes: 0 }) };
+  };
+  try {
+    doc.getElementById('deviceUrl').value = '192.168.1.50:8422';
+    doc.getElementById('deviceCode').value = '123456';
+    assert.equal(await live.connect({ silent: true }), true);
+    assert.equal(live.getState().codeUrl, 'http://192.168.1.50:8422');
+
+    // Something that is not an address changes nothing and contacts nothing.
+    doc.getElementById('deviceUrl').value = 'http://[bad';
+    calls.length = 0;
+    assert.equal(await live.connect({ silent: true }), false);
+    assert.equal(await live.push(), false);
+    assert.equal(calls.length, 0, 'an invalid address contacts nothing');
+    assert.match(doc.getElementById('deviceStateText').textContent, /not valid/);
+    assert.equal(live.getState().url, 'http://192.168.1.50:8422');
+    assert.equal(live.getState().code, '123456');
+    assert.equal(live.getState().codeUrl, 'http://192.168.1.50:8422');
+
+    // The next valid address is still another device: the code stays behind.
+    doc.getElementById('deviceUrl').value = '192.168.1.99:8422';
+    assert.equal(await live.connect({ silent: true }), true);
+    assert.ok(calls.some(c => c.url.includes('//192.168.1.99:8422/')), 'Connect used the new address');
+    assert.ok(calls.every(c => !(c.options.headers || {})['X-Live-Builder-Code']), 'the code was not sent to the other device');
+    assert.equal(live.getState().code, '');
+    assert.equal(doc.getElementById('deviceCode').value, '');
+
+    // A code typed for the new address belongs to it.
+    doc.getElementById('deviceCode').value = '654321';
+    calls.length = 0;
+    assert.equal(await live.connect({ silent: true }), true);
+    assert.equal(calls[0].options.headers['X-Live-Builder-Code'], '654321');
+    assert.equal(live.getState().codeUrl, 'http://192.168.1.99:8422');
+    const saved = JSON.parse(window.localStorage.getItem('jukahub-live-device'));
+    assert.equal(saved.code, '654321');
+    assert.equal(saved.codeUrl, 'http://192.168.1.99:8422');
+  } finally {
+    window.fetch = originalFetch;
+    window.localStorage.removeItem('jukahub-live-device');
+  }
 });
 
 // Last on purpose: every test above builds icons, so any name builder-icons.js

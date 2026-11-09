@@ -485,16 +485,6 @@ func inmapActivateByName(name string) bool {
 	return true
 }
 
-// inmapProfileNames lists every profile's name, in list order.
-func inmapProfileNames() []string {
-	list := inmapProfileList()
-	out := make([]string, 0, len(list))
-	for _, p := range list {
-		out = append(out, p.name)
-	}
-	return out
-}
-
 // inmapRegisterProfileFile adds a profile file that lives outside the
 // profiles folder (a plugin's). It is read now and again on every reload,
 // listed as a plugin's profile (it can be duplicated, not deleted), and safe

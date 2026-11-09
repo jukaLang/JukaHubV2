@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -153,9 +152,9 @@ func LoadXMLConfig(filename string) (*Config, error) {
 	// (colours, font sizes, flags) and custom variables exactly like a JSON one
 	// - including the nested <Custom> block the web builder writes.
 	if data, err := xmlVariablesJSON(xc.Variables); err != nil {
-		log.Printf("[config] reading <variables>: %v", err)
+		logWarn("config", "reading <variables>: %v", err)
 	} else if err := json.Unmarshal(data, &config.Variables); err != nil {
-		log.Printf("[config] reading <variables>: %v", err)
+		logWarn("config", "reading <variables>: %v", err)
 	}
 	// XML attribute round-trip can leave the first-class bool/int/color fields as
 	// zero if the builder omits them; re-derive the cheap overlays from the parsed
@@ -275,14 +274,14 @@ func LoadXMLConfigWithFallback(jsonPath string) (*Config, string, error) {
 		}
 		// A broken XML export must not cost the user their project: fall back to
 		// the JSON the player keeps and say so.
-		log.Printf("[config] %s is not usable (%v); loading %s instead", primary, err, jsonPath)
+		logWarn("config", "%s is not usable (%v); loading %s instead", primary, err, jsonPath)
 	}
 
 	cfg, err := LoadLastKnownGood(jsonPath)
 	if err != nil {
 		if !IsXMLConfig(primary) {
 			if xcfg, xerr := LoadXMLConfig(xmlPath); xerr == nil {
-				log.Printf("[config] %s is not usable (%v); loading %s instead", jsonPath, err, xmlPath)
+				logWarn("config", "%s is not usable (%v); loading %s instead", jsonPath, err, xmlPath)
 				return xcfg, xmlPath, nil
 			}
 		}
@@ -409,14 +408,6 @@ func xmlParseInt32(s string) int32 {
 		return int32(i)
 	}
 	return 0
-}
-
-// xmlCustomString extracts a string value from the Custom map.
-func xmlCustomString(m map[string]interface{}, key string) string {
-	if v, ok := m[key]; ok {
-		return fmt.Sprintf("%v", v)
-	}
-	return ""
 }
 
 // setCustomBool / clearCustomBool / setCustomString are shared helpers used by

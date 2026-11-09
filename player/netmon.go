@@ -1,11 +1,11 @@
 package main
 
 import (
-	"log"
-	"net"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +25,10 @@ type netMonitor struct {
 	checked   bool
 	lastProbe time.Time
 	reason    string
+	// portal is the sign-in page a captive portal sent us to, or "". A portal
+	// accepts a TCP connection and answers HTTP, so the old dial probe called
+	// it online while every real request failed.
+	portal string
 }
 
 var netMon = &netMonitor{}
@@ -51,52 +55,131 @@ func NetworkStatus() string {
 	if netMon.online {
 		return "online"
 	}
+	if netMon.portal != "" {
+		return "sign-in required"
+	}
 	if netMon.reason != "" {
 		return "offline (" + netMon.reason + ")"
 	}
 	return "offline"
 }
 
-// probeConnectivity performs one connectivity check. It prefers a lightweight
-// TCP dial to a well-known host (no DNS dependency), falling back to an ICMP
-// ping when available.
-func probeConnectivity() bool {
-	// Fast path: TCP dial to a public resolver. 3-second timeout keeps the
-	// probe from blocking the render loop for long.
-	conn, err := net.DialTimeout("tcp", "1.1.1.1:80", 3*time.Second)
-	if err == nil {
-		conn.Close()
-		return true
-	}
-	// Fallback: try Google's DNS over UDP with a short timeout.
-	conn, err = net.DialTimeout("tcp", "8.8.8.8:53", 3*time.Second)
-	if err == nil {
-		conn.Close()
-		return true
-	}
-	// Last resort: ping the gateway (Linux only, avoids needing root).
-	if runtime.GOOS == "linux" {
-		if out, err := exec.Command("ping", "-c", "1", "-W", "2", "1.1.1.1").Output(); err == nil {
-			if strings.Contains(string(out), "1 received") || strings.Contains(string(out), "1 packets received") {
-				return true
-			}
+// PortalSignInURL is the page a captive portal sent the probe to, or "" when
+// the network is not behind one. The Wi-Fi page offers "Sign in" while it is
+// set, and downloads, updates and searches stay paused because IsOnline is
+// false until the probe passes.
+func PortalSignInURL() string {
+	netMon.mu.RLock()
+	defer netMon.mu.RUnlock()
+	return netMon.portal
+}
+
+// netProbeResult is one connectivity answer: verified internet, a captive
+// portal that wants a sign-in, or neither.
+type netProbeResult struct {
+	online bool
+	// portal is the page to open when a portal answered instead of the probe.
+	portal string
+	reason string
+}
+
+// netProbeEndpoints are the generate_204 endpoints the probe asks. A network
+// with real internet answers 204 with no body; a hotel, airport or cafe portal
+// intercepts the request, so anything else — a redirect, an HTML "sign in"
+// page, a 511 — means the connection is not usable yet.
+var netProbeEndpoints = []string{
+	"http://connectivitycheck.gstatic.com/generate_204",
+	"http://clients3.google.com/generate_204",
+	"http://connectivitycheck.platform.hicloud.com/generate_204",
+}
+
+// netProbeClient follows no redirects: the redirect target is the portal page.
+var netProbeClient = &http.Client{
+	Timeout: 4 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// probeConnectivity performs one connectivity check against the first endpoint
+// that answers, and reports a portal's sign-in page when it finds one.
+func probeConnectivity() netProbeResult {
+	failure := ""
+	for _, endpoint := range netProbeEndpoints {
+		result := probeConnectivityAt(endpoint)
+		if result.online || result.portal != "" {
+			return result
+		}
+		if failure == "" {
+			failure = result.reason
 		}
 	}
-	return false
+	if failure == "" {
+		failure = "no route"
+	}
+	return netProbeResult{reason: failure}
+}
+
+// probeConnectivityAt checks one endpoint. The body is read only far enough to
+// tell a page from an empty 204; a portal's page is never downloaded here.
+func probeConnectivityAt(endpoint string) netProbeResult {
+	resp, err := netProbeClient.Get(endpoint)
+	if err != nil {
+		return netProbeResult{reason: "no route"}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	switch {
+	case resp.StatusCode == http.StatusNoContent:
+		return netProbeResult{online: true}
+	case resp.StatusCode >= 300 && resp.StatusCode < 400,
+		resp.StatusCode == http.StatusNetworkAuthenticationRequired:
+		return netProbeResult{portal: probePortalURL(resp, endpoint), reason: "sign-in required"}
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		// A 200 with a page: the portal answered instead of the probe.
+		return netProbeResult{portal: probePortalURL(resp, endpoint), reason: "sign-in required"}
+	case strings.TrimSpace(string(body)) == "":
+		return netProbeResult{reason: "probe rejected"}
+	}
+	return netProbeResult{reason: "probe rejected"}
+}
+
+// probePortalURL is where the portal wants the user to sign in: the redirect's
+// Location resolved against the probe URL, else the URL that finally answered.
+func probePortalURL(resp *http.Response, endpoint string) string {
+	if resp == nil {
+		return endpoint
+	}
+	if loc := strings.TrimSpace(resp.Header.Get("Location")); loc != "" {
+		if base, err := url.Parse(endpoint); err == nil {
+			if ref, err := url.Parse(loc); err == nil {
+				return base.ResolveReference(ref).String()
+			}
+		}
+		return loc
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		return resp.Request.URL.String()
+	}
+	return endpoint
 }
 
 // update publishes the current connectivity state and shows a toast on change.
 func (m *netMonitor) update() {
-	online := probeConnectivity()
+	result := probeConnectivity()
 
 	m.mu.Lock()
 	firstCheck := !m.checked
-	changed := m.checked && online != m.online
-	m.online = online
+	prevPortal := m.portal
+	changed := m.checked && result.online != m.online
+	m.online = result.online
 	m.checked = true
 	m.lastProbe = time.Now()
-	m.reason = ""
-	if !online {
+	m.portal = result.portal
+	m.reason = result.reason
+	if result.online {
+		m.reason = ""
+	} else if m.reason == "" {
 		m.reason = "no route"
 	}
 	m.mu.Unlock()
@@ -112,28 +195,38 @@ func (m *netMonitor) update() {
 	if sshSrv.Running() {
 		publishCustom("ssh_address", sshSrv.Address())
 	}
+	// Network time follows the connection (ntpsync.go): on every connect and
+	// hourly while online. A captive portal is not online.
+	netTimeAfterProbe(result.online, result.online && (firstCheck || changed))
 
 	switch {
-	case changed && online:
+	case result.portal != "" && (firstCheck || prevPortal == ""):
+		// Said once, not every 20 seconds while the user walks to the login
+		// page. Downloads and updates stay paused because IsOnline is false.
+		showToast("Wi-Fi needs a sign-in — open Wi-Fi and press Sign in", ToastWarn())
+		logWarn("net", "captive portal: %s", result.portal)
+	case result.portal != "":
+		// Still behind the same portal.
+	case changed && result.online:
 		showToast("Network restored", ToastSuccess())
-		log.Printf("[net] connectivity restored")
+		logDebug("net", "connectivity restored")
 		// Tools that could not be installed while offline are fetched now, so
 		// the user does not have to restart the app after joining WiFi.
 		go installMissingToolsAfterReconnect()
 	case changed:
 		showToast("Offline — connect WiFi to play videos and install tools", ToastWarn())
-		log.Printf("[net] connectivity lost")
-	case firstCheck && !online:
+		logWarn("net", "connectivity lost")
+	case firstCheck && !result.online:
 		// Launched before joining WiFi: say why searches, playback and tool
 		// installs will fail instead of leaving the user with a bare error.
 		showToast("Offline — connect WiFi to play videos and install tools", ToastWarn())
-		log.Printf("[net] started offline")
+		logDebug("net", "started offline")
 	}
 }
 
 // startNetworkMonitor begins periodic connectivity checks. It runs one probe
-// immediately, then every 20s. On TSP this is cheap (TCP dial) and stops
-// requests from piling up when the WiFi drops.
+// immediately, then every 20s. On TSP this is one small HTTP request to a
+// generate_204 endpoint and stops requests from piling up when WiFi drops.
 func startNetworkMonitor() {
 	go func() {
 		// First probe slightly delayed so startup isn't blocked.
@@ -269,7 +362,7 @@ func refreshToolHealth() {
 	for t, s := range statuses {
 		publishCustom("tool_"+t, s)
 	}
-	log.Printf("[tools] health: %s", summary)
+	logDebug("tools", "health: %s", summary)
 
 	switch {
 	case len(toFetch) > 0:
@@ -295,7 +388,7 @@ func refreshToolHealth() {
 					continue
 				}
 				if err := EnsureHelperTool(t, appConfig); err != nil {
-					log.Printf("[tools] %s auto-download failed: %v", t, err)
+					logWarn("tools", "%s auto-download failed: %v", t, err)
 					toolHealthState.mu.Lock()
 					toolHealthState.failures[t] = toolInstallFailureReason(err)
 					toolHealthState.mu.Unlock()
@@ -305,11 +398,11 @@ func refreshToolHealth() {
 					continue
 				}
 				if _, ok := checkToolPresence(t); !ok {
-					log.Printf("[tools] %s reported success but is still missing", t)
+					logWarn("tools", "%s reported success but is still missing", t)
 					continue
 				}
 				installed = append(installed, t)
-				log.Printf("[tools] %s installed and ready", t)
+				logDebug("tools", "%s installed and ready", t)
 			}
 			if len(installed) == 1 {
 				showToast(installed[0]+" installed — restart JukaHub to use it", ToastSuccess())

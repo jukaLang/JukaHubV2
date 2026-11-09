@@ -40,22 +40,38 @@ type sysToolLogRow struct {
 	raw   string
 }
 
-// sysToolParseLogLine splits "[legacy] 15:04:05 file.go:123: message" into its
-// time, its source and its message, and guesses its severity.
+// sysToolParseLogLine splits a ring line ("15:04:05 WARN  apps: message
+// key=value", logging.go) into its time, its level, its subsystem and its
+// message. A line without a level column (a dependency writing raw text) has
+// its severity guessed from its words.
 func sysToolParseLogLine(line string) sysToolLogRow {
 	r := sysToolLogRow{raw: line}
-	s := strings.TrimPrefix(line, "[legacy] ")
+	s := line
 	if len(s) >= 9 && s[2] == ':' && s[5] == ':' && s[8] == ' ' {
 		r.clock, s = s[:8], s[9:]
 	}
-	if i := strings.Index(s, ": "); i > 0 {
-		head := s[:i]
-		if strings.Contains(head, ".go:") && !strings.Contains(head, " ") {
-			r.where, s = head, s[i+2:]
+	level := -1
+	if len(s) >= 6 && s[5] == ' ' {
+		switch s[:5] {
+		case "DEBUG", "INFO ":
+			level = sysToolLogInfo
+		case "WARN ":
+			level = sysToolLogWarn
+		case "ERROR":
+			level = sysToolLogError
+		}
+		if level >= 0 {
+			s = strings.TrimLeft(s[6:], " ")
 		}
 	}
+	if i := strings.Index(s, ": "); i > 0 && i <= 24 && !strings.ContainsAny(s[:i], " \t") {
+		r.where, s = s[:i], s[i+2:]
+	}
 	r.text = s
-	r.level = sysToolLogLevel(s)
+	if level < 0 {
+		level = sysToolLogLevel(s)
+	}
+	r.level = level
 	return r
 }
 

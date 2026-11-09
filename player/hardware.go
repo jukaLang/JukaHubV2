@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"runtime"
@@ -27,16 +26,28 @@ type logBuffer struct {
 	version uint64
 }
 
+// Write appends one line per newline-separated chunk, so the buffer can stand
+// in for an io.Writer (an exec's combined output, a test).
 func (b *logBuffer) Write(p []byte) (int, error) {
-	line := strings.TrimRight(string(p), "\n")
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		b.Append(line)
+	}
+	return len(p), nil
+}
+
+// Append adds one line, dropping the oldest lines past the line and byte caps.
+func (b *logBuffer) Append(line string) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.version++
 	b.lines = append(b.lines, line)
 	b.bytes += len(line) + 1
 	if b.max <= 0 {
 		b.lines = nil
 		b.bytes = 0
-	} else if len(b.lines) > b.max {
+		return
+	}
+	if len(b.lines) > b.max {
 		drop := len(b.lines) - b.max
 		for i := 0; i < drop; i++ {
 			b.bytes -= len(b.lines[i]) + 1
@@ -56,9 +67,6 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 		b.lines[0] = b.lines[0][len(b.lines[0])-b.maxBytes:]
 		b.bytes = len(b.lines[0]) + 1
 	}
-	b.mu.Unlock()
-	// Also mirror to stderr so launch.sh's errors.txt capture still works.
-	return os.Stderr.Write(p)
 }
 
 func (b *logBuffer) String() string {
@@ -94,12 +102,6 @@ func (b *logBuffer) Snapshot() ([]string, uint64) {
 
 var appLog = &logBuffer{max: 2000, maxBytes: logBufferMaxBytes}
 
-// initLogging redirects the standard logger to the in-memory buffer (which
-// also forwards to stderr).
-func initLogging() {
-	log.SetOutput(appLog)
-}
-
 // exportLogs writes the captured log buffer to logs.txt in the app folder,
 // rotating the previous export to logs.txt.1 and capping the file size.
 func exportLogs() {
@@ -107,14 +109,14 @@ func exportLogs() {
 	// again, which is a no-op on an already-capped slice).
 	data := capLogData([]byte(appLog.String()), logExportMaxBytes)
 	if err := writeRotatedLog("logs.txt", data, logExportMaxBytes); err != nil {
-		log.Printf("exportLogs: %v", err)
+		logWarn("hardware", "exportLogs: %v", err)
 		return
 	}
 	lines := 0
 	if len(data) > 0 {
 		lines = strings.Count(string(data), "\n") + 1
 	}
-	log.Printf("Logs exported to logs.txt (%d lines, %d bytes)", lines, len(data))
+	logDebug("hardware", "Logs exported to logs.txt (%d lines, %d bytes)", lines, len(data))
 }
 
 // ---------------------------------------------------------------------------

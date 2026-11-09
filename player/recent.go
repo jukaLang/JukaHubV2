@@ -3,7 +3,6 @@ package main
 import (
 	"path/filepath"
 	"sort"
-	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -12,7 +11,6 @@ import (
 
 var (
 	recentFocusIndex int
-	recentMutex      sync.Mutex
 	emptyActionRect  sdl.Rect // "Open Media" action button in empty Continue panel
 )
 

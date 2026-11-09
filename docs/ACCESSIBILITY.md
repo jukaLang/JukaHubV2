@@ -29,12 +29,10 @@ the accessibility size is only given up where there is no room at all. A label
 that still does not fit at that floor is ellipsised. The scale is a readability
 aid, not a zoom.
 
-The two checks that keep this honest are in `ui_access_audit_test.go`: at 145%
-every button label in both shipped configs must draw in full, and the fitted
-size may not drop below normal. They run on both real canvases — 1280×720 for
-the 16:9 handhelds and 960×720 for the 4:3 Brick family — together with a
-minimum tap size for every pressable control and a bounds check on the compact
-canvas.
+These rules were checked by a render audit of both shipped configs at 145% on
+both real canvases (1280×720 and the Brick's 960×720) until the render tests
+were retired in November 2026; check both canvases by eye when you change a
+label size, a font role or a control's footprint
 
 ## Readable status colours
 

@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -195,20 +194,6 @@ func streamRecentlyFailedAt(url string, now time.Time) bool {
 		return false
 	}
 	return true
-}
-
-// resetStreamCache clears every cached resolution. Used by tests.
-func resetStreamCache() {
-	resolvedStreamsMu.Lock()
-	resolvedStreams = map[string]streamResolution{}
-	resolvedStreamsMu.Unlock()
-	streamFailuresMu.Lock()
-	streamFailures = map[string]time.Time{}
-	streamFailuresMu.Unlock()
-	streamReachMu.Lock()
-	streamReach = map[string]time.Time{}
-	streamReachMu.Unlock()
-	resetProbeCache()
 }
 
 // streamFormatSelector is the yt-dlp selector used for streaming. It prefers a
@@ -399,7 +384,7 @@ func revertVideoQualitySwitch(prepareSeq uint64, source string, fallback int) bo
 		restore = h
 	}
 	setVideoQualityOverride(source, restore)
-	log.Printf("[STREAM] quality switch did not start playback; ceiling restored to %d for %s",
+	logDebug("stream", "quality switch did not start playback; ceiling restored to %d for %s",
 		restore, sanitizeLogURL(source))
 	return true
 }
@@ -504,7 +489,7 @@ func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source 
 			return ytDlpGetURL(ctx, ytDlpPath, args)
 		})
 	if err != nil {
-		log.Printf("[STREAM] could not stream %s: %v", sanitizeLogURL(source), err)
+		logWarn("stream", "could not stream %s: %v", sanitizeLogURL(source), err)
 		return "", false
 	}
 	return direct, true
@@ -540,11 +525,11 @@ func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraA
 		direct, err := run(attemptCtx, args)
 		cancel()
 		if err == nil {
-			log.Printf("[STREAM] resolved %s with %s", sanitizeLogURL(source), attempt.name)
+			logDebug("stream", "resolved %s with %s", sanitizeLogURL(source), attempt.name)
 			return direct, nil
 		}
 		lastErr = fmt.Errorf("%s: %w", attempt.name, err)
-		log.Printf("[STREAM] %s failed for %s: %v", attempt.name, sanitizeLogURL(source), err)
+		logWarn("stream", "%s failed for %s: %v", attempt.name, sanitizeLogURL(source), err)
 		if streamFailureFatal(err.Error()) {
 			return "", lastErr
 		}
@@ -621,14 +606,14 @@ func probePlayableStream(ctx context.Context, ffprobePath, url string) bool {
 		// before giving up on streaming.
 		if probeStreamReachable(ctx, url) {
 			rememberStreamReachable(url)
-			log.Printf("[STREAM] ffprobe could not describe %s (%v); the CDN accepts it, streaming anyway", sanitizeLogURL(url), err)
+			logWarn("stream", "ffprobe could not describe %s (%v); the CDN accepts it, streaming anyway", sanitizeLogURL(url), err)
 			return true
 		}
-		log.Printf("[STREAM] ffprobe rejected %s: %v", sanitizeLogURL(url), err)
+		logWarn("stream", "ffprobe rejected %s: %v", sanitizeLogURL(url), err)
 		return false
 	}
 	if fields.width <= 0 || fields.height <= 0 {
-		log.Printf("[STREAM] ffprobe found no video stream in %s", sanitizeLogURL(url))
+		logDebug("stream", "ffprobe found no video stream in %s", sanitizeLogURL(url))
 		return false
 	}
 	rememberProbe(url, fields)
@@ -738,7 +723,7 @@ func tryStreamPlayback(ctx context.Context, config *Config, ytDlpPath, url strin
 			return false, ctx.Err() != nil
 		}
 	}
-	log.Printf("[STREAM] playing %s directly (no download)", sanitizeLogURL(url))
+	logDebug("stream", "playing %s directly (no download)", sanitizeLogURL(url))
 	startEmbeddedPlayback(config, direct, startSec, false)
 	return true, false
 }
@@ -870,7 +855,7 @@ func resolvePlaybackTools(ctx context.Context, config *Config) (ytDlpPath, missi
 	// ffprobe only supplies duration/fps; probeVideoInfo falls back to safe
 	// defaults, so a missing ffprobe must not block playback.
 	if _, err := helperToolPathCtx(ctx, "ffprobe", config); err != nil {
-		log.Printf("[DEBUG] playback: ffprobe unavailable, using defaults: %v", err)
+		logDebug("playback", "ffprobe unavailable, using defaults: %v", err)
 	}
 	return ytDlpPath, "", nil
 }
@@ -920,7 +905,7 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 			if prepareCtx.Err() != nil {
 				return playbackNotTried
 			}
-			log.Printf("[ERROR] %s: ffmpeg unavailable: %v", logLabel, err)
+			logError("streaming", "%s: ffmpeg unavailable: %v", logLabel, err)
 			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
 			return playbackNotTried
 		}
@@ -935,27 +920,27 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 	if err != nil {
 		finishVideoPrepare(prepareSeq)
 		if prepareCtx.Err() != nil {
-			log.Printf("[STREAM] %s: load cancelled while resolving %s", logLabel, missing)
+			logDebug("stream", "%s: load cancelled while resolving %s", logLabel, missing)
 			return playbackNotTried
 		}
-		log.Printf("[ERROR] %s: %s unavailable: %v", logLabel, missing, err)
+		logError("streaming", "%s: %s unavailable: %v", logLabel, missing, err)
 		showToast(toolUnavailableMessage(missing, err), ToastError())
 		return playbackNotTried
 	}
 	if prepareCtx.Err() != nil {
 		finishVideoPrepare(prepareSeq)
-		log.Printf("[STREAM] %s: load cancelled for %s", logLabel, sanitizeLogURL(url))
+		logDebug("stream", "%s: load cancelled for %s", logLabel, sanitizeLogURL(url))
 		return playbackNotTried
 	}
 
-	log.Printf("[DEBUG] %s: url=%q yt-dlp=%q", logLabel, sanitizeLogURL(url), ytDlpPath)
+	logDebug("streaming", "%s: url=%q yt-dlp=%q", logLabel, sanitizeLogURL(url), ytDlpPath)
 	// Stream straight from the CDN when possible: ffmpeg reads the media URL
 	// directly, so the first frame arrives without waiting for a full download.
 	// Anything ffmpeg cannot open falls back to the download path.
 	started, cancelled := tryStreamPlayback(prepareCtx, config, ytDlpPath, url, startSec)
 	if cancelled {
 		finishVideoPrepare(prepareSeq)
-		log.Printf("[STREAM] %s: preparation cancelled for %s", logLabel, sanitizeLogURL(url))
+		logDebug("stream", "%s: preparation cancelled for %s", logLabel, sanitizeLogURL(url))
 		return playbackNotTried
 	}
 	if started {
@@ -964,7 +949,7 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 	}
 	// Every streaming strategy failed: this is the slow path, and it is worth
 	// saying so in the log next to the reasons logged above.
-	log.Printf("[STREAM] %s: no direct stream for %s; downloading the file instead", logLabel, sanitizeLogURL(url))
+	logDebug("stream", "%s: no direct stream for %s; downloading the file instead", logLabel, sanitizeLogURL(url))
 	// The card stays up for the download and is cleared by playWithTempFile once
 	// the player overlay can report progress. The download honours prepareCtx, so
 	// B does not leave a download running invisibly behind a screen the user
@@ -1286,7 +1271,7 @@ func prefetchSlotPool() chan struct{} {
 // instead of after the whole window.
 func prefetchResolveWindow(config *Config, gen uint64, sources []string) {
 	if !prefetchMemoryOK() {
-		log.Printf("[STREAM] preload skipped: low memory (%d MB free)", freeMemoryMB())
+		logDebug("stream", "preload skipped: low memory (%d MB free)", freeMemoryMB())
 		return
 	}
 	ytDlpPath := ""
@@ -1376,7 +1361,7 @@ dispatch:
 	cancel()
 
 	if n := atomic.LoadInt32(&resolved); n > 0 {
-		log.Printf("[STREAM] preloaded %d/%d card(s)", n, len(sources))
+		logDebug("stream", "preloaded %d/%d card(s)", n, len(sources))
 	}
 }
 

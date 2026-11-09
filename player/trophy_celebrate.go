@@ -122,17 +122,6 @@ func trophyDequeue() (trophyToast, bool) {
 	return t, true
 }
 
-// trophyQueued reports how many cards are still to come.
-func trophyQueued() int {
-	trophyQueue.mu.Lock()
-	defer trophyQueue.mu.Unlock()
-	n := len(trophyQueue.items)
-	if trophyQueue.folded > 0 {
-		n++
-	}
-	return n
-}
-
 // trophyPlural is "trophy" or "trophies".
 func trophyPlural(n int) string {
 	if n == 1 {
@@ -477,7 +466,9 @@ type trophyCardLayout struct {
 // The card's three text sizes, in design pixels (getFontSized scales them for
 // the canvas and the accessibility text size).
 const (
-	trophyCardCaptionSize = 12
+	// The caption asks for the Caption role's floor size; asking for 12 made
+	// the font helper lift it silently to 14 anyway.
+	trophyCardCaptionSize = uiMinTextSize
 	trophyCardTitleSize   = 19
 	trophyCardDetailSize  = 14
 )
@@ -694,17 +685,4 @@ func trophyDrawCountBadge(renderer *sdl.Renderer, config *Config, medal sdl.Rect
 	accent := glassAccent()
 	fillRoundedRect(renderer, x, y, w, h, h/2, accent)
 	renderText(renderer, config, font, label, contrastText(accent), x+(w-tw)/2, y+(h-th)/2)
-}
-
-// trophyResetForTest empties the queue and the screen.
-func trophyResetForTest() {
-	trophyQueue.mu.Lock()
-	trophyQueue.items = nil
-	trophyQueue.folded = 0
-	trophyQueue.foldTier = trophyBronze
-	trophyQueue.mu.Unlock()
-	trophyShow.active = false
-	trophyShow.card = sdl.Rect{}
-	trophyShow.lastMS = 0
-	trophyConfettiClear()
 }

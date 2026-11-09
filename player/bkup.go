@@ -98,27 +98,6 @@ func bkupCategoryLabel(cat string) string {
 	return cat
 }
 
-// bkupCategoryDetail says what a category holds.
-func bkupCategoryDetail(cat string) string {
-	switch cat {
-	case bkupCatSettings:
-		return "Every setting, the config document and the design file"
-	case bkupCatLibrary:
-		return "Favourites, recents, playtime and trophies, alarms, notes, saved chat, bookmarks"
-	case bkupCatThemes:
-		return "Your theme files"
-	case bkupCatPlugins:
-		return "Plugin manifests and scripts"
-	case bkupCatInput:
-		return "Controller profiles"
-	case bkupCatPacks:
-		return "Packs you added"
-	case bkupCatSaves:
-		return "Save files and states from the emulators' save folders"
-	}
-	return ""
-}
-
 // bkupManifest is manifest.json inside a backup.
 type bkupManifest struct {
 	Format     string            `json:"format"`
@@ -780,6 +759,14 @@ func bkupCreate(ctx context.Context, dir, name string, cats map[string]bool, opt
 // bkupPrune keeps the newest keep backups in dir whose names start with prefix
 // and end with suffix+".jkbackup", and deletes the older ones.
 func bkupPrune(dir, prefix, suffix string, keep int) {
+	bkupPruneKeep(dir, prefix, suffix, keep, "")
+}
+
+// bkupPruneKeep is bkupPrune that never deletes keepPath, the archive the
+// caller has just written, and counts it among the keep. "Newest" is the
+// file's time: on a handheld without a clock a backup written after a cold
+// boot can be the oldest by that time, and was the first one deleted.
+func bkupPruneKeep(dir, prefix, suffix string, keep int, keepPath string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -794,11 +781,18 @@ func bkupPrune(dir, prefix, suffix string, keep int) {
 		if e.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix+bkupExt) {
 			continue
 		}
+		path := filepath.Join(dir, name)
+		if keepPath != "" && sameFilePath(path, keepPath) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		list = append(list, candidate{path: filepath.Join(dir, name), mod: info.ModTime()})
+		list = append(list, candidate{path: path, mod: info.ModTime()})
+	}
+	if keepPath != "" && keep > 0 {
+		keep--
 	}
 	sort.SliceStable(list, func(i, j int) bool { return list[i].mod.After(list[j].mod) })
 	for i := keep; i < len(list); i++ {
@@ -1131,7 +1125,7 @@ func bkupRestoreFiles(ctx context.Context, plan bkupRestorePlan, cats map[string
 		return res
 	}
 	res.SafetyPath = path
-	bkupPrune(bkupSafetyDir(), "JukaHub-safety-", "", bkupSafetyKeep)
+	bkupPruneKeep(bkupSafetyDir(), "JukaHub-safety-", "", bkupSafetyKeep, path)
 
 	zr, err := zip.OpenReader(plan.Path)
 	if err != nil {
@@ -1490,11 +1484,12 @@ func bkupMaybeAutoBackup(config *Config) {
 			cats[cat] = cat != bkupCatSaves
 		}
 		dir := bkupExportDir()
-		if _, _, err := bkupCreate(context.Background(), dir, bkupFileName("auto", now), cats, bkupOptions{PluginFiles: true}, "weekly", version, doc, nil); err != nil {
+		path, _, err := bkupCreate(context.Background(), dir, bkupFileName("auto", now), cats, bkupOptions{PluginFiles: true}, "weekly", version, doc, nil)
+		if err != nil {
 			LogScene("bkup").Warn("weekly backup failed", "err", err)
 			return
 		}
-		bkupPrune(dir, "JukaHub-backup-", "-auto", bkupAutoKeep)
+		bkupPruneKeep(dir, "JukaHub-backup-", "-auto", bkupAutoKeep, path)
 		data, err := json.Marshal(bkupAutoState{Last: now.Format(time.RFC3339)})
 		if err == nil {
 			_ = os.MkdirAll(bkupSafetyDir(), 0o755)

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -47,7 +48,7 @@ Do not open a public issue for a security problem. Use GitHub's private vulnerab
 
 ## Servers on your network
 
-- FTP, SFTP, the Phone Companion and a hosted Watch Party are reachable from your Wi-Fi while they run. FTP is unencrypted; SFTP uses a generated password and a host key; the Phone Companion needs the on-screen PIN.
+- FTP, SFTP, the Phone Companion and a hosted Watch Party are reachable from your Wi-Fi while they run. FTP and SFTP need the password shown on the device, new on every start, and stop on their own after 15 idle minutes or on another network; FTP is unencrypted and shares only games, saves and media; SFTP adds a host key; the Phone Companion needs the on-screen PIN.
 - Stop servers you are not using, especially on public networks.
 
 ## What is not trusted
@@ -81,26 +82,28 @@ type sectrustMDBlock struct {
 }
 
 var (
-	sectrustMDImage    = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
-	sectrustMDLink     = regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`)
-	sectrustMDBold     = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	sectrustMDComment  = regexp.MustCompile(`<!--.*?-->`)
-	sectrustMDTag      = regexp.MustCompile(`(?i)</?(?:br|b|i|em|strong|code|kbd|sup|sub|details|summary|p|span|div)\b[^>]*>`)
-	sectrustMDBulletRe = regexp.MustCompile(`^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$`)
-	sectrustMDSpaces   = regexp.MustCompile(`\s{2,}`)
+	sectrustMDImage   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`) })
+	sectrustMDLink    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`) })
+	sectrustMDBold    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\*\*([^*]+)\*\*`) })
+	sectrustMDComment = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`<!--.*?-->`) })
+	sectrustMDTag     = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)</?(?:br|b|i|em|strong|code|kbd|sup|sub|details|summary|p|span|div)\b[^>]*>`)
+	})
+	sectrustMDBulletRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$`) })
+	sectrustMDSpaces   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\s{2,}`) })
 )
 
 // sectrustInline reduces inline Markdown to the text a reader shows: link and
 // image text without their targets, bold and code markers dropped, simple HTML
 // tags removed. Placeholders such as <keyID> are left alone.
 func sectrustInline(s string) string {
-	s = sectrustMDComment.ReplaceAllString(s, "")
-	s = sectrustMDImage.ReplaceAllString(s, "$1")
-	s = sectrustMDLink.ReplaceAllString(s, "$1")
-	s = sectrustMDBold.ReplaceAllString(s, "$1")
-	s = sectrustMDTag.ReplaceAllString(s, " ")
+	s = sectrustMDComment().ReplaceAllString(s, "")
+	s = sectrustMDImage().ReplaceAllString(s, "$1")
+	s = sectrustMDLink().ReplaceAllString(s, "$1")
+	s = sectrustMDBold().ReplaceAllString(s, "$1")
+	s = sectrustMDTag().ReplaceAllString(s, " ")
 	s = strings.ReplaceAll(s, "`", "")
-	s = sectrustMDSpaces.ReplaceAllString(s, " ")
+	s = sectrustMDSpaces().ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }
 
@@ -209,9 +212,9 @@ func sectrustParseMarkdown(src string) []sectrustMDBlock {
 		case strings.HasPrefix(trimmed, ">"):
 			flush()
 			out = append(out, sectrustMDBlock{kind: sectrustMDQuote, text: sectrustInline(strings.TrimLeft(trimmed, "> "))})
-		case sectrustMDBulletRe.MatchString(line):
+		case sectrustMDBulletRe().MatchString(line):
 			flush()
-			m := sectrustMDBulletRe.FindStringSubmatch(line)
+			m := sectrustMDBulletRe().FindStringSubmatch(line)
 			depth := len(strings.ReplaceAll(m[1], "\t", "  ")) / 2
 			if depth > 3 {
 				depth = 3

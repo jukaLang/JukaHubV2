@@ -1,26 +1,30 @@
 package main
 
-// safeboot.go — the recovery chord and the boot guard.
+// safeboot.go — the recovery chord, and putting the previous JukaHub back.
 //
 // Safe mode already exists (--safe-mode, JUKAHUB_SAFE_MODE, safe-mode.flag) but
 // all three need a working file manager, a terminal or a USB cable. When an
 // update leaves a handheld that cannot start, none of those are at hand.
 //
-// So: hold L + R + Start while JukaHub boots. The chord must be held for the
-// whole detection window, which makes it hard to trigger by accident, and it
-// does three things:
+// So: hold L + R + Start (Ctrl + Alt + R on a keyboard) while JukaHub boots.
+// The chord must be held for the whole detection window, which makes it hard to
+// trigger by accident, and it:
 //
 //  1. turns on safe mode for this launch (plugins, updates and network work are
 //     skipped), so a bad plugin or feed cannot stop the shell from starting;
-//  2. restores the previous JukaHub binary from the newest backup set, so the
-//     next launch runs the version that worked;
+//  2. opens the recovery card as soon as the screen is up (recoverycard.go):
+//     the previous version, the last good settings, safe mode, or settings
+//     reset to the shipped ones — games and saves are never touched, and the
+//     destructive choices ask first and back the settings up before anything;
 //  3. says so in the log and in Diagnostics.
 //
-// It deliberately does not restore the user's config: a backup set may be old,
-// and silently reverting settings a user made after the update would be its own
-// bug. The executable is the file an update replaces.
+// Nothing is reverted without a choice: a backup may be old, and silently
+// putting back settings or a binary would be its own bug. The automatic half,
+// for a build that cannot even reach the card, is the boot guard
+// (bootguard.go).
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,8 +49,9 @@ const (
 type safebootState struct {
 	Triggered  bool   // the recovery chord was held at boot
 	AutoRevert bool   // the boot guard rolled back on its own
-	RolledBack string // backup set name that was restored, empty if none
-	Version    string // version recorded in that backup set
+	RolledBack string // saved version or backup set that was restored, empty if none
+	Version    string // the version it holds
+	Restarts   bool   // JukaHub restarts into it now (Version history); else it takes over at the next start
 	Err        error
 }
 
@@ -140,8 +145,10 @@ func latestExecutableBackup(sets []string, self string, load func(string) (*Back
 	return "", BackupFile{}, false
 }
 
-// rollbackLastUpdateTo restores the newest backed-up copy of self. It never
-// removes the backup set, so a second attempt (or a manual restore) still works.
+// rollbackLastUpdateTo restores the newest backed-up copy of self from the Patch
+// backup sets (installs from before Version history kept the replaced build
+// there). It never removes the backup set, so a second attempt (or a manual
+// restore) still works. The restored build takes over at the next start.
 func rollbackLastUpdateTo(self string) (name, version string, err error) {
 	if self == "" {
 		return "", "", errors.New("cannot locate the running executable")
@@ -159,11 +166,8 @@ func rollbackLastUpdateTo(self string) (name, version string, err error) {
 		return "", "", err
 	}
 	src := filepath.Join(dir, "backups", filepath.Base(name), filepath.Base(file.Rel))
-	if err := copyFile(src, self); err != nil {
+	if err := replaceRunningExecutable(src, self, os.FileMode(file.Mode)); err != nil {
 		return "", "", err
-	}
-	if file.Mode != 0 {
-		_ = os.Chmod(self, os.FileMode(file.Mode))
 	}
 	version = ""
 	if m, err := loadBackupManifest(name); err == nil && m != nil {
@@ -172,10 +176,185 @@ func rollbackLastUpdateTo(self string) (name, version string, err error) {
 	return name, version, nil
 }
 
-// initSafeboot runs the chord check and the rollback. It is a no-op when safe
-// mode was already requested another way, so an explicit flag is never
-// overridden by a button that happens to be pressed.
+// replaceRunningExecutable puts src in place of self while self may be the
+// process that is running. Writing into a running executable fails (ETXTBSY
+// on Linux, a sharing violation on Windows), which is why the copy lands beside
+// it first: Linux then renames over the old name (the running process keeps
+// its open inode), and Windows, which refuses that rename, moves the running
+// file aside to self.old first — a running .exe may be renamed.
+func replaceRunningExecutable(src, self string, mode os.FileMode) error {
+	tmp := self + ".restore"
+	_ = os.Remove(tmp)
+	if err := copyFile(src, tmp); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if mode == 0 {
+		mode = 0o755
+	}
+	// copyFile creates the file 0600; an executable that lost its x bit does
+	// not start. FAT cards ignore the mode, which is fine there.
+	_ = os.Chmod(tmp, mode)
+	if runtime.GOOS == "windows" {
+		old := self + ".old"
+		_ = os.Remove(old)
+		if err := os.Rename(self, old); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := os.Rename(tmp, self); err != nil {
+			_ = os.Rename(old, self)
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
+	}
+	if err := os.Rename(tmp, self); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// rollbackToPreviousVersion puts the previous JukaHub back: the saved version
+// in Version history released just before the running build
+// (rollbackPreviousEntry), through the journaled swap helper an update uses
+// (JukaHub restarts into it), or — on an install whose history is empty — the
+// newest executable in the Patch backup sets, ready for the next start. It runs
+// after InitPatchModule, which loads the history and the patch state.
+func rollbackToPreviousVersion(config *Config) (name, version string, err error) {
+	if entries, _ := uhistEntriesSnapshot(); len(entries) > 0 {
+		e, ok := rollbackPreviousEntry(entries)
+		if !ok {
+			return "", "", errors.New("no version released before this one is saved in Version history")
+		}
+		if err := uhistRollbackOp(context.Background(), config, e.ID); err != nil {
+			return "", "", err
+		}
+		return e.ID, uhistLabel(e.Tag, e.Date, e.Version), nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return "", "", err
+	}
+	return rollbackLastUpdateTo(self)
+}
+
+// rollbackPreviousEntry is rollbackPickVersion for the running build.
+func rollbackPreviousEntry(entries []uhistEntry) (uhistEntry, bool) {
+	running, known := installedReleaseTime()
+	return rollbackPickVersion(entries, running, known, uhistSkippedTag(), readInstalledReleaseInfo().Tag)
+}
+
+// rollbackEntryReleaseTime is when a saved version was released: its stamped
+// date, else the time in its tag.
+func rollbackEntryReleaseTime(e uhistEntry) (time.Time, bool) {
+	if t, ok := parseReleaseTimestamp(e.Date); ok {
+		return t, true
+	}
+	return releaseTimeFromTag(e.Tag)
+}
+
+// rollbackPickVersion chooses the saved version "previous version" means: the
+// one released last before the running build. The history's own order (when
+// each was replaced, by the device's clock) is not used: without an RTC that
+// clock can be years off, and after a rollback the newest entry is the build
+// just left. The release this device was rolled back from (skipTag) and the
+// running build's tag are never chosen, nor is a version released at or after
+// the running one. When the running build's release time is unknown, or no
+// dated version qualifies, an undated one is taken, newest saved first.
+func rollbackPickVersion(entries []uhistEntry, running time.Time, haveRunning bool, skipTag, runningTag string) (uhistEntry, bool) {
+	skipTag, runningTag = strings.TrimSpace(skipTag), strings.TrimSpace(runningTag)
+	var best, undated uhistEntry
+	var bestAt time.Time
+	found, haveUndated := false, false
+	for _, e := range entries { // newest saved first
+		tag := strings.TrimSpace(e.Tag)
+		if tag != "" && (strings.EqualFold(tag, skipTag) || strings.EqualFold(tag, runningTag)) {
+			continue
+		}
+		at, dated := rollbackEntryReleaseTime(e)
+		if !dated || !haveRunning {
+			if !haveUndated {
+				undated, haveUndated = e, true
+			}
+			continue
+		}
+		if !at.Before(running) {
+			continue
+		}
+		if !found || at.After(bestAt) {
+			best, bestAt, found = e, at, true
+		}
+	}
+	if found {
+		return best, true
+	}
+	return undated, haveUndated
+}
+
+// rollbackBackupSetCandidate finds what rollbackLastUpdateTo would restore on
+// an install whose Version history is empty: the name and version of the
+// newest Patch backup set that holds this executable. It reads the backup
+// folder, so it runs off the render thread.
+func rollbackBackupSetCandidate() (name, version string, ok bool) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", "", false
+	}
+	sets, err := ListBackupSets()
+	if err != nil || len(sets) == 0 {
+		return "", "", false
+	}
+	name, _, ok = latestExecutableBackup(sets, self, loadBackupManifest)
+	if !ok {
+		return "", "", false
+	}
+	if m, err := loadBackupManifest(name); err == nil && m != nil {
+		version = m.Version
+	}
+	return name, version, true
+}
+
+// rollbackBackupSetNow puts that executable back for the recovery card, under
+// the Patch operation lock. It copies tens of megabytes: off the render
+// thread. The restored build takes over at the next start.
+func rollbackBackupSetNow() error {
+	if !tryBeginPatchOp() {
+		return errors.New("another Patch operation is running; try again when it has finished")
+	}
+	defer endPatchOp()
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	_, _, err = rollbackLastUpdateTo(self)
+	return err
+}
+
+// safebootRemoveOldExecutable deletes the copy replaceRunningExecutable moved
+// aside on Windows (a running .exe cannot be deleted, only renamed), once the
+// build that was running from it has exited. Best-effort: when the old
+// process is still closing, the next start tries again.
+func safebootRemoveOldExecutable() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	if err := os.Remove(self + ".old"); err == nil {
+		logInfo("safeboot", "removed the build a rollback replaced (%s.old)", filepath.Base(self))
+	}
+}
+
+// initSafeboot runs the chord check. It is a no-op when safe mode was already
+// requested another way, so an explicit flag is never overridden by a button
+// that happens to be pressed. What to restore is the user's choice on the
+// recovery card (recoverycard.go), opened once the screen is up.
 func initSafeboot() {
+	safebootRemoveOldExecutable()
 	if safeMode.Active {
 		return
 	}
@@ -184,24 +363,7 @@ func initSafeboot() {
 	}
 	safeMode = safeModeState{Active: true, Reason: "recovery chord (L+R+Start)"}
 	safeboot.Triggered = true
-	Log().Warn("safe mode enabled: recovery chord held at boot")
-
-	self, err := os.Executable()
-	if err != nil {
-		safeboot.Err = err
-		Log().Warn("safe boot: cannot locate the running executable", "err", err)
-		return
-	}
-	name, version, err := rollbackLastUpdateTo(self)
-	if err != nil {
-		safeboot.Err = err
-		Log().Warn("safe boot: no update to roll back", "err", err)
-		return
-	}
-	safeboot.RolledBack = name
-	safeboot.Version = version
-	Log().Warn("safe boot: previous JukaHub restored from backup", "set", name, "version", version,
-		"restartRequired", runtime.GOOS != "windows")
+	Log().Warn("safe mode enabled: recovery chord held at boot; the recovery card opens with the first frame")
 }
 
 // safebootDiagnostic is the one-line Diagnostics fact, empty when neither the
@@ -227,176 +389,4 @@ func safebootDiagnostic() string {
 		version = "previous build"
 	}
 	return fmt.Sprintf("%-13s: on%s (rolled back to %s)", label, cause, version)
-}
-
-// ---------------------------------------------------------------------------
-// Boot guard — crash-loop protection for a misbehaving update
-// ---------------------------------------------------------------------------
-//
-// The recovery chord needs a person who knows about it. When the newest release
-// fails on the first frames, nobody is pressing L+R+Start — the handheld boots
-// into the broken build, dies, restarts itself (or the user does), forever.
-//
-// The boot guard is the automatic half: a small marker file records each boot.
-// If a previous boot ended without the marker being cleared (the cleanup path
-// deletes it on every graceful exit), that boot failed. Three *fast* failed
-// boots of the same build within a recent update window roll the previous
-// binary back automatically, exactly like the chord, and this launch continues
-// in safe mode until the restored version takes over on the next start.
-//
-// The fast-failure window (90 s) is deliberate: a slow boot followed by a
-// power cut is a long, good session, and the handheld is power-cycled often
-// enough that counting those would fabricate failures. Only early death counts.
-// The recent-update window (72 h) keeps the guard out of everyday life: an
-// install nobody has updated in the last three days is not what a crash loop
-// should rewrite. JUKAHUB_NO_BOOTGUARD=1 disables it for debugging.
-
-const (
-	// bootGuardFile lives in the patch state directory.
-	bootGuardFile = "bootguard.json"
-	// bootGuardThreshold consecutive fast failed boots trigger the rollback.
-	bootGuardThreshold = 3
-	// bootGuardFastExit is the longest a boot may have run to count as a
-	// failed boot. Longer than this means the build started fine and died
-	// later (power cut, firmware kill), which is not the build's fault.
-	bootGuardFastExit = 90 * time.Second
-	// bootGuardUpdateWindow limits automatic rollbacks to installs whose last
-	// update is recent. Older installs fall back to the manual recovery chord.
-	bootGuardUpdateWindow = 72 * time.Hour
-)
-
-// bootGuardFileState is the durable crash-loop counter.
-type bootGuardFileState struct {
-	Version  string    `json:"version"`   // build/release stamp of the counted boot
-	Unclean  int       `json:"unclean"`   // consecutive fast failed boots
-	LastBoot time.Time `json:"last_boot"` // when that boot started (UTC)
-}
-
-// bootGuardRollback is the revert to use, a variable so tests can watch it.
-var bootGuardRollback = rollbackLastUpdateTo
-
-// bootGuardVersionStamp picks the stamp identifying the running build. The
-// release tag when one exists (updates set it), otherwise the compile stamp.
-func bootGuardVersionStamp() string {
-	if info := readInstalledReleaseInfo(); info.Tag != "" {
-		return info.Tag
-	}
-	if t, ok := parseReleaseTimestamp(buildTime); ok {
-		return t.Format(time.RFC3339)
-	}
-	return "build:" + buildDate
-}
-
-// readBootGuardFile loads the counter, reporting whether one existed.
-func readBootGuardFile(dir string) (bootGuardFileState, bool) {
-	data, err := os.ReadFile(filepath.Join(dir, bootGuardFile))
-	if err != nil {
-		return bootGuardFileState{}, false
-	}
-	var s bootGuardFileState
-	if json.Unmarshal(data, &s) != nil {
-		// A garbled marker must never suppress the guard: treat as no marker.
-		return bootGuardFileState{}, false
-	}
-	return s, true
-}
-
-// writeBootGuardFile durably records the counter for the next boot.
-func writeBootGuardFile(dir string, s bootGuardFileState) {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return
-	}
-	_ = AtomicWrite(filepath.Join(dir, bootGuardFile), append(data, '\n'), 0o600)
-}
-
-// bootGuardUpdateIsRecent reports whether the last recorded update sits inside
-// the rollback window, so a crash loop is likely to be that update's fault.
-func bootGuardUpdateIsRecent(now time.Time, updatedAt string) bool {
-	t, ok := parseReleaseTimestamp(updatedAt)
-	if !ok {
-		return false
-	}
-	d := now.Sub(t)
-	return d >= 0 && d <= bootGuardUpdateWindow
-}
-
-// initBootGuard runs the crash-loop check at startup, after the recovery
-// chord: an explicit safe-mode request or a held chord disables the guard.
-func initBootGuard() {
-	if safeMode.Active {
-		return
-	}
-	if strings.TrimSpace(os.Getenv("JUKAHUB_NO_BOOTGUARD")) != "" {
-		return
-	}
-	self, err := os.Executable()
-	if err != nil {
-		Log().Warn("boot guard: cannot locate the running executable", "err", err)
-		return
-	}
-	dir, err := PatchStateDir()
-	if err != nil {
-		Log().Warn("boot guard: no patch state directory", "err", err)
-		return
-	}
-	patchStateMu.Lock()
-	updatedAt := patchState.LastUpdateAt
-	patchStateMu.Unlock()
-	applyBootGuard(dir, self, bootGuardVersionStamp(), updatedAt, time.Now(), rollbackLastUpdateTo)
-}
-
-// applyBootGuard is the decision core, split out so every rule (fast-fail
-// counting, threshold, recency gate, rollback) is testable with a temp dir and
-// a controlled clock. rollback is a parameter for the same reason.
-func applyBootGuard(dir, self, version, updatedAt string, now time.Time, rollback func(self string) (name, version string, err error)) {
-	marker := bootGuardFileState{Version: version, LastBoot: now.UTC()}
-	prev, markerExisted := readBootGuardFile(dir)
-	unclean := 0
-	if markerExisted && prev.Version == version {
-		// The previous boot did not reach its cleanup, so the marker is still
-		// there. Count it as failed when it ended fast; a long run means the
-		// build worked and something else killed the process.
-		run := now.Sub(prev.LastBoot)
-		if run < 0 || run <= bootGuardFastExit {
-			// run < 0: the handheld has no RTC and the clock reset over the
-			// power cycle — uptime before NTP is short by definition.
-			unclean = prev.Unclean + 1
-		}
-	}
-
-	if unclean >= bootGuardThreshold {
-		if bootGuardUpdateIsRecent(now, updatedAt) {
-			name, v, err := rollback(self)
-			safeboot.AutoRevert = true
-			if err != nil {
-				safeboot.Err = err
-				Log().Warn("boot guard: rollback attempt failed", "err", err)
-			} else {
-				safeboot.RolledBack = name
-				safeboot.Version = v
-				safeMode = safeModeState{Active: true, Reason: "crash-loop auto-rollback"}
-				Log().Warn("boot guard: repeated failed boots, previous JukaHub restored"+
-					" (the restored build takes over on the next start)",
-					"set", name, "version", v)
-			}
-		} else {
-			Log().Warn("boot guard: repeated failed boots, but no recent update to roll back")
-		}
-		// Restart the counter either way: a wedge must not grow forever, and
-		// the restored build gets a full set of chances.
-		unclean = 0
-	}
-	marker.Unclean = unclean
-	writeBootGuardFile(dir, marker)
-}
-
-// clearBootGuard deletes the counter. It runs in the exit cleanup, so a boot
-// that reached it was healthy — the next boot starts counting from zero.
-func clearBootGuard() {
-	dir, err := PatchStateDir()
-	if err != nil {
-		return
-	}
-	_ = os.Remove(filepath.Join(dir, bootGuardFile))
 }

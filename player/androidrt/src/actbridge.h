@@ -95,6 +95,7 @@ typedef void (*ANativeActivity_onCreate_t)(ANativeActivity *activity,
                                            void *savedState,
                                            size_t savedStateSize);
 
+
 /* The runner's own loop state. */
 typedef struct ActivityRunner {
     volatile int running;    /* cleared when the app should stop          */
@@ -107,17 +108,38 @@ typedef struct ActivityRunner {
     const char *obbPath;          /* <ANDROIDPAK_DATA>/obb                */
 } ActivityRunner;
 
-/* ── jnistub.c: the JavaVM / JNIEnv / activity object handed to games
- * (NULL when ANDROIDPAK_JNI=off) ─────────────────────────────────────── */
+/* ── jnienv.c: the JavaVM / JNIEnv / activity object handed to games
+ * (NULL when ANDROIDPAK_JNI=off; see jni.h for the full JNI layer) ───── */
 void *apak_jniVM(void);
 void *apak_jniEnv(void);
 void *apak_jniActivityObject(void);
+
+/* ── androidshim.c: the APK itself as the asset source ────────────────
+ * Assets are looked up in the staged assets/ tree first and then read
+ * straight out of the APK (ANDROIDPAK_APK) — a game whose assets do not fit
+ * the RAM stage still finds them. */
+struct ApakZip;
+struct ApakZip *android_apkArchive(void);  /* opened once, NULL if unreadable */
+/* AssetManager.list(): files AND directories directly under dir (malloc'd). */
+size_t android_assetList(const char *dir, char ***names);
+void android_assetListFree(char **names, size_t n);
+
+/* ── inputshim.c: the devices behind the events (android.view.InputDevice) */
+void android_inputRegisterDevice(int32_t deviceId, const char *name);
+int android_inputDeviceIds(int32_t *ids, int cap);
+const char *android_inputDeviceName(int32_t deviceId);
 
 /* ── activity.c exports (used by the android shim and the runner) ────── */
 /* onFrame is the smoke game's optional per-iteration hook (NULL for real
  * games, which drive their own loop through ALooper_pollAll). */
 void runOneActivity(ActivityRunner *runner, void *onCreate, void *onFrame);
 void runner_requestExit(ActivityRunner *runner, int code);
+/* gameactivity.c: drive an androidx GameActivity game (Minecraft since
+ * 1.21.80 and other AGDK titles) through the Java side of GameActivity —
+ * initializeNativeCode / onStartNative / onSurfaceCreatedNative ... — the
+ * game's own GameActivity C++ glue builds its structs from our answers.
+ * Returns the exit status. */
+int runGameActivity(ActivityRunner *runner);
 
 /* ── android shim exports (libandroid.so) used by the runner ─────────── */
 void android_activityInit(ANativeActivity *activity, ActivityRunner *runner);

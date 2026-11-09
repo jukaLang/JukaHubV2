@@ -23,7 +23,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -206,7 +205,7 @@ func loadBrowserAdBlockSites(path string) map[string]bool {
 	var file browserAdBlockSitesFile
 	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[browser] ignoring %s: %v", path, err)
+			logWarn("browser", "ignoring %s: %v", path, err)
 		}
 		return disabled
 	}
@@ -314,12 +313,6 @@ func browserAdBlockViewFor(variable string) browserAdBlockView {
 	browserAdBlockViews.mu.Lock()
 	defer browserAdBlockViews.mu.Unlock()
 	return browserAdBlockViews.pages[variable]
-}
-
-func resetBrowserAdBlockViewsForTest() {
-	browserAdBlockViews.mu.Lock()
-	browserAdBlockViews.pages = map[string]browserAdBlockView{}
-	browserAdBlockViews.mu.Unlock()
 }
 
 // browserAdBlockLabel is the toolbar chip's text. It stays short enough for a
@@ -430,8 +423,8 @@ func stripBlockedWebScripts(source string, base *url.URL) string {
 		// would normally be stripped.
 		return source
 	}
-	return webScriptTagRe.ReplaceAllStringFunc(source, func(tag string) string {
-		src := webScriptSrcRe.FindStringSubmatch(tag)
+	return webScriptTagRe().ReplaceAllStringFunc(source, func(tag string) string {
+		src := webScriptSrcRe().FindStringSubmatch(tag)
 		if src == nil {
 			return tag
 		}

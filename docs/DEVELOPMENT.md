@@ -29,12 +29,11 @@ targets a 1280×720 logical canvas.
 | [PACKAGES.md](PACKAGES.md) | package format, the signed repository, Patch transactions |
 | [GAME_PROFILES.md](GAME_PROFILES.md) | game-profile schema, Box64/Wine launching, import/export |
 | [WINDOWS_APPS.md](WINDOWS_APPS.md) | .exe discovery, Wine display bridge, WestonPack setup |
-| [ANDROID.md](ANDROID.md) | the Android container engine: binder gate, package list, launch and display bridge |
+| [ANDROID.md](ANDROID.md) | AndroidRT: NDK games as native processes (bionic loader, JNI environment, stock EGL) |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../SECURITY.md) | secret storage, crypto, threat notes |
-| [PROJECT_STATUS.md](PROJECT_STATUS.md) | current progress, improvement priorities and hardware checks at a glance |
-| [IMPROVEMENTS.md](IMPROVEMENTS.md) | historical comparison with BrickOS and what was learned |
-| [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | unadopted feature designs and their constraints |
+| [MODERNIZATION.md](../player/MODERNIZATION.md) | the engineering backlog: every open task, the hardware checks, the parking lot |
+| [UX_REVIEW.md](UX_REVIEW.md) | the November 2026 design critique and its open findings |
 | [TOOLBOX.md](TOOLBOX.md) | the curated tool catalog: install, run, the download allowlist and its gaps |
 | [trimui/README.md](../player/trimui/README.md) | device package and launcher details |
 
@@ -83,7 +82,7 @@ JukaHubV2/
 5. Start the background services — Patch, disk chart, FTP/SSH servers,
    screensaver — each behind a safe-mode check. Network work (weather, tool
    health, telemetry, the update check, the network monitor, the companion
-   listener and social notifications) is queued with `deferStartupTask` and run
+   listener and update check) is queued with `deferStartupTask` and run
    after the first frame instead of competing with cold font rasterisation.
 
 The boot budget is two seconds from process start to a usable first frame,
@@ -227,7 +226,7 @@ table: its own `init`. The scene's renderer, key handler and controller mapping
 live in the same file. Scenes that need nothing special — the config-driven
 screens — are simply not registered and keep the generic path.
 
-Overlays (wallpaper picker, social notifications, Quick Settings, search) are
+Overlays (wallpaper picker, Quick Settings, search) are
 checked before scene routing, so a floating panel always wins the D-pad.
 
 Before adding a scene, check the name is not already taken by a different type
@@ -415,48 +414,14 @@ instead of guessed at.
 
 ### What a long session holds
 
-A budget is a ceiling, not a prediction: whether the ceilings are anywhere near
-what the device must survive was guessed at until it was measured.
-`TestLongSessionTextureMemory` ([session_memory_test.go](../player/session_memory_test.go))
-spends a session in the two panels that fill these caches — 300 chat messages
-with 14 pictures and 24 senders, then 24 articles with three pictures each,
-scrolled the way a reader scrolls — through the real decode-and-cache paths,
-with every ceiling pinned to the handheld branch. It prints the device's own
-`[tex]` line and then each cache against its cap:
-
-```
-cd player
-go test -run TestLongSessionTextureMemory -v
-```
-
-On a desktop, at the card's ceilings:
-
-| Cache | Session held | Ceiling |
-|-------|--------------|---------|
-| chat pictures | 24,576 KB (8 of 14) | 24 MB |
-| chat avatars | 256 KB (16) | 4 MB |
-| browser page cache | 140 KB (8 pages) | 12 MB |
-| page images (`thumbnailTextures`) | 57,600 KB | 64 MB |
-| rendered text | 8,240 KB | 24 MB |
-| home labels | 0 KB | 8 MB |
-| shapes | 11,684 KB | 12 MB |
-| **total `[tex]` line** | **88 MB** | — |
-
-Three things the numbers say. **The chat picture cache is full by design**: it is
-a sliding window of the newest pictures, so it sits on its 24 MB cap for the
-whole session while older ones are evicted — a session is never *over* its
-budget, but it is never under it either. **Page images are the largest single
-item**, at 56 MB of their 64 MB ceiling, so an hour of picture-heavy reading
-leaves the least headroom of anything measured; if the card ever needs room,
-that is the budget to revisit first. **The shape cache is the tightest fit** at
-11.7 MB of 12 MB, and what fills it is the chrome — panel corners, bubbles, the
-browser's own toolbar — not the page content. Text stays at a third of its cap,
-and home labels read 0 because the chat and the reader draw through `renderText`
-rather than `drawText`.
-
-The probe fails if the session caches nothing (so it cannot pass vacuously), if
-the picture set never crosses its budget (eviction unmeasured), or if any cache
-ends above its ceiling.
+A budget is a ceiling, not a prediction. A desktop measurement (2026-10-26, a
+long chat-and-reader session with every ceiling pinned to the handheld branch)
+put the `[tex]` total at about 88 MB: the chat picture cache sits on its 24 MB
+cap by design (a sliding window of the newest pictures), page images used
+56 MB of their 64 MB ceiling — the budget to revisit first if the card ever
+needs room — and the shape cache was the tightest fit at 11.7 MB of 12 MB. The
+harness that produced these numbers was retired with the render tests; on the
+device, `JUKAHUB_TEXSTATS=1` prints the same `[tex]` line for a real session.
 
 A critical-memory sweep clears every one of these: `EvictCachesForPressure` in
 `adaptive.go` and the shutdown path in `main.go` both list them, so a cache that
@@ -467,22 +432,11 @@ the texture cache for every label on every frame, so both have zero-allocation
 fast paths (`varPattern` is compiled once; the cache key is a struct and its
 LRU is O(1)). The Live TV filter bar reads a cached count instead of filtering
 the whole playlist per frame, and the File Explorer toolbar caches its
-validated path instead of stat-ing the SD card. `go test -bench .` in `player/`
-measures those paths (`BenchmarkFrameTextPass`, `BenchmarkTVFilterBarCounts`).
+validated path instead of stat-ing the SD card.
 
-The frame itself has a budget too: `render_bench_test.go` draws a real 1280×720
-home frame (warm and with a cold text cache) and times one D-pad step, so a
-layout or text change can be compared against a number rather than a
-feeling:
-
-```
-cd player
-go test -run '^$' -bench 'BenchmarkHome' -benchmem
-```
-
-The absolute values are a desktop software-renderer proxy (see the recorded
-numbers in [MODERNIZATION.md](../player/MODERNIZATION.md), Phase 6);
-their job is to catch a regression, not to predict the device.
+The benchmarks that used to time a desktop home frame were retired with the
+render tests: a desktop software-renderer number never predicted the device.
+The device measures itself instead (next section).
 
 ### Frame time on the device
 
@@ -633,25 +587,6 @@ and tokens that fail validation. Never commit a config with real credentials —
 
 Full details: [SECURITY.md](../SECURITY.md).
 
-### Fuzzing
-
-[player/fuzz_test.go](../player/fuzz_test.go) covers the two places where text
-from outside the app becomes a path or an address: the Windows-runtime archive
-entry and symlink names, and the SFTP address field. Each target asserts an
-invariant (`runtimeArchivePath` either refuses a name or resolves it below the
-extraction root; `parseFeRemote` either refuses the text or returns a usable
-address that round-trips), so a crash means a real escape rather than a diff.
-
-```bash
-cd player
-go test . -run '^$' -fuzz '^FuzzRuntimeArchivePath$' -fuzztime 30s
-```
-
-`go test .` alone runs every target over its seed corpus as an ordinary test, so
-the seeds are the regression cases; the nightly workflow (`fuzz` job) lists the
-targets per package and gives each one a 30-second burst. Add a target whenever a
-new parser is added, and keep the seeds to the shapes that actually mattered.
-
 ## Key files
 
 | File | Purpose |
@@ -687,14 +622,11 @@ Open work, documented here so it is not rediscovered:
 - Drawing callbacks for plugins (`PluginContext` is declared but never passed).
 - Nothing on the video/player test front: the intermittent native crash in the
   fullscreen video test was fixed at its cause (renderer-owned textures reused
-  after their renderer), recorded in the
-  [modernization plan](../player/MODERNIZATION.md) Phase 6.
+  after their renderer).
 - The shortcuts overlay lists `F5` (refresh), which is not wired to anything
   yet. `Ctrl+L` is: it opens the LogExporter scene everywhere except the
   terminal, which keeps Ctrl+L to clear its output.
 
-[IMPROVEMENTS.md](IMPROVEMENTS.md) holds what the BrickOS comparison left open
-(boot visuals today) and the failure modes worth copying. Component versions,
-the keymap and the rest of that pass are in the
-[modernization plan](../player/MODERNIZATION.md); adopt an idea there or into the
-[roadmap](../ROADMAP.md) instead of starting another list.
+Open work lives in one place, the [engineering backlog](../player/MODERNIZATION.md);
+add an idea there (as a task with *Why* and *Done when*, or to its parking lot)
+instead of starting another list.

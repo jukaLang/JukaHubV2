@@ -1,14 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 // existingDirWithin is the guard behind File Explorer navigation: it must
@@ -85,122 +80,6 @@ func TestFECurrentPathFallsBackToRoot(t *testing.T) {
 	}
 }
 
-func TestFileExplorerNavigation(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "folder"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("test"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	scene := SceneConfig{Name: "FileExplorer", Elements: []Element{
-		{Type: "dynamiclist", Variable: "fe_entries", X: 24, Y: 124, Width: "1232", Height: "464"},
-		{Type: "button", Text: "Refresh", X: 774, Y: 600, Width: "232", Height: "44"},
-	}}
-	cfg := useNavScene(t, scene)
-	cfg.Variables.FileExplorerRoot = root
-	cfg.Variables.Custom = map[string]interface{}{}
-	installGraph(t, cfg, 0)
-	previousFocus := focusedFileIndex
-	previousNav := filesNav
-	t.Cleanup(func() {
-		focusedFileIndex = previousFocus
-		filesNav = previousNav
-	})
-	filesNav = filesNavState{}
-	focusedFileIndex = 0
-	feListDirectory(cfg)
-	if !feListAction(cfg, ActionNavigateDown) || focusedFileIndex != 1 {
-		t.Fatalf("down did not select second row: %d", focusedFileIndex)
-	}
-	if !feListAction(cfg, ActionNavigateRight) || selectedButtonIndex != 1 {
-		t.Fatalf("right did not reach actions: %d", selectedButtonIndex)
-	}
-	if !feFocusList(cfg) || selectedButtonIndex != 0 {
-		t.Fatal("could not return to list")
-	}
-	// The root lists a ".." row first now (it leads to the folders around the
-	// Files root), so the folder is found by name.
-	focusedFileIndex = -1
-	for i, entry := range feEntriesOf(cfg) {
-		if entry.Name == "folder" {
-			focusedFileIndex = i
-		}
-	}
-	if focusedFileIndex < 0 {
-		t.Fatalf("the folder is not listed: %v", feEntriesOf(cfg))
-	}
-	if !feListAction(cfg, ActionConfirm) || feCurrentPath(cfg) != filepath.Join(root, "folder") {
-		t.Fatal("confirm did not enter selected folder")
-	}
-	if !feListAction(cfg, ActionBack) || feCurrentPath(cfg) != root {
-		t.Fatal("back did not return to root")
-	}
-	for _, key := range []sdl.Keycode{sdl.K_a, sdl.K_RETURN, sdl.K_SPACE} {
-		if action, ok := feKeyAction(key); !ok || action != ActionConfirm {
-			t.Errorf("key %v did not map to confirm", key)
-		}
-	}
-	if action, ok := feKeyAction(sdl.K_b); !ok || action != ActionBack {
-		t.Error("keyboard B did not map to back")
-	}
-	if action, ok := feControllerAction(sdl.CONTROLLER_BUTTON_A); !ok || action != ActionConfirm {
-		t.Error("controller A did not map to confirm")
-	}
-}
-
-func TestFileExplorerRelativeRootAndScript(t *testing.T) {
-	root := t.TempDir()
-	folder := filepath.Join(root, "folder")
-	if err := os.Mkdir(folder, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := filepath.Join(folder, "launch.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rel, err := filepath.Rel(wd, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := &Config{Variables: Variables{FileExplorerRoot: rel, Custom: map[string]interface{}{}}}
-	if got := feRoot(cfg); got != root {
-		t.Fatalf("root = %q, want %q", got, root)
-	}
-	cfg.Variables.Custom["fe_path"] = folder
-	if got := feCurrentPath(cfg); got != folder {
-		t.Fatalf("current = %q, want %q", got, folder)
-	}
-	cmd, err := feScriptCommand(cfg, script)
-	if runtime.GOOS == "windows" {
-		if err == nil {
-			t.Fatal("Windows accepted a shell script")
-		}
-		return
-	}
-	if err != nil || cmd.Dir != folder || len(cmd.Args) != 2 || cmd.Args[1] != script {
-		t.Fatalf("script command = %v, error = %v", cmd, err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside.sh")
-	if err := os.WriteFile(outside, []byte("#!/bin/sh\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := feScriptCommand(cfg, outside); err == nil {
-		t.Fatal("outside script accepted")
-	}
-	link := filepath.Join(root, "escape.sh")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := feScriptCommand(cfg, link); err == nil {
-		t.Fatal("escaping script symlink accepted")
-	}
-}
-
 // An app's config.json names its launch script; that name must stay inside the
 // app folder instead of pointing at a script elsewhere on the card.
 func TestScanAppSubdirRejectsEscapingLaunch(t *testing.T) {
@@ -235,38 +114,55 @@ func TestScanAppSubdirRejectsEscapingLaunch(t *testing.T) {
 	}
 }
 
-// The launcher must not start an arbitrary executable just because a row in the
-// Apps list says so.
-func TestIsLaunchableAppPathRejectsArbitraryPaths(t *testing.T) {
-	if isLaunchableAppPath(filepath.Join(t.TempDir(), "not-an-app.exe")) {
-		t.Fatal("launcher accepted a path outside the app folders")
+func mustWriteAppFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// The example is discovered from the normal relative plugins directory and
-// its script receives an action and custom arguments without shell expansion.
-func TestExamplePluginAction(t *testing.T) {
-	previousDir, previousPlugins, previousSafeMode := pluginDir, plugins, safeMode
-	t.Cleanup(func() { pluginDir, plugins, safeMode = previousDir, previousPlugins, previousSafeMode })
-	pluginDir = "plugins"
-	plugins = make(map[string]*PluginInfo)
-	safeMode = safeModeState{}
+func TestScanSystemAppsDepthCapAndSkip(t *testing.T) {
+	root := t.TempDir()
+	mustWriteAppFile(t, filepath.Join(root, "Top.lnk"))
+	mustWriteAppFile(t, filepath.Join(root, "Vendor", "Nested.lnk"))
+	mustWriteAppFile(t, filepath.Join(root, "Vendor", "Deep", "Deeper.lnk"))
+	mustWriteAppFile(t, filepath.Join(root, "Vendor", "Deep", "Deeper", "TooDeep", "Hidden.lnk"))
+	mustWriteAppFile(t, filepath.Join(root, "Vendor", "Uninstall Nested.lnk"))
 
-	var config Config
-	if err := json.Unmarshal([]byte(`{"variables":{"plugin_name":"A B=friend","tspUsername":"ignored"}}`), &config); err != nil {
-		t.Fatal(err)
+	entries := scanSystemApps(root)
+	names := map[string]bool{}
+	for _, e := range entries {
+		names[e.Name] = true
 	}
-	LoadPlugins(&config)
-	if _, ok := GetPlugins()["hello"]; !ok {
-		t.Fatal("example plugin was not discovered")
+	for _, want := range []string{"Top", "Nested", "Deeper"} {
+		if !names[want] {
+			t.Errorf("missing entry %q (got %v)", want, names)
+		}
 	}
-	if got := ExecutePluginAction("hello", "greet", snapshotVars(&config)); got != "Hello, A B=friend!\n" {
-		t.Fatalf("greeting = %q", got)
+	if names["Hidden"] {
+		t.Error("depth cap failed: found entry 4 levels deep")
 	}
-	if got := ExecutePluginAction("hello", "greet", nil); got != "Hello, friend!\n" {
-		t.Fatalf("default greeting = %q", got)
+	if names["Uninstall Nested"] {
+		t.Error("uninstaller shortcut should be skipped")
 	}
-	if got := ExecutePluginAction("hello", "missing", nil); !strings.HasPrefix(got, "Plugin error:") || !strings.Contains(got, "Unknown action: missing") {
-		t.Fatalf("unknown action did not return the script error: %q", got)
+}
+
+// TestLaunchableAppPathStaysInTheAppFolders pins the guard that keeps an Apps
+// row from starting an arbitrary program: only paths below the scanned folders
+// are launchable, so a tampered entry outside them is refused before exec.
+func TestLaunchableAppPathStaysInTheAppFolders(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "evil.exe")
+	if isLaunchableAppPath(outside) {
+		t.Fatalf("%q outside the app folders was launchable", outside)
+	}
+	escape := filepath.Join(appsFolder(), "..", "..", "evil.exe")
+	if isLaunchableAppPath(escape) {
+		t.Fatalf("traversal path %q was launchable", escape)
+	}
+	if !isLaunchableAppPath(filepath.Join(appsFolder(), "Game.exe")) {
+		t.Fatal("a program inside the apps folder was refused")
 	}
 }

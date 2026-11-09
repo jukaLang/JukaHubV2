@@ -20,7 +20,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -205,7 +204,7 @@ func browserBookmarkAdd(address, title string) bool {
 		return browserBookmarks.list[a].Added > browserBookmarks.list[b].Added
 	})
 	if len(browserBookmarks.list) > browserBookmarkMaxRecords {
-		log.Printf("[browser] %d bookmarks saved, keeping the newest %d",
+		logDebug("browser", "%d bookmarks saved, keeping the newest %d",
 			len(browserBookmarks.list), browserBookmarkMaxRecords)
 		browserBookmarks.list = browserBookmarks.list[:browserBookmarkMaxRecords]
 	}
@@ -269,12 +268,12 @@ func browserBookmarksLoadLocked() {
 	var file browserBookmarkFile
 	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[browser] cannot read %s: %v", path, err)
+			logWarn("browser", "cannot read %s: %v", path, err)
 		}
 		return
 	}
 	if file.SchemaVersion > browserBookmarkSchemaVersion {
-		log.Printf("[browser] %s is from a newer build (schema %d)", path, file.SchemaVersion)
+		logDebug("browser", "%s is from a newer build (schema %d)", path, file.SchemaVersion)
 		return
 	}
 	browserBookmarks.list = make([]browserBookmark, 0, len(file.Bookmarks))
@@ -325,18 +324,18 @@ func browserBookmarksSaveLocked() {
 		Bookmarks:     browserBookmarks.list,
 	}, "", "  ")
 	if err != nil {
-		log.Printf("[browser] cannot encode bookmarks: %v", err)
+		logWarn("browser", "cannot encode bookmarks: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Printf("[browser] cannot create %s: %v", filepath.Dir(path), err)
+		logWarn("browser", "cannot create %s: %v", filepath.Dir(path), err)
 		return
 	}
 	// 0644 on purpose: a bookmark is the user's own list, not a session token.
 	// The atomic write keeps the previous list as .bak, so a card pulled while
 	// the new one lands costs the edit, not the bookmarks.
 	if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
-		log.Printf("[browser] cannot write %s: %v", path, err)
+		logWarn("browser", "cannot write %s: %v", path, err)
 	}
 }
 
@@ -346,12 +345,12 @@ func browserBookmarksRemoveFile(path string) {
 	browserBookmarksSaveMu.Lock()
 	defer browserBookmarksSaveMu.Unlock()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("[browser] cannot remove %s: %v", path, err)
+		logWarn("browser", "cannot remove %s: %v", path, err)
 	}
 	// The .bak is a copy of the list the user just cleared. Leaving it behind
 	// would bring every bookmark back the first time a read had to fall back.
 	if err := os.Remove(path + ".bak"); err != nil && !os.IsNotExist(err) {
-		log.Printf("[browser] cannot remove %s: %v", path+".bak", err)
+		logWarn("browser", "cannot remove %s: %v", path+".bak", err)
 	}
 }
 

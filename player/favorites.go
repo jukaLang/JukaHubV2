@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -239,7 +238,7 @@ func loadFavoritesFrom(path string) {
 		// An absent file is a first run; anything else that got this far also
 		// failed the backup, so the list really is gone and the log says why.
 		if !os.IsNotExist(err) {
-			log.Printf("loadFavorites: %v", err)
+			logWarn("favorites", "loadFavorites: %v", err)
 		}
 		return
 	}
@@ -277,14 +276,14 @@ func saveFavoritesTo(path string) {
 	defer favoritesMutex.Unlock()
 	data, err := json.MarshalIndent(favoritesStore, "", "  ")
 	if err != nil {
-		log.Printf("saveFavorites: marshal error: %v", err)
+		logWarn("favorites", "saveFavorites: marshal error: %v", err)
 		return
 	}
 	// Same crash-safe path as the notes and the config: the legacy favorites
 	// file is still read by older cards, so it must not be truncated by a
 	// power cut either.
 	if err := AtomicWrite(path, data, 0644); err != nil {
-		log.Printf("saveFavorites: write error: %v", err)
+		logWarn("favorites", "saveFavorites: write error: %v", err)
 	}
 }
 
@@ -293,14 +292,6 @@ func addFavoriteVideo(v VideoInfo) {
 	defer favoritesMutex.Unlock()
 	favoritesStore.Videos = removeDuplicateFavorite(favoritesStore.Videos, v.GetURL(), "video", v)
 	favoritesStore.Videos = append([]FavoriteItem{{Type: "video", Data: v, Timestamp: time.Now()}}, favoritesStore.Videos...)
-}
-
-func addRecentFile(path string) {
-	favoritesMutex.Lock()
-	defer favoritesMutex.Unlock()
-	fe := FileEntry{Name: filepath.Base(path), Path: path, IsDir: false}
-	favoritesStore.Recent = removeDuplicateFavorite(favoritesStore.Recent, path, "file", fe)
-	favoritesStore.Recent = append([]FavoriteItem{{Type: "file", Data: fe, Timestamp: time.Now()}}, favoritesStore.Recent...)
 }
 
 // addRecentVideo records a video at the top of the recently-played list. The
@@ -346,13 +337,6 @@ func updateRecentPosition(url string, positionSec float64) {
 		it.Data = v
 		return
 	}
-}
-
-func addRecentIPTV(ch FileEntry) {
-	favoritesMutex.Lock()
-	defer favoritesMutex.Unlock()
-	favoritesStore.IPTV = removeDuplicateFavorite(favoritesStore.IPTV, ch.Path, "iptv", ch)
-	favoritesStore.IPTV = append([]FavoriteItem{{Type: "iptv", Data: ch, Timestamp: time.Now()}}, favoritesStore.IPTV...)
 }
 
 // addRecentPodcast puts a started episode on the same timeline as videos and
@@ -674,7 +658,7 @@ func removeFavoriteItem(tab int, it FavoriteItem) bool {
 				if removeIPStreamAt(i) {
 					removed = true
 					if err := saveIPStreams(); err != nil {
-						log.Printf("removeFavoriteItem: saving streams: %v", err)
+						logWarn("favorites", "removeFavoriteItem: saving streams: %v", err)
 					}
 				}
 				break
@@ -690,14 +674,6 @@ func removeFavoriteItem(tab int, it FavoriteItem) bool {
 		}
 	}
 	return removed
-}
-
-func removeFavoriteAt(tabIndex int, idx int) {
-	items := favoritesItemsForTab(tabIndex)
-	if idx < 0 || idx >= len(items) {
-		return
-	}
-	removeFavoriteItem(tabIndex, items[idx])
 }
 
 // favoriteVideoSaved reports whether a URL is already in the Videos tab.
@@ -1678,19 +1654,10 @@ func openInExplorer(path string) {
 		cmd = exec.Command("xdg-open", filepath.Dir(path))
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("openInExplorer: %v", err)
+		logWarn("favorites", "openInExplorer: %v", err)
 		return
 	}
 	// Reap the shell process; without Wait it stays a zombie on the handheld's
 	// Linux until JukaHub exits.
 	go func() { _ = cmd.Wait() }()
-}
-
-func sortFavoritesByTimestamp(items []FavoriteItem) []FavoriteItem {
-	sorted := make([]FavoriteItem, len(items))
-	copy(sorted, items)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Timestamp.After(sorted[j].Timestamp)
-	})
-	return sorted
 }

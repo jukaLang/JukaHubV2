@@ -567,8 +567,3 @@ func bugrepBaseName(p string) string {
 	}
 	return p
 }
-
-// reportBugFromUI is the old Community card entry point: it opens the form.
-func reportBugFromUI(config *Config) {
-	bugrepOpenScreen(config)
-}

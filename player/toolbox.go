@@ -1041,18 +1041,6 @@ func toolboxAcceptAuthorizedUse(config *Config) {
 
 // ── Summaries ────────────────────────────────────────────────────────────
 
-// toolboxRowValue is the one-line state shown on a Toolbox row.
-func toolboxRowValue(t toolboxTool) (string, bool) {
-	path := toolboxInstalled(t)
-	if path == "" {
-		return "Not installed", false
-	}
-	if info, err := os.Stat(path); err == nil {
-		return "Installed · " + powerHumanSize(info.Size()), true
-	}
-	return "Installed", true
-}
-
 // toolboxInstalledCount is how many catalog tools are on the card.
 func toolboxInstalledCount() int {
 	n := 0

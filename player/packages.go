@@ -5,23 +5,17 @@ package main
 //
 // The store screen that lists and manages packages lives in the pkg*.go files
 // (pkgcatalog.go: the model; pkgstate.go: state and background work; pkgui.go:
-// drawing; pkginput.go: input). This file keeps the parts every one of them
-// leans on and that other code calls: the Package type, the install folder,
-// the download-and-unpack, and the removal.
+// drawing; pkginput.go: input; pkgverify.go: the checked download;
+// pkgstage.go: the staged unpack, the swap and the rollback). This file keeps
+// the parts every one of them leans on and that other code calls: the Package
+// type, the install folder and the install itself.
 
 import (
-	"bytes"
-	"context"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/veandco/go-sdl2/ttf"
 )
@@ -40,6 +34,14 @@ type Package struct {
 	MainFilename string   `json:"mainfilename"`
 	Download     string   `json:"download"`
 	Device       []string `json:"device"`
+	// SHA256 is the download's published SHA-256 (lowercase hex) and
+	// DownloadSize its exact byte count, both optional; HashProblem says why a
+	// "sha256" that is present cannot be used. pkgParseCatalog fills them
+	// (pkgApplyIntegrity), never the JSON decoder, so a malformed value can
+	// never read as "no hash".
+	SHA256       string `json:"-"`
+	DownloadSize int64  `json:"-"`
+	HashProblem  string `json:"-"`
 }
 
 // pkgInstallDirOverride points the package folder somewhere else; tests use a
@@ -54,28 +56,6 @@ func packageInstallDir() string {
 	}
 	os.MkdirAll(dir, 0755)
 	return dir
-}
-
-// installedPackages is the set of package folders on the card, keyed by
-// folder name. The store's background scan (pkgLoadLocal) replaces it; an
-// install adds to it and a removal takes from it.
-var (
-	installedPackages   = make(map[string]bool)
-	installedPackagesMu sync.Mutex
-)
-
-func init() {
-	// Scan existing installed packages on startup.
-	refreshInstalledPackages()
-}
-
-// refreshInstalledPackages rescans the install directory into the in-memory
-// set. It is exact: a folder deleted behind the app's back leaves the set too.
-func refreshInstalledPackages() {
-	set := pkgScanInstalled()
-	installedPackagesMu.Lock()
-	installedPackages = set
-	installedPackagesMu.Unlock()
 }
 
 // packageDirName is the directory a package installs into. The sanitising lives
@@ -103,15 +83,11 @@ func packageDirName(name string) string {
 	return safeName
 }
 
-// downloadAndInstallPackage downloads a package zip and extracts it. It is
-// the install the store's queue runs; the result is reported through the
-// shared installer card (installbar.go) and a toast.
-func downloadAndInstallPackage(config *Config, p Package) {
-	pkgInstall(config, p)
-}
-
-// pkgInstall downloads a package and unpacks it into its folder, reporting
-// through the installer card, and says whether it worked.
+// pkgInstall downloads a package, verifies it, unpacks it beside the
+// installed copy and swaps it in (pkgstage.go), reporting through the
+// installer card, and says whether it worked. Whatever fails, the version that
+// was installed stays installed and working: nothing is unpacked over it any
+// more.
 //
 // It publishes through the shared installer card instead of the generic scene
 // spinner: the card — and the activity strip that echoes it on every scene —
@@ -130,138 +106,96 @@ func pkgInstall(config *Config, p Package) bool {
 		return false
 	}
 
-	// The package's directory is what marks it installed, so it is created only
-	// once the download has arrived: made up front, a failed fetch left an
-	// empty folder that the list then showed as installed.
-	safeName := packageDirName(p.Name)
-	pkgDir := filepath.Join(packageInstallDir(), safeName)
-
-	installBarPhase(installPhaseDownload)
+	pkgEnsureRecovered()
 	ctx := installBarRunContext()
-	raw, err := pkgDownload(ctx, p.Download)
+	root := packageInstallDir()
+	res, err := pkgInstallFrom(ctx, root, p, func(phase string) {
+		installBarPhase(phase)
+		if phase == installPhaseExtract {
+			installBarResetProgress()
+		}
+	}, installBarProgress)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Cancelled from the card or the strip: the user already knows.
 			return false
 		}
-		log.Printf("packages: download %s: %v", p.Name, err)
-		installBarFail("Download failed")
-		showToast("Download failed — "+plainNetworkError(err), ToastError())
+		logWarn("packages", "install %s: %v", p.Name, err)
+		card, toast := pkgInstallFailure(p, err)
+		installBarFail(card)
+		showToast(toast, ToastError())
 		return false
 	}
-
-	installBarPhase(installPhaseExtract)
-	installBarResetProgress()
-
-	_, statErr := os.Stat(pkgDir)
-	fresh := os.IsNotExist(statErr)
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		installBarFail("Save failed")
-		showToast("Save failed: "+err.Error(), ToastError())
-		return false
+	if res.Verified {
+		logInfo("packages", "%s: download verified against the catalogue (sha256 %s)", p.Name, res.SHA256)
+	} else {
+		logWarn("packages", "%s: not verified — the catalogue publishes no SHA-256 for it (the download's is %s)", p.Name, res.SHA256)
 	}
+	pkgRecordInstalled(p, res.Verified, res.SHA256)
 
-	// Save as zip.
-	zipPath := filepath.Join(pkgDir, safeName+".zip")
-	if err := os.WriteFile(zipPath, raw, 0644); err != nil {
-		if fresh {
-			_ = os.RemoveAll(pkgDir)
-		}
-		installBarFail("Save failed")
-		showToast("Save failed: "+err.Error(), ToastError())
-		return false
+	msg := "Installed " + p.Name
+	if res.Kept {
+		msg += " · the previous version is kept"
 	}
-
-	// Extract it when it is a zip file.
-	if strings.HasSuffix(strings.ToLower(p.Download), ".zip") || len(raw) > 4 && raw[0] == 'P' && raw[1] == 'K' {
-		if err := unzipToDir(ctx, zipPath, pkgDir); err != nil {
-			log.Printf("packages: unzip error: %v", err)
-			// A package that did not unpack is not installed. A fresh folder
-			// goes; an earlier install it was meant to update stays.
-			if fresh {
-				_ = os.RemoveAll(pkgDir)
-			} else {
-				_ = os.Remove(zipPath)
-			}
-			installBarFail("Could not unpack")
-			showToast("Could not unpack "+p.Name+": "+err.Error(), ToastError())
-			return false
-		}
-		os.Remove(zipPath) // Remove the zip after extraction
+	if res.Aside != "" {
+		// The old rollback copy held files that would not move (or nothing
+		// said they had); it was kept whole rather than deleted (pkgKeepAside).
+		msg += pkgAsideNote
 	}
-
-	installedPackagesMu.Lock()
-	installedPackages[safeName] = true
-	installedPackagesMu.Unlock()
-	pkgRecordInstalled(p)
-
-	showToast("Installed "+p.Name, ToastSuccess())
+	if !res.Verified {
+		msg += " · not verified"
+	}
+	showToast(msg, ToastSuccess())
 	installBarDone()
+	// The rollback copy the swap replaced is deleted after the card settles.
+	pkgEmptyTrash(root)
 	return true
 }
 
-// pkgDownloadTimeout bounds one package download.
-const pkgDownloadTimeout = 3 * time.Minute
+// pkgAsideNote is what a toast adds when an install kept an old rollback copy
+// whole instead of deleting it (pkgKeepAside) — whether the install then
+// worked or not, the copy stays there.
+const pkgAsideNote = " · older files kept in packages/" + pkgRollbackDir
 
-// pkgDownload fetches a package with the installer card's byte progress. It
-// keeps fetchURL's limits — the same 64 MiB cap and user agent — and refuses
-// an error page: a 404 used to be saved and "installed" as the package.
-func pkgDownload(ctx context.Context, rawURL string) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
+// pkgInstallFailure is the installer card's short reason and the toast's line
+// for a failed install, from the step that failed.
+func pkgInstallFailure(p Package, err error) (card, toast string) {
+	switch {
+	case errors.Is(err, errPkgChecksum):
+		return "Checksum mismatch", p.Name + ": the download does not match the catalogue's checksum — not installed"
+	case errors.Is(err, errPkgSize):
+		return "Wrong size", p.Name + ": the download is not the size the catalogue publishes — not installed"
 	}
-	ctx, cancel := context.WithTimeout(ctx, pkgDownloadTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "JukaHub/1.0")
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("the server answered %s", resp.Status)
-	}
-	total := resp.ContentLength
-	if total > fetchURLMaxBytes {
-		return nil, fmt.Errorf("the package is larger than %d MiB", fetchURLMaxBytes>>20)
-	}
-	var buf bytes.Buffer
-	if total > 0 {
-		buf.Grow(int(total))
-	}
-	chunk := make([]byte, 32<<10)
-	var done int64
-	for {
-		n, rerr := resp.Body.Read(chunk)
-		if n > 0 {
-			buf.Write(chunk[:n])
-			done += int64(n)
-			if done > fetchURLMaxBytes {
-				return nil, fmt.Errorf("the package is larger than %d MiB", fetchURLMaxBytes>>20)
+	var step *pkgStepError
+	if errors.As(err, &step) {
+		switch step.Step {
+		case pkgStepCatalogue:
+			return "Not installed", p.Name + ": " + firstLine(step.Err.Error()) + " — not installed"
+		case pkgStepUnpack:
+			return "Could not unpack", "Could not unpack " + p.Name + ": " + firstLine(step.Err.Error())
+		case pkgStepSwap:
+			// What the toast promises follows what is on the card: a swap that
+			// stopped halfway, an installed version left as it was, or a first
+			// install that did not happen. A stranded swap is finished by the
+			// next install of the package (pkgRecoverKeyLocked) or by the next
+			// run's recovery pass, which opening Packages starts — not by
+			// opening Packages again in this run (pkgEnsureRecovered runs once).
+			aside := ""
+			if step.Aside != "" {
+				aside = pkgAsideNote
 			}
-			installBarProgress(done, total)
-		}
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			return nil, rerr
+			switch {
+			case step.Stranded:
+				return "Stopped halfway", p.Name + ": " + firstLine(step.Err.Error()) + " — install it again, or restart JukaHub and open Packages, to finish it; your files are kept" + aside
+			case step.Installed:
+				return "Could not replace the old version", p.Name + ": " + firstLine(step.Err.Error()) + " — the installed version is unchanged" + aside
+			}
+			return "Not installed", p.Name + ": " + firstLine(step.Err.Error()) + " — not installed" + aside
+		case pkgStepRecover:
+			return "Earlier install unfinished", p.Name + ": " + firstLine(step.Err.Error())
 		}
 	}
-	return buf.Bytes(), nil
-}
-
-// unzipToDir extracts a zip archive to the destination directory through the
-// Patch extractor, which refuses entries that escape destDir, links and
-// archives that expand past the cap. It used to be a stub that only logged and
-// reported success, after which the caller deleted the zip: every package
-// "installed" as an empty folder.
-func unzipToDir(ctx context.Context, zipPath, destDir string) error {
-	return extractZipSafe(ctx, zipPath, destDir, patchMaxEntries, 1<<30)
+	return "Download failed", "Download failed — " + plainNetworkError(err)
 }
 
 // packageRepository uses the source's real host, and only labels GitHub URLs

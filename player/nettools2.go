@@ -12,7 +12,6 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,12 +72,6 @@ func portCheckText(host string, port int, addr string, open bool, latency time.D
 		b.WriteString("\nThe host was reachable enough to answer, or the connect timed out at 4s.")
 	}
 	return b.String()
-}
-
-// portCheckSummary dials one port and reports what happened.
-func portCheckSummary(raw string) (string, error) {
-	text, _, err := portCheckRun(context.Background(), raw)
-	return text, err
 }
 
 // portCheckRun dials one port within ctx and reports the text and whether the
@@ -278,15 +271,6 @@ func whoisText(domain string, info rdapDomain, registrar string) string {
 	return b.String()
 }
 
-// whoisSummary asks RDAP for a domain.
-func whoisSummary(raw string) (string, error) {
-	domain, info, err := whoisQuery(context.Background(), raw)
-	if err != nil {
-		return "", err
-	}
-	return whoisText(domain, info, rdapRegistrar(info.Entities)), nil
-}
-
 // whoisQuery asks RDAP for a domain within ctx and returns the parsed answer.
 func whoisQuery(ctx context.Context, raw string) (string, rdapDomain, error) {
 	domain, err := netParseDomain(raw)
@@ -327,37 +311,6 @@ func whoisQuery(ctx context.Context, raw string) (string, rdapDomain, error) {
 // ntpEpochOffset is the number of seconds between 1900 (NTP's epoch) and 1970.
 const ntpEpochOffset = 2208988800
 
-// netNTPRequest builds the 48-byte client packet: leap indicator 0, version 4,
-// mode 3 (client).
-func netNTPRequest() []byte {
-	packet := make([]byte, 48)
-	packet[0] = 0x23
-	return packet
-}
-
-// netNTPTimestamp reads one NTP timestamp (seconds and fraction since 1900).
-func netNTPTimestamp(packet []byte, offset int) (time.Time, bool) {
-	if len(packet) < offset+8 {
-		return time.Time{}, false
-	}
-	seconds := binary.BigEndian.Uint32(packet[offset : offset+4])
-	fraction := binary.BigEndian.Uint32(packet[offset+4 : offset+8])
-	if seconds == 0 && fraction == 0 {
-		return time.Time{}, false
-	}
-	nanos := (int64(fraction) * 1e9) >> 32
-	return time.Unix(int64(seconds)-ntpEpochOffset, nanos), true
-}
-
-// netNTPStratum reads the stratum byte, which says how far the server is from a
-// reference clock. 0 is a kiss-of-death answer and means do not use it.
-func netNTPStratum(packet []byte) int {
-	if len(packet) < 2 {
-		return 0
-	}
-	return int(packet[1])
-}
-
 // clockText formats the comparison.
 func clockText(device, server time.Time, offset, rtt time.Duration, stratum int) string {
 	var b strings.Builder
@@ -381,18 +334,9 @@ func clockText(device, server time.Time, offset, rtt time.Duration, stratum int)
 	if stratum > 0 {
 		fmt.Fprintf(&b, "Stratum: %d\n", stratum)
 	}
-	b.WriteString("\nRead-only: one SNTP request to pool.ntp.org.")
+	b.WriteString("\nRead-only: one SNTP request (pool.ntp.org, or the next server when it\n" +
+		"does not answer). Settings → Date & time keeps the clock right.")
 	return b.String()
-}
-
-// clockOffsetSummary asks a public NTP server for the time and compares it with
-// this device's clock.
-func clockOffsetSummary() (string, error) {
-	r, err := clockMeasure(context.Background())
-	if err != nil {
-		return "", err
-	}
-	return clockText(r.device, r.server, r.offset, r.rtt, r.stratum), nil
 }
 
 // clockReading is one SNTP comparison.
@@ -402,51 +346,25 @@ type clockReading struct {
 	stratum        int
 }
 
-// clockMeasure runs one SNTP exchange with pool.ntp.org within ctx.
+// clockMeasure runs one SNTP exchange within ctx, with the client the network
+// time sync uses (ntpsync.go): the first of its servers that answers, and the
+// offset from all four timestamps rather than the reply's send time alone.
+// "Device" is this device's clock in the middle of the exchange that answered
+// (not of the whole search, which may have waited on servers that did not).
+// The result is also what Settings → Date & time shows as the last check —
+// on a PC, the only check JukaHub makes, and only on request.
 func clockMeasure(ctx context.Context) (clockReading, error) {
-	dialer := net.Dialer{Timeout: 4 * time.Second}
-	conn, err := dialer.DialContext(ctx, "udp", "pool.ntp.org:123")
+	r, server, err := sntpQueryAny(ctx)
 	if err != nil {
-		return clockReading{}, fmt.Errorf("no NTP server reachable: %w", err)
+		return clockReading{}, fmt.Errorf("no NTP server answered: %w", err)
 	}
-	defer conn.Close()
-	deadline := time.Now().Add(4 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		return clockReading{}, err
-	}
-	start := time.Now()
-	if _, err := conn.Write(netNTPRequest()); err != nil {
-		return clockReading{}, err
-	}
-	packet := make([]byte, 48)
-	n, err := conn.Read(packet)
-	if err != nil {
-		return clockReading{}, fmt.Errorf("no NTP answer: %w", err)
-	}
-	received := time.Now()
-	if n < 48 {
-		return clockReading{}, errors.New("the NTP answer was too short to read")
-	}
-	server, ok := netNTPTimestamp(packet, 40)
-	if !ok {
-		return clockReading{}, errors.New("the NTP answer carried no time")
-	}
-	stratum := netNTPStratum(packet)
-	if stratum == 0 || stratum > 15 {
-		return clockReading{}, errors.New("the NTP server refused to answer with a usable time")
-	}
-	// The server's time corresponds to the middle of the round trip, so compare
-	// it with the same midpoint on this device.
-	midpoint := start.Add(received.Sub(start) / 2)
+	clockNoteCheck(clockCheck{At: time.Now(), Offset: r.Offset, Source: server})
 	return clockReading{
-		device:  midpoint,
-		server:  server,
-		offset:  server.Sub(midpoint),
-		rtt:     received.Sub(start),
-		stratum: stratum,
+		device:  r.Local,
+		server:  r.Local.Add(r.Offset),
+		offset:  r.Offset,
+		rtt:     r.Delay,
+		stratum: r.Stratum,
 	}, nil
 }
 
@@ -505,15 +423,6 @@ func subnetText(iface string, ip net.IP, mask net.IPMask) (string, error) {
 	fmt.Fprintf(&b, "Scope:     %s\n", scope)
 	b.WriteString("\nRead-only: computed from this device's own address and mask.")
 	return b.String(), nil
-}
-
-// subnetSummary reads the first up, non-loopback IPv4 interface.
-func subnetSummary() (string, error) {
-	iface, ipnet, err := subnetInterface()
-	if err != nil {
-		return "", err
-	}
-	return subnetText(iface, ipnet.IP, ipnet.Mask)
 }
 
 // subnetInterface is the first up, non-loopback interface with an IPv4

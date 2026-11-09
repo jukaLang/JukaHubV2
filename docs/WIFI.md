@@ -379,67 +379,17 @@ expected to happen.
 
 ## Tests
 
-`wifi_test.go` covers the parsers, the password rules, the SSID/PSK escaping, the
-forget path, the panel layout at 720p and 480p, and the end-to-end UI flow from
-opening the picker to a connected status. It stubs `wpa_cli` completely: no test
-touches a radio, and one test asserts that the passphrase never appears in any
-argument.
+`wifi_test.go` covers the parsers (scan results, status, saved networks and the
+supplicant's escaped SSIDs), the password rules, and the join and forget paths
+against a stubbed `wpa_cli`: no test touches a radio, and one test asserts that
+the passphrase never appears in any process argument.
 
-The status meter has its own coverage in `statusbar_status_test.go`: the
-`/proc/net/wireless` parser and its bar thresholds, the `signal_poll` parser
-(including `FAIL`, a missing `RSSI` and the `0` placeholder), the source chain in
-`wifiMeterLevelFrom`, and the supplicant cache — an unanswered poll stays
-*unknown*, a failed poll clears the previous reading, and the caller never waits
-for the command.
-
-`wifi_interface_test.go` covers how the radio is *found*: the sysfs symlink the
-handheld presents, `/proc/net/wireless`, a supplicant control socket, the
-`wpa_cli` probe (both the `IFNAME=` listing and the bounded status sweep), that a
-radio sysfs already names costs no probe at all, and that 120 frames of discovery
-run the probe once — and once more only after its TTL has passed.
-
-`wifi_resilience_test.go` covers the sbin `PATH` fallback, the radio-off scan
-message, the WPA3 offer and its fallback, the superseded-entry replacement,
-the `dhclient` lease path and the rejected-password marker — all against the
-same stubbed runner. It also pins the control-directory resolution (a socket
-found in a conventional directory, and one named only by the supplicant's own
-config), that a failed call reports the tool's reason instead of `exit status
-255`, and that `FAIL-BUSY` still yields the arriving scan. `wifi_actions_test.go`
-keeps the panel's header honest about a refused scan.
-
-`wifi_ctrl_test.go` covers the socket transport and the backend choice: one
-command per write with its reply read back, unsolicited `<n>…` event messages
-stepped over instead of returned as the answer, a socket that closes without
-answering reported as an error naming the command, and a skipped script's
-printed `FAIL` left for the caller to read. It also builds the TG5040 shape — no
-radio in sysfs, no `/proc/net/wireless`, no `wpa_cli`, one socket whose name is
-the interface — and requires the picker to read status through it, sends the
-passphrase as quoted command text (never as a process argument, because no
-process starts), and reports unavailable only when neither route exists.
-
-`wifi_diag_test.go` covers the diagnostics sheet: a radio with no supplicant
-reports `none found` for the backend and a warning on the control directory, a
-working socket reports its directory, socket, backend and station, the last
-command error is kept with its phase (through the same function that builds the
-panel's message), a supplicant start records `failed:` for the sheet, `I` / **L1**
-opens the sheet while the list has no backend and **B** goes back to the list
-before it closes the panel, the sheet draws its Refresh/Copy/Back pills inside
-the panel at 720p and 480p without leaving stale list rows behind, and the list
-keeps a **Diagnostics** pill when it cannot rescan. `Copy` is checked end to end
-there too: the clipboard receives the sheet's text, a bundle lands under
-`reports/` carrying the same rows, and pressing it before the worker answered
-neither pastes nor writes anything. `diagnostics_bundle_test.go` pins the
-bundle's Wi-Fi section and its redaction.
-
-`wifi_windows_test.go` covers the netsh backend the same way: the interface
-report (English and localized), the profile list, the scan rows and how they pick
-one access point per network, the profile XML with a name and key full of XML
-metacharacters, the percentage-to-dBm mapping, the dispatch itself, and the join
-sequence — that the key is written to a temp file, never to a command line, and
-that the file is gone when the join returns. It also pins the messages for a
-machine with no netsh and for one with no adapter.
+The rest — the status meter's source chain, how the radio is found, the
+supplicant control socket, the diagnostics sheet and the Windows `netsh`
+backend — lost its tests in the November 2026 test cut; verify those on both
+stock images (Smart Pro and Brick) and on Windows when you change them.
 
 ```sh
 cd player
-go test -run 'TestWiFi|TestWinWifi|TestParseWPA|TestMergeWiFi|TestValidateWiFiCredentials' -count=1 .
+go test -run 'TestWiFi|TestParseWPA|TestValidateWiFiCredentials|TestWPAUnescape' -count=1 .
 ```

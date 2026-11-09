@@ -368,19 +368,6 @@ func chatFitPrefix(font *ttf.Font, s string, room int32) int {
 	return best
 }
 
-// chatLineText is the text of a wrapped line, for tests and the clipped-link
-// rule.
-func chatLineText(line chatLine) string {
-	if len(line.segs) == 1 {
-		return line.segs[0].text
-	}
-	var b strings.Builder
-	for _, s := range line.segs {
-		b.WriteString(s.text)
-	}
-	return b.String()
-}
-
 // ── Per-message layout cache ─────────────────────────────────────────────
 
 // chatBubbleLayout is everything about a message that depends only on the

@@ -425,32 +425,6 @@ func UIIconButtonDraw(renderer *sdl.Renderer, b UIIconButton) sdl.Rect {
 	return rect
 }
 
-// UIBadgeSize measures a count badge before drawing it, so callers can align
-// it to an edge.
-func UIBadgeSize(config *Config, text string) (int32, int32) {
-	font := FontForRole(config, TypeCaption)
-	if font == nil || text == "" {
-		return 0, 0
-	}
-	tw, th, _ := font.SizeUTF8(text)
-	pad := SpaceSM
-	return int32(tw) + pad*2, int32(th) + 8
-}
-
-// UIBadge draws a small count pill and returns its rect.
-func UIBadge(renderer *sdl.Renderer, config *Config, x, y int32, text string, bg, fg sdl.Color) sdl.Rect {
-	w, h := UIBadgeSize(config, text)
-	if renderer == nil || w <= 0 || h <= 0 {
-		return sdl.Rect{}
-	}
-	font := FontForRole(config, TypeCaption)
-	rect := sdl.Rect{X: x, Y: y, W: w, H: h}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, bg)
-	_, th, _ := font.SizeUTF8(text)
-	renderText(renderer, config, font, text, fg, rect.X+SpaceSM, rect.Y+(h-int32(th))/2)
-	return rect
-}
-
 // UIProgressBar draws a rounded progress bar. A transparent track skips the
 // background, which is what a progress-in-place button wants.
 func UIProgressBar(renderer *sdl.Renderer, rect sdl.Rect, fraction float64, track, fill sdl.Color) {
@@ -475,9 +449,10 @@ func UIProgressBar(renderer *sdl.Renderer, rect sdl.Rect, fraction float64, trac
 // UIListRow draws one list row in Home's glass: a translucent row with a
 // hairline; the hovered row a step brighter; the selected row brighter still,
 // washed with the accent and outlined in the accent all the way round. The ring
-// sits on the row's own edge rather than a lifted one, and is 2px rather than a
-// tile's 3px, because rows sit a few pixels apart inside clipped scroll
-// viewports.
+// sits on the row's own edge rather than a lifted one, because rows sit a few
+// pixels apart inside clipped scroll viewports, and it is the tiles' 3px: at
+// 2px on a 296 PPI panel the cursor was a hairline at arm's length, and a
+// marked or playing row's tint could out-shout it.
 func UIListRow(renderer *sdl.Renderer, rect sdl.Rect, radius int32, selected, hovered bool) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
@@ -490,9 +465,9 @@ func UIListRow(renderer *sdl.Renderer, rect sdl.Rect, radius int32, selected, ho
 		// the brightest edge on a dim handheld panel.
 		accent := glassAccent()
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, WithAlpha(accent, 30))
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, WithAlpha(accent, 36))
 		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFillFocus())
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 2, accent)
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFocusRingWidth, accent)
 		return
 	}
 	drawGlassSurface(renderer, rect, radius, glassState{Hovered: hovered, NoLift: true})
@@ -509,15 +484,59 @@ func UIErrorState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	uiStateBlock(renderer, config, rect, glyph, title, body, DangerInk())
 }
 
+// The empty state's type is a heading over a caption. Both lines used to
+// resolve to the theme's 24px roles, so the title and its explanation printed
+// at one size and read as two titles; and the explanation was one unclipped
+// line, so a sentence wider than its panel ran out of it. The body is now a
+// step down and wraps to two lines inside the block's side padding.
+const (
+	uiStateBodySize  = 18
+	uiStateBodyLines = 2
+	uiStateSidePad   = int32(24)
+)
+
+// uiStateBodyFont is the explanation's font: the caption size, falling back
+// to the theme's caption role.
+func uiStateBodyFont(config *Config) *ttf.Font {
+	if config == nil {
+		return nil
+	}
+	if font := getFontSized(config, "small", uiStateBodySize); font != nil {
+		return font
+	}
+	return FontForRole(config, TypeCaption)
+}
+
+// uiStateTextWidth is the width the title and body lines may use inside a
+// block of the given width.
+func uiStateTextWidth(width int32) int32 {
+	if w := width - 2*uiStateSidePad; w >= 120 {
+		return w
+	}
+	return width
+}
+
+// uiStateBodyLinesFor wraps the explanation for a block of the given width (at
+// most two lines, the second ellipsized when the sentence is longer).
+func uiStateBodyLinesFor(config *Config, body string, width int32) []string {
+	font := uiStateBodyFont(config)
+	if font == nil || strings.TrimSpace(body) == "" || width <= 0 {
+		return nil
+	}
+	return appTileLabelLines(font, body, uiStateTextWidth(width), uiStateBodyLines)
+}
+
 // uiStateBlockMetrics measures the vertical pieces of an empty/error state.
 // Layout code uses the same metrics (via uiStateBlockHeight) to size the
-// surface, so a centred block can never be taller than its background.
+// surface, so a centred block can never be taller than its background. The
+// body is measured as one line here, where the width is not known; the draw
+// wraps it to the width it is given.
 func uiStateBlockMetrics(config *Config, glyph, title, body string) (glyphH, titleH, bodyH, gap int32) {
 	titleFont := FontForRole(config, TypeHeading)
 	if titleFont == nil {
 		return 0, 0, 0, 0
 	}
-	bodyFont := FontForRole(config, TypeCaption)
+	bodyFont := uiStateBodyFont(config)
 	glyphFont := FontForRole(config, TypeTitle)
 	titleH = int32(titleFont.Height())
 	if bodyFont != nil && body != "" {
@@ -551,19 +570,24 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 		return
 	}
 	titleFont := FontForRole(config, TypeHeading)
-	bodyFont := FontForRole(config, TypeCaption)
+	bodyFont := uiStateBodyFont(config)
 	glyphFont := FontForRole(config, TypeTitle)
 	if titleFont == nil {
 		return
 	}
 
 	glyphH, titleH, bodyH, gap := uiStateBlockMetrics(config, glyph, title, body)
+	lines := uiStateBodyLinesFor(config, body, rect.W)
+	if bodyH > 0 && len(lines) > 1 {
+		bodyH *= int32(len(lines))
+	}
 	stackH := glyphH + titleH + gap + bodyH
 	y := rect.Y + (rect.H-stackH)/2
 	if y < rect.Y {
 		y = rect.Y
 	}
 	cx := rect.X + rect.W/2
+	textW := uiStateTextWidth(rect.W)
 
 	if glyphH > 0 {
 		if strings.HasPrefix(glyph, "@") {
@@ -574,12 +598,17 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 		}
 		y += glyphH
 	}
+	title = ellipsize(titleFont, title, textW)
 	tw, _, _ := titleFont.SizeUTF8(title)
 	renderText(renderer, config, titleFont, title, ColorTextPrimary(), cx-int32(tw)/2, y)
 	y += titleH + gap
-	if bodyH > 0 {
-		bw, _, _ := bodyFont.SizeUTF8(body)
-		renderText(renderer, config, bodyFont, body, ColorTextSecondary(), cx-int32(bw)/2, y)
+	if bodyFont != nil && bodyH > 0 {
+		lineH := int32(bodyFont.Height())
+		for _, line := range lines {
+			bw, _, _ := bodyFont.SizeUTF8(line)
+			renderText(renderer, config, bodyFont, line, ColorTextSecondary(), cx-int32(bw)/2, y)
+			y += lineH
+		}
 	}
 }
 
@@ -646,25 +675,6 @@ func UIGridVisibleRows(areaH, rowH, gap int32) int {
 		rows = 1
 	}
 	return rows
-}
-
-// UIGridCellRect returns the rect of cell index in a grid anchored at
-// (originX, originY). Index is zero-based, left to right, top to bottom.
-func UIGridCellRect(index, cols int, originX, originY, cellW, cellH, gap int32) sdl.Rect {
-	if cols < 1 {
-		cols = 1
-	}
-	if index < 0 {
-		index = 0
-	}
-	row := index / cols
-	col := index % cols
-	return sdl.Rect{
-		X: originX + int32(col)*(cellW+gap),
-		Y: originY + int32(row)*(cellH+gap),
-		W: cellW,
-		H: cellH,
-	}
 }
 
 // ── Page header ───────────────────────────────────────────────────────────
@@ -900,22 +910,6 @@ func drawOverlayCard(renderer *sdl.Renderer, rect sdl.Rect) {
 	drawGlassSheet(renderer, rect, overlayCardFill())
 }
 
-// drawOverlayCardFilled is drawOverlayCard with a caller-chosen surface, for the
-// one page whose rows are the raised colour: Downloads recesses its card so the
-// rows read as separate bands. The radius and border still come from here, so
-// the exception is the fill and nothing else. The two theme surfaces callers
-// pass map onto the glass sheet: the raised panel colour is the sheet itself
-// and the plain surface is the recessed sheet.
-func drawOverlayCardFilled(renderer *sdl.Renderer, rect sdl.Rect, fill sdl.Color) {
-	switch fill {
-	case ColorPanelRaised, ColorSurfaceRaised:
-		fill = overlayCardFill()
-	case ColorSurface, ColorPanel:
-		fill = glassSheetDeepFill()
-	}
-	drawGlassSheet(renderer, rect, fill)
-}
-
 // drawOverlayCardAccent marks a card's top edge. Home's cards have no accent
 // hairline — light catches their top edge instead — so this is the glass edge
 // highlight: one soft line of the glass ink, inset from the corners. Every page
@@ -1049,31 +1043,6 @@ const (
 	// the panel colour and the tile would otherwise disappear into it.
 	UITileRaised
 )
-
-// uiTileLabelFont picks the largest label whose two lines fit the space under
-// the icon. A theme whose "small" font runs tall (30px glyphs at a 20px
-// request) would otherwise wrap to one clipped line while its neighbours
-// wrapped to two.
-func uiTileLabelFont(config *Config, avail int32, cap int) (*ttf.Font, int32) {
-	if cap <= 0 {
-		cap = 22
-	}
-	for size := cap; size >= 14; size -= 2 {
-		font := getFontSized(config, "small", size)
-		if font == nil {
-			continue
-		}
-		lineH := int32(font.Height() + 1)
-		if avail <= 0 || lineH*2 <= avail || size <= 14 {
-			return font, lineH
-		}
-	}
-	font := appTileLabelFont(config)
-	if font == nil {
-		return nil, 0
-	}
-	return font, int32(font.Height() + 1)
-}
 
 // uiCategoryTileLabelSize is a tile name's size: Home's 20px card title.
 const uiCategoryTileLabelSize = 20

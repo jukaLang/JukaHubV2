@@ -122,27 +122,6 @@ func peerScenesWheel(config *Config, y int32) bool {
 	return true
 }
 
-// peerFooterHints is the footer of the three pages: the open sheet's keys, or
-// the page's own. ok is false for any other scene. It is meant for extras.go's
-// footerHints, beside tbxFooterHints, so the controls legend lists them too.
-func peerFooterHints(config *Config, name string) ([]FooterHint, bool) {
-	switch name {
-	case peerSceneName, ssyncSceneName, nearbySceneName:
-	default:
-		return nil, false
-	}
-	if tbxSheetVisible(config) {
-		return tbxSheetHints(), true
-	}
-	switch name {
-	case peerSceneName:
-		return peerScreenHints(), true
-	case ssyncSceneName:
-		return ssyncScreenHints(), true
-	}
-	return nearbyScreenHints(), true
-}
-
 // peerAgo is a past moment as people say it.
 func peerAgo(now, t time.Time) string {
 	d := now.Sub(t)

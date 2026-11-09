@@ -30,14 +30,6 @@ type PluginInfo struct {
 	Actions []plugAction `json:"actions,omitempty"`
 }
 
-// PluginContext is passed to plugin entry points.
-type PluginContext struct {
-	Config      *Config
-	ShowToast   func(msg string, color ...interface{})
-	ChangeScene func(name string)
-	RenderText  func(renderer interface{}, config *Config, font interface{}, text string, color interface{}, x, y int32)
-}
-
 var (
 	pluginDir = "plugins"
 	plugins   = make(map[string]*PluginInfo)
@@ -127,20 +119,6 @@ func GetPlugins() map[string]*PluginInfo {
 	return plugins
 }
 
-// ExecutePluginAction runs a plugin-defined action by name.
-func ExecutePluginAction(pluginName, action string, vars map[string]interface{}) string {
-	// A plugin name is a single directory below the plugins root; anything else
-	// (separators, "..", absolute paths) is rejected before touching disk.
-	if pluginName == "" || filepath.Base(pluginName) != pluginName || strings.ContainsAny(pluginName, `\/`) {
-		return fmt.Sprintf("Plugin %q not found", pluginName)
-	}
-	plugin, ok := plugins[pluginName]
-	if !ok {
-		return fmt.Sprintf("Plugin %q not found", pluginName)
-	}
-	return plugExecute(*plugin, action, vars)
-}
-
 // plugExecute runs one action of a plugin already looked up. The Plugins page
 // calls it from a goroutine with a copy of the manifest, so the run never reads
 // the plugin map a rescan may be replacing.
@@ -198,42 +176,4 @@ func plugInterpreter(entry string) string {
 		return "python3"
 	}
 	return "sh"
-}
-
-// InstallPlugin copies a plugin from source to the plugins directory.
-func InstallPlugin(sourcePath, destName string) error {
-	if destName == "" {
-		destName = filepath.Base(sourcePath)
-	}
-	// Install into exactly one new directory directly below the plugins root.
-	base, err := safeArchiveBaseName(destName)
-	if err != nil {
-		return err
-	}
-	destName = base
-	destDir, err := safeJoinFile(pluginDir, destName)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(destDir); err == nil {
-		return fmt.Errorf("plugin %q already installed", destName)
-	}
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return err
-	}
-	data, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return err
-	}
-	destPath := filepath.Join(destDir, filepath.Base(sourcePath))
-	return os.WriteFile(destPath, data, 0755)
-}
-
-// UninstallPlugin removes a plugin from the plugins directory.
-func UninstallPlugin(name string) error {
-	dir := filepath.Join(pluginDir, name)
-	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("plugin %q not installed", name)
-	}
-	return os.RemoveAll(dir)
 }

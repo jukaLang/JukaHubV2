@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -47,20 +48,20 @@ const readerPageChars = 1200
 // ── EPUB ───────────────────────────────────────────────────────────────────
 
 var (
-	reEPUBRootfile = regexp.MustCompile(`(?i)full-path\s*=\s*["']([^"']+)["']`)
-	reEPUBTitle    = regexp.MustCompile(`(?is)<dc:title[^>]*>(.*?)</dc:title>`)
-	reEPUBCreator  = regexp.MustCompile(`(?is)<dc:creator[^>]*>(.*?)</dc:creator>`)
-	reEPUBItem     = regexp.MustCompile(`(?is)<item\b[^>]*>`)
-	reEPUBItemref  = regexp.MustCompile(`(?is)<itemref\b[^>]*>`)
-	reEPUBHTMLAttr = regexp.MustCompile(`(?i)([a-z:-]+)\s*=\s*["']([^"']*)["']`)
-	reStyleBlock   = regexp.MustCompile(`(?is)<(script|style)\b.*?</(script|style)>`)
-	reCommentBlock = regexp.MustCompile(`(?s)<!--.*?-->`)
-	reHeadBlock    = regexp.MustCompile(`(?is)<head\b.*?</head>`)
-	reTag          = regexp.MustCompile(`(?s)<[^>]*>`)
-	reLineBreakTag = regexp.MustCompile(`(?i)</?(p|div|section|article|li|ul|ol|h[1-6]|tr|table|blockquote|pre|figure|figcaption)\b[^>]*>|<br\s*/?>`)
-	reBulletTag    = regexp.MustCompile(`(?i)<li\b[^>]*>`)
-	reHeading      = regexp.MustCompile(`(?is)<h[12][^>]*>(.*?)</h[12]>`)
-	reDocTitleTag  = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	reEPUBRootfile = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)full-path\s*=\s*["']([^"']+)["']`) })
+	reEPUBTitle    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<dc:title[^>]*>(.*?)</dc:title>`) })
+	reEPUBCreator  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<dc:creator[^>]*>(.*?)</dc:creator>`) })
+	reEPUBItem     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<item\b[^>]*>`) })
+	reEPUBItemref  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<itemref\b[^>]*>`) })
+	reEPUBHTMLAttr = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)([a-z:-]+)\s*=\s*["']([^"']*)["']`) })
+	reStyleBlock   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<(script|style)\b.*?</(script|style)>`) })
+	reCommentBlock = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)<!--.*?-->`) })
+	reHeadBlock    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<head\b.*?</head>`) })
+	reTag          = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)<[^>]*>`) })
+	reLineBreakTag = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)</?(p|div|section|article|li|ul|ol|h[1-6]|tr|table|blockquote|pre|figure|figcaption)\b[^>]*>|<br\s*/?>`) })
+	reBulletTag    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)<li\b[^>]*>`) })
+	reHeading      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<h[12][^>]*>(.*?)</h[12]>`) })
+	reDocTitleTag  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`) })
 )
 
 // epubOpenFile validates and loads one EPUB from the File Explorer. The path
@@ -115,7 +116,7 @@ func epubParseBytes(data []byte, path string) pdfDoc {
 
 	opfPath := ""
 	if container := readFile("META-INF/container.xml"); container != nil {
-		if m := reEPUBRootfile.FindSubmatch(container); m != nil {
+		if m := reEPUBRootfile().FindSubmatch(container); m != nil {
 			opfPath = string(m[1])
 		}
 	}
@@ -140,8 +141,12 @@ func epubParseBytes(data []byte, path string) pdfDoc {
 		doc.Error = "This EPUB's package document is missing"
 		return doc
 	}
-	doc.Title = html.UnescapeString(strings.TrimSpace(string(reEPUBTitle.FindSubmatch(opf)[1])))
-	if m := reEPUBCreator.FindSubmatch(opf); m != nil {
+	// A package document without <dc:title> is legal; the file name below
+	// stands in (indexing the missing match used to crash the reader).
+	if m := reEPUBTitle().FindSubmatch(opf); m != nil {
+		doc.Title = html.UnescapeString(strings.TrimSpace(string(m[1])))
+	}
+	if m := reEPUBCreator().FindSubmatch(opf); m != nil {
 		doc.Author = cleanHTMLInline(string(m[1]))
 	}
 	if doc.Title == "" {
@@ -150,7 +155,7 @@ func epubParseBytes(data []byte, path string) pdfDoc {
 
 	// Manifest: id -> href for HTML documents.
 	hrefByID := map[string]string{}
-	for _, tag := range reEPUBItem.FindAll(opf, -1) {
+	for _, tag := range reEPUBItem().FindAll(opf, -1) {
 		attrs := epubAttrs(string(tag))
 		id, href := attrs["id"], attrs["href"]
 		media := strings.ToLower(attrs["media-type"])
@@ -163,7 +168,7 @@ func epubParseBytes(data []byte, path string) pdfDoc {
 	}
 	opfDir := filepath.ToSlash(filepath.Dir(opfPath))
 	spine := []string{}
-	for _, tag := range reEPUBItemref.FindAll(opf, -1) {
+	for _, tag := range reEPUBItemref().FindAll(opf, -1) {
 		attrs := epubAttrs(string(tag))
 		if strings.EqualFold(attrs["linear"], "no") {
 			continue
@@ -219,7 +224,7 @@ func epubParseBytes(data []byte, path string) pdfDoc {
 // epubAttrs reads the attributes out of one HTML/OPF tag.
 func epubAttrs(tag string) map[string]string {
 	attrs := map[string]string{}
-	for _, m := range reEPUBHTMLAttr.FindAllStringSubmatch(tag, -1) {
+	for _, m := range reEPUBHTMLAttr().FindAllStringSubmatch(tag, -1) {
 		attrs[strings.ToLower(m[1])] = html.UnescapeString(m[2])
 	}
 	return attrs
@@ -250,7 +255,7 @@ func pathJoinSlash(dir, name string) string {
 
 // cleanHTMLInline strips tags and collapses whitespace for a metadata value.
 func cleanHTMLInline(s string) string {
-	s = reTag.ReplaceAllString(s, " ")
+	s = reTag().ReplaceAllString(s, " ")
 	return strings.Join(strings.Fields(html.UnescapeString(s)), " ")
 }
 
@@ -260,25 +265,25 @@ func cleanHTMLInline(s string) string {
 // the next.
 func epubHTMLText(raw []byte) (string, string) {
 	s := string(raw)
-	s = reCommentBlock.ReplaceAllString(s, " ")
+	s = reCommentBlock().ReplaceAllString(s, " ")
 	title := ""
-	if m := reDocTitleTag.FindStringSubmatch(s); m != nil {
+	if m := reDocTitleTag().FindStringSubmatch(s); m != nil {
 		title = cleanHTMLInline(m[1])
 	}
 	body := s
 	if i := strings.Index(asciiLower(body), "<body"); i >= 0 {
 		body = body[i:]
 	}
-	body = reStyleBlock.ReplaceAllString(body, " ")
-	body = reHeadBlock.ReplaceAllString(body, " ")
+	body = reStyleBlock().ReplaceAllString(body, " ")
+	body = reHeadBlock().ReplaceAllString(body, " ")
 	if title == "" {
-		if m := reHeading.FindStringSubmatch(body); m != nil {
+		if m := reHeading().FindStringSubmatch(body); m != nil {
 			title = cleanHTMLInline(m[1])
 		}
 	}
-	body = reBulletTag.ReplaceAllString(body, "\n• ")
-	body = reLineBreakTag.ReplaceAllString(body, "\n")
-	body = reTag.ReplaceAllString(body, "")
+	body = reBulletTag().ReplaceAllString(body, "\n• ")
+	body = reLineBreakTag().ReplaceAllString(body, "\n")
+	body = reTag().ReplaceAllString(body, "")
 	body = html.UnescapeString(body)
 	body = strings.ReplaceAll(body, "\r\n", "\n")
 	body = strings.ReplaceAll(body, "\r", "\n")
@@ -346,20 +351,20 @@ func readerPaginate(text string, maxChars int) []string {
 // ── PDF ────────────────────────────────────────────────────────────────────
 
 var (
-	rePDFObject    = regexp.MustCompile(`(?s)(\d+)\s+\d+\s+obj\b(.*?)endobj`)
-	rePDFRef       = regexp.MustCompile(`(\d+)\s+\d+\s+R`)
-	rePDFPagesRef  = regexp.MustCompile(`(?s)/Pages\s+(\d+)\s+\d+\s+R`)
-	rePDFKids      = regexp.MustCompile(`(?s)/Kids\s*\[(.*?)\]`)
-	rePDFContents  = regexp.MustCompile(`(?s)/Contents\s*(\d+)\s+\d+\s+R`)
-	rePDFContentsA = regexp.MustCompile(`(?s)/Contents\s*\[(.*?)\]`)
-	rePDFTitle     = regexp.MustCompile(`(?s)/Title\s*\(((?:\\.|[^\\)])*)\)`)
-	rePDFAuthor    = regexp.MustCompile(`(?s)/Author\s*\(((?:\\.|[^\\)])*)\)`)
+	rePDFObject    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)(\d+)\s+\d+\s+obj\b(.*?)endobj`) })
+	rePDFRef       = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(\d+)\s+\d+\s+R`) })
+	rePDFPagesRef  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)/Pages\s+(\d+)\s+\d+\s+R`) })
+	rePDFKids      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)/Kids\s*\[(.*?)\]`) })
+	rePDFContents  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)/Contents\s*(\d+)\s+\d+\s+R`) })
+	rePDFContentsA = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)/Contents\s*\[(.*?)\]`) })
+	rePDFTitle     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)/Title\s*\(((?:\\.|[^\\)])*)\)`) })
+	rePDFAuthor    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)/Author\s*\(((?:\\.|[^\\)])*)\)`) })
 )
 
 // pdfPageObjects maps an object number to its body.
 func pdfPageObjects(data []byte) map[int][]byte {
 	objs := map[int][]byte{}
-	for _, m := range rePDFObject.FindAllSubmatch(data, -1) {
+	for _, m := range rePDFObject().FindAllSubmatch(data, -1) {
 		num := 0
 		for _, c := range m[1] {
 			num = num*10 + int(c-'0')
@@ -430,11 +435,11 @@ func pdfOrderedPageObjects(objs map[int][]byte) [][]byte {
 			pages = append(pages, body)
 			return
 		}
-		kids := rePDFKids.FindSubmatch(body)
+		kids := rePDFKids().FindSubmatch(body)
 		if kids == nil {
 			return
 		}
-		for _, ref := range rePDFRef.FindAllSubmatch(kids[1], -1) {
+		for _, ref := range rePDFRef().FindAllSubmatch(kids[1], -1) {
 			child := 0
 			for _, c := range ref[1] {
 				child = child*10 + int(c-'0')
@@ -443,7 +448,7 @@ func pdfOrderedPageObjects(objs map[int][]byte) [][]byte {
 		}
 	}
 	if catalog >= 0 {
-		if m := rePDFPagesRef.FindSubmatch(objs[catalog]); m != nil {
+		if m := rePDFPagesRef().FindSubmatch(objs[catalog]); m != nil {
 			root := 0
 			for _, c := range m[1] {
 				root = root*10 + int(c-'0')
@@ -466,8 +471,8 @@ func pdfOrderedPageObjects(objs map[int][]byte) [][]byte {
 // the order the page lists them.
 func pdfContentObjects(objs map[int][]byte, page []byte) [][]byte {
 	refs := []int{}
-	if m := rePDFContentsA.FindSubmatch(page); m != nil {
-		for _, ref := range rePDFRef.FindAllSubmatch(m[1], -1) {
+	if m := rePDFContentsA().FindSubmatch(page); m != nil {
+		for _, ref := range rePDFRef().FindAllSubmatch(m[1], -1) {
 			n := 0
 			for _, c := range ref[1] {
 				n = n*10 + int(c-'0')
@@ -476,7 +481,7 @@ func pdfContentObjects(objs map[int][]byte, page []byte) [][]byte {
 		}
 	}
 	if len(refs) == 0 {
-		if m := rePDFContents.FindSubmatch(page); m != nil {
+		if m := rePDFContents().FindSubmatch(page); m != nil {
 			n := 0
 			for _, c := range m[1] {
 				n = n*10 + int(c-'0')
@@ -1041,24 +1046,8 @@ func pdfTextFromContent(content []byte) string {
 
 // ── Opening and metadata ───────────────────────────────────────────────────
 
-// pdfExtractText loads a PDF: page-accurate text when the page tree can be read,
-// and the old whole-document scan only as a last resort for files whose objects
-// are inside compressed object streams.
-func pdfExtractText(path string) pdfDoc {
-	resolved, guardErr := resolveExplorerEntry(appConfig, path)
-	if guardErr != nil {
-		return pdfDoc{Path: path, Format: "PDF", Error: "Cannot open file: " + guardErr.Error()}
-	}
-	path = resolved
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return pdfDoc{Path: path, Format: "PDF", Error: "Cannot open file: " + err.Error()}
-	}
-	return pdfExtractTextFromBytes(data, path)
-}
-
-// pdfExtractTextFromBytes is the parser behind pdfExtractText. Splitting it out
-// keeps the file read and the explorer guard out of the extractor tests.
+// pdfExtractTextFromBytes is the PDF text parser, kept separate from any file
+// read so the extractor tests can feed it bytes.
 func pdfExtractTextFromBytes(data []byte, path string) pdfDoc {
 	doc := pdfDoc{Path: path, Format: "PDF", Loaded: true}
 	// The full reader (pdfv_doc.go) first: it unpacks object streams, follows
@@ -1080,10 +1069,10 @@ func pdfExtractTextFromBytes(data []byte, path string) pdfDoc {
 			}
 		}
 	}
-	if m := rePDFTitle.FindSubmatch(data); m != nil {
+	if m := rePDFTitle().FindSubmatch(data); m != nil {
 		doc.Title = strings.TrimSpace(pdfDecodeTextBytes(pdfUnescapeLiteral(m[1])))
 	}
-	if m := rePDFAuthor.FindSubmatch(data); m != nil {
+	if m := rePDFAuthor().FindSubmatch(data); m != nil {
 		doc.Author = strings.TrimSpace(pdfDecodeTextBytes(pdfUnescapeLiteral(m[1])))
 	}
 

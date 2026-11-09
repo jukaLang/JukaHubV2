@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"math"
 	"strconv"
 	"strings"
@@ -64,7 +63,7 @@ func initAudioDevice() {
 	var obtained sdl.AudioSpec
 	id, err := sdl.OpenAudioDevice("", false, &desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || id == 0 {
-		log.Printf("[AUDIO] no UI sound device: %v", err)
+		logWarn("audio", "no UI sound device: %v", err)
 		return
 	}
 	sdl.PauseAudioDevice(id, false)
@@ -438,53 +437,6 @@ func bootSfxPlay(kind bootSfxKind) {
 	_ = sdl.QueueAudio(audioDev, data)
 }
 
-// playTone synthesizes a short sine wave with a soft attack/release envelope
-// and queues it on the audio device. Rapid repeated calls are throttled so a
-// held D-pad direction cannot pile up a long queue.
-func playTone(freq float64, ms int, volume float64) {
-	audioInitOnce.Do(initAudioDevice)
-	if !audioAvailable || freq <= 0 || ms <= 0 {
-		return
-	}
-	audioMutex.Lock()
-	defer audioMutex.Unlock()
-	// Keep at most ~0.5s of audio queued; drop effects when the queue is
-	// already full (e.g. navigation held down).
-	if sdl.GetQueuedAudioSize(audioDev) > uint32(audioSampleRate)*2 {
-		return
-	}
-	n := int(float64(audioSampleRate) * float64(ms) / 1000.0)
-	if n <= 0 {
-		return
-	}
-	attack := n / 8
-	if attack < 2 {
-		attack = 2
-	}
-	release := n / 10
-	if release < 2 {
-		release = 2
-	}
-	data := make([]byte, n*2)
-	for i := 0; i < n; i++ {
-		t := float64(i) / float64(audioSampleRate)
-		env := 1.0
-		if i < attack {
-			env = float64(i) / float64(attack)
-		} else if i > n-release {
-			env = float64(n-i) / float64(release)
-		}
-		v := math.Sin(2*math.Pi*freq*t) * env * volume * 0.5
-		s := int16(v * 32767.0)
-		data[i*2] = byte(s)
-		data[i*2+1] = byte(s >> 8)
-	}
-	// Feed the LED sync with the same samples the beep is about to play. Mono,
-	// so the analyser sees each sample once.
-	publishAudioLevel(data, int(audioSampleRate), 1)
-	_ = sdl.QueueAudio(audioDev, data)
-}
-
 // Each Play* helper also fires the matching vibration pulse from haptics.go.
 // These six functions are where every button, touch and toast already lands,
 // so feedback stays consistent without adding haptics at call sites. The
@@ -572,7 +524,7 @@ func initVideoAudioDevice() {
 		videoAudioDev = id
 		videoAudioOK = true
 		videoAudioRate = obtained.Freq
-		log.Printf("[AUDIO] video device opened: %d Hz stereo S16 (wanted %d)", obtained.Freq, rate)
+		logDebug("audio", "video device opened: %d Hz stereo S16 (wanted %d)", obtained.Freq, rate)
 		return
 	}
 	// Last resort: allow SDL to resample. Audio quality may suffer.
@@ -586,14 +538,14 @@ func initVideoAudioDevice() {
 	id, err := sdl.OpenAudioDevice("", false, &desired, &obtained,
 		sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || id == 0 {
-		log.Printf("[AUDIO] failed to open any video audio device")
+		logWarn("audio", "failed to open any video audio device")
 		return
 	}
 	sdl.PauseAudioDevice(id, false)
 	videoAudioDev = id
 	videoAudioOK = true
 	videoAudioRate = obtained.Freq
-	log.Printf("[AUDIO] video device (fallback): %d Hz stereo S16 (wanted %d) — resampling active", obtained.Freq, desired.Freq)
+	logDebug("audio", "video device (fallback): %d Hz stereo S16 (wanted %d) — resampling active", obtained.Freq, desired.Freq)
 }
 
 // GetVideoAudioRate returns the actual sample rate the video audio device

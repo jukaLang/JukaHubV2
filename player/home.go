@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +53,11 @@ func refreshHomeLayout(config *Config) {
 	scene := config.Scenes[currentSceneIndex]
 	homeLayoutActive = scene.Layout == "home"
 	if !homeLayoutActive {
+		// The power card belongs to Home: a scene change (a section shoulder,
+		// a shortcut) leaves it behind instead of carrying it to the next visit.
+		if homePowerConfirm.open {
+			homePowerClose()
+		}
 		return
 	}
 	if homeLayout == nil {
@@ -122,8 +126,8 @@ func homeTileSignature(elements []Element) string {
 
 // buildHomeTileMap maps Main-scene tile element indices to the home items they
 // belong to, using the same leniency as the triggers always have matched with:
-// an exact (case insensitive) title, or any text containing "tools" naming the
-// Tools card (the shipped configs may spell that row "Search / Tools").
+// an exact (case insensitive) title, or a name the card has had
+// (homeTitleAlias: "Emulator" for Games, "Search / Tools" for Tools).
 func buildHomeTileMap(elements []Element, h *HomeLayout) map[int]HomeFocusID {
 	out := map[int]HomeFocusID{}
 	for i, el := range elements {
@@ -131,13 +135,13 @@ func buildHomeTileMap(elements []Element, h *HomeLayout) map[int]HomeFocusID {
 			continue
 		}
 		title := strings.TrimSpace(el.Text)
+		alias := homeTitleAlias(title)
 		for _, id := range h.Order {
 			item, ok := h.Items[id]
 			if !ok {
 				continue
 			}
-			if strings.EqualFold(strings.TrimSpace(item.Title), title) ||
-				(id == HomeFocusTools && strings.Contains(strings.ToLower(title), "tools")) {
+			if strings.EqualFold(strings.TrimSpace(item.Title), title) || alias == id {
 				out[i] = id
 				break
 			}
@@ -239,15 +243,6 @@ func calendarAlarmButtonRect() sdl.Rect {
 	}
 }
 
-// calendarPopoverRect bounds the whole clock popover (calendar card plus the
-// action row). Clicks inside it belong to the popover; clicks outside dismiss
-// it before they reach the scene underneath.
-func calendarPopoverRect() sdl.Rect {
-	r := homeCalendarRect()
-	b := calendarAlarmButtonRect()
-	return sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: b.Y + b.H - r.Y}
-}
-
 // toggleCalendarPopover opens or closes the clock popover. The clock behaves
 // the same on Home and every other scene, so there is one toggle for both.
 // It is exclusive with the other top-bar overlays: two floating panels at once
@@ -328,14 +323,14 @@ func homeActivate(config *Config) {
 	// the chrome control on other scenes. notifToggle plays its own
 	// activation sound, so return before the generic one.
 	if id == HomeFocusBell {
-		log.Printf("[home] activate card %s", id)
+		logDebug("home", "activate card %s", id)
 		homePressedID = id
 		homePressedAt = sdl.GetTicks64()
 		notifToggle()
 		return
 	}
 	PlayActivateSound()
-	log.Printf("[home] activate card %s", id)
+	logDebug("home", "activate card %s", id)
 	homePressedID = id
 	homePressedAt = sdl.GetTicks64()
 
@@ -373,15 +368,20 @@ func homeActivate(config *Config) {
 		if homeContinueResume(config) {
 			return
 		}
+		// Nothing to resume: the first-run card's own step, the one its pill
+		// names (homeContinueEmptyState) — the game library on a handheld,
+		// Media on the desktop.
+		if homeContinueStartsGames() {
+			openGameLibraryPanel()
+			return
+		}
 		id = HomeFocusMedia
 	}
-	// Exit powers down: stop any embedded playback, then quit through the main
-	// loop's clean shutdown, which draws the glass teardown.
+	// The power button asks first (home_power.go): its card's Exit stops any
+	// embedded playback and quits through the main loop's clean shutdown,
+	// which draws the glass teardown.
 	if id == HomeFocusExit {
-		if snapshotVideoState().phase != "idle" {
-			StopEmbeddedPlayback()
-		}
-		requestAppExit()
+		homePowerOpen()
 		return
 	}
 	// Header chips never map to a scene: their dedicated triggers run before
@@ -398,12 +398,13 @@ func homeActivate(config *Config) {
 		toggleCalendarPopover()
 		return
 	}
-	// The Emulator card opens the availability panel on every platform: the
-	// desktop config has no "Emulator" scene (the card used to dead-end), and
-	// on the handheld the panel lists every emulator with its availability
-	// instead of a static launcher label.
+	// The Games card opens the game library — consoles, their games and box
+	// art — on every platform; it is a modal panel, so it needs no scene and
+	// works on the desktop config too. The emulator manager it used to open is
+	// setup, not play: it stays one step away in Start → Games → Emulators and
+	// in search.
 	if id == HomeFocusEmulator {
-		openEmulatorPanel()
+		openGameLibraryPanel()
 		return
 	}
 	// The Browser card opens the in-app browser on its start page; the scene is
@@ -426,7 +427,7 @@ func homeActivate(config *Config) {
 	// exact name here: a card whose screen this config lacks must not quietly
 	// return to Home.
 	idx := sceneIndexExact(config, target)
-	log.Printf("[home] %s -> scene %q (index %d)", id, target, idx)
+	logDebug("home", "%s -> scene %q (index %d)", id, target, idx)
 	if idx >= 0 {
 		changeSceneTo(config, idx)
 	}
@@ -437,6 +438,10 @@ func homeActivate(config *Config) {
 func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || homeLayout == nil {
 		return false
+	}
+	// The power button's confirmation is modal over Home.
+	if homePowerConfirm.open {
+		return homePowerKey(e)
 	}
 	// Easter egg: track J-U-K-A key sequence for firework animation.
 	if !fw.active {
@@ -495,6 +500,9 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || homeLayout == nil {
 		return false
 	}
+	if homePowerConfirm.open {
+		return homePowerPad(e)
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		if homeLayout.Focus.Current() != homeLayout.Move(FocusUp) {
@@ -545,6 +553,11 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	if homeLayout == nil {
 		return false
+	}
+	// The power button's confirmation owns every tap while it is up.
+	if homePowerConfirm.open {
+		homePowerClick(mx, my)
+		return true
 	}
 	// With the calendar popover open, a click inside it is consumed, a click
 	// on the clock toggles it closed, and any other click dismisses it without
@@ -743,6 +756,8 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	// A paired device's activity to continue here, or a pairing code to
 	// compare: a modal glass card over the layout (hoffcard.go).
 	hoffRenderCard(renderer, config)
+	// The power button's "Exit JukaHub?" card, over everything Home draws.
+	renderHomePowerConfirm(renderer, config)
 }
 
 // loadHomeFonts opens the bundled Inter font at the home-screen sizes. Inter
@@ -752,27 +767,21 @@ func loadHomeFonts() HomeFonts {
 	homeFontsOnce.Do(func() {
 		// The compact 4:3 canvas keeps the 720 height but loses a quarter of the
 		// width, so the home type scale shrinks with it; otherwise the narrow
-		// feature row truncates "Favorites" to "Favo…".
+		// feature row truncates "Favorites" to "Favo…". The legibility floor
+		// (uiLegibleFontSize) stops the 14px captions there at 12px instead of
+		// the 11px the bare scale gave a 3.2" panel.
 		homeFontsCache = HomeFonts{
-			Brand:    openHomeFont(uiScaleFontSize(26)),
-			Greeting: openHomeFont(uiScaleFontSize(32)),
-			Subtitle: openHomeFont(uiScaleFontSize(19)),
-			Card:     openHomeFont(uiScaleFontSize(23)),
-			Tile:     openHomeFont(uiScaleFontSize(20)),
-			Meta:     openHomeFont(uiScaleFontSize(14)),
-			Helper:   openHomeFont(uiScaleFontSize(17)),
-			Small:    openHomeFont(uiScaleFontSize(16)),
+			Brand:    openHomeFont(uiLegibleFontSize(26)),
+			Greeting: openHomeFont(uiLegibleFontSize(32)),
+			Subtitle: openHomeFont(uiLegibleFontSize(19)),
+			Card:     openHomeFont(uiLegibleFontSize(23)),
+			Tile:     openHomeFont(uiLegibleFontSize(20)),
+			Meta:     openHomeFont(uiLegibleFontSize(14)),
+			Helper:   openHomeFont(uiLegibleFontSize(17)),
+			Small:    openHomeFont(uiLegibleFontSize(16)),
 		}
 	})
 	return homeFontsCache
-}
-
-// resetHomeFonts drops the cached home type scale so it is reopened for the
-// current canvas. The fonts are sized from the canvas width, which is only
-// known once the window exists.
-func resetHomeFonts() {
-	homeFontsCache = HomeFonts{}
-	homeFontsOnce = sync.Once{}
 }
 
 // openHomeFont opens the bundled Inter at one home-screen size. It goes through

@@ -158,17 +158,6 @@ func splashRenderFrame(renderer *sdl.Renderer, config *Config, snap *stageSnapsh
 	}
 }
 
-// renderSplash draws one frame of a splash that hands over at total
-// milliseconds: the frame a test (or a still) asks for without running the
-// loop.
-func renderSplash(renderer *sdl.Renderer, config *Config, snap stageSnapshot, elapsed, total float64) {
-	handoff := 0.0
-	if start := total - splashHandoffMS; total > 0 && elapsed > start {
-		handoff = bootClamp01((elapsed - start) / splashHandoffMS)
-	}
-	splashRenderFrame(renderer, config, &snap, elapsed, handoff, !effectiveReducedMotion(config), versionDisplayString(config), splashSkipHint())
-}
-
 // ShowSplash plays the boot card for the time the boot budget left over,
 // running the queued startup work between frames (bootwork.go) so the window
 // is spent booting rather than idling. It hands over as soon as the queue has

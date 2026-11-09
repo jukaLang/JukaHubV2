@@ -1,6 +1,8 @@
 package main
 
-// HomeFocusID is a stable identifier for a selectable home-screen card.
+// HomeFocusID is a stable identifier for a selectable home-screen card. IDs
+// outlive the cards' names: HomeFocusEmulator is the Games card (it opens the
+// game library), and keeps its old ID so config mappings stay valid.
 type HomeFocusID string
 
 const (
@@ -83,17 +85,17 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	},
 	HomeFocusMedia: {
 		// Media spans the whole right column, so Down belongs to the first tile
-		// under it: Files. It used to skip Files and land on Packages. Up is the
-		// PS5 launcher drawn over it in the header band; the layout re-points
-		// that edge at whichever card the tile really sits over (SetTileLink),
-		// and with the launcher hidden Move falls through to the clock.
-		Up: HomeFocusPS5, Down: HomeFocusFiles,
+		// under it: Games. Up is the PS5 launcher drawn over it in the header
+		// band; the layout re-points that edge at whichever card the tile really
+		// sits over (SetTileLink), and with the launcher hidden Move falls
+		// through to the clock.
+		Up: HomeFocusPS5, Down: HomeFocusEmulator,
 		Left: HomeFocusContinue, Right: HomeFocusMedia,
 	},
-	HomeFocusFiles: {
-		// Files is the first tile of the row under Media, so Up is Media. It
-		// used to point at the PS5 launcher two rows up, which made Up from
-		// Files skip the card drawn directly above it.
+	HomeFocusEmulator: {
+		// Games (the HomeFocusEmulator card) is the first tile of the row under
+		// Media, beside the Continue hero: Up is Media, Left the hero, and Down
+		// the Tools tile its right half sits over in the bottom row.
 		Up: HomeFocusMedia, Down: HomeFocusTools,
 		Left: HomeFocusContinue, Right: HomeFocusPackages,
 	},
@@ -110,12 +112,11 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Left: HomeFocusPS4, Right: HomeFocusClock,
 	},
 	HomeFocusPackages: {
-		// Left is the Files card beside it. It used to jump over Files to the
-		// Continue hero, which is why Files (and its browser) felt unreachable
-		// from the right half of the grid. Up is the Media card drawn over the
-		// whole row, not Files beside it.
-		Up: HomeFocusMedia, Down: HomeFocusEmulator,
-		Left: HomeFocusFiles, Right: HomeFocusApps,
+		// Left is the Games card beside it, never a jump over it to the hero.
+		// Up is the Media card drawn over the whole row; Down is Files, the
+		// bottom-row tile under its centre.
+		Up: HomeFocusMedia, Down: HomeFocusFiles,
+		Left: HomeFocusEmulator, Right: HomeFocusApps,
 	},
 	HomeFocusApps: {
 		// Apps sits under the right end of the Media card and above the
@@ -124,28 +125,32 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusMedia, Down: HomeFocusSettings,
 		Left: HomeFocusPackages, Right: HomeFocusApps,
 	},
+	// The bottom row's left end drops to the power button under it, at the
+	// left end of the footer (home_power.go), and Up from the button comes
+	// back here; the rest of the row has nothing below it, so Down stays put.
 	HomeFocusFavorites: {
 		Up: HomeFocusContinue, Down: HomeFocusExit,
 		Left: HomeFocusFavorites, Right: HomeFocusBrowser,
 	},
 	// The browser card sits between Favorites and Chat in the bottom row, so
-	// Right walks Favorites -> Browser -> Chat -> Tools -> Emulator.
+	// Right walks Favorites -> Browser -> Chat -> Tools -> Files -> Settings.
 	HomeFocusBrowser: {
-		Up: HomeFocusContinue, Down: HomeFocusExit,
+		Up: HomeFocusContinue, Down: HomeFocusBrowser,
 		Left: HomeFocusFavorites, Right: HomeFocusChat,
 	},
 	HomeFocusChat: {
-		// Chat's centre sits under the Files card (the Continue hero ends left
-		// of it), so Up is Files, the card drawn above most of the tile.
-		Up: HomeFocusFiles, Down: HomeFocusChat,
+		// Chat's centre sits under the Games card (the Continue hero ends left
+		// of it), so Up is Games, the card drawn above most of the tile.
+		Up: HomeFocusEmulator, Down: HomeFocusChat,
 		Left: HomeFocusBrowser, Right: HomeFocusTools,
 	},
 	HomeFocusTools: {
-		Up: HomeFocusFiles, Down: HomeFocusTools,
-		Left: HomeFocusChat, Right: HomeFocusEmulator,
+		Up: HomeFocusEmulator, Down: HomeFocusTools,
+		Left: HomeFocusChat, Right: HomeFocusFiles,
 	},
-	HomeFocusEmulator: {
-		Up: HomeFocusPackages, Down: HomeFocusEmulator,
+	HomeFocusFiles: {
+		// Files is the fifth tile of the bottom row, under Packages.
+		Up: HomeFocusPackages, Down: HomeFocusFiles,
 		Left: HomeFocusTools, Right: HomeFocusSettings,
 	},
 	// Settings is the last tile of the bottom row, under Apps. Its edges still
@@ -154,7 +159,7 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	// be walked to and Up from Settings jumped over Apps.
 	HomeFocusSettings: {
 		Up: HomeFocusApps, Down: HomeFocusSettings,
-		Left: HomeFocusEmulator, Right: HomeFocusSettings,
+		Left: HomeFocusFiles, Right: HomeFocusSettings,
 	},
 	// The header chips sit in the status row above the Remote Play launchers,
 	// so Down from any of them lands on the launcher under that end of the bar
@@ -206,7 +211,8 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusBell, Down: HomeFocusPS5,
 		Left: HomeFocusUpdate, Right: HomeFocusBell,
 	},
-	// Exit sits on the footer's left end; Favorites drops down to it.
+	// The power button sits at the footer's left end, under Favorites; it is
+	// enabled only while it is drawn (HomeLayout.Render).
 	HomeFocusExit: {
 		Up: HomeFocusFavorites, Down: HomeFocusExit,
 		Left: HomeFocusExit, Right: HomeFocusExit,
@@ -373,9 +379,9 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 // firstEnabled returns the first enabled focus ID in the default order.
 func (f *HomeFocusController) firstEnabled() HomeFocusID {
 	order := []HomeFocusID{
-		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
+		HomeFocusContinue, HomeFocusMedia, HomeFocusEmulator,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
-		HomeFocusChat, HomeFocusTools, HomeFocusEmulator, HomeFocusSettings,
+		HomeFocusChat, HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
 		HomeFocusSearch, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
 		HomeFocusUpdate, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
 	}

@@ -5,10 +5,10 @@ import (
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
-	"log"
 	"math"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -20,10 +20,10 @@ var frameRateCtrl *FrameRateController
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic: %v\n%s", r, debug.Stack())
-			// Only the fact that a panic happened leaves the device, and only
-			// when the user opted in. The stack above stays local.
-			TelemetryCrash(appConfig)
+			// Runs after every other deferred cleanup, then re-panics: the
+			// runtime prints the stack to errors.txt and the crash report and
+			// exits 2, so a crash is never mistaken for a quit (crashreport.go).
+			crashOnMainPanic(r, debug.Stack())
 		}
 	}()
 
@@ -33,7 +33,10 @@ func main() {
 		os.Exit(code)
 	}
 
-	initLogging()
+	InitLogging()
+	// What the last session's crash left is filed as a report, and this
+	// session's crash output is opened (crashreport.go).
+	initCrashReports()
 	// The stop signals (the firmware's power handling, a launcher that stops
 	// the app) have to land on the same exit path as the Exit button: killed by
 	// the default handler, the app would leave a running game over the display.
@@ -41,25 +44,50 @@ func main() {
 	startupMarkNow("pre-sdl")
 
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
-		log.Fatal("SDL init error:", err)
+		logFatal("startup", "SDL init error: %v", err)
 	}
 	defer sdl.Quit()
+	// Runs before sdl.Quit on every path out of main, panics included: a chime
+	// still streaming must close its device before SDL shuts audio down.
+	defer shutdownChimeWait()
 	startupMarkNow("sdl")
 
 	if err := ttf.Init(); err != nil {
-		log.Fatal("TTF init error:", err)
+		logFatal("startup", "TTF init error: %v", err)
 	}
 	defer ttf.Quit()
 
 	if err := img.Init(img.INIT_PNG | img.INIT_JPG); err != nil {
-		log.Fatal("IMG init error:", err)
+		logFatal("startup", "IMG init error: %v", err)
 	}
 	// WebP box art: best-effort, because a build without libwebp must still
 	// start. Every shipped SDL_image is built with it, so the error is only a
 	// log line if a custom runtime drops the codec.
 	if err := img.Init(img.INIT_WEBP); err != nil {
-		log.Printf("WEBP init unavailable: %v", err)
+		logWarn("main", "WEBP init unavailable: %v", err)
 	}
+
+	// Safe mode, the recovery chord and the boot guard run before the config is
+	// loaded, so a start that dies loading or applying it is counted too. None
+	// of them reads the config: the flag file is looked up in the folder
+	// JukaHub runs in, the chord reads the pad SDL has just opened, and the
+	// boot record lives in the Patch state folder, which depends only on the
+	// device and the executable's folder.
+	//
+	// Safe mode is decided before any background work starts, so a bad plugin,
+	// update feed or network setup can be bypassed for this launch without
+	// touching the user's config.
+	initSafeMode()
+	// The recovery chord (L+R+Start held at boot) turns safe mode on and opens
+	// the recovery card with the first frame (previous version, last good
+	// settings, safe mode, reset settings), so a bad update or a bad setting is
+	// reversible without a terminal or a card reader.
+	initSafeboot()
+	// The boot guard is the automatic half (bootguard.go): it counts boots, not
+	// clock time. Three failed starts in a row start safe mode; a new build
+	// that crashed its first starts is rolled back after InitPatchModule below.
+	initBootGuard()
+
 	// Enable text input so physical keyboard typing works in input fields
 	// (both the on-screen keyboard modal and the main loop).
 	sdl.StartTextInput()
@@ -78,7 +106,7 @@ func main() {
 	// Try XML config first (exported by the web editor), then fall back to JSON.
 	config, configPath, err := LoadXMLConfigWithFallback("jukaconfig.json")
 	if err != nil {
-		log.Fatal("Failed to load config:", err)
+		logFatal("startup", "Failed to load config: %v", err)
 	}
 	LogScene("init").Info("config loaded", "path", configPath, "loadErrors", configHealth.LoadErrors)
 	startupMarkNow("config")
@@ -118,20 +146,6 @@ func main() {
 	// video frames, render layers). On the TrimUI this installs a soft heap
 	// limit so a 4K video + thumbnail grid cannot balloon the Go heap.
 	applyGCForDevice()
-
-	// Safe mode is decided before any background work starts, so a bad plugin,
-	// update feed or network setup can be bypassed for this launch without
-	// touching the user's config.
-	initSafeMode()
-	// The recovery chord (L+R+Start held at boot) turns safe mode on and puts the
-	// previous JukaHub binary back, so a bad update is reversible without a
-	// terminal or a card reader.
-	initSafeboot()
-	// The boot guard is the automatic half of the same protection: a recently
-	// applied update that dies on the first frames a few boots in a row is
-	// rolled back without anyone holding a chord. Runs second so an explicit
-	// safe-mode request (flag, env or chord) disables it for this launch.
-	initBootGuard()
 
 	// The alarm UI renders through the scene pipeline; register its scene at
 	// startup (in-memory, never written back) so the status-bar clock and the
@@ -212,6 +226,9 @@ func main() {
 	loadFavorites()
 	initCalc()
 	alarmLoad()
+	// The time zone chosen on the device and the network-time switch
+	// (datetime.go), before anything prints a time.
+	dateTimeInit(config)
 	notesInit()
 	qsInit()
 	// Accessibility settings load before the first frame so a saved text size is
@@ -234,7 +251,7 @@ func main() {
 	// Network work is queued until after the first frame: weather, the tool
 	// probe, telemetry, the update check and the network/companion listeners all
 	// compete with cold font rasterisation, and none of them are needed to paint
-	// the home screen. See runDeferredStartup.
+	// the home screen. See runDeferredStartupFor.
 	if safeModeAllows(SafeFeatureNetwork) {
 		deferStartupTask("weather", func() { startWeather(config) })
 	}
@@ -251,23 +268,24 @@ func main() {
 	// Patch module: load persisted state and roll back any interrupted update
 	// transaction so JukaHub always launches in a consistent state.
 	InitPatchModule()
-	// Game profiles: create the catalog folders once. The catalog itself is
-	// loaded lazily when the launcher opens, so a broken profile cannot slow
-	// startup or prevent booting.
-	InitGameProfiles()
-	// Compatibility catalog: create the folder skeleton and starter reports.
-	// The catalog stays lazy; a large community pack only loads when the
-	// intelligence panel opens.
-	InitCompatibility()
-	// Save Manager: create the snapshot/sync/resume folders. Discovery and the
-	// snapshot list stay lazy so a slow card does not delay boot.
-	InitSaveManager()
-	// Curation Hub: create the profile/vote folders. The feed and the ROM
-	// scan stay lazy so boot does not wait on the network or the card.
-	InitCuration()
-	// Windows Apps: create the drop folders. Runtimes themselves are not
-	// installed here; the panel detects Wine and WestonPack instead.
-	InitWindowsApps()
+	// A rollback the boot guard decided on needs Version history, loaded just
+	// above; it restarts JukaHub into the previous version through the swap
+	// helper, and this launch stays in safe mode until then.
+	bootGuardStartRollbackIfDue(config)
+	// Folder skeletons: the game-profile catalog, the compatibility catalog
+	// and its starter reports, the Save Manager's snapshot/sync/resume
+	// folders, the Curation Hub and the Windows-apps drop folders. They are
+	// mkdirs and README writes — a few dozen stat calls on a cold SD card —
+	// that nothing reads before one of those panels opens, so they run beside
+	// the window and the splash instead of in front of the first frame. The
+	// catalogs, discovery and feeds behind them stay lazy as before.
+	go func() {
+		InitGameProfiles()
+		InitCompatibility()
+		InitSaveManager()
+		InitCuration()
+		InitWindowsApps()
+	}()
 
 	// Show the release notes once on the first launch of a newly installed
 	// build. The notes were cached before the restart, so this works offline.
@@ -322,6 +340,10 @@ func main() {
 	// on their own ticker.
 	deferStartupTask("audio-output", startAudioOutputMonitor)
 
+	// A USB or Bluetooth keyboard plugged into the handheld turns the hints into
+	// keyboard keys (inputhints.go); a PC always has one, so this is a no-op there.
+	deferStartupTask("input-hints", startInputHintsMonitor)
+
 	// Tools panel / FTP: publish the initial IP and server state, and make sure
 	// the listener never outlives the app.
 	initToolsModule()
@@ -341,16 +363,20 @@ func main() {
 	}
 	startScreensaverMonitor()
 
-	// Start periodic social notifications (if enabled).
-	if config.Variables.SocialNotifs {
-		deferStartupTask("social-notifs", startSocialNotifs)
-	}
-
-	// Game tick for Pong/Snake/Tetris.
+	// Game tick for Pong/Snake/Tetris. The ticker only runs while a game is
+	// open: parked, it used to wake the CPU sixty times a second for the whole
+	// session to find there was nothing to tick (startGame wakes it).
 	go func() {
 		ticker := time.NewTicker(time.Second / 60)
 		defer ticker.Stop()
-		for range ticker.C {
+		for {
+			if activeGame == gameNone {
+				ticker.Stop()
+				<-minigameWake
+				ticker.Reset(time.Second / 60)
+				continue
+			}
+			<-ticker.C
 			// A ringing alarm pauses the mini-games under its takeover, the
 			// way it pauses a running emulator (alarmvol.go).
 			if alarmFiringActive() {
@@ -414,7 +440,7 @@ func main() {
 	window, err := sdl.CreateWindow(config.Title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, screenWidth, screenHeight, uint32(windowFlags))
 	mainWindow = window
 	if err != nil {
-		log.Fatal("Window creation error:", err)
+		logFatal("startup", "Window creation error: %v", err)
 	}
 	defer window.Destroy()
 	// Title bar, Alt-Tab and the taskbar read the window's own icon, so set it
@@ -428,6 +454,13 @@ func main() {
 	// stands. Windows development keeps its usual Direct3D default.
 	if !IsWindows() {
 		sdl.SetHint(sdl.HINT_RENDER_DRIVER, "opengles2")
+		// Naming a render driver switches SDL2's command batching off (it
+		// assumes the app may mix in its own GL calls), so every Copy and
+		// FillRect became its own draw call with its own state changes — on
+		// the PowerVR driver that is CPU time per blit. JukaHub never touches
+		// GL directly, which is the contract this hint asks for. Windows names
+		// no driver, so its default renderer already batches.
+		sdl.SetHint(sdl.HINT_RENDER_BATCHING, "1")
 	}
 
 	// Touch maps to mouse exactly once (see disableSyntheticTouchMouse); the
@@ -441,7 +474,7 @@ func main() {
 		// unavailable (e.g. dummy/offscreen drivers used in CI/headless).
 		renderer, err = sdl.CreateRenderer(window, -1, sdl.RENDERER_SOFTWARE)
 		if err != nil {
-			log.Fatal("Renderer creation error:", err)
+			logFatal("startup", "Renderer creation error: %v", err)
 		}
 	}
 	defer renderer.Destroy()
@@ -482,10 +515,10 @@ func main() {
 	allotment := splashAllotment(bootElapsed, startupTarget(), splashReserve(bootElapsed))
 	if startupWarmStart(time.Now()) {
 		allotment = 0
-		log.Printf("startup: warm start (last launch within %s); splash skipped", startupWarmWindow)
+		logInfo("startup", "warm start (last launch within %s); splash skipped", startupWarmWindow)
 	}
 	if note := startupBudgetNote(bootElapsed); note != "" && allotment > 0 {
-		log.Printf("startup: %s", note)
+		logInfo("startup", "%s", note)
 	}
 	// Everything below is real setup that the animation does not need, so it is
 	// queued and executed between splash frames instead of after them
@@ -515,27 +548,30 @@ func main() {
 
 		// Initialize gamepad support
 		if sdl.NumJoysticks() > 0 {
-			log.Printf("[GAMEPAD] Found %d joystick(s)", sdl.NumJoysticks())
+			logDebug("gamepad", "Found %d joystick(s)", sdl.NumJoysticks())
 			for i := 0; i < sdl.NumJoysticks(); i++ {
 				if sdl.IsGameController(i) {
 					// go-sdl2 has no GameControllerFromIndex: the name/ID are
 					// queried per index, and the handle comes from Open.
-					log.Printf("[GAMEPAD] Controller %d: %s (GUID: %s)", i,
+					logDebug("gamepad", "Controller %d: %s (GUID: %s)", i,
 						sdl.GameControllerNameForIndex(i),
 						sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(i)))
 				} else {
-					log.Printf("[GAMEPAD] Joystick %d: %s (not a game controller)", i, sdl.JoystickNameForIndex(i))
+					logDebug("gamepad", "Joystick %d: %s (not a game controller)", i, sdl.JoystickNameForIndex(i))
 				}
 			}
 			if c := sdl.GameControllerOpen(0); c != nil {
 				// Closed by the defer below once the loop owns the handle; a
 				// defer inside this step would close it the moment it returns.
 				gameController = c
-				log.Printf("[GAMEPAD] Opened controller 0: %s", c.Name())
+				logDebug("gamepad", "Opened controller 0: %s", c.Name())
 			}
 		} else {
-			log.Printf("[GAMEPAD] No joysticks/gamepads detected")
+			logDebug("gamepad", "No joysticks/gamepads detected")
 		}
+		// The hints' first vocabulary, now that the pad is known: the first
+		// frame already names keys on a PC without one (inputhints.go).
+		inputHintsTick(config)
 	})
 
 	// Find the vibration motor before the Settings switch is injected: the row
@@ -596,6 +632,11 @@ func main() {
 	// holding a performance profile.
 	captureBootCPUSettings()
 
+	// The startup chime rises with the glass pane (bootchime.go). A warm
+	// relaunch draws no splash, so it starts quietly too.
+	if allotment > 0 {
+		bootChimeStart(config)
+	}
 	ShowSplash(renderer, config, allotment)
 	startupMarkNow("splash")
 	// Whatever did not fit between frames runs now — and on a warm start, where
@@ -618,10 +659,11 @@ func main() {
 	defer StopConfigWatcher()
 
 	// Wi-Fi designer: the static web builder pushes jukaconfig.json here and the
-	// watcher above reloads it in place. Local-only, guarded by a pairing code.
-	if liveBuilder := startLiveBuilderIfEnabled(); liveBuilder != nil {
-		defer liveBuilder.Stop()
-	}
+	// watcher above reloads it in place. Off on the handheld until switched on
+	// (Settings → Network → Live Builder), guarded by a pairing code with a
+	// lockout, and off again after 30 idle minutes (livebuilder.go).
+	startLiveBuilderIfEnabled()
+	defer stopLiveBuilder()
 
 	// Adaptive frame rate and memory monitoring for TSP ARM64 devices.
 	// The controller is package-level so the Power Mode selector
@@ -637,15 +679,28 @@ func main() {
 	// Cleanup hooks and the display teardown run. Registered last so it is the
 	// first deferred call to execute.
 	defer shutdownSceneWork()
+	// ...except on a panic: the crash guard runs before it, writes the panic
+	// down, stops a game that owns the screen and bounds the cleanup below, so a
+	// panic can neither exit 0 nor hang on a frozen frame (crashreport.go).
+	defer crashGuardMain()
 
 	// A config that had to be recovered from its backup is reported here, not
 	// during load: the toast needs the render loop's fonts and the audio device.
 	if notice := takeUserConfigRecoveryNotice(); notice != "" {
 		ShowToast(notice, ToastKindWarning)
 	}
+	if notice := takeConfigRecoveryNotice(); notice != "" {
+		ShowToast(notice, ToastKindWarning)
+	}
+	// The recovery card: the chord's recovery choices, why this launch is in
+	// safe mode, or "JukaHub closed unexpectedly" after a crash (recoverycard.go).
+	recoveryCardOpenAtBoot(config)
 
 	running := true
 	startupReported := false
+	// The tasks deferStartupTask queued run a few per frame once the first
+	// frame is up (startup.go runDeferredStartupFor).
+	deferredStartupPending := false
 	// Alarms are checked on the clock, not on frameCount: the adaptive frame
 	// rate and the darked ambient panel both run far below 60 fps, which would
 	// make a frame-counted check ring late.
@@ -762,6 +817,8 @@ func main() {
 				}
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
+					// A real key press makes the hints name keys (inputhints.go).
+					inputHintsNoteKey(e)
 					// A ringing alarm owns the keyboard: snooze and dismiss are the
 					// only actions it accepts, and nothing behind the card reacts —
 					// not even to the key's text, which SDL sends after the key,
@@ -813,6 +870,11 @@ func main() {
 					// The dock screen owns every key while it is up, including the
 					// first press that wakes a darked panel.
 					if ambientHandleKey(e, config) {
+						continue
+					}
+					// The recovery card (crash, safe mode, recovery choices) is
+					// modal and owns every key while it is up.
+					if recoveryCardHandleKey(e, config) {
 						continue
 					}
 					if launchFailure.open {
@@ -1038,6 +1100,18 @@ func main() {
 						// The app menu and notification center are modal:
 						// while one is open it owns the D-pad and Confirm/Back keys.
 						if handleChromeOverlayKey(e, config) {
+							continue
+						}
+						// F10 is the keyboard's Start: it opens the Start menu
+						// wherever the pad's Start would (startmenu.go).
+						if startMenuKeyOpen(e, config) {
+							continue
+						}
+						// F1 (this screen's controls), F2 (search), F12
+						// (screenshot) and Ctrl+Q (Quick Settings) are global:
+						// below the scene dispatch they never reached screens
+						// that consume every key (shortcuts.go).
+						if handleGlobalKeys(renderer, e, config) {
 							continue
 						}
 						// Log viewer (Ctrl+L). It is handled here, before the per-scene
@@ -1347,8 +1421,6 @@ func main() {
 							handlePackageInput(e, config)
 						} else if curElem.Type == "recent" {
 							handleRecentInput(e, config)
-						} else if socialNotifOpen {
-							handleSocialNotifInput(e)
 						} else if wpOpen {
 							handleWallpaperInput(e, config)
 						} else if m, ok := lookupScene(curScene.Name); ok && m.handleKey(e, config) {
@@ -1412,7 +1484,10 @@ func main() {
 						// Scene switching keys — not in the terminal, where q/e are
 						// ordinary characters in a command, and not while JukaLand
 						// owns the keyboard (E builds there).
-						if !inTerminal && !jlandKeysCaptured(config) {
+						// Ctrl/Alt chords are not scene keys: Ctrl+Q used to open
+						// Quick Settings and switch the scene too. The time-zone
+						// picker's search types letters, q and e included.
+						if !inTerminal && !jlandKeysCaptured(config) && !tzPickerVisible() && e.Keysym.Mod&(sdl.KMOD_CTRL|sdl.KMOD_ALT) == 0 {
 							switch e.Keysym.Sym {
 							case sdl.K_q:
 								changeScene(config, -1)
@@ -1426,10 +1501,6 @@ func main() {
 								changeSceneTo(config, idx)
 							}
 						}
-						// Quick Settings (Ctrl+Q).
-						if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
-							qsToggleOpen()
-						}
 						// Shorts feed (Ctrl+Shift+S): opens Media's Shorts feed, pre-loads
 						// it and plays the first short. The chord is used instead of a
 						// plain S so typing a capital S in a field cannot trigger it.
@@ -1437,21 +1508,8 @@ func main() {
 							openShortsFeed(config)
 							continue
 						}
-						// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
-						if e.Keysym.Sym == sdl.K_F1 {
-							shortcutsOpen = !shortcutsOpen
-							globalSearchOpen = false
-							continue
-						}
-						if e.Keysym.Sym == sdl.K_F2 {
-							shortcutsOpen = false
-							homeSearchToggle(config)
-							continue
-						}
-						if e.Keysym.Sym == sdl.K_F12 {
-							captureScreenshot(renderer)
-							continue
-						}
+						// F1, F2, F12 and Ctrl+Q are handled before the scene
+						// (handleGlobalKeys in shortcuts.go).
 						// Clipboard manager (Ctrl+Shift+V).
 						if e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
 							clipSearchOpen = !clipSearchOpen
@@ -1486,8 +1544,8 @@ func main() {
 				screensaverNotifyInput()
 				mouseX, mouseY = physicalToLogical(int32(e.X), int32(e.Y))
 				// A ringing alarm is modal: the pointer moves, hovers and drags
-				// nothing behind its takeover.
-				if alarmFiringActive() {
+				// nothing behind its takeover. So is the recovery card.
+				if alarmFiringActive() || recoveryCard.open {
 					continue
 				}
 				// A held press on the package store drags its shelves and
@@ -1526,6 +1584,10 @@ func main() {
 					continue
 				}
 				if screensaverWakeOnPress() {
+					continue
+				}
+				// Nor does anything behind the recovery card.
+				if recoveryCard.open {
 					continue
 				}
 				// The Home search sheet floats above every screen, so its result
@@ -1671,6 +1733,13 @@ func main() {
 					}
 					continue
 				}
+				// The recovery card is modal: a left press reaches its rows
+				// (recoveryCardHandleClick below); a release or another button
+				// reaches nothing behind it (a package card opens on release).
+				if recoveryCard.open && (e.Type == sdl.MOUSEBUTTONUP || e.Button != sdl.BUTTON_LEFT) {
+					isDraggingSeekBar = false
+					continue
+				}
 				if e.Button == sdl.BUTTON_LEFT {
 					// Taps are swallowed while a video is being prepared: the
 					// spinner is modal, and a stray tap must not press the grid
@@ -1680,6 +1749,9 @@ func main() {
 					}
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
+						if recoveryCardHandleClick(mx, my, config) {
+							break
+						}
 						if launchFailure.open {
 							handleLaunchFailureMouse()
 							break
@@ -1938,8 +2010,10 @@ func main() {
 						if sysToolHandleClick(mx, my, config) {
 							break
 						}
-						// Check if clicking on seek bar for dragging
-						if pointInRect(mx, my, videoControlRects.progress) {
+						// Check if clicking on seek bar for dragging. Only a bar on
+						// screen: an idle or floating player's last layout is stale,
+						// and an empty rect would match the origin.
+						if playerPhase() != "idle" && !videoMiniVisible() && vcHit(mx, my, videoControlRects.progress) {
 							isDraggingSeekBar = true
 							seekBarDragRect = videoControlRects.progress
 							fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
@@ -2206,6 +2280,13 @@ func main() {
 										}
 									}
 								} else if elem.Type == "button" {
+									// Home's cards are hit-tested by the layout
+									// (handleHomeMouseClick); a config tile it does
+									// not draw — the hidden Exit card — must not
+									// stay pressable at its old spot.
+									if homeLayoutActive && strings.EqualFold(elem.Style, "tile") {
+										continue
+									}
 									font, _ := getCachedFont(config, elem.Font)
 									width, height := buttonHitSize(elem, font)
 									bx := elem.X
@@ -2372,6 +2453,10 @@ func main() {
 				// navigating with the D-pad sat at the idle cadence and every
 				// press felt late (the frame rate never woke up).
 				frameRateCtrl.NotifyInput()
+				// A pad press makes the hints name buttons again (inputhints.go).
+				if e.Type == sdl.CONTROLLERBUTTONDOWN {
+					inputHintsNotePad()
+				}
 				// A ringing alarm owns the pad before anything else: the dock, the
 				// first-run tour, a video's spinner and the wake filter below all
 				// used to see the press first (alarmring.go).
@@ -2440,6 +2525,10 @@ func main() {
 						if e.Button == sdl.CONTROLLER_BUTTON_B {
 							cancelVideoPrepare()
 						}
+						continue
+					}
+					// The recovery card is modal and owns the pad while it is up.
+					if recoveryCardHandleController(e, config) {
 						continue
 					}
 					if handleLaunchFailureController(e) {
@@ -2792,6 +2881,9 @@ func main() {
 				if ctrldiag.open || deflected {
 					frameRateCtrl.NotifyInput()
 				}
+				if deflected {
+					inputHintsNotePad()
+				}
 				if ctrldiag.open {
 					if deflected {
 						screensaverNotifyInput()
@@ -2812,7 +2904,6 @@ func main() {
 		if next := takePendingConfigReload(); next != nil {
 			config = applyConfigReload(config, next)
 		}
-		drainSocialNotifs(config)
 		syncLEDLoopSettingsIfDue(config, time.Now())
 
 		// Apply kinetic scroll for text browser panels
@@ -2910,6 +3001,9 @@ func main() {
 		// Contextual widgets: battery saver and time-of-day theme, checked once a
 		// second before the frame is drawn so a theme switch lands immediately.
 		widgetsTick(config)
+		// Which words the hints use this frame: the pad's buttons or the
+		// keyboard's keys (inputhints.go).
+		inputHintsTick(config)
 		// A video whose decoder reached the end releases the player here, even
 		// when its scene is not the one on screen (the flag used to wait for a
 		// repaint of a scene the user had already left).
@@ -3256,11 +3350,6 @@ func main() {
 			renderWallpaperPicker(renderer, config)
 		}
 
-		// Social notifications panel.
-		if socialNotifOpen {
-			renderSocialNotifPanel(renderer, config)
-		}
-
 		// Phone Companion pairing card.
 		if companion.open {
 			renderCompanionOverlay(renderer, config)
@@ -3312,6 +3401,8 @@ func main() {
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
 		}
+		// The recovery card sits above the tour and the launch-failure card.
+		renderRecoveryCard(renderer, config)
 		// An enlarged QR code covers everything: the panel that opened it is
 		// what made it unscannable, so it must not show through.
 		if qrZoomActive() {
@@ -3355,14 +3446,21 @@ func main() {
 			// Remember this successful boot so a relaunch inside the warm window
 			// can skip the splash. Best-effort; a read-only card still boots.
 			startupRecordFirstFrame(startupElapsed())
+			// The boot guard's health clock starts at the first frame: a session
+			// that keeps running past it is a healthy boot (bootguard.go).
+			bootGuardFirstFrame()
 			// Bench mode measures boot and stops before the event loop settles
 			// into idle work, so CI can assert on the number.
 			if startupBenchEnabled() {
 				running = false
 				continue
 			}
-			// Only now do the network/background tasks get the CPU.
-			runDeferredStartup()
+			// Only now do the network/background tasks get the CPU — a frame's
+			// worth at a time, so the screen just shown stays responsive.
+			deferredStartupPending = true
+		}
+		if deferredStartupPending {
+			deferredStartupPending = runDeferredStartupFor(deferredStartupFrameBudget)
 		}
 		animTime = float64(sdl.GetTicks64()) / 1000.0
 
@@ -3371,10 +3469,15 @@ func main() {
 		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
 			trophyOverlayActive()
 		frameRateCtrl.SetAnimationActive(animating)
+		// A playing video is drawn from the loop, so the loop's cadence is
+		// its frame rate: it keeps the active one while the clip is visible.
+		frameRateCtrl.SetVideoActive(playerPhase() == "playing" && !ambientIsActive() && !ss.active)
 		applyPowerMode(config)
 		// The idle screens' low-power state stretches this sleep to their idle
 		// cadence, but ends it the moment a press is queued (saver_power.go).
-		saverFrameSleep(frameRateCtrl.Delay())
+		// While someone is using the screen the cadence is a budget the frame's
+		// own cost comes out of (adaptive.go Pace).
+		saverFrameSleep(frameRateCtrl.Pace(time.Since(frameStart)))
 
 		frameCount++
 		// Periodic memory pressure check (every ~10 frames on TSP). The
@@ -3399,6 +3502,11 @@ func main() {
 	// Stop that waits on a connection, a flush on a dying SD card) is the other
 	// half of the "app locked" report, and the watchdog is what bounds it.
 	armExitDeadline(exitShutdownGrace)
+	// The loop ended on a quit, so this start worked: recorded now, not in the
+	// teardown, where a second stop signal, the watchdog or a power cut could
+	// still turn a normal session into a failed start (bootguard.go). Off the
+	// main thread: a slow card must not hold up stopping a game.
+	go clearBootGuard()
 
 	// The glass teardown: stop what owns the screen and the speaker, persist
 	// state, put the CPU back the way the firmware had it, close the files and
@@ -3420,8 +3528,8 @@ func main() {
 // hidden behind it.
 func textInputBlockedByOverlay() bool {
 	return modalPanelBlocksShoulders() || triggerOwnedByOverlay() ||
-		tb.startOpen || nc.open || wpOpen || shortcutsOpen || socialNotifOpen ||
-		imageViewerPath != ""
+		tb.startOpen || nc.open || wpOpen || shortcutsOpen ||
+		imageViewerPath != "" || recoveryCard.open
 }
 
 // handleTextInputEvent routes one SDL text event to whatever currently owns

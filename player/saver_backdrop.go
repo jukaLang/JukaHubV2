@@ -215,14 +215,6 @@ func saverPicForget(keep string) {
 	saverPics.entries = kept
 }
 
-// saverPicReset empties the cache. Tests use it; a worker still running writes
-// into an entry nobody reads any more.
-func saverPicReset() {
-	saverPics.mu.Lock()
-	saverPics.entries = nil
-	saverPics.mu.Unlock()
-}
-
 // ── Decoding ─────────────────────────────────────────────────────────────
 
 // saverPicRender decodes path and returns it as a w×h rendition: oriented,

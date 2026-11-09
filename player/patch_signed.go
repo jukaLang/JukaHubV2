@@ -11,9 +11,7 @@ package main
 // tooling emits a clear warning when a package was signed by another key.
 
 import (
-	"bytes"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -280,20 +278,6 @@ func repoPkgCompatible(p *RepoPkg) bool {
 	return signedRepoPackageCompatible(p, DetectDevice(), runtime.GOARCH, IsWindows())
 }
 
-// repoPkgCompatibleWithDevice is the testable entry point of the repo package
-// compatibility gate. It exists so the signed-package tests can exercise device,
-// architecture and OS constraints without calling DetectDevice() at test time.
-func repoPkgCompatibleWithDevice(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
-	return signedRepoPackageCompatible(p, device, arch, windows)
-}
-
-// repoPkgCompatibleWithDeviceExactSameDevice is a mirror of the repo gate that
-// exists only to make the exact-device regression tests read like the rest of
-// the suite. It returns the same answer as repoPkgCompatibleWithDevice.
-func repoPkgCompatibleWithDeviceExactSameDevice(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
-	return repoPkgCompatibleWithDevice(p, device, arch, windows)
-}
-
 // signedRepoPackageCompatible evaluates device/OS/architecture constraints.
 func signedRepoPackageCompatible(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
 	if p == nil || (p.Architecture != "arm64" && p.Architecture != "all") {
@@ -342,13 +326,4 @@ func packageArchiveSHA(path string) string {
 		return ""
 	}
 	return s
-}
-
-// bytesEqual is a tiny helper (kept for symmetry with the tooling).
-func bytesEqual(a, b []byte) bool { return bytes.Equal(a, b) }
-
-// hashBytes computes sha256 hex of raw bytes.
-func hashBytes(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }

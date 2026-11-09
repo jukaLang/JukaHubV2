@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +15,6 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
 )
 
 // VideoPlayerState holds the embedded video player runtime state.
@@ -63,7 +60,8 @@ var videoTextureLogCount int
 var videoFrameQueue chan *sdl.Texture
 var videoFrameQueueSize = 4
 
-// Control button hitboxes for the video overlay.
+// Control button hitboxes for the video overlay, laid out every frame by
+// vcLayout (videochrome.go). An empty rect is a control the layout dropped.
 var videoControlRects = struct {
 	playPause   sdl.Rect
 	overlayPlay sdl.Rect
@@ -80,6 +78,10 @@ var videoControlRects = struct {
 	subs        sdl.Rect
 	settings    sdl.Rect
 	fullscreen  sdl.Rect
+	mute        sdl.Rect
+	volBar      sdl.Rect
+	prev        sdl.Rect
+	next        sdl.Rect
 }{}
 
 // videoControlBounds is the window the last layout was computed for: the video
@@ -126,6 +128,11 @@ const (
 	// except Stop at the far end of the bar.
 	vcClose
 	vcBack
+	// The glass bar's additions (videochrome.go): the speaker that mutes, and
+	// previous / next while the video came from a list.
+	vcMute
+	vcPrev
+	vcNext
 )
 
 // videoControlEntry pairs a control with the rect it was laid out at.
@@ -134,22 +141,45 @@ type videoControlEntry struct {
 	rect sdl.Rect
 }
 
-// videoControlsInOrder returns the bar buttons left to right. Volume and the
-// seek bar are excluded: volume belongs to Up/Down, and the bar is a pointer
-// target, so neither is part of the ring.
+// videoControlsInOrder returns the drawn buttons in reading order: the bar left
+// to right, then the two corner buttons. The level bar and the seek track are
+// pointer targets (Up/Down and the shoulders do their jobs), and a control the
+// layout dropped for room is not in the ring.
 func videoControlsInOrder() []videoControlEntry {
-	return []videoControlEntry{
-		{vcStop, videoControlRects.stop},
+	all := [...]videoControlEntry{
+		{vcMute, videoControlRects.mute},
+		{vcPrev, videoControlRects.prev},
 		{vcSeekBack, videoControlRects.seekBack},
 		{vcPlayPause, videoControlRects.playPause},
 		{vcSeekFwd, videoControlRects.seekFwd},
+		{vcNext, videoControlRects.next},
 		{vcSpeed, videoControlRects.speed},
 		{vcSubs, videoControlRects.subs},
 		{vcSettings, videoControlRects.settings},
 		{vcFullscreen, videoControlRects.fullscreen},
-		{vcClose, videoControlRects.close},
 		{vcBack, videoControlRects.back},
+		{vcClose, videoControlRects.close},
 	}
+	out := make([]videoControlEntry, 0, len(all))
+	for _, e := range all {
+		if e.rect.W > 0 && e.rect.H > 0 {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// videoControlDrawn reports whether the control is in this frame's layout.
+func videoControlDrawn(id videoControlID) bool {
+	if id == vcNone {
+		return false
+	}
+	for _, e := range videoControlsInOrder() {
+		if e.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // moveVideoControlFocus steps the ring by delta, wrapping at both ends. With no
@@ -184,33 +214,6 @@ func moveVideoControlFocus(delta int) {
 	videoControlFocus = items[idx].id
 }
 
-// videoControlFocusedRect reports where the ring should be drawn.
-func videoControlFocusedRect() (sdl.Rect, bool) {
-	if videoControlFocus == vcNone {
-		return sdl.Rect{}, false
-	}
-	for _, it := range videoControlsInOrder() {
-		if it.id == videoControlFocus {
-			if it.rect.W <= 0 || it.rect.H <= 0 {
-				return sdl.Rect{}, false
-			}
-			return it.rect, true
-		}
-	}
-	return sdl.Rect{}, false
-}
-
-// drawVideoControlRing highlights the focused control so a D-pad user can see
-// what A will press. It is drawn per frame, above the cached control layer.
-func drawVideoControlRing(renderer *sdl.Renderer) {
-	rect, ok := videoControlFocusedRect()
-	if !ok || renderer == nil {
-		return
-	}
-	accent := ColorInfo
-	strokeRoundedRect(renderer, rect.X-4, rect.Y-4, rect.W+8, rect.H+8, 10, 2, WithAlpha(accent, 230))
-}
-
 // clampSeekFraction converts a relative skip into an absolute clamped fraction.
 func clampSeekFraction(progress, duration, seconds float64) float64 {
 	if duration <= 0 {
@@ -233,6 +236,9 @@ func seekVideoBySeconds(state videoStateSnapshot, seconds float64) {
 	if state.duration <= 0 {
 		return
 	}
+	// The picture says how far it went (videochrome.go): a skip from the pad
+	// or a shoulder otherwise shows only as a jump in the track.
+	vcNoteSeek(seconds)
 	SeekVideo(clampSeekFraction(state.progress, state.duration, seconds))
 }
 
@@ -278,7 +284,9 @@ func setPlaybackQueue(config *Config, v VideoInfo) {
 // skipPlayback moves to the previous/next video of the list that launched the
 // current one. The ends of the list answer with a message, not a dead press.
 func skipPlayback(config *Config, delta int) bool {
-	if config == nil || playbackQueue.index < 0 || len(playbackQueue.videos) == 0 {
+	// A one-entry list is a single video (a link from the browser names its
+	// title that way): there is nothing to skip to either.
+	if config == nil || playbackQueue.index < 0 || len(playbackQueue.videos) <= 1 {
 		ShowToast("No list to skip through", ToastKindInfo)
 		return true
 	}
@@ -340,6 +348,12 @@ func activateVideoControl() {
 	if state.phase == "idle" {
 		return
 	}
+	// A control the layout dropped (previous / next once the list is gone,
+	// the speed pill on a narrow player, everything but close while the stream
+	// opens) has no ring on screen, so A must not press it.
+	if !videoControlDrawn(videoControlFocus) {
+		videoControlFocus = vcNone
+	}
 	switch videoControlFocus {
 	case vcStop:
 		mediaEndSession(appConfig)
@@ -370,6 +384,15 @@ func activateVideoControl() {
 	case vcBack:
 		PlayActivateSound()
 		videoBackOut(appConfig)
+	case vcMute:
+		PlayActivateSound()
+		videoToggleMute()
+	case vcPrev:
+		// skipPlayback answers for itself: a sound when it moves, a toast at
+		// the ends of the list.
+		skipPlayback(appConfig, -1)
+	case vcNext:
+		skipPlayback(appConfig, 1)
 	default:
 		PlayActivateSound()
 		ToggleVideoPlayback()
@@ -378,9 +401,11 @@ func activateVideoControl() {
 }
 
 // videoChromeVisible reports whether the controls should be drawn. While not in
-// full screen they are always visible; in full screen they fade after a moment.
+// full screen they are always visible; in full screen they fade after a moment,
+// except while the settings sheet is open — the pad still drives it, so it must
+// not vanish under the user.
 func videoChromeVisible() bool {
-	if !videoFullscreen {
+	if !videoFullscreen || videoSettingsOpen {
 		return true
 	}
 	return sdl.GetTicks64() < videoChromeUntil
@@ -469,22 +494,6 @@ func mediaReleaseRetiredFrames() {
 		if tex != nil {
 			tex.Destroy()
 		}
-	}
-}
-
-// waitForVideoDecoders waits until every playback goroutine has returned,
-// bounded by timeout. It is used by tests that tear down a renderer.
-func waitForVideoDecoders(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		videoDecoderWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
 	}
 }
 
@@ -694,7 +703,7 @@ func removeTempVideo(path string) {
 		return
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		log.Printf("[VIDEO] could not remove temp download: %v", err)
+		logWarn("video", "could not remove temp download: %v", err)
 	}
 }
 
@@ -844,13 +853,6 @@ func rememberProbe(path string, fields probeFields) {
 	probeCacheMu.Unlock()
 }
 
-// resetProbeCache clears cached probe results. Used by tests.
-func resetProbeCache() {
-	probeCacheMu.Lock()
-	probeCache = map[string]probeSnapshot{}
-	probeCacheMu.Unlock()
-}
-
 // parseProbeOutput reads ffprobe's default=noprint_wrappers=1 key=value output.
 // avg_frame_rate wins over r_frame_rate when both are present because it is
 // what actually plays for variable-frame-rate sources.
@@ -952,11 +954,11 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		if fps <= 0 {
 			fps = 30
 		}
-		log.Printf("[VIDEO] ffprobe (cached): %dx%d, dur=%.1f, fps=%.1f", snap.width, snap.height, snap.duration, fps)
+		logDebug("video", "ffprobe (cached): %dx%d, dur=%.1f, fps=%.1f", snap.width, snap.height, snap.duration, fps)
 		return snap.width, snap.height, snap.duration, fps
 	}
 	if ffprobePath == "" {
-		log.Printf("[VIDEO] ffprobe missing; using default 1280x720@30 probe values")
+		logWarn("video", "ffprobe missing; using default 1280x720@30 probe values")
 		return 1280, 720, 0, 30
 	}
 	// A remote URL needs a bound: ffprobe sits on the connection until the
@@ -965,7 +967,7 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 	defer cancel()
 	fields, err := ffprobeStream(ctx, ffprobePath, path)
 	if err != nil {
-		log.Printf("[VIDEO] ffprobe failed for %s: %v", sanitizeLogURL(path), err)
+		logWarn("video", "ffprobe failed for %s: %v", sanitizeLogURL(path), err)
 		return 1280, 720, 0, 30
 	}
 	if fields.width <= 0 || fields.height <= 0 {
@@ -976,7 +978,7 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		fps = 30
 	}
 	rememberProbe(path, fields)
-	log.Printf("[VIDEO] ffprobe result: %dx%d, dur=%.1f, fps=%.1f", fields.width, fields.height, fields.duration, fps)
+	logDebug("video", "ffprobe result: %dx%d, dur=%.1f, fps=%.1f", fields.width, fields.height, fields.duration, fps)
 	return fields.width, fields.height, fields.duration, fps
 }
 
@@ -1017,13 +1019,13 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[VIDEO] ffmpeg stdout pipe failed: %v", err)
+		logWarn("video", "ffmpeg stdout pipe failed: %v", err)
 		return
 	}
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[VIDEO] ffmpeg failed to start: %v", err)
+		logWarn("video", "ffmpeg failed to start: %v", err)
 		return
 	}
 	if !sess.registerVideoCmd(cmd) {
@@ -1044,7 +1046,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		return
 	}
 	if frameBytes > maxVideoFrameBytes {
-		log.Printf("[VIDEO] refusing a %dx%d frame buffer", width, height)
+		logWarn("video", "refusing a %dx%d frame buffer", width, height)
 		return
 	}
 	frameSize := int(frameBytes)
@@ -1122,14 +1124,14 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			}
 		} else {
 			frameDeadline = time.Now().Add(frameDuration)
-			log.Printf("[VIDEO] First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
+			logDebug("video", "First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
 		}
 	}
 
 	// The pipe closed. A cancelled session (stop, seek, next video) is not an
 	// end of stream; only a decoder that ran to EOF raises the flag.
 	if sess.ctx.Err() == nil && playbackCurrentSession() == sess && frameCount > 0 {
-		log.Printf("[VIDEO] Reached end of stream after %d frames", frameCount)
+		logDebug("video", "Reached end of stream after %d frames", frameCount)
 		sess.ended.Store(true)
 		playbackEnded.Store(true)
 	}
@@ -1150,13 +1152,13 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[AUDIO] ffmpeg audio pipe failed: %v", err)
+		logWarn("audio", "ffmpeg audio pipe failed: %v", err)
 		return
 	}
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[AUDIO] ffmpeg audio failed to start: %v", err)
+		logWarn("audio", "ffmpeg audio failed to start: %v", err)
 		return
 	}
 	if !sess.registerAudioCmd(cmd) {
@@ -1231,11 +1233,11 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 		// the software path. ffmpeg output planes are packed: Y, then U, then V.
 		tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_IYUV), sdl.TEXTUREACCESS_STREAMING, w, h)
 		if err != nil {
-			log.Printf("[VIDEO] CreateTexture failed: %v (w=%d h=%d)", err, w, h)
+			logWarn("video", "CreateTexture failed: %v (w=%d h=%d)", err, w, h)
 			return
 		}
 		embeddedPlayer.current = tex
-		log.Printf("[VIDEO] Created IYUV texture %dx%d", w, h)
+		logDebug("video", "Created IYUV texture %dx%d", w, h)
 	}
 
 	tex := embeddedPlayer.current
@@ -1244,7 +1246,7 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	if err := tex.UpdateYUV(nil, raw[:uStart], int(w),
 		raw[uStart:vStart], int(w)/2,
 		raw[vStart:], int(w)/2); err != nil {
-		log.Printf("[VIDEO] Update YUV texture failed: %v", err)
+		logWarn("video", "Update YUV texture failed: %v", err)
 		tex.Destroy()
 		embeddedPlayer.current = nil
 		return
@@ -1444,10 +1446,6 @@ func StopEmbeddedPlayback() {
 	videoPlaybackMutex.Unlock()
 }
 
-func stopVideoPlayback() {
-	StopEmbeddedPlayback()
-}
-
 // mediaStopForScreenChild ends playback when a game or an external app takes
 // the screen: the parked main loop no longer draws the player, and the video's
 // audio would otherwise go on over the game. It is safe off the render thread,
@@ -1459,7 +1457,7 @@ func mediaStopForScreenChild() {
 	if playerPhase() == "idle" {
 		return
 	}
-	log.Printf("[VIDEO] a game or app took the screen; stopping playback")
+	logDebug("video", "a game or app took the screen; stopping playback")
 	StopEmbeddedPlayback()
 }
 
@@ -1489,10 +1487,6 @@ func ToggleVideoPlayback() {
 	// Publish after releasing the state lock: partyPublishPlayback snapshots
 	// the player and would deadlock if called underneath it.
 	partyPublishPlayback()
-}
-
-func toggleVideoPlayback() {
-	ToggleVideoPlayback()
 }
 
 func SeekVideo(fraction float64) {
@@ -1576,10 +1570,6 @@ func SetPlaybackSpeed(speed float64) {
 	embeddedPlayer.speed = speed
 }
 
-func GetEmbeddedPlayerState() *VideoPlayerState {
-	return embeddedPlayer
-}
-
 type videoStateSnapshot struct {
 	phase               string
 	progress            float64
@@ -1632,68 +1622,13 @@ func pad2(n int) string {
 	return strconv.Itoa(n)
 }
 
-// computeVideoControlLayout fills videoControlRects for the given geometry.
-// It runs every frame regardless of the overlay cache, so mouse/touch hit
-// testing keeps working when the cached overlay path is used.
-func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
-	// Remember the window itself: a windowed player's hit test is bounded by
-	// this rect, so the scene around the video keeps its own taps.
-	videoControlBounds = sdl.Rect{X: x, Y: y, W: w, H: h}
-
-	barH := int32(72)
-	barY := y + h - barH
-
-	// Top-right pair: close (ends the session) then back (steps down a size).
-	// The volume reading sits to their left.
-	cornerBtnSize := int32(30)
-	badgeY := y + 12
-	closeX := x + w - cornerBtnSize - 18
-	videoControlRects.close = sdl.Rect{X: closeX, Y: badgeY - 2, W: cornerBtnSize, H: cornerBtnSize}
-	videoControlRects.back = sdl.Rect{X: closeX - cornerBtnSize - 8, Y: badgeY - 2, W: cornerBtnSize, H: cornerBtnSize}
-
-	seekBarY := barY - 16
-	seekBarW := w - 48
-	seekBarX := x + 24
-	videoControlRects.progress = sdl.Rect{X: seekBarX, Y: seekBarY - 8, W: seekBarW, H: 20}
-
-	btnSize := int32(36)
-	gap := int32(10)
-	groupW := 8*btnSize + 7*gap
-	startX := x + (w-groupW)/2
-	btnY := barY + (barH-btnSize)/2
-
-	videoControlRects.stop = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	startX += btnSize + gap
-	videoControlRects.seekBack = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	startX += btnSize + gap
-	videoControlRects.playPause = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	startX += btnSize + gap
-	videoControlRects.seekFwd = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	startX += btnSize + gap
-	videoControlRects.speed = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	videoControlRects.speedCycle = videoControlRects.speed
-	startX += btnSize + gap
-	videoControlRects.subs = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	startX += btnSize + gap
-	videoControlRects.settings = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-	startX += btnSize + gap
-	videoControlRects.fullscreen = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
-
-	volX := x + 18
-	videoControlRects.volDown = sdl.Rect{X: volX, Y: btnY, W: btnSize, H: btnSize}
-	videoControlRects.volUp = sdl.Rect{X: volX + btnSize + 6, Y: btnY, W: btnSize, H: btnSize}
-
-	if state.phase == "paused" {
-		overlayBtnSize := int32(80)
-		videoControlRects.overlayPlay = sdl.Rect{
-			X: x + (w-overlayBtnSize)/2,
-			Y: y + (h-overlayBtnSize)/2,
-			W: overlayBtnSize,
-			H: overlayBtnSize,
-		}
-	} else {
-		videoControlRects.overlayPlay = sdl.Rect{}
-	}
+// computeVideoControlLayout fills videoControlRects for the given geometry
+// (vcLayout, videochrome.go). It runs every frame regardless of the overlay
+// cache, so mouse/touch hit testing keeps working when the cached overlay path
+// is used, and it records the window itself: a windowed player's hit test is
+// bounded by it, so the scene around the video keeps its own taps.
+func computeVideoControlLayout(config *Config, x, y, w, h int32, state videoStateSnapshot) {
+	vcLayout(config, x, y, w, h, state)
 }
 
 // videoAdvanceProgress moves the stored position forward from wall-clock time
@@ -1760,7 +1695,7 @@ func videoSyncPlaybackEnd() {
 	if sess := playbackCurrentSession(); sess != nil && !sess.ended.Load() {
 		return
 	}
-	log.Printf("[VIDEO] Playback finished; returning to the scene")
+	logDebug("video", "Playback finished; returning to the scene")
 	if shortsAutoplay {
 		// A short reached its natural end: the main loop starts the next one
 		// instead of dropping the user back on the grid.
@@ -1789,39 +1724,6 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		sess.shown.Store(true)
 	}
 
-	// Full-screen loader shown during video download.
-	if state.phase == "downloading" {
-		renderer.SetDrawColor(0, 0, 0, 180)
-		renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-
-		font, _ := getCachedFont(config, "small")
-		if font == nil {
-			return
-		}
-
-		loaderText := fmt.Sprintf("Downloading... %d%%", int(state.progress*100))
-		textW, textH, _ := font.SizeUTF8(loaderText)
-		renderText(renderer, config, font, loaderText, ColorTextPrimary(),
-			(screenWidth-int32(textW))/2, (screenHeight-int32(textH))/2)
-
-		// Estimated time remaining (guard against division by zero).
-		if state.duration > 0 && state.progress > 0 {
-			etaSec := int(state.duration * (1 - state.progress) / state.progress)
-			if etaSec > 0 {
-				etaText := formatTime(float64(etaSec))
-				renderText(renderer, config, font, "ETA: "+etaText, ColorTextTertiary(),
-					(screenWidth-int32(textW))/2, (screenHeight-int32(textH))/2+40)
-			}
-		}
-
-		// Download speed.
-		if spd := formatDownloadSpeed(state.downloadSpeed); spd != "" {
-			renderText(renderer, config, font, "Downloading at "+spd, ColorTextTertiary(),
-				(screenWidth-int32(textW))/2, (screenHeight-int32(textH))/2+70)
-		}
-		return
-	}
-
 	x, y := elem.X, elem.Y
 	w := getElementWidth(elem, screenWidth)
 	h := getElementHeight(elem, screenHeight)
@@ -1830,12 +1732,30 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		x, y, w, h = 0, 0, screenWidth, screenHeight
 	}
 
+	// While the stream is being opened the player shows a spinner in its own
+	// rect, with close the one control: the rest of the bar is not drawn yet,
+	// so it must not take taps either.
+	if state.phase == "downloading" {
+		computeVideoControlLayout(config, x, y, w, h, state)
+		closeRect := videoControlRects.close
+		videoControlRects = vcNoRects
+		videoControlRects.close = closeRect
+		// The settings sheet is not drawn over the loader, so it is closed
+		// rather than left driving rows nobody can see (a Quality change
+		// reopens the stream this way).
+		videoSettingsOpen = false
+		videoSettingsSheetDrawn = sdl.Rect{}
+		vcDrawLoading(renderer, config, state, x, y, w, h)
+		vcRoundButton(renderer, closeRect, "close", videoControlFocus == vcClose)
+		return
+	}
+
 	// Update playback progress from elapsed wall time.
 	videoAdvanceProgress(&state)
 
 	// Layout the controls first so hit testing works even when the cached
 	// overlay texture is used.
-	computeVideoControlLayout(x, y, w, h, state)
+	computeVideoControlLayout(config, x, y, w, h, state)
 
 	UpdateCurrentTexture(renderer)
 
@@ -1846,13 +1766,14 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	if currentTex == nil && state.phase == "playing" {
 		videoTextureLogCount++
 		if videoTextureLogCount%120 == 0 {
-			log.Printf("[VIDEO] currentTex is nil after UpdateCurrentTexture, raw=%v, w=%d, h=%d",
+			logDebug("video", "currentTex is nil after UpdateCurrentTexture, raw=%v, w=%d, h=%d",
 				state.hasRaw, state.width, state.height)
 		}
 	}
 
 	// Full screen with the chrome faded out: just the picture and subtitles.
 	if videoFullscreen && !videoChromeVisible() {
+		videoSettingsSheetDrawn = sdl.Rect{}
 		drawVideoFrameArea(renderer, currentTex, x, y, w, h)
 		renderVideoSubtitles(renderer, config, x, y, w, h, state.progress*state.duration, 48)
 		return
@@ -1928,176 +1849,21 @@ func mediaFitRect(box sdl.Rect, vw, vh int32) sdl.Rect {
 }
 
 // drawVideoOverlayStatic draws the part of the overlay that never changes while
-// a video is on screen: readability gradients, the control bar and the seek
-// track. The overlay cache renders this once per element size and theme change;
+// a video is on screen: the readability scrims (vcDrawScrims, videochrome.go).
+// The overlay cache renders this once per element size and theme change;
 // everything state-dependent is drawn per frame by drawVideoOverlayLive.
 // (ox, oy) is the origin the layer is drawn at: the element position on screen,
 // or (0, 0) when rendering into the element-sized cache texture.
 func drawVideoOverlayStatic(renderer *sdl.Renderer, ox, oy, w, h int32) {
-	// Top / bottom gradients for readability.
-	topGradH := int32(70)
-	for s := int32(0); s < topGradH; s += 3 {
-		a := uint8(clampInt32(90*(10-int32(float64(s)*10.0/float64(topGradH))), 0, 90))
-		renderer.SetDrawColor(0, 0, 0, a)
-		renderer.FillRect(&sdl.Rect{X: ox, Y: oy + s, W: w, H: 3})
-	}
-	bottomGradH := int32(140)
-	bottomY := oy + h - bottomGradH
-	for s := int32(0); s < bottomGradH; s += 3 {
-		a := uint8(clampInt32(int32(180.0*float64(s)/float64(bottomGradH)), 0, 180))
-		renderer.SetDrawColor(0, 0, 0, a)
-		renderer.FillRect(&sdl.Rect{X: ox, Y: bottomY + s, W: w, H: 3})
-	}
-
-	// Bottom control bar.
-	barH := int32(72)
-	barY := oy + h - barH
-	fillRoundedRect(renderer, ox+8, barY, w-16, barH, 16, WithAlpha(ColorSurfacePanel, 220))
-
-	// Seek track; the filled part and thumb change every frame and are drawn
-	// by drawVideoOverlayLive.
-	seekBarH := int32(6)
-	seekBarY := barY - 16
-	seekBarW := w - 48
-	seekBarX := ox + 24
-	fillRoundedRect(renderer, seekBarX, seekBarY, seekBarW, seekBarH, seekBarH/2,
-		sdl.Color{R: 40, G: 40, B: 50, A: 255})
-	renderer.SetDrawColor(255, 255, 255, 30)
-	renderer.FillRect(&sdl.Rect{X: seekBarX, Y: seekBarY, W: seekBarW, H: 1})
+	vcDrawScrims(renderer, ox, oy, w, h)
 }
 
-// drawVideoOverlayLive draws everything that changes while a video plays: the
-// phase badge, back button, volume, seek fill and thumb, the transport buttons
-// (stop, rewind, play/pause, forward, speed), the time readout and the big play
-// button while paused. It is drawn every frame on top of the static layer.
+// drawVideoOverlayLive draws everything that changes while a video plays — the
+// glass bar and its controls, the chip and title, the subtitle cue, the
+// settings sheet and the paused picture's play button (vcDrawChrome) — every
+// frame on top of the static layer.
 func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoStateSnapshot, x, y, w, h int32) {
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
-
-	accent := ColorInfo
-
-	barH := int32(72)
-	barY := y + h - barH
-
-	// Top-left phase badge.
-	phaseText := "PLAYING"
-	phaseCol := ColorTextPrimary()
-	if state.phase == "paused" {
-		phaseText = "PAUSED"
-		phaseCol = WarningInk()
-	} else if state.phase == "downloading" {
-		phaseText = "LOADING"
-		phaseCol = InfoInk()
-	} else if state.phase == "error" {
-		phaseText = "ERROR"
-		phaseCol = DangerInk()
-	}
-	phaseW, _, _ := font.SizeUTF8(phaseText)
-	badgeX := x + 16
-	badgeY := y + 12
-	fillRoundedRect(renderer, badgeX, badgeY, clampInt32(int32(phaseW)+18, 1, 10000), 26, 13,
-		WithAlpha(ColorSurfaceRaised, 230))
-	renderText(renderer, config, font, phaseText, phaseCol, badgeX+9, badgeY+6)
-
-	// Top-right: close and back buttons + volume text.
-	volText := formatPercentSimple(state.volume)
-	volW, _, _ := font.SizeUTF8(volText)
-	closeRect := videoControlRects.close
-	fillRoundedRect(renderer, closeRect.X, closeRect.Y, closeRect.W, closeRect.H, 8,
-		WithAlpha(ColorSurfaceRaised, 180))
-	drawCloseIcon(renderer, closeRect.X+closeRect.W/2, closeRect.Y+closeRect.H/2, 9, ColorTextPrimary())
-	backRect := videoControlRects.back
-	fillRoundedRect(renderer, backRect.X, backRect.Y, backRect.W, backRect.H, 8,
-		WithAlpha(ColorSurfaceRaised, 180))
-	drawChevronLeft(renderer, backRect.X+backRect.W/2, backRect.Y+backRect.H/2, 10, ColorTextPrimary())
-	renderText(renderer, config, font, volText, ColorTextPrimary(), x+w-int32(volW)-96, y+18)
-
-	// Seek fill + thumb.
-	seekBarH := int32(6)
-	seekBarY := barY - 16
-	seekBarW := w - 48
-	seekBarX := x + 24
-	if state.progress > 0 {
-		filledW := int32(float64(seekBarW) * state.progress)
-		if filledW > 0 {
-			fillRoundedRect(renderer, seekBarX, seekBarY, clampInt32(filledW, 0, seekBarW),
-				seekBarH, seekBarH/2, accent)
-		}
-	}
-	thumbX := seekBarX + int32(float64(seekBarW)*state.progress)
-	fillCircle(renderer, thumbX, seekBarY+seekBarH/2, 7, accent)
-
-	// Control buttons.
-	drawIconBtn(renderer, iconStop, videoControlRects.stop.X, videoControlRects.stop.Y, videoControlRects.stop.W)
-	drawIconBtn(renderer, iconSeekBack, videoControlRects.seekBack.X, videoControlRects.seekBack.Y, videoControlRects.seekBack.W)
-	if state.phase == "paused" {
-		drawIconBtn(renderer, iconPlay, videoControlRects.playPause.X, videoControlRects.playPause.Y, videoControlRects.playPause.W)
-	} else {
-		drawIconBtn(renderer, iconPause, videoControlRects.playPause.X, videoControlRects.playPause.Y, videoControlRects.playPause.W)
-	}
-	drawIconBtn(renderer, iconSeekFwd, videoControlRects.seekFwd.X, videoControlRects.seekFwd.Y, videoControlRects.seekFwd.W)
-	speedLabel := fmt.Sprintf("%.1fx", state.speed)
-	drawSpeedBtn(renderer, config, font, speedLabel,
-		videoControlRects.speed.X, videoControlRects.speed.Y, videoControlRects.speed.W)
-
-	drawIconBtn(renderer, iconVolLow, videoControlRects.volDown.X, videoControlRects.volDown.Y, videoControlRects.volDown.W)
-	drawIconBtn(renderer, iconVolHigh, videoControlRects.volUp.X, videoControlRects.volUp.Y, videoControlRects.volUp.W)
-
-	// Subtitles / settings / full screen buttons.
-	drawCCBtn(renderer, config, font, videoControlRects.subs.X, videoControlRects.subs.Y,
-		videoControlRects.subs.W, subtitlesEnabled())
-	drawIconBtn(renderer, iconSettings, videoControlRects.settings.X, videoControlRects.settings.Y,
-		videoControlRects.settings.W)
-	drawIconBtn(renderer, iconFullscreen, videoControlRects.fullscreen.X, videoControlRects.fullscreen.Y,
-		videoControlRects.fullscreen.W)
-
-	// The D-pad ring, on top of the button it selects.
-	drawVideoControlRing(renderer)
-
-	// Active subtitle cue above the control bar.
-	currentTime := state.progress * state.duration
-	renderVideoSubtitles(renderer, config, x, y, w, h, currentTime, barH+28)
-
-	// Up Next: what starts when this video reaches its end, and how much
-	// follows it. It sits above the seek track so it never fights a subtitle
-	// cue for the same line.
-	if line := upNextSummary(); line != "" {
-		if lw, lh, err := font.SizeUTF8(line); err == nil {
-			renderText(renderer, config, font, line, ColorTextSecondary(),
-				x+(w-int32(lw))/2, seekBarY-int32(lh)-8)
-		}
-	}
-
-	// Settings sheet sits above the control bar.
-	if videoSettingsOpen {
-		drawVideoSettingsSheet(renderer, config, x, y, w, h)
-	}
-
-	timeText := formatTime(currentTime) + " / " + formatTime(state.duration)
-	tw, th, _ := font.SizeUTF8(timeText)
-	renderText(renderer, config, font, timeText, ColorTextPrimary(),
-		x+w-int32(tw)-18, barY+(barH-int32(th))/2)
-
-	// Big centered play button when paused.
-	if state.phase == "paused" {
-		overlayBtn := videoControlRects.overlayPlay
-		cx := overlayBtn.X + overlayBtn.W/2
-		cy := overlayBtn.Y + overlayBtn.H/2
-		UIButton(renderer, config, overlayBtn, "", UIButtonStyle{
-			Variant:  UIButtonCustom,
-			Fill:     WithAlpha(ColorSurfacePanel, 200),
-			Border:   WithAlpha(accent, 180),
-			Pill:     true,
-			NoShadow: true,
-		}, UIButtonState{})
-		s := overlayBtn.W / 5
-		renderer.SetDrawColor(accent.R, accent.G, accent.B, accent.A)
-		renderer.DrawLine(cx-s, cy-s, cx-s, cy+s)
-		renderer.DrawLine(cx-s, cy+s, cx+s-2, cy)
-		renderer.DrawLine(cx+s-2, cy, cx-s, cy-s)
-	}
+	vcDrawChrome(renderer, config, state, x, y, w, h)
 }
 
 // drawVideoOverlayFallback draws the entire overlay from scratch. Used when
@@ -2109,120 +1875,6 @@ func drawVideoOverlayFallback(renderer *sdl.Renderer, config *Config, state vide
 	drawVideoOverlayLive(renderer, config, state, x, y, w, h)
 }
 
-// playerIcon identifies a geometry-drawn control icon.
-type playerIcon int
-
-const (
-	iconStop playerIcon = iota
-	iconSeekBack
-	iconPlay
-	iconPause
-	iconSeekFwd
-	iconVolLow
-	iconVolHigh
-	iconSettings
-	iconFullscreen
-)
-
-func iconCol() sdl.Color {
-	return ColorTextPrimary()
-}
-
-func drawIconBtn(renderer *sdl.Renderer, icon playerIcon, x, y, size int32) sdl.Rect {
-	UIButton(renderer, nil, sdl.Rect{X: x, Y: y, W: size, H: size}, "", UIButtonStyle{
-		Variant:  UIButtonCustom,
-		Fill:     WithAlpha(ColorSurfaceRaised, 180),
-		Border:   WithAlpha(ColorBorderSubtle, 120),
-		Radius:   size / 5,
-		NoShadow: true,
-	}, UIButtonState{})
-	cx := x + size/2
-	cy := y + size/2
-	col := iconCol()
-	switch icon {
-	case iconStop:
-		s := size / 4
-		fillRoundedRect(renderer, cx-s, cy-s, s*2, s*2, 2, col)
-	case iconPlay:
-		s := size / 3
-		tri := [3]pt{{x: cx - s + 1, y: cy - s}, {x: cx - s + 1, y: cy + s}, {x: cx + s - 1, y: cy}}
-		fillTriangleFilled(renderer, tri[0], tri[1], tri[2], col)
-	case iconPause:
-		s := size / 4
-		barW := s * 3 / 4
-		gap := s / 2
-		fillRoundedRect(renderer, cx-s-gap/2, cy-s, barW, s*2, 2, col)
-		fillRoundedRect(renderer, cx+gap/2, cy-s, barW, s*2, 2, col)
-	case iconSeekBack:
-		s := size / 3
-		barW := s / 3
-		barX := cx + s - barW
-		fillRoundedRect(renderer, barX, cy-s, barW, s*2, 1, col)
-		tri := [3]pt{{x: barX - 1, y: cy - s}, {x: barX - 1, y: cy + s}, {x: barX - s*2, y: cy}}
-		fillTriangleFilled(renderer, tri[0], tri[1], tri[2], col)
-	case iconSeekFwd:
-		s := size / 3
-		barW := s / 3
-		barX := cx - s
-		fillRoundedRect(renderer, barX, cy-s, barW, s*2, 1, col)
-		tri := [3]pt{{x: barX + barW + 1, y: cy - s}, {x: barX + barW + 1, y: cy + s}, {x: barX + barW + s*2, y: cy}}
-		fillTriangleFilled(renderer, tri[0], tri[1], tri[2], col)
-	case iconVolLow:
-		drawSpeaker(renderer, cx, cy, size, col, 1)
-	case iconVolHigh:
-		drawSpeaker(renderer, cx, cy, size, col, 2)
-	case iconSettings:
-		// Three sliders with offset knobs.
-		s := size / 3
-		w := s * 2
-		left := cx - s
-		for i, off := range []int32{-s / 2, s / 4, -s / 6} {
-			y := cy - s + int32(i)*s
-			fillRoundedRect(renderer, left, y, w, 2, 1, col)
-			knobOff := off
-			if knobOff < -s+3 {
-				knobOff = -s + 3
-			}
-			if knobOff > s-3 {
-				knobOff = s - 3
-			}
-			fillCircle(renderer, cx+knobOff, y+1, 2, col)
-		}
-	case iconFullscreen:
-		// Four corner brackets.
-		s := size / 3
-		arm := s / 2
-		for _, c := range [4][2]int32{{-1, -1}, {1, -1}, {-1, 1}, {1, 1}} {
-			px := cx + c[0]*s
-			py := cy + c[1]*s
-			fillRoundedRect(renderer, px-c[0]*arm, py-1, arm, 2, 1, col)
-			fillRoundedRect(renderer, px-1, py-c[1]*arm, 2, arm, 1, col)
-		}
-	}
-	return sdl.Rect{X: x, Y: y, W: size, H: size}
-}
-
-// drawCCBtn draws the closed-caption toggle; it lights up when subtitles are on.
-func drawCCBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, size int32, on bool) {
-	bg := WithAlpha(ColorSurfaceRaised, 180)
-	fg := ColorTextPrimary()
-	if on {
-		bg = WithAlpha(ColorInfo, 220)
-		fg = sdl.Color{R: 12, G: 14, B: 20, A: 255}
-	}
-	UIButton(renderer, config, sdl.Rect{X: x, Y: y, W: size, H: size}, "CC", UIButtonStyle{
-		Variant:    UIButtonCustom,
-		Fill:       bg,
-		HoverFill:  bg,
-		FocusFill:  bg,
-		Border:     WithAlpha(ColorBorderSubtle, 120),
-		LabelColor: fg,
-		Font:       font,
-		Radius:     size / 5,
-		NoShadow:   true,
-	}, UIButtonState{})
-}
-
 // Layout of the settings sheet. The row metrics are shared by the renderer and
 // the click hit test, so a tap always lands on the row it is drawn over.
 const (
@@ -2231,131 +1883,8 @@ const (
 	videoSettingsTopPad    = int32(20)
 )
 
-// videoSettingsSheetRect places the sheet in the bottom-right corner of the
-// video element, leaving room for the control bar underneath.
-func videoSettingsSheetRect(x, y, w, h int32) sdl.Rect {
-	// Wide enough for the longest Quality row: a pinned ceiling and the
-	// resolution that stream actually got, side by side. At 360 the two do not
-	// fit, and the delivered figure's only option would be an ellipsis.
-	sheetW := int32(480)
-	// Top padding, the rows, then a caption line and bottom padding.
-	sheetH := int32(videoSettingsSheetRows)*videoSettingsRowH + 68
-	if sheetW > w-32 {
-		sheetW = w - 32
-	}
-	sheetX := x + w - sheetW - 24
-	sheetY := y + h - 72 - sheetH - 16
-	if sheetY < y+16 {
-		sheetY = y + 16
-	}
-	return sdl.Rect{X: sheetX, Y: sheetY, W: sheetW, H: sheetH}
-}
-
-// drawVideoSettingsSheet draws the subtitles / full screen / speed sheet.
-func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h int32) {
-	sheet := videoSettingsSheetRect(x, y, w, h)
-	fillRoundedRect(renderer, sheet.X, sheet.Y, sheet.W, sheet.H, 14, WithAlpha(ColorSurfacePanel, 240))
-	strokeRoundedRect(renderer, sheet.X, sheet.Y, sheet.W, sheet.H, 14, 1, WithAlpha(ColorBorder, 160))
-
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
-	subState := "Off"
-	if subtitlesEnabled() {
-		subState = "On"
-	}
-	fullscreenState := "Off"
-	if videoFullscreen {
-		fullscreenState = "On"
-	}
-	rows := []string{
-		"Subtitles: " + subState,
-		"Full screen: " + fullscreenState,
-		fmt.Sprintf("Speed: %.2gx", snapshotVideoState().speed),
-		"Quality: " + videoQualityRowLabel(appConfig),
-		upNextSheetRowLabel(),
-		"Close",
-	}
-	for i, label := range rows {
-		rowY := sheet.Y + videoSettingsTopPad + int32(i)*videoSettingsRowH
-		row := sdl.Rect{X: sheet.X + 10, Y: rowY, W: sheet.W - 20, H: videoSettingsRowH - 6}
-		if i == videoSettingsItem {
-			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, WithAlpha(accentColor, 60))
-		}
-		// The sheet is wide enough for every row as written; this is the guard
-		// for a canvas narrower than the design, not the normal path.
-		if tw, _, err := font.SizeUTF8(label); err == nil && int32(tw) > row.W-28 {
-			label = ellipsize(font, label, row.W-28)
-		}
-		renderText(renderer, config, font, label, ColorTextPrimary(), row.X+14, row.Y+(row.H-int32(font.Height()))/2)
-	}
-
-	// The source line explains what was loaded (sidecar name or "embedded").
-	// It sits inside the sheet so it can never overlap the control bar.
-	status := subtitleStatusLine()
-	statusFont, _ := getCachedFont(config, "small")
-	if statusFont != nil {
-		if sw, _, _ := statusFont.SizeUTF8(status); int32(sw) > sheet.W-28 {
-			status = ellipsize(statusFont, status, sheet.W-28)
-		}
-		statusY := sheet.Y + videoSettingsTopPad + int32(videoSettingsSheetRows)*videoSettingsRowH + 8
-		renderText(renderer, config, statusFont, status, ColorTextTertiary(), sheet.X+14, statusY)
-	}
-}
-
-func drawSpeedBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, label string, x, y, size int32) sdl.Rect {
-	fillRoundedRect(renderer, x, y, size, size, size/5, WithAlpha(ColorSurfaceRaised, 180))
-	renderer.SetDrawColor(255, 255, 255, 25)
-	renderer.FillRect(&sdl.Rect{X: x + 3, Y: y + 1, W: size - 6, H: 1})
-	if font != nil {
-		lw, lh, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label, ColorTextPrimary(),
-			x+(size-int32(lw))/2, y+(size-int32(lh))/2)
-	}
-	return sdl.Rect{X: x, Y: y, W: size, H: size}
-}
-
-func drawSpeaker(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color, arcs int) {
-	s := size / 3
-	bodyW := s * 3 / 4
-	bodyH := s * 3 / 2
-	bodyX := cx - s*3/2 + s/3
-	fillRoundedRect(renderer, bodyX, cy-bodyH/2, bodyW, bodyH, 2, col)
-	cone := [3]pt{{x: bodyX + bodyW, y: cy - bodyH/2}, {x: bodyX + bodyW, y: cy + bodyH/2}, {x: bodyX + bodyW + s, y: cy}}
-	fillTriangleFilled(renderer, cone[0], cone[1], cone[2], col)
-	arcX := bodyX + bodyW + s
-	if arcs >= 1 {
-		drawArc(renderer, arcX, cy, s*3/4, 0.9, col)
-	}
-	if arcs >= 2 {
-		drawArc(renderer, arcX, cy, s*3/4+s/2, 0.9, col)
-	}
-}
-
-func drawArc(renderer *sdl.Renderer, cx, cy, r int32, half float64, col sdl.Color) {
-	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
-	steps := 10
-	for i := 0; i < steps; i++ {
-		a1 := -half + 2*half*float64(i)/float64(steps)
-		a2 := -half + 2*half*float64(i+1)/float64(steps)
-		renderer.DrawLine(
-			clampInt32(cx+int32(float64(r)*math.Cos(a1)), -2000, 8000),
-			clampInt32(cy+int32(float64(r)*math.Sin(a1)), -2000, 8000),
-			clampInt32(cx+int32(float64(r)*math.Cos(a2)), -2000, 8000),
-			clampInt32(cy+int32(float64(r)*math.Sin(a2)), -2000, 8000))
-	}
-}
-
-func drawCloseIcon(renderer *sdl.Renderer, cx, cy, r int32, col sdl.Color) {
-	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
-	renderer.DrawLine(cx-r, cy-r, cx+r, cy+r)
-	renderer.DrawLine(cx-r, cy+r, cx+r, cy-r)
-}
-
-// drawChevronLeft is the back glyph beside the close button: an X means "end
-// this", a chevron means "step out of it", and the two sat on the same button
-// before.
+// drawChevronLeft is a line chevron pointing left: the calendar popover's
+// previous-month arrow (calendarpopover.go).
 func drawChevronLeft(renderer *sdl.Renderer, cx, cy, r int32, col sdl.Color) {
 	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
 	renderer.DrawLine(cx+r/2, cy-r, cx-r/2, cy)
@@ -2414,8 +1943,9 @@ func HandleVideoControlClick(mx, my int32) bool {
 		return false
 	}
 
-	// In full screen a tap anywhere brings the controls back first.
-	if videoFullscreen && !videoChromeVisible() {
+	// In full screen a tap anywhere brings the controls back first — except
+	// while the stream opens, when the loader's close button is always drawn.
+	if videoFullscreen && !videoChromeVisible() && state.phase != "downloading" {
 		revealVideoChrome()
 		return true
 	}
@@ -2432,17 +1962,11 @@ func HandleVideoControlClick(mx, my int32) bool {
 		return false
 	}
 
-	// The settings sheet owns every click while it is open.
+	// The settings sheet owns every click while it is open. Its rows are hit
+	// where they were drawn (videoSettingsSheetDrawn): the windowed player
+	// draws the sheet inside its own rect.
 	if videoSettingsOpen {
-		sheet := videoSettingsSheetRect(0, 0, screenWidth, screenHeight)
-		if pointInRect(mx, my, sheet) {
-			idx := int((my - (sheet.Y + videoSettingsTopPad)) / videoSettingsRowH)
-			if idx < 0 {
-				idx = 0
-			}
-			if idx >= videoSettingsSheetRows {
-				idx = videoSettingsSheetRows - 1
-			}
+		if idx := vcSheetRow(mx, my); idx >= 0 {
 			videoSettingsItem = idx
 			videoSettingsActivate(idx)
 			return true
@@ -2451,52 +1975,50 @@ func HandleVideoControlClick(mx, my int32) bool {
 		return true
 	}
 
-	if pointInRect(mx, my, videoControlRects.subs) {
+	// A click also moves the D-pad ring, so the two input paths agree on what
+	// is selected instead of the ring jumping when the D-pad is next used.
+	r := videoControlRects
+	switch {
+	case vcHit(mx, my, r.subs):
 		videoControlFocus = vcSubs
 		toggleSubtitlesWithFeedback()
-		return true
-	} else if pointInRect(mx, my, videoControlRects.settings) {
+	case vcHit(mx, my, r.settings):
 		videoControlFocus = vcSettings
 		videoSettingsOpen = true
 		videoSettingsItem = 0
-		return true
-	} else if pointInRect(mx, my, videoControlRects.fullscreen) {
+	case vcHit(mx, my, r.fullscreen):
 		videoControlFocus = vcFullscreen
 		toggleVideoFullscreen()
-		return true
-	}
-
-	// A click also moves the D-pad ring, so the two input paths agree on what
-	// is selected instead of the ring jumping when the D-pad is next used.
-	if pointInRect(mx, my, videoControlRects.overlayPlay) {
+	case vcHit(mx, my, r.overlayPlay), vcHit(mx, my, r.playPause):
 		videoControlFocus = vcPlayPause
 		ToggleVideoPlayback()
-	} else if pointInRect(mx, my, videoControlRects.playPause) {
-		videoControlFocus = vcPlayPause
-		ToggleVideoPlayback()
-	} else if pointInRect(mx, my, videoControlRects.stop) {
-		mediaEndSession(appConfig)
-	} else if pointInRect(mx, my, videoControlRects.seekBack) {
+	case vcHit(mx, my, r.seekBack):
 		videoControlFocus = vcSeekBack
 		seekVideoBySeconds(state, -10)
-	} else if pointInRect(mx, my, videoControlRects.seekFwd) {
+	case vcHit(mx, my, r.seekFwd):
 		videoControlFocus = vcSeekFwd
 		seekVideoBySeconds(state, 10)
-	} else if pointInRect(mx, my, videoControlRects.volDown) {
-		AdjustVolume(-0.1)
-	} else if pointInRect(mx, my, videoControlRects.volUp) {
-		AdjustVolume(0.1)
-	} else if pointInRect(mx, my, videoControlRects.progress) {
-		fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
-		SeekVideo(fraction)
-	} else if pointInRect(mx, my, videoControlRects.speedCycle) {
+	case vcHit(mx, my, r.prev):
+		videoControlFocus = vcPrev
+		skipPlayback(appConfig, -1)
+	case vcHit(mx, my, r.next):
+		videoControlFocus = vcNext
+		skipPlayback(appConfig, 1)
+	case vcHit(mx, my, r.mute):
+		videoControlFocus = vcMute
+		videoToggleMute()
+	case vcHit(mx, my, r.volBar):
+		videoVolumeAt(mx, r.volBar)
+	case vcHit(mx, my, r.progress):
+		SeekVideo(float64(mx-r.progress.X) / float64(r.progress.W))
+	case vcHit(mx, my, r.speedCycle):
 		videoControlFocus = vcSpeed
 		cyclePlaybackSpeed()
-	} else if pointInRect(mx, my, videoControlRects.close) {
+	case vcHit(mx, my, r.close):
 		videoControlFocus = vcClose
 		PlayBackSound()
 		mediaEndSession(appConfig)
-	} else if pointInRect(mx, my, videoControlRects.back) {
+	case vcHit(mx, my, r.back):
 		// Backing out keeps the video: full screen steps down to the window,
 		// and the window steps down to the floating mini player.
 		videoControlFocus = vcBack
@@ -2722,9 +2244,13 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 			videoSettingsActivate(videoSettingsItem)
 			PlayActivateSound()
 			return true
-		case sdl.K_ESCAPE, sdl.K_b, sdl.K_s:
-			videoSettingsOpen = false
-			PlayBackSound()
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_s, sdl.K_y:
+			// Not on a repeat: the held S or Y that opened the sheet would
+			// close it again.
+			if e.Repeat == 0 {
+				videoSettingsOpen = false
+				PlayBackSound()
+			}
 			return true
 		}
 	}
@@ -2758,12 +2284,23 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		moveVideoControlFocus(1)
 		PlayNavSound()
 	case sdl.K_f:
-		toggleVideoFullscreen()
-	case sdl.K_c:
-		toggleSubtitlesWithFeedback()
-	case sdl.K_s:
-		videoSettingsOpen = !videoSettingsOpen
-		videoSettingsItem = 0
+		// The toggles act once per press, like the pad's buttons: a held
+		// key's auto-repeat flickered them.
+		if e.Repeat == 0 {
+			toggleVideoFullscreen()
+		}
+	case sdl.K_c, sdl.K_x:
+		// X and Y are the pad's captions and settings buttons, and the
+		// keyboard's X and Y do the same: X used to fall through to the Media
+		// screen's search shortcut (main.go) behind the playing video.
+		if e.Repeat == 0 {
+			toggleSubtitlesWithFeedback()
+		}
+	case sdl.K_s, sdl.K_y:
+		if e.Repeat == 0 {
+			videoSettingsOpen = !videoSettingsOpen
+			videoSettingsItem = 0
+		}
 	case sdl.K_ESCAPE:
 		// Escape steps down a size instead of ending playback: full screen
 		// shrinks back into the scene's window, and the window shrinks into the

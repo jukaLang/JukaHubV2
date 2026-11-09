@@ -408,22 +408,24 @@ func pdfvFooterHints() []FooterHint {
 	if !pdf.doc.Loaded || pdf.doc.Error != "" {
 		return []FooterHint{{Button: "B", Label: "Back"}}
 	}
-	pageLabel := "Page"
+	// The keyboard's halves (handlePDFInput): [ and ] step chapters, - and +
+	// zoom; PgUp/PgDn page, which the hint layer names from "Page" itself.
+	pageLabel, pageButton := "Page", "L1/R1"
 	if len(pdf.doc.Chapters) > 0 {
-		pageLabel = "Chapter"
+		pageLabel, pageButton = "Chapter", "L1/R1 / [ ]"
 	}
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Scroll"},
-		{Button: "L1/R1", Label: pageLabel},
+		{Button: pageButton, Label: pageLabel},
 	}
 	if pdfvIsPagedPDF() && !pdfvView.textMode {
 		hints = append(hints,
-			FooterHint{Button: "L2/R2", Label: "Zoom"},
+			FooterHint{Button: "L2/R2 / - / +", Label: "Zoom"},
 			FooterHint{Button: "A", Label: "Fit"},
 			FooterHint{Button: "X", Label: "Text"},
 		)
 	} else {
-		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Text size"})
+		hints = append(hints, FooterHint{Button: "L2/R2 / - / +", Label: "Text size"})
 		if pdf.doc.Format == "PDF" {
 			hints = append(hints, FooterHint{Button: "X", Label: "Page view"})
 		}

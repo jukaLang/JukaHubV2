@@ -112,9 +112,11 @@ func setSheetKey(s *setSheetState, sym sdl.Keycode) {
 		setSheetMove(s, -1)
 	case sdl.K_DOWN:
 		setSheetMove(s, 1)
-	case sdl.K_PAGEUP:
+	case sdl.K_PAGEUP, sdl.K_LEFT:
+		// Left/Right page like the pad's D-pad does (setSheetPad), so the
+		// footer's "D-Pad" means the same on the arrow keys.
 		setSheetMove(s, -setSheetPage(s))
-	case sdl.K_PAGEDOWN:
+	case sdl.K_PAGEDOWN, sdl.K_RIGHT:
 		setSheetMove(s, setSheetPage(s))
 	case sdl.K_HOME:
 		setSheetMove(s, -len(s.options))

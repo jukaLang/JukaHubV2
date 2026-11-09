@@ -38,10 +38,6 @@ const browserZoomDefault = 2
 // browserNav is: one browser at a time, mutated on the render/event thread.
 var browserZoomIndex = browserZoomDefault
 
-// browserZoomReset returns to 100%. It runs on a test reset so a zoom set by
-// one test cannot leak into the layout another test measures.
-func browserZoomReset() { browserZoomIndex = browserZoomDefault }
-
 // browserZoomScale is the multiplier for the current step, clamped so a stale
 // index can never size a font out of range.
 func browserZoomScale() float64 {

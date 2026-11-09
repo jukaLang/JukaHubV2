@@ -86,16 +86,23 @@ from a file next to it, so JukaHub's own icon is linked in from these files in
 
 | File | Role |
 |------|------|
-| `JukaPlayer.png` | source artwork |
-| `JukaHub.ico` | multi-size icon (16-256 px) generated from that artwork |
+| `JukaHub.ico` | multi-size icon: 16-32 px are the simplified mark drawn for their pixel grid, 40-256 px the full logo |
 | `JukaHub.rc` | resource script that attaches the icon to the binary |
 | `rsrc_windows_amd64.syso` | compiled resource, linked automatically by Go |
+| `JukaPlayer.png` | the 300 px logo: the running window's icon (embedded with `go:embed`) and the Apps-menu icon of a TrimUI release folder |
 
-`build.bat` recompiles the `.syso` with `windres` on every build, and both
-generated files are committed, so a plain `go build` (and the Windows CI job)
-gets the icon with no extra flags. After changing `JukaPlayer.png`, run
-`./mkwinres.sh` (needs Python 3 with Pillow and `windres`) to regenerate them;
-`build.bat diag` reports whether the compiled resource is present.
+These files, and every other copy of the logo (the SD-card package's
+`trimui/Apps/JukaHub/icon.png`, the web builder's favicons, the README image),
+are rendered by `branding/mklogo.py` from one construction; see
+[branding/README.md](../branding/README.md). To change the logo, edit that
+script and run `python3 branding/mklogo.py` (Python 3 with numpy and Pillow):
+it rewrites every asset that changed, the `.syso` included, so no `windres` is
+needed. Everything it writes is committed, so a plain `go build` (and the
+Windows CI job) gets the icon with no extra flags. `build.bat` still recompiles
+the `.syso` with `windres` on every build, `./mkwinres.sh` does the same by
+hand, and `build.bat diag` reports whether the compiled resource is present.
+Do not regenerate the `.ico` from `JukaPlayer.png`: a downscale loses the small
+sizes' hinting.
 
 The resource is per architecture: a `windows/arm64` build needs its own
 `rsrc_windows_arm64.syso` or it falls back to the generic icon.

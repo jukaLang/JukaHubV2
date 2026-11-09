@@ -29,7 +29,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -444,7 +443,7 @@ func dlLibraryLoad() {
 	if first {
 		var file dlLibraryFile
 		if _, err := readJSONWithBackup(dlLibraryPath(), &file); err != nil && !os.IsNotExist(err) {
-			log.Printf("[downloads] library index unreadable, rebuilding from the folders: %v", err)
+			logWarn("downloads", "library index unreadable, rebuilding from the folders: %v", err)
 		}
 		index = file.Entries
 	} else {
@@ -494,14 +493,14 @@ func dlScanMediaFolders() ([]dlScannedFile, []string) {
 		entries, err := os.ReadDir(dir.path)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				log.Printf("[downloads] cannot list %s: %v", dir.path, err)
+				logWarn("downloads", "cannot list %s: %v", dir.path, err)
 				unreadable = append(unreadable, dir.path)
 			}
 			continue
 		}
 		for _, e := range entries {
 			name := e.Name()
-			if e.IsDir() || !e.Type().IsRegular() || strings.HasPrefix(name, ".") || !isMediaFile(name) {
+			if e.IsDir() || !e.Type().IsRegular() || skipScanEntryName(name) || !isMediaFile(name) {
 				continue
 			}
 			info, err := e.Info()
@@ -701,11 +700,11 @@ func dlLibraryWrite(entries []dlLibraryEntry) {
 	}
 	data, err := json.MarshalIndent(dlLibraryFile{Version: dlLibraryVersion, Entries: entries}, "", "  ")
 	if err != nil {
-		log.Printf("[downloads] library index: %v", err)
+		logWarn("downloads", "library index: %v", err)
 		return
 	}
 	if err := AtomicWrite(dlLibraryPath(), data, 0o644); err != nil {
-		log.Printf("[downloads] could not save the library index: %v", err)
+		logWarn("downloads", "could not save the library index: %v", err)
 	}
 }
 
@@ -891,7 +890,7 @@ func dlDeleteEntryFiles(e dlLibraryEntry) {
 			time.Sleep(dlMoveRetry)
 		}
 		if err != nil {
-			log.Printf("[downloads] could not delete %s: %v", filepath.Base(e.Path), err)
+			logWarn("downloads", "could not delete %s: %v", filepath.Base(e.Path), err)
 		}
 	}
 	if e.ThumbFile != "" && isPathWithin(e.ThumbFile, root) {
@@ -1068,7 +1067,7 @@ func dlKeepWatched(tempPath, pageURL string, meta VideoInfo) {
 		return
 	}
 	if err := os.MkdirAll(downloadsVideoDir(), 0o755); err != nil {
-		log.Printf("[downloads] cannot create the video folder: %v", err)
+		logWarn("downloads", "cannot create the video folder: %v", err)
 		removeTempVideo(tempPath)
 		return
 	}
@@ -1083,7 +1082,7 @@ func dlKeepWatched(tempPath, pageURL string, meta VideoInfo) {
 	}
 	dest := uniqueDownloadPath(downloadsVideoDir(), name, ext)
 	if err := dlMoveFile(tempPath, dest, info.Size()); err != nil {
-		log.Printf("[downloads] could not keep the watched video: %v", err)
+		logWarn("downloads", "could not keep the watched video: %v", err)
 		removeTempVideo(tempPath)
 		if errors.Is(err, errDlCardFull) {
 			ShowToast("Not kept: the card is almost full", ToastKindWarning)
@@ -1236,7 +1235,7 @@ func dlFetchPoster(e dlLibraryEntry) {
 	}
 	out := filepath.Join(dlThumbDir(), e.ID+".jpg")
 	if err := os.WriteFile(out, data, 0o644); err != nil {
-		log.Printf("[downloads] could not save a poster: %v", err)
+		logWarn("downloads", "could not save a poster: %v", err)
 		return
 	}
 	dlLibraryUpdate(e.ID, func(cur *dlLibraryEntry) { cur.ThumbFile = out })

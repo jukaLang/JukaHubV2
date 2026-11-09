@@ -1278,7 +1278,7 @@ func renderAccessibilityPanel(renderer *sdl.Renderer, config *Config) {
 	// One explanation for the focused row, under the list.
 	detail := rows[a11y.cursor].detail
 	if detail == "" {
-		detail = "Change the value with Left/Right, or press A."
+		detail = hintSentence("Change the value with Left/Right, or press %s.", "A", "Next")
 	}
 	detailY := panelY + headerH + visible*rowH + 10
 	renderText(renderer, config, font, ellipsize(font, detail, rowW), ColorTextTertiary(), panelX+padX, detailY)

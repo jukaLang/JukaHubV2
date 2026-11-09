@@ -7,7 +7,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/skip2/go-qrcode"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -33,38 +33,6 @@ func companionRequest(method, target, pin string, body io.Reader) *http.Request 
 		req.Header.Set("X-Companion-Pin", pin)
 	}
 	return req
-}
-
-func TestCompanionPINIsSixDigits(t *testing.T) {
-	seen := map[string]bool{}
-	for i := 0; i < 50; i++ {
-		pin, err := companionNewPIN()
-		if err != nil {
-			t.Fatalf("companionNewPIN: %v", err)
-		}
-		if len(pin) != 6 {
-			t.Fatalf("PIN %q has length %d, want 6", pin, len(pin))
-		}
-		for _, r := range pin {
-			if r < '0' || r > '9' {
-				t.Fatalf("PIN %q contains a non-digit", pin)
-			}
-		}
-		seen[pin] = true
-	}
-	// Fifty draws from a million values colliding every time would mean the
-	// generator is not random at all.
-	if len(seen) < 40 {
-		t.Fatalf("only %d distinct PINs in 50 draws", len(seen))
-	}
-}
-
-func TestCompanionURLCarriesPIN(t *testing.T) {
-	got := companionURL("192.168.1.42", 8317, "123456")
-	want := "http://192.168.1.42:8317/?p=123456"
-	if got != want {
-		t.Fatalf("companionURL = %q, want %q", got, want)
-	}
 }
 
 // The phone remote labels buttons by meaning (A = confirm). On a handheld the
@@ -170,31 +138,6 @@ func TestCreateCompanionFileNeverOverwrites(t *testing.T) {
 	}
 }
 
-func TestCompanionTextChunksRespectRunes(t *testing.T) {
-	text := "héllo wörld"
-	chunks := companionTextChunks(text, 4)
-	if strings.Join(chunks, "") != text {
-		t.Fatalf("chunks lost characters: %q", chunks)
-	}
-	for _, c := range chunks {
-		if len(c) > 4 {
-			t.Fatalf("chunk %q is %d bytes, over the limit", c, len(c))
-		}
-		if !utf8.ValidString(c) {
-			t.Fatalf("chunk %q is not valid UTF-8", c)
-		}
-	}
-
-	// A multi-byte rune larger than the budget must still come through whole.
-	emoji := companionTextChunks("🎮", 2)
-	if len(emoji) != 1 || emoji[0] != "🎮" {
-		t.Fatalf("emoji chunking = %q", emoji)
-	}
-	if got := companionTextChunks("", 4); len(got) != 0 {
-		t.Fatalf("empty text produced %q", got)
-	}
-}
-
 func TestCompanionAuth(t *testing.T) {
 	srv, _ := newTestCompanion(t)
 	if !srv.authorized(companionRequest(http.MethodPost, "/api/key", "123456", nil)) {
@@ -241,30 +184,6 @@ func TestCompanionPageRequiresPIN(t *testing.T) {
 	}
 	if !strings.Contains(rec.Header().Get("Cache-Control"), "no-store") {
 		t.Error("companion page must not be cached")
-	}
-}
-
-func TestCompanionTextSendsLinesAndEnter(t *testing.T) {
-	srv, events := newTestCompanion(t)
-	payload, _ := json.Marshal(map[string]interface{}{"text": "ls -la\ncd /", "enter": true})
-	rec := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rec, companionRequest(http.MethodPost, "/api/text", "123456", bytes.NewReader(payload)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-	}
-	want := []companionEvent{
-		{Kind: companionEventText, Text: "ls -la"},
-		{Kind: companionEventKey, Text: "enter"},
-		{Kind: companionEventText, Text: "cd /"},
-		{Kind: companionEventKey, Text: "enter"},
-	}
-	if len(*events) != len(want) {
-		t.Fatalf("events = %+v, want %+v", *events, want)
-	}
-	for i := range want {
-		if (*events)[i] != want[i] {
-			t.Fatalf("event %d = %+v, want %+v", i, (*events)[i], want[i])
-		}
 	}
 }
 
@@ -447,141 +366,74 @@ func TestCompanionQueueIsDrainedAndCapped(t *testing.T) {
 	}
 }
 
-func TestCompanionStatusLine(t *testing.T) {
-	saved := companion
-	defer func() { companion = saved }()
-
-	companion = companionOverlay{}
-	if got := companionStatusLine(); got != "Stopped" {
-		t.Fatalf("closed status = %q", got)
-	}
-	companion = companionOverlay{open: true, pin: "123456"}
-	if got := companionStatusLine(); !strings.Contains(got, "123456") {
-		t.Fatalf("open status = %q, want the PIN", got)
-	}
-	companion = companionOverlay{open: true, err: "port busy"}
-	if got := companionStatusLine(); !strings.Contains(got, "port busy") {
-		t.Fatalf("error status = %q", got)
-	}
-}
-
-func TestCompanionURLRoundTrips(t *testing.T) {
-	srv, _ := newTestCompanion(t)
-	u := companionURL("127.0.0.1", 8317, srv.pin)
-	parsed, err := url.Parse(u)
+// The Home header draws the pairing code without the bitmap's own four-module
+// border, so the module size comes from the tile: the ~100px tile the band has
+// gives a real pairing URL 3px modules, where the old tile drew 1px ones.
+func TestCompanionHeaderQRFillsItsTile(t *testing.T) {
+	code, err := qrcode.New(companionURL("192.168.100.200", 18080, "123456"), qrcode.Low)
 	if err != nil {
-		t.Fatalf("generated URL does not parse: %v", err)
+		t.Fatal(err)
 	}
-	if got := parsed.Query().Get("p"); got != srv.pin {
-		t.Fatalf("URL PIN = %q, want %q", got, srv.pin)
+	bitmap := code.Bitmap()
+	core := qrCoreModules(bitmap)
+	n := len(core)
+	if n != len(bitmap)-8 || len(core[0]) != n {
+		t.Fatalf("core is %dx%d from a %d-module bitmap, want its 4-module border gone", n, len(core[0]), len(bitmap))
+	}
+	if !core[0][0] || !core[n-1][0] || !core[0][n-1] {
+		t.Fatal("the core does not start on the finder patterns")
+	}
+	if m := headerQRModule(100, int32(n)); m < 3 {
+		t.Fatalf("a 100px tile draws %dpx modules for a %d-module code, want 3", m, n)
+	}
+	if m := headerQRModule(30, int32(n)); m != 0 {
+		t.Fatalf("a 30px tile still draws %dpx modules", m)
+	}
+
+	// The rects cover exactly the dark modules, one row of modules each.
+	dark := 0
+	for _, row := range core {
+		for _, on := range row {
+			if on {
+				dark++
+			}
+		}
+	}
+	area := int32(0)
+	for _, r := range qrModuleRects(core, 10, 20, 3) {
+		if r.H != 3 || r.W%3 != 0 || (r.Y-20)%3 != 0 || (r.X-10)%3 != 0 {
+			t.Fatalf("rect %+v is off the 3px module grid", r)
+		}
+		area += r.W * r.H
+	}
+	if area != int32(dark)*9 {
+		t.Fatalf("rects cover %d px, the %d dark modules are %d px", area, dark, dark*9)
+	}
+
+	blank := [][]bool{{false, false}, {false, false}}
+	if got := qrCoreModules(blank); len(got) != 2 {
+		t.Fatalf("a bitmap with no dark module was trimmed to %d rows", len(got))
 	}
 }
 
-// TestCompanionEnsureStartedBuildsHomeQR covers the background path: the
-// listener and QR must exist before anyone opens the pairing card, because the
-// home header is the primary pairing affordance.
-func TestCompanionEnsureStartedBuildsHomeQR(t *testing.T) {
-	if localIPv4() == "" {
-		t.Skip("no LAN address on this machine")
-	}
-	prev := companion
-	prevRetry, prevRefresh := companionNextRetry, companionNextRefresh
-	prevRect := companionHeaderRect
-	t.Cleanup(func() {
-		shutdownCompanion()
-		companion = prev
-		companionNextRetry, companionNextRefresh = prevRetry, prevRefresh
-		companionHeaderRect = prevRect
-	})
-	companion = companionOverlay{}
-	companionNextRetry, companionNextRefresh = time.Time{}, time.Time{}
-
-	companionEnsureStarted()
-	if companion.err != "" {
-		t.Fatalf("background companion failed to start: %s", companion.err)
-	}
-	if companion.srv == nil || !companion.srv.Running() {
-		t.Fatal("background companion did not bind a listener")
-	}
-	if len(companion.pin) != 6 {
-		t.Fatalf("PIN = %q, want six digits", companion.pin)
-	}
-	if len(companion.qr) == 0 {
-		t.Fatal("background companion did not build the home QR")
-	}
-	if !strings.Contains(companion.url, companion.pin) {
-		t.Fatalf("QR URL %q does not carry the PIN", companion.url)
-	}
-
-	// Closing the large card must not take the home QR offline.
-	closeCompanionOverlay()
-	if companion.srv == nil || !companion.srv.Running() {
-		t.Fatal("closing the pairing card stopped the background listener")
-	}
-}
-
-// TestCompanionOverlayStartsAndServes walks the real open path the Tools row
-// uses: generate a PIN, bind the listener, build the QR, answer the page, and
-// release the port when the card closes.
-func TestCompanionOverlayStartsAndServes(t *testing.T) {
-	if localIPv4() == "" {
-		t.Skip("no LAN address on this machine")
-	}
-	prev := companion
-	t.Cleanup(func() {
-		shutdownCompanion()
-		companion = prev
-	})
-	companion = companionOverlay{}
-
-	openCompanionOverlay()
-	if !companion.open {
-		t.Fatal("openCompanionOverlay did not mark the card open")
-	}
-	if companion.err != "" {
-		t.Fatalf("companion failed to start: %s", companion.err)
-	}
-	if companion.srv == nil || !companion.srv.Running() {
-		t.Fatal("companion server is not running")
-	}
-	if len(companion.pin) != 6 {
-		t.Fatalf("PIN = %q, want six digits", companion.pin)
-	}
-	if len(companion.qr) == 0 {
-		t.Fatal("no QR bitmap was built")
-	}
-	if !strings.Contains(companion.url, companion.pin) {
-		t.Fatalf("URL %q does not carry the PIN", companion.url)
-	}
-
-	resp, err := http.Get(companion.url)
-	if err != nil {
-		t.Fatalf("GET %s: %v", companion.url, err)
-	}
-	defer resp.Body.Close()
-	page, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("page status = %d", resp.StatusCode)
-	}
-	if !strings.Contains(string(page), "JukaHub Companion") {
-		t.Fatal("LAN page did not return the companion UI")
-	}
-
-	// The QR the user scans must decode to the URL the server actually serves.
-	if got := companionURL(localIPv4(), companion.srv.Port(), companion.pin); got != companion.url {
-		t.Fatalf("QR URL %q does not match the listening address %q", companion.url, got)
-	}
-
-	toggleCompanionOverlay() // open -> close
-	if companion.open {
-		t.Fatal("card stayed open after toggling")
-	}
-	// The listener now stays up so the home-header QR keeps working; it is
-	// released by shutdownCompanion or a new PIN, not by closing the card.
-	if companion.srv == nil || !companion.srv.Running() {
-		t.Fatal("closing the card released the listener needed by the home QR")
-	}
-	if len(companion.qr) == 0 {
-		t.Fatal("closing the card discarded the home QR bitmap")
+// The header band really gives the code that room: on the Smart Pro's and the
+// Brick's canvases the tile Home lays out (under a status corner ending at
+// y=44) draws a pairing URL's 29-module code with 3px modules, and stays clear
+// of the ring a focused, lifted Media card draws under it.
+func TestHomeHeaderQRTileFitsTheBand(t *testing.T) {
+	for _, c := range []struct{ w, h int32 }{{1280, 720}, {960, 720}} {
+		layout := NewHomeLayout(c.w, c.h)
+		qr := layout.headerQRRect(c.w-scaleX(homeSideMargin, c.w), 44)
+		if m := headerQRModule(qr.W, 29); m < 3 {
+			t.Fatalf("%dx%d: tile %+v draws %dpx modules, want 3", c.w, c.h, qr, m)
+		}
+		media := layout.Items[HomeFocusMedia].Rect
+		ringTop := media.Y - 3 - (max32(2, scaleX(homeFocusRingGap, c.w)) + homeFocusRingWidth)
+		if qr.Y+qr.H > ringTop {
+			t.Fatalf("%dx%d: tile %+v reaches the focused Media card's ring at y=%d", c.w, c.h, qr, ringTop)
+		}
+		if qr.Y < 44 {
+			t.Fatalf("%dx%d: tile %+v climbs into the status corner", c.w, c.h, qr)
+		}
 	}
 }

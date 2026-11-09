@@ -24,7 +24,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,7 +240,7 @@ func prepareSavestateResume(launcher string) bool {
 		}
 		changed, err := enableSavestateResume(path)
 		if err != nil {
-			log.Printf("[resume] cannot enable save-state resume in %s: %v", path, err)
+			logWarn("resume", "cannot enable save-state resume in %s: %v", path, err)
 			return false
 		}
 		if changed {

@@ -471,7 +471,7 @@ func saverDrawClock(renderer *sdl.Renderer, config *Config, x, y int32, size int
 		bottom = y + h
 	}
 	if dateFont := getFontSized(config, "small", int(saverScaled(24, 15))); dateFont != nil {
-		_, h := renderText(renderer, config, dateFont, now.Format("Monday, 2 January"), saverInkDate, x+saverScaled(4, 2), bottom)
+		_, h := renderText(renderer, config, dateFont, formatDayLong(config, now), saverInkDate, x+saverScaled(4, 2), bottom)
 		bottom += h
 	}
 	return bottom

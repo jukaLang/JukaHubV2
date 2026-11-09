@@ -136,40 +136,6 @@ func TestSemaphoreReleaseUnblocksWaiter(t *testing.T) {
 	}
 }
 
-// TestTryAcquireNeverBlocks: TryAcquire reports false when full instead of waiting.
-func TestTryAcquireNeverBlocks(t *testing.T) {
-	s := newSemaphore(1)
-	if !s.TryAcquire(1) {
-		t.Fatal("TryAcquire failed on an empty semaphore")
-	}
-	if s.TryAcquire(1) {
-		t.Fatal("TryAcquire succeeded on a full semaphore")
-	}
-	s.Release(1)
-	if !s.TryAcquire(1) {
-		t.Fatal("TryAcquire failed after Release")
-	}
-}
-
-// TestDecodeImageRGBAAvoidsDoubleCopy: an already-dense RGBA is returned as-is
-// (no lossy re-wrap), and its pixels survive.
-func TestDecodeImageRGBAAvoidsDoubleCopy(t *testing.T) {
-	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
-	src.Set(1, 1, image.White.At(0, 0))
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, src); err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	// PNG decodes to *image.NRGBA, so this exercises the conversion path.
-	out, err := decodeImageRGBA(context.Background(), buf.Bytes())
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if out.Bounds().Dx() != 4 || out.Bounds().Dy() != 4 {
-		t.Fatalf("bounds = %v, want 4x4", out.Bounds())
-	}
-}
-
 // TestDecodeImageRGBAReportsBadInput: malformed bytes surface the decode error
 // rather than an empty image.
 func TestDecodeImageRGBAReportsBadInput(t *testing.T) {

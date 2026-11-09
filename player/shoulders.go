@@ -63,12 +63,6 @@ func triggerPressedEdge(side int, value int16) bool {
 	return false
 }
 
-// resetPadTriggerLatches is used by tests and by focus changes that would
-// otherwise swallow the next real press.
-func resetPadTriggerLatches() {
-	padTriggerHeld = [2]bool{}
-}
-
 // handleShoulderPress runs one shoulder/trigger press. It reports whether the
 // press was used by the screen.
 func handleShoulderPress(s padShoulder, config *Config) bool {
@@ -174,9 +168,6 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 	case wpOpen:
 		wallpaperShoulder(s)
 		return true
-	case socialNotifOpen:
-		socialNotifShoulder(s)
-		return true
 	case imageViewerPath != "":
 		// The viewer's shoulders zoom; the triggers step to the previous or
 		// next picture at any zoom (imageviewer.go).
@@ -202,7 +193,8 @@ func triggerOwnedByOverlay() bool {
 		onboarding.active && !onboardingCoveredByOverlay():
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
-		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, homeCalendarOpen:
+		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, homeCalendarOpen,
+		homePowerConfirm.open:
 		return true
 	}
 	return false
@@ -252,7 +244,6 @@ func modalPanelBlockReason() string {
 		{"on-screen keyboard", kbPanel.open},
 		{"downloads panel", dlPanel.open},
 		{"weather popover", weatherPopoverOpen},
-		{"social notifications", socialNotifOpen},
 		{"image viewer", imageViewerPath != ""},
 		{"keyboard", virtualKeyboardActive},
 		{"memory panel", memPanel.open},
@@ -369,23 +360,6 @@ func qsShoulder(s padShoulder) {
 
 // qsPageRows is how many rows one shoulder press moves in Quick Settings.
 const qsPageRows = 5
-
-// socialNotifShoulder pages the social notification list.
-func socialNotifShoulder(s padShoulder) {
-	rows := 5
-	switch s {
-	case padL1:
-		socialNotifCursor -= rows
-	case padR1:
-		socialNotifCursor += rows
-	case padL2:
-		socialNotifCursor = 0
-	case padR2:
-		socialNotifCursor = len(socialNotifHistory) - 1
-	}
-	socialNotifCursor = clampIndex(socialNotifCursor, len(socialNotifHistory))
-	PlayNavSound()
-}
 
 func globalSearchShoulder(s padShoulder) {
 	rows := 5

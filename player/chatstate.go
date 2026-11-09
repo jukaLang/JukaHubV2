@@ -545,18 +545,6 @@ func chatMarkSeenLocked(tab chatTab) {
 	chatTabs[tab].unread = 0
 }
 
-// chatUnreadTotal is the number of unread messages across every tab, for a
-// badge outside the chat (the Home card).
-func chatUnreadTotal() int {
-	chatMutex.Lock()
-	defer chatMutex.Unlock()
-	total := 0
-	for t := chatTabCommunity; t < chatTabCount; t++ {
-		total += chatTabs[t].unread
-	}
-	return total
-}
-
 // chatTabUnread returns one tab's unread count.
 func chatTabUnread(tab chatTab) int {
 	chatMutex.Lock()
@@ -585,24 +573,6 @@ func chatSelectTab(tab chatTab) bool {
 	}
 	chatDirty.Store(true)
 	return true
-}
-
-// chatOpenTab opens the Chat screen on a tab ("community", "ai" or "saved").
-// Other screens use it for a "talk to Juka" or "show messages" shortcut.
-func chatOpenTab(config *Config, key string) {
-	if config == nil {
-		return
-	}
-	if tab, ok := chatTabFromKey(key); ok {
-		chatEnsureLoaded()
-		chatSelectTab(tab)
-	}
-	if chatSceneActive(config) {
-		return
-	}
-	if idx := sceneIndexExact(config, chatSceneName); idx >= 0 {
-		changeSceneTo(config, idx)
-	}
 }
 
 // ── Getting messages in ──────────────────────────────────────────────────

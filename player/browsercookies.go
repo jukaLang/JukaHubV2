@@ -31,7 +31,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -243,7 +242,7 @@ func (j *browserCookieJar) snapshotLocked() []browserCookieRecord {
 	}
 	sort.Slice(out, func(a, b int) bool { return browserCookieKey(out[a]) < browserCookieKey(out[b]) })
 	if len(out) > browserCookieMaxRecords {
-		log.Printf("[browser] %d cookies stored, keeping the first %d", len(out), browserCookieMaxRecords)
+		logDebug("browser", "%d cookies stored, keeping the first %d", len(out), browserCookieMaxRecords)
 		out = out[:browserCookieMaxRecords]
 	}
 	return out
@@ -368,7 +367,7 @@ func (j *browserCookieJar) forgetSite(site string) int {
 	}
 	inner, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: browserPublicSuffixes{}})
 	if err != nil {
-		log.Printf("[browser] cannot rebuild the jar: %v", err)
+		logWarn("browser", "cannot rebuild the jar: %v", err)
 		return 0
 	}
 	j.jar = inner
@@ -500,7 +499,7 @@ func (j *browserCookieJar) save() {
 		// Nothing to remember: leaving an empty file behind would only be a
 		// second place to look after a Forget.
 		if err := removeBrowserCookieFile(j.path); err != nil {
-			log.Printf("[browser] cannot remove %s: %v", j.path, err)
+			logWarn("browser", "cannot remove %s: %v", j.path, err)
 		}
 		return
 	}
@@ -528,7 +527,7 @@ func removeBrowserCookieBackup(path string) {
 	browserCookieSaveMu.Lock()
 	defer browserCookieSaveMu.Unlock()
 	if err := os.Remove(path + ".bak"); err != nil && !os.IsNotExist(err) {
-		log.Printf("[browser] cannot remove %s: %v", path+".bak", err)
+		logWarn("browser", "cannot remove %s: %v", path+".bak", err)
 	}
 }
 
@@ -556,18 +555,18 @@ func writeBrowserCookies(path string, records []browserCookieRecord) {
 		Cookies:       records,
 	}, "", "  ")
 	if err != nil {
-		log.Printf("[browser] cannot encode cookies: %v", err)
+		logWarn("browser", "cannot encode cookies: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Printf("[browser] cannot create %s: %v", filepath.Dir(path), err)
+		logWarn("browser", "cannot create %s: %v", filepath.Dir(path), err)
 		return
 	}
 	// Same crash-safe path as the config: temp file, fsync, rename, and the
 	// previous session kept as .bak. A truncated jar used to read as "signed
 	// out of every site" with no way back.
 	if err := AtomicWrite(path, append(data, '\n'), browserCookieFileMode); err != nil {
-		log.Printf("[browser] cannot write %s: %v", path, err)
+		logWarn("browser", "cannot write %s: %v", path, err)
 	}
 }
 
@@ -582,12 +581,12 @@ func loadBrowserCookies(path string) []browserCookieRecord {
 	var file browserCookieFile
 	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[browser] ignoring %s: %v", path, err)
+			logWarn("browser", "ignoring %s: %v", path, err)
 		}
 		return nil
 	}
 	if file.SchemaVersion > browserCookieSchemaVersion {
-		log.Printf("[browser] %s is from a newer build (schema %d)", path, file.SchemaVersion)
+		logDebug("browser", "%s is from a newer build (schema %d)", path, file.SchemaVersion)
 		return nil
 	}
 	return file.Cookies
@@ -641,10 +640,10 @@ func browserCookies() http.CookieJar {
 		stamped := stampBrowserCookies(records, now)
 		kept, dropped := browserStaleCookieSplit(records, cookieRetentionDays(appConfig), now)
 		if n := jar.restore(kept); n > 0 {
-			log.Printf("[browser] restored %d cookie(s) from %s", n, jar.path)
+			logDebug("browser", "restored %d cookie(s) from %s", n, jar.path)
 		}
 		if dropped > 0 {
-			log.Printf("[browser] retention %s dropped %d saved cookie(s)", cookieRetentionLabel(cookieRetentionDays(appConfig)), dropped)
+			logWarn("browser", "retention %s dropped %d saved cookie(s)", cookieRetentionLabel(cookieRetentionDays(appConfig)), dropped)
 		}
 		if stamped || dropped > 0 {
 			if dropped > 0 {

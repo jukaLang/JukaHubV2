@@ -1226,7 +1226,11 @@ func termSSHCommand(args []string) {
 	if sshSrv.ReadOnly() {
 		termPushLine("  Mode:     read-only", false)
 	}
+	if n := len(sshSrv.Clients()); n > 0 {
+		termPushLine(fmt.Sprintf("  Clients:  %d connected", n), false)
+	}
 	termPushLine("  Accepts the sftp subsystem only (no shell or tunnels).", false)
+	termPushLine("  Stops by itself after 15 idle minutes or when the network changes.", false)
 }
 
 // ── Input ────────────────────────────────────────────────────────────────

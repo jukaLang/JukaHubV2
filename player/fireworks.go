@@ -395,15 +395,6 @@ func trophyConfettiAlive() int {
 	return trophyConfetti.live
 }
 
-// trophyConfettiClear drops every piece (a test, or the overlay giving way).
-func trophyConfettiClear() {
-	s := &trophyConfetti
-	for i := range s.pieces {
-		s.pieces[i].alive = false
-	}
-	s.live = 0
-}
-
 // trophyConfettiUpdate advances the pool by dt seconds. It allocates nothing.
 func trophyConfettiUpdate(dt float32) {
 	s := &trophyConfetti

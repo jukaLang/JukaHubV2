@@ -335,7 +335,7 @@ func downloadPanelStatus() string {
 		parts = append(parts, fmt.Sprintf("%d saved", done))
 	}
 	if len(parts) == 0 {
-		return "Nothing queued — press A on “Add a link” to save a track"
+		return hintSentence("Nothing queued — press %s on “Add a link” to save a track", "A", "Add")
 	}
 	status := strings.Join(parts, " · ")
 	if downloadsPaused() {
@@ -361,6 +361,14 @@ func handleDownloadsKey(e *sdl.KeyboardEvent, config *Config) bool {
 		downloadPanelCycleTab(-1)
 	case sdl.K_RIGHT:
 		downloadPanelCycleTab(1)
+	case sdl.K_TAB:
+		// Tab is the keyboard twin of the pad's L1/R1 tab switch, as the
+		// keyboard hints name it (inputhints.go); Shift+Tab goes back.
+		if e.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
+			downloadPanelCycleTab(-1)
+		} else {
+			downloadPanelCycleTab(1)
+		}
 	case sdl.K_RETURN, sdl.K_SPACE:
 		downloadPanelActivate(config)
 	case sdl.K_x:
@@ -996,7 +1004,7 @@ func downloadRowDetail(it downloadItem) string {
 		if it.Err != "" {
 			return it.Err
 		}
-		return "Press A to retry"
+		return hintSentence("Press %s to retry", "A", "Retry")
 	case downloadDone:
 		size := humanBytes(it.Done)
 		if it.Done <= 0 {

@@ -14,7 +14,6 @@ package main
 // control) still end the session.
 
 import (
-	"log"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -173,7 +172,7 @@ func mediaResolveOrphan(config *Config) {
 		return
 	}
 	if sess.local && sess.shown.Load() {
-		log.Printf("[VIDEO] left the player without Back; closing %s", sanitizeLogURL(sess.pageURL))
+		logDebug("video", "left the player without Back; closing %s", sanitizeLogURL(sess.pageURL))
 		StopEmbeddedPlayback()
 		return
 	}
@@ -373,10 +372,12 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 	}
 
 	if state.phase == "paused" {
+		// The player's paused badge in small: a dark glass disc with the
+		// accent play glyph (videochrome.go).
 		cx, cy := frame.X+frame.W/2, frame.Y+frame.H/2
-		fillCircle(renderer, cx, cy, 16, WithAlpha(ColorSurfacePanel, 210))
-		s := int32(7)
-		fillTriangleFilled(renderer, pt{x: cx - s + 1, y: cy - s}, pt{x: cx - s + 1, y: cy + s}, pt{x: cx + s - 1, y: cy}, ColorTextPrimary())
+		fillCircle(renderer, cx, cy, 18, sdl.Color{R: 8, G: 14, B: 22, A: 190})
+		fillCircle(renderer, cx, cy, 17, WithAlpha(vcAccent(), 40))
+		drawHomeGlyphTinted(renderer, "play", sdl.Rect{X: cx - 8, Y: cy - 9, W: 18, H: 18}, vcAccent())
 	}
 
 	if font, _ := getCachedFont(config, "small"); font != nil {
@@ -401,10 +402,19 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
+	// Close: the player's round corner button in small, with the shared icon.
 	close := videoMiniHits.close
-	fillRoundedRect(renderer, close.X+4, close.Y+4, close.W-8, close.H-8, 6,
-		WithAlpha(ColorSurfaceRaised, 210))
-	drawCloseIcon(renderer, close.X+close.W/2, close.Y+close.H/2, 5, ColorTextPrimary())
+	d := min32(close.W, close.H) - 6
+	if d > 0 {
+		bx, by := close.X+(close.W-d)/2, close.Y+(close.H-d)/2
+		fill := WithAlpha(ColorSurfaceRaised, 220)
+		if vcHit(mouseX, mouseY, close) {
+			fill = WithAlpha(DangerInk(), 200)
+		}
+		fillRoundedRect(renderer, bx, by, d, d, d/2, fill)
+		g := d * 11 / 20
+		drawHomeGlyphTinted(renderer, "close", sdl.Rect{X: bx + (d-g)/2, Y: by + (d-g)/2, W: g, H: g}, ColorTextPrimary())
+	}
 
 	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, RadiusMD, 1, WithAlpha(ColorBorder, 220))
 }

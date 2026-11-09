@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -88,7 +87,7 @@ func curationVotesPath() string   { return filepath.Join(curationDir(), "votes.j
 // must not stop JukaHub from booting.
 func InitCuration() {
 	if err := ensureCurationLayout(); err != nil {
-		log.Printf("[curation] setup failed: %v", err)
+		logWarn("curation", "setup failed: %v", err)
 	}
 }
 
@@ -486,7 +485,7 @@ func applyCurationBundle(config *Config, bundle curationBundle) curationApplyRes
 		message, err := applyCurationStep(config, step)
 		if err != nil {
 			result.Failed = append(result.Failed, label+": "+firstLine(err.Error()))
-			log.Printf("[curation] %s: %v", step.Kind, err)
+			logWarn("curation", "%s: %v", step.Kind, err)
 			continue
 		}
 		if strings.HasPrefix(message, "already") {
@@ -824,7 +823,7 @@ func loadCurationVotes() curationVotesFile {
 	// votes yet", which looked to the user like the app had forgotten them.
 	if _, err := readJSONWithBackup(curationVotesPath(), &store); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[curation] votes.json: %v", err)
+			logWarn("curation", "votes.json: %v", err)
 		}
 		return curationVotesFile{SchemaVersion: curationVoteVer}
 	}
@@ -1041,7 +1040,7 @@ func parseCurationFeed(data []byte) (curationFeed, error) {
 	var bundles []curationBundle
 	for _, bundle := range feed.Bundles {
 		if err := validateCurationBundle(&bundle); err != nil {
-			log.Printf("[curation] feed bundle skipped: %v", err)
+			logWarn("curation", "feed bundle skipped: %v", err)
 			continue
 		}
 		bundles = append(bundles, bundle)
@@ -1049,7 +1048,7 @@ func parseCurationFeed(data []byte) (curationFeed, error) {
 	var profiles []curationProfile
 	for _, profile := range feed.Profiles {
 		if err := normalizeCurationProfile(&profile); err != nil {
-			log.Printf("[curation] feed profile skipped: %v", err)
+			logWarn("curation", "feed profile skipped: %v", err)
 			continue
 		}
 		profile.Source = "feed"
@@ -1123,7 +1122,7 @@ func refreshCurationFeedAsync() {
 		curationFeedCache.at = time.Now()
 		if err != nil {
 			curationFeedCache.err = firstLine(err.Error())
-			log.Printf("[curation] feed: %v", err)
+			logWarn("curation", "feed: %v", err)
 		} else {
 			curationFeedCache.feed = feed
 			curationFeedCache.err = ""

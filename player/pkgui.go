@@ -1513,16 +1513,31 @@ func pkgSheetButtons(it *pkgItem, live pkgLive) []pkgSheetBtn {
 		out = append(out, pkgSheetBtn{ID: "dequeue", Label: "Queued — cancel", Kind: pkgBtnGlass, Frac: -1})
 	case status == pkgStatusRemoving:
 		out = append(out, pkgSheetBtn{ID: "busy", Label: "Removing…", Kind: pkgBtnGlass, Disabled: true, Frac: -1})
+	case st.rolling[it.Key]:
+		busy := "Rolling back…"
+		if it.RollbackNewer {
+			busy = "Switching back…"
+		}
+		out = append(out, pkgSheetBtn{ID: "busy", Label: busy, Kind: pkgBtnGlass, Disabled: true, Frac: -1})
 	case it.Kind == pkgKindLocal:
 		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: pkgBtnPrimary, Frac: -1})
+		if it.HasRollback {
+			out = append(out, pkgSheetBtn{ID: "rollback", Label: it.RollbackLabel, Kind: pkgBtnGlass, Frac: -1})
+		}
 		out = append(out, pkgSheetBtn{ID: "remove", Label: removeLabel, Kind: pkgBtnDanger, Frac: -1})
 	case status == pkgStatusUpdate:
 		out = append(out, pkgSheetBtn{ID: "update", Label: "Update to " + pkgVersionLabel(it.Pkg.Version), Kind: pkgBtnPrimary, Disabled: offline, Frac: -1})
 		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: pkgBtnGlass, Frac: -1})
+		if it.HasRollback {
+			out = append(out, pkgSheetBtn{ID: "rollback", Label: it.RollbackLabel, Kind: pkgBtnGlass, Frac: -1})
+		}
 		out = append(out, pkgSheetBtn{ID: "remove", Label: removeLabel, Kind: pkgBtnDanger, Frac: -1})
 	case status == pkgStatusInstalled:
 		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: pkgBtnPrimary, Frac: -1})
 		out = append(out, pkgSheetBtn{ID: "reinstall", Label: "Reinstall", Kind: pkgBtnGlass, Disabled: offline, Frac: -1})
+		if it.HasRollback {
+			out = append(out, pkgSheetBtn{ID: "rollback", Label: it.RollbackLabel, Kind: pkgBtnGlass, Frac: -1})
+		}
 		out = append(out, pkgSheetBtn{ID: "remove", Label: removeLabel, Kind: pkgBtnDanger, Frac: -1})
 	default:
 		label := "Get"
@@ -1641,6 +1656,16 @@ func pkgSheetText(it *pkgItem, ft *pkgType, width int32) []pkgSheetLine {
 	if label, _, ok := pkgSourceURL(it); ok {
 		para(pkgLineMeta, ft.body, "Source: "+label)
 	}
+	if it.Kind == pkgKindPackage && strings.TrimSpace(p.Download) != "" {
+		switch {
+		case p.HashProblem != "":
+			para(pkgLineMeta, ft.body, "Download check: "+p.HashProblem+", so it will not install.")
+		case p.SHA256 != "":
+			add(pkgLineMeta, "Download check: SHA-256 "+p.SHA256[:12]+"…, checked before it is unpacked")
+		default:
+			para(pkgLineMeta, ft.body, "Download check: none. The catalogue publishes no checksum for this package, so the download is not verified.")
+		}
+	}
 	if it.Installed {
 		if it.InstalledVersion != "" {
 			add(pkgLineMeta, "Installed version: "+it.InstalledVersion)
@@ -1648,6 +1673,17 @@ func pkgSheetText(it *pkgItem, ft *pkgType, width int32) []pkgSheetLine {
 			add(pkgLineMeta, "Installed version: not recorded (installed before version tracking)")
 		}
 		add(pkgLineMeta, "Folder: packages/"+it.Key)
+		if it.HasRollback {
+			kept := "yes (its version was not recorded)"
+			if v := pkgVersionLabel(it.RollbackVersion); v != "" {
+				kept = v
+			}
+			which := "Previous version kept: "
+			if it.RollbackNewer {
+				which = "Newer version kept: "
+			}
+			add(pkgLineMeta, which+kept)
+		}
 	}
 	return lines
 }
@@ -1814,6 +1850,18 @@ func pkgDrawSheet(renderer *sdl.Renderer, config *Config, ft *pkgType, body sdl.
 	}
 	if it.Kind == pkgKindLocal {
 		drawChip("Not in the registry", ColorTextTertiary(), "info")
+	}
+	// Whether the download is checked: the catalogue's SHA-256, none, or one
+	// that cannot be used (the install refuses it).
+	if it.Kind == pkgKindPackage && it.Pkg.Download != "" {
+		switch {
+		case it.Pkg.HashProblem != "":
+			drawChip("Bad checksum", DangerInk(), "warning")
+		case it.Pkg.SHA256 == "":
+			drawChip("Not verified", WarningInk(), "warning")
+		default:
+			drawChip("Verified download", SuccessInk(), "check")
+		}
 	}
 	ty += chipH + 16
 

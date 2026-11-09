@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -107,7 +106,7 @@ func loadIPStreams() {
 		// A recovered store is logged by the helper; this line is for the case
 		// where the backup failed too, which used to pass for "no channels".
 		if !os.IsNotExist(err) {
-			log.Printf("[IPSTREAM] ignoring unreadable library: %v", err)
+			logWarn("ipstream", "ignoring unreadable library: %v", err)
 		}
 		return
 	}
@@ -241,7 +240,7 @@ func ipStreamRecordResult(url string, ok bool) bool {
 		return false
 	}
 	if err := saveIPStreams(); err != nil {
-		log.Printf("[IPSTREAM] saving the play result: %v", err)
+		logWarn("ipstream", "saving the play result: %v", err)
 	}
 	return true
 }

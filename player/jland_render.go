@@ -457,16 +457,6 @@ func jlandAtlasFor(r *sdl.Renderer) *sdl.Texture {
 	return tex
 }
 
-// jlandDropAtlasForRenderer forgets the texture of a renderer that is about to
-// be destroyed (tests create one per probe).
-func jlandDropAtlasForRenderer(r *sdl.Renderer) {
-	if jlandAtlas.renderer == r {
-		jlandAtlas.renderer = nil
-		jlandAtlas.tex = nil
-		jlandAtlas.failed = false
-	}
-}
-
 // ── Draw primitives ──────────────────────────────────────────────────────
 
 var (

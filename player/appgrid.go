@@ -26,9 +26,8 @@ const (
 	appGridPad      = int32(12)
 	appGridHeadH    = int32(44)
 	// appIconBox is the square an app's artwork is fitted into at the top of a
-	// tile; appIconTop is its distance from the tile's top edge.
+	// tile.
 	appIconBox = int32(52)
-	appIconTop = int32(8)
 	// appTileLabelSize is the pixel size of a tile's name. It is smaller than
 	// the theme's list font because a tile is a square, not a row: the theme
 	// size would fit one clipped word where two readable lines fit here.

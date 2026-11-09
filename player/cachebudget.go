@@ -265,21 +265,6 @@ func (s *byteOrderedStore[K, V]) evict() {
 	}
 }
 
-// setBudget moves the byte ceiling and evicts down to it, keeping the newest
-// entry. Each cache's device budget is read once at construction, so the
-// session-memory harness — which has to measure the handheld ceilings on a
-// desktop — cannot reach a live store by changing the budget function alone. It
-// goes through evict(), so an entry being drawn is never dropped.
-//
-// Callers hold whatever lock their cache normally uses.
-func (s *byteOrderedStore[K, V]) setBudget(maxBytes int64) {
-	if maxBytes < 0 {
-		maxBytes = 0
-	}
-	s.maxBytes = maxBytes
-	s.evict()
-}
-
 // stats reports the two numbers the diagnostics and the tests care about.
 func (s *byteOrderedStore[K, V]) stats() (entries int, bytes int64) {
 	return len(s.entries), s.bytes

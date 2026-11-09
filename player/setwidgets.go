@@ -151,20 +151,6 @@ func setCarouselArrow(h int32) int32 {
 	return a
 }
 
-// setCarouselWidth is the width a carousel needs to show the widest of its
-// values without trimming any, clamped to [min, max]. A caller sizes the
-// control once from the whole option list, so the arrows do not jump around
-// while the user cycles through values of different lengths.
-func setCarouselWidth(font *ttf.Font, values []string, h, min, max int32) int32 {
-	widest := int32(0)
-	for _, v := range values {
-		if w, _ := measureText(font, v); w > widest {
-			widest = w
-		}
-	}
-	return setCarouselClamp(widest, h, min, max)
-}
-
 // setCarouselWidthFor is setCarouselWidth over option labels plus the value
 // on display (which may be none of them, "Custom · #12ab34"), with room for a
 // colour chip when the options carry one. It allocates nothing, so a screen can

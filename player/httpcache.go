@@ -124,14 +124,6 @@ func (c *httpResponseCache) size() int {
 	return entries
 }
 
-// bytesHeld is the body memory the cache is accounted for.
-func (c *httpResponseCache) bytesHeld() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, bytes := c.entries.stats()
-	return bytes
-}
-
 // clear drops every body. The memory pressure path calls it: a refetch costs
 // one round trip, which beats holding 8 MB of feeds the screen is not showing.
 func (c *httpResponseCache) clear() { c.reset() }

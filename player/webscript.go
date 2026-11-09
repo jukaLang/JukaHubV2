@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"runtime/metrics"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dop251/goja"
@@ -44,15 +45,15 @@ const (
 )
 
 var (
-	webScriptTagRe  = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script\s*>`)
-	webScriptSrcRe  = regexp.MustCompile(`(?is)\bsrc\s*=\s*["']?([^"'\s>]+)`)
-	webScriptTypeRe = regexp.MustCompile(`(?is)\btype\s*=\s*["']?([^"'\s>]+)`)
+	webScriptTagRe  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script\s*>`) })
+	webScriptSrcRe  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)\bsrc\s*=\s*["']?([^"'\s>]+)`) })
+	webScriptTypeRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)\btype\s*=\s*["']?([^"'\s>]+)`) })
 )
 
 // runWebPageScripts executes the page's classic JavaScript in document order and
 // returns the source with each script tag replaced by whatever it wrote.
 func runWebPageScripts(source string, base *url.URL) string {
-	matches := webScriptTagRe.FindAllStringSubmatchIndex(source, -1)
+	matches := webScriptTagRe().FindAllStringSubmatchIndex(source, -1)
 	if len(matches) == 0 {
 		return source
 	}
@@ -118,7 +119,7 @@ func runWebPageScripts(source string, base *url.URL) string {
 		out.WriteString(source[last:m[0]])
 		last = m[1]
 		attrs := source[m[2]:m[3]]
-		if typ := webScriptTypeRe.FindStringSubmatch(attrs); typ != nil {
+		if typ := webScriptTypeRe().FindStringSubmatch(attrs); typ != nil {
 			kind := strings.ToLower(typ[1])
 			if kind != "text/javascript" && kind != "application/javascript" && kind != "module" {
 				continue
@@ -129,7 +130,7 @@ func runWebPageScripts(source string, base *url.URL) string {
 		}
 		count++
 		code := source[m[4]:m[5]]
-		if src := webScriptSrcRe.FindStringSubmatch(attrs); src != nil {
+		if src := webScriptSrcRe().FindStringSubmatch(attrs); src != nil {
 			code = fetchWebScript(base, htmlAttrValue(src[1]), budget, deadline)
 		}
 		if code == "" || len(code) > budget {

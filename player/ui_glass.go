@@ -569,11 +569,14 @@ func drawGlassFooterBand(renderer *sdl.Renderer, band sdl.Rect) {
 
 // drawGlassHintBadge paints one controller hint the way Home's footer does: the
 // button name in a glass pill, then its action in the muted ink. It returns
-// the x just past the label.
+// the x just past the label. The button is named in this frame's vocabulary
+// (hintKeyFor: "A" is "Enter" while the hints name keyboard keys), so a caller
+// that sizes the pill itself measures hintKeyFor(button, label) too.
 func drawGlassHintBadge(renderer *sdl.Renderer, config *Config, font *ttf.Font, badge sdl.Rect, button, label string, labelX, textY int32) int32 {
 	if renderer == nil || font == nil {
 		return labelX
 	}
+	button = hintKeyFor(button, label)
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, glassChipFill())
 	strokeRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, 1, glassChipEdge())

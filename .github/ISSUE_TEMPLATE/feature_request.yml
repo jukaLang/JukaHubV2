@@ -6,9 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please check [docs/FEATURE-BACKLOG.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/FEATURE-BACKLOG.md)
-        and [docs/IMPROVEMENTS.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/IMPROVEMENTS.md)
-        first: both list what is already shipped, what is planned, and what
+        Please check the [engineering backlog](https://github.com/jukaLang/JukaHubV2/blob/main/player/MODERNIZATION.md)
+        first: it lists what is planned, the ideas parking lot, and what
         deliberately cannot work on this hardware (an in-game OSD, a generic
         Wi-Fi link cable for standalone emulators). A request against a
         documented gap is still welcome — say which gap you are closing.

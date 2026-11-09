@@ -87,28 +87,78 @@ func TestConfigRejectsNewerSchema(t *testing.T) {
 	}
 }
 
-// AtomicWrite must keep the previous file as .bak and leave no temp file.
-func TestAtomicWriteKeepsBackup(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "data.json")
-	if err := AtomicWrite(path, []byte("one"), 0o644); err != nil {
-		t.Fatal(err)
+// The interface comes from jukaconfig.json: main() boots through
+// LoadXMLConfigWithFallback and draws only what the config declares, so the
+// shipped file must load on its own (not through the .bak), validate, and
+// carry a Main scene with elements in it.
+func TestShippedJukaconfigBootsTheInterface(t *testing.T) {
+	// The live file must parse on its own. The boot loader is willing to
+	// serve jukaconfig.json.bak when the live file is broken — a recovery
+	// path for the card, not a state the shipped file may sit in.
+	if _, err := loadConfig("jukaconfig.json"); err != nil {
+		t.Fatalf("jukaconfig.json itself is not loadable (the boot would fall back to the backup): %v", err)
 	}
-	if err := AtomicWrite(path, []byte("two"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	live, err := os.ReadFile(path)
+
+	// The same entry point main() uses, so what boots is what is tested.
+	cfg, path, err := LoadXMLConfigWithFallback("jukaconfig.json")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the shipped config did not load through the boot entry point: %v", err)
 	}
-	backup, err := os.ReadFile(path + ".bak")
-	if err != nil {
-		t.Fatalf("backup missing: %v", err)
+	// With no jukaconfig.xml beside it, the boot must be the JSON itself.
+	// An active editor export legitimately takes over by mod-time (that is
+	// ResolveConfigPath's design), so the pin applies to the checkout git
+	// ships — and still catches a loader that starts reporting some other
+	// file, like the backup, as the source of the interface.
+	if _, statErr := os.Stat(XMLSidecarPath("jukaconfig.json")); statErr != nil {
+		if path != "jukaconfig.json" {
+			t.Fatalf("the boot loaded %q without a sidecar to explain it, want the shipped JSON", path)
+		}
 	}
-	if string(live) != "two" || string(backup) != "one" {
-		t.Errorf("live=%q backup=%q, want two/one", live, backup)
+
+	// The same validation main() runs: scenes named, elements typed. main
+	// treats a failure as advisory and keeps going; for the file that ships,
+	// it must simply pass.
+	if err := NewConfigValidator().Validate(cfg); err != nil {
+		t.Fatalf("the shipped config does not validate: %v", err)
 	}
-	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Error("temp file left behind after an atomic write")
+	if cfg.Version == "" {
+		t.Error("the shipped config has no Version; About and the updater read it from here")
+	}
+
+	// It has to be an interface: scenes to switch between, elements in them
+	// to draw.
+	if len(cfg.Scenes) == 0 {
+		t.Fatal("no scenes: the interface would render nothing")
+	}
+	total := 0
+	for i, scene := range cfg.Scenes {
+		if strings.TrimSpace(scene.Name) == "" {
+			t.Errorf("scene %d has no name; scenes are addressed by name", i)
+		}
+		total += len(scene.Elements)
+	}
+	if total == 0 {
+		t.Fatal("no elements in any scene: there is no interface to draw")
+	}
+
+	// Boot is currentSceneIndex = 0: the first scene is the first screen, so
+	// it must be a screen.
+	boot := cfg.Scenes[0]
+	if strings.TrimSpace(boot.Name) == "" || len(boot.Elements) == 0 {
+		t.Fatalf("the boot scene %q has %d elements; currentSceneIndex starts at 0",
+			boot.Name, len(boot.Elements))
+	}
+
+	// Back-navigation from several scenes addresses "Main" by name
+	// (favorites, packages and shorts all go home that way).
+	foundMain := false
+	for _, scene := range cfg.Scenes {
+		if scene.Name == "Main" {
+			foundMain = true
+			break
+		}
+	}
+	if !foundMain {
+		t.Error(`no "Main" scene; back-navigation calls findSceneIndex(config, "Main")`)
 	}
 }

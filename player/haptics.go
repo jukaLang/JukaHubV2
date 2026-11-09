@@ -22,7 +22,6 @@ package main
 // can actually buzz.
 
 import (
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -157,7 +156,7 @@ func (m *sysfsMotor) play(strength float32, ms uint32) error {
 		level := m.levelMin + int(math.Round(float64(m.levelMax-m.levelMin)*float64(strength)))
 		if err := writeSysfsInt(m.levelPath, level); err != nil {
 			m.levelBlocked = true
-			log.Printf("[HAPTIC] motor strength node is not writable, using its default level: %v", err)
+			logWarn("haptic", "motor strength node is not writable, using its default level: %v", err)
 		}
 	}
 	if err := writeSysfsInt(m.gpio, 1); err != nil {
@@ -239,7 +238,7 @@ func detectSysfsMotor(root string) *sysfsMotor {
 		if _, err := os.Stat(gpioPath); err != nil {
 			export := filepath.Join(root, "sys/class/gpio/export")
 			if err := os.WriteFile(export, []byte(l.exportPin), 0o644); err != nil {
-				log.Printf("[HAPTIC] motor found but GPIO %s is not exported: %v", l.exportPin, err)
+				logWarn("haptic", "motor found but GPIO %s is not exported: %v", l.exportPin, err)
 				continue
 			}
 			// The kernel creates the value node synchronously, but a slow
@@ -427,12 +426,12 @@ func detectPadHaptics() hapticBackend {
 	if runtime.GOOS == "linux" {
 		if motor := detectSysfsMotor("/"); motor != nil {
 			capMotorForDevice(motor, device)
-			log.Printf("[HAPTIC] vibration ready on the %s motor (%s)", deviceDisplayName(device), motor.gpio)
+			logDebug("haptic", "vibration ready on the %s motor (%s)", deviceDisplayName(device), motor.gpio)
 			return motor
 		}
 	}
 	if gameController == nil {
-		log.Printf("[HAPTIC] no controller open and no handheld motor — vibration unavailable")
+		logWarn("haptic", "no controller open and no handheld motor — vibration unavailable")
 		return nil
 	}
 	name := gameController.Name()
@@ -442,11 +441,11 @@ func detectPadHaptics() hapticBackend {
 	// test of whether the motor answers.
 	hasRumble := gameController.HasRumble()
 	if err := gameController.Rumble(0, 0, 1); err != nil {
-		log.Printf("[HAPTIC] pad %q has no usable rumble motor (HasRumble=%v): %v — vibration hidden",
+		logWarn("haptic", "pad %q has no usable rumble motor (HasRumble=%v): %v — vibration hidden",
 			name, hasRumble, err)
 		return nil
 	}
-	log.Printf("[HAPTIC] vibration ready on %q (HasRumble=%v)", name, hasRumble)
+	logDebug("haptic", "vibration ready on %q (HasRumble=%v)", name, hasRumble)
 	return padHaptics{pad: gameController}
 }
 
@@ -571,7 +570,7 @@ func playHaptic(p hapticPulse) {
 	if err := hapticDev.play(p.strength, p.ms); err != nil {
 		// A node can disappear after an update or a pad can be unplugged.
 		// Stop trying instead of logging on every key press.
-		log.Printf("[HAPTIC] vibration failed, feedback disabled until restart: %v", err)
+		logWarn("haptic", "vibration failed, feedback disabled until restart: %v", err)
 		hapticDev = nil
 		return
 	}

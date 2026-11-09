@@ -12,7 +12,6 @@ package main
 // timeout and report back through the page and a toast.
 
 import (
-	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -298,21 +297,4 @@ func plugRunStatus(name string) (running string, output string, at time.Time) {
 	plugRunState.mu.Lock()
 	defer plugRunState.mu.Unlock()
 	return plugRunState.running[name], plugRunState.output[name], plugRunState.at[name]
-}
-
-// plugWaitIdle blocks until no action is running or ctx ends. Tests use it.
-func plugWaitIdle(ctx context.Context) bool {
-	for {
-		plugRunState.mu.Lock()
-		busy := len(plugRunState.running) > 0
-		plugRunState.mu.Unlock()
-		if !busy {
-			return true
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
 }

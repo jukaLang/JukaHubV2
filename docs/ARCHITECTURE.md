@@ -25,11 +25,10 @@ Startup and render cadence are not left to chance:
 [`player/adaptive.go`](../player/adaptive.go) pins the frame-rate tiers
 (30 fps cap on the handheld, its active tier) and
 [`player/startup.go`](../player/startup.go) owns the cold-boot path with its
-warm-marker logic. Both budgets are measured headlessly by the benchmarks in
-[`player/render_bench_test.go`](../player/render_bench_test.go) and
-`player/startup-bench.sh`, with numbers recorded in
-[`player/MODERNIZATION.md`](../player/MODERNIZATION.md) —
-treat those as the reference before touching boot or layout code.
+warm-marker logic. The cold boot is measured on the device by
+`player/startup-bench.sh` (the `startupReport` line); open measurement work is
+tracked in [`player/MODERNIZATION.md`](../player/MODERNIZATION.md) — measure
+before and after touching boot or layout code.
 
 ## Scenes, focus and background work
 
@@ -87,7 +86,7 @@ documented in [SECURITY.md](../SECURITY.md).
 
 Most work touches exactly one runtime; use the table above to tell which. If
 you find yourself duplicating layout logic between a scene and the generic
-renderer, or measuring your own frame budgets instead of reusing the
-benchmarks in `player/render_bench_test.go`, that's a sign to read the
+renderer, or measuring your own frame budgets instead of reusing
+`player/startup-bench.sh` and the `JUKAHUB_TEXSTATS` line, that's a sign to read the
 relevant section of [DEVELOPMENT.md](DEVELOPMENT.md) first — the player is
 careful about both on purpose, given the 30 fps handheld class.

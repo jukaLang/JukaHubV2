@@ -641,22 +641,6 @@ func vkEditDistanceWithin(a, b string, limit int) (int, bool) {
 	return 0, false
 }
 
-// vkDictKnows reports whether word is a known word in language lang: in the
-// embedded list (English only) or taught by the user.
-func vkDictKnows(word, lang string) bool {
-	key := strings.ToLower(strings.TrimSpace(word))
-	if key == "" {
-		return false
-	}
-	if list := vkDict(); lang == "en" && list != nil && list.find(key) >= 0 {
-		return true
-	}
-	vkLearned.mu.Lock()
-	defer vkLearned.mu.Unlock()
-	_, ok := vkLearned.words[vkLearnedKey(lang, key)]
-	return ok
-}
-
 // ── Learned words ────────────────────────────────────────────────────────
 
 // vkLearnedWord is one word the user taught the keyboard, in the language of
@@ -886,14 +870,6 @@ func vkLearnedSaveAsync() {
 		return
 	}
 	go vkLearnedWrite(path, data)
-}
-
-// vkLearnedSaveNow is vkLearnedSaveAsync on the calling goroutine (tests, and
-// the shutdown flush).
-func vkLearnedSaveNow() {
-	if path, data, ok := vkLearnedTakeSnapshot(); ok {
-		vkLearnedWrite(path, data)
-	}
 }
 
 // vkLearnedTakeSnapshot claims a pending change and serialises the store.

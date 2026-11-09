@@ -19,7 +19,6 @@ package main
 // no measuring and allocates nothing.
 
 import (
-	"log"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -78,13 +77,6 @@ func vkPaletteNow() vkPalette {
 		ink3:       ColorTextTertiary(),
 	}
 }
-
-// vkSheetFill, vkCapFill and vkCapFocusFill are the sheet, a resting letter
-// cap and a focused cap (the render tests sample them).
-func vkSheetFill() sdl.Color    { return vkPaletteNow().sheet }
-func vkCapFill() sdl.Color      { return vkPaletteNow().cap }
-func vkCapUtilFill() sdl.Color  { return vkPaletteNow().capUtil }
-func vkCapFocusFill() sdl.Color { return vkPaletteNow().capFocus }
 
 // vkFontSet is the keyboard's type.
 type vkFontSet struct {
@@ -145,6 +137,7 @@ var vkMemo struct {
 	key         vkLayoutKey
 	anim        uint64
 	valid       bool
+	keys        hintStamp // the hints' vocabulary and remap (inputhints.go)
 	title       string
 	placeholder string
 	hints       []FooterHint
@@ -152,18 +145,20 @@ var vkMemo struct {
 }
 
 func vkMemoRefresh() {
-	if vkMemo.valid && vkMemo.key == vkLayoutKeyBuilt && vkMemo.anim == vkAnimStart {
+	keys := hintStampNow()
+	if vkMemo.valid && vkMemo.key == vkLayoutKeyBuilt && vkMemo.anim == vkAnimStart && vkMemo.keys == keys {
 		return
 	}
-	vkMemo.key, vkMemo.anim, vkMemo.valid = vkLayoutKeyBuilt, vkAnimStart, true
+	vkMemo.key, vkMemo.anim, vkMemo.valid, vkMemo.keys = vkLayoutKeyBuilt, vkAnimStart, true, keys
 	vkMemo.title = vkTitle()
 	vkMemo.placeholder = vkPlaceholder()
 	vkMemo.hints = vkHintList()
 	vkMemo.tip = vkStripTip()
 }
 
-// vkHintList is the footer: the pad's buttons on a handheld, the keyboard's
-// on a desktop. Hints are dropped from the end when the sheet is narrow, so
+// vkHintList is the footer: the pad's buttons, or the keyboard's keys while
+// the hints name keys (a PC without a pad, a keyboard on the handheld:
+// inputhints.go). Hints are dropped from the end when the sheet is narrow, so
 // they are in order of importance.
 func vkHintList() []FooterHint {
 	action := vkActionLabel()
@@ -174,14 +169,15 @@ func vkHintList() []FooterHint {
 	if vkLayer == vkLayerSymbols {
 		layer = "ABC"
 	}
-	if !P().IsHandheld() {
+	if hintsUseKeyboard() {
+		// A real keyboard types straight into the field (handleTextInputEvent);
+		// Backspace deletes and Shift is the keyboard's own.
 		return []FooterHint{
 			{Button: "Enter", Label: action},
 			{Button: "Esc", Label: "Close"},
+			{Button: "Backspace", Label: "Delete"},
 			{Button: "Ctrl+V", Label: "Paste"},
 			{Button: "Ctrl+C", Label: "Copy"},
-			{Button: "X", Label: "Delete"},
-			{Button: "L1", Label: "Shift"},
 		}
 	}
 	hints := []FooterHint{
@@ -200,7 +196,7 @@ func vkHintList() []FooterHint {
 
 // vkStripTip fills an empty suggestion strip with what the keyboard can do.
 func vkStripTip() string {
-	if P().IsHandheld() {
+	if !hintsUseKeyboard() {
 		return "Hold A for accents  ·  L1+X copy  ·  L1+Y paste"
 	}
 	return "Hold a letter for accents  ·  Ctrl+C copy  ·  Ctrl+V paste"
@@ -210,7 +206,7 @@ func vkStripTip() string {
 // so its dim stays light enough to read them.
 func vkLiveFilterTarget() bool {
 	switch vkTarget {
-	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget:
 		return true
 	}
 	return false
@@ -269,13 +265,13 @@ func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont
 	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, screenWidth, screenHeight)
 	if err != nil || tex == nil {
 		vkStaticBroken = true
-		log.Printf("[vk] keyboard cache disabled: %v", err)
+		logWarn("vk", "keyboard cache disabled: %v", err)
 		return nil
 	}
 	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
 		tex.Destroy()
 		vkStaticBroken = true
-		log.Printf("[vk] keyboard cache blend mode: %v", err)
+		logWarn("vk", "keyboard cache blend mode: %v", err)
 		return nil
 	}
 	prevTarget := renderer.GetRenderTarget()
@@ -284,7 +280,7 @@ func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont
 	if err := renderer.SetRenderTarget(tex); err != nil {
 		tex.Destroy()
 		vkStaticBroken = true
-		log.Printf("[vk] keyboard cache target: %v", err)
+		logWarn("vk", "keyboard cache target: %v", err)
 		return nil
 	}
 	// The keyboard is drawn last, so no clip should be active; make sure the
@@ -574,13 +570,14 @@ var vkChordHints = [...]FooterHint{
 }
 
 // vkChordPlan is the measured chord row, kept until the config, the width,
-// the type size or the list changes.
+// the type size, the list or the hints' words (a remap) change.
 var vkChordPlan struct {
 	ok     bool
 	config *Config
 	w      int32
 	n      int
 	scale  float64
+	words  hintStamp
 	plan   footerPlan
 }
 
@@ -611,9 +608,10 @@ func vkDrawChordHints(renderer *sdl.Renderer, config *Config, pal vkPalette, off
 	}
 	hints := vkChordHintList()
 	cp := &vkChordPlan
-	if !cp.ok || cp.config != config || cp.w != rect.W || cp.n != len(hints) || cp.scale != a11y.fontScale {
+	words := hintStampNow()
+	if !cp.ok || cp.config != config || cp.w != rect.W || cp.n != len(hints) || cp.scale != a11y.fontScale || cp.words != words {
 		cp.plan = planFooterHints(config, hints, rect.W)
-		cp.ok, cp.config, cp.w, cp.n, cp.scale = true, config, rect.W, len(hints), a11y.fontScale
+		cp.ok, cp.config, cp.w, cp.n, cp.scale, cp.words = true, config, rect.W, len(hints), a11y.fontScale, words
 	}
 	rect.Y += offset
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 0, pal.sheet)

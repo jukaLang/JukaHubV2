@@ -91,9 +91,8 @@ type alarmList struct {
 }
 
 var (
-	alarmStore    alarmList
-	alarmNextID   int
-	alarmMutating bool // prevents re-rendering during alarm editing
+	alarmStore  alarmList
+	alarmNextID int
 )
 
 // --- Persistence ---
@@ -353,7 +352,8 @@ func alarmRequestDelete() {
 	a := alarmStore.Alarms[alarmUI.cursor]
 	if alarmDeleteArm.at.IsZero() || alarmDeleteArm.id != a.ID || time.Since(alarmDeleteArm.at) > alarmDeleteWindow {
 		alarmDeleteArm.at, alarmDeleteArm.id = time.Now(), a.ID
-		ShowToast(fmt.Sprintf("Press L1 again to delete the %02d:%02d alarm", a.Hour, a.Minute), ToastKindWarning)
+		ShowToast(hintSentence("Press %s again to delete the ", "L1 / Del", "Delete")+
+			fmt.Sprintf("%02d:%02d alarm", a.Hour, a.Minute), ToastKindWarning)
 		PlayNavSound()
 		return
 	}
@@ -430,6 +430,8 @@ func alarmCheck(config *Config, now time.Time) {
 	// a game, dark panel, normal frame), so the UI-sound settings are re-read
 	// here: a switch flipped in Settings applies within a second (sound.go).
 	bootSfxBind(config)
+	// Network time or a new zone moved the clock: re-anchor first (clockjump.go).
+	alarmClockJumpCheck(now)
 	// A ring in progress keeps the idle screens away and ends itself if nobody
 	// answers it.
 	alarmRingTick(now)
@@ -497,7 +499,7 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 			ColorTextPrimary(), tx, ty)
 
 		if smallFont != nil {
-			dateStr := alarmUI.now.Format("Monday, January 2, 2006")
+			dateStr := formatDateLong(config, alarmUI.now)
 			dw, _, _ := smallFont.SizeUTF8(dateStr)
 			renderText(renderer, config, smallFont, dateStr,
 				WithAlpha(ColorTextTertiary(), 200),
@@ -556,7 +558,7 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 
 	if len(alarmStore.Alarms) == 0 {
 		if smallFont != nil {
-			empty := "No alarms set. Tap + Add Alarm or press Y."
+			empty := hintSentence("No alarms set. Tap + Add Alarm or press %s.", "Y", "Add")
 			ew, _, _ := smallFont.SizeUTF8(empty)
 			renderText(renderer, config, smallFont, empty,
 				WithAlpha(ColorTextTertiary(), 150),
@@ -1003,11 +1005,20 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 		case sdl.K_RETURN, sdl.K_SPACE:
 			alarmSelect()
 		case sdl.K_x:
-			alarmToggleFocused()
+			// Once per press: a held key's auto-repeat flipped it on and off.
+			if e.Repeat == 0 {
+				alarmToggleFocused()
+			}
 		case sdl.K_y, sdl.K_n:
 			// New alarm
 			alarmStartNew(time.Now())
 			PlayActivateSound()
+		case sdl.K_DELETE:
+			// The pad's L1: delete, pressed twice (the footer says "L1 / Del").
+			// Two presses, not one held key: its auto-repeat would confirm.
+			if e.Repeat == 0 {
+				alarmRequestDelete()
+			}
 		case sdl.K_ESCAPE, sdl.K_b:
 			alarmBack()
 		}

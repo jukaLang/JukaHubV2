@@ -176,19 +176,6 @@ func inmapResetEngine() {
 
 // ── Synthesized events ───────────────────────────────────────────────────
 
-// inmapQueuedButton and inmapQueuedKey pad an event to the size of
-// SDL_Event: PushEvent copies a whole SDL_Event from the pointer it is given
-// (see sdlevents.go).
-type inmapQueuedButton struct {
-	sdl.ControllerButtonEvent
-	_ [64]byte
-}
-
-type inmapQueuedKey struct {
-	sdl.KeyboardEvent
-	_ [64]byte
-}
-
 // inmapEmitButton queues one press or release of b as a fresh event. The A/B
 // swap applyButtonSwap applies to every polled event is undone first, so the
 // screen sees the button the profile named.
@@ -209,17 +196,11 @@ func inmapEmitButton(b inmapButton, down bool) {
 			code = sdl.CONTROLLER_BUTTON_A
 		}
 	}
-	ev := &inmapQueuedButton{ControllerButtonEvent: sdl.ControllerButtonEvent{
-		Type:      sdl.CONTROLLERBUTTONUP,
-		Timestamp: sdl.GetTicks(),
-		Which:     inmapSynthWhich,
-		Button:    code,
-		State:     sdl.RELEASED,
-	}}
+	eventType, state := uint32(sdl.CONTROLLERBUTTONUP), uint8(sdl.RELEASED)
 	if down {
-		ev.Type, ev.State = sdl.CONTROLLERBUTTONDOWN, sdl.PRESSED
+		eventType, state = sdl.CONTROLLERBUTTONDOWN, sdl.PRESSED
 	}
-	if _, err := sdl.PushEvent(ev); err != nil {
+	if err := pushControllerButton(eventType, inmapSynthWhich, code, state); err != nil {
 		LogScene("input").Warn("could not queue a profile press", "button", inmapButtons[b].name, "err", err)
 	}
 }
@@ -231,16 +212,11 @@ func inmapEmitKey(key sdl.Keycode, down bool) {
 		inmapKeyHook(key, down)
 		return
 	}
-	ev := &inmapQueuedKey{KeyboardEvent: sdl.KeyboardEvent{
-		Type:      sdl.KEYUP,
-		Timestamp: sdl.GetTicks(),
-		State:     sdl.RELEASED,
-		Keysym:    sdl.Keysym{Sym: key},
-	}}
+	eventType, state := uint32(sdl.KEYUP), uint8(sdl.RELEASED)
 	if down {
-		ev.Type, ev.State = sdl.KEYDOWN, sdl.PRESSED
+		eventType, state = sdl.KEYDOWN, sdl.PRESSED
 	}
-	if _, err := sdl.PushEvent(ev); err != nil {
+	if err := pushSyntheticKey(eventType, key, state); err != nil {
 		LogScene("input").Warn("could not queue a profile key", "key", int(key), "err", err)
 	}
 }
@@ -300,7 +276,7 @@ func inmapPaused(config *Config) bool {
 // and owns the pad. Lines scoped to a screen stand aside while one is up.
 func inmapOverlayOpen() bool {
 	return tb.startOpen || qs.open || nc.open || controlsLegend.open || shortcutsOpen ||
-		clipSearchOpen || globalSearchOpen || wpOpen || socialNotifOpen || homeCalendarOpen ||
+		clipSearchOpen || globalSearchOpen || wpOpen || homeCalendarOpen ||
 		weatherPopoverOpen || podPanel.open || ledPanel.open || companion.open || qrZoom.open ||
 		browserCookiePanel.open || browserBookmarkPanel.open || brwInfo.open ||
 		themeCommunityPanel.open || modalPanelBlocksShoulders()

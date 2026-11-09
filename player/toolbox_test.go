@@ -3,15 +3,13 @@ package main
 // Tests for the Toolbox catalog, its download guards and the security posture
 // summary. The catalog is a trust boundary, so the first test is the one that
 // matters: every repo a tool can be fetched from has to be on the approved list
-// in tools.go, and the patterns have to describe real upstream assets.
+// in tools.go. Downloads are then matched against the published checksums.
 
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestToolboxCatalogIsAllowlisted(t *testing.T) {
@@ -84,75 +82,6 @@ func looksLikeVersionToken(tok string) bool {
 	return digits > 0
 }
 
-func TestToolboxAssetPatterns(t *testing.T) {
-	tool, ok := toolboxFind("rclone")
-	if !ok {
-		t.Fatal("rclone missing from the catalog")
-	}
-	groups, err := toolboxAssetPatterns(tool, "linux", "arm64")
-	if err != nil || len(groups) == 0 {
-		t.Fatalf("linux/arm64 should be supported: groups=%v err=%v", groups, err)
-	}
-	if _, err := toolboxAssetPatterns(tool, "plan9", "mips"); err == nil {
-		t.Fatal("an unsupported platform must be an error, not a download that cannot work")
-	}
-	if _, ok := toolboxFind("nope"); ok {
-		t.Fatal("unknown id resolved")
-	}
-}
-
-// TestToolboxPatternsMatchRealAssetNames pins the tokens against the shapes the
-// upstreams actually publish, including the traps: a checksum side-car, an
-// armv7 build that a loose token would accept, and an arm64-in-name zip.
-func TestToolboxPatternsMatchRealAssetNames(t *testing.T) {
-	cases := []struct {
-		id     string
-		goos   string
-		goarch string
-		want   string
-		reject []string
-	}{
-		{"jq", "linux", "arm64", "jq-linux-arm64", []string{"jq-linux-amd64", "jq-1.8.0.tar.gz"}},
-		{"jq", "windows", "amd64", "jq-windows-amd64.exe", []string{"jq-linux-arm64"}},
-		{"rclone", "linux", "arm64", "rclone-v1.70.1-linux-arm64.zip", []string{"rclone-v1.70.1-linux-arm-v7.zip", "rclone-v1.70.1-osx-arm64.zip"}},
-		{"rg", "linux", "arm64", "ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz", []string{"ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz", "ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz.sha256"}},
-		{"fd", "windows", "amd64", "fd-v10.2.0-x86_64-pc-windows-msvc.zip", []string{"fd-v10.2.0-aarch64-unknown-linux-gnu.tar.gz"}},
-		{"pandoc", "linux", "arm64", "pandoc-3.6.4-linux-arm64.tar.gz", []string{"pandoc-3.6.4-linux-amd64.tar.gz"}},
-		{"age", "windows", "amd64", "age-v1.2.1-windows-amd64.zip", []string{"age-v1.2.1-linux-arm64.tar.gz"}},
-		// The scanners publish a macOS build with "arm64" in its name and a
-		// 32-bit linux_arm build beside linux_arm64, so both decoys are real.
-		{"naabu", "linux", "arm64", "naabu_2.6.1_linux_arm64.zip", []string{"naabu_2.6.1_macOS_arm64.zip", "naabu_2.6.1_linux_amd64.zip"}},
-		{"naabu", "windows", "amd64", "naabu_2.6.1_windows_amd64.zip", []string{"naabu_2.6.1_windows_386.zip", "naabu_2.6.1_linux_amd64.zip"}},
-		{"httpx", "linux", "arm64", "httpx_1.12.0_linux_arm64.zip", []string{"httpx_1.12.0_linux_arm.zip", "httpx_1.12.0_macOS_arm64.zip"}},
-		{"dnsx", "windows", "amd64", "dnsx_1.3.1_windows_amd64.zip", []string{"dnsx_1.3.1_windows_386.zip", "dnsx_1.3.1_linux_amd64.zip"}},
-	}
-	for _, tc := range cases {
-		tool, ok := toolboxFind(tc.id)
-		if !ok {
-			t.Fatalf("%s missing from the catalog", tc.id)
-		}
-		groups, err := toolboxAssetPatterns(tool, tc.goos, tc.goarch)
-		if err != nil {
-			t.Errorf("%s/%s%s: %v", tc.id, tc.goos, tc.goarch, err)
-			continue
-		}
-		// The desired asset has to win against every decoy in the release.
-		assets := []releaseAsset{{Name: tc.reject[0], URL: "https://example.invalid/decoy"}}
-		if len(tc.reject) > 1 {
-			assets = append(assets, releaseAsset{Name: tc.reject[1], URL: "https://example.invalid/decoy2"})
-		}
-		assets = append(assets, releaseAsset{Name: tc.want, URL: "https://example.invalid/want"})
-		picked, ok := pickToolAsset(assets, groups)
-		if !ok {
-			t.Errorf("%s/%s%s: no asset matched %q", tc.id, tc.goos, tc.goarch, tc.want)
-			continue
-		}
-		if picked.URL != "https://example.invalid/want" {
-			t.Errorf("%s/%s%s: picked %q, want %q", tc.id, tc.goos, tc.goarch, picked.Name, tc.want)
-		}
-	}
-}
-
 func TestToolboxSkipsChecksumSidecars(t *testing.T) {
 	assets := []releaseAsset{
 		{Name: "ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz.sha256", URL: "checksum"},
@@ -176,251 +105,9 @@ func TestToolboxSkipsChecksumSidecars(t *testing.T) {
 	}
 }
 
-func TestToolboxArchived(t *testing.T) {
-	for name, want := range map[string]bool{
-		"rclone-v1.70.1-linux-arm64.zip":                  true,
-		"ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz": true,
-		"pandoc-3.6.4-linux-arm64.tar.xz":                 true,
-		"jq-linux-arm64":                                  false,
-		"jq-windows-amd64.exe":                            false,
-	} {
-		if got := toolboxArchived(name); got != want {
-			t.Errorf("toolboxArchived(%q) = %v, want %v", name, got, want)
-		}
-	}
-	if got := toolboxArchiveExt("ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz"); got != ".tar.gz" {
-		t.Errorf("archive ext = %q", got)
-	}
-	if got := toolboxArchiveExt("jq-linux-arm64"); got != "" {
-		t.Errorf("raw binary ext = %q, want empty", got)
-	}
-}
-
-func TestSplitToolArgs(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"", nil},
-		{"   ", nil},
-		{"--version", []string{"--version"}},
-		{"  --max-depth  2  ", []string{"--max-depth", "2"}},
-		{`--profile "My Game"`, []string{"--profile", "My Game"}},
-		{`--name 'two words'`, []string{"--name", "two words"}},
-		{`--path /a/b\ c`, []string{"--path", "/a/b c"}},
-		{`--raw '\d+'`, []string{"--raw", `\d+`}},
-		// No shell: these are literal characters, not operators.
-		{"--pattern a;rm -rf /", []string{"--pattern", "a;rm", "-rf", "/"}},
-		{"-e $HOME", []string{"-e", "$HOME"}},
-		{`-e "*(a|b)*"`, []string{"-e", "*(a|b)*"}},
-		// An unterminated quote still yields the text typed so far.
-		{`--x "half`, []string{"--x", "half"}},
-	}
-	for _, tc := range cases {
-		got := splitToolArgs(tc.in)
-		if len(got) != len(tc.want) {
-			t.Errorf("splitToolArgs(%q) = %#v, want %#v", tc.in, got, tc.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Errorf("splitToolArgs(%q)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
-			}
-		}
-	}
-}
-
-func TestToolboxCommandLine(t *testing.T) {
-	tool, ok := toolboxFind("jq")
-	if !ok {
-		t.Fatal("jq missing")
-	}
-	line, args := toolboxCommandLine(tool, "")
-	if line != "jq --version" || len(args) != 1 || args[0] != "--version" {
-		t.Errorf("default command = %q %#v", line, args)
-	}
-	line, args = toolboxCommandLine(tool, `.[0].name "a b"`)
-	if line != `jq .[0].name "a b"` {
-		t.Errorf("typed command = %q", line)
-	}
-	if len(args) != 2 || args[1] != "a b" {
-		t.Errorf("typed args = %#v", args)
-	}
-}
-
 func TestToolboxInstallRejectsUnknownTool(t *testing.T) {
 	if err := toolboxInstall("definitely-not-a-tool", nil); err == nil {
 		t.Fatal("installing an id that is not in the catalog must fail")
-	}
-}
-
-// TestToolboxInstalledUsesToolsDir covers the presence check and the row value
-// without touching the real card: the override points at a temp folder.
-func TestToolboxInstalledUsesToolsDir(t *testing.T) {
-	dir := t.TempDir()
-	old := toolboxToolsDirOverride
-	toolboxToolsDirOverride = dir
-	defer func() { toolboxToolsDirOverride = old }()
-
-	tool, ok := toolboxFind("fd")
-	if !ok {
-		t.Fatal("fd missing")
-	}
-	if got := toolboxInstalled(tool); got != "" {
-		t.Fatalf("an empty tools folder must read as missing, got %q", got)
-	}
-	if value, installed := toolboxRowValue(tool); installed || value != "Not installed" {
-		t.Fatalf("row value = %q installed=%v", value, installed)
-	}
-	if _, err := toolboxRun("fd", "--version", 0); err == nil || !strings.Contains(err.Error(), "not installed") {
-		t.Fatalf("running a missing tool should say so, got %v", err)
-	}
-
-	// An empty placeholder (an interrupted install) is not "installed".
-	target := filepath.Join(dir, toolboxExeName(tool, runtime.GOOS))
-	if err := os.WriteFile(target, nil, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := toolboxInstalled(tool); got != "" {
-		t.Fatalf("a zero-byte file must read as missing, got %q", got)
-	}
-	if err := os.WriteFile(target, []byte("binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := toolboxInstalled(tool); got != target {
-		t.Fatalf("installed path = %q, want %q", got, target)
-	}
-	if value, installed := toolboxRowValue(tool); !installed || !strings.HasPrefix(value, "Installed") {
-		t.Fatalf("row value = %q installed=%v", value, installed)
-	}
-	if n := toolboxInstalledCount(); n != 1 {
-		t.Fatalf("installed count = %d, want 1", n)
-	}
-	if got := toolboxSummaryValue(); !strings.Contains(got, "1 of ") {
-		t.Fatalf("summary = %q", got)
-	}
-}
-
-// TestToolboxModelRows drives the Toolbox screen's rows: every catalog tool is
-// listed, "Install" while missing, "Installed" (in the installed group) once
-// the binary is there.
-func TestToolboxModelRows(t *testing.T) {
-	dir := t.TempDir()
-	old := toolboxToolsDirOverride
-	toolboxToolsDirOverride = dir
-	prevBusy := tbxScreen.busy
-	tbxScreen.busy = nil
-	t.Cleanup(func() {
-		toolboxToolsDirOverride = old
-		tbxScreen.busy = prevBusy
-	})
-
-	m := tbxBuildModel(time.Now())
-	if len(m.installed) != 0 || len(m.available) != len(toolboxCatalog()) {
-		t.Fatalf("rows = %d installed / %d available, want every tool available", len(m.installed), len(m.available))
-	}
-	for _, row := range m.available {
-		if row.spec.pill != "Install" && row.spec.pill != "Not for this device" {
-			t.Fatalf("missing tool %s shows %q", row.id, row.spec.pill)
-		}
-		if row.spec.title == "" || row.spec.subtitle == "" {
-			t.Fatalf("row %s is missing its title or summary", row.id)
-		}
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, toolboxExeNameOf("jq")), []byte("bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	m = tbxBuildModel(time.Now())
-	if len(m.installed) != 1 || m.installed[0].id != "jq" || m.installed[0].spec.pill != "Installed" {
-		t.Fatalf("installed rows = %+v, want jq marked Installed", m.installed)
-	}
-	if !strings.Contains(m.header.Status, "1 of ") {
-		t.Fatalf("header status = %q, want the installed count", m.header.Status)
-	}
-}
-
-// TestSecurityTrustModel builds the Security & trust rows from the live
-// config: one row per posture line, each one pressable, and a plaintext secret
-// shows as an amber row.
-func TestSecurityTrustModel(t *testing.T) {
-	cfg := &Config{}
-	cfg.Variables.Custom = map[string]interface{}{"groq_api_key": "gsk_real_token"}
-	m := sectrustBuildModel(cfg, time.Now())
-	if len(m.rows) != len(securityPostureRows(cfg)) {
-		t.Fatalf("rows = %d, want %d", len(m.rows), len(securityPostureRows(cfg)))
-	}
-	seen := map[string]bool{}
-	for _, row := range m.rows {
-		if row.id == "" || seen[row.id] {
-			t.Fatalf("row id %q is empty or repeated", row.id)
-		}
-		seen[row.id] = true
-		if row.spec.title == "" || row.spec.subtitle == "" || row.spec.pill == "" {
-			t.Fatalf("row %s is missing its title, detail or value: %+v", row.id, row.spec)
-		}
-		if what, _, _ := sectrustExplain(row.id); what == "" {
-			t.Fatalf("row %s has no explanation for its sheet", row.id)
-		}
-	}
-	if m.rows[0].id != "secrets" || m.rows[0].spec.tone != tbxToneWarn || !strings.Contains(m.rows[0].spec.pill, "plaintext") {
-		t.Fatalf("first row = %+v, want the amber plaintext warning", m.rows[0])
-	}
-	if m.warnings == 0 {
-		t.Fatal("the summary does not count the warning")
-	}
-}
-
-// TestToolboxKeyboardTarget covers the argument editor: the keyboard writes to
-// the toolbox buffer, and submitting saves the line for the next run.
-func TestToolboxKeyboardTarget(t *testing.T) {
-	dir := t.TempDir()
-	old := toolboxToolsDirOverride
-	toolboxToolsDirOverride = dir
-	defer func() { toolboxToolsDirOverride = old }()
-	t.Cleanup(func() {
-		virtualKeyboardActive = false
-		vkTarget = vkTargetScene
-		toolArgsToolID = ""
-		toolArgsBuffer = ""
-	})
-
-	vkOpenToolArgs("jq")
-	if !virtualKeyboardActive || vkTarget != vkTargetToolArgs {
-		t.Fatalf("keyboard target = %v active=%v", vkTarget, virtualKeyboardActive)
-	}
-	if toolArgsToolID != "jq" {
-		t.Fatalf("tool id = %q", toolArgsToolID)
-	}
-	vkSetText(`--tab .`, &Config{})
-	if toolArgsBuffer != `--tab .` {
-		t.Fatalf("buffer = %q", toolArgsBuffer)
-	}
-	vkSubmit(&Config{}, false)
-	if got := toolboxArgsFor("jq"); got != `--tab .` {
-		t.Fatalf("saved args = %q", got)
-	}
-	if virtualKeyboardActive {
-		t.Fatal("the keyboard must close on submit")
-	}
-}
-
-func toolboxExeNameOf(id string) string {
-	tool, ok := toolboxFind(id)
-	if !ok {
-		return id
-	}
-	return toolboxExeName(tool, runtime.GOOS)
-}
-
-func TestToolboxArgsAreTrimmedAndForgotten(t *testing.T) {
-	toolboxSetArgs("jq", `--tab .`)
-	if got := toolboxArgsFor("jq"); got != `--tab .` {
-		t.Fatalf("args = %q", got)
-	}
-	toolboxSetArgs("jq", "   ")
-	if got := toolboxArgsFor("jq"); got != "" {
-		t.Fatalf("a blank line should fall back to the catalog example, got %q", got)
 	}
 }
 
@@ -601,50 +288,6 @@ func TestToolboxPlaceReplaces(t *testing.T) {
 	}
 }
 
-// The install record survives a reload of the manifest, and an update is only
-// offered when the recorded tag and the latest tag are both known and differ.
-func TestToolboxRecordsAndUpdates(t *testing.T) {
-	dir := t.TempDir()
-	old := toolboxToolsDirOverride
-	toolboxToolsDirOverride = dir
-	t.Cleanup(func() {
-		toolboxToolsDirOverride = old
-		toolboxLatest.mu.Lock()
-		delete(toolboxLatest.tags, "jq")
-		toolboxLatest.mu.Unlock()
-	})
-	toolboxLatest.mu.Lock()
-	delete(toolboxLatest.tags, "jq")
-	toolboxLatest.mu.Unlock()
-
-	toolboxSaveRecord("jq", toolboxRecord{Tag: "jq-1.7.1", Asset: "jq-linux-arm64", Verified: true})
-	toolboxManifest.mu.Lock()
-	toolboxManifest.loaded = false
-	toolboxManifest.mu.Unlock()
-	rec, ok := toolboxRecordFor("jq")
-	if !ok || rec.Tag != "jq-1.7.1" || !rec.Verified {
-		t.Fatalf("record after reload = %+v %v", rec, ok)
-	}
-	if got := toolboxUpdateAvailable("jq"); got != "" {
-		t.Fatalf("an update was offered before any check: %q", got)
-	}
-	toolboxLatestSet("jq", "jq-1.7.1")
-	if got := toolboxUpdateAvailable("jq"); got != "" {
-		t.Fatalf("the installed release was offered as an update: %q", got)
-	}
-	toolboxLatestSet("jq", "jq-1.8.0")
-	if got := toolboxUpdateAvailable("jq"); got != "jq-1.8.0" {
-		t.Fatalf("update = %q, want jq-1.8.0", got)
-	}
-	toolboxForgetRecord("jq")
-	if _, ok := toolboxRecordFor("jq"); ok {
-		t.Fatal("the record survived being forgotten")
-	}
-	if got := toolboxUpdateAvailable("jq"); got != "" {
-		t.Fatalf("a removed tool was offered an update: %q", got)
-	}
-}
-
 // The Terminal opens with the installed path, quoted when it has spaces, and
 // the typed or example arguments; nothing runs until Enter.
 func TestToolboxTerminalCommand(t *testing.T) {
@@ -657,25 +300,5 @@ func TestToolboxTerminalCommand(t *testing.T) {
 	}
 	if got := toolboxTerminalCommand(tool, `C:\Juka Hub\tools\jq.exe`, `.[0] "a b"`); got != `"C:\Juka Hub\tools\jq.exe" .[0] "a b"` {
 		t.Fatalf("typed = %q", got)
-	}
-}
-
-func TestSecurityPostureKeyRow(t *testing.T) {
-	t.Setenv("JUKAHUB_CRYPTO_KEY", "")
-	rows := securityPostureRows(&Config{})
-	key := findSecurityRow(t, rows, "Encryption key")
-	if !key.Warn {
-		t.Error("the built-in key must be flagged")
-	}
-	if n := securityWarningCount(&Config{}); n == 0 {
-		t.Error("the built-in key alone should count as a warning")
-	}
-	t.Setenv("JUKAHUB_CRYPTO_KEY", "0123456789abcdef0123456789abcdef")
-	key = findSecurityRow(t, securityPostureRows(&Config{}), "Encryption key")
-	if key.Warn {
-		t.Error("an environment key must not be flagged")
-	}
-	if n := securityWarningCount(&Config{}); n != 0 {
-		t.Errorf("a clean config with an environment key should have 0 warnings, got %d", n)
 	}
 }

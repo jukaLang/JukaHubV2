@@ -190,7 +190,7 @@ func securityPostureRows(config *Config) []securityRow {
 		ID:     "servers",
 		Label:  "File servers",
 		Value:  servers,
-		Detail: "Reachable by any device on this network while running",
+		Detail: "Need the password shown on the device; stop on their own when idle or on a new network",
 		Warn:   warn,
 	})
 
@@ -596,7 +596,7 @@ func sectrustExplain(id string) (what, why, section string) {
 			"Updates and packages are the most powerful thing the app installs; they must come from the people who hold the private key.",
 			"Patch / signed repositories"
 	case "servers":
-		return "The FTP and SFTP servers share the card with other devices on the network while they run. FTP has no encryption; SFTP uses a generated password and a host key.",
+		return "While they run, FTP shares the card's games, saves and media folders and SFTP the card (your home folder on a computer) with whoever signs in with the password shown on the device — a new one every start. FTP has no encryption; SFTP adds a host key. Both stop after " + fsIdleLimitText() + " unused and when the device changes network.",
 			"A server left running on a café or hotel network is open to everyone on it.",
 			"SSH/SFTP server"
 	case "companion":

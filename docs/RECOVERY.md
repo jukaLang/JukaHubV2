@@ -1,10 +1,11 @@
 # Recovery and resilience
 
-Three features keep a handheld usable when things go wrong: a low-battery guard
-that gets a save state onto the card before the power dies, a recovery chord that
-starts JukaHub without its customisations and rolls back the last update, and an
-SD-card health check that catches the card problems behind most "the app broke"
-reports.
+These features keep a handheld usable when things go wrong: a low-battery guard
+that gets a save state onto the card before the power dies, a recovery chord
+that starts JukaHub in safe mode and offers the previous version, the last good
+settings or a settings reset, a boot guard that notices failed starts by itself,
+crash reports, and an SD-card health check that catches the card problems behind
+most "the app broke" reports.
 
 ## Low-battery auto-save and suspend
 
@@ -79,21 +80,28 @@ back instead of a frozen last frame.
 
 ## Recovery chord (safe boot)
 
-Hold **L + R + Start** while JukaHub starts. The chord must stay down for the
-whole 1.2-second window, so a stray press cannot trigger it.
+Hold **L + R + Start** (on a keyboard: **Ctrl + Alt + R**) while JukaHub starts.
+The chord must stay down for the whole 1.2-second window, so a stray press
+cannot trigger it.
 
-When it triggers:
+When it triggers, safe mode turns on for this launch (plugins, updates, tool
+installs and background network work are skipped) and the **Recovery** card
+opens with the first frame. Nothing has been changed at that point; the card
+offers:
 
-- safe mode turns on for this launch: plugins, updates, tool installs and
-  background network work are skipped;
-- the previous JukaHub binary is restored from the newest backup set that
-  contains it;
-- the result appears in the log and in Diagnostics (`Safe boot : ...`).
+| Choice | What it does |
+| --- | --- |
+| Previous version | Installs the version kept in Version history that was released just before this one, and restarts (the current one is kept there too, so it can be undone). On an install from before Version history, the build an older update kept in its backup set is put back after a confirmation and takes over at the next start (**Restart now** is offered). |
+| Last good settings | Puts back the settings the last healthy start read (kept in `patch/lastgood/` once a start has run 90 seconds outside safe mode), else the settings saved before the last change (the `.bak` of `jukauser.json` / `jukaconfig.json`) or the newest weekly backup — the last good start first, then newest first. |
+| Safe mode | Keeps going in safe mode until JukaHub restarts. |
+| Reset settings (keep games and saves) | Settings and the home layout go back to how JukaHub ships; games, saves, favourites, play history, themes and plugins stay. |
 
-The config is deliberately left alone. A backup set can be old, and silently
-reverting settings made after the update would be its own bug; the executable is
-the file an update replaces. Restart JukaHub after the chord to run the restored
-build.
+The two settings choices ask first and always write a safety backup of the
+current settings (`JukaHub-safety-*.jkbackup`, listed in Tools → Your setup →
+Backup & restore) before anything changes; nothing changes if that backup
+cannot be written. The card works with the D-pad and A/B, the arrow keys and
+Enter/Esc, or a tap. The result appears in the log and in Diagnostics
+(`Safe boot : ...`).
 
 Safe mode can also be requested without the chord:
 
@@ -105,6 +113,79 @@ Safe mode can also be requested without the chord:
 
 Interrupted updates are separate: JukaHub replays the transaction journal at
 startup and restores the files it replaced, without any user action.
+
+## Boot guard (failed starts)
+
+Every start is recorded in `patch/bootguard.json`. A start counts as
+**healthy** once JukaHub has drawn its first frame and then kept running for
+90 seconds, or when its main loop ends on a quit (recorded before the teardown
+runs). Anything else — a crash, a kill, a hang, a power cut in the first minute
+and a half — is a **failed start**. A crash after a long session is a healthy
+start that ended badly and does not count. The guard starts before the config
+is loaded, so a start that dies loading it counts too.
+
+- **Three failed starts in a row**, whatever the update history, start safe mode
+  by themselves, with a card that says why and how to leave it (quit and open
+  JukaHub again; the next start is normal once one start is healthy).
+- When those failures are the running build's own, began within its first ten
+  starts, and at least one of them was a crash (a crash report was filed for
+  it, or its exit status says so — see below), the build is treated as a bad
+  update: the previous version — the one released before it — is put back from
+  Version history and JukaHub restarts into it. A power cut, or a quit that had
+  to be forced, in a session that was working never rolls an update back.
+- A loop gets **one** automatic rollback: if the restored build fails its starts
+  too, the cause is probably not the update, and the guard starts safe mode
+  instead of going back again. The next start outside safe mode that runs 90
+  seconds or quits cleanly makes rollbacks possible again.
+
+**How a start ended.** A start that was asked to stop (the power button, a stop
+signal, Quit) is not a failed start, even when the stop has to be forced during
+a slow splash, unless it crashed on the way out. On the handheld, `launch.sh`
+leaves each run's exit status in `.last-exit` beside the app, and the next start
+reads and deletes it: 1 (a fatal error), 2 (a crash) and a signal such as 134
+(abort), 137 (killed, usually by the out-of-memory killer) or 139 (segfault)
+count as a crash, except the stop signals (129, 130, 131, 143) and a kill that
+followed a stop request; 0 never does. Without that file (Windows, a desktop,
+an older `launch.sh`), a start that died before its first frame counts as a
+crash.
+
+The count is in starts, not in clock time: the handheld may have no real-time
+clock, so after a cold boot its clock can sit at a factory date or jump ahead
+once the network sets it. `JUKAHUB_NO_BOOTGUARD=1` turns the guard off for
+debugging; a safe-mode flag, variable or command line keeps its automatic
+rollback away, and so does holding the recovery chord: the Recovery card then
+says the last starts failed and offers **Previous version** first.
+
+## Crash reports
+
+Each session writes a one-line header to `crash-session-<pid>.txt` in the log
+folder and hands the file to the Go runtime as its crash output, so a panic on
+any goroutine or a fatal runtime error is written there as well as to
+`errors.txt`. At the next start a session file with anything after its header
+becomes `crash-<yyyymmdd-hhmmss>.txt` (the newest five are kept) and JukaHub
+shows **JukaHub closed unexpectedly** with:
+
+- **Send report** — opens Report a bug with the crash category, a title and the
+  crash excerpt filled in; you see exactly what would be sent and nothing leaves
+  the device until you press Submit;
+- **Restart in safe mode** — the next start (right away where JukaHub can
+  restart itself) is in safe mode;
+- **Recovery options** — the recovery card above.
+
+With the recovery chord held, the Recovery card offers **Send report** for a
+crash report filed at that start instead.
+
+| Platform | Log folder |
+| --- | --- |
+| TrimUI | the app folder, next to `errors.txt` |
+| Windows | `%LOCALAPPDATA%\JukaHub\logs` (created on demand) |
+| Linux desktop | `data/logs` next to the binary |
+
+A panic exits with status **2** (a clean quit is 0), and `launch.sh` writes
+`JukaHub CRASHED` into `errors.txt` for it; it does not restart a crashed
+JukaHub. A panic on the main goroutine still runs the cleanup (the running game
+is stopped, the LEDs and the CPU governor are put back), bounded to 5 seconds so
+a crash can never leave a frozen frame.
 
 ## SD-card health
 

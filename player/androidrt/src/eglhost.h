@@ -59,8 +59,16 @@ typedef intptr_t EGLAttrib;
 #define EGL_WIDTH                 0x3057
 #define EGL_CLIENT_APIS           0x308D
 #define EGL_WINDOW_BIT            0x0004
+#define EGL_OPENGL_ES_BIT         0x0001
 #define EGL_OPENGL_ES2_BIT        0x0004
+#define EGL_OPENGL_ES3_BIT_KHR    0x0040
 #define EGL_PLATFORM_GBM_KHR      0x31D7
+#define EGL_NO_CONTEXT            ((EGLContext)0)
+#define EGL_BAD_CONTEXT           0x3006
+#define EGL_SAMPLES               0x3031
+#define EGL_SAMPLE_BUFFERS        0x3032
+#define EGL_CONTEXT_CLIENT_VERSION    0x3098 /* = EGL_CONTEXT_MAJOR_VERSION_KHR */
+#define EGL_CONTEXT_MINOR_VERSION_KHR 0x30FB
 
 typedef EGLint (*PFN_eglGetError)(void);
 typedef EGLDisplay (*PFN_eglGetDisplay)(void *nativeDisplay);
@@ -77,6 +85,17 @@ typedef EGLBoolean (*PFN_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surface);
 typedef EGLBoolean (*PFN_eglSwapBuffersWithDamage)(EGLDisplay dpy, EGLSurface surface, const EGLint *rects,
                                                     EGLint n);
 typedef void *(*PFN_eglGetProcAddress)(const char *name);
+typedef EGLDisplay (*PFN_eglGetCurrentDisplay)(void);
+typedef EGLSurface (*PFN_eglGetCurrentSurface)(EGLint readdraw);
+typedef EGLBoolean (*PFN_eglQuerySurface)(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint *value);
+typedef EGLContext (*PFN_eglCreateContext)(EGLDisplay dpy, EGLConfig config, EGLContext share, const EGLint *attribs);
+typedef EGLBoolean (*PFN_eglDestroyContext)(EGLDisplay dpy, EGLContext ctx);
+typedef EGLBoolean (*PFN_eglMakeCurrent)(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
+typedef EGLContext (*PFN_eglGetCurrentContext)(void);
+typedef EGLBoolean (*PFN_eglReleaseThread)(void);
+
+#define EGL_DRAW 0x3059
+#define EGL_READ 0x305A
 
 /* ── GBM ─────────────────────────────────────────────────────────────── */
 #define APAK_FOURCC(a, b, c, d) \
@@ -205,6 +224,14 @@ typedef struct ApakGpu {
     PFN_eglSwapBuffersWithDamage eglSwapBuffersWithDamageKHR;
     PFN_eglSwapBuffersWithDamage eglSwapBuffersWithDamageEXT;
     PFN_eglGetProcAddress eglGetProcAddress;
+    PFN_eglGetCurrentDisplay eglGetCurrentDisplay; /* optional (SDL-hosted window) */
+    PFN_eglGetCurrentSurface eglGetCurrentSurface;
+    PFN_eglQuerySurface eglQuerySurface;
+    PFN_eglCreateContext eglCreateContext; /* optional: the present layer passes contexts through */
+    PFN_eglDestroyContext eglDestroyContext;
+    PFN_eglMakeCurrent eglMakeCurrent;
+    PFN_eglGetCurrentContext eglGetCurrentContext;
+    PFN_eglReleaseThread eglReleaseThread; /* optional (EGL 1.2) */
     PFN_gbm_create_device gbm_create_device;
     PFN_gbm_device_destroy gbm_device_destroy;
     PFN_gbm_surface_create gbm_surface_create;
@@ -239,6 +266,13 @@ typedef struct ApakGpu {
 #define APAK_GPU_GBM 2
 #define APAK_GPU_DRM 4
 int apak_gpuLoad(ApakGpu *g, char *why, size_t cap);
+
+/* EGL only, from an explicit list of paths (the stock firmware's own
+ * /usr/lib/libEGL.so, ahead of anything LD_LIBRARY_PATH would find);
+ * ANDROIDPAK_EGL_LIB still overrides, and like apak_gpuLoad an override
+ * that does not load is final ("X not loadable: ..."), never replaced by
+ * one of the paths. APAK_GPU_EGL or 0. */
+int apak_gpuLoadEglFrom(ApakGpu *g, const char *const *paths, char *why, size_t cap);
 
 /* The DRM card the GPU userspace should modeset: ANDROIDPAK_DRM_NODE, else
  * the first /dev/dri/card* whose driver is "pvr", else the first card.

@@ -12,8 +12,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,7 +315,7 @@ func loadGameLauncherOverrides(path string) map[string]string {
 	}
 	parsed := map[string]string{}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		log.Printf("[library] ignoring %s: %v", path, err)
+		logWarn("library", "ignoring %s: %v", path, err)
 		return out
 	}
 	for system, launcher := range parsed {
@@ -373,7 +373,9 @@ func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []
 		// argument and work out the core themselves.
 		name, args = "sh", []string{launcher, romPath}
 	case ".bat", ".cmd":
-		name, args = "cmd", []string{"/c", launcher, romPath}
+		// The batch file itself, with the ROM as its argument: gameLaunchExec
+		// starts it through cmd.exe with every piece quoted (winBatchCommand).
+		name, args = launcher, []string{romPath}
 	case ".dll":
 		// A libretro core on Windows (the Emulators page installs RetroArch
 		// and its cores): the RetroArch beside it loads it with -L.
@@ -392,6 +394,36 @@ func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []
 	return name, append(args, extra...)
 }
 
+// gameLauncherIsBatch reports whether launcher is a Windows batch file.
+func gameLauncherIsBatch(launcher string) bool {
+	switch strings.ToLower(filepath.Ext(launcher)) {
+	case ".bat", ".cmd":
+		return true
+	}
+	return false
+}
+
+// gameLaunchExec is the process for a gameLaunchCommandArgs result. A batch
+// launcher runs through winBatchCommand (SEC-12): exec.Command("cmd", "/c", …)
+// quoted the ROM path and the game's own arguments for CommandLineToArgvW, not
+// for cmd.exe, so a ROM named "Tom&calc&.sfc" started calc (BatBadBut), a
+// launcher path with spaces made cmd.exe strip the quotes that remained, and
+// RetroArch's "--appendconfig=a|b" became a pipe. A name or option cmd.exe
+// cannot take literally (% or ") is refused with a message instead.
+func gameLaunchExec(launcher, name string, args []string) (*exec.Cmd, error) {
+	if !gameLauncherIsBatch(launcher) {
+		return exec.Command(name, args...), nil
+	}
+	cmd, err := winBatchCommand(name, args...)
+	if errors.Is(err, errWinBatchUnsafe) {
+		return nil, fmt.Errorf("%s cannot be given a %% or a quote safely — rename the game or its folder, or change its options", filepath.Base(launcher))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot start %s: %w", filepath.Base(launcher), err)
+	}
+	return cmd, nil
+}
+
 // launchLibraryGame starts the game detached, records it in the recents list
 // and returns an error instead of toasting so the caller can pick the message.
 func launchLibraryGame(game libraryGame, launcher string) error {
@@ -402,6 +434,11 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return fmt.Errorf("ROM is missing: %s", filepath.Base(game.Path))
 	}
 	if strings.TrimSpace(launcher) == "" {
+		// The Xbox row has a specific, actionable answer: install hakuX, or the
+		// reason this device cannot run it.
+		if strings.EqualFold(strings.TrimSpace(game.System), emuXboxEntryName) {
+			return fmt.Errorf("%s", xboxLibraryLauncherHintFor(hakuxDevice()))
+		}
 		return fmt.Errorf("no launcher for %s", game.System)
 	}
 	if !regularFile(launcher) {
@@ -423,7 +460,10 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// controller order as a one-launch --appendconfig (hotseat.go).
 	extra := hotseatLaunchArgs(launcher, parseGameArgs(options.Args))
 	name, args := gameLaunchCommandArgs(launcher, game.Path, extra)
-	cmd := exec.Command(name, args...)
+	cmd, err := gameLaunchExec(launcher, name, args)
+	if err != nil {
+		return err
+	}
 	cmd.Dir = filepath.Dir(launcher)
 	if strings.EqualFold(filepath.Ext(launcher), ".dll") && name != "" {
 		// A Windows core starts the RetroArch beside it: run from its folder.
@@ -495,7 +535,7 @@ func loadGameRecentsFile(path string) []recentGame {
 	var items []recentGame
 	if _, err := readJSONWithBackup(path, &items); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[library] ignoring %s: %v", path, err)
+			logWarn("library", "ignoring %s: %v", path, err)
 		}
 		return nil
 	}
@@ -562,7 +602,7 @@ func recordGameLaunch(game libraryGame) []recentGame {
 	}
 	gameRecents = next
 	if err := saveGameRecentsFile(gameRecentsFile(), next); err != nil {
-		log.Printf("[library] cannot save recents: %v", err)
+		logWarn("library", "cannot save recents: %v", err)
 	}
 	return append([]recentGame(nil), next...)
 }

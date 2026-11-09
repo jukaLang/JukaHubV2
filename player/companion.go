@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"mime/multipart"
 	"net"
@@ -293,7 +292,7 @@ func (s *companionServer) Start() error {
 		// a line in the log, since the companion silently stopped answering
 		// phones before.
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("[companion] server stopped: %v", err)
+			logWarn("companion", "server stopped: %v", err)
 		}
 	}()
 	return nil

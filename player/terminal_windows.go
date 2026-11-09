@@ -26,6 +26,11 @@ const termCreateNoWindow = 0x08000000
 // `chcp 65001` switches the hidden console to UTF-8 so names with accents come
 // through instead of OEM code-page bytes. The window is hidden, not absent, so
 // that console exists for chcp to change.
+//
+// Trust boundary (SEC-12): line is what the user typed at the Terminal prompt
+// (or picked from their own history), spliced into the command line on
+// purpose — cmd.exe syntax is what the user is typing. No other code path
+// builds a line for it; batch files the app launches use winBatchCommand.
 func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 	comspec := os.Getenv("ComSpec")
 	if comspec == "" {

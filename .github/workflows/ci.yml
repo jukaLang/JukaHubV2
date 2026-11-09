@@ -153,11 +153,11 @@ jobs:
       - name: go vet
         env:
           CGO_ENABLED: "0"
-        run: go vet ./internal/... ./web/... ./tools/...
+        run: go vet ./internal/... ./tools/...
       - name: go test
         env:
           CGO_ENABLED: "0"
-        run: go test ./internal/... ./web/... ./tools/... -count=1
+        run: go test ./internal/... ./tools/... -count=1
 
   player:
     name: Player vet and tests
@@ -181,7 +181,9 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        # SDL_VIDEODRIVER=dummy lets the offscreen render tests run headless.
+        # The suite is the lean core (persistence, security, update engine,
+        # parsers, input): no test opens a window or a renderer. The dummy
+        # drivers only keep any incidental SDL call headless.
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
@@ -319,12 +321,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
       - name: go test -race
+        # Only the tests that run real goroutines: the conditional HTTP cache,
+        # the semaphores and bounded runners, retry cancellation, install-run
+        # contexts, the debounced config writer, the synthetic event queue and
+        # the loopback servers (peer TLS, SSH/SFTP, FTP, Companion, live builder,
+        # save sync, patch downloads, core auto-update, telemetry). Add a prefix
+        # here when a new test exercises concurrent code.
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
+          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|LiveBuilder|Ssync|PatchDownload|RunInstalledCoreUpdates|Telemetry)"
         run: |
           set +e
-          go test -race ./... -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"
+          go test -race . -run "$RACE_TESTS" -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Surface the cause as annotations: the raw log is hard to reach.

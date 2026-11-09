@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -217,7 +216,6 @@ func userConfigFromVariables(config *Config) *UserConfig {
 		SearchWidth:        config.Variables.SearchWidth,
 		DynamicBg:          config.Variables.DynamicBg,
 		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
-		SocialNotifs:       config.Variables.SocialNotifs,
 		Clock12:            config.Variables.Clock12,
 		ReducedMotion:      config.Variables.ReducedMotion,
 		LowPower:           config.Variables.LowPower,
@@ -373,14 +371,9 @@ type geoLocation struct {
 	Latitude    float64
 	Longitude   float64
 	CountryCode string
-}
-
-// lookupLocation resolves the device's approximate position and country from a
-// keyless IP service. ipapi.co rate-limits anonymous callers aggressively, so
-// ipwho.is goes first and ipinfo.io is the last fallback; a failure here only
-// costs the forecast its exact location and unit preference.
-func lookupLocation(client *http.Client) (geoLocation, bool) {
-	return lookupLocationContext(context.Background(), client)
+	// TimeZone is the IANA zone the provider places the address in, when it
+	// says ("Europe/Berlin"); Settings → Date & time's "Set automatically".
+	TimeZone string
 }
 
 // lookupLocationContext tries the providers in order, stopping when the
@@ -424,6 +417,10 @@ func lookupIPWhoIs(ctx context.Context, client *http.Client) (geoLocation, bool)
 		Latitude    float64 `json:"latitude"`
 		Longitude   float64 `json:"longitude"`
 		CountryCode string  `json:"country_code"`
+
+		TimeZone struct {
+			ID string `json:"id"`
+		} `json:"timezone"`
 	}
 	if !getGeoJSON(ctx, client, "https://ipwho.is/", &v) || !v.Success {
 		return geoLocation{}, false
@@ -431,7 +428,7 @@ func lookupIPWhoIs(ctx context.Context, client *http.Client) (geoLocation, bool)
 	if v.Latitude == 0 && v.Longitude == 0 {
 		return geoLocation{}, false
 	}
-	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode}, true
+	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode, TimeZone: v.TimeZone.ID}, true
 }
 
 func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool) {
@@ -440,6 +437,7 @@ func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool)
 		Latitude    float64 `json:"latitude"`
 		Longitude   float64 `json:"longitude"`
 		CountryCode string  `json:"country_code"`
+		TimeZone    string  `json:"timezone"`
 	}
 	if !getGeoJSON(ctx, client, "https://ipapi.co/json/", &v) || v.Error {
 		return geoLocation{}, false
@@ -447,13 +445,14 @@ func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool)
 	if v.Latitude == 0 && v.Longitude == 0 {
 		return geoLocation{}, false
 	}
-	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode}, true
+	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode, TimeZone: v.TimeZone}, true
 }
 
 func lookupIPInfo(ctx context.Context, client *http.Client) (geoLocation, bool) {
 	var v struct {
 		Loc     string `json:"loc"`
 		Country string `json:"country"`
+		Zone    string `json:"timezone"`
 	}
 	if !getGeoJSON(ctx, client, "https://ipinfo.io/json", &v) {
 		return geoLocation{}, false
@@ -467,7 +466,7 @@ func lookupIPInfo(ctx context.Context, client *http.Client) (geoLocation, bool) 
 	if errLat != nil || errLon != nil || (lat == 0 && lon == 0) {
 		return geoLocation{}, false
 	}
-	return geoLocation{Latitude: lat, Longitude: lon, CountryCode: v.Country}, true
+	return geoLocation{Latitude: lat, Longitude: lon, CountryCode: v.Country, TimeZone: v.Zone}, true
 }
 
 func fetchWeatherOnce() {
@@ -497,7 +496,7 @@ func fetchWeatherOnceContext(parent context.Context) {
 	} else if ctx.Err() != nil {
 		return
 	} else {
-		log.Printf("[WARN] Geolocation unavailable, using default weather location")
+		logWarn("extras", "Geolocation unavailable, using default weather location")
 	}
 	url := fmt.Sprintf("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&forecast_days=7&timezone=auto", lat, lon)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -679,17 +678,6 @@ func versionDisplayString(config *Config) string {
 	return formatBuildLabel(versionString(config), installedBuildDate())
 }
 
-// headerTitle is the single header line: "JukaHub - v0.4.0" on Home and
-// "JukaHub - v0.4.0 - <Scene>" on every other scene. The active scene appears
-// exactly once per frame, here.
-func headerTitle(config *Config, scene SceneConfig) string {
-	base := "JukaHub - " + versionDisplayString(config)
-	if scene.Layout == "home" {
-		return base
-	}
-	return base + " - " + sceneDisplayName(scene.Name)
-}
-
 // --- Top status bar (brand + version + scene + clock/weather/battery) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
@@ -722,9 +710,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 
 	// One brand block, one caption type and one button height on every screen:
 	// the bar decides those in header.go, so Home and a scene cannot drift into
-	// two different headers again.
+	// two different headers again. The caption names the screen only: the build
+	// number is developer information and lives in About and the Start menu.
 	headerTextW := drawHeaderBrand(renderer, config, barH,
-		headerCaptionText(versionDisplayString(config), sceneName))
+		headerCaptionText("", sceneName))
 	nextX := headerTextW + SpaceMD
 
 	// The Back control is the bar's loudest button: larger than the rest, in
@@ -893,8 +882,8 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if statusWiFiRect.W > 0 {
 		statusWiFiRect = statusFingerRect(statusWiFiRect, barH, weatherStatusRect, statusClockRect)
 	}
-	// Focused header chips wear the ring Home's header draws: a rounded 2px
-	// accent outline, not a square hairline box.
+	// Focused header chips wear the ring Home's header draws: a rounded 3px
+	// accent outline (glassFocusRingWidth), not a square hairline box.
 	for _, chip := range []struct {
 		index int
 		rect  sdl.Rect
@@ -906,7 +895,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	} {
 		if focusEngine.ElementIndex() == chip.index && chip.rect.W > 0 {
 			r := chip.rect
-			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 2, glassAccent())
+			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, glassFocusRingWidth, glassAccent())
 		}
 	}
 
@@ -1105,11 +1094,12 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		// steps — so both ways in are named here.
 		hints[0] = FooterHint{Button: "Up/Down", Label: "Scroll"}
 		hints[1] = FooterHint{Button: "A", Label: "Link / URL"}
+		// The keyboard's halves (handleBrowserKey): - and + zoom, / searches.
 		hints = append(hints,
 			FooterHint{Button: "Left/Right", Label: "Previous / next link"},
 			FooterHint{Button: "L1/R1", Label: "Scroll"},
-			FooterHint{Button: "L2/R2", Label: "Zoom"},
-			FooterHint{Button: "Y", Label: "Search"},
+			FooterHint{Button: "L2/R2 / - / +", Label: "Zoom"},
+			FooterHint{Button: "Y / /", Label: "Search"},
 			FooterHint{Button: "X", Label: "Links"},
 		)
 	case "Chat":
@@ -1144,7 +1134,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			hints = append(hints,
 				FooterHint{Button: "Y", Label: "New"},
 				FooterHint{Button: "X", Label: "Delete"},
-				FooterHint{Button: "L1/R1", Label: "Folder"},
+				// "/ F": the keyboard cycles folders with F (inputhints.go
+				// shows whichever half the user can press).
+				FooterHint{Button: "L1/R1 / F", Label: "Folder"},
 			)
 		} else if notes.tab == 3 {
 			// Search is a draft, not an edit: B leaves the field.
@@ -1159,8 +1151,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		hints = append(hints,
 			FooterHint{Button: "X", Label: "Insert x"},
 			FooterHint{Button: "Y", Label: "Graph"},
-			FooterHint{Button: "L1", Label: "Clear"},
-			FooterHint{Button: "R1", Label: "Delete"},
+			// The keyboard's twins: C clears, Backspace deletes (calculator.go).
+			FooterHint{Button: "L1 / C", Label: "Clear"},
+			FooterHint{Button: "R1 / Backspace", Label: "Delete"},
 		)
 	case "PDFReader":
 		// The reader draws its own footer with these (pdfreader.go): pages
@@ -1177,7 +1170,8 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			hints = append(hints,
 				FooterHint{Button: "X", Label: "Toggle"},
 				FooterHint{Button: "Y", Label: "Add"},
-				FooterHint{Button: "L1", Label: "Delete"},
+				// "/ Del": the keyboard deletes with Delete (handleAlarmInput).
+				FooterHint{Button: "L1 / Del", Label: "Delete"},
 			)
 		} else if alarmUI.tab == 4 {
 			// The ringtone row: X opens the music picker (alarmpick.go).
@@ -1226,7 +1220,9 @@ func footerBarHeight() int32 {
 func hintLine(hints ...FooterHint) string {
 	parts := make([]string, 0, len(hints))
 	for _, hint := range hints {
-		button := strings.TrimSpace(hint.Button)
+		// The button in this frame's vocabulary: keyboard keys on a PC
+		// without a pad or with a keyboard on the handheld (inputhints.go).
+		button := strings.TrimSpace(hintKeyFor(hint.Button, hint.Label))
 		label := strings.TrimSpace(hint.Label)
 		switch {
 		case button == "" && label == "":
@@ -1366,7 +1362,10 @@ func planFooterHints(config *Config, hints []FooterHint, avail int32) footerPlan
 	plan.badgeW = make([]int32, len(plan.hints))
 	plan.labelW = make([]int32, len(plan.hints))
 	for i, g := range plan.hints {
-		plan.badgeW[i] = footerBadgeWidth(plan.font, g.Button, plan.badgePad, plan.badgeH)
+		// Measured as drawn: drawGlassHintBadge names the button in this
+		// frame's vocabulary. plan.hints keeps the pad names, which the click
+		// targets (emuHintPress) match on.
+		plan.badgeW[i] = footerBadgeWidth(plan.font, hintKeyFor(g.Button, g.Label), plan.badgePad, plan.badgeH)
 		plan.labelW[i], _ = measureText(plan.font, g.Label)
 	}
 	plan.width = footerHintsWidth(plan.font, plan.hints, plan.groupGap, plan.badgePad, plan.badgeGap, plan.badgeH)
@@ -1412,7 +1411,7 @@ func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, ba
 		// the planner tries), and the hints are the same strings every time.
 		lw, _ := measureText(font, g.Label)
 		total += lw
-		if bw := footerBadgeWidth(font, g.Button, badgePad, badgeH); bw > 0 {
+		if bw := footerBadgeWidth(font, hintKeyFor(g.Button, g.Label), badgePad, badgeH); bw > 0 {
 			total += bw + badgeGap
 		}
 	}
@@ -1473,7 +1472,6 @@ type UserVariables struct {
 	SearchWidth        int    `json:"searchWidth"`
 	DynamicBg          bool   `json:"dynamicBg"`
 	ScreensaverTimeout int    `json:"screensaverTimeout"`
-	SocialNotifs       bool   `json:"socialNotifs"`
 	Clock12            bool   `json:"clock12"`
 	// NetPlayEnabled is a pointer in the user file so an upgrade from a build
 	// that predates the switch keeps the shipped default instead of reading a
@@ -1528,15 +1526,15 @@ func loadUserConfig() *UserConfig {
 		// silently starting from defaults, which used to drop the theme, keymap
 		// and every other preference over one bad write.
 		if backup, backupErr := readUserConfigFile("jukauser.json.bak"); backupErr == nil {
-			log.Printf("[CONFIG] jukauser.json is unusable (%v); recovered settings from jukauser.json.bak", err)
+			logWarn("config", "jukauser.json is unusable (%v); recovered settings from jukauser.json.bak", err)
 			uc, err, recovered = backup, nil, true
 		}
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("[CONFIG] jukauser.json not found; starting with defaults")
+			logWarn("config", "jukauser.json not found; starting with defaults")
 		} else {
-			log.Printf("[CONFIG] cannot read jukauser.json: %v; starting with defaults", err)
+			logWarn("config", "cannot read jukauser.json: %v; starting with defaults", err)
 		}
 	}
 	if uc == nil {
@@ -1707,18 +1705,18 @@ func saveUserConfigToDir(dir string, user *UserConfig) {
 	}
 	data, err := json.MarshalIndent(userCopy, "", "  ")
 	if err != nil {
-		log.Printf("saveUserConfig: marshal error: %v", err)
+		logWarn("extras", "saveUserConfig: marshal error: %v", err)
 		return
 	}
 	// Keep a short rollback history next to the config. The helper skips an
 	// identical newest snapshot, so debounced saves do not grow the folder.
 	if powerConfigHistoryEnabled {
 		if err := snapshotPowerConfig(path); err != nil {
-			log.Printf("saveUserConfig: history snapshot: %v", err)
+			logWarn("extras", "saveUserConfig: history snapshot: %v", err)
 		}
 	}
 	if err := AtomicWrite(path, data, 0644); err != nil {
-		log.Printf("saveUserConfig: write error: %v", err)
+		logWarn("extras", "saveUserConfig: write error: %v", err)
 		return
 	}
 	LogScene("config").Info("user config saved", "path", path)
@@ -1813,11 +1811,11 @@ func saveConfig(config *Config) {
 
 	data, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {
-		log.Printf("saveConfig: marshal error: %v", err)
+		logWarn("extras", "saveConfig: marshal error: %v", err)
 		return
 	}
 	if err := AtomicWrite("jukaconfig.json", data, 0644); err != nil {
-		log.Printf("saveConfig: write error: %v", err)
+		logWarn("extras", "saveConfig: write error: %v", err)
 		configHealth.RecordSave("jukaconfig.json", fmt.Errorf("write error: %w", err))
 		return
 	}

@@ -137,12 +137,12 @@ const (
 )
 
 var (
-	bugrepIPv4   = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	bugrepMAC    = regexp.MustCompile(`\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b`)
-	bugrepEmail  = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
-	bugrepURL    = regexp.MustCompile(`\b(https?|rtsp|rtmp|ftp|sftp)://([^/\s"'<>]+)[^\s"'<>]*`)
-	bugrepWinAbs = regexp.MustCompile(`\b[A-Za-z]:\\[^\s"'<>|]*`)
-	bugrepUnix   = regexp.MustCompile(`(?:^|[\s"'=(])(/(?:mnt|home|root|userdata|storage|media|tmp|var|opt|usr|etc|sdcard|data|Users|Volumes|private)(?:/[^\s"'<>)]*)?)`)
+	bugrepIPv4   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`) })
+	bugrepMAC    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b`) })
+	bugrepEmail  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`) })
+	bugrepURL    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\b(https?|rtsp|rtmp|ftp|sftp)://([^/\s"'<>]+)[^\s"'<>]*`) })
+	bugrepWinAbs = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\b[A-Za-z]:\\[^\s"'<>|]*`) })
+	bugrepUnix   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?:^|[\s"'=(])(/(?:mnt|home|root|userdata|storage|media|tmp|var|opt|usr|etc|sdcard|data|Users|Volumes|private)(?:/[^\s"'<>)]*)?)`) })
 )
 
 // bugrepScrub removes what must never leave the device from text about to be
@@ -150,17 +150,17 @@ var (
 // e-mail, IP and MAC addresses and absolute paths.
 func bugrepScrub(text string) string {
 	text = redactDiagnosticText(text)
-	text = bugrepURL.ReplaceAllString(text, "$1://$2/…")
-	text = bugrepEmail.ReplaceAllString(text, "[email]")
-	text = bugrepMAC.ReplaceAllString(text, "[mac]")
-	text = bugrepIPv4.ReplaceAllStringFunc(text, func(ip string) string {
+	text = bugrepURL().ReplaceAllString(text, "$1://$2/…")
+	text = bugrepEmail().ReplaceAllString(text, "[email]")
+	text = bugrepMAC().ReplaceAllString(text, "[mac]")
+	text = bugrepIPv4().ReplaceAllStringFunc(text, func(ip string) string {
 		if ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "1.1.1.1" || ip == "8.8.8.8" {
 			return ip
 		}
 		return "[ip]"
 	})
-	text = bugrepWinAbs.ReplaceAllString(text, "[path]")
-	text = bugrepUnix.ReplaceAllStringFunc(text, func(m string) string {
+	text = bugrepWinAbs().ReplaceAllString(text, "[path]")
+	text = bugrepUnix().ReplaceAllStringFunc(text, func(m string) string {
 		// Keep the delimiter the match started with.
 		if len(m) > 0 && m[0] != '/' {
 			return m[:1] + "[path]"

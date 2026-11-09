@@ -29,6 +29,8 @@
 #include <time.h>
 
 #include "actbridge.h"
+#include "device.h"
+#include "jni.h"
 
 /* Smoke hooks (host tests only; unset on the device):
  *   ANDROIDRT_SMOKE_FRAMES=N  end the run after N loop iterations;
@@ -79,6 +81,10 @@ static int runner_poll(void) {
     return event;
 }
 
+/* The GameActivity bridge (gameactivity.c) runs its own loop on this queue. */
+int runner_nextEvent(void);
+int runner_nextEvent(void) { return runner_poll(); }
+
 /* ── dispatch ────────────────────────────────────────────────────────── */
 
 /* The framework-owned table the game fills in (zeroed, like Android's). */
@@ -125,14 +131,14 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
     int iteration = 0, focused = 0;
     ANativeActivity activity;
     AInputQueue *queue;
-    int winW = 1280, winH = 720, parsedW = 0, parsedH = 0;
-    const char *winEnv = getenv("ANDROIDRT_WINDOW");
+    int winW = 1280, winH = 720;
 
     memset(&g_callbacks, 0, sizeof g_callbacks);
     memset(&activity, 0, sizeof(activity));
     activity.callbacks = &g_callbacks;
-    /* No JVM in Tier 1: a logging JNI stub (jnistub.c) instead of NULL, so a
-     * game's first JNI call is a line in the log, not a segfault
+    /* No JVM in Tier 1, but a JNI environment (jnienv.c): the activity
+     * object is the manifest's activity class (or a class pack's), and every
+     * Java member nobody implements answers with a default and a log line
      * (ANDROIDPAK_JNI=off restores NULL). */
     activity.vm = apak_jniVM();
     activity.env = apak_jniEnv();
@@ -146,13 +152,17 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
 
     android_activityInit(&activity, runner);
 
+    apak_jniEvent(APAK_JNI_EV_BEFORE_ONCREATE);
     trace("onCreate");
     onCreate(&activity, NULL, 0);
+    apak_jniExceptionReport(activity.env, "onCreate");
+    apak_jniEvent(APAK_JNI_EV_AFTER_ONCREATE);
 
     trace("onStart");
     if (cbs(&activity)->onStart) cbs(&activity)->onStart(&activity);
     trace("onResume");
     if (cbs(&activity)->onResume) cbs(&activity)->onResume(&activity);
+    apak_jniEvent(APAK_JNI_EV_RESUME);
 
     /* The queue exists before the window, the order the glue relies on (it
      * attaches the queue to its looper when APP_CMD_INPUT_CHANGED arrives). */
@@ -163,10 +173,7 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
         if (cbs(&activity)->onInputQueueCreated) cbs(&activity)->onInputQueueCreated(&activity, queue);
     }
 
-    if (winEnv && sscanf(winEnv, "%dx%d", &parsedW, &parsedH) == 2 && parsedW > 0 && parsedH > 0) {
-        winW = parsedW;
-        winH = parsedH;
-    }
+    apak_devicePanel(&winW, &winH); /* ANDROIDRT_WINDOW, ANDROIDPAK_PANEL, the measured panel */
     fprintf(stderr, "[androidrt] lifecycle: window %dx%d\n", winW, winH);
     android_windowBackend(winW, winH);
     runner_post(APP_EVENT_WINDOW_CREATE);
@@ -184,6 +191,7 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
             android_inputInjectKey(0, AINPUT_SOURCE_GAMEPAD, AKEY_EVENT_ACTION_UP, AKEYCODE_BUTTON_A, 0);
             smokeInput = 0;
         }
+        apak_jniPump(); /* Java-side callbacks posted to the main thread */
         event = runner_poll();
         switch (event) {
             case APP_EVENT_WINDOW_CREATE:
@@ -220,6 +228,7 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
     if (onFrame) onFrame(&activity); /* final frame */
     trace("onPause");
     if (cbs(&activity)->onPause) cbs(&activity)->onPause(&activity);
+    apak_jniEvent(APAK_JNI_EV_PAUSE);
     if (cbs(&activity)->onSaveInstanceState) {
         size_t size = 0;
         void *saved = cbs(&activity)->onSaveInstanceState(&activity, &size);
@@ -234,6 +243,7 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
         android_inputQueueDestroy(activity.inputQueue);
         activity.inputQueue = NULL;
     }
+    apak_jniEvent(APAK_JNI_EV_DESTROY);
     trace("onDestroy");
     if (cbs(&activity)->onDestroy) cbs(&activity)->onDestroy(&activity);
 }

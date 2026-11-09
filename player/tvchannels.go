@@ -704,14 +704,6 @@ func tvToggleFavoriteFocused() (TVChannel, bool, bool) {
 	return ch, true, true
 }
 
-// tvFavoriteCount returns how many channels are starred.
-func tvFavoriteCount() int {
-	tvLib.mu.Lock()
-	defer tvLib.mu.Unlock()
-	tvLoadFavoritesLocked()
-	return len(tvLib.favs)
-}
-
 // toggleTVFavorite is the input-facing wrapper: it saves the change and tells
 // the user what happened.
 func toggleTVFavorite() {

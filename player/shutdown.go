@@ -23,7 +23,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +102,8 @@ func shutdownSteps(config *Config) []shutdownStep {
 		{label: "Closing caches and files", group: 2, timeout: 1200 * time.Millisecond, fn: func() (string, error) {
 			// A boot that reached the teardown was healthy bootguard-wise: the
 			// crash-loop counter resets, so the next boot starts from zero.
+			// main.go recorded it when the loop ended; this call only waits for
+			// that write (and writes nothing more) — a backstop.
 			clearBootGuard()
 			clearThumbnailDataCache()
 			conditionalCache.clear()
@@ -193,7 +194,7 @@ func shutdownStopServices() (string, error) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[shutdown] service hook panicked: %v", r)
+					logError("shutdown", "service hook panicked: %v", r)
 				}
 			}()
 			fn()
@@ -211,7 +212,7 @@ func shutdownStopServices() (string, error) {
 func shutdownRestoreHardware() (string, error) {
 	detail, err := restoreBootCPUSettings()
 	if !alarmVolumeRestoreWait(time.Second) {
-		log.Printf("[shutdown] the speaker volume restore did not finish in time")
+		logInfo("shutdown", "the speaker volume restore did not finish in time")
 	}
 	return detail, err
 }
@@ -237,11 +238,6 @@ type shutdownWait struct {
 	until time.Time
 }
 
-// runShutdownSteps runs the teardown within the default budget.
-func runShutdownSteps(steps []shutdownStep, track *stageTrack, frame func()) {
-	runShutdownStepsUntil(steps, track, frame, time.Now().Add(shutdownBudget))
-}
-
 // runShutdownStepsUntil runs steps group by group, recording each on track. A
 // group's off-thread steps start together; its inline steps then run on this
 // thread; the group ends when every step reported or ran out of time. A step
@@ -252,7 +248,7 @@ func runShutdownSteps(steps []shutdownStep, track *stageTrack, frame func()) {
 func runShutdownStepsUntil(steps []shutdownStep, track *stageTrack, frame func(), deadline time.Time) {
 	record := func(i int, detail string, err error) {
 		if err != nil {
-			log.Printf("[shutdown] %s: %v", steps[i].label, err)
+			logWarn("shutdown", "%s: %v", steps[i].label, err)
 			if detail == "" {
 				detail = err.Error()
 			}
@@ -370,12 +366,6 @@ func renderShutdownFrameAt(renderer *sdl.Renderer, config *Config, snap *stageSn
 	}
 }
 
-// renderShutdownFrame draws one teardown frame at elapsed milliseconds, the
-// card mid-teardown.
-func renderShutdownFrame(renderer *sdl.Renderer, config *Config, snap stageSnapshot, elapsed float64) {
-	renderShutdownFrameAt(renderer, config, &snap, elapsed, 0, !effectiveReducedMotion(config))
-}
-
 // shutdownReleaseTextures drops the texture caches once nothing will be drawn
 // again, so no texture outlives its renderer.
 func shutdownReleaseTextures() {
@@ -402,6 +392,11 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	// A ring still up ends first, here on the main thread that owns what it
 	// paused: the game it stopped must run again before it is asked to quit.
 	alarmStopRing()
+	// The shutdown chime plays over the card on its own audio device, so the
+	// steps that stop playback and restore the speaker leave it alone; the
+	// exit waits for it to ring out (bootchime.go).
+	shutdownChimeStart(config)
+	defer shutdownChimeWait()
 	steps := shutdownSteps(config)
 	labels := make([]string, len(steps))
 	for i, step := range steps {

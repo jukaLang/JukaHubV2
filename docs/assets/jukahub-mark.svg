@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<title>JukaHub</title>
+<defs>
+<linearGradient id="jhm-tile-base" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="64" y2="64"><stop offset="0" stop-color="#070B14"/><stop offset="1" stop-color="#0B1426"/></linearGradient>
+<radialGradient id="jhm-tile-bloom0" gradientUnits="userSpaceOnUse" cx="51.2" cy="8.96" r="34.56"><stop offset="0" stop-color="#2563EB" stop-opacity="0.5"/><stop offset="0.17" stop-color="#2563EB" stop-opacity="0.441"/><stop offset="0.33" stop-color="#2563EB" stop-opacity="0.303"/><stop offset="0.5" stop-color="#2563EB" stop-opacity="0.162"/><stop offset="0.67" stop-color="#2563EB" stop-opacity="0.068"/><stop offset="0.83" stop-color="#2563EB" stop-opacity="0.022"/><stop offset="1" stop-color="#2563EB" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhm-tile-bloom1" gradientUnits="userSpaceOnUse" cx="6.4" cy="58.88" r="23.04"><stop offset="0" stop-color="#C084FC" stop-opacity="0.22"/><stop offset="0.17" stop-color="#C084FC" stop-opacity="0.194"/><stop offset="0.33" stop-color="#C084FC" stop-opacity="0.133"/><stop offset="0.5" stop-color="#C084FC" stop-opacity="0.071"/><stop offset="0.67" stop-color="#C084FC" stop-opacity="0.03"/><stop offset="0.83" stop-color="#C084FC" stop-opacity="0.01"/><stop offset="1" stop-color="#C084FC" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhm-tile-bloom2" gradientUnits="userSpaceOnUse" cx="7.68" cy="9.6" r="46.08"><stop offset="0" stop-color="#22D3EE" stop-opacity="0.88"/><stop offset="0.17" stop-color="#22D3EE" stop-opacity="0.777"/><stop offset="0.33" stop-color="#22D3EE" stop-opacity="0.534"/><stop offset="0.5" stop-color="#22D3EE" stop-opacity="0.286"/><stop offset="0.67" stop-color="#22D3EE" stop-opacity="0.119"/><stop offset="0.83" stop-color="#22D3EE" stop-opacity="0.039"/><stop offset="1" stop-color="#22D3EE" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhm-tile-bloom3" gradientUnits="userSpaceOnUse" cx="57.6" cy="57.6" r="48"><stop offset="0" stop-color="#7C3AED" stop-opacity="0.92"/><stop offset="0.17" stop-color="#7C3AED" stop-opacity="0.812"/><stop offset="0.33" stop-color="#7C3AED" stop-opacity="0.558"/><stop offset="0.5" stop-color="#7C3AED" stop-opacity="0.299"/><stop offset="0.67" stop-color="#7C3AED" stop-opacity="0.125"/><stop offset="0.83" stop-color="#7C3AED" stop-opacity="0.04"/><stop offset="1" stop-color="#7C3AED" stop-opacity="0"/></radialGradient>
+<clipPath id="jhm-tile"><rect x="0" y="0" width="64" height="64" rx="16"/></clipPath>
+<linearGradient id="jhm-j" gradientUnits="userSpaceOnUse" x1="0" y1="17.92" x2="0" y2="46.72"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#DDF7FF"/></linearGradient>
+</defs>
+<g clip-path="url(#jhm-tile)">
+<rect width="64" height="64" fill="url(#jhm-tile-base)"/>
+<rect width="64" height="64" fill="url(#jhm-tile-bloom0)"/>
+<rect width="64" height="64" fill="url(#jhm-tile-bloom1)"/>
+<rect width="64" height="64" fill="url(#jhm-tile-bloom2)"/>
+<rect width="64" height="64" fill="url(#jhm-tile-bloom3)"/>
+<path d="M38.91 12.8H49.15V34.69A16.51 16.51 0 0 1 16.13 34.69A5.12 5.12 0 0 1 26.37 34.69A6.27 6.27 0 0 0 38.91 34.69Z" fill="url(#jhm-j)"/>
+</g>
+</svg>

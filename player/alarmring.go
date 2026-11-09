@@ -472,7 +472,8 @@ func alarmDrawHints(renderer *sdl.Renderer, config *Config, font *ttf.Font, y in
 	gap := scaleX(26, screenWidth)
 	total := int32(0)
 	for i, h := range alarmRingHints {
-		bw, _ := measureText(font, h[0])
+		// Measured as drawGlassHintBadge names it (Enter/Esc on a keyboard).
+		bw, _ := measureText(font, hintKeyFor(h[0], h[1]))
 		lw, _ := measureText(font, h[1])
 		total += bw + 2*pad + 8 + lw
 		if i > 0 {
@@ -481,25 +482,8 @@ func alarmDrawHints(renderer *sdl.Renderer, config *Config, font *ttf.Font, y in
 	}
 	x := screenWidth/2 - total/2
 	for _, h := range alarmRingHints {
-		bw, _ := measureText(font, h[0])
+		bw, _ := measureText(font, hintKeyFor(h[0], h[1]))
 		badge := sdl.Rect{X: x, Y: y, W: bw + 2*pad, H: badgeH}
 		x = drawGlassHintBadge(renderer, config, font, badge, h[0], h[1], x+badge.W+8, y+3) + gap
 	}
-}
-
-// alarmRingResetForTest clears the ring state between tests.
-func alarmRingResetForTest() {
-	alarmPlayGen.Add(1)
-	// Clear the fields, never the struct: assigning a zero alarmRingState would
-	// replace the mutex currently held and unlock a fresh, unlocked one.
-	alarmRing.mu.Lock()
-	alarmRing.active = false
-	alarmRing.entry = alarmEntry{}
-	alarmRing.started = time.Time{}
-	alarmRing.snoozes = 0
-	alarmRing.snoozeUntil = time.Time{}
-	alarmRing.focus = 0
-	alarmRing.mu.Unlock()
-	alarmRingSnoozeRect = sdl.Rect{}
-	alarmRingDismissRect = sdl.Rect{}
 }

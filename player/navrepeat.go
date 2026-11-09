@@ -76,11 +76,7 @@ const padRepeatWhich sdl.JoystickID = -2
 // loop's router handles it like a physical one. It is the same trick
 // handleStickDpad uses for the analog stick.
 func pushControllerButtonDown(button uint8) {
-	if _, err := sdl.PushEvent(&sdl.ControllerButtonEvent{
-		Type:   sdl.CONTROLLERBUTTONDOWN,
-		Which:  padRepeatWhich,
-		Button: button,
-	}); err != nil {
+	if err := pushControllerButton(sdl.CONTROLLERBUTTONDOWN, padRepeatWhich, button, sdl.PRESSED); err != nil {
 		LogScene("input").Warn("could not queue a repeat press", "button", button, "err", err)
 	}
 }
@@ -124,10 +120,4 @@ func padTickRepeat() bool {
 	}
 	padRepeatPush(button)
 	return true
-}
-
-// padResetNavRepeat forgets the held direction, so a repeat does not survive a
-// scene that swallowed input or an overlay that closed under a held pad.
-func padResetNavRepeat() {
-	padNavRepeat = navRepeatTracker{}
 }

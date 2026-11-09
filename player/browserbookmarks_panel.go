@@ -121,7 +121,7 @@ func browserBookmarkPanelRemove(config *Config) {
 		browserBookmarkPanel.armed = mark.URL
 		browserBookmarkPanel.armedAt = time.Now()
 		PlayNavSound()
-		ShowToast("Press X again to remove \u201c"+mark.Title+"\u201d", ToastKindWarning)
+		ShowToast(hintSentence("Press %s again to remove ", "X", "Remove")+"\u201c"+mark.Title+"\u201d", ToastKindWarning)
 		return
 	}
 	browserBookmarkPanel.armed = ""
@@ -225,13 +225,15 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 	rowH := smallH*2 + 12
 	armedNow := browserBookmarkPanel.armed != "" &&
 		time.Since(browserBookmarkPanel.armedAt) <= browserForgetConfirmWindow
-	subtitle := fmt.Sprintf("%d page(s) · A opens · X removes · B closes", len(marks))
+	// The controls in this frame's words (inputhints.go).
+	actions := hintSentence2("%s opens · %s removes", "A", "Open", "X", "Remove") + " · " + hintSentence("%s closes", "B", "Close")
+	subtitle := fmt.Sprintf("%d page(s) · ", len(marks)) + actions
 	if len(marks) == 1 {
-		subtitle = "1 page · A opens · X removes · B closes"
+		subtitle = "1 page · " + actions
 	}
 	subtitleInk := ColorTextSecondary()
 	if armedNow {
-		subtitle = "Press X again to remove this saved page"
+		subtitle = hintSentence("Press %s again to remove this saved page", "X", "Remove")
 		subtitleInk = WarningInk()
 	}
 	// The title band is the shared page header, built before the card is sized so

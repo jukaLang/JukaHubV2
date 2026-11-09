@@ -38,7 +38,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -170,10 +169,23 @@ func parseCoreIndex(text string) []coreIndexEntry {
 	byCore := make(map[string]coreIndexEntry)
 	for _, line := range strings.Split(text, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) != 3 {
+		// "<date> <crc32> <file>" is the format RetroArch's own core updater
+		// reads. A fourth column (a size) must not empty the whole index, and
+		// where it sits is not documented: the file is whichever of the last
+		// two ends in ".zip", and the other must be a plain number.
+		if len(fields) != 3 && len(fields) != 4 {
 			continue
 		}
 		date, crc, file := fields[0], strings.ToLower(fields[1]), fields[2]
+		if len(fields) == 4 {
+			size := fields[3]
+			if !strings.HasSuffix(file, ".zip") {
+				file, size = fields[3], fields[2]
+			}
+			if !strings.HasSuffix(file, ".zip") || size == "" || strings.Trim(size, "0123456789") != "" {
+				continue
+			}
+		}
 		// The date is not decoration: a fetched core is filed under
 		// <pool>/<core>/<date>/, so it has to be a real calendar date. The old
 		// length check accepted any ten characters, and "../../../.." is ten.
@@ -361,9 +373,13 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	}
 	// Provenance travels with the build: the pool is a folder a user can copy
 	// to another card, and the URL is the only record of where it came from.
+	// The buildbot states a CRC32 only; the SHA-256 of what was installed is
+	// recorded so a later check can tell this file from a changed one.
+	sum := sha256.Sum256(payload)
 	meta := map[string]string{
 		"source":     upd.URL,
 		"crc32":      upd.CRC32,
+		"sha256":     hex.EncodeToString(sum[:]),
 		"index_date": upd.Date,
 		"fetched_at": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -421,13 +437,13 @@ func pruneCorePool(poolRoot, core, newest string, keep int) []string {
 		}
 		path := filepath.Join(coreDir, date)
 		if err := os.RemoveAll(path); err != nil {
-			log.Printf("[emulators] could not prune pool build %q: %v", path, err)
+			logWarn("emulators", "could not prune pool build %q: %v", path, err)
 			continue
 		}
 		removed = append(removed, path)
 	}
 	if len(removed) > 0 {
-		log.Printf("[emulators] pruned %d old pool build(s) of %s (keeping %d)", len(removed), core, keep)
+		logDebug("emulators", "pruned %d old pool build(s) of %s (keeping %d)", len(removed), core, keep)
 	}
 	return removed
 }

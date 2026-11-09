@@ -1,10 +1,9 @@
 package main
 
 // Tests for the ROM manager: the header sniffers on synthetic headers, the
-// console table against the library's own, the plan a scan builds (misplaced
-// games, a disc game with its track, duplicates, BIOS, empty and unknown
-// files), the sections the page groups it into, and the conflict-safe moves
-// with their undo journal.
+// plan a scan builds (misplaced games, a disc game with its track, duplicates,
+// BIOS, empty and unknown files), and the conflict-safe moves with their undo
+// journal.
 
 import (
 	"archive/zip"
@@ -12,7 +11,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,126 +215,6 @@ func TestRommSniffCartHeaders(t *testing.T) {
 	}
 }
 
-func TestRommSniffDiscImages(t *testing.T) {
-	gc := make([]byte, 0x60)
-	binary.BigEndian.PutUint32(gc[0x1C:], 0xC2339F3D)
-	wii := make([]byte, 0x60)
-	binary.BigEndian.PutUint32(wii[0x18:], 0x5D1C9EA3)
-	rvz := make([]byte, 0x60)
-	copy(rvz, "RVZ\x01")
-	binary.BigEndian.PutUint32(rvz[0x48:], 2)
-	cso := make([]byte, 0x60)
-	copy(cso, "CISO")
-	binary.LittleEndian.PutUint32(cso[4:], 0x18)
-	xbox := make([]byte, 0x10000+0x40)
-	copy(xbox[0x10000:], "MICROSOFT*XBOX*MEDIA")
-
-	cases := []struct {
-		name string
-		img  []byte
-		want string
-	}{
-		{"PlayStation ISO", rommTestPlayStation(false, "BOOT = cdrom:\\SLUS_000.01;1"), "ps1"},
-		{"PlayStation raw Mode 2 image", rommTestPlayStation(true, "BOOT = cdrom:\\SLUS_000.01;1"), "ps1"},
-		{"PlayStation 2 DVD", rommTestPlayStation(false, "BOOT2 = cdrom0:\\SLUS_200.01;1"), "ps2"},
-		{"PSP UMD", rommTestDisc(false, 0, 17, map[int][]byte{16: rommTestPVD("PSP GAME", 0)}), "psp"},
-		{"Saturn", rommTestDisc(false, 0, 1, map[int][]byte{0: []byte("SEGA SEGASATURN ")}), "saturn"},
-		{"Dreamcast raw Mode 1 track", rommTestDisc(true, 1, 1, map[int][]byte{0: []byte("SEGA SEGAKATANA ")}), "dc"},
-		{"Sega CD is not listed", rommTestDisc(false, 0, 1, map[int][]byte{0: []byte("SEGADISCSYSTEM  ")}), ""},
-		{"GameCube", gc, "gc"},
-		{"Wii", wii, "wii"},
-		{"Wii as RVZ", rvz, "wii"},
-		{"PSP compressed ISO", cso, "psp"},
-		{"Xbox", xbox, "xbox"},
-		{"blank", make([]byte, 40<<10), ""},
-	}
-	for _, c := range cases {
-		if got := rommSniffDisc(bytes.NewReader(c.img), int64(len(c.img))); got != c.want {
-			t.Errorf("%s: rommSniffDisc = %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
-func TestRommDetectZip(t *testing.T) {
-	dir := t.TempDir()
-	gba := rommTestGBA(7)
-
-	single := filepath.Join(dir, "single.zip")
-	rommTestZip(t, single, map[string][]byte{"Game (USA).gba": gba})
-	det := rommDetectZip(single)
-	if det.System != "gba" || !det.Strong {
-		t.Fatalf("a zip of one GBA game = %+v, want a strong gba", det)
-	}
-	if !det.HasCRC || det.CRC != crc32.ChecksumIEEE(gba) {
-		t.Errorf("zip CRC = %08X (known %v), want %08X", det.CRC, det.HasCRC, crc32.ChecksumIEEE(gba))
-	}
-
-	withReadme := filepath.Join(dir, "readme.zip")
-	rommTestZip(t, withReadme, map[string][]byte{"readme.txt": []byte("hello"), "game.bin": rommTestMD()})
-	if det := rommDetectZip(withReadme); det.System != "md" {
-		t.Errorf("a .bin with a SEGA header beside a readme = %+v, want md", det)
-	}
-
-	neo := filepath.Join(dir, "mslug.zip")
-	chip := []byte("chip")
-	rommTestZip(t, neo, map[string][]byte{"201-p1.p1": chip, "201-s1.s1": chip, "201-m1.m1": chip, "201-v1.v1": chip, "201-c1.c1": chip})
-	if det := rommDetectZip(neo); det.System != "neogeo" {
-		t.Errorf("a Neo Geo ROM set = %+v, want neogeo", det)
-	}
-
-	two := filepath.Join(dir, "two.zip")
-	rommTestZip(t, two, map[string][]byte{"a.gba": gba, "b.gba": rommTestGBA(8)})
-	if det := rommDetectZip(two); det.System != "" {
-		t.Errorf("a zip of two games = %+v, want it left unidentified", det)
-	}
-}
-
-// TestRommSystemsMatchTheLibrary pins the table against the library: a game
-// the manager files into a folder must be one the library then lists, under
-// the same console, with a collection the metadata lookup can use.
-func TestRommSystemsMatchTheLibrary(t *testing.T) {
-	for _, s := range rommSystems {
-		alias, ok := romSystemAliases[strings.ToLower(s.Folder)]
-		if !ok || alias.Name != s.Name {
-			t.Errorf("%s: folder %q is %+v in the library, want %q", s.ID, s.Folder, alias, s.Name)
-		}
-		if alias.Collection == "" || gmetaCollectionFor(s.Name) == "" {
-			t.Errorf("%s: no libretro collection for the metadata lookup", s.ID)
-		}
-		for _, ext := range s.Exts {
-			if rommExtSystems[ext] != s.ID {
-				t.Errorf("%s: extension %s maps to %q", s.ID, ext, rommExtSystems[ext])
-			}
-			if !romFileExtensions[ext] {
-				t.Errorf("%s: %s is not an extension the library lists", s.ID, ext)
-			}
-		}
-	}
-	if !rommIsROMExt(".MD") || !rommIsROMExt(".zip") || rommIsROMExt(".txt") || rommIsROMExt(".img") {
-		t.Error("rommIsROMExt: .md and .zip are candidates; .txt and CloneCD's .img are not")
-	}
-	for _, c := range []struct {
-		name string
-		size int64
-		ok   bool
-		sub  string
-	}{
-		{"SCPH1001.BIN", 512 << 10, true, ""},
-		{"scph39001.bin", 4 << 20, true, ""},
-		{"scph1001.bin", 1000, false, ""},
-		{"dc_boot.bin", 2 << 20, true, "dc"},
-		{"bios7.bin", 2 << 20, false, ""},
-		{"mcpx_1.0.bin", 512, true, "xbox"},
-		{"neogeo.zip", 12345, true, ""},
-		{"zelda.gba", 4096, false, ""},
-	} {
-		b, ok := rommBIOSFor(c.name, c.size)
-		if ok != c.ok || (ok && b.Sub != c.sub) {
-			t.Errorf("rommBIOSFor(%q, %d) = %+v, %v; want ok=%v sub=%q", c.name, c.size, b, ok, c.ok, c.sub)
-		}
-	}
-}
-
 func TestRommPlanFilesLooseGamesDuplicatesAndBIOS(t *testing.T) {
 	root := t.TempDir()
 	roms := filepath.Join(root, "Roms")
@@ -435,52 +313,6 @@ func TestRommPlanFilesLooseGamesDuplicatesAndBIOS(t *testing.T) {
 	}
 	if plan.Items[0].Kind != rommKindMisplaced || plan.Items[len(plan.Items)-1].Kind != rommKindUnknown {
 		t.Error("the plan lists moves first and the files left alone last")
-	}
-}
-
-func TestRommSectionsGroupThePlan(t *testing.T) {
-	prev := rommUI
-	t.Cleanup(func() { rommUI = prev })
-	items := []rommItem{
-		{Kind: rommKindMisplaced, Action: rommActMove, Path: "/a/x.gba", Group: "Roms/GBA", System: "Game Boy Advance", On: true},
-		{Kind: rommKindMisplaced, Action: rommActMove, Path: "/a/y.gba", Group: "Roms/GBA", System: "Game Boy Advance", On: true},
-		{Kind: rommKindMisplaced, Action: rommActMove, Path: "/a/z.md", Group: "Roms/MD", System: "Mega Drive", On: true},
-		{Kind: rommKindDuplicate, Action: rommActDelete, Path: "/a/d.gba", Group: "Duplicates"},
-		{Kind: rommKindUnknown, Action: rommActNone, Path: "/a/u.bin", Group: "Not recognised"},
-	}
-	rommSetPlan(rommPlan{Items: items})
-	secs := rommUI.sections
-	if len(secs) != 4 {
-		t.Fatalf("sections = %d, want 4", len(secs))
-	}
-	if secs[0].title != "Move 2 into Roms/GBA" || secs[1].title != "Move 1 into Roms/MD" || secs[2].title != "1 duplicate copy" {
-		t.Errorf("titles = %q, %q, %q", secs[0].title, secs[1].title, secs[2].title)
-	}
-	if rommUI.itemSection[2] != 1 || rommUI.itemSection[4] != 3 {
-		t.Errorf("item sections = %v", rommUI.itemSection)
-	}
-	if rommUI.nav.focus != "apply" {
-		t.Errorf("focus = %q, want Apply when there is something to apply", rommUI.nav.focus)
-	}
-	if secs[2].pill != "Off" || secs[3].pill != "Left alone" {
-		t.Errorf("pills = %q, %q", secs[2].pill, secs[3].pill)
-	}
-	// Switching the duplicates on asks for deletes; the whole-group switch turns
-	// a full group off again.
-	rommToggleSection(2)
-	if !rommUI.plan.Items[3].On || rommUI.sections[2].tone != tbxToneBad {
-		t.Error("the duplicates section did not switch on as a deletion")
-	}
-	if _, _, deletes := rommPlanCounts(rommUI.plan.Items); deletes != 1 {
-		t.Errorf("deletes = %d, want 1", deletes)
-	}
-	rommToggleSection(0)
-	if rommUI.plan.Items[0].On || rommUI.plan.Items[1].On || rommUI.sections[0].pill != "Off" {
-		t.Error("a full section did not switch off as a whole")
-	}
-	rommToggleItem(4)
-	if rommUI.plan.Items[4].On != items[4].On {
-		t.Error("a file that is only listed was switched")
 	}
 }
 

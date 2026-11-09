@@ -225,14 +225,6 @@ func beginUILayer(renderer *sdl.Renderer) *sdl.Texture {
 	return nil
 }
 
-// compositeUILayer draws one panel through an offscreen layer so the whole
-// panel — text, shapes and all — fades as a single layer and slides by offsetY.
-// With full opacity and no offset it bypasses the layer entirely, which keeps
-// the settled state free of compositing cost.
-func compositeUILayer(renderer *sdl.Renderer, alpha float64, offsetY int32, draw func()) {
-	compositeUILayerIn(renderer, alpha, offsetY, sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}, draw)
-}
-
 // compositeUILayerIn is compositeUILayer restricted to the panel's own area.
 // Only that rectangle is blended back, so a 380px-wide panel costs a fraction
 // of a full-screen composite. The area is grown a little to keep soft edges

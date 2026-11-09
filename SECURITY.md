@@ -279,10 +279,44 @@ When configuring Discord:
 - GitHub API calls set a descriptive `User-Agent`, the `Accept` header for the intended API version, and respect `429`/`Retry-After` rate limiting.
 - Updates and package archives are checksum-verified against signed metadata before use (see Patch, below).
 
+### FTP server
+
+**Tools → Network tools → FTP server** is for a quick copy at home. It is
+opt-in, plaintext, and narrowed to what a copy needs (`ftp_server.go`):
+
+- **Authentication** — the account `juka` with a 16-character password from
+  `crypto/rand`, new on every start, shown on the device only and never
+  published as a custom variable or logged; compared through a salted
+  HMAC-SHA256 digest in constant time. There is no anonymous login. A wrong
+  password waits two seconds for its answer, the third closes the connection,
+  and ten from one address within ten minutes lock that address out for ten
+  minutes. A connection that has not signed in is dropped a minute after it
+  connected, however many commands it sends; lockouts are cleared when the
+  server starts again with a new password.
+- **What it shares** — `/` is a read-only list of the card's user folders
+  (`Roms`, `BIOS`, `Saves`, `States`, `Screenshots`, `Imgs`, media folders,
+  `Downloads`) plus JukaHub's downloads and `PhoneDrop` (uploads from the
+  phone companion); on a computer, the `shared` folder next to the app.
+  `Apps` (JukaHub and its data), `Emus`, `RetroArch`, `PortMaster` and
+  `System` hold programs the device runs and are never shared, and inside the
+  shares `Roms/Ports` (PortMaster scripts the Ports panel runs) and the
+  folders of game profiles are read-only over FTP — change them over SFTP.
+  Each share is opened as an `os.Root`, so `..`, absolute paths and symlinks
+  cannot leave it; top-level folders that are symlinks are skipped.
+- **Data connections** — passive only (no `PORT`, so no FTP bounce), and a
+  data connection is accepted only from the control connection's address.
+  Stopping the server also closes transfers in flight and passive ports still
+  waiting for a connection.
+- **Plaintext** — the password and files cross the network unencrypted; the
+  panel says to use SFTP on a network the user does not trust.
+
 ### SSH/SFTP server
 
-The Tools panel can start an SSH server that exposes the file system over
-SFTP. It is opt-in and stops when the app closes. Its security model:
+The Tools panel can start an SSH server that exposes files over SFTP. It is
+opt-in and stops when the app closes. It shares the SD card on the handheld
+and the home folder on a computer; the whole Linux file system only behind the
+**Share whole system…** switch on its panel (two presses, this run only) or
+`ssh_full_root` / `JUKAHUB_SSH_FULL_ROOT=1`. Its security model:
 
 - **Authentication** — one account, `juka`, with a 16-character password
   generated from `crypto/rand` on every start and shown only on the device. It
@@ -304,10 +338,94 @@ SFTP. It is opt-in and stops when the app closes. Its security model:
   be verified and a changed host key noticed.
 - **Least privilege** — the server runs as the JukaHub process user, not root.
   Set `JUKAHUB_SSH_READONLY=1` (or `ssh_readonly` in the config) to refuse all
-  writes, and `JUKAHUB_SSH_ROOT` to expose only one folder instead of `/`.
+  writes, and `JUKAHUB_SSH_ROOT` to expose one folder of your choice.
 
 As with FTP, the server is meant for a trusted home network. A leaked password
 is valid until the server is restarted; restart it from Tools to rotate.
+
+Both servers switch themselves off (`fileserver_guard.go`) after 15 minutes
+without a file operation — keepalives (FTP `NOOP`, `PWD`, `TYPE`, `SYST`,
+`FEAT` and the like) do not count — and when the device's address or Wi-Fi
+network changes or it loses its address (seen on two checks 15 seconds apart),
+with a toast that says why; if that check itself fails, both servers stop. The Network tools
+page lists every connected client, since when, and what it is transferring.
+
+### Live Builder (the web builder's receiver)
+
+The web builder pushes designs to a running JukaHub over HTTP on port 8422
+(`livebuilder.go`). It is off on the handheld until **Settings → Network →
+Live Builder** turns it on, and it switches itself off after 30 minutes
+without a paired request. On a PC it is on by default but listens on that
+computer only (`127.0.0.1` and `[::1]`), where the builder usually runs;
+`JUKAHUB_LIVE_LAN=1` or the `liveBuilderLAN` setting opens it to the network.
+`JUKAHUB_LIVE_BUILDER=0` or `1` overrides the switch. Its security model:
+
+- **Pairing code** — six digits from `crypto/rand` (never the code it
+  replaces, and never the one early builds published in the repository: a
+  code file holding it is replaced at start), stored in
+  `.livebuilder-code` (mode `0600`, git-ignored, written without a `.bak`)
+  and shown on the device's own screen only: the Settings row and the toast
+  when the switch is turned on (the automatic start-up toast says where to
+  find it, not what it is). It is never on the status page, in a log, in the
+  notification history or in a diagnostics bundle. It travels in the
+  `X-Live-Builder-Code` header only; a `?code=` in the URL is ignored, and
+  the builder never sends a saved code to an address that a link supplied.
+  **New pairing code** in Settings replaces it at once.
+- **Guessing** — five wrong codes within a minute lock the sender out for
+  five minutes (HTTP 429 with `Retry-After`; the code is not even compared),
+  counted per IPv4 address and per IPv6 /64. Twenty wrong codes from anyone
+  pause pairing for a minute and replace the code, so a guess that was
+  getting close starts again. The check, the comparison and the count happen
+  under one lock, and a request without a code is not counted.
+- **Browsers** — only the builder's origins get CORS answers:
+  `https://generate.jukalang.com`, a copy served from `localhost`,
+  `127.0.0.1` or `[::1]` on any port, and the origins listed in
+  `JUKAHUB_LIVE_ORIGINS`; any other `Origin` is refused with 403. A request
+  must name the device by an IP address, `localhost`, a `.local` name or its
+  own host name, which defeats DNS rebinding. The status page cannot be
+  framed and carries nothing private.
+- **What a push may not hide** — a design with two keys that differ only in
+  letter case (`trigger` and `Trigger`) is refused with 422: the player reads
+  either spelling, so the checks could see one design and the device another.
+  Every check runs on the exact bytes that will be saved.
+- **Designs that do more** — a push is held, not applied, when it can do
+  something the device's design cannot: run a program (`external_app`), a
+  Terminal or emulator command (`terminal_run`, `emulator_run`), a yt-dlp
+  command line (`yt_search`) or a plugin action; start the FTP or SFTP server;
+  bind a text field, switch or text browser to a protected setting, switch
+  one from a button or set one outright (commands, tokens, keys, passwords
+  and passphrases, credentials, private keys, auth and bearer settings,
+  cookies, the chat account, `ssh_full_root`, `tools_path`, autostart, the
+  receiver itself, every name the settings export treats as a secret, and
+  the settings that say where the smart-home tokens and passwords go:
+  `ha_url`, `ha_insecure`, `mqtt_host`, `mqtt_port`, `pihole_url`,
+  `router_host` — names are compared the way the player compares them, and
+  any name with a non-ASCII letter counts as protected); change where tools
+  run, where the file browser starts or the chat channel; or load anything
+  from a network share (`\\host\share`, `//host`, `\??\UNC\host\share`,
+  `file:`), which on Windows would send the user's login hash to that host.
+  It waits in `jukaconfig.json.pending` while the device asks its owner. The
+  card says first to apply it only if the owner made it, then shows up to two
+  reasons that fit whole; **Everything it can do** is always offered and
+  pages through every reason whole, with control and direction-changing
+  characters made visible. **Keep the current design** is focused and
+  presses within a second of the card appearing are ignored. Only **Apply
+  this design** writes it, after backing up the current one, and only if the
+  file still has the SHA-256 that was checked. While a design waits, every
+  other push gets 409; only the same design sent again, byte for byte as it
+  was sent, hears that it still waits. What the device's design can already
+  do is not asked about again, so re-pushing an approved design goes
+  straight through. A waiting design is deleted the next time the receiver
+  starts.
+- **Secrets stay on the device** — a pull replaces the values of protected
+  settings, anything stored encrypted (`ENC:`) and the chat token with
+  `<kept on device>`; a push puts the device's own value back wherever that
+  placeholder returns (and drops it where the device has none), so pulling and
+  pushing never reveals, wipes or changes a secret. What the answer to a push
+  says — the reasons a held design waits for, the validator's advice — is
+  worked out from the design as it was sent, placeholders and all, against
+  the device's design as a pull shows it, so it never quotes a value kept on
+  the device; only the owner's card on the device shows the real values.
 
 ## Patch / signed repositories
 
@@ -400,7 +518,7 @@ accepted.
 | SD card contents | **No** | It is removable and editable from a PC: config, plugins, ROMs and saves are all data the device did not author |
 | Plugins and snippets | **No**, by design | They are programs the user asked to run; they execute with the app's own privileges and a cleared environment |
 | Browser content | **No** | Only `http`/`https` survive link handling; cookies are stored per host; a page's script never gets the secret store |
-| LAN file servers (FTP/SFTP) | Trusted-network only | Plain FTP has no encryption; SFTP has a generated password and a host-key fingerprint; both are off until started and shown in the posture view |
+| LAN file servers (FTP/SFTP) | Trusted-network only | Both need a password generated per start; plain FTP has no encryption and shares only the card's user folders; SFTP has a host-key fingerprint and shares the card; both are off until started, stop after 15 idle minutes or a network change, and are shown in the posture view |
 | Emulator processes | Trusted to run | The app waits for them; it never reads their memory except through the explicit memory-scanner feature on the Linux target |
 
 Two consequences worth stating plainly: a config or a plugin read from someone
@@ -563,7 +681,8 @@ or accepted by design.
 **Guarded and tested (re-reported because the guard is a helper call)**
 
 - App launch: `isLaunchableAppPath` confines a row to the scanned app folders and
-  the extension allowlist; `apps_test.go` covers the refusals.
+  the extension allowlist (its refusals are untested since the November 2026
+  test cut; a table test is a listed follow-up in `player/MODERNIZATION.md`).
 - Plugin scripts: `resolveWithinRoot` confines the entry to the plugin folder.
 - Lyrics and subtitle sidecars (`lyrics.go`, `videosubs.go`) and the photo
   gallery (`ambient.go`) open files next to media the user already chose. The

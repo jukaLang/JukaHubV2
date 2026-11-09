@@ -3,7 +3,6 @@
 State: **documented, intentionally not implemented.** This page records how the
 self-updater is protected today, what [The Update Framework](https://theupdateframework.io/)
 (TUF) would add, when to reach for it, and the smallest slices if we do.
-The working roadmap row is item 38 in [ROADMAP.md](../ROADMAP.md).
 
 ## Where the updater stands today
 
@@ -17,10 +16,11 @@ The update pipeline (`player/autoupdate.go`, `player/patch_flow.go`,
 - **Transactional swap** — staged into a side directory, verified, swapped, then
   journalled; a journal that records an interrupted swap drives rollback on the
   next boot.
-- **Rollback under our control** — the newest backup set holds the previous
-  binary; the recovery chord (L+R+Start) or the boot guard (three consecutive
-  fast failed boots inside a 72 h update window) restores it
-  (`player/safeboot.go`).
+- **Rollback under our control** — Version history keeps the previous build
+  (`player/uhist.go`); the recovery card behind the chord (L+R+Start) offers it,
+  and the boot guard restores it by itself when a new build fails three starts
+  in a row within its first ten starts — counted in starts, not clock time
+  (`player/safeboot.go`, `player/bootguard.go`).
 - **Preflight checks** — signature, free space, write permissions before the
   swap starts.
 

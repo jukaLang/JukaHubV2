@@ -43,10 +43,6 @@ const (
 	menuTilesMinW = int32(188)
 	menuTilesMinH = int32(88)
 	menuTilesMaxH = int32(132)
-	// menuTileLabelSize is the pixel size of a tile's name: smaller than the
-	// theme's list font so two wrapped lines fit under the icon, the same trade
-	// the Apps launcher makes.
-	menuTileLabelSize = 20
 	// menuTitleSize is the page title's pixel size: a page header should read
 	// as a title, not as one more list row.
 	menuTitleSize    = 28

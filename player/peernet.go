@@ -40,7 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -137,7 +137,7 @@ func peerReconcile() {
 	}
 	if err := peerStartLocked(); err != nil {
 		peerSrv.lastErr = err.Error()
-		log.Printf("[peer] could not start: %v", err)
+		logWarn("peer", "could not start: %v", err)
 	}
 }
 
@@ -180,7 +180,7 @@ func peerStartLocked() error {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		// A failed handshake from a port scanner is not worth a log line.
-		ErrorLog: log.New(io.Discard, "", 0),
+		ErrorLog: slog.NewLogLogger(slog.DiscardHandler, slog.LevelError),
 	}
 	peerSrv.srv = srv
 	peerSrv.lastErr = ""
@@ -190,11 +190,11 @@ func peerStartLocked() error {
 	if err != nil {
 		// Discovery is best effort: a device that is not discoverable can still
 		// be reached at the address it last used.
-		log.Printf("[peer] discovery unavailable: %v", err)
+		logWarn("peer", "discovery unavailable: %v", err)
 		beacon = nil
 	}
 	peerSrv.beacon = beacon
-	log.Printf("[peer] listening on port %d", port)
+	logDebug("peer", "listening on port %d", port)
 	return nil
 }
 
@@ -210,7 +210,7 @@ func peerStopLocked() {
 		_ = srv.Shutdown(ctx)
 		cancel()
 		_ = srv.Close()
-		log.Printf("[peer] listener stopped")
+		logDebug("peer", "listener stopped")
 	}
 	peerPairAbortAll("Nearby devices was turned off")
 }

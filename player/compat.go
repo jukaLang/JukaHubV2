@@ -30,7 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,9 +63,9 @@ var (
 	compatCoreDirsOverride     []string
 	compatRetroArchRoots       []string
 	compatCorePoolDirOverride  string
-	compatIDPattern            = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	compatCorePattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	compatOptionKeyPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	compatIDPattern            = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`) })
+	compatCorePattern          = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`) })
+	compatOptionKeyPattern     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`) })
 	compatSystemCanonicalNames = map[string]string{
 		"nes":                           "NES",
 		"famicom":                       "NES",
@@ -208,9 +208,7 @@ func compatDir() string {
 	return filepath.Join(dir, "performance")
 }
 
-func compatImportDir() string { return filepath.Join(compatDir(), "import") }
-func compatLocalDir() string  { return filepath.Join(compatDir(), "local") }
-func compatBoostDir() string  { return filepath.Join(compatDir(), "boost") }
+func compatBoostDir() string { return filepath.Join(compatDir(), "boost") }
 func compatCorePoolDir() string {
 	if compatCorePoolDirOverride != "" {
 		return compatCorePoolDirOverride
@@ -222,7 +220,7 @@ func compatCorePoolDir() string {
 // It is best effort: a read-only SD card must not stop JukaHub from booting.
 func InitCompatibility() {
 	if err := ensureCompatLayout(); err != nil {
-		log.Printf("[compat] setup failed: %v", err)
+		logWarn("compat", "setup failed: %v", err)
 	}
 }
 
@@ -274,7 +272,7 @@ func compatEntries() []compatEntry {
 		compatCatalogCache.issues = issues
 		compatCatalogCache.built = true
 		for _, issue := range issues {
-			log.Printf("[compat] %s", issue)
+			logDebug("compat", "%s", issue)
 		}
 	}
 	out := make([]compatEntry, len(compatCatalogCache.entries))
@@ -462,7 +460,7 @@ func validateCompatEntry(entry *compatEntry) error {
 	}
 	entry.SchemaVersion = compatSchemaVersion
 	entry.ID = strings.ToLower(strings.TrimSpace(entry.ID))
-	if !compatIDPattern.MatchString(entry.ID) {
+	if !compatIDPattern().MatchString(entry.ID) {
 		return fmt.Errorf("invalid id %q (use lowercase letters, digits, dot, dash or underscore)", entry.ID)
 	}
 	entry.Title = strings.TrimSpace(entry.Title)
@@ -505,7 +503,7 @@ func validateCompatEntry(entry *compatEntry) error {
 	}
 	entry.Aliases = aliases
 	entry.Core = normalizeCoreName(entry.Core)
-	if entry.Core != "" && !compatCorePattern.MatchString(entry.Core) {
+	if entry.Core != "" && !compatCorePattern().MatchString(entry.Core) {
 		return fmt.Errorf("invalid core %q", entry.Core)
 	}
 	entry.CoreVersion = strings.TrimSpace(entry.CoreVersion)
@@ -533,7 +531,7 @@ func validateCompatEntry(entry *compatEntry) error {
 		return fmt.Errorf("more than %d RetroArch options", compatMaxOptions)
 	}
 	for key, value := range entry.Settings.RetroArch {
-		if !compatOptionKeyPattern.MatchString(key) {
+		if !compatOptionKeyPattern().MatchString(key) {
 			return fmt.Errorf("invalid RetroArch option key %q", key)
 		}
 		if len(value) > 96 {
@@ -1183,7 +1181,7 @@ func activateCoreBuild(build coreBuild) (string, string, error) {
 	if err != nil {
 		return "", backup, err
 	}
-	log.Printf("[compat] activated core %s %s from %s (backup %s)", build.Core, build.Version, source, backup)
+	logDebug("compat", "activated core %s %s from %s (backup %s)", build.Core, build.Version, source, backup)
 	return target, backup, nil
 }
 
@@ -1192,36 +1190,54 @@ func activateCoreBuild(build coreBuild) (string, string, error) {
 // binary — pool activation and the Emulators page's rollback both use it — so
 // the staging rule and the backup naming cannot drift apart.
 //
-// The write goes source → .jukahub.tmp → rename, so a card pulled mid-copy
-// leaves the old core in place instead of a half-written one. The previous
-// binary is copied before anything is removed, and a second replacement in the
-// same second gets its own name rather than overwriting the first build.
+// The write goes source → .jukahub.tmp (fsynced) → one rename over the
+// target, so a card pulled mid-copy leaves the old core in place instead of a
+// half-written, empty or missing one: the rename replaces the file in one step
+// on both platforms (os.Rename is MoveFileEx with REPLACE_EXISTING on
+// Windows), so there is no moment without a core. The previous binary is
+// copied, fsynced, before anything is replaced (a copy that failed is deleted,
+// never offered as a rollback), and a second replacement in the same second
+// gets its own name rather than overwriting the first build.
 func installCoreFile(source, target string) (string, error) {
 	backup := ""
+	oldCRC := ""
 	if regularFile(target) {
 		backup = nextCoreBackupPath(target)
-		if err := copyCompatFile(target, backup); err != nil {
+		sum, err := copyCompatFile(target, backup)
+		if err != nil {
+			_ = os.Remove(backup)
 			return "", fmt.Errorf("backup current core: %w", err)
 		}
+		oldCRC = fmt.Sprintf("%08x", sum)
 	}
 	tmp := target + ".jukahub.tmp"
-	if err := copyCompatFile(source, tmp); err != nil {
+	newSum, err := copyCompatFile(source, tmp)
+	if err != nil {
 		_ = os.Remove(tmp)
 		return backup, fmt.Errorf("stage core build: %w", err)
 	}
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = os.Remove(tmp)
-		return backup, fmt.Errorf("replace core binary: %w", err)
-	}
 	if err := os.Rename(tmp, target); err != nil {
-		_ = os.Remove(tmp)
-		return backup, fmt.Errorf("activate core build: %w", err)
+		// Windows does not rename over a read-only file (the old Remove
+		// cleared the bit itself): clear it and try once more.
+		if info, serr := os.Lstat(target); serr == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o200 == 0 &&
+			os.Chmod(target, info.Mode().Perm()|0o200) == nil {
+			err = os.Rename(tmp, target)
+		}
+		if err != nil {
+			_ = os.Remove(tmp)
+			return backup, fmt.Errorf("activate core build: %w", err)
+		}
 	}
+	syncDirectory(filepath.Dir(target))
 	// The replacement succeeded, so the older backups beside this core are now
 	// one deeper in the pile. Keeping the newest five is what bounds the card:
 	// the newest is the rollback the Emulators page offers, and the rest are
 	// history nobody can pick between.
 	pruneCoreBackups(target, maxCoreBackups)
+	// Which build was active when lets a game's page flag save states made
+	// with the build this one replaced (corebuilds_history.go). The checksums
+	// come from the bytes just copied, so nothing reads the card again.
+	coreHistoryNoteReplaced(source, target, oldCRC, fmt.Sprintf("%08x", newSum))
 	return backup, nil
 }
 
@@ -1242,19 +1258,22 @@ func nextCoreBackupPath(target string) string {
 	return base + "-" + strconv.Itoa(time.Now().Nanosecond()) + ".bak"
 }
 
-func copyCompatFile(src, dst string) error {
+// copyCompatFile copies src to dst with src's permissions, fsynced so a
+// rename that follows can never land ahead of the data, and returns the
+// CRC32 of what it copied (the buildbot index's identity for a core build).
+func copyCompatFile(src, dst string) (uint32, error) {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	info, err := os.Stat(src)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
-		return err
+	if err := writeFileSynced(dst, data, info.Mode().Perm()); err != nil {
+		return 0, err
 	}
-	return nil
+	return crc32.ChecksumIEEE(data), nil
 }
 
 // retroArchConfigDirs returns existing RetroArch config folders. A missing
@@ -1437,7 +1456,7 @@ func applyBoost(assessment gameAssessment) (boostResult, error) {
 		return result, err
 	}
 	result.Recipe = boostRecipePath(recipe.Key)
-	log.Printf("[compat] boost applied for %s (%s): %d override(s)", recipe.Title, recipe.Key, len(result.Targets))
+	logDebug("compat", "boost applied for %s (%s): %d override(s)", recipe.Title, recipe.Key, len(result.Targets))
 	return result, nil
 }
 
@@ -1516,7 +1535,7 @@ func revertBoost(assessment gameAssessment) ([]string, error) {
 				backup := target + compatOptBackupSuffix
 				if _, err := os.Stat(backup); err == nil {
 					if err := os.Rename(backup, target); err != nil {
-						log.Printf("[compat] could not restore %s: %v", target, err)
+						logWarn("compat", "could not restore %s: %v", target, err)
 					}
 				}
 			}
@@ -1711,16 +1730,6 @@ func compatibilitySnapshot() (games []gameAssessment, roots []string, issues []s
 	out := make([]gameAssessment, len(compatScan.games))
 	copy(out, compatScan.games)
 	return out, append([]string{}, compatScan.roots...), append([]string{}, compatScan.issues...), compatScan.scanning, compatScan.built
-}
-
-func compatibilityFind(key string) (gameAssessment, bool) {
-	games, _, _, _, _ := compatibilitySnapshot()
-	for _, game := range games {
-		if game.Key == key {
-			return game, true
-		}
-	}
-	return gameAssessment{}, false
 }
 
 // setCompatibilityBoostState updates the cached row immediately after apply

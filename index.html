@@ -17,7 +17,12 @@
     <meta name="twitter:title" content="JukaHub Generator: drag-and-drop GUI builder for handhelds">
     <meta name="twitter:description" content="Design your handheld interface visually, push it to the device over Wi-Fi, and share it as a link.">
     <meta name="twitter:image" content="https://generate.jukalang.com/background.jpg">
-    <link data-rh="true" rel="icon" href="/favicon.png">
+    <!-- The logo comes from branding/mklogo.py: the SVG mark for browsers that
+         take one, a 48 px PNG for those that do not, and an opaque 180 px
+         tile for a home-screen shortcut. -->
+    <link data-rh="true" rel="icon" href="/favicon.png" sizes="48x48">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <!-- Inter is the only font and it ships in fonts/; the icons are drawn as
          inline SVG by builder-icons.js. Nothing is fetched from a third party,
          so the builder also works on a handheld's own hotspot. -->
@@ -36,7 +41,7 @@
         <!-- Top Application Bar -->
         <header class="app-bar">
             <div class="app-bar-brand">
-                <img src="favicon.png" alt="" class="app-bar-logo" aria-hidden="true">
+                <img src="favicon.svg" alt="" class="app-bar-logo" aria-hidden="true">
                 <div class="app-bar-titles">
                     <h1>JukaHub <span>Generator</span></h1>
                     <p class="app-bar-subtitle" id="projectTitle">TrimUI Smart Pro · 1280 × 720</p>
@@ -852,13 +857,13 @@
                 <div class="device-field">
                     <label for="deviceUrl">Device address</label>
                     <input id="deviceUrl" class="share-url" type="text" inputmode="url" spellcheck="false" autocomplete="off" placeholder="192.168.1.50:8422" aria-describedby="deviceUrlHelp">
-                    <p class="field-help" id="deviceUrlHelp">Shown on the handheld when JukaHub starts, or on <span id="deviceUrlHint">its Live Builder page</span>. Default port 8422.</p>
+                    <p class="field-help" id="deviceUrlHelp">Turn on Live Builder on the handheld, in Settings under Network; the address is shown there. Default port 8422.</p>
                 </div>
 
                 <div class="device-field">
                     <label for="deviceCode">Pairing code</label>
                     <input id="deviceCode" class="share-url device-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" spellcheck="false" placeholder="6-digit code" aria-describedby="deviceCodeHelp">
-                    <p class="field-help" id="deviceCodeHelp">Six digits shown once on the device. Stored only in this browser.</p>
+                    <p class="field-help" id="deviceCodeHelp">Six digits shown under Live Builder on the device, and nowhere else. Stored only in this browser.</p>
                 </div>
 
                 <label class="device-auto">

@@ -747,6 +747,3 @@ func widgetToggleSideEffect(config *Config, variable string, on bool) bool {
 	}
 	return false
 }
-
-// batterySaverState is used by diagnostics and tests.
-func batterySaverState() bool { return batterySaverActive }

@@ -72,6 +72,65 @@ static void notLoadable(char *why, size_t cap, const char *name) {
 
 #define RESOLVE(lib, field, sym) (*(void **)&g->field = rt_dlsym((lib), (sym)))
 
+static int resolveEgl(ApakGpu *g, char *why, size_t cap) {
+    RESOLVE(g->egl, eglGetError, "eglGetError");
+    RESOLVE(g->egl, eglGetDisplay, "eglGetDisplay");
+    RESOLVE(g->egl, eglGetPlatformDisplayEXT, "eglGetPlatformDisplayEXT");
+    RESOLVE(g->egl, eglInitialize, "eglInitialize");
+    RESOLVE(g->egl, eglTerminate, "eglTerminate");
+    RESOLVE(g->egl, eglQueryString, "eglQueryString");
+    RESOLVE(g->egl, eglChooseConfig, "eglChooseConfig");
+    RESOLVE(g->egl, eglGetConfigAttrib, "eglGetConfigAttrib");
+    RESOLVE(g->egl, eglCreateWindowSurface, "eglCreateWindowSurface");
+    RESOLVE(g->egl, eglDestroySurface, "eglDestroySurface");
+    RESOLVE(g->egl, eglSwapBuffers, "eglSwapBuffers");
+    RESOLVE(g->egl, eglSwapBuffersWithDamageKHR, "eglSwapBuffersWithDamageKHR");
+    RESOLVE(g->egl, eglSwapBuffersWithDamageEXT, "eglSwapBuffersWithDamageEXT");
+    RESOLVE(g->egl, eglGetProcAddress, "eglGetProcAddress");
+    RESOLVE(g->egl, eglGetCurrentDisplay, "eglGetCurrentDisplay");
+    RESOLVE(g->egl, eglGetCurrentSurface, "eglGetCurrentSurface");
+    RESOLVE(g->egl, eglQuerySurface, "eglQuerySurface");
+    RESOLVE(g->egl, eglCreateContext, "eglCreateContext");
+    RESOLVE(g->egl, eglDestroyContext, "eglDestroyContext");
+    RESOLVE(g->egl, eglMakeCurrent, "eglMakeCurrent");
+    RESOLVE(g->egl, eglGetCurrentContext, "eglGetCurrentContext");
+    RESOLVE(g->egl, eglReleaseThread, "eglReleaseThread");
+    if (!g->eglGetPlatformDisplayEXT && g->eglGetProcAddress)
+        *(void **)&g->eglGetPlatformDisplayEXT = g->eglGetProcAddress("eglGetPlatformDisplayEXT");
+    if (g->eglGetError && g->eglGetDisplay && g->eglInitialize && g->eglTerminate && g->eglQueryString &&
+        g->eglChooseConfig && g->eglGetConfigAttrib && g->eglCreateWindowSurface && g->eglDestroySurface &&
+        g->eglSwapBuffers)
+        return APAK_GPU_EGL;
+    if (why && !why[0]) snprintf(why, cap, "%s lacks core EGL entry points (bionic build? wrong glibc?)", g->eglName);
+    return 0;
+}
+
+int apak_gpuLoadEglFrom(ApakGpu *g, const char *const *paths, char *why, size_t cap) {
+    const char *override = getenv("ANDROIDPAK_EGL_LIB");
+    size_t i;
+    if (why && cap) why[0] = '\0';
+    if (g->egl) return resolveEgl(g, why, cap);
+    if (override && *override) {
+        /* final, as in openFirst: the firmware's library is not the one asked for */
+        snprintf(g->eglName, sizeof g->eglName, "%s", override);
+        g->egl = rt_dlopen(override, 0);
+        if (!g->egl) {
+            if (why && cap) notLoadable(why, cap, override);
+            return 0;
+        }
+        return resolveEgl(g, why, cap);
+    }
+    for (i = 0; !g->egl && paths[i]; i++) {
+        g->egl = rt_dlopen(paths[i], 0);
+        if (g->egl) snprintf(g->eglName, sizeof g->eglName, "%s", paths[i]);
+    }
+    if (!g->egl) {
+        if (why && cap) snprintf(why, cap, "no libEGL at the firmware's paths");
+        return 0;
+    }
+    return resolveEgl(g, why, cap);
+}
+
 int apak_gpuLoad(ApakGpu *g, char *why, size_t cap) {
     static const char *const eglNames[] = {
         "libEGL.so.1", "libEGL.so", "/usr/lib/libEGL.so.1", "/usr/lib/aarch64-linux-gnu/libEGL.so.1",
@@ -89,28 +148,7 @@ int apak_gpuLoad(ApakGpu *g, char *why, size_t cap) {
 
     if (!g->egl) g->egl = openFirst("ANDROIDPAK_EGL_LIB", eglNames, g->eglName, sizeof g->eglName);
     if (g->egl) {
-        RESOLVE(g->egl, eglGetError, "eglGetError");
-        RESOLVE(g->egl, eglGetDisplay, "eglGetDisplay");
-        RESOLVE(g->egl, eglGetPlatformDisplayEXT, "eglGetPlatformDisplayEXT");
-        RESOLVE(g->egl, eglInitialize, "eglInitialize");
-        RESOLVE(g->egl, eglTerminate, "eglTerminate");
-        RESOLVE(g->egl, eglQueryString, "eglQueryString");
-        RESOLVE(g->egl, eglChooseConfig, "eglChooseConfig");
-        RESOLVE(g->egl, eglGetConfigAttrib, "eglGetConfigAttrib");
-        RESOLVE(g->egl, eglCreateWindowSurface, "eglCreateWindowSurface");
-        RESOLVE(g->egl, eglDestroySurface, "eglDestroySurface");
-        RESOLVE(g->egl, eglSwapBuffers, "eglSwapBuffers");
-        RESOLVE(g->egl, eglSwapBuffersWithDamageKHR, "eglSwapBuffersWithDamageKHR");
-        RESOLVE(g->egl, eglSwapBuffersWithDamageEXT, "eglSwapBuffersWithDamageEXT");
-        RESOLVE(g->egl, eglGetProcAddress, "eglGetProcAddress");
-        if (!g->eglGetPlatformDisplayEXT && g->eglGetProcAddress)
-            *(void **)&g->eglGetPlatformDisplayEXT = g->eglGetProcAddress("eglGetPlatformDisplayEXT");
-        if (g->eglGetError && g->eglGetDisplay && g->eglInitialize && g->eglTerminate && g->eglQueryString &&
-            g->eglChooseConfig && g->eglGetConfigAttrib && g->eglCreateWindowSurface && g->eglDestroySurface &&
-            g->eglSwapBuffers)
-            layers |= APAK_GPU_EGL;
-        else if (why && !why[0])
-            snprintf(why, cap, "%s lacks core EGL entry points (bionic build? wrong glibc?)", g->eglName);
+        layers |= resolveEgl(g, why, cap);
     } else if (why && !why[0]) {
         notLoadable(why, cap, g->eglName);
     }

@@ -288,7 +288,7 @@ func gameLibraryStatus() string {
 		for _, system := range currentGameSystems() {
 			games += len(system.Games)
 		}
-		return "Showing " + tag + " · " + itoa(games) + " game(s) — B shows every game"
+		return "Showing " + tag + " · " + pluralizeCount(games, "game", "games") + " — B shows every game"
 	}
 	if query := gameLib.query; query != "" {
 		games, systems := 0, 0
@@ -299,16 +299,16 @@ func gameLibraryStatus() string {
 		if games == 0 {
 			return "No match for \"" + query + "\" — press S to change it"
 		}
-		return itoa(games) + " match(es) for \"" + query + "\" in " + itoa(systems) + " console(s)"
+		return pluralizeCount(games, "match", "matches") + " for \"" + query + "\" in " + pluralizeCount(systems, "console", "consoles")
 	}
 	if gameLib.lib.Total == 0 {
 		if len(gameLib.recents) > 0 {
-			return itoa(len(gameLib.recents)) + " recent game(s) — no ROM folders found, press Y to rescan"
+			return pluralizeCount(len(gameLib.recents), "recent game", "recent games") + " — no game folders found, Y rescans"
 		}
-		return "No games found — copy ROMs into Roms/<system>/ and press Y"
+		return "No games yet — copy them to the card's Roms folder, then press Y"
 	}
-	status := itoa(gameLib.lib.Total) + " game(s) in " + itoa(len(gameLib.lib.Systems)) + " console(s)"
-	status += " · " + itoa(gameLib.lib.WithArt) + " cover(s) (" + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "%)"
+	status := pluralizeCount(gameLib.lib.Total, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "console", "consoles")
+	status += " · " + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "% with covers"
 	// The clip count, from the same census the Settings row reads — the figure
 	// that matters most on this screen, because this is where the previews
 	// play. It stays off the line until the first scan lands, the way the row
@@ -318,7 +318,7 @@ func gameLibraryStatus() string {
 		if withClip == 0 {
 			status += " · no clips"
 		} else {
-			status += " · " + itoa(withClip) + " clip(s)"
+			status += " · " + pluralizeCount(withClip, "clip", "clips")
 		}
 	}
 	if len(gameLib.recents) > 0 {
@@ -379,34 +379,6 @@ func gameLibraryMove(dx, dy int) {
 	PlayNavSound()
 }
 
-// launchSelectedGame resolves the emulator for the highlighted game and starts
-// it. Returns false when there is nothing to launch.
-func launchSelectedGame() bool {
-	game, ok := selectedLibraryGame()
-	if !ok {
-		return false
-	}
-	if gameLib.focus == 0 {
-		// Pressing A on a console opens its list instead of guessing a game.
-		gameLib.focus = 1
-		PlayNavSound()
-		return true
-	}
-	launcher := resolveGameLauncher(game.System)
-	if launcher == "" {
-		ShowToast("No emulator found for "+game.System+" — add one on the Emulators screen", ToastKindWarning)
-		return true
-	}
-	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
-		return true
-	}
-	gameLib.recents = recentGames()
-	PlaySuccessSound()
-	ShowToast("Playing "+game.Title, ToastKindSuccess)
-	return true
-}
-
 // fetchMissingLibraryArtwork starts a background download for every scanned
 // game without a local cover, or stops one that is already running. The scan is
 // repeated here instead of reusing the panel's snapshot because a card can be
@@ -436,7 +408,7 @@ func fetchMissingLibraryArtwork() {
 		ShowToast("An artwork fetch is already running.", ToastKindInfo)
 		return
 	}
-	ShowToast("Fetching "+itoa(len(missing))+" missing cover(s) — L1 / F stops and resumes", ToastKindInfo)
+	ShowToast("Fetching "+pluralizeCount(len(missing), "missing cover", "missing covers")+" — L1 / F stops and resumes", ToastKindInfo)
 }
 
 // recountLibraryArtwork refreshes the HasArt flags and the completeness counts
@@ -1048,7 +1020,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	gameLib.gameHits = gameLib.gameHits[:0]
 	if !hasSystem || len(system.Games) == 0 {
 		message := "No games yet"
-		detail := "Copy ROMs into Roms/<system>/ on the card, then press Y to rescan."
+		detail := "Put games in the Roms folder on the card, one folder per console (Roms/GBA, Roms/PS), then press Y to rescan."
 		if strings.HasPrefix(system.Name, continueSystemName) {
 			detail = "Launch a game and it appears here for one-press resume."
 		}
@@ -1059,8 +1031,10 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			message = "No game is tagged " + tag
 			detail = "Open a game (A) and choose Tags · B shows every game again."
 		}
-		renderText(renderer, config, medium, message, ColorTextSecondary(), gameX, bodyY+8)
-		renderText(renderer, config, font, detail, ColorTextTertiary(), gameX, bodyY+8+medH+8)
+		// The shared empty state (glyph, title, wrapped explanation), centred
+		// in the games column like every other list's.
+		UIEmptyState(renderer, config, sdl.Rect{X: gameX, Y: bodyY, W: gameW, H: bodyH - 8},
+			"@gamepad", message, detail)
 	} else {
 		for i := 0; i < visibleGames; i++ {
 			idx := gameLib.scroll + i
@@ -1076,7 +1050,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, bg)
 			if selected && gameLib.focus == 1 {
-				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
+				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, glassFocusRingWidth, focusColor)
 			}
 			game := system.Games[idx]
 			renderText(renderer, config, medium, ellipsize(medium, game.Title, rect.W-24),

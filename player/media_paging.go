@@ -38,9 +38,9 @@ var mediaPaging = struct {
 }{byVar: map[string]*mediaResultsPage{}}
 
 var (
-	ytSearchSpec     = regexp.MustCompile(`ytsearch(\d+):([^"]*)`)
-	playlistStartArg = regexp.MustCompile(`--playlist-start\s+\d+`)
-	playlistEndArg   = regexp.MustCompile(`--playlist-end\s+(\d+)`)
+	ytSearchSpec     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`ytsearch(\d+):([^"]*)`) })
+	playlistStartArg = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`--playlist-start\s+\d+`) })
+	playlistEndArg   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`--playlist-end\s+(\d+)`) })
 )
 
 // rememberMediaPaging records the command and page size of a fresh search, so
@@ -49,7 +49,7 @@ var (
 func rememberMediaPaging(resultVar, command string) {
 	mediaPaging.mu.Lock()
 	defer mediaPaging.mu.Unlock()
-	match := ytSearchSpec.FindStringSubmatch(command)
+	match := ytSearchSpec().FindStringSubmatch(command)
 	if match == nil {
 		delete(mediaPaging.byVar, resultVar)
 		return
@@ -116,17 +116,17 @@ func buildMediaPageCommand(command string, pageSize, page int) string {
 	}
 	start := page*pageSize + 1
 	end := (page + 1) * pageSize
-	out := ytSearchSpec.ReplaceAllStringFunc(command, func(match string) string {
-		sub := ytSearchSpec.FindStringSubmatch(match)
+	out := ytSearchSpec().ReplaceAllStringFunc(command, func(match string) string {
+		sub := ytSearchSpec().FindStringSubmatch(match)
 		return fmt.Sprintf("ytsearch%d:%s", end, sub[2])
 	})
-	if playlistStartArg.MatchString(out) {
-		out = playlistStartArg.ReplaceAllString(out, fmt.Sprintf("--playlist-start %d", start))
+	if playlistStartArg().MatchString(out) {
+		out = playlistStartArg().ReplaceAllString(out, fmt.Sprintf("--playlist-start %d", start))
 	} else {
 		out += fmt.Sprintf(" --playlist-start %d", start)
 	}
-	if playlistEndArg.MatchString(out) {
-		out = playlistEndArg.ReplaceAllString(out, fmt.Sprintf("--playlist-end %d", end))
+	if playlistEndArg().MatchString(out) {
+		out = playlistEndArg().ReplaceAllString(out, fmt.Sprintf("--playlist-end %d", end))
 	} else {
 		out += fmt.Sprintf(" --playlist-end %d", end)
 	}

@@ -10,7 +10,6 @@ package main
 // sched_windows.go).
 
 import (
-	"bytes"
 	"encoding/csv"
 	"encoding/xml"
 	"errors"
@@ -1480,16 +1479,4 @@ func schedSortItems(items []schedItem) {
 		}
 		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
-}
-
-// schedTrimBytes keeps a tool's output to the first max bytes (a scheduler
-// with thousands of tasks must not hold megabytes of text).
-func schedTrimBytes(b []byte, max int) []byte {
-	if len(b) <= max {
-		return b
-	}
-	if i := bytes.LastIndexByte(b[:max], '\n'); i > 0 {
-		return b[:i]
-	}
-	return b[:max]
 }

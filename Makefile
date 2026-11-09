@@ -19,6 +19,10 @@
 
 GO     ?= go
 NODE   ?= node
+# Extra flags for `make test`. Empty by default so Go's test cache answers a
+# re-run of unchanged code instantly; `make test GOTESTFLAGS=-count=1` forces a
+# fresh run (CI does its own uncached run).
+GOTESTFLAGS ?=
 PLAYER := player
 
 ifeq ($(OS),Windows_NT)
@@ -69,8 +73,8 @@ build: ## Build the player without launching it
 run: ## Launch the last build (no rebuild)
 	$(RUNBIN)
 
-test: ## Run the player unit and render tests
-	cd $(PLAYER) && $(GO) test ./... -count=1
+test: ## Run the player's lean unit-test core (no render tests)
+	cd $(PLAYER) && $(GO) test ./... $(GOTESTFLAGS)
 
 test-web: ## Run the browser-free builder tests (jsdom)
 	@command -v $(NODE) >/dev/null 2>&1 || { echo "node is required for the web tests: https://nodejs.org"; exit 1; }

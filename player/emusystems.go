@@ -7,10 +7,12 @@ package main
 //   - emuCoreSystems maps a libretro core to the system it runs and the family
 //     the Core builds page filters by ("mupen64plus_next" is Nintendo 64, a
 //     Nintendo core), so a list of file names reads as a list of consoles.
-//   - emuDesktopSystems are the consoles only a desktop-class machine runs:
-//     the Windows emulator that plays each one, and the honest reason the
-//     handheld cannot, so a Roms/PS2 folder on the Smart Pro says "Not
-//     supported" instead of offering an install that could never work.
+//   - emuDesktopSystems are the consoles a handheld of this class cannot
+//     emulate: the Windows emulator that plays each one, and the honest reason
+//     the handheld cannot, so a Roms/PS2 folder on the Smart Pro says "Not
+//     supported" instead of offering an install that could never work. The
+//     original Xbox is the exception on the Smart Pro, which plays it through
+//     the experimental hakuX port (hakux.go); its tile is built there.
 //   - emuGlyphFor turns a catalog entry into one of the shared emu-* icons by
 //     asking ICONS' iconEmuGlyphFor, with the core's system as a second guess.
 
@@ -152,12 +154,17 @@ type emuDesktopSystem struct {
 // emuDesktopSystems are the consoles the Smart Pro's A133P (four Cortex-A53
 // cores and a PowerVR GE8300) cannot emulate at any speed worth calling
 // playable. Each reason names what it does need instead of pretending.
+//
+// The Xbox row stays for its folders and its Windows emulator (Roms/XBOX →
+// xemu), but the handheld never shows its reason: the Xbox tile there comes
+// from hakuxXboxEntry, which offers the hakuX port on the Smart Pro and says
+// per model why another handheld has none.
 var emuDesktopSystems = []emuDesktopSystem{
 	{
 		System:   "Xbox",
 		Folders:  []string{"xbox", "xbox1", "ogxbox", "microsoft xbox", "microsoft - xbox"},
 		Emulator: "xemu",
-		Reason:   "xemu needs a desktop-class CPU and GPU — the Smart Pro's A133P can't run it. Games like Halo 2 run on PCs and high-end Android phones.",
+		Reason:   "Original Xbox games run through xemu on a PC, or the experimental hakuX port on the TrimUI Smart Pro.",
 	},
 	{
 		System:   "PlayStation 2",
@@ -227,7 +234,8 @@ func emuDesktopSystemFor(name string) (emuDesktopSystem, bool) {
 	return emuDesktopSystem{}, false
 }
 
-// emuXboxEntryName is the Xbox tile the handheld always lists.
+// emuXboxEntryName is the Xbox tile the handheld always lists (hakuxpage.go),
+// and the Games Library's name for the console.
 const emuXboxEntryName = "Xbox"
 
 // emuGlyphFor picks the shared vector icon for a catalog entry: ICONS'

@@ -1040,14 +1040,6 @@ func writeSwapScriptFor(goos, scriptPath, exePath string, files []stagedInstallF
 	return os.WriteFile(scriptPath, []byte(b.String()), 0o700)
 }
 
-// releaseInfoFromState rebuilds a releaseInfo from persisted patch state, used
-// when the staged tree has gone missing.
-func releaseInfoFromState() releaseInfo {
-	patchStateMu.Lock()
-	defer patchStateMu.Unlock()
-	return releaseInfo{Tag: patchState.LastUpdateVer, Date: patchState.LastUpdatePublishedAt}
-}
-
 // confirmAppliedUpdate clears a staged marker once the running installation is
 // the staged release (the swap helper copied release-info.json last). It runs
 // at startup, after interrupted journals have been rolled back.

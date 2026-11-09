@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,7 +221,7 @@ func saverLockLogOnce(key, format string, args ...interface{}) {
 		return
 	}
 	ssImage.logged = key
-	log.Printf(format, args...)
+	logWarn("screenlock", format, args...)
 }
 
 // screenlockTexture returns the configured picture as a screen-sized texture.

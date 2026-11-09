@@ -64,7 +64,7 @@ resolution** drops stutter on bad nights; battery saver throttles itself below
 ## Minute 6-10 — own it
 
 Everything from the first five minutes is one app on a card you can edit from
-your PC: **Tools → FTP** opens the SD card over Wi-Fi, **Remote Cast** puts the
+your PC: **Tools → FTP** opens the card's games, saves and media over Wi-Fi, **Remote Cast** puts the
 device's screen in your browser, and **Tools → Community & support** opens a
 prefilled, redacted bug report if anything misbehaves.
 

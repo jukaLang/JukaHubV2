@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -248,7 +247,7 @@ func feListDirectory(config *Config) {
 	if err != nil {
 		// The folder stays on screen with its ".." row and a sentence saying
 		// why it is empty, rather than a raw error toast over an empty panel.
-		log.Printf("File Explorer: cannot read %q: %v", path, err)
+		logWarn("features", "File Explorer: cannot read %q: %v", path, err)
 	}
 	feSortEntries(list, feSortModeOf(config))
 	config.Variables.Custom["fe_entries"] = list
@@ -384,9 +383,9 @@ func feEnterFocused(config *Config) {
 			return
 		}
 		if err := unzipFile(entry.Path); err != nil {
-			log.Printf("Unzip error: %v", err)
+			logWarn("features", "Unzip error: %v", err)
 		} else {
-			log.Printf("Unzipped %s", entry.Path)
+			logDebug("features", "Unzipped %s", entry.Path)
 			feListDirectory(config)
 		}
 		return
@@ -485,7 +484,7 @@ func feLaunchScript(config *Config, path string) error {
 	noteGameChildStarted(cmd)
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			log.Printf("File Explorer: script %q failed: %v", path, err)
+			logWarn("features", "File Explorer: script %q failed: %v", path, err)
 		}
 		screenChildReaped(cmd)
 	}()
@@ -705,7 +704,7 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		glyph := "@media"
 		if isFileExplorer {
 			glyph = "@files"
-			title, body = "This folder is empty", "Press B to go back up."
+			title, body = "This folder is empty", hintSentence("Press %s to go back up.", "B", "Back")
 			if filesNav.listErr != nil {
 				title, body = filesListErrorText(filesNav.listErr)
 			}
@@ -822,9 +821,9 @@ func renderTVEmptyState(renderer *sdl.Renderer, config *Config, font *ttf.Font, 
 	msg := "No channels found. Put an .m3u playlist in the tv/ folder, then press Load Playlist."
 	switch {
 	case tvQuery() != "":
-		msg = "No channels match \"" + tvQuery() + "\". Press X to change the search."
+		msg = "No channels match \"" + tvQuery() + "\". " + hintSentence("Press %s to change the search.", "X", "Search")
 	case tvCategory() == tvFavoritesCategory:
-		msg = "No favorites yet. Highlight a channel and press Y to star it."
+		msg = hintSentence("No favorites yet. Highlight a channel and press %s to star it.", "Y", "Favorite")
 	}
 	wrapped := wrapMeasured([]rune(msg), elemW-56, func(s string) int32 {
 		w, _, _ := font.SizeUTF8(s)
@@ -875,16 +874,16 @@ func settingsFieldColor(config *Config, element Element, editing bool) (sdl.Colo
 func applyColorVar(config *Config, name, value string) {
 	c, ok := parseColorValue(value)
 	if !ok {
-		log.Printf("applyColorVar: invalid colour %q", value)
+		logWarn("features", "applyColorVar: invalid colour %q", value)
 		return
 	}
 	if !setThemeColorValue(config, name, c) {
-		log.Printf("applyColorVar: unknown colour variable %q", name)
+		logWarn("features", "applyColorVar: unknown colour variable %q", name)
 		return
 	}
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = map[string]interface{}{}
 	}
 	config.Variables.Custom[name] = rgbHex(c)
-	log.Printf("[DEBUG] Set %s = %d,%d,%d", name, c.R, c.G, c.B)
+	logDebug("features", "Set %s = %d,%d,%d", name, c.R, c.G, c.B)
 }

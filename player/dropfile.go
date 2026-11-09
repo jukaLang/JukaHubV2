@@ -13,7 +13,6 @@ package main
 // the existing open paths rather than reimplementing playback.
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +40,7 @@ func handleFileDrop(config *Config, path string) {
 	// path that does not exist rather than failing deep inside a decoder.
 	info, err := os.Stat(path)
 	if err != nil {
-		log.Printf("[drop] refused %q: %v", filepath.Base(path), err)
+		logWarn("drop", "refused %q: %v", filepath.Base(path), err)
 		showToast("Could not open the dropped file", ToastError())
 		return
 	}
@@ -57,10 +56,10 @@ func handleFileDrop(config *Config, path string) {
 	case hasMediaExtension(path):
 		// Video and audio play through the embedded player, the same path the
 		// Files scene uses for a media file.
-		log.Printf("[drop] playing %s", filepath.Base(path))
+		logDebug("drop", "playing %s", filepath.Base(path))
 		playStream(config, path)
 	case imageExtensions[ext]:
-		log.Printf("[drop] showing %s", filepath.Base(path))
+		logDebug("drop", "showing %s", filepath.Base(path))
 		openImageAtPath(config, path)
 	default:
 		// Anything else is not something the shell can open. Say so instead of

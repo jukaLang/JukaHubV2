@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -82,8 +81,8 @@ func ytClient() *http.Client {
 }
 
 var (
-	ytVisitorPattern = regexp.MustCompile(`"visitorData":"([^"]+)"`)
-	ytAPIKeyPattern  = regexp.MustCompile(`"INNERTUBE_API_KEY":"([^"]+)"`)
+	ytVisitorPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`"visitorData":"([^"]+)"`) })
+	ytAPIKeyPattern  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`"INNERTUBE_API_KEY":"([^"]+)"`) })
 )
 
 // ytEnsureSession bootstraps the visitor data, cookies and API key the player
@@ -128,11 +127,11 @@ func ytEnsureSession(ctx context.Context) error {
 	}
 
 	visitor := ""
-	if m := ytVisitorPattern.FindSubmatch(body); len(m) == 2 {
+	if m := ytVisitorPattern().FindSubmatch(body); len(m) == 2 {
 		visitor = string(m[1])
 	}
 	key := youtubeWebAPIKey // shared with the native search path
-	if m := ytAPIKeyPattern.FindSubmatch(body); len(m) == 2 {
+	if m := ytAPIKeyPattern().FindSubmatch(body); len(m) == 2 {
 		key = string(m[1])
 	}
 	if visitor == "" {
@@ -314,18 +313,20 @@ func logNativeStreamFailure(videoID string, err error) {
 	if len(reason) > 160 {
 		reason = reason[:160] + "…"
 	}
-	log.Printf("[STREAM] native client stood down for %s: %s", videoID, reason)
+	logDebug("stream", "native client stood down for %s: %s", videoID, reason)
 }
 
 // ytVideoIDPatterns cover the shapes a video link arrives in: a watch page, a
 // short link, a Shorts page and an embed.
-var ytVideoIDPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)[?&]v=([A-Za-z0-9_-]{11})`),
-	regexp.MustCompile(`(?i)youtu\.be/([A-Za-z0-9_-]{11})`),
-	regexp.MustCompile(`(?i)/shorts/([A-Za-z0-9_-]{11})`),
-	regexp.MustCompile(`(?i)/embed/([A-Za-z0-9_-]{11})`),
-	regexp.MustCompile(`(?i)/live/([A-Za-z0-9_-]{11})`),
-}
+var ytVideoIDPatterns = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`(?i)[?&]v=([A-Za-z0-9_-]{11})`),
+		regexp.MustCompile(`(?i)youtu\.be/([A-Za-z0-9_-]{11})`),
+		regexp.MustCompile(`(?i)/shorts/([A-Za-z0-9_-]{11})`),
+		regexp.MustCompile(`(?i)/embed/([A-Za-z0-9_-]{11})`),
+		regexp.MustCompile(`(?i)/live/([A-Za-z0-9_-]{11})`),
+	}
+})
 
 // youtubeVideoID extracts the 11-character id from a YouTube URL, or "" for
 // anything else (a direct media link, a local file, another site).
@@ -338,7 +339,7 @@ func youtubeVideoID(raw string) string {
 	if !strings.Contains(lower, "youtube.com") && !strings.Contains(lower, "youtu.be") {
 		return ""
 	}
-	for _, pattern := range ytVideoIDPatterns {
+	for _, pattern := range ytVideoIDPatterns() {
 		if m := pattern.FindStringSubmatch(text); len(m) == 2 {
 			return m[1]
 		}
@@ -354,14 +355,4 @@ func ytNativeAllowed() bool {
 	ytSessionMu.Lock()
 	defer ytSessionMu.Unlock()
 	return !time.Now().Before(ytBlockedUntil)
-}
-
-// resetYTNativeState clears the session and cooldowns. Tests use it; nothing in
-// the app does.
-func resetYTNativeState() {
-	ytSessionMu.Lock()
-	ytVisitor, ytAPIKey, ytSessionFetched = "", "", time.Time{}
-	ytBlockedUntil = time.Time{}
-	ytHTTPClient = nil
-	ytSessionMu.Unlock()
 }

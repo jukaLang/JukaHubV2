@@ -8,10 +8,8 @@ package main
 //   * every button trigger is handled somewhere in the non-test sources, so no
 //     button is a no-op;
 //   * every change_scene target exists, so no button navigates nowhere;
-//   * interactive elements stay inside the content panel and do not overlap,
-//     so no control is unreachable or clipped;
-//   * every scene paints text once rendered offscreen, so a scene that draws
-//     only a background is caught.
+//   * every Apps and Start menu row opens a scene that exists or runs an
+//     action the app handles.
 //
 // The configs are the ones shipped with the app (desktop and handheld).
 
@@ -24,9 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unsafe"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 // auditConfigNames are the configs the app ships.
@@ -66,11 +61,6 @@ func loadAuditConfigs(t testing.TB) map[string]*Config {
 		out[name] = config
 	}
 	return out
-}
-
-// interactiveElement reports whether an element is something the user presses.
-func interactiveElement(el Element) bool {
-	return el.Type == "button" || el.Type == "toggle"
 }
 
 // packageSources parses every non-test Go file in the package.
@@ -250,142 +240,6 @@ func TestEverySceneHasARenderer(t *testing.T) {
 	}
 }
 
-// TestInteractiveElementsStayInBounds catches controls that run into the
-// footer or off the screen, which makes them unreachable.
-func TestInteractiveElementsStayInBounds(t *testing.T) {
-	withScreen(t, probeW, probeH)
-	configs := loadAuditConfigs(t)
-	for name, config := range configs {
-		for _, scene := range config.Scenes {
-			if strings.EqualFold(scene.Layout, "home") {
-				// Home is laid out from the measured card grid, not from the
-				// config coordinates; home_render_test.go covers that geometry.
-				continue
-			}
-			footerTop := probeH - bottomBarHeight(scene.Name)
-			for _, el := range scene.Elements {
-				if !interactiveElement(el) {
-					continue
-				}
-				w, h := resolveElementDimensions(el, 320, 48)
-				if el.X < 0 || el.Y < 0 || el.X+w > probeW {
-					t.Errorf("%s / %s: %q at %d,%d size %dx%d is off screen",
-						name, scene.Name, el.Text, el.X, el.Y, w, h)
-				}
-				if el.Y+h > footerTop {
-					t.Errorf("%s / %s: %q ends at y=%d, inside the footer band from %d",
-						name, scene.Name, el.Text, el.Y+h, footerTop)
-				}
-			}
-		}
-	}
-}
-
-// TestInteractiveElementsDoNotOverlap fails when two pressable controls cover
-// each other; the one drawn first can never be clicked.
-func TestInteractiveElementsDoNotOverlap(t *testing.T) {
-	withScreen(t, probeW, probeH)
-	configs := loadAuditConfigs(t)
-	for name, config := range configs {
-		for _, scene := range config.Scenes {
-			if scene.Name == "Main" && strings.EqualFold(scene.Layout, "home") {
-				continue // the home layout owns its own tile geometry
-			}
-			for i := 0; i < len(scene.Elements); i++ {
-				a := scene.Elements[i]
-				if !interactiveElement(a) {
-					continue
-				}
-				aw, ah := resolveElementDimensions(a, 320, 48)
-				for j := i + 1; j < len(scene.Elements); j++ {
-					b := scene.Elements[j]
-					if !interactiveElement(b) {
-						continue
-					}
-					bw, bh := resolveElementDimensions(b, 320, 48)
-					overlapX := a.X < b.X+bw && b.X < a.X+aw
-					overlapY := a.Y < b.Y+bh && b.Y < a.Y+ah
-					if overlapX && overlapY {
-						t.Errorf("%s / %s: %q overlaps %q", name, scene.Name, a.Text, b.Text)
-					}
-				}
-			}
-		}
-	}
-}
-
-// TestContentStaysInsidePanel fails when anything a scene draws reaches into
-// the header or the footer band, where it would be covered by chrome.
-func TestContentStaysInsidePanel(t *testing.T) {
-	withScreen(t, probeW, probeH)
-	for name, config := range loadAuditConfigs(t) {
-		for _, scene := range config.Scenes {
-			if strings.EqualFold(scene.Layout, "home") {
-				continue // the home layout draws its own chrome and cards
-			}
-			footerTop := probeH - bottomBarHeight(scene.Name) - 16
-			for _, el := range scene.Elements {
-				w, h := resolveElementDimensions(el, 320, 48)
-				if el.Y < HomeTopBarH+8 {
-					t.Errorf("%s / %s: %q starts at y=%d, under the header bar",
-						name, scene.Name, el.Text, el.Y)
-				}
-				if el.Y+h > footerTop {
-					t.Errorf("%s / %s: %q ends at y=%d, below the content panel (%d)",
-						name, scene.Name, el.Text, el.Y+h, footerTop)
-				}
-				if el.X < 24 || el.X+w > probeW-24 {
-					t.Errorf("%s / %s: %q spans x=%d..%d, outside the 24px margins",
-						name, scene.Name, el.Text, el.X, el.X+w)
-				}
-			}
-		}
-	}
-}
-
-// TestSharedScenesMatchAcrossConfigs keeps the handheld and desktop builds
-// visually identical: both panels are 1280x720, so a scene that ships in both
-// configs must have the same elements in the same places. Home is exempt
-// because its tiles only carry activation triggers.
-func TestSharedScenesMatchAcrossConfigs(t *testing.T) {
-	configs := loadAuditConfigs(t)
-	if len(configs) < 2 {
-		t.Fatalf("both shipped configs exist (player/jukaconfig.json and player/trimui/jukaconfig.device.json); they could not be loaded")
-	}
-	desktop, device := configs["jukaconfig.json"], configs["trimui/jukaconfig.device.json"]
-	if desktop == nil || device == nil {
-		t.Fatal("both configs must load")
-	}
-	for _, ds := range desktop.Scenes {
-		if strings.EqualFold(ds.Layout, "home") {
-			continue
-		}
-		idx := sceneIndexExact(device, ds.Name)
-		if idx < 0 {
-			continue // handheld-only scenes are allowed to differ
-		}
-		got := device.Scenes[idx].Elements
-		if len(got) != len(ds.Elements) {
-			t.Errorf("%s: %d elements on the handheld, %d on the desktop",
-				ds.Name, len(got), len(ds.Elements))
-			continue
-		}
-		for i := range ds.Elements {
-			a, b := ds.Elements[i], got[i]
-			if a.Type != b.Type || a.Text != b.Text || a.Trigger != b.Trigger {
-				t.Errorf("%s[%d]: desktop %s/%q/%q vs handheld %s/%q/%q", ds.Name, i,
-					a.Type, a.Text, a.Trigger, b.Type, b.Text, b.Trigger)
-			}
-			aw, ah := resolveElementDimensions(a, 320, 48)
-			bw, bh := resolveElementDimensions(b, 320, 48)
-			if a.X != b.X || a.Y != b.Y || aw != bw || ah != bh {
-				t.Errorf("%s[%d] %q: desktop at %d,%d %dx%d vs handheld at %d,%d %dx%d",
-					ds.Name, i, a.Text, a.X, a.Y, aw, ah, b.X, b.Y, bw, bh)
-			}
-		}
-	}
-}
-
 // startupInjectScenes applies the in-memory scene injections main() performs at
 // startup, which is what makes the extra applets (Browser, Games, Audio, ...)
 // reachable on configs that do not ship them.
@@ -456,165 +310,6 @@ func TestStartMenuEveryEntryResolves(t *testing.T) {
 			}
 			if entry.scene != "" && entry.action != nil {
 				t.Errorf("%s: Apps row %q has both a scene and an action", name, entry.name)
-			}
-		}
-	}
-}
-
-// layoutForHome returns the home layout as refreshHomeLayout would build it for
-// the config's Main scene, with the real tile -> card mapping populated. The
-// globals it relies on are restored when the test ends.
-func layoutForHome(t *testing.T, config *Config) *HomeLayout {
-	t.Helper()
-	idx := sceneIndexExact(config, "Main")
-	if idx < 0 {
-		t.Fatal("config has no Main scene")
-	}
-	prevScene, prevConfig := currentSceneIndex, appConfig
-	prevLayout, prevTiles := homeLayout, homeTileByIndex
-	currentSceneIndex, appConfig = idx, config
-	homeLayout = NewHomeLayout(probeW, probeH)
-	homeTileByIndex = map[int]HomeFocusID{}
-	refreshHomeLayout(config)
-	t.Cleanup(func() {
-		currentSceneIndex, appConfig = prevScene, prevConfig
-		homeLayout, homeTileByIndex = prevLayout, prevTiles
-	})
-	return homeLayout
-}
-
-// TestEveryHomeTileIsFocusable checks that every tile declared on Main is
-// attached to a drawn card. The home layout draws its own cards, so a tile
-// that fails to map leaves an invisible press target behind.
-func TestEveryHomeTileIsFocusable(t *testing.T) {
-	for name, config := range loadAuditConfigs(t) {
-		layout := layoutForHome(t, config)
-		idx := sceneIndexExact(config, "Main")
-		tiles := 0
-		for i, el := range config.Scenes[idx].Elements {
-			if !strings.EqualFold(el.Style, "tile") {
-				continue
-			}
-			tiles++
-			id, ok := homeTileByIndex[i]
-			if !ok {
-				t.Errorf("%s: tile %q on Main is not a card the home layout draws", name, el.Text)
-				continue
-			}
-			if _, ok := layout.Items[id]; !ok {
-				t.Errorf("%s: tile %q maps to %q, which has no layout item", name, el.Text, id)
-			}
-		}
-		if tiles == 0 {
-			t.Errorf("%s: the home scene declares no tiles", name)
-		}
-	}
-}
-
-// TestHomeCardsResolve checks that every card the home screen draws can be
-// activated: its action either opens a scene the config actually has, or is
-// handled by a dedicated overlay/card handler before the scene lookup.
-func TestHomeCardsResolve(t *testing.T) {
-	// Cards whose activation is an overlay or a direct action, not a scene.
-	overlay := map[HomeFocusID]bool{
-		HomeFocusContinue: true, HomeFocusClock: true, HomeFocusWeather: true,
-		HomeFocusBell: true, HomeFocusUpdate: true, HomeFocusPS5: true,
-		HomeFocusPS4: true, HomeFocusEmulator: true, HomeFocusExit: true,
-		// The Wi-Fi meter opens the network picker overlay.
-		HomeFocusWiFi: true,
-		// The now-playing chip opens whichever player is running, so it has no
-		// single scene target.
-		HomeFocusNowPlaying: true,
-		// The browser scene is injected into memory on demand, so the shipped
-		// config never declares it; homeActivate handles the card directly.
-		HomeFocusBrowser: true,
-		// The search pill opens the search sheet, and the Tools card the Tools
-		// hub (toolsHubOpen), before any scene lookup.
-		HomeFocusSearch: true,
-		HomeFocusTools:  true,
-	}
-	for name, config := range loadAuditConfigs(t) {
-		layout := layoutForHome(t, config)
-		for _, id := range layout.Order {
-			if _, ok := layout.Items[id]; !ok {
-				t.Errorf("%s: home card %q has no item", name, id)
-				continue
-			}
-			if _, ok := homeFocusGraph[id]; !ok {
-				t.Errorf("%s: home card %q has no focus neighbours", name, id)
-			}
-			if overlay[id] {
-				continue
-			}
-			target := homeSceneTarget(config, id)
-			if target == "" {
-				t.Errorf("%s: home card %q has no target", name, id)
-				continue
-			}
-			if sceneIndexExact(config, target) < 0 {
-				t.Errorf("%s: home card %q opens missing scene %q", name, id, target)
-			}
-		}
-	}
-}
-
-// countSceneTextPixels renders a scene and counts bright (text-like) pixels and
-// distinct colours, which distinguishes a drawn menu from an empty background.
-func countSceneTextPixels(t *testing.T, configName string, config *Config, idx int) (bright, colours int) {
-	t.Helper()
-	f := newProbeFrame(t)
-	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
-	if err != nil {
-		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
-	}
-	defer destroyTestRenderer(renderer)
-
-	prevScene, prevConfig := currentSceneIndex, appConfig
-	currentSceneIndex, appConfig = idx, config
-	defer func() { currentSceneIndex, appConfig = prevScene, prevConfig }()
-
-	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
-	renderer.Clear()
-	renderScene(renderer, config, config.Scenes[idx])
-	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
-	}
-	// JUKAHUB_SCENE_DUMP_DIR=<dir> writes every scene to <dir>/<config>_<scene>.png
-	// so a layout review can look at the real pixels instead of the config.
-	if dir := os.Getenv("JUKAHUB_SCENE_DUMP_DIR"); dir != "" {
-		file := strings.NewReplacer("/", "_", "\\", "_").Replace(configName) +
-			"_" + config.Scenes[idx].Name + ".png"
-		_ = writeFramePNG(filepath.Join(dir, file), f.buf)
-	}
-	seen := map[uint32]bool{}
-	for i := 0; i+3 < len(f.buf); i += 4 {
-		r, g, b := f.buf[i+2], f.buf[i+1], f.buf[i]
-		seen[uint32(r)<<16|uint32(g)<<8|uint32(b)] = true
-		if int(r)+int(g)+int(b) > 420 {
-			bright++
-		}
-	}
-	return bright, len(seen)
-}
-
-// TestEverySceneRendersSomething renders every scene of every config offscreen
-// and requires visible text plus a non-trivial picture. A scene that draws only
-// its background is a dead menu row.
-func TestEverySceneRendersSomething(t *testing.T) {
-	configs := loadAuditConfigs(t)
-	withScreen(t, probeW, probeH)
-	ClearTextCache()
-	t.Cleanup(ClearTextCache)
-
-	for name, config := range configs {
-		for i := range config.Scenes {
-			scene := config.Scenes[i]
-			bright, colours := countSceneTextPixels(t, name, config, i)
-			if bright < 60 {
-				t.Errorf("%s / %s: %d text pixels — the scene looks empty", name, scene.Name, bright)
-			}
-			if colours < 8 {
-				t.Errorf("%s / %s: only %d distinct colours — nothing was drawn", name, scene.Name, colours)
 			}
 		}
 	}

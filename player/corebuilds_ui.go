@@ -588,19 +588,29 @@ func coreBuildsAutoUpdateAvailable() bool {
 	return !IsWindows()
 }
 
-// coreBuildsToggleAutoUpdate switches the automatic pass on or off.
+// coreBuildsToggleAutoUpdate steps the Core updates setting: Notify me →
+// Install automatically → Off → Notify me.
 func coreBuildsToggleAutoUpdate() {
 	if !coreBuildsAutoUpdateAvailable() {
 		return
 	}
-	on := !emuAutoUpdateOn.Load()
-	emuSetAutoUpdate(appConfig, on)
-	PlayActivateSound()
-	if on {
-		ShowToast("Automatic core updates on · daily, when online and idle or charging", ToastKindSuccess)
-		return
+	next := coreUpdateNotify
+	switch emuCoreUpdateModeNow() {
+	case coreUpdateNotify:
+		next = coreUpdateInstall
+	case coreUpdateInstall:
+		next = coreUpdateOff
 	}
-	ShowToast("Automatic core updates off · update from this page or the Emulators page", ToastKindInfo)
+	emuSetCoreUpdateMode(appConfig, next)
+	PlayActivateSound()
+	switch next {
+	case coreUpdateInstall:
+		ShowToast("Core updates: install automatically · daily, when idle or charging · the old build is kept", ToastKindSuccess)
+	case coreUpdateOff:
+		ShowToast("Core updates off · update from this page or the Emulators page", ToastKindInfo)
+	default:
+		ShowToast("Core updates: notify me · a daily check says which cores have a different build", ToastKindInfo)
+	}
 }
 
 // coreBuildsBack is B: the Kept list returns to the Installed list it was
@@ -941,8 +951,11 @@ func coreBuildsHeaderStatus(now time.Time) (string, sdl.Color) {
 	if !coreBuildsAutoUpdateAvailable() {
 		return "Updates on demand · " + when, ColorTextSecondary()
 	}
-	if emuAutoUpdateOn.Load() {
+	switch emuCoreUpdateModeNow() {
+	case coreUpdateInstall:
 		return "Auto-update on · " + when, ToastSuccessInk()
+	case coreUpdateNotify:
+		return "Updates: notify · " + when, ColorTextSecondary()
 	}
 	return "Auto-update off · " + when, ColorTextTertiary()
 }
@@ -969,9 +982,13 @@ func coreBuildsHints() []FooterHint {
 		}
 		hints = append(hints, FooterHint{Button: "Y", Label: "Kept builds"})
 		if coreBuildsAutoUpdateAvailable() {
-			label := "Auto-update on"
-			if emuAutoUpdateOn.Load() {
-				label = "Auto-update off"
+			// Start steps the setting; the hint names the mode it steps to.
+			label := "Auto-install"
+			switch emuCoreUpdateModeNow() {
+			case coreUpdateInstall:
+				label = "Updates off"
+			case coreUpdateOff:
+				label = "Notify updates"
 			}
 			hints = append(hints, FooterHint{Button: "Start", Label: label})
 		}

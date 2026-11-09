@@ -341,6 +341,12 @@ func pkgHeroActivate(config *Config, btn int) {
 // pkgPrimaryAction is the one-press action of a package: get it, update it, or
 // open its folder; while it is busy, the sheet that manages it.
 func pkgPrimaryAction(config *Config, it *pkgItem) {
+	if it != nil && pkgBusyKey(it.Key) {
+		// Rolling back or being removed: the sheet says so, and nothing else
+		// may start on its folders meanwhile.
+		pkgOpenSheet(it)
+		return
+	}
 	status, _ := pkgStatusOf(it, pkgLiveNow())
 	switch status {
 	case pkgStatusInstalled:
@@ -657,6 +663,8 @@ func pkgSheetRun(config *Config, it *pkgItem, b pkgSheetBtn) {
 		pkgStartInstall(config, it, true)
 	case "open":
 		pkgOpenFolder(config, it)
+	case "rollback":
+		pkgStartRollback(it)
 	case "remove":
 		if st.sheet.armed == "remove" && now-st.sheet.armedAt < 4000 {
 			st.sheet.armed = ""
@@ -759,7 +767,7 @@ func pkgFooterHints() []FooterHint {
 			{Button: "D-Pad", Label: "Choose"},
 			{Button: "A", Label: label},
 			{Button: "B", Label: "Close"},
-			{Button: "L1/R1", Label: "Previous / next"},
+			{Button: "L1/R1 / [ ]", Label: "Previous / next"},
 		}
 	}
 	if st.chipFocus && st.view != pkgViewRows {

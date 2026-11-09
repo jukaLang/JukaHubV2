@@ -14,6 +14,7 @@ package main
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -56,9 +57,9 @@ var (
 	// toolsHubKVLine is "Label: value" where the label reads like a field name:
 	// it starts with a letter and stays short, so "64 bytes from 1.1.1.1: …" is
 	// not mistaken for a pair.
-	toolsHubKVLine = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9 /&().-]{0,22}):\s+(\S.*)$`)
+	toolsHubKVLine = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^([A-Za-z][A-Za-z0-9 /&().-]{0,22}):\s+(\S.*)$`) })
 	// toolsHubCellBreak splits a padded table row into its cells.
-	toolsHubCellBreak = regexp.MustCompile(`\s{2,}`)
+	toolsHubCellBreak = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\s{2,}`) })
 )
 
 // toolsHubClassify splits a report into classified lines.
@@ -78,9 +79,9 @@ func toolsHubClassify(text string) []toolsHubRawLine {
 		case (prev == toolsHubLineKV || prev == toolsHubLineCont) && indent >= 4 && !strings.Contains(trimmed, "  "):
 			out = append(out, toolsHubRawLine{kind: toolsHubLineCont, value: trimmed})
 		default:
-			if m := toolsHubKVLine.FindStringSubmatch(line); m != nil {
+			if m := toolsHubKVLine().FindStringSubmatch(line); m != nil {
 				out = append(out, toolsHubRawLine{kind: toolsHubLineKV, label: strings.TrimSpace(m[1]), value: strings.TrimSpace(m[2])})
-			} else if cells := toolsHubCellBreak.Split(trimmed, -1); len(cells) >= 2 {
+			} else if cells := toolsHubCellBreak().Split(trimmed, -1); len(cells) >= 2 {
 				out = append(out, toolsHubRawLine{kind: toolsHubLineTable, cells: cells})
 			} else {
 				out = append(out, toolsHubRawLine{kind: toolsHubLinePara, text: trimmed})

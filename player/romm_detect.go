@@ -76,16 +76,6 @@ func rommSystemByID(id string) (rommSystem, bool) {
 	return rommSystem{}, false
 }
 
-// rommSystemByName finds a console by the library's name for it.
-func rommSystemByName(name string) (rommSystem, bool) {
-	for _, s := range rommSystems {
-		if strings.EqualFold(s.Name, name) {
-			return s, true
-		}
-	}
-	return rommSystem{}, false
-}
-
 // rommSystemLabel is the readable name of a console id ("" for an unknown one).
 func rommSystemLabel(id string) string {
 	if s, ok := rommSystemByID(id); ok {

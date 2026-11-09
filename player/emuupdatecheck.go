@@ -8,9 +8,10 @@ package main
 // while drawing. One background check answers for both: it reads the
 // buildbot index for this platform's channel and compares it with the CRC32 of
 // every installed core (cached by size and modification time, so a second
-// check reads nothing it already read), and on Windows it asks each project
-// JukaHub installed for its newest release. The answer is kept here, guarded by
-// a mutex, and the pages only ever read it.
+// check reads nothing it already read), and asks each project JukaHub installed
+// for its newest release: the managed emulators on Windows, hakuX on the
+// handheld. The answer is kept here, guarded by a mutex, and the pages only
+// ever read it.
 //
 // The check is throttled — a page opening does not hit GitHub's rate limit —
 // and skipped outright when the device is offline.
@@ -48,7 +49,8 @@ var emuUpdateState struct {
 	// indexed lists every core the channel publishes, so a page can tell "not
 	// published" from "up to date".
 	indexed map[string]coreIndexEntry
-	// win maps a managed Windows emulator to its newer release.
+	// win maps a managed emulator — a Windows one, or the handheld's Xbox tile
+	// for hakuX — to its newer release.
 	win map[string]emuWinRelease
 	// offline records that the last check could not run for lack of a
 	// connection.
@@ -267,6 +269,16 @@ func emuRunUpdateCheck() {
 			if emuWinUpdateAvailable(manifest, release) {
 				win[strings.ToLower(spec.Name)] = release
 			}
+		}
+	} else {
+		// The handheld's one standalone install: hakuX, when JukaHub put it
+		// there. Its badge sits on the Xbox tile, keyed by the tile's name.
+		release, newer, err := hakuxUpdateFor(ctx, client)
+		if err != nil && errText == "" {
+			errText = emuFriendlyError(err)
+		}
+		if newer {
+			win[strings.ToLower(emuXboxEntryName)] = release
 		}
 	}
 

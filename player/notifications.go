@@ -89,6 +89,25 @@ func priorityToastKind(p notifPriority) ToastKind {
 // A repeat of the newest unread row is folded into it (Timestamp refreshed,
 // Repeat bumped) rather than appended, so a loop cannot flush the history.
 func notifRecord(msg string, p notifPriority) {
+	notifRecordAs(msg, p, false)
+}
+
+// notifRecordToast files a toast the user just watched appear. Confirmations
+// (info and success: "Saved", "Copied", "Connected") go into the history
+// already read, so they can be re-read but do not raise the bell's count; the
+// count is for what still needs a look — warnings and errors — and for the
+// events nobody saw happen (a missed alarm, a new release, a milestone), which
+// file themselves unread through notifRecord and notifPush. Every toast used
+// to count, so a session of ordinary confirmations put "42" on the bell.
+func notifRecordToast(msg string, kind ToastKind) {
+	p := toastKindPriority(kind)
+	notifRecordAs(msg, p, p == notifInfo || p == notifSuccess)
+}
+
+// notifRecordAs is notifRecord with the row's read state chosen by the caller.
+// A repeat folds into the newest row only when that row has the same read
+// state, so a run of confirmations cannot swallow an unread warning.
+func notifRecordAs(msg string, p notifPriority, read bool) {
 	if msg == "" {
 		return
 	}
@@ -96,16 +115,29 @@ func notifRecord(msg string, p notifPriority) {
 	defer notifHistoryMu.Unlock()
 	if len(nc.history) > 0 {
 		top := &nc.history[0]
-		if top.Message == msg && top.Priority == p && !top.Read {
+		if top.Message == msg && top.Priority == p && top.Read == read {
 			top.Timestamp = time.Now()
 			top.Repeat++
 			return
 		}
 	}
-	nc.history = append([]notification{{Message: msg, Priority: p, Timestamp: time.Now(), Repeat: 1}}, nc.history...)
+	nc.history = append([]notification{{Message: msg, Priority: p, Timestamp: time.Now(), Read: read, Repeat: 1}}, nc.history...)
 	if len(nc.history) > 50 {
 		nc.history = nc.history[:50]
 	}
+}
+
+// notifBadgeLabel is the count drawn on the bell: exact up to nine, "9+" past
+// it. A two-digit number is not more informative at a glance than "9+", and on
+// a 32px bell it reads as noise.
+func notifBadgeLabel(unread int) string {
+	if unread <= 0 {
+		return ""
+	}
+	if unread > 9 {
+		return "9+"
+	}
+	return fmt.Sprintf("%d", unread)
 }
 
 // notifPush files a notification and shows its toast. It records directly
@@ -149,8 +181,11 @@ const (
 	notifBellMinHeight = int32(24)
 	// notifBellIconInset is the padding the glyph gives up inside the chip.
 	notifBellIconInset = int32(12)
-	// notifBadgeFontSize is the unread count's size in pixels.
-	notifBadgeFontSize = 11
+	// notifBadgeFontSize is the unread count's size in pixels: 13, up from 11,
+	// which was under the legibility floor on the 1280 canvas and smaller
+	// still on the Brick. The badge grows with it and still clears the bar's
+	// top edge (uiIconButtonBadgeRect, components.go).
+	notifBadgeFontSize = 13
 )
 
 // notifBellSize returns the bell chip's width and height, so the top bar can
@@ -183,24 +218,6 @@ func notifBadgeFont(config *Config) *ttf.Font {
 		return nil
 	}
 	return loadRoleFont(config, "small", notifBadgeFontSize)
-}
-
-// notifBadgeRect hangs the unread count on the chip's top-right corner. The
-// geometry lives here so the drawer and the tests agree on it: the badge must
-// stay inside the top bar instead of hanging over its top edge.
-func notifBadgeRect(badgeFont *ttf.Font, chip sdl.Rect, label string) sdl.Rect {
-	tw, th, _ := badgeFont.SizeUTF8(label)
-	bh := int32(th) + 3
-	bw := int32(tw) + SpaceXS*2
-	if bw < bh {
-		bw = bh
-	}
-	return sdl.Rect{
-		X: chip.X + chip.W - bw + SpaceXS,
-		Y: chip.Y - bh/2,
-		W: bw,
-		H: bh,
-	}
 }
 
 // drawBellIcon paints a notification bell centred in a size×size box using only
@@ -288,6 +305,7 @@ func drawNotifBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect 
 			Surface:     ColorIconSurface,
 			OpenSurface: ColorIconSurface,
 			Ring:        accentColor,
+			RingWidth:   glassFocusRingWidth,
 			// Bell icon: primary text colour so it reads as a control, with the
 			// accent ring already marking focus/open state. The glyph is inset from
 			// the chip so the silhouette never touches the pill's edge at handheld
@@ -305,9 +323,7 @@ func drawNotifBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect 
 		State:     UIIconButtonState{Focused: focused, Open: nc.open},
 		BadgeFont: badgeFont,
 	}
-	if unread := notifUnreadCount(); unread > 0 {
-		button.Badge = fmt.Sprintf("%d", unread)
-	}
+	button.Badge = notifBadgeLabel(notifUnreadCount())
 	UIIconButtonDraw(renderer, button)
 
 	nc.bellRect = rect
@@ -777,11 +793,4 @@ func notifHandleClick(x, y int32) bool {
 		}
 	}
 	return true
-}
-
-// renderNotifCenter renders both the bell and dropdown. Call this from the
-// status bar area on every frame.
-func renderNotifCenter(renderer *sdl.Renderer, config *Config, bellX, bellY int32) {
-	renderNotifBell(renderer, config, bellX, bellY)
-	renderNotifDropdown(renderer, config)
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -88,6 +87,9 @@ type FrameRateController struct {
 	// from quicksettings, not an animation trigger like animationActive.
 	performancePinned bool
 	profile           frameProfile
+	// videoActive is a video on screen that is playing: it gets the active
+	// cadence whatever the power setting, or a 30 fps clip judders at 24.
+	videoActive bool
 }
 
 // NewFrameRateController creates a controller tuned for the given platform.
@@ -114,7 +116,7 @@ func (fc *FrameRateController) NotifyInput() {
 	fc.lastInputTime = sdl.GetTicks64()
 	if fc.currentMode != FrameRateActive {
 		fc.currentMode = FrameRateActive
-		log.Printf("[framerate] → Active (%d fps)", fc.profile.fps(FrameRateActive))
+		logDebug("framerate", "→ Active (%d fps)", fc.profile.fps(FrameRateActive))
 	}
 	fc.mu.Unlock()
 }
@@ -141,6 +143,15 @@ func (fc *FrameRateController) SetPerformance(on bool) {
 	fc.mu.Unlock()
 }
 
+// SetVideoActive reports whether a playing video is on screen. The decoder
+// hands the loop its newest frame, so the loop's cadence is the frame rate the
+// viewer sees: idling down to 15 fps ten seconds into a film made it stutter.
+func (fc *FrameRateController) SetVideoActive(on bool) {
+	fc.mu.Lock()
+	fc.videoActive = on
+	fc.mu.Unlock()
+}
+
 // Delay returns the recommended ms to sleep this frame and updates the
 // internal mode based on elapsed idle time.
 func (fc *FrameRateController) Delay() uint32 {
@@ -150,13 +161,15 @@ func (fc *FrameRateController) Delay() uint32 {
 	animation := fc.animationActive
 	lowPower := fc.lowPower
 	pinned := fc.performancePinned
+	video := fc.videoActive
 
 	fc.mu.Unlock()
 
 	var mode FrameRateMode
 	switch {
-	case pinned:
-		// Performance: answer an idle query with the fastest cadence.
+	case pinned || video:
+		// Performance, or a playing video: answer an idle query with the
+		// fastest cadence.
 		mode = FrameRateActive
 	case lowPower && elapsed < fc.deepThreshold:
 		mode = FrameRateIdle
@@ -171,10 +184,15 @@ func (fc *FrameRateController) Delay() uint32 {
 	fc.mu.Lock()
 	if mode != fc.currentMode {
 		fc.currentMode = mode
-		log.Printf("[framerate] → %v (%d fps, idle %dms)", mode, fc.profile.fps(mode), elapsed)
+		logDebug("framerate", "→ %v (%d fps, idle %dms)", mode, fc.profile.fps(mode), elapsed)
 	}
 	fc.mu.Unlock()
 
+	if video {
+		// Low Power's slower cadence is for menus; a clip shown at 24 of its
+		// 30 frames a second judders, and the decoder is the real cost anyway.
+		return fc.profile.Active
+	}
 	return fc.profile.delayFor(mode, lowPower)
 }
 
@@ -183,6 +201,31 @@ func (fc *FrameRateController) CurrentMode() FrameRateMode {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	return fc.currentMode
+}
+
+// Pace returns how long the loop should sleep after a frame that took spent.
+//
+// While the user is pressing buttons, something animates or a video plays,
+// the cadence is a frame budget: the frame's own cost comes out of it, so the
+// handheld's 33 ms profile really is 30 fps. A plain sleep after the frame
+// made it 33 ms plus the 10–20 ms the A53 spends drawing — about 20 fps while
+// navigating. Once nobody is touching anything the sleep stays whole, which is
+// the cheaper cadence idle screens are meant to have.
+func (fc *FrameRateController) Pace(spent time.Duration) uint32 {
+	delay := fc.Delay()
+	fc.mu.Lock()
+	busy := fc.animationActive || fc.performancePinned || fc.videoActive || sdl.GetTicks64()-fc.lastInputTime < fc.idleThreshold
+	fc.mu.Unlock()
+	if !busy || spent <= 0 {
+		return delay
+	}
+	ms := uint32(spent / time.Millisecond)
+	if ms >= delay {
+		// The frame used the whole budget: yield for a moment so input and
+		// the decoder goroutines still get the CPU.
+		return 1
+	}
+	return delay - ms
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -274,7 +317,7 @@ func (mm *MemoryMonitor) refresh() {
 
 	if level != previousLevel {
 		names := map[MemoryPressureLevel]string{MemNormal: "Normal", MemWarning: "Warning", MemCritical: "Critical"}
-		log.Printf("[mem] Pressure: %s (avail %d MB)", names[level], availMB)
+		logInfo("mem", "Pressure: %s (avail %d MB)", names[level], availMB)
 	}
 }
 
@@ -353,7 +396,7 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 	switch level {
 	case MemCritical:
 		logTextureMemoryStats("critical-evict")
-		log.Printf("[mem] Critical: clearing every texture and byte cache")
+		logInfo("mem", "Critical: clearing every texture and byte cache")
 		ClearTextCache()
 		// Shape textures hold the palette in their pixels just like text does.
 		ClearShapeCache()
@@ -382,7 +425,7 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		go debug.FreeOSMemory()
 		return true
 	case MemWarning:
-		log.Printf("[mem] Warning: trimming text cache (50%%)")
+		logInfo("mem", "Warning: trimming text cache (50%%)")
 		TrimTextCache(512 / 2) // keep only half
 		return true
 	}
@@ -412,29 +455,29 @@ func LogDeviceDiagnostics() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	log.Printf("[device] Platform: %s | Arch: %s | CPUs: %d",
+	logInfo("device", "Platform: %s | Arch: %s | CPUs: %d",
 		runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
-	log.Printf("[device] Heap: %d MB | Sys: %d MB | NumGC: %d",
+	logInfo("device", "Heap: %d MB | Sys: %d MB | NumGC: %d",
 		m.HeapAlloc/1024/1024, m.Sys/1024/1024, m.NumGC)
 
 	if runtime.GOOS == "linux" {
 		info := readProcMeminfo()
-		log.Printf("[device] RAM: %d MB total, %d MB available",
+		logInfo("device", "RAM: %d MB total, %d MB available",
 			info.MemTotal/1024, info.MemAvail/1024)
 	}
 
 	if IsTrimuiDevice() {
-		log.Printf("[device] TrimUI mode: text cache 512 entries, adaptive FPS enabled")
+		logInfo("device", "TrimUI mode: text cache 512 entries, adaptive FPS enabled")
 	} else {
-		log.Printf("[device] Non-TrimUI mode: text cache 2048 entries, standard FPS")
+		logInfo("device", "Non-TrimUI mode: text cache 2048 entries, standard FPS")
 	}
 
 	// Texture accounting starts near zero and grows as the user browses; the
 	// baseline still proves the budgets are what this build expects.
 	s := collectTextureMemoryStats()
-	log.Printf("[tex] startup: total=%d MB (text=%d, labels=%d, thumbs=%d, video-overlay=%d, frame=%d, ui-layer=%d)",
+	logInfo("tex", "startup: total=%d MB (text=%d, labels=%d, thumbs=%d, video-overlay=%d, frame=%d, ui-layer=%d)",
 		s.Total()>>20, s.TextCache>>20, s.HomeText>>20, s.Thumbnails>>20, s.VideoOverlay>>20, s.VideoFrame>>20, s.UILayer>>20)
-	log.Printf("[tex] thumbnail texture budget: %d MB", thumbnailTextureBudgetBytes()>>20)
+	logInfo("tex", "thumbnail texture budget: %d MB", thumbnailTextureBudgetBytes()>>20)
 }
 
 // renderPipeline is the one startup snapshot of what SDL actually handed us:

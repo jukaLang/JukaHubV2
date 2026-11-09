@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -80,7 +79,7 @@ func rommLoadJournal(path string) rommJournal {
 	}
 	if _, err := readJSONWithBackup(path, &j); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[romm] ignoring %s: %v", path, err)
+			logWarn("romm", "ignoring %s: %v", path, err)
 		}
 		return rommJournal{Version: rommJournalVersion}
 	}
@@ -321,13 +320,13 @@ func rommApplyItems(ctx context.Context, items []rommItem, journalPath string, p
 		if unsaved >= rommJournalEvery {
 			unsaved = 0
 			if err := rommSaveRun(journalPath, run); err != nil {
-				log.Printf("[romm] cannot save the journal: %v", err)
+				logWarn("romm", "cannot save the journal: %v", err)
 			}
 		}
 	}
 	if len(run.Moves) > 0 || len(run.Deleted) > 0 {
 		if err := rommSaveRun(journalPath, run); err != nil {
-			log.Printf("[romm] cannot save the journal: %v", err)
+			logWarn("romm", "cannot save the journal: %v", err)
 		}
 	}
 	return res
@@ -498,7 +497,7 @@ func rommMigrateGameOptions(moves []rommJournalMove) {
 	gameOptionsMu.Unlock()
 	if changed {
 		if err := saveGameOptionsFile(gameOptionsPath(), snapshot); err != nil {
-			log.Printf("[romm] cannot save the moved game options: %v", err)
+			logWarn("romm", "cannot save the moved game options: %v", err)
 		}
 	}
 }
@@ -529,7 +528,7 @@ func rommMigrateRecents(moves []rommJournalMove) {
 	gameRecentsMu.Unlock()
 	if changed {
 		if err := saveGameRecentsFile(gameRecentsFile(), snapshot); err != nil {
-			log.Printf("[romm] cannot save the recents: %v", err)
+			logWarn("romm", "cannot save the recents: %v", err)
 		}
 	}
 }

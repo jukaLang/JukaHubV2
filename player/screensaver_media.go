@@ -185,13 +185,6 @@ func scanCoverArt(dir, trackPath string) string {
 	return ""
 }
 
-// forgetCoverArtLookups drops the memo, so a test starts from a known state.
-func forgetCoverArtLookups() {
-	coverArtLookups.mu.Lock()
-	coverArtLookups.byDir = nil
-	coverArtLookups.mu.Unlock()
-}
-
 // saverMediaCard is the rect the media sits in. Video keeps 16:9; artwork is a
 // square. Both sit in the band between the clock block at the top (a quarter
 // of the screen) and the title, subtitle and hints at the bottom (about the same

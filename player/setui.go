@@ -159,6 +159,9 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	setHub.scroll, setHub.target = 0, 0
 	setHub.railScroll = 0
 	setHub.sheet.open = false
+	// The time-zone picker closes too, unless a deep link opened it for this
+	// visit (tzpicker.go).
+	tzPickerHubEnter()
 	setHub.viewSection = -1
 	if c != nil {
 		// A real arrival (the transition that opened this scene, not a redraw)
@@ -178,49 +181,6 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	if deep {
 		setHubEnterPane(false)
 	}
-}
-
-// setOpenSection opens Settings on one section's rows: what a search result or
-// another screen's "Settings…" link calls. id is a section id (setmodel.go).
-func setOpenSection(c *Config, id string) {
-	if c == nil {
-		return
-	}
-	i := setSectionIndex(id)
-	if setIsHubScene(setHubSceneName(c)) {
-		// Already here: no new visit will start, so move to it directly.
-		setHubEnsureVisit(c)
-		if i >= 0 {
-			setHubSelectSection(c, i, false)
-			setHubEnterPane(false)
-		}
-		return
-	}
-	if i >= 0 {
-		setHub.lastSection = i
-		setHub.deepLink = true
-	}
-	setOpenScene("Settings")(c)
-}
-
-// setActiveSectionAlias names the old page the open section replaced
-// ("SettingsGeneral", "SettingsAppearance"), or "" — for code that still keys
-// on those scene names (time-in-scene achievements).
-func setActiveSectionAlias() string {
-	if !setIsHubScene(setHub.scene) {
-		return ""
-	}
-	sections := setSections()
-	if setHub.section < 0 || setHub.section >= len(sections) {
-		return ""
-	}
-	switch sections[setHub.section].ID {
-	case "general":
-		return "SettingsGeneral"
-	case "display":
-		return "SettingsAppearance"
-	}
-	return ""
 }
 
 // ── Reading the rows ──────────────────────────────────────────────────────
@@ -673,6 +633,7 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 	if setHub.sheet.open {
 		setSheetDraw(renderer, c, &setHub.sheet)
 	}
+	tzPickerDraw(renderer, c)
 	// The footer goes last so its hints stay readable over a sheet's dim.
 	renderFooter(renderer, c)
 }
@@ -999,6 +960,10 @@ func setHubKey(e *sdl.KeyboardEvent, c *Config) bool {
 		return false
 	}
 	setHubEnsureVisit(c)
+	if tzPicker.open {
+		tzPickerKey(e)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetKey(&setHub.sheet, e.Keysym.Sym)
 		return true
@@ -1049,6 +1014,10 @@ func setHubPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 		return false
 	}
 	setHubEnsureVisit(c)
+	if tzPicker.open {
+		tzPickerPad(e.Button)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetPad(&setHub.sheet, e.Button)
 		return true
@@ -1079,6 +1048,10 @@ func setHubPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 // the config buttons under the page must never be pressed through it.
 func setHubMouse(mx, my int32, c *Config) bool {
 	setHubEnsureVisit(c)
+	if tzPicker.open {
+		tzPickerMouse(mx, my)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetMouse(&setHub.sheet, mx, my)
 		return true
@@ -1120,6 +1093,10 @@ func setHubMouse(mx, my int32, c *Config) bool {
 
 // setHubWheel scrolls the rows (or moves a sheet's cursor).
 func setHubWheel(dy int32) {
+	if tzPicker.open {
+		tzPickerWheel(dy)
+		return
+	}
 	if setHub.sheet.open {
 		setSheetWheel(&setHub.sheet, dy)
 		return
@@ -1133,12 +1110,15 @@ func setHubWheel(dy int32) {
 
 // setHubHints is the footer for what holds the focus.
 func setHubHints() []FooterHint {
+	if tzPicker.open {
+		return tzPickerHints()
+	}
 	if setHub.sheet.open {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}
 	}
 	if !setHub.inPane {
 		return []FooterHint{{Button: "D-Pad", Label: "Sections"}, {Button: "A", Label: "Open"},
-			{Button: "L1/R1", Label: "Jump"}, {Button: "B", Label: "Back"}}
+			{Button: "L1/R1 / Tab", Label: "Jump"}, {Button: "B", Label: "Back"}}
 	}
 	back := FooterHint{Button: "B", Label: "Sections"}
 	i := setHub.row

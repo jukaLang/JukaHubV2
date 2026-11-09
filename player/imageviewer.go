@@ -26,7 +26,6 @@ import (
 	"image"
 	"image/color"
 	"io"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -172,7 +171,7 @@ func webpDecodable() bool {
 		defer rw.Close()
 		surface, err := img.LoadTypedRW(rw, false, "WEBP")
 		if err != nil {
-			log.Printf("WebP images unavailable in this build: %v", err)
+			logWarn("imageviewer", "WebP images unavailable in this build: %v", err)
 			return
 		}
 		surface.Free()
@@ -636,7 +635,7 @@ func imgvTakeDecoded(renderer *sdl.Renderer) {
 	imgv.fileSize = res.size
 	if res.err != nil {
 		imgv.errText = res.err.Error()
-		log.Printf("Image viewer: %s: %v", filepath.Base(imageViewerPath), res.err)
+		logDebug("imageviewer", "Image viewer: %s: %v", filepath.Base(imageViewerPath), res.err)
 		return
 	}
 	imgvReleaseTextures()
@@ -1167,16 +1166,18 @@ func imgvFooterHints() []FooterHint {
 	if imgvZoomed() {
 		direction = "Pan"
 	}
+	// The keyboard's halves (handleImageViewerInput): - and + zoom, PgUp and
+	// PgDn step through the folder.
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: direction},
-		{Button: "L1/R1", Label: "Zoom"},
+		{Button: "L1/R1 / - / +", Label: "Zoom"},
 		{Button: "Y", Label: "Fit / Fill / 1:1"},
 	}
 	if !imageViewerRemote {
 		hints = append(hints, FooterHint{Button: "X", Label: "Lock screen"})
 	}
 	if len(imageViewerFiles) > 1 {
-		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Prev / Next"})
+		hints = append(hints, FooterHint{Button: "L2/R2 / PgUp/PgDn", Label: "Prev / Next"})
 	}
 	return append(hints,
 		FooterHint{Button: "A", Label: "Hide"},

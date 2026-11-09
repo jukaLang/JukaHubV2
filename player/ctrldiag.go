@@ -292,17 +292,6 @@ func ctrldiagSummary() string {
 	}
 }
 
-// ctrldiagHeldCount is how many buttons are down right now.
-func ctrldiagHeldCount() int {
-	n := 0
-	for _, b := range ctrldiag.buttons {
-		if b.Held {
-			n++
-		}
-	}
-	return n
-}
-
 // ctrldiagButtonLabel names a button for the chip and the "other" tally.
 func ctrldiagButtonLabel(btn uint8) string {
 	if label, ok := diagButtonLabels[btn]; ok {
@@ -427,18 +416,48 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 		drawDiagChip(renderer, config, font, x, y, chipW, chipH, btn)
 	}
 
-	// Reset chip in the footer, right-aligned.
+	// Reset chip in the footer, right-aligned. No pad button resets: the panel
+	// records every press, A's too (ctrldiagButtonEvent), so the chip names a
+	// key only on a keyboard, where Enter resets (handleCtrldiagKey); a click
+	// or a tap resets either way.
+	v := hintVocabNow()
+	resetLabel := "Reset"
+	if v == hintVocabKeyboard {
+		resetLabel = "Reset (Enter)"
+	}
 	footerY := panelY + panelH - footerH + 6
 	resetW := int32(96)
+	if tw, _ := measureText(font, resetLabel); tw+24 > resetW {
+		resetW = tw + 24
+	}
 	ctrldiagResetRect = sdl.Rect{X: panelX + panelW - padX - resetW, Y: footerY, W: resetW, H: chipH}
 	fillRoundedRect(renderer, ctrldiagResetRect.X, ctrldiagResetRect.Y, ctrldiagResetRect.W, ctrldiagResetRect.H, 8,
 		WithAlpha(installHighlight(), 40))
 	strokeRoundedRect(renderer, ctrldiagResetRect.X, ctrldiagResetRect.Y, ctrldiagResetRect.W, ctrldiagResetRect.H, 8, 1, ColorBorderDefault)
-	renderText(renderer, config, font, "Reset (A)", ColorTextSecondary(),
+	renderText(renderer, config, font, resetLabel, ColorTextSecondary(),
 		ctrldiagResetRect.X+12, ctrldiagResetRect.Y+6)
 
-	footer := hintLine(FooterHint{"Click", "Reset"}, FooterHint{"Hold SELECT", "Close"})
-	renderText(renderer, config, font, footer, ColorTextTertiary(), panelX+padX, footerY+6)
+	renderText(renderer, config, font, ctrldiagFooterLine(v), ColorTextTertiary(), panelX+padX, footerY+6)
+}
+
+// ctrldiagFooters is the footer line per hint vocabulary (pad, keyboard).
+var ctrldiagFooters [2]string
+
+// ctrldiagFooterLine is the panel's footer in vocabulary v: "Click Reset   Hold
+// SELECT Close" on the pad, Esc closing on a keyboard. The test reads the
+// physical buttons, so the names are translated with no Accessibility remap
+// (hintKeyIn with a nil remap; hintLine would follow the remap). Nothing else
+// changes the line, so each vocabulary's is built once.
+func ctrldiagFooterLine(v hintVocab) string {
+	i, closeKey := 0, "Hold SELECT"
+	if v == hintVocabKeyboard {
+		i, closeKey = 1, "Esc"
+	}
+	if ctrldiagFooters[i] == "" {
+		ctrldiagFooters[i] = hintKeyIn("Click", "Reset", v, nil) + " Reset   " +
+			hintKeyIn(closeKey, "Close", v, nil) + " Close"
+	}
+	return ctrldiagFooters[i]
 }
 
 // drawDiagStick draws one stick box with the deadzone ring, the travel box and

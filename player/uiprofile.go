@@ -16,7 +16,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"math"
 	"strconv"
 	"strings"
@@ -163,7 +162,7 @@ func applyScreenProfile(config *Config, profile deviceScreenProfile, label strin
 	if profile.Compact {
 		mode = "compact"
 	}
-	log.Printf("[ui] %s: %dx%d panel, %s canvas %dx%d",
+	logDebug("ui", "%s: %dx%d panel, %s canvas %dx%d",
 		label, profile.NativeW, profile.NativeH,
 		mode, profile.CanvasW, profile.CanvasH)
 	return true

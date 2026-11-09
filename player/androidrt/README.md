@@ -1,15 +1,19 @@
-# AndroidRT — the bionic translation runtime skeleton
+# AndroidRT — the bionic translation runtime
 
 The C side of the **AndroidPak** Tier-1 path ([docs/ANDROID.md](../../docs/ANDROID.md)):
 NativeActivity NDK games running on the Smart Pro as ordinary native
 processes, with a few megabytes of runtime instead of the Android system
 image the 1 GB device cannot afford.
 
-This is a **skeleton**, not a finished runtime. Its deliverable is the
-directory contract the Go launcher resolves, the honest failure messages
-that name exactly which bionic symbol a game needs next, and the shims the
-first games reach for. Loading *real* bionic-linked game libraries on
-glibc is the milestone sequence in the next section.
+It is **experimental and never run on hardware**: the directory contract
+the Go launcher resolves, its own bionic ELF loader with a compatibility
+layer, a JNI environment that answers a game's Java calls (with class packs
+per game family, Minecraft first — [docs/ANDROID-MINECRAFT.md](../../docs/ANDROID-MINECRAFT.md)),
+NativeActivity and androidx GameActivity entry points, an EGL present layer
+that uses the stock firmware's own PowerVR libEGL (or lets the firmware's
+SDL2 own the window and context), and honest failure messages that name
+exactly which bionic symbol or Java member a game needs next. The host smoke
+suite (186 assertions) is the proof so far.
 
 ## Directory contract (what `/mnt/SDCARD/Apps/AndroidRT` must look like)
 
@@ -86,13 +90,14 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
 
 | Piece | Status |
 |---|---|
-| Runtime directory contract, launch.sh env, ANDROIDPAK handoff | **Done** — covered by `player/androidrt_test.go`. |
+| Runtime directory contract, launch.sh env, ANDROIDPAK handoff | **Done** (`player/androidpak.go`); its Go tests were retired in the November 2026 suite cut — the smoke suite drives the env contract end to end. |
 | Lifecycle bridge (`ANativeActivity` struct layout, callback order) | **Done** — proven end-to-end by the host smoke test (`tests/smoke/run-smoke.sh`, exit 0); *unproven on a real bionic game*. |
 | `liblog.so` | **Done.** Full `__android_log_*` surface to stderr. |
 | `libandroid.so` | **Subset.** Window/ALooper/assets finish + `AConfiguration` minimum. The *surface* is a stub: games get a real number-sized window, no pixels. |
 | `libOpenSLES.so` | **Audio path done.** `slCreateEngine` → `CreateAudioPlayer` (S16 1/2-ch BufferQueue → OutputMix) → `Enqueue`/`SetPlayState` streams PCM through ALSA `default` (`snd_pcm_*` via `dlopen("libasound.so.2")`); missing libasound degrades to silence at real-time pacing instead of failing. Per-buffer callbacks fire from the worker, `Destroy` from inside a callback is safe, and unknown interfaces answer `SL_RESULT_FEATURE_UNSUPPORTED` with the real UUID table. Proven by the host audio probe; *unproven with real device sound on the A133P*. |
-| Loading bionic-linked game `.so` files | **Deliberately naive** (`dlopen`). Expected to fail with a printable undefined symbol; the runner turns that into next-shim instructions. |
-| PowerVR EGL surface backend | **Probe shipped** — `src/surface.c` measures the whole GBM+EGL chain; the swap chain/present loop is still open. |
+| Loading bionic-linked game `.so` files | **Own loader** (`src/bionicld.c`, `src/elfdyn.c`): versioned `@LIBC` imports bound through the compat resolver; missing functions become named traps (`ANDROIDPAK_MISSING=trap|zero|strict`), `loader --scan lib.so` lists them. |
+| Java side (JNI) | **Shipped** (`src/jni.h`, `src/jnienv.c`, `src/jnibase.c`): JNI 1.6 tables over a C object model, manifest + DEX class index (`src/apkmeta.c`), `JNI_OnLoad` in dependency order, `RegisterNatives`, once-per-name log of everything unimplemented and an exit report in the order the game asked (JukaHub's failure toast names its first entry). Class packs: Minecraft (`src/jnipack_minecraft.c`). GameActivity bridge: `src/gameactivity.c`. Smoke: `tests/smoke/fake_jnigame.c` (JNI + Minecraft pack), `tests/smoke/fake_gameact.c` (GameActivity glue). |
+| PowerVR EGL present | **Shipped, mock-tested** (`src/eglpresent.c`): gbm/KMS when a DRM card exists; on the stock TrimUI firmware the firmware's `/usr/lib/libEGL.so` with SDL's mali-fbdev `{width, height}` window. **SDL-hosted backend** (`ANDROIDPAK_PRESENT=sdl`, `src/sdlhost.h`): the firmware's `libSDL2-2.0.so.0` (dlopen'ed, `ANDROIDPAK_SDL_LIB` overrides) creates the window, EGL surface and GLES context and the game gets exactly those — `eglMakeCurrent` → `SDL_GL_MakeCurrent`, `eglSwapBuffers` → `SDL_GL_SwapWindow`; `auto` falls back to it when the game's `eglInitialize` of the default display fails (retried once after SDL's video driver ran) or the native window surface is refused — a context the game made before that window stays raw EGL, and the log names `ANDROIDPAK_PRESENT=sdl`. Smoke: `tests/smoke/fake_sdl.c` (a fake firmware SDL2 that drives the mock EGL like SDL's mali driver). Which backend the device accepts is unverified. |
 | Input (`AInputQueue` from the TSP's controller) | **Shim shipped.** `src/inputshim.c` implements the NDK queue semantics (getEvent/hasEvents/preDispatch/finish, axis coalescing, held-slot immutability, `LOOPER_ID_INPUT` wakeups through `ALooper_pollAll`), and `src/evdev.c` reads `/dev/input/event*` on the device (`-DJUKAHUB_EVDEV`, off via `ANDROIDPAK_INPUT=off`). *Unverified on hardware*: the TSP's actual evdev nodes and the glue-thread wakeup pairing. |
 
 ## Milestone order
@@ -102,7 +107,8 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
    JukaHub now performs this capture itself: after a non-zero AndroidPak
    exit it scans `data/game-profiles/logs/<id>.log` for the
    `[androidrt] could not load … undefined symbol:` line and names the
-   symbol in a toast and the JukaHub log. The
+   symbol in a toast and the JukaHub log — or, when the game ran, the first
+   Java method/class/field the JNI layer could not provide. The
    GPU half of the same measurement now has dedicated tooling: the surface
    probe (`src/surface.c`, see milestone 3) reports which layer of this
    firmware's GPU stack works, without a game involved.

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -92,19 +91,19 @@ func hasMediaExtension(s string) bool {
 // because the bundled binary needs X11, which the handheld does not have.
 func playStream(config *Config, url string) {
 	recordPlayed(config, url)
-	log.Printf("playStream: %s", sanitizeLogURL(url))
+	logDebug("morefeatures", "playStream: %s", sanitizeLogURL(url))
 	ensureVideoScene(config)
 	currentPlaybackURL = url
 	go func() {
 		// Resolve (and install, if needed) before playing: a missing ffmpeg
 		// shows the install card instead of failing silently in the decoder.
 		if _, err := helperToolPath("ffmpeg", config); err != nil {
-			log.Printf("[ERROR] playStream: ffmpeg unavailable: %v", err)
+			logError("morefeatures", "playStream: ffmpeg unavailable: %v", err)
 			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
 			return
 		}
 		if _, err := helperToolPath("ffprobe", config); err != nil {
-			log.Printf("[DEBUG] playStream: ffprobe unavailable, using defaults: %v", err)
+			logDebug("morefeatures", "playStream: ffprobe unavailable, using defaults: %v", err)
 		}
 		StartEmbeddedPlayback(config, url)
 	}()
@@ -132,21 +131,21 @@ func playSmartURL(config *Config, url string) {
 	// allow http/https URLs here; local paths are handled by playStream.
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		// Never log the raw URL: it can carry tokens in its query string.
-		log.Printf("[SECURITY] playSmartURL: rejecting non-http URL %q", sanitizeLogURL(url))
+		logWarn("morefeatures", "security: playSmartURL: rejecting non-http URL %q", sanitizeLogURL(url))
 		return
 	}
 	if strings.ContainsAny(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\n\r") {
-		log.Printf("[SECURITY] playSmartURL: rejecting URL with control characters %q", sanitizeLogURL(url))
+		logWarn("morefeatures", "security: playSmartURL: rejecting URL with control characters %q", sanitizeLogURL(url))
 		return
 	}
 	if len(url) > 2048 {
-		log.Printf("[SECURITY] playSmartURL: rejecting overlong URL (%d bytes)", len(url))
+		logWarn("morefeatures", "security: playSmartURL: rejecting overlong URL (%d bytes)", len(url))
 		return
 	}
 	// Validate the extra args the same way executeYouTubeSearch does, so a
 	// malicious cookies_file / api_key value cannot alter the invocation.
 	if err := validateYtDlpArgs(ytDlpExtraArgsSlice(config)); err != nil {
-		log.Printf("[SECURITY] playSmartURL: rejecting unsafe extra args: %v", err)
+		logWarn("morefeatures", "security: playSmartURL: rejecting unsafe extra args: %v", err)
 		return
 	}
 	// playVideoInfo downloads with yt-dlp and decodes in the embedded player,
@@ -735,7 +734,7 @@ func runBenchmark(config *Config) {
 			lines = append(lines, "Sequential: "+err.Error())
 		} else {
 			if recordErr := recordPowerBenchmark("sequential", seq.write, seq.read, config.Version); recordErr != nil {
-				log.Printf("[BENCH] could not record result: %v", recordErr)
+				logWarn("bench", "could not record result: %v", recordErr)
 			}
 			lines = append(lines,
 				fmt.Sprintf("Write: %.1f MB/s", seq.write),
@@ -798,6 +797,14 @@ func runRandomBenchmark(config *Config) {
 // Terminal
 // ---------------------------------------------------------------------------
 
+// runTerminal runs cmdStr through the shell (cmd /c, sh -c) and publishes its
+// output as terminal_text. Trust boundary (SEC-12): the string is a shell
+// command by design. It comes from the terminal_cmd / emulator_cmd custom
+// variables the terminal_run / emulator_run triggers read (core.go), so it is
+// either authored by the scene or typed by the user on the device; a design
+// pushed through the Live Builder that presets either variable for those
+// triggers waits for the owner's approval first (livebuilder.go,
+// liveBuilderShellTriggers).
 func runTerminal(config *Config, cmdStr string) {
 	go func() {
 		var c *exec.Cmd

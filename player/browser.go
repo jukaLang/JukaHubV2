@@ -271,6 +271,7 @@ func openBrowserHome(config *Config) {
 		return
 	}
 	browserHomeLoaded = false
+	browserPendingURL = ""
 	config.Variables.Custom[textBrowserURLVariable] = browserHomeURL
 	changeSceneTo(config, idx)
 	if currentSceneIndex == idx {
@@ -294,6 +295,13 @@ func openBrowserAtURL(config *Config, rawURL string) bool {
 		showToast("Cannot open that link: "+err.Error(), ToastError())
 		return false
 	}
+	// A YouTube video goes straight to the player: the reader cannot show its
+	// page, and opening the browser first only to leave it again would cost
+	// two scene changes (browser_youtube.go).
+	if link, ok := brwYouTubeVideo(address); ok {
+		brwPlayYouTube(config, link, "")
+		return true
+	}
 	ensureBrowserScene(config)
 	idx := sceneIndexExact(config, browserSceneName)
 	if idx < 0 {
@@ -307,12 +315,31 @@ func openBrowserAtURL(config *Config, rawURL string) bool {
 	config.Variables.Custom[browserContentVariable] = "Loading " + address + " ..."
 	changeSceneTo(config, idx)
 	if currentSceneIndex == idx {
+		browserPendingURL = ""
 		if elem, ok := findBrowserElement(config); ok {
 			loadTextBrowserURL(config, elem, address)
 		}
+		return true
 	}
+	// The scene is still on its way in: its arrival loads the page
+	// (browserEnsureHome).
+	browserPendingURL, browserPendingAt = address, sdl.GetTicks64()
 	return true
 }
+
+// browserPendingURL is the page openBrowserAtURL asked for while the Browser
+// scene was still fading in; browserEnsureHome loads it on arrival. The flag
+// that keeps the start page from replacing the link (browserHomeLoaded) also
+// kept the link itself from loading, so a link opened from Chat, Home search
+// or a paired device sat on "Loading …" for good.
+var (
+	browserPendingURL string
+	browserPendingAt  uint64
+)
+
+// browserPendingMaxAge bounds how long a pending page waits: a scene change
+// that never happened must not load it on some later visit.
+const browserPendingMaxAge = 5000
 
 // browserOpenURL loads a URL into the current browser element.
 func browserOpenURL(config *Config, rawURL string) bool {
@@ -650,7 +677,23 @@ func browserReload(config *Config) {
 // An explicit request still wins, because openBrowserAtURL and openBrowserHome
 // claim the flag before the scene is shown.
 func browserEnsureHome(config *Config) {
-	if config == nil || browserHomeLoaded {
+	if config == nil {
+		return
+	}
+	// A page openBrowserAtURL asked for on the way in comes first.
+	if pending := browserPendingURL; pending != "" {
+		browserPendingURL = ""
+		if sdl.GetTicks64()-browserPendingAt <= browserPendingMaxAge {
+			if elem, ok := findBrowserElement(config); ok {
+				loadTextBrowserURL(config, elem, pending)
+			}
+			return
+		}
+		// Its scene change never happened (another fade was running), so its
+		// "Loading …" was never followed by a load: the start page replaces it.
+		browserHomeLoaded = false
+	}
+	if browserHomeLoaded {
 		return
 	}
 	elem, ok := findBrowserElement(config)
@@ -713,45 +756,6 @@ func browserHistoryStep(delta int) (string, bool) {
 	return browserState.history[next], true
 }
 
-func resetBrowserStateForTest() {
-	// A load started by the test that just finished may still be on the wire;
-	// join it before wiping the state it publishes into, so it cannot land in
-	// the next test's browser.
-	waitForBrowserFetches()
-	browserState.mu.Lock()
-	browserState.links = map[string][]browserLink{}
-	browserState.history = nil
-	browserState.index = -1
-	browserState.mu.Unlock()
-	browserClearPageCache()
-	browserHomeLoaded = false
-	browserLinkPanel = browserLinkPanelState{}
-	browserCookiePanel = browserCookiePanelState{}
-	browserBookmarkPanel = browserBookmarkPanelState{}
-	browserBookmarkRowHits = nil
-	browserBookmarkPanelRect = sdl.Rect{}
-	browserCookieStripHit = sdl.Rect{}
-	browserLinkCursor = browserLinkCursorState{}
-	browserNav = browserModeScroll
-	// Zoom is a reader preference, but a test that changes it must not size
-	// the next test's layout differently.
-	browserZoomReset()
-	// An in-page search belongs to the page it was run against, so a new
-	// browser session starts with no match list.
-	browserFindReset()
-	// Reading positions are per session; a fresh browser starts at the top.
-	browserScrollReset()
-	// The offline card, JukaLand in the page and the site-info sheet belong to
-	// the session that showed them.
-	brwResetForTest()
-	resetBrowserDocumentsForTest()
-	resetBrowserAdBlockViewsForTest()
-	resetBrowserAdBlockCount()
-	// Cookies outlive a page inside one run on purpose, so a test has to say
-	// when the session ends instead of inheriting the previous test's jar.
-	browserResetCookies()
-}
-
 // ── Link extraction ──────────────────────────────────────────────────────
 
 // extractBrowserLinks pulls anchors out of the raw HTML before the reader text
@@ -810,7 +814,10 @@ func extractBrowserLinks(source string, base *url.URL) []browserLink {
 		if parsed.Hostname() == "" || parsed.User != nil {
 			continue
 		}
-		parsed.Fragment = ""
+		// A YouTube link keeps its #t= start time (browser_youtube.go).
+		if _, video := brwYouTubeVideo(parsed.String()); !video {
+			parsed.Fragment = ""
+		}
 		address := parsed.String()
 		if seen[address] {
 			continue
@@ -1011,6 +1018,10 @@ func browserLinkPanelActivate(config *Config) {
 		return
 	}
 	closeBrowserLinkPanel()
+	// A YouTube video plays in Media (browser_youtube.go).
+	if brwOpenYouTubeLink(config, link.URL, link.Text) {
+		return
+	}
 	loadTextBrowserURL(config, elem, link.URL)
 }
 
@@ -1082,7 +1093,7 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 	// the panel and the bar drawn into it measure the same height. Trailing 9
 	// gives back the exact band this panel has always reserved.
 	header := UIPanelHeader("Links on this page",
-		fmt.Sprintf("%d link(s) · A opens · B closes", len(links)), "browser")
+		fmt.Sprintf("%d link(s) · ", len(links))+hintSentence2("%s opens · %s closes", "A", "Open", "B", "Close"), "browser")
 	header.SubtitleColor = ColorTextSecondary()
 	headerH := UIPanelHeaderBand(config, header, 9)
 	footerH := 12 + smallH
@@ -1427,7 +1438,11 @@ func browserResolveLink(baseURL, href string) (string, bool) {
 	if target.Hostname() == "" || target.User != nil {
 		return "", false
 	}
-	target.Fragment = ""
+	// A YouTube link keeps its #t= start time (browser_youtube.go); any other
+	// fragment only names a place in a page the reader lays out itself.
+	if _, video := brwYouTubeVideo(target.String()); !video {
+		target.Fragment = ""
+	}
 	return target.String(), true
 }
 
@@ -1453,6 +1468,11 @@ func browserOpenFocusedPageLink(config *Config, elem Element) bool {
 		return true
 	}
 	browserLinkCursor = browserLinkCursorState{}
+	// A YouTube video, as a link or a play card, plays in Media instead of
+	// loading a page the reader cannot show (browser_youtube.go).
+	if brwOpenYouTubeLink(config, target, layout.Links[cursor].Text) {
+		return true
+	}
 	// A play card is activated, not navigated: the URL streams through
 	// yt-dlp inside the embedded player, exactly like a search result.
 	if layout.Links[cursor].Video {
@@ -1875,6 +1895,45 @@ func (c *webControl) submitValue() string {
 	return strings.TrimSpace(c.Options[c.Choice])
 }
 
+// browserTextOpener is the scancode of the key whose character
+// browserDropKeyText dropped last: a key that opened a keyboard and may still
+// be held down. 0 for none. Main thread.
+var browserTextOpener sdl.Scancode
+
+// browserDropKeyText removes the text event SDL queued after e, the key being
+// handled. A printable key that opens a keyboard (Space or A on the address
+// bar or a form field, F for Find, / or Y for Search) is followed by its own
+// character, and the modal keyboard it opens would type that character into
+// the field. Only the first queued text event goes: the key's own. A key that
+// typed nothing leaves the queue alone, or the next character typed would be
+// lost: a synthetic key (the Phone Companion, a control profile: scancode 0)
+// and a Ctrl, Alt or GUI chord. Main thread.
+func browserDropKeyText(e *sdl.KeyboardEvent) {
+	if e == nil || e.Keysym.Scancode == 0 || e.Keysym.Mod&uint16(sdl.KMOD_CTRL|sdl.KMOD_ALT|sdl.KMOD_GUI) != 0 {
+		return
+	}
+	browserTextOpener = e.Keysym.Scancode
+	sdl.PumpEvents()
+	_, _ = sdl.PeepEvents(make([]sdl.Event, 1), sdl.GETEVENT, sdl.TEXTINPUT, sdl.TEXTINPUT)
+}
+
+// browserTextOpenerRepeat reports whether e is the auto-repeat of the key that
+// opened the keyboard on screen (browserDropKeyText) and drops the character
+// it typed: holding / used to type "///" into the search it opened. Such a
+// repeat neither types nor acts. runInputModal passes every key event; the
+// key's release, or a new press of it, ends the watch. Main thread.
+func browserTextOpenerRepeat(e *sdl.KeyboardEvent) bool {
+	if e == nil || browserTextOpener == 0 || e.Keysym.Scancode != browserTextOpener {
+		return false
+	}
+	if e.Type != sdl.KEYDOWN || e.Repeat == 0 {
+		browserTextOpener = 0
+		return false
+	}
+	browserDropKeyText(e)
+	return true
+}
+
 // handleBrowserKey mirrors handleBrowserController for the keyboard — which
 // is how the Trimui Smart Pro reports its D-pad and face buttons. Tab cycles
 // between scrolling the page and stepping through its links; in link mode the
@@ -1919,6 +1978,14 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 	case sdl.K_RIGHT:
 		return browserMovePageLink(config, elem, 1)
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+		if e.Repeat != 0 {
+			// A held key acts once, like the pad's A: its repeats would open
+			// the next link, or the keyboard again once it was closed.
+			return true
+		}
+		if e.Keysym.Sym != sdl.K_RETURN {
+			browserDropKeyText(e)
+		}
 		if browserActivateFocusedLink(renderer, config, elem) {
 			return true
 		}
@@ -1927,10 +1994,22 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 	case sdl.K_l, sdl.K_x:
 		openBrowserLinkPanel(config, elem)
 		return true
+	case sdl.K_SLASH, sdl.K_y:
+		// The pad's Y: search the web. "/" is the search key on Home and in
+		// the music player too; the footer names it ("Y / /"). A held key
+		// opens it once, and its repeats type nothing (runInputModal).
+		if e.Repeat == 0 {
+			browserDropKeyText(e)
+			openBrowserSearch(renderer, config, elem)
+		}
+		return true
 	case sdl.K_f:
 		// Find on this page: its own keyboard, so the address bar and the
-		// web search are both left alone.
-		openBrowserFind(renderer, config, elem)
+		// web search are both left alone. Once per press, like Search.
+		if e.Repeat == 0 {
+			browserDropKeyText(e)
+			openBrowserFind(renderer, config, elem)
+		}
 		return true
 	case sdl.K_n:
 		// N steps to the next match; with no search running the key belongs
@@ -2224,6 +2303,9 @@ func browserTapPageVideo(config *Config, elem Element, mx, my int32) bool {
 			showToast("That video cannot be played here", ToastInfo())
 			return true
 		}
+		if brwOpenYouTubeLink(config, target, v.Title) {
+			return true
+		}
 		if !IsOnline() {
 			ShowToast("You're offline — videos need an internet connection", ToastKindWarning)
 			return true
@@ -2278,8 +2360,12 @@ func browserTapPageLink(renderer *sdl.Renderer, config *Config, elem Element, mx
 				showToast("That link cannot be opened here", ToastInfo())
 				return true
 			}
-			PlayActivateSound()
 			browserLinkCursor = browserLinkCursorState{}
+			// A YouTube video plays in Media (browser_youtube.go).
+			if brwOpenYouTubeLink(config, target, layout.Links[i].Text) {
+				return true
+			}
+			PlayActivateSound()
 			loadTextBrowserURL(config, elem, target)
 			return true
 		}

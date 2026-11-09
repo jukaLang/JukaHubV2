@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io/fs"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -427,7 +426,7 @@ func windowsAppsDir() string {
 func InitWindowsApps() {
 	for _, dir := range []string{windowsAppsDir(), filepath.Join(windowsRuntimeDir(), "bin")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Printf("[windowsapps] setup failed: %v", err)
+			logWarn("windowsapps", "setup failed: %v", err)
 		}
 	}
 }
@@ -478,20 +477,11 @@ func windowsAppEntries() []windowsAppEntry {
 		windowsAppsCache.roots = roots
 		windowsAppsCache.built = true
 		for _, issue := range issues {
-			log.Printf("[windowsapps] %s", issue)
+			logDebug("windowsapps", "%s", issue)
 		}
 	}
 	out := make([]windowsAppEntry, len(windowsAppsCache.entries))
 	copy(out, windowsAppsCache.entries)
-	return out
-}
-
-func windowsAppIssues() []string {
-	windowsAppEntries()
-	windowsAppsCache.mu.Lock()
-	defer windowsAppsCache.mu.Unlock()
-	out := make([]string, len(windowsAppsCache.issues))
-	copy(out, windowsAppsCache.issues)
 	return out
 }
 
@@ -731,7 +721,7 @@ func launchWindowsApp(entry windowsAppEntry) error {
 	}
 	windowsAppSetRunning(entry.Path, cmd.Process.Pid)
 	noteGameChildStarted(cmd)
-	log.Printf("[windowsapps] launched %s (pid %d)", entry.Title, cmd.Process.Pid)
+	logDebug("windowsapps", "launched %s (pid %d)", entry.Title, cmd.Process.Pid)
 
 	go func() {
 		waitErr := cmd.Wait()
@@ -746,7 +736,7 @@ func launchWindowsApp(entry windowsAppEntry) error {
 			logFile.Close()
 		}
 		if waitErr != nil {
-			log.Printf("[windowsapps] %s exited: %v", entry.Title, waitErr)
+			logWarn("windowsapps", "%s exited: %v", entry.Title, waitErr)
 		}
 	}()
 	return nil

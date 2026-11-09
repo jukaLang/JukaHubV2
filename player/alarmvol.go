@@ -23,7 +23,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,12 +134,12 @@ func alarmVolumeDoRaise() {
 	// then restores a level that is still correct.
 	alarmVolumeWriteMarker(level)
 	if err := alarmVolumeSet(100); err != nil {
-		log.Printf("[alarm] could not raise the volume: %v", err)
+		logWarn("alarm", "could not raise the volume: %v", err)
 		alarmVolumeRemoveMarker()
 		return
 	}
 	alarmVol.saved, alarmVol.raised = level, true
-	log.Printf("[alarm] volume %d%% -> 100%% for the ring", level)
+	logDebug("alarm", "volume %d%% -> 100%% for the ring", level)
 }
 
 func alarmVolumeDoRestore() {
@@ -149,11 +148,11 @@ func alarmVolumeDoRestore() {
 	}
 	alarmVol.raised = false
 	if err := alarmVolumeSet(alarmVol.saved); err != nil {
-		log.Printf("[alarm] could not restore the volume to %d%%: %v", alarmVol.saved, err)
+		logWarn("alarm", "could not restore the volume to %d%%: %v", alarmVol.saved, err)
 		return // the marker stays, so the next start tries again
 	}
 	alarmVolumeRemoveMarker()
-	log.Printf("[alarm] volume restored to %d%%", alarmVol.saved)
+	logDebug("alarm", "volume restored to %d%%", alarmVol.saved)
 }
 
 func alarmVolumeWriteMarker(level int) {
@@ -162,13 +161,13 @@ func alarmVolumeWriteMarker(level int) {
 		return
 	}
 	if err := os.WriteFile(alarmVolumeMarkerPath(), data, 0o600); err != nil {
-		log.Printf("[alarm] could not record the volume to restore: %v", err)
+		logWarn("alarm", "could not record the volume to restore: %v", err)
 	}
 }
 
 func alarmVolumeRemoveMarker() {
 	if err := os.Remove(alarmVolumeMarkerPath()); err != nil && !os.IsNotExist(err) {
-		log.Printf("[alarm] could not remove %s: %v", alarmVolumeMarkerPath(), err)
+		logWarn("alarm", "could not remove %s: %v", alarmVolumeMarkerPath(), err)
 	}
 }
 
@@ -237,7 +236,7 @@ func alarmHoldMedia() {
 	if alarmCanPauseChildren() {
 		for _, cmd := range liveScreenChildren() {
 			if err := alarmSignalChild(cmd, true); err != nil {
-				log.Printf("[alarm] could not pause the running game: %v", err)
+				logWarn("alarm", "could not pause the running game: %v", err)
 				continue
 			}
 			alarmHeld.children = append(alarmHeld.children, cmd)
@@ -251,7 +250,7 @@ func alarmHoldMedia() {
 func alarmReleaseMedia() {
 	for _, cmd := range alarmHeld.children {
 		if err := alarmSignalChild(cmd, false); err != nil {
-			log.Printf("[alarm] could not resume the game: %v", err)
+			logWarn("alarm", "could not resume the game: %v", err)
 		}
 	}
 	alarmHeld.children = nil

@@ -43,7 +43,8 @@ func hoffCardBlocked() bool {
 	return !homeLayoutActive || transitionPhase != "none" || virtualKeyboardActive ||
 		modalPanelBlocksShoulders() || tb.startOpen || nc.open || qs.open || globalSearchOpen ||
 		homeCalendarOpen || shortcutsOpen || clipSearchOpen || controlsLegend.open || wpOpen ||
-		socialNotifOpen || onboarding.active || screensaverActiveNow() || alarmFiringActive()
+		onboarding.active || screensaverActiveNow() || alarmFiringActive() ||
+		homePowerConfirm.open
 }
 
 // hoffCardRefresh decides what the card shows, a few times a second.

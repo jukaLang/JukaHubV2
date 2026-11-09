@@ -28,7 +28,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -209,7 +208,7 @@ func saverPowerApply(want saverPowerMode) {
 	if want == saverPowerOff {
 		saverPowerEngaged.Store(false)
 		if hadWrites {
-			log.Printf("[IDLE] low power off: CPU settings restored")
+			logDebug("idle", "low power off: CPU settings restored")
 		}
 		return
 	}
@@ -220,7 +219,7 @@ func saverPowerApply(want saverPowerMode) {
 	}
 	plan := saverPowerPlan(cpufreqRoot, want)
 	if len(plan) == 0 {
-		log.Printf("[IDLE] low power on: frame rate and pollers only (no CPU ceiling to lower)")
+		logDebug("idle", "low power on: frame rate and pollers only (no CPU ceiling to lower)")
 		return
 	}
 	// The marker is written before the first value changes, so a crash at
@@ -229,7 +228,7 @@ func saverPowerApply(want saverPowerMode) {
 	for _, w := range plan {
 		if err := os.WriteFile(w.Path, []byte(w.Written+"\n"), 0o644); err != nil {
 			saverPower.denied = true
-			log.Printf("[IDLE] low power: %s is read-only on this firmware (%v)", filepath.Base(w.Path), err)
+			logWarn("idle", "low power: %s is read-only on this firmware (%v)", filepath.Base(w.Path), err)
 			break
 		}
 		// The kernel may normalise what it was given; what it reports back
@@ -244,7 +243,7 @@ func saverPowerApply(want saverPowerMode) {
 		return
 	}
 	saverPowerWriteMarker(saverPower.writes)
-	log.Printf("[IDLE] low power on: %s", saverPowerSummary(saverPower.writes))
+	logDebug("idle", "low power on: %s", saverPowerSummary(saverPower.writes))
 }
 
 // saverPowerRestoreLocked puts back every value the idle state wrote, newest
@@ -271,7 +270,7 @@ func saverRestoreWrites(writes []saverSysfsWrite) int {
 			continue
 		}
 		if err := os.WriteFile(w.Path, []byte(w.Original+"\n"), 0o644); err != nil {
-			log.Printf("[IDLE] could not restore %s: %v", w.Path, err)
+			logWarn("idle", "could not restore %s: %v", w.Path, err)
 			continue
 		}
 		restored++
@@ -433,13 +432,13 @@ func saverPowerWriteMarker(writes []saverSysfsWrite) {
 		return
 	}
 	if err := os.WriteFile(saverPowerMarkerPath(), data, 0o600); err != nil {
-		log.Printf("[IDLE] could not record the CPU settings to restore: %v", err)
+		logWarn("idle", "could not record the CPU settings to restore: %v", err)
 	}
 }
 
 func saverPowerRemoveMarker() {
 	if err := os.Remove(saverPowerMarkerPath()); err != nil && !os.IsNotExist(err) {
-		log.Printf("[IDLE] could not remove %s: %v", saverPowerMarkerPath(), err)
+		logWarn("idle", "could not remove %s: %v", saverPowerMarkerPath(), err)
 	}
 }
 
@@ -456,7 +455,7 @@ func saverPowerRecover() {
 	var marker saverPowerMarker
 	if json.Unmarshal(data, &marker) == nil && len(marker.Writes) > 0 {
 		if n := saverRestoreWrites(marker.Writes); n > 0 {
-			log.Printf("[IDLE] restored %d CPU setting(s) an interrupted idle screen left lowered", n)
+			logDebug("idle", "restored %d CPU setting(s) an interrupted idle screen left lowered", n)
 		}
 	}
 	saverPowerRemoveMarker()

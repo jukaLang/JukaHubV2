@@ -908,7 +908,8 @@ func cfgdocHints() []FooterHint {
 	if cfgdocUI.inPane {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "List"}}
 	}
-	tabs := FooterHint{Button: "L1/R1", Label: "View"}
+	// "/ Tab": the keyboard switches the view with Tab (cfgdocKey).
+	tabs := FooterHint{Button: "L1/R1 / Tab", Label: "View"}
 	switch {
 	case cfgdocUI.tab == cfgdocTabChanges:
 		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "X", Label: "Reset"}, {Button: "Y", Label: "Export"}, tabs, {Button: "B", Label: "Back"}}

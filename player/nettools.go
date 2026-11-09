@@ -87,16 +87,6 @@ func parseCloudflareTrace(body string) publicIPInfo {
 	return info
 }
 
-// publicIPSummary fetches the trace and formats it. A network failure is
-// reported with the reason rather than as an empty card.
-func publicIPSummary() (string, error) {
-	info, err := publicIPLookup(context.Background())
-	if err != nil {
-		return "", err
-	}
-	return formatPublicIP(info), nil
-}
-
 // publicIPLookup asks the trace endpoint what address the internet sees. The
 // request ends with ctx, so leaving the page stops it.
 func publicIPLookup(ctx context.Context) (publicIPInfo, error) {
@@ -293,16 +283,6 @@ func formatNeighbours(list []lanNeighbour) string {
 	return b.String()
 }
 
-// lanNeighbourSummary reads the platform's table. Reading it costs nothing and
-// touches no radio: it is what the router conversation already left behind.
-func lanNeighbourSummary() (string, error) {
-	list, err := lanNeighbourList()
-	if err != nil {
-		return "", err
-	}
-	return formatNeighbours(list), nil
-}
-
 // lanNeighbourList is the platform's neighbour table, sorted.
 func lanNeighbourList() ([]lanNeighbour, error) {
 	var list []lanNeighbour
@@ -478,15 +458,6 @@ func formatListeningPorts(list []listeningPort) string {
 	fmt.Fprintf(&b, "\n%d TCP port%s listening · read-only: read from the socket table",
 		len(list), pluralS(len(list)))
 	return b.String()
-}
-
-// listeningPortsSummary reads this device's socket table.
-func listeningPortsSummary() (string, error) {
-	list, err := listeningPortList()
-	if err != nil {
-		return "", err
-	}
-	return formatListeningPorts(list), nil
 }
 
 // listeningPortList is this device's listening TCP sockets, one row per port.

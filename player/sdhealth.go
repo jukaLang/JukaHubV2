@@ -24,7 +24,6 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -84,21 +83,6 @@ func sdFindings(fsType string, total, free int64, writeMBps float64, probed, ver
 		}
 	}
 	return out
-}
-
-// sdStatusLabel summarises findings for a one-line row.
-func sdStatusLabel(r sdHealthReport) string {
-	switch len(r.Findings) {
-	case 0:
-		if !r.Probed {
-			return "not measured"
-		}
-		return "OK"
-	case 1:
-		return "1 warning"
-	default:
-		return fmt.Sprintf("%d warnings", len(r.Findings))
-	}
 }
 
 // diskUsage reports total and free bytes for the filesystem holding path.
@@ -309,13 +293,6 @@ func sdHealthCached() sdHealthReport {
 	return report
 }
 
-// invalidateSDHealth forces the next Diagnostics visit to measure again.
-func invalidateSDHealth() {
-	sdHealthCache.mu.Lock()
-	sdHealthCache.report = nil
-	sdHealthCache.mu.Unlock()
-}
-
 // sdHealthLine is the compact Diagnostics form: no paths, no serial numbers.
 func sdHealthLine(r sdHealthReport) string {
 	parts := []string{}
@@ -332,12 +309,4 @@ func sdHealthLine(r sdHealthReport) string {
 		parts = append(parts, "unknown")
 	}
 	return strings.Join(parts, ", ")
-}
-
-// sortedFindings is used by the UI and the export so both list warnings the
-// same way.
-func sortedFindings(findings []string) []string {
-	out := append([]string(nil), findings...)
-	sort.Strings(out)
-	return out
 }

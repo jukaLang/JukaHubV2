@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net/url"
 	"os"
@@ -47,8 +46,8 @@ const (
 // and compiling these inside the loop made the parser the slowest part of a
 // refresh on the handheld.
 var (
-	regexpRSSItem     = regexp.MustCompile(`(?is)<item\b[^>]*>(.*?)</item>`)
-	regexpItemChannel = regexp.MustCompile(`(?is)<channel\b[^>]*>(.*?)</channel>`)
+	regexpRSSItem     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<item\b[^>]*>(.*?)</item>`) })
+	regexpItemChannel = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<channel\b[^>]*>(.*?)</channel>`) })
 )
 
 // podcastEpisode is one playable enclososure from a feed.
@@ -187,7 +186,7 @@ func formatMediaDuration(seconds int) string {
 func podcastParseFeed(feedURL, data string) podcastShow {
 	show := podcastShow{FeedURL: strings.TrimSpace(feedURL), Episodes: []podcastEpisode{}}
 	body := data
-	if m := regexpItemChannel.FindStringSubmatch(data); m != nil {
+	if m := regexpItemChannel().FindStringSubmatch(data); m != nil {
 		body = m[1]
 	}
 	show.Title = rssTag(body, "title")
@@ -205,7 +204,7 @@ func podcastParseFeed(feedURL, data string) podcastShow {
 	}
 
 	seen := map[string]bool{}
-	for _, m := range regexpRSSItem.FindAllStringSubmatch(data, -1) {
+	for _, m := range regexpRSSItem().FindAllStringSubmatch(data, -1) {
 		block := m[1]
 		enc := rssEnclosureURL(block)
 		if enc == "" || seen[enc] {
@@ -279,7 +278,7 @@ func loadPodcastSubscriptions() {
 		podcastStore.feeds = sanitizePodcastFeeds(feeds)
 		return
 	} else if !os.IsNotExist(err) {
-		log.Printf("[PODCAST] ignoring unreadable subscriptions: %v", err)
+		logWarn("podcast", "ignoring unreadable subscriptions: %v", err)
 	}
 	podcastStore.feeds = sanitizePodcastFeeds(podcastDefaultFeeds)
 }
@@ -391,14 +390,6 @@ func podcastFeedLabel(feed string) string {
 		return strings.TrimPrefix(u.Host, "www.")
 	}
 	return feed
-}
-
-// podcastShowForFeed returns one cached show.
-func podcastShowForFeed(feed string) (podcastShow, bool) {
-	podcastStore.mu.Lock()
-	defer podcastStore.mu.Unlock()
-	show, ok := podcastStore.shows[feed]
-	return show, ok
 }
 
 // podcastRefresh fetches every subscribed feed in parallel and returns how many

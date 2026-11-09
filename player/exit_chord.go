@@ -45,17 +45,6 @@ var exitChord exitChordState
 // be exercised without sleeping.
 var exitChordClock = time.Now
 
-// resetExitChord forgets any held buttons (used by tests and after a chord).
-// It clears the fields instead of the struct: the mutex lives inside it.
-func resetExitChord() {
-	exitChord.mu.Lock()
-	exitChord.back = false
-	exitChord.start = false
-	exitChord.armedAt = time.Time{}
-	exitChord.fired = false
-	exitChord.mu.Unlock()
-}
-
 // exitChordPressed feeds one controller button event into the latch and
 // reports whether it completed the Select + Start chord.
 func exitChordPressed(e *sdl.ControllerButtonEvent) bool {

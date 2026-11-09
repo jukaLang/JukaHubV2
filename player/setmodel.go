@@ -610,6 +610,13 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
+			// Network time, the zone, 12/24 h and the date format
+			// (datetime.go). The 12-hour switch lived under Display & theme.
+			ID: "datetime", Title: "Date & time", Glyph: "clock",
+			Subtitle: "The clock, your time zone and how dates read",
+			Rows:     dateTimeSettingsRows(),
+		},
+		{
 			ID: "display", Title: "Display & theme", Glyph: "palette",
 			Subtitle: "Themes, colours, text size and motion",
 			Rows: []setRow{
@@ -687,15 +694,7 @@ func setBuildSections() []setSection {
 						widgetToggleSideEffect(c, "timeOfDayTheme", on)
 					},
 				},
-				{
-					ID: "clock12", Label: "12-hour clock", Kind: setKindToggle,
-					Detail: setStatic("Show times as 3:30 PM instead of 15:30"),
-					Get:    func(c *Config) bool { return c.Variables.Clock12 },
-					Set: func(c *Config, on bool) {
-						setStoreBool(c, "clock12", on)
-						setToast("12-hour clock: " + setOnOff(on))
-					},
-				},
+				// The 12-hour clock moved to Date & time (datetime.go).
 				setColourRow("buttonColor", "Button colour", "A tint under every button · A types a colour"),
 				setColourRow("labelColor", "Label colour", "Text on buttons and labels · A types a colour"),
 				setColourRow("inputColor", "Input colour", "The wash under text fields · A types a colour"),
@@ -757,6 +756,24 @@ func setBuildSections() []setSection {
 						saveUserConfigDebounced(userConfigFromVariables(c))
 						// A click at the new level, so the step can be heard.
 						PlayNavSound()
+					},
+				},
+				{
+					ID: "startupSound", Label: "Startup & shutdown sound", Kind: setKindToggle, Quiet: true,
+					Detail: func(c *Config) string {
+						if !setUISoundsOn(c) {
+							return "Turn Interface sounds on to use it"
+						}
+						return "A chime when JukaHub starts and closes"
+					},
+					Disabled: func(c *Config) bool { return !setUISoundsOn(c) },
+					Get:      bootChimeOn,
+					Set: func(c *Config, on bool) {
+						setStoreBool(c, bootChimeEnabledKey, on)
+						saveUserConfigDebounced(userConfigFromVariables(c))
+						if on {
+							bootChimePreview(c)
+						}
 					},
 				},
 				{
@@ -849,6 +866,27 @@ func setBuildSections() []setSection {
 					ID: "nettools", Label: "Servers & network tools", Kind: setKindAction,
 					Detail: setStatic("FTP and SSH servers, speed test and lookups"),
 					Open:   netToolsOpen,
+				},
+				// The web builder's receiver (livebuilder.go): off on the
+				// handheld until switched on, off again after 30 idle minutes.
+				// The pairing code is shown here and nowhere else.
+				{
+					ID: "liveBuilder", Label: "Live Builder", Kind: setKindToggle,
+					Detail: liveBuilderSettingDetail,
+					Get:    liveBuilderSettingOn,
+					Set:    liveBuilderSettingSet,
+				},
+				{
+					ID: "liveBuilderNewCode", Label: "New pairing code", Kind: setKindAction,
+					Detail:  setStatic("The current code stops working; type the new one into the builder"),
+					Visible: liveBuilderSettingOn,
+					Open:    liveBuilderNewCode,
+				},
+				{
+					ID: "liveBuilderPending", Label: "Design waiting for approval", Kind: setKindAction,
+					Detail:  liveBuilderPendingDetail,
+					Visible: liveBuilderPendingVisible,
+					Open:    liveBuilderShowApproval,
 				},
 				// Your other JukaHubs on this Wi-Fi (peer.go): pairing, save
 				// sync, handoff and Nearby. Everything is off until switched on.
@@ -1052,14 +1090,12 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
-					ID: "coreUpdate", Label: "Update cores automatically", Kind: setKindToggle,
-					Detail:  setStatic("Once a day, while charging or idle, never mid-game"),
+					ID: "coreUpdate", Label: "Core updates", Kind: setKindChoice,
+					Detail:  setStatic("What the daily check does; a replaced build is always kept"),
 					Visible: func(*Config) bool { return setHandheld() },
-					Get:     emuAutoUpdateEnabled,
-					Set: func(c *Config, on bool) {
-						emuSetAutoUpdate(c, on)
-						setToast("Automatic core updates: " + setOnOff(on))
-					},
+					Options: coreUpdateModeOptions,
+					Current: coreUpdateModeIndex,
+					Choose:  func(c *Config, value string) { setToast(coreUpdateModeChoose(c, value)) },
 				},
 				{
 					ID: "cpuBoost", Label: "Full speed while playing", Kind: setKindToggle,

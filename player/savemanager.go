@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -107,7 +106,7 @@ func saveManagerResumeDir() string    { return filepath.Join(saveManagerDir(), "
 // best-effort: a read-only card must not stop the hub from booting.
 func InitSaveManager() {
 	if err := ensureSaveManagerLayout(); err != nil {
-		log.Printf("[saves] setup failed: %v", err)
+		logWarn("saves", "setup failed: %v", err)
 	}
 }
 
@@ -525,7 +524,7 @@ func listSaveSnapshots() []saveSnapshot {
 	}
 	out := make([]saveSnapshot, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+		if !entry.IsDir() || skipScanEntryName(entry.Name()) {
 			continue
 		}
 		snap, err := loadSaveSnapshot(filepath.Join(saveManagerSnapshotsDir(), entry.Name()))

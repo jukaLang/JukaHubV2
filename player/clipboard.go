@@ -244,6 +244,7 @@ var vkClipView struct {
 	planCfg   *Config
 	planW     int32
 	planPad   bool
+	planRemap uint32
 	planScale float64
 	plan      footerPlan
 }
@@ -560,14 +561,17 @@ func vkClipDrawList(renderer *sdl.Renderer, config *Config, list sdl.Rect, vis [
 // is measured once per width and type size.
 func vkClipDrawFooter(renderer *sdl.Renderer, config *Config, band sdl.Rect) {
 	v := &vkClipView
-	onPad := P().IsHandheld()
-	if !v.planOK || v.planCfg != config || v.planW != band.W || v.planPad != onPad || v.planScale != a11y.fontScale {
+	// The pad's hints or the keyboard's, whichever the hints use this frame
+	// (inputhints.go); the plan below is re-measured when that, or
+	// Accessibility's remap, changes.
+	onPad, remap := !hintsUseKeyboard(), hintRemapGen()
+	if !v.planOK || v.planCfg != config || v.planW != band.W || v.planPad != onPad || v.planRemap != remap || v.planScale != a11y.fontScale {
 		hints := vkClipKeyHints[:]
 		if onPad {
 			hints = vkClipPadHints[:]
 		}
 		v.plan = planFooterHints(config, hints, band.W)
-		v.planOK, v.planCfg, v.planW, v.planPad, v.planScale = true, config, band.W, onPad, a11y.fontScale
+		v.planOK, v.planCfg, v.planW, v.planPad, v.planRemap, v.planScale = true, config, band.W, onPad, remap, a11y.fontScale
 	}
 	vkDrawHintPlan(renderer, config, v.plan, band)
 }

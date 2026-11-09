@@ -11,7 +11,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,7 +134,7 @@ func scanInstalledApps(config *Config) {
 	// A fresh scan may find icons that were missing last time (a program that
 	// was just installed, an extraction that finished), so re-resolve them.
 	dropAppIconPathCache()
-	log.Printf("[apps] scanned %d app entries", len(entries))
+	logDebug("apps", "scanned %d app entries", len(entries))
 	// Icons for desktop shortcuts are extracted by the shell in the background;
 	// the call is a cheap no-op when every tile already has a picture.
 	requestAppIconExtraction(appProgramPaths(entries))
@@ -317,7 +316,7 @@ func scanAppSubdir(dir string) (FileEntry, bool) {
 		Icon   string `json:"icon"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		log.Printf("[apps] bad app config %s: %v", cfgPath, err)
+		logWarn("apps", "bad app config %s: %v", cfgPath, err)
 		return FileEntry{}, false
 	}
 	launch := strings.TrimSpace(cfg.Launch)
@@ -328,7 +327,7 @@ func scanAppSubdir(dir string) (FileEntry, bool) {
 	// regular file inside the app folder, never "../.." or an absolute path.
 	launchPath, err := resolveWithinRoot(dir, launch)
 	if err != nil {
-		log.Printf("[SECURITY] [apps] %s has an unsafe launch path: %v", cfgPath, err)
+		logWarn("apps", "security: %s has an unsafe launch path: %v", cfgPath, err)
 		return FileEntry{}, false
 	}
 	info, err := os.Stat(launchPath)
@@ -452,7 +451,7 @@ func launchAppEntry(config *Config, entry FileEntry) {
 			changeSceneTo(config, idx)
 			return
 		}
-		log.Printf("[apps] unknown built-in app scene %q", scene)
+		logWarn("apps", "unknown built-in app scene %q", scene)
 		return
 	}
 	if !launchInstalledApp(external) {
@@ -492,7 +491,7 @@ func dropAppEntry(config *Config, path string) {
 			focusedFileIndex = 0
 		}
 	}
-	log.Printf("[apps] removed unlaunchable row %q (%s)", removed, path)
+	logDebug("apps", "removed unlaunchable row %q (%s)", removed, path)
 	ShowToast("Removed "+removed+" — it no longer opens", ToastKindWarning)
 }
 
@@ -515,7 +514,7 @@ func launchBuiltinAppAction(action string) {
 	case "chiaki":
 		openChiakiPanel()
 	default:
-		log.Printf("[apps] unknown built-in app action %q", action)
+		logWarn("apps", "unknown built-in app action %q", action)
 	}
 }
 
@@ -544,7 +543,7 @@ func launchInstalledApp(path string) bool {
 		return false
 	}
 	if !isLaunchableAppPath(clean) {
-		log.Printf("[SECURITY] [apps] refusing to launch %q: outside the app folders", clean)
+		logWarn("apps", "security: refusing to launch %q: outside the app folders", clean)
 		showToast("Refusing to launch an app outside the app folders", ToastError())
 		return false
 	}
@@ -557,19 +556,32 @@ func launchInstalledApp(path string) bool {
 	switch ext {
 	case ".exe", ".bat", ".cmd", ".lnk", ".url", ".sh":
 	default:
-		log.Printf("[apps] refusing to launch unsupported file type %q", ext)
+		logWarn("apps", "refusing to launch unsupported file type %q", ext)
 		showToast("Unsupported app type "+ext, ToastError())
 		return false
 	}
-	log.Printf("[apps] launching %s", clean)
+	logDebug("apps", "launching %s", clean)
+	// No shell ever sees a command line here: the only string is clean, a
+	// regular file inside the app folders (checked above), and it goes to the
+	// program as one argument.
 	var cmd *exec.Cmd
 	switch {
 	case runtime.GOOS == "windows" && (ext == ".lnk" || ext == ".url"):
 		// Shortcuts are resolved by the shell handler, not executed directly.
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", clean)
 	case runtime.GOOS == "windows" && (ext == ".bat" || ext == ".cmd"):
-		cmd = exec.Command("cmd", "/c", clean)
+		// A batch file needs cmd.exe, which parses its own command line:
+		// winBatchCommand quotes the path for it, so "Game (USA).bat" or a
+		// name with '&' stays one path instead of becoming two commands.
+		bat, batErr := winBatchCommand(clean)
+		if batErr != nil {
+			logWarn("apps", "refusing to launch %s: %v", clean, batErr)
+			showToast("Cannot launch "+filepath.Base(clean)+" — rename it without % or quotes", ToastError())
+			return false
+		}
+		cmd = bat
 	case ext == ".sh":
+		// sh reads the script file; the absolute path is an operand, not code.
 		cmd = exec.Command("sh", clean)
 	default:
 		cmd = exec.Command(clean)
@@ -580,7 +592,7 @@ func launchInstalledApp(path string) bool {
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
-		log.Printf("[apps] launch failed for %s: %v", clean, err)
+		logWarn("apps", "launch failed for %s: %v", clean, err)
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
 		return false
 	}
@@ -597,7 +609,7 @@ func launchInstalledApp(path string) bool {
 func openAppsFolder() {
 	dir := appsFolder()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("[apps] cannot create %s: %v", dir, err)
+		logWarn("apps", "cannot create %s: %v", dir, err)
 	}
 	// openInExplorer reveals the parent folder of its argument, so pass a
 	// placeholder file inside the apps folder.

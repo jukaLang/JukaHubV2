@@ -22,11 +22,9 @@ package main
 
 import (
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,7 +231,7 @@ func upsertPSConsole(update psConsole) psHostsFile {
 		state.Hosts[idx] = merged
 	}
 	if err := savePSHosts(state); err != nil {
-		log.Printf("[psremote] saving hosts failed: %v", err)
+		logWarn("psremote", "saving hosts failed: %v", err)
 	}
 	return state
 }
@@ -248,7 +246,7 @@ func removePSConsole(host string) psHostsFile {
 	}
 	state.Hosts = kept
 	if err := savePSHosts(state); err != nil {
-		log.Printf("[psremote] saving hosts failed: %v", err)
+		logWarn("psremote", "saving hosts failed: %v", err)
 	}
 	return state
 }
@@ -277,19 +275,6 @@ func psRegistKeyValid(key string) bool {
 func psRPKeyValid(key string) bool {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key))
 	return err == nil && len(raw) == 16
-}
-
-// psRPKeyFromHex converts the helper's hex output into the base64 form the
-// session file needs.
-func psRPKeyFromHex(value string) (string, error) {
-	raw, err := hex.DecodeString(strings.TrimSpace(value))
-	if err != nil {
-		return "", fmt.Errorf("rp_key is not hex: %w", err)
-	}
-	if len(raw) != 16 {
-		return "", fmt.Errorf("rp_key is %d bytes, expected 16", len(raw))
-	}
-	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
 // psRPVersion is the RP-Version string for a target: the PS4 path sent it with

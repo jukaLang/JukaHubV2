@@ -13,9 +13,16 @@
  *   2. loads the game's main library with the runner's own bionic loader
  *      (bionicld.c) — every import bound through the compat resolver, the
  *      complete undefined-symbol list printed before any game code runs;
- *   3. resolves ANativeActivity_onCreate (or $ANDROIDPAK_ENTRY), searching
- *      the other staged libraries when the main one does not export it;
- *   4. drives the lifecycle (activity.c) and _exit()s with its status —
+ *   3. builds the Java side the game expects (jni.h): the manifest and the
+ *      DEX class index say which activity class it is and what it extends,
+ *      class packs (jnipack_*.c) implement a game family's Java methods, and
+ *      every loaded library's JNI_OnLoad runs, dependencies first — what
+ *      System.loadLibrary would have done;
+ *   4. resolves ANativeActivity_onCreate (or $ANDROIDPAK_ENTRY), searching
+ *      the other staged libraries when the main one does not export it, or
+ *      drives an androidx GameActivity game through its natives
+ *      (gameactivity.c) when it has no NativeActivity entry;
+ *   5. drives the lifecycle (activity.c) and _exit()s with its status —
  *      Android kills app processes, it never runs their static destructors.
  *
  * Windows smoke builds keep the original dlopen/LoadLibrary path (dlport.c):
@@ -38,11 +45,18 @@
 
 #if defined(__linux__)
 #define ANDROIDRT_BIONIC_LOADER 1
+#include "apkmeta.h"
+#include "apkzip.h"
 #include "bioniccompat.h"
 #include "bionicld.h"
+#include "device.h"
+#include "jni.h"
 /* eglpresent.c */
 void apak_presentInit(void);
 void apak_presentShutdown(void);
+/* class packs and the GameActivity bridge */
+extern const ApakJniPack apak_packMinecraft;
+void apak_gameActivityDefine(void);
 #endif
 
 static const char *require_env(const char *name) {
@@ -98,6 +112,44 @@ static int mkdirs(const char *path) {
     return 0;
 }
 
+/* ── the Java side: manifest, DEX index, class packs ──────────────────── */
+
+#define GAME_ACTIVITY_CLASS "com/google/androidgamesdk/GameActivity"
+
+static ApakDexIndex *g_dex;
+
+static int classInApk(const char *name, const char **superName) {
+    return g_dex ? apak_dexLookup(g_dex, name, superName) : 0;
+}
+
+/* 1 when the manifest's activity is (a subclass of) androidx GameActivity,
+ * 0 when it is a NativeActivity or unknown. */
+static int manifestGameActivity(const ApakManifest *man) {
+    char name[512];
+    const char *cur = name, *super = NULL;
+    size_t i;
+    int depth;
+    if (!man->activity[0]) return 0;
+    snprintf(name, sizeof name, "%s", man->activity);
+    for (i = 0; name[i]; i++)
+        if (name[i] == '.') name[i] = '/';
+    for (depth = 0; depth < 16 && cur; depth++) {
+        if (strcmp(cur, GAME_ACTIVITY_CLASS) == 0) return 1;
+        if (strcmp(cur, "android/app/NativeActivity") == 0) return 0;
+        super = NULL;
+        if (!classInApk(cur, &super)) return 0;
+        cur = super;
+    }
+    return 0;
+}
+
+/* System.loadLibrary's second half for every library already loaded. */
+static void callOnLoad(const char *name, void *handle, void *ud) {
+    void *onLoad = apak_ldSymSelf(handle, "JNI_OnLoad");
+    (void)ud;
+    if (onLoad) apak_jniCallOnLoad(onLoad, name);
+}
+
 static int scanMain(int argc, char **argv) {
     const char *lib = argv[2];
     char dir[4096];
@@ -123,8 +175,10 @@ int main(int argc, char **argv) {
     const char *entry = getenv("ANDROIDPAK_ENTRY");
 #if ANDROIDRT_BIONIC_LOADER
     static char dataFiles[4096], dataExternal[4096], dataObb[4096];
-    char libDir[4096], dataRoot[3072], cacheDir[4096];
+    static char libDir[4096], dataRoot[3072], cacheDir[4096];
+    static ApakManifest manifest;
     const char *data;
+    int gameActivity = 0;
 #endif
 
 #if ANDROIDRT_BIONIC_LOADER
@@ -177,6 +231,59 @@ int main(int argc, char **argv) {
     /* Before the game loads: its EGL imports must bind to the present layer. */
     apak_presentInit();
 
+    /* What the APK says about itself: package, launcher activity and its
+     * superclass chain (classes*.dex), read straight from the APK. */
+    {
+        char err[256];
+        ApakZip *apk = android_apkArchive();
+        err[0] = '\0';
+        if (apak_manifestLoad(runner.stagedRoot, apk, &manifest, err, sizeof err) != 0)
+            fprintf(stderr, "[androidrt] manifest: %s — package and activity unknown\n", err[0] ? err : "unreadable");
+        else
+            fprintf(stderr, "[androidrt] manifest: %s %s, activity %s (minSdk %d, targetSdk %d)\n", manifest.package,
+                    manifest.versionName, manifest.activity[0] ? manifest.activity : "?", manifest.minSdk,
+                    manifest.targetSdk);
+        if (!manifest.package[0] && getenv("ANDROIDPAK_PACKAGE"))
+            snprintf(manifest.package, sizeof manifest.package, "%s", getenv("ANDROIDPAK_PACKAGE"));
+        err[0] = '\0';
+        g_dex = apk ? apak_dexIndexBuild(apk, err, sizeof err) : NULL;
+        if (g_dex)
+            fprintf(stderr, "[androidrt] dex: %zu classes in %zu file(s)\n", apak_dexCount(g_dex), apak_dexFiles(g_dex));
+        else if (err[0])
+            fprintf(stderr, "[androidrt] dex: %s\n", err);
+        gameActivity = manifestGameActivity(&manifest);
+    }
+
+    /* The Java environment exists before any game code runs: a library's
+     * constructor may already look for its JavaVM. */
+    if (apak_jniEnabled()) {
+        ApakJniConfig jcfg;
+        const ApakDevice *dev = apak_device();
+        memset(&jcfg, 0, sizeof jcfg);
+        jcfg.packageName = manifest.package;
+        jcfg.activityClass = manifest.activity;
+        jcfg.versionName = manifest.versionName;
+        jcfg.apkPath = runner.apkPath;
+        jcfg.stagedRoot = runner.stagedRoot;
+        jcfg.libDir = libDir;
+        jcfg.dataRoot = dataRoot;
+        jcfg.filesDir = dataFiles;
+        jcfg.externalDir = dataExternal;
+        jcfg.obbDir = dataObb;
+        jcfg.cacheDir = cacheDir;
+        jcfg.model = dev->model;
+        jcfg.board = dev->board;
+        apak_devicePanel(&jcfg.panelW, &jcfg.panelH);
+        jcfg.dpi = apak_deviceDpi();
+        jcfg.gameActivity = gameActivity;
+        jcfg.assetManager = android_openAssetManager(runner.stagedRoot);
+        jcfg.resolveSymbol = apak_ldSymBundled;
+        jcfg.classInApk = classInApk;
+        apak_jniAddPack(&apak_packMinecraft);
+        apak_jniInit(&jcfg);
+        if (gameActivity) apak_gameActivityDefine();
+    }
+
     if (getenv("ANDROIDPAK_SCAN") && strcmp(getenv("ANDROIDPAK_SCAN"), "0") != 0) {
         int missing = apak_ldScan(libPath);
         if (missing < 0) fprintf(stderr, "[androidrt] could not load %s: %s\n", libPath, apak_ldLastError());
@@ -189,7 +296,14 @@ int main(int argc, char **argv) {
         return 2;
     }
     onCreate = apak_ldSymSelf(game, entry);
-    if (!onCreate) {
+    if (!onCreate && !gameActivity &&
+        apak_ldSymBundled("Java_com_google_androidgamesdk_GameActivity_initializeNativeCode")) {
+        /* No manifest said so, but the library carries GameActivity's glue:
+         * that is the entry, not some other library's NativeActivity. */
+        gameActivity = 1;
+        if (apak_jniEnabled()) apak_gameActivityDefine();
+    }
+    if (!onCreate && !gameActivity) {
         char other[4096];
         if (apak_ldFindExporter(entry, other, sizeof other) && strcmp(other, libPath) != 0) {
             fprintf(stderr, "[androidrt] %s exports no %s; %s does — loading it as the entry library\n",
@@ -199,6 +313,10 @@ int main(int argc, char **argv) {
         }
     }
     if (game) onFrame = apak_ldSymSelf(game, "ANativeActivity_onFrame");
+    /* What System.loadLibrary would have done before the activity starts:
+     * every library's JNI_OnLoad, dependencies first. GameActivity games
+     * register their natives here. */
+    if (game && apak_jniEnabled()) apak_ldForEachInitOrder(game, callOnLoad, NULL);
 #else
     /* Legacy path (Windows smoke builds): the platform loader. */
     {
@@ -215,6 +333,30 @@ int main(int argc, char **argv) {
     onFrame = rt_dlsym(game, "ANativeActivity_onFrame");
 #endif
 
+#if ANDROIDRT_BIONIC_LOADER
+    if (!onCreate && gameActivity) {
+        int status;
+        if (!apak_jniEnabled()) {
+            fprintf(stderr, "[androidrt] %s is a GameActivity game, which needs the Java environment — "
+                            "ANDROIDPAK_JNI=off cannot run it\n", runner.mainLib);
+            return 3;
+        }
+#ifdef JUKAHUB_EVDEV
+        {
+            const char *inputOpt = getenv("ANDROIDPAK_INPUT");
+            if (!inputOpt || strcmp(inputOpt, "off") != 0) android_inputStartEvdev();
+        }
+#endif
+        runner.running = 1;
+        status = runGameActivity(&runner);
+        fprintf(stderr, "[androidrt] lifecycle: done, exit status %d\n", status);
+        apak_jniReport();
+        apak_presentShutdown();
+        fflush(stdout);
+        fflush(stderr);
+        _exit(status);
+    }
+#endif
     if (!onCreate) {
         fprintf(stderr,
                 "[androidrt] %s exports no %s\n"
@@ -239,6 +381,7 @@ int main(int argc, char **argv) {
     runOneActivity(&runner, onCreate, onFrame);
     fprintf(stderr, "[androidrt] lifecycle: done, exit status %d\n", runner.exitCode);
 #if ANDROIDRT_BIONIC_LOADER
+    apak_jniReport();
     apak_presentShutdown();
     fflush(stdout);
     fflush(stderr);

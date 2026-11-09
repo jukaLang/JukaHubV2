@@ -65,6 +65,9 @@ type gmetaDetails struct {
 	isRA   bool
 	resume bool
 	ra     string
+	// coreNote warns that some states were made with another build of the
+	// core (corebuilds_history.go); "" when none were.
+	coreNote string
 	// zone is the row with the focus: 0 the buttons, 1 the save states.
 	zone   int
 	button int
@@ -301,6 +304,9 @@ func gmetaLoadLocal(ctx context.Context, gen int, game libraryGame, rec gmetaRec
 		gmetaUI.loading = false
 		gmetaUI.isRA = isRA
 		gmetaUI.states = states
+		if len(states) == 0 {
+			gmetaUI.coreNote = ""
+		}
 		gmetaUI.ra = ra
 		if gmetaUI.state >= len(states) {
 			gmetaUI.state = 0
@@ -309,6 +315,17 @@ func gmetaLoadLocal(ctx context.Context, gen int, game libraryGame, rec gmetaRec
 			gmetaUI.zone = 0
 		}
 	})
+	// The core-build line comes after the strip is on screen: it reads the
+	// launcher, the history and (once per binary) the core's checksum
+	// (corebuilds_history.go).
+	if len(states) > 0 && ctx.Err() == nil {
+		coreNote := coreStatesNote(launcher, game.System, states)
+		tbxPost(func() {
+			if gmetaUI.open && gmetaUI.gen == gen {
+				gmetaUI.coreNote = coreNote
+			}
+		})
+	}
 	for _, st := range states {
 		if st.Thumb == "" {
 			continue
@@ -1059,8 +1076,9 @@ func gmetaRenderDetails(renderer *sdl.Renderer, config *Config) {
 		hint = hintLine(FooterHint{"A", "Play from this save"}, FooterHint{"Left/Right", "Choose"},
 			FooterHint{"Down", "Buttons"}, FooterHint{"B", "Back"})
 	} else {
+		// "/ O": the keyboard opens the options with O (gmetaHandleKey).
 		hints := []FooterHint{{"A", gmetaButtonLabel(gmetaUI.button)}, {"X", "Favorite"}, {"Y", "Look up again"},
-			{"Start", "Options"}}
+			{"Start / O", "Options"}}
 		if len(gmetaUI.states) > 0 {
 			hints = append(hints, FooterHint{"Up", "Saves"})
 		}
@@ -1250,10 +1268,21 @@ func gmetaDrawStates(renderer *sdl.Renderer, config *Config, fonts tbxFonts, r s
 		gmetaUI.stateHits = append(gmetaUI.stateHits, gameLibRowHit{index: i, rect: rect})
 		x += gmetaCardW + gap
 	}
+	right := r.X + r.W
 	if more := len(states) - (gmetaUI.first + visible); more > 0 {
 		label := strconv.Itoa(more) + " more ›"
 		lw, _ := measureText(fonts.tiny, label)
 		renderText(renderer, config, fonts.tiny, label, ColorTextTertiary(), r.X+r.W-lw, r.Y)
+		right -= lw + 16
+	}
+	// States made with a core build that has since been replaced may not
+	// load: one line beside the heading says so (corebuilds_history.go).
+	if note := gmetaUI.coreNote; note != "" {
+		hw, _ := measureText(fonts.tiny, "SAVE STATES")
+		x := r.X + hw + 16
+		if w := right - x; w > 80 {
+			renderText(renderer, config, fonts.tiny, ellipsize(fonts.tiny, note, w), WarningInk(), x, r.Y)
+		}
 	}
 }
 

@@ -288,11 +288,3 @@ func musicToggleFavorite(path string) bool {
 	_ = musicFavoritesSaveLocked()
 	return musicFavData.paths[key]
 }
-
-// musicFavoriteCount is the number of saved favorites (for the player header).
-func musicFavoriteCount() int {
-	musicFavMu.Lock()
-	defer musicFavMu.Unlock()
-	musicFavoritesLoadLocked()
-	return len(musicFavData.paths)
-}

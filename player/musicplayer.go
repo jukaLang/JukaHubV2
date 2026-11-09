@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -30,9 +29,8 @@ import (
 // ──────────────────────────────────────────────────────────────────────
 
 const (
-	visualBars   = 32
-	visualBarGap = 4
-	visualMaxH   = 120
+	visualBars = 32
+	visualMaxH = 120
 )
 
 // audioFileExtensions are the extensions the playlist accepts. Everything is
@@ -524,7 +522,7 @@ func musicDecode(path string, startSec float64, gen int) {
 	}
 	ffmpegPath, err := helperToolPath("ffmpeg", cfg)
 	if err != nil {
-		log.Printf("[ERROR] musicDecode: ffmpeg unavailable: %v", err)
+		logError("musicplayer", "musicDecode: ffmpeg unavailable: %v", err)
 		showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
 		return
 	}
@@ -547,11 +545,11 @@ func musicDecode(path string, startSec float64, gen int) {
 	cmd.Stderr = nil
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[ERROR] musicDecode: stdout pipe: %v", err)
+		logError("musicplayer", "musicDecode: stdout pipe: %v", err)
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] musicDecode: start ffmpeg: %v", err)
+		logError("musicplayer", "musicDecode: start ffmpeg: %v", err)
 		showToast("Could not start audio playback", ToastError())
 		return
 	}
@@ -1668,17 +1666,38 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	renderMusicPEQPanel(renderer, config)
 }
 
-// musicButton draws one rounded transport button and returns its rect.
+// musicButtonIcons maps the transport's old text marks to the shared vector
+// icons (icondefs.go). The layouts, the skins and the tap targets still name
+// their buttons by those marks; only the drawing changed, so a "|<" that read as
+// stray punctuation is a skip-back glyph now.
+var musicButtonIcons = map[string]string{
+	"|<": "skip-back",
+	">|": "skip-forward",
+	">":  "play",
+	"II": "pause",
+	"[]": "stop",
+	"+":  "plus",
+	"-":  "minus",
+}
+
+// musicButton draws one rounded transport button and returns its rect. A
+// transport mark is drawn as its icon; any other label (Shuffle, Repeat, Fav)
+// stays text.
 func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, label string, primary bool) sdl.Rect {
-	fill := WithAlpha(ColorPanelRaised, 255)
+	fill := glassA(18)
 	fg := ColorTextPrimary()
-	border := WithAlpha(ColorBorder, 200)
+	border := glassA(40)
 	if primary {
 		fill = accentColor
-		fg = sdl.Color{R: 10, G: 14, B: 22, A: 255}
+		fg = contrastText(accentColor)
 		border = accentColor
 	}
-	return UIButton(renderer, config, sdl.Rect{X: x, Y: y, W: w, H: h}, label, UIButtonStyle{
+	icon, isIcon := musicButtonIcons[label]
+	text := label
+	if isIcon {
+		text = ""
+	}
+	rect := UIButton(renderer, config, sdl.Rect{X: x, Y: y, W: w, H: h}, text, UIButtonStyle{
 		Variant:    UIButtonCustom,
 		Fill:       fill,
 		Border:     border,
@@ -1687,6 +1706,14 @@ func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w
 		Radius:     RadiusMD,
 		NoShadow:   true,
 	}, UIButtonState{})
+	if isIcon && renderer != nil {
+		g := min32(w, h) * 9 / 20
+		if g < 12 {
+			g = min32(w, h) - 4
+		}
+		drawHomeGlyphTinted(renderer, icon, sdl.Rect{X: x + (w-g)/2, Y: y + (h-g)/2, W: g, H: g}, fg)
+	}
+	return rect
 }
 
 // HandleMusicClick processes mouse/touch clicks on the audio player. It reports

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"math"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -219,12 +219,108 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		kept = append(kept, entry)
 	}
 
+	// "Screens", not "Scenes": a scene is the config's word for a screen, and
+	// the menu is read by people, not by the config.
 	return []startMenuGroup{
-		{name: "Scenes", icon: "S", items: kept},
+		{name: "Screens", icon: "S", items: kept},
 		{name: "Games", icon: "G", items: games},
 		{name: "Tools", icon: "T", items: tools},
 		{name: "Device", icon: "D", items: device},
 	}
+}
+
+// startMenuSceneGlyphs and startMenuActionGlyphs name the vector icon a Start
+// menu row draws (icondefs.go). The rows used to print their config "icon" as
+// text — "*", "~", ">>", "[D]", ">_", "pkg" — or a single letter, which on a
+// handheld read as stray punctuation beside every label. A row with no entry
+// here, or a name the icon set does not know, keeps its text mark.
+var (
+	startMenuSceneGlyphs = map[string]string{
+		"Main": "home", "Tube": "media", "IPStream": "stream", "FileExplorer": "files",
+		"MusicPlayer": "music", "LiveTV": "tv", "Podcasts": "podcast", "Recordings": "video",
+		"Tickers": "chart", "Apps": "apps", "Terminal": "terminal", "Cron": "schedule",
+		"NetSpeed": "speed", "Benchmark": "benchmark", "DiskSpace": "disk", "Weather": "weather",
+		"Hardware": "hardware", "LogExporter": "logs", "Favorites": "favorites",
+		"UnitConverter": "calculator", "Packages": "packages", "Chat": "chat", "Shorts": "video",
+		"CanvasSandbox": "palette", "JukaLand": "jukaland", "TextBrowser": "browser",
+		"Settings": "settings", "About": "info", "Tools": "tools", "Calculator": "calculator",
+		"Pomodoro": "timer", "Alarm": "alarm", "Dashboard": "grid", "PDFReader": "pdf",
+		"Notes": "edit", "Games": "games", "Browser": "browser", "Playtime": "trophy",
+		"RomManager": "rom", "NetworkTools": "network", "WiFi": "wifi",
+	}
+	startMenuActionGlyphs = map[string]string{
+		"Emulators": "emulator", "Games Library": "games", "Game Profiles": "controller",
+		"PS Remote Play": "tv", "RetroAchievements": "trophy", "Save Manager": "saves",
+		"Windows Apps": "apps", "PortMaster Ports": "packages", "Smart Pro Compatibility": "check",
+		"Network tools": "network", "Downloads": "download", "Curation Hub": "sparkles",
+		"Audio": "music", "Smart Home": "home", "Remote Cast": "tv", "Accessibility": "user",
+		"Stick Calibration": "controller", "Quick Settings": "preferences",
+		"Wi-Fi Networks": "wifi", "Screenshot": "camera", "Sleep Screen": "moon",
+		"Ambient": "clock", "Wallpapers": "image", "Quit JukaHub": "power",
+		// The rail's groups.
+		"Screens": "grid", "Games": "games", "Tools": "tools", "Device": "devices",
+	}
+)
+
+// startMenuGlyph is the icon for a row, or "" to keep its text mark.
+func startMenuGlyph(entry startMenuEntry) string {
+	name := ""
+	if entry.scene != "" {
+		name = startMenuSceneGlyphs[entry.scene]
+	}
+	if name == "" {
+		name = startMenuActionGlyphs[entry.name]
+	}
+	if name == "" && strings.HasPrefix(entry.name, "Send to ") {
+		name = "share"
+	}
+	if name == "" || !iconKnown(name) {
+		return ""
+	}
+	return name
+}
+
+// drawStartMenuMark draws a row's icon in its 32px leading column: the vector
+// glyph when the row has one, its text mark otherwise.
+func drawStartMenuMark(renderer *sdl.Renderer, config *Config, font *ttf.Font, glyph, mark string, x, rowY, rowH int32, ink sdl.Color) {
+	if glyph != "" {
+		size := int32(22)
+		drawHomeGlyphTinted(renderer, glyph, sdl.Rect{X: x, Y: rowY + (rowH-size)/2, W: size, H: size}, ink)
+		return
+	}
+	if font != nil {
+		renderText(renderer, config, font, mark, ink, x, rowY+(rowH-int32(font.Height()))/2)
+	}
+}
+
+// startMenuPower is the menu's power key: X asks to quit JukaHub through the
+// Exit screen's confirmation ("Quit JukaHub?" — Back / Quit). Quitting has two
+// fast paths now that Home has no Exit pill — this, and the Select + Start
+// chord — and the one in a menu asks first, because X sits next to A.
+func startMenuPower(config *Config) {
+	startMenuDismiss()
+	startMenuCloseOverlays()
+	if config != nil {
+		if idx := sceneIndexExact(config, "Exit"); idx >= 0 {
+			PlayActivateSound()
+			changeSceneTo(config, idx)
+			return
+		}
+	}
+	// A config without the Exit screen still quits, the way the Device
+	// group's "Quit JukaHub" row does.
+	requestAppExit()
+}
+
+// startMenuCloseOverlays drops the modal panels a menu choice replaces.
+// Without it, opening the menu from Save Manager and picking another screen (or
+// Quit) would stack two modals and leave the old one swallowing input behind
+// the new one.
+func startMenuCloseOverlays() {
+	savePanel = saveManagerPanelState{}
+	saveRowHits = nil
+	curationPanel = curationPanelState{}
+	curationRowHits = nil
 }
 
 // withoutStartMenuEntry returns the list without one action, so platform gates
@@ -383,6 +479,14 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
+	// The header's subtitle and the footer use the hint size, not the 24px
+	// "small" role: at 24px the subtitle ran from the header into the first
+	// row (it starts 43px down a 64px band) and the footer line hung 5px past
+	// the card's bottom edge.
+	captionFont := getFontSized(config, "small", footerHintSize)
+	if captionFont == nil {
+		captionFont = smallFont
+	}
 
 	menuW, menuH := startMenuSize()
 	menuX, menuY := startMenuOrigin()
@@ -416,14 +520,10 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		drawOverlayCard(renderer, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH})
 
 		// ── Header ──────────────────────────────────────────────────────
-		renderText(renderer, config, font, "Start", ColorTextPrimary(), menuX+20, menuY+12)
-		if smallFont != nil {
-			renderText(renderer, config, smallFont, "Switch scenes or run an action",
-				ColorTextTertiary(), menuX+20, menuY+12+int32(font.Height())+2)
-			count := fmt.Sprintf("%d in this group", len(items))
-			cw, _, _ := smallFont.SizeUTF8(count)
-			renderText(renderer, config, smallFont, count, ColorTextTertiary(),
-				menuX+menuW-int32(cw)-16, menuY+16)
+		renderText(renderer, config, font, "Start", ColorTextPrimary(), menuX+20, menuY+10)
+		if captionFont != nil {
+			renderText(renderer, config, captionFont, "Go to a screen, or run an action",
+				ColorTextMuted(), menuX+20, menuY+10+int32(font.Height())+2)
 		}
 
 		// ── Group rail ──────────────────────────────────────────────────
@@ -458,9 +558,10 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 			case hovered:
 				UIListRow(renderer, rect, 10, false, true)
 			}
-			renderText(renderer, config, font, g.icon, ColorTextSecondary(), rect.X+12, rect.Y+8)
+			drawStartMenuMark(renderer, config, font, startMenuGlyph(startMenuEntry{name: g.name}), g.icon,
+				rect.X+12, rect.Y, rect.H, ColorTextSecondary())
 			renderText(renderer, config, font, ellipsize(font, g.name, rect.W-52),
-				ColorTextPrimary(), rect.X+44, rect.Y+8)
+				ColorTextPrimary(), rect.X+44, rect.Y+(rect.H-int32(font.Height()))/2)
 		}
 
 		// A hairline makes the two panes read as panes rather than one grid.
@@ -506,21 +607,27 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 				iconCol, nameCol = ColorTextTertiary(), ColorTextTertiary()
 				label = ellipsize(font, entry.name+"  · "+offlineTileTag, rect.W-56)
 			}
-			renderText(renderer, config, font, entry.icon, iconCol, rect.X+12, rect.Y+6)
-			renderText(renderer, config, font, ellipsize(font, label, rect.W-56), nameCol, rect.X+46, rect.Y+6)
+			drawStartMenuMark(renderer, config, font, startMenuGlyph(entry), entry.icon,
+				rect.X+12, rect.Y, rect.H, iconCol)
+			renderText(renderer, config, font, ellipsize(font, label, rect.W-56), nameCol,
+				rect.X+46, rect.Y+(rect.H-int32(font.Height()))/2)
 		}
 
 		// ── Footer ─────────────────────────────────────────────────────
-		if smallFont != nil {
+		// The build on the left (this is the system menu, where a bug report
+		// looks for it), and on the right the power key: X asks to quit.
+		if captionFont != nil {
+			footTop := menuY + menuH - startMenuFootH
+			textY := footTop + (startMenuFootH-int32(captionFont.Height()))/2
 			ver := versionDisplayString(config)
-			renderText(renderer, config, smallFont, ver, ColorTextTertiary(),
-				menuX+20, menuY+menuH-24)
-			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-				sceneName := sceneDisplayName(config.Scenes[currentSceneIndex].Name)
-				sw, _, _ := smallFont.SizeUTF8(sceneName)
-				renderText(renderer, config, smallFont, sceneName, ColorTextTertiary(),
-					menuX+menuW-int32(sw)-20, menuY+menuH-24)
-			}
+			renderText(renderer, config, captionFont, ver, ColorTextTertiary(), menuX+20, textY)
+			const powerKey, powerLabel = "X", "Quit JukaHub"
+			badgeH := footerBadgeHeight(captionFont)
+			badgeW := footerBadgeWidth(captionFont, hintKeyFor(powerKey, powerLabel), 6, badgeH)
+			labelW, _ := measureText(captionFont, powerLabel)
+			badgeX := menuX + menuW - 20 - labelW - 7 - badgeW
+			badge := sdl.Rect{X: badgeX, Y: footTop + (startMenuFootH-badgeH)/2, W: badgeW, H: badgeH}
+			drawGlassHintBadge(renderer, config, captionFont, badge, powerKey, powerLabel, badge.X+badgeW+7, textY)
 		}
 
 		// Scrollbar when the list is longer than the pane.
@@ -665,13 +772,7 @@ func startMenuActivate(config *Config) {
 	}
 	app := group.items[tb.cursor]
 	tb.startOpen = false
-	// A menu choice replaces whatever overlay was open. Without this, opening
-	// the menu from Save Manager and picking another app would stack two
-	// modals and leave the old one swallowing input behind the new one.
-	savePanel = saveManagerPanelState{}
-	saveRowHits = nil
-	curationPanel = curationPanelState{}
-	curationRowHits = nil
+	startMenuCloseOverlays()
 	if app.action != nil {
 		app.action(config)
 	} else if app.scene == toolsHubSceneName {
@@ -706,6 +807,28 @@ func sceneClaimsStart(name string) bool {
 	return false
 }
 
+// startMenuKeyOpen is F10, the keyboard's Start: it opens the Start menu
+// wherever the pad's Start would (handleControllerEvent), so the "F10 Menu"
+// the keyboard hints show is always true. The arcade, the dock and JukaLand
+// keep their screen; the Terminal's Start is its Run button, which a keyboard
+// presses as Enter, so F10 still opens the menu there. While the menu is open,
+// handleChromeOverlayKey owns F10 and closes it.
+func startMenuKeyOpen(e *sdl.KeyboardEvent, config *Config) bool {
+	if e == nil || e.Type != sdl.KEYDOWN || e.Repeat != 0 || e.Keysym.Sym != sdl.K_F10 {
+		return false
+	}
+	if tb.startOpen || virtualKeyboardActive || modalPanelBlocksShoulders() {
+		return false
+	}
+	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && sceneClaimsStart(name) {
+			return false
+		}
+	}
+	startMenuToggle()
+	return true
+}
+
 // ctrlStartMenu hands the pad to the open Start menu: D-pad walks the current
 // group, Left/Right hop to the rail and back, shoulders page a long group and
 // A/B behave like Enter/Escape. Everything is consumed so the scene underneath
@@ -730,6 +853,10 @@ func ctrlStartMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 		startMenuFocusItems(config)
 	case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_Y:
 		startMenuActivate(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		// The menu's power key (its footer names it): the Exit screen asks
+		// before anything quits.
+		startMenuPower(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		startMenuDismiss()
 		PlayBackSound()

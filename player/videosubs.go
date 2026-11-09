@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"html"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -311,7 +310,7 @@ func downloadNetworkSubtitles(ctx context.Context, config *Config, pageURL, lang
 	cmd.Env = helperToolEnv(ytDlpPath)
 	cmd.WaitDelay = 3 * time.Second
 	if _, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("[SUBS] yt-dlp subtitle fetch failed: %v", err)
+		logWarn("subs", "yt-dlp subtitle fetch failed: %v", err)
 		return nil, "Subtitle download failed"
 	}
 	path := pickSubtitleFile(dir)
@@ -334,13 +333,6 @@ func subtitleDownloadArgs(config *Config, dir, pageURL, lang string) []string {
 		"--sub-langs", lang, "--sub-format", "vtt/srt", "-o", filepath.Join(dir, "subs")}
 	args = append(args, ytDlpExtraArgsSlice(config)...)
 	return append(args, "--", pageURL)
-}
-
-// subtitlesAvailable reports whether the current source has cues.
-func subtitlesAvailable() bool {
-	videoSubs.mu.Lock()
-	defer videoSubs.mu.Unlock()
-	return len(videoSubs.cues) > 0
 }
 
 // subtitlesEnabled reports the CC toggle state.

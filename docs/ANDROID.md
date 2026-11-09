@@ -70,14 +70,133 @@ profile runtime](GAME_PROFILES.md) is the hub's side of exactly this path:
   failing the launch. See [player/androidrt/README.md](../player/androidrt/README.md).
 
 The AndroidRT source, cross-build script, and **headless smoke check** live in
-[`player/androidrt/`](../player/androidrt/README.md). The smoke test builds a
-stub game with the host compiler and exercises loader → onCreate → window →
-frames → clean teardown without a device. JukaHub's AndroidPak profile support
-triages and stages an APK and hands it to an installed runtime; JukaHub does not
-ship a prebuilt AndroidRT package. The included loader is intentionally
-incomplete (`dlopen` plus shims), and successful execution of a real game has
-not been demonstrated on hardware. Camera, identity, privacy and framework
-features stay out of scope by design.
+[`player/androidrt/`](../player/androidrt/README.md). AndroidRT loads the game
+with its own bionic ELF loader (NDK imports are versioned `@LIBC` symbols that
+glibc's `dlopen` refuses), gives it a Java side through its own JNI
+environment (below), drives NativeActivity and androidx GameActivity entry
+points, and presents through the device's EGL. The host smoke suite (186
+assertions, about 15 s with the host compiler) exercises the loader, the
+bionic compatibility layer, the JNI environment with the Minecraft class pack,
+the GameActivity bridge with a fake GameActivity glue,
+the present layer against a mock GPU stack (including the stock-TrimUI
+default) and its SDL-hosted backend against a fake firmware SDL2, the
+looper/input queue and the OpenSL ES path — without a device.
+JukaHub's AndroidPak profile support triages and stages an APK and hands it to
+an installed runtime; JukaHub does not ship a prebuilt AndroidRT package
+(`player/androidrt/build-tsp.sh` builds it with an aarch64 toolchain). **No
+real game has been run on hardware yet.** Camera, identity, privacy and
+framework features stay out of scope by design.
+
+### The Java side: AndroidRT's JNI environment
+
+There is no Java VM on the device, but most NDK games still call Java through
+JNI (`activity->env`, `JNI_OnLoad`). AndroidRT answers those calls itself
+(`src/jni.h`, `src/jnienv.c`, `src/jnibase.c`):
+
+* **The JNI 1.6 function tables** (`JavaVM`, `JNIEnv`) over a small object
+  model: classes registered by name whose methods and fields are written in
+  C, strings, primitive and object arrays, local/global/weak references,
+  pending exceptions, `RegisterNatives` (the runtime calls the game's natives
+  back), `AttachCurrentThread` for game threads.
+* **`android.os.Build`** answers with the handheld (manufacturer TrimUI, the
+  model JukaHub detected, `SDK_INT` 28).
+* **What the APK says about itself.** The binary `AndroidManifest.xml` names
+  the package and the launcher activity; the `classes*.dex` index says which
+  Java classes the app defines and what they extend (`src/apkmeta.c`). An app
+  class becomes a known class whose unimplemented members answer defaults.
+* **Nothing unimplemented is faked silently.** `FindClass` of a class nobody
+  has returns `null`; a member nobody implements gets an ID whose calls return
+  `0`/`false`/`null`; each such name is logged **once**, and the run ends with
+  a `[androidrt][jni] report:` — the list of what to implement next, in the
+  order the game asked. When a run fails, JukaHub's toast names the first
+  Java method the game called that has no implementation (else the first
+  class it could not get, else the first member it looked up), read from that
+  report — or, when the game crashed before the report, from the first-seen
+  log lines ([player/androidpak.go](../player/androidpak.go)).
+* **System.loadLibrary semantics.** Every loaded library's `JNI_OnLoad` runs
+  before the activity starts, dependencies first.
+* **Class packs** (`src/jnipack_*.c`) implement one game family's Java
+  methods and are selected by the manifest's package name. The first is
+  Minecraft: Bedrock Edition — see [ANDROID-MINECRAFT.md](ANDROID-MINECRAFT.md).
+* **GameActivity** (`src/gameactivity.c`): androidx GameActivity games have no
+  `ANativeActivity_onCreate`; the runtime plays the Java side of
+  `com.google.androidgamesdk.GameActivity` and drives its natives
+  (`initializeNativeCode`, `onStartNative`, `onSurfaceCreatedNative`, input),
+  host-tested against a fake glue (`tests/smoke/fake_gameact.c`).
+
+Environment switches: `ANDROIDPAK_JNI=off` (hand the game a null env, the old
+behaviour), `ANDROIDPAK_JNI_TRACE=1` (log every lookup), `ANDROIDPAK_JNI_UNKNOWN=phantom`
+(unknown classes become empty classes instead of `null`), `ANDROIDPAK_PACKAGE`
+(package name when the manifest cannot be read; JukaHub sets it for titles it
+recognises) and `ANDROIDPAK_DEVICE` (JukaHub's device id: panel size, DPI and
+the display contract).
+
+### Display: the stock firmware's own EGL
+
+The stock TrimUI Smart Pro and Brick firmware has no DRM card: its PowerVR
+GE8300 userspace draws straight to the panel, and the firmware's SDL2 reaches
+it through SDL's `mali` fbdev video driver, which passes
+`eglCreateWindowSurface` a `{uint16 width, height}` struct as the native
+window. On that firmware (`ANDROIDPAK_DEVICE=trimui-*`, or `/usr/trimui`
+present) the present layer loads the firmware's `/usr/lib/libEGL.so` first and
+hands the game's window to EGL as that struct, sized to the panel (1280×720
+Smart Pro, 1024×768 Brick). A DRM/KMS + GBM stack (for example a community GPU
+driver package) still selects the `gbm` backend automatically.
+
+**SDL-hosted fallback (`sdl`).** A public report from this firmware says raw
+EGL contexts on the display of SDL's `mali` driver stayed black while
+SDL-created ones showed. The `sdl` backend therefore lets the firmware's own
+SDL2 (`/usr/lib/libSDL2-2.0.so.0`, loaded at run time — nothing links against
+it) create the fullscreen window, its EGL surface and the GLES context, and
+hands the game exactly those: its window surface is SDL's, its context is
+SDL's (re-created when the game asks for another GLES version; a context the
+game makes before its window, on a window config, builds SDL's window),
+`eglMakeCurrent` becomes `SDL_GL_MakeCurrent` and every `eglSwapBuffers` an
+`SDL_GL_SwapWindow`. SDL is pointed at the game's own libEGL and the GLES
+library beside it, the game's config sizes (colour, depth, stencil, samples)
+become SDL's GL attributes, and SDL's signal handlers stay off so JukaHub can
+still stop the game. `SDL_GL_SwapWindow` returns nothing, so on this backend
+a failed swap (even a lost context) never reaches the game.
+`auto` switches to it by itself when the native backend fails — the game's
+`eglInitialize` of the default display fails (SDL starts there and the call
+is made once more), or EGL refuses the game's window surface — and says so in
+the log (`backend sdl (fallback: ...)`). Only the window surface is SDL's
+after that second kind of fallback when the game made its GLES context
+before its window: that context stays raw EGL, its frames go through plain
+`eglSwapBuffers`, and the log says so. A black screen without an error is
+invisible to the runtime: then add `ANDROIDPAK_PRESENT=sdl` to the profile's
+`env`, which gives the game SDL's context from its first `eglCreateContext`.
+
+`ANDROIDPAK_PRESENT=auto|gbm|native|sdl|off`, `ANDROIDPAK_EGL_WINDOW=fbdev|null`,
+`ANDROIDPAK_EGL_LIB=<path>` and `ANDROIDPAK_SDL_LIB=<path>` override each
+choice (an explicit `native` never falls back, for diagnostics; an explicit
+`sdl` whose SDL2 does not start is chosen like `auto`). The first
+device run's `[androidrt][present] backend ...` line is the evidence of which
+one works.
+
+### Titles triage recognises
+
+* **Minecraft: Bedrock Edition** (`libminecraftpe.so`): needs the arm64-v8a
+  build (a 32-bit-only APK is refused with that reason); launched with the
+  Minecraft class pack. Experimental — [ANDROID-MINECRAFT.md](ANDROID-MINECRAFT.md).
+* **Terraria and other Xamarin/Mono apps** (`libmonodroid.so`,
+  `libmonosgen-2.0.so`, `assemblies/`): the game is C#/.NET code run by a Mono
+  runtime inside the Java app, which AndroidRT does not provide, so triage
+  refuses them with that reason. Terraria's PC version is an XNA game; on
+  Linux handhelds such games run through FNA on Mono with the user's own game
+  files (the PortMaster model, [PORTMASTER.md](PORTMASTER.md)).
+
+### Trying a game on the device
+
+1. Build the runtime (`CROSS=aarch64-linux-gnu- player/androidrt/build-tsp.sh`)
+   and copy the output to `/mnt/SDCARD/Apps/AndroidRT`.
+2. Add an `androidpak` [game profile](GAME_PROFILES.md) pointing at the APK.
+3. Launch it, then send back the profile's launch log: the
+   `[androidrt] manifest:`, `[androidrt][present] backend`, `undefined symbol`
+   and `[androidrt][jni] report:` lines say exactly what is missing.
+4. If the game runs (sound, input) but the panel stays black, launch it once
+   more with `ANDROIDPAK_PRESENT=sdl` in the profile's `env` and send both
+   logs.
 
 ## The ways Android could exist here, ranked
 
@@ -86,7 +205,7 @@ features stay out of scope by design.
 | **Container integration (Waydroid)** — Android runs in a container on the device kernel; JukaHub detects, lists and launches. | **Shipped.** The only approach that runs real Android apps, and it costs JukaHub no root: the one-time root step belongs to Waydroid. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
-| **AndroidPak — NDK-only games via the bionic translation runtime** | **Profile support and runtime source shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches a separately built/installed runtime; the included loader/shims are incomplete and real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
+| **AndroidPak — NDK games via AndroidRT** | **Profile support and runtime source shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches a separately built/installed runtime with its own bionic loader, JNI environment and EGL present layer; real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
 | **Sideloading APKs into the container** | Next slice. `waydroid app install <file>` is a container feature; the hub's job is validating the package and handing it over. |
 | **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |

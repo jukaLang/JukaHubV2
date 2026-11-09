@@ -172,6 +172,7 @@ var vkSet struct {
 	hintPlanW    int32
 	hintScale    float64
 	hintPlanOK   bool
+	hintKeys     hintStamp
 }
 
 // vkSetButton is a small click target on a language row (move up, move down,
@@ -567,9 +568,15 @@ func vkSetHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		vkSetBack(config)
-	case sdl.K_DELETE:
-		if vkSet.sheet == vkSetSheetNone {
+	case sdl.K_DELETE, sdl.K_x:
+		// X and Y do what the pad's X and Y do (vkSetHandleController). One
+		// language per press: a held key's auto-repeat removed the next ones.
+		if e.Repeat == 0 && vkSet.sheet == vkSetSheetNone {
 			vkSetRemoveLanguage(config, vkSet.focus)
+		}
+	case sdl.K_y:
+		if vkSet.sheet == vkSetSheetNone {
+			vkSetActivate(config, vkSetRowIndex(vkSetAddLanguage))
 		}
 	case sdl.K_LEFTBRACKET:
 		vkSetMoveLanguage(config, vkSet.focus, -1)
@@ -731,8 +738,9 @@ func vkSettingsHints(kind int) []FooterHint {
 	case 2:
 		return []FooterHint{{Button: "D-Pad", Label: "Scroll"}, {Button: "B", Label: "Close"}}
 	case 3:
+		// "/ [ ]": the keyboard moves a language with [ and ] (vkSetHandleKey).
 		return []FooterHint{{Button: "A", Label: "Use"}, {Button: "B", Label: "Back"},
-			{Button: "L1/R1", Label: "Move"}, {Button: "X", Label: "Remove"}, {Button: "Y", Label: "Add"}}
+			{Button: "L1/R1 / [ ]", Label: "Move"}, {Button: "X", Label: "Remove"}, {Button: "Y", Label: "Add"}}
 	case 4:
 		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Toggle"}, {Button: "B", Label: "Back"}}
 	}
@@ -979,9 +987,13 @@ func vkSetDrawFooter(renderer *sdl.Renderer, config *Config, band sdl.Rect) {
 	kind := vkSettingsHintKind()
 	pad := scaleX(16, screenWidth)
 	avail := band.W - 2*pad
-	if !vkSet.hintPlanOK || vkSet.hintKind != kind || vkSet.hintPlanW != avail || vkSet.hintScale != a11y.fontScale {
+	// The plan's widths are measured in this frame's hint vocabulary and
+	// remap (inputhints.go), so a switch between pad and keyboard, or a new
+	// Accessibility remap, re-plans it.
+	keys := hintStampNow()
+	if !vkSet.hintPlanOK || vkSet.hintKind != kind || vkSet.hintPlanW != avail || vkSet.hintScale != a11y.fontScale || vkSet.hintKeys != keys {
 		vkSet.hintPlan = planFooterHints(config, vkSettingsHints(kind), avail)
-		vkSet.hintKind, vkSet.hintPlanW, vkSet.hintScale, vkSet.hintPlanOK = kind, avail, a11y.fontScale, true
+		vkSet.hintKind, vkSet.hintPlanW, vkSet.hintScale, vkSet.hintPlanOK, vkSet.hintKeys = kind, avail, a11y.fontScale, true, keys
 	}
 	plan := vkSet.hintPlan
 	if plan.font == nil {

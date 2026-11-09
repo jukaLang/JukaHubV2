@@ -15,10 +15,8 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,17 +68,6 @@ func findPPSSPPConfig(sdRoots []string) string {
 	return ""
 }
 
-// readINILines reads an INI file as lines without their line endings, so the
-// helpers below can compare keys without worrying about CRLF.
-func readINILines(path string) ([]string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
-	return strings.Split(text, "\n"), nil
-}
-
 // iniSectionKey splits an INI line into its section name, key and value.
 // section is "" outside a section, key is "" for a comment, blank line or
 // section header.
@@ -97,25 +84,6 @@ func iniSectionKey(line string) (section, key, value string, isHeader bool) {
 		return "", "", "", false
 	}
 	return "", strings.TrimSpace(trimmed[:eq]), strings.TrimSpace(trimmed[eq+1:]), false
-}
-
-// ppssppINIValue reads a key from the [ControlMapping] section. It is scoped to
-// that section on purpose: the same key name exists in more than one PPSSPP
-// section ([Graphics] has its own ideas about many words), and writing the
-// wrong one would silently do nothing.
-func ppssppINIValue(lines []string, key string) (string, bool) {
-	section := ""
-	for _, line := range lines {
-		name, k, v, isHeader := iniSectionKey(line)
-		if isHeader {
-			section = name
-			continue
-		}
-		if section != "" && strings.EqualFold(section, "ControlMapping") && k != "" && strings.EqualFold(k, key) {
-			return v, true
-		}
-	}
-	return "", false
 }
 
 // setPPSSPPINIValue replaces key in [ControlMapping], or inserts it there.
@@ -172,51 +140,6 @@ func setPPSSPPINIValue(lines []string, key, value string) []string {
 	return out
 }
 
-// deadzoneFromSamples computes the PPSSPP AnalogDeadzone from what the wizard
-// saw. samples are the peak per-axis magnitudes while the stick was rolled
-// around; idlePeak is the largest magnitude seen with the stick released.
-//
-// The result is just above the idle noise, but never so high that a real push
-// is swallowed: it stays under 60% of the smallest genuine deflection. Bad
-// input (NaN, negatives, nothing usable) falls back to the 0.02 floor.
-func deadzoneFromSamples(samples []float64, idlePeak float64) float64 {
-	const (
-		floor = 0.02
-		cap   = 0.25
-		noise = 0.03
-	)
-	if math.IsNaN(idlePeak) || idlePeak < 0 {
-		idlePeak = 0
-	}
-	minSample := math.Inf(1)
-	valid := 0
-	for _, s := range samples {
-		if math.IsNaN(s) || math.IsInf(s, 0) || s < 0 {
-			continue
-		}
-		valid++
-		if s < minSample {
-			minSample = s
-		}
-	}
-	if valid == 0 {
-		return floor
-	}
-
-	dz := idlePeak + noise
-	if upper := 0.6 * minSample; dz > upper {
-		dz = upper
-	}
-	if dz < floor {
-		dz = floor
-	}
-	if dz > cap {
-		dz = cap
-	}
-	// Round down so the written value never exceeds what was justified.
-	return math.Floor(dz*1000) / 1000
-}
-
 // writePPSSPPDeadzone stores the calibrated value in [ControlMapping].
 //
 // The original is copied to path+".bak" once — a second calibration must not
@@ -257,12 +180,6 @@ func cachedPPSSPPConfig(roots []string) string {
 	ppssppInstallCache.path = findPPSSPPConfig(roots)
 	ppssppInstallCache.at = time.Now()
 	return ppssppInstallCache.path
-}
-
-func writePPSSPPDeadzone(path string, deadzone float64) error {
-	return writePPSSPPControls(path, func(lines []string) []string {
-		return setPPSSPPINIValue(lines, "AnalogDeadzone", fmt.Sprintf("%.3f", deadzone))
-	})
 }
 
 // writePPSSPPStickFix is what the calibration wizard calls: it lowers the
@@ -313,36 +230,4 @@ func writePPSSPPControls(path string, edit func([]string) []string) error {
 		}
 	}
 	return os.WriteFile(path, []byte(body), info.Mode().Perm())
-}
-
-// ppssppDeadzoneSummary is the one-line status the panel shows for a config.
-func ppssppDeadzoneSummary(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return "not installed"
-	}
-	lines, err := readINILines(path)
-	if err != nil {
-		return "not installed"
-	}
-	entries := 0
-	section := ""
-	for _, line := range lines {
-		name, k, _, isHeader := iniSectionKey(line)
-		if isHeader {
-			section = name
-			continue
-		}
-		if strings.EqualFold(section, "ControlMapping") && k != "" {
-			entries++
-		}
-	}
-	value, ok := ppssppINIValue(lines, "AnalogDeadzone")
-	if !ok || strings.TrimSpace(value) == "" {
-		return "deadzone not set · " + strconv.Itoa(entries) + " entries"
-	}
-	formatted := strings.TrimSpace(value)
-	if f, err := strconv.ParseFloat(formatted, 64); err == nil {
-		formatted = fmt.Sprintf("%.3f", f)
-	}
-	return "deadzone " + formatted + " · " + strconv.Itoa(entries) + " entries"
 }

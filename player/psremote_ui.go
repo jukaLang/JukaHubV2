@@ -14,7 +14,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -165,7 +164,7 @@ func psPanelSaveSettings() {
 	state.Settings.Volume = chiakiPanel.volume
 	state.Settings.Account = chiakiPanel.account
 	if err := savePSHosts(state); err != nil {
-		log.Printf("[psremote] saving settings failed: %v", err)
+		logWarn("psremote", "saving settings failed: %v", err)
 	}
 }
 

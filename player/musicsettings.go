@@ -13,9 +13,6 @@ package main
 
 import (
 	"fmt"
-	"math"
-	"os"
-	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -441,55 +438,8 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 		x+(panelW-int32(hw))/2, y+panelH-footerH+6)
 }
 
-// musicSettingsUSBLine describes the attached DAC, for the panel's footnote on
-// builds that expose ALSA. It is informational: the port's power is firmware
-// policy, not something the player toggles.
-func musicSettingsUSBLine() string {
-	name := detectUSBDacName()
-	if name == "" {
-		return ""
-	}
-	return "USB DAC: " + name
-}
-
-// detectUSBDacName reports a USB sound card by name, if the kernel lists one.
-// On a handheld this is the DAC plugged into the bottom USB-C port; on desktop
-// builds without ALSA it simply reports nothing rather than guessing.
-func detectUSBDacName() string {
-	data, err := os.ReadFile("/proc/asound/cards")
-	if err != nil {
-		return ""
-	}
-	var found string
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.Contains(strings.ToLower(line), "usb") {
-			continue
-		}
-		// The card list indents its description line: " 1 [Device         ]: USB-Audio - ...".
-		if idx := strings.Index(line, ": "); idx >= 0 {
-			rest := strings.TrimSpace(line[idx+2:])
-			if rest != "" {
-				found = rest
-			}
-		}
-	}
-	return found
-}
-
 // musicArtOpacitySteps are the values the settings row walks through.
 var musicArtOpacitySteps = []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
-
-// musicArtOpacityIndex snaps a percentage to the nearest step, so starting from
-// a hand-edited config still moves predictably.
-func musicArtOpacityIndex(percent int) int {
-	best, idx := math.MaxFloat64, 0
-	for i, v := range musicArtOpacitySteps {
-		if d := math.Abs(float64(v - percent)); d < best {
-			best, idx = d, i
-		}
-	}
-	return idx
-}
 
 // musicScreenModeSetting is the config writer the panel uses; the reader lives
 // in musicfeatures.go next to the mode rules.
@@ -508,10 +458,4 @@ func musicSetScreenMode(config *Config, mode musicScreenMode) {
 	default:
 		config.Variables.Custom["musicScreenOffMode"] = "any"
 	}
-}
-
-// musicSettingsBackgroundNote is the toast shown when Y + Left is used in the
-// player, so the state is always visible where it is toggled.
-func musicSettingsBackgroundNote(config *Config) string {
-	return "Background playback: " + strings.ToUpper(onOff(musicBackgroundEnabled(config)))
 }

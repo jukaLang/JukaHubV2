@@ -9,9 +9,28 @@
  *
  * The panel: one connector (31) → encoder (51) → CRTC (41) showing the
  * "hub's" framebuffer 7, mode 1280x720@60.
+ *
+ * Contexts follow EGL's rules closely enough to catch a wrong pairing:
+ * eglSwapBuffers fails (EGL_BAD_SURFACE) unless the surface is current with
+ * a context. Knobs model a native EGL path that fails, for the sdl-backend
+ * fallback tests (fake_sdl.c drives this same library):
+ *   MOCKGPU_FBDEV_SIZE=WxH  the "framebuffer" only accepts an fbdev
+ *                           {uint16 width, height} window of exactly WxH
+ *                           (EGL_BAD_NATIVE_WINDOW otherwise);
+ *   MOCKGPU_NEEDS_SDL=1     eglInitialize fails (EGL_NOT_INITIALIZED) until
+ *                           the fake SDL's video init has run (it calls
+ *                           mockgpu_sdlVideoUp) — a display only SDL's
+ *                           driver brings up;
+ *   MOCKGPU_DEFAULT_DOWN=1  the EGL_DEFAULT_DISPLAY display never
+ *                           initialises; another native display (the fake
+ *                           SDL's FAKESDL_DISPLAY=device) is a second
+ *                           display that does.
+ * A config asked for without EGL_WINDOW_BIT in EGL_SURFACE_TYPE is config 3,
+ * pbuffer-only, with no alpha/depth/stencil (an engine's probe config).
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "eglhost.h"
@@ -23,6 +42,7 @@
     } while (0)
 
 #define EXPORT __attribute__((visibility("default")))
+#define MOCK_EGL_PBUFFER_BIT 0x0001
 
 static const char *fcc(uint32_t f, char out[5]) {
     memcpy(out, &f, 4);
@@ -35,8 +55,39 @@ static EGLint g_err = EGL_SUCCESS;
 static void *g_gbmSurface;
 static int g_swaps;
 static char g_mockSurfaceObj;
-static char g_mockDisplayObj;
-static char g_cfg[3];
+static char g_mockDisplayObj, g_mockOtherDisplayObj;
+static char g_cfg[4]; /* 0-2 window configs, 3 the pbuffer-only probe config */
+static char g_ctxObjs[4];
+static int g_nextCtx;
+static int g_sdlVideoUp;
+
+static int cfgIndex(EGLConfig config) {
+    int i;
+    for (i = 0; i < 4; i++)
+        if (config == &g_cfg[i]) return i;
+    return 2;
+}
+
+/* the fake SDL's video init ran (MOCKGPU_NEEDS_SDL) */
+EXPORT void mockgpu_sdlVideoUp(void) { g_sdlVideoUp = 1; }
+static EGLint g_surfW, g_surfH;
+static uint32_t g_gbmW, g_gbmH; /* the last gbm_surface_create */
+/* the calling thread's current objects (the smoke games draw from one thread) */
+static EGLDisplay g_curDpy;
+static EGLSurface g_curSurf;
+static EGLContext g_curCtx;
+
+static const char *ctxName(EGLContext c) {
+    static char buf[4][16];
+    static int n;
+    char *b = buf[n++ & 3];
+    if (!c) return "none";
+    if ((char *)c >= g_ctxObjs && (char *)c < g_ctxObjs + sizeof g_ctxObjs)
+        snprintf(b, 16, "ctx%d", (int)((char *)c - g_ctxObjs));
+    else
+        snprintf(b, 16, "FOREIGN");
+    return b;
+}
 
 EXPORT EGLint eglGetError(void) {
     EGLint e = g_err;
@@ -45,6 +96,7 @@ EXPORT EGLint eglGetError(void) {
 }
 EXPORT EGLDisplay eglGetDisplay(void *native) {
     LOG("eglGetDisplay native=%s", native ? "non-default" : "EGL_DEFAULT_DISPLAY");
+    if (native && getenv("MOCKGPU_DEFAULT_DOWN")) return &g_mockOtherDisplayObj;
     return &g_mockDisplayObj;
 }
 EXPORT EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void *native, const EGLint *attribs) {
@@ -54,7 +106,17 @@ EXPORT EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void *native, const
     return platform == EGL_PLATFORM_GBM_KHR ? &g_mockDisplayObj : EGL_NO_DISPLAY;
 }
 EXPORT EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor) {
-    (void)dpy;
+    if (getenv("MOCKGPU_NEEDS_SDL") && !g_sdlVideoUp) {
+        LOG("eglInitialize: the display is not up (MOCKGPU_NEEDS_SDL, no SDL video yet)");
+        g_err = EGL_NOT_INITIALIZED;
+        return EGL_FALSE;
+    }
+    if (getenv("MOCKGPU_DEFAULT_DOWN") && dpy == &g_mockDisplayObj) {
+        LOG("eglInitialize: the default display never comes up (MOCKGPU_DEFAULT_DOWN)");
+        g_err = EGL_NOT_INITIALIZED;
+        return EGL_FALSE;
+    }
+    LOG("eglInitialize %s display", dpy == &g_mockOtherDisplayObj ? "the other" : "the default");
     if (major) *major = 1;
     if (minor) *minor = 4;
     return EGL_TRUE;
@@ -72,7 +134,7 @@ EXPORT const char *eglQueryString(EGLDisplay dpy, EGLint name) {
 /* Three configs in "EGL sort order": the first has no native visual, then
  * ARGB8888, then XRGB8888 — the present layer must not hand out the first. */
 EXPORT EGLBoolean eglChooseConfig(EGLDisplay dpy, const EGLint *attribs, EGLConfig *configs, EGLint size, EGLint *num) {
-    int i, pairs = 0, sane = 0;
+    int i, pairs = 0, sane = 0, pbufferOnly = 0;
     (void)dpy;
     for (i = 0; attribs && i < 64; i += 2) {
         if (attribs[i] == EGL_NONE) {
@@ -80,31 +142,74 @@ EXPORT EGLBoolean eglChooseConfig(EGLDisplay dpy, const EGLint *attribs, EGLConf
             break;
         }
         if (attribs[i] < 0x3020 || attribs[i] > 0x3100) break; /* not an EGL attribute name */
+        if (attribs[i] == EGL_SURFACE_TYPE && !(attribs[i + 1] & EGL_WINDOW_BIT)) pbufferOnly = 1;
         pairs++;
     }
     if (configs) LOG("eglChooseConfig attribs %s (%d int32 pairs)", sane ? "ok" : "MALFORMED", pairs);
     if (!configs) {
-        if (num) *num = 3;
+        if (num) *num = pbufferOnly ? 1 : 3;
+        return EGL_TRUE;
+    }
+    if (pbufferOnly) {
+        if (size > 0) configs[0] = &g_cfg[3];
+        if (num) *num = size > 0;
         return EGL_TRUE;
     }
     for (i = 0; i < 3 && i < size; i++) configs[i] = &g_cfg[i];
     if (num) *num = i;
     return EGL_TRUE;
 }
+/* Window configs 0-2: RGB888, 24-bit depth, 8-bit stencil, ES2+ES3; only
+ * config 1 (ARGB8888) has alpha. Config 3: pbuffer-only RGB888, no depth or
+ * stencil. */
 EXPORT EGLBoolean eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *value) {
     (void)dpy;
-    if (attribute == EGL_NATIVE_VISUAL_ID) {
-        *value = config == &g_cfg[0] ? 0 : config == &g_cfg[1] ? (EGLint)GBM_FORMAT_ARGB8888 : (EGLint)GBM_FORMAT_XRGB8888;
+    if (config == &g_cfg[3] && (attribute == EGL_SURFACE_TYPE || attribute == EGL_DEPTH_SIZE ||
+                                attribute == EGL_STENCIL_SIZE || attribute == EGL_NATIVE_VISUAL_ID)) {
+        *value = attribute == EGL_SURFACE_TYPE ? MOCK_EGL_PBUFFER_BIT : 0;
         return EGL_TRUE;
     }
-    *value = 0;
+    switch (attribute) {
+        case EGL_NATIVE_VISUAL_ID:
+            *value = config == &g_cfg[0]   ? 0
+                     : config == &g_cfg[1] ? (EGLint)GBM_FORMAT_ARGB8888
+                                           : (EGLint)GBM_FORMAT_XRGB8888;
+            break;
+        case EGL_RED_SIZE:
+        case EGL_GREEN_SIZE:
+        case EGL_BLUE_SIZE: *value = 8; break;
+        case EGL_ALPHA_SIZE: *value = config == &g_cfg[1] ? 8 : 0; break;
+        case EGL_DEPTH_SIZE: *value = 24; break;
+        case EGL_STENCIL_SIZE: *value = 8; break;
+        case EGL_RENDERABLE_TYPE: *value = EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR; break;
+        case EGL_SURFACE_TYPE: *value = EGL_WINDOW_BIT; break;
+        default: *value = 0; break;
+    }
     return EGL_TRUE;
 }
 EXPORT EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig config, void *win, const EGLint *attribs) {
+    int cfg = cfgIndex(config);
+    const char *fb = getenv("MOCKGPU_FBDEV_SIZE");
     (void)dpy;
     (void)attribs;
-    LOG("eglCreateWindowSurface config=%d native=%s", config == &g_cfg[0] ? 0 : config == &g_cfg[1] ? 1 : 2,
-        win && win == g_gbmSurface ? "gbm-surface" : win ? "OTHER" : "null");
+    if (win && win != g_gbmSurface) {
+        /* the fbdev contract is a {uint16 width, height} struct */
+        const unsigned short *wh = (const unsigned short *)win;
+        unsigned fw = 0, fh = 0;
+        if (fb && sscanf(fb, "%ux%u", &fw, &fh) == 2 && (wh[0] != fw || wh[1] != fh)) {
+            LOG("eglCreateWindowSurface config=%d native=OTHER(%ux%u) refused: the framebuffer is %ux%u "
+                "(EGL_BAD_NATIVE_WINDOW)", cfg, wh[0], wh[1], fw, fh);
+            g_err = EGL_BAD_NATIVE_WINDOW;
+            return EGL_NO_SURFACE;
+        }
+        LOG("eglCreateWindowSurface config=%d native=OTHER(%ux%u)", cfg, wh[0], wh[1]);
+        g_surfW = wh[0];
+        g_surfH = wh[1];
+    } else {
+        LOG("eglCreateWindowSurface config=%d native=%s", cfg, win ? "gbm-surface" : "null");
+        g_surfW = win ? (EGLint)g_gbmW : 1280; /* the null window system is the whole panel */
+        g_surfH = win ? (EGLint)g_gbmH : 720;
+    }
     return &g_mockSurfaceObj;
 }
 EXPORT EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface) {
@@ -113,9 +218,71 @@ EXPORT EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface) {
     LOG("eglDestroySurface after %d swaps", g_swaps);
     return EGL_TRUE;
 }
+EXPORT EGLBoolean eglQuerySurface(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint *value) {
+    (void)dpy;
+    if (surface != &g_mockSurfaceObj || !value) {
+        g_err = EGL_BAD_SURFACE;
+        return EGL_FALSE;
+    }
+    *value = attribute == EGL_WIDTH ? g_surfW : attribute == EGL_HEIGHT ? g_surfH : 0;
+    return EGL_TRUE;
+}
+EXPORT EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share, const EGLint *attribs) {
+    int i, version = 1, minor = 0;
+    EGLContext ctx;
+    (void)dpy;
+    for (i = 0; attribs && i < 32 && attribs[i] != EGL_NONE; i += 2) {
+        if (attribs[i] == EGL_CONTEXT_CLIENT_VERSION) version = attribs[i + 1];
+        else if (attribs[i] == EGL_CONTEXT_MINOR_VERSION_KHR) minor = attribs[i + 1];
+    }
+    if (g_nextCtx >= (int)sizeof g_ctxObjs) {
+        g_err = EGL_BAD_ALLOC;
+        return EGL_NO_CONTEXT;
+    }
+    ctx = &g_ctxObjs[g_nextCtx++];
+    LOG("eglCreateContext config=%d GLES %d.%d share=%s -> %s", cfgIndex(config), version, minor, ctxName(share),
+        ctxName(ctx));
+    return ctx;
+}
+EXPORT EGLBoolean eglDestroyContext(EGLDisplay dpy, EGLContext ctx) {
+    (void)dpy;
+    LOG("eglDestroyContext %s", ctxName(ctx));
+    if (ctx == g_curCtx) g_curCtx = NULL; /* EGL defers it; the test only needs the name */
+    return EGL_TRUE;
+}
+EXPORT EGLBoolean eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+    (void)read;
+    if (ctx && strcmp(ctxName(ctx), "FOREIGN") == 0) {
+        LOG("eglMakeCurrent with a context this EGL never made (EGL_BAD_CONTEXT)");
+        g_err = EGL_BAD_CONTEXT;
+        return EGL_FALSE;
+    }
+    g_curDpy = ctx ? dpy : NULL;
+    g_curSurf = ctx ? draw : NULL;
+    g_curCtx = ctx;
+    LOG("eglMakeCurrent %s surface=%s", ctxName(ctx), draw ? "window" : "none");
+    return EGL_TRUE;
+}
+EXPORT EGLBoolean eglReleaseThread(void) {
+    LOG("eglReleaseThread (%s was current)", ctxName(g_curCtx));
+    g_curDpy = NULL;
+    g_curSurf = NULL;
+    g_curCtx = NULL;
+    return EGL_TRUE;
+}
+EXPORT EGLContext eglGetCurrentContext(void) { return g_curCtx; }
+EXPORT EGLDisplay eglGetCurrentDisplay(void) { return g_curDpy; }
+EXPORT EGLSurface eglGetCurrentSurface(EGLint readdraw) {
+    (void)readdraw;
+    return g_curSurf;
+}
 EXPORT EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     (void)dpy;
-    (void)surface;
+    if (!g_curCtx || g_curSurf != surface) {
+        LOG("eglSwapBuffers on a surface that is not current (EGL_BAD_SURFACE)");
+        g_err = EGL_BAD_SURFACE;
+        return EGL_FALSE;
+    }
     g_swaps++;
     return EGL_TRUE;
 }
@@ -145,6 +312,8 @@ EXPORT void *gbm_surface_create(void *dev, uint32_t w, uint32_t h, uint32_t form
     int i;
     (void)dev;
     LOG("gbm_surface_create %ux%u format=%s flags=0x%x", w, h, fcc(format, f), flags);
+    g_gbmW = w;
+    g_gbmH = h;
     for (i = 0; i < 3; i++) {
         memset(&g_bos[i], 0, sizeof g_bos[i]);
         g_bos[i].w = w;

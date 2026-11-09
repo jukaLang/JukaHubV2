@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -59,7 +58,7 @@ func storeFeedFallback(url string, body []byte) {
 		return
 	}
 	if err := cacheSet(db, feedFallbackPrefix+url, body, feedFallbackTTL); err != nil {
-		log.Printf("[feedcache] store %s: %v", sanitizeLogURL(url), err)
+		logWarn("feedcache", "store %s: %v", sanitizeLogURL(url), err)
 	}
 }
 
@@ -97,7 +96,7 @@ func httpGetTextFallbackContext(ctx context.Context, url string, timeout time.Du
 	// serve the last-known-good copy rather than an empty screen.
 	if !IsOnline() {
 		if body, ok := loadFeedFallback(url); ok {
-			log.Printf("[feedcache] offline, served cached %s", sanitizeLogURL(url))
+			logDebug("feedcache", "offline, served cached %s", sanitizeLogURL(url))
 			return body
 		}
 	}

@@ -1180,13 +1180,6 @@ func vkHandleChord(button uint8, config *Config) bool {
 	return true
 }
 
-// vkFocusTool moves the highlight onto a tool chip (used by tests and mouse
-// hover-free activation).
-func vkFocusTool(t vkTool) {
-	vkFocusZone = vkZoneTools
-	vkZoneIndex = int(t)
-}
-
 // ── Physical keyboard ────────────────────────────────────────────────────
 
 // vkHandlePhysicalKey handles the text-editing keys of a real keyboard while

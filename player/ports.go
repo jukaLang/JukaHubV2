@@ -10,7 +10,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,7 +252,7 @@ func startPortMasterInstall() error {
 	go func() {
 		defer setPortMasterInstalling(false)
 		if err := installPortMaster(portMasterSDRoot, portMasterInstallURL); err != nil {
-			log.Printf("[portmaster] install failed: %v", err)
+			logWarn("portmaster", "install failed: %v", err)
 			installBarFail(firstLine(err.Error()))
 			ShowToast("Could not install PortMaster — "+firstLine(err.Error()), ToastKindError)
 			return
@@ -261,7 +260,7 @@ func startPortMasterInstall() error {
 		invalidatePortsCache()
 		invalidateEmulatorCache()
 		installBarDone()
-		log.Printf("[portmaster] installed into %s", filepath.Join(portMasterSDRoot, "Apps", "PortMaster"))
+		logDebug("portmaster", "installed into %s", filepath.Join(portMasterSDRoot, "Apps", "PortMaster"))
 		ShowToast("PortMaster installed — open Ports to add games", ToastKindSuccess)
 		noteAwayToolInstalled("PortMaster")
 	}()
@@ -327,7 +326,7 @@ func installPortMasterFromStage(unpacked, sdRoot string) error {
 		return fmt.Errorf("cannot move PortMaster into Apps: %w", err)
 	}
 	if err := os.Chmod(filepath.Join(target, "launch.sh"), 0o755); err != nil {
-		log.Printf("[portmaster] warn: cannot make launch.sh executable: %v", err)
+		logWarn("portmaster", "warn: cannot make launch.sh executable: %v", err)
 	}
 	return nil
 }
@@ -457,7 +456,7 @@ func launchPortScript(name, path string) {
 	if bash, err := exec.LookPath("bash"); err == nil && bash != "" {
 		shell = bash
 	}
-	log.Printf("[portmaster] launching %s (%s via %s)", name, path, shell)
+	logDebug("portmaster", "launching %s (%s via %s)", name, path, shell)
 	cmd := exec.Command(shell, path)
 	cmd.Dir = filepath.Dir(path)
 	// The ALSA workaround and the CPU profile are scoped to this child: the
@@ -473,7 +472,7 @@ func launchPortScript(name, path string) {
 	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
-		log.Printf("[portmaster] launch failed for %s: %v", path, err)
+		logWarn("portmaster", "launch failed for %s: %v", path, err)
 		ShowToast("Could not launch "+name, ToastKindError)
 		return
 	}

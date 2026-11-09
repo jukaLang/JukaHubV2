@@ -5,7 +5,6 @@ package main
 // "JukaHub-trimui-smart-pro-linux-arm64.tar.gz" directly from it.
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -82,21 +81,6 @@ var (
 	deviceEvidenceCache deviceIdentity
 )
 
-// detectDevice is the uncached detection. It runs once per process: the board
-// cannot change while the app is running, and DetectDevice sits on per-frame
-// paths (the frame-rate controller and the texture budgets read it every
-// frame), so it must not re-read sysfs there.
-//
-// Order: an explicit JUKAHUB_DEVICE_MODEL override, then the evidence collected
-// by readDeviceIdentity and classified by classifyDevice (launcher env, kernel
-// model codes, the firmware's own model strings, the panel). The override goes
-// through both classifiers so a test can say "TG3040" as well as
-// "trimui-brick".
-func detectDevice() DeviceModel {
-	device, _, _ := detectDeviceIdentity()
-	return device
-}
-
 // detectDeviceIdentity is detectDevice plus the source and evidence it used.
 func detectDeviceIdentity() (DeviceModel, string, deviceIdentity) {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_DEVICE_MODEL")); override != "" {
@@ -135,7 +119,7 @@ func logDeviceIdentity(device DeviceModel, source string, id deviceIdentity) {
 	if len(firmware) > 220 {
 		firmware = firmware[:220] + "…"
 	}
-	log.Printf("[device] %s: dt model=%q compatible=%q cpuinfo=%q hostname=%q firmware=%q trimui=%v panel=%s env(device=%q platform=%q model=%q)",
+	logInfo("device", "%s: dt model=%q compatible=%q cpuinfo=%q hostname=%q firmware=%q trimui=%v panel=%s env(device=%q platform=%q model=%q)",
 		name, id.Model, id.Compatible, id.CPUInfo, id.Hostname, firmware, id.TrimUI, panel,
 		id.EnvDevice, id.EnvPlatform, id.EnvModel)
 }

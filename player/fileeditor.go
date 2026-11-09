@@ -136,12 +136,6 @@ func fileEditorCanEdit(path string) bool {
 	return fileEditorSheetExts[ext]
 }
 
-// fileEditorAutoOpens reports whether pressing A on a row should open the
-// editor. Only formats no other handler claims go through here.
-func fileEditorAutoOpens(path string) bool {
-	return fileEditorAutoExts[strings.ToLower(filepath.Ext(strings.TrimSpace(path)))]
-}
-
 // fileEditorTooLargeText explains why a large file opened read-only.
 func fileEditorTooLargeText(size int64) string {
 	return fmt.Sprintf("This file is %s; the editor stops at %s",
@@ -1707,7 +1701,7 @@ func fileEditorFooterHints() []FooterHint {
 			{Button: "D-Pad", Label: "Scroll"},
 			{Button: "L1/R1", Label: "Page"},
 			{Button: "X", Label: toggle},
-			{Button: "Start", Label: "View"},
+			{Button: "Start / Tab", Label: "View"},
 			{Button: "B", Label: "Close"},
 		}
 	}
@@ -1718,22 +1712,17 @@ func fileEditorFooterHints() []FooterHint {
 			{Button: "D-Pad", Label: "Scroll"},
 			{Button: "L1/R1", Label: "Page"},
 			{Button: "L2/R2", Label: "Top / End"},
-			{Button: "Start", Label: "View"},
+			{Button: "Start / Tab", Label: "View"},
 			{Button: "B", Label: "Close"},
 		}
 	}
 	return []FooterHint{
 		{Button: "A", Label: "Edit line"},
 		{Button: "X", Label: "Insert"},
-		{Button: "R2", Label: "Delete"},
+		{Button: "R2 / Del", Label: "Delete"},
 		{Button: "Y", Label: "Save"},
 		{Button: "L1/R1", Label: "Page"},
-		{Button: "Start", Label: "View"},
+		{Button: "Start / Tab", Label: "View"},
 		{Button: "B", Label: "Close"},
 	}
-}
-
-// fileEditorFooter is the hint line as text (what the footer band shows).
-func fileEditorFooter() string {
-	return hintLine(fileEditorFooterHints()...)
 }

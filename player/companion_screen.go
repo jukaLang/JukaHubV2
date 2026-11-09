@@ -231,19 +231,6 @@ func removeCompanionWaiter(wait chan struct{}) {
 	}
 }
 
-// publishCompanionFrame stores a captured frame and wakes every waiter.
-func publishCompanionFrame(frame []byte) {
-	companionShot.mu.Lock()
-	companionShot.png = frame
-	companionShot.at = time.Now()
-	waiters := companionShot.waiters
-	companionShot.waiters = nil
-	companionShot.mu.Unlock()
-	for _, w := range waiters {
-		close(w)
-	}
-}
-
 // captureCompanionScreen grabs the framebuffer for a waiting request. It must
 // be called from the render thread, after the frame is drawn.
 func captureCompanionScreen(renderer *sdl.Renderer) {
@@ -329,7 +316,3 @@ func encodeScreenshotPNG(pixels []byte, w, h int32, pitch int) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
-// companionARGBPixel builds one ARGB8888 pixel in SDL's byte order (B,G,R,A),
-// so the encoder test can state colours instead of channel offsets.
-func companionARGBPixel(r, g, b uint8) [4]byte { return [4]byte{b, g, r, 0xff} }

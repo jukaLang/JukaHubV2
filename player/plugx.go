@@ -24,7 +24,6 @@ package main
 // its themes, ROM formats and packs on the next scan.
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -70,29 +69,6 @@ type plugxRomParser struct {
 	Offset     int64    // where Magic starts in the file
 }
 
-// handles reports whether the parser claims the extension ext (".min").
-func (p plugxRomParser) handles(ext string) bool {
-	for _, e := range p.Extensions {
-		if e == ext {
-			return true
-		}
-	}
-	return false
-}
-
-// matchesHeader reports whether header (the file's first bytes) carries the
-// parser's signature. A parser without one matches by extension alone.
-func (p plugxRomParser) matchesHeader(header []byte) bool {
-	if len(p.Magic) == 0 {
-		return true
-	}
-	end := p.Offset + int64(len(p.Magic))
-	if p.Offset < 0 || end > int64(len(header)) {
-		return false
-	}
-	return bytes.Equal(header[p.Offset:end], p.Magic)
-}
-
 // plugxRomParserSpec is a romParsers entry as it is written in plugin.json.
 type plugxRomParserSpec struct {
 	Name       string   `json:"name"`
@@ -126,8 +102,8 @@ func (e plugxExtensions) hasAny() bool {
 }
 
 var (
-	plugxSystemPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	plugxExtPattern    = regexp.MustCompile(`^\.[a-z0-9][a-z0-9_+-]{0,11}$`)
+	plugxSystemPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`) })
+	plugxExtPattern    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\.[a-z0-9][a-z0-9_+-]{0,11}$`) })
 )
 
 // plugxParse reads the typed extension points out of a manifest. dir is the
@@ -238,7 +214,7 @@ func plugxParseRomParsers(plugin string, raw json.RawMessage, problems *[]string
 // plugxValidateRomParser checks one romParsers entry and normalises it.
 func plugxValidateRomParser(plugin string, spec plugxRomParserSpec) (plugxRomParser, error) {
 	system := strings.ToLower(strings.TrimSpace(spec.System))
-	if !plugxSystemPattern.MatchString(system) {
+	if !plugxSystemPattern().MatchString(system) {
 		return plugxRomParser{}, fmt.Errorf("system %q is not a short lower-case id", spec.System)
 	}
 	p := plugxRomParser{
@@ -259,7 +235,7 @@ func plugxValidateRomParser(plugin string, spec plugxRomParserSpec) (plugxRomPar
 		if e != "" && !strings.HasPrefix(e, ".") {
 			e = "." + e
 		}
-		if !plugxExtPattern.MatchString(e) {
+		if !plugxExtPattern().MatchString(e) {
 			return plugxRomParser{}, fmt.Errorf("extension %q is not like \".min\"", e)
 		}
 		if !seen[e] {
@@ -607,57 +583,6 @@ func plugxSyncInputProfiles(found []plugxExtensions) map[string][]string {
 		}
 	}
 	return notes
-}
-
-// plugxRomParsers returns the ROM formats the switched-on plugins add, sorted by
-// plugin and name. The slice is a copy; its parsers must not be modified.
-func plugxRomParsers() []plugxRomParser {
-	plugxRegistry.mu.RLock()
-	defer plugxRegistry.mu.RUnlock()
-	out := make([]plugxRomParser, len(plugxRegistry.parsers))
-	copy(out, plugxRegistry.parsers)
-	return out
-}
-
-// plugxRomParserFor finds the plugin ROM format for a file: a parser whose
-// header signature matches wins over one that goes by the extension alone, so
-// two formats sharing ".bin" can still be told apart. It reads at most the few
-// bytes the signatures need, and only when a parser with a signature claims
-// the extension. Safe to call from any goroutine.
-func plugxRomParserFor(path string) (plugxRomParser, bool) {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == "" {
-		return plugxRomParser{}, false
-	}
-	parsers := plugxRomParsers()
-	need := int64(0)
-	for _, p := range parsers {
-		if p.handles(ext) && len(p.Magic) > 0 {
-			if end := p.Offset + int64(len(p.Magic)); end > need {
-				need = end
-			}
-		}
-	}
-	var header []byte
-	if need > 0 {
-		header = plugxReadHeader(path, need)
-	}
-	fallback, haveFallback := plugxRomParser{}, false
-	for _, p := range parsers {
-		if !p.handles(ext) {
-			continue
-		}
-		if len(p.Magic) == 0 {
-			if !haveFallback {
-				fallback, haveFallback = p, true
-			}
-			continue
-		}
-		if p.matchesHeader(header) {
-			return p, true
-		}
-	}
-	return fallback, haveFallback
 }
 
 // plugxReadHeader reads up to n bytes from the start of a file.

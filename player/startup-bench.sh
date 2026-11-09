@@ -10,6 +10,8 @@
 # Usage:
 #   ./startup-bench.sh
 #   JUKAHUB_BENCH_RUNS=5 JUKAHUB_BENCH_LIMIT_MS=3000 ./startup-bench.sh
+#   JUKAHUB_BENCH_INITTRACE=1 ./startup-bench.sh   # also print Go's package-init
+#                                                  # cost (GODEBUG=inittrace=1)
 #
 # Run it on the device too: the 2 s budget is a device claim, not a CI claim.
 # GitHub's runner is slower and the default limit is 5 s there.
@@ -69,6 +71,12 @@ export SDL_VIDEODRIVER=dummy
 export SDL_AUDIODRIVER=dummy
 export JUKAHUB_STARTUP_BENCH=1
 export JUKAHUB_STARTUP_STATE="$work/startup-state.json"
+if [ "${JUKAHUB_BENCH_INITTRACE:-}" = "1" ]; then
+  # The runtime prints one "init <package> @<start> ms, <ms> clock, <bytes>"
+  # line per package before main runs: what package-level vars and init()
+  # functions cost before the first line of main.
+  export GODEBUG="${GODEBUG:+$GODEBUG,}inittrace=1"
+fi
 
 values=()
 for i in $(seq 1 "$runs"); do
@@ -105,6 +113,11 @@ sorted="$(printf '%s\n' "${values[@]}" | sort -n)"
 median="$(printf '%s\n' "$sorted" | sed -n "$(( (runs + 1) / 2 ))p")"
 echo
 echo "cold-boot median: ${median}ms over ${runs} run(s), limit ${limit}ms"
+if [ "${JUKAHUB_BENCH_INITTRACE:-}" = "1" ]; then
+  echo
+  echo "package init (last run, slowest first):"
+  grep '^init ' "$work/run-$runs.log" | sort -t, -k2 -rn | head -10 || true
+fi
 
 if [ "$median" -gt "$limit" ]; then
   echo "BOOT BUDGET EXCEEDED: ${median}ms > ${limit}ms" >&2

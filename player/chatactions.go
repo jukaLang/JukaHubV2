@@ -92,37 +92,6 @@ func ellipsizeRunes(text string, max int) string {
 
 // --- Selection -----------------------------------------------------------
 
-// chatClampSelection keeps the selection on its message across trims, merges
-// and reloads: the index follows the id, and a message that is gone drops the
-// selection.
-func chatClampSelection() {
-	chatMutex.Lock()
-	defer chatMutex.Unlock()
-	if chatSelected < 0 {
-		return
-	}
-	list := *chatTabSliceLocked(chatActiveTabID())
-	if chatSelected < len(list) && (chatSelectedID == "" || list[chatSelected].ID == chatSelectedID) {
-		return
-	}
-	if chatSelectedID != "" {
-		for i := range list {
-			if list[i].ID == chatSelectedID {
-				chatSelected = i
-				chatSelectionBar.index = i
-				return
-			}
-		}
-	}
-	clearChatSelectionLocked()
-}
-
-func clearChatSelectionLocked() {
-	chatSelected = -1
-	chatSelectedID = ""
-	chatSelectionBar = chatSelection{}
-}
-
 // clearChatSelection drops the highlight and closes the action bar.
 func clearChatSelection() {
 	chatSelected = -1
@@ -212,41 +181,6 @@ func selectedChatMessage() (ChatMessage, int, bool) {
 		return ChatMessage{}, -1, false
 	}
 	return msgs[chatSelected], chatSelected, true
-}
-
-// moveChatSelection walks the selection by delta messages (a selection starts
-// on the newest message), without opening the action bar.
-func moveChatSelection(delta int) bool {
-	msgs := chatActiveMessages()
-	if len(msgs) == 0 {
-		return false
-	}
-	next := chatSelected
-	if next < 0 || next >= len(msgs) {
-		next = len(msgs) - 1
-	} else {
-		next += delta
-	}
-	next = clampIndex(next, len(msgs))
-	if next == chatSelected {
-		return false
-	}
-	mode := chatAnchorTop
-	if delta < 0 {
-		mode = chatAnchorBottom
-	}
-	chatFocusMessage(msgs, next, mode)
-	return true
-}
-
-// chatEnsureSelectionVisible asks the next frame to bring the selected message
-// on screen.
-func chatEnsureSelectionVisible() {
-	msgs := chatActiveMessages()
-	if chatSelected < 0 || chatSelected >= len(msgs) {
-		return
-	}
-	chatScrollToIndex(chatSelected)
 }
 
 // --- Reply ---------------------------------------------------------------

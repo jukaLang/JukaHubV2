@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -155,7 +154,7 @@ func TelemetryBoot(config *Config) {
 	payload := telemetryPayload(config, "device", "")
 	go func() {
 		if err := postTelemetry(endpoint, payload); err != nil {
-			log.Printf("telemetry: device event not sent: %v", err)
+			logWarn("telemetry", "device event not sent: %v", err)
 		}
 	}()
 }
@@ -172,6 +171,6 @@ func TelemetryCrash(config *Config) {
 		return
 	}
 	if err := postTelemetry(endpoint, telemetryPayload(config, "crash", "panic")); err != nil {
-		log.Printf("telemetry: crash event not sent: %v", err)
+		logError("telemetry", "crash event not sent: %v", err)
 	}
 }

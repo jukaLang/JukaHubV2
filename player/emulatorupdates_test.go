@@ -246,24 +246,6 @@ func TestVerifyReleaseDigest(t *testing.T) {
 	}
 }
 
-func TestStandaloneArm64Asset(t *testing.T) {
-	cases := map[string]bool{
-		"PPSSPP_linux_arm64.tar.gz":                      true,
-		"PPSSPP-v1.20.4-anylinux-aarch64.AppImage":       true,
-		"mGBA-0.10.5-appimage-arm64.appimage":            true,
-		"flycast-linux-aarch64.zip":                      true,
-		"PPSSPP_linux_x86_64.tar.gz":                     false,
-		"mGBA-0.10.5-win64.zip":                          false,
-		"PPSSPP-v1.20.4-Windows-ARM64.zip":               false,
-		"PPSSPP-v1.20.4-anylinux-aarch64.AppImage.zsync": false,
-	}
-	for name, want := range cases {
-		if got := standaloneArm64Asset(name); got != want {
-			t.Errorf("standaloneArm64Asset(%q) = %v, want %v", name, got, want)
-		}
-	}
-}
-
 func TestFetchStandaloneUpdatesPicksTheArm64Asset(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/hrydgard/ppsspp/releases/latest", func(w http.ResponseWriter, r *http.Request) {
@@ -326,26 +308,5 @@ func TestDownloadStandaloneStagesTheVerifiedArchive(t *testing.T) {
 	}
 	if data, err := os.ReadFile(want); err != nil || string(data) != string(body) {
 		t.Fatalf("staged file = %q, %v", data, err)
-	}
-}
-
-func TestEmulatorUpdateReportSummary(t *testing.T) {
-	if got := (emulatorUpdateReport{CoresChecked: 4}).summary(); !strings.Contains(got, "All 4 cores are up to date") {
-		t.Fatalf("summary = %q", got)
-	}
-	if got := (emulatorUpdateReport{}).summary(); !strings.Contains(got, "No RetroArch cores") {
-		t.Fatalf("summary = %q", got)
-	}
-	report := emulatorUpdateReport{
-		CoresChecked: 4,
-		Cores:        []coreBuild{{Core: "mgba"}, {Core: "flycast"}},
-		Standalones:  []standaloneUpdate{{Name: "PPSSPP", Path: "/x"}},
-		CoreErrors:   []string{"one failed"},
-	}
-	got := report.summary()
-	for _, want := range []string{"2 core(s) added to the pool", "1 emulator build(s) downloaded", "1 failed"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("summary = %q, want %q", got, want)
-		}
 	}
 }

@@ -161,34 +161,6 @@ func jukaHubAssetName(device DeviceModel, goos, arch string) (string, error) {
 	return target.Asset, nil
 }
 
-// OpUpdateJukaHub checks the release feed and stages the newest archive for
-// this device. The user confirms the swap through the modal; this operation
-// stops at staging.
-func OpUpdateJukaHub(ctx context.Context, config *Config) error {
-	rel, err := FetchLatestJukaHubRelease(ctx)
-	if err != nil {
-		return err
-	}
-	if !releaseIsNewerThanInstalled(rel) {
-		installed := installedBuildDate()
-		if installed == "" {
-			installed = versionString(config)
-		}
-		return fmt.Errorf("already up to date (%s)", installed)
-	}
-	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
-		return err
-	}
-	patchEventSafe(PatchEvent{Kind: PatchEventModal, Modal: &PatchModalRequest{
-		ID:       "confirm-swap",
-		Title:    "Update JukaHub to " + rel.TagName + "?",
-		Body:     "The new build is staged. Applying replaces the JukaHub files and restarts the app.\n\nBackup and rollback are automatic.",
-		Confirm:  "Apply & Restart",
-		HighRisk: true,
-	}})
-	return nil
-}
-
 // findStagedBinary locates the JukaHub executable inside a staged tree.
 func findStagedBinary(staging string) string {
 	var found string

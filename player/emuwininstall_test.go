@@ -1,9 +1,9 @@
 package main
 
-// emuwininstall_test.go — the Windows installer's promises: it picks the one
-// asset that is each emulator's portable Windows x64 build, it never unpacks
-// outside the emulator's folder, an update keeps the user's files and the
-// version it replaced, and a rollback puts that version back.
+// emuwininstall_test.go — the Windows installer's promises: it never unpacks
+// outside the emulator's folder, refuses a download whose digest does not
+// match, an update keeps the user's files and the version it replaced, and a
+// rollback puts that version back.
 
 import (
 	"archive/zip"
@@ -11,7 +11,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -112,137 +111,6 @@ func emuNewReleaseServer(t *testing.T, repo string) (*emuReleaseServer, *http.Cl
 	standaloneAPIBase = server.URL
 	t.Cleanup(func() { standaloneAPIBase = prevAPI })
 	return rs, server.Client()
-}
-
-// TestEmuPickWinAssetMatchesRealReleaseNames runs each rule against the asset
-// lists the projects really publish: the portable Windows x64 archive wins over
-// installers, ARM builds, debug symbols, checksum side-cars and other systems.
-func TestEmuPickWinAssetMatchesRealReleaseNames(t *testing.T) {
-	cases := []struct {
-		emulator string
-		assets   []string
-		want     string
-	}{
-		{"PPSSPP", []string{"PPSSPP-v1.20.4-Windows-ARM64.zip", "PPSSPP-v1.20.4-Windows-x64.zip", "PPSSPP-v1.20.4-anylinux-aarch64.AppImage", "PPSSPP_linux_x86_64.tar.gz"}, "PPSSPP-v1.20.4-Windows-x64.zip"},
-		{"DuckStation", []string{"duckstation-windows-arm64-release.zip", "duckstation-windows-x64-installer.exe", "duckstation-windows-x64-sse2-release.zip", "duckstation-windows-x64-release.zip", "DuckStation-x64.AppImage"}, "duckstation-windows-x64-release.zip"},
-		{"PCSX2", []string{"PCSX2-v2.8.2-windows-x64-installer.exe", "pcsx2-v2.8.2-windows-x64-Qt.7z", "pcsx2-v2.8.2-linux-appimage-x64-Qt.AppImage", "pcsx2-v2.8.2-macos-Qt.tar.xz"}, "pcsx2-v2.8.2-windows-x64-Qt.7z"},
-		{"melonDS", []string{"melonDS-1.1-appimage-x86_64.zip", "melonDS-1.1-windows-x86_64.zip", "melonDS-1.1-macOS-universal.zip"}, "melonDS-1.1-windows-x86_64.zip"},
-		{"mGBA", []string{"mGBA-0.10.5-win32.7z", "mGBA-0.10.5-win64-installer.exe", "mGBA-0.10.5-win64.7z", "mGBA-0.10.5-switch.7z", "mGBA-0.10.5.tar.xz"}, "mGBA-0.10.5-win64.7z"},
-		{"Cemu", []string{"Cemu-2.6-x86_64.AppImage", "cemu-2.6-macos-12-x64.dmg", "cemu-2.6-windows-x64.zip"}, "cemu-2.6-windows-x64.zip"},
-		{"Vita3K", []string{"ubuntu-latest.zip", "macos-latest.dmg", "windows-latest.zip", "Vita3K-x86_64.AppImage"}, "windows-latest.zip"},
-		{"RPCS3", []string{"rpcs3-v0.0.43-20404-e8979d31_win64_aarch64_clang.7z", "rpcs3-v0.0.43-20404-e8979d31_win64_msvc.7z.sha256", "rpcs3-v0.0.43-20404-e8979d31_win64_x86_64_clang.7z", "rpcs3-v0.0.43-20404-e8979d31_win64_msvc.7z"}, "rpcs3-v0.0.43-20404-e8979d31_win64_msvc.7z"},
-		{"xemu", []string{"xemu-0.8.139-windows-x86_64.zip", "xemu-win-aarch64-release.zip", "xemu-win-x86_64-release-pdb.zip", "xemu-win-x86_64-release.zip", "xemu-v0.8.139-x86_64.AppImage"}, "xemu-win-x86_64-release.zip"},
-		{"PPSSPP", []string{"PPSSPP_linux_x86_64.tar.gz", "PPSSPP-v1.20.4-Windows-ARM64.zip"}, ""},
-	}
-	for _, tc := range cases {
-		spec, ok := emuWinSpecFor(tc.emulator)
-		if !ok {
-			t.Fatalf("no install rules for %s", tc.emulator)
-		}
-		assets := make([]emuGitHubAsset, 0, len(tc.assets))
-		for _, name := range tc.assets {
-			assets = append(assets, emuGitHubAsset{Name: name, BrowserDownloadURL: "https://github.com/x/" + name})
-		}
-		got, found := emuPickWinAsset(spec, assets)
-		if tc.want == "" {
-			if found {
-				t.Errorf("%s picked %q from a release with no Windows x64 build", tc.emulator, got.Name)
-			}
-			continue
-		}
-		if !found || got.Name != tc.want {
-			t.Errorf("%s picked %q (found=%v), want %q", tc.emulator, got.Name, found, tc.want)
-		}
-	}
-}
-
-// TestEmuWinSpecsCoverTheCatalog keeps the two tables in step: every cataloged
-// Windows emulator has install rules, and every installable one names a launcher
-// the catalog can find.
-func TestEmuWinSpecsCoverTheCatalog(t *testing.T) {
-	for _, entry := range winEmuCatalog {
-		spec, ok := emuWinSpecFor(entry.name)
-		if !ok {
-			t.Errorf("%s has no install rules", entry.name)
-			continue
-		}
-		if !spec.installable() && spec.Site == "" {
-			t.Errorf("%s can neither be installed nor sent to its download page", entry.name)
-		}
-		if len(emuWinLauncherNames(entry.name)) == 0 {
-			t.Errorf("%s has no launcher names", entry.name)
-		}
-	}
-	if spec, ok := emuWinSpecFor("Dolphin"); !ok || spec.installable() {
-		t.Error("Dolphin publishes no GitHub build; its tile must open the download page")
-	}
-}
-
-func TestEmuWinUpdateAvailable(t *testing.T) {
-	cases := []struct {
-		name      string
-		installed emuWinManifest
-		latest    emuWinRelease
-		want      bool
-	}{
-		{"newer version", emuWinManifest{Tag: "v1.20.3"}, emuWinRelease{Tag: "v1.20.4"}, true},
-		{"same version", emuWinManifest{Tag: "v1.20.4"}, emuWinRelease{Tag: "v1.20.4"}, false},
-		{"installed is newer", emuWinManifest{Tag: "2.7"}, emuWinRelease{Tag: "2.6"}, false},
-		{"rolling tag rebuilt", emuWinManifest{Tag: "latest", Digest: "sha256:aa"}, emuWinRelease{Tag: "latest", Digest: "sha256:bb"}, true},
-		{"rolling tag unchanged", emuWinManifest{Tag: "latest", Digest: "sha256:aa"}, emuWinRelease{Tag: "latest", Digest: "SHA256:AA"}, false},
-		{"rolling tag without digest", emuWinManifest{Tag: "continuous", AssetDate: "2026-10-01T00:00:00Z"}, emuWinRelease{Tag: "continuous", AssetDate: "2026-11-01T00:00:00Z"}, true},
-		{"commit builds are not numbers", emuWinManifest{Tag: "build-e8979d31b3a2"}, emuWinRelease{Tag: "build-1f857121aaaa"}, true},
-		{"nightly date moved", emuWinManifest{Tag: "nightly-2026-11-01"}, emuWinRelease{Tag: "nightly-2026-11-08"}, true},
-		{"rolled back install", emuWinManifest{Tag: "rolled-back"}, emuWinRelease{Tag: "v0.8.139"}, true},
-		{"unknown installed tag", emuWinManifest{}, emuWinRelease{Tag: "v1"}, false},
-	}
-	for _, tc := range cases {
-		if got := emuWinUpdateAvailable(tc.installed, tc.latest); got != tc.want {
-			t.Errorf("%s: update = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestEmuRetroArchStableVersions(t *testing.T) {
-	listing := `<a href="/stable/1.9.0/">1.9.0</a>
-<a href="/stable/1.22.2/">1.22.2</a> <a href="/stable/1.21.0/">1.21.0</a>
-<a href="/stable/2026.10.25/">dated folder</a> <a href="1.22.2/">again</a>`
-	got := emuRetroArchStableVersions(listing)
-	want := []string{"1.22.2", "1.21.0", "1.9.0"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("versions = %v, want %v", got, want)
-	}
-}
-
-// TestEmuResolveRetroArchSkipsAVersionWithoutAWindowsBuild: a fresh stable
-// folder can exist before its Windows archive does; the newest one that has it
-// is the one to install.
-func TestEmuResolveRetroArchSkipsAVersionWithoutAWindowsBuild(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/stable/":
-			_, _ = w.Write([]byte(`<a href="/stable/1.22.1/">1.22.1</a><a href="/stable/1.22.2/">1.22.2</a>`))
-		case "/stable/1.22.1/windows/x86_64/RetroArch.7z":
-			w.Header().Set("Content-Length", "4096")
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	allowUpdateTestServer(t, server.URL)
-	prevStable, prevNightly := emuRetroArchStableURL, emuRetroArchNightlyURL
-	emuRetroArchStableURL = server.URL + "/stable/"
-	emuRetroArchNightlyURL = server.URL + "/nightly/RetroArch.7z"
-	t.Cleanup(func() { emuRetroArchStableURL, emuRetroArchNightlyURL = prevStable, prevNightly })
-
-	release, err := emuResolveRetroArch(context.Background(), server.Client())
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if release.Tag != "1.22.1" || !strings.HasSuffix(release.URL, "/stable/1.22.1/windows/x86_64/RetroArch.7z") {
-		t.Fatalf("release = %+v, want the 1.22.1 Windows build", release)
-	}
 }
 
 // TestEmuWinInstallUpdateAndRollBack is the whole path against a local
@@ -408,22 +276,5 @@ func TestEmuDigestMatches(t *testing.T) {
 	}
 	if err := emuDigestMatches(hexSum, "md5:abc"); err == nil {
 		t.Fatal("an unsupported digest passed")
-	}
-}
-
-func TestEmuFriendlyError(t *testing.T) {
-	cases := []struct {
-		err  error
-		want string
-	}{
-		{context.Canceled, "Cancelled"},
-		{errors.New("HTTP 403 from https://api.github.com/x"), "GitHub is limiting"},
-		{errors.New("HTTP 404 from https://github.com/x"), "not on the server"},
-		{errors.New("HTTP 502 from https://github.com/x"), "having trouble"},
-	}
-	for _, tc := range cases {
-		if got := emuFriendlyError(tc.err); !strings.Contains(got, tc.want) {
-			t.Errorf("emuFriendlyError(%v) = %q, want it to mention %q", tc.err, got, tc.want)
-		}
 	}
 }

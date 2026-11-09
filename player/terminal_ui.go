@@ -216,6 +216,31 @@ func termRefreshCwdLabels() {
 // termFooterHints is the footer row for the Terminal: what the pad does right
 // now, so X reads Stop while a command runs.
 func termFooterHints() []FooterHint {
+	// On a keyboard the terminal is typed into, so its keys are its own
+	// (handleTermInput, termHistoryKey), not the pad's names translated.
+	if hintsUseKeyboard() {
+		if termHist.open {
+			return []FooterHint{
+				{Button: "↑ ↓", Label: "Choose"},
+				{Button: "Enter", Label: "Insert"},
+				{Button: "Ctrl+Enter", Label: "Run"},
+				{Button: "Del", Label: "Delete"},
+				{Button: "Esc", Label: "Close"},
+			}
+		}
+		stop := FooterHint{Button: "Ctrl+L", Label: "Clear"}
+		if term.job != nil {
+			stop = FooterHint{Button: "Ctrl+C", Label: "Stop"}
+		}
+		return []FooterHint{
+			{Button: "Enter", Label: "Run"},
+			{Button: "Esc", Label: "Back"},
+			stop,
+			{Button: "F7", Label: "History"},
+			{Button: "Tab", Label: "Complete"},
+			{Button: "PgUp/PgDn", Label: "Scroll"},
+		}
+	}
 	if termHist.open {
 		return []FooterHint{
 			{Button: "D-Pad", Label: "Choose"},
@@ -517,11 +542,14 @@ func renderTermPrompt(renderer *sdl.Renderer, config *Config, font, uiFont *ttf.
 		term.inputScroll = 0
 		termInputTextX = area.X
 		placeholder := "Type a command — Enter runs it"
-		if P().IsHandheld() {
+		if !hintsUseKeyboard() {
 			placeholder = "Type a command — A opens the keyboard"
 		}
 		if running {
 			placeholder = "A command is running — X stops it"
+			if hintsUseKeyboard() {
+				placeholder = "A command is running — Ctrl+C stops it"
+			}
 		}
 		drawText(renderer, font, ellipsize(font, placeholder, area.W), area.X, textY, ColorTextTertiary(), textAlignLeft)
 	} else {

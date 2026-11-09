@@ -276,44 +276,8 @@ function parseSavedElement(html) {
   const node = tmp.firstChild;
   if (node && node.classList) {
     node.classList.remove('selected');
-    upgradeSavedIcons(node);
   }
   return node;
-}
-
-// Font Awesome classes an older build saved inside canvas elements (tile
-// glyphs, the Continue card, the collapsed-list marker), as builder-icons.js
-// names. Only reached when the shipped config cannot load and an old autosave
-// is restored instead.
-const LEGACY_FA_ICONS = {
-  'fa-play': 'play', 'fa-folder': 'folder', 'fa-box': 'package', 'fa-table-cells-large': 'apps',
-  'fa-th-large': 'grid', 'fa-star': 'star', 'fa-globe': 'globe', 'fa-comment': 'chat',
-  'fa-sliders': 'sliders', 'fa-gear': 'settings', 'fa-clock': 'clock', 'fa-gamepad': 'gamepad',
-  'fa-power-off': 'power', 'fa-arrow-left': 'back', 'fa-circle': 'ring', 'fa-tv': 'tv',
-  'fa-microphone': 'mic', 'fa-chart-line': 'chart', 'fa-cloud': 'cloud', 'fa-palette': 'palette',
-  'fa-microchip': 'cpu', 'fa-terminal': 'terminal', 'fa-gauge-high': 'speed', 'fa-hard-drive': 'disk',
-  'fa-file-lines': 'logs', 'fa-broom': 'broom', 'fa-download': 'download', 'fa-network-wired': 'network',
-  'fa-photo-film': 'media-stack', 'fa-bars': 'menu'
-};
-
-// upgradeSavedIcons redraws icons in element markup saved by a build that used
-// Font Awesome and text glyphs: those classes have no stylesheet any more, and
-// the remove badge's U+2715 and the Text Browser emoji are not in Inter.
-function upgradeSavedIcons(node) {
-  node.querySelectorAll('i[class*="fa-"]').forEach(old => {
-    const legacy = [...old.classList].find(cls => Object.prototype.hasOwnProperty.call(LEGACY_FA_ICONS, cls));
-    const fresh = createIcon(legacy ? LEGACY_FA_ICONS[legacy] : 'ring');
-    if (old.style.marginRight) fresh.style.marginRight = old.style.marginRight;
-    old.replaceWith(fresh);
-  });
-  node.querySelectorAll('.remove-button').forEach(badge => {
-    if (!badge.querySelector('svg')) badge.innerHTML = iconSvg('close');
-  });
-  const label = node.querySelector('.text-content');
-  if (node.getAttribute('data-type') === 'textbrowser' && label && !node.querySelector('.tb-source-icon') &&
-    /^\s*(?:\u{1F5A5}\u{FE0F}?|\u{1F50D}|\u{1F4CB}|\u{1F310})/u.test(label.textContent)) {
-    setTextBrowserLabel(node, node.getAttribute('data-source') || 'system');
-  }
 }
 
 function restoreSnapshot(snapshot) {
@@ -5596,6 +5560,7 @@ const HOME_TITLE_ICONS = {
   chat: 'chat',
   tools: 'tools',
   emulator: 'emulator',
+  games: 'emulator',
   settings: 'settings',
   clock: 'clock',
   exit: 'exit',

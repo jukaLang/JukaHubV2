@@ -6,6 +6,7 @@
  *
  * The compiled form (rsrc_windows_amd64.syso) is what the Go linker picks up,
  * so a plain "go build" on windows/amd64 gets the icon with no extra flags.
- * Rebuild it with mkwinres.sh after changing JukaPlayer.png.
+ * branding/mklogo.py writes both JukaHub.ico and the .syso; build.bat (and
+ * mkwinres.sh) recompile the .syso from this script with windres.
  */
 1 ICON "JukaHub.ico"

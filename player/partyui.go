@@ -122,12 +122,6 @@ func partyDeviceName() string {
 	return name
 }
 
-// partyOpenPanel is the old overlay's entry point, kept for callers that have
-// not moved to partyOpenScreen: it opens the Watch Party screen.
-func partyOpenPanel() {
-	partyOpenScreen(appConfig)
-}
-
 // partyTogglePanel is F8: it opens Watch Party, or leaves it when it is the
 // screen on display.
 func partyTogglePanel() {

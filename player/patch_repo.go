@@ -17,8 +17,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -576,12 +574,6 @@ func removeRemotePackage(ctx context.Context, p *PatchPackage) error {
 		return errors.New("this remote package cannot be removed automatically (files come from the archive)")
 	}
 	return RemovePackage(ctx, p, p.Files)
-}
-
-// hasher is a tiny helper for future use (kept for symmetry with sha256).
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }
 
 var _ = io.Copy

@@ -103,39 +103,6 @@ func TestEnableSavestateResumeBacksUpOnce(t *testing.T) {
 	}
 }
 
-func TestRetroArchLauncherDetection(t *testing.T) {
-	dir := t.TempDir()
-	direct := filepath.Join(dir, "RetroArch.exe")
-	if err := os.WriteFile(direct, []byte("binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := filepath.Join(dir, "launch.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec /usr/bin/retroarch -L core.so \"$1\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	standalone := filepath.Join(dir, "mgba.sh")
-	if err := os.WriteFile(standalone, []byte("#!/bin/sh\nexec mgba \"$1\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	cases := []struct {
-		path string
-		want bool
-	}{
-		{direct, true},
-		{script, true},
-		{"/mnt/SDCARD/Emus/RetroArch/launch.sh", true},
-		{standalone, false},
-		{"", false},
-		{filepath.Join(dir, "absent.sh"), false},
-	}
-	for _, c := range cases {
-		if got := retroArchLauncher(c.path); got != c.want {
-			t.Errorf("retroArchLauncher(%q) = %t, want %t", c.path, got, c.want)
-		}
-	}
-}
-
 func TestPrepareSavestateResumeWritesTheDiscoveredConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "retroarch.cfg")

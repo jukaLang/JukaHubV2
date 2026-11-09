@@ -168,6 +168,12 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 			chatCycleTab(chatTabStep(shift))
 			return true
 		}
+		// Ctrl+Enter is the pad's Start here: send the typed draft (the
+		// footer says "Start / Ctrl+Enter"). With nothing typed it falls
+		// through like any other chord.
+		if (sym == sdl.K_RETURN || sym == sdl.K_KP_ENTER) && chatSendDraft() {
+			return true
+		}
 		return false
 	}
 	switch sym {
@@ -668,21 +674,6 @@ func chatScrollToTop() {
 	view.target = 1 << 30
 }
 
-// chatScrollToIndex brings message index of the active tab into view, with
-// its end at the bottom of the list.
-func chatScrollToIndex(index int) {
-	msgs := chatActiveMessages()
-	if index < 0 || index >= len(msgs) {
-		return
-	}
-	view := &chatViews[chatActiveTabID()]
-	if index == len(msgs)-1 {
-		view.target = 0
-	}
-	view.anchorID = msgs[index].ID
-	view.anchorMode = chatAnchorBottom
-}
-
 // chatSceneWheel scrolls the history with the mouse wheel.
 func chatSceneWheel(config *Config, dy int32) bool {
 	if !chatSceneActive(config) || dy == 0 {
@@ -862,7 +853,7 @@ func chatFooterHints() []FooterHint {
 		}
 	}
 	if strings.TrimSpace(chatInputText) != "" {
-		return append(hints, FooterHint{Button: "Start", Label: "Send"})
+		return append(hints, FooterHint{Button: "Start / Ctrl+Enter", Label: "Send"})
 	}
 	return append(hints, FooterHint{Button: "X", Label: "Rename"})
 }

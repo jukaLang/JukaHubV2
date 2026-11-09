@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -214,71 +213,12 @@ func dbSetHeld(name string, held bool) error {
 	return fmt.Errorf("package %q is not installed", name)
 }
 
-// dbInstalledFiles returns the file records owned by a package.
-func dbInstalledFiles(name string) []DBInstalledFile {
-	p := dbFindInstalled(name)
-	if p == nil {
-		return nil
-	}
-	out := make([]DBInstalledFile, len(p.Files))
-	copy(out, p.Files)
-	return out
-}
-
-// dbPackageByFile finds the package that owns a managed path.
-func dbPackageByFile(path string) (string, bool) {
-	patchDBMu.Lock()
-	defer patchDBMu.Unlock()
-	for _, p := range patchDB.Installed {
-		for _, f := range p.Files {
-			if filepath.Clean(f.Path) == filepath.Clean(path) {
-				return p.Name, true
-			}
-		}
-	}
-	return "", false
-}
-
-// dbValidate checks database integrity; broken entries are reported.
-func dbValidate() []string {
-	var problems []string
-	patchDBMu.Lock()
-	defer patchDBMu.Unlock()
-	names := map[string]bool{}
-	for _, p := range patchDB.Installed {
-		if names[p.Name] {
-			problems = append(problems, "duplicate installed package: "+p.Name)
-		}
-		names[p.Name] = true
-		for _, f := range p.Files {
-			if strings.TrimSpace(f.Path) == "" {
-				problems = append(problems, p.Name+": empty managed path")
-			}
-		}
-	}
-	return problems
-}
-
 // dbSummary returns package counts for the Overview view.
 type dbSummary struct {
 	Installed   int
 	Upgradeable int
 	Held        int
 	Broken      int
-}
-
-// buildDBSummary computes installed/upgradeable/held/broken counts.
-func buildDBSummary() dbSummary {
-	var s dbSummary
-	patchDBMu.Lock()
-	defer patchDBMu.Unlock()
-	for _, p := range patchDB.Installed {
-		s.Installed++
-		if p.Held {
-			s.Held++
-		}
-	}
-	return s
 }
 
 var errNotInstalled = errors.New("package is not installed")

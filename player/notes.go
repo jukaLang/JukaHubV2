@@ -41,6 +41,7 @@ type notesState struct {
 	filter      string // folder filter
 	scrollY     int
 	storePath   string
+	skipText    string // a shortcut key's own text, dropped once (N/Y new, S search)
 }
 
 var notes notesState
@@ -449,6 +450,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return
 	}
+	notes.skipText = ""
 
 	filtered := notesFiltered()
 
@@ -474,7 +476,11 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 				notes.tab = 1
 				PlayActivateSound()
 			}
-		case sdl.K_n:
+		case sdl.K_n, sdl.K_y:
+			// Y as well as N: the footer's "Y New" is the pad's key, and a
+			// keyboard's Y is its twin (inputhints.go). The letter's text event
+			// follows and would land in the new title, so it is dropped.
+			notes.skipText = string(rune(e.Keysym.Sym))
 			notesNewNote()
 			PlayActivateSound()
 		case sdl.K_x:
@@ -488,6 +494,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 		case sdl.K_s:
 			notes.search = ""
 			notes.tab = 3 // search mode
+			notes.skipText = "s" // the S's own text must not start the query
 			PlayActivateSound()
 		case sdl.K_f:
 			// Cycle folder filter.
@@ -552,7 +559,14 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 }
 
 func handleNotesTextInput(e *sdl.TextInputEvent) {
-	notesInsertText(e.GetText())
+	text := e.GetText()
+	if skip := notes.skipText; skip != "" {
+		notes.skipText = ""
+		if strings.EqualFold(text, skip) {
+			return
+		}
+	}
+	notesInsertText(text)
 }
 
 // notesInsertText appends text to whichever field the editor has open. Clipboard

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,50 +181,6 @@ func isPlaceholderSecret(s string) bool {
 	return false
 }
 
-// ValidateCustomString validates a custom config string value for safety.
-// It checks for common injection patterns and returns an error if the value
-// appears malicious.
-func ValidateCustomString(key, value string) error {
-	if value == "" {
-		return nil
-	}
-
-	// Check for command injection patterns
-	dangerousPatterns := []struct {
-		pattern string
-		desc    string
-	}{
-		{"&&", "command chaining"},
-		{"||", "command alternation"},
-		{";", "command separator"},
-		{"|", "pipe to another command"},
-		{"$", "variable expansion"},
-		{"`", "command substitution"},
-		{">", "output redirection"},
-		{"<", "input redirection"},
-		{"\n", "newline injection"},
-		{"\r", "carriage return injection"},
-	}
-
-	for _, dp := range dangerousPatterns {
-		if strings.Contains(value, dp.pattern) {
-			return fmt.Errorf("config value for %q contains potentially dangerous pattern: %s", key, dp.desc)
-		}
-	}
-
-	return nil
-}
-
-// SanitizeCustomString removes potentially dangerous characters from a config value.
-// This is a best-effort sanitization - validation should be preferred.
-func SanitizeCustomString(value string) string {
-	// Remove null bytes
-	value = strings.ReplaceAll(value, "\x00", "")
-	// Trim whitespace
-	value = strings.TrimSpace(value)
-	return value
-}
-
 // --- Atomic config persistence ---
 
 // AtomicWrite writes data to filename atomically using a temp file + fsync +
@@ -354,6 +309,42 @@ func SaveConfig(filename string, config *Config) error {
 	return nil
 }
 
+// configRecoveryNotice is set when the primary config had to be recovered from
+// its backup. It is shown once the render loop is up (main.go) rather than
+// during load, which runs before fonts and audio exist.
+var configRecoveryNotice string
+
+// takeConfigRecoveryNotice returns the pending recovery notice once.
+func takeConfigRecoveryNotice() string {
+	notice := configRecoveryNotice
+	configRecoveryNotice = ""
+	return notice
+}
+
+// configRecoveryMessage words the recovery so a reader knows what happened to
+// their settings and where the damaged file went.
+func configRecoveryMessage(aside string) string {
+	if aside == "" {
+		return "Settings were restored from the backup"
+	}
+	return "Settings were restored from the backup; the damaged file was kept as " + filepath.Base(aside)
+}
+
+// preserveCorruptConfig renames an unparsable primary config aside so the next
+// save cannot overwrite it. Returns the path it was kept at, or "" when there
+// was nothing to keep (a missing primary is a first run, not damage).
+func preserveCorruptConfig(path string) string {
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	aside := path + ".corrupt-" + time.Now().Format("20060102-150405")
+	if err := os.Rename(path, aside); err != nil {
+		Log().Warn("damaged config could not be kept aside", "path", path, "err", err)
+		return ""
+	}
+	return aside
+}
+
 // LoadLastKnownGood attempts to load the config from the backup file if the
 // primary file is corrupt or missing. It returns the loaded config and the
 // path from which it was loaded.
@@ -377,7 +368,15 @@ func LoadLastKnownGood(filename string) (*Config, error) {
 		// do not falsely report that the primary config was healthy.
 		configHealth.SetLastLoadPath(backup)
 		configHealth.MarkLoadOK()
-		return cfg, fmt.Errorf("loaded from backup: %s", backup)
+		// Keep the broken file instead of letting the next save overwrite the
+		// evidence, and report the recovery once the render loop can show it.
+		aside := preserveCorruptConfig(filename)
+		configRecoveryNotice = configRecoveryMessage(aside)
+		Log().Warn("config recovered from backup", "damaged", filename, "kept", aside)
+		// A usable backup is a successful launch. Returning the error here made
+		// main.go logFatal() before safe mode or the recovery chord existed, so
+		// one bad write bricked startup until the file was fixed by hand.
+		return cfg, nil
 	}
 	configHealth.RecordLoad(filename, err)
 	return nil, fmt.Errorf("primary and backup config failed: %w", err)
@@ -406,29 +405,13 @@ func SetLaunchMode(mode string) {
 	configHealthLaunchMode = mode
 }
 
-// ValidateKnownAtRuntime is a compile-time marker that the config health helpers
-// are wired into the real config load paths.
-var _ = ValidateKnownAtRuntime
-
-// ValidateKnownAtRuntimeWireHere is a compile-time marker that the config health
-// wire-up in this package has been applied exactly once.
-var ValidateKnownAtRuntimeWireHere = true
-
-// ValidateKnownAtRuntimeImport is a compile-time import marker that the config
-// health helpers are wired into the real config load paths.
-var ValidateKnownAtRuntimeImport = configHealth
-
-// ValidateKnownAtRuntimeHere is a compile-time marker that this file has been
-// patched for config health diagnostics.
-var ValidateKnownAtRuntimeHere = true
-
 // Log prints a compact config-health summary to the startup log so a failed
 // launch or an unexpected reload has a readable trail in the diagnostics
 // console.
 func (ch *ConfigHealth) Log() {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
-	log.Printf("[config.health] lastLoad=%s lastSave=%s source=%s loadErrs=%d saveErrs=%d restores=%d loadOK=%v saveOK=%v",
+	logDebug("config.health", "lastLoad=%s lastSave=%s source=%s loadErrs=%d saveErrs=%d restores=%d loadOK=%v saveOK=%v",
 		ch.LastLoadPath, ch.LastSavePath, ch.LastSourcePath, ch.LoadErrors, ch.SaveErrors,
 		ch.BackupRestores, ch.LastLoadOK, ch.LastSaveOK)
 }

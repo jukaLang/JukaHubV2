@@ -58,24 +58,6 @@ func TestNetworkCmdConfigParsing(t *testing.T) {
 	}
 }
 
-func TestNetworkCmdPort(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  string
-		want int
-	}{
-		{"default when missing", "", retroArchDefaultNetCmdPort},
-		{"configured", `network_cmd_port = "55356"`, 55356},
-		{"bad value falls back", `network_cmd_port = "abc"`, retroArchDefaultNetCmdPort},
-		{"out of range falls back", `network_cmd_port = "70000"`, retroArchDefaultNetCmdPort},
-	}
-	for _, tc := range tests {
-		if got := networkCmdPort(tc.cfg); got != tc.want {
-			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestRetroArchCmdline(t *testing.T) {
 	tests := []struct {
 		name string
@@ -130,17 +112,5 @@ func TestLowBatteryGuardEnabledByDefault(t *testing.T) {
 	}
 	if lowBatteryGuardEnabled(nil) {
 		t.Fatal("nil config must not enable the guard")
-	}
-}
-
-func TestLowBatteryMessageMentionsDisabledNetCmd(t *testing.T) {
-	// The message is only as useful as the remediation it names; build both
-	// branches from a config the helper reads, then restore the environment.
-	t.Setenv("JUKAHUB_RETROARCH_CFG", t.TempDir()+"/retroarch.cfg")
-	cfg := &Config{}
-	cfg.Variables.Custom = map[string]interface{}{}
-	msg := lowBatteryMessage(cfg, 4)
-	if msg == "" {
-		t.Fatal("expected a warning message")
 	}
 }

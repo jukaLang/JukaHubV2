@@ -45,14 +45,6 @@ type TextCache struct {
 	totalBytes int64 // approximate texture memory (RGBA), for diagnostics
 }
 
-// NewTextCache creates a cache with the given maximum entries.
-// A non-positive limit is clamped to 1: a zero-sized cache would otherwise
-// never evict (the eviction loop needs an entry to remove) and grow without
-// bound while every Put destroyed nothing.
-func NewTextCache(maxSize int) *TextCache {
-	return NewTextCacheWithBudget(maxSize, 0)
-}
-
 // NewTextCacheWithBudget creates a cache bounded by entries and by bytes.
 // A non-positive maxBytes leaves the byte side unbounded, which is what the
 // unit tests of the LRU order want; the app always passes a budget.
@@ -351,13 +343,6 @@ func clearTextFitCache() {
 	sanitizeMu.Unlock()
 }
 
-// textFitStats reports the cache's hit and miss counts (diagnostics).
-func textFitStats() (hits, misses int64, entries int) {
-	textFitMu.Lock()
-	defer textFitMu.Unlock()
-	return textFitHits, textFitMisses, len(textFitEntries)
-}
-
 // textMeasureKey identifies a plain measurement: the font and the exact string.
 type textMeasureKey struct {
 	font *ttf.Font
@@ -425,13 +410,6 @@ func measureText(font *ttf.Font, text string) (int32, int32) {
 	return m.w, m.h
 }
 
-// textMeasureStats reports the width cache's hit count and size.
-func textMeasureStats() (hits int64, entries int) {
-	textMeasureMu.Lock()
-	defer textMeasureMu.Unlock()
-	return textMeasureHits, len(textMeasureEntries)
-}
-
 var (
 	sanitizeMu      sync.Mutex
 	sanitizeEntries = make(map[textMeasureKey]string, 256)
@@ -476,13 +454,6 @@ func sanitizeCached(font *ttf.Font, text string) string {
 	}
 	sanitizeMu.Unlock()
 	return out
-}
-
-// sanitizeStats reports the substitution cache's hit count and size.
-func sanitizeStats() (hits int64, entries int) {
-	sanitizeMu.Lock()
-	defer sanitizeMu.Unlock()
-	return sanitizeHits, len(sanitizeEntries)
 }
 
 // ClearTextCache destroys all cached textures. Call on theme change or shutdown.

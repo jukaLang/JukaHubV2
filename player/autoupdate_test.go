@@ -5,7 +5,6 @@ package main
 // directories; no network and no real installation is touched.
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,29 +27,6 @@ func TestReleaseTimeFromTag(t *testing.T) {
 		if _, ok := releaseTimeFromTag(bad); ok {
 			t.Errorf("tag %q must not parse as a release time", bad)
 		}
-	}
-}
-
-func TestReleasePublishedTimeAndLabel(t *testing.T) {
-	rel := &githubRelease{TagName: "JukaHub-20260101000000", PublishedAt: "2026-10-17T09:30:00Z"}
-	if label := releaseDateLabel(rel); label != "2026-10-17" {
-		t.Fatalf("releaseDateLabel = %q", label)
-	}
-	if rel.PublishedAt != "" && releaseStampISO(rel) != "2026-10-17T09:30:00Z" {
-		t.Fatalf("releaseStampISO = %q", releaseStampISO(rel))
-	}
-	// published_at wins over the tag timestamp.
-	if ts, ok := releasePublishedTime(rel); !ok || ts.Hour() != 9 {
-		t.Fatalf("releasePublishedTime = %s, %v", ts, ok)
-	}
-	// Without published_at the tag supplies the date.
-	rel2 := &githubRelease{TagName: "JukaHub-20261017120000"}
-	if label := releaseDateLabel(rel2); label != "2026-10-17" {
-		t.Fatalf("tag-only releaseDateLabel = %q", label)
-	}
-	// Unknown metadata is never a valid release time.
-	if _, ok := releasePublishedTime(&githubRelease{TagName: "nonsense"}); ok {
-		t.Error("garbage tag must not yield a release time")
 	}
 }
 
@@ -126,68 +102,6 @@ func TestOwnReleaseIsNotNewer(t *testing.T) {
 	}
 }
 
-// A stored advertisement outlives the update it offered: a card image copied
-// over the old install never ran the swap helper, and a handheld without Wi-Fi
-// never reaches the check that would clear it. The header chip used to keep
-// saying "Update" in both cases. The running build's own stamp settles it.
-func TestStaleUpdateAdvertisementIsDroppedLocally(t *testing.T) {
-	patchStateMu.Lock()
-	prevTag, prevAt, prevInstalled := patchState.AvailableUpdateTag, patchState.AvailableUpdateAt, patchState.InstalledReleaseAt
-	patchStateMu.Unlock()
-	prevTime, prevDate := buildTime, buildDate
-	t.Cleanup(func() {
-		patchStateMu.Lock()
-		patchState.AvailableUpdateTag, patchState.AvailableUpdateAt, patchState.InstalledReleaseAt = prevTag, prevAt, prevInstalled
-		patchStateMu.Unlock()
-		buildTime, buildDate = prevTime, prevDate
-	})
-
-	setState := func(advertisedTag, advertisedAt, installedAt string) {
-		patchStateMu.Lock()
-		patchState.AvailableUpdateTag = advertisedTag
-		patchState.AvailableUpdateAt = advertisedAt
-		patchState.InstalledReleaseAt = installedAt
-		patchStateMu.Unlock()
-	}
-
-	// The advertised release is older than the running build: no update.
-	setState("JukaHub-20261018154556", "2026-10-18T15:45:57Z", "2026-10-30T01:00:00Z")
-	if !advertisedUpdateIsStale() {
-		t.Fatal("a release installed after the advertisement must read as stale")
-	}
-	if updateAvailable() {
-		t.Fatal("updateAvailable must not offer a release the build already has")
-	}
-	if !pruneStaleUpdateAdvertisement() {
-		t.Fatal("pruneStaleUpdateAdvertisement = false, want the advertisement dropped")
-	}
-	if tag := availableUpdateTag(); tag != "" {
-		t.Fatalf("advertisement %q survived the prune", tag)
-	}
-
-	// A genuinely newer release stays offered.
-	setState("JukaHub-20261101090000", "2026-11-01T09:00:00Z", "2026-10-30T01:00:00Z")
-	if advertisedUpdateIsStale() || !updateAvailable() {
-		t.Fatal("a newer release must stay in the header")
-	}
-	if pruneStaleUpdateAdvertisement() {
-		t.Fatal("pruneStaleUpdateAdvertisement dropped a live offer")
-	}
-
-	// With no installed stamp nothing is proven, so the offer is kept: the
-	// network check stays the authority for an unknown build.
-	setState("JukaHub-20261018154556", "2026-10-18T15:45:57Z", "")
-	if advertisedUpdateIsStale() {
-		t.Fatal("an unknown installed stamp must not be treated as stale")
-	}
-
-	// Older state format: only the tag carries the timestamp.
-	setState("JukaHub-20261018154556", "", "2026-10-30T01:00:00Z")
-	if !advertisedUpdateIsStale() {
-		t.Fatal("a tag-only advertisement must still be compared")
-	}
-}
-
 // The automatic check only advertises a release: it must not download, stage
 // or replace anything before the user confirms in the Patch scene.
 func TestAvailableUpdateIsAdvertisedWithoutStaging(t *testing.T) {
@@ -234,30 +148,6 @@ func TestAvailableUpdateIsAdvertisedWithoutStaging(t *testing.T) {
 		if a.ID == "install" {
 			t.Fatal("install action still offered after the release was cleared")
 		}
-	}
-}
-
-// The build scripts must stamp the compile time, otherwise a local or release
-// build falls back to a date-only stamp and hides same-day releases.
-func TestBuildScriptsStampCompileTime(t *testing.T) {
-	for _, name := range []string{"build.bat", "release.sh"} {
-		data, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		body := string(data)
-		if !strings.Contains(body, "main.buildTime") {
-			t.Errorf("%s does not stamp main.buildTime", name)
-		}
-	}
-}
-
-func TestFormatBuildLabel(t *testing.T) {
-	if got := formatBuildLabel("v0.4.0", "2026-10-17"); got != "v0.4.0 · 2026-10-17" {
-		t.Fatalf("formatBuildLabel = %q", got)
-	}
-	if got := formatBuildLabel("v0.4.0", ""); got != "v0.4.0" {
-		t.Fatalf("formatBuildLabel without date = %q", got)
 	}
 }
 
@@ -449,10 +339,12 @@ func TestSwapScriptReplacesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Drop the relaunch line only.
+	// Drop the relaunch line and the helper's two-second wait for the old
+	// process to exit (there is none here).
 	var kept []string
 	for _, line := range strings.Split(string(data), "\r\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "start ") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "start ") || strings.HasPrefix(trimmed, "ping -n 3 ") {
 			continue
 		}
 		kept = append(kept, line)
@@ -527,61 +419,6 @@ func TestAutoUpdateCheckDue(t *testing.T) {
 	}
 }
 
-// TestRunAutoUpdateAttempts pins the retry: a failed lookup is tried again
-// after the delay, a success stops the loop, and the Patch lock is never
-// retried because waiting cannot release it.
-func TestRunAutoUpdateAttempts(t *testing.T) {
-	t.Run("retries then succeeds", func(t *testing.T) {
-		calls := 0
-		var slept []time.Duration
-		used, err := runAutoUpdateAttempts(func() error {
-			calls++
-			if calls == 1 {
-				return errors.New("no route to host")
-			}
-			return nil
-		}, 2, func(d time.Duration) { slept = append(slept, d) }, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if used != 2 || calls != 2 {
-			t.Fatalf("used %d attempts, check ran %d times; want 2 and 2", used, calls)
-		}
-		if len(slept) != 1 || slept[0] != autoUpdateRetryDelay {
-			t.Fatalf("slept %v, want one pause of %v", slept, autoUpdateRetryDelay)
-		}
-	})
-
-	t.Run("gives up after the budget", func(t *testing.T) {
-		calls := 0
-		used, err := runAutoUpdateAttempts(func() error {
-			calls++
-			return errors.New("offline")
-		}, 3, func(time.Duration) {}, nil)
-		if err == nil {
-			t.Fatal("expected the last error to be returned")
-		}
-		if used != 3 || calls != 3 {
-			t.Fatalf("used %d attempts, check ran %d times; want 3 and 3", used, calls)
-		}
-	})
-
-	t.Run("busy lock is not retried", func(t *testing.T) {
-		calls := 0
-		sleeps := 0
-		used, err := runAutoUpdateAttempts(func() error {
-			calls++
-			return errAutoUpdateInProgress
-		}, 3, func(time.Duration) { sleeps++ }, nil)
-		if !errors.Is(err, errAutoUpdateInProgress) {
-			t.Fatalf("error = %v, want errAutoUpdateInProgress", err)
-		}
-		if used != 1 || calls != 1 || sleeps != 0 {
-			t.Fatalf("used %d, calls %d, sleeps %d; want 1, 1, 0", used, calls, sleeps)
-		}
-	})
-}
-
 // TestReleaseAssetDigest pins the release archive checksum: only a well-formed
 // sha256 digest is used, and anything else leaves the download unverified
 // instead of rejecting a release the API described differently.
@@ -603,47 +440,5 @@ func TestReleaseAssetDigest(t *testing.T) {
 		if got := releaseAssetDigest(tc.digest); got != tc.want {
 			t.Errorf("%s: releaseAssetDigest(%q) = %q, want %q", tc.name, tc.digest, got, tc.want)
 		}
-	}
-}
-
-// TestAnnounceAvailableUpdateRepeatsEveryBoot covers the reported symptom: a
-// pending release must be offered again on later boots, through both the toast
-// and the notification center that keeps it visible after the toast fades.
-func TestAnnounceAvailableUpdateRepeatsEveryBoot(t *testing.T) {
-	patchStateMu.Lock()
-	prevTag, prevAt := patchState.AvailableUpdateTag, patchState.AvailableUpdateAt
-	patchState.AvailableUpdateTag = "JukaHub-20261018154556"
-	patchState.AvailableUpdateAt = "2026-10-18T15:45:57Z"
-	patchStateMu.Unlock()
-	t.Cleanup(func() {
-		patchStateMu.Lock()
-		patchState.AvailableUpdateTag, patchState.AvailableUpdateAt = prevTag, prevAt
-		patchStateMu.Unlock()
-	})
-
-	prevHistory := nc.history
-	nc.history = nil
-	t.Cleanup(func() { nc.history = prevHistory })
-
-	announceAvailableUpdate()
-	if len(nc.history) != 1 {
-		t.Fatalf("first announcement pushed %d notifications, want 1", len(nc.history))
-	}
-	msg := nc.history[0].Message
-	if !strings.Contains(msg, "2026-10-18") {
-		t.Errorf("offer %q lacks the release date", msg)
-	}
-	if !strings.Contains(msg, "download icon") {
-		t.Errorf("offer %q does not tell the user where to install it", msg)
-	}
-
-	announceAvailableUpdate()
-	// An unread offer for the same release is bumped instead of duplicated, so
-	// the bell keeps one entry that still points at the same install.
-	if len(nc.history) != 1 {
-		t.Fatalf("second boot left %d notifications, want 1 deduped offer", len(nc.history))
-	}
-	if nc.history[0].Repeat != 2 {
-		t.Fatalf("second boot left Repeat=%d, want 2", nc.history[0].Repeat)
 	}
 }

@@ -22,7 +22,6 @@ package main
 //	handleController   consume a controller button; false falls through
 
 import (
-	"sort"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -69,17 +68,6 @@ func registerScene(m sceneModule) {
 func lookupScene(name string) (sceneModule, bool) {
 	m, ok := sceneRegistry[name]
 	return m, ok
-}
-
-// registeredSceneNames is the sorted list of scenes that own their behaviour.
-// Used by diagnostics and by the registry test.
-func registeredSceneNames() []string {
-	names := make([]string, 0, len(sceneRegistry))
-	for name := range sceneRegistry {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // handleSceneController routes a controller button to the scene's module after

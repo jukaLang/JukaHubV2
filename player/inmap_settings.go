@@ -16,6 +16,18 @@ import (
 func inmapSettingsRows() []setRow {
 	rows := []setRow{
 		{
+			// What the hints call the controls: the pad's buttons or the
+			// keyboard's keys (inputhints.go). Auto follows the device in use.
+			ID: "buttonHints", Label: "Button hints", Kind: setKindChoice,
+			Detail:  hintModeDetail,
+			Options: hintModeOptions,
+			Current: hintModeCurrent,
+			Choose: func(c *Config, value string) {
+				hintSetMode(c, value)
+				setToast("Button hints: " + hintModeOptions(c)[hintModeCurrent(c)].Label)
+			},
+		},
+		{
 			ID: "inputProfile", Label: "Control profile", Kind: setKindChoice, Quiet: true,
 			Detail:     inmapProfileDetail,
 			Options:    inmapProfileOptions,

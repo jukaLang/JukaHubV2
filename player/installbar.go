@@ -279,11 +279,6 @@ func installBarGeneration() uint64 {
 	return installBar.gen
 }
 
-// installBarOwnedBy reports whether the card still belongs to run gen.
-func installBarOwnedBy(gen uint64) bool {
-	return installBarGeneration() == gen
-}
-
 // installBarAbortRun is installBarAbort for one run: it hides the card only
 // while the card is still that run's. A run whose token a later begin retired
 // used to call installBarAbort on its way out, and that cancelled the run that

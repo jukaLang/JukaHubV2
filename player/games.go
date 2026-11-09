@@ -118,7 +118,7 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 
 		// "Press A to play" hint
 		if focused && smallFont != nil {
-			hint := "Press A to play"
+			hint := hintSentence("Press %s to play", "A", "Play")
 			hw, _, _ := smallFont.SizeUTF8(hint)
 			drawText(renderer, smallFont, hint, cx+cardW-int32(hw)-20, cy+cardH-32, getAccentColor(config), textAlignLeft)
 		}
@@ -172,8 +172,16 @@ func handleGamesMenuInput(event *sdl.KeyboardEvent) bool {
 	return true
 }
 
+// minigameWake starts the tick loop (main.go) when a game opens; with no game
+// open the loop waits here instead of ticking.
+var minigameWake = make(chan struct{}, 1)
+
 func startGame(id gameID) {
 	activeGame = id
+	select {
+	case minigameWake <- struct{}{}:
+	default:
+	}
 	gameOver = false
 	gameScore = 0
 	gameStartTime = time.Now()

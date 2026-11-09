@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -241,7 +240,7 @@ func scanROMLibrary(roots []string) romScanReport {
 			continue
 		}
 		for _, systemDir := range entries {
-			if !systemDir.IsDir() {
+			if !systemDir.IsDir() || skipScanEntryName(systemDir.Name()) {
 				continue
 			}
 			system, ok := romSystemAliases[strings.ToLower(systemDir.Name())]
@@ -249,10 +248,18 @@ func scanROMLibrary(roots []string) romScanReport {
 				continue
 			}
 			_ = filepath.WalkDir(filepath.Join(root, systemDir.Name()), func(path string, entry os.DirEntry, walkErr error) error {
-				if walkErr != nil || entry == nil || entry.IsDir() {
+				if walkErr != nil || entry == nil {
 					return nil
 				}
-				if !romFileExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
+				// A Mac-copied ROM folder carries __MACOSX and "._" companions beside
+				// the real files; they parsed as games with no artwork.
+				if skipScanEntryName(entry.Name()) {
+					if entry.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if entry.IsDir() || !romFileExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
 					return nil
 				}
 				clean := filepath.Clean(path)
@@ -361,14 +368,14 @@ func loadArtworkMisses(dest string) map[string]time.Time {
 	}
 	var store artworkMissStore
 	if err := json.Unmarshal(raw, &store); err != nil {
-		log.Printf("[art] ignoring %s: %v", path, err)
+		logWarn("art", "ignoring %s: %v", path, err)
 		return out
 	}
 	if store.Version != artworkMissVersion {
 		// Written by an older matcher, so these misses answer a question the
 		// downloader no longer asks. Rewriting the file on the next fetch also
 		// migrates it.
-		log.Printf("[art] %s was written by matcher v%d, retrying its titles once", path, store.Version)
+		logDebug("art", "%s was written by matcher v%d, retrying its titles once", path, store.Version)
 		return out
 	}
 	now := time.Now()
@@ -427,14 +434,6 @@ func artworkRecentlyMissing(misses map[string]time.Time, key string, now time.Ti
 	}
 	age := now.Sub(at)
 	return age >= 0 && age < ttl
-}
-
-// fetchROMArtworkWithMisses is the shared downloader. A nil misses map keeps
-// the old behaviour (always retry); a map both skips recent misses and records
-// new ones, which is what the library action uses.
-func fetchROMArtworkWithMisses(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string, misses map[string]time.Time, now time.Time, ttl time.Duration) (fetched, skipped, missing int) {
-	fetched, skipped, missing, _ = fetchROMArtworkTracked(ctx, roms, client, baseURL, dest, misses, now, ttl, nil)
-	return fetched, skipped, missing
 }
 
 // fetchROMArtworkTracked is the loop behind every artwork download.
@@ -511,10 +510,6 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		}
 	}
 	return fetched, skipped, missing, false
-}
-
-func fetchROMArtwork(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string) (fetched, skipped, missing int) {
-	return fetchROMArtworkWithMisses(ctx, roms, client, baseURL, dest, nil, time.Now(), artworkMissTTL)
 }
 
 func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, collection, title string) ([]byte, error) {
@@ -936,7 +931,7 @@ func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest stri
 		cancel()
 		if misses != nil {
 			if err := saveArtworkMisses(dest, misses); err != nil {
-				log.Printf("[art] cannot save the not-found cache: %v", err)
+				logWarn("art", "cannot save the not-found cache: %v", err)
 			}
 		}
 		artworkFetchState.Lock()

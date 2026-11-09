@@ -1,15 +1,10 @@
 package main
 
 import (
-	"math"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
-
-// tileAnimMap eases per-tile focus progress (0..1) so the selected tile scales
-// up smoothly (~120-160ms) instead of snapping.
-var tileAnimMap = make(map[int]float64)
 
 // explicitTileIcon returns the glyph name an element asks for by name, or ""
 // when Icon is empty or a monogram letter. Elements that carry a glyph name
@@ -89,9 +84,6 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, fg, b
 	}
 	iconDraw(renderer, kind, sdl.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size}, fg)
 }
-
-func cos64(a float64) float64 { return math.Cos(a) }
-func sin64(a float64) float64 { return math.Sin(a) }
 
 // fillTriangleFilled draws a solid triangle by scan-conversion using a dense
 // line fan so it reads as a filled shape (matching the renderCircleSector style).

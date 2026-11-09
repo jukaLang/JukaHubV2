@@ -283,13 +283,14 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 	// the panel's full width and does not move as the cursor does.
 	armedNow := browserCookiePanel.armed != "" &&
 		time.Since(browserCookiePanel.armedAt) <= browserForgetConfirmWindow
-	subtitle := fmt.Sprintf("%d site(s) · A forgets one · B closes", len(rows)-1)
+	// The controls in this frame's words (inputhints.go).
+	subtitle := fmt.Sprintf("%d site(s) · ", len(rows)-1) + hintSentence2("%s forgets one · %s closes", "A", "Forget", "B", "Close")
 	if len(rows)-1 == 1 {
-		subtitle = "1 site · A forgets it · B closes"
+		subtitle = "1 site · " + hintSentence2("%s forgets it · %s closes", "A", "Forget", "B", "Close")
 	}
 	subtitleInk := ColorTextSecondary()
 	if armedNow {
-		subtitle = "Press A again to drop the cookies from " + browserCookiePanel.armed
+		subtitle = hintSentence("Press %s again to drop the cookies from ", "A", "Forget") + browserCookiePanel.armed
 		subtitleInk = WarningInk()
 	}
 	// The title band is the shared page header, built before the card is sized so

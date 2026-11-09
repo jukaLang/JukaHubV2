@@ -6,9 +6,9 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -30,14 +30,14 @@ var onboardingSteps = []onboardingStep{
 	},
 	{
 		title: "Connect to Wi-Fi",
-		body:  "Wi-Fi enables updates, weather, companion controls and artwork downloads. JukaHub will open your system network settings.",
+		body:  "Wi-Fi enables updates, weather, companion controls and artwork downloads. The button opens the Wi-Fi settings.",
 		hint:  "Network status is shown below. Press F or select the button to open Wi-Fi settings.",
 		kind:  "wifi",
 	},
 	{
 		title: "Set your time zone",
-		body:  "Correct local time keeps the clock, alarms and release dates consistent. This opens your device’s date and time settings.",
-		hint:  "JukaHub reads the time zone from the operating system. Restart JukaHub if the clock does not update.",
+		body:  "Correct local time keeps the clock, alarms and release dates consistent. The button opens the time zone settings.",
+		hint:  "Internet time keeps the clock right; choose the zone you live in.",
 		kind:  "timezone",
 	},
 	{
@@ -197,7 +197,7 @@ func onboardingStepIsSetup() bool {
 // rows open pages rather than panels; the tour steps aside the same way until
 // the user is back on the screen it was drawn over (toolsHubTourAway).
 func onboardingCoveredByOverlay() bool {
-	return modalPanelBlocksShoulders() || toolsHubTourAway()
+	return modalPanelBlocksShoulders() || toolsHubTourAway() || tzPickerVisible()
 }
 
 // onboardingSetupRefresh rebuilds the checklist from live device state. The
@@ -274,6 +274,9 @@ func onboardingActionLabel(kind string) string {
 	case "wifi":
 		return "Open Wi-Fi settings"
 	case "timezone":
+		if dateTimeZoneOwner() == tzOwnerJukaHub {
+			return "Choose time zone"
+		}
 		return "Open date & time settings"
 	case "theme":
 		return "Preview next theme"
@@ -293,7 +296,7 @@ func onboardingStatus(config *Config, kind string) string {
 	case "wifi":
 		return "Network: " + NetworkStatus()
 	case "timezone":
-		return "Current time zone: " + time.Now().Location().String()
+		return "Current time zone: " + dateTimeZoneLabel(time.Now())
 	case "theme":
 		if name, ok := customString(config.Variables.Custom, "theme_preset"); ok && name != "" {
 			return "Current theme: " + name
@@ -320,7 +323,12 @@ func onboardingStatus(config *Config, kind string) string {
 	}
 }
 
-func openFirstRunSettings(kind string) error {
+// openSystemSettingsPage opens the operating system's own Wi-Fi ("wifi") or
+// date and time ("timezone") page: a Settings deep link on Windows and macOS,
+// the desktop's settings app on a Linux desktop. It fails where there is no
+// such page — the handheld and any Linux without those tools, where JukaHub's
+// own screens answer instead (openFirstRunSettings).
+func openSystemSettingsPage(kind string) error {
 	var command string
 	var args []string
 	switch runtime.GOOS {
@@ -339,17 +347,9 @@ func openFirstRunSettings(kind string) error {
 		}
 		args = []string{target}
 	default:
-		command = "gnome-control-center"
-		page := "wifi"
-		if kind == "timezone" {
-			page = "datetime"
-		}
-		if _, err := exec.LookPath(command); err == nil {
-			args = []string{page}
-		} else if kind == "wifi" {
-			command = "nm-connection-editor"
-		} else {
-			return fmt.Errorf("open Date & Time from your device settings")
+		command, args = linuxDesktopSettingsCommand(kind)
+		if command == "" {
+			return fmt.Errorf("no system settings app here")
 		}
 	}
 	cmd := exec.Command(command, args...)
@@ -360,6 +360,52 @@ func openFirstRunSettings(kind string) error {
 	return nil
 }
 
+// linuxDesktopSettingsCommand is the desktop tool for a first-run page on a
+// real Linux desktop: GNOME's settings for either page, NetworkManager's
+// editor for Wi-Fi when GNOME's is missing. Nothing on the handheld (which has
+// neither) or without a graphical session.
+func linuxDesktopSettingsCommand(kind string) (string, []string) {
+	if IsTrimuiDevice() || (os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "") {
+		return "", nil
+	}
+	if app := linuxDesktopSettingsApp(); app != "" {
+		page := "wifi"
+		if kind == "timezone" {
+			page = "datetime"
+		}
+		return app, []string{page}
+	}
+	if kind == "wifi" {
+		if p, err := exec.LookPath("nm-connection-editor"); err == nil && p != "" {
+			return "nm-connection-editor", nil
+		}
+	}
+	return "", nil
+}
+
+// openFirstRunSettings answers the tour's Wi-Fi and time-zone buttons and
+// returns the line the card shows. The system's page opens where there is one;
+// elsewhere — the handheld, any Linux without desktop tools — JukaHub's own
+// Wi-Fi page and time-zone picker do, and the tour waits until the user is back
+// (toolsHubTourMark, onboardingCoveredByOverlay).
+func openFirstRunSettings(config *Config, kind string) (string, error) {
+	if err := openSystemSettingsPage(kind); err == nil {
+		return "System settings opened. Return here when you are ready.", nil
+	} else if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return "", err
+	}
+	toolsHubTourMark()
+	switch kind {
+	case "wifi":
+		wifiScrOpen(config)
+		return "Wi-Fi is open. The tour continues when you come back.", nil
+	case "timezone":
+		dateTimeOpenSettings(config, true)
+		return "Pick your zone; the tour continues when you come back.", nil
+	}
+	return "", fmt.Errorf("nothing to open for %s", kind)
+}
+
 func onboardingPerformAction(config *Config) {
 	if config == nil || onboarding.step < 0 || onboarding.step >= len(onboardingSteps) {
 		return
@@ -367,12 +413,13 @@ func onboardingPerformAction(config *Config) {
 	kind := onboardingSteps[onboarding.step].kind
 	switch kind {
 	case "wifi", "timezone":
-		if err := openFirstRunSettings(kind); err != nil {
+		info, err := openFirstRunSettings(config, kind)
+		if err != nil {
 			onboarding.info = err.Error()
 			ShowToast(err.Error(), ToastKindInfo)
 			return
 		}
-		onboarding.info = "System settings opened. Return here when you are ready."
+		onboarding.info = info
 	case "theme":
 		names := ListThemePresets()
 		if len(names) == 0 {
@@ -864,12 +911,4 @@ func ensureOnboardingEntry(config *Config) {
 		Color:   "$labelColor",
 		BgColor: "$buttonColor",
 	})
-}
-
-// onboardingSummary is used by the tour's tests and by the diagnostic overlay.
-func onboardingSummary() string {
-	if len(onboardingSteps) == 0 {
-		return "empty tour"
-	}
-	return strings.TrimSpace(onboardingSteps[0].title)
 }

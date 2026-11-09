@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,7 +314,7 @@ func startTimelapse(config *Config, title string) *timelapseRecorder {
 	// Probe the capture once. A machine without a readable framebuffer must not
 	// start a ticker that fails every twenty seconds for the whole session.
 	if _, _, err := timelapseCapture(config, filepath.Join(os.TempDir(), "timelapse-probe.png")); err != nil {
-		log.Printf("[timelapse] not recording: %v", err)
+		logWarn("timelapse", "not recording: %v", err)
 		return nil
 	}
 	root := timelapseRootDir()
@@ -324,7 +323,7 @@ func startTimelapse(config *Config, title string) *timelapseRecorder {
 	}
 	dir := filepath.Join(root, "."+timelapseSlug(title)+"-"+timelapseNow().Format("20060102-150405"))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("[timelapse] cannot create %s: %v", dir, err)
+		logWarn("timelapse", "cannot create %s: %v", dir, err)
 		return nil
 	}
 	recorder := &timelapseRecorder{
@@ -386,7 +385,7 @@ func (r *timelapseRecorder) warn(err error) {
 		return
 	}
 	r.warned = true
-	log.Printf("[timelapse] capture failed: %v", err)
+	logWarn("timelapse", "capture failed: %v", err)
 }
 
 // Stop ends the session and waits for the film to be assembled. It is safe to
@@ -403,7 +402,7 @@ func (r *timelapseRecorder) Stop() {
 func (r *timelapseRecorder) finish(config *Config) {
 	if len(r.frames) < timelapseMinFrames {
 		if err := os.RemoveAll(r.dir); err != nil {
-			log.Printf("[timelapse] cannot clean %s: %v", r.dir, err)
+			logWarn("timelapse", "cannot clean %s: %v", r.dir, err)
 		}
 		return
 	}
@@ -411,14 +410,14 @@ func (r *timelapseRecorder) finish(config *Config) {
 	if err != nil {
 		// Keep the frames: they are the only copy of the session, and a later
 		// build may be able to assemble them.
-		log.Printf("[timelapse] encode failed for %q: %v (frames kept in %s)", r.title, err, r.dir)
+		logWarn("timelapse", "encode failed for %q: %v (frames kept in %s)", r.title, err, r.dir)
 		r.notify("Time-lapse could not be encoded", ToastKindWarning)
 		return
 	}
 	if err := os.RemoveAll(r.dir); err != nil {
-		log.Printf("[timelapse] cannot clean %s: %v", r.dir, err)
+		logWarn("timelapse", "cannot clean %s: %v", r.dir, err)
 	}
-	log.Printf("[timelapse] %q ready: %s (%d frames)", r.title, out, len(r.frames))
+	logDebug("timelapse", "%q ready: %s (%d frames)", r.title, out, len(r.frames))
 	r.notify("Time-lapse ready: "+filepath.Base(out), ToastKindSuccess)
 }
 
@@ -426,12 +425,6 @@ func (r *timelapseRecorder) notify(message string, kind ToastKind) {
 	if r.deps.notify != nil {
 		r.deps.notify(message, kind)
 	}
-}
-
-// assembleTimelapse encodes the session's frames into one mp4. 24 fps keeps the
-// file short; each still stands for the seconds between captures.
-func assembleTimelapse(config *Config, dir, title string) (string, error) {
-	return assembleTimelapseWith(timelapseDepsNow(), config, dir, title)
 }
 
 // assembleTimelapseWith is the assembly half, run against one session's helpers.

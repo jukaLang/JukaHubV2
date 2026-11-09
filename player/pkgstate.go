@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -214,6 +213,8 @@ type pkgState struct {
 	dirty       bool
 	modelGen    uint64
 	removing    map[string]bool
+	rollbacks   map[string]string
+	rolling     map[string]bool
 	entered     bool
 	prefsLoaded bool
 
@@ -294,6 +295,12 @@ func pkgEnsureMaps() {
 	if st.removing == nil {
 		st.removing = map[string]bool{}
 	}
+	if st.rollbacks == nil {
+		st.rollbacks = map[string]string{}
+	}
+	if st.rolling == nil {
+		st.rolling = map[string]bool{}
+	}
 	if st.rowCols == nil {
 		st.rowCols = map[string]int{}
 	}
@@ -316,6 +323,7 @@ const (
 	pkgEvInstalled
 	pkgEvRemoved
 	pkgEvArt
+	pkgEvRolledBack
 )
 
 // pkgEvent is one finished piece of background work.
@@ -332,11 +340,13 @@ type pkgEvent struct {
 	meta      map[string]pkgInstalledMeta
 	sizes     map[string]int64
 	icons     map[string]string
+	rollbacks map[string]string
 }
 
 // pkgEvents carries finished work to the main thread. It is drained every
 // frame the screen is up; off screen a full queue drops, which is safe because
-// arriving on the screen rescans everything.
+// arriving on the screen rescans everything. The end of an install, a rollback
+// or a removal goes through pkgPostDone instead, which never drops.
 var pkgEvents = make(chan pkgEvent, 32)
 
 func pkgPost(ev pkgEvent) {
@@ -346,19 +356,59 @@ func pkgPost(ev pkgEvent) {
 	}
 }
 
-// pkgDrainEvents applies every finished piece of work.
+// pkgDone holds the ends of installs, rollbacks and removals until the screen
+// applies them. Unlike pkgEvents it never drops one: a lost pkgEvRolledBack or
+// pkgEvRemoved left the package's rolling/removing flag set, and pkgBusyKey
+// then refused that package for the rest of the session. A slice under a
+// mutex, so the worker posting never blocks either; it only grows by one per
+// finished install, rollback or removal while the screen is away.
+var pkgDone struct {
+	mu  sync.Mutex
+	evs []pkgEvent
+}
+
+// pkgPostDone queues the end of an install, a rollback or a removal for the
+// main thread. It never drops and never blocks.
+func pkgPostDone(ev pkgEvent) {
+	pkgDone.mu.Lock()
+	pkgDone.evs = append(pkgDone.evs, ev)
+	pkgDone.mu.Unlock()
+}
+
+// pkgDrainEvents applies every finished piece of work: the queue first, then
+// the ends of installs, rollbacks and removals, so a scan posted before a
+// removal finished cannot put the removed package back on screen. However
+// many of them asked for it, the card is read again once.
 func pkgDrainEvents() {
-	for {
+	rescan := false
+	for drained := false; !drained; {
 		select {
 		case ev := <-pkgEvents:
-			pkgApplyEvent(ev)
+			if pkgApplyEvent(ev) {
+				rescan = true
+			}
 		default:
-			return
+			drained = true
 		}
+	}
+	pkgDone.mu.Lock()
+	done := pkgDone.evs
+	pkgDone.evs = nil
+	pkgDone.mu.Unlock()
+	for _, ev := range done {
+		if pkgApplyEvent(ev) {
+			rescan = true
+		}
+	}
+	if rescan {
+		runSceneTask(pkgLoadLocal)
 	}
 }
 
-func pkgApplyEvent(ev pkgEvent) {
+// pkgApplyEvent applies one finished piece of work to the screen's state. It
+// reports whether the card changed under the last scan, so pkgDrainEvents
+// reads it again.
+func pkgApplyEvent(ev pkgEvent) (rescan bool) {
 	st := &pkgUI
 	pkgEnsureMaps()
 	switch ev.kind {
@@ -403,6 +453,9 @@ func pkgApplyEvent(ev pkgEvent) {
 		st.meta = ev.meta
 		st.sizes = ev.sizes
 		st.icons = ev.icons
+		if ev.rollbacks != nil {
+			st.rollbacks = ev.rollbacks
+		}
 		st.localReady = true
 		st.dirty = true
 	case pkgEvInstalled:
@@ -414,7 +467,7 @@ func pkgApplyEvent(ev pkgEvent) {
 		}
 		st.dirty = true
 		// The card changed under the scan: read it again for sizes and icons.
-		runSceneTask(pkgLoadLocal)
+		rescan = true
 	case pkgEvRemoved:
 		delete(st.removing, ev.key)
 		if ev.ok {
@@ -422,9 +475,22 @@ func pkgApplyEvent(ev pkgEvent) {
 			delete(st.meta, ev.key)
 			delete(st.sizes, ev.key)
 			delete(st.icons, ev.key)
+			delete(st.rollbacks, ev.key)
 		}
 		st.dirty = true
+		// A scan that started before the removal may still report the
+		// package; one that starts after it has the last word.
+		rescan = true
+	case pkgEvRolledBack:
+		delete(st.rolling, ev.key)
+		if ev.ok && ev.meta != nil {
+			st.meta = ev.meta
+		}
+		st.dirty = true
+		// The folder and its rollback copy changed places: read the card again.
+		rescan = true
 	}
+	return rescan
 }
 
 // ── Arrival and departure ────────────────────────────────────────────────
@@ -499,7 +565,7 @@ func pkgMigrateLegacy(config *Config) {
 	go func() {
 		if _, statErr := os.Stat(pkgCatalogCachePath()); os.IsNotExist(statErr) {
 			if werr := pkgWriteCatalogCache(data, time.Time{}); werr != nil {
-				log.Printf("packages: caching the carried-over list: %v", werr)
+				logWarn("packages", "caching the carried-over list: %v", werr)
 			}
 		}
 	}()
@@ -522,14 +588,10 @@ func pkgLoadCache(ctx context.Context) {
 // were installed at, their sizes and their own icons. It runs off the render
 // thread; a folder walk on an SD card is not frame work.
 func pkgLoadLocal(ctx context.Context) {
+	// An install or rollback an earlier run left between two renames is put
+	// right before the card is read (once per run; pkgstage.go).
+	pkgEnsureRecovered()
 	installed := pkgScanInstalled()
-	set := make(map[string]bool, len(installed))
-	for k := range installed {
-		set[k] = true
-	}
-	installedPackagesMu.Lock()
-	installedPackages = set
-	installedPackagesMu.Unlock()
 
 	meta := pkgLoadInstalledMeta()
 	sizes := make(map[string]int64, len(installed))
@@ -540,15 +602,21 @@ func pkgLoadLocal(ctx context.Context) {
 			return
 		}
 		dir := filepath.Join(root, key)
+		// One folder at a time under pkgOpMu: on Windows a handle the size
+		// walk holds inside a folder makes a swap's rename of it fail, and
+		// this way a swap waits for one folder's walk at most.
+		pkgOpMu.Lock()
 		if icon := iconInFolder(dir); icon != "" {
 			icons[key] = icon
 		}
 		sizes[key] = pkgFolderSize(dir, 20000)
+		pkgOpMu.Unlock()
 	}
+	rollbacks := pkgScanRollbacks(root)
 	if ctx.Err() != nil {
 		return
 	}
-	pkgPost(pkgEvent{kind: pkgEvLocal, installed: installed, meta: meta, sizes: sizes, icons: icons})
+	pkgPost(pkgEvent{kind: pkgEvLocal, installed: installed, meta: meta, sizes: sizes, icons: icons, rollbacks: rollbacks})
 }
 
 // ── Refresh ──────────────────────────────────────────────────────────────
@@ -608,19 +676,19 @@ func pkgFetchTask(ctx context.Context, gen uint64) {
 		return
 	}
 	if err != nil {
-		log.Printf("packages: fetch error: %v", err)
+		logWarn("packages", "fetch error: %v", err)
 		pkgPost(pkgEvent{kind: pkgEvFetchDone, gen: gen, err: plainNetworkError(err)})
 		return
 	}
 	entries, perr := pkgParseCatalog([]byte(raw))
 	if perr != nil {
-		log.Printf("packages: parse error: %v", perr)
+		logWarn("packages", "parse error: %v", perr)
 		pkgPost(pkgEvent{kind: pkgEvFetchDone, gen: gen, err: "The package list could not be read."})
 		return
 	}
 	now := time.Now()
 	if werr := pkgWriteCatalogCache([]byte(raw), now); werr != nil {
-		log.Printf("packages: caching the registry: %v", werr)
+		logWarn("packages", "caching the registry: %v", werr)
 	}
 	pkgPost(pkgEvent{kind: pkgEvCatalog, gen: gen, ok: true, network: true, entries: entries, at: now})
 	pkgPost(pkgEvent{kind: pkgEvFetchDone, gen: gen, ok: true, at: now})
@@ -695,6 +763,7 @@ func pkgRebuild() {
 		Icons:     st.icons,
 		Art:       st.art,
 		Device:    DetectDevice(),
+		Rollbacks: st.rollbacks,
 		AppUpdate: st.appUpdate,
 	})
 	pkgModelSerial++
@@ -802,7 +871,7 @@ func pkgInstallWorker(config *Config) {
 		if ok {
 			ev.meta = pkgLoadInstalledMeta()
 		}
-		pkgPost(ev)
+		pkgPostDone(ev)
 	}
 }
 
@@ -837,6 +906,11 @@ func pkgDequeue(name string) bool {
 
 // pkgStartInstall installs (or updates, or reinstalls) an item. Offline it
 // says so instead of starting a download that can only time out.
+//
+// A reinstall is an install like any other: the fresh copy is unpacked beside
+// the installed one and swapped in (pkgstage.go), so it is fresh files rather
+// than an overlay, and a failed download leaves the installed copy working.
+// The folder used to be wiped first, which made a failed reinstall a removal.
 func pkgStartInstall(config *Config, it *pkgItem, reinstall bool) {
 	if it == nil {
 		return
@@ -854,18 +928,23 @@ func pkgStartInstall(config *Config, it *pkgItem, reinstall bool) {
 	if it.Kind != pkgKindPackage {
 		return
 	}
+	if pkgBusyKey(it.Key) {
+		// A rollback or a removal of it is moving its folders right now.
+		PlayErrorSound()
+		showToast("Wait until "+it.Pkg.Name+" is done", ToastWarn())
+		return
+	}
 	PlayActivateSound()
 	if reinstall {
-		// Fresh files, not an overlay on the old ones; the mark goes with the
-		// wipe, so a failed download cannot leave a tick on an empty folder.
-		if err := pkgRemoveDir(it.Key); err != nil {
-			log.Printf("packages: wipe for reinstall of %s: %v", it.Pkg.Name, err)
-		}
-		pkgForgetInstalled(it.Key)
-		delete(pkgUI.installed, it.Key)
-		pkgUI.dirty = true
+		logInfo("packages", "reinstalling %s", it.Pkg.Name)
 	}
 	startPackageInstall(config, it.Pkg)
+}
+
+// pkgBusyKey reports whether a rollback or a removal of the package in this
+// folder is running (main thread only).
+func pkgBusyKey(key string) bool {
+	return pkgUI.rolling[key] || pkgUI.removing[key]
 }
 
 // pkgUpdateAll queues every package with an update. The JukaHub release is not
@@ -882,7 +961,7 @@ func pkgUpdateAll(config *Config) {
 	}
 	n := 0
 	for _, it := range m.Items {
-		if it.HasUpdate && it.Kind == pkgKindPackage {
+		if it.HasUpdate && it.Kind == pkgKindPackage && !pkgBusyKey(it.Key) {
 			startPackageInstall(config, it.Pkg)
 			n++
 		}
@@ -901,20 +980,115 @@ func pkgUpdateAll(config *Config) {
 	}
 }
 
-// pkgRemoveDir deletes one package folder. The key is a folder name, never a
+// pkgRemoveDir deletes one package folder, its rollback copy, any copy kept
+// aside and anything of it left in staging. The key is a folder name, never a
 // path: separators and dot names are refused, so the delete cannot leave the
 // packages folder.
+//
+// Nothing is deleted in place: under pkgOpMu each folder leaves its slot by one
+// rename into the trash (pkgTrash), and the slow delete runs after the lock is
+// free. A delete cut short therefore never leaves half a rollback copy that
+// the store would still offer (or half a package it would still list); what is
+// left in the trash goes at the next start.
 func pkgRemoveDir(key string) error {
 	if key == "" || key == "." || key == ".." || strings.ContainsAny(key, `/\`) || filepath.Base(key) != key {
 		return os.ErrInvalid
 	}
-	if err := os.RemoveAll(filepath.Join(packageInstallDir(), key)); err != nil {
-		return err
+	root := packageInstallDir()
+	paths := pkgPathsFor(root, key)
+	var doomed []string
+	pkgOpMu.Lock()
+	// The rollback copy goes first, and comes back if the installed folder
+	// cannot follow (Windows: a file in it is open), so a refused removal
+	// changes nothing.
+	backTrashed := ""
+	if pkgIsDir(paths.back) {
+		t, err := pkgTrash(root, paths.back)
+		if err != nil {
+			pkgOpMu.Unlock()
+			return err
+		}
+		backTrashed = t
+		doomed = append(doomed, t)
 	}
-	installedPackagesMu.Lock()
-	delete(installedPackages, key)
-	installedPackagesMu.Unlock()
+	if pkgExists(paths.live) {
+		t, err := pkgTrash(root, paths.live)
+		if err != nil {
+			if backTrashed != "" {
+				_ = pkgRename(backTrashed, paths.back)
+			}
+			pkgOpMu.Unlock()
+			return err
+		}
+		doomed = append(doomed, t)
+	}
+	extra := append(pkgKeptCopies(root, key), paths.stage)
+	for _, dir := range extra {
+		if !pkgExists(dir) {
+			continue
+		}
+		if t, err := pkgTrash(root, dir); err == nil {
+			doomed = append(doomed, t)
+		} else {
+			logWarn("packages", "%s: clearing %s: %v", key, dir, err)
+		}
+	}
+	_ = os.Remove(paths.journal)
+	pkgOpMu.Unlock()
+	for _, dir := range doomed {
+		if err := os.RemoveAll(dir); err != nil {
+			logWarn("packages", "%s: deleting %s: %v; the rest goes at the next start", key, dir, err)
+		}
+	}
 	return nil
+}
+
+// pkgStartRollback swaps an installed package's rollback copy back in, in the
+// background; the sheet says "Rolling back…" until it is done. The version it
+// replaces becomes the rollback copy, so the same button goes forward again.
+func pkgStartRollback(it *pkgItem) {
+	if it == nil || it.Kind == pkgKindApp || !it.Installed || !it.HasRollback {
+		return
+	}
+	st := &pkgUI
+	pkgEnsureMaps()
+	if st.rolling[it.Key] || st.removing[it.Key] {
+		return
+	}
+	if queued, current := pkgQueueState(it.Pkg.Name); queued || current {
+		PlayErrorSound()
+		showToast("Wait until "+it.Pkg.Name+" has finished installing", ToastWarn())
+		return
+	}
+	st.rolling[it.Key] = true
+	PlayActivateSound()
+	key, name, newer := it.Key, it.Pkg.Name, it.RollbackNewer
+	go func() {
+		m, err := pkgRollBack(packageInstallDir(), key)
+		ev := pkgEvent{kind: pkgEvRolledBack, key: key, ok: err == nil}
+		if err == nil {
+			if m.Name == "" {
+				m.Name = name
+			}
+			pkgRecordInstalledMarker(key, m)
+			ev.meta = pkgLoadInstalledMeta()
+			label := name
+			if v := pkgVersionLabel(m.Version); v != "" {
+				label += " " + v
+			}
+			// After a rollback the kept copy is the newer one, and the same
+			// button goes forward: the toast says which way it went.
+			msg := "Rolled back to " + label + " · the newer version is kept"
+			if newer {
+				msg = "Switched back to " + label + " · the older version is kept"
+			}
+			showToast(msg, ToastSuccess())
+		} else {
+			logWarn("packages", "roll back %s: %v", name, err)
+			showToast("Could not roll back "+name+": "+firstLine(err.Error()), ToastError())
+		}
+		pkgPostDone(ev)
+	}()
 }
 
 // pkgStartRemove deletes an installed package in the background; the card
@@ -938,7 +1112,7 @@ func pkgStartRemove(it *pkgItem) {
 		} else {
 			showToast("Could not remove "+name+": "+firstLine(err.Error()), ToastError())
 		}
-		pkgPost(pkgEvent{kind: pkgEvRemoved, key: key, ok: err == nil})
+		pkgPostDone(pkgEvent{kind: pkgEvRemoved, key: key, ok: err == nil})
 	}()
 }
 

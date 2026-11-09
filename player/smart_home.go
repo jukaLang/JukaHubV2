@@ -1087,13 +1087,6 @@ func currentSmartHomeSettings(config *Config) smartHomeSettings {
 	return smartHomeSettingsCache.set
 }
 
-// invalidateSmartHomeSettings drops the cache after a settings edit.
-func invalidateSmartHomeSettings() {
-	smartHomeSettingsCache.mu.Lock()
-	smartHomeSettingsCache.conf = nil
-	smartHomeSettingsCache.mu.Unlock()
-}
-
 // smartHomeSnapshot is a consistent copy for the renderer, so no frame ever
 // reads a half-updated struct.
 func smartHomeSnapshot() smartHomeSnapshotData {
@@ -1239,12 +1232,6 @@ func toggleTailscale(config *Config) error {
 	}
 	go refreshSmartHome(config)
 	return nil
-}
-
-// smartHomeConfigured reports whether any integration has settings, which is how
-// the panel decides between "nothing configured" and a row-less dashboard.
-func smartHomeConfigured(s smartHomeSettings) bool {
-	return s.hasHA() || s.hasPiHole() || s.hasMQTT() || s.TSEnabled
 }
 
 // runCommandTimeout runs a command with a hard deadline and returns its

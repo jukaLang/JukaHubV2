@@ -19,7 +19,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -135,7 +134,15 @@ func startupReport() string {
 // startupLog writes the report once. It is called after the first frame, so the
 // numbers are what the user actually waited for.
 func startupLog() {
-	log.Print(startupReport())
+	report := startupReport()
+	logInfo("startup", "%s", strings.TrimPrefix(report, "startup: "))
+	// The bench (startup-bench.sh, or a device run with JUKAHUB_STARTUP_BENCH=1
+	// that reads errors.txt) reads the line from stderr, which only warnings
+	// reach on the handheld or under a quiet log level, so in bench mode it is
+	// written there directly.
+	if startupBenchEnabled() {
+		fmt.Fprintln(os.Stderr, report)
+	}
 }
 
 // startupBudgetNote explains a skipped splash in the log, which is the only
@@ -149,12 +156,6 @@ func startupBudgetNote(elapsed time.Duration) string {
 		return "not enough budget left for the splash; skipped"
 	}
 	return ""
-}
-
-// startupMarkBoot logs one line per launch at debug level for the log viewer,
-// keeping Info for the summary.
-func startupMarkBoot() {
-	startupMarkNow("pre-sdl")
 }
 
 // ── Warm starts ───────────────────────────────────────────────────────────
@@ -299,19 +300,38 @@ func deferStartupTask(name string, fn func()) {
 	deferredStartup.mu.Unlock()
 }
 
-// runDeferredStartup drains the queue on the main thread after Present. A task
-// that takes long enough to be interesting is logged, because "boot felt slow"
-// is usually one of these, not the renderer.
-func runDeferredStartup() {
-	deferredStartup.mu.Lock()
-	tasks := deferredStartup.tasks
-	deferredStartup.tasks = nil
-	deferredStartup.mu.Unlock()
-	for _, task := range tasks {
+// deferredStartupFrameBudget is how much of a frame the queued tasks may take
+// before the rest wait for the next one.
+const deferredStartupFrameBudget = 8 * time.Millisecond
+
+// runDeferredStartupFor runs queued tasks on the main thread, in order, until
+// budget is spent (always at least one) and reports whether any are left. The
+// loop calls it once per frame after the first one: run back to back, the
+// tasks (plugin scan, backups, servers, probes) froze the screen the user had
+// just been shown, and the first press after boot waited for all of them. A
+// task that takes long enough to be interesting is logged, because "boot felt
+// slow" is usually one of these, not the renderer.
+func runDeferredStartupFor(budget time.Duration) bool {
+	start := time.Now()
+	for {
+		deferredStartup.mu.Lock()
+		if len(deferredStartup.tasks) == 0 {
+			deferredStartup.mu.Unlock()
+			return false
+		}
+		task := deferredStartup.tasks[0]
+		deferredStartup.tasks = deferredStartup.tasks[1:]
+		deferredStartup.mu.Unlock()
 		started := time.Now()
 		task.fn()
 		if took := time.Since(started); took > 20*time.Millisecond {
-			log.Printf("[startup] %s after first frame took %dms", task.name, took.Milliseconds())
+			logInfo("startup", "%s after first frame took %dms", task.name, took.Milliseconds())
+		}
+		if time.Since(start) >= budget {
+			deferredStartup.mu.Lock()
+			more := len(deferredStartup.tasks) > 0
+			deferredStartup.mu.Unlock()
+			return more
 		}
 	}
 }

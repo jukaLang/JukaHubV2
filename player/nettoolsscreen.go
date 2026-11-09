@@ -285,13 +285,13 @@ func netToolsBusyText(id, target string) string {
 // ── Probes ────────────────────────────────────────────────────────────────
 
 var (
-	netToolsOpenPort   = regexp.MustCompile(`(?m)^\s*\d+/tcp\s+open`)
-	netToolsPingTime   = regexp.MustCompile(`time[=<]\s?([0-9]+(?:\.[0-9]+)?)\s?ms`)
-	netToolsTCPTry     = regexp.MustCompile(`try \d+: ([0-9]+) ms`)
-	netToolsSignalDBM  = regexp.MustCompile(`Signal: (-?[0-9]+) dBm(?: \(([a-z]+)\))?`)
-	netToolsSignalPct  = regexp.MustCompile(`(?i)signal\s*:\s*([0-9]+)\s*%`)
-	netToolsHop        = regexp.MustCompile(`(?m)^\s*[0-9]+\s`)
-	netToolsDNSRecords = regexp.MustCompile(`([0-9]+) records? in`)
+	netToolsOpenPort   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?m)^\s*\d+/tcp\s+open`) })
+	netToolsPingTime   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`time[=<]\s?([0-9]+(?:\.[0-9]+)?)\s?ms`) })
+	netToolsTCPTry     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`try \d+: ([0-9]+) ms`) })
+	netToolsSignalDBM  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`Signal: (-?[0-9]+) dBm(?: \(([a-z]+)\))?`) })
+	netToolsSignalPct  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)signal\s*:\s*([0-9]+)\s*%`) })
+	netToolsHop        = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?m)^\s*[0-9]+\s`) })
+	netToolsDNSRecords = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`([0-9]+) records? in`) })
 )
 
 // netToolsProbeStub, when set, replaces every tool's run: the tests use it so
@@ -317,7 +317,7 @@ func netToolsProbeFor(id, target string) func(context.Context) netToolsOutcome {
 		return func(context.Context) netToolsOutcome {
 			text, err := powerTraceRoute(netToolsPingHost)
 			out := netToolsOutcome{text: text, err: err}
-			if hops := len(netToolsHop.FindAllString(text, -1)); hops > 0 {
+			if hops := len(netToolsHop().FindAllString(text, -1)); hops > 0 {
 				out.summary = strconv.Itoa(hops) + " hops to " + netToolsPingHost
 			}
 			return out
@@ -330,7 +330,7 @@ func netToolsProbeFor(id, target string) func(context.Context) netToolsOutcome {
 			}
 			text := powerDNSReport(q)
 			out := netToolsOutcome{text: text, summary: q.Host}
-			if m := netToolsDNSRecords.FindStringSubmatch(text); m != nil {
+			if m := netToolsDNSRecords().FindStringSubmatch(text); m != nil {
 				out.summary = q.Host + " · " + m[1] + " records"
 				if m[1] == "0" {
 					out.tone = toolsHubToneWarn
@@ -444,7 +444,7 @@ func netToolsClip(s string, max int) string {
 // netToolsScanOutcome scans the 13 common ports on host.
 func netToolsScanOutcome(host string) netToolsOutcome {
 	text := powerScanText(host, 400*time.Millisecond)
-	open := len(netToolsOpenPort.FindAllString(text, -1))
+	open := len(netToolsOpenPort().FindAllString(text, -1))
 	out := netToolsOutcome{text: text, summary: host + " · no open ports"}
 	if open > 0 {
 		out.summary = host + " · " + netToolsCount(open, "open port", "open ports")
@@ -456,9 +456,9 @@ func netToolsScanOutcome(host string) netToolsOutcome {
 // netToolsPingOutcome summarises a ping report by its average round trip.
 func netToolsPingOutcome(text string) netToolsOutcome {
 	out := netToolsOutcome{text: text, summary: "No reply from " + netToolsPingHost, tone: toolsHubToneWarn}
-	matches := netToolsPingTime.FindAllStringSubmatch(text, -1)
+	matches := netToolsPingTime().FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
-		matches = netToolsTCPTry.FindAllStringSubmatch(text, -1)
+		matches = netToolsTCPTry().FindAllStringSubmatch(text, -1)
 	}
 	total, n := 0.0, 0
 	for _, m := range matches {
@@ -477,7 +477,7 @@ func netToolsPingOutcome(text string) netToolsOutcome {
 // netToolsSignalOutcome summarises the local signal report.
 func netToolsSignalOutcome(text string) netToolsOutcome {
 	out := netToolsOutcome{text: text, summary: "No signal report"}
-	if m := netToolsSignalDBM.FindStringSubmatch(text); m != nil {
+	if m := netToolsSignalDBM().FindStringSubmatch(text); m != nil {
 		out.summary = m[1] + " dBm"
 		if m[2] != "" {
 			out.summary += " · " + m[2]
@@ -487,7 +487,7 @@ func netToolsSignalOutcome(text string) netToolsOutcome {
 		}
 		return out
 	}
-	if m := netToolsSignalPct.FindStringSubmatch(text); m != nil {
+	if m := netToolsSignalPct().FindStringSubmatch(text); m != nil {
 		out.summary = m[1] + "% signal"
 	}
 	return out
@@ -523,6 +523,10 @@ type netToolsSheetKey struct {
 	age     int64
 	server  bool
 	ip      string
+	keys    bool   // the hints name keyboard keys (inputhints.go)
+	remap   uint32 // hintRemapGen(): Accessibility's remap the hints follow
+	clients uint64 // fsClientsVersion: who is connected changed
+	armed   bool   // the whole-system switch waits for its second press
 }
 
 // netTools is the page's state.
@@ -638,14 +642,17 @@ func netToolsBuildTiles(net toolsHubNet, gateway string) []toolsHubTile {
 		}
 		switch spec.id {
 		case "ftp":
-			t.value = "Off — share the SD card with a PC"
+			t.value = "Off — share a folder with another PC"
+			if fileServerOnTrimui() {
+				t.value = "Off — share games, saves and media with a PC"
+			}
 			if ftpSrv.Running() {
-				t.value, t.tone = "On · "+ftpSrv.Address(), toolsHubToneGood
+				t.value, t.tone = "On · "+ftpSrv.Address()+netToolsConnected(ftpSrv.clients.count()), toolsHubToneGood
 			}
 		case "ssh":
 			t.value = "Off — browse files from a PC"
 			if sshSrv.Running() {
-				t.value, t.tone = "On · "+sshSrv.Address(), toolsHubToneGood
+				t.value, t.tone = "On · "+sshSrv.Address()+netToolsConnected(sshSrv.clients.count()), toolsHubToneGood
 			}
 		case "companion":
 			switch {
@@ -769,13 +776,19 @@ func netToolsSyncSheet() {
 		netTools.sheet.open = false
 		return
 	}
-	key := netToolsSheetKey{id: id, server: spec.mode == netToolsModeServer, ip: toolsIPAddress()}
+	key := netToolsSheetKey{id: id, server: spec.mode == netToolsModeServer, ip: toolsIPAddress(), keys: hintsUseKeyboard(), remap: hintRemapGen()}
 	res, _ := netToolsResultOf(id)
 	switch id {
-	case "ftp":
+	case "ftp", "ssh":
 		key.running = ftpSrv.Running()
-	case "ssh":
-		key.running = sshSrv.Running()
+		if id == "ssh" {
+			key.running = sshSrv.Running()
+			key.armed = netToolsWholeSystemArmed()
+		}
+		// The client list says "connected 3 min ago": refresh it every half
+		// minute, and at once when someone connects or a transfer starts.
+		key.clients = fsClientsVersion.Load()
+		key.age = time.Now().Unix() / 30
 	default:
 		key.seq, key.running, key.failed = res.seq, res.running, res.failed
 		if !res.at.IsZero() {
@@ -872,37 +885,143 @@ func netToolsResultSheet(s *toolsHubSheet, spec netToolsSpec, res netToolsResult
 	s.hint = hintLine(hints...)
 }
 
+// netToolsConnected is the tile's " · 2 connected" suffix ("" for nobody).
+func netToolsConnected(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return " · " + strconv.Itoa(n) + " connected"
+}
+
+// netToolsFTPFolders says what FTP shares before it runs (the real list needs
+// the card read, which the start does). The handheld test is the device's, as
+// fileServerCardRoot's: P().IsHandheld() holds on any Linux computer.
+func netToolsFTPFolders() string {
+	if fileServerOnTrimui() {
+		return "Roms, BIOS, Saves, media folders and JukaHub downloads"
+	}
+	return "the shared folder next to JukaHub (" + cachedFTPRoot() + ") and JukaHub downloads"
+}
+
+// netToolsSSHDefaultFolder names SFTP's usual root.
+func netToolsSSHDefaultFolder() string {
+	if fileServerOnTrimui() {
+		return "the SD card"
+	}
+	return "your home folder"
+}
+
+// netToolsSSHFolder says what SFTP will share on its next start.
+func netToolsSSHFolder() string {
+	if custom := sshRootOverride(); custom != "" {
+		return custom
+	}
+	if sshWholeSystemOn() {
+		return "/ — the whole file system (advanced)"
+	}
+	return netToolsSSHDefaultFolder()
+}
+
+// netToolsSSHOpensSheet reports whether a stopped SFTP's tile opens its sheet
+// instead of starting it: where the sheet holds a choice to make before the
+// start (what SFTP shares), the press must be able to reach it.
+func netToolsSSHOpensSheet() bool {
+	return sshWholeSystemSupported() && sshRootOverride() == ""
+}
+
+// netToolsWholeSystemArmedUntil is when the whole-system switch's first press
+// stops waiting for the second.
+var netToolsWholeSystemArmedUntil time.Time
+
+func netToolsWholeSystemArmed() bool { return time.Now().Before(netToolsWholeSystemArmedUntil) }
+
+// netToolsWholeSystemPress is the SFTP sheet's advanced switch. On takes two
+// presses — the first says what it shares — and lasts until JukaHub restarts;
+// off is one press. The root is chosen when the server starts, so the switch
+// waits for a stopped server.
+func netToolsWholeSystemPress() {
+	if sshSrv.Running() {
+		ShowToast("Stop the SFTP server first, then choose what it shares", ToastKindInfo)
+		return
+	}
+	if sshWholeSystemSession.Load() {
+		sshWholeSystemSession.Store(false)
+		netToolsWholeSystemArmedUntil = time.Time{}
+		ShowToast("SFTP will share "+netToolsSSHDefaultFolder()+" again", ToastKindInfo)
+		return
+	}
+	if netToolsWholeSystemArmed() {
+		sshWholeSystemSession.Store(true)
+		netToolsWholeSystemArmedUntil = time.Time{}
+		logInfo("ssh", "whole file system share switched on for this run")
+		ShowToast("SFTP will share the whole file system until JukaHub restarts", ToastKindWarning)
+		return
+	}
+	netToolsWholeSystemArmedUntil = time.Now().Add(8 * time.Second)
+	ShowToast("Advanced: this shares every file on the device, system files included — press again to confirm", ToastKindWarning)
+}
+
 // netToolsServerSheet fills the sheet with a server's details: where to
-// connect, how to sign in, and who can reach it while it runs.
+// connect, how to sign in, what it shares and who is connected.
 func netToolsServerSheet(s *toolsHubSheet, id string) {
 	var b strings.Builder
 	running := false
+	wholeSwitch := ""
 	switch id {
 	case "ftp":
 		running = ftpSrv.Running()
 		if running {
-			fmt.Fprintf(&b, "Status:   Running\nAddress:  %s\n", ftpSrv.Address())
+			fmt.Fprintf(&b, "Status:   Running\nAddress:  %s\nUser:     %s\nPassword: %s\n",
+				ftpSrv.Address(), ftpSrv.User(), ftpSrv.Password())
+			fmt.Fprintf(&b, "Folders:  %s\n", strings.Join(ftpSrv.ShareNames(), ", "))
+			fsClientLines(&b, ftpSrv.Clients())
 		} else {
 			b.WriteString("Status:   Stopped\n")
+			fmt.Fprintf(&b, "Folders:  %s\n", netToolsFTPFolders())
 		}
-		fmt.Fprintf(&b, "Folder:   %s\n", cachedFTPRoot())
-		b.WriteString("Sign in:  any user name and password\n")
-		b.WriteString("\nAnyone on this Wi-Fi can read and write the shared folder while the server runs. Stop it when the transfer is done.")
+		b.WriteString("\nSign in with this user name and password; the password is new every time the server starts and is never saved or logged. " +
+			"FTP is not encrypted: on a network you do not trust, use SFTP instead.")
 	case "ssh":
 		running = sshSrv.Running()
+		whole := false
 		if running {
 			fmt.Fprintf(&b, "Status:   Running\nAddress:  %s\nUser:     %s\nPassword: %s\n",
 				sshSrv.Address(), sshSrv.User(), sshSrv.Password())
 			if fp := sshSrv.Fingerprint(); fp != "" {
 				fmt.Fprintf(&b, "Host key: %s\n", fp)
 			}
+			fmt.Fprintf(&b, "Folder:   %s\n", sshSrv.Root())
+			whole = sshSrv.WholeSystem()
 		} else {
 			b.WriteString("Status:   Stopped\n")
+			fmt.Fprintf(&b, "Folder:   %s\n", netToolsSSHFolder())
+			// JUKAHUB_SSH_ROOT wins over the switch: warn only when the
+			// next start really shares "/".
+			whole = sshWholeSystemNext()
 		}
-		fmt.Fprintf(&b, "Folder:   %s\n", sshSrv.Root())
 		b.WriteString("Access:   SFTP file transfer only, no shell\n")
+		if running {
+			fsClientLines(&b, sshSrv.Clients())
+		}
+		if whole {
+			b.WriteString("\nAdvanced: the whole file system is shared. Anyone who signs in can change system files — share " +
+				netToolsSSHDefaultFolder() + " again when you are done.\n")
+		}
 		b.WriteString("\nThe password is new every time the server starts and is never saved or logged.")
+		// The switch is offered while stopped, and only where "/" means one
+		// file system; a config or environment that forces it is not undone
+		// here, and with JUKAHUB_SSH_ROOT set it would change nothing.
+		if !running && netToolsSSHOpensSheet() && (sshWholeSystemSession.Load() || !whole) {
+			wholeSwitch = "Share whole system…"
+			if netToolsWholeSystemArmed() {
+				wholeSwitch = "Press again to share everything"
+			}
+			if sshWholeSystemSession.Load() {
+				wholeSwitch = "Share " + netToolsSSHDefaultFolder() + " only"
+			}
+		}
 	}
+	b.WriteString("\nThe server switches itself off after " + fsIdleLimitText() + " nobody uses it, and when the device joins another network.")
 	s.subInk = sdl.Color{}
 	if running {
 		s.subtitle = "Running on " + toolsIPAddress()
@@ -923,6 +1042,9 @@ func netToolsServerSheet(s *toolsHubSheet, id string) {
 	} else {
 		s.pills = append(s.pills, toolsHubPill{id: "toggle", label: "Start server", accent: true})
 		hints = append(hints, FooterHint{Button: "A", Label: "Select"})
+	}
+	if wholeSwitch != "" {
+		s.pills = append(s.pills, toolsHubPill{id: "wholesys", label: wholeSwitch, danger: netToolsWholeSystemArmed()})
 	}
 	s.pills = append(s.pills, toolsHubPill{id: "close", label: "Close"})
 	hints = append(hints, FooterHint{Button: "B", Label: "Close"})
@@ -955,6 +1077,11 @@ func netToolsSheetAction(config *Config, action string) {
 			toggleFTPServer()
 			publishFTPState()
 		}
+		netTools.sheetKey = netToolsSheetKey{}
+		netToolsSyncSheet()
+	case "wholesys":
+		PlayActivateSound()
+		netToolsWholeSystemPress()
 		netTools.sheetKey = netToolsSheetKey{}
 		netToolsSyncSheet()
 	case "close":
@@ -1025,11 +1152,18 @@ func netToolsActivate(config *Config, idx int) {
 
 // netToolsServerPress starts a stopped server and shows how to reach it; on a
 // running server it shows the details (Stop is on the sheet, so a stray press
-// never cuts a transfer off).
+// never cuts a transfer off). A stopped SFTP on Linux opens its sheet with
+// Start first: what it shares is chosen there before the start, and a press
+// that started it at once left that choice reachable only after a stop.
 func netToolsServerPress(id string) {
 	running := ftpSrv.Running()
 	if id == "ssh" {
 		running = sshSrv.Running()
+	}
+	if !running && id == "ssh" && netToolsSSHOpensSheet() {
+		PlayActivateSound()
+		netToolsShowSheet(id)
+		return
 	}
 	if !running {
 		PlayActivateSound()

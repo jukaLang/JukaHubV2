@@ -3,7 +3,6 @@ package main
 import (
 	"math"
 	"math/rand"
-	"os"
 	"sync"
 	"time"
 
@@ -281,45 +280,6 @@ func ensureBgParticleTex(renderer *sdl.Renderer) {
 // ──────────────────────────────────────────────────────────────────────
 // Wallpaper loading
 // ──────────────────────────────────────────────────────────────────────
-
-func loadWallpaper(renderer *sdl.Renderer, path string) bool {
-	if path == "" {
-		return false
-	}
-	// Try SDL_image first
-	imgSurface, err := sdl.LoadBMP(path)
-	if err != nil {
-		// Try loading as image (jpg/png via SDL_image if available)
-		f, ferr := os.Open(path)
-		if ferr != nil {
-			return false
-		}
-		f.Close()
-		return false // Can't load without SDL_image
-	}
-	defer imgSurface.Free()
-
-	// Scale to screen size keeping aspect ratio
-	scale := math.Min(
-		float64(screenWidth)/float64(imgSurface.W),
-		float64(screenHeight)/float64(imgSurface.H),
-	)
-	newW := int32(float64(imgSurface.W) * scale)
-	newH := int32(float64(imgSurface.H) * scale)
-
-	// Use the surface directly for texture creation
-	scaled := imgSurface
-
-	tex, err := renderer.CreateTextureFromSurface(scaled)
-	if err != nil {
-		return false
-	}
-	dynbg.wallpaper = tex
-	dynbg.wallpaperW = newW
-	dynbg.wallpaperH = newH
-	dynbg.mode = bgModeImage
-	return true
-}
 
 // ──────────────────────────────────────────────────────────────────────
 // Main render function — called every frame after clearing the screen
@@ -694,19 +654,6 @@ func clampF64(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
-}
-
-// SetBgMode sets the background rendering mode.
-func SetBgMode(mode bgMode) {
-	dynbg.mode = mode
-}
-
-// SetWallpaper sets a user wallpaper image path.
-func SetWallpaper(path string) {
-	if path != "" {
-		dynbg.mode = bgModeImage
-	}
-	// Wallpaper texture will be loaded on next render
 }
 
 // DynBGUpdateWeather should be called when weather data changes.

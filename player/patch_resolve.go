@@ -133,19 +133,6 @@ func planRemove(name string, repoPkgs map[string]*RepoPkg, isInstalled func(stri
 
 // --- Transaction engine ---
 
-// txConflict describes a user-modified-file conflict during rollback/removal.
-type txConflict struct {
-	Path         string
-	InstalledSHA string
-	CurrentSHA   string
-}
-
-// txJournal wraps the low-level journal for package transactions.
-type txJournal struct {
-	journal   *journal
-	conflicts []txConflict
-}
-
 // runTransaction executes a plan: backups first, then operations, with the
 // journal recording every destructive step. On failure it rolls back.
 // installFn/removeFn perform the per-package file operations.

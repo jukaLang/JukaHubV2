@@ -35,7 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,15 +60,17 @@ const (
 
 // androidPakLibs is the triage result for one APK.
 type androidPakLibs struct {
-	Abis    []string // every lib/<abi>/ directory present, sorted
-	Chosen  string   // the ABI the game will actually run (arm64 preferred)
-	MainLib string   // "lib/<abi>/<name>.so" — the native entry
+	Abis    []string        // every lib/<abi>/ directory present, sorted
+	Chosen  string          // the ABI the game will actually run (arm64 preferred)
+	MainLib string          // "lib/<abi>/<name>.so" — the native entry
+	Title   androidPakTitle // a title AndroidRT knows by name (androidpak_titles.go)
 }
 
-// androidPakABIOrder matches the A133P: aarch64 first, then 32-bit ARM.
-// x86 ABIs are never chosen; the triage reports what an APK ships so a dead
-// package can be named as dead instead of "not supported".
-var androidPakABIOrder = []string{"arm64-v8a", "armeabi-v7a", "x86_64", "x86"}
+// androidPakABIOrder matches the A133P: aarch64 first, then 32-bit ARM. x86
+// ABIs are never chosen (an x86-only APK gets the "no ABI this device can
+// run" answer); the triage still reports what an APK ships, so a dead package
+// can be named as dead instead of "not supported".
+var androidPakABIOrder = []string{"arm64-v8a", "armeabi-v7a"}
 
 // androidPakStagePrefixes selects what a native process needs on disk. DEX
 // and signatures are deliberately skipped: this Tier-1 path never runs Java.
@@ -110,7 +111,7 @@ const (
 )
 
 // androidPakStageFootprint sums the uncompressed sizes of the entries
-// stageAndroidPak would extract (the chosen ABI's libraries + assets +
+// staging would extract (the chosen ABI's libraries + assets +
 // res + manifest), without touching the disk. Rejected ABIs and DEX are
 // skipped, matching the real staging work.
 func androidPakStageFootprint(apk string, libs androidPakLibs) (int64, error) {
@@ -207,8 +208,10 @@ func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error)
 	abils := []string{}
 	seen := map[string]bool{}
 	sizes := map[string]int64{} // "lib/<abi>/<name>.so" → uncompressed size
+	names := make([]string, 0, len(zr.File))
 	for _, f := range zr.File {
 		slash := filepath.ToSlash(f.Name)
+		names = append(names, slash)
 		if slash == "AndroidManifest.xml" || slash == "resources.arsc" {
 			manifest = true
 		}
@@ -261,7 +264,11 @@ func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error)
 		return androidPakLibs{}, errors.New("no ABI this device can run (A133P wants arm64-v8a or armeabi-v7a)")
 	}
 	sort.Strings(abils)
-	return androidPakLibs{Abis: abils, Chosen: chosen, MainLib: mainLib}, nil
+	title, err := androidPakDetectTitle(names, chosen)
+	if err != nil {
+		return androidPakLibs{}, err
+	}
+	return androidPakLibs{Abis: abils, Chosen: chosen, MainLib: mainLib, Title: title}, nil
 }
 
 // resolveAndroidRuntime finds the installed bionic translation runtime. The
@@ -342,17 +349,8 @@ var androidPakStages struct {
 	gen map[string]uint64
 }
 
-// stageAndroidPak extracts the runtime-relevant subset of the APK (bounded)
-// into a fresh staging dir and returns it with the chosen ABI's library
-// directory. A previous stage for the same profile is removed first, so a
-// rebuilt APK is never masked by stale files.
-func stageAndroidPak(id, apk string, libs androidPakLibs) (stageDir, libDir string, err error) {
-	stageDir, libDir, _, err = stageAndroidPakGen(id, apk, libs)
-	return stageDir, libDir, err
-}
-
-// stageAndroidPakGen is stageAndroidPak for a launch: it also returns the
-// stage's generation, which androidPakStageCleanupGC needs. A failed stage is
+// stageAndroidPakGen stages an APK for a launch and returns the stage's
+// generation, which androidPakStageCleanupGC needs. A failed stage is
 // removed at once — a partial extraction is RAM on the device's tmpfs.
 func stageAndroidPakGen(id, apk string, libs androidPakLibs) (stageDir, libDir string, gen uint64, err error) {
 	androidPakStages.Lock()
@@ -478,23 +476,6 @@ func androidPakStageRelease(stageDir string, gen uint64) {
 	removeAndroidPakStage(stageDir)
 }
 
-// androidPakPlanCheck is the androidpak-specific readiness check used by
-// resolveGameProfileEntry: the APK must be a real package with an ABI this
-// device runs, and the runtime must be installed with a usable entry point.
-func androidPakPlanCheck(p GameProfile, apkPath string, lookPath func(string) (string, error)) error {
-	if _, err := inspectAndroidPak(apkPath, p.MainLib); err != nil {
-		return err
-	}
-	rt, err := resolveAndroidRuntime(lookPath)
-	if err != nil {
-		return err
-	}
-	if _, _, err := androidRuntimeCommand(rt, lookPath); err != nil {
-		return err
-	}
-	return nil
-}
-
 // androidPakDataDir is an AndroidPak game's persistent data directory: the
 // runner hands it to the game as internalDataPath/externalDataPath (files/,
 // external/, obb/ and cache/ inside), so saves and settings survive the
@@ -538,6 +519,19 @@ func buildAndroidPakCommand(p GameProfile, apkPath, stageDir string, libs androi
 		if strings.TrimSpace(env["ANDROIDPAK_DATA"]) == "" {
 			env["ANDROIDPAK_DATA"] = androidPakDataDir(p.ID)
 		}
+		// The runtime describes the device to the game (panel, DPI, the
+		// firmware's EGL window contract) from JukaHub's own detection.
+		if d := DetectDevice(); d.IsTrimui() && strings.TrimSpace(env["ANDROIDPAK_DEVICE"]) == "" {
+			env["ANDROIDPAK_DEVICE"] = string(d)
+		}
+		// A recognised title's package, for a runtime that cannot read the
+		// binary manifest; the manifest wins when it can.
+		if libs.Title.Package != "" && strings.TrimSpace(env["ANDROIDPAK_PACKAGE"]) == "" {
+			env["ANDROIDPAK_PACKAGE"] = libs.Title.Package
+		}
+	}
+	if libs.Title.Name != "" {
+		logInfo("androidpak", "%s: %s", libs.Title.Name, libs.Title.Note)
 	}
 	// Current runtimes load the game with their own bionic loader and need
 	// no search paths. An older runtime layout with a shims/ directory gets
@@ -573,12 +567,124 @@ func buildAndroidPakCommand(p GameProfile, apkPath, stageDir string, libs androi
 //
 // Older runtimes (glibc dlopen) printed "could not load <lib>: ...: undefined
 // symbol: NAME" instead; that line still parses into Symbol.
+//
+// The runner's JNI layer (androidrt/src/jnienv.c) answers what the game asks
+// Java for. What it cannot provide is logged once per name as it happens and
+// listed again in the exit report, both in the order the game asked:
+//
+//	[androidrt][jni] FindClass ("com/foo/Bar") -> null (no implementation, not in the APK)
+//	[androidrt][jni] GetMethodID com/foo/Bar.baz(I)V -> not implemented; calls return 0
+//	[androidrt][jni] GetFieldID com/foo/Bar.count I -> not implemented; reads return 0 until the game stores a value
+//	[androidrt][jni] called com/foo/Bar.baz(I)V — not implemented, returned 0
+//	[androidrt][jni] report: 1 unknown classes, 0 APK classes without implementation, 2 unimplemented members (1 called)
+//	[androidrt][jni] report: FindClass returned null for (1):
+//	[androidrt][jni] report:   com/foo/Bar
+//	[androidrt][jni] report: unimplemented members ("call ..." = the game called it) (3):
+//	[androidrt][jni] report:   com/foo/Bar.baz(I)V
+//	[androidrt][jni] report:   call com/foo/Bar.baz(I)V
+//	[androidrt][jni] report:   com/foo/Bar.count:I
+//
+// The report is printed only when the run reaches its end; a game that
+// crashed leaves just the first-seen lines, which say the same in the same
+// order, so they are the fallback.
 type androidPakRunReport struct {
 	Trap        string   // unimplemented function the game called; the run aborted there
 	Undefined   []string // every undefined symbol the loader listed, in log order
 	Refused     bool     // ANDROIDPAK_MISSING=strict refused to start
 	LoadFailure string   // why the game library never loaded, when it did not
 	Symbol      string   // the undefined symbol of a legacy dlopen failure
+	JavaClasses []string // Java classes FindClass could not provide, in the order the game asked
+	JavaMembers []string // methods ("C.m(sig)") and fields ("C.f:sig") nobody implements, same order
+	JavaCalled  []string // the unimplemented methods the game actually called, same order
+	JavaTotal   int      // distinct gaps the exit report counted: classes + members (0 without a report)
+}
+
+// androidPakJavaGaps collects one source of Java gaps (the exit report or
+// the first-seen lines), each name once.
+type androidPakJavaGaps struct {
+	classes, members, called []string
+	total                    int
+	names                    map[string]bool
+}
+
+func (g *androidPakJavaGaps) add(list *[]string, kind, name string) {
+	name = strings.TrimSpace(name)
+	if name == "" || g.names[kind+" "+name] {
+		return
+	}
+	if g.names == nil {
+		g.names = map[string]bool{}
+	}
+	g.names[kind+" "+name] = true
+	*list = append(*list, name)
+}
+
+func (g *androidPakJavaGaps) empty() bool {
+	return len(g.classes)+len(g.members)+len(g.called) == 0
+}
+
+// parseAndroidPakJavaLine reads one "[androidrt][jni] " line (prefix
+// already cut) into the report or first-seen collector. section carries
+// which report list the item lines belong to.
+func parseAndroidPakJavaLine(rest string, report, seen *androidPakJavaGaps, section *string) {
+	if after, ok := strings.CutPrefix(rest, "report:"); ok {
+		if item, isItem := strings.CutPrefix(after, "   "); isItem { // "report:   <entry>"
+			item = strings.TrimSpace(item)
+			switch {
+			case strings.HasPrefix(item, "... and "):
+			case *section == "classes":
+				report.add(&report.classes, "class", item)
+			case *section == "members":
+				if name, called := strings.CutPrefix(item, "call "); called {
+					report.add(&report.called, "call", name)
+				} else {
+					report.add(&report.members, "member", item)
+				}
+			}
+			return
+		}
+		header := strings.TrimSpace(after)
+		switch {
+		case strings.HasPrefix(header, "FindClass returned null for"):
+			*section = "classes"
+		case strings.HasPrefix(header, "unimplemented members"):
+			*section = "members"
+		default:
+			var classes, apk, members, called int
+			if n, _ := fmt.Sscanf(header, "%d unknown classes, %d APK classes without implementation, %d unimplemented members (%d called)",
+				&classes, &apk, &members, &called); n == 4 {
+				report.total = classes + members // a called method was looked up first: one gap, not two
+			}
+			*section = ""
+		}
+		return
+	}
+	switch {
+	case strings.HasPrefix(rest, "FindClass"): // FindClass ("C") -> null; the old stub printed FindClass("C")
+		after := strings.TrimSpace(strings.TrimPrefix(rest, "FindClass"))
+		if name, ok := strings.CutPrefix(after, "(\""); ok {
+			if i := strings.Index(name, "\")"); i >= 0 && strings.Contains(name[i:], "-> null") {
+				seen.add(&seen.classes, "class", name[:i])
+			}
+		}
+	case strings.HasPrefix(rest, "GetMethodID "), strings.HasPrefix(rest, "GetStaticMethodID "):
+		_, after, _ := strings.Cut(rest, " ")
+		if name, _, found := strings.Cut(after, " -> not implemented"); found {
+			seen.add(&seen.members, "member", name)
+		}
+	case strings.HasPrefix(rest, "GetFieldID "), strings.HasPrefix(rest, "GetStaticFieldID "):
+		_, after, _ := strings.Cut(rest, " ")
+		if name, _, found := strings.Cut(after, " -> not implemented"); found {
+			if i := strings.LastIndex(name, " "); i > 0 { // "C.f sig" -> the report's "C.f:sig"
+				name = name[:i] + ":" + name[i+1:]
+			}
+			seen.add(&seen.members, "member", name)
+		}
+	case strings.HasPrefix(rest, "called "):
+		if name, _, found := strings.Cut(strings.TrimPrefix(rest, "called "), " — not implemented"); found {
+			seen.add(&seen.called, "call", name)
+		}
+	}
 }
 
 // androidPakLastRunLog returns the part of a profile's launch log the most
@@ -611,8 +717,15 @@ func androidPakLeadingToken(s string) string {
 // launch log.
 func parseAndroidPakRunReport(text string) androidPakRunReport {
 	var r androidPakRunReport
+	var report, seen androidPakJavaGaps
+	section := ""
 	for _, line := range strings.Split(text, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "[androidrt] ")
+		line = strings.TrimSpace(line)
+		if jni, ok := strings.CutPrefix(line, "[androidrt][jni] "); ok {
+			parseAndroidPakJavaLine(jni, &report, &seen, &section)
+			continue
+		}
+		rest, ok := strings.CutPrefix(line, "[androidrt] ")
 		if !ok {
 			continue
 		}
@@ -637,24 +750,33 @@ func parseAndroidPakRunReport(text string) androidPakRunReport {
 			}
 		}
 	}
+	gaps := seen
+	if !report.empty() {
+		gaps = report
+	}
+	r.JavaClasses, r.JavaMembers, r.JavaCalled, r.JavaTotal = gaps.classes, gaps.members, gaps.called, report.total
 	return r
 }
 
-// androidPakFirstRunSymbol names the bionic symbol that stopped the last run:
-// the unimplemented function the game called, the legacy loader's undefined
-// symbol, or the first symbol a strict run refused over. "" when the run
-// failed for another reason (exit status, no ANativeActivity_onCreate, crash).
-func androidPakFirstRunSymbol(id string) string {
-	r := parseAndroidPakRunReport(androidPakLastRunLog(id))
-	switch {
-	case r.Trap != "":
-		return r.Trap
-	case r.Symbol != "":
-		return r.Symbol
-	case r.Refused && len(r.Undefined) > 0:
-		return r.Undefined[0]
+// androidPakFirstJavaGap picks the Java gap a toast names: the first
+// unimplemented method the game actually called (it got a default back and
+// went on with it), else the first class it could not get, else the first
+// member it looked up. total counts every gap the log lists once: a called
+// method is also a member the game looked up.
+func androidPakFirstJavaGap(r androidPakRunReport) (kind, name string, total int) {
+	total = r.JavaTotal
+	if total == 0 {
+		total = len(r.JavaClasses) + len(r.JavaMembers)
 	}
-	return ""
+	switch {
+	case len(r.JavaCalled) > 0:
+		return "called", r.JavaCalled[0], total
+	case len(r.JavaClasses) > 0:
+		return "class", r.JavaClasses[0], total
+	case len(r.JavaMembers) > 0:
+		return "member", r.JavaMembers[0], total
+	}
+	return "", "", 0
 }
 
 // androidPakClip shortens s to at most n runes with an ellipsis.
@@ -684,6 +806,22 @@ func androidPakRunMessage(id string, r androidPakRunReport, logPath string) (str
 	case r.LoadFailure != "":
 		return fmt.Sprintf("AndroidPak could not load the game: %s (log: %s)", androidPakClip(r.LoadFailure, 160), logPath), true
 	}
+	// The game ran: what it asked Java for and did not get is the best lead.
+	if kind, name, total := androidPakFirstJavaGap(r); name != "" {
+		javaMore := ""
+		if total > 1 {
+			javaMore = fmt.Sprintf(" (%d more Java gaps in the log)", total-1)
+		}
+		name = androidPakClip(name, 120)
+		switch kind {
+		case "called":
+			return fmt.Sprintf("AndroidPak: the game called the Java method %s, which AndroidRT does not implement yet%s — log: %s", name, javaMore, logPath), true
+		case "class":
+			return fmt.Sprintf("AndroidPak: the game asked for the Java class %s, which AndroidRT does not provide yet%s — log: %s", name, javaMore, logPath), true
+		default:
+			return fmt.Sprintf("AndroidPak: the game looked up the Java member %s, which AndroidRT does not implement yet%s — log: %s", name, javaMore, logPath), true
+		}
+	}
 	if n := len(r.Undefined); n > 0 {
 		return fmt.Sprintf("%s first run failed (%d undefined symbols listed); loader output is in %s", id, n, logPath), false
 	}
@@ -700,7 +838,7 @@ func androidPakFirstRunReport(id string, exitErr error) {
 	}
 	logPath := filepath.Join(gameProfilesLogsDir(), id+".log")
 	message, toast := androidPakRunMessage(id, parseAndroidPakRunReport(androidPakLastRunLog(id)), logPath)
-	log.Printf("[androidpak] %s", message)
+	logDebug("androidpak", "%s", message)
 	if toast {
 		ShowToast(message, ToastKindError)
 	}

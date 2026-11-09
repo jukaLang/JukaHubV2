@@ -1145,8 +1145,18 @@ func handleQSInput(e *sdl.KeyboardEvent, config *Config) {
 		qsNavigateSlider(5)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		qsSelect()
+	case sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END:
+		// The keyboard twins of the pad's shoulders (inputhints.go).
+		qsShoulder(keyShoulder(e.Keysym.Sym))
 	case sdl.K_ESCAPE, sdl.K_b:
 		qs.open = false
 		PlayBackSound()
+	case sdl.K_q:
+		// Ctrl+Q opened the panel; the same chord puts it away (not its
+		// key repeats, which would shut the panel the press just opened).
+		if e.Keysym.Mod&sdl.KMOD_CTRL != 0 && e.Repeat == 0 {
+			qs.open = false
+			PlayBackSound()
+		}
 	}
 }

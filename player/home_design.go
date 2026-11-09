@@ -5,9 +5,10 @@ package main
 // One design system, shared by every control on the screen: translucent glass
 // tiles over the ambient background, a 48px icon badge in the top-left of a
 // tile with the label anchored bottom-left (never centred), a 20px tile radius
-// against a 12px icon radius, and exactly one focus treatment — a cyan ring, a
-// 3% lift and a soft glow. mockups/home-16x9-and-4x3.html is the reference
-// sheet; the numbers here are its tokens in 1280x720 canvas units.
+// against a 12px icon radius, and exactly one focus treatment — a cyan ring
+// standing off the card, a 3% lift, a soft glow and the icon lit in the
+// accent. mockups/home-16x9-and-4x3.html is the reference sheet; the numbers
+// here are its tokens in 1280x720 canvas units.
 
 import (
 	"math"
@@ -17,7 +18,6 @@ import (
 
 const (
 	homeSideMargin int32 = 32 // frame margin on both sides
-	homeGutter     int32 = 16 // gap between every two tiles
 	homeTileRadius int32 = 20
 	homeIconRadius int32 = 12
 	homeTilePad    int32 = 20
@@ -35,10 +35,34 @@ func homeGlass(alpha uint8) sdl.Color {
 }
 
 // homeCardFill is the resting tile fill (white 5%) and homeCardEdge its 8%
-// border, straight from the design sheet's --card / --card-border.
+// border, straight from the design sheet's --card / --card-border. A focused
+// tile is a clear step brighter (white ~10%, edge ~16%): at 13→20 the lift in
+// fill was below what a handheld panel shows at arm's length.
 func homeCardFill() sdl.Color      { return homeGlass(13) }
-func homeCardFillFocus() sdl.Color { return homeGlass(20) }
+func homeCardFillFocus() sdl.Color { return homeGlass(26) }
 func homeCardEdge() sdl.Color      { return homeGlass(20) }
+func homeCardEdgeFocus() sdl.Color { return homeGlass(40) }
+
+// The focus ring stands off the card, the design sheet's outline: 3px of
+// accent with a 4px gap (outline-offset) between it and the card. Drawn on the
+// card's own edge, the ring read as a border colour change — the "thin cyan
+// outline" a focused Media card showed — while a ring with a dark gap reads as
+// a halo from across the room, the way console shells mark focus.
+const (
+	homeFocusRingWidth int32 = 3
+	homeFocusRingGap   int32 = 4
+)
+
+// homeFocusRingOutset is how far the ring's outer edge sits outside the card:
+// the gap, scaled with the canvas so the compact canvas's 12px gutters keep a
+// clear line between a focused ring and the next tile, plus the ring itself.
+func homeFocusRingOutset() int32 {
+	gap := scaleX(homeFocusRingGap, screenWidth)
+	if gap < 2 {
+		gap = 2
+	}
+	return gap + homeFocusRingWidth
+}
 
 // homeGlowBlob blits the soft radial glow into rect. One textured copy, no
 // gradient math: the ambience behind the home screen is two of these.
@@ -133,36 +157,43 @@ func drawHomeFocusGlow(renderer *sdl.Renderer, rect sdl.Rect) {
 	}, ColorAccent, 70)
 }
 
-// drawHomeFocusRing paints the ring itself: 3px of cyan on the card's edge. It
-// is drawn inside the rect so the lift never paints outside the control, and it
-// shares the settled surface's cached shape.
+// drawHomeFocusRing paints the ring itself: 3px of accent standing
+// homeFocusRingGap off the card (homeFocusRingOutset), with the card's radius
+// grown by the same amount so the halo stays concentric. It follows the
+// lifted rect but takes its cached shape from the settled one, like the card.
+// The layout keeps every card at least a gutter apart, so the ring never
+// reaches a neighbour (10px out against 16px gutters, 9px against the compact
+// canvas's 12px).
 func drawHomeFocusRing(renderer *sdl.Renderer, base, rect sdl.Rect, radius int32) {
 	if renderer == nil || rect.W <= 0 {
 		return
 	}
-	strokeRoundedRectAt(renderer, base, rect, radius, 3, ColorAccent)
+	out := homeFocusRingOutset()
+	grow := func(r sdl.Rect) sdl.Rect {
+		return sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}
+	}
+	strokeRoundedRectAt(renderer, grow(base), grow(rect), radius+out, homeFocusRingWidth, ColorAccent)
 }
 
 // drawGlassTile paints a card: the frosted fill, its hairline border, and the
-// focus ring on top. base/rect split keeps the fill texture cached while the
+// focus ring around it. base/rect split keeps the fill texture cached while the
 // focus lift animates.
 func drawGlassTile(renderer *sdl.Renderer, base, rect sdl.Rect, focused, pressed bool) {
 	if renderer == nil {
 		return
 	}
-	fill := homeCardFill()
+	fill, edge := homeCardFill(), homeCardEdge()
 	if focused {
-		fill = homeCardFillFocus()
+		fill, edge = homeCardFillFocus(), homeCardEdgeFocus()
 	}
 	if pressed {
-		fill = homeGlass(26)
+		fill = homeGlass(32)
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRectAt(renderer, base, rect, homeTileRadius, fill)
+	strokeRoundedRectAt(renderer, base, rect, homeTileRadius, 1, edge)
 	if focused {
 		drawHomeFocusRing(renderer, base, rect, homeTileRadius)
-	} else {
-		strokeRoundedRectAt(renderer, base, rect, homeTileRadius, 1, homeCardEdge())
 	}
 }
 

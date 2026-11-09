@@ -74,16 +74,11 @@ same four checks plus `go vet`/`go test` for the player; a builder change is not
 finished until the Chromium smoke test passes, because it is the only check that
 drives the real drop handler, history buttons and import path.
 
-> **On flaky tests.** `TestVideoFullscreenHidesControlBar` used to crash
-> intermittently in `SDL_RenderReadPixels`. The cause was not the test: the
-> static-layer caches in `player/vkeyboard.go` (keyboard, chat and video
-> overlay) kept textures after their renderer was destroyed, so a later probe
-> drew or freed a dangling pointer. The caches now record their owning
-> renderer, drop a foreign texture instead of touching it, and
-> `destroyTestRenderer` releases them before destroying the renderer;
-> `player/renderer_cache_owner_test.go` pins the rule. `TestDecryptWithAuthRoundTrip`
-> and `TestKeyboardCachedFrameIsCheaperThanFullRedraw` have each been seen to
-> fail once without a clear cause; re-run those before digging.
+> **Renderer-owned caches.** A texture belongs to the renderer that created it.
+> The static-layer caches in `player/vkeyboard.go` (keyboard, chat and video
+> overlay) record their owning renderer and drop a foreign texture instead of
+> touching it; a cache that outlived its renderer once made the app draw or free
+> a dangling pointer. Follow the same rule for any new texture cache
 
 ## Error handling conventions
 
@@ -135,36 +130,25 @@ error paths:
 
 ### Tests for what you changed
 
+The Go suite is deliberately small and fast: it guards what would hurt users
+silently (saved data, config migration, security checks, the updater and
+package installer, tricky parsers) and nothing else. `go test` should finish in
+seconds, so it gets run.
+
 | Change | Expected |
 |--------|----------|
-| Logic, parsing, config, safety checks | table-driven unit tests |
-| Rendering, layout, focus | pixel or geometry tests |
-| Bug fix | a test that fails before your fix |
+| Persistence, migration, security, installer or updater logic | a table-driven unit test |
+| Pure parsing or maths with edge cases | a unit test |
+| Bug fix in one of the above | a test that fails before your fix |
+| Rendering, layout, copy, colours, focus geometry | no test — check it on screen (Windows build, then the device) |
 
-Rendering tests run headless: `SDL_VIDEODRIVER=dummy` with the software
-renderer, then read the pixels back and assert on them. See
-[`player/installbar_render_test.go`](player/installbar_render_test.go),
-[`player/widgets_render_test.go`](player/widgets_render_test.go) and
-[`player/statusbar_render_test.go`](player/statusbar_render_test.go) for the
-pattern, and
-[`player/widgets_test.go`](player/widgets_test.go) for focus-graph and
-config-injection tests. Tests must not write into the project directory; use
-`t.TempDir()` and `t.Chdir()` for anything that saves a config.
-
-### A test may only skip for the machine, never for itself
-
-`t.Skip` means "this machine cannot run the check" — no SDL video, no POSIX
-`sh`, no symlink privilege, no listener, no bundled `ffmpeg`, an opt-in preview
-switch, or the helper-process re-exec pattern. It never means "the fixture did
-not set up" or "the thing I measure was not drawn": those are failures, because
-a skipped test reports green while asserting nothing, so the regression it was
-supposed to catch goes unnoticed. Fix the test or fail it.
-
-`TestSkipsAreEnvironmentGated` (`player/skipaudit_test.go`) enforces this: every
-skip must carry a literal reason, and the reason must match one of the
-capability gates listed in that file. A new skip with any other reason fails
-the suite with the file, line and reason; if the machine genuinely cannot run
-the check, add the capability there and say why.
+Tests never open an SDL window, renderer or font, never sleep for more than a
+few milliseconds, never touch the network beyond an `httptest` server, and never
+write into the project directory: use `t.TempDir()` and `t.Chdir()` for anything
+that saves a file. Shared helpers live in
+[`player/testhelpers_test.go`](player/testhelpers_test.go). A test may skip only
+when the machine cannot run it (no POSIX `sh`, no symlink privilege, no
+listener), never because its own fixture failed.
 
 ## Repository layout
 
@@ -180,7 +164,7 @@ JukaHubV2/
 │   ├── vkeyboard.go                   # on-screen keyboard
 │   ├── patch_*.go, packages.go        # package manager
 │   ├── plugins.go                     # plugin loader and runner
-│   ├── *_test.go                      # unit, render and focus tests
+│   ├── *_test.go                      # the lean unit-test core (data, security, updates)
 │   ├── jukaconfig.json                # committed design config
 │   ├── trimui/                        # device package assets and notes
 │   └── build.bat, release.sh, package-sdcard.sh

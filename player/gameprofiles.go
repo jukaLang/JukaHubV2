@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,7 +125,6 @@ func gameProfilesDir() string {
 }
 
 func gameProfilesImportDir() string { return filepath.Join(gameProfilesDir(), "import") }
-func gameProfilesLocalDir() string  { return filepath.Join(gameProfilesDir(), "local") }
 func gameProfilesExportDir() string { return filepath.Join(gameProfilesDir(), "export") }
 func gameProfilesLogsDir() string   { return filepath.Join(gameProfilesDir(), "logs") }
 func gameProfilesGamesDir() string  { return filepath.Join(gameProfilesDir(), "games") }
@@ -211,7 +209,7 @@ func ensureGameProfilesLayout() error {
 // best-effort: a read-only data folder must not stop JukaHub from booting.
 func InitGameProfiles() {
 	if err := ensureGameProfilesLayout(); err != nil {
-		log.Printf("[gameprofiles] setup failed: %v", err)
+		logWarn("gameprofiles", "setup failed: %v", err)
 	}
 }
 
@@ -225,7 +223,7 @@ func gameProfileEntries() []gameProfileEntry {
 		gameProfileCache.issues = issues
 		gameProfileCache.built = true
 		for _, issue := range issues {
-			log.Printf("[gameprofiles] %s", issue)
+			logDebug("gameprofiles", "%s", issue)
 		}
 	}
 	out := make([]gameProfileEntry, len(gameProfileCache.entries))
@@ -975,7 +973,7 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 	pid := cmd.Process.Pid
 	noteGameChildStarted(cmd)
 	gameProfileSetRunning(id, pid)
-	log.Printf("[gameprofiles] launched %s (pid %d, dir %s)", id, pid, gameDir)
+	logDebug("gameprofiles", "launched %s (pid %d, dir %s)", id, pid, gameDir)
 	recorder := startTimelapse(appConfig, id)
 	go func() {
 		err := cmd.Wait()
@@ -991,9 +989,9 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 			logFile.Close()
 		}
 		if err != nil {
-			log.Printf("[gameprofiles] %s exited: %v", id, err)
+			logWarn("gameprofiles", "%s exited: %v", id, err)
 		} else {
-			log.Printf("[gameprofiles] %s exited cleanly", id)
+			logDebug("gameprofiles", "%s exited cleanly", id)
 		}
 		if cleanup != nil {
 			cleanup()

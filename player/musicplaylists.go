@@ -15,7 +15,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,7 +133,7 @@ func musicPlaylistsLoadLocked() {
 	}
 	var file musicPlaylistsFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		log.Printf("[MUSIC] %s is unreadable (%v); starting with no saved playlists", path, err)
+		logWarn("music", "%s is unreadable (%v); starting with no saved playlists", path, err)
 		return
 	}
 	musicPlaylistState.items = sanitizeMusicPlaylists(file.Playlists)
@@ -144,11 +143,11 @@ func musicPlaylistsSaveLocked() {
 	path := musicPlaylistFilePath()
 	data, err := json.MarshalIndent(musicPlaylistsFile{Playlists: musicPlaylistState.items}, "", "  ")
 	if err != nil {
-		log.Printf("[MUSIC] cannot encode playlists: %v", err)
+		logWarn("music", "cannot encode playlists: %v", err)
 		return
 	}
 	if err := AtomicWrite(path, data, 0o644); err != nil {
-		log.Printf("[MUSIC] cannot save playlists to %s: %v", path, err)
+		logWarn("music", "cannot save playlists to %s: %v", path, err)
 	}
 }
 
@@ -161,15 +160,6 @@ func musicPlaylistsSnapshot() []musicPlaylist {
 	out := make([]musicPlaylist, len(musicPlaylistState.items))
 	copy(out, musicPlaylistState.items)
 	return out
-}
-
-func musicPlaylistNames() []string {
-	items := musicPlaylistsSnapshot()
-	names := make([]string, 0, len(items))
-	for _, pl := range items {
-		names = append(names, pl.Name)
-	}
-	return names
 }
 
 func musicPlaylistNamed(name string) (musicPlaylist, bool) {
@@ -238,31 +228,6 @@ func musicSaveQueueAsPlaylist(name string) (musicPlaylist, error) {
 	}
 	musicPlaylistsSaveLocked()
 	return clean, nil
-}
-
-func musicDeletePlaylist(name string) bool {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return false
-	}
-	musicPlaylistState.mu.Lock()
-	defer musicPlaylistState.mu.Unlock()
-	musicPlaylistsLoadLocked()
-	for i := range musicPlaylistState.items {
-		if !strings.EqualFold(musicPlaylistState.items[i].Name, name) {
-			continue
-		}
-		musicPlaylistState.items = append(musicPlaylistState.items[:i], musicPlaylistState.items[i+1:]...)
-		if musicPlaylistSelectionIndex >= len(musicPlaylistState.items) {
-			musicPlaylistSelectionIndex = len(musicPlaylistState.items) - 1
-		}
-		if musicPlaylistSelectionIndex < 0 {
-			musicPlaylistSelectionIndex = 0
-		}
-		musicPlaylistsSaveLocked()
-		return true
-	}
-	return false
 }
 
 // musicSelectedPlaylist is the name the settings row is pointing at.

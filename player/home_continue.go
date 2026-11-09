@@ -182,12 +182,41 @@ func homeContinueSnapshot() HomeContinueState {
 		return homeContinueCache.state
 	}
 	homeNoteMusicSession()
-	st := HomeContinueState{}
+	st := homeContinueEmptyState()
 	if it, ok := homeContinueItem(); ok {
 		st = homeContinueStateFor(it)
 	}
 	homeContinueCache.state, homeContinueCache.at, homeContinueCache.valid = st, now, true
 	return st
+}
+
+// homeContinueStartsGames reports whether the first-run Continue card leads to
+// the game library rather than to Media: on a handheld, playing the library is
+// what the device is picked up for; on the desktop, Media is.
+func homeContinueStartsGames() bool {
+	return homeOnHandheld()
+}
+
+// homeContinueEmptyState is the Continue card before anything has been played.
+// The largest card on the screen used to read "Nothing played recently" over
+// an "Open Media" pill on every new device; it now says what the card will
+// hold and offers the first step, which A takes (homeActivate opens the same
+// destination the pill names).
+func homeContinueEmptyState() HomeContinueState {
+	if homeContinueStartsGames() {
+		return HomeContinueState{
+			Chip:     "Get started",
+			Title:    "Your next game starts here",
+			Subtitle: "What you play shows up here, ready to resume.",
+			Action:   "Browse games",
+		}
+	}
+	return HomeContinueState{
+		Chip:     "Get started",
+		Title:    "Your next video starts here",
+		Subtitle: "What you watch shows up here, ready to resume.",
+		Action:   "Open Media",
+	}
 }
 
 // homeContinueInvalidate makes the next frame rebuild the card.

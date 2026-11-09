@@ -72,6 +72,60 @@ static AndroidInputQueue g_queue = {
     .fds = { -1, -1 },
 };
 
+/* The devices behind the events (android.view.InputDevice), each with the
+ * current value of every axis: Android's joystick MotionEvents carry the
+ * whole stick state, so a MOVE for the Y axis still reports X. Guarded by
+ * g_queue.lock. */
+#define INPUT_MAX_DEVICES 32
+static struct {
+    int used;
+    int32_t id;
+    char name[64];
+    float axes[INPUT_AXIS_SLOT_COUNT];
+} g_devices[INPUT_MAX_DEVICES];
+
+static int deviceLocked(int32_t id) {
+    int i, freeSlot = -1;
+    for (i = 0; i < INPUT_MAX_DEVICES; i++) {
+        if (g_devices[i].used && g_devices[i].id == id) return i;
+        if (!g_devices[i].used && freeSlot < 0) freeSlot = i;
+    }
+    if (freeSlot < 0) return -1;
+    memset(&g_devices[freeSlot], 0, sizeof g_devices[freeSlot]);
+    g_devices[freeSlot].used = 1;
+    g_devices[freeSlot].id = id;
+    snprintf(g_devices[freeSlot].name, sizeof g_devices[freeSlot].name, "TrimUI Gamepad");
+    return freeSlot;
+}
+
+void android_inputRegisterDevice(int32_t deviceId, const char *name) {
+    int d;
+    pthread_mutex_lock(&g_queue.lock);
+    d = deviceLocked(deviceId);
+    if (d >= 0 && name && *name) snprintf(g_devices[d].name, sizeof g_devices[d].name, "%s", name);
+    pthread_mutex_unlock(&g_queue.lock);
+}
+
+int android_inputDeviceIds(int32_t *ids, int cap) {
+    int i, n = 0;
+    pthread_mutex_lock(&g_queue.lock);
+    for (i = 0; i < INPUT_MAX_DEVICES && n < cap; i++)
+        if (g_devices[i].used) ids[n++] = g_devices[i].id;
+    pthread_mutex_unlock(&g_queue.lock);
+    return n;
+}
+
+const char *android_inputDeviceName(int32_t deviceId) {
+    static char name[64];
+    int i;
+    snprintf(name, sizeof name, "TrimUI Gamepad");
+    pthread_mutex_lock(&g_queue.lock);
+    for (i = 0; i < INPUT_MAX_DEVICES; i++)
+        if (g_devices[i].used && g_devices[i].id == deviceId) snprintf(name, sizeof name, "%s", g_devices[i].name);
+    pthread_mutex_unlock(&g_queue.lock);
+    return name;
+}
+
 static int64_t nowNs(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -424,6 +478,7 @@ void android_inputInjectKey(int32_t deviceId, int32_t source, int32_t action, in
     struct AndroidInputEvent *slot;
     if (!g_queue.alive) return;
     pthread_mutex_lock(&g_queue.lock);
+    deviceLocked(deviceId);
     slot = takeFreeSlot(&g_queue);
     if (slot) {
         memset(slot, 0, sizeof(*slot));
@@ -442,15 +497,20 @@ void android_inputInjectKey(int32_t deviceId, int32_t source, int32_t action, in
 
 void android_inputInjectAxis(int32_t deviceId, int32_t source, int32_t axis, float value) {
     struct AndroidInputEvent *pending;
+    int dev;
     if (!g_queue.alive) return;
     if (axis < 0 || axis >= INPUT_AXIS_SLOT_COUNT) return;
     pthread_mutex_lock(&g_queue.lock);
+    dev = deviceLocked(deviceId);
+    if (dev >= 0) g_devices[dev].axes[axis] = value;
     /* Merge into an already-queued-but-unread motion event of the same
      * stick — how Android batches joystick updates so a 60 Hz reader never
-     * buries the queue in per-axis MOVE events. */
+     * buries the queue in per-axis MOVE events. Every event carries the
+     * device's whole current axis state. */
     pending = findSlotLocked(&g_queue, 1, AINPUT_EVENT_TYPE_MOTION, deviceId);
     if (pending) {
-        pending->axes[axis] = value;
+        if (dev >= 0) memcpy(pending->axes, g_devices[dev].axes, sizeof pending->axes);
+        else pending->axes[axis] = value;
         pending->eventTime = nowNs();
     } else {
         struct AndroidInputEvent *slot = takeFreeSlot(&g_queue);
@@ -461,7 +521,8 @@ void android_inputInjectAxis(int32_t deviceId, int32_t source, int32_t axis, flo
             slot->source = source ? source : AINPUT_SOURCE_JOYSTICK;
             slot->state = 1;
             slot->motionAction = 2; /* AMOTION_EVENT_ACTION_MOVE */
-            slot->axes[axis] = value;
+            if (dev >= 0) memcpy(slot->axes, g_devices[dev].axes, sizeof slot->axes);
+            else slot->axes[axis] = value;
             slot->eventTime = nowNs();
         }
     }

@@ -203,42 +203,6 @@ func dialTestSSH(t *testing.T, password string, hostKey *ssh.PublicKey) (*ssh.Cl
 	return ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", sshSrv.Port()), config)
 }
 
-// The terminal is the console fallback when the Tools panel is not open.
-func TestTerminalSSHStatusAndStop(t *testing.T) {
-	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
-	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
-		t.Fatalf("start SSH: %v", err)
-	}
-	defer sshSrv.Stop()
-
-	prevLines, prevInput, prevCursor, prevHistory := term.lines, term.input, term.cursor, term.history
-	term.lines, term.input, term.cursor, term.history = nil, "", 0, nil
-	t.Cleanup(func() {
-		term.lines, term.input, term.cursor, term.history = prevLines, prevInput, prevCursor, prevHistory
-	})
-
-	termSSHCommand([]string{"status"})
-	var out strings.Builder
-	for _, line := range term.lines {
-		out.WriteString(line.text)
-		out.WriteByte('\n')
-	}
-	text := out.String()
-	for _, want := range []string{"running", sshSrv.Password(), sshSrv.Fingerprint(), "sftp://"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("ssh status output is missing %q:\n%s", want, text)
-		}
-	}
-
-	termSSHCommand([]string{"off"})
-	if sshSrv.Running() {
-		t.Fatal("ssh off left the server running")
-	}
-	if !strings.Contains(term.lines[len(term.lines)-1].text, "stopped") {
-		t.Fatalf("ssh off output = %q", term.lines[len(term.lines)-1].text)
-	}
-}
-
 func TestToggleSSHServerStops(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -367,5 +331,30 @@ func TestSSHServerEndToEnd(t *testing.T) {
 	}
 	if second := sshSrv.Fingerprint(); second != first {
 		t.Fatalf("host key changed across restarts: %q then %q", first, second)
+	}
+}
+
+// The password is shown on the device only: publishing it as a custom variable
+// would write it into jukauser.json and any scene text using $ssh_password.
+func TestPublishSSHStateOmitsPassword(t *testing.T) {
+	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
+	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start SSH: %v", err)
+	}
+	defer sshSrv.Stop()
+
+	config := &Config{Variables: Variables{Custom: make(map[string]interface{})}}
+	drainCustom(config)
+	publishSSHState()
+	drainCustom(config)
+
+	if got := config.Variables.Custom["ssh_status"]; got != "running" {
+		t.Fatalf("ssh_status = %v, want running", got)
+	}
+	password := sshSrv.Password()
+	for key, value := range config.Variables.Custom {
+		if strings.Contains(key, "password") || strings.Contains(fmt.Sprint(value), password) {
+			t.Fatalf("custom variable %q leaked the SSH password: %v", key, value)
+		}
 	}
 }

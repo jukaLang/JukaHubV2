@@ -66,23 +66,9 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 	iconDraw(renderer, name, rect, iconHomeInk(focused))
 }
 
-// drawHomeIconShapes paints the named glyph at (x, y) inside a w×h box without
-// the atlas texture — the fallback painter, also used by tests that want the
-// glyph's pixels independent of the atlas.
-func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, focused bool) {
-	iconDrawDirect(renderer, name, sdl.Rect{X: x, Y: y, W: w, H: h}, iconHomeInk(focused))
-}
-
 // drawHomeGlyphTinted paints a glyph in an explicit colour: the accent tiles
 // (Media, the Continue play button) carry their icon on a tinted badge, where
 // the theme's body-text colour would be wrong.
 func drawHomeGlyphTinted(renderer *sdl.Renderer, name string, rect sdl.Rect, color sdl.Color) {
 	iconDraw(renderer, name, rect, color)
-}
-
-// paintHomeIcon is the previous painter's signature, kept so any caller of it
-// still compiles. The vector glyphs knock their details out to transparency,
-// so the tile colour it used for knock-outs is no longer needed.
-func paintHomeIcon(renderer *sdl.Renderer, name string, x, y, w, h int32, color, _ sdl.Color) {
-	iconDraw(renderer, name, sdl.Rect{X: x, Y: y, W: w, H: h}, color)
 }

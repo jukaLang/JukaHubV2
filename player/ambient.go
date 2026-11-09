@@ -232,7 +232,6 @@ func ambientEntryBlockReason(config *Config) string {
 		{"achievements panel", raPanel.open},
 		{"accessibility panel", a11y.open},
 		{"wave background panel", wpOpen},
-		{"social notifications", socialNotifOpen},
 		{"smart home panel", smartHomePanel.open},
 		{"memory panel", memPanel.open},
 		{"text editor", fileEditor.open},
@@ -312,19 +311,6 @@ func ambientLeave() {
 	ambientButtons = nil
 	saverDockCardRect = sdl.Rect{}
 	noteUserInputTime(time.Now())
-}
-
-// ambientResetState clears every flag without replacing the mutex, so tests and
-// a future "reset settings" path can return to a known state safely.
-func ambientResetState() {
-	ambient.mu.Lock()
-	ambient.active = false
-	ambient.screenOff = false
-	ambient.blackFrame = false
-	ambient.entered = time.Time{}
-	ambient.sleepUntil = time.Time{}
-	ambient.sleepGen++
-	ambient.mu.Unlock()
 }
 
 // ambientNotifyInput wakes a darked panel. Any real input calls this through
@@ -485,7 +471,7 @@ func ambientPhotoFiles(dir string) []string {
 	}
 	files := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+		if entry.IsDir() || skipScanEntryName(entry.Name()) {
 			continue
 		}
 		if !isImageExtension(filepath.Ext(entry.Name())) {

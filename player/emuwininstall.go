@@ -39,7 +39,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -772,7 +771,8 @@ func emuArchiveRel(name string) (string, error) {
 // emuExtractZip unpacks every directory and regular file of a zip archive into
 // dest through an os.Root, so no entry can land outside it; links and special
 // entries are skipped. progress receives bytes written against the archive's
-// declared total.
+// declared total. The handheld's hakuX install (hakux.go) unpacks through it
+// too.
 func emuExtractZip(ctx context.Context, archive, dest string, progress func(done, total int64)) error {
 	zr, err := zip.OpenReader(archive)
 	if err != nil {
@@ -834,7 +834,14 @@ func emuExtractZip(ctx context.Context, archive, dest string, progress func(done
 		if err != nil {
 			return fmt.Errorf("%w (%s: %v)", errBadToolArchive, f.Name, err)
 		}
-		out, err := root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		// An entry the archive marks executable stays executable: the
+		// handheld's hakuX package carries a launch.sh and its binaries this
+		// way, and a card formatted ext4 honours the bit.
+		perm := os.FileMode(0o644)
+		if f.Mode()&0o111 != 0 {
+			perm = 0o755
+		}
+		out, err := root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
 		if err != nil {
 			rc.Close()
 			return err
@@ -1075,7 +1082,7 @@ func emuWinInstall(ctx context.Context, client *http.Client, spec emuWinSpec, pr
 		return result, err
 	}
 	if release.Digest == "" {
-		log.Printf("[emulators] %s %s has no published digest; verified by TLS from the allowlisted host only", spec.Name, release.Tag)
+		logDebug("emulators", "%s %s has no published digest; verified by TLS from the allowlisted host only", spec.Name, release.Tag)
 	}
 
 	stage, err := os.MkdirTemp(root, ".stage-")
@@ -1136,7 +1143,7 @@ func emuWinInstall(ctx context.Context, client *http.Client, spec emuWinSpec, pr
 		}
 		_ = os.RemoveAll(backup)
 		if renameErr := os.Rename(pending, backup); renameErr != nil {
-			log.Printf("[emulators] could not keep the previous %s: %v", spec.Name, renameErr)
+			logWarn("emulators", "could not keep the previous %s: %v", spec.Name, renameErr)
 			_ = os.RemoveAll(pending)
 		} else {
 			result.Kept = true
@@ -1146,7 +1153,7 @@ func emuWinInstall(ctx context.Context, client *http.Client, spec emuWinSpec, pr
 		return result, moveErr
 	}
 	if err := emuWinWriteManifest(dest, manifest); err != nil {
-		log.Printf("[emulators] could not record the %s install: %v", spec.Name, err)
+		logWarn("emulators", "could not record the %s install: %v", spec.Name, err)
 	}
 	if spec.Buildbot {
 		// A portable RetroArch loads cores from the folder beside it; creating
@@ -1154,7 +1161,7 @@ func emuWinInstall(ctx context.Context, client *http.Client, spec emuWinSpec, pr
 		_ = os.MkdirAll(filepath.Join(dest, "cores"), 0o755)
 	}
 	result.Exe = filepath.Join(dest, exeRel)
-	log.Printf("[emulators] installed %s %s into %s", spec.Name, release.Tag, dest)
+	logDebug("emulators", "installed %s %s into %s", spec.Name, release.Tag, dest)
 	return result, nil
 }
 
@@ -1226,7 +1233,7 @@ func emuWinRollback(name string) (emuWinBackupInfo, error) {
 		_ = os.Remove(filepath.Join(dir, clean))
 	}
 	_ = os.RemoveAll(backup)
-	log.Printf("[emulators] rolled %s back to %s", name, info.Tag)
+	logDebug("emulators", "rolled %s back to %s", name, info.Tag)
 	return info, nil
 }
 
@@ -1255,6 +1262,12 @@ func emuInstallingName() string {
 // emuInstallBarReport drives the install bar from an emuWinProgress callback.
 func emuInstallBarReport(phase string, done, total int64) {
 	if phase != "" {
+		// A phase announcement (no progress yet) starts the bar's counters
+		// over, so the extract phase does not inherit the download's bytes and
+		// show a negative speed.
+		if done == 0 && total == 0 {
+			installBarResetProgress()
+		}
 		installBarPhase(phase)
 	}
 	if done > 0 || total > 0 {
@@ -1353,7 +1366,7 @@ func emuWinFinish(spec emuWinSpec, result emuWinInstallResult, err error) {
 		}
 		installBarFail(installCardDetail(msg))
 		ShowToast(spec.Name+": "+msg, ToastKindError)
-		log.Printf("[emulators] %s install failed: %v", spec.Name, err)
+		logWarn("emulators", "%s install failed: %v", spec.Name, err)
 		return
 	}
 	installBarPhase(installPhaseDone)

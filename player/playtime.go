@@ -160,7 +160,9 @@ func playtimeRecord(seconds int64, scene string) {
 	}
 	playtime.data.Total += seconds
 	playtime.data.Scenes[scene] += seconds
-	playtime.data.Days[playtimeTodayKey()] += seconds
+	day := playtimeTodayKey()
+	playtime.data.Days[day] += seconds
+	playtimeRunNote(day, seconds)
 	playtime.rev++
 	playtimeCheckAchievements()
 }
@@ -225,6 +227,8 @@ func playtimeTick(config *Config) {
 	// Which trophies this setup can award follows the live config (scenes are
 	// injected at startup and replaced by a hot reload). Cheap when unchanged.
 	trophySyncAvailability(config)
+	// Network time or a new zone moved the date: re-anchor (clockjump.go).
+	playtimeClockJumpCheck()
 	now := time.Now()
 	if playtime.lastTick.IsZero() {
 		playtime.lastTick = now
@@ -339,7 +343,9 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 	}
 	playtime.data.Games[title] += secs
 	playtime.data.Total += secs
-	playtime.data.Days[playtimeTodayKey()] += secs
+	day := playtimeTodayKey()
+	playtime.data.Days[day] += secs
+	playtimeRunNote(day, secs)
 	playtime.rev++
 	playtimeCheckAchievements()
 }
@@ -837,22 +843,6 @@ func trophyIndexByID(id string) int {
 	return -1
 }
 
-// playtimeAchievementsOrdered puts what the user has already earned first. The
-// groups keep their definition order, so a trophy never moves between the two
-// halves and the number on it stays put.
-func playtimeAchievementsOrdered(data playtimeData) []playtimeAchievement {
-	done := make([]playtimeAchievement, 0, len(playtimeAchievements))
-	todo := make([]playtimeAchievement, 0, len(playtimeAchievements))
-	for _, a := range playtimeAchievements {
-		if _, ok := data.Unlocked[a.ID]; ok {
-			done = append(done, a)
-			continue
-		}
-		todo = append(todo, a)
-	}
-	return append(done, todo...)
-}
-
 // playtimeCheckAchievements awards every trophy the snapshot now earns and
 // announces each one. The stats are measured once for the whole pass; the
 // collection trophies and the platinum see the unlocks made earlier in it.
@@ -1047,26 +1037,6 @@ func formatPlaytime(seconds int64) string {
 		return fmt.Sprintf("%dh", h)
 	}
 	return fmt.Sprintf("%dh %02dm", h, m)
-}
-
-// playtimeUnlockLabel formats a trophy's saved unlock time for its card. The
-// timestamp is the RFC3339 string playtimeCheckAchievements wrote; a save from
-// before dates were kept, or one that cannot be read back, gets no label rather
-// than a broken one.
-func playtimeUnlockLabel(stamp string) string {
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(stamp))
-	if err != nil {
-		return ""
-	}
-	return "Unlocked " + t.Format("2 Jan 2006")
-}
-
-func playtimeWeekSeconds(data playtimeData) int64 {
-	var total int64
-	for i := 0; i < 7; i++ {
-		total += data.Days[time.Now().AddDate(0, 0, -i).Format("2006-01-02")]
-	}
-	return total
 }
 
 // ── Scene ─────────────────────────────────────────────────────────────────────

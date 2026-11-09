@@ -276,21 +276,6 @@ func isWirelessNetdev(root, name string) bool {
 	return false
 }
 
-// findWirelessInterface picks the wireless netdev under root. Entries are
-// sorted so a device exposing two radios always resolves to the same one.
-func findWirelessInterface(root string) (string, error) {
-	names, err := sysfsNetdevs(root)
-	if err != nil {
-		return "", err
-	}
-	for _, name := range names {
-		if isWirelessNetdev(root, name) {
-			return name, nil
-		}
-	}
-	return "", fmt.Errorf("no wireless interface under %s", root)
-}
-
 // parseWirelessProcIfaces returns the interface names listed in
 // /proc/net/wireless. That file is the kernel's own list of interfaces with
 // wireless extensions, so it names the radio even when the driver creates

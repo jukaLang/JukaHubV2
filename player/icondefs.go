@@ -71,6 +71,39 @@ var iconDefs = [...]iconDef{
 		F: M7 4.5 L19 12 L7 19.5 Z`},
 	{"pause", `
 		F: R6 4.5 3 15 1 R15 4.5 3 15 1`},
+	// ── Playback ───────────────────────────────────────────────────────
+	// The media players' controls (videochrome.go): rewind and fast-forward
+	// seek within a video, skip-back and skip-forward step through a list.
+	{"stop", `
+		F: R6.5 6.5 11 11 2`},
+	{"rewind", `
+		F: M11.5 6.5 L4 12 L11.5 17.5 Z M20 6.5 L12.5 12 L20 17.5 Z`},
+	{"fast-forward", `
+		F: M4 6.5 L11.5 12 L4 17.5 Z M12.5 6.5 L20 12 L12.5 17.5 Z`},
+	{"skip-back", `
+		F: M18.5 6 L9.5 12 L18.5 18 Z
+		s: M5.5 6 V18`},
+	{"skip-forward", `
+		F: M5.5 6 L14.5 12 L5.5 18 Z
+		s: M18.5 6 V18`},
+	{"subtitles", `
+		D: R2.5 5 19 14 3
+		s: M6.5 11 H9.5 M12 11 H17.5 M6.5 15 H13.5 M16 15 H17.5`},
+	{"fullscreen", `
+		s: M4 9 V6 Q4 4 6 4 H9 M15 4 H18 Q20 4 20 6 V9 M20 15 V18 Q20 20 18 20 H15 M9 20 H6 Q4 20 4 18 V15`},
+	{"fullscreen-exit", `
+		s: M9 4 V7 Q9 9 7 9 H4 M15 4 V7 Q15 9 17 9 H20 M20 15 H17 Q15 15 15 17 V20 M4 15 H7 Q9 15 9 17 V20`},
+	{"volume", `
+		D: M3.5 9.5 H7 L12 5 V19 L7 14.5 H3.5 Z
+		s: U13 12 3.5 -48 48 U13 12 7.5 -52 52`},
+	{"volume-low", `
+		D: M3.5 9.5 H7 L12 5 V19 L7 14.5 H3.5 Z
+		s: U13 12 3.5 -48 48`},
+	{"volume-mute", `
+		D: M3.5 9.5 H7 L12 5 V19 L7 14.5 H3.5 Z
+		s: M16 9.5 L21 14.5 M21 9.5 L16 14.5`},
+	{"chevron-down", `
+		s: M6 9.5 L12 15.5 L18 9.5`},
 	{"back", `
 		s: M19 12 H5 M11 6 L5 12 L11 18`},
 	{"search", `

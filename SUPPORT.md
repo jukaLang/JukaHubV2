@@ -41,8 +41,8 @@ installs.
 ## What to expect
 
 - This is a small project maintained by volunteers; first response to an
-  issue or PR is usually quick, but fixes follow triage (see the roadmap's
-  KPI table in [ROADMAP.md](ROADMAP.md)).
+  issue or PR is usually quick, but fixes follow the priorities in the
+  [engineering backlog](player/MODERNIZATION.md).
 - Bugs you cannot reproduce on latest main or latest release get the
   `needs reproduction` label — add the missing detail and it moves again.
 - Feature work is scoped through Discussions/Ideas first so nobody builds a

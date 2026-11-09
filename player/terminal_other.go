@@ -14,6 +14,10 @@ import (
 // termShellCommand runs line through sh -c, so pipes, quotes, wildcards and
 // redirects behave as they do in any shell. It returns nil when the system has
 // no shell; the caller then runs the first word as a program directly.
+//
+// Trust boundary (SEC-12): line is what the user typed at the Terminal prompt
+// on the device (or picked from their own history). Running it in a shell is
+// the Terminal's purpose; no other code path builds a line for it.
 func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 	sh, err := exec.LookPath("sh")
 	if err != nil {

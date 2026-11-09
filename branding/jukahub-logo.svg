@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>JukaHub</title>
+<defs>
+<linearGradient id="jhl-tile-base" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024"><stop offset="0" stop-color="#070B14"/><stop offset="1" stop-color="#0B1426"/></linearGradient>
+<radialGradient id="jhl-tile-bloom0" gradientUnits="userSpaceOnUse" cx="819.2" cy="143.36" r="552.96"><stop offset="0" stop-color="#2563EB" stop-opacity="0.5"/><stop offset="0.17" stop-color="#2563EB" stop-opacity="0.441"/><stop offset="0.33" stop-color="#2563EB" stop-opacity="0.303"/><stop offset="0.5" stop-color="#2563EB" stop-opacity="0.162"/><stop offset="0.67" stop-color="#2563EB" stop-opacity="0.068"/><stop offset="0.83" stop-color="#2563EB" stop-opacity="0.022"/><stop offset="1" stop-color="#2563EB" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhl-tile-bloom1" gradientUnits="userSpaceOnUse" cx="102.4" cy="942.08" r="368.64"><stop offset="0" stop-color="#C084FC" stop-opacity="0.22"/><stop offset="0.17" stop-color="#C084FC" stop-opacity="0.194"/><stop offset="0.33" stop-color="#C084FC" stop-opacity="0.133"/><stop offset="0.5" stop-color="#C084FC" stop-opacity="0.071"/><stop offset="0.67" stop-color="#C084FC" stop-opacity="0.03"/><stop offset="0.83" stop-color="#C084FC" stop-opacity="0.01"/><stop offset="1" stop-color="#C084FC" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhl-tile-bloom2" gradientUnits="userSpaceOnUse" cx="122.88" cy="153.6" r="737.28"><stop offset="0" stop-color="#22D3EE" stop-opacity="0.88"/><stop offset="0.17" stop-color="#22D3EE" stop-opacity="0.777"/><stop offset="0.33" stop-color="#22D3EE" stop-opacity="0.534"/><stop offset="0.5" stop-color="#22D3EE" stop-opacity="0.286"/><stop offset="0.67" stop-color="#22D3EE" stop-opacity="0.119"/><stop offset="0.83" stop-color="#22D3EE" stop-opacity="0.039"/><stop offset="1" stop-color="#22D3EE" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhl-tile-bloom3" gradientUnits="userSpaceOnUse" cx="921.6" cy="921.6" r="768"><stop offset="0" stop-color="#7C3AED" stop-opacity="0.92"/><stop offset="0.17" stop-color="#7C3AED" stop-opacity="0.812"/><stop offset="0.33" stop-color="#7C3AED" stop-opacity="0.558"/><stop offset="0.5" stop-color="#7C3AED" stop-opacity="0.299"/><stop offset="0.67" stop-color="#7C3AED" stop-opacity="0.125"/><stop offset="0.83" stop-color="#7C3AED" stop-opacity="0.04"/><stop offset="1" stop-color="#7C3AED" stop-opacity="0"/></radialGradient>
+<linearGradient id="jhl-seen-base" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024"><stop offset="0" stop-color="#070B14"/><stop offset="1" stop-color="#0B1426"/></linearGradient>
+<radialGradient id="jhl-seen-bloom0" gradientUnits="userSpaceOnUse" cx="819.2" cy="143.36" r="593.3"><stop offset="0" stop-color="#2563EB" stop-opacity="0.499"/><stop offset="0.17" stop-color="#2563EB" stop-opacity="0.441"/><stop offset="0.33" stop-color="#2563EB" stop-opacity="0.303"/><stop offset="0.5" stop-color="#2563EB" stop-opacity="0.162"/><stop offset="0.67" stop-color="#2563EB" stop-opacity="0.068"/><stop offset="0.83" stop-color="#2563EB" stop-opacity="0.022"/><stop offset="1" stop-color="#2563EB" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhl-seen-bloom1" gradientUnits="userSpaceOnUse" cx="102.4" cy="942.08" r="426.78"><stop offset="0" stop-color="#C084FC" stop-opacity="0.189"/><stop offset="0.17" stop-color="#C084FC" stop-opacity="0.167"/><stop offset="0.33" stop-color="#C084FC" stop-opacity="0.114"/><stop offset="0.5" stop-color="#C084FC" stop-opacity="0.061"/><stop offset="0.67" stop-color="#C084FC" stop-opacity="0.026"/><stop offset="0.83" stop-color="#C084FC" stop-opacity="0.008"/><stop offset="1" stop-color="#C084FC" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhl-seen-bloom2" gradientUnits="userSpaceOnUse" cx="122.88" cy="153.6" r="768"><stop offset="0" stop-color="#22D3EE" stop-opacity="0.933"/><stop offset="0.17" stop-color="#22D3EE" stop-opacity="0.823"/><stop offset="0.33" stop-color="#22D3EE" stop-opacity="0.566"/><stop offset="0.5" stop-color="#22D3EE" stop-opacity="0.303"/><stop offset="0.67" stop-color="#22D3EE" stop-opacity="0.126"/><stop offset="0.83" stop-color="#22D3EE" stop-opacity="0.041"/><stop offset="1" stop-color="#22D3EE" stop-opacity="0"/></radialGradient>
+<radialGradient id="jhl-seen-bloom3" gradientUnits="userSpaceOnUse" cx="921.6" cy="921.6" r="797.54"><stop offset="0" stop-color="#7C3AED" stop-opacity="0.981"/><stop offset="0.17" stop-color="#7C3AED" stop-opacity="0.866"/><stop offset="0.33" stop-color="#7C3AED" stop-opacity="0.595"/><stop offset="0.5" stop-color="#7C3AED" stop-opacity="0.319"/><stop offset="0.67" stop-color="#7C3AED" stop-opacity="0.133"/><stop offset="0.83" stop-color="#7C3AED" stop-opacity="0.043"/><stop offset="1" stop-color="#7C3AED" stop-opacity="0"/></radialGradient>
+<clipPath id="jhl-tile"><rect x="56.32" y="56.32" width="911.36" height="911.36" rx="227.84"/></clipPath>
+<clipPath id="jhl-pane"><rect x="168.96" y="168.96" width="686.08" height="686.08" rx="157.8"/></clipPath>
+<linearGradient id="jhl-rim" gradientUnits="userSpaceOnUse" x1="168.96" y1="168.96" x2="855.04" y2="855.04"><stop offset="0" stop-color="#55D6FF"/><stop offset="0.25" stop-color="#55D6FF"/><stop offset="0.75" stop-color="#8B7CFF"/><stop offset="1" stop-color="#8B7CFF"/></linearGradient>
+<linearGradient id="jhl-frost" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.13"/><stop offset="0.25" stop-color="#fff" stop-opacity="0.1"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.08"/><stop offset="0.75" stop-color="#fff" stop-opacity="0.06"/><stop offset="1" stop-color="#fff" stop-opacity="0.05"/></linearGradient>
+<linearGradient id="jhl-sheen" gradientUnits="userSpaceOnUse" x1="168.96" y1="168.96" x2="450.56" y2="450.56"><stop offset="0" stop-color="#fff" stop-opacity="0.07"/><stop offset="0.25" stop-color="#fff" stop-opacity="0.04"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.02"/><stop offset="0.75" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<linearGradient id="jhl-lit" gradientUnits="userSpaceOnUse" x1="168.96" y1="168.96" x2="855.04" y2="855.04"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<linearGradient id="jhl-hair" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024"><stop offset="0" stop-color="#fff" stop-opacity="0.35"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.06"/><stop offset="1" stop-color="#fff" stop-opacity="0.05"/></linearGradient>
+<linearGradient id="jhl-j" gradientUnits="userSpaceOnUse" x1="0" y1="286.72" x2="0" y2="747.52"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#DDF7FF"/></linearGradient>
+<filter id="jhl-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="35.84"/></filter>
+<filter id="jhl-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="30.72"/></filter>
+<filter id="jhl-tight" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="4.1"/></filter>
+<filter id="jhl-rich"><feColorMatrix type="saturate" values="1.35"/></filter>
+</defs>
+<g clip-path="url(#jhl-tile)">
+<rect width="1024" height="1024" fill="url(#jhl-tile-base)"/>
+<rect width="1024" height="1024" fill="url(#jhl-tile-bloom0)"/>
+<rect width="1024" height="1024" fill="url(#jhl-tile-bloom1)"/>
+<rect width="1024" height="1024" fill="url(#jhl-tile-bloom2)"/>
+<rect width="1024" height="1024" fill="url(#jhl-tile-bloom3)"/>
+<rect x="168.96" y="168.96" width="686.08" height="686.08" rx="157.8" fill="none" stroke="url(#jhl-rim)" stroke-width="51.2" opacity="0.30" filter="url(#jhl-soft)"/>
+<rect x="168.96" y="168.96" width="686.08" height="686.08" rx="157.8" fill="#03050E" opacity="0.30" filter="url(#jhl-soft)" transform="translate(0 25.6)"/>
+<g clip-path="url(#jhl-pane)"><g filter="url(#jhl-rich)" transform="translate(512 496.64) scale(1.22) translate(-512 -512)">
+<rect width="1024" height="1024" fill="url(#jhl-seen-base)"/>
+<rect width="1024" height="1024" fill="url(#jhl-seen-bloom0)"/>
+<rect width="1024" height="1024" fill="url(#jhl-seen-bloom1)"/>
+<rect width="1024" height="1024" fill="url(#jhl-seen-bloom2)"/>
+<rect width="1024" height="1024" fill="url(#jhl-seen-bloom3)"/>
+</g>
+<rect x="168.96" y="168.96" width="686.08" height="686.08" rx="157.8" fill="url(#jhl-frost)"/>
+<rect x="168.96" y="168.96" width="686.08" height="686.08" rx="157.8" fill="url(#jhl-sheen)"/>
+<rect x="168.96" y="168.96" width="686.08" height="686.08" rx="157.8" fill="none" stroke="url(#jhl-lit)" stroke-width="30.72" opacity="0.5" filter="url(#jhl-tight)"/>
+</g>
+<rect x="176.13" y="176.13" width="671.74" height="671.74" rx="150.63" fill="none" stroke="url(#jhl-rim)" stroke-width="14.34" opacity="0.9"/>
+<path d="M612.35 271.36H733.18V541.7A210.94 210.94 0 0 1 311.3 541.7A60.42 60.42 0 0 1 432.13 541.7A90.11 90.11 0 0 0 612.35 541.7Z" fill="#55D6FF" opacity="0.45" filter="url(#jhl-glow)"/>
+<path d="M612.35 271.36H733.18V541.7A210.94 210.94 0 0 1 311.3 541.7A60.42 60.42 0 0 1 432.13 541.7A90.11 90.11 0 0 0 612.35 541.7Z" fill="#000A1E" opacity="0.22" filter="url(#jhl-tight)" transform="translate(0 10.24)"/>
+<path d="M612.35 271.36H733.18V541.7A210.94 210.94 0 0 1 311.3 541.7A60.42 60.42 0 0 1 432.13 541.7A90.11 90.11 0 0 0 612.35 541.7Z" fill="url(#jhl-j)"/>
+</g>
+<rect x="56.82" y="56.82" width="910.36" height="910.36" rx="227.34" fill="none" stroke="url(#jhl-hair)" stroke-width="1"/>
+</svg>

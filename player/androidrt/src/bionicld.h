@@ -50,6 +50,17 @@ int apak_ldScan(const char *nameOrPath);
 /* Find a library in the search dirs whose exports contain `symbol`. */
 int apak_ldFindExporter(const char *symbol, char *out, size_t cap);
 
+/* An export of any loaded game library (bundled or a glibc-built one). */
+void *apak_ldSymBundled(const char *name);
+
+/* Visit the game's libraries reachable from root, dependencies first. */
+void apak_ldForEachInitOrder(void *root, void (*fn)(const char *name, void *handle, void *ud), void *ud);
+
+/* Bind a system library name a game imports ("libEGL.so", "libGLESv2.so")
+ * to an already opened host library — the present layer's GPU stack —
+ * instead of the default soname lookup. Call before apak_ldOpen. */
+void apak_ldSetHostLib(const char *virtualName, void *handle, const char *label);
+
 const char *apak_ldLastError(void);
 
 /* Missing-symbol counters of everything loaded so far (for the runner). */

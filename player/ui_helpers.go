@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -78,35 +77,6 @@ func getSmallFont(config *Config) *ttf.Font {
 		font, _ = getCachedFont(config, "default")
 	}
 	return font
-}
-
-// getFieldFont returns a font suitable for data labels.
-func getFieldFont(config *Config) *ttf.Font {
-	font, _ := getCachedFont(config, "medium")
-	if font == nil {
-		font, _ = getCachedFont(config, "default")
-	}
-	return font
-}
-
-// renderTextAligned is a convenience wrapper around drawText for center-aligned text.
-func renderTextAligned(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, color sdl.Color) {
-	if font == nil || renderer == nil || strings.TrimSpace(text) == "" {
-		return
-	}
-	drawText(renderer, font, text, x, y, color, textAlignCenter)
-}
-
-// drawDivider renders a subtle horizontal divider line.
-func drawDivider(renderer *sdl.Renderer, x, y, w int32, color sdl.Color) {
-	if renderer == nil || w <= 0 {
-		return
-	}
-	if color.A == 0 {
-		color = ColorDivider
-	}
-	renderer.SetDrawColor(color.R, color.G, color.B, color.A)
-	renderer.DrawLine(x, y, x+w, y)
 }
 
 // drawPreloadBolt draws the "plays immediately" mark that sits in front of a

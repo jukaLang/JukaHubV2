@@ -29,7 +29,6 @@ package main
 // past the splash: the UI does not depend on them.
 
 import (
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -110,7 +109,7 @@ func bootEnqueueAsync(name string, fn func(note func(string)) error) {
 		started := time.Now()
 		failed := runBootCheck(name, fn, note)
 		if took := time.Since(started); took > 250*time.Millisecond {
-			log.Printf("[startup] boot check %s took %dms", name, took.Milliseconds())
+			logInfo("startup", "boot check %s took %dms", name, took.Milliseconds())
 		}
 		bootWork.mu.Lock()
 		if index < len(bootWork.states) {
@@ -135,12 +134,12 @@ func bootEnqueueAsync(name string, fn func(note func(string)) error) {
 func runBootCheck(name string, fn func(note func(string)) error, note func(string)) (failed bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[startup] boot check %s panicked: %v", name, r)
+			logError("startup", "boot check %s panicked: %v", name, r)
 			failed = true
 		}
 	}()
 	if err := fn(note); err != nil {
-		log.Printf("[startup] boot check %s: %v", name, err)
+		logWarn("startup", "boot check %s: %v", name, err)
 		return true
 	}
 	return false
@@ -156,27 +155,12 @@ func bootWorkSetDetail(index int, detail string) {
 	bootWork.mu.Unlock()
 }
 
-// bootWorkPending reports whether any queued (render-thread) step is still
-// waiting. Async checks are not counted: nothing waits for them.
-func bootWorkPending() bool {
-	bootWork.mu.Lock()
-	defer bootWork.mu.Unlock()
-	return len(bootWork.pending) > 0
-}
-
 // bootWorkSettled reports whether the queue is empty and every async check has
 // reported, which is when the splash may hand over without cutting a row off.
 func bootWorkSettled() bool {
 	bootWork.mu.Lock()
 	defer bootWork.mu.Unlock()
 	return len(bootWork.pending) == 0 && bootWork.async == 0
-}
-
-// bootWorkVersion is the change counter the card's string cache keys on.
-func bootWorkVersion() uint64 {
-	bootWork.mu.Lock()
-	defer bootWork.mu.Unlock()
-	return bootWork.version
 }
 
 // runOneBootStep pops and runs the oldest queued step. It reports false when
@@ -205,7 +189,7 @@ func runOneBootStep() bool {
 	// Anything long enough to be felt is worth a line in the boot log: it is
 	// the difference between "the splash stuttered" and "this step is slow".
 	if took > 20*time.Millisecond {
-		log.Printf("[startup] boot step %s took %dms", step.name, took.Milliseconds())
+		logInfo("startup", "boot step %s took %dms", step.name, took.Milliseconds())
 	}
 
 	bootWork.mu.Lock()
@@ -230,7 +214,7 @@ func runOneBootStep() bool {
 func runBootStep(step bootStep) (failed bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[startup] boot step %s panicked: %v", step.name, r)
+			logError("startup", "boot step %s panicked: %v", step.name, r)
 			failed = true
 		}
 	}()
@@ -336,33 +320,6 @@ func bootWorkSnapshotInto(dst *stageSnapshot) {
 	}
 }
 
-// bootWorkSnapshot is bootWorkSnapshotInto into a fresh value, for callers
-// that keep the result (tests, the log).
-func bootWorkSnapshot() stageSnapshot {
-	var snap stageSnapshot
-	bootWorkSnapshotInto(&snap)
-	return snap
-}
-
-// bootWorkReset empties the queue and its progress. Tests use it between runs;
-// the app never resets a boot that has already queued work. An async check
-// still running when the reset lands reports into rows that no longer exist,
-// which the index guards above ignore.
-func bootWorkReset() {
-	bootWork.mu.Lock()
-	bootWork.pending = nil
-	bootWork.labels = nil
-	bootWork.states = nil
-	bootWork.details = nil
-	bootWork.done = 0
-	bootWork.failures = 0
-	bootWork.current = 0
-	bootWork.hasCurrent = false
-	bootWork.async = 0
-	bootWork.version++
-	bootWork.mu.Unlock()
-}
-
 // bootWorkTick spends the frame's spare time on queued steps. At least one step
 // always runs, so a single slow step cannot starve the queue while the splash
 // is up: the next frame continues from where it stopped.
@@ -444,7 +401,7 @@ func warmSceneCaches(renderer *sdl.Renderer, config *Config, scene SceneConfig) 
 	drawn := func() (ok bool) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[startup] scene warm skipped: %v", r)
+				logInfo("startup", "scene warm skipped: %v", r)
 				ok = false
 			}
 		}()
@@ -457,7 +414,7 @@ func warmSceneCaches(renderer *sdl.Renderer, config *Config, scene SceneConfig) 
 	}()
 
 	if err := renderer.SetRenderTarget(nil); err != nil {
-		log.Printf("[startup] scene warm could not release its target: %v", err)
+		logWarn("startup", "scene warm could not release its target: %v", err)
 		drawn = false
 	}
 	// renderScene leaves clip and blend state set for its own draw pass; the
@@ -494,7 +451,7 @@ func bootWarmCacheInBackground() {
 			defer bootWarmCache.wg.Done()
 			db, err := openSharedCache("jukahub.cache")
 			if err != nil {
-				log.Printf("[startup] cache warm failed: %v", err)
+				logWarn("startup", "cache warm failed: %v", err)
 				return
 			}
 			// The probe read faults the first pages in; correctness does not
@@ -503,8 +460,3 @@ func bootWarmCacheInBackground() {
 		}()
 	})
 }
-
-// bootWaitForWarmCache blocks until the background open has finished. The
-// splash queue uses it as its last step: by then the UI is about to start and
-// the handle must be settled, not half-open.
-func bootWaitForWarmCache() { bootWarmCache.wg.Wait() }

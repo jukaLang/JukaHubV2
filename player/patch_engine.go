@@ -55,10 +55,6 @@ const (
 	PermDir = 0o755
 	// PermExec is the permission for executable files (rwxr-xr-x)
 	PermExec = 0o755
-	// PermFile is the permission for regular files (rw-r-----)
-	PermFile = 0o600
-	// PermConfig is the permission for config files (rw-r--r--)
-	PermConfig = 0o644
 )
 
 // --- Sentinel errors for common failure cases ---
@@ -495,6 +491,9 @@ type PatchState struct {
 	// read the build index. A pass that failed to reach it does not stamp, so
 	// an offline boot retries on the next launch instead of waiting a day.
 	CoreUpdateCheckedAt string `json:"core_update_checked_at,omitempty"`
+	// CoreUpdateNotified names the core builds the last "notify" pass
+	// announced (emulatorautoupdate.go), so they are announced once.
+	CoreUpdateNotified string `json:"core_update_notified,omitempty"`
 	// A newer release that was detected but deliberately not downloaded or
 	// staged: installing waits for the user to confirm in the Patch scene.
 	AvailableUpdateTag   string `json:"available_update_tag,omitempty"`
@@ -995,10 +994,6 @@ func firstLine(s string) string {
 	return truncateRunesSuffix(s, 96, "...")
 }
 
-func downloadHelperTool(tool, target string, config *Config) error {
-	return downloadHelperToolCtx(context.Background(), tool, target, config)
-}
-
 // downloadHelperToolCtx is downloadHelperTool that honours cancellation.
 func downloadHelperToolCtx(ctx context.Context, tool, target string, config *Config) error {
 	// ffmpeg and ffprobe ship together in one FFmpeg bundle, so a single
@@ -1047,13 +1042,6 @@ func ffmpegArchiveExt(url string) string {
 		}
 	}
 	return ".zip"
-}
-
-// downloadFFmpegBundle downloads the FFmpeg build for this platform and
-// installs ffmpeg and ffprobe into the tools directory. The archive nests the
-// binaries a few folders deep, so extraction is by base name.
-func downloadFFmpegBundle(target string, config *Config) error {
-	return downloadFFmpegBundleCtx(context.Background(), target, config)
 }
 
 // toolInstallError is an install failure with the one short line the install
@@ -1443,19 +1431,6 @@ func executableHeaderOK(header []byte) bool {
 	default:
 		return true
 	}
-}
-
-// downloadYtDlp downloads the platform-appropriate standalone yt-dlp build,
-// installs it under the canonical tool name, makes it executable on Unix, and
-// validates the file (size and ELF/PE header) before reporting success.
-//
-// The download is staged *inside the tools directory*, not the system temp
-// directory: on TrimUI, /tmp is a different filesystem from the SD card, so
-// renaming a temp file into place fails with EXDEV (invalid cross-device
-// link). That left yt-dlp downloaded but never installed, while the ffmpeg
-// bundle (which is copied, not renamed) worked.
-func downloadYtDlp(target string, config *Config) error {
-	return downloadYtDlpCtx(context.Background(), target, config)
 }
 
 // downloadYtDlpCtx is downloadYtDlp bounded by ctx (see downloadFileWithProgressCtx).
@@ -2844,6 +2819,12 @@ func DiagnosticsText(config *Config) string {
 	if line := safebootDiagnostic(); line != "" {
 		sb.WriteString(line + "\n")
 	}
+	if line := bootGuardDiagnostic(); line != "" {
+		sb.WriteString(line + "\n")
+	}
+	if report, _ := crashLastReport(); report != "" {
+		sb.WriteString("Last crash   : " + filepath.Base(report) + "\n")
+	}
 	backups, _ := ListBackupSets()
 	sb.WriteString(fmt.Sprintf("Backups      : %d set(s)\n", len(backups)))
 	for _, b := range backups {
@@ -2870,13 +2851,6 @@ func ExportDiagnostics(config *Config) (string, error) {
 		return "", err
 	}
 	return path, nil
-}
-
-func orUnknown(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "Unknown"
-	}
-	return s
 }
 
 // ---------------------------------------------------------------------------

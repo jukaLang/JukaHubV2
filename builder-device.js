@@ -19,6 +19,8 @@
   const state = {
     url: '',
     code: '',
+    // The address the code was saved for: another address never gets it.
+    codeUrl: '',
     auto: false,
     connected: false,
     info: null,
@@ -31,6 +33,9 @@
 
   let autoTimer = null;
   let initialized = false;
+  // An address a link suggested (?device=…). It only fills in the address
+  // field when the panel opens; it is never saved or connected to by itself.
+  let suggestedUrl = '';
 
   function el(id) { return document.getElementById(id); }
 
@@ -95,6 +100,8 @@
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
       state.url = normalizeUrl(saved.url || '');
       state.code = String(saved.code || '').trim();
+      // Saved before codeUrl existed: the code was saved with that address.
+      state.codeUrl = state.code ? normalizeUrl(saved.codeUrl || saved.url || '') : '';
       state.auto = saved.auto === true;
       state.lastHash = saved.lastHash || '';
       state.lastPush = saved.lastPush || null;
@@ -106,6 +113,7 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         url: state.url,
         code: state.code,
+        codeUrl: state.codeUrl,
         auto: state.auto,
         lastHash: state.lastHash,
         lastPush: state.lastPush
@@ -138,7 +146,7 @@
     const url = el('deviceUrl');
     const code = el('deviceCode');
     const auto = el('deviceAutoPush');
-    if (url) url.value = state.url.replace(/^https?:\/\//, '');
+    if (url) url.value = (suggestedUrl || state.url).replace(/^https?:\/\//, '');
     if (code) code.value = state.code;
     if (auto) auto.checked = state.auto;
   }
@@ -150,16 +158,32 @@
     const rawUrl = String((urlInput && urlInput.value) || '').trim();
     const normalized = normalizeUrl(rawUrl);
     if (rawUrl && !normalized) {
+      // Nothing is taken from the fields: the saved address, and the code
+      // that belongs to it, stay as they were.
       state.lastError = 'invalid-url';
-      state.url = '';
       updateButtons();
       return false;
     }
-    if (normalized) {
-      state.url = normalized;
-      if (urlInput) urlInput.value = state.url.replace(/^https?:\/\//, '');
+    const url = normalized || state.url;
+    let code = codeInput ? String(codeInput.value || '').trim().replace(/\s+/g, '') : state.code;
+    if (url !== state.url) {
+      state.connected = false;
+      state.info = null;
     }
-    state.code = String((codeInput && codeInput.value) || state.code || '').trim().replace(/\s+/g, '');
+    // A code belongs to the address it was saved for: another address never
+    // inherits it, or a link that names another host would collect it. A code
+    // typed now is kept, and one saved before any address goes with the first
+    // address the user enters, never with one a link suggested.
+    const fromLink = Boolean(suggestedUrl) && url === suggestedUrl;
+    if (code && code === state.code && (state.codeUrl ? state.codeUrl !== url : fromLink)) {
+      code = '';
+      if (codeInput) codeInput.value = '';
+    }
+    state.url = url;
+    if (urlInput && normalized) urlInput.value = url.replace(/^https?:\/\//, '');
+    suggestedUrl = '';
+    state.code = code;
+    state.codeUrl = code ? url : '';
     state.auto = Boolean(autoInput && autoInput.checked);
     saveSettings();
     updateButtons();
@@ -220,17 +244,24 @@
 
   function connectionError(error) {
     if (error && error.name === 'AbortError') return 'The device did not answer within 8 seconds.';
-    return 'Cannot reach ' + (state.url || 'the device') + '. Check that JukaHub is running, the address is right, and both devices are on the same Wi-Fi.';
+    return 'Cannot reach ' + (state.url || 'the device') + '. Check that Live Builder is on (on the handheld, in Settings under Network), the address is right, and both devices are on the same Wi-Fi.';
+  }
+
+  // connect reaches the address in the panel's fields, or with { saved: true }
+  // the device saved in this browser (the automatic reconnects use that, so
+  // nothing connects to an address only a link suggested).
+  // The address field holds something that is not an address: say so. The
+  // saved device and its code stay as they were.
+  function invalidAddress() {
+    setState('That address is not valid', 'error');
+    setMeta('Use an address like 192.168.1.50:8422, or a full http:// URL.');
+    el('deviceUrl')?.focus();
+    return false;
   }
 
   async function connect(options) {
     const opts = options || {};
-    if (captureFields() === false) {
-      setState('That address is not valid', 'error');
-      setMeta('Use an address like 192.168.1.50:8422, or a full http:// URL.');
-      el('deviceUrl')?.focus();
-      return false;
-    }
+    if (!opts.saved && captureFields() === false) return invalidAddress();
     if (!state.url) {
       setState('Enter the device address first', 'error');
       setWarning('');
@@ -315,7 +346,7 @@
     }
 
     if (!state.connected && !opts.skipConnect) {
-      const ok = await connect({ silent: true });
+      const ok = await connect({ silent: true, saved: true });
       if (!ok) return false;
     }
 
@@ -334,8 +365,24 @@
       if (response.status === 401) {
         state.connected = false;
         setState('Pairing code rejected', 'error');
-        setMeta('That code does not match the handheld. Read it from the device status page or the startup message.');
+        setMeta('That code does not match the handheld. It is shown on the device in Settings, under Network, Live Builder.');
         if (!opts.silent) showToast('Pairing code rejected by the device', 'error');
+        return false;
+      }
+      if (response.status === 429) {
+        // Several wrong codes in a row: the handheld stops comparing codes for
+        // a few minutes, so retrying now cannot help.
+        setState('Too many wrong codes', 'error');
+        setMeta((payload && payload.error) || 'The handheld paused pairing after several wrong codes. Wait a few minutes, then try again.');
+        if (!opts.silent) showToast('The handheld paused pairing for a few minutes', 'error');
+        return false;
+      }
+      if (response.status === 409) {
+        // A design that needs the owner's approval is already waiting on the
+        // handheld; nothing else lands until it is accepted or rejected there.
+        setState('A design is waiting on the handheld', 'error');
+        setMeta((payload && payload.error) || 'Accept or reject the waiting design on the handheld first.');
+        if (!opts.silent) showToast('Accept or reject the waiting design on the handheld first', 'warning');
         return false;
       }
       if (!response.ok) {
@@ -344,6 +391,20 @@
         setMeta(detail);
         if (!opts.silent) showToast('Device rejected the design: ' + detail, 'error');
         return false;
+      }
+      if (payload && payload.quarantined) {
+        // The design can run programs or change protected settings, so the
+        // handheld keeps it until its owner accepts it there. Nothing changed
+        // on the device yet, so the edits stay marked as not synced.
+        const reasons = Array.isArray(payload.details) ? payload.details : [];
+        setState('Waiting for approval on the handheld', 'connected');
+        setMeta('Accept it on the handheld to apply it' + (reasons.length
+          ? ': ' + reasons[0] + (reasons.length > 1 ? ' (and ' + (reasons.length - 1) + ' more)' : '') + '.'
+          : '.'));
+        setWarning(payload.message || 'This design waits for approval on the handheld.');
+        if (!opts.silent) showToast('The handheld asks before applying this design', 'warning');
+        announce('The handheld is asking its owner to approve this design.');
+        return true;
       }
 
       state.lastHash = hashDesign(design);
@@ -377,12 +438,12 @@
   }
 
   async function push() {
-    captureFields();
+    if (captureFields() === false) return invalidAddress();
     return pushConfig(buildEditorConfig());
   }
 
   async function pull() {
-    captureFields();
+    if (captureFields() === false) return invalidAddress();
     if (!state.code) {
       setState('Pairing code needed', 'error');
       el('deviceCode')?.focus();
@@ -390,7 +451,7 @@
       return false;
     }
     if (!state.connected) {
-      const ok = await connect({ silent: true });
+      const ok = await connect({ silent: true, saved: true });
       if (!ok) return false;
     }
     if (!window.confirm('Replace this workspace with the design on the device?')) return false;
@@ -401,6 +462,11 @@
       if (response.status === 401) {
         setState('Pairing code rejected', 'error');
         showToast('Pairing code rejected by the device', 'error');
+        return false;
+      }
+      if (response.status === 429) {
+        setState('Too many wrong codes', 'error');
+        showToast('The handheld paused pairing for a few minutes', 'error');
         return false;
       }
       if (!response.ok) {
@@ -484,7 +550,7 @@
     panel.setAttribute('aria-hidden', 'false');
     const focusTarget = state.url ? el('devicePushBtn') : el('deviceUrl');
     setTimeout(() => focusTarget?.focus(), 0);
-    if (state.url && !state.connected) connect({ silent: true });
+    if (state.url && !state.connected) connect({ silent: true, saved: true });
   }
 
   function closePanel() {
@@ -531,17 +597,24 @@
       if (event.key === 'Enter') { event.preventDefault(); push(); }
     });
 
-    const params = new URLSearchParams(window.location.search);
-    const presetUrl = params.get('device') || params.get('builder');
-    const presetCode = params.get('code');
-    if (presetUrl) state.url = normalizeUrl(presetUrl) || state.url;
-    if (presetCode) state.code = presetCode.trim();
-    if (presetUrl || presetCode) saveSettings();
+    suggestFromLink(window.location.search);
     setDot('offline');
 
     if (state.url) {
-      setTimeout(() => { if (!state.connected) connect({ silent: true }); }, 700);
+      setTimeout(() => { if (!state.connected) connect({ silent: true, saved: true }); }, 700);
     }
+  }
+
+  // A link may suggest a device address (?device= or ?builder=, as the
+  // handheld's own page links here). It only pre-fills the address field
+  // when the panel opens: nothing is saved, nothing connects, and the code
+  // saved in this browser is not sent there unless the user types it again.
+  // A ?code= in a link is ignored.
+  function suggestFromLink(search) {
+    const params = new URLSearchParams(search || '');
+    const url = normalizeUrl(params.get('device') || params.get('builder') || '');
+    suggestedUrl = url && url !== state.url ? url : '';
+    return suggestedUrl;
   }
 
   window.JukaLiveBuilder = {
@@ -553,6 +626,7 @@
     pushConfig,
     pull,
     noteEdit,
+    suggestFromLink,
     isConnected: () => state.connected,
     isDirty,
     getInfo: () => state.info,

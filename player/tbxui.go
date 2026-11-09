@@ -743,21 +743,6 @@ func tbxToneColor(t tbxTone) sdl.Color {
 	return glassA(60)
 }
 
-// tbxToneInk is the tone as readable text on the current theme.
-func tbxToneInk(t tbxTone) sdl.Color {
-	switch t {
-	case tbxToneGood:
-		return ToastSuccessInk()
-	case tbxToneWarn:
-		return ToastWarnInk()
-	case tbxToneBad:
-		return ToastErrorInk()
-	case tbxToneAccent:
-		return glassAccent()
-	}
-	return ColorTextSecondary()
-}
-
 // tbxPillSize measures a pill for text.
 func tbxPillSize(font *ttf.Font, text string) (int32, int32) {
 	tw, th := measureText(font, text)

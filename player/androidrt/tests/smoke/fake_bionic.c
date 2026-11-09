@@ -460,7 +460,8 @@ static void testJni(void *activity) {
     check(clazz != 0, "activity->clazz is a stub object");
     check(((int32_t (*)(void *, void **, int32_t))invoke[6])(vm, &env2, 0x10006) == 0 && env2 == env, "(*vm)->GetEnv");
     check(((int32_t (*)(void *))fn[4])(env) == 0x10006, "(*env)->GetVersion is JNI 1.6");
-    check(((void *(*)(void *, const char *))fn[6])(env, "android/os/Build") == 0, "(*env)->FindClass logs and finds nothing");
+    check(((void *(*)(void *, const char *))fn[6])(env, "android/os/SmokeNoSuchClass") == 0,
+          "(*env)->FindClass logs and finds nothing");
     check(((void *(*)(void *, void *, const char *, const char *))fn[33])(env, 0, "getWindow", "()Landroid/view/Window;") == 0,
           "(*env)->GetMethodID logs and finds nothing");
     check(((uint8_t (*)(void *))fn[228])(env) == 0, "(*env)->ExceptionCheck: never pending");

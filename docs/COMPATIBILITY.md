@@ -180,6 +180,45 @@ RetroArch is using, and activation keeps the previous binary as a `.bak`. This
 channel is nightly, not stable — the buildbot publishes no stable aarch64 tree —
 so treat a fetched build as a candidate to try, not as a guaranteed upgrade.
 
+### Core updates and your save states
+
+A save state is a snapshot of the core's memory in that core's own format, so
+a new build of a core can refuse a state an older build wrote. On the handheld,
+**Settings → Games & emulators → Core updates** decides what the daily check
+does:
+
+| Setting | What happens |
+| --- | --- |
+| **Notify me** (default) | Once a day, while the device charges or after two idle minutes and never during a game, JukaHub reads the buildbot index and compares it with the installed cores. Cores with a different build are announced once (a toast the notification centre keeps); nothing is downloaded. Update them from the Emulators page or the Core-builds page. |
+| **Install automatically** | The same check, then the new builds are installed while the device charges or after two idle minutes, never during a game. |
+| **Off** | No daily check. The pages still update on a press. |
+
+**Start** on the Core builds page steps through the same three settings. The
+setting used to be an on/off switch that was on unless switched off. An
+explicit off stays **Off**, an explicit on (which only the user could have set)
+becomes **Install automatically**, and a card that never touched it gets
+**Notify me**.
+
+Every install, automatic or not, downloads over HTTPS only (redirects
+included), checks the CRC32 the index publishes for the core binary, records
+the SHA-256 of what it installed in the build's `source.json`, and keeps the
+build it replaced as a `.bak` that **R1** on the Emulators page restores. The
+libretro buildbot publishes per-core archives for `linux/aarch64` only in its
+nightly tree, and only CRC32 checksums: there is no stable per-core channel for
+this device and no SHA-256 or signature to verify against.
+
+JukaHub remembers which build of each core was active when
+(`data/core-history.json`, written whenever it replaces a core). A game's page
+compares the time of each save state with that history and, when some states
+were written by a build other than the installed one, says so in one line next
+to **SAVE STATES**, naming the build when it knows it. Rolling the core back
+with **R1** makes those states loadable again. Only replacements JukaHub made
+are recorded; a core changed outside JukaHub is noticed through its file time
+only. Times from a clock that was wrong — anything before 2020, which is what
+the handheld can read before it reaches the network — are never used: such a
+replacement is not recorded, such a state is not judged, and while the
+installed binary carries such a time the line stays off.
+
 Standalone emulators (PPSSPP, mGBA, Flycast) are looked up separately, because
 their upstream releases target desktop Linux rather than this device's userspace
 and launcher scripts. When a release publishes an aarch64 archive it is fetched

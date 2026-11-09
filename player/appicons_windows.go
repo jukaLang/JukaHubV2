@@ -16,7 +16,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,12 +215,12 @@ func requestAppIconExtraction(programs []string) {
 func extractAppIcons(programs []string) {
 	dir := appIconCacheDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("[apps] cannot create the icon cache: %v", err)
+		logWarn("apps", "cannot create the icon cache: %v", err)
 		return
 	}
 	scriptPath := filepath.Join(dir, "extract-icons.ps1")
 	if err := os.WriteFile(scriptPath, []byte(appIconScript), 0o644); err != nil {
-		log.Printf("[apps] cannot write the icon helper: %v", err)
+		logWarn("apps", "cannot write the icon helper: %v", err)
 		return
 	}
 	type iconRequest struct {
@@ -248,7 +247,7 @@ func extractAppIcons(programs []string) {
 		return
 	}
 	if err := os.WriteFile(listPath, data, 0o644); err != nil {
-		log.Printf("[apps] cannot write the icon list: %v", err)
+		logWarn("apps", "cannot write the icon list: %v", err)
 		return
 	}
 	defer os.Remove(listPath)
@@ -261,10 +260,10 @@ func extractAppIcons(programs []string) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("[apps] icon extraction failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		logWarn("apps", "icon extraction failed: %v (%s)", err, strings.TrimSpace(string(out)))
 		return
 	}
-	log.Printf("[apps] icons ready: %s", strings.TrimSpace(string(out)))
+	logDebug("apps", "icons ready: %s", strings.TrimSpace(string(out)))
 	// The render path caches misses; forget them so the new pictures show up
 	// on the next frame instead of on the next scan.
 	dropAppIconPathCache()

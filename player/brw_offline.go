@@ -876,7 +876,7 @@ func brwDrawOnlinePill(r *sdl.Renderer, config *Config, view sdl.Rect) {
 var (
 	brwCardHints = []FooterHint{
 		{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"},
-		{Button: "B", Label: "Back"}, {Button: "Y", Label: "Search"},
+		{Button: "B", Label: "Back"}, {Button: "Y / /", Label: "Search"},
 	}
 	brwGamePadHints = []FooterHint{
 		{Button: "D-Pad", Label: "Move"}, {Button: "A", Label: "Jump"}, {Button: "Y", Label: "Mine"},
@@ -919,19 +919,4 @@ func brwSceneDeparture(config *Config) {
 	brwInfoForget()
 	brwGameEnd(config)
 	jlandSceneDeparture(config, leaving)
-}
-
-// brwResetForTest clears the failures, the card and the game.
-func brwResetForTest() {
-	brwFails.mu.Lock()
-	brwFails.byVar = map[string]brwFailure{}
-	brwFails.mu.Unlock()
-	brwCard.focus, brwCard.count, brwCard.retries = 0, 0, 0
-	brwCard.lastRetry, brwCard.lastProbe = 0, 0
-	brwCard.failAt = time.Time{}
-	brwProbeDone.Store(0)
-	brwRetryBypass = false
-	brwGame.active = false
-	brwGame.pill = sdl.Rect{}
-	brwInfoForget()
 }

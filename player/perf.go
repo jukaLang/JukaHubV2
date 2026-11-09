@@ -18,7 +18,6 @@ package main
 // ──────────────────────────────────────────────────────────────────────
 
 import (
-	"log"
 	"math"
 	"os"
 	"runtime"
@@ -69,22 +68,22 @@ func deviceRAMMB() uint64 {
 // app should never have their experiment silently overridden.
 func applyGCForDevice() {
 	if v := os.Getenv("GOGC"); v != "" {
-		log.Printf("[perf] GOGC=%s set by environment; leaving the collector alone", v)
+		logDebug("perf", "GOGC=%s set by environment; leaving the collector alone", v)
 		return
 	}
 	if v := os.Getenv("GOMEMLIMIT"); v != "" {
-		log.Printf("[perf] GOMEMLIMIT=%s set by environment; leaving the collector alone", v)
+		logDebug("perf", "GOMEMLIMIT=%s set by environment; leaving the collector alone", v)
 		return
 	}
 	handheld := IsTrimuiDevice() || P().IsHandheld()
 	settings, ok := gcSettingsFor(deviceRAMMB(), handheld)
 	if !ok {
-		log.Printf("[perf] GC: stock settings (no memory constraint detected)")
+		logDebug("perf", "GC: stock settings (no memory constraint detected)")
 		return
 	}
 	debug.SetGCPercent(settings.Percent)
 	debug.SetMemoryLimit(settings.MemoryLimit)
-	log.Printf("[perf] GC: GOGC=%d memlimit=%d MB (handheld=%v)", settings.Percent, settings.MemoryLimit>>20, handheld)
+	logDebug("perf", "GC: GOGC=%d memlimit=%d MB (handheld=%v)", settings.Percent, settings.MemoryLimit>>20, handheld)
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -237,7 +236,7 @@ func logTextureMemoryStats(reason string) {
 	}
 	// The three small caches are printed in KB: an avatar cache of 768 KB would
 	// read as "0 MB" and look like it was not being accounted for at all.
-	log.Printf("[tex] %s: total=%d MB (text=%d/%d, labels=%d, thumbs=%d, icons=%dK, chat=%dK, avatars=%dK, video-overlay=%d, frame=%d, ui-layer=%d)",
+	logInfo("tex", "%s: total=%d MB (text=%d/%d, labels=%d, thumbs=%d, icons=%dK, chat=%dK, avatars=%dK, video-overlay=%d, frame=%d, ui-layer=%d)",
 		reason, s.Total()>>20, s.TextCache>>20, textCap>>20, s.HomeText>>20, s.Thumbnails>>20,
 		s.AppIcons>>10, s.ChatImages>>10, s.ChatAvatars>>10,
 		s.VideoOverlay>>20, s.VideoFrame>>20, s.UILayer>>20)

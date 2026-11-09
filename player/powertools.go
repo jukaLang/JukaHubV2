@@ -490,46 +490,6 @@ func powerRunFromTools(config *Config, title, working string, fn func() powerAsy
 	powerStartAsync(title, working, fn)
 }
 
-func powerProbeGatewayScan(config *Config) {
-	gateway := powerGatewayGuess(toolsIPAddress())
-	if gateway == "" {
-		ShowToast("No LAN address — connect to Wi-Fi first", ToastKindWarning)
-		return
-	}
-	powerRunFromTools(config, "Gateway port scan", "Scanning "+gateway+"…", func() powerAsyncResult {
-		return powerAsyncResult{text: powerScanText(gateway, 400*time.Millisecond)}
-	})
-}
-
-func powerProbeClipboardScan(config *Config) {
-	text, err := powerClipboardText()
-	if err != nil || text == "" {
-		ShowToast("Clipboard is empty — copy a host or IP first", ToastKindWarning)
-		return
-	}
-	host, err := powerCleanHost(text)
-	if err != nil {
-		ShowToast(err.Error(), ToastKindWarning)
-		return
-	}
-	powerRunFromTools(config, "Port scan · "+host, "Scanning "+host+"…", func() powerAsyncResult {
-		return powerAsyncResult{text: powerScanText(host, 400*time.Millisecond)}
-	})
-}
-
-func powerProbePing(config *Config) {
-	powerRunFromTools(config, "Ping", "Pinging 1.1.1.1…", func() powerAsyncResult {
-		return powerAsyncResult{text: powerPingSummary("1.1.1.1")}
-	})
-}
-
-func powerProbeTraceroute(config *Config) {
-	powerRunFromTools(config, "Traceroute", "Tracing to 1.1.1.1…", func() powerAsyncResult {
-		out, err := powerTraceRoute("1.1.1.1")
-		return powerAsyncResult{text: out, err: err}
-	})
-}
-
 // powerDNSLastHost remembers the last host looked up, so opening the row again
 // is a correction instead of a retype. It is touched on the UI thread only.
 var powerDNSLastHost string
@@ -569,12 +529,6 @@ func powerProbeDNS(config *Config, q powerDNSQuery) {
 	}
 	powerRunFromTools(config, title, "Resolving "+q.Host+"…", func() powerAsyncResult {
 		return powerAsyncResult{text: powerDNSReport(q)}
-	})
-}
-
-func powerProbeWiFiSignal(config *Config) {
-	powerRunFromTools(config, "Wi-Fi signal", "Reading the local interface…", func() powerAsyncResult {
-		return powerAsyncResult{text: powerWiFiSummary()}
 	})
 }
 

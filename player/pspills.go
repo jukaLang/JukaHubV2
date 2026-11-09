@@ -8,10 +8,20 @@ package main
 // that is meant to read as controls. Both pills stay in the D-pad focus graph
 // (HomeFocusPS4 / HomeFocusPS5) and keep their one-press behaviour: A plays the
 // console, or opens the pairing flow when nothing is paired yet.
+//
+// The group opens with its purpose, "Remote Play", in the capsule's muted ink:
+// "● PS4  ● PS5" on its own read as two status lights, and nothing on screen
+// said that pressing one streams the console to the handheld. The label is
+// part of the capsule, not a control; it is dropped first when the band is too
+// narrow for it. The group is not drawn at all where Remote Play cannot run
+// (psRemoteSupported): on the desktop each pill only answered with a warning.
 
 import (
 	"github.com/veandco/go-sdl2/sdl"
 )
+
+// psPillGroupLabel names what the pills do.
+const psPillGroupLabel = "Remote Play"
 
 // psPillVisual is this frame's state for the whole group.
 type psPillVisual struct {
@@ -19,11 +29,14 @@ type psPillVisual struct {
 	PS5On   bool
 	Focused HomeFocusID
 	Pressed HomeFocusID
+	// Label is the capsule's leading caption; empty draws the pills alone.
+	Label string
 }
 
 // psPillRects lays the group out so its right edge is at `right` and its top at
-// y. A zero group rect means there is no font to measure with.
-func psPillRects(fonts HomeFonts, right, y, height int32) (group, ps4, ps5 sdl.Rect) {
+// y, with room for label at its left end when one is given. A zero group rect
+// means there is no font to measure with.
+func psPillRects(fonts HomeFonts, right, y, height int32, label string) (group, ps4, ps5 sdl.Rect) {
 	if fonts.Small == nil || right <= 0 || height <= 0 {
 		return sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	}
@@ -40,16 +53,25 @@ func psPillRects(fonts HomeFonts, right, y, height int32) (group, ps4, ps5 sdl.R
 	w5, _ := measureText(fonts.Small, "PS5")
 	pill4W := labelPad*2 + dot + dotGap + w4
 	pill5W := labelPad*2 + dot + dotGap + w5
-	groupW := groupPad*2 + pill4W + pillGap + pill5W
+	captionW := int32(0)
+	if label != "" {
+		lw, _ := measureText(fonts.Small, label)
+		if lw > 0 {
+			// The caption's own inset from the capsule's rounded end, and the
+			// gap before the first pill.
+			captionW = labelPad + lw + labelPad/2
+		}
+	}
+	groupW := groupPad*2 + captionW + pill4W + pillGap + pill5W
 	group = sdl.Rect{X: right - groupW, Y: y, W: groupW, H: height}
-	ps4 = sdl.Rect{X: group.X + groupPad, Y: y + groupPad, W: pill4W, H: inner}
+	ps4 = sdl.Rect{X: group.X + groupPad + captionW, Y: y + groupPad, W: pill4W, H: inner}
 	ps5 = sdl.Rect{X: ps4.X + pill4W + pillGap, Y: y + groupPad, W: pill5W, H: inner}
 	return group, ps4, ps5
 }
 
 // renderPSPillGroup draws the group and records both pill rects for focus and
 // clicks. The container is the design's translucent capsule; a paired console
-// lights its own pill, and the focused pill carries the standard cyan ring.
+// lights its own pill, and the focused pill carries the home focus ring.
 func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 sdl.Rect, v psPillVisual) {
 	if renderer == nil || fonts.Small == nil || group.W <= 0 {
 		return
@@ -58,17 +80,32 @@ func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 
 	fillRoundedRect(renderer, group.X, group.Y, group.W, group.H, group.H/2, homeGlass(13))
 	strokeRoundedRect(renderer, group.X, group.Y, group.W, group.H, group.H/2, 1, homeGlass(20))
 
+	// The caption fills the capsule left of the first pill, centred in it.
+	if v.Label != "" && ps4.X > group.X {
+		lw, _ := measureText(fonts.Small, v.Label)
+		slot := ps4.X - group.X
+		if lw > 0 && lw <= slot {
+			drawText(renderer, fonts.Small, v.Label, group.X+(slot-lw)/2,
+				group.Y+(group.H-int32(fonts.Small.Height()))/2, ColorTextMuted(), textAlignLeft)
+		}
+	}
+
 	pill := func(rect sdl.Rect, label string, on bool, id HomeFocusID) {
 		if rect.W <= 0 {
 			return
 		}
 		if v.Focused == id {
+			// The header's focus ring: 3px of accent on the pill, over a soft
+			// bloom, the same weight the header chips and the bell wear.
 			drawHomeFocusGlow(renderer, rect)
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 2, ColorAccent)
+			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, homeGlass(26))
+			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, homeFocusRingWidth, ColorAccent)
 		}
 		if on {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, WithAlpha(ColorAccent, 38))
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, WithAlpha(ColorAccent, 115))
+			if v.Focused != id {
+				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, WithAlpha(ColorAccent, 115))
+			}
 		}
 		dotColor := homeGlass(90)
 		if on {
@@ -84,7 +121,7 @@ func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 
 		fillCircle(renderer, dotCX, rect.Y+rect.H/2, dotR, dotColor)
 
 		text := ColorTextMuted()
-		if on {
+		if on || v.Focused == id {
 			text = ColorTextPrimary()
 		}
 		if v.Pressed == id {

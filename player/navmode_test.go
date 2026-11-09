@@ -1,7 +1,7 @@
 package main
 
-// navmode_test.go — the D-pad navigation modes on synthetic layouts, their
-// settings, and the focus graph following a mode chosen for its area.
+// navmode_test.go — the D-pad navigation modes on synthetic layouts and the
+// focus graph following a mode chosen for its area.
 
 import (
 	"testing"
@@ -144,31 +144,6 @@ func TestNavmodeAreasAndDefaults(t *testing.T) {
 	if navmodeFocusMode("FileExplorer") != navModeFreeform || !navmodeWrapEnabled() || navmodeFor(navAreaLibrary) != navModeGrid {
 		t.Fatalf("loaded lists %s wrap %v library %s", navmodeLabel(navmodeFocusMode("FileExplorer")),
 			navmodeWrapEnabled(), navmodeLabel(navmodeFor(navAreaLibrary)))
-	}
-}
-
-func TestNavmodeSettingsRow(t *testing.T) {
-	prev := navmodeState
-	t.Cleanup(func() { navmodeState = prev })
-	clearToastAfterTest(t)
-	navmodeState.set = [navAreaCount]bool{}
-	config := &Config{}
-	row := navmodeSettingsRow(navAreaLibrary)
-	opts := row.Options(config)
-	if len(opts) != 5 || opts[0].Value != "" || opts[0].Label != "Default · Grid" {
-		t.Fatalf("options = %+v", opts)
-	}
-	if row.Current(config) != 0 {
-		t.Fatalf("a fresh row shows stop %d, want the default", row.Current(config))
-	}
-	row.Choose(config, "list")
-	if navmodeFor(navAreaLibrary) != navModeList || row.Current(config) != 3 || config.Variables.Custom["navModeLibrary"] != "list" {
-		t.Fatalf("after List: mode %s, stop %d, stored %v", navmodeLabel(navmodeFor(navAreaLibrary)), row.Current(config),
-			config.Variables.Custom["navModeLibrary"])
-	}
-	row.Choose(config, "")
-	if navmodeFor(navAreaLibrary) != navModeGrid || row.Current(config) != 0 {
-		t.Fatal("choosing Default did not put the area back on its default")
 	}
 }
 

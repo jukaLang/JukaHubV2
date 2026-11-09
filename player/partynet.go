@@ -1193,33 +1193,3 @@ func partyServerPort() int {
 	}
 	return srv.Port()
 }
-
-// partyStatusLine is a one-line summary for the Tools hub tile.
-func partyStatusLine() string {
-	snap, _, ok, _ := partyState()
-	if !ok {
-		return "Not in a room"
-	}
-	n := len(snap.Members)
-	who := fmt.Sprintf("%d watching", n)
-	if n == 1 {
-		who = "Just you so far"
-	}
-	if partyIsHosting() {
-		return "Hosting " + snap.Code + " · " + who
-	}
-	return "In " + snap.Code + " · " + who
-}
-
-// partyLastError reports the transport error shown under the room header.
-func partyLastError() string {
-	partySession.mu.Lock()
-	defer partySession.mu.Unlock()
-	if partySession.lastErr != "" {
-		return partySession.lastErr
-	}
-	if partySession.client != nil {
-		return partySession.client.Err()
-	}
-	return ""
-}

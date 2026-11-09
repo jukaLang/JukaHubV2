@@ -236,14 +236,6 @@ func bootLiquidRelease() {
 	*k = bootLiquidKit{}
 }
 
-// bootLiquidDropForRenderer forgets a kit owned by a renderer that is about to
-// be destroyed, without destroying it (the renderer frees its textures).
-func bootLiquidDropForRenderer(r *sdl.Renderer) {
-	if bootLiquid.renderer == r {
-		bootLiquid = bootLiquidKit{}
-	}
-}
-
 // bootLiquidTexture uploads straight-alpha bytes in R,G,B,A order — the
 // memory layout of ABGR8888 on the little-endian targets the app runs on — as
 // a blended static texture.

@@ -28,7 +28,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -466,18 +465,6 @@ func snapPreviewStop() {
 	}
 }
 
-// snapPreviewReset is the test hook: it stops the preview and forgets the
-// session's broken-file memo.
-func snapPreviewReset() {
-	snapPreviewStop()
-	snapState.mu.Lock()
-	snapState.broken = map[string]bool{}
-	snapState.since = time.Time{}
-	snapState.lastCheck = time.Time{}
-	snapState.frames = 0
-	snapState.mu.Unlock()
-}
-
 // snapPreviewRun decodes the clip until the context is cancelled. It is the
 // production body of snapStartDecoder.
 func snapPreviewRun(ctx context.Context, path string, config *Config) {
@@ -493,7 +480,7 @@ func snapPreviewRun(ctx context.Context, path string, config *Config) {
 
 	ffmpeg := snapFFmpegPath(config)
 	if ffmpeg == "" {
-		log.Printf("[SNAP] no ffmpeg available; video snaps are off")
+		logDebug("snap", "no ffmpeg available; video snaps are off")
 		snapPreviewMarkBroken(path)
 		return
 	}
@@ -506,12 +493,12 @@ func snapPreviewRun(ctx context.Context, path string, config *Config) {
 	cmd.Stderr = &stderr
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[SNAP] %s: stdout pipe failed: %v", filepath.Base(path), err)
+		logWarn("snap", "%s: stdout pipe failed: %v", filepath.Base(path), err)
 		snapPreviewMarkBroken(path)
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("[SNAP] %s: ffmpeg failed to start: %v", filepath.Base(path), err)
+		logWarn("snap", "%s: ffmpeg failed to start: %v", filepath.Base(path), err)
 		snapPreviewMarkBroken(path)
 		return
 	}
@@ -560,7 +547,7 @@ func snapPreviewRun(ctx context.Context, path string, config *Config) {
 		if idx := strings.IndexByte(reason, '\n'); idx >= 0 {
 			reason = reason[:idx]
 		}
-		log.Printf("[SNAP] %s produced no frames (%s); ignoring it this session", filepath.Base(path), reason)
+		logDebug("snap", "%s produced no frames (%s); ignoring it this session", filepath.Base(path), reason)
 	}
 }
 
@@ -620,7 +607,7 @@ func snapPreviewTexture(renderer *sdl.Renderer, gamePath string) *sdl.Texture {
 	if tex == nil {
 		newTex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_IYUV), sdl.TEXTUREACCESS_STREAMING, w, h)
 		if err != nil {
-			log.Printf("[SNAP] CreateTexture failed: %v", err)
+			logWarn("snap", "CreateTexture failed: %v", err)
 			return nil
 		}
 		tex = newTex
@@ -634,7 +621,7 @@ func snapPreviewTexture(renderer *sdl.Renderer, gamePath string) *sdl.Texture {
 	if err := tex.UpdateYUV(nil, frame[:uStart], int(w),
 		frame[uStart:vStart], int(w)/2,
 		frame[vStart:], int(w)/2); err != nil {
-		log.Printf("[SNAP] texture upload failed: %v", err)
+		logWarn("snap", "texture upload failed: %v", err)
 		tex.Destroy()
 		snapState.mu.Lock()
 		if snapState.tex == tex {
@@ -648,22 +635,6 @@ func snapPreviewTexture(renderer *sdl.Renderer, gamePath string) *sdl.Texture {
 	snapState.uploaded = seq
 	snapState.mu.Unlock()
 	return tex
-}
-
-// snapPreviewDropTexture releases the texture when its renderer goes away. It
-// is called from destroyTestRenderer for the same reason every other
-// renderer-owned cache is.
-func snapPreviewDropTexture() {
-	snapState.mu.Lock()
-	tex := snapState.tex
-	snapState.tex = nil
-	snapState.uploaded = 0
-	snapState.frame = nil
-	snapState.seq++
-	snapState.mu.Unlock()
-	if tex != nil {
-		tex.Destroy()
-	}
 }
 
 // drawSnapFrame letterboxes a 16:9 preview inside the square art box and marks
@@ -719,31 +690,6 @@ func drawSnapFrame(renderer *sdl.Renderer, config *Config, rect sdl.Rect, tex *s
 	dotR := int32(3)
 	fillCircle(renderer, chipX+9, chipY+chipH/2, dotR, installHighlight())
 	renderText(renderer, config, font, label, ColorTextPrimary(), chipX+15, chipY+4)
-}
-
-// snapPreviewOpen reports whether a frame is being shown for this game. The
-// footer uses it to name the feature only when it is actually doing something.
-func snapPreviewOpen(gamePath string) bool {
-	snapState.mu.Lock()
-	defer snapState.mu.Unlock()
-	return snapState.playing && snapState.game == gamePath
-}
-
-// snapPreviewStatus is one line for the diagnostics view and the tests: what
-// the preview is doing right now.
-func snapPreviewStatus() string {
-	snapState.mu.Lock()
-	defer snapState.mu.Unlock()
-	switch {
-	case snapState.playing:
-		return "playing " + filepath.Base(snapState.snap)
-	case snapState.starting:
-		return "starting " + filepath.Base(snapState.snap)
-	case snapState.game == "":
-		return "idle"
-	default:
-		return "waiting for a snap"
-	}
 }
 
 // The only child process here is ffmpeg, started with an argv — never through a

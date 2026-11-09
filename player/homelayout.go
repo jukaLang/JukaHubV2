@@ -133,6 +133,11 @@ type HomeLayout struct {
 	// Arrangement is the alternative layout in force (homeArrangementCustom
 	// when the scene's own geometry is authoritative).
 	Arrangement string
+
+	// geometryEdited is set when jukaconfig.json moved a body card off its
+	// built-in rect: the hand-tuned graph (homeFocusGraph) describes the
+	// built-in composition, so focus then steps by the drawn geometry instead.
+	geometryEdited bool
 }
 
 func NewHomeLayout(width, height int32) *HomeLayout {
@@ -251,11 +256,11 @@ func homeGridRects(width, height int32) map[HomeFocusID]sdl.Rect {
 		HomeFocusContinue: {X: body.X, Y: body.Y, W: cellW, H: 2*cellH + gap},
 	}
 	// Everything else in reading order, skipping the two cells the hero tile
-	// occupies.
+	// occupies. Games follows Media, as in the dashboard.
 	rest := []HomeFocusID{
-		HomeFocusMedia, HomeFocusFiles, HomeFocusPackages,
+		HomeFocusMedia, HomeFocusEmulator, HomeFocusPackages,
 		HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
-		HomeFocusChat, HomeFocusTools, HomeFocusEmulator, HomeFocusSettings,
+		HomeFocusChat, HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
 	}
 	col, row := int32(1), int32(0)
 	for _, id := range rest {
@@ -303,8 +308,11 @@ func (h *HomeLayout) rebuildItems() {
 		return
 	}
 	// A built-in arrangement moves the body cards; the rects below are the
-	// dashboard composition and stay the default for Custom.
-	arrangementRects := homeArrangementRects(h.Arrangement, h.Width, h.Height)
+	// dashboard composition and stay the default for Custom. Both are in the
+	// 1280x720 design space and scaled to the canvas once, by card(): asking
+	// for the arrangement at the canvas size scaled the Brick's cards twice.
+	arrangementRects := homeArrangementRects(h.Arrangement, HomeBaseWidth, HomeBaseHeight)
+	h.geometryEdited = false
 	card := func(id HomeFocusID, title, subtitle, icon string, action HomeAction, rect sdl.Rect) {
 		if override, ok := arrangementRects[id]; ok {
 			rect = override
@@ -323,7 +331,12 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 32, Y: 160, W: 480, H: 320})
 	card(HomeFocusMedia, "Media", "Watch and listen", "media", HomeActionMedia,
 		sdl.Rect{X: 528, Y: 160, W: 720, H: 152})
-	card(HomeFocusFiles, "Files", "Browse storage", "files", HomeActionFiles,
+	// Games heads the row under Media, beside the hero: playing the library is
+	// what a gaming handheld is picked up for, so it is the first tile the
+	// D-pad meets after Continue and Media rather than the fifth of the bottom
+	// row. It opens the game library (games by console, with box art), not the
+	// emulator manager; "Emulator" named the plumbing instead of the thing.
+	card(HomeFocusEmulator, "Games", "Play your library", "emulator", HomeActionEmulator,
 		sdl.Rect{X: 528, Y: 328, W: 230, H: 152})
 	card(HomeFocusPackages, "Packages", "Install and update", "packages", HomeActionPackages,
 		sdl.Rect{X: 774, Y: 328, W: 229, H: 152})
@@ -339,7 +352,7 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 444, Y: 496, W: 189, H: 152})
 	card(HomeFocusTools, "Tools", "Network and system", "tools", HomeActionTools,
 		sdl.Rect{X: 649, Y: 496, W: 189, H: 152})
-	card(HomeFocusEmulator, "Emulator", "Retro library", "emulator", HomeActionEmulator,
+	card(HomeFocusFiles, "Files", "Browse storage", "files", HomeActionFiles,
 		sdl.Rect{X: 854, Y: 496, W: 189, H: 152})
 	card(HomeFocusSettings, "Settings", "Device and design", "settings", HomeActionSettings,
 		sdl.Rect{X: 1059, Y: 496, W: 189, H: 152})
@@ -347,9 +360,10 @@ func (h *HomeLayout) rebuildItems() {
 	// a config tile cannot move it (homeConfigOverlayables).
 	card(HomeFocusSearch, "Search", "Apps, settings, files and the web", "search", HomeActionSearch,
 		sdl.Rect{X: homeSearchPillX, Y: homeSearchPillY, W: homeSearchPillW, H: homeSearchPillH})
-	// Exit sits on the footer band, inset by the frame margin like the rest of
-	// the grid; the design sheet puts it at the band's left end.
-	card(HomeFocusExit, "Exit", "Power down", "exit", HomeActionExit,
+	// The power button at the footer band's left end (home_power.go): a glass
+	// pill that asks before it quits. This is its slot, the design sheet's; the
+	// pill is drawn at its label's width inside it.
+	card(HomeFocusExit, "Exit", "Quit JukaHub", "power", HomeActionExit,
 		sdl.Rect{X: 48, Y: 674, W: 116, H: 36})
 	// The header chips (signal meter, weather, clock, now-playing, bell, update)
 	// are the header text itself: drawHeader replaces every one of these rects
@@ -443,6 +457,9 @@ func (h *HomeLayout) ApplyConfig(elements []Element) {
 			rect := sdl.Rect{X: el.X, Y: el.Y, W: w, H: hgt}
 			if rect.X >= 0 && rect.Y >= 0 &&
 				rect.X+rect.W <= h.Width && rect.Y+rect.H <= h.Height {
+				if homeIsBodyCard(id) && homeRectMoved(item.Rect, rect) {
+					h.geometryEdited = true
+				}
 				item.Rect = rect
 			}
 		}
@@ -459,8 +476,7 @@ func (h *HomeLayout) ApplyConfig(elements []Element) {
 
 // configItemFor maps a config tile's text to the home item it customizes, with
 // the same leniency tile triggers have always matched with: an exact (case
-// insensitive) title, or any title containing "tools" naming the Tools card —
-// the shipped config spells that row "Search / Tools".
+// insensitive) title, or one of the names a card has had (homeTitleAlias).
 func (h *HomeLayout) configItemFor(title string) HomeFocusID {
 	for _, id := range h.Order {
 		item, ok := h.Items[id]
@@ -471,7 +487,21 @@ func (h *HomeLayout) configItemFor(title string) HomeFocusID {
 			return id
 		}
 	}
-	if strings.Contains(strings.ToLower(title), "tools") {
+	return homeTitleAlias(title)
+}
+
+// homeTitleAlias maps a config tile title that is not a card's built-in title
+// to the card it has always meant: "Emulator" — the Games card's name until
+// it was renamed, still in every jukaconfig.json a device kept through an
+// update (the file is a user file) — and any title containing "tools", which
+// is how the shipped config once spelled the Tools row ("Search / Tools").
+func homeTitleAlias(title string) HomeFocusID {
+	t := strings.ToLower(strings.TrimSpace(title))
+	switch t {
+	case "games", "game library", "games library", "library", "emulator", "emulators":
+		return HomeFocusEmulator
+	}
+	if strings.Contains(t, "tools") {
 		return HomeFocusTools
 	}
 	return ""
@@ -488,15 +518,186 @@ func (h *HomeLayout) CurrentAction() HomeAction {
 	return h.CurrentItem().Action
 }
 
+// Move moves focus in the given direction. The hand-tuned graph
+// (homeFocusGraph) describes the dashboard composition; the Hero grid
+// arrangement puts the same cards in other cells, so there a step inside the
+// body is taken by geometry instead (homeGridStep) — otherwise Down from Media
+// followed the dashboard and landed on a card to its right. Leaving the body
+// upwards still follows the graph into the header.
 func (h *HomeLayout) Move(direction FocusDirection) HomeFocusID {
 	if h == nil {
 		return HomeFocusContinue
 	}
+	if h.Arrangement == homeArrangementGrid || h.geometryEdited {
+		// The power button is not a body card, and the graph's Up from it names
+		// the dashboard's Favorites: here Up takes whichever card is drawn
+		// above it.
+		if direction == FocusUp && h.Focus.Current() == HomeFocusExit {
+			if id := h.cardAbove(h.Items[HomeFocusExit].Rect); id != "" && h.Focus.Set(id) {
+				h.Focus.Remember()
+				return id
+			}
+		}
+		if next, ok := h.homeGridStep(direction); ok {
+			if next != h.Focus.Current() && h.Focus.Set(next) {
+				h.Focus.Remember()
+			}
+			return h.Focus.Current()
+		}
+		// Up left the body. The graph's Up from a card under Media names
+		// Media (a body card); here the press means the header, so it takes
+		// the edge Media itself leaves by. The card under the header launcher
+		// keeps its own edge to the launcher.
+		cur := h.Focus.Current()
+		if direction == FocusUp && cur != HomeFocusMedia && cur != h.Focus.TileLink() &&
+			homeIsBodyCard(homeFocusGraph[cur].Up) && h.Focus.Set(HomeFocusMedia) {
+			if next := h.Focus.Move(FocusUp); next != HomeFocusMedia {
+				return next
+			}
+			h.Focus.Set(cur)
+			return h.Focus.Current()
+		}
+	}
 	return h.Focus.Move(direction)
 }
 
+// homeIsBodyCard reports whether id is one of the cards an arrangement places.
+func homeIsBodyCard(id HomeFocusID) bool {
+	for _, b := range homeBodyCards {
+		if b == id {
+			return true
+		}
+	}
+	return false
+}
+
+// homeRectMoved reports whether a config rect differs from a built-in one by
+// more than the rounding device scaling can introduce.
+func homeRectMoved(a, b sdl.Rect) bool {
+	const tol = 4
+	diff := func(x, y int32) bool { return x-y > tol || y-x > tol }
+	return diff(a.X, b.X) || diff(a.Y, b.Y) || diff(a.W, b.W) || diff(a.H, b.H)
+}
+
+// homeBodyCards are the cards an arrangement places (homeGridRects).
+var homeBodyCards = [...]HomeFocusID{
+	HomeFocusContinue, HomeFocusMedia, HomeFocusEmulator, HomeFocusPackages,
+	HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser, HomeFocusChat,
+	HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
+}
+
+// homeGridStep picks the body card a press reaches by the drawn geometry: the
+// nearest enabled card lying wholly past the focused card's edge in that
+// direction, preferring one that shares its row (or column). It reports false
+// when focus is not on a body card, or when an Up press leaves the body, so
+// the graph takes over; at the other edges focus stays where it is.
+func (h *HomeLayout) homeGridStep(direction FocusDirection) (HomeFocusID, bool) {
+	cur := h.Focus.Current()
+	from, ok := h.Items[cur]
+	if !ok || !homeIsBodyCard(cur) || from.Rect.W <= 0 || from.Rect.H <= 0 {
+		return "", false
+	}
+	const tol = 4
+	f := from.Rect
+	best, bestScore := HomeFocusID(""), int64(math.MaxInt64)
+	for _, id := range homeBodyCards {
+		if id == cur || !h.Focus.IsEnabled(id) {
+			continue
+		}
+		r := h.Items[id].Rect
+		if r.W <= 0 || r.H <= 0 {
+			continue
+		}
+		var gap, offset int32
+		switch direction {
+		case FocusRight:
+			if r.X < f.X+f.W-tol {
+				continue
+			}
+			gap, offset = r.X-(f.X+f.W), spanOffset(f.Y, f.H, r.Y, r.H)
+		case FocusLeft:
+			if r.X+r.W > f.X+tol {
+				continue
+			}
+			gap, offset = f.X-(r.X+r.W), spanOffset(f.Y, f.H, r.Y, r.H)
+		case FocusDown:
+			if r.Y < f.Y+f.H-tol {
+				continue
+			}
+			gap, offset = r.Y-(f.Y+f.H), spanOffset(f.X, f.W, r.X, r.W)
+		case FocusUp:
+			if r.Y+r.H > f.Y+tol {
+				continue
+			}
+			gap, offset = f.Y-(r.Y+r.H), spanOffset(f.X, f.W, r.X, r.W)
+		default:
+			return "", false
+		}
+		if gap < 0 {
+			gap = 0
+		}
+		// The cross-axis miss weighs double: a card in the same row a little
+		// further away beats a nearer one a row up or down.
+		score := int64(gap) + 2*int64(offset)
+		if score < bestScore {
+			best, bestScore = id, score
+		}
+	}
+	if best == "" {
+		if direction == FocusUp {
+			return "", false
+		}
+		// Down off the bottom row reaches the power button from the card that
+		// starts over its end of the footer, as Favorites does in the dashboard.
+		if direction == FocusDown && h.Focus.IsEnabled(HomeFocusExit) {
+			if exit := h.Items[HomeFocusExit].Rect; exit.W > 0 && f.X <= exit.X+exit.W {
+				return HomeFocusExit, true
+			}
+		}
+		return cur, true
+	}
+	return best, true
+}
+
+// cardAbove is the enabled body card drawn nearest above r, preferring one
+// that overlaps it horizontally: where Up from the power button lands.
+func (h *HomeLayout) cardAbove(r sdl.Rect) HomeFocusID {
+	if r.W <= 0 || r.H <= 0 {
+		return ""
+	}
+	best, bestScore := HomeFocusID(""), int64(math.MaxInt64)
+	for _, id := range homeBodyCards {
+		if !h.Focus.IsEnabled(id) {
+			continue
+		}
+		c := h.Items[id].Rect
+		if c.W <= 0 || c.H <= 0 || c.Y+c.H > r.Y+4 {
+			continue
+		}
+		score := int64(r.Y-(c.Y+c.H)) + 2*int64(spanOffset(r.X, r.W, c.X, c.W))
+		if score < bestScore {
+			best, bestScore = id, score
+		}
+	}
+	return best
+}
+
+// spanOffset is how far apart two spans are along one axis: zero when they
+// overlap, otherwise the gap between their nearest ends.
+func spanOffset(aStart, aLen, bStart, bLen int32) int32 {
+	switch {
+	case bStart >= aStart+aLen:
+		return bStart - (aStart + aLen)
+	case aStart >= bStart+bLen:
+		return aStart - (bStart + bLen)
+	}
+	return 0
+}
+
 func (h *HomeLayout) FocusAt(x, y int32) bool {
-	if h == nil {
+	// While the power button's card is up the pointer is the card's: hovering
+	// the cards behind it must not move Home's focus.
+	if h == nil || homePowerConfirm.open {
 		return false
 	}
 	for _, id := range h.Order {
@@ -574,6 +775,11 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	h.drawHeader(renderer, fonts, data)
 	h.drawGreeting(renderer, fonts, data)
 
+	// The power button takes its label's width inside its slot, and is a
+	// control only while it can be drawn (home_power.go). Sized before the
+	// footer, whose hints keep clear of it.
+	h.sizePowerPill(fonts)
+
 	// The footer is plain chrome: corner chips draw after it on top of its
 	// band instead of disappearing behind it.
 	h.drawFooter(renderer, fonts, data.ShowBackHint)
@@ -602,7 +808,9 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 		case HomeFocusMedia:
 			h.drawMediaCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		case HomeFocusExit:
-			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
+			if h.Focus.IsEnabled(HomeFocusExit) {
+				h.drawPowerPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
+			}
 		case HomeFocusSearch:
 			h.drawSearchPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift, data.Subtitle)
 		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi:
@@ -653,7 +861,10 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if headerConfig == nil {
 		headerConfig = &Config{}
 	}
-	drawHeaderBrand(renderer, headerConfig, barH, headerCaptionText(data.Version, ""))
+	// The wordmark stands alone on Home. The build number is for whoever files
+	// a bug report, not for the person picking a game: it lives in About, the
+	// Start menu's footer and the update offer, which is where it gets read.
+	drawHeaderBrand(renderer, headerConfig, barH, headerCaptionText("", ""))
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
@@ -731,9 +942,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	companionHeaderRect = sdl.Rect{}
 	ps4TileRect, ps5TileRect = sdl.Rect{}, sdl.Rect{}
 	bandRight := h.Width - scaleX(homeSideMargin, h.Width)
-	qrcSize := scaleY(72, h.Height)
-	if qrcSize > 0 && bandY+qrcSize <= h.Height {
-		renderCompanionHeaderQR(renderer, fonts, sdl.Rect{X: bandRight - qrcSize, Y: bandY, W: qrcSize, H: qrcSize})
+	// The pairing code takes the band's right end at the largest size the band
+	// has room for: from just under the system corner to just above the first
+	// card below it. The code is only as readable as its modules are big, and
+	// renderCompanionHeaderQR sizes them from this square.
+	statusBottom := max32(bellY+bellH, (barH+int32(fonts.Small.Height()))/2+scaleY(6, h.Height))
+	if qr := h.headerQRRect(bandRight, statusBottom); qr.W > 0 {
+		renderCompanionHeaderQR(renderer, fonts, qr)
 	}
 	groupRight := bandRight
 	groupY := bandY
@@ -748,14 +963,27 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if pill := h.Items[HomeFocusSearch].Rect; pill.W > 0 {
 		minGroupX = max32(minGroupX, pill.X+pill.W+scaleX(homeSearchPillGap, h.Width))
 	}
-	if group, p4, p5 := psPillRects(fonts, groupRight, groupY, bandH); group.W > 0 && group.X >= minGroupX {
-		renderPSPillGroup(renderer, fonts, group, p4, p5, psPillVisual{
-			PS4On:   ps4TileCurrentState() == ps4TileLaunch,
-			PS5On:   ps5TileCurrentState() == ps5TileLaunch,
-			Focused: h.Focus.Current(),
-			Pressed: data.Pressed,
-		})
-		ps4TileRect, ps5TileRect = p4, p5
+	// Remote Play only runs on the handheld build (psRemoteSupported); elsewhere
+	// each pill could only answer with a warning, so the group is not drawn and
+	// the D-pad walks past it. The group says what it is ("Remote Play") when
+	// the band has room for the caption, and drops the caption before the pills.
+	if psRemoteSupported() {
+		label := psPillGroupLabel
+		group, p4, p5 := psPillRects(fonts, groupRight, groupY, bandH, label)
+		if group.W > 0 && group.X < minGroupX {
+			label = ""
+			group, p4, p5 = psPillRects(fonts, groupRight, groupY, bandH, label)
+		}
+		if group.W > 0 && group.X >= minGroupX {
+			renderPSPillGroup(renderer, fonts, group, p4, p5, psPillVisual{
+				PS4On:   ps4TileCurrentState() == ps4TileLaunch,
+				PS5On:   ps5TileCurrentState() == ps5TileLaunch,
+				Focused: h.Focus.Current(),
+				Pressed: data.Pressed,
+				Label:   label,
+			})
+			ps4TileRect, ps5TileRect = p4, p5
+		}
 	}
 	h.Focus.SetEnabled(HomeFocusPS4, ps4TileRect.W > 0)
 	h.Focus.SetEnabled(HomeFocusPS5, ps5TileRect.W > 0)
@@ -833,24 +1061,21 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// playing it may still be drawn (naming the headphones), but pressing it
 	// would open nothing, so the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusNowPlaying, HomeFocusUpdate, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
+	// The text chips (clock, forecast, signal meter, now playing) wear the
+	// header ring here. The bell, the release offer and the Remote Play pills
+	// draw their own ring with their own shape (drawNotifBell, drawUpdatePill,
+	// renderPSPillGroup); a second, square-cornered one on top of theirs was
+	// the double outline a focused bell showed.
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusNowPlaying} {
 		if h.Focus.Current() != id {
 			continue
 		}
 		r := h.Items[id].Rect
-		switch id {
-		case HomeFocusUpdate:
-			r = homeUpdateRect
-		case HomeFocusPS5:
-			r = ps5TileRect
-		case HomeFocusPS4:
-			r = ps4TileRect
-		}
 		if r.W <= 0 {
 			continue
 		}
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 2, ColorAccent)
+		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, homeFocusRingWidth, ColorAccent)
 	}
 }
 
@@ -884,6 +1109,44 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 		}
 	}
 	return best
+}
+
+// The header pairing code's size bounds, in 1280x720 canvas units: the band
+// gives it about 100px between the system corner and the cards; the cap keeps a
+// tall window from growing it past the band's proportions, and below the floor
+// a phone could not read it, so the band is left to the launchers instead.
+const (
+	homeHeaderQRMax int32 = 120
+	homeHeaderQRMin int32 = 56
+)
+
+// headerQRRect is the square the header's pairing code is drawn in: right-
+// aligned at bandRight, its top just below the system corner (top) and its
+// bottom clear of the first card under its column — the Media card in the
+// dashboard, whichever card an arrangement or a config puts there otherwise.
+// "Clear" includes that card's focus treatment: it lifts 3px and its ring
+// stands homeFocusRingOutset off it, and neither may cut into the tile.
+// Empty when that leaves less than the floor.
+func (h *HomeLayout) headerQRRect(bandRight, top int32) sdl.Rect {
+	maxSide := scaleY(homeHeaderQRMax, h.Height)
+	y := top + scaleY(6, h.Height)
+	ringOut := max32(2, scaleX(homeFocusRingGap, h.Width)) + homeFocusRingWidth
+	gapBelow := ringOut + 3 + 1
+	bottom := h.Height
+	for _, id := range homeBodyCards {
+		r := h.Items[id].Rect
+		if r.W <= 0 || r.H <= 0 || r.X >= bandRight || r.X+r.W <= bandRight-maxSide || r.Y+r.H <= y {
+			continue
+		}
+		if r.Y < bottom {
+			bottom = r.Y
+		}
+	}
+	side := min32(bottom-gapBelow-y, maxSide)
+	if side < scaleY(homeHeaderQRMin, h.Height) {
+		return sdl.Rect{}
+	}
+	return sdl.Rect{X: bandRight - side, Y: y, W: side, H: side}
 }
 
 // renderHomeBell draws the notification bell in the home header's top-right
@@ -1007,31 +1270,6 @@ func (h *HomeLayout) drawSearchPill(renderer *sdl.Renderer, fonts HomeFonts, ite
 	drawText(renderer, font, text, textX, draw.Y+(draw.H-int32(font.Height()))/2, ColorTextMuted(), textAlignLeft)
 }
 
-// fitHomeTitle picks the largest of the card fonts that prints the whole title
-// inside maxW. The bottom feature row on the compact 4:3 canvas is only ~100px
-// wide per card, and a title that ellipsizes there ("Favo…", "Brow…") reads as
-// a broken label, so the type steps down a tier instead before it truncates.
-func fitHomeTitle(fonts HomeFonts, text string, maxW int32) (*ttf.Font, string) {
-	for _, font := range []*ttf.Font{fonts.Card, fonts.Helper, fonts.Small} {
-		if font == nil {
-			continue
-		}
-		// Cached: ten cards are sized every frame and each one otherwise
-		// walked the candidate fonts with its own SizeUTF8 calls.
-		if w, _ := measureText(font, text); w <= maxW {
-			return font, text
-		}
-	}
-	fallback := fonts.Helper
-	if fallback == nil {
-		fallback = fonts.Card
-	}
-	if fallback == nil {
-		return fonts.Card, text
-	}
-	return fallback, ellipsize(fallback, text, maxW)
-}
-
 func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth, lift float64) {
 	if fonts.Card == nil {
 		return
@@ -1057,8 +1295,15 @@ func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, ite
 		return
 	}
 	badge := sdl.Rect{X: draw.X + pad, Y: draw.Y + pad, W: iconSize, H: iconSize}
-	glyph := drawIconBadge(renderer, badge, false)
-	DrawHomeIcon(renderer, item.Icon, glyph, false)
+	// The focused tile lights its icon the way the Media card always does — the
+	// tinted badge and an accent glyph — so focus is carried by the tile's
+	// content as well as its outline.
+	glyph := drawIconBadge(renderer, badge, focused)
+	if focused {
+		drawHomeGlyphTinted(renderer, item.Icon, glyph, ColorAccent)
+	} else {
+		DrawHomeIcon(renderer, item.Icon, glyph, false)
+	}
 
 	textW := draw.W - pad*2
 	if textW < 24 {
@@ -1127,7 +1372,14 @@ func (h *HomeLayout) drawMediaCard(renderer *sdl.Renderer, fonts HomeFonts, item
 	// the wash has no seam where a second pass would meet the first.
 	fillRoundedGradient(renderer, draw, homeTileRadius, left, right, true)
 	_ = mid
-	strokeRoundedRect(renderer, draw.X, draw.Y, draw.W, draw.H, homeTileRadius, 1, WithAlpha(ColorAccent, 110))
+	// The resting accent edge stays quiet so that focus — the standing-off ring
+	// — is a change a glance can see; at 110 alpha the resting card already
+	// looked half-selected.
+	edge := WithAlpha(ColorAccent, 70)
+	if focused {
+		edge = WithAlpha(ColorAccent, 150)
+	}
+	strokeRoundedRect(renderer, draw.X, draw.Y, draw.W, draw.H, homeTileRadius, 1, edge)
 	if focused {
 		drawHomeFocusRing(renderer, item.Rect, draw, homeTileRadius)
 	}
@@ -1218,24 +1470,26 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		drawContinueThumb(renderer, draw)
 	}
 	if focused {
-		// The hero card is large and its thumbnail is bright, so the standard
-		// 3px accent ring read as part of the artwork. Four pixels outside a
-		// dark inner hairline keeps the selection obvious on every theme.
-		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius, 4, ColorAccent)
-		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius-1, 1, WithAlpha(ColorIconDark, 120))
+		// The hero's thumbnail is bright, and a ring drawn on its edge read as
+		// part of the artwork; the standing-off ring has the dark gap between
+		// the two, so the selection is obvious over any frame or box art.
+		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius, 1, homeCardEdgeFocus())
+		drawHomeFocusRing(renderer, item.Rect, draw, homeTileRadius)
 	} else {
 		strokeRoundedRectAt(renderer, item.Rect, draw, homeTileRadius, 1, homeCardEdge())
 	}
 
 	pad := scaleX(20, h.Width)
 
-	// Continue chip, top-left: the card says what pressing it will do.
+	// Continue chip, top-left: the card says what pressing it will do. With
+	// nothing to resume it is the first-run card (homeContinueEmptyState) and
+	// says how to start instead.
 	chipText := "Continue watching"
 	if c := strings.TrimSpace(state.Chip); c != "" {
 		chipText = c
 	}
-	if !state.HasRecent {
-		chipText = "Ready when you are"
+	if !state.HasRecent && strings.TrimSpace(state.Chip) == "" {
+		chipText = "Get started"
 	}
 	label := strings.ToUpper(chipText)
 	chipW, _ := measureText(fonts.Small, label)
@@ -1264,6 +1518,11 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	title := strings.TrimSpace(state.Title)
 	subtitle := strings.TrimSpace(state.Subtitle)
 	action := "Open Media"
+	if a := strings.TrimSpace(state.Action); a != "" && !state.HasRecent {
+		// The first-run card names its own destination (games on a handheld,
+		// media on the desktop); homeActivate opens the same one.
+		action = a
+	}
 	if state.HasRecent {
 		action = "Resume"
 		if a := strings.TrimSpace(state.Action); a != "" {
@@ -1276,11 +1535,13 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 			subtitle = "Pick up where you left off."
 		}
 	} else {
+		// The most valuable card on the screen is not spent on "nothing here":
+		// it says what it will hold and offers the first step.
 		if title == "" {
-			title = "Nothing played recently"
+			title = "Your next video starts here"
 		}
 		if subtitle == "" {
-			subtitle = "Open Media to start watching or listening."
+			subtitle = "What you watch shows up here, ready to resume."
 		}
 	}
 
@@ -1354,55 +1615,6 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		pillY+(pillH-int32(fonts.Small.Height()))/2, ColorIconDark, textAlignLeft)
 }
 
-// drawChipButton renders a compact pill for the corner buttons (Exit, Back):
-// a small glyph followed by a single label, sized so the text stays readable
-// where the full action card would be too cramped.
-func (h *HomeLayout) drawChipButton(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth float64) {
-	if fonts.Small == nil {
-		return
-	}
-	rect := item.Rect
-	if pressDepth > 0 {
-		rect.Y += homePressOffset(pressDepth, h.Height)
-	}
-	bg := ColorIconSurface
-	fg := ColorTextPrimary()
-	border := ColorBorder
-	if focused {
-		bg = ColorAccent
-		fg = ColorIconDark
-		border = ColorAccent
-	}
-
-	UIButton(renderer, nil, rect, "", UIButtonStyle{
-		Variant:  UIButtonCustom,
-		Fill:     bg,
-		Border:   border,
-		Pill:     true,
-		NoShadow: true,
-	}, UIButtonState{Pressed: pressed})
-
-	// Small glyph on the left, then the label.
-	glyph := rect.H - 16
-	if glyph < 12 {
-		glyph = 12
-	}
-	iconRect := sdl.Rect{X: rect.X + 12, Y: rect.Y + (rect.H-glyph)/2, W: glyph, H: glyph}
-	DrawHomeIcon(renderer, item.Icon, iconRect, focused)
-
-	// The label is ellipsized to the space left of the glyph: a config can
-	// rename this chip (item.Title), and an unmetered label would overflow
-	// the pill it is drawn in.
-	labelX := iconRect.X + iconRect.W + scaleX(8, h.Width)
-	maxLabelW := rect.X + rect.W - scaleX(10, h.Width) - labelX
-	if maxLabelW < scaleY(12, h.Height) {
-		maxLabelW = scaleY(12, h.Height)
-	}
-	chipLabel := ellipsize(fonts.Small, item.Title, maxLabelW)
-	drawText(renderer, fonts.Small, chipLabel, labelX,
-		rect.Y+(rect.H-int32(fonts.Small.Height()))/2, fg, textAlignLeft)
-}
-
 // footerHint pairs a controller button label with the action it performs.
 type footerHint struct {
 	button string
@@ -1411,7 +1623,8 @@ type footerHint struct {
 
 func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBack bool) {
 	// The footer is a 56px translucent band with rounded top corners, inset by
-	// the frame margin like every other row; the Exit pill is a control on it.
+	// the frame margin like every other row: the power button at its left end
+	// (home_power.go, drawn with the cards), the controller hints on the right.
 	footer := ScaleHomeRect(sdl.Rect{X: homeSideMargin, Y: 664, W: 1216, H: 56}, h.Width, h.Height)
 	if footer.H <= 0 {
 		return
@@ -1446,7 +1659,7 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	var badgeWs, groupWs [len(homeFooterHintsStart)]int32
 	total := int32(0)
 	for i, g := range hints {
-		bw, _ := measureText(fonts.Small, g.button)
+		bw, _ := measureText(fonts.Small, homeHintKey(g.button, g.label))
 		lw, _ := measureText(fonts.Small, g.label)
 		badgeWs[i] = max32(badgeD, bw+scaleX(12, h.Width))
 		groupWs[i] = badgeWs[i] + badgeGap + lw
@@ -1455,11 +1668,12 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	if len(hints) > 1 {
 		total += itemGap * int32(len(hints)-1)
 	}
-	// The hints must stay clear of the Exit pill at the band's left end: on a
-	// narrow canvas the least specific hint (the D-pad) is dropped first.
+	// The hints must stay inside the band and clear of the power button at its
+	// left end: on a narrow canvas the least specific hint (the D-pad) is
+	// dropped first.
 	limit := footer.X + scaleX(16, h.Width)
-	if exit := h.Items[HomeFocusExit].Rect; exit.W > 0 {
-		limit = exit.X + exit.W + scaleX(16, h.Width)
+	if power := h.Items[HomeFocusExit].Rect; power.W > 0 && h.Focus.IsEnabled(HomeFocusExit) {
+		limit = max32(limit, power.X+power.W+scaleX(16, h.Width))
 	}
 	right := footer.X + footer.W - scaleX(16, h.Width)
 	first := 0
@@ -1476,7 +1690,7 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 		badge := sdl.Rect{X: x, Y: badgeY, W: badgeWs[i], H: badgeD}
 		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, homeGlass(16))
 		strokeRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, 1, homeGlass(45))
-		drawText(renderer, fonts.Small, g.button, badge.X+badge.W/2,
+		drawText(renderer, fonts.Small, homeHintKey(g.button, g.label), badge.X+badge.W/2,
 			badge.Y+(badge.H-fh)/2, homeGlass(210), textAlignCenter)
 		drawText(renderer, fonts.Small, g.label, badge.X+badge.W+badgeGap, textY, ColorTextMuted(), textAlignLeft)
 		x += groupWs[i] + itemGap
@@ -1485,31 +1699,39 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 
 // homeFooterHintsStart is Home's footer: Home is the root scene, so B has
 // nothing to go back to and the footer names Start, the menu that reaches
-// every other screen. homeFooterHintsBack is the same row for a layout that
-// does have somewhere to go back to. Both must stay the same length.
+// every other screen, and the platform's quit chord — the shortcut beside the
+// power button (exit_chord.go; TrimUI launchers all quit with Select + Start).
+// homeFooterHintsBack is the same row for a layout that does have somewhere
+// to go back to. Both must stay the same length. The row is dropped from the
+// front on a narrow canvas, so the most specific hints sit at the end.
 var (
 	homeFooterHintsStart = [...]footerHint{
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
-		{button: "Start", label: "Menu"},
 		{button: "L2/R2", label: "Sections"},
+		{button: "Start", label: "Menu"},
+		{button: "Select+Start", label: "Quit"},
 	}
 	homeFooterHintsBack = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
-		{button: "B", label: "Back"},
 		{button: "L2/R2", label: "Sections"},
+		{button: "B", label: "Back"},
+		{button: "Select+Start", label: "Quit"},
 	}
 )
 
+// defaultGreeting is the greeting for the hour. Morning starts at five: a
+// handheld picked up at half past midnight is still in the evening for the
+// person holding it, and "Good morning" at 00:30 read as a broken clock.
 func defaultGreeting(now time.Time) string {
 	hour := now.Hour()
 	switch {
-	case hour < 12:
+	case hour >= 5 && hour < 12:
 		return "Good morning"
-	case hour < 18:
+	case hour >= 12 && hour < 18:
 		return "Good afternoon"
 	default:
 		return "Good evening"
@@ -1583,15 +1805,6 @@ func homeTextCacheBudgetBytes() int64 {
 // tiny strings would otherwise never hit the byte budget.
 func homeTextCacheMaxItems() int {
 	return int(sceneBudgetByDevice(homeTextHandheldItems, homeTextDesktopItems))
-}
-
-// homeTextCacheApplyBudget retunes the live label cache from the device branch.
-// The store is a package variable built at init, so pinning the branch after the
-// fact — the scene-navigation harness does exactly that — has to move the
-// operator's ceilings too, the way TextCache.SetBudget does for rendered text.
-func homeTextCacheApplyBudget() {
-	homeTextCache.maxBytes = homeTextCacheBudgetBytes()
-	homeTextCache.maxItems = homeTextCacheMaxItems()
 }
 
 // homeTextCacheBytes reports the cache's memory for the texture accounting log.
@@ -1746,19 +1959,6 @@ func max32(a, b int32) int32 {
 	return b
 }
 
-func DrawHomeCardSurface(renderer *sdl.Renderer, rect sdl.Rect, focused, pressed bool) {
-	DrawHomeCardSurfaceAt(renderer, rect, rect, focused, pressed)
-}
-
-// DrawHomeCardSurfaceAt draws the card's surface and border at rect, taking
-// their shape from base's size. The focus lift grows the card by up to three
-// pixels; shaping it from the settled rect means the whole lift animation is
-// one cached texture per card instead of one per pixel it grows, on the screen
-// whose cards are the largest textures in the shell.
-func DrawHomeCardSurfaceAt(renderer *sdl.Renderer, base, rect sdl.Rect, focused, pressed bool) {
-	drawGlassTile(renderer, base, rect, focused, pressed)
-}
-
 // The shared icon painters (DrawHomeIcon, drawHomeGlyphTinted,
 // drawHomeIconShapes) live in icondraw.go; the glyphs themselves are vector
 // definitions in icondefs.go.
@@ -1783,12 +1983,6 @@ func fillStar(renderer *sdl.Renderer, cx, cy, radius int32, color sdl.Color) {
 		j := (i + 1) % 10
 		fillTriangleFilled(renderer, center, pts[i], pts[j], color)
 	}
-}
-
-// fillQuad fills an arbitrary convex quad as two triangles.
-func fillQuad(renderer *sdl.Renderer, p1, p2, p3, p4 pt, color sdl.Color) {
-	fillTriangleFilled(renderer, p1, p2, p3, color)
-	fillTriangleFilled(renderer, p1, p3, p4, color)
 }
 
 // ellipsize shortens text to fit within a pixel width, appending an ellipsis.

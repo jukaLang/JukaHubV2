@@ -11,7 +11,6 @@ package main
 // finds the pad already open and changes nothing.
 
 import (
-	"log"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -39,14 +38,14 @@ func handleControllerDevice(e *sdl.ControllerDeviceEvent) {
 			return
 		}
 		replaceGameController(c)
-		log.Printf("[GAMEPAD] Opened controller: %s", c.Name())
+		logDebug("gamepad", "Opened controller: %s", c.Name())
 	case sdl.CONTROLLERDEVICEREMOVED:
 		// For a "removed" event Which is the instance id.
 		if gameController == nil || gameController.Joystick() == nil ||
 			gameController.Joystick().InstanceID() != e.Which {
 			return
 		}
-		log.Printf("[GAMEPAD] Controller removed: %s", gameController.Name())
+		logDebug("gamepad", "Controller removed: %s", gameController.Name())
 		replaceGameController(nil)
 		for i := 0; i < sdl.NumJoysticks(); i++ {
 			if !sdl.IsGameController(i) {
@@ -54,7 +53,7 @@ func handleControllerDevice(e *sdl.ControllerDeviceEvent) {
 			}
 			if c := sdl.GameControllerOpen(i); c != nil {
 				replaceGameController(c)
-				log.Printf("[GAMEPAD] Switched to controller: %s", c.Name())
+				logDebug("gamepad", "Switched to controller: %s", c.Name())
 				break
 			}
 		}

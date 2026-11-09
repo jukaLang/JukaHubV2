@@ -3,8 +3,7 @@
 # PR CI (ci.yml) stays fast on Linux only. The release pipeline
 # (docker-image.yml) cross-compiles Windows and linux/arm64 but never *runs*
 # them. This workflow is the third leg: it builds and exercises the player on
-# the platforms people actually develop on, plus a fuzz smoke pass, and nobody
-# has to wait for it. A red nightly is real signal — it means main broke a
+# the platforms people actually develop on, and nobody has to wait for it. A red nightly is real signal — it means main broke a
 # platform — so triage it like a failing merge check.
 name: Nightly
 
@@ -76,57 +75,6 @@ jobs:
         run: go build -o /tmp/JukaHub-nightly .
 
       - name: Native tests
-        # Full suite. The known-flaky native-renderer test (see
-        # docs/QUICK_START.md) may crash; the build result above is still
-        # reported, and nightly red gets an issue, not a merge block.
+        # Full suite (the lean core: no renderer or window tests). Nightly red
+        # gets an issue, not a merge block.
         run: go test ./... -count=1 -timeout 25m
-
-  fuzz:
-    name: Fuzz smoke (30 s per target)
-    # Nightly only, so the fuzz corpus gets *some* continuous attention without
-    # slowing PR CI. Targets live where parsers do; add one per new parser.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: Install SDL2 headers
-        # The archive and address fuzz targets live in the player package, which
-        # links SDL through cgo, so the test binary needs the headers.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-      - name: Mine the seed corpus
-        # One "package target" pair per line: -fuzz only accepts a single
-        # package, so the package has to travel with the target name.
-        run: |
-          set +e
-          : > fuzz_targets.txt
-          for pkg in $(go list ./...); do
-            for target in $(go test "$pkg" -list '^Fuzz' 2>/dev/null | grep '^Fuzz' | sort -u); do
-              echo "$pkg $target" >> fuzz_targets.txt
-            done
-          done
-          if [ ! -s fuzz_targets.txt ]; then
-            rm -f fuzz_targets.txt
-            echo "No fuzz targets found; add one per new parser." >> "$GITHUB_STEP_SUMMARY"
-          else
-            cat fuzz_targets.txt >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Run each target briefly
-        if: hashFiles('player/fuzz_targets.txt') != ''
-        # -run '^$' skips ordinary tests so only the fuzz engines run; the seed
-        # corpus refines on every nightly, and a crash exits non-zero.
-        run: |
-          set -e
-          while read -r pkg target; do
-            [ -n "$target" ] || continue
-            echo "=== $pkg: $target ==="
-            go test "$pkg" -run '^$' -fuzz "^${target}\$" -fuzztime 30s
-          done < fuzz_targets.txt

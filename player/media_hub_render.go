@@ -519,7 +519,7 @@ func mediaHubDrawSearch(renderer *sdl.Renderer, config *Config, rect sdl.Rect, o
 	if focused && !editing {
 		hint := getFontSized(config, "small", 14)
 		if hint != nil {
-			label := "A to type"
+			label := hintSentence("%s to type", "A", "Type")
 			hw, hh := measureText(hint, label)
 			if textW > hw+200 {
 				drawText(renderer, hint, label, rect.X+rect.W-20-hw, rect.Y+(rect.H-hh)/2, ColorTextTertiary(), textAlignLeft)
@@ -1045,9 +1045,11 @@ func mediaHubDrawGridEmpty(renderer *sdl.Renderer, config *Config, rect sdl.Rect
 	case mediaTabHistory:
 		mediaHubDrawState(renderer, config, rect, "@clock", "Nothing watched yet", "Videos you play show up here, with where you stopped.", "", -1, false)
 	case mediaTabFavorites:
-		mediaHubDrawState(renderer, config, rect, "@favorites", "No favorites yet", "Press Y on any video and choose Add to Favorites.", "", -1, false)
+		mediaHubDrawState(renderer, config, rect, "@favorites", "No favorites yet",
+			hintSentence("Press %s on any video and choose Add to Favorites.", "Y", "Details"), "", -1, false)
 	case mediaTabLibrary:
-		mediaHubDrawState(renderer, config, rect, "@folder", "Nothing here any more", "Its files were moved or deleted. B goes back.", "", -1, false)
+		mediaHubDrawState(renderer, config, rect, "@folder", "Nothing here any more",
+			hintSentence("Its files were moved or deleted. %s goes back.", "B", "Back"), "", -1, false)
 	}
 }
 

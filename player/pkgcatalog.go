@@ -26,7 +26,6 @@ import (
 	"errors"
 	"hash/fnv"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,6 +84,9 @@ func pkgParseCatalog(raw []byte) ([]pkgEntry, error) {
 			continue
 		}
 		seen[key] = true
+		// The optional "sha256" and exact "size" the install checks the
+		// download against (pkgverify.go).
+		pkgApplyIntegrity(&p, item)
 		out = append(out, pkgEntry{Pkg: p, Extra: pkgParseExtra(item)})
 	}
 	pkgSortEntries(out)
@@ -685,7 +687,11 @@ const pkgAppItemKey = "\x00jukahub-update"
 const pkgAppInstallTool = "JukaHub update"
 
 // pkgItem is one package as every view draws it. All display strings are
-// computed when the model is built.
+// computed when the model is built. HasRollback marks an installed package
+// with a rollback copy (pkgstage.go); RollbackLabel is its sheet button,
+// RollbackVersion the copy's version ("" when it does not say), and
+// RollbackNewer says the copy is newer than the installed version (after a
+// rollback the same button goes forward again).
 type pkgItem struct {
 	Kind             pkgItemKind
 	Pkg              Package
@@ -697,6 +703,10 @@ type pkgItem struct {
 	Installed        bool
 	InstalledVersion string
 	HasUpdate        bool
+	HasRollback      bool
+	RollbackLabel    string
+	RollbackVersion  string
+	RollbackNewer    bool
 	Size             int64
 	Date             time.Time
 	HasDate          bool
@@ -765,6 +775,7 @@ type pkgModelInput struct {
 	Icons     map[string]string
 	Art       map[string]string
 	Device    DeviceModel
+	Rollbacks map[string]string
 	// AppUpdate is the label of the JukaHub release the header advertises,
 	// "" when there is none.
 	AppUpdate string
@@ -781,6 +792,21 @@ func pkgNewItem(kind pkgItemKind, e pkgEntry, key string, in pkgModelInput) *pkg
 	if kind == pkgKindPackage && it.Installed && it.InstalledVersion != "" && p.Version != "" &&
 		pkgCompareVersions(p.Version, it.InstalledVersion) > 0 {
 		it.HasUpdate = true
+	}
+	// Rollbacks maps a package with a rollback copy to that copy's version
+	// ("" when the copy does not say).
+	if v, ok := in.Rollbacks[key]; ok && it.Installed && kind != pkgKindApp {
+		it.HasRollback = true
+		it.RollbackVersion = v
+		it.RollbackLabel = "Roll back"
+		if label := pkgVersionLabel(v); label != "" {
+			it.RollbackLabel = "Roll back to " + label
+			if it.InstalledVersion != "" && pkgCompareVersions(v, it.InstalledVersion) > 0 {
+				// The kept copy is the newer one: this goes forward again.
+				it.RollbackNewer = true
+				it.RollbackLabel = "Switch back to " + label
+			}
+		}
 	}
 	it.Category, it.CategoryTitle, it.CategoryIcon = pkgCategoryFor(e)
 	it.Size = e.Extra.Size
@@ -1161,12 +1187,15 @@ func pkgReadCatalogCache() ([]pkgEntry, time.Time, error) {
 	return entries, at, nil
 }
 
-// pkgInstalledMeta records what was installed into one package folder.
+// pkgInstalledMeta records what was installed into one package folder: SHA256
+// is the download's hash and Verified says it matched the catalogue's.
 type pkgInstalledMeta struct {
 	Name        string `json:"name"`
 	Version     string `json:"version,omitempty"`
 	Date        string `json:"date,omitempty"`
 	InstalledAt string `json:"installed_at,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Verified    bool   `json:"verified,omitempty"`
 }
 
 // pkgInstalledFile is the installed-version record on disk.
@@ -1215,19 +1244,28 @@ func pkgWriteInstalledMetaLocked(m map[string]pkgInstalledMeta) error {
 }
 
 // pkgRecordInstalled notes the version a package was installed at, which is
-// what lets the store say "Update" when the registry moves on.
-func pkgRecordInstalled(p Package) {
-	pkgMetaMu.Lock()
-	defer pkgMetaMu.Unlock()
-	m := pkgReadInstalledMetaLocked()
-	m[packageDirName(p.Name)] = pkgInstalledMeta{
+// what lets the store say "Update" when the registry moves on, and whether
+// its download was verified.
+func pkgRecordInstalled(p Package, verified bool, sum string) {
+	pkgRecordInstalledMeta(packageDirName(p.Name), pkgInstalledMeta{
 		Name:        p.Name,
 		Version:     strings.TrimSpace(p.Version),
 		Date:        strings.TrimSpace(p.Date),
 		InstalledAt: time.Now().UTC().Format(time.RFC3339),
-	}
+		SHA256:      sum,
+		Verified:    verified,
+	})
+}
+
+// pkgRecordInstalledMeta stores one folder's record (an install, a rollback or
+// a recovered swap).
+func pkgRecordInstalledMeta(key string, meta pkgInstalledMeta) {
+	pkgMetaMu.Lock()
+	defer pkgMetaMu.Unlock()
+	m := pkgReadInstalledMetaLocked()
+	m[key] = meta
 	if err := pkgWriteInstalledMetaLocked(m); err != nil {
-		log.Printf("packages: recording %s: %v", p.Name, err)
+		logWarn("packages", "recording %s: %v", meta.Name, err)
 	}
 }
 
@@ -1241,7 +1279,7 @@ func pkgForgetInstalled(key string) {
 	}
 	delete(m, key)
 	if err := pkgWriteInstalledMetaLocked(m); err != nil {
-		log.Printf("packages: forgetting %s: %v", key, err)
+		logWarn("packages", "forgetting %s: %v", key, err)
 	}
 }
 
@@ -1254,7 +1292,7 @@ func pkgScanInstalled() map[string]bool {
 		return set
 	}
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() && !skipScanEntryName(e.Name()) {
 			set[e.Name()] = true
 		}
 	}

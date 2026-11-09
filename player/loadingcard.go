@@ -115,7 +115,8 @@ func loadingCancelLayout(font *ttf.Font, cardX, cardW, y int32) (pill sdl.Rect, 
 		padX  = int32(10)
 		label = "Cancel"
 	)
-	bw, bh, _ := font.SizeUTF8(loadingCancelButton)
+	// Measured as drawGlassHintBadge names it: Esc while the hints name keys.
+	bw, bh, _ := font.SizeUTF8(hintKeyFor(loadingCancelButton, label))
 	lw, _, _ := font.SizeUTF8(label)
 	pillW := int32(bw) + padX*2
 	total := pillW + gap + int32(lw)

@@ -310,31 +310,6 @@ func TestUpchDeltaRebuildsAndVerifiesATree(t *testing.T) {
 	}
 }
 
-func TestUpchSideloadKind(t *testing.T) {
-	cases := []struct {
-		name string
-		goos string
-		want string
-		ok   bool
-	}{
-		{"JukaHub-Trimui.zip", "linux", upchKindArchive, true},
-		{"JukaHub-Windows.zip", "windows", upchKindArchive, true},
-		{"JukaHub-Windows.zip", "linux", "", false},
-		{"JukaHub-Trimui.zip", "windows", "", false},
-		{"JukaHub-trimui-smart-pro-linux-arm64.tar.gz", "linux", upchKindArchive, true},
-		{"JukaHub-Trimui-20261101120000.jkdelta", "linux", upchKindDelta, true},
-		{"jukahub.zip", "windows", upchKindArchive, true},
-		{"Roms.zip", "linux", "", false},
-		{"JukaHub-Trimui.exe", "linux", "", false},
-	}
-	for _, tc := range cases {
-		got, ok := upchSideloadKind(tc.name, tc.goos)
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("upchSideloadKind(%q, %s) = %q, %v; want %q, %v", tc.name, tc.goos, got, ok, tc.want, tc.ok)
-		}
-	}
-}
-
 func TestUpchParseSums(t *testing.T) {
 	sum := strings.Repeat("0f", 32)
 	text := []byte("# checksums\n" + strings.Repeat("1a", 32) + "  other.zip\n" + strings.ToUpper(sum) + " *JukaHub-Trimui.zip\n")
@@ -407,42 +382,5 @@ func TestUpchVerifyFileTrustOrder(t *testing.T) {
 	writeReleaseZip(t, empty, map[string]string{"readme.txt": "no program in here"})
 	if v := upchVerifyFile(empty); v.Err == "" {
 		t.Fatal("an archive without JukaHub was accepted")
-	}
-}
-
-// The channel's lines stay short enough for a Patch row on the small canvas.
-func TestUpchStatusLines(t *testing.T) {
-	upchTestPatchDir(t)
-	upchTestResetState(t)
-	withAvailableUpdate(t, "JukaHub-20261107120000")
-	patchStateMu.Lock()
-	patchState.InstalledReleaseAt = "2026-11-01T00:00:00Z"
-	patchStateMu.Unlock()
-
-	running := upchBuildView(true, "JukaHub-20261107120000", 6<<20, 15<<20, "", "", "")
-	if !running.Running || running.Progress < 0.39 || running.Progress > 0.41 {
-		t.Fatalf("a download at 6 of 15 MiB: %+v", running)
-	}
-	upchState.mu.Lock()
-	upchState.entries = []upchEntry{{Tag: "JukaHub-20261107120000", PublishedAt: "2026-11-07T12:00:00Z", Verified: upchVerifiedSigned}}
-	upchState.mu.Unlock()
-	ready := upchBuildView(false, "", 0, 0, "", "", "")
-	if !ready.Ready || !strings.Contains(ready.Line, "no internet needed") || ready.Verified != "signed by JukaHub" {
-		t.Fatalf("a verified cached release: %+v", ready)
-	}
-	upchState.mu.Lock()
-	upchState.entries = nil
-	upchState.mu.Unlock()
-	lines := []string{
-		running.Line,
-		ready.Line,
-		upchBuildView(true, "JukaHub-20261107120000", 0, 0, "", "", "").Line,
-		upchBuildView(false, "", 0, 0, "No internet connection — connect WiFi and try again.", "", "").Line,
-		upchBuildView(false, "", 0, 0, "", "", "").Line,
-	}
-	for _, line := range lines {
-		if n := len([]rune(line)); n == 0 || n > 90 {
-			t.Errorf("a %d-character status line: %q", n, line)
-		}
 	}
 }

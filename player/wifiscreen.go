@@ -48,6 +48,7 @@ type wifiScrSheetKey struct {
 	busy      bool
 	detailsAt time.Time
 	diagAt    time.Time
+	keys      hintStamp // the hints' vocabulary and remap (inputhints.go)
 }
 
 // The sheet modes.
@@ -200,6 +201,11 @@ func wifiScrBuildCtrls() []wifiScrCtrl {
 	if wifiPanel.busy && strings.HasPrefix(wifiPanel.busyLabel, "Scanning") {
 		scan = "Scanning…"
 	}
+	// A portal is the one thing on this page that needs doing first: the
+	// network is joined but every request lands on a login page.
+	if PortalSignInURL() != "" {
+		ctrls = append(ctrls, wifiScrCtrl{id: "portal", label: "Sign in"})
+	}
 	if wifiPanel.available {
 		ctrls = append(ctrls, wifiScrCtrl{id: "scan", label: scan})
 	}
@@ -246,6 +252,9 @@ func wifiScrRowMeta(n wifiNetwork, status wifiStatus, busyLabel string) string {
 	case busyLabel != "" && n.SSID != "" && strings.Contains(busyLabel, n.SSID):
 		return strings.TrimSuffix(busyLabel, "…") + "…"
 	case n.Active && status.Connected:
+		if PortalSignInURL() != "" {
+			return "Connected · Sign in required"
+		}
 		if status.IP != "" {
 			return "Connected · " + status.IP
 		}
@@ -857,7 +866,7 @@ func wifiScrSyncSheet() {
 	s := &wifiScr.sheet
 	switch wifiScr.sheetMode {
 	case wifiScrSheetDiag:
-		key := wifiScrSheetKey{mode: wifiScrSheetDiag, busy: wifiPanel.busy, diagAt: wifiPanel.diag.At}
+		key := wifiScrSheetKey{mode: wifiScrSheetDiag, busy: wifiPanel.busy, diagAt: wifiPanel.diag.At, keys: hintStampNow()}
 		if key == wifiScr.sheetKey && s.title != "" {
 			return
 		}
@@ -898,6 +907,7 @@ func wifiScrSyncSheet() {
 			armed:     wifiPanel.confirmForget == n.SSID,
 			busy:      wifiPanel.busy,
 			detailsAt: d.at,
+			keys:      hintStampNow(),
 		}
 		if key == wifiScr.sheetKey && s.title != "" {
 			return
@@ -1048,6 +1058,9 @@ func wifiScrEmptyActivate() {
 // wifiScrCtrlActivate presses a header control.
 func wifiScrCtrlActivate(id string) {
 	switch id {
+	case "portal":
+		PlayActivateSound()
+		openPortalSignIn(appConfig)
 	case "scan":
 		PlayActivateSound()
 		wifiRefreshAsync(true)
@@ -1389,7 +1402,9 @@ func wifiScrFooterHints(hints []FooterHint) []FooterHint {
 		{Button: "B", Label: "Back"},
 		{Button: "X", Label: "Details"},
 		{Button: "Y", Label: "Scan"},
-		{Button: "Select", Label: "Diagnostics"},
+		// "/ I": the keyboard opens diagnostics with I (inputhints.go shows
+		// the half the user can press).
+		{Button: "Select / I", Label: "Diagnostics"},
 	}
 }
 

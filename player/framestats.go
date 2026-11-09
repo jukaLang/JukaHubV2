@@ -24,7 +24,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"time"
@@ -100,7 +99,7 @@ func newFrameStats() *frameStatsState {
 // the work a frame costs — not the idle delay that follows it.
 func frameStatsRecord(d time.Duration) {
 	if line, ok := frameStats.add(d, frameStats.now()); ok {
-		log.Print(line)
+		logInfo("frames", "%s", line)
 	}
 }
 

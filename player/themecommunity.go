@@ -156,22 +156,6 @@ func handleThemeCommunityMouse(mx, my int32, config *Config) bool {
 	return true
 }
 
-func handleThemeCommunityWheel(y int32) bool {
-	if !themeCommunityPanel.open {
-		return false
-	}
-	// The renderer keeps the focused row on screen by deriving its scroll from
-	// the cursor every frame, so a bare scroll offset would be clamped straight
-	// back. One notch moves the focus three rows instead.
-	switch {
-	case y > 0:
-		moveThemeCommunityCursor(3)
-	case y < 0:
-		moveThemeCommunityCursor(-3)
-	}
-	return true
-}
-
 // themeCommunitySwatches are the entry's own colours, so a card reads as the
 // palette before it is installed. A malformed colour is simply not drawn.
 func themeCommunitySwatches(entry communityTheme) []sdl.Color {

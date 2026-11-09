@@ -363,6 +363,72 @@ using the GitHub digest (with the log warning above).
 
 ---
 
+## The Packages store (JukaLang registry)
+
+The **Packages** screen installs apps from the JukaLang registry
+(`packages.json` in the `jukaLang/Packages` repository) into the `packages/`
+folder next to JukaHub. That registry is a plain, unsigned list, separate from
+the signed Patch repository above. An install there works like this:
+
+- **Checksums.** A registry entry may carry `"sha256"` (64 hex digits, a
+  `sha256:` prefix is accepted) and, with it, an exact `"size"` in bytes. A
+  download whose hash or size differs is refused before anything is unpacked,
+  and so is an entry whose `sha256` is present but is not a SHA-256. Entries
+  without a hash still install, because the registry publishes none yet: the
+  package page labels them **Not verified**, the install toast says so, and the
+  log records the download's own SHA-256 every time.
+
+  ```json
+  { "name": "My app", "version": "1.2", "download": "https://…/my-app.zip",
+    "sha256": "<64 hex digits>", "size": 482113 }
+  ```
+
+- **Streaming.** The download goes straight to a file in
+  `packages/.jukahub-staging/`, hashed as it arrives. Nothing is held in
+  memory, and a download is capped by its published size or at 1 GiB. It
+  starts only when the card has room for it plus 64 MiB; one whose size
+  nobody states checks again every 32 MiB.
+- **Staging.** A zip is unpacked into `packages/.jukahub-staging/<name>/`
+  through an `os.Root`. An entry that is absolute, climbs out with `..`, is a
+  link, a device or a pipe, names a file twice, or uses a name the system
+  cannot store safely (a reserved Windows name) stops the install. So does a
+  card without room for the unpacked size plus 64 MiB.
+- **Swap.** Only a complete, verified copy replaces the installed one, by two
+  renames: the installed folder becomes the rollback copy
+  (`packages/.jukahub-rollback/<name>/`), and the new one takes its place. A
+  failed or cancelled install leaves the installed version exactly as it was.
+  A power cut between the two renames is finished the next time Packages
+  opens (a small journal file tells it apart from a folder you deleted
+  yourself). Each step is flushed to the card before the next one relies on
+  it. In the rare case that a failed swap cannot even put the old version
+  back, the toast says so; installing that package again finishes the swap
+  first, and so does opening Packages after a restart.
+- **Your files stay.** Each installed folder carries
+  `.jukahub-package.json`, which lists the files the package itself
+  installed. Anything else in the folder, such as settings or saves the app
+  wrote, moves into the new version. A folder installed before this list
+  existed keeps every file the new version does not replace, as unpacking over
+  the folder used to. If some of your files cannot be moved (one is in use),
+  the next update stops and names the file; after three such refusals that
+  old copy is kept whole in `packages/.jukahub-rollback/.kept-<name>-…`
+  instead, so an update is never blocked for good and nothing is deleted.
+  The same happens when the installed version's list cannot be read: an old
+  copy is only deleted once the list says your files are out of it.
+- **Roll back.** The package page offers **Roll back to v…** while a rollback
+  copy exists. It swaps the two versions; afterwards the same button reads
+  **Switch back to v…** and goes forward again. Removing a package removes its
+  rollback copy and any kept copy too, each moved into
+  `packages/.jukahub-trash/` by one rename before it is deleted, so a removal
+  cut short never leaves half a copy behind. **Reinstall** no longer
+  empties the folder first: it is an install like any other, so a failed
+  reinstall leaves the package working.
+
+The registry has no signature yet. Publishing hashes in the registry, then
+signing it and making hashes mandatory, is tracked in
+[MODERNIZATION.md](../player/MODERNIZATION.md).
+
+---
+
 ## Related
 
 - [Building](BUILDING.md) — release artifacts and the compile stamp the updater compares

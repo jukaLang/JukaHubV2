@@ -18,20 +18,10 @@ type pt struct{ x, y int32 }
 
 // Home screen layout constants (px at 720p; reduced on smaller viewports).
 const (
-	HomeMargin          int32 = 28
-	HomeTopBarH         int32 = 56 // matches the home header height so the bar never shifts between screens
-	HomeTopBarHSmall    int32 = 40
-	HomeFooterH         int32 = 48
-	HomeFooterHSmall    int32 = 42
-	HomeSectionGap      int32 = 14
-	HomeCardGap         int32 = 14
-	HomeCols            int32 = 4
-	HomeColsSmall       int32 = 3
-	HomeColsTiny        int32 = 2
-	HomeContinueH       int32 = 112
-	HomeCardHMax        int32 = 158
-	HomeCardHMin        int32 = 118
-	HomeTileSlotMissing int   = -1
+	HomeTopBarH      int32 = 56 // matches the home header height so the bar never shifts between screens
+	HomeTopBarHSmall int32 = 40
+	HomeFooterH      int32 = 48
+	HomeFooterHSmall int32 = 42
 )
 
 var (
@@ -495,24 +485,9 @@ func PanelFill(alpha uint8) sdl.Color {
 	return WithAlpha(ColorSurfaceAlt, alpha)
 }
 
-// CardFill returns the standard card/row background color.
-func CardFill() sdl.Color {
-	return ColorSurfaceRaised
-}
-
 // ShadowFill returns a shadow color at the given alpha.
 func ShadowFill(alpha uint8) sdl.Color {
 	return WithAlpha(ColorShadow, alpha)
-}
-
-// SurfaceHighlight returns a soft white top sheen at the given alpha.
-func SurfaceHighlight(alpha uint8) sdl.Color {
-	return WithAlpha(surfaceHighlightColor, alpha)
-}
-
-// TopSheen returns the ultra-subtle top highlight used on cards/rows.
-func TopSheen(alpha uint8) sdl.Color {
-	return WithAlpha(topSheenColor, alpha)
 }
 
 // TextPrimary returns the primary text color.
@@ -532,24 +507,9 @@ func HomeCardColor() sdl.Color {
 	return ColorCard
 }
 
-// HomeCardFocusColor returns the brighter card background color for focused tiles.
-func HomeCardFocusColor() sdl.Color {
-	return ColorCardFocus
-}
-
 // HomeBorderColor returns the border color for Home cards.
 func HomeBorderColor() sdl.Color {
 	return ColorBorder
-}
-
-// HomeFocusColor returns the cyan accent color for focus rings.
-func HomeFocusColor() sdl.Color {
-	return focusColorForAccent(accentColor)
-}
-
-// HomeFooterColor returns the footer background color.
-func HomeFooterColor() sdl.Color {
-	return ColorFooter
 }
 
 // TextTertiary returns the tertiary / placeholder text color.
@@ -569,12 +529,6 @@ func ToastInfo() sdl.Color { return ColorToastInfo }
 // ToastSuccess returns the semantic success toast color.
 func ToastSuccess() sdl.Color { return ColorToastSuccess }
 
-// Accent returns the primary accent color.
-func Accent() sdl.Color { return ColorAccent }
-
-// AccentSecondary returns the secondary accent color.
-func AccentSecondary() sdl.Color { return ColorAccentSecondary }
-
 // Danger returns the danger/error color.
 func Danger() sdl.Color { return ColorDanger }
 
@@ -582,65 +536,6 @@ func Danger() sdl.Color { return ColorDanger }
 // used for subtle top-edge sheen on cards and panels.
 func GlossFill(alpha uint8) sdl.Color {
 	return sdl.Color{R: 255, G: 255, B: 255, A: alpha}
-}
-
-// CardHoverColor returns the hover state card color.
-func CardHoverColor() sdl.Color {
-	return ColorCardHover
-}
-
-// BorderHoverColor returns the hover state border color.
-func BorderHoverColor() sdl.Color {
-	return ColorBorderHover
-}
-
-// TrackColor returns the standard progress-track background color.
-func TrackColor() sdl.Color { return ColorTrack }
-
-// ProgressColor returns the standard progress-fill color.
-func ProgressColor() sdl.Color { return ColorProgress }
-
-// DividerColor returns the standard divider line color.
-func DividerColor() sdl.Color { return ColorDivider }
-
-// ChipColor returns the standard chip/pill surface color.
-func ChipColor() sdl.Color { return ColorChip }
-
-// IconSurfaceColor returns the standard small-icon fill color.
-func IconSurfaceColor() sdl.Color { return ColorIconSurface }
-
-// Spacing returns the appropriate spacing based on the density preference.
-// When airy is true, returns more generous spacing for a premium feel.
-func Spacing(airy bool, size string) int32 {
-	if airy {
-		switch size {
-		case "xs":
-			return SpaceAiryXS
-		case "sm":
-			return SpaceAirySM
-		case "md":
-			return SpaceAiryMD
-		case "lg":
-			return SpaceAiryLG
-		case "xl":
-			return SpaceAiryXL
-		}
-	}
-	switch size {
-	case "xs":
-		return SpaceXS
-	case "sm":
-		return SpaceSM
-	case "md":
-		return SpaceMD
-	case "lg":
-		return SpaceLG
-	case "xl":
-		return SpaceXL
-	case "2xl":
-		return Space2XL
-	}
-	return SpaceMD
 }
 
 // --- Semantic typography -------------------------------------------------
@@ -692,6 +587,51 @@ func (r TypeRole) Size() int32 {
 	return FontSizeLG
 }
 
+// --- Legibility floor -----------------------------------------------------
+//
+// A handheld is read at arm's length. Valve's Steam Deck review allows no
+// character below 9px at 1280x800 (about 1.06 mm on its 7" panel, read from
+// 30 cm) and recommends 12px; on the Smart Pro's 4.96" 1280x720 panel those
+// are about 12 and 16.5 canvas pixels. The design sheet sets every caption at
+// 14px (mockups/home-16x9-and-4x3.html), but screens drew badges, overlines and
+// metadata at 12-13px, and the Brick's 0.75 text scale took the 14px captions
+// down to 11px and the 13px badges to 10px on a 3.2" panel.
+const (
+	// uiMinTextSize is the smallest size, in 1280-canvas design pixels, for
+	// text a user has to read: captions, metadata, badges and hints.
+	uiMinTextSize = 14
+	// uiMinTextSizeCompact is the floor on the 960-wide compact canvas, after
+	// its text scale: the most the Brick's fixed layouts take without
+	// re-measuring them on the device (the sheet's own Brick frame asks 15).
+	uiMinTextSizeCompact = 12
+	// uiTextFloorFrom is the smallest authored size the floor lifts. Sizes
+	// under it are glyph-like (a calendar's week digits, a counter drawn into
+	// a fixed pill) and keep the size their artwork was drawn for.
+	uiTextFloorFrom = 12
+)
+
+// uiLegibleFontSize maps an authored size to the size it is drawn at on this
+// canvas: authored 12-13px captions are lifted to the 14px floor, the compact
+// canvas's text scale is applied (uiScaleFontSize), and the result is kept at
+// or above the compact floor. Sizes of 14 and up are unchanged on the wide
+// canvas, so a layout that already met the floor draws exactly as before. The
+// accessibility text size applies after this floor, so a user who picks the
+// smaller step (85%) deliberately gets text below it.
+func uiLegibleFontSize(size int) int {
+	if size <= 0 {
+		return size
+	}
+	authored := size
+	if authored >= uiTextFloorFrom && authored < uiMinTextSize {
+		authored = uiMinTextSize
+	}
+	scaled := uiScaleFontSize(authored)
+	if size >= uiTextFloorFrom && uiTextScaleFactor() < 0.999 && scaled < uiMinTextSizeCompact {
+		scaled = uiMinTextSizeCompact
+	}
+	return scaled
+}
+
 // FontForRole resolves the configured font for a semantic role.
 func FontForRole(config *Config, role TypeRole) *ttf.Font {
 	if config == nil {
@@ -710,41 +650,6 @@ const (
 	DensityCompact Density = iota
 	DensityComfortable
 )
-
-// DensityFor picks the rhythm for the current viewport. Low Power uses the
-// compact rhythm too, because fitting more content on screen means less
-// scrolling (and fewer redraws) on the handheld.
-func DensityFor(config *Config) Density {
-	if config != nil && effectiveLowPower(config) {
-		return DensityCompact
-	}
-	if screenHeight >= 600 {
-		return DensityComfortable
-	}
-	return DensityCompact
-}
-
-// DensitySpace returns a spacing token for the density. Steps use the same
-// names as Spacing.
-func DensitySpace(d Density, step string) int32 {
-	return Spacing(d == DensityComfortable, step)
-}
-
-// focusColorForAccent returns a focus ring color from the accent hue.
-// visibleAccent returns the accent when it is bright enough to tint a focused
-// surface, and the ring fallback (focusColorForAccent) when it is not.
-//
-// The accent comes from the config's $buttonColor, so it is often a dark blue.
-// Painting a focused card with WithAlpha(accentColor, 70) then made the focused
-// card DARKER than the resting card beside it — focus read as a hole in the
-// panel instead of the brightest state on the page. Rings already substitute a
-// visible colour for such accents; fills have to agree with them.
-func visibleAccent() sdl.Color {
-	if wcagLuminance(accentColor) < 0.10 {
-		return focusColorForAccent(accentColor)
-	}
-	return accentColor
-}
 
 func focusColorForAccent(accent sdl.Color) sdl.Color {
 	if int(accent.R)+int(accent.G) > 420 && int(accent.R) > int(accent.B) {

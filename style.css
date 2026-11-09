@@ -306,7 +306,9 @@ textarea {
   width: 30px;
   height: 30px;
   flex-shrink: 0;
-  border-radius: 8px;
+  /* The mark is a full-bleed tile with 25% corners (branding/mklogo.py), so
+     the ring follows its edge exactly. */
+  border-radius: 25%;
   box-shadow: 0 0 0 1px var(--border), var(--shadow-sm);
 }
 

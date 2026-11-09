@@ -44,8 +44,7 @@ The build and test loop lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
   No per-frame allocations, no blocking calls on the render thread, no
   unbounded caches.
 - Textures belong to the renderer that created them. Drop a renderer-owned
-  cache before destroying the renderer ([player/testrenderer_test.go](../player/testrenderer_test.go)
-  is the test-side example, and the `*Owner` fields in
+  cache before destroying the renderer (the `*Owner` fields in
   [player/vkeyboard.go](../player/vkeyboard.go) enforce it at runtime).
 - New panels follow an existing panel's layout (`toolsui.go`, `a11y.go`,
   `netplay_ui.go`) instead of inventing a card: same header, same row height,
@@ -60,6 +59,12 @@ The build and test loop lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
   the glass ink and the text inks follow the theme, which is what keeps a screen
   readable on the light presets. Focus is Home's 3px accent ring
   (`glassAccent()`); there are no drop shadows.
+- **The logo is one picture.** Every copy of it is rendered by
+  [branding/mklogo.py](../branding/mklogo.py) (see
+  [branding/README.md](../branding/README.md)). On screen, draw it with
+  `drawBrandLogo` ([player/brandlogo.go](../player/brandlogo.go)), which
+  resamples the artwork the binary already embeds to the size it is shown at;
+  do not rebuild it from primitives or ship a second copy.
 - Keyboard, controller, mouse and touch all reach the same action. If a row can
   be activated with A, it needs a click target and a key binding too.
 
@@ -72,14 +77,14 @@ The build and test loop lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
   directory. Global state a test mutates is restored in `t.Cleanup`.
 - Prefer a test that pins the contract over one that pins a number that will
   drift: "the cache is not shared across renderers" outlives "builds == 3".
-- Rendering tests run headless with `SDL_VIDEODRIVER=dummy` and the software
-  renderer; see [player/installbar_render_test.go](../player/installbar_render_test.go)
-  for the probe pattern.
+- There are no rendering tests: the suite stays fast and guards data,
+  security and updates. Check visual changes on screen, on Windows first and
+  then on the device.
 
 ## Documentation
 
 - Describe what the code does and link the implementation. Documented gaps are
-  useful ([docs/FEATURE-BACKLOG.md](FEATURE-BACKLOG.md)); aspirational docs are
+  useful ([the engineering backlog](../player/MODERNIZATION.md)); aspirational docs are
   worse than none.
 - A user-visible change gets a [CHANGELOG.md](../CHANGELOG.md) entry under
   `Unreleased`, and a config or control change updates

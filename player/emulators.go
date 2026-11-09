@@ -10,11 +10,11 @@ package main
 // real emulator locations: known install folders on Windows (the portable
 // Emulators folder JukaHub installs into first), the SD-card Emus/ and Roms/
 // trees plus RetroArch cores on TrimUI. emutiles.go draws it as a page of
-// tiles; emuwininstall.go and emulatorinstall.go install what is missing.
+// tiles; emuwininstall.go and emulatorinstall.go install what is missing, and
+// hakux.go the handheld's one standalone install, hakuX for the Xbox.
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,13 +58,13 @@ type emuEntry struct {
 	// Version is the installed build when it is known: the release tag of a
 	// Windows emulator JukaHub installed.
 	Version string
-	// Managed marks a Windows emulator JukaHub installed, and can therefore
-	// update and roll back; an install found elsewhere is launched but left
-	// alone.
+	// Managed marks a Windows emulator JukaHub installed (or the handheld's
+	// hakuX package, hakux.go), and can therefore update and roll back; an
+	// install found elsewhere is launched but left alone.
 	Managed bool
-	// KeptVersion is the version a rollback of a managed Windows emulator
-	// would restore ("" when none is kept). Read once per catalog build, so
-	// the footer never touches the disk while drawing.
+	// KeptVersion is the version a rollback of a managed emulator would
+	// restore ("" when none is kept). Read once per catalog build, so the
+	// footer never touches the disk while drawing.
 	KeptVersion string
 	// Via names the Windows emulator that plays this tile's system (Roms/XBOX
 	// is played by xemu), so Install on the system installs it.
@@ -417,9 +417,10 @@ func emuCoreEntries(coresDir string) ([]emuEntry, map[string]bool) {
 
 // deviceEmulatorEntries builds the handheld list: every emulator folder under
 // the Emus roots with its availability, every installed RetroArch core, every
-// ROM system that has games but no emulator at all, and the consoles this
-// hardware cannot run (Xbox always, the others when their Roms/ folder exists),
-// marked "Not supported" with the reason instead of offering a dead end.
+// ROM system that has games but no emulator at all, the consoles this hardware
+// cannot run (when their Roms/ folder exists), marked "Not supported" with the
+// reason instead of offering a dead end, and always one Xbox tile: hakuX where
+// it is offered or installed, the honest reason where it is not.
 func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEntry {
 	byName := map[string]emuEntry{}
 	add := func(e emuEntry) {
@@ -446,6 +447,11 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				continue
 			}
 			folder := filepath.Join(root, de.Name())
+			if hakuxIsXboxFolder(de.Name(), folder) {
+				// The Xbox launcher folder (hakuX's Emus/XBOX) is the Xbox
+				// tile below, not a row of its own.
+				continue
+			}
 			e := emuEntry{
 				Name:     de.Name(),
 				Detail:   folder,
@@ -491,6 +497,10 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				}
 				folder := filepath.Join(romsRoot, r.Name())
 				if sys, ok := emuDesktopSystemFor(r.Name()); ok {
+					if sys.System == emuXboxEntryName {
+						// The Xbox tile below speaks for every Xbox folder.
+						continue
+					}
 					add(emuEntry{
 						Name:   r.Name(),
 						Detail: sys.System + " — not supported on this device",
@@ -514,17 +524,11 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	}
 
 	// Xbox is listed whether or not a Roms/ folder exists: people ask for it
-	// (Halo 2), and the honest answer belongs on the page instead of a missing
-	// tile. A real launcher folder for it, should one exist, still wins.
-	if xbox, ok := emuDesktopSystemFor(emuXboxEntryName); ok {
-		add(emuEntry{
-			Name:   emuXboxEntryName,
-			Detail: "Xbox (xemu) — not supported on this device",
-			Status: emuUnsupported,
-			Glyph:  emuGlyphFor(emuXboxEntryName, ""),
-			Note:   xbox.Reason,
-		})
-	}
+	// (Halo 2). On the Smart Pro the tile installs the experimental hakuX port;
+	// on a model it is not offered for, it says why. A launcher folder that is
+	// already on the card is the tile, whoever put it there.
+	xboxFolder, _, _ := hakuxInstalled(emuRoots)
+	add(hakuxXboxEntry(xboxFolder, romsRoot, hakuxDevice()))
 
 	entries := make([]emuEntry, 0, len(byName))
 	for _, e := range byName {
@@ -603,6 +607,8 @@ func emulatorEntries() []emuEntry {
 	biosDetail := "Check PS1, Dreamcast and Saturn firmware"
 	if IsWindows() {
 		biosDetail = "Check PS1, Dreamcast, Saturn and Xbox firmware"
+	} else if hakuxOffered() {
+		biosDetail = "Check PS1, Dreamcast and Saturn firmware, and the Xbox setup"
 	}
 	entries = append(entries, pin(emuEntry{
 		Name:   biosDoctorEntryName,
@@ -822,17 +828,20 @@ func launchEmulatorEntry(e emuEntry) {
 			return
 		}
 	default:
-		log.Printf("[emulators] refusing to launch %q", path)
+		logWarn("emulators", "refusing to launch %q", path)
 		showLaunchFailureDialog(e.Name, fmt.Errorf("unsupported launcher file type %q", ext), "")
 		return
 	}
 	if !regularFile(path) {
-		log.Printf("[emulators] %s vanished: %s", e.Name, path)
+		logDebug("emulators", "%s vanished: %s", e.Name, path)
 		showLaunchFailureDialog(e.Name, fmt.Errorf("launcher file is missing: %w", os.ErrNotExist), "")
 		invalidateEmulatorCache()
 		return
 	}
-	log.Printf("[emulators] launching %s (%s)", e.Name, path)
+	logDebug("emulators", "launching %s (%s)", e.Name, path)
+	// No shell ever sees a command line here: path comes from the scan roots
+	// and catalog (never from config input) and goes to the program as one
+	// argument.
 	var cmd *exec.Cmd
 	dir := filepath.Dir(path)
 	switch {
@@ -840,7 +849,15 @@ func launchEmulatorEntry(e emuEntry) {
 		// Shortcuts are resolved by the shell handler, not executed directly.
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
 	case IsWindows() && (ext == ".bat" || ext == ".cmd"):
-		cmd = exec.Command("cmd", "/c", path)
+		// cmd.exe parses its own command line: winBatchCommand quotes the path
+		// for it, so a folder like "Emulators (x64)" stays one path.
+		bat, err := winBatchCommand(path)
+		if err != nil {
+			logWarn("emulators", "refusing to launch %s: %v", path, err)
+			showLaunchFailureDialog(e.Name, err, "")
+			return
+		}
+		cmd = bat
 	case ext == ".dll":
 		retroArch := emuRetroArchForCore(path)
 		if retroArch == "" {
@@ -850,6 +867,7 @@ func launchEmulatorEntry(e emuEntry) {
 		cmd = exec.Command(retroArch, "-L", path)
 		dir = filepath.Dir(retroArch)
 	case ext == ".sh" || ext == "":
+		// sh reads the launch script; the absolute path is an operand, not code.
 		cmd = exec.Command("sh", path)
 	default:
 		cmd = exec.Command(path)
@@ -864,7 +882,7 @@ func launchEmulatorEntry(e emuEntry) {
 	restoreProfile := beginGamePowerProfile(appConfig)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
-		log.Printf("[emulators] launch failed for %s: %v", path, err)
+		logWarn("emulators", "launch failed for %s: %v", path, err)
 		showLaunchFailureDialog(e.Name, err, "")
 		return
 	}
@@ -927,6 +945,12 @@ func emuPanelActivate(config *Config) {
 		openRetroAchievementsPanelFromEmu()
 		return
 	}
+	if hakuxTile(e) {
+		// The handheld's Xbox tile: its games once hakuX is installed, the
+		// setup sheet before that (hakuxpage.go).
+		hakuxActivate(e)
+		return
+	}
 	switch e.Status {
 	case emuUnsupported:
 		// Said plainly, every time it is asked: what this console needs and
@@ -976,8 +1000,9 @@ func emuPanelInstall() {
 	startEmulatorInstall(e)
 }
 
-// emuPanelAlt is Y: the Xbox setup checklist on xemu's tile (Windows), the
-// RetroAchievements panel everywhere else it is supported.
+// emuPanelAlt is Y: the Xbox setup checklist on xemu's tile (Windows) and on
+// the Xbox tile where hakuX is offered (the handheld), the RetroAchievements
+// panel everywhere else it is supported.
 func emuPanelAlt() {
 	if e, ok := emuSelectedEntry(); ok && emuXboxSetupAvailable(e) {
 		emuOpenXboxSetup()
@@ -1122,6 +1147,11 @@ func handleEmuWheel(dy int32) bool {
 // emuHintPress runs the action a footer hint badge names, so every key the
 // footer advertises is also a click or tap target.
 func emuHintPress(button string, config *Config) {
+	// A badge may carry its keyboard twin ("R1 / R", inputhints.go); the pad
+	// half names the action.
+	if i := strings.Index(button, " / "); i >= 0 {
+		button = button[:i]
+	}
 	switch strings.TrimSpace(button) {
 	case "A":
 		emuPanelActivate(config)

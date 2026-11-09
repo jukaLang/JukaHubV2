@@ -9,7 +9,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +48,7 @@ func openGameProfilePanel(returnEmu bool) {
 	invalidateGameProfileCache()
 	entries := gameProfileEntries()
 	if n := len(entries); n == 0 {
-		log.Printf("[gameprofiles] panel opened with no profiles (folder %s)", gameProfilesImportDir())
+		logDebug("gameprofiles", "panel opened with no profiles (folder %s)", gameProfilesImportDir())
 	}
 	PlayActivateSound()
 }
@@ -105,7 +104,7 @@ func gameProfilePanelActivate() {
 	}
 	entry := entries[gpPanel.cursor]
 	if err := launchGameProfile(entry); err != nil {
-		log.Printf("[gameprofiles] launch %s failed: %v", entry.Profile.ID, err)
+		logWarn("gameprofiles", "launch %s failed: %v", entry.Profile.ID, err)
 		logPath := filepath.Join(gameProfilesLogsDir(), entry.Profile.ID+".log")
 		if _, statErr := os.Stat(logPath); statErr != nil {
 			logPath = ""
@@ -361,7 +360,7 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, font, ellipsize(font, gameProfilesImportDir(), panelW-2*padX),
 			accentColor, panelX+padX, y)
 		y += smallH + 4
-		renderText(renderer, config, font, "then press Y to rescan.", ColorTextTertiary(), panelX+padX, y)
+		renderText(renderer, config, font, hintSentence("then press %s to rescan.", "Y", "Rescan"), ColorTextTertiary(), panelX+padX, y)
 	} else {
 		focusColor := installHighlight()
 		rowW := panelW - 2*padX

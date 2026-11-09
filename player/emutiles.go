@@ -6,7 +6,8 @@ package main
 // file owns the page: a full-screen grid of glass tiles, each showing the
 // emulator's own icon when the install ships one — the icon inside a TrimUI
 // Emus/ folder, or the shell icon of a Windows executable — and otherwise the
-// shared vector icon of what it emulates (emu-psp, emu-xbox, …).
+// shared vector icon of what it emulates (emu-psp, emu-xbox, …). The Xbox setup
+// sheet (emuxbox.go) draws over the page while it is open.
 //
 // Status is spelled out, not implied: every usable-or-not tile carries a pill
 // at its bottom edge reading "Available", "Unavailable", "Not installed" or
@@ -726,9 +727,9 @@ type emuHintHit struct {
 // render/event thread.
 var emuHintHits []emuHintHit
 
-// emuFittedHints trims a hint set to the width the page has, the way
-// emuFooterLine trims the text form: the D-pad hint goes first, then the
-// optional page keys from the right, and Back is always the last one standing.
+// emuFittedHints trims a hint set to the width the page has: the D-pad hint
+// goes first, then the optional page keys from the right, and Back is always
+// the last one standing.
 func emuFittedHints(config *Config, hints []FooterHint, width int32) footerPlan {
 	plan := planFooterHints(config, hints, width)
 	if len(plan.hints) == len(hints) || len(hints) <= 2 {
@@ -787,43 +788,6 @@ func emuDrawHintRow(renderer *sdl.Renderer, config *Config, hints []FooterHint, 
 	return hits
 }
 
-// emuFooterLine fits the control hints into the width the page has. The widest
-// set — a tile with a core to update, a build to roll back to, and the L1/R2/Y
-// page keys all live — is wider than one page card, and a line that has to be
-// ellipsized gets its tail cut, which is where B Back lives. Dropping whole
-// hints is the readable trade: the D-pad line goes first (this page is a grid
-// and the arrows are the one control nobody needs telling), then the optional
-// page keys from the right, and Back is always the last hint standing.
-func emuFooterLine(font *ttf.Font, hints []FooterHint, width int32) string {
-	fits := func(line string) bool {
-		if font == nil || width <= 0 {
-			return true
-		}
-		tw, _, err := font.SizeUTF8(line)
-		return err != nil || int32(tw) <= width
-	}
-	line := hintLine(hints...)
-	if fits(line) {
-		return line
-	}
-	trimmed := hints
-	if len(trimmed) > 2 && strings.EqualFold(strings.TrimSpace(trimmed[0].Button), "D-Pad") {
-		trimmed = trimmed[1:]
-		if line = hintLine(trimmed...); fits(line) {
-			return line
-		}
-	}
-	for len(trimmed) > 2 {
-		// Drop the hint just before Back: the optional page key is the one the
-		// line can do without.
-		trimmed = append(append([]FooterHint(nil), trimmed[:len(trimmed)-2]...), trimmed[len(trimmed)-1])
-		if line = hintLine(trimmed...); fits(line) {
-			return line
-		}
-	}
-	return line
-}
-
 // emuEntryBackup is the newest kept build for a tile's core, if any. It goes
 // through the same per-frame cache the hints use, so drawing never stats a
 // folder.
@@ -835,8 +799,8 @@ func emuEntryBackup(e emuEntry) (coreBackup, bool) {
 	return emuNewestCoreBackup(core)
 }
 
-// emuAnyManaged reports whether the catalog holds a Windows emulator JukaHub
-// installed (and Update all can therefore update).
+// emuAnyManaged reports whether the catalog holds an emulator JukaHub installed
+// — a Windows one, or hakuX on the handheld — that Update all can update.
 func emuAnyManaged() bool {
 	for _, e := range emulatorEntries() {
 		if e.Managed {
@@ -851,7 +815,7 @@ func emuAnyManaged() bool {
 // where it used to print "no emulator found" — and X only appears when there is
 // something on the card to update, so no hint promises a file that is not
 // there. R1 appears only when there is a kept build to restore; Y is the Xbox
-// setup on xemu's tile.
+// setup on xemu's tile (Windows) and on the handheld's Xbox tile (hakuX).
 func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
 	hints := []FooterHint{{Button: "D-Pad", Label: "Navigate"}}
 	if label := emuInstallHintLabel(e); label != "" {
@@ -861,15 +825,17 @@ func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
 		hints = append(hints, FooterHint{Button: "X", Label: label})
 	}
 	if label := emuRollbackHintLabel(e); label != "" {
-		hints = append(hints, FooterHint{Button: "R1", Label: label})
+		hints = append(hints, FooterHint{Button: "R1 / R", Label: label})
 	}
-	if len(emuInstalledCoreSet()) > 0 || (IsWindows() && emuAnyManaged()) {
-		hints = append(hints, FooterHint{Button: "L1", Label: "Update all"})
+	// A managed emulator is a Windows install JukaHub made, or hakuX on the
+	// handheld: both are part of what L1 updates.
+	if len(emuInstalledCoreSet()) > 0 || emuAnyManaged() {
+		hints = append(hints, FooterHint{Button: "L1 / U", Label: "Update all"})
 	}
 	// R2 opens the Core builds page. It only appears when there is something to
 	// review, so no hint promises an empty page.
 	if label := emuKeptBuildsHint(); label != "" {
-		hints = append(hints, FooterHint{Button: "R2", Label: label})
+		hints = append(hints, FooterHint{Button: "R2 / K", Label: label})
 	}
 	if emuXboxSetupAvailable(e) {
 		hints = append(hints, FooterHint{Button: "Y", Label: "Setup"})

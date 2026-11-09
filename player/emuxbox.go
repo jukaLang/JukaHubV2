@@ -1,6 +1,7 @@
 package main
 
-// emuxbox.go — the original Xbox, through xemu.
+// emuxbox.go — the original Xbox: xemu on Windows, and the setup sheet the
+// Xbox tile opens on both platforms.
 //
 // On Windows JukaHub installs xemu from its GitHub releases like every other
 // emulator (emuwininstall.go), the game library lists Roms/XBOX (.iso/.xiso)
@@ -17,9 +18,13 @@ package main
 //   - "Apply to xemu" writes the found paths into xemu.toml's [sys.files], the
 //     settings xemu itself reads, so nothing has to be browsed to by hand.
 //
-// The BIOS doctor lists the same checklist on Windows. On the handheld the
-// Xbox tile is "Not supported" with the reason (emusystems.go): the A133P is
-// nowhere near what xemu needs, and the page says so instead of pretending.
+// On the TrimUI Smart Pro the Xbox runs through the experimental hakuX port
+// instead (hakux.go installs it, hakuxpage.go builds its checklist), and the
+// same sheet lists the package, the Roms/XBOX games and whatever firmware the
+// installed build's own settings name — current hakuX boots games on its own
+// Xbox kernel and normally asks for none — with the in-game controls under
+// them. Its buttons install or update hakuX and open the Xbox games. The BIOS
+// doctor prints the same checklist on both platforms.
 
 import (
 	"archive/zip"
@@ -72,11 +77,22 @@ func (f emuXboxFile) ok() bool { return f.Path != "" && f.Problem == "" }
 type emuXboxReport struct {
 	Files []emuXboxFile
 	// Folder is where the sheet asks for the files; ConfigPath is the
-	// xemu.toml xemu reads; Configured says it already names working files.
+	// emulator's settings file (xemu.toml, or the hakuX config that names
+	// firmware); Configured says it already names working files.
 	Folder     string
 	ConfigPath string
 	Configured bool
 	XemuExe    string
+	// Emulator names what the checklist is for: "xemu" on Windows, "hakuX" on
+	// the handheld.
+	Emulator string
+	// Installed reports the emulator is on this machine; Supported is false on
+	// a handheld the hakuX port is not offered for.
+	Installed bool
+	Supported bool
+	// Notes are printed under the checklist: on the handheld, the in-game
+	// controls and what to expect from an experimental port.
+	Notes []string
 }
 
 // ready reports that every required file is there.
@@ -385,11 +401,15 @@ func emuXboxCheckFile(f *emuXboxFile) {
 	}
 }
 
-// emuXboxScan builds the checklist: the paths xemu.toml already names first,
-// then whatever the search folders hold.
+// emuXboxScan builds the checklist: on Windows the paths xemu.toml already
+// names first, then whatever the search folders hold; on the handheld hakuX's
+// (hakuxSheetReport).
 func emuXboxScan() emuXboxReport {
+	if !IsWindows() {
+		return hakuxSheetReport()
+	}
 	xemuExe := emuWinExe("xemu")
-	report := emuXboxReport{Folder: emuXboxFolder(), XemuExe: xemuExe}
+	report := emuXboxReport{Folder: emuXboxFolder(), XemuExe: xemuExe, Emulator: "xemu", Installed: xemuExe != "", Supported: true}
 	report.Files = []emuXboxFile{
 		{Key: "bootrom", Label: "MCPX boot ROM", Want: "mcpx_1.0.bin · 512 bytes", Required: true},
 		{Key: "flashrom", Label: "Flash ROM (BIOS)", Want: "e.g. Complex_4627.bin · 256 KB or 1 MB", Required: true},
@@ -611,11 +631,14 @@ var emuXboxSheet struct {
 	mu       sync.Mutex
 	open     bool
 	scanning bool
-	report   emuXboxReport
-	scanned  bool
-	focus    int // button with the focus: 0 Apply, 1 HDD image, 2 Folder, 3 Back
-	buttons  []emuXboxButtonHit
-	rect     sdl.Rect
+	// again asks for one more scan when the running one ends: a rescan
+	// requested mid-scan (an install that just finished) must not be lost.
+	again   bool
+	report  emuXboxReport
+	scanned bool
+	focus   int // index into emuXboxSheetButtons
+	buttons []emuXboxButtonHit
+	rect    sdl.Rect
 }
 
 type emuXboxButtonHit struct {
@@ -623,12 +646,69 @@ type emuXboxButtonHit struct {
 	rect  sdl.Rect
 }
 
-// emuXboxButtons are the sheet's actions, in focus order.
-var emuXboxButtons = []string{"Apply to xemu", "Get HDD image", "Open folder", "Back"}
+// emuXboxAction is what one of the sheet's buttons does: Apply, HDD and Folder
+// are xemu's (Windows), Install and Games are hakuX's (the handheld).
+type emuXboxAction int
 
-// emuXboxSetupAvailable reports whether a tile offers the Xbox setup (Y).
+const (
+	emuXboxActBack emuXboxAction = iota
+	emuXboxActApply
+	emuXboxActHDD
+	emuXboxActFolder
+	emuXboxActInstall
+	emuXboxActGames
+)
+
+// emuXboxButton is one of the sheet's buttons. Key is the pad button that
+// presses it from anywhere on the sheet ("" when only A on the focus does).
+type emuXboxButton struct {
+	Label    string
+	Action   emuXboxAction
+	Key      string
+	Disabled bool
+}
+
+// emuXboxSheetButtons are the sheet's actions for a report, in focus order. A
+// disabled button still explains itself when pressed.
+func emuXboxSheetButtons(report emuXboxReport, scanned bool) []emuXboxButton {
+	if !IsWindows() {
+		install := "Install hakuX"
+		if report.Installed {
+			install = "Update hakuX"
+		}
+		return []emuXboxButton{
+			{Label: install, Action: emuXboxActInstall, Key: "X", Disabled: !report.Supported},
+			{Label: "Xbox games", Action: emuXboxActGames, Key: "Y", Disabled: !report.Installed},
+			{Label: "Back", Action: emuXboxActBack},
+		}
+	}
+	hddFound := false
+	for _, f := range report.Files {
+		if f.Key == "hdd" && f.ok() {
+			hddFound = true
+		}
+	}
+	return []emuXboxButton{
+		{Label: "Apply to xemu", Action: emuXboxActApply, Disabled: !scanned || !report.ready()},
+		{Label: "Get HDD image", Action: emuXboxActHDD, Key: "X", Disabled: hddFound},
+		{Label: "Open folder", Action: emuXboxActFolder, Key: "Y"},
+		{Label: "Back", Action: emuXboxActBack},
+	}
+}
+
+// emuXboxCurrentButtons is the button row for the sheet's latest report.
+func emuXboxCurrentButtons() []emuXboxButton {
+	report, scanned, _ := emuXboxSnapshot()
+	return emuXboxSheetButtons(report, scanned)
+}
+
+// emuXboxSetupAvailable reports whether a tile offers the Xbox setup (Y):
+// xemu's tile on Windows, and the Xbox tile on a handheld hakuX is offered on.
 func emuXboxSetupAvailable(e emuEntry) bool {
-	return IsWindows() && strings.EqualFold(strings.TrimSpace(e.Name), "xemu")
+	if IsWindows() {
+		return strings.EqualFold(strings.TrimSpace(e.Name), "xemu")
+	}
+	return hakuxTile(e) && e.Status != emuUnsupported && hakuxOffered()
 }
 
 func emuXboxSheetOpen() bool {
@@ -637,11 +717,18 @@ func emuXboxSheetOpen() bool {
 	return emuXboxSheet.open
 }
 
-// emuOpenXboxSetup shows the sheet and checks the files in the background.
+// emuOpenXboxSetup shows the sheet and checks the files in the background. On
+// the handheld the focus starts on Back: A opens this sheet from a tile where
+// hakuX is not installed yet, and a second A must not start a download nobody
+// has read about. X (named in the subtitle) or a move to the button installs.
 func emuOpenXboxSetup() {
+	focus := 0
+	if !IsWindows() {
+		focus = len(emuXboxSheetButtons(emuXboxReport{}, false)) - 1
+	}
 	emuXboxSheet.mu.Lock()
 	emuXboxSheet.open = true
-	emuXboxSheet.focus = 0
+	emuXboxSheet.focus = focus
 	emuXboxSheet.buttons = nil
 	emuXboxSheet.mu.Unlock()
 	PlayActivateSound()
@@ -660,22 +747,31 @@ func emuCloseXboxSetup() {
 	}
 }
 
-// emuXboxRescan re-reads the checklist off the event thread.
+// emuXboxRescan re-reads the checklist off the event thread. A request that
+// arrives while a scan is running is kept, and runs as soon as that one ends.
 func emuXboxRescan() {
 	emuXboxSheet.mu.Lock()
 	if emuXboxSheet.scanning {
+		emuXboxSheet.again = true
 		emuXboxSheet.mu.Unlock()
 		return
 	}
 	emuXboxSheet.scanning = true
 	emuXboxSheet.mu.Unlock()
 	go func() {
-		report := emuXboxScan()
-		emuXboxSheet.mu.Lock()
-		emuXboxSheet.report = report
-		emuXboxSheet.scanned = true
-		emuXboxSheet.scanning = false
-		emuXboxSheet.mu.Unlock()
+		for {
+			report := emuXboxScan()
+			emuXboxSheet.mu.Lock()
+			emuXboxSheet.report = report
+			emuXboxSheet.scanned = true
+			if !emuXboxSheet.again {
+				emuXboxSheet.scanning = false
+				emuXboxSheet.mu.Unlock()
+				return
+			}
+			emuXboxSheet.again = false
+			emuXboxSheet.mu.Unlock()
+		}
 	}()
 }
 
@@ -686,11 +782,31 @@ func emuXboxSnapshot() (emuXboxReport, bool, bool) {
 	return emuXboxSheet.report, emuXboxSheet.scanned, emuXboxSheet.scanning
 }
 
-// emuXboxPress runs one of the sheet's actions.
+// emuXboxPress presses the button at index in the current row.
 func emuXboxPress(index int) {
+	buttons := emuXboxCurrentButtons()
+	if index < 0 || index >= len(buttons) {
+		return
+	}
+	emuXboxPressAction(buttons[index].Action)
+}
+
+// emuXboxPressKey presses the button a pad key names ("X", "Y"), when the
+// current row has one.
+func emuXboxPressKey(key string) {
+	for _, b := range emuXboxCurrentButtons() {
+		if b.Key == key {
+			emuXboxPressAction(b.Action)
+			return
+		}
+	}
+}
+
+// emuXboxPressAction runs one of the sheet's actions.
+func emuXboxPressAction(action emuXboxAction) {
 	report, scanned, _ := emuXboxSnapshot()
-	switch index {
-	case 0:
+	switch action {
+	case emuXboxActApply:
 		if !scanned {
 			ShowToast("Still checking the Xbox files…", ToastKindInfo)
 			return
@@ -704,9 +820,9 @@ func emuXboxPress(index int) {
 		PlaySuccessSound()
 		ShowToast("xemu now uses these files · "+path, ToastKindSuccess)
 		emuXboxRescan()
-	case 1:
+	case emuXboxActHDD:
 		emuXboxStartHDDDownload()
-	case 2:
+	case emuXboxActFolder:
 		folder := emuXboxFolder()
 		if err := os.MkdirAll(folder, 0o755); err != nil {
 			ShowToast("Could not create "+folder, ToastKindError)
@@ -718,6 +834,15 @@ func emuXboxPress(index int) {
 		}
 		PlayActivateSound()
 		ShowToast("Put the Xbox files in "+folder, ToastKindInfo)
+	case emuXboxActInstall:
+		hakuxStartInstall()
+	case emuXboxActGames:
+		if !report.Installed {
+			ShowToast("Install hakuX first — X on this sheet", ToastKindInfo)
+			return
+		}
+		emuCloseXboxSetup()
+		hakuxOpenGames()
 	default:
 		emuCloseXboxSetup()
 	}
@@ -764,13 +889,14 @@ func emuXboxStartHDDDownload() {
 }
 
 func emuXboxMoveFocus(delta int) {
+	count := len(emuXboxCurrentButtons())
 	emuXboxSheet.mu.Lock()
 	next := emuXboxSheet.focus + delta
+	if next >= count {
+		next = count - 1
+	}
 	if next < 0 {
 		next = 0
-	}
-	if next >= len(emuXboxButtons) {
-		next = len(emuXboxButtons) - 1
 	}
 	changed := next != emuXboxSheet.focus
 	emuXboxSheet.focus = next
@@ -787,8 +913,9 @@ func emuXboxFocused() int {
 }
 
 // ctrlEmuXboxSheet is the pad on the sheet: Left/Right walk the buttons, A
-// presses the focused one, X fetches the HDD image, Y opens the folder, B
-// closes the sheet.
+// presses the focused one, X and Y press the buttons they are printed on
+// (xemu: the HDD image and the folder; hakuX: install or update, and the Xbox
+// games), B closes the sheet.
 func ctrlEmuXboxSheet(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -798,9 +925,9 @@ func ctrlEmuXboxSheet(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		emuXboxPress(emuXboxFocused())
 	case sdl.CONTROLLER_BUTTON_X:
-		emuXboxPress(1)
+		emuXboxPressKey("X")
 	case sdl.CONTROLLER_BUTTON_Y:
-		emuXboxPress(2)
+		emuXboxPressKey("Y")
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		emuCloseXboxSetup()
 	}
@@ -817,11 +944,17 @@ func handleEmuXboxKey(e *sdl.KeyboardEvent) bool {
 	case sdl.K_RETURN, sdl.K_SPACE:
 		emuXboxPress(emuXboxFocused())
 	case sdl.K_a:
-		emuXboxPress(0)
+		// On the handheld the sheet opens on Back so a second A never starts
+		// a download; the keyboard's A follows the same focus there.
+		if IsWindows() {
+			emuXboxPress(0)
+		} else {
+			emuXboxPress(emuXboxFocused())
+		}
 	case sdl.K_x, sdl.K_h:
-		emuXboxPress(1)
-	case sdl.K_y, sdl.K_o:
-		emuXboxPress(2)
+		emuXboxPressKey("X")
+	case sdl.K_y, sdl.K_o, sdl.K_g:
+		emuXboxPressKey("Y")
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		emuCloseXboxSetup()
 	}
@@ -870,9 +1003,36 @@ func emuXboxSheetRect(page sdl.Rect) sdl.Rect {
 	return sdl.Rect{X: page.X + (page.W-w)/2, Y: page.Y + (page.H-h)/2, W: w, H: h}
 }
 
-// renderEmuXboxSheet draws the checklist over the page: a row per file with a
-// found / missing mark, where the files go, whether xemu is set up, and the
-// four actions as glass buttons.
+// emuXboxSheetHeading is the sheet's subtitle and status chip for a report.
+func emuXboxSheetHeading(report emuXboxReport, scanned bool) (string, string, sdl.Color) {
+	if !scanned {
+		return "Checking the Xbox files…", "", ColorTextTertiary()
+	}
+	missing := report.missing()
+	if report.Emulator == hakuxName {
+		switch {
+		case !report.Installed && !report.Supported:
+			return "No hakuX build for this device", "Not supported", ToastWarnInk()
+		case !report.Installed:
+			return "hakuX is not installed — X installs the Smart Pro port (experimental)", "Not installed", ColorTextTertiary()
+		case len(missing) > 0:
+			return "Missing: " + strings.Join(missing, ", "), itoa(len(missing)) + " missing", ToastWarnInk()
+		}
+		return "Ready — Y opens your Xbox games", "Ready", ToastSuccessInk()
+	}
+	switch {
+	case report.ready() && report.Configured:
+		return "Ready — xemu has everything it needs", "Ready", ToastSuccessInk()
+	case report.ready():
+		return "All files found — A applies them to xemu", "Not applied", ToastWarnInk()
+	}
+	return "Missing: " + strings.Join(missing, ", "), itoa(len(missing)) + " missing", ToastWarnInk()
+}
+
+// renderEmuXboxSheet draws the checklist over the page: a row per item with a
+// found / missing mark, the lines under it (where the files go, the settings
+// file, on the handheld the controls), and the actions as glass buttons. What
+// does not fit above the buttons gives way: the lines first, then the rows.
 func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	if renderer == nil || config == nil || !emuXboxSheetOpen() {
 		return
@@ -896,19 +1056,7 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	drawOverlayCard(renderer, sheet)
 	drawOverlayCardAccent(renderer, sheet.X, sheet.Y, sheet.W)
 
-	subtitle := "Checking the Xbox files…"
-	statusText, statusColor := "", ColorTextTertiary()
-	switch {
-	case scanned && report.ready() && report.Configured:
-		subtitle = "Ready — xemu has everything it needs"
-		statusText, statusColor = "Ready", ToastSuccessInk()
-	case scanned && report.ready():
-		subtitle = "All files found — A applies them to xemu"
-		statusText, statusColor = "Not applied", ToastWarnInk()
-	case scanned:
-		subtitle = "Missing: " + strings.Join(report.missing(), ", ")
-		statusText, statusColor = itoa(len(report.missing()))+" missing", ToastWarnInk()
-	}
+	subtitle, statusText, statusColor := emuXboxSheetHeading(report, scanned)
 	if scanning && scanned {
 		statusText = "Checking…"
 	}
@@ -923,14 +1071,27 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	labelH := int32(label.Height())
 	noteH := int32(note.Height())
 	rowH := labelH + noteH + 18
+
+	buttons := emuXboxSheetButtons(report, scanned)
+	btnFont := getFontSized(config, "small", 17)
+	if btnFont == nil {
+		btnFont = small
+	}
+	btnH := int32(btnFont.Height()) + 18
+	btnY := sheet.Y + sheet.H - 18 - btnH
+	limit := btnY - 10
+
 	y := bodyY
 	files := report.Files
 	if !scanned {
 		files = nil
-		renderText(renderer, config, small, "Looking in the BIOS folders and xemu's settings…", ColorTextSecondary(), sheet.X+padX, y)
+		renderText(renderer, config, small, "Looking for the Xbox files…", ColorTextSecondary(), sheet.X+padX, y)
 		y += int32(small.Height()) + 10
 	}
 	for _, f := range files {
+		if y+rowH > limit {
+			break
+		}
 		row := sdl.Rect{X: sheet.X + padX, Y: y, W: rowW, H: rowH}
 		drawGlassSurface(renderer, row, glassRowRadius, glassState{})
 		icon, ink := "close", ToastErrorInk()
@@ -959,6 +1120,9 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 			state, stateColor = f.Problem, ToastWarnInk()
 		case !f.Required:
 			state, stateColor = "Optional", ColorTextTertiary()
+			if f.Note != "" {
+				state = f.Note
+			}
 		}
 		stateW, _ := measureText(note, state)
 		renderText(renderer, config, note, state, stateColor, row.X+row.W-14-stateW, row.Y+9+(labelH-noteH)/2)
@@ -973,51 +1137,45 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	}
 
 	y += 4
+	var lines []emuFooterSegment
 	if report.Folder != "" {
-		folderLine := "Put the files in " + report.Folder
-		renderText(renderer, config, note, ellipsize(note, folderLine, rowW), ColorTextSecondary(), sheet.X+padX, y)
-		y += noteH + 4
+		lines = append(lines, emuFooterSegment{"Put the files in " + report.Folder, ColorTextSecondary()})
 	}
 	if report.ConfigPath != "" {
-		cfg := "xemu settings: " + report.ConfigPath
-		if report.Configured {
+		cfg := report.Emulator + " settings: " + report.ConfigPath
+		if report.Configured && report.Emulator != hakuxName {
 			cfg += " · set up"
 		}
-		renderText(renderer, config, note, ellipsize(note, cfg, rowW), ColorTextTertiary(), sheet.X+padX, y)
+		lines = append(lines, emuFooterSegment{cfg, ColorTextTertiary()})
+	}
+	for _, line := range report.Notes {
+		lines = append(lines, emuFooterSegment{line, ColorTextSecondary()})
+	}
+	for _, line := range lines {
+		if y+noteH > limit {
+			break
+		}
+		renderText(renderer, config, note, ellipsize(note, line.text, rowW), line.color, sheet.X+padX, y)
+		y += noteH + 4
 	}
 
-	// The actions: glass buttons along the bottom, the focused one ringed.
+	// The actions: glass buttons along the bottom, the focused one ringed and
+	// the first one tinted while it can act.
 	focus := emuXboxFocused()
-	btnFont := getFontSized(config, "small", 17)
-	if btnFont == nil {
-		btnFont = small
-	}
-	btnH := int32(btnFont.Height()) + 18
 	gap := int32(12)
-	btnW := (rowW - gap*int32(len(emuXboxButtons)-1)) / int32(len(emuXboxButtons))
-	btnY := sheet.Y + sheet.H - 18 - btnH
-	hits := make([]emuXboxButtonHit, 0, len(emuXboxButtons))
-	for i, text := range emuXboxButtons {
+	count := int32(len(buttons))
+	btnW := (rowW - gap*(count-1)) / count
+	hits := make([]emuXboxButtonHit, 0, len(buttons))
+	for i, b := range buttons {
 		rect := sdl.Rect{X: sheet.X + padX + int32(i)*(btnW+gap), Y: btnY, W: btnW, H: btnH}
-		disabled := false
-		switch i {
-		case 0:
-			disabled = !scanned || !report.ready()
-		case 1:
-			for _, f := range report.Files {
-				if f.Key == "hdd" && f.ok() {
-					disabled = true
-				}
-			}
-		}
 		tint := sdl.Color{}
-		if i == 0 && !disabled {
+		if i == 0 && !b.Disabled {
 			tint = glassButtonTint(glassAccent())
 		}
-		drawGlassButton(renderer, config, rect, text, btnFont, tint, glassState{
+		drawGlassButton(renderer, config, rect, b.Label, btnFont, tint, glassState{
 			Focused:  i == focus,
 			Hovered:  pointInRect(mouseX, mouseY, rect),
-			Disabled: disabled,
+			Disabled: b.Disabled,
 		})
 		hits = append(hits, emuXboxButtonHit{index: i, rect: rect})
 	}

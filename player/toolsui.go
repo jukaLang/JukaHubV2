@@ -92,5 +92,7 @@ func toggleFTPServer() {
 		return
 	}
 	PlaySuccessSound()
-	ShowToast("FTP on "+ftpSrv.Address(), ToastKindSuccess)
+	// The password is on the Network tools sheet only: a toast is kept in the
+	// notification history, which is no place for it.
+	ShowToast("FTP on "+ftpSrv.Address()+" — sign in as "+ftpSrv.User()+", password on Network tools", ToastKindSuccess)
 }

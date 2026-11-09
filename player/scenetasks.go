@@ -169,9 +169,6 @@ func currentSceneWorkName() string { return sceneWork.scene() }
 // scene is left, provided it watches ctx.
 func runSceneTask(fn func(context.Context)) bool { return sceneWork.spawn(fn) }
 
-// waitForSceneWork joins the active scene's tasks.
-func waitForSceneWork() { sceneWork.wait() }
-
 // ── Coordinated fan-out ────────────────────────────────────────────────
 
 // runCancelableGroup runs fns concurrently and cancels the rest as soon as one

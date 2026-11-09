@@ -12,9 +12,9 @@ renderer resources, what a diagnostic report may contain. Those decisions have
 been argued in pull requests and then survived only in code comments, so the
 next person re-opens the same question without the earlier measurements.
 
-The project is also deliberately small (see
-[Appendix D of the roadmap](../../ROADMAP.md#appendix-d-keeping-it-small)). An
-RFC process for every change would be process outrunning contributors.
+The project is also deliberately small: one task list
+([player/MODERNIZATION.md](../../player/MODERNIZATION.md)) and no RFC process. An
+RFC for every change would be process outrunning contributors.
 
 ## Decision
 

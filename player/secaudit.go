@@ -503,20 +503,6 @@ func secAuditInstalledCount() int {
 	return n
 }
 
-// secAuditCommandLine is a resolved path plus arguments, quoted for a shell.
-func secAuditCommandLine(t secAuditTool, path string) string {
-	args := append([]string{path}, t.Version...)
-	quoted := make([]string, 0, len(args))
-	for _, a := range args {
-		if strings.ContainsAny(a, " \t") {
-			quoted = append(quoted, `"`+a+`"`)
-			continue
-		}
-		quoted = append(quoted, a)
-	}
-	return strings.Join(quoted, " ")
-}
-
 // ── Interpreters ─────────────────────────────────────────────────────────
 
 // auditInterpreter is the command that runs a script tool: the interpreter's

@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -145,21 +144,6 @@ func (e *httpError) Unwrap() error {
 	return nil
 }
 
-// IsHTTPError returns true if the error is an httpError.
-func IsHTTPError(err error) bool {
-	_, ok := err.(*httpError)
-	return ok
-}
-
-// HTTPStatusCode extracts the HTTP status code from an error if it's an httpError.
-// Returns 0 if the error is not an httpError.
-func HTTPStatusCode(err error) int {
-	if he, ok := err.(*httpError); ok {
-		return he.Code
-	}
-	return 0
-}
-
 // ──────────────────────────────────────────────────────────────────────
 // Bounded in-memory thumbnail byte cache
 // ──────────────────────────────────────────────────────────────────────
@@ -179,13 +163,6 @@ func thumbnailDataSet(url string, data []byte) {
 	thumbnailCacheMutex.Lock()
 	defer thumbnailCacheMutex.Unlock()
 	thumbnailDataCache.put(url, data)
-}
-
-// thumbnailDataStats reports the payloads and bytes held.
-func thumbnailDataStats() (entries int, bytes int64) {
-	thumbnailCacheMutex.Lock()
-	defer thumbnailCacheMutex.Unlock()
-	return thumbnailDataCache.stats()
 }
 
 // clearThumbnailDataCache drops every downloaded payload (memory pressure and
@@ -354,33 +331,6 @@ func (c *thumbnailTextureCache) Put(key string, texture *sdl.Texture, w, h int32
 	}
 }
 
-// setBudget moves the byte ceiling and evicts down to it, keeping the newest
-// texture: destroying the one a caller is still drawing would hand it back a
-// dangling pointer. The device budget is read once at construction, so the
-// session-memory harness — which measures the handheld ceiling on a desktop —
-// needs this to reach the live cache.
-func (c *thumbnailTextureCache) setBudget(maxBytes int64) {
-	if maxBytes <= 0 {
-		maxBytes = thumbnailTextureHandheldBudget
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.maxBytes = maxBytes
-	for c.bytes > c.maxBytes && c.lru.Len() > 1 {
-		back := c.lru.Back()
-		if back == nil {
-			break
-		}
-		key := back.Value.(string)
-		if evicted, ok := c.entries[key]; ok {
-			c.bytes -= evicted.bytes
-			c.destroy(evicted.texture)
-			delete(c.entries, key)
-		}
-		c.lru.Remove(back)
-	}
-}
-
 // Clear destroys every cached texture. Runs on the render thread / shutdown.
 func (c *thumbnailTextureCache) Clear() {
 	c.mu.Lock()
@@ -391,14 +341,6 @@ func (c *thumbnailTextureCache) Clear() {
 	}
 	c.lru.Init()
 	c.bytes = 0
-}
-
-// contains reports whether a key is cached, without touching its LRU position.
-func (c *thumbnailTextureCache) contains(key string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.entries[key]
-	return ok
 }
 
 // Len returns the number of cached textures.
@@ -446,7 +388,7 @@ func thumbnailPrefetchWorker() {
 			// Silent failure — the render path retries on demand. The URL goes
 			// through the log sanitizer like every other one: thumbnail links
 			// can carry a per-session signed parameter.
-			log.Printf("[thumb] prefetch failed for %s: %v", sanitizeLogURL(url), err)
+			logWarn("thumb", "prefetch failed for %s: %v", sanitizeLogURL(url), err)
 		}
 	}
 }

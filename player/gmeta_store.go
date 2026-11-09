@@ -19,7 +19,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,7 +126,7 @@ func gmetaEnsureLocked() {
 	var file gmetaFile
 	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[gmeta] ignoring %s: %v", path, err)
+			logWarn("gmeta", "ignoring %s: %v", path, err)
 		}
 		return
 	}
@@ -153,16 +152,6 @@ func gmetaPreload() {
 		gmetaEnsureLocked()
 		gmetaStore.mu.Unlock()
 	}()
-}
-
-// gmetaResetForTest forgets the loaded document.
-func gmetaResetForTest() {
-	gmetaStore.mu.Lock()
-	gmetaStore.loaded = false
-	gmetaStore.games = nil
-	gmetaStore.tags = nil
-	gmetaStore.rev++
-	gmetaStore.mu.Unlock()
 }
 
 // gmetaCleanTag tidies a tag name: one line, single spaces, a bounded length,
@@ -395,11 +384,11 @@ func gmetaPersist(file gmetaFile, seq uint64) {
 		}
 		data, err := json.MarshalIndent(file, "", "  ")
 		if err != nil {
-			log.Printf("[gmeta] cannot encode the game data: %v", err)
+			logWarn("gmeta", "cannot encode the game data: %v", err)
 			return
 		}
 		if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
-			log.Printf("[gmeta] cannot save the game data: %v", err)
+			logWarn("gmeta", "cannot save the game data: %v", err)
 			return
 		}
 		gmetaWrites.written = seq
@@ -699,26 +688,4 @@ func gmetaCheckPlaytime(game libraryGame, secs int64) {
 	for _, m := range due {
 		gmetaCelebrate(m, game.Title)
 	}
-}
-
-// gmetaSortedTags returns tags in the sheet's order: built-in first, then the
-// custom ones alphabetically.
-func gmetaSortedTags(tags []string) []string {
-	out := append([]string(nil), tags...)
-	rank := func(t string) int {
-		for i, b := range gmetaBuiltinTags {
-			if b == t {
-				return i
-			}
-		}
-		return len(gmetaBuiltinTags)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ri, rj := rank(out[i]), rank(out[j])
-		if ri != rj {
-			return ri < rj
-		}
-		return strings.ToLower(out[i]) < strings.ToLower(out[j])
-	})
-	return out
 }

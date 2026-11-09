@@ -8,19 +8,4 @@ package main
 // uses.
 
 import (
-	"sync"
 )
-
-var (
-	detectedDevice     DeviceModel
-	detectedDeviceOnce sync.Once
-)
-
-func DetectDeviceFirstRun() {
-	if detectedDevice != "" {
-		return
-	}
-	detectedDeviceOnce.Do(func() {
-		detectedDevice = DetectDevice()
-	})
-}

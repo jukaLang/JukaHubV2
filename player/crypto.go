@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -43,7 +42,7 @@ var encryptionSalt = func() []byte {
 	// Try to load salt from environment
 	if envSalt := os.Getenv("JUKAHUB_CRYPTO_SALT"); envSalt != "" {
 		if salt, err := hex.DecodeString(envSalt); err == nil && len(salt) >= 16 {
-			log.Printf("[CRYPTO] Using custom crypto salt (len=%d)", len(salt))
+			logDebug("crypto", "Using custom crypto salt (len=%d)", len(salt))
 			return salt
 		}
 	}
@@ -55,7 +54,7 @@ var encryptionSalt = func() []byte {
 	for len(defaultSalt) < 32 {
 		defaultSalt = append(defaultSalt, 0)
 	}
-	log.Printf("[CRYPTO] Using built-in crypto salt (set JUKAHUB_CRYPTO_SALT for production)")
+	logDebug("crypto", "Using built-in crypto salt (set JUKAHUB_CRYPTO_SALT for production)")
 	return defaultSalt
 }()
 
@@ -108,7 +107,7 @@ var cryptoKey = func() []byte {
 					IsDefault:  false,
 					IsEnhanced: true,
 				}
-				log.Printf("[CRYPTO] Using encryption key from JUKAHUB_CRYPTO_KEY env var (key ID: %s, enhanced: %v)", currentKeyInfo.ID, currentKeyInfo.IsEnhanced)
+				logDebug("crypto", "Using encryption key from JUKAHUB_CRYPTO_KEY env var (key ID: %s, enhanced: %v)", currentKeyInfo.ID, currentKeyInfo.IsEnhanced)
 				return key
 			}
 		}
@@ -120,7 +119,7 @@ var cryptoKey = func() []byte {
 			IsDefault:  false,
 			IsEnhanced: true,
 		}
-		log.Printf("[CRYPTO] Using derived key from JUKAHUB_CRYPTO_KEY (key ID: %s)", currentKeyInfo.ID)
+		logDebug("crypto", "Using derived key from JUKAHUB_CRYPTO_KEY (key ID: %s)", currentKeyInfo.ID)
 		return key
 	}
 
@@ -134,7 +133,7 @@ var cryptoKey = func() []byte {
 		IsDefault:  true,
 		IsEnhanced: true,
 	}
-	log.Printf("[CRYPTO] Using enhanced built-in encryption key (NOT recommended for production) (key ID: %s)", currentKeyInfo.ID)
+	logDebug("crypto", "Using enhanced built-in encryption key (NOT recommended for production) (key ID: %s)", currentKeyInfo.ID)
 	return key
 }()
 
@@ -166,11 +165,6 @@ var (
 // getCryptoKey returns the player's encryption key.
 func getCryptoKey() []byte {
 	return cryptoKey
-}
-
-// GetKeyInfo returns metadata about the current encryption key.
-func GetKeyInfo() KeyInfo {
-	return currentKeyInfo
 }
 
 // zeroizeKey securely clears the key from memory when the program exits.
@@ -281,7 +275,7 @@ func decryptData(data []byte) ([]byte, error) {
 	}
 	for _, key := range legacyDecryptionKeys() {
 		if plaintext, err := decryptAESGCM(key, data); err == nil {
-			log.Printf("[CRYPTO] Decrypted a value written with the legacy default salt")
+			logDebug("crypto", "Decrypted a value written with the legacy default salt")
 			return plaintext, nil
 		}
 	}
@@ -321,7 +315,7 @@ func EncryptAPIToken(plaintext string, keyName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt %s: %w", keyName, err)
 	}
-	log.Printf("[CRYPTO] Encrypted %s", keyName)
+	logDebug("crypto", "Encrypted %s", keyName)
 	return encrypted, nil
 }
 
@@ -337,7 +331,7 @@ func DecryptAPIToken(encrypted string, keyName string) (string, error) {
 	}
 	decrypted, err := DecryptString(encrypted)
 	if err != nil {
-		log.Printf("[CRYPTO] Failed to decrypt %s: %v", keyName, err)
+		logWarn("crypto", "Failed to decrypt %s: %v", keyName, err)
 		if strings.HasPrefix(err.Error(), "decryption failed") {
 			return "", fmt.Errorf("%s: %w", keyName, err)
 		}
@@ -352,16 +346,6 @@ func DecryptAPIToken(encrypted string, keyName string) (string, error) {
 // DecryptSecret is a small convenience wrapper for generic config secrets. It uses
 // the same error distinctions as DecryptAPIToken but names the field more neutrally
 // so it is usable for non-API tokens where "API" would be misleading.
-
-// VerifyEncryptedData checks if an encrypted value can be decrypted successfully.
-// Returns true if valid, false otherwise. Does not leak the plaintext.
-func VerifyEncryptedData(encrypted string) bool {
-	if encrypted == "" || !strings.HasPrefix(encrypted, "ENC:") {
-		return false
-	}
-	_, err := DecryptString(encrypted)
-	return err == nil
-}
 
 // EncryptWithAuth encrypts data and provides an additional HMAC authentication layer.
 // This is useful for high-security scenarios where you want defense in depth.
@@ -382,13 +366,6 @@ func EncryptWithAuth(plaintext string) (string, error) {
 	// Format: ENC:AUTH:<keyID>/<hex>:<hmac>. DecryptWithAuth parses exactly
 	// this shape, so the AUTH: marker has to sit right after ENC:.
 	return fmt.Sprintf("ENC:AUTH:%s:%s", body, hex.EncodeToString(hmacValue)), nil
-}
-
-// DecryptSecret decrypts a generic config secret and logs failures. It is
-// intentionally parallel to DecryptAPIToken so callers get the same three-way
-// distinction without inventing a separate error scheme.
-func DecryptSecret(encrypted string, fieldName string) (string, error) {
-	return DecryptAPIToken(encrypted, fieldName)
 }
 
 // DecryptWithAuth decrypts data that was encrypted with EncryptWithAuth.
@@ -416,27 +393,10 @@ func DecryptWithAuth(encrypted string) (string, error) {
 	expectedHMAC := mac.Sum(nil)
 
 	if !hmac.Equal(providedMAC, expectedHMAC) {
-		log.Printf("[CRYPTO] HMAC verification failed - data may be tampered")
+		logWarn("crypto", "HMAC verification failed - data may be tampered")
 		return "", errors.New("authentication failed - data may be tampered")
 	}
 
 	// HMAC valid, proceed with decryption
 	return DecryptString(encryptedData)
-}
-
-// EncryptToken encrypts a plaintext token using AES-GCM.
-// DEPRECATED: Use EncryptString() or EncryptAPIToken() instead.
-// This function is kept for backward compatibility with existing encrypted data.
-// New code should use the generic EncryptString() function.
-func EncryptToken(plaintext string) (string, error) {
-	log.Printf("[DEPRECATED] EncryptToken is deprecated, use EncryptString instead")
-	return EncryptString(plaintext)
-}
-
-// DecryptToken decrypts an ENC:<base64> token back to plaintext.
-// DEPRECATED: Use DecryptString() or DecryptAPIToken() instead.
-// This function is kept for backward compatibility.
-func DecryptToken(token string) (string, error) {
-	log.Printf("[DEPRECATED] DecryptToken is deprecated, use DecryptString instead")
-	return DecryptString(token)
 }

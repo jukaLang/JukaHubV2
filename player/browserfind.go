@@ -317,13 +317,3 @@ func browserDrawPageFind(renderer *sdl.Renderer, elem Element, layout *webLayout
 		fillRoundedRect(renderer, left, y, width, layout.RowH, 4, WithAlpha(ColorWarning, 28))
 	}
 }
-
-// browserFindHintLine is the footer hint shown while a search is running, so
-// the keys that step it are discoverable without the docs. An empty result
-// means "no search", and the caller then draws nothing extra.
-func browserFindHintLine() string {
-	if !browserFind.active {
-		return ""
-	}
-	return hintLine(FooterHint{"N", "Next"}, FooterHint{"P", "Prev"}, FooterHint{"Esc", "End find"})
-}

@@ -2,19 +2,11 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
-) // ValidateKnownAtRuntime is a compile-time marker that the config validation
-// helpers in config_health.go are wired into the real config load paths.
-const ValidateKnownAtRuntime = true
-
-// ValidateKnownAtRuntimeWire is a compile-time wire-up marker that the config
-// health helpers on config_health.go are actually used by the real config load/save
-// paths in this module.
-var _ = configHealth
+)
 
 // ConfigWatcher monitors the project's config files for changes and triggers a
 // reload. It watches jukaconfig.json and jukaconfig.xml together and resolves
@@ -123,7 +115,7 @@ func (cw *ConfigWatcher) Start() {
 	cw.mu.Unlock()
 
 	go cw.watchLoop()
-	log.Printf("[hotreload] watching %s for changes", strings.Join(cw.paths, ", "))
+	logDebug("hotreload", "watching %s for changes", strings.Join(cw.paths, ", "))
 }
 
 // Stop halts the background file watcher.
@@ -211,13 +203,13 @@ func (cw *ConfigWatcher) performReload() {
 
 	cfg, source, err := LoadXMLConfigWithFallback(primary)
 	if err != nil {
-		log.Printf("[hotreload] reload failed: %v", err)
+		logWarn("hotreload", "reload failed: %v", err)
 		return
 	}
 
 	// Validate
 	if err := NewConfigValidator().Validate(cfg); err != nil {
-		log.Printf("[hotreload] validation failed: %v", err)
+		logWarn("hotreload", "validation failed: %v", err)
 		configHealth.RecordLoad(source, fmt.Errorf("validation failed: %w", err))
 		configHealth.Log()
 		return
@@ -229,7 +221,7 @@ func (cw *ConfigWatcher) performReload() {
 	fn(cfg)
 	configHealth.RecordLoad(source, nil)
 	configHealth.MarkLoadOK()
-	log.Printf("[hotreload] config reloaded successfully from %s", source)
+	logDebug("hotreload", "config reloaded successfully from %s", source)
 }
 
 // activeStart is when the process started; a config file created after this

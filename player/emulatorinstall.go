@@ -24,7 +24,10 @@ package main
 // is written. Those folders are the firmware's launcher scripts, and the
 // standalone emulators upstream publishes are desktop Linux builds that would
 // install a launcher that cannot start. A core is a single file in a folder
-// RetroArch owns, which is why it is the one thing safe to install there.
+// RetroArch owns, which is why it is the one thing safe to install there. The
+// one exception is the Xbox tile on the Smart Pro: the hakuX port is published
+// as exactly such a folder, built for this firmware, and hakux.go merges it
+// (and keeps what it replaces); startEmulatorInstall routes that tile there.
 //
 // Windows has no such firmware: the same page installs a portable RetroArch
 // (then the core, from the buildbot's windows/x86_64 tree) and the standalone
@@ -35,7 +38,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,20 +58,6 @@ const (
 	emuInstallUpdate
 	emuInstallCurrent
 )
-
-// verb is the word the page shows for the action, "" when there is none.
-func (a emuInstallAction) verb() string {
-	switch a {
-	case emuInstallNew:
-		return "Install"
-	case emuInstallUpdate:
-		return "Update"
-	case emuInstallCurrent:
-		return "Up to date"
-	default:
-		return ""
-	}
-}
 
 // emuCoreInstallPlatform is the shipped policy: every platform installs cores,
 // each from its own buildbot channel (emuCoreIndexURL) — aarch64 shared objects
@@ -195,7 +183,7 @@ func applyEmuInstallPlan(ctx context.Context, client *http.Client, plan emuInsta
 	if err != nil {
 		return build, "", err
 	}
-	log.Printf("[emulators] installed core %s %s (backup %q)", plan.Core, plan.Index.Date, backup)
+	logDebug("emulators", "installed core %s %s (backup %q)", plan.Core, plan.Index.Date, backup)
 	return build, backup, nil
 }
 
@@ -273,6 +261,11 @@ func startEmulatorInstall(e emuEntry) {
 	if e.Status == emuUnsupported {
 		PlayNavSound()
 		ShowToast(e.Name+" is not supported here — "+e.Note, ToastKindInfo)
+		return
+	}
+	if hakuxTile(e) {
+		// The handheld's Xbox tile installs (or updates) the hakuX package.
+		hakuxStartInstall()
 		return
 	}
 	if IsWindows() {
@@ -468,31 +461,36 @@ func emuWinManagedSpecs() []emuWinSpec {
 }
 
 // startEmulatorUpdateInstalled updates every installed core the index has a
-// newer build of — and, on Windows, every emulator JukaHub installed — so a
-// card full of emulators is brought forward in one press instead of one tile at
-// a time. Nothing that is not installed is added: this action updates.
+// newer build of — and every standalone emulator JukaHub installed: the managed
+// ones on Windows, hakuX on the handheld — so a card full of emulators is
+// brought forward in one press instead of one tile at a time. Nothing that is
+// not installed is added: this action updates.
 func startEmulatorUpdateInstalled() {
-	if !emuCoreInstallSupported() {
-		ShowToast("Core updates are switched off in this build", ToastKindInfo)
+	var standalone []emuWinSpec
+	if IsWindows() {
+		standalone = emuWinManagedSpecs()
+	}
+	hakux := hakuxManagedOnCard()
+	// The build switch covers the cores only; standalone emulators and hakuX
+	// update the same way their tile's X does.
+	cores := emuCoreInstallSupported() && len(emuInstalledCoreSet()) > 0
+	if !cores && len(standalone) == 0 && !hakux {
+		if !emuCoreInstallSupported() {
+			ShowToast("Core updates are switched off in this build", ToastKindInfo)
+		} else {
+			ShowToast("Nothing installed to update yet", ToastKindInfo)
+		}
 		return
 	}
 	if !IsOnline() {
 		ShowToast("No internet connection — connect to update emulators", ToastKindWarning)
 		return
 	}
-	var standalone []emuWinSpec
-	if IsWindows() {
-		standalone = emuWinManagedSpecs()
-	}
-	if len(emuInstalledCoreSet()) == 0 && len(standalone) == 0 {
-		ShowToast("Nothing installed to update yet", ToastKindInfo)
-		return
-	}
 	if !tryBeginPatchOp() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	if len(standalone) > 0 {
+	if len(standalone) > 0 || hakux {
 		installBarBeginLabelled("Emulators", "Updating emulators")
 	} else {
 		installBarBeginLabelled("Emulator cores", "Updating emulator cores")
@@ -503,13 +501,13 @@ func startEmulatorUpdateInstalled() {
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
 		timeout := 20 * time.Minute
-		if len(standalone) > 0 {
+		if len(standalone) > 0 || hakux {
 			timeout = emuWinInstallTimeout
 		}
 		ctx, cancel := context.WithTimeout(installBarRunContext(), timeout)
 		defer cancel()
 		var report emuInstallReport
-		if len(emuInstalledCoreSet()) > 0 {
+		if cores {
 			report = runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
 		}
 		for _, spec := range standalone {
@@ -527,6 +525,26 @@ func startEmulatorUpdateInstalled() {
 			default:
 				report.Updated = append(report.Updated, spec.Name)
 				emuForgetUpdate(spec.Name)
+			}
+		}
+		if hakux && ctx.Err() == nil {
+			installBarResetProgress()
+			installBarDetail(hakuxName + " (Xbox)")
+			emuSetInstalling(emuXboxEntryName)
+			result, err := hakuxRunUpdate(ctx)
+			emuSetInstalling("")
+			switch {
+			case err != nil:
+				report.Errors = append(report.Errors, hakuxName+": "+emuFriendlyError(err))
+			case result.Current:
+				report.Current++
+			default:
+				report.Updated = append(report.Updated, hakuxName)
+				emuForgetUpdate(emuXboxEntryName)
+				if result.Edited > 0 {
+					logInfo("emulators", "hakuX: %d changed file(s) replaced; copies in %s", result.Edited, result.EditedDir)
+					ShowToast(fmt.Sprintf("hakuX: %s you had changed replaced — your copies are in %s", pluralizeCount(result.Edited, "file", "files"), result.EditedDir), ToastKindInfo)
+				}
 			}
 		}
 		installBarPhase(installPhaseDone)
@@ -553,6 +571,9 @@ func startEmulatorUpdateInstalled() {
 // Windows emulator with no download JukaHub can install says "Get" (it opens
 // the official page), and a console this device cannot run says "Details".
 func emuInstallHintLabel(e emuEntry) string {
+	if hakuxTile(e) {
+		return hakuxHintA(e)
+	}
 	switch {
 	case e.Pinned:
 		return "Open"
@@ -581,8 +602,12 @@ func emuInstallHintLabel(e emuEntry) string {
 
 // emuUpdateHintLabel is the X hint for a tile: Update when a core is on the
 // card (whether it is stale needs the index) or the tile is a Windows emulator
-// JukaHub installed, and nothing when there is nothing to update.
+// JukaHub installed, Install or Update on the handheld's Xbox tile, and nothing
+// when there is nothing to update.
 func emuUpdateHintLabel(e emuEntry) string {
+	if hakuxTile(e) {
+		return hakuxHintX(e)
+	}
 	if IsWindows() && e.Managed && e.Status == emuAvailable {
 		return "Update"
 	}
@@ -744,43 +769,15 @@ func pruneCoreBackups(target string, keep int) []string {
 	removed := make([]string, 0, len(backups)-keep)
 	for _, backup := range backups[keep:] {
 		if err := os.Remove(backup.Path); err != nil {
-			log.Printf("[emulators] could not prune backup %q: %v", backup.Path, err)
+			logWarn("emulators", "could not prune backup %q: %v", backup.Path, err)
 			continue
 		}
 		removed = append(removed, backup.Path)
 	}
 	if len(removed) > 0 {
-		log.Printf("[emulators] pruned %d old backup(s) beside %s (keeping %d)", len(removed), filepath.Base(target), keep)
+		logDebug("emulators", "pruned %d old backup(s) beside %s (keeping %d)", len(removed), filepath.Base(target), keep)
 	}
 	return removed
-}
-
-// coreBackups lists a core's backups across every RetroArch cores folder the
-// card has, newest first. A backup is restored into the folder it came from, so
-// the folder is part of the entry rather than looked up again at rollback time.
-func coreBackups(core string) []coreBackup {
-	if strings.TrimSpace(core) == "" {
-		return nil
-	}
-	var out []coreBackup
-	for _, dir := range retroArchCoreDirs() {
-		out = append(out, coreBackupsIn(dir, core)...)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].Stamp.Equal(out[j].Stamp) {
-			return out[i].Stamp.After(out[j].Stamp)
-		}
-		return out[i].Path > out[j].Path
-	})
-	return out
-}
-
-func newestCoreBackup(core string) (coreBackup, bool) {
-	backups := coreBackups(core)
-	if len(backups) == 0 {
-		return coreBackup{}, false
-	}
-	return backups[0], true
 }
 
 // scanCoreBackups reads every kept build beside every active core the card
@@ -853,7 +850,7 @@ func deleteCoreBackup(b coreBackup) error {
 	if err := os.Remove(b.Path); err != nil {
 		return fmt.Errorf("delete %s: %w", filepath.Base(b.Path), err)
 	}
-	log.Printf("[emulators] deleted kept build %s (%d bytes freed)", b.Path, b.Size)
+	logDebug("emulators", "deleted kept build %s (%d bytes freed)", b.Path, b.Size)
 	return nil
 }
 
@@ -908,14 +905,14 @@ func rollbackCoreBuild(b coreBackup) (coreBuild, error) {
 	if err := os.Remove(b.Path); err != nil {
 		// The rollback itself succeeded; a leftover copy is only a stale entry
 		// in the next listing, and the caller still reports success.
-		log.Printf("[emulators] restored backup %q could not be removed: %v", b.Path, err)
+		logWarn("emulators", "restored backup %q could not be removed: %v", b.Path, err)
 	}
 	build, ok := coreBuildFromPath(b.Target, false)
 	if !ok {
 		return coreBuild{}, errors.New("the restored core is not a loadable binary")
 	}
 	build.Active = true
-	log.Printf("[emulators] rolled core %s back to the %s build (%s)", build.Core, b.Stamp.Format(coreBackupStampLayout), b.Target)
+	logDebug("emulators", "rolled core %s back to the %s build (%s)", build.Core, b.Stamp.Format(coreBackupStampLayout), b.Target)
 	return build, nil
 }
 
@@ -947,6 +944,14 @@ func startEmulatorRollback() {
 		return
 	}
 	e := entries[emuPanel.cursor]
+	if hakuxTile(e) {
+		if !e.Managed || e.KeptVersion == "" {
+			ShowToast("No previous hakuX version is kept — one is kept after the next update", ToastKindInfo)
+			return
+		}
+		hakuxStartRollback()
+		return
+	}
 	if e.Managed {
 		if e.KeptVersion == "" {
 			ShowToast("No previous "+e.Name+" version is kept — one is kept after the next update", ToastKindInfo)

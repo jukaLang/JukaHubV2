@@ -422,10 +422,19 @@ func homeSearchDrawFooter(renderer *sdl.Renderer, fonts homeSearchFonts, band sd
 	if gsCursor < 0 {
 		hints = homeSearchHintsField[:]
 	}
+	// On a keyboard the sheet is typed into, so its keys are its own
+	// (handleGSInput): Enter opens the best match, X would type an "x".
+	if hintsUseKeyboard() {
+		hints = homeSearchKeysResults[:]
+		if gsCursor < 0 {
+			hints = homeSearchKeysField[:]
+		}
+	}
 	// Right-aligned like Home's footer: measure, then draw from the left.
 	total := int32(0)
 	for i, h := range hints {
-		bw, _ := measureText(font, h.Button)
+		// Measured as drawGlassHintBadge names it (inputhints.go).
+		bw, _ := measureText(font, hintKeyFor(h.Button, h.Label))
 		lw, _ := measureText(font, h.Label)
 		total += max32(badgeH, bw+scaleX(12, screenWidth)) + scaleX(6, screenWidth) + lw
 		if i > 0 {
@@ -437,7 +446,7 @@ func homeSearchDrawFooter(renderer *sdl.Renderer, fonts homeSearchFonts, band sd
 		x = minX
 	}
 	for _, h := range hints {
-		bw, _ := measureText(font, h.Button)
+		bw, _ := measureText(font, hintKeyFor(h.Button, h.Label))
 		badge := sdl.Rect{X: x, Y: badgeY, W: max32(badgeH, bw+scaleX(12, screenWidth)), H: badgeH}
 		end := drawGlassHintBadge(renderer, nil, font, badge, h.Button, h.Label, badge.X+badge.W+scaleX(6, screenWidth), textY)
 		x = end + gap
@@ -449,12 +458,23 @@ var (
 	homeSearchHintsResults = [...]FooterHint{
 		{Button: "A", Label: "Open"},
 		{Button: "X", Label: "Edit search"},
-		{Button: "L1/R1", Label: "Groups"},
+		{Button: "L1/R1 / Tab", Label: "Groups"},
 		{Button: "B", Label: "Close"},
 	}
 	homeSearchHintsField = [...]FooterHint{
 		{Button: "A", Label: "Type"},
 		{Button: "Down", Label: "Results"},
 		{Button: "B", Label: "Close"},
+	}
+	homeSearchKeysResults = [...]FooterHint{
+		{Button: "Enter", Label: "Open"},
+		{Button: "Tab", Label: "Groups"},
+		{Button: "Backspace", Label: "Edit search"},
+		{Button: "Esc", Label: "Close"},
+	}
+	homeSearchKeysField = [...]FooterHint{
+		{Button: "Enter", Label: "Open best match"},
+		{Button: "Down", Label: "Results"},
+		{Button: "Esc", Label: "Close"},
 	}
 )

@@ -139,3 +139,29 @@ func TestUnzipFileBoundedStillRefusesTraversal(t *testing.T) {
 		t.Fatal("traversal file was written")
 	}
 }
+
+// An experience pack is a zip someone else made: every entry name must stay
+// inside the pack, whatever prefix or separator it was written with.
+func TestXpackZipEntryNamesStayInsideThePack(t *testing.T) {
+	cases := []struct {
+		name, prefix, want string
+		bad                bool
+	}{
+		{"pack.json", "", "pack.json", false},
+		{"art/wall.png", "", "art/wall.png", false},
+		{"mypack/art/wall.png", "mypack/", "art/wall.png", false},
+		{"other/file.txt", "mypack/", "", false},
+		{"art/", "", "", false},
+		{"../evil", "", "", true},
+		{"/etc/passwd", "", "", true},
+		{`a\..\b`, "", "", true},
+		{"C:/x", "", "", true},
+		{"a/../../b", "", "", true},
+	}
+	for _, c := range cases {
+		got, err := xpackZipEntryName(c.name, c.prefix)
+		if (err != nil) != c.bad || got != c.want {
+			t.Errorf("xpackZipEntryName(%q, %q) = %q, %v; want %q, refused %v", c.name, c.prefix, got, err, c.want, c.bad)
+		}
+	}
+}

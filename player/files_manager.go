@@ -996,7 +996,7 @@ func filesDrawListNotice(renderer *sdl.Renderer, config *Config, element Element
 		title = "Only hidden items here"
 		body = fmt.Sprintf("%s hidden · Y → Show hidden files", feItemCountLabel(filesNav.hiddenCount))
 	default:
-		title, body = "This folder is empty", "Press B to go back up"
+		title, body = "This folder is empty", hintSentence("Press %s to go back up", "B", "Back")
 	}
 	top := element.Y + dynamicListListOffset(element) + dynamicListRowH + 8
 	elemH := getElementHeight(element, 500)
@@ -1526,7 +1526,7 @@ func feSheetActivate(config *Config) {
 			return
 		}
 		PlayActivateSound()
-		showToast("Selected "+feItemCountLabel(marked)+" — Y for actions", ToastInfo())
+		showToast("Selected "+feItemCountLabel(marked)+" — "+hintSentence("%s for actions", "Y", "Actions"), ToastInfo())
 		closeFeSheet()
 	case feActSort:
 		mode := feCycleSort(config)

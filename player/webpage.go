@@ -679,12 +679,6 @@ func browserDocumentFor(variable string) *webDocument {
 	return browserDocuments.docs[variable]
 }
 
-func resetBrowserDocumentsForTest() {
-	browserDocuments.mu.Lock()
-	browserDocuments.docs = make(map[string]*webDocument)
-	browserDocuments.mu.Unlock()
-}
-
 // --- CSS parsing ----------------------------------------------------------
 
 // webMediaBlockApplies decides whether the rules inside an at-rule block belong

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/pkg/sftp"
 )
@@ -89,8 +90,10 @@ func (r *sftpRoot) localPath(client string) (string, error) {
 			return "", errSFTPOutsideRoot
 		}
 		// On Windows ':' selects an alternate data stream and '\\' is a
-		// separator, so either could be used to address a host path.
-		if runtime.GOOS == "windows" && strings.ContainsAny(part, `:\`) {
+		// separator, so either could be used to address a host path, and a
+		// reserved name (CON, NUL, AUX, COM1…) opens a device instead of a
+		// file; filepath.IsLocal refuses those names.
+		if runtime.GOOS == "windows" && (strings.ContainsAny(part, `:\`) || !filepath.IsLocal(part)) {
 			return "", errSFTPOutsideRoot
 		}
 		local = filepath.Join(local, part)
@@ -223,6 +226,37 @@ func (r *sftpRoot) denyReadOnly() error {
 // single value covers get, put, open, list, stat, readlink and file commands.
 type sftpRootHandlers struct {
 	root *sftpRoot
+	// opened, when set, is told what a client opened ("downloading Roms/x")
+	// and returns what to call when the client closes it: the Network tools
+	// page shows the transfer in between.
+	opened func(what string) func()
+}
+
+// sftpTrackedFile is an open file whose Close also ends its entry on the
+// Network tools page. pkg/sftp closes what a handler returned through
+// io.Closer, so overriding Close is enough.
+type sftpTrackedFile struct {
+	*os.File
+	once sync.Once
+	done func()
+}
+
+func (f *sftpTrackedFile) Close() error {
+	f.once.Do(f.done)
+	return f.File.Close()
+}
+
+// track wraps f for the page, or returns nil when nothing listens; the
+// callers then return f itself.
+func (h *sftpRootHandlers) track(f *os.File, verb, client string) *sftpTrackedFile {
+	if h.opened == nil {
+		return nil
+	}
+	done := h.opened(verb + " " + strings.TrimPrefix(path.Clean("/"+client), "/"))
+	if done == nil {
+		done = func() {}
+	}
+	return &sftpTrackedFile{File: f, done: done}
 }
 
 // sftpLister is the ListAt buffer expected by pkg/sftp.
@@ -254,6 +288,9 @@ func (h *sftpRootHandlers) Fileread(req *sftp.Request) (io.ReaderAt, error) {
 			return nil, err
 		}
 		return nil, os.ErrInvalid
+	}
+	if tracked := h.track(f, "downloading", req.Filepath); tracked != nil {
+		return tracked, nil
 	}
 	return f, nil
 }
@@ -293,6 +330,9 @@ func (h *sftpRootHandlers) Filewrite(req *sftp.Request) (io.WriterAt, error) {
 		}
 		return nil, os.ErrInvalid
 	}
+	if tracked := h.track(f, "uploading", req.Filepath); tracked != nil {
+		return tracked, nil
+	}
 	return f, nil
 }
 
@@ -326,6 +366,9 @@ func (h *sftpRootHandlers) OpenFile(req *sftp.Request) (sftp.WriterAtReaderAt, e
 			return nil, err
 		}
 		return nil, os.ErrInvalid
+	}
+	if tracked := h.track(f, "editing", req.Filepath); tracked != nil {
+		return tracked, nil
 	}
 	return f, nil
 }

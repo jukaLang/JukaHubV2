@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 // saveConfig writes only design data: runtime-only custom keys are dropped,
@@ -148,5 +150,108 @@ func TestSaveUserConfigPreservesSections(t *testing.T) {
 	}
 	if loaded.Favorites == nil || len(loaded.Favorites.Videos) != 1 {
 		t.Error("favorites lost across save/load")
+	}
+}
+
+// A pending debounced save must not follow the process into a different working
+// directory. This used to dirty a test-runner's checkout two seconds after the
+// change was made.
+func TestDebouncedUserConfigSaveStaysInScheduledDir(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore the working directory before the testing package removes the temp
+	// directories; Windows cannot delete a directory that is still the cwd.
+	defer func() { _ = os.Chdir(prevWD) }()
+	prevDelay := userConfigSaveDelay
+	prevCache := userConfigCache
+	prevWrites := userConfigWritesEnabled
+	userConfigSaveDelay = 20 * time.Millisecond
+	userConfigCache = nil
+	// This test is about the writer actually landing a file; the rest of the
+	// binary runs with the debounced writer disabled so tests never touch the
+	// checkout.
+	userConfigWritesEnabled = true
+	t.Cleanup(func() {
+		userConfigSaveMutex.Lock()
+		if userConfigSaveTimer != nil {
+			userConfigSaveTimer.Stop()
+			userConfigSaveTimer = nil
+		}
+		pendingUserConfig = nil
+		pendingUserConfigDir = ""
+		userConfigSaveMutex.Unlock()
+		userConfigSaveDelay = prevDelay
+		userConfigCache = prevCache
+		userConfigWritesEnabled = prevWrites
+		_ = os.Chdir(prevWD)
+	})
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	if err := os.Chdir(dirA); err != nil {
+		t.Fatal(err)
+	}
+
+	saveUserConfigDebounced(&UserConfig{
+		Variables: UserVariables{
+			ReducedMotion: true,
+			Custom:        map[string]interface{}{"debounced": "yes"},
+		},
+	})
+
+	// Simulate the directory going away before the timer fires.
+	if err := os.Chdir(dirB); err != nil {
+		t.Fatal(err)
+	}
+
+	pathA := filepath.Join(dirA, "jukauser.json")
+	deadline := time.Now().Add(2 * time.Second)
+	var data []byte
+	var readErr error
+	// Poll for a readable, non-empty file instead of stat-then-read: on Windows
+	// a scanner or antivirus can briefly hold a freshly renamed file, and an
+	// immediate read then fails with a sharing violation even though the save
+	// landed correctly. The assertion is unchanged, only the wait is robust.
+	for time.Now().Before(deadline) {
+		data, readErr = os.ReadFile(pathA)
+		if readErr == nil && len(data) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if readErr != nil {
+		t.Fatalf("debounced save did not land in the scheduled directory: %v", readErr)
+	}
+	if len(data) == 0 {
+		t.Fatal("debounced save wrote an empty file")
+	}
+	if _, err := os.Stat(filepath.Join(dirB, "jukauser.json")); !os.IsNotExist(err) {
+		t.Errorf("debounced save leaked into the current directory (err=%v)", err)
+	}
+}
+
+// Loading a config never schedules a jukauser.json write. Every load used to:
+// at boot that write carried jukaconfig.json's values (with the Quick Settings
+// levels zeroed) over the user's settings, so a crash or a power cut inside
+// the debounce reset them.
+func TestConfigLoadSchedulesNoUserSave(t *testing.T) {
+	prevWrites := userConfigWritesEnabled
+	userConfigWritesEnabled = true
+	cancelPendingUserConfigSave(t)
+	t.Cleanup(func() {
+		cancelPendingUserConfigSave(t)
+		userConfigWritesEnabled = prevWrites
+	})
+
+	if _, err := loadConfig("jukaconfig.json"); err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	userConfigSaveMutex.Lock()
+	pending := pendingUserConfig
+	userConfigSaveMutex.Unlock()
+	if pending != nil {
+		t.Fatal("loading the config scheduled a jukauser.json save")
 	}
 }

@@ -13,7 +13,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -153,7 +152,7 @@ func compatPanelActivate() {
 		}
 		target, backup, err := activateCoreBuild(build)
 		if err != nil {
-			log.Printf("[compat] activate core failed: %v", err)
+			logWarn("compat", "activate core failed: %v", err)
 			ShowToast("Core activation failed: "+err.Error(), ToastKindError)
 			return
 		}
@@ -164,7 +163,7 @@ func compatPanelActivate() {
 		if backup != "" {
 			message += " · backup " + filepath.Base(backup)
 		}
-		log.Printf("[compat] core active at %s", target)
+		logDebug("compat", "core active at %s", target)
 		PlaySuccessSound()
 		ShowToast(message, ToastKindSuccess)
 		return
@@ -178,7 +177,7 @@ func compatPanelActivate() {
 	assessment := games[cpPanel.cursor]
 	result, err := applyBoost(assessment)
 	if err != nil {
-		log.Printf("[compat] boost failed for %s: %v", assessment.Title, err)
+		logWarn("compat", "boost failed for %s: %v", assessment.Title, err)
 		ShowToast("Boost failed: "+err.Error(), ToastKindError)
 		return
 	}
@@ -598,7 +597,7 @@ func renderCompatGamesList(renderer *sdl.Renderer, config *Config, games []gameA
 		}
 		if built && !scanning {
 			y += 6
-			renderText(renderer, config, font, "Add games under Roms/<system>/ and press Y.", ColorTextSecondary(), panelX+padX, y)
+			renderText(renderer, config, font, hintSentence("Add games under Roms/<system>/ and press %s.", "Y", "Rescan"), ColorTextSecondary(), panelX+padX, y)
 		}
 		if len(issues) > 0 {
 			y += 6

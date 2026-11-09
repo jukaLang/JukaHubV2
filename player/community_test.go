@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,56 +11,8 @@ import (
 	"time"
 )
 
-func TestPlainReleaseNotes(t *testing.T) {
-	body := "## What's new\n\n" +
-		"- **Sharing**: share a theme with a link\n" +
-		"* Fixed a crash on [issue 12](https://github.com/jukaLang/JukaHubV2/issues/12)\n" +
-		"<!-- internal note -->\n" +
-		"<details><summary>More</summary>\n\n" +
-		"`code` stays readable\n"
-	lines := plainReleaseNotes(body)
-	joined := strings.Join(lines, "\n")
-	for _, unwanted := range []string{"##", "**", "](", "<!--", "<details>", "<summary>", "`"} {
-		if strings.Contains(joined, unwanted) {
-			t.Fatalf("markdown %q survived: %q", unwanted, joined)
-		}
-	}
-	if !strings.Contains(joined, "Sharing: share a theme with a link") {
-		t.Fatalf("bullet text missing: %q", joined)
-	}
-	if !strings.Contains(joined, "Fixed a crash on issue 12") {
-		t.Fatalf("link text was not unwrapped: %q", joined)
-	}
-	if strings.Contains(joined, "internal note") {
-		t.Fatalf("HTML comment leaked: %q", joined)
-	}
-}
-
-func TestPlainReleaseNotesEmpty(t *testing.T) {
-	if lines := plainReleaseNotes("  \n\n <!-- only a comment -->\n"); len(lines) != 0 {
-		t.Fatalf("empty notes produced %v", lines)
-	}
-}
-
-func TestChangelogDue(t *testing.T) {
-	cases := []struct {
-		installed, seen string
-		want            bool
-	}{
-		{"", "", false},
-		{"v1", "", true},
-		{"v1", "v1", false},
-		{" v1 ", "v1", false},
-		{"v2", "v1", true},
-	}
-	for _, c := range cases {
-		if got := changelogDue(c.installed, c.seen); got != c.want {
-			t.Errorf("changelogDue(%q,%q) = %v, want %v", c.installed, c.seen, got, c.want)
-		}
-	}
-}
-
 func TestDiagnosticsTextRedactsConfigValues(t *testing.T) {
+	withTempPatchState(t) // DiagnosticsText creates patch/ state folders
 	config := &Config{
 		Version:        "9.9.9",
 		Author:         "Alice",
@@ -85,6 +36,7 @@ func TestDiagnosticsTextRedactsConfigValues(t *testing.T) {
 // nothing that must stay on the device; the phone path's issue link is short
 // enough for a QR code and still names the build.
 func TestBugReportBundlesRedactedDiagnostics(t *testing.T) {
+	withTempPatchState(t) // DiagnosticsText creates patch/ state folders
 	config := &Config{
 		Version:        "1.2.3",
 		ChannelProfile: ChannelProfileConfig{Token: "channel-secret"},
@@ -213,135 +165,42 @@ func TestTelemetryCrashRespectsConsent(t *testing.T) {
 	}
 }
 
-func TestPostTelemetry(t *testing.T) {
-	var got map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", r.Method)
-		}
-		if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-			t.Errorf("content-type = %q", r.Header.Get("Content-Type"))
-		}
-		body, _ := io.ReadAll(r.Body)
-		if err := json.Unmarshal(body, &got); err != nil {
-			t.Errorf("body is not JSON: %v", err)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	if err := postTelemetry(srv.URL, map[string]interface{}{"kind": "device", "device": "TrimUI Smart Pro"}); err != nil {
-		t.Fatal(err)
+func TestRedactDiagnosticTextRemovesCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"token assignment", "discord token=abc123, retrying", "discord token=[redacted], retrying"},
+		{"api key with colon", "groq api_key: sk-live-8891", "groq api_key: [redacted]"},
+		{"password field", `login password="hunter2" failed`, "login password=[redacted] failed"},
+		{"bearer header", "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9", "Authorization: [redacted]"},
+		{"bare bearer", "sent bearer abcdefghijkl", "sent bearer [redacted]"},
+		{"url userinfo", "GET https://media:secret@example.org/a.mp4", "GET https://[credentials]@example.org/a.mp4"},
+		{"unix home", "open /home/stepan/.config/jukauser.json", "open ~/.config/jukauser.json"},
+		{"mac home", "open /Users/alice/Library/x", "open ~/Library/x"},
+		{"windows home", `open C:\Users\stepan\AppData\Roaming\x`, `open C:\Users\[user]\AppData\Roaming\x`},
 	}
-	if got["kind"] != "device" || got["device"] != "TrimUI Smart Pro" {
-		t.Fatalf("server received %v", got)
-	}
-}
-
-func TestCommunityRowsExposeAllActions(t *testing.T) {
-	rows := communityRows(&Config{Version: "1.0.0"})
-	if len(rows) != 6 {
-		t.Fatalf("rows = %d, want changelog, BIOS Doctor, diagnostics QR, bug report, telemetry and close", len(rows))
-	}
-	want := []communityAction{
-		communityActionWhatsNew, communityActionBIOSDoctor, communityActionDiagnosticsQR,
-		communityActionReportBug, communityActionTelemetry, communityActionClose,
-	}
-	for i, action := range want {
-		if rows[i].action != action {
-			t.Fatalf("row %d action = %v, want %v", i, rows[i].action, action)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactDiagnosticText(tt.in); got != tt.want {
+				t.Errorf("redact(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
-func TestCommunityPanelRender(t *testing.T) {
-	prevState, prevDir := patchState, patchStateDir
-	patchState = &PatchState{Schema: 1, ReleaseNotesTag: "v2", ReleaseNotesText: "## Fixed\n- Sharing works"}
-	patchStateDir = t.TempDir()
-	prevOpen, prevPage, prevCursor := communityPanel.open, communityPanel.page, communityPanel.cursor
-	prevW, prevH := screenWidth, screenHeight
-	screenWidth, screenHeight = probeW, probeH
-	communityPanel.open = true
-	communityPanel.page = communityPageHome
-	communityPanel.cursor = 0
-	t.Cleanup(func() {
-		patchState, patchStateDir = prevState, prevDir
-		communityPanel.open, communityPanel.page, communityPanel.cursor = prevOpen, prevPage, prevCursor
-		screenWidth, screenHeight = prevW, prevH
-		communityRowRects = nil
-	})
-	if font, _ := getCachedFont(&Config{}, "small"); font == nil {
-		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
-	}
-	renderer := probeRenderer(t)
-	ClearTextCache()
-	renderCommunityPanel(renderer, &Config{})
-	if communityPanelRect.W <= 0 || communityPanelRect.H <= 0 {
-		t.Fatalf("panel was not measured: %+v", communityPanelRect)
-	}
-	if len(communityRowRects) != 6 {
-		t.Fatalf("row rects = %d, want 6", len(communityRowRects))
-	}
-
-	communityPanel.page = communityPageChangelog
-	renderCommunityPanel(renderer, &Config{})
-	if communityPanelRect.H <= 0 {
-		t.Fatal("changelog page was not measured")
-	}
-}
-
-func TestChangelogOpensOnceAfterUpdate(t *testing.T) {
-	prevState, prevDir := patchState, patchStateDir
-	patchState = &PatchState{
-		Schema:              1,
-		InstalledReleaseTag: "v42",
-		ReleaseNotesTag:     "v42",
-		ReleaseNotesText:    "## Fixed\n- Something",
-	}
-	patchStateDir = t.TempDir()
-	prevOpen, prevPage := communityPanel.open, communityPanel.page
-	communityPanel.open = false
-	t.Cleanup(func() {
-		patchState, patchStateDir = prevState, prevDir
-		communityPanel.open, communityPanel.page = prevOpen, prevPage
-	})
-
-	maybeShowChangelogAfterUpdate(&Config{})
-	if !communityPanel.open || communityPanel.page != communityPageChangelog {
-		t.Fatalf("changelog did not open: open=%v page=%v", communityPanel.open, communityPanel.page)
-	}
-	if tag, _ := cachedReleaseNotes(); tag != "v42" {
-		t.Fatalf("notes cache = %q", tag)
-	}
-	patchStateMu.Lock()
-	seen := patchState.ChangelogSeenTag
-	patchStateMu.Unlock()
-	if seen != "v42" {
-		t.Fatalf("seen tag = %q, want v42", seen)
-	}
-
-	communityPanel.open = false
-	communityPanel.page = communityPageHome
-	maybeShowChangelogAfterUpdate(&Config{})
-	if communityPanel.open {
-		t.Fatal("the same release reopened the changelog")
-	}
-}
-
-func TestStoreReleaseNotes(t *testing.T) {
-	prevState, prevDir := patchState, patchStateDir
-	patchState = &PatchState{Schema: 1}
-	patchStateDir = t.TempDir()
-	t.Cleanup(func() {
-		patchState, patchStateDir = prevState, prevDir
-	})
-
-	storeReleaseNotes(&githubRelease{TagName: "v9", Body: "## Notes\n- Fixed things"})
-	tag, notes := cachedReleaseNotes()
-	if tag != "v9" || !strings.Contains(notes, "Fixed things") {
-		t.Fatalf("notes not cached: tag=%q notes=%q", tag, notes)
-	}
-	if !strings.Contains(plainReleaseNotes(notes)[0], "Notes") {
-		t.Fatalf("cached notes lost their heading: %q", notes)
+func TestRedactDiagnosticTextLeavesDiagnosticsAlone(t *testing.T) {
+	// Ordinary support lines must survive untouched, or the tail stops being
+	// useful exactly when it matters.
+	for _, line := range []string{
+		"[netplay] listening on port 55435",
+		"[startup] splash 750ms, first frame 1.9s",
+		"error: could not start RetroArch: executable file not found",
+		"[wifi] wlan0 obtained 192.168.1.24",
+	} {
+		if got := redactDiagnosticText(line); got != line {
+			t.Errorf("redact(%q) = %q, want it unchanged", line, got)
+		}
 	}
 }

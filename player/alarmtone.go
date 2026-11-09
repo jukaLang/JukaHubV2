@@ -23,7 +23,6 @@ package main
 import (
 	"context"
 	"io"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -165,27 +164,6 @@ func alarmSoundName(id string) string {
 		return "Choose from music…"
 	}
 	return alarmSoundByID(id).Name
-}
-
-// alarmNextSound steps through the synthesised catalogue, wrapping at both
-// ends.
-func alarmNextSound(id string, dir int) string {
-	if len(alarmSoundList) == 0 {
-		return alarmDefaultSound
-	}
-	current := 0
-	for i, s := range alarmSoundList {
-		if s.ID == id {
-			current = i
-			break
-		}
-	}
-	if dir < 0 {
-		current--
-	} else {
-		current++
-	}
-	return alarmSoundList[(current+len(alarmSoundList))%len(alarmSoundList)].ID
 }
 
 // alarmCycleRingtone is the editor's Left/Right: the synthesised list with one
@@ -382,7 +360,7 @@ func alarmPlayLoop(gen int64, soundID string, preview bool) {
 		samples, done, failed := src.view()
 		if (failed || (done && len(samples) == 0)) && !fellBack {
 			// The music could not be played: ring the default chime instead.
-			log.Printf("[alarm] ringtone %q could not be decoded; using the default", alarmMusicName(alarmMusicPath(soundID)))
+			logWarn("alarm", "ringtone %q could not be decoded; using the default", alarmMusicName(alarmMusicPath(soundID)))
 			fellBack = true
 			src = &alarmPCM{samples: alarmSoundPCM(rate, alarmSoundByID(alarmDefaultSound)), done: true}
 			pos = 0
@@ -436,7 +414,7 @@ func alarmPlayLoop(gen int64, soundID string, preview bool) {
 // counts as a failure too.
 func alarmDecodeMusic(ctx context.Context, path string, rate int32, seconds int, dst *alarmPCM) {
 	fail := func(reason string, err error) {
-		log.Printf("[alarm] music ringtone %s: %s: %v", filepath.Base(path), reason, err)
+		logWarn("alarm", "music ringtone %s: %s: %v", filepath.Base(path), reason, err)
 		dst.mu.Lock()
 		dst.failed, dst.done = true, true
 		dst.mu.Unlock()
@@ -491,7 +469,7 @@ func alarmDecodeMusic(ctx context.Context, path string, rate int32, seconds int,
 		}
 		if rerr != nil {
 			if rerr != io.EOF && ctx.Err() == nil {
-				log.Printf("[alarm] music ringtone read: %v", rerr)
+				logWarn("alarm", "music ringtone read: %v", rerr)
 			}
 			break
 		}

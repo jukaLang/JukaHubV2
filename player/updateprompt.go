@@ -69,7 +69,7 @@ func maybeOfferUpdate() {
 	if virtualKeyboardActive || toolsPanel.open || imageViewerPath != "" || qs.open ||
 		patchModal != nil || transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
 		nc.open || tb.startOpen || processPanel.open || wifiPanel.open || ipPanelOpen || emuPanel.open || gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open || raPanel.open || a11y.open ||
-		wpOpen || socialNotifOpen || shortcutsOpen || globalSearchOpen || clipSearchOpen || smartHomePanel.open ||
+		wpOpen || shortcutsOpen || globalSearchOpen || clipSearchOpen || smartHomePanel.open ||
 		memPanel.open || ctrldiag.open || fileEditor.open {
 		return
 	}
@@ -236,7 +236,9 @@ func drawUpdatePill(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect
 	// control draws one; without it a controller user cannot tell the offer is
 	// selected rather than merely present.
 	if focused {
-		strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, (rect.H+4)/2, 2, accentColor)
+		// The shared 3px ring (glassFocusRingWidth), standing just off the
+		// pill like every other focused control in the bar.
+		strokeRoundedRect(renderer, rect.X-3, rect.Y-3, rect.W+6, rect.H+6, (rect.H+6)/2, glassFocusRingWidth, accentColor)
 	}
 
 	// Down-arrow drawn with lines: Inter may not contain U+2193 on the device.

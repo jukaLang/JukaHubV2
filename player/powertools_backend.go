@@ -337,16 +337,6 @@ func powerScanText(host string, timeout time.Duration) string {
 	return b.String()
 }
 
-func powerResolve(host string) ([]string, error) {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return nil, errors.New("no host name")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	return net.DefaultResolver.LookupHost(ctx, host)
-}
-
 // powerPingSummary prefers the platform's ping binary (real ICMP echo) and
 // falls back to TCP connect timing when the binary is missing or blocked.
 func powerPingSummary(host string) string {

@@ -11,7 +11,501 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Date & time.** One place for the clock: *Set time
+  automatically*, *Time zone*, *12-hour clock* (moved here from Display &
+  theme, same setting), *Date format* (Auto from your region, 9 Nov 2026,
+  Nov 9, 2026, 2026-11-09 or 09.11.2026) and *Clock last set*, which says when
+  and how JukaHub last set the clock. On Windows, macOS and Linux desktops the
+  zone and clock rows show what the system uses and open its own settings.
+  Home search finds it under "date", "time zone" or "12 hour"
+  ([player/datetime.go](player/datetime.go),
+  [player/setmodel.go](player/setmodel.go),
+  [player/clockformat.go](player/clockformat.go)).
+
+- **A time-zone picker on the handheld.** The IANA time zones grouped by region
+  with their current UTC offset, the zone in force ticked, and search by city,
+  country or an old name (Calcutta, Kiev) — type on a keyboard, or press Y for
+  the on-screen keyboard; L1/R1 jump between regions. *Set automatically*
+  takes the zone from the same location lookup the weather uses, and never
+  overrides a zone you picked while it was looking. The zone applies to
+  JukaHub at once and is kept on the card (`jukatimezone`); `launch.sh`
+  exports it as `TZ`, so games started from JukaHub use it from the next
+  start. The zone database is built into the Linux binary, so this works on
+  images without `/usr/share/zoneinfo`
+  ([player/tzpicker.go](player/tzpicker.go),
+  [player/tzzones.go](player/tzzones.go),
+  [player/tzdata_linux.go](player/tzdata_linux.go),
+  [player/launch.sh](player/launch.sh)).
+
+- **The clock sets itself from the network.** Each time Wi-Fi comes online,
+  and hourly while it stays, JukaHub asks an internet time server
+  (pool.ntp.org, then Cloudflare and Google; the HTTPS date of the
+  connectivity check if none answers) and sets the clock when it is more than
+  two seconds off — only on the handheld, where nothing else does. A
+  correction of more than ten minutes (counted with the unconfirmed ones
+  before it, of which ten minutes a day are forgiven) is made only when the
+  HTTPS date confirms it, so a forged time-server answer on the Wi-Fi cannot
+  move the clock far; on a firmware with no CA certificates at all, where
+  HTTPS cannot be checked, a clock still dated before this release is set from
+  the time server alone. A failed attempt is retried after 1, 2, 5, 10 and 30
+  minutes.
+  Windows, macOS and Linux PCs keep their own time; JukaHub never asks a time
+  server there by itself. Nothing is sent offline, in airplane mode or behind
+  a captive portal. After the clock or the zone changes, a snoozed alarm moves
+  with the clock and still rings, and playtime recorded under a wrong date
+  moves to the right day (never more than the change can have misdated)
+  ([player/ntpsync.go](player/ntpsync.go),
+  [player/clockjump.go](player/clockjump.go),
+  [player/netmon.go](player/netmon.go)).
+
+- **JukaHub saves a crash report and offers it at the next start.** Every
+  session hands a crash file to the Go runtime, so a panic on any goroutine or
+  a fatal error is written down next to the logs (TrimUI: the app folder beside
+  `errors.txt`; Windows: `%LOCALAPPDATA%\JukaHub\logs`). The next start files it
+  as `crash-<time>.txt` (the newest five are kept, and the newest is never
+  pruned even when the clock is behind) and shows "JukaHub closed
+  unexpectedly" with Send report (Report a bug, prefilled; nothing is sent
+  until you press Submit), Restart in safe mode and Recovery options
+  ([player/crashreport.go](player/crashreport.go),
+  [player/recoverycard.go](player/recoverycard.go)).
+
+- **The recovery chord opens a recovery card.** Holding L + R + Start
+  (Ctrl + Alt + R on a keyboard) while JukaHub starts no longer replaces the
+  binary on its own; it offers the previous version (the one released before
+  this build in Version history; on older installs the build an update backup
+  kept, with Restart now), the last good settings (what the last healthy start
+  read, then the settings' `.bak` or the newest weekly backup), staying in
+  safe mode, and Reset settings (keep games and saves). The settings choices
+  ask first and write a safety backup before anything changes, a crash report
+  filed at that start can be sent from the same card, and holding the chord
+  keeps the automatic rollback away: the card says the last starts failed and
+  offers the previous version first. It works with the pad, a keyboard and a
+  tap ([player/safeboot.go](player/safeboot.go),
+  [player/recoverycard.go](player/recoverycard.go),
+  [player/recoverysettings.go](player/recoverysettings.go)).
+
+- **Three failed starts in a row start safe mode by themselves**, whatever the
+  update history, with a card that says why and how to leave it. A start
+  counts as healthy once it has drawn its first frame and run for 90 seconds,
+  or quit cleanly, and a start that was asked to stop is not counted; the
+  check runs before the settings load, so a crash
+  while loading them counts too ([player/bootguard.go](player/bootguard.go)).
+
+- **A healthy start keeps the settings it started with.** A start that runs
+  90 seconds outside safe mode keeps the settings files it read at boot in
+  `patch/lastgood/`; *Last good settings* on the recovery card offers them
+  first, because the `.bak` beside each file is rewritten by every save
+  ([player/bootguard.go](player/bootguard.go),
+  [player/recoverysettings.go](player/recoverysettings.go)).
+
+- **Roll back a package.** The previous version of an updated package is kept,
+  and its page offers **Roll back to v…**, which swaps the two; the button then
+  reads **Switch back to v…**. Files the app or you wrote into its folder
+  follow the installed version — if some cannot move, the next update says
+  which, and after three tries keeps that old copy whole in
+  `packages/.jukahub-rollback/` rather than block or delete it (as it also
+  does when the installed version's list of its files cannot be read) — and an
+  install cut short by a power loss is finished or undone the next time
+  Packages opens. Removing
+  a package moves every copy into the trash by rename before deleting it
+  ([player/pkgstage.go](player/pkgstage.go),
+  [player/pkgstate.go](player/pkgstate.go), [player/pkgui.go](player/pkgui.go)).
+
+- **Save states made with another core build are flagged.** JukaHub now
+  records which build of each core was active when, and a game's page says in
+  one line beside **SAVE STATES** when some states were written by a build
+  other than the installed one — the cue to roll the core back with **R1**.
+  Times from a clock that was wrong (before 2020, as the handheld reads before
+  it reaches the network) are never used
+  ([player/corebuilds_history.go](player/corebuilds_history.go),
+  [player/gmeta_ui.go](player/gmeta_ui.go)).
+
+- **See who is connected to FTP and SFTP.** The Network tools page lists every
+  connected computer, since when and what it is uploading or downloading, and
+  the tiles show "· 2 connected"
+  ([player/nettoolsscreen.go](player/nettoolsscreen.go)).
+
+- **Android games can present through the firmware's own SDL2.** A public
+  report from the stock TrimUI firmware says raw EGL contexts on SDL's `mali`
+  display stayed black while SDL-created ones showed, so AndroidRT has a new
+  present backend, `ANDROIDPAK_PRESENT=sdl`: the firmware's
+  `libSDL2-2.0.so.0` (loaded at run time, never linked; `ANDROIDPAK_SDL_LIB`
+  overrides) creates the fullscreen window, its EGL surface and the GLES
+  context, and the game gets exactly those — `eglMakeCurrent` becomes
+  `SDL_GL_MakeCurrent`, every `eglSwapBuffers` an `SDL_GL_SwapWindow`, and SDL
+  is pointed at the game's own libEGL and the GLES library beside it, with its
+  signal handlers off so JukaHub can still stop the game. `auto` switches to
+  it by itself when the native backend fails — the game's own `eglInitialize`
+  of the default display fails (SDL starts there and the call is made once
+  more) or EGL refuses the window surface — and logs `backend sdl (fallback:
+  …)`; a game that made its GLES context before that window keeps it as a raw
+  EGL context, and the log names `ANDROIDPAK_PRESENT=sdl` for it.
+  Mock-tested with a fake firmware SDL2 (186 smoke assertions); not yet run on
+  a device ([player/androidrt/src/eglpresent.c](player/androidrt/src/eglpresent.c),
+  [player/androidrt/src/sdlhost.h](player/androidrt/src/sdlhost.h),
+  [docs/ANDROID.md](docs/ANDROID.md)).
+
+- **Hints follow Accessibility's button remaps.** With the Nintendo layout, an
+  A/B or X/Y swap or a per-button remap, every hint now names the physical
+  button that does the job ("B Open" when A and B are swapped) instead of the
+  button that now does something else. An action no button sends any more
+  (its button switched off, or moved to another job with nothing in its
+  place) reads "—", and an alternative with no button is dropped ("B / Start"
+  with Start switched off reads "B"). Screens that keep hint text between
+  frames (keyboard languages, clipboard history, the on-screen keyboard, the
+  Wi-Fi and Network tools sheets, the recovery card) rebuild it when the remap
+  changes. Keyboard keys, the Select + Start quit chord and the controller
+  test (which read physical buttons) are left as printed
+  ([player/inputhints.go](player/inputhints.go),
+  [player/inputhints_test.go](player/inputhints_test.go)).
+
+- **Sentences that name a button speak the hints' words.** A new
+  `hintSentence` helper writes prose such as "Press A to retry" as "Press
+  Enter to retry" on a keyboard and follows a remap; the empty states and
+  status lines of Media, Live TV, Files, Downloads, the arcade, Alarm,
+  Accessibility, Compatibility, Game profiles, Curation, Patch, the browser's
+  link, saved-page and cookie pickers and site info now use it
+  ([player/inputhints.go](player/inputhints.go) and the screens' files).
+
+### Changed
+
+- **A panic no longer exits as a normal quit.** It exits with status 2 after
+  the cleanup still ran (the running game stopped, LEDs and CPU governor put
+  back), bounded to 5 seconds — the deadline is armed before anything is
+  written — so a crash cannot leave a frozen frame, and `launch.sh` writes
+  "JukaHub CRASHED" (or the startup failure, or the signal that ended it) into
+  `errors.txt` instead of a bare exit code, leaves that status in
+  `.last-exit` for the boot guard, and does not relaunch after a crash ([player/crashreport.go](player/crashreport.go),
+  [player/main.go](player/main.go), [player/exitguard.go](player/exitguard.go),
+  [player/launch.sh](player/launch.sh)).
+
+- **Core updates ask before they install.** Settings → Games & emulators →
+  **Core updates** is now Off / Notify me / Install automatically, default
+  Notify me: the daily check says once which cores have a different build and
+  installs nothing. An explicit off stays off and an explicit on becomes
+  Install automatically; the setting is stored once at start-up, with the old
+  switch beside it. Each fetched build's SHA-256 is recorded beside it; the
+  buildbot publishes only CRC32 checksums and no stable per-core tree for this
+  device, which the docs now say plainly
+  ([player/emulatorautoupdate.go](player/emulatorautoupdate.go),
+  [player/setmodel.go](player/setmodel.go),
+  [player/corebuilds_ui.go](player/corebuilds_ui.go),
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
+
+- **A failed Android game's toast names the Java piece it was missing.**
+  After a run that ended badly, JukaHub already named the first missing bionic
+  symbol; when the game got as far as running, the toast now names the first
+  Java method it called that AndroidRT does not implement (else the first
+  class it could not get, else the first member it looked up), read from the
+  runtime's `[androidrt][jni] report:` — or, when the game crashed before
+  printing it, from the first-seen log lines. Loader traps and load failures
+  still come first; table-tested
+  ([player/androidpak.go](player/androidpak.go),
+  [player/androidpak_report_test.go](player/androidpak_report_test.go)).
+
+- **AndroidRT builds without a single compiler warning.** The
+  `-Wformat-truncation` spots now check what `snprintf` wrote: an over-long
+  asset name or library path is "not found" instead of a cut name that could
+  match another file, and an activity name that does not fit is "unknown"
+  ([player/androidrt/src/androidshim.c](player/androidrt/src/androidshim.c),
+  [player/androidrt/src/apkmeta.c](player/androidrt/src/apkmeta.c),
+  [player/androidrt/src/bionicld.c](player/androidrt/src/bionicld.c)).
+
+- **Dates follow one format.** The alarm clock screen and the idle clock dock
+  write the date in the order chosen in Settings → Date & time instead of two
+  different hard-coded layouts; Network tools' clock check uses the same
+  four-timestamp SNTP client as the clock sync, and its Device line is the
+  device time of the exchange that answered
+  ([player/clockformat.go](player/clockformat.go),
+  [player/saver_status.go](player/saver_status.go),
+  [player/nettools2.go](player/nettools2.go)).
+
+- **The controls guide lists the keyboard keys screen by screen.**
+  `docs/CONTROLS.md` gains a "Keyboard keys, screen by screen" table (pad
+  buttons → keyboard keys for about 40 screens) and a paragraph on keyboard
+  twins and Accessibility remaps (an action no button sends shows "—"); the
+  in-app keyboard sheet lists the new browser, video and alarm keys
+  ([docs/CONTROLS.md](docs/CONTROLS.md), [player/shortcuts.go](player/shortcuts.go)).
+
+- **A damaged config no longer stops JukaHub when its backup is good.**
+  `LoadLastKnownGood` loaded the `.bak` and still returned an error, and
+  startup treated that as fatal before safe mode or the recovery chord could
+  run. The backup is now a successful launch: the broken file is kept as
+  `jukaconfig.json.corrupt-<time>`, a toast says the settings were restored,
+  and a test feeds a truncated config plus a good backup
+  ([player/config_health.go](player/config_health.go),
+  [player/main.go](player/main.go)).
+
+- **macOS and Windows metadata no longer appear as games, albums or files.**
+  Hidden entries (`.DS_Store`, the `._Name` AppleDouble companions),
+  `__MACOSX` and `desktop.ini` are skipped by the game library, the media
+  index and the text browser through one shared filter
+  ([player/filejunk.go](player/filejunk.go)).
+
+- **Scene-change toasts name the screen, not its internal ID** — switching to
+  General no longer flashes "SettingsGeneral"
+  ([player/core.go](player/core.go)). The trophy card's caption asks for the
+  Caption role's size instead of 12 px, which the font helper lifted anyway
+  ([player/trophy_celebrate.go](player/trophy_celebrate.go)).
+
+- **The remaining package-level regexps compile on first use.** The 32
+  patterns in `compat.go`, `core.go`, `media_paging.go`,
+  `nettoolsscreen.go`, `podcasts.go`, `plugx.go`, `sectrustdoc.go`,
+  `toolssheet.go` and `webscript.go` now sit behind `sync.OnceValue`, so
+  startup does not pay for screens and features that may never open.
+
+- **Synthetic input events are safe on every path.** Events the app pushes
+  into SDL itself — the phone Companion's buttons, the left stick's D-pad
+  presses, held-direction repeats and touch taps — were bare Go structs that
+  `SDL_PushEvent` read as 56-byte `SDL_Event`s, over-reading 20–40 bytes, and
+  presses arrived with `State` 0 (a release). Every push now goes through one
+  padded constructor that sets the state (`player/sdlevents.go`), the four
+  call sites use it, and the race job exercises the queue
+  ([player/sdlevents_test.go](player/sdlevents_test.go)).
+
+### Removed
+
+- **The invented "social notifications" feed is gone.** With
+  `socialNotifs` on, the app generated fake "Storage 80% full" and "New
+  follower" alerts in the real notification centre. The generator, its
+  settings row, its panel and its `socialNotifs` key are deleted; older
+  configs drop the key instead of re-saving it
+  ([player/social.go](player/social.go) removed).
+
 ### Fixed
+
+- **The boot guard can now roll back a bad update on a handheld without a
+  clock.** It counts starts instead of comparing saved clock times, treats a
+  build as new for its first ten starts, and runs the rollback through Version
+  history after the update state is loaded — before, it read the update time
+  before that state was loaded and could never fire. A rollback needs at least
+  one real crash among the failed starts — a crash report, or the exit status
+  `launch.sh` now leaves for the next start in `.last-exit` (a crash, a fatal
+  error, an abort, a segfault or an out-of-memory kill; without it, a start
+  that died before its first frame) — so power-offs and quits in a working
+  session never roll an update back; a start that was asked to stop (power
+  button, stop signal, Quit) is not a failed start even when the exit watchdog
+  has to force it during a slow splash; a loop gets one automatic rollback (a restored build
+  that fails too gets safe mode); the target is the version released before the
+  running one, not the newest saved; and a quit is recorded as soon as the main
+  loop ends, before the teardown ([player/bootguard.go](player/bootguard.go)).
+
+- **Rolling back to a backed-up executable works while JukaHub is running.**
+  The copy lands beside the binary and is renamed over it, instead of writing
+  into a running executable, which Linux and Windows refuse; on Windows the
+  replaced build, moved aside as `.old`, is deleted at the next start
+  ([player/safeboot.go](player/safeboot.go)).
+
+- **A safety backup can no longer be deleted right after it is written.** A
+  backup made before a recovery restore, a reset, a Backup & restore or the
+  weekly backup was pruned with the others by file time, so on a handheld
+  whose clock was behind the new archive looked oldest and went first; the
+  prune now always keeps the one just written ([player/bkup.go](player/bkup.go)).
+
+- **First-run "Connect to Wi-Fi" and "Set your time zone" work on the
+  handheld.** Both buttons tried `gnome-control-center` /
+  `nm-connection-editor`, which do not exist on TrimUI, so on a new device they
+  were dead (Wi-Fi showed a raw `exec … not found` toast). They now open
+  JukaHub's Wi-Fi page and the time-zone picker, and the tour waits until you
+  come back; desktop tools are used only on a real Linux desktop
+  ([player/onboarding.go](player/onboarding.go)).
+
+- **An alarm can no longer be silenced by a clock that ran ahead.** A wrong
+  clock could mark an alarm done for a day that had not come yet; after
+  network time corrects the clock, such alarms are re-armed
+  ([player/clockjump.go](player/clockjump.go), [player/alarm.go](player/alarm.go)).
+
+- **On a Linux computer the file servers no longer take your home folder for
+  the SD card.** JukaHub run from `~/Apps/JukaHub` made FTP share
+  `~/Documents` and `~/Downloads`; the card layout is now trusted only on an
+  identified TrimUI device ([player/fileserver_guard.go](player/fileserver_guard.go)).
+
+- **FTP folders show as folders.** Directory listings marked every folder as a
+  plain file, so FTP clients offered to download folders instead of opening
+  them; old files now show their year
+  ([player/ftp_server.go](player/ftp_server.go)).
+
+- **An endless FTP command line can no longer exhaust memory.** The command
+  reader collected a line until its newline, which anyone on the network could
+  withhold before signing in ([player/ftp_server.go](player/ftp_server.go)).
+
+- **A failed reinstall no longer removes the package.** Reinstall used to empty
+  the folder before downloading; it is now an ordinary staged install, so the
+  installed copy keeps working if the download fails
+  ([player/pkgstate.go](player/pkgstate.go)).
+
+- **Replacing an emulator core can no longer leave it missing or empty.** The
+  old binary was deleted before the new one was renamed in, and the new one
+  was written without a sync; it is now fsynced and renamed over the old one
+  in one step, its backup is fsynced too, and a backup that failed is deleted
+  instead of being offered as a rollback ([player/compat.go](player/compat.go)).
+
+- **A buildbot index with a size column no longer reads as empty.** Lines with
+  a fourth (size) field are accepted, on either side of the file name
+  ([player/emulatorupdates.go](player/emulatorupdates.go)).
+
+- **A game asking for a missing Java class every frame no longer grows
+  memory.** `FindClass` added a report entry on every miss, so such a game
+  leaked a little per call and its exit report repeated one class thousands of
+  times; misses are now recorded once per name, and the report lists entries
+  in the order the game asked
+  ([player/androidrt/src/jnienv.c](player/androidrt/src/jnienv.c)).
+
+- **Android games use exactly the EGL library the present layer chose.** The
+  game's `libEGL.so` was resolved again through the library search path, which
+  could pick another copy than the firmware's `/usr/lib/libEGL.so` (or none,
+  for a GPU package outside the path); it is now bound to the present layer's
+  own handle ([player/androidrt/src/eglpresent.c](player/androidrt/src/eglpresent.c)).
+
+- **The browser's Search works from a keyboard.** Y or / opens the web search
+  (the pad's Y), and the footer names "/" on a keyboard; the zoom hint names the
+  minus and plus keys. Keys that open a keyboard (/, Y, F for Find, Space or A
+  on the address bar) no longer type their own character into the field they
+  opened, and a held one opens it once without typing its repeats; a key that
+  types nothing (a Ctrl, Alt or Win chord, a Phone Companion or control-profile
+  key) no longer swallows the next character typed
+  ([player/browser.go](player/browser.go), [player/core.go](player/core.go),
+  [player/extras.go](player/extras.go), [player/brw_offline.go](player/brw_offline.go)).
+
+- **Keyboard X and Y in the video player do what the pad's X and Y do.** X
+  toggles captions and Y the settings sheet (C and S still work); X used to
+  fall through to the Media screen's search behind the playing video. Holding
+  X, Y or F acts once instead of flickering captions, the settings sheet or
+  full screen ([player/videoplayer.go](player/videoplayer.go)).
+
+- **Footer hints that named only pad buttons now name their keys.** Playtime
+  and the config inspector switch views with Tab, the image viewer zooms with
+  the minus and plus keys and steps with PgUp / PgDn, the PDF reader steps
+  chapters with [ ] and zooms with minus and plus, game details open options
+  with O, Local play moves players with PgUp / PgDn, keyboard languages move
+  with [ ], the Tools pages jump sections with PgUp / PgDn, and Patch's
+  "Hold A" reads "Hold Enter"
+  ([player/inputhints.go](player/inputhints.go),
+  [player/trophy_room.go](player/trophy_room.go),
+  [player/cfgdocui.go](player/cfgdocui.go),
+  [player/imageviewer.go](player/imageviewer.go),
+  [player/pdfreader.go](player/pdfreader.go),
+  [player/gmeta_ui.go](player/gmeta_ui.go),
+  [player/hotseat_ui.go](player/hotseat_ui.go),
+  [player/vksettings.go](player/vksettings.go)).
+
+- **Missing keyboard twins added.** Delete removes an alarm (the pad's L1, two
+  separate presses: holding Delete does not count twice), Ctrl+Enter sends a
+  chat draft (the pad's Start), X ends a Local play game and Y removes one
+  player per press, X removes one keyboard language per press and Y adds one,
+  and Left / Right page the Settings option sheet like the D-pad
+  ([player/alarm.go](player/alarm.go), [player/chatinput.go](player/chatinput.go),
+  [player/hotseat_ui.go](player/hotseat_ui.go),
+  [player/vksettings.go](player/vksettings.go),
+  [player/setsheet.go](player/setsheet.go)).
+
+- **Holding X on the alarm list no longer flips the alarm on and off**
+  ([player/alarm.go](player/alarm.go)).
+
+- **The controller test speaks keyboard on a keyboard** ("Reset (Enter)", "Esc
+  Close"); on the pad the chip reads "Reset" instead of "Reset (A)" (A only
+  registers a press there; click or tap Reset), and its footer is translated
+  with no remap, so its pad names stay physical
+  ([player/ctrldiag.go](player/ctrldiag.go)).
+
+- **A Wi-Fi login page no longer looks like internet.** The connectivity
+  probe was a TCP dial to `1.1.1.1:80`, which a hotel or airport portal
+  answers happily: the app said online while every request failed. It now
+  requests an HTTP `generate_204` endpoint and requires a 204 with no body;
+  a redirect or a page is reported as a captive portal and its sign-in URL
+  is kept. The Wi-Fi page then shows a **Sign in** control (and
+  "Connected · Sign in required") that opens the portal in the in-app
+  Browser, while downloads and updates stay paused until the probe passes
+  ([player/netmon.go](player/netmon.go),
+  [player/portalsignin.go](player/portalsignin.go)).
+- **Opening a link can no longer run a command on Windows.** A config
+  trigger reached the shell as `cmd /c start "" <url>`, so `&`, `|` and `^`
+  in the URL were parsed as cmd syntax and ordinary query strings were cut at
+  the first `&`. Links now go through one allowlist (http, https, mailto) and
+  `rundll32 url.dll,FileProtocolHandler`, with a test for
+  `https://x/?a=1&calc` ([player/openurl.go](player/openurl.go)). The platform
+  file opener uses the same shell-free handler.
+
+- **An Xbox game with no launcher names the fix.** The Games Library now
+  says "Install hakuX: Emulators → Xbox → X" where the device is offered the
+  port, and the model's own reason on a Smart Pro S or Brick
+  ([player/hakuxpage.go](player/hakuxpage.go)).
+
+- **The metadata filter covers every scanner it was meant to.** The
+  downloads library, package list, save snapshots, ambient photo slideshow
+  and hakuX's Xbox folder now use the shared hidden/junk filter, so
+  `._Name`, `__MACOSX` and `desktop.ini` no longer appear as content
+  ([player/filejunk.go](player/filejunk.go)).
+
+- **Links opened in the browser from another screen load.** A link from Chat,
+  Home search, a paired device or a package page opened the Browser on
+  "Loading …" and stopped there: the flag that keeps the start page from
+  replacing the link also kept the link from loading once the screen arrived
+  ([player/browser.go](player/browser.go)).
+
+- **The video player's settings sheet answers taps where it is drawn.** The
+  windowed player drew the sheet inside its own frame but hit-tested it as if
+  it filled the screen, so a tap could change a setting it was not on; in full
+  screen the sheet no longer fades out while the pad is still using it
+  ([player/videochrome.go](player/videochrome.go), [player/videoplayer.go](player/videoplayer.go)).
+
+- **A click no longer seeks a video that is not on screen.** The seek bar's
+  last position stayed live after the player shrank to the corner window, so a
+  click on the screen underneath could seek the floating video
+  ([player/main.go](player/main.go)).
+
+- **Ctrl+Q no longer switches the screen too.** The Q/E screen keys ignored
+  modifiers, so the Quick Settings chord also stepped back one screen
+  ([player/main.go](player/main.go)).
+
+- **Pomodoro's keyboard matches its footer and the pad.** X skips the phase and
+  Esc goes back; Esc used to skip, which left no key to leave the timer by
+  ([player/pomodoro.go](player/pomodoro.go)). Likewise Esc now leaves the
+  Calculator, which consumed every key and had no way out on a keyboard
+  ([player/calculator.go](player/calculator.go)).
+
+- **Notes' shortcut letters stay out of the text.** N (and now Y) start a new
+  note and S opens search; the letter's own text event used to follow and land in
+  the new title or the query ([player/notes.go](player/notes.go)).
+
+- **Navigation runs at the frame rate it promises.** The main loop slept the
+  whole frame budget *after* drawing, so the handheld's 30 fps profile ran at
+  about 20 fps while navigating (17 in Low Power). The loop now subtracts the
+  frame's own cost while something moves (`FrameRateController.Pace`), and a
+  playing video keeps the active cadence even in Low Power instead of dropping to
+  ~17 fps after 3 s and ~12 fps after 10 s without input
+  ([player/adaptive.go](player/adaptive.go), [player/main.go](player/main.go)).
+
+- **SDL batches draw calls on the device again.** Naming the `opengles2` render
+  driver silently turns SDL's batching off, so every blit was its own GL draw
+  call on the PowerVR GPU. Batching is requested explicitly on the handheld
+  (Windows is unchanged) ([player/main.go](player/main.go)).
+
+- **The live-builder pairing code is no longer in the repository.** The six-digit
+  code that guards pushing a design over Wi-Fi was committed, so every clone
+  shared it. It is generated per install, as the code always allowed, and is
+  git-ignored now ([player/livebuilder.go](player/livebuilder.go)).
+
+- **An EPUB without a title no longer crashes the app.** The reader indexed the
+  title match without checking it, so a package document with no `<dc:title>`
+  killed JukaHub; the file name stands in now ([player/reader.go](player/reader.go)).
+
+- **The Hero grid fits the Brick.** That arrangement scaled its cards to the
+  960-wide canvas twice, leaving a quarter of the screen empty and the gutters
+  too thin for the focus ring; on the Hero grid (and on a Home whose tiles the
+  owner moved) the D-pad now steps by the drawn geometry, and Up from the top
+  row goes to the header instead of sideways ([player/homelayout.go](player/homelayout.go)).
+
+- **An x86-only Android package is refused up front.** It used to be staged
+  and launched, then fail inside the runner; it now gets the "no ABI this
+  device can run" answer ([player/androidpak.go](player/androidpak.go)).
+
+- **`errors.txt` stops growing on the card.** Every log line was mirrored to
+  stderr, which `launch.sh` appends to `errors.txt` forever. Only warnings and
+  errors reach it now, and the launcher rotates it to `errors.txt.1` past 1 MiB
+  ([player/logging.go](player/logging.go), [player/launch.sh](player/launch.sh)).
 
 - **The handheld's Appearance page has the clock row again.** The desktop
   config grew a Clock label and the 12-hour toggle, and the TrimUI config did
@@ -40,7 +534,200 @@ For anything older, the git log and the
   keyboard too, where the grid has no text field to type into
   ([player/appgrid.go](player/appgrid.go), [player/favorites.go](player/favorites.go)).
 
+### Security
+
+- **The live builder can no longer be driven by a web page, a guess or a
+  tricky design.** On the handheld it is off until Settings → Network → Live
+  Builder turns it on; on a PC it listens on that computer only unless
+  `JUKAHUB_LIVE_LAN=1`; everywhere it turns itself off after 30 minutes
+  without use. The pairing code is shown on the device only (never on the
+  status page, in a log or the notification history), travels in a header
+  only, and is replaced from Settings or automatically when wrong codes pile
+  up; five wrong codes lock a sender out (an IPv6 sender by its /64). Only the
+  builder's own origins and host names get answers, which also stops DNS
+  rebinding. A design whose field names differ only in letter case is refused,
+  and a design that can do more than the device's current one — run a
+  program, a command, a yt-dlp command line or a plugin action, start a file
+  server, bind or change a protected setting, move where tools run, change the
+  chat channel or load from a network share — waits in
+  `jukaconfig.json.pending` until the owner applies it on the device, where
+  the card says to apply only one's own design and lists every reason whole
+  (Keep the current design is the default); nothing else lands while it
+  waits. Pulled designs leave secrets on the device, pushing them back keeps
+  them, and no answer to a push quotes one; an install that still holds the
+  published code gets a new one at start ([player/livebuilder.go](player/livebuilder.go),
+  [builder-device.js](builder-device.js), [SECURITY.md](SECURITY.md)).
+
+- **The live builder's pairing code file is out of the repository.** An
+  earlier change git-ignored `player/.livebuilder-code`, but the file stayed
+  tracked, so every clone still shared one code; it is now removed from git
+  (the removal is staged; the file each install generates stays ignored) and an
+  install still holding the published code gets a new one
+  ([player/.gitignore](player/.gitignore),
+  [player/livebuilder.go](player/livebuilder.go)).
+
+- **FTP now asks for a password and shares only your games, saves and
+  media.** The FTP server used to accept any user name and password and serve
+  the whole SD card. It now signs in as `juka` with a password made up for
+  each start and shown on the Network tools page, waits two seconds after a
+  wrong password, closes the connection after three failed sign-ins, locks an
+  address out for ten minutes after ten, and drops a connection that has not
+  signed in a minute after it connected; there is no anonymous login. The top
+  level is a read-only list of the card's user folders (Roms, BIOS, Saves,
+  screenshots, media), JukaHub's downloads and PhoneDrop (so phone uploads can
+  be collected), each opened as an `os.Root` so `..` and symlinks cannot leave
+  it; Apps, Emus, RetroArch and System are never shared, and `Roms/Ports`,
+  whose PortMaster scripts the Ports panel runs, and the folders of game
+  profiles stay read-only over FTP (change them over SFTP). A data connection
+  is only accepted from the signed-in computer, and stopping the server also
+  ends transfers in flight ([player/ftp_server.go](player/ftp_server.go)).
+
+- **SFTP shares the SD card, not the whole system.** On the handheld the SFTP
+  server's root is the card (your home folder on a computer); the whole file
+  system is shared only after **Share whole system…** on its panel is pressed
+  twice, for that run, or with `ssh_full_root` / `JUKAHUB_SSH_FULL_ROOT=1`. On
+  the handheld the SFTP tile opens that panel first, so the choice can be made
+  before the server starts ([player/ssh_server.go](player/ssh_server.go),
+  [player/nettoolsscreen.go](player/nettoolsscreen.go)).
+
+- **The file servers switch themselves off.** FTP and SFTP stop after 15
+  minutes nobody uses them and when the handheld joins another Wi-Fi network or
+  loses its address, with a toast that says why; keepalives (NOOP, PWD,
+  TYPE…) do not count as use, and if the check itself fails the servers stop;
+  the idle time runs on the device's uptime clock, so the clock being set from
+  the network neither stops the servers early nor keeps them on longer
+  ([player/fileserver_guard.go](player/fileserver_guard.go)).
+
+- **Batch files start without cmd.exe reading their names as commands.**
+  Apps, emulators and games launched through `.bat`/`.cmd` files get a command
+  line quoted for cmd.exe (`/d /v:off /s /c`), so the launcher, the ROM path
+  and per-game arguments with `&`, `|` or parentheses reach the right file — a
+  ROM named `Tom&calc&.sfc` no longer runs a command — and a name cmd.exe
+  cannot take literally (`%`, quotes) is refused with a message instead of
+  being run ([player/winbatch.go](player/winbatch.go),
+  [player/apps.go](player/apps.go), [player/emulators.go](player/emulators.go),
+  [player/game_library.go](player/game_library.go)).
+
+- **Package installs are checked, staged and swapped whole.** A registry entry
+  may now publish `"sha256"` (and an exact `"size"`); a download that does not
+  match is refused before anything is unpacked, and an entry whose checksum is
+  malformed does not install at all. Entries without a hash still install but
+  the package page says **Not verified** and the log records the download's
+  own SHA-256. Downloads stream to a file beside the package instead of a
+  64 MiB memory buffer, archives unpack through an `os.Root` into a staging
+  folder (absolute paths, `..`, links, devices, duplicate names and reserved
+  Windows names are refused), and only a complete copy replaces the installed
+  one, by rename. Every step is on the card before the next one relies on it,
+  so a power cut leaves the old version or the new one, never a copy of empty
+  files; a swap that fails and cannot be undone is finished when the package
+  is installed again, or when Packages opens after a restart;
+  and a download is refused up front when the card (Windows included) lacks
+  room for it plus 64 MiB ([player/pkgverify.go](player/pkgverify.go),
+  [player/pkgstage.go](player/pkgstage.go),
+  [player/packages.go](player/packages.go), [docs/PACKAGES.md](docs/PACKAGES.md)).
+
 ### Changed
+
+- **The video player has new controls.** A frosted bar across the bottom of the
+  picture holds a thick seek track with a handle and the time at both ends
+  (time left counts down), a centred transport — rewind and fast-forward 10 s, a
+  round accent play button, and previous / next when the video came from a
+  list — the volume (a mute button, a level bar you can click, the percentage)
+  and speed, captions, settings and full screen. Every button is a vector icon
+  that lights up under the pointer and wears Home's focus ring under the D-pad;
+  captions and full screen stay tinted while on. A chip and the title sit
+  top-left, minimise and close top-right; a paused picture dims behind a large
+  play button; a skip flashes "−10 s" / "+10 s" on its side of the picture; a
+  live stream says LIVE instead of showing a track; the settings sheet lists
+  each setting with its value. The chrome no longer takes the theme's text
+  colour, so a light theme cannot draw dark icons over the video. The music
+  player's transport (previous, play, next, stop, volume) draws the same icons
+  instead of "|<", ">|" and "[]" ([player/videochrome.go](player/videochrome.go),
+  [player/videoplayer.go](player/videoplayer.go), [player/icondefs.go](player/icondefs.go),
+  [player/musicplayer.go](player/musicplayer.go)).
+
+- **The Home pairing QR code is bigger.** The tile grew from 72 px to the full
+  height between the status corner and the cards (about 100 px), and the code
+  now fills it: the bitmap's own four-module margin used to be drawn inside the
+  tile at one pixel per module, so the 72 px tile held a 37 px code. A pairing
+  URL now draws with 3 px modules — 87 px of code — in one batched draw call
+  ([player/companionui.go](player/companionui.go), [player/homelayout.go](player/homelayout.go)).
+
+- **One log, with real levels.** The standard-library `[legacy]` log channel is
+  gone: its 484 call sites now go through levelled helpers
+  (`logDebug/logInfo/logWarn/logError`) into one slog handler that feeds the
+  in-app Logs screen and the diagnostics bundle, formats a debug line only when
+  debug is on, and colours the Logs screen by the line's real level instead of
+  guessing from its words. `JUKAHUB_LOG_LEVEL` and `JUKAHUB_DEBUG=1` still work
+  ([player/logging.go](player/logging.go), [player/systool_logs.go](player/systool_logs.go)).
+
+- **Home puts games first and reads at arm's length** (the UX review's first
+  fixes, see [docs/UX_REVIEW.md](docs/UX_REVIEW.md)). A **Games** card sits beside
+  the hero and opens the game library; a new device shows a "Get started" card
+  instead of an empty "Nothing played recently"; the version left the header;
+  the greeting knows it is night after midnight; captions are at least 14 px
+  (12 px on the Brick canvas); the focus ring stands off the card as a halo; the
+  bell counts only what needs attention and caps at "9+"; the Exit pill left the
+  footer (quit from the Start menu, or Select+Start); the PS4/PS5 pills read
+  "Remote Play"; the Start menu draws real icons; the Exit screen asks "Quit
+  JukaHub?" with Back focused, and its misleading Save button is gone. Untouched
+  0.4.0 and early-November layouts migrate automatically
+  ([player/homelayout.go](player/homelayout.go), [player/homefocus.go](player/homefocus.go),
+  [player/home_migrate.go](player/home_migrate.go), [player/design.go](player/design.go),
+  [player/startmenu.go](player/startmenu.go), [player/notifications.go](player/notifications.go),
+  [player/game_library_ui.go](player/game_library_ui.go)).
+
+- **Faster start on the handheld.** 42 regular expressions compile on first use
+  instead of before `main`, a dead package registry no longer reads a directory
+  at program start, five folder-setup steps moved off the path before the window,
+  work deferred past the first frame runs in ~8 ms slices instead of freezing the
+  first interactive second, and the minigame ticker no longer wakes 60 times a
+  second when no game is open. `JUKAHUB_BENCH_INITTRACE=1 ./startup-bench.sh`
+  shows package-init costs ([player/startup.go](player/startup.go),
+  [player/startup-bench.sh](player/startup-bench.sh)).
+
+- **A lean test suite.** 402 test files (about 3,000 tests, 113k lines) that
+  rendered pixels, pinned layout numbers, audited the docs or slept were deleted;
+  73 files and 469 fast tests remain and guard saved data, config migration,
+  security checks, the updater and installers, and the parsers. No test opens an
+  SDL window now, so `go test` finishes in seconds and `make test` uses Go's test
+  cache ([CONTRIBUTING.md](CONTRIBUTING.md#tests-for-what-you-changed)).
+
+- **About 5,300 lines of dead code removed.** A reference scan found ~380
+  functions, types and variables nothing used — among them the old Waydroid
+  Android host, an analog clock that was never drawn, a `TaskGroup` with no
+  users, layout constants from the first Home, and "compile-time marker"
+  variables — plus a test that lived in a production file (it never ran and
+  linked the `testing` package into the release binary).
+
+- **One engineering backlog.** `player/MODERNIZATION.md` is now the single open
+  task list — about 100 tasks with priority, size, files, "done when" and how to verify,
+  a hardware validation queue and an ideas parking lot — and the completed
+  checklists and audit logs left it. `FEATURE-SLATE`, `FEATURE-BACKLOG`,
+  `IMPROVEMENTS`, `PROJECT_STATUS` and `ROADMAP` were folded into it and deleted
+  ([player/MODERNIZATION.md](player/MODERNIZATION.md)).
+
+- **The builder forgets Font Awesome.** The migration that redrew icons in
+  autosaves from the Font Awesome era is removed along with its test; icons are
+  the builder's own SVGs ([script.js](script.js)).
+
+- **A new logo, in the glass design.** The metallic circuit-board J did not
+  belong to the glass app it opened. The logo is now Home made into an icon: the
+  navy backdrop with its cyan and violet blooms, a pane of glass whose rim
+  catches both lights, and a white J set like the Inter wordmark. It replaces
+  the old artwork everywhere: the TrimUI Apps-menu icon (the SD-card package's
+  copy had a grey checkerboard painted in where its transparency should have
+  been), the Windows executable, window and taskbar icon, the web builder's
+  favicon and app bar, the README and the docs site; and it now stands beside
+  the wordmark on the About screen. One script renders every copy from one
+  construction. The small Windows sizes (16-32 px, plus new 20 and 40 px entries
+  for 125% display scaling) are a simpler mark drawn for their pixel grid
+  rather than a shrunk 300 px picture, and the script writes the compiled icon
+  resource itself, so changing the logo needs Python with numpy and Pillow and
+  no MinGW. `mkwinres.sh` no longer remakes the `.ico` from `JukaPlayer.png`,
+  which would throw that hinting away
+  ([branding/mklogo.py](branding/mklogo.py), [branding/README.md](branding/README.md),
+  [player/brandlogo.go](player/brandlogo.go), [player/about.go](player/about.go)).
 
 - **The goodbye scene's leftovers are gone.** The farewell animation was already
   replaced by the glass teardown, but the exit request still lived in
@@ -63,9 +750,9 @@ For anything older, the git log and the
   ([player/splash.go](player/splash.go), [player/stageui.go](player/stageui.go),
   [player/bootwork.go](player/bootwork.go), [player/bootchecks.go](player/bootchecks.go),
   [player/shutdown.go](player/shutdown.go), [player/powerprofile.go](player/powerprofile.go);
-  tests in [player/bootstage_test.go](player/bootstage_test.go),
-  [player/shutdown_test.go](player/shutdown_test.go) and
-  [player/powerprofile_boot_test.go](player/powerprofile_boot_test.go)).
+  tests in `player/bootstage_test.go`,
+  `player/shutdown_test.go` and
+  `player/powerprofile_boot_test.go`).
 
 - **Button sounds are a soft thump.** Navigation, activate, back and toggle were
   flat beeps (880 Hz and up) with a linear envelope, which the handheld speaker
@@ -79,6 +766,93 @@ For anything older, the git log and the
   session to get it back ([player/logging.go](player/logging.go)).
 
 ### Added
+
+- **YouTube links in the browser play in Media.** Following a link to a YouTube
+  video — a tap, A on a focused link, the link picker, a play card, a typed or
+  pasted address, a bookmark, a shortener that redirects to a watch page, or a
+  link another screen opens in the browser — now plays it on the Media screen
+  instead of loading a page the reader cannot show. DuckDuckGo's and Google's
+  click-tracking links and YouTube's EU consent page are seen through, a `t=`
+  start time is kept, a watch link's playlist is dropped (yt-dlp would fetch the
+  whole list into one file), and the result's text becomes the video's title.
+  Back returns to the page the link was on, where it was scrolled, with the
+  video in the corner window ([player/browser_youtube.go](player/browser_youtube.go)).
+
+- **The power button is back on Home.** The Exit pill returns to the left end of
+  the footer with a power glyph; Favorites drops down to it. It now asks first:
+  an "Exit JukaHub?" card opens above it with Exit focused, so quitting is still
+  two presses of A, but a stray press, a double click or a held key no longer
+  quits by accident ([player/home_power.go](player/home_power.go)).
+
+- **Hints name the keys you actually have.** On a PC without a game controller
+  every hint (the footer, the Controls card, the on-screen keyboard, the hint
+  lines in panels) now names keyboard keys: Enter instead of A, Esc instead of
+  B, the arrow keys instead of the D-pad, F10 for the Start menu, PgUp/PgDn,
+  Home/End and Tab where the shoulders page, jump or switch tabs. On a TrimUI the
+  same happens when a USB or Bluetooth keyboard is plugged in (the device's own
+  power and volume keys and key mappers do not count). With both connected, the
+  one pressed last wins; a short message says why the words changed. Shoulders
+  whose job differs on a screen keep their pad names rather than promise a key
+  that does something else. Settings → Controls → Button hints overrides it
+  (Auto / Controller / Keyboard) ([player/inputhints.go](player/inputhints.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md#keyboard-or-controller-what-the-hints-name)).
+
+- **F10 opens the Start menu from the keyboard,** and closes it. Before, a
+  keyboard could only reach the menu by walking to the top bar's pill. PgUp/PgDn
+  and Home/End now page the Start menu, the notification centre and Quick
+  Settings; Ctrl+Q closes Quick Settings as well as opening it; Tab switches the
+  Downloads tabs; Y works as the "New" and "Graph" keys in Notes and the
+  Calculator, as their footers say ([player/startmenu.go](player/startmenu.go),
+  [player/core.go](player/core.go), [player/quicksettings.go](player/quicksettings.go)).
+
+- **F1 shows the keys for the screen you are on.** It opens the Controls card,
+  written in keyboard keys, and F1 again opens the full list, which was
+  rewritten: every row of a category used to be drawn on the same line, its Home
+  entries described keys that had changed, and what did not fit was cut off (it
+  scrolls now). F1, F2 (search), F12 (screenshot) and Ctrl+Q now work on every
+  screen, including those that take every key (Notes, Calculator, Pomodoro) or
+  have nothing to focus, where they used to do nothing; the music player keeps
+  F2 for its library search
+  ([player/shortcuts.go](player/shortcuts.go), [player/controlslegend.go](player/controlslegend.go)).
+
+- **Startup and shutdown chimes.** JukaHub now starts and closes with a sound,
+  in the spirit of a console boot: as the glass splash comes up, a breath of air,
+  a warm D♭ major-ninth pad and four glass bells climbing left to right, then a
+  sparkle as the glint crosses the wordmark; closing plays the mirror, three bells
+  falling back home. Both are synthesised (no audio files), streamed a block
+  ahead of the speaker on their own stereo device so the first sound leaves within
+  milliseconds, and follow the interface-sound level. **Settings → Sound &
+  haptics → Startup & shutdown sound** turns them off (a toggle that previews the
+  chime); a warm relaunch and a firmware power-off stay silent
+  ([player/bootchime.go](player/bootchime.go),
+  [branding/sound/README.md](branding/sound/README.md)).
+
+- **Xbox on the Smart Pro, through hakuX.** The "xemu — not supported" tile is now
+  an installer for the experimental hakuX port for the TG5040: X installs or
+  updates it from its GitHub releases (digest-checked, SHA-256 recorded), unpacked
+  on the card and merged into `Data/` and `Emus/` without touching files the
+  package does not ship; R1 rolls back the last update, Y shows a setup sheet
+  with the in-game controls, and Xbox games in `Roms/XBOX` launch from the Games
+  library. The Brick Pro gets the same offer marked untested; Brick, Hammer and
+  Smart Pro S say why they cannot; Windows keeps xemu
+  ([player/hakux.go](player/hakux.go), [player/hakuxpage.go](player/hakuxpage.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md)).
+
+- **AndroidRT grows a Java side.** NDK games now get a real JNI environment
+  (classes, methods, strings, arrays, references, exceptions, `RegisterNatives`)
+  where anything unimplemented returns a safe default and is reported once, so a
+  game's first run lists exactly what it is missing. A Minecraft Bedrock class
+  pack answers the platform questions the game asks — store, licence and Xbox
+  Live honestly report "unavailable", never a fake success — GameActivity games
+  (recent Minecraft builds) start through their own glue, and on TrimUI firmware
+  the present layer uses the stock PowerVR `libEGL` first. Minecraft needs its
+  64-bit build; Terraria, a Xamarin/Mono app, is refused with the reason and the
+  PC route. Host smoke suite: 103 checks. Nothing has run on a device yet
+  ([docs/ANDROID.md](docs/ANDROID.md), [docs/ANDROID-MINECRAFT.md](docs/ANDROID-MINECRAFT.md)).
+
+- **A UX review.** [docs/UX_REVIEW.md](docs/UX_REVIEW.md) is an expert critique of
+  every main screen for a 5-inch handheld at arm's length: principles, 30
+  findings rated P0–P3, and which ones shipped.
 
 - **Screens that need the internet say so before the press.** Launched before
   WiFi is joined, Live TV, Podcasts, Shorts, Tickers, video search and the
@@ -95,7 +869,7 @@ For anything older, the git log and the
   ([player/offlineaware.go](player/offlineaware.go),
   [player/menutiles.go](player/menutiles.go), [player/startmenu.go](player/startmenu.go),
   [player/core.go](player/core.go); tests in
-  [player/offlineaware_test.go](player/offlineaware_test.go)).
+  `player/offlineaware_test.go`).
 
 - **A ringing alarm takes over the screen.** The alarm was a three-second
   arpeggio and a toast that any open panel or game could paint over, which is
@@ -111,7 +885,7 @@ For anything older, the git log and the
   Loud Buzz, Morning Birds) on a new **Ringtone** row in the editor, previewed as
   it cycles ([player/alarmring.go](player/alarmring.go),
   [player/alarm.go](player/alarm.go), [player/sound.go](player/sound.go);
-  tests in [player/alarm_ring_test.go](player/alarm_ring_test.go)).
+  tests in `player/alarm_ring_test.go`).
 
 - **Community theme library.** The theme gallery on Settings → Appearance has a
   **C** shortcut (**Y** on a gamepad) now: it opens a browser of the community
@@ -136,7 +910,7 @@ For anything older, the git log and the
   with the saved position. Episodes de-duplicate by audio link and the row is
   labelled as a Podcast, not a video
   ([player/favorites.go](player/favorites.go), [player/recent.go](player/recent.go);
-  tests in [player/recent_podcast_test.go](player/recent_podcast_test.go)).
+  tests in `player/recent_podcast_test.go`).
 
 - **Saved playlists for music.** Audio Settings has a **Playlists** row: X names
   and saves the current queue ("Road Trip", "Relaxing"), left/right picks a
@@ -144,7 +918,7 @@ For anything older, the git log and the
   replaces the list, and the store is plain JSON next to the other app data with
   atomic writes and a 40-playlist / 500-track bound
   ([player/musicplaylists.go](player/musicplaylists.go); tests in
-  [player/musicplaylists_test.go](player/musicplaylists_test.go)).
+  `player/musicplaylists_test.go`).
 
 - **In-game OSD presets.** Settings → Smart Widgets has an **In-game OSD** row
 that cycles *leave as is* (the default), *quiet*, *notifications* and
@@ -153,7 +927,7 @@ font, menu widgets, FPS/framecount/memory counters — before a RetroArch launch
 with the original config kept once as `retroarch.cfg.jukahub-backup`. It never
 touches a hotkey: those are numeric button codes that differ per firmware, so a
 guess would break controls ([player/osdpreset.go](player/osdpreset.go); tests in
-[player/osdpreset_test.go](player/osdpreset_test.go)).
+`player/osdpreset_test.go`).
 
 - **Box art finds more of your library.** A cover lookup now also tries the same
 title spelled the other way: accents folded (`Pokémon` → `Pokemon`), Roman
@@ -163,7 +937,7 @@ for the names that differ by more than spelling, starting with `Zelda II` →
 `Zelda II - The Adventure of Link`. The exact name is still asked for first, and
 the guesses come after every structural one
 ([player/romsetup.go](player/romsetup.go); tests in
-[player/artwork_aliases_test.go](player/artwork_aliases_test.go)).
+`player/artwork_aliases_test.go`).
 
 - **A 12-hour clock, if you want one.** Settings → Appearance has a **12-hour
   clock** switch: the status cluster, the dock clock, the saver, the clock app
@@ -173,7 +947,7 @@ the guesses come after every structural one
   24-hour, so existing configs and screenshots do not change
   ([player/clockformat.go](player/clockformat.go),
   [player/config.go](player/config.go); tests in
-  [player/clockformat_test.go](player/clockformat_test.go)).
+  `player/clockformat_test.go`).
 
 - **The web builder ships its own fonts.** Inter and the Font Awesome faces the
   markup uses now live in `fonts/` instead of a CDN, so the builder opens on
@@ -199,7 +973,7 @@ the guesses come after every structural one
   shows no line and wakes on **Y** like any other key
   ([player/screensaver.go](player/screensaver.go),
   [player/main.go](player/main.go); tests in
-  [player/screensaver_backdrop_test.go](player/screensaver_backdrop_test.go)).
+  `player/screensaver_backdrop_test.go`).
 
 - **The Benchmark screen's Run button says it is running.** While a measurement
   is in flight — and the screen starts one as it opens, so on a slow card that
@@ -212,7 +986,7 @@ the guesses come after every structural one
   rather than ellipsized
   ([player/core.go](player/core.go),
   [player/morefeatures.go](player/morefeatures.go); test in
-  [player/benchmark_test.go](player/benchmark_test.go)).
+  `player/benchmark_test.go`).
 
 - **Picture and video thumbnails in Files.** A row whose file is a photo or a
   video now shows the picture itself in the leading chip instead of **IMG** or
@@ -228,7 +1002,7 @@ the guesses come after every structural one
   24-megapixel decode ceiling
   ([player/filethumb.go](player/filethumb.go),
   [player/files_manager.go](player/files_manager.go); tests in
-  [player/filethumb_test.go](player/filethumb_test.go)).
+  `player/filethumb_test.go`).
 
 - **A playback queue: results can be lined up, and each one starts when the last
   finishes.** The **Queue** pill on a search-result row adds that video to Up
@@ -243,7 +1017,7 @@ the guesses come after every structural one
   purpose ([player/playbackqueue.go](player/playbackqueue.go),
   [player/videoplayer.go](player/videoplayer.go),
   [player/result_actions.go](player/result_actions.go); tests in
-  [player/playbackqueue_test.go](player/playbackqueue_test.go)).
+  `player/playbackqueue_test.go`).
 
 - **Vibration strength: Soft, Normal or Strong.** A new row in the Accessibility
   panel scales the drive level of every pulse — navigation ticks, confirmations,
@@ -254,7 +1028,7 @@ the guesses come after every structural one
   as `hapticsIntensity` beside the switch and a Strong error pulse is capped at
   full scale ([player/haptics.go](player/haptics.go),
   [player/a11y.go](player/a11y.go); tests in
-  [player/haptics_test.go](player/haptics_test.go)).
+  `player/haptics_test.go`).
 
 - **Box art for ROM names that do not match the reference title.** The lookup
   now asks for the exact name first, then the underscored twin, the name without
@@ -265,7 +1039,7 @@ the guesses come after every structural one
   the matcher version, so titles the older lookup gave up on are retried once
   instead of being hidden for the month-long window
   ([player/romsetup.go](player/romsetup.go); tests in
-  [player/artwork_match_test.go](player/artwork_match_test.go)).
+  `player/artwork_match_test.go`).
 
 - **Files is a file manager, and it moves files between two consoles.** The
   screen opens on a breadcrumb bar where every folder in the path is its own
@@ -318,8 +1092,8 @@ the guesses come after every structural one
   ([player/wifi_diag.go](player/wifi_diag.go),
   [player/diagnostics_bundle.go](player/diagnostics_bundle.go),
   [player/wifi_ui.go](player/wifi_ui.go); tests in
-  [player/wifi_diag_test.go](player/wifi_diag_test.go),
-  [player/diagnostics_bundle_test.go](player/diagnostics_bundle_test.go)).
+  `player/wifi_diag_test.go`,
+  `player/diagnostics_bundle_test.go`).
 
 - **Podcasts are a subscription library, not a URL box.** The Podcasts screen
   now keeps a saved list of feeds in `podcasts.json` next to the app's other
@@ -380,7 +1154,7 @@ the guesses come after every structural one
   ([player/ledpanel.go](player/ledpanel.go), [player/ledsync.go](player/ledsync.go),
   [player/quicksettings.go](player/quicksettings.go), [player/main.go](player/main.go),
   [player/controller.go](player/controller.go); tests in
-  [player/ledpanel_test.go](player/ledpanel_test.go)).
+  `player/ledpanel_test.go`).
 
 - **Favorites is a library, not a flat list of links.** The page now opens on
   **Continue** and has four tabs with their counts on the strip — Continue
@@ -404,8 +1178,8 @@ the guesses come after every structural one
   ([player/favorites.go](player/favorites.go), [player/result_actions.go](player/result_actions.go),
   [player/core.go](player/core.go), [player/main.go](player/main.go),
   [docs/CONTROLS.md](docs/CONTROLS.md); tests in
-  [player/favorites_library_test.go](player/favorites_library_test.go),
-  [player/result_actions_test.go](player/result_actions_test.go)).
+  `player/favorites_library_test.go`,
+  `player/result_actions_test.go`).
 
 - **Files can keep the picture it opens as the lock-screen image.** The
   full-screen viewer in Files now has a **Set lock screen** action — the button,
@@ -439,7 +1213,7 @@ the guesses come after every structural one
   injected Media button is a real focus target: a test walks the D-pad from
   Shorts to it on the compact Brick canvas and checks that confirming it opens
   the menu ([player/ipstreams.go](player/ipstreams.go); tests in
-  [player/ipstreams_test.go](player/ipstreams_test.go)).
+  `player/ipstreams_test.go`).
 
 - **Earned badges show their unlock date.** The unlock time was already saved
   with each badge (RFC3339, from the moment the check passed) and never shown,
@@ -468,7 +1242,7 @@ the guesses come after every structural one
   be drawn on top of its own bar, and on the compact (Brick) canvas the insight
   stats ran off the card edge. ([player/playtime.go](player/playtime.go),
   [player/main.go](player/main.go), [docs/CONTROLS.md](docs/CONTROLS.md); tests
-  in [player/playtime_achievements_test.go](player/playtime_achievements_test.go)).
+  in `player/playtime_achievements_test.go`).
 
 - **About now shows the device identification evidence, not just the log.**
   `[device] …` was the only place the model, the source that named it, the panel
@@ -483,7 +1257,7 @@ the guesses come after every structural one
   two measured rows, so the new card cannot push the licence list into the
   footer band on either the wide or the compact canvas, and a card too short
   for the whole list says `+N more` instead of clipping it. ([player/about.go](player/about.go);
-  tests in [player/about_device_test.go](player/about_device_test.go)).
+  tests in `player/about_device_test.go`).
 
 - **A Wi-Fi diagnostics sheet, for a handheld that cannot connect and has no
   shell.** The picker could only say "no networks", which is the same line for
@@ -503,7 +1277,7 @@ the guesses come after every structural one
   disagree. ([player/wifi_diag.go](player/wifi_diag.go),
   [player/wifi_ui.go](player/wifi_ui.go), [player/wifi.go](player/wifi.go),
   [docs/WIFI.md](docs/WIFI.md); tests in
-  [player/wifi_diag_test.go](player/wifi_diag_test.go)).
+  `player/wifi_diag_test.go`).
 
 - **Playtime now answers "have I been consistent?" instead of "what did I use?"**
   The second card on the Playtime screen was seven bars for the past week and
@@ -523,8 +1297,8 @@ the guesses come after every structural one
   "start exploring" empty state in the neighbouring card is now ellipsized
   instead of running under it. ([player/wrapped.go](player/wrapped.go),
   [player/playtime.go](player/playtime.go); tests in
-  [player/wrapped_test.go](player/wrapped_test.go),
-  [player/wrapped_render_test.go](player/wrapped_render_test.go)).
+  `player/wrapped_test.go`,
+  `player/wrapped_render_test.go`).
 
 - **The Wi-Fi picker now works on Windows.** The backend was written against the
   handheld's `wpa_supplicant` — `wpa_cli`, `/sys/class/net`,
@@ -544,7 +1318,7 @@ the guesses come after every structural one
   the app started) is no longer remembered as "no interface": that answer is
   re-checked within seconds, and opening the picker asks Windows again.
   ([player/wifi.go](player/wifi.go), [docs/WIFI.md](docs/WIFI.md); tests in
-  [player/wifi_windows_test.go](player/wifi_windows_test.go)).
+  `player/wifi_windows_test.go`).
 
 - **A persistent activity strip now shows background work on every scene.** While
   a tool or core install, the app's own update, an offline audio/video download
@@ -565,7 +1339,7 @@ the guesses come after every structural one
   source of truth to aggregate.
   ([player/activity.go](player/activity.go), [player/main.go](player/main.go),
   [player/packages.go](player/packages.go); tests in
-  [player/activity_test.go](player/activity_test.go)).
+  `player/activity_test.go`).
 
 - **Frame cost is now measured on the device instead of inferred from a desktop.**
   The main loop times each iteration from the top of the loop to just after
@@ -601,7 +1375,7 @@ the guesses come after every structural one
   announces a switch still names only the new ceiling, because at that instant
   the delivered figure is still the previous stream's.
   ([player/videoplayer.go](player/videoplayer.go),
-  [player/videoquality_delivered_test.go](player/videoquality_delivered_test.go)).
+  `player/videoquality_delivered_test.go`).
 
 - **A long chat and browser session is now measured, not assumed.** The texture
   budgets were sized from reasoning about a 1 GB device; the new long-session
@@ -619,7 +1393,7 @@ the guesses come after every structural one
   picture set never crosses its budget, or if any cache ends above its ceiling;
   it also caught a fixture defect worth knowing about — a browser element with
   no source renders the plain-text reader and silently draws no images at all.
-  ([player/session_memory_test.go](player/session_memory_test.go),
+  (`player/session_memory_test.go`,
   [player/thumbstore.go](player/thumbstore.go),
   [player/cachebudget.go](player/cachebudget.go),
   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
@@ -641,8 +1415,8 @@ the guesses come after every structural one
   [player/textcache.go](player/textcache.go),
   [player/shapeCache.go](player/shapeCache.go),
   [player/homelayout.go](player/homelayout.go); tests in
-  [player/memory_growth_test.go](player/memory_growth_test.go),
-  [player/cachebudget_test.go](player/cachebudget_test.go)).
+  `player/memory_growth_test.go`,
+  `player/cachebudget_test.go`).
 
 - **An emulator update can be rolled back from the Emulators page.** Every
   update already kept the binary it replaced as `<core>_libretro.so.jukahub-
@@ -687,7 +1461,7 @@ the guesses come after every structural one
   [player/thumbstore.go](player/thumbstore.go),
   [player/httpcache.go](player/httpcache.go),
   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); tests in
-  [player/cachebudget_test.go](player/cachebudget_test.go)).
+  `player/cachebudget_test.go`).
 
 - **The Emulators page installs emulators, not just lists them.** A `Roms/`
   folder with no emulator was a dead end: the tile read "no emulator found" and
@@ -737,7 +1511,7 @@ the guesses come after every structural one
   stay separate, so one press cannot send the other form's fields.
   ([player/webpage.go](player/webpage.go), [player/browser.go](player/browser.go),
   [player/vkeyboard.go](player/vkeyboard.go), [docs/BROWSER.md](docs/BROWSER.md);
-  tests in [player/browserforms_test.go](player/browserforms_test.go)).
+  tests in `player/browserforms_test.go`).
 
 - **One page header across every screen.** The Emulators page drew its own title,
   summary and count by hand, so it read as a bespoke panel next to Tools and
@@ -757,8 +1531,8 @@ the guesses come after every structural one
   keeps warning in amber.
   ([player/emutiles.go](player/emutiles.go),
   [player/components.go](player/components.go); tests in
-  [player/emulators_test.go](player/emulators_test.go) and
-  [player/page_header_consistency_test.go](player/page_header_consistency_test.go)).
+  `player/emulators_test.go` and
+  `player/page_header_consistency_test.go`).
 - **The browser remembers where you were reading.** Following a link and
   pressing Back (or Forward, or Reload) returns you to the paragraph you were
   on instead of the top of the page. Positions are kept per address for the
@@ -768,7 +1542,7 @@ the guesses come after every structural one
   once the page is laid out and clamped to its length, so a page that changed
   since it was last read is never scrolled out of range.
   ([player/browserscroll.go](player/browserscroll.go); tests in
-  [player/browserscroll_test.go](player/browserscroll_test.go)).
+  `player/browserscroll_test.go`).
 - **Text zoom in the browser.** The reader's page can be scaled 75%–160% with
   L2/R2 on a pad or `-`/`+` on a keyboard, independent of the global
   accessibility text size. The whole styled page is re-measured from the new
@@ -778,7 +1552,7 @@ the guesses come after every structural one
   control, so the web page's L2/R2 moved from jump-to-top/bottom (still one held
   D-pad away) to zoom.
   ([player/browserzoom.go](player/browserzoom.go); test in
-  [player/browserzoom_test.go](player/browserzoom_test.go)).
+  `player/browserzoom_test.go`).
 - **A zoom chip on the browser toolbar.** The reader's text scale now has a
   home in the UI, not just the keyboard's `-`/`+` and the L2/R2 triggers: a
   measured chip beside the mode chip shows the current scale, lights up when it
@@ -791,20 +1565,20 @@ the guesses come after every structural one
   now has its own Accessibility row that steps through the same helper, so a
   player picks a battery-vs-speed trade-off without learning two separate
   toggles. ([player/a11y.go](player/a11y.go);
-  test in [player/a11y_powermode_test.go](player/a11y_powermode_test.go)).
+  test in `player/a11y_powermode_test.go`).
 - **Dropping a file on the window plays it (desktop).** A video or audio file
   dragged onto JukaHub plays through the embedded player, an image opens in the
   viewer, a folder points at Files, and an unknown extension says so instead of
   silently ignoring the drop; a path that does not exist is refused up front.
   The handheld has no pointer, so this never fires there.
   ([player/dropfile.go](player/dropfile.go); test in
-  [player/dropfile_test.go](player/dropfile_test.go)).
+  `player/dropfile_test.go`).
 - **Podcast feeds survive an offline boot.** The last-known-good copy of each
   feed is kept on the card (30-day window, 1 MiB cap) and served only when the
   network fetch fails outright — a live response, a 304 or an HTTP error status
   all win first, so a feed that is genuinely gone is never replayed as if it
   were live. ([player/feedcache.go](player/feedcache.go); tests in
-  [player/feedcache_test.go](player/feedcache_test.go)).
+  `player/feedcache_test.go`).
 - **A bounded image-decode pool and a general semaphore.** Image decoding runs
   under a shared cap (2 jobs on the handheld, 4 on desktop) so a fan-out of
   decodes cannot open one RGBA buffer per item on a 1 GB device, and a weighted
@@ -816,7 +1590,7 @@ the guesses come after every structural one
   drawn control's tap area to a 44px minimum, centred on what is drawn, so the
   36px Exit pill absorbs a near-miss press without its drawn geometry moving.
   ([player/touchtarget.go](player/touchtarget.go); tests in
-  [player/touchtarget_test.go](player/touchtarget_test.go)).
+  `player/touchtarget_test.go`).
 - **The web builder stamps `schemaVersion`.** A config the builder exports now
   carries the format version the player checks on load instead of none, keeping
   an imported design's own version when it has one.
@@ -860,8 +1634,8 @@ the guesses come after every structural one
   ([player/notes.go](player/notes.go), [player/calculator.go](player/calculator.go),
   [player/pdfreader.go](player/pdfreader.go), [player/alarm.go](player/alarm.go),
   [player/pomodoro.go](player/pomodoro.go), [player/extras.go](player/extras.go);
-  tests in [player/header_test.go](player/header_test.go) and
-  [player/calendar_popover_test.go](player/calendar_popover_test.go)).
+  tests in `player/header_test.go` and
+  `player/calendar_popover_test.go`).
 
 - **The top-bar calendar is a month view you can page through.** The clock's
   popover borrowed the alarm screen's corner widget: 28×22 cells drawn with the
@@ -876,7 +1650,7 @@ the guesses come after every structural one
   unchanged. ([player/calendarpopover.go](player/calendarpopover.go),
   [player/home.go](player/home.go), [player/main.go](player/main.go),
   [player/controller.go](player/controller.go); tests in
-  [player/calendarpopover_test.go](player/calendarpopover_test.go)).
+  `player/calendarpopover_test.go`).
 
 ### Fixed
 
@@ -1038,7 +1812,7 @@ the guesses come after every structural one
   twelve Home tiles still sit exactly on the old geometry is also moved to the
   new grid in memory when it loads; a layout with any tile moved or resized is
   left alone ([player/home_migrate.go](player/home_migrate.go); tests in
-  [player/home_migrate_test.go](player/home_migrate_test.go)).
+  `player/home_migrate_test.go`).
 
 - **Colour blends towards a darker colour came back unchanged.** `lerpColor`
   took each channel difference in `uint8`, which wraps whenever the target is
@@ -1072,7 +1846,7 @@ the guesses come after every structural one
   with the entry itself, and a loopback test drives the console's own transfer
   client against its own server, covering connect, host-key pinning, download
   and upload ([player/sftp_root.go](player/sftp_root.go); tests in
-  [player/filetransfer_loopback_test.go](player/filetransfer_loopback_test.go)).
+  `player/filetransfer_loopback_test.go`).
 
 - **A damaged snapshot can no longer half-overwrite live saves.** A restore
   copied the snapshot's files one at a time, so a truncated copy, a flipped byte
@@ -1098,7 +1872,7 @@ the guesses come after every structural one
   without following the helper — on top of the existing resolution guard. On the
   FAT/exFAT card, where links are impossible, the alias is still copied as
   before ([player/windows_runtime_install.go](player/windows_runtime_install.go);
-  fuzz targets in [player/fuzz_test.go](player/fuzz_test.go)).
+  fuzz targets in `player/fuzz_test.go`).
 
 - **The search log can no longer be derived from the API key.** The tool name a
   refused search command reports is now taken from the scene's own command text,
@@ -1117,7 +1891,7 @@ the guesses come after every structural one
   [player/widgets.go](player/widgets.go)).
 
 - **The parsers are fuzzed instead of only reviewed.**
-  [player/fuzz_test.go](player/fuzz_test.go) adds native Go fuzz targets for the
+  `player/fuzz_test.go` adds native Go fuzz targets for the
   archive entry and symlink names and for the transfer address field: each
   asserts an invariant (a name either gets refused or resolves below the
   extraction root; an address either gets refused or round-trips through its own
@@ -1141,7 +1915,7 @@ the guesses come after every structural one
   the address bar is being edited, and never for a page the reader has already
   navigated past ([player/textbrowser.go](player/textbrowser.go),
   [player/browser.go](player/browser.go); tests in
-  [player/browser_redirect_test.go](player/browser_redirect_test.go)).
+  `player/browser_redirect_test.go`).
 
 - **The dark blue palette now separates, and its text is readable.** The shipped
   dark blue was one flat field: panels sat 1.11:1 above the page, rows 1.09:1
@@ -1166,7 +1940,7 @@ the guesses come after every structural one
   [player/jukaconfig.json](player/jukaconfig.json),
   [player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json),
   [script.js](script.js), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); tests in
-  [player/themes_test.go](player/themes_test.go)).
+  `player/themes_test.go`).
 
 - **The Emulators page is the same page as every other overlay.** It drew the
   shared title bar inside a card that ran out to the screen edge (20px of
@@ -1182,9 +1956,9 @@ the guesses come after every structural one
   sheds whole hints by measurement instead of letting the line be ellipsized,
   dropping the D-pad line first and always keeping Back
   ([player/emutiles.go](player/emutiles.go); tests in
-  [player/emulators_test.go](player/emulators_test.go),
+  `player/emulators_test.go`,
   [player/emulatorinstall_test.go](player/emulatorinstall_test.go) and
-  [player/page_header_consistency_test.go](player/page_header_consistency_test.go)).
+  `player/page_header_consistency_test.go`).
 
 - **Play Link asks for a link and plays it.** The Media screen's Play Link button
   only acted on a link that was already typed into the URL field, so with nothing
@@ -1197,7 +1971,7 @@ the guesses come after every structural one
   already in the field still plays without asking again
   ([player/features.go](player/features.go), [player/core.go](player/core.go),
   [player/vkeyboard.go](player/vkeyboard.go); tests in
-  [player/media_playlink_test.go](player/media_playlink_test.go)).
+  `player/media_playlink_test.go`).
 
 - **The Playtime badge list scrolls with the D-pad and the arrow keys.** The
   screen has no config elements, so its only focus nodes were the top-bar
@@ -1221,7 +1995,7 @@ the guesses come after every structural one
   lines, and a front pocket whose seam crosses the paper — and Packages is a
   taped parcel: shaded lid, tape band down the middle, shipping label off to one
   side. ([player/homelayout.go](player/homelayout.go); tests in
-  [player/homelayout_icon_test.go](player/homelayout_icon_test.go) pin both the
+  `player/homelayout_icon_test.go` pin both the
   missing-glyph fallback and that the two redrawn glyphs paint three or more
   tones).
 
@@ -1257,8 +2031,8 @@ the guesses come after every structural one
   only ran in full screen, so touches in the window did nothing, and the bound is
   now the laid-out window itself, leaving the rest of the scene to the scene.
   ([player/videoplayer.go](player/videoplayer.go); tests in
-  [player/videoplayer_close_test.go](player/videoplayer_close_test.go),
-  [player/videoplayer_controls_test.go](player/videoplayer_controls_test.go)).
+  `player/videoplayer_close_test.go`,
+  `player/videoplayer_controls_test.go`).
 
 - **The Wi-Fi switch no longer turns the radio off.** `rfkill`'s verbs are
   `block`/`unblock`, and `runRfkill` had them the wrong way round: asking for
@@ -1267,7 +2041,7 @@ the guesses come after every structural one
   `nmcli` — the Quick Settings switch and the picker's "press A to turn Wi-Fi
   on" both did the opposite of what they said, which is why the list stayed
   empty after turning Wi-Fi on. ([player/systemcontrol.go](player/systemcontrol.go);
-  test in [player/wifi_supplicant_start_test.go](player/wifi_supplicant_start_test.go)).
+  test in `player/wifi_supplicant_start_test.go`).
 
 - **The Brick's Wi-Fi picker finds (and if needed starts) its supplicant.** Three
   gaps kept the picker from ever opening on the Brick. The supplicant's
@@ -1285,7 +2059,7 @@ the guesses come after every structural one
   simply off, opening the picker in "turn Wi-Fi on" mode instead of turning the
   user away. ([player/wifi.go](player/wifi.go), [player/wifi_ui.go](player/wifi_ui.go),
   [player/startmenu.go](player/startmenu.go), [player/quicksettings.go](player/quicksettings.go),
-  [docs/WIFI.md](docs/WIFI.md); tests in [player/wifi_supplicant_start_test.go](player/wifi_supplicant_start_test.go)).
+  [docs/WIFI.md](docs/WIFI.md); tests in `player/wifi_supplicant_start_test.go`).
 
 - **A Brick is identified by its model code, not only by its panel.** TrimUI
   images do not all stamp a name into `/etc/hostname`, so the Brick fell through
@@ -1325,7 +2099,7 @@ the guesses come after every structural one
   message names both routes instead of claiming a missing `wpa_cli` that the
   image never had. ([player/wifi_ctrl.go](player/wifi_ctrl.go),
   [player/wifi.go](player/wifi.go); tests in
-  [player/wifi_ctrl_test.go](player/wifi_ctrl_test.go)).
+  `player/wifi_ctrl_test.go`).
 
 - **A 4:3 panel fills the screen even when the hardware cannot be named.** The
   shipped design is 1280x720 and a 4:3 display letterboxes it into a strip with
@@ -1336,7 +2110,7 @@ the guesses come after every structural one
   panel it chose. A design that is already 4:3, and the 16:9 Smart Pro panels,
   are left alone. ([player/uiprofile.go](player/uiprofile.go),
   [player/main.go](player/main.go); tests in
-  [player/uiprofile_test.go](player/uiprofile_test.go)).
+  `player/uiprofile_test.go`).
 
 - **"Could not install ffplay" no longer fails on every attempt on the TrimUI
   Brick.** The handheld FFmpeg bundle is a ~130 MB `.tar.xz`, and JukaHub
@@ -1367,7 +2141,7 @@ the guesses come after every structural one
   [player/netmon.go](player/netmon.go),
   [player/package-sdcard.sh](player/package-sdcard.sh); tests in
   [player/tools_unpack_test.go](player/tools_unpack_test.go) and
-  [player/mpv_removal_test.go](player/mpv_removal_test.go)).
+  `player/mpv_removal_test.go`).
 
 - **The Brick's front F1 / F2 keys do something.** The firmware reports them as
   L3 / R3, which almost nothing listened for, and the Controller card told Brick
@@ -1379,7 +2153,7 @@ the guesses come after every structural one
   nothing on Home. ([player/brickkeys.go](player/brickkeys.go),
   [player/controlslegend.go](player/controlslegend.go),
   [docs/CONTROLS.md](docs/CONTROLS.md); tests in
-  [player/brickkeys_test.go](player/brickkeys_test.go)).
+  `player/brickkeys_test.go`).
 
 - **The header's "Update" pill can be selected from where it is drawn.** On Home
   the pill sits in the header's system corner, immediately left of the
@@ -1394,7 +2168,7 @@ the guesses come after every structural one
   hidden now-playing chip or an unadvertised release still falls through to the
   next control instead of trapping the pad.
   ([player/homefocus.go](player/homefocus.go), [docs/CONTROLS.md](docs/CONTROLS.md);
-  tests in [player/updatechip_test.go](player/updatechip_test.go)).
+  tests in `player/updatechip_test.go`).
 
 - **The Podcasts list no longer extends past the screen bottom on the Brick.**
 The curated-feed scene's `dynamiclist` element carried the root config's portrait
@@ -1408,7 +2182,7 @@ top-anchored under the header and ending above the footer — so the entries fil
 the content band and are reachable with the same navigation as the rest of the
 scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json),
 [player/jukaconfig.json](player/jukaconfig.json); regression test in
-[player/layout_bounds_test.go](player/layout_bounds_test.go)).
+`player/layout_bounds_test.go`).
 
 - **Opening the Wi-Fi picker no longer answers `exit status 255`.** On an image
   whose supplicant keeps its control socket somewhere `wpa_cli` does not look by
@@ -1442,7 +2216,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   or switch has started, or once playback has moved to another video.
   ([player/streaming.go](player/streaming.go),
   [player/videoplayer.go](player/videoplayer.go); tests in
-  [player/videoquality_revert_test.go](player/videoquality_revert_test.go)).
+  `player/videoquality_revert_test.go`).
 - **Discovery asks the supplicant which interface it drives when nothing on the
   card names it.** Some images expose the radio in neither `/sys/class/net` (no
   `wireless`/`phy80211` marker), nor `/proc/net/wireless`, nor any of the known
@@ -1456,7 +2230,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   draws and an uncached probe would fork a process per frame. A probe never runs
   when an earlier source answered, and the cache is reset when a caller knows the
   hardware changed. ([player/wifi.go](player/wifi.go), [docs/WIFI.md](docs/WIFI.md);
-  tests in [player/wifi_interface_test.go](player/wifi_interface_test.go)).
+  tests in `player/wifi_interface_test.go`).
 - **Play is modal from the press, and B cancels all of it.** Pressing Play on a
   cold card spends the first seconds downloading yt-dlp/ffmpeg, and the loading
   state only began after those tools were resolved — so the install card was up
@@ -1475,8 +2249,8 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   [player/patch_engine.go](player/patch_engine.go), [player/tools.go](player/tools.go),
   [player/installbar.go](player/installbar.go),
   [player/loadingcard.go](player/loadingcard.go); tests in
-  [player/playprepare_cancel_test.go](player/playprepare_cancel_test.go)).
-- **The Wi-Fi picker finds the radio on a device that is online.** It reported `No wireless network interface on this device` while the handheld was connected. Interface discovery listed `/sys/class/net` and kept only entries that `DirEntry.IsDir` called a directory — but every entry there is a symlink into the device tree, so the link itself is never a directory and every real radio was filtered out. The probe now resolves the entry before testing it, accepts both the old `wireless` marker and the cfg80211 `phy80211` one, and falls back to `/proc/net/wireless`, to the supplicant's control sockets, and finally to a Wi-Fi interface name when a vendor driver exposes none of those. The status meter's "interface is up" check reads the same list, so a cfg80211 image no longer shows the no-link icon while connected. ([player/wifi.go](player/wifi.go), [player/statusbar_status.go](player/statusbar_status.go); tests in [player/wifi_interface_test.go](player/wifi_interface_test.go)).
+  `player/playprepare_cancel_test.go`).
+- **The Wi-Fi picker finds the radio on a device that is online.** It reported `No wireless network interface on this device` while the handheld was connected. Interface discovery listed `/sys/class/net` and kept only entries that `DirEntry.IsDir` called a directory — but every entry there is a symlink into the device tree, so the link itself is never a directory and every real radio was filtered out. The probe now resolves the entry before testing it, accepts both the old `wireless` marker and the cfg80211 `phy80211` one, and falls back to `/proc/net/wireless`, to the supplicant's control sockets, and finally to a Wi-Fi interface name when a vendor driver exposes none of those. The status meter's "interface is up" check reads the same list, so a cfg80211 image no longer shows the no-link icon while connected. ([player/wifi.go](player/wifi.go), [player/statusbar_status.go](player/statusbar_status.go); tests in `player/wifi_interface_test.go`).
 - **Every JSON store that holds your work now survives a power cut and a damaged file.** Notes, alarms and the IPTV list got this first; an audit of the rest found the same two defects in sixteen more stores (fourteen on both halves, two only when reading). Each was written with a temp file + rename (atomic, but with no fsync and no backup), so a card pulled at the wrong moment could still leave a zero-length file, and each loader returned an empty store on a parse error with at most one log line — a favourites list, a set of per-game overrides, a saved browser session or a PS4 pairing all read as "never existed". They now go through `AtomicWrite` (temp file, fsync, rename, previous version kept as `.bak`) and `readJSONWithBackup`, which recovers the backup and says so in the log. `favorites.json` was worse still: it was truncated by a bare `os.WriteFile` on every save. The stores are `favorites.json`, `game-options.json`, `game-recents.json`, `musicfavorites.json`, `audioresume.json`, `ipstreams.json`, `tvfavorites.json`, `browser-cookies.json`, `browser-bookmarks.json`, `browser-block.json`, `partyfriends.json`, `partyhistory.json`, `psremote.json`, `startup-state.json`, `save-sync/folders.json`, the curation profiles and the Toolbox's `power-scripts.json`; the `secret` command writes `jukauser.json` the same way now instead of skipping the backup. A store the user deletes — a cleared bookmark list, the browser's Forget (whole jar, one site, or an expiry prune) and a deleted curation profile — deletes its `.bak` in the same step, because data the user removed must not survive on the card. Caches (weather, RetroAchievements, artwork misses, the patch database) are deliberately left regenerable, and a file the app only reads (`game-launchers.json`) still falls back to its built-in default with a log rather than looking for a backup that could never exist. ([player/config_health.go](player/config_health.go), [player/browsercookies.go](player/browsercookies.go), [docs/CONFIGURATION.md](docs/CONFIGURATION.md); tests in [player/store_durability_test.go](player/store_durability_test.go), [player/store_durability_library_test.go](player/store_durability_library_test.go), [player/store_durability_media_test.go](player/store_durability_media_test.go) and [player/store_durability_social_test.go](player/store_durability_social_test.go)).
 - **The game library releases box art it is done with.** The preview loads one
   cover per focused row, and the texture cache behind it was an unbounded map:
@@ -1497,13 +2271,13 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   recently used entries and always keeping the label being drawn; the texture
   accounting line (`JUKAHUB_TEXSTATS=1`) prints usage against the budget.
   ([player/textcache.go](player/textcache.go), [player/perf.go](player/perf.go);
-  tests in [player/textcache_test.go](player/textcache_test.go)).
+  tests in `player/textcache_test.go`).
 - **A launcher full of broken icons no longer grows the icon cache.** An icon
   that fails to decode is cached as a miss so the file is not re-read every
   frame, but the miss skipped the eviction order: the count cap only ever
   counted icons that loaded, while the map grew with every missing image. Misses
   now go through the same bound. ([player/appicons.go](player/appicons.go); test
-  in [player/appicons_test.go](player/appicons_test.go)).
+  in `player/appicons_test.go`).
 - **Notes, alarms and the IPTV list survive a power cut.** All three stores were
   written with a bare `os.WriteFile`, which truncates the file before writing the
   new bytes: pulling the power, or filling the card mid-save, left a half-written
@@ -1545,7 +2319,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   browser already used in the same run still keeps the page on screen, and a
   link from chat or the Home card still claims the session first.
   ([player/browser.go](player/browser.go); test in
-  [player/browser_test.go](player/browser_test.go)).
+  `player/browser_test.go`).
 - **The browser's bottom chips fit their labels again.** Thirteen actions now
   share the row, and equal shares sized it by the count alone, so the widest
   label ("Forward") overflowed its chip on every panel and "Search" did the same
@@ -1554,7 +2328,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   size, and the column's surplus is shared out pro rata, which fits with room to
   spare at 1280×720, 960×544 and 800×480.
   ([player/browser.go](player/browser.go); guard in
-  [player/browsercookies_site_test.go](player/browsercookies_site_test.go)).
+  `player/browsercookies_site_test.go`).
 - **Five ways a "Wi-Fi stopped working" report turned out to be code.** A
   launcher's PATH can miss the sbin folders where firmware images keep
   `wpa_cli` and the DHCP clients, so the picker claimed they were not
@@ -1569,7 +2343,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   key replaces the stale supplicant entry only after it joins. An image whose
   only DHCP client is `dhclient` never got a lease attempt.
   ([player/wifi.go](player/wifi.go), [player/wifi_ui.go](player/wifi_ui.go);
-  tests in [player/wifi_resilience_test.go](player/wifi_resilience_test.go),
+  tests in `player/wifi_resilience_test.go`,
   docs in [docs/WIFI.md](docs/WIFI.md)).
 - **A tap in the Media gallery plays the row it lands on.** The list layout
   draws 100px rows at a 114px pitch, but the click path always used the
@@ -1583,7 +2357,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   presses aimed at the controls above it
   ([player/core.go](player/core.go), [player/main.go](player/main.go),
   [player/media_paging.go](player/media_paging.go); tests in
-  [player/searchresults_click_test.go](player/searchresults_click_test.go)).
+  `player/searchresults_click_test.go`).
 - **The browser's toolbar and cookie strip are full-size tap targets.** The
   drawn chips are 32px tall and the cookie strip is a font height — fine for
   a D-pad, short for a fingertip on the Brick's panel. The click path now
@@ -1607,7 +2381,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   a two-canvas render test now fails if any chip's label is wider than the
   chip
   ([player/textbrowser.go](player/textbrowser.go),
-  [player/browser_devices_render_test.go](player/browser_devices_render_test.go)).
+  `player/browser_devices_render_test.go`).
 - **The screensaver's hint line no longer runs under the Cookies row in
   Settings → General.** The injected helper ("Idle time before the screensaver
   starts. Tap to change.") draws 620px wide; at y=576 its tail ran beneath the
@@ -1739,7 +2513,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   for hand-edited configs ([player/morefeatures.go](player/morefeatures.go),
   [player/jukaconfig.json](player/jukaconfig.json),
   [player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json);
-  tests in [player/benchmark_test.go](player/benchmark_test.go)).
+  tests in `player/benchmark_test.go`).
 
 - **The notification bell is a header button, not a headline.** It was sized off
   the status font and came out a 54×40 capsule with a 32px glyph on the 1280
@@ -1767,7 +2541,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   readings at once: a forecast on a ten-minute timer no longer stays stale for
   the rest of the session after a game
   ([player/gamesuspend.go](player/gamesuspend.go), [player/main.go](player/main.go);
-  tests in [player/backgroundwork_test.go](player/backgroundwork_test.go)).
+  tests in `player/backgroundwork_test.go`).
 
 - **The handheld keeps its emulator cores current by itself, and stops piling
   up the builds it replaces.** Updating every installed core meant opening
@@ -1815,7 +2589,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   480×258 Continue card 2,972 KB → under 64 KB of shape memory
   ([player/shapeCache.go](player/shapeCache.go), [player/core.go](player/core.go),
   [player/homelayout.go](player/homelayout.go), [player/home.go](player/home.go),
-  [player/shape_cache_animation_test.go](player/shape_cache_animation_test.go)).
+  `player/shape_cache_animation_test.go`).
 - **The scene-navigation memory harness measures the box-art ceiling that
   actually ships.** Its library phase sizes its synthetic card from the art
   budget, but it read whichever branch the host takes, so a desktop run measured
@@ -1828,7 +2602,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   `TestLibraryArtBudgetBranches` pins both ceilings and the derivation, so
   forcing one branch does not leave the other untested
   ([player/game_library_ui.go](player/game_library_ui.go),
-  [player/memory_growth_test.go](player/memory_growth_test.go),
+  `player/memory_growth_test.go`,
   [player/game_library_test.go](player/game_library_test.go)).
 - **One top bar on every screen, and a Back button you can find at arm's
   length.** Home and every scene already drew the same band, but the music
@@ -1853,7 +2627,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   [player/musicplayer.go](player/musicplayer.go),
   [player/musicskins.go](player/musicskins.go),
   [player/terminal.go](player/terminal.go), [player/extras.go](player/extras.go);
-  tests in [player/header_test.go](player/header_test.go)).
+  tests in `player/header_test.go`).
 
 - **Text is measured once instead of on every frame, which is what the handheld
   was spending its frame on.** Profiling a warm home frame put ~40% of it inside
@@ -2317,7 +3091,7 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   ([0002](docs/adr/0002-renderer-owned-caches.md)); CONTRIBUTING says when one
   is expected.
 - A documentation link check in the test suite
-  ([player/docs_links_test.go](player/docs_links_test.go)): every relative
+  (`player/docs_links_test.go`): every relative
   Markdown link in the checkout must resolve, so a renamed page fails the build
   instead of shipping a dead pointer. It found four broken links on the way in,
   including links to an Android-on-A133P study that was later removed; current
@@ -2643,7 +3417,7 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   cannot start reading a different adapter mid-session when the ranking between
   two connected adapters flips. ([player/wifi_windows.go](player/wifi_windows.go),
   [docs/WIFI.md](docs/WIFI.md); tests in
-  [player/wifi_windows_test.go](player/wifi_windows_test.go)).
+  `player/wifi_windows_test.go`).
 
 - **The Package Manager shows which package is selected.** The cursor was a
   50-alpha accent wash plus a 3px spine, and the list's pane border was drawn in
@@ -2709,7 +3483,7 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   back to the generic hint. Errors are wrapped with `%w` throughout the player
   (netplay, tools, crypto, system control, the Windows runtime installer and
   the patch resolver), and
-  [player/errorwrap_audit_test.go](player/errorwrap_audit_test.go) fails on a
+  `player/errorwrap_audit_test.go` fails on a
   new `%v` wrap instead of relying on review.
 - The intermittent `SDL_RenderReadPixels` crash in the test suite is fixed at
   its cause. The static-layer caches (on-screen keyboard, chat, video overlay)
@@ -2718,7 +3492,7 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   record their owning renderer, drop a foreign texture without touching it, and
   the test renderer releases them before destroying its renderer
   ([player/vkeyboard.go](player/vkeyboard.go),
-  [player/renderer_cache_owner_test.go](player/renderer_cache_owner_test.go)).
+  `player/renderer_cache_owner_test.go`).
 
 - One touch tap on a video card in the browser resolved the video twice.
   SDL synthesizes its own mouse press at finger-down, so a page's play card
@@ -2878,4 +3652,4 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   [player/chatprofile.go](player/chatprofile.go),
   [player/controller.go](player/controller.go), [player/main.go](player/main.go),
   [docs/CONTROLS.md](docs/CONTROLS.md); tests in
-  [player/chat_profile_test.go](player/chat_profile_test.go)).
+  `player/chat_profile_test.go`).

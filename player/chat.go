@@ -9,7 +9,6 @@ import (
 	"image"
 	"image/color"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -60,17 +59,6 @@ type ChatMessage struct {
 	Error string `json:"error,omitempty"`
 }
 
-// LinkPreview holds metadata for a URL link
-type LinkPreview struct {
-	URL      string
-	Title    string
-	Desc     string
-	SiteName string
-	ImageURL string
-	Fetched  bool
-	ThumbTex *sdl.Texture
-}
-
 // chatImageTexture is one decoded chat image with the footprint it occupies.
 type chatImageTexture struct {
 	texture *sdl.Texture
@@ -114,7 +102,6 @@ func clearChatImageCache() {
 var chatImageDownloads = make(map[string][]byte)
 var chatImageFetching = make(map[string]bool)
 var chatImageDLMutex sync.Mutex
-var linkPreviews = make(map[string]*LinkPreview)
 var urlRegex = regexp.MustCompile(`https?://[^\s<>"]+`)
 var imageURLRegex = regexp.MustCompile(`\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$`)
 
@@ -186,7 +173,7 @@ func chatLocalAttachment(path string) (string, bool) {
 	}
 	resolved, err := regularFileWithin(chatAttachmentRoot, path)
 	if err != nil {
-		log.Printf("[SECURITY] [chat] refusing local attachment %q: %v", path, err)
+		logWarn("chat", "security: refusing local attachment %q: %v", path, err)
 		return "", false
 	}
 	if info, err := os.Stat(resolved); err != nil || info.Size() > 32<<20 {
@@ -386,12 +373,12 @@ func fetchChatAvatar(url string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		log.Printf("[chat] avatar download failed: %v", err)
+		logWarn("chat", "avatar download failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[chat] avatar download failed: %s", resp.Status)
+		logWarn("chat", "avatar download failed: %s", resp.Status)
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, chatAvatarMaxBytes))
@@ -415,7 +402,7 @@ func uploadChatAvatar(renderer *sdl.Renderer, url string, data []byte) *sdl.Text
 		chatAvatarDLMutex.Lock()
 		chatAvatarFailed[url] = true
 		chatAvatarDLMutex.Unlock()
-		log.Printf("[chat] avatar decode failed: %v", err)
+		logWarn("chat", "avatar decode failed: %v", err)
 		return nil
 	}
 	pixels := circularAvatarPixels(img, chatAvatarPixels)
@@ -594,18 +581,6 @@ type chatLinkHit struct {
 
 var chatLinkRects []chatLinkHit
 
-// chatLineLinkTargets keeps the spans that survived the wrap intact. A link the
-// renderer clipped to fit the last line would otherwise play a malformed URL.
-func chatLineLinkTargets(line string, whole map[string]bool) []chatLineLinkSpan {
-	var targets []chatLineLinkSpan
-	for _, span := range chatLineLinkSpans(line) {
-		if whole[span.url] {
-			targets = append(targets, span)
-		}
-	}
-	return targets
-}
-
 // chatTextLinkRects are the URL spans drawn as message text. They are kept apart
 // from the card rects so a card and the text it previews never shadow each
 // other in a click.
@@ -644,15 +619,6 @@ func trimChatURL(u string) string {
 	return strings.TrimRight(u, ".,;:!?)]}'\"")
 }
 
-// firstChatURL returns the first http(s) URL in a message, or "".
-func firstChatURL(text string) string {
-	m := urlRegex.FindString(text)
-	if m == "" {
-		return ""
-	}
-	return trimChatURL(m)
-}
-
 // firstChatImageURL returns the first URL in a message that points at an image,
 // so pasting an image link shows a thumbnail instead of a bare address.
 func firstChatImageURL(text string) string {
@@ -681,18 +647,6 @@ func chatMessageImageURL(msg ChatMessage) string {
 func isYouTubeURL(u string) bool {
 	lower := strings.ToLower(u)
 	return strings.Contains(lower, "youtube.com/") || strings.Contains(lower, "youtu.be/")
-}
-
-// chatPlayableURL returns the first link in a message that the media player can
-// open: a YouTube link, a direct audio/video file, or a live stream.
-func chatPlayableURL(text string) string {
-	for _, m := range urlRegex.FindAllString(text, -1) {
-		u := trimChatURL(m)
-		if isYouTubeURL(u) || hasMediaExtension(u) {
-			return u
-		}
-	}
-	return ""
 }
 
 // chatLinkCardLimit bounds how many link cards one message may draw. Each card
@@ -732,24 +686,6 @@ func chatMessageLinks(text string) []string {
 type chatLineLinkSpan struct {
 	start, end int
 	url        string
-}
-
-// chatLineLinkSpans finds the URLs drawn on one wrapped line, so a tap on the
-// link text itself can play or open it. The rects are measured from the same
-// line and font the renderer uses, which keeps the target exactly on the text.
-func chatLineLinkSpans(line string) []chatLineLinkSpan {
-	var spans []chatLineLinkSpan
-	for _, m := range urlRegex.FindAllStringIndex(line, -1) {
-		if m[0] >= m[1] {
-			continue
-		}
-		u := trimChatURL(line[m[0]:m[1]])
-		if u == "" {
-			continue
-		}
-		spans = append(spans, chatLineLinkSpan{start: m[0], end: m[0] + len(u), url: u})
-	}
-	return spans
 }
 
 // chatLinkOpensInPlayer reports whether a link is media the player handles
@@ -914,13 +850,13 @@ func discordCreds() (string, string) {
 
 	if !strings.HasPrefix(tok, "ENC:") {
 		discordStatus = "Discord: token is not encrypted"
-		log.Printf("[DISCORD] Stored discord_token does not have an ENC: prefix; rename it to an encrypted value before enabling Discord.")
+		logDebug("discord", "Stored discord_token does not have an ENC: prefix; rename it to an encrypted value before enabling Discord.")
 		return "", defaultDiscordChannel
 	}
 
 	decrypted, err := DecryptAPIToken(tok, "discord_token")
 	if err != nil {
-		log.Printf("[DISCORD] Failed to decrypt token: %v", err)
+		logWarn("discord", "Failed to decrypt token: %v", err)
 		if strings.HasPrefix(err.Error(), "discord_token: value is not encrypted") {
 			discordStatus = "Discord: token is not encrypted"
 		} else if err.Error() == "discord_token: empty encrypted value" {
@@ -1038,7 +974,7 @@ func discordValidateToken(token, tokenType string) (string, error) {
 		}
 		if ok {
 			if strings.HasPrefix(auth, "Bot ") && strings.EqualFold(tokenType, "user") {
-				log.Printf("[DISCORD] Token is configured as a user token but Discord accepted it as a bot token")
+				logDebug("discord", "Token is configured as a user token but Discord accepted it as a bot token")
 			}
 			return auth, nil
 		}
@@ -1279,14 +1215,6 @@ func chatCommunityTitle() string {
 	return "Community"
 }
 
-// discordConnect opens a Discord session with the configured credentials. The
-// chat's sender loop calls discordConnectWith with a snapshot instead, because
-// the live config must not be read off the main thread.
-func discordConnect() error {
-	tok, _ := discordCreds()
-	return discordConnectWith(tok, discordChannel(), discordTokenType())
-}
-
 // discordConnectWith opens a live Discord gateway session for tok on channel
 // ch and listens for new messages there; the recent history is fetched in the
 // background once the session is open.
@@ -1390,7 +1318,7 @@ func chatEntryFromDiscord(m *discordgo.Message) (ChatMessage, bool) {
 func discordLoadHistory(dg *discordgo.Session, ch string) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[discord] history fetch recovered from: %v", r)
+			logDebug("discord", "history fetch recovered from: %v", r)
 		}
 	}()
 	// Role and channel names first: message text is rewritten when it is
@@ -1413,7 +1341,7 @@ func discordLoadHistory(dg *discordgo.Session, ch string) {
 	msgs, ferr := dg.ChannelMessages(ch, 50, "", "", "")
 	if ferr != nil {
 		discordStatus = "Discord: " + ferr.Error()
-		log.Printf("[discord] history fetch failed: %v", ferr)
+		logWarn("discord", "history fetch failed: %v", ferr)
 		return
 	}
 	// Discord answers newest first.
@@ -1613,17 +1541,10 @@ func normalizeGroqModel(model string) string {
 		return groqDefaultModel
 	}
 	if replacement, ok := groqRetiredModels[strings.ToLower(model)]; ok {
-		log.Printf("[groq] model %q was retired; using %q", model, replacement)
+		logDebug("groq", "model %q was retired; using %q", model, replacement)
 		return replacement
 	}
 	return model
-}
-
-// groqCandidates returns the configured model followed by the current
-// production lineup, so a single unavailable model does not break the
-// assistant.
-func groqCandidates() []string {
-	return groqCandidatesFor(groqModel())
 }
 
 // groqCandidatesFor is groqCandidates for an already-resolved first choice
@@ -1687,12 +1608,6 @@ func groqErrorFromResponse(status int, body []byte) *groqError {
 	return &groqError{status: status, msg: msg, model: modelErr}
 }
 
-// buildGroqMessages assembles a short conversation from the Juka AI tab so the
-// assistant keeps context instead of answering every message from scratch.
-func buildGroqMessages(userText string) []map[string]string {
-	return buildGroqMessagesFrom(chatTabMessages(chatTabAI), strings.TrimSpace(userText))
-}
-
 // buildGroqMessagesFrom builds the request from a history: the system prompt,
 // the exchanges since the last "New conversation" divider, and the question.
 func buildGroqMessagesFrom(history []ChatMessage, userText string) []map[string]string {
@@ -1752,17 +1667,6 @@ func sendGroqChatMessage(userText string) {
 	chatAskAI(userText)
 }
 
-// groqStatusColor tints the status label according to its state.
-func groqStatusColor() sdl.Color {
-	switch {
-	case strings.Contains(groqStatus, "error"), strings.Contains(groqStatus, "no API key"):
-		return DangerInk()
-	case strings.Contains(groqStatus, "thinking"):
-		return WarningInk()
-	}
-	return SuccessInk()
-}
-
 // newChatMessageID gives a local message a stable id, so the selection and the
 // quote target follow it even when the history scrolls or is trimmed.
 func newChatMessageID() string {
@@ -1775,12 +1679,6 @@ func sendChatMessage(sender, text string) {
 	// "System" lines are the app talking to this user (a missing key, a file
 	// that could not be read); they are never posted to the channel.
 	postChatMessage(sender, text, sender != "System")
-}
-
-// postLocalChatMessage adds a message to the community tab of this device
-// only; nothing is sent to Discord.
-func postLocalChatMessage(sender, text string) {
-	postChatMessage(sender, text, false)
 }
 
 // postChatMessage adds a message to the community tab. With mirror set, a

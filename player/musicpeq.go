@@ -388,12 +388,6 @@ func musicPEQAdjust(band int, delta float64, config *Config) {
 	}
 }
 
-// musicPEQApplyPreset loads a preset curve.
-func musicPEQApplyPreset(name string) {
-	musicEQ.preset = name
-	musicEQ.gains = musicPEQPresetGains(name)
-}
-
 // musicPEQStatus is the one-line summary used by the panel and the player's
 // status line.
 func musicPEQStatus() string {

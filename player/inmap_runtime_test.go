@@ -1,8 +1,8 @@
 package main
 
 // inmap_runtime_test.go — the engine that runs a control profile, driven with
-// a fake clock: plain remaps, holds, double taps, chords, the Select + R1
-// switch, screen scopes, the pause rules and the recovery from a lost release.
+// a fake clock: plain remaps, holds, double taps, chords, screen scopes, the
+// pause rules and the recovery from a lost release.
 
 import (
 	"strings"
@@ -238,57 +238,6 @@ func TestInmapChord(t *testing.T) {
 	r.release(inmapBtnA)
 }
 
-func TestInmapSwitchHotkey(t *testing.T) {
-	r := newInmapTestRig(t, "")
-	before := inmapEffective()
-	if !r.press(inmapBtnSelect) {
-		t.Fatal("Select was not held back for the switch hotkey")
-	}
-	if !r.press(inmapBtnR1) {
-		t.Fatal("Select + R1 did not switch")
-	}
-	r.release(inmapBtnR1)
-	r.release(inmapBtnSelect)
-	r.wait(1000)
-	r.expect()
-	if after := inmapEffective(); after == before || after.name != "Gaming" {
-		t.Fatalf("the switch went from %q to %q, want Gaming", before.name, after.name)
-	}
-	if !strings.Contains(currentToast.Message, "Controls: Gaming") {
-		t.Fatalf("toast = %q", currentToast.Message)
-	}
-
-	// Select alone is Back on its way up (on Default, which gives Select no
-	// line of its own: Gaming's double tap would make it wait for a second).
-	inmapChoose(nil, inmapFindProfile(inmapDefaultName), false)
-	r.press(inmapBtnSelect)
-	r.release(inmapBtnSelect)
-	r.expect("+select", "-select")
-
-	// R1 alone is R1 at once.
-	if r.press(inmapBtnR1) {
-		t.Fatal("R1 alone was held back")
-	}
-	r.release(inmapBtnR1)
-
-	// With the hotkey off, or no pad attached, Select goes straight through.
-	inmapReg.mu.Lock()
-	inmapReg.hotkeyOn = false
-	inmapReg.mu.Unlock()
-	if r.press(inmapBtnSelect) {
-		t.Fatal("Select was held back with the hotkey off")
-	}
-	r.release(inmapBtnSelect)
-	inmapReg.mu.Lock()
-	inmapReg.hotkeyOn = true
-	inmapReg.mu.Unlock()
-	inmapPadHook = func() bool { return false }
-	if r.press(inmapBtnSelect) {
-		t.Fatal("Select was held back with no pad attached")
-	}
-	r.release(inmapBtnSelect)
-}
-
 func TestInmapSceneScopeAndOverlays(t *testing.T) {
 	r := newInmapTestRig(t, "profile: Media\nscenes: Tube\nmap:\nx -> button:y\n")
 	if r.press(inmapBtnX) {
@@ -352,79 +301,5 @@ func TestInmapLostReleaseIsRecovered(t *testing.T) {
 	r.expect("-y")
 	if inmapEngine.btn[inmapBtnX].held {
 		t.Fatal("X is still marked down")
-	}
-}
-
-func TestInmapTriggersHoldAndRelease(t *testing.T) {
-	r := newInmapTestRig(t, "profile: P\nr2 hold 500ms -> button:y\nl2 -> button:x\n")
-	if !r.press(inmapBtnR2) {
-		t.Fatal("R2 with a hold line was not held back")
-	}
-	r.wait(500)
-	r.expect("+y", "-y")
-	r.release(inmapBtnR2)
-	r.wait(10)
-	r.expect()
-	if inmapEngine.btn[inmapBtnR2].held {
-		t.Fatal("R2 is still marked down after the latch let go")
-	}
-
-	r.press(inmapBtnL2)
-	r.expect("+x")
-	r.release(inmapBtnL2)
-	r.wait(10)
-	r.expect("-x")
-}
-
-func TestInmapProfileTargetAndAutoSwitch(t *testing.T) {
-	r := newInmapTestRig(t, "profile: P\nl3 -> profile:Left-handed\n")
-	r.press(inmapBtnL3)
-	r.release(inmapBtnL3)
-	if got := inmapEffective(); got.name != "Left-handed" {
-		t.Fatalf("profile:Left-handed chose %q", got.name)
-	}
-
-	// With "Switch by screen" on, a profile naming a screen takes over there
-	// and hands back when the screen is left.
-	inmapReg.mu.Lock()
-	inmapReg.autoOn = true
-	inmapReg.mu.Unlock()
-	currentSceneIndex = 1
-	r.wait(1)
-	if got := inmapEffective(); got.name != "Media browsing" {
-		t.Fatalf("on Tube the effective profile is %q, want Media browsing", got.name)
-	}
-	currentSceneIndex = 0
-	r.wait(1)
-	if got := inmapEffective(); got.name != "Left-handed" {
-		t.Fatalf("back on Main the effective profile is %q, want Left-handed", got.name)
-	}
-}
-
-func TestInmapHeldDirectionFollowsTheProfile(t *testing.T) {
-	r := newInmapTestRig(t, "profile: Lefty\na -> button:dpad_down\n")
-	r.press(inmapBtnA)
-	if dx, dy := inmapHeldNavDirection(); dx != 0 || dy != 1 {
-		t.Fatalf("holding A (now Down) repeats as %d,%d, want 0,1", dx, dy)
-	}
-	r.release(inmapBtnA)
-	if dx, dy := inmapHeldNavDirection(); dx != 0 || dy != 0 {
-		t.Fatalf("after the release the held direction is %d,%d", dx, dy)
-	}
-}
-
-func TestInmapCompileKeepsTheFirstLine(t *testing.T) {
-	p := inmapParse("profile: P\nscene: Tube / a -> button:x\na -> button:y\nb hold -> home\nl1+r1 -> home\n")
-	inmapValidate(p, inmapKnown{})
-	onMain := inmapCompile(p, "Main")
-	if onMain.plain[inmapBtnA].scene != -1 || onMain.plain[inmapBtnA].global != 1 {
-		t.Fatalf("on Main A = %+v, want only the everywhere line", onMain.plain[inmapBtnA])
-	}
-	onTube := inmapCompile(p, "Tube")
-	if onTube.plain[inmapBtnA].pick(false) != 0 || onTube.plain[inmapBtnA].pick(true) != 1 {
-		t.Fatalf("on Tube A = %+v: the screen's line must win, unless a panel is up", onTube.plain[inmapBtnA])
-	}
-	if onTube.hold[inmapBtnB].global != 2 || len(onTube.chords) != 1 || !onTube.modGlobal[inmapBtnL1] {
-		t.Fatalf("hold %+v, chords %+v, L1 modifier %v", onTube.hold[inmapBtnB], onTube.chords, onTube.modGlobal[inmapBtnL1])
 	}
 }

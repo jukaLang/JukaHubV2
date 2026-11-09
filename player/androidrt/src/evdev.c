@@ -26,6 +26,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -108,13 +109,18 @@ static const struct axisMap g_axes[] = {
 /* ── the reader ────────────────────────────────────────────────────── */
 
 static int g_devfds[16];
+static int g_devnodes[16]; /* N of /dev/input/eventN: the Android deviceId */
 static int g_devcount;
+
+/* EVIOCGNAME(len): _IOC(_IOC_READ, 'E', 0x06, len) */
+#define APAK_EVIOCGNAME(len) ((2u << 30) | ((unsigned)(len) << 16) | ('E' << 8) | 0x06u)
 
 static void openEvdevDevices(void) {
     int i;
     char path[64];
     g_devcount = 0;
     for (i = 0; i < (int)(sizeof(g_devfds) / sizeof(g_devfds[0])); i++) {
+        char name[64] = "";
         snprintf(path, sizeof(path), "/dev/input/event%d", i);
         /* A node the process cannot read (no input group, kiosk sandbox)
          * shows up at open(); that is a device condition, not an error of
@@ -122,8 +128,11 @@ static void openEvdevDevices(void) {
          * only honest verdict. */
         int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) continue;
+        if (ioctl(fd, APAK_EVIOCGNAME(sizeof name - 1), name) < 0) name[0] = '\0';
+        g_devnodes[g_devcount] = i;
         g_devfds[g_devcount++] = fd;
-        fprintf(stderr, "[androidrt] input: reading %s\n", path);
+        android_inputRegisterDevice(i, name[0] ? name : "TrimUI Gamepad");
+        fprintf(stderr, "[androidrt] input: reading %s (%s) as device %d\n", path, name[0] ? name : "unnamed", i);
     }
     if (!g_devcount)
         fprintf(stderr, "[androidrt] input: no /dev/input/event* readable — "
@@ -134,14 +143,14 @@ static void openEvdevDevices(void) {
 /* feed: keys always look like a gamepad to games; source 0 lets the input
  * shim apply its default (SOURCE_GAMEPAD for keys, SOURCE_JOYSTICK for
  * axes), which is what Android's classifier would have concluded. */
-static void feed(unsigned short type, unsigned short code, int value) {
+static void feed(int deviceId, unsigned short type, unsigned short code, int value) {
     int i;
     if (type == EV_SYN || type == EV_MSC) return;
 
     if (type == EV_KEY) {
         for (i = 0; i < (int)(sizeof(g_keys) / sizeof(g_keys[0])); i++) {
             if (g_keys[i].code == code) {
-                android_inputInjectKey(i /* deviceId = evdev index, stable */,
+                android_inputInjectKey(deviceId, /* the eventN node: stable per device */
                                        0, /* default gamepad source */
                                        value ? 0 /* AKEY_EVENT_ACTION_DOWN */ : 1,
                                        g_keys[i].keyCode, 0);
@@ -161,7 +170,7 @@ static void feed(unsigned short type, unsigned short code, int value) {
                     v = (float)value; /* hats are ±1 already */
                 if (v > 1.0f) v = 1.0f;
                 if (v < -1.0f) v = -1.0f;
-                android_inputInjectAxis(i /* deviceId = evdev index, stable */,
+                android_inputInjectAxis(deviceId, /* one device per node: X and Y share an event */
                                         0, /* default joystick source */
                                         g_axes[i].axis, v);
                 return;
@@ -185,7 +194,7 @@ static void *evdevThread(void *arg) {
                 size_t e;
                 any = 1;
                 for (e = 0; e < count; e++)
-                    feed(buf[e].type, buf[e].code, buf[e].value);
+                    feed(g_devnodes[i], buf[e].type, buf[e].code, buf[e].value);
             }
             /* n < 0 with EAGAIN just means "no events now"; anything else is
              * a device that went away mid-read (unplug): leak nothing, but

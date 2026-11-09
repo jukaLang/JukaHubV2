@@ -4,7 +4,7 @@ package main
 //
 // JukaHub cannot draw over a running emulator: the emulator owns the framebuffer
 // and the hub is blocked until it exits, so an in-game "record now" button in
-// the hub would never appear (see docs/FEATURE-BACKLOG.md). What is buildable is
+// the hub would never appear (see docs/RECORDINGS.md). What is buildable is
 // the other half of the recording feature: point RetroArch's record toggle at a
 // folder JukaHub knows, then list the files it produced in a scene that plays
 // them through the existing video player.
@@ -24,7 +24,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -246,7 +245,7 @@ func prepareRecordings(launcher string) bool {
 	}
 	if !dirExists(dir) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Printf("[recordings] cannot create %s: %v", dir, err)
+			logWarn("recordings", "cannot create %s: %v", dir, err)
 			return false
 		}
 	}
@@ -262,7 +261,7 @@ func prepareRecordings(launcher string) bool {
 			return applyRetroArchRecordingDir(cfgText, dir)
 		})
 		if err != nil {
-			log.Printf("[recordings] cannot set the recording folder in %s: %v", path, err)
+			logWarn("recordings", "cannot set the recording folder in %s: %v", path, err)
 			return false
 		}
 		if changed {
@@ -329,7 +328,7 @@ func loadRecordings(config *Config) int {
 		config.Variables.Custom[recordingsDirVar] = dir
 	}
 	focusedFileIndex = 0
-	log.Printf("[recordings] %d capture(s) in %s", len(entries), dir)
+	logDebug("recordings", "%d capture(s) in %s", len(entries), dir)
 	return len(entries)
 }
 

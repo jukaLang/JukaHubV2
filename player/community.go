@@ -10,6 +10,7 @@ package main
 // page opens itself once after an update.
 
 import (
+	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -253,16 +254,20 @@ const jukaHubIssuesNew = "https://github.com/jukaLang/JukaHubV2/issues/new"
 
 // openExternalURL hands a URL to the desktop without going through a shell.
 func openExternalURL(raw string) error {
+	link, ok := externalURLAllowed(raw)
+	if !ok {
+		return fmt.Errorf("refusing to open an unsupported link: %q", raw)
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
 		// rundll32 avoids cmd.exe, so a query string full of & and % arrives
 		// intact and cannot be parsed as shell syntax.
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", raw)
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", link)
 	case "darwin":
-		cmd = exec.Command("open", raw)
+		cmd = exec.Command("open", link)
 	default:
-		cmd = exec.Command("xdg-open", raw)
+		cmd = exec.Command("xdg-open", link)
 	}
 	if err := cmd.Start(); err != nil {
 		return err

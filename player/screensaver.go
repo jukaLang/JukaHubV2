@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"math"
 	"math/rand"
 	"strconv"
@@ -444,7 +443,7 @@ func screensaverBackdropPress(config *Config, now time.Time) bool {
 	ss.backdropArmedAt = time.Time{}
 	if err := clearScreenlockImage(config); err != nil {
 		// The photo is still there, so say why instead of pretending it is gone.
-		log.Printf("[IDLE] could not clear the backdrop: %v", err)
+		logWarn("idle", "could not clear the backdrop: %v", err)
 		return true
 	}
 	ss.backdropClearedAt = now

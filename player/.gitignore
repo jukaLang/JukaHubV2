@@ -24,5 +24,8 @@ native/libs/
 androidrt/tests/smoke/tmp/
 androidrt/AndroidRT/
 
-# Gated visual-audit frame dumps (zz_ui_audit_test.go)
-uiaudit/
+# Live builder pairing code (generated per install; never commit it) and a
+# pushed design waiting for the owner's approval on the device
+.livebuilder-code
+jukaconfig.json.pending
+jukaconfig.json.pending.tmp

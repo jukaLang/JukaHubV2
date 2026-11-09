@@ -85,18 +85,6 @@ func ambientGlowFor(renderer *sdl.Renderer) *sdl.Texture {
 	return tex
 }
 
-// DropAmbientGlowForRenderer forgets a glow texture owned by a renderer that
-// is about to be destroyed, without destroying it itself (its renderer frees
-// it). Mirrors DropShapeCacheForRenderer and DropIconAtlasForRenderer.
-func DropAmbientGlowForRenderer(r *sdl.Renderer) {
-	ambientGlowCache.mu.Lock()
-	defer ambientGlowCache.mu.Unlock()
-	if ambientGlowCache.renderer == r {
-		ambientGlowCache.renderer = nil
-		ambientGlowCache.texture = nil
-	}
-}
-
 // renderAmbientBackground draws the slowly drifting color blobs. It is called
 // after the base background and content panel, before scene elements, so the
 // glow reads as ambient light behind the controls. All texture state is

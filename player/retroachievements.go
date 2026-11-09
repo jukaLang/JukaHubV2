@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -816,22 +815,11 @@ func raRunFetch(id int, creds raCredentials) {
 	}
 }
 
-func raResetStateForTests() {
-	raOnCredentialsChanged()
-	raSettingsState.mu.Lock()
-	raSettingsState.loaded = false
-	raSettingsState.data = raSettings{}
-	raSettingsState.mu.Unlock()
-	raCredentialState.mu.Lock()
-	raCredentialState.loaded = false
-	raCredentialState.creds = raCredentials{}
-	raCredentialState.mu.Unlock()
-}
-
 func logRA(format string, args ...interface{}) {
 	// Keep RA messages in one place so a rejected key never ends up in a
-	// generic config line (the key itself is never passed here).
-	log.Printf("[retroachievements] "+format, args...)
+	// generic config line (the key itself is never passed here). Every caller
+	// reports a failure, so these are warnings.
+	logWarn("retroachievements", format, args...)
 }
 
 // ── Panel state ──────────────────────────────────────────────────────────

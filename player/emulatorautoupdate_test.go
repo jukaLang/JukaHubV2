@@ -286,25 +286,3 @@ func TestPruneCoreBackupsKeepsTheNewestAndOthersAlone(t *testing.T) {
 		t.Errorf("trimming removed %s, which is not a core backup", filepath.Base(foreign))
 	}
 }
-
-// TestInstallBarNamesACoreUpdate: the bar is what makes a background download
-// visible, and "Installing Emulator cores" would be the wrong sentence for it.
-func TestInstallBarNamesACoreUpdate(t *testing.T) {
-	t.Cleanup(resetInstallBar)
-	resetInstallBar()
-
-	installBarBeginLabelled("Emulator cores", "Updating emulator cores")
-	if got := installBarTitle(); got != "Updating emulator cores" {
-		t.Fatalf("title = %q, want the update wording", got)
-	}
-	if visible, tool, _, _, _, _, _, _, _ := installBarSnapshot(); !visible || tool != "Emulator cores" {
-		t.Fatalf("snapshot visible=%v tool=%q, want the running card", visible, tool)
-	}
-	installBarAbort()
-
-	installBarBegin("ffplay")
-	if got := installBarTitle(); got != "" {
-		t.Fatalf("a plain install carries the title %q; it should use the default wording", got)
-	}
-	installBarAbort()
-}

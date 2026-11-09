@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/jukahub-logo.png" width="128" height="128" alt="JukaHub logo: a white J on a pane of glass over a navy tile lit cyan and violet"></p>
+
 # JukaHub
 
 [![CI](https://github.com/jukaLang/JukaHubV2/actions/workflows/ci.yml/badge.svg)](https://github.com/jukaLang/JukaHubV2/actions/workflows/ci.yml)
@@ -108,18 +110,16 @@ because it is a design decision rather than a feature bullet.
   installs, SHA-256 *and* Ed25519 verification, a rollback copy and an
   interrupted-install recovery — not "download the zip and hope". See
   [docs/PACKAGES.md](docs/PACKAGES.md) and [Updating](#updating).
-* **The UI is tested, not just the logic.** Scene audits, offscreen render
-  probes and PNG dumps catch layout drift headlessly (`JUKAHUB_SCENE_DUMP_DIR`),
-  which is how several of the bugs in
-  [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) were found before a user hit them.
+* **A fast, honest test suite.** The Go tests guard what would hurt users
+  silently — saved data, config migration, security checks, the updater and the
+  package installer — and run in seconds, so they get run. Visual changes are
+  checked on screen, on Windows and then on the device.
 * **Breadth without a second app.** Watch party, PS4/PS5 streaming, the video
   and music players, FTP/SFTP, plugins, the accessibility panel and opt-in
   telemetry all ship in the same folder, on top of the stock firmware.
 
-The comparison that produced this list — item by item against BrickOS, including
-what is deliberately *not* copied — is in
-[docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md). What is still missing is listed
-honestly in [docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md).
+What is still missing, and what deliberately cannot work on this hardware, is
+listed honestly in the [engineering backlog](player/MODERNIZATION.md).
 
 ## Install on a TrimUI Smart Pro
 
@@ -142,7 +142,7 @@ SDCARD/Apps/JukaHub/
 ├── launch.sh
 ├── config.json        <- the Apps-menu entry
 ├── jukaconfig.json    <- the interface
-├── JukaPlayer.png
+├── JukaPlayer.png     <- the icon in the Apps menu
 ├── Inter-Regular.ttf
 └── background.jpg
 ```
@@ -313,15 +313,23 @@ alarm, calculator, terminal, JukaLand, desktop keys) are in
 
 1. Connect the handheld to the same Wi-Fi as your PC.
 2. Open **Tools** and note the **IP address** (press A to copy it).
-3. Start the **FTP server**. The panel shows the address to type, such as
-   `ftp://192.168.1.42:2121`.
-4. On your PC, paste that address into Explorer/Finder (or any FTP client) and
-   drop files into the SD card (on Windows the share is a `shared` folder next
-   to the app, so your settings and saved logins are never exposed).
+3. Start the **FTP server** (**Tools → Network tools**). The panel shows the
+   address to type, such as `ftp://192.168.1.42:2121`, the user name `juka`
+   and a password made up for this start.
+4. On your PC, paste that address into Explorer/Finder (or any FTP client),
+   sign in, and drop files into one of the folders it shows: `Roms`, `BIOS`,
+   `Saves`, your media folders and JukaHub's downloads. The rest of the card —
+   the apps, emulator scripts and system files — is not shared (on Windows the
+   share is a `shared` folder next to the app, so your settings and saved
+   logins are never exposed). `Roms/Ports` and the folders of game profiles
+   hold programs the device runs, so FTP can read them but not change them;
+   use SFTP for those.
 
-The FTP server stays on until you stop it or close JukaHub. Turn it on only on
-a network you trust: while it runs, anyone on the same Wi-Fi can read and write
-the shared folder — login accepts any username and password by design.
+A wrong password costs a pause, three end the connection, and ten from one
+address lock it out for ten minutes. FTP is not encrypted, so on a network you
+do not trust use SFTP below. Both servers switch themselves off after 15
+minutes nobody uses them, and when the handheld joins another network; the
+panel lists who is connected while they run.
 
 ## Browse files over SFTP
 
@@ -332,11 +340,14 @@ connect with WinSCP, FileZilla, Cyberduck, Finder or the `sftp` command line.
 (Windows Explorer only speaks FTP, so use the server above or install an SFTP
 client.)
 
-Unlike FTP this is not open to the network: the password is random and
-regenerated every start, guesses are limited, and shell commands, port
-forwarding and tunnels are refused. Paths cannot escape the root, including
-through symlinks, and the host key is saved once in the app data folder. Press
-**A** on the row (or run `ssh off`) to stop it.
+Unlike FTP this is encrypted: the password is random and regenerated every
+start, guesses are limited, and shell commands, port forwarding and tunnels are
+refused. It shares the SD card (your home folder on a computer); the whole file
+system only after **Share whole system…** on its panel is pressed twice, for
+that run of JukaHub. Paths cannot escape the root, including through symlinks,
+and the host key is saved once in the app data folder. On the handheld the
+SFTP tile opens its panel first (that is where **Share whole system…** is);
+press **Start** there. Press **A** on the row (or run `ssh off`) to stop it.
 
 The password is shown on the device only and is never written to
 `jukauser.json` or the log. For unattended access, put your public key in
@@ -345,7 +356,8 @@ The password is shown on the device only and is never written to
 | Variable | Effect |
 |----------|--------|
 | `JUKAHUB_SSH_PORT` | Port to listen on (default `2222`), or set `ssh_port` in the config |
-| `JUKAHUB_SSH_ROOT` | Folder to expose instead of the whole file system |
+| `JUKAHUB_SSH_ROOT` | Folder to expose instead of the SD card |
+| `JUKAHUB_SSH_FULL_ROOT=1` | Expose the whole file system on every start (Linux); or set `ssh_full_root` in the config |
 | `JUKAHUB_SSH_READONLY=1` | Refuse every upload, rename and delete; or set `ssh_readonly` in the config |
 | `JUKAHUB_COMPANION_PORT` | Port for the phone companion page (default `8317`) |
 
@@ -412,6 +424,25 @@ On a narrow screen the builder switches to Library, Canvas and Inspector tabs:
 
 ![The builder on a phone-sized screen with the Library, Canvas and Inspector tabs](screenshots/design-phone.png)
 
+### Push a design to the handheld
+
+**Live Builder** sends the design to a running JukaHub over Wi-Fi and reloads it
+in place. On the handheld, turn it on in **Settings → Network → Live Builder**;
+the row shows the address and the six-digit pairing code. In the builder open
+**Device**, enter both and press **Push to device**. Open the builder from a
+copy on `http://localhost`: a browser does not let an HTTPS page reach a plain
+HTTP device. The receiver switches itself off after 30 minutes without use, and
+a design that can run programs or change protected settings waits until you
+approve it on the device — see
+[SECURITY.md](SECURITY.md#live-builder-the-web-builders-receiver).
+
+| Variable | Effect |
+|----------|--------|
+| `JUKAHUB_LIVE_BUILDER=0` / `1` | Never start the receiver / start it with JukaHub, whatever the Settings switch says |
+| `JUKAHUB_LIVE_LAN=1` | On a PC, listen on the network instead of this computer only (or set `liveBuilderLAN`) |
+| `JUKAHUB_LIVE_PORT` | Port to listen on (default `8422`; a busy port falls back to a free one, shown in Settings) |
+| `JUKAHUB_LIVE_ORIGINS` | Extra builder origins allowed to call the device, comma-separated (a self-hosted builder) |
+
 ## Share and remix a design
 
 In the [web builder](https://generate.jukalang.com), **Share** turns the current
@@ -473,8 +504,8 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 | Problem | What to do |
 |---------|-----------|
 | Not in the Apps menu | Reboot. Check the folder is `Apps/JukaHub` and contains `launch.sh`. |
-| Black screen or closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log. |
-| A plugin or a bad update broke startup | Create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). |
+| Black screen or closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log — and the newest `crash-*.txt` next to it (on Windows in `%LOCALAPPDATA%\JukaHub\logs`). |
+| A plugin, a setting or a bad update broke startup | Hold **L + R + Start** (Ctrl + Alt + R on a keyboard) while JukaHub starts: safe mode plus a recovery card (previous version, last good settings, reset settings). Three failed starts in a row start safe mode by themselves. Or create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). See [docs/RECOVERY.md](docs/RECOVERY.md). |
 | Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing at once: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
 | YouTube search fails | Check Wi-Fi; open **Logs** from the Start menu for the app's own log. |
 | Video stutters | Settings → playback resolution → try `480` or `360`. |
@@ -541,13 +572,10 @@ bundled and nothing is uploaded. What the toolbox does and does not verify is in
 
 ## Contributing
 
-Start with [Project status and improvement priorities](docs/PROJECT_STATUS.md)
-for a concise view of what is partly complete, what is prioritized for
-improvement, and what still needs device verification. It links to the detailed
-[player modernization plan](player/MODERNIZATION.md) and
-[project roadmap](ROADMAP.md); the [feature backlog](docs/FEATURE-BACKLOG.md) and
-[feature slate](docs/FEATURE-SLATE.md) are ideas, not active commitments. Small,
-well-scoped work is the best way in: issues labelled
+Start with the [engineering backlog](player/MODERNIZATION.md): it is the one
+task list for the player, the builder and AndroidRT, with priorities, the files
+to read, and what "done" means for each task — including the checks that still
+need a device. Small, well-scoped work is the best way in: issues labelled
 [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue).
 Setup, test commands and commit rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 Questions and feature talk happen on
@@ -582,10 +610,8 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Toolbox](docs/TOOLBOX.md) | installing rclone, jq, ripgrep, fd, pandoc and age plus the naabu/httpx/dnsx scanners, running them with arguments, the one-time authorization prompt, what is and is not verified |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
-| [Project status](docs/PROJECT_STATUS.md) | one-page overview of progress, open improvements and device checks |
-| [Roadmap](ROADMAP.md) | detailed project plan: GitHub mechanics, CI, releases, contributor path |
-| [Modernization plan](player/MODERNIZATION.md) | detailed player engineering status and implementation evidence |
-| [Feature slate](docs/FEATURE-SLATE.md) | unadopted ideas ranked by cost, fit and device risk |
+| [Engineering backlog](player/MODERNIZATION.md) | every open task with priority, files and acceptance criteria; the hardware checks; the ideas parking lot |
+| [UX review](docs/UX_REVIEW.md) | the November 2026 design critique: principles and per-screen findings |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
 | [Architecture](docs/ARCHITECTURE.md) | the three runtimes (player, builder, patch repo), where a change lands |
 | [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |

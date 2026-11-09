@@ -263,9 +263,6 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if wpOpen {
 		return ctrlWallpaper(e)
 	}
-	if socialNotifOpen {
-		return ctrlSocialNotif(e)
-	}
 	if imageViewerPath != "" {
 		return ctrlImageViewer(e, config)
 	}
@@ -335,8 +332,17 @@ func ctrlShortcuts(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		shortcutsOpen = false
+		shortcutsScroll = 0
 		PlayBackSound()
 		return true
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		shortcutsScrollBy(-shortcutsRowStep)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		shortcutsScrollBy(shortcutsRowStep)
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		shortcutsScrollBy(-shortcutsPageStep)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		shortcutsScrollBy(shortcutsPageStep)
 	}
 	return true // consume all
 }
@@ -471,33 +477,6 @@ func ctrlWallpaper(e *sdl.ControllerButtonEvent) bool {
 	return true
 }
 
-// ── Social notifications ──
-
-func ctrlSocialNotif(e *sdl.ControllerButtonEvent) bool {
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if socialNotifCursor > 0 {
-			socialNotifCursor--
-		}
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if socialNotifCursor < len(socialNotifHistory)-1 {
-			socialNotifCursor++
-		}
-	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		socialNotifShoulder(padL1)
-	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		socialNotifShoulder(padR1)
-	case sdl.CONTROLLER_BUTTON_X:
-		socialNotifHistory = nil
-		socialNotifCursor = 0
-		PlayActivateSound()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		socialNotifOpen = false
-		PlayBackSound()
-	}
-	return true
-}
-
 // ── Image viewer ──
 
 func ctrlImageViewer(e *sdl.ControllerButtonEvent, config *Config) bool {
@@ -575,17 +554,15 @@ func handleStickDpad(btn uint8) bool {
 	}
 	lastStickBtn = btn
 	lastStickTime = now
-	fakeEvent := &sdl.ControllerButtonEvent{
-		Type:   sdl.CONTROLLERBUTTONDOWN,
-		Button: btn,
-	}
 	// Re-queue the synthetic press instead of routing it here: the main loop
 	// is the only place that knows about the virtual keyboard and the scene
 	// handlers, and handleControllerEvent covers overlays only. Calling the
 	// overlay router directly left the left stick unable to move focus in
-	// menus or on the on-screen keyboard.
-	if _, err := sdl.PushEvent(fakeEvent); err == nil {
+	// menus or on the on-screen keyboard. The event is padded and carries its
+	// press state, and the same event is the fallback when SDL refuses it.
+	fakeEvent := newQueuedControllerButton(sdl.CONTROLLERBUTTONDOWN, 0, btn, sdl.PRESSED)
+	if _, err := syntheticEventPush(fakeEvent); err == nil {
 		return true
 	}
-	return handleControllerEvent(fakeEvent, appConfig)
+	return handleControllerEvent(&fakeEvent.ControllerButtonEvent, appConfig)
 }

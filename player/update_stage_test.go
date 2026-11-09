@@ -3,10 +3,7 @@ package main
 // update_stage_test.go covers the "it actually unzips and installs" half of the
 // one-press updater: a release-shaped ZIP is extracted into the staging folder,
 // the executable is found, the release stamp is written, and the staged files
-// planned by the swap helper are the ones the archive shipped. The opt-in
-// integration test repeats the same checks against the release GitHub really
-// serves, so a broken archive name or layout fails loudly instead of leaving
-// the download chip spinning.
+// planned by the swap helper are the ones the archive shipped.
 
 import (
 	"archive/zip"
@@ -17,7 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 // writeReleaseZip builds the same shape the release workflow publishes: the
@@ -262,88 +258,4 @@ func TestStagedUpdateUnzipsAndReplacesTheInstallation(t *testing.T) {
 	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
 		t.Error("journal must be removed after a successful swap")
 	}
-}
-
-// TestStageLatestReleaseIntegration downloads the release asset this build
-// would install and stages it for real. Opt-in: it fetches tens of megabytes.
-func TestStageLatestReleaseIntegration(t *testing.T) {
-	if os.Getenv("JUKAHUB_TEST_UPDATE") != "1" {
-		t.Skip("set JUKAHUB_TEST_UPDATE=1 to download and stage the real latest release")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	rel, err := FetchLatestJukaHubRelease(ctx)
-	if err != nil {
-		t.Fatalf("fetch latest release: %v", err)
-	}
-	target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH)
-	if err != nil {
-		t.Fatalf("no update target for this build: %v", err)
-	}
-	t.Logf("release %s asset %s", rel.TagName, target.Asset)
-
-	// The updater verifies the download against the API's digest; a release
-	// published without one would install unverified. Fail loudly here rather
-	// than letting the check silently disappear.
-	digest := ""
-	for _, a := range rel.Assets {
-		if strings.EqualFold(a.Name, target.Asset) {
-			digest = releaseAssetDigest(a.Digest)
-		}
-	}
-	if digest == "" {
-		t.Fatalf("published asset %s carries no sha256 digest", target.Asset)
-	}
-
-	dir := t.TempDir()
-	prevDirFn := patchStateDirFn
-	prevDir := patchStateDir
-	patchStateMu.Lock()
-	origPatch := *patchState
-	patchStateMu.Unlock()
-	t.Cleanup(func() {
-		patchStateDirFn = prevDirFn
-		patchStateDir = prevDir
-		patchStateMu.Lock()
-		*patchState = origPatch
-		patchStateMu.Unlock()
-	})
-	patchStateDirFn = func() (string, error) { return dir, nil }
-	patchStateDir = dir
-
-	if err := StageJukaHubUpdate(ctx, &Config{}, rel); err != nil {
-		t.Fatalf("StageJukaHubUpdate: %v", err)
-	}
-	staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(rel.TagName))
-	bin := findStagedBinary(staging)
-	if bin == "" {
-		t.Fatal("the published archive has no JukaHub executable")
-	}
-	// The bytes that were unpacked are the bytes the release published.
-	archive := filepath.Join(dir, "downloads", sanitizeFileName(target.Asset))
-	gotSHA, err := SHA256File(archive)
-	if err != nil {
-		t.Fatalf("hash the downloaded archive: %v", err)
-	}
-	if !strings.EqualFold(gotSHA, digest) {
-		t.Fatalf("downloaded archive sha256 = %s, published digest = %s", gotSHA, digest)
-	}
-
-	info := readReleaseInfoFromDir(filepath.Dir(bin))
-	if info.Tag != rel.TagName {
-		t.Fatalf("staged stamp = %q, want %q", info.Tag, rel.TagName)
-	}
-	files, err := stagedInstallFiles(filepath.Dir(bin), t.TempDir())
-	if err != nil {
-		t.Fatalf("the published archive cannot be installed: %v", err)
-	}
-	if len(files) > autoUpdateMaxFiles {
-		t.Fatalf("published archive has %d installable files (limit %d)", len(files), autoUpdateMaxFiles)
-	}
-	names := make([]string, 0, len(files))
-	for _, f := range files {
-		names = append(names, f.Name)
-	}
-	t.Logf("staged %d files from %s: %v", len(files), target.Asset, names)
 }

@@ -15,9 +15,15 @@ package main
 //     changed host. It is generated on first start.
 //   - Paths are confined by sftp_root.go: ".." cannot escape and symlinks that
 //     point outside the root are refused.
-//   - The default root is the whole file system on Linux (the point of the
-//     feature) and the user's home directory on Windows. JUKAHUB_SSH_ROOT
-//     narrows it; JUKAHUB_SSH_READONLY=1 makes every session read-only.
+//   - The default root is the SD card on the handheld and the user's home
+//     directory on a computer. The whole Linux file system is shared only
+//     behind the "advanced" switch on the SFTP sheet (for this run), or with
+//     ssh_full_root / JUKAHUB_SSH_FULL_ROOT=1 for a developer who wants it
+//     every time. JUKAHUB_SSH_ROOT names a root outright;
+//     JUKAHUB_SSH_READONLY=1 makes every session read-only.
+//   - The server stops itself after 15 idle minutes and when the device
+//     changes network (fileserver_guard.go); the Network tools page lists who
+//     is connected and what they are transferring.
 
 import (
 	"crypto/ed25519"
@@ -30,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,6 +43,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -64,6 +70,10 @@ type sshService struct {
 	readOnly    bool
 	lastErr     string
 	conns       map[net.Conn]struct{}
+	gen         uint64
+	netBase     fsNetIdentity
+	clients     fsClients
+	activity    fsActivity
 }
 
 var sshSrv = &sshService{conns: make(map[net.Conn]struct{})}
@@ -159,12 +169,47 @@ func (s *sshService) Address() string {
 	return fmt.Sprintf("sftp://%s@%s:%d", sshUserName, host, s.Port())
 }
 
-// Start serves the configured root on all interfaces.
+// Clients lists the open connections for the Network tools page.
+func (s *sshService) Clients() []fsClient {
+	if s == nil {
+		return nil
+	}
+	return s.clients.list()
+}
+
+// watchTarget is the server as the watchdog sees it.
+func (s *sshService) watchTarget() fsWatchTarget {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fsWatchTarget{running: s.ln != nil, gen: s.gen, base: s.netBase, lastUsed: s.activity.lastUsed()}
+}
+
+// stopRun stops the server if it is still run gen: one restarted since the
+// watchdog looked is left alone. The check and the stop share one critical
+// section, so a start between them cannot be stopped in the old run's place.
+func (s *sshService) stopRun(gen uint64) bool {
+	s.mu.Lock()
+	if s.ln == nil || s.gen != gen {
+		s.mu.Unlock()
+		return false
+	}
+	s.stopLocked()
+	return true
+}
+
+// Start serves the configured root on all interfaces. The watchdog that
+// stops it again starts with it.
 func (s *sshService) Start() error {
 	if s.Running() {
 		return nil
 	}
-	return s.startAt(sshRootDir(), fmt.Sprintf("0.0.0.0:%d", sshPort()))
+	if err := s.startAt(sshRootDir(), fmt.Sprintf("0.0.0.0:%d", sshPort())); err != nil {
+		return err
+	}
+	if s == sshSrv {
+		fileServerWatchStart()
+	}
+	return nil
 }
 
 // startAt is Start with an explicit root and listen address (used by tests).
@@ -206,6 +251,7 @@ func (s *sshService) startAt(root, addr string) error {
 		return fmt.Errorf("start SSH server on %s: %w", addr, err)
 	}
 
+	netBase := fsNetIdentity{ip: localIPv4()}
 	s.mu.Lock()
 	if s.conns == nil {
 		s.conns = make(map[net.Conn]struct{})
@@ -216,15 +262,18 @@ func (s *sshService) startAt(root, addr string) error {
 	s.fingerprint = fingerprint
 	s.readOnly = confined.readOnly
 	s.lastErr = ""
+	s.gen++
+	s.netBase = netBase
 	if tcp, ok := ln.Addr().(*net.TCPAddr); ok {
 		s.port = tcp.Port
 	}
 	s.mu.Unlock()
+	s.activity.touch()
 
 	if s == sshSrv {
 		publishSSHState()
 	}
-	log.Printf("[SSH] SFTP serving %q on %s (user %s, host key %s, keys %d)",
+	logDebug("ssh", "SFTP serving %q on %s (user %s, host key %s, keys %d)",
 		confined.root, ln.Addr(), sshUserName, fingerprint, len(authorized))
 	go s.acceptLoop(ln, config, confined)
 	return nil
@@ -236,6 +285,14 @@ func (s *sshService) Stop() {
 		return
 	}
 	s.mu.Lock()
+	s.stopLocked()
+}
+
+// stopLocked is Stop for a caller holding s.mu, which it releases. The run is
+// taken apart inside the lock — a start right after gets a free port and its
+// own client list — and its connections are closed after it, since their
+// goroutines take the lock to deregister.
+func (s *sshService) stopLocked() {
 	ln := s.ln
 	s.ln = nil
 	conns := make([]net.Conn, 0, len(s.conns))
@@ -243,16 +300,17 @@ func (s *sshService) Stop() {
 		conns = append(conns, c)
 	}
 	s.conns = make(map[net.Conn]struct{})
-	s.mu.Unlock()
-
 	if ln != nil {
 		_ = ln.Close()
 	}
+	s.clients.clear()
+	s.mu.Unlock()
+
 	for _, c := range conns {
 		_ = c.Close()
 	}
 	if ln != nil {
-		log.Printf("[SSH] stopped")
+		logDebug("ssh", "stopped")
 	}
 	if s == sshSrv {
 		publishSSHState()
@@ -299,7 +357,12 @@ func (s *sshService) serveConn(conn net.Conn, config *ssh.ServerConfig, root *sf
 	}
 	_ = conn.SetDeadline(time.Time{})
 	defer serverConn.Close()
-	log.Printf("[SSH] %s connected from %s", serverConn.User(), conn.RemoteAddr())
+	logDebug("ssh", "%s connected from %s", serverConn.User(), conn.RemoteAddr())
+	// Listed only once signed in: the page shows who is in, not who knocked.
+	clientID := s.clients.add(conn.RemoteAddr().String())
+	defer s.clients.remove(clientID)
+	s.clients.setUser(clientID, serverConn.User())
+	s.activity.touch()
 
 	// Answer keepalives so clients that rely on them stay connected, and refuse
 	// every other global request (tcpip-forward, agent forwarding).
@@ -314,8 +377,29 @@ func (s *sshService) serveConn(conn net.Conn, config *ssh.ServerConfig, root *sf
 		if err != nil {
 			continue
 		}
-		go s.serveSession(channel, channelReqs, root)
+		go s.serveSession(channel, channelReqs, root, clientID)
 	}
+}
+
+// sshActivityChannel counts every SFTP packet as use, for the idle stop. SSH
+// keepalives are global requests and never pass through a channel, so a
+// client left open on a desk does not keep the server up.
+type sshActivityChannel struct {
+	ssh.Channel
+	act *fsActivity
+}
+
+func (c sshActivityChannel) Read(p []byte) (int, error) {
+	n, err := c.Channel.Read(p)
+	if n > 0 {
+		c.act.touch()
+	}
+	return n, err
+}
+
+func (c sshActivityChannel) Write(p []byte) (int, error) {
+	c.act.touch()
+	return c.Channel.Write(p)
 }
 
 func serveSSHGlobalRequests(reqs <-chan *ssh.Request) {
@@ -327,7 +411,7 @@ func serveSSHGlobalRequests(reqs <-chan *ssh.Request) {
 
 // serveSession accepts exactly one "subsystem: sftp" request per channel and
 // rejects shell/exec/pty/env requests, then hands the channel to pkg/sftp.
-func (s *sshService) serveSession(channel ssh.Channel, reqs <-chan *ssh.Request, root *sftpRoot) {
+func (s *sshService) serveSession(channel ssh.Channel, reqs <-chan *ssh.Request, root *sftpRoot, clientID uint64) {
 	defer channel.Close()
 	for req := range reqs {
 		if req.Type != "subsystem" {
@@ -340,15 +424,21 @@ func (s *sshService) serveSession(channel ssh.Channel, reqs <-chan *ssh.Request,
 			continue
 		}
 		_ = req.Reply(true, nil)
-		handlers := &sftpRootHandlers{root: root}
-		server := sftp.NewRequestServer(channel, sftp.Handlers{
+		handlers := &sftpRootHandlers{
+			root: root,
+			opened: func(what string) func() {
+				s.clients.setTransfer(clientID, what)
+				return func() { s.clients.clearTransfer(clientID, what) }
+			},
+		}
+		server := sftp.NewRequestServer(sshActivityChannel{Channel: channel, act: &s.activity}, sftp.Handlers{
 			FileGet:  handlers,
 			FilePut:  handlers,
 			FileCmd:  handlers,
 			FileList: handlers,
 		})
 		if err := server.Serve(); err != nil && !errors.Is(err, io.EOF) {
-			log.Printf("[SSH] sftp session ended: %v", err)
+			logWarn("ssh", "sftp session ended: %v", err)
 		}
 		_ = server.Close()
 		return
@@ -402,11 +492,11 @@ func buildSSHServerConfig(hostKey ssh.Signer, password string, authorized []ssh.
 			// A server started without a password must not accept an empty
 			// one: every unauthenticated client would match.
 			if password == "" {
-				log.Printf("[SSH] password auth refused for %s: no password configured", meta.RemoteAddr())
+				logWarn("ssh", "password auth refused for %s: no password configured", meta.RemoteAddr())
 				return nil, fmt.Errorf("password auth disabled")
 			}
 			if subtle.ConstantTimeCompare(sshPasswordDigest(string(pass)), passwordHash) != 1 {
-				log.Printf("[SSH] password rejected for %s from %s", meta.User(), meta.RemoteAddr())
+				logWarn("ssh", "password rejected for %s from %s", meta.User(), meta.RemoteAddr())
 				return nil, fmt.Errorf("password rejected")
 			}
 			return nil, nil
@@ -455,7 +545,7 @@ func loadOrCreateSSHHostKey(dir string) (ssh.Signer, string, error) {
 		if signer, err := ssh.ParsePrivateKey(data); err == nil {
 			return signer, ssh.FingerprintSHA256(signer.PublicKey()), nil
 		}
-		log.Printf("[SSH] host key %s is unreadable; generating a new one", path)
+		logWarn("ssh", "host key %s is unreadable; generating a new one", path)
 	}
 
 	_, private, err := ed25519.GenerateKey(rand.Reader)
@@ -471,9 +561,9 @@ func loadOrCreateSSHHostKey(dir string) (ssh.Signer, string, error) {
 		return nil, "", err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Printf("[SSH] cannot create key folder %s: %v", dir, err)
+		logWarn("ssh", "cannot create key folder %s: %v", dir, err)
 	} else if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
-		log.Printf("[SSH] cannot save host key %s: %v", path, err)
+		logWarn("ssh", "cannot save host key %s: %v", path, err)
 	} else {
 		_ = os.Chmod(path, 0o600)
 	}
@@ -555,17 +645,22 @@ func sshPort() int {
 	return sshDefaultPort
 }
 
-// sshRootDir picks the folder exposed to SFTP clients. The whole Linux file
-// system is the point of the feature; on a desktop the user's home directory
-// keeps the workspace and personal files out of reach by default.
+// sshRootDir picks the folder exposed to SFTP clients: the SD card on the
+// handheld, the user's home directory on a computer. The whole Linux file
+// system — /etc, the firmware, every other app's data — only behind the
+// advanced switch (sshWholeSystemOn). Reads the config: call it from the
+// render thread (Start, the terminal), as every caller does.
 func sshRootDir() string {
 	// Return the override even when it does not exist: starting then fails
 	// loudly instead of silently widening the share back to the whole system.
-	if custom := strings.TrimSpace(os.Getenv("JUKAHUB_SSH_ROOT")); custom != "" {
+	if custom := sshRootOverride(); custom != "" {
 		return custom
 	}
-	if runtime.GOOS == "linux" {
+	if sshWholeSystemOn() {
 		return "/"
+	}
+	if card := fileServerCardRoot(); card != "" {
+		return card
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		if info, err := os.Stat(home); err == nil && info.IsDir() {
@@ -573,6 +668,61 @@ func sshRootDir() string {
 		}
 	}
 	return ftpRootDir()
+}
+
+// sshRootOverride is JUKAHUB_SSH_ROOT, the root named outright ("" for none).
+// It wins over every other choice, the advanced switch included.
+func sshRootOverride() string {
+	return strings.TrimSpace(os.Getenv("JUKAHUB_SSH_ROOT"))
+}
+
+// sshWholeSystemNext reports whether the next start shares the whole file
+// system, as sshRootDir will decide, without looking at the card: the override
+// counts only when it names "/" itself.
+func sshWholeSystemNext() bool {
+	if custom := sshRootOverride(); custom != "" {
+		return sshWholeSystemSupported() && filepath.Clean(custom) == string(filepath.Separator)
+	}
+	return sshWholeSystemOn()
+}
+
+// sshWholeSystemSession is the advanced switch on the SFTP sheet. It lasts for
+// this run only, so a share of the whole system cannot outlive the moment it
+// was wanted for by accident.
+var sshWholeSystemSession atomic.Bool
+
+// sshWholeSystemSupported reports whether "the whole file system" means
+// something here: one "/" on Linux. Windows has drives, not one root.
+func sshWholeSystemSupported() bool { return runtime.GOOS == "linux" }
+
+// sshWholeSystemOn reports whether SFTP shares "/": the sheet's switch for this
+// run, or ssh_full_root in the config / JUKAHUB_SSH_FULL_ROOT=1 for a
+// developer who wants it every time. Reads the config (render thread only).
+func sshWholeSystemOn() bool {
+	if !sshWholeSystemSupported() {
+		return false
+	}
+	if sshWholeSystemSession.Load() {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JUKAHUB_SSH_FULL_ROOT"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	if appConfig != nil {
+		return customBool(appConfig.Variables.Custom, "ssh_full_root", false)
+	}
+	return false
+}
+
+// WholeSystem reports whether the running server shares the whole file system.
+func (s *sshService) WholeSystem() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ln != nil && filepath.Clean(s.root) == string(filepath.Separator) && runtime.GOOS != "windows"
 }
 
 func sshReadOnly() bool {

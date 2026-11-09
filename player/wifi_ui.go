@@ -226,13 +226,6 @@ func wifiApplySnapshot(snap wifiSnapshot) {
 
 // ── Visits ────────────────────────────────────────────────────────────────
 
-// openWiFiPanel opens the Wi-Fi page. It is the picker overlay's old name,
-// kept so callers written against it still land on the page; new code calls
-// wifiScrOpen with its config.
-func openWiFiPanel() {
-	wifiScrOpen(appConfig)
-}
-
 // wifiScrBeginVisit starts a fresh visit: anything still in flight belongs to
 // the previous one, the interface is looked up again and a scan starts.
 func wifiScrBeginVisit() {

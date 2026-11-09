@@ -35,7 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -324,7 +323,7 @@ func ssyncHashStore(fresh map[string]ssyncHashEntry) {
 		return
 	}
 	if err := AtomicWrite(ssyncHashPath(), data, 0o600); err != nil {
-		log.Printf("[ssync] could not save the hash cache: %v", err)
+		logWarn("ssync", "could not save the hash cache: %v", err)
 	}
 }
 
@@ -1188,7 +1187,7 @@ func ssyncRunSync(ctx context.Context, cmp ssyncComparison, progress func(done, 
 		}
 	}
 	if err := ssyncSaveBase(cmp.PeerID, base); err != nil {
-		log.Printf("[ssync] could not save the sync base: %v", err)
+		logWarn("ssync", "could not save the sync base: %v", err)
 	}
 	dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	_ = peerDoJSON(dctx, cmp.PeerID, http.MethodPost, "/peer/v1/saves/done", ssyncDoneReq{
@@ -1421,7 +1420,7 @@ func ssyncIncomingSnapshot(call peerCall, session string, roots []saveRoot, dst 
 		return true
 	}
 	if _, err := createSaveSnapshot(roots, "before sync from "+call.rec.Name); err != nil && !errors.Is(err, errSaveManagerEmpty) {
-		log.Printf("[ssync] safety snapshot failed: %v", err)
+		logWarn("ssync", "safety snapshot failed: %v", err)
 		return false
 	}
 	ssyncIncoming.mu.Lock()
@@ -1461,7 +1460,7 @@ func ssyncHandleDone(w http.ResponseWriter, r *http.Request, call peerCall) {
 		}
 	}
 	if err := ssyncSaveBase(call.id, base); err != nil {
-		log.Printf("[ssync] could not save the sync base: %v", err)
+		logWarn("ssync", "could not save the sync base: %v", err)
 	}
 	ssyncIncoming.mu.Lock()
 	s := ssyncIncomingLocked(call, req.Session)

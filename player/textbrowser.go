@@ -7,7 +7,6 @@ import (
 	"fmt"
 	htmlstd "html"
 	"io"
-	"log"
 	"math"
 	"net"
 	"net/http"
@@ -102,37 +101,6 @@ func currentBrowserPageFetcher() func(string) browserPage {
 	return browserPageFetcher
 }
 
-// setBrowserPageFetcherForTest replaces the network seam and returns the
-// function that restores it. Tests must use this instead of assigning
-// browserPageFetcher, which would race with an in-flight load.
-func setBrowserPageFetcherForTest(fn func(string) browserPage) func() {
-	browserPageFetcherMu.Lock()
-	prev := browserPageFetcher
-	browserPageFetcher = fn
-	browserPageFetcherMu.Unlock()
-	return func() {
-		browserPageFetcherMu.Lock()
-		browserPageFetcher = prev
-		browserPageFetcherMu.Unlock()
-	}
-}
-
-// waitForBrowserFetches blocks until the loads started by the test that just
-// finished have returned (or the wait is capped), so its cleanup can reset the
-// browser globals without a fetch publishing into the next test.
-func waitForBrowserFetches() {
-	done := make(chan struct{})
-	go func() {
-		browserFetches.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(browserFetchWait):
-		log.Printf("[browser] a page load is still running after %s; resetting anyway", browserFetchWait)
-	}
-}
-
 var textBrowserRequestMutex sync.Mutex
 var textBrowserAddressEditing bool
 var textBrowserAddressSubmitted bool
@@ -203,7 +171,7 @@ func browserSyncLandedURL(config *Config) {
 func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[textbrowser] recovered panic in render: %v", r)
+			logError("textbrowser", "recovered panic in render: %v", r)
 		}
 	}()
 	// The Forget chip carries the saved-session count, so the toolbar answers
@@ -218,6 +186,10 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		browserSyncBookmarkChips(config)
 		// A page a redirect moved lands under the URL it actually came from.
 		browserSyncLandedURL(config)
+		// A load that ended on a YouTube video plays it in Media, and coming
+		// back from the player puts the page where it was (browser_youtube.go).
+		brwTakeLanding(config, element)
+		brwRestoreReturn(config)
 	}
 
 	elemW := getElementWidth(element, 1100)
@@ -868,24 +840,6 @@ func textBrowserToolbarRects(config *Config, element Element) (address, goButton
 	return
 }
 
-// textBrowserFilterRect is the ad-filter chip's hit area.
-func textBrowserFilterRect(config *Config, element Element) sdl.Rect {
-	_, _, _, _, filter, _ := textBrowserToolbarLayout(config, element)
-	return filter
-}
-
-// textBrowserModeRect is the D-pad mode chip's hit area.
-func textBrowserModeRect(config *Config, element Element) sdl.Rect {
-	_, mode, _, _, _, _ := textBrowserToolbarLayout(config, element)
-	return mode
-}
-
-// textBrowserZoomRect is the text-zoom chip's hit area.
-func textBrowserZoomRect(config *Config, element Element) sdl.Rect {
-	_, _, _, _, _, zoom := textBrowserToolbarLayout(config, element)
-	return zoom
-}
-
 // textBrowserScrollLimit is the last scroll row for an element, measured the
 // same way the renderer draws it. A styled web page scrolls by layout rows; a
 // plain-text panel scrolls by its 22px lines. -1 means "not measured yet": the
@@ -1038,15 +992,9 @@ func browserHTTPSAddress(address string) bool {
 	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil
 }
 
-// textBrowserSearchRect is the Search chip's hit area.
-func textBrowserSearchRect(config *Config, element Element) sdl.Rect {
-	_, _, search, _, _, _ := textBrowserToolbarLayout(config, element)
-	return search
-}
-
 const (
 	// textBrowserTouchMin is the smallest area the browser's own chrome offers
-	// a finger, from the touch-target audit in MODERNIZATION.md (Phase 8). The
+	// a finger, from the touch-target audit (MODERNIZATION.md, UX-8). The
 	// drawn chips are 32px tall and the cookie strip is a font height — fine
 	// for a D-pad, short for a fingertip on the Brick's panel — so every tap
 	// test grows its rect to this height while the drawn size stays put.
@@ -1117,6 +1065,16 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		showToast("Enter a valid http:// or https:// address.", ToastError())
 		return
 	}
+	// A YouTube video is not a page the reader can show: it plays in Media
+	// (browser_youtube.go). The link handlers send their links there first;
+	// this catches a typed or pasted address, a bookmark and the history.
+	if brwOpenAddress(config, outputVariable, address) {
+		return
+	}
+	// The page on screen before this load — its document's URL, not the
+	// address variable, which holds whatever was typed: a load that only
+	// redirects to a video puts it back (brwQueueLanding).
+	back := brwPageOnScreen(outputVariable)
 	// Remember where the reader was on the page being left, so Back can
 	// return them there. This reads the address before it is overwritten, so
 	// "from" is the page still on screen.
@@ -1200,7 +1158,7 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		// the render loop's recover. The page becomes an error message.
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[browser] reader crashed on %s: %v\n%s", pageURL, r, debug.Stack())
+				logError("browser", "reader crashed on %s: %v\n%s", pageURL, r, debug.Stack())
 				textBrowserRequestMutex.Lock()
 				isCurrent := textBrowserRequestSequence[variable] == id
 				textBrowserRequestMutex.Unlock()
@@ -1217,6 +1175,11 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
 		if !isCurrent {
+			return
+		}
+		// A redirect that ended on a YouTube video publishes and caches
+		// nothing: the render pass plays it and puts the page back.
+		if brwQueueLanding(variable, pageURL, back, recordHistory, id, page.FinalURL) {
 			return
 		}
 		// Remember the page for Back/Forward before publishing it: the next
@@ -1321,10 +1284,6 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func browseWebPage(rawURL string) string {
-	return browseWebPageResult(rawURL).Text
-}
-
 func browseWebPageResult(rawURL string) browserPage {
 	// Every subresource this load requests is counted here, so the reader can
 	// say how much advertising it kept off the wire.
@@ -1353,6 +1312,14 @@ func browseWebPageResult(rawURL string) browserPage {
 		return browserPage{Text: f.text(), Fail: &f}
 	}
 	body, truncated, pageURL := fetched.Body, fetched.Truncated, fetched.URL
+	// A redirect that ended on a YouTube watch page goes to the player
+	// (brwQueueLanding); running its scripts and fetching its stylesheets and
+	// images would only delay that.
+	if landed := pageURL.String(); landed != address {
+		if _, ok := brwYouTubeVideo(landed); ok {
+			return browserPage{Text: "Opening the video in Media…", FinalURL: landed}
+		}
+	}
 	// Ad and tracker scripts are removed before the script pass: there is no
 	// reason to spend the page's 5-second script budget running them, and some
 	// ship an inline fallback that would run even with the src blocked.
@@ -1828,14 +1795,6 @@ func textBrowserWrappedLines(text string, font *ttf.Font, width int32) []string 
 	return lines
 }
 
-// resetTextBrowserWrapCache drops the cached wrap; the next render pays for
-// one fresh wrap. Used by tests.
-func resetTextBrowserWrapCache() {
-	textBrowserWrapCache.mu.Lock()
-	textBrowserWrapCache.entry = textBrowserWrapCacheEntry{}
-	textBrowserWrapCache.mu.Unlock()
-}
-
 func wrapTextBrowserContent(text string, font *ttf.Font, maxWidth int32) string {
 	if font == nil || maxWidth <= 0 {
 		return text
@@ -2253,32 +2212,6 @@ func truncate(s string, maxLen int) string {
 // System info helpers (gopsutil-backed)
 // ---------------------------------------------------------------------------
 
-// getGPSUtilization returns a simple GPU info string if available via
-// gopsutil. On many handheld devices GPU info is exposed through nvidia-smi,
-// intel_gpu_top, or similar tools.
-func getGPSUtilization() string {
-	var candidates []string
-	switch runtime.GOOS {
-	case "linux":
-		candidates = []string{
-			"nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader",
-			"intel_gpu_top -s",
-		}
-	case "windows":
-		candidates = []string{
-			"nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader",
-		}
-	}
-
-	for _, cmd := range candidates {
-		out, err := exec.Command("sh", "-c", cmd).Output()
-		if err == nil && len(out) > 0 {
-			return strings.TrimSpace(string(out))
-		}
-	}
-	return "N/A"
-}
-
 // getRunningServices returns common running services/daemons on Linux.
 func getRunningServices() (result string) {
 	defer func() {
@@ -2393,6 +2326,9 @@ func scanLocalFiles(dir string) (result string) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("=== %s ===\n", dir))
 	for _, e := range entries {
+		if skipScanEntryName(e.Name()) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue

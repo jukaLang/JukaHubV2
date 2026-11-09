@@ -37,6 +37,7 @@ update. These deliberately track upstream:
 | `yt-dlp` | `yt-dlp/yt-dlp` latest release | the app's tools directory |
 | `ffmpeg` / `ffprobe` | `btbn/ffmpeg-builds` latest release | the app's tools directory |
 | Standalone emulator updates | an allowlist of emulator repositories (`player/emulatorupdates.go`) | next to the emulator install |
+| hakuX for the Smart Pro (Xbox) | `ToastedFrog2/hakux-trimui-smart-pro` latest release, asset `xbox-trimui-smart-pro-v<version>.zip` (`player/hakux.go`) | merged into the SD card's `Data/` and `Emus/`, only when the user installs it from the Xbox tile |
 | Windows runtime (Wine/Hangover, DXVK) | `AndreRH/hangover`, `doitsujin/dxvk` latest release | the Windows-apps runtime directory |
 | PortMaster | `PortsMaster/PortMaster-GUI` release asset | the ports directory |
 | Toolbox tools (`rclone`, `jq`, `ripgrep`, `fd`, `pandoc`, `age`, `naabu`, `httpx`, `dnsx`) | each project's latest release, from `player/toolbox.go` | the app's tools directory, only when the user installs one; the three scanners also need a one-time acknowledgement before their first run |
@@ -48,13 +49,16 @@ Two guardrails apply to all of them:
    `allowedToolRepos`, because the GitHub API can be used to probe release
    metadata and a future code path might over-trust the returned URL.
 2. **Asset-name matching, pinned by tests.** A release asset is chosen by name
-   (`yt_dlp_asset_test.go`, `install_tools_test.go`), so an upstream rename
+   (`install_tools_test.go`), so an upstream rename
    fails a unit test instead of producing a download error on a device. The
    toolbox matches on the stable parts of the name rather than a full file name
    (versions change every release), skips checksum/signature side-cars, and is
    pinned the same way (`toolbox_test.go`).
 
-There is **no published-digest check** on these downloads today. Integrity rests
+The emulator installs on the Emulators page check GitHub's per-asset SHA-256
+digest when the release publishes one (the hakuX install also a checksum file
+attached to the release) and record the hash in their manifest. For the helper
+tools there is **no published-digest check** today. Integrity rests
 on HTTPS to github.com plus the allowlist, and the *result* is recorded: the
 component report and the diagnostics bundle carry the SHA-256 of every installed
 helper, so a bug report names the exact build. [UPDATER_TUF.md](UPDATER_TUF.md)

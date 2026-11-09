@@ -21,7 +21,6 @@ package main
 // config is kept once as `retroarch.cfg.jukahub-backup` by the shared writer.
 
 import (
-	"log"
 	"strings"
 )
 
@@ -150,7 +149,7 @@ func applyOSDPresetToFoundConfig(preset string) bool {
 		}
 		changed, err := applyOSDPresetToFile(path, preset)
 		if err != nil {
-			log.Printf("[osd] cannot apply the %s preset in %s: %v", preset, path, err)
+			logWarn("osd", "cannot apply the %s preset in %s: %v", preset, path, err)
 			return false
 		}
 		if changed {

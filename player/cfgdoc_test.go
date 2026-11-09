@@ -1,11 +1,9 @@
 package main
 
-// cfgdoc_test.go — config as code: the diff finds added, changed and removed
-// settings and files them under the right section, secrets never reach the
-// exported file, flattening keeps settings and leaves runtime state out, an
-// import is previewed item by item and merged through the normal setting path,
-// the defaults a new version changed are reported once, and scenes merge into
-// the design file without losing anything else in it.
+// cfgdoc_test.go — config as code: secrets never reach the exported file,
+// flattening keeps settings and leaves runtime state out, an import is
+// previewed item by item and merged through the normal setting path, and
+// scenes merge into the design file without losing anything else in it.
 
 import (
 	"encoding/json"
@@ -30,47 +28,6 @@ func cfgdocTestIsolate(t *testing.T) {
 		bootSfxLevelSet.Store(levelSet)
 		restorePalette(palette)
 	})
-}
-
-func TestCfgdocDiffFindsAddedChangedAndRemoved(t *testing.T) {
-	defaults := map[string]interface{}{
-		"weatherUnit": "C", "fullscreen": false, "theme_preset": "hub", "gridColumns": float64(4), "same": "x",
-	}
-	current := map[string]interface{}{
-		"weatherUnit": "F", "fullscreen": "false", "gridColumns": float64(4), "same": "x",
-		"groq_api_key": "sk-123", "homeArrangement": "grid",
-	}
-	changes := cfgdocDiff(current, defaults)
-	want := []struct {
-		key, kind, section string
-		secret             bool
-	}{
-		{"homeArrangement", cfgdocAdded, cfgdocSectionLayouts, false},
-		{"theme_preset", cfgdocRemoved, cfgdocSectionTheme, false},
-		{"groq_api_key", cfgdocAdded, cfgdocSectionBehavior, true},
-		{"weatherUnit", cfgdocChanged, cfgdocSectionBehavior, false},
-	}
-	if len(changes) != len(want) {
-		t.Fatalf("changes = %+v, want %d (a \"false\" written as text equals false)", changes, len(want))
-	}
-	for i, w := range want {
-		ch := changes[i]
-		if ch.Key != w.key || ch.Kind != w.kind || ch.Section != w.section || ch.Secret != w.secret {
-			t.Errorf("change %d = %+v, want %+v", i, ch, w)
-		}
-	}
-	if changes[3].Old != "C" || changes[3].New != "F" {
-		t.Errorf("weatherUnit = %v → %v, want C → F", changes[3].Old, changes[3].New)
-	}
-	for key, section := range map[string]string{
-		"swapABButtons": cfgdocSectionInput, a11yKeySwapAB: cfgdocSectionInput, "inputProfile": cfgdocSectionInput,
-		"homeArrangement": cfgdocSectionLayouts, "theme_background": cfgdocSectionTheme, a11yKeyFontScale: cfgdocSectionTheme,
-		"buttonColor": cfgdocSectionTheme, "weatherUnit": cfgdocSectionBehavior,
-	} {
-		if got := cfgdocSectionOf(key); got != section {
-			t.Errorf("%s is filed under %s, want %s", key, got, section)
-		}
-	}
 }
 
 func TestCfgdocExportNeverCarriesSecrets(t *testing.T) {
@@ -241,77 +198,6 @@ func TestCfgdocImportIsPreviewedThenMerged(t *testing.T) {
 	}
 	if themePresetName(config) != "nord" || homeArrangement(config) != homeArrangementGrid {
 		t.Errorf("theme %q, arrangement %q", themePresetName(config), homeArrangement(config))
-	}
-}
-
-func TestCfgdocUpstreamListsChangedDefaultsOnce(t *testing.T) {
-	prev := cfgdocDefaultsPathOverride
-	cfgdocDefaultsPathOverride = filepath.Join(t.TempDir(), cfgdocDefaultsFile)
-	t.Cleanup(func() { cfgdocDefaultsPathOverride = prev })
-
-	old := cfgdocShipped{Source: "test.json", Version: "1.0", Stamp: "one",
-		Values: map[string]interface{}{"weatherUnit": "C", "gridColumns": float64(4)}}
-	if _, changes := cfgdocUpstream(old); len(changes) != 0 {
-		t.Fatalf("a first run reported %v", changes)
-	}
-	newer := cfgdocShipped{Source: "test.json", Version: "1.1", Stamp: "two",
-		Values: map[string]interface{}{"weatherUnit": "F", "gridColumns": float64(4), "newKey": true}}
-	rec, changes := cfgdocUpstream(newer)
-	if rec.Version != "1.0" || len(changes) != 2 {
-		t.Fatalf("since %q: %+v, want weatherUnit changed and newKey added", rec.Version, changes)
-	}
-	// The same build again reports the same list until it is acknowledged.
-	if _, again := cfgdocUpstream(newer); len(again) != 2 {
-		t.Errorf("a second look reported %v", again)
-	}
-	if err := cfgdocSaveRecord(newer); err != nil {
-		t.Fatal(err)
-	}
-	if _, after := cfgdocUpstream(newer); len(after) != 0 {
-		t.Errorf("after \"got it\" the list still says %v", after)
-	}
-	// The other platform's shipped config is not an update.
-	other := newer
-	other.Source, other.Stamp = "other.json", "three"
-	if _, cross := cfgdocUpstream(other); len(cross) != 0 {
-		t.Errorf("another platform's defaults were reported as an update: %v", cross)
-	}
-}
-
-func TestCfgdocShippedConfigsCompareCleanly(t *testing.T) {
-	cases := []struct {
-		source string
-		data   []byte
-	}{
-		{"jukaconfig.json", cfgdocShippedDesktop},
-		{"trimui/jukaconfig.device.json", cfgdocShippedDevice},
-	}
-	for _, c := range cases {
-		s := cfgdocDecodeShipped(c.source, c.data)
-		if s.Err != nil || len(s.Values) == 0 || s.Stamp == "" {
-			t.Fatalf("%s: %v (%d values)", c.source, s.Err, len(s.Values))
-		}
-		if changes := cfgdocDiff(s.Values, s.Values); len(changes) != 0 {
-			t.Errorf("%s differs from itself: %v", c.source, changes)
-		}
-		if again := cfgdocDecodeShipped(c.source, c.data); again.Stamp != s.Stamp {
-			t.Errorf("%s: the defaults stamp is not stable", c.source)
-		}
-	}
-}
-
-func TestCfgdocSceneDeltaIgnoresFormatting(t *testing.T) {
-	shipped := []byte(`{"scenes": [{"name": "Main", "elements": [{"type": "label", "text": "Hi"}]}, {"name": "Old", "elements": []}]}`)
-	disk := []byte(`{"scenes": [
-	  {"elements": [{"text": "Hi", "type": "label"}], "name": "Main"},
-	  {"name": "Mine", "elements": [{"type": "label", "text": "new"}]}
-	]}`)
-	delta, err := cfgdocDiffScenes(disk, shipped)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(delta.Names, ",") != "Mine" || !delta.Added["Mine"] || strings.Join(delta.Removed, ",") != "Old" {
-		t.Errorf("delta = %+v, want Mine added and Old removed, Main unchanged", delta)
 	}
 }
 

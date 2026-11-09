@@ -105,7 +105,7 @@ func alarmDrawRingtoneRow(renderer *sdl.Renderer, config *Config, font, small *t
 	alarmRingtoneMusicRect = sdl.Rect{}
 	if focused {
 		label := "Music"
-		bw, th := measureText(small, "X")
+		bw, th := measureText(small, hintKeyFor("X", label))
 		lw, _ := measureText(small, label)
 		badge := sdl.Rect{W: bw + 20, H: th + 6}
 		badge.X = nameRight - lw - 8 - badge.W
@@ -321,7 +321,8 @@ func renderAlarmPicker(renderer *sdl.Renderer, config *Config) {
 	hy := listTop + listH + 16
 	hx := x
 	for _, h := range [2][2]string{{"A", "Choose"}, {"B", "Back"}} {
-		bw, _ := measureText(small, h[0])
+		// Measured as drawGlassHintBadge names it (Enter/Esc on a keyboard).
+		bw, _ := measureText(small, hintKeyFor(h[0], h[1]))
 		badge := sdl.Rect{X: hx, Y: hy, W: bw + 20, H: smallH + 6}
 		hx = drawGlassHintBadge(renderer, config, small, badge, h[0], h[1], badge.X+badge.W+8, hy+3) + scaleX(24, screenWidth)
 	}

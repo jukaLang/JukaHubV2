@@ -9,7 +9,6 @@ package main
 // fresh six-digit PIN, so nothing has to be typed on the handheld to pair.
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -231,44 +230,150 @@ func drawCompanionQR(renderer *sdl.Renderer, rect sdl.Rect, modules [][]bool) {
 	}
 }
 
-// renderCompanionHeaderQR draws the compact, always-available pairing code in
-// the home header. It returns an empty rect when there is no code to show.
+// companionHeaderQRQuiet is the quiet zone the header code keeps inside its
+// white tile, in modules. The standard asks for four; phone cameras read two
+// reliably, and every module the margin does not take goes to the code itself.
+const companionHeaderQRQuiet = 2
+
+// companionHeaderQR caches the header code between frames: the symbol without
+// the quiet zone the bitmap carries, and the rects one frame fills, so the tile
+// costs one FillRects call instead of a FillRect per dark module. Render
+// thread only.
+var companionHeaderQR struct {
+	src    [][]bool // the companion.qr the fields below were built from
+	core   [][]bool
+	origin sdl.Point
+	module int32
+	rects  []sdl.Rect
+}
+
+// qrCoreModules strips the all-light rows and columns around a QR bitmap — the
+// quiet zone go-qrcode adds — and returns the symbol itself. A bitmap with no
+// dark module, or with ragged rows, comes back unchanged.
+func qrCoreModules(bitmap [][]bool) [][]bool {
+	top, bottom, left, right := -1, -1, -1, -1
+	for y, row := range bitmap {
+		if len(row) != len(bitmap[0]) {
+			return bitmap
+		}
+		for x, on := range row {
+			if !on {
+				continue
+			}
+			if top < 0 {
+				top = y
+			}
+			bottom = y
+			if left < 0 || x < left {
+				left = x
+			}
+			if x > right {
+				right = x
+			}
+		}
+	}
+	if top < 0 {
+		return bitmap
+	}
+	core := make([][]bool, 0, bottom-top+1)
+	for y := top; y <= bottom; y++ {
+		core = append(core, bitmap[y][left:right+1])
+	}
+	return core
+}
+
+// qrModuleRects lays a symbol out at (x, y) with square modules of the given
+// size. Neighbouring dark modules on a row merge into one rect, so a pairing
+// code is a couple of hundred rects for a single FillRects call.
+func qrModuleRects(core [][]bool, x, y, module int32) []sdl.Rect {
+	rects := make([]sdl.Rect, 0, len(core)*len(core)/3)
+	for r, row := range core {
+		for c := 0; c < len(row); {
+			if !row[c] {
+				c++
+				continue
+			}
+			start := c
+			for c < len(row) && row[c] {
+				c++
+			}
+			rects = append(rects, sdl.Rect{
+				X: x + int32(start)*module,
+				Y: y + int32(r)*module,
+				W: int32(c-start) * module,
+				H: module,
+			})
+		}
+	}
+	return rects
+}
+
+// companionHeaderQRCore is the current code's symbol, recomputed only when the
+// code itself changes (a new PIN or LAN address).
+func companionHeaderQRCore() [][]bool {
+	c := &companionHeaderQR
+	qr := companion.qr
+	if len(qr) == 0 {
+		return nil
+	}
+	if len(c.src) != len(qr) || &c.src[0] != &qr[0] {
+		c.src = qr
+		c.core = qrCoreModules(qr)
+		c.rects = nil
+	}
+	return c.core
+}
+
+// headerQRModule is the module size, in pixels, of a symbol of n modules drawn
+// in a square tile of the given side with the header's quiet zone: the largest
+// whole number that fits, so every module is the same crisp square. Zero when
+// not even one-pixel modules fit.
+func headerQRModule(side, n int32) int32 {
+	if n <= 0 || side <= 0 {
+		return 0
+	}
+	return side / (n + 2*companionHeaderQRQuiet)
+}
+
+// renderCompanionHeaderQR draws the always-available pairing code in the home
+// header: a white tile, right-aligned in rect, that the code fills edge to
+// edge apart from a two-module quiet zone. The old tile drew the bitmap with
+// its own four-module margin and a pixel per module, so the 72px tile held a
+// 37px code; the module size now comes from the tile (headerQRModule), which
+// is what makes the code bigger, not just its frame. It returns an empty rect
+// when there is no code to show or no room for a readable one.
 func renderCompanionHeaderQR(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect) sdl.Rect {
 	companionHeaderRect = sdl.Rect{}
-	if renderer == nil || len(companion.qr) == 0 || rect.W < 72 || rect.H < 72 {
+	if renderer == nil || len(companion.qr) == 0 || rect.W <= 0 || rect.H <= 0 {
 		return sdl.Rect{}
 	}
-	UIButton(renderer, nil, rect, "", UIButtonStyle{
-		Variant:  UIButtonCustom,
-		Fill:     sdl.Color{R: 255, G: 255, B: 255, A: 255},
-		Border:   WithAlpha(accentColor, 200),
-		Radius:   RadiusSM,
-		NoShadow: true,
-	}, UIButtonState{})
+	core := companionHeaderQRCore()
+	n := int32(len(core))
+	side := min32(rect.W, rect.H)
+	module := headerQRModule(side, n)
+	if module < 1 {
+		return sdl.Rect{}
+	}
+	tile := sdl.Rect{X: rect.X + rect.W - side, Y: rect.Y, W: side, H: side}
+	radius := max32(6, side/10)
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	// A plain white card: on the navy backdrop it already reads as the one
+	// tappable code on the screen, and every pixel of it is quiet zone or code.
+	fillRoundedRect(renderer, tile.X, tile.Y, tile.W, tile.H, radius, sdl.Color{R: 255, G: 255, B: 255, A: 255})
 
-	pad := int32(6)
-	captionH := int32(0)
-	if rect.H >= 80 && fonts.Small != nil {
-		captionH = companionFontLine(fonts.Small) + 2
+	code := module * n
+	origin := sdl.Point{X: tile.X + (tile.W-code)/2, Y: tile.Y + (tile.H-code)/2}
+	c := &companionHeaderQR
+	if c.rects == nil || c.origin != origin || c.module != module {
+		c.rects = qrModuleRects(core, origin.X, origin.Y, module)
+		c.origin, c.module = origin, module
 	}
-	qrSize := rect.W - 2*pad
-	if maxH := rect.H - 2*pad - captionH; qrSize > maxH {
-		qrSize = maxH
+	if len(c.rects) > 0 {
+		renderer.SetDrawColor(0, 0, 0, 255)
+		_ = renderer.FillRects(c.rects)
 	}
-	if qrSize > 0 {
-		drawCompanionQR(renderer, sdl.Rect{
-			X: rect.X + (rect.W-qrSize)/2,
-			Y: rect.Y + pad,
-			W: qrSize,
-			H: qrSize,
-		}, companion.qr)
-	}
-	if captionH > 0 {
-		drawText(renderer, fonts.Small, "SCAN", rect.X+rect.W/2, rect.Y+rect.H-captionH,
-			colorNew(7, 17, 31, 255), textAlignCenter)
-	}
-	companionHeaderRect = rect
-	return rect
+	companionHeaderRect = tile
+	return tile
 }
 
 // companionFontLine is the height of one line of a cached font, falling back
@@ -557,13 +662,15 @@ func companionButtonFor(name string, swapped bool) (uint8, bool) {
 // handheld's own pad, overlays and scene handlers included.
 func pushCompanionKey(name string, config *Config) {
 	if btn, ok := companionButtonFor(name, abButtonsSwapped(config)); ok {
-		sdl.PushEvent(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: btn})
-		sdl.PushEvent(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONUP, Button: btn})
+		// Pushed events carry their press state: the phone's A used to arrive
+		// with State 0, which reads as a release.
+		_ = pushControllerButton(sdl.CONTROLLERBUTTONDOWN, 0, btn, sdl.PRESSED)
+		_ = pushControllerButton(sdl.CONTROLLERBUTTONUP, 0, btn, sdl.RELEASED)
 		return
 	}
 	if key, ok := companionKeyboardKeys[name]; ok {
-		sdl.PushEvent(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: key}})
-		sdl.PushEvent(&sdl.KeyboardEvent{Type: sdl.KEYUP, Keysym: sdl.Keysym{Sym: key}})
+		_ = pushSyntheticKey(sdl.KEYDOWN, key, sdl.PRESSED)
+		_ = pushSyntheticKey(sdl.KEYUP, key, sdl.RELEASED)
 	}
 }
 
@@ -597,16 +704,4 @@ func drainCompanionQueue(config *Config) {
 			showToast("Phone sent "+filepath.Base(ev.Text), ColorToastSuccess)
 		}
 	}
-}
-
-// companionStatusLine is used by tests and the Tools panel: a one-line summary
-// of where the phone should connect.
-func companionStatusLine() string {
-	if companion.err != "" {
-		return "Error: " + companion.err
-	}
-	if companion.pin == "" && companion.srv == nil {
-		return "Stopped"
-	}
-	return fmt.Sprintf("Pairing PIN %s", companion.pin)
 }

@@ -258,19 +258,6 @@ func stageFade(c sdl.Color, a float64) sdl.Color {
 	return c
 }
 
-// stageDrawBackdrop paints the backdrop the card floats on: the liquid one when
-// the kit is ready, Home's own otherwise.
-func stageDrawBackdrop(renderer *sdl.Renderer, config *Config, elapsedMS float64) {
-	if renderer == nil {
-		return
-	}
-	if bootLiquid.ready && bootLiquid.renderer == renderer {
-		bootLiquidDrawBackdrop(renderer, elapsedMS/1000, 1, !effectiveReducedMotion(config))
-		return
-	}
-	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
-}
-
 // stageDrawCard paints the pane and its contents: the wordmark, what the card
 // is doing, the live step, the progress track, the step list and a footer.
 func stageDrawCard(renderer *sdl.Renderer, config *Config, snap *stageSnapshot, st stageCardStyle) {

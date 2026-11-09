@@ -1995,8 +1995,11 @@ func mediaHubFooterHints(base []FooterHint) []FooterHint {
 	case 3:
 		hints = []FooterHint{
 			{Button: "D-Pad", Label: "Controls"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Back"},
-			{Button: "X", Label: "Captions"}, {Button: "Y", Label: "Settings"},
-			{Button: "L1/R1", Label: "Seek"}, {Button: "L2/R2", Label: "Prev / Next"},
+			// The second half of each badge is the keyboard's key in the
+			// player (HandleVideoKeyInput); inputhints.go shows the half the
+			// user can press.
+			{Button: "X / C", Label: "Captions"}, {Button: "Y / S", Label: "Settings"},
+			{Button: "L1/R1 / Shift+←→", Label: "Seek"}, {Button: "L2/R2 / P/N", Label: "Prev / Next"},
 		}
 	case 4:
 		hints = []FooterHint{

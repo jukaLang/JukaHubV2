@@ -686,12 +686,6 @@ type nativeVideoRenderer struct {
 	} `json:"thumbnail"`
 }
 
-// parseNativeYouTubeSearch turns the endpoint's body into the entries the grid
-// draws. Entries that are not videos (mixes, shelves, channels) are skipped.
-func parseNativeYouTubeSearch(data []byte) []VideoInfo {
-	return parseNativeSearchPage(data).videos
-}
-
 // parseNativeSearchPage is parseNativeYouTubeSearch plus the continuation token
 // that asks the same search for the twenty results after these.
 func parseNativeSearchPage(data []byte) nativeSearchPage {

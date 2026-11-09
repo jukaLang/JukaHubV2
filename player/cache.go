@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -142,17 +141,6 @@ func cacheSet(db *bolt.DB, key string, value []byte, ttl time.Duration) error {
 	})
 }
 
-// cacheDelete removes a cached key.
-func cacheDelete(db *bolt.DB, key string) error {
-	return db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(cacheBucket))
-		if b == nil {
-			return nil
-		}
-		return b.Delete([]byte(key))
-	})
-}
-
 // cacheExpiredGrace is how long past its TTL an entry is still kept. The media
 // grids paint a stale list and refresh behind it (cacheGetStale), so an entry
 // is not dropped the moment it expires, only once nothing would show it.
@@ -201,9 +189,9 @@ func sweepSharedCacheLater(delay time.Duration) {
 			return
 		}
 		if n, err := cacheSweepExpired(db, cacheExpiredGrace); err != nil {
-			log.Printf("[cache] expiry sweep failed: %v", err)
+			logWarn("cache", "expiry sweep failed: %v", err)
 		} else if n > 0 {
-			log.Printf("[cache] expiry sweep removed %d entries", n)
+			logDebug("cache", "expiry sweep removed %d entries", n)
 		}
 	})
 }

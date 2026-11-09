@@ -26,7 +26,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -304,7 +303,7 @@ func vkActionLabel() string {
 	switch vkTarget {
 	case vkTargetTerm:
 		return "Run"
-	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget:
 		return "Search"
 	case vkTargetWiFi, vkTargetNetplay:
 		return "Join"
@@ -654,15 +653,6 @@ func vkHitTest(mx, my int32) (int, int, bool) {
 	return 0, 0, false
 }
 
-// vkCloseHit reports whether the close button was pressed.
-func vkCloseHit(mx, my int32) bool {
-	vkEnsureLayout()
-	if vkCloseRect.W <= 0 {
-		return false
-	}
-	return pointInRect(mx, my-vkAnimOffset(), vkCloseRect)
-}
-
 // vkOutsidePanel reports whether a logical point is outside the keyboard, used
 // to dismiss it by tapping the dimmed content behind it.
 func vkOutsidePanel(mx, my int32) bool {
@@ -868,6 +858,8 @@ func vkCurrentText() string {
 		return netPromptBuffer
 	case homeSearchVKTarget:
 		return homeSearchText()
+	case tzPickerVKTarget:
+		return tzPicker.query
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
 	}
@@ -925,6 +917,9 @@ func vkSetText(text string, config *Config) {
 		// The Home search sheet re-runs its query on every key, so results
 		// fill in above the keyboard while the words are typed.
 		homeSearchSetQuery(text)
+	case tzPickerVKTarget:
+		// The zone list behind the keyboard narrows on every key.
+		tzPickerSetQuery(text)
 	case vkTargetDownloads:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
@@ -1091,6 +1086,8 @@ func vkTitle() string {
 		return "FIND STREAMS"
 	case homeSearchVKTarget:
 		return "SEARCH JUKAHUB"
+	case tzPickerVKTarget:
+		return "SEARCH TIME ZONES"
 	case vkTargetDownloads:
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
@@ -1198,6 +1195,8 @@ func vkPlaceholder() string {
 		return "Name, group or link: news"
 	case homeSearchVKTarget:
 		return "Apps, settings, files or the web"
+	case tzPickerVKTarget:
+		return "City or country: berlin"
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
@@ -1274,49 +1273,6 @@ func vkPlaceholder() string {
 		return "https://example.com"
 	}
 	return "Type here"
-}
-
-func vkHints() string {
-	switch vkTarget {
-	case vkTargetName, vkTargetRA, vkTargetPSRemote:
-		if vkTarget == vkTargetPSRemote && psPanelEditField == psEditPIN {
-			return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Pair"}, FooterHint{"B / Esc", "Close"})
-		}
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetChat:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Ask AI"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetUnit:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Convert"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetTerm:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Done", "Run"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetTV:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{Label: "Live Filter"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetMusic:
-		return hintLine(FooterHint{Label: "Type Initials"}, FooterHint{"A / Y", "Search"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetNetplay:
-		// Y joins; Start closes the keyboard like B (the old "Start Join" hint
-		// promised an action Start never had).
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Join"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetMemory:
-		return hintLine(FooterHint{"ENTER", "Use Value"}, FooterHint{"123", "Digits"}, FooterHint{"B / Esc", "Cancel"})
-	case vkTargetGameSearch:
-		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetGameArgs:
-		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Save"}, FooterHint{"B / Esc", "Close"})
-	case vkTargetToolArgs:
-		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Run"}, FooterHint{"B / Esc", "Cancel"})
-	case vkTargetFiles:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"A / Enter", "Save"}, FooterHint{"B / Esc", "Cancel"})
-	case vkTargetDNS:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Look up"}, FooterHint{"B / Esc", "Cancel"})
-	case vkTargetFileLine:
-		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Save Line"}, FooterHint{"B / Esc", "Cancel"})
-	case vkTargetIPStream:
-		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
-	case homeSearchVKTarget:
-		return hintLine(FooterHint{Label: "Live Results"}, FooterHint{"Y / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
-	}
-	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
 
 // --- Opening / closing ------------------------------------------------------
@@ -2291,6 +2247,10 @@ func vkSubmit(config *Config, askAI bool) {
 		// and hands the highlight to the first result.
 		vkCloseKeyboard()
 		homeSearchKeyboardDone()
+	case tzPickerVKTarget:
+		// The zone list already narrowed while typing; Search drops the
+		// keyboard with the cursor on the first match.
+		vkCloseKeyboard()
 	case vkTargetDownloads:
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.
@@ -2762,13 +2722,13 @@ func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int3
 	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, w, h)
 	if err != nil || tex == nil {
 		vkVideoOverlayBroken = true
-		log.Printf("[vk] video overlay cache disabled: %v", err)
+		logWarn("vk", "video overlay cache disabled: %v", err)
 		return nil
 	}
 	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
 		tex.Destroy()
 		vkVideoOverlayBroken = true
-		log.Printf("[vk] video overlay cache blend mode: %v", err)
+		logWarn("vk", "video overlay cache blend mode: %v", err)
 		return nil
 	}
 
@@ -2778,7 +2738,7 @@ func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int3
 	if err := renderer.SetRenderTarget(tex); err != nil {
 		tex.Destroy()
 		vkVideoOverlayBroken = true
-		log.Printf("[vk] video overlay cache target: %v", err)
+		logWarn("vk", "video overlay cache target: %v", err)
 		return nil
 	}
 	// The overlay is drawn last, so no clip should be active; make sure the
@@ -2799,106 +2759,4 @@ func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int3
 	vkVideoOverlayValid = true
 	vkVideoOverlayBuilds++
 	return tex
-}
-
-// vkEnsureChatCache returns the cached chat panel + status bar,
-// rebuilding it only when the panel geometry, screen dimensions, theme colours
-// or header/footer text changed. The cache is drawn once per frame and only the
-// message bubbles (which change with each message) are redrawn on top.
-func vkEnsureChatCache(renderer *sdl.Renderer, config *Config, listX, listY, listW, listH int32) *sdl.Texture {
-	vkForgetForeignTexture(renderer, &vkChatStaticTex, &vkChatStaticOwner, &vkChatStaticValid)
-	state := vkStaticLayerStateNow(sdl.Rect{X: listX, Y: listY, W: listW, H: listH})
-	if vkChatStaticValid && vkChatStaticTex != nil && vkChatStaticState == state {
-		return vkChatStaticTex
-	}
-	// Checked before the destroy below (which clears the flag): a renderer
-	// without render-target support must not retry and log every frame.
-	if vkChatStaticBroken || listW <= 0 || listH <= 0 {
-		return nil
-	}
-	statusFont, _ := getCachedFont(config, "small")
-	if statusFont == nil {
-		return nil
-	}
-	DestroyVKChatCache()
-
-	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, listW, listH)
-	if err != nil || tex == nil {
-		vkChatStaticBroken = true
-		log.Printf("[vk] chat cache disabled: %v", err)
-		return nil
-	}
-	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
-		tex.Destroy()
-		vkChatStaticBroken = true
-		log.Printf("[vk] chat cache blend mode: %v", err)
-		return nil
-	}
-	prevTarget := renderer.GetRenderTarget()
-	var prevBlend sdl.BlendMode
-	_ = renderer.GetDrawBlendMode(&prevBlend)
-	if err := renderer.SetRenderTarget(tex); err != nil {
-		tex.Destroy()
-		vkChatStaticBroken = true
-		log.Printf("[vk] chat cache target: %v", err)
-		return nil
-	}
-	// The chat is drawn last, so no clip should be active; make sure the
-	// cached layer is not clipped by a leftover scene rect.
-	_ = renderer.SetClipRect(nil)
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 0)
-	renderer.Clear()
-	// Panel background with subtle border.
-	fillRoundedRect(renderer, listX, listY, listW, listH, RadiusMD, ColorSurfaceRaised)
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
-	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: listW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: 1, H: listH - 2})
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 60)
-	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + listH - 2, W: listW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: listX + listW - 2, Y: listY + 1, W: 1, H: listH - 2})
-	// Header.
-	const headerH = int32(44)
-	vkDrawPanel(renderer, sdl.Rect{X: listX, Y: listY, W: listW, H: headerH})
-	// Status bar area.
-	statusY := listY + int32(8)
-	statusRight := listX + listW - int32(12)
-	if discordStatus != "" {
-		dsw, _, _ := statusFont.SizeUTF8(discordStatus)
-		statusRight -= int32(dsw) + int32(8)
-		renderText(renderer, config, statusFont, discordStatus, ColorTextTertiary(), statusRight, statusY)
-		statusRight -= int32(8)
-	}
-	if groqStatus != "" {
-		gw, _, _ := statusFont.SizeUTF8(groqStatus)
-		groqX := statusRight - int32(gw) - int32(8)
-		if groqX < listX+int32(12) {
-			groqX = listX + int32(12)
-		}
-		renderText(renderer, config, statusFont, groqStatus, groqStatusColor(), groqX, statusY)
-	}
-	// Divider under status.
-	dividerY := statusY + int32(statusFont.Height()) + int32(2)
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
-	renderer.FillRect(&sdl.Rect{X: listX + int32(12), Y: dividerY, W: listW - 2*int32(12), H: 1})
-	_ = renderer.SetRenderTarget(prevTarget)
-	_ = renderer.SetDrawBlendMode(prevBlend)
-	vkChatStaticState = state
-	vkChatStaticTex = tex
-	vkChatStaticOwner = renderer
-	vkChatStaticValid = true
-	vkChatStaticBuilds++
-	return tex
-}
-
-// vkDrawPanel paints the chat cache's header band: the overlay sheet's shape
-// on the theme's panel surface. (The keyboard itself draws vkDrawSheet.)
-func vkDrawPanel(renderer *sdl.Renderer, panel sdl.Rect) {
-	// The overlay sheet's shape — the shared corner radius and glass hairline,
-	// with the glass edge highlight along the top — on the theme's panel
-	// surface. The three stacked shadows and the square double border were the
-	// older shell's panel; Home's cards have neither.
-	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, OverlayCardRadius, WithAlpha(ColorSurfacePanel, 250))
-	strokeRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, OverlayCardRadius, 1, glassSheetEdge())
-	drawOverlayCardAccent(renderer, panel.X, panel.Y, panel.W)
 }

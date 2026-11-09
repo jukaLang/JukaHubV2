@@ -143,14 +143,6 @@ func browserClearPageCache() {
 	browserCache.bytes = 0
 }
 
-// browserCacheSize reports the entries and bytes held, for tests and the
-// diagnostics screen.
-func browserCacheSize() (entries, bytes int) {
-	browserCache.mu.Lock()
-	defer browserCache.mu.Unlock()
-	return len(browserCache.items), browserCache.bytes
-}
-
 // trimBrowserCacheAddress keeps the cache key stable across the spellings the
 // browser accepts for the same page.
 func trimBrowserCacheAddress(address string) string {

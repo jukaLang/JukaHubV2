@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -130,7 +129,7 @@ func chatSyncLoop() {
 func chatSyncStep(now time.Time) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[chat] sender recovered from: %v", r)
+			logDebug("chat", "sender recovered from: %v", r)
 		}
 	}()
 	chatSyncDiscord(now)
@@ -285,7 +284,7 @@ func chatSyncDiscord(now time.Time) {
 			if state == chatNetUnconfigured || state == chatNetRejected {
 				chatFailPending(chatTabCommunity, chatCommunityProblem(state))
 			}
-			log.Printf("[chat] discord connect: %v", err)
+			logWarn("chat", "discord connect: %v", err)
 			return
 		}
 		chatDiscordBackoff = 0
@@ -314,7 +313,7 @@ func chatSyncDiscord(now time.Time) {
 				chatSendRetryAt = now.Add(15 * time.Second)
 				return
 			}
-			log.Printf("[chat] discord send refused: %v", err)
+			logWarn("chat", "discord send refused: %v", err)
 			chatUpdateMessage(chatTabCommunity, msg.ID, func(m *ChatMessage) {
 				m.Pending = false
 				m.Error = "Not sent — Discord refused the message"
@@ -512,7 +511,7 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 	defer func() {
 		if r := recover(); r != nil {
 			chatStreamEnd()
-			log.Printf("[groq] request recovered from: %v", r)
+			logDebug("groq", "request recovered from: %v", r)
 		}
 	}()
 	groqStatus = "Groq: thinking..."
@@ -524,7 +523,7 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 	chatStreamEnd()
 	now := time.Now()
 	if err != nil {
-		log.Printf("[groq] request failed: %v", err)
+		logWarn("groq", "request failed: %v", err)
 		if chatIsNetworkError(err) {
 			groqStatus = "Groq: offline"
 			chatAIRetryLater(now)
@@ -615,7 +614,7 @@ func chatGroqAsk(key string, models []string, messages []map[string]string, onDe
 		lastErr = err
 		var apiErr *groqError
 		if errors.As(err, &apiErr) && apiErr.model {
-			log.Printf("[groq] model %s unavailable: %s", model, apiErr.msg)
+			logWarn("groq", "model %s unavailable: %s", model, apiErr.msg)
 			continue
 		}
 		return "", err

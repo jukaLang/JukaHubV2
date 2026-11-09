@@ -45,7 +45,9 @@ echo "== AndroidRT → $OUT (CC=$CC) =="
 
 $CC $CFLAGS -DJUKAHUB_EVDEV -I"$SRC" \
     "$SRC/runner.c" "$SRC/activity.c" "$SRC/androidshim.c" "$SRC/inputshim.c" "$SRC/looper.c" \
-    "$SRC/jnistub.c" "$SRC/evdev.c" "$SRC/logshim.c" "$SRC/openslessim.c" "$SRC/surface.c" "$SRC/eglpresent.c" \
+    "$SRC/jnienv.c" "$SRC/jnibase.c" "$SRC/jnipack_minecraft.c" "$SRC/gameactivity.c" "$SRC/apkzip.c" \
+    "$SRC/apkmeta.c" "$SRC/device.c" "$SRC/evdev.c" "$SRC/logshim.c" "$SRC/openslessim.c" "$SRC/surface.c" \
+    "$SRC/eglpresent.c" \
     "$SRC/dlport.c" "$SRC/elfdyn.c" "$SRC/bionicld.c" "$SRC/bioniccompat.c" "$SRC/bionicpthread.c" \
     "$SRC/bionicjmp.S" "$SRC/sysprops.c" \
     -o "$OUT/loader" -pthread -ldl -lm -Wl,--export-dynamic

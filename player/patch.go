@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -225,7 +224,7 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, medium, titleStr, ColorTextPrimary(), 24, contentTop+2)
 	renderText(renderer, config, font, subStr, ColorTextSecondary(), 24+int32(120), contentTop+10)
 
-	statusLine := "Local checks only · press A on a row for details"
+	statusLine := hintSentence("Local checks only · press %s on a row for details", "A", "Details")
 	if label := CurrentPatchBusyLabel(); label != "" {
 		statusLine = label
 	} else if patchState.LastCheckAt != "" {
@@ -1174,11 +1173,6 @@ func patchFooterHints() ([]FooterHint, bool) {
 		return hints, true
 	}
 	return nil, false
-}
-
-// formatPatchTime is a tiny helper for display.
-func formatPatchTime(t time.Time) string {
-	return t.Format("2006-01-02 15:04")
 }
 
 // Scene registration. Patch draws its own status bar and footer, and clears the

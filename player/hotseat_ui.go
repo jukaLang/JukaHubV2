@@ -419,9 +419,16 @@ func hotseatUIKey(e *sdl.KeyboardEvent, c *Config) bool {
 		if hotseatUI.view == hotseatViewLobby && hotseatUI.zone == 0 {
 			hotseatUIMovePlayer(1)
 		}
-	case sdl.K_DELETE:
-		if hotseatUI.view == hotseatViewLobby && hotseatUI.zone == 0 {
+	case sdl.K_DELETE, sdl.K_y:
+		// Y and Delete are the pad's Y: remove the focused player, once per
+		// press (a held key's auto-repeat removed the next ones too).
+		if e.Repeat == 0 && hotseatUI.view == hotseatViewLobby && hotseatUI.zone == 0 {
 			hotseatUIRemovePlayer()
+		}
+	case sdl.K_x:
+		// The pad's X: end the game from the turn screen.
+		if hotseatUI.view == hotseatViewTurns {
+			hotseatUIPressTurns(c, 2)
 		}
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		hotseatUIBack(c)
@@ -491,7 +498,8 @@ func hotseatUIHints() []FooterHint {
 		return []FooterHint{{Button: "A", Label: "Press"}, {Button: "X", Label: "End game"}, {Button: "B", Label: "Players"}}
 	}
 	if hotseatUI.zone == 0 {
-		return []FooterHint{{Button: "A", Label: "Join"}, {Button: "L1/R1", Label: "Move"},
+		// "/ PgUp/PgDn": the keyboard moves a player with PgUp/PgDn (hotseatUIKey).
+		return []FooterHint{{Button: "A", Label: "Join"}, {Button: "L1/R1 / PgUp/PgDn", Label: "Move"},
 			{Button: "Y", Label: "Remove"}, {Button: "B", Label: "Back"}}
 	}
 	return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Open"}, {Button: "B", Label: "Back"}}

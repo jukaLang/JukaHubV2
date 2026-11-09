@@ -249,26 +249,6 @@ func formatFrequencyKHz(khz int64) string {
 	return fmt.Sprintf("%.1f GHz", float64(khz)/1_000_000)
 }
 
-// readCurrentGovernors returns the governors in use, or "" when they differ.
-func readCurrentGovernors(paths []string) string {
-	current := ""
-	for _, p := range paths {
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return ""
-		}
-		name := strings.TrimSpace(string(raw))
-		if current == "" {
-			current = name
-			continue
-		}
-		if current != name {
-			return ""
-		}
-	}
-	return current
-}
-
 // powerProfileTarget is the governor a profile would write, using the
 // configured override when it is one the CPU actually offers.
 func powerProfileTarget(profile powerProfile, govPath string, cfg powerProfileConfig) string {
@@ -415,43 +395,6 @@ type powerProfileState struct {
 	Ceiling int64
 }
 
-// probePowerProfiles reports whether the switch can do anything here.
-func probePowerProfiles(cfg powerProfileConfig) powerProfileState {
-	state := powerProfileState{Enabled: cfg.Enabled}
-	if !cfg.Enabled {
-		state.Reason = "off in settings"
-		return state
-	}
-	paths := cpuGovernorPaths(cpufreqRoot)
-	if len(paths) == 0 {
-		state.Reason = "no cpufreq governors on this device"
-		return state
-	}
-	state.Current = readCurrentGovernors(paths)
-	if dirs := cpufreqDirs(cpufreqRoot); len(dirs) > 0 {
-		state.Ceiling = powerProfileCeilingKHz(dirs[0], cfg)
-	}
-	for _, path := range paths {
-		target := powerProfileTarget(powerProfilePerformance, path, cfg)
-		if target == "" {
-			continue
-		}
-		// A write is the only honest test on sysfs, and a probe must not change
-		// the governor. The permission bits are the next best signal: sysfs
-		// reports the real mode, and a file the user cannot write is a clear no.
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if info.Mode().Perm()&0o222 != 0 {
-			state.Supported = true
-			return state
-		}
-	}
-	state.Reason = "governor is read-only (needs root on this firmware)"
-	return state
-}
-
 // launchPowerProfile holds the profile applied for the running child, so a
 // second launch cannot restore the wrong one when the first exits.
 var launchPowerProfile struct {
@@ -584,31 +527,6 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 		logPatch("power profile: performance for the running game")
 	}
 	return release
-}
-
-// powerProfileLine is the one-line status for the Emulators/Ports panels.
-func powerProfileLine(config *Config) string {
-	state := probePowerProfiles(loadPowerProfileConfig(config))
-	if !state.Enabled {
-		return "power profiles: " + state.Reason
-	}
-	if !state.Supported {
-		return "power profiles: " + state.Reason
-	}
-	line := ""
-	if state.Current != "" {
-		line = "now " + state.Current
-	}
-	if state.Ceiling > 0 {
-		if line != "" {
-			line += " · "
-		}
-		line += "max " + formatFrequencyKHz(state.Ceiling)
-	}
-	if line == "" {
-		return "performance on launch · battery on return"
-	}
-	return line + " · performance on launch"
 }
 
 // bootCPUSettings remembers the governor and frequency ceiling the machine

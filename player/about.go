@@ -48,10 +48,10 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	top := HomeTopBarH + 8
 	bottom := screenHeight - bottomBarHeight("About") - 16
 
-	// Brand block: the shared page header in its centred form. The wordmark, the
-	// version and the tagline are the three lines every header can carry, and
-	// the cards start where this one says the band ends.
-	headerBottom := UIPageHeaderDraw(renderer, config, UIPageHeader{
+	// Brand block: the logo beside the shared page header in its centred form.
+	// The wordmark, the version and the tagline are the three lines every
+	// header can carry, and the cards start where this one says the band ends.
+	headerBottom := drawAboutBrand(renderer, config, UIPageHeader{
 		X: margin, Y: top, W: screenWidth - 2*margin,
 		Title:        "JukaHub",
 		TitleRole:    "big",
@@ -208,6 +208,59 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	renderer.SetClipRect(nil)
+}
+
+// aboutLogoGap is the space between the logo and the brand block's lines.
+const aboutLogoGap = int32(20)
+
+// drawAboutBrand draws the brand block: the app's logo (brandlogo.go) as tall
+// as the three centred lines, with the lines beside it and the pair centred on
+// the screen together. It returns the band's bottom like UIPageHeaderDraw, and
+// the band is exactly as tall as it was without the logo, so the cards keep
+// their room. When the logo cannot be drawn, or the canvas is too narrow for
+// it, the block is the plain centred header.
+func drawAboutBrand(renderer *sdl.Renderer, config *Config, h UIPageHeader) int32 {
+	logo := uiPageHeaderMetricsFor(config, h).Height
+	textW := aboutBrandTextWidth(config, h)
+	if logo < 48 || textW <= 0 || logo+aboutLogoGap+textW > h.W || brandLogoTexture(renderer, logo) == nil {
+		return UIPageHeaderDraw(renderer, config, h)
+	}
+	// The lines centre on a point half the logo and the gap to the right, so
+	// the logo and the lines together sit on the screen's centre line.
+	shift := logo + aboutLogoGap
+	h.X += shift
+	h.W -= shift
+	bottom := UIPageHeaderDraw(renderer, config, h)
+	left := h.X + (h.W-textW)/2 - aboutLogoGap - logo
+	drawBrandLogo(renderer, sdl.Rect{X: left, Y: h.Y, W: logo, H: logo})
+	return bottom
+}
+
+// aboutBrandTextWidth is the widest of the brand block's lines in the fonts
+// UIPageHeaderDraw sets them in.
+func aboutBrandTextWidth(config *Config, h UIPageHeader) int32 {
+	lines := []struct {
+		text, role string
+		size       int
+	}{
+		{h.Title, h.TitleRole, h.TitleSize},
+		{h.Subtitle, h.SubtitleRole, 0},
+		{h.Status, h.StatusRole, 0},
+	}
+	widest := int32(0)
+	for _, line := range lines {
+		if strings.TrimSpace(line.text) == "" {
+			continue
+		}
+		font := uiPageHeaderFont(config, line.role, line.size)
+		if font == nil {
+			continue
+		}
+		if w, _, err := font.SizeUTF8(line.text); err == nil && int32(w) > widest {
+			widest = int32(w)
+		}
+	}
+	return widest
 }
 
 // handleAboutInput processes keyboard input for the about scene.

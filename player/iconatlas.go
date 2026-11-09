@@ -111,15 +111,6 @@ func (a *iconAtlas) directPaint() {
 	a.mu.Unlock()
 }
 
-// IconAtlasStats reports how icon draws split between atlas copies, bakes and
-// fallback paints since the last renderer switch or clear. Diagnostics,
-// following ShapeCacheStats.
-func IconAtlasStats() (copies, bakes, direct int64) {
-	homeIconAtlas.mu.Lock()
-	defer homeIconAtlas.mu.Unlock()
-	return homeIconAtlas.copies, homeIconAtlas.bakes, homeIconAtlas.direct
-}
-
 // forgetLocked drops the texture reference and every slot without destroying
 // anything: the caller either destroyed the texture already or knows it died
 // with its renderer.
@@ -130,20 +121,6 @@ func (a *iconAtlas) forgetLocked() {
 	a.shelves = a.shelves[:0]
 	a.nextY = 0
 	a.modSet = false
-}
-
-// dropForRenderer forgets a renderer's atlas without destroying the texture:
-// when the renderer is gone, its textures are gone with it. Mirrors
-// shapeCache.dropForRenderer so probe tests stay stable across many renderers.
-func (a *iconAtlas) dropForRenderer(r *sdl.Renderer) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.renderer == r {
-		a.renderer = nil
-		a.forgetLocked()
-		a.copies, a.bakes, a.direct = 0, 0, 0
-	}
-	delete(a.unsupported, r)
 }
 
 // ClearIconAtlas destroys the atlas texture and forgets its slots. It runs
@@ -160,15 +137,6 @@ func ClearIconAtlas() {
 	a.forgetLocked()
 	a.runs = map[iconAtlasKey][]iconRun{}
 	a.copies, a.bakes, a.direct = 0, 0, 0
-}
-
-// DropIconAtlasForRenderer forgets an atlas owned by a renderer that is about
-// to be destroyed, without destroying it itself.
-func DropIconAtlasForRenderer(r *sdl.Renderer) {
-	if r == nil {
-		return
-	}
-	homeIconAtlas.dropForRenderer(r)
 }
 
 // draw copies the named glyph (a canonical name from iconResolve) into dst,

@@ -29,6 +29,8 @@
 #include <unistd.h>
 
 #include "actbridge.h"
+#include "apkzip.h"
+#include "device.h"
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0 /* MinGW smoke builds */
@@ -352,24 +354,60 @@ void android_wakeLooper(void) {
     pthread_mutex_unlock(&g_looper_lock);
 }
 
-/* ── assets ──────────────────────────────────────────────────────────── */
+/* ── assets ──────────────────────────────────────────────────────────────
+ * Two sources, in this order: the staged assets/ tree (small games: JukaHub
+ * extracted them to tmpfs) and the APK itself on the SD card (large games:
+ * JukaHub stages only lib/<abi>; stored entries are read in place, deflated
+ * ones inflated through the device's zlib). AAsset_openFileDescriptor on a
+ * stored APK entry returns the APK's descriptor with the entry's offset —
+ * exactly what Android does — and -1 for a compressed one. */
+
+#define ASSET_INFLATE_WHOLE (8L << 20) /* deflated assets up to this are inflated on open */
 
 typedef struct AssetManager {
     char root[1024];
 } AssetManager;
 
 typedef struct AAsset {
-    FILE *fp;
+    FILE *fp;              /* staged file                                */
+    ApakZipStream *zs;     /* APK entry read incrementally              */
+    const ApakZipEntry *ze;
+    int stored;            /* APK entry stored uncompressed             */
     long size;
-    void *buffer;
+    void *buffer;          /* AAsset_getBuffer / an inflated APK entry  */
+    int fromBuffer;        /* reads are served from buffer at pos       */
+    long pos;
     char path[2048];
 } AssetFile;
 
 typedef struct AAssetDir {
-    DIR *dir;
+    DIR *dir;              /* staged directory, when it exists          */
     char path[2048];
+    char prefix[1024];     /* "assets/<dir>/" inside the APK            */
+    size_t zipNext;
     char current[512];
 } AssetDir;
+
+static pthread_once_t g_apkOnce = PTHREAD_ONCE_INIT;
+static ApakZip *g_apk;
+
+static void apkOpen(void) {
+    const char *path = getenv("ANDROIDPAK_APK");
+    char err[200];
+    struct stat st;
+    if (!path || !*path || stat(path, &st) != 0) return;
+    g_apk = apak_zipOpen(path, err, sizeof err);
+    if (!g_apk)
+        fprintf(stderr, "[androidrt] assets: cannot index the APK %s (%s) — only staged assets are visible\n", path, err);
+    else
+        fprintf(stderr, "[androidrt] assets: APK indexed (%zu entries; inflate via %s)\n", apak_zipCount(g_apk),
+                apak_zipInflateLib()[0] ? apak_zipInflateLib() : "nothing — deflated assets unreadable");
+}
+
+struct ApakZip *android_apkArchive(void) {
+    pthread_once(&g_apkOnce, apkOpen);
+    return g_apk;
+}
 
 AAssetManager *android_openAssetManager(const char *stagedRoot) {
     static AssetManager mgr;
@@ -391,6 +429,46 @@ static const char *assetName(const char *name) {
     return name;
 }
 
+static AssetFile *openFromApk(const char *name) {
+    char entryName[2048];
+    const ApakZipEntry *e;
+    AssetFile *asset;
+    ApakZip *apk = android_apkArchive();
+    if (!apk) return NULL;
+    /* A name that does not fit is no entry: a cut one could name another. */
+    if (snprintf(entryName, sizeof entryName, "assets/%s", name) >= (int)sizeof entryName) return NULL;
+    e = apak_zipFind(apk, entryName);
+    if (!e || e->size > 0x7fffffffu) return NULL;
+    asset = (AssetFile *)calloc(1, sizeof(*asset));
+    if (!asset) return NULL;
+    asset->ze = e;
+    asset->size = (long)e->size;
+    asset->stored = e->method == 0;
+    /* "<apk>!/assets/<name>" is only a label (APK entries are never opened
+     * by path); behind an over-long APK path the entry name alone. */
+    if (snprintf(asset->path, sizeof asset->path, "%s!/%s", apak_zipPath(apk), entryName) >= (int)sizeof asset->path)
+        snprintf(asset->path, sizeof asset->path, "%s", entryName);
+    if (!asset->stored && asset->size <= ASSET_INFLATE_WHOLE) {
+        char err[160];
+        size_t len = 0;
+        asset->buffer = apak_zipReadAll(apk, e, ASSET_INFLATE_WHOLE, &len, err, sizeof err);
+        if (!asset->buffer) {
+            fprintf(stderr, "[androidrt] assets: %s: %s\n", entryName, err);
+            free(asset);
+            return NULL;
+        }
+        asset->fromBuffer = 1;
+        return asset;
+    }
+    asset->zs = apak_zipStreamOpen(apk, e);
+    if (!asset->zs) {
+        fprintf(stderr, "[androidrt] assets: cannot read %s from the APK\n", entryName);
+        free(asset);
+        return NULL;
+    }
+    return asset;
+}
+
 ANDROIDRT_EXPORT AssetFile *AAssetManager_open(AAssetManager *mgr, const char *fileName, int mode) {
     AssetManager *m = (AssetManager *)mgr;
     AssetFile *asset;
@@ -400,7 +478,7 @@ ANDROIDRT_EXPORT AssetFile *AAssetManager_open(AAssetManager *mgr, const char *f
     (void)mode;
     if (!m) return NULL;
     snprintf(path, sizeof(path), "%s/%s", m->root, assetName(fileName));
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return NULL;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return openFromApk(assetName(fileName));
     fp = fopen(path, "rb");
     if (!fp) return NULL;
     asset = (AssetFile *)calloc(1, sizeof(*asset));
@@ -414,15 +492,41 @@ ANDROIDRT_EXPORT AssetFile *AAssetManager_open(AAssetManager *mgr, const char *f
     return asset;
 }
 
+static long assetTell(AssetFile *asset) {
+    if (asset->fp) return (long)ftello(asset->fp);
+    if (asset->fromBuffer) return asset->pos;
+    return (long)apak_zipStreamTell(asset->zs);
+}
+
 ANDROIDRT_EXPORT int AAsset_read(AssetFile *asset, void *buf, size_t count) {
     if (!asset || !buf) return -1;
-    return (int)fread(buf, 1, count, asset->fp);
+    if (asset->fp) return (int)fread(buf, 1, count, asset->fp);
+    if (asset->fromBuffer) {
+        long left = asset->size - asset->pos;
+        if (left <= 0) return 0;
+        if ((long)count > left) count = (size_t)left;
+        memcpy(buf, (const char *)asset->buffer + asset->pos, count);
+        asset->pos += (long)count;
+        return (int)count;
+    }
+    return (int)apak_zipStreamRead(asset->zs, buf, count);
 }
 
 /* NDK: returns the new position, or (off_t)-1 on error. */
 ANDROIDRT_EXPORT off_t AAsset_seek(AssetFile *asset, off_t offset, int whence) {
-    if (!asset || fseeko(asset->fp, offset, whence) != 0) return (off_t)-1;
-    return ftello(asset->fp);
+    if (!asset) return (off_t)-1;
+    if (asset->fp) {
+        if (fseeko(asset->fp, offset, whence) != 0) return (off_t)-1;
+        return ftello(asset->fp);
+    }
+    if (asset->fromBuffer) {
+        long target = whence == SEEK_SET ? (long)offset : whence == SEEK_CUR ? asset->pos + (long)offset
+                                                                             : asset->size + (long)offset;
+        if (target < 0 || target > asset->size) return (off_t)-1;
+        asset->pos = target;
+        return (off_t)target;
+    }
+    return (off_t)apak_zipStreamSeek(asset->zs, (int64_t)offset, whence == SEEK_SET ? 0 : whence == SEEK_CUR ? 1 : 2);
 }
 ANDROIDRT_EXPORT off64_t AAsset_seek64(AssetFile *asset, off64_t offset, int whence) {
     return (off64_t)AAsset_seek(asset, (off_t)offset, whence);
@@ -430,10 +534,10 @@ ANDROIDRT_EXPORT off64_t AAsset_seek64(AssetFile *asset, off64_t offset, int whe
 ANDROIDRT_EXPORT off_t AAsset_getLength(AssetFile *asset) { return asset ? (off_t)asset->size : 0; }
 ANDROIDRT_EXPORT off64_t AAsset_getLength64(AssetFile *asset) { return asset ? (off64_t)asset->size : 0; }
 ANDROIDRT_EXPORT off_t AAsset_getRemainingLength(AssetFile *asset) {
-    off_t cur;
+    long cur;
     if (!asset) return 0;
-    cur = ftello(asset->fp);
-    return cur < 0 ? 0 : (off_t)asset->size - cur;
+    cur = assetTell(asset);
+    return cur < 0 ? 0 : (off_t)(asset->size - cur);
 }
 ANDROIDRT_EXPORT off64_t AAsset_getRemainingLength64(AssetFile *asset) {
     return (off64_t)AAsset_getRemainingLength(asset);
@@ -441,7 +545,8 @@ ANDROIDRT_EXPORT off64_t AAsset_getRemainingLength64(AssetFile *asset) {
 
 ANDROIDRT_EXPORT void AAsset_close(AssetFile *asset) {
     if (!asset) return;
-    fclose(asset->fp);
+    if (asset->fp) fclose(asset->fp);
+    if (asset->zs) apak_zipStreamClose(asset->zs);
     free(asset->buffer);
     free(asset);
 }
@@ -452,6 +557,14 @@ ANDROIDRT_EXPORT const void *AAsset_getBuffer(AssetFile *asset) {
     off_t pos;
     if (!asset) return NULL;
     if (asset->buffer) return asset->buffer;
+    if (!asset->fp) {
+        char err[160];
+        size_t len = 0;
+        asset->buffer = asset->ze ? apak_zipReadAll(android_apkArchive(), asset->ze, (size_t)asset->size, &len, err,
+                                                    sizeof err)
+                                  : NULL;
+        return asset->buffer;
+    }
     asset->buffer = malloc(asset->size > 0 ? (size_t)asset->size : 1);
     if (!asset->buffer) return NULL;
     pos = ftello(asset->fp);
@@ -467,10 +580,21 @@ ANDROIDRT_EXPORT const void *AAsset_getBuffer(AssetFile *asset) {
 ANDROIDRT_EXPORT int AAsset_isAllocated(AssetFile *asset) { return asset && asset->buffer ? 1 : 0; }
 
 /* Staged assets are plain files, so a real descriptor works (FMOD and media
- * players read assets this way): start 0, the whole file. */
+ * players read assets this way): start 0, the whole file. A stored APK entry
+ * is the APK's own descriptor at the entry's offset; a compressed one has no
+ * descriptor (Android says the same: -1). */
 ANDROIDRT_EXPORT int AAsset_openFileDescriptor(AssetFile *asset, off_t *outStart, off_t *outLength) {
     int fd;
     if (!asset) return -1;
+    if (!asset->fp) {
+        uint64_t offset = 0;
+        if (!asset->stored || !asset->ze || apak_zipDataOffset(android_apkArchive(), asset->ze, &offset) != 0) return -1;
+        fd = apak_zipDupFd(android_apkArchive());
+        if (fd < 0) return -1;
+        if (outStart) *outStart = (off_t)offset;
+        if (outLength) *outLength = (off_t)asset->size;
+        return fd;
+    }
     fd = open(asset->path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     if (outStart) *outStart = 0;
@@ -487,8 +611,17 @@ ANDROIDRT_EXPORT int AAsset_openFileDescriptor64(AssetFile *asset, off64_t *outS
     return fd;
 }
 
+/* "assets/<dir>/" (or "assets/" for the root) — the APK prefix of a dir. */
+static void apkPrefix(const char *dirName, char *out, size_t cap) {
+    const char *n = assetName(dirName);
+    size_t len = strlen(n);
+    while (len && n[len - 1] == '/') len--;
+    if (len) snprintf(out, cap, "assets/%.*s/", (int)len, n);
+    else snprintf(out, cap, "assets/");
+}
+
 /* AAssetDir lists the FILES of one asset directory (never subdirectories,
- * like Android's). */
+ * like Android's): the staged directory when it exists, else the APK's. */
 ANDROIDRT_EXPORT AssetDir *AAssetManager_openDir(AAssetManager *mgr, const char *dirName) {
     AssetManager *m = (AssetManager *)mgr;
     AssetDir *d;
@@ -497,27 +630,123 @@ ANDROIDRT_EXPORT AssetDir *AAssetManager_openDir(AAssetManager *mgr, const char 
     if (!d) return NULL;
     snprintf(d->path, sizeof d->path, "%s/%s", m->root, assetName(dirName));
     d->dir = opendir(d->path);
+    apkPrefix(dirName, d->prefix, sizeof d->prefix);
     return d; /* Android returns an empty dir, not NULL, for a missing path */
 }
 
 ANDROIDRT_EXPORT const char *AAssetDir_getNextFileName(AssetDir *d) {
     struct dirent *e;
-    if (!d || !d->dir) return NULL;
-    while ((e = readdir(d->dir)) != NULL) {
-        char full[2600];
-        struct stat st;
-        if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0')))
-            continue;
-        snprintf(full, sizeof full, "%s/%s", d->path, e->d_name);
-        if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) continue;
-        snprintf(d->current, sizeof d->current, "%s", e->d_name);
+    ApakZip *apk;
+    size_t plen;
+    if (!d) return NULL;
+    if (d->dir) {
+        while ((e = readdir(d->dir)) != NULL) {
+            char full[2600];
+            struct stat st;
+            if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+                continue;
+            snprintf(full, sizeof full, "%s/%s", d->path, e->d_name);
+            if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            snprintf(d->current, sizeof d->current, "%s", e->d_name);
+            return d->current;
+        }
+        return NULL;
+    }
+    apk = android_apkArchive();
+    if (!apk) return NULL;
+    plen = strlen(d->prefix);
+    while (d->zipNext < apak_zipCount(apk)) {
+        const ApakZipEntry *z = apak_zipAt(apk, d->zipNext++);
+        const char *rest;
+        if (z->nameLen <= plen || strncmp(z->name, d->prefix, plen) != 0) continue;
+        rest = z->name + plen;
+        if (!*rest || strchr(rest, '/')) continue;
+        snprintf(d->current, sizeof d->current, "%s", rest);
         return d->current;
     }
     return NULL;
 }
 
 ANDROIDRT_EXPORT void AAssetDir_rewind(AssetDir *d) {
-    if (d && d->dir) rewinddir(d->dir);
+    if (!d) return;
+    if (d->dir) rewinddir(d->dir);
+    d->zipNext = 0;
+}
+
+static int nameCmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+static char *dupPrefix(const char *s, size_t n) {
+    char *d = (char *)malloc(n + 1);
+    if (d) {
+        memcpy(d, s, n);
+        d[n] = '\0';
+    }
+    return d;
+}
+
+/* AssetManager.list(dir): names of files and directories directly below. */
+size_t android_assetList(const char *dir, char ***namesOut) {
+    char **names = NULL;
+    size_t n = 0, cap = 0, i, w;
+    char path[2048], prefix[1024];
+    const char *stagedRoot = getenv("ANDROIDPAK_STAGED");
+    DIR *dd;
+    ApakZip *apk;
+    *namesOut = NULL;
+    snprintf(path, sizeof path, "%s/assets/%s", stagedRoot && *stagedRoot ? stagedRoot : ".", assetName(dir));
+    dd = opendir(path);
+    if (dd) {
+        struct dirent *e;
+        while ((e = readdir(dd)) != NULL) {
+            if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+                continue;
+            if (n == cap) {
+                char **grown = (char **)realloc(names, (cap = cap ? cap * 2 : 32) * sizeof *grown);
+                if (!grown) break;
+                names = grown;
+            }
+            names[n++] = strdup(e->d_name);
+        }
+        closedir(dd);
+    } else if ((apk = android_apkArchive()) != NULL) {
+        size_t plen;
+        apkPrefix(dir, prefix, sizeof prefix);
+        plen = strlen(prefix);
+        for (i = 0; i < apak_zipCount(apk); i++) {
+            const ApakZipEntry *z = apak_zipAt(apk, i);
+            const char *rest, *slash;
+            if (z->nameLen <= plen || strncmp(z->name, prefix, plen) != 0) continue;
+            rest = z->name + plen;
+            slash = strchr(rest, '/');
+            if (slash == rest || !*rest) continue;
+            if (n == cap) {
+                char **grown = (char **)realloc(names, (cap = cap ? cap * 2 : 32) * sizeof *grown);
+                if (!grown) break;
+                names = grown;
+            }
+            names[n++] = dupPrefix(rest, slash ? (size_t)(slash - rest) : strlen(rest));
+        }
+    }
+    if (!n) {
+        free(names);
+        return 0;
+    }
+    qsort(names, n, sizeof *names, nameCmp);
+    for (i = 1, w = 1; i < n; i++) {
+        if (names[i] && names[w - 1] && strcmp(names[i], names[w - 1]) == 0) {
+            free(names[i]);
+            continue;
+        }
+        names[w++] = names[i];
+    }
+    *namesOut = names;
+    return w;
+}
+
+void android_assetListFree(char **names, size_t n) {
+    size_t i;
+    for (i = 0; names && i < n; i++) free(names[i]);
+    free(names);
 }
 
 ANDROIDRT_EXPORT void AAssetDir_close(AssetDir *d) {
@@ -537,18 +766,22 @@ typedef struct ApakConfig {
 } ApakConfig;
 
 static void configDefaults(ApakConfig *c) {
-    int w = 1280, h = 720, pw = 0, ph = 0;
-    const char *win = getenv("ANDROIDRT_WINDOW");
-    if (win && sscanf(win, "%dx%d", &pw, &ph) == 2 && pw > 0 && ph > 0) {
-        w = pw;
-        h = ph;
-    }
+    int w = 1280, h = 720;
+    const char *lang = getenv("LC_ALL");
+    apak_devicePanel(&w, &h);
     memset(c, 0, sizeof *c);
     memcpy(c->language, "en", 2);
     memcpy(c->country, "US", 2);
+    if (!lang || !*lang) lang = getenv("LANG");
+    /* LANG=de_DE.UTF-8 → language "de", country "DE" (C/POSIX stay en-US) */
+    if (lang && strlen(lang) >= 5 && lang[2] == '_' && lang[0] >= 'a' && lang[0] <= 'z' && lang[1] >= 'a' &&
+        lang[1] <= 'z' && lang[3] >= 'A' && lang[3] <= 'Z' && lang[4] >= 'A' && lang[4] <= 'Z') {
+        memcpy(c->language, lang, 2);
+        memcpy(c->country, lang + 3, 2);
+    }
     c->orientation = w >= h ? 2 : 1;  /* ACONFIGURATION_ORIENTATION_LAND/PORT */
     c->touchscreen = 1;               /* NOTOUCH: buttons and sticks only     */
-    c->density = 320;                 /* DENSITY_XHIGH                        */
+    c->density = apak_deviceDensity(); /* DENSITY_XHIGH                       */
     c->keyboard = 1;                  /* NOKEYS                               */
     c->navigation = 2;                /* DPAD                                 */
     c->keysHidden = 2;                /* YES (no hardware keyboard)           */

@@ -17,6 +17,10 @@
  * invoke interface (GetEnv, AttachCurrentThread, ...) succeeds. Every
  * function of the 229-entry JNI 1.6 table exists; each logs its first three
  * calls. ANDROIDPAK_JNI=off restores the old NULL vm/env/clazz.
+ *
+ * Since the real JNI layer (jni.h, jnienv.c) this file only builds the
+ * Windows smoke subset, which has no ELF loader and no class packs: the
+ * lifecycle hooks activity.c calls are no-ops here.
  */
 #define _GNU_SOURCE
 #include <pthread.h>
@@ -363,3 +367,14 @@ void *apak_jniEnv(void) {
 }
 
 void *apak_jniActivityObject(void) { return jniEnabled() ? (void *)&g_activityObject : NULL; }
+
+/* ── lifecycle hooks (jni.h) — nothing to tell without class packs ───── */
+void apak_jniEvent(int event);
+void apak_jniPump(void);
+void apak_jniExceptionReport(void *env, const char *where);
+void apak_jniEvent(int event) { (void)event; }
+void apak_jniPump(void) {}
+void apak_jniExceptionReport(void *env, const char *where) {
+    (void)env;
+    (void)where;
+}
