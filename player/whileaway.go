@@ -171,7 +171,12 @@ func whileAwayNotify() {
 		return
 	}
 	ShowToast(text, ToastKindSuccess)
+	// Only ever longer: a long summary already has its reading time
+	// (toastDurationForMessage), screenshot mode's zero means no toast at all,
+	// and a toast raised from a goroutine in between is not the summary.
 	currentToastMu.Lock()
-	currentToast.Duration = whileAwayToastDurationMS
+	if d := currentToast.Duration; d > 0 && d < whileAwayToastDurationMS && currentToast.Message == strings.TrimSpace(text) {
+		currentToast.Duration = whileAwayToastDurationMS
+	}
 	currentToastMu.Unlock()
 }

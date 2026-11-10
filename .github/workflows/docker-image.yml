@@ -228,34 +228,111 @@ jobs:
   # for a runner to pick up this job" long after both Ubuntu jobs had finished,
   # and publish-release waits for this job. An Ubuntu runner starts at once,
   # needs no Homebrew, and the archive keeps the same files.
+  #
+  # Most of a cold run is compiling the Go standard library, every module and
+  # the cgo-heavy SDL bindings for windows/amd64, so the job starts from the Go
+  # build cache the previous release left behind and only the player itself
+  # compiles. Where that cache may come from, and why it is not actions/cache,
+  # is in .github/scripts/go-build-cache.sh.
   build-and-publish-windows:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: create-tag
     permissions:
       contents: write   # attach the Windows archive to the draft
+      actions: read     # find and download the previous release's build cache
     env:
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
+      GO_CACHE_ARTIFACT: go-build-cache-windows
     steps:
       - name: Check out the repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # gcc-mingw-w64-x86-64 brings x86_64-w64-mingw32-gcc and the matching
-      # binutils (objdump is used below to check the exe's DLL imports).
-      - name: Install MinGW-w64
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 zip
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          # Not setup-go's cache: that is actions/cache, which any workflow on
+          # main can write, and what is restored here flows into the published
+          # binary. The build cache comes from go-build-cache.sh instead.
+          cache: false
 
-      - name: Download and verify SDL2 development libraries
-        # Versions, URLs and digests live in the shared script, so a bump is
-        # one edit for this pipeline and the nightly Windows job alike.
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" "$RUNNER_TEMP/sdl2-src"
+      - name: Install MinGW-w64, SDL2, the Go modules and the build cache
+        # The SDL tarballs, the Go modules and the previous build cache download
+        # in the background while apt installs the compiler; none of them needs
+        # another, and the step waits for all of them.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          logs="$RUNNER_TEMP/fetch-logs"
+          mkdir -p "$logs"
+          : > "$logs/sdl.log"
+          : > "$logs/go.log"
+          show_logs() {
+            echo "::group::SDL2 download"; cat "$logs/sdl.log"; echo "::endgroup::"
+            echo "::group::Go toolchain, modules and build cache"; cat "$logs/go.log"; echo "::endgroup::"
+          }
+          # Whatever fails, apt included, the background logs still get shown.
+          trap 'status=$?; [ "$status" -eq 0 ] || show_logs' EXIT
+          echo "### Windows build" >> "$GITHUB_STEP_SUMMARY"
+
+          # Versions, URLs and digests live in the shared script, so a bump is
+          # one edit for this pipeline and the nightly Windows job alike.
+          bash .github/scripts/install-sdl-mingw.sh "$RUNNER_TEMP/sdl2-src" > "$logs/sdl.log" 2>&1 &
+          sdl_job=$!
+
+          # Modules before the cache: the go command may first have to fetch the
+          # toolchain go.mod names, and the restore asks it where the cache is.
+          # go mod download, not go mod tidy: a release builds the module graph
+          # that was committed, not a tidied copy of it. The restore is bounded:
+          # a stalled download must cost a cold build, not the job's timeout and
+          # with it the release.
+          (
+            cd player
+            go version
+            go mod download
+            timeout 300 bash "$GITHUB_WORKSPACE/.github/scripts/go-build-cache.sh" restore "$GO_CACHE_ARTIFACT" ||
+              echo "::warning title=Go build cache::the restore failed or ran out of time; building without it"
+          ) > "$logs/go.log" 2>&1 &
+          go_job=$!
+
+          # Nothing here reads man pages: skip man-db's index rebuild. Only a
+          # speed-up, so it must not be able to fail the release.
+          sudo rm -f /var/lib/man-db/auto-update || true
+          sudo apt-get update -q
+          # Only the win32 flavour. The gcc-mingw-w64-x86-64 metapackage also
+          # installs the posix one, but x86_64-w64-mingw32-gcc resolved to win32
+          # (the higher-priority alternative) all along, so this is the same
+          # compiler for half the download. Its binutils bring the objdump the
+          # DLL check below uses.
+          sudo apt-get install -y -q --no-install-recommends gcc-mingw-w64-x86-64-win32 zip
+          x86_64-w64-mingw32-gcc --version | sed -n 1p
+
+          if ! wait "$sdl_job"; then
+            echo "::error::the SDL2 MinGW development packages did not download or verify (see the SDL2 download group)"
+            exit 1
+          fi
+          if ! wait "$go_job"; then
+            echo "::error::fetching the Go toolchain or the modules failed (see the Go group)"
+            exit 1
+          fi
+          show_logs
 
       - name: Merge SDL2 into one MinGW prefix
         run: |
-          prefix="$RUNNER_TEMP/sdl2"
+          # The prefix is named after what the cgo packages compile against that
+          # Go's build cache cannot see. Go keys a cgo package on its compiler
+          # flags and the compiler's version line, not on the headers the flags
+          # point at, and that line ("13-win32") stays the same across Ubuntu's
+          # MinGW revisions. A new SDL set or MinGW package therefore renames the
+          # prefix, and the SDL bindings compile afresh instead of being reused.
+          cgo_inputs=$({
+            cat .github/scripts/install-sdl-mingw.sh
+            dpkg-query -W -f '${Package} ${Version}\n' gcc-mingw-w64-x86-64-win32 mingw-w64-x86-64-dev binutils-mingw-w64-x86-64
+          } | sha256sum | cut -c1-12)
+          prefix="$RUNNER_TEMP/sdl2-$cgo_inputs"
           mkdir -p "$prefix"
           # Globbed so a version bump in the shared script needs no edit here.
           # The underscore is load-bearing: the tarballs extract as SDL2-<ver>,
@@ -277,29 +354,11 @@ jobs:
           done
           echo "SDL2_PREFIX=$prefix" >> "$GITHUB_ENV"
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          # No restored build cache in a job whose output is published: a cache
-          # entry saved by some other run would flow into the release binary.
-          cache: false
-
-      - name: Install Dependencies
-        run: |
-          cd player
-          go mod tidy
-
-      - name: Verify Go Environment
-        run: go env
-
-      - name: Verify Compiler
-        run: x86_64-w64-mingw32-gcc --version
-
       - name: Build Package
         # Exported in the script rather than set under env:, which does no shell
         # expansion: "$SDL2_PREFIX/include" there would reach cgo as literal text.
         run: |
+          set -o pipefail
           export CC=x86_64-w64-mingw32-gcc
           export CGO_ENABLED=1 GOOS=windows GOARCH=amd64
           export CGO_CFLAGS="-I$SDL2_PREFIX/include -I$SDL2_PREFIX/include/SDL2 -D_REENTRANT"
@@ -309,8 +368,28 @@ jobs:
           echo "CGO_LDFLAGS: $CGO_LDFLAGS"
           mkdir -p JukaHub-Trimui-Windows
           cd player
-          go build -ldflags "-X main.buildDate=$(date -u +%Y-%m-%d)" -o ../JukaHub-Trimui-Windows/JukaHub.exe ./
-          echo "Build completed."
+          # -v names each package actually compiled (not the cached ones), which
+          # is how the cache step below tells a player-only release from one
+          # that rebuilt dependencies. -s -w leave out the symbol table and DWARF,
+          # as build.bat does: less for the linker to write and a smaller
+          # download, while a panic still prints function names and lines.
+          build() {
+            go build -v -ldflags "-s -w -X main.buildDate=$(date -u +%Y-%m-%d)" \
+              -o ../JukaHub-Trimui-Windows/JukaHub.exe ./ 2>&1 | tee "$RUNNER_TEMP/go-build.log"
+          }
+          start=$SECONDS
+          if ! build; then
+            # A restored cache that cannot build (an entry gone bad, a C
+            # dependency Go does not track) must not fail every release after
+            # it: retry once from an empty cache, which also makes the cache step
+            # upload a fresh one. discard refuses when nothing was restored, as a
+            # cold retry would only repeat the failure.
+            bash "$GITHUB_WORKSPACE/.github/scripts/go-build-cache.sh" discard
+            echo "::warning title=Go build cache::the build failed on the restored cache; retrying from an empty one"
+            build
+          fi
+          echo "Build completed in $((SECONDS - start)) s."
+          echo "- go build: $((SECONDS - start)) s" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package Artifacts
         run: |
@@ -367,6 +446,34 @@ jobs:
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only for a push to main (restore accepts a cache from no other event),
+      # after the release asset is attached, and bounded twice over: the cache
+      # only speeds up the next release, so it must neither fail nor stall this
+      # one.
+      - name: Pack the build cache for the next release
+        id: cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          own=$(cd player && go list -m)
+          bash .github/scripts/go-build-cache.sh save "$GO_CACHE_ARTIFACT" "$RUNNER_TEMP/go-build-cache" "$RUNNER_TEMP/go-build.log" "$own"
+
+      - name: Upload the build cache
+        if: steps.cache.outputs.upload == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.GO_CACHE_ARTIFACT }}
+          path: ${{ steps.cache.outputs.archive }}
+          # Already zstd-compressed: zipping it again would only cost time.
+          compression-level: 0
+          retention-days: 90
+          # A re-run of this job replaces its own earlier upload.
+          overwrite: true
+          if-no-files-found: error
 
   # Publishing is the last step, not the first: the draft from create-tag only
   # becomes visible after both build jobs succeeded and both archives are

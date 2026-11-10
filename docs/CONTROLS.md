@@ -98,7 +98,10 @@ until a unit is set explicitly in Settings. Both chips can be tapped or reached
 with the D-pad — Up from the top-right cards lands on the weather chip, then
 the clock, and **Right** from the clock lands on the notification bell. **A** on
 the bell opens the notification centre, exactly like tapping it; **B**/Esc
-closes it.
+closes it. The highlighted notification shows its whole message, and the
+D-pad, **L1**/**R1**, **L2**/**R2** and the mouse wheel scroll through every
+one kept; a toast cut short with "…" opens the centre on its message when
+clicked.
 **Local weather** is modal: **A**/**B**/Esc closes it, a tap outside dismisses
 it, and the D-pad does not move the screen underneath while it is open.
 
@@ -190,7 +193,7 @@ no footer names may have no key.
 | Live TV | X search · Y favourite | X · Y or F |
 | Browser | L1 / R1 scroll · L2 / R2 zoom · X links · Y search · L3 mode | PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info |
 | Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
-| Chat | L1 / R1 tabs · Start send · X rename · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab |
+| Chat | L1 / R1 tabs · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, R renames you, Del drops a waiting file |
 | On-screen keyboard | A type · B close · X delete · Y submit · L1 / R1 shift / layer | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V |
 | Settings | L1 / R1 sections · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · arrows (Left / Right page the sheet) |
 | Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
@@ -258,23 +261,26 @@ had nothing to go back to.
 | Start | Open the Start menu (scenes, games, tools, device) |
 | Back / Select | Back one screen, falling back to Home |
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
-| Both sticks moved at once | Show / hide the virtual cursor (below) |
+| Right stick | Move the virtual cursor (below); L2 / R2 scroll under it |
 
 ### Virtual cursor
 
-Move **both analog sticks** out together — just tilt them at the same moment,
-they do not need to be clicked in — and a mouse pointer appears (handy on the
-TrimUI Smart Pro, which has no touch screen): the **left stick**
-moves it (a light tilt is slow, full tilt crosses the screen in about a
-second and a half), the **right stick** scrolls whatever is under it like a
-mouse wheel, and **A** clicks — hold A and move to drag a slider or a shelf.
-B and the other buttons keep their usual jobs. Both sticks again (from the
-centre, together), any D-pad press, or 30 seconds without touching it puts the
-pointer away; it comes back where it was. Moving the pointer and then scrolling
-never counts as the gesture, and neither does a stick that rests off centre. It stays off in JukaLand and browser games (they use both
-sticks), Quick Settings, the wallpaper picker, the stick calibration and the
-controller test. Turn the gesture off in
-**Settings → Controls → Virtual cursor**.
+The **right stick** is a mouse pointer (handy on the TrimUI Smart Pro, which
+has no touch screen): move it and the pointer appears and follows it — a light
+tilt is slow, full tilt crosses the screen in about a second and a half. **A**
+clicks (hold A and move to drag a slider or a shelf), and **L2 / R2** scroll up
+and down under the pointer (held, they keep scrolling). B and the other buttons
+keep their usual jobs; the **left stick** stays the D-pad's twin. Any D-pad
+press or left-stick step puts the pointer away (so A presses the focused item
+again), and so do 30 seconds without touching the right stick; the right stick
+brings it back where it was. A stick that rests a little off centre never
+brings it up.
+
+Screens that use the right stick themselves keep it: Chat scrolls its history
+with it, JukaLand and browser games aim with it, and the stick calibration and
+the controller test measure it. The pointer also stays away in Quick Settings
+and the wallpaper picker. Turn it off in **Settings → Controls → Virtual
+cursor**.
 
 ### Stick calibration
 
@@ -501,7 +507,7 @@ Up/Down follow the page's rows and pick the nearest column, so a two-column
 layout does not throw the cursor across the screen, while Left/Right stay in
 plain reading order. **Y** (or the **SEARCH** chip beside the address bar) opens
 the keyboard on an empty field: type a phrase to search, or a host to open it.
-The search goes to the engine chosen in Settings → **Browser**, DuckDuckGo
+The search goes to the engine chosen in Settings → **Browser**, Startpage
 unless you change it (see [docs/BROWSER.md](BROWSER.md#search-engine-and-home-page)).
 The **Back**, **Forward**, **Reload**, **Links**, **Filter**, **Search**,
 **Home**, **Issues**, **Sites**, **Forget**, **Save**, **Marks** and **Find**
@@ -593,33 +599,82 @@ last frame no longer keeps the grid behind it locked.
 
 ## Chat
 
-The Chat screen shows the Discord channel (when configured) and the local
-history. Every speaker can be opened as a profile card with their picture,
+The Chat screen has three tabs: the community channel (the JukaHub Discord,
+when it is configured), **Juka AI**, and **Saved** for notes that stay on this
+device. Every speaker can be opened as a profile card with their picture,
 handle, roles and last message.
 
 | Button | Action |
 |--------|--------|
-| D-pad Up / Down | Scroll the history |
-| D-pad Left / Right | Select the previous / next message |
-| L1 / R1 | Walk the message selection one message at a time |
+| D-pad Up / Down | Walk the history one message at a time (a tall message scrolls first); Down past the newest message reaches the files waiting to be sent, then the composer |
+| D-pad Left / Right, L1 / R1 | Previous / next tab; on the waiting files, Left / Right picks one |
 | L2 / R2 | Jump to the oldest / newest message |
-| A | Type a message; with a message selected, open its actions |
-| Y | Ask Juka AI about the typed text; with an empty composer, open the member list |
-| X | Rename yourself in the chat |
-| B / Back | Leave the chat, or close an open card |
-| Tab (keyboard) | Open the member list |
+| Right stick | Scroll the history freely |
+| A | Type a message; on a selected message, open its actions; on a waiting file, take it off the message |
+| Start | Send what is typed and attached (with nothing to send, Start opens the Start menu as everywhere) |
+| X | Attach files: Files opens to pick them |
+| Y | The tab's own action: **People** in the community tab, **New chat** (or **Add key**) in Juka AI |
+| B / Back | Leave the chat; an open card, list or action bar closes first, and on the waiting files B goes back to the composer |
+
+On a keyboard, Tab / Shift+Tab (or 1–3) pick a tab, Enter types straight into
+the composer (Enter sends, Shift+Enter starts a new line, Esc stops typing),
+Ctrl+Enter sends, **X** attaches files, Del takes the waiting file under the
+cursor off the message, and **R** renames you (so do a click on your name at
+the top right and **Rename** on your own card in People, which is there before
+you have written anything).
+
+### Sending files
+
+**X** (or the paperclip at the start of the composer) opens Files in pick
+mode; its bar says which tab the files are for. **A** on a file attaches it and
+brings the chat back; mark several with **X** first to attach them together.
+Folders open as usual and **Left** climbs one, while **B** calls the pick off
+and goes straight back to the chat. **Send to chat** in Files' **Y** sheet
+attaches the marked rows from any visit to Files (to the community tab, unless
+Chat is picking for another one), and on a PC a file dropped on the window
+while the chat is open is attached too.
+
+Attached files wait in a row above the composer until the message goes; words
+are optional. **Up** from the composer reaches them, **Left / Right** picks
+one, and **A**, Del or a click on its **×** takes it off. Where they go depends
+on the tab:
+
+- **Community** — to the Discord channel with the message, up to 10 files of
+  up to 20 MB each (50 or 100 MB on a server boosted to level 2 or 3). The line
+  under the bubble shows how far the upload is, and messages written after it
+  wait their turn; a dropped connection waits and tries again without posting
+  twice, **Cancel** in the message's actions stops it (deleting it while it
+  goes out takes it back off the channel), and a file Discord refuses says why
+  under the bubble, with **Retry**.
+- **Juka AI** — text files (logs, configs, notes), up to three with a
+  question. Juka is shown the file (the start and the end of a long one) with
+  the question, a follow-up keeps it, and a file sent alone asks what stands
+  out in it.
+- **Saved** — any file, kept as a reference to where it is on this device.
+
+Files other people send show under their message. The first picture is drawn
+in the bubble; every other file is a card with its name, its size and what a
+click on it does: **View** a picture or **Play** a clip or a song straight from
+the chat, and **Open** anything else — it is saved into Downloads (your
+Downloads folder on a PC, `Downloads` at the top of the SD card on the
+handheld) and opened from there, in Files when JukaHub has no viewer of its own
+for it. In a message's actions, a single file has the same **View**, **Play**
+or **Open** (a lone picture: **Enlarge**), several are listed by **Files**, and
+**Download** saves what is not on this device yet. Discord's file links expire
+after about a day; an older one is renewed when it is shown or opened.
 
 **Names and pictures are the way to a profile**: click a speaker's name or
 avatar in a bubble (or use **Actions → Profile** on a selected message). The
 card offers **Mention**, **Latest** (jump to their newest message), **Copy ID**
 and **Picture** (open the full image in the viewer); tapping the card's picture
-does the same. The **Members N** chip in
-the header opens the list of everyone in the history, so a name that has
+does the same. The **N people** chip in
+the header (or **Y**) opens the list of everyone in the history, so a name that has
 scrolled away is still one press away.
 
 A selected message turns the composer into its action bar: **Reply** (a quote
-header in the bubble, sent as a real Discord reply), **Copy**, **Ask AI**,
-**Profile**, and **Delete** for your own messages. A message that carries a
+header in the bubble, sent as a real Discord reply), **Copy**, **Ask Juka**,
+**Save**, **Profile**, and **Delete** for your own messages; when they do not
+all fit, the row follows the focused action and "…" marks the rest. A message that carries a
 picture leads with **Enlarge** — clicking the picture itself does the same
 — which opens it full screen in the viewer, where it can be zoomed and
 panned. The member list and the profile card are modal: **Up/Down** walks the rows, **A** opens a profile,
@@ -1081,20 +1136,21 @@ format), the row keeps its type chip.
 |--------|--------|
 | Up / Down | Move through the list |
 | L1 / R1 | Move a screenful; L2 / R2 jump to the first / last row |
-| A | Open a folder or a file |
-| B / Back | Up one level, or back to Home at the root |
+| A | Open a folder or a file (while Chat is picking files, attach the file, or the marked rows) |
+| B / Back | Up one level, or back to Home at the root (while Chat is picking files, back to the chat) |
 | Y | The action sheet |
 | X | Mark the row under the cursor and step down |
 | Mouse / touch | A chip in the breadcrumb bar to jump, the sort chip to change order, a row to open it |
 
-The action sheet (**Y**) holds **New folder**, **Rename**, **Copy**, **Cut**,
-**Paste**, **Delete**, **Select all**, **Sort**, **Connect to device** and
-**Remote files**. Marked rows are tinted and their type chip becomes a tick, so
+The action sheet (**Y**) holds **New folder**, **Edit text**, **Send to
+chat**, **Rename**, **Copy**, **Cut**, **Paste**, **Delete**, **Select all**,
+**Sort**, **Connect to device** and **Remote files**. Marked rows are tinted and their type chip becomes a tick, so
 a selection is visible in the list rather than only in the sheet. When nothing
 is marked the actions apply to the row under the cursor, which is the rule a
 desktop manager follows. **Delete** arms on the first press and acts on the
 second, and a paste never overwrites: a second copy of the same name lands as
-`name (2).ext`. The clipboard holds paths, so **Copy** and **Cut** work between
+`name (2).ext`. A script (`.sh`) in Downloads, where files saved from the chat
+land, runs on a second **A** within five seconds only. The clipboard holds paths, so **Copy** and **Cut** work between
 any two folders of either card without a PC.
 
 **Connect to device** asks for an address on the on-screen keyboard —

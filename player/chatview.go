@@ -501,6 +501,9 @@ func chatResetHits() {
 	chatLinkRects = chatLinkRects[:0]
 	chatTextLinkRects = chatTextLinkRects[:0]
 	chatImageRects = chatImageRects[:0]
+	chatFileRects = chatFileRects[:0]
+	chatTrayHits = chatTrayHits[:0]
+	chatTrayMore = sdl.Rect{}
 	chatMessageHits = chatMessageHits[:0]
 	chatHeaderMembersRect = sdl.Rect{}
 	chatJumpRect = sdl.Rect{}
@@ -578,6 +581,12 @@ func chatRenderArea(renderer *sdl.Renderer, config *Config, area sdl.Rect) {
 	if tab == chatTabCommunity && !chatSelectionBar.open {
 		replyH = chatReplyStripHeight(fonts.meta)
 	}
+	// The files waiting to go sit right above the composer; the action bar
+	// takes the composer's place, and then they wait out of sight.
+	trayH := int32(0)
+	if !chatSelectionBar.open && chatStagedCount(tab) > 0 {
+		trayH = chatTrayHeight(fonts.meta)
+	}
 	gap := chatPx(10)
 	tabsRect := sdl.Rect{X: area.X, Y: area.Y, W: area.W, H: chatPx(42)}
 	y := tabsRect.Y + tabsRect.H + gap
@@ -589,6 +598,11 @@ func chatRenderArea(renderer *sdl.Renderer, config *Config, area sdl.Rect) {
 	compH := chatPx(52)
 	composer := sdl.Rect{X: area.X, Y: area.Y + area.H - compH, W: area.W, H: compH}
 	bottom := composer.Y - gap
+	trayRect := sdl.Rect{}
+	if trayH > 0 {
+		trayRect = sdl.Rect{X: area.X, Y: bottom - trayH, W: area.W, H: trayH}
+		bottom = trayRect.Y - chatPx(6)
+	}
 	replyRect := sdl.Rect{}
 	if replyH > 0 {
 		replyRect = sdl.Rect{X: area.X, Y: bottom - replyH, W: area.W, H: replyH}
@@ -605,6 +619,9 @@ func chatRenderArea(renderer *sdl.Renderer, config *Config, area sdl.Rect) {
 	chatDrawHistory(renderer, config, fonts, list, tab, now)
 	if replyH > 0 {
 		drawChatReplyStrip(renderer, config, fonts.meta, replyRect)
+	}
+	if trayH > 0 {
+		chatDrawTray(renderer, config, fonts.meta, trayRect, tab)
 	}
 	if chatSelectionBar.open {
 		drawChatSelectionBar(renderer, config, fonts.meta, composer)
@@ -967,12 +984,19 @@ func chatBubbleSize(msg *ChatMessage, l *chatBubbleLayout, fonts chatFonts, m ch
 		w = max32(w, chatPx(240))
 	}
 	content += int32(len(l.body.lines)) * m.lineH
-	if l.image != "" {
+	if l.image != "" || l.imageFile >= 0 {
 		if content > 0 {
 			content += chatPx(8)
 		}
 		content += m.imageH
 		w = max32(w, m.imageW+2*m.padX)
+	}
+	if len(l.files) > 0 {
+		if content > 0 {
+			content += chatPx(8)
+		}
+		content += int32(len(l.files))*m.cardH + int32(len(l.files)-1)*m.cardGap
+		w = max32(w, chatPx(300))
 	}
 	if len(l.cards) > 0 {
 		if content > 0 {
@@ -1015,6 +1039,19 @@ func chatStatusFor(msg *ChatMessage, tab chatTab) string {
 		}
 		if chatNet() != chatNetLive {
 			return "Waiting for the connection…"
+		}
+		if len(msg.Files) > 0 {
+			if sent, total, ok := chatUploadProgress(msg.ID); ok {
+				return chatUploadStatus(sent, total)
+			}
+			if note := chatUploadNote(); note != "" {
+				return note
+			}
+			return "Waiting to upload…"
+		}
+		// The channel keeps the order: words written after a file wait for it.
+		if chatUploadBusy.Load() || chatUploadNote() != "" {
+			return "Waiting for the upload above…"
 		}
 	}
 	return "Sending…"
@@ -1444,13 +1481,42 @@ func chatDrawMessage(renderer *sdl.Renderer, config *Config, fonts chatFonts, m 
 		}
 	}
 	cy += int32(len(l.body.lines)) * m.lineH
-	if l.image != "" {
+	if l.image != "" || l.imageFile >= 0 {
 		if len(l.body.lines) > 0 || msg.Quote != nil {
 			cy += chatPx(8)
 		}
+		// A picture among the files is drawn from this device's copy when
+		// there is one, else from the channel's link (chatFileImageSource).
+		src := l.image
+		if l.imageFile >= 0 && l.imageFile < len(msg.Files) {
+			f := msg.Files[l.imageFile]
+			src = chatFileImageSource(f)
+			if src == f.URL && chatLinkExpired(src, time.Now()) {
+				// Discord's links expire after about a day: an old picture
+				// asks for a fresh one, and is drawn from it once it lands.
+				chatRenewLink(tab, msg.ID, l.imageFile, f, false, nil)
+			}
+		}
 		box := sdl.Rect{X: bubble.X + m.padX, Y: cy, W: min32(m.imageW, inner), H: m.imageH}
-		chatDrawImageBox(renderer, config, fonts.meta, box, l.image, list)
+		chatDrawImageBox(renderer, config, fonts.meta, box, src, list)
 		cy += m.imageH
+	}
+	if len(l.files) > 0 {
+		if cy > bubble.Y+m.padY {
+			cy += chatPx(8)
+		}
+		cardW := min32(inner, chatPx(360))
+		for ci, fi := range l.files {
+			r := sdl.Rect{X: bubble.X + m.padX, Y: cy + int32(ci)*(m.cardH+m.cardGap), W: cardW, H: m.cardH}
+			if fi < 0 || fi >= len(msg.Files) || r.Y > clipBottom || r.Y+r.H < clipTop {
+				continue
+			}
+			drawChatFileCard(renderer, config, fonts.meta, r, msg, fi)
+			if hit := chatClipRect(r, list); hit.W > 0 && hit.H > 0 {
+				chatFileRects = append(chatFileRects, chatFileHit{rect: hit, tab: tab, id: msg.ID, index: fi})
+			}
+		}
+		cy += int32(len(l.files))*m.cardH + int32(len(l.files)-1)*m.cardGap
 	}
 	if len(l.cards) > 0 {
 		if cy > bubble.Y+m.padY {
@@ -1589,7 +1655,7 @@ func chatIntroText(tab chatTab) (string, string) {
 	case chatTabAI:
 		return "Juka AI", "Answers come from Groq. Juka only sees this conversation."
 	case chatTabSaved:
-		return "Saved", "Notes, links and pictures for yourself. Only this device sees them."
+		return "Saved", "Notes, links and files for yourself. Only this device sees them."
 	}
 	return chatCommunityTitle(), "The start of the JukaHub community chat."
 }
@@ -1597,12 +1663,12 @@ func chatIntroText(tab chatTab) (string, string) {
 // chatDrawEmpty draws an empty tab: what it is for, and for Juka AI a few
 // questions to start with.
 func chatDrawEmpty(renderer *sdl.Renderer, config *Config, fonts chatFonts, list sdl.Rect, tab chatTab, m chatMetrics) {
-	title, body := "Say hi to the community", "Messages from the JukaHub Discord show up here."
+	title, body := "Say hi to the community", "Messages and files from the JukaHub Discord show up here."
 	switch tab {
 	case chatTabAI:
-		title, body = "Ask Juka anything", "Tips for JukaHub, help with settings, or something to play tonight."
+		title, body = "Ask Juka anything", "Tips for JukaHub, help with settings, or attach a log and ask what went wrong."
 	case chatTabSaved:
-		title, body = "Notes to self", "Save links, reminders and ideas. Only this device can see them."
+		title, body = "Notes to self", "Save links, files and ideas. Only this device can see them."
 	default:
 		if chatNet() == chatNetUnconfigured {
 			body = "Community chat isn't set up on this device."
@@ -1666,6 +1732,13 @@ var chatPlaceholderCache struct {
 
 // chatPlaceholder is the composer's hint for a tab.
 func chatPlaceholder(tab chatTab) string {
+	if chatStagedCount(tab) > 0 {
+		// Files are waiting: words are optional now.
+		if tab == chatTabAI {
+			return "Ask about the file…"
+		}
+		return "Add a message…"
+	}
 	switch tab {
 	case chatTabAI:
 		return "Ask Juka anything…"
@@ -1729,7 +1802,7 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	btn := h - chatPx(6)
 	gap := chatPx(10)
 	accent := glassAccent()
-	hasText := strings.TrimSpace(chatInputText) != ""
+	hasText := chatHasDraft()
 
 	send := sdl.Rect{X: rect.X + rect.W - btn, Y: rect.Y + (h-btn)/2, W: btn, H: btn}
 	chatSendBtnRect = send
@@ -1747,19 +1820,18 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	aw, ah := measureText(fonts.title, "↑")
 	chatText(renderer, config, fonts.title, "↑", arrowCol, send.X+(send.W-aw)/2, send.Y+(send.H-ah)/2)
 
+	// The paperclip: every tab takes files (Juka AI reads text files).
 	x := rect.X
-	if tab != chatTabAI {
-		attach := sdl.Rect{X: x, Y: rect.Y + (h-btn)/2, W: btn, H: btn}
-		chatAttachBtnRect = attach
-		fill := glassA(12)
-		if chatHover(attach) {
-			fill = glassA(22)
-		}
-		chatFillDisc(renderer, attach.X, attach.Y, attach.W, fill)
-		icon := btn / 2
-		DrawHomeIcon(renderer, "image", sdl.Rect{X: attach.X + (btn-icon)/2, Y: attach.Y + (btn-icon)/2, W: icon, H: icon}, false)
-		x += btn + gap
+	attach := sdl.Rect{X: x, Y: rect.Y + (h-btn)/2, W: btn, H: btn}
+	chatAttachBtnRect = attach
+	fill := glassA(12)
+	if chatHover(attach) {
+		fill = glassA(22)
 	}
+	chatFillDisc(renderer, attach.X, attach.Y, attach.W, fill)
+	icon := btn / 2
+	DrawHomeIcon(renderer, "paperclip", sdl.Rect{X: attach.X + (btn-icon)/2, Y: attach.Y + (btn-icon)/2, W: icon, H: icon}, false)
+	x += btn + gap
 
 	input := sdl.Rect{X: x, Y: rect.Y, W: send.X - gap - x, H: h}
 	if input.W <= 0 {
@@ -1767,7 +1839,7 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	}
 	chatInputRect = input
 	typing := chatComposerInline || (virtualKeyboardActive && vkTarget == vkTargetChat)
-	focused := !typing && chatSelected < 0 && chatSuggestFocus < 0 && chatPadOnContent() && chatWasVisible
+	focused := !typing && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() && chatWasVisible
 	if focused {
 		drawGlassFocusGlow(renderer, input)
 	}

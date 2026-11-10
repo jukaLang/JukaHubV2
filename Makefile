@@ -132,8 +132,9 @@ clean: ## Remove build outputs (Windows also removes the local SDL copy)
 workflows: ## Check the workflow pins: actions, images and downloaded archives
 	@bash .github/scripts/check-workflows.sh
 
-test-scripts: ## Check the CI helper scripts (a tampered archive must be refused)
+test-scripts: ## Check the CI helper scripts (tampered archives refused, release-cache provenance)
 	@bash tests/scripts/install-sdl-mingw.test.sh
+	@bash tests/scripts/go-build-cache.test.sh
 
 check: lint test test-web workflows test-scripts ## Everything a pull request must pass (no browser needed); ESLint is skipped by lint until test-web installs it
 	@echo "check: ok"

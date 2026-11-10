@@ -1255,11 +1255,12 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
-			// The search engine and the home page (browser_engines.go). It sits
-			// beside Privacy & data, whose first rows are the Browser's sign-ins.
+			// The search engine and the home page (browser_engines.go) and the
+			// page-script switch (webdom_runtime.go). It sits beside Privacy &
+			// data, whose first rows are the Browser's sign-ins.
 			ID: "browser", Title: "Browser", Glyph: "browser",
-			Subtitle: "Search engine and home page",
-			Rows:     brwSettingsRows(),
+			Subtitle: "Search engine, home page and JavaScript",
+			Rows:     append(brwSettingsRows(), webJSSettingsRow()),
 		},
 		{
 			ID: "privacy", Title: "Privacy & data", Glyph: "shield",

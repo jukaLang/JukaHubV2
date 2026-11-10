@@ -728,6 +728,14 @@ func tryStreamPlayback(ctx context.Context, config *Config, ytDlpPath, url strin
 	if !ok {
 		return false, ctx.Err() != nil
 	}
+	// A stream of this page — or two in a row of any — would not open a moment
+	// ago (videorecover.go): the download is how it plays, so it goes there now
+	// instead of after another failed attempt. A playlist stream is still
+	// tried: a live one has no file to download.
+	if mediaStreamSkipped(url, time.Now()) && !mediaIsHLS(direct) {
+		logDebug("stream", "streaming did not work here a moment ago; downloading %s instead", sanitizeLogURL(url))
+		return false, false
+	}
 	ffprobePath := ""
 	if config != nil {
 		ffprobePath = getToolPath("ffprobe", config)
@@ -760,6 +768,11 @@ func videoStreamPreloaded(url string) bool {
 	}
 	if isDirectStreamURL(url) {
 		return true
+	}
+	// A page that will be downloaded first does not start at once, whatever
+	// the cache holds (videorecover.go).
+	if mediaStreamSkipped(url, time.Now()) {
+		return false
 	}
 	_, ok := cachedDirectStream(url)
 	return ok
@@ -1152,6 +1165,7 @@ func prefetchVideos(config *Config, videos []VideoInfo, focus int) {
 func prefetchTargets(urls []string) []string {
 	targets := make([]string, 0, len(urls))
 	seen := make(map[string]bool, len(urls))
+	now := time.Now()
 	for _, u := range urls {
 		u = strings.TrimSpace(u)
 		if u == "" || seen[u] {
@@ -1169,6 +1183,11 @@ func prefetchTargets(urls []string) []string {
 			continue
 		}
 		if streamRecentlyFailed(u) {
+			continue
+		}
+		// It will be downloaded when played (videorecover.go): a stream URL
+		// resolved for it now would never be used.
+		if mediaStreamSkipped(u, now) {
 			continue
 		}
 		targets = append(targets, u)

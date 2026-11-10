@@ -13,6 +13,74 @@ For anything older, the git log and the
 
 ### Added
 
+- **The Browser runs page JavaScript against a real document.** A page's
+  scripts used to get a stand-in document whose every lookup answered `null`,
+  so a page that builds its content in script — a framework app, a list fetched
+  as JSON, lazy-loaded images, a web component — drew as an empty shell. They
+  now run against a DOM built from the page (selectors up to `:has()`, events,
+  forms, `innerHTML`, `MutationObserver`, custom elements with shadow DOM and
+  slots, declarative shadow roots) in a browser's order: classic scripts and
+  their `document.write`, deferred and module scripts (`import`/`export`,
+  `import()` and import maps, rewritten for the embedded engine, which has no
+  modules), async and script-inserted scripts, `DOMContentLoaded` and `load`.
+  Timers run on a virtual clock, so a page that waits three seconds before
+  showing its content costs no time; `fetch`, `XMLHttpRequest`,
+  `document.cookie`, `localStorage` (in memory, per site), `IntersectionObserver`
+  (everything counts as visible, so lazy images load) and an `Intl` stand-in are
+  there. What the scripts leave is handed to the reader as HTML, with shadow
+  roots drawn in place and `data-src` images promoted, and a script that sends
+  the page elsewhere is followed like a meta refresh. Like any browser that runs
+  JavaScript, the reader now ignores a `<meta>` refresh inside `<noscript>` (the
+  usual bounce to a "turn on JavaScript" or `/nojs` page) and runs the page
+  instead. Google Search still ends on its card, which now says why: its
+  results sit behind a robot check only full desktop and phone browsers pass,
+  and the reader will not disguise itself as one. The pass is bounded for
+  the handheld — 10 s in all, 6 s for one script, 5 s of patience for a slow
+  request, 192 MiB of growth, 4 MiB / 60 000-node pages, 2 s for any one
+  regular-expression match — and a page the pass cannot take, or whose scripts
+  wipe most of its text, is drawn as before. Under node, jQuery 3, Bootstrap 4,
+  Underscore templates, highlight.js and Modernizr run through it; nothing has
+  run on the handheld yet
+  ([player/webdom_runtime.go](player/webdom_runtime.go),
+  [player/webdom/](player/webdom/), [player/webdom_parse.go](player/webdom_parse.go),
+  [player/webdom_module.go](player/webdom_module.go),
+  [docs/BROWSER.md](docs/BROWSER.md#javascript)).
+
+- **Settings → Browser → JavaScript.** Turns page scripts off — every page is
+  then drawn as its server sent it, the quickest test of whether something odd
+  on a page came from its scripts — and back on. It is the `browserJavaScript`
+  key in `jukauser.json`, on by default
+  ([docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
+
+- **Send files in chat.** **X** in Chat (or the paperclip by the composer)
+  opens Files to pick files: **A** on a file, or on the rows **X** marked,
+  attaches it and comes back, and **B** calls the pick off; Files' **Y** sheet
+  has **Send to chat**, and on a PC a file dropped on the window attaches too.
+  Attached files wait above the composer (**Up** reaches them, **A** takes one
+  off) and go with the next message, words optional. In the community tab they
+  go to the Discord channel as real attachments, up to 10 a message and 20 MB
+  each (50 / 100 MB on a boosted server), with the progress under the bubble;
+  the upload streams from the card instead of loading the file into memory,
+  keeps the messages in the order they were written, waits out a dropped
+  connection and tries again without posting twice, can be cancelled (deleting
+  a message while it goes out takes it back off the channel), and says why when
+  Discord refuses a file. Files other people send now show as cards — not just
+  the first picture: a picture or a clip is viewed or played from the chat,
+  anything else is saved into Downloads (the SD card's `Downloads` folder on
+  the handheld) and opened from there; **Files** lists a message's files and
+  **Download** saves them, and expired Discord file links are renewed. A script
+  in Downloads now runs from Files on a second press only. Juka AI reads text
+  files: attach a log or a config and ask about it (the start and the end of a
+  long file go with the question, and follow-ups keep it). Saved keeps
+  references to files on this device. Renaming yourself moved off **X**: press
+  **R** on a keyboard, click your name, or open your own card in People, which
+  is there before you have written anything. The `send_to_chat` and
+  `attach_image` triggers send real files now
+  ([player/chatfiles.go](player/chatfiles.go),
+  [player/chatupload.go](player/chatupload.go),
+  [player/chatfilesview.go](player/chatfilesview.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md#chat)).
+
 - **Light & dark by time of day.** Settings → Display & theme → **Light &
   dark by time of day** switches between a day theme and a night theme at two
   times you choose (07:00 and 19:00 to start, in half-hour steps, a window
@@ -61,7 +129,7 @@ For anything older, the git log and the
   makes the highlighted page home. The address bar, the Search chip and Y
   (whose keyboard now names the engine), and Home search's "Search the web" all
   follow the choice. Google shows results only to browsers
-  that run JavaScript, which the reader does not, so a Google search lands on a
+  that pass its JavaScript test, which the reader does not, so a search lands on a
   card instead of Google's "turn on JavaScript" page: the same words on
   Startpage (Google's results as plain HTML), Startpage from now on, or — on a
   PC — the desktop's own browser. Result links from DuckDuckGo, Google, Bing and
@@ -80,13 +148,13 @@ For anything older, the git log and the
   calibrated rings. The firmware's calibration app still sets the hardware
   range for games ([player/stickcal.go](player/stickcal.go),
   [player/stickcal_ui.go](player/stickcal_ui.go)).
-- **Virtual cursor for the analog sticks.** Move both sticks at once (tilt
-  them; nothing needs to be clicked in) and a pointer appears: the left stick
-  moves it, the right stick scrolls under it, A clicks (hold to drag). Both
-  sticks again, the D-pad or 30 s idle hide it.
-  It drives the app through ordinary mouse events, so hover, clicks, drags
-  and the wheel work wherever a mouse does; it is never drawn into
-  screenshots. Settings → Controls → Virtual cursor turns it off
+- **Virtual cursor on the right stick.** Moving the right stick brings up a
+  mouse pointer and moves it; A clicks (hold to drag) and L2 / R2 scroll under
+  it. The left stick stays the D-pad's twin, and a D-pad press or left-stick
+  step puts the pointer away, as do 30 s without the right stick. It drives
+  the app through ordinary mouse events, so hover, clicks, drags and the wheel
+  work wherever a mouse does; it is never drawn into screenshots. Chat keeps
+  its right-stick scrolling; Settings → Controls → Virtual cursor turns it off
   ([player/virtualcursor.go](player/virtualcursor.go)).
 - **Screenshot mode, for pictures you can publish.** `JukaHub
   --screenshot-tour ../screenshots` (run from `player/`) opens Home, Media,
@@ -309,6 +377,11 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Startpage is the default search engine.** It serves Google's results as
+  plain HTML, so a fresh install can search Google without meeting its robot
+  check; DuckDuckGo Lite is one step away in Settings → Browser
+  ([player/browser_engines.go](player/browser_engines.go)).
+
 - **A panic no longer exits as a normal quit.** It exits with status 2 after
   the cleanup still ran (the running game stopped, LEDs and CPU governor put
   back), bounded to 5 seconds — the deadline is armed before anything is
@@ -413,6 +486,102 @@ For anything older, the git log and the
   ([player/social.go](player/social.go) removed).
 
 ### Fixed
+
+- **A tag with a stray quote no longer freezes a page load.** The reader's
+  attribute scanners stopped advancing on a `>` that a quote had pulled into a
+  tag (`<img alt=don't>` with another `'` further down the page), so the load
+  spun at full speed until JukaHub was closed
+  ([player/browser.go](player/browser.go), [player/webpage.go](player/webpage.go)).
+
+- **Pages no longer draw blank because of attribute or pseudo selectors.** The
+  reader's CSS matcher assumed every `[attribute]` and `:pseudo` selector
+  matched, so a site's `[hidden] { display: none }`, Vue's `[v-cloak]`, Alpine's
+  `[x-cloak]` or a web component's `:not(:defined)` rule hid the whole page,
+  `::selection`/`::placeholder`/`::-webkit-scrollbar` rules painted every
+  element and `a:hover` coloured every link. Attribute selectors and the
+  pseudo-classes a static page can answer are now evaluated, `::before`-style
+  rules never style the element itself, a rule that would hide something applies
+  only on a certain match, specificity follows CSS, and escaped Tailwind class
+  names (`md:hidden`) match. Every `<style>` block now applies to the whole
+  page (a `:root` palette declared in one reaches everything), `@media` width,
+  height and orientation queries are answered for the handheld's screen (so
+  Tailwind's paired `md:hidden`/`max-md:hidden` copies keep one), `:target`
+  works, a rule that reveals content on `:hover`/`:focus` still applies, and
+  `opacity: 0` hides only on a certain match ([player/webpage.go](player/webpage.go),
+  [docs/BROWSER.md](docs/BROWSER.md#what-it-can-do)).
+
+- **The `hidden` attribute hides.** What a page keeps out of sight with
+  `hidden` — a dialog, a template, a panel it opens on a click — was drawn as
+  ordinary text; it is skipped as in a browser, and `hidden="until-found"` stays
+  readable ([player/webpage.go](player/webpage.go)).
+
+- **Long notifications are shown whole.** A toast was cut by pixel count into
+  two lines of a 420×96 card, so a message past about 60 characters ended
+  mid-word in "…" ("…shares every fil" / "e on the device, system files i…"),
+  and at the larger text sizes the 96 px ceiling clipped even the second line.
+  The notification centre then stopped every row at two lines, so the end of a
+  long error could not be read anywhere. Toasts now wrap at word boundaries to
+  four lines in a card that grows to 45% of a wide screen (576 px at 1280, 432
+  on the Brick); paths and URLs break after a `/`; and a long toast stays up
+  long enough to read (1.5 s plus 50 ms a character, at most 10 s, never
+  shorter than before). One that is still too long ends in "…", and a click on
+  it opens the centre on that message. In the centre the highlighted
+  notification shows its whole message (up to a card-full, some 650
+  characters at the default text size), and the list scrolls: the D-pad,
+  L1/R1, L2/R2 and the mouse wheel reach all 50 kept notifications, where the
+  cursor used to stop at the first card-full or be paged onto rows that were
+  never drawn. A notification that arrives while you read keeps the highlight
+  on your row, and a toast no longer covers the open centre when its
+  notification is already on the card
+  ([player/notiftext.go](player/notiftext.go),
+  [player/notifications.go](player/notifications.go),
+  `player/notiftext_test.go`).
+
+- **A picture attached in Chat left Files in attach mode.** Backing out of
+  Files without picking kept the flag set, so the next picture opened in Files,
+  however much later, became a chat message instead of opening; and the picture
+  never reached the Discord channel at all. Picking is now one visit to Files,
+  and what is picked is sent ([player/chatfiles.go](player/chatfiles.go)).
+- **Pictures attached in Chat stopped showing after Files moved.** A picture
+  was only drawn from inside the location Files was browsing when it was
+  attached, so one from Home, Downloads or a drive went blank as soon as Files
+  moved on, and after every restart; files the user attached are now drawn
+  where they are ([player/chat.go](player/chat.go)).
+- **Another device's message no longer vanishes as an "echo".** Every device
+  posts through one bot, and a message from somebody else with the same words
+  as one of yours, sent within five minutes, was taken for your own coming back
+  and dropped; the sender now has to match too, and only a message of yours
+  that is going out right now (or whose answer from Discord was lost) is
+  matched ([player/chatstate.go](player/chatstate.go)).
+- **A chat message's last actions could be out of reach.** On a narrow screen
+  the action bar cut off what did not fit — often Delete and Close — and no
+  press could get there; the row now follows the focused action and shows "…"
+  where more are ([player/chatactions.go](player/chatactions.go)).
+- **A video that will not stream no longer flashes black and vanishes.** When
+  ffmpeg could not open a stream, the player showed its dark loading picture
+  for about a second and then simply closed, with no message — reported as
+  "YouTube videos open a black canvas for a second, but then crash". The
+  decoder now says how it stopped. A web video (YouTube and every other site
+  played through yt-dlp) whose stream would not open is downloaded and played
+  from the card instead, with the usual loading card (B cancels) and a toast
+  that says so; one whose stream broke off well before its end carries on the
+  same way from where it stopped while the player is on screen (floating over
+  another screen it only says so, and Play resumes). A file, a download, a
+  direct link or a live channel says why it could not play instead ("the
+  server refused it (HTTP 403)", "it has no picture"). A page whose stream
+  would not open is downloaded first for half an hour, and after two YouTube
+  streams in a row that would not open every YouTube video is, so the next
+  play does not pay for the failed attempt again (live playlists are still
+  streamed). The decoders also ask for a resolved stream as the browser
+  yt-dlp, the native client, the CDN check and ffprobe already announced,
+  instead of as ffmpeg's own "Lavf/…" — the one request in the chain a CDN
+  that refuses ffmpeg's name turned away — and reconnect where a dropped
+  connection broke off (a long pause used to end the video there).
+  errors.txt gets one line per failure ("decoder for … stopped before its
+  first frame: Server returned 403 Forbidden") without the signed media
+  address ([player/videorecover.go](player/videorecover.go),
+  [player/videoplayer.go](player/videoplayer.go),
+  [player/streaming.go](player/streaming.go)).
 
 - **YouTube plays on a stock TrimUI.** The firmware's own `ffmpeg` and
   `ffprobe` (6.1, built without TLS) are on PATH, so JukaHub used them and never
@@ -783,6 +952,28 @@ For anything older, the git log and the
   it checks every DLL the exe imports is part of Windows or ships in the archive
   ([.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)).
 
+- **The Windows release build reuses the previous release's compile work.**
+  It compiled the Go standard library, every module and the cgo-heavy SDL
+  bindings for windows/amd64 from nothing on every release, because its build
+  cache was off on purpose: `actions/cache` can be written by any workflow on
+  `main`, and a restored cache decides what goes into the published binary. The
+  job now starts from the build cache the previous release uploaded as an
+  artifact, accepted only from an earlier push-to-main run of the same workflow
+  whose commit is on `main`, so a release normally compiles just the player.
+  The cache is pruned to what the last build used and uploaded again only when
+  `go build -v` shows a dependency was recompiled; a build that fails on a
+  restored cache retries once from an empty one, and every cache step is
+  time-bounded, so the cache cannot fail or stall a release. The MinGW install,
+  the SDL download, `go mod download` (instead of `go mod tidy`, so a release
+  builds the committed module graph; CI now warns when `go.mod` is not tidy) and
+  the cache download run side by side, apt installs one MinGW flavour (the one
+  the build already used) instead of two, and the exe is linked with `-s -w` as
+  `build.bat` links it, which also makes the download smaller
+  ([.github/workflows/docker-image.yml](.github/workflows/docker-image.yml),
+  [.github/scripts/go-build-cache.sh](.github/scripts/go-build-cache.sh), tested
+  by [tests/scripts/go-build-cache.test.sh](tests/scripts/go-build-cache.test.sh)
+  in `make test-scripts` and in CI).
+
 - **staticcheck is clean again.** An unconditional `strings.TrimSuffix`
   (S1017), a struct conversion instead of a field-by-field literal (S1016), a
   merged declaration (S1021) and a `delete` without its redundant guard (S1033)
@@ -916,6 +1107,22 @@ For anything older, the git log and the
   [player/browser_youtube.go](player/browser_youtube.go)).
 
 ### Security
+
+- **Page scripts are kept off the handheld and the LAN, and away from other
+  sites' cookies.** The requests a page's JavaScript makes — `fetch`,
+  `XMLHttpRequest`, the scripts and modules it loads — cannot reach this device
+  (where the Live Builder and the companion listen) or the LAN from a public
+  site: the address is checked when the connection is dialled, so DNS rebinding
+  gains nothing, and numeric spellings like `127.1` are refused by name; a script
+  cannot navigate there either. They carry cookies only for the page's own site,
+  re-checked on every redirect hop, read another origin's response only when its
+  CORS headers allow it, never see `Set-Cookie`, and an https page cannot load
+  plain http. `document.cookie` hides `HttpOnly` cookies under every spelling of
+  the host and cannot overwrite or shadow them, and the `Secure`, `__Host-` and
+  `__Secure-` rules hold. A page gets at most 160 requests, 24 MiB, 6 at a time
+  and 15 s a request, and the ad filter sees every hop
+  ([player/webdom_net.go](player/webdom_net.go),
+  [docs/BROWSER.md](docs/BROWSER.md#what-a-page-cannot-do)).
 
 - **The live builder can no longer be driven by a web page, a guess or a
   tricky design.** On the handheld it is off until Settings → Network → Live

@@ -31,6 +31,13 @@ jobs:
         # The script `make check` runs too, so a workflow edit that breaks a
         # rule fails locally instead of on the push that follows it.
         run: bash .github/scripts/check-workflows.sh
+      - name: CI helper scripts
+        # What `make test-scripts` runs: the SDL installer must refuse a
+        # tampered archive, and the release build cache must come only from an
+        # earlier push-to-main run of the release workflow.
+        run: |
+          bash tests/scripts/install-sdl-mingw.test.sh
+          bash tests/scripts/go-build-cache.test.sh
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -158,6 +165,17 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go test ./internal/... ./tools/... -count=1
+      - name: go.mod and go.sum are tidy
+        # The Windows release builds the committed module graph (go mod
+        # download, not go mod tidy), so an import added without running
+        # `go mod tidy` fails that release. This says so on the pull request
+        # instead. Advisory until it has been green for a while.
+        continue-on-error: true
+        run: |
+          if ! go mod tidy -diff; then
+            echo "::warning title=go.mod is not tidy::run 'go mod tidy' in player/ and commit go.mod and go.sum, or the Windows release build fails"
+            exit 1
+          fi
 
   player:
     name: Player vet and tests

@@ -904,7 +904,7 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	totalsW, _, _ := font.SizeUTF8(totals)
 	totalsW32 := int32(totalsW)
 	totalsInk := ColorTextTertiary()
-	if feSelectionCount() > 0 {
+	if feSelectionCount() > 0 || chatPickActive() {
 		totalsInk = ColorTextAccent()
 	}
 	totalsX := chip.X - totalsW32 - 20
@@ -1016,6 +1016,10 @@ func filesDrawListNotice(renderer *sdl.Renderer, config *Config, element Element
 // feFolderTotalsLabel is the bar's middle reading: what this folder holds, how
 // many rows are marked, and how much room is left on the card beneath it.
 func feFolderTotalsLabel(config *Config) string {
+	// Picking files for the chat: the bar says so, and for which tab.
+	if pick := chatPickLabel(); pick != "" {
+		return pick
+	}
 	if filesNav.atLocations {
 		n := len(filesNav.locations)
 		if n == 1 {
@@ -1236,6 +1240,7 @@ const (
 	feActHidden
 	feActLocations
 	feActSystemOpen
+	feActSendChat
 )
 
 // feAction is one row of the sheet. Detail is the line's right-hand summary
@@ -1312,9 +1317,25 @@ func feActions(config *Config) []feAction {
 			editDetail = "opens in its own viewer"
 		}
 	}
+	// "Send to chat" takes the marked files (or the one under the cursor) to
+	// the chat's tray; folders are not sent.
+	sendFiles := 0
+	for _, t := range targets {
+		if !t.IsDir {
+			sendFiles++
+		}
+	}
+	sendDetail := "pick files"
+	if sendFiles > 0 {
+		sendDetail = feItemCountLabel(sendFiles)
+	}
+	if chatPickActive() {
+		sendDetail += " · for " + chatTabShortName(chatPick.tab)
+	}
 	actions := []feAction{
 		{Kind: feActNewFolder, Label: "New folder", Detail: newFolderDetail, Enabled: true},
 		{Kind: feActEdit, Label: "Edit text", Detail: editDetail, Enabled: editEnabled},
+		{Kind: feActSendChat, Label: "Send to chat", Detail: sendDetail, Enabled: sendFiles > 0},
 		{Kind: feActRename, Label: "Rename", Detail: renameDetail, Enabled: renameEnabled},
 		{Kind: feActCopy, Label: "Copy", Detail: targetDetail, Enabled: len(targets) > 0},
 		{Kind: feActCut, Label: "Cut", Detail: targetDetail, Enabled: len(targets) > 0},
@@ -1550,6 +1571,12 @@ func feSheetActivate(config *Config) {
 		}
 		closeFeSheet()
 		filesOpenWithSystem(targets[0].Path)
+	case feActSendChat:
+		// The files wait in the chat's tray, and the chat comes up to send
+		// them (chatfiles.go).
+		targets := feSelectionTargets(config)
+		feSheetForget()
+		chatSendFromFiles(config, targets)
 	case feActConnect:
 		closeFeSheetKeepKeyboard()
 		openFeRemoteAddressEntry(config)

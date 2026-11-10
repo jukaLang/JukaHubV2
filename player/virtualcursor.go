@@ -1,28 +1,24 @@
 package main
 
-// virtualcursor.go — a mouse pointer driven by the analog sticks.
+// virtualcursor.go — a mouse pointer on the right analog stick.
 //
 // The TrimUI Smart Pro has two sticks and no touch screen, so every surface
 // that is easiest with a pointer (links on a web page, the store's shelves,
-// a seek bar, small chips) was D-pad only there. Moving BOTH sticks at the
-// same time (tilting them — they do not have to be clicked in) brings up a
-// pointer:
+// a seek bar, small chips) was D-pad only there. The left stick is the D-pad's
+// twin (controller.go); the right stick is the pointer:
 //
-//	left stick   moves it (speed follows the tilt)
-//	right stick  scrolls whatever is under it (a mouse wheel)
+//	right stick  moving it brings the pointer up and moves it (speed
+//	             follows the tilt)
 //	A            clicks; hold A and move to drag
+//	L2 / R2      scroll up / down under the pointer (held: repeats)
 //
-// Everything else on the pad keeps its normal job (B is still back). Both
-// sticks again put the pointer away; so does any D-pad press, and half a
-// minute without touching it. Settings → Controls → Virtual cursor turns the
-// gesture off.
-//
-// The gesture is both sticks leaving their centres together — within
-// vcursorGesturePair of each other — and going well out. Two sticks already
-// out (moving the pointer while scrolling), or a stick resting off centre,
-// never make it. The left stick's first D-pad step waits vcursorNavHold for
-// the right stick to join, so starting the gesture does not also move the
-// focus.
+// B and the other buttons keep their usual jobs. The D-pad — and the left
+// stick, which steps like it — puts the pointer away and moves the focus as
+// always, so A goes back to pressing the focused item; so does half a minute
+// without touching the right stick. Settings → Controls → Virtual cursor turns
+// it off. Screens that use the right stick themselves keep it: Chat scrolls
+// its history with it, JukaLand and browser games aim with it, and the stick
+// calibration and the controller test measure it.
 //
 // The pointer is a real mouse to the rest of the app: it queues SDL mouse
 // motion, button and wheel events at its position (in window pixels, the way
@@ -33,8 +29,8 @@ package main
 //
 // Every stick value is read through the stick calibration (stickcal.go): the
 // dead zone, resting centre and reach Settings → Controls measures, so a
-// drifting stick does not creep the pointer and a short one still reaches
-// full speed.
+// drifting stick neither brings the pointer up nor creeps it, and a short one
+// still reaches full speed.
 
 import (
 	"math"
@@ -46,30 +42,23 @@ import (
 const (
 	// vcursorKey is the Custom setting (default on).
 	vcursorKey = "virtualCursor"
-	// The gesture, on calibrated stick tilts (0 inside the dead zone, 1 at the
-	// reach): a stick is away from its centre past Away and back under Home
-	// (apart, so a stick near the edge of its dead zone does not flicker), and
-	// both must leave within Pair of each other and reach Out.
-	vcursorGestureOut  = 0.5
-	vcursorGestureAway = 0.1
-	vcursorGestureHome = 0.05
-	vcursorGesturePair = 300 * time.Millisecond
-	// vcursorLatchMax is how long a fired gesture keeps its sticks at most:
-	// held out longer, they move the pointer.
-	vcursorLatchMax = time.Second
-	// vcursorNavHold is how long the left stick's first D-pad step waits for
-	// the right stick to join (and make it the gesture instead).
-	vcursorNavHold = 70 * time.Millisecond
+	// vcursorShowTilt is the calibrated right-stick tilt (0 inside the dead
+	// zone, 1 at the reach) that brings the pointer up: a deliberate move,
+	// never a stick resting a little off centre.
+	vcursorShowTilt = 0.25
+	// vcursorActiveTilt is the tilt that counts as using the pointer (it keeps
+	// the idle hide away).
+	vcursorActiveTilt = 0.1
 	// vcursorCreep is the smallest tilt that moves the pointer.
-	vcursorCreep = 0.05
-	// vcursorScrollStart is the tilt past which the right stick scrolls.
-	vcursorScrollStart = 0.3
+	vcursorCreep = 0.06
 	// vcursorMaxSpeed is the pointer's speed at full tilt, logical px/s: the
 	// 1280-wide canvas is crossed in about 1.4 s; a light touch is slow enough
 	// to land on a link.
 	vcursorMaxSpeed = 900.0
-	// vcursorScrollRate is the wheel notches per second at full tilt.
-	vcursorScrollRate = 14.0
+	// vcursorScrollDelay / vcursorScrollRepeat pace a held L2 / R2: one notch
+	// at once, then a notch every Repeat after Delay.
+	vcursorScrollDelay  = 350 * time.Millisecond
+	vcursorScrollRepeat = 90 * time.Millisecond
 	// vcursorIdleHide puts an untouched pointer away.
 	vcursorIdleHide = 30 * time.Second
 	// vcursorScale is the size of one bitmap pixel in logical pixels.
@@ -79,30 +68,16 @@ const (
 type vcursorState struct {
 	active  bool
 	placed  bool // x/y hold a position from an earlier showing
+	told    bool // the how-to toast was shown this run
 	x, y    float64
-	latched bool       // the gesture fired; its sticks are still out
-	pressed bool       // A is held: the left mouse button is down
-	scroll  [2]float64 // fractional wheel notches still owed (X, Y)
-	sentX   int32      // last position queued, window pixels
+	pressed bool    // A is held: the left mouse button is down
+	trig    [2]bool // L2 / R2 held while the pointer is up: scrolling
+	sentX   int32   // last position queued, window pixels
 	sentY   int32
 	last    time.Time // previous tick
-	used    time.Time // last movement, scroll or click
-	shown   time.Time // when the gesture last put it up
-
-	// The gesture: whether each stick is away from its centre and when it
-	// left, the departure the gesture last fired for and when it fired.
-	away     [2]bool
-	left     [2]time.Time
-	firedFor time.Time
-	firedAt  time.Time
-	// navOwed is the left stick's first D-pad step, held back for
-	// vcursorNavHold; 0 when none.
-	navOwed uint8
+	used    time.Time // last deliberate move, click or scroll
+	next    time.Time // when a held trigger scrolls again
 }
-
-// vcursorShowGrace is how long after the gesture a D-pad press is taken for a
-// stick step the gesture itself queued (handleStickDpad), not a real press.
-const vcursorShowGrace = 300 * time.Millisecond
 
 // vcursorStaleGap is a tick gap that means the main loop was away (a modal
 // input loop, a launched game): the A release and the stick returning to rest
@@ -126,8 +101,7 @@ func vcursorEnabled(config *Config) bool {
 // vcursorSetEnabled stores the toggle; turning it off puts the pointer away.
 func vcursorSetEnabled(config *Config, on bool) {
 	if !on {
-		vcursorHide(false)
-		vcursorForget()
+		vcursorHide()
 	}
 	if config == nil {
 		return
@@ -139,15 +113,23 @@ func vcursorSetEnabled(config *Config, on bool) {
 	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
-// vcursorBlocked reports a screen that owns the sticks itself, or a moment the
-// pointer must not be up: JukaLand / a browser game read both sticks, the
-// stick calibrations (JukaHub's and PPSSPP's) and the controller test measure
-// them, a ringing alarm is modal.
+// vcursorBlocked reports a screen that owns the right stick itself, or a
+// moment the pointer must not be up: Chat scrolls with the right stick,
+// JukaLand / a browser game aim with it, the stick calibrations (JukaHub's and
+// PPSSPP's) and the controller test measure it, a ringing alarm is modal.
 func vcursorBlocked(config *Config) bool {
 	// Quick Settings and the wallpaper picker are pad-modal, but the mouse path
 	// has no guard for them: a click would press the screen behind.
-	return !vcursorEnabled(config) || jlandKeysCaptured(config) || calibrationPanel.open ||
-		stickCalOwnsSticks(config) || ctrldiag.open || alarmFiringActive() || qs.open || wpOpen
+	return !vcursorEnabled(config) || vcursorChatOwnsStick(config) || jlandKeysCaptured(config) ||
+		calibrationPanel.open || stickCalOwnsSticks(config) || ctrldiag.open || alarmFiringActive() ||
+		qs.open || wpOpen
+}
+
+// vcursorChatOwnsStick reports the Chat screen scrolling its history with the
+// right stick: not while its keyboard or an overlay is up (chatSceneStick),
+// where the pointer can press the keys.
+func vcursorChatOwnsStick(config *Config) bool {
+	return chatSceneActive(config) && !virtualKeyboardActive && !chatOverlayOpen()
 }
 
 // vcursorMouseState is sdl.GetMouseState with the virtual cursor folded in:
@@ -164,18 +146,12 @@ func vcursorMouseState() (x, y int32, state uint32) {
 	return sdl.GetMouseState()
 }
 
-// vcursorForget drops a gesture under way and a held-back step.
-func vcursorForget() {
-	vcursor.latched = false
-	vcursor.navOwed = 0
-}
-
 // vcursorResetAxes answers a controller coming or going: the sticks are read
-// again, a gesture under way is dropped, a click the pad that went away was
-// holding is released, and a stick measurement is cancelled.
+// again, a click the pad that went away was holding is released, held
+// triggers are let go, and a stick measurement is cancelled.
 func vcursorResetAxes() {
 	stickResetAxes()
-	vcursorForget()
+	vcursor.trig = [2]bool{}
 	if vcursor.pressed {
 		vcursor.pressed = false
 		vcursorPushButton(false)
@@ -183,131 +159,88 @@ func vcursorResetAxes() {
 	stickCalDeviceChanged()
 }
 
-// vcursorStickTilts are how far each stick is tilted, calibrated (0 inside
-// its dead zone, 1 at its reach).
-func vcursorStickTilts(config *Config) (left, right float64) {
-	lx, ly := stickShaped(config, stickLeft)
-	rx, ry := stickShaped(config, stickRight)
-	return math.Hypot(lx, ly), math.Hypot(rx, ry)
+// vcursorRightTilt is how far the right stick is tilted, calibrated (0
+// inside its dead zone, 1 at its reach).
+func vcursorRightTilt(config *Config) float64 {
+	x, y := stickShaped(config, stickRight)
+	return math.Hypot(x, y)
 }
 
-// vcursorTrack follows each stick leaving its centre and coming back.
-func vcursorTrack(l, r float64, now time.Time) {
-	for i, t := range [2]float64{l, r} {
-		switch {
-		case !vcursor.away[i] && t >= vcursorGestureAway:
-			vcursor.away[i], vcursor.left[i] = true, now
-		case vcursor.away[i] && t < vcursorGestureHome:
-			vcursor.away[i] = false
-		}
-	}
-}
-
-// vcursorPair is the gesture both sticks are making: the later of their two
-// departures, and false when they are not both away or did not leave
-// together.
-func vcursorPair() (time.Time, bool) {
-	if !vcursor.away[0] || !vcursor.away[1] {
-		return time.Time{}, false
-	}
-	a, b := vcursor.left[0], vcursor.left[1]
-	d := a.Sub(b)
-	if d < 0 {
-		d = -d
-	}
-	if d > vcursorGesturePair {
-		return time.Time{}, false
-	}
-	if a.After(b) {
-		return a, true
-	}
-	return b, true
-}
-
-// vcursorForming reports both sticks away together for a gesture that has
-// not fired yet: its sticks move nothing meanwhile.
-func vcursorForming() bool {
-	id, ok := vcursorPair()
-	return ok && id.After(vcursor.firedFor)
-}
-
-// vcursorAxis decides what a stick event does. It reports true when the event
-// belongs to the pointer (the gesture, a held-back first step, or any stick
-// while the pointer is up); false sends it on to the normal stick navigation.
+// vcursorAxis decides what a stick or trigger event does. It reports true
+// when the event belongs to the pointer: the right stick (which brings it up),
+// and L2 / R2 while it is up. false sends the event on: the left stick to
+// stick navigation, the triggers to their shoulder actions.
 func vcursorAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
-	if int(e.Axis) >= len(stickAxes) {
-		return false // the triggers stay shoulder buttons
+	switch e.Axis {
+	case sdl.CONTROLLER_AXIS_TRIGGERLEFT, sdl.CONTROLLER_AXIS_TRIGGERRIGHT:
+		return vcursorTrigger(e, config)
+	case sdl.CONTROLLER_AXIS_LEFTX, sdl.CONTROLLER_AXIS_LEFTY:
+		// The left stick is stick navigation's, except on the stick
+		// calibration screen, which measures it.
+		return stickCalOwnsSticks(config)
+	case sdl.CONTROLLER_AXIS_RIGHTX, sdl.CONTROLLER_AXIS_RIGHTY:
+	default:
+		return false
 	}
 	// The stick calibration screen measures the sticks: there they move
-	// nothing, not the focus and not the pointer.
+	// nothing, not the pointer either.
 	if stickCalOwnsSticks(config) {
-		vcursorHide(false)
-		vcursorForget()
+		vcursorHide()
 		return true
 	}
 	if vcursorBlocked(config) {
-		vcursorHide(false)
-		vcursorForget()
+		vcursorHide()
 		return false
 	}
 	now := vcursorClock()
-	l, r := vcursorStickTilts(config)
-	vcursorTrack(l, r, now)
-	if vcursor.latched && ((!vcursor.away[0] && !vcursor.away[1]) || now.Sub(vcursor.firedAt) >= vcursorLatchMax) {
-		vcursor.latched = false
+	tilt := vcursorRightTilt(config)
+	if tilt >= vcursorActiveTilt {
+		vcursor.used = now
 	}
-	if vcursorForming() && l >= vcursorGestureOut && r >= vcursorGestureOut {
-		vcursor.firedFor, _ = vcursorPair()
-		vcursor.firedAt, vcursor.latched, vcursor.navOwed = now, true, 0
-		if vcursor.active {
-			vcursorHide(true)
-		} else {
-			vcursorShow()
-		}
-		return true
+	if !vcursor.active && tilt >= vcursorShowTilt {
+		vcursorShow()
 	}
-	// While the gesture is held its sticks belong to it: after a hide, the
-	// left stick must not go on to move the focus.
-	if vcursor.active || vcursor.latched {
-		return true
-	}
-	if vcursorForming() {
-		vcursor.navOwed = 0
-		return true
-	}
-	// The left stick's first step waits a moment for the right stick: two
-	// thumbs never leave in the same instant, and the step the left stick
-	// would take first must not move the focus. A step it earns meanwhile is
-	// owed, and taken by vcursorFlushNav if the right stick does not join.
-	if (e.Axis == sdl.CONTROLLER_AXIS_LEFTX || e.Axis == sdl.CONTROLLER_AXIS_LEFTY) &&
-		vcursor.away[0] && !vcursor.away[1] && now.Sub(vcursor.left[0]) < vcursorNavHold {
-		if btn, ok := stickNavButton(config, e.Axis, e.Value); ok && vcursor.navOwed == 0 {
-			vcursor.navOwed = btn
-		}
-		return true
-	}
-	return false
+	return true
 }
 
-// vcursorFlushNav takes the left stick's held-back step once the right stick
-// has had its moment to join, or drops it when the right stick did.
-func vcursorFlushNav(config *Config, now time.Time) {
-	if vcursor.navOwed == 0 {
-		return
+// vcursorTrigger turns L2 / R2 into the wheel while the pointer is up: a
+// notch at once, then repeating while held (vcursorTick). The shoulders' own
+// latch still follows the trigger, so it is in step when the pointer goes.
+func vcursorTrigger(e *sdl.ControllerAxisEvent, config *Config) bool {
+	if !vcursor.active || vcursorBlocked(config) {
+		return false
 	}
-	if vcursorForming() || vcursorBlocked(config) {
-		vcursor.navOwed = 0
-		return
+	side := 0
+	if e.Axis == sdl.CONTROLLER_AXIS_TRIGGERRIGHT {
+		side = 1
 	}
-	if now.Sub(vcursor.left[0]) < vcursorNavHold {
-		return
+	// Only a press the pointer saw start scrolls: one that began before the
+	// pointer came up stays the shoulder action it already was.
+	pressed := triggerPressedEdge(side, e.Value)
+	if !padTriggerHeld[side] {
+		vcursor.trig[side] = false
 	}
-	btn := vcursor.navOwed
-	vcursor.navOwed = 0
-	handleStickDpad(btn)
+	if pressed {
+		now := vcursorClock()
+		vcursor.trig[side] = true
+		vcursorScrollNotch(side)
+		vcursor.used, vcursor.next = now, now.Add(vcursorScrollDelay)
+	}
+	return true
 }
 
-// vcursorShow puts the pointer up where it was last time (the centre at first).
+// vcursorScrollNotch scrolls one notch under the pointer: up for L2, down for
+// R2 (wheel Y is positive away from the user).
+func vcursorScrollNotch(side int) {
+	if side == 0 {
+		vcursorPushWheel(0, 1)
+		return
+	}
+	vcursorPushWheel(0, -1)
+}
+
+// vcursorShow puts the pointer up where it was last time (the centre at
+// first). The first time in a run it says how it works.
 func vcursorShow() {
 	now := vcursorClock()
 	if !vcursor.placed {
@@ -315,19 +248,19 @@ func vcursorShow() {
 		vcursor.placed = true
 	}
 	vcursor.active = true
-	vcursor.scroll = [2]float64{}
-	vcursor.last, vcursor.used, vcursor.shown = now, now, now
-	// Chat scrolls with the right stick by itself; the pointer takes the
-	// stick's events from here, so Chat would never see it come back.
-	chatStickSpeed = 0
+	vcursor.trig = [2]bool{}
+	vcursor.last, vcursor.used = now, now
 	vcursorPushMotion(true)
 	vcursorWake()
-	setToast("Virtual cursor: A clicks · move both sticks to hide it")
+	if !vcursor.told {
+		vcursor.told = true
+		setToast("Pointer: A clicks · L2/R2 scroll · D-pad hides it")
+	}
 }
 
 // vcursorHide puts the pointer away, releasing a held click first so nothing
 // is left mid-drag.
-func vcursorHide(toast bool) {
+func vcursorHide() {
 	if !vcursor.active {
 		return
 	}
@@ -336,21 +269,19 @@ func vcursorHide(toast bool) {
 		vcursorPushButton(false)
 	}
 	vcursor.active = false
-	vcursor.scroll = [2]float64{}
-	if toast {
-		setToast("Virtual cursor off")
-	}
+	vcursor.trig = [2]bool{}
 }
 
 // vcursorButton turns A into the left mouse button while the pointer is up.
-// A D-pad press puts the pointer away and still moves the focus. It reports
-// true when the press is consumed.
+// A D-pad press (the left stick's steps are D-pad presses too) puts the
+// pointer away and still moves the focus. It reports true when the press is
+// consumed.
 func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if !vcursor.active {
 		return false
 	}
 	if vcursorBlocked(config) {
-		vcursorHide(false)
+		vcursorHide()
 		return false
 	}
 	down := e.Type == sdl.CONTROLLERBUTTONDOWN
@@ -374,15 +305,9 @@ func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_DOWN,
 		sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		if !down || vcursor.pressed {
-			break
+		if down && !vcursor.pressed {
+			vcursorHide()
 		}
-		// A stick step queued while the gesture was forming arrives just
-		// after the pointer came up: swallow it rather than hide.
-		if vcursorClock().Sub(vcursor.shown) < vcursorShowGrace {
-			return true
-		}
-		vcursorHide(false)
 	}
 	return false
 }
@@ -397,43 +322,32 @@ func vcursorCurve(v float64) float64 {
 	return t
 }
 
-// vcursorTick runs once per frame: it takes a held-back stick step that is
-// due, and moves and scrolls the pointer from the held stick values (axis
-// events only arrive when a value changes, so a steady tilt has to be
-// integrated here, not in the event handler).
+// vcursorTick runs once per frame: it moves the pointer from the held right
+// stick (axis events only arrive when a value changes, so a steady tilt has
+// to be integrated here, not in the event handler) and repeats a held
+// trigger's scroll.
 func vcursorTick(config *Config) {
-	now := vcursorClock()
-	vcursorFlushNav(config, now)
 	if !vcursor.active {
 		return
 	}
 	if vcursorBlocked(config) {
-		vcursorHide(false)
+		vcursorHide()
 		return
 	}
+	now := vcursorClock()
 	gap := now.Sub(vcursor.last)
 	dt := gap.Seconds()
 	vcursor.last = now
 	if gap > vcursorStaleGap {
 		// Whatever happened while the loop was away is unknown: drop the
-		// held click (its release went elsewhere) and re-read the sticks.
+		// held click (its release went elsewhere) and the held triggers, and
+		// re-read the sticks.
 		vcursor.pressed = false
+		vcursor.trig = [2]bool{}
 		stickResetAxes()
-		vcursor.scroll = [2]float64{}
-		vcursorForget()
 	}
 	if dt < 0 {
 		dt = 0
-	}
-	// The gesture's own tilt is not a move: until both sticks are back home
-	// (or held out past vcursorLatchMax) the pointer stays where it appeared;
-	// nor does a hide gesture on its way move or scroll anything.
-	if vcursor.latched && now.Sub(vcursor.firedAt) >= vcursorLatchMax {
-		vcursor.latched = false
-	}
-	if vcursor.latched || vcursorForming() {
-		vcursor.scroll = [2]float64{}
-		return
 	}
 	// A stalled frame must not fling the pointer across the screen.
 	if dt > 0.05 {
@@ -441,58 +355,38 @@ func vcursorTick(config *Config) {
 	}
 	busy := false
 
-	// Left stick: the direction it points, at a speed on the curve. A tilt
+	// Right stick: the direction it points, at a speed on the curve. A tilt
 	// under vcursorCreep (a stick settling just outside its dead zone) moves
-	// nothing, so the pointer can still go idle.
-	var dx, dy float64
-	if lx, ly := stickShaped(config, stickLeft); lx != 0 || ly != 0 {
-		if m := math.Hypot(lx, ly); m >= vcursorCreep {
+	// nothing.
+	if rx, ry := stickShaped(config, stickRight); rx != 0 || ry != 0 {
+		if m := math.Hypot(rx, ry); m >= vcursorCreep {
 			k := vcursorCurve(m) / m
-			dx, dy = lx*k, ly*k
+			vcursor.x = clampFloat(vcursor.x+rx*k*vcursorMaxSpeed*dt, 0, float64(screenWidth-1))
+			vcursor.y = clampFloat(vcursor.y+ry*k*vcursorMaxSpeed*dt, 0, float64(screenHeight-1))
+			busy = vcursorPushMotion(false)
 		}
-	}
-	if dx != 0 || dy != 0 {
-		vcursor.x = clampFloat(vcursor.x+dx*vcursorMaxSpeed*dt, 0, float64(screenWidth-1))
-		vcursor.y = clampFloat(vcursor.y+dy*vcursorMaxSpeed*dt, 0, float64(screenHeight-1))
-		busy = vcursorPushMotion(false)
 	}
 
-	// Right stick, past vcursorScrollStart: up scrolls up (wheel Y is positive
-	// away from the user), right scrolls right.
-	rx, ry := stickShaped(config, stickRight)
-	var wheel [2]int32
-	for i, v := range [2]float64{rx, -ry} {
-		if math.Abs(v) < vcursorScrollStart {
-			vcursor.scroll[i] = 0
-			continue
-		}
-		// The first notch comes at once, the rest at the tilt's rate.
-		if vcursor.scroll[i] == 0 {
-			vcursor.scroll[i] = math.Copysign(1, v)
-		} else {
-			vcursor.scroll[i] += vcursorCurve(v) * vcursorScrollRate * dt
-		}
-		n := int32(vcursor.scroll[i]) // truncates toward zero
-		if n != 0 {
-			wheel[i] = n
-			vcursor.scroll[i] -= float64(n)
-			// Keep the accumulator non-zero so the next tick does not take
-			// it for a fresh tilt and send another immediate notch.
-			if vcursor.scroll[i] == 0 {
-				vcursor.scroll[i] = math.Copysign(1e-9, v)
+	// A held trigger keeps scrolling.
+	if (vcursor.trig[0] || vcursor.trig[1]) && !now.Before(vcursor.next) {
+		for side, held := range vcursor.trig {
+			if held {
+				vcursorScrollNotch(side)
 			}
 		}
-	}
-	if wheel[0] != 0 || wheel[1] != 0 {
-		vcursorPushWheel(wheel[0], wheel[1])
+		vcursor.next = now.Add(vcursorScrollRepeat)
+		vcursor.used = now
 		busy = true
 	}
 
 	if busy {
-		vcursor.used = now
 		vcursorWake()
-	} else if !vcursor.pressed && now.Sub(vcursor.used) > vcursorIdleHide {
-		vcursorHide(false)
+	}
+	// Idle is measured from deliberate use, not from movement: a stick
+	// drifting just past its dead zone creeps the pointer but does not keep it
+	// up for ever.
+	if !vcursor.pressed && now.Sub(vcursor.used) > vcursorIdleHide {
+		vcursorHide()
 	}
 }
 

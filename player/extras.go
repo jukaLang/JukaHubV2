@@ -1074,6 +1074,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	backLabel := "Back"
 	if scene.Name == "FileExplorer" {
 		backLabel = filesBackLabel(config)
+		if chatPickActive() {
+			// Picking for the chat, B calls the pick off (chatPickBack).
+			backLabel = "Cancel"
+		}
 	}
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Navigate"},
@@ -1102,6 +1106,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		} else if filesNav.atLocations {
 			hints = append(hints, FooterHint{Button: "Y", Label: "Options"})
 		} else {
+			// Picking for the chat, A on a file attaches it (chatfiles.go).
+			if entry, ok := feFocusEntry(config); ok && chatPickActive() && !entry.IsDir {
+				hints[1].Label = "Attach"
+			}
 			hints = append(hints,
 				FooterHint{Button: "Y", Label: "Actions"},
 				FooterHint{Button: "X", Label: "Mark"},

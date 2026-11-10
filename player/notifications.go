@@ -43,11 +43,19 @@ type notifCenter struct {
 	dropRect  sdl.Rect
 	clearRect sdl.Rect // "Clear All" hit area
 	enter     uiEnter  // drop-down + fade entrance
-	// visibleRows and rowRects describe the rows the last frame drew; the
-	// cursor limit and click selection are driven by them instead of a
-	// hard-coded row count.
+	// visibleRows and rowRects describe the rows the last frame drew; paging
+	// and click selection are driven by them instead of a hard-coded row
+	// count.
 	visibleRows int
 	rowRects    []sdl.Rect
+	// rowFirst is the history index of rowRects[0]; scroll is where the next
+	// frame's window starts, so the list follows the cursor instead of always
+	// drawing from the newest row (notifListWindow).
+	rowFirst int
+	scroll   int
+	// seenAdded is notifAdded as of the last frame drawn while open
+	// (notifFollowArrivals).
+	seenAdded uint64
 }
 
 var nc notifCenter
@@ -108,6 +116,9 @@ func notifRecordToast(msg string, kind ToastKind) {
 // A repeat folds into the newest row only when that row has the same read
 // state, so a run of confirmations cannot swallow an unread warning.
 func notifRecordAs(msg string, p notifPriority, read bool) {
+	// Stored as the toast shows it, so the toast can find its row (notifPush
+	// hands its text over untrimmed; showToastPrimitive trims the toast's).
+	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return
 	}
@@ -122,6 +133,7 @@ func notifRecordAs(msg string, p notifPriority, read bool) {
 		}
 	}
 	nc.history = append([]notification{{Message: msg, Priority: p, Timestamp: time.Now(), Read: read, Repeat: 1}}, nc.history...)
+	notifAdded++
 	if len(nc.history) > 50 {
 		nc.history = nc.history[:50]
 	}
@@ -153,11 +165,42 @@ func notifPush(msg string, p notifPriority) {
 // append racing that read could hand it a torn slice header.
 var notifHistoryMu sync.Mutex
 
-// notifHistorySnapshot copies the history for a reader on the render thread.
-func notifHistorySnapshot() []notification {
+// notifAdded counts the rows ever prepended to nc.history (a folded repeat is
+// not a new row). Guarded by notifHistoryMu. The open centre compares it with
+// the value it last saw to keep its highlight on the row being read.
+var notifAdded uint64
+
+// notifHistoryState copies the history for a reader on the render thread,
+// with notifAdded read under the same lock.
+func notifHistoryState() ([]notification, uint64) {
 	notifHistoryMu.Lock()
 	defer notifHistoryMu.Unlock()
-	return append([]notification(nil), nc.history...)
+	return append([]notification(nil), nc.history...), notifAdded
+}
+
+// notifHistoryLen is the number of rows in the history.
+func notifHistoryLen() int {
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
+	return len(nc.history)
+}
+
+// notifRowIndex is the newest row whose message is msg, or -1.
+func notifRowIndex(msg string) int {
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
+	return notifRowIndexLocked(msg)
+}
+
+// notifRowIndexLocked is notifRowIndex for a caller holding notifHistoryMu.
+func notifRowIndexLocked(msg string) int {
+	msg = strings.TrimSpace(msg)
+	for i, n := range nc.history {
+		if n.Message == msg {
+			return i
+		}
+	}
+	return -1
 }
 
 func notifUnreadCount() int {
@@ -346,14 +389,22 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 }
 
 const (
-	notifDropW   = int32(400)
-	notifHeaderH = int32(40)
+	// notifDropW is the card's width on a narrow canvas; a wide one gives it
+	// three eighths of the screen, up to notifDropMaxW (notifDropWidth).
+	notifDropW    = int32(400)
+	notifDropMaxW = int32(520)
+	notifHeaderH  = int32(40)
+	// notifListPadB is the space under the last row.
+	notifListPadB = int32(12)
 	// notifRowMinH is the shortest row (one line plus its timestamp); taller
 	// rows grow from their measured content instead.
 	notifRowMinH = int32(52)
 	notifMaxRows = 8
-	// notifMsgLines is how many lines a message may use. Two covers the long
-	// path and error strings that a single ellipsized line used to swallow.
+	// notifMsgLines is how many lines a row's message may use while it is not
+	// highlighted; the highlighted row shows the whole message, up to as many
+	// lines as the card holds (notifExpandedLines: 18 under the Smart Pro's
+	// bell at the default text size, some 650 characters). Every row used to
+	// stop at two lines, so the end of a long error could not be read anywhere.
 	notifMsgLines = 2
 	notifRowPad   = int32(8)
 )
@@ -363,12 +414,13 @@ const (
 type notifRowLayout struct {
 	lines  []string
 	height int32
-	rect   sdl.Rect
 }
 
-// notifDropWidth is the card width, clamped so it never runs off the panel.
+// notifDropWidth is the card width: 400 px, or three eighths of a wide canvas
+// (480 on the 1280 one) so a long message takes fewer lines, clamped so it
+// never runs off the panel.
 func notifDropWidth() int32 {
-	w := notifDropW
+	w := min(max(notifDropW, screenWidth*3/8), notifDropMaxW)
 	if maxW := screenWidth - 24; w > maxW {
 		w = maxW
 	}
@@ -395,110 +447,92 @@ func notifRowMessage(n notification) string {
 	return n.Message
 }
 
-// notifWrapLines wraps a notification message. It behaves like wrapTextLines
-// except for a token wider than the whole line: paths and URLs have no spaces
-// to break at, and ellipsizing them kept the folder and threw away the file
-// name and the reason (".../Dracula X Chroni..."). Those are cut into chunks
-// that fit instead, so both lines carry text the user can actually read.
-func notifWrapLines(font *ttf.Font, text string, maxW, maxLines int32) []string {
+// notifWrapKey identifies one wrapped row. The open centre lays out every row
+// on every frame, and a wrap is a FreeType measurement per word through cgo;
+// a row only changes when a message arrives, the highlight moves or the font
+// (the text size) changes.
+type notifWrapKey struct {
+	font     *ttf.Font
+	text     string
+	maxW     int32
+	maxLines int
+}
+
+// notifWrapCur and notifWrapPrev hold the wrapped rows in two generations: a
+// lookup that hits the older one moves the row into the current one, and when
+// the current one is full it becomes the older one. The rows on the card
+// survive the turnover, so no frame re-measures the whole history at once (a
+// repeat counter, "x2", "x3", makes a new key every time it counts).
+var (
+	notifWrapMu   sync.Mutex
+	notifWrapCur  = map[notifWrapKey][]string{}
+	notifWrapPrev = map[notifWrapKey][]string{}
+)
+
+// notifWrapCacheMax bounds a generation; a frame looks up one key per row of
+// the 50-row history.
+const notifWrapCacheMax = 128
+
+// notifWrapLines word-wraps a notification message into at most maxLines lines
+// (wrapWordsMeasured). A path or URL wider than the line is cut into pieces
+// that fit, at a separator where it can be, instead of being ellipsized to its
+// folder and losing the file name and the reason (".../Dracula X Chroni...").
+func notifWrapLines(font *ttf.Font, text string, maxW int32, maxLines int) []string {
 	if font == nil || maxLines <= 0 || maxW <= 0 {
 		return nil
 	}
-	limit := int(maxLines)
-	measure := func(s string) int32 {
+	key := notifWrapKey{font: font, text: text, maxW: maxW, maxLines: maxLines}
+	notifWrapMu.Lock()
+	lines, ok := notifWrapCur[key]
+	if !ok {
+		if lines, ok = notifWrapPrev[key]; ok {
+			notifWrapKeepLocked(key, lines)
+		}
+	}
+	notifWrapMu.Unlock()
+	if ok {
+		return lines
+	}
+	lines, _ = wrapWordsMeasured(text, maxW, maxLines, func(s string) int32 {
 		w, _, _ := font.SizeUTF8(s)
 		return int32(w)
-	}
-	var out []string
-	cur := ""
-	flush := func() {
-		if cur != "" {
-			out = append(out, cur)
-			cur = ""
-		}
-	}
-	for _, word := range strings.Fields(text) {
-		if measure(word) > maxW {
-			// Over-long token: split it at the widest prefix that still fits.
-			flush()
-			rest := []rune(word)
-			for len(rest) > 0 {
-				n := 0
-				for n < len(rest) && measure(string(rest[:n+1])) <= maxW {
-					n++
-				}
-				if n == 0 {
-					n = 1 // one glyph at a time, so the loop always ends
-				}
-				// Paths read far better split at a separator ("/storage/roms/
-				// psp/") than mid-word (".../Games/Ca"). If a slash lands in
-				// the back half of the chunk, end the line there instead.
-				cut := -1
-				for i := n - 1; i > 0; i-- {
-					if rest[i] == '/' {
-						cut = i
-						break
-					}
-				}
-				if cut > 0 && cut >= n/2 {
-					n = cut + 1
-				}
-				out = append(out, string(rest[:n]))
-				rest = rest[n:]
-			}
-			continue
-		}
-		cand := word
-		if cur != "" {
-			cand = cur + " " + word
-		}
-		if cur == "" || measure(cand) <= maxW {
-			cur = cand
-			continue
-		}
-		flush()
-		cur = word
-	}
-	flush()
-
-	truncated := len(out) > limit
-	if truncated {
-		out = out[:limit]
-	}
-	if truncated && len(out) > 0 {
-		out[len(out)-1] = fitTextToWidth(font, out[len(out)-1]+"…", maxW)
-	}
-	return out
+	})
+	notifWrapMu.Lock()
+	notifWrapKeepLocked(key, lines)
+	notifWrapMu.Unlock()
+	return lines
 }
 
-// notifMeasureRows wraps each visible message and gives its row a height that
-// fits the lines plus the timestamp. The fixed height these rows used to share
-// ellipsized long errors to one line — exactly the messages worth reading — and
-// the timestamp then sat on top of the clipped text.
-func notifMeasureRows(font *ttf.Font, history []notification, maxW int32, limit int) []notifRowLayout {
-	if font == nil || limit <= 0 {
+// notifWrapKeepLocked files a wrapped row in the current generation, turning
+// the generations over first when it is full. The caller holds notifWrapMu.
+func notifWrapKeepLocked(key notifWrapKey, lines []string) {
+	if len(notifWrapCur) >= notifWrapCacheMax {
+		notifWrapPrev = notifWrapCur
+		notifWrapCur = make(map[notifWrapKey][]string, notifWrapCacheMax)
+	}
+	notifWrapCur[key] = lines
+}
+
+// notifMeasureRows wraps every message and gives its row a height that fits
+// the lines plus the timestamp: two lines at most, except the highlighted row
+// (cursor), which may use expanded lines, its whole message on any card that
+// can hold it. The fixed height these rows once shared ellipsized long errors
+// to one line, exactly the messages worth reading.
+func notifMeasureRows(font *ttf.Font, history []notification, maxW int32, cursor, expanded int) []notifRowLayout {
+	if font == nil || len(history) == 0 {
 		return nil
 	}
 	lineH := int32(font.Height())
-	rows := make([]notifRowLayout, 0, limit)
-	for i := 0; i < limit && i < len(history); i++ {
-		lines := notifWrapLines(font, notifRowMessage(history[i]), maxW, notifMsgLines)
-		h := notifRowPad*2 + int32(len(lines))*lineH + 2 + lineH
-		if h < notifRowMinH {
-			h = notifRowMinH
+	rows := make([]notifRowLayout, 0, len(history))
+	for i, n := range history {
+		limit := notifMsgLines
+		if i == cursor {
+			limit = max(expanded, notifMsgLines)
 		}
-		rows = append(rows, notifRowLayout{lines: lines, height: h})
+		lines := notifWrapLines(font, notifRowMessage(n), maxW, limit)
+		rows = append(rows, notifRowLayout{lines: lines, height: notifRowHeight(len(lines), lineH)})
 	}
 	return rows
-}
-
-// notifRowSpan is the total height of the given measured rows.
-func notifRowSpan(rows []notifRowLayout) int32 {
-	total := int32(0)
-	for _, r := range rows {
-		total += r.height
-	}
-	return total
 }
 
 // notifEmptyContentH is the vertical space the empty state needs below the
@@ -513,34 +547,53 @@ func notifEmptyContentH(config *Config) int32 {
 	return content + SpaceLG*2
 }
 
+// notifDropMaxH is the tallest the card may be when it hangs from by: down to
+// 12 px above the bottom edge, and never less than a header and one row.
+func notifDropMaxH(by int32) int32 {
+	return max(screenHeight-by-12, notifHeaderH+notifRowMinH+notifListPadB)
+}
+
 // notifDropdownLayout sizes the dropdown so it always fits on screen: the
-// panel is measured from the bell's anchor, and the visible row count shrinks
-// until the card (header + measured rows + padding) fits below it. Rows have
-// their own measured heights, so a two-line message is never clipped to make
-// the arithmetic work. An empty history gets the empty state's measured height
+// panel is measured from the bell's anchor and holds the window of rows that
+// notifListWindow picks, the highlighted row always among them and whole. Rows
+// have their own measured heights, so a message is never clipped to make the
+// arithmetic work. An empty history gets the empty state's measured height
 // instead of a guessed row count.
-func notifDropdownLayout(config *Config, by int32, rows []notifRowLayout) (w, h int32, visible int) {
+func notifDropdownLayout(config *Config, by int32, heights []int32, cursor, scroll int) (w, h int32, first, count int) {
 	w = notifDropWidth()
-	maxH := screenHeight - by - 12
-	if maxH < notifHeaderH+notifRowMinH+12 {
-		maxH = notifHeaderH + notifRowMinH + 12
+	maxH := notifDropMaxH(by)
+	if len(heights) == 0 {
+		return w, min(notifHeaderH+notifEmptyContentH(config), maxH), 0, 0
 	}
-	if len(rows) == 0 {
-		h = notifHeaderH + notifEmptyContentH(config)
-		if h > maxH {
-			h = maxH
-		}
-		return w, h, 0
+	first, count = notifListWindow(heights, maxH-notifHeaderH-notifListPadB, notifMaxRows, cursor, scroll)
+	h = notifHeaderH + notifSumHeights(heights[first:first+count]) + notifListPadB
+	return w, h, first, count
+}
+
+// notifFollowArrivals keeps the highlight on the row being read when rows
+// arrive while the centre is open. New rows are prepended, so without this
+// the highlight, and with it the expanded message, would slide onto a
+// neighbour, the newest row included: a message opened from its toast would
+// collapse under the reader as soon as anything else was filed. Arrivals
+// show at the top, collapsed, while the list is at its top; a scrolled list
+// keeps its rows where they are. When every row of the history (rows) is new
+// there is no row to follow (Clear All, then a burst), and the highlight goes
+// to the newest instead of the oldest of the burst.
+func notifFollowArrivals(added uint64, rows int) {
+	if added <= nc.seenAdded {
+		nc.seenAdded = added
+		return
 	}
-	visible = len(rows)
-	if visible > notifMaxRows {
-		visible = notifMaxRows
+	d := int(added - nc.seenAdded)
+	nc.seenAdded = added
+	if d >= rows {
+		nc.cursor, nc.scroll = 0, 0
+		return
 	}
-	for visible > 0 && notifHeaderH+notifRowSpan(rows[:visible])+12 > maxH {
-		visible--
+	nc.cursor += d
+	if nc.scroll > 0 {
+		nc.scroll += d
 	}
-	h = notifHeaderH + notifRowSpan(rows[:visible]) + 12
-	return w, h, visible
 }
 
 // renderNotifDropdown draws the notification history dropdown.
@@ -555,12 +608,22 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Position below the bell, then size the card to the rows that fit. Rows
-	// are measured first: their heights depend on the wrapped message, and the
-	// card has to be tall enough for whatever survives the wrap.
+	// are measured first: their heights depend on the wrapped message (the
+	// highlighted one in full), and the card has to be tall enough for
+	// whatever survives the wrap.
 	by := nc.bellRect.Y + nc.bellRect.H + 8
-	history := notifHistorySnapshot()
-	rowLayouts := notifMeasureRows(font, history, notifMessageWidth(notifDropWidth()), len(history))
-	dropW, dropH, numRows := notifDropdownLayout(config, by, rowLayouts)
+	history, added := notifHistoryState()
+	notifFollowArrivals(added, len(history))
+	nc.cursor = clampIndex(nc.cursor, len(history))
+	lineH := int32(font.Height())
+	expanded := notifExpandedLines(notifDropMaxH(by)-notifHeaderH-notifListPadB, lineH)
+	rowLayouts := notifMeasureRows(font, history, notifMessageWidth(notifDropWidth()), nc.cursor, expanded)
+	heights := make([]int32, len(rowLayouts))
+	for i, r := range rowLayouts {
+		heights[i] = r.height
+	}
+	dropW, dropH, first, numRows := notifDropdownLayout(config, by, heights, nc.cursor, nc.scroll)
+	nc.scroll = first
 	bx := nc.bellRect.X
 	if bx+dropW > screenWidth {
 		bx = screenWidth - dropW - 12
@@ -568,9 +631,10 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	if bx < 12 {
 		bx = 12
 	}
-	// Navigation and click selection need the same row count the render used,
-	// otherwise the D-pad could walk onto a row that was not drawn.
+	// Paging and click selection need the rows the render drew, otherwise a
+	// click could pick a row that is not on the card.
 	nc.visibleRows = numRows
+	nc.rowFirst = first
 	nc.rowRects = nc.rowRects[:0]
 	headerH := notifHeaderH
 
@@ -608,25 +672,33 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 				clearX, by+12)
 		}
 
-		// Notification rows. Each row is as tall as its wrapped message needs,
-		// so a long error shows both lines and its timestamp stays inside the
-		// row instead of overlapping the clipped text.
+		// Notification rows: the window notifListWindow picked. Each row is as
+		// tall as its wrapped message needs, the highlighted one showing the
+		// whole message, so its timestamp stays inside the row instead of
+		// overlapping clipped text.
 		listY := by + headerH
-		lineH := int32(font.Height())
 		ry := listY
-		for i := 0; i < numRows && i < len(history) && i < len(rowLayouts); i++ {
+		// With rows above or below the window a scrollbar takes the card's
+		// right edge, and the rows (the highlight's wash) stop short of it.
+		scrollable := numRows > 0 && numRows < len(history)
+		rowW := dropW - 8
+		if scrollable {
+			rowW -= 8
+		}
+		for i := first; i < first+numRows && i < len(history) && i < len(rowLayouts); i++ {
 			n := history[i]
 			row := rowLayouts[i]
+			focused := i == nc.cursor
 
 			if ry+row.height > by+dropH {
 				break
 			}
 
-			rowRect := sdl.Rect{X: bx + 4, Y: ry, W: dropW - 8, H: row.height - 2}
+			rowRect := sdl.Rect{X: bx + 4, Y: ry, W: rowW, H: row.height - 2}
 			nc.rowRects = append(nc.rowRects, rowRect)
 
 			// Row background: the cursor row is a selected list row.
-			if i == nc.cursor {
+			if focused {
 				UIListRow(renderer, rowRect, 10, true, false)
 			}
 
@@ -642,10 +714,14 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			}
 			fillCircle(renderer, bx+20, ry+notifRowPad+lineH/2, 4, dotCol)
 
-			// Message lines, wrapped by notifMeasureRows.
+			// Message lines, wrapped by notifMeasureRows. The highlighted row
+			// is the one being read, so it takes the primary text colour.
 			msgCol := WithAlpha(ColorTextSecondary(), 220)
 			if n.Read {
 				msgCol = WithAlpha(ColorTextTertiary(), 180)
+			}
+			if focused {
+				msgCol = ColorTextPrimary()
 			}
 			for li, line := range row.lines {
 				renderText(renderer, config, font, line, msgCol,
@@ -670,6 +746,15 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			ry += row.height
 		}
 
+		// Rows above or below the window: the scrollbar says there is more,
+		// and where the card is in the history.
+		if scrollable {
+			listH := dropH - headerH - notifListPadB
+			thumb := float64(numRows) / float64(len(history))
+			pos := float64(first) / float64(len(history)-numRows)
+			drawScrollbar(renderer, bx+dropW-9, listY+2, 3, listH-4, thumb, pos)
+		}
+
 		if len(history) == 0 {
 			UIEmptyState(renderer, config, sdl.Rect{X: bx, Y: listY, W: dropW, H: dropH - headerH},
 				"@bell", "No notifications", "You're all caught up.")
@@ -679,12 +764,21 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 
 // notifToggle opens/closes the notification dropdown.
 func notifToggle() {
-	nc.open = !nc.open
+	notifSetOpen(!nc.open, true)
+}
+
+// notifSetOpen opens or closes the dropdown. Home has its own focus graph: a
+// tap on the bell or a chrome activation on Home is a deliberate choice, so
+// with focusBell the focus follows it and the D-pad continues from the bell
+// instead of jumping back to a card. A click on a toast is not a visit to the
+// bell, and leaves the focus on the card the user was on.
+func notifSetOpen(open, focusBell bool) {
+	nc.open = open
 	nc.cursor = 0
-	// Home has its own focus graph. A tap or a chrome activation on Home is a
-	// deliberate choice, so focus follows it and the D-pad continues from the
-	// bell instead of jumping back to a card.
-	if homeLayoutActive && homeLayout != nil {
+	nc.scroll = 0
+	nc.rowFirst = 0
+	nc.visibleRows = 0
+	if focusBell && homeLayoutActive && homeLayout != nil {
 		if homeLayout.Focus.Set(HomeFocusBell) {
 			homeLayout.Focus.Remember()
 		}
@@ -696,43 +790,98 @@ func notifToggle() {
 		homeCalendarOpen = false
 		dismissWeatherPopover()
 		dismissVolumePopover()
-		// Mark all as read.
+		// Mark all as read. Rows that arrive from here on move the highlight
+		// with them (notifFollowArrivals).
 		notifHistoryMu.Lock()
 		for i := range nc.history {
 			nc.history[i].Read = true
 		}
+		nc.seenAdded = notifAdded
 		notifHistoryMu.Unlock()
 	}
 	PlayActivateSound()
 }
 
-// notifNavigate moves the cursor in the dropdown. The limit is the number of
-// rows the last frame actually drew, so the D-pad cannot land on a row that was
-// measured out of the card.
+// notifOpenOn opens the centre with the highlight on the newest row carrying
+// msg, and the highlighted row shows its message whole: a click on a toast
+// that was cut short lands here (notifToastOpensCentre).
+func notifOpenOn(msg string) {
+	if !nc.open {
+		notifSetOpen(true, false)
+	}
+	// The row is looked up and the arrivals count taken under one lock, so a
+	// row filed in between cannot leave the highlight one row off.
+	notifHistoryMu.Lock()
+	i := notifRowIndexLocked(msg)
+	nc.seenAdded = notifAdded
+	notifHistoryMu.Unlock()
+	if i >= 0 {
+		nc.cursor = i
+	}
+}
+
+// notifToastOpensCentre reports whether a click on the toast showing msg
+// opens the centre on it. The card must have cut that very message (cutMsg is
+// what the last frame drew cut short), the centre must keep it (the Live
+// Builder's pairing-code toasts are not filed), and an opened centre must be
+// seen and get the pad: no panel or menu owns the pad (inmapOverlayOpen) and
+// nothing is drawn over the centre (notifCentreCovered). Otherwise the click
+// only dismisses the toast, as it always did.
+func notifToastOpensCentre(msg, cutMsg string) bool {
+	if msg == "" || msg != cutMsg || nc.open {
+		return false
+	}
+	if inmapOverlayOpen() || notifCentreCovered() {
+		return false
+	}
+	return notifRowIndex(msg) >= 0
+}
+
+// notifCentreCovered reports whether something is drawn over the centre's
+// place: the full-screen player, the dock and the screensaver cover the scene
+// and its chrome, and the Chat panel's member list, profile card and file
+// sheet are drawn above the top-bar overlays. A centre opened under them
+// would take the pad unseen.
+func notifCentreCovered() bool {
+	return (videoFullscreen && playerPhase() != "idle") || ambientIsActive() || ss.active || chatOverlayOpen()
+}
+
+// notifCentreShowsRow reports whether the open, uncovered centre has msg's row
+// on its card: rowFirst and visibleRows are what renderNotifDropdown drew,
+// earlier in the same frame than the toast. renderToast keeps the toast off
+// the centre only then; a row scrolled off the card still gets its toast.
+func notifCentreShowsRow(msg string) bool {
+	if !nc.open || nc.visibleRows <= 0 || notifCentreCovered() {
+		return false
+	}
+	i := notifRowIndex(msg)
+	return i >= nc.rowFirst && i < nc.rowFirst+nc.visibleRows
+}
+
+// notifNavigate moves the cursor in the dropdown, over the whole history: the
+// list scrolls to keep the cursor's row on the card (notifListWindow). It used
+// to stop at the rows the first card-full drew, so an older notification could
+// not be reached at all.
 func notifNavigate(dr int) {
 	if !nc.open {
 		return
 	}
-	nc.cursor += dr
-	if nc.cursor < 0 {
-		nc.cursor = 0
+	nc.cursor = clampIndex(nc.cursor+dr, notifHistoryLen())
+}
+
+// notifWheel walks the open centre's rows under the mouse wheel, a row a
+// notch like the D-pad. It reports whether the wheel was the centre's.
+func notifWheel(dy int32) bool {
+	if !nc.open {
+		return false
 	}
-	max := nc.visibleRows - 1
-	if max < 0 {
-		max = notifMaxRows - 1
+	switch {
+	case dy > 0:
+		notifNavigate(-1)
+	case dy < 0:
+		notifNavigate(1)
 	}
-	notifHistoryMu.Lock()
-	last := len(nc.history) - 1
-	notifHistoryMu.Unlock()
-	if max > last {
-		max = last
-	}
-	if max < 0 {
-		max = 0
-	}
-	if nc.cursor > max {
-		nc.cursor = max
-	}
+	return true
 }
 
 // notifClearAll clears all notifications. The dropdown stays open so the
@@ -742,6 +891,7 @@ func notifClearAll() {
 	nc.history = nc.history[:0]
 	notifHistoryMu.Unlock()
 	nc.cursor = 0
+	nc.scroll = 0
 }
 
 // notifDismiss closes the dropdown.
@@ -782,12 +932,12 @@ func notifHandleClick(x, y int32) bool {
 		PlayActivateSound()
 		return true
 	}
-	// Clicking a row moves the selection there, so a touch user can see which
-	// message the next action would apply to instead of only dismissing the card.
+	// Clicking a row moves the selection there, which also shows its whole
+	// message; rowRects[0] is history row rowFirst once the list has scrolled.
 	for i, r := range nc.rowRects {
 		if pointInRect(x, y, r) {
-			if nc.cursor != i {
-				nc.cursor = i
+			if row := nc.rowFirst + i; nc.cursor != row {
+				nc.cursor = row
 				PlayNavSound()
 			}
 			break

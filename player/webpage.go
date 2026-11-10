@@ -22,6 +22,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,11 +50,17 @@ const (
 	webMaxRows = 12000
 )
 
-// webElement is the little of an open element the CSS matcher needs.
+// webElement is the little of an open element the CSS matcher needs. attrs is
+// a pointer so every copy of the element (its frame, and each chain built while
+// its descendants are styled) shares one attribute list, parsed at most once
+// and only when a selector asks for an attribute. target marks the element the
+// page address's fragment names, which is what :target matches.
 type webElement struct {
 	tag     string
 	id      string
 	classes []string
+	attrs   *webAttrSet
+	target  bool
 }
 
 // The layout enums are small integers rather than strings: they are copied into
@@ -606,6 +613,26 @@ type webRule struct {
 	// kept apart because they outrank every normal declaration, whatever the
 	// selector's specificity.
 	important map[string]string
+	// sel is the selector compiled once, when the sheet is parsed. hides marks
+	// a rule whose declarations would hide what it matches; the matcher only
+	// applies such a rule on a definite match (see webSelector.matches).
+	// reveals marks one that would show it (display other than none,
+	// visibility: visible, a non-zero opacity): a reader nobody can hover or
+	// focus still reaches what such a rule opens on :hover or :focus.
+	sel     *webSelector
+	hides   bool
+	reveals bool
+}
+
+// mode is how the rule is matched against an element (webSelMode).
+func (r *webRule) mode() webSelMode {
+	switch {
+	case r.hides:
+		return webSelStrict
+	case r.reveals:
+		return webSelReveal
+	}
+	return webSelLenient
 }
 
 // webFrame is an open element during the streaming parse.
@@ -681,47 +708,337 @@ func browserDocumentFor(variable string) *webDocument {
 
 // --- CSS parsing ----------------------------------------------------------
 
-// webMediaBlockApplies decides whether the rules inside an at-rule block belong
+// webMediaBlockApplies decides whether the rules inside an @media block belong
 // on the reader's screen.
 //
-// The reader has exactly one medium: a handheld screen. So a width, orientation
-// or feature query keeps its rules — the reader is the media that matters — but
-// a block that only targets `print` or `speech` must not. A print sheet strips
-// the page's navigation with display:none and re-colours it for paper; applying
-// that on the screen is how a page arrives with its header and menu missing.
+// The reader has one medium: the handheld's screen, at the size page scripts
+// see too (webMediaViewport). A block that only targets `print` or `speech`
+// never applies — a print sheet strips the navigation with display:none and
+// re-colours the page for paper, which is how a page arrived with its header
+// and menu missing — and width, height, orientation and aspect-ratio queries
+// are answered for that one screen. They used to all apply at once, which was
+// harmless for most sheets and wrong for paired ones: Tailwind's md:hidden and
+// max-md:hidden each hid one copy of the content, and applied together they hid
+// both. A feature the reader does not model (hover, pointer, colour schemes,
+// resolution) still applies, as before.
 func webMediaBlockApplies(query string) bool {
+	w, h := webMediaViewport()
+	return webMediaQueryApplies(query, w, h)
+}
+
+// webMediaViewport is the size media queries are judged against: the screen the
+// reader draws on, which is also what page scripts get as innerWidth and
+// innerHeight (webdom_runtime.go's configJSON), so a script's matchMedia and
+// the sheet agree.
+func webMediaViewport() (float64, float64) {
+	w, h := float64(screenWidth), float64(screenHeight)
+	if w <= 0 || h <= 0 {
+		w, h = 1280, 720
+	}
+	return w, h
+}
+
+// webMediaQueryApplies evaluates a media query list (with or without its
+// "@media" keyword) for a viewport of w × h CSS pixels: true when any query of
+// the list holds. An empty list is "all".
+func webMediaQueryApplies(query string, w, h float64) bool {
 	query = strings.ToLower(strings.TrimSpace(query))
 	query = strings.TrimSpace(strings.TrimPrefix(query, "@media"))
-	for _, part := range strings.Split(query, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		negated := strings.HasPrefix(part, "not ")
-		applies := true
-		for _, field := range strings.Fields(part) {
-			switch field {
-			case "and", "not", "only", "or":
-				continue
-			}
-			if strings.HasPrefix(field, "(") {
-				// A feature query with no media type is the screen's.
-				break
-			}
-			switch strings.Trim(field, ",") {
-			case "print", "speech":
-				applies = false
-			}
-			break
-		}
-		if negated {
-			applies = !applies
-		}
-		if applies {
+	if query == "" {
+		return true
+	}
+	for _, part := range webSplitSelectorList(query) {
+		if part = strings.TrimSpace(part); part != "" && webMediaQueryHolds(part, w, h) {
 			return true
 		}
 	}
 	return false
+}
+
+// webMediaQueryHolds evaluates one query: `[not|only] type [and condition]` or
+// a bare condition.
+func webMediaQueryHolds(query string, w, h float64) bool {
+	words := webMediaTokens(query)
+	if len(words) == 0 {
+		return true
+	}
+	i, negate := 0, false
+	switch words[0] {
+	case "not":
+		// `not (feature)` negates a condition, `not screen` the whole query.
+		if len(words) > 1 && !strings.HasPrefix(words[1], "(") {
+			negate, i = true, 1
+		}
+	case "only":
+		i = 1
+	}
+	result := true
+	if i < len(words) && !strings.HasPrefix(words[i], "(") && words[i] != "not" {
+		switch words[i] {
+		case "print", "speech":
+			result = false
+		}
+		i++
+		if i < len(words) && words[i] == "and" {
+			i++
+		}
+	}
+	if i < len(words) {
+		result = result && webMediaCondition(words[i:], w, h)
+	}
+	if negate {
+		result = !result
+	}
+	return result
+}
+
+// webMediaCondition evaluates `not (…)`, or groups joined by `and` or `or`.
+// Anything it cannot read applies, as an unknown feature does.
+func webMediaCondition(words []string, w, h float64) bool {
+	if len(words) == 0 {
+		return true
+	}
+	if words[0] == "not" {
+		if len(words) == 2 {
+			return !webMediaInParens(words[1], w, h)
+		}
+		return true
+	}
+	result := webMediaInParens(words[0], w, h)
+	for i := 1; i+1 < len(words); i += 2 {
+		next := webMediaInParens(words[i+1], w, h)
+		switch words[i] {
+		case "and":
+			result = result && next
+		case "or":
+			result = result || next
+		default:
+			return true
+		}
+	}
+	return result
+}
+
+// webMediaInParens evaluates one parenthesised group: a nested condition or a
+// single feature.
+func webMediaInParens(group string, w, h float64) bool {
+	if len(group) < 2 || group[0] != '(' || group[len(group)-1] != ')' {
+		return true
+	}
+	inner := strings.TrimSpace(group[1 : len(group)-1])
+	if inner == "" {
+		return true
+	}
+	if words := webMediaTokens(inner); len(words) > 1 || strings.HasPrefix(inner, "(") {
+		if words[0] == "not" || strings.HasPrefix(words[0], "(") {
+			return webMediaCondition(words, w, h)
+		}
+	}
+	return webMediaFeature(inner, w, h)
+}
+
+// webMediaTokens splits a query into words and whole parenthesised groups.
+func webMediaTokens(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		if webAttrSpaceByte(s[i]) {
+			i++
+			continue
+		}
+		start := i
+		if s[i] == '(' {
+			depth := 0
+			for i < len(s) {
+				if s[i] == '(' {
+					depth++
+				} else if s[i] == ')' {
+					depth--
+					if depth == 0 {
+						i++
+						break
+					}
+				}
+				i++
+			}
+		} else {
+			for i < len(s) && !webAttrSpaceByte(s[i]) && s[i] != '(' {
+				i++
+			}
+		}
+		out = append(out, s[start:i])
+	}
+	return out
+}
+
+// webMediaFeature evaluates one feature: `name: value` (with min-/max-), the
+// range form (`width < 48rem`, `400px <= width <= 700px`), or a bare name.
+func webMediaFeature(inner string, w, h float64) bool {
+	if colon := strings.IndexByte(inner, ':'); colon >= 0 {
+		name := strings.TrimSpace(inner[:colon])
+		value := strings.TrimSpace(inner[colon+1:])
+		prefix := ""
+		if strings.HasPrefix(name, "min-") || strings.HasPrefix(name, "max-") {
+			prefix, name = name[:3], name[4:]
+		}
+		switch name {
+		case "orientation":
+			switch value {
+			case "landscape":
+				return w > h
+			case "portrait":
+				return h >= w
+			}
+			return true
+		case "aspect-ratio", "device-aspect-ratio":
+			want, ok := webMediaRatio(value)
+			return !ok || webMediaCompare(w/h, prefix, want)
+		}
+		have, ok := webMediaDimension(name, w, h)
+		if !ok {
+			return true
+		}
+		want, ok := webMediaLength(value)
+		return !ok || webMediaCompare(have, prefix, want)
+	}
+	if strings.ContainsAny(inner, "<>=") {
+		return webMediaRange(inner, w, h)
+	}
+	return true
+}
+
+// webMediaDimension is the viewport size a width or height feature asks for.
+func webMediaDimension(name string, w, h float64) (float64, bool) {
+	switch name {
+	case "width", "device-width":
+		return w, true
+	case "height", "device-height":
+		return h, true
+	}
+	return 0, false
+}
+
+// webMediaRange evaluates the range form of a width, height or aspect-ratio
+// feature: one comparison with the name on either side, or the name between
+// two values.
+func webMediaRange(inner string, w, h float64) bool {
+	var parts, ops []string
+	start := 0
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if c != '<' && c != '>' && c != '=' {
+			continue
+		}
+		parts = append(parts, strings.TrimSpace(inner[start:i]))
+		op := string(c)
+		if c != '=' && i+1 < len(inner) && inner[i+1] == '=' {
+			op += "="
+			i++
+		}
+		ops = append(ops, op)
+		start = i + 1
+	}
+	parts = append(parts, strings.TrimSpace(inner[start:]))
+	if len(ops) == 0 || len(ops) > 2 || len(parts) != len(ops)+1 {
+		return true
+	}
+	// The feature's own value, and a parser for the values it is compared with.
+	feature := func(name string) (float64, func(string) (float64, bool), bool) {
+		if name == "aspect-ratio" || name == "device-aspect-ratio" {
+			return w / h, webMediaRatio, true
+		}
+		have, ok := webMediaDimension(name, w, h)
+		return have, webMediaLength, ok
+	}
+	if len(ops) == 2 {
+		have, parse, ok := feature(parts[1])
+		if !ok {
+			return true
+		}
+		low, okLow := parse(parts[0])
+		high, okHigh := parse(parts[2])
+		if !okLow || !okHigh {
+			return true
+		}
+		return webMediaCmp(low, ops[0], have) && webMediaCmp(have, ops[1], high)
+	}
+	if have, parse, ok := feature(parts[0]); ok {
+		want, valid := parse(parts[1])
+		return !valid || webMediaCmp(have, ops[0], want)
+	}
+	if have, parse, ok := feature(parts[1]); ok {
+		want, valid := parse(parts[0])
+		return !valid || webMediaCmp(want, ops[0], have)
+	}
+	return true
+}
+
+// webMediaCompare applies a min-/max- prefix ("" is an exact match).
+func webMediaCompare(have float64, prefix string, want float64) bool {
+	switch prefix {
+	case "min":
+		return have >= want
+	case "max":
+		return have <= want
+	}
+	return math.Abs(have-want) < 0.01
+}
+
+// webMediaCmp applies one range operator: a op b.
+func webMediaCmp(a float64, op string, b float64) bool {
+	switch op {
+	case "<":
+		return a < b
+	case "<=":
+		return a <= b
+	case ">":
+		return a > b
+	case ">=":
+		return a >= b
+	}
+	return math.Abs(a-b) < 0.01
+}
+
+// webMediaLength reads a media query length in CSS pixels: px, em and rem
+// (16px, the initial font size media queries use whatever the page sets), pt,
+// or a bare 0. Anything else reads as unknown.
+func webMediaLength(value string) (float64, bool) {
+	value = strings.TrimSpace(value)
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '.' || value[end] == '-' || value[end] == '+') {
+		end++
+	}
+	n, err := strconv.ParseFloat(value[:end], 64)
+	if err != nil {
+		return 0, false
+	}
+	switch unit := strings.TrimSpace(value[end:]); unit {
+	case "px":
+		return n, true
+	case "em", "rem":
+		return n * 16, true
+	case "pt":
+		return n * 4 / 3, true
+	case "":
+		return n, n == 0
+	}
+	return 0, false
+}
+
+// webMediaRatio reads an aspect ratio: "16/9", "16 / 9" or a plain number.
+func webMediaRatio(value string) (float64, bool) {
+	num, den, found := strings.Cut(value, "/")
+	a, err := strconv.ParseFloat(strings.TrimSpace(num), 64)
+	if err != nil || a <= 0 {
+		return 0, false
+	}
+	if !found {
+		return a, true
+	}
+	b, err := strconv.ParseFloat(strings.TrimSpace(den), 64)
+	if err != nil || b <= 0 {
+		return 0, false
+	}
+	return a / b, true
 }
 
 // parseWebCSS turns a stylesheet into rules. An at-rule block is skipped unless
@@ -781,7 +1098,11 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule) {
 		if len(decls) == 0 && len(important) == 0 {
 			continue
 		}
-		for _, selector := range strings.Split(selectorText, ",") {
+		hides := webDeclsHide(decls) || webDeclsHide(important)
+		reveals := webDeclsReveal(decls) || webDeclsReveal(important)
+		// Split on top-level commas only: `:is(.a, .b)` and `[title="a,b"]`
+		// are one selector each, and a plain Split cut them into broken halves.
+		for _, selector := range webSplitSelectorList(selectorText) {
 			selector = strings.TrimSpace(selector)
 			if selector == "" {
 				continue
@@ -789,12 +1110,22 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule) {
 			if len(*rules) >= webCSSMaxRules {
 				break
 			}
+			sel, specificity := webCompileSelector(selector)
+			if sel.never {
+				// A ::before/::after/::marker rule styles a generated box, never
+				// an element. Icon fonts ship a thousand of them; dropping them
+				// here keeps them out of every element's matching loop.
+				continue
+			}
 			*rules = append(*rules, webRule{
 				selector:    selector,
-				specificity: webSelectorSpecificity(selector),
+				specificity: specificity,
 				order:       *order,
 				decls:       decls,
 				important:   important,
+				sel:         sel,
+				hides:       hides,
+				reveals:     reveals,
 			})
 			*order++
 		}
@@ -1350,162 +1681,1401 @@ func (p *webCalcParser) factor() (webCalcValue, bool) {
 	return webCalcValue{}, false
 }
 
-// webSelectorParts splits a selector into compounds on descendant combinators.
-// Child/sibling combinators are treated as descendant, which is close enough
-// for a reader and never matches less than the real thing would.
-func webSelectorParts(sel string) []string {
-	var parts []string
-	start := -1
-	for i := 0; i < len(sel); i++ {
-		switch sel[i] {
-		case ' ', '\t', '\n', '>', '+', '~':
-			if start >= 0 {
-				parts = append(parts, sel[start:i])
-				start = -1
-			}
-		default:
-			if start < 0 {
-				start = i
-			}
-		}
+// --- CSS selectors --------------------------------------------------------
+//
+// Selectors are compiled once, when a sheet is parsed, and matched against the
+// chain of open elements: outermost first, the element being styled last. The
+// streaming parser keeps no DOM, so a few selectors cannot be decided from a
+// start tag — those that depend on a later sibling (:last-child), on the
+// element's content (:empty, :has()) or on the previous sibling (+, ~). They
+// answer "maybe".
+//
+// The matcher used to assume that every attribute selector and every pseudo
+// held. That was harmless for a colour and fatal for display:none: a reset
+// sheet's `[hidden] { display: none }`, a Vue or Alpine app's `[v-cloak]` and
+// `[x-cloak]`, a web-component site's `:not(:defined)` or an icon font's
+// `.icon::before { display: none }` matched every element, and the page drew
+// blank. Attribute selectors and the pseudo-classes a static page can answer
+// are now evaluated, a selector aimed at a pseudo-element never styles the
+// element itself, and a rule that would hide what it matches only applies on a
+// definite match.
+
+// webSelTri is a selector test's answer. webSelMaybe is one the streaming
+// parser cannot decide from a start tag.
+type webSelTri uint8
+
+const (
+	webSelNo webSelTri = iota
+	webSelYes
+	webSelMaybe
+)
+
+func webSelBool(ok bool) webSelTri {
+	if ok {
+		return webSelYes
 	}
-	if start >= 0 {
-		parts = append(parts, sel[start:])
-	}
-	return parts
+	return webSelNo
 }
 
-// webCompoundTokens splits `div.note#main:hover` into its simple selectors.
-func webCompoundTokens(compound string) []string {
-	var tokens []string
-	for i := 0; i < len(compound); {
-		switch compound[i] {
-		case '.', '#':
-			start := i
-			i++
-			for i < len(compound) && webSelectorNameByte(compound[i]) {
-				i++
+// webSelNot negates an answer; an undecidable one stays undecidable.
+func webSelNot(r webSelTri) webSelTri {
+	switch r {
+	case webSelYes:
+		return webSelNo
+	case webSelNo:
+		return webSelYes
+	}
+	return webSelMaybe
+}
+
+// webSelector is one selector of a rule. Matching used to split the selector
+// text again for every element of the page, which on a large sheet was most of
+// what styling a page cost on the handheld.
+type webSelector struct {
+	// compounds run left to right; compounds[i].comb joins compounds[i] to
+	// compounds[i-1].
+	compounds []webSelCompound
+	// never marks a selector that cannot match an element: one aimed at a
+	// pseudo-element (its declarations style a generated box such as ::before,
+	// never the element) or one that does not parse, which a browser drops too.
+	never bool
+}
+
+// webSelCompound is one compound selector, such as `div.note[data-x]:hover`.
+type webSelCompound struct {
+	tag     string // lower-case type selector; "" is any element
+	comb    byte   // ' ', '>', '+' or '~' to the compound before; 0 for the first
+	simples []webSelSimple
+}
+
+// webSelSimple is one simple selector inside a compound.
+type webSelSimple struct {
+	kind uint8 // webSelID … webSelPseudo
+	op   uint8 // attribute operator or pseudo-class
+	// fold compares an attribute value ASCII case-insensitively ([a=v i], or
+	// an attribute HTML defines that way); value is then already lower-case.
+	fold  bool
+	name  string // id, class, attribute name, or the direction of :dir()
+	value string
+	// words are the language ranges of :lang(); args are the selectors of
+	// :not(), :is() and :where().
+	words []string
+	args  []*webSelector
+}
+
+// Simple selector kinds, in the order a compound tests them: the cheap checks
+// come first, so an element whose class already fails never has its attributes
+// parsed.
+const (
+	webSelID uint8 = iota
+	webSelClass
+	webSelAttr
+	webSelPseudo
+)
+
+// Attribute selector operators.
+const (
+	webAttrExists uint8 = iota // [a]
+	webAttrEquals              // [a=v]
+	webAttrWord                // [a~=v]
+	webAttrDash                // [a|=v]
+	webAttrPrefix              // [a^=v]
+	webAttrSuffix              // [a$=v]
+	webAttrSubstr              // [a*=v]
+)
+
+// The pseudo-classes the matcher tells apart. webPseudoMaybe is every one it
+// cannot decide from a start tag (:nth-child(), :last-child, :has(), :valid…);
+// webPseudoNever is a state that is false on a page nobody is playing, and
+// webPseudoUser a pointer or focus state (:hover, :focus…), false too except
+// for a rule that reveals (webSelReveal). webPseudoTarget is :target, decided
+// by the page address's fragment.
+const (
+	webPseudoMaybe uint8 = iota
+	webPseudoNever
+	webPseudoUser
+	webPseudoTarget
+	webPseudoRoot
+	webPseudoLink
+	webPseudoChecked
+	webPseudoDisabled
+	webPseudoEnabled
+	webPseudoRequired
+	webPseudoOptional
+	webPseudoReadOnly
+	webPseudoReadWrite
+	webPseudoPlaceholder
+	webPseudoEmpty
+	webPseudoDefined
+	webPseudoOpen
+	webPseudoLang
+	webPseudoDir
+	webPseudoNot
+	webPseudoIs
+)
+
+// webSelMaxDepth bounds nested :not()/:is() arguments, so a hostile sheet
+// cannot make the compiler recurse without end.
+const webSelMaxDepth = 4
+
+// webSelMode is how a rule is matched. webSelLenient is the reader's old
+// leniency — an undecidable test is assumed to hold and every combinator reads
+// as a descendant one — which costs nothing for a colour or a margin.
+// webSelStrict is for a rule that would hide what it matches: it applies only
+// on a definite match. webSelReveal is lenient too, and also answers the
+// pointer and focus states "maybe": a reader nobody can hover or focus would
+// otherwise never reach a sub-menu, tooltip or panel a page shows on :hover or
+// :focus-within.
+type webSelMode uint8
+
+const (
+	webSelLenient webSelMode = iota
+	webSelStrict
+	webSelReveal
+)
+
+// webSelSpec is a selector's specificity: ids; then classes, attributes and
+// pseudo-classes; then types and pseudo-elements.
+type webSelSpec struct{ a, b, c int }
+
+func (s webSelSpec) less(o webSelSpec) bool {
+	if s.a != o.a {
+		return s.a < o.a
+	}
+	if s.b != o.b {
+		return s.b < o.b
+	}
+	return s.c < o.c
+}
+
+// packed folds the three counts into one int that orders the same way. The old
+// ids*100+classes*10+types sum let eleven classes outrank an id.
+func (s webSelSpec) packed() int {
+	return min(s.a, 999)*1000000 + min(s.b, 999)*1000 + min(s.c, 999)
+}
+
+// webSelParser reads one selector.
+type webSelParser struct {
+	src   string
+	pos   int
+	depth int
+	sel   *webSelector
+	spec  webSelSpec
+}
+
+// webCompileSelector compiles one selector — a list is split first, see
+// webSplitSelectorList — and returns it with its packed specificity.
+func webCompileSelector(text string) (*webSelector, int) {
+	sel, spec := webCompileSelectorAt(text, 0)
+	return sel, spec.packed()
+}
+
+func webCompileSelectorAt(text string, depth int) (*webSelector, webSelSpec) {
+	p := &webSelParser{src: text, depth: depth, sel: &webSelector{}}
+	var comb byte
+	for {
+		spaced := p.skipSpace()
+		if p.pos >= len(p.src) {
+			break
+		}
+		if c := p.src[p.pos]; c == '>' || c == '+' || c == '~' {
+			// A second combinator, or one with no compound before it (a
+			// relative selector, valid only inside :has()), does not parse.
+			if (comb != 0 && comb != ' ') || len(p.sel.compounds) == 0 {
+				p.sel.never = true
+				return p.sel, p.spec
 			}
-			tokens = append(tokens, compound[start:i])
-		case '[':
-			start := i
-			if end := strings.IndexByte(compound[i:], ']'); end >= 0 {
-				i += end + 1
+			comb = c
+			p.pos++
+			continue
+		}
+		if spaced && comb == 0 && len(p.sel.compounds) > 0 {
+			comb = ' '
+		}
+		compound, ok := p.compound()
+		if !ok {
+			p.sel.never = true
+			return p.sel, p.spec
+		}
+		compound.comb = comb
+		comb = 0
+		p.sel.compounds = append(p.sel.compounds, compound)
+	}
+	if (comb != 0 && comb != ' ') || len(p.sel.compounds) == 0 {
+		p.sel.never = true
+	}
+	return p.sel, p.spec
+}
+
+// skipSpace steps over whitespace and reports whether there was any.
+func (p *webSelParser) skipSpace() bool {
+	start := p.pos
+	for p.pos < len(p.src) && webAttrSpaceByte(p.src[p.pos]) {
+		p.pos++
+	}
+	return p.pos > start
+}
+
+// compound reads one compound selector: an optional type (or *), then any
+// number of #id, .class, [attr] and :pseudo.
+func (p *webSelParser) compound() (webSelCompound, bool) {
+	var c webSelCompound
+	start := p.pos
+	if ch := p.src[p.pos]; ch == '*' || ch == '|' || webSelIdentStart(p.src, p.pos) {
+		tag, ok := p.qualifiedName()
+		if !ok {
+			return c, false
+		}
+		if tag != "*" {
+			c.tag = asciiLower(tag)
+			p.spec.c++
+		}
+	}
+	for p.pos < len(p.src) {
+		ch := p.src[p.pos]
+		if webAttrSpaceByte(ch) || ch == '>' || ch == '+' || ch == '~' {
+			break
+		}
+		switch ch {
+		case '#', '.':
+			p.pos++
+			name := p.name()
+			if name == "" {
+				return c, false
+			}
+			if ch == '#' {
+				c.simples = append(c.simples, webSelSimple{kind: webSelID, name: name})
+				p.spec.a++
 			} else {
-				i = len(compound)
+				c.simples = append(c.simples, webSelSimple{kind: webSelClass, name: name})
+				p.spec.b++
 			}
-			tokens = append(tokens, compound[start:i])
+		case '[':
+			simple, ok := p.attribute()
+			if !ok {
+				return c, false
+			}
+			c.simples = append(c.simples, simple)
+			p.spec.b++
 		case ':':
-			start := i
-			i++
-			for i < len(compound) && compound[i] == ':' {
-				i++
+			if !p.pseudo(&c) {
+				return c, false
 			}
-			for i < len(compound) && webSelectorNameByte(compound[i]) {
-				i++
-			}
-			if i < len(compound) && compound[i] == '(' {
-				if end := strings.IndexByte(compound[i:], ')'); end >= 0 {
-					i += end + 1
-				}
-			}
-			tokens = append(tokens, compound[start:i])
 		default:
-			start := i
-			for i < len(compound) && compound[i] != '.' && compound[i] != '#' &&
-				compound[i] != ':' && compound[i] != '[' {
-				i++
-			}
-			if token := strings.TrimSpace(compound[start:i]); token != "" {
-				tokens = append(tokens, token)
-			}
+			return c, false
 		}
 	}
-	return tokens
-}
-
-func webSelectorNameByte(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-		c == '-' || c == '_'
-}
-
-func webSelectorSpecificity(selector string) int {
-	ids, classes, tags := 0, 0, 0
-	for _, part := range webSelectorParts(selector) {
-		for _, token := range webCompoundTokens(part) {
-			switch {
-			case strings.HasPrefix(token, "#"):
-				ids++
-			case strings.HasPrefix(token, "."):
-				classes++
-			case strings.HasPrefix(token, "[") || strings.HasPrefix(token, ":"), token == "*":
-				// Attribute and pseudo selectors cannot be evaluated against
-				// this document model; they contribute only specificity.
-			default:
-				tags++
-			}
+	if p.pos == start {
+		return c, false
+	}
+	// Test order (ids, classes, attributes, pseudo-classes) by a stable
+	// insertion sort: a compound holds a handful of simples, and
+	// sort.SliceStable built a reflection swapper for every compound of a sheet.
+	for i := 1; i < len(c.simples); i++ {
+		for j := i; j > 0 && c.simples[j].kind < c.simples[j-1].kind; j-- {
+			c.simples[j], c.simples[j-1] = c.simples[j-1], c.simples[j]
 		}
 	}
-	return ids*100 + classes*10 + tags
+	return c, true
 }
 
-// webSelectorMatches matches a selector against the chain of open elements,
-// right to left, which is how descendant selectors are supposed to behave.
-func webSelectorMatches(selector string, chain []webElement) bool {
-	parts := webSelectorParts(selector)
-	if len(parts) == 0 || len(chain) == 0 {
+// qualifiedName reads a type selector or * with an optional namespace prefix
+// (svg|rect, *|a, |a). Namespaces are not modelled: the local name decides.
+func (p *webSelParser) qualifiedName() (string, bool) {
+	name := ""
+	if p.src[p.pos] == '*' {
+		p.pos++
+		name = "*"
+	} else if p.src[p.pos] != '|' {
+		name = p.name()
+	}
+	if p.pos < len(p.src) && p.src[p.pos] == '|' && (p.pos+1 >= len(p.src) || p.src[p.pos+1] != '=') {
+		p.pos++
+		switch {
+		case p.pos < len(p.src) && p.src[p.pos] == '*':
+			p.pos++
+			name = "*"
+		case webSelIdentStart(p.src, p.pos):
+			name = p.name()
+		default:
+			return "", false
+		}
+	}
+	return name, name != ""
+}
+
+// webSelIdentStart reports whether an identifier starts at s[i]: a letter, '_',
+// '-', a non-ASCII byte or an escape.
+func webSelIdentStart(s string, i int) bool {
+	if i >= len(s) {
 		return false
 	}
-	if !webCompoundMatches(parts[len(parts)-1], chain[len(chain)-1]) {
+	c := s[i]
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '-' || c >= 0x80 ||
+		c == '\\' && i+1 < len(s) && s[i+1] != '\n'
+}
+
+// name reads a CSS name with its escapes decoded. Tailwind's `.md\:flex` is the
+// class "md:flex"; it used to be read as the class "md" plus a stray token.
+func (p *webSelParser) name() string {
+	start := p.pos
+	var b []byte
+	for p.pos < len(p.src) {
+		c := p.src[p.pos]
+		if webSelectorNameByte(c) || c >= 0x80 {
+			if b != nil {
+				b = append(b, c)
+			}
+			p.pos++
+			continue
+		}
+		if c != '\\' || p.pos+1 >= len(p.src) || p.src[p.pos+1] == '\n' {
+			break
+		}
+		if b == nil {
+			b = append([]byte(nil), p.src[start:p.pos]...)
+		}
+		p.pos++
+		b = utf8.AppendRune(b, p.escape())
+	}
+	if b != nil {
+		return string(b)
+	}
+	return p.src[start:p.pos]
+}
+
+// escape decodes the CSS escape after a backslash: up to six hex digits (and
+// the one whitespace character that may end them), or the next character as
+// itself.
+func (p *webSelParser) escape() rune {
+	if p.pos >= len(p.src) {
+		return utf8.RuneError
+	}
+	if webSelHexVal(p.src[p.pos]) < 0 {
+		r, size := utf8.DecodeRuneInString(p.src[p.pos:])
+		p.pos += size
+		return r
+	}
+	var r rune
+	for n := 0; n < 6 && p.pos < len(p.src); n++ {
+		v := webSelHexVal(p.src[p.pos])
+		if v < 0 {
+			break
+		}
+		r = r*16 + rune(v)
+		p.pos++
+	}
+	if p.pos < len(p.src) && webAttrSpaceByte(p.src[p.pos]) {
+		// CSS reads "\r\n" as one whitespace character.
+		if p.src[p.pos] == '\r' && p.pos+1 < len(p.src) && p.src[p.pos+1] == '\n' {
+			p.pos++
+		}
+		p.pos++
+	}
+	if r == 0 || r > utf8.MaxRune || r >= 0xD800 && r <= 0xDFFF {
+		return utf8.RuneError
+	}
+	return r
+}
+
+func webSelHexVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c) - '0'
+	case c >= 'a' && c <= 'f':
+		return int(c) - 'a' + 10
+	case c >= 'A' && c <= 'F':
+		return int(c) - 'A' + 10
+	}
+	return -1
+}
+
+// str reads a quoted string with its escapes decoded.
+func (p *webSelParser) str() (string, bool) {
+	quote := p.src[p.pos]
+	p.pos++
+	start := p.pos
+	var b []byte
+	for p.pos < len(p.src) {
+		c := p.src[p.pos]
+		switch {
+		case c == quote:
+			p.pos++
+			if b != nil {
+				return string(b), true
+			}
+			return p.src[start : p.pos-1], true
+		case c == '\n':
+			return "", false // an unclosed string ends at the line, like the selector
+		case c == '\\':
+			if b == nil {
+				b = append([]byte(nil), p.src[start:p.pos]...)
+			}
+			p.pos++
+			if p.pos < len(p.src) && p.src[p.pos] == '\n' {
+				p.pos++ // an escaped newline continues the string
+				continue
+			}
+			b = utf8.AppendRune(b, p.escape())
+		default:
+			if b != nil {
+				b = append(b, c)
+			}
+			p.pos++
+		}
+	}
+	return "", false
+}
+
+// attribute reads [name], [name op value] and [name op value i|s].
+func (p *webSelParser) attribute() (webSelSimple, bool) {
+	s := webSelSimple{kind: webSelAttr}
+	p.pos++ // '['
+	p.skipSpace()
+	if p.pos >= len(p.src) {
+		return s, false
+	}
+	name, ok := p.qualifiedName()
+	if !ok || name == "*" {
+		return s, false
+	}
+	s.name = asciiLower(name)
+	p.skipSpace()
+	if p.pos >= len(p.src) {
+		return s, false
+	}
+	switch p.src[p.pos] {
+	case ']':
+		p.pos++
+		s.op = webAttrExists
+		return s, true
+	case '=':
+		s.op = webAttrEquals
+		p.pos++
+	case '~', '|', '^', '$', '*':
+		if p.pos+1 >= len(p.src) || p.src[p.pos+1] != '=' {
+			return s, false
+		}
+		switch p.src[p.pos] {
+		case '~':
+			s.op = webAttrWord
+		case '|':
+			s.op = webAttrDash
+		case '^':
+			s.op = webAttrPrefix
+		case '$':
+			s.op = webAttrSuffix
+		default:
+			s.op = webAttrSubstr
+		}
+		p.pos += 2
+	default:
+		return s, false
+	}
+	p.skipSpace()
+	if p.pos >= len(p.src) {
+		return s, false
+	}
+	if q := p.src[p.pos]; q == '"' || q == '\'' {
+		if s.value, ok = p.str(); !ok {
+			return s, false
+		}
+	} else if s.value = p.name(); s.value == "" {
+		return s, false
+	}
+	p.skipSpace()
+	s.fold = webSelFoldedAttr(s.name)
+	if p.pos < len(p.src) && p.src[p.pos] != ']' {
+		switch asciiLower(p.name()) {
+		case "i":
+			s.fold = true
+		case "s":
+			s.fold = false
+		default:
+			return s, false
+		}
+		p.skipSpace()
+	}
+	if p.pos >= len(p.src) || p.src[p.pos] != ']' {
+		return s, false
+	}
+	p.pos++
+	if s.fold {
+		s.value = asciiLower(s.value)
+	}
+	return s, true
+}
+
+// webSelFoldedAttr lists the attributes whose values HTML compares
+// case-insensitively in a selector, so `input[type=checkbox]` still matches
+// type="CHECKBOX". The `s` flag turns that off.
+func webSelFoldedAttr(name string) bool {
+	switch name {
+	case "accept", "accept-charset", "align", "alink", "axis", "bgcolor", "charset", "checked",
+		"clear", "codetype", "color", "compact", "declare", "defer", "dir", "direction", "disabled",
+		"enctype", "face", "frame", "hreflang", "http-equiv", "lang", "language", "link", "media",
+		"method", "multiple", "nohref", "noresize", "noshade", "nowrap", "readonly", "rel", "rev",
+		"rules", "scope", "scrolling", "selected", "shape", "target", "text", "type", "valign",
+		"valuetype", "vlink":
+		return true
+	}
+	return false
+}
+
+// pseudo reads a pseudo-class or a pseudo-element, with its argument if any.
+func (p *webSelParser) pseudo(c *webSelCompound) bool {
+	p.pos++ // ':'
+	element := false
+	if p.pos < len(p.src) && p.src[p.pos] == ':' {
+		element = true
+		p.pos++
+	}
+	name := asciiLower(p.name())
+	if name == "" {
+		return false
+	}
+	args, hasArgs := "", false
+	if p.pos < len(p.src) && p.src[p.pos] == '(' {
+		end := webSelParenEnd(p.src, p.pos)
+		if end < 0 {
+			return false
+		}
+		args, hasArgs = p.src[p.pos+1:end], true
+		p.pos = end + 1
+	}
+	switch name {
+	case "before", "after", "first-line", "first-letter":
+		element = true // the CSS2 single-colon spelling of a pseudo-element
+	}
+	if element {
+		// The declarations style a generated box (::before, ::marker, a
+		// placeholder, a scrollbar), never the element itself.
+		p.sel.never = true
+		p.spec.c++
+		return true
+	}
+	s := webSelSimple{kind: webSelPseudo, op: webPseudoMaybe}
+	switch name {
+	case "hover", "active", "focus", "focus-visible", "focus-within":
+		s.op = webPseudoUser
+	case "target":
+		s.op = webPseudoTarget
+	case "visited", "target-within", "fullscreen", "modal", "popover-open", "picture-in-picture",
+		"user-invalid", "user-valid", "autofill", "playing", "paused", "seeking", "buffering",
+		"stalled", "current", "past", "future", "host", "host-context", "has-slotted",
+		"active-view-transition", "active-view-transition-type":
+		// :host and friends only ever match inside a shadow tree.
+		s.op = webPseudoNever
+	case "root", "scope":
+		s.op = webPseudoRoot
+	case "link", "any-link", "-webkit-any-link", "-moz-any-link":
+		s.op = webPseudoLink
+	case "checked":
+		s.op = webPseudoChecked
+	case "disabled":
+		s.op = webPseudoDisabled
+	case "enabled":
+		s.op = webPseudoEnabled
+	case "required":
+		s.op = webPseudoRequired
+	case "optional":
+		s.op = webPseudoOptional
+	case "read-only", "-moz-read-only":
+		s.op = webPseudoReadOnly
+	case "read-write", "-moz-read-write":
+		s.op = webPseudoReadWrite
+	case "placeholder-shown":
+		s.op = webPseudoPlaceholder
+	case "empty":
+		s.op = webPseudoEmpty
+	case "defined":
+		s.op = webPseudoDefined
+	case "open":
+		s.op = webPseudoOpen
+	case "lang":
+		for _, part := range webSplitSelectorList(args) {
+			if part = strings.Trim(strings.TrimSpace(part), `"'`); part != "" {
+				s.words = append(s.words, asciiLower(part))
+			}
+		}
+		if len(s.words) > 0 {
+			s.op = webPseudoLang
+		}
+	case "dir":
+		s.op = webPseudoDir
+		s.name = asciiLower(strings.TrimSpace(args))
+	case "not", "is", "matches", "where", "has", "-webkit-any", "-moz-any":
+		if !hasArgs {
+			return false
+		}
+		p.selectorArgs(c, s, name, args)
+		return true
+	default:
+		if strings.HasPrefix(name, "-") {
+			// Another engine's state or part (:-moz-focusring,
+			// :-webkit-autofill, :-ms-input-placeholder): false here, and
+			// dropped outright by every browser of another engine.
+			s.op = webPseudoNever
+		}
+	}
+	c.simples = append(c.simples, s)
+	p.spec.b++
+	return true
+}
+
+// selectorArgs compiles the selector list of :not(), :is(), :where() or :has().
+// Its specificity is that of its most specific argument (:where() adds none).
+// A :has() argument looks at descendants the parser has not seen yet, so it is
+// compiled for that specificity only and the test stays undecidable.
+//
+// An argument that cannot match an element (a pseudo-element, or one that does
+// not parse) adds no specificity. :is() and :where() forgive it — it simply
+// matches nothing — but :not() does not: a browser drops `:not(::before)` and
+// an empty `:not()` with the whole rule, where the matcher used to read them as
+// "not this" and match every element.
+func (p *webSelParser) selectorArgs(c *webSelCompound, s webSelSimple, name, args string) {
+	switch name {
+	case "not":
+		s.op = webPseudoNot
+	case "has":
+		s.op = webPseudoMaybe
+	default:
+		s.op = webPseudoIs
+	}
+	var best webSelSpec
+	if p.depth < webSelMaxDepth {
+		for _, part := range webSplitSelectorList(args) {
+			part = strings.TrimSpace(part)
+			if name == "has" {
+				part = strings.TrimSpace(strings.TrimLeft(part, ">+~"))
+			}
+			if part == "" {
+				continue
+			}
+			arg, spec := webCompileSelectorAt(part, p.depth+1)
+			if arg.never {
+				if name == "not" {
+					p.sel.never = true
+				}
+			} else if best.less(spec) {
+				best = spec
+			}
+			if name != "has" {
+				s.args = append(s.args, arg)
+			}
+		}
+		if name == "not" && len(s.args) == 0 {
+			p.sel.never = true
+		}
+	} else {
+		s.op = webPseudoMaybe
+	}
+	if name != "where" {
+		p.spec.a += best.a
+		p.spec.b += best.b
+		p.spec.c += best.c
+	}
+	c.simples = append(c.simples, s)
+}
+
+// webSelParenEnd finds the ')' closing the '(' at open, skipping quoted strings,
+// escapes and nested brackets.
+func webSelParenEnd(src string, open int) int {
+	depth := 0
+	var quote byte
+	for i := open; i < len(src); i++ {
+		c := src[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\\':
+			i++
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// webSplitSelectorList splits a selector list on its top-level commas.
+func webSplitSelectorList(text string) []string {
+	var parts []string
+	depth, start := 0, 0
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\\':
+			i++
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '(' || c == '[':
+			depth++
+		case c == ')' || c == ']':
+			if depth > 0 {
+				depth--
+			}
+		case c == ',' && depth == 0:
+			parts = append(parts, text[start:i])
+			start = i + 1
+		}
+	}
+	return append(parts, text[start:])
+}
+
+// webDeclsHide reports whether declarations would hide what they style, the
+// way applyWebDecls reads display and visibility — or fade it out entirely:
+// the reader paints opacity, and children inherit the fade, so `opacity: 0`
+// makes text as invisible as display:none does (a web-component site's
+// `:not(:defined) { opacity: 0 }` would otherwise blank every custom element).
+// A value written with var() counts too: it may resolve to none or to 0.
+func webDeclsHide(decls map[string]string) bool {
+	for _, key := range [...]string{"display", "visibility"} {
+		value, ok := decls[key]
+		if !ok {
+			continue
+		}
+		lower := asciiLower(strings.TrimSpace(value))
+		if lower == "none" || lower == "hidden" || strings.Contains(lower, "var(") {
+			return true
+		}
+	}
+	if value, ok := decls["opacity"]; ok {
+		if strings.Contains(asciiLower(value), "var(") {
+			return true
+		}
+		if alpha, valid := webOpacityValue(value); valid && alpha <= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// webDeclsReveal reports whether declarations would show what they style: a
+// display other than none, visibility: visible, or full opacity. A menu that
+// opens on :hover or a tooltip shown on :focus is written that way, and those
+// states never hold on the reader (webSelReveal). A partial opacity is not a
+// reveal: `a:hover { opacity: .8 }` is a hover effect, and applying it as one
+// would fade every link on the page.
+func webDeclsReveal(decls map[string]string) bool {
+	if value, ok := decls["display"]; ok {
+		lower := asciiLower(strings.TrimSpace(value))
+		if lower != "" && lower != "none" && !strings.Contains(lower, "var(") {
+			return true
+		}
+	}
+	if value, ok := decls["visibility"]; ok && asciiLower(strings.TrimSpace(value)) == "visible" {
+		return true
+	}
+	if value, ok := decls["opacity"]; ok {
+		if alpha, valid := webOpacityValue(value); valid && alpha >= 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// matches reports whether the selector matches the last element of chain; the
+// elements before it are its open ancestors, outermost first.
+//
+// hiding is set for a rule whose declarations would hide what it matches. Such
+// a rule must not match on a guess: an undecidable test counts against it, `>`
+// is checked against the real parent, and `+` or `~` fail it (the previous
+// sibling is long gone in a streaming parse). Every other rule keeps the
+// reader's old leniency — an undecidable test is assumed to hold and every
+// combinator is read as a descendant one. A colour or a margin applied a little
+// too widely costs nothing, and the open-element stack of a page that leaves
+// its <p> and <li> unclosed is deeper than the real tree, which an exact `>`
+// would punish.
+func (sel *webSelector) matches(chain []webElement, hiding bool) bool {
+	if hiding {
+		return sel.matchesIn(chain, webSelStrict)
+	}
+	return sel.matchesIn(chain, webSelLenient)
+}
+
+// matchesIn is matches for a rule's own mode (webRule.mode): strict for a rule
+// that hides, lenient otherwise, with the pointer and focus states answered
+// "maybe" for a rule that reveals.
+func (sel *webSelector) matchesIn(chain []webElement, mode webSelMode) bool {
+	if sel == nil || sel.never || len(sel.compounds) == 0 || len(chain) == 0 {
+		return false
+	}
+	if mode == webSelStrict {
+		return sel.matchesExactly(chain)
+	}
+	last := len(sel.compounds) - 1
+	if webSelCompoundTest(&sel.compounds[last], chain, len(chain)-1, mode) == webSelNo {
 		return false
 	}
 	idx := len(chain) - 2
-	for pi := len(parts) - 2; pi >= 0; pi-- {
-		matched := false
-		for ; idx >= 0; idx-- {
-			if webCompoundMatches(parts[pi], chain[idx]) {
-				matched = true
-				idx--
-				break
-			}
+	for ci := last - 1; ci >= 0; ci-- {
+		for idx >= 0 && webSelCompoundTest(&sel.compounds[ci], chain, idx, mode) == webSelNo {
+			idx--
 		}
-		if !matched {
+		if idx < 0 {
+			return false
+		}
+		idx--
+	}
+	return true
+}
+
+// matchesExactly is matches for a hiding rule. A run of compounds joined by `>`
+// has to sit on consecutive elements of the chain. The runs between descendant
+// combinators are placed nearest first, which leaves the most room above for
+// the rest, so no placement is missed and nothing has to backtrack.
+func (sel *webSelector) matchesExactly(chain []webElement) bool {
+	end := len(sel.compounds) - 1
+	top := -1 // chain index of the leftmost compound placed so far
+	for {
+		start := end
+		for start > 0 && sel.compounds[start].comb == '>' {
+			start--
+		}
+		span := end - start
+		if top < 0 {
+			// The run holding the subject ends at the element itself.
+			if !sel.runAt(start, end, chain, len(chain)-1) {
+				return false
+			}
+			top = len(chain) - 1 - span
+		} else {
+			pos := top - 1
+			for pos-span >= 0 && !sel.runAt(start, end, chain, pos) {
+				pos--
+			}
+			if pos-span < 0 {
+				return false
+			}
+			top = pos - span
+		}
+		if start == 0 {
+			return true
+		}
+		if sel.compounds[start].comb != ' ' {
+			return false // `+` or `~`
+		}
+		end = start - 1
+	}
+}
+
+// runAt reports whether compounds[start..end], joined by `>`, sit on the
+// consecutive elements of chain that end at chain[pos], each a definite match.
+func (sel *webSelector) runAt(start, end int, chain []webElement, pos int) bool {
+	if pos-(end-start) < 0 {
+		return false
+	}
+	for ci := end; ci >= start; ci-- {
+		if webSelCompoundTest(&sel.compounds[ci], chain, pos-(end-ci), webSelStrict) != webSelYes {
 			return false
 		}
 	}
 	return true
 }
 
-func webCompoundMatches(compound string, el webElement) bool {
-	for _, token := range webCompoundTokens(compound) {
-		switch {
-		case token == "" || token == "*":
-		case strings.HasPrefix(token, "#"):
-			if !strings.EqualFold(el.id, token[1:]) {
-				return false
-			}
-		case strings.HasPrefix(token, "."):
-			cls := token[1:]
-			found := false
-			for _, have := range el.classes {
-				if strings.EqualFold(have, cls) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		case strings.HasPrefix(token, "[") || strings.HasPrefix(token, ":"):
-			// Cannot evaluate attrs/pseudos; assume they hold rather than
-			// dropping an otherwise valid rule.
-		default:
-			if !strings.EqualFold(token, el.tag) {
-				return false
-			}
+// webSelCompoundTest tests one compound against chain[idx]. Both tags are
+// lower case already (asciiLower when compiled, parseWebTag when read).
+func webSelCompoundTest(c *webSelCompound, chain []webElement, idx int, mode webSelMode) webSelTri {
+	el := &chain[idx]
+	if c.tag != "" && c.tag != el.tag {
+		return webSelNo
+	}
+	result := webSelYes
+	for i := range c.simples {
+		switch c.simples[i].test(chain, idx, mode) {
+		case webSelNo:
+			return webSelNo
+		case webSelMaybe:
+			result = webSelMaybe
 		}
 	}
-	return true
+	return result
+}
+
+// test answers one simple selector for chain[idx]. Ids and classes compare
+// case-insensitively, as the reader always has.
+func (s *webSelSimple) test(chain []webElement, idx int, mode webSelMode) webSelTri {
+	el := &chain[idx]
+	switch s.kind {
+	case webSelID:
+		return webSelBool(strings.EqualFold(el.id, s.name))
+	case webSelClass:
+		for _, have := range el.classes {
+			if strings.EqualFold(have, s.name) {
+				return webSelYes
+			}
+		}
+		return webSelNo
+	case webSelAttr:
+		if mode == webSelStrict && s.name == "open" && el.tag == "details" {
+			// The reader draws its own toggle for a <details> and keeps the body
+			// either way (startTag). Primer's and normalize's
+			// `details:not([open]) > :not(summary) { display: none }` would drop
+			// the body's text instead, so opening the section showed nothing.
+			return webSelMaybe
+		}
+		value, ok := el.attr(s.name)
+		return webSelBool(ok && s.attrValueMatches(value))
+	}
+	return s.pseudoTest(chain, idx, mode)
+}
+
+// attrValueMatches applies the attribute operator to a present attribute's
+// value. An empty ^=, $= or *= value matches nothing, as the spec says.
+func (s *webSelSimple) attrValueMatches(value string) bool {
+	if s.op == webAttrExists {
+		return true
+	}
+	if s.fold {
+		value = asciiLower(value)
+	}
+	want := s.value
+	switch s.op {
+	case webAttrEquals:
+		return value == want
+	case webAttrWord:
+		return webSelHasWord(value, want)
+	case webAttrDash:
+		return value == want || len(value) > len(want) && value[len(want)] == '-' && strings.HasPrefix(value, want)
+	case webAttrPrefix:
+		return want != "" && strings.HasPrefix(value, want)
+	case webAttrSuffix:
+		return want != "" && strings.HasSuffix(value, want)
+	case webAttrSubstr:
+		return want != "" && strings.Contains(value, want)
+	}
+	return false
+}
+
+// webSelHasWord reports whether a whitespace-separated list holds word. An
+// empty word, or one with whitespace in it, is in no list.
+func webSelHasWord(list, word string) bool {
+	if word == "" || strings.ContainsAny(word, " \t\n\r\f") {
+		return false
+	}
+	for i := 0; i < len(list); {
+		for i < len(list) && webAttrSpaceByte(list[i]) {
+			i++
+		}
+		start := i
+		for i < len(list) && !webAttrSpaceByte(list[i]) {
+			i++
+		}
+		if i > start && list[start:i] == word {
+			return true
+		}
+	}
+	return false
+}
+
+// pseudoTest answers a pseudo-class for chain[idx].
+func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) webSelTri {
+	el := &chain[idx]
+	switch s.op {
+	case webPseudoNever:
+		return webSelNo
+	case webPseudoUser:
+		if mode == webSelReveal {
+			return webSelMaybe
+		}
+		return webSelNo
+	case webPseudoTarget:
+		return webSelBool(el.target)
+	case webPseudoRoot:
+		if el.tag == "html" {
+			return webSelYes
+		}
+		if idx == 0 {
+			// A page that leaves out <html> still has one; its first element
+			// is the nearest thing to it in the chain.
+			return webSelMaybe
+		}
+		return webSelNo
+	case webPseudoLink:
+		return webSelBool((el.tag == "a" || el.tag == "area") && el.hasAttr("href"))
+	case webPseudoChecked:
+		switch el.tag {
+		case "input":
+			kind := webSelInputType(el)
+			return webSelBool((kind == "checkbox" || kind == "radio") && el.hasAttr("checked"))
+		case "option":
+			if el.hasAttr("selected") {
+				return webSelYes
+			}
+			return webSelMaybe // a list's first option is selected when none says so
+		}
+		return webSelNo
+	case webPseudoDisabled:
+		return webSelDisabled(chain, idx)
+	case webPseudoEnabled:
+		if !webSelCanDisable(el.tag) {
+			return webSelNo
+		}
+		return webSelNot(webSelDisabled(chain, idx))
+	case webPseudoRequired, webPseudoOptional:
+		if el.tag != "input" && el.tag != "select" && el.tag != "textarea" {
+			return webSelNo
+		}
+		required := el.hasAttr("required")
+		if el.tag == "input" {
+			switch webSelInputType(el) {
+			case "hidden", "range", "color", "submit", "image", "reset", "button":
+				required = false // the attribute does not apply to these
+			}
+		}
+		return webSelBool(required == (s.op == webPseudoRequired))
+	case webPseudoReadWrite:
+		return webSelReadWrite(chain, idx)
+	case webPseudoReadOnly:
+		return webSelNot(webSelReadWrite(chain, idx))
+	case webPseudoPlaceholder:
+		return webSelPlaceholderShown(el)
+	case webPseudoEmpty:
+		if webVoidElement(el.tag) {
+			return webSelYes
+		}
+		return webSelMaybe // the content comes after the start tag
+	case webPseudoDefined:
+		if strings.IndexByte(el.tag, '-') >= 0 {
+			return webSelMaybe // a custom element is defined once its script ran
+		}
+		return webSelYes
+	case webPseudoOpen:
+		if mode == webSelStrict && el.tag == "details" {
+			return webSelMaybe // the reader's own toggle decides (see test)
+		}
+		return webSelBool((el.tag == "details" || el.tag == "dialog") && el.hasAttr("open"))
+	case webPseudoLang:
+		return s.langTest(chain, idx)
+	case webPseudoDir:
+		return s.dirTest(chain, idx)
+	case webPseudoNot:
+		return webSelNot(webSelAnyArg(s.args, chain, idx, webSelMaybe, mode))
+	case webPseudoIs:
+		return webSelAnyArg(s.args, chain, idx, webSelNo, mode)
+	}
+	return webSelMaybe
+}
+
+// webSelAnyArg answers the argument list of :is() or :not(): yes as soon as one
+// argument matches. An argument with a combinator would need its own walk up
+// the chain for every ancestor tried, so it stays undecidable — unless its
+// subject, the last compound, already fails on this element. One that does
+// not parse answers invalid (dropped from :is(); a :not() holding one is
+// dropped whole when compiled, see selectorArgs).
+func webSelAnyArg(args []*webSelector, chain []webElement, idx int, invalid webSelTri, mode webSelMode) webSelTri {
+	result := webSelNo
+	for _, arg := range args {
+		r := webSelMaybe
+		switch {
+		case arg.never:
+			r = invalid
+		case len(arg.compounds) == 1:
+			r = webSelCompoundTest(&arg.compounds[0], chain, idx, mode)
+		case len(arg.compounds) > 1:
+			if webSelCompoundTest(&arg.compounds[len(arg.compounds)-1], chain, idx, mode) == webSelNo {
+				r = webSelNo
+			}
+		}
+		if r == webSelYes {
+			return webSelYes
+		}
+		if r == webSelMaybe {
+			result = webSelMaybe
+		}
+	}
+	return result
+}
+
+// webSelCanDisable lists the elements :disabled and :enabled apply to.
+func webSelCanDisable(tag string) bool {
+	switch tag {
+	case "button", "input", "select", "textarea", "optgroup", "option", "fieldset":
+		return true
+	}
+	return false
+}
+
+// webSelDisabled answers :disabled: the attribute itself, a disabled <optgroup>
+// around an option, or a disabled <fieldset> around a control — except inside
+// the fieldset's first <legend>, which the parser cannot tell from a later one.
+func webSelDisabled(chain []webElement, idx int) webSelTri {
+	el := &chain[idx]
+	if !webSelCanDisable(el.tag) {
+		return webSelNo
+	}
+	if el.hasAttr("disabled") {
+		return webSelYes
+	}
+	if el.tag == "option" || el.tag == "optgroup" {
+		return webSelBool(el.tag == "option" && idx > 0 && chain[idx-1].tag == "optgroup" && chain[idx-1].hasAttr("disabled"))
+	}
+	for i := idx - 1; i >= 0; i-- {
+		if chain[i].tag != "fieldset" || !chain[i].hasAttr("disabled") {
+			continue
+		}
+		if i+1 < idx && chain[i+1].tag == "legend" {
+			return webSelMaybe
+		}
+		return webSelYes
+	}
+	return webSelNo
+}
+
+// webSelInputType is an <input>'s type in lower case; a missing one is "text".
+func webSelInputType(el *webElement) string {
+	kind, ok := el.attr("type")
+	kind = asciiLower(strings.TrimSpace(kind))
+	if !ok || kind == "" {
+		return "text"
+	}
+	return kind
+}
+
+// webSelReadWrite answers :read-write: a text field or textarea that is neither
+// readonly nor disabled, or anything inside a contenteditable element.
+func webSelReadWrite(chain []webElement, idx int) webSelTri {
+	el := &chain[idx]
+	if el.tag == "input" || el.tag == "textarea" {
+		if el.tag == "input" {
+			switch webSelInputType(el) {
+			case "hidden", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button":
+				return webSelNo
+			}
+		}
+		if el.hasAttr("readonly") {
+			return webSelNo
+		}
+		return webSelNot(webSelDisabled(chain, idx))
+	}
+	for i := idx; i >= 0; i-- {
+		value, ok := chain[i].attr("contenteditable")
+		if !ok {
+			continue
+		}
+		switch asciiLower(strings.TrimSpace(value)) {
+		case "", "true", "plaintext-only":
+			return webSelYes
+		case "false":
+			return webSelNo
+		}
+	}
+	return webSelNo
+}
+
+// webSelPlaceholderShown answers :placeholder-shown. A textarea's value is the
+// text after its start tag, so only an <input> can be decided.
+func webSelPlaceholderShown(el *webElement) webSelTri {
+	placeholder, ok := el.attr("placeholder")
+	switch el.tag {
+	case "input":
+		switch webSelInputType(el) {
+		case "hidden", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button",
+			"date", "month", "week", "time", "datetime-local":
+			return webSelNo
+		}
+	case "textarea":
+		if !ok {
+			return webSelNo
+		}
+		return webSelMaybe
+	default:
+		return webSelNo
+	}
+	if !ok {
+		return webSelNo
+	}
+	if placeholder == "" {
+		return webSelMaybe // engines disagree about an empty placeholder
+	}
+	value, _ := el.attr("value")
+	return webSelBool(value == "")
+}
+
+// langTest answers :lang(): the nearest lang attribute decides, matching a
+// range exactly or as the prefix before a '-' ("en" matches "en-GB").
+func (s *webSelSimple) langTest(chain []webElement, idx int) webSelTri {
+	for i := idx; i >= 0; i-- {
+		value, ok := chain[i].attr("lang")
+		if !ok {
+			continue
+		}
+		value = asciiLower(strings.TrimSpace(value))
+		if value == "" {
+			return webSelNo // lang="" is an unknown language
+		}
+		result := webSelNo
+		for _, want := range s.words {
+			if strings.HasPrefix(want, "*") {
+				result = webSelMaybe
+				continue
+			}
+			if value == want || len(value) > len(want) && value[len(want)] == '-' && strings.HasPrefix(value, want) {
+				return webSelYes
+			}
+		}
+		return result
+	}
+	return webSelMaybe // the language may come from a header or a <meta>
+}
+
+// dirTest answers :dir(): the nearest valid dir attribute decides, and a page
+// that sets none runs left to right.
+func (s *webSelSimple) dirTest(chain []webElement, idx int) webSelTri {
+	for i := idx; i >= 0; i-- {
+		value, ok := chain[i].attr("dir")
+		if !ok {
+			continue
+		}
+		switch dir := asciiLower(strings.TrimSpace(value)); dir {
+		case "ltr", "rtl":
+			return webSelBool(dir == s.name)
+		case "auto":
+			return webSelMaybe // decided by the text, which comes later
+		}
+	}
+	return webSelBool(s.name == "ltr")
+}
+
+// webAttrSet is an element's attributes: the raw text that followed the tag
+// name, parsed the first time a selector asks for an attribute.
+type webAttrSet struct {
+	raw    string
+	parsed bool
+	list   []webAttr
+}
+
+// webAttr is one attribute: the name in lower case, the value with its
+// character references decoded the way htmlAttrValue does — but not trimmed,
+// since a selector compares the exact value.
+type webAttr struct {
+	name  string
+	value string
+}
+
+// webMaxElementAttrs bounds the attributes kept for one element. A real element
+// has a handful; a hostile one with thousands would turn every attribute test
+// into a long scan.
+const webMaxElementAttrs = 64
+
+// webNewElement builds the matcher's view of an element from its start tag.
+func webNewElement(tag, attrs string) webElement {
+	el := webElement{tag: tag}
+	if strings.TrimSpace(attrs) == "" {
+		return el
+	}
+	el.id = strings.TrimSpace(htmlTagAttribute(attrs, "id"))
+	el.classes = strings.Fields(htmlTagAttribute(attrs, "class"))
+	el.attrs = &webAttrSet{raw: attrs}
+	return el
+}
+
+// attr returns an attribute's value and whether the element has it at all.
+func (e *webElement) attr(name string) (string, bool) {
+	set := e.attrs
+	if set == nil {
+		return "", false
+	}
+	if !set.parsed {
+		set.list, set.parsed = webParseAttrs(set.raw), true
+	}
+	for i := range set.list {
+		if set.list[i].name == name {
+			return set.list[i].value, true
+		}
+	}
+	return "", false
+}
+
+func (e *webElement) hasAttr(name string) bool {
+	_, ok := e.attr(name)
+	return ok
+}
+
+// webParseAttrs reads a start tag's attribute text with the tokenisation
+// htmlTagAttribute and htmlTagAttributeHas use: single, double or unquoted
+// values, a bare name for a boolean attribute, and a stray '>' stepped over.
+// When a name repeats, the first one is found first, as in HTML.
+func webParseAttrs(raw string) []webAttr {
+	// Sized from the '=' count: a sheet with bare attribute selectors ([hidden],
+	// [type=button]) parses nearly every element that has attributes.
+	out := make([]webAttr, 0, min(strings.Count(raw, "=")+1, webMaxElementAttrs))
+	for i := 0; i < len(raw) && len(out) < webMaxElementAttrs; {
+		for i < len(raw) && (webAttrSpaceByte(raw[i]) || raw[i] == '/') {
+			i++
+		}
+		start := i
+		for i < len(raw) && raw[i] != '=' && raw[i] != '/' && raw[i] != '>' && !webAttrSpaceByte(raw[i]) {
+			i++
+		}
+		if i == start && i < len(raw) && raw[i] != '=' {
+			i++
+			continue
+		}
+		name := asciiLower(raw[start:i])
+		for i < len(raw) && webAttrSpaceByte(raw[i]) {
+			i++
+		}
+		value := ""
+		if i < len(raw) && raw[i] == '=' {
+			i++
+			for i < len(raw) && webAttrSpaceByte(raw[i]) {
+				i++
+			}
+			if i < len(raw) && (raw[i] == '"' || raw[i] == '\'') {
+				quote := raw[i]
+				i++
+				valueStart := i
+				for i < len(raw) && raw[i] != quote {
+					i++
+				}
+				value = raw[valueStart:i]
+				if i < len(raw) {
+					i++
+				}
+			} else {
+				valueStart := i
+				for i < len(raw) && raw[i] != '>' && !webAttrSpaceByte(raw[i]) {
+					i++
+				}
+				value = raw[valueStart:i]
+			}
+			if strings.IndexByte(value, '&') >= 0 {
+				value = htmlstd.UnescapeString(value)
+			}
+		}
+		if name != "" {
+			out = append(out, webAttr{name: name, value: value})
+		}
+	}
+	return out
+}
+
+func webAttrSpaceByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
+}
+
+func webSelectorNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '-' || c == '_'
 }
 
 // --- CSS values -----------------------------------------------------------
@@ -2566,9 +4136,20 @@ type webParser struct {
 	// body is parsed and kept either way; the stack decides which blocks are
 	// laid out and which section a summary's toggle belongs to.
 	details []webDetailsFrame
+	// target is the page address's fragment: the element whose id it names is
+	// the one :target matches.
+	target string
 }
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document.
+//
+// Every style sheet is in force for the whole document, as in a browser: the
+// linked sheets (extraCSS) and the page's own <style> blocks are gathered
+// before the walk and parsed once. The walk used to add each <style> block
+// when it reached it, so nothing before a block saw it — not even <html>, so
+// a `:root { --accent: … }` in the head reached no element — and re-parsed the
+// whole accumulated sheet at every block, which on a page with dozens of them
+// was quadratic.
 func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	doc := &webDocument{
 		URL:   baseURL,
@@ -2576,9 +4157,13 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 		Text:  sdl.Color{R: 28, G: 32, B: 38, A: 255},
 	}
 	p := &webParser{doc: doc}
-	if extraCSS != "" {
-		p.css.WriteString(extraCSS)
-		p.rules = parseWebCSS(extraCSS)
+	p.css.WriteString(extraCSS)
+	webCollectInlineCSS(source, &p.css)
+	if p.css.Len() > 0 {
+		p.rules = parseWebCSS(p.css.String())
+	}
+	if u, err := url.Parse(baseURL); err == nil {
+		p.target = u.Fragment
 	}
 	p.walk(source)
 	p.flush()
@@ -2784,6 +4369,16 @@ func webVoidElement(tag string) bool {
 	return false
 }
 
+// webHeadContentElement lists what may stand in <head>; any other start tag
+// closes an open one (startTag).
+func webHeadContentElement(tag string) bool {
+	switch tag {
+	case "base", "basefont", "bgsound", "link", "meta", "title", "style", "script", "noscript", "template":
+		return true
+	}
+	return false
+}
+
 func webRawTextElement(tag string) bool {
 	switch tag {
 	case "script", "noscript", "svg", "iframe", "template", "canvas", "video", "audio", "object":
@@ -2801,6 +4396,55 @@ func webBlockElement(tag string) bool {
 		return true
 	}
 	return false
+}
+
+// webCollectInlineCSS appends the page's own <style> blocks to b, in document
+// order and within webMaxCSSBytes, reading the markup exactly as walk does:
+// comments, <!…> and <?…> are skipped, and so is the content of every element
+// walk treats as raw text (title, style, and webRawTextElement's list), so a
+// <style> inside <noscript>, <template> or an <svg> stays out, as it always
+// has. Each block is preceded by a newline, the separator walk used.
+func webCollectInlineCSS(source string, b *strings.Builder) {
+	for i := 0; i < len(source); {
+		lt := strings.IndexByte(source[i:], '<')
+		if lt < 0 {
+			return
+		}
+		i += lt
+		if strings.HasPrefix(source[i:], "<!--") {
+			end := strings.Index(source[i+4:], "-->")
+			if end < 0 {
+				return
+			}
+			i += 4 + end + 3
+			continue
+		}
+		if strings.HasPrefix(source[i:], "<!") || strings.HasPrefix(source[i:], "<?") {
+			end := strings.IndexByte(source[i:], '>')
+			if end < 0 {
+				return
+			}
+			i += end + 1
+			continue
+		}
+		end := findTextBrowserTagEnd(source, i+1)
+		if end < 0 {
+			return
+		}
+		name, closing, _, _ := parseWebTag(source[i+1 : end])
+		i = end + 1
+		if name == "" || closing {
+			continue
+		}
+		if name == "title" || name == "style" || webRawTextElement(name) {
+			inner, next, _ := webRawElement(source, i, name)
+			i = next
+			if name == "style" && b.Len()+len(inner) < webMaxCSSBytes {
+				b.WriteString("\n")
+				b.WriteString(inner)
+			}
+		}
+	}
 }
 
 func (p *webParser) walk(source string) {
@@ -2855,11 +4499,8 @@ func (p *webParser) walk(source string) {
 					p.doc.Title = cleanTextBrowserHTML(inner)
 				}
 			case "style":
-				if p.css.Len()+len(inner) < webMaxCSSBytes {
-					p.css.WriteString("\n")
-					p.css.WriteString(inner)
-					p.rules = parseWebCSS(p.css.String())
-				}
+				// Already in p.rules: webCollectInlineCSS gathered every block
+				// before the walk began.
 			case "video", "iframe":
 				p.addVideoBlock(name, attrs, inner)
 			}
@@ -2872,15 +4513,23 @@ func (p *webParser) walk(source string) {
 func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "head" {
 		p.inHead = true
-		p.push(webElement{tag: name}, webBaseStyle(), "skip")
+		p.push(webNewElement(name, attrs), webBaseStyle(), "skip")
 		return
+	}
+	// An unclosed <head> ends at the first element that cannot live in it, as
+	// HTML's parser has it. Left open, its frame (styled from the base, not
+	// from <html>) sat between <html> and the body, so the body inherited
+	// nothing from <html> — not the custom properties of a :root rule either
+	// — and a strict `html > body` missed.
+	if p.inHead && !webHeadContentElement(name) {
+		p.endTag("head")
+		p.inHead = false
 	}
 	if name == "body" || name == "html" {
 		p.inHead = false
 	}
-	el := webElement{tag: name}
-	el.id = strings.TrimSpace(htmlTagAttribute(attrs, "id"))
-	el.classes = strings.Fields(htmlTagAttribute(attrs, "class"))
+	el := webNewElement(name, attrs)
+	el.target = p.target != "" && el.id == p.target
 	style := p.computeStyle(el, attrs)
 	if name == "body" || name == "html" {
 		if style.HasBg {
@@ -3205,17 +4854,28 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	}
 	chain = append(chain, el)
 
-	var matched []webRule
-	for _, rule := range p.rules {
-		if webSelectorMatches(rule.selector, chain) {
+	// A rule that would hide the element is matched strictly, so a selector
+	// the reader cannot fully decide never blanks the page, and one that would
+	// reveal it also reaches what a page opens on :hover (webSelMode). The
+	// matches are kept as pointers into the sheet — copying each rule for every
+	// element styled was most of what this loop allocated — and sorted without
+	// reflection.
+	var matched []*webRule
+	for i := range p.rules {
+		if rule := &p.rules[i]; rule.sel.matchesIn(chain, rule.mode()) {
 			matched = append(matched, rule)
 		}
 	}
-	sort.SliceStable(matched, func(i, j int) bool {
-		if matched[i].specificity != matched[j].specificity {
-			return matched[i].specificity < matched[j].specificity
+	slices.SortStableFunc(matched, func(a, b *webRule) int {
+		switch {
+		case a.specificity != b.specificity:
+			return a.specificity - b.specificity
+		case a.order < b.order:
+			return -1
+		case a.order > b.order:
+			return 1
 		}
-		return matched[i].order < matched[j].order
+		return 0
 	})
 	// Cascade: every normal declaration in specificity order, then the
 	// !important ones. Collapsing the winners into one map also gives var()
@@ -3269,6 +4929,14 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// Decorative icon fonts and aria-hidden helpers render as short words like
 	// "navigate_next" or "menu" in a text engine; hide them.
 	if strings.EqualFold(strings.TrimSpace(htmlTagAttribute(attrs, "aria-hidden")), "true") {
+		st.Hidden = true
+	}
+	// The hidden attribute is the UA stylesheet's [hidden] { display: none }.
+	// Pages park dialogs, templates and not-yet-loaded panels behind it, and the
+	// script pass (webdom_runtime.go) removes it from whatever a script reveals,
+	// so only content the page itself keeps hidden is skipped. "until-found" is
+	// content a browser's find-in-page would open, so it stays readable.
+	if htmlTagAttributeHas(attrs, "hidden") && !strings.EqualFold(strings.TrimSpace(htmlTagAttribute(attrs, "hidden")), "until-found") {
 		st.Hidden = true
 	}
 	for _, class := range el.classes {
@@ -3499,6 +5167,13 @@ func htmlTagAttributeHas(attrs, want string) bool {
 		name := strings.ToLower(attrs[start:i])
 		if name == want {
 			return true
+		}
+		// A '>' the name scan stopped on without consuming (a tag that
+		// findTextBrowserTagEnd extended past a stray quote) is stepped over,
+		// or the loop would never end.
+		if i == start && i < len(attrs) && attrs[i] != '=' {
+			i++
+			continue
 		}
 		// Step over a value, quoted or not, so a space inside one cannot be read
 		// as the start of the next attribute.

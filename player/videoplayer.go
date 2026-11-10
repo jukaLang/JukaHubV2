@@ -987,8 +987,9 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 // ffmpegDecoderArgs builds the rawvideo decoder command. When the source is
 // larger than the decode target it uses a scale filter in ffmpeg (cheaper than
 // decoding 4K frames and letting the GPU shrink them); otherwise it asks for
-// the native size directly.
-func ffmpegDecoderArgs(path string, width, height int32, scaling bool, startSec float64) []string {
+// the native size directly. inputOpts go in front of -i (the identity a
+// resolved stream is asked for with, ffmpegStreamInputArgs).
+func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, scaling bool, startSec float64) []string {
 	// The decoder's stderr goes to errors.txt: without these, every start
 	// (and every retry) wrote ffmpeg's banner and configure line there,
 	// burying the one line that said why the stream failed.
@@ -996,6 +997,7 @@ func ffmpegDecoderArgs(path string, width, height int32, scaling bool, startSec 
 	if startSec > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
+	args = append(args, inputOpts...)
 	args = append(args, "-i", path)
 	if scaling {
 		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=bilinear", width, height))
@@ -1014,28 +1016,71 @@ func ffmpegDecoderArgs(path string, width, height int32, scaling bool, startSec 
 	)
 }
 
-func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, height int32, startSec float64) {
+// startFFmpegDecoder runs the picture decoder for one session until its pipe
+// closes. It returns how the decoder failed — no frame at all, or a stream
+// resolved from a page that broke off well before its end — or nil for the end
+// of the source and for a session that was stopped or replaced. The caller
+// closes the session either way and hands a failure to mediaRecoverStream
+// (videorecover.go), which used to be a player that silently vanished.
+func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, height int32, startSec float64) *mediaStreamFailure {
 	embeddedPlayer.mu.Lock()
 	srcW, srcH := embeddedPlayer.sourceWidth, embeddedPlayer.sourceHeight
+	duration := embeddedPlayer.duration
 	embeddedPlayer.mu.Unlock()
 	scaling := srcW > 0 && srcH > 0 && (srcW != width || srcH != height)
+	pageStream := !sess.tempFile && !sess.local && mediaPageStream(path, sess.pageURL)
+	failure := func(frames int, position float64, reason string) *mediaStreamFailure {
+		return &mediaStreamFailure{
+			source:   path,
+			pageURL:  sess.pageURL,
+			tempFile: sess.tempFile,
+			local:    sess.local,
+			startSec: startSec,
+			position: position,
+			duration: duration,
+			frames:   frames,
+			reason:   reason,
+			// Read now: closing the session forgets both.
+			origin:   mediaPlayOriginName(),
+			floating: videoMiniActive(),
+		}
+	}
 
-	args := ffmpegDecoderArgs(ffmpegReadableInput(ffmpegPath, path), width, height, scaling, startSec)
+	args := ffmpegDecoderArgs(ffmpegReadableInput(ffmpegPath, path), ffmpegStreamInputArgs(path, sess.pageURL),
+		width, height, scaling, startSec)
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
+		if sess.ctx.Err() != nil {
+			return nil // stopped meanwhile: not a failure
+		}
 		logWarn("video", "ffmpeg stdout pipe failed: %v", err)
-		return
+		f := failure(0, startSec, ffmpegStartReason(err))
+		f.startErr = true
+		return f
 	}
-	cmd.Stderr = os.Stderr
+	// ffmpeg's stderr still goes to errors.txt; its last lines are also kept,
+	// because they are the only place that says why a stream would not play.
+	stderrTail := &lockedTailBuffer{max: 8 << 10}
+	cmd.Stderr = ffmpegStderrSink{tail: stderrTail}
+	// With the stderr copy above, Wait also waits for that pipe; a child that
+	// left it open must not hold the session's goroutine for good.
+	cmd.WaitDelay = 2 * time.Second
 
 	if err := cmd.Start(); err != nil {
+		// Start answers a session stopped meanwhile (Close, a second seek, a
+		// game taking the screen) with the context's error: that is no failure.
+		if sess.ctx.Err() != nil {
+			return nil
+		}
 		logWarn("video", "ffmpeg failed to start: %v", err)
-		return
+		f := failure(0, startSec, ffmpegStartReason(err))
+		f.startErr = true
+		return f
 	}
 	if !sess.registerVideoCmd(cmd) {
 		cmd.Wait()
-		return
+		return nil
 	}
 	defer sess.clearVideoCmd(cmd)
 	defer cmd.Wait()
@@ -1046,13 +1091,18 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	// a large one, handing make a buffer far smaller than the frames ffmpeg
 	// then writes into it.
 	frameBytes := int64(width) * int64(height) * 3 / 2
-	if frameBytes <= 0 {
-		// A probe that reported no usable size leaves nothing to size by.
-		return
-	}
-	if frameBytes > maxVideoFrameBytes {
+	if frameBytes <= 0 || frameBytes > maxVideoFrameBytes {
+		// A probe that reported no usable size leaves nothing to size by, and
+		// a header-declared giant is refused. ffmpeg is stopped first: nobody
+		// will read its pipe, and the deferred Wait would sit on it for good.
 		logWarn("video", "refusing a %dx%d frame buffer", width, height)
-		return
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		// A download would have the same picture: nothing takes this over.
+		f := failure(0, startSec, fmt.Sprintf("its picture size (%dx%d) is too large", width, height))
+		f.unplayable = true
+		return f
 	}
 	frameSize := int(frameBytes)
 	buf := make([]byte, frameSize)
@@ -1076,7 +1126,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	for {
 		select {
 		case <-sess.ctx.Done():
-			return
+			return nil
 		default:
 		}
 		embeddedPlayer.mu.Lock()
@@ -1130,16 +1180,36 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		} else {
 			frameDeadline = time.Now().Add(frameDuration)
 			logDebug("video", "First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
+			if pageStream {
+				// Streaming works here: the run of streams that would not
+				// open starts again (videorecover.go).
+				mediaNoteStreamOpened(sess.pageURL)
+			}
 		}
 	}
 
-	// The pipe closed. A cancelled session (stop, seek, next video) is not an
-	// end of stream; only a decoder that ran to EOF raises the flag.
-	if sess.ctx.Err() == nil && playbackCurrentSession() == sess && frameCount > 0 {
+	// The pipe closed. Wait for the exit, and with it the last of ffmpeg's
+	// stderr: whether this was the end of the file or a stream that would not
+	// open (or broke off) is in there. The deferred Wait then has nothing left
+	// to do.
+	_ = cmd.Wait()
+	// A cancelled session (stop, seek, next video) is neither an end of stream
+	// nor a failure — checked after the Wait, so a Stop during it counts too.
+	if sess.ctx.Err() != nil || playbackCurrentSession() != sess {
+		return nil
+	}
+	position := startSec + float64(frameCount)/fps
+	stderr := stderrTail.String()
+	if mediaDecoderFailed(startSec, position, duration, frameCount, pageStream, stderr) {
+		return failure(frameCount, position, ffmpegFailureReason(stderr))
+	}
+	// Only a decoder that ran to the end raises the flag.
+	if frameCount > 0 {
 		logDebug("video", "Reached end of stream after %d frames", frameCount)
 		sess.ended.Store(true)
 		playbackEnded.Store(true)
 	}
+	return nil
 }
 
 func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) {
@@ -1148,6 +1218,8 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 	if startSec > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
+	// The same identity as the picture decoder (ffmpegStreamInputArgs).
+	args = append(args, ffmpegStreamInputArgs(path, sess.pageURL)...)
 	args = append(args, "-i", ffmpegReadableInput(ffmpegPath, path),
 		"-f", "s16le",
 		"-ac", "2",
@@ -1376,9 +1448,13 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		go prepareVideoSubtitles(sess, config, url)
 
 		go startFFmpegAudio(sess, ffmpegPath, url, startSec)
-		startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
+		failure := startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
 
 		sess.finish()
+		// A decoder that could not play its source no longer just closes the
+		// player: a web video falls back to the download, anything else says
+		// why (videorecover.go).
+		mediaRecoverStream(config, failure)
 	}()
 }
 
@@ -1545,8 +1621,11 @@ func SeekVideo(fraction float64) {
 	go func() {
 		defer videoDecoderWG.Done()
 		go startFFmpegAudio(next, ffmpegPath, prev.source, seekSec)
-		startFFmpegDecoder(next, ffmpegPath, prev.source, width, height, seekSec)
+		failure := startFFmpegDecoder(next, ffmpegPath, prev.source, width, height, seekSec)
 		next.finish()
+		// A stream that will not reopen at the new position (a signed URL
+		// that expired during a long pause) downloads from there instead.
+		mediaRecoverStream(appConfig, failure)
 	}()
 	partyPublishPlayback()
 }

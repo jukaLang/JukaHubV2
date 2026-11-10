@@ -29,8 +29,9 @@ var imageExtensions = map[string]bool{
 }
 
 // handleFileDrop routes one dropped path to the player, the image viewer or the
-// music player. It is safe to call from the event loop; heavy work (decoding,
-// network) is handed off to the existing background paths.
+// music player — or, with the chat on screen, to the message being written.
+// It is safe to call from the event loop; heavy work (decoding, network) is
+// handed off to the existing background paths.
 func handleFileDrop(config *Config, path string) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -42,6 +43,16 @@ func handleFileDrop(config *Config, path string) {
 	if err != nil {
 		logWarn("drop", "refused %q: %v", filepath.Base(path), err)
 		showToast("Could not open the dropped file", ToastError())
+		return
+	}
+	if config != nil && currentSceneHasChat(config) {
+		// The chat on screen takes the file as an attachment: it waits in the
+		// tray above the composer until the message is sent (chatfiles.go).
+		if info.IsDir() {
+			showToast("Folders can't be sent — drop the files inside", ToastInfo())
+			return
+		}
+		chatStageDropped(path)
 		return
 	}
 	if info.IsDir() {

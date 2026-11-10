@@ -309,6 +309,10 @@ func feDisplayPath(config *Config) string {
 // the Locations list it returns to the previous scene/Home. It never
 // terminates the application.
 func feBack(config *Config) {
+	// Picking files for the chat, B calls the pick off (chatfiles.go).
+	if chatPickBack(config) {
+		return
+	}
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
 		config.Scenes[currentSceneIndex].Name == "FileExplorer" && !filesNav.atLocations {
 		if filesAtLocationRoot(config) {
@@ -368,7 +372,18 @@ func feEnterFocused(config *Config) {
 		filesEnterDir(config, entry)
 		return
 	}
+	// Picking files for the chat: A attaches the file (or the rows X marked)
+	// instead of opening, running or unpacking it, and the chat comes back
+	// (chatfiles.go).
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" && chatPickFromFiles(config, entry) {
+		return
+	}
 	if strings.EqualFold(filepath.Ext(entry.Path), ".sh") {
+		// A script saved from the chat (any script in Downloads) runs on a
+		// second press only (chatfiles.go).
+		if !chatConfirmRun(entry.Path) {
+			return
+		}
 		if err := feLaunchScript(config, entry.Path); err != nil {
 			showToast("Cannot run script: "+err.Error(), ToastError())
 		} else {
@@ -392,19 +407,6 @@ func feEnterFocused(config *Config) {
 	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if isImageExtension(ext) {
-		if config.Variables.Custom["chat_attach_image"] == "1" {
-			// Send image as chat message attachment. The chat renderer only reads
-			// a local attachment from this root, so record which folder the user
-			// was browsing when the image was picked.
-			chatAttachmentRoot = feRoot(config)
-			config.Variables.Custom["chat_attach_image"] = ""
-			// The picture becomes the local user's own message in the chat tab
-			// that asked for it, so it can be enlarged, saved and deleted like
-			// anything typed in the composer.
-			chatAttachLocalImage(entry.Path)
-			showToast("Picture added to the chat", ToastSuccess())
-			return
-		}
 		imagePath, err := resolveExplorerEntry(config, entry.Path)
 		if err != nil {
 			showToast("Cannot open image: "+err.Error(), ToastError())

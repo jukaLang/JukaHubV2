@@ -1074,6 +1074,13 @@ func vkTitle() string {
 		if isTerminalScene() {
 			return "TERMINAL"
 		}
+		// The keyboard covers the tray: the title says files go along.
+		switch n := chatStagedCount(chatActiveTabID()); {
+		case n == 1:
+			return "MESSAGE · 1 FILE"
+		case n > 1:
+			return vkChatFilesTitle.get(n, func(n int) string { return fmt.Sprintf("MESSAGE · %d FILES", n) })
+		}
 		return "MESSAGE"
 	case vkTargetUnit:
 		return "NUMBER"
@@ -1186,6 +1193,9 @@ func vkPlaceholder() string {
 	case vkTargetChat:
 		if isTerminalScene() {
 			return "Enter a command"
+		}
+		if chatStagedCount(chatActiveTabID()) > 0 {
+			return "Add a message (optional)…"
 		}
 		return "Message Juka…"
 	case vkTargetUnit:
@@ -2388,7 +2398,8 @@ func vkSubmit(config *Config, askAI bool) {
 		// queue a network call), and the panel used to stay on screen until
 		// that finished, which looked like the keyboard ignoring the button.
 		vkCloseKeyboard()
-		if text != "" {
+		// Files waiting in the tray go even without words (chatfiles.go).
+		if text != "" || (chatSceneActive(config) && chatStagedCount(chatActiveTabID()) > 0) {
 			// The chat sends to the tab on screen (community, Juka AI or
 			// Saved); Ask AI hands the text to Juka AI instead (chatstate.go).
 			chatSubmitComposer(text, askAI)

@@ -61,6 +61,27 @@ updates itself with a rollback, failures that name their cause). Follow-ups:
 MED-19 to MED-25, SND-5, SND-6, INP-15 and INP-16; PWR-4 and INP-13 were
 rewritten for what shipped: 264 tasks in the file.
 
+Night fix (**2026-11-09**, unbuilt): a stream ffmpeg could not open used to
+close the player silently (reported as "YouTube videos open a black canvas for
+a second, but then crash"); a web video now falls back to the download and
+anything else says why (`videorecover.go`), and the decoders ask as the browser
+the stream was resolved for. Follow-ups: MED-26 to MED-29.
+
+Files in chat (**2026-11-09**, unbuilt): the chat sends files — a tray above
+the composer, Files in pick mode (X), real Discord uploads that stream from the
+card, file cards with View / Play / Open, saving into Downloads, and text files
+for Juka AI (`chatfiles.go`, `chatupload.go`, `chatfilesview.go`). Follow-up:
+SYS-14.
+
+Late-night pass (**2026-11-09**, unbuilt): the Browser runs page JavaScript
+against a real DOM (`webdom_*.go`, `webdom/*.js`: a Go HTML parser, an ES-module
+rewrite for goja, a network layer that keeps scripts off the LAN and away from
+other sites' cookies, timers on a virtual clock), switched by Settings → Browser
+→ JavaScript; the reader's CSS matcher now evaluates attribute selectors and
+pseudo-classes instead of assuming they match, honours `hidden`, and no longer
+hangs on a tag with a stray quote. Follow-ups: PERF-15, TEST-12, SEC-25, SEC-26,
+NET-16 and APP-10 to APP-13; PERF-7 was rewritten: 277 tasks in the file.
+
 ## How to use this file (agents read this first)
 
 1. **Pick** the highest-priority task you can actually verify. Tags tell you what
@@ -132,7 +153,7 @@ What exists, by area, so nobody rebuilds it. `player/` is one Go `package main`
 | Games | `game_library*.go`, `emulators.go`, `emu*.go`, `emulatorinstall.go`, `hakux*.go` (Xbox on Smart Pro), `retroachievements.go`, `savemanager*.go`, `savestate_resume.go`, `gamesuspend.go`, `gmeta_*.go`, `romsetup.go`, `romm_*.go`, `ports.go`, `netplay*.go`, `hotseat*.go`, `trophy_*.go`, `playtime.go`, `wrapped.go` |
 | Android games | `androidpak*.go` (Go side) and `androidrt/` (C runtime, `docs/ANDROID.md`, `docs/ANDROID-MINECRAFT.md`) |
 | Media | `videoplayer.go` (ffmpeg decode → IYUV texture), `streaming.go`, `musicplayer.go`, `media_hub*.go`, `podcasts.go`, `tvchannels.go`, `ipstreams.go`, `shorts.go`, `youtube*.go`, `playbackqueue.go`, `castui.go` |
-| Web and apps | `browser*.go`, `textbrowser.go`, `webpage*.go`, `webscript.go` (goja), `apps.go`, `winbatch*.go` (cmd.exe quoting for `.bat`/`.cmd` launches), `appgrid.go`, `windowsapps*.go`, `plugx.go`/`plug*.go` (plugins), `toolbox.go`, `xpack*.go` |
+| Web and apps | `browser*.go`, `textbrowser.go`, `webpage*.go`, `webscript.go` + `webdom_*.go` + `webdom/*.js` (page JavaScript on goja: DOM prelude, HTML parser, module rewrite, the scripts' network), `apps.go`, `winbatch*.go` (cmd.exe quoting for `.bat`/`.cmd` launches), `appgrid.go`, `windowsapps*.go`, `plugx.go`/`plug*.go` (plugins), `toolbox.go`, `xpack*.go` |
 | Files and transfer | `files_*.go`, `fileeditor.go`, `ftp_server.go`, `ssh_server.go`, `sftp_root.go`, `fileserver_guard.go` (FTP/SFTP auto-stop, clients), `filetransfer.go`, `companion*.go` |
 | System | `wifi*.go`, `systemcontrol.go`, `audiooutput.go`, `hardware.go`, `systool_*.go`, `sdhealth.go`, `batteryhealth.go`, `ledsync.go`, `haptics.go`, `screensaver*.go`, `alarm*.go`, `sched*.go`, `ntpsync.go` + `clockjump.go` (network time, re-anchoring after a clock jump) |
 | Social and LAN | `chat*.go` (Discord), `party*.go`, `peer*.go`, `nearby*.go`, `psremote*.go`, `smart_home*.go` |
@@ -384,13 +405,18 @@ paired (or uses inotify on Linux); desktop dev keeps today's behaviour.
 
 ### PERF-7 — Trim heavy dependencies (P2, L) [WIN]
 **Why.** Compile time, binary size (~36 MB) and page-in time on the SD card.
-**Where.** `webscript.go` (goja), `processes.go`/`systool_disk.go`/`systool_hw.go`/
+**Where.** goja: since the late-night pass of 2026-11-09 it runs every page's
+scripts against the DOM prelude — `webdom_runtime.go` (+ the embedded
+`webdom/*.js`), `webdom_parse.go`, `webdom_module.go`, `webdom_net.go` and the
+legacy pass in `webscript.go`; `processes.go`/`systool_disk.go`/`systool_hw.go`/
 `terminal.go`/`textbrowser.go` (gopsutil), `textbrowser.go` (zeroconf), `chat.go`
 (discordgo).
-**Done when.** goja sits behind a `//go:build !nojs` split (lite build without
-page scripts); gopsutil replaced by `/proc` + `statfs` on Linux and two Win32
-calls; zeroconf replaced by a one-shot mDNS query; `go mod tidy && go mod vendor`
-run; features unchanged.
+**Done when.** goja and the whole DOM pass sit behind a `//go:build !nojs`
+split: the `webdom_*.go` files and `webscript.go` in the full build, and in the
+lite build a stub `webJSRunPageFor` that returns the page as it arrived, with
+Settings → Browser → JavaScript hidden; gopsutil replaced by `/proc` + `statfs`
+on Linux and two Win32 calls; zeroconf replaced by a one-shot mDNS query;
+`go mod tidy && go mod vendor` run; features unchanged.
 **Verify.** Binary size and cold-cache build time before/after in
 `docs/PERFORMANCE.md`; `make check` green.
 
@@ -441,6 +467,24 @@ release builds.
 **Where.** `player/internal/`, `web/`, `player/tools/`.
 **Done when.** No package-level `regexp.MustCompile` outside a `sync.OnceValue`
 remains in those trees and their tests pass.
+
+### PERF-15 — What page scripts cost on the handheld (P1, S) [HW]
+**Why.** The Browser's JavaScript pass has only run under node. On the device the
+550 KB DOM prelude is compiled once per run (estimated at about a second on the
+A133P, started beside the first page's download by `webDOMPreludeWarm`), runs
+again for every page (thousands of accessors), and goja interprets every page
+script on four Cortex-A53 cores inside a 10-second budget.
+**Where.** `webdom_runtime.go` (`webDOMPrelude`, `webDOMPreludeWarm`, `runPage`,
+the `scripts on …` summary line), `webdom/*.js` (work done while the prelude
+loads), `docs/PERFORMANCE.md`.
+**Done when.** `docs/PERFORMANCE.md` records, on a Smart Pro and a Brick, the
+prelude compile, the per-page start (prelude run and boot) on a near-empty page,
+and the whole pass on a jQuery site, a framework single-page app and a news
+article with lazy images (add a debug line for compile and start if the
+summary is not enough); the per-page start is under 300 ms, or the interfaces
+pages rarely touch are installed on first use until it is.
+**Verify.** The `scripts on …` lines in `logs.txt` with
+`JUKAHUB_LOG_LEVEL=debug`.
 
 ---
 
@@ -630,6 +674,21 @@ been deleted. A reader cannot see a dangling ID or a stale count.
 that matches no heading, an anchor that matches no heading, and a header count
 that differs from the number of task headings; CI runs it beside the docs link
 check (TEST-7).
+
+### TEST-12 — First run of the browser-engine tests (P1, S) [WIN]
+**Why.** The Browser's DOM pass (`webdom_runtime.go`, `webdom_parse.go`,
+`webdom_net.go`, `webdom_module.go`) and the reader's new selector matcher
+(`webpage.go`, `webpage_cssmatch_test.go`) were written without a Go toolchain:
+their tests have never run, including `TestWebDOMPreludeCompilesInGoja`, which
+compiles the embedded prelude in goja — the first time it meets the real engine.
+The prelude itself is tested under node (`tests/web/webdom_*.test.mjs`, run by
+the web suite's `npm test` against goja's set of built-ins).
+**Where.** The files above and their `_test.go` files, `player/go.mod`
+(`github.com/dlclark/regexp2/v2` is now a direct import).
+**Done when.** `go test ./...` passes on Windows and in CI with the new files,
+`go mod tidy && go mod vendor` has been run, and the web job's node run includes
+the two `webdom` suites.
+**Verify.** The `go test` tail and the CI run in the PR.
 
 ---
 
@@ -1109,6 +1168,9 @@ relay's default headers).
 yt-dlp `-g` with `player_client=android`), the probe, the decoder and the relay
 send that client's user agent; other hosts are unchanged.
 **Verify.** Needed only once the log line above appears on a device.
+**Note.** Since 2026-11-09 the decoders send `streamUserAgent` like the probe
+(`ffmpegStreamInputArgs`, `videorecover.go`), so this task only changes which
+agent that is.
 
 ### MED-23 — "Update yt-dlp now" on the Patch screen (P2, S)
 **Why.** `ytdlp_update.go` updates on its own schedule (Media opened with a copy
@@ -1150,6 +1212,54 @@ and Patch shows the new version; a failing search names its cause and says no
 API key is needed; a browser link without text gets its title on the Continue
 card; on Windows an update swaps a busy `yt-dlp.exe`. Record whether android's
 format 18 still plays — if it does not, MED-19 and MED-20 become P0.
+
+### MED-26 — The stream fallback on a device (P1, S) [HW]
+**Why.** `videorecover.go` (2026-11-09 night) turns a decoder that never
+delivered a frame into a download or a message, instead of a player that
+closed after a second; it was written from reading alone, for a user report
+("YouTube videos open a black canvas for a second, but then crash").
+**Where.** `videorecover.go`, `videoplayer.go` (`startFFmpegDecoder`),
+`streaming.go` (`tryStreamPlayback`); errors.txt lines starting `decoder for`.
+**Done when.** On a stock Smart Pro: a YouTube result either streams or shows
+"Streaming didn't work — downloading the video instead" and then plays; the
+errors.txt line says why the stream failed (record it here: "Protocol not
+found", "403 Forbidden" or something else decides between the relay, the user
+agent and the client); after two such failures the next video goes straight to
+the download; a live YouTube stream still streams; a video paused for ten
+minutes carries on when resumed (`-reconnect`) instead of ending; closing the
+player during the loading picture shows no message.
+
+### MED-27 — An old session's end takes a newer play's page (P2, S)
+**Why.** `StopEmbeddedPlayback`, run by `finish()` on a decoder goroutine,
+clears `currentPlaybackURL` and the play origin and calls `partyNoteStop` with
+whatever page is current. When the user starts another video while the old
+one is failing or ending, those belong to the new play: it then starts with the
+CDN URL as its page (no browser user agent, no download fallback, resume and
+Quality keyed to the wrong URL). `currentPlaybackURL` is also a plain string
+written from several goroutines.
+**Where.** `videoplayer.go` (`StopEmbeddedPlayback`, `startEmbeddedPlayback`),
+`core.go` (`playVideoInfo`), `media_hub.go` (`mediaForgetPlayOrigin`).
+**Done when.** The clears and `partyNoteStop` use the stopped session's own
+page and leave a newer play's alone; `currentPlaybackURL` is read and written
+through a mutex-guarded accessor.
+
+### MED-28 — Watch Party guests open the watch page in ffmpeg (P2, S)
+**Why.** `partynet.go` applies the room's video with `StartEmbeddedPlayback`
+on the page URL the host published, so a YouTube room plays nothing on a
+guest; since 2026-11-09 the guest at least sees "Couldn't play this stream".
+**Where.** `partynet.go` (the apply path), `streaming.go`
+(`resolveAndStartPlayback`).
+**Done when.** A page URL from the room goes through the same load as Play
+(stream, else download) at the room's position.
+
+### MED-29 — Decoders have no read timeout (P3, S)
+**Why.** ffprobe gets `-rw_timeout`; the two decoders do not, so a stream that
+stalls without closing is a frozen picture (or the loading picture) forever,
+which nothing can recover from.
+**Where.** `videorecover.go` (`ffmpegStreamInputArgs`), `videoplayer.go`.
+**Done when.** http inputs get a read timeout that `-reconnect` retries
+through, and a stall that outlasts it ends as a failure `mediaRecoverStream`
+handles; checked on handheld Wi-Fi that normal playback never trips it.
 
 ---
 
@@ -1224,6 +1334,24 @@ the wall clock and were not checked.
 **Where.** `sched_model.go`, `sched.go`, `clockjump.go` (`clockJumpView`).
 **Done when.** A jump forward does not fire every missed run at once and a jump
 back does not run a task twice; a table test covers both.
+
+### SYS-14 — Chat files against the real channel (P1, S) [NET] [HW]
+**Why.** Sending files in chat (2026-11-09) uploads with a hand-written
+streaming multipart POST (`chatupload.go`: `payload_json` + `files[n]`, the
+session's `Authorization`/`User-Agent`, `nonce` + `enforce_nonce`), and nothing
+of it has met Discord yet. The limits it assumes (20 MiB a file, 50 / 100 MiB
+on boost tier 2 / 3) changed in 2026 and may change again; text messages still
+go through discordgo without a nonce, so a text post whose answer is lost can
+appear twice.
+**Where.** `chatupload.go` (`chatDiscordUpload`, `chatUploadAnswer`,
+`chatEchoCandidate`), `chatfiles.go` (downloads, `chatRefreshAttachmentURL`),
+`chatsync.go`; docs/CONTROLS.md → "Sending files".
+**Done when.** From a Smart Pro and from Windows: a picture, a 15 MB zip and a
+log reach the channel with progress and show on the other device and in
+Discord; a file over the server's limit is refused with "too big"; pulling
+Wi-Fi mid-upload resumes without a second post; a picture older than a day
+renews its link; Juka AI answers about an attached log. If a lost text answer
+still duplicates, text posts move to the same raw POST with a nonce.
 
 ---
 
@@ -1467,6 +1595,32 @@ decides, so guessing is slow, but a boolean or short value can be learnt.
 **Done when.** A protected value that a pull would hide counts as a change
 unless it comes back as the placeholder (the card then shows the pushed value),
 with a test.
+
+### SEC-25 — Mute errors from cross-origin scripts (P3, S)
+**Why.** A browser reports an error thrown by a cross-origin classic script that
+was loaded without CORS as "Script error." with no file, line or message, so a
+page cannot read another site's source or URLs through `window.onerror`. The
+Browser's DOM pass hands the page the real message and URL
+(`webdom/85_scripts.js`, `scrReportResult`), although `fetchScript` already
+marks such a script `opaque` (`webdom_net.go`).
+**Where.** `webdom_runtime.go` (script responses), `webdom/85_scripts.js`.
+**Done when.** An error from an opaque script reaches page handlers as "Script
+error." with an empty filename and zero line and column, the debug log keeps the
+real text, and a runtime test shows both.
+
+### SEC-26 — Cookie records keyed like the jar (P2, S)
+**Why.** `browserCookieKey` is host + path + name, while the jar keys a cookie by
+its domain + path + name: a host-only and a domain cookie of one name, set from
+the same host, share one record, so an `HttpOnly` flag can be lost — and with it
+the protection page scripts get through `document.cookie` (`webdom_net.go`).
+The records also rebuild an IPv6 host without its brackets, which is why
+`webJSNetJarURL` exists.
+**Where.** `browsercookies.go` (`browserCookieKey`, `trackLocked`,
+`browserCookieURL`), `webdom_net.go`.
+**Done when.** Records are keyed by domain-or-host + path + name and keep the
+request's host spelling, an existing `browser-cookies.json` migrates on load,
+`webJSNetJarURL` is gone, and a test sets a host-only and a domain cookie of one
+name and keeps both flags.
 
 ---
 
@@ -2099,6 +2253,19 @@ speak it, but Windows Explorer only speaks FTP.
 fingerprint the sheet shows, `PROT P` data channels, and the sheet recommends
 FTPS or SFTP.
 
+### NET-16 — The script guard knows where the page itself lives (P2, M)
+**Why.** Scripts on a public page may not reach the LAN (`webdom_net.go`). A
+public DNS name that resolves to a LAN address — split-horizon DNS, a Tailscale
+`*.ts.net` name — is therefore classed as public, and its own scripts cannot
+reach their own site. Looking the name up again to classify it would reopen the
+DNS-rebinding hole the dial-time check closes.
+**Where.** `textbrowser.go` (`fetchTextBrowserOnce`), `webdom_net.go`
+(`webJSNetPageGuard`, `newWebJSNet`), `webdom_runtime.go`.
+**Done when.** The page fetch records the address it actually connected to
+(`httptrace.ClientTrace.GotConn`) and the guard classes the page by that address:
+a page whose server is on the LAN reaches the LAN, a public page still cannot,
+and a test covers both.
+
 ---
 
 ## Game library and emulation (LIB)
@@ -2294,6 +2461,49 @@ DLL overrides and a controller mapping, stored beside its profile; the setup
 page shows which prefix an app uses; a second app with a conflicting override
 launches with its own.
 
+### APP-10 — Live bindings between ES modules (P2, M)
+**Why.** goja has no modules, so `webdom_module.go` rewrites each one into a
+function, and an imported name is a copy taken when the importing module starts.
+Inside an import cycle a name read before its module ran gets a forwarding stub
+(`webdom/85_scripts.js`), which covers functions and objects but not a `let` the
+other module assigns later.
+**Where.** `webdom_module.go` (references to imported names),
+`webdom/85_scripts.js` (`modContext`, the namespaces).
+**Done when.** References to an imported name in a module body read the
+exporting module's namespace (with scope analysis in the rewrite, so local
+variables and property names of the same spelling stay untouched), cycles
+evaluate in the standard's order, and a test links a two-module cycle that
+reassigns an exported `let`.
+
+### APP-11 — Linked stylesheets for page scripts (P2, S)
+**Why.** `getComputedStyle` (`webdom/45_css.js`) cascades inline styles and the
+page's own `<style>` sheets only; linked sheets are fetched after the script
+pass, for the renderer (`fetchWebStylesheets`). A script asking whether a panel a
+linked sheet hides is visible hears "yes", and jQuery's `.show()` on such an
+element writes nothing.
+**Where.** `textbrowser.go` (`browseWebPageResult`), `webpage.go`
+(`fetchWebStylesheets`), `webdom_runtime.go` (boot), `webdom/45_css.js`.
+**Done when.** The first linked sheets (the renderer's limits) are fetched beside
+the page's scripts and handed to the prelude before the parser scripts run, the
+renderer reuses the same bytes instead of a second download, and a test shows
+`.show()` on an element a linked sheet hides.
+
+### APP-12 — Ranges that follow the document (P3, S)
+**Why.** A `Range` (`webdom/55_traversal.js`) keeps its boundary nodes and
+offsets when the DOM changes under it, so editors and highlighters that keep a
+range across a change act on the wrong text.
+**Done when.** Live ranges are tracked per document and their boundaries move on
+insert, remove, `splitText` and `normalize` as the DOM standard says, covered by
+the jsdom comparison in `tests/web/webdom_dom.test.mjs`.
+
+### APP-13 — Customized built-in elements (P3, S)
+**Why.** `customElements.define(name, cls, { extends: "button" })` is
+registered, but a `<button is="name">` is never upgraded
+(`webdom/50_shadow_ce.js`), so components built that way do nothing.
+**Done when.** `is=` elements made by the parser, `innerHTML` and
+`createElement(tag, { is })` upgrade like autonomous custom elements, with a node
+test.
+
 ---
 
 ## Windows desktop (DESK)
@@ -2370,7 +2580,8 @@ GAME-2 (verify), GAME-9, XBX-1, XBX-4, AND-1, AND-3, AND-5, AND-6, SYS-1
 SHELL-1 (verify), SHELL-2, PWR-1, PWR-2, PWR-3, PWR-5, PWR-8, REL-7, NET-2,
 NET-5, NET-6, NET-10, LIB-8, LIB-10, LIB-14, I18N-3, TEST-10, APP-9; from the second
 afternoon pass: FIX-2, NET-3, NET-12, REL-10, REL-12, LIB-17, LIB-18, SEC-21;
-from the evening pass: MED-19, MED-20, MED-22, MED-25, SND-5, SND-6, INP-15.
+from the evening pass: MED-19, MED-20, MED-22, MED-25, SND-5, SND-6, INP-15;
+from the late-night pass: PERF-15.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 
@@ -2402,6 +2613,12 @@ passes `Emus/<system>/../../Roms/...`); LAN play finds `ra64.trimui` and
 RetroArch comes up with its own config; Stick Calibration edits the ini of the
 PPSSPP build that is played; the save manager lists the PSP saves under
 `Emus/PSP/PPSSPP_<version>/`.
+From the JavaScript pass: on a Smart Pro and a Brick, a page whose content its
+scripts build (a framework app, a jQuery site, a news page with lazy images)
+draws that content; with **Settings → Browser → JavaScript** off, **Reload**
+draws the same page as its server sent it; a public page cannot fetch from the
+LAN (the debug log names the refusal); and `JUKAHUB_LOG_LEVEL=debug` shows one
+`scripts on …` line per page.
 
 ---
 

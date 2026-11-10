@@ -76,11 +76,13 @@ var textBrowserRequestSequence = make(map[string]uint64)
 
 // browserPageFetcher loads one page. It is a variable so the browser's load
 // path (cache, stale-request guard, history) can be tested without a network.
+// The second argument is the load's script-pass generation, read on the main
+// thread when the load began (webJSLoadGeneration).
 //
-// A load runs on its own goroutine, so the seam is read under a lock and tests
-// swap it with setBrowserPageFetcherForTest: assigning the variable directly
-// races with a fetch that is still on the wire, which the race detector reports
-// as soon as a page load outlives the test that started it.
+// A load runs on its own goroutine, so the seam is read under a lock: assigning
+// the variable directly races with a fetch that is still on the wire, which the
+// race detector reports as soon as a page load outlives the test that started
+// it.
 var (
 	browserPageFetcherMu sync.RWMutex
 	browserPageFetcher   = browseWebPageResult
@@ -95,7 +97,7 @@ var browserFetches sync.WaitGroup
 const browserFetchWait = 10 * time.Second
 
 // currentBrowserPageFetcher returns the fetch function a new load should use.
-func currentBrowserPageFetcher() func(string) browserPage {
+func currentBrowserPageFetcher() func(string, uint64) browserPage {
 	browserPageFetcherMu.RLock()
 	defer browserPageFetcherMu.RUnlock()
 	return browserPageFetcher
@@ -1115,6 +1117,17 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	textBrowserRequestSequence[outputVariable]++
 	requestID := textBrowserRequestSequence[outputVariable]
 	textBrowserRequestMutex.Unlock()
+	// The same goes for a page whose scripts are still running: its result
+	// would be dropped, and it would keep the handheld's cores busy beside this
+	// load (webdom_runtime.go). The JavaScript setting is copied for the fetch
+	// goroutine here, on the main thread that owns the config.
+	webJSStopRunning()
+	refreshBrowserJavaScriptSetting(config)
+	// This load's generation is read here, on the main thread, right after the
+	// stop moved it on: read on the fetch goroutine instead, a load superseded
+	// before its goroutine ran would pick up the newer number and could no
+	// longer be stopped.
+	scriptGen := webJSLoadGeneration()
 
 	// A new load replaces whatever owned the page area: the last failure's
 	// card, and JukaLand if it was being played from it.
@@ -1176,7 +1189,7 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 				}
 			}
 		}()
-		page := fetch(pageURL)
+		page := fetch(pageURL, scriptGen)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
@@ -1293,10 +1306,18 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func browseWebPageResult(rawURL string) browserPage {
+// browseWebPageResult loads and prepares one page. gen is the script-pass
+// generation browserLoadURL read when this load began: a newer load moves it
+// on, which is how this load's script pass knows to stop (webdom_runtime.go).
+func browseWebPageResult(rawURL string, gen uint64) browserPage {
 	// Every subresource this load requests is counted here, so the reader can
 	// say how much advertising it kept off the wire.
 	resetBrowserAdBlockCount()
+	// The script pass's DOM prelude is compiled once per run — about a second
+	// on the handheld — so the first page starts it beside its own download.
+	if browserJavaScriptEnabled() {
+		go webDOMPreludeWarm()
+	}
 	address, err := normalizeTextBrowserURL(rawURL)
 	if err != nil {
 		f := brwNewFailure(brwFailOther, strings.TrimSpace(rawURL), "That address can't be opened: "+err.Error()+".")
@@ -1342,12 +1363,65 @@ func browseWebPageResult(rawURL string) browserPage {
 		return browserPage{Text: f.text(), Fail: &f}
 	}
 	// Ad and tracker scripts are removed before the script pass: there is no
-	// reason to spend the page's 5-second script budget running them, and some
-	// ship an inline fallback that would run even with the src blocked.
+	// reason to spend the page's script budget running them, and some ship an
+	// inline fallback that would run even with the src blocked.
 	html := stripBlockedWebScripts(string(body), pageURL)
-	// Page scripts run first, so the text, link, CSS and image passes below see
-	// the markup they produced (webscript.go).
-	source := runWebPageScripts(html, pageURL)
+	// Page scripts run first, against a real document (webdom_runtime.go), so
+	// the text, link, CSS and image passes below see the markup they built.
+	scripted := webJSRunPageFor(html, pageURL, gen, time.Time{})
+	// A script that sends the page elsewhere — a stub whose only job is
+	// location.replace(…), a consent or locale bounce — is followed like a meta
+	// refresh: a few hops on the same client and time budget, never back to an
+	// address this load already showed. A hop that fails keeps the page the
+	// scripts were leaving, which is still worth drawing; so does a load the
+	// reader has left, or one with too little of its time left to fetch the
+	// next page and run its scripts. A hop's pass gets only what is left.
+	seen := map[string]bool{address: true, pageURL.String(): true}
+	for hop := 0; scripted.Navigate != "" && hop < textBrowserMetaRedirectLimit; hop++ {
+		target := scripted.Navigate
+		if seen[target] || webJSLoadGeneration() != gen {
+			break
+		}
+		deadline, _ := ctx.Deadline()
+		if time.Until(deadline) < webJSMinBudget {
+			break
+		}
+		seen[target] = true
+		if _, ok := brwYouTubeVideo(target); ok {
+			return browserPage{Text: "Opening the video in Media…", FinalURL: target}
+		}
+		next, err := fetchTextBrowserDocument(ctx, client, target)
+		if err != nil {
+			// A wall met on the way is the same card as one met by the first
+			// fetch: its buttons run the search that was asked for.
+			var fetchErr *brwFetchError
+			if errors.As(err, &fetchErr) && fetchErr.fail.Kind == brwFailWall {
+				f := fetchErr.fail
+				f.URL = address
+				return browserPage{Text: f.text(), Fail: &f}
+			}
+			logDebug("browser", "script navigation from %s not followed: %v", webJSLogURL(pageURL), err)
+			break
+		}
+		landed := next.URL.String()
+		if landed != target {
+			if _, ok := brwYouTubeVideo(landed); ok {
+				return browserPage{Text: "Opening the video in Media…", FinalURL: landed}
+			}
+			// It redirected back to a page this load already showed.
+			if seen[landed] {
+				break
+			}
+		}
+		if f, ok := brwSearchWall(address, next.URL, next.Body); ok {
+			return browserPage{Text: f.text(), Fail: &f}
+		}
+		body, truncated, pageURL = next.Body, next.Truncated, next.URL
+		seen[landed] = true
+		html = stripBlockedWebScripts(string(body), pageURL)
+		scripted = webJSRunPageFor(html, pageURL, gen, deadline)
+	}
+	source := scripted.HTML
 	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
 		title = pageURL.Hostname()
@@ -1513,11 +1587,20 @@ func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address stri
 // <meta http-equiv="refresh" content="0; url=/next">. A refresh that only
 // reloads the page, waits longer than a couple of seconds, or names something
 // other than an http(s) URL is not a redirect and returns "".
+//
+// A refresh inside <noscript> is skipped while page scripts are on. A browser
+// that runs JavaScript never reads <noscript>, and that is where pages park the
+// redirect meant only for script-less browsers — Google's "turn on JavaScript",
+// a site's /nojs page. Following it sent the reader there even though its own
+// script pass (webdom_runtime.go) could have run the page itself. With
+// JavaScript off in Settings the reader is a script-less browser again and
+// follows it.
 func browserMetaRefreshTarget(html string, base *url.URL) string {
 	if base == nil {
 		return ""
 	}
 	lower := asciiLower(html)
+	skipNoscript := browserJavaScriptEnabled()
 	for from := 0; from < len(lower); {
 		i := strings.Index(lower[from:], "<meta")
 		if i < 0 {
@@ -1533,6 +1616,11 @@ func browserMetaRefreshTarget(html string, base *url.URL) string {
 		if !strings.EqualFold(strings.TrimSpace(htmlTagAttribute(tag, "http-equiv")), "refresh") {
 			continue
 		}
+		// Checked only for refresh tags: the look back over the page is cheap
+		// for the one or two a page has, not for every <meta> of a big page.
+		if skipNoscript && browserInsideNoscript(lower, i) {
+			continue
+		}
 		delay, target := parseBrowserMetaRefresh(htmlAttrValue(htmlTagAttribute(tag, "content")))
 		if target == "" || delay > textBrowserMetaRedirectDelay {
 			return ""
@@ -1544,6 +1632,22 @@ func browserMetaRefreshTarget(html string, base *url.URL) string {
 		return resolved.String()
 	}
 	return ""
+}
+
+// browserInsideNoscript reports whether offset i of lower (the page,
+// lower-cased) lies inside a <noscript> element: the nearest "<noscript" before
+// it has not been closed by a "</noscript" yet. noscript's content is raw text
+// in a browser that runs scripts, so no tag inside it can close it early.
+func browserInsideNoscript(lower string, i int) bool {
+	if i <= 0 || i > len(lower) {
+		return false
+	}
+	before := lower[:i]
+	open := strings.LastIndex(before, "<noscript")
+	if open < 0 {
+		return false
+	}
+	return strings.LastIndex(before, "</noscript") < open
 }
 
 // parseBrowserMetaRefresh splits a refresh content value into its delay and

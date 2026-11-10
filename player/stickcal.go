@@ -11,7 +11,7 @@ package main
 //
 //   - the left stick as a D-pad (controller.go handleControllerAxis →
 //     stickNavButton),
-//   - the virtual cursor's gesture, movement and scrolling (virtualcursor.go),
+//   - the virtual cursor on the right stick (virtualcursor.go),
 //   - what counts as "the stick moved" for the screensaver, the frame rate and
 //     the button hints (axisDeflectedOn), and the controller test's rings.
 //
@@ -496,10 +496,10 @@ func stickCalSettingsRows() []setRow {
 	hasSticks := func(*Config) bool { return stickHardware() }
 	rows := []setRow{
 		{
-			// Moving both sticks at once brings up a pointer: left stick
-			// moves, right stick scrolls, A clicks (virtualcursor.go).
+			// The right stick moves a pointer; A clicks, L2/R2 scroll
+			// (virtualcursor.go).
 			ID: vcursorKey, Label: "Virtual cursor", Kind: setKindToggle,
-			Detail:  setStatic("Move both sticks at once to show a pointer; A clicks"),
+			Detail:  setStatic("The right stick moves a pointer; A clicks"),
 			Visible: hasSticks,
 			Get:     vcursorEnabled,
 			Set: func(c *Config, on bool) {

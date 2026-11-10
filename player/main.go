@@ -1615,6 +1615,11 @@ func main() {
 				if homeSearchWheel(e.Y) {
 					continue
 				}
+				// The open notification centre walks its rows under the wheel,
+				// the way its D-pad does (notifications.go).
+				if notifWheel(e.Y) {
+					continue
+				}
 				// The Files viewers own the wheel while they are up: the picture
 				// zooms, the text page and the reader scroll, the list pages.
 				if filesHandleWheel(config, e.Y) {
@@ -1809,12 +1814,20 @@ func main() {
 							break
 						}
 
-						// Dismiss toast on click
+						// A click dismisses the toast. One that was cut short opens
+						// the notification centre on its message, which the
+						// centre shows whole (notifToastOpensCentre says when).
 						if toastRect.W > 0 && toastRect.H > 0 && pointInRect(mx, my, toastRect) {
 							currentToastMu.Lock()
+							toastMsg := currentToast.Message
 							currentToast = ToastState{}
 							currentToastMu.Unlock()
+							openFull := notifToastOpensCentre(toastMsg, toastCutMsg)
 							toastRect = sdl.Rect{}
+							toastCutMsg = ""
+							if openFull {
+								notifOpenOn(toastMsg)
+							}
 							break
 						}
 						// LED style panel is modal the same way.
@@ -2929,8 +2942,8 @@ func main() {
 					ctrldiagAxisEvent(int(e.Axis), e.Value)
 				} else if axisWakeFilter(e.Axis, e.Value) {
 					// A push that woke the screen only woke it (axisWakeFilter).
-					// Both sticks at once bring up the virtual cursor, which then
-					// owns the sticks (virtualcursor.go).
+					// The right stick is the virtual cursor's, and L2/R2 scroll
+					// under it while it is up (virtualcursor.go).
 					if !vcursorAxis(e, config) {
 						handleControllerAxis(e, config)
 					}
@@ -2944,7 +2957,8 @@ func main() {
 		}
 
 		drainCustom(config)
-		// A held stick moves / scrolls the virtual cursor every frame.
+		// A held right stick moves the virtual cursor every frame, and a held
+		// L2/R2 keeps scrolling under it.
 		vcursorTick(config)
 		// A hot-reloaded config is installed here, on the main thread and
 		// between frames, never under a frame that is still drawing.
@@ -3410,6 +3424,10 @@ func main() {
 		}
 		if chatProfile.open {
 			renderChatProfile(renderer, config)
+		}
+		// A message's list of files (chatfiles.go).
+		if chatFileSheet.open {
+			setSheetDraw(renderer, config, &chatFileSheet)
 		}
 
 		// Update prompt is the topmost modal.

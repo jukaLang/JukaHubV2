@@ -197,17 +197,23 @@ now**, writes nothing: it drops the saved
 session and the file immediately, exactly as the Browser's Forget chip does.
 
 `browserSearchEngine` (string) is the engine the Browser searches with:
-`duckduckgo` (the default, and what an unknown value means), `google`, `bing`,
-`startpage`, `brave`, `yahoo`, `mojeek`, `wikipedia`, or `custom`, which uses
+`startpage` (the default, and what an unknown value means), `duckduckgo`,
+`google`, `bing`, `brave`, `yahoo`, `mojeek`, `wikipedia`, or `custom`, which uses
 `browserSearchCustom` (string): a results address with `%s` where the words go
 (one ending in `=` takes them at the end, and a bare host gains `https://`). A
-`custom` engine without a usable address searches DuckDuckGo.
+`custom` engine without a usable address searches Startpage.
 `browserHomePage` (string) is the page **Home** and a newly opened Browser
 show; empty or absent follows the engine's start page, and a value that is not
 a web address is ignored the same way. `browserHomeTyped` (string) is the last
 address typed for it, kept so the row can still offer it after another choice.
 Settings → **Browser** writes all four (a typed value only when it is usable);
 see [Browser → Search engine and home page](BROWSER.md#search-engine-and-home-page).
+
+`browserJavaScript` (bool, default true) lets the Browser run page scripts.
+Off, every page is drawn as its server sent it; `false`, `0`, `"false"`,
+`"0"`, `"no"` and `"off"` all mean off, and a missing key means on. Settings → Browser
+→ **JavaScript** writes it as `"true"`/`"false"`; a hand edit applies from the
+next page load. See [Browser → JavaScript](BROWSER.md#javascript).
 
 Time-lapse recording is two custom keys, documented in
 [Time-lapse](TIMELAPSE.md): `timelapse` (bool, default true) films every game
@@ -382,7 +388,8 @@ folder can join the conversion tab by naming an arrangement:
 | `fav_tab`, `fav_play`, `fav_remove` | favourites tabs (`videos`/`recent`/`files`/`iptv`), play, remove |
 | `fe_list`, `fe_up` | file explorer: list the current directory, go up one level |
 | `app_refresh`, `app_open_folder` | rescan the Apps list, open the apps folder |
-| `chat_send`, `chat_clear`, `groq_chat`, `discord_connect`, `attach_image`, `send_to_chat` | chat and assistant |
+| `chat_send`, `chat_clear`, `groq_chat`, `discord_connect` | chat and assistant |
+| `attach_image`, `send_to_chat` | files for the chat: `attach_image` opens Files to pick files (any kind, despite the name) for the chat tab on screen; `send_to_chat` puts the focused Files row in the community tab's tray and opens the chat — see [Sending files](CONTROLS.md#sending-files) |
 | `tick`, `add_ticker`, `clear_tickers` | stock/crypto tickers |
 | `netspeed_run`, `benchmark_run`, `benchmark_random`, `hw_load`, `cron_load`, `cron_startup` | network test, benchmarks, hardware info, scheduled tasks and startup items |
 | `terminal_run`, `emulator_run`, `external_app` | run a command, an emulator, or an external program |

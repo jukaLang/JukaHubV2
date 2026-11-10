@@ -70,6 +70,9 @@ const (
 // handlers (the same thread) touch it.
 type chatTabView struct {
 	draft string
+	// files wait in the tray above the composer until the message goes
+	// (chatfiles.go). Like the draft, they belong to their tab.
+	files []ChatFile
 	// scroll is how far the history is pushed down from "newest message at the
 	// bottom", in pixels; target is where the smooth scroll is heading.
 	scroll float64
@@ -303,6 +306,9 @@ func loadChatMessages() {
 		sec = userConfigCache.Chat
 	}
 	community, ai, saved := chatSplitHistory(sec)
+	// Every local path in the history was put there on this device: the
+	// pictures among them may be drawn wherever they are (chatPathTrusted).
+	chatTrustHistory(community, ai, saved)
 	pending := false
 	chatMutex.Lock()
 	chatMessages, chatAIMessages, chatSavedMessages = community, ai, saved
@@ -460,6 +466,8 @@ func chatTick(config *Config) {
 	chatEnsureLoaded()
 	chatRefreshCreds(config, time.Now(), false)
 	chatSyncVisibility(config)
+	// Picking in Files, and files saved from the chat that should open now.
+	chatFilesTick(config)
 	if chatOutboxFlag.Swap(false) {
 		chatEnsureSync()
 		chatWakeSync()
@@ -595,32 +603,43 @@ func chatOutboxPoke() {
 	chatWakeSync()
 }
 
-// chatSubmitComposer sends a typed message to the tab on screen. askAI sends
-// it to Juka AI instead (the keyboard's Ask AI key), switching to that tab so
-// the answer is in view.
+// chatSubmitComposer sends a typed message, and the files waiting in the tray,
+// to the tab on screen. askAI sends the text to Juka AI instead (the
+// keyboard's Ask AI key), switching to that tab so the answer is in view; the
+// tray stays with the tab it was filled for.
 func chatSubmitComposer(text string, askAI bool) {
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
 	tab := chatActiveTabID()
 	if askAI && tab != chatTabAI {
+		if text == "" {
+			// Ask AI sends words; the files stay with the tab they wait in.
+			showToast("Type a question for Juka first", ToastInfo())
+			return
+		}
 		chatSelectTab(chatTabAI)
 		tab = chatTabAI
 	}
+	files := chatStagedFiles(tab)
+	if text == "" && len(files) == 0 {
+		return
+	}
 	switch tab {
 	case chatTabAI:
-		if !chatAskAI(text) {
+		if !chatAskAIWith(text, files) {
 			// Nothing is lost while the key is missing: the text stays in the
 			// composer and the setup hint says where the key goes.
 			chatInputText = text
 			return
 		}
 	case chatTabSaved:
-		chatAppendSaved(text)
+		chatAppendSavedWith(text, files)
 	default:
-		sendChatMessage(chatDisplayName(), text)
+		// "System" lines are never posted to the channel (sendChatMessage).
+		sender := chatDisplayName()
+		postChatMessageFiles(sender, text, files, !strings.EqualFold(sender, chatSystemSender))
 	}
+	// The files went with the message.
+	chatTakeStaged(tab)
 	// The caller plays the press sound: the keyboard's Send already did.
 	chatJumpToLatest()
 }
@@ -628,8 +647,14 @@ func chatSubmitComposer(text string, askAI bool) {
 // chatAskAI queues a question for Juka. It reports false (and explains) when
 // no Groq key is configured, so the caller can keep the text.
 func chatAskAI(text string) bool {
+	return chatAskAIWith(text, nil)
+}
+
+// chatAskAIWith is chatAskAI for a question that carries text files: Juka is
+// shown an excerpt of each (chatAIFileContext). A file alone is a question too.
+func chatAskAIWith(text string, files []ChatFile) bool {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(files) == 0 {
 		return false
 	}
 	if groqAPIKey() == "" {
@@ -640,6 +665,7 @@ func chatAskAI(text string) bool {
 	msg := newChatMessage(chatDisplayName(), text)
 	msg.Own = true
 	msg.Pending = true
+	msg.Files = files
 	chatMutex.Lock()
 	chatAppendLocked(chatTabAI, msg)
 	chatMutex.Unlock()
@@ -650,9 +676,16 @@ func chatAskAI(text string) bool {
 
 // chatAppendSaved stores a note to self.
 func chatAppendSaved(text string) {
+	chatAppendSavedWith(text, nil)
+}
+
+// chatAppendSavedWith stores a note to self with files: references to files
+// on this device, opened from the note.
+func chatAppendSavedWith(text string, files []ChatFile) {
 	msg := newChatMessage(chatDisplayName(), text)
 	msg.Own = true
-	if msg.Text == "" {
+	msg.Files = files
+	if msg.Text == "" && len(msg.Files) == 0 {
 		return
 	}
 	chatMutex.Lock()
@@ -661,7 +694,8 @@ func chatAppendSaved(text string) {
 	chatDirty.Store(true)
 }
 
-// chatSaveCopy keeps a copy of any message in the Saved tab.
+// chatSaveCopy keeps a copy of any message in the Saved tab, its files
+// included.
 func chatSaveCopy(msg ChatMessage) {
 	copyMsg := ChatMessage{
 		ID:        newChatMessageID(),
@@ -670,6 +704,7 @@ func chatSaveCopy(msg ChatMessage) {
 		ImageURL:  msg.ImageURL,
 		Timestamp: time.Now(),
 		Own:       true,
+		Files:     append([]ChatFile(nil), msg.Files...),
 	}
 	if !chatIsOwn(msg) {
 		// Who said it travels with the note; a quote without text draws as a
@@ -681,34 +716,6 @@ func chatSaveCopy(msg ChatMessage) {
 	chatMutex.Unlock()
 	chatDirty.Store(true)
 	showToast("Saved", ToastInfo())
-}
-
-// chatAttachTab is the tab that asked the File Explorer for a picture.
-var chatAttachTab = chatTabCommunity
-
-// chatAttachLocalImage adds a picture picked in the File Explorer to the tab
-// that asked for it, as this device's own message. It stays on the device: a
-// local file has no URL the channel could show.
-func chatAttachLocalImage(path string) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return
-	}
-	tab := chatAttachTab
-	if tab == chatTabAI {
-		tab = chatTabSaved
-	}
-	msg := ChatMessage{
-		ID:        newChatMessageID(),
-		Sender:    chatDisplayName(),
-		Timestamp: time.Now(),
-		ImageURL:  path,
-		Own:       true,
-	}
-	chatMutex.Lock()
-	chatAppendLocked(tab, msg)
-	chatMutex.Unlock()
-	chatDirty.Store(true)
 }
 
 // chatAddMarker starts a new Juka AI conversation: a divider in the history,
@@ -731,13 +738,15 @@ func chatAddMarker() bool {
 	return true
 }
 
-// chatRetryMessage queues a failed message again.
+// chatRetryMessage queues a failed message again. A Retry means now: the
+// back-off a failed upload left is forgotten.
 func chatRetryMessage(tab chatTab, id string) bool {
 	ok := chatUpdateMessage(tab, id, func(m *ChatMessage) {
 		m.Error = ""
 		m.Pending = true
 	})
 	if ok {
+		chatUploadRetryReset()
 		chatOutboxPoke()
 	}
 	return ok
@@ -774,8 +783,10 @@ func chatPendingCount(tab chatTab) int {
 }
 
 // chatAppendIncoming adds a message that arrived from Discord. A copy that is
-// already there (the same id, or the echo of a message this device just sent
+// already there (the same id, or the echo of a message this device is sending
 // through the shared bot) is skipped; it reports whether the message was new.
+// The echo of a message deleted here while it went out is taken back off the
+// channel instead.
 func chatAppendIncoming(msg ChatMessage, echo bool) bool {
 	chatMutex.Lock()
 	list := chatMessages
@@ -789,20 +800,28 @@ func chatAppendIncoming(msg ChatMessage, echo bool) bool {
 			chatMutex.Unlock()
 			return false
 		}
-		if echo && have.Own && have.Text == msg.Text {
-			if gap := msg.Timestamp.Sub(have.Timestamp); gap > -5*time.Minute && gap < 5*time.Minute {
-				if !isDiscordSnowflake(have.ID) && msg.ID != "" {
-					chatUpdateLocked(chatTabCommunity, have.ID, func(m *ChatMessage) {
-						m.ID = msg.ID
-						m.Pending = false
-						m.Error = ""
-					})
-				}
-				chatMutex.Unlock()
-				chatDirty.Store(true)
-				return false
-			}
+		if !echo || !chatSameContent(have, msg) || !chatEchoCandidate(have, msg.Timestamp, false) {
+			continue
 		}
+		// This device's own message, back through the shared bot: it keeps
+		// its files' paths and takes Discord's id and links.
+		chatUpdateLocked(chatTabCommunity, have.ID, func(m *ChatMessage) {
+			chatAdoptEcho(m, msg)
+		})
+		chatMutex.Unlock()
+		chatDirty.Store(true)
+		return false
+	}
+	if echo && chatTakeUnsend("", &msg) {
+		chatMutex.Unlock()
+		chatDeleteRemote(msg.ID)
+		return false
+	}
+	if chatWasDropped(msg.ID) {
+		// Taken back already (Discord's answer came first): its late echo
+		// is not shown either.
+		chatMutex.Unlock()
+		return false
 	}
 	chatAppendLocked(chatTabCommunity, msg)
 	if !chatIsOwn(msg) {

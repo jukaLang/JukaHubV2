@@ -216,7 +216,8 @@ func chatMemberProfiles() []chatMemberProfile {
 		}
 		if !msg.Timestamp.Before(entry.LastSeen) {
 			entry.LastSeen = msg.Timestamp
-			entry.LastText = msg.Text
+			// A message of files alone reads as what it carried.
+			entry.LastText = chatMessagePreview(msg)
 			entry.Name = name
 			if msg.AvatarURL != "" {
 				entry.AvatarURL = msg.AvatarURL
@@ -247,9 +248,22 @@ func chatMemberProfiles() []chatMemberProfile {
 }
 
 // chatMembersList returns the member rows for the list overlay: the local user
-// first (the person holding the device), then everyone else by recency.
+// first (the person holding the device), then everyone else by recency. The
+// local user is there before writing anything too: their card is where a pad
+// renames them.
 func chatMembersList() []chatMemberProfile {
 	profiles := chatMemberProfiles()
+	local := false
+	for _, p := range profiles {
+		if p.Local {
+			local = true
+			break
+		}
+	}
+	if !local {
+		name := chatDisplayName()
+		profiles = append(profiles, chatMemberProfile{Key: "name:" + strings.ToLower(name), Name: name, Local: true})
+	}
 	sort.SliceStable(profiles, func(i, j int) bool {
 		if profiles[i].Local != profiles[j].Local {
 			return profiles[i].Local
@@ -298,10 +312,10 @@ func chatProfileSource(p chatMemberProfile) string {
 
 // --- Overlay open/close ---------------------------------------------------
 
-// chatOverlayOpen reports whether a chat profile or member list is up. Both are
-// modal over the scene.
+// chatOverlayOpen reports whether a chat profile, the member list or a
+// message's file list is up. All three are modal over the scene.
 func chatOverlayOpen() bool {
-	return chatProfile.open || chatMembers.open
+	return chatProfile.open || chatMembers.open || chatFileSheet.open
 }
 
 // chatOverlayOwnsInput reports whether the member list or the profile card
@@ -315,6 +329,8 @@ func chatOverlayOwnsInput(config *Config) bool {
 	if !currentSceneHasChat(config) {
 		chatProfile = chatProfileCard{}
 		chatMembers = chatMembersPanel{}
+		chatFileSheet.open = false
+		chatFileSheet.choose = nil
 		return false
 	}
 	return true
@@ -420,6 +436,14 @@ func handleChatOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e.Type != sdl.KEYDOWN {
 		return true
 	}
+	if chatFileSheet.open {
+		if e.Keysym.Sym == sdl.K_b {
+			setSheetClose(&chatFileSheet)
+			return true
+		}
+		setSheetKey(&chatFileSheet, e.Keysym.Sym)
+		return true
+	}
 	if chatProfile.open {
 		switch e.Keysym.Sym {
 		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
@@ -470,6 +494,10 @@ func ctrlChatOverlay(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	if !chatOverlayOwnsInput(config) {
 		return false
+	}
+	if chatFileSheet.open {
+		setSheetPad(&chatFileSheet, e.Button)
+		return true
 	}
 	if chatProfile.open {
 		switch e.Button {
@@ -534,6 +562,10 @@ func chatMembersEnsureVisible() {
 func chatOverlayClick(mx, my int32, config *Config) bool {
 	if !chatOverlayOpen() {
 		return false
+	}
+	if chatFileSheet.open {
+		setSheetMouse(&chatFileSheet, mx, my)
+		return true
 	}
 	if chatProfile.open {
 		if chatProfile.profile.AvatarURL != "" && pointInRect(mx, my, chatProfile.avatar) {

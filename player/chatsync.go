@@ -259,6 +259,7 @@ func chatSyncDiscord(now time.Time) {
 	if chatRetryRequested.Swap(false) {
 		chatDiscordRetryAt, chatSendRetryAt = time.Time{}, time.Time{}
 		chatDiscordBackoff = 0
+		chatUploadRetryReset()
 	}
 	pending := chatPendingMessages(chatTabCommunity)
 	if !chatDiscordWanted.Load() && len(pending) == 0 {
@@ -299,16 +300,35 @@ func chatSyncDiscord(now time.Time) {
 		// reconnecting, and its Connect event brings the tab back to Live.
 		chatSetNet(chatNetConnecting)
 	}
-	if len(pending) == 0 || now.Before(chatSendRetryAt) {
+	// While a message's files are going up nothing else is sent, so the
+	// channel shows the messages in the order they were written.
+	if len(pending) == 0 || now.Before(chatSendRetryAt) || chatUploadBusy.Load() {
 		return
 	}
 	for _, msg := range pending {
+		if len(msg.Files) > 0 {
+			// Files go up on their own goroutine (chatupload.go), one message
+			// at a time; the ones after it wait their turn.
+			if chatUploadDue(now) {
+				chatStartUpload(msg)
+			}
+			return
+		}
+		// The list was read before the first post went out: a message deleted
+		// (or delivered by its echo) since then is not posted.
+		if cur, ok := chatFindMessage(chatTabCommunity, msg.ID); !ok || !cur.Pending || cur.Error != "" {
+			continue
+		}
 		replyID := ""
 		if msg.Quote != nil {
 			replyID = msg.Quote.ID
 		}
+		// While the post is on its way the message is in flight, so an echo
+		// that beats Discord's answer finds it (chatEchoCandidate).
+		chatPostingBegin(msg.ID)
 		discordID, err := chatDiscordPost(msg.Sender, msg.Text, replyID)
 		if err != nil {
+			chatPostingEnd()
 			if chatIsNetworkError(err) {
 				chatSendRetryAt = now.Add(15 * time.Second)
 				return
@@ -320,13 +340,18 @@ func chatSyncDiscord(now time.Time) {
 			})
 			continue
 		}
-		chatUpdateMessage(chatTabCommunity, msg.ID, func(m *ChatMessage) {
+		posted := chatUpdateMessage(chatTabCommunity, msg.ID, func(m *ChatMessage) {
 			m.Pending = false
 			m.Error = ""
 			if discordID != "" {
 				m.ID = discordID
 			}
 		})
+		chatPostingEnd()
+		if !posted && discordID != "" && chatTakeUnsend(msg.ID, nil) {
+			// Deleted here while the post was on its way: taken back.
+			chatDropRemote(discordID)
+		}
 	}
 }
 
@@ -514,9 +539,28 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 			logDebug("groq", "request recovered from: %v", r)
 		}
 	}()
+	history := chatAIHistoryBefore(prompt.ID)
+	question := strings.TrimSpace(prompt.Text)
+	// A text file attached to the question (or, for a follow-up, earlier in
+	// the conversation) goes with it as an excerpt (chatfiles.go).
+	extra, ferr := chatAIFileContext(prompt, history)
+	if ferr != nil {
+		logWarn("groq", "attached file: %v", ferr)
+		chatUpdateMessage(chatTabAI, prompt.ID, func(m *ChatMessage) {
+			m.Pending = false
+			m.Error = "Couldn't read the attached file — Retry reads it again"
+		})
+		return
+	}
+	if extra != "" {
+		if question == "" {
+			question = chatAIFileQuestion
+		}
+		question += "\n\n" + extra
+	}
 	groqStatus = "Groq: thinking..."
 	chatStreamBegin(prompt.ID)
-	messages := buildGroqMessagesFrom(chatAIHistoryBefore(prompt.ID), strings.TrimSpace(prompt.Text))
+	messages := buildGroqMessagesFrom(history, question)
 	reply, err := chatGroqAsk(key, models, messages, func(partial string) {
 		chatStreamUpdate(prompt.ID, partial)
 	})

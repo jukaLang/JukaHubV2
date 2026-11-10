@@ -116,10 +116,10 @@ go build -o JukaHub .
 ./JukaHub
 ```
 
-On macOS use Homebrew (`sdl2`, `sdl2_image`, `sdl2_ttf`) and set `CGO_CFLAGS` /
-`CGO_LDFLAGS` to the `brew --prefix sdl2*/include|lib` paths, as the Windows CI
-job in [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml)
-does for MinGW.
+On macOS install the same three libraries with Homebrew
+(`brew install sdl2 sdl2_image sdl2_ttf`); the SDL bindings find them through
+`pkg-config`, which is all the nightly macOS job in
+[`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml) does.
 
 ## TrimUI Smart Pro (linux/arm64)
 
@@ -206,7 +206,7 @@ numbers. See [Patch and package format](PACKAGES.md) for what consumes it.
 | Workflow | Trigger | Output |
 |----------|---------|--------|
 | [`.github/workflows/build-sdcard.yml`](../.github/workflows/build-sdcard.yml) | push to `main` touching `player/**`, pull requests, manual | `JukaHub-SDCARD` artifact (the SD-card package), built in the community TrimUI toolchain image |
-| [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` and `JukaHub-Windows.zip`, each carrying `release-info.json` (`tag` + RFC3339 `date`). The release is created as a draft and published only after both archives are attached, so a download link never points at an empty release. Pull-request runs stop at the draft. |
+| [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` and `JukaHub-Windows.zip`, each carrying `release-info.json` (`tag` + RFC3339 `date`). The release is created as a draft and published only after both archives are attached, so a download link never points at an empty release. Pull-request runs stop at the draft. The Windows job starts from the Go build cache an earlier push-to-main run of the same workflow left as an artifact, so a release normally compiles only the player; [`.github/scripts/go-build-cache.sh`](../.github/scripts/go-build-cache.sh) explains why it is not `actions/cache`. |
 | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json` and `SHA256SUMS` to the GitHub release, then publishes it once the draft upload is complete |
 
 Both the updater and the version line in the UI read `release-info.json`, so a

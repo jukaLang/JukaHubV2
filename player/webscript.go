@@ -1,13 +1,17 @@
 package main
 
-// webscript.go — runs a page's own <script> tags for the built-in browser.
+// webscript.go — the original script pass of the built-in browser.
 //
-// Scripts run in an embedded ES5/ES6 engine (goja) with a small document
-// object. document.write output is spliced back into the page where its
-// script stood, so the text, link, stylesheet and image passes that follow see
-// the markup the script produced. Every limit here exists for the handheld's
-// 1 GB of RAM and slow CPU: a script can never hang the page load or grow the
-// source without bound.
+// A page load runs its scripts through the DOM pass (webJSRunPageFor in
+// webdom_runtime.go: a real document, timers, fetch, modules), which falls
+// back to the pass kept here when it cannot start.
+//
+// This pass (runWebPageScriptsLegacy) runs scripts in an embedded
+// ES5/ES6 engine (goja) with a small stub document. document.write output is
+// spliced back into the page where its script stood, so the text, link,
+// stylesheet and image passes that follow see the markup the script produced.
+// Every limit here exists for the handheld's 1 GB of RAM and slow CPU: a
+// script can never hang the page load or grow the source without bound.
 
 import (
 	"context"
@@ -50,9 +54,10 @@ var (
 	webScriptTypeRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)\btype\s*=\s*["']?([^"'\s>]+)`) })
 )
 
-// runWebPageScripts executes the page's classic JavaScript in document order and
-// returns the source with each script tag replaced by whatever it wrote.
-func runWebPageScripts(source string, base *url.URL) string {
+// runWebPageScriptsLegacy executes the page's classic JavaScript in document
+// order against a stub document and returns the source with each script tag
+// replaced by whatever it wrote. It is the DOM pass's fallback.
+func runWebPageScriptsLegacy(source string, base *url.URL) string {
 	matches := webScriptTagRe().FindAllStringSubmatchIndex(source, -1)
 	if len(matches) == 0 {
 		return source
@@ -184,15 +189,20 @@ func runWebCallback(rt *goja.Runtime, fn goja.Callable, remaining time.Duration)
 
 // webScriptGuard interrupts rt when the run outlasts min(webScriptRunTimeout,
 // remaining) or the live heap grows by webScriptMaxHeapGrowth. The returned
-// function ends the watch; the caller clears any interrupt afterwards.
+// function ends the watch and returns only once the watching goroutine has:
+// an Interrupt that fires just as a script returns must land before the
+// caller's ClearInterrupt, not after it, where it would kill the next script
+// at its first instruction.
 func webScriptGuard(rt *goja.Runtime, remaining time.Duration) func() {
 	timeout := webScriptRunTimeout
 	if remaining > 0 && remaining < timeout {
 		timeout = remaining
 	}
 	done := make(chan struct{})
+	exited := make(chan struct{})
 	base := webLiveHeapBytes()
 	go func() {
+		defer close(exited)
 		limit := time.NewTimer(timeout)
 		defer limit.Stop()
 		tick := time.NewTicker(50 * time.Millisecond)
@@ -215,7 +225,10 @@ func webScriptGuard(rt *goja.Runtime, remaining time.Duration) func() {
 			}
 		}
 	}()
-	return func() { close(done) }
+	return func() {
+		close(done)
+		<-exited
+	}
 }
 
 // webLiveHeapBytes is the live heap at the last collection (0 if the runtime

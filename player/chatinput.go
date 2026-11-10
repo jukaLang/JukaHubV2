@@ -12,16 +12,21 @@ package main
 // Now the screen starts in browse mode:
 //
 //	Up / Down            walk the history (a tall message scrolls first);
-//	                     Down from the newest message returns to the composer
-//	L1 / R1, Left/Right  previous / next tab (Tab / Shift+Tab on a keyboard)
+//	                     Down from the newest message reaches the files
+//	                     waiting to be sent, then the composer
+//	L1 / R1, Left/Right  previous / next tab (Tab / Shift+Tab on a keyboard);
+//	                     on the waiting files Left/Right picks one
 //	L2 / R2              oldest / newest message
 //	right stick, wheel   scroll freely
 //	A / Enter            type (on-screen keyboard; Enter types inline on a
-//	                     real keyboard), or open a focused message's actions
-//	Start                send what is typed (an empty composer leaves Start to
-//	                     the Start menu, as everywhere)
+//	                     real keyboard), open a focused message's actions, or
+//	                     take a waiting file off the message
+//	Start                send what is typed or attached (an empty composer
+//	                     leaves Start to the Start menu, as everywhere)
 //	Y                    the tab's own action: People / New chat / Add key
-//	X                    rename yourself
+//	X                    attach files (Files opens to pick them)
+//	R (keyboard)         rename yourself (also the name chip, and Rename on
+//	                     your own card in People)
 //	B / Esc / Backspace  leave Chat (an open card or action bar closes first,
 //	                     and the on-screen keyboard closes itself first)
 //
@@ -85,17 +90,27 @@ func chatSceneController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		chatFocusDown()
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		if !chatTrayMove(-1) {
+			chatCycleTab(-1)
+		}
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		if !chatTrayMove(1) {
+			chatCycleTab(1)
+		}
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		chatCycleTab(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		chatCycleTab(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		chatActivate()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		if chatTrayLeave() {
+			break
+		}
 		chatLeave(config)
 	case sdl.CONTROLLER_BUTTON_X:
-		PlayActivateSound()
-		vkOpenName()
+		chatStartAttach(config)
 	case sdl.CONTROLLER_BUTTON_Y:
 		chatTabAction(config)
 	case sdl.CONTROLLER_BUTTON_START:
@@ -184,9 +199,18 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		chatFocusDown()
 	case sdl.K_LEFT:
-		chatCycleTab(-1)
+		if !chatTrayMove(-1) {
+			chatCycleTab(-1)
+		}
 	case sdl.K_RIGHT:
-		chatCycleTab(1)
+		if !chatTrayMove(1) {
+			chatCycleTab(1)
+		}
+	case sdl.K_DELETE:
+		// Del takes the waiting file under the cursor off the message.
+		if !chatTrayRemoveFocused() {
+			return false
+		}
 	case sdl.K_TAB:
 		chatCycleTab(chatTabStep(shift))
 	case sdl.K_1, sdl.K_2, sdl.K_3:
@@ -204,7 +228,7 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		clearChatSelection()
 		chatJumpToLatest()
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
-		if chatSuggestFocus >= 0 {
+		if chatSuggestFocus >= 0 || chatTrayFocus >= 0 {
 			chatActivate()
 			break
 		}
@@ -222,10 +246,15 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		chatSkipSpace = sym == sdl.K_SPACE
 		chatStartInlineTyping()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
+		if chatTrayLeave() {
+			break
+		}
 		chatLeave(config)
 	case sdl.K_y:
 		chatTabAction(config)
 	case sdl.K_x:
+		chatStartAttach(config)
+	case sdl.K_r:
 		PlayActivateSound()
 		vkOpenName()
 	default:
@@ -365,11 +394,11 @@ func chatLeave(config *Config) {
 	goBackScene(config)
 }
 
-// chatSendDraft sends what the composer holds. It reports false when there is
-// nothing to send.
+// chatSendDraft sends what the composer holds: the typed text and the files
+// waiting in the tray. It reports false when there is nothing to send.
 func chatSendDraft() bool {
 	text := strings.TrimSpace(chatInputText)
-	if text == "" {
+	if text == "" && chatStagedCount(chatActiveTabID()) == 0 {
 		return false
 	}
 	chatInputText = ""
@@ -378,8 +407,17 @@ func chatSendDraft() bool {
 	return true
 }
 
+// chatHasDraft reports whether the composer has something to send.
+func chatHasDraft() bool {
+	return strings.TrimSpace(chatInputText) != "" || chatStagedCount(chatActiveTabID()) > 0
+}
+
 // chatActivate is A on the Chat scene.
 func chatActivate() {
+	if chatTrayFocus >= 0 {
+		chatTrayRemoveFocused()
+		return
+	}
 	if chatSuggestFocus >= 0 && chatSuggestFocus < chatSuggestionCount {
 		text := chatSuggestions[chatSuggestFocus]
 		chatSuggestFocus = -1
@@ -444,21 +482,15 @@ func chatCycleTab(delta int) {
 	}
 }
 
-// chatStartAttach sends the user to the File Explorer to pick a picture; the
-// pick lands in the tab that asked (chatAttachLocalImage).
+// chatStartAttach opens Files to pick files for the tab on screen: A on a
+// file (or on the rows X marked) puts it in the tray and comes back here
+// (chatfiles.go).
 func chatStartAttach(config *Config) {
 	if config == nil {
 		return
 	}
-	chatAttachTab = chatActiveTabID()
-	if config.Variables.Custom == nil {
-		config.Variables.Custom = map[string]interface{}{}
-	}
-	config.Variables.Custom["chat_attach_image"] = "1"
-	PlayActivateSound()
-	showToast("Pick a picture to attach it", ToastInfo())
-	if idx := sceneIndexExact(config, "FileExplorer"); idx >= 0 {
-		changeSceneTo(config, idx)
+	if chatPickBegin(config, chatActiveTabID()) {
+		showToast(hintSentence2("Pick a file to attach — %s marks several, %s cancels", "X", "Mark", "B", "Cancel"), ToastInfo())
 	}
 }
 
@@ -543,6 +575,7 @@ func chatFocusMessage(msgs []ChatMessage, idx int, mode chatAnchorMode) {
 	}
 	chatSelected, chatSelectedID = idx, msgs[idx].ID
 	chatSelectionBar = chatSelection{index: idx, buttons: chatSelectionActions(idx)}
+	chatTrayFocus = -1
 	view := &chatViews[chatActiveTabID()]
 	view.anchorID = msgs[idx].ID
 	view.anchorMode = mode
@@ -572,6 +605,14 @@ func chatFocusUp() bool {
 		return false
 	}
 	if chatSelected < 0 || chatSelected >= len(msgs) {
+		// Above the composer come the files waiting to be sent, then the
+		// history.
+		if chatTrayFocus < 0 && chatStagedCount(tab) > 0 {
+			chatTrayFocus = chatStagedCount(tab) - 1
+			PlayNavSound()
+			return true
+		}
+		chatTrayFocus = -1
 		if len(msgs) == 0 {
 			if tab == chatTabAI && chatHasGroqKey() {
 				chatSuggestFocus = chatSuggestionCount - 1
@@ -610,8 +651,18 @@ func chatFocusDown() bool {
 		if chatSuggestFocus < chatSuggestionCount-1 {
 			chatSuggestFocus++
 		} else {
+			// Below the questions: the files waiting to go, then the composer.
 			chatSuggestFocus = -1
+			if n := chatStagedCount(tab); n > 0 {
+				chatTrayFocus = n - 1
+			}
 		}
+		PlayNavSound()
+		return true
+	}
+	if chatTrayFocus >= 0 {
+		// From the waiting files down to the composer.
+		chatTrayFocus = -1
 		PlayNavSound()
 		return true
 	}
@@ -629,6 +680,12 @@ func chatFocusDown() bool {
 	}
 	if idx := chatNextFocusable(msgs, chatSelected); idx >= 0 {
 		chatFocusMessage(msgs, idx, chatAnchorTop)
+		return true
+	}
+	if n := chatStagedCount(tab); n > 0 {
+		// Past the newest message: the files waiting to be sent come first.
+		chatFocusComposer()
+		chatTrayFocus = n - 1
 		return true
 	}
 	chatFocusComposer()
@@ -679,6 +736,10 @@ func chatSceneWheel(config *Config, dy int32) bool {
 	if !chatSceneActive(config) || dy == 0 {
 		return false
 	}
+	if chatFileSheet.open {
+		setSheetWheel(&chatFileSheet, dy)
+		return true
+	}
 	if chatOverlayOpen() {
 		return true
 	}
@@ -727,7 +788,19 @@ func chatSceneClick(mx, my int32, config *Config) bool {
 	if !chatSceneActive(config) || chatOverlayOpen() {
 		return false
 	}
+	// The "Jump to latest" pill floats over the bottom of the history: it
+	// takes its clicks before the picture, card or link drawn under it.
+	if chatJumpRect.W > 0 && pointInRect(mx, my, chatJumpRect) {
+		clearChatSelection()
+		chatJumpToLatest()
+		PlayNavSound()
+		return true
+	}
 	if handleChatImageClick(mx, my) {
+		return true
+	}
+	// A file card opens (or saves) its file, like A on it in the file list.
+	if handleChatFileClick(mx, my, config) {
 		return true
 	}
 	// Link text sits inside a bubble, so it is checked before the bubble,
@@ -785,6 +858,9 @@ func handleChatComposerMouse(mx, my int32, config *Config) bool {
 		openChatMembers()
 		return true
 	}
+	if handleChatTrayClick(mx, my) {
+		return true
+	}
 	if chatInputRect.W > 0 && pointInRect(mx, my, chatInputRect) {
 		chatComposerClicked()
 		return true
@@ -809,6 +885,13 @@ func handleChatComposerMouse(mx, my int32, config *Config) bool {
 func chatFooterHints() []FooterHint {
 	back := FooterHint{Button: "B", Label: "Back"}
 	switch {
+	case chatFileSheet.open:
+		// A message's list of files is up (chatOpenFileSheet).
+		return []FooterHint{
+			{Button: "D-Pad", Label: "Choose"},
+			{Button: "A", Label: "Open"},
+			{Button: "B", Label: "Close"},
+		}
 	case chatSelectionBar.open:
 		return []FooterHint{
 			{Button: "D-Pad", Label: "Choose"},
@@ -820,6 +903,14 @@ func chatFooterHints() []FooterHint {
 			{Button: "Enter", Label: "Send"},
 			back,
 			{Button: "Esc", Label: "Done"},
+		}
+	case chatTrayFocus >= 0:
+		return []FooterHint{
+			{Button: "D-Pad", Label: "Choose"},
+			{Button: "A", Label: "Remove"},
+			{Button: "Start / Ctrl+Enter", Label: "Send"},
+			{Button: "B", Label: "Done"},
+			{Button: "X", Label: "Attach"},
 		}
 	case chatSuggestFocus >= 0:
 		return []FooterHint{
@@ -839,9 +930,16 @@ func chatFooterHints() []FooterHint {
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Browse"},
 		{Button: "A", Label: "Type"},
-		back,
-		{Button: "L1/R1", Label: "Tabs"},
 	}
+	// Something to send leads; the planner drops hints from the end when the
+	// footer is narrow.
+	if chatHasDraft() {
+		hints = append(hints, FooterHint{Button: "Start / Ctrl+Enter", Label: "Send"})
+	}
+	hints = append(hints, back,
+		FooterHint{Button: "X", Label: "Attach"},
+		FooterHint{Button: "L1/R1", Label: "Tabs"},
+	)
 	switch chatActiveTabID() {
 	case chatTabCommunity:
 		hints = append(hints, FooterHint{Button: "Y", Label: "People"})
@@ -852,8 +950,5 @@ func chatFooterHints() []FooterHint {
 			hints = append(hints, FooterHint{Button: "Y", Label: "Add key"})
 		}
 	}
-	if strings.TrimSpace(chatInputText) != "" {
-		return append(hints, FooterHint{Button: "Start / Ctrl+Enter", Label: "Send"})
-	}
-	return append(hints, FooterHint{Button: "X", Label: "Rename"})
+	return hints
 }

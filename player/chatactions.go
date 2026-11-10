@@ -11,6 +11,7 @@ package main
 // Discord replies when the original came from Discord.
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -92,11 +93,13 @@ func ellipsizeRunes(text string, max int) string {
 
 // --- Selection -----------------------------------------------------------
 
-// clearChatSelection drops the highlight and closes the action bar.
+// clearChatSelection drops the highlight and closes the action bar. The pad
+// leaves the tray of waiting files too: it is back on the composer.
 func clearChatSelection() {
 	chatSelected = -1
 	chatSelectedID = ""
 	chatSelectionBar = chatSelection{}
+	chatTrayFocus = -1
 }
 
 // selectChatMessage highlights one message of the tab on screen and opens its
@@ -108,6 +111,7 @@ func selectChatMessage(index int) {
 	}
 	chatStopInlineTyping()
 	chatSuggestFocus = -1
+	chatTrayFocus = -1
 	chatSelected, chatSelectedID = index, msgs[index].ID
 	chatSelectionBar = chatSelection{open: true, index: index, focus: 0}
 	chatSelectionBar.buttons = chatSelectionActions(index)
@@ -134,16 +138,38 @@ func chatSelectionActions(index int) []chatProfileAction {
 	msg := msgs[index]
 	tab := chatActiveTabID()
 	own := chatIsOwn(msg)
-	actions := make([]chatProfileAction, 0, 8)
+	actions := make([]chatProfileAction, 0, 10)
 	// A picture is the one part of a message that cannot be read at bubble
-	// size, and a link is the one that does nothing until it is opened, so
-	// those lead; every other entry is about the message as a whole.
+	// size, and a file or a link is the part that does nothing until it is
+	// opened, so those lead; every other entry is about the message as a whole.
 	if chatMessageImageURL(msg) != "" {
 		actions = append(actions, chatProfileAction{label: "Enlarge", kind: "image"})
 	}
+	// Files: one is opened (or played, or viewed) straight from the bar,
+	// several are listed. Download saves what is not on this device yet; a
+	// lone file that only opens from Downloads is saved by its Open already.
+	fileVerb := ""
+	inline := chatInlineImageIndex(msg)
+	switch n := len(msg.Files); {
+	case n > 1:
+		actions = append(actions, chatProfileAction{label: "Files", kind: "files"})
+	case n == 1 && inline != 0:
+		fileVerb = chatFileOpenLabel(msg.Files[0])
+		actions = append(actions, chatProfileAction{label: fileVerb, kind: "file_open"})
+	}
+	if chatMessageHasRemoteFile(msg) && (len(msg.Files) > 1 || inline == 0 || fileVerb == "Play") {
+		actions = append(actions, chatProfileAction{label: "Download", kind: "file_save"})
+	}
+	if own && msg.Pending && len(msg.Files) > 0 && tab == chatTabCommunity {
+		actions = append(actions, chatProfileAction{label: "Cancel", kind: "cancel_upload"})
+	}
 	if link, plays := chatFirstLink(msg); link != "" {
 		if plays {
-			actions = append(actions, chatProfileAction{label: "Play", kind: "play"})
+			label := "Play"
+			if fileVerb == "Play" {
+				label = "Play link" // the file's Play is already there
+			}
+			actions = append(actions, chatProfileAction{label: label, kind: "play"})
 		} else {
 			actions = append(actions, chatProfileAction{label: "Open link", kind: "open"})
 		}
@@ -280,14 +306,39 @@ func drawChatSelectionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font
 	pad := chatPx(18)
 	x := rect.X + chatPx(10)
 	right := rect.X + rect.W - chatPx(10)
+	// A message with a file, a link and a reply has more actions than a
+	// narrow bar holds: the row starts late enough that the focused one is
+	// always drawn (and so always reachable), and "…" says there is more.
+	widths := chatBarWidths[:0]
 	for i := range chatSelectionBar.buttons {
+		lw, _ := measureText(font, chatSelectionBar.buttons[i].label)
+		widths = append(widths, lw+2*pad)
+		chatSelectionBar.buttons[i].rect = sdl.Rect{}
+	}
+	chatBarWidths = widths
+	more := ""
+	moreW := int32(0)
+	if chatRowWidth(widths, gap) > right-x {
+		more = "…"
+		moreW, _ = measureText(font, more)
+		right -= moreW + gap
+	}
+	start := chatRowStart(widths, gap, right-x, chatSelectionBar.focus)
+	if start > 0 && more != "" {
+		chatTextCentered(renderer, config, font, more, ColorTextTertiary(), x, rect)
+		x += moreW + gap
+		if s := chatRowStart(widths, gap, right-x, chatSelectionBar.focus); s > start {
+			start = s
+		}
+	}
+	last := -1
+	for i := start; i < len(chatSelectionBar.buttons); i++ {
 		button := &chatSelectionBar.buttons[i]
-		lw, _ := measureText(font, button.label)
-		w := lw + 2*pad
-		button.rect = sdl.Rect{}
+		w := widths[i]
 		if x+w > right {
 			break
 		}
+		last = i
 		r := sdl.Rect{X: x, Y: rect.Y + (rect.H-h)/2, W: w, H: h}
 		button.rect = r
 		focused := i == chatSelectionBar.focus
@@ -308,6 +359,9 @@ func drawChatSelectionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font
 		}
 		chatTextCentered(renderer, config, font, button.label, col, r.X+pad, r)
 		x += w + gap
+	}
+	if more != "" && last >= 0 && last < len(chatSelectionBar.buttons)-1 {
+		chatTextCentered(renderer, config, font, more, ColorTextTertiary(), right+gap, rect)
 	}
 }
 
@@ -347,6 +401,28 @@ func activateChatSelectionAction(kind string, config *Config) {
 			playSmartURL(config, link)
 		} else {
 			openBrowserAtURL(config, link)
+		}
+	case "file_open":
+		clearChatSelection()
+		chatFileActivate(config, tab, msg.ID, 0)
+	case "files":
+		clearChatSelection()
+		chatOpenFileSheet(tab, msg)
+	case "file_save":
+		clearChatSelection()
+		started := 0
+		for i, f := range msg.Files {
+			if f.URL != "" && chatFileOnDevice(f) == "" && chatDownloadFile(config, tab, msg.ID, i, false) {
+				started++
+			}
+		}
+		if started > 1 {
+			showToast(fmt.Sprintf("Downloading %d files…", started), ToastInfo())
+		}
+	case "cancel_upload":
+		clearChatSelection()
+		if chatCancelUpload(msg.ID) {
+			PlayBackSound()
 		}
 	case "retry":
 		clearChatSelection()
@@ -398,11 +474,13 @@ func deleteChatMessage(id string) {
 	tab := chatActiveTabID()
 	chatMutex.Lock()
 	allowed := true
+	var victim ChatMessage
 	if tab == chatTabCommunity {
 		allowed = false
 		for _, msg := range chatMessages {
 			if msg.ID == id {
 				allowed = chatIsOwn(msg)
+				victim = msg
 				break
 			}
 		}
@@ -413,6 +491,16 @@ func deleteChatMessage(id string) {
 	if !removed {
 		showToast("Only your own messages can be deleted", ToastWarn())
 		return
+	}
+	if tab == chatTabCommunity && chatInFlight(id) {
+		// It is going out right now: the upload stops, and if Discord got it
+		// anyway it is taken back off the channel (chatupload.go).
+		chatRememberUnsend(victim)
+		chatCancelUpload(id)
+	} else if tab == chatTabCommunity && victim.Pending && len(victim.Files) > 0 {
+		// A queued upload that waited out a failed try: the wait was its
+		// own, and the next one in the queue goes at once.
+		chatUploadRetryReset()
 	}
 	chatDirty.Store(true)
 	PlayActivateSound()

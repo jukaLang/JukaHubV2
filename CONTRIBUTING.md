@@ -185,6 +185,12 @@ check on or within the next two lines (or an explicit `# download-pin-ok:
 <reason>` when the source publishes no digest). The three SDL tarballs both
 Windows builds need are listed once, digests included, in
 [`.github/scripts/install-sdl-mingw.sh`](.github/scripts/install-sdl-mingw.sh).
+The one fetch that cannot carry a digest is the Windows release's Go build
+cache, because each release produces it; instead
+[`.github/scripts/go-build-cache.sh`](.github/scripts/go-build-cache.sh) accepts
+it only from an earlier push-to-main run of the release workflow whose commit
+is on `main`, never from `actions/cache`, which any workflow on `main` can
+write.
 
 All three pinning rules live in
 [`.github/scripts/check-workflows.sh`](.github/scripts/check-workflows.sh), and

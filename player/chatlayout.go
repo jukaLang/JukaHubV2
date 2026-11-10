@@ -374,16 +374,22 @@ func chatFitPrefix(font *ttf.Font, s string, room int32) int {
 // message, the body font and the wrap width: what the renderer would otherwise
 // recompute for every bubble on every frame.
 type chatBubbleLayout struct {
-	body     chatTextLayout
-	image    string   // the picture shown under the text, "" for none
-	cards    []string // link preview cards, at most chatLinkCardLimit
-	clock    string   // "14:03" (or "2:03 PM")
-	initials string   // what the avatar circle shows without a picture
+	body  chatTextLayout
+	image string // the picture link shown under the text (an older saved picture, or a pasted image link)
+	// imageFile is the file shown as the picture instead, -1 for none. Its
+	// source (this device's copy or the link) is looked up when it is drawn.
+	imageFile int
+	files     []int    // the other files, drawn as cards
+	cards     []string // link preview cards, at most chatLinkCardLimit
+	clock     string   // "14:03" (or "2:03 PM")
+	initials  string   // what the avatar circle shows without a picture
 }
 
 // chatLayoutKey identifies one layout. A message is immutable once it is in
 // the history; n still takes part because a streamed answer grows under one id,
-// and the timestamp keeps two id-less messages with the same text apart.
+// and the timestamp keeps two id-less messages with the same text apart. The
+// file count and the old picture field take part because a fresh history page
+// can turn an old picture-only message into one with files.
 type chatLayoutKey struct {
 	id      string
 	n       int
@@ -391,6 +397,8 @@ type chatLayoutKey struct {
 	maxW    int32
 	font    *ttf.Font
 	clock12 bool
+	files   int
+	legacy  bool
 }
 
 // chatLayoutCacheMax bounds the cache. A screenful is a dozen bubbles; the rest
@@ -426,7 +434,8 @@ func chatClockLabel(t time.Time, twelve bool) string {
 // it on first use.
 func chatLayoutFor(font *ttf.Font, msg *ChatMessage, maxW int32) *chatBubbleLayout {
 	twelve := chatClock12()
-	key := chatLayoutKey{id: msg.ID, n: len(msg.Text), ts: msg.Timestamp.UnixNano(), maxW: maxW, font: font, clock12: twelve}
+	key := chatLayoutKey{id: msg.ID, n: len(msg.Text), ts: msg.Timestamp.UnixNano(), maxW: maxW, font: font, clock12: twelve,
+		files: len(msg.Files), legacy: msg.ImageURL != ""}
 	if key.id == "" {
 		key.id = msg.Text
 	}
@@ -445,10 +454,18 @@ func chatLayoutFor(font *ttf.Font, msg *ChatMessage, maxW int32) *chatBubbleLayo
 // changes every few frames and is laid out on its own).
 func chatBuildLayout(font *ttf.Font, msg *ChatMessage, maxW int32, twelve bool) *chatBubbleLayout {
 	l := &chatBubbleLayout{
-		body:     chatWrapText(font, msg.Text, maxW, chatMaxLines),
-		image:    chatMessageImageURL(*msg),
-		clock:    chatClockLabel(msg.Timestamp, twelve),
-		initials: chatInitials(msg.Sender),
+		body:      chatWrapText(font, msg.Text, maxW, chatMaxLines),
+		imageFile: chatInlineImageIndex(*msg),
+		clock:     chatClockLabel(msg.Timestamp, twelve),
+		initials:  chatInitials(msg.Sender),
+	}
+	if l.imageFile < 0 {
+		l.image = chatMessageImageURL(*msg)
+	}
+	for i := range msg.Files {
+		if i != l.imageFile {
+			l.files = append(l.files, i)
+		}
 	}
 	for _, link := range chatMessageLinks(msg.Text) {
 		if link != l.image {

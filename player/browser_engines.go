@@ -21,10 +21,14 @@ package main
 // which applies them on submit only: a half-typed host never becomes the home
 // page or the engine, and B leaves both as they were.
 //
-// The reader runs no real JavaScript, so an engine is only as good as the HTML
-// it sends a browser that runs none. Google sends none: since 2025 its results
-// page answers such a browser with a redirect to "turn on JavaScript", and by
-// 2026 no User-Agent gets around it. Google stays on the list — it is the
+// The reader runs page scripts in a small engine of its own (webdom_runtime.go),
+// but an engine is still only as good as the HTML it sends. Google sends no
+// results: since 2025 its results page is a robot check (Google calls it
+// SearchGuard) built to admit full desktop and phone browsers and nothing
+// else. A script-less browser is redirected to "turn on JavaScript", and a
+// small engine like this one fails the check just the same — passing it would
+// mean disguising the reader as Chrome, which is exactly what the check exists
+// to catch, so the reader does not try. Google stays on the list — it is the
 // engine people ask for by name, its home page loads, and on a PC the desktop
 // browser is one press away — but a search that lands on that wall draws a card
 // (brwSearchWall) instead of Google's apology: the same words on Startpage,
@@ -56,7 +60,7 @@ const (
 
 const (
 	// brwEngineDefault is the engine a fresh install searches with.
-	brwEngineDefault = "duckduckgo"
+	brwEngineDefault = "startpage"
 	// brwEngineCustomID is the engine the custom address describes.
 	brwEngineCustomID = "custom"
 	// brwEngineWallAlt is where a search Google walls off goes instead:
@@ -84,24 +88,25 @@ type brwEngine struct {
 	Search string
 	// Note is the line under the engine's name in Settings.
 	Note string
-	// Wall marks an engine whose results need JavaScript: a search that lands
-	// on its wall draws the card brwSearchWall builds.
+	// Wall marks an engine whose results sit behind a check only full browsers
+	// pass: a search that lands on its wall draws the card brwSearchWall builds.
 	Wall bool
 }
 
 // brwEngines are the engines Settings offers, in the order it lists them.
-// DuckDuckGo leads: it is the default, and its Lite page is the one built for a
-// browser like this. Each of the others serves its results as HTML a script-less
-// browser can read, except Google (Wall).
+// Startpage leads: it is the default and serves Google's results as plain HTML
+// a script-less browser can read. DuckDuckGo Lite follows — that page is built
+// for a browser like this one — and the rest serve HTML too, except Google
+// (Wall).
 var brwEngines = []brwEngine{
+	{ID: "startpage", Name: "Startpage", Home: "https://www.startpage.com/",
+		Search: "https://www.startpage.com/sp/search?query=%s", Note: "Google's results, privately, without JavaScript"},
 	{ID: "duckduckgo", Name: "DuckDuckGo", Home: "https://lite.duckduckgo.com/lite/",
 		Search: "https://lite.duckduckgo.com/lite/?q=%s", Note: "Private · the Lite page is made for simple browsers"},
 	{ID: "google", Name: "Google", Home: "https://www.google.com/",
-		Search: "https://www.google.com/search?q=%s", Note: "Results need JavaScript · each search offers Startpage", Wall: true},
+		Search: "https://www.google.com/search?q=%s", Note: "Results need a full browser · each search offers Startpage", Wall: true},
 	{ID: "bing", Name: "Bing", Home: "https://www.bing.com/",
 		Search: "https://www.bing.com/search?q=%s", Note: "Microsoft's results"},
-	{ID: "startpage", Name: "Startpage", Home: "https://www.startpage.com/",
-		Search: "https://www.startpage.com/sp/search?query=%s", Note: "Google's results, privately, without JavaScript"},
 	{ID: "brave", Name: "Brave Search", Home: "https://search.brave.com/",
 		Search: "https://search.brave.com/search?q=%s", Note: "Its own index · private"},
 	{ID: "yahoo", Name: "Yahoo", Home: "https://search.yahoo.com/",
@@ -123,7 +128,8 @@ func brwEngineByID(id string) (brwEngine, bool) {
 	return brwEngine{}, false
 }
 
-// brwDefaultEngine is DuckDuckGo, the engine the browser shipped with.
+// brwDefaultEngine is Startpage: Google's results as plain HTML, so a fresh
+// install can search Google without meeting its robot check.
 func brwDefaultEngine() brwEngine {
 	e, _ := brwEngineByID(brwEngineDefault)
 	return e
@@ -272,7 +278,7 @@ func brwEngineAddress(e brwEngine, query string) string {
 // the device: on a PC the wall card offers the desktop's own browser first.
 func brwEngineNote(e brwEngine) string {
 	if e.Wall && brwHasDesktopBrowser() {
-		return "Results need JavaScript · each search offers your web browser"
+		return "Results need a full browser · each search offers your web browser"
 	}
 	return e.Note
 }
@@ -477,8 +483,11 @@ func brwYahooTarget(escapedPath string) string {
 // ── Google's wall ────────────────────────────────────────────────────────
 
 // brwSearchWall reports whether a load landed on Google's wall instead of its
-// results — the "turn on JavaScript" page, or the "unusual traffic" check,
-// whose puzzle needs JavaScript too — and builds the card that replaces it.
+// results — the robot-check page (whose <noscript> says "turn on JavaScript"),
+// or the "unusual traffic" check behind it — and builds the card that replaces
+// it. It runs before the page's scripts on purpose: the check is built to turn
+// away everything but full browsers, so letting the reader's engine run it would
+// spend the whole script budget to end on the same wall.
 // requested is the address that was asked for (the search the card's buttons
 // run again), landed is where the redirects ended and body is that page. A
 // failure carries no FinalURL, so the wall is never cached and Reload asks
@@ -496,12 +505,15 @@ func brwSearchWall(requested string, landed *url.URL, body []byte) (brwFailure, 
 	}
 	f := brwNewFailure(brwFailWall, requested, "")
 	f.Host = landed.Hostname()
+	// The words say what is true now that the reader runs JavaScript: the
+	// obstacle is a check for full browsers, not a missing script engine. The
+	// card holds three lines of detail, so each sentence stays short.
 	if captcha {
 		f.Title = "Google wants to check for robots"
-		f.Detail = "Google paused this search to check it isn't automated, and its check needs JavaScript. " + brwWallWayOut()
+		f.Detail = "Google paused this search for a robot check only full browsers pass. " + brwWallWayOut()
 	} else {
-		f.Title = "Google needs JavaScript"
-		f.Detail = "Google only shows results to browsers that run JavaScript, and this one doesn't. " + brwWallWayOut()
+		f.Title = "Google needs a full web browser"
+		f.Detail = "Its robot check turns away small script engines like this one. " + brwWallWayOut()
 	}
 	return f, true
 }
@@ -510,9 +522,9 @@ func brwSearchWall(requested string, landed *url.URL, body []byte) (brwFailure, 
 func brwWallWayOut() string {
 	alt := brwWallAltEngine().Name
 	if !brwHasDesktopBrowser() {
-		return alt + " shows Google's results without it."
+		return alt + " shows Google's results without the check."
 	}
-	return "Open the search in your web browser, or try " + alt + ": Google's results without it."
+	return "Open the search in your web browser, or try " + alt + ": Google's results without the check."
 }
 
 // brwWallButtonSets caches the card's buttons per device kind (handheld, PC):
@@ -790,7 +802,7 @@ func brwChooseEngine(c *Config, value string) {
 	e := brwEngineFor(c)
 	msg := "Search engine: " + e.Name
 	if e.Wall {
-		msg += " · its results need JavaScript"
+		msg += " · its results need a full web browser"
 	}
 	setToast(msg)
 }

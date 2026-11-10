@@ -5399,8 +5399,10 @@ const (
 )
 
 // ToastState is the single active toast. Replacing the message resets the
-// timer; an empty message renders nothing. lines/linesW cache the wrapped
-// text so the render loop only re-measures when the message or width changes.
+// timer; an empty message renders nothing. lines/linesW/linesFont cache the
+// wrapped text so the render loop only re-measures when the message, the width
+// or the font (a text-size change) changes; cut records that the wrap ended in
+// "…", so the whole message is only in the notification centre.
 type ToastState struct {
 	Message   string
 	Kind      ToastKind
@@ -5408,13 +5410,23 @@ type ToastState struct {
 	Duration  uint64 // ms
 	lines     []string
 	linesW    int32
+	linesFont *ttf.Font
+	cut       bool
 }
 
 // toastRect stores the last-rendered toast bounds for dismiss-on-click.
 var toastRect sdl.Rect
 
+// toastCutMsg is the message of the toast in toastRect when the card had to
+// cut it short, "" otherwise: a click on it opens the notification centre on
+// that message instead of only dismissing it. Holding the message rather than
+// a flag means a toast raised between the frame and the click is not mistaken
+// for the one that was cut.
+var toastCutMsg string
+
 // toastDurationFor returns the display time for a toast kind: info/success
-// ~2.5s, warnings ~3.5s, errors ~5s. Screenshot mode shows none: a zero
+// ~2.5s, warnings ~3.5s, errors ~5s; toastDurationForMessage (notiftext.go)
+// stretches the slot for a long message. Screenshot mode shows none: a zero
 // duration is cleared before it is drawn (renderToast, screenshotmode.go).
 func toastDurationFor(kind ToastKind) uint64 {
 	if shotModeOn() {
@@ -5477,7 +5489,7 @@ func showToastPrimitive(message string, kind ToastKind) {
 		Message:   msg,
 		Kind:      kind,
 		StartedAt: sdl.GetTicks64(),
-		Duration:  toastDurationFor(kind),
+		Duration:  toastDurationForMessage(kind, msg),
 		lines:     nil,
 		linesW:    -1,
 	}
@@ -5621,12 +5633,14 @@ func wrapTextLines(font *ttf.Font, text string, maxW int32, maxLines int) []stri
 	return out
 }
 
-// wrapToastLines wraps the toast message to at most two lines within maxW.
-func wrapToastLines(font *ttf.Font, message string, maxW int32) []string {
+// wrapToastLines word-wraps the toast message to at most toastMaxLines lines
+// within maxW, and reports whether it had to end in "…". It used wrapMeasured,
+// which cuts by pixel count into two lines ("…every fil" / "e on the…").
+func wrapToastLines(font *ttf.Font, message string, maxW int32) ([]string, bool) {
 	if font == nil {
-		return []string{message}
+		return []string{message}, false
 	}
-	return wrapMeasured([]rune(message), maxW, func(s string) int32 {
+	return wrapWordsMeasured(message, maxW, toastMaxLines, func(s string) int32 {
 		w, _, _ := font.SizeUTF8(s)
 		return int32(w)
 	})
@@ -5641,6 +5655,11 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	if renderer == nil {
 		return
 	}
+	// The hit area is this frame's: every return below that draws nothing
+	// leaves it empty, so a click where a toast used to be does nothing (a
+	// toast cleared with an empty message used to leave its rect behind).
+	toastRect = sdl.Rect{}
+	toastCutMsg = ""
 	currentToastMu.Lock()
 	t := currentToast
 	currentToastMu.Unlock()
@@ -5655,7 +5674,15 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 			currentToast = ToastState{}
 		}
 		currentToastMu.Unlock()
-		toastRect = sdl.Rect{}
+		return
+	}
+	// While the open notification centre shows this message on its card, the
+	// toast would only sit over the centre's lower rows: it waits out its timer
+	// unseen (notifCentreShowsRow; the centre was drawn earlier this frame). A
+	// toast the centre does not keep (the Live Builder's pairing code), one
+	// whose row is scrolled off the card, and every toast while the centre is
+	// covered (the full-screen player, a chat sheet) still show.
+	if notifCentreShowsRow(t.Message) {
 		return
 	}
 
@@ -5680,15 +5707,22 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Wrap to at most two lines, cached per message+width.
-	maxTextW := int32(420) - 16*2 - 10
-	if t.lines == nil || t.linesW != maxTextW {
-		t.lines = wrapToastLines(font, t.Message, maxTextW)
+	// Word-wrapped to toastMaxLines lines in a card up to toastMaxWidth wide
+	// (notiftext.go), cached per message, width and font. It used to be cut by
+	// pixel count into two lines of a 420×96 card, so a long message ended
+	// mid-word in "…" and a large text size clipped even the second line.
+	maxW := toastMaxWidth(screenWidth)
+	maxTextW := toastTextWidth(maxW)
+	if t.lines == nil || t.linesW != maxTextW || t.linesFont != font {
+		t.lines, t.cut = wrapToastLines(font, t.Message, maxTextW)
 		t.linesW = maxTextW
+		t.linesFont = font
 		currentToastMu.Lock()
 		if currentToast.StartedAt == t.StartedAt && currentToast.Message == t.Message {
 			currentToast.lines = t.lines
 			currentToast.linesW = t.linesW
+			currentToast.linesFont = t.linesFont
+			currentToast.cut = t.cut
 		}
 		currentToastMu.Unlock()
 	}
@@ -5698,40 +5732,25 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	}
 
 	lineH := int32(font.Height())
-	pad := int32(16)
+	pad := toastPad
 	textW := int32(0)
 	for _, l := range lines {
-		w, _, _ := font.SizeUTF8(l)
-		if int32(w) > textW {
-			textW = int32(w)
-		}
+		lw, _ := measureText(font, l)
+		textW = max(textW, lw)
 	}
-	stripW := int32(10)
-	w := textW + pad*2 + stripW
-	if w < 120 {
-		w = 120
-	}
-	if w > 420 {
-		w = 420
-	}
-	h := int32(len(lines))*lineH + pad*2
-	if h < 52 {
-		h = 52
-	}
-	if h > 96 {
-		h = 96
-	}
+	stripW := toastStripW
+	w, h := toastCardSize(textW, len(lines), lineH, maxW)
 
-	x := screenWidth - 24 - w + slide
+	x := screenWidth - toastMarginRight - w + slide
 	y := screenHeight - HomeFooterH - 16 - h
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 		y = screenHeight - bottomBarHeight(config.Scenes[currentSceneIndex].Name) - 16 - h
 	}
-	if x < 16 {
-		x = 16
+	if x < toastMarginMin {
+		x = toastMarginMin
 	}
-	if y < 16 {
-		y = 16
+	if y < toastMarginMin {
+		y = toastMarginMin
 	}
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
@@ -5762,8 +5781,12 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 		}
 	})
 
-	// Store the rendered toast rect for dismiss-on-click
+	// Store the rendered toast rect for dismiss-on-click; a cut toast's click
+	// opens its row in the centre (scene-switch labels are not filed there).
 	toastRect = sdl.Rect{X: x, Y: y, W: w, H: h}
+	if t.cut && t.Kind != ToastKindSwitch {
+		toastCutMsg = t.Message
+	}
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
 }
@@ -5958,8 +5981,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		case !looksLikeStreamURL(url):
 			showToast("That does not look like a stream URL.", ToastError())
 		default:
-			StartEmbeddedPlayback(config, url)
+			// The page is set first: the session reads it as it starts, and
+			// a video still playing would otherwise lend it its own page.
 			currentPlaybackURL = url
+			StartEmbeddedPlayback(config, url)
 			addRecentVideo(VideoInfo{URL: url, Title: url})
 		}
 	case "custom_link":
@@ -5997,9 +6022,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "podcast_panel":
 		openPodcastPanel()
 	case "attach_image":
-		// Set config variable to indicate we're in image attach mode.
-		config.Variables.Custom["chat_attach_image"] = "1"
-		showToast("Select an image to attach to your message", ToastInfo())
+		// A layout's attach button. The name is older than file support:
+		// Files opens (or, already open, starts picking) for the chat tab on
+		// screen, and any file can be picked (chatfiles.go).
+		chatStartAttach(config)
 		return
 	case "tick":
 		fetchTickers(config)
@@ -6199,32 +6225,13 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 		}
 	case "send_to_chat":
+		// The focused file itself goes to the chat: it waits in the community
+		// tab's tray (resolved under the Files root, like every row action) and
+		// the chat opens with it ready to send. It used to post "Sent file:
+		// name", or the first 500 characters of a text file, and no file.
 		entries, ok := getSceneFileEntries(config, config.Scenes[currentSceneIndex])
 		if ok && focusedFileIndex >= 0 && focusedFileIndex < len(entries) {
-			entry := entries[focusedFileIndex]
-			ext := strings.ToLower(filepath.Ext(entry.Path))
-			if isImageExtension(ext) {
-				sendChatMessage(chatDisplayName(), "[Image: "+entry.Name+"]")
-			} else if ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".js" || ext == ".html" {
-				// The row comes from a dynamic list, not from the filesystem:
-				// resolve it under the explorer root before reading.
-				// A file that cannot be read is this device's problem, so it is
-				// a toast here rather than a "System" line in the shared chat.
-				resolved, resolveErr := resolveExplorerEntry(config, entry.Path)
-				if resolveErr != nil {
-					showToast("Can't read "+entry.Name, ToastWarn())
-					break
-				}
-				data, err := os.ReadFile(resolved)
-				if err != nil {
-					showToast("Can't read "+entry.Name, ToastWarn())
-				} else {
-					content := truncateRunesSuffix(string(data), 500, "...")
-					sendChatMessage(chatDisplayName(), content)
-				}
-			} else {
-				sendChatMessage(chatDisplayName(), "Sent file: "+entry.Name)
-			}
+			chatSendFromFiles(config, []FileEntry{entries[focusedFileIndex]})
 		}
 	case "canvas_open":
 		entries, ok := getSceneFileEntries(config, config.Scenes[currentSceneIndex])

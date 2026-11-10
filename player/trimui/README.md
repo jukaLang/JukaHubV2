@@ -133,6 +133,7 @@ identical — a test rejects the build if they differ.
 | Text is missing or shows as boxes | `Inter-Regular.ttf` is missing from the app folder. |
 | The screen flickers between MainUI and JukaHub after an update | The `launch.sh` on the card is older than the app. Update once more (the release archive replaces `launch.sh`), or copy `launch.sh` from the archive into `Apps/JukaHub/`, then reboot. |
 | YouTube search fails | Check that `required/yt-dlp` exists; Wi-Fi is required. Also see `logs.txt` (the **Logs** scene in the Start menu). |
+| A video goes black for a second, then says it is downloading | The stream would not open (`errors.txt`: `decoder for … stopped …`), so JukaHub downloads the video to the SD card and plays it from there. If the download fails too, the message says why. |
 | Just opened the app and Wi-Fi is not connected yet | An **Offline — connect WiFi** message appears. Connect Wi-Fi; any missing tools are downloaded automatically once the connection is back. |
 | Downloading `yt-dlp` / `ffmpeg` fails | The download card shows `Could not install …` with an **A: retry** button. Press **A** to retry; once it succeeds, restart JukaHub so the new tools are used. |
 | Video is slow or stutters | Lower the playback resolution in Settings to `360` or `240`. |

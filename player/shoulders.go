@@ -297,6 +297,8 @@ func notifShoulder(s padShoulder) {
 	if rows < 1 {
 		rows = notifMaxRows
 	}
+	// The history is filed from goroutines: its length is read under its lock.
+	n := notifHistoryLen()
 	switch s {
 	case padL1:
 		nc.cursor -= rows
@@ -305,9 +307,9 @@ func notifShoulder(s padShoulder) {
 	case padL2:
 		nc.cursor = 0
 	case padR2:
-		nc.cursor = len(nc.history) - 1
+		nc.cursor = n - 1
 	}
-	nc.cursor = clampIndex(nc.cursor, len(nc.history))
+	nc.cursor = clampIndex(nc.cursor, n)
 	PlayNavSound()
 }
 

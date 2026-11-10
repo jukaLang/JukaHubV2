@@ -57,6 +57,10 @@ type ChatMessage struct {
 	// Error is the one sentence shown under a message that could not be
 	// delivered for a reason other than the network (Retry clears it).
 	Error string `json:"error,omitempty"`
+	// Files are what the message carries besides its text: Discord's
+	// attachments, or files attached on this device (chatfiles.go). The first
+	// picture among them is the bubble's picture; the rest draw as cards.
+	Files []ChatFile `json:"files,omitempty"`
 }
 
 // chatImageTexture is one decoded chat image with the footprint it occupies.
@@ -156,27 +160,32 @@ func markChatImageFailed(url string) {
 	chatImageFailed[url] = time.Now()
 }
 
-// chatAttachmentRoot is the directory local chat attachments may be read from.
-// The File Explorer sets it to its own root when it attaches an image, and the
-// chat renderer seeds it from the configured explorer root so an attachment
-// restored from a saved history still previews after a restart. Anything else
-// — a path typed into a message, or one carried in from a remote room — is
-// refused rather than read and drawn.
+// chatAttachmentRoot is the directory a picture saved by an older version (a
+// local path in ImageURL) may be read from when it is not one the user put
+// into the chat on this device (chatPathTrusted). The chat renderer seeds it
+// from the configured explorer root. Anything else — a path typed into a
+// message, or one carried in from a remote room — is refused rather than read
+// and drawn.
 var chatAttachmentRoot = "."
 
-// chatLocalAttachment resolves a message's local attachment path against
-// chatAttachmentRoot. It returns false unless the result is an existing image
-// file inside the root and small enough to decode.
+// chatLocalAttachment resolves a picture's local path for the bubble. A path
+// the user attached or saved on this device is read where it is; any other
+// must lie inside chatAttachmentRoot. Either way it has to be an existing
+// image file small enough to decode.
 func chatLocalAttachment(path string) (string, bool) {
 	if !isImageExtension(strings.ToLower(filepath.Ext(path))) {
 		return "", false
 	}
-	resolved, err := regularFileWithin(chatAttachmentRoot, path)
-	if err != nil {
-		logWarn("chat", "security: refusing local attachment %q: %v", path, err)
-		return "", false
+	resolved := filepath.Clean(path)
+	if !chatPathTrusted(path) {
+		within, err := regularFileWithin(chatAttachmentRoot, path)
+		if err != nil {
+			logWarn("chat", "security: refusing local attachment %q: %v", path, err)
+			return "", false
+		}
+		resolved = within
 	}
-	if info, err := os.Stat(resolved); err != nil || info.Size() > 32<<20 {
+	if info, err := os.Stat(resolved); err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
 		return "", false
 	}
 	return resolved, true
@@ -559,8 +568,8 @@ var discordStatus string
 // chatSendBtnRect is the round send button at the end of the composer.
 var chatSendBtnRect sdl.Rect
 
-// chatAttachBtnRect is the attach-a-picture button at the start of the
-// composer.
+// chatAttachBtnRect is the attach-a-file button (the paperclip) at the start
+// of the composer.
 var chatAttachBtnRect sdl.Rect
 
 // chatInputRect is the composer's text field (a click starts typing).
@@ -631,13 +640,17 @@ func firstChatImageURL(text string) string {
 	return ""
 }
 
-// chatMessageImageURL is the picture a message carries: an attachment first,
-// then the first image link pasted into its text. The bubble preview and the
-// action bar both read it here, so they can never disagree about whether a
-// message has a picture to enlarge.
+// chatMessageImageURL is the picture a message carries: a picture saved by an
+// older version first, then the first picture among its files, then the first
+// image link pasted into its text. The bubble preview and the action bar both
+// read it here, so they can never disagree about whether a message has a
+// picture to enlarge.
 func chatMessageImageURL(msg ChatMessage) string {
 	if u := strings.TrimSpace(msg.ImageURL); u != "" {
 		return u
+	}
+	if i := chatInlineImageIndex(msg); i >= 0 {
+		return chatFileImageSource(msg.Files[i])
 	}
 	return firstChatImageURL(msg.Text)
 }
@@ -1154,21 +1167,14 @@ func chatMessageFromDiscord(m *discordgo.Message) ChatMessage {
 		Sender:    sender,
 		Text:      text,
 		Timestamp: time.Time(m.Timestamp),
-		ImageURL:  extractImageURL(m),
+		// Every attachment is a file now, the picture included: the first
+		// picture among them is drawn in the bubble (chatInlineImageIndex).
+		Files:     chatFilesFromDiscord(m),
 		AvatarURL: discordAvatarURL(m),
 		UserID:    userID,
 		Handle:    handle,
 		Bot:       bot,
 	}
-}
-
-func extractImageURL(msg *discordgo.Message) string {
-	for _, att := range msg.Attachments {
-		if strings.HasPrefix(att.ContentType, "image/") {
-			return att.URL
-		}
-	}
-	return ""
 }
 
 // discordSessionChannel is the channel discordSession listens to and posts in.
@@ -1242,6 +1248,7 @@ func discordConnectWith(tok, ch, tokenType string) error {
 		}
 		discordSession.Close()
 		discordSession = nil
+		chatPublishSession(nil, "")
 	}
 	auth, authErr := discordValidateToken(tok, tokenType)
 	if authErr != nil {
@@ -1278,7 +1285,7 @@ func discordConnectWith(tok, ch, tokenType string) error {
 		if chatAppendIncoming(entry, echo) {
 			// A message that arrives while the panel is idle should be
 			// readable on the screensaver without waking the device.
-			noteScreensaverChat(entry.Sender, entry.Text)
+			noteScreensaverChat(entry.Sender, chatMessagePreview(entry))
 		}
 	})
 	if err := dg.Open(); err != nil {
@@ -1288,6 +1295,8 @@ func discordConnectWith(tok, ch, tokenType string) error {
 	discordSession = dg
 	discordSessionKey = tok + "\x00" + ch
 	discordSessionChannel = ch
+	// Other goroutines read the pair from here (chatupload.go).
+	chatPublishSession(dg, ch)
 	discordStatus = "Discord: connecting..."
 	go discordLoadHistory(dg, ch)
 	return nil
@@ -1335,6 +1344,8 @@ func discordLoadHistory(dg *discordgo.Session, ch string) {
 			resetDiscordMemberDetails()
 			if guild, gerr := dg.Guild(info.GuildID); gerr == nil && guild != nil {
 				cacheDiscordNames(guild.Roles, guild.Channels)
+				// The server's boost tier sets how big a file it takes.
+				chatSetUploadTier(int(guild.PremiumTier))
 			}
 		}
 	}
@@ -1361,38 +1372,75 @@ func discordLoadHistory(dg *discordgo.Session, ch string) {
 
 // chatMergeCommunity merges a page of channel history into the community tab.
 // What is already there (the same id, or this device's own message coming
-// back through the shared bot) is kept as it is; the rest is added in time
-// order. A new slice is swapped in, so a frame reading the old one is safe.
+// back through the shared bot) is kept as it is, except for its file links:
+// Discord's expire after about a day and the fresh page has working ones. The
+// rest is added in time order. A new slice is swapped in, so a frame reading
+// the old one is safe.
 func chatMergeCommunity(fresh []ChatMessage, echoes []bool) {
 	chatMutex.Lock()
 	cur := chatMessages
-	have := make(map[string]bool, len(cur))
-	for _, m := range cur {
+	have := make(map[string]int, len(cur))
+	for i, m := range cur {
 		if m.ID != "" {
-			have[m.ID] = true
+			have[m.ID] = i
 		}
 	}
 	merged := make([]ChatMessage, 0, len(cur)+len(fresh))
 	merged = append(merged, cur...)
 	added, unseen := 0, 0
+	relinked := false
 	for i, m := range fresh {
-		if m.ID != "" && have[m.ID] {
-			continue
+		if m.ID != "" {
+			if at, ok := have[m.ID]; ok {
+				if at < len(cur) {
+					if next, changed := chatRefreshLinks(merged[at], m); changed {
+						merged[at] = next
+						relinked = true
+					}
+				}
+				continue
+			}
 		}
-		if i < len(echoes) && echoes[i] && chatHasOwnTwin(merged, m) {
-			continue
+		if i < len(echoes) && echoes[i] {
+			if at := chatOwnTwin(merged, m); at >= 0 {
+				// This device's own message, already in the channel: it is
+				// delivered, even when a restart lost Discord's answer, and
+				// must not go out a second time.
+				next := merged[at]
+				chatAdoptEcho(&next, m)
+				merged[at] = next
+				if m.ID != "" {
+					have[m.ID] = at
+				}
+				relinked = true
+				continue
+			}
+			if chatTakeUnsend("", &m) {
+				// Deleted here while it went out: taken back, not shown.
+				chatDeleteRemote(m.ID)
+				continue
+			}
+		}
+		if chatWasDropped(m.ID) {
+			continue // taken back off the channel already
 		}
 		merged = append(merged, m)
 		added++
 		if m.ID != "" {
-			have[m.ID] = true
+			have[m.ID] = len(merged) - 1
 		}
 		if !chatIsOwn(m) && m.Timestamp.UnixMilli() > chatTabs[chatTabCommunity].seenAt {
 			unseen++
 		}
 	}
 	if added == 0 {
+		if relinked {
+			chatMessages = merged
+		}
 		chatMutex.Unlock()
+		if relinked {
+			chatDirty.Store(true)
+		}
 		return
 	}
 	sort.SliceStable(merged, func(a, b int) bool {
@@ -1414,19 +1462,16 @@ func chatMergeCommunity(fresh []ChatMessage, echoes []bool) {
 	chatDirty.Store(true)
 }
 
-// chatHasOwnTwin reports whether list already holds this device's own copy of
-// m: the same text, sent within a few minutes of it.
-func chatHasOwnTwin(list []ChatMessage, m ChatMessage) bool {
+// chatOwnTwin returns the index in list of this device's own copy of m (the
+// same sender, text and files, not yet holding a Discord id), or -1.
+func chatOwnTwin(list []ChatMessage, m ChatMessage) int {
 	for i := len(list) - 1; i >= 0; i-- {
 		have := list[i]
-		if !have.Own || have.Text != m.Text {
-			continue
-		}
-		if gap := m.Timestamp.Sub(have.Timestamp); gap > -5*time.Minute && gap < 5*time.Minute {
-			return true
+		if chatSameContent(have, m) && chatEchoCandidate(have, m.Timestamp, true) {
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // discordPostMessage posts one message to the session's channel and returns
@@ -1643,7 +1688,9 @@ func buildGroqMessagesFrom(history []ChatMessage, userText string) []map[string]
 		if msg.Pending || msg.Error != "" {
 			continue // an unanswered question is not part of the conversation
 		}
-		text := strings.TrimSpace(msg.Text)
+		// A question that carried files names them; their contents went with
+		// that question (chatAIFileContext).
+		text := chatAIMessageText(msg)
 		if text == "" {
 			continue
 		}
@@ -1668,11 +1715,14 @@ func sendGroqChatMessage(userText string) {
 }
 
 // newChatMessageID gives a local message a stable id, so the selection and the
-// quote target follow it even when the history scrolls or is trimmed.
+// quote target follow it even when the history scrolls or is trimmed. The
+// letter in front keeps it from ever reading as a Discord id: sixteen hex
+// digits are all decimal about once in 1,850 ids, and isDiscordSnowflake would
+// take such a local message for one Discord already has.
 func newChatMessageID() string {
 	idBytes := make([]byte, 8)
 	rand.Read(idBytes)
-	return fmt.Sprintf("%x", idBytes)
+	return fmt.Sprintf("l%x", idBytes)
 }
 
 func sendChatMessage(sender, text string) {
@@ -1685,10 +1735,17 @@ func sendChatMessage(sender, text string) {
 // message of this device's own is queued for the Discord channel: the sender
 // loop delivers it now, or as soon as the device is back online.
 func postChatMessage(sender, text string, mirror bool) {
-	if strings.TrimSpace(text) == "" {
+	postChatMessageFiles(sender, text, nil, mirror)
+}
+
+// postChatMessageFiles is postChatMessage for a message that carries files
+// (attached on this device, so each has a Path); they go up with it.
+func postChatMessageFiles(sender, text string, files []ChatFile, mirror bool) {
+	if strings.TrimSpace(text) == "" && len(files) == 0 {
 		return
 	}
 	msg := newChatMessage(sender, text)
+	msg.Files = files
 	// A reply picked from the action bar travels with the message, so the
 	// quote survives a restart and becomes a Discord reply.
 	msg.Quote = takeChatReply(sender)
@@ -1700,7 +1757,7 @@ func postChatMessage(sender, text string, mirror bool) {
 	chatDirty.Store(true)
 	if !msg.Own {
 		// Incoming messages (a relayed one, an app notice) go to the idle feed.
-		noteScreensaverChat(msg.Sender, msg.Text)
+		noteScreensaverChat(msg.Sender, chatMessagePreview(msg))
 	}
 	if queued {
 		chatDiscordWanted.Store(true)

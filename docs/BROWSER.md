@@ -3,8 +3,9 @@
 The stock TrimUI firmware has no web browser, so links in the app (GitHub
 issues, release notes, documentation) had nowhere to open. **Browser** is a
 small text browser built into JukaHub. It needs no X11, Wayland, WebKit or
-Chromium: it fetches a page over HTTPS, extracts the readable text, and draws it
-with the same SDL renderer as the rest of the app.
+Chromium: it fetches a page over HTTPS, runs the page's own scripts against a
+small document model of its own, extracts the readable text, and draws it with
+the same SDL renderer as the rest of the app.
 
 Open it from **Apps → Browser** or **Start → Browser**.
 
@@ -27,9 +28,9 @@ Open it from **Apps → Browser** or **Start → Browser**.
   12 MB of text and images), so returning to a page is instant instead of
   re-downloading it. **Reload** always asks the server again and replaces that
   cached copy.
-* Open on the home page: out of the box DuckDuckGo Lite
-  (`lite.duckduckgo.com/lite/`), which is server-rendered and so readable in the
-  text browser, with the search box the first thing on screen — or the engine
+* Open on the home page: out of the box Startpage (`www.startpage.com/`), which
+  serves Google's results as plain HTML and so stays readable in the text
+  browser, with the search box the first thing on screen — or the engine
   and the page chosen in **Settings → Browser** (see
   [Search engine and home page](#search-engine-and-home-page)). The first open
   in a run always goes there: a page the last run left behind in the saved
@@ -40,6 +41,9 @@ Open it from **Apps → Browser** or **Start → Browser**.
   8 MiB is cut at the cap and the top of the page says so.
 * Read GitHub issues, release notes, README files, documentation sites and
   other server-rendered HTML.
+* Run the page's own JavaScript, so content a script builds — a framework app,
+  a list fetched as JSON, lazy-loaded images, web components — is drawn too.
+  See [JavaScript](#javascript).
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows (cards
   and icon+label pairs side by side), and absolutely positioned or fixed
   layers painted over the text in `z-index` order.
@@ -77,13 +81,31 @@ Open it from **Apps → Browser** or **Start → Browser**.
   (`:root { --brand: #0af }`, `var(--brand, #fff)`), `!important`, and `calc()`
   over `px`, `em` and `rem`. A page whose palette lives in `--custom`
   properties keeps its colours instead of falling back to the reader's paper.
-* Apply the stylesheet rules that describe a screen. `@media` blocks are kept
-  (a width or feature query is a question about the reader, and the reader is
-  the medium that matters) except the ones that only target `print` or
-  `speech`: a print sheet hides the navigation with `display: none` and
-  repaints the page for paper, which on screen reads as a page with its menu
-  missing. `@supports` and `@layer` blocks are kept, because this reader does
-  implement the properties they gate.
+* Apply the stylesheet rules that describe a screen. Every `<style>` block
+  applies to the whole page, as in a browser, together with the linked sheets.
+  `@media` width, height, orientation and aspect-ratio queries are answered for
+  the handheld's own screen — the same size page scripts see — so a site's
+  paired "phone" and "desktop" copies of a block keep exactly one; other
+  feature queries apply. Blocks that only target `print` or `speech` are
+  dropped: a print sheet hides the navigation with `display: none` and repaints
+  the page for paper, which on screen reads as a page with its menu missing.
+  `@supports` and `@layer` blocks are kept, because this reader does implement
+  the properties they gate.
+* Match selectors where it decides what is shown. Attribute selectors
+  (`[hidden]`, `[data-theme=dark]`, Vue's `[v-cloak]`, Alpine's `[x-cloak]`) are
+  evaluated, and so are the pseudo-classes a static page can answer (`:root`,
+  `:link`, `:checked`, `:disabled`, `:not()`, `:is()`, `:target` …). `:hover` and
+  `:focus` never hold for styling, but a rule that *reveals* content through
+  them (a CSS-only sub-menu or tooltip) still applies, since the handheld has
+  no pointer to hover with. Rules for `::before`/`::after` boxes are skipped
+  (the reader draws no generated content), and specificity counts as it does in
+  CSS. A rule that would hide an element (`display: none`, `visibility:
+  hidden`, `opacity: 0`) applies only when its selector certainly matches: the
+  reader used to read every `[attribute]` and `:pseudo` selector as a match, so a
+  site's `[hidden] { display: none }` or a cloak rule blanked the whole page.
+  An element with the `hidden` attribute stays hidden, as in a browser, and a
+  tag with a stray quote in it (`<img alt=don't>`) no longer stops the page from
+  loading.
 
 * Fold what the page folds. A `<details>` section draws its summary and its
   `[+]` / `[-]` marker, and keeps the body out of the layout until the marker is
@@ -99,7 +121,7 @@ from what arrived, with a note at the top of the page.
 
 ### Redirects
 
-A redirect reaches the reader in two shapes, and both are followed:
+A redirect reaches the reader in three shapes, and all of them are followed:
 
 * **HTTP 3xx.** The client follows up to five hops, and every hop must stay on
   HTTP or HTTPS: a site cannot send the reader to a scheme this app cannot draw.
@@ -110,7 +132,18 @@ A redirect reaches the reader in two shapes, and both are followed:
   on its own — the reader would be left on the stub, whose telltale link is
   stripped along with the page's scripts. A load follows up to three of these,
   resolving the target against the page it came from and accepting it quoted,
-  unquoted, spaced or as `URL=` in any case.
+  unquoted, spaced or as `URL=` in any case. While page scripts are on, a
+  refresh inside `<noscript>` is not followed, just as a browser that runs
+  JavaScript never reads `<noscript>`: that is where sites park the bounce to a
+  "turn on JavaScript" or `/nojs` page, and the reader runs the page itself
+  instead. With JavaScript off it follows them as before.
+* **A script that navigates.** A page whose script sets `location.href`, calls
+  `location.replace()`, opens `window.open(…, '_self')`, clicks a link or
+  submits a GET form while the page loads goes where the script sent it (see
+  [JavaScript](#javascript)), under a refresh's rules: three hops at most, never
+  back to an address this load already showed, and only while three seconds of
+  the load's budget are left. A site on the internet cannot send the reader to a
+  LAN or `localhost` address this way.
 
 Only a real redirect is followed. A refresh that names no target, names a
 non-web scheme, asks to reload the same page, or waits longer than two seconds
@@ -125,6 +158,134 @@ walk through the redirect. The move happens during the render pass, never while
 the address bar is being edited, and a correction for a page the reader has
 already navigated past is dropped.
 
+## JavaScript
+
+A page's own scripts run before it is drawn, against a document the reader
+builds from the page. They can read and change it (`querySelector`,
+`innerHTML`, `createElement`, `classList`, `style` …), fetch data, set timers
+and define web components, and what they leave behind is what the reader draws:
+an article a framework renders into an empty `<div id="app">`, a list fetched
+as JSON, lazy-loaded images, a cookie banner a script dismisses, `document.write`
+output. The reader used to give scripts a stand-in document whose every lookup
+answered `null`, so pages like that came out empty.
+
+### What runs
+
+* Classic scripts in document order — inline ones and downloaded ones, fetched
+  side by side while the earlier ones run — then `defer` scripts,
+  `DOMContentLoaded`, `async` and script-inserted scripts, `load`, and whatever
+  those schedule. `document.write` inserts where the writing script stands, so
+  old "write a script tag" loaders still work; a write after the page has loaded
+  is ignored, as browsers do for asynchronous scripts.
+* `<script type="module">` with `import`/`export`, `import()`, import maps and
+  JSON or CSS modules. The embedded engine has no modules of its own, so each
+  one is rewritten into a function before it runs; an imported name is a copy
+  taken when the importing module starts rather than a live binding, which only
+  shows inside an import cycle. `nomodule` scripts are skipped, as in any
+  browser with modules.
+* Timers and animation frames run on a virtual clock: a page that waits three
+  seconds before showing its content costs no time, because the reader skips
+  ahead to the next timer whenever nothing else is happening, and `Date` moves
+  with it. A timer that asked for more than ten seconds is never skipped to —
+  that is a "your session expired" notice or the next slide of a carousel, not
+  content — each phase of the load skips at most 15 seconds, and one interval
+  (or a timeout that re-arms itself) runs at most 100 times.
+* `fetch` and `XMLHttpRequest`; `document.cookie`; `localStorage` and
+  `sessionStorage`, kept in memory per site while JukaHub runs and never written
+  to the card; `MutationObserver`; `IntersectionObserver`, which reports every
+  element as visible — that is what makes lazy images load; `ResizeObserver`;
+  custom elements with shadow DOM and slots; `history.pushState`; `URL`,
+  `TextEncoder`, `crypto.getRandomValues`; and a stand-in for `Intl`, which the
+  engine lacks, that formats numbers and dates the US-English way.
+* Layout questions get plausible answers: an element that is shown reports a
+  size on screen, so "has it scrolled into view yet?" checks pass, and
+  `getComputedStyle` sees inline styles and the page's own `<style>` sheets
+  (linked stylesheet files are fetched after the scripts, for the drawing).
+
+A shadow root a component attached is drawn in its element's place, with the
+light-DOM children in their slots. The declarative form
+(`<template shadowrootmode="open">`) and lazy images that keep their real
+address in `data-src`, `data-srcset` or one of their cousins behind a
+placeholder `src` are unfolded even on a page without scripts, as long as
+JavaScript is on.
+
+### Limits
+
+Everything is bounded for the handheld's 1 GB and four slow cores:
+
+| Limit | Value | Past it |
+|-------|-------|---------|
+| The whole script pass | 10 s, network waits included | the page is drawn as the scripts left it; most pages go idle much sooner and stop there |
+| One script or task | 6 s | that script is stopped and the page goes on |
+| A slow request | 5 s | the pass stops waiting for it, so a long-poll that never answers cannot hold the page (script downloads are waited for until the pass ends) |
+| One regular-expression match | 2 s | the match throws a `RangeError` instead of freezing the load |
+| Memory | 192 MiB of growth | the page is drawn as it arrived |
+| Page size | 4 MiB, 60 000 nodes | the old `document.write`-only pass runs instead |
+| Scripts | 256 runs, 6 MiB of code | further scripts are skipped |
+| Requests | 160 per page, 24 MiB in all, 6 at a time, 15 s and 4 MiB each (3 MiB for a script) | the request fails as a network error |
+| Pages running scripts | 2 | opening a new page stops the scripts of the page you left |
+
+A page that arrived with a fair amount of text and lost more than two thirds of
+it to its scripts is drawn as it arrived: a script that tears down the server's
+content and fails to rebuild it should not cost you the article. When the pass
+cannot start at all, the old `document.write`-only pass runs instead, so a page
+that defeats the new engine still shows what it showed before.
+
+### What a page cannot do
+
+The reader runs other people's code on whatever network the handheld is on, so
+page scripts are kept on a short leash:
+
+* **No local network from a public site.** A page from the internet cannot make
+  requests to this device — where JukaHub's own Live Builder and companion
+  services listen — or to the LAN (`192.168.x.x`, `10.x.x.x`, `.local` and
+  `.lan` names …), and cannot navigate there either. The address is checked
+  when the connection opens, so a site whose name starts resolving to a LAN
+  address mid-visit gains nothing. A page opened from the LAN may reach the
+  LAN; only a page on `localhost` may reach `localhost`.
+* **Cookies stay with their site.** A script's own requests carry cookies only
+  for the page's own site, the way browsers treat `SameSite=Lax` cookies; a
+  response from another origin reaches the script only when that server allows
+  it (CORS), and `Set-Cookie` headers never do. `document.cookie` leaves out
+  `HttpOnly` cookies and cannot overwrite them, only an https page can set a
+  `Secure` cookie, and an https page cannot load anything over plain http.
+* **No workers, sockets or databases.** Web Workers, service workers, IndexedDB
+  and the Cache API are absent, so pages that check for them take their
+  fallback; `WebSocket` and `EventSource` exist but never connect; `<canvas>`
+  has no drawing context; media elements refuse to play (videos open in Media
+  instead, see [Videos and yt-dlp playback](#videos-and-yt-dlp-playback)); and
+  permission requests (notifications, location) are answered "no".
+* Every locale formats as US English, and the only real time zones are UTC, the
+  device's own and the fixed `Etc/GMT±N` ones.
+* Sites that check whether a full browser is visiting — Cloudflare's "checking
+  your browser", Google Search (see [Google needs a full
+  web browser](#google-needs-a-full-web-browser)) and other bot walls — still stop at
+  their check.
+
+The ad and tracker filter applies to everything scripts request (see
+[Ads and trackers](#ads-and-trackers)).
+
+### Turning it off
+
+**Settings → Browser → JavaScript** switches page scripts off and on. Off,
+every page is drawn as its server sent it — which is also the quickest way to
+tell whether something odd on a page came from its scripts: turn JavaScript off
+and press **Reload** (Back and Forward show the copy that was cached when the
+page loaded). The change applies from the next page load. The setting is
+`browserJavaScript` in `jukauser.json` (see [Configuration](CONFIGURATION.md)).
+
+With debug logging on (the default on a PC; `JUKAHUB_LOG_LEVEL=debug` on the
+handheld), every page that ran scripts leaves a summary line in `logs.txt`,
+
+```text
+scripts on https://example.com/news: 14 run (1 failed), 212 tasks, 37 timers, 6 requests (180 KiB, 2 blocked), 2311 nodes, 640ms
+```
+
+followed by its first few script errors (`script error on …`), console output
+(`js error: …`, at most 40 lines a page) and the reason when the pass stopped
+early, took the old path, or a script navigation was not followed. Addresses in
+these lines never include the query string, where tokens and search terms live.
+
 ## Search engine and home page
 
 **Settings → Browser** chooses where a search goes and which page **Home**
@@ -136,10 +297,10 @@ web** row in Home search (its second line names the engine too), and the
 
 | Engine | Results address | Without JavaScript |
 |--------|-----------------|--------------------|
-| DuckDuckGo (the default) | `lite.duckduckgo.com/lite/?q=` | Results: the Lite page is made for simple browsers |
-| Google | `www.google.com/search?q=` | No results — see [Google needs JavaScript](#google-needs-javascript) |
+| Startpage (the default) | `www.startpage.com/sp/search?query=` | Results: Google's, served as plain HTML |
+| Google | `www.google.com/search?q=` | No results — see [Google needs a full web browser](#google-needs-a-full-web-browser) |
 | Bing | `www.bing.com/search?q=` | Results; its links are unwrapped (see [Result links](#result-links)) |
-| Startpage | `www.startpage.com/sp/search?query=` | Results: Google's, served as plain HTML |
+| DuckDuckGo | `lite.duckduckgo.com/lite/?q=` | Results: the Lite page is made for simple browsers |
 | Brave Search | `search.brave.com/search?q=` | Results |
 | Yahoo | `search.yahoo.com/search?p=` | Results |
 | Mojeek | `www.mojeek.com/search?q=` | Results |
@@ -160,7 +321,7 @@ press **Save**, and only if it is usable — `http` or `https`, a real host (one
 with a dot, an IP address or `localhost`) and a place for the words. Anything
 else is refused with a note and the engine stays what it was; **B** leaves it
 untouched too. A custom address that stops being usable (edited by hand in
-`jukauser.json`) sends searches to DuckDuckGo, and the row says so.
+`jukauser.json`) sends searches to Startpage, and the row says so.
 
 **Home page** follows the search engine out of the box: its start page, so
 choosing Google makes **Home** open google.com. The row's list also offers the
@@ -179,14 +340,19 @@ The values live in `jukauser.json` as `browserSearchEngine`,
 `browserSearchCustom`, `browserHomePage` and `browserHomeTyped` (see
 [Configuration](CONFIGURATION.md)).
 
-### Google needs JavaScript
+### Google needs a full web browser
 
-Since January 2025 Google shows search results only to browsers that run
-JavaScript, and by mid-2026 no script-less client gets results from it, whatever
-User-Agent it sends: the results page answers with a redirect to "turn on
-JavaScript" (or, when it suspects a robot, a puzzle that needs scripts too).
-This reader runs no real JavaScript, so a Google search would end on that page.
-It shows a card instead:
+Since January 2025 Google's results page is not a page of results but a robot
+check (Google calls it SearchGuard): a script that inspects the browser running
+it, built to admit full desktop and phone browsers and turn away everything
+else. A browser without JavaScript is sent to "turn on JavaScript"; one that
+does run scripts but is not a full browser — scrapers, headless tools, and this
+reader's small engine (see [JavaScript](#javascript)) — fails the check the same
+way, or is sent to the "unusual traffic" puzzle. Passing it would mean
+disguising the reader as Chrome, which is exactly what the check exists to
+catch, so the reader does not try. It recognises Google's answer before running
+any of its scripts — they would only spend the page's script budget to end on
+the same wall — and shows a card instead:
 
 * On the handheld, **Search on Startpage** runs the same words on Startpage,
   which serves Google's results as plain HTML; **Always use Startpage** does that
@@ -228,8 +394,10 @@ bytes. The filter is two lists:
   left alone.
 
 Ad `<script>` tags are also removed from the page source before the script pass,
-so they are never downloaded and their inline fallback never runs. The address
-bar's rightmost chip reports how many requests the page load skipped
+so they are never downloaded and their inline fallback never runs. What a
+page's scripts request on their own — `fetch`, `XMLHttpRequest`, the scripts
+and modules they load — passes the same filter, on every redirect hop. The
+address bar's rightmost chip reports how many requests the page load skipped
 (`12 BLOCKED`, or `0 BLOCKED` when nothing was in the way; it caps at
 `99+ BLOCKED`). The plain-text fallback carries the same count
 (`Blocked: 3 ad/tracker request(s)`). A page you navigate to directly is never
@@ -274,6 +442,11 @@ hops of one load see the cookies each earlier hop set.
 The jar is scoped the way a browser's is: a cookie belongs to the host that set
 it (including `Domain=` subdomains, the `Path=` prefix, `Secure` and expiry) and
 is never offered to a different site.
+
+Page scripts see the jar through `document.cookie`, without the `HttpOnly`
+cookies a script must never read, and they cannot overwrite those either. The
+requests a script makes carry cookies only for the page's own site (see
+[JavaScript](#javascript)).
 
 ### A session survives a relaunch
 
@@ -540,10 +713,12 @@ In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 
 ## What it cannot do
 
-This is a reading browser, not a full web engine. Its JavaScript support is a
-small embedded engine that only exists to splice `document.write` output into the
-page; it is not a full JS runtime, so a site whose content is built by a modern
-framework stays empty. It does not implement grid or float layouts, and while it
+This is a reading browser, not a full web engine. It runs a page's scripts
+against a small document model of its own (see [JavaScript](#javascript)),
+which brings most script-built content onto the page, but there is no layout
+for scripts to measure, no canvas, no workers or sockets, and the scripts get
+ten seconds; a heavy web app can still come out empty, and sites that test for
+a full browser stop at their test. It does not implement grid or float layouts, and while it
 can fill in and send a form it cannot **post** one: a submission is sent as a
 GET (see [Forms](#forms)), which a search box accepts and a login form usually
 does not.
@@ -563,9 +738,11 @@ keep, so applying those rules everywhere would restyle the whole page. A font
 family is kept only as far as "the app's one face", so a monospace `font-family`
 does not make a code block monospaced.
 GitHub issue pages and
-release pages work; a site that renders its content only with JavaScript will
-show little or no text. Google's search results are one such page (see
-[Google needs JavaScript](#google-needs-javascript)). The companion app is the way to send a link from a
+release pages work, and so do most pages that render their content with
+JavaScript; a page whose scripts need more than the reader has (a canvas, a live
+socket feed, a browser check) still shows little or no text. Google's search
+results are one such page (see
+[Google needs a full web browser](#google-needs-a-full-web-browser)). The companion app is the way to send a link from a
 phone if typing on the handheld is awkward.
 
 If a page fails, the error is shown in the content area. Check Wi-Fi first, then

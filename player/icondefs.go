@@ -228,6 +228,8 @@ var iconDefs = [...]iconDef{
 		s: M9 17 H7 A7 12 5 90 270 H9
 		s: M15 7 H17 A17 12 5 -90 90 H15
 		s: M8 12 H16`},
+	{"paperclip", `
+		s: M18 6 V15 A12 15 6 0 180 V7 A10 7 4 180 360 V15 A12 15 2 0 180 V9`},
 	{"home", `
 		D: M3 10 L12 3 L21 10 V19 Q21 21 19 21 H5 Q3 21 3 19 Z
 		s: M10 21 V15 H14 V21`},
@@ -692,6 +694,8 @@ var iconAliasPairs = [...][2]string{
 	{"bin", "trash"},
 	{"rename", "edit"},
 	{"pencil", "edit"},
+	{"attach", "paperclip"},
+	{"attachment", "paperclip"},
 	{"find", "search"},
 	{"magnifier", "search"},
 	{"cancel", "close"},

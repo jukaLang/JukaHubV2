@@ -528,6 +528,7 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 | A plugin, a setting or a bad update broke startup | Hold **L + R + Start** (Ctrl + Alt + R on a keyboard) while JukaHub starts: safe mode plus a recovery card (previous version, last good settings, reset settings). Three failed starts in a row start safe mode by themselves. Or create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). See [docs/RECOVERY.md](docs/RECOVERY.md). |
 | Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing at once: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
 | YouTube search fails | Check Wi-Fi; open **Logs** from the Start menu for the app's own log. |
+| A video goes black for a second, then says it is downloading | The stream would not open, so JukaHub downloads the video and plays it from the card instead (**B** cancels). If that fails too, the message says why; `errors.txt` has a line starting `decoder for` with ffmpeg's reason. |
 | Video stutters | Settings → playback resolution → try `480` or `360`. |
 | Text shows as boxes | `Inter-Regular.ttf` is missing from `Apps/JukaHub`. |
 

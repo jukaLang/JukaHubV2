@@ -880,6 +880,14 @@ func htmlTagAttribute(tag, want string) string {
 		for i < len(tag) && tag[i] != '=' && tag[i] != ' ' && tag[i] != '\t' && tag[i] != '\r' && tag[i] != '\n' && tag[i] != '/' && tag[i] != '>' {
 			i++
 		}
+		// A '>' the scan stops on without consuming must still be stepped
+		// over. findTextBrowserTagEnd reads a quote anywhere as opening a
+		// value, so `<img alt=don't>…it's…>` hands this a tag with '>' inside
+		// it — and the loop used to spin there forever, freezing the page load.
+		if i == start && i < len(tag) && tag[i] != '=' {
+			i++
+			continue
+		}
 		name := strings.ToLower(tag[start:i])
 		for i < len(tag) && (tag[i] == ' ' || tag[i] == '\t' || tag[i] == '\r' || tag[i] == '\n') {
 			i++

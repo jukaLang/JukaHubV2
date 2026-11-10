@@ -52,9 +52,11 @@ func vcursorTestState(t *testing.T, start time.Time) (now *time.Time, queued *[]
 	t.Helper()
 	oldPush, oldClock, oldState, oldAxes := syntheticEventPush, vcursorClock, vcursor, stickAxes
 	oldScale, oldOX, oldOY := windowScaleFactor, windowOffsetX, windowOffsetY
+	oldTrig := padTriggerHeld
 	t.Cleanup(func() {
 		syntheticEventPush, vcursorClock, vcursor, stickAxes = oldPush, oldClock, oldState, oldAxes
 		windowScaleFactor, windowOffsetX, windowOffsetY = oldScale, oldOX, oldOY
+		padTriggerHeld = oldTrig
 	})
 	clock := start
 	var events []sdl.Event
@@ -66,51 +68,53 @@ func vcursorTestState(t *testing.T, start time.Time) (now *time.Time, queued *[]
 	windowScaleFactor, windowOffsetX, windowOffsetY = 1, 0, 0
 	vcursor = vcursorState{}
 	stickAxes = [4]float64{}
+	padTriggerHeld = [2]bool{}
 	clearToastAfterTest(t)
 	return &clock, &events
 }
 
-// TestVcursorClickAndDrag drives the pointer through show, move, click and
-// hide and checks the mouse events it queues.
-func TestVcursorClickAndDrag(t *testing.T) {
+// vcursorRight moves the right stick to x, y and sends its event.
+func vcursorRight(config *Config, x, y float64) bool {
+	stickAxes[2], stickAxes[3] = x, y
+	return vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_RIGHTX, Value: int16(x * 32767)}, config)
+}
+
+// TestVcursorRightStick: the right stick brings the pointer up and moves it;
+// the left stick stays the D-pad, and its steps put the pointer away.
+func TestVcursorRightStick(t *testing.T) {
 	now, queued := vcursorTestState(t, time.Unix(1000, 0))
 	config := &Config{}
 
-	// Both sticks moved out → shown at the centre.
-	stickAxes = [4]float64{0.9, 0, 0.9, 0}
-	if !vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_RIGHTX, Value: 30000}, config) || !vcursor.active {
-		t.Fatal("gesture did not show the pointer")
+	// A small tilt (inside the dead zone, or just past it) does not bring it up.
+	if !vcursorRight(config, 0.2, 0) || vcursor.active {
+		t.Fatal("a light right-stick tilt brought the pointer up")
+	}
+	// A deliberate move does, at the centre the first time.
+	if !vcursorRight(config, 0.9, 0) || !vcursor.active {
+		t.Fatal("moving the right stick did not bring the pointer up")
 	}
 	if vcursor.x != float64(screenWidth)/2 {
 		t.Errorf("first showing at x=%v, want the centre", vcursor.x)
 	}
-	// Still latched: the gesture's own tilt neither moves nor scrolls.
-	*queued = nil
-	*now = now.Add(16 * time.Millisecond)
-	vcursorTick(config)
-	if len(*queued) != 0 || vcursor.x != float64(screenWidth)/2 {
-		t.Errorf("held gesture moved or scrolled: %d events, x=%v", len(*queued), vcursor.x)
-	}
-	// Sticks back to rest, then the left stick right for a frame.
-	stickAxes = [4]float64{}
-	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX}, config)
-	if vcursor.latched {
-		t.Fatal("latch not released at rest")
-	}
-	stickAxes[0] = 1
 	startX := vcursor.x
 	*now = now.Add(20 * time.Millisecond)
 	vcursorTick(config)
 	if vcursor.x <= startX {
-		t.Errorf("left stick right did not move the pointer: %v → %v", startX, vcursor.x)
+		t.Errorf("the right stick did not move the pointer: %v → %v", startX, vcursor.x)
 	}
-	// A tilt inside the dead zone moves nothing.
-	stickAxes[0] = stickCalDefaultDZ * 0.9
+	// Inside the dead zone it stays put.
+	vcursorRight(config, stickCalDefaultDZ*0.9, 0)
 	stillX := vcursor.x
 	*now = now.Add(20 * time.Millisecond)
 	vcursorTick(config)
 	if vcursor.x != stillX {
 		t.Errorf("a tilt inside the dead zone moved the pointer: %v → %v", stillX, vcursor.x)
+	}
+
+	// The left stick is not the pointer's: it goes on to stick navigation.
+	stickAxes[0] = 0.9
+	if vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 29490}, config) {
+		t.Error("the left stick was taken by the pointer")
 	}
 	stickAxes[0] = 0
 
@@ -139,55 +143,94 @@ func TestVcursorClickAndDrag(t *testing.T) {
 	if vcursorButton(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_B}, config) {
 		t.Error("B was swallowed by the pointer")
 	}
-	// The right stick scrolls: one notch at once.
-	*queued = nil
-	stickAxes[3] = -1 // up
-	*now = now.Add(16 * time.Millisecond)
-	vcursorTick(config)
-	stickAxes[3] = 0
-	if len(*queued) != 1 {
-		t.Fatalf("scroll queued %d events, want 1", len(*queued))
-	}
-	if w, ok := (*queued)[0].(*queuedMouseWheelEvent); !ok || w.Y != 1 || w.Type != sdl.MOUSEWHEEL {
-		t.Errorf("stick up = %#v, want one wheel notch up", (*queued)[0])
-	}
-
-	// A D-pad press right after the gesture is the gesture's own stick step:
-	// swallowed, the pointer stays.
-	if !vcursorButton(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_RIGHT}, config) || !vcursor.active {
-		t.Error("a stick step queued by the gesture hid the pointer")
-	}
-	// Later, a D-pad press hides it and still goes on to move the focus.
-	*now = now.Add(time.Second)
+	// A D-pad press (or a left-stick step) hides it and still moves the focus.
 	if vcursorButton(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_DOWN}, config) {
 		t.Error("D-pad press was swallowed")
 	}
 	if vcursor.active {
 		t.Error("D-pad press did not hide the pointer")
 	}
+	// The right stick brings it back where it was.
+	at := vcursor.x
+	vcursorRight(config, 0, 0)
+	vcursorRight(config, 0, 0.9)
+	if !vcursor.active || vcursor.x != at {
+		t.Errorf("pointer back: active %v at x=%v, want %v", vcursor.active, vcursor.x, at)
+	}
+}
+
+// TestVcursorTriggerScroll: while the pointer is up, L2 / R2 scroll under it,
+// once at once and repeating while held; with it hidden they are the
+// shoulders' again.
+func TestVcursorTriggerScroll(t *testing.T) {
+	now, queued := vcursorTestState(t, time.Unix(2000, 0))
+	config := &Config{}
+	trigger := func(axis uint8, v int16) bool {
+		return vcursorAxis(&sdl.ControllerAxisEvent{Axis: axis, Value: v}, config)
+	}
+
+	if trigger(sdl.CONTROLLER_AXIS_TRIGGERRIGHT, 32000) {
+		t.Fatal("R2 was taken with the pointer hidden")
+	}
+	trigger(sdl.CONTROLLER_AXIS_TRIGGERRIGHT, 0) // let go (the shoulders' latch)
+
+	vcursorRight(config, 0.9, 0)
+	vcursorRight(config, 0, 0)
+	*queued = nil
+	if !trigger(sdl.CONTROLLER_AXIS_TRIGGERRIGHT, 32000) {
+		t.Fatal("R2 not taken with the pointer up")
+	}
+	wheels := func() (n int, last int32) {
+		for _, e := range *queued {
+			if w, ok := e.(*queuedMouseWheelEvent); ok {
+				n++
+				last = w.Y
+			}
+		}
+		return n, last
+	}
+	if n, y := wheels(); n != 1 || y != -1 {
+		t.Fatalf("R2 press: %d wheel events, last Y %d; want one notch down", n, y)
+	}
+	*now = now.Add(200 * time.Millisecond)
+	vcursorTick(config)
+	if n, _ := wheels(); n != 1 {
+		t.Errorf("R2 repeated before the delay: %d notches", n)
+	}
+	*now = now.Add(200 * time.Millisecond)
+	vcursorTick(config)
+	if n, _ := wheels(); n != 2 {
+		t.Errorf("held R2 did not repeat: %d notches", n)
+	}
+	trigger(sdl.CONTROLLER_AXIS_TRIGGERRIGHT, 0)
+	*now = now.Add(time.Second)
+	vcursorTick(config)
+	if n, _ := wheels(); n != 2 || vcursor.trig[1] || padTriggerHeld[1] {
+		t.Errorf("released R2 kept scrolling: %d notches, held %v latch %v", n, vcursor.trig[1], padTriggerHeld[1])
+	}
+	// L2 scrolls up.
+	*queued = nil
+	trigger(sdl.CONTROLLER_AXIS_TRIGGERLEFT, 32000)
+	if n, y := wheels(); n != 1 || y != 1 {
+		t.Errorf("L2 press: %d wheel events, last Y %d; want one notch up", n, y)
+	}
 }
 
 func TestVcursorDisabledAndIdle(t *testing.T) {
-	now, _ := vcursorTestState(t, time.Unix(2000, 0))
+	now, _ := vcursorTestState(t, time.Unix(3000, 0))
 
 	off := &Config{}
 	off.Variables.Custom = map[string]interface{}{vcursorKey: false}
-	stickAxes = [4]float64{0.9, 0, 0.9, 0}
-	if vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 30000}, off) || vcursor.active {
-		t.Error("gesture worked with the setting off")
+	if vcursorRight(off, 0.9, 0) || vcursor.active {
+		t.Error("the right stick brought the pointer up with the setting off")
 	}
 
 	on := &Config{}
-	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 30000}, on)
+	vcursorRight(on, 0.9, 0)
 	if !vcursor.active {
-		t.Fatal("gesture did not show the pointer")
+		t.Fatal("the right stick did not bring the pointer up")
 	}
-	// The triggers are never the pointer's.
-	if vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_TRIGGERLEFT, Value: 30000}, on) {
-		t.Error("a trigger was taken by the pointer")
-	}
-	stickAxes = [4]float64{}
-	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX}, on) // back at rest
+	vcursorRight(on, 0, 0)
 	*now = now.Add(vcursorIdleHide + time.Second)
 	vcursorTick(on)
 	if vcursor.active {
@@ -195,109 +238,89 @@ func TestVcursorDisabledAndIdle(t *testing.T) {
 	}
 }
 
-// TestVcursorCalibratedDrift: a stick calibrated to rest off centre neither
-// fires the gesture nor counts as forming it while it rests there.
-func TestVcursorCalibratedDrift(t *testing.T) {
-	vcursorTestState(t, time.Unix(3000, 0))
-	config := &Config{}
-	config.Variables.Custom = map[string]interface{}{
-		stickCalKeys[stickLeft]:  "0.100,0.300,0.000,1.000",
-		stickCalKeys[stickRight]: "0.100,0.000,0.300,1.000",
-	}
-	// Both sticks resting at their calibrated, off-centre spots.
-	stickAxes = [4]float64{0.3, 0, 0, 0.3}
-	if vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 9830}, config) || vcursor.active {
-		t.Error("two drifting sticks at rest fired the gesture")
-	}
-	l, r := vcursorStickTilts(config)
-	if l != 0 || r != 0 || vcursorForming() {
-		t.Errorf("resting tilts = %v, %v; want 0, 0", l, r)
-	}
-}
-
-// TestVcursorGesturePairing: the gesture is both sticks leaving their
-// centres together; a stick that has been out for a while does not pair.
-func TestVcursorGesturePairing(t *testing.T) {
+// TestVcursorDriftStaysHidden: a stick calibrated to rest off centre does
+// not bring the pointer up, and a stick creeping just past its dead zone does
+// not keep it up.
+func TestVcursorDriftStaysHidden(t *testing.T) {
 	now, _ := vcursorTestState(t, time.Unix(4000, 0))
 	config := &Config{}
-	axis := func(a uint8) bool { return vcursorAxis(&sdl.ControllerAxisEvent{Axis: a}, config) }
-
-	// Left out first, right half a second later: moving the pointer and then
-	// scrolling is not the gesture.
-	stickAxes = [4]float64{0.9, 0, 0, 0}
-	axis(sdl.CONTROLLER_AXIS_LEFTX)
-	*now = now.Add(500 * time.Millisecond)
-	stickAxes = [4]float64{0.9, 0, 0.9, 0}
-	axis(sdl.CONTROLLER_AXIS_RIGHTX)
-	if vcursor.active || vcursorForming() {
-		t.Fatal("sticks that left half a second apart made the gesture")
+	config.Variables.Custom = map[string]interface{}{
+		stickCalKeys[stickRight]: "0.100,0.000,0.300,1.000",
 	}
-	// Both back home, then out together (100 ms apart): the gesture.
-	stickAxes = [4]float64{}
-	axis(sdl.CONTROLLER_AXIS_LEFTX)
-	*now = now.Add(time.Second)
-	stickAxes = [4]float64{0.9, 0, 0, 0}
-	axis(sdl.CONTROLLER_AXIS_LEFTX)
-	*now = now.Add(100 * time.Millisecond)
-	stickAxes = [4]float64{0.9, 0, 0.9, 0}
-	if !axis(sdl.CONTROLLER_AXIS_RIGHTX) || !vcursor.active {
-		t.Fatal("both sticks moved together did not show the pointer")
+	if vcursorRight(config, 0, 0.3); vcursor.active {
+		t.Fatal("a drifting stick at rest brought the pointer up")
 	}
-	// Held out: one toggle only, even once the latch runs out.
-	*now = now.Add(2 * vcursorLatchMax)
-	axis(sdl.CONTROLLER_AXIS_RIGHTX)
+	// Brought up on purpose, then left creeping at a tilt of about 0.08.
+	vcursorRight(config, 0.9, 0.3)
 	if !vcursor.active {
-		t.Fatal("holding the gesture toggled the pointer again")
+		t.Fatal("a deliberate move did not bring the pointer up")
 	}
-	if vcursor.latched {
-		t.Error("the latch outlived vcursorLatchMax")
+	vcursorRight(config, 0.172, 0.3)
+	for i := 0; i < 40; i++ {
+		*now = now.Add(time.Second)
+		vcursorTick(config)
+	}
+	if vcursor.active {
+		t.Error("a creeping stick kept the pointer up for ever")
 	}
 }
 
-// TestVcursorNavHold: the left stick's first step waits for the right stick;
-// taken late when it does not come, dropped when it does.
-func TestVcursorNavHold(t *testing.T) {
-	now, queued := vcursorTestState(t, time.Unix(6000, 0))
-	oldBtn, oldTime := lastStickBtn, lastStickTime
-	defer func() { lastStickBtn, lastStickTime = oldBtn, oldTime }()
-	lastStickBtn, lastStickTime = 0, 0
+// TestVcursorChatKeepsRightStick: Chat scrolls its history with the right
+// stick, so the pointer leaves it alone there.
+func TestVcursorChatKeepsRightStick(t *testing.T) {
+	vcursorTestState(t, time.Unix(5000, 0))
+	oldScene := currentSceneIndex
+	defer func() { currentSceneIndex = oldScene }()
+	config := &Config{Scenes: []SceneConfig{{Name: chatSceneName}}}
+	currentSceneIndex = 0
+	if vcursorRight(config, 0.9, 0) || vcursor.active {
+		t.Error("the pointer took the right stick on the Chat screen")
+	}
+}
+
+// TestVcursorStickCalScreen: on the stick calibration screen neither stick
+// moves anything — not the pointer, not the focus.
+func TestVcursorStickCalScreen(t *testing.T) {
+	vcursorTestState(t, time.Unix(6000, 0))
+	oldScene := currentSceneIndex
+	defer func() { currentSceneIndex = oldScene }()
+	config := &Config{Scenes: []SceneConfig{{Name: stickCalScene}}}
+	currentSceneIndex = 0
+	if !vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 30000}, config) {
+		t.Error("the left stick navigated on the calibration screen")
+	}
+	if !vcursorRight(config, 0.9, 0) || vcursor.active {
+		t.Error("the right stick brought the pointer up on the calibration screen")
+	}
+}
+
+// TestVcursorTriggerHeldBeforePointer: a trigger already held for its
+// shoulder action when the pointer comes up does not start scrolling.
+func TestVcursorTriggerHeldBeforePointer(t *testing.T) {
+	now, queued := vcursorTestState(t, time.Unix(7000, 0))
 	config := &Config{}
-
-	stickAxes = [4]float64{0.9, 0, 0, 0}
-	if !vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 29490}, config) {
-		t.Fatal("the left stick's first step was not held back")
-	}
-	*now = now.Add(30 * time.Millisecond)
-	vcursorTick(config)
-	if len(*queued) != 0 {
-		t.Fatalf("the held step was taken early: %d events", len(*queued))
-	}
-	*now = now.Add(50 * time.Millisecond)
-	vcursorTick(config)
-	if len(*queued) != 1 {
-		t.Fatalf("the held step was not taken: %d events", len(*queued))
-	}
-	if b, ok := (*queued)[0].(*queuedControllerButtonEvent); !ok || b.Button != sdl.CONTROLLER_BUTTON_DPAD_RIGHT {
-		t.Errorf("held step = %#v, want D-pad right", (*queued)[0])
-	}
-
-	// Home, then left and right 40 ms apart: the step is dropped.
-	stickAxes = [4]float64{}
-	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX}, config)
+	// R2 pressed with the pointer hidden: the shoulders' latch holds it.
+	triggerPressedEdge(1, 32000)
+	vcursorRight(config, 0.9, 0)
 	*queued = nil
+	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_TRIGGERRIGHT, Value: 31000}, config)
 	*now = now.Add(time.Second)
-	stickAxes = [4]float64{0.4, 0, 0, 0}
-	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_LEFTX, Value: 13107}, config)
-	*now = now.Add(40 * time.Millisecond)
-	stickAxes = [4]float64{0.4, 0, 0.3, 0}
-	if !vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_RIGHTX, Value: 9830}, config) {
-		t.Error("two sticks on their way out together were not held as the gesture")
-	}
-	*now = now.Add(100 * time.Millisecond)
 	vcursorTick(config)
 	for _, e := range *queued {
-		if _, ok := e.(*queuedControllerButtonEvent); ok {
-			t.Fatal("the left stick stepped the focus while the gesture formed")
+		if _, ok := e.(*queuedMouseWheelEvent); ok {
+			t.Fatal("a trigger held before the pointer came up scrolled")
 		}
+	}
+	// Its release and a fresh press do scroll.
+	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_TRIGGERRIGHT, Value: 0}, config)
+	vcursorAxis(&sdl.ControllerAxisEvent{Axis: sdl.CONTROLLER_AXIS_TRIGGERRIGHT, Value: 32000}, config)
+	n := 0
+	for _, e := range *queued {
+		if _, ok := e.(*queuedMouseWheelEvent); ok {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("a fresh R2 press sent %d notches, want 1", n)
 	}
 }
