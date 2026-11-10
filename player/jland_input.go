@@ -182,27 +182,18 @@ func jlandKeysCaptured(config *Config) bool {
 }
 
 // jlandPadHeld is the set of logical buttons held on the pad, after the same
-// A/B swap and remap the press events go through.
+// A/B and X/Y swaps (padFaceButton) and remap the press events go through.
 func jlandPadHeld(config *Config, pad *sdl.GameController) [32]bool {
 	var held [32]bool
 	if pad == nil {
 		return held
 	}
 	handheld := P().IsHandheld()
-	swap := abButtonsSwapped(config)
 	for phys := 0; phys < len(held) && phys < int(sdl.CONTROLLER_BUTTON_MAX); phys++ {
 		if pad.Button(sdl.GameControllerButton(phys)) == 0 {
 			continue
 		}
-		b := normalizeHandheldBackButton(uint8(phys), handheld)
-		if swap {
-			switch b {
-			case sdl.CONTROLLER_BUTTON_A:
-				b = sdl.CONTROLLER_BUTTON_B
-			case sdl.CONTROLLER_BUTTON_B:
-				b = sdl.CONTROLLER_BUTTON_A
-			}
-		}
+		b := padFaceButton(config, normalizeHandheldBackButton(uint8(phys), handheld))
 		if logical := a11yRemapButton(b); int(logical) < len(held) {
 			held[logical] = true
 		}

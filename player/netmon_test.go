@@ -63,8 +63,7 @@ func TestProbeConnectivityCaptivePortalPage(t *testing.T) {
 // Many portals redirect to a login page; the redirect target is what "Sign in"
 // must open, not the probe endpoint.
 func TestProbeConnectivityPortalRedirect(t *testing.T) {
-	var srv *httptest.Server
-	srv = withProbeServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := withProbeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/login") {
 			_, _ = w.Write([]byte("login"))
 			return

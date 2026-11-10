@@ -175,9 +175,14 @@ func resolveRetroArchSaveDir(value, cfgPath string) string {
 // fail. configText/configPath may be empty (no RetroArch installed).
 func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 	var roots []saveRoot
+	var infos []os.FileInfo // infos[i] describes roots[i]
 	add := func(name, path string) {
 		path = filepath.Clean(strings.TrimSpace(path))
-		if path == "" || path == "." || !dirExists(path) {
+		if path == "" || path == "." {
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
 			return
 		}
 		// A snapshot directory inside a save root would copy itself. The data
@@ -186,12 +191,16 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 		if isPathWithin(path, saveManagerDir()) || isPathWithin(saveManagerDir(), path) {
 			return
 		}
-		for _, existing := range roots {
-			if existing.Path == path {
+		// One folder under two spellings is one root: FAT ignores case, so
+		// RetroArch/saves and retroarch/saves can be the same folder, which was
+		// then copied twice and synced under two keys.
+		for i, existing := range roots {
+			if existing.Path == path || os.SameFile(infos[i], info) {
 				return
 			}
 		}
 		roots = append(roots, saveRoot{Name: name, Path: path})
+		infos = append(infos, info)
 	}
 
 	if configText != "" {
@@ -244,6 +253,10 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 		}
 	}
 
+	if sdRoot != "" {
+		addPPSSPPMemstickRoots(sdRoot, roots, add)
+	}
+
 	sort.Slice(roots, func(i, j int) bool {
 		if roots[i].Name != roots[j].Name {
 			return roots[i].Name < roots[j].Name
@@ -251,6 +264,65 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 		return roots[i].Path < roots[j].Path
 	})
 	return roots
+}
+
+// addPPSSPPMemstickRoots adds the saves of every PPSSPP kept in an emulator
+// folder on the card: CrossMix's Emus/PSP/PPSSPP_<version>/.config/ppsspp/PSP,
+// <SD>/.config/ppsspp/PSP on the first CrossMix images (ppssppEmuMemsticks).
+// Without them a CrossMix card's PSP saves were in no snapshot, backup or sync
+// set. roots is what saveRootsFor found before; add is its adder.
+//
+// The plain "PPSSPP savedata" and "PPSSPP states" names are what snapshot and
+// backup slugs and the cross-device sync keys are made of, with -2, -3 handed
+// out in path order, so only one memstick may use them, and it has to stay the
+// same one from launch to launch: the first memstick that holds saves, in
+// ppssppEmuMemsticks order (the newest version first) — never the build played
+// last, which would move the key each time a game picks another build. And
+// only when no root found before already has the plain names: a folder that
+// had a key keeps it. Every other memstick is named after its place on the
+// card, so its key is its own.
+func addPPSSPPMemstickRoots(sdRoot string, roots []saveRoot, add func(name, path string)) {
+	memsticks := ppssppEmuMemsticks([]string{sdRoot})
+	if len(memsticks) == 0 {
+		return
+	}
+	owner := ""
+	for _, memstick := range memsticks {
+		if dirExists(filepath.Join(memstick.Dir, "SAVEDATA")) || dirExists(filepath.Join(memstick.Dir, "PPSSPP_STATE")) {
+			owner = memstick.Dir
+			break
+		}
+	}
+	plainTaken := false
+	for _, root := range roots {
+		if root.Name == "PPSSPP savedata" || root.Name == "PPSSPP states" {
+			plainTaken = true
+		}
+	}
+	for _, memstick := range memsticks {
+		suffix := ""
+		if plainTaken || memstick.Dir != owner {
+			suffix = " (" + ppssppMemstickLabel(sdRoot, memstick) + ")"
+		}
+		add("PPSSPP savedata"+suffix, filepath.Join(memstick.Dir, "SAVEDATA"))
+		add("PPSSPP states"+suffix, filepath.Join(memstick.Dir, "PPSSPP_STATE"))
+	}
+}
+
+// ppssppMemstickLabel names a memstick by its place on the card: its home
+// ("Emus/PSP/PPSSPP_1.15.4", "card root") for the .config/ppsspp/PSP layout,
+// and the folder itself ("Emus/PSP/PPSSPP_1.15.4/PSP") for a bare PSP folder,
+// so the two layouts of one home never share a name.
+func ppssppMemstickLabel(sdRoot string, memstick ppssppMemstick) string {
+	place := memstick.Home
+	if filepath.Dir(memstick.Dir) == filepath.Clean(memstick.Home) {
+		place = memstick.Dir
+	}
+	rel, err := filepath.Rel(sdRoot, place)
+	if err != nil || rel == "." {
+		return "card root"
+	}
+	return filepath.ToSlash(rel)
 }
 
 // saveManagerRoots reads the live discoverable set. The RetroArch config is

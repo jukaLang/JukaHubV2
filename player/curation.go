@@ -779,6 +779,10 @@ func applyCurationProfile(config *Config, profile curationProfile) error {
 		return fmt.Errorf("unknown theme %q", profile.Theme)
 	}
 	curationThemeApplier(config, profile.Theme, false)
+	// Applying a profile is the user's pick of its theme, the way the gallery
+	// is: with light & dark by time of day on it becomes this part of the
+	// day's theme instead of being undone at the next switch (themeschedule.go).
+	themeScheduleNoteManualPick(config, profile.Theme)
 	a11y.fontScale = a11yClampScale(profile.TextScale)
 	a11yRefreshFonts()
 	a11ySave(config)

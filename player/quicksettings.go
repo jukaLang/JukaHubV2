@@ -248,9 +248,17 @@ func qsApplyPersistedSystemState() {
 	if user == nil {
 		return
 	}
-	if user.Variables.VolumeSet && volumeBackend() != "" {
-		if err := setSystemVolume(user.Variables.Volume); err != nil {
-			LogScene("quicksettings").Warn("restore volume failed", "err", err)
+	// The TrimUI firmware keeps its own level across reboots (system.json,
+	// which every change here also updates) and its keys may have moved it
+	// since JukaHub last saved one: restoring the saved level would jump the
+	// volume at every launch. Elsewhere JukaHub's saved level is the only one.
+	if user.Variables.VolumeSet {
+		switch volumeBackend() {
+		case "", "trimui":
+		default:
+			if err := setSystemVolume(user.Variables.Volume); err != nil {
+				LogScene("quicksettings").Warn("restore volume failed", "err", err)
+			}
 		}
 	}
 	if user.Variables.BrightnessSet && brightnessAvailable() {
@@ -337,6 +345,10 @@ type qsProbe struct {
 	volumeOK, brightnessOK          bool
 	// gen is qsEditGen when the probe started.
 	gen int
+	// volGen and volApplied are the speaker's change counters when the probe
+	// started (volumeEditCounters): a step made from the header's card while
+	// it ran makes its volume reading stale too.
+	volGen, volApplied int
 }
 
 var (
@@ -390,9 +402,11 @@ func qsStartProbe() {
 	wantVolume := qs.sliders[0].Available
 	wantBrightness := qs.sliders[1].Available
 	gen := qsEditGen
+	volGen, volApplied := volumeEditCounters()
 	go func() {
 		r := qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightness)
 		r.gen = gen
+		r.volGen, r.volApplied = volGen, volApplied
 		qsProbeCh <- r
 	}()
 }
@@ -433,7 +447,9 @@ func qsApplyProbe(r qsProbe) {
 			qs.toggles[1].Value = false
 		}
 	}
-	if r.volumeOK && qs.sliders[0].Available {
+	// The header's speaker takes the same reading (volumectl.go), and a
+	// reading that raced one of its steps moves neither it nor the slider.
+	if r.volumeOK && qs.sliders[0].Available && volumeNoteReadingAt(r.volume, r.volGen, r.volApplied) {
 		qs.sliders[0].Value = float64(r.volume) / 100
 		qs.lastVolume = r.volume
 	}
@@ -448,6 +464,11 @@ func qsToggleOpen() {
 	if qs.open {
 		qs.cursor = 0
 		qs.enter.begin(uiClockMS(), uiPanelEnterMS)
+		// The top-bar cards would otherwise stay open under the panel: a
+		// control profile can open it while one is up, and then the pad went
+		// to the card and the keys to the panel.
+		dismissWeatherPopover()
+		dismissVolumePopover()
 		if appConfig != nil {
 			qsSyncFromConfig(appConfig)
 		} else {
@@ -691,10 +712,14 @@ func qsStepSlider(idx, deltaPct int) {
 		if pct == qs.lastVolume {
 			return
 		}
-		if err := setSystemVolume(pct); err != nil {
-			ShowToast("Volume: "+firstLine(err.Error()), ToastKindWarning)
-			return
-		}
+		// The mixer write runs on the volume worker (volumectl.go), which
+		// reports a failure itself: on the TrimUI a write is several amixer
+		// calls and a card write, too slow for the render thread. The header's
+		// speaker follows at once. The level applied can differ from the one
+		// asked for — on the TrimUI it goes onto the firmware's 5% grid — and
+		// the slider shows (and saves) the one applied.
+		pct = volumeApplyLevel(pct)
+		s.Value = float64(pct) / 100
 		qs.lastVolume = pct
 		qsNoteEdit()
 	case "brightness":
@@ -921,7 +946,11 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		footerY := panelY + panelH - smallH - 8
 		infoY := footerY - smallH - 8
 		if bat := getBatteryPercent(); bat >= 0 {
-			renderText(renderer, config, font, fmt.Sprintf("Battery %d%%", bat),
+			line := fmt.Sprintf("Battery %d%%", bat)
+			if getBatteryCharging() {
+				line += " · Charging"
+			}
+			renderText(renderer, config, font, line,
 				WithAlpha(ColorTextSecondary(), 200), panelX+qsPadX, infoY)
 		}
 		netStr := "Online"

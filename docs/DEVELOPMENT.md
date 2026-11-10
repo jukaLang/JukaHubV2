@@ -342,8 +342,7 @@ files pin the pattern per store.
 `TestFooterHintsMatchTheHandlers` keeps the footer badges honest (Chat says
 "A Type", because A opens the keyboard), and
 `TestAboutSceneDrawsTheSharedChrome` pins the About screen to the shared header
-and footer. Set `JUKAHUB_SCENE_DUMP_DIR=/tmp/scenes` to have the audit write one
-PNG per scene for a visual review.
+and footer. For pictures of real screens, see [Screenshots](#screenshots).
 
 The test binary turns off `jukauser.json` writes (`TestMain` in
 `testmain_test.go`), so a run cannot rewrite the checkout's user config; the few
@@ -567,6 +566,35 @@ A `themes/*.json` file next to the app adds a preset to the gallery at startup
 (`themeloader.go`): every colour must be `#rrggbb` or `#rrggbbaa`, the file name
 is the preset id, a built-in id wins on a collision, and invalid files are
 logged and skipped.
+
+### Screenshots
+
+The README's pictures should come from the app, so they show real screens
+without the details of the machine that took them. From `player/`, after a build:
+
+```text
+JukaHub --screenshot-tour ../screenshots
+```
+
+opens Home, Media, Settings → Display & theme and the dock one after another,
+writes `home.png`, `media.png`, `settings.png` and `ambient.png` (one frame of
+the 1280×720 canvas each) into the folder, and quits — about half a minute.
+Leave the window visible while it runs. `JukaHub --screenshot-mode` is the same
+session without the walk: F12 or Start → Screenshot saves the next frame as a
+PNG into `--screenshot-dir` (default `Pictures\JukaHub`).
+`JUKAHUB_SCREENSHOT_MODE=1` turns the mode on from `launch.sh` on the handheld.
+
+`screenshotmode.go` swaps out what identifies the person taking the picture:
+the hints name the pad's buttons whatever is plugged in, every clock reads 9:41
+on Saturday 14 November and the dock's next alarm 10:45, no weather is drawn,
+the LAN address reads 192.168.1.42 and the pairing QR encodes it with PIN
+123456, and the Wi-Fi name reads HomeNet. The greeting's user name, the
+wallpaper, toasts, recent searches, the update offer, the first-run tour, the
+handoff card, the headset name and the dock's chat preview and photos are left
+out. The watch history (the Continue card, Media's rows) stays, so play
+something you are happy to publish first. Screens the tour does not open — the
+Wi-Fi screen and its details, the Hardware monitor, the network tools — still
+read the system directly: do not capture those.
 
 ## Security
 

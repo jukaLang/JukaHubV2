@@ -109,6 +109,7 @@ const (
 	ChromeUpdateIndex  = -7
 	ChromeMediaIndex   = -8
 	ChromeWiFiIndex    = -9
+	ChromeVolumeIndex  = -10
 	ChromeBackType     = "back"
 	ChromeClockType    = "clock"
 	ChromeStartType    = "start"
@@ -117,6 +118,7 @@ const (
 	ChromeUpdateType   = "update"
 	ChromeMediaType    = "media"
 	ChromeWiFiType     = "wifi"
+	ChromeVolumeType   = "volume"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -125,7 +127,7 @@ const (
 // The bottom of the screen is now the hint bar only, so there is no tier 2.
 func chromeTier(idx int) int {
 	switch idx {
-	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex, ChromeWiFiIndex:
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex, ChromeWiFiIndex, ChromeVolumeIndex:
 		return 1
 	}
 	return 0
@@ -217,6 +219,11 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		// It joins the bar so the D-pad can reach Wi-Fi (and the network list)
 		// without a touchscreen: on the handheld the meter used to be the one
 		// drawn control the pad could not select.
+		// The speaker beside it opens the volume popover. On the handheld the
+		// pad is the only way to reach it, so it joins the bar the same way.
+		if statusVolumeRect.W > 0 {
+			addNode(ChromeVolumeIndex, statusVolumeRect, ChromeVolumeType, "Volume")
+		}
 		if statusWiFiRect.W > 0 {
 			addNode(ChromeWiFiIndex, statusWiFiRect, ChromeWiFiType, "Wi-Fi")
 		}

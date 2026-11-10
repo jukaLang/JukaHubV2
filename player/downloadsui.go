@@ -352,6 +352,10 @@ func handleDownloadsKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !dlPanel.open {
 		return false
 	}
+	// Space on the add-link row opens the link keyboard: its space must not
+	// be typed into the link (vkopenertext.go).
+	wasOpen := virtualKeyboardActive
+	defer vkDropOpenerText(e, wasOpen)
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		downloadPanelMove(-1)

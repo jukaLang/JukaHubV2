@@ -330,7 +330,7 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
-          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|LiveBuilder|Ssync|PatchDownload|RunInstalledCoreUpdates|Telemetry)"
+          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|LiveBuilder|Ssync|PatchDownload|RunInstalledCoreUpdates|Telemetry|MediaRelay|FFmpegReadableInput|SDLTeardown)"
         run: |
           set +e
           go test -race . -run "$RACE_TESTS" -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"

@@ -22,8 +22,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -229,16 +227,21 @@ func emuFolderIcon(folder string) string {
 	if strings.TrimSpace(folder) == "" {
 		return ""
 	}
-	if raw, err := os.ReadFile(filepath.Join(folder, "config.json")); err == nil {
-		var cfg struct {
-			Icon string `json:"icon"`
-		}
-		if json.Unmarshal(raw, &cfg) == nil {
-			if declared := strings.TrimSpace(cfg.Icon); declared != "" {
-				if resolved, err := resolveWithinRoot(folder, declared); err == nil {
-					if icon := regularIconFile(resolved); icon != "" {
-						return icon
-					}
+	return emuFolderIconFrom(folder, emuFolderConfig(folder))
+}
+
+// emuFolderIconFrom is emuFolderIcon for a config.json the caller already read
+// (emuFolderConfig), so a catalog build reads each folder's file once.
+func emuFolderIconFrom(folder string, fields map[string]json.RawMessage) string {
+	if strings.TrimSpace(folder) == "" {
+		return ""
+	}
+	var declared string
+	if json.Unmarshal(emuConfigField(fields, "icon"), &declared) == nil {
+		if declared = strings.TrimSpace(declared); declared != "" {
+			if resolved, err := resolveWithinRoot(folder, declared); err == nil {
+				if icon := regularIconFile(resolved); icon != "" {
+					return icon
 				}
 			}
 		}
@@ -254,7 +257,10 @@ func emuEntryIconPath(entry emuEntry) string {
 	if entry.IconPath != "" {
 		return entry.IconPath
 	}
-	if entry.Launch == "" {
+	// The handheld's scan already looked beside the launcher
+	// (deviceEmulatorEntries); only Windows has pictures that arrive later,
+	// from the background icon extraction.
+	if entry.Launch == "" || !IsWindows() {
 		return ""
 	}
 	if icon := sidecarIcon(entry.Launch); icon != "" {

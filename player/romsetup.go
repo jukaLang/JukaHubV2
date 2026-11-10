@@ -57,6 +57,7 @@ var romSystemAliases = map[string]romSystem{
 	"psx":                         {"PlayStation", "Sony - PlayStation"},
 	"sony - playstation":          {"PlayStation", "Sony - PlayStation"},
 	"psp":                         {"PlayStation Portable", "Sony - PlayStation Portable"},
+	"ppsspp":                      {"PlayStation Portable", "Sony - PlayStation Portable"}, // the stock firmware's Roms/PPSSPP
 	"playstation portable":        {"PlayStation Portable", "Sony - PlayStation Portable"},
 	"nds":                         {"Nintendo DS", "Nintendo - Nintendo DS"},
 	"nintendo ds":                 {"Nintendo DS", "Nintendo - Nintendo DS"},

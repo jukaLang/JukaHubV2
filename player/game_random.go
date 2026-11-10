@@ -307,7 +307,10 @@ func renderGameRandomPicker(renderer *sdl.Renderer, config *Config) {
 	medH := int32(medium.Height())
 
 	const pad = OverlayPadX
-	rowH := int32(66)
+	// Measured from the type: at the shipped 24px roles the fixed 66px row was
+	// short of a title over a detail line, and "PlayStation Portable · 12
+	// games" ran into the row below (8 above, 4 between, 6 under, 8 gap).
+	rowH := max32(66, medH+smallH+26)
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar drawn into it measure the same height.
 	subtitle := "Where should the pick come from?"

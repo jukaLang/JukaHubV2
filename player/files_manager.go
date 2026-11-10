@@ -629,6 +629,8 @@ func feEntryBadge(entry FileEntry) (string, sdl.Color) {
 	switch {
 	case isImageExtension(ext):
 		return "IMG", sdl.Color{R: 130, G: 205, B: 255, A: 255}
+	case isMusicPlaylistFile(entry.Name):
+		return "PL", sdl.Color{R: 255, G: 214, B: 120, A: 255}
 	case isAudioFile(entry.Name):
 		return "AUD", sdl.Color{R: 167, G: 235, B: 160, A: 255}
 	case isMediaFile(entry.Name) || hasMediaExtension(entry.Path):
@@ -1161,6 +1163,8 @@ func filesEntryIcon(entry FileEntry) string {
 	switch {
 	case isImageExtension(ext):
 		return "image"
+	case isMusicPlaylistFile(entry.Name):
+		return "music"
 	case isAudioFile(entry.Name):
 		return "music"
 	case isMediaFile(entry.Name) || hasMediaExtension(entry.Path):

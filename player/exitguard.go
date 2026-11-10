@@ -146,8 +146,20 @@ func forceExit(reason string) {
 		// noted: a forced exit nobody asked for stays a failed start.
 		noted := bootGuardNoteStopAsync()
 		notedBy := time.Now().Add(exitLastChanceGrace)
-		dumpGoroutines()
+		// Inside SDL's own teardown the wait is the GPU driver's, and the
+		// stacks say nothing more than this line (sdlteardown.go). Everything
+		// before it has run; the Cleanup hooks after it (the TrimUI volume
+		// flush, a Recovery restart) still have to.
+		inSDLTeardown := sdlTeardownStepActive.Load()
+		if inSDLTeardown {
+			logWarn("exit", "the main goroutine is still in SDL's teardown (the GPU driver); no goroutine dump")
+		} else {
+			dumpGoroutines()
+		}
 		killScreenChildren()
+		if inSDLTeardown {
+			runCleanupHooksBounded(sdlTeardownHooksGrace)
+		}
 		_ = SetLEDSync(false)
 		exitLastChanceRestore(exitLastChanceGrace)
 		select {

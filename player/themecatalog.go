@@ -227,9 +227,7 @@ func writeThemeCatalogCache(entries []communityTheme) {
 // same id again after an install. themePresetOrder is rebuilt rather than
 // appended, or a reinstall would list the theme twice.
 func forgetThemePreset(id string) {
-	if _, ok := themePresets[id]; ok {
-		delete(themePresets, id)
-	}
+	delete(themePresets, id)
 	kept := themePresetOrder[:0]
 	for _, name := range themePresetOrder {
 		if name != id {
@@ -283,6 +281,10 @@ func installCommunityTheme(config *Config, entry communityTheme) error {
 		config.Variables.Custom = make(map[string]interface{})
 	}
 	applyThemePreset(config, id, true)
+	// A theme installed from the gallery is a pick like any other: with light &
+	// dark by time of day on it becomes this part of the day's theme
+	// (themeschedule.go) instead of being undone at the next switch.
+	themeScheduleNoteManualPick(config, id)
 	return nil
 }
 

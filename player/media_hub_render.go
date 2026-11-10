@@ -1020,8 +1020,15 @@ func mediaHubDrawGridEmpty(renderer *sdl.Renderer, config *Config, rect sdl.Rect
 		}
 		if errVal, ok := config.Variables.Custom["search_error"]; ok && errVal != nil {
 			msg, _ := errVal.(string)
+			if note, ok := youTubeFailureFor(mediaResultsVar); ok && note.message != "" {
+				msg = note.message
+			}
 			if !online {
 				msg = offlinePlainNotice
+			} else {
+				// The question the error state raises ("do I need my own API
+				// key?") is answered where it is asked.
+				msg = ytWithAPIKeyNote(msg)
 			}
 			mediaHubDrawState(renderer, config, rect, "@warning", "Search did not work", msg, "", -1, false)
 			return
@@ -1041,7 +1048,18 @@ func mediaHubDrawGridEmpty(renderer *sdl.Renderer, config *Config, rect sdl.Rect
 			mediaHubDrawState(renderer, config, rect, "", "Loading "+strings.ToLower(what)+"…", "", "", -1, true)
 			return
 		}
-		mediaHubDrawState(renderer, config, rect, "@media", what+" did not load", "The service did not answer. Try again in a moment.", "Try again", 1, false)
+		// The list's own reason (a 403 being fixed by a yt-dlp update, a wrong
+		// clock, the helper still installing) instead of one line for all.
+		body := "The service did not answer. Try again in a moment."
+		resultVar := mediaHubTabVar(mediaHub.tab)
+		if mediaHub.tab == mediaTabShorts {
+			resultVar = mediaShortsVar
+		}
+		if note, ok := youTubeFailureFor(resultVar); ok && note.message != "" {
+			body = note.message
+		}
+		body = ytWithAPIKeyNote(body)
+		mediaHubDrawState(renderer, config, rect, "@media", what+" did not load", body, "Try again", 1, false)
 	case mediaTabHistory:
 		mediaHubDrawState(renderer, config, rect, "@clock", "Nothing watched yet", "Videos you play show up here, with where you stopped.", "", -1, false)
 	case mediaTabFavorites:

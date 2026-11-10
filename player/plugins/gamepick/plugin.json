@@ -1,7 +1,7 @@
 {
   "name": "gamepick",
   "title": "Random game",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Can't decide what to play? Picks one game at random from your Roms folders (custom variable gamepick_dir points elsewhere).",
   "author": "JukaHub",
   "entry": "gamepick.sh",
@@ -9,6 +9,9 @@
   "enabled": true,
   "actions": [
     {"id": "pick", "label": "Pick a game"},
-    {"id": "count", "label": "Count games"}
-  ]
+    {"id": "count", "label": "Count games"},
+    {"id": "@open-library", "label": "Open the library"}
+  ],
+  "onEnable": "count",
+  "quick": ["pick"]
 }

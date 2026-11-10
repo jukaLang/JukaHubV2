@@ -102,7 +102,12 @@ func TestHomeSceneIndex(t *testing.T) {
 }
 
 func TestApplyButtonSwapFlipsABOnly(t *testing.T) {
-	on := &Config{Variables: Variables{Custom: map[string]interface{}{"swapABButtons": true}}}
+	// The X/Y half is its own setting (TestApplyButtonSwapFlipsXYOnHandheld). It
+	// is pinned off here: left unset it follows the platform, and a Linux run
+	// can be the TrimUI platform, where it is on.
+	on := &Config{Variables: Variables{Custom: map[string]interface{}{
+		"swapABButtons": true, "swapXYButtons": false,
+	}}}
 
 	a := &sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_A}
 	applyButtonSwap(on, a)
@@ -151,5 +156,101 @@ func TestApplyButtonSwapFlipsABOnly(t *testing.T) {
 	applyButtonSwap(explicitOff, e)
 	if e.Button != sdl.CONTROLLER_BUTTON_A {
 		t.Fatalf("explicit off must not flip even on a handheld, got %v", e.Button)
+	}
+}
+
+func TestXYButtonsSwappedReadsSetting(t *testing.T) {
+	prev := platform
+	defer func() { platform = prev }()
+
+	// With nothing stored the default follows the platform, like A/B: the
+	// TrimUI firmware mirrors X and Y, a desktop pad does not.
+	unset := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	platform = &trimuiLinuxPlatform{}
+	if !xyButtonsSwapped(unset) {
+		t.Fatal("handheld with no setting must swap X and Y")
+	}
+	platform = &windowsPlatform{}
+	if xyButtonsSwapped(unset) {
+		t.Fatal("desktop with no setting must keep SDL's X and Y")
+	}
+
+	on := &Config{Variables: Variables{Custom: map[string]interface{}{"swapXYButtons": "true"}}}
+	if !xyButtonsSwapped(on) {
+		t.Fatal("swapXYButtons=true must enable the swap on a desktop")
+	}
+	platform = &trimuiLinuxPlatform{}
+	off := &Config{Variables: Variables{Custom: map[string]interface{}{"swapXYButtons": false}}}
+	if xyButtonsSwapped(off) {
+		t.Fatal("swapXYButtons=false must win over the handheld default")
+	}
+	if xyButtonsSwapped(nil) {
+		t.Fatal("nil config must not swap")
+	}
+}
+
+// The TrimUI pad reports positions the Xbox way under Nintendo labels, so on a
+// handheld with nothing stored both pairs flip at the event entry point. The
+// X/Y half is its own switch: turning it off leaves the A/B swap alone, and a
+// desktop only flips X/Y when asked to.
+func TestApplyButtonSwapFlipsXYOnHandheld(t *testing.T) {
+	prev := platform
+	defer func() { platform = prev }()
+	press := func(config *Config, button uint8) uint8 {
+		e := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}
+		applyButtonSwap(config, e)
+		return e.Button
+	}
+	unset := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+
+	platform = &trimuiLinuxPlatform{}
+	// Raw X is the left button, printed Y; raw Y is the top one, printed X.
+	if got := press(unset, sdl.CONTROLLER_BUTTON_X); got != sdl.CONTROLLER_BUTTON_Y {
+		t.Fatalf("handheld raw X (the button printed Y) = %d, want Y", got)
+	}
+	if got := press(unset, sdl.CONTROLLER_BUTTON_Y); got != sdl.CONTROLLER_BUTTON_X {
+		t.Fatalf("handheld raw Y (the button printed X) = %d, want X", got)
+	}
+	xyOff := &Config{Variables: Variables{Custom: map[string]interface{}{"swapXYButtons": false}}}
+	if got := press(xyOff, sdl.CONTROLLER_BUTTON_X); got != sdl.CONTROLLER_BUTTON_X {
+		t.Fatalf("swapXYButtons=false must leave X alone, got %d", got)
+	}
+	if got := press(xyOff, sdl.CONTROLLER_BUTTON_A); got != sdl.CONTROLLER_BUTTON_B {
+		t.Fatalf("turning X/Y off must not touch the A/B swap, got %d", got)
+	}
+
+	platform = &windowsPlatform{}
+	if got := press(unset, sdl.CONTROLLER_BUTTON_X); got != sdl.CONTROLLER_BUTTON_X {
+		t.Fatalf("desktop with no setting must not flip X, got %d", got)
+	}
+	xyOn := &Config{Variables: Variables{Custom: map[string]interface{}{"swapXYButtons": true}}}
+	if got := press(xyOn, sdl.CONTROLLER_BUTTON_Y); got != sdl.CONTROLLER_BUTTON_X {
+		t.Fatalf("swapXYButtons=true must flip Y on a desktop too, got %d", got)
+	}
+	if got := press(xyOn, sdl.CONTROLLER_BUTTON_A); got != sdl.CONTROLLER_BUTTON_A {
+		t.Fatalf("the X/Y switch must not flip A on a desktop, got %d", got)
+	}
+}
+
+// padFaceButton is its own inverse. That is what lets the phone remote and the
+// control profiles pre-flip a press with the same call the main loop uses to
+// flip it back, and lets a pad poll turn a logical button into the raw one.
+func TestPadFaceButtonIsAnInvolution(t *testing.T) {
+	both := &Config{Variables: Variables{Custom: map[string]interface{}{
+		"swapABButtons": true, "swapXYButtons": true,
+	}}}
+	for b := uint8(0); b < uint8(sdl.CONTROLLER_BUTTON_MAX); b++ {
+		if got := padFaceButton(both, padFaceButton(both, b)); got != b {
+			t.Errorf("padFaceButton twice on %d = %d, want %d", b, got, b)
+		}
+	}
+	for _, b := range []uint8{sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_START,
+		sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_LEFTSHOULDER} {
+		if got := padFaceButton(both, b); got != b {
+			t.Errorf("non-face button %d mapped to %d", b, got)
+		}
+	}
+	if got := padFaceButton(nil, sdl.CONTROLLER_BUTTON_X); got != sdl.CONTROLLER_BUTTON_X {
+		t.Errorf("nil config must not swap, got %d", got)
 	}
 }

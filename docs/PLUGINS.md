@@ -11,6 +11,61 @@ automatically create buttons for the plugin or let scripts draw a UI.
 > Custom variables are also passed on the command line and may be visible to
 > other processes; do not put secrets in them or print them in plugin output.
 
+## What switching a plugin on does
+
+Settings → **Plugins** lists every plugin folder with an on/off switch (X).
+A plugin that is on is part of JukaHub, not just a row on that page:
+
+- **Switching it on answers.** The manifest's `onEnable` action runs at once
+  and its first line is the toast ("Clock is on: Mon 09 Nov · 18:41").
+  Switching it off says what went with it (its theme, ROM formats, Start menu
+  buttons).
+- **Its buttons are in the Start menu**, in a **Plugins** group, so they work
+  from any screen (and from Home search). `quick` names which actions; with
+  none named, the first action is listed. **Manage plugins** at the end of the
+  group opens the Plugins page.
+- **It can greet you at start-up.** `onStartup` runs an action when JukaHub
+  starts; with `"startupDaily": true` only on the first start of the day (the
+  Daily quote plugin does this).
+- **Theme, pack and control-profile plugins can be used in one press.** Action
+  ids that start with `@` are done by JukaHub itself with the plugin's own
+  contributions, no script involved:
+
+  | Action id | What JukaHub does |
+  |-----------|-------------------|
+  | `@apply-theme` | Switches to the plugin's (first) theme. |
+  | `@restore-theme` | Goes back to the theme in use before `@apply-theme`. |
+  | `@apply-pack` | Applies the plugin's (first) experience pack. |
+  | `@undo-pack` | Takes the last pack switch back. |
+  | `@use-profile` | Switches to the plugin's (first) control profile. |
+  | `@default-profile` | Back to the Default controls. |
+  | `@open-library` | Opens the game library. |
+
+```json
+{
+  "actions": [
+    {"id": "about", "label": "About the theme"},
+    {"id": "@apply-theme", "label": "Use it now"}
+  ],
+  "onEnable": "about",
+  "quick": ["@apply-theme"],
+  "onStartup": "about",
+  "startupDaily": true
+}
+```
+
+All four keys are optional; a hook that names an action the plugin does not
+have is ignored.
+
+**The bundled plugins work everywhere.** The thirteen plugins that ship with
+JukaHub also exist in Go (`player/plugnative.go`), so they run on Windows,
+which has no `sh`, and without starting a shell on the handheld. The Go
+version is used while the plugin's script is the one JukaHub shipped (or
+cannot run here); edit the script and, wherever `sh` exists, your script runs
+instead. A copy installed by an older JukaHub is upgraded in place when its
+`version` is older, keeping files you added (such as the notes plugin's
+`notes.txt`).
+
 ## Try the example plugin
 
 The repository ships a few examples in [`player/plugins/`](../player/plugins).
@@ -116,6 +171,9 @@ Each immediate subdirectory of `plugins/` is scanned for a readable, valid
 | `entry` | Path to a regular file, relative to the plugin directory; use `.sh` or `.py`. |
 | `enabled` | Must be `true`; missing or false manifests are skipped. |
 | `config` | Optional object; parsed but **not** passed to the script. |
+| `title`, `icon` | Name and glyph on the Plugins page and in the Start menu. |
+| `actions` | Buttons: `[{"id": "now", "label": "Time"}]`; ids starting with `@` are JukaHub's own (above). |
+| `onEnable`, `onStartup`, `startupDaily`, `quick` | What switching the plugin on does (above). |
 
 `plugin.json` is unrelated to the package `manifest.json` described in
 [Packages](PACKAGES.md). The root `plugins/` directory is relative to the

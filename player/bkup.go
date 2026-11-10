@@ -1176,7 +1176,9 @@ func bkupRestoreFiles(ctx context.Context, plan bkupRestorePlan, cats map[string
 		}
 		if rf.File.Target == "app:jukaconfig.json" && globalConfigWatcher != nil {
 			// The reload below installs it; the watcher must not do it twice.
-			globalConfigWatcher.IgnoreWrite(rf.Dest)
+			// The watcher keys its paths as they were registered (the relative
+			// "jukaconfig.json"), so name that as well as the destination.
+			globalConfigWatcher.IgnoreWrite("jukaconfig.json", rf.Dest)
 		}
 		res.Written++
 	}
@@ -1196,7 +1198,7 @@ var bkupLibraryKeys = []string{playtimeCustomKey, "recently_played"}
 // platform.
 func bkupDeviceKey(k string) bool {
 	switch strings.ToLower(k) {
-	case "fullscreen", "screenwidth", "screenheight", "swapabbuttons", strings.ToLower(abSwapMigrationKey),
+	case "fullscreen", "screenwidth", "screenheight", "swapabbuttons", "swapxybuttons", strings.ToLower(abSwapMigrationKey),
 		"devicemodel", "targetplatform", "tools_path":
 		return true
 	}

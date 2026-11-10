@@ -16,7 +16,7 @@ Settings › General: switch Weather off if you never look at it, and nothing po
 Theme presets › Total conversion repaints and rearranges the whole interface.
 Settings › Network › Phone companion lets you type on your phone instead.
 Settings › Games & emulators: Video snaps preview your games in the library.
-The Plugins page runs small scripts: a folder with plugin.json in plugins/.
+Plugins you switch on put their buttons in the Start menu, under Plugins.
 Settings › Power & battery: a shorter screensaver delay saves the most power.
 Settings › Privacy & data: saved browser sign-ins can expire on their own.'
 

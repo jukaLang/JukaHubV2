@@ -154,6 +154,11 @@ func hakuxXboxEntry(folder, romsRoot string, device DeviceModel) emuEntry {
 	if launcher := hakuxLauncherIn(folder); launcher != "" {
 		e.Status = emuAvailable
 		e.Launch = launcher
+		if e.IconPath == "" {
+			// Looked up once, as the folder scan does: on the handheld the
+			// tiles no longer probe beside the launcher every frame.
+			e.IconPath = sidecarIcon(launcher)
+		}
 	} else {
 		e.Status = emuBroken
 	}

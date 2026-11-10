@@ -2068,24 +2068,22 @@ func sanitizeLogURL(rawURL string) string {
 	return sanitized
 }
 
-// ytDlpExtraArgs returns extra yt-dlp arguments based on config, such as
-// --cookies and --extractor-args for the YouTube extractor.
+// ytDlpExtraArgs returns extra yt-dlp arguments based on config: the cookies
+// file, when one is set.
+//
+// A google_api_key used to be passed here as "youtube:api_key=…". yt-dlp has
+// no such extractor argument (its youtube:innertube_key wants the site's own
+// web key, not a Data API key), so the key did nothing for yt-dlp — but it
+// made every search command one the native search does not model, so a user
+// who added a key because they thought YouTube needed one got slower searches
+// for it. Nothing in JukaHub needs a YouTube or Google API key; a key that is
+// set is now only noted in the log (ytNoteIgnoredAPIKey).
 func ytDlpExtraArgs(config *Config) string {
 	var parts []string
 	if config == nil {
 		return ""
 	}
-	// Decrypt API key if encrypted; use the result form so a decryption failure
-	// is distinguishable from "not encrypted" and gets logged specifically.
-	if apiKey, err := decryptCustomStringResult(config, "google_api_key"); err == nil {
-		if apiKey != "" {
-			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
-		}
-	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || !strings.Contains(err.Error(), "not encrypted") && !strings.Contains(err.Error(), "missing") {
-		// Only log when the value was encrypted but could not be decrypted.
-		// "not encrypted" and "missing" are not actionable failures here.
-		logWarn("core", "security: yt-dlp API key unavailable: %v", err)
-	}
+	ytNoteIgnoredAPIKey(config)
 	// Cookies file path - not encrypted (it's a file path, not a secret).
 	// Normalize it and require a real regular file; helper args are resolved
 	// from config, so never hand a malformed path to a subprocess.
@@ -2109,20 +2107,13 @@ func ytSearchCmd(config *Config) string {
 	return base
 }
 
+// ytDlpExtraArgsSlice is ytDlpExtraArgs as an argument list.
 func ytDlpExtraArgsSlice(config *Config) []string {
 	var parts []string
 	if config == nil {
 		return nil
 	}
-	// Decrypt API key if encrypted; use the result form so a decryption failure
-	// is distinguishable from "not encrypted" and gets logged specifically.
-	if apiKey, err := decryptCustomStringResult(config, "google_api_key"); err == nil {
-		if apiKey != "" {
-			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
-		}
-	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || (!strings.Contains(err.Error(), "not encrypted") && !strings.Contains(err.Error(), "missing")) {
-		logWarn("core", "security: yt-dlp API key unavailable: %v", err)
-	}
+	ytNoteIgnoredAPIKey(config)
 	// Cookies file path - not encrypted (it's a file path, not a secret).
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
 		if cookies, err := existingRegularFile(v); err == nil {
@@ -2526,6 +2517,27 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// stale is true once a newer search owns the results variable; an old run
 	// must then neither publish results nor clear the error line.
 	stale := func() bool { return mediaSearchSuperseded(resultVar, gen) }
+	// retryAfterUpdate runs this search once more when a failure below started
+	// a yt-dlp update and it installed a newer release — but only while the
+	// screen that asked is still up and nothing newer took the variable. The
+	// update can land minutes after the failure (a slow transfer, or a video it
+	// waited out), and a re-run then would pull the user onto the Results tab
+	// or start a preload beside a video they have started since; so it also
+	// needs the list to still show this failure, recently, with the player
+	// idle (youTubeRetryWanted). Otherwise it stays quiet: the updater's own
+	// toast already says yt-dlp was updated, and every failed search waiting
+	// on one update would add a toast of its own.
+	scene := currentSceneWorkName()
+	retryAfterUpdate := func() {
+		if stale() || currentSceneWorkName() != scene {
+			return
+		}
+		if !youTubeRetryWanted(resultVar, time.Now()) {
+			return
+		}
+		ShowToast("yt-dlp updated — loading the videos again", ToastKindInfo)
+		executeYouTubeSearchPage(config, command, resultVar, vars, appendMode)
+	}
 
 	// staleResults is the expired page this search can paint immediately, if
 	// the cache still holds one. It is what makes a repeat visit to a media
@@ -2534,12 +2546,24 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	var staleResults []VideoInfo
 	stalePainted := false
 
+	// The error line ("search_error") belongs to the search list. Trending and
+	// Shorts keep their reason in their own failure note (noteYouTubeFailure),
+	// which their tabs draw. Shared by every list, the line let a Trending
+	// failure end a running search's spinner with Trending's reason, and a
+	// later Trending answer wipe a failed search's reason ("No results").
+	ownsErrorLine := resultVar == mediaResultsVar
+	setErrorLine := func(v interface{}) {
+		if ownsErrorLine {
+			publishCustom("search_error", v)
+		}
+	}
+
 	// publish replaces the grid with a first page: the list, a cleared error
 	// line, no focus ring and the first card warmed so Play is immediate.
 	publish := func(videos []VideoInfo) {
 		markMediaPageSettled(resultVar, false)
 		publishCustom(resultVar, videos)
-		publishCustom("search_error", nil)
+		setErrorLine(nil)
 		focusedResultIndex = -1
 		resetResultActions()
 		prefetchFirstResult(config, videos)
@@ -2552,6 +2576,10 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		if stale() {
 			return
 		}
+		// An answer, even an empty follow-up page, ends whatever failure the
+		// list showed. Failures never come through here (fail below), so this
+		// clear cannot wipe the note a failure has just written.
+		clearYouTubeFailure(resultVar)
 		// The stale page painted the same list a moment ago: publishing it again
 		// would reset the focus ring and the action row for nothing.
 		if stalePainted && !appendMode && sameMediaResults(videos, staleResults) {
@@ -2563,46 +2591,53 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			merged, added := mergeMediaResults(current, videos)
 			if added == 0 {
 				markMediaPageSettled(resultVar, true)
-				publishCustom("search_error", nil)
+				setErrorLine(nil)
 				ShowToast("No more results", ToastKindInfo)
 				return
 			}
 			markMediaPageSettled(resultVar, false)
 			publishCustom(resultVar, merged)
-			publishCustom("search_error", nil)
+			setErrorLine(nil)
 			focusedResultIndex = len(current)
 			prefetchVideos(config, merged, focusedResultIndex)
 			return
 		}
 		publish(videos)
 	}
-	publishVideos := func(videos []VideoInfo) {
+	// fail publishes a fetch that failed. It used to be an error line followed
+	// by an empty answer through deliver, whose "an answer ends the failure"
+	// clear and publish's nil error line wiped both the list's failure note
+	// (noteYouTubeFailure, written just before) and the error line
+	// microseconds after they were written: Trending and Shorts said "The
+	// service did not answer" and a failed search read "No results". The
+	// emptied list now goes out first and the error line last, so the frame
+	// that drains them shows the error, and the note is left alone.
+	fail := func(msg string) {
 		if stale() {
-			logDebug("stream", "dropping superseded search results for %s", resultVar)
-			return
-		}
-		if appendMode && len(videos) == 0 {
-			// A failed page must leave the loaded results alone.
-			markMediaPageSettled(resultVar, false)
-			return
-		}
-		deliver(videos)
-	}
-	publishSearchError := func(msg string) {
-		if stale() {
+			logDebug("stream", "dropping a superseded failure for %s", resultVar)
 			return
 		}
 		if stalePainted {
 			// The grid already shows the last page for this search: a refresh
-			// that failed must not replace readable results with an error line.
+			// that failed must not replace readable results with an error line
+			// or an empty grid.
 			logWarn("stream", "refresh for %s failed: %s", resultVar, msg)
 			return
 		}
+		// Settled either way: a failed follow-up page must not leave the grid
+		// stuck on "Loading…", and it leaves the loaded results alone.
+		markMediaPageSettled(resultVar, false)
 		if appendMode {
-			// A failed page must not leave the grid stuck on "Loading…".
-			markMediaPageSettled(resultVar, false)
+			// The loaded pages stay readable: an error line would swap the
+			// whole grid for an error card (renderSearchResults) and block
+			// paging, so a failed next page says why in a toast instead.
+			ShowToast(msg, ToastKindWarning)
+			return
 		}
-		publishCustom("search_error", msg)
+		publishCustom(resultVar, []VideoInfo{})
+		focusedResultIndex = -1
+		resetResultActions()
+		setErrorLine(msg)
 	}
 
 	vars = sanitizeSearchVars(vars)
@@ -2631,8 +2666,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	tokens := splitShellArgs(cmdWithVars)
 	if len(tokens) == 0 {
 		logError("core", "Empty command after substitution")
-		publishSearchError("Empty search command")
-		publishVideos([]VideoInfo{})
+		fail("Empty search command")
 		return
 	}
 	tool := strings.ToLower(strings.TrimSuffix(filepath.Base(tokens[0]), ".exe"))
@@ -2644,8 +2678,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		// through the same redactor as the extractor's stderr: a command line
 		// that embedded a credential must not put it in the log either.
 		logWarn("core", "security: executeYouTubeSearch: refusing tool %q", redactDiagnosticText(tool))
-		publishSearchError("Unsupported search command")
-		publishVideos([]VideoInfo{})
+		fail("Unsupported search command")
 		return
 	}
 
@@ -2669,8 +2702,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	}
 	if err := rejectYtDlpExecFlags(args); err != nil {
 		logWarn("core", "security: executeYouTubeSearch: %v", err)
-		publishSearchError("Unsupported search command")
-		publishVideos([]VideoInfo{})
+		fail("Unsupported search command")
 		return
 	}
 	// The context bounds both the native request and the extractor run: a
@@ -2756,8 +2788,8 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			refreshToolHealth()
 		}()
 		logWarn("core", "yt-dlp is not installed yet; install started")
-		publishSearchError("yt-dlp is being installed — try the search again in a moment.")
-		publishVideos([]VideoInfo{})
+		noteYouTubeFailure(resultVar, ytFailUnknown, "yt-dlp is being installed — try again in a moment")
+		fail("yt-dlp is being installed — try the search again in a moment.")
 		showToast("Installing yt-dlp…", ToastInfo())
 		return
 	}
@@ -2779,20 +2811,23 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	if ctx.Err() == context.DeadlineExceeded {
 		logError("core", "yt-dlp search timed out after %v", mediaSearchTimeout)
 		reason := "Search timed out — check the connection and try again"
-		publishSearchError(reason)
-		publishVideos([]VideoInfo{})
+		noteYouTubeFailure(resultVar, ytFailTimeout, reason)
+		fail(reason)
 		showToast(reason, ToastWarn())
 		return
 	}
 	if err != nil {
 		logError("core", "yt-dlp execution error: %v", err)
-		// Redacted: the extractor receives the decrypted API key and the cookies
-		// path as its own arguments, so its stderr is the one log line that can
-		// carry a credential verbatim.
+		// Redacted: the extractor receives the cookies path as its own
+		// argument, so its stderr is the one log line that can carry a
+		// credential verbatim.
 		logError("stderr", "%s", redactDiagnosticText(stderr.String()))
-		reason := ytDlpFailureReason(stderr.String(), err, fullToolPath)
-		publishSearchError(reason)
-		publishVideos([]VideoInfo{})
+		// The cause, in words that say what happens next: a 403, a format or
+		// an extractor error starts a yt-dlp update and this search runs again
+		// when it lands (youTubeSearchFailure, ytdlp_update.go); the raw first
+		// stderr line used to be all the grid said.
+		reason := youTubeSearchFailure(config, resultVar, stderr.String(), err, fullToolPath, retryAfterUpdate)
+		fail(reason)
 		switch {
 		case !IsOnline():
 			showToast("Search failed — offline, connect WiFi", ToastWarn())
@@ -2806,8 +2841,8 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 
 	if stdout.Len() == 0 {
 		logWarn("core", "yt-dlp returned empty stdout")
-		publishSearchError("yt-dlp returned no data. Check your query or network.")
-		publishVideos([]VideoInfo{})
+		noteYouTubeFailure(resultVar, ytFailUnknown, "YouTube sent nothing back — try again in a moment")
+		fail("yt-dlp returned no data. Check your query or network.")
 		showToast("No results found.", ToastWarn())
 		return
 	}
@@ -2868,9 +2903,18 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		return
 	}
 
-	if len(videos) == 0 {
+	if len(videos) == 0 && !appendMode {
+		// yt-dlp answered, so whatever failure the list showed is over; but an
+		// empty first page is not cached (a repeat search would read "nothing"
+		// from the cache for an hour) and goes out through fail, so its line
+		// is not wiped by the empty answer behind it. An empty follow-up page
+		// is the end of the list, which deliver says ("No more results").
 		logError("core", "No videos could be parsed from yt-dlp output")
-		publishSearchError("No videos found. Try a different query.")
+		if !stale() {
+			clearYouTubeFailure(resultVar)
+		}
+		fail("No videos found. Try a different query.")
+		return
 	}
 
 	if stale() {
@@ -3565,7 +3609,11 @@ func playVideoURL(config *Config, url string) {
 		logDebug("core", "playVideoURL: empty URL, nothing to play")
 		return
 	}
-	playVideoInfo(config, VideoInfo{URL: url})
+	v := VideoInfo{URL: url}
+	playVideoInfo(config, v)
+	// A pasted YouTube link has no title: look it up so Continue and Recents
+	// do not show the address (ytoembed.go).
+	ytFillMissingTitle(v)
 }
 
 // looksLikeStreamURL reports whether s is a playable link rather than a search
@@ -3757,7 +3805,9 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		"--geo-bypass",
 		"--no-continue",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
+		// The clients that still carry a muxed format (streaming.go explains
+		// the list and why android_vr and plain web left it).
+		"--extractor-args", ytDlpDownloadClients,
 		"-f", videoFormatSelectorFor(config, url),
 		url,
 	}
@@ -3789,10 +3839,15 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		case err := <-done:
 			if err != nil {
 				if ctx.Err() != nil {
-					// Cancelled by B / Esc (or the 5-minute cap): not a network
-					// failure, so no error toast and no half-download left behind.
+					// Cancelled by B / Esc: not a network failure, so no error
+					// toast and no half-download left behind.
 					logDebug("stream", "download cancelled for %s", sanitizeLogURL(url))
 					removeTempVideoArtifacts(tempPath)
+					if parent.Err() == nil && ctx.Err() == context.DeadlineExceeded {
+						// The five-minute cap, not the user: a long video on a
+						// slow link used to end here with nothing on screen.
+						showToast("This video took too long to download — try a lower quality in Settings", ToastWarn())
+					}
 					return false
 				}
 				// A failed fetch leaves its partial pieces too; each attempt has
@@ -3800,13 +3855,12 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 				removeTempVideoArtifacts(tempPath)
 				logError("core", "playWithTempFile: download failed: %v", err)
 				// Same redaction as the search path: these arguments include the
-				// decrypted API key.
+				// cookies path.
 				logError("core", "playWithTempFile: stderr: %s", redactDiagnosticText(stderrBuf.String()))
-				if !IsOnline() {
-					showToast("Download failed — offline, connect WiFi", ToastWarn())
-				} else {
-					showToast("Download failed. Check network.", ToastError())
-				}
+				// The cause in words (ytfailure.go), not "Check network." for a
+				// 403, a missing format or an outdated helper — which also
+				// starts the yt-dlp update that fixes those.
+				showToast(youTubePlaybackFailureMessage(config, url, stderrBuf.String()), ToastError())
 				videoPlaybackMutex.Lock()
 				videoPlaybackPhase = "error"
 				videoPlaybackPhaseAt = sdl.GetTicks64()
@@ -4693,6 +4747,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 // the self-drawing registered scenes included.
 func renderTopBarOverlays(renderer *sdl.Renderer, config *Config) {
 	renderWeatherPopover(renderer, config)
+	renderVolumePopover(renderer, config)
 	renderStartMenu(renderer, config)
 	renderNotifDropdown(renderer, config)
 }
@@ -5133,10 +5188,61 @@ func abButtonsSwapped(config *Config) bool {
 	return P().IsHandheld()
 }
 
-// applyButtonSwap normalizes A/B face-button events against the
-// "swapABButtons" setting so every scene and overlay sees one consistent
-// mapping. All controller input flows through the PollEvent loops, so
-// swapping here covers the whole app.
+// xyButtonsSwapped reports whether the X/Y face buttons should be treated as
+// flipped. It is the other half of the quirk abButtonsSwapped handles: the
+// TrimUI handhelds print a Nintendo layout on their buttons (A right, B bottom,
+// X top, Y left), while the firmware's pad ("TRIMUI Player1", an X360 mapping)
+// reports positions the Xbox way. Only the A/B half used to be corrected, so the
+// top button ran every "Y" action and the left one every "X" action — the
+// opposite of the letter printed on it. "swapXYButtons" is a setting of its own,
+// so a pad that mirrors only one pair can be told apart; with no value stored it
+// follows the platform, exactly like the A/B swap.
+func xyButtonsSwapped(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	if v, ok := customValue(config.Variables.Custom, "swapXYButtons"); ok {
+		return coerceBool(v)
+	}
+	return P().IsHandheld()
+}
+
+// padFaceButton maps a face button between what the pad reports and the
+// logical button every handler is written against: A<->B while
+// abButtonsSwapped, X<->Y while xyButtonsSwapped, anything else unchanged.
+//
+// Each swap is its own inverse, so the same call also turns a logical button
+// back into the raw one. That is what the code that queues a press for the main
+// loop to swap again (the phone remote, control profiles) and the code that
+// polls the pad for a held button (pad.Button) need. Every one of those sites
+// goes through this function: they used to copy the A/B switch by hand, which
+// is how the X/Y half could be missing from all of them at once.
+func padFaceButton(config *Config, button uint8) uint8 {
+	switch button {
+	case sdl.CONTROLLER_BUTTON_A:
+		if abButtonsSwapped(config) {
+			return sdl.CONTROLLER_BUTTON_B
+		}
+	case sdl.CONTROLLER_BUTTON_B:
+		if abButtonsSwapped(config) {
+			return sdl.CONTROLLER_BUTTON_A
+		}
+	case sdl.CONTROLLER_BUTTON_X:
+		if xyButtonsSwapped(config) {
+			return sdl.CONTROLLER_BUTTON_Y
+		}
+	case sdl.CONTROLLER_BUTTON_Y:
+		if xyButtonsSwapped(config) {
+			return sdl.CONTROLLER_BUTTON_X
+		}
+	}
+	return button
+}
+
+// applyButtonSwap normalizes face-button events against the "swapABButtons"
+// and "swapXYButtons" settings (padFaceButton) so every scene and overlay sees
+// one consistent mapping. All controller input flows through the PollEvent
+// loops, so swapping here covers the whole app.
 //
 // It also folds the auxiliary buttons some handheld firmwares use for the B
 // face button (GUIDE / MISC1) into BACK, and logs each press while running on
@@ -5150,14 +5256,7 @@ func applyButtonSwap(config *Config, event sdl.Event) {
 	raw := ce.Button
 	handheld := P().IsHandheld()
 	ce.Button = normalizeHandheldBackButton(ce.Button, handheld)
-	if abButtonsSwapped(config) {
-		switch ce.Button {
-		case sdl.CONTROLLER_BUTTON_A:
-			ce.Button = sdl.CONTROLLER_BUTTON_B
-		case sdl.CONTROLLER_BUTTON_B:
-			ce.Button = sdl.CONTROLLER_BUTTON_A
-		}
-	}
+	ce.Button = padFaceButton(config, ce.Button)
 	if ce.Type == sdl.CONTROLLERBUTTONDOWN && handheld && controllerInputLogs < controllerInputLogLimit {
 		controllerInputLogs++
 		scene := ""
@@ -5181,12 +5280,8 @@ func toggleVariable(config *Config, element Element) {
 	PlayToggleSound()
 	config.Variables.Custom[element.Variable] = map[bool]string{true: "true", false: "false"}[on]
 	syncVariableOverrides(config)
-	if strings.EqualFold(strings.TrimSpace(element.Variable), "fullscreen") && mainWindow != nil {
-		if on {
-			mainWindow.SetFullscreen(1)
-		} else {
-			mainWindow.SetFullscreen(0)
-		}
+	if strings.EqualFold(strings.TrimSpace(element.Variable), "fullscreen") {
+		applyFullscreen(config, on)
 	}
 	// Widget toggles (start at login, battery saver, ...) act on the system and
 	// show their own, more useful message.
@@ -5319,8 +5414,12 @@ type ToastState struct {
 var toastRect sdl.Rect
 
 // toastDurationFor returns the display time for a toast kind: info/success
-// ~2.5s, warnings ~3.5s, errors ~5s.
+// ~2.5s, warnings ~3.5s, errors ~5s. Screenshot mode shows none: a zero
+// duration is cleared before it is drawn (renderToast, screenshotmode.go).
 func toastDurationFor(kind ToastKind) uint64 {
+	if shotModeOn() {
+		return 0
+	}
 	switch kind {
 	case ToastKindError:
 		return 5000
@@ -5962,14 +6061,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			switch element.VariableChange {
 			case "fullscreen":
 				if b, err := strconv.ParseBool(strings.TrimSpace(val)); err == nil {
-					if mainWindow != nil {
-						if b {
-							mainWindow.SetFullscreen(1)
-						} else {
-							mainWindow.SetFullscreen(0)
-						}
-					}
-					config.Variables.Fullscreen = b
+					applyFullscreen(config, b)
 				}
 			case "buttonColor", "labelColor":
 				applyColorVar(config, element.VariableChange, val)
@@ -6155,13 +6247,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		syncVariableOverrides(config)
 		// Apply the Fullscreen setting live instead of only on restart.
-		if mainWindow != nil {
-			if config.Variables.Fullscreen {
-				mainWindow.SetFullscreen(1)
-			} else {
-				mainWindow.SetFullscreen(0)
-			}
-		}
+		applyFullscreen(config, config.Variables.Fullscreen)
 		// Apply theme colors live. The accent stays the theme's: the button
 		// colour tints the glass buttons themselves (renderDarkButtonElement).
 		SetAccentColor(themeAccentColor())
@@ -6609,6 +6695,7 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	startMenuDismiss()
 	notifDismiss()
 	dismissWeatherPopover()
+	dismissVolumePopover()
 	// Home's "Exit JukaHub?" card (home_power.go) must not wait behind a scene
 	// change and greet the next return to Home with Exit focused.
 	homePowerClose()
@@ -7045,6 +7132,12 @@ func activateChromeFocus(config *Config) bool {
 		PlayActivateSound()
 		wifiScrOpen(config)
 		return true
+	case ChromeVolumeIndex:
+		// The speaker opens the volume popover (volumepopover.go), the same
+		// card a tap on it opens.
+		PlayActivateSound()
+		toggleVolumePopover()
+		return true
 	}
 	return false
 }
@@ -7073,6 +7166,15 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	}
 	if weatherStatusRect.W > 0 && hitTouchTarget(weatherStatusRect, mx, my) {
 		toggleWeatherPopover()
+		return true
+	}
+	// The speaker opens the volume popover. Its rect is already finger-sized
+	// and split from the meter's at the gap's middle (growStatusButtonRects),
+	// so it is tested as drawn, and before the meter, whose grown target may
+	// reach a few pixels over it.
+	if statusVolumeRect.W > 0 && pointInRect(mx, my, statusVolumeRect) {
+		PlayActivateSound()
+		toggleVolumePopover()
 		return true
 	}
 	// The Wi-Fi meter opens the network picker (scan, connect, enter a
@@ -7228,6 +7330,10 @@ func handleChromeKey(e *sdl.KeyboardEvent, config *Config) bool {
 func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
+	}
+	// The volume card owns every key while it is up (volumepopover.go).
+	if volumePopoverKey(e, config) {
+		return true
 	}
 	if weatherPopoverOpen {
 		switch e.Keysym.Sym {

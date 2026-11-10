@@ -80,6 +80,12 @@ func brwUnwrapTracking(raw string) string {
 			}
 		case brwHostIs(host, "consent.youtube.com") || brwHostIs(host, "consent.google.com"):
 			next = u.Query().Get("continue")
+		case brwHostIs(host, "bing.com") && path == "/ck/a":
+			// Bing's and Yahoo's results, for the other search engines
+			// (browser_engines.go decodes both).
+			next = brwBingTarget(u.Query().Get("u"))
+		case brwHostIs(host, "r.search.yahoo.com"):
+			next = brwYahooTarget(u.EscapedPath())
 		}
 		next = strings.TrimSpace(next)
 		if next == "" || !brwWebLink(next) {
@@ -273,6 +279,12 @@ func brwPlayYouTube(config *Config, link brwYouTubeLink, title string) bool {
 	}
 	logInfo("browser", "YouTube link opens in Media: %s (start %.0fs)", link.ID, link.Start)
 	playVideoInfo(config, v)
+	if v.Title == "" {
+		// A link with no usable text (a thumbnail, a bare address): look the
+		// title up so Continue and Recents name the video instead of showing
+		// its address (ytoembed.go).
+		ytFillMissingTitle(v)
+	}
 	if v.Title != "" {
 		// The video came from one link, not a list: naming it as its own
 		// one-entry list is what puts its title on the player and the status

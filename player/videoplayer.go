@@ -915,10 +915,12 @@ func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, 
 		args = append(args, "-user_agent", streamUserAgent,
 			"-rw_timeout", "15000000")
 	}
+	// The firmware's own ffprobe cannot open https; such a URL is handed to
+	// it through the loopback relay (ffmpegtls.go).
 	args = append(args,
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration",
-		"-of", "default=noprint_wrappers=1", path)
+		"-of", "default=noprint_wrappers=1", ffmpegReadableInput(ffprobePath, path))
 	cmd := exec.CommandContext(ctx, ffprobePath, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -987,7 +989,10 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 // decoding 4K frames and letting the GPU shrink them); otherwise it asks for
 // the native size directly.
 func ffmpegDecoderArgs(path string, width, height int32, scaling bool, startSec float64) []string {
-	args := []string{}
+	// The decoder's stderr goes to errors.txt: without these, every start
+	// (and every retry) wrote ffmpeg's banner and configure line there,
+	// burying the one line that said why the stream failed.
+	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error"}
 	if startSec > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
@@ -1015,7 +1020,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	embeddedPlayer.mu.Unlock()
 	scaling := srcW > 0 && srcH > 0 && (srcW != width || srcH != height)
 
-	args := ffmpegDecoderArgs(path, width, height, scaling, startSec)
+	args := ffmpegDecoderArgs(ffmpegReadableInput(ffmpegPath, path), width, height, scaling, startSec)
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1139,11 +1144,11 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 
 func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) {
 	rate := GetVideoAudioRate()
-	args := []string{}
+	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error"}
 	if startSec > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
-	args = append(args, "-i", path,
+	args = append(args, "-i", ffmpegReadableInput(ffmpegPath, path),
 		"-f", "s16le",
 		"-ac", "2",
 		"-ar", fmt.Sprintf("%d", rate),

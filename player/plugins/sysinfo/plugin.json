@@ -1,7 +1,7 @@
 {
   "name": "sysinfo",
   "title": "System info",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Reports free memory, free disk space and battery level.",
   "author": "JukaHub",
   "entry": "sysinfo.sh",
@@ -10,5 +10,7 @@
   "actions": [
     {"id": "status", "label": "Memory and disk"},
     {"id": "power", "label": "Battery"}
-  ]
+  ],
+  "onEnable": "status",
+  "quick": ["status", "power"]
 }

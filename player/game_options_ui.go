@@ -277,7 +277,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	medH := int32(medium.Height())
 
 	const pad = OverlayPadX
-	rowH := int32(58)
+	// Measured from the type: at the shipped 24px roles the fixed 58px row put
+	// each hint 12px into the row below (8 above, 2 between, 6 under, 8 gap).
+	rowH := max32(58, medH+smallH+24)
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar drawn into it measure the same height.
 	subtitle := gameOptsUI.game.Title

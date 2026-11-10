@@ -221,7 +221,11 @@ func downloadFileWithProgressCtx(ctx context.Context, url, dest string, progress
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	client := &http.Client{Timeout: 15 * time.Minute}
+	// ytTransport is the default transport unless the firmware has no
+	// certificate store, when it trusts the bundle JukaHub can find
+	// (bugrepCAPaths: cacert.pem next to the app first). The install card's
+	// "put cacert.pem next to JukaHub" advice is only true because of it.
+	client := &http.Client{Timeout: 15 * time.Minute, Transport: ytTransport()}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

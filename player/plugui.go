@@ -162,11 +162,9 @@ func plugToggle(c *Config) {
 	PlayToggleSound()
 	plugSetEnabled(c, e.Name, on)
 	plugSyncCursor()
-	state := "off"
-	if on {
-		state = "on"
-	}
-	ShowToast(e.Title+" is "+state, ToastKindInfo)
+	// Says what the switch changed and, switched on, runs the plugin's
+	// onEnable action (plughooks.go).
+	plugAfterToggle(c, e.Name, on)
 	if !on {
 		plugUI.inActions = false
 	}
@@ -208,11 +206,14 @@ func plugRun(c *Config) {
 		return
 	}
 	a := e.Actions[plugUI.action]
-	if !plugRunAsync(*info, a.ID, e.Title, snapshotVars(c)) {
+	if !plugDispatch(c, *info, a.ID, e.Title, snapshotVars(c)) {
 		ShowToast(e.Title+" is still running", ToastKindInfo)
 		return
 	}
-	PlayActivateSound()
+	// JukaHub's own actions play their own sound (or open a screen that does).
+	if plugUIActionFor(*info, a.ID) == nil {
+		PlayActivateSound()
+	}
 }
 
 // plugMoveAction steps the focused button in the two-column grid.
@@ -431,7 +432,7 @@ func plugRender(renderer *sdl.Renderer, c *Config) {
 	top := headerBarHeight() + scaleY(8, screenHeight)
 	bottom := screenHeight - bottomBarHeight(plugSceneName) - 16
 	on, total := plugEnabledCount()
-	header := UIPanelHeader("Plugins", "Small scripts that add actions to JukaHub", "plugin")
+	header := UIPanelHeader("Plugins", "Switch one on and its buttons join the Start menu", "plugin")
 	header.X, header.Y, header.W = margin, top, screenWidth-2*margin
 	if total > 0 {
 		if plugUI.status == "" || plugUI.statusOn != on || plugUI.statusTotal != total {

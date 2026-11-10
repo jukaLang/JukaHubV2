@@ -48,6 +48,10 @@ const (
 	brwFailHTTP
 	brwFailContent
 	brwFailOther
+	// brwFailWall is a search engine's wall instead of its results: Google's
+	// "turn on JavaScript" page (browser_engines.go builds the card's words
+	// and buttons).
+	brwFailWall
 )
 
 // brwOfflineTitle and brwOfflineDetail are the offline card's words.
@@ -292,6 +296,12 @@ const (
 	brwActRetry
 	brwActWiFi
 	brwActSearch
+	// The search-wall card's (brwWallButtons): the same words on Startpage,
+	// Startpage from now on, Settings → Browser, the desktop's own browser.
+	brwActWallSearch
+	brwActWallAlways
+	brwActWallEngines
+	brwActWallBrowser
 )
 
 type brwCardButton struct {
@@ -321,6 +331,8 @@ func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
 		return brwOfflineButtons
 	case f.Kind == brwFailNotFound:
 		return brwNotFoundButtons
+	case f.Kind == brwFailWall:
+		return brwWallButtons()
 	}
 	return brwErrorButtons
 }
@@ -403,6 +415,8 @@ func brwCardActivate(config *Config, elem Element, f brwFailure, i int) {
 	case brwActSearch:
 		PlayActivateSound()
 		loadTextBrowserURL(config, elem, textBrowserSearchURL(f.Host))
+	case brwActWallSearch, brwActWallAlways, brwActWallEngines, brwActWallBrowser:
+		brwWallActivate(config, elem, f, buttons[i].action)
 	}
 }
 
@@ -628,6 +642,8 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 		icon = "unlock"
 	case f.Kind == brwFailTimeout:
 		icon = "clock"
+	case f.Kind == brwFailWall:
+		icon = "search"
 	}
 	titleFont := getFontSized(config, "small", 28)
 	bodyFont := getFontSized(config, "small", 18)
@@ -652,7 +668,9 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 	titleH, lineH, smallH := int32(titleFont.Height()), int32(bodyFont.Height()), int32(smallFont.Height())
 	textH := titleH + 6 + int32(len(lines))*lineH + 6 + smallH
 	headH := max(badgeSize, textH)
-	stacked := offline && !compact && len(buttons) == 3
+	// The wall card stacks too: its first button carries a longer label
+	// ("Search on Startpage") than a third of the row holds.
+	stacked := (offline || f.Kind == brwFailWall) && !compact && len(buttons) == 3
 	buttonsH := rowH
 	if stacked {
 		buttonsH = primaryH + gap + rowH

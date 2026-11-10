@@ -95,6 +95,15 @@ else a toggle changes) into `jukauser.json`, which is merged over the design
 defaults at startup. Settings → **Smart Widgets** adds `batterySaver`,
 `timeOfDayTheme` and `autoStart` there, for example.
 
+`timeOfDayTheme` (Settings → Display & theme → **Light & dark by time of
+day**) switches between two colour themes: `themeDay` (default `light`) from
+`themeDayStart` and `themeNight` (default `hub`, JukaHub's own glass) from
+`themeNightStart`, both `"HH:MM"` (07:00 and 19:00 unless set; a window that
+wraps midnight works too). The theme changes at those two times only, so a
+theme picked by hand stands until the next switch — and becomes the theme of
+that part of the day. High contrast, the colour-blind palettes, a total
+conversion and the battery saver's OLED all pause it while they are on.
+
 `hapticsEnabled` (Settings → General → **Vibration**, on by default) turns the
 short vibration feedback on or off. Detection checks the handheld's own motor
 nodes first — `/sys/class/motor/voltage` plus `/sys/class/gpio/gpio227/value` on
@@ -106,8 +115,12 @@ chosen (`[HAPTIC] vibration ready on …`). Because it is an ordinary toggle
 variable, a hand-edited `"hapticsEnabled": false` in `jukauser.json` behaves
 the same as the switch.
 
-`autoStart` (Settings → Smart Widgets → **Start JukaHub at login**, off by
-default) writes exactly one launcher and removes exactly that file again:
+`autoStart` (Settings → General → **Start JukaHub at login**) writes exactly
+one launcher and removes exactly that file again. It is off by default on a
+desktop. On a TrimUI the first start switches it on once when nobody has set it
+yet (the first-run tour's *Start with your device* step says so and can turn it
+off); `autoStartDefaulted` records that this happened, so turning it off is
+final and a value set beforehand is never overridden:
 
 | Platform | Hook file |
 |----------|-----------|
@@ -118,8 +131,9 @@ default) writes exactly one launcher and removes exactly that file again:
 The handheld hook is a `#!/bin/sh` script that returns immediately and does its
 work in a background subshell, so a slow or hung launch can never block the
 firmware's boot. The subshell waits up to 30 s for the stock launcher to appear
-(the hook may run before MainUI is on screen), then runs `launch.sh`, which
-takes the display and hands it back on exit. Output goes to
+(the hook may run before MainUI is on screen), then — unless a JukaHub is
+already running — runs `launch.sh`, which takes the display and hands it back
+on exit. Output goes to
 `Apps/JukaHub/autostart.log`. Other files in `System/starts` are never touched,
 and if the SD card cannot be located the toggle stays off and says why rather
 than writing somewhere arbitrary.
@@ -181,6 +195,19 @@ from the jar's oldest first-seen stamp and re-seeded on every launch and page
 entry, so editing it by hand changes nothing. The row's neighbour, **Forget
 now**, writes nothing: it drops the saved
 session and the file immediately, exactly as the Browser's Forget chip does.
+
+`browserSearchEngine` (string) is the engine the Browser searches with:
+`duckduckgo` (the default, and what an unknown value means), `google`, `bing`,
+`startpage`, `brave`, `yahoo`, `mojeek`, `wikipedia`, or `custom`, which uses
+`browserSearchCustom` (string): a results address with `%s` where the words go
+(one ending in `=` takes them at the end, and a bare host gains `https://`). A
+`custom` engine without a usable address searches DuckDuckGo.
+`browserHomePage` (string) is the page **Home** and a newly opened Browser
+show; empty or absent follows the engine's start page, and a value that is not
+a web address is ignored the same way. `browserHomeTyped` (string) is the last
+address typed for it, kept so the row can still offer it after another choice.
+Settings → **Browser** writes all four (a typed value only when it is usable);
+see [Browser → Search engine and home page](BROWSER.md#search-engine-and-home-page).
 
 Time-lapse recording is two custom keys, documented in
 [Time-lapse](TIMELAPSE.md): `timelapse` (bool, default true) films every game

@@ -253,6 +253,7 @@ func toggleCalendarPopover() {
 		tb.startOpen = false
 		nc.open = false
 		dismissWeatherPopover()
+		dismissVolumePopover()
 		// Every open starts on the current month: a view left on March must not
 		// look like the clock's date the next time it is opened.
 		resetCalendarView()
@@ -329,6 +330,16 @@ func homeActivate(config *Config) {
 		notifToggle()
 		return
 	}
+	// The pairing code goes full screen: the size and brightness a phone
+	// camera reads from arm's length (qrzoom.go). The card plays its own
+	// activation sound, so this returns before the generic one too.
+	if id == HomeFocusQR {
+		logDebug("home", "activate card %s", id)
+		homePressedID = id
+		homePressedAt = sdl.GetTicks64()
+		homeShowPairingQR()
+		return
+	}
 	PlayActivateSound()
 	logDebug("home", "activate card %s", id)
 	homePressedID = id
@@ -388,6 +399,11 @@ func homeActivate(config *Config) {
 	// the scene lookup. The meter opens the Wi-Fi screen (toolshub.go).
 	if id == HomeFocusWiFi {
 		wifiScrOpen(config)
+		return
+	}
+	// The speaker beside it opens the volume popover (volumepopover.go).
+	if id == HomeFocusVolume {
+		toggleVolumePopover()
 		return
 	}
 	if id == HomeFocusWeather {
@@ -470,6 +486,11 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 			PlayNavSound()
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
+		// A held Enter on the pairing code must not open the full-screen
+		// card again with every repeat (each open also drives the backlight).
+		if e.Repeat != 0 && homeLayout.Focus.Current() == HomeFocusQR {
+			break
+		}
 		homeActivate(config)
 	case sdl.K_SLASH:
 		// "/" is the keyboard's search key on Home (F2 opens search anywhere).
@@ -568,10 +589,14 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	if weatherPopoverClick(mx, my, config) {
 		return true
 	}
-	// The header QR is a direct pairing affordance: tapping it opens the large
-	// pairing card without leaving Home.
+	// The header QR is a direct pairing affordance: a tap shows it full screen,
+	// the same as A on it (focus follows, so the D-pad continues from it). The
+	// pairing card with the PIN and the address stays in Settings, Network
+	// tools and search.
 	if companionHeaderRect.W > 0 && pointInRect(mx, my, companionHeaderRect) {
-		openCompanionOverlay()
+		homeLayout.Focus.Set(HomeFocusQR)
+		homeLayout.Focus.Remember()
+		homeShowPairingQR()
 		return true
 	}
 	// The PS5 launcher beside it starts streaming in one press, installing the
@@ -607,9 +632,10 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 // state resolved from the recently-played store, and pressed feedback.
 // homeGreeting builds the greeting line, appending the configured username so
 // the home screen feels personal without touching the header status cluster.
+// A screenshot leaves the name out (screenshotmode.go).
 func homeGreeting(name string) string {
 	g := defaultGreeting(time.Now())
-	if n := strings.TrimSpace(name); n != "" {
+	if n := strings.TrimSpace(name); n != "" && !shotModeOn() {
 		return g + ", " + n
 	}
 	return g

@@ -184,8 +184,12 @@ func sanitiseWeatherDays(in []WeatherDay) []WeatherDay {
 // start before today — a forecast restored from the cache may be a day old —
 // and taking its first entry showed yesterday's weather as today's in the
 // status bar, on the dock and in the backdrop. False when today is not in the
-// list at all.
+// list at all, and always in screenshot mode, where no forecast is shown
+// (screenshotmode.go).
 func weatherDayFor(days []WeatherDay, now time.Time) (WeatherDay, bool) {
+	if shotModeOn() {
+		return WeatherDay{}, false
+	}
 	today := weatherTodayDate(now)
 	for _, d := range days {
 		if d.Date == today {

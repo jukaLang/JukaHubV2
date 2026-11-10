@@ -11,7 +11,9 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2/badge)](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/R9qgJjh5jG)
 
-<img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />
+<p align="center">
+  <img src="screenshots/home.png" alt="The JukaHub Home screen: a search bar, a Continue watching card, a wide Media tile, nine smaller tiles from Games to Settings, the phone-pairing QR code, and the controller hints along the bottom">
+</p>
 
 **Your TrimUI handheld as a complete media and gaming console: one folder on
 the SD card, the stock OS untouched underneath.**
@@ -80,6 +82,25 @@ it back.
 * **Extend** — signed packages from a repository with rollback, and plugins.
 
 Most of these have a page in the [documentation table](#documentation) below.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="screenshots/media.png" alt="The Media screen: video search, a row of tabs from For you to Podcasts, and Continue watching and Trending now rows of video thumbnails">
+      <br>
+      <b>Media</b> — YouTube with Continue watching and Trending rows;
+      Shorts, Downloads, History, Favorites, Library, Live TV and Podcasts are
+      tabs on the same screen.
+    </td>
+    <td width="50%" valign="top">
+      <img src="screenshots/ambient.png" alt="The dock display: a large clock with the date and the next alarm under it, a Wi-Fi chip, and button hints for play, previous, next, sleep timer, screen off and exit">
+      <br>
+      <b>Dock &amp; ambient</b> — the clock that takes over while charging or
+      idle, with the next alarm, today's weather and new chat messages, and
+      play, skip, a sleep timer and screen-off on the buttons.
+    </td>
+  </tr>
+</table>
 
 ## JukaHub and Juka
 
@@ -165,9 +186,10 @@ only scans `Apps/` at boot. Also check that the folder is exactly
 
 ## First run
 
-Home is a grid of tiles: **Continue**, **Media**, **Files**, **Packages**,
-**Apps**, **Favorites**, **Browser**, **Chat**, **Tools**, **Emulator**,
-**Settings**, plus **Exit** in the footer. The PS4/PS5 launcher tiles and the
+Home is a grid of tiles: **Continue**, **Media**, **Games**, **Packages**,
+**Apps**, **Favorites**, **Browser**, **Chat**, **Tools**, **Files**,
+**Settings**, plus **Exit** in the footer, under a search bar (**Y**) for apps,
+settings, files and the web. The PS4/PS5 launcher tiles and the
 phone-pairing QR sit just under the top bar on the right; the weather chip, the
 clock and the notification bell are in the bar itself.
 
@@ -204,15 +226,16 @@ clock and the notification bell are in the bar itself.
   keyboard, reconnect saved networks without retyping the password, disconnect
   and forget. Open it from **Quick Settings → Wi-Fi Networks** or **Hardware →
   Wi-Fi**; see [docs/WIFI.md](docs/WIFI.md).
-
-  ![The Wi-Fi picker showing a connected network, saved networks and the button hints](screenshots/wifi-picker.png)
 * **Settings** — playback resolution, weather and 25 colour themes
   (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
   **Smart Widgets** (from General) holds the settings that react to the device
   on their own: battery saver, which drops to the slowest cadence, stops UI
   motion and switches to the OLED theme below 20% until it is charged again;
-  the optional time-of-day theme (dawn, day, evening, night); and start at
-  login, which is off by default.
+  light & dark by time of day (a day theme and a night theme that switch at
+  times you choose, also under Display & theme); and start at login, which a
+  TrimUI switches on at its first start and a desktop leaves off.
+
+  ![Settings on Display & theme: theme presets, experience pack, community themes, wallpaper, text size and high contrast](screenshots/settings.png)
 * **Game Profiles** — launch Windows games through Box64/Wine, native
   binaries and scripts. Profiles live in `Apps/JukaHub/data/game-profiles`;
   see [docs/GAME_PROFILES.md](docs/GAME_PROFILES.md) for the format and the
@@ -269,9 +292,6 @@ clock and the notification bell are in the bar itself.
   with the D-pad (`Up` from the card beneath them) and **A**. JukaHub hands the
   screen to the helper and closes while it runs; the stock menu returns when the
   stream ends. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
-
-  ![The PS Remote Play panel listing a PS5 ready to stream, unpaired PS4 and PS5 consoles, and scan and add options](screenshots/psremote-panel.png)
-
 * **Smart home** — **Start → Smart Home** drives Home Assistant entities,
   mirrors every toggle to MQTT, shows the Pi-hole, router and Tailscale state,
   and connects or disconnects the tunnel. WireGuard is status-only because
@@ -582,6 +602,12 @@ Questions and feature talk happen on
 [Discord](https://discord.gg/R9qgJjh5jG) and in
 [Discussions](https://github.com/jukaLang/JukaHubV2/discussions); support
 paths are listed in [SUPPORT.md](SUPPORT.md).
+
+The app screenshots in this README use stand-in data: the clock, date, alarm,
+network name and pairing address are made up and the weather is left out.
+`JukaHub --screenshot-tour ../screenshots`, run from `player/`, retakes all
+four the same way, with controller hints; see
+[Screenshots](docs/DEVELOPMENT.md#screenshots) for what it hides.
 
 ## Documentation
 

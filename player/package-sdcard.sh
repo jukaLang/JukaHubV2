@@ -93,7 +93,7 @@ readelf -d "$PKG/$APP_NAME" | grep NEEDED || true
 # --------------------------------------------------------------- 2. app files
 say "Staging app files"
 cp -f trimui/Apps/$APP_DIR_NAME/config.json "$PKG/config.json"
-cp -f trimui/Apps/$APP_DIR_NAME/launch.sh   "$PKG/launch.sh"
+cp -f launch.sh                            "$PKG/launch.sh"
 cp -f trimui/Apps/$APP_DIR_NAME/icon.png     "$PKG/icon.png"
 cp -f trimui/jukaconfig.device.json          "$PKG/jukaconfig.json"
 cp -f Inter-Regular.ttf                      "$PKG/Inter-Regular.ttf"

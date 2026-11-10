@@ -825,8 +825,77 @@ func drawCoverCompletenessRing(renderer *sdl.Renderer, config *Config, cx, cy, r
 		label = itoa(percent)
 		tw, th, _ = font.SizeUTF8(label)
 	}
+	if int32(tw) > 2*radius-8 {
+		// Still wider than the ring (a 24px "100" in the 22px ring the panel
+		// header leaves room for): a caption size keeps it inside the stroke.
+		if caption := getFontSized(config, "small", 14); caption != nil {
+			font = caption
+			tw, th, _ = font.SizeUTF8(label)
+		}
+	}
 	renderText(renderer, config, font, label, ColorTextSecondary(),
 		cx-int32(tw)/2, cy-int32(th)/2)
+}
+
+const (
+	// gameLibraryRowGap is the space between two game rows.
+	gameLibraryRowGap = int32(6)
+	// gameLibraryRowMin is the games column's design pitch, kept as the floor
+	// so small type does not pack the rows tighter than the panel was drawn.
+	gameLibraryRowMin = int32(58)
+	// gameLibraryDetailSize is the design size of the "System · file" line
+	// under a title: a step under the title, as secondary text.
+	gameLibraryDetailSize = 18
+)
+
+// gameLibraryRows is the games column's geometry for the type in use.
+type gameLibraryRows struct {
+	rowH      int32 // pitch, gap included
+	titleY    int32 // the title's offset inside a row
+	detailY   int32 // the detail line's offset inside a row
+	visible   int   // rows drawn
+	showRange bool  // the "1-6 of 40" line is drawn under the rows
+	rangeY    int32 // its offset from the column's top
+}
+
+// gameLibraryRowLayout measures the games column from the fonts it is drawn
+// with. Every shipped config leaves "small" and "medium" at the 24px default,
+// and the fixed 58px pitch the column had was 16px short of a 24px title over
+// a 24px detail line: "PlayStation Portable · game.iso" ran into the next row,
+// under its background and against its title. A list longer than the column
+// also keeps a line free under its last row for the range, which used to be
+// drawn across that row.
+func gameLibraryRowLayout(bodyH, titleH, detailH, rangeH int32, total int) gameLibraryRows {
+	const padTop, lineGap, padBottom = int32(6), int32(2), int32(6)
+	content := titleH + lineGap + detailH
+	l := gameLibraryRows{rowH: padTop + content + padBottom + gameLibraryRowGap}
+	if l.rowH < gameLibraryRowMin {
+		l.rowH = gameLibraryRowMin
+	}
+	// The two lines sit in the middle of the row's box, so the floor's spare
+	// pixels split above and below instead of pooling under the detail line.
+	l.titleY = (l.rowH - gameLibraryRowGap - content) / 2
+	l.detailY = l.titleY + titleH + lineGap
+	l.visible = int(bodyH / l.rowH)
+	if total > l.visible {
+		l.showRange = true
+		l.rangeY = bodyH - rangeH
+		l.visible = int((bodyH - rangeH - 4) / l.rowH)
+	}
+	if l.visible < 1 {
+		l.visible = 1
+	}
+	return l
+}
+
+// gameLibrarySystemRowHeight is a console row's pitch for its name's line
+// height: the name centred above the cover meter along the row's bottom edge,
+// never under the 46px design height.
+func gameLibrarySystemRowHeight(nameH int32) int32 {
+	if h := nameH + 16; h > 46 {
+		return h
+	}
+	return 46
 }
 
 // renderGameLibraryPanel draws the three-column browser.
@@ -902,8 +971,14 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	// Cover completeness at a glance: a ring that fills as the library gains
 	// art, with the percentage inside it.
 	if gameLib.lib.Total > 0 {
+		// The ring stays on the title line: at 26px it reached down into the
+		// status line under it, whose long form runs the width of the card.
+		ringR := int32(26)
+		if half := band.WellBox / 2; half > 8 && half < ringR {
+			ringR = half
+		}
 		drawCoverCompletenessRing(renderer, config,
-			panelX+panelW-pad-26, header.Y+band.WellBox/2, 26,
+			panelX+panelW-pad-ringR, header.Y+band.WellBox/2, ringR,
 			coverPercent(gameLib.lib.WithArt, gameLib.lib.Total))
 	}
 
@@ -943,7 +1018,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	focusColor := installHighlight()
 
 	// ── Consoles ────────────────────────────────────────────────────────
-	sysRowH := int32(46)
+	sysRowH := gameLibrarySystemRowHeight(medH)
 	visibleSys := int(bodyH / sysRowH)
 	if visibleSys < 1 {
 		visibleSys = 1
@@ -990,11 +1065,15 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 
 	// ── Games ───────────────────────────────────────────────────────────
 	system, hasSystem := selectedLibrarySystem()
-	gameRowH := int32(58)
-	visibleGames := int(bodyH / gameRowH)
-	if visibleGames < 1 {
-		visibleGames = 1
+	// The "System · file" line under each title is secondary, so it is set a
+	// step smaller than the title; the row is measured from both fonts.
+	detailFont := getFontSized(config, "small", gameLibraryDetailSize)
+	if detailFont == nil {
+		detailFont = font
 	}
+	rows := gameLibraryRowLayout(bodyH, medH, int32(detailFont.Height()), smallH, len(system.Games))
+	gameRowH := rows.rowH
+	visibleGames := rows.visible
 	if len(system.Games) > 0 {
 		if gameLib.cursor >= len(system.Games) {
 			gameLib.cursor = len(system.Games) - 1
@@ -1041,7 +1120,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			if idx >= len(system.Games) {
 				break
 			}
-			rect := sdl.Rect{X: gameX, Y: bodyY + int32(i)*gameRowH, W: gameW, H: gameRowH - 6}
+			rect := sdl.Rect{X: gameX, Y: bodyY + int32(i)*gameRowH, W: gameW, H: gameRowH - gameLibraryRowGap}
 			gameLib.gameHits = append(gameLib.gameHits, gameLibRowHit{index: idx, rect: rect})
 			selected := idx == gameLib.cursor
 			bg := WithAlpha(ColorSurfaceRow, 150)
@@ -1054,15 +1133,15 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			game := system.Games[idx]
 			renderText(renderer, config, medium, ellipsize(medium, game.Title, rect.W-24),
-				ColorTextPrimary(), rect.X+12, rect.Y+8)
+				ColorTextPrimary(), rect.X+12, rect.Y+rows.titleY)
 			detail := game.System + " · " + filepath.Base(game.Path)
 			// A per-game clock is worth seeing in the list: it explains why
 			// this title runs cooler than the one above it.
 			if opts := gameOptionsFor(game.Path); opts.MaxFreqKHz > 0 {
 				detail += " · " + formatGameCeiling(opts.MaxFreqKHz)
 			}
-			renderText(renderer, config, font, ellipsize(font, detail, rect.W-24),
-				ColorTextTertiary(), rect.X+12, rect.Y+8+medH+2)
+			renderText(renderer, config, detailFont, ellipsize(detailFont, detail, rect.W-24),
+				ColorTextTertiary(), rect.X+12, rect.Y+rows.detailY)
 		}
 		if gameLib.scroll > 0 || gameLib.scroll+visibleGames < len(system.Games) {
 			rng := itoa(gameLib.scroll+1) + "-" + itoa(gameLib.scroll+visibleGames) + " of " + itoa(len(system.Games))
@@ -1091,7 +1170,10 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		if preview.Title != "" {
 			label := ellipsize(font, preview.Title, artW)
 			renderText(renderer, config, font, label, ColorTextSecondary(), artX, bodyY+artSize+10)
-			renderText(renderer, config, font, preview.System, ColorTextTertiary(), artX, bodyY+artSize+10+smallH+2)
+			// Fitted like the title: at 24px "PlayStation Portable" alone is
+			// wider than the 250px column, and ran past the card's edge.
+			renderText(renderer, config, detailFont, ellipsize(detailFont, preview.System, artW), ColorTextTertiary(),
+				artX, bodyY+artSize+10+smallH+2)
 		}
 	} else {
 		gameLib.artRect = sdl.Rect{}

@@ -61,8 +61,10 @@ type bgPalette struct {
 }
 
 func getTimePalette() bgPalette {
-	hour := time.Now().Hour()
-	min := time.Now().Minute()
+	// Screenshot mode paints the hour its clock shows (shotClock).
+	now := shotClock(time.Now())
+	hour := now.Hour()
+	min := now.Minute()
 	frac := float64(hour) + float64(min)/60.0
 
 	switch {

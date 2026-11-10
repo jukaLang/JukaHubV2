@@ -29,11 +29,10 @@ const (
 	browserSceneName       = "Browser"
 	browserContentVariable = "browser_content"
 	browserReposURL        = "https://github.com/jukaLang/JukaHubV2"
-	// The start page is DuckDuckGo Lite so the tile opens where search happens.
-	// The repo page is retired: lite.duckduckgo.com is server-rendered and
-	// readable in the text browser, opening straight onto the search box.
-	browserHomeURL     = "https://lite.duckduckgo.com/lite/"
-	browserSearchURL   = "https://lite.duckduckgo.com/lite/?q="
+	// The start page and the search engine are settings (Settings → Browser,
+	// browser_engines.go): brwHomeURL and brwSearchURLFor. Out of the box they
+	// are DuckDuckGo Lite, which is server-rendered and readable in the text
+	// browser, so the tile opens straight onto a search box.
 	browserIssuesURL   = "https://github.com/jukaLang/JukaHubV2/issues"
 	browserNewIssueURL = "https://github.com/jukaLang/JukaHubV2/issues/new"
 
@@ -272,13 +271,15 @@ func openBrowserHome(config *Config) {
 	}
 	browserHomeLoaded = false
 	browserPendingURL = ""
-	config.Variables.Custom[textBrowserURLVariable] = browserHomeURL
+	// The home page the user chose, or the search engine's start page.
+	home := brwHomeURL(config)
+	config.Variables.Custom[textBrowserURLVariable] = home
 	changeSceneTo(config, idx)
 	if currentSceneIndex == idx {
 		// Already on the Browser scene: no transition will refresh the page.
 		if elem, ok := findBrowserElement(config); ok {
 			browserHomeLoaded = true
-			loadTextBrowserURL(config, elem, browserHomeURL)
+			loadTextBrowserURL(config, elem, home)
 		}
 	}
 }
@@ -381,14 +382,15 @@ func browserForward(config *Config) {
 	loadTextBrowserURLAt(config, elem, address, false)
 }
 
-// browserHome loads the browser's start page, the same way a browser's home
-// button does.
+// browserHome loads the browser's home page, the same way a browser's home
+// button does: the one chosen in Settings → Browser, or the search engine's
+// start page.
 func browserHome(config *Config) {
 	elem, ok := findBrowserElement(config)
 	if !ok {
 		return
 	}
-	loadTextBrowserURL(config, elem, browserHomeURL)
+	loadTextBrowserURL(config, elem, brwHomeURL(config))
 }
 
 // browserToggleAdFilter flips ad/tracker filtering for the site on screen and
@@ -701,8 +703,9 @@ func browserEnsureHome(config *Config) {
 		return
 	}
 	browserHomeLoaded = true
-	config.Variables.Custom[textBrowserURLVariable] = browserHomeURL
-	loadTextBrowserURLAt(config, elem, browserHomeURL, true)
+	home := brwHomeURL(config)
+	config.Variables.Custom[textBrowserURLVariable] = home
+	loadTextBrowserURLAt(config, elem, home, true)
 }
 
 // ── History ──────────────────────────────────────────────────────────────
@@ -1182,13 +1185,17 @@ const (
 	// It is separate from the address so cancelling the keyboard leaves the
 	// address bar, and the page on screen, untouched.
 	browserSearchVariable = "browser_search_query"
-	browserSearchPrompt   = "Search the web"
 
 	// browserFormVariable holds the value typed into a form control on the
 	// page. Its own buffer is what keeps the address bar and the web search
 	// untouched while the keyboard is open for the page itself.
 	browserFormVariable = "browser_form_value"
 )
+
+// browserSearchPrompt is the Search keyboard's placeholder. It names the
+// engine the words go to ("Search Google"): openBrowserSearch and a change in
+// Settings → Browser rewrite it (brwSyncSearchPrompt).
+var browserSearchPrompt = "Search the web"
 
 var (
 	// browserFormEditing says the open keyboard belongs to a control on the
@@ -2122,6 +2129,8 @@ func openBrowserSearch(renderer *sdl.Renderer, config *Config, elem Element) {
 	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
+	// The empty field names the engine the words will go to.
+	brwSyncSearchPrompt(config)
 	for i, current := range config.Scenes[currentSceneIndex].Elements {
 		if current.Type != "textbrowser" || current.Variable != elem.Variable {
 			continue

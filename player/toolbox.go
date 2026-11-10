@@ -469,7 +469,8 @@ func toolboxFetchSmall(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "JukaHub-Toolbox/1.0")
-	client := &http.Client{Timeout: 30 * time.Second}
+	// The same certificate fallback as the downloads it verifies (tools.go).
+	client := &http.Client{Timeout: 30 * time.Second, Transport: ytTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

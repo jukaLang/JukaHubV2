@@ -162,8 +162,13 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if castPanel.open {
 		return ctrlCastPanel(e, config)
 	}
-	// Audio settings are modal: the panel owns the d-pad while open.
+	// Audio settings are modal: the panel owns the d-pad while open, except
+	// while its playlist-name keyboard is up. That keyboard needs the D-pad and
+	// A to type, and the main loop hands it the press once this declines.
 	if musicSettings.open {
+		if virtualKeyboardActive {
+			return false
+		}
 		return ctrlMusicSettings(e, config)
 	}
 	// Accessibility settings are modal: the panel owns the d-pad while open.
@@ -178,8 +183,14 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if calibrationPanel.open {
 		return ctrlStickCalibration(e, config)
 	}
-	// The PS Remote Play client panel is modal too.
+	// The PS Remote Play client panel is modal too, but its keyboard (console
+	// address, PSN Account-ID, pairing PIN) takes the pad while it is up. The
+	// panel used to keep every press, so behind the keyboard the D-pad moved the
+	// hidden list, A ran a row again and B closed the panel.
 	if chiakiPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
 		return ctrlChiakiPanel(e)
 	}
 	// Save Manager is modal too and takes priority over the panels that
@@ -195,13 +206,20 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if portsPanel.open {
 		return ctrlPortsPanel(e)
 	}
-	// LAN play is modal over the game library.
+	// LAN play is modal over the game library; its host-address keyboard takes
+	// the pad while it is up, as the key chain already lets it take the keys.
 	if netplayPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
 		return ctrlNetplay(e, config)
 	}
 	// Downloads is modal: the queue's own bindings must not leak into the
-	// panel it was opened from.
+	// panel it was opened from. Its link keyboard takes the pad while it is up.
 	if dlPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
 		return ctrlDownloadsPanel(e, config)
 	}
 	// The game library is modal: nothing underneath may react while it is open.
@@ -242,6 +260,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// controller until it is dismissed.
 	if weatherPopoverOpen {
 		return ctrlWeatherPopover(e)
+	}
+	// So does the volume card the speaker button opens: the D-pad moves the
+	// level, A mutes, B closes (volumepopover.go).
+	if volumePopoverOpen {
+		return ctrlVolumePopover(e, config)
 	}
 	// The controller legend is modal like the help overlays around it; F1's
 	// pad twin does not exist, so closing is the only way out of it.
@@ -523,23 +546,11 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	if e.Axis == sdl.CONTROLLER_AXIS_RIGHTY && chatSceneStick(config, e.Value) {
 		return true
 	}
-	// Left stick X axis → left/right
-	if e.Axis == sdl.CONTROLLER_AXIS_LEFTX {
-		if e.Value > stickDeadzone {
-			return handleStickDpad(sdl.CONTROLLER_BUTTON_DPAD_RIGHT)
-		}
-		if e.Value < -stickDeadzone {
-			return handleStickDpad(sdl.CONTROLLER_BUTTON_DPAD_LEFT)
-		}
-	}
-	// Left stick Y axis → up/down
-	if e.Axis == sdl.CONTROLLER_AXIS_LEFTY {
-		if e.Value > stickDeadzone {
-			return handleStickDpad(sdl.CONTROLLER_BUTTON_DPAD_DOWN)
-		}
-		if e.Value < -stickDeadzone {
-			return handleStickDpad(sdl.CONTROLLER_BUTTON_DPAD_UP)
-		}
+	// Left stick → D-pad, measured from where the stick rests and past its
+	// dead zone (the stick calibration, stickcal.go): a drifting stick no
+	// longer steps the focus on its own.
+	if btn, ok := stickNavButton(config, e.Axis, e.Value); ok {
+		return handleStickDpad(btn)
 	}
 	return false
 }

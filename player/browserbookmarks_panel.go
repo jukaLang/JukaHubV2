@@ -10,9 +10,12 @@ package main
 // things on the same row is how pages get deleted by accident.
 //
 // A row opens the page it names, which is the only reason to have the list.
+// Y makes the highlighted page the home page (browser_engines.go), and the
+// home page's row says "Home" beside its date.
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -150,6 +153,9 @@ func ctrlBrowserBookmarks(e *sdl.ControllerButtonEvent, config *Config) bool {
 		browserBookmarkPanelActivate(config)
 	case sdl.CONTROLLER_BUTTON_X:
 		browserBookmarkPanelRemove(config)
+	case sdl.CONTROLLER_BUTTON_Y:
+		// The highlighted page becomes the home page (browser_engines.go).
+		browserBookmarkPanelMakeHome(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeBrowserBookmarkPanel()
 	}
@@ -169,6 +175,8 @@ func handleBrowserBookmarksKey(e *sdl.KeyboardEvent, config *Config) bool {
 		browserBookmarkPanelActivate(config)
 	case sdl.K_x:
 		browserBookmarkPanelRemove(config)
+	case sdl.K_y:
+		browserBookmarkPanelMakeHome(config)
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		closeBrowserBookmarkPanel()
 	}
@@ -226,7 +234,8 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 	armedNow := browserBookmarkPanel.armed != "" &&
 		time.Since(browserBookmarkPanel.armedAt) <= browserForgetConfirmWindow
 	// The controls in this frame's words (inputhints.go).
-	actions := hintSentence2("%s opens · %s removes", "A", "Open", "X", "Remove") + " · " + hintSentence("%s closes", "B", "Close")
+	actions := hintSentence2("%s opens · %s removes", "A", "Open", "X", "Remove") + " · " +
+		hintSentence2("%s sets home · %s closes", "Y", "Home", "B", "Close")
 	subtitle := fmt.Sprintf("%d page(s) · ", len(marks)) + actions
 	if len(marks) == 1 {
 		subtitle = "1 page · " + actions
@@ -280,6 +289,11 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 	UIPageHeaderDraw(renderer, config, header)
 
 	browserBookmarkRowHits = browserBookmarkRowHits[:0]
+	// The home page's key, once per frame: its row says "Home" beside the date.
+	homeKey := ""
+	if home, ok := brwHomeAddress(brwHomeChoice(config)); ok {
+		homeKey = browserBookmarkKey(home)
+	}
 	y := panelY + headerH
 	for i := browserBookmarkPanel.scroll; i < len(marks) && i < browserBookmarkPanel.scroll+int(maxRows); i++ {
 		mark := marks[i]
@@ -294,6 +308,9 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 		meta := ""
 		if stamp, err := time.Parse(time.RFC3339, mark.Added); err == nil {
 			meta = stamp.Local().Format("Jan 2, 2006")
+		}
+		if homeKey != "" && browserBookmarkKey(mark.URL) == homeKey {
+			meta = strings.TrimSuffix("Home · "+meta, " · ")
 		}
 		budget := rect.W - 24
 		if meta != "" {

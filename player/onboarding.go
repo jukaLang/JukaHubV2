@@ -41,6 +41,15 @@ var onboardingSteps = []onboardingStep{
 		kind:  "timezone",
 	},
 	{
+		// On a TrimUI the first start has already switched this on
+		// (autostart_firstrun.go); the step says so and offers the way back.
+		// Elsewhere it is off, and the button turns it on.
+		title: "Start with your device",
+		body:  "JukaHub can open by itself every time the device starts.",
+		hint:  "Settings > General > Start JukaHub at login changes it later.",
+		kind:  "autostart",
+	},
+	{
 		title: "Choose a theme",
 		body:  "Preview a complete palette now. You can change it again any time in Settings > Appearance.",
 		hint:  "Press F or select the button to cycle through the built-in themes.",
@@ -119,8 +128,9 @@ func onboardingDone(config *Config) bool {
 
 // onboardingStartIfNeeded opens the tour on the first launch after an install
 // (or after a config reset). A completed tour is remembered in jukauser.json.
+// A screenshot session skips it without marking it done (screenshotmode.go).
 func onboardingStartIfNeeded(config *Config) {
-	if onboardingDone(config) {
+	if onboardingDone(config) || shotModeOn() {
 		return
 	}
 	onboardingStart()
@@ -278,6 +288,14 @@ func onboardingActionLabel(kind string) string {
 			return "Choose time zone"
 		}
 		return "Open date & time settings"
+	case "autostart":
+		if !autostartSupported() {
+			return ""
+		}
+		if autoStartEnabled(appConfig) {
+			return "Turn it off"
+		}
+		return "Turn it on"
 	case "theme":
 		return "Preview next theme"
 	case "roms":
@@ -297,6 +315,8 @@ func onboardingStatus(config *Config, kind string) string {
 		return "Network: " + NetworkStatus()
 	case "timezone":
 		return "Current time zone: " + dateTimeZoneLabel(time.Now())
+	case "autostart":
+		return onboardingAutoStartStatus(config)
 	case "theme":
 		if name, ok := customString(config.Variables.Custom, "theme_preset"); ok && name != "" {
 			return "Current theme: " + name
@@ -420,6 +440,8 @@ func onboardingPerformAction(config *Config) {
 			return
 		}
 		onboarding.info = info
+	case "autostart":
+		onboarding.info = onboardingAutoStartToggle(config)
 	case "theme":
 		names := ListThemePresets()
 		if len(names) == 0 {

@@ -735,6 +735,13 @@ func toolInstallFailureReason(err error) string {
 	if !IsOnline() {
 		return "No internet — connect WiFi, then press A"
 	}
+	// A clock reset to 1970 or a firmware with no certificate store fails
+	// every download with an x509 line no one can act on; both have a fix the
+	// user can make, so they get their own words.
+	switch kind := classifyYouTubeFailure(err.Error()); kind {
+	case ytFailClock, ytFailTrust:
+		return youTubeFailureMessage(kind, "", ytUpdateNone)
+	}
 	var reasoned *toolInstallError
 	if errors.As(err, &reasoned) {
 		return firstLine(reasoned.reason)
@@ -775,6 +782,12 @@ func stripURLs(s string) string {
 // itself into TMPDIR before it can run; on the TrimUI /tmp is a small tmpfs, so
 // that unpack failed and looked like a broken download. Point TMPDIR at a
 // writable folder next to the tools (on the SD card) instead.
+//
+// The tool's own folder also goes first on PATH. yt-dlp looks for two other
+// programs there: ffmpeg (for fixups and merges) and, since 2025.11, the
+// JavaScript runtime it needs for full YouTube support (Deno by default). On
+// the handheld the tools folder is on no PATH at all, so a runtime or ffmpeg
+// sitting right next to yt-dlp was invisible to it.
 func helperToolEnv(toolPath string, extra ...string) []string {
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
@@ -785,11 +798,46 @@ func helperToolEnv(toolPath string, extra ...string) []string {
 		}
 		env = append(env, kv)
 	}
+	if toolPath != "" && filepath.IsAbs(toolPath) {
+		env = prependPathEnv(env, filepath.Dir(toolPath))
+	}
 	env = append(env, extra...)
 	if tmp := helperTempDir(toolPath); tmp != "" {
 		env = append(env, "TMPDIR="+tmp)
 	}
 	return env
+}
+
+// prependPathEnv puts dir first on the PATH entry of env (matched without
+// regard to case: Windows spells it "Path"), adding one when env has none.
+func prependPathEnv(env []string, dir string) []string {
+	if dir == "" {
+		return env
+	}
+	sep := string(os.PathListSeparator)
+	out := make([]string, 0, len(env)+1)
+	found := false
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || found || !strings.EqualFold(key, "PATH") {
+			out = append(out, kv)
+			continue
+		}
+		found = true
+		first, _, _ := strings.Cut(value, sep)
+		switch {
+		case value == "":
+			out = append(out, key+"="+dir)
+		case first == dir:
+			out = append(out, kv)
+		default:
+			out = append(out, key+"="+dir+sep+value)
+		}
+	}
+	if !found {
+		out = append(out, "PATH="+dir)
+	}
+	return out
 }
 
 // minHelperUnpackBytes is roughly what a PyInstaller one-file helper needs
@@ -921,10 +969,59 @@ func tempDirWritable(dir string) error {
 // helperUnpackFailure reports whether a helper died before it could run. These
 // errors come from the PyInstaller bootloader unpacking itself, so they say
 // nothing about the site, the query or the network.
+//
+// "Failed to extract" alone is not enough to say so: it is also how yt-dlp
+// words its best-known "YouTube changed something" error ("ERROR: [youtube]
+// <id>: Failed to extract any player response; … yt-dlp -U"), which an update
+// fixes. Matched loosely, that error read "yt-dlp could not unpack itself —
+// free space on the SD card" and started no update. The bootloader never
+// prefixes its lines the way the extractor does ("ERROR: [site]", "WARNING:
+// [site]"), so a line that does is the extractor talking.
+//
+// A binary this system cannot load (helperCannotRun) is not an unpack failure
+// either, even though the bootloader words one case of it with the same
+// "[PYI-" prefix.
 func helperUnpackFailure(stderr string) bool {
-	return strings.Contains(stderr, "Failed to extract") ||
-		strings.Contains(stderr, "decompression resulted in return code") ||
-		strings.Contains(stderr, "[PYI-")
+	if helperCannotRun(stderr) {
+		return false
+	}
+	if strings.Contains(stderr, "[PYI-") || strings.Contains(stderr, "decompression resulted in return code") {
+		return true
+	}
+	for _, line := range strings.Split(stderr, "\n") {
+		if !strings.Contains(line, "Failed to extract") {
+			continue
+		}
+		if strings.Contains(line, "ERROR: [") || strings.Contains(line, "WARNING: [") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// helperCannotRunMarkers are the loader's own words for a binary this system
+// cannot run at all.
+var helperCannotRunMarkers = []string{
+	"GLIBC_", "not found (required by", "Failed to load Python shared library",
+	"error while loading shared libraries", "exec format error", "Exec format error",
+	"cannot execute binary file",
+}
+
+// helperCannotRun reports a helper binary this system cannot load: a C library
+// older than the one the release was built against, a missing shared library,
+// or a build for another CPU. The one-file build's bootloader words the first
+// case as "[PYI-…] Failed to load Python shared library '…libpython3.x.so':
+// … version `GLIBC_2.38' not found", which starts like an unpack failure but
+// is the opposite situation: neither a retry nor free space can help, and an
+// update that produced it has to be rolled back (classifyYtDlpProbe).
+func helperCannotRun(text string) bool {
+	for _, marker := range helperCannotRunMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ytDlpFailureReason turns a failed yt-dlp run into one short line for the UI.

@@ -27,13 +27,15 @@ Open it from **Apps → Browser** or **Start → Browser**.
   12 MB of text and images), so returning to a page is instant instead of
   re-downloading it. **Reload** always asks the server again and replaces that
   cached copy.
-* Open on DuckDuckGo Lite (`lite.duckduckgo.com/lite/`), which is
-  server-rendered and so readable in the text browser, with the search box the
-  first thing on screen. The first open in a run always goes there: a page the
-  last run left behind in the saved config is not something this session chose.
-  **Home** returns to the start page at any time, **Search** (Y) opens a
-  DuckDuckGo Lite query, and **Issues** jumps to `jukaLang/JukaHubV2`'s issue
-  list.
+* Open on the home page: out of the box DuckDuckGo Lite
+  (`lite.duckduckgo.com/lite/`), which is server-rendered and so readable in the
+  text browser, with the search box the first thing on screen — or the engine
+  and the page chosen in **Settings → Browser** (see
+  [Search engine and home page](#search-engine-and-home-page)). The first open
+  in a run always goes there: a page the last run left behind in the saved
+  config is not something this session chose. **Home** returns to the home page
+  at any time, **Search** (Y) searches with the chosen engine, and **Issues**
+  jumps to `jukaLang/JukaHubV2`'s issue list.
 * Draw the first part of a big page instead of refusing it: a page larger than
   8 MiB is cut at the cap and the top of the page says so.
 * Read GitHub issues, release notes, README files, documentation sites and
@@ -122,6 +124,91 @@ landing page is cached under it so Back is a map lookup rather than a second
 walk through the redirect. The move happens during the render pass, never while
 the address bar is being edited, and a correction for a page the reader has
 already navigated past is dropped.
+
+## Search engine and home page
+
+**Settings → Browser** chooses where a search goes and which page **Home**
+opens. A change applies at once, everywhere a search starts: the address bar
+(words with a space, or a word with no dot, are a search), the **Search** chip
+and **Y** (whose keyboard names the engine: "Search Google"), the **Search the
+web** row in Home search (its second line names the engine too), and the
+**Search the web** button on the "Site not found" card.
+
+| Engine | Results address | Without JavaScript |
+|--------|-----------------|--------------------|
+| DuckDuckGo (the default) | `lite.duckduckgo.com/lite/?q=` | Results: the Lite page is made for simple browsers |
+| Google | `www.google.com/search?q=` | No results — see [Google needs JavaScript](#google-needs-javascript) |
+| Bing | `www.bing.com/search?q=` | Results; its links are unwrapped (see [Result links](#result-links)) |
+| Startpage | `www.startpage.com/sp/search?query=` | Results: Google's, served as plain HTML |
+| Brave Search | `search.brave.com/search?q=` | Results |
+| Yahoo | `search.yahoo.com/search?p=` | Results |
+| Mojeek | `www.mojeek.com/search?q=` | Results |
+| Wikipedia | `en.m.wikipedia.org/w/index.php?search=` | Opens the article when a title matches |
+| Custom | the address you type | Whatever that site serves without scripts |
+
+Search engines change what they send a script-less browser without notice, and
+DuckDuckGo and Mojeek answer a flood of searches from one address with a
+puzzle; the column is what each sent when this was written, not a promise.
+
+The **Search engine** row steps through the engines with Left/Right; **A** opens
+the list with a line about each, plus **Custom address…**, which opens the
+keyboard on a results address of your own: write `%s` where the words go
+(`https://searx.example/search?q=%s`), or end it with `=` and the words are
+added at the end; the strip above the keys offers `https://`, `www.` and `.com`.
+A custom engine is named after its site's host. The address counts when you
+press **Save**, and only if it is usable — `http` or `https`, a real host (one
+with a dot, an IP address or `localhost`) and a place for the words. Anything
+else is refused with a note and the engine stays what it was; **B** leaves it
+untouched too. A custom address that stops being usable (edited by hand in
+`jukauser.json`) sends searches to DuckDuckGo, and the row says so.
+
+**Home page** follows the search engine out of the box: its start page, so
+choosing Google makes **Home** open google.com. The row's list also offers the
+page the Browser has open, every saved page, and **Type an address…**. **Y** in
+**Saved pages** (the **Marks** chip) makes the highlighted page home without
+leaving the Browser, and that page's row says **Home** beside its date. A typed
+address opens holding the current home page, selected, so the first key typed
+replaces it; it applies on **Save** only, and **B** keeps the old one. Without a
+scheme it gains `https://`; text that is not a web address (a single word,
+another scheme) is refused with a note rather than turned into a search. The
+last address typed stays in the list and among the row's Left/Right stops after
+another choice, so going back to it needs no retyping. Leaving the field empty
+and pressing **Save** returns Home to the engine's start page.
+
+The values live in `jukauser.json` as `browserSearchEngine`,
+`browserSearchCustom`, `browserHomePage` and `browserHomeTyped` (see
+[Configuration](CONFIGURATION.md)).
+
+### Google needs JavaScript
+
+Since January 2025 Google shows search results only to browsers that run
+JavaScript, and by mid-2026 no script-less client gets results from it, whatever
+User-Agent it sends: the results page answers with a redirect to "turn on
+JavaScript" (or, when it suspects a robot, a puzzle that needs scripts too).
+This reader runs no real JavaScript, so a Google search would end on that page.
+It shows a card instead:
+
+* On the handheld, **Search on Startpage** runs the same words on Startpage,
+  which serves Google's results as plain HTML; **Always use Startpage** does that
+  and makes Startpage the engine; **Change engine** opens Settings → Browser.
+* On a PC, **Open in web browser** hands the search to the desktop's own
+  browser, which runs Google's scripts; **Search on Startpage** and **Change
+  engine** follow it.
+
+Google stays on the list because its home page loads (so it works as a home
+page) and because the PC path makes it useful there. The card is never cached:
+**Reload** asks Google again, should that ever change.
+
+### Result links
+
+Search engines wrap their result links in click-tracking hops. Before a link is
+loaded, the reader reads the destination out of DuckDuckGo's `/l/?uddg=`,
+Google's `/url?q=`, Bing's `/ck/a?u=a1…` (the address in base64) and Yahoo's
+`…/RU=…/RK=…`, and opens the page itself: one request sooner, and the engine is
+not told which result was chosen. Bing's hop is a script page this reader could
+not follow at all, so on Bing this is what makes a result open. A destination
+that is not an `http` or `https` page with a host (a `javascript:` link) is not
+followed, and a wrapped YouTube link still plays in Media.
 
 ## Ads and trackers
 
@@ -342,9 +429,11 @@ second copy of it.
 
 **Marks** opens that list and carries its size in the label (`Marks 3`), so a
 page saved from a link is visible on the chip that opens it. In the panel the
-D-pad chooses, **A** opens, **X** removes one entry, and **B** closes it. Saved
-pages are the user's own data, so nothing ages them out or prunes them behind
-your back; the only thing that removes one is a press.
+D-pad chooses, **A** opens, **X** removes one entry, **Y** makes it the home
+page (its row then says **Home** beside the date; see
+[Search engine and home page](#search-engine-and-home-page)), and **B** closes
+it. Saved pages are the user's own data, so nothing ages them out or prunes them
+behind your back; the only thing that removes one is a press.
 
 The list lives in `data/browser-bookmarks.json`, written through the durable
 path (temp file, fsync, rename) with the previous version kept as `.bak`, so a
@@ -437,6 +526,8 @@ behind the keyboard — which is exactly what it used to do.
 | `f` · **Find** chip | Find on the page; `n` / `p` step to the next / previous match, **Esc** clears the search |
 | **Save** chip | Save the page on screen (**Saved** when it is already on the list) |
 | **Marks** chip | Open the saved-page list, with its count in the label |
+| Y in the saved-page list | Make the highlighted page the home page |
+| **Home** chip | Open the home page (Settings → Browser chooses it, and the search engine) |
 | X / `x` / `l` | Open the link picker |
 | B / Esc | Go back to the previous screen (link mode: back to scroll mode) |
 | Back / Forward / Reload | Return to a page — and to the paragraph you were on — instead of the top (session-only; a fresh link or typed address starts at the top) |
@@ -473,7 +564,8 @@ family is kept only as far as "the app's one face", so a monospace `font-family`
 does not make a code block monospaced.
 GitHub issue pages and
 release pages work; a site that renders its content only with JavaScript will
-show little or no text. The companion app is the way to send a link from a
+show little or no text. Google's search results are one such page (see
+[Google needs JavaScript](#google-needs-javascript)). The companion app is the way to send a link from a
 phone if typing on the handheld is awkward.
 
 If a page fails, the error is shown in the content area. Check Wi-Fi first, then

@@ -423,6 +423,10 @@ func feEnterFocused(config *Config) {
 		pdfvOpenDocument(config, entry.Path)
 		return
 	}
+	if isMusicPlaylistFile(entry.Name) {
+		openMusicPlaylistFile(config, entry.Path)
+		return
+	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
 		recordPlayed(config, entry.Path)
 		// Audio files open the audio player instead of the video decoder: it

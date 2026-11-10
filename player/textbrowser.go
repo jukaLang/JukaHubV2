@@ -1065,6 +1065,12 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		showToast("Enter a valid http:// or https:// address.", ToastError())
 		return
 	}
+	// A search result's click-tracking link opens the page it names
+	// (browser_engines.go): Bing's is a script the reader cannot run, and the
+	// others cost a request that only reports the click.
+	if target, ok := brwSearchClickTarget(address); ok {
+		address = target
+	}
 	// A YouTube video is not a page the reader can show: it plays in Media
 	// (browser_youtube.go). The link handlers send their links there first;
 	// this catches a typed or pasted address, a bookmark and the history.
@@ -1227,9 +1233,12 @@ func showBrowserPage(config *Config, variable string, page browserPage) {
 
 // textBrowserSearchURL turns an address-bar entry that is clearly not a host
 // into a web search, so the browser doubles as a search box the way a handheld
-// user expects from a single field.
+// user expects from a single field. The engine is the one chosen in Settings →
+// Browser (browser_engines.go). Every caller runs on the main thread, which
+// owns the config it reads: the fetch goroutine's own normalize only ever sees
+// an address that already has a scheme.
 func textBrowserSearchURL(query string) string {
-	return browserSearchURL + url.QueryEscape(query)
+	return brwSearchURLFor(appConfig, query)
 }
 
 // textBrowserLooksLikeAddress reports whether the entry names a host rather
@@ -1306,6 +1315,12 @@ func browseWebPageResult(rawURL string) browserPage {
 		var fetchErr *brwFetchError
 		if errors.As(err, &fetchErr) {
 			f := fetchErr.fail
+			if f.Kind == brwFailWall {
+				// The wall can be met on a meta-refresh hop; the card's buttons
+				// run the search that was asked for, not that hop.
+				f.URL = address
+				return browserPage{Text: f.text(), Fail: &f}
+			}
 			return browserPage{Text: err.Error(), Fail: &f}
 		}
 		f := brwNewFailure(brwFailOther, address, brwFriendlyNetError(err))
@@ -1319,6 +1334,12 @@ func browseWebPageResult(rawURL string) browserPage {
 		if _, ok := brwYouTubeVideo(landed); ok {
 			return browserPage{Text: "Opening the video in Media…", FinalURL: landed}
 		}
+	}
+	// Google answers a browser without JavaScript with a wall, not results:
+	// the card that replaces it offers the same search where it works
+	// (browser_engines.go).
+	if f, ok := brwSearchWall(address, pageURL, body); ok {
+		return browserPage{Text: f.text(), Fail: &f}
 	}
 	// Ad and tracker scripts are removed before the script pass: there is no
 	// reason to spend the page's 5-second script budget running them, and some
@@ -1465,6 +1486,11 @@ func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address stri
 		return fail(brwFailHTTP, "HTTP "+resp.Status+" — the redirect named no usable target")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Google's robot check answers 429 at the end of a redirect: the wall
+		// card, not "HTTP 429" (browser_engines.go).
+		if wall, ok := brwSearchWall(address, resp.Request.URL, nil); ok {
+			return textBrowserDocument{}, &brwFetchError{fail: wall}
+		}
 		return fail(brwFailHTTP, "HTTP "+resp.Status)
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))

@@ -637,31 +637,25 @@ var companionKeyboardKeys = map[string]sdl.Keycode{
 
 // companionButtonFor resolves the SDL button a phone label should press.
 //
-// The phone labels describe what the user means ("A" = confirm), while the
-// event queue is later normalized by applyButtonSwap for firmware that reports
-// the physical face buttons inverted. Pre-flipping here cancels that second
-// swap, so a phone A stays A on every device instead of becoming Back.
-func companionButtonFor(name string, swapped bool) (uint8, bool) {
+// The phone labels describe what the user means ("A" = confirm, "X" = the X
+// action), while the event queue is later normalized by applyButtonSwap for
+// firmware that reports the physical face buttons mirrored (A/B and X/Y on the
+// TrimUI handhelds). Pre-flipping through the same padFaceButton cancels that
+// second swap, so a phone A stays A and a phone X stays X on every device
+// instead of becoming Back or Y.
+func companionButtonFor(name string, config *Config) (uint8, bool) {
 	btn, ok := companionControllerButtons[name]
 	if !ok {
 		return 0, false
 	}
-	if swapped {
-		switch btn {
-		case sdl.CONTROLLER_BUTTON_A:
-			btn = sdl.CONTROLLER_BUTTON_B
-		case sdl.CONTROLLER_BUTTON_B:
-			btn = sdl.CONTROLLER_BUTTON_A
-		}
-	}
-	return btn, true
+	return padFaceButton(config, btn), true
 }
 
 // pushCompanionKey replays a phone button as a real SDL event. Going through
 // the event queue means the phone gets exactly the same handling as the
 // handheld's own pad, overlays and scene handlers included.
 func pushCompanionKey(name string, config *Config) {
-	if btn, ok := companionButtonFor(name, abButtonsSwapped(config)); ok {
+	if btn, ok := companionButtonFor(name, config); ok {
 		// Pushed events carry their press state: the phone's A used to arrive
 		// with State 0, which reads as a release.
 		_ = pushControllerButton(sdl.CONTROLLERBUTTONDOWN, 0, btn, sdl.PRESSED)

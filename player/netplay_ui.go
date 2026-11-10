@@ -150,6 +150,10 @@ func handleNetplayKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !netplayPanel.open {
 		return false
 	}
+	// Space on the Join row opens the address keyboard: its space must not
+	// be typed into the address (vkopenertext.go).
+	wasOpen := virtualKeyboardActive
+	defer vkDropOpenerText(e, wasOpen)
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		netplayMove(-1)

@@ -207,6 +207,16 @@ func musicSaveQueueAsPlaylist(name string) (musicPlaylist, error) {
 		return musicPlaylist{}, errMusicPlaylistEmpty
 	}
 
+	if err := musicPlaylistPut(clean); err != nil {
+		return musicPlaylist{}, err
+	}
+	return clean, nil
+}
+
+// musicPlaylistPut stores one sanitised playlist, replacing a list of the same
+// name and moving the row's cursor to it. The import path (musicm3u8.go) shares
+// it so both entry points enforce the same limit and de-duplication.
+func musicPlaylistPut(clean musicPlaylist) error {
 	musicPlaylistState.mu.Lock()
 	defer musicPlaylistState.mu.Unlock()
 	musicPlaylistsLoadLocked()
@@ -221,13 +231,13 @@ func musicSaveQueueAsPlaylist(name string) (musicPlaylist, error) {
 	}
 	if !replaced {
 		if len(musicPlaylistState.items) >= musicPlaylistLimit {
-			return musicPlaylist{}, errMusicPlaylistNoSpace
+			return errMusicPlaylistNoSpace
 		}
 		musicPlaylistState.items = append(musicPlaylistState.items, clean)
 		musicPlaylistSelectionIndex = len(musicPlaylistState.items) - 1
 	}
 	musicPlaylistsSaveLocked()
-	return clean, nil
+	return nil
 }
 
 // musicSelectedPlaylist is the name the settings row is pointing at.
@@ -275,7 +285,10 @@ func musicPlaySavedPlaylist(config *Config, name string) bool {
 	}
 	tracks := make([]musicTrack, 0, len(pl.Tracks))
 	for _, tr := range pl.Tracks {
-		tracks = append(tracks, musicTrack{Path: tr.Path, Name: tr.Name, Duration: tr.Duration})
+		// Same fields in the same order, so a conversion copies them all (the
+		// JSON tags do not count) and a field added to one type but not the
+		// other stops this compiling instead of being dropped silently.
+		tracks = append(tracks, musicTrack(tr))
 	}
 	if !musicPlayPlaylist(tracks, 0) {
 		return false

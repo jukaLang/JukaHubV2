@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 // DBInstalledFile records one managed file owned by a package.
@@ -69,6 +68,9 @@ func patchDBPath() (string, error) {
 	return filepath.Join(dir, "db", "db.json"), nil
 }
 
+// patchDBCorruptKeep bounds the damaged database copies kept for inspection.
+const patchDBCorruptKeep = 5
+
 // loadPatchDB loads the local database (best effort; a missing file starts
 // empty, a corrupt file is quarantined).
 func loadPatchDB() {
@@ -82,7 +84,10 @@ func loadPatchDB() {
 	}
 	var db PatchDB
 	if json.Unmarshal(data, &db) != nil {
-		_ = os.Rename(path, path+".corrupt-"+fmt.Sprintf("%d", time.Now().Unix()))
+		// Keep the damaged copy for inspection, but bounded like the config's
+		// (FIX-17): a database that fails every start must not fill the card.
+		_ = os.Rename(path, corruptAsidePath(path))
+		pruneCorruptCopies(path, patchDBCorruptKeep)
 		return
 	}
 	if db.Schema == 1 {

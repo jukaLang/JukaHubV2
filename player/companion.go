@@ -110,7 +110,13 @@ func companionNewPIN() (string, error) {
 	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
+// companionURL is the pairing link the QR encodes. In screenshot mode it names
+// the stand-in address and PIN, so a published QR pairs with nothing
+// (screenshotmode.go).
 func companionURL(ip string, port int, pin string) string {
+	if shotModeOn() {
+		ip, pin = shotLANAddress, shotPairPIN
+	}
 	return fmt.Sprintf("http://%s/?p=%s", net.JoinHostPort(ip, strconv.Itoa(port)), pin)
 }
 

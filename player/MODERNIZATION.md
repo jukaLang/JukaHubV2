@@ -48,7 +48,18 @@ SDL-hosted present fallback. Every workstream had an independent review whose
 findings were fixed, but none of it is compiled yet —
 [BUILD-1](#build-1--first-compile-of-the-november-pass-p0-s-win) covers it.
 Finished tasks were deleted, partly done ones rewritten, and the follow-ups
-added: 251 tasks in the file.
+added. A same-day feature sweep of the shipped subsystems (music, recordings,
+the browser, per-game launch options, Wine apps) added seven more — MED-15, MED-17, MED-18, APP-8, APP-9, GAME-13
+(two have since shipped).
+
+Evening pass (**2026-11-09**, unbuilt): the TrimUI's X and Y fixed where every
+press enters the app (with a **Swap X and Y** switch), a volume button and card
+in the status corner with a tg5040 codec backend, the charging bolt, a
+selectable Home pairing QR, the PS Remote Play keyboard and four other panel
+keyboards, and YouTube resolution reworked (android client first, yt-dlp that
+updates itself with a rollback, failures that name their cause). Follow-ups:
+MED-19 to MED-25, SND-5, SND-6, INP-15 and INP-16; PWR-4 and INP-13 were
+rewritten for what shipped: 264 tasks in the file.
 
 ## How to use this file (agents read this first)
 
@@ -180,7 +191,7 @@ read-only sweeps) and a benchmark of what the best systems shipped in 2026:
 | Game switcher / resume | RetroArch auto-save/load only; no switcher; no resume-at-boot | SHELL-1, LIB-10 |
 | Sleep | No power-button sleep; "screen off" is a black frame with the backlight on | PWR-1, PWR-2 |
 | Overlay over games | Declared impossible; muOS proves injection works | SHELL-2 |
-| Recovery | Boot guard counts failed starts (safe mode after three; one rollback, only with crash evidence), crash reports offered at the next start, a recovery card with previous version / last good settings / reset (Nov 2026, unbuilt) | REL-10, REL-5, FIX-18 |
+| Recovery | Boot guard counts failed starts (safe mode after three; one rollback, only with crash evidence), crash reports offered at the next start, a recovery card with previous version / last good settings / reset (Nov 2026, unbuilt) | REL-10, REL-5 |
 | Updates | Signed manifests optional per release; dev key only; no channels | REL-3, REL-4, REL-5 |
 | Packages | Store installs streamed, hash-checked when the catalogue has a hash, staged and swapped with one rollback; the catalogue has no hashes or signature yet; core updates notify by default (Nov 2026, unbuilt) | SEC-16, SEC-21, LIB-17 |
 | Keyboard | Hints follow the device and Accessibility remaps (Nov 2026); a few screens and sentences left | INP-1, INP-2, INP-13, INP-14 |
@@ -297,11 +308,6 @@ its docs are removed.
 **Done when.** Playback speed changes audio and video (ffmpeg `atempo` +
 frame pacing), or the control is removed.
 
-### FIX-12 — Fullscreen means two things on Windows (P2, S)
-**Where.** `core.go:5187/5968/6161` use exclusive `SetFullscreen(1)`; F11 and
-Quick Settings use `FULLSCREEN_DESKTOP`; `main.go:403` ignores the saved choice.
-**Done when.** One helper, desktop fullscreen everywhere, the saved choice wins.
-
 ### FIX-13 — Critical battery saves RetroArch only (P1, M) [HW]
 **Why.** The 3% guard (`lowbattery.go` `protectLowBattery`, ~:412-478) acts only
 while RetroArch runs and saves through its UDP command; PPSSPP, DraStic, hakuX,
@@ -323,46 +329,6 @@ here yet" table (l. 429-435), `docs/ACCESSIBILITY.md` (slow repeat scope, missin
 Power mode and Vibration rows), `docs/UX_REVIEW.md` H9 (Exit pill), `mise.toml`
 (Go 1.26 vs `go.mod` 1.27.3).
 **Done when.** Each matches the code.
-
-### FIX-17 — Kept damaged configs accumulate (P3, S)
-**Why.** A recovered config now leaves its unparsable predecessor as
-`jukaconfig.json.corrupt-<time>` (the November config-recovery fix); every
-damaged launch adds one, and a card is not a place to keep them forever.
-**Where.** `config_health.go` (`preserveCorruptConfig`).
-**Done when.** At most five `.corrupt-*` files are kept (oldest removed on the
-next recovery) and a unit test covers the bound.
-
-### FIX-18 — One launcher script (P1, S)
-**Why.** `package-sdcard.sh` ships `player/trimui/Apps/JukaHub/launch.sh`, which
-has drifted from `player/launch.sh` (no `errors.txt` rotation, no time zone, no
-crash lines, no `.restart-now`), while CI and `release.sh` ship
-`player/launch.sh`; on an SD-card install "Restart in safe mode" falls back to
-"close and reopen".
-**Where.** `player/launch.sh`, `player/trimui/Apps/JukaHub/launch.sh`,
-`player/package-sdcard.sh`, `release.sh`, `.github/workflows/`.
-**Done when.** One file is the source (the other generated or deleted), every
-packager copies it, and a test asserts the restart tokens the app reads
-(`jukahub-restart-protocol`, `jukahub-restart-now`) are in the shipped script.
-
-### FIX-19 — The config import's safety backup can be pruned at once (P2, S)
-**Why.** `cfgdocui.go` (~:564) writes the pre-import safety backup and then
-`bkupPrune` keeps the three newest by file time; after a cold boot without an
-RTC the new archive looks oldest and is deleted.
-**Where.** `player/cfgdocui.go`; `bkupPruneKeep` in `player/bkup.go`.
-**Done when.** The import path prunes with `bkupPruneKeep(…, path)` for the
-archive it just wrote, and a test like `TestSafetyBackupPruneKeepsTheNewOne`
-covers it.
-
-### FIX-20 — Backup & restore reloads the design file twice (P3, S)
-**Why.** `bkupRestoreFiles` (`bkup.go` ~:1162) calls
-`globalConfigWatcher.IgnoreWrite(rf.Dest)` with an absolute path while the
-watcher keys `"jukaconfig.json"`, so the poller reloads (and toasts) after
-`bkupCommit` already installed the config; the recovery card's weekly-backup
-restore goes through it too.
-**Where.** `player/bkup.go` (`bkupRestoreFiles`).
-**Done when.** It calls `IgnoreWrite("jukaconfig.json", rf.Dest)` after the write
-(as `recoveryInstallDesign` does) and a restore shows at most one "Config
-reloaded".
 
 ---
 
@@ -654,6 +620,17 @@ release on a Smart Pro and a Brick (boot, sleep/wake, a game per launcher
 family, video, Wi-Fi join, update + rollback, keyboard plugged in, controller
 on Windows) and the release workflow links it.
 
+### TEST-11 — The backlog checks itself (P2, S) [WIN]
+**Why.** Two review passes drifted the file's own bookkeeping: the header said
+234 tasks while 238 existed, and the recovery row cited a task that had already
+been deleted. A reader cannot see a dangling ID or a stale count.
+**Where.** `player/MODERNIZATION.md`; a dependency-free script under `tools/`
+(Python or Node, like TEST-7).
+**Done when.** The script fails on a duplicate task ID, an ID named in prose
+that matches no heading, an anchor that matches no heading, and a header count
+that differs from the number of task headings; CI runs it beside the docs link
+check (TEST-7).
+
 ---
 
 ## UX and design (UX)
@@ -829,6 +806,18 @@ controls; pairing PIN shown in-app.
 **Done when.** A daily pick with a simple goal (play 15 minutes of X) appears on
 Home's Continue card when nothing is in progress; completion earns a trophy.
 
+### GAME-13 — Per-game launch options (P2, M)
+**Why.** `game-launchers.json` sets flags per system, not per game, so one
+troublesome ROM cannot get its own core, flags or environment; the library
+docs list this as the next piece of the same data.
+**Where.** `game_library.go` (`game-launchers.json`), `emulators.go`,
+`gameoptions.go` / `game_options_ui.go`, keyed by content hash like LIB-4.
+**Done when.** The game options sheet edits extra arguments, a core override and
+environment variables for one game; the launch path uses them for RetroArch and
+standalone emulators; the override survives a rename and goes with the game's
+metadata when it is removed; a test pins argument order and that an empty
+override changes nothing.
+
 ---
 
 ## Xbox on the Smart Pro (XBX)
@@ -855,16 +844,16 @@ not guess build steps.
 TG4040. Detection (and the hakuX offer) may miss real units.
 **Done when.** The code read from a real Brick Pro is in `device.go`.
 
+### XBX-5 — Per-game hakuX settings in the options sheet (P3, S)
+**Done when.** Once the package's per-title settings layout is known, the game
+options sheet opens it for Xbox games.
+
 ### XBX-6 — hakuX housekeeping (P3, S)
 **Where.** `hakux.go`, `hakuxpage.go`.
 **Done when.** Rollback (renames + deleting the kept copy) runs off the event
 thread like the install; files an older release shipped but a newer one dropped
 move into the kept copy instead of lingering in `Data/`; on equal version
 numbers the asset without a pre-release suffix wins (`0.1.3` over `0.1.3-rc1`).
-
-### XBX-5 — Per-game hakuX settings in the options sheet (P3, S)
-**Done when.** Once the package's per-title settings layout is known, the game
-options sheet opens it for Xbox games.
 
 ---
 
@@ -1021,6 +1010,147 @@ now/next in the channel list.
 **Done when.** DLNA/UPnP servers are discovered (SSDP) and browsable as a Media
 source; a Kodi remote (parking lot) uses JSON-RPC.
 
+### MED-15 — A music library you can browse (P2, M)
+**Why.** The player walks one folder at a time (`musicLoadPlaylist`), so a card
+with 40 GB of music has no artist, album or search view; `docs/MUSIC_PLAYER.md`
+lists the index as the first roadmap phase.
+**Where.** `musicplayer.go` (playlist helpers), `musiclibrary.go` (queue and
+favourites today), `musicuifeatures.go`; a cached index beside the other data
+files.
+**Done when.** A scan of the music root caches path, size, mtime, title, artist,
+album and duration; Audio browses by folder, artist, album and all tracks, with
+search and natural sort; a rescan picks up added or removed files without
+reading every tag again; the cache is bounded like `cachebudget.go` and never
+lives in `jukaconfig.json`.
+**Verify.** 2,000 tracks on a card: first open and a one-file rescan each under
+a second.
+
+### MED-17 — Listening history and continue listening (P3, S)
+**Why.** Playtime exists for games, but music keeps no history: no recently
+played, no top artists, no "continue this album", which the player's roadmap
+lists as phase 5.
+**Where.** `musicplayer.go`, `musiclibrary.go` (the favourites store as the
+pattern), `playtime.go` for the bounded-log shape.
+**Done when.** Plays append to a bounded local log (path, title, artist, start
+and seconds played, 400 days like LIB-13); Audio shows Recently played, Top
+artists and Continue listening; LIB-13's export includes the log and a
+Settings row clears it.
+
+### MED-18 — Trim, rename and delete a recording (P2, M)
+**Why.** The Recordings screen only lists and plays captures;
+`docs/RECORDINGS.md` says trimming, renaming and deleting are a PC job, which is
+exactly the moment the user is away from one.
+**Where.** `recordings.go` (`scanRecordings`, `loadRecordings`), the scene that
+draws them (`core.go` callers), the video player for the trim preview.
+**Done when.** A recording can be renamed and deleted after a two-press
+confirmation (moved to the APP-4 trash once it lands), and trimmed to in/out
+points with ffmpeg stream copy where the codec allows it (re-encode otherwise),
+keeping the original until the trimmed file plays; the list shows duration and
+size.
+**Verify.** Trim a 2-minute clip on Windows and on a Smart Pro; the result
+plays and the original is intact until the trim is confirmed.
+
+### MED-19 — A JavaScript runtime for yt-dlp (P1, M) [HW]
+**Why.** Since late 2025 yt-dlp needs an external JavaScript runtime (Deno by
+default) for full YouTube support. Without one it is down to the android
+client's 360p single-file format 18, which YouTube may stop serving at any time
+— late-October 2026 reports already disagree on whether it plays without a
+token.
+**Where.** `ytdlp_update.go` (the download, SHA-256 check and swap to copy),
+`patch_engine.go` (`helperToolEnv` already puts the tools folder first on
+PATH), `streaming.go` (`streamAttempts`).
+**Done when.** JukaHub installs a pinned, checksum-verified Deno (≥ 2.3) next
+to yt-dlp on Windows and — if the TrimUI's glibc and 1 GB of RAM allow it
+(about 100 MB unpacked) — on the handheld; yt-dlp is pointed at it
+(`--js-runtimes`), the stream attempts prefer yt-dlp's default clients while a
+runtime is present, and the Patch screen shows its version. Anything above
+360p also needs MED-20.
+**Verify.** On a Smart Pro a video resolves through the default clients with
+the runtime, and still plays through format 18 without it.
+
+### MED-20 — Two-stream and HLS playback (P1, L) [HW]
+**Why.** The player opens one URL that carries audio and video together, which
+caps YouTube at 360p (format 18) and fails outright the day YouTube drops it.
+The download fallback (`core.go` `playWithTempFile`) stops at five minutes, so
+a long video on slow Wi-Fi cannot play that way either.
+**Where.** `videoplayer.go` (`ffmpegDecoderArgs`, `startFFmpegAudio`),
+`streaming.go` (`resolveStreamSource`, `probePlayableStream`), `ffmpegtls.go`
+(the https relay already rewrites HLS playlists), `core.go`
+(`playWithTempFile`).
+**Done when.** A separate video + audio pair (adaptive formats) plays in sync
+and seeks; an HLS master (`hlsManifestUrl`) plays as one input — yt-dlp's
+visionos client reportedly returns one with muxed H.264 variants (itags 91–96)
+and is the first thing to try when android's format 18 is refused; the
+resolver prefers these over format 18 when they exist; and the download
+fallback's limit follows size and speed instead of a fixed five minutes.
+**Verify.** First by hand on a device: `yt-dlp -g -f 91/92/93 --extractor-args
+youtube:player_client=visionos <id>` and play the URL with ffplay. Then a
+10-minute 720p video plays and seeks on a Smart Pro and on Windows.
+
+### MED-21 — Remember retired YouTube clients across restarts (P3, S)
+**Why.** The native client cooldowns in `youtubenative.go` (10 minutes after a
+bot check, 6 hours after a CDN refusal) live in memory, so every start — often
+on the handheld — proves again that a retired client is refused.
+**Where.** `youtubenative.go` (per-client cooldowns), `jukahub.cache` (where
+`ytdlp_update.go` keeps its check time).
+**Done when.** Cooldowns persist as `ytnative:<client>@<version>` with their
+TTL, and a client version bump clears them by changing the key.
+
+### MED-22 — Send the stream's own user agent to the player (P2, S) [HW]
+**Why.** The native CDN check decides with the player's identity and, on a
+refusal, logs whether the producing client's own user agent would have been
+accepted ("…HTTP 403 to the player's identity but HTTP 2xx to the ANDROID
+app's own user agent…"). If YouTube ties ANDROID URLs to that agent, the player
+has to send it.
+**Where.** `youtubenative.go` (`ytNativeClientUserAgent`), `videoplayer.go`
+(`ffprobeStream`, `ffmpegDecoderArgs`, `startFFmpegAudio`), `ffmpegtls.go` (the
+relay's default headers).
+**Done when.** For googlevideo URLs whose `c=` names a client (native, or
+yt-dlp `-g` with `player_client=android`), the probe, the decoder and the relay
+send that client's user agent; other hosts are unchanged.
+**Verify.** Needed only once the log line above appears on a device.
+
+### MED-23 — "Update yt-dlp now" on the Patch screen (P2, S)
+**Why.** `ytdlp_update.go` updates on its own schedule (Media opened with a copy
+over ten days old, or a failure an update can fix), so a user who hears of a
+YouTube change cannot ask for the new release; and the first-run install
+(`patch_engine.go` `downloadYtDlpCtx`) is not checked against the release's
+SHA-256 list the way updates are.
+**Where.** `ytdlp_update.go` (`requestYtDlpUpdate`), the Patch screen's
+helper-tool rows, `patch_engine.go`, `toolbox.go` (its manifest records a tag
+and a hash).
+**Done when.** The yt-dlp row shows the installed version and an "Update now"
+action that runs the updater without the age gate (still waiting for a playing
+video); the first install verifies SHA2-256SUMS too; the tools manifest records
+the release tag and hash.
+
+### MED-24 — A YouTube client table that updates without a release (P2, M) [NET]
+**Why.** The native path's client names and versions are constants
+(`youtubenative.go` `ytNativeClients`; the web search client takes the live
+version from the homepage but falls back to a constant), and YouTube retires
+versions every few months: the ANDROID_VR refusal of 2026-08-17 broke every
+install until an app change.
+**Where.** `youtubenative.go`, `youtubesearch.go`, the update channel.
+**Done when.** A small JSON (client name, version, user agent, client ID,
+order), fetched at most daily and checked (signature or a pinned hash list), is
+cached and used ahead of the built-in table; a bad or unverifiable file is
+ignored with a log line.
+
+### MED-25 — YouTube on a stock Smart Pro (P1, S) [HW]
+**Why.** The evening pass of 2026-11-09 reworked how Media resolves YouTube
+(android client first with a CDN check, yt-dlp auto-update with rollback,
+failure messages that name the cause) from web reports alone; none of it has
+run on a device.
+**Where.** `youtubenative.go`, `streaming.go`, `ytdlp_update.go`,
+`ytfailure.go`; log lines tagged `youtube`, `stream` and `tools`.
+**Done when.** With the tools folder's yt-dlp deleted, Media installs it and a
+search result streams within a few seconds (not "Downloading…"); an old yt-dlp
+(or one with its mtime set three weeks back) is updated on the next Media visit
+and Patch shows the new version; a failing search names its cause and says no
+API key is needed; a browser link without text gets its title on the Continue
+card; on Windows an update swaps a busy `yt-dlp.exe`. Record whether android's
+format 18 still plays — if it does not, MED-19 and MED-20 become P0.
+
 ---
 
 ## System and connectivity (SYS)
@@ -1120,6 +1250,33 @@ the LED analyser fed from the mix.
 ### SND-4 — A haptic tap on the chime's last bell (P3, S)
 **Done when.** When vibration is on, the startup chime's final bell fires a soft
 pulse through `playHaptic`.
+
+### SND-5 — The tg5040 mixer, checked on a device (P1, S) [HW]
+**Why.** Volume on the Smart Pro and the Brick now drives the codec's "digital
+volume" (an attenuation: 0 is loudest, 63 quietest), mutes through "DAC
+Volume" and keeps `/mnt/UDISK/system.json` "vol" in step (`volume_trimui.go`).
+The control names, the curve (raw ≈ −43·log10(pct/100)) and the interplay with
+the firmware's keymon come from MinUI and NextUI reports, not from a device.
+**Where.** `volume_trimui.go` (`trimuiAttenuationFor`; the probe logs the
+controls it found once, tag `volume`), `systemcontrol.go`, `volumectl.go`,
+`alarmvol.go`.
+**Done when.** On both devices 100% is the loudest and 0% is silent, the steps
+feel even, un-mute restores the level, the hardware keys carry on from a level
+set in JukaHub (or the drift is written down), and the alarm's ramp leaves
+`system.json` alone.
+
+### SND-6 — Follow the firmware's own volume changes (P2, M) [HW]
+**Why.** The stock keymon owns the hardware keys and may re-apply its own level
+— for example when headphones are plugged in, with a separate "hpvol" in
+`system.json` — over a level JukaHub set. And a USB DAC present at boot becomes
+ALSA card 0 (NextUI issue #865), so the codec's controls are not where `amixer`
+looks.
+**Where.** `volume_trimui.go` (probe and poll), `audiooutput.go` (the output
+re-probe already sees headphones and Bluetooth), `volumectl.go`.
+**Done when.** The volume card follows what keymon did after a headphone plug
+or unplug (reading back, never fighting it), the probe finds the codec's card
+by name instead of assuming card 0, and a USB or Bluetooth output gets the
+generic mixer path or an honest "volume is set on the device" note.
 
 ---
 
@@ -1452,7 +1609,9 @@ opens the keyboard is also typed into it: X on Live TV (`tvchannels.go` →
 start the query with "x" or "/". The browser drops that one event
 (`browserDropKeyText`) and ignores the opener's repeats
 (`browserTextOpenerRepeat`); Home, Notes and Alarm use per-screen `skipText`
-fields.
+fields. A shared helper exists since 2026-11-09 — `vkDropOpenerText`
+(`vkopenertext.go`) — and the Audio panel, Podcasts, PS Remote Play, LAN play
+and Downloads use it; the screens named above do not yet.
 **Where.** `browser.go` (`browserDropKeyText`, `browserTextOpener`), `core.go`
 (`runInputModal`), `tvchannels.go`, `media_hub_input.go`, `globalsearch.go`,
 `notes.go`, `alarm.go`, `main.go` (`handleTextInputEvent` → `vkInsertText`).
@@ -1475,6 +1634,30 @@ settings sheet's Enter, the browser's X/L link panel.
 **Done when.** A central rule in the key dispatch (repeats reach a scene only for
 arrows, PgUp/PgDn, Home/End, Backspace/Delete in text fields, volume and zoom
 keys) or per-handler checks, and a held key acts once on every screen.
+
+### INP-15 — The firmware button swap for the built-in pad only (P3, S) [HW]
+**Why.** `applyButtonSwap` (`core.go`) flips A/B and, since 2026-11-09, X/Y for
+every pad on a handheld, so an external Xbox-layout pad on a TrimUI (Local play
+opens extra pads, `hotseat.go`) comes out mirrored on both pairs.
+**Where.** `core.go` (`applyButtonSwap`, `padFaceButton`), the polling helpers
+that mirror it (`inmapPhysicallyHeld`, `jlandPadHeld`, `vkLogicalHeld`), and
+the synthetic presses (`padRepeatWhich`, `inmapSynthWhich`, the phone remote's
+pushes, which use `Which` 0 — also the first real pad's instance).
+**Done when.** The swaps apply to the firmware pad ("TRIMUI Player1",
+045e:028e) and to synthetic presses only, the polling helpers match per pad,
+and an external pad on a Smart Pro reports its printed letters.
+
+### INP-16 — Undo the old X/Y workarounds once (P3, S)
+**Why.** Until 2026-11-09 a TrimUI's X and Y arrived swapped; a user who fixed
+that with Accessibility (the Button layout or an X↔Y remap) or a control
+profile now has them swapped again. The CHANGELOG says to set them back, which
+few will read.
+**Where.** `extras.go` (`migrateHandheldButtonMapping` and its marker key are
+the pattern), `a11y.go` (`a11y_swap_xy`, the per-button keymap), the control
+profiles (`inmap*.go`).
+**Done when.** On a handheld, the first start after the update offers (not
+forces) to clear an X/Y swap or an X↔Y remap it finds, with a marker so it
+asks once.
 
 ---
 
@@ -1590,9 +1773,10 @@ UDP, PPSSPP's save-on-exit, DraStic's SIGTERM handling, hakuX/AndroidRT/ports:
 grace period, then sleeps (PWR-1) rather than powering off.
 
 ### PWR-4 — Charging and battery history (P1, M)
-**Why.** The status bar never shows charging (`statusbar_status.go`); there is
-no drain history or time-left estimate; battery health is a diagnostics line.
-**Done when.** The gauge shows a bolt while charging and "Full"; Settings →
+**Why.** Since 2026-11-09 the gauge shows a bolt while a charger is connected
+(`statusbar_status.go`, the charger input in `widgets.go`), but there is no
+drain history or time-left estimate, and battery health is a diagnostics line.
+**Done when.** The gauge also marks "Full"; Settings →
 Battery shows a 48-hour graph (sampled every 5 minutes into a bounded ring on
 disk), time left at the current drain, health and cycle count.
 
@@ -1656,8 +1840,9 @@ saves, media) and "Erase everything JukaHub created"; both make a backup first
 (`bkup.go`) and ask twice.
 
 ### REL-7 — JukaHub as the default shell (P1, M) [HW]
-**Why.** The autostart hook (`autostart.go`, off by default) waits up to 30 s
-for MainUI and then kills it; a crash hands back to MainUI; the desktop
+**Why.** The autostart hook (`autostart.go`; on by itself from a TrimUI's first
+start since 2026-11-09, `autostart_firstrun.go`) waits up to 30 s for MainUI and
+then kills it (it skips the launch when a JukaHub already runs); a crash hands back to MainUI; the desktop
 `.cmd`/`.desktop` do not set the working directory although `main.go:83` reads
 `jukaconfig.json` from it.
 **Done when.** "Start JukaHub at boot" launches before MainUI, a crash relaunches
@@ -2086,6 +2271,29 @@ every action goes through the existing pairing and queue.
 **Done when.** Notes sync between paired devices through `ssync` and render
 Markdown (headings, lists, checkboxes) in the reader view.
 
+### APP-8 — Forms that POST (P2, M)
+**Why.** The browser fills forms but sends every submission as a GET
+(`browser.go` near the form submit path, documented in `docs/BROWSER.md`), so a
+login or search form that requires POST fails even when cookies work.
+**Where.** `browser.go` (form fill and submit), `webpage.go` (`webForm`, field
+values), `browsercookies.go`.
+**Done when.** A form with `method=post` is sent as
+`application/x-www-form-urlencoded` (and `multipart/form-data` when it has a
+file field), the response replaces the page, cookies set by the response are
+kept, and redirects follow the GET rules; a local test server asserts the
+method, body and cookie round-trip.
+
+### APP-9 — A profile per Windows app (P3, M) [HW]
+**Why.** Every Wine app shares one prefix and one controller mapping; the docs
+say conflicting DLL overrides need their own `WINEPREFIX` and the Game Profiles
+controller field is informational, so two apps that disagree cannot both work.
+**Where.** `windowsapps.go`, `windowsapps_ui.go`, `gameprofiles.go`,
+`docs/WINDOWS_APPS.md`.
+**Done when.** An app can opt into its own prefix (created on first launch),
+DLL overrides and a controller mapping, stored beside its profile; the setup
+page shows which prefix an app uses; a second app with a conflicting override
+launches with its own.
+
 ---
 
 ## Windows desktop (DESK)
@@ -2111,7 +2319,7 @@ is crisp at 150% and 200%.
 ### DESK-3 — Windows that remember (P2, S) [WIN]
 **Done when.** Size, position, monitor and maximised state persist; a
 borderless-window mode exists; the monitor can be chosen (today always display
-0, `main.go:388`); FIX-12 lands first.
+0, `main.go:388`); the fullscreen cleanup lands first.
 
 ### DESK-4 — An installer and package-manager listings (P2, M) [WIN] [NET]
 **Why.** Only portable zips exist; no VERSIONINFO (`JukaHub.rc` has an icon
@@ -2158,10 +2366,11 @@ notifications appear as Windows toasts (AUMID set by the installer).
 Every **[HW]** task in one list, so a device session can work through them:
 HW-1, PERF-1, PERF-4, PERF-8, PERF-9, PERF-10, GPU-1, GPU-4, UX-5, UX-7, UX-10,
 GAME-2 (verify), GAME-9, XBX-1, XBX-4, AND-1, AND-3, AND-5, AND-6, SYS-1
-(verify), SYS-2, SYS-3, SYS-7, SND-1; from the North star: INP-5, INP-6,
+(verify), SYS-2, SYS-3, SYS-7, SND-1, FIX-13 (with PWR-3), DOC-1; from the North star: INP-5, INP-6,
 SHELL-1 (verify), SHELL-2, PWR-1, PWR-2, PWR-3, PWR-5, PWR-8, REL-7, NET-2,
-NET-5, NET-6, NET-10, LIB-8, LIB-10, LIB-14, I18N-3, TEST-10; from the second
-afternoon pass: FIX-2, NET-3, NET-12, REL-10, REL-12, LIB-17, LIB-18, SEC-21.
+NET-5, NET-6, NET-10, LIB-8, LIB-10, LIB-14, I18N-3, TEST-10, APP-9; from the second
+afternoon pass: FIX-2, NET-3, NET-12, REL-10, REL-12, LIB-17, LIB-18, SEC-21;
+from the evening pass: MED-19, MED-20, MED-22, MED-25, SND-5, SND-6, INP-15.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 
@@ -2177,7 +2386,22 @@ network time sets the clock and stops 15 minutes after its last use) and SFTP's
 card root and "Share whole system…"; the Date &
 time picker and the first-run Wi-Fi and time-zone buttons on the Brick's 960×720
 canvas; on Windows, `.bat` launchers and ROMs whose names contain `&`, spaces and
-parentheses, and the refusal for `%`.
+parentheses, and the refusal for `%`. From the evening pass: on a Smart Pro
+and a Brick the Controller test lights X for the printed X (and **Swap X and
+Y** off brings the old mapping back), the phone remote's X and Y do X and Y,
+the charging bolt appears within a second of plugging in and goes when
+unplugged, the volume button and card work by pad and by USB keyboard (and by
+wheel on Windows), the Home pairing QR's preview opens and puts the backlight
+back, and the PS Remote Play pairing keyboard answers the pad and a USB
+keyboard.
+From the CrossMix report: on a CrossMix card the Emulators page shows PSP and
+NDS as Available with the script their `config.json` names (`ppsspp_*.sh`,
+`drastic.sh`), and a PSP and an NDS game start from the Games library through
+it (CrossMix's `common_launcher.sh` gets an absolute ROM path, where MainUI
+passes `Emus/<system>/../../Roms/...`); LAN play finds `ra64.trimui` and
+RetroArch comes up with its own config; Stick Calibration edits the ini of the
+PPSSPP build that is played; the save manager lists the PSP saves under
+`Emus/PSP/PPSSPP_<version>/`.
 
 ---
 

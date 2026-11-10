@@ -13,7 +13,8 @@ package main
 //  3. suspends the device (or explains why it could not).
 //
 // The guard is deliberately conservative:
-//   - it never acts while charging, or when the charge level is unknown;
+//   - it never acts while the battery is charging (a cable in and the level
+//     not falling, batteryHoldingCharge), or when the level is unknown;
 //   - it only auto-saves/suspends when a game is actually running, so reading a
 //     note at 2% does not put the device to sleep without warning;
 //   - it acts at most once per launch (a failed save must not loop forever on
@@ -403,7 +404,11 @@ func lowBatteryTick(config *Config) {
 		resetLowBatteryWarning()
 		return
 	}
-	charging := getBatteryCharging()
+	// "Charging" here means the battery is not draining (batteryHoldingCharge),
+	// not just that a cable is in: a charger too weak for the load keeps the
+	// cable in while the level falls, and the guard standing down for it let
+	// the device lose power mid-game with no save.
+	charging := batteryHoldingCharge()
 	if charging {
 		resetLowBatteryWarning()
 		return
@@ -412,7 +417,7 @@ func lowBatteryTick(config *Config) {
 	switch batteryGuardActionFor(percent, charging, retroArchRunning(), acted, warned) {
 	case batteryGuardWarn:
 		if markLowBatteryWarned() {
-			showToast(lowBatteryMessage(config, percent), ToastWarn())
+			showToast(lowBatteryMessage(config, percent, getBatteryCharging()), ToastWarn())
 		}
 	case batteryGuardProtect:
 		if beginLowBatteryProtect() {
@@ -427,10 +432,16 @@ func lowBatteryTick(config *Config) {
 
 // lowBatteryMessage explains the warning, including the one thing the user can
 // fix: RetroArch's network command interface, without which no save is possible.
-func lowBatteryMessage(config *Config, percent int) string {
-	msg := "Battery low — plug in now"
+// With a cable already in, "plug in now" would be no help: the charger is not
+// keeping up, and the message says that instead.
+func lowBatteryMessage(config *Config, percent int, cableIn bool) string {
+	advice := "plug in now"
+	if cableIn {
+		advice = "still draining on this charger"
+	}
+	msg := "Battery low — " + advice
 	if percent >= 0 {
-		msg = fmt.Sprintf("Battery %d%% — plug in now", percent)
+		msg = fmt.Sprintf("Battery %d%% — %s", percent, advice)
 	}
 	if cfg, _, ok := retroArchConfig(); ok && !networkCmdEnabled(cfg) {
 		return msg + " (auto-save is off: enable network commands in RetroArch)"

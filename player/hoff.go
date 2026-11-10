@@ -297,7 +297,8 @@ func hoffWebActivity(config *Config, now time.Time) (hoffActivity, bool) {
 	}
 	raw, _ := config.Variables.Custom[textBrowserURLVariable].(string)
 	raw = strings.TrimSpace(raw)
-	if !isHTTPMediaURL(raw) || raw == browserHomeURL {
+	// A search engine's start page is the Browser at rest (browser_engines.go).
+	if !isHTTPMediaURL(raw) || brwIsStartPage(config, raw) {
 		return hoffActivity{}, false
 	}
 	return hoffActivity{Kind: "web", Title: hoffHost(raw), URL: raw, At: now.Unix()}, true
@@ -472,9 +473,10 @@ func hoffPickOffer(offers map[string]hoffOffer, dismissed map[string]bool, lastL
 	return best, found
 }
 
-// hoffPendingOffer is the offer to show now, if any.
+// hoffPendingOffer is the offer to show now, if any. None in screenshot mode:
+// the card names the other device, often after its owner (screenshotmode.go).
 func hoffPendingOffer(now time.Time) (hoffOffer, bool) {
-	if !hoffOffersFlag.Load() || !peerEnabledFlag.Load() {
+	if !hoffOffersFlag.Load() || !peerEnabledFlag.Load() || shotModeOn() {
 		return hoffOffer{}, false
 	}
 	hoffState.mu.Lock()

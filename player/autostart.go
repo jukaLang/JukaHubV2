@@ -2,10 +2,11 @@ package main
 
 // autostart.go implements the "Start JukaHub at login" setting.
 //
-// The setting is off by default and never changes anything on disk until the
-// user turns it on: enabling it writes a launcher into the platform's standard
-// startup location, disabling it removes that launcher again. Only JukaHub's own
-// file is ever written or removed.
+// On a desktop the setting is off by default and never changes anything on
+// disk until the user turns it on; on a TrimUI the first start turns it on once
+// (autostart_firstrun.go). Enabling it writes a launcher into the platform's
+// standard startup location, disabling it removes that launcher again. Only
+// JukaHub's own file is ever written or removed.
 //
 // Two kinds of hook are supported:
 //   - Desktop: a freedesktop .desktop file (or a .cmd on Windows) in the
@@ -93,6 +94,8 @@ func trimuiAutostartScript(appDir string) string {
 		"      n=$((n + 1))\n" +
 		"      sleep 1\n" +
 		"    done\n" +
+		"    # Already started some other way: one JukaHub on the display, never two.\n" +
+		"    pidof JukaHub >/dev/null 2>&1 && exit 0\n" +
 		"  fi\n" +
 		"  /bin/sh \"$APP_DIR/launch.sh\" >>\"$APP_DIR/autostart.log\" 2>&1\n" +
 		") >/dev/null 2>&1 &\n" +
@@ -271,6 +274,12 @@ func autoStartInstalled() bool {
 func reconcileAutoStart(config *Config) {
 	if !autostartSupported() {
 		return
+	}
+	// A TrimUI's first start switches it on (autostart_firstrun.go) and says
+	// so once: in the tour's own step when the tour gets that far, otherwise
+	// in a toast once the tour is out of the way (it can be skipped early).
+	if applyAutoStartFirstRunDefault(config) {
+		autoStartNoticePending = true
 	}
 	want := autoStartEnabled(config)
 	if want == autoStartInstalled() {

@@ -3,27 +3,44 @@
 JukaHub is controller-first: every screen is reachable with the D-pad and the
 four face buttons. Keyboard and mouse are supported on desktop builds.
 
-The top bar always shows the system status — a Wi-Fi meter, the weather chip,
-the clock, a battery gauge, the now-playing title and the notification bell on
-the right, the **Apps** pill and a **back** pill on the left. The bottom of every screen is the hint bar
-for real controller bindings; there is no second clock or battery indicator
-down there.
+The top bar always shows the system status — a volume button, a Wi-Fi meter,
+the weather chip, the clock, a battery gauge, the now-playing title and the
+notification bell on the right, the **Apps** pill and a **back** pill on the
+left. The bottom of every screen is the hint bar for real controller bindings;
+there is no second clock or battery indicator down there.
 
-The **Wi-Fi meter** is the leftmost item of that right-hand cluster and a button
+The **Wi-Fi meter** sits immediately right of the volume button and is a button
 on every screen: four bars that are hollow when there is no link and fill with
 signal strength, plus `! Offline` while the device has no network at all. A
 click or tap opens the Wi-Fi picker (scan, connect, enter a password). From a
 controller it is part of the same focus row as the clock and the forecast: on
 Home **Up** from the Settings card reaches the header, then **Left**/**Right**
-walk the forecast, the meter, the clock, the now-playing chip, the update offer
-and the bell; in any other scene **Up** leaves the content for the top bar and
+walk the volume button, the meter, the forecast, the clock, the now-playing
+chip, the update offer and the bell; in any other scene **Up** leaves the content for the top bar and
 **Left**/**Right** walk it. **A** on the meter opens the picker, exactly like a
 tap. The same picker is also
 **Start → Wi-Fi Networks** and the Wi-Fi row in Quick Settings.
 
+The **volume button**, a speaker, leads the cluster, immediately left of the
+Wi-Fi meter, wherever JukaHub can drive a mixer: the codec on a TrimUI,
+JukaHub's own entry in the Windows volume mixer, PulseAudio or ALSA on a Linux
+PC. Its glyph follows the level, with a cross while muted. **A** on it, or a
+click or tap, opens the **volume card**: the level, a slider and a mute button.
+In the card **Left**/**Down** turn the level down and **Right**/**Up** turn it
+up in 5% steps (hold to repeat), **A** mutes and un-mutes, and **B** or
+**Start** closes it. On a keyboard the arrow keys, **-**/**+** or
+**PgDn**/**PgUp** change the level, **Enter**, **Space** or **M** mutes, and
+**Esc** or **F10** closes. With a mouse, click or drag the slider, click the
+card's speaker to mute, scroll on the card or over the button, and click
+outside to close. The level follows the hardware volume keys, and Quick
+Settings' volume row shows the same value.
+
 The **battery gauge** sits right of the clock: a cell filled to the charge left,
 with the percentage beside it. It is green above 50%, yellow from 50% down to
 20%, and red below that, so a dying battery is obvious from any screen.
+While a charger is connected the gauge turns green with a bolt over the cell;
+on the Smart Pro and the Brick the charger input decides, because the
+battery's own status is not reliable there.
 
 The **media chip** closes that cluster. While something is playing it shows a
 headphone glyph and the name of the audio track, or the video in the embedded
@@ -134,6 +151,18 @@ button first (`X / C`, `L1/R1 / Tab`), and shows only the half you can press:
 **C** on a keyboard, **X** on the pad. A held button reads the same way: Patch's
 **Hold A** is **Hold Enter** on a keyboard.
 
+**Face buttons on a TrimUI.** The Smart Pro and the Brick print a Nintendo
+layout on their face buttons (A right, B bottom, X top, Y left), while their
+firmware reports button positions the Xbox way. JukaHub turns both pairs back
+where every press enters the app, so the button printed X does what every X
+hint says, and the same for A, B and Y; the phone remote, control profiles and
+JukaLand follow the same rule, and the Controller test lights the letter you
+pressed. **Settings → Games & emulators** has the two switches, **Swap A and
+B** and **Swap X and Y**: both are on by default on the handheld and off on
+Windows; turn one off for a pad that already reports that pair the way it is
+printed. If you remapped X and Y in Accessibility to work around the old
+behaviour, set them back.
+
 Hints also follow **Accessibility** (Start → Tools → Accessibility): with the
 Nintendo layout, an A/B or X/Y swap or a per-button remap, every hint names the
 physical button that now does the job — **B Open** instead of **A Open** when A
@@ -229,6 +258,44 @@ had nothing to go back to.
 | Start | Open the Start menu (scenes, games, tools, device) |
 | Back / Select | Back one screen, falling back to Home |
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
+| Both sticks moved at once | Show / hide the virtual cursor (below) |
+
+### Virtual cursor
+
+Move **both analog sticks** out together — just tilt them at the same moment,
+they do not need to be clicked in — and a mouse pointer appears (handy on the
+TrimUI Smart Pro, which has no touch screen): the **left stick**
+moves it (a light tilt is slow, full tilt crosses the screen in about a
+second and a half), the **right stick** scrolls whatever is under it like a
+mouse wheel, and **A** clicks — hold A and move to drag a slider or a shelf.
+B and the other buttons keep their usual jobs. Both sticks again (from the
+centre, together), any D-pad press, or 30 seconds without touching it puts the
+pointer away; it comes back where it was. Moving the pointer and then scrolling
+never counts as the gesture, and neither does a stick that rests off centre. It stays off in JukaLand and browser games (they use both
+sticks), Quick Settings, the wallpaper picker, the stick calibration and the
+controller test. Turn the gesture off in
+**Settings → Controls → Virtual cursor**.
+
+### Stick calibration
+
+**Settings → Controls → Calibrate sticks** measures both sticks in about ten
+seconds: let go of them, roll them slowly round their edges, let go again.
+JukaHub then knows where each stick really rests (a drifting stick no longer
+moves the focus or the pointer on its own), how much it jitters there (its
+dead zone), and how far it reaches (so a stick that falls short still reaches
+full speed). The result is drawn with the live sticks moving through it; A
+saves it, B cancels, and **Reset to default** forgets it. A step that sees a
+thumb on a stick starts over; a doubtful result (a short roll, a stick resting
+far off centre) says why under that stick and puts the focus on **Measure
+again** instead of Save. Each stick's dead zone can also be set by hand
+(**Left / Right stick dead zone**, 5–50 %); the next calibration replaces it.
+
+This tunes JukaHub's own stick handling: stick navigation, the virtual cursor,
+and what counts as the stick moving for the screensaver. Games and emulators
+read the sticks themselves: use the TrimUI firmware's calibration app for the
+hardware range every program sees, and PPSSPP's own calibration (Start menu →
+Tools → Stick Calibration) for PPSSPP. The Controller test (Power tools) draws
+each stick's dead zone ring around its calibrated resting spot.
 
 The TrimUI's **Select** button is the one the app sees as **Back**. Holding
 **Select + Start** together quits the app the way every other launcher on the
@@ -303,10 +370,12 @@ their way, and no panel is covered by a menu drawn beneath it.
 |--------|--------|
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
-| D-pad | Move between tiles, the header chips (Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5) and the footer row |
+| D-pad | Move between tiles, the header chips (volume button, Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5, pairing QR) and the footer row |
 | Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
+| Left (from the Wi-Fi meter) | Move onto the volume button; **A** opens the volume card |
 | Right (from the clock) | Move onto the now-playing chip while something plays, then the update offer while a release is advertised, then the notification bell; **A** opens that player, installs the release, or opens the notification centre |
 | Left (from the bell) | Move onto the update offer while a release is advertised; **A** installs it |
+| Right (from the PS5 pill), Down (from the bell) | Move onto the pairing QR while it is shown; **A** (or a click or tap) shows it full screen at full brightness with the PIN and address under it, and **A** or **B** closes it |
 | L2 / R2 | Previous / next section of the grid |
 
 ## Media
@@ -421,6 +490,8 @@ A text web browser for GitHub issues, release notes and documentation. See
 | B | Leave the browser (in link mode, the first press returns to scroll mode) |
 | `f` · **Find** chip | Find on the page; `n` / `p` step to the next / previous match, **Esc** clears the search |
 | **Save** / **Marks** chips | Save the page on screen / open the saved-page list, whose chip carries its count |
+| Y in **Saved pages** | Make the highlighted page your home page |
+| **Home** chip | Open the home page; Settings → **Browser** chooses it, and the engine **Y** searches with |
 
 Links are outlined as they come into focus, so a link deep in an article can be
 followed without opening the picker. Walking them needs the D-pad to do two
@@ -430,6 +501,8 @@ Up/Down follow the page's rows and pick the nearest column, so a two-column
 layout does not throw the cursor across the screen, while Left/Right stay in
 plain reading order. **Y** (or the **SEARCH** chip beside the address bar) opens
 the keyboard on an empty field: type a phrase to search, or a host to open it.
+The search goes to the engine chosen in Settings → **Browser**, DuckDuckGo
+unless you change it (see [docs/BROWSER.md](BROWSER.md#search-engine-and-home-page)).
 The **Back**, **Forward**, **Reload**, **Links**, **Filter**, **Search**,
 **Home**, **Issues**, **Sites**, **Forget**, **Save**, **Marks** and **Find**
 chips at the bottom are ordinary scene buttons, reachable by pressing Down past

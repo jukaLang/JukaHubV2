@@ -59,9 +59,10 @@ func noteScreensaverChat(sender, text string) {
 }
 
 // screensaverChatNotes returns the newest notes, oldest first, dropping ones
-// that have aged out so yesterday's conversation does not reappear.
+// that have aged out so yesterday's conversation does not reappear. None in
+// screenshot mode: the names and messages are other people's.
 func screensaverChatNotes(now time.Time, limit int) []ssChatNote {
-	if limit <= 0 {
+	if limit <= 0 || shotModeOn() {
 		return nil
 	}
 	ssChatFeed.mu.Lock()
@@ -346,7 +347,7 @@ var axisWakeLatched [8]bool
 // axisWakeFilter registers one stick or trigger event with the idle machinery
 // and reports whether the screen may act on it.
 func axisWakeFilter(axis uint8, value int16) bool {
-	deflected := axisDeflected(value)
+	deflected := axisDeflectedOn(axis, value)
 	if int(axis) >= len(axisWakeLatched) {
 		if deflected {
 			screensaverNotifyInput()

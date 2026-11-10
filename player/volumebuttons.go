@@ -186,6 +186,9 @@ func volumeButtonPress(dir int, down bool) {
 		volumeButtons.hold.active = false
 		volumeButtons.mu.Unlock()
 	}
+	// The OS just changed the level (on the press, and while held): the
+	// header's speaker reads it back now instead of on its next poll.
+	volumeNoteHardwareKey()
 }
 
 // volumeButtonSkip performs the long-press action. It works from any scene,

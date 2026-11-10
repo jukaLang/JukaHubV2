@@ -62,6 +62,9 @@ func ppssppSearchRoots() []string {
 	var roots []string
 	if root := strings.TrimSpace(trimuiSDRootFn()); root != "" {
 		roots = append(roots, root)
+	} else if IsTrimuiDevice() && dirExists("/mnt/SDCARD") {
+		// JukaHub started from outside <SD>/Apps still runs on that card.
+		roots = append(roots, "/mnt/SDCARD")
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		roots = append(roots,
@@ -112,8 +115,15 @@ func openStickCalibrationPanel(config *Config) {
 	qs.open = false
 	toolsPanel.open = false
 	smartHomePanel.open = false
-	path := findPPSSPPConfig(ppssppSearchRoots())
+	roots := ppssppSearchRoots()
+	path := findPPSSPPConfig(roots)
 	if path == "" {
+		if len(ppssppEmuBuilds(roots)) > 0 {
+			// A build that has never run has no ini yet; the first game
+			// writes it.
+			ShowToast("PPSSPP has no settings file yet — play a PSP game once, then try again", ToastKindWarning)
+			return
+		}
 		ShowToast("PPSSPP is not installed — no ppsspp.ini found", ToastKindWarning)
 		return
 	}

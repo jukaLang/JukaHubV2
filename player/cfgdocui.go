@@ -561,9 +561,11 @@ func cfgdocApplyNow(c *Config) {
 	ShowToast("Saving a backup of your settings first…", ToastKindInfo)
 	go func() {
 		cats := map[string]bool{bkupCatSettings: true}
-		_, _, err := bkupCreate(context.Background(), bkupSafetyDir(), bkupFileName("safety", time.Now()), cats, bkupOptions{}, "pre-import", version, nil, nil)
+		path, _, err := bkupCreate(context.Background(), bkupSafetyDir(), bkupFileName("safety", time.Now()), cats, bkupOptions{}, "pre-import", version, nil, nil)
 		if err == nil {
-			bkupPrune(bkupSafetyDir(), "JukaHub-safety-", "", bkupSafetyKeep)
+			// Spare the archive just written: after a cold boot without an RTC
+			// its file time can be the oldest, and the plain prune deleted it.
+			bkupPruneKeep(bkupSafetyDir(), "JukaHub-safety-", "", bkupSafetyKeep, path)
 		}
 		cfgdocData.mu.Lock()
 		cfgdocData.importReady, cfgdocData.importErr = true, err

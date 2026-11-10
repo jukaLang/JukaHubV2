@@ -218,8 +218,22 @@ func screenBrightness() (int, bool) {
 
 // ── Volume ─────────────────────────────────────────────────────────────────
 
-// volumeBackend names the mixer this device exposes, best first.
+// volumeBackend names the mixer this device exposes, best first: the
+// platform's own (JukaHub's session volume on Windows, volume_windows.go), the
+// TrimUI codec (volume_trimui.go), then PulseAudio and plain ALSA. It only
+// looks for binaries, so it is cheap; what the TrimUI codec actually exposes
+// is asked once, on the first read or write, off the render thread.
+//
+// The TrimUI case used to fall into the generic amixer path, which only knows
+// Master and PCM. The tg5040 codec has neither, so every volume write on the
+// Smart Pro and the Brick failed.
 func volumeBackend() string {
+	if b := volumePlatformBackend(); b != "" {
+		return b
+	}
+	if IsTrimuiDevice() && commandExists("amixer") {
+		return "trimui"
+	}
 	if commandExists("pactl") {
 		return "pactl"
 	}
@@ -230,6 +244,8 @@ func volumeBackend() string {
 }
 
 // setSystemVolume applies a 0..100 percentage through the available mixer.
+// It may run a mixer process, so callers on the render thread go through
+// volumeRequestLevel (volumectl.go) instead.
 func setSystemVolume(pct int) error {
 	if pct < 0 {
 		pct = 0
@@ -239,6 +255,10 @@ func setSystemVolume(pct int) error {
 	}
 	level := strconv.Itoa(pct) + "%"
 	switch volumeBackend() {
+	case "winmm":
+		return winmmSetVolume(pct)
+	case "trimui":
+		return trimuiSetVolume(pct)
 	case "pactl":
 		if _, err := systemCommandRunner("pactl", "set-sink-volume", "@DEFAULT_SINK@", level); err == nil {
 			return nil
@@ -254,6 +274,18 @@ func setSystemVolume(pct int) error {
 	default:
 		return errors.New("no audio mixer (pactl/amixer) on this device")
 	}
+}
+
+// setSystemVolumeTransient applies a level that is only borrowed: the alarm's
+// full volume for a ring, and the level it gives back afterwards
+// (alarmvol.go). On the TrimUI it leaves the firmware's saved level
+// (system.json) alone, because a crash or a power cut mid-ring must not leave
+// the handheld coming back at 100%; everywhere else it is setSystemVolume.
+func setSystemVolumeTransient(pct int) error {
+	if volumeBackend() == "trimui" {
+		return trimuiSetVolumeTransient(volumeClamp(pct))
+	}
+	return setSystemVolume(pct)
 }
 
 func runAmixerSet(level string) error {
@@ -297,9 +329,14 @@ func parseFirstPercent(s string) (int, bool) {
 	return 0, false
 }
 
-// systemVolume reads the current mixer level.
+// systemVolume reads the current mixer level. Like setSystemVolume it may run
+// a process, so the header reads it through volumeCurrent's background poll.
 func systemVolume() (int, bool) {
 	switch volumeBackend() {
+	case "winmm":
+		return winmmGetVolume()
+	case "trimui":
+		return trimuiVolume()
 	case "pactl":
 		if out, err := systemCommandRunner("pactl", "get-sink-volume", "@DEFAULT_SINK@"); err == nil {
 			if v, ok := parseFirstPercent(out); ok {
@@ -314,6 +351,12 @@ func systemVolume() (int, bool) {
 	default:
 		return 0, false
 	}
+	return amixerGenericVolume()
+}
+
+// amixerGenericVolume reads the level of the controls a desktop ALSA setup
+// exposes, Master first and PCM second (runAmixerSet's order).
+func amixerGenericVolume() (int, bool) {
 	for _, ctl := range []string{"Master", "PCM"} {
 		if out, err := systemCommandRunner("amixer", "get", ctl); err == nil {
 			if v, ok := parseFirstPercent(out); ok {

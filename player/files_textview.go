@@ -114,10 +114,7 @@ func filesWindowStart(f io.ReaderAt, end, size int64) int64 {
 // filesMaxChunkBytes split at rune boundaries into continuation rows, a final
 // "\r" dropped. A trailing newline does not add an empty last row.
 func filesSplitRows(data []byte, startsMidLine bool) ([]string, []int32) {
-	text := string(data)
-	if strings.HasSuffix(text, "\n") {
-		text = text[:len(text)-1]
-	}
+	text := strings.TrimSuffix(string(data), "\n")
 	var rows []string
 	var nums []int32
 	line := int32(0)

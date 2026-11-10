@@ -304,7 +304,7 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 	// answer a tap here.
 	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 	sceneTitleBackRect, statusClockRect, statusWiFiRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
-	weatherStatusRect, statusMediaRect = sdl.Rect{}, sdl.Rect{}
+	weatherStatusRect, statusMediaRect, statusVolumeRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	tb.startRect = sdl.Rect{}
 	pdfvPollLoaded()
 	doc := pdf.doc

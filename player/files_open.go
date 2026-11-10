@@ -109,6 +109,8 @@ func filesOpenROM(config *Config, entry FileEntry) bool {
 func filesHasDedicatedViewer(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch {
+	case isMusicPlaylistFile(path):
+		return true
 	case isImageExtension(ext), isMediaFile(path), hasMediaExtension(path):
 		return true
 	case ext == ".pdf" || ext == ".epub" || ext == ".zip" || ext == ".sh" || ext == ".html" || ext == ".js":

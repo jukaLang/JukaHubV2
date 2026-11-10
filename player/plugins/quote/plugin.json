@@ -1,8 +1,8 @@
 {
   "name": "quote",
   "title": "Daily quote",
-  "version": "1.0.0",
-  "description": "A short public-domain quote: the same one all day, or a new one on every press.",
+  "version": "1.1.0",
+  "description": "A short public-domain quote: the same one all day (shown once when JukaHub first starts each day), or a new one on every press.",
   "author": "JukaHub",
   "entry": "quote.sh",
   "icon": "text",
@@ -10,5 +10,9 @@
   "actions": [
     {"id": "today", "label": "Quote of the day"},
     {"id": "random", "label": "Another one"}
-  ]
+  ],
+  "onEnable": "today",
+  "quick": ["today", "random"],
+  "onStartup": "today",
+  "startupDaily": true
 }

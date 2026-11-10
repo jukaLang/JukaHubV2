@@ -28,6 +28,14 @@ type PluginInfo struct {
 	// Actions are the buttons the Plugins page offers. A manifest without any
 	// still loads; its actions can be run from a config button as before.
 	Actions []plugAction `json:"actions,omitempty"`
+	// What switching the plugin on changes (plughooks.go). OnEnable is the
+	// action run, and shown, the moment it is switched on; OnStartup runs
+	// when JukaHub starts (once a day with StartupDaily); Quick are the action
+	// ids the Start menu lists under Plugins (the first action when empty).
+	OnEnable     string   `json:"onEnable,omitempty"`
+	OnStartup    string   `json:"onStartup,omitempty"`
+	StartupDaily bool     `json:"startupDaily,omitempty"`
+	Quick        []string `json:"quick,omitempty"`
 }
 
 var (
@@ -112,6 +120,9 @@ func LoadPlugins(config *Config) {
 	plugxInstall(config, extensions, catalog)
 	plugins = loaded
 	plugSetCatalog(catalog)
+	// The first scan of a launch runs the startup actions of the plugins that
+	// are on (a quote of the day, say).
+	plugRunStartupHooks(config)
 }
 
 // GetPlugins returns all loaded plugins.
@@ -125,6 +136,11 @@ func GetPlugins() map[string]*PluginInfo {
 func plugExecute(plugin PluginInfo, action string, vars map[string]interface{}) string {
 	pluginName := plugin.Name
 	pluginRoot := filepath.Join(pluginDir, pluginName)
+	// A stock JukaHub plugin runs its Go version (plugnative.go) where its
+	// script cannot run, or when the script is still the shipped one.
+	if plugPreferNative(plugin, pluginRoot) {
+		return plugRunNative(plugNativeFor(plugin), action, vars, pluginRoot)
+	}
 	entryPath, err := resolveWithinRoot(pluginRoot, plugin.Entry)
 	if err != nil {
 		return fmt.Sprintf("Plugin %q has an unsafe entry path", pluginName)

@@ -24,8 +24,10 @@ func clockHour12(config *Config) bool {
 
 // clockDigits formats a wall-clock time: "15:04" by default, "3:04 PM" when the
 // 12-hour clock is on. The single space before AM/PM keeps the status cluster's
-// width predictable as the hour changes.
+// width predictable as the hour changes. In screenshot mode the present moment
+// reads 9:41 (shotClock).
 func clockDigits(config *Config, t time.Time) string {
+	t = shotClock(t)
 	if clockHour12(config) {
 		return t.Format("3:04 PM")
 	}
@@ -34,6 +36,7 @@ func clockDigits(config *Config, t time.Time) string {
 
 // clockDigitsSeconds is the clock-app and alarm variant that includes seconds.
 func clockDigitsSeconds(config *Config, t time.Time) string {
+	t = shotClock(t)
 	if clockHour12(config) {
 		return t.Format("3:04:05 PM")
 	}
@@ -160,9 +163,10 @@ func formatDateLong(config *Config, t time.Time) string {
 }
 
 // formatDayLong is formatDateLong without the year, for the clock faces that
-// show today under the time: "Monday, 9 November".
+// show today under the time: "Monday, 9 November". In screenshot mode today
+// reads Saturday 14 November (shotClock).
 func formatDayLong(config *Config, t time.Time) string {
-	return t.Format(dateLayoutsFor(dateOrder(config)).Day)
+	return shotClock(t).Format(dateLayoutsFor(dateOrder(config)).Day)
 }
 
 // formatDateTime writes a date and a time in the user's clock: "9 Nov 2026,

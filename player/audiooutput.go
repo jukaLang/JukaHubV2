@@ -50,8 +50,12 @@ func rememberAudioOutput(name string) {
 }
 
 // connectedAudioOutput names the output the chip should advertise while nothing
-// plays, or "" when the speakers are it.
+// plays, or "" when the speakers are it. Screenshot mode names none: a headset
+// is often called after its owner (screenshotmode.go).
 func connectedAudioOutput() string {
+	if shotModeOn() {
+		return ""
+	}
 	audioOutputState.mu.Lock()
 	defer audioOutputState.mu.Unlock()
 	return audioOutputState.name

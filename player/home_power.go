@@ -56,6 +56,7 @@ var homePowerConfirm struct {
 func homePowerOpen() {
 	homeCalendarOpen = false
 	dismissWeatherPopover()
+	dismissVolumePopover()
 	homePowerConfirm.open = true
 	homePowerConfirm.focus = homePowerExit
 	homePowerConfirm.openedAt = sdl.GetTicks64()

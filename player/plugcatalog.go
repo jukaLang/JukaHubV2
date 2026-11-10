@@ -57,6 +57,12 @@ type plugEntry struct {
 	// ExtLines are the card's lines about each of those, and about any entry
 	// that was skipped and why. Built with the scan.
 	ExtLines []string
+	// OnEnable, OnStartup and StartupDaily are the manifest's hooks, Quick
+	// the actions the Start menu offers while the plugin is on (plughooks.go).
+	OnEnable     string
+	OnStartup    string
+	StartupDaily bool
+	Quick        []plugAction
 }
 
 // plugRunNote is the RunNote for e.
@@ -78,7 +84,10 @@ func plugRunNote(e plugEntry) string {
 // (LoadPlugins runs on a press or a scene entry, the page reads it to draw).
 var plugCatalog []plugEntry
 
-func plugSetCatalog(entries []plugEntry) { plugCatalog = entries }
+func plugSetCatalog(entries []plugEntry) {
+	plugCatalog = entries
+	plugCatalogGen++
+}
 
 // plugCatalogEntries returns the last scan.
 func plugCatalogEntries() []plugEntry { return plugCatalog }
@@ -113,6 +122,10 @@ func plugEntryFor(config *Config, info PluginInfo) plugEntry {
 		row.Enabled = on
 	}
 	row.Problem = plugProblem(info)
+	row.OnEnable = plugKnownAction(row.Actions, info.OnEnable)
+	row.OnStartup = plugKnownAction(row.Actions, info.OnStartup)
+	row.StartupDaily = info.StartupDaily
+	row.Quick = plugQuickActions(row.Actions, info.Quick)
 	return row
 }
 
@@ -140,6 +153,10 @@ var plugLookPath = exec.LookPath
 // missing from PATH (Windows has no sh unless Git for Windows or similar is
 // installed). The entry file itself is checked when the action runs.
 func plugProblem(info PluginInfo) string {
+	// A bundled plugin always has its Go version to fall back on.
+	if plugNativeFor(info) != nil {
+		return ""
+	}
 	entry := strings.TrimSpace(info.Entry)
 	if entry == "" {
 		return "plugin.json names no entry script"
@@ -287,7 +304,7 @@ func plugRunTrigger(name, action string, vars map[string]interface{}) {
 		return
 	}
 	title := plugTitle(info.Name, info.Title)
-	if !plugRunAsync(*info, action, title, vars) {
+	if !plugDispatch(appConfig, *info, action, title, vars) {
 		ShowToast(title+" is still running", ToastKindInfo)
 	}
 }

@@ -518,10 +518,11 @@ func setThemeName(c *Config) string {
 	return GetThemePreset(name).Name
 }
 
-// setWallpaperName is the wallpaper's file name, or None for the backdrop.
+// setWallpaperName is the wallpaper's file name, or None for the backdrop (and
+// in screenshot mode, which draws no wallpaper).
 func setWallpaperName(c *Config) string {
 	path := c.Variables.BackgroundImage
-	if appWallpaperIsShippedDefault(path) {
+	if appWallpaperIsShippedDefault(path) || shotModeOn() {
 		return "None"
 	}
 	return filepath.Base(path)
@@ -685,15 +686,13 @@ func setBuildSections() []setSection {
 						setToast("Living background: " + setOnOff(on))
 					},
 				},
-				{
-					ID: "timeTheme", Label: "Theme follows the time of day", Kind: setKindToggle,
-					Detail: setStatic("Dawn, day, evening and night palettes"),
-					Get:    timeOfDayThemeEnabled,
-					Set: func(c *Config, on bool) {
-						setStoreBool(c, "timeOfDayTheme", on)
-						widgetToggleSideEffect(c, "timeOfDayTheme", on)
-					},
-				},
+				// Light & dark by time of day: the switch, the two themes and the
+				// two times they start (themeschedule.go).
+				themeScheduleToggleRow(),
+				themeScheduleThemeRow(true),
+				themeScheduleThemeRow(false),
+				themeScheduleTimeRow(true),
+				themeScheduleTimeRow(false),
 				// The 12-hour clock moved to Date & time (datetime.go).
 				setColourRow("buttonColor", "Button colour", "A tint under every button · A types a colour"),
 				setColourRow("labelColor", "Label colour", "Text on buttons and labels · A types a colour"),
@@ -1040,6 +1039,27 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// The TrimUI firmware mirrors X and Y the same way it mirrors A
+					// and B, so the switch starts on there (xyButtonsSwapped);
+					// elsewhere it is for a pad with Nintendo-style labels.
+					ID: "swapXY", Label: "Swap X and Y", Kind: setKindToggle,
+					Detail: func(*Config) string {
+						if P().IsHandheld() {
+							return "On by default here: the firmware reports X and Y mirrored"
+						}
+						return "For pads that print X and Y the other way round"
+					},
+					Get: xyButtonsSwapped,
+					Set: func(c *Config, on bool) {
+						setStoreBool(c, "swapXYButtons", on)
+						if on {
+							setToast("X and Y swapped")
+						} else {
+							setToast("X and Y are back in their usual places")
+						}
+					},
+				},
+				{
 					ID: "snaps", Label: "Video snaps", Kind: setKindToggle,
 					Detail: func(*Config) string {
 						with, _, known := snapClipCount()
@@ -1233,6 +1253,13 @@ func setBuildSections() []setSection {
 					Set:    setQSWrite(qsActionLowPower),
 				},
 			},
+		},
+		{
+			// The search engine and the home page (browser_engines.go). It sits
+			// beside Privacy & data, whose first rows are the Browser's sign-ins.
+			ID: "browser", Title: "Browser", Glyph: "browser",
+			Subtitle: "Search engine and home page",
+			Rows:     brwSettingsRows(),
 		},
 		{
 			ID: "privacy", Title: "Privacy & data", Glyph: "shield",

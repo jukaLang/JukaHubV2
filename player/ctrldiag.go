@@ -227,9 +227,13 @@ func ctrldiagNorm(v int16) float64 {
 	return float64(v) / 32767.0
 }
 
-// diagDeadzoneNorm is the deadzone the app itself applies to the left stick, so
-// the rings on the sticks mean something rather than being decoration.
-func diagDeadzoneNorm() float64 {
+// diagDeadzoneNorm is the dead zone the app itself applies to an axis, so the
+// rings on the sticks mean something rather than being decoration: a stick's
+// calibrated one (stickcal.go), the fixed threshold for a trigger.
+func diagDeadzoneNorm(axis int) float64 {
+	if axis >= 0 && axis < len(stickAxes) {
+		return stickCalFor(appConfig, axis/2).DZ
+	}
 	return float64(stickDeadzone) / 32767.0
 }
 
@@ -247,14 +251,16 @@ func ctrldiagAxisProblem(axis int, now time.Time) (string, bool) {
 	if now.Sub(a.ChangedAt) < diagRestWindow {
 		return "moving", false
 	}
-	magnitude := ctrldiagNorm(a.Value)
+	// Measured from where the calibration says the axis rests: a calibrated
+	// stick resting off centre is not drifting.
+	magnitude := ctrldiagNorm(a.Value) - stickAxisCentre(appConfig, axis)
 	if magnitude < 0 {
 		magnitude = -magnitude
 	}
 	switch {
 	case magnitude < diagCentred:
 		return "centred", false
-	case magnitude < diagDeadzoneNorm():
+	case magnitude < diagDeadzoneNorm(axis):
 		return fmt.Sprintf("rests at %+.2f — inside the deadzone", ctrldiagNorm(a.Value)), true
 	default:
 		return fmt.Sprintf("rests at %+.2f — past the deadzone", ctrldiagNorm(a.Value)), true
@@ -468,9 +474,12 @@ func drawDiagStick(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y,
 
 	cx, cy := x+size/2, y+size/2
 	radius := size/2 - 6
-	// The deadzone ring is the one the app actually applies, so "inside the
-	// ring" means the menu cursor will not move.
-	strokeCircle(renderer, cx, cy, int32(diagDeadzoneNorm()*float64(radius)), WithAlpha(accentColor, 120))
+	// The dead zone ring is the one the app actually applies, around where the
+	// calibration says the stick rests, so "inside the ring" means the stick
+	// reads as centred.
+	ringX := cx + int32(stickAxisCentre(appConfig, axisX)*float64(radius))
+	ringY := cy + int32(stickAxisCentre(appConfig, axisY)*float64(radius))
+	strokeCircle(renderer, ringX, ringY, int32(diagDeadzoneNorm(axisX)*float64(radius)), WithAlpha(accentColor, 120))
 	strokeCircle(renderer, cx, cy, 2, WithAlpha(ColorTextTertiary(), 120))
 
 	nx := ctrldiagNorm(ctrldiag.axes[axisX].Value)

@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -236,8 +237,11 @@ func psPanelPair(host, pin string, target int) {
 		return
 	}
 	psPanelMu.Lock()
-	if chiakiPanel.busy != "" {
+	if busy := chiakiPanel.busy; busy != "" {
 		psPanelMu.Unlock()
+		// One handshake at a time. The other consoles' rows still say "Pair",
+		// so a PIN typed for one of them used to vanish without a word.
+		ShowToast(strings.TrimSuffix(busy, "…")+" — try this console when it finishes", ToastKindInfo)
 		return
 	}
 	chiakiPanel.busy = "Pairing " + host + "…"
@@ -472,6 +476,9 @@ func chiakiPanelActivate() {
 	case psActionAddHost:
 		psPanelOpenKeyboard(psEditHost)
 	case psActionAccount:
+		// Editing the Account-ID from its own row is not a step of a pairing,
+		// even if an earlier pairing was abandoned at this prompt.
+		psPanelPairAfterAccount = false
 		psPanelOpenKeyboard(psEditAccount)
 	case psActionQuality:
 		chiakiPanel.quality = (chiakiPanel.quality + 1) % len(psQualityPresets)
@@ -492,6 +499,9 @@ func psPanelBeginPair(host string) {
 	if host == "" {
 		return
 	}
+	// A pairing abandoned at its Account-ID prompt (B on the keyboard) must not
+	// carry over into this one.
+	psPanelPairAfterAccount = false
 	console, _ := psPanelConsole(host)
 	chiakiPanel.pairHost = host
 	chiakiPanel.pairTarget = console.Target
@@ -548,15 +558,25 @@ func vkOpenPSRemote() {
 func psPanelOpenKeyboard(edit psPanelEdit) {
 	switch edit {
 	case psEditHost:
-		psPanelEditField = edit
-		vkSeedText(chiakiPanel.host)
+		psPanelOpenKeyboardWith(edit, chiakiPanel.host)
 	case psEditAccount:
-		psPanelEditField = edit
-		vkSeedText(chiakiPanel.account)
+		psPanelOpenKeyboardWith(edit, chiakiPanel.account)
 	case psEditPIN:
-		psPanelEditField = edit
-		vkSeedText("")
+		psPanelOpenKeyboardWith(edit, "")
 	}
+}
+
+// psPanelOpenKeyboardWith opens the keyboard for one field holding seed. A
+// submission the panel cannot use (an address with a space in it, a PIN that is
+// not 8 digits, an Account-ID that is not base64) comes back through here with
+// the typed text still in the field, so a slip is a correction rather than a
+// retype — and it is caught before the handshake spends its timeouts on it.
+func psPanelOpenKeyboardWith(edit psPanelEdit, seed string) {
+	if edit == psEditNone {
+		return
+	}
+	psPanelEditField = edit
+	vkSeedText(seed)
 	vkOpenPSRemote()
 }
 
@@ -570,10 +590,27 @@ func psPanelApplyEdit(text string) {
 		if text == "" {
 			return
 		}
+		if !psPanelValidHost(text) {
+			ShowToast("Type the console's address, like 192.168.1.51", ToastKindWarning)
+			psPanelOpenKeyboardWith(psEditHost, text)
+			return
+		}
 		chiakiPanel.host = text
 		// A typed address is paired straight away; the panel asks for the PIN.
 		psPanelBeginPair(text)
 	case psEditAccount:
+		if text == "" && psPanelPairAfterAccount {
+			// An empty field in the middle of a pairing is a way out, not a
+			// cleared setting: a PS5 refuses the PIN without the Account-ID.
+			psPanelPairAfterAccount = false
+			ShowToast("Pairing stopped — a PS5 needs the Account-ID from Link Device", ToastKindInfo)
+			return
+		}
+		if _, _, err := ps4DecodeAccountID(text); err != nil {
+			ShowToast("Account-ID: "+err.Error(), ToastKindWarning)
+			psPanelOpenKeyboardWith(psEditAccount, text)
+			return
+		}
 		chiakiPanel.account = text
 		psPanelSaveSettings()
 		if psPanelPairAfterAccount {
@@ -581,13 +618,59 @@ func psPanelApplyEdit(text string) {
 			psPanelOpenKeyboard(psEditPIN)
 			return
 		}
-		ShowToast("Account-ID saved", ToastKindSuccess)
-	case psEditPIN:
 		if text == "" {
+			ShowToast("Account-ID cleared", ToastKindInfo)
 			return
 		}
-		psPanelPair(chiakiPanel.pairHost, text, chiakiPanel.pairTarget)
+		ShowToast("Account-ID saved", ToastKindSuccess)
+	case psEditPIN:
+		pin := psPanelNormalizePIN(text)
+		if pin == "" {
+			return
+		}
+		// A PS5 hands the PIN to the native helper unchecked, so a typo used to
+		// surface only after the 25 s handshake timed out.
+		if _, err := ps4ParsePin(pin); err != nil {
+			ShowToast("The PIN is the 8 digits Link Device shows", ToastKindWarning)
+			psPanelOpenKeyboardWith(psEditPIN, text)
+			return
+		}
+		psPanelPair(chiakiPanel.pairHost, pin, chiakiPanel.pairTarget)
 	}
+}
+
+// psPanelNormalizePIN drops the spaces and dashes a person types when copying
+// the PIN the way the console groups it ("1234 5678").
+func psPanelNormalizePIN(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(text))
+}
+
+// psPanelValidHost accepts what a console address can be: an IP address or a
+// plain host name. A space, a slash or a pasted URL is caught here instead of
+// as a pairing failure three handshake timeouts later.
+func psPanelValidHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if strings.HasPrefix(host, ".") || strings.HasPrefix(host, "-") {
+		return false
+	}
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ctrlChiakiPanel(e *sdl.ControllerButtonEvent) bool {
@@ -614,6 +697,10 @@ func handleChiakiKey(e *sdl.KeyboardEvent) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !chiakiPanel.open {
 		return false
 	}
+	// Space on the Add, Account-ID or Pair rows opens the keyboard: its space
+	// must not be typed into the field it opened (vkopenertext.go).
+	wasOpen := virtualKeyboardActive
+	defer vkDropOpenerText(e, wasOpen)
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		chiakiPanelMove(-1)
@@ -625,7 +712,10 @@ func handleChiakiKey(e *sdl.KeyboardEvent) bool {
 		chiakiPanelAdjust(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		chiakiPanelActivate()
-	case sdl.K_DELETE:
+	case sdl.K_y, sdl.K_DELETE:
+		// The footer says "Y Forget", and in the keyboard vocabulary Y is the
+		// letter key: it was Delete only, so the hint named a key that did
+		// nothing.
 		psPanelForget()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		closeChiakiPanel()

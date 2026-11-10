@@ -461,7 +461,13 @@ func formatInstallBytes(n int64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
+	// int64 reaches exabytes, so the table covers every reachable unit; the
+	// clamp keeps a future caller from indexing past it.
+	units := "KMGTPE"
+	if exp >= len(units) {
+		exp = len(units) - 1
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), units[exp])
 }
 
 // formatInstallSpeed renders a transfer rate ("3.2 MB/s").

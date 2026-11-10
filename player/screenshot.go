@@ -28,18 +28,30 @@ func requestScreenshot() {
 }
 
 // capturePendingScreenshot saves the frame drawn this tick. It reports whether
-// a request was handled.
+// a request was handled. It also runs screenshot mode's tick, the capture tour
+// included (screenshotmode.go), since this is where a finished frame is read.
 func capturePendingScreenshot(renderer *sdl.Renderer) bool {
+	shotTick(renderer)
 	if !screenshotRequested || renderer == nil {
 		return false
 	}
 	screenshotRequested = false
+	if shotModeOn() {
+		shotSaveManual(renderer)
+		return true
+	}
 	captureScreenshot(renderer)
 	return true
 }
 
-// captureScreenshot saves the current renderer output to a BMP file.
+// captureScreenshot saves the current renderer output to a BMP file. In
+// screenshot mode it asks for the next finished frame instead, which is saved
+// as a PNG (capturePendingScreenshot).
 func captureScreenshot(renderer *sdl.Renderer) {
+	if shotModeOn() {
+		requestScreenshot()
+		return
+	}
 	now := time.Now()
 	if now.Sub(lastScreenshotTime) < time.Second {
 		return

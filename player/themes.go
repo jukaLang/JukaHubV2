@@ -1112,6 +1112,10 @@ func ensureThemeColors(config *Config) {
 // confirmation toast.
 func ApplyThemePreset(config *Config, presetName string) {
 	applyThemePreset(config, presetName, true)
+	// With light & dark by time of day on, a theme picked by hand becomes the
+	// theme of the part of the day it was picked in, instead of being undone
+	// at the next switch (themeschedule.go).
+	themeScheduleNoteManualPick(config, presetName)
 }
 
 // applyThemePreset writes the preset into the config variables. notify controls

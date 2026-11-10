@@ -33,6 +33,8 @@ const (
 	HomeActionNowPlaying     HomeAction = "now_playing"
 	HomeActionWiFi           HomeAction = "toggle_wifi"
 	HomeActionSearch         HomeAction = "search"
+	HomeActionVolume         HomeAction = "toggle_volume"
+	HomeActionQR             HomeAction = "show_pairing_qr"
 )
 
 // The search pill's place in the design grid (1280x720 canvas units): under
@@ -153,7 +155,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 		Height: height,
 		Motion: true,
 		Focus:  NewHomeFocusController(),
-		Items:  make(map[HomeFocusID]HomeItem, 19),
+		Items:  make(map[HomeFocusID]HomeItem, 21),
 		// The search pill comes after the cards: its grown touch target reaches
 		// a few pixels toward the Continue card, and a tap on the card's own
 		// edge must stay the card's.
@@ -161,9 +163,9 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusSearch, HomeFocusUpdate, HomeFocusWiFi,
-			HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying, HomeFocusBell,
-			HomeFocusExit,
+			HomeFocusSettings, HomeFocusSearch, HomeFocusUpdate, HomeFocusVolume,
+			HomeFocusWiFi, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
+			HomeFocusBell, HomeFocusExit, HomeFocusQR,
 		},
 	}
 	layout.rebuildItems()
@@ -381,6 +383,12 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 1204, Y: 10, W: 46, H: 36})
 	card(HomeFocusUpdate, "Update", "Install the new release", "update", HomeActionUpdate,
 		sdl.Rect{X: 900, Y: 12, W: 26, H: 24})
+	card(HomeFocusVolume, "Volume", "Change the volume", "volume", HomeActionVolume,
+		sdl.Rect{X: 890, Y: 10, W: 34, H: 36})
+	// The pairing code's slot in the header band; drawHeader replaces it with
+	// the tile renderCompanionHeaderQR drew (companionHeaderRect).
+	card(HomeFocusQR, "Pairing code", "Show the QR code full screen", "qr", HomeActionQR,
+		sdl.Rect{X: 1148, Y: 52, W: 100, H: 100})
 }
 
 // homeConfigOverlayables lists the HomeFocusID header chips whose drawn rect
@@ -397,6 +405,8 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 		HomeFocusBell:       false,
 		HomeFocusNowPlaying: false,
 		HomeFocusWiFi:       false,
+		HomeFocusVolume:     false,
+		HomeFocusQR:         false,
 		HomeFocusPS4:        false,
 		HomeFocusPS5:        false,
 		// The search pill is a fixed control under the greeting.
@@ -712,7 +722,16 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 		// 36px Exit pill or a header chip looks right but is smaller than a
 		// fingertip, and a press a few pixels off does nothing. The drawn
 		// geometry never moves — only the invisible target grows.
-		r := growTouchTarget(item.Rect)
+		//
+		// The speaker and the signal meter are already finger-sized
+		// (statusFingerRect), with the gap between them split and the meter
+		// stopped short of the forecast: growing them again reached into the
+		// forecast chip, and since the meter is tested first, a click on the
+		// forecast's left edge opened Wi-Fi.
+		r := item.Rect
+		if id != HomeFocusWiFi && id != HomeFocusVolume {
+			r = growTouchTarget(item.Rect)
+		}
 		if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
 			return h.Focus.Set(id)
 		}
@@ -743,7 +762,8 @@ func (h *HomeLayout) BoundsViolations() []string {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
 		switch id {
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying, HomeFocusWiFi:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying, HomeFocusWiFi,
+			HomeFocusVolume, HomeFocusQR:
 			continue
 		}
 		checked = append(checked, item)
@@ -813,7 +833,8 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			}
 		case HomeFocusSearch:
 			h.drawSearchPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift, data.Subtitle)
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi,
+			HomeFocusVolume, HomeFocusQR:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
 			// (title and icon) over the header -- the now-playing entry sits on
@@ -843,6 +864,7 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
 	weatherStatusRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
+	statusVolumeRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
@@ -876,8 +898,16 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// cluster is laid out to its left.
 	if fonts.Small == nil {
 		// No status bar, so no bell either. Keep it out of the D-pad path so
-		// focus can never land on a control that is not drawn.
+		// focus can never land on a control that is not drawn — nor on the
+		// speaker, the meter or the pairing code, which are not drawn either
+		// and would otherwise keep their placeholder rects (and stay
+		// clickable through the rects the last frame left).
+		companionHeaderRect = sdl.Rect{}
+		statusVolumeRect = sdl.Rect{}
 		h.Focus.SetEnabled(HomeFocusBell, false)
+		h.Focus.SetEnabled(HomeFocusVolume, false)
+		h.Focus.SetEnabled(HomeFocusWiFi, false)
+		h.Focus.SetEnabled(HomeFocusQR, false)
 		return
 	}
 	sep := "   "
@@ -950,6 +980,29 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if qr := h.headerQRRect(bandRight, statusBottom); qr.W > 0 {
 		renderCompanionHeaderQR(renderer, fonts, qr)
 	}
+	// The code is a control: the D-pad reaches it (Right from the PS5
+	// launcher, Down from the bell) and A shows it full screen. It is
+	// focusable only while a code is drawn, and Down from it lands on the card
+	// actually under it.
+	if companionHeaderRect.W > 0 {
+		item := h.Items[HomeFocusQR]
+		item.Rect = companionHeaderRect
+		h.Items[HomeFocusQR] = item
+	} else if h.Focus.Current() == HomeFocusQR {
+		// The code went away under the focus (Wi-Fi dropped, a new PIN is
+		// being made): hand the focus to its neighbour on the band, or the
+		// bell above it. Disabling it first would throw the focus to the
+		// Continue card at the other end of the screen and forget where Home
+		// was.
+		if !h.Focus.Set(HomeFocusPS5) {
+			h.Focus.Set(HomeFocusBell)
+		}
+	}
+	h.Focus.SetEnabled(HomeFocusQR, companionHeaderRect.W > 0)
+	h.Focus.SetQRLink(h.CardUnderTile(companionHeaderRect))
+	if h.Focus.Current() == HomeFocusQR && companionHeaderRect.W > 0 {
+		h.drawHeaderQRRing(renderer, companionHeaderRect)
+	}
 	groupRight := bandRight
 	groupY := bandY
 	if companionHeaderRect.W > 0 {
@@ -1021,6 +1074,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		if isWiFiStatusPart(part) {
 			statusWiFiRect = r
 		}
+		if isVolumeStatusPart(part) {
+			statusVolumeRect = r
+		}
 		if isChipStatusPart(part) {
 			// The now-playing chip is a header button: clicks land on the
 			// measured chip and the D-pad reaches it from the clock. The idle
@@ -1034,13 +1090,11 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
 		x += w + sepW
 	}
-	// The network meter is a tap target as well as a reading, so grow its hit
-	// area to finger size once the cluster is placed, stopping short of the
-	// forecast and the clock so their taps still belong to them.
-	if statusWiFiRect.W > 0 {
-		statusWiFiRect = statusFingerRect(statusWiFiRect, header.H,
-			weatherStatusRect, h.Items[HomeFocusClock].Rect)
-	}
+	// The network meter and the speaker are tap targets as well as readings, so
+	// grow their hit areas to finger size once the cluster is placed: the meter
+	// stops short of the forecast and the clock so their taps still belong to
+	// them, and the gap between the speaker and the meter is split.
+	growStatusButtonRects(header.H, weatherStatusRect, h.Items[HomeFocusClock].Rect)
 	// The meter is a button, not just a reading: the D-pad focuses the same
 	// grown hit area a fingertip taps, and the entry is disabled whenever the
 	// cluster had to drop the network slot for space.
@@ -1050,6 +1104,14 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		h.Items[HomeFocusWiFi] = item
 	}
 	h.Focus.SetEnabled(HomeFocusWiFi, statusWiFiRect.W > 0)
+	// So is the speaker: A opens the volume popover. No mixer, no part, so the
+	// entry is disabled and Left from the meter goes on to the search pill.
+	if statusVolumeRect.W > 0 {
+		item := h.Items[HomeFocusVolume]
+		item.Rect = statusVolumeRect
+		h.Items[HomeFocusVolume] = item
+	}
+	h.Focus.SetEnabled(HomeFocusVolume, statusVolumeRect.W > 0)
 	// The D-pad may only focus the chip while it is on screen; with no update
 	// (or no room) it stays disabled and the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
@@ -1061,12 +1123,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// playing it may still be drawn (naming the headphones), but pressing it
 	// would open nothing, so the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
-	// The text chips (clock, forecast, signal meter, now playing) wear the
-	// header ring here. The bell, the release offer and the Remote Play pills
-	// draw their own ring with their own shape (drawNotifBell, drawUpdatePill,
-	// renderPSPillGroup); a second, square-cornered one on top of theirs was
-	// the double outline a focused bell showed.
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusNowPlaying} {
+	// The text chips (clock, forecast, signal meter, speaker, now playing) wear
+	// the header ring here. The bell, the release offer and the Remote Play
+	// pills draw their own ring with their own shape (drawNotifBell,
+	// drawUpdatePill, renderPSPillGroup); a second, square-cornered one on top
+	// of theirs was the double outline a focused bell showed. The pairing code
+	// wears its own (drawHeaderQRRing).
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusVolume, HomeFocusWiFi, HomeFocusNowPlaying} {
 		if h.Focus.Current() != id {
 			continue
 		}
@@ -1093,7 +1156,8 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	for _, id := range h.Order {
 		switch id {
 		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell,
-			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate:
+			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate,
+			HomeFocusVolume, HomeFocusQR:
 			continue
 		}
 		item, ok := h.Items[id]
@@ -1147,6 +1211,21 @@ func (h *HomeLayout) headerQRRect(bandRight, top int32) sdl.Rect {
 		return sdl.Rect{}
 	}
 	return sdl.Rect{X: bandRight - side, Y: y, W: side, H: side}
+}
+
+// drawHeaderQRRing marks the focused pairing code: the accent ring standing
+// off the white tile like a card's halo, concentric with the tile's corners
+// (renderCompanionHeaderQR rounds them by side/10), so it never covers a
+// module. The gap is 2px rather than a card's 4: the tile sits 6px under the
+// system corner, and a card-sized halo would touch the bell above it.
+func (h *HomeLayout) drawHeaderQRRing(renderer *sdl.Renderer, tile sdl.Rect) {
+	if renderer == nil || tile.W <= 0 || tile.H <= 0 {
+		return
+	}
+	out := homeFocusRingWidth + 2
+	radius := max32(6, min32(tile.W, tile.H)/10) + out
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	strokeRoundedRect(renderer, tile.X-out, tile.Y-out, tile.W+2*out, tile.H+2*out, radius, homeFocusRingWidth, ColorAccent)
 }
 
 // renderHomeBell draws the notification bell in the home header's top-right
@@ -1644,11 +1723,21 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	}
 
 	// The hint sets are fixed arrays: slicing one costs nothing, where building
-	// the list with append allocated on every frame Home was on screen.
-	hints := homeFooterHintsStart[:]
+	// the list with append allocated on every frame Home was on screen. A copy
+	// on the stack lets A's label say what it does on the two header controls
+	// whose action is not "open a screen".
+	set := homeFooterHintsStart
 	if showBack {
-		hints = homeFooterHintsBack[:]
+		set = homeFooterHintsBack
 	}
+	if label := homeFooterActionLabel(h.Focus.Current()); label != "" {
+		for i := range set {
+			if set[i].button == "A" {
+				set[i].label = label
+			}
+		}
+	}
+	hints := set[:]
 
 	// Right-aligned hint groups: a circular glyph badge and its label.
 	itemGap := scaleX(18, h.Width)
@@ -1697,6 +1786,19 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	}
 }
 
+// homeFooterActionLabel is A's label on a focused header control whose press
+// is not "open a screen": the pairing code goes full screen, the speaker opens
+// the volume card. "" keeps the row's own "Open".
+func homeFooterActionLabel(id HomeFocusID) string {
+	switch id {
+	case HomeFocusQR:
+		return "Show QR"
+	case HomeFocusVolume:
+		return "Volume"
+	}
+	return ""
+}
+
 // homeFooterHintsStart is Home's footer: Home is the root scene, so B has
 // nothing to go back to and the footer names Start, the menu that reaches
 // every other screen, and the platform's quit chord — the shortcut beside the
@@ -1725,9 +1827,10 @@ var (
 
 // defaultGreeting is the greeting for the hour. Morning starts at five: a
 // handheld picked up at half past midnight is still in the evening for the
-// person holding it, and "Good morning" at 00:30 read as a broken clock.
+// person holding it, and "Good morning" at 00:30 read as a broken clock. In
+// screenshot mode it follows the 9:41 the clock shows (shotClock).
 func defaultGreeting(now time.Time) string {
-	hour := now.Hour()
+	hour := shotClock(now).Hour()
 	switch {
 	case hour >= 5 && hour < 12:
 		return "Good morning"

@@ -815,6 +815,10 @@ func handlePodcastPanelKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !podPanel.open {
 		return false
 	}
+	// A (or Space on the add-feed row) opens the feed keyboard: its own
+	// character must not start the address (vkopenertext.go).
+	wasOpen := virtualKeyboardActive
+	defer vkDropOpenerText(e, wasOpen)
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		if podcastPanelMove(-1) {

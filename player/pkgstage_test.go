@@ -669,4 +669,9 @@ func TestPkgZipSignature(t *testing.T) {
 	if err := pkgCheckFreeSpace(t.TempDir(), 1<<62); err == nil {
 		t.Error("a download larger than any card was not refused")
 	}
+	// The refusal above words the size, so a size past the unit table used to
+	// panic before the store could say anything.
+	if got := formatInstallBytes(1 << 62); !strings.Contains(got, "EB") {
+		t.Errorf("a huge size must render as exabytes, got %q", got)
+	}
 }

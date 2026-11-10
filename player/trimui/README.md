@@ -69,8 +69,10 @@ If `Apps/JukaHub` does not appear in the menu, power the device off and on again
 
 ### Starting automatically at boot
 
-Open **Settings → Smart Widgets** and turn on **Start JukaHub at login**.
-JukaHub then writes one hook file:
+JukaHub switches **Start JukaHub at login** on by itself the first time it
+starts on a TrimUI where nobody has set it yet; the first-run tour's *Start
+with your device* step says so and can turn it off. Later it lives in
+**Settings → General**. When it is on, JukaHub writes one hook file:
 
 ```
 SDCARD/System/starts/jukahub-autostart.sh
@@ -79,10 +81,12 @@ SDCARD/System/starts/jukahub-autostart.sh
 `runtrimui.sh` runs the scripts in the `System/starts` folder at boot, so
 JukaHub opens as soon as the device starts. That script returns immediately
 (work continues in the background), waits up to 30 seconds for MainUI to appear,
-then runs `launch.sh` — boot is never held up if the app fails to start. Its
+then runs `launch.sh` unless a JukaHub is already running — boot is never held up
+if the app fails to start. Its
 output goes to `Apps/JukaHub/autostart.log`.
 
-To turn it off: switch the same toggle off, or delete
+To turn it off: switch the toggle off (turning it off is final: the first-start
+default is never applied again), or delete
 `System/starts/jukahub-autostart.sh` by hand. No other file in that folder is
 touched. If the SD card cannot be detected (for example when the binary is run
 from a symlink), the toggle refuses and explains why; set `JUKAHUB_SD_ROOT` to

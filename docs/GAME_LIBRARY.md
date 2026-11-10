@@ -95,8 +95,18 @@ Pressing **A** on a game resolves the emulator in this order:
 3. nothing — the panel toasts which console has no emulator instead of starting
    something random.
 
+On the handheld, an `Emus/<system>/` folder's launcher is the script its
+`config.json` names in `"launch"`, which is what the firmware's own menu
+starts: `launch.sh` on the stock OS, the default emulator's own script on
+CrossMix (`ppsspp_1.17.1_gl.sh` for PSP, `drastic.sh` for NDS). After that
+comes the first `"launchlist"` script that exists, then `launch.sh`, then a
+script named `launch`. A declared script must be a `.sh` file inside the
+folder. When the launcher is a declared script rather than `launch.sh` or
+`launch`, the Emulators tile names it, so you can see which emulator a console
+starts.
+
 The launcher is started detached with the ROM path as its first argument,
-which is what stock TrimUI and CrossMix `launch.sh` scripts expect:
+which is what stock TrimUI and CrossMix launcher scripts expect:
 
 ```sh
 sh /mnt/SDCARD/Emus/GBA/launch.sh "/mnt/SDCARD/Roms/GBA/Pokemon Emerald (USA).gba"

@@ -684,6 +684,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	sceneTitleBackRect = sdl.Rect{}
 	statusClockRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
+	statusVolumeRect = sdl.Rect{}
 	weatherStatusRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
 	barH := headerBarHeight()
@@ -866,6 +867,13 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 				W: pw + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
+		if isVolumeStatusPart(p) {
+			// The speaker is the volume button on every screen.
+			statusVolumeRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
 		if isChipStatusPart(p) {
 			// The now-playing chip opens the player it is naming; the idle
 			// output chip is measured the same way so it draws in the same
@@ -877,11 +885,11 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		}
 		startX += pw + gap
 	}
-	// The meter is the Wi-Fi button, so its hit area is grown to a finger-sized
-	// target once the cluster is placed and the neighbours' rects are known.
-	if statusWiFiRect.W > 0 {
-		statusWiFiRect = statusFingerRect(statusWiFiRect, barH, weatherStatusRect, statusClockRect)
-	}
+	// The meter and the speaker are buttons, so their hit areas are grown to
+	// finger-sized targets once the cluster is placed and the neighbours' rects
+	// are known. The two sit side by side, so the gap between them is split at
+	// its middle (statusGapNeighbours) instead of being claimed by both.
+	growStatusButtonRects(barH, weatherStatusRect, statusClockRect)
 	// Focused header chips wear the ring Home's header draws: a rounded 3px
 	// accent outline (glassFocusRingWidth), not a square hairline box.
 	for _, chip := range []struct {
@@ -890,6 +898,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	}{
 		{ChromeClockIndex, statusClockRect},
 		{ChromeWeatherIndex, weatherStatusRect},
+		{ChromeVolumeIndex, statusVolumeRect},
 		{ChromeWiFiIndex, statusWiFiRect},
 		{ChromeMediaIndex, statusMediaRect},
 	} {
@@ -926,9 +935,13 @@ func fitStatusParts(parts []string, width func(string) int32, gap, maxW int32) [
 }
 
 // statusDropIndex picks the least important part to remove when the bar is
-// crowded: the network name first, then the forecast, then the offline badge.
-// The clock and the battery level are what the user glanced at, so they leave
-// last.
+// crowded: the network meter first, then the forecast, then the offline badge,
+// then the volume button. The clock and the battery level are what the user
+// glanced at, so they leave last.
+//
+// The network slot used to be found as "index 0"; the volume button leads the
+// cluster now, so every slot is found by what it is. Left as index 0, the
+// speaker would have been the first thing a crowded bar gave up.
 func statusDropIndex(parts []string) int {
 	// The chip goes before any reading: it is the one part that can be
 	// arbitrarily long — a media title or a headset's name — and the network,
@@ -942,16 +955,29 @@ func statusDropIndex(parts []string) int {
 			return n - 1
 		}
 	}
-	if len(parts) > 2 && !strings.HasPrefix(parts[0], "! Offline") {
-		return 0
+	if len(parts) > 2 {
+		for i, p := range parts {
+			if p == statusWiFiMarker {
+				return i
+			}
+		}
 	}
 	for i, p := range parts {
 		if isWeatherStatusPart(p) {
 			return i
 		}
 	}
-	if len(parts) > 2 && strings.HasPrefix(parts[0], "! Offline") {
-		return 0
+	if len(parts) > 2 {
+		for i, p := range parts {
+			if strings.HasPrefix(p, "! Offline") {
+				return i
+			}
+		}
+		for i, p := range parts {
+			if isVolumeStatusPart(p) {
+				return i
+			}
+		}
 	}
 	if videoMiniVisible() && len(parts) > 1 && isMediaStatusPart(parts[len(parts)-1]) {
 		return len(parts) - 2
@@ -960,13 +986,18 @@ func statusDropIndex(parts []string) int {
 }
 
 // headerStatusParts returns the right-side status cluster in one canonical
-// order shared by the home header and every scene's status bar: network,
-// weather (hi/lo), time (HH:MM), battery, and the chip — the now-playing title
-// while something plays, the connected output's name while nothing does. Both
-// headers draw this exact list, so the right side of the top bar never shifts or
-// reorders between screens.
+// order shared by the home header and every scene's status bar: volume,
+// network, weather (hi/lo), time (HH:MM), battery, and the chip — the
+// now-playing title while something plays, the connected output's name while
+// nothing does. Both headers draw this exact list, so the right side of the top
+// bar never shifts or reorders between screens.
 func headerStatusParts(config *Config) []string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
+	// The volume button leads the cluster, immediately left of the Wi-Fi
+	// meter, wherever there is a mixer for it to drive (volumectl.go).
+	if statusVolumeAvailable() {
+		parts = append(parts, statusVolumePart)
+	}
 	// Offline indicator takes priority over the SSID so the user instantly
 	// knows why network features are failing.
 	// The slot always exists, even when the meter has no bars to fill: an empty

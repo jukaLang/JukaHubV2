@@ -17,23 +17,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 // ppssppConfigRelPaths are the layouts PPSSPP installs use on an SD card. The
-// order is the preference order: a standalone memstick folder first, then the
-// PPSSPP app folder, then a copy unpacked into Apps.
+// newest file wins (newestPPSSPPConfig); on a tie this order decides: a
+// standalone memstick folder first, then the PPSSPP app folder, then a copy
+// unpacked into Apps.
 var ppssppConfigRelPaths = []string{
 	filepath.Join("PSP", "SYSTEM", "ppsspp.ini"),
 	filepath.Join("ppsspp", "PSP", "SYSTEM", "ppsspp.ini"),
 	filepath.Join("Apps", "PPSSPP", "PSP", "SYSTEM", "ppsspp.ini"),
 }
 
-// ppssppConfigCandidates lists every possible config path for the given roots,
-// in preference order and without duplicates. FAT32 is case-insensitive, so the
-// dedupe key is lowercased; the returned paths keep their original spelling.
+// ppssppConfigCandidates lists every fixed-layout config path for the given
+// roots, in tie-break order and without duplicates. FAT32 is case-insensitive,
+// so the dedupe key is lowercased; the returned paths keep their spelling.
 func ppssppConfigCandidates(sdRoots []string) []string {
 	seen := make(map[string]bool, len(sdRoots)*len(ppssppConfigRelPaths))
 	out := make([]string, 0, len(sdRoots)*len(ppssppConfigRelPaths))
@@ -55,17 +57,141 @@ func ppssppConfigCandidates(sdRoots []string) []string {
 	return out
 }
 
-// findPPSSPPConfig returns the first candidate that exists as a file, or "".
-// Directories and symlinks to directories are not configs.
+// ppssppMemstick is the memstick (the PSP folder holding SYSTEM, SAVEDATA and
+// PPSSPP_STATE) of a PPSSPP kept in a TrimUI emulator folder, with the folder
+// that build runs with as HOME.
+type ppssppMemstick struct {
+	Home string
+	Dir  string
+}
+
+// ppssppHomeMemstickRels are where the memstick sits relative to that HOME.
+// CrossMix unpacks each build into Emus/PSP/PPSSPP_<version>/ and its
+// launchers point HOME there, so the desktop-Linux layout (.config/ppsspp/PSP)
+// is inside that folder; a build that runs portable keeps a bare PSP folder.
+var ppssppHomeMemstickRels = []string{
+	filepath.Join(".config", "ppsspp", "PSP"),
+	"PSP",
+}
+
+// ppssppEmuFolderName reports whether an Emus/ folder belongs to the PSP:
+// CrossMix's PSP and PSPMINIS, the stock firmware's PPSSPP.
+func ppssppEmuFolderName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.Contains(lower, "psp") || strings.Contains(lower, "ppsspp")
+}
+
+// ppssppEmuFolders lists the PSP emulator folders on the cards in sdRoots, in
+// directory order.
+func ppssppEmuFolders(sdRoots []string) []string {
+	var out []string
+	for _, root := range sdRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		emus := filepath.Join(root, "Emus")
+		entries, err := os.ReadDir(emus)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && !skipScanEntryName(entry.Name()) && ppssppEmuFolderName(entry.Name()) {
+				out = append(out, filepath.Join(emus, entry.Name()))
+			}
+		}
+	}
+	return out
+}
+
+// ppssppEmuBuilds lists the PPSSPP builds unpacked inside the cards' PSP
+// emulator folders (CrossMix: Emus/PSP/PPSSPP_1.17.1/), newest version first
+// within each folder. A card with any of them has PPSSPP installed, even before
+// the first game has made it write an ini.
+func ppssppEmuBuilds(sdRoots []string) []string {
+	var out []string
+	for _, folder := range ppssppEmuFolders(sdRoots) {
+		entries, err := os.ReadDir(folder)
+		if err != nil {
+			continue
+		}
+		var names []string
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "ppsspp") {
+				names = append(names, entry.Name())
+			}
+		}
+		sort.SliceStable(names, func(i, j int) bool { return compareCoreVersions(names[i], names[j]) > 0 })
+		for _, name := range names {
+			out = append(out, filepath.Join(folder, name))
+		}
+	}
+	return out
+}
+
+// ppssppEmuHomes is every folder a PPSSPP on a TrimUI card can run with as its
+// HOME: each build folder, each PSP emulator folder itself, and the card root —
+// the first CrossMix images pointed HOME at the card, so their ini is
+// <SD>/.config/ppsspp/PSP/SYSTEM/ppsspp.ini. Only a root with an Emus folder is
+// such a card, so a desktop's search roots add nothing here.
+func ppssppEmuHomes(sdRoots []string) []string {
+	homes := ppssppEmuBuilds(sdRoots)
+	homes = append(homes, ppssppEmuFolders(sdRoots)...)
+	for _, root := range sdRoots {
+		if root = strings.TrimSpace(root); root != "" && dirExists(filepath.Join(root, "Emus")) {
+			homes = append(homes, root)
+		}
+	}
+	return homes
+}
+
+// ppssppEmuMemsticks lists every memstick a PPSSPP on the cards may use, home
+// by home in ppssppEmuHomes order.
+func ppssppEmuMemsticks(sdRoots []string) []ppssppMemstick {
+	var out []ppssppMemstick
+	for _, home := range ppssppEmuHomes(sdRoots) {
+		for _, rel := range ppssppHomeMemstickRels {
+			out = append(out, ppssppMemstick{Home: home, Dir: filepath.Join(home, rel)})
+		}
+	}
+	return out
+}
+
+// ppssppMemstickIni is the ini inside a memstick.
+func ppssppMemstickIni(memstick string) string {
+	return filepath.Join(memstick, "SYSTEM", "ppsspp.ini")
+}
+
+// findPPSSPPConfig returns the newest ini among the fixed layouts and the
+// memsticks of the PPSSPPs kept in emulator folders, or "". Directories and
+// symlinks to directories are not configs.
 func findPPSSPPConfig(sdRoots []string) string {
-	for _, path := range ppssppConfigCandidates(sdRoots) {
+	candidates := ppssppConfigCandidates(sdRoots)
+	for _, memstick := range ppssppEmuMemsticks(sdRoots) {
+		candidates = append(candidates, ppssppMemstickIni(memstick.Dir))
+	}
+	return newestPPSSPPConfig(candidates)
+}
+
+// newestPPSSPPConfig picks the ini of the PPSSPP that is actually played when
+// a card holds several (CrossMix keeps two or three builds side by side, and
+// another layout's file can linger from an older setup): PPSSPP writes its ini
+// when it exits and CrossMix's launchers edit it just before a start, so the
+// newest file is the live one — the file the stick fix has to land in. A tie
+// keeps the earlier candidate: the fixed layouts, then the newer version.
+func newestPPSSPPConfig(candidates []string) string {
+	best := ""
+	var bestTime time.Time
+	for _, path := range candidates {
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
 			continue
 		}
-		return path
+		if best == "" || info.ModTime().After(bestTime) {
+			best, bestTime = path, info.ModTime()
+		}
 	}
-	return ""
+	return best
 }
 
 // iniSectionKey splits an INI line into its section name, key and value.
@@ -140,15 +266,10 @@ func setPPSSPPINIValue(lines []string, key, value string) []string {
 	return out
 }
 
-// writePPSSPPDeadzone stores the calibrated value in [ControlMapping].
-//
-// The original is copied to path+".bak" once — a second calibration must not
-// clobber the factory file the user may want back — and the rewrite keeps the
-// file's line endings and permissions.
 // hasPPSSPPInstall reports whether any of these roots holds a PPSSPP ini, which
 // is what decides if the calibration entry is offered. The answer is cached for
 // a few seconds because the Start menu asks on every frame it renders, and a
-// stat of six paths on an SD card is not a per-frame cost worth paying.
+// scan of the card's PSP folders is not a per-frame cost worth paying.
 func hasPPSSPPInstall(roots []string) bool { return cachedPPSSPPConfig(roots) != "" }
 
 var ppssppInstallCache struct {

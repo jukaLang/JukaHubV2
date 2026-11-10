@@ -1,7 +1,7 @@
 {
   "name": "tips",
   "title": "Handheld tips",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A tip for getting more out of JukaHub, and battery advice based on the charge you have left.",
   "author": "JukaHub",
   "entry": "tips.sh",
@@ -10,5 +10,7 @@
   "actions": [
     {"id": "tip", "label": "Give me a tip"},
     {"id": "battery", "label": "Battery advice"}
-  ]
+  ],
+  "onEnable": "tip",
+  "quick": ["tip"]
 }

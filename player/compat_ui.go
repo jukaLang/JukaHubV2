@@ -526,9 +526,13 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 		tabX += int32(w) + 28
 	}
 
-	rowH := int32(64)
+	// Measured from the type: a title over the status and "PlayStation
+	// Portable · core" line needs more than the fixed 64/58px rows at the
+	// shipped 24px roles, and the second line ran into the row below.
+	medH := int32(medium.Height())
+	rowH := max32(64, medH+smallH+25)
 	if cpPanel.tab == compatTabCores {
-		rowH = 58
+		rowH = max32(58, medH+smallH+24)
 	}
 	maxRows := bodyH / rowH
 	if maxRows < 2 {

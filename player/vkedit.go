@@ -107,7 +107,7 @@ var (
 var vkPadHeld = vkLogicalHeld
 
 // vkLogicalHeld reports whether any physical button that maps to the logical
-// button want (after the handheld's A/B swap, the Back folding and the
+// button want (after the handheld's A/B and X/Y swaps, the Back folding and the
 // accessibility keymap) is held. Long presses and chords poll it, because the
 // main loop only hands the keyboard button-down events.
 func vkLogicalHeld(want uint8) bool {
@@ -116,20 +116,11 @@ func vkLogicalHeld(want uint8) bool {
 		return false
 	}
 	handheld := P().IsHandheld()
-	swapped := abButtonsSwapped(appConfig)
 	for phys := uint8(0); phys < uint8(sdl.CONTROLLER_BUTTON_MAX); phys++ {
 		if pad.Button(sdl.GameControllerButton(phys)) == 0 {
 			continue
 		}
-		b := normalizeHandheldBackButton(phys, handheld)
-		if swapped {
-			switch b {
-			case sdl.CONTROLLER_BUTTON_A:
-				b = sdl.CONTROLLER_BUTTON_B
-			case sdl.CONTROLLER_BUTTON_B:
-				b = sdl.CONTROLLER_BUTTON_A
-			}
-		}
+		b := padFaceButton(appConfig, normalizeHandheldBackButton(phys, handheld))
 		if logical, dropped := a11yResolveButton(b); !dropped && logical == want {
 			return true
 		}
@@ -459,7 +450,7 @@ func vkStripModeNow() vkStripMode {
 	case vkTargetWiFi, vkTargetPSRemote, vkTargetMemory, vkTargetUnit, vkTargetTerm,
 		vkTargetRA, vkTargetMusic, vkTargetGameArgs, vkTargetToolArgs, vkTargetGroqKey:
 		return vkStripHidden
-	case vkTargetDownloads, vkTargetPodcast, vkTargetToolsURL, vkTargetParty:
+	case vkTargetDownloads, vkTargetPodcast, vkTargetToolsURL, vkTargetParty, vkTargetBrowserURL:
 		return vkStripQuickURL
 	case vkTargetDNS, vkTargetNetwork, vkTargetNetplay:
 		return vkStripQuickHost
@@ -1111,7 +1102,8 @@ func vkHoldStillDown() bool {
 	case vkHoldPadX:
 		return vkPadHeld(sdl.CONTROLLER_BUTTON_X)
 	case vkHoldMouse:
-		_, _, state := sdl.GetMouseState()
+		// The virtual cursor's A counts as the mouse (virtualcursor.go).
+		_, _, state := vcursorMouseState()
 		return state&sdl.ButtonLMask() != 0
 	case vkHoldTouch:
 		return vkTouchDown

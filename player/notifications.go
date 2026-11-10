@@ -695,6 +695,7 @@ func notifToggle() {
 		tb.startOpen = false
 		homeCalendarOpen = false
 		dismissWeatherPopover()
+		dismissVolumePopover()
 		// Mark all as read.
 		notifHistoryMu.Lock()
 		for i := range nc.history {

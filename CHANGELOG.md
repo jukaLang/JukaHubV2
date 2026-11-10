@@ -13,6 +13,102 @@ For anything older, the git log and the
 
 ### Added
 
+- **Light & dark by time of day.** Settings → Display & theme → **Light &
+  dark by time of day** switches between a day theme and a night theme at two
+  times you choose (07:00 and 19:00 to start, in half-hour steps, a window
+  across midnight included); the two themes have rows of their own. It replaces
+  the four fixed palettes the switch used to cycle through every hour, which
+  undid a theme picked by hand within the hour: the theme now changes at the
+  two switch times only, and a colour theme picked by hand becomes the theme of
+  that part of the day. High contrast, the colour-blind palettes, a total
+  conversion and the battery saver's OLED pause it, and a switch time that
+  passes during a game waits for the game to end
+  ([player/themeschedule.go](player/themeschedule.go)).
+
+- **JukaHub starts with your TrimUI.** The first time JukaHub starts on a
+  TrimUI where nobody has set it, **Start JukaHub at login** turns on by itself
+  and the boot hook is written. The first-run tour has a new **Start with your
+  device** step that says so and turns it off (on a desktop the same step
+  offers to turn it on); when the tour is skipped before that step, a toast
+  says it. It happens once per device (`autoStartDefaulted`, kept out of
+  exported configs): turning it off is final, and a value set before is never
+  overridden. The boot hook no longer starts a second JukaHub when one is
+  already running ([player/autostart_firstrun.go](player/autostart_firstrun.go),
+  [player/autostart.go](player/autostart.go)).
+
+- **Plugins do something when you switch them on.** Switching a plugin on
+  now runs it straight away and shows the result ("Clock is on: Mon 09 Nov ·
+  18:41"); its buttons join a new **Plugins** group in the Start menu (and Home
+  search), so they work from any screen; switching it off says what went with
+  it. The Daily quote greets you on the first start of each day. Theme, pack
+  and controls plugins get one-press buttons — **Use it now** / **Back to my
+  theme** for Neon Grid, **Apply it now** / **Undo** for Pocket Classic, **Use
+  Couch remote** / **Use default controls** — and Quick notes' **Add note**
+  opens the keyboard. All thirteen bundled plugins now also run in Go, so on
+  Windows (no `sh`) they work instead of saying "Can't run here". Manifests
+  gain optional `onEnable`, `onStartup`, `startupDaily`, `quick` and
+  JukaHub-run `@` actions; older installed copies of the bundled plugins are
+  upgraded in place, keeping your notes
+  ([player/plughooks.go](player/plughooks.go),
+  [player/plugnative.go](player/plugnative.go),
+  [docs/PLUGINS.md](docs/PLUGINS.md#what-switching-a-plugin-on-does)).
+- **Choose the browser's search engine and home page.** Settings → **Browser**
+  sets where a search goes — DuckDuckGo (still the default), Google, Bing,
+  Startpage, Brave Search, Yahoo, Mojeek, Wikipedia, or a results address of
+  your own with `%s` for the words — and which page **Home** opens: the engine's
+  start page, the page open in the Browser, a saved page, or an address you
+  type (applied on Save only, so B keeps the old one). **Y** in Saved pages
+  makes the highlighted page home. The address bar, the Search chip and Y
+  (whose keyboard now names the engine), and Home search's "Search the web" all
+  follow the choice. Google shows results only to browsers
+  that run JavaScript, which the reader does not, so a Google search lands on a
+  card instead of Google's "turn on JavaScript" page: the same words on
+  Startpage (Google's results as plain HTML), Startpage from now on, or — on a
+  PC — the desktop's own browser. Result links from DuckDuckGo, Google, Bing and
+  Yahoo now open their destination directly, which is what makes Bing's results
+  open at all ([player/browser_engines.go](player/browser_engines.go),
+  [docs/BROWSER.md](docs/BROWSER.md#search-engine-and-home-page)).
+
+- **Stick calibration and dead zones.** Settings → Controls → **Calibrate
+  sticks** measures both sticks in about ten seconds (let go, roll them round
+  their edges, let go again): where each one rests, how much it jitters there
+  and how far it reaches. Stick navigation, the virtual cursor and the
+  screensaver / frame-rate wake read the sticks through it, so a drifting stick
+  no longer steps the focus, creeps the pointer or keeps the screen awake, and
+  a stick that falls short of its rim still reaches full tilt. **Left / Right
+  stick dead zone** set each one by hand; the Controller test draws the
+  calibrated rings. The firmware's calibration app still sets the hardware
+  range for games ([player/stickcal.go](player/stickcal.go),
+  [player/stickcal_ui.go](player/stickcal_ui.go)).
+- **Virtual cursor for the analog sticks.** Move both sticks at once (tilt
+  them; nothing needs to be clicked in) and a pointer appears: the left stick
+  moves it, the right stick scrolls under it, A clicks (hold to drag). Both
+  sticks again, the D-pad or 30 s idle hide it.
+  It drives the app through ordinary mouse events, so hover, clicks, drags
+  and the wheel work wherever a mouse does; it is never drawn into
+  screenshots. Settings → Controls → Virtual cursor turns it off
+  ([player/virtualcursor.go](player/virtualcursor.go)).
+- **Screenshot mode, for pictures you can publish.** `JukaHub
+  --screenshot-tour ../screenshots` (run from `player/`) opens Home, Media,
+  Settings and the dock in turn, saves each as a 1280×720 PNG and quits;
+  `--screenshot-mode` is the same session by hand, with F12 saving PNGs. In
+  both, the hints name the pad's buttons, every clock reads 9:41, no weather
+  is drawn, the LAN address and the pairing QR use 192.168.1.42, the Wi-Fi
+  name reads HomeNet, and the user name, wallpaper, toasts, recent searches,
+  update offer and the dock's chat and photos are left out; the dock's alarm
+  reads 10:45. It is how the README's screenshots are meant to be retaken
+  ([player/screenshotmode.go](player/screenshotmode.go),
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#screenshots)).
+
+- **M3U8 playlists go both ways.** Audio → Settings → Playlists exports the
+  selected list as `.m3u8` with **Y**, and opening an `.m3u8`/`.m3u` in Files
+  imports it as a named playlist and starts it; relative entries resolve
+  against the playlist's folder, `#EXTINF` titles and durations are read, and
+  missing files are skipped with a count
+  ([player/musicm3u8.go](player/musicm3u8.go),
+  [player/musicsettings.go](player/musicsettings.go),
+  [player/features.go](player/features.go)).
+
 - **Settings → Date & time.** One place for the clock: *Set time
   automatically*, *Time zone*, *12-hour clock* (moved here from Display &
   theme, same setting), *Date format* (Auto from your region, 9 Nov 2026,
@@ -169,6 +265,48 @@ For anything older, the git log and the
   link, saved-page and cookie pickers and site info now use it
   ([player/inputhints.go](player/inputhints.go) and the screens' files).
 
+- **A volume button in the top-right corner.** A speaker now leads the
+  status cluster, immediately left of the Wi-Fi meter, on Home and on every
+  screen, and the D-pad reaches it like the meter. It shows the level at a
+  glance (a speaker with a cross when muted); A, a click or a tap opens a
+  glass volume card with the level, a slider to click or drag and a mute
+  button. The D-pad, the arrow keys or the wheel move the level in 5% steps,
+  A (Enter) mutes and un-mutes, and B (Esc) closes. Mixer writes run on one
+  worker that applies only the newest level, so a held D-pad never stalls the
+  screen, and the level follows the hardware volume keys. On the TrimUI it
+  drives the codec itself (see Fixed); on Windows it is JukaHub's own entry in
+  the Windows volume mixer, not the whole PC; on a Linux PC it uses PulseAudio
+  or ALSA as before. Where no mixer is available the button is not drawn
+  ([player/volumepopover.go](player/volumepopover.go),
+  [player/volumectl.go](player/volumectl.go),
+  [player/statusbar_status.go](player/statusbar_status.go),
+  [player/volume_windows.go](player/volume_windows.go)).
+
+- **The Home pairing code is a control.** The D-pad reaches the QR in the
+  header (Right from the PS5 launcher, Down from the bell), and A, a click or
+  a tap shows it full screen at full brightness, with the PIN and address
+  under it for a phone that cannot scan; A or B closes it and the backlight
+  goes back. A click used to open the Phone Companion card, which is still in
+  Settings, Network tools and search. With no code drawn, those presses go
+  where they always went ([player/homefocus.go](player/homefocus.go),
+  [player/homelayout.go](player/homelayout.go),
+  [player/qrzoom.go](player/qrzoom.go)).
+
+- **yt-dlp keeps itself up to date.** It was installed once and never
+  updated, so every YouTube change broke Media until the binary was deleted
+  by hand. Opening Media now checks for a newer release when the installed
+  one is more than ten days old (at most twice a day), and a failure an update
+  can fix (a 403, no playable format, the bot check, an extractor error)
+  checks at once, at most every 90 minutes. The download waits for a playing
+  video to end, is checked against the release's SHA-256 list and keeps the
+  previous copy; the new one is run once, and a release that cannot run on the
+  device is put back and skipped for 30 days. A search that failed in the last
+  three minutes runs again by itself once the update lands, and a yt-dlp you
+  installed yourself is never replaced. The tools folder also goes first on
+  the helper's PATH, so yt-dlp finds ffmpeg and a JavaScript runtime (Deno)
+  dropped next to it ([player/ytdlp_update.go](player/ytdlp_update.go),
+  [player/patch_engine.go](player/patch_engine.go)).
+
 ### Changed
 
 - **A panic no longer exits as a normal quit.** It exits with status 2 after
@@ -275,6 +413,108 @@ For anything older, the git log and the
   ([player/social.go](player/social.go) removed).
 
 ### Fixed
+
+- **YouTube plays on a stock TrimUI.** The firmware's own `ffmpeg` and
+  `ffprobe` (6.1, built without TLS) are on PATH, so JukaHub used them and never
+  installed its own, and every stream failed with "https protocol not found". A
+  video only played when the stream check gave up and the whole file was
+  downloaded instead, which is why YouTube "sometimes" failed. JukaHub now asks
+  each tool once whether it opens https (`-protocols`); when it does not, the
+  stream reaches it through a loopback relay inside JukaHub — Range requests
+  passed through for seeking, HLS playlists rewritten so variants, keys and
+  segments follow, cookies kept for the CDNs that check them — with no extra
+  download. Radio and podcast streams over https gain the same, and the
+  decoders no longer write their banner into `errors.txt` on every start
+  ([player/ffmpegtls.go](player/ffmpegtls.go),
+  [player/videoplayer.go](player/videoplayer.go),
+  [player/musicplayer.go](player/musicplayer.go)).
+
+- **Game details no longer draw over each other.** Every shipped config leaves
+  the small and medium text roles at 24px, and the game list's fixed 58px rows
+  were short of a title over its "PlayStation Portable · game.iso" line, which
+  ran into the next row; the "1-6 of 40" line also sat on the last row. Rows
+  are now measured from the type (the detail line a step smaller), the range
+  line has its own space, the console name under the cover is fitted to its
+  column, and the same overflow is fixed in the Random picker, Game options,
+  the Smart Pro Compatibility list and RetroAchievements' recent unlocks
+  ([player/game_library_ui.go](player/game_library_ui.go),
+  [player/game_random.go](player/game_random.go),
+  [player/game_options_ui.go](player/game_options_ui.go),
+  [player/compat_ui.go](player/compat_ui.go),
+  [player/retroachievements.go](player/retroachievements.go)).
+
+- **Quitting no longer writes a goroutine dump.** On a Smart Pro the exit
+  watchdog fired while `SDL_DestroyWindow` was still inside the GPU driver, so
+  the last frame stayed up for six seconds and `errors.txt` got every
+  goroutine's stack for an ordinary quit. Each SDL teardown call now has its
+  own 1.5 s deadline, after which JukaHub runs the cleanup hooks still due (the
+  volume flush, a restart Recovery asked for) and leaves with the normal exit
+  code; the watchdog skips the dump while SDL is what it is waiting for, and a
+  crash keeps its own path ([player/sdlteardown.go](player/sdlteardown.go),
+  [player/exitguard.go](player/exitguard.go)).
+
+- **CrossMix's emulators, PPSSPP and RetroArch are found.** An `Emus/<system>/`
+  folder only counted when it held `launch.sh`, but the firmware's own menu
+  starts the script `config.json` names in `"launch"`, and CrossMix gives each
+  default emulator its own (`ppsspp_1.17.1_gl.sh` for PSP, `drastic.sh` for
+  NDS), so those consoles read "Unavailable — no launcher" and their games "No
+  emulator found". JukaHub now takes that script, then the first `"launchlist"`
+  script that exists, then `launch.sh`, and the tile names the script it runs.
+  LAN play looked for a file called `retroarch`, but TrimUI's stock and CrossMix
+  images ship `ra64.trimui`, so it said "RetroArch not found" on every handheld;
+  it now finds `ra64.trimui` and starts it as the firmware does, from its own
+  folder with `HOME` set there. Stick calibration and the save manager also look
+  in CrossMix's `Emus/PSP/PPSSPP_<version>/.config/ppsspp` (with several builds,
+  the ini written last wins), so CrossMix PSP saves are in snapshots, backups and
+  sync, and a PPSSPP that has never run says to play a PSP game first instead of
+  "not installed". The plain save-folder names that backup and sync keys are
+  made of go to one build only, the newest that holds saves, and never away
+  from a folder that already had them; other builds are named after their
+  folder. A folder FAT reaches under two spellings (`RetroArch/saves`,
+  `retroarch/saves`) is one save root, not two. The stock firmware's
+  `Roms/PPSSPP` folder now appears in the library as PlayStation Portable
+  ([player/emulators.go](player/emulators.go),
+  [player/netplay.go](player/netplay.go),
+  [player/ppsspp_calibration.go](player/ppsspp_calibration.go),
+  [player/savemanager.go](player/savemanager.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#launching)).
+
+- **Fullscreen is one mode everywhere.** Settings triggers, Save and F11
+  each chose a different mode — exclusive `SetFullscreen(1)` in three places,
+  desktop fullscreen in one — and a Windows start ignored the saved choice.
+  Every path now uses desktop fullscreen through one helper, and the next
+  start honours the choice ([player/fullscreen.go](player/fullscreen.go)).
+
+- **A huge download size can no longer crash the free-space message.**
+  `formatInstallBytes` indexed a four-letter unit table, so a package size above
+  1 TB panicked while wording "not enough free space"; it now renders through
+  exabytes ([player/installbar.go](player/installbar.go)).
+
+- **A config import's safety backup can no longer prune itself.** The import
+  wrote the pre-import archive and then pruned the folder by file time without
+  sparing it, so on a handheld whose clock was behind the archive just written
+  looked oldest and was deleted; the prune now keeps it
+  ([player/cfgdocui.go](player/cfgdocui.go)).
+
+- **Damaged configs and patch databases stay bounded.** A recovered config left
+  every damaged predecessor on the card, and two recoveries in the same second
+  overwrote each other's evidence; at most five `.corrupt-*` copies are kept,
+  newest first, for both the config and `patch/db/db.json`
+  ([player/config_health.go](player/config_health.go),
+  [player/patch_db.go](player/patch_db.go)).
+
+- **A backup restore reloads the design file once.** `bkupRestoreFiles` told the
+  config watcher about an absolute path while the watcher keys the relative
+  `jukaconfig.json`, so the poller reloaded and toasted after the restore had
+  already installed the config; it now names both
+  ([player/bkup.go](player/bkup.go)).
+
+- **The SD-card package ships the one launcher script.** Packaging copied
+  `trimui/Apps/JukaHub/launch.sh`, which had drifted from `player/launch.sh`:
+  no restart protocol, no `TZ`, no log rotation, no crash lines. The stale copy
+  is deleted and every packager ships `player/launch.sh`
+  ([player/launch.sh](player/launch.sh),
+  [player/package-sdcard.sh](player/package-sdcard.sh)).
 
 - **The boot guard can now roll back a bad update on a handheld without a
   clock.** It counts starts instead of comparing saved clock times, treats a
@@ -533,6 +773,147 @@ For anything older, the git log and the
   only way out was a key the pad cannot send. `b` now works on a desktop
   keyboard too, where the grid has no text field to type into
   ([player/appgrid.go](player/appgrid.go), [player/favorites.go](player/favorites.go)).
+
+- **The Windows release build no longer waits for a macOS runner.** The
+  `build-and-publish-windows` job cross-compiled on `macos-latest`, the scarcest
+  hosted runner, so a release could sit on "Waiting for a runner" long after the
+  handheld build had finished, and publishing waits for both. It now
+  cross-compiles on `ubuntu-24.04` with the distribution's MinGW-w64 and the same
+  checksum-verified SDL2 tarballs, merged into one prefix, and before packaging
+  it checks every DLL the exe imports is part of Windows or ships in the archive
+  ([.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)).
+
+- **staticcheck is clean again.** An unconditional `strings.TrimSuffix`
+  (S1017), a struct conversion instead of a field-by-field literal (S1016), a
+  merged declaration (S1021) and a `delete` without its redundant guard (S1033)
+  ([player/files_textview.go](player/files_textview.go),
+  [player/musicplaylists.go](player/musicplaylists.go),
+  [player/netmon_test.go](player/netmon_test.go),
+  [player/themecatalog.go](player/themecatalog.go)).
+
+- **X and Y match their labels on the TrimUI Smart Pro and Brick.** The
+  firmware's pad reports button positions the Xbox way under the handhelds'
+  Nintendo labels. A and B were already turned back where every press enters
+  the app, but X and Y still arrived swapped: the top button ran every "Y"
+  action, the left one every "X" action, and the Controller test lit the wrong
+  letter. Both pairs now go through one helper at that entry point and in
+  every place that queues a press or polls a held button — the phone remote,
+  control profiles, JukaLand and the on-screen keyboard's long presses. A new
+  **Swap X and Y** switch sits beside **Swap A and B** in Settings → Games &
+  emulators (on by default on the handheld, off on Windows) and, like it,
+  stays on the device when a backup or design comes from another platform.
+  Anyone who remapped X and Y in Accessibility (the Button layout or the
+  per-button rows) to work around this should set them back
+  ([player/core.go](player/core.go),
+  [player/companionui.go](player/companionui.go),
+  [player/inmap_runtime.go](player/inmap_runtime.go),
+  [player/jland_input.go](player/jland_input.go),
+  [player/vkedit.go](player/vkedit.go), [player/setmodel.go](player/setmodel.go),
+  [player/bkup.go](player/bkup.go), [player/cfgdoc.go](player/cfgdoc.go)).
+
+- **The PS Remote Play keyboard types again.** While the on-screen keyboard
+  was up for a console address, the PSN Account-ID or the pairing PIN, the
+  Remote Play panel behind it still took every pad press and key: the D-pad
+  moved the hidden list, A ran a row again, and B, Backspace or Esc closed the
+  panel under the keyboard. The panel now steps aside while its keyboard is
+  open. Around it: a PIN typed with the console's grouping ("1234 5678") is
+  accepted; a PIN that is not 8 digits, an Account-ID that is not base64 or an
+  address with a space in it goes back to the keyboard with the text still
+  there, instead of failing after the handshake times out; an empty Account-ID
+  in the middle of a PS5 pairing stops it rather than asking for a PIN the
+  console would refuse; an abandoned pairing no longer turns a later
+  Account-ID edit into a PIN prompt; a PIN typed while another console is
+  pairing says to wait instead of vanishing; the action key reads **Next**
+  where it leads on to the PIN; and **Y** forgets a console from a keyboard,
+  as the footer says ([player/controller.go](player/controller.go),
+  [player/main.go](player/main.go),
+  [player/psremote_ui.go](player/psremote_ui.go),
+  [player/vkeyboard.go](player/vkeyboard.go)).
+
+- **Four more panels let their keyboard have the input, and the key that
+  opens a keyboard no longer types into it.** LAN play's host address, the
+  Downloads link field and the Audio panel's playlist name had the Remote
+  Play fault on the pad; the Audio panel and the Podcast library had it on a
+  USB or Bluetooth keyboard, where Backspace while typing a feed address
+  removed a show. Separately, the key that opened a keyboard typed its own
+  character into it: X in the Audio panel gave "Playlist 3x", A for a podcast
+  feed started the address with "a", and Space on the Remote Play, LAN play,
+  Downloads, Podcasts and Audio rows added a space
+  ([player/controller.go](player/controller.go),
+  [player/main.go](player/main.go),
+  [player/vkopenertext.go](player/vkopenertext.go)).
+
+- **Charging shows in the corner.** Plugged in, the battery gauge looked the
+  same as on battery. It now turns green with a bolt over the cell while a
+  charger is connected, on Home and every screen, and Quick Settings adds
+  "Charging" to its battery line. The Smart Pro's battery driver does not
+  report "Charging" reliably, so a charger input that is online (axp2202-usb,
+  the reading MinUI and NextUI use) now counts too, and a latched "Full" no
+  longer shows the bolt on battery. The low-battery guard and the battery
+  saver stand down for a cable only while the level holds: a charger too weak
+  to keep up no longer silences them, and the warning then says the battery
+  is still draining on this charger ([player/widgets.go](player/widgets.go),
+  [player/statusbar_status.go](player/statusbar_status.go),
+  [player/lowbattery.go](player/lowbattery.go)).
+
+- **Volume control works on the Smart Pro and the Brick.** Quick Settings'
+  slider asked amixer for Master or PCM, which the tg5040 codec does not
+  have, so every change failed. JukaHub now drives the codec's "digital
+  volume" control (an attenuation, written through a curve fitted to the
+  steps NextUI measured on the same codec), mutes for real through "DAC
+  Volume", reads the level back from the codec so it follows the hardware
+  keys (headphones included), and keeps the firmware's own level in
+  /mnt/UDISK/system.json in step so the keys carry on from it. The next level
+  JukaHub sets lifts any mute, and the hardware keys lift one JukaHub made;
+  the alarm's temporary 100% is no longer written to the firmware's settings;
+  a level set just before quitting still reaches them; and JukaHub no longer
+  puts its own saved level over the firmware's at launch. Quick Settings'
+  writes moved off the render thread too. The mixer names and the curve come
+  from MinUI and NextUI work on the same hardware and still need a check on a
+  device ([player/volume_trimui.go](player/volume_trimui.go),
+  [player/systemcontrol.go](player/systemcontrol.go),
+  [player/quicksettings.go](player/quicksettings.go),
+  [player/alarmvol.go](player/alarmvol.go)).
+
+- **YouTube stops leaning on a client it retired — the best current bet, not
+  yet tried on a device.** Since 2026-08-17 YouTube refuses every stream of
+  the Android VR client the fast path asked as, and a refused stream went
+  straight to downloading the whole file, or failed with "Download failed.
+  Check network." The fast path now asks as the Android client first, checks
+  each stream with the video CDN before using it, and hands a refused one to
+  yt-dlp instead of the download; a refusal about the video itself (private,
+  removed, age-gated) goes straight to yt-dlp, and an age gate no longer
+  benches a working client as if it were the bot check. yt-dlp is asked for
+  the clients that may still carry a playable single-file format (android,
+  then its own defaults, then ios/tv — no longer android_vr). Whether YouTube
+  still serves Android's 360p file without a token has not been tried on a
+  device, and late-October reports disagree; if it does not, the yt-dlp
+  update (Added) and the messages below are what still help
+  ([player/youtubenative.go](player/youtubenative.go),
+  [player/streaming.go](player/streaming.go)).
+
+- **YouTube failures say what happened, and that no API key is needed.**
+  "Check network", "No results" and "The service did not answer" are replaced
+  by the cause and what happens next — no internet, a wrong clock, YouTube's
+  bot check or rate limit, a refused stream and the yt-dlp check it started, a
+  private or removed video — in the toast and in the Search, Trending and
+  Shorts tabs, which also say that no API key is needed (the tabs' own reason
+  used to be wiped the moment it was written). A download that hits the
+  five-minute limit says so instead of ending silently, and a failed refresh
+  keeps the results already on screen
+  ([player/ytfailure.go](player/ytfailure.go), [player/core.go](player/core.go),
+  [player/media_hub_render.go](player/media_hub_render.go)).
+
+- **A google_api_key no longer slows search down.** yt-dlp has no use for a
+  Data API key, but passing one made every search skip the native fast path;
+  JukaHub needs no API key for YouTube, and a key that is set is now ignored
+  ([player/core.go](player/core.go)).
+
+- **Videos opened from a link get their title.** A video played from a
+  browser link with no text, Play Link or a pasted address showed its raw URL
+  on the Continue card; the title is now looked up through YouTube's oEmbed,
+  which needs no key ([player/ytoembed.go](player/ytoembed.go),
+  [player/browser_youtube.go](player/browser_youtube.go)).
 
 ### Security
 

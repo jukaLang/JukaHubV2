@@ -216,8 +216,12 @@ func appWallpaperIsShippedDefault(path string) bool {
 var homeBackdropConfig *Config
 
 // appWallpaperActive reports whether a user-chosen wallpaper is loaded and
-// should be drawn under the backdrop's blooms.
+// should be drawn under the backdrop's blooms. Never in screenshot mode: the
+// picture is the user's own (screenshotmode.go).
 func appWallpaperActive(config *Config) bool {
+	if shotModeOn() {
+		return false
+	}
 	return config != nil && bgTexture != nil && !appWallpaperIsShippedDefault(config.Variables.BackgroundImage)
 }
 

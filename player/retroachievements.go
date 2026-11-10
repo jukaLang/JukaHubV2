@@ -1387,7 +1387,9 @@ func raRenderOverview(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 	renderText(renderer, config, font, "RECENT UNLOCKS", ColorTextTertiary(), leftX+20, columnsY+14)
 	renderText(renderer, config, font, "GAME PROGRESS", ColorTextTertiary(), rightX+20, columnsY+14)
 
-	rowH := int32(64)
+	// Measured from the type: at the shipped 24px roles the "game · console"
+	// line ended a few pixels into the row below the fixed 64px pitch.
+	rowH := max32(64, medH+smallH+19)
 	listY := columnsY + 40
 	rows := int32((columnsH - 52) / rowH)
 	if rows < 1 {

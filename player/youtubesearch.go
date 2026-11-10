@@ -54,10 +54,13 @@ const (
 	// account, and it grants nothing beyond what the site shows a visitor.
 	youtubeSearchEndpoint = "https://www.youtube.com/youtubei/v1/search"
 	youtubeWebAPIKey      = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
-	// youtubeWebClientVersion is the web client build the request announces.
-	// The endpoint rejects a request that names none; the value only has to be
-	// a plausible build string.
-	youtubeWebClientVersion = "2.20240101.00.00"
+	// youtubeWebClientVersion is the web client build the request announces
+	// until a homepage fetch has told the app the current one
+	// (ytLiveWebClientVersion). The endpoint rejects a request that names
+	// none, and a build years older than the site is exactly the kind of odd
+	// one out a bot check looks for, so this is the build yt-dlp master
+	// announced in October 2026 rather than a placeholder from 2024.
+	youtubeWebClientVersion = "2.20260708.00.00"
 
 	// youtubeWebUserAgent is the browser every web request is dressed as: a
 	// current mobile Chrome, because this is what the app runs next to on a
@@ -268,7 +271,21 @@ func sliceNativeSearchWindow(videos []VideoInfo, start, end int) []VideoInfo {
 // nativeSearchHTTPClient is kept separate from the thumbnail client: this one
 // waits for a JSON body rather than an image, and its timeout is the search's
 // own budget rather than the thumbnail preload's.
-var nativeSearchHTTPClient = &http.Client{Timeout: nativeSearchTimeout}
+// Its transport is the native player's (ytTransport), which falls back to a
+// shipped CA bundle on a firmware with no certificate store; it is built on
+// first use so reading the certificate store never costs startup time.
+var nativeSearchHTTPClient = sync.OnceValue(func() *http.Client {
+	return &http.Client{Timeout: nativeSearchTimeout, Transport: ytTransport()}
+})
+
+// nativeSearchClientVersion is the web build the search announces: the one the
+// site itself named in the last homepage fetch, else the built-in string.
+func nativeSearchClientVersion() string {
+	if v := ytLiveWebClientVersion(); v != "" {
+		return v
+	}
+	return youtubeWebClientVersion
+}
 
 const (
 	// nativeSearchAttemptBudget is the one attempt's own deadline. The search's
@@ -499,9 +516,9 @@ func postNativeSearch(ctx context.Context, body map[string]interface{}, continua
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Origin", "https://www.youtube.com")
 	req.Header.Set("X-Youtube-Client-Name", "1")
-	req.Header.Set("X-Youtube-Client-Version", youtubeWebClientVersion)
+	req.Header.Set("X-Youtube-Client-Version", nativeSearchClientVersion())
 
-	resp, err := nativeSearchHTTPClient.Do(req)
+	resp, err := nativeSearchHTTPClient().Do(req)
 	if err != nil {
 		return nativeSearchPage{}, err
 	}
@@ -572,7 +589,7 @@ func nativeSearchClientContext() map[string]interface{} {
 	return map[string]interface{}{
 		"client": map[string]interface{}{
 			"clientName":    "WEB",
-			"clientVersion": youtubeWebClientVersion,
+			"clientVersion": nativeSearchClientVersion(),
 			"hl":            "en",
 			"gl":            "US",
 		},

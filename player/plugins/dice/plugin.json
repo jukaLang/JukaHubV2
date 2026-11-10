@@ -1,7 +1,7 @@
 {
   "name": "dice",
   "title": "Dice",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Rolls a die, flips a coin or picks a random entry from a list (custom variables dice_sides and dice_list).",
   "author": "JukaHub",
   "entry": "dice.sh",
@@ -11,5 +11,7 @@
     {"id": "roll", "label": "Roll a die"},
     {"id": "coin", "label": "Flip a coin"},
     {"id": "pick", "label": "Pick from list"}
-  ]
+  ],
+  "onEnable": "roll",
+  "quick": ["roll", "coin"]
 }

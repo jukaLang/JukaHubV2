@@ -272,6 +272,37 @@ func parseNetplayAddress(raw string, defPort int) (string, int, error) {
 	return host, port, nil
 }
 
+// netplayRetroArchNames are the RetroArch binaries a RetroArch folder can
+// hold: the upstream name, then TrimUI's own builds. The stock and CrossMix
+// images ship only ra64.trimui (ra32.trimui on the oldest firmware), so looking
+// for "retroarch" alone reported the handheld's RetroArch as missing.
+var netplayRetroArchNames = []string{"retroarch", "ra64.trimui", "ra32.trimui"}
+
+// netplayCardRetroArch finds RetroArch on the SD cards in roots: the card's
+// RetroArch folder first, then a RetroArch app folder.
+func netplayCardRetroArch(roots []string) string {
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		for _, dir := range []string{filepath.Join(root, "RetroArch"), filepath.Join(root, "Apps", "RetroArch")} {
+			for _, name := range netplayRetroArchNames {
+				if p := filepath.Join(dir, name); regularFile(p) {
+					return p
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// netplayTrimuiBuild reports whether path is TrimUI's own RetroArch build.
+func netplayTrimuiBuild(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	return strings.HasPrefix(name, "ra64.") || strings.HasPrefix(name, "ra32.")
+}
+
 // netplayRetroArchPath finds the RetroArch binary. JUKAHUB_RETROARCH wins so a
 // non-standard install can be pointed at without a code change.
 func netplayRetroArchPath() string {
@@ -282,12 +313,16 @@ func netplayRetroArchPath() string {
 			return p
 		}
 	}
+	// The card JukaHub runs from, then the handheld's usual mount points. Not
+	// on Windows: a TrimUI card in a reader holds an ARM Linux RetroArch.
+	if !IsWindows() {
+		if p := netplayCardRetroArch([]string{trimuiSDRootFn(), "/mnt/SDCARD", "/mnt/sdcard"}); p != "" {
+			return p
+		}
+	}
 	candidates := []string{
-		"/mnt/SDCARD/RetroArch/retroarch",
-		"/mnt/SDCARD/Apps/RetroArch/retroarch",
-		"/mnt/sdcard/RetroArch/retroarch",
-		"/mnt/sdcard/Apps/RetroArch/retroarch",
 		"/usr/trimui/RetroArch/retroarch",
+		"/usr/trimui/RetroArch/ra64.trimui",
 		"/usr/bin/retroarch",
 		"/usr/local/bin/retroarch",
 	}
@@ -329,6 +364,10 @@ func netplayCoreDirs() []string {
 	}
 	if exe := netplayRetroArchPath(); exe != "" {
 		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "cores"))
+		if netplayTrimuiBuild(exe) {
+			// TrimUI's build keeps its cores in .retroarch/cores beside it.
+			dirs = append(dirs, filepath.Join(filepath.Dir(exe), ".retroarch", "cores"))
+		}
 	}
 	dirs = append(dirs, retroArchCoreDirs()...)
 	seen := map[string]bool{}
@@ -506,6 +545,12 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	name, args := netplayCommand(plan)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(plan.RetroArch)
+	if netplayTrimuiBuild(plan.RetroArch) {
+		// Every firmware launch.sh starts ra64.trimui from its own folder with
+		// HOME pointed there, which is where it finds retroarch.cfg and
+		// .retroarch/. JukaHub's own HOME is its app folder.
+		cmd.Env = append(os.Environ(), "HOME="+cmd.Dir)
+	}
 	restoreProfile := beginGamePowerProfile(config)
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the

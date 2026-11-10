@@ -39,8 +39,13 @@ var updatePrompt struct {
 // advertisement is not enough: it is persisted state, and a build that already
 // caught up with it (installed without the swap helper, or a card image copied
 // over the old install) must not keep showing "Update" until a network check
-// happens to clear it. advertisedUpdateIsStale answers that locally.
+// happens to clear it. advertisedUpdateIsStale answers that locally. Screenshot
+// mode offers nothing: neither the header pill nor the prompt belongs in a
+// published picture (screenshotmode.go).
 func updateAvailable() bool {
+	if shotModeOn() {
+		return false
+	}
 	return availableUpdateTag() != "" && !advertisedUpdateIsStale()
 }
 

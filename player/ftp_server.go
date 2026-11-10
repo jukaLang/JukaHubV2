@@ -910,8 +910,14 @@ func openFTPShares(shares []ftpShare) (*ftpShareSet, error) {
 }
 
 // localIPv4 returns the device's LAN IPv4 address, preferring wireless
-// interfaces and ignoring loopback/link-local addresses.
+// interfaces and ignoring loopback/link-local addresses. In screenshot mode it
+// is a stand-in (192.168.1.42) so no capture shows the real one. The servers
+// still listen on every interface, but what they advertise for that session
+// (pairing, Remote Cast, Watch Party, netplay) points at the stand-in.
 func localIPv4() string {
+	if shotModeOn() {
+		return shotLANAddress
+	}
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""

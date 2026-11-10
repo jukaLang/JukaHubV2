@@ -35,51 +35,69 @@ func companionRequest(method, target, pin string, body io.Reader) *http.Request 
 	return req
 }
 
-// The phone remote labels buttons by meaning (A = confirm). On a handheld the
-// event queue swaps A/B again, so the injected event must be pre-flipped or a
-// phone A arrives at the scene as Back.
+// The phone remote labels buttons by meaning (A = confirm, X = the X action).
+// On a handheld the event queue swaps A/B and X/Y again, so the injected event
+// must be pre-flipped or a phone A arrives at the scene as Back and a phone X
+// as Y.
 func TestCompanionButtonForMatchesAppSemantics(t *testing.T) {
-	if got, ok := companionButtonFor("a", false); !ok || got != sdl.CONTROLLER_BUTTON_A {
-		t.Fatalf("phone A on unswapped config = %d, %v; want SDL A", got, ok)
+	unswapped := &Config{Variables: Variables{Custom: map[string]interface{}{
+		"swapABButtons": false, "swapXYButtons": false,
+	}}}
+	swapped := &Config{Variables: Variables{Custom: map[string]interface{}{
+		"swapABButtons": true, "swapXYButtons": true,
+	}}}
+	for _, tc := range []struct {
+		name   string
+		config *Config
+		want   uint8
+	}{
+		{"a", unswapped, sdl.CONTROLLER_BUTTON_A},
+		{"b", unswapped, sdl.CONTROLLER_BUTTON_B},
+		{"x", unswapped, sdl.CONTROLLER_BUTTON_X},
+		{"y", unswapped, sdl.CONTROLLER_BUTTON_Y},
+		// With the firmware swaps enabled, push the mirrored button so
+		// applyButtonSwap turns it back before any scene handler sees it.
+		{"a", swapped, sdl.CONTROLLER_BUTTON_B},
+		{"b", swapped, sdl.CONTROLLER_BUTTON_A},
+		{"x", swapped, sdl.CONTROLLER_BUTTON_Y},
+		{"y", swapped, sdl.CONTROLLER_BUTTON_X},
+		// The D-pad is never part of either swap.
+		{"up", swapped, sdl.CONTROLLER_BUTTON_DPAD_UP},
+	} {
+		if got, ok := companionButtonFor(tc.name, tc.config); !ok || got != tc.want {
+			t.Errorf("phone %q = %d, %v; want %d", tc.name, got, ok, tc.want)
+		}
 	}
-	if got, ok := companionButtonFor("b", false); !ok || got != sdl.CONTROLLER_BUTTON_B {
-		t.Fatalf("phone B on unswapped config = %d, %v; want SDL B", got, ok)
-	}
-	// With the firmware swap enabled, push B for phone A so applyButtonSwap
-	// turns it back into A before any scene handler sees it.
-	if got, ok := companionButtonFor("a", true); !ok || got != sdl.CONTROLLER_BUTTON_B {
-		t.Fatalf("phone A on swapped config = %d, %v; want pre-swapped SDL B", got, ok)
-	}
-	if got, ok := companionButtonFor("b", true); !ok || got != sdl.CONTROLLER_BUTTON_A {
-		t.Fatalf("phone B on swapped config = %d, %v; want pre-swapped SDL A", got, ok)
-	}
-	if got, ok := companionButtonFor("up", true); !ok || got != sdl.CONTROLLER_BUTTON_DPAD_UP {
-		t.Fatalf("D-pad must not be swapped, got %d, %v", got, ok)
-	}
-	if _, ok := companionButtonFor("not-a-button", false); ok {
+	if _, ok := companionButtonFor("not-a-button", unswapped); ok {
 		t.Fatal("unknown phone key must not map to an SDL button")
 	}
 }
 
-// Full pipeline check: a phone A is pre-flipped for a handheld, then the main
-// loop's applyButtonSwap flips it back. The scene must see A, never B.
+// Full pipeline check: a phone face button is pre-flipped for a handheld, then
+// the main loop's applyButtonSwap flips it back. The scene must see what the
+// phone pressed, never its mirror (A as B, X as Y).
 func TestCompanionASurvivesTheHandheldButtonSwap(t *testing.T) {
-	config := &Config{Variables: Variables{Custom: map[string]interface{}{"swapABButtons": true}}}
-	btn, ok := companionButtonFor("a", abButtonsSwapped(config))
-	if !ok {
-		t.Fatal("phone A did not map to a controller button")
-	}
-	event := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: btn}
-	applyButtonSwap(config, event)
-	if event.Button != sdl.CONTROLLER_BUTTON_A {
-		t.Fatalf("phone A reached the scene as button %d, want A", event.Button)
-	}
-
-	btn, _ = companionButtonFor("b", abButtonsSwapped(config))
-	event = &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: btn}
-	applyButtonSwap(config, event)
-	if event.Button != sdl.CONTROLLER_BUTTON_B {
-		t.Fatalf("phone B reached the scene as button %d, want B", event.Button)
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{
+		"swapABButtons": true, "swapXYButtons": true,
+	}}}
+	for _, tc := range []struct {
+		name string
+		want uint8
+	}{
+		{"a", sdl.CONTROLLER_BUTTON_A},
+		{"b", sdl.CONTROLLER_BUTTON_B},
+		{"x", sdl.CONTROLLER_BUTTON_X},
+		{"y", sdl.CONTROLLER_BUTTON_Y},
+	} {
+		btn, ok := companionButtonFor(tc.name, config)
+		if !ok {
+			t.Fatalf("phone %q did not map to a controller button", tc.name)
+		}
+		event := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: btn}
+		applyButtonSwap(config, event)
+		if event.Button != tc.want {
+			t.Fatalf("phone %q reached the scene as button %d, want %d", tc.name, event.Button, tc.want)
+		}
 	}
 }
 

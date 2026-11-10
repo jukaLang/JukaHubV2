@@ -14,7 +14,10 @@ package main
 // hakux.go the handheld's one standalone install, hakuX for the Xbox.
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -372,6 +375,113 @@ var (
 	deviceRACores  = "/mnt/SDCARD/RetroArch/.retroarch/cores"
 )
 
+// emuFolderConfigMax bounds how much of an emulator folder's config.json a
+// catalog build reads. The firmware's files are a few kilobytes even with a
+// long CrossMix launchlist; a damaged or mislabelled file must not be slurped.
+const emuFolderConfigMax = 256 << 10
+
+// emuConfigField is one key of a parsed config.json: the exact spelling
+// first, then any capitalisation, so a hand-edited "Launch" still counts. Of
+// two other spellings the first in byte order wins, the same on every run.
+func emuConfigField(fields map[string]json.RawMessage, want string) json.RawMessage {
+	if value, ok := fields[want]; ok {
+		return value
+	}
+	found, best := false, ""
+	var value json.RawMessage
+	for key, v := range fields {
+		if strings.EqualFold(key, want) && (!found || key < best) {
+			found, best, value = true, key, v
+		}
+	}
+	return value
+}
+
+// emuFolderConfig reads an emulator folder's config.json into its top-level
+// fields: nil when the file is missing, oversized or not a JSON object. The
+// catalog reads it once per folder for both the icon and the launcher.
+func emuFolderConfig(folder string) map[string]json.RawMessage {
+	f, err := os.Open(filepath.Join(folder, "config.json"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, emuFolderConfigMax+1))
+	if err != nil || len(raw) > emuFolderConfigMax {
+		return nil
+	}
+	// A config.json saved by a Windows editor can start with a byte-order
+	// mark, which the JSON decoder refuses.
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil
+	}
+	return fields
+}
+
+// emuConfigLaunchNames lists the launchers a parsed config.json declares, in
+// the order the firmware uses them: "launch" first — the script MainUI starts,
+// launch.sh on the stock firmware but on CrossMix whatever that system's
+// default emulator is (drastic.sh, ppsspp_1.17.1_gl.sh) — then every
+// "launchlist" entry, CrossMix's alternative emulators. A field of an
+// unexpected shape is skipped without losing the others.
+func emuConfigLaunchNames(fields map[string]json.RawMessage) []string {
+	var names []string
+	add := func(name string) {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	var launch string
+	if json.Unmarshal(emuConfigField(fields, "launch"), &launch) == nil {
+		add(launch)
+	}
+	var list []json.RawMessage
+	if json.Unmarshal(emuConfigField(fields, "launchlist"), &list) == nil {
+		for _, item := range list {
+			var name string
+			if json.Unmarshal(item, &name) == nil {
+				add(name)
+				continue
+			}
+			var entry map[string]json.RawMessage
+			if json.Unmarshal(item, &entry) == nil &&
+				json.Unmarshal(emuConfigField(entry, "launch"), &name) == nil {
+				add(name)
+			}
+		}
+	}
+	return names
+}
+
+// emuFolderLauncher is the script MainUI would start for an emulator folder
+// whose config.json fields are given: the first launcher they declare that is
+// a shell script inside the folder, then the conventional launch.sh and
+// launch. Only launch.sh used to count, so every CrossMix system whose default
+// emulator has its own script — PSP's PPSSPP, NDS's DraStic — read "no
+// launcher" and its games "no emulator found" while MainUI ran them fine. A
+// declared name that leaves the folder ("../x.sh", an absolute path elsewhere)
+// is ignored, the rule the Apps scanner applies to an app's "launch", and a
+// declared file that is not a .sh script is skipped because JukaHub starts
+// launchers with sh.
+func emuFolderLauncher(folder string, fields map[string]json.RawMessage) string {
+	for _, name := range emuConfigLaunchNames(fields) {
+		if !strings.EqualFold(filepath.Ext(name), ".sh") {
+			continue
+		}
+		if path, err := resolveWithinRoot(folder, name); err == nil && regularFile(path) {
+			return path
+		}
+	}
+	for _, name := range []string{"launch.sh", "launch"} {
+		if path := filepath.Join(folder, name); regularFile(path) {
+			return path
+		}
+	}
+	return ""
+}
+
 // emuCoreEntries lists the libretro cores in one cores folder as catalog rows
 // (shared objects on the handheld, DLLs on Windows), and the set of core names
 // found.
@@ -443,7 +553,8 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 			continue
 		}
 		for _, de := range dirEntries {
-			if !de.IsDir() {
+			// Hidden and Mac/Windows metadata folders are never emulators.
+			if !de.IsDir() || skipScanEntryName(de.Name()) {
 				continue
 			}
 			folder := filepath.Join(root, de.Name())
@@ -452,22 +563,31 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				// tile below, not a row of its own.
 				continue
 			}
+			fields := emuFolderConfig(folder)
 			e := emuEntry{
 				Name:     de.Name(),
 				Detail:   folder,
 				Glyph:    emuGlyphFor(de.Name(), defaultCoreForSystem(de.Name())),
-				IconPath: emuFolderIcon(folder),
+				IconPath: emuFolderIconFrom(folder, fields),
 			}
-			// launch.sh is the launcher on stock and CrossMix; a folder
-			// without one still gets listed, as installed-but-unusable.
-			switch {
-			case regularFile(filepath.Join(folder, "launch.sh")):
+			// The launcher is the script config.json names (launch.sh on the
+			// stock firmware, the default emulator's own script on CrossMix),
+			// else launch.sh; a folder with none still gets listed, as
+			// installed-but-unusable.
+			if launcher := emuFolderLauncher(folder, fields); launcher != "" {
 				e.Status = emuAvailable
-				e.Launch = filepath.Join(folder, "launch.sh")
-			case regularFile(filepath.Join(folder, "launch")):
-				e.Status = emuAvailable
-				e.Launch = filepath.Join(folder, "launch")
-			default:
+				e.Launch = launcher
+				if base := strings.ToLower(filepath.Base(launcher)); base != "launch.sh" && base != "launch" {
+					// On CrossMix the script's name is the emulator
+					// (ppsspp_1.17.1_gl.sh), so the tile says which one runs.
+					e.Detail = folder + " · " + filepath.Base(launcher)
+				}
+				if e.IconPath == "" {
+					// A picture beside the launcher, looked up once here: the
+					// tiles draw every frame (emuEntryIconPath).
+					e.IconPath = sidecarIcon(launcher)
+				}
+			} else {
 				e.Status = emuBroken
 				e.Detail = folder + " — no launcher"
 			}
@@ -814,8 +934,10 @@ func emuPanelPageStep() int {
 
 // launchEmulatorEntry starts a discovered emulator detached from JukaHub. The
 // paths come from this file's fixed scan roots and catalog - never from
-// config input - so unlike the Apps launcher there is no folder sandbox to
-// pass; the entry point itself is still re-checked before it runs.
+// JukaHub's config input; the one name a firmware file supplies, an Emus
+// folder's config.json launcher, is confined to that folder when it is read
+// (emuFolderLauncher) - so unlike the Apps launcher there is no folder sandbox
+// to pass here; the entry point itself is still re-checked before it runs.
 func launchEmulatorEntry(e emuEntry) {
 	path := strings.TrimSpace(e.Launch)
 	ext := strings.ToLower(filepath.Ext(path))
@@ -840,8 +962,8 @@ func launchEmulatorEntry(e emuEntry) {
 	}
 	logDebug("emulators", "launching %s (%s)", e.Name, path)
 	// No shell ever sees a command line here: path comes from the scan roots
-	// and catalog (never from config input) and goes to the program as one
-	// argument.
+	// and catalog (never from JukaHub's config input) and goes to the program
+	// as one argument.
 	var cmd *exec.Cmd
 	dir := filepath.Dir(path)
 	switch {

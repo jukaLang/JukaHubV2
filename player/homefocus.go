@@ -50,6 +50,15 @@ const (
 	// HomeFocusSearch is the search pill under the greeting, above the Continue
 	// card. A opens the search sheet (globalsearch.go).
 	HomeFocusSearch HomeFocusID = "search"
+	// HomeFocusVolume is the speaker at the left end of the status cluster,
+	// immediately left of the signal meter. A opens the volume popover
+	// (volumepopover.go). It is a chrome control on every other scene; enabled
+	// only while it is drawn (no mixer, no button).
+	HomeFocusVolume HomeFocusID = "volume"
+	// HomeFocusQR is the phone-pairing code in the header band, right of the
+	// Remote Play launchers. A shows it full screen (qrzoom.go), the size a
+	// phone camera reads from arm's length. Enabled only while it is drawn.
+	HomeFocusQR HomeFocusID = "qr"
 )
 
 // FocusDirection indicates the direction to move focus.
@@ -169,14 +178,32 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusWeather, Down: HomeFocusPS4,
 		Left: HomeFocusWiFi, Right: HomeFocusClock,
 	},
-	// The signal meter is the Wi-Fi button: Left leaves the bar for the search
-	// pill, the next control toward the left edge, and Right reads the weather
-	// text. The release offer is drawn at the other end of the bar, beside the
-	// bell, so the meter does not point at it: the pad used to jump from here to
-	// a pill on the far right.
+	// The signal meter is the Wi-Fi button: Left is the volume button beside
+	// it (and, when there is no mixer to show one for, the search pill, the
+	// next control toward the left edge), and Right reads the weather text. The
+	// release offer is drawn at the other end of the bar, beside the bell, so
+	// the meter does not point at it: the pad used to jump from here to a pill
+	// on the far right.
 	HomeFocusWiFi: {
 		Up: HomeFocusWiFi, Down: HomeFocusPS4,
-		Left: HomeFocusSearch, Right: HomeFocusWeather,
+		Left: HomeFocusVolume, Right: HomeFocusWeather,
+	},
+	// The speaker leads the status cluster: Left leaves the bar for the search
+	// pill, Right is the signal meter, and Down drops to the launcher under
+	// that end of the bar like the meter's does.
+	HomeFocusVolume: {
+		Up: HomeFocusVolume, Down: HomeFocusPS4,
+		Left: HomeFocusSearch, Right: HomeFocusWiFi,
+	},
+	// The pairing code is the header band's right end, under the bell: Up is
+	// the bell, Left the PS5 launcher beside it, Down the card under it (the
+	// layout links whichever card that is, see SetQRLink). Right is the screen
+	// edge. The edges *into* it are made in neighbor(), so that a code that is
+	// not drawn (no Wi-Fi, no companion server) leaves the old paths exactly as
+	// they were: PS5 → clock, bell → PS5.
+	HomeFocusQR: {
+		Up: HomeFocusBell, Down: HomeFocusMedia,
+		Left: HomeFocusPS5, Right: HomeFocusQR,
 	},
 	// The update download chip is a header button drawn immediately left of the
 	// notification bell, right of the now-playing chip. Its neighbours are the
@@ -229,6 +256,9 @@ type HomeFocusController struct {
 	// and Down from the launcher returns there. The static graph cannot know
 	// this: the header cluster's width moves the tile.
 	tileUnder HomeFocusID
+	// qrUnder is the card under the header pairing code, set the same way, so
+	// Down from the code lands on the card actually drawn below it.
+	qrUnder HomeFocusID
 }
 
 // NewHomeFocusController creates a new HomeFocusController with all focus IDs enabled.
@@ -259,6 +289,15 @@ func (f *HomeFocusController) TileLink() HomeFocusID {
 		return ""
 	}
 	return f.tileUnder
+}
+
+// SetQRLink records the card under the header pairing code, or clears the
+// link when the code is not drawn.
+func (f *HomeFocusController) SetQRLink(under HomeFocusID) {
+	if f == nil {
+		return
+	}
+	f.qrUnder = under
 }
 
 // Current returns the currently focused HomeFocusID.
@@ -348,6 +387,21 @@ func (f *HomeFocusController) Restore() HomeFocusID {
 
 // neighbor returns the neighbor HomeFocusID in the given direction.
 func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection) HomeFocusID {
+	// The pairing code is entered from the PS5 launcher on its left (Right)
+	// and from the bell above it (Down), but only while it is drawn: a hidden
+	// code is not a stop on the way, so those presses keep the targets they
+	// had before the code was a control (the clock, the PS5 launcher).
+	if f.IsEnabled(HomeFocusQR) {
+		if direction == FocusRight && id == HomeFocusPS5 {
+			return HomeFocusQR
+		}
+		if direction == FocusDown && id == HomeFocusBell {
+			return HomeFocusQR
+		}
+	}
+	if direction == FocusDown && id == HomeFocusQR && f.qrUnder != "" {
+		return f.qrUnder
+	}
 	if f.tileUnder != "" {
 		// The header launcher trades Up/Down with the card under it, so the
 		// D-pad never has to guess which column the tile ended up in.
@@ -384,6 +438,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusChat, HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
 		HomeFocusSearch, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
 		HomeFocusUpdate, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
+		HomeFocusVolume, HomeFocusWiFi, HomeFocusQR,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

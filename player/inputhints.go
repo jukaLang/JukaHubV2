@@ -180,6 +180,11 @@ func inputHintsTick(config *Config) {
 	case hintModeController:
 		keyboard = false
 	}
+	// A screenshot shows the hints a player holding the pad sees, whatever is
+	// plugged into the PC taking it (screenshotmode.go).
+	if shotModeOn() {
+		keyboard = false
+	}
 	if hintKeyboardNow.Load() != keyboard {
 		hintKeyboardNow.Store(keyboard)
 	}

@@ -289,6 +289,9 @@ var cfgdocRuntimeKeys = map[string]bool{
 	"screensaverTimeoutMigrated": true, xpackUndoKey: true, xpackActiveFileKey: true,
 	xpackWallpaperKey: true, "chat_input": true, "local_ip": true, "plugin_list": true,
 	"batterySaverRestore": true, "media_recent_searches": true, "weather_screen_text": true,
+	// The TrimUI first-start autostart default was considered on THIS device;
+	// carried to another one it would stop the default there (autostart_firstrun.go).
+	autoStartDefaultedKey: true,
 }
 
 // cfgdocIgnoredKey reports whether a Custom key is runtime state rather than a
@@ -409,7 +412,7 @@ func cfgdocIsSecret(key string, value interface{}) bool {
 func cfgdocSectionOf(key string) string {
 	k := strings.ToLower(key)
 	switch {
-	case k == "swapabbuttons", k == strings.ToLower(xpackInputKey), strings.HasPrefix(k, "inmap"),
+	case k == "swapabbuttons", k == "swapxybuttons", k == strings.ToLower(xpackInputKey), strings.HasPrefix(k, "inmap"),
 		strings.Contains(k, "keymap"), strings.Contains(k, "remap"), strings.Contains(k, "inputprofile"),
 		strings.Contains(k, "controller"), strings.Contains(k, "gamepad"),
 		k == a11yKeySwapAB, k == a11yKeySwapXY, k == a11yKeyOneHanded, k == a11yKeyChordBtn,
@@ -418,7 +421,8 @@ func cfgdocSectionOf(key string) string {
 	case strings.HasPrefix(k, "home"), k == "gridcolumns", k == "searchwidth", strings.Contains(k, "layout"):
 		return cfgdocSectionLayouts
 	case strings.HasPrefix(k, "theme_"), isThemeColorVariable(key), k == "accentcolor", k == "backgroundimage",
-		k == "dynamicbg", k == "timeofdaytheme", k == "fonts", k == "fontsizes", k == a11yKeyFontScale,
+		k == "dynamicbg", k == "timeofdaytheme", strings.HasPrefix(k, "themeday"), strings.HasPrefix(k, "themenight"),
+		k == "fonts", k == "fontsizes", k == a11yKeyFontScale,
 		k == a11yKeyContrast, k == a11yKeyColorblind, k == a11yKeyPrevTheme:
 		return cfgdocSectionTheme
 	}
@@ -1038,8 +1042,9 @@ type cfgdocImportPlan struct {
 // cfgdocDeviceSpecific are settings that belong to one kind of device: fine to
 // import from the same platform, off by default from another.
 var cfgdocDeviceSpecific = map[string]bool{
-	"fullscreen": true, "swapABButtons": true, "tools_path": true, "fileExplorerRoot": true,
-	"powerMode": true, "lowPower": true, "reducedMotion": true, "ledSync": true,
+	"fullscreen": true, "swapABButtons": true, "swapXYButtons": true, "tools_path": true,
+	"fileExplorerRoot": true, "powerMode": true, "lowPower": true, "reducedMotion": true,
+	"ledSync": true,
 }
 
 // cfgdocForeignPath reports whether a value is an absolute path written on the

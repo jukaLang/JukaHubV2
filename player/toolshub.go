@@ -351,10 +351,14 @@ func toolsHubRefreshWiFiName() {
 	}
 }
 
-// toolsHubWiFiSSID is the last network name read, or "".
+// toolsHubWiFiSSID is the last network name read, or "". Screenshot mode
+// names a stand-in network instead (screenshotmode.go).
 func toolsHubWiFiSSID() string {
 	toolsHubWiFiName.mu.Lock()
 	defer toolsHubWiFiName.mu.Unlock()
+	if toolsHubWiFiName.ssid != "" && shotModeOn() {
+		return shotSSID
+	}
 	return toolsHubWiFiName.ssid
 }
 

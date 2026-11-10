@@ -177,8 +177,9 @@ func inmapResetEngine() {
 // ── Synthesized events ───────────────────────────────────────────────────
 
 // inmapEmitButton queues one press or release of b as a fresh event. The A/B
-// swap applyButtonSwap applies to every polled event is undone first, so the
-// screen sees the button the profile named.
+// and X/Y swaps applyButtonSwap applies to every polled event are undone first
+// (padFaceButton is its own inverse), so the screen sees the button the profile
+// named.
 func inmapEmitButton(b inmapButton, down bool) {
 	if inmapEmitHook != nil {
 		inmapEmitHook(b, down)
@@ -187,15 +188,7 @@ func inmapEmitButton(b inmapButton, down bool) {
 	if b >= inmapButtonCount || inmapButtons[b].trigger {
 		return
 	}
-	code := inmapButtons[b].code
-	if appConfig != nil && abButtonsSwapped(appConfig) {
-		switch code {
-		case sdl.CONTROLLER_BUTTON_A:
-			code = sdl.CONTROLLER_BUTTON_B
-		case sdl.CONTROLLER_BUTTON_B:
-			code = sdl.CONTROLLER_BUTTON_A
-		}
-	}
+	code := padFaceButton(appConfig, inmapButtons[b].code)
 	eventType, state := uint32(sdl.CONTROLLERBUTTONUP), uint8(sdl.RELEASED)
 	if down {
 		eventType, state = sdl.CONTROLLERBUTTONDOWN, sdl.PRESSED
@@ -266,7 +259,7 @@ func inmapPaused(config *Config) bool {
 		return true
 	}
 	switch inmapCurrentScene(config) {
-	case inmapProfilesScene, hotseatScene:
+	case inmapProfilesScene, hotseatScene, stickCalScene:
 		return true
 	}
 	return false
@@ -675,15 +668,9 @@ func inmapPhysicallyHeld(b inmapButton, which sdl.JoystickID) bool {
 	if pad == nil {
 		return true
 	}
-	code := inmapButtons[b].code
-	if appConfig != nil && abButtonsSwapped(appConfig) {
-		switch code {
-		case sdl.CONTROLLER_BUTTON_A:
-			code = sdl.CONTROLLER_BUTTON_B
-		case sdl.CONTROLLER_BUTTON_B:
-			code = sdl.CONTROLLER_BUTTON_A
-		}
-	}
+	// The pad is asked for the raw button, so the logical one the profile names
+	// goes back through the firmware swaps (A/B and X/Y on a handheld).
+	code := padFaceButton(appConfig, inmapButtons[b].code)
 	if pad.Button(sdl.GameControllerButton(code)) != 0 {
 		return true
 	}

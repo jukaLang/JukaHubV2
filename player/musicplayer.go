@@ -536,7 +536,9 @@ func musicDecode(path string, startSec float64, gen int) {
 	if speed <= 0 {
 		speed = 1
 	}
-	args := musicFFmpegArgs(path, startSec, speed, rate)
+	// An https stream (radio, podcast) reaches the firmware's TLS-less ffmpeg
+	// through the loopback relay (ffmpegtls.go).
+	args := musicFFmpegArgs(ffmpegReadableInput(ffmpegPath, path), startSec, speed, rate)
 
 	cmd := execCommand(ffmpegPath, args...)
 	if cmd == nil {

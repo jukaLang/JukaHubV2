@@ -67,6 +67,9 @@ func inmapSettingsRows() []setRow {
 			Open:   inmapOpenProfiles,
 		},
 	}
+	// The virtual cursor, Calibrate sticks and each stick's dead zone
+	// (stickcal.go).
+	rows = append(rows, stickCalSettingsRows()...)
 	for a := navArea(0); a < navAreaCount; a++ {
 		rows = append(rows, navmodeSettingsRow(a))
 	}

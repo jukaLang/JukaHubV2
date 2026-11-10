@@ -194,7 +194,7 @@ func triggerOwnedByOverlay() bool {
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
 		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, homeCalendarOpen,
-		homePowerConfirm.open:
+		homePowerConfirm.open, volumePopoverOpen:
 		return true
 	}
 	return false
@@ -244,6 +244,7 @@ func modalPanelBlockReason() string {
 		{"on-screen keyboard", kbPanel.open},
 		{"downloads panel", dlPanel.open},
 		{"weather popover", weatherPopoverOpen},
+		{"volume popover", volumePopoverOpen},
 		{"image viewer", imageViewerPath != ""},
 		{"keyboard", virtualKeyboardActive},
 		{"memory panel", memPanel.open},

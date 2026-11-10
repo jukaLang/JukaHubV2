@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -330,6 +331,10 @@ func configRecoveryMessage(aside string) string {
 	return "Settings were restored from the backup; the damaged file was kept as " + filepath.Base(aside)
 }
 
+// configCorruptKeep is how many damaged files are kept: enough to compare a
+// repeat with the first, few enough that a card cannot fill with them.
+const configCorruptKeep = 5
+
 // preserveCorruptConfig renames an unparsable primary config aside so the next
 // save cannot overwrite it. Returns the path it was kept at, or "" when there
 // was nothing to keep (a missing primary is a first run, not damage).
@@ -337,12 +342,57 @@ func preserveCorruptConfig(path string) string {
 	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
-	aside := path + ".corrupt-" + time.Now().Format("20060102-150405")
+	aside := corruptAsidePath(path)
 	if err := os.Rename(path, aside); err != nil {
 		Log().Warn("damaged config could not be kept aside", "path", path, "err", err)
 		return ""
 	}
+	pruneCorruptCopies(path, configCorruptKeep)
 	return aside
+}
+
+// corruptAsidePath names the copy kept for inspection. Two damaged starts can
+// land in the same second, so an existing name gets a numeric suffix instead of
+// being replaced (os.Rename would lose the first file's evidence).
+func corruptAsidePath(path string) string {
+	base := path + ".corrupt-" + time.Now().Format("20060102-150405.000000000")
+	aside := base
+	for i := 2; ; i++ {
+		if _, err := os.Stat(aside); os.IsNotExist(err) {
+			return aside
+		}
+		aside = fmt.Sprintf("%s-%02d", base, i)
+	}
+}
+
+// pruneCorruptCopies keeps the newest keep damaged copies of path. The names
+// carry the timestamp (and a suffix for a same-second copy), so sorting them
+// oldest-first does not depend on file times, which a clockless handheld can
+// get wrong.
+func pruneCorruptCopies(path string, keep int) {
+	dir, base := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := base + ".corrupt-"
+	var kept []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		kept = append(kept, e.Name())
+	}
+	if len(kept) <= keep {
+		return
+	}
+	sort.Strings(kept)
+	for _, name := range kept[:len(kept)-keep] {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
 // LoadLastKnownGood attempts to load the config from the backup file if the

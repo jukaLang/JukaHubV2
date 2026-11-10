@@ -688,9 +688,10 @@ func formatAmbientTemps(day WeatherDay, unit string) string {
 // dock forecast is switched off. The dock reads the same forecast the header
 // does but is not tied to the header chip's visibility: a user who keeps the
 // top bar minimal still gets weather on the dock, and ambientWeather=false
-// hides it here without touching the rest of the UI.
+// hides it here without touching the rest of the UI. A screenshot has no
+// weather chip at all (screenshotmode.go).
 func ambientWeather(config *Config) (string, string) {
-	if !ambientCustomBool(config, "ambientWeather", true) {
+	if !ambientCustomBool(config, "ambientWeather", true) || shotModeOn() {
 		return "", ""
 	}
 	wxMutex.Lock()
@@ -1035,9 +1036,13 @@ func renderAmbient(renderer *sdl.Renderer, config *Config) bool {
 
 // ambientDrawBackdrop paints the dock's backdrop: the lock-screen picture when
 // one is set, else the photo slideshow, else Home's dark backdrop. It reports
-// whether the slideshow is what is showing (for the photo counter).
+// whether the slideshow is what is showing (for the photo counter). A
+// screenshot keeps the plain backdrop: the photos are the user's own.
 func ambientDrawBackdrop(renderer *sdl.Renderer, config *Config, now time.Time) bool {
 	saverDockDrawBase(renderer)
+	if shotModeOn() {
+		return false
+	}
 	if screenlockImagePath(config) != "" {
 		if drawScreenlockImage(renderer, config, 255) || saverLockShowing(config) {
 			// The chosen picture wins over the slideshow; while it is still

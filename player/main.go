@@ -46,7 +46,9 @@ func main() {
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
 		logFatal("startup", "SDL init error: %v", err)
 	}
-	defer sdl.Quit()
+	// The SDL teardown calls each run under a short deadline of their own: on
+	// the TrimUI they can sit in the GPU driver at exit (sdlteardown.go).
+	defer sdlQuitBounded()
 	// Runs before sdl.Quit on every path out of main, panics included: a chime
 	// still streaming must close its device before SDL shuts audio down.
 	defer shutdownChimeWait()
@@ -96,12 +98,10 @@ func main() {
 	// Cleanup runs before the SDL teardown below. Deferred earlier it would run
 	// after sdl.Quit(), where any entry that still touches an SDL-owned object
 	// (a listener posting a frame, a font) is a crash on the way out instead of
-	// a clean exit.
-	defer func() {
-		for _, fn := range Cleanup {
-			fn()
-		}
-	}()
+	// a clean exit. (They run after the window and renderer are gone, before
+	// sdl.Quit.) Once per process: a wedged SDL teardown call runs them on its
+	// way out too (sdlteardown.go).
+	defer runCleanupHooks()
 
 	// Try XML config first (exported by the web editor), then fall back to JSON.
 	config, configPath, err := LoadXMLConfigWithFallback("jukaconfig.json")
@@ -411,9 +411,10 @@ func main() {
 	if config.Variables.ScreenHeight > 0 {
 		screenH = config.Variables.ScreenHeight
 	}
-	// Fullscreen is intended for the handheld device. On Windows we
-	// always stay windowed so the app is usable during development.
-	fullscreen := config.Variables.Fullscreen && P().FullscreenDefault()
+	// The saved choice wins on every platform: F11 and Settings write it, so a
+	// Windows session left fullscreen comes back that way instead of being
+	// gated behind the platform default.
+	fullscreen := config.Variables.Fullscreen
 
 	windowFlags := sdl.WINDOW_SHOWN
 	if fullscreen {
@@ -442,7 +443,7 @@ func main() {
 	if err != nil {
 		logFatal("startup", "Window creation error: %v", err)
 	}
-	defer window.Destroy()
+	defer sdlDestroyWindowBounded(window)
 	// Title bar, Alt-Tab and the taskbar read the window's own icon, so set it
 	// before anything is drawn instead of relying on the executable resource.
 	applyWindowIcon(window)
@@ -477,7 +478,7 @@ func main() {
 			logFatal("startup", "Renderer creation error: %v", err)
 		}
 	}
-	defer renderer.Destroy()
+	defer sdlDestroyRendererBounded(renderer)
 
 	// Log which renderer we actually ended up with. The GPU driver name
 	// decides where the per-frame cost lands (GPU passes vs CPU fills) and
@@ -813,12 +814,23 @@ func main() {
 					if musicSceneActive() {
 						musicHandleVolumeKey(e)
 					}
+					// Releasing the key that opened an on-screen keyboard ends
+					// the watch on its auto-repeats (browserTextOpenerRepeat).
+					browserTextOpenerRepeat(e)
 					continue
 				}
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
 					// A real key press makes the hints name keys (inputhints.go).
 					inputHintsNoteKey(e)
+					// The key that opened an on-screen keyboard may still be held:
+					// its auto-repeats neither type into the field it opened nor
+					// act. vkDropOpenerText dropped the first character; this
+					// drops the rest, as runInputModal does for the address bar
+					// ("Playlist 3xxx" from a held X).
+					if virtualKeyboardActive && browserTextOpenerRepeat(e) {
+						continue
+					}
 					// A ringing alarm owns the keyboard: snooze and dismiss are the
 					// only actions it accepts, and nothing behind the card reacts —
 					// not even to the key's text, which SDL sends after the key,
@@ -926,8 +938,10 @@ func main() {
 					if ledPanel.open && handleLEDPanelKey(e, config) {
 						continue
 					}
-					// Podcast library is modal and consumes all keys while open.
-					if podPanel.open && handlePodcastPanelKey(e, config) {
+					// Podcast library is modal and consumes all keys while open,
+					// except while its feed keyboard is up: Backspace there used to
+					// remove a show instead of a character.
+					if podPanel.open && !virtualKeyboardActive && handlePodcastPanelKey(e, config) {
 						continue
 					}
 					// IPStream library is modal and consumes all keys while open.
@@ -999,14 +1013,17 @@ func main() {
 					if castPanel.open && handleCastKey(e, config) {
 						continue
 					}
-					if musicSettings.open && handleMusicSettingsKey(e, config) {
+					// The Audio panel yields to its playlist-name keyboard.
+					if musicSettings.open && !virtualKeyboardActive && handleMusicSettingsKey(e, config) {
 						continue
 					}
 					if a11y.open && handleAccessibilityKey(e, config) {
 						continue
 					}
-					// The PS Remote Play client panel is modal too.
-					if chiakiPanel.open && handleChiakiKey(e) {
+					// The PS Remote Play client panel is modal too, but its address,
+					// Account-ID and PIN keyboard owns the keys while it is up:
+					// Backspace and Esc used to close the panel and Enter re-ran a row.
+					if chiakiPanel.open && !virtualKeyboardActive && handleChiakiKey(e) {
 						continue
 					}
 					// PortMaster Ports is modal too.
@@ -1520,14 +1537,7 @@ func main() {
 						}
 						// Fullscreen toggle (F11 / Alt+Enter).
 						if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
-							config.Variables.Fullscreen = !config.Variables.Fullscreen
-							if mainWindow != nil {
-								if config.Variables.Fullscreen {
-									mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
-								} else {
-									mainWindow.SetFullscreen(0)
-								}
-							}
+							applyFullscreen(config, !config.Variables.Fullscreen)
 						}
 					}
 					focusEngine.SyncSelected()
@@ -1546,6 +1556,11 @@ func main() {
 				// A ringing alarm is modal: the pointer moves, hovers and drags
 				// nothing behind its takeover. So is the recovery card.
 				if alarmFiringActive() || recoveryCard.open {
+					continue
+				}
+				// The volume card follows a drag on its slider and keeps the
+				// pointer from hovering the cards behind it (volumepopover.go).
+				if volumePopoverPointerMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0) {
 					continue
 				}
 				// A held press on the package store drags its shelves and
@@ -1588,6 +1603,11 @@ func main() {
 				}
 				// Nor does anything behind the recovery card.
 				if recoveryCard.open {
+					continue
+				}
+				// The wheel is a volume knob while the volume card is up, and
+				// over the speaker button in the header (volumepopover.go).
+				if volumeWheel(config, mouseX, mouseY, e.Y) {
 					continue
 				}
 				// The Home search sheet floats above every screen, so its result
@@ -1993,6 +2013,12 @@ func main() {
 						// Local weather card: it floats above the scene and dismisses
 						// on an outside click before the scene sees the tap.
 						if weatherPopoverClick(mx, my, config) {
+							break
+						}
+
+						// The volume card the same way: its slider and mute button
+						// take the click, anything else closes it (volumepopover.go).
+						if volumePopoverMouseDown(mx, my, config) {
 							break
 						}
 
@@ -2508,6 +2534,12 @@ func main() {
 				if e.Which != padRepeatWhich && e.Which != inmapSynthWhich && a11yRemapEvent(e) {
 					continue
 				}
+				// While the virtual cursor is up, A is its click (a queued left
+				// mouse press at the pointer); a D-pad press puts it away. After the
+				// remap, so a one-handed chord or a remapped confirm clicks too.
+				if vcursorButton(e, config) {
+					continue
+				}
 				// Control profiles see every release here, before anything below
 				// can drop one: a press they rewrote is released as what it
 				// became, and one they held back for a hold, a double tap or the
@@ -2869,6 +2901,10 @@ func main() {
 					}
 				}
 			case *sdl.ControllerAxisEvent:
+				// The sticks' live values see every sample, swallowed or not:
+				// stick navigation, the virtual cursor and the calibration
+				// screen read them (stickcal.go).
+				stickNoteAxis(e)
 				// A ringing alarm is modal: the stick must not move the focus of
 				// the screen behind it (its two buttons answer the D-pad).
 				if alarmFiringActive() {
@@ -2877,7 +2913,9 @@ func main() {
 				// Only a deliberate deflection is input (axisDeflected): a
 				// drifting stick kept the screen awake and the frame rate up.
 				// The controller test still sees every value.
-				deflected := axisDeflected(e.Value)
+				// A stick's dead zone and resting centre are its calibration
+				// (stickcal.go), so a stick resting off centre is not input.
+				deflected := axisDeflectedOn(e.Axis, e.Value)
 				if ctrldiag.open || deflected {
 					frameRateCtrl.NotifyInput()
 				}
@@ -2891,14 +2929,23 @@ func main() {
 					ctrldiagAxisEvent(int(e.Axis), e.Value)
 				} else if axisWakeFilter(e.Axis, e.Value) {
 					// A push that woke the screen only woke it (axisWakeFilter).
-					handleControllerAxis(e, config)
+					// Both sticks at once bring up the virtual cursor, which then
+					// owns the sticks (virtualcursor.go).
+					if !vcursorAxis(e, config) {
+						handleControllerAxis(e, config)
+					}
 				}
 			case *sdl.ControllerDeviceEvent:
 				handleControllerDevice(e)
+				// After the pad is (re)opened, so the sticks are read from it
+				// (virtualcursor.go, stickcal.go).
+				vcursorResetAxes()
 			}
 		}
 
 		drainCustom(config)
+		// A held stick moves / scrolls the virtual cursor every frame.
+		vcursorTick(config)
 		// A hot-reloaded config is installed here, on the main thread and
 		// between frames, never under a frame that is still drawing.
 		if next := takePendingConfigReload(); next != nil {
@@ -3434,6 +3481,9 @@ func main() {
 		// A Screenshot picked from the Start menu lands on the frame the user
 		// was looking at, not on whatever is drawn next.
 		capturePendingScreenshot(renderer)
+		// The virtual cursor goes on last, after both captures, so it is on
+		// screen but never in a screenshot (virtualcursor.go).
+		vcursorRender(renderer)
 
 		renderer.Present()
 		// Measured after Present, so the idle delay at the end of the loop is
@@ -3502,6 +3552,8 @@ func main() {
 	// Stop that waits on a connection, a flush on a dying SD card) is the other
 	// half of the "app locked" report, and the watchdog is what bounds it.
 	armExitDeadline(exitShutdownGrace)
+	// What follows is a quit, not a panic unwinding (sdlteardown.go).
+	sdlMainLoopEnded.Store(true)
 	// The loop ended on a quit, so this start worked: recorded now, not in the
 	// teardown, where a second stop signal, the watchdog or a power cut could
 	// still turn a normal session into a failed start (bootguard.go). Off the

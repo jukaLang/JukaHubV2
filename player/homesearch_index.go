@@ -22,7 +22,6 @@ package main
 // the ranking is tested without a renderer.
 
 import (
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -236,6 +235,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Tickers", where: "Tools", icon: "list", keys: "tickers stocks crypto finance market prices", scene: "Tickers"},
 		{title: "Chat", where: "Apps", icon: "chat", keys: "chat messages ai assistant discord groq", scene: "Chat"},
 		{title: "Browser", where: "Apps", icon: "browser", keys: "browser web internet www website pages", open: openBrowserHome},
+		{title: "Browser settings", where: "Settings", icon: "browser", keys: "browser search engine default engine home page homepage start page google duckduckgo bing startpage", open: brwOpenSettings},
 		{title: "JukaLand", where: "Games", icon: "gamepad", keys: "jukaland game sandbox craft blocks", scene: "JukaLand"},
 		{title: "Apps", where: "Apps", icon: "apps", keys: "apps applications launcher programs", scene: "Apps"},
 		{title: "Packages", where: "Apps", icon: "packages", keys: "packages store install updates repository", scene: "Packages"},
@@ -912,9 +912,10 @@ func homeSearchLooksLikeURL(raw string) bool {
 	return dot > 0 && dot < len(s)-2 && !strings.HasSuffix(s, ".")
 }
 
-// homeSearchWebURL is the Browser's search address for a query.
+// homeSearchWebURL is the Browser's search address for a query, on the engine
+// chosen in Settings → Browser (browser_engines.go).
 func homeSearchWebURL(raw string) string {
-	return browserSearchURL + url.QueryEscape(strings.TrimSpace(raw))
+	return brwSearchURLFor(appConfig, raw)
 }
 
 // homeSearchWebRows is the last group: open the typed address, and search the
@@ -938,7 +939,7 @@ func homeSearchWebRows(q homeSearchQuery, online bool) []gsResult {
 			Category: homeSearchGroupWeb, Action: func(c *Config) { openBrowserAtURL(c, address) }}))
 	}
 	searchURL := homeSearchWebURL(raw)
-	out = append(out, mark(gsResult{Title: "Search the web for “" + raw + "”", Subtitle: "DuckDuckGo in the Browser",
+	out = append(out, mark(gsResult{Title: "Search the web for “" + raw + "”", Subtitle: brwEngineFor(appConfig).Name + " in the Browser",
 		Icon: "globe", Category: homeSearchGroupWeb, Action: func(c *Config) { openBrowserAtURL(c, searchURL) }}))
 	return out
 }

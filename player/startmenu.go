@@ -50,6 +50,9 @@ type startMenuEntry struct {
 	icon   string
 	scene  string
 	action func(*Config)
+	// glyph names the row's vector icon directly (plugin rows); "" looks
+	// it up by scene or name.
+	glyph string
 }
 
 // startMenuGroup is one rail entry and the items it lists.
@@ -220,11 +223,13 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	}
 
 	// "Screens", not "Scenes": a scene is the config's word for a screen, and
-	// the menu is read by people, not by the config.
+	// the menu is read by people, not by the config. Plugins lists the
+	// buttons of the plugins that are switched on (plughooks.go).
 	return []startMenuGroup{
 		{name: "Screens", icon: "S", items: kept},
 		{name: "Games", icon: "G", items: games},
 		{name: "Tools", icon: "T", items: tools},
+		{name: "Plugins", icon: "P", items: plugStartMenuEntries()},
 		{name: "Device", icon: "D", items: device},
 	}
 }
@@ -258,12 +263,15 @@ var (
 		"Wi-Fi Networks": "wifi", "Screenshot": "camera", "Sleep Screen": "moon",
 		"Ambient": "clock", "Wallpapers": "image", "Quit JukaHub": "power",
 		// The rail's groups.
-		"Screens": "grid", "Games": "games", "Tools": "tools", "Device": "devices",
+		"Screens": "grid", "Games": "games", "Tools": "tools", "Plugins": "plugin", "Device": "devices",
 	}
 )
 
 // startMenuGlyph is the icon for a row, or "" to keep its text mark.
 func startMenuGlyph(entry startMenuEntry) string {
+	if entry.glyph != "" && iconKnown(entry.glyph) {
+		return entry.glyph
+	}
 	name := ""
 	if entry.scene != "" {
 		name = startMenuSceneGlyphs[entry.scene]
@@ -689,6 +697,7 @@ func startMenuToggle() {
 		nc.open = false
 		homeCalendarOpen = false
 		dismissWeatherPopover()
+		dismissVolumePopover()
 	}
 	PlayActivateSound()
 }

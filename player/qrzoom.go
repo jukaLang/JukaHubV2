@@ -11,12 +11,19 @@ package main
 // at the largest size that fits and the backlight goes to full while it is up,
 // then returns to exactly the level the device had when the card closes.
 
-import "github.com/veandco/go-sdl2/sdl"
+import (
+	"net/url"
+
+	"github.com/veandco/go-sdl2/sdl"
+)
 
 type qrZoomState struct {
 	open    bool
 	title   string
 	modules [][]bool
+	// detail is an optional caption under the code (the pairing PIN and
+	// address for the Phone Companion); empty keeps the generic hint.
+	detail string
 	// prevPct is the backlight the device had before the card went up.
 	// restore stays false when the device has no readable backlight, so a
 	// platform without one (the desktop builds) never writes a guess back.
@@ -43,6 +50,13 @@ func qrZoomActive() bool { return qrZoom.open }
 // card opened: a surface with no code yet (Wi-Fi down, no companion server)
 // says so and leaves the screen alone rather than showing an empty square.
 func qrZoomOpenCard(modules [][]bool, title string) bool {
+	return qrZoomOpenCardDetail(modules, title, "")
+}
+
+// qrZoomOpenCardDetail is qrZoomOpenCard with a caption under the code: what a
+// person may need beside the camera (the Home pairing code shows its PIN and
+// address, for a phone that cannot scan).
+func qrZoomOpenCardDetail(modules [][]bool, title, detail string) bool {
 	if len(modules) == 0 {
 		ShowToast("No QR code to enlarge yet", ToastKindInfo)
 		return false
@@ -50,6 +64,7 @@ func qrZoomOpenCard(modules [][]bool, title string) bool {
 	qrZoom.open = true
 	qrZoom.title = title
 	qrZoom.modules = modules
+	qrZoom.detail = detail
 	qrZoom.restore = false
 	if pct, ok := qrZoomReadBrightness(); ok {
 		qrZoom.prevPct, qrZoom.restore = pct, true
@@ -80,6 +95,12 @@ func qrZoomCloseCard() {
 func handleQRZoomKey(e *sdl.KeyboardEvent) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !qrZoom.open {
 		return false
+	}
+	// The key that opened the card (Enter on the focused Home code) may still
+	// be held: its repeats are swallowed, or they closed the card, the next
+	// one opened it again, and the backlight flipped with every repeat.
+	if e.Repeat != 0 {
+		return true
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
@@ -192,7 +213,35 @@ func renderQRZoom(renderer *sdl.Renderer, config *Config) {
 }
 
 // qrZoomHint is the one dismissal line every surface shows: either button
-// closes, and the second half says where to point the phone.
+// closes, and the second half says where to point the phone — or, when the
+// surface gave one, its caption (qrZoomOpenCardDetail).
 func qrZoomHint() string {
+	if qrZoom.detail != "" {
+		return hintLine(FooterHint{"A / B", "Close"}, FooterHint{"", qrZoom.detail})
+	}
 	return hintLine(FooterHint{"A / B", "Close"}, FooterHint{"", "Hold the phone steady over the code"})
+}
+
+// homeShowPairingQR shows the Home header's pairing code full screen (A, a
+// click or a tap on it). The header tile is a scaled-down copy of the code
+// on the Phone Companion card, so this is the same symbol at the size and
+// backlight a phone camera reads from arm's length, with the PIN and address
+// under it for a phone that cannot scan.
+func homeShowPairingQR() {
+	qrZoomOpenCardDetail(companion.qr, "Phone Companion", companionPairingCaption(companion.url))
+}
+
+// companionPairingCaption is "PIN 123456 · 192.168.1.5:8765" for a pairing
+// link, read out of the link itself so the caption always matches the code
+// (and its screenshot stand-in, companionURL). A link without a PIN gives the
+// address alone; no link gives "". Pure.
+func companionPairingCaption(link string) string {
+	u, err := url.Parse(link)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if pin := u.Query().Get("p"); pin != "" {
+		return "PIN " + pin + " · " + u.Host
+	}
+	return u.Host
 }

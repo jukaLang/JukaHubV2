@@ -137,7 +137,7 @@ func inmapEnsureScenes(config *Config) {
 	if config == nil {
 		return
 	}
-	for _, name := range []string{inmapProfilesScene, hotseatScene} {
+	for _, name := range []string{inmapProfilesScene, hotseatScene, stickCalScene} {
 		if sceneIndexExact(config, name) < 0 {
 			config.Scenes = append(config.Scenes, SceneConfig{Name: name})
 		}
@@ -152,6 +152,8 @@ func inmapSceneDisplayName(name string) string {
 		return "Control profiles"
 	case hotseatScene:
 		return "Local play"
+	case stickCalScene:
+		return "Stick calibration"
 	}
 	return ""
 }
@@ -177,6 +179,8 @@ func inmapScenesClick(mx, my int32, config *Config) bool {
 		return inmapUIClick(mx, my, config)
 	case hotseatScene:
 		return hotseatUIClick(mx, my, config)
+	case stickCalScene:
+		return stickCalClick(mx, my, config)
 	}
 	return false
 }
@@ -187,7 +191,7 @@ func inmapScenesWheel(config *Config, dy int32) bool {
 	case inmapProfilesScene:
 		inmapUIWheel(dy)
 		return true
-	case hotseatScene:
+	case hotseatScene, stickCalScene:
 		return true
 	}
 	return false
@@ -201,6 +205,8 @@ func inmapScenesFooterHints(name string) ([]FooterHint, bool) {
 		return inmapUIHints(), true
 	case hotseatScene:
 		return hotseatUIHints(), true
+	case stickCalScene:
+		return stickCalHints(), true
 	}
 	return nil, false
 }

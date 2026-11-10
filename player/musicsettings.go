@@ -266,6 +266,7 @@ func handleMusicSettingsKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if cur < 0 || cur >= len(rows) {
 		cur = 0
 	}
+	wasOpen := virtualKeyboardActive
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		musicSettingsMove(-1)
@@ -280,9 +281,15 @@ func handleMusicSettingsKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_x:
 		// Save the current queue under a name typed on the on-screen keyboard.
 		vkOpenPlaylistName()
+	case sdl.K_y:
+		// Export the selected playlist as M3U8 for a PC or another card.
+		musicExportSelectedPlaylist()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_k:
 		closeMusicSettingsPanel()
 	}
+	// X (or Space on a row that asks for a name) opened the keyboard: its own
+	// character must not be typed into the name (vkopenertext.go).
+	vkDropOpenerText(e, wasOpen)
 	return true
 }
 
@@ -304,6 +311,8 @@ func ctrlMusicSettings(e *sdl.ControllerButtonEvent, config *Config) bool {
 		musicSettingsAdjust(rows[cur], -1, config)
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_A:
 		musicSettingsActivate(rows[cur], config)
+	case sdl.CONTROLLER_BUTTON_Y:
+		musicExportSelectedPlaylist()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeMusicSettingsPanel()
 	}
@@ -432,7 +441,7 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 
 	hint := hintLine(FooterHint{"Up/Down", "Row"}, FooterHint{"Left/Right", "Change"},
-		FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
+		FooterHint{"A", "Select"}, FooterHint{"Y", "Export"}, FooterHint{"B", "Close"})
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 200},
 		x+(panelW-int32(hw))/2, y+panelH-footerH+6)

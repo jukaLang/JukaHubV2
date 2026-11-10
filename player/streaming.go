@@ -207,12 +207,17 @@ func streamFormatSelector(maxHeight int) string {
 		maxHeight, maxHeight, maxHeight)
 }
 
-// streamAttempt is one extraction strategy. The order is deliberate: measured
-// against current YouTube, the web/ios/tv/mweb clients return no muxed format
-// at all from a standalone yt-dlp without a JavaScript runtime, while the
-// android clients still do. The web-based clients are therefore only the last
-// resort (they do work when a JS runtime is installed), and each attempt gets
-// cheaper and more permissive as it goes.
+// streamAttempt is one extraction strategy. The order is deliberate: the
+// player needs one muxed stream (video and sound in one URL), and in November
+// 2026 the only client that serves one from a standalone yt-dlp without a
+// JavaScript runtime is android — format 18, the 360p MP4 (yt-dlp issues 17586
+// and 18005). yt-dlp's own defaults (tv_samsung, visionos, web) carry no muxed
+// format without a runtime, so they come second, where a runtime next to the
+// helper makes them useful. Each attempt is one helper process: a cold start
+// is most of an attempt (yt-dlp --version alone measured 2.8 s, because the
+// one-file binary unpacks itself on every run), so clients that belong
+// together share an invocation and yt-dlp falls through between them inside
+// it.
 type streamAttempt struct {
 	name string
 	args []string
@@ -220,45 +225,58 @@ type streamAttempt struct {
 
 func streamAttempts(maxHeight int) []streamAttempt {
 	muxed := streamFormatSelector(maxHeight)
-	// 18 is the 360p muxed MP4 every client still serves; asking for it first
-	// is the last chance before the caller downloads the whole file.
+	// 18 is the 360p muxed MP4 the android and embedded clients still serve;
+	// asking for it first is the last chance before the caller downloads the
+	// whole file.
 	anyMuxed := "18/" + muxed
 	return []streamAttempt{
 		{
-			// Both android clients in one invocation, in yt-dlp's own client
-			// list, which is what makes a dead client cheap: yt-dlp falls
-			// through to the next one inside the same process. Asking for them
-			// as two attempts cost a whole second extraction when the first
-			// failed — a cold helper is most of an attempt (yt-dlp --version
-			// alone measured 2.8 s here, because the one-file binary unpacks
-			// itself on every run), so the serial fallback measured 9.2-10.4 s
-			// and the run in the field logged 2.4 s + 4.5 s. As one call with
-			// both clients it measured 4.2-4.5 s, and a client that still fails
-			// inside it (web,android_vr was the probe) still returns a URL.
-			name: "android clients",
+			// android alone. It used to share this call with android_vr, but
+			// since 2026-08-17 the CDN refuses every android_vr format (yt-dlp
+			// issue 17456) while its player call still answers, so yt-dlp could
+			// hand back an android_vr URL that ffmpeg was then refused.
+			name: "android client",
 			args: []string{
-				"--extractor-args", "youtube:player_client=android,android_vr",
+				"--extractor-args", "youtube:player_client=android",
 				"-f", muxed,
 			},
 		},
 		{
-			name: "android 360p",
+			// yt-dlp's own default clients — maintained upstream and refreshed
+			// by every update (ytdlp_update.go) — plus web_embedded, the client
+			// yt-dlp itself falls back to for format 18. Both need the
+			// JavaScript runtime yt-dlp looks for on PATH (helperToolEnv puts
+			// the tools folder there, so a runtime dropped next to the helper
+			// is found).
+			name: "default clients",
 			args: []string{
-				"--extractor-args", "youtube:player_client=android,android_vr",
+				"--extractor-args", "youtube:player_client=default,web_embedded",
 				"-f", anyMuxed,
 			},
 		},
 		{
-			// No extractor overrides: yt-dlp's own client list also fetches
-			// the webpage, which is the path that works once a JavaScript
-			// runtime is available next to the helper tools.
-			name: "default clients",
+			// The clients that used to work, in one call: ios and tv, for
+			// helpers old enough to still prefer them. android_vr is not asked
+			// any more: yt-dlp prints its format 18 without fetching it, so the
+			// attempt "succeeded" with a URL the CDN refuses (403 since
+			// 2026-08-17), failed the probe, and the refusal that explained the
+			// failure never reached the message.
+			name: "legacy clients",
 			args: []string{
+				"--extractor-args", "youtube:player_client=ios,tv",
 				"-f", anyMuxed,
 			},
 		},
 	}
 }
+
+// ytDlpDownloadClients is the client list of the whole-file download, the
+// path every failed stream ends on: android for the muxed format 18, then
+// yt-dlp's defaults and web_embedded for a helper with a JavaScript runtime.
+// It replaced "android,web;youtube:player_skip=webpage", whose second
+// "youtube:" made player_skip an unknown argument and whose web client serves
+// nothing muxed any more.
+const ytDlpDownloadClients = "youtube:player_client=android,default,web_embedded"
 
 // playbackMaxHeight reads the playback resolution ceiling from the config.
 func playbackMaxHeight(config *Config) int {
@@ -490,6 +508,9 @@ func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source 
 		})
 	if err != nil {
 		logWarn("stream", "could not stream %s: %v", sanitizeLogURL(source), err)
+		// The download that follows reports the failure; this is what it
+		// reads when its own stderr does not explain it.
+		noteStreamResolveFailure(source, err.Error())
 		return "", false
 	}
 	return direct, true

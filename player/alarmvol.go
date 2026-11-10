@@ -5,13 +5,15 @@ package main
 // An alarm has to be heard across a room and seen whatever was open, so for the
 // length of a ring it borrows three things and gives each back exactly:
 //
-//   - the speaker: the system mixer goes to 100% (pactl/amixer, the same
-//     allowlisted backends Quick Settings uses) and returns to the level it was
-//     found at on snooze, dismiss or exit. The level being restored is written
-//     to a marker in the temp directory before the mixer is touched, so a crash
-//     mid-ring is undone by the next start (the temp directory is RAM on the
-//     handheld, and a reboot resets the mixer anyway). Windows has no mixer
-//     backend here; the ring is simply synthesised at full scale.
+//   - the speaker: the system mixer goes to 100% (the same backends Quick
+//     Settings uses) and returns to the level it was found at on snooze,
+//     dismiss or exit. The level being restored is written to a marker in the
+//     temp directory before the mixer is touched, so a crash mid-ring is undone
+//     by the next start. The temp directory is RAM on the handheld, so the
+//     ring's level is set as a borrowed one (setSystemVolumeTransient): the
+//     TrimUI firmware's own saved level never sees the 100%, and a reboot comes
+//     back at the user's level. On Windows the mixer is JukaHub's own entry in
+//     the Windows volume mixer.
 //   - the media: music and an embedded video are paused under the ring and
 //     resumed after it, if the alarm was what paused them.
 //   - a running game: on the handheld it is paused (SIGSTOP to its group) so
@@ -42,7 +44,7 @@ var alarmVolumeMarkerPath = func() string {
 var (
 	alarmVolumeAvailable = func() bool { return volumeBackend() != "" }
 	alarmVolumeGet       = systemVolume
-	alarmVolumeSet       = setSystemVolume
+	alarmVolumeSet       = setSystemVolumeTransient
 )
 
 // alarmVolumeMarker is the marker's content.
@@ -139,6 +141,9 @@ func alarmVolumeDoRaise() {
 		return
 	}
 	alarmVol.saved, alarmVol.raised = level, true
+	// The speaker's cache must not take the ring's 100% as the level an
+	// un-mute returns to (volumectl.go).
+	volumeAlarmRaised.Store(true)
 	logDebug("alarm", "volume %d%% -> 100%% for the ring", level)
 }
 
@@ -147,6 +152,9 @@ func alarmVolumeDoRestore() {
 		return
 	}
 	alarmVol.raised = false
+	// Cleared once the level is back (or the write failed), so a poll that
+	// read the ring's level while it was up still counts as the alarm's.
+	defer volumeAlarmRaised.Store(false)
 	if err := alarmVolumeSet(alarmVol.saved); err != nil {
 		logWarn("alarm", "could not restore the volume to %d%%: %v", alarmVol.saved, err)
 		return // the marker stays, so the next start tries again

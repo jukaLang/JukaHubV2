@@ -150,7 +150,11 @@ func playSmartURL(config *Config, url string) {
 	}
 	// playVideoInfo downloads with yt-dlp and decodes in the embedded player,
 	// which is the same path YouTube search results use.
-	playVideoInfo(config, VideoInfo{URL: url})
+	v := VideoInfo{URL: url}
+	playVideoInfo(config, v)
+	// A bare link has no title: name a YouTube video in Recents instead of
+	// showing its address (ytoembed.go).
+	ytFillMissingTitle(v)
 }
 
 // Live TV playlist parsing, categorisation, search and favorites live in

@@ -536,6 +536,24 @@ func mediaHubEnter(config *Config) {
 	if mediaHub.tab == mediaTabShorts {
 		mediaHubLoadShorts(config)
 	}
+	// An old yt-dlp is the usual reason YouTube stops loading videos. Opening
+	// Media is when to look, in the background and at most twice a day
+	// (ytdlp_update.go); the native search above needs no helper meanwhile.
+	go requestYtDlpUpdate(config, ytdlpTriggerRoutine, nil)
+}
+
+// mediaHubTabShown is the tab on screen while Media is up, -1 while it is not.
+// mediaHubTick writes it on the main loop; background work that must not read
+// mediaHub itself (the search a yt-dlp update re-runs) reads it instead.
+var mediaHubTabShown atomic.Int32
+
+// mediaHubSearchRetryBlocked reports whether re-running the search behind the
+// Results tab would take the screen from the user: Media is up on another
+// tab, and a new search generation makes it switch to Results (mediaHubTick).
+// On another screen — the legacy Tube scene, say — a re-run moves nothing.
+func mediaHubSearchRetryBlocked() bool {
+	shown := mediaHubTabShown.Load()
+	return shown >= 0 && shown != int32(mediaTabSearch)
 }
 
 // mediaHubTick runs every frame from the main loop. It is a few comparisons
@@ -543,6 +561,7 @@ func mediaHubEnter(config *Config) {
 // settings mirror.
 func mediaHubTick(config *Config) {
 	if !mediaHubIsCurrent(config) {
+		mediaHubTabShown.Store(-1)
 		// The Library's scan is Media's: it stops when Media is left and the
 		// next visit carries on from what it finished (mlib.go).
 		if mlibScanning.Load() {
@@ -550,6 +569,7 @@ func mediaHubTick(config *Config) {
 		}
 		return
 	}
+	mediaHubTabShown.Store(int32(mediaHub.tab))
 	if transitionPhase != "none" {
 		return
 	}
@@ -1330,7 +1350,9 @@ func mediaHubBuildRows(config *Config, ctx mediaCardContext, prev []mediaRow) []
 		}
 		rows = append(rows, row)
 	}
-	if len(mediaHub.recent) > 0 && IsOnline() {
+	// The searches are the user's own: a screenshot leaves the row out
+	// (screenshotmode.go).
+	if len(mediaHub.recent) > 0 && IsOnline() && !shotModeOn() {
 		rows = append(rows, mediaRow{kind: mediaRowRecentSearch, title: "Search again",
 			chips: append([]string(nil), mediaHub.recent...)})
 	}

@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,10 +49,11 @@ var (
 	batterySaverSaved  batterySaverSnapshot
 	lastWidgetTick     time.Time
 
-	// lastTimeOfDayBucket is the hour whose preset was last applied. Tracking
-	// the bucket (not the preset) is what lets a manual theme choice stick: the
-	// automatic switch only fires when the time of day actually moves on.
-	lastTimeOfDayBucket = -1
+	// lastTimeOfDayBucket is the part of the day (themePhaseDay or
+	// themePhaseNight, themeschedule.go) the schedule last acted on. Tracking
+	// the part of the day (not the preset) is what lets a manual theme choice
+	// stick: the automatic switch only fires when the day actually moves on.
+	lastTimeOfDayBucket = themePhaseUnknown
 )
 
 // --- settings ---------------------------------------------------------------
@@ -82,28 +84,242 @@ func timeOfDayThemeEnabled(config *Config) bool {
 
 // --- battery ----------------------------------------------------------------
 
-// getBatteryCharging reports whether the battery is charging/full. Unknown
-// (no sysfs entry, desktop machine) counts as not charging, which lets the
-// saver engage on a low battery rather than never engaging at all.
+// powerSupplyRoot is the kernel's power-supply class: the battery and every
+// charger input (USB, mains, wireless) appear here as one directory each.
+const powerSupplyRoot = "/sys/class/power_supply"
+
+// batteryChargingCache keeps the power-supply walk off the render path. The
+// status bar's battery gauge draws the charging bolt from this on every frame,
+// and on the handheld each uncached read is a directory walk plus a handful of
+// sysfs opens.
+var batteryChargingCache struct {
+	mu       sync.Mutex
+	at       time.Time
+	charging bool
+}
+
+// getBatteryCharging reports whether the device is on external power: the
+// battery says it is charging (or held full on the cable), or a charger input
+// reports that it is plugged in. Unknown (no sysfs entry, desktop machine)
+// counts as not charging, which lets the saver engage on a low battery rather
+// than never engaging at all. The answer is reused for batteryPercentRefresh,
+// the same window the level uses.
+//
+// The battery's own status was the only source, and the TrimUI Smart Pro's
+// AXP2202 driver does not reliably report "Charging" there: plugged in, the
+// corner showed a plain gauge. Its USB input (axp2202-usb/online) is the
+// reading MinUI and NextUI use for the same question, so a charger that is
+// online now counts too.
 func getBatteryCharging() bool {
-	dir := batterySysfsDir()
-	if dir == "" {
-		return false
+	batteryChargingCache.mu.Lock()
+	defer batteryChargingCache.mu.Unlock()
+	if !batteryChargingCache.at.IsZero() && time.Since(batteryChargingCache.at) < batteryPercentRefresh {
+		return batteryChargingCache.charging
 	}
+	charging := batteryChargingIn(powerSupplyRoot)
+	batteryChargingCache.at = time.Now()
+	batteryChargingCache.charging = charging
+	return charging
+}
+
+// batteryChargingIn is getBatteryCharging for one power_supply directory, so a
+// test can lay out a fake sysfs. A battery that says "Charging" is on external
+// power whatever else is there. Otherwise, on a device with a charger input,
+// that input's `online` decides: "Full" and "Not charging" alone are only
+// trusted where there is no charger entry at all, because some fuel gauges
+// latch Full at 100% or report "Not charging" when the current reads 0 with no
+// cable in — and with the bolt in the corner, such a false positive is on
+// screen. ("Not charging" is otherwise a battery on the cable held where it is:
+// full, or paused for heat.)
+func batteryChargingIn(base string) bool {
+	status := ""
+	if dir := batterySysfsDirIn(base); dir != "" {
+		status = batteryStatusIn(dir)
+	}
+	if status == "charging" {
+		return true
+	}
+	if chargers, online := powerSupplyChargersIn(base); chargers > 0 {
+		return online
+	}
+	return status == "full" || status == "not charging"
+}
+
+// batteryStatusIn reads a battery's status file, lower-cased: "charging",
+// "discharging", "full", "not charging" or "unknown"; "" when it cannot be
+// read.
+func batteryStatusIn(dir string) string {
 	data, err := os.ReadFile(filepath.Join(dir, "status"))
 	if err != nil {
-		return false
+		return ""
 	}
-	switch strings.ToLower(strings.TrimSpace(string(data))) {
-	case "charging", "full", "not charging": // "not charging" = plugged in, held full
-		return true
+	return strings.ToLower(strings.TrimSpace(string(data)))
+}
+
+// powerSupplyChargersIn counts the charger inputs in one power_supply
+// directory and reports whether any of them has power on it.
+func powerSupplyChargersIn(base string) (chargers int, online bool) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return 0, false
+	}
+	for _, entry := range entries {
+		path := filepath.Join(base, entry.Name())
+		// Entries are symlinks into the device tree: Stat follows them, the
+		// way batterySysfsDirIn does (DirEntry.IsDir reports false for a link).
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		isCharger, on := powerSupplyCharger(path, entry.Name())
+		if !isCharger {
+			continue
+		}
+		chargers++
+		if on {
+			online = true
+		}
+	}
+	return chargers, online
+}
+
+// powerSupplyCharger reports whether one power_supply entry is a charger input
+// — one with an `online` reading — and whether power is on it. The kernel's
+// own type decides when it names one (Mains, USB and its USB_* variants,
+// Wireless); a driver that leaves the type empty or vague is judged by its name
+// (axp2202-usb, *-ac, *charger*). A battery is never a charger, whatever its
+// name says.
+func powerSupplyCharger(dir, name string) (isCharger, online bool) {
+	kind := ""
+	if data, err := os.ReadFile(filepath.Join(dir, "type")); err == nil {
+		kind = strings.ToLower(strings.TrimSpace(string(data)))
+	}
+	if kind == "battery" {
+		return false, false
+	}
+	value, ok := readBatteryCounter(filepath.Join(dir, "online"))
+	if !ok {
+		return false, false
+	}
+	switch {
+	case kind == "mains", kind == "usb", kind == "wireless", strings.HasPrefix(kind, "usb_"):
+	case powerSupplyNameLooksLikeCharger(name):
+	default:
+		return false, false
+	}
+	return true, value > 0
+}
+
+// powerSupplyNameLooksLikeCharger is the name half of powerSupplyCharger:
+// whole words like "ac", "usb", "dc" or "vbus" (so "axp2202-usb" and "bq-ac"
+// count but "tracker" does not), or a name containing charger/adapter/mains.
+func powerSupplyNameLooksLikeCharger(name string) bool {
+	n := strings.ToLower(name)
+	for _, word := range []string{"charger", "adapter", "mains"} {
+		if strings.Contains(n, word) {
+			return true
+		}
+	}
+	for _, field := range strings.FieldsFunc(n, func(r rune) bool { return r < 'a' || r > 'z' }) {
+		switch field {
+		case "ac", "usb", "dc", "vbus", "pd":
+			return true
+		}
 	}
 	return false
 }
 
+// --- is the battery holding up? ----------------------------------------------
+//
+// getBatteryCharging answers "is a cable in?", which is what the bolt, Quick
+// Settings and the update and LED policies want. The low-battery guard and the
+// battery saver need a different answer — "is the battery not draining?" — and
+// the two part ways on a supply that cannot keep up: a 500 mA PC port under an
+// emulator holds the cable in while the level still falls, and the guard
+// standing down for the cable let the PMIC cut power at its floor with no save.
+// So those two stand down only while the battery itself says it is charging,
+// or while a cable is in and the level has not fallen since it went in.
+
+// batteryTrend is the level since the cable last went in, fed by widgetsTick.
+var batteryTrend struct {
+	mu      sync.Mutex
+	cableIn bool
+	state   batteryTrendState
+}
+
+// batteryTrendState is the history batteryHoldingCharge reads: the highest
+// level seen since the cable went in and the newest one. have is false until
+// the first reading.
+type batteryTrendState struct {
+	have   bool
+	peak   int
+	newest int
+}
+
+// note returns the state after one more reading; an unknown level (-1) changes
+// nothing. The peak only ever rises. It used to be the highest reading of the
+// last ten minutes, and on a charger that loses a percent every ten minutes or
+// more that window aged each drop out: the battery read "holding" again until
+// the next one, so near 20-25% the battery saver turned off and on every cycle
+// (a toast, a theme switch and a settings save each time) and the low-battery
+// warning repeated. Pure.
+func (s batteryTrendState) note(pct int) batteryTrendState {
+	if pct < 0 {
+		return s
+	}
+	if !s.have || pct > s.peak {
+		s.peak = pct
+	}
+	s.newest = pct
+	s.have = true
+	return s
+}
+
+// falling reports whether the level is below the highest seen since the cable
+// went in. It latches: the battery reads as holding again only once the level
+// is back at that peak (a charger catching up) or the cable state changes. A
+// cable that just went in has nothing to fall from and gets the benefit of the
+// doubt. Pure.
+func (s batteryTrendState) falling() bool {
+	return s.have && s.newest < s.peak
+}
+
+// batteryTrendNote records one reading. A change of the cable state starts the
+// history over, so the drain before a cable went in never counts against it.
+func batteryTrendNote(pct int, cableIn bool) {
+	batteryTrend.mu.Lock()
+	defer batteryTrend.mu.Unlock()
+	if cableIn != batteryTrend.cableIn {
+		batteryTrend.cableIn = cableIn
+		batteryTrend.state = batteryTrendState{}
+	}
+	if !cableIn {
+		return
+	}
+	batteryTrend.state = batteryTrend.state.note(pct)
+}
+
+// batteryHoldingCharge is the "on external power" the low-battery guard and
+// the battery saver use: the battery says it is charging (or full), or a cable
+// is in and the level has not fallen below its peak since it went in.
+func batteryHoldingCharge() bool {
+	if dir := batterySysfsDir(); dir != "" {
+		switch batteryStatusIn(dir) {
+		case "charging", "full":
+			return true
+		}
+	}
+	if !getBatteryCharging() {
+		return false
+	}
+	batteryTrend.mu.Lock()
+	defer batteryTrend.mu.Unlock()
+	return !batteryTrend.state.falling()
+}
+
 // batterySysfsDir returns the battery directory under /sys/class/power_supply.
 func batterySysfsDir() string {
-	return batterySysfsDirIn("/sys/class/power_supply")
+	return batterySysfsDirIn(powerSupplyRoot)
 }
 
 // batterySysfsDirIn picks the battery from one power_supply directory. The
@@ -274,6 +490,12 @@ func applyBatterySaver(config *Config, engage bool, percent int) {
 		}
 		delete(config.Variables.Custom, batterySaverRestoreKey)
 		batterySaverActive = false
+		// With light & dark by time of day on, the next tick puts on the theme
+		// for this part of the day — which the saver's snapshot may no longer
+		// be: a switch time passed, or a theme was picked, under the saver.
+		if timeOfDayThemeEnabled(config) {
+			lastTimeOfDayBucket = themePhaseUnknown
+		}
 		showToast(saverMessage("Battery saver off", percent), ToastSuccess())
 	}
 	// The cadence controller reads LowPower from the config each frame, so the
@@ -337,36 +559,20 @@ func themePresetName(config *Config) string {
 
 // --- time of day ------------------------------------------------------------
 
-// timeOfDayPresetFor maps an hour to a theme preset. Every name exists in the
-// theme gallery, so a preset rename shows up here as a compile-time no-op
-// rather than a crash.
-func timeOfDayPresetFor(hour int) string {
-	switch {
-	case hour >= 5 && hour < 7:
-		return "sunset" // dawn
-	case hour >= 7 && hour < 19:
-		return "light"
-	case hour >= 19 && hour < 22:
-		return "midnight"
-	default:
-		return "oled" // night
-	}
-}
-
-// applyTimeOfDayTheme switches to the preset for the current hour. It returns
-// the preset it applied, or "" when the hour has not moved on (or the theme
-// already matches), so a theme the user picked by hand is not reverted a
-// second later — it stands until the next time-of-day bucket.
+// applyTimeOfDayTheme applies the day or the night theme of the light & dark
+// schedule (themeschedule.go). It returns the preset it applied, or "" when
+// the part of the day has not moved on (or the theme already matches), so a
+// theme the user picked by hand is not reverted a second later — it stands
+// until the next switch.
 func applyTimeOfDayTheme(config *Config, now time.Time) string {
-	if config == nil || !timeOfDayThemeEnabled(config) {
+	// Not under a running game: a switch clears the texture caches and saves
+	// the settings, which can wait until the game hands the screen back.
+	if gameScreenSuspended() {
 		return ""
 	}
-	if now.Hour() == lastTimeOfDayBucket {
-		return ""
-	}
-	lastTimeOfDayBucket = now.Hour()
-	want := timeOfDayPresetFor(now.Hour())
-	if want == themePresetName(config) {
+	want, phase := themeScheduleStep(config, now, lastTimeOfDayBucket)
+	lastTimeOfDayBucket = phase
+	if want == "" {
 		return ""
 	}
 	applyThemePreset(config, want, false)
@@ -385,10 +591,13 @@ func widgetsTick(config *Config) {
 	lastWidgetTick = now
 
 	// Battery saver. `sdl.GetTicks64()` keeps the toast timing honest even when
-	// the clock is adjusted.
+	// the clock is adjusted. It stands down for a battery that is holding its
+	// charge, not merely for a cable (batteryHoldingCharge); the level's recent
+	// history behind that answer is kept here, once a second.
 	percent := getBatteryPercent()
+	batteryTrendNote(percent, getBatteryCharging())
 	if batterySaverEnabled(config) {
-		engage := batterySaverShouldEngage(percent, getBatteryCharging(), batterySaverActive)
+		engage := batterySaverShouldEngage(percent, batteryHoldingCharge(), batterySaverActive)
 		applyBatterySaver(config, engage, percent)
 	} else if batterySaverActive {
 		applyBatterySaver(config, false, percent)
@@ -401,6 +610,10 @@ func widgetsTick(config *Config) {
 	if !batterySaverActive {
 		applyTimeOfDayTheme(config, now)
 	}
+
+	// A first-start default applied before the loop ran is announced here,
+	// on a frame the user can see (autostart_firstrun.go).
+	autoStartShowPendingNotice()
 }
 
 // --- settings scene ---------------------------------------------------------
@@ -590,11 +803,11 @@ func ensureSmartSettingsScene(config *Config) {
 		note     string
 	}{
 		{"Start JukaHub at login", "autoStart",
-			"Off by default. Adds one launcher to your startup folder."},
+			"On from a TrimUI's first start; elsewhere off until you turn it on."},
 		{"Battery saver (automatic)", "batterySaver",
 			"At 20% or less: slower cadence, no motion, OLED theme."},
-		{"Theme follows time of day", "timeOfDayTheme",
-			"Dawn sunset · day light · evening midnight · night OLED."},
+		{"Light & dark by time of day", "timeOfDayTheme",
+			"Day and night themes and times: Settings → Display & theme."},
 		{"Save & suspend at 3%", "lowBatteryGuard",
 			"While a game runs: save state, sync, then suspend."},
 	}
@@ -731,17 +944,29 @@ func widgetToggleSideEffect(config *Config, variable string, on bool) bool {
 		weatherApplyEnabled(on)
 		return false
 	case "timeofdaytheme":
-		// Re-evaluate from scratch so turning it on applies the preset for this
-		// hour right away.
-		lastTimeOfDayBucket = -1
+		// Re-evaluate from scratch so turning it on applies the theme for this
+		// part of the day right away.
+		lastTimeOfDayBucket = themePhaseUnknown
 		if !on {
-			showToast("Theme no longer follows time of day", ToastInfo())
+			showToast("Light & dark by time of day is off", ToastInfo())
+			return true
+		}
+		// The Smart Widgets page turns it on without the Settings row's seeding:
+		// the theme on screen keeps the part of the day it suits.
+		if config != nil {
+			themeScheduleSeed(config)
+			saveUserConfigDebounced(userConfigFromVariables(config))
+		}
+		// The battery saver keeps its OLED while it is on; the first tick after
+		// it lets go applies the schedule (the phase is unknown until then).
+		if batterySaverActive {
+			showToast("Light & dark by time of day is on · after the battery saver", ToastInfo())
 			return true
 		}
 		if preset := applyTimeOfDayTheme(config, time.Now()); preset != "" {
-			showToast("Theme follows time of day: "+GetThemePreset(preset).Name, ToastSuccess())
+			showToast("Light & dark by time of day: "+GetThemePreset(preset).Name+" now", ToastSuccess())
 		} else {
-			showToast("Theme already matches the time of day", ToastInfo())
+			showToast("Light & dark by time of day is on", ToastInfo())
 		}
 		return true
 	}

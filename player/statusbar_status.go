@@ -1,12 +1,15 @@
 package main
 
-// The system corner of the top bar: a Wi-Fi meter and a battery gauge.
+// The system corner of the top bar: a volume button, a Wi-Fi meter and a
+// battery gauge.
 //
 // The right-hand cluster is still the shared []string from headerStatusParts,
 // so layout, trimming (fitStatusParts) and the clock/weather hit rects keep
-// working unchanged. What changes here is how two of those parts are painted:
-// the network slot becomes signal bars (empty when there is no link) and the
-// battery part grows a gauge coloured green / yellow / red by the charge left.
+// working unchanged. What changes here is how three of those parts are painted:
+// the leading volume part is a speaker glyph (the button that opens the volume
+// popover, volumepopover.go), the network slot becomes signal bars (empty when
+// there is no link) and the battery part grows a gauge coloured green / yellow
+// / red by the charge left, with a bolt over it while a charger is plugged in.
 //
 // Both the home header and every scene's status bar call the helpers below with
 // their own text drawing function, so the icons are pixel-identical on every
@@ -29,6 +32,11 @@ const (
 	// device is online. The meter replaces the word itself.
 	statusWiFiMarker = "WiFi"
 
+	// statusVolumePart is the volume button's part: a marker like the media
+	// chip's "np|", never drawn as text. headerStatusParts puts it first, so
+	// the speaker sits immediately left of the Wi-Fi meter.
+	statusVolumePart = "vol|"
+
 	// statusChipTextGap separates a gauge from its label and the bar gap.
 	statusChipTextGap = int32(6)
 
@@ -44,10 +52,24 @@ type statusTextDrawer func(text string, color sdl.Color, x, y int32)
 // header is on screen. A click or tap on it opens the Wi-Fi picker.
 var statusWiFiRect sdl.Rect
 
+// statusVolumeRect is the speaker button's hit area, measured the same way. A
+// click, a tap or A on it opens the volume popover, and the popover hangs
+// from it.
+var statusVolumeRect sdl.Rect
+
 // statusBatteryPercent supplies the level in the shared status cluster. It is a
 // variable so the render tests can pin a level instead of depending on the host
 // machine's battery (the real reader returns -1 when there is none).
 var statusBatteryPercent = getBatteryPercent
+
+// statusBatteryCharging says whether the gauge wears the charging bolt. A
+// variable for the same reason as the level: a render test pins it instead of
+// depending on whether the build machine is on its charger.
+var statusBatteryCharging = getBatteryCharging
+
+// statusVolumeLevel supplies the speaker glyph's level (volumectl.go keeps it
+// fresh off the render thread); known=false before the first reading.
+var statusVolumeLevel = volumeCurrent
 
 // statusWiFiSignal returns the live meter state: 1..4 measured bars,
 // statusWiFiUnknown (a link whose strength is not reported) or statusWiFiNoLink
@@ -108,11 +130,23 @@ func isWiFiStatusPart(part string) bool {
 	return part == statusWiFiMarker || strings.HasPrefix(part, "! Offline")
 }
 
+// isVolumeStatusPart reports whether the part is the volume button. The marker
+// cannot collide with a reading: no clock, forecast, battery level, SSID or
+// media title is spelt "vol|".
+func isVolumeStatusPart(part string) bool {
+	return part == statusVolumePart
+}
+
 // statusFingerRect turns a drawn status chip into a tap target a thumb can hit
 // without aiming. The meter itself is only about 18px of bars inside a 34px
 // chip, which is a miss on a 5-inch panel; the target grows to the full height
 // of the bar and to a comfortable width, then stops short of the neighbouring
 // controls so a tap on the clock or the forecast still belongs to them.
+//
+// Neighbours on either side bound it: the cluster now starts with the volume
+// button, so the meter is no longer the leftmost chip and its target may not
+// grow over the speaker beside it. A chip with nothing on its left (the
+// volume button itself) still grows into the empty space there.
 func statusFingerRect(chip sdl.Rect, barH int32, neighbours ...sdl.Rect) sdl.Rect {
 	if chip.W <= 0 || barH <= 0 {
 		return chip
@@ -122,22 +156,43 @@ func statusFingerRect(chip sdl.Rect, barH int32, neighbours ...sdl.Rect) sdl.Rec
 		minTargetW = int32(44)
 	)
 	r := sdl.Rect{X: chip.X - padX, Y: 0, W: chip.W + 2*padX, H: barH}
+	// floor is the leftmost x the target may take: 0, or 2px clear of a
+	// neighbour drawn on the chip's left.
+	floor := int32(0)
 	// A neighbour on the right is only a few pixels away (the cluster packs
 	// its chips tightly), so the right edge stops before it.
 	for _, n := range neighbours {
 		if n.W <= 0 || n.H <= 0 {
 			continue
 		}
-		if n.X >= chip.X+chip.W/2 && r.X+r.W > n.X-2 {
-			if limit := n.X - 2; limit > r.X {
-				r.W = limit - r.X
+		if n.X >= chip.X+chip.W/2 {
+			if r.X+r.W > n.X-2 {
+				if limit := n.X - 2; limit > r.X {
+					r.W = limit - r.X
+				}
+			}
+			continue
+		}
+		if n.X+n.W <= chip.X+chip.W/2 {
+			if limit := n.X + n.W + 2; limit > floor {
+				floor = limit
 			}
 		}
 	}
-	// The meter leads the cluster, so the space to its left is empty and a
-	// short target grows into it rather than into a neighbour.
+	if floor > chip.X {
+		floor = chip.X
+	}
+	if r.X < floor {
+		r.W -= floor - r.X
+		r.X = floor
+	}
+	// A short target grows into the space on its left, as far as the floor:
+	// the volume button leads the cluster, so that space is empty for it.
 	if r.W < minTargetW {
 		extra := minTargetW - r.W
+		if room := r.X - floor; extra > room {
+			extra = room
+		}
 		r.X -= extra
 		r.W += extra
 	}
@@ -149,6 +204,47 @@ func statusFingerRect(chip sdl.Rect, barH int32, neighbours ...sdl.Rect) sdl.Rec
 		r.W = chip.W
 	}
 	return r
+}
+
+// statusGapNeighbours splits the gap between two chips drawn side by side at
+// its middle, as the stand-in neighbour each one's statusFingerRect stops at:
+// the left chip's target ends at the middle and the right chip's starts there,
+// so a tap in the gap belongs to exactly one of them.
+func statusGapNeighbours(left, right sdl.Rect) (forLeft, forRight sdl.Rect) {
+	mid := (left.X + left.W + right.X) / 2
+	// statusFingerRect stops 2px short of a right neighbour and starts 2px past
+	// a left one; these 1px stand-ins put both edges exactly on mid.
+	forLeft = sdl.Rect{X: mid + 2, Y: right.Y, W: 1, H: 1}
+	forRight = sdl.Rect{X: mid - 3, Y: left.Y, W: 1, H: 1}
+	return forLeft, forRight
+}
+
+// growStatusButtonRects grows the volume button's and the Wi-Fi meter's hit
+// areas once both are measured (both headers call it after placing the
+// cluster). The meter still stops short of the forecast and the clock on its
+// right (rightOfWiFi); the gap between the speaker and the meter is split.
+// Either may be missing: the bar drops parts when it is crowded.
+func growStatusButtonRects(barH int32, rightOfWiFi ...sdl.Rect) {
+	vol, wifi := statusVolumeRect, statusWiFiRect
+	switch {
+	case vol.W > 0 && wifi.W > 0:
+		forVol, forWiFi := statusGapNeighbours(vol, wifi)
+		var nb [4]sdl.Rect
+		nb[0] = forWiFi
+		n := 1
+		for _, r := range rightOfWiFi {
+			if n < len(nb) {
+				nb[n] = r
+				n++
+			}
+		}
+		statusVolumeRect = statusFingerRect(vol, barH, forVol)
+		statusWiFiRect = statusFingerRect(wifi, barH, nb[:n]...)
+	case wifi.W > 0:
+		statusWiFiRect = statusFingerRect(wifi, barH, rightOfWiFi...)
+	case vol.W > 0:
+		statusVolumeRect = statusFingerRect(vol, barH, rightOfWiFi...)
+	}
 }
 
 // statusIconHeight derives the gauge height from the status font, so the icons
@@ -197,11 +293,27 @@ func statusBatteryIconWidth(iconH int32) int32 {
 	return w
 }
 
+// statusVolumeIconWidth is the speaker's box for a given icon height. The glyph
+// is drawn on the shared 24-grid with its own padding, so its box is a third
+// taller than the gauges' to read at the same weight as the signal bars.
+func statusVolumeIconWidth(iconH int32) int32 {
+	w := iconH * 4 / 3
+	if w < 12 {
+		w = 12
+	}
+	if w > 28 {
+		w = 28
+	}
+	return w
+}
+
 // statusClusterPartWidth measures one part as it will be drawn. fitStatusParts
 // uses it, so a gauged part is never clipped by the bar's trimming.
 func statusClusterPartWidth(font *ttf.Font, part string) int32 {
 	iconH := statusIconHeight(font)
 	switch {
+	case isVolumeStatusPart(part):
+		return statusVolumeIconWidth(iconH)
 	case isWiFiStatusPart(part):
 		w := statusWiFiIconWidth(iconH)
 		if part != statusWiFiMarker {
@@ -368,6 +480,9 @@ func drawStatusWiFiChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, 
 
 // drawStatusBatteryChip paints the battery part: gauge plus percentage, both in
 // the level's colour so a dying battery is visible in the corner of the screen.
+// On a charger both turn green and a bolt sits over the cell, the way a phone
+// says "plugged in" — the gauge alone looked the same on and off the cable.
+// The bolt is drawn inside the cell, so the part's width does not change.
 func drawStatusBatteryChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, textTop int32, draw statusTextDrawer) int32 {
 	pct, ok := statusBatteryPercentOf(part)
 	if !ok {
@@ -378,18 +493,82 @@ func drawStatusBatteryChip(renderer *sdl.Renderer, font *ttf.Font, part string, 
 	if font != nil {
 		textH = int32(font.Height())
 	}
+	charging := statusBatteryCharging()
 	col := statusBatteryColor(pct)
-	gaugeW := drawStatusBatteryGauge(renderer, x, textTop+(textH-iconH)/2, iconH, pct, col)
+	if charging {
+		col = statusBatteryChargingColor
+	}
+	cellY := textTop + (textH-iconH)/2
+	gaugeW := drawStatusBatteryGauge(renderer, x, cellY, iconH, pct, col)
+	if charging {
+		drawStatusChargingBolt(renderer, sdl.Rect{X: x, Y: cellY, W: statusBatteryIconWidth(iconH), H: iconH})
+	}
 	if draw != nil {
 		draw(statusBatteryLabel(pct), col, x+gaugeW+statusChipTextGap, textTop)
 	}
 	return statusClusterPartWidth(font, part)
 }
 
+// statusBatteryChargingColor is the gauge's ink on a charger: the same green as
+// a healthy charge, so "charging" never reads as a warning, even at 5%.
+var statusBatteryChargingColor = sdl.Color{R: 92, G: 200, B: 140, A: 255}
+
+// drawStatusChargingBolt paints the charging bolt centred on the battery cell:
+// a dark silhouette a little larger than the bolt first, so the white bolt
+// keeps an edge over the green fill and over an empty cell alike. Both come
+// from the icon atlas ("bolt" in icondefs.go), one cached blit each.
+func drawStatusChargingBolt(renderer *sdl.Renderer, cell sdl.Rect) {
+	if renderer == nil || cell.W <= 0 || cell.H <= 0 {
+		return
+	}
+	side := cell.H + 2
+	cx, cy := cell.X+cell.W/2, cell.Y+cell.H/2
+	halo := side + 4
+	iconDraw(renderer, "bolt", sdl.Rect{X: cx - halo/2, Y: cy - halo/2, W: halo, H: halo},
+		sdl.Color{R: 8, G: 12, B: 20, A: 210})
+	iconDraw(renderer, "bolt", sdl.Rect{X: cx - side/2, Y: cy - side/2, W: side, H: side},
+		sdl.Color{R: 255, G: 255, B: 255, A: 250})
+}
+
+// drawStatusVolumeChip paints the volume button: the speaker glyph for the
+// current level (struck through at zero, one wave below half, two above), in
+// the accent while its popover is open so the button says what is showing.
+func drawStatusVolumeChip(renderer *sdl.Renderer, font *ttf.Font, x, textTop int32) int32 {
+	iconH := statusIconHeight(font)
+	side := statusVolumeIconWidth(iconH)
+	textH := iconH
+	if font != nil {
+		textH = int32(font.Height())
+	}
+	pct, known := statusVolumeLevel()
+	col := ColorTextSecondary()
+	if volumePopoverOpen {
+		col = glassAccent()
+	}
+	iconDraw(renderer, statusVolumeGlyph(pct, known), sdl.Rect{X: x, Y: textTop + (textH-side)/2, W: side, H: side}, col)
+	return side
+}
+
+// statusVolumeGlyph names the speaker glyph for a level. An unread level shows
+// the plain speaker: claiming "muted" before the mixer answered would be a lie.
+func statusVolumeGlyph(pct int, known bool) string {
+	switch {
+	case !known:
+		return "volume"
+	case pct <= 0:
+		return "volume-mute"
+	case pct < 50:
+		return "volume-low"
+	}
+	return "volume"
+}
+
 // drawStatusClusterPart paints one part of the shared cluster and returns the
 // width it used, so the caller can advance exactly as it measured.
 func drawStatusClusterPart(renderer *sdl.Renderer, font *ttf.Font, part string, x, textTop int32, draw statusTextDrawer) int32 {
 	switch {
+	case isVolumeStatusPart(part):
+		return drawStatusVolumeChip(renderer, font, x, textTop)
 	case isWiFiStatusPart(part):
 		return drawStatusWiFiChip(renderer, font, part, x, textTop, draw)
 	case isBatteryStatusPart(part):

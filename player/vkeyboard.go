@@ -71,6 +71,7 @@ const (
 	vkTargetIPStream   // stream menu: the Find row's filter
 	vkTargetPlaylist   // audio player: name for a saved queue
 	vkTargetGroqKey    // Keyboard settings: the Groq API key voice typing uses
+	vkTargetBrowserURL // Settings → Browser: the home page or a custom search address
 )
 
 // podcastFeedInput holds the feed URL while it is being typed. It is only read
@@ -312,12 +313,17 @@ func vkActionLabel() string {
 	case vkTargetToolsURL, vkTargetNetwork:
 		return "Check"
 	case vkTargetPSRemote:
-		if psPanelEditField == psEditPIN {
+		switch {
+		case psPanelEditField == psEditPIN:
 			return "Pair"
+		case psPanelEditField == psEditHost, psPanelPairAfterAccount:
+			// A typed address, and an Account-ID asked for by a pairing, both
+			// lead straight on to the PIN prompt rather than ending there.
+			return "Next"
 		}
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetGameArgs, vkTargetFileLine,
-		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey:
+		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL:
 		return "Save"
 	case vkTargetScene:
 		switch {
@@ -862,6 +868,8 @@ func vkCurrentText() string {
 		return tzPicker.query
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
+	case vkTargetBrowserURL:
+		return brwPref.buffer
 	}
 	return inputTextBuffer
 }
@@ -957,6 +965,10 @@ func vkSetText(text string, config *Config) {
 		// The key is saved on submit only, so a half-pasted key never replaces
 		// a working one.
 		vkGroqKeyBuffer = text
+	case vkTargetBrowserURL:
+		// Same rule for the home page and a custom search address: a
+		// half-typed host never becomes either (browser_engines.go).
+		brwPref.buffer = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -1148,6 +1160,8 @@ func vkTitle() string {
 		return "DEVICE ADDRESS"
 	case vkTargetGroqKey:
 		return "GROQ API KEY"
+	case vkTargetBrowserURL:
+		return brwPrefTitle()
 	}
 	if textBrowserSearchEditing {
 		return "SEARCH WEB"
@@ -1262,6 +1276,8 @@ func vkPlaceholder() string {
 		return "user@192.168.1.7:2222/roms"
 	case vkTargetGroqKey:
 		return "Paste your key from console.groq.com"
+	case vkTargetBrowserURL:
+		return brwPrefPlaceholder()
 	}
 	if textBrowserSearchEditing {
 		return browserSearchPrompt
@@ -1742,6 +1758,9 @@ func vkCloseKeyboard() {
 		// A pasted key must not outlive the field that asked for it.
 		vkGroqKeyBuffer = ""
 	}
+	if vkTarget == vkTargetBrowserURL {
+		brwPref.buffer = ""
+	}
 	if vkTarget == vkTargetRA {
 		// The API-key field starts in uppercase; do not leak that into the
 		// next keyboard target.
@@ -1902,7 +1921,7 @@ func vkHoverFromPointer() int {
 	if vkPanelRect.W <= 0 || len(keyboardRects) == 0 {
 		return -1
 	}
-	mx, my, _ := sdl.GetMouseState()
+	mx, my, _ := vcursorMouseState()
 	now := sdl.GetTicks64()
 	if mx != vkPointerX || my != vkPointerY {
 		vkPointerX, vkPointerY = mx, my
@@ -2242,6 +2261,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()
 		vkSaveGroqKey(config, text)
+	case vkTargetBrowserURL:
+		// The text was read above; the address applies only here, so B leaves
+		// the home page and the search engine as they were.
+		vkCloseKeyboard()
+		brwPrefSubmit(config, text)
 	case homeSearchVKTarget:
 		// The Home search results are already live: Done drops the keyboard
 		// and hands the highlight to the first result.

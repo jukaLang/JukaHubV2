@@ -250,6 +250,11 @@ func saverWifiInvalidate() {
 func saverWifiLabel(st saverWifiState) (string, bool) {
 	switch st.kind {
 	case saverWifiConnected:
+		// A screenshot names a stand-in network, never the user's
+		// (screenshotmode.go).
+		if shotModeOn() {
+			return shotSSID, false
+		}
 		if st.ssid != "" {
 			return st.ssid, false
 		}
@@ -488,7 +493,12 @@ func saverDrawAlarmChip(renderer *sdl.Renderer, config *Config, x, y int32) int3
 	if font == nil {
 		return y
 	}
-	label := "Alarm " + clockDigitsHM(config, next.Hour, next.Minute)
+	hour, minute := next.Hour, next.Minute
+	if shotModeOn() {
+		// A screenshot shows a stand-in alarm, not the user's (screenshotmode.go).
+		hour, minute = 10, 45
+	}
+	label := "Alarm " + clockDigitsHM(config, hour, minute)
 	m := saverChipSize()
 	lw, _ := measureText(font, label)
 	w := m.pad + m.icon + m.gap + lw + m.pad

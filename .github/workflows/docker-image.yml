@@ -222,62 +222,68 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Cross-compiled on Ubuntu with the distribution's MinGW-w64. This job used
+  # to cross-compile the same way on macos-latest with Homebrew's MinGW, but
+  # macOS runners are the scarcest hosted machines: a release sat on "Waiting
+  # for a runner to pick up this job" long after both Ubuntu jobs had finished,
+  # and publish-release waits for this job. An Ubuntu runner starts at once,
+  # needs no Homebrew, and the archive keeps the same files.
   build-and-publish-windows:
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: create-tag
     permissions:
       contents: write   # attach the Windows archive to the draft
-    env: 
+    env:
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
     steps:
       - name: Check out the repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # No Homebrew install step: the GitHub macOS runners ship it already, and
-      # running the installer through bash was an unpinned fetch executed on
-      # every release build.
-      - name: Install MinGW
-        run: brew install mingw-w64
-
-      - name: Set up MinGW directories
+      # gcc-mingw-w64-x86-64 brings x86_64-w64-mingw32-gcc and the matching
+      # binutils (objdump is used below to check the exe's DLL imports).
+      - name: Install MinGW-w64
         run: |
-          MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64
-          mkdir -p $MINGW_DIR/x86_64-w64-mingw32/bin
-          mkdir -p $MINGW_DIR/x86_64-w64-mingw32/include
-          mkdir -p $MINGW_DIR/x86_64-w64-mingw32/lib
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 zip
 
       - name: Download and verify SDL2 development libraries
         # Versions, URLs and digests live in the shared script, so a bump is
         # one edit for this pipeline and the nightly Windows job alike.
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" .
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" "$RUNNER_TEMP/sdl2-src"
 
-      - name: Install SDL2 into the MinGW toolchain
+      - name: Merge SDL2 into one MinGW prefix
         run: |
-          MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32
+          prefix="$RUNNER_TEMP/sdl2"
+          mkdir -p "$prefix"
           # Globbed so a version bump in the shared script needs no edit here.
           # The underscore is load-bearing: the tarballs extract as SDL2-<ver>,
-          # SDL2_image-<ver> and SDL2_ttf-<ver>, so the old "SDL2-*" pattern
-          # installed only the base package. This step still reported success and
-          # the release build then died on SDL_ttf.h and SDL_image.h.
-          for dir in SDL2*/x86_64-w64-mingw32; do
+          # SDL2_image-<ver> and SDL2_ttf-<ver>, so an "SDL2-*" pattern installs
+          # only the base package. That once still reported success and the
+          # release build then died on SDL_ttf.h and SDL_image.h.
+          for dir in "$RUNNER_TEMP"/sdl2-src/SDL2*/x86_64-w64-mingw32; do
             echo "installing $dir"
-            sudo cp -r "$dir/"* "$MINGW_DIR/"
+            cp -r "$dir/"* "$prefix/"
           done
           # Fail here, naming the file, instead of at a cgo compile further down
           # with three "No such file" errors that do not say what fetched them.
           for need in include/SDL2/SDL.h include/SDL2/SDL_image.h include/SDL2/SDL_ttf.h \
                       lib/libSDL2.dll.a lib/libSDL2_image.dll.a lib/libSDL2_ttf.dll.a; do
-            if [ ! -e "$MINGW_DIR/$need" ]; then
+            if [ ! -e "$prefix/$need" ]; then
               echo "::error::the SDL2 MinGW packages did not install $need"
               exit 1
             fi
           done
+          echo "SDL2_PREFIX=$prefix" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
+          # No restored build cache in a job whose output is published: a cache
+          # entry saved by some other run would flow into the release binary.
+          cache: false
 
       - name: Install Dependencies
         run: |
@@ -288,27 +294,21 @@ jobs:
         run: go env
 
       - name: Verify Compiler
-        run: |
-          x86_64-w64-mingw32-gcc --version
-          x86_64-w64-mingw32-g++ --version
+        run: x86_64-w64-mingw32-gcc --version
 
       - name: Build Package
-        env:
-          CC: "x86_64-w64-mingw32-gcc"
-          CXX: "x86_64-w64-mingw32-g++"
-          CGO_ENABLED: 1
-          GOARCH: "amd64"
-          GOOS: "windows"
-          MINGW_DIR: $(brew --prefix mingw-w64)/toolchain-x86_64
-          CGO_CFLAGS: "-I$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32/include -D_REENTRANT"
-          CGO_LDFLAGS: "-L$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32/lib -lSDL2 -lSDL2_image -lSDL2_ttf"
+        # Exported in the script rather than set under env:, which does no shell
+        # expansion: "$SDL2_PREFIX/include" there would reach cgo as literal text.
         run: |
-          mkdir -p ../JukaHub-Trimui-Windows
-          cd player
+          export CC=x86_64-w64-mingw32-gcc
+          export CGO_ENABLED=1 GOOS=windows GOARCH=amd64
+          export CGO_CFLAGS="-I$SDL2_PREFIX/include -I$SDL2_PREFIX/include/SDL2 -D_REENTRANT"
+          export CGO_LDFLAGS="-L$SDL2_PREFIX/lib"
           echo "CC: $CC"
-          echo "CXX: $CXX"
           echo "CGO_CFLAGS: $CGO_CFLAGS"
           echo "CGO_LDFLAGS: $CGO_LDFLAGS"
+          mkdir -p JukaHub-Trimui-Windows
+          cd player
           go build -ldflags "-X main.buildDate=$(date -u +%Y-%m-%d)" -o ../JukaHub-Trimui-Windows/JukaHub.exe ./
           echo "Build completed."
 
@@ -317,6 +317,39 @@ jobs:
           cd player
           cp jukaconfig.json Inter-Regular.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
           cd ..
+          # Every DLL the exe imports must be part of Windows or ship next to
+          # it. The SDL DLLs come from player/ above; a MinGW runtime DLL (only
+          # imported if the toolchain linked one dynamically) is copied from
+          # the toolchain; anything else fails the release here instead of as
+          # "The code execution cannot proceed" on someone's PC.
+          dump=$(x86_64-w64-mingw32-objdump -p JukaHub-Trimui-Windows/JukaHub.exe)
+          imports=$(printf '%s\n' "$dump" | sed -n 's/^[[:space:]]*DLL Name:[[:space:]]*//p' | tr -d '\r' | sort -u)
+          if [ -z "$imports" ]; then
+            echo "::error::could not read the DLL imports of JukaHub.exe"
+            exit 1
+          fi
+          missing=""
+          for dll in $imports; do
+            echo "JukaHub.exe imports $dll"
+            case "$dll" in
+              SDL2*.dll|lib*.dll) ;;
+              *) continue ;;
+            esac
+            if [ -e "JukaHub-Trimui-Windows/$dll" ]; then
+              continue
+            fi
+            src=$(x86_64-w64-mingw32-gcc -print-file-name="$dll")
+            if [ -f "$src" ]; then
+              echo "bundling $src"
+              cp "$src" JukaHub-Trimui-Windows/
+            else
+              missing="$missing $dll"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::JukaHub.exe needs$missing, which the Windows archive would not carry"
+            exit 1
+          fi
           # Tools -> Security & trust opens SECURITY.md from next to the binary.
           if [ -f SECURITY.md ]; then
             cp SECURITY.md JukaHub-Trimui-Windows/
