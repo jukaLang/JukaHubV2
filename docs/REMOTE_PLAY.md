@@ -18,8 +18,8 @@ when the helper is missing.
 
 Nothing has to be copied by hand: a JukaHub installed from a package without
 `bin/` (an older one, or a copy of just the binary) downloads both helpers
-itself the first time **PS Remote Play** opens on Wi-Fi; see
-[Installing the helpers](#installing-the-helpers).
+itself, in the background soon after it starts on Wi-Fi, or when **PS Remote
+Play** opens; see [Installing the helpers](#installing-the-helpers).
 
 ## Supported consoles
 
@@ -38,13 +38,31 @@ every PS4 from firmware 7.0 on, also checks the PSN Account-ID when it pairs
 
 The helpers come with every TrimUI package of JukaHub (`Apps/JukaHub/bin/`).
 When they are not there (a JukaHub installed from a package without them, which
-every release before the November 2026 helper build was) the panel installs
-them itself, once:
+every release before the November 2026 helper build was) JukaHub installs them
+itself, once:
 
-1. Opening **PS Remote Play** while the handheld is online starts the download.
-   The console list shows **Installing Remote Play…** with its progress, and you
-   can go on choosing a console or getting the Account-ID meanwhile.
-2. A PS5 is asked for its PIN only once its pairing helper is in, because the
+1. **In the background.** About a minute after JukaHub starts, and at every look
+   after that (every 30 seconds, and at once when you come back from a game),
+   the download starts as soon as the handheld is online (a Wi-Fi that wants a
+   sign-in is not), its clock is past the date of this build (an older clock
+   fails every certificate, so network time goes first), JukaHub is on screen
+   (not behind a game, and not on the idle dock or starfield) and nothing else
+   is installing them. Saving a PSN Account-ID, on the handheld or
+   [from the phone](#getting-the-psn-account-id), is a reason to look at once.
+   While it runs, a **Remote Play** chip at the top right of every other screen
+   follows the download: tapping it opens PS Remote Play, its **✕** stops the
+   download (not once the helpers are being copied into place, when the chip
+   has no ✕). Settings → Games & emulators →
+   **Download Remote Play automatically** (`remotePlayAutoDownload`, on by
+   default) turns the background download off; the panel then installs the
+   helpers when it opens.
+2. Opening **PS Remote Play** while the handheld is online starts the download
+   too, when it has not happened yet. The panel's subtitle and its install row
+   say what is happening: **Downloading Remote Play…** with the percentage and
+   how many MB have arrived, then **Installing Remote Play…** while the download
+   is checked and put in place. You can go on choosing a console or getting the
+   Account-ID meanwhile, and closing the panel does not stop it.
+3. A PS5 is asked for its PIN only once its pairing helper is in, because the
    PIN Link Device shows lasts five minutes: **A** on it during the download
    says so, its row says *PIN keyboard opens when Remote Play is installed*,
    and the PIN keyboard opens by itself when the install ends (open Link
@@ -56,9 +74,10 @@ them itself, once:
    prompt (the install goes on), and so does closing the panel; both say so,
    and a newer press takes the place of an older one. A PS4 pairs without the
    helpers; only its stream needs `chiaki-stream`.
-3. The list then says **Remote Play is installed** for the rest of that visit,
-   and a toast says so too (not over the PIN keyboard or the Account-ID card).
-   JukaHub updates bring their own `bin/`, so this happens once.
+4. The list then says **Remote Play is installed** for the rest of that visit,
+   and a toast says so too (not over the PIN keyboard or the Account-ID card;
+   after a background download, on whatever screen is up). JukaHub updates
+   bring their own `bin/`, so this happens once.
 
 What it downloads is `JukaHub-RemotePlay-linux-arm64.zip` (`bin/chiaki-stream`,
 `bin/chiaki-regist`, `bin/BUILDINFO.txt` and `SHA256SUMS`, a few MB) from the
@@ -88,6 +107,15 @@ waits in `bin/.remote-play-install/`, which is removed once the helpers are
 installed, or when a download fails its check or the firmware refuses it).
 With no internet the list offers **Install Remote Play** for when it is back;
 after a failure the row says why, and **A** on it (**Retry**) tries again.
+In the background, a try that failed because of the network, GitHub's rate
+limit or a server error, a clock that was still wrong, or a download that took
+too long is repeated after 2, 5, 15 and 30 minutes and then hourly; any other
+failure (no recent release has the helpers, a full or read-only card, a
+download that did not verify, a certificate the handheld cannot check, or a
+stop on the chip) is not repeated by itself until JukaHub starts again, an
+Account-ID is saved or the switch is turned back on. Opening the panel still
+starts one (two minutes or more after the last try), and **Retry**, **Play**,
+a PS5's PIN and **Download now** on the phone start one at once.
 
 ## Using it
 
@@ -99,7 +127,7 @@ scan found.
 |---|---|
 | `Name · PS4/PS5` (paired) | Starts the stream, waking the console first if it is in rest mode ([Waking the console](#waking-the-console)) |
 | `Name · PS4/PS5` (not paired) | Asks for the PSN Account-ID once (if none is saved), then for the PIN the console shows |
-| Installing Remote Play… / Remote Play is not installed / Install Remote Play | Only while a helper is missing: the install's progress, why it failed (A tries again), or the offer to install ([Installing the helpers](#installing-the-helpers)); *Remote Play is installed* once it is done, and *Remote Play won't run on this firmware* (or *PS5 pairing won't run on this firmware*) when the firmware refused the helpers |
+| Downloading Remote Play… / Installing Remote Play… / Remote Play is not installed / Install Remote Play | Only while a helper is missing: the download's progress (it keeps going if you close the panel), the check and copy that follow it, why it failed (A tries again), or the offer to install ([Installing the helpers](#installing-the-helpers)); *Remote Play is installed* once it is done, and *Remote Play won't run on this firmware* (or *PS5 pairing won't run on this firmware*) when the firmware refused the helpers |
 | Scan for consoles | Sweeps the LAN for three seconds |
 | Add console by address | Type `192.168.1.x` when discovery cannot see it |
 | PSN Account-ID | Opens the Account-ID card: sign in with your phone or browser, or type it |
@@ -173,17 +201,22 @@ name or Online ID and **not** the PIN, and no console menu shows it, Link
 Device included. It is needed once per account; JukaHub keeps it in
 `psremote.json`.
 
-The Account-ID card offers:
+The Account-ID card on the handheld offers the first three; the last needs
+only your phone:
 
 | Choice | Where | What you do |
 |---|---|---|
 | **Sign in with your phone** | Handheld (also PC) | Scan the QR code on the card (**A** shows it full screen). The phone opens JukaHub's sign-in page. Tap **Sign in to PlayStation** and sign in with the account you play on the console; the tab ends on a page that says *redirect*. Copy that page's address, paste it into JukaHub's page and tap **Send to handheld**. The handheld fetches the Account-ID and goes on to the PIN by itself. |
 | **Sign in in your web browser** | Windows / PC | Sony's page opens in your browser and JukaHub opens the Account-ID field. After signing in, copy the address of the *redirect* page, paste it into the field (Ctrl+V) and press Enter. |
 | **Type or paste it** | Anywhere | Type the 12-character Account-ID if you already have it (desktop chiaki-ng shows it after **PSN Login**). The field also takes the long decimal account number other tools print, or a pasted *redirect* address. |
+| **The phone's PlayStation card** | Phone Companion page | Any time, without the panel: the page the Home screen's QR code opens has a **PlayStation Remote Play** card. It says whether an Account-ID is saved (shortened, as the panel shows it). Paste the Account-ID, the long account number or a *redirect* address into its field and tap **Save on handheld**, or tap **Sign in to get it** for the sign-in page described above. Under it, the card follows Remote Play's own download on the handheld, with **Download now** (or **Try again**) when it is missing. |
 
-The phone page is part of the Phone Companion (the server behind the Home
+The phone pages are part of the Phone Companion (the server behind the Home
 screen's QR code), so the phone has to be on the same Wi-Fi as the handheld,
-and the handheld needs the internet to reach Sony.
+and the handheld needs the internet to reach Sony. An Account-ID saved from the
+phone while PS Remote Play is closed is kept for the next pairing (a toast says
+so) and, with **Download Remote Play automatically** on, starts Remote Play's
+download when the helpers are missing.
 
 What happens to the sign-in: the *redirect* address carries a one-time code.
 JukaHub sends it to Sony's token service over HTTPS — the same exchange

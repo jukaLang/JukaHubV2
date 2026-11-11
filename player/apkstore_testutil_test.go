@@ -1,21 +1,14 @@
 package main
 
-// apkstore_testutil_test.go — builders for the APK Store tests: Android binary
-// XML (the AXML chunk format), a minimal resources.arsc, and whole APK zips.
+// apkstore_testutil_test.go — builders for the APK Store parser tests: Android
+// binary XML (the AXML chunk format) and a minimal resources.arsc.
 // They write the layouts of AOSP's ResourceTypes.h from scratch, so the
 // decoder is tested against an independent encoder rather than against
 // itself.
 
 import (
-	"archive/zip"
 	"bytes"
 	"encoding/binary"
-	"image"
-	"image/color"
-	"image/png"
-	"os"
-	"path/filepath"
-	"testing"
 	"unicode/utf16"
 )
 
@@ -320,22 +313,6 @@ func axTestManifest(pkg, label string, hasCode bool, libName string) *axNode {
 	)
 }
 
-// axJavaManifest is an app whose launcher is its own Java activity.
-func axJavaManifest(pkg string) *axNode {
-	return axEl("manifest", []axAttr{{name: "package", typ: apkxTypeString, str: pkg}},
-		axEl("application", []axAttr{axString("label", axIDLabel, "Java Start")},
-			axEl("activity", []axAttr{axString("name", axIDName, ".MainActivity")},
-				axEl("intent-filter", nil,
-					axEl("action", []axAttr{axString("name", axIDName, "android.intent.action.MAIN")}),
-					axEl("category", []axAttr{axString("name", axIDName, "android.intent.category.LAUNCHER")}),
-				),
-			),
-		),
-	)
-}
-
-// ── resources.arsc ─────────────────────────────────────────────────────────
-
 type arscEntryT struct {
 	typ  uint8
 	data uint32
@@ -468,136 +445,3 @@ func arscTypeChunk(id uint8, c arscConfigT) []byte {
 }
 
 // ── APK zips ───────────────────────────────────────────────────────────────
-
-// testPNG is a small opaque PNG.
-func testPNG(t *testing.T, w, h int) []byte {
-	t.Helper()
-	img := image.NewNRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			img.Set(x, y, color.NRGBA{R: uint8(x * 20), G: 120, B: uint8(y * 20), A: 255})
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
-
-// writeTestAPK writes a zip with the given entries (name → content) to
-// dir/name and returns its path. Every entry is deflated.
-func writeTestAPK(t *testing.T, dir, name string, entries map[string][]byte) string {
-	t.Helper()
-	return writeTestAPKWith(t, dir, name, entries, nil)
-}
-
-// writeTestAPKWith is writeTestAPK with the entries store reports true for
-// written uncompressed (zip.Store), the way modern APKs keep native libraries.
-func writeTestAPKWith(t *testing.T, dir, name string, entries map[string][]byte, store func(string) bool) string {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(dir, name)
-	f, err := os.Create(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	zw := zip.NewWriter(f)
-	// A stable order keeps failures reproducible.
-	names := make([]string, 0, len(entries))
-	for n := range entries {
-		names = append(names, n)
-	}
-	for i := 1; i < len(names); i++ {
-		for j := i; j > 0 && names[j] < names[j-1]; j-- {
-			names[j], names[j-1] = names[j-1], names[j]
-		}
-	}
-	for _, n := range names {
-		hdr := &zip.FileHeader{Name: n, Method: zip.Deflate}
-		if store != nil && store(n) {
-			hdr.Method = zip.Store
-		}
-		w, err := zw.CreateHeader(hdr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := w.Write(entries[n]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-// testELF64 is a minimal 64-bit little-endian shared object: the ELF header,
-// a dynamic string table holding names, a .dynsym that links to it, and the
-// section header table at the end (where linkers put it). dynsym=false leaves
-// the symbol table out.
-func testELF64(names []string, dynsym bool) []byte {
-	var dynstr bytes.Buffer
-	dynstr.WriteByte(0)
-	for _, n := range names {
-		dynstr.WriteString(n)
-		dynstr.WriteByte(0)
-	}
-	const hdrSize = 64
-	strOff := hdrSize
-	symOff := strOff + dynstr.Len()
-	for symOff%8 != 0 {
-		symOff++
-	}
-	symSize := 24 * (len(names) + 1)
-	shOff := symOff + symSize
-	for shOff%8 != 0 {
-		shOff++
-	}
-	sections := 2 // null + .dynstr
-	if dynsym {
-		sections = 3
-	}
-	out := make([]byte, shOff+64*sections)
-	copy(out, "\x7fELF")
-	out[4], out[5], out[6] = 2, 1, 1 // ELFCLASS64, little-endian, version
-	le := binary.LittleEndian
-	le.PutUint16(out[16:], 3)   // ET_DYN
-	le.PutUint16(out[18:], 183) // EM_AARCH64
-	le.PutUint64(out[0x28:], uint64(shOff))
-	le.PutUint16(out[0x34:], hdrSize)
-	le.PutUint16(out[0x3A:], 64)
-	le.PutUint16(out[0x3C:], uint16(sections))
-	copy(out[strOff:], dynstr.Bytes())
-	sh := func(i int, typ uint32, off, size uint64, link uint32) {
-		b := out[shOff+64*i:]
-		le.PutUint32(b[4:], typ)
-		le.PutUint64(b[24:], off)
-		le.PutUint64(b[32:], size)
-		le.PutUint32(b[40:], link)
-	}
-	sh(1, 3, uint64(strOff), uint64(dynstr.Len()), 0) // SHT_STRTAB
-	if dynsym {
-		sh(2, 11, uint64(symOff), uint64(symSize), 1) // SHT_DYNSYM → section 1
-	}
-	return out
-}
-
-// nativeTestAPK is a NativeActivity game whose manifest names libgame.so,
-// with a bigger helper library that triage would otherwise pick.
-func nativeTestAPK(t *testing.T, dir, name, pkg string) string {
-	t.Helper()
-	return writeTestAPK(t, dir, name, map[string][]byte{
-		"AndroidManifest.xml":                buildAXML(axTestManifest(pkg, "Tunnel Run", false, "game"), false, false),
-		"lib/arm64-v8a/libgame.so":           bytes.Repeat([]byte{1}, 64),
-		"lib/arm64-v8a/libc++_shared.so":     bytes.Repeat([]byte{2}, 4096),
-		"lib/armeabi-v7a/libgame.so":         bytes.Repeat([]byte{3}, 64),
-		"res/mipmap-hdpi-v4/ic_launcher.png": testPNG(t, 12, 12),
-		"assets/level1.dat":                  []byte("level"),
-	})
-}

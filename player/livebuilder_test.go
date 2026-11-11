@@ -617,6 +617,126 @@ func TestLiveBuilderHoldsDesignsThatRunPrograms(t *testing.T) {
 	}
 }
 
+func TestLiveBuilderAcceptUsesTodaysSecrets(t *testing.T) {
+	initial := []byte(`{
+  "AppName": "JukaHub", "Version": "0.4.0", "Width": 1280, "Height": 720,
+  "variables": {"fontSizes": {"medium": 24}, "discord_token": "ENC:old-token"},
+  "scenes": [{"name": "Original", "elements": [{"type": "label", "text": "Hi", "x": 10, "y": 10, "width": 200, "height": 40}]}]
+}`)
+	pushRisky := func(t *testing.T, srv *liveBuilderServer) []byte {
+		t.Helper()
+		handler := srv.handler()
+		rec := liveBuilderRequest(t, handler, http.MethodGet, "/api/design", nil, liveBuilderTestCode)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("pull status = %d", rec.Code)
+		}
+		design := liveBuilderJSON(t, rec.Body.Bytes())
+		scene := design["scenes"].([]interface{})[0].(map[string]interface{})
+		scene["elements"] = append(scene["elements"].([]interface{}),
+			map[string]interface{}{"type": "button", "text": "Run", "x": 10, "y": 60, "width": 200, "height": 40,
+				"trigger": "external_app", "externalAppPath": "sh old.sh"})
+		body, err := json.Marshal(design)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec := liveBuilderRequest(t, handler, http.MethodPost, "/api/design", body, liveBuilderTestCode); rec.Code != http.StatusAccepted {
+			t.Fatalf("risky push: status = %d (%s), want 202", rec.Code, rec.Body.String())
+		}
+		return body
+	}
+
+	// The waiting file must not contain the device's secret; accepting it
+	// restores the value from the current file.
+	srv, path, _ := newLiveBuilderTestServer(t, initial)
+	pushRisky(t, srv)
+	pending, _ := os.ReadFile(path + liveBuilderPendingExt)
+	if bytes.Contains(pending, []byte("old-token")) {
+		t.Fatal("the waiting design carried the device's kept value")
+	}
+	p, ok := srv.Pending()
+	if !ok {
+		t.Fatal("nothing waiting")
+	}
+	if err := srv.AcceptPending(p.Seq); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	saved := liveBuilderJSON(t, func() []byte { data, _ := os.ReadFile(path); return data }())
+	if got := saved["variables"].(map[string]interface{})["discord_token"]; got != "ENC:old-token" {
+		t.Errorf("accepted design token = %v, want the device's old token", got)
+	}
+
+	// If the device's secret changes while the card waits, accepting would
+	// put the stale one back; the design is refused and the new one stays.
+	srv, path, _ = newLiveBuilderTestServer(t, initial)
+	pushRisky(t, srv)
+	p, _ = srv.Pending()
+	changed := liveBuilderJSON(t, initial)
+	changed["variables"].(map[string]interface{})["discord_token"] = "ENC:new-token"
+	changedBytes, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, changedBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.AcceptPending(p.Seq); err == nil {
+		t.Fatal("a waiting design was accepted after the device's secret changed")
+	}
+	if onDisk, _ := os.ReadFile(path); !bytes.Contains(onDisk, []byte("ENC:new-token")) {
+		t.Fatal("refusing the stale design overwrote the device's new token")
+	}
+	if _, ok := srv.Pending(); ok {
+		t.Error("the stale design still waits after it was refused")
+	}
+}
+
+func TestLiveBuilderProtectedGuessIsAlwaysAChange(t *testing.T) {
+	initial := []byte(`{
+  "AppName": "JukaHub", "Version": "0.4.0", "Width": 1280, "Height": 720,
+  "variables": {"fontSizes": {"medium": 24}, "discord_token": "ENC:secret"},
+  "scenes": [{"name": "Main", "elements": [{"type": "label", "text": "Hi", "x": 10, "y": 10, "width": 200, "height": 40}]}]
+}`)
+	srv, _, _ := newLiveBuilderTestServer(t, initial)
+	handler := srv.handler()
+
+	pull := func() map[string]interface{} {
+		t.Helper()
+		rec := liveBuilderRequest(t, handler, http.MethodGet, "/api/design", nil, liveBuilderTestCode)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("pull status = %d", rec.Code)
+		}
+		return liveBuilderJSON(t, rec.Body.Bytes())
+	}
+	push := func(design map[string]interface{}) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(design)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return liveBuilderRequest(t, handler, http.MethodPost, "/api/design", body, liveBuilderTestCode)
+	}
+
+	// Spelling out the device's exact secret is a change, exactly like a
+	// wrong guess: neither answer tells the sender whether it was right.
+	for _, guess := range []string{"ENC:secret", "ENC:wrong"} {
+		design := pull()
+		design["variables"].(map[string]interface{})["discord_token"] = guess
+		if rec := push(design); rec.Code != http.StatusAccepted {
+			t.Errorf("guess %q: status = %d (%s), want 202", guess, rec.Code, rec.Body.String())
+		}
+		if p, ok := srv.Pending(); ok {
+			srv.RejectPending(p.Seq)
+		}
+	}
+
+	// The placeholder still means "keep what is there" and goes through.
+	design := pull()
+	design["variables"].(map[string]interface{})["discord_token"] = liveBuilderKeptValue
+	if rec := push(design); rec.Code != http.StatusOK {
+		t.Fatalf("placeholder push: status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+}
+
 func TestLiveBuilderWaitingDesignBlocksOtherPushes(t *testing.T) {
 	initial := liveBuilderTestConfig("Original")
 	srv, path, _ := newLiveBuilderTestServer(t, initial)
@@ -1018,18 +1138,35 @@ func TestLiveBuilderAnswersNeverQuoteKeptValues(t *testing.T) {
 		t.Fatal("nothing to reject")
 	}
 
-	// A protected list with the placeholder as one of its items.
+	// A protected list with the placeholder as one of its items is restored
+	// only while the rest of the list is still the device's list.
 	design = pull()
 	design["variables"].(map[string]interface{})["tokens"] = []interface{}{liveBuilderKeptValue, "x"}
 	rec = push(design)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("push with a reordered protected list: status = %d (%s), want 409", rec.Code, rec.Body.String())
+	}
+	leaks("the 409 answer for the list", rec.Body.Bytes())
+	if strings.Contains(rec.Body.String(), "S1-secret") || strings.Contains(rec.Body.String(), "S2-secret") {
+		t.Errorf("the refusal quoted a kept list value: %s", rec.Body.String())
+	}
+	if _, waiting := srv.Pending(); waiting {
+		t.Error("a mismatched kept list was held for approval instead of refused")
+	}
+
+	// A list that still matches may be restored, but spelling out one of its
+	// protected items is a change the owner must approve (SEC-24).
+	design["variables"].(map[string]interface{})["tokens"] = []interface{}{liveBuilderKeptValue, "S2-secret"}
+	rec = push(design)
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("push with a changed protected list: status = %d (%s), want 202", rec.Code, rec.Body.String())
+		t.Fatalf("push with the device's list around a kept value: status = %d (%s), want 202", rec.Code, rec.Body.String())
 	}
-	leaks("the 202 answer for the list", rec.Body.Bytes())
+	// The answer may quote the item the sender wrote (S2-secret), but never
+	// the other kept item it did not send.
+	if bytes.Contains(rec.Body.Bytes(), []byte("S1-secret")) {
+		t.Errorf("the 202 answer quoted a kept value the sender did not write: %s", rec.Body.String())
+	}
 	p, _ = srv.Pending()
-	if !strings.Contains(strings.Join(p.Reasons, " "), "S1-secret") {
-		t.Errorf("the owner's card does not show the value that would be saved: %q", p.Reasons)
-	}
 	srv.RejectPending(p.Seq)
 
 	// An ordinary push of the pulled design: the advice is about what the

@@ -131,8 +131,9 @@ def place(w, h, line_h=0):
 
 
 def selfcheck():
-    """The numbers player/bootlogo_layout_test.go pins, so the two sides cannot
-    drift apart without this script refusing to run."""
+    """The placement player/bootlogo_layout.go computes, written out by hand.
+    The script refuses to run when its own copy of the layout drifts from
+    these numbers; nothing checks the Go side, so change both together."""
     l = place(1280, 720, 52)
     assert l["sprite"] == (550, 219, 180, 180), l
     assert (l["word_px"], l["word_top"], l["line_h"]) == (43, 421, 52), l

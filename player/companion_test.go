@@ -455,3 +455,70 @@ func TestHomeHeaderQRTileFitsTheBand(t *testing.T) {
 		}
 	}
 }
+
+// The phone's voice page and its /api/voice call both want the Companion PIN,
+// and the page keeps its requests on the handheld.
+func TestVoicePhonePageNeedsThePIN(t *testing.T) {
+	srv, _ := newTestCompanion(t)
+	h := srv.handler()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, companionRequest(http.MethodGet, "/voice", "", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/voice without a PIN: %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, companionRequest(http.MethodGet, "/voice?p=123456", "", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/voice with the PIN: %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/api/voice") || !strings.Contains(body, "enterkeyhint=send") {
+		t.Fatal("the voice page does not post to /api/voice from a send field")
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "connect-src 'self'") {
+		t.Fatalf("voice page CSP %q must keep requests on the handheld", csp)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, companionRequest(http.MethodPost, "/api/voice", "", strings.NewReader(`{"text":"open youtube"}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api/voice without a PIN: %d, want 401", rec.Code)
+	}
+}
+
+// The PlayStation card's /api/remote-play wants the Companion PIN, and its
+// state carries the saved Account-ID only shortened, never whole.
+func TestRemotePlayCardNeedsThePINAndHidesTheAccountID(t *testing.T) {
+	psUseTempHosts(t)
+	if err := savePSHosts(psHostsFile{Settings: psRemoteSettings{Account: "FYHpffQQIhE="}}); err != nil {
+		t.Fatal(err)
+	}
+	srv, events := newTestCompanion(t)
+	h := srv.handler()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, companionRequest(http.MethodGet, "/api/remote-play", "", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET without a PIN: %d, want 401", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, companionRequest(http.MethodPost, "/api/remote-play", "654321", strings.NewReader(`{"action":"install"}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("POST with a wrong PIN: %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, companionRequest(http.MethodGet, "/api/remote-play", "123456", nil))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `"shown":"FYHp…E="`) {
+		t.Fatalf("GET with the PIN: %d %s", rec.Code, body)
+	}
+	if strings.Contains(body, "FYHpffQQIhE=") {
+		t.Fatal("the card's state carried the whole Account-ID")
+	}
+	if len(*events) != 0 {
+		t.Fatalf("the card queued phone events: %+v", *events)
+	}
+}

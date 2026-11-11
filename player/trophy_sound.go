@@ -163,6 +163,9 @@ func trophyChimeFor(rate int32, tier trophyTier) []byte {
 // device already holding two seconds of sound is busy with something louder
 // than a trophy, and the chime is skipped rather than played late.
 func trophyPlayChime(tier trophyTier) {
+	if quietModeOn() {
+		return
+	}
 	audioInitOnce.Do(initAudioDevice)
 	if !audioAvailable {
 		return

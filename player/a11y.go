@@ -38,6 +38,12 @@ const (
 	a11yKeyChordBtn   = "a11y_chord_button"
 	a11yKeySlowRepeat = "a11y_slow_repeat"
 	a11yKeyKeymap     = "a11y_keymap"
+	// Vision toggles sit beside the High Contrast palette but are not the same
+	// thing: they change the shared glass and text tokens rather than swapping
+	// the whole palette, so they keep working on any theme.
+	a11yKeyReduceTransparency = "a11y_reduce_transparency"
+	a11yKeyIncreaseContrast   = "a11y_increase_contrast"
+	a11yKeyBoldText           = "a11y_bold_text"
 
 	a11yPanelTitle = "Accessibility"
 
@@ -69,9 +75,19 @@ type a11ySettings struct {
 	scroll       int
 	fontScale    float64
 	highContrast bool
-	colorblind   string
-	swapAB       bool
-	swapXY       bool
+	// reduceTransparency makes glassA return solid tokens, so wallpaper and
+	// scene content cannot show through tiles, rows, sheets or chips.
+	reduceTransparency bool
+	// increaseContrast strengthens glass alphas, widens every focus ring by
+	// 2 px and lifts text to at least 7:1 on the surfaces it is drawn on.
+	increaseContrast bool
+	// boldText swaps the single UI face for Inter SemiBold. The size floor is
+	// still applied by getCachedFont/loadRoleFont, so bold never buys legibility
+	// by shrinking a caption.
+	boldText   bool
+	colorblind string
+	swapAB     bool
+	swapXY     bool
 	// One-handed mode turns the chord button plus the d-pad into the four
 	// face buttons, so a player who can only reach one side of the device can
 	// still navigate and confirm.
@@ -145,6 +161,9 @@ func a11yLoad(config *Config) {
 		}
 	}
 	a11y.highContrast = a11yCustomBool(config, a11yKeyContrast)
+	a11y.reduceTransparency = a11yCustomBool(config, a11yKeyReduceTransparency)
+	a11y.increaseContrast = a11yCustomBool(config, a11yKeyIncreaseContrast)
+	a11y.boldText = a11yCustomBool(config, a11yKeyBoldText)
 	a11y.swapAB = a11yCustomBool(config, a11yKeySwapAB)
 	a11y.swapXY = a11yCustomBool(config, a11yKeySwapXY)
 	a11y.oneHanded = a11yCustomBool(config, a11yKeyOneHanded)
@@ -161,6 +180,15 @@ func a11yLoad(config *Config) {
 	if s, ok := customString(config.Variables.Custom, a11yKeyKeymap); ok {
 		a11y.keys = a11yParseKeymap(s)
 	}
+	a11yApplyVision()
+}
+
+// a11yOnOff is the panel's spelling of a boolean value.
+func a11yOnOff(on bool) string {
+	if on {
+		return "On"
+	}
+	return "Off"
 }
 
 func a11yCustomBool(config *Config, key string) bool {
@@ -187,6 +215,9 @@ func a11yStore(config *Config) {
 	}
 	config.Variables.Custom[a11yKeyFontScale] = a11y.fontScale
 	config.Variables.Custom[a11yKeyContrast] = a11y.highContrast
+	config.Variables.Custom[a11yKeyReduceTransparency] = a11y.reduceTransparency
+	config.Variables.Custom[a11yKeyIncreaseContrast] = a11y.increaseContrast
+	config.Variables.Custom[a11yKeyBoldText] = a11y.boldText
 	config.Variables.Custom[a11yKeyColorblind] = a11y.colorblind
 	config.Variables.Custom[a11yKeySwapAB] = a11y.swapAB
 	config.Variables.Custom[a11yKeySwapXY] = a11y.swapXY
@@ -204,6 +235,17 @@ func a11ySave(config *Config) {
 		return
 	}
 	saveUserConfig(userConfigFromVariables(config))
+}
+
+// a11yApplyVision makes the live token state match the saved toggles. The
+// focus ring is the only piece of state that cannot be computed on demand —
+// every draw call reads the same width — so it is set here and in a11yAdjust,
+// keeping launch, reset and both UI entry points in sync.
+func a11yApplyVision() {
+	glassFocusRingWidth = 3
+	if a11y.increaseContrast {
+		glassFocusRingWidth = 5
+	}
 }
 
 // ── Text scaling ──────────────────────────────────────────────────────────
@@ -252,6 +294,7 @@ func a11yRefreshFonts() {
 	ClearShapeCache()
 	ClearIconAtlas()
 	clearHomeTextCache()
+	resetHomeFonts()
 }
 
 func a11yScaleIndex() int {
@@ -688,6 +731,9 @@ type a11yRowKind int
 const (
 	a11yRowTextSize a11yRowKind = iota
 	a11yRowContrast
+	a11yRowReduceTransparency
+	a11yRowIncreaseContrast
+	a11yRowBoldText
 	a11yRowColorblind
 	a11yRowLayoutPreset
 	// a11yRowButton edits one physical → logical entry of the keymap. The list
@@ -735,10 +781,10 @@ var a11yPanelButtons = []uint8{
 }
 
 func a11yRows() []a11yRow {
-	contrast := "Off"
-	if a11y.highContrast {
-		contrast = "On"
-	}
+	contrast := a11yOnOff(a11y.highContrast)
+	reducedTransparency := a11yOnOff(a11y.reduceTransparency)
+	increasedContrast := a11yOnOff(a11y.increaseContrast)
+	boldText := a11yOnOff(a11y.boldText)
 	oneHanded := "Off"
 	if a11y.oneHanded {
 		oneHanded = "On"
@@ -750,6 +796,9 @@ func a11yRows() []a11yRow {
 	rows := []a11yRow{
 		{label: "Text size", detail: "Scales every menu, overlay and keyboard label.", value: a11yScaleLabel(), kind: a11yRowTextSize},
 		{label: "High contrast", detail: "Stronger borders and brighter text on every screen.", value: contrast, kind: a11yRowContrast},
+		{label: "Reduce transparency", detail: "Makes every glass tile, row, sheet and chip opaque, so wallpaper and background motion cannot show through them.", value: reducedTransparency, kind: a11yRowReduceTransparency},
+		{label: "Increase contrast", detail: "Strengthens glass edges, widens focus outlines and keeps text at 7:1 or better on the surfaces it sits on.", value: increasedContrast, kind: a11yRowIncreaseContrast},
+		{label: "Bold text", detail: "Draws every menu, list and Home label in Inter SemiBold. Captions stay at the 14 px legibility floor.", value: boldText, kind: a11yRowBoldText},
 		{label: "Colour-blind palette", detail: "Replaces the theme colours with a safer set.", value: a11yColorblindLabel(a11y.colorblind), kind: a11yRowColorblind},
 		{label: "Button layout", detail: "Nintendo order swaps A/B and X/Y together, for players used to the Japanese layout. Applying a preset clears the per-button remaps below.", value: a11yLayoutPresetLabel(), kind: a11yRowLayoutPreset},
 	}
@@ -991,6 +1040,20 @@ func a11yAdjust(dir int, config *Config) {
 		a11y.highContrast = !a11y.highContrast
 		a11yApplyPalette(config)
 		changed = true
+	case a11yRowReduceTransparency:
+		a11y.reduceTransparency = !a11y.reduceTransparency
+		ShowToast("Reduce transparency: "+a11yOnOff(a11y.reduceTransparency), ToastKindInfo)
+		changed = true
+	case a11yRowIncreaseContrast:
+		a11y.increaseContrast = !a11y.increaseContrast
+		a11yApplyVision()
+		ShowToast("Increase contrast: "+a11yOnOff(a11y.increaseContrast), ToastKindInfo)
+		changed = true
+	case a11yRowBoldText:
+		a11y.boldText = !a11y.boldText
+		a11yRefreshFonts()
+		ShowToast("Bold text: "+a11yOnOff(a11y.boldText), ToastKindInfo)
+		changed = true
 	case a11yRowColorblind:
 		idx := a11yColorblindIndex(a11y.colorblind) + dir
 		if idx < 0 {
@@ -1087,6 +1150,9 @@ func a11yAdjust(dir int, config *Config) {
 	case a11yRowReset:
 		a11y.fontScale = 1.0
 		a11y.highContrast = false
+		a11y.reduceTransparency = false
+		a11y.increaseContrast = false
+		a11y.boldText = false
 		a11y.colorblind = ""
 		a11y.swapAB = false
 		a11y.swapXY = false
@@ -1096,6 +1162,7 @@ func a11yAdjust(dir int, config *Config) {
 		a11y.keys = map[uint8]uint8{}
 		a11yChordReset()
 		a11yRefreshFonts()
+		a11yApplyVision()
 		a11yApplyPalette(config)
 		changed = true
 		ShowToast("Accessibility settings reset", ToastKindInfo)

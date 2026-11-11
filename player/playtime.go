@@ -29,6 +29,9 @@ type playtimeData struct {
 	// Games is the time spent in games launched from JukaHub, by title. It is
 	// absent from saves written before it existed, which read back as empty.
 	Games map[string]int64 `json:"games,omitempty"`
+	// GameDays is the same game time by day, for the optional daily limit.
+	// It is absent from older saves, which start with no measured game days.
+	GameDays map[string]int64 `json:"game_days,omitempty"`
 	// Counts holds the counters and bests the trophies read besides time, by
 	// key (trophy_events.go). Absent from saves older than the second set.
 	Counts map[string]int64 `json:"counts,omitempty"`
@@ -83,6 +86,7 @@ func newPlaytimeData() playtimeData {
 		Days:     map[string]int64{},
 		Unlocked: map[string]string{},
 		Games:    map[string]int64{},
+		GameDays: map[string]int64{},
 		Counts:   map[string]int64{},
 		Sets:     map[string][]uint32{},
 	}
@@ -115,6 +119,9 @@ func playtimeInit(config *Config) {
 					}
 					if data.Games == nil {
 						data.Games = map[string]int64{}
+					}
+					if data.GameDays == nil {
+						data.GameDays = map[string]int64{}
 					}
 					if data.Counts == nil {
 						data.Counts = map[string]int64{}
@@ -214,6 +221,11 @@ func playtimePruneDays() {
 	for day := range playtime.data.Days {
 		if day < cutoff {
 			delete(playtime.data.Days, day)
+		}
+	}
+	for day := range playtime.data.GameDays {
+		if day < cutoff {
+			delete(playtime.data.GameDays, day)
 		}
 	}
 	for len(playtime.data.Games) > playtimeMaxGames {
@@ -397,13 +409,18 @@ func playtimeActiveScene(config *Config) string {
 // (ensureVideoScene), so their own screens only ever held the lists, and
 // "Watch Shorts for 2 hours" counted time spent looking at a grid.
 func playtimePlaybackScene(name string) string {
-	if name != mediaHubSceneName {
+	if name != mediaHubSceneName || playerPhase() == "idle" {
 		return name
+	}
+	if playbackQueue.shorts {
+		// The feed advances from the player scene, which notes Media as the
+		// origin of every Short after the first one.
+		return "Shorts"
 	}
 	mediaPlayOrigin.mu.Lock()
 	origin := mediaPlayOrigin.scene
 	mediaPlayOrigin.mu.Unlock()
-	if (origin == "Shorts" || origin == "LiveTV") && playerPhase() != "idle" {
+	if origin == "Shorts" || origin == "LiveTV" {
 		return origin
 	}
 	return name
@@ -466,6 +483,7 @@ func playtimeTick(config *Config) {
 	}
 	playtime.carry -= float64(whole)
 	playtimeRecord(whole, scene)
+	playtimeLimitsTick(config)
 
 	if now.Sub(playtime.lastSave) >= playtimeSaveInterval {
 		playtimePersist(config)
@@ -546,11 +564,15 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 	if playtime.data.Days == nil {
 		playtime.data.Days = map[string]int64{}
 	}
+	if playtime.data.GameDays == nil {
+		playtime.data.GameDays = map[string]int64{}
+	}
 	if playtime.data.Unlocked == nil {
 		playtime.data.Unlocked = map[string]string{}
 	}
 	d := &playtime.data
 	d.Games[title] += secs
+	d.GameDays[playtimeTodayKey()] += secs
 	d.Total += secs
 	day := playtimeTodayKey()
 	sane := trophyClockSane(gapEnd)
@@ -1590,12 +1612,15 @@ func trophyComputeAvailability(config *Config, dst []bool) []bool {
 		}
 		dst = append(dst, ok)
 	}
-	// A collection trophy needs that many other trophies the setup can award.
-	// Dropping one can drop the next, so settle before returning.
+	// A collection trophy needs that many other trophies the setup can award —
+	// bonus ones aside, or the platinum, which needs every collection trophy on
+	// offer, would wait for them after all. Dropping one can drop the next, so
+	// settle before returning.
 	for {
 		awardable := 0
 		for i := range playtimeAchievements {
-			if playtimeAchievements[i].Metric != trophyMetricPlatinum && dst[i] {
+			a := &playtimeAchievements[i]
+			if a.Metric != trophyMetricPlatinum && !a.Bonus && dst[i] {
 				awardable++
 			}
 		}

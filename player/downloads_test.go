@@ -284,6 +284,8 @@ func TestRejectYtDlpExecFlags(t *testing.T) {
 		"ytsearch20:funny cats",
 		"--cookies", "/tmp/cookies.txt",
 		"--extractor-args", "youtube:api_key=abc=",
+		"--format", "best[height<=720]",
+		"--", "--exec",
 	}
 	if err := rejectYtDlpExecFlags(allowed); err != nil {
 		t.Fatalf("benign search command rejected: %v", err)
@@ -291,16 +293,34 @@ func TestRejectYtDlpExecFlags(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"--exec", "rm -rf /"},
+		{"--exec-before-d", "sh -c id"},
 		{"--exec-before-download=sh -c id"},
 		{"--downloader", "curl"},
 		{"--external-downloader=wget"},
 		{"--postprocessor-args", "-i"},
 		{"--ppa=ffmpeg:-i"},
 		{"--update"},
+		{"--alias", "x=exec"},
+		{"--netrc-cmd", "sh -c id"},
+		{"--config-locations", "/tmp/yt-dlp.conf"},
+		{"-o", "/tmp/out"},
+		{"--output", "/tmp/out"},
 	} {
 		if err := rejectYtDlpExecFlags(args); err == nil {
 			t.Errorf("execution-capable args %v were accepted", args)
 		}
+	}
+}
+
+// A pack scene may not hand yt-dlp an arbitrary command line. The fixed
+// youtube_search and youtube_smart triggers remain available.
+func TestXpackRejectsYtSearchCommand(t *testing.T) {
+	elem := Element{Type: "button", Trigger: "yt_search", TriggerTarget: "yt-dlp --exec x"}
+	if _, err := xpackCheckElement(&elem, t.TempDir()); err == nil {
+		t.Fatal("a pack scene was allowed to carry yt_search")
+	}
+	if xpackSceneTriggers["yt_search"] {
+		t.Fatal("yt_search is still listed as a pack trigger")
 	}
 }
 

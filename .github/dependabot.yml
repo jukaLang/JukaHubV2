@@ -1,6 +1,7 @@
 version: 2
 # Grouped so one week produces one PR per ecosystem instead of one per module;
-# each PR runs three workflows, so ungrouped updates cost hours of CI.
+# each PR runs two workflows (ci.yml and the release build), so ungrouped
+# updates cost hours of CI.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -27,7 +28,8 @@ updates:
         patterns: ["*"]
   # The Playwright smoke test is the only check that drives the real drop
   # handler and history buttons, so its driver needs the same update and
-  # advisory coverage as the jsdom harness.
+  # advisory coverage as the jsdom harness. It runs weekly (weekly.yml), not
+  # on the PR: run Weekly checks by hand on the update's branch before merging.
   - package-ecosystem: "npm"
     directory: "/tests/e2e"
     schedule:

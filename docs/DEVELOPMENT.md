@@ -353,9 +353,8 @@ a lock, not by assignment. `browserPageFetcher` is the worked example: the load
 path reads it once per request through `currentBrowserPageFetcher`, tests swap
 it with `setBrowserPageFetcherForTest`, and `resetBrowserStateForTest` joins the
 loads still on the wire (`waitForBrowserFetches`). A bare swap is a real data
-race — the `player-race` CI job caught exactly that, because a page load can
-outlive the test that started it. `TestBrowserFetcherSwapDuringLoadIsSafe` keeps
-the pattern honest.
+race — the race-detector job (weekly now, in `weekly.yml`) caught exactly that,
+because a page load can outlive the test that started it.
 
 ### Text input and wrapping
 

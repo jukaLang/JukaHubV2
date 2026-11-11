@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"runtime"
 	"strings"
@@ -294,6 +295,98 @@ func TestApkxQualify(t *testing.T) {
 	for in, want := range cases {
 		if got := apkxQualify("com.x", in); got != want {
 			t.Errorf("apkxQualify(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The APK Store never downloads a catalogue entry that has no SHA-256 to check.
+func TestApkStoreDownloadRefusesUnverified(t *testing.T) {
+	e := apkStoreCatalogEntry{ID: "x", Title: "X", URL: "https://github.com/o/r/x.apk", Size: 10}
+	if _, err := apkStoreDownload(context.Background(), e); err == nil {
+		t.Error("a download without a SHA-256 was attempted")
+	}
+	if got := apkStoreDownloadName(apkStoreCatalogEntry{ID: "minecraft-bedrock"}); got != "minecraft-bedrock.apk" {
+		t.Errorf("download name = %q", got)
+	}
+}
+
+// A catalogue from the network keeps only https downloads from GitHub, of an
+// .apk with a SHA-256 and a bounded size; malformed entries go, and control
+// characters never reach the screen.
+func TestApkStoreCatalogueValidation(t *testing.T) {
+	sum := strings.Repeat("ab", 32)
+	raw := `{"schemaVersion":1,"updated":"2026-12-01","entries":[
+	 {"id":"good","title":"Good","status":"works","summary":"Fine.","url":"https://github.com/o/r/releases/download/v1/good.apk","sha256":"` + sum + `","size":1000},
+	 {"id":"nohash","title":"No hash","status":"works","summary":"Fine.","url":"https://github.com/o/r/releases/download/v1/x.apk","size":1000},
+	 {"id":"http","title":"Plain HTTP","status":"works","summary":"Fine.","url":"http://github.com/o/r/x.apk","sha256":"` + sum + `","size":10},
+	 {"id":"host","title":"Other host","status":"works","summary":"Fine.","url":"https://example.com/x.apk","sha256":"` + sum + `","size":10},
+	 {"id":"notapk","title":"Zip","status":"works","summary":"Fine.","url":"https://github.com/o/r/x.zip","sha256":"` + sum + `","size":10},
+	 {"id":"huge","title":"Huge","status":"works","summary":"Fine.","url":"https://github.com/o/r/x.apk","sha256":"` + sum + `","size":99999999999},
+	 {"id":"Bad ID","title":"x","status":"works","summary":"x"},
+	 {"id":"badstatus","title":"x","status":"perhaps","summary":"x"},
+	 {"id":"notitle","title":"","status":"works","summary":"x"},
+	 {"id":"good","title":"Duplicate","status":"works","summary":"x"},
+	 {"id":"ctl","title":"Line\nbreak\u0007","status":"WontRun","summary":"x","route":"r"}
+	]}`
+	data, err := parseApkStoreCatalog([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]apkStoreCatalogEntry{}
+	for _, e := range data.Entries {
+		byID[e.ID] = e
+	}
+	if !byID["good"].downloadable() || byID["good"].Title != "Good" {
+		t.Errorf("good entry: %+v", byID["good"])
+	}
+	for _, id := range []string{"nohash", "http", "host", "notapk", "huge"} {
+		e, ok := byID[id]
+		if !ok {
+			t.Errorf("%s: the entry itself should stay as information", id)
+			continue
+		}
+		if e.downloadable() || e.URL != "" {
+			t.Errorf("%s: an invalid download survived: %+v", id, e)
+		}
+	}
+	for _, id := range []string{"Bad ID", "badstatus", "notitle"} {
+		if _, ok := byID[id]; ok {
+			t.Errorf("%s: an invalid entry was kept", id)
+		}
+	}
+	if c := byID["ctl"]; c.Title != "Line break" || c.Status != apkStatusWontRun {
+		t.Errorf("control characters / status case: %+v", c)
+	}
+	for _, bad := range []string{`{"schemaVersion":2,"updated":"2026-12-01","entries":[]}`, `{"schemaVersion":1,"entries":[]}`, `not json`} {
+		if _, err := parseApkStoreCatalog([]byte(bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+// The built-in catalogue parses, is not empty, and — honestly — carries no
+// download nobody could verify.
+func TestApkStoreBuiltinCatalogue(t *testing.T) {
+	data, err := parseApkStoreCatalog(apkStoreCatalogJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Entries) < 4 {
+		t.Fatalf("only %d entries", len(data.Entries))
+	}
+	ids := map[string]bool{}
+	for _, e := range data.Entries {
+		if e.downloadable() {
+			t.Errorf("%s ships a download; the built-in list must not carry unverified ones", e.ID)
+		}
+		if e.Status == apkStatusWontRun && e.Route == "" {
+			t.Errorf("%s says it won't run but names no route that works", e.ID)
+		}
+		ids[e.ID] = true
+	}
+	for _, want := range []string{"minecraft-bedrock", "terraria-mobile", "unity-games", "java-apps"} {
+		if !ids[want] {
+			t.Errorf("missing entry %s", want)
 		}
 	}
 }

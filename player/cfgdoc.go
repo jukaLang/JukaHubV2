@@ -1018,6 +1018,8 @@ func cfgdocRefresh(config *Config) {
 	xpackRepaint(config)
 	bootSfxBind(config)
 	a11yInit(config)
+	// The background Remote Play download's switch (psremote_helpers_bg.go).
+	psBgBind(config)
 }
 
 // ── Importing ─────────────────────────────────────────────────────────────

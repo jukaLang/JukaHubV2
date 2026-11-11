@@ -776,6 +776,7 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 			break
 		}
 	}
+	fontPath = homeUIFontForRole(fontPath)
 	for k, v := range config.Variables.FontSizes {
 		if strings.EqualFold(k, fontName) {
 			size = v
@@ -810,7 +811,7 @@ func loadRoleFont(config *Config, fontName string, size int) *ttf.Font {
 			break
 		}
 	}
-	return loadCachedFont(fontPath, size)
+	return loadCachedFont(homeUIFontForRole(fontPath), size)
 }
 
 // fontRoleSize is the size a logical font role is authored at on this canvas,
@@ -2171,35 +2172,47 @@ func validateYtDlpArgs(args []string) error {
 	return nil
 }
 
-// ytDlpExecFlags are yt-dlp options that launch another program or load extra
-// configuration instead of just fetching metadata. The YouTube search command
-// comes from the scene config, so editing that config must not escalate into
-// arbitrary command execution.
-var ytDlpExecFlags = []string{
-	"--exec",
-	"--exec-before-download",
-	"--downloader",
-	"--external-downloader",
-	"--postprocessor-args",
-	"--ppa",
-	"--update",
-	"--update-to",
-	"--config-location",
+// ytDlpAllowedFlags are the only options a config-supplied search command may
+// use. It is an allowlist rather than a blocklist because yt-dlp accepts unique
+// prefixes of long options and has many ways to run a program or read another
+// config file. The fixed command builder and the cookies argument are covered;
+// adding another search option means adding its exact long name here.
+var ytDlpAllowedFlags = map[string]bool{
+	"--flat-playlist":        true,
+	"--dump-single-json":     true,
+	"--default-search":       true,
+	"--no-playlist":          true,
+	"--no-check-certificate": true,
+	"--geo-bypass":           true,
+	"--skip-download":        true,
+	"--quiet":                true,
+	"--ignore-errors":        true,
+	"--playlist-start":       true,
+	"--playlist-end":         true,
+	"--cookies":              true,
+	"--format":               true,
+	"--extractor-args":       true,
 }
 
-// rejectYtDlpExecFlags refuses execution-capable options in a config-supplied
-// yt-dlp command line. Both "--flag value" and "--flag=value" are caught
-// because the flag name is compared before the first '='.
+// rejectYtDlpExecFlags refuses any option outside the allowlist in a
+// config-supplied yt-dlp command line. Exact names are compared before the
+// first '=', so neither a unique prefix (--exec-before-d) nor a short alias
+// (-o) can slip through. Non-option operands are the search query and URLs;
+// after the standard "--" terminator everything is an operand.
 func rejectYtDlpExecFlags(args []string) error {
 	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "" || a[0] != '-' || a == "-" {
+			continue
+		}
 		flag := a
 		if i := strings.IndexByte(flag, '='); i >= 0 {
 			flag = flag[:i]
 		}
-		for _, bad := range ytDlpExecFlags {
-			if flag == bad {
-				return fmt.Errorf("yt-dlp option %s is not allowed in a search command", bad)
-			}
+		if !ytDlpAllowedFlags[flag] {
+			return fmt.Errorf("yt-dlp option %s is not allowed in a search command", flag)
 		}
 	}
 	return nil
@@ -2674,7 +2687,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 
 	// Apply a playback-resolution cap if the user set one in Settings > General.
 	if res, ok := vars["PlaybackResolution"].(string); ok && res != "" && res != "best" {
-		cmdWithVars += fmt.Sprintf(" -f \"best[height<=%s]\"", res)
+		cmdWithVars += fmt.Sprintf(" --format \"best[height<=%s]\"", res)
 	}
 
 	// Tokenize the command into arguments, honouring double quotes so that
@@ -3617,10 +3630,40 @@ func getSceneVideos(config *Config, scene SceneConfig) ([]VideoInfo, bool) {
 
 // --- Video playback helper ---
 
-// currentPlaybackURL is the source URL of the video currently playing in the
+// currentPlaybackURL is the page URL of the video currently playing in the
 // embedded player; it is used to write resume positions back to the recent
-// store.
-var currentPlaybackURL string
+// store and to tell Watch Party what is on screen. It is guarded because the
+// render path, the network poll and decoder goroutines all reach it.
+var (
+	currentPlaybackURLMu sync.RWMutex
+	currentPlaybackURL   string
+)
+
+func playbackPageURL() string {
+	currentPlaybackURLMu.RLock()
+	defer currentPlaybackURLMu.RUnlock()
+	return currentPlaybackURL
+}
+
+func setPlaybackPageURL(page string) {
+	currentPlaybackURLMu.Lock()
+	currentPlaybackURL = page
+	currentPlaybackURLMu.Unlock()
+}
+
+func clearPlaybackPageURLIf(page string) {
+	currentPlaybackURLMu.Lock()
+	if currentPlaybackURL == page {
+		currentPlaybackURL = ""
+	}
+	currentPlaybackURLMu.Unlock()
+}
+
+func clearPlaybackPageURL() {
+	currentPlaybackURLMu.Lock()
+	currentPlaybackURL = ""
+	currentPlaybackURLMu.Unlock()
+}
 
 // playVideoURL plays a video by URL. It is the legacy entry point; callers
 // that have the full VideoInfo should use playVideoInfo so the recent store
@@ -3743,7 +3786,7 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	ensureVideoScene(config)
 	PlayActivateSound()
 	addRecentVideo(v)
-	currentPlaybackURL = url
+	setPlaybackPageURL(url)
 	// A quality pin belongs to one video; a different URL forgets it.
 	syncVideoQualitySource(url)
 
@@ -5554,11 +5597,33 @@ func ShowToast(message string, kind ToastKind) {
 	notifRecordToast(msg, kind)
 }
 
+// ShowToastAlways is for messages that must survive Quiet Mode: alarm results
+// and other safety feedback. Everything else goes through ShowToast, which
+// still records the message in the notification centre while the toast itself
+// is held.
+func ShowToastAlways(message string, kind ToastKind) {
+	showToastPrimitiveMode(message, kind, false)
+	msg := strings.TrimSpace(message)
+	if msg == "" || kind == ToastKindSwitch {
+		return
+	}
+	notifRecordToast(msg, kind)
+}
+
 // showToastPrimitive renders a toast without touching the notification
 // history. ShowToast wraps it for normal callers; notifPush uses it directly
 // because it has already recorded its own message.
 func showToastPrimitive(message string, kind ToastKind) {
+	showToastPrimitiveMode(message, kind, quietModeOn())
+}
+
+// showToastPrimitiveMode is showToastPrimitive with the Quiet Mode answer
+// supplied by the caller, so alarm messages can deliberately bypass it.
+func showToastPrimitiveMode(message string, kind ToastKind, quiet bool) {
 	msg := strings.TrimSpace(message)
+	if quiet && msg != "" {
+		return
+	}
 	currentToastMu.Lock()
 	currentToast = ToastState{
 		Message:   msg,
@@ -5589,16 +5654,26 @@ var currentToastMu sync.Mutex
 // showToast is the legacy entry point used across the codebase; it maps the
 // semantic color constants to a ToastKind and delegates to ShowToast.
 func showToast(message string, color sdl.Color) {
-	kind := ToastKindInfo
+	ShowToast(message, toastKindForColor(color))
+}
+
+// showToastAlways is the legacy-colour form of ShowToastAlways, for the two
+// alarm-result messages that must stay visible in Quiet Mode.
+func showToastAlways(message string, color sdl.Color) {
+	ShowToastAlways(message, toastKindForColor(color))
+}
+
+func toastKindForColor(color sdl.Color) ToastKind {
 	switch color {
 	case ColorToastError:
-		kind = ToastKindError
+		return ToastKindError
 	case ColorToastWarn:
-		kind = ToastKindWarning
+		return ToastKindWarning
 	case ColorToastSuccess:
-		kind = ToastKindSuccess
+		return ToastKindSuccess
+	default:
+		return ToastKindInfo
 	}
-	ShowToast(message, kind)
 }
 
 // trimLastRune removes the last user-visible character, not the last byte.
@@ -6058,7 +6133,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		default:
 			// The page is set first: the session reads it as it starts, and
 			// a video still playing would otherwise lend it its own page.
-			currentPlaybackURL = url
+			setPlaybackPageURL(url)
 			StartEmbeddedPlayback(config, url)
 			addRecentVideo(VideoInfo{URL: url, Title: url})
 		}

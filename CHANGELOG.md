@@ -11,8 +11,174 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Added
+
+- **An old video finishing no longer clears a newer play.** The embedded
+  player's stop path now owns a session: a decoder that finishes after the
+  next video started only stops itself, keeps its own page for the Watch
+  Party dismissal, and cannot erase the new play's page or opening scene.
+  The shared playback page is read and written through a mutex-guarded
+  accessor ([player/videoplayer.go](player/videoplayer.go),
+  [player/core.go](player/core.go)).
+- **Liquid background animates as soon as it is enabled.** A gentle centered
+  ripple previews the water immediately, with its depth reduced by Reduce
+  Motion ([player/liquidbg.go](player/liquidbg.go)).
+- **A guessed protected value always counts as a change in Live Builder.**
+  Push approval now compares the design as the sender wrote it with the
+  device as a pull shows it, so sending the exact device secret no longer
+  gets a different answer from sending a wrong one. A placeholder still
+  goes through as “keep the device's value”
+  ([player/livebuilder.go](player/livebuilder.go)).
+- **A waiting Live Builder design restores secrets as they are at approval time.**
+  The held copy now stores `<kept on device>` placeholders instead of the
+  device's tokens and commands, and accepting it fills them from the current
+  config. If a kept value changed while the card waited, the waiting design
+  is refused and discarded rather than putting the old secret back
+  ([player/livebuilder.go](player/livebuilder.go)).
+- **A kept value inside a list is restored only into the list it came from.**
+  Live Builder pushes now refuse a list that was reordered or edited around
+  a `<kept on device>` placeholder, instead of putting the device's value at
+  a different position. A matching list still restores, and the refusal never
+  quotes a kept value ([player/livebuilder.go](player/livebuilder.go)).
+- **Held keys act once, except where holding means moving or editing.** The
+  keyboard dispatch now drops SDL auto-repeats for actions such as Enter,
+  Space, letters, Esc and function keys, while arrows, PgUp/PgDn, Home/End,
+  Backspace/Delete, volume and zoom still repeat. This stops a held key from
+  opening a screen several times, stepping back through several screens or
+  toggling the same switch repeatedly
+  ([player/main.go](player/main.go)).
+- **yt-dlp search commands are allowlisted.** A scene or edited config can
+  no longer add an option outside the search builder's exact allowlist; unique
+  prefixes, aliases, `--netrc-cmd`, `--config-locations`, `-o`/`--output` and
+  execution options are refused before yt-dlp starts. Experience packs can no
+  longer carry `yt_search`, while the fixed `youtube_search` and
+  `youtube_smart` triggers still work ([player/core.go](player/core.go),
+  [player/xpackscene.go](player/xpackscene.go)).
+- **Bold text uses Inter SemiBold everywhere.** A new **Bold text** switch
+  loads the bundled `Inter-SemiBold.ttf` for every UI role, including Home
+  and widget labels, while the existing 14 px legibility floor still applies.
+  It is saved as `a11y_bold_text`; switching it clears the font, Home and
+  button-fit caches so the next frame uses the new face without a restart
+  ([player/home_fonts.go](player/home_fonts.go),
+  [player/core.go](player/core.go), [player/a11y.go](player/a11y.go),
+  [player/setmodel.go](player/setmodel.go)).
+- **Reduce Transparency and Increase Contrast work on every screen.** Two
+  accessibility switches now live beside High Contrast and are saved as
+  `a11y_reduce_transparency` / `a11y_increase_contrast` in `jukauser.json`.
+  Reduce Transparency makes `glassA` blend its ink into an opaque token, so
+  tiles, rows, sheets, chips and hairlines stop showing the wallpaper through
+  while keeping their hierarchy; modal scrims stay translucent because they
+  dim a scene rather than act as a glass surface. Increase Contrast adds
+  24/255 to the same glass tokens, widens every shared focus ring from 3 px to
+  5 px, and makes the semantic text accessors reach 7:1 on the background and
+  both surfaces. Both settings are also rows in Settings → Display & theme
+  ([player/ui_glass.go](player/ui_glass.go), [player/design.go](player/design.go),
+  [player/a11y.go](player/a11y.go), [player/setmodel.go](player/setmodel.go)).
+- **A backup carries the handheld's time zone.** The zone file
+  (`jukatimezone`) is now part of the Settings category, and a restore hands
+  its value to `dateTimeApplyZone` on the main thread before the stores
+  reload. A desktop restore leaves the OS-owned zone alone; the file is carried
+  but not applied there ([player/bkup.go](player/bkup.go), [player/datetime.go](player/datetime.go)).
+- **Books remember where you left them.** The PDF/EPUB reader now saves the
+  page, scroll position, text size and per-page bookmarks in
+  `reader-state.json`; the Files list shows the page and bookmark count beside
+  a book. Options has Bookmark/Remove and Previous/Next bookmark actions, and M
+  bookmarks the current page from a keyboard
+  ([player/reader_state.go](player/reader_state.go),
+  [player/pdfreader.go](player/pdfreader.go),
+  [player/pdfv_view.go](player/pdfv_view.go)).
+- **Quiet Mode in Quick Settings.** A new Do-not-disturb switch holds JukaHub's
+  toasts, UI sounds and chimes until it is turned off, without silencing an
+  alarm's ringtone; alarm snooze and dismiss messages still appear. The switch
+  is saved as `quietMode` in `jukauser.json`
+  ([player/quietmode.go](player/quietmode.go),
+  [player/quicksettings.go](player/quicksettings.go)).
+- **PS Remote Play gets ready by itself, and the phone can send the PSN
+  Account-ID.** A JukaHub without its Remote Play helpers now downloads them in
+  the background about a minute after it starts — once the handheld is online,
+  its clock is past the build's date and no game is running — instead of
+  waiting for PS Remote Play to open; a try the network, GitHub or the clock
+  failed is repeated after 2 to 60 minutes, any other failure waits until
+  JukaHub starts again, an Account-ID is saved or you press Retry. A
+  **Remote Play** chip on every other screen follows the download (tap it for
+  PS Remote Play, ✕ stops it), and the panel now says **Downloading Remote
+  Play…** with the percentage and the MB that have arrived, then **Installing
+  Remote Play…** while the download is checked and put in place. Settings →
+  Games & emulators → **Download Remote Play automatically** turns the
+  background download off (`remotePlayAutoDownload`). The Phone Companion page
+  has a **PlayStation Remote Play** card: it says whether an Account-ID is
+  saved, takes the Account-ID (or the long account number, or Sony's
+  *redirect* address) and saves it on the handheld, opens the sign-in page, and
+  follows Remote Play's download on the handheld with **Download now** or
+  **Try again** — with the switch on, sending an Account-ID also starts that
+  download when it is needed
+  ([player/psremote_helpers_bg.go](player/psremote_helpers_bg.go),
+  [player/companion_psremote.go](player/companion_psremote.go),
+  [player/psremote_helpers_install.go](player/psremote_helpers_install.go),
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#installing-the-helpers)).
+- **Optional daily game limits and break reminders.** Settings → Games &
+  emulators can cap game time per day and show a reminder after a stretch of
+  use. A launch over the cap asks for a second press before starting, so the
+  limit stays a speed bump rather than a lock; both settings default to off
+  ([player/playtime_limits.go](player/playtime_limits.go),
+  [player/playtime.go](player/playtime.go)).
+- **Patch can update yt-dlp on demand.** An installed helper's row shows its
+  version and offers **Update yt-dlp now**, which checks GitHub immediately
+  instead of waiting for the ten-day routine (still postponing the transfer
+  while a video plays). The first install now verifies the release's
+  SHA2-256SUMS before the binary enters the tools folder, and
+  `toolbox-installed.json` records every install's tag and hash
+  ([player/ytdlp_update.go](player/ytdlp_update.go),
+  [player/patch_engine.go](player/patch_engine.go), [player/patch.go](player/patch.go)).
+
+### Changed
+
+- **CI checks less on every push, and the test suite is back to its core.** A
+  push or pull request now runs two CI jobs — the web builder checks, and the
+  player's `go vet`, staticcheck and `go test` — instead of eight, beside the
+  release build. The race
+  detector, the Go vulnerability scan, the cold-boot budget, the builder's
+  Chromium smoke test, the CI helper scripts' and game-audio plugin's tests and
+  the player's native Windows build and tests run once a week and from the
+  Actions tab (`weekly.yml`, which replaces the nightly macOS and Windows run;
+  macOS is not a shipped build). The SD-card package
+  builds by hand only, since on every push it compiled the handheld binary and
+  the Remote Play helpers a second time beside the release, and OpenSSF
+  Scorecard runs only weekly and when branch protection changes. The Go suite
+  had doubled to 180 test files (1,675 tests) in two days, nearly all of it
+  tests of features, screens and effect maths; 61 files were deleted, four kept
+  only their security and persistence cases, and the security tests among the
+  deleted ones were kept in files that stayed or in four small files, leaving
+  123 files and about 1,005 tests. `make
+  check` matches CI again (the CI-script and game-audio tests are `make
+  test-scripts` and `make test-spatialfx`, and run weekly), and
+  [CONTRIBUTING.md](CONTRIBUTING.md#tests-for-what-you-changed) now says which
+  changes get a test and which do not
+  ([.github/workflows/ci.yml](.github/workflows/ci.yml),
+  [.github/workflows/weekly.yml](.github/workflows/weekly.yml)).
+
 ### Fixed
 
+- **The Remote Play helper build gets past chiaki-ng's libevent check, with a
+  readable log.** The second helper build stopped at `find_package(libevent)`
+  in chiaki-ng's `lib/CMakeLists.txt`. The build now makes libevent
+  2.1.12-stable from its checksum-verified release, static like the other
+  dependencies, and adds the lowercase package file name that lookup asks for
+  (libevent installs only `LibeventConfig.cmake`, which a case-sensitive
+  lookup does not see). Each step's output, including the hundreds of
+  "Performing Test HAVE_…" compiler probes curl's and the libraries' configures
+  print, now goes to a log file, and the job shows one line per step; a failed
+  step prints the end of its log, a failed configure also prints the lines of
+  chiaki-ng's CMake files around the error and every package and option they
+  ask for, and the run's summary repeats it
+  ([player/native/build-helpers.sh](player/native/build-helpers.sh),
+  [.github/workflows/remote-play-helpers.yml](.github/workflows/remote-play-helpers.yml)).
+- **A key that opens a text field no longer types its own letter on Live TV
+  or Media.** X on Live TV and X or / on Media now drop the key's character
+  through the shared opener guard, so a search starts empty instead of with
+  "x" or "/" ([player/vkopenertext.go](player/vkopenertext.go),
+  [player/tvchannels.go](player/tvchannels.go),
+  [player/media_hub_input.go](player/media_hub_input.go)).
 - **"Use JukaHub on 90 days" meant 90 of the last 91.** The days trophies read
   the 90-day window the tracker keeps, so they could only be earned with an
   almost unbroken run; they now count every day ever, from a lifetime record

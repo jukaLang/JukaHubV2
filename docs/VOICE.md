@@ -183,14 +183,11 @@ were before you spoke, not to the voice page.
   switches, the channel a mono microphone lands on.
 * `player/voicecmd.go` — the page: listening, the Whisper request, the
   confirm pause, the choices, the phone QR sheet.
-* `player/voicecmd_intent.go` — the parser: what a sentence asks for (pure,
-  table-tested in `voicecmd_intent_test.go`).
-* `player/voicecmd_resolve.go` — which target a name means (pure ranking,
-  tested in `voicecmd_resolve_test.go`).
+* `player/voicecmd_intent.go` — the parser: what a sentence asks for (pure).
+* `player/voicecmd_resolve.go` — which target a name means (pure ranking).
 * `player/voicecmd_exec.go` — what each command does, through the existing
   controls.
-* `player/voicecmd_phone.go` — the phone page and `/api/voice`
-  (`voicecmd_phone_test.go`).
+* `player/voicecmd_phone.go` — the phone page and `/api/voice`.
 
 ## Not yet
 

@@ -317,7 +317,7 @@ func homeResumeLocalVideo(config *Config, v VideoInfo, path string) {
 	musicStopIfPlaying()
 	ensureVideoScene(config)
 	addRecentVideo(v)
-	currentPlaybackURL = path
+	setPlaybackPageURL(path)
 	go func() {
 		// Resolve (and install, if needed) before playing: a missing ffmpeg
 		// shows the install card instead of failing silently in the decoder.

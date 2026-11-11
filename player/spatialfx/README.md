@@ -85,12 +85,13 @@ sysroot and ships it as `Apps/JukaHub/lib/jukahub-spatial.so`
 Settings then says the game plugin is not installed). `player/release.sh` and
 `player/package-sdcard.sh` (the release and SD-card archives) build it the
 same way when an aarch64 cross gcc is installed and put it in every TrimUI
-archive's `lib/`. `ci.yml` runs the host tests below.
+archive's `lib/`. The weekly checks (`.github/workflows/weekly.yml`) run the
+host tests below.
 
 ## Test
 
 ```sh
-sh player/spatialfx/tests/run-tests.sh      # or: make test-spatialfx (Linux; part of make check)
+sh player/spatialfx/tests/run-tests.sh      # or: make test-spatialfx (Linux)
 ```
 
 Builds the library with `build.sh` (so the link checks run too), then

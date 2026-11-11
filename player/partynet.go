@@ -659,9 +659,9 @@ func partyHost(name string) error {
 	// Sharing starts from what is already on screen: hosting while a stream
 	// plays should put that stream and its position in the room instead of
 	// showing friends an empty party.
-	if looksLikeStreamURL(currentPlaybackURL) {
+	if looksLikeStreamURL(playbackPageURL()) {
 		if phase := snapshotVideoState().phase; phase == "playing" || phase == "paused" {
-			_ = room.SetPlayback(hostID, currentPlaybackURL, "", partyLocalPosition(), phase == "playing")
+			_ = room.SetPlayback(hostID, playbackPageURL(), "", partyLocalPosition(), phase == "playing")
 		}
 	}
 	srv := newPartyServer(room)
@@ -904,7 +904,7 @@ func partyApplyRemote(config *Config) {
 		return
 	}
 	target := partyLivePosition(snap, received, time.Now())
-	localURL := currentPlaybackURL
+	localURL := playbackPageURL()
 
 	partySession.mu.Lock()
 	applying := partySession.applying
@@ -937,7 +937,7 @@ func partyApplyRemote(config *Config) {
 		// the music player that shares the audio device.
 		musicStopIfPlaying()
 		ensureVideoScene(config)
-		currentPlaybackURL = snap.Playback.URL
+		setPlaybackPageURL(snap.Playback.URL)
 		if target > 1 {
 			StartEmbeddedPlaybackAt(config, snap.Playback.URL, target)
 		} else {
@@ -1036,7 +1036,7 @@ func partyPublishPlayback() {
 	if client == nil || applying {
 		return
 	}
-	url := currentPlaybackURL
+	url := playbackPageURL()
 	if !looksLikeStreamURL(url) {
 		// Local files are not shareable across devices; leave them out of the
 		// room instead of spamming the host with rejected updates.
@@ -1145,7 +1145,7 @@ func partyResumeRemote() {
 
 // partyWatchingRemote reports whether the local player shows the room's video.
 func partyWatchingRemote(snap partySnapshot) bool {
-	return snap.Playback.URL != "" && currentPlaybackURL == snap.Playback.URL &&
+	return snap.Playback.URL != "" && playbackPageURL() == snap.Playback.URL &&
 		snapshotVideoState().phase != "idle"
 }
 

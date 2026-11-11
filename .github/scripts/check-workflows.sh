@@ -53,10 +53,11 @@ if [ -n "$unpinned_images" ]; then
 fi
 
 # A pinned action still runs code this repository did not write, and so does a
-# download without a digest. Three archive fetches in nightly.yml sat unverified
-# until a manual pass found them, which is the argument for a check rather than
-# a habit. The digest may sit on the fetch line or up to two lines below it; a
-# fetch that publishes no digest says so with `# download-pin-ok: <reason>`.
+# download without a digest. Three archive fetches in the old nightly.yml sat
+# unverified until a manual pass found them, which is the argument for a check
+# rather than a habit. The digest may sit on the fetch line or up to two lines
+# below it; a fetch that publishes no digest says so with
+# `# download-pin-ok: <reason>`.
 unverified=$(awk '
   BEGIN { total = 0; n = 0 }
   {

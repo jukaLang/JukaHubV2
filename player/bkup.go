@@ -144,6 +144,9 @@ type bkupSource struct {
 func bkupSources() []bkupSource {
 	return []bkupSource{
 		{bkupCatSettings, "app", "jukauser.json", false},
+		// The zone lives beside the binary, not in jukauser.json; carrying the
+		// file is what lets a handheld restore keep its own clock settings.
+		{bkupCatSettings, "app", "jukatimezone", false},
 		{bkupCatSettings, "app", "jukaconfig.json", true},
 		{bkupCatLibrary, "app", "jukaalarm.json", false},
 		{bkupCatLibrary, "app", "notes.json", false},
@@ -1095,6 +1098,7 @@ func bkupSummarize(plan bkupRestorePlan) []bkupCatSummary {
 type bkupRestoreResult struct {
 	UserData   []byte // the backup's jukauser.json, merged on the main thread
 	HasUser    bool
+	Zone       string  // the backup's jukatimezone, applied by its owner on the main thread
 	Next       *Config // the design config as it is after the restore
 	Written    int
 	Skipped    []string
@@ -1106,6 +1110,9 @@ type bkupRestoreResult struct {
 
 // bkupUserTarget is where the user config is stored in a backup.
 const bkupUserTarget = "app:jukauser.json"
+
+// bkupZoneTarget is where the chosen IANA zone is stored in a backup.
+const bkupZoneTarget = "app:jukatimezone"
 
 // bkupRestoreFiles is the background half of a restore: it checks the backup
 // again, writes a safety backup of what the chosen categories would replace,
@@ -1161,6 +1168,9 @@ func bkupRestoreFiles(ctx context.Context, plan bkupRestorePlan, cats map[string
 		if sum := sha256.Sum256(data); !strings.EqualFold(hex.EncodeToString(sum[:]), rf.File.SHA256) {
 			res.Err = fmt.Errorf("%s changed while it was restored", rf.File.Path)
 			return res
+		}
+		if rf.File.Target == bkupZoneTarget {
+			res.Zone = strings.TrimSpace(string(data))
 		}
 		if rf.File.Target == bkupUserTarget {
 			res.UserData, res.HasUser = data, true
@@ -1349,6 +1359,10 @@ func bkupCommit(config *Config, res bkupRestoreResult) error {
 	if config == nil {
 		return errors.New("no configuration is loaded")
 	}
+	// The zone is applied on the main thread, before the stores reload, so the
+	// alarm and playtime caches pick up the restored clock. On a desktop the
+	// OS owns the zone and dateTimeApplyZone is deliberately not called.
+	bkupApplyRestoredZone(res.Zone)
 	if res.HasUser {
 		var backup UserConfig
 		if err := json.Unmarshal(res.UserData, &backup); err != nil {
@@ -1377,6 +1391,26 @@ func bkupCommit(config *Config, res bkupRestoreResult) error {
 	}
 	bkupReloadStores(config)
 	return nil
+}
+
+// bkupZoneOwner and bkupZoneApply are seams for the restore test; production
+// uses the same functions the Date & time screen does.
+var (
+	bkupZoneOwner = dateTimeZoneOwner
+	bkupZoneApply = dateTimeApplyZone
+)
+
+// bkupApplyRestoredZone applies a backed-up zone only where JukaHub owns it.
+// A bad zone is reported and leaves the device on its current clock rather
+// than making an otherwise valid restore fail.
+func bkupApplyRestoredZone(zone string) {
+	zone = strings.TrimSpace(zone)
+	if zone == "" || bkupZoneOwner() != tzOwnerJukaHub {
+		return
+	}
+	if err := bkupZoneApply(zone); err != nil {
+		logWarn("clock", "restored time zone %s was ignored: %v", zone, err)
+	}
 }
 
 // bkupReloadStores makes every store that keeps a copy in memory read its file

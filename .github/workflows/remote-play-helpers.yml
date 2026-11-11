@@ -25,8 +25,10 @@ name: Remote Play helpers
 #     which is what the digest would have guaranteed.
 #
 # What the build links is decided in player/native/build-helpers.sh (native
-# mode): FFmpeg, opus and json-c from pinned, checksum-verified sources, all
-# static, and OpenSSL static from Ubuntu. Only SDL2 and the C library are left
+# mode): FFmpeg, opus, json-c and libevent from pinned, checksum-verified
+# sources, all static, and OpenSSL static from Ubuntu. Each step's output goes
+# to a log in the build root and the job log shows one line per step (a failed
+# step prints the end of its log). Only SDL2 and the C library are left
 # to the handheld, and the script fails the build if anything else is NEEDED,
 # if a symbol needs a glibc newer than 2.31, or if a binary does not start.
 #
@@ -197,6 +199,10 @@ jobs:
           if [ ! -f "$info" ]; then
             info="$ROOTFS/tmp/jukahub-chiaki-build/jukahub-stage/BUILDINFO.txt"
           fi
+          # What build-helpers.sh printed when a step failed: the end of that
+          # step's log and, for chiaki-ng's configure, the CMake lines around
+          # the error and every package the pinned commit asks for.
+          failure="$ROOTFS/tmp/jukahub-helper-logs/failure.txt"
           {
             echo "### Remote Play helpers"
             echo ""
@@ -211,6 +217,18 @@ jobs:
               else
                 echo "The **Build the helpers** step says why."
               fi
+              if [ -f "$failure" ]; then
+                # Tildes, not backticks: a log line of three backticks would
+                # end a backtick fence early. The empty echo closes the last
+                # line when head cut it short.
+                echo ""
+                echo '~~~text'
+                head -c 60000 "$failure"
+                echo ""
+                echo '~~~'
+                echo ""
+                echo "Every step's whole log is in the run's \`remote-play-helper-logs\` artifact."
+              fi
             fi
             if [ -f "$info" ]; then
               echo ""
@@ -222,6 +240,27 @@ jobs:
           if [ -z "$REUSED_FROM" ] && [ "$BUILD_OUTCOME" != "success" ]; then
             echo "::warning title=Remote Play helpers::not built; this run's TrimUI packages ship without Remote Play streaming"
           fi
+
+      - name: Keep the logs of a failed build
+        # build-helpers.sh writes one log per step inside the build root, which
+        # goes away with the runner; FFmpeg's and opus's configure explain a
+        # failure only in their own config.log, and CMake's configure log
+        # records every check. Only a help for the next fix: bounded, and its
+        # failure changes nothing.
+        if: ${{ always() && steps.build.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: remote-play-helper-logs
+          path: |
+            ${{ env.ROOTFS }}/tmp/jukahub-helper-logs/
+            ${{ env.ROOTFS }}/tmp/jukahub-deps-src/*/config.log
+            ${{ env.ROOTFS }}/tmp/jukahub-deps-src/*/ffbuild/config.log
+            ${{ env.ROOTFS }}/tmp/jukahub-chiaki-build/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
       - name: Upload the helpers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

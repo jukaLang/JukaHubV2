@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download and verify the SDL2 MinGW development tarballs.
 #
-# Two jobs need these same three archives: the nightly Windows build (which
+# Two jobs need these same three archives: the weekly Windows build (which
 # installs them into a local prefix and runs the tests) and the release
 # pipeline's Windows cross-build on Ubuntu (which merges them into one prefix
 # for the MinGW-w64 compiler). Keeping the versions, URLs and digests here

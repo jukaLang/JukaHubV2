@@ -171,3 +171,38 @@ func TestPS4RefusalDetailExplainsReasons(t *testing.T) {
 		t.Errorf("plain 500 = %q", got)
 	}
 }
+
+// sessionLines splits a session file into key -> value, failing on any line
+// that is not key=value.
+func sessionLines(t *testing.T, text string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			t.Fatalf("session line %q is not key=value in:\n%s", line, text)
+		}
+		if _, dup := out[key]; dup {
+			t.Fatalf("key %q appears twice in:\n%s", key, text)
+		}
+		out[key] = value
+	}
+	return out
+}
+
+// A console name is whatever the network said. A newline in it must not
+// become a second line of the session file, which the helper would read as a
+// key of its own.
+func TestPSSessionExtrasCannotInjectALine(t *testing.T) {
+	text := psSessionExtras(psStreamOptions{Name: "PS5\nhost=203.0.113.9\rrp_key=AAAA x", Codec: psCodecH264})
+	got := sessionLines(t, text)
+	if _, ok := got["host"]; ok {
+		t.Fatalf("a name injected a host line:\n%s", text)
+	}
+	if _, ok := got["rp_key"]; ok {
+		t.Fatalf("a name injected an rp_key line:\n%s", text)
+	}
+	if !strings.HasPrefix(got["name"], "PS5 host=") {
+		t.Errorf("name = %q, want the text kept on one line", got["name"])
+	}
+}

@@ -1541,10 +1541,18 @@ func downloadYtDlpCtx(ctx context.Context, target string, config *Config) error 
 		return err
 	}
 	installBarPhase(installPhaseResolving)
-	url, err := resolveToolURL("yt-dlp/yt-dlp", "", asset)
+	rel, err := ytdlpLatestRelease(ctx)
 	if err != nil {
-		return fmt.Errorf("find yt-dlp release asset %q: %w", asset, err)
+		return fmt.Errorf("find yt-dlp release: %w", err)
 	}
+	file, ok := pickReleaseAsset(rel.assets, []string{asset})
+	if !ok {
+		return fmt.Errorf("release %s has no %s", rel.tag, asset)
+	}
+	if !strings.HasPrefix(strings.ToLower(file.URL), "https://github.com/") {
+		return fmt.Errorf("refusing a yt-dlp download from outside github.com")
+	}
+	url := file.URL
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create tools directory %s: %w", dir, err)
@@ -1567,6 +1575,11 @@ func downloadYtDlpCtx(ctx context.Context, target string, config *Config) error 
 	if err := os.Chmod(tmpPath, PermExec); err != nil {
 		logPatch("[TOOLS] warn: cannot chmod staged yt-dlp: %v", err)
 	}
+	installBarPhase(installPhaseVerify)
+	sum, err := ytdlpVerifyReleaseChecksum(ctx, rel, asset, tmpPath)
+	if err != nil {
+		return fmt.Errorf("verify yt-dlp %s: %w", rel.tag, err)
+	}
 	// Same directory, so this rename never crosses a filesystem.
 	if err := os.Rename(tmpPath, target); err != nil {
 		return fmt.Errorf("install yt-dlp to %s: %w", target, err)
@@ -1576,12 +1589,18 @@ func downloadYtDlpCtx(ctx context.Context, target string, config *Config) error 
 			logPatch("[TOOLS] warn: cannot chmod yt-dlp: %v", err)
 		}
 	}
-	installBarPhase(installPhaseVerify)
 	if err := verifyHelperTool(target); err != nil {
 		_ = os.Remove(target)
 		return fmt.Errorf("yt-dlp download is unusable and was removed: %w", err)
 	}
-	logPatch("[TOOLS] yt-dlp installed at %s (asset %s, %d bytes)", target, asset, fileSize(target))
+	toolboxSaveRecord("yt-dlp", toolboxRecord{
+		Tag:      rel.tag,
+		Asset:    asset,
+		SHA256:   sum,
+		Verified: true,
+		At:       time.Now().UTC().Format(time.RFC3339),
+	})
+	logPatch("[TOOLS] yt-dlp installed at %s (asset %s, %d bytes, sha256 %s)", target, asset, fileSize(target), sum)
 	return nil
 }
 

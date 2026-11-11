@@ -55,6 +55,7 @@ func bkupTestPlaces(t *testing.T) string {
 // bkupTestSetup is a device's files, by slash path under the scratch root.
 var bkupTestSetup = map[string]string{
 	"app/jukauser.json":                 `{"variables": {"weatherUnit": "F"}}`,
+	"app/jukatimezone":                  "Europe/Berlin\n",
 	"app/jukaconfig.json":               `{"scenes": []}`,
 	"app/notes.json":                    `{"notes": []}`,
 	"app/themes/neon.json":              `{"name": "Neon"}`,
@@ -77,7 +78,7 @@ var bkupTestSetup = map[string]string{
 // files a backup must leave out.
 var (
 	bkupTestTargets = []string{
-		"app:jukauser.json", "app:jukaconfig.json", "app:notes.json", "themes:neon.json",
+		"app:jukauser.json", "app:jukatimezone", "app:jukaconfig.json", "app:notes.json", "themes:neon.json",
 		"plugins:demo/plugin.json", "plugins:demo/run.sh", "data:vk-words.json", "data:games.json",
 		"input:pad.jkinput", "packs:mine/pack.json", "saves/retroarch:game.srm", "patch:db/db.json",
 		"doc:" + cfgdocFileName,
@@ -317,6 +318,53 @@ func TestBkupRefusesAChangedBackup(t *testing.T) {
 	}
 }
 
+func TestBkupTimeZoneTravelsAndRestoresThroughOwner(t *testing.T) {
+	root := bkupTestPlaces(t)
+	path, m := bkupTestMake(t, root)
+	found := false
+	for _, f := range m.Files {
+		if f.Target == bkupZoneTarget {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the backup does not carry %s", bkupZoneTarget)
+	}
+
+	if err := os.Remove(filepath.Join(root, "app", "jukatimezone")); err != nil {
+		t.Fatal(err)
+	}
+	cats := bkupTestAllCats()
+	res := bkupRestoreFiles(context.Background(), bkupPlanRestore(path, m, cats), cats, "v1.2.3", nil)
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if res.Zone != "Europe/Berlin" {
+		t.Fatalf("restored zone = %q, want Europe/Berlin", res.Zone)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "app", "jukatimezone"))
+	if err != nil || strings.TrimSpace(string(data)) != "Europe/Berlin" {
+		t.Fatalf("restored zone file = %q (%v)", data, err)
+	}
+
+	prevOwner, prevApply := bkupZoneOwner, bkupZoneApply
+	t.Cleanup(func() { bkupZoneOwner, bkupZoneApply = prevOwner, prevApply })
+	var applied string
+	bkupZoneOwner = func() tzOwner { return tzOwnerJukaHub }
+	bkupZoneApply = func(name string) error { applied = name; return nil }
+	bkupApplyRestoredZone(res.Zone)
+	if applied != "Europe/Berlin" {
+		t.Fatalf("the handheld applied %q, want Europe/Berlin", applied)
+	}
+
+	applied = ""
+	bkupZoneOwner = func() tzOwner { return tzOwnerWindows }
+	bkupApplyRestoredZone(res.Zone)
+	if applied != "" {
+		t.Fatalf("a desktop applied the restored zone as %q", applied)
+	}
+}
+
 func TestBkupTargetsNameKnownPlacesOnly(t *testing.T) {
 	for _, target := range []string{"app:jukauser.json", "data:sub/x.json", "saves/retroarch:game.srm", "doc:jukahub-config.json"} {
 		if _, _, err := bkupSplitTarget(target); err != nil {
@@ -406,8 +454,12 @@ func TestBkupMergeKeepsWhatBelongsToThisDevice(t *testing.T) {
 func TestBkupNamesAndPrunesBackups(t *testing.T) {
 	now := time.Date(2026, 11, 8, 9, 5, 0, 0, time.UTC)
 	for kind, check := range map[string]func(string) bool{
-		"manual": func(n string) bool { return strings.HasPrefix(n, "JukaHub-backup-") && !strings.HasSuffix(n, "-auto"+bkupExt) },
-		"auto":   func(n string) bool { return strings.HasPrefix(n, "JukaHub-backup-") && strings.HasSuffix(n, "-auto"+bkupExt) },
+		"manual": func(n string) bool {
+			return strings.HasPrefix(n, "JukaHub-backup-") && !strings.HasSuffix(n, "-auto"+bkupExt)
+		},
+		"auto": func(n string) bool {
+			return strings.HasPrefix(n, "JukaHub-backup-") && strings.HasSuffix(n, "-auto"+bkupExt)
+		},
 		"safety": func(n string) bool { return strings.HasPrefix(n, "JukaHub-safety-") },
 	} {
 		name := bkupFileName(kind, now)

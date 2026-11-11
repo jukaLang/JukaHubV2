@@ -655,7 +655,14 @@ func (s *playbackSession) finish() {
 	if s.ended.Load() && playbackEnded.Load() {
 		return
 	}
-	StopEmbeddedPlayback()
+	stopEmbeddedPlayback(s)
+}
+
+// playbackStopOwns reports whether a stop for stopped may clear the player.
+// A nil stopped means the current session (the screen's Stop action); a
+// non-nil one may only clear itself, never a play that replaced it.
+func playbackStopOwns(stopped, current *playbackSession) bool {
+	return stopped == nil || stopped == current
 }
 
 func persistSessionProgress(s *playbackSession) {
@@ -1357,13 +1364,13 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	if url == "" {
 		return
 	}
-	pageURL := currentPlaybackURL
+	pageURL := playbackPageURL()
 	if pageURL == "" {
 		pageURL = url
 		// Direct StartEmbeddedPlayback calls (queue/home cards) must still
 		// know their source, or Watch Party would see an empty URL and think
 		// the room had switched streams.
-		currentPlaybackURL = pageURL
+		setPlaybackPageURL(pageURL)
 	}
 	// Trophies: once per video. A quality switch, the download fallback and a
 	// Watch Party resync restart the page whose start is committed just below.
@@ -1477,11 +1484,25 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 }
 
 func StopEmbeddedPlayback() {
-	playbackEnded.Store(false)
+	stopEmbeddedPlayback(nil)
+}
+
+func stopEmbeddedPlayback(stopped *playbackSession) {
 	playbackMu.Lock()
 	sess := playbackCurrent
+	if stopped == nil {
+		stopped = sess
+	}
+	if !playbackStopOwns(stopped, sess) {
+		playbackMu.Unlock()
+		if stopped != nil {
+			stopped.stop()
+		}
+		return
+	}
 	playbackCurrent = nil
 	playbackMu.Unlock()
+	playbackEnded.Store(false)
 
 	if sess != nil {
 		persistSessionProgress(sess)
@@ -1520,13 +1541,30 @@ func StopEmbeddedPlayback() {
 	}
 
 	// Remember a deliberate stop so Watch Party does not reopen the room's
-	// stream the moment the poll sees it again.
-	partyNoteStop(currentPlaybackURL)
-	currentPlaybackURL = ""
-	// The next session records where it was started from afresh.
-	mediaForgetPlayOrigin()
-	// Nothing is playing any more, so the top bar drops its now-playing slot.
-	forgetVideoPage()
+	// stream the moment the poll sees it again. Use the stopped session's own
+	// page: a newer play may already own the shared page URL.
+	page := ""
+	if sess != nil {
+		page = sess.pageURL
+	}
+	partyNoteStop(page)
+	// Only clear the shared page and the opener when they still belong to
+	// this session. A newer play may have set its page before its session was
+	// installed; its state is not ours to erase.
+	switch {
+	case sess == nil:
+		clearPlaybackPageURL()
+		mediaForgetPlayOrigin()
+		forgetVideoPage()
+	case page != "" && playbackPageURL() == page:
+		clearPlaybackPageURLIf(page)
+		mediaForgetPlayOrigin()
+		forgetVideoPage()
+	case page == "" && playbackPageURL() == "":
+		clearPlaybackPageURL()
+		mediaForgetPlayOrigin()
+		forgetVideoPage()
+	}
 	// Leaving playback also leaves full screen, the settings sheet and the
 	// floating window behind.
 	videoFullscreen = false
@@ -1764,7 +1802,7 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 	// Throttled resume-position safety net.
 	if now := sdl.GetTicks64(); now-lastResumeSaveTicks > 5000 {
 		lastResumeSaveTicks = now
-		// The session's own page URL, not currentPlaybackURL: that switches
+		// The session's own page URL, not playbackPageURL(): that switches
 		// to the next video the moment Play is pressed, while this one keeps
 		// playing through the resolve, and its position was written into the
 		// next video's history entry every five seconds.
@@ -2160,7 +2198,7 @@ func nextVideoQualityHeight(current int) int {
 // pin when there is one, otherwise the global playbackResolution (which treats
 // "best" and an empty value as 720p).
 func videoQualityCeilingHeight(config *Config) int {
-	if h := videoQualityOverrideFor(currentPlaybackURL); h > 0 {
+	if h := videoQualityOverrideFor(playbackPageURL()); h > 0 {
 		return h
 	}
 	return playbackMaxHeight(config)
@@ -2206,7 +2244,7 @@ func videoQualityRowLabel(config *Config) string {
 // active per-video pin names itself, otherwise the global playbackResolution
 // ceiling is reported as Auto.
 func videoQualityLabel(config *Config) string {
-	if h := videoQualityOverrideFor(currentPlaybackURL); h > 0 {
+	if h := videoQualityOverrideFor(playbackPageURL()); h > 0 {
 		return fmt.Sprintf("%dp (this video)", h)
 	}
 	res := strings.TrimSpace(config.Variables.PlaybackResolution)
@@ -2224,7 +2262,7 @@ func videoQualityLabel(config *Config) string {
 // the current position so the new ceiling is used immediately; with nothing
 // loaded it only updates the label (and a later video picks it fresh).
 func cycleVideoQuality(config *Config) {
-	url := currentPlaybackURL
+	url := playbackPageURL()
 	if strings.TrimSpace(url) == "" {
 		showToast("Open a video to change quality", ToastInfo())
 		return

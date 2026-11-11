@@ -86,6 +86,16 @@ func patchActions() []patchAction {
 	if patchSnap != nil && len(patchSnap.Backups) > 0 {
 		actions = append(actions, patchAction{ID: "restore", Label: "Restore latest backup", Sub: "Reverts the most recent backup set"})
 	}
+	// yt-dlp is the one helper YouTube changes force us to update between
+	// JukaHub releases. Only the copy in JukaHub's tools folder can be
+	// replaced here; one the user installed elsewhere is theirs.
+	if path, managed := ytdlpManagedPath(appConfig); managed && path != "" {
+		sub := "Check GitHub for a newer release"
+		if v := helperToolVersion("yt-dlp"); v != "" {
+			sub = "Installed " + v + " · check now"
+		}
+		actions = append(actions, patchAction{ID: "ytdlp", Label: "Update yt-dlp now", Sub: sub})
+	}
 	return actions
 }
 
@@ -968,6 +978,8 @@ func patchActivate(config *Config) {
 			}
 		case "diagnostics":
 			RunPatchOp("Exporting diagnostics", func(ctx context.Context) error { return OpExportDiagnostics(ctx, config) })
+		case "ytdlp":
+			patchYtDlpUpdate(config)
 		case "apply":
 			patchModal = &patchModalState{
 				ID:       "confirm-swap",

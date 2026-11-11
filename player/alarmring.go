@@ -212,7 +212,7 @@ func alarmSnoozeFiring() {
 	}
 	alarmSave()
 	trophyEvent(tkAlarmSnooze)
-	showToast(fmt.Sprintf("Snoozed %d minutes — rings again at %s", alarmSnoozeMinutes, clockDigits(appConfig, until)), ToastInfo())
+	showToastAlways(fmt.Sprintf("Snoozed %d minutes — rings again at %s", alarmSnoozeMinutes, clockDigits(appConfig, until)), ToastInfo())
 	PlayActivateSound()
 }
 
@@ -247,7 +247,7 @@ func alarmDismissWith(message string) {
 		}
 	}
 	alarmSave()
-	showToast(message, ToastInfo())
+	showToastAlways(message, ToastInfo())
 	PlayBackSound()
 }
 

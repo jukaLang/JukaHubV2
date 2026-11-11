@@ -190,6 +190,7 @@ type liveBuilderPending struct {
 	Elements      int
 	Sum           [sha256.Size]byte
 	PublicSum     [sha256.Size]byte
+	KeptSum       [sha256.Size]byte // the device's protected values at push time
 }
 
 func newLiveBuilderServer(configPath, code string, onReload func()) *liveBuilderServer {
@@ -1014,6 +1015,18 @@ func (s *liveBuilderServer) handleDesignPush(w http.ResponseWriter, r *http.Requ
 	// value the pull left on the device.
 	currentData, _ := os.ReadFile(s.configPath)
 	currentDoc := liveBuilderParseDoc(currentData)
+	pendingDoc := liveBuilderCopyDoc(doc)
+	keptSum := liveBuilderKeptDigest(currentDoc)
+	// A placeholder inside a list is put back by position. Only accept it
+	// when the list is still the device's list around it: a reordered or
+	// edited list would otherwise give the placeholder a different item.
+	if mismatch := liveBuilderKeptListMismatch(doc, currentDoc, ""); mismatch != "" {
+		writeLiveBuilderJSON(w, http.StatusConflict, liveBuilderResponse{
+			Error:   "the design changed a list around a kept value",
+			Details: []string{mismatch},
+		})
+		return
+	}
 	publicDoc := liveBuilderCopyDoc(doc)
 	liveBuilderRestoreKept(publicDoc, currentDoc, true)
 	liveBuilderRestoreKept(doc, currentDoc, false)
@@ -1046,7 +1059,18 @@ func (s *liveBuilderServer) handleDesignPush(w http.ResponseWriter, r *http.Requ
 		writeLiveBuilderJSON(w, status, resp)
 		return
 	}
-	sum := sha256.Sum256(stamped)
+	for k := range pendingDoc {
+		if strings.EqualFold(k, "schemaVersion") {
+			delete(pendingDoc, k)
+		}
+	}
+	pendingDoc["schemaVersion"] = ConfigSchemaVersion
+	pendingStamped, err := json.MarshalIndent(pendingDoc, "", "  ")
+	if err != nil {
+		writeLiveBuilderJSON(w, http.StatusUnprocessableEntity, liveBuilderResponse{Error: "could not serialise the design"})
+		return
+	}
+	sum := sha256.Sum256(pendingStamped)
 	sent, err := json.Marshal(publicDoc)
 	if err != nil {
 		writeLiveBuilderJSON(w, http.StatusUnprocessableEntity, liveBuilderResponse{Error: "could not read the design"})
@@ -1076,10 +1100,20 @@ func (s *liveBuilderServer) handleDesignPush(w http.ResponseWriter, r *http.Requ
 	// saved; the sender hears about the design it sent, compared with the
 	// device's design as a pull shows it.
 	publicCfg := liveBuilderDecodeDesign(publicDoc)
-	if risks := liveBuilderDesignRisks(cfg, liveBuilderParseDesign(currentData)); len(risks) > 0 {
-		reasons, levels := liveBuilderRiskTexts(risks)
-		publicReasons, _ := liveBuilderRiskTexts(liveBuilderDesignRisks(publicCfg, liveBuilderShownDesign(currentData)))
-		s.holdForOwner(w, r, stamped, liveBuilderPending{
+	// Decide on the design as its sender wrote it, compared with the device
+	// as a pull shows it. Comparing the restored design with the real one
+	// would answer "nothing new" for a guessed secret that happens to be
+	// right, which is a yes/no oracle for a protected value.
+	publicRisks := liveBuilderDesignRisks(publicCfg, liveBuilderShownDesign(currentData))
+	if len(publicRisks) > 0 {
+		reasons, levels := liveBuilderRiskTexts(liveBuilderDesignRisks(cfg, liveBuilderParseDesign(currentData)))
+		if len(reasons) == 0 {
+			// The pushed value equalled the device's; the public design still
+			// shows the value the sender wrote.
+			reasons, levels = liveBuilderRiskTexts(publicRisks)
+		}
+		publicReasons, _ := liveBuilderRiskTexts(publicRisks)
+		s.holdForOwner(w, r, pendingStamped, liveBuilderPending{
 			Reasons:       reasons,
 			PublicReasons: publicReasons,
 			Levels:        levels,
@@ -1087,6 +1121,7 @@ func (s *liveBuilderServer) handleDesignPush(w http.ResponseWriter, r *http.Requ
 			Elements:      countLiveBuilderElements(cfg),
 			Sum:           sum,
 			PublicSum:     publicSum,
+			KeptSum:       keptSum,
 		})
 		return
 	}
@@ -1339,6 +1374,53 @@ func liveBuilderHasValue(v interface{}) bool {
 // settings under "variables" and "channel_profile" and every encrypted
 // ("ENC:") string with "<kept on device>". It reports whether anything was
 // replaced.
+// liveBuilderKeptDigest fingerprints the protected values in a design without
+// writing any of them down: accepting a waiting design uses it to notice that
+// a token or command changed on the device while the card waited.
+func liveBuilderKeptDigest(doc map[string]interface{}) [sha256.Size]byte {
+	var values []string
+	var walk func(v interface{}, protected bool, path string)
+	walk = func(v interface{}, protected bool, path string) {
+		switch t := v.(type) {
+		case map[string]interface{}:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				child := t[k]
+				p := path + "." + k
+				if protected && liveBuilderSensitiveKey(k) && liveBuilderHasValue(child) {
+					data, _ := json.Marshal(child)
+					values = append(values, p+"="+string(data))
+					continue
+				}
+				walk(child, protected, p)
+			}
+		case []interface{}:
+			for i, child := range t {
+				walk(child, protected, path+"["+strconv.Itoa(i)+"]")
+			}
+		case string:
+			if strings.HasPrefix(strings.TrimSpace(t), "ENC:") {
+				values = append(values, path+"="+t)
+			}
+		}
+	}
+	keys := make([]string, 0, len(doc))
+	for k := range doc {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		scope := strings.EqualFold(k, "variables") || strings.EqualFold(k, "channel_profile")
+		walk(doc[k], scope, k)
+	}
+	sort.Strings(values)
+	return sha256.Sum256([]byte(strings.Join(values, "\n")))
+}
+
 func liveBuilderRedact(doc map[string]interface{}) bool {
 	changed := false
 	var walk func(v interface{}, protectedScope bool) interface{}
@@ -1388,6 +1470,98 @@ func liveBuilderLookup(m map[string]interface{}, key string) (interface{}, bool)
 		}
 	}
 	return nil, false
+}
+
+// liveBuilderContainsKept reports whether v holds a kept-value placeholder.
+func liveBuilderContainsKept(v interface{}) bool {
+	switch t := v.(type) {
+	case string:
+		return t == liveBuilderKeptValue
+	case map[string]interface{}:
+		for _, child := range t {
+			if liveBuilderContainsKept(child) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, child := range t {
+			if liveBuilderContainsKept(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// liveBuilderKeptEquivalent compares a pushed value with the device's value,
+// treating a placeholder as equal to whatever the device has there. Map fields
+// the push leaves out are ignored (a push may remove a field); list length and
+// every non-placeholder item must match.
+func liveBuilderKeptEquivalent(next, current interface{}) bool {
+	if s, ok := next.(string); ok && s == liveBuilderKeptValue {
+		return current != nil
+	}
+	switch t := next.(type) {
+	case map[string]interface{}:
+		cur, ok := current.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		for k, child := range t {
+			old, found := liveBuilderLookup(cur, k)
+			if !found || !liveBuilderKeptEquivalent(child, old) {
+				return false
+			}
+		}
+		return true
+	case []interface{}:
+		cur, ok := current.([]interface{})
+		if !ok || len(t) != len(cur) {
+			return false
+		}
+		for i := range t {
+			if !liveBuilderKeptEquivalent(t[i], cur[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return reflect.DeepEqual(next, current)
+}
+
+// liveBuilderKeptListMismatch names the first list in a pushed design that
+// holds a kept value but no longer matches the device's list around it. ""
+// means every placeholder is safe to restore by position.
+func liveBuilderKeptListMismatch(next, current interface{}, path string) string {
+	switch t := next.(type) {
+	case map[string]interface{}:
+		cur, _ := current.(map[string]interface{})
+		for k, child := range t {
+			old, _ := liveBuilderLookup(cur, k)
+			p := k
+			if path != "" {
+				p = path + "." + k
+			}
+			if mismatch := liveBuilderKeptListMismatch(child, old, p); mismatch != "" {
+				return mismatch
+			}
+		}
+	case []interface{}:
+		if !liveBuilderContainsKept(t) {
+			return ""
+		}
+		where := path
+		if where == "" {
+			where = "a list"
+		}
+		if _, ok := current.([]interface{}); !ok {
+			return where + " is new, but it holds a value kept on the device; pull the design again"
+		}
+		if !liveBuilderKeptEquivalent(t, current) {
+			return where + " no longer matches the device's list; pull the design again"
+		}
+	}
+	return ""
 }
 
 // liveBuilderRestoreKept replaces every "<kept on device>" in a pushed design
@@ -2009,9 +2183,31 @@ func (s *liveBuilderServer) AcceptPending(seq int) error {
 		s.dropPendingLocked("its file changed after it was checked")
 		return errors.New("the waiting design changed after it was checked, so it was deleted")
 	}
-	cfg := &Config{}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return fmt.Errorf("the waiting design is damaged: %w", err)
+	pendingDoc := liveBuilderParseDoc(data)
+	if pendingDoc == nil {
+		return errors.New("the waiting design is damaged")
+	}
+	currentData, err := os.ReadFile(s.configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("could not read the current design: %w", err)
+	}
+	currentDoc := liveBuilderParseDoc(currentData)
+	if liveBuilderKeptDigest(currentDoc) != p.KeptSum {
+		s.dropPendingLocked("a value kept on the device changed after it was pushed")
+		return errors.New("a value kept on the device changed while this design waited; push it again")
+	}
+	if mismatch := liveBuilderKeptListMismatch(pendingDoc, currentDoc, ""); mismatch != "" {
+		s.dropPendingLocked("a list around a kept value changed after it was pushed")
+		return errors.New(mismatch)
+	}
+	liveBuilderRestoreKept(pendingDoc, currentDoc, false)
+	data, err = json.MarshalIndent(pendingDoc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("could not read the waiting design: %w", err)
+	}
+	cfg, status, resp := liveBuilderCheckDesign(data, NewConfigValidator())
+	if status != 0 {
+		return fmt.Errorf("the waiting design no longer passes validation: %s", resp.Error)
 	}
 	if err := backupLiveBuilderConfig(s.configPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("could not back up the current design: %w", err)

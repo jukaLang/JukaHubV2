@@ -92,7 +92,7 @@ func playStream(config *Config, url string) {
 	recordPlayed(config, url)
 	logDebug("morefeatures", "playStream: %s", sanitizeLogURL(url))
 	ensureVideoScene(config)
-	currentPlaybackURL = url
+	setPlaybackPageURL(url)
 	go func() {
 		// Resolve (and install, if needed) before playing: a missing ffmpeg
 		// shows the install card instead of failing silently in the decoder.

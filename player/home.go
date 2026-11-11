@@ -877,5 +877,15 @@ func loadHomeFonts() HomeFonts {
 // registered for character substitution (fonts.go), and a size Home shares
 // with a scene role is opened once instead of twice.
 func openHomeFont(size int) *ttf.Font {
-	return loadCachedFont(homeUIFontFile, size)
+	return loadCachedFont(homeUIFontForRole(homeUIFontFile), size)
+}
+
+// resetHomeFonts drops Home's size caches after a text-size or bold-text
+// change. The shared face cache is cleared by a11yRefreshFonts; this releases
+// the cached role set so the next frame opens the new face at the same sizes.
+func resetHomeFonts() {
+	homeFontsOnce = sync.Once{}
+	homeFontsCache = HomeFonts{}
+	homeWidgetFontsOnce = sync.Once{}
+	homeWidgetFontsCache = homeWidgetFontSet{}
 }

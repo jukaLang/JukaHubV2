@@ -46,11 +46,12 @@ type pdfDoc struct {
 }
 
 type pdfState struct {
-	doc      pdfDoc
-	page     int
-	scrollY  float64
-	zoom     float64
-	viewMode int // 0=text, 1=fit-width
+	doc       pdfDoc
+	page      int
+	scrollY   float64
+	zoom      float64
+	viewMode  int // 0=text, 1=fit-width
+	bookmarks []int
 }
 
 var pdf pdfState
@@ -114,6 +115,7 @@ func pdfvOpenDocument(config *Config, path string) bool {
 // pdfvSceneLeft releases the reader's textures when another scene takes over:
 // a zoomed page holds several megabytes of tiles.
 func pdfvSceneLeft() {
+	pdfSaveReadingState()
 	pdfvReleaseTextures()
 	pdfvView.menu.open = false
 }
@@ -131,6 +133,7 @@ func pdfOpenFile(path string) {
 	if !pdfIsDocumentPath(path) {
 		return
 	}
+	pdfSaveReadingState()
 	pdfInit()
 	pdfvReleaseTextures()
 	textSize := pdfvView.textSize
@@ -152,13 +155,29 @@ func pdfOpenFile(path string) {
 		Title:   strings.TrimSuffix(filepath.Base(resolved), filepath.Ext(resolved)),
 		Loading: true,
 	}
+	if saved, ok := readerBookFor(resolved); ok {
+		pdf.page = saved.Page
+		pdf.scrollY = saved.Scroll
+		pdf.bookmarks = append([]int(nil), saved.Bookmarks...)
+		if saved.TextSize > 0 {
+			pdfvView.textSize = saved.TextSize
+		}
+		pdfvView.textMode = saved.TextMode
+		if saved.Fit >= int(pdfvFitWidth) && saved.Fit <= int(pdfvFitCustom) {
+			pdfvView.fit = pdfvFitMode(saved.Fit)
+		}
+		if saved.Zoom > 0 {
+			pdfvView.zoom = saved.Zoom
+		}
+	} else {
+		pdf.page = 1
+		pdf.scrollY = 0
+	}
 	if epub {
 		pdfvLoadEPUB(resolved)
 	} else {
 		pdfvStartLoad(resolved)
 	}
-	pdf.page = 1
-	pdf.scrollY = 0
 }
 
 // pdfvLoadEPUB reads a book in the background and hands it over through the
@@ -210,6 +229,7 @@ func pdfGoToPage(page int) bool {
 	pdf.page = page
 	pdf.scrollY = 0
 	pdfvView.scrollY = 0
+	pdfSaveReadingState()
 	trophyEvent(tkPdfPage)
 	PlayNavSound()
 	return true
@@ -220,6 +240,69 @@ func pdfPrevPage() bool { return pdfGoToPage(pdf.page - 1) }
 
 // pdfJumpChapter moves to the start of the previous or next chapter. It returns
 // false when the document has no chapter structure.
+// pdfSaveReadingState stores the page, scroll, text size and bookmarks of the
+// open document. Scroll position is whichever view is on screen; the other
+// view starts at the top of the page.
+func pdfSaveReadingState() {
+	if !pdf.doc.Loaded || pdf.doc.Error != "" || strings.TrimSpace(pdf.doc.Path) == "" {
+		return
+	}
+	scroll := pdf.scrollY
+	if pdfvIsPagedPDF() && !pdfvView.textMode {
+		scroll = pdfvView.scrollY
+	}
+	readerSaveBook(readerBookState{
+		Path:      pdf.doc.Path,
+		Page:      pdf.page,
+		Pages:     pdfPageCount(),
+		Scroll:    scroll,
+		TextSize:  pdfvView.textSize,
+		TextMode:  pdfvView.textMode,
+		Fit:       int(pdfvView.fit),
+		Zoom:      pdfvView.zoom,
+		Bookmarks: pdf.bookmarks,
+	})
+}
+
+func pdfPageBookmarked(page int) bool {
+	for _, p := range pdf.bookmarks {
+		if p == page {
+			return true
+		}
+	}
+	return false
+}
+
+// pdfBookmarkToggle marks or unmarks the page under the reader.
+func pdfBookmarkToggle() {
+	bookmarks, added := readerBookmarkToggle(pdf.bookmarks, pdf.page)
+	if len(bookmarks) == len(pdf.bookmarks) && !added {
+		return
+	}
+	pdf.bookmarks = bookmarks
+	pdfSaveReadingState()
+	PlayActivateSound()
+	if added {
+		showToast(fmt.Sprintf("Bookmarked page %d", pdf.page), ToastSuccess())
+	} else {
+		showToast(fmt.Sprintf("Bookmark removed from page %d", pdf.page), ToastInfo())
+	}
+}
+
+// pdfBookmarkJump moves to the nearest bookmark in dir.
+func pdfBookmarkJump(dir int) bool {
+	page, ok := readerBookmarkNext(pdf.bookmarks, pdf.page, dir)
+	if !ok {
+		if dir < 0 {
+			showToast("No earlier bookmark", ToastInfo())
+		} else {
+			showToast("No later bookmark", ToastInfo())
+		}
+		return false
+	}
+	return pdfGoToPage(page)
+}
+
 func pdfJumpChapter(delta int) bool {
 	if len(pdf.doc.Chapters) == 0 {
 		return false
@@ -646,6 +729,8 @@ func handlePDFInput(e *sdl.KeyboardEvent, config *Config) {
 		}
 	case sdl.K_t, sdl.K_x:
 		pdfvToggleText()
+	case sdl.K_m:
+		pdfBookmarkToggle()
 	case sdl.K_o, sdl.K_y, sdl.K_TAB:
 		if pdf.doc.Loaded && pdf.doc.Error == "" {
 			pdfvOpenMenu()

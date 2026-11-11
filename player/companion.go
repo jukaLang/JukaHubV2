@@ -421,6 +421,9 @@ func (s *companionServer) handler() http.Handler {
 	// and the call that hands the PSN Account-ID back (psn_signin.go).
 	mux.HandleFunc("/psn", s.handlePSNPage)
 	mux.HandleFunc("/api/psn", s.guard(s.handlePSN))
+	// The main page's PlayStation card: the saved Account-ID, and Remote
+	// Play's own download on the handheld (companion_psremote.go).
+	mux.HandleFunc("/api/remote-play", s.guard(s.handleRemotePlay))
 	// Voice commands from the phone's keyboard microphone: the page, and the
 	// call that runs one command and answers with what it did (voicecmd_phone.go).
 	mux.HandleFunc("/voice", s.handleVoicePage)
@@ -694,9 +697,11 @@ body.typing .shot img{max-height:16vh}
 body.noshot .shot,body.noshot .shotonly{display:none}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
 h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
-textarea,input[type=url],input[type=password],input[type=text]{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:15px/1.4 inherit;resize:vertical}
+/* A shorthand cannot take "inherit" for the family, so the fonts are named;
+   16 px in the fields keeps iOS from zooming in on focus. */
+textarea,input[type=url],input[type=password],input[type=text]{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:16px/1.4 system-ui,-apple-system,sans-serif;resize:vertical}
 textarea{min-height:88px}
-button{font:600 15px inherit;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:12px 16px;min-height:44px}
+button{font:600 15px system-ui,-apple-system,sans-serif;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:12px 16px;min-height:44px}
 button.ghost{background:#1d2330;color:var(--ink);border:1px solid var(--line)}
 button:active{transform:translateY(1px)}
 .row{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
@@ -711,6 +716,23 @@ label.check input{width:20px;height:20px;accent-color:var(--accent)}
 #toast.bad{border-color:var(--bad)}
 small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 .note{color:var(--dim);font-size:14px;margin:0 0 10px}
+/* An element's own display (the .row flex) beats the browser's rule for the
+   hidden attribute, so the attribute gets its own. */
+[hidden]{display:none!important}
+/* The PlayStation card: its answer under the field, its line about Remote
+   Play on the handheld, and the progress bar (the download's share, or a slow
+   pulse while the size is not known yet or the download is being checked and
+   installed). */
+.msg{margin-top:8px;font-size:14px;color:var(--dim)}
+.msg:empty{display:none}
+.msg.bad{color:var(--bad)}
+.split{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+.split .note{margin:0}
+.bar{height:6px;margin-top:10px;background:#0f131b;border:1px solid var(--line);border-radius:99px;overflow:hidden}
+.bar>span{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
+.bar.idle{display:none}
+.bar.pulse>span{animation:pulse 1.2s ease-in-out infinite alternate}
+@keyframes pulse{from{opacity:.25}to{opacity:.8}}
 /* A phone on its side has little height: the screen moves to a column of its
    own on the left and the cards scroll on the right. */
 @media (orientation:landscape) and (max-height:540px){
@@ -761,6 +783,20 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <input type=file id=file>
   <div class=row><button id=sendFile>Upload</button></div>
   <small id=fileName>Files land in the PhoneDrop folder on the SD card.</small>
+</div>
+
+<div class=card id=psCard>
+  <h2>PlayStation Remote Play</h2>
+  <p class=note id=psStatus>Checking the handheld...</p>
+  <input type=text id=psAccount placeholder="PSN Account-ID, like AbCdEfGhIjk=" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <div class=row><button id=sendPS>Save on handheld</button><button class=ghost id=psSignIn>Sign in to get it</button></div>
+  <div class=msg id=psMsg></div>
+  <small>Pairing a PS5, or a PS4 on firmware 7 or newer, needs your PSN Account-ID once. It is 12 characters, not your sign-in name or the PIN, and no console menu shows it. Don't know it? Tap Sign in to get it: you sign in to Sony on this phone, and the handheld keeps only the Account-ID, never your password. The long account number some tools print works in the field too.</small>
+  <div class=split id=psRemote hidden>
+    <p class=note id=psRemoteText></p>
+    <div class="bar idle" id=psBar><span id=psBarFill></span></div>
+    <div class=row id=psStartRow hidden><button class=ghost id=psStart>Download now</button></div>
+  </div>
 </div>
 
 <div class=card>
@@ -960,6 +996,118 @@ document.getElementById('sendGroq').onclick = async () => {
     toast(err.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+
+// The PlayStation card. The Account-ID goes to /api/psn, as the sign-in page
+// sends it; /api/remote-play says what the handheld has saved (shortened) and
+// how Remote Play's own download there is going. That is asked again every
+// 1.5 s while the download runs (5 s after an ask that failed), every 10 s
+// while a sent Account-ID waits to be saved, every 20 s while the download may
+// still start by itself, and whenever the page comes back into view. Answers are numbered, so an older one never replaces a newer one.
+const psStatusEl = document.getElementById('psStatus');
+const psMsgEl = document.getElementById('psMsg');
+let psTimer = 0;
+let psSeq = 0;
+let psBusy = false;
+// psSent is the shortened Account-ID this page sent, until the handheld shows
+// it saved: while a game has its screen, the handheld saves it afterwards.
+let psSent = '';
+function psShort(id) { return id.length > 8 ? id.slice(0, 4) + '…' + id.slice(-2) : id; }
+function psSay(text, bad) { psMsgEl.textContent = text || ''; psMsgEl.className = bad ? 'msg bad' : 'msg'; }
+function showPSAccount(set, shown) {
+  if (psSent && set && shown === psSent) psSent = '';
+  if (psSent) {
+    psStatusEl.textContent = 'Sent ' + psSent + ': the handheld saves it when JukaHub is back on its screen.';
+  } else {
+    psStatusEl.textContent = set ? 'Saved on the handheld: ' + shown + '. Send another to replace it.' : 'No PSN Account-ID on the handheld yet.';
+  }
+  // Without one, signing in is the usual way to get it: that button leads.
+  const have = set || !!psSent;
+  document.getElementById('psSignIn').classList.toggle('ghost', have);
+  document.getElementById('sendPS').classList.toggle('ghost', !have);
+}
+function psPoll(ms) {
+  clearTimeout(psTimer);
+  psTimer = setTimeout(() => {
+    psTimer = 0;
+    loadPS().catch(() => { if ((psBusy || psSent) && !document.hidden) psPoll(5000); });
+  }, ms);
+}
+function showPS(s) {
+  const acct = s.account || {};
+  showPSAccount(!!acct.set, acct.shown || '');
+  const rp = s.remotePlay || {};
+  psBusy = !!rp.busy;
+  document.getElementById('psRemote').hidden = !rp.text;
+  document.getElementById('psRemoteText').textContent = rp.text || '';
+  const pct = typeof rp.percent === 'number' ? rp.percent : -1;
+  const bar = document.getElementById('psBar');
+  bar.classList.toggle('idle', !rp.busy);
+  bar.classList.toggle('pulse', !!rp.busy && pct < 0);
+  document.getElementById('psBarFill').style.width = (pct >= 0 ? pct : 100) + '%';
+  document.getElementById('psStartRow').hidden = !rp.canStart;
+  document.getElementById('psStart').textContent = rp.startLabel || 'Download now';
+  clearTimeout(psTimer);
+  psTimer = 0;
+  if (document.hidden) return;
+  if (rp.busy) psPoll(1500);
+  else if (psSent) psPoll(10000);
+  else if (rp.state === 'missing') psPoll(20000);
+}
+async function loadPS() {
+  const seq = ++psSeq;
+  const res = await fetch('/api/remote-play', {headers: hdr(), cache: 'no-store'});
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  const s = await res.json();
+  if (seq === psSeq) showPS(s);
+}
+loadPS().catch(() => { psStatusEl.textContent = 'Paste your Account-ID to save it on the handheld.'; });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) loadPS().catch(() => {});
+});
+document.getElementById('psSignIn').onclick = () => { location.href = '/psn?p=' + encodeURIComponent(pin); };
+document.getElementById('psAccount').addEventListener('input', () => psSay(''));
+document.getElementById('sendPS').onclick = async () => {
+  const input = document.getElementById('psAccount');
+  const value = input.value.trim();
+  if (!value) { psSay('Paste your Account-ID first, or tap Sign in to get it.', true); input.focus(); return; }
+  const btn = document.getElementById('sendPS');
+  btn.disabled = true; btn.textContent = 'Checking...';
+  psSay('');
+  try {
+    const r = await api('/api/psn', {input: value}, true);
+    input.value = '';
+    psSent = psShort(r.account || '');
+    // An answer asked for before this send is out of date now.
+    psSeq++;
+    psStatusEl.textContent = 'Sent ' + psSent + ' to the handheld.';
+    toast('Account-ID sent');
+    // The handheld saves it on its next frame and, when Remote Play is
+    // missing and its background download is on, starts downloading it.
+    setTimeout(() => { loadPS().catch(() => { if (!document.hidden) psPoll(5000); }); }, 900);
+  } catch (err) {
+    // The handheld's sentences are long: they stay under the field.
+    psSay(err.message, true);
+    toast('Not saved', true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+document.getElementById('psStart').onclick = async () => {
+  const btn = document.getElementById('psStart');
+  btn.disabled = true;
+  psSay('');
+  const seq = ++psSeq;
+  try {
+    const r = await api('/api/remote-play', {action: 'install'}, true);
+    if (seq === psSeq) showPS(r);
+    toast(r.message || 'Downloading on the handheld');
+  } catch (err) {
+    psSay(err.message, true);
+    toast('Not started', true);
+  } finally {
+    btn.disabled = false;
   }
 };
 stateEl.textContent = pin ? 'paired' : 'no PIN';

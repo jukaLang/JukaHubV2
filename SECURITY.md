@@ -772,8 +772,8 @@ silently carried as an open alert:
    questionnaire doubles as the project's own checklist).
 2. Claim the passing level. Most criteria are already answered by this repo:
    published vulnerability reporting ([above](#reporting-a-vulnerability)),
-   dependency update automation, a security scan on every push, fuzzing in the
-   nightly workflow, no bundled binaries, and dependencies pinned by commit or
+   dependency update automation, a weekly vulnerability scan (govulncheck in
+   `weekly.yml`), no bundled binaries, and dependencies pinned by commit or
    digest in CI.
 3. Paste the project's badge into the top of [`README.md`](README.md) once the
    id exists, so the score has something to read:

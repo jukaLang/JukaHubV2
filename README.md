@@ -420,6 +420,12 @@ the phone opens a small page with:
   characters on the handheld. It is checked with Groq, saved for voice typing,
   voice commands and the Juka chat, and never shown again (the page only
   learns its last four characters).
+* **PlayStation Remote Play** — save the PSN Account-ID that pairing a PS5 (or
+  a PS4 on firmware 7 or newer) needs: paste it, the long account number, or
+  the address of Sony's *redirect* page, or tap **Sign in to get it** for
+  Sony's sign-in. The card also follows Remote Play's own download on the
+  handheld, with **Download now** when it is missing (the page only learns the
+  Account-ID's first and last characters).
 
 The QR code carries a fresh six-digit PIN, so nothing has to be typed on the
 device. The server runs in the background for the whole session, and **Y**

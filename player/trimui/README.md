@@ -33,8 +33,10 @@ community TrimUI toolchain image, which already has the A133P SDK + aarch64 gcc
 
 1. Commit and push your changes to the repository.
 2. Open the **Actions** tab → workflow **Build SD card package** → **Run
-   workflow**. (The workflow also runs automatically on every push to `main`.)
-3. Wait about 3–6 minutes. Download the **JukaHub-SDCARD** artifact.
+   workflow**. (It runs only by hand; every push to `main` already publishes
+   the same build in the release's `JukaHub-Trimui.zip`.)
+3. Wait about 20 minutes (it builds the Remote Play helpers too). Download the
+   **JukaHub-SDCARD** artifact.
 4. The artifact contains `JukaHub-SDCARD.zip`.
 
 Alternative without GitHub (if you have a Linux PC, WSL or a VPS):

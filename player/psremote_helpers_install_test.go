@@ -669,8 +669,13 @@ func TestPSHelpersHoldPlayUntilInstalled(t *testing.T) {
 	if v := psHelpersView(); v.phase != psHelperLooking && v.phase != psHelperDownloading {
 		t.Errorf("phase = %v while the download is held", v.phase)
 	}
-	if rows := psHelperRows(); len(rows) != 1 || !strings.HasPrefix(rows[0].label, "Installing Remote Play") || rows[0].action != psActionNone {
-		t.Errorf("rows while installing = %+v", rows)
+	// Held at the download: the row and the subtitle say Downloading, not
+	// Installing, which is the check and the copy that come after it.
+	if rows := psHelperRows(); len(rows) != 1 || !strings.HasPrefix(rows[0].label, "Downloading Remote Play") || rows[0].action != psActionNone {
+		t.Errorf("rows while downloading = %+v", rows)
+	}
+	if line := psHelperSubtitle(); !strings.HasPrefix(line, "Downloading Remote Play") {
+		t.Errorf("subtitle while downloading = %q", line)
 	}
 	if note, ok := psHelperConsoleNote(c); !ok || !strings.HasPrefix(note, "Streams by itself when Remote Play is installed") {
 		t.Errorf("the console's row while its Play waits = %q, %v", note, ok)
@@ -986,7 +991,7 @@ func TestPSHelperNetErrSaysWhatToDo(t *testing.T) {
 func TestPSHelperFailTextsFitARow(t *testing.T) {
 	for _, err := range []error{errPSHelpersOffline, errPSHelpersNoInternet, errPSHelpersCutOff, errPSHelpersRateLimited,
 		errPSHelpersClock, errPSHelpersTrust, errPSHelpersSDWrite, errPSHelpersNotPublished, errPSHelpersUnverified,
-		context.DeadlineExceeded, psHelperNoSpace(40<<20, 12<<20)} {
+		errPSHelpersStopped, context.DeadlineExceeded, psHelperNoSpace(40<<20, 12<<20)} {
 		if text := psHelpersFailText(err); len([]rune(text)) > 62 {
 			t.Errorf("%q is %d characters, more than a Smart Pro row shows", text, len([]rune(text)))
 		}
@@ -996,5 +1001,43 @@ func TestPSHelperFailTextsFitARow(t *testing.T) {
 	}
 	if got := psHelperFailToast("Account-ID saved. ", errPSHelpersNotPublished); !strings.HasPrefix(got, "Account-ID saved, but Remote Play could not install") {
 		t.Errorf("a press's news was lost: %q", got)
+	}
+}
+
+// The activity chip's X stops an install: it ends as errPSHelpersStopped with
+// nothing in bin/, and once the helpers are being copied into place a stop is
+// refused rather than announced and ignored.
+func TestPSHelpersStopEndsTheInstall(t *testing.T) {
+	s := psHelperTestEnv(t)
+	psHelperTestOneRelease(t, s)
+	s.gateDownloads(t)
+	if !psHelpersStart(psStartRetry) {
+		t.Fatal("no install started")
+	}
+	// The context exists before the worker's first step, so this lands.
+	if !psHelpersStop() {
+		t.Fatal("the running install was not stopped")
+	}
+	if err := psHelperTestWait(t); !errors.Is(err, errPSHelpersStopped) {
+		t.Fatalf("install after the stop = %v, want errPSHelpersStopped", err)
+	}
+	psHelperTestNothingInstalled(t)
+	if rows := psHelperRows(); len(rows) != 1 || rows[0].status != "Retry" || !strings.Contains(rows[0].detail, "stopped") {
+		t.Errorf("rows after the stop = %+v, want a Retry row that says so", rows)
+	}
+	if psHelpersStop() {
+		t.Error("an install that had ended was stopped again")
+	}
+
+	run := &psHelperRun{done: make(chan struct{}), cancel: func() {}}
+	psHelperJob.mu.Lock()
+	psHelperJob.run, psHelperJob.running = run, true
+	psHelperJob.view = psHelperView{phase: psHelperChecking, placing: true}
+	psHelperJob.mu.Unlock()
+	stopped := psHelpersStop()
+	// This run never ends: forget it before the cleanup waits for it.
+	psHelperResetJob()
+	if stopped || run.stopped {
+		t.Error("a stop was taken while the helpers were copied into place")
 	}
 }

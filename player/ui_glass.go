@@ -75,6 +75,24 @@ func glassA(alpha uint8) sdl.Color {
 		}
 		alpha = uint8(boosted)
 	}
+	if a11y.increaseContrast {
+		boosted := int(alpha) + 24
+		if boosted > 255 {
+			boosted = 255
+		}
+		alpha = uint8(boosted)
+	}
+	if a11y.reduceTransparency {
+		// Blend the ink into the backdrop at the token's own weight and return
+		// an opaque colour. This keeps the token's hierarchy — a 13/255 tile is
+		// still quieter than a 235/255 ring — without any surface underneath
+		// showing through. It uses ColorBackground rather than the current
+		// scene, which is the point: the token is stable and cacheable.
+		t := 0.06 + float64(alpha)/255*0.82
+		c = glassMix(ColorBackground, c, t)
+		c.A = 255
+		return c
+	}
 	c.A = alpha
 	return c
 }
@@ -123,12 +141,15 @@ const (
 	glassControlRadius = int32(14)
 	// glassRowRadius rounds list rows.
 	glassRowRadius = int32(14)
-	// glassFocusRingWidth is Home's ring: 3px of accent on the control's edge.
-	glassFocusRingWidth = int32(3)
 	// glassFocusLift is how far a focused control grows on every side: Home's
 	// 3px card lift, with the ring drawn on the lifted edge.
 	glassFocusLift = int32(3)
 )
+
+// glassFocusRingWidth is Home's ring: 3px of accent on the control's edge.
+// Increase Contrast widens it by 2px at runtime (a11yApplyVision), because it
+// is read by every focusable's draw call rather than baked into one screen.
+var glassFocusRingWidth int32 = 3
 
 func glassFill() sdl.Color        { return glassA(13) }
 func glassFillHover() sdl.Color   { return glassA(17) }

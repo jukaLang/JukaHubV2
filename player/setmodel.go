@@ -537,6 +537,31 @@ func setHighContrast(c *Config, on bool) {
 	setToast("High contrast: " + setOnOff(on))
 }
 
+// setReduceTransparency flips the shared glass token. The token itself is read
+// every frame, so no screen needs to be told to repaint.
+func setReduceTransparency(c *Config, on bool) {
+	a11y.reduceTransparency = on
+	a11ySave(c)
+	setToast("Reduce transparency: " + setOnOff(on))
+}
+
+// setIncreaseContrast flips the shared contrast tokens and resizes the focus
+// ring. a11yApplyVision also runs at launch and at the panel's Reset row.
+func setIncreaseContrast(c *Config, on bool) {
+	a11y.increaseContrast = on
+	a11yApplyVision()
+	a11ySave(c)
+	setToast("Increase contrast: " + setOnOff(on))
+}
+
+// setBoldText swaps the shared UI face and drops every font-dependent cache.
+func setBoldText(c *Config, on bool) {
+	a11y.boldText = on
+	a11yRefreshFonts()
+	a11ySave(c)
+	setToast("Bold text: " + setOnOff(on))
+}
+
 // setThemeName is the active theme's display name.
 func setThemeName(c *Config) string {
 	name := themePresetName(c)
@@ -746,6 +771,24 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Black and white with a yellow focus ring"),
 					Get:    func(*Config) bool { return a11y.highContrast },
 					Set:    setHighContrast,
+				},
+				{
+					ID: "reduceTransparency", Label: "Reduce transparency", Kind: setKindToggle,
+					Detail: setStatic("Opaque glass; the wallpaper cannot show through"),
+					Get:    func(*Config) bool { return a11y.reduceTransparency },
+					Set:    setReduceTransparency,
+				},
+				{
+					ID: "increaseContrast", Label: "Increase contrast", Kind: setKindToggle,
+					Detail: setStatic("Stronger edges, wider focus rings, 7:1 text"),
+					Get:    func(*Config) bool { return a11y.increaseContrast },
+					Set:    setIncreaseContrast,
+				},
+				{
+					ID: "boldText", Label: "Bold text", Kind: setKindToggle,
+					Detail: setStatic("Inter SemiBold in every menu, list and Home label"),
+					Get:    func(*Config) bool { return a11y.boldText },
+					Set:    setBoldText,
 				},
 				{
 					ID: "motion", Label: "Reduce motion", Kind: setKindToggle, Quiet: true,
@@ -1208,6 +1251,18 @@ func setBuildSections() []setSection {
 					Choose:  func(c *Config, value string) { setToast(coreUpdateModeChoose(c, value)) },
 				},
 				{
+					// PS Remote Play's helpers, fetched in the background
+					// while they are missing (psremote_helpers_bg.go).
+					ID: "remotePlayAuto", Label: "Download Remote Play automatically", Kind: setKindToggle,
+					Visible: func(*Config) bool { return psRemoteSupported() },
+					Detail:  psBgSettingDetail,
+					Get:     psBgEnabled,
+					Set: func(c *Config, on bool) {
+						psBgSetEnabled(c, on)
+						setToast("Download Remote Play automatically: " + setOnOff(on))
+					},
+				},
+				{
 					ID: "cpuBoost", Label: "Full speed while playing", Kind: setKindToggle,
 					Detail:  setStatic("Lets games use the fastest CPU clock, then backs off"),
 					Visible: func(*Config) bool { return setHandheld() },
@@ -1256,6 +1311,8 @@ func setBuildSections() []setSection {
 						setToast("Find box art automatically: " + setOnOff(on))
 					},
 				},
+				playtimeDailyLimitRow(),
+				playtimeBreakReminderRow(),
 				{
 					ID: "saves", Label: "Save manager", Kind: setKindAction,
 					Detail: setStatic("Back up and restore save files"),

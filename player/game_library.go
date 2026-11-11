@@ -469,6 +469,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if !regularFile(launcher) {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
 	}
+	if err := playtimeAllowGameLaunch(game.Title); err != nil {
+		return err
+	}
 	// A RetroArch launcher gets the two cfg switches that make the next boot
 	// continue from the auto state, plus the folder its own record toggle
 	// writes captures to, so the Recordings screen can list them. Standalone

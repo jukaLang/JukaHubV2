@@ -27,7 +27,7 @@ lists every target.
 | `make test` | player tests; `make test-web` / `make e2e` for the builder |
 | `make lint` | gofmt, `go vet`, builder syntax, config JSON |
 | `make bench` | cold-boot benchmark against the 2 s device budget |
-| `make check` | everything a pull request must pass locally |
+| `make check` | what CI checks on every push, locally (staticcheck aside) |
 | `make release` | the same packaging as `player/release.sh` |
 
 On Windows the player targets are thin wrappers around `player\build.bat`, so
@@ -118,8 +118,8 @@ go build -o JukaHub .
 
 On macOS install the same three libraries with Homebrew
 (`brew install sdl2 sdl2_image sdl2_ttf`); the SDL bindings find them through
-`pkg-config`, which is all the nightly macOS job in
-[`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml) does.
+`pkg-config`. No CI job builds for macOS: the shipped builds are TrimUI and
+Windows.
 
 ## TrimUI Smart Pro (linux/arm64)
 
@@ -205,8 +205,8 @@ JUKAHUB_HELPERS_NATIVE=1 ./native/build-helpers.sh
 ```
 
 That mode builds FFmpeg 6.1 (only the H.264 and HEVC decoders and swscale),
-opus and json-c from pinned, checksum-verified sources into `DEPS_PREFIX`
-(default `/opt/jukahub-deps`) and links them statically, together with the
+opus, json-c and libevent from pinned, checksum-verified sources into
+`DEPS_PREFIX` (default `/opt/jukahub-deps`) and links them statically, together with the
 distribution's static OpenSSL and chiaki-ng's bundled curl (the script points
 chiaki-lib at curl's static target, `libcurl_static`, and stops if the configure
 turns shared libraries back on). chiaki-ng and miniupnpc are fetched by full
@@ -245,6 +245,7 @@ SDK_ROOT=/opt/sdk-tg5050 ./native/build-helpers.sh
 | `SDK_ROOT` | `/opt/sdk-tg5050` | TG5050 SDK for the cross build |
 | `CHIAKI_COMMIT`, `CHIAKI_SOURCE`, `BUILD_DIR` | pinned commit, `/tmp/...` | chiaki-ng checkout and build directory |
 | `JOBS` | number of CPUs | parallel build jobs |
+| `LOG_DIR` | `/tmp/jukahub-helper-logs` | one log per build step; the console shows one line per step, and a failed step prints the end of its log |
 
 See [`player/native/README.md`](../player/native/README.md) for the
 session-file contract and the Brick Pro runtime note.
@@ -279,7 +280,9 @@ numbers. See [Patch and package format](PACKAGES.md) for what consumes it.
 
 | Workflow | Trigger | Output |
 |----------|---------|--------|
-| [`.github/workflows/build-sdcard.yml`](../.github/workflows/build-sdcard.yml) | push to `main` touching `player/**`, pull requests, manual | `JukaHub-SDCARD` artifact (the SD-card package, Remote Play helpers included), built in the community TrimUI toolchain image |
+| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push to `main`, pull requests | two jobs: the web builder checks (workflow pins, syntax, jsdom tests, ESLint) and the player's `go vet`, staticcheck and `go test` |
+| [`.github/workflows/weekly.yml`](../.github/workflows/weekly.yml) | Mondays, manual | the slow checks: race detector, `govulncheck`, cold-boot budget, the Chromium smoke test, the CI helper scripts' and the game-audio plugin's tests, and a native Windows build with its tests |
+| [`.github/workflows/build-sdcard.yml`](../.github/workflows/build-sdcard.yml) | manual only | `JukaHub-SDCARD` artifact (the SD-card package, Remote Play helpers included), built in the community TrimUI toolchain image |
 | [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` (its `bin/` holds the Remote Play helpers), `JukaHub-Windows.zip` and, when the helpers were built, `JukaHub-RemotePlay-linux-arm64.zip` (the helpers alone: `bin/` plus `SHA256SUMS`, which a JukaHub without them downloads by itself; optional, so the release is published without it), each carrying `release-info.json` (`tag` + RFC3339 `date`). The release is created as a draft and published only after both archives are attached, so a download link never points at an empty release. Pull-request runs stop at the draft. The Windows job and the TrimUI compile (`build-trimui`, the toolchain image under `docker run` through [`trimui-build.sh`](../.github/scripts/trimui-build.sh)) each start from the Go build cache an earlier push-to-main run of the same workflow left as an artifact, so a release normally compiles only the player; [`.github/scripts/go-build-cache.sh`](../.github/scripts/go-build-cache.sh) explains why it is not `actions/cache`. The TrimUI compile runs beside the Remote Play helpers, and a short packaging job waits for both. |
 | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` (with the Remote Play helpers in `native/bin`) on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json`, `SHA256SUMS` and (when the helpers were built) `JukaHub-RemotePlay-linux-arm64.zip` to the GitHub release, then publishes it once the draft upload is complete |
 | [`.github/workflows/remote-play-helpers.yml`](../.github/workflows/remote-play-helpers.yml) | called by the three workflows above, or manual | `remote-play-helpers` artifact: `chiaki-stream`, `chiaki-regist` and `BUILDINFO.txt`, built by `build-helpers.sh` in native mode on an arm64 runner inside a debootstrapped Ubuntu 20.04 root, or reused from an earlier push-to-main run of the same calling workflow when nothing they are built from changed (the artifact `remote-play-helpers-<hash of the sources>`, under the build cache's provenance rules). It may fail without stopping anything: the callers run regardless and their packages then ship without Remote Play streaming, with a warning. |
@@ -295,5 +298,7 @@ go vet ./...
 go test ./...
 ```
 
-Rendering changes are expected to come with pixel or geometry tests; see
-[CONTRIBUTING.md](../CONTRIBUTING.md).
+Rendering, layout and feature flows get no tests (check them on screen); the
+suite covers saved data, security, the updater and installers, and parsers of
+outside files. See
+[CONTRIBUTING.md](../CONTRIBUTING.md#tests-for-what-you-changed).

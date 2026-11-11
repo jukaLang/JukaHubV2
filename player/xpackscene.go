@@ -43,7 +43,7 @@ var xpackSceneTypes = map[string]bool{
 // command, launches a program, writes settings or files, signs in or quits is
 // missing on purpose.
 var xpackSceneTriggers = map[string]bool{
-	"change_scene": true, "theme_preset": true, "yt_search": true, "youtube_search": true,
+	"change_scene": true, "theme_preset": true, "youtube_search": true,
 	"youtube_smart": true, "youtube_trending": true, "youtube_play": true, triggerShortsOpen: true,
 	"music_player": true, "play_focused": true, "fe_list": true, "fe_up": true,
 	"ip_stream": true, "custom_link": true, "iptv_load": true, "podcast_load": true,

@@ -124,8 +124,8 @@ The DSP's specification is a Python reference,
 [player/spatialfx/jh_spatial_ref.py](../player/spatialfx/jh_spatial_ref.py): every
 constant and the order of every operation is normative. It writes golden
 vectors into `player/testdata/spatial/`; the Go port
-([player/spatial_dsp.go](../player/spatial_dsp.go), tested by
-`spatial_dsp_test.go`) and the C build for games are checked against them. The
+([player/spatial_dsp.go](../player/spatial_dsp.go)) follows them, and the C
+build for games is checked against them (`make test-spatialfx`). The
 media hook is one call in `QueueVideoAudio` ([player/sound.go](../player/sound.go)),
 which every JukaHub player feeds; the settings, the Auto rule and the live
 snapshot the decoders read are in [player/spatial.go](../player/spatial.go), the

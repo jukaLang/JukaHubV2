@@ -104,6 +104,7 @@ func bootSfxBind(config *Config) {
 	if config == nil {
 		return
 	}
+	quietModeBind(config)
 	on := true
 	if v, ok := customValue(config.Variables.Custom, bootSfxEnabledKey); ok {
 		on = bootSfxParseBool(v, true)
@@ -398,7 +399,7 @@ const bootSfxMaxQueued = 150 * time.Millisecond
 
 // bootSfxPlay queues one UI sound at the user's volume.
 func bootSfxPlay(kind bootSfxKind) {
-	if kind < 0 || kind >= bootSfxKindCount || !bootSfxEnabled() {
+	if kind < 0 || kind >= bootSfxKindCount || !bootSfxEnabled() || quietModeOn() {
 		return
 	}
 	// A ringing alarm owns the speaker: its own snooze/dismiss sounds play once

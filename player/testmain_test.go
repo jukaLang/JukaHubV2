@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 	// The installer's own tests switch it back on (psremote_helpers_install_test.go).
 	psHelperSupportedFn = func() bool { return false }
 	// Subtitles: CC outlives a stopped video, so the suite must never fetch
-	// for real or write the real subtitle cache (videosubs_test.go).
+	// for real or write the real subtitle cache (testhelpers_test.go).
 	subtitlesCleanup := subtitlesIsolateForTests()
 	code := m.Run()
 	subtitlesCleanup()

@@ -1,0 +1,231 @@
+# The slow checks, once a week rather than on every push.
+#
+# ci.yml stays at two jobs per push (builder checks; player vet, staticcheck
+# and tests). What costs more than it catches per push runs here, Mondays and
+# by hand (Actions -> Weekly checks -> Run workflow): the race detector over
+# the tests that run real goroutines, the Go vulnerability scan, the
+# cold-boot budget, the builder's Chromium smoke test, the CI helper scripts'
+# and the game-audio plugin's own tests, and the player built and tested on
+# native Windows (the release pipeline only cross-compiles it).
+# Nothing waits for this workflow; a red run means main broke something these
+# catch, so triage it like a failing check.
+name: Weekly checks
+
+on:
+  schedule:
+    - cron: "37 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+jobs:
+  player-race:
+    name: Player race detector
+    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
+    # ubuntu-latest label is moving to Ubuntu 26.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: go test -race
+        # Only the tests that run real goroutines: the conditional HTTP cache,
+        # the semaphores and bounded runners, retry cancellation, install-run
+        # contexts, the debounced config writer, the synthetic event queue and
+        # the loopback servers (peer TLS, SSH/SFTP, FTP, Companion, live
+        # builder, save sync, patch downloads, core auto-update, telemetry, the
+        # media relay). Add a prefix here when a new test exercises concurrent
+        # code.
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|LiveBuilder|Ssync|PatchDownload|RunInstalledCoreUpdates|Telemetry|MediaRelay|FFmpegReadableInput)"
+        run: |
+          set +e
+          go test -race . -run "$RACE_TESTS" -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface the cause as annotations: the raw log is hard to reach.
+            excerpt=$(grep -E -A3 'WARNING: DATA RACE|^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/race.log" | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=go test -race failed::${excerpt}"
+            if failures=$(grep -E '^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -12 | sed ':a;N;$!ba;s/\n/%0A/g'); [ -n "$failures" ]; then
+              echo "::error title=Failing assertion::${failures}"
+            fi
+            { echo "### go test -race failed"; echo '```'; grep -E 'WARNING: DATA RACE|--- FAIL|^FAIL|panic:|^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+  govulncheck:
+    name: Go vulnerability scan
+    # The scan builds the package to find the calls that can reach a known
+    # vulnerability, so it needs the SDL2 headers too.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: Install govulncheck
+        # Pinned: a scanner that updates itself mid-run makes a red build
+        # unreproducible, and the vulnerability database it reads is fetched
+        # fresh on every run anyway, so the pin costs no coverage.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Scan the player
+        # Advisory: the scan includes the standard library of whichever
+        # toolchain go.mod selects, so a fresh Go patch release can turn it red
+        # without any change here; the fix for that is a toolchain bump.
+        continue-on-error: true
+        run: govulncheck ./...
+
+  player-boot:
+    name: Player cold-boot budget
+    # The same script as `make bench`: builds once, starts the player headless
+    # three times and fails on a median over the limit. The desktop limit is
+    # deliberately looser than the 2 s device target; see docs/DEVELOPMENT.md.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: Cold-boot median
+        env:
+          JUKAHUB_BENCH_LIMIT_MS: "5000"
+          JUKAHUB_BENCH_RUNS: "3"
+        run: bash ./startup-bench.sh
+
+  web-e2e:
+    name: Web builder smoke test (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install Playwright and Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          # --no-install: use the Playwright from package-lock.json, never a
+          # registry version resolved at run time.
+          npx --no-install playwright install --with-deps chromium
+      - name: Run the builder smoke test
+        # Loads the real page, drops a palette component on the canvas, checks
+        # undo/redo, then exports JSON and re-imports it.
+        run: npx --no-install playwright test
+      - name: Upload the failure trace
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
+          retention-days: 7
+
+  scripts:
+    name: CI helper scripts and the game-audio plugin
+    # `make test-scripts` and `make test-spatialfx`. The SDL installer must
+    # refuse a tampered archive; the release build caches and the reused
+    # Remote Play helpers must come only from an earlier push-to-main run of
+    # the same workflow; the TrimUI build must start its container offline and
+    # refuse a binary the handhelds could not start; the C game-audio plugin
+    # must match its DSP spec. A stock Git Bash lacks the tools most of these
+    # need and skips them, so this is where they run.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: CI helper scripts
+        run: |
+          bash tests/scripts/install-sdl-mingw.test.sh
+          bash tests/scripts/go-build-cache.test.sh
+          bash tests/scripts/trimui-build.test.sh
+      - name: Game-audio plugin host tests (player/spatialfx)
+        # Advisory until it has been green on the runner's gcc (the test is
+        # built with -Werror).
+        continue-on-error: true
+        run: sh player/spatialfx/tests/run-tests.sh
+
+  windows:
+    name: "Windows: native build + tests"
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: player
+    env:
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+
+      - name: Install SDL2 and a C toolchain
+        # The same official MinGW development tarballs the release pipeline
+        # uses, from the one script that pins them, so a version bump is a
+        # single edit.
+        shell: bash
+        run: |
+          choco install mingw -y --no-progress
+          bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" /c/sdl2
+
+      - name: Point cgo at the SDL2 headers
+        # The flags reach go and gcc in the pwsh steps below, which are
+        # Windows programs: they need C:/sdl2/... paths. /c/sdl2/... (what
+        # Git Bash calls the same folder) would mean \c\sdl2 on the current
+        # drive to them.
+        shell: bash
+        run: |
+          sdl=C:/sdl2
+          echo "CGO_CFLAGS=-I$sdl/SDL2-2.30.11/x86_64-w64-mingw32/include -I$sdl/SDL2-2.30.11/x86_64-w64-mingw32/include/SDL2 -I$sdl/SDL2_image-2.8.4/x86_64-w64-mingw32/include -I$sdl/SDL2_image-2.8.4/x86_64-w64-mingw32/include/SDL2 -I$sdl/SDL2_ttf-2.22.0/x86_64-w64-mingw32/include -I$sdl/SDL2_ttf-2.22.0/x86_64-w64-mingw32/include/SDL2" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$sdl/SDL2-2.30.11/x86_64-w64-mingw32/lib -L$sdl/SDL2_image-2.8.4/x86_64-w64-mingw32/lib -L$sdl/SDL2_ttf-2.22.0/x86_64-w64-mingw32/lib" >> "$GITHUB_ENV"
+          echo "CC=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: go build -o JukaHub-weekly.exe .
+
+      - name: Native tests
+        run: go test ./... -count=1 -timeout 25m

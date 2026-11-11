@@ -584,10 +584,14 @@ func feEntryMeta(entry FileEntry) string {
 	if entry.IsDir {
 		return "Folder"
 	}
-	if entry.Mod.IsZero() {
-		return humanBytes(entry.Size)
+	meta := humanBytes(entry.Size)
+	if !entry.Mod.IsZero() {
+		meta += " · " + entry.Mod.Format("Jan 2")
 	}
-	return humanBytes(entry.Size) + " · " + entry.Mod.Format("Jan 2")
+	if progress := readerProgressLabel(entry.Path); progress != "" {
+		meta += " · " + progress
+	}
+	return meta
 }
 
 // feVolumeFree is the space left on the card holding the open folder. It is read

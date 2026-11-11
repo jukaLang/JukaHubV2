@@ -47,18 +47,25 @@ go vet ./...
 go test ./...
 ```
 
+CI on every push and pull request is two jobs (`.github/workflows/ci.yml`): the
+web builder checks, and the player's `go vet`, staticcheck and `go test`. The
+slow checks run once a week and by hand (`.github/workflows/weekly.yml`): the
+race detector, the Go vulnerability scan, the cold-boot budget, the Chromium
+smoke test, the CI helper scripts' and the game-audio plugin's tests and the
+native Windows build and tests. Keep it that way: a new check goes into
+`weekly.yml` or a `make` target, not into a new per-push job.
+
 For a startup, render-loop or dependency change, also run the cold-boot
 benchmark. It builds once, runs headless three times and fails on a median over
-the limit; CI uses the same script as a blocking gate.
+the limit; the weekly checks run the same script.
 
 ```bash
 cd player
 JUKAHUB_BENCH_RUNS=3 JUKAHUB_BENCH_LIMIT_MS=5000 ./startup-bench.sh
 ```
 
-Coverage is advisory, not a gate. CI's player job writes a per-function
-coverage profile and puts the total plus the functions at 0% into the run's step
-summary; the same is one command locally:
+Coverage is advisory, not a gate, and CI does not measure it; the total plus
+the functions at 0% are one command locally:
 
 ```bash
 make coverage      # total plus the worst-covered functions
@@ -83,9 +90,10 @@ node --check script.js && node --check builder-device.js \
 ```
 
 The first Playwright run needs `npx playwright install chromium`. CI runs the
-same four checks plus `go vet`/`go test` for the player; a builder change is not
-finished until the Chromium smoke test passes, because it is the only check that
-drives the real drop handler, history buttons and import path.
+syntax checks and the jsdom tests on every push and the Chromium smoke test once
+a week; a builder change is still not finished until the Chromium smoke test
+passes, because it is the only check that drives the real drop handler, history
+buttons and import path.
 
 > **Renderer-owned caches.** A texture belongs to the renderer that created it.
 > The static-layer caches in `player/vkeyboard.go` (keyboard, chat and video
@@ -145,15 +153,20 @@ error paths:
 
 The Go suite is deliberately small and fast: it guards what would hurt users
 silently (saved data, config migration, security checks, the updater and
-package installer, tricky parsers) and nothing else. `go test` should finish in
-seconds, so it gets run.
+package installer, parsers of files from outside) and nothing else. `go test`
+should finish in seconds, so it gets run.
 
 | Change | Expected |
 |--------|----------|
 | Persistence, migration, security, installer or updater logic | a table-driven unit test |
-| Pure parsing or maths with edge cases | a unit test |
+| A parser of files or data from outside (archives, playlists, manifests, binaries) | a unit test |
 | Bug fix in one of the above | a test that fails before your fix |
-| Rendering, layout, copy, colours, focus geometry | no test — check it on screen (Windows build, then the device) |
+| A feature's flow or state, rendering, layout, copy, colours, focus geometry, timing, the maths behind an effect or an estimate | no test — check it on screen (Windows build, then the device) |
+
+Owner rule (2026-11-10): the suite grew from 90 to 180 files in two days,
+almost all of it feature tests, and was cut back to the rows above. Add a case
+to an existing test file before starting a new one, and start a new one only
+for a row above.
 
 Tests never open an SDL window, renderer or font, never sleep for more than a
 few milliseconds, never touch the network beyond an `httptest` server, and never
@@ -182,7 +195,7 @@ JukaHubV2/
 │   ├── trimui/                        # device package assets and notes
 │   └── build.bat, release.sh, package-sdcard.sh
 ├── docs/                              # user and developer documentation
-└── .github/workflows/                 # CI: SD-card package, release, tags
+└── .github/workflows/                 # CI (two jobs per push), weekly checks, release, SD-card package (by hand)
 ```
 
 Every workflow action is pinned to a full commit SHA with the release it matches in a

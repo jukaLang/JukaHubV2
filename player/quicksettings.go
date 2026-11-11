@@ -29,6 +29,7 @@ const (
 	qsActionLedSync
 	qsActionLowPower
 	qsActionReducedMotion
+	qsActionQuiet
 	qsActionFullscreen
 	qsActionNetplay
 )
@@ -125,6 +126,8 @@ func qsInit() {
 				OnColor: sdl.Color{R: 80, G: 200, B: 120, A: 255}, OffColor: qsToggleOff},
 			{Label: "Reduced Motion", Icon: "[M]", Action: qsActionReducedMotion,
 				OnColor: sdl.Color{R: 200, G: 160, B: 80, A: 255}, OffColor: qsToggleOff},
+			{Label: "Quiet Mode", Icon: "[Q]", Action: qsActionQuiet,
+				OnColor: sdl.Color{R: 150, G: 120, B: 230, A: 255}, OffColor: qsToggleOff},
 			{Label: "Fullscreen", Icon: "[F]", Action: qsActionFullscreen,
 				OnColor: sdl.Color{R: 180, G: 100, B: 255, A: 255}, OffColor: qsToggleOff},
 			// LAN play is a hub feature, not a radio: the toggle only decides
@@ -182,6 +185,7 @@ func qsRefreshAvailability() {
 		qsActionLedSync:       ledSyncAvailable(),
 		qsActionLowPower:      true,
 		qsActionReducedMotion: true,
+		qsActionQuiet:         true,
 		qsActionFullscreen:    true,
 		qsActionNetplay:       true,
 	}
@@ -358,6 +362,8 @@ func qsSyncFromConfig(config *Config) {
 				if managed {
 					qs.toggles[i].Value = effectiveReducedMotion(config)
 				}
+			case qsActionQuiet:
+				qs.toggles[i].Value = quietModeFromConfig(config)
 			case qsActionFullscreen:
 				qs.toggles[i].Value = config.Variables.Fullscreen
 			case qsActionLedSync:
@@ -715,6 +721,9 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 			appConfig.Variables.Custom[bootOSMotionChosenKey] = "true"
 			syncVariableOverrides(appConfig)
 		}
+		return nil
+	case qsActionQuiet:
+		quietModeSet(appConfig, want)
 		return nil
 	case qsActionNetplay:
 		if appConfig != nil {

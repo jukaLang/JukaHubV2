@@ -141,6 +141,11 @@ func activityRows() []activityItem {
 	if item, ok := feExtractActivityItem(); ok {
 		rows = append(rows, item)
 	}
+	// PS Remote Play downloading or installing its helpers, on every screen
+	// but its own panel (psremote_helpers_bg.go).
+	if item, ok := psHelpersActivityItem(); ok {
+		rows = append(rows, item)
+	}
 	return rows
 }
 

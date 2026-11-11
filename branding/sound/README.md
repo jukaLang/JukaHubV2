@@ -41,6 +41,5 @@ python3 analyze.py startup.wav shutdown.wav   # levels, spectrum, spectrogram PN
 ```
 
 The program prints the gain that would put the peak at 0.56 of full scale;
-copy it into `chimeStartGain` / `chimeStopGain`. The player's
-`TestChimesRenderCleanly` checks length, peak, silent edges and NaNs at 48 and
-44.1 kHz.
+copy it into `chimeStartGain` / `chimeStopGain`. Listen to the result (and
+run `analyze.py`): no Go test checks the chimes.

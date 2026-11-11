@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/veandco/go-sdl2/sdl"
+)
 
 // A TrimUI's own devices: the gpio power/volume keys and the firmware's
 // virtual X360 pad. Neither is a keyboard.
@@ -75,6 +79,28 @@ B: PROP=0
 B: EV=1b
 B: KEY=7fdb000000000000 0 0 0 fffffffffffffffe
 `
+
+func TestHeldKeyRepeatOnlyMovesOrEdits(t *testing.T) {
+	repeat := func(sym sdl.Keycode) bool {
+		return keyRepeatAllowed(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Repeat: 1, Keysym: sdl.Keysym{Sym: sym}})
+	}
+	for _, sym := range []sdl.Keycode{sdl.K_UP, sdl.K_DOWN, sdl.K_LEFT, sdl.K_RIGHT,
+		sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END,
+		sdl.K_BACKSPACE, sdl.K_DELETE, sdl.K_VOLUMEUP, sdl.K_VOLUMEDOWN,
+		sdl.K_PLUS, sdl.K_MINUS, sdl.K_EQUALS, sdl.K_KP_PLUS, sdl.K_KP_MINUS} {
+		if !repeat(sym) {
+			t.Fatalf("repeat of %v was blocked", sym)
+		}
+	}
+	for _, sym := range []sdl.Keycode{sdl.K_RETURN, sdl.K_SPACE, sdl.K_ESCAPE, sdl.K_a, sdl.K_F5, sdl.K_TAB} {
+		if repeat(sym) {
+			t.Fatalf("repeat of action key %v was allowed", sym)
+		}
+	}
+	if !keyRepeatAllowed(&sdl.KeyboardEvent{Type: sdl.KEYDOWN}) {
+		t.Fatal("an initial key press was blocked")
+	}
+}
 
 func TestHintParseInputDevices(t *testing.T) {
 	cases := []struct {

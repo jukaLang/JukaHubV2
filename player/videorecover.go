@@ -502,7 +502,7 @@ func mediaDownloadFromCard(config *Config, page string, resume float64) {
 	prepareSeq, prepareCtx := beginVideoPrepare(recentVideoTitle(page))
 	// StopEmbeddedPlayback cleared it; the download is still this page's
 	// video, and its session reads the page from here (startEmbeddedPlayback).
-	currentPlaybackURL = page
+	setPlaybackPageURL(page)
 	go func() {
 		ytDlpPath, missing, err := resolvePlaybackTools(prepareCtx, config)
 		if err != nil {

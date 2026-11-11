@@ -973,12 +973,21 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 		p.lastDrew = liquidDrewNothing
 		return liquidDrewNothing
 	}
+	justEnabled := !p.on
 	p.on = true
 	p.level = level
 	if now := liquidClock(); liquidUpdateDue(p.framed, p.frame, frameCount, p.updatedAt, now) {
 		p.framed, p.frame, p.updatedAt = true, frameCount, now
 		p.epoch++
 		liquidUpdate(config, w, h, now)
+		if justEnabled && p.sim != nil {
+			// Give the setting an immediate, gentle preview instead of leaving
+			// the water looking static until focus moves or the first raindrop.
+			// liquidTuningFor already scales this down for Reduce Motion.
+			radius := math.Min(110, float64(min(w, h))*0.15)
+			p.dropAt(float64(w)/2, float64(h)/2, radius, p.tuning.drop*0.6, now)
+			p.lastUser = now
+		}
 	}
 
 	// The living background hides the wallpaper and paints a flat colour

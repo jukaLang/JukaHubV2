@@ -7,12 +7,12 @@ name: OpenSSF Scorecard
 
 on:
   # Weekly, plus a run whenever protection rules change so a weakening shows up
-  # immediately instead of up to seven days later.
+  # immediately instead of up to seven days later. Not on every push as well:
+  # the badge shows the latest result, and a week is soon enough for the
+  # workflow changes it scores.
   branch_protection_rule:
   schedule:
     - cron: "35 4 * * 6"
-  push:
-    branches: [main]
 
 permissions: read-all
 

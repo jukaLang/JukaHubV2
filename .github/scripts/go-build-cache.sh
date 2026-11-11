@@ -199,7 +199,7 @@ EOF
 }
 
 # The workflow id of run <run>. The same workflow file has the same id on every
-# branch, so an artifact from another workflow (ci.yml, nightly.yml, ...) never
+# branch, so an artifact from another workflow (ci.yml, weekly.yml, ...) never
 # qualifies.
 this_workflow() { # <repo> <run>
   gh api "repos/$1/actions/runs/$2" --jq '.workflow_id'

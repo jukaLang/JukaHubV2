@@ -76,6 +76,10 @@ func mediaHubHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !mediaHubAcceptsInput(config) {
 		return false
 	}
+	// X and / open the search keyboard. Capture this before the switch so
+	// vkDropOpenerText can drop their own character (vkopenertext.go).
+	wasOpen := virtualKeyboardActive
+	defer vkDropOpenerText(e, wasOpen)
 	mod := e.Keysym.Mod
 	ctrl := mod&sdl.KMOD_CTRL != 0
 	shift := mod&sdl.KMOD_SHIFT != 0

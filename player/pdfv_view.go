@@ -257,6 +257,10 @@ func pdfvPollLoaded() {
 	if pdf.page < 1 {
 		pdf.page = 1
 	}
+	if count := pdfPageCount(); count > 0 && pdf.page > count {
+		pdf.page = count
+	}
+	pdfSaveReadingState()
 }
 
 // pdfvRequest asks the worker for a page unless it is cached or on its way.
@@ -1054,6 +1058,7 @@ func pdfvToggleText() {
 	}
 	pdfvView.textMode = !pdfvView.textMode
 	pdf.scrollY = 0
+	pdfSaveReadingState()
 	PlayNavSound()
 	if pdfvView.textMode {
 		showToast("Text view — the page's words, reflowed", ToastInfo())
@@ -1078,6 +1083,7 @@ func pdfvStepTextSize(steps int) {
 	idx = clampIndex(idx+steps, len(pdfvTextSizes))
 	pdfvView.textSize = pdfvTextSizes[idx]
 	pdfvView.textKey = ""
+	pdfSaveReadingState()
 	PlayNavSound()
 }
 
@@ -1192,7 +1198,12 @@ func pdfvMenuRows() {
 	if pdfvView.textMode {
 		view = "Show the page"
 	}
+	mark := "Bookmark this page"
+	if pdfPageBookmarked(pdf.page) {
+		mark = "Remove bookmark"
+	}
 	rows := []filesMenuRow{
+		{ID: "mark", Label: mark, Enabled: pdfPageCount() > 0},
 		{ID: "first", Label: "First page", Enabled: pdfPageCount() > 1},
 		{ID: "back10", Label: "Back 10 pages", Enabled: pdf.page > 1},
 		{ID: "fwd10", Label: "Forward 10 pages", Enabled: pdf.page < pdfPageCount()},
@@ -1200,6 +1211,12 @@ func pdfvMenuRows() {
 		{ID: "fit", Label: "Page size", Value: pdfvFitLabel(), Enabled: paged && !pdfvView.textMode},
 		{ID: "zoom", Label: "Zoom", Value: pdfvZoomLabel(), Adjust: true, Enabled: true},
 		{ID: "text", Label: view, Enabled: pdf.doc.Format == "PDF" && pdf.doc.Error == ""},
+	}
+	if len(pdf.bookmarks) > 0 {
+		rows = append(rows,
+			filesMenuRow{ID: "prevmark", Label: "Previous bookmark", Enabled: true},
+			filesMenuRow{ID: "nextmark", Label: "Next bookmark", Enabled: true},
+		)
 	}
 	if filesSystemOpenAvailable() && pdf.doc.Path != "" {
 		rows = append(rows, filesMenuRow{ID: "system", Label: "Open with Windows", Enabled: true})
@@ -1228,6 +1245,12 @@ func pdfvMenuApply(in filesMenuInput) {
 		pdfGoToPage(pdf.page + 10)
 	case "last":
 		pdfGoToPage(pdfPageCount())
+	case "mark":
+		pdfBookmarkToggle()
+	case "prevmark":
+		pdfBookmarkJump(-1)
+	case "nextmark":
+		pdfBookmarkJump(1)
 	case "fit":
 		pdfvCycleFit()
 	case "zoom":

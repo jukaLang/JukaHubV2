@@ -971,7 +971,7 @@ func partyNowPlayingPress() {
 // partyOpenAddSheet offers the ways to add a video.
 func partyOpenAddSheet(config *Config) {
 	buttons := make([]tbxSheetButton, 0, 4)
-	playing := currentPlaybackURL
+	playing := playbackPageURL()
 	if looksLikeStreamURL(playing) && snapshotVideoState().phase != "idle" {
 		buttons = append(buttons, tbxSheetButton{label: "What's playing", primary: true, run: func() {
 			partyQueueFlow(playing, "")

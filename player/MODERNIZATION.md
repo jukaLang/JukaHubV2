@@ -171,6 +171,36 @@ packaging waits for it and for the Remote Play helpers, which are reused when
 their sources did not change (`go-build-cache.sh fetch`). TEST-14 was
 rewritten for what is left. Follow-up: BUILD-5 (one new task).
 
+Remote Play downloads in the background (**2026-11-10**, night, unbuilt): a
+JukaHub without its helpers fetches them about a minute after it starts, when
+it is online, on screen and its clock is past the build's date, waiting 2 to 60
+minutes after a failure the network, GitHub or the clock caused and leaving any
+other until the next start, an Account-ID or Retry (`psremote_helpers_bg.go`);
+a chip on every other screen follows the download and stops it, the panel says
+Downloading or Installing, and Settings → Games &
+emulators → Download Remote Play automatically turns it off. The Phone
+Companion page's PlayStation card sends the PSN Account-ID and follows the
+download (`companion_psremote.go`). Follow-ups: PSR-15 and SEC-28 (two new
+tasks).
+
+Fewer tests, two CI jobs, and libevent for the helpers (**2026-11-10**, night,
+unbuilt; the owner: "Too many tests... reduce them especially for CI"): a push
+now runs `ci.yml`'s two jobs (builder checks; the player's vet, staticcheck and
+tests) besides the release pipeline, instead of eight CI jobs plus a second
+TrimUI and helper build; the race detector, govulncheck, the cold-boot budget,
+the Chromium smoke test and the native Windows tests run weekly (`weekly.yml`,
+which replaced the nightly macOS + Windows run), the SD-card package builds by
+hand only and Scorecard weekly only. The Go suite was cut back to its rule
+(ground rules above): 59 of the 90 test files added since 2026-11-09 and two
+older ones went, four files kept only their security or persistence cases, and
+the security tests among the deleted ones were kept, moved into files that
+stayed or into four one- or two-test files (180 files and 1,675 tests before,
+123 and about 1,005 after). The helper build makes libevent, which
+the pinned chiaki-ng's configure asked for next, and its log shows one line per
+step (BUILD-4). TEST-13 was dropped, TEST-14 is done, and TEST-3, 4, 5, 7, 8,
+9, 11, 12 and 17, SEC-10, INP-12 and INP-18 were rewritten so that no task adds
+a per-push CI job: 320 tasks in the file.
+
 ## How to use this file (agents read this first)
 
 1. **Pick** the highest-priority task you can actually verify. Tags tell you what
@@ -203,9 +233,13 @@ Priorities: **P0** broken or blocks everything · **P1** users feel it now ·
 - **Logging:** never import `log`. Use `logDebug/logInfo/logWarn/logError(sys,
   format, args...)` or `Log()/LogScene(...)` (slog) from `logging.go`. Only WARN+
   reaches `errors.txt` on the device; the Logs screen shows the ring buffer.
-- **Tests:** the suite is a lean core (~70 files): data integrity, security,
-  updater/installers, parsers. Add a fast unit test when you touch those areas.
-  No SDL/renderer/pixel tests (see `CONTRIBUTING.md`).
+- **Tests and CI (owner rule, 2026-11-10: "too many tests"):** the suite is a
+  lean core: data integrity, security, updater/installers, parsers of files from
+  outside. No tests for a feature's flow or state, rendering, layout, wording,
+  timing or the maths behind an effect; add a case to an existing test file
+  before starting a new one (`CONTRIBUTING.md` → Tests for what you changed).
+  CI is two jobs per push (`ci.yml`); slow checks run weekly (`weekly.yml`); a
+  new check goes there or into a `make` target, never into a new per-push job.
 - **Modules:** never edit `go.mod`/`go.sum` without a Go toolchain (the
   git-ignored `vendor/` would become inconsistent). With one, finish with
   `go mod tidy && go mod vendor`.
@@ -304,8 +338,8 @@ read-only sweeps) and a benchmark of what the best systems shipped in 2026:
 | Recovery | Boot guard counts failed starts (safe mode after three; one rollback, only with crash evidence), crash reports offered at the next start, a recovery card with previous version / last good settings / reset (Nov 2026, unbuilt) | REL-10, REL-5 |
 | Updates | Signed manifests optional per release; dev key only; no channels | REL-3, REL-4, REL-5 |
 | Packages | Store installs streamed, hash-checked when the catalogue has a hash, staged and swapped with one rollback; the catalogue has no hashes or signature yet; core updates notify by default (Nov 2026, unbuilt) | SEC-16, SEC-21, LIB-17 |
-| Keyboard | Hints follow the device and Accessibility remaps (Nov 2026); a few screens and sentences left | INP-1, INP-2, INP-13, INP-14 |
-| Accessibility | Text size, palettes, remaps; no narration, no reduce-transparency | A11Y-1, A11Y-2 |
+| Keyboard | Hints follow the device and Accessibility remaps (Nov 2026); a few screens and sentences left | INP-1, INP-2, INP-13 |
+| Accessibility | Text size, palettes, remaps, Reduce Transparency, Increase Contrast and Bold text; no narration | A11Y-1 |
 | Languages | English only, Latin/Cyrillic/Greek glyphs only, no IME | I18N-1 … I18N-6 |
 | Network services | Live builder off on the handheld, rate-limited, risky designs held for approval; FTP/SFTP need a password, share confined folders and stop on their own (Nov 2026, unbuilt); all plaintext on the wire | SEC-19, NET-15, SEC-17 |
 | Clock | Zone picker and network time on the handheld (Nov 2026, unbuilt); whether the device keeps time across a power cycle is unknown | FIX-2, NET-3, NET-12 |
@@ -318,9 +352,9 @@ The tasks carry their own priorities; this is the order they make sense in.
 
 | Train | Theme | Contents |
 |---|---|---|
-| **0.5 "Trustworthy"** | Nothing breaks, nothing leaks | BUILD-*, HW-1, every FIX-*, REL-3, REL-10, SEC-8, SEC-16, SEC-18, SEC-21, INP-1, INP-2, INP-6, PWR-3, NET-3, NET-11, DESK-1 |
-| **0.6 "Console-grade"** | Feels like a real handheld OS | SHELL-1 … SHELL-6, PWR-1, PWR-2, PWR-4, PWR-6, LIB-1 … LIB-4, LIB-10, A11Y-1, A11Y-2, I18N-1, I18N-2, DESK-2 … DESK-4, UX-12 |
-| **0.7 "Platform"** | Others build on it | APP-*, SEC-6, I18N-3 … I18N-6, LIB-5 … LIB-9, MED-6 …, NET-6 … NET-9, SYS-8 … SYS-10, SYS-12, SYS-13, DESK-5 … DESK-10 |
+| **0.5 "Trustworthy"** | Nothing breaks, nothing leaks | BUILD-*, HW-1, every FIX-*, REL-3, REL-10, SEC-8, SEC-16, SEC-21, INP-1, INP-2, INP-6, PWR-3, NET-3, NET-11, DESK-1 |
+| **0.6 "Console-grade"** | Feels like a real handheld OS | SHELL-1 … SHELL-6, PWR-1, PWR-2, PWR-4, PWR-6, LIB-1 … LIB-4, LIB-10, A11Y-1, I18N-1, I18N-2, DESK-2 … DESK-4, UX-12 |
+| **0.7 "Platform"** | Others build on it | APP-*, SEC-6, I18N-3 … I18N-6, LIB-5 … LIB-9, MED-6 …, NET-6 … NET-9, SYS-8 … SYS-10, SYS-13, DESK-5 … DESK-10 |
 
 ---
 
@@ -403,6 +437,17 @@ avformat, and `CHIAKI_ENABLE_FFMPEG_DECODER=ON` makes that fatal.
 `build_ffmpeg` now also builds libavformat, with no demuxer, muxer or protocol
 in it (a prefix without `libavformat.pc` is rebuilt). Next run: whatever comes
 after the configure.
+**Status 2026-11-10 (night).** The second run (16f03d5) found FFmpeg and
+stopped at `find_package(libevent)` in chiaki-ng's `lib/CMakeLists.txt:182`.
+`build_libevent` now builds libevent 2.1.12-stable (checksum-verified, static,
+its OpenSSL part against the static OpenSSL) and adds `libevent-config.cmake`
+beside libevent's own `LibeventConfig.cmake`, which a case-sensitive
+`find_package(libevent)` cannot see; the configure gets `libevent_DIR`. Every
+step now logs to `LOG_DIR` and prints one line, and a failed configure prints
+the end of its log, the lines of chiaki-ng's CMake files around each error and
+every `find_package`/`pkg_check_modules`/`option` those files contain, so one
+red run shows everything the pinned commit asks for. Next run: whatever comes
+after libevent (the CMake lines after line 182, then the compile).
 
 ### BUILD-5 — First run of the split TrimUI release build (P0, S) [NET]
 **Why.** The 2026-11-10 evening pass moved the handheld compile out of the
@@ -825,6 +870,10 @@ documented) or removed together with its test.
 
 ## Tests and CI (TEST)
 
+CI runs two jobs on a push (`ci.yml`) and the slow checks once a week
+(`weekly.yml`); the owner wants it kept that small (2026-11-10). The tasks
+below add checks only to `weekly.yml` or to `make` targets.
+
 ### TEST-1 — A scene-dump tool, not a test (P1, M) [WIN]
 **Why.** The visual audit was deleted with the render tests; design work needs
 every scene rendered to PNG.
@@ -849,17 +898,18 @@ the `.bak` with it (`browsercookies*.go`), app launch path refusals
 unnoticed.
 **Where.** `focus.go` (`BuildGraph`), both shipped configs.
 **Done when.** `go run ./tools/scenedump -reach` (or a sibling tool) walks every
-scene's focus graph at both canvases and reports unreachable focusables; run it
-in CI as a non-blocking job.
+scene's focus graph at both canvases and reports unreachable focusables; a
+`make` target runs it.
 
-### TEST-4 — CI builds the device binary and runs AndroidRT's smoke suite (P1, S) [NET]
-**Where.** `.github/workflows/ci.yml`, `build-sdcard.yml`,
-`player/androidrt/tests/smoke/run-smoke.sh` (103 asserts, ~7 s, host gcc).
-**Done when.** Every PR cross-builds linux/arm64 and runs the smoke suite.
+### TEST-4 — The weekly checks run AndroidRT's smoke suite (P2, S) [NET]
+**Where.** `.github/workflows/weekly.yml`,
+`player/androidrt/tests/smoke/run-smoke.sh` (~190 asserts, ~7 s, host gcc).
+**Done when.** `weekly.yml` runs the smoke suite (the release pipeline already
+cross-builds the device binary on every push).
 
-### TEST-5 — CI keeps `go vet` for both GOOS (P2, S) [NET]
-**Done when.** CI runs `GOOS=windows go vet ./...` (cgo off where possible) as
-well as Linux, so Windows-only files cannot rot.
+### TEST-5 — `go vet` for Windows too (P2, S) [NET]
+**Done when.** The weekly Windows job (`weekly.yml`) runs `go vet ./...` before
+its tests, so Windows-only files cannot rot.
 
 ### TEST-6 — Ship the static checker in the repo (P2, S)
 **Why.** Agents without a toolchain rely on `gocheck.py`, which lives in the
@@ -867,21 +917,22 @@ git-ignored `tmp/`.
 **Done when.** `tools/gocheck/` holds `gocheck.py`, `alignchk.py`,
 `importchk.py` and a README; `CONTRIBUTING.md` mentions it.
 
-### TEST-7 — Relative-link check for the docs in CI (P3, S)
+### TEST-7 — Relative-link check for the docs in `make check` (P3, S)
 **Why.** The Go test that checked doc links went with the test cut; links to
 deleted files then pile up (the November cut left 98).
-**Done when.** A small script (Python or Node, no Go) fails CI on a broken
-relative link in any `*.md` outside `node_modules`/`vendor`.
+**Done when.** A small script (Python or Node, no Go) fails `make check` on a
+broken relative link in any `*.md` outside `node_modules`/`vendor`.
 
 ### TEST-8 — Fuzz the parsers (P2, M)
 **Done when.** `go test -fuzz` targets exist for M3U, CUE/GDI/M3U sheets, the
 PDF and EPUB readers, zip/tar extraction (`extractTarMembers`), package and
-update manifests, `/proc/bus/input/devices` and the XML config; CI runs each for
-30 s and keeps the corpus.
+update manifests, `/proc/bus/input/devices` and the XML config; the weekly
+checks run each for 30 s and keep the corpus.
 
-### TEST-9 — gofmt and a race/checkptr job in CI (P2, S) [NET]
-**Done when.** CI fails on unformatted Go, and a `-race` job (which enables
-checkptr) runs the synthetic event, input, companion and download tests.
+### TEST-9 — gofmt in CI, and the input and download tests under `-race` (P2, S) [NET]
+**Done when.** CI's player job fails on unformatted Go (a `gofmt -l` step, not a
+new job), and the weekly `-race` job (which enables checkptr) also runs the
+input and download tests.
 
 ### TEST-10 — A device release checklist (P1, S) [HW]
 **Done when.** `docs/RELEASE_CHECKLIST.md` lists the 20-minute walk before a
@@ -897,44 +948,23 @@ been deleted. A reader cannot see a dangling ID or a stale count.
 (Python or Node, like TEST-7).
 **Done when.** The script fails on a duplicate task ID, an ID named in prose
 that matches no heading, an anchor that matches no heading, and a header count
-that differs from the number of task headings; CI runs it beside the docs link
-check (TEST-7).
+that differs from the number of task headings; `make check` runs it beside the
+docs link check (TEST-7).
 
 ### TEST-12 — First run of the browser-engine tests (P1, S) [WIN]
 **Why.** The Browser's DOM pass (`webdom_runtime.go`, `webdom_parse.go`,
-`webdom_net.go`, `webdom_module.go`) and the reader's new selector matcher
-(`webpage.go`, `webpage_cssmatch_test.go`) were written without a Go toolchain:
-their tests have never run, including `TestWebDOMPreludeCompilesInGoja`, which
-compiles the embedded prelude in goja — the first time it meets the real engine.
-The prelude itself is tested under node (`tests/web/webdom_*.test.mjs`, run by
-the web suite's `npm test` against goja's set of built-ins).
-**Where.** The files above and their `_test.go` files, `player/go.mod`
+`webdom_net.go`, `webdom_module.go`) was written without a Go toolchain: its two
+kept test files, `webdom_parse_test.go` (the HTML parser) and
+`webdom_net_test.go` (what page scripts may reach), have never run. The embedded
+prelude is tested under node only (`tests/web/webdom_*.test.mjs`, run by the web
+suite's `npm test` against goja's set of built-ins); nothing compiles it in goja
+before a page does.
+**Where.** The files above, `player/go.mod`
 (`github.com/dlclark/regexp2/v2` is now a direct import).
-**Done when.** `go test ./...` passes on Windows and in CI with the new files,
+**Done when.** `go test ./...` passes on Windows and in CI with those files,
 `go mod tidy && go mod vendor` has been run, and the web job's node run includes
 the two `webdom` suites.
-**Verify.** The `go test` tail and the CI run in the PR.
-
-### TEST-13 — Run the Remote Play helper's host tests in CI (P2, S) [NET]
-**Why.** `player/native/tests/run-host-tests.sh` checks the helper's button
-map, session and status files, battery reader, motor and its whole `main()`
-against fakes with nothing but a C compiler, and nothing runs it.
-**Where.** `.github/workflows/ci.yml`.
-**Done when.** A job runs it (with ASan and UBSan) on every push and pull
-request that touches `player/native/`, and a failure fails the check.
-
-### TEST-14 — One Remote Play helper build per push (P3, S) [NET]
-**Why.** `remote-play-helpers.yml` reuses the helpers an earlier push-to-main run
-built from the same sources (the artifact `remote-play-helpers-<hash>`, taken by
-`go-build-cache.sh fetch`), but each calling workflow keeps its own: a push that
-changes `player/native/**` still builds them twice, for `docker-image.yml` and
-for `build-sdcard.yml`, about a quarter of an hour of arm64 runner each.
-**Where.** `.github/workflows/remote-play-helpers.yml`, `build-sdcard.yml`,
-`.github/scripts/go-build-cache.sh` (`trusted_run` accepts the same workflow
-only).
-**Done when.** One push builds the helpers once for both workflows, and the runs
-an artifact may come from are still only push-to-main runs of the release
-workflows, never one a pull request or another workflow can start.
+**Verify.** The `go test` tail and the CI run.
 
 ### TEST-15 — A reproducible build root for the helpers (P3, S) [NET]
 **Why.** The Ubuntu 20.04 root is debootstrapped from the day's focal-updates
@@ -959,14 +989,17 @@ checksum-verified tarball into `DEPS_PREFIX` and found through
 
 ### TEST-17 — Every helper dependency from a verified source, offline configure (P2, S) [NET]
 **Why.** miniupnpc comes in through chiaki-ng's external-project flags taken
-over from the original port's build, and chiaki-ng newer than v1.10 may also
-want libevent for its PSN code; if its configure fetches either itself, that
-download is not checksum-verified (`BUILDINFO.txt` lists anything it fetched).
+over from the original port's build (fetched by full commit id, but handed to
+FetchContent); if chiaki-ng's configure fetches anything itself, that download
+is not checksum-verified (`BUILDINFO.txt` lists anything it fetched). libevent
+is built from a checksum-verified tarball since 2026-11-10.
 **Where.** `player/native/build-helpers.sh`.
-**Done when.** miniupnpc (and libevent if the pinned chiaki-ng needs it) are
-built statically into `DEPS_PREFIX` from verified tarballs or commits,
-configure runs with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON`, and BUILDINFO lists
-nothing fetched by configure.
+**Done when.** miniupnpc is built statically into `DEPS_PREFIX` like the other
+dependencies, configure runs with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON`,
+BUILDINFO lists nothing fetched by configure, and libevent is 2.1.13-stable
+(2026-07, security fixes in evbuffer, bufferevent, evdns and evhttp; chiaki-ng
+1.10.1 moved to it) once its tarball's SHA-256 is checked against its signed
+release — a reviewer found `f7e9383b…` in Buildroot only.
 
 ---
 
@@ -1040,10 +1073,6 @@ remaining exceptions is in the PR.
 first-run Continue card.
 **Done when.** A new user reaches "add games / connect Wi-Fi / pick a theme" in
 ≤ 3 presses from first boot; the controller legend matches the device.
-
-### UX-11 — Quiet mode for notifications (P3, S)
-**Done when.** A Do-not-disturb switch in Quick Settings holds toasts, chimes and
-UI sounds (alarms excepted) until turned off.
 
 ### UX-12 — Every screen on the tokens (P1, M)
 **Why.** Hard-coded colours and sizes bypass themes, High Contrast and the
@@ -1417,8 +1446,10 @@ a test server (`psremote_helpers_install_test.go`).
 `.github/workflows/docker-image.yml` (Package Artifacts, Upload the Remote Play
 helper package).
 **Done when.** After BUILD-4, on a Smart Pro with `Apps/JukaHub/bin/` deleted:
-opening PS Remote Play shows *Installing Remote Play…* with a moving
-percentage, then the toast *PS Remote Play is installed*; `bin/` holds both
+opening PS Remote Play (with **Download Remote Play automatically** off, or
+before the background download's first look, PSR-15) shows *Downloading Remote
+Play…* with a moving percentage, then *Installing Remote Play…*, then the toast
+*PS Remote Play is installed*; `bin/` holds both
 helpers and no `.remote-play-install/`; A on an unpaired PS5 during the
 download says the PIN comes later, and the PIN keyboard opens by itself when
 it ends (and the pairing works with that PIN); Play pressed during the
@@ -1441,6 +1472,33 @@ by its address, without a PS4/PS5 guess) from the PIN prompt until the pairing
 ends, with the busy line while the handshakes run; a failure leaves it
 listed as unpaired until the panel closes.
 **Verify.** A unit test on `chiakiRows` with a typed host and a busy pairing.
+
+### PSR-15 — The background download and the phone's PlayStation card on a handheld (P1, S) [HW] [NET]
+**Why.** The helpers now download by themselves after JukaHub starts, and the
+Phone Companion page has a card that sends the PSN Account-ID and follows that
+download (`psremote_helpers_bg.go`, `companion_psremote.go`), but only a test
+server and jsdom have run them.
+**Where.** `psremote_helpers_bg.go` (`psBgLoop`, `psBgScheduler.tick`,
+`psHelpersActivityItem`), `psremote_helpers_install.go` (`psHelpersStop`),
+`companion_psremote.go`, `companion.go` (the card), `activity.go`,
+`setmodel.go` (the switch).
+**Done when.** After BUILD-4, on a Smart Pro with `Apps/JukaHub/bin/` deleted:
+about a minute after JukaHub starts on Wi-Fi the **Remote Play** chip appears
+with a moving rail and the Logs screen shows `downloading the Remote Play
+helpers in the background`, then `Remote Play helpers installed from …` and the
+toast; started offline, it begins within 30 s of joining Wi-Fi; it does not
+start while a game runs; the chip's ✕ stops it (while the helpers are copied
+into place the chip has no ✕), and the background download does not start it
+again until JukaHub restarts, an Account-ID is saved or the switch is turned
+back on (opening PS Remote Play two minutes later, Retry, Play or the phone's
+Download now still do); with the Settings switch off nothing downloads until
+PS Remote Play opens. On a phone on the same Wi-Fi the
+card says *No PSN Account-ID on the handheld yet*, a pasted Account-ID is saved
+(the handheld toasts *PSN Account-ID saved*) and a *redirect* address is traded
+for one, Sign in to get it opens the sign-in page, and the card shows the
+download's percentage while it runs and *Remote Play is installed on the
+handheld.* after.
+**Verify.** [HW] [NET] the steps above.
 
 ---
 
@@ -1669,12 +1727,6 @@ favourites, buffering state and now-playing metadata.
 **Done when.** CBZ/CBR/CB7 open in a reader with fit width/height, two-page
 spread and right-to-left (manga) mode, remembering the page.
 
-### MED-12 — E-books that remember (P2, S)
-**Why.** Reading position and bookmarks are not saved (`reader.go`,
-`pdfv_doc.go`).
-**Done when.** Position, bookmarks and text size persist per book; the library
-shows progress.
-
 ### MED-13 — TV guide (P3, M) [NET]
 **Done when.** XMLTV EPG for M3U playlists that name one (`url-tvg`), shown as
 now/next in the channel list.
@@ -1779,20 +1831,6 @@ send that client's user agent; other hosts are unchanged.
 (`ffmpegStreamInputArgs`, `videorecover.go`), so this task only changes which
 agent that is.
 
-### MED-23 — "Update yt-dlp now" on the Patch screen (P2, S)
-**Why.** `ytdlp_update.go` updates on its own schedule (Media opened with a copy
-over ten days old, or a failure an update can fix), so a user who hears of a
-YouTube change cannot ask for the new release; and the first-run install
-(`patch_engine.go` `downloadYtDlpCtx`) is not checked against the release's
-SHA-256 list the way updates are.
-**Where.** `ytdlp_update.go` (`requestYtDlpUpdate`), the Patch screen's
-helper-tool rows, `patch_engine.go`, `toolbox.go` (its manifest records a tag
-and a hash).
-**Done when.** The yt-dlp row shows the installed version and an "Update now"
-action that runs the updater without the age gate (still waiting for a playing
-video); the first install verifies SHA2-256SUMS too; the tools manifest records
-the release tag and hash.
-
 ### MED-24 — A YouTube client table that updates without a release (P2, M) [NET]
 **Why.** The native path's client names and versions are constants
 (`youtubenative.go` `ytNativeClients`; the web search client takes the live
@@ -1835,20 +1873,6 @@ agent and the client); after two such failures the next video goes straight to
 the download; a live YouTube stream still streams; a video paused for ten
 minutes carries on when resumed (`-reconnect`) instead of ending; closing the
 player during the loading picture shows no message.
-
-### MED-27 — An old session's end takes a newer play's page (P2, S)
-**Why.** `StopEmbeddedPlayback`, run by `finish()` on a decoder goroutine,
-clears `currentPlaybackURL` and the play origin and calls `partyNoteStop` with
-whatever page is current. When the user starts another video while the old
-one is failing or ending, those belong to the new play: it then starts with the
-CDN URL as its page (no browser user agent, no download fallback, resume and
-Quality keyed to the wrong URL). `currentPlaybackURL` is also a plain string
-written from several goroutines.
-**Where.** `videoplayer.go` (`StopEmbeddedPlayback`, `startEmbeddedPlayback`),
-`core.go` (`playVideoInfo`), `media_hub.go` (`mediaForgetPlayOrigin`).
-**Done when.** The clears and `partyNoteStop` use the stopped session's own
-page and leave a newer play's alone; `currentPlaybackURL` is read and written
-through a mutex-guarded accessor.
 
 ### MED-28 — Watch Party guests open the watch page in ffmpeg (P2, S)
 **Why.** `partynet.go` applies the room's video with `StartEmbeddedPlayback`
@@ -1939,11 +1963,6 @@ completes through the LAN Play panel.
 Settings → Simple; leaving needs a PIN (hashed in the secret store); the setting
 says plainly it is not parental security.
 
-### SYS-5 — Playtime limits and break reminders (P3, S)
-**Where.** `playtime.go`, toast pipeline.
-**Done when.** Optional daily limit and break reminder; a launch over the limit
-asks for confirmation.
-
 ### SYS-6 — Event webhooks (P3, S)
 **Done when.** Opt-in HTTP POSTs for "game launched", "trophy unlocked",
 "install finished" (bounded queue, no secrets in payloads).
@@ -1970,14 +1989,6 @@ flow, with a summary of what moved.
 ### SYS-10 — Import from the stock launcher and other firmwares (P3, M)
 **Done when.** First run offers to import TrimUI MainUI favourites, recents and
 playtime, and NextUI/muOS collections where their files are on the card.
-
-### SYS-12 — The device's zone travels with backup and transfer (P3, S)
-**Why.** The zone lives in `jukatimezone` next to the binary, not in
-`jukauser.json`, so Backup & restore and a future system transfer (SYS-9) leave
-it behind.
-**Where.** `bkup.go`, `datetime.go` (`dateTimeApplyZone`).
-**Done when.** A backup carries the zone and a restore applies it through
-`dateTimeApplyZone` on the handheld (ignored on desktops, where the OS owns it).
 
 ### SYS-13 — Scheduled tasks after a clock jump (P2, S)
 **Why.** Alarms and playtime re-anchor after network time moves the clock
@@ -2318,8 +2329,9 @@ secrets are re-encrypted, the log line is removed, RA and every API key go
 through the store, and Discord uses bot or OAuth tokens only.
 
 ### SEC-10 — Supply chain in CI (P2, S) [NET]
-**Done when.** govulncheck is blocking for reachable vulnerabilities, CodeQL runs
-on Go and JavaScript (`.github/codeql/` is empty), the container image and SDL
+**Done when.** The weekly govulncheck is blocking for reachable vulnerabilities,
+CodeQL runs weekly on Go and JavaScript (`.github/codeql/` is empty; not a new
+per-push job), the container image and SDL
 tarballs are covered by dependabot or a pinned-digest check.
 
 ### SEC-11 — A privacy page that tells everything (P3, S)
@@ -2373,21 +2385,6 @@ are not.
 argument and refreshed when the profile cache rebuilds, and writes through
 symlinks inside shares are refused; a test covers each.
 
-### SEC-18 — yt-dlp options from an allowlist, not a blocklist (P1, S)
-**Why.** `rejectYtDlpExecFlags` (`core.go`, `ytDlpExecFlags`) blocks a fixed
-list, but yt-dlp accepts unique prefixes of long options (`--exec-before-d`),
-`--alias`, `--netrc-cmd`, `--config-locations`, and `-o` to any path for a
-direct link. A design's `yt_search` target is that command line; the Live
-Builder holds such designs for approval, but experience packs (`xpackscene.go`
-allows `yt_search`) and hand-edited configs still reach it.
-**Where.** `core.go` (`ytDlpExecFlags`, `rejectYtDlpExecFlags`,
-`planMediaSearchTrigger`, the yt-dlp exec path), `xpackscene.go`
-(`xpackSceneTriggers`).
-**Done when.** A config-supplied yt-dlp command may only use options from an
-allowlist (exact long names, no prefixes or aliases), packs cannot carry a
-`yt_search` command, and a table test covers the prefix, alias, netrc,
-config-locations and `-o` variants.
-
 ### SEC-19 — The pairing code never crosses the network in clear (P2, M)
 **Why.** The Live Builder is plain HTTP: someone on the same Wi-Fi who sees one
 request learns the code. Risky designs still wait for the owner, but an ordinary
@@ -2422,34 +2419,6 @@ while the store scans either retries and succeeds or fails with "the installed
 version is unchanged"; a card with less free space than the download is refused
 before any byte is written; an entry with a wrong `sha256` is refused and a
 correct one shows "Verified download".
-
-### SEC-22 — Kept values in lists restore whole or not at all (P3, S)
-**Why.** A pull replaces protected values with `<kept on device>` and a push
-puts the device's values back (`liveBuilderRestoreKept`), but inside a list it
-does so by position, so a reordered or edited list can pick up a different kept
-item.
-**Where.** `livebuilder.go` (`liveBuilderRestoreKept`).
-**Done when.** A list holding a placeholder is restored only when its length
-and other items match the device's list (otherwise the push is refused with a
-clear message), with a test.
-
-### SEC-23 — Accepting a waiting design keeps today's secrets (P2, S)
-**Why.** A held design's kept values were filled in at push time, so applying
-it later puts back a token or command the owner changed on the device while it
-waited.
-**Where.** `livebuilder.go` (`AcceptPending`, `liveBuilderRestoreKept`).
-**Done when.** Accept fills the kept fields from the device's current file (or
-refuses when one changed since the push), with a test.
-
-### SEC-24 — No yes/no answer about a protected value (P3, S)
-**Why.** A push that spells out a guessed protected value is "nothing new" when
-it equals the device's value (applied, 200) and held when it does not (202). A
-wrong guess puts the approval card up and blocks pushes until the owner
-decides, so guessing is slow, but a boolean or short value can be learnt.
-**Where.** `livebuilder.go` (`liveBuilderDesignRisks`, the capability keys).
-**Done when.** A protected value that a pull would hide counts as a change
-unless it comes back as the placeholder (the card then shows the pushed value),
-with a test.
 
 ### SEC-25 — Mute errors from cross-origin scripts (P3, S)
 **Why.** A browser reports an error thrown by a cross-origin classic script that
@@ -2495,6 +2464,21 @@ BCJ or delta is refused, where 7-Zip (when present) could unpack it.
 `files_extract_xz.go`, `files_extract_tools.go` (`feRunWindowsTar`), `emu7z.go`.
 **Done when.** Each is closed, or accepted in SECURITY.md with the reason, with
 a test where one can be written.
+
+### SEC-28 — The Phone Companion's PIN budget is per phone, not per server (P2, S)
+**Why.** `noteSuccess` (`companion.go`) clears the failure count and the
+growing lockout on every request that has the right PIN. A paired phone that
+polls — the Live screen every 1.2 s, the PlayStation card every 1.5 s while
+Remote Play downloads — keeps clearing them, so a guesser on the same network
+never meets the lockouts while it does. Found in the review of the PlayStation
+card (2026-11-10), which made the polling more common.
+**Where.** `companion.go` (`throttled`, `noteFailure`, `noteSuccess`, `guard`,
+`handlePage`), `psn_signin.go` (`handlePSNPage`).
+**Done when.** Failures and lockouts are counted per remote address, and a
+success clears only its own address's count (with a cap on how many addresses
+are tracked).
+**Verify.** A unit test: a paired address polling while another guesses still
+locks the guesser out.
 
 ---
 
@@ -2622,40 +2606,7 @@ one), battery level (`SDL_JoystickCurrentPowerLevel`) in Quick Settings, and a
 **Where.** A `tools/hintcheck` program (or a scenedump mode, TEST-1) that, for
 each scene and state, renders the footer in both vocabularies and replays each
 hint's key through the scene's key handler with a recording stub.
-**Done when.** It runs in CI as a non-blocking job and lists mismatches.
-
-### INP-13 — A key that opens a text field types its own letter (P2, S)
-**Why.** SDL sends a key's text right after the key, so a printable key that
-opens the keyboard is also typed into it: X on Live TV (`tvchannels.go` →
-`vkOpenTVSearch`), X and / on Media (`mediaHubOpenSearch`) and similar shortcuts
-start the query with "x" or "/". The browser drops that one event
-(`browserDropKeyText`) and ignores the opener's repeats
-(`browserTextOpenerRepeat`); Home, Notes and Alarm use per-screen `skipText`
-fields. A shared helper exists since 2026-11-09 — `vkDropOpenerText`
-(`vkopenertext.go`) — and the Audio panel, Podcasts, PS Remote Play, LAN play
-and Downloads use it; the screens named above do not yet.
-**Where.** `browser.go` (`browserDropKeyText`, `browserTextOpener`), `core.go`
-(`runInputModal`), `tvchannels.go`, `media_hub_input.go`, `globalsearch.go`,
-`notes.go`, `alarm.go`, `main.go` (`handleTextInputEvent` → `vkInsertText`).
-**Done when.** One shared helper next to the hint layer is called by every
-printable key that opens a text field, the main-loop keyboard honours the
-opener's repeats too, the per-screen `skipText` copies are retired where it
-covers them, and a keyboard check of each listed screen starts with an empty
-field.
-
-### INP-14 — A held key acts once unless holding means repeat (P2, M)
-**Why.** SDL auto-repeats keyboard keys, but no pad face button or shoulder
-repeats (`navrepeat.go` repeats the D-pad only), and most key handlers ignore
-`e.Repeat`: a held key repeats toggles, deletes and open/close actions the pad
-does once. Fixed so far: alarm Delete/X, Local play Y/Delete, keyboard languages
-X/Delete, video C/X, S/Y and F, the browser's openers. Not audited: Enter/Space
-on lists that open or toggle, Esc stepping back several screens, the video
-settings sheet's Enter, the browser's X/L link panel.
-**Where.** Each scene module's `handleKey`; the key dispatch in `main.go`;
-`shortcuts.go` (already Repeat-aware).
-**Done when.** A central rule in the key dispatch (repeats reach a scene only for
-arrows, PgUp/PgDn, Home/End, Backspace/Delete in text fields, volume and zoom
-keys) or per-handler checks, and a held key acts once on every screen.
+**Done when.** A `make` target runs it and lists mismatches.
 
 ### INP-15 — The firmware button swap for the built-in pad only (P3, S) [HW]
 **Why.** `applyButtonSwap` (`core.go`) flips A/B and, since 2026-11-09, X/Y for
@@ -2699,10 +2650,10 @@ it through `SDL_EVDEV_DEVICES`; an LED colour while it is on (ledpanel).
 **Why.** Voice command understands English only: its phrase tables are English
 and it asks Whisper for English.
 **Where.** `voicecmd_intent.go` (phrase tables), `voicecmd.go` (the
-transcription request), `voicecmd_intent_test.go`; the keyboard layout's
-language (`vkCurrentLayout().Lang`) or the UI language as the source.
-**Done when.** At least one more language has its phrase table and tests, is
-picked from the layout or the UI language, and English stays the fallback.
+transcription request); the keyboard layout's language
+(`vkCurrentLayout().Lang`) or the UI language as the source.
+**Done when.** At least one more language has its phrase table, is picked from
+the layout or the UI language, and English stays the fallback.
 
 ### INP-19 — Offline voice recognition on Windows (P3, M) [WIN]
 **Why.** The microphone path needs a Groq key and internet. Many Windows PCs
@@ -3022,19 +2973,6 @@ both off-thread; focus changes in `focus.go`, Home, Settings, lists and toasts.
 label, value and hint ("Vibration, on, A toggles"); a new focus interrupts the
 old speech (XAG 106); speed and voice are settings; narration of the settings
 dialog itself works.
-
-### A11Y-2 — Reduce transparency and increase contrast (P1, M)
-**Why.** The glass UI (`ui_glass.go`) has no opacity override; High Contrast is
-just another palette that hard-coded colours ignore. iOS 26 needed Reduce
-Transparency, Increase Contrast and a Tinted mode for the same reason.
-**Done when.** "Reduce transparency" makes every glass surface opaque
-(`glassA` returns solid tokens), "Increase contrast" adds 2 px outlines to
-focusables and raises text contrast to ≥ 7:1, both applying to every screen
-that uses the tokens (UX-12 finds the rest).
-
-### A11Y-3 — Bold text (P2, S)
-**Done when.** A switch loads Inter SemiBold for every role (the font ships in
-`fonts/`), with the 14 px floor respected.
 
 ### A11Y-4 — Audio access: mono, balance, captions (P2, S)
 **Where.** `videoplayer.go:1122` forces stereo (`-ac 2`); captions are on/off
@@ -3602,7 +3540,7 @@ NET-5, NET-6, NET-10, LIB-8, LIB-10, LIB-14, I18N-3, TEST-10, APP-9; from the se
 afternoon pass: FIX-2, NET-3, NET-12, REL-10, REL-12, LIB-17, LIB-18, SEC-21;
 from the evening pass: MED-19, MED-20, MED-22, MED-25, SND-5, SND-6, INP-15;
 from the late-night pass: PERF-15; archives: SYS-15; brightness: SYS-16.
-From the Remote Play passes: PSR-1, PSR-2, PSR-6, PSR-7, PSR-10, PSR-13.
+From the Remote Play passes: PSR-1, PSR-2, PSR-6, PSR-7, PSR-10, PSR-13, PSR-15.
 From the liquid background, animated wallpaper and Screen Share pass: GPU-5,
 PERF-17, PERF-18, SYS-18.
 From the APK Store, Voice command and spatial audio pass: AND-17, INP-20,

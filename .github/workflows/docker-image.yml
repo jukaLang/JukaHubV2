@@ -457,7 +457,7 @@ jobs:
           echo "### Windows build" >> "$GITHUB_STEP_SUMMARY"
 
           # Versions, URLs and digests live in the shared script, so a bump is
-          # one edit for this pipeline and the nightly Windows job alike.
+          # one edit for this pipeline and the weekly Windows job alike.
           bash .github/scripts/install-sdl-mingw.sh "$RUNNER_TEMP/sdl2-src" > "$logs/sdl.log" 2>&1 &
           sdl_job=$!
 

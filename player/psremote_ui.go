@@ -978,6 +978,10 @@ func psPanelAccountArrived(account string) {
 	if _, offline, err := ps4DecodeAccountID(account); err != nil || offline {
 		return
 	}
+	// Whoever sends an Account-ID is about to pair: Remote Play's helpers,
+	// when they are missing, start downloading now rather than at the next
+	// background look (psremote_helpers_bg.go).
+	psBgKick()
 	if !chiakiPanel.open {
 		// Held from the load to the save, as in psPanelSaveSettings.
 		psHostsMu.Lock()
@@ -1193,6 +1197,8 @@ func psPanelApplyEdit(text string) {
 		}
 		chiakiPanel.account = in.AccountID
 		psPanelSaveSettings()
+		// As for one from the phone: a pairing is coming (psBgKick).
+		psBgKick()
 		psPanelAccountSaved()
 	case psEditPIN:
 		pin := psPanelNormalizePIN(text)

@@ -17,8 +17,7 @@ package main
 // English only; anything it does not recognise is treated as a name, because
 // "YouTube" on its own is the most common command of all.
 //
-// Pure: no SDL, no config, no globals that change. voicecmd_intent_test.go
-// holds the phrase table.
+// Pure: no SDL, no config, no globals that change.
 
 import (
 	"strconv"

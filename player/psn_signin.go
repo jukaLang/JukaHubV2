@@ -686,7 +686,9 @@ code{font:15px ui-monospace,monospace;background:#0f131b;border-radius:6px;paddi
 #done h2{color:var(--ok)}
 .msg{min-height:1.4em;margin-top:10px;font-size:14px}
 .msg.bad{color:var(--bad)}
+.back{display:inline-block;color:var(--dim);text-decoration:none;font-size:14px;margin:4px 0 2px}
 </style>
+<a class=back id=back href="/">‹ Phone Companion</a>
 <h1>Sign in with PlayStation</h1>
 <p class=lead>Pairing a PS5 (or a PS4) needs your PSN Account-ID once. Signing in to Sony here fetches it. JukaHub keeps only that number; your password stays with Sony.</p>
 
@@ -706,7 +708,7 @@ code{font:15px ui-monospace,monospace;background:#0f131b;border-radius:6px;paddi
 
 <div class=card id=done hidden>
   <h2>Done</h2>
-  <p>Your Account-ID <code id=acct></code> is saved on the handheld. Go back to it: it now asks for the 8 numbers the console shows under Link Device (on a PS4: Add Device).</p>
+  <p>Your Account-ID <code id=acct></code> is saved on the handheld. If PS Remote Play is waiting there on its Account-ID card, it now asks for the 8 numbers the console shows under Link Device (on a PS4: Add Device); otherwise open PS Remote Play and pick the console to pair it.</p>
   <a class="btn ghost" id=typePin href="/">Type the PIN from this phone</a>
 </div>
 
@@ -721,6 +723,7 @@ code{font:15px ui-monospace,monospace;background:#0f131b;border-radius:6px;paddi
 <script>
 const pin = new URL(location.href).searchParams.get('p') || '';
 document.getElementById('typePin').href = '/?p=' + encodeURIComponent(pin);
+document.getElementById('back').href = '/?p=' + encodeURIComponent(pin);
 function say(el, text, bad) { el.textContent = text; el.className = bad ? 'msg bad' : 'msg'; }
 async function send(field, btn, msg) {
   const input = field.value.trim();

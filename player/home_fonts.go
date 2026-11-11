@@ -24,7 +24,20 @@ import (
 
 // homeUIFontFile is the bundled UI typeface, resolved like every other asset
 // (resolvePath) from the executable's folder.
-const homeUIFontFile = "Inter-Regular.ttf"
+const (
+	homeUIFontFile     = "Inter-Regular.ttf"
+	homeUIFontBoldFile = "Inter-SemiBold.ttf"
+)
+
+// homeUIFontForRole is the face every UI role resolves to. Bold text replaces
+// the configured Inter cut for every role at once, while still going through
+// the normal path/cache/fallback chain in loadCachedFont.
+func homeUIFontForRole(path string) string {
+	if a11y.boldText {
+		return homeUIFontBoldFile
+	}
+	return path
+}
 
 // homeUIFontSource keeps one immutable font file in memory for all point sizes.
 // SDL_ttf's RWops retains a pointer into data until its Font is closed, so the
@@ -42,6 +55,7 @@ var homeUIFontSourceCache = struct {
 // openHomeUIFont opens one size from the shared in-memory source instead of
 // asking SDL_ttf to reopen the font file from the card for every size.
 func openHomeUIFont(path string, size int) (*ttf.Font, error) {
+	path = homeUIFontForRole(path)
 	source, err := homeUIFontSourceFor(path)
 	if err != nil {
 		return nil, err

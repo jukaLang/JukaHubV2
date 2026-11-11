@@ -760,3 +760,22 @@ func TestTrophyGroupsFollowTheReadingOrder(t *testing.T) {
 		last = r
 	}
 }
+
+func TestTrophyRungsReachableWithoutBonus(t *testing.T) {
+	keepTrophyState(t)
+	config := &Config{Scenes: []SceneConfig{{Name: "Main"}, {Name: "Tube"}, {Name: "Settings"}}}
+	ok := trophyComputeAvailability(config, nil)
+	others := 0
+	for i := range playtimeAchievements {
+		a := &playtimeAchievements[i]
+		if ok[i] && !a.Bonus && a.Metric != trophyMetricPlatinum {
+			others++
+		}
+	}
+	for i := range playtimeAchievements {
+		a := &playtimeAchievements[i]
+		if a.Metric == trophyMetricTrophies && ok[i] && a.Goal > int64(others-1) {
+			t.Errorf("%s (goal %d) is on offer with only %d other non-bonus trophies", a.ID, a.Goal, others-1)
+		}
+	}
+}

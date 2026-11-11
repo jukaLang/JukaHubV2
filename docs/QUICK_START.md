@@ -55,7 +55,8 @@ Where a change normally lands is mapped in
 make check        # gofmt, go vet, builder syntax + ESLint, config JSON, player + jsdom tests
 ```
 
-For a builder change, CI also runs the Chromium smoke test:
+For a builder change, also run the Chromium smoke test (CI runs it once a
+week, in `weekly.yml`):
 
 ```bash
 cd tests/e2e

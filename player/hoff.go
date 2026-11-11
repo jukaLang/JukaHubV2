@@ -248,7 +248,7 @@ func hoffVideoActivity(now time.Time) (hoffActivity, bool) {
 	if st.phase != "playing" && st.phase != "paused" {
 		return hoffActivity{}, false
 	}
-	src := strings.TrimSpace(currentPlaybackURL)
+	src := strings.TrimSpace(playbackPageURL())
 	if src == "" {
 		return hoffActivity{}, false
 	}

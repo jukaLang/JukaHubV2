@@ -732,9 +732,16 @@ func toggleTVFavorite() {
 
 // tvListKeyAction handles Live TV-only keys while the channel list is focused:
 // Left/Right switch category, X opens the search keyboard, Y stars a channel,
-// F is an alternative favorite key for hardware keyboards.
-func tvListKeyAction(sym sdl.Keycode, config *Config) bool {
-	switch sym {
+// F is an alternative favorite key for hardware keyboards. X's own character
+// is dropped when it opens the keyboard (vkopenertext.go).
+func tvListKeyAction(e *sdl.KeyboardEvent, config *Config) bool {
+	if e == nil {
+		return false
+	}
+	// Capture this before the switch: opening the search keyboard changes it.
+	wasOpen := virtualKeyboardActive
+	defer vkDropOpenerText(e, wasOpen)
+	switch e.Keysym.Sym {
 	case sdl.K_LEFT:
 		tvCycleCategory(-1)
 		PlayNavSound()

@@ -38,7 +38,7 @@ const bootChimeEnabledKey = "startupSound"
 
 // bootChimeOn reports whether the chimes play for this config.
 func bootChimeOn(c *Config) bool {
-	if c == nil || !setUISoundsOn(c) {
+	if c == nil || !setUISoundsOn(c) || quietModeOn() || quietModeFromConfig(c) {
 		return false
 	}
 	if v, ok := customValue(c.Variables.Custom, bootChimeEnabledKey); ok {

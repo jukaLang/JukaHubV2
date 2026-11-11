@@ -8,22 +8,16 @@ name: Build SD card package
 #
 # Run it:  Actions -> Build SD card package -> Run workflow
 # Result:  artifact "JukaHub-SDCARD" containing JukaHub-SDCARD.zip
+#
+# By hand only. On every push it built the handheld binary a second time and,
+# worse, the Remote Play helpers a second time (about a quarter of an hour of
+# arm64 runner), beside the release pipeline in docker-image.yml, which
+# publishes the same binary and helpers in JukaHub-Trimui.zip anyway. A run
+# from here finds no helpers to reuse (only push-to-main runs of the same
+# workflow leave any), so it always builds them.
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "player/**"
-      - ".github/workflows/build-sdcard.yml"
-      # The Remote Play helpers it packages are built by this one.
-      - ".github/workflows/remote-play-helpers.yml"
-  pull_request:
-    paths:
-      - "player/**"
-      - ".github/workflows/build-sdcard.yml"
-      - ".github/workflows/remote-play-helpers.yml"
 
 permissions:
   contents: read

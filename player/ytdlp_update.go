@@ -21,12 +21,14 @@ package main
 //     likely fix for (ytFailure.wantsHelperUpdate: a 403, no playable format,
 //     the bot check, an extractor error), at most once per
 //     ytdlpFailureCheckEvery. A failed search is retried once when the update
-//     lands; a failed play says to try again.
+//     lands; a failed play says to try again;
+//   - on demand from Patch's "Update yt-dlp now" row. This bypasses the age
+//     and recent-check gates, but still waits for a playing video to finish.
 //
 // The download reuses the installer's pieces: the same release lookup through
 // the approved-repo list, the same staged ".part" file in the tools folder, the
 // same header check, plus the release's own SHA2-256SUMS, which the first-run
-// installer never compared. The swap is a rename in the same folder, so a run
+// installer now checks too. The swap is a rename in the same folder, so a run
 // that is using the old binary keeps it (Linux keeps the old inode; Windows is
 // allowed to rename a running .exe, not to overwrite it, so the old copy is
 // moved aside first). The replaced copy is kept as "yt-dlp.bak", and the new
@@ -190,6 +192,7 @@ type ytdlpTrigger int
 const (
 	ytdlpTriggerRoutine ytdlpTrigger = iota // Media opened; update an old install
 	ytdlpTriggerFailure                     // a YouTube failure an update can fix
+	ytdlpTriggerManual                      // Patch's "Update yt-dlp now"
 )
 
 // ytdlpUpdateOutcome is how a check ended.
@@ -292,7 +295,7 @@ func requestYtDlpUpdate(config *Config, trigger ytdlpTrigger, done func(ytdlpUpd
 		}
 		ytdlpUpdater.routineNext = now.Add(10 * time.Minute)
 	}
-	if now.Before(ytdlpUpdater.retryAt) {
+	if trigger != ytdlpTriggerManual && now.Before(ytdlpUpdater.retryAt) {
 		ytdlpUpdater.mu.Unlock()
 		return ytUpdateNone
 	}
@@ -300,7 +303,7 @@ func requestYtDlpUpdate(config *Config, trigger ytdlpTrigger, done func(ytdlpUpd
 	if trigger == ytdlpTriggerFailure {
 		interval = ytdlpFailureCheckEvery
 	}
-	if !ytdlpUpdater.lastCheck.IsZero() && now.Sub(ytdlpUpdater.lastCheck) < interval {
+	if trigger != ytdlpTriggerManual && !ytdlpUpdater.lastCheck.IsZero() && now.Sub(ytdlpUpdater.lastCheck) < interval {
 		current := ytdlpUpdater.current
 		ytdlpUpdater.mu.Unlock()
 		if current && trigger == ytdlpTriggerFailure {
@@ -315,7 +318,7 @@ func requestYtDlpUpdate(config *Config, trigger ytdlpTrigger, done func(ytdlpUpd
 		return ytUpdateNone
 	}
 	if !managed {
-		if trigger == ytdlpTriggerFailure {
+		if trigger == ytdlpTriggerFailure || trigger == ytdlpTriggerManual {
 			return ytUpdateUnmanaged
 		}
 		return ytUpdateNone
@@ -357,6 +360,25 @@ func requestYtDlpUpdate(config *Config, trigger ytdlpTrigger, done func(ytdlpUpd
 // gate the next one (and is remembered across restarts): one that could not
 // reach GitHub, a download that failed and an update the player kept waiting
 // are tried again ytdlpFailedRetryAfter later.
+// patchYtDlpUpdate starts a check from Patch's Update now row. The updater's
+// result is reported by a toast; this function only tells the user what was
+// decided immediately.
+func patchYtDlpUpdate(config *Config) {
+	state := requestYtDlpUpdate(config, ytdlpTriggerManual, nil)
+	switch state {
+	case ytUpdateStarted:
+		ShowToast("Checking for a newer yt-dlp…", ToastKindInfo)
+	case ytUpdateUnmanaged:
+		ShowToast("This yt-dlp was not installed by JukaHub — update it where it came from", ToastKindWarning)
+	default:
+		if !IsOnline() {
+			ShowToast("Connect to Wi-Fi to update yt-dlp", ToastKindWarning)
+			return
+		}
+		ShowToast("yt-dlp cannot be updated right now — try again later", ToastKindWarning)
+	}
+}
+
 func ytdlpRunUpdate(target string, trigger ytdlpTrigger) {
 	outcome := ytdlpOutcomeFailed
 	defer func() {
@@ -383,7 +405,7 @@ func ytdlpRunUpdate(target string, trigger ytdlpTrigger) {
 	rel, err := ytdlpLatestRelease(checkCtx)
 	if err != nil {
 		logWarn("tools", "yt-dlp update check failed: %v", err)
-		if trigger == ytdlpTriggerFailure {
+		if trigger == ytdlpTriggerFailure || trigger == ytdlpTriggerManual {
 			ShowToast("Could not check for a newer yt-dlp — "+ytdlpToastReason(err), ToastKindWarning)
 		}
 		return
@@ -393,7 +415,7 @@ func ytdlpRunUpdate(target string, trigger ytdlpTrigger) {
 		outcome = ytdlpOutcomeCurrent
 		ytdlpNoteChecked()
 		logInfo("tools", "yt-dlp %s is current (latest release %s)", ytdlpVersionLabel(installed), rel.tag)
-		if trigger == ytdlpTriggerFailure {
+		if trigger == ytdlpTriggerFailure || trigger == ytdlpTriggerManual {
 			// The failure's message said a check had started; it says how
 			// that ended, or the user waits for an update that is not coming.
 			ShowToast("yt-dlp is already the newest version — try again later", ToastKindInfo)
@@ -406,7 +428,7 @@ func ytdlpRunUpdate(target string, trigger ytdlpTrigger) {
 		outcome = ytdlpOutcomeCurrent
 		ytdlpNoteChecked()
 		logInfo("tools", "yt-dlp %s did not run on this device before; staying on %s", rel.tag, ytdlpVersionLabel(installed))
-		if trigger == ytdlpTriggerFailure {
+		if trigger == ytdlpTriggerFailure || trigger == ytdlpTriggerManual {
 			ShowToast("The newest yt-dlp ("+rel.tag+") does not run on this device — keeping the current one", ToastKindWarning)
 		}
 		return
@@ -420,7 +442,7 @@ func ytdlpRunUpdate(target string, trigger ytdlpTrigger) {
 		return
 	}
 	logInfo("tools", "updating yt-dlp %s to %s", ytdlpVersionLabel(installed), rel.tag)
-	if trigger == ytdlpTriggerFailure {
+	if trigger == ytdlpTriggerFailure || trigger == ytdlpTriggerManual {
 		ShowToast("Updating yt-dlp to "+rel.tag+"…", ToastKindInfo)
 	}
 	installCtx, cancelInstall := context.WithTimeout(context.Background(), ytdlpUpdateBudget)
@@ -611,6 +633,8 @@ func ytdlpInstallRelease(ctx context.Context, rel ytdlpRelease, target string) e
 	if err := verifyHelperTool(tmpPath); err != nil {
 		return fmt.Errorf("the downloaded yt-dlp is unusable: %w", err)
 	}
+	sum := ""
+	verified := false
 	if sums, ok := pickReleaseAsset(rel.assets, []string{ytdlpChecksumAsset}); ok {
 		list, err := toolboxFetchSmall(ctx, sums.URL)
 		if err != nil {
@@ -620,7 +644,8 @@ func ytdlpInstallRelease(ctx context.Context, rel ytdlpRelease, target string) e
 		if err != nil {
 			return fmt.Errorf("hash the download: %w", err)
 		}
-		verified, err := toolboxMatchChecksum(got, string(list), asset, false)
+		sum = got
+		verified, err = toolboxMatchChecksum(got, string(list), asset, false)
 		if err != nil {
 			return err
 		}
@@ -654,7 +679,41 @@ func ytdlpInstallRelease(ctx context.Context, rel ytdlpRelease, target string) e
 	case ytdlpProbeInconclusive:
 		logWarn("tools", "the new yt-dlp %s did not confirm that it runs (%s); keeping it", rel.tag, detail)
 	}
+	toolboxSaveRecord("yt-dlp", toolboxRecord{
+		Tag:      rel.tag,
+		Asset:    asset,
+		SHA256:   sum,
+		Verified: verified,
+		At:       time.Now().UTC().Format(time.RFC3339),
+	})
 	return nil
+}
+
+// ytdlpVerifyReleaseChecksum checks a downloaded yt-dlp against the release's
+// own SHA2-256SUMS. The first install uses this strict form: unlike an update,
+// which may keep a working old copy, a fresh install must not put an unverified
+// binary into the tools folder.
+func ytdlpVerifyReleaseChecksum(ctx context.Context, rel ytdlpRelease, asset, path string) (string, error) {
+	sums, ok := pickReleaseAsset(rel.assets, []string{ytdlpChecksumAsset})
+	if !ok {
+		return "", fmt.Errorf("release %s publishes no %s", rel.tag, ytdlpChecksumAsset)
+	}
+	list, err := toolboxFetchSmall(ctx, sums.URL)
+	if err != nil {
+		return "", fmt.Errorf("download the published checksums: %w", err)
+	}
+	got, err := hashFile(path)
+	if err != nil {
+		return "", fmt.Errorf("hash the download: %w", err)
+	}
+	verified, err := toolboxMatchChecksum(got, string(list), asset, false)
+	if err != nil {
+		return "", err
+	}
+	if !verified {
+		return "", fmt.Errorf("%s does not list %s", ytdlpChecksumAsset, asset)
+	}
+	return got, nil
 }
 
 // ytdlpBrokenReleaseError is an update whose new binary would not run on this

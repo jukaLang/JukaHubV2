@@ -1,8 +1,14 @@
 name: CI
 
-# Runs on every push and pull request: syntax-check the builder scripts and run
-# the jsdom/Playwright web tests, then vet and test the player on Linux with SDL2
-# installed so the offscreen render tests can run headless.
+# Every push to main and every pull request: two jobs, only what has to hold
+# on each of them. The builder scripts parse, pass ESLint and their jsdom
+# tests; the player passes go vet, staticcheck and its test suite.
+#
+# The slow checks run once a week instead (weekly.yml, or by hand from the
+# Actions tab): the race detector, the Go vulnerability scan, the cold-boot
+# budget, the builder's Chromium smoke test, the CI helper scripts' and the
+# game-audio plugin's own tests (`make test-scripts`, `make test-spatialfx`)
+# and the player's tests on native Windows.
 
 on:
   push:
@@ -31,25 +37,16 @@ jobs:
         # The script `make check` runs too, so a workflow edit that breaks a
         # rule fails locally instead of on the push that follows it.
         run: bash .github/scripts/check-workflows.sh
-      - name: CI helper scripts
-        # What `make test-scripts` runs: the SDL installer must refuse a
-        # tampered archive, the release build caches (and the reused Remote
-        # Play helpers) must come only from an earlier push-to-main run of the
-        # same workflow, and the TrimUI build must start its container offline
-        # and refuse a binary the handhelds could not start.
-        run: |
-          bash tests/scripts/install-sdl-mingw.test.sh
-          bash tests/scripts/go-build-cache.test.sh
-          bash tests/scripts/trimui-build.test.sh
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-      - name: Syntax check builder scripts
+      - name: Syntax check builder scripts and the config
         run: |
           for f in builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js; do
             node --check "$f"
           done
+          node -e "JSON.parse(require('fs').readFileSync('player/jukaconfig.json','utf8'))"
       - name: Browser-free smoke and security tests (jsdom)
         working-directory: tests/web
         run: |
@@ -59,136 +56,9 @@ jobs:
         run: >
           tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs
           builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
-      - name: Audit test dependencies
-        working-directory: tests/web
-        # Advisory, like staticcheck: an advisory in jsdom's own tree should be
-        # visible on every run but must not block a release of the player. The
-        # builder ships no npm dependencies at runtime (plain scripts, a vendored
-        # Inter and inline SVG icons), so this covers the test harness, not
-        # shipping code.
-        continue-on-error: true
-        run: npm audit --audit-level=high
-      - name: Config files are valid JSON
-        run: |
-          for f in player/jukaconfig.json; do
-            [ -f "$f" ] && node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
-          done
-          true
-
-  web-e2e:
-    name: Web builder smoke test (Chromium)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: tests/e2e
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: tests/e2e/package-lock.json
-      - name: Install Playwright and Chromium
-        run: |
-          npm ci --no-audit --no-fund
-          # --no-install: use the Playwright from package-lock.json, never a
-          # registry version resolved at run time.
-          npx --no-install playwright install --with-deps chromium
-      - name: Run the builder smoke test
-        # Loads the real page, drops a palette component on the canvas, checks
-        # undo/redo, then exports JSON and re-imports it.
-        run: npx --no-install playwright test
-      - name: Upload the failure trace
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: playwright-report
-          path: |
-            tests/e2e/playwright-report
-            tests/e2e/test-results
-          retention-days: 7
-
-  govulncheck:
-    name: Go vulnerability scan
-    # Pinned for the same reason as the player jobs: the SDL2 dev packages
-    # differ between Ubuntu releases. The scan builds the package to find the
-    # calls that can reach a known vulnerability, so it needs the headers too.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: Install SDL2 headers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-      - name: Install govulncheck
-        # Pinned like staticcheck: a scanner that updates itself mid-run makes a
-        # red build unreproducible, and the vulnerability database it reads is
-        # fetched fresh on every run anyway, so the pin costs no coverage.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-      - name: Scan the player
-        # Advisory for now, like staticcheck. The scan includes the standard
-        # library of whichever toolchain go.mod selects, so a fresh Go patch
-        # release (or an unfixed one) can turn this red without any change in
-        # this repository; the fix for that is a toolchain bump, not a code
-        # change. Unreachable findings are printed but never fail either way.
-        # Promote to blocking once the pinned toolchain is one release behind
-        # the current patch line.
-        continue-on-error: true
-        run: govulncheck ./...
-
-  player-core:
-    name: Player helpers (no SDL)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # These packages do not import SDL, so they build and test with cgo off and
-    # are the blocking half of the player checks.
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: go vet
-        env:
-          CGO_ENABLED: "0"
-        run: go vet ./internal/... ./tools/...
-      - name: go test
-        env:
-          CGO_ENABLED: "0"
-        run: go test ./internal/... ./tools/... -count=1
-      - name: Game-audio plugin host tests (player/spatialfx)
-        # The C port of the spatial-audio DSP against the golden vectors of its
-        # spec (spatialfx/jh_spatial_ref.py), through both plugin ABIs; gcc and
-        # readelf only, about a second. Advisory until it has been green on the
-        # runner's gcc (the test is built with -Werror).
-        continue-on-error: true
-        run: sh spatialfx/tests/run-tests.sh
-      - name: go.mod and go.sum are tidy
-        # The release builds (Windows and TrimUI) compile the committed module
-        # graph (go mod download, not go mod tidy), so an import added without
-        # running `go mod tidy` fails the release. This says so on the pull
-        # request instead. Advisory until it has been green for a while.
-        continue-on-error: true
-        run: |
-          if ! go mod tidy -diff; then
-            echo "::warning title=go.mod is not tidy::run 'go mod tidy' in player/ and commit go.mod and go.sum, or the Windows and TrimUI release builds fail"
-            exit 1
-          fi
 
   player:
-    name: Player vet and tests
+    name: Player vet, staticcheck and tests
     # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
     # ubuntu-latest label is moving to Ubuntu 26.
     runs-on: ubuntu-24.04
@@ -206,18 +76,31 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
       - name: go vet
         run: go vet ./...
+
+      - name: staticcheck
+        # The backlog is triaged in player/staticcheck.conf (unused scene
+        # helpers, player-facing error wording, and the deliberate CFB/math-rand
+        # deprecations are off); every other check fails the run. It runs even
+        # when vet failed, so one push reports both.
+        if: ${{ !cancelled() }}
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
       - name: go test
         # The suite is the lean core (persistence, security, update engine,
         # parsers, input): no test opens a window or a renderer. The dummy
         # drivers only keep any incidental SDL call headless.
+        if: ${{ !cancelled() }}
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
         run: |
           set +e
-          go test ./... -count=1 -timeout 10m -covermode=atomic -coverprofile="$RUNNER_TEMP/cover.out" 2>&1 | tee "$RUNNER_TEMP/gotest.log"
+          go test ./... -count=1 -timeout 10m 2>&1 | tee "$RUNNER_TEMP/gotest.log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Put the failures where a reviewer looks: the step summary and
@@ -240,137 +123,5 @@ jobs:
             grep -E '^\s*--- FAIL' "$RUNNER_TEMP/gotest.log" | head -9 | while IFS= read -r line; do
               echo "::error title=Failing test::${line}"
             done
-          fi
-          exit "$status"
-
-      - name: Coverage summary
-        # Advisory: the profile exists even on failure as long as the test
-        # binary got far enough, and the numbers sit in the step summary, so a
-        # drop is visible without a third-party service reading the repo.
-        if: always()
-        run: |
-          set +e
-          if [ ! -f "$RUNNER_TEMP/cover.out" ] || [ ! -s "$RUNNER_TEMP/cover.out" ]; then
-            echo "No coverage profile produced by the test run." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          go tool cover -func="$RUNNER_TEMP/cover.out" > "$RUNNER_TEMP/cover-func.txt"
-          total=$(grep -E '^total:' "$RUNNER_TEMP/cover-func.txt" | awk '{print $3}')
-          missed=$(awk '$NF == "0.0%" && $1 != "total:" {n++} END {print n+0}' "$RUNNER_TEMP/cover-func.txt")
-          { echo "### Go coverage"
-            echo ""
-            echo "Total: **${total:-n/a}** — ${missed} functions with 0% coverage."
-            echo ""
-            echo "<details><summary>Functions with 0% coverage (first 25)</summary>"
-            echo ""
-            echo '```'
-            awk '$NF == "0.0%" && $1 != "total:" {print}' "$RUNNER_TEMP/cover-func.txt" | head -25
-            echo '```'
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-  player-boot:
-    name: Player cold-boot budget
-    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
-    # ubuntu-latest label is moving to Ubuntu 26.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # Blocking on purpose: a regression that makes the app slower than five
-    # seconds to first frame should not reach main, even while the full player
-    # suite is still advisory. The desktop runner limit is deliberately looser
-    # than the 2 s device target measured by running the same script on a
-    # TrimUI; see docs/DEVELOPMENT.md.
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: Install SDL2 headers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-      - name: Cold-boot median
-        env:
-          JUKAHUB_BENCH_LIMIT_MS: "5000"
-          JUKAHUB_BENCH_RUNS: "3"
-        run: bash ./startup-bench.sh
-
-  player-staticcheck:
-    name: Player staticcheck
-    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
-    # ubuntu-latest label is moving to Ubuntu 26.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    # The backlog is triaged in player/staticcheck.conf (unused scene helpers,
-    # player-facing error wording, and the deliberate CFB/math-rand deprecations
-    # are off); every other check fails the run, so the output stays readable.
-    # Blocking: it has been green on main since the S1016 fix. Releases are a
-    # separate workflow, so a finding turns CI red without stopping a build.
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: Install SDL2 headers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-      - name: staticcheck
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
-          "$(go env GOPATH)/bin/staticcheck" ./...
-
-  player-race:
-    name: Player race detector
-    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
-    # ubuntu-latest label is moving to Ubuntu 26.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: Install SDL2 headers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-      - name: go test -race
-        # Only the tests that run real goroutines: the conditional HTTP cache,
-        # the semaphores and bounded runners, retry cancellation, install-run
-        # contexts, the debounced config writer, the synthetic event queue and
-        # the loopback servers (peer TLS, SSH/SFTP, FTP, Companion, live builder,
-        # save sync, patch downloads, core auto-update, telemetry). Add a prefix
-        # here when a new test exercises concurrent code.
-        env:
-          SDL_VIDEODRIVER: dummy
-          SDL_AUDIODRIVER: dummy
-          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|LiveBuilder|Ssync|PatchDownload|RunInstalledCoreUpdates|Telemetry|MediaRelay|FFmpegReadableInput|SDLTeardown)"
-        run: |
-          set +e
-          go test -race . -run "$RACE_TESTS" -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            # Surface the cause as annotations: the raw log is hard to reach.
-            excerpt=$(grep -E -A3 'WARNING: DATA RACE|^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/race.log" | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=go test -race failed::${excerpt}"
-            # Same reason as the plain job: the assertion carries the message.
-            if failures=$(grep -E '^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -12 | sed ':a;N;$!ba;s/\n/%0A/g'); [ -n "$failures" ]; then
-              echo "::error title=Failing assertion::${failures}"
-            fi
-            { echo "### go test -race failed"; echo '```'; grep -E 'WARNING: DATA RACE|--- FAIL|^FAIL|panic:|^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"

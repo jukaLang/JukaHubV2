@@ -32,13 +32,16 @@ package main
 //     there; each through a temporary name, synced, read back and renamed into
 //     place, chiaki-stream last, so a half-done install never looks complete.
 //
-// The panel starts it as it opens (psHelpersAutoStart). A PS5's PIN is asked
+// It usually happens in the background, soon after JukaHub starts
+// (psremote_helpers_bg.go), and the panel starts it as it opens
+// (psHelpersAutoStart) when that has not. A PS5's PIN is asked
 // for only once chiaki-regist is in (psHelpersHoldPIN: the PIN Link Device
 // shows lasts five minutes, a download can take longer), and so is the PIN of
 // an address typed by hand while an install runs (it may be a PS5). Play waits
 // and then streams (psHelpersHoldPlay). B, or closing the panel, lets go of a
-// waiting press. Nothing runs where Remote Play cannot (psRemoteSupported) or
-// when both helpers are there.
+// waiting press; the activity chip's X stops the install itself (psHelpersStop).
+// Nothing runs where Remote Play cannot (psRemoteSupported) or when both
+// helpers are there.
 
 import (
 	"archive/zip"
@@ -103,6 +106,9 @@ const (
 	// a finished install clears them.
 	psPairCodeNoHelpers       = "Not paired: Remote Play did not install (see its row)"
 	psPairCodeStillInstalling = "Not paired yet: Remote Play was still installing"
+	// psHelperRefusedPrefix starts a refusal's reason (psHelpersFailText); the
+	// panel's row and the phone's card show what follows it.
+	psHelperRefusedPrefix = "it won't run on this firmware · "
 )
 
 // psHelperReleasesAPI lists JukaHub's releases, newest first, assets included.
@@ -133,6 +139,8 @@ var (
 	errPSHelpersUnlisted     = errors.New("the release's signed manifest does not list the helper package")
 	errPSHelpersWontRun      = errors.New("the Remote Play helpers won't run on this firmware")
 	errPSHelpersMissing      = errors.New("the Remote Play helpers are not installed")
+	// errPSHelpersStopped is an install the user stopped (psHelpersStop).
+	errPSHelpersStopped = errors.New("the Remote Play download was stopped")
 	// errPSPairNoHelpers marks a pairing that never reached the console: the
 	// helper it needs did not install. errPSPairStillInstalling is one that
 	// stopped waiting for the install.
@@ -309,12 +317,21 @@ type psHelperView struct {
 	// names the helpers the firmware refused ("stream", "regist", "both").
 	reason  string
 	refused string
+	// placing is the last step: the checked helpers are being copied into
+	// bin/, and a stop is no longer taken (psHelpersStop).
+	placing bool
 }
 
 // psHelperRun is one install: done closes when it has ended, after err is set.
+// cancel ends its context early; stopped (under psHelperJob.mu) says the user
+// asked for that, so the run ends as errPSHelpersStopped; settled (under the
+// same lock) says the install has returned and a stop comes too late.
 type psHelperRun struct {
-	done chan struct{}
-	err  error
+	done    chan struct{}
+	err     error
+	cancel  context.CancelFunc
+	stopped bool
+	settled bool
 }
 
 // psHelperJob is the one install at a time. Its fields are written by the
@@ -411,20 +428,52 @@ func psHelpersStart(mode psHelperStartMode) bool {
 			return false
 		}
 	}
-	run := &psHelperRun{done: make(chan struct{})}
+	// The context is made here, under the lock, so a stop that comes before
+	// the worker's first step still reaches it (psHelpersStop).
+	ctx, cancel := context.WithTimeout(context.Background(), psHelperTimeout)
+	run := &psHelperRun{done: make(chan struct{}), cancel: cancel}
 	psHelperJob.run = run
 	psHelperJob.running = true
 	psHelperJob.view = psHelperView{phase: psHelperLooking}
-	go psHelpersWorker(run)
+	go psHelpersWorker(ctx, run)
+	return true
+}
+
+// psHelpersStop stops the running install: the activity chip's X
+// (psremote_helpers_bg.go). A download keeps what it has for the next try, and
+// the install ends as errPSHelpersStopped, which no background try repeats by
+// itself. It reports whether it stopped one: false when none runs, or when it
+// is already copying the helpers into place or has returned, where a stop
+// would only be announced and not happen.
+func psHelpersStop() bool {
+	psHelperJob.mu.Lock()
+	defer psHelperJob.mu.Unlock()
+	run := psHelperJob.run
+	if !psHelperJob.running || run == nil || run.cancel == nil || run.settled || psHelperJob.view.placing {
+		return false
+	}
+	run.stopped = true
+	// Cancelled under the lock: the install marks its copy into bin/ under it
+	// too (placing), and checks the context right after, so a stop either
+	// lands before that and is seen, or is refused here.
+	run.cancel()
 	return true
 }
 
 // psHelpersWorker is the goroutine behind psHelpersStart.
-func psHelpersWorker(run *psHelperRun) {
-	ctx, cancel := context.WithTimeout(context.Background(), psHelperTimeout)
-	defer cancel()
+func psHelpersWorker(ctx context.Context, run *psHelperRun) {
+	defer run.cancel()
 	started := time.Now()
 	tag, err := psInstallHelpers(ctx, psHelperSetView)
+	psHelperJob.mu.Lock()
+	stopped := run.stopped
+	run.settled = true
+	psHelperJob.mu.Unlock()
+	if stopped && err != nil && !errors.Is(err, errPSHelpersWontRun) {
+		// Whatever step the stop cut short, it was the user's; a refusal by
+		// the firmware is kept, since it is saved and must be shown.
+		err = errPSHelpersStopped
+	}
 	psHelpersForgetPresence()
 	if err == nil && psHelpersNeeded() {
 		// Written, yet the engine lookup does not see them.
@@ -437,6 +486,8 @@ func psHelpersWorker(run *psHelperRun) {
 	}
 	reason := psHelpersFailText(err)
 	switch {
+	case errors.Is(err, errPSHelpersStopped):
+		logInfo("psremote", "the Remote Play download was stopped after %s", time.Since(started).Round(time.Second))
 	case err != nil:
 		logWarn("psremote", "installing the Remote Play helpers failed after %s: %v", time.Since(started).Round(time.Second), err)
 	case tag != "":
@@ -472,6 +523,9 @@ func psHelpersWorker(run *psHelperRun) {
 			psPanelClearHelperCode()
 		}
 		switch {
+		case errors.Is(err, errPSHelpersStopped):
+			// The stop said so itself (psHelpersStopFromChip), and a press
+			// still waiting from an earlier visit of the panel goes quietly.
 		case next != nil:
 			next(err)
 		case waited:
@@ -599,7 +653,7 @@ func psHelpersFailText(err error) string {
 		return ""
 	case errors.Is(err, errPSHelpersWontRun):
 		problem := strings.TrimPrefix(err.Error(), errPSHelpersWontRun.Error()+": ")
-		return "it won't run on this firmware · " + psHelperCompact(problem)
+		return psHelperRefusedPrefix + psHelperCompact(problem)
 	case errors.Is(err, errPSHelpersNoSpace):
 		// It carries the numbers when it knows them.
 		return firstLine(err.Error())
@@ -624,6 +678,8 @@ func psHelpersFailText(err error) string {
 		return "no recent JukaHub release has them · try after an update"
 	case errors.Is(err, errPSHelpersUnverified):
 		return "the download did not verify · try again"
+	case errors.Is(err, errPSHelpersStopped):
+		return "the download was stopped · try again to resume it"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the download took too long · try again"
 	}
@@ -1262,6 +1318,11 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 	_ = os.RemoveAll(unpacked)
 	defer os.RemoveAll(unpacked)
 	if err := extractZipSafe(ctx, archive, unpacked, psHelperMaxEntries, psHelperMaxUnpacked); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Stopped, or out of time: the archive is not at fault and stays
+			// for the next try.
+			return rel.TagName, ctxErr
+		}
 		if disk := psHelperDiskErr(err); disk != nil {
 			// The archive is good: it stays for the next try.
 			return rel.TagName, disk
@@ -1322,6 +1383,14 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 		}
 	}
 
+	// From here the helpers are copied into bin/, and a stop is no longer
+	// taken (psHelpersStop reads placing under the same lock). One that came
+	// during the checks wins now, before anything is written; the archive
+	// stays for the next try.
+	progress(psHelperView{phase: psHelperChecking, tag: rel.TagName, placing: true})
+	if err := ctx.Err(); err != nil {
+		return rel.TagName, err
+	}
 	place := func(src, name, sum string, mode os.FileMode) error {
 		err := psHelperPlace(src, dir, name, sum, mode)
 		if disk := psHelperDiskErr(err); disk != nil {
@@ -1651,21 +1720,33 @@ func psHelpersAutoStart() {
 		psHelperJob.mu.Unlock()
 		return
 	}
-	if tag, problem, ok := psHelperLoadRefusal(); ok {
-		psHelperJob.mu.Lock()
-		if psHelperJob.run == nil && !psHelperJob.running {
-			err := fmt.Errorf("%w: %s", errPSHelpersWontRun, problem)
-			run := &psHelperRun{done: make(chan struct{}), err: err}
-			close(run.done)
-			psHelperJob.run = run
-			psHelperJob.view = psHelperView{phase: psHelperFailed, tag: tag, reason: psHelpersFailText(err), refused: psHelperRefusedWhich(problem)}
-		}
-		psHelperJob.mu.Unlock()
-	}
+	psHelpersAdoptSavedRefusal()
 	if !IsOnline() {
 		return
 	}
 	psHelpersStart(psStartAuto)
+}
+
+// psHelpersAdoptSavedRefusal makes a refusal remembered from an earlier start
+// (bin/.remote-play-refused) the last install's outcome when nothing has run
+// in this one: the panel then says why, and neither its opening nor the
+// background download (psremote_helpers_bg.go) fetches those helpers again.
+// It reports whether a refusal was saved.
+func psHelpersAdoptSavedRefusal() bool {
+	tag, problem, ok := psHelperLoadRefusal()
+	if !ok {
+		return false
+	}
+	psHelperJob.mu.Lock()
+	if psHelperJob.run == nil && !psHelperJob.running {
+		err := fmt.Errorf("%w: %s", errPSHelpersWontRun, problem)
+		run := &psHelperRun{done: make(chan struct{}), err: err}
+		close(run.done)
+		psHelperJob.run = run
+		psHelperJob.view = psHelperView{phase: psHelperFailed, tag: tag, reason: psHelpersFailText(err), refused: psHelperRefusedWhich(problem)}
+	}
+	psHelperJob.mu.Unlock()
+	return true
 }
 
 // psPanelInstallHelpers is A on the install row: Install, or Retry.
@@ -1685,6 +1766,9 @@ func psPanelInstallHelpers() {
 	}
 	PlayActivateSound()
 	psHelpersStart(psStartRetry)
+	// A Retry also wakes the background download (psremote_helpers_bg.go):
+	// a network failure of this try is then tried again by itself.
+	psBgKick()
 }
 
 // psHelperPercent is the install's progress for a status column.
@@ -1718,17 +1802,25 @@ func psHelperRows() []chiakiRow {
 		}
 		return nil
 	}
+	// The download and the install are named apart: "Downloading" while bytes
+	// come in (with how many), "Installing" while they are checked and put in
+	// place.
 	switch v.phase {
 	case psHelperLooking:
-		return []chiakiRow{{label: "Installing Remote Play…", detail: "Finding the download on GitHub · a one-time download", status: "…"}}
+		return []chiakiRow{{label: "Downloading Remote Play…", detail: "Finding it on GitHub · a one-time download of a few MB", status: "…"}}
 	case psHelperDownloading:
-		detail := "Downloading the helpers"
+		detail := "Streaming and pairing helpers"
 		if v.total > 0 {
-			detail += " · " + formatBytes(uint64(max64(v.got, 0))) + " of " + formatBytes(uint64(v.total))
+			detail = formatBytes(uint64(max64(v.got, 0))) + " of " + formatBytes(uint64(v.total))
 		}
-		return []chiakiRow{{label: "Installing Remote Play…", detail: detail, status: psHelperPercent(v)}}
+		detail += " · keeps going if you close this"
+		return []chiakiRow{{label: "Downloading Remote Play…", detail: detail, status: psHelperPercent(v)}}
 	case psHelperChecking:
-		return []chiakiRow{{label: "Installing Remote Play…", detail: "Checking the download and that it runs on this handheld", status: "…"}}
+		detail := "Checking the download and that it runs on this handheld"
+		if v.placing {
+			detail = "Copying the helpers into place"
+		}
+		return []chiakiRow{{label: "Installing Remote Play…", detail: detail, status: "…"}}
 	case psHelperFailed:
 		label, detail := "Remote Play is not installed", v.reason
 		if v.refused != "" {
@@ -1736,7 +1828,7 @@ func psHelperRows() []chiakiRow {
 			if v.refused == "regist" {
 				label = "PS5 pairing won't run on this firmware"
 			}
-			detail = strings.TrimPrefix(v.reason, "it won't run on this firmware · ")
+			detail = strings.TrimPrefix(v.reason, psHelperRefusedPrefix)
 		}
 		return []chiakiRow{{label: label, detail: detail, status: "Retry", action: psActionInstallHelpers}}
 	}
@@ -1758,10 +1850,12 @@ func psHelperSubtitle() string {
 	}
 	v := psHelpersView()
 	switch v.phase {
-	case psHelperLooking, psHelperChecking:
-		return "Installing Remote Play · one moment"
+	case psHelperLooking:
+		return "Downloading Remote Play · one moment"
 	case psHelperDownloading:
-		return "Installing Remote Play · " + psHelperPercent(v)
+		return "Downloading Remote Play · " + psHelperPercent(v)
+	case psHelperChecking:
+		return "Installing Remote Play · one moment"
 	case psHelperFailed:
 		if v.refused == "regist" {
 			return "PS5 pairing won't run on this firmware · see the row below"
@@ -1815,5 +1909,8 @@ func psHelperPairingWait() string {
 	if !running || !waiting {
 		return ""
 	}
-	return "Installing Remote Play" + psHelperProgressNote(v) + ", then pairing"
+	if v.phase == psHelperChecking {
+		return "Installing Remote Play, then pairing"
+	}
+	return "Downloading Remote Play" + psHelperProgressNote(v) + ", then pairing"
 }

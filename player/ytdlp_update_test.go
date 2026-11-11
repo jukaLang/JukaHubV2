@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -89,6 +90,13 @@ func TestYtDlpUpdateNeeded(t *testing.T) {
 }
 
 // The release's checksum list is read the way the toolbox reads it.
+func TestYtDlpFirstInstallNeedsPublishedChecksum(t *testing.T) {
+	_, err := ytdlpVerifyReleaseChecksum(context.Background(), ytdlpRelease{tag: "2026.11.01"}, "yt-dlp.exe", "not-read-without-a-checksum")
+	if err == nil || !strings.Contains(err.Error(), "publishes no") {
+		t.Fatalf("a release without SHA2-256SUMS must be refused, got %v", err)
+	}
+}
+
 func TestYtDlpChecksumListMatches(t *testing.T) {
 	sum := strings.Repeat("ab", 32)
 	list := sum + "  yt-dlp_linux_aarch64\n" + strings.Repeat("cd", 32) + "  yt-dlp.exe\n"

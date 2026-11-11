@@ -17,6 +17,25 @@ import (
 // Mode selector retunes it from elsewhere).
 var frameRateCtrl *FrameRateController
 
+// keyRepeatAllowed reports whether SDL's auto-repeat of a held key may reach
+// the overlays and scenes. Movement and text editing repeat; actions do not.
+// It runs on KEYDOWN only, after the browser opener has had a chance to drop
+// the characters a held opener would type.
+func keyRepeatAllowed(e *sdl.KeyboardEvent) bool {
+	if e == nil || e.Repeat == 0 {
+		return true
+	}
+	switch e.Keysym.Sym {
+	case sdl.K_UP, sdl.K_DOWN, sdl.K_LEFT, sdl.K_RIGHT,
+		sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END,
+		sdl.K_BACKSPACE, sdl.K_DELETE,
+		sdl.K_VOLUMEUP, sdl.K_VOLUMEDOWN,
+		sdl.K_PLUS, sdl.K_MINUS, sdl.K_EQUALS, sdl.K_KP_PLUS, sdl.K_KP_MINUS:
+		return true
+	}
+	return false
+}
+
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -757,12 +776,12 @@ func main() {
 		// child have the framebuffer to itself. A ringing alarm is the one
 		// exception: it paused the game (alarmvol.go) and takes the screen
 		// until it is snoozed or dismissed.
+		if gameScreenSuspended() && !wallpaperParkedForGame {
+			gifWallPauseForGame()
+			wallpaperParkedForGame = true
+		}
 		if gameScreenSuspended() && !alarmFiringActive() {
 			whileAwayWasActive = true
-			if !wallpaperParkedForGame {
-				gifWallPauseForGame()
-				wallpaperParkedForGame = true
-			}
 			for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 				if _, quit := event.(*sdl.QuitEvent); quit {
 					running = false
@@ -873,6 +892,13 @@ func main() {
 					// drops the rest, as runInputModal does for the address bar
 					// ("Playlist 3xxx" from a held X).
 					if virtualKeyboardActive && browserTextOpenerRepeat(e) {
+						continue
+					}
+					// SDL auto-repeats a held key. Menus want repeats for movement
+					// and text editing, but a held Enter, Space, letter or Esc must
+					// not open, toggle or step back several times. The allowlist is
+					// deliberately small; every other repeat stops here.
+					if !keyRepeatAllowed(e) {
 						continue
 					}
 					// A ringing alarm owns the keyboard: snooze and dismiss are the
@@ -1347,7 +1373,7 @@ func main() {
 							}
 							// Live TV: Left/Right switch category, X searches, Y stars
 							// the highlighted channel. Other lists keep their keys.
-							if curElem.Variable == tvEntriesVar && tvListKeyAction(e.Keysym.Sym, config) {
+							if curElem.Variable == tvEntriesVar && tvListKeyAction(e, config) {
 								continue
 							}
 							entries, _ := getSceneFileEntries(config, curScene)

@@ -132,15 +132,15 @@ clean: ## Remove build outputs (Windows also removes the local SDL copy)
 workflows: ## Check the workflow pins: actions, images and downloaded archives
 	@bash .github/scripts/check-workflows.sh
 
-test-scripts: ## Check the CI helper scripts (tampered archives refused, release-cache provenance, TrimUI build)
+test-scripts: ## Check the CI helper scripts (tampered archives refused, release-cache provenance, TrimUI build); CI runs it weekly
 	@bash tests/scripts/install-sdl-mingw.test.sh
 	@bash tests/scripts/go-build-cache.test.sh
 	@bash tests/scripts/trimui-build.test.sh
 
-# Linux only: the test builds an ELF library and loads it with dlopen (CI runs
-# it too); elsewhere it says it skipped.
+# Linux only: the test builds an ELF library and loads it with dlopen; elsewhere
+# it says it skipped. CI runs it weekly (weekly.yml).
 test-spatialfx: ## Check the game-audio plugin against its DSP spec (Linux, gcc)
 	@if [ "$$(uname -s 2>/dev/null)" = Linux ]; then sh $(PLAYER)/spatialfx/tests/run-tests.sh >/dev/null && echo "test-spatialfx: ok"; else echo "test-spatialfx: skipped (Linux only)"; fi
 
-check: lint test test-web workflows test-scripts test-spatialfx ## Everything a pull request must pass (no browser needed); ESLint is skipped by lint until test-web installs it
+check: lint test test-web workflows ## CI's two jobs, locally and without staticcheck (no browser needed); ESLint is skipped by lint until test-web installs it
 	@echo "check: ok"

@@ -220,7 +220,7 @@ type batteryShown struct {
 }
 
 // batteryETATracker is the whole estimator. It holds no globals and reads no
-// files, so every case is a table row in battery_eta_test.go.
+// files.
 type batteryETATracker struct {
 	started bool
 	cable   bool

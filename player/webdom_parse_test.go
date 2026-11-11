@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -345,4 +347,74 @@ func webDOMParseTestSkeleton(tree string) bool {
 		ok = len(names) == 2 && names[0] == "head" && names[1] == "body"
 	}
 	return htmls == 1 && ok
+}
+
+// Hostile modules come back, as code or an error, in linear time and without
+// deep Go recursion: the script watchdog cannot interrupt Go code, and a
+// stack overflow kills the process. These once took cubic time (about 100 KB
+// of class heritages without semicolons ran for minutes) or a million nested
+// Go frames.
+func TestWebJSModHostile(t *testing.T) {
+	nested := strings.Repeat("class extends ", 3000) + "B" + strings.Repeat(" {}", 3000)
+	for _, tc := range []struct {
+		name    string
+		src     string
+		wantErr bool
+	}{
+		{"class heritages without semicolons", strings.Repeat("export const a = class extends b ", 3000), false},
+		{"nested brackets", "export const " + strings.Repeat("[", 1<<20) + "a" + strings.Repeat("]", 1<<20) + " = x", true},
+		{"nested template substitutions", strings.Repeat("`${", 1<<15) + strings.Repeat("}`", 1<<15), true},
+		{"nested class heritages", "export default " + nested, true},
+		{"nested class heritages in an initializer", "export const a = " + nested, true},
+	} {
+		done := make(chan error, 1)
+		go func(src string) {
+			_, _, err := webJSTransformModule(src)
+			done <- err
+		}(tc.src)
+		select {
+		case err := <-done:
+			if (err != nil) != tc.wantErr {
+				t.Errorf("%s: error %v, want an error: %v", tc.name, err, tc.wantErr)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s: still running after 30 s", tc.name)
+		}
+	}
+
+	// Distinct imports are found through a map (a linear search made 3 MiB
+	// of them quadratic) and capped.
+	var many strings.Builder
+	for i := 0; i < webJSModMaxImports; i++ {
+		many.WriteString(`import"a` + strconv.Itoa(i) + `";`)
+	}
+	many.WriteString(`import"a0";`) // seen before: no new entry
+	if _, imports, err := webJSTransformModule(many.String()); err != nil || len(imports) != webJSModMaxImports || imports[1].Spec != "a1" {
+		t.Errorf("%d imports: got %d, error %v", webJSModMaxImports, len(imports), err)
+	}
+	many.WriteString(`import"one more";`)
+	if _, _, err := webJSTransformModule(many.String()); err == nil {
+		t.Errorf("%d imports: no error", webJSModMaxImports+1)
+	}
+}
+
+// Every prefix of a module that uses everything the transform knows must
+// come back as a result or an error, never a panic or a hang.
+func TestWebJSModNoPanic(t *testing.T) {
+	src := "\xef\xbb\xbf#!/x\n" +
+		"import d, * as ns from './a.js' with { type: 'json' };\n" +
+		"import { a as b, \"s-t\" as u, default as v } from \"./b.js\";\n" +
+		"export const { p, q: [r = 1, ...s], ...t } = ns, w = function () {}\n" +
+		"export default class extends (b ? B : C) { static #x = /[}]/g; m() { return import.meta.url } }\n" +
+		"export * as nn from './c.js'; export * from './d.js'; export { b as \"bb\", u };\n" +
+		"const \xc3\xbc = `\xc3\xa9${`x${ {y: 1}.y }`}` / 2, re = a ? /x/ : 1e-3, z = 0x1_0n;\n" +
+		"if (z) /re/.test(\"import(\") && import(\"./e.js\").then(m => m.f?.(.5));\n"
+	for i := 0; i <= len(src); i++ {
+		webJSTransformModule(src[:i])
+		webJSRewriteDynamicImport(src[:i])
+		webJSTransformModule(src[i:])
+	}
+	if _, _, err := webJSTransformModule(src); err != nil {
+		t.Errorf("whole module: %v", err)
+	}
 }

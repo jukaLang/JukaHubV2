@@ -391,7 +391,7 @@ func playingVideoQuality(source string) (int, bool) {
 // own load path), which keeps the row at its last real value instead of guessing.
 func revertVideoQualitySwitch(prepareSeq uint64, source string, fallback int) bool {
 	source = strings.TrimSpace(source)
-	if source == "" || strings.TrimSpace(currentPlaybackURL) != source {
+	if source == "" || strings.TrimSpace(playbackPageURL()) != source {
 		return false
 	}
 	if !videoPrepareIsCurrent(prepareSeq) {

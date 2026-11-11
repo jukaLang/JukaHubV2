@@ -4,6 +4,8 @@ package main
 // were removed when the suite was cut down to its fast, high-value core.
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +23,7 @@ func init() {
 func resetA11yForTest() {
 	a11y = a11ySettings{fontScale: 1.0}
 	a11yChordReset()
+	a11yApplyVision()
 }
 
 func chordEvent(kind uint32, button uint8) *sdl.ControllerButtonEvent {
@@ -159,4 +162,29 @@ func clearToastAfterTest(t *testing.T) {
 		currentToast = ToastState{}
 		currentToastMu.Unlock()
 	})
+}
+
+// subtitlesIsolateForTests keeps the whole test binary (TestMain) away from the
+// network, the helpers and the real data folder: CC outlives a stopped video,
+// so a test that played something with CC on would otherwise fetch for real
+// and write the real subtitle cache. It returns the cleanup.
+func subtitlesIsolateForTests() func() {
+	dir, err := os.MkdirTemp("", "jukahub-subtitles")
+	if err == nil {
+		subtitleCacheDirOverride = dir
+	}
+	ytNativeCaptionsFor = func(context.Context, string, string) ([]subtitleCue, error) {
+		return nil, errors.New("no network in tests")
+	}
+	subtitleYtdlpRunner = func(context.Context, subtitleRequest) ([]subtitleCue, string) {
+		return nil, "no helper in tests"
+	}
+	videoSubs.mu.Lock()
+	videoSubs.enabled = false
+	videoSubs.mu.Unlock()
+	return func() {
+		if err == nil {
+			os.RemoveAll(dir)
+		}
+	}
 }

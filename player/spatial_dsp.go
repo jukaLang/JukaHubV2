@@ -5,9 +5,9 @@ package main
 // This is a float64 port of player/spatialfx/jh_spatial_ref.py, which is the
 // specification: the same constants, the same coefficient formulas and the
 // same order of operations in every frame, so the golden vectors that script
-// writes (player/testdata/spatial/*.txt) hold for this code too
-// (spatial_dsp_test.go). The C build of the same DSP that RetroArch games use
-// (player/spatialfx/jukahub_spatial.c) is checked against the same vectors.
+// writes (player/testdata/spatial/*.txt) hold for this code too. The C build
+// of the same DSP that RetroArch games use (player/spatialfx/jukahub_spatial.c)
+// is checked against those vectors by `make test-spatialfx`.
 //
 // The model, in short (the reference has the long version):
 //

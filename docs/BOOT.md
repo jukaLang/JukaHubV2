@@ -246,7 +246,9 @@ was missing; **Tools → Logs** has the details for a report.
 | `branding/mkbootlogo.py` | the reference pictures above |
 
 Change a placement constant in `bootlogo_layout.go` and its twin in
-`mkbootlogo.py` together: the script refuses to run unless it reproduces the
-numbers `bootlogo_layout_test.go` pins, so the two cannot drift apart
-silently. Rerun it with `python3 branding/mkbootlogo.py`; files that did not
-change are left alone.
+`mkbootlogo.py` together, with the numbers the script asserts (the sprite, the
+word and the track): the script refuses to run when its own copy drifts from
+those numbers, but nothing compares it with the Go side, so a change to
+`bootlogo_layout.go` alone would let the firmware's logo and the boot
+animation's first frame drift apart unnoticed. Rerun it with
+`python3 branding/mkbootlogo.py`; files that did not change are left alone.

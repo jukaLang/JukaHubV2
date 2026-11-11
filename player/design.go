@@ -219,34 +219,55 @@ var (
 )
 
 // ColorTextPrimary returns the primary text color.
-func ColorTextPrimary() sdl.Color { return textPrimaryColor }
+func ColorTextPrimary() sdl.Color { return a11yReadableText(textPrimaryColor) }
 
 // ColorTextSecondary returns the secondary text color.
-func ColorTextSecondary() sdl.Color { return textSecondaryColor }
+func ColorTextSecondary() sdl.Color { return a11yReadableText(textSecondaryColor) }
 
 // ColorTextTertiary returns the tertiary / placeholder text color.
-func ColorTextTertiary() sdl.Color { return textTertiaryColor }
+func ColorTextTertiary() sdl.Color { return a11yReadableText(textTertiaryColor) }
 
 // ColorTextInverse returns the text color for use on accent fills.
 func ColorTextInverse() sdl.Color { return textInverseColor }
 
 // ColorTextAccent returns the accent-colored text.
-func ColorTextAccent() sdl.Color { return textAccentColor }
+func ColorTextAccent() sdl.Color { return a11yReadableText(textAccentColor) }
 
 // ColorTextMuted returns the muted/secondary text color.
-func ColorTextMuted() sdl.Color { return textSecondaryColor }
+func ColorTextMuted() sdl.Color { return a11yReadableText(textSecondaryColor) }
+
+// a11yReadableText leaves a normal theme's text tokens untouched, but makes
+// Increase Contrast apply to every semantic text accessor. TextInk blends a
+// colour towards the readable end of the palette only when it misses the
+// target, so colours that already pass come back unchanged.
+func a11yReadableText(c sdl.Color) sdl.Color {
+	if a11y.increaseContrast {
+		return TextInk(c)
+	}
+	return c
+}
 
 // SuccessInk returns the success colour as readable text.
-func SuccessInk() sdl.Color { return successInk }
+func SuccessInk() sdl.Color { return a11yReadableStatusInk(successInk, ColorSuccess) }
 
 // WarningInk returns the warning colour as readable text.
-func WarningInk() sdl.Color { return warningInk }
+func WarningInk() sdl.Color { return a11yReadableStatusInk(warningInk, ColorWarning) }
 
 // DangerInk returns the danger colour as readable text.
-func DangerInk() sdl.Color { return dangerInk }
+func DangerInk() sdl.Color { return a11yReadableStatusInk(dangerInk, ColorDanger) }
 
 // InfoInk returns the info colour as readable text.
-func InfoInk() sdl.Color { return infoInk }
+func InfoInk() sdl.Color { return a11yReadableStatusInk(infoInk, ColorInfo) }
+
+// a11yReadableStatusInk recomputes the cached status ink when Increase Contrast
+// is on. The cached variants target 4.5:1, which is not enough for the 7:1
+// mode, while leaving the normal path allocation-free.
+func a11yReadableStatusInk(cached, source sdl.Color) sdl.Color {
+	if a11y.increaseContrast {
+		return TextInk(source)
+	}
+	return cached
+}
 
 // The toast palette is fixed brand colour: no preset retints it, which made it
 // the worst case for text use — on the light theme the amber lands at 2.0:1 and
@@ -431,6 +452,10 @@ const textInkMinContrast = 4.5
 // A colour that already passes comes back untouched, so a palette authored
 // correctly cannot drift.
 func TextInk(c sdl.Color) sdl.Color {
+	minContrast := textInkMinContrast
+	if a11y.increaseContrast {
+		minContrast = 7.0
+	}
 	surfaces := [...]sdl.Color{ColorBackground, ColorSurface, ColorSurfaceAlt}
 	readable := func(v sdl.Color) bool {
 		for _, s := range surfaces {
@@ -438,7 +463,7 @@ func TextInk(c sdl.Color) sdl.Color {
 			if la < lb {
 				la, lb = lb, la
 			}
-			if (la+0.05)/(lb+0.05) < textInkMinContrast {
+			if (la+0.05)/(lb+0.05) < minContrast {
 				return false
 			}
 		}

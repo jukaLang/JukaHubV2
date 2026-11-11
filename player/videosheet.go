@@ -253,7 +253,7 @@ func videoSaveRowValue(kind downloadKind, c videoSheetContext, format string) st
 	if c.live {
 		return "Live"
 	}
-	saved, queued := videoSaveState(strings.TrimSpace(currentPlaybackURL), kind)
+	saved, queued := videoSaveState(strings.TrimSpace(playbackPageURL()), kind)
 	switch {
 	case saved:
 		return "In Downloads"
@@ -367,7 +367,7 @@ func videoSettingsActivate(idx int) {
 // videoPageSaved reports whether the page on screen is in the Downloads
 // library already, as a video or as a track.
 func videoPageSaved(video bool) bool {
-	page := strings.TrimSpace(currentPlaybackURL)
+	page := strings.TrimSpace(playbackPageURL())
 	if page == "" || !isNetworkSource(page) {
 		return false
 	}
@@ -389,7 +389,7 @@ func videoSessionWillBeKept() bool {
 // connection) is said and leaves the sheet open; a queued download — or one
 // that is saved or on its way already — closes it.
 func videoSaveCurrent(kind downloadKind) {
-	page := strings.TrimSpace(currentPlaybackURL)
+	page := strings.TrimSpace(playbackPageURL())
 	lower := strings.ToLower(page)
 	if page == "" || !(strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
 		ShowToast("This video cannot be downloaded", ToastKindWarning)

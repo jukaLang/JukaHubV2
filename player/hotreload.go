@@ -341,6 +341,9 @@ func applyConfigReload(prev, next *Config) *Config {
 	// The UI-sound settings' live value comes from the new config too
 	// (sound.go; the switch is the Settings hub's row).
 	bootSfxBind(next)
+	// So does the background Remote Play download's switch
+	// (psremote_helpers_bg.go), which its goroutine reads from a copy.
+	psBgBind(next)
 	showToast("Config reloaded", ColorToastSuccess)
 	return next
 }
