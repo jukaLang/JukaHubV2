@@ -801,7 +801,13 @@ func bootLiquidDrawWordmark(renderer *sdl.Renderer, cx, top int32, appear, alpha
 	glyphW, glyphH := float64(k.wordW-2*k.wordPad), float64(k.wordH-2*k.wordPad)
 	fw, fh := float64(k.wordW)*scale, float64(k.wordH)*scale
 	pad := float64(k.wordPad) * scale
-	x := float64(cx) - fw/2
+	// The word keeps one centre, on a whole-pixel column, while its scale
+	// settles: at rest its glyphs then sit on whole pixels (an odd-width word
+	// centred on a whole x would land on half pixels and blur through the
+	// linear filter, and the boot logo's copy of it, bootlogo.go, is
+	// pixel-exact), with no half-pixel step on the frame it settles. At rest y
+	// is top minus the margin, already whole.
+	x := math.Floor(float64(cx)-float64(k.wordW)/2) + (float64(k.wordW)-fw)/2
 	y := float64(top) + glyphH/2 - fh/2
 	bootLiquidF = sdl.FRect{X: float32(x), Y: float32(y), W: float32(fw), H: float32(fh)}
 

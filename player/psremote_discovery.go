@@ -18,7 +18,10 @@ import (
 	"time"
 )
 
-// psDiscovered is one console answered by a scan.
+// psDiscovered is one console answered by a scan. HostID is the console's own
+// MAC as discovery names it (host-id, twelve hex digits): the pairing stores
+// the same MAC, which is how a console that moved to a new address is followed
+// (psremote_wake.go).
 type psDiscovered struct {
 	Host       string
 	Name       string
@@ -26,6 +29,7 @@ type psDiscovered struct {
 	Target     int
 	PS5        bool
 	RunningApp string
+	HostID     string
 	LastSeen   time.Time
 }
 
@@ -157,6 +161,7 @@ func psParseDiscoveryResponse(payload []byte, from net.Addr) (psDiscovered, bool
 		Target:     psTargetFromSystemVersion(headers["system-version"], ps5),
 		PS5:        ps5,
 		RunningApp: headers["running-app-name"],
+		HostID:     headers["host-id"],
 		LastSeen:   time.Now(),
 	}, true
 }

@@ -53,6 +53,10 @@ type startMenuEntry struct {
 	// glyph names the row's vector icon directly (plugin rows); "" looks
 	// it up by scene or name.
 	glyph string
+	// badge is a short reading drawn at the row's right edge in the muted
+	// ink: "12/101" beside Trophies. It is only drawn — the name stays the
+	// row's identity for the audits, the duplicate check and the shortcuts.
+	badge string
 }
 
 // startMenuGroup is one rail entry and the items it lists.
@@ -77,12 +81,19 @@ var (
 // expect them: the main screens first, then everything else. Hidden, utility
 // and maintenance scenes stay out; About is offered by the Device group so it
 // is not listed twice.
+//
+// Trophies comes right after Home. The trophy room is injected at startup
+// (ensurePlaytimeScene), so it used to fall through to the unordered tail and
+// sat last in a long Screens list, where testers never found it. It is the
+// screen people open for fun, so it is now one press below Home in the group
+// the menu opens on (after any screens an experience pack pins), with the
+// earned count beside it.
 func startMenuSceneEntries(config *Config) []startMenuEntry {
 	if config == nil {
 		return nil
 	}
 	preferOrder := []string{
-		"Main", "Tube", "LiveTV", "FileExplorer", "Chat", toolsHubSceneName, "Calculator",
+		"Main", playtimeSceneName, "Tube", "LiveTV", "FileExplorer", "Chat", toolsHubSceneName, "Calculator",
 		"Pomodoro", "Alarm", "Dashboard", "Cron", "Settings",
 		"JukaLand", "CanvasSandbox", "Favorites", "Terminal",
 		"Dictionary", "PDFReader", "MusicPlayer", "Notes",
@@ -108,11 +119,17 @@ func startMenuSceneEntries(config *Config) []startMenuEntry {
 		if sc.Icon == "" || sc.Name == "Exit" || sc.Name == "Patch" || sc.Name == "About" {
 			return
 		}
-		entries = append(entries, startMenuEntry{
+		entry := startMenuEntry{
 			name:  sceneDisplayName(sc.Name),
 			icon:  sc.Icon,
 			scene: sc.Name,
-		})
+		}
+		if sc.Name == playtimeSceneName {
+			// Cached between frames (trophySummary), so the menu can ask on
+			// every frame it draws.
+			entry.badge = trophySummaryBadge()
+		}
+		entries = append(entries, entry)
 		seen[sc.Name] = true
 	}
 	for _, name := range preferOrder {
@@ -152,6 +169,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		games = append(games,
 			startMenuEntry{name: windowsAppsEntryName, icon: "W", action: func(*Config) { openWindowsAppsPanel(false) }},
 			startMenuEntry{name: portMasterEntryName, icon: "P", action: func(*Config) { openPortsPanel(false) }},
+			// Android games through AndroidRT (apkstore.go).
+			startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }},
 		)
 	}
 	// RetroAchievements is only meaningful where a card can hold credentials.
@@ -168,7 +187,10 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
 		{name: "Smart Home", icon: "M", action: func(c *Config) { openSmartHomePanel(c) }},
-		{name: "Remote Cast", icon: "V", action: func(c *Config) { openCastPanel(c) }},
+		{name: "Screen Share", icon: "V", action: func(c *Config) { openCastPanel(c) }},
+		// Say what to open (voicecmd.go); the phone's keyboard microphone works
+		// too, so the row stays on a device without a microphone.
+		{name: "Voice command", icon: "O", action: func(c *Config) { voiceOpen(c) }},
 		{name: "Accessibility", icon: "Y", action: func(c *Config) { openAccessibilityPanel(c) }},
 	}
 	if IsTrimuiDevice() || hasPPSSPPInstall(ppssppSearchRoots()) {
@@ -182,6 +204,9 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "Sleep Screen", icon: "Z", action: func(*Config) { activateScreensaver() }},
 		{name: "Ambient", icon: "D", action: func(c *Config) { ambientEnter(c) }},
 		{name: "Wallpapers", icon: "P", action: func(*Config) { wpOpen = true; initWallpaperPicker() }},
+		{name: "Edit Home", icon: "H", action: func(c *Config) { homeEditOpen(c) }},
+		// Report a bug (bugrep.go): its Submit sends with no typing at all.
+		{name: bugrepEntryName, icon: "B", action: func(c *Config) { bugrepOpenScreen(c) }},
 		{name: "About", icon: "i", scene: "About"},
 		{name: "Quit JukaHub", icon: "X", action: func(*Config) { requestAppExit() }},
 	}
@@ -192,6 +217,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	if !IsWindows() && !wifiEntryReachable() {
 		device = withoutStartMenuEntry(device, "Wi-Fi Networks")
 	}
+	// Bluetooth pairing, where bluetoothctl exists (bluetooth_devices_ui.go).
+	device = btStartMenuInsert(device)
 	// Handoff: send what is on screen to a paired device, which offers it on
 	// its Home (hoff.go). Listed first, and only while devices are paired.
 	if targets := hoffSendTargets(); len(targets) > 0 {
@@ -256,12 +283,13 @@ var (
 	startMenuActionGlyphs = map[string]string{
 		"Emulators": "emulator", "Games Library": "games", "Game Profiles": "controller",
 		"PS Remote Play": "tv", "RetroAchievements": "trophy", "Save Manager": "saves",
-		"Windows Apps": "apps", "PortMaster Ports": "packages", "Smart Pro Compatibility": "check",
+		"Windows Apps": "apps", "PortMaster Ports": "packages", "APK Store": "phone", "Smart Pro Compatibility": "check",
 		"Network tools": "network", "Downloads": "download", "Curation Hub": "sparkles",
-		"Audio": "music", "Smart Home": "home", "Remote Cast": "tv", "Accessibility": "user",
-		"Stick Calibration": "controller", "Quick Settings": "preferences",
+		"Audio": "music", "Smart Home": "home", "Screen Share": "tv", "Accessibility": "user",
+		"Stick Calibration": "controller", "Quick Settings": "preferences", "Voice command": "mic",
 		"Wi-Fi Networks": "wifi", "Screenshot": "camera", "Sleep Screen": "moon",
-		"Ambient": "clock", "Wallpapers": "image", "Quit JukaHub": "power",
+		"Ambient": "clock", "Wallpapers": "image", "Edit Home": "edit", "Quit JukaHub": "power",
+		bugrepEntryName: "bug",
 		// The rail's groups.
 		"Screens": "grid", "Games": "games", "Tools": "tools", "Plugins": "plugin", "Device": "devices",
 	}
@@ -608,16 +636,34 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 			if focused {
 				iconCol = ColorTextPrimary()
 			}
+			// The name's room: the 46px icon column on the left, a 10px margin
+			// on the right — less the badge and its gap when the row has one.
+			textW := rect.W - 56
+			if entry.badge != "" && captionFont != nil {
+				// Only when the name keeps a usable width beside it: on a menu
+				// too narrow for both the name wins and the badge is left out,
+				// because ellipsize given no width returns the whole label,
+				// which would run under the badge.
+				if badgeW, badgeH := measureText(captionFont, entry.badge); textW-badgeW-14 >= 48 {
+					badgeInk := ColorTextTertiary()
+					if focused {
+						badgeInk = ColorTextSecondary()
+					}
+					renderText(renderer, config, captionFont, entry.badge, badgeInk,
+						rect.X+rect.W-14-badgeW, rect.Y+(rect.H-badgeH)/2)
+					textW -= badgeW + 14
+				}
+			}
 			label := entry.name
 			if _, blocked := offlineSceneBlock(entry.scene); blocked {
 				// Dimmed and marked, so the menu says what will not work before
 				// the press says it again.
 				iconCol, nameCol = ColorTextTertiary(), ColorTextTertiary()
-				label = ellipsize(font, entry.name+"  · "+offlineTileTag, rect.W-56)
+				label = ellipsize(font, entry.name+"  · "+offlineTileTag, textW)
 			}
 			drawStartMenuMark(renderer, config, font, startMenuGlyph(entry), entry.icon,
 				rect.X+12, rect.Y, rect.H, iconCol)
-			renderText(renderer, config, font, ellipsize(font, label, rect.W-56), nameCol,
+			renderText(renderer, config, font, ellipsize(font, label, textW), nameCol,
 				rect.X+46, rect.Y+(rect.H-int32(font.Height()))/2)
 		}
 
@@ -698,6 +744,7 @@ func startMenuToggle() {
 		homeCalendarOpen = false
 		dismissWeatherPopover()
 		dismissVolumePopover()
+		dismissBrightnessPopover()
 	}
 	PlayActivateSound()
 }

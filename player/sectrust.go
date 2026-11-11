@@ -242,7 +242,7 @@ func securityPostureRows(config *Config) []securityRow {
 	// 11. Bug reports go out only when the user sends one.
 	reports := "Through your phone"
 	if bugrepEndpointURL() != "" {
-		reports = "Anonymous collector"
+		reports = "Straight from this device"
 	}
 	if n := bugrepOutboxCount(); n > 0 {
 		reports += fmt.Sprintf(" · %d queued", n)

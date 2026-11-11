@@ -17,10 +17,13 @@ on:
     paths:
       - "player/**"
       - ".github/workflows/build-sdcard.yml"
+      # The Remote Play helpers it packages are built by this one.
+      - ".github/workflows/remote-play-helpers.yml"
   pull_request:
     paths:
       - "player/**"
       - ".github/workflows/build-sdcard.yml"
+      - ".github/workflows/remote-play-helpers.yml"
 
 permissions:
   contents: read
@@ -30,27 +33,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The PS Remote Play helpers for Apps/JukaHub/bin; see remote-play-helpers.yml.
+  helpers:
+    name: Remote Play helpers
+    uses: ./.github/workflows/remote-play-helpers.yml
+    # What the helpers job asks for (actions read finds helpers an earlier run
+    # built); a called workflow asking for more than this grants cannot start.
+    permissions:
+      contents: read
+      actions: read
+
   sdcard:
     name: linux/arm64 + SD card layout
+    needs: helpers
+    # Packages whatever became of the helpers: without them the SD card package
+    # still builds and only lacks Remote Play streaming.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
       # Pinned by digest: the image has one tag (latest), last pushed long ago, and a
       # silent re-push would change every build. Dependabot does not bump this.
       image: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
+    env:
+      # Go's caches at paths the cache step below can name for certain. A
+      # container job's HOME is /github/home, not the image's, so unless the
+      # image sets them Go's default caches are not the /home/toolchain folders
+      # this step used to save, and a run compiled everything from nothing.
+      GOCACHE: /github/home/.cache/go-build
+      GOMODCACHE: /github/home/go/pkg/mod
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # actions/cache is fine here and not in the release: this artifact is a
+      # CI download, not what devices install (docker-image.yml's TrimUI build
+      # carries its cache with go-build-cache.sh instead). The workflow file is
+      # in the key because it pins the image, whose headers cgo compiles
+      # against and Go's cache keys cannot see.
       - name: Cache Go modules and build cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            /home/toolchain/go/pkg/mod
-            /home/toolchain/.cache/go-build
-          key: tspsdcard-${{ hashFiles('player/go.sum') }}
+            /github/home/go/pkg/mod
+            /github/home/.cache/go-build
+          key: tspsdcard-${{ hashFiles('.github/workflows/build-sdcard.yml') }}-${{ hashFiles('player/go.sum') }}
           restore-keys: |
-            tspsdcard-
+            tspsdcard-${{ hashFiles('.github/workflows/build-sdcard.yml') }}-
+
+      - name: Download the Remote Play helpers
+        # Into native/bin, where package-sdcard.sh looks for them. Absent when
+        # their build failed. Bounded, because continue-on-error does not end a
+        # step that hangs.
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: remote-play-helpers
+          path: player/native/bin
 
       - name: Build and package
         working-directory: player

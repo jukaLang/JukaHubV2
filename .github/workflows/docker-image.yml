@@ -64,16 +64,218 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-and-publish-ubuntu:
-    runs-on: ubuntu-24.04
-    needs: create-tag
+  # The PS Remote Play helpers (Apps/JukaHub/bin/chiaki-stream and
+  # chiaki-regist), built natively on an arm64 runner; why there, and why a
+  # failure is allowed, is in remote-play-helpers.yml. It starts at once,
+  # beside create-tag.
+  build-remote-play-helpers:
+    name: Remote Play helpers
+    uses: ./.github/workflows/remote-play-helpers.yml
+    # The helpers job asks for exactly these: actions read is how it finds the
+    # helpers an earlier release run built from the same sources. A called
+    # workflow cannot be given more than its caller grants, and asking for
+    # more fails the whole run before it starts.
     permissions:
-      contents: write   # attach the handheld archive to the draft
-    container:
+      contents: read
+      actions: read
+
+  # The handheld binary (linux/arm64, cgo + SDL2), compiled in the community
+  # TrimUI toolchain image, which carries what a binary must be linked against
+  # to start on the handheld: the device SDK sysroot, the Linaro aarch64 gcc and
+  # SDL2 2.26.1. The image runs under docker run, started by
+  # .github/scripts/trimui-build.sh with no network and the checkout, the
+  # runner's Go and both Go caches mounted at their own paths, rather than as
+  # the job's container: that way the job can carry the Go build cache from one
+  # release to the next as the Windows job does (go-build-cache.sh needs gh and
+  # zstd, which the image lacks), and the image download overlaps the module
+  # and cache downloads. It needs nothing from the other jobs, so it starts at
+  # once; the packaging job below waits for it, the tag and the helpers.
+  #
+  # The job this replaces also built zlib, libpng, libjpeg, bzip2, libtiff and
+  # libwebp from source on every release. They were for a fully static link
+  # given up long ago (commit edb40d4, "dynamic test"); the dynamic link never
+  # used them, as build-sdcard.yml's build without them showed.
+  build-trimui:
+    name: Build for TrimUI (linux/arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read     # find and download the previous release's build cache
+    env:
       # Pinned by digest: the image has one tag (latest), last pushed long ago, and a
       # silent re-push would change every build. Dependabot does not bump this.
-      image: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
-    env: 
+      TOOLCHAIN_IMAGE: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The toolchain image runs with the checkout mounted; nothing here
+          # pushes, so no token stays in .git/config for it to read.
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          # Not setup-go's cache, for the reason the Windows job gives: what is
+          # restored here flows into the published binary.
+          cache: false
+
+      - name: Pull the toolchain image, the Go modules and the build cache
+        # The three download side by side; none needs another, and the step
+        # waits for all of them.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          logs="$RUNNER_TEMP/fetch-logs"
+          mkdir -p "$logs"
+          : > "$logs/image.log"
+          : > "$logs/go.log"
+          show_logs() {
+            echo "::group::Toolchain image"; cat "$logs/image.log"; echo "::endgroup::"
+            echo "::group::Go toolchain, modules and build cache"; cat "$logs/go.log"; echo "::endgroup::"
+          }
+          trap 'status=$?; [ "$status" -eq 0 ] || show_logs' EXIT
+          echo "### TrimUI build" >> "$GITHUB_STEP_SUMMARY"
+
+          # Named after the image digest: cgo compiles against the image's
+          # sysroot and SDL headers, which Go's cache keys cannot see, so a new
+          # image starts a new cache instead of reusing objects built against
+          # the old one.
+          digest=${TOOLCHAIN_IMAGE##*@sha256:}
+          artifact="go-build-cache-trimui-${digest:0:12}"
+          echo "GO_CACHE_ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+          # A registry hiccup should cost seconds, not the release.
+          (
+            for try in 1 2 3; do
+              if docker pull -q "$TOOLCHAIN_IMAGE"; then exit 0; fi
+              echo "pull attempt $try failed"
+              [ "$try" -eq 3 ] || sleep $((try * 15))
+            done
+            exit 1
+          ) > "$logs/image.log" 2>&1 &
+          image_job=$!
+
+          # Bounded like the Windows job's restore: a stalled download must
+          # cost a cold build, not the job's timeout and with it the release.
+          (
+            cd player
+            go version
+            go mod download
+            timeout 300 bash "$GITHUB_WORKSPACE/.github/scripts/go-build-cache.sh" restore "$artifact" ||
+              echo "::warning title=Go build cache::the restore failed or ran out of time; building without it"
+          ) > "$logs/go.log" 2>&1 &
+          go_job=$!
+
+          if ! wait "$image_job"; then
+            echo "::error::the TrimUI toolchain image did not download (see the Toolchain image group)"
+            exit 1
+          fi
+          if ! wait "$go_job"; then
+            echo "::error::fetching the Go toolchain or the modules failed (see the Go group)"
+            exit 1
+          fi
+          show_logs
+
+      - name: Build Package
+        run: |
+          set -o pipefail
+          start=$SECONDS
+          build() {
+            bash .github/scripts/trimui-build.sh go JukaHub-Trimui "$RUNNER_TEMP/go-build.log"
+          }
+          if ! build; then
+            # As in the Windows job: a restored cache that cannot build must
+            # not fail every release after it. Retry once from an empty cache,
+            # which also makes the cache step upload a fresh one; discard
+            # refuses when nothing was restored, as a cold retry would only
+            # repeat the failure.
+            bash .github/scripts/go-build-cache.sh discard
+            echo "::warning title=Go build cache::the build failed on the restored cache; retrying from an empty one"
+            build
+          fi
+          echo "Build completed in $((SECONDS - start)) s."
+          echo "- go build: $((SECONDS - start)) s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the spatial audio plugin
+        # Spatial audio in RetroArch games (player/spatialfx): a small C library
+        # RetroArch loads as an audio DSP filter. Built with the player's own
+        # cross compiler and sysroot, so it loads on the handheld's glibc, into
+        # lib/ where spatial_games.go looks for it. Optional: a failed build
+        # ships the archive without it, and the Audio panel then says the game
+        # plugin is not installed.
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          # A failed build leaves no library; drop the then-empty lib/ too.
+          bash .github/scripts/trimui-build.sh spatial JukaHub-Trimui || {
+            rmdir "$PWD/JukaHub-Trimui/lib" 2>/dev/null || true
+            exit 1
+          }
+
+      - name: Check the binary can start on the handhelds
+        # An AArch64 program for the standard glibc loader that links the
+        # firmware's SDL2 and needs no glibc newer than the firmware's: a wrong
+        # compiler or sysroot stops the release here, not on a handheld.
+        run: bash .github/scripts/trimui-build.sh check JukaHub-Trimui/JukaHub
+
+      - name: Hand the build to the packaging job
+        # A tar keeps the binary's exec bit, which an artifact alone loses.
+        run: tar -C JukaHub-Trimui -cf "$RUNNER_TEMP/trimui-build.tar" .
+
+      - name: Upload the build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trimui-build
+          path: ${{ runner.temp }}/trimui-build.tar
+          retention-days: 1
+          if-no-files-found: error
+          # A re-run of this job replaces its own earlier upload.
+          overwrite: true
+
+      # As in the Windows job: only for a push to main (restore accepts a cache
+      # from no other event), after the build is handed on, and bounded twice
+      # over, since the cache only speeds up the next release.
+      - name: Pack the build cache for the next release
+        id: cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          own=$(cd player && go list -m)
+          bash .github/scripts/go-build-cache.sh save "$GO_CACHE_ARTIFACT" "$RUNNER_TEMP/go-build-cache" "$RUNNER_TEMP/go-build.log" "$own"
+
+      - name: Upload the build cache
+        if: steps.cache.outputs.upload == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.GO_CACHE_ARTIFACT }}
+          path: ${{ steps.cache.outputs.archive }}
+          # Already zstd-compressed: zipping it again would only cost time.
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+          if-no-files-found: error
+
+  # Packaging only: the binary and the game-audio plugin come from build-trimui,
+  # the Remote Play helpers from their own job. Waiting for those here, rather
+  # than making the compile wait for the helpers, lets both build at once.
+  build-and-publish-ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [create-tag, build-remote-play-helpers, build-trimui]
+    # Runs whatever became of the helpers: an archive without them still ships
+    # (it only lacks Remote Play streaming, like every release before them), so
+    # their job must not be able to skip this one. A cancelled run still stops.
+    if: ${{ !cancelled() && needs.create-tag.result == 'success' && needs.build-trimui.result == 'success' }}
+    permissions:
+      contents: write   # attach the handheld archive to the draft
+    env:
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
     steps:
@@ -92,111 +294,68 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Download and Install ARM Libraries
-        run: |
-          mkdir -p ${SYSROOT}/usr/lib
-          mkdir -p ${SYSROOT}/usr/include
+      - name: Download the TrimUI build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: trimui-build
+          path: ${{ runner.temp }}/trimui-build
 
-          # Download and install zlib 1.3.1
-          # Each source tarball below is checked against its published
-          # digest: this step fetches six archives from six hosts and runs
-          # their Makefiles, so an altered one would run here.
-          wget https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
-          echo "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23  zlib-1.3.1.tar.gz" | sha256sum -c -
-          tar -xzf zlib-1.3.1.tar.gz
-          cd zlib-1.3.1
-          ./configure --prefix=${SYSROOT}/usr
-          make
-          make install
-          cd ..
-
-          # Download and install libpng 1.6.37
-          wget https://download.sourceforge.net/libpng/libpng-1.6.37.tar.gz
-          echo "daeb2620d829575513e35fecc83f0d3791a620b9b93d800b763542ece9390fb4  libpng-1.6.37.tar.gz" | sha256sum -c -
-          tar -xzf libpng-1.6.37.tar.gz
-          cd libpng-1.6.37
-          ./configure --host=aarch64-linux-gnu --prefix=${SYSROOT}/usr
-          make
-          make install
-          cd ..
-
-          # Download and install libjpeg
-          wget http://www.ijg.org/files/jpegsrc.v9d.tar.gz
-          echo "2303a6acfb6cc533e0e86e8a9d29f7e6079e118b9de3f96e07a71a11c082fa6a  jpegsrc.v9d.tar.gz" | sha256sum -c -
-          tar -xzf jpegsrc.v9d.tar.gz
-          cd jpeg-9d
-          ./configure --host=aarch64-linux-gnu --prefix=${SYSROOT}/usr
-          make
-          make install
-          cd ..
-
-          # Download and install libbz2
-          wget https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
-          echo "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269  bzip2-1.0.8.tar.gz" | sha256sum -c -
-          tar -xzf bzip2-1.0.8.tar.gz
-          cd bzip2-1.0.8
-          make CC="aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar" RANLIB="aarch64-linux-gnu-ranlib" libbz2.a
-          cp libbz2.a ${SYSROOT}/usr/lib/
-          cp bzlib.h ${SYSROOT}/usr/include/
-          cd ..
-
-          # Download and install libtiff
-          wget http://download.osgeo.org/libtiff/tiff-4.0.9.tar.gz
-          echo "6e7bdeec2c310734e734d19aae3a71ebe37a4d842e0e23dbb1b8921c0026cfcd  tiff-4.0.9.tar.gz" | sha256sum -c -
-          tar -xzf tiff-4.0.9.tar.gz
-          cd tiff-4.0.9
-          if [ -f config/config.sub ]; then sed -i 's/| x86_64)/| x86_64| aarch64)/' config/config.sub; fi
-          ./configure --host=aarch64-linux-gnu --prefix=${SYSROOT}/usr
-          make
-          make install
-          cd ..
-
-          # Download and install libwebp
-          wget https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.0.0.tar.gz
-          echo "84259c4388f18637af3c5a6361536d754a5394492f91be1abc2e981d4983225b  libwebp-1.0.0.tar.gz" | sha256sum -c -
-          tar -xzf libwebp-1.0.0.tar.gz
-          cd libwebp-1.0.0
-          if [ -f config/config.sub ]; then sed -i 's/| x86_64)/| x86_64| aarch64)/' config/config.sub; fi
-          ./configure --host=aarch64-linux-gnu --prefix=${SYSROOT}/usr
-          make
-          make install
-          cd ..
-
-          export SYSROOT=/usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot
-          export CC="aarch64-linux-gnu-gcc --sysroot=${SYSROOT}"
-          export CXX="aarch64-linux-gnu-g++ --sysroot=${SYSROOT}"
-          export CGO_ENABLED=1
-          export GOARCH=arm64
-          export GOOS=linux
-          export CGO_CFLAGS="-I${SYSROOT}/usr/include -I/usr/aarch64-linux-gnu/include -I/usr/aarch64-linux-gnu/include/SDL2 -I/usr/include/SDL2 -D_REENTRANT"
-          export CGO_LDFLAGS="-L${SYSROOT}/usr/lib -L/usr/lib/aarch64-linux-gnu -lSDL2_image -lSDL2_ttf -lSDL2 -lpng -ltiff -lwebp -lfreetype -ljpeg -lz -lbz2 -ldl -lpthread -lm"
-          ln -s ${SYSROOT}/lib/libpthread.so.0 /usr/lib/libpthread.so.0
-          ln -s ${SYSROOT}/usr/lib/libpthread_nonshared.a /usr/lib/libpthread_nonshared.a
-
-      - name: Install Dependencies
-        run: |
-          cd player
-          GOPROXY=https://proxy.golang.org,direct
-          go mod tidy
-
-      - name: Build Package
-        run: |
-          mkdir -p ../JukaHub-Trimui
-          cd player
-          echo "Building package..."
-          CGO_ENABLED=1 \
-          CC="aarch64-linux-gnu-gcc --sysroot=${SYSROOT}" \
-          CXX="aarch64-linux-gnu-g++ --sysroot=${SYSROOT}" \
-          GOARCH=arm64 \
-          GOOS=linux \
-          CGO_CFLAGS="-I${SYSROOT}/usr/include -I/usr/aarch64-linux-gnu/include -I/usr/aarch64-linux-gnu/include/SDL2 -I/usr/include/SDL2 -D_REENTRANT" \
-          CGO_LDFLAGS="-L${SYSROOT}/usr/lib -L/usr/lib/aarch64-linux-gnu -lSDL2_image -lSDL2_ttf -lSDL2 -ldl -lpthread -lm" \
-          go build -tags dynamic -ldflags "-X main.buildDate=$(date -u +%Y-%m-%d)" -o ../JukaHub-Trimui/JukaHub ./
-          echo "Build completed."
-
-      - name: Package Artifacts
+      - name: Unpack the TrimUI build
+        # JukaHub, and lib/ when the game-audio plugin built, with their modes.
         run: |
           mkdir -p JukaHub-Trimui
+          tar -xf "$RUNNER_TEMP/trimui-build/trimui-build.tar" -C JukaHub-Trimui
+          ls -la JukaHub-Trimui
+
+      - name: Download the Remote Play helpers
+        # Absent when their build failed; Package Artifacts then warns and the
+        # archive goes out without bin/, as every release before them did.
+        # Bounded: continue-on-error does not end a step that hangs, so a
+        # stalled download would otherwise run into the job's own timeout and
+        # cost the release its handheld archive.
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: remote-play-helpers
+          path: remote-play-helpers
+
+      - name: Package Artifacts
+        id: package
+        run: |
+          mkdir -p JukaHub-Trimui
+          # The PS Remote Play client runs these two from Apps/JukaHub/bin.
+          # Artifacts do not keep file modes, so they are made executable here,
+          # and zip stores that mode for whatever unpacks the archive.
+          if [ -f remote-play-helpers/chiaki-stream ] && [ -f remote-play-helpers/chiaki-regist ]; then
+            mkdir -p JukaHub-Trimui/bin
+            cp remote-play-helpers/chiaki-stream remote-play-helpers/chiaki-regist JukaHub-Trimui/bin/
+            chmod 755 JukaHub-Trimui/bin/chiaki-stream JukaHub-Trimui/bin/chiaki-regist
+            echo "Remote Play helpers added to bin/:"
+            sed -n '1,4p' remote-play-helpers/BUILDINFO.txt 2>/dev/null || true
+            # The same helpers on their own, as JukaHub-RemotePlay-linux-arm64.zip:
+            # a handheld whose JukaHub has no bin/ (installed from an older or
+            # partial package) downloads this one by itself when PS Remote Play
+            # opens (player/psremote_helpers_install.go), instead of the user
+            # fetching files. SHA256SUMS lets it check what it unpacked.
+            # Optional like the helpers themselves: a failure here leaves the
+            # release without the package, never without JukaHub-Trimui.zip.
+            rm -rf remote-play-package JukaHub-RemotePlay-linux-arm64.zip
+            if (
+              mkdir -p remote-play-package/bin &&
+              cp JukaHub-Trimui/bin/chiaki-stream JukaHub-Trimui/bin/chiaki-regist remote-play-package/bin/ &&
+              { [ ! -f remote-play-helpers/BUILDINFO.txt ] || cp remote-play-helpers/BUILDINFO.txt remote-play-package/bin/; } &&
+              cd remote-play-package && sha256sum bin/* > SHA256SUMS &&
+              zip -r ../JukaHub-RemotePlay-linux-arm64.zip bin SHA256SUMS
+            ); then
+              echo "helpers_package=true" >> "$GITHUB_OUTPUT"
+            else
+              rm -f JukaHub-RemotePlay-linux-arm64.zip
+              echo "::warning title=Remote Play helpers::the helper package could not be built; this release goes out without JukaHub-RemotePlay-linux-arm64.zip"
+            fi
+          else
+            echo "::warning title=Remote Play helpers::not built for this run; JukaHub-Trimui.zip ships without Remote Play streaming (see the Remote Play helpers job)"
+          fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
           cp player/launch.sh JukaHub-Trimui/
@@ -218,6 +377,23 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-Trimui.zip
           asset_name: JukaHub-Trimui.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the Remote Play helper package
+        # Optional, like the helpers themselves: publish-release waits only for
+        # the two app archives, and a JukaHub that finds no helper package on
+        # the newest release takes it from the newest release that has one.
+        # Bounded, because continue-on-error does not end a step that hangs.
+        if: steps.package.outputs.helpers_package == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-RemotePlay-linux-arm64.zip
+          asset_name: JukaHub-RemotePlay-linux-arm64.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -488,7 +664,15 @@ jobs:
       contents: write   # flip the verified draft to published
     # A pull-request build must not become a release: it was published before
     # too, which is how a branch build could take over /releases/latest.
-    if: github.event_name != 'pull_request'
+    # The three results are spelled out instead of left to the implicit
+    # success(), which looks at every job upstream, the Remote Play helpers
+    # included: their failure must cost a release its helpers, never the
+    # release itself.
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request' &&
+      needs.create-tag.result == 'success' &&
+      needs.build-and-publish-ubuntu.result == 'success' &&
+      needs.build-and-publish-windows.result == 'success' }}
     env:
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
     steps:

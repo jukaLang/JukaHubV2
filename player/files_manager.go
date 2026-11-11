@@ -526,7 +526,7 @@ func fePaste(config *Config) (int, error) {
 // renames something leaves the cursor on it instead of on the old row number.
 func feFocusPath(config *Config, path string) {
 	for i, entry := range feEntriesOf(config) {
-		if entry.Path == path {
+		if filesSamePath(entry.Path, path) {
 			focusedFileIndex = i
 			return
 		}
@@ -635,7 +635,7 @@ func feEntryBadge(entry FileEntry) (string, sdl.Color) {
 		return "AUD", sdl.Color{R: 167, G: 235, B: 160, A: 255}
 	case isMediaFile(entry.Name) || hasMediaExtension(entry.Path):
 		return "VID", ColorTextAccent()
-	case ext == ".zip" || ext == ".tar" || ext == ".gz" || ext == ".xz" || ext == ".7z" || ext == ".rar":
+	case feArchiveKindOf(entry.Name) != feArchiveNone:
 		return "ZIP", sdl.Color{R: 224, G: 176, B: 255, A: 255}
 	case ext == ".pdf":
 		return "PDF", sdl.Color{R: 255, G: 141, B: 141, A: 255}
@@ -879,6 +879,8 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	// A glass strip, the same surface as the list panel under it.
 	fillRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, glassControlRadius, glassFill())
 	strokeRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, glassControlRadius, 1, glassEdge())
+	// A running extraction lines the bar's bottom edge (files_extract_ui.go).
+	feExtractDrawBarProgress(renderer, config, bar)
 	lineH := int32(font.Height())
 
 	// Sort chip, right-aligned: the order is a per-folder preference, and the
@@ -904,7 +906,7 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	totalsW, _, _ := font.SizeUTF8(totals)
 	totalsW32 := int32(totalsW)
 	totalsInk := ColorTextTertiary()
-	if feSelectionCount() > 0 || chatPickActive() {
+	if feSelectionCount() > 0 || chatPickActive() || feExtractActive() {
 		totalsInk = ColorTextAccent()
 	}
 	totalsX := chip.X - totalsW32 - 20
@@ -1019,6 +1021,14 @@ func feFolderTotalsLabel(config *Config) string {
 	// Picking files for the chat: the bar says so, and for which tab.
 	if pick := chatPickLabel(); pick != "" {
 		return pick
+	}
+	// While an archive unpacks, the bar says how far it has come (and how
+	// many rows are marked, which the list shows nowhere else).
+	if label := feExtractBarLabel(); label != "" {
+		if selected := feSelectionCount(); selected > 0 {
+			return fmt.Sprintf("%d selected · %s", selected, label)
+		}
+		return label
 	}
 	if filesNav.atLocations {
 		n := len(filesNav.locations)
@@ -1177,7 +1187,7 @@ func filesEntryIcon(entry FileEntry) string {
 		return "pdf"
 	case ext == ".epub" || ext == ".mobi" || ext == ".azw3":
 		return "text"
-	case ext == ".zip" || ext == ".tar" || ext == ".gz" || ext == ".xz" || ext == ".7z" || ext == ".rar":
+	case feArchiveKindOf(entry.Name) != feArchiveNone:
 		if filesROMSystem(entry.Path) != "" {
 			return "gamepad"
 		}
@@ -1241,6 +1251,12 @@ const (
 	feActLocations
 	feActSystemOpen
 	feActSendChat
+	// The archive rows (files_extract_ui.go): the Y menu's Extract…, and the
+	// archive sheet's Extract, Extract here and Cancel.
+	feActArchive
+	feActExtract
+	feActExtractHere
+	feActExtractCancel
 )
 
 // feAction is one row of the sheet. Detail is the line's right-hand summary
@@ -1255,6 +1271,10 @@ type feAction struct {
 }
 
 func feActions(config *Config) []feAction {
+	// One archive's sheet has its own two rows (files_extract_ui.go).
+	if feSheet.archive != "" {
+		return feArchiveActions(config)
+	}
 	hiddenDetail := "Off"
 	if filesShowHidden(config) {
 		hiddenDetail = "On"
@@ -1335,6 +1355,7 @@ func feActions(config *Config) []feAction {
 	actions := []feAction{
 		{Kind: feActNewFolder, Label: "New folder", Detail: newFolderDetail, Enabled: true},
 		{Kind: feActEdit, Label: "Edit text", Detail: editDetail, Enabled: editEnabled},
+		feArchiveMainAction(targets),
 		{Kind: feActSendChat, Label: "Send to chat", Detail: sendDetail, Enabled: sendFiles > 0},
 		{Kind: feActRename, Label: "Rename", Detail: renameDetail, Enabled: renameEnabled},
 		{Kind: feActCopy, Label: "Copy", Detail: targetDetail, Enabled: len(targets) > 0},
@@ -1372,6 +1393,9 @@ type feSheetState struct {
 	scroll  int
 	armed   string
 	armedAt time.Time
+	// archive turns the sheet into one archive's sheet (its path), with its
+	// own rows and preview (files_extract_ui.go); empty for the Y menu.
+	archive string
 }
 
 var feSheet feSheetState
@@ -1397,6 +1421,8 @@ func feSheetForget() {
 	feSheet = feSheetState{}
 	feSheetRowHits = nil
 	feSheetRect = sdl.Rect{}
+	// An archive's sheet may still be reading the archive (files_extract_ui.go).
+	feArchiveInspectStop()
 }
 
 func closeFeSheet() {
@@ -1438,6 +1464,11 @@ func feSheetActivate(config *Config) {
 	}
 	action := actions[feSheet.cursor]
 	if !action.Enabled {
+		// An archive row says why it cannot run (files_extract_ui.go).
+		if why := feArchiveDisabledReason(action); why != "" {
+			showToast(why, ToastWarn())
+			return
+		}
 		showToast(action.Label+" is not available here", ToastInfo())
 		return
 	}
@@ -1577,6 +1608,8 @@ func feSheetActivate(config *Config) {
 		targets := feSelectionTargets(config)
 		feSheetForget()
 		chatSendFromFiles(config, targets)
+	case feActArchive, feActExtract, feActExtractHere, feActExtractCancel:
+		feArchiveSheetActivate(config, action)
 	case feActConnect:
 		closeFeSheetKeepKeyboard()
 		openFeRemoteAddressEntry(config)
@@ -1603,6 +1636,11 @@ func handleFeSheetKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		feSheetMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+		// A held key repeats; a repeat must never be the second press that
+		// confirms an armed row (Delete, Extract here).
+		if e.Repeat != 0 {
+			return true
+		}
 		feSheetActivate(config)
 	case sdl.K_ESCAPE, sdl.K_b:
 		closeFeSheet()
@@ -1633,12 +1671,24 @@ func ctrlFeSheet(e *sdl.ControllerButtonEvent, config *Config) bool {
 	return true
 }
 
+// feSheetLastClick is the last row a click ran: the second half of a
+// double-click is not a second press — it would confirm what the first one
+// armed, or cancel the extraction the first one started.
+var feSheetLastClick struct {
+	at    time.Time
+	index int
+}
+
 func handleFeSheetMouse(mx, my int32, config *Config) bool {
 	if !feSheet.open || virtualKeyboardActive {
 		return false
 	}
 	for _, hit := range feSheetRowHits {
 		if pointInRect(mx, my, hit.rect) {
+			if hit.index == feSheetLastClick.index && time.Since(feSheetLastClick.at) < 400*time.Millisecond {
+				return true
+			}
+			feSheetLastClick.at, feSheetLastClick.index = time.Now(), hit.index
 			feSheet.cursor = hit.index
 			feSheetActivate(config)
 			return true
@@ -1751,10 +1801,10 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 	}
 	subtitleInk := ColorTextSecondary()
 	if armed := feSheet.armed == "delete" && feSheetArmed("delete"); armed {
-		subtitle = "Press A again to delete " + feItemCountLabel(len(feSelectionTargets(config)))
+		subtitle = hintSentence("Press %s again to delete "+feItemCountLabel(len(feSelectionTargets(config))), "A", "Delete")
 		subtitleInk = WarningInk()
 	} else if strings.HasPrefix(feSheet.armed, "sys:") && feSheetArmed(feSheet.armed) {
-		subtitle = "System folder — press A again to " + strings.ToLower(strings.TrimPrefix(feSheet.armed, "sys:"))
+		subtitle = hintSentence("System folder — press %s again to "+strings.ToLower(strings.TrimPrefix(feSheet.armed, "sys:")), "A", "Confirm")
 		subtitleInk = WarningInk()
 	} else if filesNav.atLocations {
 		subtitle = fmt.Sprintf("%d places", len(filesNav.locations))
@@ -1763,6 +1813,13 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 	}
 	header := UIPanelHeader("Files", subtitle, "files")
 	header.SubtitleColor = subtitleInk
+	// One archive's sheet: its name and contents, and its extraction's
+	// progress, between the header and the rows (files_extract_ui.go).
+	var preview []feArchiveLine
+	if feSheet.archive != "" {
+		header = feArchiveSheetHeader()
+		preview = feArchivePreview()
+	}
 	headerH := UIPanelHeaderBand(config, header, 9)
 	footerH := 12 + smallH
 
@@ -1770,17 +1827,29 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 	if panelW > screenWidth-48 {
 		panelW = screenWidth - 48
 	}
+	previewW := panelW - 2*OverlayPadX
+	maxPreviewH := screenHeight - 48 - headerH - 2*rowH - footerH
+	preview = feArchivePreviewFit(font, preview, previewW, maxPreviewH)
+	previewH := feArchivePreviewHeight(font, preview, previewW)
 	rows := int32(len(actions))
-	maxRows := (screenHeight - 120 - headerH - footerH) / rowH
+	maxRows := (screenHeight - 120 - headerH - previewH - footerH) / rowH
 	if maxRows < 3 {
 		maxRows = 3
 	}
 	if rows > maxRows {
 		rows = maxRows
 	}
-	panelH := headerH + rows*rowH + footerH
+	panelH := headerH + previewH + rows*rowH + footerH
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
+	if feSheet.archive != "" {
+		// The archive sheet grows as its reading lands and its progress line
+		// comes and goes; its top stays put, so nothing moves under the pointer.
+		tallest := headerH + feArchivePreviewMaxH(font, maxPreviewH) + rows*rowH + footerH
+		if panelY = (screenHeight - tallest) / 2; panelY < 24 {
+			panelY = 24
+		}
+	}
 	feSheetRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
 	if feSheet.cursor < feSheet.scroll {
@@ -1801,9 +1870,12 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 	drawOverlayCard(renderer, card)
 	header = overlayHeaderOnCard(header, card)
 	UIPageHeaderDraw(renderer, config, header)
+	if previewH > 0 {
+		drawFeArchivePreview(renderer, config, font, preview, panelX+OverlayPadX, panelY+headerH, previewW)
+	}
 
 	feSheetRowHits = feSheetRowHits[:0]
-	y := panelY + headerH
+	y := panelY + headerH + previewH
 	for i := feSheet.scroll; i < len(actions) && i < feSheet.scroll+int(maxRows); i++ {
 		action := actions[i]
 		rect := sdl.Rect{X: panelX + 12, Y: y, W: panelW - 24, H: rowH - 4}
@@ -1822,12 +1894,23 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 		if action.Dangerous && feSheet.armed == "delete" && feSheetArmed("delete") {
 			ink = WarningInk()
 		}
+		if action.Kind == feActExtractHere && feSheet.armed == "extract-here" && feSheetArmed("extract-here") {
+			ink = WarningInk()
+		}
+		// The detail (often a file name) gets what the label leaves, and is
+		// drawn as it is: names are the user's text, never $variables.
+		labelW, _ := measureText(font, action.Label)
 		detail := action.Detail
+		if detail != "" {
+			room := rect.W - labelW - 52
+			if room < 60 {
+				room = 60
+			}
+			detail = ellipsize(font, detail, room)
+		}
 		detailW := int32(0)
 		if detail != "" {
-			if w, _, err := font.SizeUTF8(detail); err == nil {
-				detailW = int32(w)
-			}
+			detailW, _ = measureText(font, detail)
 		}
 		budget := rect.W - detailW - 40
 		if budget < 140 {
@@ -1835,7 +1918,7 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 		}
 		renderText(renderer, config, font, ellipsize(font, action.Label, budget), ink, rect.X+12, rect.Y+7)
 		if detail != "" {
-			renderText(renderer, config, font, detail, detailInk, rect.X+rect.W-12-detailW, rect.Y+7)
+			filesDrawPlainText(renderer, config, font, detail, detailInk, rect.X+rect.W-12-detailW, rect.Y+7)
 		}
 		feSheetRowHits = append(feSheetRowHits, struct {
 			index int
@@ -1844,7 +1927,12 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 		y += rowH
 	}
 
+	closeLabel := "Close"
+	if feArchiveSheetBusy() {
+		// B leaves the extraction running.
+		closeLabel = "Hide"
+	}
 	hint := hintLine(FooterHint{"D-Pad / Mouse", "Choose"}, FooterHint{"A / Enter", "Run"},
-		FooterHint{"B / Esc", "Close"})
+		FooterHint{"B / Esc", closeLabel})
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+22, panelY+panelH-footerH+8)
 }

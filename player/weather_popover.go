@@ -117,6 +117,7 @@ func toggleWeatherPopover() {
 		tb.startOpen = false
 		nc.open = false
 		dismissVolumePopover()
+		dismissBrightnessPopover()
 		// Opening the card is the moment the user is asking for the
 		// forecast, so refresh a missing or stale one instead of showing the
 		// "unavailable" state until the next 10-minute tick.

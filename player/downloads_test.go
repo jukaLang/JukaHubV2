@@ -10,9 +10,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,6 +29,10 @@ func downloadsTestReset(t *testing.T) {
 	downloads.paused = false
 	downloads.running = false
 	downloads.cancel = nil
+	downloads.sidecars = nil
+	downloads.sidecarID = 0
+	downloads.sidecarPath = ""
+	downloads.sidecarDropped = false
 	downloads.mu.Unlock()
 
 	prevRoot, prevRunner := downloadsRootOverride, downloadRunner
@@ -54,6 +60,10 @@ func downloadsTestReset(t *testing.T) {
 		downloads.items = nil
 		downloads.paused = false
 		downloads.cancel = nil
+		downloads.sidecars = nil
+		downloads.sidecarID = 0
+		downloads.sidecarPath = ""
+		downloads.sidecarDropped = false
 		downloads.mu.Unlock()
 		downloadsRootOverride = prevRoot
 		downloadRunner = prevRunner
@@ -291,5 +301,291 @@ func TestRejectYtDlpExecFlags(t *testing.T) {
 		if err := rejectYtDlpExecFlags(args); err == nil {
 			t.Errorf("execution-capable args %v were accepted", args)
 		}
+	}
+}
+
+func TestDownloadEnqueueRefusesASecondCopy(t *testing.T) {
+	downloadsTestReset(t)
+	downloadSetPaused(true) // the rows stay queued; nothing runs
+	page := "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	first, err := downloadEnqueueKind(page, downloadKindVideo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !downloadsHas("https://youtu.be/dQw4w9WgXcQ", downloadKindVideo) {
+		t.Fatal("the queued video was not found under its short link")
+	}
+	if _, err := downloadEnqueueKind("https://youtu.be/dQw4w9WgXcQ", downloadKindVideo); !errors.Is(err, errDownloadAlreadyQueued) {
+		t.Fatalf("a second copy of a queued video = %v, want errDownloadAlreadyQueued", err)
+	}
+	if _, err := downloadEnqueueKind(page, downloadKindAudio); err != nil {
+		t.Fatalf("the sound of a queued video is a different file: %v", err)
+	}
+	downloads.mu.Lock()
+	downloads.findLocked(first.ID).Status = downloadFailed
+	downloads.mu.Unlock()
+	if downloadsHas(page, downloadKindVideo) {
+		t.Fatal("a failed row still counts as downloading")
+	}
+	if _, err := downloadEnqueueKind(page, downloadKindVideo); err != nil {
+		t.Fatalf("a new try after a failure was refused: %v", err)
+	}
+	// The worker does not read the custom settings map: each row carries its
+	// own copy of the extra yt-dlp arguments, empty but not nil when there are
+	// none.
+	if it, ok := downloadFocused(first.ID); !ok || it.ytExtra == nil {
+		t.Fatal("a queued row must carry its own copy of the yt-dlp arguments")
+	}
+}
+
+// downloadsSidecarFixture records what the queue did: transfers (a stub that
+// writes the video into the download folder) and subtitle steps (each test's
+// own stub, set on downloadSubtitleSaver after the fixture is made).
+type downloadsSidecarFixture struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (f *downloadsSidecarFixture) note(event string) {
+	f.mu.Lock()
+	f.events = append(f.events, event)
+	f.mu.Unlock()
+}
+
+func (f *downloadsSidecarFixture) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
+}
+
+// newDownloadsSidecarFixture gives a test the queue with saved videos getting
+// the subtitle step. The step's globals are restored by a cleanup registered
+// before downloadsTestReset's, so it runs after the worker has stopped
+// (cleanups run last in, first out) and no step can reach the real fetch.
+func newDownloadsSidecarFixture(t *testing.T) *downloadsSidecarFixture {
+	t.Helper()
+	clearToastAfterTest(t) // the worker toasts "Saved …"
+	prevSaver, prevOn := downloadSubtitleSaver, downloadSidecarsOn
+	t.Cleanup(func() { downloadSubtitleSaver, downloadSidecarsOn = prevSaver, prevOn })
+	downloadsTestReset(t)
+	f := &downloadsSidecarFixture{}
+	videos := downloadsVideoDir()
+	if err := os.MkdirAll(videos, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	downloadRunner = func(_ context.Context, job downloadJob, _ func(downloadProgress)) (downloadResult, error) {
+		path := filepath.Join(videos, fmt.Sprintf("clip%d.mp4", job.ID))
+		if err := os.WriteFile(path, []byte("video"), 0o644); err != nil {
+			return downloadResult{}, err
+		}
+		f.note(fmt.Sprintf("transfer %d", job.ID))
+		return downloadResult{Path: path, Title: fmt.Sprintf("Clip %d", job.ID)}, nil
+	}
+	downloadSubtitleSaver = func(_ context.Context, _ subtitleRequest, videoPath string) (string, error) {
+		return videoPath + ".en.srt", nil
+	}
+	downloadSidecarsOn = func() bool { return true }
+	return f
+}
+
+// A queued download never waits behind a subtitle fetch: the subtitles of the
+// videos that landed are fetched once nothing else is queued.
+func TestDownloadSubtitleStepsWaitForAnIdleQueue(t *testing.T) {
+	f := newDownloadsSidecarFixture(t)
+	downloadSubtitleSaver = func(_ context.Context, r subtitleRequest, videoPath string) (string, error) {
+		event := "subtitles " + filepath.Base(videoPath)
+		if r.extra == nil {
+			event += " (arguments read on the worker)"
+		}
+		f.note(event)
+		return videoPath + ".en.srt", nil
+	}
+	downloadSetPaused(true)
+	for _, link := range []string{"https://example.com/a", "https://example.com/b"} {
+		if _, err := downloadEnqueueKind(link, downloadKindVideo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	downloadSetPaused(false)
+	waitForDownload(t, "both subtitle steps", func() bool { return len(f.snapshot()) >= 4 })
+	got := strings.Join(f.snapshot(), ", ")
+	want := "transfer 1, transfer 2, subtitles clip1.mp4, subtitles clip2.mp4"
+	if got != want {
+		t.Fatalf("order = %s\nwant    %s", got, want)
+	}
+}
+
+// A row queued while a subtitle step runs starts at once; the step is put
+// back and runs again when the queue is idle.
+func TestDownloadSubtitleStepYieldsToANewRow(t *testing.T) {
+	f := newDownloadsSidecarFixture(t)
+	started := make(chan struct{}, 1)
+	var once sync.Once
+	downloadSubtitleSaver = func(ctx context.Context, _ subtitleRequest, videoPath string) (string, error) {
+		block := false
+		once.Do(func() { block = true })
+		if block {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			f.note("subtitles " + filepath.Base(videoPath) + " cut short")
+			return "", ctx.Err()
+		}
+		f.note("subtitles " + filepath.Base(videoPath))
+		return videoPath + ".en.srt", nil
+	}
+	if _, err := downloadEnqueueKind("https://example.com/a", downloadKindVideo); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subtitle step never started")
+	}
+	if _, err := downloadEnqueueKind("https://example.com/b", downloadKindVideo); err != nil {
+		t.Fatal(err)
+	}
+	waitForDownload(t, "the transfers and the subtitle steps", func() bool { return len(f.snapshot()) >= 5 })
+	got := strings.Join(f.snapshot(), ", ")
+	want := "transfer 1, subtitles clip1.mp4 cut short, transfer 2, subtitles clip1.mp4, subtitles clip2.mp4"
+	if got != want {
+		t.Fatalf("order = %s\nwant    %s", got, want)
+	}
+}
+
+// Removing a video that just landed stops the fetch of its subtitles, which
+// is not tried again.
+func TestDownloadRemoveStopsItsSubtitleStep(t *testing.T) {
+	f := newDownloadsSidecarFixture(t)
+	started := make(chan struct{}, 1)
+	downloadSubtitleSaver = func(ctx context.Context, _ subtitleRequest, videoPath string) (string, error) {
+		f.note("subtitles " + filepath.Base(videoPath))
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	row, err := downloadEnqueueKind("https://example.com/a", downloadKindVideo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subtitle step never started")
+	}
+	if !downloadRemove(row.ID) {
+		t.Fatal("remove refused the saved video")
+	}
+	waitForDownload(t, "the worker to stop", func() bool {
+		downloads.mu.Lock()
+		defer downloads.mu.Unlock()
+		return !downloads.running
+	})
+	if got := f.snapshot(); len(got) != 2 {
+		t.Fatalf("events = %v; a removed video's subtitles must not be fetched again", got)
+	}
+	if regularFile(filepath.Join(downloadsVideoDir(), "clip1.mp4")) {
+		t.Fatal("the removed video stayed on the card")
+	}
+}
+
+func TestPlaceDownloadedFileNeverReplaces(t *testing.T) {
+	dir := t.TempDir()
+	stage := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Song.m4a"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(stage, "audio.m4a")
+	if err := os.WriteFile(src, []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest, err := placeDownloadedFile(src, dir, "Song", ".m4a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(dest) != "Song (2).m4a" {
+		t.Fatalf("placed as %q, want Song (2).m4a", filepath.Base(dest))
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "Song.m4a")); err != nil || string(data) != "first" {
+		t.Fatalf("the file that was there became %q (%v)", data, err)
+	}
+	if data, err := os.ReadFile(dest); err != nil || string(data) != "second" {
+		t.Fatalf("the placed file holds %q (%v)", data, err)
+	}
+	if regularFile(src) {
+		t.Fatal("the staged file was left behind")
+	}
+	// A file that cannot be moved or copied leaves no empty placeholder.
+	if _, err := placeDownloadedFile(filepath.Join(stage, "missing.m4a"), dir, "Ghost", ".m4a"); err == nil {
+		t.Fatal("a missing file was placed")
+	}
+	if regularFile(filepath.Join(dir, "Ghost.m4a")) {
+		t.Fatal("a failed placement left a file behind")
+	}
+}
+
+func TestDownloadTrimmedRowKeepsItsSubtitleStep(t *testing.T) {
+	downloadsTestReset(t)
+	video := filepath.Join(downloadsVideoDir(), "kept.mp4")
+	if err := os.MkdirAll(filepath.Dir(video), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(video, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	downloads.mu.Lock()
+	// Rows trimmed from the list (more than downloadQueueLimit saved in one
+	// go): one whose file is still on the card, one whose file is gone.
+	downloads.sidecars = []downloadItem{
+		{ID: 41, Path: filepath.Join(downloadsVideoDir(), "gone.mp4")},
+		{ID: 42, Path: video},
+	}
+	sub, ok := downloads.nextSidecarLocked()
+	rest := len(downloads.sidecars)
+	downloads.mu.Unlock()
+	if !ok || sub.ID != 42 || rest != 0 {
+		t.Fatalf("next step = %+v %v (%d left); want the trimmed row whose file is there", sub, ok, rest)
+	}
+}
+
+func TestDownloadRetryDoesNotFetchAPageTwice(t *testing.T) {
+	downloadsTestReset(t)
+	downloadSetPaused(true)
+	const page = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	downloads.mu.Lock()
+	downloads.nextID = 2
+	downloads.items = []*downloadItem{
+		{ID: 1, URL: page, Kind: downloadKindVideo, Status: downloadFailed},
+		{ID: 2, URL: "https://youtu.be/dQw4w9WgXcQ", Kind: downloadKindVideo, Status: downloadQueued},
+	}
+	downloads.mu.Unlock()
+	if downloadRetry(1) {
+		t.Fatal("a retry queued a page that is already waiting")
+	}
+	if it, ok := downloadFocused(1); !ok || it.Status != downloadFailed {
+		t.Fatalf("the refused row = %+v", it)
+	}
+	if !downloadsHas(page, downloadKindVideo) {
+		t.Fatal("the waiting row stopped counting")
+	}
+}
+
+func TestForgetQueuePathDropsAWaitingStepOfATrimmedRow(t *testing.T) {
+	downloadsTestReset(t)
+	video := filepath.Join(downloadsVideoDir(), "trimmed.mp4")
+	downloads.mu.Lock()
+	downloads.sidecars = []downloadItem{{ID: 7, Path: video}, {ID: 8, Path: filepath.Join(downloadsVideoDir(), "other.mp4")}}
+	downloads.mu.Unlock()
+	dlForgetQueuePath(video)
+	downloads.mu.Lock()
+	left := append([]downloadItem(nil), downloads.sidecars...)
+	downloads.mu.Unlock()
+	if len(left) != 1 || left[0].ID != 8 {
+		t.Fatalf("waiting steps after the delete = %+v, want only the other video's", left)
 	}
 }

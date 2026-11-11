@@ -376,9 +376,11 @@ func recoveryRestartApp() bool {
 // recoverySpawn starts JukaHub again, detached, in the folder it ran in (the
 // config is read from there).
 func recoverySpawn(self string, args []string, wd string) {
-	cmd := exec.Command(self, args...)
+	// A restart is not a power-on: the boot request a login launcher passed
+	// (--boot, JUKAHUB_BOOT) stays behind (bootos.go).
+	cmd := exec.Command(self, bootOSRestartArgs(args)...)
 	cmd.Dir = wd
-	cmd.Env = os.Environ()
+	cmd.Env = bootOSRestartEnv(os.Environ())
 	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		logWarn("recovery", "could not start JukaHub again: %v", err)

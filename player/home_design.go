@@ -168,6 +168,8 @@ func drawHomeFocusRing(renderer *sdl.Renderer, base, rect sdl.Rect, radius int32
 	if renderer == nil || rect.W <= 0 {
 		return
 	}
+	// The settled rect, so the lift animation is not a move (liquidbg.go).
+	liquidNoteFocus(base)
 	out := homeFocusRingOutset()
 	grow := func(r sdl.Rect) sdl.Rect {
 		return sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}
@@ -308,19 +310,32 @@ func drawContinueThumb(renderer *sdl.Renderer, rect sdl.Rect) {
 	fillRoundedGradient(renderer, rect, homeTileRadius,
 		sdl.Color{R: 11, G: 34, B: 50, A: 255}, sdl.Color{R: 8, G: 14, B: 26, A: 255}, false)
 	// The blooms are clipped just inside the card so they cannot bleed past its
-	// rounded corners into the next tile.
+	// rounded corners into the next tile — inside whatever clip the caller set
+	// (the Widgets grid clips its scrolling body), which is put back after.
 	inner := sdl.Rect{X: rect.X + 6, Y: rect.Y + 6, W: rect.W - 12, H: rect.H - 12}
 	if inner.W > 0 && inner.H > 0 {
-		_ = renderer.SetClipRect(&inner)
-		homeGlowBlob(renderer, sdl.Rect{
-			X: inner.X - inner.W/3, Y: inner.Y - inner.H/2,
-			W: inner.W * 3 / 2, H: inner.W * 3 / 2,
-		}, ColorAccent, 92)
-		homeGlowBlob(renderer, sdl.Rect{
-			X: inner.X + inner.W/4, Y: inner.Y - inner.H/3,
-			W: inner.W, H: inner.W,
-		}, sdl.Color{R: 124, G: 58, B: 237}, 84)
-		_ = renderer.SetClipRect(nil)
+		hadClip := renderer.IsClipEnabled()
+		prevClip := renderer.GetClipRect()
+		clip := inner
+		if hadClip {
+			clip = glassIntersect(prevClip, inner)
+		}
+		if clip.W > 0 && clip.H > 0 {
+			_ = renderer.SetClipRect(&clip)
+			homeGlowBlob(renderer, sdl.Rect{
+				X: inner.X - inner.W/3, Y: inner.Y - inner.H/2,
+				W: inner.W * 3 / 2, H: inner.W * 3 / 2,
+			}, ColorAccent, 92)
+			homeGlowBlob(renderer, sdl.Rect{
+				X: inner.X + inner.W/4, Y: inner.Y - inner.H/3,
+				W: inner.W, H: inner.W,
+			}, sdl.Color{R: 124, G: 58, B: 237}, 84)
+		}
+		if hadClip {
+			_ = renderer.SetClipRect(&prevClip)
+		} else {
+			_ = renderer.SetClipRect(nil)
+		}
 	}
 	// Scrim: transparent where the artwork shows, near-black behind the labels.
 	// It starts without corner rounding and follows the card's radius only at

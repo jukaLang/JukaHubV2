@@ -12,8 +12,18 @@ installs.
 | An idea or "wouldn't it be nice" | [Ideas in Discussions](https://github.com/jukaLang/JukaHubV2/discussions/categories/ideas) | Ideas graduate into issues once scoped |
 | Show anything you built | [Show and tell](https://github.com/jukaLang/JukaHubV2/discussions/categories/show-and-tell) | Screen designs, configs, themes |
 | A reproducible bug | [Bug issue template](https://github.com/jukaLang/JukaHubV2/issues/new?template=bug_report.yml) | Gets the reproduction fields so fixers don't guess |
+| A bug, from the handheld itself | **Tools → Community & support → Report a bug** | Sent straight from the device as an issue, with redacted diagnostics ([BUG_REPORTS.md](docs/BUG_REPORTS.md)) |
 | Security reports | Privately, per [SECURITY.md](SECURITY.md) | Never in a public issue |
 | Community chat | [Discord](https://discord.gg/R9qgJjh5jG) | Fast, synchronous, answers get distilled into docs or issues afterwards |
+
+## Reporting from the device
+
+On the handheld, **Report a bug** needs no phone and no GitHub account: the
+report (your words plus redacted device facts, which the preview shows in full)
+goes straight to the JukaHub report service, which files it as a public issue
+and shows you its number. Without a connection it waits on the device and goes
+out on its own later. [docs/BUG_REPORTS.md](docs/BUG_REPORTS.md) explains what
+is sent and how the service is run.
 
 ## Before filing a bug
 

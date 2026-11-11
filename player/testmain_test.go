@@ -71,7 +71,18 @@ func TestMain(m *testing.M) {
 	gmetaLookupEnabled = false
 	gmetaBackgroundLoads = false
 	rommScanEnabled = false
+	// The APK Store never walks the real card or fetches its catalogue online
+	// from a test (apkstore.go).
+	apkStoreScanEnabled = false
+	// Opening the PS Remote Play panel installs missing helpers from GitHub
+	// where Remote Play runs (linux/arm64); the suite never does, on any host.
+	// The installer's own tests switch it back on (psremote_helpers_install_test.go).
+	psHelperSupportedFn = func() bool { return false }
+	// Subtitles: CC outlives a stopped video, so the suite must never fetch
+	// for real or write the real subtitle cache (videosubs_test.go).
+	subtitlesCleanup := subtitlesIsolateForTests()
 	code := m.Run()
+	subtitlesCleanup()
 	// Core replacements queue their history writes (corebuilds_history.go);
 	// they land before the folder goes, so none can recreate it afterwards.
 	coreHistoryFlush()

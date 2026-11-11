@@ -278,7 +278,11 @@ func resolveAndroidRuntime(lookPath func(string) (string, error)) (string, error
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_ANDROIDRT")); override != "" {
 		info, err := os.Stat(override)
 		if err != nil {
-			return "", fmt.Errorf("JUKAHUB_ANDROIDRT %q does not exist", override)
+			err = fmt.Errorf("JUKAHUB_ANDROIDRT %q: %w", override, err)
+			if errors.Is(err, os.ErrNotExist) {
+				err = withLaunchFailureKind(launchFailureRuntimeMissing, err)
+			}
+			return "", err
 		}
 		if !info.IsDir() {
 			return "", fmt.Errorf("JUKAHUB_ANDROIDRT %q is not a directory", override)
@@ -307,7 +311,8 @@ func resolveAndroidRuntime(lookPath func(string) (string, error)) (string, error
 			return filepath.Dir(path), nil
 		}
 	}
-	return "", errors.New("android runtime not found (install the bionic translation runtime or set JUKAHUB_ANDROIDRT)")
+	err := errors.New("android runtime not found (install the bionic translation runtime or set JUKAHUB_ANDROIDRT)")
+	return "", withLaunchFailureKind(launchFailureRuntimeMissing, err)
 }
 
 // androidRuntimeCommand picks how the runtime is started. The loader runs the
@@ -320,11 +325,13 @@ func androidRuntimeCommand(rt string, lookPath func(string) (string, error)) (st
 	if script := filepath.Join(rt, "launch.sh"); regularFile(script) {
 		sh, err := lookPath("sh")
 		if err != nil || sh == "" {
-			return "", nil, errors.New("android runtime launch.sh needs sh, but it was not found")
+			err := errors.New("android runtime launch.sh needs sh, but it was not found")
+			return "", nil, withLaunchFailureKind(launchFailureRuntimeMissing, err)
 		}
 		return sh, []string{script}, nil
 	}
-	return "", nil, fmt.Errorf("android runtime at %s has no loader or launch.sh", rt)
+	err := fmt.Errorf("android runtime at %s has no loader or launch.sh", rt)
+	return "", nil, withLaunchFailureKind(launchFailureRuntimeMissing, err)
 }
 
 // androidPakStageRoot is where staged packages live (tmpfs on the device).

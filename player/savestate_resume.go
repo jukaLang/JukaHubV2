@@ -17,8 +17,11 @@ package main
 // DraStic) own their state formats, so they are left alone rather than promised
 // a resume that cannot work.
 //
-// The effect is global to RetroArch, not per game: RetroArch names the auto
-// state after the loaded content, so each game still has its own file.
+// The switches are set for JukaHub's launch only (racfgscope.go): the user's
+// own values go back when the game exits, so a game started from the
+// firmware's menu behaves exactly as it did before JukaHub — it used to
+// auto-load and auto-save there too after one JukaHub launch. RetroArch names
+// the auto state after the loaded content, so each game has its own file.
 // `savestateResume: false` in the config turns the automation off.
 
 import (
@@ -64,8 +67,10 @@ func savestateResumeEnabled() bool {
 
 // retroArchLauncher reports whether starting launcher starts RetroArch. The
 // stock firmware calls a per-system launch.sh, so the path alone is not enough:
-// the script's content is the reliable signal. Direct retroarch(.exe) launches
-// and a folder named RetroArch are matched by path.
+// the script's content is the reliable signal — the word RetroArch, TrimUI's
+// own binary names (ra64.trimui does not contain it) or a libretro core.
+// Direct retroarch(.exe) launches and a folder named RetroArch are matched by
+// path.
 func retroArchLauncher(launcher string) bool {
 	launcher = strings.TrimSpace(launcher)
 	if launcher == "" {
@@ -96,87 +101,30 @@ func retroArchLauncher(launcher string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(string(head)), "retroarch")
+	text := strings.ToLower(string(head))
+	for _, marker := range []string{"retroarch", "ra64.", "ra32.", "_libretro."} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
-// setRetroArchConfigBool edits one `key = value` line in a RetroArch config.
-// Only the value is replaced; indentation and a trailing comment are kept. A
-// missing key is appended, because RetroArch uses its built-in default when the
-// line is absent.
-func setRetroArchConfigBool(cfg, key string) (string, bool) {
-	return setRetroArchConfigBoolTo(cfg, key, "true")
-}
-
-// setRetroArchConfigBoolTo is the general form: it writes one boolean value,
-// keeping the indentation and any trailing comment. A missing key is appended,
-// because RetroArch uses its built-in default when the line is absent. One
-// father for both, so the OSD presets and the save-state switches cannot drift
-// apart in how they edit the file.
-func setRetroArchConfigBoolTo(cfg, key, value string) (string, bool) {
-	newline := "\n"
-	if strings.Contains(cfg, "\r\n") {
-		newline = "\r\n"
+// savestateResumeValues are the two switches behind Continue, as the scoped
+// edit takes them (racfgscope.go).
+func savestateResumeValues() []raScopeValue {
+	return []raScopeValue{
+		{Key: savestateAutoSaveKey, Value: "true"},
+		{Key: savestateAutoLoadKey, Value: "true"},
 	}
-	lines := strings.Split(cfg, newline)
-	changed, found := false, false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		eq := strings.IndexByte(trimmed, '=')
-		if eq < 0 {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(trimmed[:eq]), key) {
-			continue
-		}
-		found = true
-		rest := strings.TrimSpace(trimmed[eq+1:])
-		comment := ""
-		if hash := strings.IndexByte(rest, '#'); hash >= 0 {
-			comment = " " + strings.TrimSpace(rest[hash:])
-			rest = strings.TrimSpace(rest[:hash])
-		}
-		if strings.EqualFold(strings.Trim(rest, `"'`), value) {
-			continue
-		}
-		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		lines[i] = indent + key + ` = "` + value + `"` + comment
-		changed = true
-	}
-	if found {
-		if !changed {
-			return cfg, false
-		}
-		return strings.Join(lines, newline), true
-	}
-	if cfg != "" && !strings.HasSuffix(cfg, "\n") {
-		cfg += newline
-	}
-	return cfg + key + ` = "` + value + `"` + newline, true
-}
-
-// ensureSavestateResume is the pure edit: both switches on, everything else
-// byte-for-byte intact. It reports whether the text actually changed so a
-// launch does not rewrite the card on every play.
-func ensureSavestateResume(cfg string) (string, bool) {
-	updated, changedSave := setRetroArchConfigBool(cfg, savestateAutoSaveKey)
-	updated, changedLoad := setRetroArchConfigBool(updated, savestateAutoLoadKey)
-	return updated, changedSave || changedLoad
-}
-
-// enableSavestateResume writes the edit through the shared config writer.
-func enableSavestateResume(path string) (bool, error) {
-	return editRetroArchConfig(path, ensureSavestateResume)
 }
 
 // editRetroArchConfig applies a pure text edit to a RetroArch config and writes
 // it through a temporary file so a power loss cannot truncate retroarch.cfg. The
 // original is copied to the backup once, before the first edit.
 //
-// Every managed edit goes through here, so the save-state switches and the
-// recording folder share one crash-safe write instead of two copies of it.
+// Every edit goes through here — a launch's scoped values, their restore and
+// the one-time repair (racfgscope.go) — so they share one crash-safe write.
 func editRetroArchConfig(path string, edit func(string) (string, bool)) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -229,24 +177,23 @@ func editRetroArchConfig(path string, edit func(string) (string, bool)) (bool, e
 
 // prepareSavestateResume is the launch-time entry point. It never blocks or
 // fails a launch: a read-only card or a missing config is logged and the game
-// still starts. It reports whether a RetroArch config was found and configured.
+// still starts. The switches hold for this launch only (racfgscope.go). It
+// reports whether a RetroArch config was found and configured.
 func prepareSavestateResume(launcher string) bool {
 	if !savestateResumeEnabled() || !retroArchLauncher(launcher) {
 		return false
 	}
-	for _, path := range savestateResumeCandidates() {
-		if !regularFile(path) {
-			continue
-		}
-		changed, err := enableSavestateResume(path)
+	configured := false
+	for _, path := range raScopeTargets(raLaunchCandidates(launcher, savestateResumeCandidates())) {
+		changed, err := raScopeApply(path, savestateResumeValues())
 		if err != nil {
 			logWarn("resume", "cannot enable save-state resume in %s: %v", path, err)
-			return false
+			continue
 		}
+		configured = true
 		if changed {
-			Log().Info("save-state resume enabled", "config", path)
+			Log().Info("save-state resume enabled for this launch", "config", path)
 		}
-		return true
 	}
-	return false
+	return configured
 }

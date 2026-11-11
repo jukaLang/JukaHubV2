@@ -31,13 +31,11 @@ package main
 // one described above.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -562,117 +560,33 @@ func trimuiSystemStepFor(pct int) int {
 // settings document; ok=false when the document is not an object or holds no
 // such number. Pure.
 func trimuiSystemVolumeFrom(data []byte) (int, bool) {
-	var doc map[string]interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return 0, false
-	}
-	v, ok := doc["vol"].(float64)
-	if !ok || math.IsNaN(v) {
-		return 0, false
-	}
-	vol := int(math.Round(v))
-	if vol < 0 {
-		vol = 0
-	}
-	if vol > trimuiSystemSteps {
-		vol = trimuiSystemSteps
-	}
-	return vol, true
+	vol, ok, _ := trimuiSystemJSONIntFrom(data, "vol", trimuiSystemSteps)
+	return vol, ok
 }
 
-// trimuiVolKey finds the "vol" member and its number in the settings text.
-var trimuiVolKey = regexp.MustCompile(`("vol"\s*:\s*)(-?[0-9]+(?:\.[0-9]+)?)`)
-
 // trimuiSystemJSONWithVolume returns the settings document with "vol" set to
-// vol, changing nothing else: not the key order, not the spacing, not another
-// number's spelling. Re-encoding the whole document would have rewritten the
-// firmware's file in Go's style. It reports false (and returns data as it was)
-// when the document is not an object with exactly one numeric "vol", or when
-// vol is already the value. Pure.
+// vol, changing nothing else (trimuiSystemJSONWithInt, brightness_trimui.go,
+// which the brightness's "brightness" shares). It reports false (and returns
+// data as it was) when the document is not an object with exactly one numeric
+// "vol", or when vol is already the value. Pure.
 func trimuiSystemJSONWithVolume(data []byte, vol int) ([]byte, bool) {
-	current, ok := trimuiSystemVolumeFrom(data)
-	if !ok {
-		return data, false
-	}
-	matches := trimuiVolKey.FindAllSubmatchIndex(data, -1)
-	if len(matches) != 1 {
-		return data, false
-	}
-	m := matches[0]
-	if current == vol && string(data[m[4]:m[5]]) == strconv.Itoa(vol) {
-		return data, false
-	}
-	out := make([]byte, 0, len(data)+2)
-	out = append(out, data[:m[4]]...)
-	out = append(out, strconv.Itoa(vol)...)
-	out = append(out, data[m[5]:]...)
-	return out, true
+	return trimuiSystemJSONWithInt(data, "vol", vol, trimuiSystemSteps)
 }
 
 // errTrimuiSystemJSONChanged is trimuiSystemVolumeWrite giving up because the
 // firmware wrote the file while it was being updated.
 var errTrimuiSystemJSONChanged = errors.New("system.json changed while it was being updated")
 
-// trimuiSystemVolumeWrite stores vol (0..20) in system.json: a temp file in
-// the same directory, flushed, then renamed over the original, so a power cut
-// leaves the old file or the new one and never half of each. No .bak is left
-// in the firmware's partition.
-//
-// A symlinked settings file is updated where it really lives (renaming over
-// the link would replace it with a plain file and leave the real one stale),
-// the temp file gets the original's exact mode (OpenFile's mode passes through
-// the umask), and the rename is skipped when the file changed since it was
-// read: the firmware writes it too (its keys, its other settings), and
-// renaming then would throw that change away.
+// trimuiSystemVolumeWrite stores vol (0..20) in system.json through the
+// shared rewrite (trimuiSystemJSONRewrite, brightness_trimui.go): in place, on
+// the same inode keymon's inotify watch is on, written where a symlinked file
+// really lives, with its mode kept, and skipped (errTrimuiSystemJSONChanged)
+// when the firmware changed the file while it was being updated or left it
+// half-written.
 func trimuiSystemVolumeWrite(vol int) error {
-	path := trimuiSystemJSONPath
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	out, changed := trimuiSystemJSONWithVolume(data, vol)
-	if !changed {
-		return nil
-	}
-	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".jukahub-tmp")
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	abandon := func(cause error) error {
-		f.Close()
-		os.Remove(tmp)
-		return cause
-	}
-	if _, err := f.Write(out); err != nil {
-		return abandon(err)
-	}
-	if err := f.Chmod(info.Mode().Perm()); err != nil {
-		return abandon(err)
-	}
-	if err := f.Sync(); err != nil {
-		return abandon(err)
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if now, err := os.Stat(path); err != nil || now.Size() != info.Size() || !now.ModTime().Equal(info.ModTime()) {
-		os.Remove(tmp)
-		return errTrimuiSystemJSONChanged
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return trimuiSystemJSONRewrite(func(data []byte) ([]byte, bool) {
+		return trimuiSystemJSONWithVolume(data, vol)
+	})
 }
 
 // trimuiSystemSync debounces the system.json write (trimuiSystemSyncDelay).

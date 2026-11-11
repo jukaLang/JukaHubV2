@@ -289,15 +289,7 @@ func ps4ParseResultBody(raw []byte) (psConsole, error) {
 		return psConsole{}, err
 	}
 	if result.Status != 0 && result.Status != 200 {
-		reason := result.Headers["rp-application-reason"]
-		detail := "the PS4 refused registration (HTTP " + strconv.Itoa(result.Status) + ")"
-		if reason != "" {
-			detail += ", reason " + reason
-		}
-		if result.Status == 403 {
-			detail += " — close Add Device on the console, open it again for a fresh PIN, and retry"
-		}
-		return psConsole{}, errors.New(detail)
+		return psConsole{}, errors.New(ps4RefusalDetail("the PS4 refused registration", result.Status, result.Headers["rp-application-reason"]))
 	}
 	required := []string{"ps4-registkey", "rp-key", "ps4-mac"}
 	for _, key := range required {
@@ -409,14 +401,7 @@ func ps4Register(host, pin, accountID string, target int, timeout time.Duration)
 		return psConsole{}, err
 	}
 	if response.Status != 200 {
-		detail := "the PS4 refused pairing (HTTP " + strconv.Itoa(response.Status) + ")"
-		if reason := response.Headers["rp-application-reason"]; reason != "" {
-			detail += ", reason " + reason
-		}
-		if response.Status == 403 {
-			detail += " — close Add Device on the console, open it again for a fresh PIN, and retry"
-		}
-		return psConsole{}, errors.New(detail)
+		return psConsole{}, errors.New(ps4RefusalDetail("the PS4 refused pairing", response.Status, response.Headers["rp-application-reason"]))
 	}
 	if len(response.Body) == 0 {
 		return psConsole{}, errors.New("the PS4 sent an empty registration body")
@@ -434,6 +419,42 @@ func ps4Register(host, pin, accountID string, target int, timeout time.Duration)
 		console.Target = psTargetPS4FW9
 	}
 	return console, nil
+}
+
+// ps4RefusalDetail words a refused registration: the status, the console's
+// RP-Application-Reason, and what to do about it. A known reason says what
+// it means — a refused Account-ID used to read as "get a fresh PIN", which
+// sent people round the PIN loop for a problem the PIN could not fix.
+func ps4RefusalDetail(what string, status int, reason string) string {
+	detail := what + " (HTTP " + strconv.Itoa(status) + ")"
+	reason = strings.TrimSpace(reason)
+	if reason != "" {
+		detail += ", reason " + reason
+	}
+	if hint := ps4ReasonHint(reason); hint != "" {
+		return detail + " — " + hint
+	}
+	if status == 403 {
+		detail += " — close Add Device on the console, open it again for a fresh PIN, and retry"
+	}
+	return detail
+}
+
+// ps4ReasonHint explains the RP-Application-Reason codes libchiaki names
+// (regist.c reads the header as hex, with or without "0x"); "" for the rest.
+func ps4ReasonHint(reason string) string {
+	code := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(reason)), "0x")
+	switch code {
+	case "80108b09":
+		return "the PIN was wrong or has expired: open Add Device again for a fresh one"
+	case "80108b02":
+		return "the console did not accept the PSN Account-ID: sign in again with the account you play on"
+	case "80108b10":
+		return "Remote Play is already in use on the console"
+	case "80108b15":
+		return "Remote Play crashed on the console: restart the console and try again"
+	}
+	return ""
 }
 
 // allHexBytes reports whether every byte is an ASCII hex character.

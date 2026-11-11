@@ -8,6 +8,7 @@
 # Produces, in dist/:
 #   JukaHub-win-x64.zip
 #   JukaHub-{trimui-smart-pro,trimui-smart-pro-s,trimui-brick,trimui-brick-pro,trimui-hammer}-linux-arm64.tar.gz
+#   JukaHub-RemotePlay-linux-arm64.zip   (when the Remote Play helpers were built)
 #   manifest.json
 #   SHA256SUMS
 #
@@ -55,6 +56,61 @@ fi
 WINDOWS_SHA="$(sha256sum "$OUT/JukaHub-win-x64.zip" | cut -d' ' -f1)"
 WINDOWS_SIZE="$(stat -c %s "$OUT/JukaHub-win-x64.zip")"
 
+# --- Remote Play helpers ---
+# chiaki-stream and chiaki-regist are built separately (native/build-helpers.sh,
+# in CI the remote-play-helpers workflow) because they need chiaki-ng's sources
+# and an arm64 build host or SDK. Both put them in native/bin; bin/ is where
+# older checkouts of build-helpers.sh wrote them. They are taken when present
+# even without the exec bit, which a CI artifact does not keep, and a release
+# without them still runs: the Remote Play panel then reports them missing.
+HELPERS_DIR=""
+for dir in native/bin bin; do
+    if [ -f "$dir/chiaki-stream" ] && [ -f "$dir/chiaki-regist" ]; then
+        HELPERS_DIR="$dir"
+        break
+    fi
+done
+if [ -n "$HELPERS_DIR" ]; then
+    echo "Remote Play helpers: $HELPERS_DIR"
+    # The helpers on their own as well: a JukaHub that has no bin/ downloads
+    # this package by itself when PS Remote Play opens
+    # (psremote_helpers_install.go). Same layout as docker-image.yml's.
+    # Optional: a failure here costs the release this package, nothing else.
+    HELPER_PKG="$OUT/remote-play-package"
+    if ! (
+        mkdir -p "$HELPER_PKG/bin" &&
+        cp "$HELPERS_DIR/chiaki-stream" "$HELPERS_DIR/chiaki-regist" "$HELPER_PKG/bin/" &&
+        { [ ! -f "$HELPERS_DIR/BUILDINFO.txt" ] || cp "$HELPERS_DIR/BUILDINFO.txt" "$HELPER_PKG/bin/"; } &&
+        chmod 755 "$HELPER_PKG/bin/chiaki-stream" "$HELPER_PKG/bin/chiaki-regist" &&
+        cd "$HELPER_PKG" && sha256sum bin/* > SHA256SUMS &&
+        zip -q -r ../JukaHub-RemotePlay-linux-arm64.zip bin SHA256SUMS
+    ); then
+        rm -f "$OUT/JukaHub-RemotePlay-linux-arm64.zip"
+        echo "WARNING: the Remote Play helper package could not be built; the release goes out without it" >&2
+    fi
+    rm -rf "$HELPER_PKG"
+else
+    echo "WARNING: no Remote Play helpers in native/bin; the TrimUI archives will ship without Remote Play streaming" >&2
+fi
+
+# --- JukaHub Spatial, the game-audio plugin (spatialfx/README.md) ---
+# Built once with the aarch64 cross gcc and copied into every TrimUI archive's
+# lib/, where spatial_games.go looks for it. build.sh refuses a library that
+# needs a glibc newer than 2.17 or anything beyond libc/libm/the loader, so the
+# cross gcc of a current distribution is fine. Optional like the helpers:
+# without the compiler, or when a check fails, the archives ship without it and
+# Tools -> Audio says the game plugin is not installed.
+SPATIAL_SO=""
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+    if CC=aarch64-linux-gnu-gcc CROSS=aarch64-linux-gnu- OUT="$OUT/spatialfx" sh spatialfx/build.sh; then
+        SPATIAL_SO="$OUT/spatialfx/jukahub-spatial.so"
+    else
+        echo "WARNING: the game audio plugin did not build; the TrimUI archives ship without it" >&2
+    fi
+else
+    echo "WARNING: no aarch64-linux-gnu-gcc; the TrimUI archives ship without the game audio plugin" >&2
+fi
+
 # --- TrimUI Linux arm64 targets ---
 # These identifiers match DeviceModel values and the updater's strict target map.
 TRIMUI_DEVICES=(trimui-smart-pro trimui-smart-pro-s trimui-brick trimui-brick-pro trimui-hammer)
@@ -66,22 +122,26 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$TARGET_DIR/JukaHub" .
     cp Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png "$TARGET_DIR/"
 
-    # Remote Play helpers. They are built separately by native/build-helpers.sh
-    # because they need the TG5050 SDK and chiaki-ng's sources; a release without
-    # them still runs, and the panel reports the helper as missing.
     PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png)
     # SECURITY.md sits next to the binary for Tools -> Security & trust's reader.
     if [ -f ../SECURITY.md ]; then
         cp ../SECURITY.md "$TARGET_DIR/SECURITY.md"
         PKG_FILES+=(SECURITY.md)
     fi
-    if [ -x native/bin/chiaki-stream ] && [ -x native/bin/chiaki-regist ]; then
+    # Remote Play helpers (see HELPERS_DIR above).
+    if [ -n "$HELPERS_DIR" ]; then
         mkdir -p "$TARGET_DIR/bin"
-        cp native/bin/chiaki-stream native/bin/chiaki-regist "$TARGET_DIR/bin/"
-        chmod +x "$TARGET_DIR/bin/chiaki-stream" "$TARGET_DIR/bin/chiaki-regist"
+        cp "$HELPERS_DIR/chiaki-stream" "$HELPERS_DIR/chiaki-regist" "$TARGET_DIR/bin/"
+        chmod 755 "$TARGET_DIR/bin/chiaki-stream" "$TARGET_DIR/bin/chiaki-regist"
         PKG_FILES+=(bin/chiaki-stream bin/chiaki-regist)
     else
-        echo "WARNING: native/bin helpers missing; ${device} will ship without Remote Play streaming" >&2
+        echo "WARNING: ${device} ships without Remote Play streaming (no helpers)" >&2
+    fi
+    # The game-audio plugin (see SPATIAL_SO above).
+    if [ -n "$SPATIAL_SO" ]; then
+        mkdir -p "$TARGET_DIR/lib"
+        cp "$SPATIAL_SO" "$TARGET_DIR/lib/"
+        PKG_FILES+=(lib/jukahub-spatial.so)
     fi
     # The Brick Pro needs the bundled FFmpeg/OpenSSL runtime next to the app.
     if [ -d native/libs/brick-stock ]; then
@@ -121,6 +181,9 @@ ${TARGETS_JSON},
 }
 EOF
 (cd "$OUT" && sha256sum manifest.json JukaHub-*-linux-arm64.tar.gz JukaHub-win-x64.zip > SHA256SUMS)
+if [ -f "$OUT/JukaHub-RemotePlay-linux-arm64.zip" ]; then
+    (cd "$OUT" && sha256sum JukaHub-RemotePlay-linux-arm64.zip >> SHA256SUMS)
+fi
 
 echo
 echo "Built release v${VERSION}:"

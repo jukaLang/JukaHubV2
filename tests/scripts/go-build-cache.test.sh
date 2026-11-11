@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# The Windows release build cache must come only from an earlier push-to-main
-# run of the same workflow whose commit is on main, must never fail a release,
-# and must not grow.
+# The release build caches (Windows and TrimUI) must come only from an earlier
+# push-to-main run of the same workflow whose commit is on main, must never fail
+# a release, and must not grow; fetch, which reuses the Remote Play helpers
+# under the same rules, must take exactly the files asked for or nothing.
 #
 # A fake gh answers the GitHub API from fixtures, applying the script's own
 # --jq filters with the real jq, so the provenance rules are exercised exactly
@@ -354,9 +355,118 @@ ln -s /etc/passwd "$link/${lid:0:2}/$lid-d"
 tamper symlink "$link"
 
 # 9. Usage errors are loud: they are workflow bugs, not cache misses. --------
-if bash "$script" restore > /dev/null 2>&1; then fail "restore without a name succeeded"; fi
-if bash "$script" restore 'a/b' > /dev/null 2>&1; then fail "a name with a slash was accepted"; fi
-if bash "$script" save "$name" "$work/out" > /dev/null 2>&1; then fail "save without a build log succeeded"; fi
-if bash "$script" discard extra > /dev/null 2>&1; then fail "discard with an argument succeeded"; fi
+usage_error() { # <args...>: must exit 2
+  local rc=0
+  bash "$script" "$@" > /dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "'$*' exited $rc instead of failing as a usage error"
+}
+usage_error restore
+usage_error restore 'a/b'
+usage_error save "$name" "$work/out"
+usage_error discard extra
+usage_error fetch "$name" "$work/out"
+usage_error fetch "$name" "" chiaki-stream
+usage_error fetch "$name" "$work/out" bin/chiaki-stream
+usage_error fetch "$name" "$work/out" ..
+usage_error fetch 'a/b' "$work/out" chiaki-stream
+
+# 10. fetch: a few plain files under the same provenance rules (the Remote
+#     Play helpers). The newest acceptable artifact holding exactly the files
+#     asked for wins; anything else is refused and the next one is tried.
+hname=remote-play-helpers-0123456789abcdef
+helpers=(chiaki-stream chiaki-regist BUILDINFO.txt)
+hartifact() { # <artifact id> <run id> <created_at>
+  printf '{"id":%s,"name":"%s","expired":false,"created_at":"%s","workflow_run":{"id":%s,"repository_id":1,"head_repository_id":1,"head_branch":"main"}}' \
+    "$1" "$hname" "$3" "$2"
+}
+files_artifact() { # <artifact id> <source dir>: every entry of it, links kept as links
+  rm -f "$work/files-$1.zip"
+  (cd "$2" && zip -q -r -y "$work/files-$1.zip" -- *)
+  fixture "repos/$repo/actions/artifacts/$1/zip" < "$work/files-$1.zip"
+}
+helper_set() { # <dir> <tag>: the three files, each saying where it came from
+  mkdir -p "$1"
+  for f in "${helpers[@]}"; do printf '%s from %s\n' "$f" "$2" > "$1/$f"; done
+}
+helper_set "$work/h-good" good
+helper_set "$work/h-extra" extra
+echo "not asked for" > "$work/h-extra/notes.txt"
+helper_set "$work/h-short" short
+rm "$work/h-short/chiaki-regist"
+helper_set "$work/h-link" link
+rm "$work/h-link/chiaki-stream"
+ln -s /etc/passwd "$work/h-link/chiaki-stream"
+helper_set "$work/h-nested/bin" nested
+files_artifact 603 "$work/h-extra"
+files_artifact 604 "$work/h-short"
+files_artifact 605 "$work/h-link"
+files_artifact 606 "$work/h-nested"
+files_artifact 607 "$work/h-good"
+printf 'this is not a zip\n' | fixture "repos/$repo/actions/artifacts/608/zip"
+helper_set "$work/h-self" self
+files_artifact 609 "$work/h-self"
+{
+  printf '{"total_count":9,"artifacts":['
+  hartifact 609 "$self_run" 2026-11-10T10:00:00Z # this run, an earlier attempt
+  printf ','
+  hartifact 601 201 2026-11-10T09:00:00Z # a pull-request run
+  printf ','
+  hartifact 602 205 2026-11-10T08:00:00Z # a tag named "main"
+  printf ','
+  hartifact 608 206 2026-11-10T07:30:00Z # not a zip
+  printf ','
+  hartifact 603 206 2026-11-10T07:00:00Z # an extra file
+  printf ','
+  hartifact 604 206 2026-11-10T06:00:00Z # a file missing
+  printf ','
+  hartifact 605 206 2026-11-10T05:00:00Z # a link
+  printf ','
+  hartifact 606 206 2026-11-10T04:00:00Z # the files in a folder
+  printf ','
+  hartifact 607 207 2026-11-10T03:00:00Z # the one to take
+  printf ']}\n'
+} | fixture "repos/$repo/actions/artifacts?name=$hname&per_page=100"
+
+s="$work/fetch"
+: > "$fixtures/calls.log"
+run_script fetch fetch "$hname" "$s/bin" "${helpers[@]}" || fail "fetch found nothing to take: $(cat "$s/log")"
+for f in "${helpers[@]}"; do
+  grep -qx "$f from good" "$s/bin/$f" 2> /dev/null || fail "fetch did not take $f from the acceptable artifact: $(cat "$s/log")"
+done
+[ "$(find "$s/bin" -mindepth 1 | wc -l | tr -d ' ')" = 3 ] || fail "fetch put more than the three files in place: $(ls -la "$s/bin")"
+grep -q '^run=207$' "$s/output" || fail "fetch did not report the run its files came from: $(cat "$s/output" 2> /dev/null)"
+for id in 601 602 609; do
+  if grep -q "artifacts/$id/zip" "$fixtures/calls.log"; then
+    fail "artifact $id was downloaded although its run does not qualify"
+  fi
+done
+for id in 603 604 605 606 608; do
+  grep -q "artifacts/$id/zip" "$fixtures/calls.log" || fail "artifact $id was never tried, so its refusal went untested"
+done
+[ "$(grep -c '::warning' "$s/log")" -ge 5 ] || fail "the five refused artifacts did not each warn: $(cat "$s/log")"
+if [ -n "$(find "$s/tmp" -name 'go-build-cache.??????' -print -quit)" ]; then
+  fail "fetch left its download directory behind"
+fi
+
+# Nothing acceptable: exit 1 and nothing in place, so the caller builds.
+s="$work/fetch-none"
+echo '{"total_count":0,"artifacts":[]}' | fixture "repos/$repo/actions/artifacts?name=remote-play-helpers-ffff&per_page=100"
+if run_script fetch-none fetch remote-play-helpers-ffff "$s/bin" "${helpers[@]}"; then
+  fail "fetch reported success with no artifact to take"
+fi
+[ ! -e "$s/bin" ] || [ -z "$(ls -A "$s/bin")" ] || fail "fetch without an artifact left files behind"
+
+# The API failing is a build, not a failed release: down from the start, or
+# answering the run lookup but not the artifact list.
+s="$work/fetch-down"
+if FAKE_GH_FAIL=1 run_script fetch-down fetch "$hname" "$s/bin" "${helpers[@]}"; then
+  fail "fetch reported success while the API was down"
+fi
+grep -q '::warning' "$s/log" || fail "an API failure during fetch produced no warning"
+s="$work/fetch-nolist"
+if run_script fetch-nolist fetch remote-play-helpers-unlisted "$s/bin" "${helpers[@]}"; then
+  fail "fetch reported success although the artifact list could not be read"
+fi
+grep -q 'could not list' "$s/log" || fail "a failed artifact list produced no warning: $(cat "$s/log")"
 
 echo "go-build-cache: ok"

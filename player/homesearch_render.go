@@ -453,16 +453,19 @@ func homeSearchDrawFooter(renderer *sdl.Renderer, fonts homeSearchFonts, band sd
 	}
 }
 
-// The sheet's footer hints: on a result, and on the field.
+// The sheet's footer hints: on a result, and on the field. Y (F4 on a
+// keyboard) says the search instead: Voice command (voicecmd.go).
 var (
 	homeSearchHintsResults = [...]FooterHint{
 		{Button: "A", Label: "Open"},
 		{Button: "X", Label: "Edit search"},
+		{Button: "Y", Label: "Voice"},
 		{Button: "L1/R1 / Tab", Label: "Groups"},
 		{Button: "B", Label: "Close"},
 	}
 	homeSearchHintsField = [...]FooterHint{
 		{Button: "A", Label: "Type"},
+		{Button: "Y", Label: "Voice"},
 		{Button: "Down", Label: "Results"},
 		{Button: "B", Label: "Close"},
 	}
@@ -470,11 +473,13 @@ var (
 		{Button: "Enter", Label: "Open"},
 		{Button: "Tab", Label: "Groups"},
 		{Button: "Backspace", Label: "Edit search"},
+		{Button: "F4", Label: "Voice"},
 		{Button: "Esc", Label: "Close"},
 	}
 	homeSearchKeysField = [...]FooterHint{
 		{Button: "Enter", Label: "Open best match"},
 		{Button: "Down", Label: "Results"},
+		{Button: "F4", Label: "Voice"},
 		{Button: "Esc", Label: "Close"},
 	}
 )

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -954,104 +953,6 @@ func loadCron(config *Config) {
 		sb.WriteString("No cron/systemd data found on this system.")
 	}
 	publishCustom("cron_text", sb.String())
-}
-
-// ---------------------------------------------------------------------------
-// Unzip (.zip files in File Explorer)
-// ---------------------------------------------------------------------------
-
-// Bounds for a File Explorer unzip. A .zip the user picked is not signed and
-// not checked by anything, so it is unpacked with the same kind of cap the
-// installer archives use: without one, a bomb (or a header that merely claims
-// petabytes) filled the card until it was full.
-const (
-	maxUnzipEntries = 20000
-	maxUnzipBytes   = int64(2 << 30)
-)
-
-func unzipFile(src string) error {
-	// Only archives selected inside the browsable File Explorer tree are opened.
-	resolved, err := resolveExplorerEntry(appConfig, src)
-	if err != nil {
-		return err
-	}
-	return unzipFileBounded(resolved, maxUnzipEntries, maxUnzipBytes)
-}
-
-// unzipFileBounded unpacks a zip next to itself, refusing an archive with more
-// entries or more declared bytes than the caller allows. It is separate from
-// unzipFile so the caps can be exercised without building a real bomb.
-func unzipFileBounded(src string, maxEntries int, maxBytes int64) error {
-	r, err := zip.OpenReader(src)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	if len(r.File) > maxEntries {
-		return fmt.Errorf("archive has %d entries (limit %d)", len(r.File), maxEntries)
-	}
-	dest := strings.TrimSuffix(src, filepath.Ext(src)) + "_unzipped"
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	destPrefix := filepath.Clean(dest) + string(os.PathSeparator)
-	var total int64
-	for _, f := range r.File {
-		// Mitigate Zip Slip: refuse entries whose cleaned path escapes dest.
-		cleanedP := filepath.Join(destPrefix, filepath.Clean(f.Name))
-		if !strings.HasPrefix(cleanedP, destPrefix) {
-			return fmt.Errorf("refusing to extract zip entry with unsafe path %q", f.Name)
-		}
-		// A link entry's "content" is its target text. Written out as a file it
-		// would be a misleading stub, and materialised as a link it would let a
-		// later entry be written through it, so it is skipped outright.
-		if f.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		p := cleanedP
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(p, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), maxBytes)
-		if !ok {
-			return fmt.Errorf("archive expands beyond %d bytes", maxBytes)
-		}
-		total = sum
-		if err := copyZipEntryTo(f, p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// copyZipEntryTo writes one entry to p and closes both handles before the next
-// entry is opened: the older loop deferred the reader's Close inside the loop,
-// so a two-thousand-entry archive held two thousand open files at once.
-func copyZipEntryTo(f *zip.File, p string) error {
-	rc, err := f.Open()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		rc.Close()
-		return err
-	}
-	out, err := os.Create(p)
-	if err != nil {
-		rc.Close()
-		return err
-	}
-	// One entry may not expand past what the whole archive is allowed to.
-	_, copyErr := io.Copy(out, io.LimitReader(rc, maxUnzipBytes+1))
-	rc.Close()
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
 }
 
 // ---------------------------------------------------------------------------

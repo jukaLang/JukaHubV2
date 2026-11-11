@@ -423,6 +423,15 @@ func hintIsQuitChord(b string) bool {
 	return compact == "select+start" || compact == "start+select"
 }
 
+// hintIsMouseChord reports mouse mode's chord, which is read from the physical
+// buttons like the quit chord (vcursor_mode.go), so an Accessibility remap does
+// not rename it. It is kept apart from hintIsQuitChord, which hintTranslate
+// turns into Alt+F4.
+func hintIsMouseChord(b string) bool {
+	compact := strings.ToLower(strings.ReplaceAll(b, " ", ""))
+	return compact == "select+l1" || compact == "l1+select"
+}
+
 // hintTranslate is the translation as a pure function. In the pad vocabulary
 // it only drops keyboard alternatives ("A / Enter" → "A"); in the keyboard one
 // it names the twin key ("A" → "Enter", "B / Esc" → "Esc"). desktop is a PC
@@ -764,15 +773,16 @@ func hintRemapInverse(resolve func(uint8) (uint8, bool)) []hintRemapPair {
 // swap on, the button that opens is B, so "A" is drawn "B". Keyboard words are
 // left alone, because Accessibility remaps the pad and never the keyboard; so
 // are X and Y in the keyboard vocabulary, where they are letter keys, a key
-// pair such as JukaLand's "A/D", and the quit chord, which is read from the
-// physical buttons (exit_chord.go). Names match as hints spell them ("Select",
+// pair such as JukaLand's "A/D", and the quit and mouse-mode chords, which are
+// read from the physical buttons (exit_chord.go, vcursor_mode.go). Names match
+// as hints spell them ("Select",
 // not "SELECT"); the controller test, which also reads the physical buttons,
 // translates its line with no remap at all (ctrldiagFooterLine). An
 // alternative that no button sends any more is dropped while another is left
 // ("B / Start" with Start switched off is "B"); with none left the badge is
 // hintRemapNone. It runs only when a badge is not in hintKeyFor's cache.
 func hintRemapPads(s string, v hintVocab, brick bool, pairs []hintRemapPair) string {
-	if len(pairs) == 0 || hintIsQuitChord(s) {
+	if len(pairs) == 0 || hintIsQuitChord(s) || hintIsMouseChord(s) {
 		return s
 	}
 	alts := strings.Split(s, " / ")

@@ -87,6 +87,17 @@ type downloadItem struct {
 
 	added    time.Time
 	finished time.Time
+
+	// subLang is the subtitle language a video row saves beside its file,
+	// read from Settings when the row was queued (videosubs.go).
+	subLang string
+	// ytExtra is the user's extra yt-dlp arguments (the cookies file), read
+	// when the row was queued, on the thread that owns the config: the worker
+	// passes it to the transfer and to the subtitle step instead of reading
+	// the custom map while Settings may be writing it. (The helper's path is
+	// still looked up from the config on the worker, as every helper run in
+	// the app does.)
+	ytExtra []string
 }
 
 // displayTitle is what a row shows before metadata arrives.
@@ -131,6 +142,9 @@ type downloadJob struct {
 	URL  string
 	Kind downloadKind
 	Dir  string
+	// Extra is the row's yt-dlp extra arguments as read when it was queued;
+	// nil reads them from the config instead (a job made without a row).
+	Extra []string
 }
 
 // downloadResult is what a finished job hands back.
@@ -233,7 +247,29 @@ type downloadQueue struct {
 	paused  bool
 	running bool
 	cancel  context.CancelFunc
+	// sidecars are the saved videos whose subtitles are still to be fetched
+	// (downloadsSaveSubtitles). They wait until no transfer is queued, so a
+	// download never waits behind a subtitle fetch; sidecarID is the row
+	// whose subtitles are being fetched now, 0 while none is, and cancel is
+	// that step's then. sidecarPath is that row's file, so a library delete
+	// can stop the step even after the row was trimmed from the list, and
+	// sidecarDropped says a removal stopped it: the worker does not put it back.
+	sidecars       []downloadItem
+	sidecarID      int64
+	sidecarPath    string
+	sidecarDropped bool
 }
+
+// The answers a second press on a save gets, wherever it was pressed: the
+// player sheet, Media or the results list.
+const (
+	dlAlreadySavedNotice  = "Already in your downloads"
+	dlAlreadyQueuedNotice = "Already downloading — it will be in Media → Downloads"
+)
+
+// errDownloadAlreadyQueued refuses a row for a page that is already waiting or
+// downloading as the same kind: a second press would save the file twice.
+var errDownloadAlreadyQueued = errors.New("already downloading — it will be in Media → Downloads")
 
 var downloads downloadQueue
 
@@ -332,15 +368,78 @@ func downloadEnqueueKind(raw string, kind downloadKind) (downloadItem, error) {
 	downloadsStagingSweep.Do(func() {
 		_ = os.RemoveAll(filepath.Join(downloadsRoot(), ".partial"))
 	})
+	// A video comes with its subtitles when it has any. The language and the
+	// user's extra yt-dlp arguments are read here, on the thread that owns
+	// the config (every caller is a press on the render thread); the worker
+	// only ever uses these copies. The arguments are kept as a non-nil slice,
+	// so "no extra arguments" is not mistaken for "not read yet".
+	subLang := ""
+	if kind == downloadKindVideo {
+		subLang, _ = subtitleLanguage(appConfig)
+	}
+	extra := append([]string{}, ytDlpExtraArgsSlice(appConfig)...)
 	downloads.mu.Lock()
+	if downloads.hasLocked(clean, kind) {
+		downloads.mu.Unlock()
+		return downloadItem{}, errDownloadAlreadyQueued
+	}
 	downloads.nextID++
-	it := &downloadItem{ID: downloads.nextID, URL: clean, Kind: kind, Status: downloadQueued, added: time.Now()}
+	it := &downloadItem{ID: downloads.nextID, URL: clean, Kind: kind, Status: downloadQueued, added: time.Now(),
+		subLang: subLang, ytExtra: extra}
 	downloads.items = append(downloads.items, it)
 	downloads.trimLocked()
 	snapshot := *it
+	yield := downloads.yieldSidecarLocked()
 	downloads.mu.Unlock()
+	if yield != nil {
+		yield()
+	}
 	downloadsKick()
 	return snapshot, nil
+}
+
+// downloadsHas reports a row for the page that is still waiting or downloading
+// as the same kind. A YouTube video's watch?v=, youtu.be/ and shorts/ links
+// count as one page (dlLibraryKey).
+func downloadsHas(raw string, kind downloadKind) bool {
+	downloads.mu.Lock()
+	defer downloads.mu.Unlock()
+	return downloads.hasLocked(raw, kind)
+}
+
+func (d *downloadQueue) hasLocked(raw string, kind downloadKind) bool {
+	key := dlLibraryKey(raw)
+	if key == "" {
+		return false
+	}
+	for _, it := range d.items {
+		if it.Kind == kind && (it.Status == downloadQueued || it.Status == downloadActive) && dlLibraryKey(it.URL) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// yieldSidecarLocked returns the cancel of a running subtitle step, so a row
+// that was just queued (or retried) starts at once instead of waiting for it;
+// the worker puts the step back and runs it when the queue is idle again.
+// nil while no subtitle step runs.
+func (d *downloadQueue) yieldSidecarLocked() context.CancelFunc {
+	if d.sidecarID == 0 {
+		return nil
+	}
+	return d.cancel
+}
+
+// dropSidecarLocked forgets the waiting subtitle step of a row that is gone.
+func (d *downloadQueue) dropSidecarLocked(id int64) {
+	kept := d.sidecars[:0]
+	for _, s := range d.sidecars {
+		if s.ID != id {
+			kept = append(kept, s)
+		}
+	}
+	d.sidecars = kept
 }
 
 // downloadsSnapshot copies the queue for the render thread, newest section
@@ -425,20 +524,31 @@ func downloadRetry(id int64) bool {
 		downloads.mu.Unlock()
 		return false
 	}
+	// The page may have been queued again since this row failed: a retry must
+	// not fetch it a second time (this row, still failed, does not count).
+	if downloads.hasLocked(it.URL, it.Kind) {
+		downloads.mu.Unlock()
+		return false
+	}
 	it.Status = downloadQueued
 	it.Err = ""
 	it.Done = 0
 	it.Total = 0
 	it.Speed = 0
+	yield := downloads.yieldSidecarLocked()
 	downloads.mu.Unlock()
+	if yield != nil {
+		yield()
+	}
 	downloadsKick()
 	return true
 }
 
-// downloadRemove drops a row, cancels it when it is the running one, and
-// deletes the saved file. Only files inside the app's own download folder are
-// ever deleted: a row always ends up there, but a renamed or moved download
-// must not turn X into an arbitrary file delete.
+// downloadRemove drops a row, cancels it when it is the running one (its
+// transfer, or the subtitle step of a video that just landed), and deletes the
+// saved file. Only files inside the app's own download folder are ever
+// deleted: a row always ends up there, but a renamed or moved download must
+// not turn X into an arbitrary file delete.
 func downloadRemove(id int64) bool {
 	downloads.mu.Lock()
 	idx := -1
@@ -454,9 +564,13 @@ func downloadRemove(id int64) bool {
 	}
 	it := downloads.items[idx]
 	cancel := downloads.cancel
-	active := it.Status == downloadActive
+	active := it.Status == downloadActive || it.ID == downloads.sidecarID
+	if it.ID == downloads.sidecarID {
+		downloads.sidecarDropped = true
+	}
 	path := it.Path
 	downloads.items = append(downloads.items[:idx], downloads.items[idx+1:]...)
+	downloads.dropSidecarLocked(id)
 	downloads.mu.Unlock()
 
 	if active && cancel != nil {
@@ -464,9 +578,11 @@ func downloadRemove(id int64) bool {
 	}
 	os.RemoveAll(downloadsPartDir(id))
 	// Both saved folders live under the app's own root; nothing outside it is
-	// ever deleted.
+	// ever deleted. A video's subtitle files go with it.
 	if path != "" && isPathWithin(path, downloadsRoot()) {
-		os.Remove(path)
+		if err := os.Remove(path); err == nil || os.IsNotExist(err) {
+			removeSubtitleSidecars(path)
+		}
 	}
 	return true
 }
@@ -509,22 +625,42 @@ func dlCancelTransfer(id int64) (removed, done bool) {
 }
 
 // dlForgetQueuePath drops the saved rows that point at a file the Downloads
-// library just deleted, so the queue panel cannot offer to play it.
+// library just deleted, so the queue panel cannot offer to play it, and stops
+// the subtitle step of such a row (running or waiting): its video is gone.
 func dlForgetQueuePath(path string) {
 	if strings.TrimSpace(path) == "" {
 		return
 	}
 	key := dlPathKey(path)
+	var stop context.CancelFunc
 	downloads.mu.Lock()
 	kept := downloads.items[:0]
 	for _, it := range downloads.items {
 		if it.Status == downloadDone && it.Path != "" && dlPathKey(it.Path) == key {
+			downloads.dropSidecarLocked(it.ID)
 			continue
 		}
 		kept = append(kept, it)
 	}
 	downloads.items = kept
+	// The file's subtitle step goes too — waiting or running — even when its
+	// row was already trimmed from the list.
+	waiting := downloads.sidecars[:0]
+	for _, s := range downloads.sidecars {
+		if s.Path != "" && dlPathKey(s.Path) == key {
+			continue
+		}
+		waiting = append(waiting, s)
+	}
+	downloads.sidecars = waiting
+	if downloads.sidecarID != 0 && downloads.sidecarPath != "" && dlPathKey(downloads.sidecarPath) == key {
+		stop = downloads.cancel
+		downloads.sidecarDropped = true
+	}
 	downloads.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // downloadFocused returns one row's copy, for the UI's Play/Retry paths.
@@ -589,9 +725,39 @@ func downloadsWorker() {
 		}
 		item := downloads.nextQueuedLocked()
 		if item == nil {
-			downloads.running = false
+			// The queue is dry: the subtitle steps that waited for it run now,
+			// one at a time, still on this worker, so the handheld never runs
+			// two helpers at once and a transfer never waits behind one.
+			sub, ok := downloads.nextSidecarLocked()
+			if !ok {
+				downloads.running = false
+				downloads.mu.Unlock()
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), downloadSidecarTimeout)
+			downloads.cancel = cancel
+			downloads.sidecarID = sub.ID
+			downloads.sidecarPath = sub.Path
+			downloads.sidecarDropped = false
 			downloads.mu.Unlock()
-			return
+			err := downloadsSaveSubtitles(ctx, sub)
+			downloads.mu.Lock()
+			downloads.cancel = nil
+			downloads.sidecarID = 0
+			downloads.sidecarPath = ""
+			// Cut short by a pause or by a row queued meanwhile — not by its
+			// own deadline, and not by removing the row or deleting its file —
+			// the step waits for the next idle moment again. A row trimmed
+			// from the list (more than downloadQueueLimit saved) still wants
+			// its subtitles while its file is there.
+			if err != nil && errors.Is(ctx.Err(), context.Canceled) && !downloads.sidecarDropped &&
+				(downloads.findLocked(sub.ID) != nil || regularFile(sub.Path)) {
+				downloads.sidecars = append([]downloadItem{sub}, downloads.sidecars...)
+			}
+			downloads.sidecarDropped = false
+			downloads.mu.Unlock()
+			cancel()
+			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		downloads.cancel = cancel
@@ -599,10 +765,11 @@ func downloadsWorker() {
 		item.Err = ""
 		item.Speed = 0
 		job := downloadJob{
-			ID:   item.ID,
-			URL:  item.URL,
-			Kind: item.Kind,
-			Dir:  downloadsDirForKind(item.Kind),
+			ID:    item.ID,
+			URL:   item.URL,
+			Kind:  item.Kind,
+			Dir:   downloadsDirForKind(item.Kind),
+			Extra: item.ytExtra,
 		}
 		downloads.mu.Unlock()
 
@@ -655,6 +822,10 @@ func downloadsWorker() {
 			}
 			justSaved = true
 			saved = *cur
+			// Its subtitles come once nothing else is queued.
+			if cur.Kind == downloadKindVideo && downloadSidecarWanted(*cur) {
+				downloads.sidecars = append(downloads.sidecars, *cur)
+			}
 		}
 		title := cur.displayTitle()
 		downloads.mu.Unlock()
@@ -667,6 +838,63 @@ func downloadsWorker() {
 			dlLibraryNoteSaved(saved)
 		}
 	}
+}
+
+// downloadSidecarTimeout bounds the subtitle step after a video lands.
+const downloadSidecarTimeout = 2 * time.Minute
+
+// downloadSubtitleSaver is the subtitle step; tests swap it.
+var downloadSubtitleSaver = subtitleSaveSidecar
+
+// downloadSidecarsOn reports whether saved videos get the subtitle step. The
+// queue's tests leave the library and the network alone (dlLibraryFilingOff);
+// a test of the step itself swaps this.
+var downloadSidecarsOn = func() bool { return !dlLibraryFilingOff.Load() }
+
+// downloadSidecarWanted reports a saved video row whose subtitles should be
+// fetched: a language to ask for and a file to put them beside.
+func downloadSidecarWanted(it downloadItem) bool {
+	return downloadSubtitleSaver != nil && downloadSidecarsOn() && it.subLang != "" && strings.TrimSpace(it.Path) != ""
+}
+
+// nextSidecarLocked takes the first waiting subtitle step whose row is still
+// listed with the same file, or whose row was only trimmed from the list (more
+// than downloadQueueLimit saved in one go) while its file is still on the card.
+// A removal drops its step itself (dropSidecarLocked, dlForgetQueuePath), so a
+// step found here without its row is a trimmed one.
+func (d *downloadQueue) nextSidecarLocked() (downloadItem, bool) {
+	for len(d.sidecars) > 0 {
+		sub := d.sidecars[0]
+		d.sidecars = d.sidecars[1:]
+		cur := d.findLocked(sub.ID)
+		if cur != nil && cur.Status == downloadDone && cur.Path == sub.Path {
+			return sub, true
+		}
+		if cur == nil && regularFile(sub.Path) {
+			return sub, true
+		}
+	}
+	return downloadItem{}, false
+}
+
+// downloadsSaveSubtitles fetches a saved video's subtitles and saves them
+// beside it (videosubs.go). The worker runs it when no transfer is queued —
+// whatever happens here, the video is in the library already — under its own
+// deadline; Pause, a row queued meanwhile and removing the row cancel ctx.
+func downloadsSaveSubtitles(ctx context.Context, it downloadItem) error {
+	if downloadSubtitleSaver == nil {
+		return errors.New("no subtitle step")
+	}
+	r := subtitleRequest{config: appConfig, page: it.URL, lang: it.subLang, extra: it.ytExtra}
+	path, err := downloadSubtitleSaver(ctx, r, it.Path)
+	if err != nil {
+		if ctx.Err() == nil {
+			logDebug("downloads", "no subtitles saved beside %s: %v", filepath.Base(it.Path), err)
+		}
+		return err
+	}
+	logDebug("downloads", "subtitles saved beside %s: %s", filepath.Base(it.Path), filepath.Base(path))
+	return nil
 }
 
 // nextQueuedLocked returns the first waiting row, or nil when the queue is dry.
@@ -886,8 +1114,17 @@ func downloadArgs(partDir string, job downloadJob, config *Config) []string {
 		"-f", "bestaudio/best",
 		"--extract-audio", "--audio-format", "m4a", "--audio-quality", "0",
 	}
-	args = append(args, ytDlpExtraArgsSlice(config)...)
+	args = append(args, downloadJobExtra(job, config)...)
 	return append(args, job.URL)
+}
+
+// downloadJobExtra is the user's extra yt-dlp arguments for a job: the copy
+// its row took when it was queued, or the config's when there is none.
+func downloadJobExtra(job downloadJob, config *Config) []string {
+	if job.Extra != nil {
+		return job.Extra
+	}
+	return ytDlpExtraArgsSlice(config)
 }
 
 // videoDownloadArgs is the yt-dlp command line for one saved video. It asks
@@ -915,7 +1152,7 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 		"-f", "bv*+ba/b",
 		"--merge-output-format", "mp4",
 	}
-	args = append(args, ytDlpExtraArgsSlice(config)...)
+	args = append(args, downloadJobExtra(job, config)...)
 	return append(args, job.URL)
 }
 
@@ -1017,17 +1254,41 @@ func adoptDownloadedFile(partDir, dir, title string) (string, error) {
 	if name == "" {
 		name = "track"
 	}
-	dest := uniqueDownloadPath(dir, name, ext)
-	src := filepath.Join(partDir, best)
-	if err := os.Rename(src, dest); err != nil {
-		// The staging folder can sit on a different mount from the music
-		// folder, where a rename is not allowed; copy instead.
+	// The staging folder can sit on a different mount from the music folder,
+	// where a rename is not allowed; placeDownloadedFile copies then.
+	return placeDownloadedFile(filepath.Join(partDir, best), dir, name, ext)
+}
+
+// placeDownloadedFile moves a finished file into dir as name+ext without ever
+// replacing a file that is there. The name is claimed first with an exclusive
+// create, so a download and an extraction finishing with the same title at
+// the same moment become "Title.m4a" and "Title (2).m4a" instead of one
+// replacing the other; the file is then renamed over its own placeholder, or
+// copied into it when the folders sit on different mounts. A copy that fails
+// leaves no partial file behind.
+func placeDownloadedFile(src, dir, name, ext string) (string, error) {
+	for tries := 0; tries < 50; tries++ {
+		dest := uniqueDownloadPath(dir, name, ext)
+		f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				// Taken between the check and the claim: the next name.
+				continue
+			}
+			return "", fmt.Errorf("cannot save into the %s folder: %w", filepath.Base(dir), err)
+		}
+		f.Close()
+		if err := os.Rename(src, dest); err == nil {
+			return dest, nil
+		}
 		if err := copyFile(src, dest); err != nil {
+			os.Remove(dest)
 			return "", err
 		}
 		os.Remove(src)
+		return dest, nil
 	}
-	return dest, nil
+	return "", fmt.Errorf("no free file name for %q", name)
 }
 
 // safeDownloadName reduces a title to a file name. It never returns a path: a

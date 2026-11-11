@@ -1084,6 +1084,9 @@ func inmapValidate(p *inmapProfile, known inmapKnown) {
 		if inmapSameChord(t.buttons, inmapBtnSelect, inmapBtnR1) {
 			add(b.line, b.col, "hold Select and press R1 switches profiles: this line only runs with the switch hotkey off", true)
 		}
+		if inmapSameChord(t.buttons, inmapBtnSelect, inmapBtnL1) {
+			add(b.line, b.col, "hold Select and press L1 is mouse mode: this line only runs with Mouse mode off", true)
+		}
 		scopeKey := strings.ToLower(strings.Join(b.scenes, ","))
 		key := inmapTriggerKey(t) + "|" + scopeKey
 		if first, ok := seen[key]; ok {

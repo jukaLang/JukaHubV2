@@ -158,9 +158,9 @@ func retroArchConfigCandidates() []string {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_RETROARCH_CFG")); override != "" {
 		return []string{override}
 	}
-	// The TrimUI firmware keeps its RetroArch config under .retroarch; the
-	// achievements reader already knew that path, this guard did not, so on the
-	// Smart Pro and the Brick it never found network_cmd_enable at all.
+	// The TrimUI firmware's RetroArch folder first, the config beside
+	// ra64.trimui before a .retroarch/retroarch.cfg (raRetroArchConfigPaths):
+	// the first file found here is the one every reader takes.
 	out := append([]string(nil), raRetroArchConfigPaths...)
 	home, _ := os.UserHomeDir()
 	for _, base := range []string{"/mnt/SDCARD", "/mnt/sdcard"} {
@@ -433,7 +433,9 @@ func lowBatteryTick(config *Config) {
 // lowBatteryMessage explains the warning, including the one thing the user can
 // fix: RetroArch's network command interface, without which no save is possible.
 // With a cable already in, "plug in now" would be no help: the charger is not
-// keeping up, and the message says that instead.
+// keeping up, and the message says that instead. When battery_eta.go has a
+// measured estimate (never a guess from earlier use), the time left leads:
+// "Battery 5% — about 9 min left, plug in now".
 func lowBatteryMessage(config *Config, percent int, cableIn bool) string {
 	advice := "plug in now"
 	if cableIn {
@@ -442,6 +444,9 @@ func lowBatteryMessage(config *Config, percent int, cableIn bool) string {
 	msg := "Battery low — " + advice
 	if percent >= 0 {
 		msg = fmt.Sprintf("Battery %d%% — %s", percent, advice)
+		if left := batteryETALeft(); left != "" {
+			msg = fmt.Sprintf("Battery %d%% — %s, %s", percent, left, advice)
+		}
 	}
 	if cfg, _, ok := retroArchConfig(); ok && !networkCmdEnabled(cfg) {
 		return msg + " (auto-save is off: enable network commands in RetroArch)"

@@ -53,11 +53,14 @@ func vcursorTestState(t *testing.T, start time.Time) (now *time.Time, queued *[]
 	oldPush, oldClock, oldState, oldAxes := syntheticEventPush, vcursorClock, vcursor, stickAxes
 	oldScale, oldOX, oldOY := windowScaleFactor, windowOffsetX, windowOffsetY
 	oldTrig := padTriggerHeld
+	oldChord, oldSound := vcursorChord, vcursorModeSound
 	t.Cleanup(func() {
 		syntheticEventPush, vcursorClock, vcursor, stickAxes = oldPush, oldClock, oldState, oldAxes
 		windowScaleFactor, windowOffsetX, windowOffsetY = oldScale, oldOX, oldOY
 		padTriggerHeld = oldTrig
+		vcursorChord, vcursorModeSound = oldChord, oldSound
 	})
+	vcursorChord, vcursorModeSound = vcursorChordState{}, func() {}
 	clock := start
 	var events []sdl.Event
 	syntheticEventPush = func(e sdl.Event) (bool, error) {

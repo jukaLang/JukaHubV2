@@ -33,11 +33,14 @@ jobs:
         run: bash .github/scripts/check-workflows.sh
       - name: CI helper scripts
         # What `make test-scripts` runs: the SDL installer must refuse a
-        # tampered archive, and the release build cache must come only from an
-        # earlier push-to-main run of the release workflow.
+        # tampered archive, the release build caches (and the reused Remote
+        # Play helpers) must come only from an earlier push-to-main run of the
+        # same workflow, and the TrimUI build must start its container offline
+        # and refuse a binary the handhelds could not start.
         run: |
           bash tests/scripts/install-sdl-mingw.test.sh
           bash tests/scripts/go-build-cache.test.sh
+          bash tests/scripts/trimui-build.test.sh
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -165,6 +168,13 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go test ./internal/... ./tools/... -count=1
+      - name: Game-audio plugin host tests (player/spatialfx)
+        # The C port of the spatial-audio DSP against the golden vectors of its
+        # spec (spatialfx/jh_spatial_ref.py), through both plugin ABIs; gcc and
+        # readelf only, about a second. Advisory until it has been green on the
+        # runner's gcc (the test is built with -Werror).
+        continue-on-error: true
+        run: sh spatialfx/tests/run-tests.sh
       - name: go.mod and go.sum are tidy
         # The Windows release builds the committed module graph (go mod
         # download, not go mod tidy), so an import added without running

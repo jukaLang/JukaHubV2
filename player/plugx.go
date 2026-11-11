@@ -58,8 +58,9 @@ const (
 
 // plugxRomParser is one ROM format a plugin teaches the library: files with one
 // of Extensions belong to System, optionally only when Magic appears at Offset.
-// The game library (LIBRARY's ROM manager) consults plugxRomParsers or
-// plugxRomParserFor for files its own catalogue does not know.
+// The game library's ROM scan reads these through plugxROMFormats, so a file
+// with an extension the catalogue does not know still becomes a game. A
+// built-in system or extension keeps precedence over a plugin claiming it.
 type plugxRomParser struct {
 	Plugin     string   // folder name of the plugin that provides it
 	Name       string   // display name ("Pokémon mini")

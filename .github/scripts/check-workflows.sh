@@ -36,8 +36,12 @@ if [ -n "$unpinned" ]; then
   exit 1
 fi
 
-# A container image is as mutable as an action tag unless it is pulled by digest.
-unpinned_images=$(grep -nHE '^[[:space:]]*image:[[:space:]]+[^[:space:]#]+' "${files[@]}" \
+# A container image is as mutable as an action tag unless it is pulled by digest:
+# a job's `container: image:`, and an image a step starts itself, which the
+# workflow names in an env key ending in _IMAGE (docker-image.yml's
+# TOOLCHAIN_IMAGE, which .github/scripts/trimui-build.sh also refuses unless it
+# carries a digest).
+unpinned_images=$(grep -nHE '^[[:space:]]*(image|[A-Z0-9_]*_IMAGE):[[:space:]]+[^[:space:]#]+' "${files[@]}" \
   | tr -d '\r' \
   | grep -vE '@sha256:[0-9a-f]{64}([[:space:]]+#.*)?$' || true)
 if [ -n "$unpinned_images" ]; then

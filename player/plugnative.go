@@ -576,18 +576,15 @@ func plugFreeDisk() uint64 {
 	return free
 }
 
-// plugBatteryLine is "Battery 80%", "Battery 80% · charging" or a plain
-// sentence when there is no battery to read.
+// plugBatteryLine is "Battery 80%", "Battery 80% · charging", with the time
+// left or to full once battery_eta.go has one ("Battery 80% · about 3 h
+// left"), or a plain sentence when there is no battery to read.
 func plugBatteryLine() string {
 	pct := getBatteryPercent()
 	if pct < 0 {
 		return "No battery data"
 	}
-	line := fmt.Sprintf("Battery %d%%", pct)
-	if getBatteryCharging() {
-		line += " · charging"
-	}
-	return line
+	return batteryETALevelLine(pct, getBatteryCharging(), "charging", "on cable", batteryETA(), nil)
 }
 
 func plugNativeSysinfo(action string, _ map[string]interface{}, _ string) (string, error) {

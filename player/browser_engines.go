@@ -59,8 +59,9 @@ const (
 )
 
 const (
-	// brwEngineDefault is the engine a fresh install searches with.
-	brwEngineDefault = "startpage"
+	// brwEngineDefault is the engine a fresh install searches with: DuckDuckGo
+	// Lite, whose page is built for a simple browser.
+	brwEngineDefault = "duckduckgo"
 	// brwEngineCustomID is the engine the custom address describes.
 	brwEngineCustomID = "custom"
 	// brwEngineWallAlt is where a search Google walls off goes instead:
@@ -94,15 +95,14 @@ type brwEngine struct {
 }
 
 // brwEngines are the engines Settings offers, in the order it lists them.
-// Startpage leads: it is the default and serves Google's results as plain HTML
-// a script-less browser can read. DuckDuckGo Lite follows — that page is built
-// for a browser like this one — and the rest serve HTML too, except Google
-// (Wall).
+// DuckDuckGo Lite leads: it is the default, and its page is built for a simple
+// browser. Startpage follows — it serves Google's results as plain HTML — and
+// the rest serve HTML too, except Google (Wall).
 var brwEngines = []brwEngine{
-	{ID: "startpage", Name: "Startpage", Home: "https://www.startpage.com/",
-		Search: "https://www.startpage.com/sp/search?query=%s", Note: "Google's results, privately, without JavaScript"},
 	{ID: "duckduckgo", Name: "DuckDuckGo", Home: "https://lite.duckduckgo.com/lite/",
 		Search: "https://lite.duckduckgo.com/lite/?q=%s", Note: "Private · the Lite page is made for simple browsers"},
+	{ID: "startpage", Name: "Startpage", Home: "https://www.startpage.com/",
+		Search: "https://www.startpage.com/sp/search?query=%s", Note: "Google's results, privately, without JavaScript"},
 	{ID: "google", Name: "Google", Home: "https://www.google.com/",
 		Search: "https://www.google.com/search?q=%s", Note: "Results need a full browser · each search offers Startpage", Wall: true},
 	{ID: "bing", Name: "Bing", Home: "https://www.bing.com/",
@@ -128,8 +128,8 @@ func brwEngineByID(id string) (brwEngine, bool) {
 	return brwEngine{}, false
 }
 
-// brwDefaultEngine is Startpage: Google's results as plain HTML, so a fresh
-// install can search Google without meeting its robot check.
+// brwDefaultEngine is DuckDuckGo Lite: its page is built for a browser without
+// a full JavaScript engine, so a fresh install can search without a wall.
 func brwDefaultEngine() brwEngine {
 	e, _ := brwEngineByID(brwEngineDefault)
 	return e

@@ -64,8 +64,9 @@ func downloadLinkSubmit(raw string) {
 		return
 	}
 	if _, err := downloadEnqueue(link); err != nil {
-		// Resolver chatter means "you are offline", which the toast can say.
-		ShowToast(plainNetworkError(err), ToastKindWarning)
+		// A link already on its way is a note; resolver chatter means "you are
+		// offline", which the toast can say (mediaHubEnqueueRefused).
+		mediaHubEnqueueRefused(err)
 		return
 	}
 	// The row is already on screen and names itself once yt-dlp resolves the
@@ -262,6 +263,9 @@ func downloadPanelActivate(config *Config) {
 	case downloadFailed:
 		if downloadRetry(it.ID) {
 			ShowToast("Retrying "+it.displayTitle(), ToastKindInfo)
+		} else if downloadsHas(it.URL, it.Kind) {
+			// The page was queued again meanwhile; that row is the one to wait for.
+			ShowToast(dlAlreadyQueuedNotice, ToastKindInfo)
 		}
 	case downloadDone:
 		if info, err := os.Stat(it.Path); err != nil || info.Size() == 0 {

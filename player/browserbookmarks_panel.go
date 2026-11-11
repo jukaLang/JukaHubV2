@@ -172,7 +172,12 @@ func handleBrowserBookmarksKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		browserBookmarkPanelMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
-		browserBookmarkPanelActivate(config)
+		// A held key picks once: the repeats of the press that opened the
+		// list (Enter on the Select menu's Saved pages row) must not open a
+		// page.
+		if e.Repeat == 0 {
+			browserBookmarkPanelActivate(config)
+		}
 	case sdl.K_x:
 		browserBookmarkPanelRemove(config)
 	case sdl.K_y:

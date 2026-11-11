@@ -165,7 +165,14 @@ func ppssppMemstickIni(memstick string) string {
 // findPPSSPPConfig returns the newest ini among the fixed layouts and the
 // memsticks of the PPSSPPs kept in emulator folders, or "". Directories and
 // symlinks to directories are not configs.
+//
+// While JukaHub's own PPSSPP plays PSP games (ppsspp_managed.go), its ini is
+// the one that counts: that build runs with its own HOME in JukaHub's data
+// folder, outside every root here, and never reads the firmware's ini.
 func findPPSSPPConfig(sdRoots []string) string {
+	if ini := ppssppActiveIni(); ini != "" {
+		return ini
+	}
 	candidates := ppssppConfigCandidates(sdRoots)
 	for _, memstick := range ppssppEmuMemsticks(sdRoots) {
 		candidates = append(candidates, ppssppMemstickIni(memstick.Dir))

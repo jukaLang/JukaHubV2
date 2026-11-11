@@ -1028,7 +1028,7 @@ func gmetaRenderDetails(renderer *sdl.Renderer, config *Config) {
 	card := sdl.Rect{X: (screenWidth - cardW) / 2, Y: (screenHeight - cardH) / 2, W: cardW, H: cardH}
 	gmetaUI.card = card
 	sub := g.System + " · " + filepath.Base(g.Path)
-	header := UIPanelHeader(g.Title, sub, iconEmuGlyphFor(g.System))
+	header := UIPanelHeader(g.Label(), sub, iconEmuGlyphFor(g.System))
 	headerH := UIPanelHeaderBand(config, header, 12)
 	drawOverlayScrim(renderer)
 	drawOverlayCard(renderer, card)
@@ -1324,7 +1324,7 @@ func gmetaRenderTags(renderer *sdl.Renderer, config *Config) {
 	if !ok {
 		return
 	}
-	header := UIPanelHeader("Tags", gmetaUI.game.Title, "filter")
+	header := UIPanelHeader("Tags", gmetaUI.game.Label(), "filter")
 	headerH := UIPanelHeaderBand(config, header, 10)
 	rowH := int32(48)
 	n := len(gmetaTagUI.tags) + 1

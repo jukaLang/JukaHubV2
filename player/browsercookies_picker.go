@@ -228,7 +228,12 @@ func handleBrowserCookiesKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		browserCookiePanelMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
-		browserCookiePanelActivate(config)
+		// A held key picks once: the repeats of the press that opened the
+		// picker (Enter on the Select menu's sign-ins row) must not sign a
+		// site out.
+		if e.Repeat == 0 {
+			browserCookiePanelActivate(config)
+		}
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		closeBrowserCookiePanel()
 	}

@@ -24,6 +24,13 @@
 #
 #  A clean exit that leaves .restart-now behind (Restart in safe mode on the
 #  recovery card) is started again once, the same way.
+#
+#  jukahub-screen-handoff: 1
+#
+#  A helper that quits JukaHub to take the display for itself (PS Remote Play's
+#  stream) leaves its pid in .screen-handoff. This script waits for that helper
+#  with the firmware UI still stopped, then starts JukaHub again, so nothing
+#  draws over the stream and the user comes back to JukaHub, not to MainUI.
 # ---------------------------------------------------------------------------
 
 APP_DIR=/mnt/SDCARD/Apps/JukaHub
@@ -51,6 +58,8 @@ PENDING="$APP_DIR/.restart-pending"
 SWAPPED="$APP_DIR/.update-swapped"
 FAILED="$APP_DIR/.update-failed"
 RESTART_NOW="$APP_DIR/.restart-now"
+# A helper that took the display over from JukaHub (see the header).
+HANDOFF="$APP_DIR/.screen-handoff"
 # How the last run ended, "<exit status> <pid>", for JukaHub's next start (its
 # boot guard reads and removes it). Not cleared below: that start may come from
 # a later launch of this script.
@@ -63,17 +72,32 @@ sync
 
 # The markers only belong to a process that has just exited. Leftovers from a
 # failed update would make this launch wait for a helper that never arrives.
-rm -f "$PENDING" "$SWAPPED" "$FAILED" "$RESTART_NOW"
+rm -f "$PENDING" "$SWAPPED" "$FAILED" "$RESTART_NOW" "$HANDOFF"
 
 # --------------------------------------------------- take over the display
 # MainUI can be found through pidof (busybox) or pgrep; when neither exists,
 # the checks below are skipped and the script behaves as it did before.
+#
+# A zombie is not counted. A MainUI killed while its supervisor is paused
+# stays a zombie until the supervisor runs again, and busybox pidof still
+# lists it: every start made while MainUI was up (the boot hook, a start over
+# SSH) used to "fail" to kill it eight times and give up without starting
+# JukaHub. A zombie holds no display, so it is not in the way.
 ui_pid() {
-    if command -v pidof >/dev/null 2>&1; then
-        pidof MainUI 2>/dev/null
-    elif command -v pgrep >/dev/null 2>&1; then
-        pgrep -x MainUI 2>/dev/null
-    fi
+    UI_LIST=""
+    for UI_P in $(
+        if command -v pidof >/dev/null 2>&1; then
+            pidof MainUI 2>/dev/null
+        elif command -v pgrep >/dev/null 2>&1; then
+            pgrep -x MainUI 2>/dev/null
+        fi
+    ); do
+        UI_STATE=""
+        # 2>/dev/null first: a MainUI that has just gone must not print here.
+        read -r _ _ UI_STATE _ 2>/dev/null <"/proc/$UI_P/stat" || continue
+        [ "$UI_STATE" = Z ] || UI_LIST="$UI_LIST${UI_LIST:+ }$UI_P"
+    done
+    echo "$UI_LIST"
 }
 
 # Normally the launcher has already stepped aside before this script runs.
@@ -102,7 +126,8 @@ if command -v pidof >/dev/null 2>&1 || command -v pgrep >/dev/null 2>&1; then
     while [ -n "$(ui_pid)" ] && [ "$n" -lt 8 ]; do
         n=$((n + 1))
         say "MainUI still running; kill -9 attempt $n"
-        kill -9 "$(ui_pid)" 2>/dev/null
+        # One argument per pid: pidof can name more than one MainUI.
+        kill -9 $(ui_pid) 2>/dev/null
         sleep 1
     done
     if [ -n "$(ui_pid)" ]; then
@@ -118,6 +143,25 @@ else
 fi
 
 # ------------------------------------------------------------- environment
+# The games, emulators and apps JukaHub starts must get the environment MainUI
+# would have given them, not the one set below for JukaHub itself (its own
+# folder first on the library path, HOME pointed at its folder). So the
+# originals are recorded before anything changes: JUKAHUB_ORIG_ENV names the
+# variables, and JUKAHUB_ORIG_<NAME> carries a value only when it was set.
+# JukaHub puts them back for every screen-taking child (childenv.go). A launch
+# from inside JukaHub's own environment (the update helper's relaunch) already
+# carries the originals, and keeps them rather than recording JukaHub's values.
+if [ -z "${JUKAHUB_ORIG_ENV+x}" ]; then
+    JUKAHUB_ORIG_ENV="HOME PATH LD_LIBRARY_PATH"
+    if [ -n "${HOME+x}" ]; then JUKAHUB_ORIG_HOME="$HOME"; export JUKAHUB_ORIG_HOME; fi
+    if [ -n "${PATH+x}" ]; then JUKAHUB_ORIG_PATH="$PATH"; export JUKAHUB_ORIG_PATH; fi
+    if [ -n "${LD_LIBRARY_PATH+x}" ]; then
+        JUKAHUB_ORIG_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+        export JUKAHUB_ORIG_LD_LIBRARY_PATH
+    fi
+fi
+export JUKAHUB_ORIG_ENV
+
 # SDL2 + SDL2_image + SDL2_ttf already live in the device rootfs (/usr/lib):
 # 2.26.1 on early firmware, 2.30.8 since firmware 1.1.0. Its video backends
 # are "mali" (SDL's generic fbdev-EGL driver, running on the PowerVR GE8300's
@@ -131,7 +175,11 @@ HOME="$APP_DIR"
 # restarting. Older launchers do not set it, and the app then falls back to the
 # helper's own relaunch path.
 JUKAHUB_LAUNCHED_BY=launch.sh
-export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY
+# This launcher waits for a screen helper (the header's screen-handoff
+# protocol). Exported by the running script, so a newer launch.sh copied onto
+# the card under an older running one never makes the app expect a wait.
+JUKAHUB_SCREEN_HANDOFF=1
+export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY JUKAHUB_SCREEN_HANDOFF
 
 # ---------------------------------------------------------------- time zone
 # The zone chosen in Settings -> Date & time is kept in jukatimezone next to
@@ -231,6 +279,49 @@ while :; do
     esac
     sync
 
+    # A helper took the display over (PS Remote Play): JukaHub quit so the
+    # helper could have the screen to itself, and wrote the helper's pid. Wait
+    # for it here, with the supervisors still paused and MainUI still stopped —
+    # giving the screen back now would put MainUI over the stream — then start
+    # JukaHub again, which is where the user came from. A stop request ends the
+    # wait (the power key); twelve hours bound it.
+    if [ -f "$HANDOFF" ]; then
+        HPID="$(head -c 32 "$HANDOFF" 2>/dev/null | tr -cd '0-9')"
+        rm -f "$HANDOFF"
+        # A real pid only: 0 or 1 would make the kills below reach this
+        # script's own group or every process, and never this script itself.
+        if [ -n "$HPID" ] && [ "$HPID" -gt 1 ] 2>/dev/null && [ "$HPID" != "$$" ] &&
+            kill -0 "$HPID" 2>/dev/null; then
+            say "screen handed to helper pid $HPID; waiting for it"
+            n=0
+            while [ "$STOPPED" -eq 0 ] && [ "$n" -lt 43200 ] && kill -0 "$HPID" 2>/dev/null; do
+                n=$((n + 1))
+                sleep 1
+            done
+            if kill -0 "$HPID" 2>/dev/null; then
+                # The stop request (or the bound) ended the wait, not the
+                # helper: it runs in a session of its own and got no signal.
+                # Handing the screen back now would put MainUI over a live
+                # stream, so its whole session goes first (it leads it, so its
+                # pid is the group's): TERM, then KILL after five seconds.
+                say "stopping helper pid $HPID before handing the screen back"
+                kill -TERM -"$HPID" 2>/dev/null || kill -TERM "$HPID" 2>/dev/null
+                n=0
+                while [ "$n" -lt 5 ] && { kill -0 -"$HPID" 2>/dev/null || kill -0 "$HPID" 2>/dev/null; }; do
+                    n=$((n + 1))
+                    sleep 1
+                done
+                kill -KILL -"$HPID" 2>/dev/null
+            else
+                say "helper pid $HPID finished after ${n}s"
+            fi
+            if [ "$STOPPED" -eq 0 ] && [ "$RC" -eq 0 ]; then
+                sync
+                continue
+            fi
+        fi
+    fi
+
     # A stop request ends the session: never restart into an update in the
     # middle of handing the screen back.
     [ "$STOPPED" -eq 1 ] && break
@@ -274,10 +365,30 @@ if command -v pgrep >/dev/null 2>&1; then
     pkill -CONT trimui_launcher 2>/dev/null
 fi
 
-# If no supervisor brought the launcher back, start it ourselves so the user
-# never ends up on a black screen.
-sleep 2
-if [ -z "$(ui_pid)" ]; then
+# Who brings MainUI back. On stock and CrossMix firmware MainUI started this
+# script (through /tmp/cmd_to_run.sh) and exited, and the firmware supervisor,
+# runtrimui.sh, is waiting for this script: it starts MainUI again the moment
+# the script returns. (Started by the boot hook instead, the supervisor's own
+# MainUI was the one stopped above, and the CONT above lets it start a new
+# one.) This script used to start a MainUI of its own two seconds before
+# returning — so the supervisor's made two, both drawing to /dev/fb0: the
+# glitchy, flickering screen after leaving JukaHub.
+#
+# The supervisor now always gets the first go. A watcher left behind waits up
+# to ten seconds after this script is gone for a MainUI to appear and starts
+# one only if none has (a firmware without a supervisor, a start over SSH),
+# checking once more right before it does, so the user never ends up on a
+# black screen and never gets two launchers either.
+(
+    # The nohup of the old code: a hang-up as the session ends must not take
+    # the watcher (or the MainUI it starts) with it.
+    trap '' HUP
+    n=0
+    while [ "$n" -lt 10 ]; do
+        sleep 1
+        [ -n "$(ui_pid)" ] && exit 0
+        n=$((n + 1))
+    done
     for UI in \
         /usr/trimui/bin/MainUI \
         /usr/bin/MainUI \
@@ -285,11 +396,13 @@ if [ -z "$(ui_pid)" ]; then
         /mnt/SDCARD/System/usr/trimui/bin/MainUI
     do
         if [ -x "$UI" ]; then
-            say "restarting stock launcher: $UI"
-            (nohup "$UI" >/dev/null 2>&1 &)
-            break
+            [ -n "$(ui_pid)" ] && exit 0
+            say "no launcher came back after 10s; starting $UI"
+            cd "$(dirname "$UI")" 2>/dev/null
+            exec "$UI" >/dev/null 2>&1
         fi
     done
-fi
+    say "no launcher came back and none was found to start"
+) </dev/null >/dev/null 2>&1 &
 
 exit 0

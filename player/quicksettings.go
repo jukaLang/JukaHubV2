@@ -58,7 +58,7 @@ type qsSlider struct {
 type qsCycle struct {
 	Label string
 	Icon  string
-	Value int // seconds (screensaver) or a power-mode index (Power Mode)
+	Value int // timeout or a mode index; each cycle row defines its own scale
 }
 
 // qsLinkAction names a row that opens another panel instead of changing a
@@ -151,6 +151,7 @@ func qsInit() {
 		cycles: []qsCycle{
 			{Label: "Screensaver", Icon: "[T]", Value: 25},
 			{Label: "Power Mode", Icon: "[P]", Value: qsPowerModeRowIndex()},
+			{Label: "Spatial audio", Icon: "[S]", Value: qsSpatialModeRowIndex(appConfig)},
 			{Label: "LED Mode", Icon: "[R]", Value: ledPolicyIndex(ledPolicyFromConfig(nil))},
 			// The experience pack in force; Left/Right apply the next one at
 			// once (xpack.go).
@@ -162,6 +163,13 @@ func qsInit() {
 	}
 	qsRefreshAvailability()
 	qsLoadPersisted()
+	// The saved brightness waits for the brightness controller to know its
+	// backend, and is only pushed where JukaHub owns the level
+	// (brightnessRestoreFor): the window does not exist yet, and on Windows
+	// finding the backend takes a PowerShell run.
+	if user := loadUserConfig(); user != nil && user.Variables.BrightnessSet {
+		brightnessNoteSavedLevel(user.Variables.Brightness)
+	}
 }
 
 // qsRefreshAvailability probes which backends exist. It only looks for binaries
@@ -211,11 +219,50 @@ func qsRefreshAvailability() {
 		}
 	}
 	volumeOK := volumeBackend() != ""
-	brightnessOK := brightnessAvailable()
 	qs.sliders[0].Available = volumeOK
 	qs.sliders[0].Detail = "no pactl/amixer"
-	qs.sliders[1].Available = brightnessOK
-	qs.sliders[1].Detail = "no backlight device"
+	qsRefreshBrightnessRow()
+}
+
+// qsRefreshBrightnessRow takes the brightness controller's answer
+// (brightnessctl.go): the row is live once the backend is known — the
+// software dimmer is always there as the last resort — and its floor and grid
+// are the backend's. It never starts the probe (qsInit runs before the window
+// exists); the controller calls it again once the probe has answered.
+func qsRefreshBrightnessRow() {
+	if len(qs.sliders) < 2 || qs.sliders[1].Action != "brightness" {
+		return
+	}
+	s := &qs.sliders[1]
+	s.Available = brightnessKnownBackend() != ""
+	s.Detail = "checking…"
+	s.Min = float64(brightnessFloor()) / 100
+	if s.Value < s.Min {
+		s.Value = s.Min
+	}
+}
+
+// qsNoteBrightnessLevel shows a level the brightness controller applied on
+// the slider, so stepping it continues from there. Main thread.
+func qsNoteBrightnessLevel(pct int) {
+	if len(qs.sliders) < 2 || qs.sliders[1].Action != "brightness" {
+		return
+	}
+	qs.sliders[1].Value = float64(pct) / 100
+	qs.lastBrightness = pct
+}
+
+// qsSyncBrightnessFromController keeps the slider on the controller's cached
+// level, which follows the hardware (its poll) and every change made from the
+// header's card. The panel used to read the backlight itself, in its own
+// probe; one owner of the reading keeps the two from disagreeing.
+func qsSyncBrightnessFromController() {
+	if len(qs.sliders) < 2 || !qs.sliders[1].Available {
+		return
+	}
+	if pct, known := brightnessCurrent(); known {
+		qsNoteBrightnessLevel(pct)
+	}
 }
 
 // qsLoadPersisted restores the saved levels so the panel opens where the user
@@ -238,11 +285,12 @@ func qsLoadPersisted() {
 		qs.cycles[qsCycleScreensaverRow].Value = appConfig.Variables.ScreensaverTimeout
 	}
 	qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
+	qs.cycles[qsCycleRowSpatialMode].Value = qsSpatialModeRowIndex(appConfig)
 }
 
-// qsApplyPersistedSystemState pushes the saved volume and brightness to the
-// device at launch. Nothing is written unless the user has actually set a
-// value, so a fresh install keeps the device's own defaults.
+// qsApplyPersistedSystemState pushes the saved volume to the device at
+// launch. Nothing is written unless the user has actually set a value, so a
+// fresh install keeps the device's own defaults.
 func qsApplyPersistedSystemState() {
 	user := loadUserConfig()
 	if user == nil {
@@ -261,11 +309,8 @@ func qsApplyPersistedSystemState() {
 			}
 		}
 	}
-	if user.Variables.BrightnessSet && brightnessAvailable() {
-		if err := setScreenBrightness(user.Variables.Brightness); err != nil {
-			LogScene("quicksettings").Warn("restore brightness failed", "err", err)
-		}
-	}
+	// The saved brightness is the brightness controller's to restore
+	// (brightnessNoteSavedLevel, queued by qsInit), on the main thread.
 }
 
 func clampQSPercent(v int) float64 {
@@ -279,17 +324,18 @@ func clampQSPercent(v int) float64 {
 }
 
 // qsRowCount is the number of interactive rows: toggles, sliders, links, then
-// the timeout and power-mode cycles.
+// the timeout and mode cycles.
 func qsRowCount() int { return len(qs.toggles) + len(qs.sliders) + len(qs.links) + len(qs.cycles) }
 
 // The cycle rows, in row order. The screensaver row owns arrays and labels
-// via the shared helper sets; the Power Mode row is named so a future row
-// cannot silently become "the cycle row".
+// via the shared helper sets; named indices keep later rows from silently
+// changing each other's behavior.
 const (
 	qsCycleScreensaverRow = 0
 	qsCycleRowPowerMode   = 1
-	qsCycleRowLED         = 2
-	qsCycleRowXPack       = 3
+	qsCycleRowSpatialMode = 2
+	qsCycleRowLED         = 3
+	qsCycleRowXPack       = 4
 )
 
 // qsSyncFromConfig refreshes the rows whose truth lives in the config, then
@@ -324,10 +370,15 @@ func qsSyncFromConfig(config *Config) {
 			qs.cycles[qsCycleScreensaverRow].Value = config.Variables.ScreensaverTimeout
 		}
 		qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
+		qs.cycles[qsCycleRowSpatialMode].Value = qsSpatialModeRowIndex(config)
 		qs.cycles[qsCycleRowLED].Value = ledPolicyIndex(ledPolicyFromConfig(config))
 	}
 	qsRefreshAvailability()
 	qsStartProbe()
+	// The brightness controller reads the level again for the slider; the
+	// panel takes it from the controller's cache as it draws.
+	brightnessRefreshNow()
+	qsSyncBrightnessFromController()
 }
 
 // ── Live state probing ─────────────────────────────────────────────────────
@@ -341,8 +392,8 @@ func qsSyncFromConfig(config *Config) {
 type qsProbe struct {
 	wifi, bluetooth, airplane       bool
 	wifiOK, bluetoothOK, airplaneOK bool
-	volume, brightness              int
-	volumeOK, brightnessOK          bool
+	volume                          int
+	volumeOK                        bool
 	// gen is qsEditGen when the probe started.
 	gen int
 	// volGen and volApplied are the speaker's change counters when the probe
@@ -367,10 +418,11 @@ var (
 // qsNoteEdit marks a change made from the panel (see qsEditGen).
 func qsNoteEdit() { qsEditGen++ }
 
-// qsCollectLiveState asks the host what the radios and levels are doing. It runs
-// on a worker goroutine, so it takes everything it needs as arguments and never
-// reads (or writes) the live qs state.
-func qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightness bool) qsProbe {
+// qsCollectLiveState asks the host what the radios and the volume are doing.
+// It runs on a worker goroutine, so it takes everything it needs as arguments
+// and never reads (or writes) the live qs state. The brightness is the
+// brightness controller's to read (qsSyncBrightnessFromController).
+func qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume bool) qsProbe {
 	r := qsProbe{}
 	if wantWifi {
 		r.wifi, r.wifiOK = wifiEnabled()
@@ -383,9 +435,6 @@ func qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightne
 	}
 	if wantVolume {
 		r.volume, r.volumeOK = systemVolume()
-	}
-	if wantBrightness {
-		r.brightness, r.brightnessOK = screenBrightness()
 	}
 	return r
 }
@@ -400,11 +449,10 @@ func qsStartProbe() {
 	wantBT := qs.toggles[1].Available
 	wantAirplane := qs.toggles[2].Available
 	wantVolume := qs.sliders[0].Available
-	wantBrightness := qs.sliders[1].Available
 	gen := qsEditGen
 	volGen, volApplied := volumeEditCounters()
 	go func() {
-		r := qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightness)
+		r := qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume)
 		r.gen = gen
 		r.volGen, r.volApplied = volGen, volApplied
 		qsProbeCh <- r
@@ -453,10 +501,7 @@ func qsApplyProbe(r qsProbe) {
 		qs.sliders[0].Value = float64(r.volume) / 100
 		qs.lastVolume = r.volume
 	}
-	if r.brightnessOK && qs.sliders[1].Available {
-		qs.sliders[1].Value = clampQSPercent(r.brightness)
-		qs.lastBrightness = r.brightness
-	}
+	qsSyncBrightnessFromController()
 }
 
 func qsToggleOpen() {
@@ -469,6 +514,7 @@ func qsToggleOpen() {
 		// to the card and the keys to the panel.
 		dismissWeatherPopover()
 		dismissVolumePopover()
+		dismissBrightnessPopover()
 		if appConfig != nil {
 			qsSyncFromConfig(appConfig)
 		} else {
@@ -660,6 +706,12 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 		if appConfig != nil {
 			appConfig.Variables.ReducedMotion = want
 			dropCustomMirror(appConfig, "reducedMotion")
+			// Switched by hand: the boot follows Reduce motion from now on
+			// instead of the handheld's out-of-box default (bootOSMotion).
+			if appConfig.Variables.Custom == nil {
+				appConfig.Variables.Custom = map[string]interface{}{}
+			}
+			appConfig.Variables.Custom[bootOSMotionChosenKey] = "true"
 			syncVariableOverrides(appConfig)
 		}
 		return nil
@@ -698,6 +750,7 @@ func qsStepSlider(idx, deltaPct int) {
 		ShowToast(s.Label+" control is unavailable on this device ("+s.Detail+")", ToastKindInfo)
 		return
 	}
+	before := int(math.Round(s.Value * 100))
 	value := s.Value + float64(deltaPct)/100
 	if value < s.Min {
 		value = s.Min
@@ -723,13 +776,21 @@ func qsStepSlider(idx, deltaPct int) {
 		qs.lastVolume = pct
 		qsNoteEdit()
 	case "brightness":
+		// The write runs on the brightness controller's worker
+		// (brightnessctl.go), which reports a failure itself: on Windows it is
+		// a PowerShell run or a DDC/CI exchange. The level applied is snapped
+		// to the backend's grid (the TrimUI firmware's 10% steps) and kept
+		// above its floor — and a step finer than the grid (the panel's 5%)
+		// still moves one grid step, or rounding put it back where it was. The
+		// slider shows (and saves) the one applied, and the header's sun
+		// follows at once.
+		pct = brightnessStepTarget(brightnessKnownBackend(), before, deltaPct)
+		s.Value = float64(pct) / 100
 		if pct == qs.lastBrightness {
 			return
 		}
-		if err := setScreenBrightness(pct); err != nil {
-			ShowToast("Brightness: "+firstLine(err.Error()), ToastKindWarning)
-			return
-		}
+		pct = brightnessApplyLevel(pct)
+		s.Value = float64(pct) / 100
 		qs.lastBrightness = pct
 		qsNoteEdit()
 	}
@@ -742,8 +803,20 @@ func qsStepSlider(idx, deltaPct int) {
 // qsPowerModeRowIndex is where the config's Power Mode sits on the cycle.
 func qsPowerModeRowIndex() int { return powerModeIndex(currentPowerMode(appConfig)) }
 
-// qsStepCycle moves one cycle row. Row 0 is the screensaver timeout, row 1 is
-// the Power Mode selector; everything future lands in the row switch too.
+// qsSpatialModeRowIndex is where spatial audio's configured mode sits on its
+// cycle. Auto's current output is shown separately in the row's value.
+func qsSpatialModeRowIndex(config *Config) int {
+	mode := spatialNormalizeMode(spatialSettingsFor(config).Mode)
+	for i, name := range spatialModeNames {
+		if name == mode {
+			return i
+		}
+	}
+	return 0
+}
+
+// qsStepCycle moves one cycle row. Screensaver, power and spatial modes each
+// use their shared cycle helper; the remaining rows keep their own handlers.
 func qsStepCycle(row, dir int) {
 	if row < 0 || row >= len(qs.cycles) || dir == 0 {
 		return
@@ -779,6 +852,14 @@ func qsStepCycle(row, dir int) {
 		if appConfig != nil {
 			qsPersist(appConfig)
 		}
+		PlayNavSound()
+		return
+	case qsCycleRowSpatialMode:
+		if appConfig == nil {
+			return
+		}
+		ShowToast(spatialCycleMode(appConfig, dir), ToastKindInfo)
+		qs.cycles[qsCycleRowSpatialMode].Value = qsSpatialModeRowIndex(appConfig)
 		PlayNavSound()
 		return
 	}
@@ -861,8 +942,10 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 	if !qs.open {
 		return
 	}
-	// Pick up a finished radio/level probe before drawing this frame.
+	// Pick up a finished radio/level probe before drawing this frame, and the
+	// brightness controller's level (its poll, the firmware's keys).
 	qsDrainProbe()
+	qsSyncBrightnessFromController()
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")
@@ -946,10 +1029,14 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		footerY := panelY + panelH - smallH - 8
 		infoY := footerY - smallH - 8
 		if bat := getBatteryPercent(); bat >= 0 {
-			line := fmt.Sprintf("Battery %d%%", bat)
-			if getBatteryCharging() {
-				line += " · Charging"
-			}
+			// The level, the cable and the time left (battery_eta.go), in the
+			// longest form that leaves the connectivity label its room.
+			netW, _, _ := font.SizeUTF8("! Offline")
+			room := panelW - 2*qsPadX - int32(netW) - 16
+			line := batteryETALevelLine(bat, getBatteryCharging(), "Charging", "On cable", batteryETA(), func(s string) bool {
+				w, _, _ := font.SizeUTF8(s)
+				return int32(w) <= room
+			})
 			renderText(renderer, config, font, line,
 				WithAlpha(ColorTextSecondary(), 200), panelX+qsPadX, infoY)
 		}
@@ -1147,6 +1234,13 @@ func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row 
 		if c.Value != powerModeIndex(PowerModeDefault) {
 			// A named mode is live: tint the value with the accent so the
 			// override reads as "on", the way a coloured switch does.
+			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
+		}
+	}
+	if row == qsCycleRowSpatialMode {
+		settings := spatialSettingsFor(config)
+		value = spatialModeValue(config)
+		if settings.Mode != "off" {
 			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
 		}
 	}

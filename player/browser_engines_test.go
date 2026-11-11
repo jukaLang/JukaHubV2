@@ -18,19 +18,19 @@ func brwTestConfig(kv ...string) *Config {
 }
 
 // An unknown or unusable choice must still search somewhere.
-func TestBrwEngineForFallsBackToStartpage(t *testing.T) {
+func TestBrwEngineForFallsBackToDuckDuckGo(t *testing.T) {
 	custom := "https://searx.example/search?q=%s"
 	cases := []struct {
 		name string
 		cfg  *Config
 		want string
 	}{
-		{"nil config", nil, "startpage"},
-		{"unset", brwTestConfig(), "startpage"},
+		{"nil config", nil, "duckduckgo"},
+		{"unset", brwTestConfig(), "duckduckgo"},
 		{"google", brwTestConfig(brwEngineKey, "google"), "google"},
 		{"case and spaces", brwTestConfig(brwEngineKey, "  Bing "), "bing"},
-		{"unknown id", brwTestConfig(brwEngineKey, "altavista"), "startpage"},
-		{"custom without an address", brwTestConfig(brwEngineKey, "custom"), "startpage"},
+		{"unknown id", brwTestConfig(brwEngineKey, "altavista"), "duckduckgo"},
+		{"custom without an address", brwTestConfig(brwEngineKey, "custom"), "duckduckgo"},
 		{"custom with an address", brwTestConfig(brwEngineKey, "custom", brwEngineCustomKey, custom), "custom"},
 		{"the builder's casing", brwTestConfig("BrowserSearchEngine", "startpage"), "startpage"},
 	}
@@ -42,8 +42,8 @@ func TestBrwEngineForFallsBackToStartpage(t *testing.T) {
 	// A value of another type (a hand-edited file) is not a choice.
 	odd := brwTestConfig()
 	odd.Variables.Custom[brwEngineKey] = 42
-	if got := brwEngineFor(odd).ID; got != "startpage" {
-		t.Errorf("a number as the engine: %q, want startpage", got)
+	if got := brwEngineFor(odd).ID; got != "duckduckgo" {
+		t.Errorf("a number as the engine: %q, want duckduckgo", got)
 	}
 }
 
@@ -134,8 +134,8 @@ func TestBrwSearchFollowsTheSetting(t *testing.T) {
 	}
 
 	appConfig = nil
-	if got := textBrowserSearchURL("x"); got != "https://www.startpage.com/sp/search?query=x" {
-		t.Errorf("no config: %q, want Startpage", got)
+	if got := textBrowserSearchURL("x"); got != "https://lite.duckduckgo.com/lite/?q=x" {
+		t.Errorf("no config: %q, want DuckDuckGo Lite", got)
 	}
 }
 
@@ -179,13 +179,13 @@ func TestBrwHomeURL(t *testing.T) {
 		cfg  *Config
 		want string
 	}{
-		{"follows the default engine", brwTestConfig(), "https://www.startpage.com/"},
+		{"follows the default engine", brwTestConfig(), "https://lite.duckduckgo.com/lite/"},
 		{"follows the chosen engine", brwTestConfig(brwEngineKey, "google"), "https://www.google.com/"},
 		{"a typed host", brwTestConfig(brwHomePageKey, "news.ycombinator.com"), "https://news.ycombinator.com"},
 		{"a full address", brwTestConfig(brwHomePageKey, "http://example.com/start?x=1"), "http://example.com/start?x=1"},
 		{"a word is not an address", brwTestConfig(brwEngineKey, "bing", brwHomePageKey, "news"), "https://www.bing.com/"},
-		{"another scheme", brwTestConfig(brwHomePageKey, "file:///etc/passwd"), "https://www.startpage.com/"},
-		{"no config", nil, "https://www.startpage.com/"},
+		{"another scheme", brwTestConfig(brwHomePageKey, "file:///etc/passwd"), "https://lite.duckduckgo.com/lite/"},
+		{"no config", nil, "https://lite.duckduckgo.com/lite/"},
 	}
 	for _, tc := range cases {
 		if got := brwHomeURL(tc.cfg); got != tc.want {
@@ -318,7 +318,7 @@ func TestBrwHomeSettingsRows(t *testing.T) {
 	c := brwTestConfig(textBrowserURLVariable, "https://example.com/article")
 
 	options := brwHomeOptions(c)
-	if len(options) != 2 || options[0].Value != "" || options[0].Label != "Startpage start page" || options[1].Label != "News" {
+	if len(options) != 2 || options[0].Value != "" || options[0].Label != "DuckDuckGo start page" || options[1].Label != "News" {
 		t.Fatalf("carousel %+v", options)
 	}
 	if got := brwHomeCurrent(c); got != 0 {
@@ -341,7 +341,7 @@ func TestBrwHomeSettingsRows(t *testing.T) {
 	for _, o := range sheet {
 		labels = append(labels, o.Label)
 	}
-	want := []string{"Startpage start page", "Page open in the Browser", "News", "Type an address…"}
+	want := []string{"DuckDuckGo start page", "Page open in the Browser", "News", "Type an address…"}
 	if strings.Join(labels, "|") != strings.Join(want, "|") {
 		t.Errorf("sheet %q, want %q", labels, want)
 	}
@@ -376,9 +376,9 @@ func TestBrwEngineSettingsRows(t *testing.T) {
 		t.Errorf("the sheet ends with %+v, want the custom address row", last)
 	}
 
-	// An unusable custom address: Startpage answers and the row says why.
+	// An unusable custom address: DuckDuckGo Lite answers and the row says why.
 	c = brwTestConfig(brwEngineKey, "custom", brwEngineCustomKey, "https://")
-	if i := brwEngineCurrent(c); i < 0 || brwEngineOptions(c)[i].Value != "startpage" {
+	if i := brwEngineCurrent(c); i < 0 || brwEngineOptions(c)[i].Value != "duckduckgo" {
 		t.Errorf("an unusable custom address is stop %d", i)
 	}
 	if detail := brwEngineDetail(c); !strings.Contains(detail, "isn't usable") {

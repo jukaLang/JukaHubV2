@@ -696,6 +696,10 @@ func drainCompanionQueue(config *Config) {
 			showToast("Phone sent a link", ColorToastSuccess)
 		case companionEventUpload:
 			showToast("Phone sent "+filepath.Base(ev.Text), ColorToastSuccess)
+		case companionEventPSN:
+			// A PlayStation sign-in (the phone's /psn page, or a "redirect"
+			// address pasted on this device) produced the PSN Account-ID.
+			psPanelAccountArrived(ev.Text)
 		}
 	}
 }

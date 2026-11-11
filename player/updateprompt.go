@@ -209,8 +209,9 @@ func updatePillSize(font *ttf.Font) (int32, int32) {
 }
 
 // drawHeaderUpdatePill draws the release offer in the header's system corner:
-// the same pill, at the same button height, immediately left of the bell, on
-// Home and in every scene. It records nothing — the caller owns the hit rect
+// the same pill, at the same button height, immediately left of the trophy
+// room's cup beside the bell (header_trophy.go), on Home and in every scene.
+// It records nothing — the caller owns the hit rect
 // for its own screen (homeUpdateRect or updatePrompt.badge).
 func drawHeaderUpdatePill(renderer *sdl.Renderer, config *Config, rightX, barH int32, focused bool) sdl.Rect {
 	font := headerCaptionFont(config)

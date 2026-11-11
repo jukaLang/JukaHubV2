@@ -58,6 +58,10 @@ func refreshHomeLayout(config *Config) {
 		if homePowerConfirm.open {
 			homePowerClose()
 		}
+		// So does Edit Home, which saves what it has not saved yet.
+		if homeEditActive() {
+			homeEditClose(config)
+		}
 		return
 	}
 	if homeLayout == nil {
@@ -84,6 +88,12 @@ func refreshHomeLayout(config *Config) {
 		homeTileByIndex = buildHomeTileMap(scene.Elements, homeLayout)
 		homeTileMapSig = sig
 	}
+
+	// The Carousel and Widgets bodies follow the tile list and step their
+	// animations (home_dynbody.go); an Edit Home asked for on another screen
+	// opens now that Home is up (home_edit.go).
+	homeLayout.dynSync(config)
+	homeEditPendingCheck(config)
 
 	// Clear the pressed feedback once the short visual window has elapsed.
 	if homePressedID != "" && sdl.GetTicks64()-homePressedAt > homePressDuration {
@@ -254,6 +264,7 @@ func toggleCalendarPopover() {
 		nc.open = false
 		dismissWeatherPopover()
 		dismissVolumePopover()
+		dismissBrightnessPopover()
 		// Every open starts on the current month: a view left on March must not
 		// look like the clock's date the next time it is opened.
 		resetCalendarView()
@@ -345,6 +356,12 @@ func homeActivate(config *Config) {
 	homePressedID = id
 	homePressedAt = sdl.GetTicks64()
 
+	// The tile layouts' own controls: a widget, an app tile, the add tile and
+	// the Edit pill (home_edit.go). Built-in cards go on as below.
+	if homeActivateDynamic(config, id) {
+		return
+	}
+
 	// The PS5 launcher is the one header tile that is also a launcher: A plays
 	// the PS5 build, or downloads it first. It gets its own sound, so return
 	// before the generic card handling below.
@@ -375,6 +392,12 @@ func homeActivate(config *Config) {
 		openNowPlaying(config)
 		return
 	}
+	// The trophy room's cup beside the bell opens Trophies, the same as a tap
+	// on it and the chrome control of every other scene (header_trophy.go).
+	if id == HomeFocusTrophy {
+		headerTrophyActivate(config)
+		return
+	}
 	if id == HomeFocusContinue {
 		if homeContinueResume(config) {
 			return
@@ -401,9 +424,14 @@ func homeActivate(config *Config) {
 		wifiScrOpen(config)
 		return
 	}
-	// The speaker beside it opens the volume popover (volumepopover.go).
+	// The speaker beside it opens the volume popover (volumepopover.go), and
+	// the sun left of the speaker the brightness card (brightnesspopover.go).
 	if id == HomeFocusVolume {
 		toggleVolumePopover()
+		return
+	}
+	if id == HomeFocusBrightness {
+		toggleBrightnessPopover()
 		return
 	}
 	if id == HomeFocusWeather {
@@ -459,6 +487,10 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if homePowerConfirm.open {
 		return homePowerKey(e)
 	}
+	// So is Edit Home (home_edit.go).
+	if homeEditActive() {
+		return homeEditKey(e, config)
+	}
 	// Easter egg: track J-U-K-A key sequence for firework animation.
 	if !fw.active {
 		keyMap := map[sdl.Keycode]string{
@@ -498,6 +530,14 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		PlayActivateSound()
 		homeSearchOpen(config, false)
 		homeSearch.skipText = "/"
+	case sdl.K_x:
+		// X edits a Carousel or Widgets Home, as the pad's X does; elsewhere
+		// the key keeps its old meaning further down the dispatch.
+		if !homeLayout.dynActive() || e.Repeat != 0 || homeLayout.Focus.Current() == HomeFocusNowPlaying {
+			return false
+		}
+		PlayActivateSound()
+		homeEditOpen(config)
 	case sdl.K_ESCAPE:
 		// Escape dismisses the calendar popover first.
 		if homeCalendarOpen {
@@ -523,6 +563,9 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	if homePowerConfirm.open {
 		return homePowerPad(e)
+	}
+	if homeEditActive() {
+		return homeEditPad(e, config)
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -551,6 +594,13 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		PlayActivateSound()
 		homeSearchOpen(config, true)
 	case sdl.CONTROLLER_BUTTON_X:
+		// On a Carousel or Widgets Home, X edits it (the footer says so);
+		// the now-playing chip keeps closing the mini player.
+		if homeLayout.dynActive() && homeLayout.Focus.Current() != HomeFocusNowPlaying {
+			PlayActivateSound()
+			homeEditOpen(config)
+			break
+		}
 		if homeLayout.Focus.Current() != HomeFocusNowPlaying || !closeFocusedMiniVideo() {
 			return false
 		}
@@ -579,6 +629,10 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	if homePowerConfirm.open {
 		homePowerClick(mx, my)
 		return true
+	}
+	// So does Edit Home (home_edit.go).
+	if homeEditActive() {
+		return homeEditClick(mx, my, config)
 	}
 	// With the calendar popover open, a click inside it is consumed, a click
 	// on the clock toggles it closed, and any other click dismisses it without
@@ -615,6 +669,11 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 		homeLayout.Focus.Set(HomeFocusPS5)
 		homeLayout.Focus.Remember()
 		ps5TileActivate()
+		return true
+	}
+	// A carousel card: a side card turns the row to it, the middle one opens
+	// (home_carousel.go). The pointer's hover never moves the row.
+	if homeLayout.dynClick(mx, my, config) {
 		return true
 	}
 	if homeLayout.FocusAt(mx, my) {
@@ -784,6 +843,9 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	hoffRenderCard(renderer, config)
 	// The power button's "Exit JukaHub?" card, over everything Home draws.
 	renderHomePowerConfirm(renderer, config)
+	// Edit Home's add sheet (home_addsheet.go); edit mode also ends here when
+	// another overlay has taken the screen.
+	renderHomeEditOverlays(renderer, config)
 }
 
 // loadHomeFonts opens the bundled Inter font at the home-screen sizes. Inter

@@ -49,6 +49,11 @@ const builtinActionPrefix = "action:"
 // Sandbox, IP Stream and the Audio Player used to be listed here as well and
 // were pure duplicates of Start → Scenes, which already lists every scene the
 // config ships.
+//
+// Trophies is the one deliberate exception: Start → Screens has it too, but
+// testers looked for "the trophies app" among the apps and found nothing (it
+// is injected at startup, so no config lists it), and it is the screen people
+// open for fun.
 var builtinApplets = []struct {
 	Name   string
 	Scene  string
@@ -56,6 +61,7 @@ var builtinApplets = []struct {
 }{
 	{"JukaLand", "JukaLand", ""},
 	{"Browser", "Browser", ""},
+	{"Trophies", playtimeSceneName, ""},
 	{"PS Remote Play", "", "chiaki"},
 }
 

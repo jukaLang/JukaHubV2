@@ -19,6 +19,13 @@ package main
 //
 // The layer is deliberately pure enough to test: brightness scaling, percent
 // parsing and the backlight search take their inputs as arguments.
+//
+// The sysfs backlight here is one of the screen-brightness backends; the
+// header's sun button, Quick Settings and the QR card all go through the
+// brightness controller (brightnessctl.go), which picks between it, the
+// Allwinner display driver the TrimUI handhelds actually use
+// (brightness_disp_linux.go), Windows' own controls (brightness_windows.go)
+// and a software dimmer.
 
 import (
 	"context"
@@ -166,8 +173,9 @@ func brightnessPercentFor(raw, max int) int {
 	return pct
 }
 
-// brightnessAvailable reports whether this device exposes a writable backlight.
-func brightnessAvailable() bool {
+// sysfsBrightnessAvailable reports whether this device exposes a writable
+// sysfs backlight (one of the brightness backends, brightnessFindBackend).
+func sysfsBrightnessAvailable() bool {
 	dir, _, err := findBacklight(backlightRoot)
 	if err != nil {
 		return false
@@ -186,34 +194,40 @@ func canWriteFile(path string) bool {
 	return true
 }
 
-// setScreenBrightness writes a 0..100 percentage to the backlight device.
-func setScreenBrightness(pct int) error {
+// sysfsSetBacklightRaw writes a raw level to the sysfs backlight, kept inside
+// 1..max_brightness: 0 is a dark panel. The rest of the app sets the level
+// through the brightness controller (brightnessApplyLevel), which maps the
+// percentage (brightnessRawForLevel) and calls this on its worker.
+func sysfsSetBacklightRaw(raw int) error {
 	dir, max, err := findBacklight(backlightRoot)
 	if err != nil {
 		return err
 	}
-	raw := brightnessRawFor(pct, max)
-	if err := os.WriteFile(filepath.Join(dir, "brightness"), []byte(strconv.Itoa(raw)), 0o644); err != nil {
-		return err
+	if raw < 1 {
+		raw = 1
 	}
-	return nil
+	if raw > max {
+		raw = max
+	}
+	return os.WriteFile(filepath.Join(dir, "brightness"), []byte(strconv.Itoa(raw)), 0o644)
 }
 
-// screenBrightness reads the current backlight level as a percentage.
-func screenBrightness() (int, bool) {
+// sysfsBacklightRaw reads the sysfs backlight's raw level and the top of its
+// scale (max_brightness).
+func sysfsBacklightRaw() (raw, max int, err error) {
 	dir, max, err := findBacklight(backlightRoot)
 	if err != nil {
-		return 0, false
+		return 0, 0, err
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "brightness"))
 	if err != nil {
-		return 0, false
+		return 0, 0, err
 	}
-	raw, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	raw, err = strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return 0, false
+		return 0, 0, err
 	}
-	return brightnessPercentFor(raw, max), true
+	return raw, max, nil
 }
 
 // ── Volume ─────────────────────────────────────────────────────────────────

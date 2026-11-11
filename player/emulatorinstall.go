@@ -123,6 +123,8 @@ type emuInstallPlan struct {
 	Index   coreIndexEntry
 	Current string
 	Reason  string
+	// ActivePath is the binary an update replaces ("" for an install).
+	ActivePath string
 }
 
 // planEmuInstall decides what installing the tile would do. It reads the
@@ -150,6 +152,14 @@ func planEmuInstall(e emuEntry, inv coreInventory, index []coreIndexEntry) emuIn
 		return plan
 	}
 	plan.Current = active.Version
+	plan.ActivePath = active.Path
+	if coreDirIsSystem(filepath.Dir(active.Path)) {
+		// The firmware's own copy, on its read-only partition: nothing here
+		// replaces it (coreActivationTarget would refuse at the write).
+		plan.Action = emuInstallNone
+		plan.Reason = "The " + coreConfigDisplayName(plan.Core) + " core is part of the firmware and is not updated here"
+		return plan
+	}
 	if sum, err := emuCachedCRC32(active.Path); err == nil && sum == entry.CRC32 {
 		plan.Action = emuInstallCurrent
 		plan.Reason = coreConfigDisplayName(plan.Core) + " core is already the " + entry.Date + " build"
@@ -173,6 +183,7 @@ func applyEmuInstallPlan(ctx context.Context, client *http.Client, plan emuInsta
 		CRC32:   plan.Index.CRC32,
 		URL:     emuCoreBaseURL() + plan.Index.File,
 		Current: plan.Current,
+		Active:  plan.ActivePath,
 	}
 	build, err := fetchCoreUpdate(ctx, client, upd, poolRoot)
 	if err != nil {
@@ -225,11 +236,26 @@ type emuInstallReport struct {
 	// to tell "nothing to update" from "could not ask", so an offline boot does
 	// not stand down for the whole cooldown.
 	Checked bool
+	// Refused names the cores whose new build this device refused in this run
+	// (coreRefusedError: it cannot load on this firmware, or it is over the
+	// download limit); RefusedNote is the first refusal's reason. KnownRefused
+	// counts the cores skipped because that exact build was refused before. In
+	// every case the installed core stays, and none of it is a failure.
+	Refused      []string
+	RefusedNote  string
+	KnownRefused int
+	// Interrupted reports a run stopped before it reached every core: a game
+	// started, the card was cancelled, or the time ran out.
+	Interrupted bool
+	// LowSpace is the free space a run found when it stopped because the card
+	// is nearly full ("" when it did not stop for that): the cores it did not
+	// reach keep their builds, and the toast says why.
+	LowSpace string
 }
 
 // summary is the one-line result shown in the toast.
 func (r emuInstallReport) summary() string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 6)
 	if len(r.Installed) > 0 {
 		parts = append(parts, strings.Join(r.Installed, ", ")+" installed")
 	}
@@ -239,8 +265,16 @@ func (r emuInstallReport) summary() string {
 	if r.Current > 0 {
 		parts = append(parts, itoa(r.Current)+" already current")
 	}
+	if kept := len(r.Refused) + r.KnownRefused; kept > 0 {
+		parts = append(parts, itoa(kept)+" kept (the new build is not usable here)")
+	}
 	if len(r.Errors) > 0 {
 		parts = append(parts, itoa(len(r.Errors))+" failed")
+	}
+	if r.LowSpace != "" {
+		parts = append(parts, coreLowSpaceNote(r.LowSpace))
+	} else if r.Interrupted {
+		parts = append(parts, "stopped early")
 	}
 	if len(parts) == 0 {
 		if r.Skipped > 0 {
@@ -356,7 +390,17 @@ func startEmulatorInstall(e emuEntry) {
 		build, backup, err := applyEmuInstallPlan(ctx, client, plan, compatCorePoolDir())
 		if err != nil {
 			installBarFail(installCardDetail(emuFriendlyError(err)))
-			ShowToast(coreConfigDisplayName(plan.Core)+": "+emuFriendlyError(err), ToastKindError)
+			msg, kind := coreConfigDisplayName(plan.Core)+": "+emuFriendlyError(err), ToastKindError
+			var refused *coreRefusedError
+			if errors.As(err, &refused) {
+				// Not a failure of the download: this device will not take
+				// the build, and the core that works is untouched.
+				kind = ToastKindWarning
+				if plan.Action == emuInstallUpdate {
+					msg += " · the installed build is kept"
+				}
+			}
+			ShowToast(msg, kind)
 			return
 		}
 		installBarPhase(installPhaseDone)
@@ -400,6 +444,13 @@ func startEmulatorInstall(e emuEntry) {
 // progress may be nil. It exists so both callers — the page's Update action and
 // the automatic pass — report through the install bar with one implementation
 // rather than two that can drift.
+//
+// A build this device refused before — it cannot load on this firmware, or it
+// is over the download limit — is not downloaded again: without that, a card
+// whose firmware is older than the buildbot's build image would fetch every
+// stale core every day only to refuse each one. The next build the index lists
+// is fetched and checked as usual. A stop (ctx) ends the run between cores and
+// is reported as Interrupted, not as a failure of the core it interrupted.
 func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport {
 	var report emuInstallReport
 	notify := func(phase, detail string) {
@@ -417,32 +468,83 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 	inv := scanCoreInventory()
 	// One update per core: several tiles can name the same emulator (a ROM
 	// folder and the core that runs it), and the binary is the same file.
-	updates := planCoreUpdates(index, inv.Active)
+	planned := planCoreUpdates(index, inv.Active)
+	report.Current = len(inv.Active) - len(planned)
+	if report.Current < 0 {
+		report.Current = 0
+	}
+	updates := make([]coreUpdate, 0, len(planned))
+	for _, upd := range planned {
+		if reason, refused := coreBuildRefused(upd.Core, upd.CRC32); refused {
+			logDebug("emulators", "core %s %s not fetched: refused before (%s)", upd.Core, upd.Date, reason)
+			report.KnownRefused++
+			continue
+		}
+		updates = append(updates, upd)
+	}
 	pool := compatCorePoolDir()
 	for i, upd := range updates {
-		if err := ctx.Err(); err != nil {
-			report.Errors = append(report.Errors, err.Error())
+		if ctx.Err() != nil {
+			report.Interrupted = true
+			break
+		}
+		// Each update writes the build twice (the pool copy and the active
+		// file) and keeps the one it replaces, so a pass over a card's whole
+		// core set — CrossMix's first one replaces most of them — can need
+		// gigabytes. A card that fills up is one where the next save cannot be
+		// written: the run stops while there is room, and says so.
+		if free, err := freeBytes(filepath.Dir(upd.Active)); err == nil && free < coreUpdateFreeFloor(upd.Active) {
+			report.LowSpace = bootFormatBytes(free)
+			logWarn("emulators", "core updates stopped before %s: only %s free on the card", upd.Core, report.LowSpace)
 			break
 		}
 		notify(installPhaseDownload, fmt.Sprintf("%s (%d/%d)", coreConfigDisplayName(upd.Core), i+1, len(updates)))
 		build, err := fetchCoreUpdate(ctx, client, upd, pool)
-		if err != nil {
-			report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
-			continue
+		if err == nil {
+			var target string
+			target, _, err = activateCoreBuild(build)
+			emuCRCForget(target)
 		}
-		target, _, err := activateCoreBuild(build)
-		emuCRCForget(target)
 		if err != nil {
-			report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
+			var refused *coreRefusedError
+			switch {
+			case ctx.Err() != nil:
+				// Stopped mid-download: this core was not reached, it did not
+				// fail, and the next pass picks it up.
+				report.Interrupted = true
+			case errors.As(err, &refused):
+				report.Refused = append(report.Refused, coreConfigDisplayName(upd.Core))
+				if report.RefusedNote == "" {
+					report.RefusedNote = err.Error()
+				}
+			default:
+				report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
+			}
+			if report.Interrupted {
+				break
+			}
 			continue
 		}
 		report.Updated = append(report.Updated, coreConfigDisplayName(upd.Core))
 	}
-	report.Current = len(inv.Active) - len(updates)
-	if report.Current < 0 {
-		report.Current = 0
-	}
 	return report
+}
+
+// coreUpdateFreeFloor is the free space a core update must find on the card
+// before it starts: what the boot card warns below (bootLowSpaceBytes), plus
+// three copies of the core it replaces — the pool copy, the staged file and the
+// kept build — counting at least 16 MB for one.
+func coreUpdateFreeFloor(active string) int64 {
+	size := int64(16 << 20)
+	if info, err := os.Stat(active); err == nil && info.Size() > size {
+		size = info.Size()
+	}
+	return bootLowSpaceBytes + 3*size
+}
+
+// coreLowSpaceNote is how a toast says a run stopped for a nearly full card.
+func coreLowSpaceNote(free string) string {
+	return "stopped: the card is almost full (" + free + " free)"
 }
 
 // emuWinManagedSpecs lists the Windows emulators JukaHub installed and can
@@ -557,7 +659,7 @@ func startEmulatorUpdateInstalled() {
 			PlaySuccessSound()
 		}
 		kind := ToastKindSuccess
-		if len(report.Errors) > 0 {
+		if len(report.Errors) > 0 || report.LowSpace != "" {
 			kind = ToastKindWarning
 		} else if len(report.Updated) == 0 {
 			kind = ToastKindInfo
@@ -582,8 +684,12 @@ func emuInstallHintLabel(e emuEntry) string {
 	case e.Status == emuAvailable && e.Launch != "":
 		return "Launch"
 	case e.Status == emuAvailable:
-		// A core row is already the install; A only says where it is used from,
-		// so the footer does not advertise an install that would replace it.
+		// A core row is already the install, so the footer does not advertise an
+		// install that would replace it. A opens the Games library on the games
+		// the core plays (raemu.go), and says so when the core's console is known.
+		if emuCoreSystemQuery(e) != "" {
+			return "Games"
+		}
 		return ""
 	}
 	if IsWindows() {
@@ -607,6 +713,10 @@ func emuInstallHintLabel(e emuEntry) string {
 func emuUpdateHintLabel(e emuEntry) string {
 	if hakuxTile(e) {
 		return hakuxHintX(e)
+	}
+	// The handheld's PSP tile: X opens the PPSSPP card (ppsspp_managed_ui.go).
+	if label := ppssppTileXLabel(e); label != "" {
+		return label
 	}
 	if IsWindows() && e.Managed && e.Status == emuAvailable {
 		return "Update"
@@ -896,6 +1006,12 @@ func rollbackCoreBuild(b coreBackup) (coreBuild, error) {
 	}
 	if _, err := existingRegularFile(b.Path); err != nil {
 		return coreBuild{}, err
+	}
+	// A kept build ran here once, but not necessarily well: one installed
+	// before the load check existed may be a nightly that never loaded.
+	// Restoring that would trade a core for a broken one.
+	if problem := coreLoadProblemFile(b.Path, b.Target); problem != "" {
+		return coreBuild{}, &coreRefusedError{Core: b.Core, Build: "kept " + b.Stamp.Format("2006-01-02 15:04"), Reason: coreCannotLoadReason + problem}
 	}
 	_, installErr := installCoreFile(b.Path, b.Target)
 	emuCRCForget(b.Target)

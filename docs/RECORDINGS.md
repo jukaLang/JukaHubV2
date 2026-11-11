@@ -30,9 +30,12 @@ from the guess. The hub only decides where the file lands.
 The edit uses the same crash-safe writer as the save-state switches: one
 `key = value` line changes, the original is kept once as
 `retroarch.cfg.jukahub-backup`, and the file is replaced through a temporary
-file so a power loss cannot truncate it. `recordings: false` stops the hub from
-touching `retroarch.cfg` at all — the screen still lists whatever is in the
-folder.
+file so a power loss cannot truncate it. Like those switches it lasts for the
+JukaHub launch only: the previous value (usually `default`) goes back when the
+game exits, so RetroArch started from the firmware's menu records where it
+always did ([GAME_LIBRARY.md](GAME_LIBRARY.md#resume-and-auto-save)).
+`recordings: false` stops the hub from touching `retroarch.cfg` at all — the
+screen still lists whatever is in the folder.
 
 ## Recording something
 

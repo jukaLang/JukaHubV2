@@ -26,10 +26,11 @@ Titles are the filename with the extension, underscores and trailing release
 tags removed: `Pokemon_Emerald_(USA).gba` appears as **Pokemon Emerald**.
 Nothing is renamed on the card.
 
-Box art comes from `data/game-art/<Console_Name>/<Title>.png`. Onboarding fills
-it from the libretro thumbnail set, and the library can fetch the rest itself:
-press **L1** (or **F**) to download covers for every scanned game that does not
-have one. A game without art shows its initials on an accent tile instead, so
+Box art comes from `data/game-art/<Console_Name>/<Title>.png`. JukaHub fills
+it from the libretro thumbnail set by itself, in the background
+([Found automatically](#found-automatically)), and the library fetches the rest
+on a press: **L1** (or **F**) downloads covers for every scanned game that does
+not have one. A game without art shows its initials on an accent tile instead, so
 the layout stays the same while the download is missing.
 
 The fetch runs on a worker; covers appear when it finishes, without reopening
@@ -43,6 +44,37 @@ thumbnail set does not have is remembered in
 `data/game-art/.missing-art.json` and not requested again for 30 days, so a
 library full of unlisted homebrew does not re-download 200 404s every time.
 Network errors are not cached — only a real 404 is.
+
+### Found automatically
+
+Covers are also found without a press. About a minute and a half after JukaHub
+starts on a card that has never had a pass, and then at most once a day, a
+background pass scans the card once and asks the thumbnail set for the games
+that still have no cover, skipping the titles it already answered "not found"
+for within the 30 days above. Every half hour it also looks at the ROM folders
+— the names in each console folder and the time of a game's sub-folder, not a
+walk of the card — so games copied onto the card get their covers within about
+half an hour instead of the next day.
+
+It only runs at a moment that costs nothing: online, never while a game or an
+emulator has the screen (a game that starts stops the pass after the cover it
+is on), never beside another fetch or a running install, and on battery only
+at 20 % or more and once the device has been left alone for a minute and a half; on
+the charger, or on a PC, at once. It is the same fetch as **L1** / **F**, so
+the status line shows its progress, and pressing the action while it runs stops
+it, and the automatic passes then wait a day. Covers land in the library without reopening it.
+When a pass saved any, one quiet notification says so ("Found box art for 12
+games") and stays in the notification centre; a pass that found nothing says
+nothing.
+
+A pass is stamped in `data/game-art/.auto-art.json` only when every title got an
+answer — a saved cover or a real 404 — so a pass cut short by a game, by Wi-Fi
+dropping or by a power cut resumes at the next good moment, and network errors
+are retried after half an hour (doubling, at most a day). What leaves the device
+is what **L1** / **F** sends: game titles, as plain GET requests to
+`thumbnails.libretro.com`. Nothing is uploaded. **Settings → Games & emulators →
+Find box art automatically** turns it off (`artAutoFetch`, on by default), and
+safe mode skips it for that launch.
 
 ## Disc-based systems
 
@@ -79,9 +111,9 @@ is visible without opening a settings panel.
 The numbers are counted from the files on the card, not from the download
 attempts: a cover that exists is counted whatever put it there, including one
 copied from a PC or a scraper. Deleting a cover lowers the figure again.
-Providers beyond the libretro thumbnail set (descriptions, screenshots, release
-dates) need a metadata source with its own account or key, so they are not part
-of this pass.
+The library can also look up genre, developer, release year and player count
+from libretro-database's separate DAT files. Descriptions and notes are yours to
+write; manuals and screenshots are not fetched.
 
 ## Launching
 
@@ -117,11 +149,45 @@ RetroArch) is started directly with the ROM as its argument. JukaHub raises the
 game power profile for the child process and restores it when the emulator
 exits, exactly like the Emulators screen.
 
+On the handheld the launcher also gets the environment the firmware's own menu
+would have given it, not JukaHub's. `launch.sh` records `HOME`, `PATH` and
+`LD_LIBRARY_PATH` before it points them at JukaHub's folder
+(`JUKAHUB_ORIG_ENV` names them, `JUKAHUB_ORIG_<NAME>` holds each value that was
+set), and every game, emulator and app JukaHub starts gets those originals
+back; a variable that was unset stays unset. Before this, a launcher that did
+not reset them ran RetroArch with JukaHub's library folders ahead of the
+firmware's — on CrossMix, the stock `/usr/lib` copies ahead of
+`/mnt/SDCARD/System/lib` — so the same game could behave differently from
+JukaHub and from the firmware's menu. With an older `launch.sh` that records
+nothing, only JukaHub's own folders are taken out of `PATH` and
+`LD_LIBRARY_PATH`. The time zone chosen in Settings (`TZ`) is kept on purpose.
+JukaHub's own tools — the Terminal, Power Tools snippets, PortMaster ports, Wine
+and Android titles — keep JukaHub's environment.
+
+The Emulators page lists RetroArch itself on the handheld, beside its cores:
+the tile names its folder, how many cores it holds and the config it reads,
+and **A** opens RetroArch's own menu, started the way the firmware's launchers
+start it (from its folder, with `HOME` there). **A** on a core row opens this
+library searched for the console that core plays (the first **B** clears the
+search).
+
 ### Per-game launch options
 
 **Start** (or **O** on a keyboard) opens the options sheet for the highlighted
-game. It has four rows and applies to that title only:
+game. The first four rows are saved library view settings; the rest apply to
+that launch only:
 
+- **Display title** — the name shown in the library. It is stored beside the
+  game, not written into the ROM filename, so the file stays exactly as it is.
+  Leave it empty to go back to the name derived from the file.
+- **Visibility** — hide this game, or make it visible again. Hidden games are
+  left out of the console lists, Continue, search and tag filters until
+  **Show hidden** is on.
+- **Library sort** — Title, Last played, Playtime, Rating or Year. The order is
+  saved and applies to every console. Games with no value for the chosen sort
+  (never played, unrated, no year) come last.
+- **Show hidden** — reveal the games hidden from the library; turn it off to
+  tuck them away again.
 - **CPU limit** — `Auto`, then 2.0, 1.8, 1.6, 1.4 and 1.2 GHz. `Auto` follows the
 global `powerProfileMaxFreq`; any other value caps the clock for this game's  launch and nothing else. **A** and **Right** step one rung cooler, **Left** warms
   back up. A cap can only lower the chip's top OPP, never invent a faster one, and
@@ -134,10 +200,13 @@ global `powerProfileMaxFreq`; any other value caps the clock for this game's  la
   sh /mnt/SDCARD/Emus/PSP/launch.sh "/mnt/SDCARD/Roms/PSP/Game.iso" --fast
   ```
 
-  Double quotes group a value with spaces (`--profile "My Game"`). Stock
-  `launch.sh` scripts read only `$1` and ignore the rest, so this row is for a
-  launcher that forwards its arguments, or for an emulator binary started
-directly.
+  Double quotes group a value with spaces (`--profile "My Game"`). This row is
+  for a launcher that forwards its arguments (`"$@"`), or for an emulator binary
+  started directly. Stock TrimUI and CrossMix `launch.sh` scripts end in
+  `ra64.trimui … "$*"`, which joins the ROM path and everything after it into
+  one argument: with extra arguments RetroArch is handed a ROM path that does
+  not exist. Local play's player order is therefore not passed to those scripts
+  either.
 - **Reset** — clears both rows for the game and puts it back on the defaults.
 - **Open in…** — hands this game straight to the tool that owns its next step
   (see *Handing a game to its tool* below), the same as **E** in the library.
@@ -163,11 +232,31 @@ overrides" — the library still opens. The clock is applied through the same
 profile code as the global setting, so a firmware with a read-only
 `scaling_max_freq` logs one line and runs the game at its own clock instead.
 
+Display titles, hidden flags and the sort mode are a library view, not launch
+options. They live in `Apps/JukaHub/data/game-library.json`, keyed by a hash of
+the ROM's content (its size plus the first and last 256 KiB), so moving or
+renaming the file keeps its name and hidden state:
+
+```json
+{
+  "version": 1,
+  "sort": "rating",
+  "show_hidden": false,
+  "games": {
+    "9c1f...": { "display_title": "My Zelda", "hidden": true }
+  }
+}
+```
+
+The launch options above remain keyed by path because they belong to one
+launcher's invocation; the view state follows the cartridge instead.
+
 ### Resume and auto-save
 
 When the resolved launcher runs RetroArch (its path contains a `RetroArch`
-segment, or the `launch.sh` script mentions `retroarch`), JukaHub turns on two
-switches in `retroarch.cfg` before the game starts:
+segment, or the `launch.sh` script mentions `retroarch`, `ra64.`/`ra32.` or a
+`_libretro` core), JukaHub turns on two switches in `retroarch.cfg` before the
+game starts:
 
 ```ini
 savestate_auto_save = "true"
@@ -181,11 +270,31 @@ other key survive — and the original file is kept once as
 `retroarch.cfg.jukahub-backup`. Only the auto state is involved; manual save
 slots are untouched.
 
+The switches hold for JukaHub's launch only. Before the edit, JukaHub writes
+what it changes (and the value you had, or that you had none) to
+`Apps/JukaHub/data/retroarch-launch-scope.json`; when the game exits, your
+values go back. RetroArch may rewrite the whole file as it exits, so only these
+keys are touched, and only where they still hold JukaHub's value — a setting you
+changed in RetroArch's menu during the game is yours. A crash or a power cut
+mid-game leaves the journal behind, and the next JukaHub start restores from it;
+a launch whose emulator never started is put back about twenty seconds later.
+The same applies to the recording folder (`recording_output_directory`,
+[RECORDINGS.md](RECORDINGS.md)) and to the in-game OSD preset. So a game started
+from the firmware's own menu — CrossMix's or the stock one — behaves exactly as
+it did before JukaHub, with its own resume and save-on-MENU features. Earlier
+versions left the switches on for good; the first start of this version puts
+back the values the backup shows you had, for keys that still hold JukaHub's
+value.
+
+On TrimUI cards JukaHub edits `RetroArch/retroarch.cfg`, the file beside
+`ra64.trimui` that the firmware's launchers make RetroArch read, and a
+`RetroArch/.retroarch/retroarch.cfg` too when one exists; `JUKAHUB_RETROARCH_CFG`
+names a different file.
+
 This is deliberately RetroArch-only. mGBA, PPSSPP, DraStic and the other
 standalone emulators own their own state formats, so the hub does not pretend it
 can resume them. To opt out entirely, set `savestateResume` to `false` in
-`variables.Custom` in `jukauser.json`; JukaHub will stop editing the config, and
-the values already there are left as they are.
+`variables.Custom` in `jukauser.json`; JukaHub will stop editing the config.
 
 ### Pinning a launcher by hand
 
@@ -283,6 +392,7 @@ reconnect.
 | D-pad right | enter the game list from a console |
 | D-pad left | back to the console column |
 | **A** | open the highlighted console, or play the highlighted game |
+| **Start** / **O** | open the game options sheet: display title, visibility, library sort, launch options |
 | **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
 | **E** | open the highlighted game in its tool: a covering Game Profile, its exact Compatibility row, or the Emulators page with the console's tile highlighted. Closing that tool (**B**) comes back to the library where you left it |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
@@ -410,8 +520,9 @@ How it behaves while you browse:
 - A clip that produces no frames is remembered for the rest of the session and
   never retried, so one bad file cannot stutter the list.
 
-This is a browse-time aid, not a scraper. Covers, manuals and metadata still
-come from the libretro thumbnail set ([Completeness](#completeness)); snaps are
+This is a browse-time aid, not a scraper. Covers come from the public libretro
+thumbnail set; game facts use libretro-database DAT files, and descriptions and
+notes are yours to write. Manuals and screenshots are not fetched. Snaps are
 whatever you put on the card.
 
 ## Notes and limits
@@ -434,12 +545,11 @@ whatever you put on the card.
 ## What is deliberately not here yet
 
 The library is the foundation, not the whole front end. These are the next
-pieces that fit the same data, in the order they are worth building:
+pieces that fit the same data:
 
 | Next | Why it is not in this version |
 |------|-------------------------------|
-| Save-state slots and resume-at-frame | Auto-save/auto-load now resumes a RetroArch game where it stopped, but named slots and exact-frame control still belong to the emulator's own menu. |
+| Create and manage save states in JukaHub | The game page lists RetroArch's existing auto and numbered states and can start from one. Saving a new state or stepping to an exact frame still uses RetroArch's own menu. |
 | Cheats from the libretro database | Needs a downloaded cheat catalogue per core and a `.cht` writer. The covered consoles are the ones the catalog reports, so it can reuse `findGameLauncher`. |
-| Collections and pinned games | A second index over the same paths (`Collections` is already a protected folder in the patch engine). |
-| Per-game launch options | The library can pass extra flags today via `game-launchers.json`; per-game overrides need a profile file keyed by ROM path. |
-| Per-game overlays and hotkeys | An overlay has to be drawn by the emulator, not behind it. The working path is a JukaHub-managed RetroArch overlay preset and hotkey block, which is separate from the launcher. |
+| Curated collections | Favorites and custom tags already filter the library. A separate collection editor with its own saved order is not included. |
+| Managed emulator overlays and hotkey profiles | Per-game extra arguments and the player-order setting cover some launch needs, but JukaHub does not create or manage RetroArch overlay layouts and named hotkey profiles. |

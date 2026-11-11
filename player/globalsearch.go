@@ -422,6 +422,12 @@ func handleGSInput(e *sdl.KeyboardEvent, config *Config) {
 		// every key reaches this handler before main.go's F2 toggle.
 		homeSearchClose()
 		PlayBackSound()
+	case sdl.K_F4:
+		// Say it instead, as Y does on the pad. The global F4 is read after
+		// this sheet, so it is answered here; Alt+F4 stays the window's quit.
+		if e.Repeat == 0 && e.Keysym.Mod&(sdl.KMOD_ALT|sdl.KMOD_CTRL) == 0 {
+			voiceOpen(config)
+		}
 	case sdl.K_UP:
 		homeSearchMove(-1)
 	case sdl.K_DOWN:
@@ -475,10 +481,14 @@ func homeSearchController(e *sdl.ControllerButtonEvent, config *Config) bool {
 			return true
 		}
 		homeSearchActivate(config, gsCursor)
-	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
-		// X / Y edit the query: the keyboard comes back with the text in it.
+	case sdl.CONTROLLER_BUTTON_X:
+		// X edits the query: the keyboard comes back with the text in it.
 		PlayActivateSound()
 		homeSearchOpenKeyboard()
+	case sdl.CONTROLLER_BUTTON_Y:
+		// Y says it instead: the sheet closes and Voice command opens
+		// (voicecmd.go). Y used to be a second X.
+		voiceOpen(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		homeSearchClose()
 		PlayBackSound()

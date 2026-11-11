@@ -12,13 +12,34 @@ package main
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
 
-// screenChildGroupConfigure makes cmd the leader of a new process group. It
-// must run before cmd.Start.
+// screenChildGroupConfigure prepares a screen-taking child (a game, an
+// emulator, an app): it becomes the leader of a new process group, and when
+// the caller left cmd.Env nil it gets the environment the firmware's own menu
+// would have given it rather than JukaHub's (childenv.go). That is a side
+// effect callers must know about: in the child, HOME, PATH and
+// LD_LIBRARY_PATH are the firmware's, so JukaHub's libs/ and required/ tools
+// are not on its paths. A caller whose child needs JukaHub's environment sets
+// cmd.Env itself first (game profiles, PortMaster, Wine and the Terminal do),
+// or uses processGroupConfigure. It must run before cmd.Start.
 func screenChildGroupConfigure(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	processGroupConfigure(cmd)
+	if cmd.Env == nil {
+		cmd.Env = screenChildEnv(os.Environ())
+	}
+}
+
+// processGroupConfigure only makes cmd the leader of a new process group, for
+// JukaHub's own helpers (Power Tools snippets): stopped as a whole like a
+// game, but running with JukaHub's environment. It must run before cmd.Start.
+func processGroupConfigure(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}

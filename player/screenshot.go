@@ -92,5 +92,6 @@ func captureScreenshot(renderer *sdl.Renderer) {
 		ShowToast("Screenshot save failed", ToastKindError)
 		return
 	}
+	trophyEvent(tkScreenshot)
 	ShowToast(fmt.Sprintf("[Screenshot] %s", filename), ToastKindSuccess)
 }

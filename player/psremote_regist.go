@@ -126,10 +126,23 @@ func ps5Register(engine psEngine, host, pin, accountID string, timeout time.Dura
 		return psConsole{}, err
 	}
 	if offline {
-		return psConsole{}, errors.New("a PS5 needs the PSN Account-ID from Link Device")
+		// Link Device only shows the PIN: the Account-ID comes from a PSN
+		// sign-in (the Account-ID card, psn_signin.go).
+		return psConsole{}, errors.New("a PS5 needs your PSN Account-ID — set it under PSN Account-ID (sign in with PlayStation)")
 	}
 	if !regularFile(engine.Regist) {
-		return psConsole{}, errors.New("the PS5 pairing helper is missing (chiaki-regist)")
+		if !psRemoteSupported() {
+			return psConsole{}, errors.New("a PS5 pairs on the TrimUI handhelds: its helper, chiaki-regist, is a Linux ARM64 program")
+		}
+		// The panel installs it before this point (psremote_helpers_install.go).
+		return psConsole{}, errors.New("the PS5 pairing helper is missing (chiaki-regist) · on Wi-Fi, A on Install Remote Play installs it")
+	}
+	// An update or a copy can drop the execute bit (psremote_stream_opts.go).
+	psEnsureExecutable(engine.Regist)
+	// A helper this firmware's loader refuses says why now, not as a pairing
+	// that failed at "start" (PSR-4; the answer is kept per file).
+	if problem := psNativeHelperProblem(engine.Regist, psRegistHelperLibraryPath(engine)); problem != "" {
+		return psConsole{}, errors.New("chiaki-regist won't run here: " + psHelperCompact(problem))
 	}
 	if timeout <= 0 {
 		timeout = 20 * time.Second

@@ -46,32 +46,53 @@ var controlsLegend controlsLegendState
 func systemLegendRows() []FooterHint {
 	if hintsUseKeyboard() {
 		// The keyboard's own globals (main.go): F10 is Start, Ctrl+Q Quick
-		// Settings, F2 search, F1 this card and then the full list. The pad
-		// chords (profile switch) have no keyboard twin and are left out.
-		return []FooterHint{
+		// Settings, F2 search, F6 mouse mode, F1 this card and then the full
+		// list. The pad's profile switch has no keyboard twin and is left out.
+		keys := []FooterHint{
 			{Button: "F10", Label: "Start menu"},
 			{Button: "Ctrl+Q", Label: "Quick Settings"},
 			{Button: "F2", Label: "Search"},
-			{Button: hintQuitKeys(), Label: "Quit JukaHub"},
-			{Button: "F1", Label: "All keyboard shortcuts"},
 		}
+		if row, ok := voiceOrbLegendRow(true); ok {
+			keys = append(keys, row)
+		}
+		if row, ok := vcursorLegendRow(true); ok {
+			keys = append(keys, row)
+		}
+		return append(keys,
+			FooterHint{Button: hintQuitKeys(), Label: "Quit JukaHub"},
+			FooterHint{Button: "F1", Label: "All keyboard shortcuts"},
+		)
 	}
 	rows := []FooterHint{
 		{Button: "Start", Label: "Start menu"},
 		{Button: "Select + Start", Label: "Quit JukaHub"},
 	}
+	// Menu: the voice orb (voiceorb.go), unless Settings gave Menu back to Back.
+	voiceRow, menuIsVoice := voiceOrbLegendRow(false)
+	if menuIsVoice {
+		rows = append(rows, voiceRow)
+	}
 	// Hold Select, press R1: the next control profile (inmap_runtime.go).
 	if inmapHotkeyEnabled() {
 		rows = append(rows, FooterHint{Button: "Select + R1", Label: "Next control profile"})
 	}
+	// Hold Select + L1: mouse mode (vcursor_mode.go).
+	if row, ok := vcursorLegendRow(false); ok {
+		rows = append(rows, row)
+	}
 	if controlsLegend.brick {
 		// On a Brick "F1" is a key on the device, not the keyboard's: it opens
-		// this card, F2 opens Quick Settings, and Menu goes back like B.
-		return append(rows,
+		// this card, F2 opens Quick Settings, and Menu is voice (listed above)
+		// or, with that switched off, goes back like B.
+		rows = append(rows,
 			FooterHint{Button: "F1", Label: "This help"},
 			FooterHint{Button: "F2", Label: "Quick Settings"},
-			FooterHint{Button: "Menu", Label: "Back"},
 		)
+		if !menuIsVoice {
+			rows = append(rows, FooterHint{Button: "Menu", Label: "Back"})
+		}
+		return rows
 	}
 	return append(rows, FooterHint{Button: "F1", Label: "Keyboard shortcuts"})
 }

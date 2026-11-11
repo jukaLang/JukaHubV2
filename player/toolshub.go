@@ -490,8 +490,13 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		system = append(system, toolsHubTile{id: "calculator", label: "Calculator", icon: "calculator", value: "Quick math with history"})
 	}
 	// The trophy room is injected on demand (trophyOpenRoom), so its tile is
-	// there whatever the config carries.
-	system = append(system, toolsHubTile{id: "trophies", label: "Trophies & playtime", icon: "trophy", value: "Your stats and badges"})
+	// there whatever the config carries. Its value is the live count, which is
+	// what makes the tile worth opening; trophySummary is cached between frames.
+	trophies := toolsHubTile{id: "trophies", label: "Trophies & playtime", icon: "trophy", value: "Your stats and badges"}
+	if earned, shown := trophySummary(); shown > 0 {
+		trophies.value = strconv.Itoa(earned) + " of " + strconv.Itoa(shown) + " earned"
+	}
+	system = append(system, trophies)
 	system[0].section, system[0].sectionIcon = "System", "cpu"
 	tiles = append(tiles, system...)
 

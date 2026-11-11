@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-11-10",
+  "entries": [
+    {
+      "id": "native-games",
+      "title": "Native (NDK) games",
+      "kind": "category",
+      "status": "experimental",
+      "summary": "Games whose code is a native library started by NativeActivity or GameActivity are what AndroidRT is built for. Nothing has been verified on a handheld yet.",
+      "get": "Copy APKs you own into the APKs folder on the card, or send them from your phone with the Phone Companion. Your APKs tab checks each one and marks the ones worth trying.",
+      "notes": "Use the 64-bit (arm64-v8a) build when a game offers one. If a game stops, its launch log names what AndroidRT is missing; that list is what the runtime implements next."
+    },
+    {
+      "id": "minecraft-bedrock",
+      "title": "Minecraft: Bedrock Edition",
+      "package": "com.mojang.minecraftpe",
+      "kind": "title",
+      "status": "experimental",
+      "summary": "AndroidRT ships a class pack for Minecraft's Java side. Nobody has run it on a handheld yet.",
+      "get": "Buy Minecraft on Google Play, then copy your own APK off your phone (an APK backup app, or adb). Use the 64-bit (arm64-v8a) build.",
+      "notes": "The store, the license check and Xbox Live answer as unavailable, never as granted, so a Google Play build may refuse to start without its license. It needs OpenGL ES 3.0 and most of the 1 GB of RAM. Details: docs/ANDROID-MINECRAFT.md."
+    },
+    {
+      "id": "terraria-mobile",
+      "title": "Terraria (mobile edition)",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "The mobile edition is C#/.NET code running on Mono inside a Java app. AndroidRT runs native (NDK) code only.",
+      "route": "Terraria's PC version runs on Linux handhelds through FNA with your own game files — the PortMaster route (Start → Games → PortMaster Ports)."
+    },
+    {
+      "id": "gamemaker-games",
+      "title": "GameMaker games",
+      "kind": "category",
+      "status": "wontrun",
+      "summary": "GameMaker's Android runner starts in Java, so AndroidRT cannot run these.",
+      "route": "PortMaster's GMLoader runs a number of GameMaker games from their Android APK on Linux handhelds — look the game up in PortMaster."
+    },
+    {
+      "id": "unity-games",
+      "title": "Unity games",
+      "kind": "category",
+      "status": "wontrun",
+      "summary": "Unity's Android player starts in Java (UnityPlayerActivity) and calls back into it every frame. AndroidRT has no Java runtime, so it cannot run them today.",
+      "route": "Some Unity games ship a Linux build; PortMaster carries the ones that run on handhelds."
+    },
+    {
+      "id": "engine-games",
+      "title": "Godot, LÖVE and SDL games",
+      "kind": "category",
+      "status": "wontrun",
+      "summary": "Their Android builds start in Java (GodotApp, LÖVE's activity, SDLActivity), which AndroidRT does not provide.",
+      "route": "These engines all build for Linux: the game's PC version, or its .love file with LÖVE for Linux, usually runs on the handheld through PortMaster."
+    },
+    {
+      "id": "java-apps",
+      "title": "Java and Kotlin apps",
+      "kind": "category",
+      "status": "wontrun",
+      "summary": "Almost every Android app, and most games, is Java/Kotlin bytecode that needs Android's runtime (ART) and framework. AndroidRT is not Android: it loads native game code only.",
+      "route": "A full Android firmware for the device, or Waydroid on a Linux machine with a binder kernel, runs them. Where Waydroid is set up, the APK Store can install an APK into it."
+    }
+  ]
+}

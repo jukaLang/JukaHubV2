@@ -1,15 +1,17 @@
 package main
 
-// The system corner of the top bar: a volume button, a Wi-Fi meter and a
-// battery gauge.
+// The system corner of the top bar: a brightness button, a volume button, a
+// Wi-Fi meter and a battery gauge.
 //
 // The right-hand cluster is still the shared []string from headerStatusParts,
 // so layout, trimming (fitStatusParts) and the clock/weather hit rects keep
-// working unchanged. What changes here is how three of those parts are painted:
-// the leading volume part is a speaker glyph (the button that opens the volume
-// popover, volumepopover.go), the network slot becomes signal bars (empty when
-// there is no link) and the battery part grows a gauge coloured green / yellow
-// / red by the charge left, with a bolt over it while a charger is plugged in.
+// working unchanged. What changes here is how four of those parts are painted:
+// the leading brightness part is a sun (the button that opens the brightness
+// card, brightnesspopover.go), the volume part beside it a speaker glyph (the
+// button that opens the volume popover, volumepopover.go), the network slot
+// becomes signal bars (empty when there is no link) and the battery part grows
+// a gauge coloured green / yellow / red by the charge left, with a bolt over it
+// while a charger is plugged in.
 //
 // Both the home header and every scene's status bar call the helpers below with
 // their own text drawing function, so the icons are pixel-identical on every
@@ -37,6 +39,12 @@ const (
 	// the speaker sits immediately left of the Wi-Fi meter.
 	statusVolumePart = "vol|"
 
+	// statusBrightnessPart is the brightness button's part, a marker like the
+	// volume's. headerStatusParts puts it before the volume part, so the sun
+	// sits immediately left of the speaker and the speaker stays immediately
+	// left of the Wi-Fi meter.
+	statusBrightnessPart = "bri|"
+
 	// statusChipTextGap separates a gauge from its label and the bar gap.
 	statusChipTextGap = int32(6)
 
@@ -56,6 +64,14 @@ var statusWiFiRect sdl.Rect
 // click, a tap or A on it opens the volume popover, and the popover hangs
 // from it.
 var statusVolumeRect sdl.Rect
+
+// statusBrightnessRect is the sun's hit area, measured the same way. A click,
+// a tap or A on it opens the brightness card, which hangs from it.
+var statusBrightnessRect sdl.Rect
+
+// statusBrightnessLevel supplies the sun's level (brightnessctl.go keeps it
+// fresh off the render thread); known=false before the first reading.
+var statusBrightnessLevel = brightnessCurrent
 
 // statusBatteryPercent supplies the level in the shared status cluster. It is a
 // variable so the render tests can pin a level instead of depending on the host
@@ -137,16 +153,22 @@ func isVolumeStatusPart(part string) bool {
 	return part == statusVolumePart
 }
 
+// isBrightnessStatusPart reports whether the part is the brightness button,
+// whose marker cannot collide with a reading either.
+func isBrightnessStatusPart(part string) bool {
+	return part == statusBrightnessPart
+}
+
 // statusFingerRect turns a drawn status chip into a tap target a thumb can hit
 // without aiming. The meter itself is only about 18px of bars inside a 34px
 // chip, which is a miss on a 5-inch panel; the target grows to the full height
 // of the bar and to a comfortable width, then stops short of the neighbouring
 // controls so a tap on the clock or the forecast still belongs to them.
 //
-// Neighbours on either side bound it: the cluster now starts with the volume
-// button, so the meter is no longer the leftmost chip and its target may not
-// grow over the speaker beside it. A chip with nothing on its left (the
-// volume button itself) still grows into the empty space there.
+// Neighbours on either side bound it: the cluster now starts with the
+// brightness and volume buttons, so the meter is no longer the leftmost chip
+// and its target may not grow over the speaker beside it. A chip with nothing
+// on its left (the leading button) still grows into the empty space there.
 func statusFingerRect(chip sdl.Rect, barH int32, neighbours ...sdl.Rect) sdl.Rect {
 	if chip.W <= 0 || barH <= 0 {
 		return chip
@@ -219,31 +241,47 @@ func statusGapNeighbours(left, right sdl.Rect) (forLeft, forRight sdl.Rect) {
 	return forLeft, forRight
 }
 
-// growStatusButtonRects grows the volume button's and the Wi-Fi meter's hit
-// areas once both are measured (both headers call it after placing the
-// cluster). The meter still stops short of the forecast and the clock on its
-// right (rightOfWiFi); the gap between the speaker and the meter is split.
-// Either may be missing: the bar drops parts when it is crowded.
+// growStatusButtonRects grows the brightness button's, the volume button's
+// and the Wi-Fi meter's hit areas once they are measured (both headers call it
+// after placing the cluster). They sit side by side in that order, and each
+// gap between two of them is split at its middle; the rightmost one still
+// stops short of the forecast and the clock on its right (rightOfWiFi), and
+// the leftmost grows into the empty space on its left. Any of them may be
+// missing: the bar drops parts when it is crowded.
 func growStatusButtonRects(barH int32, rightOfWiFi ...sdl.Rect) {
-	vol, wifi := statusVolumeRect, statusWiFiRect
-	switch {
-	case vol.W > 0 && wifi.W > 0:
-		forVol, forWiFi := statusGapNeighbours(vol, wifi)
-		var nb [4]sdl.Rect
-		nb[0] = forWiFi
-		n := 1
-		for _, r := range rightOfWiFi {
-			if n < len(nb) {
-				nb[n] = r
-				n++
+	var live [3]*sdl.Rect
+	n := 0
+	for _, r := range []*sdl.Rect{&statusBrightnessRect, &statusVolumeRect, &statusWiFiRect} {
+		if r.W > 0 {
+			live[n] = r
+			n++
+		}
+	}
+	var drawn [3]sdl.Rect
+	for i := 0; i < n; i++ {
+		drawn[i] = *live[i]
+	}
+	for i := 0; i < n; i++ {
+		var nb [6]sdl.Rect
+		k := 0
+		if i > 0 {
+			_, forRight := statusGapNeighbours(drawn[i-1], drawn[i])
+			nb[k] = forRight
+			k++
+		}
+		if i+1 < n {
+			forLeft, _ := statusGapNeighbours(drawn[i], drawn[i+1])
+			nb[k] = forLeft
+			k++
+		} else {
+			for _, r := range rightOfWiFi {
+				if k < len(nb) {
+					nb[k] = r
+					k++
+				}
 			}
 		}
-		statusVolumeRect = statusFingerRect(vol, barH, forVol)
-		statusWiFiRect = statusFingerRect(wifi, barH, nb[:n]...)
-	case wifi.W > 0:
-		statusWiFiRect = statusFingerRect(wifi, barH, rightOfWiFi...)
-	case vol.W > 0:
-		statusVolumeRect = statusFingerRect(vol, barH, rightOfWiFi...)
+		*live[i] = statusFingerRect(drawn[i], barH, nb[:k]...)
 	}
 }
 
@@ -312,7 +350,8 @@ func statusVolumeIconWidth(iconH int32) int32 {
 func statusClusterPartWidth(font *ttf.Font, part string) int32 {
 	iconH := statusIconHeight(font)
 	switch {
-	case isVolumeStatusPart(part):
+	case isVolumeStatusPart(part), isBrightnessStatusPart(part):
+		// The sun shares the speaker's box, so the two buttons read as a pair.
 		return statusVolumeIconWidth(iconH)
 	case isWiFiStatusPart(part):
 		w := statusWiFiIconWidth(iconH)
@@ -563,10 +602,31 @@ func statusVolumeGlyph(pct int, known bool) string {
 	return "volume"
 }
 
+// drawStatusBrightnessChip paints the brightness button: the sun for the
+// current level (the small sun below half), in the accent while its card is
+// open, in the speaker's box.
+func drawStatusBrightnessChip(renderer *sdl.Renderer, font *ttf.Font, x, textTop int32) int32 {
+	iconH := statusIconHeight(font)
+	side := statusVolumeIconWidth(iconH)
+	textH := iconH
+	if font != nil {
+		textH = int32(font.Height())
+	}
+	pct, known := statusBrightnessLevel()
+	col := ColorTextSecondary()
+	if brightnessPopoverOpen {
+		col = glassAccent()
+	}
+	iconDraw(renderer, brightnessGlyph(pct, known), sdl.Rect{X: x, Y: textTop + (textH-side)/2, W: side, H: side}, col)
+	return side
+}
+
 // drawStatusClusterPart paints one part of the shared cluster and returns the
 // width it used, so the caller can advance exactly as it measured.
 func drawStatusClusterPart(renderer *sdl.Renderer, font *ttf.Font, part string, x, textTop int32, draw statusTextDrawer) int32 {
 	switch {
+	case isBrightnessStatusPart(part):
+		return drawStatusBrightnessChip(renderer, font, x, textTop)
 	case isVolumeStatusPart(part):
 		return drawStatusVolumeChip(renderer, font, x, textTop)
 	case isWiFiStatusPart(part):

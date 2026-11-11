@@ -891,6 +891,9 @@ func dlDeleteEntryFiles(e dlLibraryEntry) {
 		}
 		if err != nil {
 			logWarn("downloads", "could not delete %s: %v", filepath.Base(e.Path), err)
+		} else {
+			// The subtitles saved beside a video go with it.
+			removeSubtitleSidecars(e.Path)
 		}
 	}
 	if e.ThumbFile != "" && isPathWithin(e.ThumbFile, root) {
@@ -1105,7 +1108,25 @@ func dlKeepWatched(tempPath, pageURL string, meta VideoInfo) {
 	dlLibraryAdd(entry)
 	ShowToast("Saved to Downloads: "+dlShortTitle(entry.Title, 48), ToastKindSuccess)
 	dlCheckKeptLimit()
+	dlKeepCachedSubtitles(pageURL, dest)
 	dlFetchPoster(entry)
+}
+
+// dlKeepCachedSubtitles saves the subtitles a kept video was watched with
+// beside its file, from the subtitle cache (ytcaptions.go): no network, so a
+// kept video plays offline with the subtitles it had.
+func dlKeepCachedSubtitles(pageURL, videoPath string) {
+	lang, err := subtitleLanguage(appConfig)
+	if err != nil {
+		return
+	}
+	cues := subtitleCacheLoad(pageURL, lang)
+	if len(cues) == 0 {
+		return
+	}
+	if _, err := writeSubtitleSidecar(videoPath, lang, cues); err != nil {
+		logDebug("downloads", "kept video without its subtitles: %v", err)
+	}
 }
 
 // dlMoveFile moves src to dst: a rename on the same card (free and instant),

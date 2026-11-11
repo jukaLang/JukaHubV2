@@ -58,8 +58,12 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowArtOpacity, "Cover art opacity", "How strongly the artwork tile and its spectrum show through the card."},
 		{msRowScreenMode, "Screen-off controls", "What still works while the panel is dark: any key wakes, Controls keeps transport and volume, Select only ignores stray presses."},
 		{msRowBackground, "Background playback", "Keep playing when you leave the player. In the player, Y + Left toggles it too."},
-		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser and tempo so decoded samples reach the DAC unprocessed."},
+		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser, tempo and spatial audio so decoded samples reach the DAC unprocessed."},
 		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz. Open it with G in the player."},
+		{msRowSpatialMode, "Spatial audio", spatialModeHint},
+		{msRowSpatialStrength, "Spatial strength", spatialStrengthHint},
+		{msRowSpatialRoom, "Virtual room", spatialRoomHint},
+		{msRowSpatialGames, "Spatial audio in games", spatialGamesHint},
 		{msRowPlaylists, "Playlists", "Left/right picks a saved list, A plays it, X saves the current queue under a name."},
 		{msRowShortcuts, "Keyboard shortcuts", "Show every key and controller binding."},
 	}
@@ -90,6 +94,9 @@ func musicSetBackgroundEnabled(config *Config, on bool) {
 
 // musicSettingsValue is the right-hand text of a row.
 func musicSettingsValue(row musicSettingsRow, config *Config) string {
+	if v, ok := spatialPanelValue(row.kind, config); ok {
+		return v
+	}
 	switch row.kind {
 	case msRowLayout:
 		return musicLayoutFromConfig(config).label()
@@ -120,6 +127,10 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 
 // musicSettingsAdjust moves a row's value. dir < 0 is left, dir > 0 is right.
 func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
+	// The spatial rows save and sound for themselves (spatial_ui.go).
+	if spatialPanelAdjust(row.kind, dir, config) {
+		return true
+	}
 	switch row.kind {
 	case msRowLayout:
 		next := musicLayoutStockOS
@@ -160,7 +171,7 @@ func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 	case msRowBitPerfect:
 		musicSetBitPerfect(!musicEQ.bitPerfect, config)
 		if musicEQ.bitPerfect {
-			showToast("Bit-perfect: EQ and tempo bypassed", ToastSuccess())
+			showToast("Bit-perfect: EQ, tempo and spatial audio bypassed", ToastSuccess())
 		} else {
 			showToast("Bit-perfect off", ToastInfo())
 		}
@@ -177,6 +188,8 @@ func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 		return false
 	}
 	musicPEQSave(config)
+	// Bit-perfect holds spatial audio back: publish the switch at once.
+	spatialBind(config)
 	PlayNavSound()
 	return true
 }

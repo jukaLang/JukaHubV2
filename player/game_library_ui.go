@@ -11,9 +11,18 @@ package main
 // config, including the desktop one with no Roms folder.
 
 import (
+	"context"
+	"errors"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +33,14 @@ import (
 type gameLibRowHit struct {
 	index int
 	rect  sdl.Rect
+}
+
+type gameLibrarySystemsKey struct {
+	scan       uint64
+	query      string
+	showHidden bool
+	tag        string
+	gmetaRev   uint64
 }
 
 type gameLibraryPanel struct {
@@ -48,7 +65,17 @@ type gameLibraryPanel struct {
 	// artSeen is the artwork-fetch generation whose images are in artCache. A
 	// newer generation means the cache holds "missing" entries that now exist.
 	artSeen uint64
-	panel   sdl.Rect
+	// scanning is true while the card walk and build run off the render thread.
+	// scanGen makes a result from a closed/reopened panel harmless.
+	scanning bool
+	scanGen  uint64
+	// systemsCache is currentGameSystems' answer for one generation of scan,
+	// query, hidden/view setting and tag revision. Without it the panel rebuilt
+	// the recents list and stat'd every recent game several times per frame.
+	systemsCache []librarySystem
+	systemsKey   gameLibrarySystemsKey
+	systemsValid bool
+	panel        sdl.Rect
 
 	systemHits []gameLibRowHit
 	gameHits   []gameLibRowHit
@@ -56,7 +83,28 @@ type gameLibraryPanel struct {
 	artRect sdl.Rect
 }
 
+type libraryArtDecodeResult struct {
+	path       string
+	generation uint64
+	picture    *image.NRGBA
+	err        error
+}
+
+// libraryArtDecodeState allows only one focused cover decode at a time. The
+// decoded picture is handed back for texture upload on the render thread; a
+// focus change cancels queued work and discards any finished stale result.
+type libraryArtDecodeState struct {
+	mu         sync.Mutex
+	path       string
+	generation uint64
+	pending    bool
+	pendingGen uint64
+	cancel     context.CancelFunc
+	done       *libraryArtDecodeResult
+}
+
 var gameLib gameLibraryPanel
+var libraryArtDecode libraryArtDecodeState
 
 const continueSystemName = "Continue"
 
@@ -76,13 +124,15 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 				Path:   it.Path,
 				System: it.System,
 			}, libraryArtworkRoot())
-			recentGames = append(recentGames, libraryGame{
+			game := libraryGame{
 				Path:   it.Path,
 				System: it.System,
 				Title:  title,
 				Art:    art,
 				HasArt: artworkCoverPresent(art),
-			})
+			}
+			libraryDecorateGame(&game)
+			recentGames = append(recentGames, game)
 		}
 		systems = append(systems, librarySystem{
 			Name:    continueSystemName,
@@ -99,9 +149,29 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 var libraryArtworkRoot = romArtworkDir
 
 func currentGameSystems() []librarySystem {
-	// The tag filter (L3 / T, gmeta_ui.go) narrows what the search leaves; it
-	// returns the list untouched when no tag is chosen.
-	return gmetaFilterSystems(filterLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), gameLib.query))
+	key := gameLibrarySystemsKey{
+		scan:       gameLib.scanGen,
+		query:      gameLib.query,
+		showHidden: libraryShowHidden(),
+		tag:        gmetaFilterTag(),
+		gmetaRev:   gmetaRev(),
+	}
+	if gameLib.systemsValid && gameLib.systemsKey == key {
+		return gameLib.systemsCache
+	}
+	// The view filter is first: a hidden game stays out of search, tags and the
+	// Continue row unless "Show hidden" is on. The tag filter (L3 / T,
+	// gmeta_ui.go) narrows what the search leaves; it returns the list untouched
+	// when no tag is chosen.
+	systems := filterHiddenLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), key.showHidden)
+	systems = gmetaFilterSystems(filterLibrarySystems(systems, gameLib.query))
+	gameLib.systemsCache, gameLib.systemsKey, gameLib.systemsValid = systems, key, true
+	return systems
+}
+
+func invalidateGameLibrarySystemsCache() {
+	gameLib.systemsCache = nil
+	gameLib.systemsValid = false
 }
 
 // normalizeGameSearch folds a query the way the matcher compares it: case does
@@ -130,7 +200,7 @@ func filterLibrarySystems(systems []librarySystem, query string) []librarySystem
 		games := make([]libraryGame, 0, len(system.Games))
 		for _, game := range system.Games {
 			if consoleMatch ||
-				strings.Contains(normalizeGameSearch(game.Title), needle) ||
+				strings.Contains(normalizeGameSearch(game.Label()), needle) ||
 				strings.Contains(normalizeGameSearch(filepath.Base(game.Path)), needle) {
 				games = append(games, game)
 			}
@@ -159,6 +229,7 @@ func setGameLibraryQuery(query string) {
 		return
 	}
 	gameLib.query = query
+	invalidateGameLibrarySystemsCache()
 	gameLib.system, gameLib.cursor, gameLib.scroll = 0, 0, 0
 	if query == "" {
 		gameLib.focus = 0
@@ -217,8 +288,11 @@ func openGameLibraryPanel() {
 	gameLib.artSeen = artworkFetchGeneration()
 	gameLib.systemHits = nil
 	gameLib.gameHits = nil
+	invalidateGameLibrarySystemsCache()
 	gameLib.recents = recentGames()
-	gameLib.lib = scanGameLibrary()
+	// Keep the previous scan on screen while the new one runs; first open shows
+	// the scanning state instead of freezing the render loop on the card walk.
+	startGameLibraryScan()
 	// The header carries the clip count — the same figure Settings → General
 	// reports — so opening the library is when the ask starts. The scan runs
 	// as scene work off this goroutine and the header reads the finished
@@ -240,6 +314,11 @@ func closeGameLibraryPanel() {
 	// page's screenshots are textures and go with it.
 	gmetaCloseAll()
 	gameLib.open = false
+	// A scan that finishes after this must not write into a closed panel or a
+	// later visit that has already started its own scan.
+	gameLib.scanGen++
+	gameLib.scanning = false
+	invalidateGameLibrarySystemsCache()
 	closeGameLibraryArt()
 	PlayBackSound()
 }
@@ -250,6 +329,7 @@ func closeGameLibraryArt() {
 	// A preview belongs to the panel and to the focused game: closing the panel
 	// (or losing the art cache to a finished fetch) ends the decoder.
 	snapPreviewStop()
+	resetLibraryArtDecode()
 	for path, tex := range gameLib.artCache {
 		if tex != nil {
 			tex.Destroy()
@@ -262,10 +342,52 @@ func closeGameLibraryArt() {
 	gameLib.artRect = sdl.Rect{}
 }
 
-// refreshGameLibrary rescans the card and keeps the highlight on a real row.
-func refreshGameLibrary() {
-	gameLib.lib = scanGameLibrary()
-	gameLib.recents = recentGames()
+// startGameLibraryScan walks the card and builds the report on a goroutine. The
+// panel keeps its previous list on screen until the result is posted back; a
+// generation check discards a result from a closed panel or an older rescan.
+func startGameLibraryScan() {
+	if gameLib.scanning {
+		return
+	}
+	gameLib.scanGen++
+	gen := gameLib.scanGen
+	gameLib.scanning = true
+	invalidateGameLibrarySystemsCache()
+	roots := append([]string(nil), romLibraryRoots()...)
+	artRoot := libraryArtworkRoot()
+	// Copy the playtime map on the render thread; the background build must not
+	// read it while the ticker is writing it.
+	seconds := libraryPlaytimeSnapshot()
+	go func() {
+		report := scanROMLibrary(roots)
+		lib := buildGameLibraryWith(report, artRoot, seconds)
+		tbxPost(func() {
+			if !applyGameLibraryScan(&gameLib, gen, lib, recentGames()) {
+				return
+			}
+			clampGameLibrarySelection()
+		})
+	}()
+}
+
+// applyGameLibraryScan installs a finished scan only when it belongs to the
+// panel's current generation. It is separated so the stale-result rule has a
+// test without needing a live SDL loop.
+func applyGameLibraryScan(panel *gameLibraryPanel, gen uint64, lib gameLibraryReport, recents []recentGame) bool {
+	if panel == nil || gen != panel.scanGen {
+		return false
+	}
+	panel.lib = lib
+	panel.recents = recents
+	panel.scanning = false
+	panel.systemsCache = nil
+	panel.systemsValid = false
+	return true
+}
+
+// clampGameLibrarySelection keeps the highlight on a real row after a scan or
+// a view change shrinks the visible list.
+func clampGameLibrarySelection() {
 	systems := currentGameSystems()
 	if gameLib.system >= len(systems) {
 		gameLib.system = len(systems) - 1
@@ -282,7 +404,19 @@ func refreshGameLibrary() {
 	gameLib.scroll = 0
 }
 
+// refreshGameLibrary starts a background rescan; callers can keep the panel
+// interactive while it runs.
+func refreshGameLibrary() {
+	startGameLibraryScan()
+}
+
 func gameLibraryStatus() string {
+	if gameLib.scanning {
+		if gameLib.lib.Total == 0 {
+			return "Scanning the card…"
+		}
+		return "Scanning for changes… · " + pluralizeCount(gameLib.lib.Total, "game", "games") + " already found"
+	}
 	if tag := gmetaFilterTag(); tag != "" && gameLib.query == "" {
 		games := 0
 		for _, system := range currentGameSystems() {
@@ -307,6 +441,9 @@ func gameLibraryStatus() string {
 		}
 		return "No games yet — copy them to the card's Roms folder, then press Y"
 	}
+	if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 && len(currentGameSystems()) == 0 {
+		return pluralizeCount(hidden, "hidden game", "hidden games") + " — Game options → Show hidden reveals them"
+	}
 	status := pluralizeCount(gameLib.lib.Total, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "console", "consoles")
 	status += " · " + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "% with covers"
 	// The clip count, from the same census the Settings row reads — the figure
@@ -320,6 +457,9 @@ func gameLibraryStatus() string {
 		} else {
 			status += " · " + pluralizeCount(withClip, "clip", "clips")
 		}
+	}
+	if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 {
+		status += " · " + itoa(hidden) + " hidden"
 	}
 	if len(gameLib.recents) > 0 {
 		status += " · " + itoa(len(gameLib.recents)) + " recent"
@@ -427,6 +567,7 @@ func recountLibraryArtwork() {
 	}
 	gameLib.lib.Total = total
 	gameLib.lib.WithArt = with
+	invalidateGameLibrarySystemsCache()
 }
 
 // handleGameLibraryKey consumes every key while the panel is open so the scene
@@ -711,6 +852,181 @@ func artTexture(renderer *sdl.Renderer, path string) *sdl.Texture {
 	return tex
 }
 
+const libraryArtDecodeMaxEdge = 512
+
+var errLibraryArtDimensions = errors.New("cover dimensions are invalid or exceed the decode limit")
+
+func libraryArtDimensionsAllowed(w, h int) bool {
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	return int64(w) <= imageDecodeMaxPixels()/int64(h)
+}
+
+// setLibraryArtFocus invalidates a result as soon as the highlighted cover
+// changes. If a decoder is running, it gets a cancellation signal; the next
+// cover waits for that single worker to finish before it starts.
+func setLibraryArtFocus(path string) {
+	path = strings.TrimSpace(path)
+	libraryArtDecode.mu.Lock()
+	if path != libraryArtDecode.path {
+		libraryArtDecode.path = path
+		libraryArtDecode.generation++
+		libraryArtDecode.done = nil
+		if libraryArtDecode.cancel != nil {
+			libraryArtDecode.cancel()
+		}
+	}
+	libraryArtDecode.mu.Unlock()
+}
+
+// resetLibraryArtDecode drops any picture waiting for upload and makes an
+// in-flight result stale when the panel closes or its textures are cleared.
+func resetLibraryArtDecode() {
+	libraryArtDecode.mu.Lock()
+	libraryArtDecode.path = ""
+	libraryArtDecode.generation++
+	libraryArtDecode.done = nil
+	if libraryArtDecode.cancel != nil {
+		libraryArtDecode.cancel()
+	}
+	libraryArtDecode.mu.Unlock()
+}
+
+// requestLibraryArtDecode starts one bounded background decode for the
+// currently focused game. It is cheap to call from the render loop.
+func requestLibraryArtDecode(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+
+	libraryArtDecode.mu.Lock()
+	if path != libraryArtDecode.path || libraryArtDecode.pending || libraryArtDecode.done != nil {
+		libraryArtDecode.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	generation := libraryArtDecode.generation
+	libraryArtDecode.pending = true
+	libraryArtDecode.pendingGen = generation
+	libraryArtDecode.cancel = cancel
+	libraryArtDecode.mu.Unlock()
+
+	go func() {
+		picture, err := decodeLibraryArt(path, ctx)
+		libraryArtDecode.mu.Lock()
+		if libraryArtDecode.pendingGen == generation {
+			libraryArtDecode.pending = false
+			libraryArtDecode.pendingGen = 0
+			libraryArtDecode.cancel = nil
+		}
+		if libraryArtDecode.generation == generation && libraryArtDecode.path == path {
+			libraryArtDecode.done = &libraryArtDecodeResult{
+				path: path, generation: generation, picture: picture, err: err,
+			}
+		}
+		libraryArtDecode.mu.Unlock()
+	}()
+}
+
+// takeLibraryArtDecode transfers a finished picture to the render thread once.
+func takeLibraryArtDecode(path string) (*libraryArtDecodeResult, bool) {
+	libraryArtDecode.mu.Lock()
+	defer libraryArtDecode.mu.Unlock()
+	result := libraryArtDecode.done
+	if result == nil || result.path != path || result.generation != libraryArtDecode.generation {
+		return nil, false
+	}
+	libraryArtDecode.done = nil
+	return result, true
+}
+
+// decodeLibraryArt decodes and shrinks one cover away from the render thread.
+// The header is checked before allocating pixels, and the output is capped to
+// 512px on its longest side so both the temporary image and GPU texture stay
+// small even when a downloaded cover is poster-sized.
+func decodeLibraryArt(path string, ctx context.Context) (*image.NRGBA, error) {
+	if !imageDecodeSem.Acquire(ctx, 1) {
+		return nil, ctx.Err()
+	}
+	defer imageDecodeSem.Release(1)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	config, _, err := image.DecodeConfig(file)
+	if err != nil {
+		return nil, err
+	}
+	if !libraryArtDimensionsAllowed(config.Width, config.Height) {
+		return nil, errLibraryArtDimensions
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	picture, _, err := image.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	bounds := picture.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if !libraryArtDimensionsAllowed(w, h) {
+		return nil, errLibraryArtDimensions
+	}
+	if edge := max(w, h); edge > libraryArtDecodeMaxEdge {
+		scale := float64(libraryArtDecodeMaxEdge) / float64(edge)
+		w = max(1, int(math.Round(float64(w)*scale)))
+		h = max(1, int(math.Round(float64(h)*scale)))
+	}
+	return imgvScale(picture, w, h), nil
+}
+
+// libraryArtTexture uploads a prepared cover on the render thread. Until the
+// worker finishes (or when a cover is missing/broken), callers draw the normal
+// monogram placeholder without waiting for disk or image decoding.
+func libraryArtTexture(renderer *sdl.Renderer, path string) *sdl.Texture {
+	path = strings.TrimSpace(path)
+	setLibraryArtFocus(path)
+	if renderer == nil || path == "" {
+		return nil
+	}
+	if gameLib.artCache == nil {
+		gameLib.resetArtCache()
+	}
+	if tex, ok := gameLib.artCache[path]; ok {
+		return tex
+	}
+	requestLibraryArtDecode(path)
+	result, ready := takeLibraryArtDecode(path)
+	if !ready {
+		return nil
+	}
+	if result.err != nil || result.picture == nil {
+		gameLib.rememberArt(path, nil, 0, 0)
+		return nil
+	}
+	tex := imgvTexture(renderer, result.picture)
+	var w, h int32
+	if tex != nil {
+		if _, _, tw, th, err := tex.Query(); err == nil {
+			w, h = tw, th
+		}
+	}
+	gameLib.rememberArt(path, tex, w, h)
+	return tex
+}
+
 // drawLibraryArt draws box art fitted inside rect, or a monogram placeholder
 // when the game has no downloaded image yet.
 func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game libraryGame) {
@@ -722,11 +1038,12 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 	// frame arrives the cover stays, so entering the library never flashes a
 	// grey box.
 	if snap := snapPreviewTexture(renderer, game.Path); snap != nil {
+		setLibraryArtFocus("")
 		drawSnapFrame(renderer, config, rect, snap)
 		return
 	}
 
-	tex := artTexture(renderer, game.Art)
+	tex := libraryArtTexture(renderer, game.Art)
 	if tex != nil {
 		_, _, tw, th, err := tex.Query()
 		if err == nil && tw > 0 && th > 0 {
@@ -1100,6 +1417,14 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if !hasSystem || len(system.Games) == 0 {
 		message := "No games yet"
 		detail := "Put games in the Roms folder on the card, one folder per console (Roms/GBA, Roms/PS), then press Y to rescan."
+		if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 {
+			message = "All games are hidden"
+			detail = "Game options → Show hidden reveals them again."
+		}
+		if gameLib.scanning && !hasSystem {
+			message = "Scanning the card…"
+			detail = "The library opens as soon as the scan finishes."
+		}
 		if strings.HasPrefix(system.Name, continueSystemName) {
 			detail = "Launch a game and it appears here for one-press resume."
 		}
@@ -1132,9 +1457,12 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, glassFocusRingWidth, focusColor)
 			}
 			game := system.Games[idx]
-			renderText(renderer, config, medium, ellipsize(medium, game.Title, rect.W-24),
+			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-24),
 				ColorTextPrimary(), rect.X+12, rect.Y+rows.titleY)
 			detail := game.System + " · " + filepath.Base(game.Path)
+			if game.Hidden {
+				detail += " · Hidden"
+			}
 			// A per-game clock is worth seeing in the list: it explains why
 			// this title runs cooler than the one above it.
 			if opts := gameOptionsFor(game.Path); opts.MaxFreqKHz > 0 {
@@ -1167,8 +1495,8 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		rect := sdl.Rect{X: artX, Y: bodyY, W: artSize, H: artSize}
 		gameLib.artRect = rect
 		drawLibraryArt(renderer, config, rect, preview)
-		if preview.Title != "" {
-			label := ellipsize(font, preview.Title, artW)
+		if preview.Label() != "" {
+			label := ellipsize(font, preview.Label(), artW)
 			renderText(renderer, config, font, label, ColorTextSecondary(), artX, bodyY+artSize+10)
 			// Fitted like the title: at 24px "PlayStation Portable" alone is
 			// wider than the 250px column, and ran past the card's edge.

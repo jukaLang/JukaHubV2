@@ -311,8 +311,11 @@ func inmapActVolumeDown(c *Config, _ float64) bool {
 	return inmapActVolume(c, -10)
 }
 
-// inmapActBrightness steps the backlight (Quick Settings slider 1).
+// inmapActBrightness steps the backlight (Quick Settings slider 1), from the
+// level the brightness controller has now: with the panel closed the slider
+// is not following it, and the firmware's own keys may have moved it.
 func inmapActBrightness(_ *Config, pct float64) bool {
+	qsSyncBrightnessFromController()
 	qsStepSlider(1, int(math.Round(pct)))
 	return true
 }

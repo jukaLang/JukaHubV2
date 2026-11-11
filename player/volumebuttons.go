@@ -187,8 +187,11 @@ func volumeButtonPress(dir int, down bool) {
 		volumeButtons.mu.Unlock()
 	}
 	// The OS just changed the level (on the press, and while held): the
-	// header's speaker reads it back now instead of on its next poll.
+	// header's speaker reads it back now instead of on its next poll. The
+	// firmware's brightness chord holds a volume key too, so the sun does the
+	// same (brightnessctl.go).
 	volumeNoteHardwareKey()
+	brightnessNoteHardwareKey()
 }
 
 // volumeButtonSkip performs the long-press action. It works from any scene,

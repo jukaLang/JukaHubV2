@@ -78,12 +78,29 @@ with your device* step says so and can turn it off. Later it lives in
 SDCARD/System/starts/jukahub-autostart.sh
 ```
 
-`runtrimui.sh` runs the scripts in the `System/starts` folder at boot, so
-JukaHub opens as soon as the device starts. That script returns immediately
-(work continues in the background), waits up to 30 seconds for MainUI to appear,
-then runs `launch.sh` unless a JukaHub is already running — boot is never held up
-if the app fails to start. Its
-output goes to `Apps/JukaHub/autostart.log`.
+`runtrimui.sh` runs the scripts in the `System/starts` folder at boot. The hook
+starts JukaHub the way the stock menu starts an app: it queues JukaHub in
+`/tmp/cmd_to_run.sh` (the file MainUI writes when you pick an app) and, once the
+stock menu has been up for two seconds and has stopped writing its settings
+(eight seconds at most), closes it. The firmware's launcher loop
+then runs JukaHub with its own environment and services, and brings the stock
+menu back when you quit JukaHub, exactly as after an app started from the menu.
+On a firmware whose loop reads the queue before it opens the menu, JukaHub
+appears without the menu ever showing.
+
+The hook never holds the boot up (it queues JukaHub and does the waiting in the
+background), is safe whether the firmware runs or sources it, and starts
+JukaHub at most once per boot. It stays out of the way when JukaHub is already
+running, when another app is already queued (a game CrossMix resumes at boot,
+an app you picked in the first seconds), and when the stock menu does not
+appear within two minutes. If JukaHub hangs on the way up — it neither gets
+going nor exits, and you have to force the device off — the next boot stays on
+the stock menu once instead of trying again, so a broken JukaHub can never lock
+the device up at boot; the boot after that tries again. (A JukaHub that exits or
+crashes just hands the device back to the stock menu, so it costs nothing.)
+What happened at each boot is written to `Apps/JukaHub/autostart.log`, and
+JukaHub repeats the last line in `errors.txt` when it starts. A card that still
+has an older hook gets this one the next time JukaHub starts.
 
 To turn it off: switch the toggle off (turning it off is final: the first-start
 default is never applied again), or delete
@@ -95,6 +112,18 @@ the card root to point it at the right location.
 Note: this is the hook the community and CrossMix use, not an official trimui
 interface. If your firmware uses another mechanism, run `launch.sh` from that
 firmware's hook — the result is the same.
+
+### The boot logo and the power-on boot
+
+A start with the device plays JukaHub's full boot (the logo comes alive, Home
+builds itself); opening JukaHub from **Apps** keeps the quick start. **Settings
+→ General → Boot logo** (A twice) puts the JukaHub logo into the picture the
+firmware shows while it powers on, saving the previous one to
+`Apps/JukaHub/data/bootlogo/` first (A twice again restores it); on CrossMix it
+also leaves `Apps/BootLogo/Images/JukaHub.bmp` for the BootLogo app. Reference
+BMPs for flashing by hand are in `branding/bootlogo/`. How the installer finds
+and protects the firmware's partition, and what has not been verified on a
+device yet: [docs/BOOT.md](../../docs/BOOT.md).
 
 ### Self-update and restart
 
@@ -131,6 +160,7 @@ identical — a test rejects the build if they differ.
 | Black screen / the app never appears | Put the SD card in a PC and send the contents of `Apps/JukaHub/errors.txt`. |
 | The app appears but exits immediately | Check `errors.txt` — usually `JukaHub` is not executable yet (`chmod +x`) or a library is missing. |
 | Text is missing or shows as boxes | `Inter-Regular.ttf` is missing from the app folder. |
+| **Start JukaHub at login** is on, but the device boots to the stock menu | Read `Apps/JukaHub/autostart.log`: each boot says what the hook did (no lines at all means the firmware never ran `System/starts/jukahub-autostart.sh`). One boot on the stock menu after a start that hung (and was forced off) is deliberate; the next boot tries again. Send the log with `errors.txt` if it keeps happening. |
 | The screen flickers between MainUI and JukaHub after an update | The `launch.sh` on the card is older than the app. Update once more (the release archive replaces `launch.sh`), or copy `launch.sh` from the archive into `Apps/JukaHub/`, then reboot. |
 | YouTube search fails | Check that `required/yt-dlp` exists; Wi-Fi is required. Also see `logs.txt` (the **Logs** scene in the Start menu). |
 | A video goes black for a second, then says it is downloading | The stream would not open (`errors.txt`: `decoder for … stopped …`), so JukaHub downloads the video to the SD card and plays it from there. If the download fails too, the message says why. |

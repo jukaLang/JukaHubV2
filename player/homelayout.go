@@ -34,7 +34,9 @@ const (
 	HomeActionWiFi           HomeAction = "toggle_wifi"
 	HomeActionSearch         HomeAction = "search"
 	HomeActionVolume         HomeAction = "toggle_volume"
+	HomeActionBrightness     HomeAction = "toggle_brightness"
 	HomeActionQR             HomeAction = "show_pairing_qr"
+	HomeActionTrophies       HomeAction = "open_trophies"
 )
 
 // The search pill's place in the design grid (1280x720 canvas units): under
@@ -140,6 +142,10 @@ type HomeLayout struct {
 	// built-in rect: the hand-tuned graph (homeFocusGraph) describes the
 	// built-in composition, so focus then steps by the drawn geometry instead.
 	geometryEdited bool
+
+	// dyn is the body of the Carousel and Widgets arrangements, which place
+	// the tile list instead of the built-in cards (home_dynbody.go).
+	dyn homeDyn
 }
 
 func NewHomeLayout(width, height int32) *HomeLayout {
@@ -155,7 +161,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 		Height: height,
 		Motion: true,
 		Focus:  NewHomeFocusController(),
-		Items:  make(map[HomeFocusID]HomeItem, 21),
+		Items:  make(map[HomeFocusID]HomeItem, 22),
 		// The search pill comes after the cards: its grown touch target reaches
 		// a few pixels toward the Continue card, and a tap on the card's own
 		// edge must stay the card's.
@@ -163,9 +169,12 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusSearch, HomeFocusUpdate, HomeFocusVolume,
-			HomeFocusWiFi, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
-			HomeFocusBell, HomeFocusExit, HomeFocusQR,
+			HomeFocusSettings, HomeFocusSearch, HomeFocusUpdate, HomeFocusBrightness,
+			HomeFocusVolume, HomeFocusWiFi, HomeFocusWeather, HomeFocusClock,
+			// The bell is hit-tested before the trophy room's cup beside it,
+			// as main.go's click path tests it, so a hover and a click on the
+			// strip where their touch targets meet pick the same control.
+			HomeFocusNowPlaying, HomeFocusBell, HomeFocusTrophy, HomeFocusExit, HomeFocusQR,
 		},
 	}
 	layout.rebuildItems()
@@ -186,10 +195,15 @@ func (h *HomeLayout) Resize(width, height int32) {
 // the same cards out as equal tiles. A total-conversion theme preset installs
 // one of them, and "custom" — the default — keeps jukaconfig.json authoritative,
 // which is why choosing a conversion never rewrites the scene's own geometry.
+//
+// Carousel and Widgets do not place the built-in cards at all: they lay out
+// the tile list the user edits (home_tiles.go, home_dynbody.go).
 const (
 	homeArrangementCustom    = "custom"
 	homeArrangementDashboard = "dashboard"
 	homeArrangementGrid      = "grid"
+	homeArrangementCarousel  = "carousel"
+	homeArrangementWidgets   = "widgets"
 )
 
 // homeArrangementLabel is the name the UI shows for an arrangement.
@@ -199,6 +213,10 @@ func homeArrangementLabel(name string) string {
 		return "Dashboard"
 	case homeArrangementGrid:
 		return "Hero grid"
+	case homeArrangementCarousel:
+		return "Carousel"
+	case homeArrangementWidgets:
+		return "Widgets"
 	}
 	return "Custom (from jukaconfig.json)"
 }
@@ -210,8 +228,67 @@ func normalizeHomeArrangement(name string) string {
 		return homeArrangementDashboard
 	case homeArrangementGrid:
 		return homeArrangementGrid
+	case homeArrangementCarousel:
+		return homeArrangementCarousel
+	case homeArrangementWidgets, "widget", "tiles":
+		return homeArrangementWidgets
 	}
 	return homeArrangementCustom
+}
+
+// homeArrangementIsDynamic reports whether an arrangement lays out the tile
+// list (Carousel, Widgets) rather than the built-in cards.
+func homeArrangementIsDynamic(name string) bool {
+	switch normalizeHomeArrangement(name) {
+	case homeArrangementCarousel, homeArrangementWidgets:
+		return true
+	}
+	return false
+}
+
+// homeArrangementChoiceList is what Settings → Home layout and Edit Home's
+// strip offer, in order. The dashboard is not listed apart: on an unedited
+// config it is what Standard already shows, and two identical choices would
+// only confuse — a theme that installs it shows as Standard.
+var homeArrangementChoiceList = [...]string{
+	homeArrangementCustom, homeArrangementGrid, homeArrangementCarousel, homeArrangementWidgets,
+}
+
+// homeArrangementChoiceLabel is a choice's name in Settings and on the strip.
+func homeArrangementChoiceLabel(name string) string {
+	switch normalizeHomeArrangement(name) {
+	case homeArrangementGrid:
+		return "Hero grid"
+	case homeArrangementCarousel:
+		return "Carousel"
+	case homeArrangementWidgets:
+		return "Widgets"
+	}
+	return "Standard"
+}
+
+// homeArrangementChoiceIndex is an arrangement's place in
+// homeArrangementChoiceList; the dashboard (and anything unknown) is Standard.
+func homeArrangementChoiceIndex(name string) int {
+	n := normalizeHomeArrangement(name)
+	for i, c := range homeArrangementChoiceList {
+		if c == n {
+			return i
+		}
+	}
+	return 0
+}
+
+// homeSetArrangement stores the user's layout choice and applies it to the
+// live Home at once.
+func homeSetArrangement(config *Config, name string) {
+	next := normalizeHomeArrangement(name)
+	if config != nil {
+		setStoreString(config, "homeArrangement", next)
+	}
+	if homeLayout != nil {
+		homeLayout.SetArrangement(next)
+	}
 }
 
 // homeArrangement is the arrangement the user is on. The unset case is Custom:
@@ -302,7 +379,15 @@ func (h *HomeLayout) SetArrangement(name string) {
 		return
 	}
 	h.Arrangement = next
+	if !homeArrangementIsDynamic(next) && h.dyn.active {
+		// Back to the built-in cards: the order, the cards' focus and the
+		// items the tiles added are put back first.
+		h.dynDeactivate()
+	}
 	h.rebuildItems()
+	// The tile layouts build their body on the next refresh, from the config
+	// (dynSync); forget what the last one was built from.
+	h.dyn.sig = homeDynSig{}
 }
 
 func (h *HomeLayout) rebuildItems() {
@@ -381,10 +466,14 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 1160, Y: 10, W: 44, H: 36})
 	card(HomeFocusBell, "Notifications", "Recent alerts", "bell", HomeActionNotifications,
 		sdl.Rect{X: 1204, Y: 10, W: 46, H: 36})
+	card(HomeFocusTrophy, "Trophies", "Your trophies and playtime", "trophy", HomeActionTrophies,
+		sdl.Rect{X: 1160, Y: 10, W: 36, H: 36})
 	card(HomeFocusUpdate, "Update", "Install the new release", "update", HomeActionUpdate,
 		sdl.Rect{X: 900, Y: 12, W: 26, H: 24})
 	card(HomeFocusVolume, "Volume", "Change the volume", "volume", HomeActionVolume,
 		sdl.Rect{X: 890, Y: 10, W: 34, H: 36})
+	card(HomeFocusBrightness, "Brightness", "Change the screen brightness", "brightness", HomeActionBrightness,
+		sdl.Rect{X: 850, Y: 10, W: 34, H: 36})
 	// The pairing code's slot in the header band; drawHeader replaces it with
 	// the tile renderCompanionHeaderQR drew (companionHeaderRect).
 	card(HomeFocusQR, "Pairing code", "Show the QR code full screen", "qr", HomeActionQR,
@@ -403,9 +492,11 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 		HomeFocusWeather:    false,
 		HomeFocusUpdate:     false,
 		HomeFocusBell:       false,
+		HomeFocusTrophy:     false,
 		HomeFocusNowPlaying: false,
 		HomeFocusWiFi:       false,
 		HomeFocusVolume:     false,
+		HomeFocusBrightness: false,
 		HomeFocusQR:         false,
 		HomeFocusPS4:        false,
 		HomeFocusPS5:        false,
@@ -533,10 +624,14 @@ func (h *HomeLayout) CurrentAction() HomeAction {
 // arrangement puts the same cards in other cells, so there a step inside the
 // body is taken by geometry instead (homeGridStep) — otherwise Down from Media
 // followed the dashboard and landed on a card to its right. Leaving the body
-// upwards still follows the graph into the header.
+// upwards still follows the graph into the header. The Carousel and Widgets
+// bodies have no graph at all; they step by their own geometry (dynMove).
 func (h *HomeLayout) Move(direction FocusDirection) HomeFocusID {
 	if h == nil {
 		return HomeFocusContinue
+	}
+	if h.dyn.active {
+		return h.dynMove(direction)
 	}
 	if h.Arrangement == homeArrangementGrid || h.geometryEdited {
 		// The power button is not a body card, and the graph's Up from it names
@@ -717,6 +812,14 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 		if !h.Focus.IsEnabled(id) {
 			continue
 		}
+		// A Widgets tile is hit only inside the body it scrolls in; a carousel
+		// card never takes the focus from the pointer (home_dynbody.go).
+		if handled, hit := h.dynFocusHover(id, x, y); handled {
+			if hit {
+				return true
+			}
+			continue
+		}
 		item := h.Items[id]
 		// Hit-test against the grown tap area, not the drawn rect: a compact
 		// 36px Exit pill or a header chip looks right but is smaller than a
@@ -729,7 +832,7 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 		// forecast chip, and since the meter is tested first, a click on the
 		// forecast's left edge opened Wi-Fi.
 		r := item.Rect
-		if id != HomeFocusWiFi && id != HomeFocusVolume {
+		if id != HomeFocusWiFi && id != HomeFocusVolume && id != HomeFocusBrightness {
 			r = growTouchTarget(item.Rect)
 		}
 		if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
@@ -750,6 +853,11 @@ func (h *HomeLayout) BoundsViolations() []string {
 	var out []string
 	checked := make([]HomeItem, 0, len(h.Order))
 	for _, id := range h.Order {
+		// The tile layouts' tiles scroll and slide by design; only the
+		// controls around them have to stay on the canvas.
+		if h.dynIsTile(id) || (id == HomeFocusEditPill && !h.Focus.IsEnabled(id)) {
+			continue
+		}
 		item, ok := h.Items[id]
 		if !ok {
 			out = append(out, fmt.Sprintf("%s: missing", id))
@@ -763,7 +871,7 @@ func (h *HomeLayout) BoundsViolations() []string {
 		}
 		switch id {
 		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying, HomeFocusWiFi,
-			HomeFocusVolume, HomeFocusQR:
+			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy:
 			continue
 		}
 		checked = append(checked, item)
@@ -793,12 +901,24 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	// its translucent backdrop blocks on top of it.
 	h.drawBackdrop(renderer)
 	h.drawHeader(renderer, fonts, data)
-	h.drawGreeting(renderer, fonts, data)
+	// Edit Home's strip (the layouts, Reset, Done) takes the greeting's and
+	// the search pill's place while Home is being edited (home_edit.go).
+	editing := homeEditActive()
+	if editing {
+		h.drawEditStrip(renderer, fonts)
+	} else {
+		h.drawGreeting(renderer, fonts, data)
+	}
 
 	// The power button takes its label's width inside its slot, and is a
 	// control only while it can be drawn (home_power.go). Sized before the
-	// footer, whose hints keep clear of it.
+	// footer, whose hints keep clear of it. Edit mode hides it: the strip's
+	// Done is the way out there. The tile layouts' Edit pill sits beside it.
 	h.sizePowerPill(fonts)
+	if editing {
+		h.Focus.SetEnabled(HomeFocusExit, false)
+	}
+	h.sizeEditPill(fonts)
 
 	// The footer is plain chrome: corner chips draw after it on top of its
 	// band instead of disappearing behind it.
@@ -812,7 +932,19 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 		h.hover.weight = 0
 	}
 	lift := h.hover.update(1, h.Motion)
+	// The Carousel and Widgets bodies draw their own tiles (home_dynbody.go);
+	// the loop below then draws only the controls around them.
+	if h.dyn.active {
+		h.dynRender(renderer, fonts, data, focused, lift)
+	} else if editing {
+		// Editing Standard or the Hero grid: the strip has the focus, so no
+		// card under the veil wears the ring.
+		focused = ""
+	}
 	for _, id := range h.Order {
+		if h.dyn.active && h.dynIsTile(id) {
+			continue
+		}
 		item := h.Items[id]
 		cardLift := 0.0
 		if id == focused {
@@ -832,9 +964,15 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 				h.drawPowerPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 			}
 		case HomeFocusSearch:
-			h.drawSearchPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift, data.Subtitle)
+			if !editing {
+				h.drawSearchPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift, data.Subtitle)
+			}
+		case HomeFocusEditPill:
+			if h.Focus.IsEnabled(HomeFocusEditPill) {
+				h.drawEditPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
+			}
 		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi,
-			HomeFocusVolume, HomeFocusQR:
+			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
 			// (title and icon) over the header -- the now-playing entry sits on
@@ -842,6 +980,11 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 		default:
 			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		}
+	}
+	// Standard and the Hero grid cannot be rearranged: while editing, their
+	// cards sit under a veil that points at the strip.
+	if editing && !h.dyn.active {
+		h.drawEditVeil(renderer, fonts)
 	}
 
 	return nil
@@ -865,10 +1008,15 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	weatherStatusRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
 	statusVolumeRect = sdl.Rect{}
+	statusBrightnessRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
+	headerTrophyClear()
+	// A scene's release pill is not on Home: left over, its rect would still
+	// take a click (handleChromeBarClick) where Home draws something else.
+	updatePrompt.badge = sdl.Rect{}
 	// The bar's height, wordmark and caption come from header.go — the same code
 	// the scene bar draws with — so Home and a scene can no longer differ by two
 	// pixels of bar height and ten of caption size, which is what made the header
@@ -886,7 +1034,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// The wordmark stands alone on Home. The build number is for whoever files
 	// a bug report, not for the person picking a game: it lives in About, the
 	// Start menu's footer and the update offer, which is where it gets read.
-	drawHeaderBrand(renderer, headerConfig, barH, headerCaptionText("", ""))
+	brandEnd := drawHeaderBrand(renderer, headerConfig, barH, headerCaptionText("", ""))
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
@@ -899,13 +1047,16 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if fonts.Small == nil {
 		// No status bar, so no bell either. Keep it out of the D-pad path so
 		// focus can never land on a control that is not drawn — nor on the
-		// speaker, the meter or the pairing code, which are not drawn either
-		// and would otherwise keep their placeholder rects (and stay
+		// sun, the speaker, the meter or the pairing code, which are not drawn
+		// either and would otherwise keep their placeholder rects (and stay
 		// clickable through the rects the last frame left).
 		companionHeaderRect = sdl.Rect{}
 		statusVolumeRect = sdl.Rect{}
+		statusBrightnessRect = sdl.Rect{}
 		h.Focus.SetEnabled(HomeFocusBell, false)
+		h.Focus.SetEnabled(HomeFocusTrophy, false)
 		h.Focus.SetEnabled(HomeFocusVolume, false)
+		h.Focus.SetEnabled(HomeFocusBrightness, false)
 		h.Focus.SetEnabled(HomeFocusWiFi, false)
 		h.Focus.SetEnabled(HomeFocusQR, false)
 		return
@@ -943,15 +1094,31 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	h.Focus.SetEnabled(HomeFocusBell, nc.bellRect.W > 0)
 
+	// The trophy room's cup is the corner's second fixed control, immediately
+	// left of the bell as on every scene header (header_trophy.go). It gives
+	// way only if the cluster beside it would reach the wordmark.
+	cornerX := bellX
+	if trophyW, _ := headerTrophySize(headerConfig); trophyW > 0 &&
+		bellX-headerCornerGap-trophyW-headerCornerGap-total >= brandEnd+Space2XL {
+		if cup := drawHeaderTrophy(renderer, headerConfig, bellX-headerCornerGap, barH,
+			h.Focus.Current() == HomeFocusTrophy); cup.W > 0 {
+			item := h.Items[HomeFocusTrophy]
+			item.Rect = cup
+			h.Items[HomeFocusTrophy] = item
+			cornerX = cup.X
+		}
+	}
+	h.Focus.SetEnabled(HomeFocusTrophy, headerTrophyRect.W > 0)
+
 	// The release offer is the same pill in the same corner as on every scene
-	// header: immediately left of the bell. It is dropped when it would push the
-	// cluster into the greeting column; on such a screen the modal prompt and
-	// the scene headers still reach the release.
+	// header: immediately left of the trophy room's cup. It is dropped when it
+	// would push the cluster into the greeting column; on such a screen the
+	// modal prompt and the scene headers still reach the release.
 	updatePill := sdl.Rect{}
 	if updateAvailable() {
 		chipW, _ := homeUpdateChipSize(headerCaptionFont(headerConfig))
-		if bellX-headerCornerGap-total-headerCornerGap-chipW >= scaleX(480, h.Width) {
-			updatePill = drawHeaderUpdatePill(renderer, headerConfig, bellX-headerCornerGap, barH,
+		if cornerX-headerCornerGap-total-headerCornerGap-chipW >= scaleX(480, h.Width) {
+			updatePill = drawHeaderUpdatePill(renderer, headerConfig, cornerX-headerCornerGap, barH,
 				h.Focus.Current() == HomeFocusUpdate)
 			if updatePill.W > 0 {
 				homeUpdateRect = updatePill
@@ -962,7 +1129,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			}
 		}
 	}
-	x := bellX - headerCornerGap - total
+	x := cornerX - headerCornerGap - total
 
 	// Header controls, in the band under the system cluster and clear of the
 	// greeting column: the phone-pairing code and the PS4/PS5 launcher pills.
@@ -1020,7 +1187,8 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// each pill could only answer with a warning, so the group is not drawn and
 	// the D-pad walks past it. The group says what it is ("Remote Play") when
 	// the band has room for the caption, and drops the caption before the pills.
-	if psRemoteSupported() {
+	// Edit Home's strip has the band while Home is being edited.
+	if psRemoteSupported() && !homeEditActive() {
 		label := psPillGroupLabel
 		group, p4, p5 := psPillRects(fonts, groupRight, groupY, bandH, label)
 		if group.W > 0 && group.X < minGroupX {
@@ -1077,6 +1245,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		if isVolumeStatusPart(part) {
 			statusVolumeRect = r
 		}
+		if isBrightnessStatusPart(part) {
+			statusBrightnessRect = r
+		}
 		if isChipStatusPart(part) {
 			// The now-playing chip is a header button: clicks land on the
 			// measured chip and the D-pad reaches it from the clock. The idle
@@ -1090,10 +1261,10 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
 		x += w + sepW
 	}
-	// The network meter and the speaker are tap targets as well as readings, so
-	// grow their hit areas to finger size once the cluster is placed: the meter
-	// stops short of the forecast and the clock so their taps still belong to
-	// them, and the gap between the speaker and the meter is split.
+	// The network meter, the speaker and the sun are tap targets as well as
+	// readings, so grow their hit areas to finger size once the cluster is
+	// placed: the meter stops short of the forecast and the clock so their taps
+	// still belong to them, and each gap between two of the buttons is split.
 	growStatusButtonRects(header.H, weatherStatusRect, h.Items[HomeFocusClock].Rect)
 	// The meter is a button, not just a reading: the D-pad focuses the same
 	// grown hit area a fingertip taps, and the entry is disabled whenever the
@@ -1105,13 +1276,23 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	h.Focus.SetEnabled(HomeFocusWiFi, statusWiFiRect.W > 0)
 	// So is the speaker: A opens the volume popover. No mixer, no part, so the
-	// entry is disabled and Left from the meter goes on to the search pill.
+	// entry is disabled and Left from the meter goes on to the sun.
 	if statusVolumeRect.W > 0 {
 		item := h.Items[HomeFocusVolume]
 		item.Rect = statusVolumeRect
 		h.Items[HomeFocusVolume] = item
 	}
 	h.Focus.SetEnabled(HomeFocusVolume, statusVolumeRect.W > 0)
+	// And the sun: A opens the brightness card. It is drawn once the
+	// brightness controller has found what it drives; until then (a moment, on
+	// Windows) the entry is disabled and Left from the speaker goes on to the
+	// search pill.
+	if statusBrightnessRect.W > 0 {
+		item := h.Items[HomeFocusBrightness]
+		item.Rect = statusBrightnessRect
+		h.Items[HomeFocusBrightness] = item
+	}
+	h.Focus.SetEnabled(HomeFocusBrightness, statusBrightnessRect.W > 0)
 	// The D-pad may only focus the chip while it is on screen; with no update
 	// (or no room) it stays disabled and the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
@@ -1123,13 +1304,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// playing it may still be drawn (naming the headphones), but pressing it
 	// would open nothing, so the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
-	// The text chips (clock, forecast, signal meter, speaker, now playing) wear
-	// the header ring here. The bell, the release offer and the Remote Play
-	// pills draw their own ring with their own shape (drawNotifBell,
+	// The text chips (clock, forecast, signal meter, speaker, sun, now playing)
+	// wear the header ring here. The bell, the release offer and the Remote
+	// Play pills draw their own ring with their own shape (drawNotifBell,
 	// drawUpdatePill, renderPSPillGroup); a second, square-cornered one on top
 	// of theirs was the double outline a focused bell showed. The pairing code
 	// wears its own (drawHeaderQRRing).
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusVolume, HomeFocusWiFi, HomeFocusNowPlaying} {
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBrightness, HomeFocusVolume, HomeFocusWiFi, HomeFocusNowPlaying} {
 		if h.Focus.Current() != id {
 			continue
 		}
@@ -1150,6 +1331,11 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	if h == nil || tile.W <= 0 {
 		return ""
 	}
+	if h.dyn.active {
+		// The tile layouts' bodies scroll and turn: the card under a header
+		// tile is the one on screen nearest it (home_dynbody.go).
+		return h.dynEntryBelow(tile)
+	}
 	center := tile.X + tile.W/2
 	best := HomeFocusID("")
 	bestY := int32(0)
@@ -1157,7 +1343,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 		switch id {
 		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell,
 			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate,
-			HomeFocusVolume, HomeFocusQR:
+			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy:
 			continue
 		}
 		item, ok := h.Items[id]
@@ -1192,18 +1378,28 @@ const (
 // stands homeFocusRingOutset off it, and neither may cut into the tile.
 // Empty when that leaves less than the floor.
 func (h *HomeLayout) headerQRRect(bandRight, top int32) sdl.Rect {
+	// Edit Home's strip has the band while Home is being edited.
+	if homeEditActive() {
+		return sdl.Rect{}
+	}
 	maxSide := scaleY(homeHeaderQRMax, h.Height)
 	y := top + scaleY(6, h.Height)
 	ringOut := max32(2, scaleX(homeFocusRingGap, h.Width)) + homeFocusRingWidth
 	gapBelow := ringOut + 3 + 1
 	bottom := h.Height
-	for _, id := range homeBodyCards {
-		r := h.Items[id].Rect
-		if r.W <= 0 || r.H <= 0 || r.X >= bandRight || r.X+r.W <= bandRight-maxSide || r.Y+r.H <= y {
-			continue
-		}
-		if r.Y < bottom {
-			bottom = r.Y
+	if h.dyn.active {
+		// The tile layouts scroll their tiles through the body: the band
+		// ends where the body begins, whatever is under it right now.
+		bottom = scaleY(homeDynBodyTop, h.Height)
+	} else {
+		for _, id := range homeBodyCards {
+			r := h.Items[id].Rect
+			if r.W <= 0 || r.H <= 0 || r.X >= bandRight || r.X+r.W <= bandRight-maxSide || r.Y+r.H <= y {
+				continue
+			}
+			if r.Y < bottom {
+				bottom = r.Y
+			}
 		}
 	}
 	side := min32(bottom-gapBelow-y, maxSide)
@@ -1726,18 +1922,24 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	// the list with append allocated on every frame Home was on screen. A copy
 	// on the stack lets A's label say what it does on the two header controls
 	// whose action is not "open a screen".
-	set := homeFooterHintsStart
-	if showBack {
-		set = homeFooterHintsBack
-	}
-	if label := homeFooterActionLabel(h.Focus.Current()); label != "" {
+	// The tile layouts and Edit Home have rows of their own
+	// (homeFooterHintSet, home_edit.go); an empty slot in a row is skipped.
+	set := h.homeFooterHintSet(showBack)
+	if label := homeFooterActionLabel(h.Focus.Current()); label != "" && !homeEditActive() {
 		for i := range set {
 			if set[i].button == "A" {
 				set[i].label = label
 			}
 		}
 	}
-	hints := set[:]
+	n := 0
+	for i := range set {
+		if set[i].button != "" {
+			set[n] = set[i]
+			n++
+		}
+	}
+	hints := set[:n]
 
 	// Right-aligned hint groups: a circular glyph badge and its label.
 	itemGap := scaleX(18, h.Width)
@@ -1764,6 +1966,9 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	if power := h.Items[HomeFocusExit].Rect; power.W > 0 && h.Focus.IsEnabled(HomeFocusExit) {
 		limit = max32(limit, power.X+power.W+scaleX(16, h.Width))
 	}
+	if pill := h.Items[HomeFocusEditPill].Rect; pill.W > 0 && h.Focus.IsEnabled(HomeFocusEditPill) {
+		limit = max32(limit, pill.X+pill.W+scaleX(16, h.Width))
+	}
 	right := footer.X + footer.W - scaleX(16, h.Width)
 	first := 0
 	for first < len(hints)-1 && right-total < limit {
@@ -1788,13 +1993,15 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 
 // homeFooterActionLabel is A's label on a focused header control whose press
 // is not "open a screen": the pairing code goes full screen, the speaker opens
-// the volume card. "" keeps the row's own "Open".
+// the volume card, the sun the brightness card. "" keeps the row's own "Open".
 func homeFooterActionLabel(id HomeFocusID) string {
 	switch id {
 	case HomeFocusQR:
 		return "Show QR"
 	case HomeFocusVolume:
 		return "Volume"
+	case HomeFocusBrightness:
+		return "Brightness"
 	}
 	return ""
 }

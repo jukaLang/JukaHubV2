@@ -676,6 +676,9 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	}
 	trophySyncAvailability(config)
 	trophyRoomRefresh(config)
+	// The room is on screen: what it shows is seen, so the count on the top
+	// bar's cup goes (header_trophy.go).
+	trophyRoomNoteSeen(config)
 
 	f := trophyRoomFonts(config)
 	if f.sub == nil {

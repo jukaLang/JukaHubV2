@@ -84,6 +84,11 @@ func upchSideloadKind(name, goos string) (string, bool) {
 	if !strings.HasPrefix(lower, "jukahub") {
 		return "", false
 	}
+	if strings.Contains(lower, "remoteplay") || strings.Contains(lower, "remote-play") {
+		// JukaHub-RemotePlay-linux-arm64.zip holds the Remote Play helpers,
+		// not a JukaHub (psremote_helpers_install.go installs it).
+		return "", false
+	}
 	windowsName := strings.Contains(lower, "windows") || strings.Contains(lower, "win-x64") || strings.Contains(lower, "win64")
 	deviceName := strings.Contains(lower, "trimui") || strings.Contains(lower, "linux")
 	if (goos == "windows" && deviceName) || (goos != "windows" && windowsName) {

@@ -184,8 +184,9 @@ func runPowerScript(command string, timeout time.Duration) (string, error) {
 	// output pipe open, CombinedOutput waited for them, and the "hard timeout"
 	// never returned. The snippet now leads its own process group, the timeout
 	// kills the whole group, and WaitDelay stops waiting on a pipe held by
-	// anything that escaped it.
-	screenChildGroupConfigure(cmd)
+	// anything that escaped it. Group only: a snippet is JukaHub's own tool and
+	// keeps JukaHub's PATH (its ffmpeg and required/), unlike a game.
+	processGroupConfigure(cmd)
 	cmd.Cancel = func() error { return screenChildKill(cmd) }
 	cmd.WaitDelay = powerScriptWaitDelay
 	out, err := cmd.CombinedOutput()

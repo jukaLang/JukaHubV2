@@ -544,6 +544,33 @@ func renderAmbientDynamicBg(renderer *sdl.Renderer, t float64) {
 	renderer.SetDrawColor(pal.top.R, pal.top.G, pal.top.B, 255)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
+	renderAmbientDynamicLayers(renderer, t, pal)
+}
+
+// renderDynamicBackgroundOver draws the living background's drifting lights
+// and particles without its opaque base, for a backdrop that painted the base
+// itself: the liquid background bends the palette's colours through its water
+// (liquidbg.go), and the base fill would cover it.
+func renderDynamicBackgroundOver(renderer *sdl.Renderer) {
+	if renderer == nil {
+		return
+	}
+	dynbg.once.Do(func() {
+		initBgParticles()
+	})
+	now := float64(sdl.GetTicks64()) / 1000.0
+	dt := now - lastBgTime
+	if lastBgTime == 0 {
+		dt = 1.0 / 60.0
+	}
+	lastBgTime = now
+	renderAmbientDynamicLayers(renderer, now, getTimePalette())
+	updateBgParticles(dt)
+}
+
+// renderAmbientDynamicLayers is everything the living background draws over
+// its base: the drifting blobs and the particles.
+func renderAmbientDynamicLayers(renderer *sdl.Renderer, t float64, pal bgPalette) {
 	// Enhanced ambient glow — more colors and bigger blobs than original.
 	// The glow texture is renderer-owned (see backgroundfx.go), so ask for
 	// this renderer's copy rather than holding a package-level handle.

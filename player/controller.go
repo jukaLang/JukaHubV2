@@ -1,8 +1,6 @@
 package main
 
 import (
-	"strings"
-
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -266,6 +264,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if volumePopoverOpen {
 		return ctrlVolumePopover(e, config)
 	}
+	// And the brightness card the sun opens: the D-pad moves the level, A
+	// dims, B closes (brightnesspopover.go).
+	if brightnessPopoverOpen {
+		return ctrlBrightnessPopover(e, config)
+	}
 	// The controller legend is modal like the help overlays around it; F1's
 	// pad twin does not exist, so closing is the only way out of it.
 	if controlsLegend.open {
@@ -310,7 +313,9 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 
 	// The Now Playing chip is the pad-accessible anchor for the floating
 	// video. Keep X local to that focus so scene actions remain available.
-	if !virtualKeyboardActive && activeSceneIndex == -1 && !homeLayoutActive &&
+	// The Browser's Select menu (brw_menu.go) takes its own A and X: it is
+	// routed after this function, so both shortcuts below stand aside for it.
+	if !virtualKeyboardActive && activeSceneIndex == -1 && !homeLayoutActive && !brwMenu.open &&
 		e.Button == sdl.CONTROLLER_BUTTON_X && focusEngine.ElementIndex() == ChromeMediaIndex && closeFocusedMiniVideo() {
 		return true
 	}
@@ -318,7 +323,7 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// A failed helper-tool install keeps its card on screen with an
 	// "A: retry" hint; A starts the download again instead of activating the
 	// scene underneath (the usual failure is launching before WiFi is joined).
-	if e.Button == sdl.CONTROLLER_BUTTON_A {
+	if e.Button == sdl.CONTROLLER_BUTTON_A && !brwMenu.open {
 		if tool, ok := installBarRetryPending(); ok {
 			PlayActivateSound()
 			retryHelperToolInstall(tool)
@@ -454,47 +459,23 @@ func ctrlQuickSettings(e *sdl.ControllerButtonEvent, config *Config) bool {
 func ctrlWallpaper(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if wpCursor > 0 {
-			wpCursor--
-		}
-		PlayNavSound()
+		wallpaperMove(-1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if wpCursor < len(wpEntries)-1 {
-			wpCursor++
-		}
-		PlayNavSound()
+		wallpaperMove(1)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		wallpaperUp()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		wallpaperRight(appConfig)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		wpCursor -= 5
-		if wpCursor < 0 {
-			wpCursor = 0
-		}
-		PlayNavSound()
+		wallpaperMove(-wallpaperPage)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		wpCursor += 5
-		if wpCursor >= len(wpEntries) {
-			wpCursor = len(wpEntries) - 1
-		}
-		PlayNavSound()
+		wallpaperMove(wallpaperPage)
 	case sdl.CONTROLLER_BUTTON_A:
-		if wpCursor >= 0 && wpCursor < len(wpEntries) {
-			en := wpEntries[wpCursor]
-			// Folders are listed as "[+] name" (listPickerEntries). This looked
-			// for a folder emoji the list never used, so A on a folder — the
-			// parent row included — set a directory as the wallpaper.
-			if strings.HasPrefix(en.name, "[+]") {
-				wpDir = en.path
-				scanWallpaperDir()
-			} else {
-				appConfig.Variables.BackgroundImage = en.path
-				wpPreview = en.path
-				dynbg.wallpaper = nil
-				wpOpen = false
-				ShowToast("[P] Wallpaper set!", ToastKindSuccess)
-			}
-			PlayActivateSound()
-		}
+		// The same path the keyboard takes (wallpaper.go): folders open, the
+		// None row clears, a picture is set and remembered.
+		wallpaperActivate(appConfig)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		wpOpen = false
+		wallpaperClose()
 		PlayBackSound()
 	}
 	return true

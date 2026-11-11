@@ -80,11 +80,36 @@ func ensureBrowserScene(config *Config) {
 		return
 	}
 	for i := range config.Scenes {
-		if config.Scenes[i].Name == browserSceneName {
-			return
+		if config.Scenes[i].Name != browserSceneName {
+			continue
 		}
+		if config.Scenes[i].Description == browserSceneDescription {
+			// The injected scene itself (this run's, or one a saved copy of the
+			// config carried back): it follows the full-screen switch, so the
+			// layout and brwFullScreenOn cannot disagree.
+			config.Scenes[i].Elements = browserSceneElements(config)
+		} else {
+			// A Browser scene the config ships itself keeps the layout it was
+			// authored with: no full-screen page, no bars hidden, no rebuild.
+			brwFullScreenOn = false
+		}
+		return
 	}
+	config.Scenes = append(config.Scenes, SceneConfig{
+		Name:        browserSceneName,
+		Icon:        "@",
+		Description: browserSceneDescription,
+		Background:  "#0B0F17",
+		Elements:    browserSceneElements(config),
+	})
+}
 
+// browserSceneElements builds the Browser scene's elements for the layout the
+// config asks for, and records that layout (brwFullScreenOn) so the renderer
+// and the hit tests measure the page the way it was built: the page alone,
+// covering the screen (brw_fullscreen.go), or the classic page framed by its
+// toolbar and a row of chips.
+func browserSceneElements(config *Config) []Element {
 	// Scale the injected scene from the 1280x720 design so it fits the smaller
 	// handheld panels too instead of running off the bottom of the screen.
 	width, height := screenWidth, screenHeight
@@ -93,6 +118,10 @@ func ensureBrowserScene(config *Config) {
 	}
 	if height <= 0 {
 		height = 720
+	}
+	brwFullScreenOn = brwFullScreenSetting(config)
+	if brwFullScreenOn {
+		return brwFullscreenElements(width, height)
 	}
 	textBrowser := Element{
 		Type:     "textbrowser",
@@ -211,13 +240,7 @@ func ensureBrowserScene(config *Config) {
 		})
 		chipX += chipWidths[i] + chipGap
 	}
-	config.Scenes = append(config.Scenes, SceneConfig{
-		Name:        browserSceneName,
-		Icon:        "@",
-		Description: "Web browser with GitHub shortcuts",
-		Background:  "#0B0F17",
-		Elements:    elements,
-	})
+	return elements
 }
 
 // findBrowserElement returns the first web textbrowser in the current scene,
@@ -407,6 +430,12 @@ func browserToggleAdFilter(config *Config) bool {
 	site := browserAdBlockSiteKey(address)
 	if site == "" {
 		showToast("Open a page before turning the filter off", ToastInfo())
+		return false
+	}
+	// With Settings → Browser → Block ads and trackers off there is nothing
+	// to turn on or off per site (brw_adblock.go).
+	if !browserBlockAdsEnabled() {
+		ShowToast("Blocking ads and trackers is off · Settings → Browser turns it on", ToastKindInfo)
 		return false
 	}
 	off := browserAdBlockOff(site)
@@ -1060,7 +1089,11 @@ func handleBrowserLinksKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		browserLinkPanelMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
-		browserLinkPanelActivate(config)
+		// A held key picks once: the repeats of the press that opened the
+		// panel (Enter on the Select menu's Links row) must not follow a link.
+		if e.Repeat == 0 {
+			browserLinkPanelActivate(config)
+		}
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		closeBrowserLinkPanel()
 	}
@@ -1245,6 +1278,10 @@ func browserVisibleRows(elem Element, layout *webLayout) int {
 		return 0
 	}
 	height := getElementHeight(elem, 480) - 28 - textBrowserURLBarHeight - 12 - browserCookieStripReserved
+	if brwFullscreenElem(elem) {
+		// Full screen the page is the whole element, less its 4px margins.
+		height = getElementHeight(elem, 480) - 8
+	}
 	rows := int(height / layout.RowH)
 	if rows < 1 {
 		rows = 1
@@ -1989,9 +2026,34 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		}
 		return browserScrollButton(config, elem, 1)
 	case sdl.K_LEFT:
+		// Alt+Left and Alt+Right are a desktop browser's Back and Forward:
+		// the full-screen page has no buttons for them (brw_fullscreen.go).
+		if e.Keysym.Mod&uint16(sdl.KMOD_ALT) != 0 {
+			if e.Repeat == 0 {
+				browserBack(config)
+			}
+			return true
+		}
 		return browserMovePageLink(config, elem, -1)
 	case sdl.K_RIGHT:
+		if e.Keysym.Mod&uint16(sdl.KMOD_ALT) != 0 {
+			if e.Repeat == 0 {
+				browserForward(config)
+			}
+			return true
+		}
 		return browserMovePageLink(config, elem, 1)
+	case sdl.K_BACKSPACE:
+		// Backspace is Back too, as in most desktop browsers.
+		if e.Repeat == 0 {
+			browserBack(config)
+		}
+		return true
+	case sdl.K_F5:
+		if e.Repeat == 0 {
+			browserReload(config)
+		}
+		return true
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		if e.Repeat != 0 {
 			// A held key acts once, like the pad's A: its repeats would open
@@ -2078,15 +2140,19 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 // browserScrollButton scrolls one line and, at either end of the page, hands
 // the D-pad to the scene: Up leaves to the chrome above, Down to the button
 // row below. That is what makes the browser's own buttons reachable from the
-// page without a mouse.
+// page without a mouse. Full screen there is neither above nor below the page
+// (brw_fullscreen.go): the page keeps the pad, and Select opens the menu.
 func browserScrollButton(config *Config, elem Element, dir int) bool {
 	layout := browserPageLayout(config, elem)
 	max := browserScrollMax(elem, layout)
+	full := brwFullscreenElem(elem)
 	if dir < 0 {
 		if textBrowserScrollY <= 0 {
 			textBrowserScrollVelocity = 0
 			textBrowserScrollCooldown = 0
-			moveSelection(config, ActionNavigateUp)
+			if !full {
+				moveSelection(config, ActionNavigateUp)
+			}
 			return true
 		}
 		textBrowserScrollVelocity -= textBrowserScrollAccel
@@ -2099,7 +2165,9 @@ func browserScrollButton(config *Config, elem Element, dir int) bool {
 	if max <= 0 || textBrowserScrollY >= max {
 		textBrowserScrollVelocity = 0
 		textBrowserScrollCooldown = 0
-		moveSelection(config, ActionNavigateDown)
+		if !full {
+			moveSelection(config, ActionNavigateDown)
+		}
 		return true
 	}
 	textBrowserScrollVelocity += textBrowserScrollAccel
@@ -2188,7 +2256,14 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 		// clicks; the browser keeps both, see brickkeys.go).
 		brwInfoOpenFor(config)
 		return true
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+	case sdl.CONTROLLER_BUTTON_BACK:
+		// Select is the browser's menu (brw_menu.go). The main loop opens it
+		// before the page sees the press; a press that still arrives here came
+		// while the menu could not open (a scene fade), and Select must not
+		// leave the screen the way B does.
+		brwMenuOpen(config)
+		return true
+	case sdl.CONTROLLER_BUTTON_B:
 		if browserFind.active {
 			browserFindClear()
 		} else if browserNav == browserModeLinks {
@@ -2246,6 +2321,10 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 // page: the toolbar, the focus outline and this hit-test share the same
 // numbers, so a tap lands on exactly the row the renderer drew.
 func browserPageContentBox(elem Element) (left, top, width, height int32) {
+	if brwFullscreenElem(elem) {
+		// Full screen there is no header band or toolbar above the page.
+		return elem.X + 7, elem.Y + 4, getElementWidth(elem, 1100) - 14, getElementHeight(elem, 480) - 8
+	}
 	width = getElementWidth(elem, 1100) - 14
 	headerH := int32(28)
 	height = getElementHeight(elem, 480) - headerH - textBrowserURLBarHeight - 12

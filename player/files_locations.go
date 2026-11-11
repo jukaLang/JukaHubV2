@@ -730,7 +730,7 @@ func filesSystemConfirm(label string) bool {
 	feSheet.armed = key
 	feSheet.armedAt = time.Now()
 	PlayNavSound()
-	showToast("System folder — press A again to "+strings.ToLower(label), ToastWarn())
+	showToast(hintSentence("System folder — press %s again to "+strings.ToLower(label), "A", "Confirm"), ToastWarn())
 	return false
 }
 

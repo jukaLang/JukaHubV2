@@ -446,6 +446,16 @@ func musicPlayTrackNow(index int) {
 	musicStartDecode(track.Path, resume)
 	PlayActivateSound()
 	go musicProbeDuration(track.Path)
+	// Trophies: a new local track (Play on a stopped one resumes it; podcasts and
+	// radio are remote), with its artist when the media library knows the file.
+	if !isHTTPMediaURL(track.Path) && (previousPath == "" || !sameAudioPath(previousPath, track.Path)) {
+		trophyEvent(tkTrackPlay)
+		if m := mlibCurrentModel(); m != nil {
+			if i, ok := m.byPath[dlPathKey(track.Path)]; ok {
+				trophyEventDistinct(tkArtists, m.items[i].Artist)
+			}
+		}
+	}
 }
 
 // musicProbeDuration fills in the track length once ffprobe answers. It never
@@ -858,6 +868,9 @@ func musicToggleLyrics() bool {
 		return false
 	}
 	music.showLyrics = !music.showLyrics
+	if music.showLyrics {
+		trophyEvent(tkLyrics)
+	}
 	return true
 }
 

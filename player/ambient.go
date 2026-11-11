@@ -236,6 +236,9 @@ func ambientEntryBlockReason(config *Config) string {
 		{"memory panel", memPanel.open},
 		{"text editor", fileEditor.open},
 		{"controller diagnostics", ctrldiag.open},
+		// The Browser's Select menu is drawn over the page, and would be drawn
+		// over the idle screen too (brw_menu.go).
+		{"browser menu", brwMenu.open},
 	}
 	for _, b := range open {
 		if b.yes {

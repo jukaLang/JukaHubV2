@@ -472,7 +472,12 @@ func inmapPress(b inmapButton, which sdl.JoystickID, config *Config) bool {
 
 	*st = inmapBtnState{held: true, which: which, downAt: now}
 	hold, dbl, plain := t.hold[b].pick(overlay), t.double[b].pick(overlay), t.plain[b].pick(overlay)
-	modifier := t.modGlobal[b] || (!overlay && t.modScene[b]) || (b == inmapBtnSelect && inmapHotkeyActive())
+	// Select is held back for the Select + R1 switch and, while Mouse mode is
+	// on, for its hold Select + L1 chord (vcursor_mode.go), so a chord's Select
+	// does not go Back (or open the browser's menu) on its press. A lone Select
+	// still taps on its release.
+	modifier := t.modGlobal[b] || (!overlay && t.modScene[b]) ||
+		(b == inmapBtnSelect && (inmapHotkeyActive() || (inmapPadPresent() && vcursorModeEnabled(config))))
 	if hold >= 0 || dbl >= 0 || modifier {
 		st.mode = inmapPending
 		st.modifier = modifier && hold < 0 && dbl < 0

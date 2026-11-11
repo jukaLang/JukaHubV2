@@ -158,9 +158,11 @@ func uiClamp01(v float64) float64 {
 }
 
 // uiAnimating reports whether any overlay entrance is still playing, so the
-// adaptive frame-rate controller can keep the fast cadence while it does.
+// adaptive frame-rate controller can keep the fast cadence while it does. A
+// Carousel or Widgets Home that is still sliding counts too
+// (home_dynbody.go).
 func uiAnimating() bool {
-	return tb.enter.active || nc.enter.active || qs.enter.active
+	return tb.enter.active || nc.enter.active || qs.enter.active || homeLayoutAnimating()
 }
 
 // ── Layer compositing ─────────────────────────────────────────────────

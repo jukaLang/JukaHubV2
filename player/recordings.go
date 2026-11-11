@@ -19,7 +19,8 @@ package main
 // A folder the user chose always wins: an explicit `recording_output_directory`
 // in retroarch.cfg is read, honoured and left untouched. Only "default"/unset is
 // replaced, which is the case where RetroArch writes somewhere the hub cannot
-// predict. `recordingsDir` overrides everything from JukaHub's own config, and
+// predict, and only for the length of a JukaHub launch (racfgscope.go).
+// `recordingsDir` overrides everything from JukaHub's own config, and
 // `recordings: false` leaves retroarch.cfg alone.
 
 import (
@@ -170,71 +171,13 @@ func recordingsDirFor(config *Config) string {
 	return filepath.Join(root, recordingsFolderName)
 }
 
-// setRetroArchConfigString edits one `key = "value"` line in a RetroArch config.
-// Only the value is replaced; indentation and a trailing comment survive. A
-// missing key is appended, because RetroArch falls back to its built-in default
-// when the line is absent.
-func setRetroArchConfigString(cfg, key, value string) (string, bool) {
-	newline := "\n"
-	if strings.Contains(cfg, "\r\n") {
-		newline = "\r\n"
-	}
-	quoted := `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
-	lines := strings.Split(cfg, newline)
-	changed, found := false, false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		eq := strings.IndexByte(trimmed, '=')
-		if eq < 0 {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(trimmed[:eq]), key) {
-			continue
-		}
-		found = true
-		rest := strings.TrimSpace(trimmed[eq+1:])
-		comment := ""
-		if hash := strings.IndexByte(rest, '#'); hash >= 0 {
-			comment = " " + strings.TrimSpace(rest[hash:])
-			rest = strings.TrimSpace(rest[:hash])
-		}
-		if rest == quoted {
-			continue
-		}
-		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		lines[i] = indent + key + ` = ` + quoted + comment
-		changed = true
-	}
-	if found {
-		if !changed {
-			return cfg, false
-		}
-		return strings.Join(lines, newline), true
-	}
-	if cfg != "" && !strings.HasSuffix(cfg, "\n") {
-		cfg += newline
-	}
-	return cfg + key + ` = ` + quoted + newline, true
-}
-
-// applyRetroArchRecordingDir is the pure edit: one key, everything else
-// byte-for-byte intact. Slashes are normalized so a Windows path cannot be
-// mangled by escaping.
-func applyRetroArchRecordingDir(cfg, dir string) (string, bool) {
-	dir = strings.TrimSpace(dir)
-	if dir == "" {
-		return cfg, false
-	}
-	return setRetroArchConfigString(cfg, retroArchRecordingDirKey, filepath.ToSlash(dir))
-}
-
 // prepareRecordings is the launch-time entry point, called next to
 // prepareSavestateResume. It never blocks or fails a launch: a read-only card, a
 // missing config or a standalone emulator is logged (or skipped) and the game
-// still starts. It reports whether a RetroArch config was configured.
+// still starts. The folder is RetroArch's for this launch only
+// (racfgscope.go): a game started from the firmware's menu records where it
+// always did. Slashes are normalised so a Windows path needs no escaping. It
+// reports whether a RetroArch config was configured.
 func prepareRecordings(launcher string) bool {
 	if !recordingsEnabled() || !retroArchLauncher(launcher) {
 		return false
@@ -249,27 +192,29 @@ func prepareRecordings(launcher string) bool {
 			return false
 		}
 	}
-	for _, path := range recordingsCandidates() {
-		if !regularFile(path) {
+	values := []raScopeValue{{Key: retroArchRecordingDirKey, Value: filepath.ToSlash(dir)}}
+	configured := false
+	for _, path := range raScopeTargets(raLaunchCandidates(launcher, recordingsCandidates())) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
 			continue
 		}
-		changed, err := editRetroArchConfig(path, func(cfgText string) (string, bool) {
-			// A folder the user picked is theirs: never rewrite it.
-			if retroArchRecordingDirFor(cfgText, path) != "" {
-				return cfgText, false
-			}
-			return applyRetroArchRecordingDir(cfgText, dir)
-		})
+		// A folder the user picked is theirs: never rewrite it.
+		if retroArchRecordingDirFor(string(raw), path) != "" {
+			configured = true
+			continue
+		}
+		changed, err := raScopeApply(path, values)
 		if err != nil {
 			logWarn("recordings", "cannot set the recording folder in %s: %v", path, err)
-			return false
+			continue
 		}
+		configured = true
 		if changed {
-			Log().Info("recording folder set", "config", path, "dir", dir)
+			Log().Info("recording folder set for this launch", "config", path, "dir", dir)
 		}
-		return true
 	}
-	return false
+	return configured
 }
 
 // scanRecordings lists the captures in dir, newest first. Zero-byte files are

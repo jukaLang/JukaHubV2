@@ -257,25 +257,50 @@ func TestHomeFocusReachesThePairingCode(t *testing.T) {
 	}
 }
 
-// The speaker sits between the search pill and the meter; without a mixer the
-// meter's Left goes on to the search pill as before.
+// The search pill, the sun, the speaker and the meter are a row: Left walks
+// meter -> speaker -> sun -> search pill and Right walks back, and a button
+// that is not drawn (no mixer, no brightness control yet) is stepped over.
 func TestHomeFocusVolumeButton(t *testing.T) {
 	f := NewHomeFocusController()
 	f.Set(HomeFocusWiFi)
 	if got := f.Move(FocusLeft); got != HomeFocusVolume {
 		t.Fatalf("Left from the meter = %s, want the speaker", got)
 	}
-	if got := f.Move(FocusLeft); got != HomeFocusSearch {
-		t.Fatalf("Left from the speaker = %s, want the search pill", got)
+	if got := f.Move(FocusLeft); got != HomeFocusBrightness {
+		t.Fatalf("Left from the speaker = %s, want the sun", got)
 	}
-	f.Set(HomeFocusVolume)
+	if got := f.Move(FocusLeft); got != HomeFocusSearch {
+		t.Fatalf("Left from the sun = %s, want the search pill", got)
+	}
+	f.Set(HomeFocusBrightness)
+	if got := f.Move(FocusRight); got != HomeFocusVolume {
+		t.Fatalf("Right from the sun = %s, want the speaker", got)
+	}
 	if got := f.Move(FocusRight); got != HomeFocusWiFi {
 		t.Fatalf("Right from the speaker = %s, want the meter", got)
 	}
+	f.Set(HomeFocusBrightness)
+	if got := f.Move(FocusDown); got != HomeFocusPS4 {
+		t.Fatalf("Down from the sun = %s, want the launcher under that end of the bar", got)
+	}
+	f.SetEnabled(HomeFocusBrightness, false)
+	f.Set(HomeFocusVolume)
+	if got := f.Move(FocusLeft); got != HomeFocusSearch {
+		t.Fatalf("with no sun Left from the speaker = %s, want the search pill", got)
+	}
+	f.SetEnabled(HomeFocusBrightness, true)
 	f.SetEnabled(HomeFocusVolume, false)
 	f.Set(HomeFocusWiFi)
+	if got := f.Move(FocusLeft); got != HomeFocusBrightness {
+		t.Fatalf("with no speaker Left from the meter = %s, want the sun", got)
+	}
+	if got := f.Move(FocusRight); got != HomeFocusWiFi {
+		t.Fatalf("with no speaker Right from the sun = %s, want the meter", got)
+	}
+	f.SetEnabled(HomeFocusBrightness, false)
+	f.Set(HomeFocusWiFi)
 	if got := f.Move(FocusLeft); got != HomeFocusSearch {
-		t.Fatalf("with no speaker Left from the meter = %s, want the search pill", got)
+		t.Fatalf("with neither Left from the meter = %s, want the search pill", got)
 	}
 }
 
@@ -297,16 +322,18 @@ func TestCompanionPairingCaption(t *testing.T) {
 func TestHomeLayoutHeaderItemsInBounds(t *testing.T) {
 	for _, c := range []struct{ w, h int32 }{{1280, 720}, {960, 720}} {
 		layout := NewHomeLayout(c.w, c.h)
-		for _, id := range []HomeFocusID{HomeFocusVolume, HomeFocusQR} {
+		for _, id := range []HomeFocusID{HomeFocusVolume, HomeFocusBrightness, HomeFocusQR} {
 			r := layout.Items[id].Rect
 			if r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > c.w || r.Y+r.H > c.h {
 				t.Errorf("%dx%d: %s placeholder %+v is off the canvas", c.w, c.h, id, r)
 			}
 		}
 		for _, problem := range layout.BoundsViolations() {
-			if strings.HasPrefix(problem, string(HomeFocusVolume)) || strings.HasPrefix(problem, string(HomeFocusQR)+":") ||
-				strings.Contains(problem, " "+string(HomeFocusVolume)) || strings.Contains(problem, " "+string(HomeFocusQR)) {
-				t.Errorf("%dx%d: %s", c.w, c.h, problem)
+			for _, id := range []HomeFocusID{HomeFocusVolume, HomeFocusBrightness, HomeFocusQR} {
+				if strings.HasPrefix(problem, string(id)+":") || strings.HasPrefix(problem, string(id)+" ") ||
+					strings.Contains(problem, " "+string(id)) {
+					t.Errorf("%dx%d: %s", c.w, c.h, problem)
+				}
 			}
 		}
 	}

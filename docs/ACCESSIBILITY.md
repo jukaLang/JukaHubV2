@@ -136,12 +136,29 @@ standalone emulators each need their own configuration.
 **Key repeat → Slow** doubles the delay before a held direction starts repeating
 on the on-screen keyboard, and doubles the repeat interval. The press itself is
 unchanged, so typing a single character still feels immediate; it is only the
-runaway after a long hold that goes away.
+runaway after a long hold that goes away. It affects this keyboard only; physical
+keyboard repeat remains controlled by the operating system.
+
+## Power mode
+
+**Power mode** cycles through **Default**, **Battery Saver**, **Balanced** and
+**Performance**. Battery Saver enables Low Power and Reduced Motion and uses the
+slowest frame cadence. Balanced keeps motion on while allowing the interface to
+slow down when idle. Performance keeps the full frame cadence and motion on.
+Default leaves the separate Low Power and Reduced Motion settings in charge.
+This controls JukaHub's interface, not the CPU limit used when a game launches.
+
+## Vibration strength
+
+On devices with a vibration motor, **Vibration strength** cycles through
+**Soft**, **Normal** and **Strong**. The separate **Vibration** switch in
+Settings → General turns feedback off completely; the strength setting only
+changes how strongly the interface pulses.
 
 ## Where the settings live
 
-Everything is stored in `Apps/JukaHub/jukauser.json` under
-`variables.Custom`:
+Accessibility preferences are stored in `Apps/JukaHub/jukauser.json`. The
+accessibility-specific keys below are kept in `variables.Custom`:
 
 | Key | Type | Meaning |
 |-----|------|---------|
@@ -155,8 +172,11 @@ Everything is stored in `Apps/JukaHub/jukauser.json` under
 | `a11y_slow_repeat` | bool | keyboard repeat delay and interval doubled |
 | `a11y_prev_theme` | string | theme restored when the palettes are switched off |
 
-Because they are plain config values, they can be set from a PC before the
-device ever boots, and they survive updates like every other setting.
+Power mode is the built-in `variables.powerMode` setting (`""`, `battery`,
+`balanced` or `performance`). Vibration strength and its on/off switch are
+`hapticsIntensity` and `hapticsEnabled` in `variables.Custom`; the switch is
+available only when a motor is detected. These values can be set from a PC
+before the device boots, and they survive updates like every other setting.
 
 ## Limitations
 

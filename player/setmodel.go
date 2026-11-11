@@ -496,6 +496,34 @@ func setTextSizeOptions(*Config) []setOption {
 	return out
 }
 
+// setHomeLayoutOptions are the stops of Display & theme → Home layout, in the
+// order Home's edit strip lists them, each with the line the list sheet shows.
+func setHomeLayoutOptions(*Config) []setOption {
+	out := make([]setOption, 0, len(homeArrangementChoiceList))
+	for _, name := range homeArrangementChoiceList {
+		note := "Your config's dashboard"
+		switch name {
+		case homeArrangementGrid:
+			note = "The same cards as equal tiles"
+		case homeArrangementCarousel:
+			note = "Big cards in a row"
+		case homeArrangementWidgets:
+			note = "Move, resize, add and remove tiles"
+		}
+		out = append(out, setOption{Value: name, Label: homeArrangementChoiceLabel(name), Note: note})
+	}
+	return out
+}
+
+// setHomeLayoutValue is the stop the list sheet marks: the stored arrangement,
+// with the Dashboard reading as Standard.
+func setHomeLayoutValue(c *Config) string {
+	if i := homeArrangementChoiceIndex(homeArrangement(c)); i >= 0 && i < len(homeArrangementChoiceList) {
+		return homeArrangementChoiceList[i]
+	}
+	return homeArrangementCustom
+}
+
 // setHighContrast switches the accessibility palette through the panel's own
 // helpers. Turning it off with no earlier theme to return to clears the
 // preset, so the switch never leaves the black-and-yellow palette behind.
@@ -588,6 +616,29 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// The full boot at power-on, on every start, or never
+					// (bootos.go).
+					ID: "startupAnimation", Label: "Startup animation", Kind: setKindChoice,
+					Detail:  bootOSAnimationDetail,
+					Options: bootOSAnimationOptions,
+					Current: bootOSAnimationCurrent,
+					Choose:  bootOSAnimationChoose,
+				},
+				{
+					// The firmware's power-on picture (bootlogo.go): A twice
+					// installs JukaHub's, A twice again puts the previous one back.
+					ID: "bootLogo", Label: "Boot logo", Kind: setKindAction,
+					Detail:  bootLogoRowDetail,
+					Visible: bootLogoRowVisible,
+					Value:   bootLogoRowValue,
+					Open:    bootLogoRowOpen,
+				},
+				{
+					ID: "bootPreview", Label: "Watch the boot animation", Kind: setKindAction,
+					Detail: setStatic("The full boot JukaHub plays when the device starts"),
+					Open:   bootOSPreviewOpen,
+				},
+				{
 					ID: "fileRoot", Label: "Files start folder", Kind: setKindText, Field: "fileExplorerRoot",
 					Detail: setStatic("Where Files opens; empty uses the card"),
 					Value: func(c *Config) string {
@@ -636,6 +687,29 @@ func setBuildSections() []setSection {
 					Open:   xpackOpenGallery,
 				},
 				{
+					// Which Home: the shipped dashboard, the Hero grid, or one of
+					// the two that read the homeTiles list — a carousel and the
+					// widgets you arrange (home_edit.go). A opens the list with a
+					// line on each; Left/Right step through them.
+					ID: "homeLayout", Label: "Home layout", Kind: setKindChoice,
+					Detail:     setStatic("Standard, Hero grid, a carousel or widgets you arrange"),
+					Options:    setHomeLayoutOptions,
+					Current:    func(c *Config) int { return homeArrangementChoiceIndex(homeArrangement(c)) },
+					Sheet:      setHomeLayoutOptions,
+					SheetValue: setHomeLayoutValue,
+					Choose: func(c *Config, value string) {
+						homeSetArrangement(c, value)
+						setToast("Home layout: " + homeArrangementChoiceLabel(value))
+					},
+				},
+				{
+					// Home's edit mode from here (home_edit.go): it opens Home
+					// first, switching to Widgets when Home is not a tile layout.
+					ID: "homeEdit", Label: "Edit Home", Kind: setKindAction,
+					Detail: setStatic("Move, resize, add and remove Home tiles"),
+					Open:   homeEditOpen,
+				},
+				{
 					ID: "community", Label: "Community themes", Kind: setKindAction,
 					Detail: setStatic("Browse and install themes from the gallery"),
 					Open:   openThemeCommunityPanel,
@@ -649,6 +723,8 @@ func setBuildSections() []setSection {
 						initWallpaperPicker()
 					},
 				},
+				// A GIF wallpaper plays unless this is off (gifwall.go).
+				wallpaperAnimateRow(),
 				setSliderRow("brightness", "Brightness", "The screen's backlight", 1),
 				{
 					ID: "textSize", Label: "Text size", Kind: setKindChoice,
@@ -686,6 +762,10 @@ func setBuildSections() []setSection {
 						setToast("Living background: " + setOnOff(on))
 					},
 				},
+				// The water under the glass, and tilt where the device can feel
+				// it (liquidbg.go).
+				liquidLevelRow(),
+				liquidTiltRow(),
 				// Light & dark by time of day: the switch, the two themes and the
 				// two times they start (themeschedule.go).
 				themeScheduleToggleRow(),
@@ -716,6 +796,8 @@ func setBuildSections() []setSection {
 			Subtitle: "Volume, interface sounds and vibration",
 			Rows: []setRow{
 				setSliderRow("volume", "Volume", "The device's speaker and headphone level", 0),
+				// Virtual surround for what JukaHub plays (spatial_ui.go).
+				spatialSettingsRow(),
 				{
 					// The keys and the setter are sound.go's; the switch plays
 					// its own click once the sounds are back on, so the hub
@@ -842,6 +924,14 @@ func setBuildSections() []setSection {
 					Visible: setQSAvailable(qsActionBluetooth),
 					Get:     setQSRead(qsActionBluetooth),
 					Set:     setQSWrite(qsActionBluetooth),
+				},
+				{
+					// Pairing, connecting and forgetting (bluetooth_devices_ui.go).
+					ID: "btdevices", Label: "Bluetooth devices", Kind: setKindAction,
+					Detail:  setStatic("Pair controllers for games and Remote Play, and headphones"),
+					Visible: func(*Config) bool { return btDevicesAvailable() },
+					Value:   btSettingsValue,
+					Open:    btScreenOpen,
 				},
 				{
 					ID: "airplane", Label: "Airplane mode", Kind: setKindToggle, Quiet: true,
@@ -1110,8 +1200,8 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
-					ID: "coreUpdate", Label: "Core updates", Kind: setKindChoice,
-					Detail:  setStatic("What the daily check does; a replaced build is always kept"),
+					ID: "coreUpdate", Label: "Emulator updates", Kind: setKindChoice,
+					Detail:  setStatic("What the daily check does for cores and PPSSPP; the old build is always kept"),
 					Visible: func(*Config) bool { return setHandheld() },
 					Options: coreUpdateModeOptions,
 					Current: coreUpdateModeIndex,
@@ -1152,6 +1242,21 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// The background box-art passes (boxart_auto.go).
+					ID: "artAuto", Label: "Find box art automatically", Kind: setKindToggle,
+					Detail: func(c *Config) string {
+						if boxArtAutoEnabled(c) {
+							return "Covers for new games from the libretro thumbnails, when online"
+						}
+						return "Off: covers download only from the library's Fill gaps"
+					},
+					Get: boxArtAutoEnabled,
+					Set: func(c *Config, on bool) {
+						boxArtSetAutoEnabled(c, on)
+						setToast("Find box art automatically: " + setOnOff(on))
+					},
+				},
+				{
 					ID: "saves", Label: "Save manager", Kind: setKindAction,
 					Detail: setStatic("Back up and restore save files"),
 					Open:   func(*Config) { openSaveManagerPanel() },
@@ -1180,6 +1285,16 @@ func setBuildSections() []setSection {
 						}
 						setToast("Power mode: " + label)
 					},
+				},
+				{
+					// The level and how long it will last (battery_eta.go);
+					// the detail says what the estimate rests on. Second, so
+					// the page still opens on Power mode, where Left/Right
+					// change the mode as before.
+					ID: "batteryNow", Label: "Battery", Kind: setKindInfo,
+					Visible: func(*Config) bool { return getBatteryPercent() >= 0 },
+					Value:   batteryETASettingsValue,
+					Detail:  batteryETASettingsDetail,
 				},
 				{
 					ID: "screensaver", Label: "Screensaver after", Kind: setKindChoice,
@@ -1255,12 +1370,14 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
-			// The search engine and the home page (browser_engines.go) and the
-			// page-script switch (webdom_runtime.go). It sits beside Privacy &
+			// The search engine and the home page (browser_engines.go), the
+			// page-script switch (webdom_runtime.go), the full-screen layout
+			// (brw_fullscreen.go), the ad and tracker filter (brw_adblock.go) and,
+			// on the handheld, WPE Browser (brw_wpe.go). It sits beside Privacy &
 			// data, whose first rows are the Browser's sign-ins.
 			ID: "browser", Title: "Browser", Glyph: "browser",
-			Subtitle: "Search engine, home page and JavaScript",
-			Rows:     append(brwSettingsRows(), webJSSettingsRow()),
+			Subtitle: "Search engine, home page, JavaScript, full screen and ads",
+			Rows:     append(brwSettingsRows(), webJSSettingsRow(), brwFullScreenSettingsRow(), brwAdBlockSettingsRow(), brwWpeSettingsRow()),
 		},
 		{
 			ID: "privacy", Title: "Privacy & data", Glyph: "shield",

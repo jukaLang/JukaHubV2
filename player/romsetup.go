@@ -232,8 +232,69 @@ func romLibraryRoots() []string {
 	return unique
 }
 
+// romPluginFolderKey folds a folder name to the key plugins are matched by:
+// lower case with the separators people put in console folder names removed.
+func romPluginFolderKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch r {
+		case ' ', '-', '_', '.', '(', ')', '[', ']', '/', '\\':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// romPluginSystems turns the switched-on plugins' ROM parsers into the same
+// lookup tables the built-in catalogue uses. Extensions a built-in already
+// handles, and folder names the built-in aliases already name, are left to the
+// catalogue: a plugin must not take over NES because it also reads .nes.
+func romPluginSystems(parsers []plugxRomParser) (byExt, byFolder map[string]romSystem) {
+	byExt = make(map[string]romSystem)
+	byFolder = make(map[string]romSystem)
+	for _, p := range parsers {
+		system := romSystem{Name: p.Name, Collection: "Plugins"}
+		for _, ext := range p.Extensions {
+			if ext == "" || romFileExtensions[ext] {
+				continue
+			}
+			if _, taken := byExt[ext]; !taken {
+				byExt[ext] = system
+			}
+		}
+		for _, key := range []string{strings.ToLower(p.System), romPluginFolderKey(p.Name)} {
+			if key == "" {
+				continue
+			}
+			if _, builtin := romSystemAliases[key]; builtin {
+				continue
+			}
+			if _, taken := byFolder[key]; !taken {
+				byFolder[key] = system
+			}
+		}
+	}
+	return byExt, byFolder
+}
+
+// plugxROMFormats snapshots the registered ROM parsers under the registry lock.
+// The scan runs on a background goroutine while a plugin can be switched on or
+// off on the main thread.
+func plugxROMFormats() (byExt, byFolder map[string]romSystem) {
+	plugxRegistry.mu.RLock()
+	parsers := append([]plugxRomParser(nil), plugxRegistry.parsers...)
+	plugxRegistry.mu.RUnlock()
+	return romPluginSystems(parsers)
+}
+
 func scanROMLibrary(roots []string) romScanReport {
 	report := romScanReport{Roots: append([]string(nil), roots...), Counts: make(map[string]int)}
+	pluginByExt, pluginByFolder := plugxROMFormats()
 	seen := make(map[string]bool)
 	for _, root := range roots {
 		entries, err := os.ReadDir(root)
@@ -245,6 +306,9 @@ func scanROMLibrary(roots []string) romScanReport {
 				continue
 			}
 			system, ok := romSystemAliases[strings.ToLower(systemDir.Name())]
+			if !ok {
+				system, ok = pluginByFolder[romPluginFolderKey(systemDir.Name())]
+			}
 			if !ok {
 				continue
 			}
@@ -260,7 +324,9 @@ func scanROMLibrary(roots []string) romScanReport {
 					}
 					return nil
 				}
-				if entry.IsDir() || !romFileExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
+				ext := strings.ToLower(filepath.Ext(entry.Name()))
+				pluginSystem, pluginExt := pluginByExt[ext]
+				if entry.IsDir() || (!romFileExtensions[ext] && !pluginExt) {
 					return nil
 				}
 				clean := filepath.Clean(path)
@@ -268,8 +334,12 @@ func scanROMLibrary(roots []string) romScanReport {
 					return nil
 				}
 				seen[clean] = true
-				report.Games = append(report.Games, scannedROM{Path: clean, System: system.Name, Collection: system.Collection})
-				report.Counts[system.Name]++
+				fileSystem := system
+				if pluginExt {
+					fileSystem = pluginSystem
+				}
+				report.Games = append(report.Games, scannedROM{Path: clean, System: fileSystem.Name, Collection: fileSystem.Collection})
+				report.Counts[fileSystem.Name]++
 				return nil
 			})
 		}

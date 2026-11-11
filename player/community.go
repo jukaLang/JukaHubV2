@@ -111,7 +111,7 @@ func communityRows(config *Config) []communityRow {
 		{
 			label:  "Report a bug",
 			value:  "Describe the problem",
-			detail: "Anonymous; you review the redacted diagnostics before sending",
+			detail: "Becomes a public GitHub issue, not under your name; you review it first",
 			hint:   hintLine(FooterHint{"A", "Open"}),
 			action: communityActionReportBug,
 		},

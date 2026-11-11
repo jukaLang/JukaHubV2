@@ -548,8 +548,10 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	if netplayTrimuiBuild(plan.RetroArch) {
 		// Every firmware launch.sh starts ra64.trimui from its own folder with
 		// HOME pointed there, which is where it finds retroarch.cfg and
-		// .retroarch/. JukaHub's own HOME is its app folder.
-		cmd.Env = append(os.Environ(), "HOME="+cmd.Dir)
+		// .retroarch/. JukaHub's own HOME is its app folder. The rest is the
+		// firmware's environment, as for any game (childenv.go): JukaHub's
+		// library path must not decide which libraries RetroArch loads.
+		cmd.Env = append(screenChildEnv(os.Environ()), "HOME="+cmd.Dir)
 	}
 	restoreProfile := beginGamePowerProfile(config)
 	// Same hand-off rule as the emulator launchers: the child leads its own

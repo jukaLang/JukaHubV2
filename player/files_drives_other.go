@@ -32,3 +32,7 @@ func filesFreeSpace(path string) (int64, error) {
 func filesSkipFreeSpace(loc filesLocation) bool {
 	return false
 }
+
+// filesSetHidden has nothing to do outside Windows: a dot name is what hides a
+// file here.
+func filesSetHidden(string) {}

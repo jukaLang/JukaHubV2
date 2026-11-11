@@ -252,6 +252,10 @@ func xpackDescribeLines(c *Config, e xpackEntry) []string {
 		lines = append(lines, "Home: your own layout")
 	case homeArrangementDashboard, homeArrangementGrid:
 		lines = append(lines, "Home: "+homeArrangementLabel(m.HomeLayout))
+	case homeArrangementCarousel, homeArrangementWidgets:
+		// The tile layouts show the user's own tiles (homeTiles): a pack
+		// picks the layout, never the tiles.
+		lines = append(lines, "Home: "+homeArrangementLabel(m.HomeLayout)+" · your tiles")
 	}
 	switch {
 	case e.WallpaperPath != "":
@@ -1002,6 +1006,64 @@ func xpackDrawPreview(renderer *sdl.Renderer, c *Config, pv xpackPreview, r sdl.
 				}
 				tile(cell(col, row, 1, 1), false)
 			}
+		}
+		return
+	}
+	if arrangement == homeArrangementCarousel {
+		// One row of big cards: the focused one in the middle, its smaller,
+		// veiled neighbours half off the edges, the position dots under them.
+		dot := max(hh/2, 2)
+		cw, ch := body.W*3/5, body.H-dot-2*gap
+		sw, sh := cw*2/3, ch*2/3
+		sy := body.Y + (ch-sh)/2
+		if clip.W > 0 && clip.H > 0 {
+			_ = renderer.SetClipRect(&clip)
+			for _, sx := range [2]int32{r.X - sw/2, r.X + r.W - sw/2} {
+				tile(sdl.Rect{X: sx, Y: sy, W: sw, H: sh}, false)
+				// Faded toward the backdrop's own colour, as Home's carousel
+				// fades its side cards (light on a light pack).
+				fillRoundedRect(renderer, sx, sy, sw, sh, min(min(sw, sh)/5, 6), WithAlpha(bg, 120))
+			}
+			if hadClip {
+				_ = renderer.SetClipRect(&prev)
+			} else {
+				_ = renderer.SetClipRect(nil)
+			}
+		}
+		tile(sdl.Rect{X: body.X + (body.W-cw)/2, Y: body.Y, W: cw, H: ch}, true)
+		// Five dots, the focused card's the accent pill.
+		pillW := dot * 3
+		dx := body.X + (body.W-8*dot-pillW)/2
+		for i := 0; i < 5; i++ {
+			dw, fill := dot, WithAlpha(text, 90)
+			if i == 2 {
+				dw, fill = pillW, accent
+			}
+			fillRoundedRect(renderer, dx, body.Y+body.H-dot, dw, dot, dot/2, fill)
+			dx += dw + dot
+		}
+		return
+	}
+	if arrangement == homeArrangementWidgets {
+		// The tiles the user arranges, on six columns, in the default list's
+		// sizes: Continue 2×2 with the Media strip 4×1 beside it, then cards
+		// and widgets one cell each.
+		colW := (body.W - 5*gap) / 6
+		cell6 := func(col, row, spanC, spanR int32) sdl.Rect {
+			return sdl.Rect{
+				X: body.X + col*(colW+gap),
+				Y: body.Y + row*(cellH+gap),
+				W: spanC*colW + (spanC-1)*gap,
+				H: spanR*cellH + (spanR-1)*gap,
+			}
+		}
+		tile(cell6(0, 0, 2, 2), true)
+		tile(cell6(2, 0, 4, 1), false)
+		for col := int32(2); col < 6; col++ {
+			tile(cell6(col, 1, 1, 1), false)
+		}
+		for col := int32(0); col < 6; col++ {
+			tile(cell6(col, 2, 1, 1), false)
 		}
 		return
 	}

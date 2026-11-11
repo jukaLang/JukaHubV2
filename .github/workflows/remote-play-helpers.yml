@@ -1,0 +1,246 @@
+name: Remote Play helpers
+
+# Builds the two native PS Remote Play helpers in player/native (chiaki-stream
+# and chiaki-regist) for the TrimUI handhelds, checks that they will start
+# there, and hands them to the packaging jobs as the artifact
+# "remote-play-helpers" (the two binaries plus BUILDINFO.txt).
+#
+# docker-image.yml (every push to main), release.yml (v* tags) and
+# build-sdcard.yml call this workflow and put the binaries in Apps/JukaHub/bin.
+# No release before this workflow carried them, so on every handheld the PS
+# Remote Play panel said "Helper missing". It can also be run on its own:
+# Actions -> Remote Play helpers -> Run workflow.
+#
+# Why an arm64 runner and an Ubuntu 20.04 root:
+#   * The Smart Pro has glibc 2.33 (firmware 1.0.4 and later), and a binary
+#     linked against a newer glibc does not start there at all. Ubuntu 20.04
+#     has glibc 2.31; the runner's own 24.04 has 2.39.
+#   * A native aarch64 build needs no cross toolchain or sysroot, and the
+#     binaries can be started right here, which is the smoke test the build
+#     script ends with.
+#   * The 20.04 root comes from debootstrap, not from a container image. The
+#     repository pulls images by digest only (check-workflows.sh), and there is
+#     no ubuntu:20.04 digest that could be verified from here; debootstrap and
+#     apt check every package against the Ubuntu archive signing key instead,
+#     which is what the digest would have guaranteed.
+#
+# What the build links is decided in player/native/build-helpers.sh (native
+# mode): FFmpeg, opus and json-c from pinned, checksum-verified sources, all
+# static, and OpenSSL static from Ubuntu. Only SDL2 and the C library are left
+# to the handheld, and the script fails the build if anything else is NEEDED,
+# if a symbol needs a glibc newer than 2.31, or if a binary does not start.
+#
+# A failure here never stops a JukaHub release: this job is continue-on-error,
+# the callers run whatever its result, and an archive without the helpers ships
+# without Remote Play streaming (exactly what every release did before), with a
+# warning on the run.
+#
+# A build takes about a quarter of an hour and the TrimUI archive waits for it,
+# while the helpers' sources rarely change. So the job first looks for helpers
+# an earlier run built from exactly the same sources (the artifact
+# remote-play-helpers-<hash of the sources>) and builds only when there are
+# none. What it takes has to pass the provenance rules of the release build
+# cache in .github/scripts/go-build-cache.sh: an earlier push-to-main run of
+# the same calling workflow, whose commit is in the history being built. A
+# fresh build on a push to main leaves its helpers under that name for 90 days.
+# The callers grant this job `actions: read` for the lookup; without it the run
+# would not start.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: chiaki-stream + chiaki-regist (linux/arm64, glibc 2.31)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read     # find and download helpers an earlier run built
+    env:
+      ROOTFS: /srv/jukahub-focal
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The workspace is bind-mounted into the build root, where third-party
+          # build code runs as root; nothing here pushes, so no token stays in
+          # .git/config for it to read.
+          persist-credentials: false
+
+      - name: Look for helpers an earlier run built from these sources
+        id: cache
+        # The key covers everything the helpers are built from: the native
+        # sources, build-helpers.sh with its pinned versions and checksums, the
+        # Python tool pins, and this workflow, which makes the build root.
+        # git's blob ids hash the committed content, so every runner gets the
+        # same key; the host tests and the README change nothing that is built
+        # and stay out of it. Never fails: a miss, or any trouble here, only
+        # means the steps below build the helpers.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          inputs=$(git ls-files -s -- player/native ':(exclude)player/native/tests' \
+            ':(exclude)player/native/*.md' .github/workflows/remote-play-helpers.yml)
+          case "$inputs" in
+            *player/native/build-helpers.sh*) ;;
+            *)
+              echo "::warning title=Remote Play helpers::could not list the helper sources; building them"
+              exit 0 ;;
+          esac
+          name="remote-play-helpers-$(printf '%s\n' "$inputs" | sha256sum | cut -c1-16)"
+          echo "artifact=$name" >> "$GITHUB_OUTPUT"
+          echo "helper sources: $name"
+          if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin \
+              chiaki-stream chiaki-regist BUILDINFO.txt; then
+            exit 0
+          fi
+          # The binaries must be the ones their BUILDINFO.txt describes, which
+          # is what the step summary and the release's helper package show.
+          for bin in chiaki-stream chiaki-regist; do
+            want=$(awk -v b="$bin" '$0 == b { f = 1; next } f && $1 == "sha256:" { print $2; exit }' \
+              player/native/bin/BUILDINFO.txt)
+            have=$(sha256sum "player/native/bin/$bin" | cut -d' ' -f1)
+            if [ -z "$want" ] || [ "$want" != "$have" ]; then
+              echo "::warning title=Remote Play helpers::the earlier $bin does not match its BUILDINFO.txt; building the helpers instead"
+              rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/BUILDINFO.txt
+              exit 0
+            fi
+          done
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create the Ubuntu 20.04 build root
+        if: steps.cache.outputs.hit != 'true'
+        run: |
+          set -euo pipefail
+          # Nothing here reads man pages: skip man-db's index rebuild.
+          sudo rm -f /var/lib/man-db/auto-update || true
+          sudo apt-get -o Acquire::Retries=3 update -q
+          sudo apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends debootstrap
+          # Naming the keyring makes an unsigned or wrongly signed archive fatal;
+          # without it debootstrap only warns and carries on.
+          sudo debootstrap --variant=minbase --arch=arm64 \
+            --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg \
+            focal "$ROOTFS" http://ports.ubuntu.com/ubuntu-ports
+          # The security and bug-fix updates too: OpenSSL is linked statically,
+          # so whatever libssl-dev holds today is what ships.
+          printf '%s\n' \
+            "deb http://ports.ubuntu.com/ubuntu-ports focal main universe" \
+            "deb http://ports.ubuntu.com/ubuntu-ports focal-updates main universe" \
+            "deb http://ports.ubuntu.com/ubuntu-ports focal-security main universe" \
+            | sudo tee "$ROOTFS/etc/apt/sources.list" >/dev/null
+          sudo cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+          sudo mkdir -p "$ROOTFS/src"
+          sudo mount --bind "$GITHUB_WORKSPACE" "$ROOTFS/src"
+          sudo mount -t proc proc "$ROOTFS/proc"
+          sudo mount --bind /dev "$ROOTFS/dev"
+          in_root() {
+            sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
+              DEBIAN_FRONTEND=noninteractive \
+              PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
+          }
+          in_root apt-get -o Acquire::Retries=3 update -q
+          in_root apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends \
+            build-essential ca-certificates curl file git libssl-dev make \
+            ninja-build patchelf pkg-config python3 python3-pip \
+            python3-setuptools python3-wheel xz-utils
+          # 20.04's pip predates the wheel tags current cmake and grpcio-tools
+          # publish (manylinux_2_17), and would fall back to compiling them.
+          in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: 'pip==24.0'
+          # CMake, and the grpcio-tools protoc that player/native/protoc-wrapper.py
+          # runs for nanopb: exact versions, wheels only (no source builds, no
+          # setup.py), from player/native/helper-build-requirements.txt, which
+          # says why each one and why hashes are not pinned yet.
+          in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: \
+            -r /src/player/native/helper-build-requirements.txt
+          in_root cmake --version
+          in_root python3 -c 'import grpc_tools.protoc, google.protobuf; print("protoc wrapper ready")'
+
+      - name: Build the helpers
+        id: build
+        if: steps.cache.outputs.hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            JOBS="$(nproc)" JUKAHUB_HELPERS_NATIVE=1 DEPS_PREFIX=/opt/jukahub-deps \
+            /bin/sh /src/player/native/build-helpers.sh
+
+      - name: Report what was built
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          REUSED_FROM: ${{ steps.cache.outputs.hit == 'true' && steps.cache.outputs.run || '' }}
+        run: |
+          info=player/native/bin/BUILDINFO.txt
+          # A build that failed its checks never reaches native/bin; what it
+          # had checked so far is still in the build root's staging folder.
+          if [ ! -f "$info" ]; then
+            info="$ROOTFS/tmp/jukahub-chiaki-build/jukahub-stage/BUILDINFO.txt"
+          fi
+          {
+            echo "### Remote Play helpers"
+            echo ""
+            if [ -n "$REUSED_FROM" ]; then
+              echo "Reused from run $REUSED_FROM, which built and verified them from the same sources; the TrimUI packages of this run carry them in \`Apps/JukaHub/bin\`."
+            elif [ "$BUILD_OUTCOME" = "success" ]; then
+              echo "Built and verified; the TrimUI packages of this run carry them in \`Apps/JukaHub/bin\`."
+            else
+              echo "Not built (${BUILD_OUTCOME:-not run}): the TrimUI packages of this run ship without Remote Play streaming."
+              echo "The **Build the helpers** step says why."
+            fi
+            if [ -f "$info" ]; then
+              echo ""
+              echo '```'
+              cat "$info"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$REUSED_FROM" ] && [ "$BUILD_OUTCOME" != "success" ]; then
+            echo "::warning title=Remote Play helpers::not built; this run's TrimUI packages ship without Remote Play streaming"
+          fi
+
+      - name: Upload the helpers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: remote-play-helpers
+          # Artifacts do not keep file modes: the packaging jobs set +x again.
+          path: |
+            player/native/bin/chiaki-stream
+            player/native/bin/chiaki-regist
+            player/native/bin/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 30
+          # A re-run of this job replaces its own earlier upload instead of
+          # failing on the name.
+          overwrite: true
+
+      - name: Keep the helpers for later runs
+        # A fresh build that passed its checks, on a push to main: the only
+        # kind the lookup above accepts. Reused helpers are kept already.
+        if: steps.build.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.cache.outputs.artifact }}
+          path: |
+            player/native/bin/chiaki-stream
+            player/native/bin/chiaki-regist
+            player/native/bin/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+      - name: Release the build root
+        if: always()
+        run: |
+          sudo umount "$ROOTFS/dev" 2>/dev/null || true
+          sudo umount "$ROOTFS/proc" 2>/dev/null || true
+          sudo umount "$ROOTFS/src" 2>/dev/null || true

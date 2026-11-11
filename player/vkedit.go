@@ -438,6 +438,9 @@ func vkSecretTarget() bool {
 		return raPanel.edit == raEditAPIKey
 	case vkTargetFiles:
 		return filesKeyboard == filesEditPassword
+	case vkTargetPSRemote:
+		// The PlayStation profile's login passcode (psremote_console_opts.go).
+		return psPanelEditField == psEditLoginPIN
 	}
 	return false
 }

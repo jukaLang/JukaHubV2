@@ -30,12 +30,34 @@ const gamesLibraryEntryName = "Games Library"
 type libraryGame struct {
 	Path   string
 	System string
-	Title  string
-	Art    string
+	// Title is the title derived from the ROM's file name. It stays the key
+	// for metadata and playtime even when the user gives the game a display
+	// title, so a rename here never moves its tags or hours.
+	Title string
+	Art   string
+	// DisplayTitle is what the user asked the library to call the game. Empty
+	// means Title. ContentKey keys the view state by the cartridge's bytes, not
+	// its path, so renaming the file keeps the display title and hidden flag.
+	DisplayTitle string
+	ContentKey   string
+	Hidden       bool
+	LastPlayed   time.Time
+	Playtime     int64
+	Rating       int
+	Year         int
 	// HasArt is true when the cover file exists right now. It is filled at
 	// scan time and recounted after a download, so the completeness figures
 	// describe the card rather than the intent.
 	HasArt bool
+}
+
+// Label is the name every library surface shows: the display title when the
+// user set one, otherwise the title derived from the file.
+func (g libraryGame) Label() string {
+	if title := strings.TrimSpace(g.DisplayTitle); title != "" {
+		return title
+	}
+	return g.Title
 }
 
 // librarySystem is one console row with its games.
@@ -103,6 +125,13 @@ func gameDisplayTitle(path string) string {
 // buildGameLibrary groups a scan by system, sorts it for browsing and attaches
 // the artwork path romsetup.go uses for downloaded box art.
 func buildGameLibrary(report romScanReport, artRoot string) gameLibraryReport {
+	return buildGameLibraryWith(report, artRoot, nil)
+}
+
+// buildGameLibraryWith is buildGameLibrary with a playtime snapshot. A
+// background scan passes a copy taken on the render thread; nil reads the live
+// ledger (the main-thread path used by tests and non-panel callers).
+func buildGameLibraryWith(report romScanReport, artRoot string, playtimeSeconds map[string]int64) gameLibraryReport {
 	lib := gameLibraryReport{Roots: append([]string(nil), report.Roots...)}
 	grouped := make(map[string][]libraryGame)
 	for _, rom := range report.Games {
@@ -120,13 +149,9 @@ func buildGameLibrary(report romScanReport, artRoot string) gameLibraryReport {
 		})
 	}
 	for name, games := range grouped {
-		sort.SliceStable(games, func(i, j int) bool {
-			left, right := strings.ToLower(games[i].Title), strings.ToLower(games[j].Title)
-			if left == right {
-				return games[i].Path < games[j].Path
-			}
-			return left < right
-		})
+		// Sort, display title, hidden flag and the rating/year/playtime the
+		// chosen sort reads all come from the existing stores (game_library_view.go).
+		libraryDecorateGames(games, playtimeSeconds)
 		withArt := countCoveredGames(games)
 		lib.Systems = append(lib.Systems, librarySystem{Name: name, Games: games, WithArt: withArt})
 		lib.Total += len(games)
@@ -453,12 +478,22 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// config just before the launch, beside the save-state switches.
 	prepareOSDPreset(launcher)
 	prepareRecordings(launcher)
+	// Spatial audio in games: the DSP preset for this launch (spatial_games.go).
+	prepareSpatialAudio(launcher)
 	// Per-game options are read here, at launch time, so an edit made in the
 	// options sheet applies to the very next start without a rescan.
 	options := gameOptionsFor(game.Path)
 	// With two or more players in Local play, a RetroArch launch gets their
 	// controller order as a one-launch --appendconfig (hotseat.go).
 	extra := hotseatLaunchArgs(launcher, parseGameArgs(options.Args))
+	if len(extra) > 0 && !hotseatLauncherForwards(launcher) {
+		// The stock and CrossMix scripts pass "$*", which joins the ROM path and
+		// every option into one argument: an option there makes RetroArch look
+		// for a ROM that does not exist. A script reading only "$1" ignores them
+		// anyway, so they are dropped rather than passed.
+		logWarn("library", "%s does not forward options; ignoring %q", filepath.Base(launcher), extra)
+		extra = nil
+	}
 	name, args := gameLaunchCommandArgs(launcher, game.Path, extra)
 	cmd, err := gameLaunchExec(launcher, name, args)
 	if err != nil {

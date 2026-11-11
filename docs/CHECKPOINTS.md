@@ -30,7 +30,9 @@ time the game exits, and it depends on the emulator shutting down cleanly.
   `savestate_auto_save` and `savestate_auto_load` in `retroarch.cfg` before a
   launch when the resolved launcher actually runs RetroArch. The edit is
   line-based, keeps the original once as `retroarch.cfg.jukahub-backup`, and is
-  skipped for standalone emulators. `savestateResume: false` opts out.
+  skipped for standalone emulators. It lasts for that launch only: the user's
+  values go back when the game exits, from a journal that also survives a crash
+  ([racfgscope.go](../player/racfgscope.go)). `savestateResume: false` opts out.
 - **Recents and Continue.** [game_library.go](../player/game_library.go) writes
   `game-recents.json` (last twelve games, deduplicated, atomic write) and the
   Continue row relaunches through the same launcher resolution as the library.

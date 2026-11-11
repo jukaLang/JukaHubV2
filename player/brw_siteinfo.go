@@ -14,6 +14,9 @@ package main
 //   - Security headers: which of the six hardening headers the server sends
 //     (headerAuditSummary)
 //
+// Above the tabs' reports a line counts the page's blocked ads and trackers,
+// with "Allow ads on this site" (X) beside it (brw_adblock.go).
+//
 // All three run on their own goroutines as soon as the sheet opens, so
 // switching tabs is instant, and the results are kept per URL for the session.
 // Offline, the tabs say they need internet and start by themselves when the
@@ -110,6 +113,7 @@ type brwInfoState struct {
 	recheck   sdl.Rect
 	close     sdl.Rect
 	wifi      sdl.Rect
+	ads       sdl.Rect
 }
 
 var brwInfo brwInfoState
@@ -432,6 +436,8 @@ func brwInfoController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		brwInfoScroll(40)
 	case sdl.CONTROLLER_BUTTON_Y:
 		brwInfoRecheck()
+	case sdl.CONTROLLER_BUTTON_X:
+		brwInfoToggleAds(config)
 	case sdl.CONTROLLER_BUTTON_A:
 		if !IsOnline() {
 			brwInfoClose()
@@ -466,6 +472,8 @@ func brwInfoKey(e *sdl.KeyboardEvent, config *Config) bool {
 		brwInfoScroll(240)
 	case sdl.K_r, sdl.K_F5:
 		brwInfoRecheck()
+	case sdl.K_x:
+		brwInfoToggleAds(config)
 	case sdl.K_RETURN:
 		if !IsOnline() {
 			brwInfoClose()
@@ -495,6 +503,8 @@ func brwInfoMouse(mx, my int32, config *Config) bool {
 		brwInfoClose()
 	case brwInfo.recheck.W > 0 && hitTouchTarget(brwInfo.recheck, mx, my):
 		brwInfoRecheck()
+	case brwInfo.ads.W > 0 && pointInRect(mx, my, brwInfo.ads):
+		brwInfoToggleAds(config)
 	case brwInfo.wifi.W > 0 && pointInRect(mx, my, brwInfo.wifi):
 		brwInfoClose()
 		wifiScrOpen(config)
@@ -644,6 +654,8 @@ func brwInfoRender(r *sdl.Renderer, config *Config) {
 		renderText(r, config, body, ellipsize(body, status, pill.W-36), ink, pill.X+26, pill.Y+6)
 	}
 	y += max(brwInfo.recheck.H, int32(body.Height())+12) + 12
+	// The page's ads and trackers, and the per-site switch (brw_adblock.go).
+	y = brwInfoDrawAds(r, config, card, y, label, body)
 
 	// Body: the rows, scrolled inside the card.
 	hintH := int32(small.Height()) + 18
@@ -666,7 +678,7 @@ func brwInfoRender(r *sdl.Renderer, config *Config) {
 	}
 
 	hint := hintLine(FooterHint{Button: "L1/R1", Label: "Tab"}, FooterHint{Button: "Up/Down", Label: "Scroll"},
-		FooterHint{Button: "Y", Label: "Re-check"}, FooterHint{Button: "B", Label: "Close"})
+		FooterHint{Button: "Y", Label: "Re-check"}, brwInfoAdsHint(), FooterHint{Button: "B", Label: "Close"})
 	renderText(r, config, small, ellipsize(small, hint, card.W-2*OverlayPadX), ColorTextTertiary(),
 		card.X+OverlayPadX, card.Y+card.H-hintH+6)
 }

@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+// ensureSavestateResume is the pure edit a launch makes (racfgscope.go).
+func ensureSavestateResume(cfg string) (string, bool) {
+	return raScopeApplyText(cfg, savestateResumeValues())
+}
+
 func TestEnsureSavestateResumeAppendsMissingSwitches(t *testing.T) {
 	in := "# stock config\nvideo_fullscreen = \"true\"\n"
 	out, changed := ensureSavestateResume(in)
@@ -64,6 +69,9 @@ func TestEnableSavestateResumeBacksUpOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	enableSavestateResume := func(path string) (bool, error) {
+		return editRetroArchConfig(path, ensureSavestateResume)
+	}
 	changed, err := enableSavestateResume(path)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +112,7 @@ func TestEnableSavestateResumeBacksUpOnce(t *testing.T) {
 }
 
 func TestPrepareSavestateResumeWritesTheDiscoveredConfig(t *testing.T) {
+	raScopeTestSetup(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "retroarch.cfg")
 	if err := os.WriteFile(cfgPath, []byte("savestate_auto_save = \"false\"\n"), 0o600); err != nil {
@@ -128,9 +137,34 @@ func TestPrepareSavestateResumeWritesTheDiscoveredConfig(t *testing.T) {
 	if v, ok := retroArchConfigValue(string(raw), savestateAutoLoadKey); !ok || !strings.EqualFold(v, "true") {
 		t.Errorf("auto-load = %q (found %t), want true\n%s", v, ok, raw)
 	}
+	// The switches belong to this launch only: once the game is over, the
+	// firmware's own menu finds the user's config again.
+	raScopeRestoreNow(t)
+	if raw, _ = os.ReadFile(cfgPath); string(raw) != "savestate_auto_save = \"false\"\n" {
+		t.Errorf("after the game the config is %q, want the user's back", raw)
+	}
+}
+
+// TrimUI's own binary name does not contain "retroarch"; a launch script that
+// only names ra64.trimui or a libretro core is still a RetroArch launch.
+func TestRetroArchLauncherKnowsTrimUIBinaries(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"ra.sh":   "#!/bin/sh\ncd $RA_DIR\nHOME=$RA_DIR/ $RA_DIR/ra64.trimui -v -L $CORES/mgba.so \"$*\"\n",
+		"core.sh": "#!/bin/sh\n./emu -L cores/snes9x_libretro.so \"$1\"\n",
+	} {
+		launcher := filepath.Join(dir, name)
+		if err := os.WriteFile(launcher, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if !retroArchLauncher(launcher) {
+			t.Errorf("%s is not seen as a RetroArch launcher", name)
+		}
+	}
 }
 
 func TestPrepareSavestateResumeRespectsOptOut(t *testing.T) {
+	raScopeTestSetup(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "retroarch.cfg")
 	if err := os.WriteFile(cfgPath, []byte("video_fullscreen = \"true\"\n"), 0o600); err != nil {
@@ -161,6 +195,7 @@ func TestPrepareSavestateResumeRespectsOptOut(t *testing.T) {
 }
 
 func TestPrepareSavestateResumeLeavesStandaloneEmulatorsAlone(t *testing.T) {
+	raScopeTestSetup(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "retroarch.cfg")
 	if err := os.WriteFile(cfgPath, []byte("video_fullscreen = \"true\"\n"), 0o600); err != nil {

@@ -598,7 +598,11 @@ func resolveGameProfilePaths(p GameProfile, roots []string) (string, string, err
 	if filepath.IsAbs(dir) {
 		gameDir, err = containedDir(dir, roots)
 		if err != nil {
-			return "", "", fmt.Errorf("game folder: %w", err)
+			err = fmt.Errorf("game folder: %w", err)
+			if errors.Is(err, os.ErrNotExist) {
+				err = withLaunchFailureKind(launchFailureGameFolderMissing, err)
+			}
+			return "", "", err
 		}
 	} else {
 		for _, root := range roots {
@@ -609,12 +613,16 @@ func resolveGameProfilePaths(p GameProfile, roots []string) (string, string, err
 			}
 		}
 		if gameDir == "" {
-			return "", "", fmt.Errorf("game folder %q not found under %s", dir, strings.Join(roots, ", "))
+			err := fmt.Errorf("game folder %q not found under %s", dir, strings.Join(roots, ", "))
+			return "", "", withLaunchFailureKind(launchFailureGameFolderMissing, err)
 		}
 	}
 
 	exe, err := resolveProfileFile(gameDir, p.Executable)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			err = withLaunchFailureKind(launchFailureProfileExecutableMissing, err)
+		}
 		return "", "", fmt.Errorf("executable: %w", err)
 	}
 	return gameDir, exe, nil
@@ -717,7 +725,8 @@ func planGameRuntime(p GameProfile, exe string, lookPath func(string) (string, e
 	case gameRuntimeScript:
 		sh, err := lookPath("sh")
 		if err != nil || sh == "" {
-			return "", nil, errors.New("script runtime needs sh, but it was not found")
+			err := errors.New("script runtime needs sh, but it was not found")
+			return "", nil, withLaunchFailureKind(launchFailureRuntimeMissing, err)
 		}
 		return sh, append([]string{exe}, args...), nil
 	case gameRuntimeBox64:
@@ -766,7 +775,8 @@ func resolveBox64(lookPath func(string) (string, error)) (string, error) {
 			return path, nil
 		}
 	}
-	return "", errors.New("box64 not found (install Box64 or set JUKAHUB_BOX64)")
+	err := errors.New("box64 not found (install Box64 or set JUKAHUB_BOX64)")
+	return "", withLaunchFailureKind(launchFailureRuntimeMissing, err)
 }
 
 func resolveWine(lookPath func(string) (string, error)) (string, error) {
@@ -797,7 +807,8 @@ func resolveWine(lookPath func(string) (string, error)) (string, error) {
 			}
 		}
 	}
-	return "", errors.New("wine not found (install Wine or set JUKAHUB_WINE)")
+	err := errors.New("wine not found (install Wine or set JUKAHUB_WINE)")
+	return "", withLaunchFailureKind(launchFailureRuntimeMissing, err)
 }
 
 // absoluteRegularFile validates an environment override and anchors it to an

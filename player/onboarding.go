@@ -62,9 +62,11 @@ var onboardingSteps = []onboardingStep{
 		kind:  "roms",
 	},
 	{
+		// The background passes are boxart_auto.go's; the button still fetches
+		// at once.
 		title: "Fetch game artwork",
-		body:  "When online, JukaHub can look up box art from the public Libretro thumbnails collection and save matches to its data folder.",
-		hint:  "This is optional. Unmatched titles are left unchanged.",
+		body:  "When online, JukaHub finds box art in the background. Only game titles go to the public Libretro thumbnails collection.",
+		hint:  "The button fetches now. Settings > Games & emulators turns it off.",
 		kind:  "artwork",
 	},
 	{

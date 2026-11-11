@@ -16,10 +16,14 @@ import (
 )
 
 const (
-	gameOptionsRowCeiling = iota
+	gameOptionsRowTitle = iota
+	gameOptionsRowHidden
+	gameOptionsRowSort
+	gameOptionsRowShowHidden
+	gameOptionsRowCeiling
 	gameOptionsRowArgs
-	gameOptionsRowReset
 	gameOptionsRowOpenIn
+	gameOptionsRowReset
 	gameOptionsRowCount
 )
 
@@ -27,8 +31,12 @@ var gameOptsUI struct {
 	open   bool
 	game   libraryGame
 	cursor int
-	opts   gameOptions
-	panel  sdl.Rect
+	scroll int
+	// visible is how many rows the last paint fit; gameOptionsMove uses it to
+	// keep the cursor on the card on a short screen.
+	visible int
+	opts    gameOptions
+	panel   sdl.Rect
 	// rowHits are the clickable rows, filled by the renderer.
 	rowHits []gameLibRowHit
 }
@@ -39,6 +47,14 @@ var gameArgsBuffer string
 
 func gameOptionsRowName(row int) string {
 	switch row {
+	case gameOptionsRowTitle:
+		return "Display title"
+	case gameOptionsRowHidden:
+		return "Visibility"
+	case gameOptionsRowSort:
+		return "Library sort"
+	case gameOptionsRowShowHidden:
+		return "Show hidden"
 	case gameOptionsRowCeiling:
 		return "CPU limit"
 	case gameOptionsRowArgs:
@@ -55,6 +71,14 @@ func gameOptionsRowName(row int) string {
 // value does rather than repeating it.
 func gameOptionsRowHint(row int) string {
 	switch row {
+	case gameOptionsRowTitle:
+		return "Shown in the library; the ROM file keeps its name"
+	case gameOptionsRowHidden:
+		return "Hide this game; Show hidden brings it back"
+	case gameOptionsRowSort:
+		return "Order of every console's games"
+	case gameOptionsRowShowHidden:
+		return "Reveal games hidden from the library"
 	case gameOptionsRowCeiling:
 		return "Clock ceiling for this game, restored when it exits"
 	case gameOptionsRowArgs:
@@ -70,6 +94,23 @@ func gameOptionsRowHint(row int) string {
 // gameOptionsRowValue is the right-hand value of a row.
 func gameOptionsRowValue(row int, opts gameOptions) string {
 	switch row {
+	case gameOptionsRowTitle:
+		if title := strings.TrimSpace(gameOptsUI.game.DisplayTitle); title != "" {
+			return title
+		}
+		return "Default"
+	case gameOptionsRowHidden:
+		if gameOptsUI.game.Hidden {
+			return "Hidden"
+		}
+		return "Visible"
+	case gameOptionsRowSort:
+		return librarySortLabel()
+	case gameOptionsRowShowHidden:
+		if libraryShowHidden() {
+			return "Shown"
+		}
+		return "Only visible"
 	case gameOptionsRowCeiling:
 		return formatGameCeiling(opts.MaxFreqKHz)
 	case gameOptionsRowArgs:
@@ -102,9 +143,14 @@ func openGameOptions() bool {
 	// The sheet always edits the highlighted title, whichever column has the
 	// focus; its header names the game so opening it from the console list is
 	// unambiguous.
+	if game.ContentKey == "" {
+		libraryDecorateGame(&game)
+	}
 	gameOptsUI.open = true
 	gameOptsUI.game = game
 	gameOptsUI.cursor = 0
+	gameOptsUI.scroll = 0
+	gameOptsUI.visible = 0
 	gameOptsUI.opts = gameOptionsFor(game.Path)
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
 	PlayActivateSound()
@@ -132,28 +178,71 @@ func gameOptionsMove(delta int) {
 	if gameOptsUI.cursor >= gameOptionsRowCount {
 		gameOptsUI.cursor = gameOptionsRowCount - 1
 	}
+	if gameOptsUI.visible > 0 {
+		if gameOptsUI.cursor < gameOptsUI.scroll {
+			gameOptsUI.scroll = gameOptsUI.cursor
+		}
+		if gameOptsUI.cursor >= gameOptsUI.scroll+gameOptsUI.visible {
+			gameOptsUI.scroll = gameOptsUI.cursor - gameOptsUI.visible + 1
+		}
+	}
 	PlayNavSound()
 }
 
 // adjustGameOptions changes the highlighted value with Left/Right.
 func adjustGameOptions(delta int) {
-	if gameOptsUI.cursor != gameOptionsRowCeiling || delta == 0 {
+	if delta == 0 {
 		return
 	}
-	next := cycleGameCeiling(gameOptsUI.opts.MaxFreqKHz, delta)
-	if next == gameOptsUI.opts.MaxFreqKHz {
+	switch gameOptsUI.cursor {
+	case gameOptionsRowCeiling:
+		next := cycleGameCeiling(gameOptsUI.opts.MaxFreqKHz, delta)
+		if next == gameOptsUI.opts.MaxFreqKHz {
+			return
+		}
+		gameOptsUI.opts = updateGameOptions(gameOptsUI.game.Path, func(o gameOptions) gameOptions {
+			o.MaxFreqKHz = next
+			return o
+		})
+	case gameOptionsRowSort:
+		cycleLibrarySort(delta)
+		refreshLibraryView()
+		ShowToast("Sorted by "+strings.ToLower(librarySortLabel()), ToastKindInfo)
+	case gameOptionsRowShowHidden:
+		setLibraryShowHidden(delta > 0)
+		refreshLibraryView()
+		if libraryShowHidden() {
+			ShowToast("Hidden games shown", ToastKindInfo)
+		} else {
+			ShowToast("Hidden games concealed", ToastKindInfo)
+		}
+	case gameOptionsRowHidden:
+		toggleGameHidden()
+	default:
 		return
 	}
-	gameOptsUI.opts = updateGameOptions(gameOptsUI.game.Path, func(o gameOptions) gameOptions {
-		o.MaxFreqKHz = next
-		return o
-	})
 	PlayNavSound()
 }
 
 // activateGameOptionsRow runs the highlighted row.
 func activateGameOptionsRow() {
 	switch gameOptsUI.cursor {
+	case gameOptionsRowTitle:
+		vkOpenGameTitle()
+	case gameOptionsRowHidden:
+		toggleGameHidden()
+	case gameOptionsRowSort:
+		cycleLibrarySort(1)
+		refreshLibraryView()
+		ShowToast("Sorted by "+strings.ToLower(librarySortLabel()), ToastKindInfo)
+	case gameOptionsRowShowHidden:
+		setLibraryShowHidden(!libraryShowHidden())
+		refreshLibraryView()
+		if libraryShowHidden() {
+			ShowToast("Hidden games shown", ToastKindInfo)
+		} else {
+			ShowToast("Hidden games concealed", ToastKindInfo)
+		}
 	case gameOptionsRowCeiling:
 		adjustGameOptions(1)
 	case gameOptionsRowArgs:
@@ -282,7 +371,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	rowH := max32(58, medH+smallH+24)
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar drawn into it measure the same height.
-	subtitle := gameOptsUI.game.Title
+	subtitle := gameOptsUI.game.Label()
 	if system := strings.TrimSpace(gameOptsUI.game.System); system != "" {
 		subtitle += " · " + system
 	}
@@ -313,12 +402,39 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 
 	bodyY := panelY + headerH
 	innerW := panelW - 2*pad
+	// The panel is capped to the screen, so a short display shows a window of
+	// the rows rather than drawing the last ones through the card edge.
+	bodyH := panelH - headerH - noteH - footerH
+	visible := int(bodyH / rowH)
+	if visible < 1 {
+		visible = 1
+	}
+	if visible > gameOptionsRowCount {
+		visible = gameOptionsRowCount
+	}
+	if gameOptsUI.cursor >= gameOptionsRowCount {
+		gameOptsUI.cursor = gameOptionsRowCount - 1
+	}
+	if gameOptsUI.scroll > gameOptionsRowCount-visible {
+		gameOptsUI.scroll = gameOptionsRowCount - visible
+	}
+	if gameOptsUI.scroll < 0 {
+		gameOptsUI.scroll = 0
+	}
+	if gameOptsUI.cursor < gameOptsUI.scroll {
+		gameOptsUI.scroll = gameOptsUI.cursor
+	}
+	if gameOptsUI.cursor >= gameOptsUI.scroll+visible {
+		gameOptsUI.scroll = gameOptsUI.cursor - visible + 1
+	}
+	gameOptsUI.visible = visible
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
 	focusColor := installHighlight()
-	for i := 0; i < gameOptionsRowCount; i++ {
+	for i := 0; i < visible; i++ {
+		idx := gameOptsUI.scroll + i
 		rect := sdl.Rect{X: panelX + pad, Y: bodyY + int32(i)*rowH, W: innerW, H: rowH - 8}
-		gameOptsUI.rowHits = append(gameOptsUI.rowHits, gameLibRowHit{index: i, rect: rect})
-		selected := i == gameOptsUI.cursor
+		gameOptsUI.rowHits = append(gameOptsUI.rowHits, gameLibRowHit{index: idx, rect: rect})
+		selected := idx == gameOptsUI.cursor
 		bg := WithAlpha(ColorSurfaceRow, 165)
 		if selected {
 			bg = WithAlpha(focusColor, 46)
@@ -328,24 +444,31 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
 		}
 
-		renderText(renderer, config, medium, gameOptionsRowName(i), ColorTextPrimary(),
+		renderText(renderer, config, medium, gameOptionsRowName(idx), ColorTextPrimary(),
 			rect.X+14, rect.Y+8)
 		// Leave room for the right-aligned value instead of letting a long hint
 		// run underneath it.
-		renderText(renderer, config, font, ellipsize(font, gameOptionsRowHint(i), rect.W-28-170), ColorTextTertiary(),
+		renderText(renderer, config, font, ellipsize(font, gameOptionsRowHint(idx), rect.W-28-170), ColorTextTertiary(),
 			rect.X+14, rect.Y+8+medH+2)
 
-		value := gameOptionsRowValue(i, gameOptsUI.opts)
+		value := gameOptionsRowValue(idx, gameOptsUI.opts)
 		valueColor := ColorTextSecondary()
-		if i == gameOptionsRowCeiling && gameOptsUI.opts.MaxFreqKHz > 0 {
+		if idx == gameOptionsRowTitle && strings.TrimSpace(gameOptsUI.game.DisplayTitle) != "" {
 			valueColor = focusColor
 		}
-		if i == gameOptionsRowArgs && strings.TrimSpace(gameOptsUI.opts.Args) != "" {
+		if idx == gameOptionsRowHidden && gameOptsUI.game.Hidden {
 			valueColor = focusColor
 		}
-		// The ceiling is a ladder, so a highlighted row shows which way it
-		// moves; a static value would leave Left/Right undiscoverable.
-		if selected && i == gameOptionsRowCeiling {
+		if idx == gameOptionsRowCeiling && gameOptsUI.opts.MaxFreqKHz > 0 {
+			valueColor = focusColor
+		}
+		if idx == gameOptionsRowArgs && strings.TrimSpace(gameOptsUI.opts.Args) != "" {
+			valueColor = focusColor
+		}
+		// Ladders and toggles show which way they move; a static value would
+		// leave Left/Right undiscoverable.
+		if selected && (idx == gameOptionsRowCeiling || idx == gameOptionsRowSort ||
+			idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden) {
 			value = "‹  " + value + "  ›"
 		}
 		value = ellipsize(font, value, innerW/2)
@@ -354,9 +477,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 			rect.X+rect.W-14-int32(vw), rect.Y+(rect.H-smallH)/2)
 	}
 
-	noteY := bodyY + rowH*gameOptionsRowCount + 4
+	noteY := bodyY + rowH*int32(visible) + 4
 	renderText(renderer, config, font,
-		ellipsize(font, "Applies to this launch only — the firmware ceiling comes back after.", innerW),
+		ellipsize(font, "Display, visibility and sort are saved; launch rows apply to this game only.", innerW),
 		ColorTextTertiary(), panelX+pad, noteY)
 
 	hint := hintLine(FooterHint{"D-Pad", "Row"}, FooterHint{"A", "Change"},

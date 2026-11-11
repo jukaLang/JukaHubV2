@@ -148,7 +148,7 @@ func setupChecklist(env setupEnv, actions setupActions) []setupRow {
 		Action: actions.Companion,
 	}
 	if phone.Done {
-		phone.Detail = "Ready · pairing PIN " + env.CompanionPIN
+		phone.Detail = "Ready · pairing PIN " + castMaskPIN(env.CompanionPIN)
 	} else if err := strings.TrimSpace(env.CompanionErr); err != "" {
 		phone.Detail = err
 	}

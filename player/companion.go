@@ -409,10 +409,22 @@ func (s *companionServer) handler() http.Handler {
 	mux.HandleFunc("/api/open", s.guard(s.handleOpenURL))
 	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
 	mux.HandleFunc("/api/screen", s.guard(s.handleScreen))
-	// Remote cast: a view-only page and its MJPEG feed. Both are PIN-guarded
-	// like the rest of the API, and both refuse when the cast is off.
-	mux.HandleFunc("/watch", s.guard(s.handleWatch))
-	mux.HandleFunc("/stream", s.guard(s.handleStream))
+	// Screen Share (companion_cast.go): the viewer page, its MJPEG feed, single
+	// frames for browsers without MJPEG, and the state the page shows. They
+	// take the view-only share token or this PIN; the feed and the frames
+	// refuse while sharing is off.
+	mux.HandleFunc("/watch", s.castGuard(s.handleWatch))
+	mux.HandleFunc("/stream", s.castGuard(s.handleStream))
+	mux.HandleFunc("/frame.jpg", s.castGuard(s.handleFrame))
+	mux.HandleFunc("/status", s.castGuard(s.handleCastStatus))
+	// PlayStation sign-in: the page that walks a phone through Sony's login,
+	// and the call that hands the PSN Account-ID back (psn_signin.go).
+	mux.HandleFunc("/psn", s.handlePSNPage)
+	mux.HandleFunc("/api/psn", s.guard(s.handlePSN))
+	// Voice commands from the phone's keyboard microphone: the page, and the
+	// call that runs one command and answers with what it did (voicecmd_phone.go).
+	mux.HandleFunc("/voice", s.handleVoicePage)
+	mux.HandleFunc("/api/voice", s.guard(s.handleVoice))
 	return mux
 }
 
@@ -692,6 +704,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 </div>
 
 <div class=card>
+  <h2>Voice</h2>
+  <div class=row><button id=voicePage>Say what to open</button></div>
+  <small>Your keyboard's microphone sends commands like "open YouTube" or "volume 50".</small>
+</div>
+
+<div class=card>
   <h2>Remote</h2>
   <div class=pad>
     <button data-key=lb>&#8676;</button><button data-key=up>&#9650;</button><button data-key=rb>&#8677;</button>
@@ -772,6 +790,7 @@ async function sendText() {
 }
 document.getElementById('sendText').onclick = () => sendText().catch(e => toast(e.message, true));
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
+document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
 document.querySelectorAll('[data-key]').forEach(btn => {
   btn.onclick = () => api('/api/key', {key: btn.dataset.key}, true).catch(e => toast(e.message, true));
 });

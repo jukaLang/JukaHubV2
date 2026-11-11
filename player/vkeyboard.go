@@ -61,6 +61,7 @@ const (
 	vkTargetGameSearch // game library search
 	vkTargetDownloads  // Downloads panel: a link to save for offline use
 	vkTargetGameArgs   // game library: extra launch arguments for one game
+	vkTargetGameTitle  // game library: display title for one game
 	vkTargetToolArgs   // toolbox: arguments for the highlighted tool
 	vkTargetPodcast    // podcasts panel: an RSS feed URL to subscribe to
 	vkTargetFiles      // Files screen: address, password, new folder, rename
@@ -94,6 +95,10 @@ var vkNameBuffer string
 // vkPlaylistNameBuffer holds a playlist name while it is typed; the playlist is
 // only written when the keyboard submits.
 var vkPlaylistNameBuffer string
+
+// vkGameTitleBuffer holds a library display title while it is typed. The ROM
+// file is never renamed; the submitted text goes to game-library.json.
+var vkGameTitleBuffer string
 
 // wifiPassphraseBuffer holds a Wi-Fi password while it is typed. It is cleared
 // when the keyboard closes or submits, so the secret does not outlive the
@@ -322,7 +327,7 @@ func vkActionLabel() string {
 			return "Next"
 		}
 		return "Save"
-	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetGameArgs, vkTargetFileLine,
+	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL:
 		return "Save"
 	case vkTargetScene:
@@ -848,6 +853,8 @@ func vkCurrentText() string {
 		return downloadLinkInput
 	case vkTargetGameArgs:
 		return gameArgsBuffer
+	case vkTargetGameTitle:
+		return vkGameTitleBuffer
 	case vkTargetToolArgs:
 		return toolArgsBuffer
 	case vkTargetPodcast:
@@ -935,6 +942,9 @@ func vkSetText(text string, config *Config) {
 	case vkTargetGameArgs:
 		// Edited in its own buffer; the game's options change only on submit.
 		gameArgsBuffer = text
+	case vkTargetGameTitle:
+		// Only the library label changes, and only when the field is submitted.
+		vkGameTitleBuffer = text
 	case vkTargetToolArgs:
 		// Same rule for the toolbox: the saved argument line changes on submit,
 		// so a half-typed `--delete` can never reach the tool.
@@ -1111,6 +1121,8 @@ func vkTitle() string {
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
 		return "LAUNCH ARGUMENTS"
+	case vkTargetGameTitle:
+		return "GAME TITLE"
 	case vkTargetToolArgs:
 		if t, ok := toolboxFind(toolArgsToolID); ok {
 			return strings.ToUpper(t.Binary) + " ARGUMENTS"
@@ -1124,6 +1136,10 @@ func vkTitle() string {
 			return "PAIRING PIN"
 		case psEditAccount:
 			return "PSN ACCOUNT-ID"
+		case psEditRemoteHost:
+			return "INTERNET ADDRESS"
+		case psEditLoginPIN:
+			return "LOGIN PASSCODE"
 		}
 		return "CONSOLE ADDRESS"
 	case vkTargetWiFi:
@@ -1225,6 +1241,8 @@ func vkPlaceholder() string {
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
 		return "--profile \"My Game\""
+	case vkTargetGameTitle:
+		return "Final Fantasy VI"
 	case vkTargetToolArgs:
 		if t, ok := toolboxFind(toolArgsToolID); ok && len(t.Example) > 0 {
 			return strings.Join(t.Example, " ")
@@ -1238,6 +1256,10 @@ func vkPlaceholder() string {
 			return "8 digits from Link Device"
 		case psEditAccount:
 			return "Base64 Account-ID (12 chars)"
+		case psEditRemoteHost:
+			return "myhome.duckdns.org or 203.0.113.7"
+		case psEditLoginPIN:
+			return "4 digits"
 		}
 		return "192.168.1.51"
 	case vkTargetWiFi:
@@ -1336,6 +1358,26 @@ func vkOpenName() {
 // vkOpenPlaylistName opens the keyboard for a playlist name. It is seeded with
 // the next free default so a single Return saves the queue, and the name can be
 // edited into "Road Trip" without retyping.
+// vkOpenGameTitle opens the keyboard for a library display title. It is seeded
+// with the current label so a small correction does not start from an empty
+// field; submitting it unchanged keeps the file-derived title.
+func vkOpenGameTitle() {
+	if !gameOptsUI.open {
+		return
+	}
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetGameTitle
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	vkGameTitleBuffer = gameOptsUI.game.Label()
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
 func vkOpenPlaylistName() {
 	chatInputActive = false
 	unitInputActive = false
@@ -1758,6 +1800,9 @@ func vkCloseKeyboard() {
 	if vkTarget == vkTargetFileLine {
 		fileEditorLineBuffer = ""
 	}
+	if vkTarget == vkTargetGameTitle {
+		vkGameTitleBuffer = ""
+	}
 	if vkTarget == vkTargetToolsURL {
 		toolsURLBuffer = ""
 	}
@@ -1767,6 +1812,10 @@ func vkCloseKeyboard() {
 	if vkTarget == vkTargetGroqKey {
 		// A pasted key must not outlive the field that asked for it.
 		vkGroqKeyBuffer = ""
+	}
+	if vkTarget == vkTargetPSRemote && psPanelEditField == psEditLoginPIN {
+		// Nor a typed login passcode; a submit has read it already.
+		vkPSRemoteBuffer = ""
 	}
 	if vkTarget == vkTargetBrowserURL {
 		brwPref.buffer = ""
@@ -2344,6 +2393,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// row and the game's record; the next launch picks it up.
 		vkCloseKeyboard()
 		applyGameArgs()
+	case vkTargetGameTitle:
+		// Rename only the library label; the ROM file and its metadata keys keep
+		// their names. Closing first clears the keyboard buffer.
+		vkCloseKeyboard()
+		applyGameDisplayTitle(text)
 	case vkTargetPodcast:
 		// Subscribe before closing: closing clears the buffer, and the panel is
 		// already open behind the keyboard so the new show can be refreshed

@@ -257,7 +257,9 @@ func performResultAction(action, index int, videos []VideoInfo) bool {
 	switch action {
 	case resultActionAudio, resultActionVideo:
 		if err := resultEnqueueDownload(link, kind); err != nil {
-			ShowToast(err.Error(), ToastKindWarning)
+			// A second press on a page already on its way is a note, not a
+			// warning (mediaHubEnqueueRefused).
+			mediaHubEnqueueRefused(err)
 			return true
 		}
 		// The queue row names itself once yt-dlp resolves the title, so the

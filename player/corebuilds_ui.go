@@ -588,8 +588,10 @@ func coreBuildsAutoUpdateAvailable() bool {
 	return !IsWindows()
 }
 
-// coreBuildsToggleAutoUpdate steps the Core updates setting: Notify me →
-// Install automatically → Off → Notify me.
+// coreBuildsToggleAutoUpdate steps the Emulator updates setting (the cores
+// and JukaHub's PPSSPP): Install automatically → Off → Notify me → Install
+// automatically. It is the user's own choice, so emuSetCoreUpdateMode marks it
+// as chosen and the start-up migration leaves it alone.
 func coreBuildsToggleAutoUpdate() {
 	if !coreBuildsAutoUpdateAvailable() {
 		return
@@ -605,11 +607,11 @@ func coreBuildsToggleAutoUpdate() {
 	PlayActivateSound()
 	switch next {
 	case coreUpdateInstall:
-		ShowToast("Core updates: install automatically · daily, when idle or charging · the old build is kept", ToastKindSuccess)
+		ShowToast("Emulator updates: install automatically · daily, when idle or charging · the old build is kept", ToastKindSuccess)
 	case coreUpdateOff:
-		ShowToast("Core updates off · update from this page or the Emulators page", ToastKindInfo)
+		ShowToast("Emulator updates off · update from this page or the Emulators page", ToastKindInfo)
 	default:
-		ShowToast("Core updates: notify me · a daily check says which cores have a different build", ToastKindInfo)
+		ShowToast("Emulator updates: notify me · a daily check says what has a different build", ToastKindInfo)
 	}
 }
 

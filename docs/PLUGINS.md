@@ -173,6 +173,7 @@ Each immediate subdirectory of `plugins/` is scanned for a readable, valid
 | `config` | Optional object; parsed but **not** passed to the script. |
 | `title`, `icon` | Name and glyph on the Plugins page and in the Start menu. |
 | `actions` | Buttons: `[{"id": "now", "label": "Time"}]`; ids starting with `@` are JukaHub's own (above). |
+| `romParsers` | ROM formats for the game library: `[{"name": "Pokémon mini", "system": "pokemini", "extensions": [".min"]}]`. |
 | `onEnable`, `onStartup`, `startupDaily`, `quick` | What switching the plugin on does (above). |
 
 `plugin.json` is unrelated to the package `manifest.json` described in
@@ -182,10 +183,28 @@ process working directory; the TrimUI launcher changes to `Apps/JukaHub/`.
 The `plugin_refresh` trigger scans and updates `plugin_list`. A scan also occurs
 when entering a scene with a `dynamiclist` whose `variable` is `plugin_list`;
 the shipped Plugins scene uses a `textlog`, so **press Refresh there** rather
-than relying on entering the scene. The current scan does not clear previously
-loaded entries in normal mode: after disabling, deleting or breaking a manifest,
-restart JukaHub and refresh to remove the stale entry. Safe mode clears the
-loaded list for that launch.
+than relying on entering the scene.
+Every scan rebuilds the catalog and live plugin map. After disabling, deleting
+or fixing a manifest, press **Refresh** to update the list and loaded
+contributions; safe mode skips plugin loading for that launch.
+
+### ROM formats
+
+`romParsers` lets a plugin teach the game library a cartridge format it does not
+know. Each entry names the format, gives a short lower-case `system` id and the
+extensions (with or without the leading dot). Files then appear in LIBRARY under
+the format's name, collected as **Plugins**, whether they sit in a folder named
+after `system` or the display name (spaces and punctuation ignored) or use the
+extension inside a known console folder. Extensions and folder names the
+built-in catalogue already owns stay with the built-in system, so a parser
+cannot claim `.nes` from NES. A plugin's own subfolder under any ROM root works
+for `.zip` sets too.
+
+```json
+"romParsers": [
+  {"name": "Pokémon mini", "system": "pokemini", "extensions": [".min"]}
+]
+```
 
 ## Action contract
 

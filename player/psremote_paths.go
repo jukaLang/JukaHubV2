@@ -129,8 +129,13 @@ func psBinDir() string {
 }
 
 // psRuntimeInstallHint is the one-line explanation the panel shows when the
-// helpers are missing, so a user knows what to install instead of guessing.
+// helpers are missing and could not be installed by themselves
+// (psremote_helpers_install.go), so a user knows what is wrong instead of
+// guessing.
 func psRuntimeInstallHint() string {
+	if !psRemoteSupported() {
+		return "Remote Play streams on the TrimUI handhelds"
+	}
 	dir := psBinDir()
 	if dir == "" {
 		return "install the JukaHub-ng-chiaki build into Apps/JukaHub"

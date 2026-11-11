@@ -302,6 +302,10 @@ const (
 	brwActWallAlways
 	brwActWallEngines
 	brwActWallBrowser
+	// WPE Browser on the handheld (brw_wpe.go): the wall's search opens in
+	// it, or the install starts.
+	brwActWpeOpen
+	brwActWpeGet
 )
 
 type brwCardButton struct {
@@ -332,7 +336,9 @@ func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
 	case f.Kind == brwFailNotFound:
 		return brwNotFoundButtons
 	case f.Kind == brwFailWall:
-		return brwWallButtons()
+		// On the handheld WPE Browser goes first when it is installed, or
+		// is offered when it is not (brw_wpe.go).
+		return brwWpeWallButtons(brwWallButtons())
 	}
 	return brwErrorButtons
 }
@@ -417,6 +423,8 @@ func brwCardActivate(config *Config, elem Element, f brwFailure, i int) {
 		loadTextBrowserURL(config, elem, textBrowserSearchURL(f.Host))
 	case brwActWallSearch, brwActWallAlways, brwActWallEngines, brwActWallBrowser:
 		brwWallActivate(config, elem, f, buttons[i].action)
+	case brwActWpeOpen, brwActWpeGet:
+		brwWpeWallActivate(config, f, buttons[i].action)
 	}
 }
 
@@ -644,6 +652,8 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 		icon = "clock"
 	case f.Kind == brwFailWall:
 		icon = "search"
+		// With WPE Browser first on the card, the way-out sentence names it.
+		detail = brwWpeWallDetail(detail)
 	}
 	titleFont := getFontSized(config, "small", 28)
 	bodyFont := getFontSized(config, "small", 18)

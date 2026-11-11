@@ -309,6 +309,11 @@ func feDisplayPath(config *Config) string {
 // the Locations list it returns to the previous scene/Home. It never
 // terminates the application.
 func feBack(config *Config) {
+	// A B pressed to close a finished extraction's sheet as it closed by
+	// itself is not one for the folder under it (files_extract_ui.go).
+	if feExtractJustClosed() {
+		return
+	}
 	// Picking files for the chat, B calls the pick off (chatfiles.go).
 	if chatPickBack(config) {
 		return
@@ -357,6 +362,11 @@ func feEnterFocused(config *Config) {
 	// Files: a Locations row opens that place, and ".." climbs to the real
 	// parent folder (files_locations.go).
 	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" {
+		// The A that met a finished extraction's sheet as it closed was meant
+		// for the sheet, not for the list it uncovered (files_extract_ui.go).
+		if feExtractJustClosed() {
+			return
+		}
 		if loc, ok := filesLocationAt(focusedFileIndex); ok {
 			filesEnterLocation(config, loc)
 			return
@@ -391,19 +401,20 @@ func feEnterFocused(config *Config) {
 		}
 		return
 	}
-	if strings.EqualFold(filepath.Ext(entry.Path), ".zip") {
+	if feArchiveKindOf(entry.Name) != feArchiveNone {
 		// A zipped game in a console folder (Roms/GBA/game.zip) is a game, not
-		// an archive to unpack beside itself.
+		// an archive to unpack beside itself; Y → Extract… still unpacks it.
 		if filesOpenROM(config, entry) {
 			return
 		}
-		if err := unzipFile(entry.Path); err != nil {
-			logWarn("features", "Unzip error: %v", err)
-		} else {
-			logDebug("features", "Unzipped %s", entry.Path)
-			feListDirectory(config)
+		// Any other archive opens its sheet: what is in it, Extract and
+		// Extract here (files_extract_ui.go). It used to be unzipped on the
+		// spot, on the render thread, into "<name>_unzipped", with no word
+		// about how it went.
+		if feSceneActive(config) {
+			openFeArchiveSheet(config, entry.Path, false)
+			return
 		}
-		return
 	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if isImageExtension(ext) {

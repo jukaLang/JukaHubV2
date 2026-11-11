@@ -119,6 +119,16 @@ const (
 	ChromeMediaType    = "media"
 	ChromeWiFiType     = "wifi"
 	ChromeVolumeType   = "volume"
+
+	// The sun left of the speaker opens the brightness card
+	// (brightnesspopover.go).
+	ChromeBrightnessIndex = -11
+	ChromeBrightnessType  = "brightness"
+
+	// The trophy room's cup, immediately left of the bell, opens Trophies
+	// (header_trophy.go).
+	ChromeTrophyIndex = -12
+	ChromeTrophyType  = "trophy"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -127,7 +137,8 @@ const (
 // The bottom of the screen is now the hint bar only, so there is no tier 2.
 func chromeTier(idx int) int {
 	switch idx {
-	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex, ChromeWiFiIndex, ChromeVolumeIndex:
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex, ChromeWiFiIndex, ChromeVolumeIndex,
+		ChromeBrightnessIndex, ChromeTrophyIndex:
 		return 1
 	}
 	return 0
@@ -195,7 +206,12 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 	// have, so it cannot be tap-only. What such a screen must not get is focus
 	// *starting* on the bar: SetGraph leaves a bar-only graph unfocused, and
 	// screenPadPress steps onto the bar with Up.
-	if scene.Layout != "home" {
+	//
+	// The full-screen Browser is the exception: it draws no bar (its Select
+	// menu holds Back and the rest, brw_menu.go), and a graph built from the
+	// rects the screen before measured would let a restored focus, or Up from
+	// the page, land on a button that is not on screen.
+	if scene.Layout != "home" && !brwFullscreenScene(scene) {
 		var chromeIdx []int
 		addNode := func(idx int, rect sdl.Rect, typ, label string) {
 			nodes = append(nodes, FocusNode{Index: idx, Rect: rect, Type: typ, Label: label})
@@ -220,7 +236,11 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		// without a touchscreen: on the handheld the meter used to be the one
 		// drawn control the pad could not select.
 		// The speaker beside it opens the volume popover. On the handheld the
-		// pad is the only way to reach it, so it joins the bar the same way.
+		// pad is the only way to reach it, so it joins the bar the same way,
+		// and so does the sun left of it (the brightness card).
+		if statusBrightnessRect.W > 0 {
+			addNode(ChromeBrightnessIndex, statusBrightnessRect, ChromeBrightnessType, "Brightness")
+		}
 		if statusVolumeRect.W > 0 {
 			addNode(ChromeVolumeIndex, statusVolumeRect, ChromeVolumeType, "Volume")
 		}
@@ -229,6 +249,11 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		}
 		if nc.bellRect.W > 0 {
 			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")
+		}
+		// The trophy room's cup, beside the bell: the bar's chain is ordered by
+		// x below, so Left from the bell reaches it and Right from it the bell.
+		if headerTrophyRect.W > 0 {
+			addNode(ChromeTrophyIndex, headerTrophyRect, ChromeTrophyType, headerTrophyLabel)
 		}
 		// The now-playing chip is a button only while a player is behind it. The
 		// idle output chip is drawn in the same spot but names headphones, so it

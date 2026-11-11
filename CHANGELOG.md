@@ -11,7 +11,691 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Focused game covers no longer decode during drawing.** The selected cover
+  is decoded and reduced on one background worker, then uploaded as a texture
+  on the render thread. Missing, damaged or oversized images keep the instant
+  monogram fallback ([player/game_library_ui.go](player/game_library_ui.go)).
+- **Voice finds the Smart Pro's microphone.** Voice typing (and the Voice
+  command page) said "No microphone found" on a TrimUI Smart Pro, which has
+  one: they only ever asked SDL for its default capture device, ALSA's
+  "default" PCM, and gave up when that would not open. All three voice
+  features now share one microphone that also tries every capture device the
+  kernel lists (through ALSA's plug layer, `plughw:0,0`), SDL's own list and
+  `arecord`, swaps a device that opens but stays silent for the next one, and
+  remembers the one that worked. Before the first recording it switches on the
+  codec's microphone inputs, which the Smart Pro's and the Brick's codec ships
+  switched off ("ADCL Input MIC1 Boost Switch" and its MIC2 twin; never a
+  playback path), lifts a microphone level found at zero, and puts both back on
+  quit; every attempt is logged under `mic`. The mic chip no longer hides when
+  SDL lists no capture device but the kernel does
+  ([player/voicemic.go](player/voicemic.go), [player/vkvoice.go](player/vkvoice.go),
+  [player/voicecmd.go](player/voicecmd.go), [docs/VOICE.md](docs/VOICE.md)).
+- **The power-on boot moves on the handheld.** The TrimUI comes with Reduce
+  motion on for its menus, and the boot honoured that default, so on the very
+  device it was made for it was a series of fades: no light round the logo's
+  pane, no glint, no cards rising into place. The boot now follows Reduce
+  motion only once it has been switched by hand (Settings → Display & theme,
+  or Quick Settings), and Battery Saver still stills it; on Windows, where
+  Reduce motion starts off, it is followed as before
+  ([player/bootos.go](player/bootos.go), [docs/BOOT.md](docs/BOOT.md)).
+- **WPE Browser gets the animated wallpaper's memory too.** Handing a page to
+  WPE freed every cache the low-memory path frees except an animated
+  wallpaper's frames, up to 40 MB on the handheld; they are let go as well
+  now and decoded again when JukaHub is back, and the shutdown card releases
+  them with the other textures ([player/brw_wpe.go](player/brw_wpe.go),
+  [player/shutdown.go](player/shutdown.go)).
+- **A release offer that is gone no longer answers a tap.** The top bar's
+  update pill kept its last rect after it stopped being drawn (the release
+  installed, screenshot mode, Home), so a tap there could still start the
+  install and the D-pad could still stop on it; the rect is now measured
+  again every frame ([player/extras.go](player/extras.go)).
+- **Updated the game library and accessibility docs to match the app.** They now
+  distinguish libretro cover images from game metadata, describe the existing
+  save-state and per-game options, and cover Power mode and vibration strength.
+  The Home quit flow and the mise Go pin now match the shipped code and Go
+  toolchain ([docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md),
+  [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md),
+  [docs/UX_REVIEW.md](docs/UX_REVIEW.md), [mise.toml](mise.toml)).
+- **Launch failure help survives wrapped errors.** Missing game folders,
+  profile executables and runtimes, plus unsupported launcher types, now carry
+  typed causes so the dialog can suggest a fix without parsing the displayed
+  error text ([player/launch_errors.go](player/launch_errors.go),
+  [player/gameprofiles.go](player/gameprofiles.go),
+  [player/emulators.go](player/emulators.go)).
+
 ### Added
+
+- **The voice orb: press Menu and talk.** On a TrimUI the Menu button (F4 on a
+  keyboard) now opens a glowing, Siri-style orb in the bottom-right corner of
+  any screen that says "Listening…" and follows your voice. It stops by itself
+  when you stop talking, or listens for as long as Menu is held, then runs the
+  Voice command page's commands — open a screen, app, game or setting, volume,
+  brightness, Wi-Fi, music, screenshots — saying what it did in a bubble,
+  counting down before it opens something (B stops it), listing matches to
+  pick from, and handing a question that names nothing on the handheld to Juka,
+  whose answer streams into the bubble. Missing pieces come with their fix one
+  press away (add the Groq key, use the phone, search for it). With the
+  keyboard up, Menu is voice typing; music pauses while it listens. Menu was
+  Back before: it still is over modal panels, the tour and JukaHub's own games,
+  and Settings → Controls → **Menu button: voice** turns the binding off
+  ([player/voiceorb.go](player/voiceorb.go), [player/main.go](player/main.go),
+  [docs/VOICE.md](docs/VOICE.md), [docs/CONTROLS.md](docs/CONTROLS.md)).
+- **Eight new themed Total conversions.** Moonbase opens a lunar dashboard;
+  Sunset Strip and Deep Reef put the Home tiles on glowing carousels; Sakura
+  Night Market, Radioactive Vault and Neon Raceway build themed widget boards;
+  Pixel Rain adds a phosphor carousel, and Velvet Arcade turns the grid into a
+  walnut-and-amber cabinet. Each conversion pairs its palette, Home layout and
+  backdrop glow ([player/themes.go](player/themes.go)).
+- **Six new palettes and six complete Home conversions.** Arctic and Orchid
+  use the dashboard, Ruby and Terminal use the carousel, Cobalt becomes an
+  editable widget board, and Tangerine uses the hero grid
+  ([player/themes.go](player/themes.go), [README.md](README.md)).
+- **Four new palettes and four complete Home conversions.** Arcade and Moss
+  conversions use the carousel, E-Ink becomes an editable widget board, and
+  Ember uses the hero grid. Each conversion applies its palette and layout
+  together ([player/themes.go](player/themes.go), [README.md](README.md)).
+- **Theme authors have a complete file reference.** The new guide lists every
+  theme JSON key, its color format, and the shared glass behavior. The plugin
+  guide's refresh instructions now match how scans rebuild the live catalog
+  ([docs/THEMES.md](docs/THEMES.md), [docs/PLUGINS.md](docs/PLUGINS.md)).
+- **Spatial audio is one step away in Quick Settings.** Its mode row cycles
+  Off, Auto, Headphones and Speakers, shows what Auto resolves to, and uses the
+  same saved setting as the audio and game controls
+  ([player/quicksettings.go](player/quicksettings.go),
+  [player/spatial.go](player/spatial.go)).
+- **PS Remote Play installs its own helpers.** A JukaHub without
+  `Apps/JukaHub/bin/chiaki-stream` and `chiaki-regist` (every install so far:
+  no release carried them) no longer stops at "the PS5 pairing helper is
+  missing (chiaki-regist)". Opening **PS Remote Play** online downloads
+  `JukaHub-RemotePlay-linux-arm64.zip` from the newest recent release that has
+  it (stable before beta, so a release whose helper build failed is skipped),
+  checks it against GitHub's digest (and a signed `release.json` when the
+  release has one) and its own `SHA256SUMS`, starts each helper once to make
+  sure this firmware loads it, and installs only the missing ones beside the
+  binary, `chiaki-stream` last; a cut-off download resumes. The console list
+  shows the progress; a PS5 is asked for its PIN once its pairing helper is in
+  (the PIN Link Device shows lasts five minutes), and Play streams by itself
+  when the install is done; **B** or closing the panel lets go of either.
+  Offline or after a failure the row says why, in words that fit it, and **A**
+  tries again. `docker-image.yml` and `release.sh` attach the package to every
+  release that built the helpers
+  ([player/psremote_helpers_install.go](player/psremote_helpers_install.go),
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#installing-the-helpers)).
+- **Trophies in the top bar.** A gold trophy now sits immediately left of the
+  notification bell, on Home and on every screen: **A** on it (the D-pad
+  reaches it from the bell and from the release offer), a click or a tap opens
+  **Trophies** from anywhere, and inside the room the same press goes back to
+  the top of the Trophies tab. A gold count on it shows the trophies earned
+  since the room was last open (since JukaHub started, until the room has
+  been opened once), and it is outlined while the room is on screen. The
+  release offer moved one place left, so the corner's two fixed controls never
+  move; and a screen's status readings now leave room for the whole corner,
+  so a crowded bar drops a reading instead of running under the Menu pill
+  ([player/header_trophy.go](player/header_trophy.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md)).
+- **Bug reports in one press, no typing.** **Report a bug** is in **Start →
+  Device** now, and Submit no longer asks for a title first: with nothing
+  typed it sends the redacted diagnostics and recent log under a title such as
+  *Quick report from TrimUI Smart Pro*. The preview (**Y**, from anywhere on
+  the form) has a **Send** button that starts focused, so **Y** then **A**
+  sends what it just showed. With the diagnostics and the log both switched
+  off, a title or a description is still needed
+  ([player/bugrep.go](player/bugrep.go), [docs/BUG_REPORTS.md](docs/BUG_REPORTS.md)).
+- **APK Store: which Android games this handheld might run, in one screen.**
+  **Start → Games → APK Store** (not on Windows) finds the APKs on the card,
+  in the Phone Companion's `PhoneDrop` folder and in the download folders,
+  reads each one — its manifest, name and icon, its native code and the engine
+  it was made with — and says plainly whether AndroidRT can try it, and if
+  not, why and what works instead (a PortMaster build of the same game, for
+  example); an app that needs Android's Java runtime is never offered. One
+  press adds a game to **Game Profiles** and plays it through the AndroidPak
+  launch path, and *Remove from Games* takes away only the store's own
+  profile. A **Store** tab lists known titles and kinds of APK with how to get
+  them legally (a download only ever with a published SHA-256; the built-in
+  list has none yet), and a **Runtime** tab shows AndroidRT, this device and,
+  on a Linux machine that has it, Waydroid. Experimental: no Android game has
+  run on a handheld yet, and no release carries AndroidRT yet. docs/ANDROID.md
+  was brought up to date as well — it still described a Waydroid engine
+  (`android.go`) that is no longer in the tree
+  ([player/apkstore.go](player/apkstore.go),
+  [player/apkstore_axml.go](player/apkstore_axml.go),
+  [player/apkstore_verdict.go](player/apkstore_verdict.go),
+  [docs/ANDROID.md](docs/ANDROID.md)).
+- **Voice command: say what to open.** "Open YouTube", "play Mario Kart",
+  "volume 50", "take a screenshot", "turn off Wi-Fi", "next song" or "what
+  time is it": **Start → Tools → Voice command**, **Y** in the Home search
+  sheet or **F4** on a keyboard opens a page with one big microphone. **A**
+  listens through the handheld's microphone and Groq's Whisper (the Groq key
+  from Settings → General, and internet); the clip goes to Groq with a short
+  list of this handheld's screen, app and game names so they come back spelled
+  right, and neither the audio nor the words are kept or logged. Without a
+  key, a working microphone or internet, **Y** shows a QR code for the Phone
+  Companion's new **Voice** page, where the phone's own keyboard dictation
+  does the listening. Names are matched against everything Home search finds:
+  a clear match opens after a short "Opening…" pause that **B** cancels, an
+  unclear one lists the matches, and nothing found offers a search instead.
+  English only for now; not yet tried with a handheld's microphone
+  ([player/voicecmd.go](player/voicecmd.go),
+  [player/voicecmd_intent.go](player/voicecmd_intent.go),
+  [player/voicecmd_phone.go](player/voicecmd_phone.go),
+  [docs/VOICE.md](docs/VOICE.md)).
+- **Spatial audio (virtual surround).** **Settings → Sound & haptics → Spatial
+  audio**, or **Tools → Audio**: *Off* (the default), *Auto*, *Headphones* or
+  *Speakers*, with **Spatial strength** and **Virtual room** (small, medium,
+  large). On headphones everything JukaHub plays — videos, music, podcasts,
+  audiobooks, YouTube — comes from four virtual loudspeakers around you in a
+  small virtual room: a parametric model of the head (Brown & Duda's spherical
+  head), early reflections and a short reverb, loudness-matched and
+  soft-limited so it never clips. On the handheld's own speakers it widens the
+  stereo instead, and *Auto* follows the output in use (the 3.5 mm jack or
+  Bluetooth headphones, or the speakers). Bit-perfect bypasses it, and
+  choosing a mode switches Bit-perfect off. The DSP is specified once, by a
+  reference script, and both the Go player and the game plugin below carry
+  tests against its golden vectors. Not yet listened to on a device
+  ([player/spatial.go](player/spatial.go),
+  [player/spatial_dsp.go](player/spatial_dsp.go),
+  [player/spatialfx/jh_spatial_ref.py](player/spatialfx/jh_spatial_ref.py),
+  [docs/SPATIAL_AUDIO.md](docs/SPATIAL_AUDIO.md)).
+- **Spatial audio in RetroArch games.** With **Tools → Audio → Spatial audio
+  in games** on, a RetroArch game started from the library plays through the
+  same virtual surround: a small native library built into the handheld
+  package, which RetroArch loads as its own audio DSP filter, with a preset
+  JukaHub writes for that launch (mode, strength and room; *Auto* is resolved
+  when the game starts). `retroarch.cfg` gets its own value back when the game
+  exits, and a filter you chose in RetroArch is never replaced. JukaHub checks
+  once whether the installed RetroArch can load filter libraries, and the row
+  says when it cannot (or when the plugin is missing, as on Windows for now).
+  The same library is also a LADSPA plugin. Its host tests drive both plugin
+  interfaces through `dlopen` against the reference; it has not run on a
+  handheld, and whether the firmware's RetroArch loads filters is unknown
+  ([player/spatial_games.go](player/spatial_games.go),
+  [player/spatialfx/README.md](player/spatialfx/README.md)).
+- **The backdrop can be water.** **Settings → Display & theme → Liquid
+  background** (*Off*, the default, *Gentle* or *Lively*) turns the backdrop
+  under the glass into a shallow pool that answers the controls you already
+  use: moving the focus drops a ripple under the tile it lands on, the Smart
+  Pro's left stick stirs the water round the focused tile and its right stick
+  drags a wake (or follows the virtual cursor while it is up), the pointer
+  does the same on a Brick in mouse mode and the mouse on a PC, a device with
+  an accelerometer sloshes it when tilted (**Tilt to slosh**, shown only where
+  a sensor answers — none is known on the Smart Pro or the Brick), and a drop
+  of rain now and then keeps an untouched screen alive for two minutes. The
+  wallpaper — an animated one included — or Home's own colours and blooms are
+  bent through the water with `SDL_RenderGeometry` and lit along the ripples:
+  a calm pool costs one copy, a moving one a 30 Hz step of a 64×36 grid (48
+  columns on Low Power) and two draw calls, and the header-band repaint sends
+  only the rows under it. Reduce Motion (the handheld's default) keeps the
+  ripples you make and drops the rain and the slosh; the handheld steps down
+  to the coarse grid by itself if the water costs more than 5 ms a frame; a
+  renderer without geometry support gets the plain backdrop and Settings says
+  so. With Living background on, the water bends its flat colour and its
+  lights drift over it
+  ([player/liquidbg.go](player/liquidbg.go),
+  [player/liquidbg_motion.go](player/liquidbg_motion.go)).
+- **Animated wallpapers.** A GIF picked as the wallpaper plays on every
+  screen, Home included. The file is walked block by block and decoded one
+  frame at a time on a goroutine — never every frame at full size, which a
+  few megabytes of GIF can turn into hundreds — then cropped to the screen's
+  shape, kept no larger than the screen and uploaded a few megabytes per UI
+  frame; frames play as they arrive, so the first appears at once. The
+  decoded frames stay within a budget (40 MB on the handheld, 192 MB on a
+  PC): a big GIF is shrunk, then a very long one drops frames and gives their
+  time to the frame before. Pixel art (a third of the screen or less) keeps
+  its own pixels at a whole-number scale with nearest filtering. Low Power
+  plays at up to about 15 fps; Battery Saver and the new **Settings → Display
+  & theme → Animate wallpaper** switch hold the first frame, while plain
+  Reduce Motion does not, because the handheld ships with it on and picking
+  an animated wallpaper is itself a choice of motion. A GIF too large to
+  animate is refused at the picker with a reason, critical memory pressure
+  leaves the wallpaper on its first frame, and a theme change decodes it again
+  (transparent areas take the theme's base colour)
+  ([player/gifwall.go](player/gifwall.go)).
+- **The wallpaper picker, redone.** It is on Home's glass over the live
+  backdrop, so an animated wallpaper keeps playing behind it, with a preview
+  of the highlighted picture decoded in the background and its facts
+  (*Animated GIF · 48 frames · 480 × 270 · 2.1 MB*). A *None — the glass
+  backdrop* row clears the wallpaper, an *Up a folder* row is always there,
+  folders come first, GIFs wear a chip and the wallpaper in use is marked. It
+  opens in the current wallpaper's folder; on the handheld the card's
+  `Wallpapers`, JukaHub's `data/wallpapers`, the Phone Companion's
+  `PhoneDrop` (a GIF sent from a phone is right there), `Pictures` and
+  `Screenshots` folders come next. Right opens a folder and Left (or
+  Backspace) goes up to the folder you came from; a mouse click highlights a
+  row and a second click uses it
+  ([player/wallpaper.go](player/wallpaper.go)).
+- **Screen Share: the Smart Pro's missing HDMI port, in a browser.** **Start →
+  Tools → Screen Share** (Remote Cast until now; search finds it as *screen
+  share*, *cast*, *tv*, *hdmi* or *mirror*) shows a link and a QR code: open it
+  on a smart TV, a laptop, a tablet or a phone on the same Wi-Fi — or cast that
+  laptop tab to a TV — and the handheld's screen plays there, games included.
+  JukaHub stops drawing while a game owns the screen, which used to freeze the
+  picture on the last menu frame; now the game is read from `/dev/fb0` through
+  the bundled ffmpeg when it is installed, otherwise by JukaHub's own reader
+  (at most 8 fps and 640 px, so it never takes more than about half a core
+  from the game). Quality is *Smooth* (640 px, 20 fps; the handheld's
+  default), *Balanced* (960 px, 15 fps; a PC's) or *Sharp* (full size,
+  10 fps); the handheld captures its menus at most about twelve times a
+  second, fewer when the GPU is slow to hand a frame back, and a screen that
+  is not changing is re-sent once a second instead of at the frame rate.
+  **Games too** can be switched off (viewers then see a pause card). The
+  viewer page goes full screen (button, double-click or tap, **F**), cycles
+  Fit / Fill / Pixel-perfect (**M**), hides its controls after three idle
+  seconds, has a `&tv=1` mode with no controls for TV browsers, falls back to
+  single frames for a browser that cannot show MJPEG, and waits while sharing
+  is off, then starts by itself. Up to six browsers watch at once, and a red
+  **LIVE** pill shows on the handheld while anyone does (never in the stream
+  or in screenshots). Sound stays on the handheld
+  ([player/castcap.go](player/castcap.go),
+  [player/castcap_fb.go](player/castcap_fb.go),
+  [player/companion_cast.go](player/companion_cast.go),
+  [player/castui.go](player/castui.go)).
+- **Report a bug sends the report from the device.** Submit used to end on a
+  QR code for a phone signed in to GitHub: no build carried a report
+  collector. Every build now posts the redacted report to the JukaHub report
+  service — a Netlify function on the builder's site
+  (`https://generate.jukalang.com/api/bug-report`) that files it as a public
+  GitHub issue, not under your name — and the sent sheet shows the issue
+  number, with an optional code to follow it on a phone. The preview names
+  where the report goes and shows its reference and creation time, so it is
+  exactly what is sent. The phone path is only the fallback now, with **Send
+  later** when the service is not answering. The outbox backs off while the
+  collector fails (90 s, doubling, up to 6 h), stops for the session when it
+  is not there, never sends a delivered report twice, and retires a report it
+  could not deliver in a month to a readable file instead of retrying it for
+  ever; a web page, a proxy's refusal or a redirect is never taken for the
+  collector's answer. Maintainers set `JUKAHUB_GITHUB_TOKEN` in Netlify
+  ([docs/BUG_REPORTS.md](docs/BUG_REPORTS.md),
+  [netlify/functions/bug-report.mjs](netlify/functions/bug-report.mjs),
+  [player/bugrepsend.go](player/bugrepsend.go),
+  [player/bugrep.go](player/bugrep.go)).
+- **Save a video, or just its sound, from the player.** The video settings
+  sheet (**Y**) has a **Save offline** row that opens a second page in the
+  same sheet: for a web video **Download video** (MP4, into Media →
+  Downloads) and **Audio only** (an M4A for the music player); for a file on
+  the card **Extract audio** and **Get subtitles** (from the page a download
+  came from). **B** steps back to the settings. The Media details sheet
+  offers the same: **Save audio only** beside **Download for offline**, and
+  **Extract audio** on a downloaded video. Extracting copies the video's
+  sound track with ffmpeg — offline, in seconds for a clip and minutes for a
+  long film — or encodes it to AAC when it cannot be copied, and files the
+  track with the video's title, channel and picture; it refuses a sound that
+  is already saved and stops when JukaHub quits. A second press on a
+  download that is already queued says so instead of saving the file twice
+  ([player/videosheet.go](player/videosheet.go),
+  [player/mediaextract.go](player/mediaextract.go),
+  [player/media_hub_sheet.go](player/media_hub_sheet.go)).
+- **Downloaded videos come with their subtitles.** Once the download queue is
+  idle, each newly saved video gets its subtitles in your language beside it
+  as `<name>.<lang>.srt`, so it plays with CC offline (and in any other
+  player); a video kept after watching gets the subtitles it was watched
+  with, and removing the download removes them too. A subtitle problem never
+  fails or holds up a download ([player/downloads.go](player/downloads.go),
+  [player/ytcaptions.go](player/ytcaptions.go)).
+- **Emulator cores now update by themselves.** Settings → Games & emulators →
+  **Emulator updates** (it was "Core updates") defaults to **Install
+  automatically**: once a day, while the handheld charges or after two idle
+  minutes and never during a game or a video, JukaHub installs the buildbot's
+  newer build of every installed core where RetroArch loads it, and keeps the
+  one it replaced for a one-press roll back (Emulators **R1**). It stops before
+  a core that would leave the card nearly full. Choices people made are kept —
+  an old "off" stays Off, and a mode picked in Settings, on the Core builds page
+  or in an imported settings file stays picked — while the "Notify me" earlier
+  builds stored for users who never chose moves to the new default once, with a
+  toast that says where to change it. The same setting keeps JukaHub's own
+  PPSSPP current ([player/emulatorautoupdate.go](player/emulatorautoupdate.go),
+  [player/emulatorinstall.go](player/emulatorinstall.go),
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
+
+- **A core build that cannot run on this firmware is never installed.** Before
+  a download reaches the core pool, and before an activation or a roll back
+  replaces a core, JukaHub reads the binary's ELF metadata: it must be the
+  architecture the card's RetroArch runs, and every library symbol version it
+  needs (`GLIBC_2.34`, `GLIBCXX_3.4.30`, …) must exist in the libraries the
+  firmware's loader would find, in the order it searches them. A refused build
+  says why ("needs GLIBC_2.34; this firmware's libc.so.6 has up to
+  GLIBC_2.33"), the working core stays, and that build is remembered
+  (`data/performance/core-refused.json`) so the daily check does not download
+  it again; a core over the 96 MB download limit is handled the same way instead
+  of failing every day ([player/elfcompat.go](player/elfcompat.go),
+  [player/emulatorupdates.go](player/emulatorupdates.go),
+  [player/compat.go](player/compat.go)).
+
+- **PSP games can run JukaHub's own, current PPSSPP on the handheld, and the
+  Emulators page says which PPSSPP plays them.** A tester asked which PPSSPP
+  JukaHub uses and why it never updated: it had none of its own — PSP games ran
+  the card's (1.18.1 in the stock 2025-04-30 package, or the build CrossMix's
+  PSP folder picks) — and its "update" only staged an archive the PPSSPP
+  project does not publish for this hardware. The PSP tile now leads with the
+  answer ("PPSSPP 1.18.1 (firmware) · 1.20.3 available", "PPSSPP 1.20.3
+  (JukaHub) · firmware 1.18.1 kept"), and **X** on it opens a PPSSPP card:
+  install or update the TrimUI build the minui-psp project packages (PowerVR
+  for the Smart Pro and Brick, Mali for the Smart Pro S; the Brick Pro is
+  offered as untested and never installed for automatically), choose which
+  PPSSPP plays PSP games, remove JukaHub's, or install RetroArch's PPSSPP core
+  as **X** did before. The package is installed only with GitHub's SHA-256
+  digest, unpacked into JukaHub's data folder (never over the firmware's
+  PPSSPP) after a check that its binary loads here, and one previous build is
+  kept. JukaHub's PPSSPP keeps its settings, cheats and textures in one folder
+  of its own that every update reads, starts from the package's tuned defaults
+  plus the firmware's button mapping and per-game configs, and shares the
+  firmware's saves and save states (bind mounts, as minui-psp does), so
+  switching either way loses nothing. If it does not start, or the saves cannot
+  be shared, the game opens in the firmware's PPSSPP instead and JukaHub
+  switches back by itself with one toast. **Emulator updates** drives a daily
+  check: Notify says once per release; Install automatically installs it and
+  switches when it is newer than the firmware's — never over a launcher you
+  pinned in `game-launchers.json`, which is restored exactly, in its place,
+  when you switch back. The stick calibration edits whichever ini the PPSSPP in
+  use reads ([player/ppsspp_managed.go](player/ppsspp_managed.go),
+  [player/ppsspp_managed_ui.go](player/ppsspp_managed_ui.go),
+  [player/ppsspp_calibration.go](player/ppsspp_calibration.go)).
+
+- **Mouse mode: hold Select + L1 for a pointer anywhere in JukaHub.** Like
+  GammaOS's mouse emulation, a held chord (about 0.7 s; **F6** on a keyboard)
+  turns a mouse pointer on and off. While it is on the pointer stays up, the
+  D-pad (slow at first, faster while held) and both sticks move it, **A**
+  clicks or drags and **L2** / **R2** scroll, while **B** and every other
+  button keep their jobs — which gives the TrimUI Brick, with no sticks, a
+  pointer for the first time. Panels that own the pad (Quick Settings, the
+  calibrations, the controller test, an alarm) and the screensaver put it away
+  until they close, the on-screen keyboard keeps the D-pad, and Chat keeps its
+  right-stick scroll. GammaOS uses Select + R1, but that already switches
+  control profiles here, so mouse mode takes the mirror image; a control
+  profile line on Select + L1 now gets a warning. Settings → Controls →
+  **Mouse mode** turns the chord off
+  ([player/vcursor_mode.go](player/vcursor_mode.go),
+  [player/virtualcursor.go](player/virtualcursor.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md#mouse-mode-hold-select--l1)).
+
+- **Mouse in games and apps (TrimUI, opt-in).** With Settings → Controls →
+  **Mouse in games and apps** on, the same Select + L1 inside a running game,
+  emulator or port turns the pad into a mouse for it: JukaHub lets go of the
+  buttons the game saw pressed, takes the pad and adds a uinput mouse that the
+  sticks and D-pad move — **A** left button, **B** right, **X** middle,
+  **L2** / **R2** the wheel; a vibration pulse says on or off. The chord again,
+  Menu, leaving the game or quitting JukaHub gives the pad back. Only programs
+  that draw their own pointer show one (ScummVM, DOSBox, PC ports, WPE
+  Browser), and a program that only looks for devices at start-up may not see
+  it ([player/vcursor_bridge_linux.go](player/vcursor_bridge_linux.go),
+  [player/vcursor_evdev.go](player/vcursor_evdev.go)).
+
+- **Sign in with PlayStation to pair a PS5 or PS4: no more hunting for the
+  Base64 Account-ID.** Pairing a console that needs the PSN Account-ID, with
+  none saved, now opens an Account-ID card instead of a bare keyboard. On the
+  handheld it shows a QR code for the Phone Companion's new sign-in page: the
+  phone opens Sony's login, and after you sign in you paste the address of the
+  page that says "redirect". The handheld trades its one-time code with Sony
+  (the same exchange as chiaki's psn-account-id script), keeps only the
+  Account-ID and goes straight to the PIN step with the console's exact menu
+  path. On a PC, **Sign in in your web browser** opens Sony's page and the
+  Account-ID field takes the pasted address. **Type or paste it** also takes
+  the Account-ID itself, the long account number other tools print, or `0x`
+  hex. The code and tokens are never logged or saved, and errors say what
+  happened in plain words ("That sign-in code has expired — sign in again")
+  ([player/psn_signin.go](player/psn_signin.go),
+  [player/psremote_ui.go](player/psremote_ui.go),
+  [player/companion.go](player/companion.go),
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#getting-the-psn-account-id)).
+
+- **Sites the reader can't show open in WPE Browser on the handheld.** The
+  Browser's Select menu has **Open in WPE Browser**, and Google's "needs a full
+  web browser" card puts it first: the page (or the search) opens in
+  [WPE Browser](https://github.com/matweew/wpe-tsp), the community WebKit
+  browser for the Smart Pro, Brick and Brick Pro, while JukaHub steps aside the
+  way it does for a game — freeing its caches first, since WebKit wants most of
+  the 1 GB — and comes back to the same page when WPE Browser closes. Where it
+  is not installed, the menu and the card offer **Get WPE Browser**, and
+  Settings → Browser → **WPE Browser** shows the version and updates it: the
+  latest GitHub release is downloaded straight to the SD card with progress,
+  verified against GitHub's SHA-256, resumed after a dropped connection,
+  unpacked into `Apps/WPE`, and an update keeps `settings.conf` and everything
+  you or WPE Browser added to its folder (the old folder is only deleted once
+  they are across). On a PC the menu row opens the page in the desktop's
+  browser ([player/brw_wpe.go](player/brw_wpe.go),
+  [player/brw_wpe_install.go](player/brw_wpe_install.go),
+  [docs/BROWSER.md](docs/BROWSER.md#wpe-browser)).
+
+- **The Browser blocks far more ads and trackers, and says how many.** The
+  filter's host list grew from about 65 to about 370 entries — JukaHub's own
+  curated list of ad exchanges, native-ad widgets, pop-under and affiliate
+  networks, data brokers, attribution SDKs, analytics, session replay and A/B
+  testing (not EasyList) — with a first-party rule, so a listed company's own
+  site still loads its own files. Site info shows "14 ads and trackers
+  blocked" with **Allow ads on this site** (**X**), and Settings → Browser →
+  **Block ads and trackers** (`browserBlockAds`, on by default) turns the filter
+  off everywhere ([player/brw_adblock.go](player/brw_adblock.go),
+  [player/adblock.go](player/adblock.go),
+  [docs/BROWSER.md](docs/BROWSER.md#ads-and-trackers)).
+
+- **Box art finds itself.** Covers used to download only when you asked — the
+  tour's "Fetch game artwork" step or the library's Fill gaps (**L1** / **F**).
+  JukaHub now looks them up in the background: about a minute and a half after
+  it starts on a card that never had a pass, at most once a day after that, and
+  within half an hour of new games appearing in the ROM folders (a cheap look
+  at the names in each console folder, not a walk of the card). A pass waits
+  for a moment that costs nothing: online, never while a game or emulator has
+  the screen (a game that starts stops it after the cover it is on), never
+  beside another fetch or a running install, and on battery only at 20 % or
+  more and after a minute and a half without input — counted from the end of
+  the last game. It is stamped only when every title got an answer, so a pass
+  cut short resumes at the next good moment, and network errors back off from
+  half an hour to a day. When it saved covers, one quiet notification says so
+  ("Found box art for 12 games"). Only game titles are sent, as the same GET
+  requests Fill gaps makes. **Settings → Games & emulators → Find box art
+  automatically** (`artAutoFetch`, on by default) turns it off; safe mode skips
+  it ([player/boxart_auto.go](player/boxart_auto.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#found-automatically)).
+
+- **RetroArch has a tile on the handheld's Emulators page, and core rows lead
+  to their games.** The page listed every core but no RetroArch, and **A** on a
+  core said "start it from RetroArch". The RetroArch tile names its folder,
+  core count and the config it reads, and **A** opens RetroArch's own menu the
+  way the firmware's launchers start it; **A** on a core row (its hint now says
+  **Games**) opens the Games library searched for the console it plays
+  ([player/raemu.go](player/raemu.go), [player/emulators.go](player/emulators.go)).
+
+- **Booting into JukaHub looks like an operating system starting.** When the
+  handheld starts straight into JukaHub (Settings → General → Start JukaHub
+  at login), the start is no longer a half-second card but a boot: the
+  JukaHub logo the firmware showed stays on the black screen, a light runs
+  once round its glass pane, the backdrop's four blooms ignite one by one
+  with the startup chime's four bells and drift out from behind the logo
+  while the theme's colours dawn, the wordmark catches a glint, and a quiet
+  progress line reports the real boot steps. Then the first screen arrives
+  instead of cutting in: Home's cards rise into place one after another in
+  reading order over Home's own backdrop, the header and the greeting fade
+  in round them, and the boot's wordmark flies up into the header, where the
+  same word lives on Home, so the last frame of the boot is the first frame
+  of Home. The queued startup work runs first, behind the still logo (so no
+  light ever stalls on its lap), then the beats take under three seconds and
+  the arrival about one more; it never waits for the network, and any button
+  skips to the arrival. A power-on is detected, not configured: the TrimUI
+  autostart hook's marker, or a start the hook's queued command made within
+  the first minutes of the kernel's uptime with autostart on, or
+  `JUKAHUB_BOOT=1` / `--boot` (the Windows and Linux login launchers now pass
+  it); a start since the same kernel boot (recorded with the boot id, so a
+  clock set by the network cannot fool it) never replays it, and Recovery's
+  restart drops the trigger.
+  **Settings → General → Startup animation** picks *Full at power-on* (the
+  default), *Full every time* or *Always quick*, and **Watch the boot
+  animation** plays it on demand. Reduced motion (the handheld's default)
+  keeps every beat as a fade: nothing travels, drifts, scales or flies
+  ([player/bootos.go](player/bootos.go),
+  [player/bootarrive.go](player/bootarrive.go),
+  [player/bootlogo_layout.go](player/bootlogo_layout.go),
+  [docs/BOOT.md](docs/BOOT.md)).
+- **A JukaHub boot logo for the TrimUI firmware.** **Settings → General →
+  Boot logo** (A twice) writes the JukaHub boot screen — the logo over the
+  wordmark on black, on exactly the pixels the boot animation opens with —
+  into the picture the bootloader shows before Linux starts, so a power-on
+  reads as one continuous boot; A twice again puts the previous picture
+  back. It is the one place JukaHub writes outside the SD card, so it is
+  narrow: the logo is found by partition *name* only (a FAT `boot-resource`
+  or `bootloader` partition holding `bootlogo.bmp`, or a raw `bootlogo`
+  partition that starts with a BMP — Allwinner's two layouts), every source
+  that names partitions must agree, and the SD card and the running system
+  are never touched; the firmware's own file decides the format, its header
+  is kept byte for byte and only the pixel rows are rewritten, in place and
+  at the same length; the current picture is saved to
+  `Apps/JukaHub/data/bootlogo/` and read back before anything is written,
+  and every write is read back by SHA-256 (a write that does not read back
+  puts the previous picture straight back). Anything unexpected — another
+  layout, compression, a palette, a portrait logo, two stores — leaves the
+  row at *Unavailable* with the reason instead of guessing. On CrossMix the
+  same picture is also left in `Apps/BootLogo/Images/JukaHub.bmp` for its
+  BootLogo app. Not run on a device yet: TrimUI's exact storage (firmware
+  1.1.x enlarged its boot partition) is unconfirmed, which is why the
+  installer probes before it writes. `branding/mkbootlogo.py` renders the
+  same screen as 24-bit BMPs for flashing by hand
+  (`branding/bootlogo/jukahub-bootlogo-1280x720.bmp` for the Smart Pro and
+  Smart Pro S, `-1024x768.bmp` for the Brick and Hammer)
+  ([player/bootlogo.go](player/bootlogo.go),
+  [player/bootlogo_linux.go](player/bootlogo_linux.go),
+  [branding/mkbootlogo.py](branding/mkbootlogo.py),
+  [docs/BOOT.md](docs/BOOT.md)).
+- **A brightness button beside the volume button.** A sun now leads the
+  status cluster, immediately left of the speaker, on Home and on every
+  screen, and the D-pad reaches it the same way. It shows the level at a
+  glance (a smaller sun below half); A, a click or a tap opens a brightness
+  card that matches the volume card: the level, a slider to click or drag,
+  and a Dim button (A, Enter) that drops to the lowest level and back again.
+  The D-pad, the arrow keys or the wheel move the level and B (Esc) closes.
+  What it moves depends on the device: on the TrimUI Smart Pro and Brick the
+  panel's backlight through the Allwinner display driver (`/dev/disp`, the
+  path the firmware, MinUI and spruceOS use), in the firmware's own ten steps,
+  with the level written back to the firmware's `system.json` so its
+  brightness keys carry on from it (and each step written with the panel level
+  the firmware itself was seen to use for it, so nothing jumps when the
+  firmware applies its own); on a Linux PC the sysfs backlight; on a Windows
+  desktop the monitor's own brightness over DDC/CI, and on a laptop or
+  handheld the panel brightness through WMI. Where none of those
+  exists, the card dims JukaHub's picture instead and says so. Writes run on
+  one worker that applies only the newest level, so a held D-pad never stalls
+  the screen (on Windows a write is a PowerShell run or a monitor exchange).
+  Quick Settings' Brightness slider, the Settings brightness row, the control
+  profiles' brightness actions and the pairing QR's full-brightness boost now
+  go through the same controller, so they all show one number; the saved
+  level is restored at launch only where JukaHub is its sole owner (never over
+  the TrimUI firmware's or Windows' own level)
+  ([player/brightnessctl.go](player/brightnessctl.go),
+  [player/brightnesspopover.go](player/brightnesspopover.go),
+  [player/brightness_disp_linux.go](player/brightness_disp_linux.go),
+  [player/brightness_trimui.go](player/brightness_trimui.go),
+  [player/brightness_windows.go](player/brightness_windows.go)).
+
+- **The Browser fills the screen, and Select opens a menu with everything.**
+  The page used to sit inside the top bar, a header band, the address toolbar,
+  a cookie strip, a row of fourteen chips and the footer, which on the Smart
+  Pro's 720-line panel left it a little over half the screen. It is now drawn
+  edge to edge, the way the WPE browser for the device does it, and **Select**
+  (M or the Menu key on a keyboard, a right click with a mouse) opens a sheet
+  with every action: Back, Forward, Reload and Home across the top, then the
+  address bar, web search, the page's links, find, zoom, link mode, saving and
+  the saved pages, site info, the ad filter, sign-ins, the layout switch,
+  Browser settings, the issue tracker and Close. Rows keep their places (one
+  that cannot act is dimmed), so Select then A goes back a page; Zoom and Find
+  change in place with Left/Right. A pill in the top-right corner names the
+  site for a moment after each page loads and while the pointer is near the
+  top, the find count and link mode sit under it, and the menu's footer has
+  the clock and battery. Backspace / Alt+← / Alt+→ / F5 work as in a desktop
+  browser. **Settings → Browser → Full-screen pages** (`browserFullScreen`)
+  brings the classic layout back
+  ([player/brw_fullscreen.go](player/brw_fullscreen.go),
+  [player/brw_menu.go](player/brw_menu.go)).
+
+- **Home can be a carousel, or widgets you arrange.** Next to Standard (your
+  config's dashboard) and the Hero grid, **Settings → Display & theme → Home
+  layout** offers two layouts built from your own list of tiles. **Carousel**
+  is one row of big cards centred on the focus, wrapping around, with the
+  focused card's title and description under it and position dots.
+  **Widgets** is a six-column grid of tiles in the sizes you give them, which
+  scrolls past three rows. A tile is a Home card, any Start-menu entry (a
+  screen, a tool, a device action, a plugin's button) or an info widget:
+  Clock (with the next alarm), Weather, Battery, Storage, Now playing,
+  Calendar or Playtime, each opening its screen on **A**. **Edit Home** —
+  **X** on Home, the footer's **Edit** pill, a right-click on a tile,
+  **Start → Device → Edit Home** or the new **Edit Home** row in Settings —
+  moves a tile with **A** and the D-pad, cycles its size with **X**, removes
+  it with **Y** (Delete), adds tiles from a sheet of widgets, cards and apps,
+  switches layout with **L1**/**R1** (Tab) or the strip at the top, and
+  resets to the default tiles; every change is saved as it is made, in the
+  `homeTiles` setting. The mouse edits too: drag a tile, click its remove
+  badge or its size chip. Experience packs can name the new layouts, and the
+  theme and pack galleries draw a sketch of each
+  ([player/homelayout.go](player/homelayout.go),
+  [player/home_tiles.go](player/home_tiles.go),
+  [player/home_edit.go](player/home_edit.go),
+  [player/home_widgetdraw.go](player/home_widgetdraw.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md#home-layouts),
+  [docs/CONFIGURATION.md](docs/CONFIGURATION.md#home-tiles-hometiles)).
+
+- **Files extracts archives.** **A** on a zip, a tar (plain, `.tar.gz` /
+  `.tgz`, `.tar.xz`, `.tar.bz2`), a lone `.gz`, `.xz` or `.bz2`, a 7z or a RAR
+  opens its sheet: the format and size and, for a zip (or a 7z or RAR that
+  7-Zip can list), how many files it holds, how big it unpacks and the first
+  few things in it. **Extract** puts a single top-level item (one folder, one
+  game) next to the archive and several into a new folder named after it, and
+  never overwrites anything — a taken name gets " (2)", as Paste does.
+  **Extract here** merges into the archive's own folder and replaces files of
+  the same name, after a second press; every move is decided before the first
+  is made, and the archive itself is never replaced. A zipped game in a
+  console folder still starts on **A**; **Y → Extract…** unpacks it, or every
+  marked archive one after another (the new row sits under **Edit text**, so
+  the rows below it moved down one). The work runs in the background with its
+  progress in the sheet, along the bottom of the Files bar and in the activity
+  strip on other screens, and can be cancelled; a cancel or a failure while it
+  unpacks leaves the folder exactly as it was, because everything is unpacked
+  into a hidden folder first and moved into place at the end, and after
+  **Extract** the cursor lands on what came out when it was still on the
+  archive. The built-in readers make names safe for FAT cards and Windows
+  (`a:b.txt` → `a_b.txt`, `CON` → `_CON`), skip a name that climbs out with
+  `..` and keep an absolute one inside, leave links, devices and macOS
+  metadata out (a tar's hard link becomes a copy) and hold every member to the
+  bytes it declares; 32 MB of the card are kept free (a zip is checked before
+  it starts, a tar as it goes, a 7z or RAR from 7-Zip's listing, and 7-Zip is
+  stopped when the card gets down to it); an `.xz`'s container is read by
+  JukaHub itself, with its checks verified, so no block can make the decoder
+  take more than 128 MB of memory (one made with a BCJ or delta filter is
+  refused); old DOS zips' names are read as code page 437, and file dates are
+  kept. 7z, RAR
+  and zips packed with something other than Deflate go to 7-Zip —
+  JukaCrossMix's `7zz`, an installed 7-Zip on Windows (else 7-Zip's own
+  `7zr.exe`, fetched once and checked against its published digest, for 7z),
+  or Windows' `tar.exe` for RAR — after 7-Zip has listed them: an archive it
+  cannot list, or one holding links, is not unpacked, and the sheet says why,
+  as it does when no 7-Zip is there. Password-protected archives are refused
+  with that reason. This
+  replaces **A** on a zip, which unpacked it on the render thread into
+  `name_unzipped` without a word about how it went
+  ([player/files_extract.go](player/files_extract.go),
+  [player/files_extract_ui.go](player/files_extract_ui.go),
+  [player/files_extract_tools.go](player/files_extract_tools.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md#archives)).
+
+- **The Games Library opens without walking the card on the render
+  thread.** The scan and build now run in the background, with a scanning
+  state, a cached filtered list, and stale-result protection when the panel
+  closes or rescans ([player/game_library_ui.go](player/game_library_ui.go)).
+
+- **The library remembers how you like to browse.** Games can be sorted
+  by title, last played, playtime, rating or year; hidden with a Show hidden
+  toggle; and given a display title without renaming the ROM. The view is
+  keyed by a content hash, so it survives a file rename
+  ([player/game_library_view.go](player/game_library_view.go),
+  [player/game_options_ui.go](player/game_options_ui.go)).
+
+- **Plugin ROM formats reach the library.** A switched-on plugin's
+  `romParsers` extensions and system folders are now indexed by the ROM scan,
+  including `.zip` sets, while built-in systems and extensions keep precedence
+  ([player/romsetup.go](player/romsetup.go)).
+
+- **Settings search opens the exact row.** Home search indexes every
+  Settings row by label, detail line and id, so "vibration" or "button hints"
+  lands on that row with the focus on it instead of the top of its section
+  ([player/setui.go](player/setui.go),
+  [player/homesearch_index.go](player/homesearch_index.go)).
 
 - **The Browser runs page JavaScript against a real document.** A page's
   scripts used to get a stand-in document whose every lookup answered `null`,
@@ -375,11 +1059,227 @@ For anything older, the git log and the
   dropped next to it ([player/ytdlp_update.go](player/ytdlp_update.go),
   [player/patch_engine.go](player/patch_engine.go)).
 
+- **Wake your PS4 or PS5 from the handheld.** A console in rest mode no longer
+  has to be switched on by hand before Remote Play: A on its row asks the
+  console how it is, sends the wake signal when it rests, waits while it comes
+  up (the row counts the seconds, up to a minute) and starts the stream by
+  itself; X wakes a console without streaming, and B stops waiting. The row
+  says when a console is in rest mode and when it did not answer — A then
+  connects anyway, for consoles behind a VPN. A console with an Internet
+  address is also asked there when it does not answer at home, so a router
+  that forwards its discovery port lets it be woken from away. The signal is
+  chiaki-ng's own WAKEUP packet with the pairing key as its credential, sent
+  only to an address that has just answered as this console (its MAC must
+  match the pairing's), never broadcast; the console needs Stay Connected to
+  the Internet and Enable Turning On PS5/PS4 from Network in its rest-mode
+  settings, and a failed wake names that setting
+  ([player/psremote_wake.go](player/psremote_wake.go),
+  [player/psremote_ui.go](player/psremote_ui.go); tests in
+  [player/psremote_wake_test.go](player/psremote_wake_test.go)).
+
+- **Pair Bluetooth controllers and headphones in JukaHub.** Settings →
+  Network → Bluetooth devices (also **Bluetooth** in the Start menu, search,
+  and the PS Remote Play panel's new **Controllers** row) switches the radio,
+  lists the paired devices, searches for ten seconds and pairs, trusts and
+  connects a device in one step — controllers first, with a sheet that says
+  which buttons put a DualSense, a DualShock 4, an Xbox or an 8BitDo pad in
+  pairing mode. Every bluetoothctl conversation runs off the render thread
+  with its own deadline (the stock BusyBox has no `timeout`), in a
+  pseudo-terminal, because a search and a pairing last only as long as the
+  client that asked for them. A pad is called ready only when the kernel has
+  made a controller for it; one that connects without one — what firmware
+  with Bluetooth LE input only can do with a classic-Bluetooth DualShock 4 or
+  DualSense — shows **No input**, with a USB cable or a 2.4 GHz adapter as the
+  way out. The page and the Controllers row also say that Bluetooth shares the
+  radio with Wi-Fi here, so a stream can stutter while it is on
+  ([player/bluetooth_devices.go](player/bluetooth_devices.go),
+  [player/bluetooth_devices_ui.go](player/bluetooth_devices_ui.go); tests in
+  [player/bluetooth_devices_test.go](player/bluetooth_devices_test.go)).
+
+- **Remote Play uses every controller, including one connected mid-stream.**
+  The stream helper opened one controller as it started — the first one SDL
+  listed, else joystick 0 — and never looked again, so a Bluetooth or USB pad
+  listed after the built-in pad, or switched on during the stream, did
+  nothing. `chiaki-stream` now opens every pad (up to six) at the start and
+  whenever one connects, lets go of what a pad held when it leaves, and sends
+  the console the merge of all of them: any pad's buttons, each stick axis
+  from the pad pushed furthest on it (the way chiaki-ng merges pads, so a
+  resting pad does not cancel the one in use) and the deeper trigger. An
+  external pad keeps its own layout while the built-in pad is there: its PS
+  button is the console's PS button for as long as it is held (the stream
+  menu stays on the handheld's Menu), its D-pad stays a D-pad when the
+  Brick's *D-pad = left stick* mode is on, and a DualShock 4's or DualSense's
+  Create is Create while its touchpad passes the click and up to two fingers.
+  The built-in pad is told apart by its USB id and the kernel's name for it
+  ("TRIMUI Player1"), because SDL names it "Xbox 360 Controller" after that
+  id; that is what keeps the handheld's motor rumbling and the handheld-only
+  options on the handheld's own pad. Rumble goes to the pad in use, handed to
+  the main loop instead of called from chiaki's thread, and is sent again
+  every second so a long rumble does not stop after SDL's ten seconds.
+  Start + Select ends the stream only when both are held on one pad; the
+  fallback that read raw buttons 8 and 9 as Select and Start now applies only
+  to raw joysticks SDL has no mapping for, because on the TrimUI's own
+  X360-mapped pad those numbers are Menu and L3 and on a DualSense they are
+  other buttons. Pads with Nintendo labels are read by position, so Cross is
+  the bottom button ([player/native/chiaki-stream.c](player/native/chiaki-stream.c),
+  [player/native/stream_input.c](player/native/stream_input.c),
+  [player/native/stream_sys.c](player/native/stream_sys.c); host tests in
+  [player/native/tests/](player/native/tests/)).
+
+- **PS Remote Play maps every DualSense input.** The face buttons go by
+  position, so the bottom button is Cross whatever letter the TrimUI prints on
+  it. A **Menu** tap is the PS button and the stream menu's **Hold PS (Home)**
+  gives the long press (the PS5's home screen, the PS4's quick menu);
+  **Select** is the touchpad click and **Menu + Select** Create (the two swap
+  in the stream menu or with the panel's new **Select button** row);
+  **Menu + D-pad** swipes the touchpad, **Menu + right stick** puts a finger on
+  it, **Menu + R3** clicks where that finger is, and **Menu + L3** makes the
+  D-pad drive the left stick, which is how the stickless Brick and Hammer
+  start. L2 and R2 stay analog. The helper registers the handheld pad's X360
+  mapping itself, so the layout no longer depends on what the firmware's SDL
+  knows, and reads a six-axis raw joystick in that order (the old raw table
+  turned its triggers into a right stick pinned to one side). Game rumble now
+  also drives the handheld's own motor — a GPIO the old helper never touched —
+  whenever the built-in controls are the pad in use, and the motor is switched
+  off however the stream ends, a crash or a signal included
+  ([player/native/stream_input.c](player/native/stream_input.c),
+  [player/native/chiaki-stream.c](player/native/chiaki-stream.c),
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#controls-in-a-stream)).
+
+- **The Remote Play stream has an on-screen display.** Instead of a black
+  screen while it connects, a card names the console, its address and the
+  codec and counts the seconds; the controls show for six seconds when the
+  picture starts; holding **Menu** for about a second opens the stream menu —
+  resume, quit, **Hold PS (Home)**, the Select button, the D-pad mode, rumble,
+  the stream's volume, statistics and the controls table — while the console
+  is sent an idle pad; toasts say when a mode changes or a pad comes or goes,
+  and warn at 15, 10 and 5 % battery, because JukaHub's own warnings cannot
+  show while the stream has the screen; holding **Start + Select** on one pad
+  fills a bar before it quits, and once both are down neither reaches the
+  console until it is let go, so letting go of one early sends nothing; and a
+  stream that fails, or that the console ends, says why before it exits. The
+  text comes from a glyph atlas generated from the UI font
+  ([player/native/stream_osd.c](player/native/stream_osd.c),
+  [player/native/gen-osd-font.py](player/native/gen-osd-font.py)).
+
+- **A PlayStation login passcode no longer ends the stream.** A profile that
+  asks for its 4-digit passcode when Remote Play starts used to stop the helper
+  with exit code 12. The stream now enters the one saved under the console's
+  options (**Start** on its row → **Login passcode**) once, or asks for it on
+  screen: Up / Down set a digit, Left / Right move, **A** sends it (Start does
+  not: it is half of the quit combo) and **B** gives up, also while the console
+  is checking it. A refused saved passcode is reported on the next start, and a
+  console that ends the connection at the passcode step is reported as that,
+  not as one that could not be reached. The passcode field in the console's
+  options is hidden like a password and cleared when the keyboard closes
+  ([player/native/chiaki-stream.c](player/native/chiaki-stream.c),
+  [player/psremote_console_opts.go](player/psremote_console_opts.go)).
+
+- **PS Remote Play from another network.** A console's options take an
+  **Internet address**: the home's public address or a dynamic-DNS name, with
+  the router forwarding TCP 9295 and UDP 9296–9297 (and UDP 9302 to wake the
+  console), or a VPN address: an IPv4 address or a host name (IPv6 does not
+  work yet). A port typed with it is left out, with a note when it was not
+  9295, since the Remote Play ports are fixed. JukaHub streams to the home
+  address when the console answers there and to the internet address when it
+  does not, with the same pairing. There is no PSN relay yet — the hole
+  punching through Sony's servers that Sony's app and chiaki-ng's "remote
+  connection via PSN" use (backlog PSR-8)
+  ([player/psremote_stream_opts.go](player/psremote_stream_opts.go),
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#playing-away-from-home)).
+
+- **Stream settings and console options in PS Remote Play.** The panel gains
+  **Video codec** (Auto, H.264 or H.265; a PS4 always sends H.264), **Select
+  button** (touchpad click or Create) and **Rumble** rows, and **Start** (O on a
+  keyboard) on a console's row opens its options: Play or Pair, Internet
+  address, Login passcode, Forget. Both text fields save only on the keyboard's
+  Save ([player/psremote_console_opts.go](player/psremote_console_opts.go),
+  [player/psremote_stream_opts.go](player/psremote_stream_opts.go)).
+
+- **Remote Play says how a stream ended.** The helper writes its result to
+  `Apps/JukaHub/data/psremote-last.txt` — the console could not be reached, the
+  passcode was not entered or the console refused the saved one, the video was
+  too heavy, the console ended the stream, or a crash with its exit code — and
+  the next start of JukaHub turns a bad ending into one toast and a **Last
+  stream** row whose **A** opens that console's options. A refused saved
+  passcode gets its own toast even after a good stream, and a video the
+  handheld could not keep up with names the other codec to try (or a lower
+  quality on a PS4). When the helper died before it could write,
+  `psremote.log` is read from where that stream began — the note left at the
+  hand-off records the log's size — so even a long stream's crash is reported
+  with its exit code
+  ([player/psremote_lastrun.go](player/psremote_lastrun.go),
+  [player/native/stream_sys.c](player/native/stream_sys.c)).
+
+- **Battery time left.** JukaHub now estimates how long the battery lasts and
+  how long it takes to fill: a new **Battery** row in Settings → Power &
+  battery reads "72% · about 3 h 10 min left" (or "full in about 40 min"),
+  Quick Settings' footer shows the longest form that fits ("72% · 3h 10m left"
+  on the Smart Pro), and the battery-saver and low-battery toasts say how long
+  is left. The estimate comes from the battery's own report when the driver
+  has one (the Smart Pro's AXP2202 reports minutes, which is recognised), else
+  the current draw, else how fast the level is actually falling over the last
+  45 minutes. A rate learned from earlier use, or a driver figure the level has
+  not confirmed yet, gives only a rough figure — "roughly 3 h 30 min left",
+  "~3h 30m" — that is dropped when the level does not bear it out and never
+  goes into a toast. Nothing is shown until there is evidence, a charger that
+  cannot keep up reads "still draining", and the figure is smoothed so it does
+  not jump with every change of load
+  ([player/battery_eta.go](player/battery_eta.go)).
+
+- **Host tests for the Remote Play helper.**
+  `sh player/native/tests/run-host-tests.sh` needs only a C compiler: it tests
+  the button mapping, the session and status files, the battery reader and the
+  motor, and runs the helper's whole `main()` against scripted fakes of SDL,
+  chiaki and FFmpeg, under ASan and UBSan
+  ([player/native/tests/run-host-tests.sh](player/native/tests/run-host-tests.sh)).
+
 ### Changed
 
-- **Startpage is the default search engine.** It serves Google's results as
-  plain HTML, so a fresh install can search Google without meeting its robot
-  check; DuckDuckGo Lite is one step away in Settings → Browser
+- **Remote Cast is now Screen Share.** The Start menu row, the panel and the
+  viewer page say Screen Share; the panel is on Home's glass with *Share*,
+  *Quality* and *Games too* rows, the link and its code, and a live line (the
+  frame rate, kB/s and picture size viewers get). **Y** makes a new link
+  without restarting the Phone Companion or changing its PIN, and in safe mode
+  or without a network the panel says why sharing cannot start instead of
+  switching on a link nothing serves ([player/castui.go](player/castui.go)).
+- **Trophies are one press from Home.** The trophy room was injected at
+  startup and so sat last in Start → Screens, where testers never found it.
+  It is now the row right under Home, with your earned count beside it
+  ("12/101"); the Apps screen lists it as a built-in app, the Tools hub tile
+  shows "12 of 101 earned", and tapping a trophy card as it pops up opens the
+  room (over an open panel the tap only puts the card away)
+  ([player/startmenu.go](player/startmenu.go),
+  [player/playtime.go](player/playtime.go), [player/apps.go](player/apps.go),
+  [player/trophy_celebrate.go](player/trophy_celebrate.go)).
+- **In a Remote Play stream, Select is the touchpad and the PS button fires
+  when Menu is let go.** Select used to send Share/Create, which games rarely
+  use, while the touchpad click (maps, inventories) had no button at all; now
+  Select is the touchpad and Menu + Select is Create, swappable. Menu sends the
+  PS button when it is released after a tap (up to about a second, nothing
+  else pressed), so that a longer hold can open the stream menu, whose **Hold
+  PS (Home)** row gives the long press; Start + Select still quits after 1.2 s
+  held, now with a bar and only when both are held on one pad. A PS5's
+  **Auto** codec is H.264 on the original Smart Pro and the Brick family,
+  whose A133P decodes in software, and H.265 only on the Smart Pro S; it used
+  to be H.265 on every handheld
+  ([player/native/stream_input.c](player/native/stream_input.c),
+  [player/psremote_stream_opts.go](player/psremote_stream_opts.go)).
+- **The startup splash became the boot's quick hello.** Opening JukaHub from
+  a launcher keeps the two-second budget, but the glass card and its list of
+  steps (unreadable in the half second a warm start left it) gave way to the
+  boot's own picture, compressed: the logo and wordmark come up, the light
+  runs round the pane, the blooms come in with the chime's bells, and Home
+  arrives card by card in under half a second, starting before the budget
+  runs out so a launch takes about as long as before. The shutdown keeps its
+  glass card. A pad that connects while the boot holds the event queue (a
+  Bluetooth pad pairing at power-on) is now handed to the main loop instead
+  of being dropped, and a start right after a reboot no longer counts as a
+  warm start (a quick power cycle skipped the greeting)
+  ([player/splash.go](player/splash.go), [player/startup.go](player/startup.go)).
+- **DuckDuckGo Lite is the default search engine and home page.** Its Lite
+  page is built for a simple browser, so a fresh install searches and opens
+  Home there; Settings → Browser still offers the other engines and pages
   ([player/browser_engines.go](player/browser_engines.go)).
 
 - **A panic no longer exits as a normal quit.** It exits with status 2 after
@@ -476,6 +1376,10 @@ For anything older, the git log and the
   call sites use it, and the race job exercises the queue
   ([player/sdlevents_test.go](player/sdlevents_test.go)).
 
+- **Contributor guide has a first-task path.** Its ten steps point contributors
+  to the backlog, the build and run commands, the project checks and how to
+  handle work that needs hardware ([CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ### Removed
 
 - **The invented "social notifications" feed is gone.** With
@@ -486,6 +1390,239 @@ For anything older, the git log and the
   ([player/social.go](player/social.go) removed).
 
 ### Fixed
+
+- **Remote Play looks for its helpers where an update puts them.** The lookup
+  only knew `/mnt/SDCARD/Apps/JukaHub/bin`, while an update unpacks a release's
+  `bin/` beside the running binary; it now looks there first. A PS5 pairing
+  checks that `chiaki-regist` loads before the handshake instead of failing at
+  "start". A failed PS4 pairing no longer turns into a PS5 error: only an
+  address no scan has identified tries the PS5 handshake after the PS4 ones,
+  and its error replaces the PS4's only when a PS5 answered and refused. On
+  Windows the panel says streaming runs on the TrimUI handhelds instead of
+  naming a missing Linux file, and a status row's footer no longer offers an A
+  that does nothing
+  ([player/psremote.go](player/psremote.go),
+  [player/psremote_regist.go](player/psremote_regist.go)).
+- **The Smart Pro has a microphone.** A comment in voice typing said it had
+  none; it has a mono one. Voice typing and Voice command both use whatever
+  capture device SDL lists, so whether it records depends on the firmware
+  routing it ([player/vkvoice.go](player/vkvoice.go),
+  [docs/VOICE.md](docs/VOICE.md)).
+- **A wallpaper picked in the picker is kept.** It was set for the session
+  only — nothing saved it — so every restart went back to the stock backdrop;
+  it is now kept in `jukauser.json` (`wallpaper`, or `none`) and put back at
+  start, and whichever came last, the pick or an experience pack's wallpaper,
+  wins. The picker also had no way back to no wallpaper, an unreadable folder
+  left it with no rows at all, keys went to the Home tiles behind it when it
+  was opened from Home, and on a PC clicks went through it to the screen
+  underneath ([player/wallpaper.go](player/wallpaper.go),
+  [player/gifwall.go](player/gifwall.go)).
+- **Watching the screen no longer stutters the handheld.** Every shared frame
+  was JPEG-encoded at full size inside the render loop — well over 100 ms a
+  frame on the A53 — for as long as anyone watched. The render loop now only
+  reads a frame back when one is due and the encoder is free, and a goroutine
+  scales and encodes it; the Phone Companion's screenshot PNG moved off the
+  render loop too ([player/castcap.go](player/castcap.go),
+  [player/companion_screen.go](player/companion_screen.go)).
+- **YouTube subtitles say "no subtitles" much less often, and say why when
+  they do.** CC asked yt-dlp for the exact code ("en"), which missed
+  `en-US`, `en-GB`, named tracks and the auto-generated original, and a
+  format check could fail the whole run. Subtitles now come from YouTube's
+  own caption list first (about a second, no helper run): a written track in
+  your language, then another region of it, then the auto-generated track,
+  then a translation YouTube makes on the fly; yt-dlp is the fallback, asked
+  for the code and its regions (without YouTube's machine translations) with
+  `--ignore-no-formats-error`, and cancelling it now stops the helper's whole
+  process group. Auto-generated captions no longer show every line twice.
+  The toast says "Getting English subtitles…" and then how it went — it used
+  to say "Subtitles on" over a download that then failed silently. Fetched
+  subtitles are cached (`subtitles/` in the data folder), so a replay or a
+  quality change shows them at once. A seek no longer cancels a running
+  fetch (and no longer left CC unable to start again), and CC stays on for
+  the next video until you turn it off — a YouTube video then brings its
+  subtitles up by itself (quietly when it has none), anything else waits for
+  a press of CC ([player/videosubs.go](player/videosubs.go),
+  [player/ytcaptions.go](player/ytcaptions.go)).
+- **Leaving JukaHub no longer puts two launchers on the TrimUI's screen.** On
+  stock and CrossMix firmware MainUI starts JukaHub's `launch.sh` through
+  `/tmp/cmd_to_run.sh` and exits, and the firmware's supervisor
+  (`runtrimui.sh`) starts MainUI again the moment the script returns. The
+  script used to start a MainUI of its own two seconds before returning, so
+  the supervisor's made two, both drawing to `/dev/fb0` — the glitchy,
+  flickering screen a tester saw every time they left JukaHub. The supervisor
+  now always gets the first go; a watcher left behind starts MainUI only if
+  none has appeared ten seconds after the script is gone (a firmware without a
+  supervisor, a start over SSH), checking once more right before it does
+  ([player/launch.sh](player/launch.sh)).
+
+- **PS Remote Play hands the screen over cleanly and brings you back to
+  JukaHub.** The stream's hand-off script had the same double-MainUI ending,
+  and passed several MainUI pids to `kill` as one quoted argument. `launch.sh`
+  now speaks a screen hand-off protocol (`jukahub-screen-handoff: 1`, exported
+  as `JUKAHUB_SCREEN_HANDOFF=1` by the running script): JukaHub leaves the
+  helper's pid in `.screen-handoff` as it quits, `launch.sh` waits for it with
+  MainUI and the firmware supervisors still stopped — a stop request during the
+  wait ends the helper's session first — and then starts JukaHub again, so
+  nothing draws over the stream and the stream ends where it started. With an
+  older `launch.sh` the script stops and restores the firmware UI itself as
+  before, without starting a second MainUI
+  ([player/psremote.go](player/psremote.go), [player/launch.sh](player/launch.sh),
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md)).
+
+- **RetroArch started from CrossMix's or the stock menu behaves as it did
+  before JukaHub.** Before a RetroArch game, JukaHub turns on the two save-state
+  switches behind Continue, points the record toggle at its Recordings folder
+  and applies the chosen OSD preset — and those edits stayed in the one global
+  `retroarch.cfg`, so after a single JukaHub launch every game started from the
+  firmware's own menu also loaded an old auto state and saved one on exit,
+  fighting CrossMix's resume and save-on-MENU features. The values now hold for
+  JukaHub's launch only: a journal in `data/` records what changed before the
+  edit, and the user's values go back when the game exits — only JukaHub's
+  keys, and only where they still hold JukaHub's value, so RetroArch's own save
+  on exit and a change made in its menu survive. A crash or power cut is
+  repaired at the next start, a launch that never started 20 s later, and the
+  first start of this version undoes what earlier versions left (from
+  `retroarch.cfg.jukahub-backup`). Each line keeps its own line ending, so a
+  config with mixed CRLF and LF lines is no longer merged into one line. The
+  OSD preset row only stores the choice now. On TrimUI cards
+  `RetroArch/retroarch.cfg`, the file beside `ra64.trimui`, is read first, and
+  a Windows core launch edits the config beside its `retroarch.exe`
+  ([player/racfgscope.go](player/racfgscope.go),
+  [player/savestate_resume.go](player/savestate_resume.go),
+  [player/recordings.go](player/recordings.go),
+  [player/osdpreset.go](player/osdpreset.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#resume-and-auto-save)).
+
+- **Games and emulators start with the firmware's environment, not
+  JukaHub's.** `launch.sh` points `HOME`, `PATH` and `LD_LIBRARY_PATH` at
+  JukaHub's folder, and every game, emulator and app inherited that: RetroArch
+  started from JukaHub loaded the stock `/usr/lib` libraries ahead of
+  CrossMix's `/mnt/SDCARD/System/lib`, and launch scripts found JukaHub's tools
+  first. `launch.sh` now records the originals (`JUKAHUB_ORIG_ENV` and
+  `JUKAHUB_ORIG_<NAME>`, set only for a variable that was set), and every
+  screen-taking child gets them back — an unset variable stays unset, and the
+  Settings time zone is kept. With an older `launch.sh` only JukaHub's own
+  folders are taken out of the paths. The Terminal, Power Tools snippets,
+  PortMaster ports, Wine and Android titles keep JukaHub's environment; LAN
+  play starts `ra64.trimui` with the firmware's environment too
+  ([player/childenv.go](player/childenv.go),
+  [player/screengroup_unix.go](player/screengroup_unix.go),
+  [player/launch.sh](player/launch.sh)).
+
+- **Local play and per-game options no longer break RetroArch on stock and
+  CrossMix launchers.** Their scripts end in `ra64.trimui … "$*"`, which joins
+  the ROM path and every option into one argument, so the player-order
+  `--appendconfig` or a game's own extra arguments turned the ROM path into a
+  file that does not exist. Those scripts now count as not forwarding options,
+  and the options are left out for them (a script that forwards with `"$@"`
+  still gets them) ([player/hotseat.go](player/hotseat.go),
+  [player/game_library.go](player/game_library.go)).
+
+- **Core updates land where RetroArch loads them, and the first one comes
+  soon.** An update replaces the active core file in its own folder (it used
+  to be copied into the first cores folder, where a core living elsewhere was
+  never loaded), cores on the firmware's read-only partition are left alone, a
+  fresh card gets its first pass after at most one 20-minute wait for a quiet
+  moment, and a pass a game interrupts resumes at the next quiet moment instead
+  of waiting a day — while one that could not finish a single core waits for
+  the next day instead of downloading again all afternoon
+  ([player/compat.go](player/compat.go),
+  [player/emulatorautoupdate.go](player/emulatorautoupdate.go)).
+
+- **No more phantom PPSSPP, mGBA and Flycast "updates" on the handheld.** The
+  compatibility panel's **L1** check no longer downloads desktop emulator
+  releases to `data/emulator-updates/` (none of them publishes a build for
+  this firmware, so nothing was ever installed); it checks the libretro cores
+  only, and JukaHub's own PPSSPP updates through its card and the daily pass
+  ([player/emulatorupdates.go](player/emulatorupdates.go)).
+
+- **The PS Remote Play panel no longer sends people to Link Device for the
+  Account-ID, and PS4 pairing asks for it too.** Link Device only shows the
+  8-digit PIN. The Account-ID row, the pairing toasts and the PS5 helper's
+  error now say where the ID really comes from, and the PIN prompt names the
+  right menu: PS5 Settings → System → Remote Play → Link Device, PS4 Settings →
+  Remote Play Connection Settings → Add Device. A PS4 on firmware 7.0 or newer
+  checks the Account-ID like a PS5, so it now gets the Account-ID card before
+  the PIN, and a refusal with reason 80108b02 says the console did not accept
+  the Account-ID instead of asking for a fresh PIN that cannot help. The README
+  no longer promises Remote Play "on the train": away from home it needs a
+  hotspot and a way back to the console (a VPN or port forwarding), which
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#playing-away-from-home) now
+  explains ([player/psremote_ui.go](player/psremote_ui.go),
+  [player/psremote_ps4.go](player/psremote_ps4.go)).
+
+- **PS Remote Play's native helpers finally ship.** No JukaHub release ever
+  contained `bin/chiaki-stream` or `bin/chiaki-regist`: the release workflow
+  packed no `bin/`, `native/build-helpers.sh` wrote `player/bin` while
+  `release.sh` and `package-sdcard.sh` read `native/bin`, and nothing in CI
+  built them, so the Remote Play panel said "Helper missing" on every handheld.
+  A new `remote-play-helpers` workflow builds both natively on an arm64 runner
+  inside a signature-verified Ubuntu 20.04 root (glibc 2.31; the Smart Pro has
+  2.33), links FFmpeg (the H.264 and HEVC decoders only), opus, json-c and
+  OpenSSL statically, leaves only SDL2 and the C library to the firmware, and
+  refuses the result if anything else is needed, if a symbol needs a newer
+  glibc, or if a binary does not start. `JukaHub-Trimui.zip`, the `v*` release
+  archives and the SD-card package now carry them in `Apps/JukaHub/bin/`; a
+  failed helper build costs that run its helpers, never its release
+  ([.github/workflows/remote-play-helpers.yml](.github/workflows/remote-play-helpers.yml),
+  [player/native/build-helpers.sh](player/native/build-helpers.sh),
+  [docs/BUILDING.md](docs/BUILDING.md)).
+
+- **Two stream-helper bugs that ended streams.** With the built-in pad the
+  helper read Menu and L3 (raw buttons 8 and 9 of the firmware's X360 mapping)
+  as Select and Start for its quit combo, so holding Menu + L3 could end a
+  stream and letting go of Menu forgot a held Select; only the pad's own Start
+  and Select count now. And a PS5 paired with the generic PS5 target (1000000)
+  was refused with "protocol/target mismatch" before it connected
+  ([player/native/chiaki-stream.c](player/native/chiaki-stream.c)).
+
+- **Remote Play's PIN fields open on the digits, and the helpers run without
+  their execute bit.** The 8-digit pairing PIN and the 4-digit login passcode
+  open the keyboard on its number layer, and Play and PS5 pairing set the
+  helpers' execute bit first: a copy that dropped it made both fail with
+  "permission denied"
+  ([player/psremote_stream_opts.go](player/psremote_stream_opts.go),
+  [player/psremote_ui.go](player/psremote_ui.go)).
+
+- **The TrimUI firmware keeps hearing its settings file.** JukaHub's writes to
+  `/mnt/UDISK/system.json` (the volume's `"vol"` since the volume button, now
+  the brightness too) replaced the file with a new one renamed over it. The
+  firmware's keymon watches that file with inotify, and a watch on a file
+  that is renamed over is lost, so the firmware could stop noticing the file
+  — its own later changes included — until a reboot. The file is now
+  rewritten in place on the same inode, padded with spaces when it got
+  shorter so no stale tail is left, and a file that does not parse (the
+  firmware half-way through writing it) is retried instead of being taken as
+  "nothing to change"
+  ([player/brightness_trimui.go](player/brightness_trimui.go),
+  [player/volume_trimui.go](player/volume_trimui.go)).
+
+- **Files' action sheet: a held key no longer confirms what it armed.** Holding
+  Enter used to repeat into the second press of **Delete**; repeats are ignored
+  now. The sheet's details (file names) are shortened to the room the label
+  leaves instead of running under it, and the system-folder confirmation names
+  the keyboard's key when that is what is in use
+  ([player/files_manager.go](player/files_manager.go)).
+
+- **"Start JukaHub at login" now really boots a TrimUI into JukaHub.** The
+  boot hook waited for the stock menu and ran `launch.sh`, which paused the
+  firmware's launcher loop and killed MainUI. With its parent paused, the
+  killed MainUI stays a zombie, busybox `pidof` keeps listing it, and
+  `launch.sh` gave up after eight kills ("MainUI still holds the display")
+  without starting JukaHub, so every boot ended on the stock menu. The hook
+  now starts JukaHub the way the stock menu starts an app: it queues it in
+  `/tmp/cmd_to_run.sh` and closes the menu once it is up, and the firmware's
+  loop runs it with its own environment and services and brings the menu back
+  when JukaHub exits (a firmware that reads the queue first starts JukaHub
+  without showing the menu at all). The hook is safe when the firmware sources
+  its boot scripts, starts JukaHub at most once per boot, steps aside when
+  another app or a CrossMix resume is queued, and a start that hangs makes the
+  next boot stay on the stock menu once instead of locking the device up.
+  A card with the old hook gets the new one the next time JukaHub starts,
+  `launch.sh` no longer counts a zombie MainUI as running, and
+  `Apps/JukaHub/autostart.log` says what happened at each boot
+  ([player/autostart.go](player/autostart.go), [player/launch.sh](player/launch.sh),
+  [player/trimui/README.md](player/trimui/README.md#starting-automatically-at-boot)).
 
 - **A tag with a stray quote no longer freezes a page load.** The reader's
   attribute scanners stopped advancing on a `>` that a quote had pulled into a
@@ -974,6 +2111,34 @@ For anything older, the git log and the
   by [tests/scripts/go-build-cache.test.sh](tests/scripts/go-build-cache.test.sh)
   in `make test-scripts` and in CI).
 
+- **The TrimUI release build is fast too.** The handheld job rebuilt zlib,
+  libpng, libjpeg, bzip2, libtiff and libwebp from source on every release
+  (leftovers of a fully static link given up in January 2025, which the
+  dynamic link never used), ran `go mod tidy`, and compiled everything from
+  nothing in the toolchain container. The compile is now its own job,
+  `build-trimui`, which starts at once: it pulls the same pinned image while
+  `go mod download` and the previous release's build cache download beside it
+  (the Windows job's provenance-checked artifact cache, named after the image
+  digest), then compiles in the image through `docker run` with no network
+  and the runner's Go and both Go caches mounted at their own paths, so a
+  release normally compiles only the player. The binary is linked with
+  `-s -w`, which also shrinks the download, and a new check refuses one the
+  handhelds could not start: not AArch64, another loader, no SDL2 from the
+  firmware, or a glibc symbol newer than 2.33. Packaging is a short job that
+  waits for the compile, the tag and the Remote Play helpers, instead of the
+  compile waiting a quarter of an hour for the helpers, and the helpers are
+  reused from an earlier push-to-main run whenever nothing they are built from
+  changed (`go-build-cache.sh fetch`, under the same provenance rules). The
+  same script builds the binary locally on Linux or WSL 2 with Docker, and the
+  SD-card workflow now caches the Go folders it actually uses
+  ([.github/workflows/docker-image.yml](.github/workflows/docker-image.yml),
+  [.github/scripts/trimui-build.sh](.github/scripts/trimui-build.sh),
+  [.github/workflows/remote-play-helpers.yml](.github/workflows/remote-play-helpers.yml),
+  [.github/workflows/build-sdcard.yml](.github/workflows/build-sdcard.yml);
+  tested by [tests/scripts/trimui-build.test.sh](tests/scripts/trimui-build.test.sh)
+  and [tests/scripts/go-build-cache.test.sh](tests/scripts/go-build-cache.test.sh)
+  in `make test-scripts` and in CI).
+
 - **staticcheck is clean again.** An unconditional `strings.TrimSuffix`
   (S1017), a struct conversion instead of a field-by-field literal (S1016), a
   merged declaration (S1021) and a `delete` without its redundant guard (S1033)
@@ -1106,8 +2271,63 @@ For anything older, the git log and the
   which needs no key ([player/ytoembed.go](player/ytoembed.go),
   [player/browser_youtube.go](player/browser_youtube.go)).
 
+- **Remote Play says why its helper cannot run, before JukaHub quits.**
+  Starting a stream hands the screen to `chiaki-stream` and quits JukaHub; a
+  helper the firmware's loader refuses (linked against a newer glibc than the
+  handheld's, a missing library, another processor) failed only after that,
+  with one line in `psremote.log`. The helper is checked first now: the ELF
+  reading the core installer uses, then one start with no arguments in the
+  hand-off's library path (it exits with its usage before it touches the
+  screen), with immediate symbol binding so a missing SDL function shows too;
+  the check runs as the panel opens, so Play does not wait for it. A refusal
+  stays in the panel as "Could not start Remote Play — the helper won't run
+  here: …", naming what is missing
+  ([player/psremote_preflight.go](player/psremote_preflight.go),
+  [player/psremote.go](player/psremote.go); tests in
+  [player/psremote_preflight_test.go](player/psremote_preflight_test.go)).
+
+- **Starting a stream reset Quality and Volume and erased the PSN Account-ID.**
+  A on a console closed the panel before the stream was started, and closing
+  it cleared the panel's state: the stream ran at the default 720p30 whatever
+  Quality said, and the settings saved as it started were the cleared ones —
+  Quality 0, Volume 0 and an empty Account-ID, which the next PS5 pairing then
+  asked for again. The panel now closes once the stream is under way, after
+  the real settings are saved, and `psremote.json` writes are serialised so
+  a scan that moves a console cannot overwrite a pairing saved at the same
+  moment ([player/psremote_ui.go](player/psremote_ui.go),
+  [player/psremote.go](player/psremote.go)).
+
+- **A console that got a new address from the router kept its pairing on the
+  old one.** Discovery now reads the console's MAC (`host-id`), and a scan
+  that finds a paired console at a new address moves the pairing there, keys
+  included; a console added by host name keeps its name
+  ([player/psremote_wake.go](player/psremote_wake.go),
+  [player/psremote_discovery.go](player/psremote_discovery.go)).
+
+- **Embedded subtitle extraction is bounded.** ffmpeg output stops after
+  one byte beyond 8 MiB; an over-limit track kills the helper and is rejected,
+  keeping long subtitle streams from growing memory without bound
+  ([player/videosubs.go](player/videosubs.go)).
+- **Native YouTube client cooldowns survive restarts.** Bot-check and CDN-refusal
+  cooldowns are saved in the shared cache with a client-version key and their
+  remaining time-to-live; a newer version starts with a fresh record
+  ([player/youtubenative.go](player/youtubenative.go)).
+
 ### Security
 
+- **The Screen Share link is view-only.** It used to carry the Phone
+  Companion's PIN, which also unlocks the keyboard, the remote and uploads, so
+  "a picture only" was not true. It now carries its own 80-bit token, kept in
+  `jukauser.json` (`castToken`, redacted from exported configs) so a TV's
+  bookmark survives restarts; **Y** replaces it and the old link stops at once,
+  even for a viewer waiting on its next frame. Token requests never reset the
+  PIN's wrong-guess lockout, and wrong tokens count toward it. The pairing
+  code — Home's header QR, the pairing card, and the Screen Share panel's own
+  code and link — is painted over in the shared picture, no frames go out
+  while an enlarged QR is on screen, and the setup checklist hides the pairing
+  PIN while sharing is on
+  ([player/companion_cast.go](player/companion_cast.go),
+  [player/castcap.go](player/castcap.go)).
 - **Page scripts are kept off the handheld and the LAN, and away from other
   sites' cookies.** The requests a page's JavaScript makes — `fetch`,
   `XMLHttpRequest`, the scripts and modules it loads — cannot reach this device

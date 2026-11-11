@@ -12,27 +12,49 @@ import (
 	"time"
 )
 
+// The default is Install automatically since 2026-11-10. Every explicit choice
+// survives that — an old switch flipped either way, a mode picked with the
+// marker beside it — and only what nobody chose follows the new default,
+// including the "notify" LIB-16 stored for users who never picked one.
 func TestCoreUpdateModeMigratesTheOldSwitch(t *testing.T) {
 	cases := []struct {
 		name   string
 		custom map[string]interface{}
 		want   coreUpdateMode
 	}{
-		{"nothing stored: the new default", nil, coreUpdateNotify},
+		{"nothing stored: the new default", nil, coreUpdateInstall},
 		{"explicit off stays off", map[string]interface{}{"emuAutoUpdate": false}, coreUpdateOff},
 		{"explicit on was chosen", map[string]interface{}{"emuAutoUpdate": true}, coreUpdateInstall},
 		{"off as text", map[string]interface{}{"emuAutoUpdate": "off"}, coreUpdateOff},
 		{"on as text", map[string]interface{}{"emuAutoUpdate": "true"}, coreUpdateInstall},
 		{"zero from JSON", map[string]interface{}{"emuAutoUpdate": 0.0}, coreUpdateOff},
-		{"the mode wins", map[string]interface{}{"coreUpdateMode": "notify", "emuAutoUpdate": true}, coreUpdateNotify},
+		{"unchosen notify (what LIB-16 stored) is the default", map[string]interface{}{"coreUpdateMode": "notify", "emuAutoUpdate": false}, coreUpdateInstall},
+		{"chosen notify stays notify", map[string]interface{}{"coreUpdateMode": "notify", "coreUpdateModeChosen": true}, coreUpdateNotify},
+		{"chosen notify as text", map[string]interface{}{"coreUpdateMode": "notify", "coreUpdateModeChosen": "true"}, coreUpdateNotify},
+		{"the mode wins over the switch", map[string]interface{}{"coreUpdateMode": "off", "emuAutoUpdate": true}, coreUpdateOff},
 		{"install mode", map[string]interface{}{"coreUpdateMode": "install"}, coreUpdateInstall},
-		{"off mode", map[string]interface{}{"coreUpdateMode": "off", "emuAutoUpdate": true}, coreUpdateOff},
-		{"unknown mode, no switch", map[string]interface{}{"coreUpdateMode": "bogus"}, coreUpdateNotify},
+		{"unknown mode, no switch", map[string]interface{}{"coreUpdateMode": "bogus"}, coreUpdateInstall},
 		{"unknown mode, switch off", map[string]interface{}{"coreUpdateMode": "bogus", "emuAutoUpdate": false}, coreUpdateOff},
 	}
 	for _, c := range cases {
 		if got := coreUpdateModeFrom(c.custom); got != c.want {
 			t.Errorf("%s: got %s, want %s", c.name, got.key(), c.want.key())
+		}
+	}
+	migrate := []struct {
+		custom map[string]interface{}
+		want   bool
+	}{
+		{map[string]interface{}{"coreUpdateMode": "notify"}, true},
+		{map[string]interface{}{"coreUpdateMode": "notify", "coreUpdateModeChosen": true}, false},
+		{map[string]interface{}{"coreUpdateMode": "install"}, false},
+		{map[string]interface{}{"coreUpdateMode": "off"}, false},
+		{map[string]interface{}{"emuAutoUpdate": false}, false},
+		{nil, false},
+	}
+	for _, c := range migrate {
+		if got := coreUpdateModeNeedsMigration(c.custom); got != c.want {
+			t.Errorf("needs migration %v = %v, want %v", c.custom, got, c.want)
 		}
 	}
 	for _, m := range coreUpdateModes {

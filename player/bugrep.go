@@ -7,13 +7,21 @@ package main
 // report and the recent log, both redacted — a Preview that shows exactly what
 // would be sent, and Submit. Where it goes and what happens when the handheld
 // cannot reach it is bugrepsend.go's job; this file is the form and the sheets
-// that report the outcome: "Sent · reference JH-…", "Queued", "Set the date
-// and time first", or the phone path with a QR code when this build has no
-// collector.
+// that report the outcome: "Sent · issue #… · reference JH-…", "Queued", "Set
+// the date and time first", or — only when the device cannot send it itself —
+// the phone path with a QR code.
+//
+// Submit used to end on that QR code every time: no build carried a collector,
+// so a tester had to finish every report on a phone signed in to GitHub. Every
+// build now sends to the JukaHub report service (bugrepDefaultEndpoint), which
+// files the report as a GitHub issue; the phone is the fallback.
 
 import (
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/skip2/go-qrcode"
 	"github.com/veandco/go-sdl2/sdl"
@@ -30,9 +38,36 @@ type bugrepScreenState struct {
 	descWrap tbxWrapCache
 	note     string
 	noteAt   time.Time
+	// draftRef is the reference of the report being written, made once per
+	// draft (bugrepDraftRef) so the preview names the reference it is sent
+	// with; a report that left (or was queued) starts a new one. draftAt is
+	// the draft's "Created" time, pinned the same way: the preview shows the
+	// time the report is sent with, and a second Submit of the same draft
+	// (after an answer that never came) is the same report to the collector,
+	// which recognises it as a duplicate instead of filing it twice.
+	draftRef string
+	draftAt  time.Time
 }
 
 var bugrepScreen = bugrepScreenState{form: bugrepForm{Category: -1, Diagnostics: true, Log: true}}
+
+// bugrepEntryName is Report a bug's row in Start → Device.
+const bugrepEntryName = "Report a bug"
+
+// bugrepQuickTitle is the title a report gets when nothing was typed: a report
+// is one press from the form (Submit, or Y then Send), and what the device
+// knows — its diagnostics and recent log — is the report. The collector wants
+// a title or a description, and "Other problem" would say less than this.
+func bugrepQuickTitle(form bugrepForm) string {
+	cat := "Quick report"
+	if form.Category >= 0 && form.Category < len(bugrepCategories) && bugrepCategories[form.Category] != "Other" {
+		cat = "Quick " + strings.ToLower(bugrepCategories[form.Category]) + " report"
+	}
+	if name := strings.TrimSpace(deviceDisplayName(DetectDevice())); name != "" {
+		return cat + " from " + name
+	}
+	return cat
+}
 
 // bugrepOpenScreen opens Report a bug. Cross-area contract: the Tools hub, the
 // Community card and Security & trust call it.
@@ -74,7 +109,7 @@ func bugrepRenderScreen(renderer *sdl.Renderer, config *Config) {
 	endpoint := bugrepEndpointURL()
 	status := "Sent through your phone"
 	if endpoint != "" {
-		status = "Anonymous"
+		status = "Sent from this device"
 	}
 	if n := bugrepOutboxCount(); n > 0 {
 		status += " · " + bugrepQueuedLabel(n)
@@ -155,18 +190,23 @@ func bugrepRenderScreen(renderer *sdl.Renderer, config *Config) {
 	submit := sdl.Rect{X: x + w - sw, Y: y, W: sw, H: 52}
 	tbxDrawButton(renderer, config, fonts.body, scr(submit), label, true, nav.focused("submit"), bugrepScreen.sending)
 	nav.add("submit", submit, row, bugrepScreen.sending)
-	where := "Goes to the JukaHub report collector without your name or address."
-	if endpoint == "" {
-		where = "This build has no report collector: Submit shows a code your phone opens as a GitHub issue."
-	}
+	where := bugrepWhereLine(endpoint, bugrepOutboxCount() > 0 && bugrepOutboxStopped())
 	if bugrepScreen.note != "" && time.Since(bugrepScreen.noteAt) < 8*time.Second {
 		where = bugrepScreen.note
 	}
-	lines := bugrepScreen.wrap.get(fonts.small, where, submit.X-x-24)
-	ly := top + y + (52-int32(len(lines))*(fonts.smallH+2))/2
-	for i, line := range lines {
-		if i >= 2 {
-			break
+	whereW := submit.X - x - 24
+	lines := bugrepScreen.wrap.get(fonts.small, where, whereW)
+	shown := len(lines)
+	if shown > 2 {
+		shown = 2
+	}
+	ly := top + y + (52-int32(shown)*(fonts.smallH+2))/2
+	for i := 0; i < shown; i++ {
+		line := lines[i]
+		if i == shown-1 && len(lines) > shown {
+			// At a large text size the line runs longer than two rows: its
+			// end is marked as cut instead of silently dropped.
+			line = ellipsize(fonts.small, line+" …", whereW)
 		}
 		renderText(renderer, config, fonts.small, line, ColorTextMuted(), x+4, ly)
 		ly += fonts.smallH + 2
@@ -186,6 +226,85 @@ func bugrepQueuedLabel(n int) string {
 		return "1 queued"
 	}
 	return sectrustItoa(int32(n)) + " queued"
+}
+
+// bugrepWhereLine is the line beside Submit: where the report goes, for the
+// collector at endpoint ("" when the build has none). waiting is true while
+// queued reports wait for a collector that is not answering. Only the JukaHub
+// report service is promised to file a public GitHub issue; a collector the
+// environment, the config, the build or the telemetry setting chose is named
+// by its host, because what it does with a report is not this app's to say.
+func bugrepWhereLine(endpoint string, waiting bool) string {
+	switch {
+	case endpoint == "":
+		return "This build has no report service: Submit shows a code your phone opens as a GitHub issue."
+	case waiting:
+		return bugrepCapital(bugrepServiceName(endpoint)) + " is not answering right now; queued reports go out on " +
+			"the next start. Submit offers your phone or a later try."
+	case bugrepIsDefaultEndpoint(endpoint):
+		return "Sent from this device to the JukaHub report service, which files it as a public GitHub issue — " +
+			"not under your name, and without your address."
+	}
+	return "Sent from this device to " + bugrepServiceName(endpoint) + ", which this build or its settings name."
+}
+
+// bugrepWhereText is the preview's opening section: where what follows goes.
+func bugrepWhereText(endpoint string) string {
+	switch {
+	case endpoint == "":
+		return "## Where it goes\nThis build has no report service: Submit shows a code your phone opens as a " +
+			"prefilled GitHub issue, and you send it from there.\n\n"
+	case bugrepIsDefaultEndpoint(endpoint):
+		return "## Where it goes\nStraight from this device to the JukaHub report service, which files it as a " +
+			"public issue on JukaHub's GitHub for anyone to read. It is not filed under your name, and your " +
+			"address is not part of it. No phone or account is needed.\n\n"
+	}
+	return "## Where it goes\nStraight from this device to " + bugrepServiceName(endpoint) + ", which this build or " +
+		"its settings name instead of the JukaHub report service. What happens to the report there is up to " +
+		"whoever runs it.\n\n"
+}
+
+// bugrepCapital starts s with a capital letter, for a phrase that opens a
+// sentence ("the JukaHub report service is …").
+func bugrepCapital(s string) string {
+	r, size := utf8.DecodeRuneInString(s)
+	if size == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[size:]
+}
+
+// bugrepSentence turns an error into a sentence for a sheet: its first line,
+// capitalised, with a full stop.
+func bugrepSentence(s string) string {
+	s = strings.TrimSpace(firstLine(s))
+	if s == "" {
+		return ""
+	}
+	s = bugrepCapital(s)
+	if !strings.HasSuffix(s, ".") {
+		s += "."
+	}
+	return s
+}
+
+// bugrepDraftRef is the reference of the report being written: made once per
+// draft, so the preview shows the reference the report is then sent with.
+// bugrepFormDone starts the next draft with a new one.
+func bugrepDraftRef() string {
+	if !bugrepRefValid(bugrepScreen.draftRef) {
+		bugrepScreen.draftRef = bugrepNewRef()
+	}
+	return bugrepScreen.draftRef
+}
+
+// bugrepDraftTime is the draft's "Created" time, made with its first preview
+// or Submit and kept until bugrepFormDone starts the next draft.
+func bugrepDraftTime() time.Time {
+	if bugrepScreen.draftAt.IsZero() {
+		bugrepScreen.draftAt = time.Now()
+	}
+	return bugrepScreen.draftAt
 }
 
 // bugrepDrawChip draws one category chip: a glass pill, accent-filled when
@@ -353,14 +472,27 @@ func bugrepActivate(config *Config, id string) {
 		PlayNavSound()
 	case id == "preview":
 		PlayActivateSound()
-		r := bugrepBuild(config, *form, time.Now())
+		preview := *form
+		if strings.TrimSpace(preview.Title) == "" && strings.TrimSpace(preview.Description) == "" &&
+			(preview.Diagnostics || preview.Log) {
+			// The title Submit would give it, so the preview is still exactly
+			// what is sent.
+			preview.Title = bugrepQuickTitle(preview)
+		}
+		r := bugrepBuild(config, preview, bugrepDraftTime())
+		r.ID = bugrepDraftRef()
+		// Send is the sheet's first button and starts focused: Y then A is a
+		// report from anywhere on the form, after seeing what it holds.
 		tbxOpenSheet(config, tbxSheetSpec{
 			title:    "What will be sent",
 			subtitle: "Exactly this, nothing else",
 			icon:     "info",
-			body:     bugrepPreviewText(r),
+			body:     bugrepWhereText(bugrepEndpointURL()) + bugrepPreviewText(r),
 			tall:     true,
-			buttons:  []tbxSheetButton{{label: "Close", primary: true}},
+			buttons: []tbxSheetButton{
+				{label: "Send", primary: true, run: func() { bugrepSubmit(config) }},
+				{label: "Close"},
+			},
 		})
 	case id == "submit":
 		bugrepSubmit(config)
@@ -375,26 +507,34 @@ func bugrepSubmit(config *Config) {
 	}
 	form := bugrepScreen.form
 	if strings.TrimSpace(form.Title) == "" && strings.TrimSpace(form.Description) == "" {
-		ShowToast("Add a title or a description first", ToastKindWarning)
-		bugrepScreen.nav.setFocus("title")
-		return
+		// Nothing typed: the device's own diagnostics and log are the report,
+		// under a title that says so — typing on a handheld is what kept a
+		// report from being one press. With both switched off there is
+		// nothing to send at all.
+		if !form.Diagnostics && !form.Log {
+			ShowToast("Add a title or a description, or include the diagnostics", ToastKindWarning)
+			bugrepScreen.nav.setFocus("title")
+			return
+		}
+		form.Title = bugrepQuickTitle(form)
 	}
 	if form.Category < 0 {
 		form.Category = len(bugrepCategories) - 1
 	}
-	r := bugrepBuild(config, form, time.Now())
+	r := bugrepBuild(config, form, bugrepDraftTime())
+	r.ID = bugrepDraftRef()
 	endpoint := bugrepEndpointURL()
 	if endpoint == "" {
 		PlayActivateSound()
-		bugrepPhoneSheet(config, r, "")
+		bugrepPhoneSheet(config, r, "", false)
 		return
 	}
 	if bugrepClockWrong(time.Now()) {
-		bugrepHold(config, r, true)
+		bugrepHold(config, r, bugrepHoldClock)
 		return
 	}
 	if !IsOnline() {
-		bugrepHold(config, r, false)
+		bugrepHold(config, r, bugrepHoldOffline)
 		return
 	}
 	// The report goes straight to the collector and only lands in the outbox
@@ -403,41 +543,107 @@ func bugrepSubmit(config *Config) {
 	bugrepScreen.sending = true
 	PlayActivateSound()
 	go func() {
-		ref, kind, err := bugrepPostFunc(endpoint, r)
+		sent, kind, err := bugrepPostFunc(endpoint, r)
 		tbxPost(func() {
 			bugrepScreen.sending = false
 			away := tbxCurrentScene(config) != bugrepSceneName
 			switch {
 			case err == nil:
 				bugrepFormDone()
+				// The collector works, so anything that waited for it goes now.
+				bugrepCollectorAnswered(endpoint)
 				if away {
-					ShowToast("Bug report sent · reference "+ref, ToastKindSuccess)
+					ShowToast(bugrepSentToast(sent), ToastKindSuccess)
 					return
 				}
-				bugrepSentSheet(config, ref)
+				bugrepSentSheet(config, sent)
 			case kind == bugrepErrClock:
-				bugrepHold(config, r, true)
-			case kind == bugrepErrTrust:
+				if !bugrepClockWrong(time.Now()) {
+					// A certificate that only looks expired cost a request.
+					bugrepNoteSendFailed(time.Now())
+				}
+				bugrepHold(config, r, bugrepHoldClock)
+			case kind == bugrepErrUnavailable:
+				bugrepCollectorUnavailable()
 				if away {
-					ShowToast("Bug report not sent — open Report a bug to send it from your phone", ToastKindWarning)
+					// Nothing on screen can show the code, so the report is
+					// kept and tried again on the next start.
+					bugrepHold(config, r, bugrepHoldService)
 					return
 				}
-				bugrepPhoneSheet(config, r, "This firmware cannot check the report server's certificate, so the report goes through your phone instead.")
+				bugrepPhoneSheet(config, r, bugrepCapital(bugrepServiceName(endpoint))+" is not answering right now. "+
+					"Send the report from your phone with the code, or choose Send later to keep it on this device and "+
+					"send it on the next start.", true)
+			case kind == bugrepErrTrust:
+				// The outbox would meet the same certificate, so it waits for
+				// the next start too.
+				bugrepCollectorUnavailable()
+				if away {
+					bugrepHold(config, r, bugrepHoldTrust)
+					return
+				}
+				bugrepPhoneSheet(config, r, "This firmware cannot check the report server's certificate, so the report goes through your phone instead.", false)
 			case kind == bugrepErrRejected:
-				ShowToast(firstLine(err.Error()), ToastKindError)
+				// A refusal retires nothing here: the words are kept as a copy
+				// on the device, and the phone can still send them.
+				if away {
+					// Said as saved only when the copy really was written.
+					msg := "Bug report not sent: " + firstLine(err.Error())
+					if _, cerr := bugrepSaveCopy(r); cerr == nil {
+						msg += " — a copy is saved on this device"
+					} else {
+						msg += " — open Report a bug to send it from your phone"
+					}
+					ShowToast(msg, ToastKindError)
+					return
+				}
+				bugrepPhoneSheet(config, r, bugrepSentence(err.Error())+" You can still send it from your phone with the code.", false)
+			case kind == bugrepErrServer:
+				bugrepNoteSendFailed(time.Now())
+				bugrepHold(config, r, bugrepHoldBusy)
 			default:
-				bugrepHold(config, r, false)
+				bugrepNoteSendFailed(time.Now())
+				bugrepHold(config, r, bugrepHoldOffline)
 			}
 		})
 	}()
 }
+
+// bugrepSentToast is the confirmation when the user left the screen before the
+// answer came.
+func bugrepSentToast(sent bugrepSent) string {
+	if sent.Issue > 0 {
+		return "Bug report sent · issue #" + strconv.Itoa(sent.Issue)
+	}
+	return "Bug report sent · reference " + sent.Ref
+}
+
+// bugrepHoldWhy is why a report waits in the outbox, which decides what the
+// user is told about when it goes out.
+type bugrepHoldWhy int
+
+const (
+	// bugrepHoldOffline: no network; it goes when JukaHub is online again.
+	bugrepHoldOffline bugrepHoldWhy = iota
+	// bugrepHoldClock: the clock is wrong; it goes once the date is set.
+	bugrepHoldClock
+	// bugrepHoldService: the report service is not answering; it is tried
+	// again on the next start.
+	bugrepHoldService
+	// bugrepHoldBusy: the report service answered but is busy or failing
+	// (429, 5xx); the outbox retries it with its backoff.
+	bugrepHoldBusy
+	// bugrepHoldTrust: this firmware cannot check the service's certificate;
+	// it waits for the next start, and a readable copy is saved as well.
+	bugrepHoldTrust
+)
 
 // bugrepHold keeps a report that cannot go out now in the outbox, to be sent
 // on its own later, and says so — as a sheet on this screen, or a toast when
 // the user has moved on. When the outbox cannot be written either (no data
 // folder, a read-only card), the form is kept and the phone path is offered,
 // so a report is never announced as saved when it is not.
-func bugrepHold(config *Config, r bugrepReport, clock bool) {
+func bugrepHold(config *Config, r bugrepReport, why bugrepHoldWhy) {
 	away := tbxCurrentScene(config) != bugrepSceneName
 	if err := bugrepQueue(r); err != nil {
 		logPatch("[bugreport] cannot queue %s: %v", r.ID, err)
@@ -445,51 +651,111 @@ func bugrepHold(config *Config, r bugrepReport, clock bool) {
 			ShowToast("The bug report could not be saved — open Report a bug to send it from your phone", ToastKindError)
 			return
 		}
-		bugrepPhoneSheet(config, r, "The report could not be saved on this device for later, so it goes through your phone instead.")
+		bugrepPhoneSheet(config, r, "The report could not be saved on this device for later, so it goes through your phone instead.", false)
 		return
+	}
+	copied := false
+	if why == bugrepHoldTrust {
+		// The queued copy may wait a long time on this firmware: a readable
+		// one goes next to the other support reports as well — and is only
+		// mentioned when it was written.
+		_, cerr := bugrepSaveCopy(r)
+		copied = cerr == nil
 	}
 	bugrepFormDone()
 	switch {
-	case away && clock:
+	case away && why == bugrepHoldClock:
 		ShowToast("Bug report saved — set the date and time so it can be sent", ToastKindWarning)
+	case away && why == bugrepHoldService:
+		ShowToast("Bug report saved — the report service is not answering, so it is sent on the next start", ToastKindInfo)
+	case away && why == bugrepHoldBusy:
+		ShowToast("Bug report queued — the report service is busy, so it is sent in a little while", ToastKindInfo)
+	case away && why == bugrepHoldTrust && copied:
+		ShowToast("Bug report saved, not sent — this firmware cannot check the report server; a copy is in the Patch reports folder", ToastKindWarning)
+	case away && why == bugrepHoldTrust:
+		ShowToast("Bug report saved, not sent — this firmware cannot check the report server", ToastKindWarning)
 	case away:
 		ShowToast("Bug report queued — it is sent when JukaHub is online", ToastKindInfo)
-	case clock:
+	case why == bugrepHoldClock:
 		bugrepClockSheet(config)
 	default:
-		bugrepQueuedSheet(config, r.ID)
+		bugrepQueuedSheet(config, r.ID, why, copied)
 	}
 }
 
-// bugrepFormDone clears the form after a report left (or was queued).
+// bugrepFormDone clears the form after a report left (or was queued), and
+// starts the next draft with a new reference.
 func bugrepFormDone() {
 	bugrepScreen.form.Title = ""
 	bugrepScreen.form.Description = ""
 	bugrepScreen.form.Category = -1
 	bugrepScreen.touched = false
 	bugrepScreen.nav.focus = "cat:0"
+	bugrepScreen.draftRef = ""
+	bugrepScreen.draftAt = time.Time{}
 }
 
-func bugrepSentSheet(config *Config, ref string) {
+// bugrepSentSheet thanks the user and names what the report became: the issue
+// number when the report service filed one, and the reference either way. The
+// issue's code is there for anyone who wants to follow it on a phone; nothing
+// else needs doing.
+func bugrepSentSheet(config *Config, sent bugrepSent) {
 	PlaySuccessSound()
-	tbxOpenSheet(config, tbxSheetSpec{
+	subtitle := "Reference " + sent.Ref
+	var body strings.Builder
+	if sent.Issue > 0 {
+		number := strconv.Itoa(sent.Issue)
+		subtitle = "Issue #" + number + " · reference " + sent.Ref
+		body.WriteString("## Filed as issue #" + number + "\n" +
+			"It is public on JukaHub's GitHub, where anyone can read it and add to it. You do not need to do anything else.\n\n")
+	}
+	body.WriteString("## Your reference\n" + sent.Ref + "\n\n" +
+		"Mention it if you talk to us about this problem — on GitHub or Discord — so the report can be found.")
+	spec := tbxSheetSpec{
 		title:    "Thank you — report sent",
-		subtitle: "Reference " + ref,
+		subtitle: subtitle,
 		icon:     "check",
-		body: "## Your reference\n" + ref + "\n\n" +
-			"Mention it if you talk to us about this problem — on GitHub or Discord — so the report can be found.",
-		buttons: []tbxSheetButton{{label: "Done", primary: true}},
-	})
+		body:     body.String(),
+		buttons:  []tbxSheetButton{{label: "Done", primary: true}},
+	}
+	if sent.URL != "" {
+		if code, err := qrcode.New(sent.URL, qrcode.Low); err == nil {
+			spec.qr = code.Bitmap()
+			spec.qrLabel = "Optional: scan to follow it on your phone"
+		}
+	}
+	tbxOpenSheet(config, spec)
 }
 
-func bugrepQueuedSheet(config *Config, ref string) {
+// bugrepQueuedSheet says the report waits on this device, and what for: the
+// network, a report service that is not answering, one that is busy, or a
+// certificate this firmware cannot check. copied says whether a readable copy
+// was saved next to the support reports (the certificate case writes one).
+func bugrepQueuedSheet(config *Config, ref string, why bugrepHoldWhy, copied bool) {
+	body := "There is no connection to the report service right now. The report is saved on this device and is sent " +
+		"automatically the next time JukaHub is online — you do not need to do anything."
+	switch why {
+	case bugrepHoldService:
+		body = "The report service is not answering right now. The report is saved on this device and JukaHub " +
+			"sends it on its own after the next start — you do not need to do anything."
+	case bugrepHoldBusy:
+		body = "The report service is busy right now. The report is saved on this device and is sent automatically " +
+			"in a little while — you do not need to do anything."
+	case bugrepHoldTrust:
+		body = "This firmware cannot check the report server's certificate, so the report could not be sent. It is " +
+			"saved on this device and JukaHub tries again after the next start."
+		if copied {
+			body = "This firmware cannot check the report server's certificate, so the report could not be sent. It is " +
+				"saved on this device, with a readable copy in the Patch reports folder, and JukaHub tries again after " +
+				"the next start."
+		}
+	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title:    "Queued",
 		subtitle: "Reference " + ref,
 		icon:     "upload",
-		body: "There is no connection to the report service right now. The report is saved on this device and is sent " +
-			"automatically the next time JukaHub is online — you do not need to do anything.",
-		buttons: []tbxSheetButton{{label: "Done", primary: true}},
+		body:     body,
+		buttons:  []tbxSheetButton{{label: "Done", primary: true}},
 	})
 }
 
@@ -505,10 +771,12 @@ func bugrepClockSheet(config *Config) {
 	})
 }
 
-// bugrepPhoneSheet is the no-collector path: a QR code that opens a prefilled
-// GitHub issue on a phone, the full report saved on the device, and — on a
-// desktop — the same issue in the browser.
-func bugrepPhoneSheet(config *Config, r bugrepReport, why string) {
+// bugrepPhoneSheet is the path for a report the device cannot send itself: a
+// QR code that opens a prefilled GitHub issue on a phone, the full report saved
+// on the device, and — on a desktop — the same issue in the browser. later
+// adds "Send later", which keeps the report in the outbox instead (for a
+// report service that is only not answering right now).
+func bugrepPhoneSheet(config *Config, r bugrepReport, why string, later bool) {
 	link := bugrepIssueURL(r, 900)
 	var modules [][]bool
 	if code, err := qrcode.New(link, qrcode.Low); err == nil {
@@ -545,6 +813,11 @@ func bugrepPhoneSheet(config *Config, r bugrepReport, why string) {
 				return
 			}
 			bugrepFormDone()
+		}})
+	}
+	if later {
+		buttons = append(buttons, tbxSheetButton{label: "Send later", run: func() {
+			bugrepHold(config, r, bugrepHoldService)
 		}})
 	}
 	buttons = append(buttons, tbxSheetButton{label: "Done", primary: true, run: bugrepFormDone})

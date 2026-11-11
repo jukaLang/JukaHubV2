@@ -480,6 +480,7 @@ func shotSaveManual(renderer *sdl.Renderer) {
 		logWarn("screenshot", "not saved: %v", err)
 		return
 	}
+	trophyEvent(tkScreenshot)
 	PlaySuccessSound()
 	logInfo("screenshot", "saved %s", path)
 }

@@ -177,11 +177,15 @@ const (
 )
 
 // startupState is the tiny marker written after a successful first frame.
+// BootID is the kernel's id of the boot that frame was drawn in (empty where
+// there is none): it tells a restart within one boot from the first start of
+// the next even when the clock moved in between (bootos.go).
 type startupState struct {
 	Version    int       `json:"version"`
 	LastLaunch time.Time `json:"lastLaunch"`
 	TotalMS    int64     `json:"totalMs"`
 	TargetMS   int64     `json:"targetMs"`
+	BootID     string    `json:"bootId,omitempty"`
 }
 
 // Overridden by tests and by JUKAHUB_STARTUP_STATE, which lets the bench run
@@ -251,7 +255,10 @@ func startupWarmStart(now time.Time) bool {
 		return false
 	}
 	state, ok := loadStartupState(startupStatePath())
-	return ok && warmStartWithin(state.LastLaunch, now)
+	// A reboot empties the caches a warm start counts on, however recent the
+	// last launch was (a quick power cycle is well inside the window), and the
+	// launch after one is the device's boot (bootos.go launchPredatesBoot).
+	return ok && warmStartWithin(state.LastLaunch, now) && !launchPredatesBoot(state.LastLaunch, state.BootID, now)
 }
 
 func startupBenchWarm() bool {
@@ -270,6 +277,7 @@ func startupRecordFirstFrame(total time.Duration) {
 		LastLaunch: time.Now(),
 		TotalMS:    total.Milliseconds(),
 		TargetMS:   startupTarget().Milliseconds(),
+		BootID:     bootOSBootIDFn(),
 	})
 }
 

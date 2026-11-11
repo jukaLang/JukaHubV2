@@ -796,12 +796,33 @@ func vcDrawSeekFlash(renderer *sdl.Renderer, font *ttf.Font, g vcGeom, ox, oy in
 // out for the whole screen) missed.
 var videoSettingsSheetDrawn sdl.Rect
 
-// vcSheetRect places the settings sheet above the bar's right end. It is wide
-// enough for the longest Quality row: a pinned ceiling and the resolution the
-// stream actually got, side by side.
-func vcSheetRect(g vcGeom, ox, oy int32) sdl.Rect {
+// videoSettingsSheetRowsDrawn is how many rows the sheet last drew: its two
+// pages have different lengths.
+var videoSettingsSheetRowsDrawn int
+
+// videoSettingsSheetRowH is the height the sheet last drew its rows at.
+var videoSettingsSheetRowH = videoSettingsRowH
+
+// vcSheetRect places the settings sheet above the bar's right end and returns
+// it with the height of its rows. It is wide enough for the longest Quality
+// row: a pinned ceiling and the resolution the stream actually got, side by
+// side. A small window narrows the rows (down to videoSettingsRowMinH) before
+// the sheet would cover the bar.
+func vcSheetRect(g vcGeom, ox, oy int32, rows int) (sdl.Rect, int32) {
 	w := min32(480, g.w-32)
-	h := int32(videoSettingsSheetRows)*videoSettingsRowH + videoSettingsTopPad + 40
+	n := int32(rows)
+	if n < 1 {
+		n = 1
+	}
+	room := g.bar.Y - 24
+	if g.bar.W <= 0 {
+		room = g.h - 24
+	}
+	rowH := videoSettingsRowH
+	for rowH > videoSettingsRowMinH && n*rowH+videoSettingsTopPad+40 > room {
+		rowH--
+	}
+	h := n*rowH + videoSettingsTopPad + 40
 	x := ox + g.bar.X + g.bar.W - w
 	if x < ox+16 {
 		x = ox + 16
@@ -810,14 +831,26 @@ func vcSheetRect(g vcGeom, ox, oy int32) sdl.Rect {
 	if y < oy+12 {
 		y = oy + 12
 	}
-	return sdl.Rect{X: x, Y: y, W: w, H: h}
+	return sdl.Rect{X: x, Y: y, W: w, H: h}, rowH
 }
 
 // vcDrawSettingsSheet is the settings sheet: a glass card of rows, each a name
-// and its value, the selected row tinted, the subtitle source underneath.
+// and its value, the selected row tinted, a status line underneath (the
+// subtitle source, or where saved files go). The rows are the page's
+// (videosheet.go).
 func vcDrawSettingsSheet(renderer *sdl.Renderer, config *Config, g vcGeom, ox, oy int32) {
-	sheet := vcSheetRect(g, ox, oy)
+	ctx := videoSheetContextNow()
+	ids := videoSheetRowIDsFor(videoSettingsPage, ctx)
+	if videoSettingsItem >= len(ids) {
+		videoSettingsItem = len(ids) - 1
+	}
+	if videoSettingsItem < 0 {
+		videoSettingsItem = 0
+	}
+	sheet, rowH := vcSheetRect(g, ox, oy, len(ids))
 	videoSettingsSheetDrawn = sheet
+	videoSettingsSheetRowsDrawn = len(ids)
+	videoSettingsSheetRowH = rowH
 	acc := vcAccent()
 	fillRoundedRect(renderer, sheet.X+2, sheet.Y+6, sheet.W, sheet.H, 16, sdl.Color{R: 0, G: 0, B: 0, A: 90})
 	fillRoundedRect(renderer, sheet.X, sheet.Y, sheet.W, sheet.H, 16, sdl.Color{R: 14, G: 20, B: 28, A: 238})
@@ -826,25 +859,10 @@ func vcDrawSettingsSheet(renderer *sdl.Renderer, config *Config, g vcGeom, ox, o
 	if font == nil {
 		return
 	}
-	subState := "Off"
-	if subtitlesEnabled() {
-		subState = "On"
-	}
-	fullState := "Off"
-	if videoFullscreen {
-		fullState = "On"
-	}
-	rows := [videoSettingsSheetRows]string{
-		"Subtitles: " + subState,
-		"Full screen: " + fullState,
-		"Speed: " + vcSpeedLabel(snapshotVideoState().speed),
-		"Quality: " + videoQualityRowLabel(appConfig),
-		upNextSheetRowLabel(),
-		"Close",
-	}
-	for i, text := range rows {
-		rowY := sheet.Y + videoSettingsTopPad + int32(i)*videoSettingsRowH
-		row := sdl.Rect{X: sheet.X + 10, Y: rowY, W: sheet.W - 20, H: videoSettingsRowH - 6}
+	for i, id := range ids {
+		text := videoSheetRowLabel(id, ctx)
+		rowY := sheet.Y + videoSettingsTopPad + int32(i)*rowH
+		row := sdl.Rect{X: sheet.X + 10, Y: rowY, W: sheet.W - 20, H: rowH - 6}
 		selected := i == videoSettingsItem
 		if selected {
 			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, WithAlpha(acc, 46))
@@ -876,28 +894,38 @@ func vcDrawSettingsSheet(renderer *sdl.Renderer, config *Config, g vcGeom, ox, o
 		drawText(renderer, font, name, row.X+14, ty, nameInk, textAlignLeft)
 	}
 	if small := vcFont(config, 13); small != nil {
-		status := ellipsize(small, subtitleStatusLine(), sheet.W-28)
-		statusY := sheet.Y + videoSettingsTopPad + int32(videoSettingsSheetRows)*videoSettingsRowH + 8
+		line := subtitleStatusLine()
+		if videoSettingsPage == videoSheetSave {
+			line = "Saved videos and tracks are in Media → Downloads"
+		}
+		status := ellipsize(small, line, sheet.W-28)
+		statusY := sheet.Y + videoSettingsTopPad + int32(len(ids))*rowH + 8
 		drawText(renderer, small, status, sheet.X+14, statusY, vcInk3, textAlignLeft)
 	}
 }
 
-// vcSheetRow is the sheet row under a tap, or -1 off the rows — and -1 when
-// the sheet is not on screen (opened from the keyboard while the stream was
-// still opening), so a tap can never press a row nobody can see.
+// vcSheetMargin is vcSheetRow's answer for a tap on the sheet that is not on a
+// row: the band above the rows or the status line under them.
+const vcSheetMargin = -2
+
+// vcSheetRow is the sheet row under a tap; vcSheetMargin on the sheet but off
+// its rows; -1 beside the sheet — and -1 when the sheet is not on screen
+// (opened from the keyboard while the stream was still opening), so a tap can
+// never press a row nobody can see. The margins press nothing: on the Save
+// offline page the first and last rows start a download or an extraction, and
+// a tap that grazed the sheet's edge used to press them.
 func vcSheetRow(mx, my int32) int {
 	sheet := videoSettingsSheetDrawn
-	if sheet.W <= 0 || !pointInRect(mx, my, sheet) {
+	rows := videoSettingsSheetRowsDrawn
+	rowH := videoSettingsSheetRowH
+	if sheet.W <= 0 || rows <= 0 || rowH <= 0 || !pointInRect(mx, my, sheet) {
 		return -1
 	}
-	idx := int((my - (sheet.Y + videoSettingsTopPad)) / videoSettingsRowH)
-	if my < sheet.Y+videoSettingsTopPad || idx < 0 {
-		return 0
+	top := sheet.Y + videoSettingsTopPad
+	if my < top || my >= top+int32(rows)*rowH {
+		return vcSheetMargin
 	}
-	if idx >= videoSettingsSheetRows {
-		return videoSettingsSheetRows - 1
-	}
-	return idx
+	return int((my - top) / rowH)
 }
 
 // ── Loading ──────────────────────────────────────────────────────────────

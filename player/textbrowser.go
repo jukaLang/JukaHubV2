@@ -196,7 +196,12 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
-	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(235), accentColor)
+	// The full-screen Browser draws its page edge to edge: no panel, header
+	// band, toolbar or cookie strip around it (brw_fullscreen.go).
+	full := brwFullscreenElem(element)
+	if !full {
+		drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(235), accentColor)
+	}
 
 	text := ""
 	if element.Variable != "" {
@@ -205,7 +210,9 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 	}
 	if text == "" {
-		if textBrowserElementSource(element) == textBrowserSourceWeb {
+		if full {
+			text = "Press " + hintKeyFor("Select / M", "Menu") + " for the menu, then Go to address."
+		} else if textBrowserElementSource(element) == textBrowserSourceWeb {
 			text = "Enter a website address above and press Go."
 		} else if element.AutoRefresh {
 			text = "Auto-refreshing..."
@@ -226,6 +233,9 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	browserCookieStripHit = sdl.Rect{}
 
 	headerH := int32(28)
+	if full {
+		headerH = 0
+	}
 	headerY := element.Y + 4
 	source := textBrowserElementSource(element)
 
@@ -253,12 +263,14 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	// does not reflow the moment a login cookie arrives.
 	cookieStripH := int32(0)
 	cookieFont, _ := getCachedFont(config, "small")
-	if source == textBrowserSourceWeb && cookieFont != nil {
+	if source == textBrowserSourceWeb && cookieFont != nil && !full {
 		cookieStripH = int32(cookieFont.Height()) + 8
 	}
 	contentH := elemH - headerH - 8
 	if source == textBrowserSourceWeb {
-		contentH = elemH - headerH - textBrowserURLBarHeight - 12 - cookieStripH
+		if !full {
+			contentH = elemH - headerH - textBrowserURLBarHeight - 12 - cookieStripH
+		}
 		browserCookieStripReserved = cookieStripH
 	}
 	maxLines := int((contentH) / lineH)
@@ -299,14 +311,22 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		totalLines = len(lines)
 	}
 
+	// Full screen the page's own paper is the ground, edge to edge, in place of
+	// the panel; the header band below is not drawn at all.
+	if full {
+		brwDrawFullscreenPaper(renderer, element, styledDoc, styledLayout != nil && !pageOwned)
+	}
+
 	// The header is Home's glass band with the source named in its own colour.
 	// It used to be a saturated slab with white type: white on the cyan WEB band
 	// was hard to read, and on a light preset the strip was the loudest thing on
 	// the screen. The 8px corner also keeps it inside the panel's rounding.
-	fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 8, glassA(14))
-	strokeRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 8, 1, glassEdge())
+	if !full {
+		fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 8, glassA(14))
+		strokeRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 8, 1, glassEdge())
+	}
 	labelFont, _ := getCachedFont(config, "small")
-	if labelFont != nil {
+	if labelFont != nil && !full {
 		sourceLabel := "SYSTEM"
 		switch source {
 		case textBrowserSourceZeroconf:
@@ -383,7 +403,11 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 
 	contentTop := element.Y + 8 + headerH
-	if source == textBrowserSourceWeb {
+	if full {
+		// The page starts 4px below the screen's top edge (contentTop+4 below);
+		// what the toolbar did is in the Select menu (brw_menu.go).
+		contentTop = element.Y
+	} else if source == textBrowserSourceWeb {
 		addressRect, modeRect, searchRect, goRect, filterRect, zoomRect := textBrowserToolbarLayout(config, element)
 		backRect, forwardRect := textBrowserHistoryRects(config, element)
 		drawBrowserHistoryIcon(renderer, backRect, -1, browserHistoryAvailable(-1))
@@ -500,6 +524,10 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		contentTop += textBrowserURLBarHeight + 4
 	}
 	y := contentTop
+	if full {
+		// A plain-text page gets the margin the header band used to give it.
+		y += 6
+	}
 
 	scrollMax := int32(0)
 	if int32(totalLines) > int32(maxLines) {
@@ -533,6 +561,11 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	// and the cookie strip under it; nothing of the page is drawn under them.
 	if source == textBrowserSourceWeb && brwDrawPageState(renderer, config, element,
 		sdl.Rect{X: element.X + 7, Y: contentTop + 4, W: elemW - 14, H: contentH}, cookieStripH) {
+		if full {
+			// The card names no site: the status stack only lets go of the
+			// targets the last frame drew.
+			brwDrawFullscreenStatus(renderer, config, element, nil, true)
+		}
 		return
 	}
 
@@ -624,8 +657,11 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	// A running find names itself in the top-right of the page, so the reader
 	// can see which match they are on without leaving the text. It is drawn
 	// last: a pill over the page is chrome, and the page's own highlights must
-	// not paint over it.
-	if textBrowserElementSource(element) == textBrowserSourceWeb && browserFind.active {
+	// not paint over it. Full screen it is one entry of the page's status stack,
+	// under the site pill and over the link-mode chip (brw_fullscreen.go).
+	if full {
+		brwDrawFullscreenStatus(renderer, config, element, styledDoc, loading || styledLayout == nil)
+	} else if textBrowserElementSource(element) == textBrowserSourceWeb && browserFind.active {
 		browserDrawFindStatus(renderer, config, element)
 	}
 }
@@ -1104,7 +1140,10 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	}
 	// The toolbar's filter chip belongs to the address being opened, not to the
 	// page still on screen: a reload after turning filtering off shows the new
-	// state immediately.
+	// state immediately. Settings → Browser → Block ads and trackers is copied
+	// for the fetch goroutines first, here on the main thread that owns the
+	// config (brw_adblock.go).
+	refreshBrowserBlockAdsSetting(config)
 	setBrowserAdBlockView(outputVariable, browserAdBlockView{
 		Site: browserAdBlockSiteKey(address),
 		Off:  browserAdBlockOff(address),

@@ -7,7 +7,8 @@ package main
 // Arcade" or a "Movie Night":
 //
 //   - the theme: a preset or total conversion by id, or a theme file of its own;
-//   - the Home arrangement (your own layout, the dashboard or the hero grid);
+//   - the Home arrangement (your own layout, the dashboard, the hero grid, the
+//     carousel or the widgets — those two show the user's own homeTiles);
 //   - a wallpaper, or "none" for Home's own backdrop;
 //   - the interface sounds (on or off, and how loud);
 //   - the screen JukaHub opens on;
@@ -421,10 +422,11 @@ func xpackValidate(e *xpackEntry) {
 	}
 	if layout := strings.ToLower(strings.TrimSpace(m.HomeLayout)); layout != "" {
 		switch layout {
-		case homeArrangementCustom, homeArrangementDashboard, homeArrangementGrid:
+		case homeArrangementCustom, homeArrangementDashboard, homeArrangementGrid,
+			homeArrangementCarousel, homeArrangementWidgets:
 			m.HomeLayout = layout
 		default:
-			drop("Home layout %q is not custom, dashboard or grid", m.HomeLayout)
+			drop("Home layout %q is not custom, dashboard, grid, carousel or widgets", m.HomeLayout)
 			m.HomeLayout = ""
 		}
 	}
@@ -895,11 +897,14 @@ func xpackRegisterTheme(e xpackEntry) string {
 // xpackStateKeys are the user-config keys a pack can change. Undo restores each
 // one exactly: its old value, or its absence.
 func xpackStateKeys() []string {
-	keys := make([]string, 0, len(themePresetKeys)+len(themeColorVariables)+9)
+	keys := make([]string, 0, len(themePresetKeys)+len(themeColorVariables)+10)
 	keys = append(keys, themePresetKeys...)
 	keys = append(keys, themeColorVariables...)
 	return append(keys, "homeArrangement", bootSfxEnabledKey, bootSfxVolumeKey, "ambientMode",
-		xpackActiveKey, xpackActiveFileKey, xpackStartSceneKey, xpackWallpaperKey, xpackInputKey)
+		xpackActiveKey, xpackActiveFileKey, xpackStartSceneKey, xpackWallpaperKey, xpackInputKey,
+		// The picker's remembered wallpaper (gifwall.go): Undo puts the
+		// wallpaper back, so it puts back what restores it at the next start.
+		wallpaperSavedKey)
 }
 
 // xpackApply switches to pack e. Everything it sets changes now, and what it

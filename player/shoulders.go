@@ -69,6 +69,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	if config == nil {
 		return false
 	}
+	// Edit Home owns the pad: a trigger must not page Home away mid-edit
+	// (its L1/R1 switch the layout, home_edit.go).
+	if homeEditActive() {
+		return true
+	}
 	// The editor's one destructive key lives on R2. A/X/Y/B are already editing
 	// keys there and DELETE exists only on a keyboard the handheld does not
 	// have, so a line could be added but never removed. The footer advertises
@@ -193,8 +198,8 @@ func triggerOwnedByOverlay() bool {
 		onboarding.active && !onboardingCoveredByOverlay():
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
-		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, homeCalendarOpen,
-		homePowerConfirm.open, volumePopoverOpen:
+		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, brwMenu.open, homeCalendarOpen,
+		homePowerConfirm.open, volumePopoverOpen, brightnessPopoverOpen:
 		return true
 	}
 	return false
@@ -221,6 +226,7 @@ func modalPanelBlockReason() string {
 		{"Wi-Fi panel", wifiPanel.open},
 		{"update prompt", updatePrompt.open},
 		{"browser link panel", browserLinkPanel.open},
+		{"browser menu", brwMenu.open},
 		{"companion", companion.open},
 		{"community panel", communityPanel.open},
 		{"power tools", powerTools.open},
@@ -245,6 +251,7 @@ func modalPanelBlockReason() string {
 		{"downloads panel", dlPanel.open},
 		{"weather popover", weatherPopoverOpen},
 		{"volume popover", volumePopoverOpen},
+		{"brightness popover", brightnessPopoverOpen},
 		{"image viewer", imageViewerPath != ""},
 		{"keyboard", virtualKeyboardActive},
 		{"memory panel", memPanel.open},
@@ -381,18 +388,18 @@ func globalSearchShoulder(s padShoulder) {
 }
 
 func wallpaperShoulder(s padShoulder) {
+	// Through the picker's own move, like its D-pad and keys (wallpaper.go):
+	// the same page size, and no click when the cursor is already at the end.
 	switch s {
 	case padL1:
-		wpCursor -= 5
+		wallpaperMove(-wallpaperPage)
 	case padR1:
-		wpCursor += 5
+		wallpaperMove(wallpaperPage)
 	case padL2:
-		wpCursor = 0
+		wallpaperMove(-len(wpEntries))
 	case padR2:
-		wpCursor = len(wpEntries) - 1
+		wallpaperMove(len(wpEntries))
 	}
-	wpCursor = clampIndex(wpCursor, len(wpEntries))
-	PlayNavSound()
 }
 
 // handleListShoulder pages the focused scene element. Media results are the

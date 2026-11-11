@@ -561,7 +561,7 @@ func renderMusicPEQPanel(renderer *sdl.Renderer, config *Config) {
 		footer = "Saved to Settings · playback restarts when the curve changes"
 	}
 	if musicEQ.bitPerfect {
-		footer = "Bit-perfect on: EQ and tempo are bypassed until it is turned off"
+		footer = "Bit-perfect on: EQ, tempo and spatial audio are bypassed until it is turned off"
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),

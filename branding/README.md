@@ -77,3 +77,19 @@ throws that away.
 Keep the logo on its own tile; it brings its own background, so it reads on
 light and dark surfaces alike. Do not recolour it per theme: the colours are
 Home's own, and a theme preset changes the app around it, not its icon.
+
+## Boot logo
+
+[`mkbootlogo.py`](mkbootlogo.py) renders the picture a TrimUI shows at power-on
+when it boots into JukaHub: the logo over the wordmark on black, placed with the
+constants of `player/bootlogo_layout.go`, so the firmware's still picture and
+the first frame of the boot animation land on the same pixels. It writes
+[`bootlogo/`](bootlogo/): 24-bit BMPs at 1280x720 (Smart Pro, Smart Pro S) and
+1024x768 (Brick, Hammer) for flashing by hand, PNG previews and a contact sheet.
+The app renders its own copy in the device's exact format (Settings → General
+→ Boot logo); [docs/BOOT.md](../docs/BOOT.md) has the whole story.
+
+```sh
+python3 branding/mkbootlogo.py                     # rewrites the files that changed
+python3 branding/mkbootlogo.py --preview sheet.png # the contact sheet only
+```

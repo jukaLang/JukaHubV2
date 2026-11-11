@@ -64,8 +64,12 @@ type setHubState struct {
 	section     int
 	lastSection int
 	deepLink    bool
-	row         int
-	inPane      bool
+	// pendingRow is the row a search result asked for; setHubEnter applies it
+	// after the first refresh, when the section's rows are known.
+	pendingRow   string
+	pendingLabel string
+	row          int
+	inPane       bool
 	// follow keeps the focused row in view; the wheel turns it off until the
 	// next D-pad or key press, so scrolling with the mouse is not undone.
 	follow      bool
@@ -142,6 +146,8 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	setHub.cfg = c
 	section := setHub.lastSection
 	deep := setHub.deepLink
+	pendingRow, pendingLabel := setHub.pendingRow, setHub.pendingLabel
+	setHub.pendingRow, setHub.pendingLabel = "", ""
 	setHub.deepLink = false
 	if id := setLegacySection(scene); id != "" {
 		if i := setSectionIndex(id); i >= 0 {
@@ -180,6 +186,7 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	setHubRefresh(c)
 	if deep {
 		setHubEnterPane(false)
+		setHubFocusRow(pendingRow, pendingLabel)
 	}
 }
 
@@ -326,6 +333,52 @@ func setHubSelectSection(c *Config, i int, sound bool) {
 	if sound {
 		PlayNavSound()
 	}
+}
+
+// setOpenSettingRow opens Settings on one row: Home search's row results land
+// on the exact switch instead of the first line of its section.
+func setOpenSettingRow(c *Config, sectionID, rowID, label string) {
+	if c == nil {
+		return
+	}
+	section := setSectionIndex(sectionID)
+	if section < 0 {
+		return
+	}
+	if setIsHubScene(setHubSceneName(c)) {
+		setHubSelectSection(c, section, false)
+		if !setHubFocusRow(rowID, label) {
+			setHubEnterPane(false)
+		}
+		return
+	}
+	if sceneIndexExact(c, "Settings") < 0 {
+		setToast("That screen is not part of this setup")
+		return
+	}
+	setHub.lastSection = section
+	setHub.deepLink = true
+	setHub.pendingRow, setHub.pendingLabel = rowID, label
+	setOpenScene("Settings")(c)
+}
+
+// setHubFocusRow puts the focus on the row with this id, or — for a row that
+// predates ids — on the one with this label. It reports whether it found a
+// visible row; the caller leaves the first row focused when it did not.
+func setHubFocusRow(id, label string) bool {
+	for i := range setHub.rows {
+		if i >= len(setHub.views) || !setHub.views[i].visible {
+			continue
+		}
+		row := setHub.rows[i]
+		if (id != "" && row.ID == id) || (id == "" && row.Label == label) {
+			setHub.row = i
+			setHub.inPane = true
+			setHub.follow = true
+			return true
+		}
+	}
+	return false
 }
 
 // setHubEnterPane moves the focus from the rail onto the first row.
@@ -978,7 +1031,11 @@ func setHubKey(e *sdl.KeyboardEvent, c *Config) bool {
 	case sdl.K_RIGHT:
 		setHubAct(c, setActRight)
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
-		setHubAct(c, setActOK)
+		// Once per press: a held key's repeats must not arm and then confirm
+		// a two-press action such as the boot logo (bootlogo.go).
+		if e.Repeat == 0 {
+			setHubAct(c, setActOK)
+		}
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		setHubAct(c, setActBack)
 	case sdl.K_TAB:

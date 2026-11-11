@@ -108,10 +108,15 @@ func volumePercentAtX(track sdl.Rect, x int32) int {
 
 // toggleVolumePopover opens or closes the card. Like the calendar and the
 // weather card it is exclusive with the other top-bar overlays, and opening it
-// reads the mixer again so the number is the one the hardware keys left.
+// reads the mixer again so the number is the one the hardware keys left. It
+// does not open under Quick Settings, which is drawn over it and would leave
+// it holding the pad unseen (a tap reaches the header through the panel).
 func toggleVolumePopover() {
 	if volumePopoverOpen {
 		dismissVolumePopover()
+		return
+	}
+	if qs.open {
 		return
 	}
 	volumePopoverOpen = true
@@ -120,6 +125,7 @@ func toggleVolumePopover() {
 	tb.startOpen = false
 	nc.open = false
 	dismissWeatherPopover()
+	dismissBrightnessPopover()
 	volumeRefreshNow()
 }
 

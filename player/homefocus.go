@@ -33,12 +33,13 @@ const (
 	// tile. Disabled (and skipped by the D-pad) while it is not drawn.
 	HomeFocusPS4 HomeFocusID = "ps4"
 	// HomeFocusUpdate is the "new release available" download chip in the header's
-	// system corner, immediately left of the notification bell — the same place
-	// every scene header draws it. It is disabled unless a release is actually
-	// offered and drawn.
+	// system corner, immediately left of the trophy room's cup beside the
+	// notification bell — the same place every scene header draws it. It is
+	// disabled unless a release is actually offered and drawn.
 	HomeFocusUpdate HomeFocusID = "update"
 	// HomeFocusNowPlaying is the now-playing chip at the right end of the status
-	// cluster, between the clock and the bell. It is a chrome control on other
+	// cluster, between the clock and the system corner (the release offer, the
+	// trophy room's cup and the bell). It is a chrome control on other
 	// scenes, so Home needs its own entry to reach it; it is enabled only while
 	// the chip is drawn.
 	HomeFocusNowPlaying HomeFocusID = "nowplaying"
@@ -50,15 +51,28 @@ const (
 	// HomeFocusSearch is the search pill under the greeting, above the Continue
 	// card. A opens the search sheet (globalsearch.go).
 	HomeFocusSearch HomeFocusID = "search"
-	// HomeFocusVolume is the speaker at the left end of the status cluster,
-	// immediately left of the signal meter. A opens the volume popover
-	// (volumepopover.go). It is a chrome control on every other scene; enabled
-	// only while it is drawn (no mixer, no button).
+	// HomeFocusVolume is the speaker in the status cluster, immediately left
+	// of the signal meter. A opens the volume popover (volumepopover.go). It
+	// is a chrome control on every other scene; enabled only while it is drawn
+	// (no mixer, no button).
 	HomeFocusVolume HomeFocusID = "volume"
+	// HomeFocusBrightness is the sun at the left end of the status cluster,
+	// immediately left of the speaker. A opens the brightness card
+	// (brightnesspopover.go). Enabled only while it is drawn: it appears once
+	// the brightness controller has found what it drives.
+	HomeFocusBrightness HomeFocusID = "brightness"
 	// HomeFocusQR is the phone-pairing code in the header band, right of the
 	// Remote Play launchers. A shows it full screen (qrzoom.go), the size a
 	// phone camera reads from arm's length. Enabled only while it is drawn.
 	HomeFocusQR HomeFocusID = "qr"
+	// HomeFocusEditPill is the Edit pill right of the power button on a
+	// Carousel or Widgets Home (home_edit.go): A opens Edit Home. Enabled only
+	// while it is drawn.
+	HomeFocusEditPill HomeFocusID = "editpill"
+	// HomeFocusTrophy is the trophy room's cup, immediately left of the bell
+	// (header_trophy.go): A opens Trophies. It is a chrome control on every
+	// other scene; enabled only while it is drawn.
+	HomeFocusTrophy HomeFocusID = "trophies"
 )
 
 // FocusDirection indicates the direction to move focus.
@@ -179,21 +193,29 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Left: HomeFocusWiFi, Right: HomeFocusClock,
 	},
 	// The signal meter is the Wi-Fi button: Left is the volume button beside
-	// it (and, when there is no mixer to show one for, the search pill, the
-	// next control toward the left edge), and Right reads the weather text. The
-	// release offer is drawn at the other end of the bar, beside the bell, so
-	// the meter does not point at it: the pad used to jump from here to a pill
-	// on the far right.
+	// it (and, when there is no mixer to show one for, the next control toward
+	// the left edge: the sun, then the search pill), and Right reads the
+	// weather text. The
+	// release offer is drawn at the other end of the bar, in the system corner
+	// beside the trophy room's cup and the bell, so the meter does not point at
+	// it: the pad used to jump from here to a pill on the far right.
 	HomeFocusWiFi: {
 		Up: HomeFocusWiFi, Down: HomeFocusPS4,
 		Left: HomeFocusVolume, Right: HomeFocusWeather,
 	},
-	// The speaker leads the status cluster: Left leaves the bar for the search
-	// pill, Right is the signal meter, and Down drops to the launcher under
-	// that end of the bar like the meter's does.
+	// The speaker sits between the sun and the signal meter: Left is the sun
+	// (and, when it is not drawn, the search pill beyond it), Right is the
+	// meter, and Down drops to the launcher under that end of the bar like the
+	// meter's does.
 	HomeFocusVolume: {
 		Up: HomeFocusVolume, Down: HomeFocusPS4,
-		Left: HomeFocusSearch, Right: HomeFocusWiFi,
+		Left: HomeFocusBrightness, Right: HomeFocusWiFi,
+	},
+	// The sun leads the status cluster: Left leaves the bar for the search
+	// pill, Right is the speaker, Down the launcher under that end of the bar.
+	HomeFocusBrightness: {
+		Up: HomeFocusBrightness, Down: HomeFocusPS4,
+		Left: HomeFocusSearch, Right: HomeFocusVolume,
 	},
 	// The pairing code is the header band's right end, under the bell: Up is
 	// the bell, Left the PS5 launcher beside it, Down the card under it (the
@@ -206,22 +228,33 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Left: HomeFocusPS5, Right: HomeFocusQR,
 	},
 	// The update download chip is a header button drawn immediately left of the
-	// notification bell, right of the now-playing chip. Its neighbours are the
+	// trophy room's cup, right of the now-playing chip. Its neighbours are the
 	// controls actually beside it on screen: before this, the graph put it left
 	// of the Wi-Fi meter, so pressing Left/Right next to the drawn pill skipped
 	// it and the offer could only be reached by walking to the meter and
 	// pressing Left — which moved focus rightward, away from the pill.
 	//
-	// Both neighbours may be disabled (nothing playing, no release offered);
-	// Move keeps walking their own neighbour chains, so clock -> bell still
-	// works with the chip hidden and bell -> clock still works with it shown.
+	// Its neighbours may be disabled (nothing playing, no cup drawn) and so may
+	// the chip itself (no release offered); Move keeps walking their own
+	// neighbour chains, so clock -> cup -> bell still works with the chip hidden
+	// and bell -> cup -> clock still works with it shown.
 	HomeFocusUpdate: {
 		Up: HomeFocusUpdate, Down: HomeFocusPS5,
-		Left: HomeFocusNowPlaying, Right: HomeFocusBell,
+		Left: HomeFocusNowPlaying, Right: HomeFocusTrophy,
+	},
+	// The trophy room's cup sits between the release offer and the bell, the
+	// corner's two fixed controls side by side: Left crosses the offer when it
+	// is drawn (the now-playing chip, then the clock, when it is not), Right is
+	// the bell, and Down drops to the pairing code under that end of the bar
+	// (neighbor) or the launcher, as the bell's does.
+	HomeFocusTrophy: {
+		Up: HomeFocusTrophy, Down: HomeFocusPS5,
+		Left: HomeFocusUpdate, Right: HomeFocusBell,
 	},
 	// The now-playing chip sits right of the clock and names the running
 	// player. Disabled while nothing plays, so Right from the clock falls
-	// through to the release offer (or the bell when none is offered).
+	// through to the release offer (or the trophy room's cup when none is
+	// offered).
 	HomeFocusNowPlaying: {
 		Up: HomeFocusNowPlaying, Down: HomeFocusPS5,
 		Left: HomeFocusClock, Right: HomeFocusUpdate,
@@ -230,19 +263,29 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusClock, Down: HomeFocusPS5,
 		Left: HomeFocusWeather, Right: HomeFocusNowPlaying,
 	},
-	// The bell is the last control in the header, right of the clock. Left
-	// crosses the release offer when it is drawn (skipping it when it is not);
-	// Right stays put at the screen edge and Down drops to the launcher under
-	// the right end of the bar, or the Media card when it is hidden.
+	// The bell is the last control in the header, right of the trophy room's
+	// cup. Left is the cup (and, when it is not drawn, the release offer or
+	// whatever is left of it); Right stays put at the screen edge and Down
+	// drops to the launcher under the right end of the bar, or the Media card
+	// when it is hidden.
 	HomeFocusBell: {
 		Up: HomeFocusBell, Down: HomeFocusPS5,
-		Left: HomeFocusUpdate, Right: HomeFocusBell,
+		Left: HomeFocusTrophy, Right: HomeFocusBell,
 	},
 	// The power button sits at the footer's left end, under Favorites; it is
-	// enabled only while it is drawn (HomeLayout.Render).
+	// enabled only while it is drawn (HomeLayout.Render). Right is the Edit
+	// pill beside it, which only the Carousel and Widgets layouts draw; while
+	// it is disabled Right stays on the power button.
 	HomeFocusExit: {
 		Up: HomeFocusFavorites, Down: HomeFocusExit,
-		Left: HomeFocusExit, Right: HomeFocusExit,
+		Left: HomeFocusExit, Right: HomeFocusEditPill,
+	},
+	// The Edit pill; the dynamic layouts take Up to the tile drawn above it
+	// (home_dynbody.go), so the graph's Up only matters to the dashboard,
+	// which never draws it.
+	HomeFocusEditPill: {
+		Up: HomeFocusBrowser, Down: HomeFocusEditPill,
+		Left: HomeFocusExit, Right: HomeFocusEditPill,
 	},
 }
 
@@ -259,9 +302,16 @@ type HomeFocusController struct {
 	// qrUnder is the card under the header pairing code, set the same way, so
 	// Down from the code lands on the card actually drawn below it.
 	qrUnder HomeFocusID
+	// dynamic holds the focus IDs of the Carousel and Widgets tiles that are
+	// not in the graph (widgets, apps, the add tile), and bodyOrder every
+	// tile in order: the first enabled one is where a lost focus goes
+	// (home_dynbody.go). Both are empty on the standard layouts.
+	dynamic   map[HomeFocusID]bool
+	bodyOrder []HomeFocusID
 }
 
-// NewHomeFocusController creates a new HomeFocusController with all focus IDs enabled.
+// NewHomeFocusController creates a new HomeFocusController with all focus IDs
+// enabled, except the Edit pill, which the layout enables while it draws it.
 func NewHomeFocusController() *HomeFocusController {
 	f := &HomeFocusController{
 		current:  HomeFocusContinue,
@@ -271,7 +321,37 @@ func NewHomeFocusController() *HomeFocusController {
 	for id := range homeFocusGraph {
 		f.enabled[id] = true
 	}
+	f.enabled[HomeFocusEditPill] = false
 	return f
+}
+
+// SetDynamic replaces the tiles a dynamic layout adds: ids are the ones the
+// graph does not know (they are enabled here; the previous set is dropped),
+// order is every tile in order. nil, nil goes back to the graph alone.
+func (f *HomeFocusController) SetDynamic(ids, order []HomeFocusID) {
+	if f == nil {
+		return
+	}
+	next := make(map[HomeFocusID]bool, len(ids))
+	for _, id := range ids {
+		next[id] = true
+	}
+	for id := range f.dynamic {
+		if !next[id] {
+			delete(f.enabled, id)
+		}
+	}
+	f.dynamic = next
+	for id := range next {
+		f.enabled[id] = true
+	}
+	f.bodyOrder = append(f.bodyOrder[:0], order...)
+	if !f.IsEnabled(f.current) {
+		f.current = f.firstEnabled()
+	}
+	if !f.IsEnabled(f.lastHome) {
+		f.lastHome = f.current
+	}
 }
 
 // SetTileLink records which card the header launcher sits over, or clears the
@@ -313,7 +393,7 @@ func (f *HomeFocusController) Set(id HomeFocusID) bool {
 	if f == nil || !f.IsEnabled(id) {
 		return false
 	}
-	if _, ok := homeFocusGraph[id]; !ok {
+	if _, ok := homeFocusGraph[id]; !ok && !f.dynamic[id] {
 		return false
 	}
 	f.current = id
@@ -395,7 +475,7 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 		if direction == FocusRight && id == HomeFocusPS5 {
 			return HomeFocusQR
 		}
-		if direction == FocusDown && id == HomeFocusBell {
+		if direction == FocusDown && (id == HomeFocusBell || id == HomeFocusTrophy) {
 			return HomeFocusQR
 		}
 	}
@@ -430,15 +510,21 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 	}
 }
 
-// firstEnabled returns the first enabled focus ID in the default order.
+// firstEnabled returns the first enabled focus ID in the default order: a
+// dynamic layout's first tile, then the dashboard's order.
 func (f *HomeFocusController) firstEnabled() HomeFocusID {
+	for _, id := range f.bodyOrder {
+		if f.IsEnabled(id) {
+			return id
+		}
+	}
 	order := []HomeFocusID{
 		HomeFocusContinue, HomeFocusMedia, HomeFocusEmulator,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
 		HomeFocusChat, HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
 		HomeFocusSearch, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
-		HomeFocusUpdate, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
-		HomeFocusVolume, HomeFocusWiFi, HomeFocusQR,
+		HomeFocusUpdate, HomeFocusTrophy, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
+		HomeFocusBrightness, HomeFocusVolume, HomeFocusWiFi, HomeFocusQR,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

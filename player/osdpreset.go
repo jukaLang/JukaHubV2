@@ -16,9 +16,12 @@ package main
 // widgets and the stats read-out on or off; everything else in retroarch.cfg is
 // left byte-for-byte alone.
 //
-// The choice is stored in the user config (`osdPreset`), applied at the next
-// RetroArch launch and immediately when the row is pressed, and the original
-// config is kept once as `retroarch.cfg.jukahub-backup` by the shared writer.
+// The choice is stored in the user config (`osdPreset`) and written into
+// retroarch.cfg for each RetroArch launch from JukaHub only: the user's own
+// values go back when the game exits (racfgscope.go), so RetroArch started
+// from the firmware's menu keeps its own OSD. It used to be written for good,
+// even the moment the row was pressed. The original config is kept once as
+// `retroarch.cfg.jukahub-backup` by the shared writer.
 
 import (
 	"strings"
@@ -111,63 +114,61 @@ func nextOSDPreset(current string) string {
 	return osdPresetOrder[0]
 }
 
-// ensureOSDPreset is the pure edit: only the preset's own keys change, and only
-// their values. Comments, ordering, indentation and unrelated keys survive
-// because the work goes through setRetroArchConfigBool. "unmanaged" changes
-// nothing.
-func ensureOSDPreset(cfg, preset string) (string, bool) {
-	values, ok := osdPresetValues[normalizeOSDPreset(preset)]
-	if !ok || len(values) == 0 {
-		return cfg, false
+// osdPresetScopeValues is a preset's keys and values as the scoped edit takes
+// them (racfgscope.go): only the preset's own display switches, and nothing at
+// all for "unmanaged".
+func osdPresetScopeValues(preset string) []raScopeValue {
+	pairs := osdPresetValues[normalizeOSDPreset(preset)]
+	values := make([]raScopeValue, 0, len(pairs))
+	for _, pair := range pairs {
+		values = append(values, raScopeValue{Key: pair[0], Value: pair[1]})
 	}
-	changed := false
-	for _, pair := range values {
-		var step bool
-		cfg, step = setRetroArchConfigBoolTo(cfg, pair[0], pair[1])
-		changed = changed || step
-	}
-	return cfg, changed
+	return values
 }
 
-// applyOSDPresetToFile writes one preset through the shared crash-safe writer,
-// which also keeps the original as retroarch.cfg.jukahub-backup.
-func applyOSDPresetToFile(path, preset string) (bool, error) {
-	return editRetroArchConfig(path, func(cfg string) (string, bool) {
-		return ensureOSDPreset(cfg, preset)
-	})
-}
-
-// applyOSDPresetToFoundConfig applies the preset to the first readable
-// RetroArch config. It reports whether one was found and written.
+// applyOSDPresetToFoundConfig no longer writes anything: a preset changes
+// RetroArch only for JukaHub's own launches, and the choice row (Settings,
+// Smart Widgets) only stores it. It reports whether a RetroArch config is
+// there for the next launch to use, and logs the choice.
 func applyOSDPresetToFoundConfig(preset string) bool {
 	if normalizeOSDPreset(preset) == "unmanaged" {
 		return false
 	}
 	for _, path := range osdPresetCandidates() {
-		if !regularFile(path) {
-			continue
+		if regularFile(path) {
+			logDebug("osd", "%s preset chosen; it applies to RetroArch games started from JukaHub (%s)", preset, path)
+			return true
 		}
-		changed, err := applyOSDPresetToFile(path, preset)
-		if err != nil {
-			logWarn("osd", "cannot apply the %s preset in %s: %v", preset, path, err)
-			return false
-		}
-		if changed {
-			Log().Info("in-game OSD preset applied", "preset", preset, "config", path)
-		}
-		return true
 	}
 	return false
 }
 
 // prepareOSDPreset is the launch-time entry point. Like save-state resume it
 // never blocks a launch: a read-only card or a missing config is logged and the
-// game still starts. Standalone emulators own their own OSD and are skipped.
+// game still starts, and the preset holds for this launch only. Standalone
+// emulators own their own OSD and are skipped.
 func prepareOSDPreset(launcher string) bool {
 	if !retroArchLauncher(launcher) {
 		return false
 	}
-	return applyOSDPresetToFoundConfig(osdPresetSetting())
+	preset := osdPresetSetting()
+	values := osdPresetScopeValues(preset)
+	if len(values) == 0 {
+		return false
+	}
+	configured := false
+	for _, path := range raScopeTargets(raLaunchCandidates(launcher, osdPresetCandidates())) {
+		changed, err := raScopeApply(path, values)
+		if err != nil {
+			logWarn("osd", "cannot apply the %s preset in %s: %v", preset, path, err)
+			continue
+		}
+		configured = true
+		if changed {
+			Log().Info("in-game OSD preset applied for this launch", "preset", preset, "config", path)
+		}
+	}
+	return configured
 }
 
 // osdPresetSetting reads the choice for the launch path. appConfig is the live
@@ -192,9 +193,9 @@ func setOSDPresetChoice(config *Config, preset string) string {
 	return osdPresetLabel(preset)
 }
 
-// cycleOSDPreset advances the row, persists the choice with the rest of the
-// settings, and applies it now when a config is readable. It returns the new
-// label for the toast and the row.
+// cycleOSDPreset advances the row and persists the choice with the rest of the
+// settings; the next RetroArch launch from JukaHub applies it. It returns the
+// new label for the toast and the row.
 func cycleOSDPreset(config *Config) string {
 	if config == nil {
 		return osdPresetLabel("unmanaged")

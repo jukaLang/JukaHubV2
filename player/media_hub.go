@@ -32,6 +32,7 @@ package main
 // that player itself.
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -295,6 +296,11 @@ const (
 	mediaActCancelDownload
 	// mediaActOpen opens a Library show, album or See all list.
 	mediaActOpen
+	// mediaActDownloadAudio saves a web video's sound as a track (yt-dlp).
+	mediaActDownloadAudio
+	// mediaActExtractAudio saves the sound of a video on the card as a track
+	// (ffmpeg, mediaextract.go).
+	mediaActExtractAudio
 )
 
 // mediaSheet is the details sheet for one card.
@@ -1679,6 +1685,9 @@ func mediaHubQueueAction(card mediaCard) {
 		if downloadRetry(card.queueID) {
 			PlayActivateSound()
 			ShowToast("Retrying "+card.title, ToastKindInfo)
+		} else if it, ok := downloadFocused(card.queueID); ok && downloadsHas(it.URL, it.Kind) {
+			// The page was queued again meanwhile; that row is the one to wait for.
+			ShowToast(dlAlreadyQueuedNotice, ToastKindInfo)
 		}
 	case downloadQueued:
 		if downloadsPaused() {
@@ -1699,7 +1708,7 @@ func mediaHubDownload(card mediaCard) {
 		return
 	}
 	if card.downloaded {
-		ShowToast("Already in your downloads", ToastKindInfo)
+		ShowToast(dlAlreadySavedNotice, ToastKindInfo)
 		return
 	}
 	if !IsOnline() {
@@ -1708,12 +1717,97 @@ func mediaHubDownload(card mediaCard) {
 	}
 	dlRememberMeta(url, card.video)
 	if _, err := downloadEnqueueKind(url, downloadKindVideo); err != nil {
-		ShowToast(plainNetworkError(err), ToastKindWarning)
+		mediaHubEnqueueRefused(err)
 		return
 	}
 	PlayActivateSound()
 	ShowToast("Downloading — it will be in Downloads, ready offline", ToastKindSuccess)
 	mediaHub.builtAt = 0
+}
+
+// mediaHubEnqueueRefused says why a download was not queued: a second press
+// for a page already on its way is a note, anything else a warning.
+func mediaHubEnqueueRefused(err error) {
+	if errors.Is(err, errDownloadAlreadyQueued) {
+		ShowToast(dlAlreadyQueuedNotice, ToastKindInfo)
+		return
+	}
+	ShowToast(plainNetworkError(err), ToastKindWarning)
+}
+
+// mediaHubDownloadAudio queues a card's sound as a track for the music player:
+// the m4a path the results list's Audio pill uses.
+func mediaHubDownloadAudio(card mediaCard) {
+	url := strings.TrimSpace(card.video.GetURL())
+	if url == "" || card.path != "" {
+		return
+	}
+	if _, ok := dlLibraryFindSource(url, false); ok {
+		ShowToast(dlAlreadySavedNotice, ToastKindInfo)
+		return
+	}
+	if !IsOnline() {
+		ShowToast(offlinePlainNotice, ToastKindWarning)
+		return
+	}
+	dlRememberMeta(url, card.video)
+	if _, err := downloadEnqueueKind(url, downloadKindAudio); err != nil {
+		mediaHubEnqueueRefused(err)
+		return
+	}
+	PlayActivateSound()
+	ShowToast("Saving the audio — it will be in Downloads and the music player", ToastKindSuccess)
+	mediaHub.builtAt = 0
+}
+
+// mediaHubExtractAudio saves the sound of a card's video file as a track: the
+// file itself for a card on the device, the downloaded copy for a web card
+// that has one. It reports whether the extraction started, so the sheet stays
+// open on a refusal.
+func mediaHubExtractAudio(config *Config, card mediaCard) bool {
+	path, page := card.path, ""
+	if path == "" && card.downloaded {
+		if e, ok := dlLibraryFindSource(card.video.GetURL(), true); ok {
+			path, page = e.Path, e.Source
+		}
+	}
+	if path == "" {
+		ShowToast("Download the video first, then extract its audio", ToastKindInfo)
+		return false
+	}
+	if !mediaExtractAudio(config, path, card.title, page) {
+		return false
+	}
+	PlayActivateSound()
+	return true
+}
+
+// mediaHubAudioSaved reports whether a card's page has its sound saved as a
+// track already (downloaded with "Save audio only", or extracted). A card for
+// a file on the device asks about the page the Downloads library has for it.
+func mediaHubAudioSaved(card mediaCard) bool {
+	page := strings.TrimSpace(card.video.GetURL())
+	if card.path != "" {
+		page = ""
+		if e, ok := dlLibraryFindPath(card.path); ok {
+			page = strings.TrimSpace(e.Source)
+		}
+	}
+	if page == "" || !isNetworkSource(page) {
+		return false
+	}
+	_, ok := dlLibraryFindSource(page, false)
+	return ok
+}
+
+// mediaCardIsVideoFile reports a card for a video file on the device, the
+// kind whose sound can be extracted.
+func mediaCardIsVideoFile(card mediaCard) bool {
+	if card.path == "" {
+		return false
+	}
+	video, ok := mlibMediaKind(card.path)
+	return ok && video
 }
 
 // mediaHubToggleFavorite saves a card's video, or removes it the way the

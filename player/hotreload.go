@@ -290,6 +290,11 @@ func applyConfigReload(prev, next *Config) *Config {
 	ensureToolsHubScene(next)
 	peerEnsureScenes(next)
 	ensureRommScene(next)
+	ensureApkStoreScene(next)
+	// Voice command (voicecmd.go) is injected the same way; a reload while it
+	// is up must not drop the page under the user.
+	ensureVoiceScene(next)
+	btEnsureScene(next)
 	ensureBrowserScene(next)
 	// Control profiles and Local play, and the chosen profile, its switches
 	// and the D-pad modes as the reloaded settings say.

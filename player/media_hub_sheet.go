@@ -5,8 +5,9 @@ package main
 // Y (or the "…" button on a card, or the Application key) opens a sheet for the
 // focused card: the artwork, the title wrapped in full, who made it and how far
 // in the user is, and every action the card has — play or resume, play from
-// the start, download or remove the download, favourite, Up Next, the Watch
-// Party queue, copy the link. Deleting a file always goes through the small
+// the start, download the video or only its sound, extract the sound of a video
+// already on the card, remove the download, favourite, Up Next, the Watch Party
+// queue, copy the link. Deleting a file always goes through the small
 // confirmation, which says how much space it frees.
 
 import (
@@ -18,7 +19,9 @@ import (
 
 // mediaSheetActionsFor lists the actions a card offers, with their labels. It
 // is a pure function of the card and the state around it so it can be tested.
-func mediaSheetActionsFor(card mediaCard, online, party, favorite, queued bool) ([]mediaSheetAction, []string) {
+// audioSaved says the page's sound is a saved track already, so neither "Save
+// audio only" nor "Extract audio" is offered: either would only refuse.
+func mediaSheetActionsFor(card mediaCard, online, party, favorite, queued, audioSaved bool) ([]mediaSheetAction, []string) {
 	acts := make([]mediaSheetAction, 0, 8)
 	labels := make([]string, 0, 8)
 	add := func(a mediaSheetAction, label string) {
@@ -52,15 +55,25 @@ func mediaSheetActionsFor(card mediaCard, online, party, favorite, queued bool) 
 	}
 	switch {
 	case local:
+		// A video's sound can be kept as a track without the network.
+		if mediaCardIsVideoFile(card) && !audioSaved {
+			add(mediaActExtractAudio, "Extract audio")
+		}
 		// Only a file the Downloads library lists is removed from here; any
 		// other file on the card (opened from Files) is Files' to manage.
 		if card.libID != "" {
 			add(mediaActRemoveDownload, "Remove from this device")
 		}
 	case card.downloaded:
+		if !audioSaved {
+			add(mediaActExtractAudio, "Extract audio")
+		}
 		add(mediaActRemoveDownload, "Remove download")
 	case online:
 		add(mediaActDownload, "Download for offline")
+		if !audioSaved {
+			add(mediaActDownloadAudio, "Save audio only")
+		}
 	}
 	if local {
 		add(mediaActCopy, "Copy file path")
@@ -113,7 +126,7 @@ func mediaSheetInfo(card mediaCard) string {
 // mediaHubOpenSheet opens the details sheet for a card.
 func mediaHubOpenSheet(card mediaCard) {
 	url := strings.TrimSpace(card.video.GetURL())
-	acts, labels := mediaSheetActionsFor(card, IsOnline(), partyActive(), favoriteVideoSaved(url), upNextHas(url))
+	acts, labels := mediaSheetActionsFor(card, IsOnline(), partyActive(), favoriteVideoSaved(url), upNextHas(url), mediaHubAudioSaved(card))
 	mediaHub.sheet = mediaSheet{
 		open:    true,
 		card:    card,
@@ -132,7 +145,7 @@ func mediaHubRefreshSheet() {
 	}
 	card := mediaHub.sheet.card
 	url := strings.TrimSpace(card.video.GetURL())
-	acts, labels := mediaSheetActionsFor(card, IsOnline(), partyActive(), favoriteVideoSaved(url), upNextHas(url))
+	acts, labels := mediaSheetActionsFor(card, IsOnline(), partyActive(), favoriteVideoSaved(url), upNextHas(url), mediaHubAudioSaved(card))
 	focus := mediaHub.sheet.focus
 	if focus >= len(acts) {
 		focus = len(acts) - 1
@@ -156,6 +169,14 @@ func mediaHubSheetRun(config *Config, act mediaSheetAction) {
 	case mediaActDownload:
 		mediaHubDownload(card)
 		mediaHub.sheet = mediaSheet{}
+	case mediaActDownloadAudio:
+		mediaHubDownloadAudio(card)
+		mediaHub.sheet = mediaSheet{}
+	case mediaActExtractAudio:
+		// The sheet stays open on a refusal (its toast says why).
+		if mediaHubExtractAudio(config, card) {
+			mediaHub.sheet = mediaSheet{}
+		}
 	case mediaActRemoveDownload:
 		mediaHubAskRemove(card)
 	case mediaActFavorite:
@@ -302,6 +323,8 @@ func mediaSheetIcon(act mediaSheetAction) string {
 		return "refresh"
 	case mediaActDownload:
 		return "download"
+	case mediaActDownloadAudio, mediaActExtractAudio:
+		return "music"
 	case mediaActRemoveDownload, mediaActCancelDownload:
 		return "trash"
 	case mediaActFavorite:

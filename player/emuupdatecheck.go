@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -176,13 +177,18 @@ func emuCRCForget(path string) {
 
 // emuCompareCores splits the installed cores into those the index has a
 // different build of, and those that match it. A core the index does not carry
-// is in neither.
+// is in neither; nor is one on the firmware's read-only partition, or one whose
+// listed build this device already refused (coreBuildRefused) — offering those
+// as updates would only lead to a press that cannot install them.
 func emuCompareCores(index []coreIndexEntry, active map[string]coreBuild) (stale map[string]coreIndexEntry, current map[string]bool) {
 	stale = map[string]coreIndexEntry{}
 	current = map[string]bool{}
 	for _, entry := range index {
 		build, ok := active[entry.Core]
-		if !ok || build.Path == "" {
+		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) {
+			continue
+		}
+		if _, refused := coreBuildRefused(entry.Core, entry.CRC32); refused {
 			continue
 		}
 		sum, err := emuCachedCRC32(build.Path)

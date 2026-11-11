@@ -222,7 +222,8 @@ func appWallpaperActive(config *Config) bool {
 	if shotModeOn() {
 		return false
 	}
-	return config != nil && bgTexture != nil && !appWallpaperIsShippedDefault(config.Variables.BackgroundImage)
+	return config != nil && (bgTexture != nil || gifWallpaperReady(config)) &&
+		!appWallpaperIsShippedDefault(config.Variables.BackgroundImage)
 }
 
 // drawAppBackdrop paints Home's backdrop over a w×h screen: the navy base, the
@@ -234,37 +235,65 @@ func drawAppBackdrop(renderer *sdl.Renderer, config *Config, w, h int32) {
 	if renderer == nil || w <= 0 || h <= 0 {
 		return
 	}
+	// One config for every layer: the water (liquidbg.go) and the layers
+	// below must agree on the wallpaper and the living background, or one
+	// would paint an opaque base over what the other drew.
+	if config == nil {
+		config = appConfig
+	}
 	if config != nil {
+		// A wallpaper picked in the picker survives a restart (gifwall.go).
+		wallpaperRestoreSaved(config)
 		// Cheap when nothing changed (a string compare); it is what lets a
 		// module screen show a wallpaper picked while it was not on screen.
 		ensureBackgroundTexture(renderer, config)
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	base := ColorBackground
-	base.A = 255
-	if appWallpaperActive(config) {
-		_ = renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: w, H: h})
-		base.A = 150
+	// With the liquid background on (liquidbg.go) the bottom layer — the
+	// wallpaper, or the base and blooms baked into one picture — is drawn
+	// through the water, and what it painted decides what is left to draw.
+	water := liquidBackdropBase(renderer, config, w, h)
+	if water != liquidDrewBackdrop {
+		base := ColorBackground
+		base.A = 255
+		if appWallpaperActive(config) {
+			if water != liquidDrewWallpaper {
+				// An animated GIF wallpaper hands over its current frame
+				// (gifwall.go).
+				if tex, src := appWallpaperTexture(renderer, config); tex != nil {
+					_ = renderer.Copy(tex, src, &sdl.Rect{X: 0, Y: 0, W: w, H: h})
+				}
+			}
+			base.A = 150
+		}
+		setDrawColor(renderer, base)
+		_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: w, H: h})
+		blob := scaleX(900, w)
+		// The bloom colours come from the theme (themegallery.go): the accent
+		// and Home's violet unless a preset — a total conversion — names its
+		// own pair.
+		bloom, bloom2 := themeBackdropBlooms(config)
+		homeGlowBlob(renderer, sdl.Rect{
+			X: scaleX(60, w) - blob/2, Y: scaleY(300, h) - blob/2,
+			W: blob, H: blob,
+		}, bloom, 44)
+		homeGlowBlob(renderer, sdl.Rect{
+			X: w - blob/2 - scaleX(60, w), Y: h - blob/2,
+			W: blob, H: blob,
+		}, bloom2, 36)
 	}
-	setDrawColor(renderer, base)
-	_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: w, H: h})
-	blob := scaleX(900, w)
-	// The bloom colours come from the theme (themegallery.go): the accent and
-	// Home's violet unless a preset — a total conversion — names its own pair.
-	bloom, bloom2 := themeBackdropBlooms(config)
-	homeGlowBlob(renderer, sdl.Rect{
-		X: scaleX(60, w) - blob/2, Y: scaleY(300, h) - blob/2,
-		W: blob, H: blob,
-	}, bloom, 44)
-	homeGlowBlob(renderer, sdl.Rect{
-		X: w - blob/2 - scaleX(60, w), Y: h - blob/2,
-		W: blob, H: blob,
-	}, bloom2, 36)
-	if config != nil && config.Variables.DynamicBg {
+	switch {
+	case config != nil && config.Variables.DynamicBg && water != liquidDrewNothing:
+		// The living background's opaque base would cover the water: only its
+		// drifting lights and particles go on top.
+		renderDynamicBackgroundOver(renderer)
+	case config != nil && config.Variables.DynamicBg:
 		renderDynamicBackground(renderer)
-	} else {
+	default:
 		renderAmbientBackground(renderer)
 	}
+	// The light the ripples catch goes over everything the backdrop drew.
+	liquidBackdropLight(renderer)
 }
 
 // drawAppBackdropBand repaints the backdrop inside one band of the screen. The
@@ -351,6 +380,8 @@ func drawGlassFocusRing(renderer *sdl.Renderer, rect sdl.Rect, radius int32) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
+	// A focus that moved drops a ripple in the liquid background (liquidbg.go).
+	liquidNoteFocus(rect)
 	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFocusRingWidth, glassAccent())
 }
 

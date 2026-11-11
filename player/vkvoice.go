@@ -2,17 +2,21 @@ package main
 
 // vkvoice.go — voice typing for the on-screen keyboard.
 //
-// The mic chip records from the default capture device through SDL's queued
-// capture: 16 kHz mono 16-bit, at most vkVoiceMaxSeconds, with a live level
-// meter in the strip. A second press (A, Enter, a tap on the bar) stops it and
+// The mic chip (or the Menu button, or F4, while the keyboard is up) records
+// through the shared microphone (voicemic.go: SDL's default capture device,
+// then the kernel's capture PCMs and SDL's own list): 16 kHz mono 16-bit, at
+// most vkVoiceMaxSeconds, with a live level meter in the strip. A second press (A, Enter, a tap on the bar) stops it and
 // sends the clip, as an in-memory WAV, to Groq's Whisper through the
 // OpenAI-compatible transcription endpoint, with the Groq API key from
 // Settings → General. The words land at the caret.
 //
 // The states say what is wrong instead of failing silently: no key ("Add your
 // Groq key in Settings", with a jump there), offline ("Voice typing needs
-// internet"), no microphone (the Smart Pro has none; the chip dims and says
-// so), silence (Whisper invents text for silence, so a quiet clip is never
+// internet"), no microphone (the chip dims and says so: neither SDL nor the
+// kernel lists a capture device — the Smart Pro has a built-in mono mic, which
+// voicemic.go reaches through ALSA when SDL's default device cannot record),
+// silence (Whisper invents text for
+// silence, so a quiet clip is never
 // sent). Nothing touches the disk, and neither the key nor the audio is ever
 // logged.
 
@@ -79,7 +83,7 @@ var vkVoiceHTTP = &http.Client{Timeout: vkVoiceTimeout}
 
 var vkVoice struct {
 	phase    vkVoicePhase
-	dev      sdl.AudioDeviceID
+	mic      *micStream
 	buf      []byte
 	started  uint64
 	level    float64
@@ -117,19 +121,18 @@ const (
 	vkMicAbsent
 )
 
-// vkMicProbeStart counts capture devices off the render thread when a keyboard
-// opens (a USB mic plugged in later is found on the next open).
+// vkMicProbeStart looks for a microphone off the render thread when a keyboard
+// opens (a USB mic plugged in later is found on the next open): SDL's capture
+// devices, and on Linux the kernel's capture PCMs too (micPresence) — SDL's
+// list alone missed the Smart Pro's codec and hid the mic chip.
 func vkMicProbeStart() {
 	if !vkMicProbing.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
 		defer vkMicProbing.Store(false)
-		switch n := sdl.GetNumAudioDevices(true); {
-		case n > 0:
-			vkMic.Store(vkMicPresent)
-		case n == 0:
-			vkMic.Store(vkMicAbsent)
+		if v := micPresence(); v != vkMicUnknown {
+			vkMic.Store(v)
 		}
 	}()
 }
@@ -185,14 +188,17 @@ func vkVoiceToggle(config *Config) {
 		vkVoiceSay("Voice typing needs internet", vkVoiceNoAction)
 		return
 	}
-	desired := sdl.AudioSpec{Freq: vkVoiceRate, Format: sdl.AUDIO_S16LSB, Channels: 1, Samples: 1024}
-	var obtained sdl.AudioSpec
-	// No allowed changes: SDL converts whatever the device records into
-	// 16 kHz mono 16-bit, which is exactly what Whisper wants.
-	dev, err := sdl.OpenAudioDevice("", true, &desired, &obtained, 0)
-	if err != nil || dev == 0 {
-		vkMic.Store(vkMicAbsent)
-		vkVoiceSay("No microphone found", vkVoiceNoAction)
+	// The shared microphone (voicemic.go) tries SDL's default device, then
+	// the kernel's capture PCMs and SDL's own list, and hands back 16 kHz mono
+	// 16-bit, which is exactly what Whisper wants.
+	mic, err := micOpen()
+	if err != nil {
+		if errors.Is(err, errMicNone) {
+			vkMic.Store(vkMicAbsent)
+			vkVoiceSay("No microphone found", vkVoiceNoAction)
+			return
+		}
+		vkVoiceSay("The microphone didn't open — the log says why", vkVoiceNoAction)
 		return
 	}
 	vkMic.Store(vkMicPresent)
@@ -200,32 +206,26 @@ func vkVoiceToggle(config *Config) {
 		vkVoice.buf = make([]byte, 0, vkVoiceMaxBytes)
 	}
 	vkVoice.buf = vkVoice.buf[:0]
-	vkVoice.dev = dev
+	vkVoice.mic = mic
 	vkVoice.phase = vkVoiceRecording
 	vkVoice.started = sdl.GetTicks64()
 	vkVoice.level, vkVoice.peak = 0, 0
 	vkVoice.meter = [vkVoiceMeterBars]float64{}
 	vkVoice.secs, vkVoice.clock = -1, ""
-	sdl.PauseAudioDevice(dev, false)
 	vkPlay(PlayActivateSound)
 }
 
-// vkVoiceDrain moves whatever the device captured into the clip.
+// vkVoiceDrain moves whatever the microphone captured into the clip.
 func vkVoiceDrain() {
-	if vkVoice.dev == 0 {
+	if vkVoice.mic == nil {
 		return
 	}
-	avail := int(sdl.GetQueuedAudioSize(vkVoice.dev))
-	room := cap(vkVoice.buf) - len(vkVoice.buf)
-	if avail > room {
-		avail = room
-	}
-	avail &^= 1
-	if avail <= 0 {
+	room := (cap(vkVoice.buf) - len(vkVoice.buf)) &^ 1
+	if room <= 0 {
 		return
 	}
 	start := len(vkVoice.buf)
-	got, _ := sdl.DequeueAudio(vkVoice.dev, vkVoice.buf[start:start+avail])
+	got := vkVoice.mic.Read(vkVoice.buf[start : start+room])
 	if got <= 0 {
 		return
 	}
@@ -243,12 +243,11 @@ func vkVoiceDrain() {
 	}
 }
 
-// vkVoiceCloseDevice stops and closes the capture device.
+// vkVoiceCloseDevice stops and closes the microphone.
 func vkVoiceCloseDevice() {
-	if vkVoice.dev != 0 {
-		sdl.PauseAudioDevice(vkVoice.dev, true)
-		sdl.CloseAudioDevice(vkVoice.dev)
-		vkVoice.dev = 0
+	if vkVoice.mic != nil {
+		vkVoice.mic.Close()
+		vkVoice.mic = nil
 	}
 }
 

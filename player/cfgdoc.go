@@ -292,6 +292,13 @@ var cfgdocRuntimeKeys = map[string]bool{
 	// The TrimUI first-start autostart default was considered on THIS device;
 	// carried to another one it would stop the default there (autostart_firstrun.go).
 	autoStartDefaultedKey: true,
+	// Bookkeeping beside coreUpdateMode: whether the user picked the mode
+	// (emulatorautoupdate.go), not a setting of its own.
+	coreUpdateModeChosenSetting: true,
+	// How many trophies the trophy room had shown when it was last open
+	// (header_trophy.go, and the first build's visit time), and whether Reduce
+	// motion was ever switched by hand (bootOSMotion): bookkeeping too.
+	trophySeenKey: true, trophySeenOldKey: true, bootOSMotionChosenKey: true,
 }
 
 // cfgdocIgnoredKey reports whether a Custom key is runtime state rather than a
@@ -911,6 +918,14 @@ func cfgdocSetValue(config *Config, key string, value interface{}) error {
 	canonical, typed := cfgdocTypedIndex[strings.ToLower(key)]
 	if !typed {
 		config.Variables.Custom[key] = value
+		if strings.EqualFold(key, coreUpdateModeSetting) {
+			// A mode in a settings document is a choice someone made: it
+			// carries the marker that keeps the start-up migration from
+			// turning a "notify" into the default, and the schedulers act on
+			// it now rather than after a restart.
+			config.Variables.Custom[coreUpdateModeChosenSetting] = true
+			emuCoreUpdateMode.Store(int32(coreUpdateModeFrom(config.Variables.Custom)))
+		}
 		return nil
 	}
 	switch {

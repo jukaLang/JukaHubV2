@@ -31,6 +31,11 @@ package main
 // dead zone, resting centre and reach Settings → Controls measures, so a
 // drifting stick neither brings the pointer up nor creeps it, and a short one
 // still reaches full speed.
+//
+// Mouse mode (vcursor_mode.go) is the same pointer turned on on purpose: hold
+// Select + L1 and it stays up, the D-pad and the left stick move it too, and
+// only the screens that own the pad put it away. That is also how the TrimUI
+// Brick, which has no sticks, gets a pointer.
 
 import (
 	"math"
@@ -77,6 +82,11 @@ type vcursorState struct {
 	last    time.Time // previous tick
 	used    time.Time // last deliberate move, click or scroll
 	next    time.Time // when a held trigger scrolls again
+	// Mouse mode (vcursor_mode.go).
+	mode      bool      // on: the pointer stays up; the D-pad and left stick move it
+	modeTold  bool      // its how-to toast was shown this run
+	dpad      [4]bool   // up, down, left, right held in mouse mode
+	dpadSince time.Time // when the D-pad started moving the pointer
 }
 
 // vcursorStaleGap is a tick gap that means the main loop was away (a modal
@@ -113,16 +123,32 @@ func vcursorSetEnabled(config *Config, on bool) {
 	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
-// vcursorBlocked reports a screen that owns the right stick itself, or a
-// moment the pointer must not be up: Chat scrolls with the right stick,
-// JukaLand / a browser game aim with it, the stick calibrations (JukaHub's and
-// PPSSPP's) and the controller test measure it, a ringing alarm is modal.
+// vcursorBlocked reports a moment the pointer must not be up: a screen that
+// owns the pad outright (vcursorScreenBlocks), or — outside mouse mode — the
+// Virtual cursor switch being off or Chat scrolling with the right stick. In
+// mouse mode the pointer is the user's own choice, so only the screens that
+// own the pad put it away; Chat keeps its right stick (vcursorAxis) while the
+// D-pad and the left stick move the pointer.
 func vcursorBlocked(config *Config) bool {
-	// Quick Settings and the wallpaper picker are pad-modal, but the mouse path
-	// has no guard for them: a click would press the screen behind.
-	return !vcursorEnabled(config) || vcursorChatOwnsStick(config) || jlandKeysCaptured(config) ||
-		calibrationPanel.open || stickCalOwnsSticks(config) || ctrldiag.open || alarmFiringActive() ||
-		qs.open || wpOpen
+	if vcursorScreenBlocks(config) {
+		return true
+	}
+	if vcursorModeLive(config) {
+		return false
+	}
+	return !vcursorEnabled(config) || vcursorChatOwnsStick(config)
+}
+
+// vcursorScreenBlocks reports a screen that owns the pad: JukaLand / a browser
+// game aim with the sticks, the stick calibrations (JukaHub's and PPSSPP's)
+// and the controller test measure them, a ringing alarm is modal. Quick
+// Settings and the wallpaper picker are pad-modal, but the mouse path has no
+// guard for them: a click would press the screen behind. The screensaver and
+// the dock's darkened panel show nothing to point at (screensaverAsleep), and
+// mouse mode's pointer, which never times out, was drawn over the starfield.
+func vcursorScreenBlocks(config *Config) bool {
+	return jlandKeysCaptured(config) || calibrationPanel.open || stickCalOwnsSticks(config) || ctrldiag.open ||
+		alarmFiringActive() || qs.open || wpOpen || screensaverAsleep()
 }
 
 // vcursorChatOwnsStick reports the Chat screen scrolling its history with the
@@ -148,10 +174,13 @@ func vcursorMouseState() (x, y int32, state uint32) {
 
 // vcursorResetAxes answers a controller coming or going: the sticks are read
 // again, a click the pad that went away was holding is released, held
-// triggers are let go, and a stick measurement is cancelled.
+// triggers, a held D-pad and a half-held mouse-mode chord are let go, and a
+// stick measurement is cancelled.
 func vcursorResetAxes() {
 	stickResetAxes()
 	vcursor.trig = [2]bool{}
+	vcursorDpadClear()
+	vcursorChord = vcursorChordState{}
 	if vcursor.pressed {
 		vcursor.pressed = false
 		vcursorPushButton(false)
@@ -168,16 +197,21 @@ func vcursorRightTilt(config *Config) float64 {
 
 // vcursorAxis decides what a stick or trigger event does. It reports true
 // when the event belongs to the pointer: the right stick (which brings it up),
-// and L2 / R2 while it is up. false sends the event on: the left stick to
-// stick navigation, the triggers to their shoulder actions.
+// the left stick in mouse mode, and L2 / R2 while it is up. false sends the
+// event on: the left stick to stick navigation, the triggers to their
+// shoulder actions.
 func vcursorAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	switch e.Axis {
 	case sdl.CONTROLLER_AXIS_TRIGGERLEFT, sdl.CONTROLLER_AXIS_TRIGGERRIGHT:
 		return vcursorTrigger(e, config)
 	case sdl.CONTROLLER_AXIS_LEFTX, sdl.CONTROLLER_AXIS_LEFTY:
 		// The left stick is stick navigation's, except on the stick
-		// calibration screen, which measures it.
-		return stickCalOwnsSticks(config)
+		// calibration screen, which measures it, and in mouse mode, where it
+		// moves the pointer (vcursorTick reads it).
+		if stickCalOwnsSticks(config) {
+			return true
+		}
+		return vcursorModeLive(config) && !vcursorBlocked(config)
 	case sdl.CONTROLLER_AXIS_RIGHTX, sdl.CONTROLLER_AXIS_RIGHTY:
 	default:
 		return false
@@ -190,6 +224,11 @@ func vcursorAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	}
 	if vcursorBlocked(config) {
 		vcursorHide()
+		return false
+	}
+	// In mouse mode Chat still scrolls its history with the right stick; the
+	// pointer stays where the D-pad and the left stick put it.
+	if vcursorChatOwnsStick(config) {
 		return false
 	}
 	now := vcursorClock()
@@ -270,12 +309,13 @@ func vcursorHide() {
 	}
 	vcursor.active = false
 	vcursor.trig = [2]bool{}
+	vcursorDpadClear()
 }
 
 // vcursorButton turns A into the left mouse button while the pointer is up.
 // A D-pad press (the left stick's steps are D-pad presses too) puts the
-// pointer away and still moves the focus. It reports true when the press is
-// consumed.
+// pointer away and still moves the focus — except in mouse mode, where the
+// D-pad moves the pointer. It reports true when the press is consumed.
 func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if !vcursor.active {
 		return false
@@ -305,6 +345,15 @@ func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_DOWN,
 		sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		if vcursorModeLive(config) {
+			// Mouse mode: the D-pad moves the pointer (vcursorTick). A queued
+			// hold-to-repeat press (navrepeat.go) stands for a direction that
+			// is already held, so it only has to stay away from the focus.
+			if e.Which != padRepeatWhich {
+				vcursorDpadEvent(e.Button, down)
+			}
+			return true
+		}
 		if down && !vcursor.pressed {
 			vcursorHide()
 		}
@@ -322,11 +371,27 @@ func vcursorCurve(v float64) float64 {
 	return t
 }
 
-// vcursorTick runs once per frame: it moves the pointer from the held right
-// stick (axis events only arrive when a value changes, so a steady tilt has
-// to be integrated here, not in the event handler) and repeats a held
-// trigger's scroll.
+// vcursorTick runs once per frame: it times the mouse-mode chord, moves the
+// pointer from the held sticks and, in mouse mode, the held D-pad (axis events
+// only arrive when a value changes, so a steady tilt has to be integrated
+// here, not in the event handler), and repeats a held trigger's scroll.
 func vcursorTick(config *Config) {
+	now := vcursorClock()
+	// Select + L1 held long enough: mouse mode on or off (vcursor_mode.go).
+	// A chord button whose release was lost is dropped first, and a switch
+	// turned off behind mouse mode's back (a reloaded config) ends it.
+	vcursorChord.forget(vcursorChordPadHeld)
+	if vcursorChord.tick(now) {
+		vcursorModeToggle(config)
+	}
+	if vcursor.mode && !vcursorModeEnabled(config) {
+		vcursorModeApply(config, false, false)
+	}
+	// Mouse mode brings the pointer back once whatever put it away (a panel,
+	// the on-screen keyboard) is gone.
+	if !vcursor.active && vcursorModeLive(config) && !vcursorBlocked(config) {
+		vcursorShow()
+	}
 	if !vcursor.active {
 		return
 	}
@@ -334,16 +399,16 @@ func vcursorTick(config *Config) {
 		vcursorHide()
 		return
 	}
-	now := vcursorClock()
 	gap := now.Sub(vcursor.last)
 	dt := gap.Seconds()
 	vcursor.last = now
 	if gap > vcursorStaleGap {
 		// Whatever happened while the loop was away is unknown: drop the
-		// held click (its release went elsewhere) and the held triggers, and
-		// re-read the sticks.
+		// held click (its release went elsewhere), the held triggers and
+		// D-pad, and re-read the sticks.
 		vcursor.pressed = false
 		vcursor.trig = [2]bool{}
+		vcursorDpadClear()
 		stickResetAxes()
 	}
 	if dt < 0 {
@@ -354,17 +419,24 @@ func vcursorTick(config *Config) {
 		dt = 0.05
 	}
 	busy := false
+	live := vcursorModeLive(config)
 
-	// Right stick: the direction it points, at a speed on the curve. A tilt
-	// under vcursorCreep (a stick settling just outside its dead zone) moves
-	// nothing.
-	if rx, ry := stickShaped(config, stickRight); rx != 0 || ry != 0 {
-		if m := math.Hypot(rx, ry); m >= vcursorCreep {
-			k := vcursorCurve(m) / m
-			vcursor.x = clampFloat(vcursor.x+rx*k*vcursorMaxSpeed*dt, 0, float64(screenWidth-1))
-			vcursor.y = clampFloat(vcursor.y+ry*k*vcursorMaxSpeed*dt, 0, float64(screenHeight-1))
-			busy = vcursorPushMotion(false)
-		}
+	// Right stick: the direction it points, at a speed on the curve (in mouse
+	// mode Chat keeps it for its history). Mouse mode adds the left stick and
+	// the held D-pad, all together never faster than full tilt.
+	var vx, vy float64
+	if !live || !vcursorChatOwnsStick(config) {
+		rx, ry := stickShaped(config, stickRight)
+		vx, vy = vcursorStickVelocity(rx, ry)
+	}
+	if live {
+		mx, my := vcursorModeVelocity(config, now)
+		vx, vy = vcursorClampSpeed(vx+mx, vy+my)
+	}
+	if vx != 0 || vy != 0 {
+		vcursor.x = clampFloat(vcursor.x+vx*dt, 0, float64(screenWidth-1))
+		vcursor.y = clampFloat(vcursor.y+vy*dt, 0, float64(screenHeight-1))
+		busy = vcursorPushMotion(false)
 	}
 
 	// A held trigger keeps scrolling.
@@ -384,8 +456,8 @@ func vcursorTick(config *Config) {
 	}
 	// Idle is measured from deliberate use, not from movement: a stick
 	// drifting just past its dead zone creeps the pointer but does not keep it
-	// up for ever.
-	if !vcursor.pressed && now.Sub(vcursor.used) > vcursorIdleHide {
+	// up for ever. Mouse mode keeps it up until it is turned off.
+	if !live && !vcursor.pressed && now.Sub(vcursor.used) > vcursorIdleHide {
 		vcursorHide()
 	}
 }

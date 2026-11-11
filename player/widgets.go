@@ -540,11 +540,18 @@ func restoreBatterySaverLeftover(config *Config) {
 	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
+// saverMessage is the saver's toast: "Battery saver on — battery 20%, about
+// 50 min left". Only a time to empty is added, never a time to full: the saver
+// turns off when the cable goes in, before there is a charging estimate.
 func saverMessage(prefix string, percent int) string {
 	if percent < 0 {
 		return prefix
 	}
-	return prefix + " — battery " + strconv.Itoa(percent) + "%"
+	msg := prefix + " — battery " + strconv.Itoa(percent) + "%"
+	if left := batteryETALeft(); left != "" {
+		msg += ", " + left
+	}
+	return msg
 }
 
 func themePresetName(config *Config) string {
@@ -595,7 +602,12 @@ func widgetsTick(config *Config) {
 	// charge, not merely for a cable (batteryHoldingCharge); the level's recent
 	// history behind that answer is kept here, once a second.
 	percent := getBatteryPercent()
-	batteryTrendNote(percent, getBatteryCharging())
+	// One cable reading for both: getBatteryCharging's cache can expire
+	// between two calls, and the trend and the estimate must agree.
+	cableIn := getBatteryCharging()
+	batteryTrendNote(percent, cableIn)
+	// The same reading feeds the time-to-empty estimate (battery_eta.go).
+	batteryETANote(percent, cableIn)
 	if batterySaverEnabled(config) {
 		engage := batterySaverShouldEngage(percent, batteryHoldingCharge(), batterySaverActive)
 		applyBatterySaver(config, engage, percent)
@@ -614,6 +626,9 @@ func widgetsTick(config *Config) {
 	// A first-start default applied before the loop ran is announced here,
 	// on a frame the user can see (autostart_firstrun.go).
 	autoStartShowPendingNotice()
+	// A start from the TrimUI boot hook counts as working once the loop has
+	// run a little while (autostart.go).
+	autoStartBootSettleTick()
 }
 
 // --- settings scene ---------------------------------------------------------

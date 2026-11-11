@@ -1,0 +1,6 @@
+# build.sh output (OUT defaults to player/spatialfx/build)
+/build/
+*.so
+*.dll
+*.o
+__pycache__/

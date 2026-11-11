@@ -29,6 +29,24 @@ type playtimeData struct {
 	// Games is the time spent in games launched from JukaHub, by title. It is
 	// absent from saves written before it existed, which read back as empty.
 	Games map[string]int64 `json:"games,omitempty"`
+	// Counts holds the counters and bests the trophies read besides time, by
+	// key (trophy_events.go). Absent from saves older than the second set.
+	Counts map[string]int64 `json:"counts,omitempty"`
+	// Sets holds distinct values by key, as sorted 32-bit hashes.
+	Sets map[string][]uint32 `json:"sets,omitempty"`
+	// Life is what outlives the 90-day window Days keeps.
+	Life playtimeLife `json:"life"`
+}
+
+// playtimeLife is the lifetime record of days: every day used, the first, and
+// the run of consecutive days, kept as days arrive rather than read off Days,
+// which forgets anything older than 90 days.
+type playtimeLife struct {
+	Days       int64  `json:"days,omitempty"`        // days with any time, ever
+	First      string `json:"first,omitempty"`       // the first of them, "2006-01-02"
+	Last       string `json:"last,omitempty"`        // the newest one counted
+	Streak     int64  `json:"streak,omitempty"`      // consecutive days ending at Last
+	BestStreak int64  `json:"best_streak,omitempty"` // the longest such run
 }
 
 type playtimeState struct {
@@ -50,13 +68,18 @@ func newPlaytimeData() playtimeData {
 		Days:     map[string]int64{},
 		Unlocked: map[string]string{},
 		Games:    map[string]int64{},
+		Counts:   map[string]int64{},
+		Sets:     map[string][]uint32{},
 	}
 }
 
 // playtimeInit decodes the persisted snapshot, tolerating the map form that
-// comes back from JSON and the typed struct form used in-process.
+// comes back from JSON and the typed struct form used in-process. rev carries
+// on from where it was rather than starting again: a backup restore calls this
+// mid-session, and a counter back at 1 could match a count the trophy room or
+// the Start menu badge cached from the snapshot before it.
 func playtimeInit(config *Config) {
-	playtime = playtimeState{data: newPlaytimeData()}
+	playtime = playtimeState{data: newPlaytimeData(), rev: playtime.rev}
 	if config != nil {
 		if raw, ok := config.Variables.Custom[playtimeCustomKey]; ok {
 			if b, err := json.Marshal(raw); err == nil {
@@ -973,6 +996,62 @@ func trophyShown(i int, d playtimeData) bool {
 		return true
 	}
 	return trophyAvailable(i)
+}
+
+// trophyCount is how many trophies d has earned and how many the room lists,
+// counted the way trophyRoomRefresh counts its header: a trophy the room does
+// not show (trophyShown) counts towards neither.
+func trophyCount(d playtimeData) (earned, shown int) {
+	for i := range playtimeAchievements {
+		if !trophyShown(i, d) {
+			continue
+		}
+		shown++
+		if _, ok := d.Unlocked[playtimeAchievements[i].ID]; ok {
+			earned++
+		}
+	}
+	return earned, shown
+}
+
+// trophySummaryCache keeps the last trophyCount of the live snapshot. The
+// Start menu row and the Tools hub tile show the count on every frame they
+// draw; it is redone only when the snapshot (playtime.rev, which moves about
+// once a second while time accrues) or the availability (trophyAvail.gen)
+// changed. playtimeInit carries rev forward (a backup restore cannot bring an
+// old rev back); the unlock count in the key is belt and braces for a snapshot
+// swapped in without a rev bump.
+var trophySummaryCache struct {
+	valid    bool
+	rev      uint64
+	gen      uint64
+	unlocked int
+	earned   int
+	shown    int
+}
+
+// trophySummary returns the live earned and shown counts. Render thread only,
+// like the playtime snapshot it reads.
+func trophySummary() (earned, shown int) {
+	d := playtime.data
+	c := &trophySummaryCache
+	if c.valid && c.rev == playtime.rev && c.gen == trophyAvail.gen && c.unlocked == len(d.Unlocked) {
+		return c.earned, c.shown
+	}
+	earned, shown = trophyCount(d)
+	c.valid, c.rev, c.gen, c.unlocked = true, playtime.rev, trophyAvail.gen, len(d.Unlocked)
+	c.earned, c.shown = earned, shown
+	return earned, shown
+}
+
+// trophySummaryBadge is the short count a menu row shows beside "Trophies",
+// "12/101", or "" before there is anything to count.
+func trophySummaryBadge() string {
+	earned, shown := trophySummary()
+	if shown <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", earned, shown)
 }
 
 // ── Stats helpers ─────────────────────────────────────────────────────────────

@@ -369,13 +369,25 @@ func hotseatMergeAppendConfig(extra []string, path string) []string {
 }
 
 // hotseatScriptForwards reports whether a launch script passes its extra
-// arguments on: "$@" or $* in a shell script, %* in a batch file. A stock
-// launch.sh that passes only "$1" does not.
+// arguments on as arguments: "$@" or a bare $* in a shell script, %* in a batch
+// file. A stock launch.sh that passes only "$1" does not, and neither does one
+// that passes "$*" — the stock and CrossMix scripts end in
+// `ra64.trimui ... -L <core> "$*"`, which joins everything into ONE argument,
+// so an appended --appendconfig became part of the ROM path and RetroArch
+// could not open the game at all. "$@" wins over a quoted "$*" elsewhere in
+// the script: JukaHub's own PPSSPP launcher forwards with "$@" and joins its
+// arguments with "$*" only for a log line.
 func hotseatScriptForwards(head string, batch bool) bool {
 	if batch {
 		return strings.Contains(head, "%*")
 	}
-	return strings.Contains(head, "$@") || strings.Contains(head, "$*") || strings.Contains(head, "${@}")
+	if strings.Contains(head, "$@") || strings.Contains(head, "${@}") {
+		return true
+	}
+	if strings.Contains(head, `"$*"`) || strings.Contains(head, `"${*}"`) {
+		return false
+	}
+	return strings.Contains(head, "$*")
 }
 
 // hotseatScriptHead reads the start of a launch script.

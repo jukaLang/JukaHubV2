@@ -235,6 +235,7 @@ func musicPlaylistPut(clean musicPlaylist) error {
 		}
 		musicPlaylistState.items = append(musicPlaylistState.items, clean)
 		musicPlaylistSelectionIndex = len(musicPlaylistState.items) - 1
+		trophyEvent(tkPlaylist) // a new name only: re-saving one replaces it
 	}
 	musicPlaylistsSaveLocked()
 	return nil

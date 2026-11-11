@@ -616,9 +616,39 @@ or accepted by design.
   folder the File Explorer attached from (`chatAttachmentRoot` in `chat.go`).
   A path typed into a message, restored from an edited history file or attached
   by a remote room is refused instead of read.
-- Archive entries (tool downloads and File Explorer unzip) are reduced to a
+- Archive entries (tool downloads and the Files extraction) are reduced to a
   plain base name or checked to stay below the destination directory, so a
   hostile archive cannot write outside it.
+- The Files extraction (`files_extract.go`) writes every member through an
+  `os.Root` opened on a fresh staging folder beside the archive and moves the
+  result into place only when the whole archive has unpacked, with a rename
+  that refuses to replace (`renameat2` `RENAME_NOREPLACE`, `MoveFileEx` without
+  `MOVEFILE_REPLACE_EXISTING`). A name with a `..` component, deeper than 64
+  folders or longer than 4096 bytes is skipped, a leading slash or drive is
+  dropped, each component is cleaned of what FAT and Windows refuse (and
+  reserved device names), links, devices and pipes are never created (a tar
+  hard link is copied from a file already written), and a member must hold
+  exactly the bytes it declares. A zip's central directory is walked header
+  by header before archive/zip reads it (the way archive/zip will, so a count
+  the end record understates is still seen), capping entries at 200 000 and
+  the directory at 64 MB; the declared total must fit the card's free space
+  less 32 MB; and an `.xz` is not given to the library's xz reader, which
+  allocates whatever LZMA2 dictionary a block header asks for: JukaHub reads
+  the container itself (`files_extract_xz.go`: header CRCs, checks, index and
+  footer verified), refuses a dictionary over 128 MB (and a file whose blocks
+  ask for far more dictionary than they unpack to), and hands each block's
+  LZMA2 data to `lzma.Reader2` with the size it chose. 7z and RAR
+  go to 7-Zip (`files_extract_tools.go`) with wildcards off (`-spd`) and the
+  output folder as the working folder; 7-Zip lists the archive first, and
+  encrypted entries, too many items, more than the free space, symbolic links
+  or a listing it cannot give stop it there; the free space is watched while
+  it runs; and what it wrote is walked afterwards and held to the same rules.
+  Windows' `tar.exe` (RAR, when no full 7-Zip is installed) is not listed
+  first; libarchive refuses to write through links by itself, and the space
+  watch and the walk apply. The sweep of crashed staging folders only removes
+  folders that carry its marker file, and no archive entry may be named like
+  one. Extract never replaces an existing file; Extract here replaces regular
+  files of the same name after a second press, and never the archive itself.
 - The Windows-runtime extractor writes nothing through a link the archive
   supplied: member names and link texts are resolved against the extraction
   root, then passed through the prefix test the analyser can follow, and the
@@ -660,7 +690,7 @@ or accepted by design.
   summing two sizes (`patch_engine.go`). A header claiming more than `int64`
   holds is reported as `math.MaxInt64` and rejected by the cap rather than
   wrapping negative past it. Tool installs, core updates, APK staging, package
-  archives and the File Explorer unzip all use these helpers.
+  archives and the Files extraction all use these helpers.
 - The tar extractor refuses a negative declared size before any arithmetic, so a
   header cannot subtract from the running total and let the rest of an archive
   through (`extractTarGzSafe` in `patch_engine.go`).

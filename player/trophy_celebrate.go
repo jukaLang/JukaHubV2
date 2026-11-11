@@ -15,7 +15,9 @@ package main
 // starts while JukaHub is not on screen (a game owns the framebuffer, the window
 // is minimised), while the alarm rings or while the screensaver is up — the
 // queue simply waits, so a trophy earned in the background is celebrated when
-// the user is back. It never takes input: the card is a notice, not a dialog.
+// the user is back. It never takes the pad or the keyboard: the card is a
+// notice, not a dialog. A tap or a click on it is a deliberate press, though,
+// and opens the trophy room (trophyCardClick).
 //
 // Reduced motion (or the "Calm" celebration setting) keeps the card and the
 // chime but drops the slide, the pop, the shine and the confetti: the card
@@ -361,6 +363,50 @@ func trophyOverlayReady() bool {
 // main loop keeps its fast frame cadence until the confetti has landed.
 func trophyOverlayActive() bool {
 	return trophyShow.active || trophyConfettiAlive() > 0
+}
+
+// trophyCardClick takes a tap or click on the card on screen: the card ends
+// and the trophy room opens, so a trophy just earned is one touch from the
+// whole collection. main.go asks after the modal panels, the Start menu and the
+// notification centre have had the click. It stands aside — the press goes on
+// to whatever is under the card — while a video is open, because the player's
+// own top-right controls sit under the card and a tap meant for them must not
+// pull the user out of the video.
+//
+// Over anything that owns the screen (trophyCardOverOverlay) the tap only puts
+// the card away: opening the room changes the scene, which would tear down the
+// power confirmation, a sheet or Quick Settings the card happened to cover.
+func trophyCardClick(mx, my int32, config *Config) bool {
+	if config == nil || !trophyShow.active || trophyShow.card.W <= 0 || !pointInRect(mx, my, trophyShow.card) {
+		return false
+	}
+	if playerPhase() != "idle" {
+		return false
+	}
+	trophyShow.active = false
+	trophyShow.card = sdl.Rect{}
+	PlayActivateSound()
+	if trophyCardOverOverlay(config) {
+		return true
+	}
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		config.Scenes[currentSceneIndex].Name == playtimeSceneName {
+		// Already in the room: the tap only puts the card away.
+		return true
+	}
+	trophyOpenRoom(config)
+	return true
+}
+
+// trophyCardOverOverlay reports whether the card sits over something that owns
+// the screen: a modal panel, Home's power confirmation, the hand-off card, a
+// Tools sheet, Quick Settings, the controls legend, the shortcuts sheet, the
+// wallpaper picker, search, the calendar, the tour, the Start menu or the
+// notification centre.
+func trophyCardOverOverlay(config *Config) bool {
+	return modalPanelBlocksShoulders() || homePowerConfirm.open || (hoffCard.rect.W > 0 && hoffCardVisible()) ||
+		tbxSheetVisible(config) || qs.open || controlsLegend.open || shortcutsOpen || wpOpen ||
+		globalSearchOpen || clipSearchOpen || homeCalendarOpen || onboarding.active || tb.startOpen || nc.open
 }
 
 // trophyBegin puts a card on screen and fires its sound and pulse.

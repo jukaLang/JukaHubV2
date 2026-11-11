@@ -14,18 +14,27 @@ package main
 //     the binary it replaces as a .bak (pruned to maxCoreBackups). The Emulators
 //     page does that on a press, and startCoreAutoUpdate does it by itself once a
 //     day on the handheld — see emulatorautoupdate.go.
-//   - standalone emulators on the handheld (PPSSPP, mGBA, Flycast). Their
-//     upstream releases are built for desktop Linux, not for this firmware's
-//     userspace and launcher scripts, so they are fetched to
-//     data/emulator-updates/<app>/<tag>/ and reported, never dropped over an
-//     installed emulator. Nothing here can break a working install in the
-//     background. (Windows installs its standalone emulators for real, from
-//     their GitHub releases — see emuwininstall.go.)
+//   - standalone emulators. Windows installs them for real, from their GitHub
+//     releases (emuwininstall.go). The handheld used to look up PPSSPP, mGBA and
+//     Flycast here and "stage" an aarch64 archive in data/emulator-updates/, but
+//     none of the three publishes a build for this firmware — upstream PPSSPP
+//     and mGBA release no aarch64 Linux build at all, and a desktop AppImage
+//     could not start under the firmware's launchers anyway. The stage never
+//     received a file, and the page's toast still read as though an emulator
+//     had been updated, so the lookup is gone. Where a launcher runs the
+//     libretro core (mgba, flycast, ppsspp) the core pass keeps it current; the
+//     standalone PPSSPP the PSP launchers start is managed for real elsewhere:
+//     JukaHub installs and updates its own build under the same Emulator
+//     updates setting.
 //
 // The index is a plain listing, not a signed document: its CRC is a corruption
 // check, not proof of authorship. An activation — on a press or automatic — is
 // therefore always reversible: the replaced binary is kept beside the core and
-// the Emulators page restores it in one press.
+// the Emulators page restores it in one press. And a build is checked before it
+// is kept at all: one that cannot load on this firmware (a nightly built against
+// a newer glibc than the handheld has — elfcompat.go) is refused before it
+// reaches the pool, remembered by its checksum so the daily pass does not fetch
+// it again, and the core that works stays.
 
 import (
 	"archive/zip"
@@ -43,6 +52,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -123,9 +133,18 @@ func fetchUpdateBytes(ctx context.Context, client *http.Client, raw string, maxB
 		return nil, err
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("response exceeds %d byte limit", maxBytes)
+		return nil, &updateTooLargeError{limit: maxBytes}
 	}
 	return data, nil
+}
+
+// updateTooLargeError is fetchUpdateBytes' refusal of a response over its
+// limit. It is a type so the core pass can tell "this build will never fit"
+// (remembered, not retried daily) from a download that merely failed.
+type updateTooLargeError struct{ limit int64 }
+
+func (e *updateTooLargeError) Error() string {
+	return fmt.Sprintf("response exceeds %d byte limit", e.limit)
 }
 
 // coreIndexEntry is one line of the buildbot index:
@@ -145,20 +164,9 @@ type coreUpdate struct {
 	CRC32   string
 	URL     string
 	Current string
-}
-
-// standaloneUpdate is one upstream release an installed emulator could be
-// updated to, and where it was fetched to.
-type standaloneUpdate struct {
-	Name string
-	Repo string
-	Tag  string
-	URL  string
-	Path string
-	Note string
-	// Digest is GitHub's own "sha256:<hex>" for the asset. It is checked when
-	// present; an older release without one is still fetched, with a note.
-	Digest string
+	// Active is the binary the build would replace ("" for a first install),
+	// so the download can be refused when it is not the same architecture.
+	Active string
 }
 
 // parseCoreIndex reads the buildbot index. It skips anything that is not a
@@ -273,13 +281,20 @@ func coreCRC32File(path string) (string, error) {
 }
 
 // planCoreUpdates returns the installed cores whose build differs from the one
-// the index lists, newest-first by core name. A core the index does not carry
-// (a custom build, a Windows .dll) is left alone.
+// the index lists, in core-name order. A core the index does not carry (a
+// custom build, a Windows .dll) is left alone, and so is one on the firmware's
+// read-only system partition (coreDirIsSystem): its update could only fail.
+//
+// "Differs" is all the CRC32 can say. On CrossMix, whose image ships its own
+// builds of many cores, that means a shipped core is replaced by the buildbot's
+// nightly the first time the pass runs — the kept .bak and the one-press
+// rollback are what make that acceptable, and a nightly that cannot load here is
+// refused before it replaces anything.
 func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []coreUpdate {
 	updates := make([]coreUpdate, 0, len(entries))
 	for _, entry := range entries {
 		build, ok := active[entry.Core]
-		if !ok || build.Path == "" {
+		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) {
 			continue
 		}
 		// The checksum cache is keyed by size and modification time, so a core
@@ -294,6 +309,7 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 			CRC32:   entry.CRC32,
 			URL:     emuCoreBaseURL() + entry.File,
 			Current: build.Version,
+			Active:  build.Path,
 		})
 	}
 	return updates
@@ -315,9 +331,19 @@ func fetchCoreIndex(ctx context.Context, client *http.Client) ([]coreIndexEntry,
 // fetchCoreUpdate downloads one core zip, checks the CRC32 the index promised
 // and writes the binary into the pool. A pool build is inert until something
 // activates it: the Emulators page does, and so does the automatic pass.
+//
+// Two outcomes are refusals rather than failures (coreRefusedError): a build
+// larger than the download limit, and one that cannot load on this firmware.
+// Neither changes by trying again, so the build is remembered by its checksum
+// (coreBuildRefused) and the daily pass does not download it every day; the
+// next build the index lists gets its own check.
 func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, poolRoot string) (coreBuild, error) {
 	data, err := fetchUpdateBytes(ctx, client, upd.URL, coreUpdateMaxDownload)
 	if err != nil {
+		var tooLarge *updateTooLargeError
+		if errors.As(err, &tooLarge) {
+			return coreBuild{}, coreRefuse(upd, coreTooLargeReason())
+		}
 		return coreBuild{}, err
 	}
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -350,12 +376,17 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		return coreBuild{}, fmt.Errorf("%s does not contain %s", upd.URL, want)
 	}
 	if int64(len(payload)) > coreUpdateMaxDownload {
-		return coreBuild{}, errors.New("core binary is larger than the download limit")
+		return coreBuild{}, coreRefuse(upd, coreTooLargeReason())
 	}
 	h := crc32.NewIEEE()
 	_, _ = h.Write(payload)
 	if got := fmt.Sprintf("%08x", h.Sum32()); got != upd.CRC32 {
 		return coreBuild{}, fmt.Errorf("core checksum mismatch (index %s, download %s)", upd.CRC32, got)
+	}
+	// The bytes are the build the index promised; whether this firmware can
+	// load them is a separate question, asked before anything is written.
+	if problem := coreLoadProblemData(payload, upd.Active); problem != "" {
+		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
 	}
 
 	dir := filepath.Join(poolRoot, upd.Core, upd.Date)
@@ -390,6 +421,9 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	// cores by itself a new dated folder per core per day would be the fastest
 	// growing thing on the card. The build just written is never a candidate.
 	pruneCorePool(poolRoot, upd.Core, upd.Date, maxCorePoolBuilds)
+	// A build refused before (on older firmware, say) that passed now is no
+	// longer one to skip.
+	coreRefusalForget(upd.Core, upd.CRC32)
 	return coreBuild{
 		Core:    upd.Core,
 		Version: upd.Date,
@@ -398,6 +432,142 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		Pool:    true,
 		Size:    int64(len(payload)),
 	}, nil
+}
+
+// coreRefusedError is a core build this device will not take: one that cannot
+// load on this firmware, or one larger than the download limit. The core that
+// is installed stays as it is.
+type coreRefusedError struct {
+	Core string
+	// Build names the build — the index date, or a kept build's time.
+	Build  string
+	Reason string
+}
+
+func (e *coreRefusedError) Error() string {
+	build := "this build"
+	if strings.TrimSpace(e.Build) != "" {
+		build = "the " + e.Build + " build"
+	}
+	return build + " " + e.Reason
+}
+
+// coreCannotLoadReason prefixes a load problem from elfcompat.go, so every
+// refusal of that kind reads "… cannot load on this firmware: needs …".
+const coreCannotLoadReason = "cannot load on this firmware: "
+
+// coreTooLargeReason is the refusal of a build over coreUpdateMaxDownload (a
+// full MAME core can be).
+func coreTooLargeReason() string {
+	return fmt.Sprintf("is larger than the %d MB a core download may be", coreUpdateMaxDownload>>20)
+}
+
+// coreRefuse remembers that upd's build was refused and returns the error that
+// says why.
+func coreRefuse(upd coreUpdate, reason string) error {
+	coreRefusalRecord(upd.Core, upd.CRC32, upd.Date, reason)
+	logWarn("emulators", "core %s %s (crc %s) refused: %s", upd.Core, upd.Date, upd.CRC32, reason)
+	return &coreRefusedError{Core: upd.Core, Build: upd.Date, Reason: reason}
+}
+
+// coreRefusal is one remembered refusal: the build, by the CRC32 the index
+// states for it, and why it was refused.
+type coreRefusal struct {
+	CRC32  string `json:"crc32"`
+	Build  string `json:"build,omitempty"`
+	Reason string `json:"reason"`
+	At     string `json:"at,omitempty"`
+}
+
+// coreRefusals holds one refusal per core — a newer refusal of the same core
+// replaces the older one — in data/performance/core-refused.json, so a reboot
+// does not mean downloading every refused build again. Only the exact build is
+// skipped: the next one the index lists is fetched and checked like any other.
+var coreRefusals struct {
+	mu   sync.Mutex
+	path string
+	m    map[string]coreRefusal
+}
+
+func coreRefusalsPath() string { return filepath.Join(compatDir(), "core-refused.json") }
+
+// coreRefusalsLoadLocked reads the file the first time, and again whenever the
+// data folder is another one (a test pointing compatDir elsewhere).
+func coreRefusalsLoadLocked() {
+	path := coreRefusalsPath()
+	if coreRefusals.m != nil && coreRefusals.path == path {
+		return
+	}
+	coreRefusals.path = path
+	coreRefusals.m = map[string]coreRefusal{}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 1<<20 {
+		return
+	}
+	loaded := map[string]coreRefusal{}
+	if json.Unmarshal(data, &loaded) != nil {
+		return
+	}
+	for core, r := range loaded {
+		if core != "" && r.CRC32 != "" {
+			coreRefusals.m[core] = r
+		}
+	}
+}
+
+func coreRefusalsSaveLocked() {
+	data, err := json.MarshalIndent(coreRefusals.m, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := writeCompatAtomic(coreRefusals.path, append(data, '\n'), 0o644); err != nil {
+		logWarn("emulators", "could not save the refused core builds: %v", err)
+	}
+}
+
+// coreBuildRefused reports whether this exact build of core (by its index
+// CRC32) was refused before, and why.
+func coreBuildRefused(core, crc string) (string, bool) {
+	core = normalizeCoreName(core)
+	crc = strings.ToLower(strings.TrimSpace(crc))
+	if core == "" || crc == "" {
+		return "", false
+	}
+	coreRefusals.mu.Lock()
+	defer coreRefusals.mu.Unlock()
+	coreRefusalsLoadLocked()
+	r, ok := coreRefusals.m[core]
+	if !ok || r.CRC32 != crc {
+		return "", false
+	}
+	return r.Reason, true
+}
+
+// coreRefusalRecord remembers a refused build.
+func coreRefusalRecord(core, crc, build, reason string) {
+	core = normalizeCoreName(core)
+	crc = strings.ToLower(strings.TrimSpace(crc))
+	if core == "" || crc == "" {
+		return
+	}
+	coreRefusals.mu.Lock()
+	defer coreRefusals.mu.Unlock()
+	coreRefusalsLoadLocked()
+	coreRefusals.m[core] = coreRefusal{CRC32: crc, Build: build, Reason: reason, At: time.Now().UTC().Format(time.RFC3339)}
+	coreRefusalsSaveLocked()
+}
+
+// coreRefusalForget drops core's refusal when it names this build.
+func coreRefusalForget(core, crc string) {
+	core = normalizeCoreName(core)
+	crc = strings.ToLower(strings.TrimSpace(crc))
+	coreRefusals.mu.Lock()
+	defer coreRefusals.mu.Unlock()
+	coreRefusalsLoadLocked()
+	if r, ok := coreRefusals.m[core]; ok && r.CRC32 == crc {
+		delete(coreRefusals.m, core)
+		coreRefusalsSaveLocked()
+	}
 }
 
 // maxCorePoolBuilds is how many fetched builds of one core stay in the pool.
@@ -448,123 +618,6 @@ func pruneCorePool(poolRoot, core, newest string, keep int) []string {
 	return removed
 }
 
-// standaloneEmulatorRepos is the allowlist of upstream projects worth checking.
-// They are looked up, and their aarch64 asset downloaded to a staging folder;
-// nothing is installed, because the launcher on the card belongs to the
-// firmware, not to JukaHub.
-var standaloneEmulatorRepos = []struct {
-	Name string
-	Repo string
-}{
-	{"PPSSPP", "hrydgard/ppsspp"},
-	{"mGBA", "mgba-emu/mgba"},
-	{"Flycast", "flyinghead/flycast"},
-}
-
-// standaloneArm64Asset reports whether an upstream asset is the aarch64 Linux
-// build worth fetching.
-func standaloneArm64Asset(name string) bool {
-	lower := strings.ToLower(name)
-	if !strings.Contains(lower, "arm64") && !strings.Contains(lower, "aarch64") {
-		return false
-	}
-	// "arm64" is not enough on its own: PPSSPP also ships a Windows-ARM64
-	// archive, which would install a desktop binary on the card.
-	for _, other := range []string{"windows", "win32", "win64", "win-arm", "macos", "osx", "darwin"} {
-		if strings.Contains(lower, other) {
-			return false
-		}
-	}
-	for _, ext := range []string{".zip", ".tar.gz", ".tgz", ".appimage"} {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
-	}
-	return false
-}
-
-// fetchStandaloneUpdates asks each allowlisted project for its latest release
-// and returns the aarch64 asset when it publishes one. A project with no such
-// asset gets a note instead of an offer, because a desktop build is not an
-// update for this device.
-func fetchStandaloneUpdates(ctx context.Context, client *http.Client) ([]standaloneUpdate, []string) {
-	var found []standaloneUpdate
-	var errs []string
-	for _, item := range standaloneEmulatorRepos {
-		url := fmt.Sprintf("%s/repos/%s/releases/latest", standaloneAPIBase, item.Repo)
-		data, err := fetchUpdateBytes(ctx, client, url, patchMaxMetadata)
-		if err != nil {
-			errs = append(errs, item.Name+": "+err.Error())
-			continue
-		}
-		var rel struct {
-			TagName string `json:"tag_name"`
-			Assets  []struct {
-				Name               string `json:"name"`
-				BrowserDownloadURL string `json:"browser_download_url"`
-				Digest             string `json:"digest"`
-			} `json:"assets"`
-		}
-		if err := json.Unmarshal(data, &rel); err != nil {
-			errs = append(errs, item.Name+": unreadable release metadata")
-			continue
-		}
-		update := standaloneUpdate{Name: item.Name, Repo: item.Repo, Tag: rel.TagName}
-		for _, asset := range rel.Assets {
-			if standaloneArm64Asset(asset.Name) {
-				update.URL = asset.BrowserDownloadURL
-				update.Digest = asset.Digest
-				break
-			}
-		}
-		if update.URL == "" {
-			update.Note = "no aarch64 build published"
-		}
-		found = append(found, update)
-	}
-	return found, errs
-}
-
-// downloadStandalone saves an upstream emulator archive under the app's data
-// folder. The file is verified against the digest GitHub reports for the asset;
-// it is deliberately not unpacked over an installed emulator.
-func downloadStandalone(ctx context.Context, client *http.Client, update standaloneUpdate, destRoot string) (standaloneUpdate, error) {
-	if update.URL == "" {
-		return update, errors.New("no aarch64 asset to download")
-	}
-	data, err := fetchUpdateBytes(ctx, client, update.URL, standaloneMaxDownload)
-	if err != nil {
-		return update, err
-	}
-	if err := verifyReleaseDigest(data, update.Digest); err != nil {
-		return update, err
-	}
-	name := sanitizeFileName(filepath.Base(update.URL))
-	if name == "" {
-		name = "download.bin"
-	}
-	dir := filepath.Join(destRoot, strings.ToLower(update.Name), sanitizeFileName(update.Tag))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return update, err
-	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return update, err
-	}
-	update.Path = path
-	return update, nil
-}
-
-// emulatorUpdateDir is where fetched standalone builds are staged. It sits in
-// the app data folder so the files are easy to find, and deliberately not in
-// an Emus/ folder: nothing is installed for the user.
-func emulatorUpdateDir() string {
-	if dir, err := P().DataDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "emulator-updates")
-	}
-	return filepath.Join("data", "emulator-updates")
-}
-
 // verifyReleaseDigest checks GitHub's sha256 for a downloaded asset. A release
 // that publishes no digest is fetched anyway; the caller logs that it was not
 // verified rather than pretending it was.
@@ -587,11 +640,13 @@ func verifyReleaseDigest(data []byte, digest string) error {
 
 // emulatorUpdateReport is what one check-and-fetch pass did.
 type emulatorUpdateReport struct {
-	CoresChecked  int
-	Cores         []coreBuild
-	CoreErrors    []string
-	Standalones   []standaloneUpdate
-	StandaloneErr []string
+	CoresChecked int
+	Cores        []coreBuild
+	CoreErrors   []string
+	// Refused names the cores whose new build this device will not take — it
+	// cannot load on this firmware, or it is over the download limit
+	// (coreRefusedError). Their installed builds stay, and it is not a failure.
+	Refused []string
 }
 
 // summary is the one-line result shown in the toast.
@@ -600,19 +655,11 @@ func (r emulatorUpdateReport) summary() string {
 	if len(r.Cores) > 0 {
 		parts = append(parts, itoa(len(r.Cores))+" core(s) added to the pool")
 	}
-	if len(r.Standalones) > 0 {
-		downloaded := 0
-		for _, s := range r.Standalones {
-			if s.Path != "" {
-				downloaded++
-			}
-		}
-		if downloaded > 0 {
-			parts = append(parts, itoa(downloaded)+" emulator build(s) downloaded")
-		}
+	if len(r.Refused) > 0 {
+		parts = append(parts, strings.Join(r.Refused, ", ")+": new build not usable here, current kept")
 	}
-	if len(r.CoreErrors) > 0 || len(r.StandaloneErr) > 0 {
-		parts = append(parts, itoa(len(r.CoreErrors)+len(r.StandaloneErr))+" failed")
+	if len(r.CoreErrors) > 0 {
+		parts = append(parts, itoa(len(r.CoreErrors))+" failed")
 	}
 	if len(parts) == 0 {
 		if r.CoresChecked == 0 {
@@ -623,8 +670,10 @@ func (r emulatorUpdateReport) summary() string {
 	return strings.Join(parts, " · ")
 }
 
-// runEmulatorUpdates performs one full pass: cores first, then the standalone
-// lookups. It never touches an active core or an installed emulator.
+// runEmulatorUpdates performs one pass over the cores: every installed core
+// whose build differs from the index gets that build in the pool. It never
+// touches an active core — activation is the separate press on the
+// compatibility panel's core tab, or the Emulators page's update.
 func runEmulatorUpdates(ctx context.Context, client *http.Client) emulatorUpdateReport {
 	var report emulatorUpdateReport
 	inv := scanCoreInventory()
@@ -634,49 +683,28 @@ func runEmulatorUpdates(ctx context.Context, client *http.Client) emulatorUpdate
 	entries, err := fetchCoreIndex(ctx, client)
 	if err != nil {
 		report.CoreErrors = append(report.CoreErrors, "core index: "+err.Error())
-	} else {
-		updates := planCoreUpdates(entries, inv.Active)
-		pool := compatCorePoolDir()
-		for i, upd := range updates {
-			if err := ctx.Err(); err != nil {
-				report.CoreErrors = append(report.CoreErrors, err.Error())
-				break
-			}
-			installBarPhase(installPhaseDownload)
-			installBarDetail(fmt.Sprintf("%s (%d/%d)", upd.Core, i+1, len(updates)))
-			build, err := fetchCoreUpdate(ctx, client, upd, pool)
-			if err != nil {
-				report.CoreErrors = append(report.CoreErrors, upd.Core+": "+err.Error())
-				continue
-			}
-			report.Cores = append(report.Cores, build)
-		}
-	}
-
-	// The staged standalone builds are aarch64 Linux archives for the handheld.
-	// On Windows the Emulators page installs real Windows releases instead
-	// (emuwininstall.go), so staging an ARM build there would only fill a folder.
-	if IsWindows() {
 		return report
 	}
-	installBarPhase(installPhaseResolving)
-	installBarDetail("Checking standalone emulators")
-	standalones, errs := fetchStandaloneUpdates(ctx, client)
-	report.StandaloneErr = append(report.StandaloneErr, errs...)
-	destRoot := emulatorUpdateDir()
-	for _, update := range standalones {
-		if update.URL == "" {
-			report.Standalones = append(report.Standalones, update)
-			continue
+	updates := planCoreUpdates(entries, inv.Active)
+	pool := compatCorePoolDir()
+	for i, upd := range updates {
+		if err := ctx.Err(); err != nil {
+			report.CoreErrors = append(report.CoreErrors, err.Error())
+			break
 		}
 		installBarPhase(installPhaseDownload)
-		installBarDetail(update.Name + " " + update.Tag)
-		fetched, err := downloadStandalone(ctx, client, update, destRoot)
+		installBarDetail(fmt.Sprintf("%s (%d/%d)", upd.Core, i+1, len(updates)))
+		build, err := fetchCoreUpdate(ctx, client, upd, pool)
 		if err != nil {
-			report.StandaloneErr = append(report.StandaloneErr, update.Name+": "+err.Error())
+			var refused *coreRefusedError
+			if errors.As(err, &refused) {
+				report.Refused = append(report.Refused, coreConfigDisplayName(upd.Core))
+				continue
+			}
+			report.CoreErrors = append(report.CoreErrors, upd.Core+": "+err.Error())
 			continue
 		}
-		report.Standalones = append(report.Standalones, fetched)
+		report.Cores = append(report.Cores, build)
 	}
 	return report
 }
@@ -708,9 +736,9 @@ func startEmulatorUpdates() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	installBarBegin("Emulator updates")
+	installBarBegin("Core builds")
 	installBarPhase(installPhaseResolving)
-	ShowToast("Checking libretro cores and emulator releases…", ToastKindInfo)
+	ShowToast("Checking the libretro buildbot for newer core builds…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
 		// The timeout derives from the card's run token, so a cancel from the
@@ -721,7 +749,7 @@ func startEmulatorUpdates() {
 		installBarPhase(installPhaseDone)
 		installBarDone()
 		kind := ToastKindSuccess
-		if len(report.CoreErrors) > 0 || len(report.StandaloneErr) > 0 {
+		if len(report.CoreErrors) > 0 {
 			kind = ToastKindWarning
 		}
 		PlaySuccessSound()

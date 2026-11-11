@@ -646,6 +646,10 @@ func sceneDisplayName(name string) string {
 		return "Keyboard"
 	case rommSceneName:
 		return "ROM manager"
+	case apkStoreSceneName:
+		return apkStoreEntryName
+	case voiceSceneName:
+		return "Voice command"
 	default:
 		return name
 	}
@@ -685,8 +689,14 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	statusClockRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
 	statusVolumeRect = sdl.Rect{}
+	statusBrightnessRect = sdl.Rect{}
 	weatherStatusRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
+	headerTrophyClear()
+	// The release pill is measured again below whenever it is drawn; a rect
+	// left from a frame that drew it (an offer since installed, screenshot
+	// mode) would still take a click and be a focus stop where the cup is now.
+	updatePrompt.badge = sdl.Rect{}
 	barH := headerBarHeight()
 	// Home's status row has no bar chrome: the wordmark and the system corner
 	// sit straight on the backdrop. The band is repainted with the backdrop's
@@ -786,7 +796,8 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	// Right-side status cluster in the canonical shared order (network,
 	// weather, time, battery) — identical to the home header so the right
 	// side of the top bar stays put across screens. The notification bell
-	// sits to the right of the cluster as the top-right system corner.
+	// sits to the right of the cluster as the top-right system corner, and
+	// the trophy room's cup immediately left of the bell.
 	parts := headerStatusParts(config)
 	statusFont := headerStatusFont()
 	if statusFont == nil {
@@ -795,15 +806,25 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	bellW, bellH := notifBellSize(config)
 	rightX := screenWidth - StatusBarMargin
 	if bellW > 0 {
-		// The offer is placed against the bell the same way Home places it:
-		// one corner gap, not the wider spacing the cluster parts use, so the
-		// pill sits against the bell on both headers instead of 6px apart on
-		// Home and 16px apart in a scene.
+		// The corner's controls (bell, cup, offer) sit one corner gap apart, the
+		// same way Home places them, not at the wider spacing the cluster parts
+		// use, so they read as one group on both headers instead of 6px apart
+		// on Home and 16px apart in a scene.
 		rightX -= bellW + headerCornerGap
 	}
+	// The trophy room's cup is the corner's second fixed control, immediately
+	// left of the bell on every screen as on Home (header_trophy.go). It gives
+	// way only on a bar too crowded to keep the clock and the battery beside it.
+	if trophyW, _ := headerTrophySize(config); trophyW > 0 &&
+		rightX-trophyW-headerCornerGap-(StatusBarMargin+headerTextW+Space2XL) >= headerTrophyMinCluster {
+		if cup := drawHeaderTrophy(renderer, config, rightX, barH,
+			focusEngine.ElementIndex() == ChromeTrophyIndex); cup.W > 0 {
+			rightX = cup.X - headerCornerGap
+		}
+	}
 	// The release offer (only while an update is advertised) is the same pill
-	// in the same corner as on Home: immediately left of the bell, inside the
-	// system corner rather than floating in the status cluster.
+	// in the same corner as on Home: immediately left of the trophy room's cup,
+	// inside the system corner rather than floating in the status cluster.
 	if pill := drawHeaderUpdatePill(renderer, config, rightX, barH,
 		focusEngine.ElementIndex() == ChromeUpdateIndex); pill.W > 0 {
 		updatePrompt.badge = pill
@@ -813,8 +834,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 
 	// Measure total width and drop least-important items if they don't fit
 	// next to the brand/version/scene/back cluster. Battery and clock are what
-	// the user needs at a glance, so the network name goes first.
-	maxW := screenWidth - StatusBarMargin - StatusBarMargin - headerTextW - Space2XL
+	// the user needs at a glance, so the network name goes first. The room is
+	// what is left between that cluster and the corner (bell, cup, offer): the
+	// screen's width alone let a crowded cluster run under the Menu pill.
+	maxW := rightX - StatusBarMargin - headerTextW - Space2XL
 	if maxW < 120 {
 		maxW = 120
 	}
@@ -874,6 +897,13 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 				W: pw + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
+		if isBrightnessStatusPart(p) {
+			// The sun beside it is the brightness button.
+			statusBrightnessRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
 		if isChipStatusPart(p) {
 			// The now-playing chip opens the player it is naming; the idle
 			// output chip is measured the same way so it draws in the same
@@ -885,10 +915,11 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		}
 		startX += pw + gap
 	}
-	// The meter and the speaker are buttons, so their hit areas are grown to
-	// finger-sized targets once the cluster is placed and the neighbours' rects
-	// are known. The two sit side by side, so the gap between them is split at
-	// its middle (statusGapNeighbours) instead of being claimed by both.
+	// The meter, the speaker and the sun are buttons, so their hit areas are
+	// grown to finger-sized targets once the cluster is placed and the
+	// neighbours' rects are known. They sit side by side, so each gap between
+	// two of them is split at its middle (statusGapNeighbours) instead of
+	// being claimed by both.
 	growStatusButtonRects(barH, weatherStatusRect, statusClockRect)
 	// Focused header chips wear the ring Home's header draws: a rounded 3px
 	// accent outline (glassFocusRingWidth), not a square hairline box.
@@ -898,6 +929,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	}{
 		{ChromeClockIndex, statusClockRect},
 		{ChromeWeatherIndex, weatherStatusRect},
+		{ChromeBrightnessIndex, statusBrightnessRect},
 		{ChromeVolumeIndex, statusVolumeRect},
 		{ChromeWiFiIndex, statusWiFiRect},
 		{ChromeMediaIndex, statusMediaRect},
@@ -936,8 +968,8 @@ func fitStatusParts(parts []string, width func(string) int32, gap, maxW int32) [
 
 // statusDropIndex picks the least important part to remove when the bar is
 // crowded: the network meter first, then the forecast, then the offline badge,
-// then the volume button. The clock and the battery level are what the user
-// glanced at, so they leave last.
+// then the brightness button, then the volume button. The clock and the
+// battery level are what the user glanced at, so they leave last.
 //
 // The network slot used to be found as "index 0"; the volume button leads the
 // cluster now, so every slot is found by what it is. Left as index 0, the
@@ -974,6 +1006,11 @@ func statusDropIndex(parts []string) int {
 			}
 		}
 		for i, p := range parts {
+			if isBrightnessStatusPart(p) {
+				return i
+			}
+		}
+		for i, p := range parts {
 			if isVolumeStatusPart(p) {
 				return i
 			}
@@ -986,15 +1023,22 @@ func statusDropIndex(parts []string) int {
 }
 
 // headerStatusParts returns the right-side status cluster in one canonical
-// order shared by the home header and every scene's status bar: volume,
-// network, weather (hi/lo), time (HH:MM), battery, and the chip — the
+// order shared by the home header and every scene's status bar: brightness,
+// volume, network, weather (hi/lo), time (HH:MM), battery, and the chip — the
 // now-playing title while something plays, the connected output's name while
 // nothing does. Both headers draw this exact list, so the right side of the top
 // bar never shifts or reorders between screens.
 func headerStatusParts(config *Config) []string {
-	parts := make([]string, 0, 6)
-	// The volume button leads the cluster, immediately left of the Wi-Fi
-	// meter, wherever there is a mixer for it to drive (volumectl.go).
+	parts := make([]string, 0, 7)
+	// The brightness button leads the cluster, immediately left of the volume
+	// button, once the brightness controller knows what it drives
+	// (brightnessctl.go) — always, after a moment: its last resort is a
+	// software dimmer.
+	if statusBrightnessAvailable() {
+		parts = append(parts, statusBrightnessPart)
+	}
+	// The volume button follows, immediately left of the Wi-Fi meter,
+	// wherever there is a mixer for it to drive (volumectl.go).
 	if statusVolumeAvailable() {
 		parts = append(parts, statusVolumePart)
 	}
@@ -1096,6 +1140,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 				{Button: "A", Label: "Run"},
 				{Button: "B", Label: "Close"},
 			}
+			if feArchiveSheetBusy() {
+				// B leaves the extraction running (files_extract_ui.go).
+				hints[2].Label = "Hide"
+			}
 		} else if feRemotePanel.open {
 			hints = []FooterHint{
 				{Button: "A", Label: "Download"},
@@ -1109,6 +1157,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			// Picking for the chat, A on a file attaches it (chatfiles.go).
 			if entry, ok := feFocusEntry(config); ok && chatPickActive() && !entry.IsDir {
 				hints[1].Label = "Attach"
+			} else if ok && feArchiveOpensSheet(entry) {
+				// A on an archive opens its sheet (files_extract_ui.go).
+				hints[1].Label = "Extract…"
 			}
 			hints = append(hints,
 				FooterHint{Button: "Y", Label: "Actions"},
@@ -1134,7 +1185,11 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		hints[0] = FooterHint{Button: "Up/Down", Label: "Scroll"}
 		hints[1] = FooterHint{Button: "A", Label: "Link / URL"}
 		// The keyboard's halves (handleBrowserKey): - and + zoom, / searches.
+		// Select leads the extras: the menu holds everything else, and the
+		// full-screen page draws no footer, so this row is what the controls
+		// card (F1) lists for it (brw_menu.go).
 		hints = append(hints,
+			FooterHint{Button: "Select / M", Label: "Menu"},
 			FooterHint{Button: "Left/Right", Label: "Previous / next link"},
 			FooterHint{Button: "L1/R1", Label: "Scroll"},
 			FooterHint{Button: "L2/R2 / - / +", Label: "Zoom"},
@@ -1236,6 +1291,12 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		// The ROM manager names what A does on the focused control, and its
 		// sheet's keys while one is up (romm_ui.go).
 		hints = rommFooterHints(config)
+	case apkStoreSceneName:
+		// The APK Store follows its focus and its open sheet (apkstore.go).
+		hints = apkStoreFooterHints(config)
+	case voiceSceneName:
+		// Voice command's keys follow what it is doing (voicecmd.go).
+		hints = voiceFooterHints(config)
 	}
 	return hints
 }

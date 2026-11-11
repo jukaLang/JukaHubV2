@@ -92,3 +92,18 @@ func filesFreeSpace(path string) (int64, error) {
 func filesSkipFreeSpace(loc filesLocation) bool {
 	return loc.Detail == "Network drive"
 }
+
+// filesSetHidden gives path Windows' hidden attribute, so a working folder (the
+// staging folder of an extraction) stays out of Explorer as well as out of
+// Files.
+func filesSetHidden(path string) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return
+	}
+	attrs, err := windows.GetFileAttributes(p)
+	if err != nil {
+		return
+	}
+	_ = windows.SetFileAttributes(p, attrs|windows.FILE_ATTRIBUTE_HIDDEN)
+}

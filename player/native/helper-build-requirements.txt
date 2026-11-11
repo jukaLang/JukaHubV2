@@ -1,0 +1,24 @@
+# Python packages for player/native/build-helpers.sh, exactly as the release
+# installs them into its Ubuntu 20.04 build root (Python 3.8, aarch64) in
+# .github/workflows/remote-play-helpers.yml:
+#
+#   python3 -m pip install --no-cache-dir --only-binary=:all: -r helper-build-requirements.txt
+#
+# Every version is exact and only published wheels are accepted, so nothing is
+# compiled from source and no setup.py runs. Hashes are not pinned yet (they
+# could not be looked up where this file was written); switching to
+# --require-hashes is backlog task TEST-15 in player/MODERNIZATION.md.
+# setuptools (pkg_resources, which grpc_tools needs on Python 3.8) and ninja
+# come from Ubuntu's python3-setuptools and ninja-build packages.
+
+# CMake 3.24 or newer for chiaki-ng; 4.x refuses its submodules' old
+# cmake_minimum_required.
+cmake==3.31.6
+
+# The protoc nanopb runs (player/native/protoc-wrapper.py) and the protobuf
+# runtime its generator imports; grpcio is grpcio-tools' own dependency.
+# grpcio-tools 1.62 needs protobuf >= 4.21.6, < 5; 4.25.8 is the last 4.25.x
+# with security fixes and also ships a pure-Python wheel.
+grpcio-tools==1.62.3
+grpcio==1.62.3
+protobuf==4.25.8

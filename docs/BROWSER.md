@@ -9,6 +9,51 @@ the same SDL renderer as the rest of the app.
 
 Open it from **Apps → Browser** or **Start → Browser**.
 
+## Full screen and the Select menu
+
+The page fills the screen. There is no address bar, toolbar, chip row, top bar
+or footer around it: on the Smart Pro's 720-line panel those took nearly half of
+the height a page had. Everything they did is in the **Select menu** — press
+**Select** (**M** or the Menu key on a keyboard, a right click with a mouse) and
+a sheet opens at the right, with the page still in view beside it.
+
+Across its top are **Back**, **Forward**, **Reload** and **Home**. Under them, in
+this order: **Go to address**, **Search the web** (with the engine's name),
+**Links on this page** (with their count), **Find on this page**, **Zoom**,
+**Link mode**, **Save this page**, **Saved pages**, **Open in WPE Browser**
+(see [WPE Browser](#wpe-browser)), **Site info**, **Ad &
+tracker filter**, **Signed-in sites**, **Forget sign-ins**, **Full-screen
+pages**, **Browser settings**, **JukaHub issues** and **Close browser**. The rows
+never move: one that cannot act on the page on screen (Back with no history,
+Site info with no page) is dimmed rather than removed, so the other rows stay
+where your thumb learned them. The menu opens on Back — **Select** then **A**
+goes back a page — or on Go to address when there is nothing to go back to. Up and
+Down wrap round (Close browser is one press up from the top), L1/R1 jump five
+rows, **A** acts and closes the menu, **B** or Select closes it. Two rows change
+in place instead: on **Zoom**, Left/Right step the text size and **A** puts it
+back to 100%; on **Find**, while a search runs, Left/Right step through its
+matches and **A** starts a new one. **Forget sign-ins** asks twice, as the chip
+did. A row's own shortcut on the page is named at its right — **Y** to search,
+**X** for the links, **L2/R2** to zoom, and **F**, **Tab** and **I** while you
+are using a keyboard — and the footer carries the clock and the battery level,
+which the full-screen page has no top bar for.
+
+What the toolbar showed is still on the page, in the top-right corner. For a
+couple of seconds after a page loads a pill names its site, with a padlock for
+the connection and the button that opens the menu; it comes back while the
+mouse (or the right-stick pointer) is near the top of the screen, and clicking
+it opens the menu. Under it sit the find count while a search runs (click it for
+the next match) and **Link mode** while the D-pad walks the page's links (click
+it to go back to scrolling). With a keyboard, **Backspace** or **Alt+←** goes
+back, **Alt+→** forward and **F5** reloads, as in a desktop browser.
+
+The classic layout is one switch away: **Settings → Browser → Full-screen
+pages**, or the **Full-screen pages** row of the menu. Off, the address bar, the
+toolbar chips, the cookie strip, the chip row and the shared bars come back as
+they were, and Select still opens the menu. The choice is the
+`browserFullScreen` key in `jukauser.json` (see
+[Configuration](CONFIGURATION.md)).
+
 ## What it can do
 
 * Open a URL from the address bar, with or without `https://`. The bar opens
@@ -22,16 +67,17 @@ Open it from **Apps → Browser** or **Start → Browser**.
   outlined link. The toolbar's **SCROLL** / **LINKS** chip names the mode you
   are in, so the D-pad's job is readable a frame later instead of living only in
   the toast that announced the switch; the chip is also a tap target, so touch
-  can switch modes without the keyboard.
+  can switch modes without the keyboard. Full screen, a **Link mode** pill in
+  the top-right corner says the same, and the menu's **Link mode** row switches.
 * Go **Back** through visited pages and **Reload** the current one. Back and
   Forward are served from an in-memory page cache (up to eight pages, about
   12 MB of text and images), so returning to a page is instant instead of
   re-downloading it. **Reload** always asks the server again and replaces that
   cached copy.
-* Open on the home page: out of the box Startpage (`www.startpage.com/`), which
-  serves Google's results as plain HTML and so stays readable in the text
-  browser, with the search box the first thing on screen — or the engine
-  and the page chosen in **Settings → Browser** (see
+* Open on the home page: out of the box DuckDuckGo Lite
+  (`lite.duckduckgo.com/lite/`), whose page is built for a simple browser and
+  so stays readable in the text browser, with the search box the first thing
+  on screen — or the engine and the page chosen in **Settings → Browser** (see
   [Search engine and home page](#search-engine-and-home-page)). The first open
   in a run always goes there: a page the last run left behind in the saved
   config is not something this session chose. **Home** returns to the home page
@@ -297,10 +343,10 @@ web** row in Home search (its second line names the engine too), and the
 
 | Engine | Results address | Without JavaScript |
 |--------|-----------------|--------------------|
-| Startpage (the default) | `www.startpage.com/sp/search?query=` | Results: Google's, served as plain HTML |
+| DuckDuckGo (the default) | `lite.duckduckgo.com/lite/?q=` | Results: the Lite page is made for simple browsers |
+| Startpage | `www.startpage.com/sp/search?query=` | Results: Google's, served as plain HTML |
 | Google | `www.google.com/search?q=` | No results — see [Google needs a full web browser](#google-needs-a-full-web-browser) |
 | Bing | `www.bing.com/search?q=` | Results; its links are unwrapped (see [Result links](#result-links)) |
-| DuckDuckGo | `lite.duckduckgo.com/lite/?q=` | Results: the Lite page is made for simple browsers |
 | Brave Search | `search.brave.com/search?q=` | Results |
 | Yahoo | `search.yahoo.com/search?p=` | Results |
 | Mojeek | `www.mojeek.com/search?q=` | Results |
@@ -321,10 +367,11 @@ press **Save**, and only if it is usable — `http` or `https`, a real host (one
 with a dot, an IP address or `localhost`) and a place for the words. Anything
 else is refused with a note and the engine stays what it was; **B** leaves it
 untouched too. A custom address that stops being usable (edited by hand in
-`jukauser.json`) sends searches to Startpage, and the row says so.
+`jukauser.json`) sends searches to DuckDuckGo Lite, and the row says so.
 
-**Home page** follows the search engine out of the box: its start page, so
-choosing Google makes **Home** open google.com. The row's list also offers the
+**Home page** follows the search engine out of the box: its start page, so the
+DuckDuckGo default makes **Home** open `lite.duckduckgo.com/lite/`, and choosing
+Google makes it open google.com. The row's list also offers the
 page the Browser has open, every saved page, and **Type an address…**. **Y** in
 **Saved pages** (the **Marks** chip) makes the highlighted page home without
 leaving the Browser, and that page's row says **Home** beside its date. A typed
@@ -360,6 +407,10 @@ the same wall — and shows a card instead:
 * On a PC, **Open in web browser** hands the search to the desktop's own
   browser, which runs Google's scripts; **Search on Startpage** and **Change
   engine** follow it.
+* On a handheld with [WPE Browser](#wpe-browser) installed, **Open in WPE
+  Browser** comes first and runs the search there, where Google's check passes;
+  **Search on Startpage** and **Change engine** follow it. Where WPE Browser can
+  be installed but is not, **Get WPE Browser** takes Change engine's place.
 
 Google stays on the list because its home page loads (so it works as a home
 page) and because the PC path makes it useful there. The card is never cached:
@@ -376,6 +427,58 @@ not follow at all, so on Bing this is what makes a result open. A destination
 that is not an `http` or `https` page with a host (a `javascript:` link) is not
 followed, and a wrapped YouTube link still plays in Media.
 
+## WPE Browser
+
+Some sites only work in a full browser: Google's robot check, web apps, sites
+built entirely in script. On the Smart Pro, Brick and Brick Pro there is one —
+[WPE Browser](https://github.com/matweew/wpe-tsp), a community build of WPE
+WebKit for these handhelds with GPU rendering, hardware video and a gamepad
+pointer. JukaHub does not try to be it; it hands pages to it.
+
+* **Open in WPE Browser** in the Select menu opens the page on screen there.
+  JukaHub steps aside the way it does for a game: WPE Browser has the screen and
+  the buttons until you quit it, and then you are back in the reader on the same
+  page. Before it starts, JukaHub lets go of everything it can rebuild (cached
+  text and icon textures, the back/forward page cache, a page script still
+  running), because WebKit wants most of the handheld's 1 GB of memory — so Back
+  loads the previous page again afterwards.
+* On the [Google card](#google-needs-a-full-web-browser), **Open in WPE Browser**
+  comes first and runs the search there.
+* Only web addresses are handed over (`http://` or `https://` with a host, no
+  user name or password in them); anything else opens WPE Browser on its own
+  start page.
+
+WPE Browser has to live in exactly `Apps/WPE` on the SD card
+(`/mnt/SDCARD/Apps/WPE`). JukaHub recognises it there by its `launch.sh` and
+starts that script with the page's address as its first argument, with the
+environment the stock launcher would have given it (not JukaHub's own library
+path).
+
+### Getting and updating it
+
+Where WPE Browser is not installed, the menu row reads **Get WPE Browser** and
+the Google card offers it too. **Settings → Browser → WPE Browser** (handheld
+only) shows the installed version and installs or updates it; when a newer
+release is out it reads **Update: v…** (JukaHub asks GitHub at most every six
+hours, and only while the row, the menu or the Google card is on screen).
+
+The install takes the latest release from GitHub and refuses a package without
+a SHA-256 checksum. It needs about three times the package's size free on the
+card (the download and the unpacked app: several hundred megabytes), streams the
+download to the card with progress on the install bar — cancel it there, and the
+next try continues where it stopped — unpacks it in `Apps/.wpe-install`, and
+moves the app into `Apps/WPE`. An update keeps `settings.conf` and everything WPE
+Browser or you added to its folder (favorites, data); the old folder is removed
+only once the new one is in place, and nothing is replaced while WPE Browser (or
+a game) is running. The installed release is recorded in
+`Apps/WPE/.jukahub-release` and the package's file list in
+`Apps/WPE/.jukahub-files`. A WPE Browser you copied over by hand opens the same
+way; it has no recorded release, so JukaHub offers no update for it until you
+update it once from Settings.
+
+On a PC none of this is shown: the menu row is **Open in web browser**, which
+hands the page to the desktop's own browser.
+
 ## Ads and trackers
 
 Every subresource the reader would fetch — linked stylesheets, images and
@@ -385,9 +488,13 @@ bytes. The filter is two lists:
 
 * **Hosts** that only serve advertising, measurement or session replay:
   DoubleClick, Google Ads/Analytics/GTM, Criteo, Taboola, Outbrain, ad exchanges,
-  mobile ad SDKs, Hotjar, Mixpanel and similar. Matching is by host suffix, so
-  `ads.example.com` never matches an entry for `example.com`, and
-  `notdoubleclick.net` is not mistaken for `doubleclick.net`.
+  mobile ad SDKs, Hotjar, Mixpanel and similar — about 370 of them: JukaHub's
+  own curated list of ad exchanges and ad servers, native-ad and recommendation
+  widgets, pop-under and affiliate networks, data brokers, attribution SDKs,
+  analytics, session replay, A/B testing and the big regional networks.
+  Matching is by host suffix on dot boundaries, so an entry for
+  `doubleclick.net` covers `ads.g.doubleclick.net`, and `notdoubleclick.net` is
+  not mistaken for it.
 * **URL paths** that only exist to serve ads or pixels (`/ads/`, `/pagead/`,
   `/adserver`, `/gtag/js`, `/gtm.js`, `/tracking/`, `/pixel/`, `/beacon/`,
   `/collect?`). Slashes are part of the pattern, so a genuine `/tracks/` page is
@@ -402,6 +509,11 @@ address bar's rightmost chip reports how many requests the page load skipped
 `99+ BLOCKED`). The plain-text fallback carries the same count
 (`Blocked: 3 ad/tracker request(s)`). A page you navigate to directly is never
 blocked — that is an explicit request — only its subresources are.
+
+A listed host is blocked only on someone else's page. On its own site — reading
+criteo.com, or twitter.com loading analytics.twitter.com — its files load as
+the site's own. The URL-path patterns apply everywhere, so an `/ads/` folder is
+blocked on any site.
 
 ### Turning filtering off for one site
 
@@ -423,9 +535,24 @@ is plain JSON if you want to clear the list by hand:
 }
 ```
 
-This is a curated starter list, not EasyList: it targets the networks that
-dominate ad-heavy pages without breaking sites that load their own assets.
-First-party ads served from the article's own domain can still get through.
+**Site info** (the Select menu, `I` on a keyboard, or the padlock) shows the
+page's count on a line of its own — "14 ads and trackers blocked" — with **Allow
+ads on this site** (**X**) beside it: the same per-site exception, and the page
+reloads under it. On an excepted site it reads **Block ads on this site**.
+
+### Turning filtering off everywhere
+
+**Settings → Browser → Block ads and trackers** (on by default) turns the filter
+off for every site: pages load every subresource they ask for, the counter reads
+**FILTER OFF**, and the per-site switches have nothing to do until it is back
+on. The setting is the `browserBlockAds` key in `jukauser.json` (see
+[Configuration](CONFIGURATION.md)).
+
+This is a curated list, not EasyList (whose licence and cosmetic rules do not
+fit a reader): it targets the networks that dominate ad-heavy pages without
+breaking sites that load their own assets — no CDNs, font or library hosts, or
+video hosts are on it. Ads a site serves from its own domain can still get
+through.
 A page's images are given at most six seconds in total, so photo-heavy pages
 show their text promptly and draw any image that missed the budget as a plain
 placeholder. Laying out a very long article (1,500+ rows) takes a moment once,
@@ -690,6 +817,8 @@ behind the keyboard — which is exactly what it used to do.
 
 | Input | Action |
 |-------|--------|
+| Select · M / Menu key · right click | Open (or close) the Select menu, which holds every action below; see [Full screen and the Select menu](#full-screen-and-the-select-menu) |
+| Backspace · Alt+← / Alt+→ · F5 | Back / Forward / Reload (keyboard) |
 | D-pad Up / Down | Scroll the page (link mode: nearest link on the row above/below) |
 | D-pad Left / Right | Walk the page's links in reading order |
 | Tab / L3 | Cycle scroll ⇄ link mode (**SCROLL** / **LINKS** chip shows which) |
@@ -708,6 +837,12 @@ behind the keyboard — which is exactly what it used to do.
 | **Forget** chip | Saved-cookie count in its label (capped at 99+); drop every saved cookie and the file on the card (press twice) |
 | Cookie strip | Under the page: the hosts the saved cookies belong to, or **No saved cookies** |
 | Touch / mouse | Tap the address bar, **GO**, the filter counter, the mode chip, the zoom chip, a link row, or a form control |
+
+The chips, the address bar and the cookie strip in this table are the classic
+layout's (**Full-screen pages** off); full screen, the same actions are rows of
+the Select menu; a tap on the page follows links and works forms, and a tap on
+the site pill, the find count or **Link mode** in its corner does what that
+pill does.
 
 In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 

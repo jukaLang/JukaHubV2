@@ -326,19 +326,25 @@ func cyclePlaybackSpeed() {
 // toggleSubtitlesWithFeedback toggles subtitles and reports the result, since
 // the button gives no other visible confirmation.
 func toggleSubtitlesWithFeedback() {
-	wasEnabled := subtitlesEnabled()
-	if toggleSubtitles() {
-		showToast("Subtitles on", ToastInfo())
-	} else if wasEnabled {
-		showToast("Subtitles off", ToastInfo())
-	} else {
-		showToast(subtitleStatusLine(), ToastInfo())
-	}
+	result, msg := toggleSubtitlesFor(appConfig)
+	subtitleToggleFeedback(result, msg)
 }
 
-// moveVideoSettingsItem steps the settings sheet selection, wrapping.
-func moveVideoSettingsItem(delta int) {
-	videoSettingsItem = (videoSettingsItem + delta + videoSettingsSheetRows) % videoSettingsSheetRows
+// subtitleToggleFeedback says what a press of CC did. A fetch is announced as
+// started ("Getting English subtitles…") and announces itself again when it
+// lands (videosubs.go), so "on" is only said when cues are really there.
+func subtitleToggleFeedback(result subtitleToggle, msg string) {
+	switch result {
+	case subtitleToggleOff:
+		showToast("Subtitles off", ToastInfo())
+	case subtitleToggleOn:
+		showToast("Subtitles on", ToastInfo())
+	default:
+		if strings.TrimSpace(msg) == "" {
+			msg = subtitleStatusLine()
+		}
+		showToast(msg, ToastInfo())
+	}
 }
 
 // activateVideoControl runs the control under the ring. With no ring, A keeps
@@ -425,10 +431,9 @@ func toggleVideoFullscreen() {
 	}
 }
 
-// toggleVideoSettings opens or closes the settings sheet.
+// toggleVideoSettings opens or closes the settings sheet (on its first page).
 func toggleVideoSettings() {
-	videoSettingsOpen = !videoSettingsOpen
-	videoSettingsItem = 0
+	videoSettingsToggle()
 }
 
 // playbackSession owns one decode pipeline.
@@ -1515,7 +1520,9 @@ func StopEmbeddedPlayback() {
 	videoSettingsOpen = false
 	videoControlFocus = vcNone
 	videoMiniClear()
-	setSubtitlesEnabled(false)
+	// CC is the user's choice for the session: stopping ends this video's
+	// fetch and drops its cues, and the next video comes up with its own
+	// subtitles when CC is on (videosubs.go).
 	resetVideoSubtitles(nil)
 
 	videoPlaybackMutex.Lock()
@@ -1959,12 +1966,14 @@ func drawVideoOverlayFallback(renderer *sdl.Renderer, config *Config, state vide
 	drawVideoOverlayLive(renderer, config, state, x, y, w, h)
 }
 
-// Layout of the settings sheet. The row metrics are shared by the renderer and
-// the click hit test, so a tap always lands on the row it is drawn over.
+// Layout of the settings sheet. The renderer records the rows it drew and
+// their height (videoSettingsSheetRowH: a small window narrows them, down to
+// videoSettingsRowMinH, before the sheet would cover the bar), and the click
+// hit test reads them back, so a tap always lands on the row it is drawn over.
 const (
-	videoSettingsSheetRows = 6
-	videoSettingsRowH      = int32(48)
-	videoSettingsTopPad    = int32(20)
+	videoSettingsRowH    = int32(48)
+	videoSettingsRowMinH = int32(34)
+	videoSettingsTopPad  = int32(20)
 )
 
 // drawChevronLeft is a line chevron pointing left: the calendar popover's
@@ -2048,14 +2057,17 @@ func HandleVideoControlClick(mx, my int32) bool {
 
 	// The settings sheet owns every click while it is open. Its rows are hit
 	// where they were drawn (videoSettingsSheetDrawn): the windowed player
-	// draws the sheet inside its own rect.
+	// draws the sheet inside its own rect. A tap on the sheet's margin presses
+	// nothing and keeps it open; a tap beside it closes it.
 	if videoSettingsOpen {
-		if idx := vcSheetRow(mx, my); idx >= 0 {
+		switch idx := vcSheetRow(mx, my); {
+		case idx >= 0:
 			videoSettingsItem = idx
 			videoSettingsActivate(idx)
-			return true
+		case idx == vcSheetMargin:
+		default:
+			videoSettingsOpen = false
 		}
-		videoSettingsOpen = false
 		return true
 	}
 
@@ -2070,6 +2082,7 @@ func HandleVideoControlClick(mx, my int32) bool {
 		videoControlFocus = vcSettings
 		videoSettingsOpen = true
 		videoSettingsItem = 0
+		videoSettingsPage = videoSheetMain
 	case vcHit(mx, my, r.fullscreen):
 		videoControlFocus = vcFullscreen
 		toggleVideoFullscreen()
@@ -2109,44 +2122,6 @@ func HandleVideoControlClick(mx, my int32) bool {
 		videoBackOut(appConfig)
 	}
 	return true
-}
-
-// videoSettingsActivate runs the action for one settings sheet row.
-func videoSettingsActivate(idx int) {
-	switch idx {
-	case 0:
-		toggleSubtitlesWithFeedback()
-	case 1:
-		toggleVideoFullscreen()
-		videoSettingsOpen = !videoSettingsOpen
-		if videoSettingsOpen {
-			revealVideoChrome()
-		}
-	case 2:
-		speeds := []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
-		current := snapshotVideoState().speed
-		next := speeds[0]
-		for _, s := range speeds {
-			if s > current {
-				next = s
-				break
-			}
-		}
-		SetPlaybackSpeed(next)
-	case 3:
-		cycleVideoQuality(appConfig)
-	case 4:
-		// The queue outlives the results screen it was filled from, so this is
-		// the one place it can be emptied once those rows are gone.
-		if n := upNextClear(); n > 0 {
-			PlayBackSound()
-			ShowToast(fmt.Sprintf("Up Next cleared (%d)", n), ToastKindInfo)
-		} else {
-			ShowToast("Up Next is empty", ToastKindInfo)
-		}
-	case 5:
-		videoSettingsOpen = false
-	}
 }
 
 // HandleVideoKeyInput processes keyboard input for video controls. It reports
@@ -2330,9 +2305,14 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 			return true
 		case sdl.K_ESCAPE, sdl.K_b, sdl.K_s, sdl.K_y:
 			// Not on a repeat: the held S or Y that opened the sheet would
-			// close it again.
+			// close it again. Escape and B step back from the Save offline
+			// page first; S and Y, the keys that open the sheet, close it.
 			if e.Repeat == 0 {
-				videoSettingsOpen = false
+				if videoSettingsPage != videoSheetMain && (e.Keysym.Sym == sdl.K_ESCAPE || e.Keysym.Sym == sdl.K_b) {
+					videoSettingsBack()
+				} else {
+					videoSettingsOpen = false
+				}
 				PlayBackSound()
 			}
 			return true
@@ -2382,8 +2362,7 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		}
 	case sdl.K_s, sdl.K_y:
 		if e.Repeat == 0 {
-			videoSettingsOpen = !videoSettingsOpen
-			videoSettingsItem = 0
+			videoSettingsToggle()
 		}
 	case sdl.K_ESCAPE:
 		// Escape steps down a size instead of ending playback: full screen
@@ -2455,7 +2434,8 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 			PlayActivateSound()
 			return true
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-			videoSettingsOpen = false
+			// B steps back from the Save offline page, then closes.
+			videoSettingsBack()
 			PlayBackSound()
 			return true
 		}
@@ -2491,8 +2471,7 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_X:
 		toggleSubtitlesWithFeedback()
 	case sdl.CONTROLLER_BUTTON_Y:
-		videoSettingsOpen = !videoSettingsOpen
-		videoSettingsItem = 0
+		videoSettingsToggle()
 	default:
 		return false
 	}

@@ -43,11 +43,13 @@ var shortcutCategories = []struct {
 			{"F1", "Controls for this screen, then this list"},
 			{"F10", "Start menu"},
 			{"F2", "Search"},
+			{"F4", "Voice: talk (hold to talk; Voice command page: speak / stop)"},
 			{"Ctrl+Q", "Quick Settings"},
 			{"Ctrl+K", "Media search"},
 			{"Ctrl+Shift+S", "Shorts feed"},
 			{"Ctrl+Shift+V", "Clipboard history"},
 			{"Ctrl+L", "Log viewer"},
+			{"F6", "Mouse mode (pad: hold Select + L1)"},
 			{"F8", "Watch Party"},
 			{"F11 / Alt+Enter", "Full screen"},
 			{"F12", "Screenshot"},
@@ -131,12 +133,16 @@ var shortcutCategories = []struct {
 
 // handleGlobalKeys runs the keyboard keys that hold on every screen before the
 // screen sees them: F1 (the Controls card for this screen, then this list), F2
-// (search), F12 (screenshot) and Ctrl+Q (Quick Settings). They used to be read
-// after the scene's own dispatch, which a screen that consumes every key
-// (Notes, the calculator, Pomodoro) or has nothing focusable never reached, so
-// keys the Controls card lists under "Every screen" did nothing there. The
-// music player keeps F2 for its own library search. Key repeats are ignored,
-// so a held key does not open and close a panel over and over.
+// (search), F4 (the voice orb — voiceorb.go reads it before the panels and
+// stands aside for a modal one, which keeps it here too; Alt+F4 stays the
+// window's quit), F6 (mouse mode, the twin of the pad's hold
+// Select + L1 — vcursor_mode.go), F12 (screenshot) and Ctrl+Q (Quick
+// Settings). They used to be read after the scene's own dispatch, which a
+// screen that consumes every key (Notes, the calculator, Pomodoro) or has
+// nothing focusable never
+// reached, so keys the Controls card lists under "Every screen" did nothing
+// there. The music player keeps F2 for its own library search. Key repeats are
+// ignored, so a held key does not open and close a panel over and over.
 func handleGlobalKeys(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || e.Repeat != 0 {
 		return false
@@ -157,6 +163,12 @@ func handleGlobalKeys(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		shortcutsOpen = false
 		homeSearchToggle(config)
 		return true
+	case e.Keysym.Sym == sdl.K_F4 && e.Keysym.Mod&(sdl.KMOD_ALT|sdl.KMOD_CTRL) == 0:
+		// The voice orb's key (voiceorb.go) is read before every panel
+		// (main.go); it only gets here when the orb could not come up.
+		return voiceOrbF4(config)
+	case e.Keysym.Sym == sdl.K_F6:
+		return vcursorModeKeyToggle(config)
 	case e.Keysym.Sym == sdl.K_F12:
 		captureScreenshot(renderer)
 		return true

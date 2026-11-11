@@ -115,6 +115,8 @@ func bootSfxBind(config *Config) {
 		}
 	}
 	bootSfxApply(on, pct)
+	// Spatial audio's settings ride the same bind (spatial.go).
+	spatialBind(config)
 }
 
 // bootSfxApply sets the live state without touching any config.
@@ -601,6 +603,18 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	defer videoAudioMutex.Unlock()
+	// Spatial audio (spatial.go) runs here, under the lock. It applies the
+	// volume itself, before its limiter, so the loop below then has nothing to
+	// do; off, pcm comes back unprocessed, cut to whole frames (a read that
+	// ended mid-frame keeps its last bytes for the next call, which also keeps
+	// the loop below from pairing bytes across samples).
+	pcm, spatialScaled := spatialQueueHook(pcm, videoAudioRate, volume)
+	if spatialScaled {
+		volume = 1
+	}
+	if len(pcm) == 0 {
+		return
+	}
 	if volume < 0.999 {
 		n := len(pcm) / 2
 		for i := 0; i < n; i++ {
@@ -642,4 +656,6 @@ func ClearVideoAudioQueue() {
 	videoAudioMutex.Lock()
 	defer videoAudioMutex.Unlock()
 	sdl.ClearQueuedAudio(videoAudioDev)
+	// A new stream starts: no reverb tail or held byte from the old one.
+	spatialResetLocked()
 }

@@ -66,16 +66,39 @@ echo "    SYSROOT     = $SYSROOT"
 go version
 go build -trimpath -ldflags "-s -w" -o "$PKG/$APP_NAME" .
 
-# Remote Play helpers, when native/build-helpers.sh has produced them. The
-# GitHub release uses it; this script does not build them itself.
-if [ -x native/bin/chiaki-stream ] && [ -x native/bin/chiaki-regist ]; then
+# Remote Play helpers, when native/build-helpers.sh (in CI the
+# remote-play-helpers workflow) has produced them; this script does not build
+# them itself. native/bin is where both put them, bin/ where older checkouts of
+# build-helpers.sh did. A CI artifact loses the exec bit, so presence is enough.
+HELPERS_DIR=""
+for dir in native/bin bin; do
+    if [ -f "$dir/chiaki-stream" ] && [ -f "$dir/chiaki-regist" ]; then
+        HELPERS_DIR="$dir"
+        break
+    fi
+done
+if [ -n "$HELPERS_DIR" ]; then
     mkdir -p "$PKG/bin"
-    cp native/bin/chiaki-stream native/bin/chiaki-regist "$PKG/bin/"
-    chmod +x "$PKG/bin/chiaki-stream" "$PKG/bin/chiaki-regist"
+    cp "$HELPERS_DIR/chiaki-stream" "$HELPERS_DIR/chiaki-regist" "$PKG/bin/"
+    chmod 755 "$PKG/bin/chiaki-stream" "$PKG/bin/chiaki-regist"
+    echo "    Remote Play helpers: $HELPERS_DIR"
+else
+    echo "    (no Remote Play helpers in native/bin: the package ships without Remote Play streaming)"
 fi
 if [ -d native/libs/brick-stock ]; then
     mkdir -p "$PKG/libs/brick-stock"
     cp -a native/libs/brick-stock/. "$PKG/libs/brick-stock/"
+fi
+
+# JukaHub Spatial, the game-audio plugin (spatialfx/README.md), with the same
+# cross compiler ($CC above) into lib/, where spatial_games.go looks for it. A
+# failed build only warns: the package then ships without it and Tools -> Audio
+# says the game plugin is not installed.
+if CROSS=aarch64-linux-gnu- OUT="$PKG/lib" sh spatialfx/build.sh; then
+    echo "    game audio plugin: $PKG/lib/jukahub-spatial.so"
+else
+    echo "    WARNING: the game audio plugin did not build; the package ships without it" >&2
+    rmdir "$PKG/lib" 2>/dev/null || true
 fi
 
 # `file` is not installed in every toolchain image; it is only for the log.

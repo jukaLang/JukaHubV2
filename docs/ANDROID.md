@@ -1,15 +1,112 @@
 # Android engine
 
-The **Android engine** integrates with an Android container on the handheld.
-It detects the container the device already has, lists the apps installed in
-it, and launches them with the display bridged the same way [Windows
-apps](WINDOWS_APPS.md) bridge Wine.
+JukaHub does not ship a complete Android runtime. The **AndroidPak** path runs
+a limited class of native-only (NDK) games through **AndroidRT**, a small
+runtime whose source is included; a target-built runtime must be installed
+separately, and real-game support is still unverified on hardware. The **APK
+Store** (Start → Games → APK Store) is the front door to it: it finds the APKs
+on the card, says what each one is and whether it can run, and adds the ones
+worth trying to the game profiles in one press. Running arbitrary Android apps
+would require more than the loader and shims described below — where a real
+Android container (Waydroid) exists, the store can install APKs into it.
 
-JukaHub does not ship a complete Android runtime. The separate AndroidPak path
-supports a limited class of native-only games; its runtime source is included,
-but a target-built runtime must be installed separately and real-game support
-is still unverified on hardware. Running arbitrary Android apps would require
-more than the loader and shims described below.
+## APK Store
+
+The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
+
+* **Your APKs.** A bounded scan (two folders deep, at most 300 files, a few
+  seconds) of `/mnt/SDCARD/APKs`, `Android`, `Roms/ANDROID`, `Roms/APK`,
+  `Downloads`, the Phone Companion's `PhoneDrop` folder (a phone sends an APK
+  there in one tap), the store's own download folder and JukaHub's downloads;
+  on a computer, the user's Downloads. `JUKAHUB_APK_DIRS` (a PATH-style list)
+  adds folders. Each APK is read once and cached by path, size and time:
+  * the zip directory (ABIs, native libraries, DEX files, icons);
+  * the binary `AndroidManifest.xml`, decoded in Go
+    ([apkstore_axml.go](../player/apkstore_axml.go)): package, version, SDK
+    levels, the label, the launcher activity (MAIN/LAUNCHER, activity-aliases
+    followed), NativeActivity's `android.app.lib_name`, `hasCode`, the GLES
+    version, whether the file is one piece of a split app — and, when the
+    label or icon is a resource reference, just enough of `resources.arsc` to
+    resolve it (default locale first; the densest PNG or JPEG icon;
+    adaptive-icon XML and WebP are skipped). Both decoders are bounded in
+    memory as well as in offsets: each pool string is decoded at most once
+    and shared, a pool decodes at most 8 MiB of text, an element's attributes
+    past 128 and a resource's configurations past 256 are not read, and a
+    value is decoded only when it is used — running out of memory is not a
+    panic that a recover() could catch;
+  * AndroidPak's own triage (`inspectAndroidPak`, the titles it knows);
+  * the engine the libraries and activities give away (Unity, Unreal, Godot,
+    GameMaker, LÖVE, SDL, Cocos2d-x, Flutter, React Native, Xamarin,
+    NativeActivity, GameActivity);
+  * when the start is Java and nothing else says, whether a library of the
+    chosen ABI exports an entry point AndroidRT can start
+    (`ANativeActivity_onCreate`, GameActivity's `GameActivity_onCreate` or the
+    JNI name of its `initializeNativeCode` — what `runner.c` looks for): an
+    uncompressed library is read through its ELF section headers (only its
+    dynamic string table), a compressed one as a stream, at most 64 MiB per
+    APK. None means a Java app with helper libraries. Only when one is found
+    are the DEX files searched (bounded) for a NativeActivity or GameActivity
+    subclass.
+
+  The verdict is one of: **Native game — try it (experimental)**, **Minecraft
+  class pack (experimental)**, **Native entry, Java start — may not run**,
+  **Needs Android's Java runtime — can't run on AndroidRT** (with the reason and
+  the route that works instead, such as a PortMaster build or PortMaster's
+  GMLoader for GameMaker games — Java apps that carry helper libraries
+  included), **One piece of a split APK** (a `base.apk` or `split_config…` piece
+  of an App Bundle install: it needs a single, universal APK), **Wrong CPU**
+  (x86-only builds, and 32-bit-only `armeabi-v7a` builds: AndroidRT's loader
+  takes 64-bit `arm64-v8a` libraries only) or **Not a readable APK**. A Java
+  app is never offered as something to try.
+
+  A on an APK offers **Add to Games**: the store writes one profile per APK to
+  `<data>/game-profiles/local/apkstore-<id>.json` (runtime `androidpak`; the
+  manifest's NativeActivity library — `android.app.lib_name` X is `libX.so`,
+  as Android maps it — as `mainLib` whenever the APK carries it), and the
+  profile appears in **Start → Games → Game Profiles** like any other — the
+  Games Library does not list game profiles. Two APKs of one package (two
+  versions of a game) get two profiles: the second id carries a short hash of
+  its path. **Play** launches through the same path (triage, memory pre-flight,
+  tmpfs staging, launch log, first-run report) in the background — the row
+  says "Starting…" while a big game is staged — and **Remove from Games**
+  deletes only the store's own profile file; the APK stays. X shows everything
+  the store read, the profile's state and how the last run ended (from its
+  launch log). The APK must sit inside the folders game profiles launch from
+  (the card on a handheld). A hand-written profile for an APK the verdict says
+  cannot run shows as "In Games · won't run", with Play offered but not
+  suggested.
+* **Store.** A short catalogue ([apkstore_catalog.json](../player/apkstore_catalog.json),
+  also served as `apk-catalog.json` from the builder site) of titles and kinds
+  of APK: status (experimental / won't run / works), how to get the APK
+  legally (your own APK — JukaHub never hands out paid apps) and what works
+  instead. An entry may carry a direct download for free software, but only
+  with a SHA-256 and a size, from the HTTPS hosts JukaHub's patch downloader
+  trusts (GitHub and the libretro buildbot); the file is checked before it is
+  kept, it is saved as `<id>.apk` (or `<id>-<hash>.apk` when a different file
+  already has that name — a download never replaces a file it did not write),
+  and an entry without a hash offers no download. The built-in list carries
+  none yet: none could be verified when it was written. A newer list is
+  fetched at most once a day (256 KiB cap, schema-checked) and used only when
+  it is newer, dated no more than three days past today (or past the built-in
+  list's date, on a handheld whose clock has not been set), and at least half
+  of its entries are readable.
+* **Runtime.** Whether AndroidRT is installed (and where), whether this machine
+  can run it (aarch64 Linux only — on a PC the store reads APKs but games run on
+  the handheld), the RAM, whether Waydroid is usable here, and what AndroidRT
+  can and cannot run.
+
+**Waydroid.** Where the `waydroid` command exists, the kernel exposes a
+binder device and Waydroid's session is running, A on an APK also offers
+**Install into Android**: `waydroid app install <apk>` with the path validated
+first (absolute, a regular `.apk`, no name that reads as an option). Waydroid's
+exit status proves nothing — with the session stopped it logs the failure and
+exits 0, and the container finishes an install on its own — so the session is
+checked again just before, failure words in the output count as a failure,
+and the store calls the APK installed only when `waydroid app list` shows its
+package; otherwise the toast says it was handed over. The app then opens from
+Waydroid's own window. A stock TrimUI kernel has no binder device, so this is
+for Linux machines and community firmware
+([apkstore_waydroid.go](../player/apkstore_waydroid.go)).
 
 ## Why an APK cannot simply be run
 
@@ -190,7 +287,9 @@ one works.
 
 1. Build the runtime (`CROSS=aarch64-linux-gnu- player/androidrt/build-tsp.sh`)
    and copy the output to `/mnt/SDCARD/Apps/AndroidRT`.
-2. Add an `androidpak` [game profile](GAME_PROFILES.md) pointing at the APK.
+2. Put the APK in `/mnt/SDCARD/APKs` and press **Add to Games** on it in the
+   APK Store (or write an `androidpak` [game profile](GAME_PROFILES.md) by
+   hand).
 3. Launch it, then send back the profile's launch log: the
    `[androidrt] manifest:`, `[androidrt][present] backend`, `undefined symbol`
    and `[androidrt][jni] report:` lines say exactly what is missing.
@@ -202,71 +301,61 @@ one works.
 
 | Approach | Verdict |
 |----------|---------|
-| **Container integration (Waydroid)** — Android runs in a container on the device kernel; JukaHub detects, lists and launches. | **Shipped.** The only approach that runs real Android apps, and it costs JukaHub no root: the one-time root step belongs to Waydroid. |
+| **Container integration (Waydroid)** — Android runs in a container on the device kernel. | **Install only.** The only approach that runs real Android apps. The APK Store detects Waydroid (binary + binder device) and installs APKs into it; the earlier engine that listed and launched container apps through a display bridge (`android.go`) is no longer in the tree. A stock TrimUI kernel has no binder device. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
 | **AndroidPak — NDK games via AndroidRT** | **Profile support and runtime source shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches a separately built/installed runtime with its own bionic loader, JNI environment and EGL present layer; real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
-| **Sideloading APKs into the container** | Next slice. `waydroid app install <file>` is a container feature; the hub's job is validating the package and handing it over. |
+| **Sideloading APKs into the container** | **Shipped in the APK Store.** The package is read and triaged first; `waydroid app install <file>` gets a validated path. |
 | **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
 
 ## What ships now
 
-`player/android.go` implements the engine's core:
-
-* **Backend detection.** Finds `waydroid`, honours `JUKAHUB_ANDROID_BACKEND`
-  (only `waydroid` is supported), and checks the piece that cannot be worked
-  around from userspace: a binder device (`/dev/binder`, `/dev/binderfs/binder`,
-  `/dev/anbox-binder`). A stock TrimUI kernel does not expose one, and the
-  engine says exactly that instead of launching something that dies inside the
-  container.
-* **Session state.** Reads `waydroid status` and distinguishes a running
-  session from a stopped one, because a stopped session cannot launch an app.
-  `androidSessionStartCommand` starts it once and keeps it for later launches.
-* **Package list.** Parses `waydroid app list`, which prints `Name:` before
-  `Package:`; a package-first list and a tab-separated list are accepted too,
-  and duplicate packages collapse.
-* **Launch.** `waydroid app launch <package>`, with the package name validated
-  first. The name reaches `argv`, so it must not be readable as an option,
-  a shell word or a path — `-rf`, `com.app; rm -rf /` and `com.app/../etc` are
-  refused before the container is contacted.
-* **Display bridge.** Android draws through Wayland, so the engine reuses
-  WestonPack's `westonwrap.sh` on DRM/KMS exactly as the Wine launcher does,
-  passing `XDG_RUNTIME_DIR` through so the wrapped app finds Waydroid's socket.
-  There is no X11 mode: Wine can use X11, SurfaceFlinger cannot. There is no
-  headless mode either — the surface *is* the app.
+* **The APK Store** (above): scan, manifest and resource-table reading,
+  triage, engine and verdict, one-press game profiles, Play/Remove, the
+  catalogue and its verified downloads, the runtime and Waydroid status.
+* **AndroidPak** profile support: triage, the memory pre-flight, tmpfs
+  staging, the runtime contract and the first-run report
+  ([player/androidpak.go](../player/androidpak.go)).
+* **AndroidRT** source and its host smoke suite
+  ([player/androidrt](../player/androidrt/README.md)); no prebuilt runtime.
+* **Waydroid**: detection (the `waydroid` command, a binder device at
+  `/dev/binder`, `/dev/binderfs/binder`, `/dev/binderfs/anbox-binder` or
+  `/dev/anbox-binder`, `waydroid status`) and APK install. Listing and
+  launching container apps from JukaHub, and the WestonPack display bridge the
+  removed `android.go` had, are not part of this tree.
 
 ## Requirements
 
-1. A kernel with the binder module (`binder_linux`). This is the hard gate.
-2. Waydroid installed and initialised — a one-time root step on the device.
-3. A Wayland compositor: an existing `WAYLAND_DISPLAY`, or WestonPack
-   (`JUKAHUB_WESTON` points at an existing `westonwrap.sh`).
+* **AndroidPak / AndroidRT:** an aarch64 Linux handheld (the TrimUI Smart Pro
+  and Brick), the runtime built from `player/androidrt` and copied to
+  `/mnt/SDCARD/Apps/AndroidRT` (or `JUKAHUB_ANDROIDRT`), and the APK on the
+  card.
+* **Waydroid install:** a kernel with the binder module (`binder_linux`) —
+  the hard gate — and Waydroid installed, initialised and with its session
+  running (a one-time root step that belongs to Waydroid).
 
 ## Limits
 
-* The engine starts apps the container already has; it does not run arbitrary
-  APKs on its own.
-* 3D games remain out of reach in practice: the container needs a working GPU
-  stack, and the handheld's driver is not one Waydroid supports out of the box.
-* Memory is shared with everything else on a 1 GB device. A heavy app can make
-  the hub itself get killed while the user works inside it.
-* **Nothing here is verified on hardware yet.** Waydroid detection, listing,
-  launch argv, display-bridge selection and package-name validation are
-  unit-tested against a fake host. AndroidPak staging and its runtime contract
-  also have host-side tests/smokes, but those do not prove real APK execution.
+* AndroidRT runs native (NDK) games only; Java apps and the engines that start
+  in Java (Unity, Unreal, Godot, GameMaker, LÖVE, SDL, Cocos2d-x) cannot run
+  on it, and the store says so instead of offering them.
+* Memory is shared with everything else on a 1 GB device: a launch that would
+  not leave the hub alive is refused with the numbers.
+* **Nothing here is verified on hardware yet.** The store's reading, triage,
+  verdicts, profiles, catalogue and Waydroid probe are unit-tested with
+  generated APKs and fakes; AndroidPak staging and AndroidRT have host-side
+  tests and smokes. None of that proves a real game running on the handheld.
 
 ## Next slices
 
-1. **Panel and scene** — an **Android** scene with the runtime status card
-   (backend, session, display, what is missing) and one row per package,
-   following [windowsapps_ui.go](../player/windowsapps_ui.go).
-2. **Per-app profiles** — reuse [game profiles](GAME_PROFILES.md) so an app
-   gets a power profile and a display mode on launch.
-3. **APK sideload** — read the package name, min SDK and ABI out of an APK
-   before handing it to `waydroid app install`, so an incompatible file is
-   refused with a reason.
-4. **Container data** — expose `waydroid`'s data directory to the Save Manager
+1. **A prebuilt AndroidRT** — build it in CI next to the TrimUI package and
+   install it from the Runtime tab (hash-checked), so "Missing" has a button.
+2. **Verified catalogue entries** — free NDK games whose authors publish APKs
+   on GitHub releases, with their SHA-256 and size, so Store rows can download.
+3. **Library integration** — list added Android games in the Games Library
+   (today they live in Game Profiles).
+4. **Container data** — expose Waydroid's data directory to the Save Manager
    so an app's state can be snapshotted like a game save.
 
 ## Related

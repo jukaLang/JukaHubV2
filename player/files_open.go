@@ -4,7 +4,7 @@ package main
 // dedicated branch in feEnterFocused (features.go).
 //
 // The rule is the one desktop file managers follow: a file with a viewer of its
-// own (pictures, music and video, PDF/EPUB, a game, a script, a zip) opens
+// own (pictures, music and video, PDF/EPUB, a game, a script, an archive) opens
 // there, and everything else opens in the built-in text editor — or, when the
 // bytes are not text, in its read-only hex view with a warning instead of a
 // screen of garbage. Before this, any extension the editor did not list
@@ -113,7 +113,10 @@ func filesHasDedicatedViewer(path string) bool {
 		return true
 	case isImageExtension(ext), isMediaFile(path), hasMediaExtension(path):
 		return true
-	case ext == ".pdf" || ext == ".epub" || ext == ".zip" || ext == ".sh" || ext == ".html" || ext == ".js":
+	case ext == ".pdf" || ext == ".epub" || ext == ".sh" || ext == ".html" || ext == ".js":
+		return true
+	case feArchiveKindOf(path) != feArchiveNone:
+		// Archives open their sheet (files_extract_ui.go).
 		return true
 	case filesROMSystem(path) != "":
 		return true

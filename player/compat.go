@@ -26,6 +26,7 @@ package main
 // without rebuilding JukaHub.
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1146,7 +1148,11 @@ func coreStateFor(core, required string, inv coreInventory) (state, detail strin
 }
 
 // activateCoreBuild copies a pool build into RetroArch's cores folder and
-// keeps the previous active binary next to it as a timestamped backup.
+// keeps the previous active binary next to it as a timestamped backup. It is
+// the one door every activation goes through — the Emulators page, the daily
+// pass, the compatibility panel — so the two refusals live here: a build that
+// cannot load on this firmware (elfcompat.go) never replaces anything, and
+// nothing is written on the firmware's read-only system partition.
 func activateCoreBuild(build coreBuild) (string, string, error) {
 	if !build.Pool {
 		return "", "", errors.New("only builds from the core pool can be activated")
@@ -1158,31 +1164,183 @@ func activateCoreBuild(build coreBuild) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	dirs := retroArchCoreDirs()
-	if len(dirs) == 0 {
-		return "", "", errors.New("RetroArch cores folder not found")
+	target, err := coreActivationTarget(build)
+	if err != nil {
+		return "", "", err
 	}
-	destDir := dirs[0]
-	targetName := coreBuildFileName(build.Core)
-	if ext := strings.ToLower(filepath.Ext(build.File)); ext == ".so" || ext == ".dll" {
-		targetName = build.Core + "_libretro" + ext
+	if problem := coreLoadProblemFile(source, target); problem != "" {
+		return "", "", &coreRefusedError{Core: build.Core, Build: build.Version, Reason: coreCannotLoadReason + problem}
 	}
-	// Prefer the extension of the active binary in this folder: that is the
-	// file the emulator actually loads. Fall back to the build's extension
-	// for a first-time install (a Linux card mounted on Windows, or vice versa).
-	for _, ext := range []string{".so", ".dll"} {
-		if regularFile(filepath.Join(destDir, build.Core+"_libretro"+ext)) {
-			targetName = build.Core + "_libretro" + ext
-			break
-		}
-	}
-	target := filepath.Join(destDir, targetName)
 	backup, err := installCoreFile(source, target)
 	if err != nil {
 		return "", backup, err
 	}
 	logDebug("compat", "activated core %s %s from %s (backup %s)", build.Core, build.Version, source, backup)
 	return target, backup, nil
+}
+
+// coreActivationTarget is the file a build replaces. When the card has the
+// core, that is the binary the inventory calls active — the first one in
+// retroArchCoreDirs order, the copy RetroArch's launchers load — replaced where
+// it is, under its own name. Writing into the first cores folder instead (what
+// this did before) put an update beside a core that lives in another folder,
+// where nothing loads it, and the inventory then reported the new file as the
+// active one. A core the card does not have yet goes into the first cores folder
+// JukaHub may write, as <core>_libretro.<ext>.
+func coreActivationTarget(build coreBuild) (string, error) {
+	dirs := retroArchCoreDirs()
+	if len(dirs) == 0 {
+		return "", errors.New("RetroArch cores folder not found")
+	}
+	if active := coreActiveBinary(build.Core, dirs); active != "" {
+		if coreDirIsSystem(filepath.Dir(active)) {
+			return "", fmt.Errorf("the %s core RetroArch loads is part of the firmware (%s) and is not replaced", coreConfigDisplayName(build.Core), filepath.Dir(active))
+		}
+		return active, nil
+	}
+	destDir := ""
+	for _, dir := range dirs {
+		if !coreDirIsSystem(dir) {
+			destDir = dir
+			break
+		}
+	}
+	if destDir == "" {
+		return "", errors.New("RetroArch's cores folder is part of the firmware (read-only); nothing is installed there")
+	}
+	targetName := coreBuildFileName(build.Core)
+	if ext := strings.ToLower(filepath.Ext(build.File)); ext == ".so" || ext == ".dll" {
+		targetName = build.Core + "_libretro" + ext
+	}
+	return filepath.Join(destDir, targetName), nil
+}
+
+// coreActiveBinary is the active binary of core in dirs, by scanCoreInventory's
+// rule: the first file, folder by folder in name order, that parses as that
+// core. Only names are compared until one matches, so the call costs one folder
+// listing rather than a stat per core on a card with a hundred of them.
+func coreActiveBinary(core string, dirs []string) string {
+	core = normalizeCoreName(core)
+	if core == "" {
+		return ""
+	}
+	for _, dir := range dirs {
+		items, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, item := range items {
+			if item.IsDir() {
+				continue
+			}
+			name := item.Name()
+			if ext := strings.ToLower(filepath.Ext(name)); ext != ".so" && ext != ".dll" {
+				continue
+			}
+			if got, _ := parseCoreFile(name); got != core {
+				continue
+			}
+			if path := filepath.Join(dir, name); regularFile(path) {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+// coreDirIsSystem reports a cores folder on the firmware's own partition
+// (/usr/trimui/RetroArch/... on the handheld). That tree is read-only on the
+// device, or at least not JukaHub's to change: an update there would fail every
+// day, or quietly modify the firmware. Its cores are left as they are, like a
+// custom build the index does not carry.
+func coreDirIsSystem(dir string) bool {
+	if IsWindows() || strings.TrimSpace(dir) == "" {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(dir)) + "/"
+	for _, prefix := range []string{"/usr/", "/rom/", "/lib/", "/bin/", "/sbin/", "/etc/"} {
+		if strings.HasPrefix(clean, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// coreLoadProblemFile is the load check (elfcompat.go) for a core file that is
+// about to become target — "" when it may. A core is loaded by RetroArch, not
+// by JukaHub, so it must match RetroArch's architecture (coreLoadEnv); on
+// Windows, and for anything that is not an ELF file, there is nothing to check.
+func coreLoadProblemFile(source, target string) string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	info, err := os.Stat(source)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > elfCheckMaxSize {
+		return ""
+	}
+	f, err := os.Open(source)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	return elfLoadProblemFrom(f, coreLoadEnv(target))
+}
+
+// coreLoadProblemData is coreLoadProblemFile for a download still in memory, so
+// a build that cannot load is refused before it reaches the pool. target may be
+// "" (a core the card does not have yet); activation checks again with the
+// real one.
+func coreLoadProblemData(data []byte, target string) string {
+	if runtime.GOOS != "linux" || len(data) > elfCheckMaxSize {
+		return ""
+	}
+	return elfLoadProblemFrom(bytes.NewReader(data), coreLoadEnv(target))
+}
+
+// coreLoadEnv is what a core that becomes target has to match. The
+// architecture is RetroArch's — read from the RetroArch binary that owns the
+// cores folder, else from the core being replaced, else this process's — because
+// they need not be JukaHub's: early firmware ran a 32-bit RetroArch
+// (ra32.trimui) on the 64-bit handheld, and an aarch64 build over one of its
+// cores would stop every game that core runs while "loading on this device".
+// The symbol-version check runs only when that architecture is this process's
+// own, whose libraries are the ones in the system folders.
+func coreLoadEnv(target string) elfLoadEnv {
+	hostClass, hostMachine := elfHostArch(runtime.GOARCH)
+	env := elfHostEnv(nil)
+	if strings.TrimSpace(target) == "" {
+		return env
+	}
+	env.origin = filepath.Dir(target)
+	class, machine := hostClass, hostMachine
+	for _, probe := range []string{coreRetroArchBinary(filepath.Dir(target)), target} {
+		if probe == "" {
+			continue
+		}
+		// The first of the two that is an ELF this device runs decides; a
+		// RetroArch that is a wrapper script leaves it to the core.
+		if c, m, ok := elfArchOfFile(probe); ok && elfHostRuns(hostClass, hostMachine, c, m) {
+			class, machine = c, m
+			break
+		}
+	}
+	env.class, env.machine = class, machine
+	env.archOnly = class != hostClass || machine != hostMachine
+	return env
+}
+
+// coreRetroArchBinary is the RetroArch that owns a cores folder: TrimUI's
+// layout keeps it two levels up (RetroArch/.retroarch/cores), a plain RetroArch
+// folder one level up (RetroArch/cores). "" when neither holds one.
+func coreRetroArchBinary(coresDir string) string {
+	for _, root := range []string{filepath.Dir(filepath.Dir(coresDir)), filepath.Dir(coresDir)} {
+		for _, name := range []string{"ra64.trimui", "ra32.trimui", "retroarch"} {
+			if p := filepath.Join(root, name); regularFile(p) {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // installCoreFile puts source in place of target, keeping the file it replaces

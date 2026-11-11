@@ -57,6 +57,7 @@ func homePowerOpen() {
 	homeCalendarOpen = false
 	dismissWeatherPopover()
 	dismissVolumePopover()
+	dismissBrightnessPopover()
 	homePowerConfirm.open = true
 	homePowerConfirm.focus = homePowerExit
 	homePowerConfirm.openedAt = sdl.GetTicks64()

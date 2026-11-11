@@ -790,6 +790,7 @@ func notifSetOpen(open, focusBell bool) {
 		homeCalendarOpen = false
 		dismissWeatherPopover()
 		dismissVolumePopover()
+		dismissBrightnessPopover()
 		// Mark all as read. Rows that arrive from here on move the highlight
 		// with them (notifFollowArrivals).
 		notifHistoryMu.Lock()

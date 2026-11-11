@@ -136,6 +136,11 @@ func activityRows() []activityItem {
 			open: func() { openDownloadsPanel() },
 		})
 	}
+	// An archive unpacking in Files, on every other screen
+	// (files_extract_ui.go).
+	if item, ok := feExtractActivityItem(); ok {
+		rows = append(rows, item)
+	}
 	return rows
 }
 

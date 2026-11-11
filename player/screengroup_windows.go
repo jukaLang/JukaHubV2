@@ -12,7 +12,12 @@ import (
 	"os/exec"
 )
 
+// screenChildGroupConfigure leaves the environment alone too: a desktop
+// emulator gets the one JukaHub was started with (childenv.go is about the
+// handheld's launch.sh).
 func screenChildGroupConfigure(cmd *exec.Cmd) {}
+
+func processGroupConfigure(cmd *exec.Cmd) {}
 
 func screenChildGroupConfigured(cmd *exec.Cmd) bool { return false }
 

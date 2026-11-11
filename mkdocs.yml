@@ -45,9 +45,12 @@ nav:
       - The ten-minute tour: TOUR.md
       - Controls: CONTROLS.md
       - Recovery: RECOVERY.md
+      - Bug reports from the device: BUG_REPORTS.md
   - Software:
       - Toolbox: TOOLBOX.md
       - Video and music: MUSIC_PLAYER.md
+      - Spatial audio: SPATIAL_AUDIO.md
+      - Voice command: VOICE.md
       - Recordings: RECORDINGS.md
       - Wi-Fi network picker: WIFI.md
       - Browser: BROWSER.md
@@ -59,11 +62,12 @@ nav:
       - LAN play (Remote Play, watch party): REMOTE_PLAY.md
       - Smart home: SMART_HOME.md
       - Windows apps: WINDOWS_APPS.md
-      - Android (tsp) builds: ANDROID.md
+      - Android games and the APK Store: ANDROID.md
       - Minecraft on AndroidRT: ANDROID-MINECRAFT.md
       - Game curation screens: CURATION.md
   - Configure and extend:
       - Configuration reference: CONFIGURATION.md
+      - Boot logo and the power-on boot: BOOT.md
       - Packages and the Patch manager: PACKAGES.md
       - Plugins: PLUGINS.md
       - Engineering backlog: https://github.com/jukaLang/JukaHubV2/blob/main/player/MODERNIZATION.md

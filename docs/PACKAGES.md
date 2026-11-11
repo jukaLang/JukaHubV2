@@ -354,8 +354,14 @@ PATCH_SIGN_KEY=<hex private key> go run ./tools/sign-release \
   -tag JukaHub-20261020154603 \
   -asset JukaHub-Windows.zip=dist/JukaHub-Windows.zip \
   -asset JukaHub-Trimui.zip=dist/JukaHub-Trimui.zip \
+  -asset JukaHub-RemotePlay-linux-arm64.zip=dist/JukaHub-RemotePlay-linux-arm64.zip \
   -out dist/release.json
 ```
+
+List `JukaHub-RemotePlay-linux-arm64.zip` whenever the release carries it: the
+PS Remote Play panel installs its helpers from that package, and it passes over
+a release whose signed manifest leaves the package out
+([REMOTE_PLAY.md → Installing the helpers](REMOTE_PLAY.md#installing-the-helpers)).
 
 Upload `release.json` as a release asset. Until the release pipeline runs that
 step with the signing key in CI, releases stay unsigned and the updater keeps

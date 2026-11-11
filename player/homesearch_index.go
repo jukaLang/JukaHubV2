@@ -192,6 +192,7 @@ type homeSearchEntry struct {
 func homeSearchCatalog() []homeSearchEntry {
 	return []homeSearchEntry{
 		{title: "Wi-Fi", where: "Network", icon: "wifi", keys: "wifi wlan wireless network internet hotspot ssid connect password router", open: wifiScrOpen},
+		{title: "Pair a controller", where: "Network", icon: "bluetooth", keys: "bluetooth devices pair pairing controller gamepad pad headphones earbuds headset dualsense dualshock xbox 8bitdo", open: btScreenOpen},
 		{title: "Network tools", where: "Tools", icon: "network", keys: "ftp sftp ssh telnet ping dns port scan traceroute whois ip address server lan http https curl tls certificate headers", open: netToolsOpen},
 		{title: "Tools", where: "Tools", icon: "tools", keys: "tools utilities misc system", open: toolsHubOpen},
 		{title: "Settings", where: "Settings", icon: "settings", keys: "settings preferences options configuration setup", scene: "Settings"},
@@ -206,7 +207,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Accessibility", where: "Settings", icon: "user", keys: "accessibility text size font size large text bigger contrast reduce motion remap buttons", open: openAccessibilityPanel},
 		{title: "Quick Settings", where: "Device", icon: "settings", keys: "quick settings brightness volume toggles airplane", open: func(*Config) { qsToggleOpen() }},
 		{title: "Wallpapers", where: "Device", icon: "image", keys: "wallpaper wallpapers background picture photo lock screen", open: func(*Config) { wpOpen = true; initWallpaperPicker() }},
-		{title: "Audio", where: "Device", icon: "music", keys: "audio sound output equalizer eq speaker headphones volume", open: openMusicSettingsPanel},
+		{title: "Audio", where: "Device", icon: "music", keys: "audio sound output equalizer eq speaker headphones volume spatial surround virtual 3d hrtf", open: openMusicSettingsPanel},
 		{title: "Media", where: "Media", icon: "media", keys: "media video videos youtube watch movies search", scene: "Tube"},
 		{title: "Music", where: "Media", icon: "music", keys: "music songs audio mp3 flac player playlist albums", open: func(c *Config) { openAudioPlayerBrowser(c, musicDefaultDir(c)) }},
 		{title: "Live TV", where: "Media", icon: "video", keys: "live tv television channels iptv", scene: "LiveTV"},
@@ -243,6 +244,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Games Library", where: "Games", icon: "gamepad", keys: "games game library roms play", open: func(*Config) { openGameLibraryPanel() }},
 		{title: "PS Remote Play", where: "Games", icon: "gamepad", keys: "ps5 ps4 playstation remote play chiaki stream console", open: func(*Config) { openChiakiPanel() }},
 		{title: "Phone companion", where: "Device", icon: "phone", keys: "phone companion qr pair remote control", open: func(*Config) { openCompanionOverlay() }},
+		{title: "Screen Share", where: "Device", icon: "devices", keys: "screen share sharing cast mirror stream tv hdmi watch broadcast remote cast", open: openCastPanel},
 		{title: "Trophies", where: "Games", icon: "trophy", keys: "trophies achievements playtime stats", scene: playtimeSceneName},
 		{title: "Smart Home", where: "Device", icon: "home", keys: "smart home lights home assistant", open: openSmartHomePanel},
 		{title: "Quit JukaHub", where: "Device", icon: "exit", keys: "exit quit power off shutdown close", open: func(*Config) { requestAppExit() }},
@@ -370,7 +372,7 @@ type homeSearchScreen struct {
 // keystroke (the Start menu probes the card for a couple of its rows).
 func homeSearchScreens(config *Config) []homeSearchScreen {
 	catalog := homeSearchCatalog()
-	out := make([]homeSearchScreen, 0, len(catalog)+24)
+	out := make([]homeSearchScreen, 0, len(catalog)+160)
 	seen := map[string]bool{}
 	add := func(s homeSearchScreen) {
 		key := homeSearchFold(s.title)
@@ -379,6 +381,43 @@ func homeSearchScreens(config *Config) []homeSearchScreen {
 		}
 		seen[key] = true
 		out = append(out, s)
+	}
+	// Settings rows come first: a row whose label the catalog already uses
+	// ("Date & time") should open that row, not merely the section above it.
+	// The keys carry the id and the detail line too, so "vibration" or "button
+	// hints" finds the switch whose own label does not contain the word.
+	if config != nil && sceneIndexExact(config, "Settings") >= 0 {
+		rowSeen := map[string]bool{}
+		for _, section := range setSections() {
+			for _, row := range setSectionRows(config, section) {
+				label := strings.TrimSpace(row.Label)
+				if label == "" || (row.Visible != nil && !row.Visible(config)) {
+					continue
+				}
+				key := "row:" + section.ID + ":" + row.ID + ":" + label
+				if rowSeen[key] {
+					continue
+				}
+				rowSeen[key] = true
+				detail := ""
+				if row.Detail != nil {
+					detail = row.Detail(config)
+				}
+				sectionID, rowID, rowLabel := section.ID, row.ID, label
+				out = append(out, homeSearchScreen{
+					title: label,
+					where: "Settings · " + setOr(section.Title, section.ID),
+					icon:  setOr(section.Glyph, "settings"),
+					keys:  strings.TrimSpace(strings.Join([]string{row.ID, detail, section.Title, section.Subtitle}, " ")),
+					action: func(c *Config) {
+						setOpenSettingRow(c, sectionID, rowID, rowLabel)
+					},
+				})
+			}
+		}
+		for _, s := range out {
+			seen[homeSearchFold(s.title)] = true
+		}
 	}
 	for _, e := range catalog {
 		switch {

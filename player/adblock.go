@@ -19,6 +19,9 @@ package main
 // the toggle is stored in data/browser-block.json, keyed by host, and both the
 // fetch pass and the script-stripping pass consult it. The toolbar reports the
 // count for the page on screen, so a page that saved nothing says so too.
+//
+// brw_adblock.go builds on this: a broader curated host list, the Settings
+// switch (Block ads and trackers), the first-party rule and the Site info row.
 
 import (
 	"encoding/json"
@@ -239,16 +242,14 @@ func saveBrowserAdBlockSites(path string, disabled map[string]bool) error {
 }
 
 // browserAdBlockOff reports whether filtering is disabled for the site a URL
-// belongs to. It is safe to call for every request and every page.
+// belongs to: Settings → Browser → Block ads and trackers is off, or the site
+// is excepted (browserAdBlockSiteAllowed, brw_adblock.go). It is safe to call
+// for every request and every page.
 func browserAdBlockOff(raw string) bool {
-	site := browserAdBlockSiteKey(raw)
-	if site == "" {
-		return false
+	if !browserBlockAdsEnabled() {
+		return true
 	}
-	browserAdBlockSites.mu.Lock()
-	defer browserAdBlockSites.mu.Unlock()
-	ensureBrowserAdBlockSitesLocked()
-	return browserAdBlockSites.disabled[site]
+	return browserAdBlockSiteAllowed(raw)
 }
 
 // setBrowserAdBlockOff stores one site's setting and writes the file. The
@@ -353,7 +354,9 @@ func browserRequestBlocked(pageURL, rawURL string) bool {
 	if browserAdBlockOff(pageURL) {
 		return false
 	}
-	if browserURLIsAd(rawURL) {
+	// brwAdBlocks adds the first-party rule: a listed host loading its own
+	// site's files is not blocked there (brw_adblock.go).
+	if brwAdBlocks(pageURL, rawURL) {
 		noteBrowserBlocked()
 		return true
 	}
@@ -382,6 +385,12 @@ func browserURLIsAd(rawURL string) bool {
 	host := strings.ToLower(parsed.Hostname())
 	path := strings.ToLower(parsed.Path)
 	if host != "" {
+		// Every host-only entry of this list and of the curated one in
+		// brw_adblock.go, looked up by the host's own suffixes; the loop below
+		// still handles the host-plus-path entries.
+		if browserAdHostListed(host) {
+			return true
+		}
 		for _, blocked := range browserAdHosts {
 			if before, after, ok := strings.Cut(blocked, "/"); ok {
 				// A host-plus-path entry (facebook.com/tr) only matches that
@@ -432,7 +441,7 @@ func stripBlockedWebScripts(source string, base *url.URL) string {
 		if err != nil {
 			return tag
 		}
-		if browserURLIsAd(target.String()) {
+		if brwAdBlocks(base.String(), target.String()) {
 			noteBrowserBlocked()
 			return ""
 		}

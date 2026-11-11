@@ -381,6 +381,9 @@ func shutdownReleaseTextures() {
 	clearAppIconCache()
 	clearChatImageCache()
 	clearChatAvatarCache()
+	// An animated wallpaper's frames are textures too, the largest set there
+	// is (gifwall.go).
+	gifWallEvict()
 }
 
 // ShowShutdown runs the teardown while drawing it. A signal-initiated exit runs

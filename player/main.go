@@ -188,6 +188,8 @@ func main() {
 	// The ROM manager (Tools → ROM manager) is a Go-owned page injected the
 	// same way (romm_ui.go).
 	ensureRommScene(config)
+	// The APK Store (Start → Games) likewise (apkstore.go).
+	ensureApkStoreScene(config)
 	// Control profiles and Local play are Go-owned screens reached from Tools
 	// and Settings → Controls, injected in memory the same way.
 	inmapEnsureScenes(config)
@@ -316,6 +318,9 @@ func main() {
 	deferStartupTask("cache-sweep", func() { sweepSharedCacheLater(2 * time.Minute) })
 	// Temp video downloads a crash or power cut left on the card.
 	deferStartupTask("temp-videos", func() { go sweepTempVideos() })
+	// RetroArch settings a launch changed and a crash or power cut left in
+	// retroarch.cfg go back to the user's (racfgscope.go; its own goroutine).
+	deferStartupTask("retroarch-scope", raScopeStartupRecover)
 	// Plugins can add themes, ROM formats, control profiles and experience
 	// packs (plugx.go), so their folder is scanned once after the first frame
 	// rather than only when the Plugins page opens; safe mode skips the scan.
@@ -325,6 +330,9 @@ func main() {
 	deferStartupTask("xpack-start", func() { xpackOpenStartScene(config) })
 	deferStartupTask("bkup-auto", func() { bkupMaybeAutoBackup(config) })
 	deferStartupTask("cfgdoc-upstream", cfgdocCheckUpstreamAsync)
+	// Box art for games without a cover, found in the background when online;
+	// it picks its own moment and stands down in safe mode (boxart_auto.go).
+	deferStartupTask("boxart-auto", func() { startBoxArtAuto(config) })
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
@@ -507,10 +515,11 @@ func main() {
 	// background image instead of painting opaque.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	// Boot splash: the glass boot card in splash.go, played for whatever is left
-	// of the two-second boot budget. A warm launch skips it entirely — the
-	// greeting is for a cold start, and a relaunch has the card's caches warm.
-	// A cold card with nothing left opens the UI directly (see startup.go).
+	// Boot splash (splash.go, bootos.go): an app launch gets a quick hello in
+	// whatever is left of the two-second boot budget. A warm launch skips it
+	// entirely — the greeting is for a cold start, and a relaunch has the card's
+	// caches warm. A cold card with nothing left opens the UI directly (see
+	// startup.go). A power-on gets the full boot instead.
 	startupMarkNow("window")
 	bootElapsed := startupElapsed()
 	allotment := splashAllotment(bootElapsed, startupTarget(), splashReserve(bootElapsed))
@@ -521,6 +530,10 @@ func main() {
 	if note := startupBudgetNote(bootElapsed); note != "" && allotment > 0 {
 		logInfo("startup", "%s", note)
 	}
+	// Started with the device (or asked to play it every time): the full boot,
+	// whatever the budget left (bootos.go). Decided before the queue is built,
+	// so the warm render the first screen arrives from is queued for it too.
+	allotment = bootOSPlanStartup(config, allotment)
 	// Everything below is real setup that the animation does not need, so it is
 	// queued and executed between splash frames instead of after them
 	// (bootwork.go). The cache handle is the one piece that must not block a
@@ -633,9 +646,10 @@ func main() {
 	// holding a performance profile.
 	captureBootCPUSettings()
 
-	// The startup chime rises with the glass pane (bootchime.go). A warm
-	// relaunch draws no splash, so it starts quietly too.
-	if allotment > 0 {
+	// The startup chime rises with the boot (bootchime.go). A warm relaunch
+	// draws no splash, so it starts quietly too; the full boot starts its own,
+	// later in its score, so the bells land on its blooms (bootos.go).
+	if allotment > 0 && !bootOSPowerOnActive() {
 		bootChimeStart(config)
 	}
 	ShowSplash(renderer, config, allotment)
@@ -676,6 +690,10 @@ func main() {
 	defer memMonitor.Stop()
 	LogDeviceDiagnostics()
 
+	// An archive extraction is cancelled on the way out, after the scene work
+	// below, and given a moment to delete its staging folder
+	// (files_extract.go).
+	defer feExtractShutdown()
 	// Cancel the active scene's background work on the way out, before the
 	// Cleanup hooks and the display teardown run. Registered last so it is the
 	// first deferred call to execute.
@@ -736,6 +754,11 @@ func main() {
 				}
 			}
 			widgetsTick(config)
+			// Nothing listens behind a game: the voice orb goes (voiceorb.go).
+			voiceOrbAway()
+			// Mouse in games and apps: a goroutine watches the pad for the
+			// Select + L1 chord while the child runs (vcursor_bridge_linux.go).
+			vcursorBridgeTick(config)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
 				alarmCheck(config, now)
@@ -817,6 +840,8 @@ func main() {
 					// Releasing the key that opened an on-screen keyboard ends
 					// the watch on its auto-repeats (browserTextOpenerRepeat).
 					browserTextOpenerRepeat(e)
+					// F4 let go after a long hold sends the voice orb's clip.
+					voiceOrbKeyUp(e, config)
 					continue
 				}
 				if e.Type == sdl.KEYDOWN {
@@ -850,6 +875,13 @@ func main() {
 					// A key that wakes the screen only wakes it (and the text it
 					// would have typed is dropped with it).
 					if wakeSwallowPress(wakeInputKey, int32(e.Keysym.Scancode), e.Repeat != 0) {
+						wakeSwallowedText = true
+						continue
+					}
+					// The voice orb's keys (voiceorb.go): F4 anywhere, and Enter,
+					// Esc and the arrows while it listens or offers a choice. The
+					// text a taken key would type is dropped with it.
+					if voiceOrbKey(e, config) {
 						wakeSwallowedText = true
 						continue
 					}
@@ -1046,6 +1078,12 @@ func main() {
 					if brwInfo.open && brwInfoKey(e, config) {
 						continue
 					}
+					// And the browser's Select menu, which M or the Menu key opens
+					// over the page and which owns the keys while it is up
+					// (brw_menu.go).
+					if brwMenuKey(renderer, e, config) {
+						continue
+					}
 					// The stick calibration wizard is modal while it runs.
 					if calibrationPanel.open && handleStickCalibrationKey(e, config) {
 						continue
@@ -1078,6 +1116,14 @@ func main() {
 					// Quick Settings takes priority when open.
 					if qs.open {
 						handleQSInput(e, config)
+						continue
+					}
+					// The wallpaper picker covers whatever scene it was opened
+					// over (Home, from Start or search): it owns the keys while it
+					// is up, as it owns the pad (controller.go). Further down,
+					// Home's own key handling took the arrows, Enter and Esc first.
+					if wpOpen && !virtualKeyboardActive {
+						handleWallpaperInput(e, config)
 						continue
 					}
 					// Chat member list and profile card float above the chat panel
@@ -1438,8 +1484,6 @@ func main() {
 							handlePackageInput(e, config)
 						} else if curElem.Type == "recent" {
 							handleRecentInput(e, config)
-						} else if wpOpen {
-							handleWallpaperInput(e, config)
 						} else if m, ok := lookupScene(curScene.Name); ok && m.handleKey(e, config) {
 							// The scene consumed the key. Overlays are checked first so a
 							// picker floating over a scene always wins the D-pad.
@@ -1558,9 +1602,19 @@ func main() {
 				if alarmFiringActive() || recoveryCard.open {
 					continue
 				}
+				// The wallpaper picker covers the screen: the pointer hovers its
+				// rows and nothing behind it (wallpaper.go).
+				if wallpaperOwnsPointer() {
+					wallpaperMouseMove(mouseX, mouseY)
+					continue
+				}
 				// The volume card follows a drag on its slider and keeps the
 				// pointer from hovering the cards behind it (volumepopover.go).
 				if volumePopoverPointerMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0) {
+					continue
+				}
+				// So does the brightness card (brightnesspopover.go).
+				if brightnessPopoverPointerMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0) {
 					continue
 				}
 				// A held press on the package store drags its shelves and
@@ -1570,7 +1624,11 @@ func main() {
 				// highlight as D-pad navigation. A deliberate click remembers
 				// the card for restore-on-return (see handleHomeMouseClick).
 				if homeLayoutActive && homeLayout != nil {
-					homeLayout.FocusAt(mouseX, mouseY)
+					// Edit Home follows the pointer itself: hover, and a press
+					// that turns into carrying a tile (home_edit.go).
+					if !homeEditPointerMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0) {
+						homeLayout.FocusAt(mouseX, mouseY)
+					}
 				} else if !mediaHubHover(config, mouseX, mouseY) {
 					focusMediaResultAt(config, mouseX, mouseY)
 				}
@@ -1605,9 +1663,23 @@ func main() {
 				if recoveryCard.open {
 					continue
 				}
+				// Nor behind the wallpaper picker, whose list it scrolls.
+				if wallpaperOwnsPointer() {
+					wallpaperWheel(e.Y)
+					continue
+				}
 				// The wheel is a volume knob while the volume card is up, and
-				// over the speaker button in the header (volumepopover.go).
+				// over the speaker button in the header (volumepopover.go); a
+				// brightness knob the same way for the sun's card
+				// (brightnesspopover.go). An open card takes it first, wherever
+				// the pointer is.
+				if brightnessPopoverOpen && brightnessWheel(config, mouseX, mouseY, e.Y) {
+					continue
+				}
 				if volumeWheel(config, mouseX, mouseY, e.Y) {
+					continue
+				}
+				if brightnessWheel(config, mouseX, mouseY, e.Y) {
 					continue
 				}
 				// The Home search sheet floats above every screen, so its result
@@ -1618,6 +1690,12 @@ func main() {
 				// The open notification centre walks its rows under the wheel,
 				// the way its D-pad does (notifications.go).
 				if notifWheel(e.Y) {
+					continue
+				}
+				// Home's widget grid scrolls a row per notch and its carousel
+				// turns a card; Edit Home's add sheet takes the wheel while it is
+				// open (home_edit.go).
+				if homeWheel(config, e.Y) {
 					continue
 				}
 				// The Files viewers own the wheel while they are up: the picture
@@ -1645,6 +1723,10 @@ func main() {
 					continue
 				}
 				if brwInfo.open && brwInfoWheel(e.Y) {
+					continue
+				}
+				// The browser's Select menu walks its rows under the wheel.
+				if brwMenuWheel(e.Y) {
 					continue
 				}
 				// The Core builds list and the Emulators grid scroll with the wheel
@@ -1675,12 +1757,24 @@ func main() {
 				if peerScenesWheel(config, e.Y) {
 					continue
 				}
+				// So does the Bluetooth page (bluetooth_devices_ui.go).
+				if btScenesWheel(config, e.Y) {
+					continue
+				}
 				// Control profiles and Local play scroll their own lists.
 				if inmapScenesWheel(config, e.Y) {
 					continue
 				}
 				// The ROM manager scrolls its plan, or its open sheet.
 				if !virtualKeyboardActive && rommSceneWheel(config, e.Y) {
+					continue
+				}
+				// The APK Store scrolls its tab, or its open sheet.
+				if !virtualKeyboardActive && apkStoreSceneWheel(config, e.Y) {
+					continue
+				}
+				// Voice command scrolls its choices, or its phone sheet.
+				if !virtualKeyboardActive && voiceSceneWheel(config, e.Y) {
 					continue
 				}
 				// Experience packs, Config and Backup & restore scroll their
@@ -1765,6 +1859,29 @@ func main() {
 					isDraggingSeekBar = false
 					continue
 				}
+				// The wallpaper picker covers the screen: a left press reaches its
+				// rows, and nothing behind it hears a press or a release
+				// (wallpaper.go).
+				if wallpaperOwnsPointer() {
+					if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
+						px, py := physicalToLogical(int32(e.X), int32(e.Y))
+						wallpaperMouseDown(px, py, e.Clicks, config)
+					}
+					continue
+				}
+				// A right click is the mouse's Select on the Browser: it opens the
+				// menu over the page and closes it again (brw_menu.go).
+				if e.Button == sdl.BUTTON_RIGHT && e.Type == sdl.MOUSEBUTTONDOWN && brwMenuRightClick(config) {
+					continue
+				}
+				// On a Carousel or Widgets Home a right click edits the tile
+				// under the pointer (home_edit.go).
+				if e.Button == sdl.BUTTON_RIGHT && e.Type == sdl.MOUSEBUTTONDOWN && homeLayoutActive {
+					rx, ry := physicalToLogical(int32(e.X), int32(e.Y))
+					if homeRightClick(config, rx, ry) {
+						continue
+					}
+				}
 				if e.Button == sdl.BUTTON_LEFT {
 					// Taps are swallowed while a video is being prepared: the
 					// spinner is modal, and a stray tap must not press the grid
@@ -1773,6 +1890,12 @@ func main() {
 						continue
 					}
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
+					// The voice orb takes a click on itself and its bubble, and
+					// while it listens a click anywhere, release included
+					// (voiceorb.go).
+					if voiceOrbMouse(e.Type == sdl.MOUSEBUTTONDOWN, mx, my, config) {
+						continue
+					}
 					if e.Type == sdl.MOUSEBUTTONDOWN {
 						if recoveryCardHandleClick(mx, my, config) {
 							break
@@ -1966,6 +2089,11 @@ func main() {
 							brwInfoMouse(mx, my, config)
 							break
 						}
+						// And the browser's Select menu.
+						if brwMenu.open {
+							brwMenuMouse(renderer, mx, my, config)
+							break
+						}
 						// The calibration wizard is modal the same way.
 						if calibrationPanel.open {
 							handleStickCalibrationMouse(mx, my, config)
@@ -2034,6 +2162,10 @@ func main() {
 						if volumePopoverMouseDown(mx, my, config) {
 							break
 						}
+						// And the brightness card (brightnesspopover.go).
+						if brightnessPopoverMouseDown(mx, my, config) {
+							break
+						}
 
 						// The alarm screen draws its own Back pill and rows, so it owns
 						// the clicks on its surface.
@@ -2091,6 +2223,17 @@ func main() {
 						// Notification dropdown open -> click outside dismisses it.
 						if nc.open {
 							notifDismiss()
+							break
+						}
+						// A tap on a trophy celebration card opens the trophy room;
+						// it stands aside while a video plays (trophy_celebrate.go).
+						if trophyCardClick(mx, my, config) {
+							break
+						}
+						// The full-screen Browser draws no top bar, so a click there is
+						// its page's or its status pills' (brw_fullscreen.go), never a
+						// bar button the screen before left behind.
+						if brwFullscreenClick(renderer, mx, my, config) {
 							break
 						}
 
@@ -2165,6 +2308,11 @@ func main() {
 						if peerScenesClick(mx, my, config) {
 							break
 						}
+						// The Bluetooth page's rows and sheets
+						// (bluetooth_devices_ui.go).
+						if btScenesClick(mx, my, config) {
+							break
+						}
 						// Control profiles and Local play draw their own rows,
 						// slots, buttons and sheets (inmap_ui.go, hotseat_ui.go).
 						if inmapScenesClick(mx, my, config) {
@@ -2172,6 +2320,14 @@ func main() {
 						}
 						// The ROM manager draws its own card, rows and sheets.
 						if rommSceneClick(mx, my, config) {
+							break
+						}
+						// The APK Store's tabs, rows and sheets (apkstore.go).
+						if apkStoreSceneClick(mx, my, config) {
+							break
+						}
+						// Voice command's microphone, buttons and choices.
+						if voiceSceneClick(mx, my, config) {
 							break
 						}
 						// The Chat scene owns every click inside it: tabs, banner,
@@ -2478,6 +2634,9 @@ func main() {
 						}
 					} else if e.Type == sdl.MOUSEBUTTONUP {
 						isDraggingSeekBar = false
+						// A tile carried across Edit Home's grid is put down
+						// (home_edit.go).
+						homeEditPointerUp(config, mx, my)
 						// A press on a package card opens it on release, unless
 						// it turned into a drag (pkginput.go).
 						pkgPointerUp(config, mx, my)
@@ -2521,6 +2680,14 @@ func main() {
 				} else if wakeSwallowRelease(wakeInputPad, int32(e.Button)) {
 					continue
 				}
+				// The voice orb (voiceorb.go): the Menu button — the physical
+				// GUIDE, before its fold into Back — opens and stops it, and
+				// while it listens or offers a choice it owns the pad. It runs
+				// before the quit chord and feeds that chord itself, so Menu never
+				// counts as Select there.
+				if voiceOrbController(e, padEventRaw, config) {
+					continue
+				}
 				// Select + Start is the handheld's system quit chord and is read
 				// from the physical buttons, before remapping or any overlay: it
 				// has to leave the app from a panel, a video or the keyboard too.
@@ -2538,6 +2705,13 @@ func main() {
 					ctrldiagButtonEvent(e)
 					continue
 				}
+				// Hold Select + L1: mouse mode on / off (vcursor_mode.go). Read
+				// from the physical buttons like the quit chord, before the remap;
+				// L1's press is taken while Select is held, so the shoulder does
+				// not also turn a page. vcursorTick times the hold.
+				if e.Which != padRepeatWhich && e.Which != inmapSynthWhich && vcursorChordButton(e, config) {
+					continue
+				}
 				// Accessibility remapping rewrites the physical button once, here,
 				// before the overlay router or the scene sees the event. A chord
 				// modifier press is consumed: it arms the next direction instead of
@@ -2548,8 +2722,9 @@ func main() {
 					continue
 				}
 				// While the virtual cursor is up, A is its click (a queued left
-				// mouse press at the pointer); a D-pad press puts it away. After the
-				// remap, so a one-handed chord or a remapped confirm clicks too.
+				// mouse press at the pointer); a D-pad press puts it away, or in
+				// mouse mode moves it. After the remap, so a one-handed chord or a
+				// remapped confirm clicks too.
 				if vcursorButton(e, config) {
 					continue
 				}
@@ -2585,6 +2760,13 @@ func main() {
 					}
 					// Route overlays first (highest priority).
 					if handleControllerEvent(e, config) {
+						continue
+					}
+					// Select opens the browser's menu from anywhere on its screen,
+					// and the menu owns the pad while it is up (brw_menu.go). It is
+					// routed here rather than in the overlay router because its rows
+					// open keyboards, which need the renderer.
+					if brwMenuController(renderer, e, config) {
 						continue
 					}
 					focusEngine.SyncSelected()
@@ -3095,6 +3277,9 @@ func main() {
 		// pump runs even when the Files remote browser is off screen: a transfer
 		// the user walked away from still has to finish and clear its busy flag.
 		feRemoteDrain(config)
+		// Archive extractions report here the same way: the toast, the relisted
+		// folder and the cursor on the result (files_extract_ui.go).
+		feExtractDrain(config)
 		// The dock/ambient screen takes the whole panel when it is up, then the
 		// screensaver, then the scene.
 		if ambientIsActive() {
@@ -3401,6 +3586,12 @@ func main() {
 			brwInfoRender(renderer, config)
 		}
 
+		// The browser's Select menu: every action the full-screen page keeps
+		// out of sight (brw_menu.go).
+		if brwMenu.open {
+			brwMenuRender(renderer, config)
+		}
+
 		// RetroAchievements overlay (recent unlocks + game progress).
 		if raPanel.open {
 			renderRetroAchievementsPanel(renderer, config)
@@ -3499,9 +3690,20 @@ func main() {
 		// A Screenshot picked from the Start menu lands on the frame the user
 		// was looking at, not on whatever is drawn next.
 		capturePendingScreenshot(renderer)
+		// The voice orb, after both captures: the screenshot "take a
+		// screenshot" asked for shows the screen, not the orb (voiceorb.go).
+		voiceOrbRender(renderer, config)
 		// The virtual cursor goes on last, after both captures, so it is on
 		// screen but never in a screenshot (virtualcursor.go).
 		vcursorRender(renderer)
+		// The brightness controller's main-thread work for the frame (the
+		// probe, a saved level, the header cards a full-screen surface now
+		// covers), then — where no brightness control exists — the software
+		// dimmer, which darkens the finished frame the way a backlight would
+		// (brightnessctl.go): after the captures, so a screenshot is not
+		// darkened with it.
+		brightnessFrameTick()
+		brightnessSoftRender(renderer)
 
 		renderer.Present()
 		// Measured after Present, so the idle delay at the end of the loop is

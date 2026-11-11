@@ -187,7 +187,8 @@ func resolveWineDisplay(requested string, host wineHost) (string, error) {
 			if host.westonErr != "" {
 				return "", errors.New(host.westonErr)
 			}
-			return "", errors.New("display=weston, but westonwrap.sh was not found (install WestonPack or set JUKAHUB_WESTON)")
+			err := errors.New("display=weston, but westonwrap.sh was not found (install WestonPack or set JUKAHUB_WESTON)")
+			return "", withLaunchFailureKind(launchFailureRuntimeMissing, err)
 		}
 		return windowsDisplayWeston, nil
 	case windowsDisplayHeadless:

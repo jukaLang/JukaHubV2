@@ -280,6 +280,10 @@ type ytPlayerResponse struct {
 		Title         string `json:"title"`
 		LengthSeconds string `json:"lengthSeconds"`
 	} `json:"videoDetails"`
+	// Captions is the video's subtitle list, kept raw: ytcaptions.go decodes
+	// it (ytCaptionTracksOf), so a change in its shape cannot make this
+	// answer unreadable for the stream path, which ignores it.
+	Captions json.RawMessage `json:"captions"`
 }
 
 // ytPlayerHTTPError is a player call the endpoint answered with an error status.
@@ -546,6 +550,60 @@ func ytFirstBytes(ctx context.Context, direct, userAgent string) (int, bool, err
 	return resp.StatusCode, media, nil
 }
 
+// ytNativeCooldownKey includes the client version so a new version does not
+// inherit a refusal earned by the retired one.
+func ytNativeCooldownKey(clientName string) string {
+	for _, client := range ytNativeClients {
+		if client.name == clientName {
+			return "ytnative:" + client.name + "@" + client.version
+		}
+	}
+	return ""
+}
+
+// ytLoadNativeCooldown restores one unexpired client cooldown from the shared
+// cache. Cache failures leave the fast path usable; they only lose persistence.
+func ytLoadNativeCooldown(clientName string, now time.Time) time.Time {
+	key := ytNativeCooldownKey(clientName)
+	if key == "" {
+		return time.Time{}
+	}
+	db, err := openSharedCache("jukahub.cache")
+	if err != nil {
+		logDebug("stream", "native YouTube cooldown cache unavailable: %v", err)
+		return time.Time{}
+	}
+	data, err := cacheGet(db, key)
+	if err != nil || len(data) == 0 {
+		if err != nil {
+			logDebug("stream", "native YouTube cooldown read failed: %v", err)
+		}
+		return time.Time{}
+	}
+	until, err := time.Parse(time.RFC3339Nano, string(data))
+	if err != nil || !until.After(now) {
+		return time.Time{}
+	}
+	return until
+}
+
+// ytSaveNativeCooldown persists only the remaining lifetime of the refusal.
+func ytSaveNativeCooldown(clientName string, until time.Time) {
+	key := ytNativeCooldownKey(clientName)
+	remaining := time.Until(until)
+	if key == "" || remaining <= 0 {
+		return
+	}
+	db, err := openSharedCache("jukahub.cache")
+	if err != nil {
+		logDebug("stream", "native YouTube cooldown cache unavailable: %v", err)
+		return
+	}
+	if err := cacheSet(db, key, []byte(until.UTC().Format(time.RFC3339Nano)), remaining); err != nil {
+		logDebug("stream", "native YouTube cooldown save failed: %v", err)
+	}
+}
+
 // ytBlockNativeClient cools one client down and says so once in the log.
 func ytBlockNativeClient(clientName string, d time.Duration, why string) {
 	until := time.Now().Add(d)
@@ -554,7 +612,9 @@ func ytBlockNativeClient(clientName string, d time.Duration, why string) {
 	if !already {
 		ytClientBlocked[clientName] = until
 	}
+	storedUntil := ytClientBlocked[clientName]
 	ytSessionMu.Unlock()
+	ytSaveNativeCooldown(clientName, storedUntil)
 	if !already {
 		logWarn("stream", "native YouTube client %s stands down for %v: %s; the next client or yt-dlp answers instead",
 			clientName, d, why)
@@ -564,8 +624,18 @@ func ytBlockNativeClient(clientName string, d time.Duration, why string) {
 // ytNativeClientAllowed reports whether a client is out of its cooldown.
 func ytNativeClientAllowed(clientName string, now time.Time) bool {
 	ytSessionMu.Lock()
-	defer ytSessionMu.Unlock()
-	return !now.Before(ytClientBlocked[clientName])
+	until, loaded := ytClientBlocked[clientName]
+	ytSessionMu.Unlock()
+	if !loaded {
+		until = ytLoadNativeCooldown(clientName, now)
+		ytSessionMu.Lock()
+		if current, ok := ytClientBlocked[clientName]; ok && current.After(until) {
+			until = current
+		}
+		ytClientBlocked[clientName] = until
+		ytSessionMu.Unlock()
+	}
+	return !now.Before(until)
 }
 
 // ytIsBotCheck reports whether a refusal is YouTube asking this client to prove
@@ -638,12 +708,13 @@ func ytNativeAllowed() bool {
 	}
 	now := time.Now()
 	ytSessionMu.Lock()
-	defer ytSessionMu.Unlock()
-	if now.Before(ytBootstrapBlockedUntil) {
+	bootstrapBlocked := now.Before(ytBootstrapBlockedUntil)
+	ytSessionMu.Unlock()
+	if bootstrapBlocked {
 		return false
 	}
 	for _, client := range ytNativeClients {
-		if !now.Before(ytClientBlocked[client.name]) {
+		if ytNativeClientAllowed(client.name, now) {
 			return true
 		}
 	}

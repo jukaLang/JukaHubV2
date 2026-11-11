@@ -24,20 +24,20 @@ type qrZoomState struct {
 	// detail is an optional caption under the code (the pairing PIN and
 	// address for the Phone Companion); empty keeps the generic hint.
 	detail string
-	// prevPct is the backlight the device had before the card went up.
-	// restore stays false when the device has no readable backlight, so a
-	// platform without one (the desktop builds) never writes a guess back.
-	prevPct int
+	// restore is set when the card borrowed the backlight (the level was
+	// known and below full), so closing it gives the user's level back.
 	restore bool
 }
 
 var qrZoom qrZoomState
 
-// The backlight seam. The real readers and writers are the backlight sysfs
-// helpers; tests swap these so a card can be opened without touching a device.
+// The backlight seam: the brightness controller (brightnessctl.go) borrows
+// the screen at full and gives the user's level back, without saving the
+// borrowed level or writing it to the firmware. Tests swap these so a card
+// can be opened without touching a device.
 var (
-	qrZoomReadBrightness  = screenBrightness
-	qrZoomWriteBrightness = setScreenBrightness
+	qrZoomBorrowBrightness   = brightnessBorrow
+	qrZoomGiveBackBrightness = brightnessGiveBack
 )
 
 // qrZoomBrightness is how bright the screen goes while a code is up: a phone
@@ -65,13 +65,8 @@ func qrZoomOpenCardDetail(modules [][]bool, title, detail string) bool {
 	qrZoom.title = title
 	qrZoom.modules = modules
 	qrZoom.detail = detail
-	qrZoom.restore = false
-	if pct, ok := qrZoomReadBrightness(); ok {
-		qrZoom.prevPct, qrZoom.restore = pct, true
-		if pct < qrZoomBrightness {
-			_ = qrZoomWriteBrightness(qrZoomBrightness)
-		}
-	}
+	// A second open over a card already up keeps the borrow it made.
+	qrZoom.restore = qrZoomBorrowBrightness(qrZoomBrightness) || qrZoom.restore
 	PlayActivateSound()
 	return true
 }
@@ -83,7 +78,7 @@ func qrZoomCloseCard() {
 		return
 	}
 	if qrZoom.restore {
-		_ = qrZoomWriteBrightness(qrZoom.prevPct)
+		qrZoomGiveBackBrightness()
 	}
 	qrZoom = qrZoomState{}
 	PlayBackSound()

@@ -19,34 +19,56 @@ type launchFailureState struct {
 
 var launchFailure launchFailureState
 
-func launchFailureSuggestion(err error) string {
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "game folder") && strings.Contains(message, "not found") {
-		return "Put the game folder under one of the configured game roots, or correct the profile’s folder path."
+type launchFailureKind uint8
+
+const (
+	launchFailureGameFolderMissing launchFailureKind = iota + 1
+	launchFailureProfileExecutableMissing
+	launchFailureUnsupportedLauncherType
+	launchFailureRuntimeMissing
+)
+
+// launchFailureCause adds a stable category while preserving the underlying
+// error for errors.Is/As and for the reason shown in the dialog.
+type launchFailureCause struct {
+	kind launchFailureKind
+	err  error
+}
+
+func (e *launchFailureCause) Error() string { return e.err.Error() }
+func (e *launchFailureCause) Unwrap() error { return e.err }
+
+func withLaunchFailureKind(kind launchFailureKind, err error) error {
+	if err == nil {
+		return nil
 	}
-	// exec.ErrNotFound's message says "executable file not found", so it must
-	// be recognized before the generic profile-executable branch: this error
-	// means the launcher itself is absent, not that a profile path is wrong.
+	return &launchFailureCause{kind: kind, err: err}
+}
+
+func launchFailureSuggestion(err error) string {
+	var categorized *launchFailureCause
+	if errors.As(err, &categorized) {
+		switch categorized.kind {
+		case launchFailureGameFolderMissing:
+			return "Put the game folder under one of the configured game roots, or correct the profile’s folder path."
+		case launchFailureProfileExecutableMissing:
+			return "Check the profile’s executable path and make sure the game files are installed."
+		case launchFailureUnsupportedLauncherType:
+			return "Use a supported launcher file (.exe, .bat, .cmd, .lnk, .url or .sh), then rescan."
+		case launchFailureRuntimeMissing:
+			return "The launcher or a required runtime is missing. Reinstall the emulator, then check its BIOS/runtime setup."
+		}
+	}
+	// An unclassified exec.ErrNotFound comes from the command or runtime. A
+	// missing profile executable has its own category above.
 	if errors.Is(err, exec.ErrNotFound) {
 		return "The launcher or a required runtime is missing. Reinstall the emulator, then check its BIOS/runtime setup."
-	}
-	if strings.Contains(message, "executable") && (strings.Contains(message, "not found") || strings.Contains(message, "no such file")) {
-		return "Check the profile’s executable path and make sure the game files are installed."
-	}
-	if strings.Contains(message, "unsupported launcher file type") {
-		return "Use a supported launcher file (.exe, .bat, .cmd, .lnk, .url or .sh), then rescan."
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return "The launcher or a required runtime is missing. Reinstall the emulator, then check its BIOS/runtime setup."
 	}
 	if errors.Is(err, os.ErrPermission) {
 		return "The launcher is not executable. Check file permissions or reinstall the emulator."
-	}
-	if strings.Contains(message, "permission denied") {
-		return "The launcher is not executable. Check file permissions or reinstall the emulator."
-	}
-	if strings.Contains(message, "no such file") || strings.Contains(message, "not found") {
-		return "A launcher or required runtime is missing. Reinstall the emulator and check its runtime setup."
 	}
 	return "Check the emulator's required BIOS, runtime, and launcher configuration. The game log may contain more detail."
 }

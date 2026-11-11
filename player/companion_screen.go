@@ -1,26 +1,28 @@
 package main
 
-// companion_screen.go — live screen view for the companion web UI.
+// companion_screen.go — the handheld's picture, for the phone companion's
+// screenshot and for Screen Share.
 //
 // The companion server already types, presses keys, opens links and accepts
 // uploads from a phone. Seeing the screen is the piece that makes it usable for
 // support: "the settings menu is blank" becomes a screenshot instead of a
 // description.
 //
-// SDL is not thread-safe, so the HTTP goroutine never touches the renderer. It
-// registers a request and waits; the render loop captures the framebuffer on its
-// own thread, encodes it once, and closes the wait channel. Frames are reused
-// for a short window so refreshing the page cannot turn into a capture every
-// frame.
+// SDL is not thread-safe, so no HTTP goroutine touches the renderer. A request
+// registers and waits; at the end of a frame the render loop copies the
+// finished picture (captureCompanionScreen) and castcap.go's encoder goroutine
+// turns it into the PNG a phone asked for, or the JPEG the share streams, then
+// closes the waiters' channels. Frames are reused for a short window so a page
+// refreshing in a loop cannot turn into a capture every frame.
 
 import (
 	"bytes"
 	"errors"
+	"image"
 	"image/png"
 	"net/http"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -30,6 +32,9 @@ const (
 	companionShotReuse = 300 * time.Millisecond
 	// companionShotWait bounds how long an HTTP request blocks for a frame.
 	companionShotWait = 2 * time.Second
+	// companionFrameFresh is how old the share's newest frame may be and still
+	// go straight to a viewer that just connected.
+	companionFrameFresh = 2 * time.Second
 )
 
 // handleScreen serves the current screen as PNG. GET only: a capture costs a
@@ -56,19 +61,11 @@ type companionShotState struct {
 	png     []byte
 	at      time.Time
 
-	// Streaming (companion_cast.go). jpeg is the newest encoded frame for the
-	// MJPEG feed; seq lets a viewer skip frames it already sent without
-	// re-sending the same picture.
+	// Screen Share (companion_cast.go). jpeg is the newest encoded frame;
+	// jpegSeq lets a viewer skip frames it already sent.
 	jpeg    []byte
 	jpegSeq uint64
 	jpegAt  time.Time
-	// raw is the newest captured framebuffer, kept so a viewer that connects
-	// between captures gets a frame immediately instead of a timeout.
-	raw      []byte
-	rawW     int32
-	rawH     int32
-	rawPitch int
-	rawAt    time.Time
 
 	streamWaiters []chan struct{} // one per waiting viewer
 }
@@ -116,7 +113,7 @@ func requestCompanionScreen(timeout time.Duration) ([]byte, error) {
 	return companionShot.png, nil
 }
 
-// companionScreenPending reports whether the render loop has a waiter, so the
+// companionScreenPending reports whether a screenshot request waits, so the
 // per-frame hook costs one mutex acquisition when nobody is looking.
 func companionScreenPending() bool {
 	companionShot.mu.Lock()
@@ -124,63 +121,58 @@ func companionScreenPending() bool {
 	return len(companionShot.waiters) > 0
 }
 
-// companionStreamDue reports whether the capture hook should run for the cast:
-// there are viewers and the last encoded frame is older than the frame
-// interval, so a 60 fps loop still encodes ten frames a second.
-func companionStreamDue() bool {
-	if castViewerCount() == 0 || !castIsEnabled() {
-		return false
+// publishCompanionPNG hands a finished screenshot to the requests waiting for
+// it.
+func publishCompanionPNG(frame []byte) {
+	if len(frame) == 0 {
+		return
 	}
 	companionShot.mu.Lock()
-	defer companionShot.mu.Unlock()
-	return time.Since(companionShot.jpegAt) >= castFrameInterval
-}
-
-// publishCompanionPixels stores the captured framebuffer and, while viewers are
-// watching, the JPEG the stream sends. waiters receive the PNG exactly as
-// before, so /api/screen keeps its behaviour.
-func publishCompanionPixels(pixels []byte, w, h int32, pitch int, png, jpeg []byte) {
-	companionShot.mu.Lock()
-	companionShot.raw = pixels
-	companionShot.rawW, companionShot.rawH, companionShot.rawPitch = w, h, pitch
-	companionShot.rawAt = time.Now()
-	if len(png) > 0 {
-		companionShot.png = png
-		companionShot.at = companionShot.rawAt
-	}
-	if len(jpeg) > 0 {
-		companionShot.jpeg = jpeg
-		companionShot.jpegSeq++
-		companionShot.jpegAt = companionShot.rawAt
-	}
-	// Only wake the consumers this capture actually served. A screenshot
-	// request that arrived while a JPEG was being encoded keeps waiting for a
-	// frame with its PNG instead of getting an empty answer.
-	var waiters, streamWaiters []chan struct{}
-	if len(png) > 0 {
-		waiters = companionShot.waiters
-		companionShot.waiters = nil
-	}
-	if len(jpeg) > 0 {
-		streamWaiters = companionShot.streamWaiters
-		companionShot.streamWaiters = nil
-	}
+	companionShot.png = frame
+	companionShot.at = time.Now()
+	waiters := companionShot.waiters
+	companionShot.waiters = nil
 	companionShot.mu.Unlock()
 	for _, w := range waiters {
 		close(w)
 	}
-	for _, w := range streamWaiters {
-		close(w)
+}
+
+// publishCompanionJPEG makes frame the share's newest picture and wakes the
+// streams waiting for it. w and h are its size, for the panel and /status. The
+// frame is shared by every stream at once, so its bytes are never changed.
+func publishCompanionJPEG(frame []byte, w, h int) {
+	if len(frame) == 0 {
+		return
 	}
+	companionShot.mu.Lock()
+	companionShot.jpeg = frame
+	companionShot.jpegSeq++
+	companionShot.jpegAt = time.Now()
+	waiters := companionShot.streamWaiters
+	companionShot.streamWaiters = nil
+	companionShot.mu.Unlock()
+	for _, wait := range waiters {
+		close(wait)
+	}
+	castNoteFrame(len(frame), w, h)
+}
+
+// companionNewestJPEG is the share's newest frame, its sequence number and
+// when it was made.
+func companionNewestJPEG() ([]byte, uint64, time.Time) {
+	companionShot.mu.Lock()
+	defer companionShot.mu.Unlock()
+	return companionShot.jpeg, companionShot.jpegSeq, companionShot.jpegAt
 }
 
 // requestCompanionStreamFrame returns the newest JPEG newer than after. When
-// nothing newer is ready it waits for the render loop, but never longer than
+// nothing newer is ready it waits for the next one, but never longer than
 // timeout, so a viewer with a stalled device reconnects instead of hanging.
 func requestCompanionStreamFrame(after uint64, timeout time.Duration) ([]byte, uint64, bool) {
 	companionShot.mu.Lock()
 	if len(companionShot.jpeg) > 0 && companionShot.jpegSeq > after &&
-		time.Since(companionShot.jpegAt) < 2*time.Second {
+		time.Since(companionShot.jpegAt) < companionFrameFresh {
 		frame, seq := companionShot.jpeg, companionShot.jpegSeq
 		companionShot.mu.Unlock()
 		return frame, seq, true
@@ -231,71 +223,24 @@ func removeCompanionWaiter(wait chan struct{}) {
 	}
 }
 
-// captureCompanionScreen grabs the framebuffer for a waiting request. It must
-// be called from the render thread, after the frame is drawn.
+// captureCompanionScreen is the render loop's end-of-frame hook, called after
+// every overlay is drawn and before the virtual cursor and Present. It copies
+// the frame for a waiting screenshot or the share (castcap.go: no encoding
+// here, the encoder goroutine does that), keeps the share's settings current,
+// and then draws the LIVE pill — after the copy, so viewers never see it.
 func captureCompanionScreen(renderer *sdl.Renderer) {
 	if renderer == nil {
 		return
 	}
-	// A screenshot request wants a PNG; a cast viewer wants a JPEG at the frame
-	// interval. Either one is enough reason to read the framebuffer.
-	wantPNG := companionScreenPending()
-	wantJPEG := companionStreamDue()
-	if !wantPNG && !wantJPEG {
-		return
-	}
-	w, h, err := renderer.GetOutputSize()
-	if err != nil || w <= 0 || h <= 0 {
-		return
-	}
-	surface, err := sdl.CreateRGBSurfaceWithFormat(0, w, h, 32, sdl.PIXELFORMAT_ARGB8888)
-	if err != nil {
-		return
-	}
-	defer surface.Free()
-	if err := surface.Lock(); err != nil {
-		return
-	}
-	readErr := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
-		unsafe.Pointer(&surface.Pixels()[0]), int(surface.Pitch))
-	if readErr != nil {
-		surface.Unlock()
-		return
-	}
-	// Copy the rows out before unlocking: the surface is freed on return. The
-	// pitch*height product is formed in int64 and checked against the surface's
-	// own pixel slice before it narrows: on a 32-bit int it would wrap for a
-	// large output size and size this buffer below the data it is handed.
-	pitch := int(surface.Pitch)
-	total := int64(pitch) * int64(h)
-	if pitch <= 0 || total <= 0 || total != int64(len(surface.Pixels())) {
-		surface.Unlock()
-		return
-	}
-	pixels := make([]byte, int(total))
-	copy(pixels, surface.Pixels())
-	surface.Unlock()
-
-	var pngFrame, jpegFrame []byte
-	if wantPNG {
-		if encoded, err := encodeScreenshotPNG(pixels, w, h, pitch); err == nil {
-			pngFrame = encoded
-		}
-	}
-	if wantJPEG {
-		if encoded, err := encodeCompanionJPEG(pixels, w, h, pitch); err == nil {
-			jpegFrame = encoded
-		}
-	}
-	if len(pngFrame) == 0 && len(jpegFrame) == 0 {
-		return
-	}
-	publishCompanionPixels(pixels, w, h, pitch, pngFrame, jpegFrame)
+	castTick()
+	castCaptureFrame(renderer, time.Now())
+	castDrawLiveIndicator(renderer)
 }
 
-// encodeScreenshotPNG turns SDL's ARGB8888 rows into a PNG. The in-memory byte
-// order is B,G,R,A (little-endian), so the channels are swapped here rather
-// than handing the browser a colour-shifted image.
+// encodeScreenshotPNG turns SDL's ARGB8888 rows (screenshot mode's capture)
+// into a PNG. The in-memory byte order is B, G, R, A (little-endian), so the
+// channels are swapped here rather than handing over a colour-shifted image,
+// and every pixel is made opaque: a picture of the screen has no holes.
 func encodeScreenshotPNG(pixels []byte, w, h int32, pitch int) ([]byte, error) {
 	if w <= 0 || h <= 0 {
 		return nil, errors.New("screenshot has no size")
@@ -306,9 +251,13 @@ func encodeScreenshotPNG(pixels []byte, w, h int32, pitch int) ([]byte, error) {
 	if len(pixels) < pitch*int(h) {
 		return nil, errors.New("screenshot buffer is truncated")
 	}
-	img, err := companionFrameImage(pixels, w, h, pitch)
-	if err != nil {
-		return nil, err
+	img := image.NewRGBA(image.Rect(0, 0, int(w), int(h)))
+	for y := 0; y < int(h); y++ {
+		row := pixels[y*pitch : y*pitch+int(w)*4]
+		dst := img.Pix[y*img.Stride : y*img.Stride+int(w)*4]
+		for x := 0; x < len(row); x += 4 {
+			dst[x], dst[x+1], dst[x+2], dst[x+3] = row[x+2], row[x+1], row[x], 255
+		}
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {

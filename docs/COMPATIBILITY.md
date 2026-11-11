@@ -180,24 +180,70 @@ RetroArch is using, and activation keeps the previous binary as a `.bak`. This
 channel is nightly, not stable — the buildbot publishes no stable aarch64 tree —
 so treat a fetched build as a candidate to try, not as a guaranteed upgrade.
 
+A build is only kept if it can load on this firmware. The buildbot compiles its
+nightlies on its own build image, not against the handheld's userspace (TrimUI's
+firmware has shipped glibc 2.33 since 1.0.4), so before a download reaches the
+pool — and again before any activation or rollback replaces a core — JukaHub
+reads the binary's ELF header and version tables: it must be the architecture
+RetroArch here runs (read from the `ra64.trimui` that owns the cores folder),
+and every symbol version it needs (`GLIBC_2.34`, `GLIBCXX_3.4.30`, …) must be
+one the firmware's own library defines. A build that fails is refused with the
+reason — "the 2026-11-09 build cannot load on this firmware: needs GLIBC_2.34;
+this firmware's libc.so.6 has up to GLIBC_2.33" — the installed core stays, and
+that exact build (by its checksum) is remembered in
+`data/performance/core-refused.json` so the daily check does not download it
+again; the next build the index lists is checked as usual. A core larger than
+the 96 MB a core download may be (a full MAME build can be) is refused and
+remembered the same way.
+
 ### Core updates and your save states
 
 A save state is a snapshot of the core's memory in that core's own format, so
 a new build of a core can refuse a state an older build wrote. On the handheld,
-**Settings → Games & emulators → Core updates** decides what the daily check
-does:
+**Settings → Games & emulators → Emulator updates** decides what the daily check
+does — for the libretro cores and for the PPSSPP build JukaHub manages:
 
 | Setting | What happens |
 | --- | --- |
-| **Notify me** (default) | Once a day, while the device charges or after two idle minutes and never during a game, JukaHub reads the buildbot index and compares it with the installed cores. Cores with a different build are announced once (a toast the notification centre keeps); nothing is downloaded. Update them from the Emulators page or the Core-builds page. |
-| **Install automatically** | The same check, then the new builds are installed while the device charges or after two idle minutes, never during a game. |
+| **Install automatically** (default) | Once a day, while the device charges or after two idle minutes — never during a game or while a video plays — JukaHub reads the buildbot index, compares it with the installed cores and installs the builds that differ, keeping each replaced build as a `.bak`. A game that starts mid-pass stops it between cores; the rest follow at the next quiet moment. The pass ends with one toast ("Updated 3 emulator cores (…)") that the notification centre keeps. |
+| **Notify me** | The same daily check, but nothing is downloaded: cores with a different build are announced once, and the Emulators page or the Core-builds page installs them on a press. |
 | **Off** | No daily check. The pages still update on a press. |
 
 **Start** on the Core builds page steps through the same three settings. The
-setting used to be an on/off switch that was on unless switched off. An
-explicit off stays **Off**, an explicit on (which only the user could have set)
-becomes **Install automatically**, and a card that never touched it gets
-**Notify me**.
+setting began as an on/off switch that was on unless switched off; it then
+became these three with **Notify me** as the default, and since 2026-11-10 the
+default is **Install automatically** again. Every choice someone made is kept:
+an explicit off of the old switch stays **Off**, an explicit on stays **Install
+automatically**, and a mode picked in Settings or on the Core builds page is
+remembered as picked. A card on which nobody chose — including the "Notify me"
+the previous builds stored by themselves — moves to **Install automatically**
+once, with a toast that says so and where to change it.
+
+A card that has never had a pass waits for a quiet moment too, but no longer
+than one 20-minute poll: after that the first pass runs at the next moment that
+is not a game or another install, so a handheld that is always in use on battery
+still gets its first update. While a pass is due the scheduler looks every
+minute instead of every 20.
+
+On CrossMix, whose image ships its own builds of many cores, "differs" is all a
+checksum can say: the first pass replaces a shipped core with the buildbot's
+nightly whenever the bytes differ. The shipped build is the `.bak` beside it,
+**R1** on the Emulators page puts it back, and a nightly that cannot load on the
+firmware is refused before it replaces anything. Cores the buildbot does not
+carry, and cores on the firmware's read-only partition (`/usr/trimui/…`), are
+left alone.
+
+A pass stops while the card still has room. Every update writes the new build
+twice (the pool copy and the active file) and keeps the one it replaced, so a
+first pass over a whole shipped core set can need gigabytes; before each core
+the pass checks that 256 MB plus three copies of that core would stay free, and
+otherwise ends with a toast that the card is almost full. The cores it did not
+reach keep their builds, and the next day's pass tries again.
+
+If a pass runs out of time (20 minutes) after updating some cores, the rest
+follow at the next quiet moment; one that ran out of time before it settled any
+core waits for the next day, so a connection too slow for a single build does
+not restart the same downloads every minute.
 
 Every install, automatic or not, downloads over HTTPS only (redirects
 included), checks the CRC32 the index publishes for the core binary, records
@@ -219,12 +265,14 @@ the handheld can read before it reaches the network — are never used: such a
 replacement is not recorded, such a state is not judged, and while the
 installed binary carries such a time the line stays off.
 
-Standalone emulators (PPSSPP, mGBA, Flycast) are looked up separately, because
-their upstream releases target desktop Linux rather than this device's userspace
-and launcher scripts. When a release publishes an aarch64 archive it is fetched
-to `data/emulator-updates/<app>/<tag>/` and reported, **not** unpacked over the
-installed emulator: switching the launcher stays a manual job. Releases without
-an aarch64 asset are reported as such rather than offering a desktop build.
+Standalone emulators are no longer looked up on the handheld. Earlier builds
+checked PPSSPP, mGBA and Flycast's GitHub releases and "staged" an aarch64
+archive in `data/emulator-updates/`, but none of them publishes a build for this
+firmware, so nothing ever arrived while the result read like an update. Where a
+launcher runs the libretro core (`mgba`, `flycast`, `ppsspp`), that core is
+updated like every other; the standalone PPSSPP that JukaHub installs and
+manages itself for the PSP launchers follows the same **Emulator updates**
+setting. An old `data/emulator-updates/` folder can be deleted.
 
 ## Controls
 

@@ -19,6 +19,19 @@ packaging are in [docs/BUILDING.md](docs/BUILDING.md); if you do not have make,
 the raw commands are `player\build.bat` on Windows and `cd player && go build -o
 JukaHub .` elsewhere.
 
+## First task
+
+1. Start with `player/MODERNIZATION.md`; it is the player and builder backlog.
+2. Pick a task you can finish and verify; read its `[HW]`, `[NET]` and `[OWNER]` tags.
+3. Read the listed source files and docs before changing anything.
+4. Check `git status` so you preserve work already in the checkout.
+5. Make one focused change and avoid dependency edits unless the task needs them.
+6. Build and run the player with `make dev`.
+7. Run `make check` and address failures caused by your change.
+8. Without a device, use the host checks and leave hardware-only acceptance open.
+9. When all acceptance steps pass, remove the task and update `CHANGELOG.md`.
+10. Review the diff and add any follow-up task with a reason and acceptance steps.
+
 ## Checks to run before opening a pull request
 
 ```bash
@@ -185,12 +198,15 @@ check on or within the next two lines (or an explicit `# download-pin-ok:
 <reason>` when the source publishes no digest). The three SDL tarballs both
 Windows builds need are listed once, digests included, in
 [`.github/scripts/install-sdl-mingw.sh`](.github/scripts/install-sdl-mingw.sh).
-The one fetch that cannot carry a digest is the Windows release's Go build
-cache, because each release produces it; instead
+The fetches that cannot carry a digest are the release jobs' Go build caches
+(Windows and TrimUI) and the reused Remote Play helpers, because each release
+run produces them; instead
 [`.github/scripts/go-build-cache.sh`](.github/scripts/go-build-cache.sh) accepts
-it only from an earlier push-to-main run of the release workflow whose commit
+them only from an earlier push-to-main run of the same workflow whose commit
 is on `main`, never from `actions/cache`, which any workflow on `main` can
-write.
+write. A container image is pinned by digest wherever a workflow names it:
+under `container: image:`, or in an env key ending in `_IMAGE` for an image a
+step starts itself (the TrimUI compile's `TOOLCHAIN_IMAGE`).
 
 All three pinning rules live in
 [`.github/scripts/check-workflows.sh`](.github/scripts/check-workflows.sh), and

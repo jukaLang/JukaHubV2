@@ -4,8 +4,9 @@ package main
 //
 // Home and every scene draw the same band: the wordmark and version on the
 // left, that screen's own chrome (Back, Menu) after it, and the system corner on
-// the right — the bell at the margin, the release offer immediately left of it,
-// and the network/weather/clock/battery cluster to its left. Before this file
+// the right — the bell at the margin, the trophy room's cup immediately left of
+// it (header_trophy.go), the release offer left of the cup, and the
+// network/weather/clock/battery cluster to their left. Before this file
 // the two screens each laid that band out by hand: Home used a 26px wordmark and
 // a 16px caption on a 56px-scaled band with the update offer inside the status
 // cluster, while a scene used a 24px wordmark and a 24px caption on a 56/40px

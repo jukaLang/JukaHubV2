@@ -168,7 +168,8 @@ func jlandInputBlocked() bool {
 	return virtualKeyboardActive || tb.startOpen || nc.open || qs.open || globalSearchOpen ||
 		controlsLegend.open || shortcutsOpen || clipSearchOpen || homeCalendarOpen || weatherPopoverOpen ||
 		imageViewerPath != "" || transitionPhase != "none" || modalPanelBlocksShoulders() ||
-		browserLinkPanel.open || browserCookiePanel.open || browserBookmarkPanel.open || brwInfo.open
+		browserLinkPanel.open || browserCookiePanel.open || browserBookmarkPanel.open || brwInfo.open ||
+		brwMenu.open
 }
 
 // jlandKeysCaptured reports whether JukaLand owns the keyboard and the touch

@@ -601,6 +601,11 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	for _, row := range coreRows {
 		add(row)
 	}
+	// RetroArch itself, beside those cores: where it lives, its core count and
+	// config, and A opens its menu (raemu.go).
+	if ra, ok := deviceRetroArchEntry(coresDir, len(coreRows)); ok {
+		add(ra)
+	}
 
 	// Systems with games but no emulator are the rows that matter most: the
 	// user finds out here instead of when launching fails. A system a core
@@ -709,6 +714,8 @@ func emulatorEntries() []emuEntry {
 		entries = append(entries, windowsSystemEntries(romLibraryRoots(), emuWinRetroArchCoreDirs(), entries)...)
 	} else {
 		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRACores)
+		// The PSP tile says which PPSSPP plays PSP games (ppsspp_managed_ui.go).
+		entries = ppssppDecorateCatalog(entries)
 	}
 	// Pinned rows keep their append order: RetroAchievements stays first (it
 	// was the original top row), followed by BIOS Doctor and the launchers.
@@ -951,7 +958,8 @@ func launchEmulatorEntry(e emuEntry) {
 		}
 	default:
 		logWarn("emulators", "refusing to launch %q", path)
-		showLaunchFailureDialog(e.Name, fmt.Errorf("unsupported launcher file type %q", ext), "")
+		err := fmt.Errorf("unsupported launcher file type %q", ext)
+		showLaunchFailureDialog(e.Name, withLaunchFailureKind(launchFailureUnsupportedLauncherType, err), "")
 		return
 	}
 	if !regularFile(path) {
@@ -1073,6 +1081,12 @@ func emuPanelActivate(config *Config) {
 		hakuxActivate(e)
 		return
 	}
+	if emuRetroArchMenuTile(e) {
+		// The handheld's RetroArch tile opens RetroArch's own menu (raemu.go).
+		emuPanel.open = false
+		launchRetroArchMenu(e)
+		return
+	}
 	switch e.Status {
 	case emuUnsupported:
 		// Said plainly, every time it is asked: what this console needs and
@@ -1081,8 +1095,9 @@ func emuPanelActivate(config *Config) {
 		ShowToast(e.Name+" is not supported here — "+e.Note, ToastKindInfo)
 	case emuAvailable:
 		if e.Launch == "" {
-			// Availability-only rows (RetroArch cores) explain themselves.
-			ShowToast(e.Name+" is available — start it from RetroArch", ToastKindInfo)
+			// A core row: RetroArch runs it from a system's launcher, so A shows
+			// the games it plays in the Games library (raemu.go).
+			emuCoreRowActivate(e)
 			return
 		}
 		emuPanel.open = false
@@ -1117,6 +1132,13 @@ func emuPanelActivate(config *Config) {
 func emuPanelInstall() {
 	e, ok := emuSelectedEntry()
 	if !ok {
+		return
+	}
+	// The handheld's PSP tile opens the PPSSPP card (ppsspp_managed_ui.go):
+	// JukaHub's own PPSSPP, which PPSSPP plays PSP games, and RetroArch's PPSSPP
+	// core — what X installed on this tile before.
+	if ppssppTileOpensCard(e) {
+		openPPSSPPCard(e)
 		return
 	}
 	startEmulatorInstall(e)

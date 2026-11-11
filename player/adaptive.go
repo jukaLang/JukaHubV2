@@ -403,6 +403,9 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		ClearIconAtlas()
 		// The gradient textures are the largest cached surfaces — free first.
 		ClearBgGradientCache()
+		// An animated wallpaper keeps only its first frame: its frames are up
+		// to 40 MB of textures (gifwall.go).
+		gifWallShrinkForPressure()
 		clearHomeTextCache()
 		clearThumbnailCache()
 		// Launcher icons, chat images and avatars are textures too. Each was

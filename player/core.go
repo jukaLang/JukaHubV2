@@ -1051,6 +1051,18 @@ func ensureBackgroundTexture(renderer *sdl.Renderer, config *Config) {
 		bgImagePath = ""
 		return
 	}
+	if gifWallpaperPath(path) {
+		// An animated wallpaper belongs to gifwall.go, which decodes it off the
+		// render thread at the size it is shown. Loading it here as well kept a
+		// second, stretched copy of its first frame — and where SDL_image
+		// cannot read GIFs, logged a failed load every 15 seconds.
+		if bgTexture != nil {
+			bgTexture.Destroy()
+			bgTexture = nil
+		}
+		bgImagePath = path
+		return
+	}
 	if path == bgImagePath && bgTexture != nil {
 		return
 	}
@@ -3992,6 +4004,8 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 			renderScene(renderer, config, config.Scenes[currentSceneIndex])
 		}
 		renderKeyboard(renderer, config)
+		// The software dimmer covers this loop's frames too (brightnessctl.go).
+		brightnessSoftRender(renderer)
 		renderer.Present()
 
 		quit := false
@@ -4726,13 +4740,21 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		snapPreviewSyncRow(config)
 	}
 
-	// Single global header: brand + version + active scene, the Apps pill and
-	// the right-side system cluster (network, weather, clock, battery, bell).
-	renderStatusBar(renderer, config)
+	if brwFullscreenScene(scene) {
+		// The full-screen Browser is the one config scene without the shared
+		// bars: its page is the whole screen, and Select opens the menu that
+		// holds what the bars and its toolbar did (brw_fullscreen.go). The
+		// bar's hit areas go with it, or the screen before's would still click.
+		brwClearChromeHits()
+	} else {
+		// Single global header: brand + version + active scene, the Apps pill and
+		// the right-side system cluster (network, weather, clock, battery, bell).
+		renderStatusBar(renderer, config)
 
-	// The bottom of every menu is reserved for buttons now: the controller
-	// hint bar, plus the app menu overlay when it is open.
-	renderFooter(renderer, config)
+		// The bottom of every menu is reserved for buttons now: the controller
+		// hint bar, plus the app menu overlay when it is open.
+		renderFooter(renderer, config)
+	}
 	renderTopBarOverlays(renderer, config)
 
 	// Reset renderer state after rendering to avoid state leakage
@@ -4748,6 +4770,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 func renderTopBarOverlays(renderer *sdl.Renderer, config *Config) {
 	renderWeatherPopover(renderer, config)
 	renderVolumePopover(renderer, config)
+	renderBrightnessPopover(renderer, config)
 	renderStartMenu(renderer, config)
 	renderNotifDropdown(renderer, config)
 }
@@ -5110,8 +5133,8 @@ func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Elem
 }
 
 // drawThemeArrangementSketch draws a miniature of an arrangement inside a
-// theme preview: the dashboard's wide lead card and small ones, or an even
-// grid of tiles.
+// theme preview: the dashboard's wide lead card and small ones, the hero grid's
+// tiles, the carousel's row of cards or the widgets' mixed sizes.
 func drawThemeArrangementSketch(renderer *sdl.Renderer, arrangement string, x, y, w, h int32, ink, accent sdl.Color) {
 	if w <= 0 || h <= 0 {
 		return
@@ -5134,6 +5157,46 @@ func drawThemeArrangementSketch(renderer *sdl.Renderer, arrangement string, x, y
 			{1, 0}, {2, 0}, {3, 0},
 			{1, 1}, {2, 1}, {3, 1},
 			{0, 2}, {1, 2}, {2, 2}, {3, 2},
+		} {
+			tile(sdl.Rect{
+				X: x + cellPos[0]*(cw+gap),
+				Y: y + cellPos[1]*(ch+gap),
+				W: cw, H: ch,
+			}, soft)
+		}
+	case homeArrangementCarousel:
+		// The focused card in the middle, its smaller, dimmed neighbours half
+		// off the edges, and the position dots under them.
+		gap := int32(4)
+		dot := max(h/12, 2)
+		cw, ch := w/2, h-dot-gap
+		sw, sh := cw*2/3, ch*2/3
+		sy := y + (ch-sh)/2
+		dim := sdl.Color{R: ink.R, G: ink.G, B: ink.B, A: 50}
+		tile(sdl.Rect{X: x, Y: sy, W: sw / 2, H: sh}, dim)
+		tile(sdl.Rect{X: x + w - sw/2, Y: sy, W: sw / 2, H: sh}, dim)
+		tile(sdl.Rect{X: x + (w-cw)/2, Y: y, W: cw, H: ch}, accent)
+		pillW := dot * 3
+		dx := x + (w-8*dot-pillW)/2
+		for i := 0; i < 5; i++ {
+			dw, colour := dot, soft
+			if i == 2 {
+				dw, colour = pillW, accent
+			}
+			tile(sdl.Rect{X: dx, Y: y + h - dot, W: dw, H: dot}, colour)
+			dx += dw + dot
+		}
+	case homeArrangementWidgets:
+		// The default tiles on six columns: Continue 2×2, the Media strip 4×1
+		// beside it, then cards and widgets one cell each.
+		gap := int32(4)
+		cw := (w - 5*gap) / 6
+		ch := (h - 2*gap) / 3
+		tile(sdl.Rect{X: x, Y: y, W: 2*cw + gap, H: 2*ch + gap}, accent)
+		tile(sdl.Rect{X: x + 2*(cw+gap), Y: y, W: 4*cw + 3*gap, H: ch}, soft)
+		for _, cellPos := range [][2]int32{
+			{2, 1}, {3, 1}, {4, 1}, {5, 1},
+			{0, 2}, {1, 2}, {2, 2}, {3, 2}, {4, 2}, {5, 2},
 		} {
 			tile(sdl.Rect{
 				X: x + cellPos[0]*(cw+gap),
@@ -5254,6 +5317,9 @@ func applyButtonSwap(config *Config, event sdl.Event) {
 		return
 	}
 	raw := ce.Button
+	// The voice orb's Menu is the physical GUIDE, which the fold below turns
+	// into BACK (voiceorb.go reads it for this event).
+	padEventRaw = raw
 	handheld := P().IsHandheld()
 	ce.Button = normalizeHandheldBackButton(ce.Button, handheld)
 	ce.Button = padFaceButton(config, ce.Button)
@@ -6703,6 +6769,7 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	notifDismiss()
 	dismissWeatherPopover()
 	dismissVolumePopover()
+	dismissBrightnessPopover()
 	// Home's "Exit JukaHub?" card (home_power.go) must not wait behind a scene
 	// change and greet the next return to Home with Exit focused.
 	homePowerClose()
@@ -6723,6 +6790,8 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	// The browser's site-info sheet closes too, JukaLand played on its offline
 	// page stops, and a JukaLand world is saved however its screen was left.
 	brwSceneDeparture(config)
+	// So does the Browser's Select menu, and its page's status pills.
+	brwMenuForget()
 	feSheetForget()
 	// The editor's card names one file on the screen being left, and its keys
 	// would otherwise keep answering on the next scene.
@@ -7122,6 +7191,11 @@ func activateChromeFocus(config *Config) bool {
 		// notifToggle plays its own activation sound.
 		notifToggle()
 		return true
+	case ChromeTrophyIndex:
+		// The cup beside the bell opens the trophy room (header_trophy.go).
+		PlayActivateSound()
+		headerTrophyActivate(config)
+		return true
 	case ChromeUpdateIndex:
 		// Same one-press install as the home header chip, so the offer behaves
 		// identically wherever it is drawn.
@@ -7145,6 +7219,11 @@ func activateChromeFocus(config *Config) bool {
 		PlayActivateSound()
 		toggleVolumePopover()
 		return true
+	case ChromeBrightnessIndex:
+		// The sun opens the brightness card (brightnesspopover.go).
+		PlayActivateSound()
+		toggleBrightnessPopover()
+		return true
 	}
 	return false
 }
@@ -7153,7 +7232,7 @@ func activateChromeFocus(config *Config) bool {
 // the back pill leaves the scene, the status clock toggles the calendar
 // popover (exactly like Home). It reports whether a chrome button was hit.
 func handleChromeBarClick(mx, my int32, config *Config) bool {
-	// The update badge sits in the status cluster, left of the bell, and starts
+	// The update badge sits in the system corner, left of the cup and the bell, and starts
 	// the install directly — the same action as the D-pad and the home chip.
 	// Every bar control is hit-tested through the shared touch target: the
 	// pills are 28–36 px tall by design, and a fingertip that lands a few pixels
@@ -7161,6 +7240,12 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	if updatePrompt.badge.W > 0 && hitTouchTarget(updatePrompt.badge, mx, my) {
 		PlayActivateSound()
 		startHeaderUpdate()
+		return true
+	}
+	// The trophy room's cup, between the offer and the bell, opens Trophies.
+	if headerTrophyHit(mx, my) {
+		PlayActivateSound()
+		headerTrophyActivate(config)
 		return true
 	}
 	if sceneTitleBackRect.W > 0 && hitTouchTarget(sceneTitleBackRect, mx, my) {
@@ -7182,6 +7267,13 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	if statusVolumeRect.W > 0 && pointInRect(mx, my, statusVolumeRect) {
 		PlayActivateSound()
 		toggleVolumePopover()
+		return true
+	}
+	// The sun left of it opens the brightness card; its target is split from
+	// the speaker's the same way, so it is tested as drawn too.
+	if statusBrightnessRect.W > 0 && pointInRect(mx, my, statusBrightnessRect) {
+		PlayActivateSound()
+		toggleBrightnessPopover()
 		return true
 	}
 	// The Wi-Fi meter opens the network picker (scan, connect, enter a
@@ -7338,8 +7430,12 @@ func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
 	}
-	// The volume card owns every key while it is up (volumepopover.go).
+	// The volume card owns every key while it is up (volumepopover.go), and
+	// so does the brightness card (brightnesspopover.go).
 	if volumePopoverKey(e, config) {
+		return true
+	}
+	if brightnessPopoverKey(e, config) {
 		return true
 	}
 	if weatherPopoverOpen {

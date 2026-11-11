@@ -181,11 +181,14 @@ func bootDeferredToolHealth() {
 // deferred "core-update" task, so the scheduler is started exactly once.
 func bootCheckCores(config *Config) {
 	startCoreAutoUpdate(config)
+	startPPSSPPAutoUpdate(config)
 	switch {
 	case !emuAutoUpdateEnabled(config):
 		bootStepNote("auto-update off")
 	case localIPv4() == "":
 		bootStepNote("will check when online")
+	case coreUpdateModeFor(config) == coreUpdateInstall:
+		bootStepNote("auto-update scheduled")
 	default:
 		bootStepNote("update check scheduled")
 	}

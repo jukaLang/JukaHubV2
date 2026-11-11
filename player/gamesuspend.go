@@ -89,6 +89,9 @@ func noteGameChildExited(cmd *exec.Cmd) {
 	// child still runs is not sent — the count above covers it.
 	if !gameScreenSuspended() {
 		wakeForegroundWork()
+		// RetroArch has written its config and gone: the keys JukaHub set for
+		// the launch get the user's values back (racfgscope.go; never blocks).
+		raScopeScreenFree()
 	}
 	if cmd == nil {
 		return

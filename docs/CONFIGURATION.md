@@ -59,7 +59,9 @@ settings such as `search_query` or `stream_url`.
 | Key | Type | Meaning |
 |-----|------|---------|
 | `buttonColor`, `labelColor`, `inputColor` | `"#rrggbb"` or `{r,g,b}` | palette. `buttonColor` is a light tint under each scene button's glass; focus rings, pills and highlights use the active theme's accent, not this colour |
-| `backgroundImage` | string | your own wallpaper, drawn on every screen (Home included) under the backdrop's dim and colour blooms so glass and text stay readable. Empty or the stock `background.jpg` means Home's procedural backdrop; the stock image is not loaded. A picked image is scaled once to the canvas when it loads |
+| `backgroundImage` | string | your own wallpaper, drawn on every screen (Home included) under the backdrop's dim and colour blooms so glass and text stay readable. Empty or the stock `background.jpg` means Home's procedural backdrop; the stock image is not loaded. A picked image is scaled once to the canvas when it loads. A `.gif` plays: it is decoded frame by frame off the render thread, cropped to the screen's shape and kept within a memory budget (40 MB of frames on the handheld), and pixel art stays sharp at a whole-number scale (see `wallpaperAnimate`) |
+| `wallpaper` | string | the picture picked in **Settings → Display & theme → Wallpaper** (or Start → Device → Wallpapers), kept in `jukauser.json` and put back at start when the design config names the stock `background.jpg`; `none` means no wallpaper. Whichever came last, the pick or an experience pack's wallpaper, wins; a wallpaper named in the design config itself still beats both |
+| `wallpaperAnimate` | bool | Settings → Display & theme → **Animate wallpaper** (on by default): a GIF wallpaper plays; off holds its first frame. Battery Saver holds it too. Plain Reduce Motion does not, because the handheld ships with it on |
 | `fonts`, `fontSizes` | object | per-role font file and size (e.g. `small`, `medium`, `big`) |
 | `fullscreen` | bool | start in fullscreen |
 | `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. Logical font sizes follow that canvas (0.75× on the compact one) so text keeps its proportion to the layout. |
@@ -68,16 +70,27 @@ settings such as `search_query` or `stream_url`.
 | `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country. In Settings → General, press Weather Unit to cycle Auto, Celsius and Fahrenheit. |
 | `tspUsername` | string | name used in the greeting |
 | `playbackResolution` | string | maximum video height, e.g. `"720"` |
-| `subtitleLanguage` | string | Subtitle language code for online video (Settings → General), e.g. `"en"`, `"es"`, or `"pt-BR"`; blank defaults to English. Turn on CC to fetch available manual or automatic captions with yt-dlp. |
+| `subtitleLanguage` | string | Subtitle language code for online video (Settings → General), e.g. `"en"`, `"es"`, or `"pt-BR"`; blank defaults to English. CC fetches a written track in that language, another region of it, the auto-generated track or a YouTube translation — from YouTube's caption list first, yt-dlp second — and caches it under the data folder's `subtitles/`; downloaded videos keep theirs beside the file as `<name>.<lang>.srt`. The code must start with a letter (`all` is refused). |
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
+| `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `off`): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. Anything else reads as off. Reduce Motion keeps only the ripples you make; Low Power uses a coarser grid; the handheld steps down by itself if the water costs more than 5 ms a frame |
+| `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
 | `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
 | `liveBuilder`, `liveBuilderLAN` | bool | Settings → Network → **Live Builder**: whether the web builder's receiver starts with JukaHub (default off on the handheld, on on a PC; either way it switches itself off after 30 minutes without use), and whether a PC listens on the network instead of that computer only. `JUKAHUB_LIVE_BUILDER` and `JUKAHUB_LIVE_LAN` win over both, and the older `liveBuilderDisabled: true` still keeps it off; see [SECURITY.md](../SECURITY.md#live-builder-the-web-builders-receiver) |
-| `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Core updates** (default `notify`: the daily check says once which cores have a different build and installs nothing). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically) |
+| `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (the libretro cores and JukaHub's PPSSPP; default `install`: once a day, while charging or idle and never during a game or a video, builds that differ are installed after a check that they can load on this firmware, and the replaced one is kept as a `.bak` for a one-press roll back). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
+| `artAutoFetch` | bool | Settings → Games & emulators → **Find box art automatically** (default on): background box-art passes from the libretro thumbnail set — about 100 s after start on a card that never had one, at most daily, and early when the ROM folders gain games; online only, never during a game, on battery only at 20 % or more and after 90 s without input. Only game titles are sent (GET requests to thumbnails.libretro.com). Off leaves the library's Fill gaps (**L1** / **F**). The pass stamp is `data/game-art/.auto-art.json` ([Games Library → Found automatically](GAME_LIBRARY.md#found-automatically)) |
 | `ssh_readonly`, `ssh_full_root` | bool | the SFTP server refuses every write; or it shares the whole Linux file system instead of the SD card (like `JUKAHUB_SSH_FULL_ROOT=1`, while the **Share whole system…** switch on its panel lasts one run). A design pushed through the Live Builder that sets either waits for approval on the device |
+| `castQuality` | `"smooth"`/`"balanced"`/`"sharp"` | Screen Share's picture: Smooth (640 px, 20 fps; the handheld's default), Balanced (960 px, 15 fps; a PC's default) or Sharp (full size, 10 fps). The handheld captures its menus at most about 12 times a second (fewer when the GPU readback is slow) and re-sends a screen that is not changing once a second |
+| `castGames` | bool | Screen Share's **Games too** (handheld only, on by default): while a game owns the screen the picture comes from `/dev/fb0`, through the bundled ffmpeg when it is installed, else JukaHub's own reader at up to 8 fps and 640 px. Off shows viewers a pause card while you play |
+| `castRotate` | `0`/`90`/`180`/`270` | turns a shared game's picture clockwise; unset turns a portrait framebuffer under a landscape canvas a quarter anticlockwise (the guess for a panel mounted sideways) |
+| `castToken` | string | Screen Share's view-only link token (16 base32 characters), kept so a bookmarked link — a TV's, say — survives restarts; **Y** on the panel replaces it. A secret: exported configs redact it |
+| `spatialMode` | `"off"`/`"auto"`/`"headphones"`/`"speakers"` | Settings → Sound & haptics → **Spatial audio**, also Tools → Audio (default `off`): virtual surround for everything JukaHub plays — videos, music, podcasts, audiobooks, YouTube. `headphones` places four virtual loudspeakers and a small virtual room around you, `speakers` widens the stereo of a close pair of speakers, and `auto` picks between them by the output in use. Music's Bit-perfect bypasses it ([SPATIAL_AUDIO.md](SPATIAL_AUDIO.md)) |
+| `spatialStrength` | 0–100 | Tools → Audio → **Spatial strength** (default 75; the row steps 25/50/75/100): how much of the effect you get — the far-ear crossfeed, the rear loudspeakers and the room in Headphones mode, the extra width in Speakers mode |
+| `spatialRoom` | `"small"`/`"medium"`/`"large"` | Tools → Audio → **Virtual room** (default `medium`): the room the Headphones mode plays in, from close and dry to a hall |
+| `spatialGames` | bool | Tools → Audio → **Spatial audio in games** (default off): a RetroArch game started from the library plays through the same effect, as a DSP filter RetroArch loads for that launch only; the row says when the plugin, RetroArch or its filter support is missing |
 | `netPlayEnabled`, `videoPlayerEnabled`, `screensaverEnabled`, `launcherEnabled`, `externalAppEnabled`, `packageRepoEnabled`, `themeGalleryEnabled` | bool | feature toggles |
 | `deviceModel`, `targetPlatform`, `defaultOrientation`, `accentColor` | string | device hints; unknown values mean "no preference", never an error |
 
@@ -115,6 +128,24 @@ chosen (`[HAPTIC] vibration ready on …`). Because it is an ordinary toggle
 variable, a hand-edited `"hapticsEnabled": false` in `jukauser.json` behaves
 the same as the switch.
 
+`mouseMode` (Settings → Controls → **Mouse mode**, on by default) lets the held
+**Select + L1** chord, and **F6** on a keyboard, turn mouse mode on and off: a
+pointer that stays up and that the D-pad and both sticks move
+([Controls](CONTROLS.md#mouse-mode-hold-select--l1)). Off, the chord does
+nothing and L1 is always the shoulder.
+
+`mouseInGames` (Settings → Controls → **Mouse in games and apps**, off by
+default; the row is shown on TrimUI handhelds only) carries the chord into
+games, emulators and ports: the pad becomes a uinput mouse ("JukaHub Mouse")
+for the running program until the chord again or Menu. Only programs that
+draw their own pointer show one.
+
+`voiceMenuButton` (Settings → Controls → **Menu button: voice**, on by default;
+the row is shown on handhelds only) makes the TrimUI's Menu button open the
+voice orb, and hold-to-talk with it ([Voice](VOICE.md#the-voice-orb)). Off,
+Menu goes back like B, as it did before. On a keyboard F4 opens the orb either
+way.
+
 `autoStart` (Settings → General → **Start JukaHub at login**) writes exactly
 one launcher and removes exactly that file again. It is off by default on a
 desktop. On a TrimUI the first start switches it on once when nobody has set it
@@ -128,29 +159,58 @@ final and a value set beforehand is never overridden:
 | Linux, macOS | `~/.config/autostart/jukahub.desktop` |
 | Windows | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JukaHub.cmd` |
 
-The handheld hook is a `#!/bin/sh` script that returns immediately and does its
-work in a background subshell, so a slow or hung launch can never block the
-firmware's boot. The subshell waits up to 30 s for the stock launcher to appear
-(the hook may run before MainUI is on screen), then — unless a JukaHub is
-already running — runs `launch.sh`, which takes the display and hands it back
-on exit. Output goes to
-`Apps/JukaHub/autostart.log`. Other files in `System/starts` are never touched,
+The handheld hook is a `#!/bin/sh` script that never holds the firmware's boot
+up and is as safe sourced as it is run. It starts JukaHub the way the stock
+menu starts an app: it queues JukaHub in `/tmp/cmd_to_run.sh` and, once the
+stock launcher (MainUI) has been up for two seconds and has stopped writing
+(eight seconds at most), closes it, so the
+firmware's launcher loop runs `launch.sh` with its own environment and brings
+MainUI back when JukaHub exits (a loop that reads the queue first starts
+JukaHub before MainUI ever shows). It starts JukaHub at most once per boot,
+steps aside when JukaHub is already running, when another app (a CrossMix
+resume, an app picked in the first seconds) is queued, or when MainUI does not
+appear within two minutes, and only falls back to running `launch.sh` itself
+(with the launcher loop paused) when the loop ignores the queue. A start that
+hangs leaves `Apps/JukaHub/.autostart-pending` behind (it goes when JukaHub
+exits or has been up for 15 s), and the next boot then stays on the stock menu
+once. Each boot is logged to
+`Apps/JukaHub/autostart.log`, and a hook written by an older build is replaced
+the next time JukaHub starts. Other files in `System/starts` are never touched,
 and if the SD card cannot be located the toggle stays off and says why rather
 than writing somewhere arbitrary.
+
+`startupAnimation` (Settings → General → **Startup animation**) chooses how a
+start is greeted: `power` (the default) plays the full boot only when the
+device starts into JukaHub and the quick hello otherwise, `always` plays the
+full boot on every start, and `quick` never does. A start counts as a power-on
+when the autostart hook's `.autostart-pending` marker is there, when it comes
+within the first minutes of the kernel's uptime on a TrimUI with `autoStart`
+on and the hook's queued command has started JukaHub in this boot (it leaves
+`/tmp/jukahub-autostart.ran`), or when `JUKAHUB_BOOT=1` or `--boot` asks for
+it (the Windows and Linux login launchers pass `--boot`; Recovery's restart
+drops both) — never when JukaHub has already started since the machine
+booted, which the kernel's boot id recorded with each first frame
+(`bootId` in `startup-state.json`) tells even across a clock change. The firmware boot logo (Settings → General → **Boot
+logo**) keeps its record in `Apps/JukaHub/data/bootlogo/state.json`, not in
+`jukauser.json`; see [BOOT.md](BOOT.md).
 
 Quick Settings (`Ctrl+Q`) writes these keys:
 
 | Key | Meaning |
 |-----|---------|
 | `volume` (0–100) + `volumeSet` | mixer level; written only after you move the slider |
-| `brightness` (0–100) + `brightnessSet` | backlight level, same rule |
+| `brightness` (0–100) + `brightnessSet` | screen brightness, same rule; the header's brightness card writes it too |
 | `screensaverTimeout` | idle seconds before the screensaver overlay, cycled by the panel and by Settings → General → Screensaver after |
 | `lowPower`, `reducedMotion`, `fullscreen` | the remaining switches |
 | `ledSync` | audio-reactive stick/ring LEDs |
 
 The `*Set` flags separate "never touched" from a real 0, so a fresh install
 never overrides the device's own mixer or backlight on first launch. A level is
-only restored at startup when its flag is set.
+only restored at startup when its flag is set. The brightness is restored only
+where JukaHub is its sole owner — the software dimmer and a plain Linux
+backlight: on a TrimUI the firmware keeps its own level (`"brightness"`, 0–10,
+in `/mnt/UDISK/system.json`, which every change made in JukaHub also updates),
+and on Windows the system keeps it, so neither is overwritten at launch.
 
 Radio switches are **not** replayed at startup: airplane mode is applied when
 you press it, not on every boot, and turning it off restores the Wi-Fi/Bluetooth
@@ -158,10 +218,14 @@ state that was active before it was enabled.
 
 Each row picks its backend at runtime from a fixed list: `nmcli` then `rfkill`
 for Wi-Fi, `bluetoothctl` then `rfkill` for Bluetooth, `rfkill` for airplane
-mode, `pactl` then `amixer` for volume, and `/sys/class/backlight` for
-brightness (only direct children of that directory are ever written, and only
-the `brightness` file inside them). A row with no backend renders dimmed with
-the reason, and pressing it says so instead of pretending to work.
+mode, `pactl` then `amixer` for volume. Brightness goes through the brightness
+controller (`player/brightnessctl.go`), shared with the header's sun button: the
+Allwinner display driver (`/dev/disp`) on a TrimUI, `/sys/class/backlight`
+(only direct children of that directory are ever written, and only the
+`brightness` file inside them), WMI or DDC/CI on Windows, and otherwise a
+software dimmer that darkens JukaHub's own picture. A row with no backend
+renders dimmed with the reason, and pressing it says so instead of pretending
+to work.
 
 Dock and ambient settings are plain custom keys, documented in
 [Dock & ambient](AMBIENT.md): `ambientMode` (bool, default true) chooses
@@ -197,11 +261,11 @@ now**, writes nothing: it drops the saved
 session and the file immediately, exactly as the Browser's Forget chip does.
 
 `browserSearchEngine` (string) is the engine the Browser searches with:
-`startpage` (the default, and what an unknown value means), `duckduckgo`,
+`duckduckgo` (the default, and what an unknown value means), `startpage`,
 `google`, `bing`, `brave`, `yahoo`, `mojeek`, `wikipedia`, or `custom`, which uses
 `browserSearchCustom` (string): a results address with `%s` where the words go
 (one ending in `=` takes them at the end, and a bare host gains `https://`). A
-`custom` engine without a usable address searches Startpage.
+`custom` engine without a usable address searches DuckDuckGo Lite.
 `browserHomePage` (string) is the page **Home** and a newly opened Browser
 show; empty or absent follows the engine's start page, and a value that is not
 a web address is ignored the same way. `browserHomeTyped` (string) is the last
@@ -214,6 +278,23 @@ Off, every page is drawn as its server sent it; `false`, `0`, `"false"`,
 `"0"`, `"no"` and `"off"` all mean off, and a missing key means on. Settings → Browser
 → **JavaScript** writes it as `"true"`/`"false"`; a hand edit applies from the
 next page load. See [Browser → JavaScript](BROWSER.md#javascript).
+
+`browserBlockAds` (bool, default true) is Settings → Browser → **Block ads and
+trackers**: `false`, `0`, `"false"`, `"0"`, `"no"` and `"off"` let every page
+load all the subresources it asks for; anything else keeps the filter on. Sites
+excepted one by one (Site info → **Allow ads on this site**, or the Filter
+chip) are not Custom keys: they live in `data/browser-block.json`. See
+[Browser → Ads and trackers](BROWSER.md#ads-and-trackers).
+
+`browserFullScreen` (bool, default true) draws the Browser's page edge to edge,
+with every action in the Select menu instead of the address bar, toolbar,
+chip row and shared bars; `false` brings that classic layout back. `false`,
+`0`, `"false"`, `"0"`, `"no"` and `"off"` all mean off, and a missing key
+means on. Settings → Browser → **Full-screen pages** and the menu's own row
+write it as `"true"`/`"false"` and rebuild the screen at once; a hand edit
+applies from the next launch or config reload. A `Browser` scene a config
+ships itself keeps the layout it was written with. See
+[Browser → Full screen and the Select menu](BROWSER.md#full-screen-and-the-select-menu).
 
 Time-lapse recording is two custom keys, documented in
 [Time-lapse](TIMELAPSE.md): `timelapse` (bool, default true) films every game
@@ -291,31 +372,111 @@ config-customizable.
 
 ### Home arrangements and total conversions
 
-The home screen has two built-in arrangements, chosen with the
-`homeArrangement` custom variable:
+The home screen has five arrangements, chosen with the `homeArrangement`
+custom variable. **Settings → Display & theme → Home layout** and the strip at
+the top of Home's edit mode ([CONTROLS.md](CONTROLS.md#home-layouts)) offer
+four of them: Standard, Hero grid, Carousel and Widgets.
 
-| Value | What it is |
-|---|---|
-| `custom` (default, and any unset value) | the scene's own tiles decide where the cards are — the arrangement described above |
-| `dashboard` | the built-in composition: the wide Continue card with the smaller cards beside it |
-| `grid` | a 4×3 mosaic with the Continue card standing two rows tall as a hero tile and the other ten cards filling the rest |
+| Value | In Settings | What it is |
+|---|---|---|
+| `custom` (default, and any unset or unknown value) | Standard | the scene's own tiles decide where the cards are — the arrangement described above |
+| `dashboard` | Standard | the built-in composition: the wide Continue card with the smaller cards beside it |
+| `grid` | Hero grid | a 4×3 mosaic with the Continue card standing two rows tall as a hero tile and the other ten cards filling the rest |
+| `carousel` | Carousel | one row of big cards centred on the focused one and wrapping around, with its title and description under it and a row of position dots; the cards are the tiles of `homeTiles` (below), in order, all at one size |
+| `widgets` | Widgets | a six-column grid of the tiles of `homeTiles`, each at its own size: Home cards, Start-menu entries and info widgets; three rows fit on the screen and the grid scrolls past them |
 
 `dashboard` and `grid` ignore the tiles' `x`/`y`/`width`/`height` (and their
 titles and icons) while they are in force, and **never rewrite them**: the
 scene's elements are left exactly as authored, so switching back to `custom`
 puts the user's arrangement back untouched. That is what makes an arrangement
-safe to try.
+safe to try. `carousel` and `widgets` leave the scene alone too: what they
+show, and what edit mode changes, is `homeTiles`. Standard and the Hero grid
+cannot be edited on the device; **Edit Home** opened on one of them switches
+to Widgets first.
 
-The **Total conversion** tab of the theme gallery (Settings → Appearance) is
-where these are offered: each preset there is a palette *plus* an arrangement,
-so picking one repaints and rearranges the interface in one press. The colour
-tab holds the palettes, which never move a card. A theme file in the themes
-folder can join the conversion tab by naming an arrangement:
+An experience pack's `homeLayout` takes the same five values. A pack picks the
+arrangement, never the tiles: on `carousel` or `widgets` Home shows the user's
+own `homeTiles`.
+
+The **Total conversion** tab of the theme gallery (Settings → Appearance)
+pairs the Dashboard and the Hero grid with a palette: each preset there is a
+palette *plus* an arrangement, so picking one repaints and rearranges the
+interface in one press. The colour tab holds the palettes, which never move a
+card. A theme file in the themes folder can join the conversion tab by naming
+an arrangement:
 
 ```json
 {"name": "Paper tiles", "arrangement": "grid",
  "background": "#f6f1e7", "buttonColor": "#e8dfcd", "...": "the rest of the colours"}
 ```
+
+### Home tiles (`homeTiles`)
+
+The Carousel and Widgets arrangements show one ordered list of tiles, the
+`homeTiles` custom variable. Home's edit mode writes it after every finished
+change (a drop, a resize, a removal, an addition, a reset) and when editing
+ends, so it seldom needs writing by hand. The value is a list of entries
+joined by `;`. Each entry is a tile reference, optionally followed by `@` and
+a size in grid cells written `WxH` (width, a lowercase `x`, height):
+
+```text
+continue@2x2;media@4x1;emulator;packages;apps;w:clock;favorites;browser;chat;tools;files;settings
+```
+
+That is the default list, and what **Reset** in edit mode puts back. On six
+columns it packs into exactly three rows: Continue 2×2 at the top left, Media
+4×1 beside it, Games, Packages, Apps and the Clock widget under Media, and
+Favorites, Browser, Chat, Tools, Files and Settings along the bottom.
+
+| Reference | Tile |
+|---|---|
+| `continue`, `media`, `emulator`, `packages`, `apps`, `favorites`, `browser`, `chat`, `tools`, `files`, `settings` | a built-in Home card (`emulator` is the Games card) |
+| `w:clock`, `w:weather`, `w:battery`, `w:storage`, `w:nowplaying`, `w:calendar`, `w:playtime` | an info widget |
+| `app:scene:<Scene>` | a screen row of the Start menu, by the scene's `name` (`app:scene:Weather`) |
+| `app:do:<Start menu entry>` | an action row of the Start menu — a tool, a device action, a plugin's button — by its label (`app:do:Wi-Fi Networks`) |
+
+The Start menu's "Send to …" rows cannot be tiles. Inside a reference, `%` is
+written `%25`, `;` is `%3B` and `@` is `%40`. The **Add** tile edit mode shows
+(`edit:add`) is never stored.
+
+The sizes a tile can take, width × height in cells. The first one listed is the
+size of an entry without `@` and of a newly added tile, and **X** in edit mode
+steps through them in this order:
+
+| Tile | Sizes |
+|---|---|
+| `continue` | 2×2, 3×2, 4×2 (never shorter than two rows: its chip, progress bar and button would collide) |
+| `media` | 2×1, 3×1, 4×1, 2×2, 4×2 |
+| every other card and every `app:` tile | 1×1, 2×1, 2×2 |
+| `w:clock`, `w:weather` | 1×1, 2×1, 2×2 |
+| `w:battery`, `w:storage`, `w:playtime` | 1×1, 2×1 |
+| `w:nowplaying` | 2×1, 2×2, 1×1 |
+| `w:calendar` | 2×2, 1×1 |
+
+A stored size that is not in the tile's list snaps to the nearest one that is
+(the smallest difference in width plus height; on a tie, the one listed
+first). The carousel draws every tile at the same size, so sizes only matter
+on Widgets.
+
+Reading the value is tolerant, so a hand edit never breaks Home:
+
+- a missing or blank `homeTiles` is the default list; `none` is an empty list,
+  and Home then shows just the **Add tiles** tile;
+- blank entries are skipped, unknown cards are dropped, a reference that
+  repeats keeps its first place, and at most 64 tiles are read (edit mode
+  stops adding at 64);
+- a `w:` widget this version does not know (a typo, or one a newer version
+  saved) is kept, drawn dimmed with "Not available here", and keeps its stored
+  size, so editing Home here never deletes it;
+- an `app:` tile is kept even when its screen or entry does not resolve on
+  this device right now: it is drawn dimmed with "Not available here" and
+  works again wherever it resolves. The name after `app:scene:` / `app:do:`
+  is matched without regard to case.
+
+Tiles are placed in list order, row by row on six columns: each goes at the
+first place after the previous tile where it fits, wrapping to the next row,
+and a hole left beside a wide or tall tile is never filled from further down
+the list, so the reading order is always the list order.
 
 ## `elements`
 
@@ -499,10 +660,14 @@ A collector must be configured by the build (`-X main.telemetryEndpoint=…`) or
 at runtime with `JUKAHUB_TELEMETRY_URL`; when neither is set the switch stores
 the preference but sends nothing.
 
-**Report a bug** (same panel) builds a GitHub issue from `DiagnosticsText`: app
+**Report a bug** (same panel) sends a report built from `DiagnosticsText`: app
 and release version, build date, device, OS/architecture, config scene/element
 counts, safe-mode state and backup count. It never includes config values,
-tokens, usernames or private paths.
+tokens, usernames or private paths. Reports go to the JukaHub report service
+(`https://generate.jukalang.com/api/bug-report`, which files a public GitHub
+issue) unless `JUKAHUB_BUGREPORT_URL`, a `bugReportURL` custom key,
+`-X main.bugrepEndpoint=…` or the telemetry collector names another
+([BUG_REPORTS.md](BUG_REPORTS.md)).
 
 ---
 

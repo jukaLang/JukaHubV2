@@ -491,7 +491,8 @@ func stickCalStatusText(c *Config) string {
 }
 
 // stickCalSettingsRows are the stick rows of Settings → Controls. A device
-// without sticks (the Brick family) has none of them.
+// without sticks (the Brick family) has none of them, but it does get the two
+// mouse rows (vcursor_mode.go), which follow the virtual cursor's.
 func stickCalSettingsRows() []setRow {
 	hasSticks := func(*Config) bool { return stickHardware() }
 	rows := []setRow{
@@ -518,5 +519,10 @@ func stickCalSettingsRows() []setRow {
 		stickDeadzoneRow(stickRight),
 	}
 	rows[2].Visible, rows[3].Visible = hasSticks, hasSticks
-	return rows
+	out := make([]setRow, 0, len(rows)+3)
+	out = append(out, rows[0])
+	out = append(out, vcursorModeSettingsRows()...)
+	// "Menu button: voice" (voiceorb.go), a handheld's row.
+	out = append(out, voiceOrbSettingsRows()...)
+	return append(out, rows[1:]...)
 }

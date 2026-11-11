@@ -87,11 +87,17 @@ var (
 		"/mnt/SDCARD/Saves/cheevos/settings.json",
 		"/mnt/sdcard/Saves/cheevos/settings.json",
 	}
+	// The config beside ra64.trimui comes first: the stock firmware and
+	// CrossMix keep RetroArch's own config there (the launchers start it from
+	// that folder with HOME set to it), and CrossMix's "Reset RetroArch
+	// Configuration" restores that file. A .retroarch/retroarch.cfg found
+	// first used to win even where RetroArch never reads it, so the low-battery
+	// guard and the save manager read the wrong file.
 	raRetroArchConfigPaths = []string{
-		"/mnt/SDCARD/RetroArch/.retroarch/retroarch.cfg",
 		"/mnt/SDCARD/RetroArch/retroarch.cfg",
-		"/mnt/sdcard/RetroArch/.retroarch/retroarch.cfg",
+		"/mnt/SDCARD/RetroArch/.retroarch/retroarch.cfg",
 		"/mnt/sdcard/RetroArch/retroarch.cfg",
+		"/mnt/sdcard/RetroArch/.retroarch/retroarch.cfg",
 	}
 	raRetroArchConfigGlobs = []string{
 		"/mnt/SDCARD/Saves/ra-configs/retroarch-*.cfg",

@@ -152,16 +152,19 @@ func TestNavmodeFocusEngineFollowsTheChosenMode(t *testing.T) {
 	prevBack, prevStart, prevClock := sceneTitleBackRect, tb.startRect, statusClockRect
 	prevBell, prevWiFi, prevWeather := nc.bellRect, statusWiFiRect, weatherStatusRect
 	prevMedia, prevBadge := statusMediaRect, updatePrompt.badge
+	prevVolume, prevBrightness, prevTrophy := statusVolumeRect, statusBrightnessRect, headerTrophyRect
 	t.Cleanup(func() {
 		navmodeState, homeLayoutActive = prev, prevHome
 		sceneTitleBackRect, tb.startRect, statusClockRect = prevBack, prevStart, prevClock
 		nc.bellRect, statusWiFiRect, weatherStatusRect = prevBell, prevWiFi, prevWeather
 		statusMediaRect, updatePrompt.badge = prevMedia, prevBadge
+		statusVolumeRect, statusBrightnessRect, headerTrophyRect = prevVolume, prevBrightness, prevTrophy
 	})
 	// No top bar measured: the graph is the scene's own buttons.
 	sceneTitleBackRect, tb.startRect, statusClockRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	nc.bellRect, statusWiFiRect, weatherStatusRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	statusMediaRect, updatePrompt.badge = sdl.Rect{}, sdl.Rect{}
+	statusVolumeRect, statusBrightnessRect, headerTrophyRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	homeLayoutActive = false
 	navmodeState.set = [navAreaCount]bool{}
 	navmodeState.wrap = false
