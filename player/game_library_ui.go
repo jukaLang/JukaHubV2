@@ -361,6 +361,8 @@ func startGameLibraryScan() {
 	go func() {
 		report := scanROMLibrary(roots)
 		lib := buildGameLibraryWith(report, artRoot, seconds)
+		// The APK Store's Android games join as one more console (AND-16).
+		libraryAddAndroidGames(&lib, seconds)
 		tbxPost(func() {
 			if !applyGameLibraryScan(&gameLib, gen, lib, recentGames()) {
 				return
@@ -611,7 +613,7 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_r:
 		openGameRandomPicker()
 	case sdl.K_x:
-		openNetplayForSelectedGame()
+		libraryOpenNetplay()
 	case sdl.K_f:
 		fetchMissingLibraryArtwork()
 	case sdl.K_y:
@@ -671,7 +673,7 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// free here, like R3 for the random pick.
 		gmetaOpenFilterPicker()
 	case sdl.CONTROLLER_BUTTON_X:
-		openNetplayForSelectedGame()
+		libraryOpenNetplay()
 	case sdl.CONTROLLER_BUTTON_START:
 		openGameOptions()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
@@ -1145,7 +1147,7 @@ func drawCoverCompletenessRing(renderer *sdl.Renderer, config *Config, cx, cy, r
 	if int32(tw) > 2*radius-8 {
 		// Still wider than the ring (a 24px "100" in the 22px ring the panel
 		// header leaves room for): a caption size keeps it inside the stroke.
-		if caption := getFontSized(config, "small", 14); caption != nil {
+		if caption := FontForRole(config, TypeCaption); caption != nil {
 			font = caption
 			tw, th, _ = font.SizeUTF8(label)
 		}

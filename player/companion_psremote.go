@@ -62,15 +62,7 @@ func companionPSStateNow() companionPSState {
 	account := strings.TrimSpace(loadPSHosts().Settings.Account)
 	st := psHelperStatusNow()
 	state := companionPSState{
-		RemotePlay: companionPSRemote{
-			Supported:  st.Supported,
-			State:      st.State,
-			Text:       st.Text,
-			Percent:    st.Percent,
-			Busy:       st.Busy,
-			CanStart:   st.CanStart,
-			StartLabel: st.StartLabel,
-		},
+		RemotePlay: companionPSRemote(st),
 	}
 	if account != "" {
 		state.Account = companionPSAccount{Set: true, Shown: accountStatus(account)}

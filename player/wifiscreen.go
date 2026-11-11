@@ -187,10 +187,10 @@ func wifiScrLoadFonts(config *Config) wifiScrFonts {
 		return f
 	}
 	return wifiScrFonts{
-		ssid:  pick(getFontSized(config, "small", 19)),
-		meta:  pick(getFontSized(config, "small", 14)),
-		badge: pick(getFontSized(config, "small", 13)),
-		ctrl:  pick(getFontSized(config, "small", 16)),
+		ssid:  pick(FontForRole(config, TypeBody)),
+		meta:  pick(FontForRole(config, TypeCaption)),
+		badge: pick(FontForRole(config, TypeCaption)),
+		ctrl:  pick(FontForRole(config, TypeLabel)),
 	}
 }
 
@@ -476,7 +476,7 @@ func wifiScrDrawList(renderer *sdl.Renderer, config *Config, fonts wifiScrFonts,
 		rowH = 56
 	}
 	gap := int32(8)
-	headingH := toolsHubFontH(getFontSized(config, "small", 15), 18) + 20
+	headingH := toolsHubFontH(FontForRole(config, TypeLabel), 18) + 20
 
 	// Lay the rows out in body coordinates.
 	var y int32

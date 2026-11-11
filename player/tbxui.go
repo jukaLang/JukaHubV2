@@ -198,10 +198,10 @@ type tbxFonts struct {
 // rather than text at random sizes.
 func tbxLoadFonts(config *Config) (tbxFonts, bool) {
 	f := tbxFonts{
-		title: getFontSized(config, "small", 20),
-		body:  getFontSized(config, "small", 17),
-		small: getFontSized(config, "small", 15),
-		tiny:  getFontSized(config, "small", 13),
+		title: FontForRole(config, TypeBody),
+		body:  FontForRole(config, TypeBody),
+		small: FontForRole(config, TypeLabel),
+		tiny:  FontForRole(config, TypeCaption),
 	}
 	if f.small == nil {
 		f.small, _ = getCachedFont(config, "small")

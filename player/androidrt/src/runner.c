@@ -6,6 +6,10 @@
  *                                  and its bundled dependencies, run nothing
  *                                  (exit 0 = everything resolves, 2 = undefined
  *                                  symbols listed, 1 = unreadable)
+ *   loader --version               print one "AndroidRT loader ..." line and
+ *                                  exit 0: JukaHub runs it on a downloaded
+ *                                  runtime before installing it, to prove the
+ *                                  binary starts on this device (CPU, glibc)
  *
  * Profile mode, Linux (the device):
  *   1. validates the ANDROIDPAK_* environment and prepares the persistent
@@ -57,6 +61,21 @@ void apak_presentShutdown(void);
 /* class packs and the GameActivity bridge */
 extern const ApakJniPack apak_packMinecraft;
 void apak_gameActivityDefine(void);
+#endif
+
+/* What `loader --version` prints. A build may stamp its release with
+ * -DANDROIDRT_VERSION='"v1.2"'; the CPU comes from the compiler. */
+#ifndef ANDROIDRT_VERSION
+#define ANDROIDRT_VERSION "dev"
+#endif
+#if defined(__aarch64__)
+#define RUNNER_CPU "aarch64"
+#elif defined(__x86_64__)
+#define RUNNER_CPU "x86_64"
+#elif defined(__arm__)
+#define RUNNER_CPU "arm"
+#else
+#define RUNNER_CPU "other CPU"
 #endif
 
 static const char *require_env(const char *name) {
@@ -181,6 +200,16 @@ int main(int argc, char **argv) {
     int gameActivity = 0;
 #endif
 
+    /* Harmless on purpose: no environment, no files, no GPU — it only proves
+     * that this binary starts here (the right CPU, a new enough glibc). */
+    if (argc >= 2 && strcmp(argv[1], "--version") == 0) {
+#if ANDROIDRT_BIONIC_LOADER
+        printf("AndroidRT loader %s (%s, bionic loader)\n", ANDROIDRT_VERSION, RUNNER_CPU);
+#else
+        printf("AndroidRT loader %s (%s, platform loader)\n", ANDROIDRT_VERSION, RUNNER_CPU);
+#endif
+        return 0;
+    }
 #if ANDROIDRT_BIONIC_LOADER
     if (argc >= 3 && strcmp(argv[1], "--scan") == 0) return scanMain(argc, argv);
 #endif

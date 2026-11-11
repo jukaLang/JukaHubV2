@@ -582,16 +582,18 @@ func coreBuildsRescan() {
 	ShowToast("Checking for newer builds…", ToastKindInfo)
 }
 
-// coreBuildsAutoUpdateAvailable reports whether this device updates cores by
-// itself (the handheld does; Windows updates on a press).
+// coreBuildsAutoUpdateAvailable reports whether the cores this page lists are
+// updated by themselves: on the TrimUI handhelds, and on a PC whose RetroArch
+// JukaHub installed (its cores are; another RetroArch's are not touched).
 func coreBuildsAutoUpdateAvailable() bool {
-	return !IsWindows()
+	return IsTrimuiDevice() || emuDesktopCoresDirCached() != ""
 }
 
-// coreBuildsToggleAutoUpdate steps the Emulator updates setting (the cores
-// and JukaHub's PPSSPP): Install automatically → Off → Notify me → Install
-// automatically. It is the user's own choice, so emuSetCoreUpdateMode marks it
-// as chosen and the start-up migration leaves it alone.
+// coreBuildsToggleAutoUpdate steps the Emulator updates setting — the cores,
+// and everything else it covers on this device (emuAutoUpdateCovers): Install
+// automatically → Off → Notify me → Install automatically. It is the user's own
+// choice, so emuSetCoreUpdateMode marks it as chosen and the start-up
+// migration leaves it alone.
 func coreBuildsToggleAutoUpdate() {
 	if !coreBuildsAutoUpdateAvailable() {
 		return
@@ -605,13 +607,18 @@ func coreBuildsToggleAutoUpdate() {
 	}
 	emuSetCoreUpdateMode(appConfig, next)
 	PlayActivateSound()
+	covers := emuAutoUpdateCovers()
 	switch next {
 	case coreUpdateInstall:
-		ShowToast("Emulator updates: install automatically · daily, when idle or charging · the old build is kept", ToastKindSuccess)
+		when := "when idle or charging"
+		if !IsTrimuiDevice() {
+			when = "when JukaHub sits idle"
+		}
+		ShowToast("Emulator updates: install automatically · "+covers+" · daily, "+when+" · the old build is kept", ToastKindSuccess)
 	case coreUpdateOff:
 		ShowToast("Emulator updates off · update from this page or the Emulators page", ToastKindInfo)
 	default:
-		ShowToast("Emulator updates: notify me · a daily check says what has a different build", ToastKindInfo)
+		ShowToast("Emulator updates: notify me · a daily check of "+covers+" says what has a new build", ToastKindInfo)
 	}
 }
 
@@ -1014,11 +1021,11 @@ func renderCoreBuildsPanel(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
-	title := getFontSized(config, "small", 19)
+	title := FontForRole(config, TypeBody)
 	if title == nil {
 		title = font
 	}
-	meta := getFontSized(config, "small", 15)
+	meta := FontForRole(config, TypeLabel)
 	if meta == nil {
 		meta = font
 	}

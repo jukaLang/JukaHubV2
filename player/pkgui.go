@@ -82,16 +82,16 @@ func pkgFonts(config *Config) *pkgType {
 		return t
 	}
 	t.at, t.key = now, key
-	t.title = getFontSized(config, "small", 24)
-	t.hero = getFontSized(config, "small", 30)
-	t.shelf = getFontSized(config, "small", 19)
-	t.name = getFontSized(config, "small", 16)
-	t.body = getFontSized(config, "small", 15)
-	t.meta = getFontSized(config, "small", 13)
-	t.overline = getFontSized(config, "small", 12)
-	t.mono = getFontSized(config, "small", 40)
-	t.monoBig = getFontSized(config, "small", 56)
-	t.monoList = getFontSized(config, "small", 20)
+	t.title = FontForRole(config, TypeHeading)
+	t.hero = FontForRole(config, TypeTitle)
+	t.shelf = FontForRole(config, TypeBody)
+	t.name = FontForRole(config, TypeLabel)
+	t.body = FontForRole(config, TypeLabel)
+	t.meta = FontForRole(config, TypeCaption)
+	t.overline = FontForRole(config, TypeCaption)
+	t.mono = FontForRole(config, TypeTitle)
+	t.monoBig = FontForRole(config, TypeTitle)
+	t.monoList = FontForRole(config, TypeBody)
 	return t
 }
 

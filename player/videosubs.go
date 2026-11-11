@@ -535,6 +535,12 @@ func resetVideoSubtitles(sess *playbackSession) {
 	// (prepareVideoSubtitles); a stream is not, and neither is a session whose
 	// source is a link.
 	videoSubs.preparing = sess != nil && !isNetworkSource(sess.pageURL) && !isNetworkSource(sess.source)
+	// Always-on captions start each new video enabled. Without the preference,
+	// the session's own CC choice carries over as before; CC can still turn it
+	// off for one video without disabling the preference.
+	if sess != nil && a11y.captionsAlways {
+		videoSubs.enabled = true
+	}
 	videoSubs.notifyPrepare = false
 	if sess != nil {
 		videoSubs.videoCtx, videoSubs.videoCancel = context.WithCancel(context.Background())
@@ -1307,7 +1313,18 @@ func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int
 	if text == "" || renderer == nil {
 		return
 	}
-	font, _ := getCachedFont(config, "medium")
+	fontKey := "medium"
+	lineGap := int32(4)
+	switch a11y.captionSize {
+	case 0:
+		fontKey, lineGap = "small", 2
+	case 2:
+		fontKey, lineGap = "large", 7
+	}
+	font, _ := getCachedFont(config, fontKey)
+	if font == nil {
+		font, _ = getCachedFont(config, "medium")
+	}
 	if font == nil {
 		font, _ = getCachedFont(config, "small")
 	}
@@ -1321,7 +1338,7 @@ func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int
 	for _, line := range strings.Split(text, "\n") {
 		lines = append(lines, wrapTextLines(font, line, w-32, 20)...)
 	}
-	lineH := int32(font.Height()) + 4
+	lineH := int32(font.Height()) + lineGap
 	maxLines := int((h - 16) / lineH)
 	if maxLines < 1 || len(lines) == 0 {
 		return
@@ -1338,7 +1355,9 @@ func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int
 		lineW, _, _ := font.SizeUTF8(line)
 		maxWidth = max32(maxWidth, int32(lineW))
 	}
-	fillRoundedRect(renderer, x+(w-maxWidth)/2-8, top-2, maxWidth+16, int32(len(lines))*lineH+4, 6, sdl.Color{R: 0, G: 0, B: 0, A: 170})
+	if a11y.captionBackground {
+		fillRoundedRect(renderer, x+(w-maxWidth)/2-8, top-2, maxWidth+16, int32(len(lines))*lineH+4, 6, sdl.Color{R: 0, G: 0, B: 0, A: 170})
+	}
 	for i, line := range lines {
 		lineW, _, _ := font.SizeUTF8(line)
 		lx := x + (w-int32(lineW))/2

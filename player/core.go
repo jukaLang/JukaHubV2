@@ -485,14 +485,18 @@ func substituteVars(text string, vars map[string]interface{}) string {
 }
 
 var (
-	ytSearchKeyPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`"ytsearch\d+:[^"]+"`) })
-	ffmpegFlagPattern  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`-f "[^"]*"`) })
-	spaceRunPattern    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\s+`) })
+	ffmpegFlagPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`-f "[^"]*"`) })
+	spaceRunPattern   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\s+`) })
 )
 
+// normalizeCacheKey is the part of a search command that decides which cached
+// page answers it. The query has to stay in it: the ytsearch token used to be
+// rewritten to a literal "ytsearch:QUERY", which gave every search the same
+// key, so a new query was answered with the previous query's videos for as long
+// as that entry lived. Only the playback-resolution flag is dropped, and only
+// because it caps the format without changing which videos are found.
 func normalizeCacheKey(raw string) string {
 	s := strings.ToLower(raw)
-	s = ytSearchKeyPattern().ReplaceAllString(s, `"ytsearch:QUERY"`)
 	s = ffmpegFlagPattern().ReplaceAllString(s, "")
 	s = spaceRunPattern().ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
@@ -909,7 +913,10 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 	// Inter is the only UI face: a path naming any other font is read as the
 	// bundled Inter before it reaches the cache, so the cache key, the file
 	// opened and the cmap registered below all agree.
-	fontPath = homeUIFontPath(fontPath)
+	// The legible reading face (A11Y-8) is chosen here, after the configured
+	// role is reduced to the bundled face, so the cache key, the file opened
+	// and the cmap registered below all name the face actually drawn.
+	fontPath = homeUIFontForRole(homeUIFontPath(fontPath))
 	key := fontPath + "\n" + strconv.Itoa(size)
 	if font, ok := fontCache[key]; ok {
 		return font
@@ -922,7 +929,7 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 		// is deliberately no chain past it: DejaVu, Arial and Roboto are not
 		// shipped, and borrowing a system face made every device draw a
 		// different UI.
-		if f, e2 := openHomeUIFont(homeUIFontFile, size); e2 == nil {
+		if f, e2 := openUIFontFile(homeUIFontFile, size); e2 == nil {
 			font, err, opened = f, nil, homeUIFontFile
 		}
 	}
@@ -2178,20 +2185,23 @@ func validateYtDlpArgs(args []string) error {
 // config file. The fixed command builder and the cookies argument are covered;
 // adding another search option means adding its exact long name here.
 var ytDlpAllowedFlags = map[string]bool{
-	"--flat-playlist":        true,
-	"--dump-single-json":     true,
-	"--default-search":       true,
-	"--no-playlist":          true,
-	"--no-check-certificate": true,
-	"--geo-bypass":           true,
-	"--skip-download":        true,
-	"--quiet":                true,
-	"--ignore-errors":        true,
-	"--playlist-start":       true,
-	"--playlist-end":         true,
-	"--cookies":              true,
-	"--format":               true,
-	"--extractor-args":       true,
+	"--flat-playlist":          true,
+	"--dump-single-json":       true,
+	"--default-search":         true,
+	"--no-playlist":            true,
+	"--no-check-certificate":   true,
+	"--geo-bypass":             true,
+	"--geo-bypass-country":     true,
+	"--geo-verification-proxy": true,
+	"--xff":                    true,
+	"--skip-download":          true,
+	"--quiet":                  true,
+	"--ignore-errors":          true,
+	"--playlist-start":         true,
+	"--playlist-end":           true,
+	"--cookies":                true,
+	"--format":                 true,
+	"--extractor-args":         true,
 }
 
 // rejectYtDlpExecFlags refuses any option outside the allowlist in a
@@ -2509,7 +2519,9 @@ func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
 	// bare goroutine, so leaving the results screen stops the run
 	// (executeYouTubeSearch spawns the scene task).
 	trophyEvent(tkVideoSearch)
-	executeYouTubeSearch(config, plan.command, plan.resultVar, snapshotVars(config))
+	// The trigger was pressed with a query in hand, so the answer must be the
+	// site's current one rather than an hour-old cached page.
+	executeYouTubeSearchFresh(config, plan.command, plan.resultVar, snapshotVars(config))
 	return true
 }
 
@@ -2519,7 +2531,18 @@ func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
 // screen. It returns immediately — it never blocks the render loop.
 func executeYouTubeSearch(config *Config, command string, resultVar string, vars map[string]interface{}) {
 	runSceneTask(func(ctx context.Context) {
-		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, false)
+		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, false, false)
+	})
+}
+
+// executeYouTubeSearchFresh runs a search the user asked for. It behaves like
+// executeYouTubeSearch except that a page cached moments ago cannot answer it
+// with the videos it already had: the stored page is still painted first, so
+// the grid appears at once, but the fetch always runs and replaces it when the
+// site has something newer.
+func executeYouTubeSearchFresh(config *Config, command string, resultVar string, vars map[string]interface{}) {
+	runSceneTask(func(ctx context.Context) {
+		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, false, true)
 	})
 }
 
@@ -2528,14 +2551,14 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 // scrolling past the last card grows the grid rather than restarting it.
 func executeYouTubeSearchPage(config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
 	runSceneTask(func(ctx context.Context) {
-		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, appendMode)
+		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, appendMode, false)
 	})
 }
 
 // executeYouTubeSearchContext is the blocking body behind the spawned
 // wrappers. parent is the scene's context (sceneWorkContext), so the scene
 // scope and the newer-search cancellation both reach the child process.
-func executeYouTubeSearchContext(parent context.Context, config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
+func executeYouTubeSearchContext(parent context.Context, config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool, bypassCache bool) {
 	// A dead scope starts nothing: no wipe of the previous screen's results,
 	// no error line, no spinner on the next screen.
 	if parent == nil {
@@ -2753,14 +2776,19 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// already seen needs neither the network nor an installed extractor.
 	cacheKey := "ytsearch:" + normalizeCacheKey(fullCommand)
 	if db, err := openSharedCache("jukahub.cache"); err == nil {
-		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
-			var videos []VideoInfo
-			if json.Unmarshal(cached, &videos) == nil {
-				if stale() {
+		// A search the user just typed always fetches: the stored page is
+		// painted below as the instant stale page and then replaced, so a
+		// repeat query still shows what the site has now.
+		if !bypassCache {
+			if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
+				var videos []VideoInfo
+				if json.Unmarshal(cached, &videos) == nil {
+					if stale() {
+						return
+					}
+					deliver(videos)
 					return
 				}
-				deliver(videos)
-				return
 			}
 		}
 		// An expired page still paints at once. The refresh that follows either
@@ -5099,7 +5127,7 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		// a fixed 74x20 box under the theme's "small" font — 24px when a config
 		// does not set it — was smaller than the label it carried.
 		if name == current {
-			badgeFont := getFontSized(config, "small", 14)
+			badgeFont := FontForRole(config, TypeCaption)
 			if badgeFont == nil {
 				badgeFont = small
 			}
@@ -5550,16 +5578,18 @@ func toastDurationFor(kind ToastKind) uint64 {
 	if shotModeOn() {
 		return 0
 	}
+	var base uint64
 	switch kind {
 	case ToastKindError:
-		return 5000
+		base = 5000
 	case ToastKindWarning:
-		return 3500
+		base = 3500
 	case ToastKindSwitch:
-		return 1500
+		base = 1500
 	default:
-		return 2500
+		base = 2500
 	}
+	return a11yToastMs(base)
 }
 
 // toastKindColor returns the severity accent used by the toast indicator.
@@ -6041,6 +6071,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		logWarn("core", "change_scene: scene not found: %s", target)
 	case "yt_search", "youtube_search", "youtube_smart":
+		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
+	case "vault_search":
+		// Vault tab search: search RedGifs with the typed query
 		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
 	case "youtube_trending":
 		fetchTrendingVideos(config, "search_results", snapshotVars(config))

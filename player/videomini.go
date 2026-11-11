@@ -393,7 +393,7 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 
 	// Keep touch and pad instructions on the window itself rather than stealing
 	// the underlying scene's footer. A/X apply only while Now Playing is focused.
-	if hintFont := getFontSized(config, "small", 16); hintFont != nil {
+	if hintFont := FontForRole(config, TypeLabel); hintFont != nil {
 		for i, hint := range videoMiniHints() {
 			hint = ellipsize(hintFont, hint, r.W-16)
 			tw, _, _ := hintFont.SizeUTF8(hint)

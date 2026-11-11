@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Carry the Go build cache from one release build to the next (the Windows and
 # the TrimUI job each keep their own), and, with `fetch`, the Remote Play
-# helpers from one release run to the next while their sources stay the same.
+# helpers and the runtime packages (AndroidRT, the Box64 pack) from one release
+# run to the next while their sources stay the same.
 #
 # A release compiles the Go standard library, every module and the cgo-heavy
 # SDL bindings for its platform. From an empty cache that is most of the job;
@@ -31,7 +32,8 @@
 #       would only repeat the failure.
 #   go-build-cache.sh fetch <name> <dir> <file>...
 #       the same provenance rules for an artifact of a few plain files (the
-#       Remote Play helpers, named after a hash of their sources): move
+#       Remote Play helpers, or one runtime package zip, named after a hash
+#       of their sources): move
 #       <file>... from the newest acceptable <name> artifact into <dir>. The
 #       artifact must hold exactly those files. Exits 0 when they are there and
 #       1 when there was nothing acceptable to take, so the caller builds them;

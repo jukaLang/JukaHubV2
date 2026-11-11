@@ -577,6 +577,17 @@ const (
 	TypeCaption
 )
 
+// The role scale is the whole type scale: five steps, and no screen picks a
+// pixel size of its own (UX-1). The legibility floor still lifts this scale on
+// the compact canvas, and the accessibility text size still scales it.
+const (
+	typeCaptionSize = 14
+	typeLabelSize   = 16
+	typeBodySize    = 18
+	typeHeadingSize = 22
+	typeTitleSize   = 28
+)
+
 // FontName returns the logical font name configured for the role.
 func (r TypeRole) FontName() string {
 	switch r {
@@ -594,22 +605,22 @@ func (r TypeRole) FontName() string {
 	return "medium"
 }
 
-// Size returns the role's design size in px. It mirrors the shipped
-// jukaconfig FontSizes and is the fallback when a config omits the entry.
+// Size returns the role's design size in px: Caption 14, Label 16, Body 18,
+// Heading 22, Title 28.
 func (r TypeRole) Size() int32 {
 	switch r {
 	case TypeTitle:
-		return FontSize2XL
+		return typeTitleSize
 	case TypeHeading:
-		return FontSizeXL
+		return typeHeadingSize
 	case TypeBody:
-		return FontSizeLG
+		return typeBodySize
 	case TypeLabel:
-		return FontSizeLG
+		return typeLabelSize
 	case TypeCaption:
-		return FontSizeMD
+		return typeCaptionSize
 	}
-	return FontSizeLG
+	return typeBodySize
 }
 
 // --- Legibility floor -----------------------------------------------------
@@ -657,13 +668,16 @@ func uiLegibleFontSize(size int) int {
 	return scaled
 }
 
-// FontForRole resolves the configured font for a semantic role.
+// FontForRole resolves the configured face for a semantic role at that role's
+// size. It is the only way screens should ask for type: the role's face name
+// still comes from the config, while the size comes from the five-step scale,
+// and getFontSized keeps the accessibility text size and legibility floor in
+// the same path as every other label.
 func FontForRole(config *Config, role TypeRole) *ttf.Font {
 	if config == nil {
 		return nil
 	}
-	font, _ := getCachedFont(config, role.FontName())
-	return font
+	return getFontSized(config, role.FontName(), int(role.Size()))
 }
 
 // --- Density -------------------------------------------------------------

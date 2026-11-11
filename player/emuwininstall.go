@@ -44,6 +44,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +67,12 @@ type emuWinSpec struct {
 	// Match lists token groups: an asset qualifies when its name contains every
 	// token of one group. Groups are tried in order.
 	Match [][]string
+	// ARM64Prefer and ARM64Match name the project's Windows on ARM build. They
+	// are tried first when JukaHub itself runs as arm64 (runtime.GOARCH, the
+	// one honest signal it has); Prefer and Match stay the fallback, because
+	// Windows 11 on ARM runs x64 programs through its own emulation.
+	ARM64Prefer []string
+	ARM64Match  [][]string
 	// Exclude disqualifies an asset whose name contains any of these.
 	Exclude []string
 	// MaxBytes caps the download.
@@ -81,7 +88,17 @@ type emuWinSpec struct {
 // PPSSPP-v1.20.4-Windows-x64.zip, duckstation-windows-x64-release.zip,
 // pcsx2-v2.8.2-windows-x64-Qt.7z, melonDS-1.1-windows-x86_64.zip,
 // mGBA-0.10.5-win64.7z, cemu-2.6-windows-x64.zip, windows-latest.zip (Vita3K),
-// rpcs3-v0.0.43-…_win64_msvc.7z and xemu-win-x86_64-release.zip.
+// rpcs3-v0.0.43-…_win64_msvc.7z, xemu-0.8.139-windows-x86_64.zip (and its
+// older name xemu-win-x86_64-release.zip, published beside it since 0.8.132)
+// and xenia_canary_windows.7z.
+//
+// xemu also publishes a debug build of every release
+// (xemu-0.8.139-dbg-windows-x86_64.zip) that matches the same tokens; "dbg"
+// in emuWinAssetExclude keeps it out. Xenia Canary has no version numbers: each
+// build is its own release, tagged after its commit
+// ("7a7b089_canary_experimental") and marked Latest, so a new tag is a new
+// build (emuWinUpdateAvailable). Older Canary releases named the archive
+// xenia_canary_windows.zip or xenia_canary.zip.
 var emuWinSpecs = []emuWinSpec{
 	{
 		Name:     "RetroArch",
@@ -156,12 +173,22 @@ var emuWinSpecs = []emuWinSpec{
 		Site:     "https://rpcs3.net/download",
 	},
 	{
-		Name:     "xemu",
-		Repo:     "xemu-project/xemu",
-		Prefer:   []string{"xemu-win-x86_64-release.zip"},
-		Match:    [][]string{{"win", "x86_64", ".zip"}},
+		Name:        "xemu",
+		Repo:        "xemu-project/xemu",
+		Prefer:      []string{"xemu-win-x86_64-release.zip"},
+		Match:       [][]string{{"windows", "x86_64", ".zip"}, {"win", "x86_64", ".zip"}},
+		ARM64Prefer: []string{"xemu-win-aarch64-release.zip"},
+		ARM64Match:  [][]string{{"windows", "arm64", ".zip"}, {"win", "aarch64", ".zip"}},
+		MaxBytes:    128 << 20,
+		Site:        "https://xemu.app/",
+	},
+	{
+		Name:     emuXeniaName,
+		Repo:     "xenia-canary/xenia-canary",
+		Prefer:   []string{"xenia_canary_windows.7z", "xenia_canary_windows.zip", "xenia_canary.zip"},
+		Match:    [][]string{{"xenia", "windows", ".7z"}, {"xenia", "windows", ".zip"}},
 		MaxBytes: 128 << 20,
-		Site:     "https://xemu.app/",
+		Site:     "https://github.com/xenia-canary/xenia-canary/releases",
 	},
 	{Name: "FCEUX", Site: "https://fceux.com/web/download.html"},
 	{Name: "Snes9x", Site: "https://www.snes9x.com/"},
@@ -170,12 +197,16 @@ var emuWinSpecs = []emuWinSpec{
 	{Name: "bsnes", Site: "https://github.com/bsnes-emu/bsnes/releases"},
 }
 
-// emuWinAssetExclude disqualifies the assets no rule may pick: debug symbols,
-// installers, other architectures and source archives.
+// emuWinAssetExclude disqualifies the assets no rule may pick: debug builds
+// ("-dbg-" is xemu's) and their symbols, installers and source archives.
 var emuWinAssetExclude = []string{
-	"pdb", "debug", "symbols", "installer", "setup", ".msi",
-	"arm64", "aarch64", "source", "-src",
+	"pdb", "debug", "dbg", "symbols", "installer", "setup", ".msi",
+	"source", "-src",
 }
+
+// emuWinARMNames mark a Windows on ARM build, which only a spec's ARM64 rules
+// may pick.
+var emuWinARMNames = []string{"arm64", "aarch64"}
 
 const (
 	// emuWinManifestName records which release a managed folder holds.
@@ -419,11 +450,30 @@ type emuGitHubRelease struct {
 	Assets     []emuGitHubAsset `json:"assets"`
 }
 
-// emuPickWinAsset returns the asset of a release that spec installs: an
-// exact preferred name first, then the first asset matching a token group.
-// Side-cars (checksums, signatures), installers, debug symbols and other
-// architectures never qualify.
+// emuPickWinAsset returns the asset of a release that spec installs on this
+// machine: emuPickWinAssetFor with the architecture JukaHub runs as.
 func emuPickWinAsset(spec emuWinSpec, assets []emuGitHubAsset) (emuGitHubAsset, bool) {
+	return emuPickWinAssetFor(spec, assets, runtime.GOARCH)
+}
+
+// emuPickWinAssetFor returns the asset spec installs for one architecture. On
+// arm64 the project's ARM64 build comes first when the spec names one; the x64
+// build is the answer everywhere else and the fallback there. Each pass takes
+// an exact preferred name first, then the first asset matching a token group.
+// Side-cars (checksums, signatures), installers, debug builds and symbols,
+// Linux and macOS packages never qualify, and an ARM64 build only through the
+// ARM64 rules.
+func emuPickWinAssetFor(spec emuWinSpec, assets []emuGitHubAsset, goarch string) (emuGitHubAsset, bool) {
+	if goarch == "arm64" && (len(spec.ARM64Prefer) > 0 || len(spec.ARM64Match) > 0) {
+		if a, ok := emuPickAssetBy(spec, assets, spec.ARM64Prefer, spec.ARM64Match, true); ok {
+			return a, true
+		}
+	}
+	return emuPickAssetBy(spec, assets, spec.Prefer, spec.Match, false)
+}
+
+// emuPickAssetBy is one pass of the pick. arm lets an ARM64 build through.
+func emuPickAssetBy(spec emuWinSpec, assets []emuGitHubAsset, prefer []string, match [][]string, arm bool) (emuGitHubAsset, bool) {
 	usable := func(a emuGitHubAsset) bool {
 		lower := strings.ToLower(strings.TrimSpace(a.Name))
 		if lower == "" || strings.TrimSpace(a.BrowserDownloadURL) == "" || isToolAssetSidecar(lower) {
@@ -437,6 +487,13 @@ func emuPickWinAsset(spec emuWinSpec, assets []emuGitHubAsset) (emuGitHubAsset, 
 				return false
 			}
 		}
+		if !arm {
+			for _, bad := range emuWinARMNames {
+				if strings.Contains(lower, bad) {
+					return false
+				}
+			}
+		}
 		for _, bad := range spec.Exclude {
 			if bad != "" && strings.Contains(lower, strings.ToLower(bad)) {
 				return false
@@ -444,14 +501,14 @@ func emuPickWinAsset(spec emuWinSpec, assets []emuGitHubAsset) (emuGitHubAsset, 
 		}
 		return true
 	}
-	for _, want := range spec.Prefer {
+	for _, want := range prefer {
 		for _, a := range assets {
 			if strings.EqualFold(strings.TrimSpace(a.Name), want) && usable(a) {
 				return a, true
 			}
 		}
 	}
-	for _, tokens := range spec.Match {
+	for _, tokens := range match {
 		if len(tokens) == 0 {
 			continue
 		}
@@ -630,11 +687,127 @@ func emuWinResolve(ctx context.Context, client *http.Client, spec emuWinSpec) (e
 // ("build-e8979d31…"), whose digits mean nothing in order.
 var emuVersionTag = regexp.MustCompile(`^[vV]?[0-9]+(\.[0-9]+)+([-.][0-9A-Za-z]+)*$`)
 
+// emuReleasePreWords start the suffixes that mark a pre-release of a version
+// ("v0.1.3-rc1", "2.0-beta2"), which comes before the final release of the
+// same number. Any other suffix — a build number ("v0.1-11752"), "-hotfix" —
+// is read as coming after it.
+var emuReleasePreWords = []string{"alpha", "beta", "rc", "pre", "dev", "test"}
+
+// emuSplitReleaseVersion splits a version tag into its release numbers and
+// what follows them: "v0.1.3-rc1" is [0 1 3] and "rc1". Build metadata after a
+// "+" is dropped. ok is false when the tag does not start with a number.
+func emuSplitReleaseVersion(tag string) (nums []int, suffix string, ok bool) {
+	s := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(tag)), "v")
+	if i := strings.IndexByte(s, '+'); i >= 0 {
+		s = s[:i]
+	}
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		n := 0
+		for ; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {
+			if n < 1_000_000_000 {
+				n = n*10 + int(s[i]-'0')
+			}
+		}
+		nums = append(nums, n)
+		// Another number follows only after a dot ("0.1.3"); anything else
+		// ("-rc1", ".rc1") is the suffix.
+		if i+1 < len(s) && s[i] == '.' && s[i+1] >= '0' && s[i+1] <= '9' {
+			i++
+		}
+	}
+	if len(nums) == 0 {
+		return nil, "", false
+	}
+	return nums, strings.TrimLeft(s[i:], "-._"), true
+}
+
+// emuReleaseSuffixRank orders the suffix of one release number: a pre-release
+// (-1), then the final release (0), then any later suffix (1).
+func emuReleaseSuffixRank(suffix string) int {
+	if suffix == "" {
+		return 0
+	}
+	for _, word := range emuReleasePreWords {
+		if strings.HasPrefix(suffix, word) {
+			return -1
+		}
+	}
+	return 1
+}
+
+// emuCompareInts orders two number lists, a missing part counting as 0.
+func emuCompareInts(a, b []int) int {
+	for i := 0; i < len(a) || i < len(b); i++ {
+		var left, right int
+		if i < len(a) {
+			left = a[i]
+		}
+		if i < len(b) {
+			right = b[i]
+		}
+		if left != right {
+			if left < right {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// emuCompareReleaseVersions orders two version tags like strings.Compare: the
+// release numbers first, then a pre-release before the final release before a
+// later suffix, then the suffixes' own words and numbers — so "0.1.3" is newer
+// than "0.1.3-rc1" and "0.1.3-rc2" newer than "0.1.3-rc1". compareCoreVersions
+// read "0.1.3-rc1" as 0.1.3.1, newer than the final release it leads up to.
+func emuCompareReleaseVersions(a, b string) int {
+	na, sa, okA := emuSplitReleaseVersion(a)
+	nb, sb, okB := emuSplitReleaseVersion(b)
+	switch {
+	case !okA && !okB:
+		return strings.Compare(a, b)
+	case !okA:
+		return -1
+	case !okB:
+		return 1
+	}
+	if c := emuCompareInts(na, nb); c != 0 {
+		return c
+	}
+	if ra, rb := emuReleaseSuffixRank(sa), emuReleaseSuffixRank(sb); ra != rb {
+		if ra < rb {
+			return -1
+		}
+		return 1
+	}
+	// Two suffixes of one kind: the word first ("beta2" before "rc1"), then
+	// its number ("rc1" before "rc2").
+	if c := strings.Compare(emuLeadingLetters(sa), emuLeadingLetters(sb)); c != 0 {
+		return c
+	}
+	if c := emuCompareInts(versionParts(sa), versionParts(sb)); c != 0 {
+		return c
+	}
+	return strings.Compare(sa, sb)
+}
+
+// emuLeadingLetters is the word a lower-case version suffix starts with: "rc"
+// of "rc2", "" of "11752".
+func emuLeadingLetters(s string) string {
+	i := 0
+	for i < len(s) && s[i] >= 'a' && s[i] <= 'z' {
+		i++
+	}
+	return s[:i]
+}
+
 // emuWinUpdateAvailable reports whether latest is newer than what the
-// manifest says is installed. Two version numbers compare numerically; any
-// other change of tag (a new commit build, a nightly date) is an update; a
-// rolling tag is compared by the asset's digest, or by its upload time when
-// GitHub publishes no digest.
+// manifest says is installed. Two version numbers compare as releases
+// (emuCompareReleaseVersions: a final release is newer than its release
+// candidates); any other change of tag (a new commit build, a nightly date)
+// is an update; a rolling tag is compared by the asset's digest, or by its
+// upload time when GitHub publishes no digest.
 func emuWinUpdateAvailable(installed emuWinManifest, latest emuWinRelease) bool {
 	have, want := strings.TrimSpace(installed.Tag), strings.TrimSpace(latest.Tag)
 	if have == "" || want == "" {
@@ -642,7 +815,7 @@ func emuWinUpdateAvailable(installed emuWinManifest, latest emuWinRelease) bool 
 	}
 	if have != want {
 		if emuVersionTag.MatchString(have) && emuVersionTag.MatchString(want) {
-			return compareCoreVersions(want, have) > 0
+			return emuCompareReleaseVersions(want, have) > 0
 		}
 		return true
 	}
@@ -1289,6 +1462,7 @@ func emuFriendlyError(err error) string {
 		return "The download took too long — try again on a faster connection"
 	}
 	msg := err.Error()
+	lower := strings.ToLower(msg)
 	switch {
 	case strings.Contains(msg, "HTTP 403"), strings.Contains(msg, "HTTP 429"):
 		return "GitHub is limiting downloads right now — try again in a while"
@@ -1296,6 +1470,19 @@ func emuFriendlyError(err error) string {
 		return "The download is not on the server any more — try again later"
 	case strings.Contains(msg, "HTTP 5"):
 		return "The download server is having trouble — try again later"
+	case strings.Contains(lower, "checksum mismatch"):
+		return "The download arrived damaged (its checksum did not match) — try again"
+	case strings.Contains(lower, "download stopped after"), strings.Contains(lower, "unexpected eof"),
+		strings.Contains(lower, "connection reset"):
+		return "The download was cut off — try again"
+	case strings.Contains(lower, "x509:"):
+		// The handheld keeps no time across a flat battery, and a clock in
+		// the past turns every certificate "not yet valid".
+		return "A secure connection could not be made — check the date and time, then try again"
+	case strings.Contains(lower, "no space left"), strings.Contains(lower, "not enough space"):
+		return "The storage is full — free some space and try again"
+	case errors.Is(err, errBadToolArchive):
+		return "The download is not a usable archive — try again later"
 	}
 	return plainNetworkError(err)
 }
@@ -1355,6 +1542,27 @@ func emuWinStartInstall(spec emuWinSpec) {
 	}()
 }
 
+// emuWinHasVCRuntime reports whether the Microsoft Visual C++ runtime that
+// Xenia Canary's Quickstart lists as a requirement is installed: its 64-bit
+// DLLs in the system folder. Without them xenia_canary.exe stops before its
+// window opens. Where nothing can be checked (no SystemRoot, not Windows) it
+// answers true, so no hint ever rests on a guess.
+func emuWinHasVCRuntime() bool {
+	if !IsWindows() {
+		return true
+	}
+	sys := strings.TrimSpace(os.Getenv("SystemRoot"))
+	if sys == "" {
+		return true
+	}
+	for _, dll := range []string{"vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"} {
+		if !regularFile(filepath.Join(sys, "System32", dll)) {
+			return false
+		}
+	}
+	return true
+}
+
 // emuWinFinish reports one install's outcome.
 func emuWinFinish(spec emuWinSpec, result emuWinInstallResult, err error) {
 	if err != nil {
@@ -1392,6 +1600,13 @@ func emuWinFinish(spec emuWinSpec, result emuWinInstallResult, err error) {
 	case strings.EqualFold(spec.Name, "xemu"):
 		PlaySuccessSound()
 		ShowToast("xemu "+result.Tag+" installed · press Y on its tile for the Xbox BIOS setup", ToastKindSuccess)
+	case strings.EqualFold(spec.Name, emuXeniaName):
+		PlaySuccessSound()
+		note := emuXeniaName + " " + result.Tag + " installed · put Xbox 360 games in Roms\\XBOX360"
+		if !emuWinHasVCRuntime() {
+			note += " · it also needs the Microsoft Visual C++ Redistributable (x64)"
+		}
+		ShowToast(note, ToastKindSuccess)
 	default:
 		PlaySuccessSound()
 		ShowToast(spec.Name+" "+result.Tag+" installed", ToastKindSuccess)

@@ -14,10 +14,12 @@
 #      --scan report, the full compat suite, trap/zero/strict policies
 #   6. the android_native_app_glue contract game (looper, input, choreographer)
 #   7. the EGL present layer against a mock libEGL/libgbm/libdrm (gbm, native,
-#      and the stock-TrimUI default: firmware libEGL + fbdev window), and the
-#      SDL-hosted backend against a fake libSDL2 (explicit, context-first,
-#      probe contexts, eglReleaseThread, both automatic fallbacks, SDL2
-#      missing or failing, a default display that never comes up)
+#      and the stock-TrimUI defaults: firmware libEGL, the SDL-hosted backend
+#      on the PowerVR models, native + fbdev window without SDL2 and on the
+#      Mali Smart Pro S), and the SDL-hosted backend against a fake libSDL2
+#      (explicit, context-first, probe contexts, eglReleaseThread, both
+#      automatic fallbacks, SDL2 missing or failing, a default display that
+#      never comes up)
 #   8. surface probe (host as is, then against the mock GPU)
 #   9. ALooper + AInputQueue probe
 #  10. OpenSL ES audio probe
@@ -125,6 +127,12 @@ if grep -qE '^(apak_|bw_|android_inputInject|runner_requestExit)' "$WORK/exports
 else
     pass "runner keeps its internals hidden"
 fi
+# JukaHub's install check runs `loader --version` on a downloaded runtime: it
+# must answer without any AndroidPak environment and start nothing.
+run_to "$WORK/version.log" env -u ANDROIDPAK_APK -u ANDROIDPAK_STAGED -u ANDROIDPAK_DATA "$LOADER" --version
+expect_rc "--version exits 0 without a profile environment" 0
+expect "--version prints the loader line" "$WORK/version.log" "AndroidRT loader "
+expect_not "--version starts no present layer" "$WORK/version.log" "[androidrt]"
 
 # ── 2. the ELF reader against binutils ────────────────────────────────
 echo "== ELF reader vs readelf =="
@@ -321,12 +329,15 @@ expect "native backend hands EGL a null native window" "$WORK/present-native.log
 expect_not "native backend never modesets" "$WORK/present-native.log" "drmModeSetCrtc"
 expect "an explicit native backend sets no SDL_* variables" "$WORK/present-native.log" "[egl-test] SDL environment unset"
 # The stock TrimUI firmware: no DRM card, the firmware's libEGL, SDL's mali
-# fbdev window contract — chosen by auto without any ANDROIDPAK_PRESENT.
+# fbdev window contract — chosen by auto without any ANDROIDPAK_PRESENT. With
+# no SDL2 to start (this case), auto uses the native backend.
 run_to "$WORK/present-trimui.log" env "$MOCK" ANDROIDPAK_DEVICE=trimui-smart-pro ANDROIDPAK_GBM_LIB=/nonexistent/libgbm.so \
     ANDROIDPAK_DRM_LIB=/nonexistent/libdrm.so ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so \
     ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "EGL game on the stock-firmware default exits cleanly" 0
-expect "stock firmware picks the native backend with the fbdev window" "$WORK/present-trimui.log" \
+expect "stock firmware without SDL2 says so" "$WORK/present-trimui.log" \
+    "stock firmware (Smart Pro): SDL2 is not usable ($WORK/no-libSDL2-2.0.so.0 not loadable"
+expect "stock firmware without SDL2 picks the native backend with the fbdev window" "$WORK/present-trimui.log" \
     "backend native (EGL $WORK/libmockgpu.so, window: fbdev {width, height} struct)"
 expect "the fbdev window carries the panel size" "$WORK/present-trimui.log" "native=OTHER(1280x720)"
 if [ "$(count_of "$WORK/present-trimui.log" '[mockgpu] eglGetDisplay')" = 1 ]; then
@@ -354,6 +365,37 @@ $CC -O1 -g -std=gnu11 $WARN -fPIC -shared -fvisibility=hidden -I"$SRC" "$HERE/fa
     -ldl -pthread
 FAKESDL="ANDROIDPAK_SDL_LIB=$WORK/libfakesdl.so"
 STOCK_NO_KMS="ANDROIDPAK_DEVICE=trimui-smart-pro ANDROIDPAK_GBM_LIB=/nonexistent/libgbm.so ANDROIDPAK_DRM_LIB=/nonexistent/libdrm.so"
+# The Smart Pro S (tg5050) has a real Mali GPU: there auto still starts native
+# and keeps SDL as its fallback, so the fallback cases below run on it.
+MALI_NO_KMS="ANDROIDPAK_DEVICE=trimui-smart-pro-s ANDROIDPAK_GBM_LIB=/nonexistent/libgbm.so ANDROIDPAK_DRM_LIB=/nonexistent/libdrm.so"
+# auto on the stock firmware of the PowerVR models (Smart Pro, Brick): the
+# SDL-hosted backend from the start, because raw EGL contexts stay black there.
+run_to "$WORK/present-trimui-sdl.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect_rc "EGL game on the stock-firmware default (SDL2 there) exits cleanly" 0
+expect "auto on the PowerVR stock firmware chooses the SDL-hosted backend" "$WORK/present-trimui-sdl.log" \
+    "[androidrt][present] backend sdl (EGL $WORK/libmockgpu.so, SDL $WORK/libfakesdl.so, video driver mali)"
+expect "the log says why auto chose SDL" "$WORK/present-trimui-sdl.log" \
+    "stock firmware (Smart Pro): auto chose the SDL-hosted backend"
+expect "stock default: the game's context is SDL's" "$WORK/present-trimui-sdl.log" \
+    "[androidrt][present] the game's GLES 2.0 context is SDL's"
+expect_count "stock default: every frame through SDL_GL_SwapWindow (5 of 5)" "$WORK/present-trimui-sdl.log" 5 \
+    "[fakesdl] SDL_GL_SwapWindow frame"
+expect "EGL game checks (stock default, sdl)" "$WORK/present-trimui-sdl.log" "[egl-test] all checks passed"
+# GLSurfaceView's order on the same default: the context made before the
+# window is SDL's as well, so no raw context can be left drawing black.
+run_to "$WORK/present-trimui-sdl-ctxfirst.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS EGLTEST_CONTEXT_FIRST=1 \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect_rc "a context-first game on the stock default exits cleanly" 0
+expect_count "stock default, context first: every frame through SDL_GL_SwapWindow" \
+    "$WORK/present-trimui-sdl-ctxfirst.log" 5 "[fakesdl] SDL_GL_SwapWindow frame"
+expect "EGL game checks (stock default, context first)" "$WORK/present-trimui-sdl-ctxfirst.log" "[egl-test] all checks passed"
+run_to "$WORK/present-tg5050.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect_rc "EGL game on the Smart Pro S default exits cleanly" 0
+expect "the Smart Pro S (Mali) keeps the native backend under auto" "$WORK/present-tg5050.log" \
+    "backend native (EGL $WORK/libmockgpu.so, window: fbdev {width, height} struct)"
+expect_not "the Smart Pro S starts no SDL when native works" "$WORK/present-tg5050.log" "[fakesdl] SDL_InitSubSystem"
 run_to "$WORK/present-sdl.log" env "$MOCK" "$FAKESDL" ANDROIDPAK_PRESENT=sdl $STOCK_NO_KMS \
     ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "EGL game on the sdl backend exits cleanly" 0
@@ -458,7 +500,7 @@ expect_not "a scan run touches no EGL display" "$WORK/present-sdl-scan.log" "[mo
 # auto on the stock firmware, but the raw fbdev window is refused (the mock's
 # framebuffer only takes its own 1280x720; the game asked for 640x360
 # buffers): SDL takes over at the game's window surface.
-run_to "$WORK/present-fallback.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
+run_to "$WORK/present-fallback.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
     EGLTEST_BUFFERS=640x360 ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "a refused native window falls back to SDL and the game runs" 0
 expect "auto starts on the native backend" "$WORK/present-fallback.log" \
@@ -476,7 +518,7 @@ expect "EGL game checks (fallback at the window)" "$WORK/present-fallback.log" "
 # The same, but the game made its context before the window (native, raw):
 # it keeps that context, the log says so and names ANDROIDPAK_PRESENT=sdl,
 # and its frames are counted as plain eglSwapBuffers, not SDL's.
-run_to "$WORK/present-fallback-ctxfirst.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
+run_to "$WORK/present-fallback-ctxfirst.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
     EGLTEST_BUFFERS=640x360 EGLTEST_CONTEXT_FIRST=1 ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so \
     ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "a context-first game survives the window fallback" 0
@@ -492,7 +534,7 @@ expect "EGL game checks (fallback at the window, context first)" "$WORK/present-
     "[egl-test] all checks passed"
 # The window is refused and SDL's video init fails too: both reasons are
 # named, and the game reads EGL's own error for its window, not EGL_SUCCESS.
-run_to "$WORK/present-fallback-sdlfail.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
+run_to "$WORK/present-fallback-sdlfail.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
     EGLTEST_BUFFERS=640x360 FAKESDL_FAIL_INIT=1 ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so \
     ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "no window anywhere: the game fails its own check" 3
@@ -501,7 +543,7 @@ expect "a failing SDL video init is named after the refused window" "$WORK/prese
 expect "the game reads EGL_BAD_NATIVE_WINDOW, not EGL_SUCCESS" "$WORK/present-fallback-sdlfail.log" \
     "[egl-test] eglCreateWindowSurface failed: 0x300b"
 # The same without any SDL2 (auto, nothing at ANDROIDPAK_SDL_LIB).
-run_to "$WORK/present-fallback-nosdl.log" env "$MOCK" $STOCK_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
+run_to "$WORK/present-fallback-nosdl.log" env "$MOCK" $MALI_NO_KMS MOCKGPU_FBDEV_SIZE=1280x720 \
     EGLTEST_BUFFERS=640x360 ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect "auto without SDL2 names it at the refused window" "$WORK/present-fallback-nosdl.log" \
     "the native window surface was refused (0x300b), and the SDL fallback is not usable ($WORK/no-libSDL2-2.0.so.0 not loadable"
@@ -510,7 +552,7 @@ expect "auto without SDL2: the game reads EGL_BAD_NATIVE_WINDOW" "$WORK/present-
 # auto, and the native display cannot even initialise before SDL's video
 # driver has run (MOCKGPU_NEEDS_SDL): the game's own eglInitialize fails, SDL
 # takes over there and the call is made once more.
-run_to "$WORK/present-fallback-init.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS MOCKGPU_NEEDS_SDL=1 \
+run_to "$WORK/present-fallback-init.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS MOCKGPU_NEEDS_SDL=1 \
     ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "a native display that does not initialise falls back to SDL" 0
 expect "auto still starts native (nothing is decided before the game asks)" "$WORK/present-fallback-init.log" \
@@ -524,7 +566,7 @@ expect_count "after the eglInitialize fallback every frame goes through SDL (5 o
 expect "EGL game checks (fallback at eglInitialize)" "$WORK/present-fallback-init.log" "[egl-test] all checks passed"
 # SDL's EGL display is another one (a KMSDRM SDL's own device) and the
 # default display never comes up: said plainly; the game reads EGL's error.
-run_to "$WORK/present-default-down.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS MOCKGPU_DEFAULT_DOWN=1 FAKESDL_DISPLAY=device \
+run_to "$WORK/present-default-down.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS MOCKGPU_DEFAULT_DOWN=1 FAKESDL_DISPLAY=device \
     ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "a default display that never comes up fails the game's check" 3
 expect "SDL is tried at the failed eglInitialize" "$WORK/present-default-down.log" \

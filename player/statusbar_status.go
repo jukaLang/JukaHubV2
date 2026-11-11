@@ -354,7 +354,7 @@ func statusClusterPartWidth(font *ttf.Font, part string) int32 {
 		// The sun shares the speaker's box, so the two buttons read as a pair.
 		return statusVolumeIconWidth(iconH)
 	case isWiFiStatusPart(part):
-		w := statusWiFiIconWidth(iconH)
+		w := statusWiFiIconWidth(iconH) + statusVPNLockWidth(iconH)
 		if part != statusWiFiMarker {
 			w += statusChipTextGap + statusWidth(font, part)
 		}
@@ -511,10 +511,35 @@ func drawStatusWiFiChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, 
 		ink = WarningInk()
 	}
 	drawStatusSignalBars(renderer, x, iconY, iconW, iconH, level, ink)
+	textX := x + iconW
+	// The VPN's lock sits right of the bars (vpn.go): the meter's ink while
+	// the tunnel is up, the warning ink while the VPN is on but not connected
+	// — traffic is then not going where the user asked.
+	if show, warn := statusVPNBadge(); show {
+		lockInk := sdl.Color{R: 120, G: 132, B: 154, A: 230}
+		if warn {
+			lockInk = WarningInk()
+		}
+		iconDraw(renderer, "lock", sdl.Rect{X: textX + statusChipTextGap/2, Y: iconY, W: iconH, H: iconH}, lockInk)
+		textX += statusVPNLockWidth(iconH)
+	}
 	if offline && draw != nil {
-		draw(part, WarningInk(), x+iconW+statusChipTextGap, textTop)
+		draw(part, WarningInk(), textX+statusChipTextGap, textTop)
 	}
 	return statusClusterPartWidth(font, part)
+}
+
+// statusVPNBadge says whether the network slot wears the VPN's lock, and
+// whether in the warning ink (vpnHeaderBadge). A variable, like the meter's
+// reading, so the render tests do not depend on the host's VPN.
+var statusVPNBadge = vpnHeaderBadge
+
+// statusVPNLockWidth is what the lock adds to the network slot (0 without it).
+func statusVPNLockWidth(iconH int32) int32 {
+	if show, _ := statusVPNBadge(); !show {
+		return 0
+	}
+	return statusChipTextGap/2 + iconH
 }
 
 // drawStatusBatteryChip paints the battery part: gauge plus percentage, both in

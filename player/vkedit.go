@@ -1088,7 +1088,7 @@ func vkHoldBegin(source vkHoldSource, key string, rect sdl.Rect) {
 	vkHold.key = key
 	vkHold.rect = rect
 	vkHold.fired = false
-	vkHold.repeatAt = vkHold.start + vkDeleteRepeatDelayMs
+	vkHold.repeatAt = vkHold.start + uint64(a11yRepeatDelayMs())
 }
 
 func vkHoldEnd() {
@@ -1133,11 +1133,11 @@ func vkTickHold(now uint64, config *Config) {
 		if now >= vkHold.repeatAt {
 			vkBackspace(config)
 			vkFlashPressedRect(vkHold.rect)
-			vkHold.repeatAt = now + vkDeleteRepeatMs
+			vkHold.repeatAt = now + uint64(a11yRepeatRateMs())
 		}
 		return
 	}
-	if vkHold.fired || now < vkHold.start+vkLongPressMs {
+	if vkHold.fired || now < vkHold.start+a11yLongPressMs() {
 		return
 	}
 	vkHold.fired = true

@@ -554,7 +554,7 @@ func partyRenderRoom(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 	if qrSize < 96 {
 		qrSize = 96
 	}
-	codeFont := getFontSized(config, "small", 34)
+	codeFont := FontForRole(config, TypeTitle)
 	if codeFont == nil {
 		codeFont = fonts.title
 	}

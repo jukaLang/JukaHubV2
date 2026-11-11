@@ -24,10 +24,13 @@ package main
 //   - emuExtractZip unpacks it through an os.Root into JukaHub's data folder on
 //     the same card, and only a complete, verified tree is merged — file by file,
 //     through an os.Root opened on the SD root, so no path can leave the card;
-//   - a file the package does not ship is never touched. One it ships that is
-//     already there with the same bytes stays as it is; one it replaces is moved
-//     into a kept copy first, so an update can be rolled back (R1) and a merge
-//     that fails half way is put back exactly as it was. A replaced file the
+//   - a file no install of the package laid down is never touched. One it
+//     ships that is already there with the same bytes stays as it is; one it
+//     replaces is moved into a kept copy first, so an update can be rolled back
+//     (R1) and a merge that fails half way is put back exactly as it was. One
+//     the previous version laid down and this one no longer ships joins the
+//     kept copy too, if it is still byte for byte what was installed (a changed
+//     one is hakuX's or the user's by now and stays). A replaced file the
 //     user had changed since JukaHub laid it down is also copied to
 //     data/hakux/edited, which no later update rotates away, and originals a
 //     merge could not put back are set aside in data/hakux/recovered-<time>,
@@ -177,8 +180,9 @@ func hakuxAssetVersion(name string) string {
 }
 
 // hakuxPickAsset returns a release's TG5040 package: the asset whose version is
-// the release tag's when there are several, else the newest version. An asset
-// without a download URL never qualifies.
+// the release tag's when there are several, else the newest version, where a
+// final release beats its release candidates (0.1.3 over 0.1.3-rc1,
+// emuCompareReleaseVersions). An asset without a download URL never qualifies.
 func hakuxPickAsset(assets []emuGitHubAsset, tag string) (emuGitHubAsset, bool) {
 	want := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(tag)), "v")
 	var pick emuGitHubAsset
@@ -191,7 +195,7 @@ func hakuxPickAsset(assets []emuGitHubAsset, tag string) (emuGitHubAsset, bool) 
 		if want != "" && strings.EqualFold(version, want) {
 			return a, true
 		}
-		if pickVersion == "" || compareCoreVersions(version, pickVersion) > 0 {
+		if pickVersion == "" || emuCompareReleaseVersions(version, pickVersion) > 0 {
 			pick, pickVersion = a, version
 		}
 	}
@@ -386,15 +390,12 @@ func hakuxAsWinManifest(m hakuxManifest) emuWinManifest {
 	return emuWinManifest{Name: hakuxName, Tag: m.Tag, Digest: m.Digest, AssetDate: m.AssetDate}
 }
 
-// hakuxNewer reports whether a release should replace the installed package:
-// emuWinUpdateAvailable's rules, plus the final release after an installed
-// pre-release of it ("v0.1.4" after "v0.1.4-rc1"), which a numeric compare
-// ranks lower.
+// hakuxNewer reports whether a release should replace the installed package,
+// by emuWinUpdateAvailable's rules: version tags compare as releases, so the
+// final "v0.1.4" replaces an installed "v0.1.4-rc1" and a "v0.1.4-rc2" never
+// replaces the final "v0.1.4"; a re-published asset under the same tag is
+// told by its digest.
 func hakuxNewer(m hakuxManifest, release emuWinRelease) bool {
-	have, want := strings.ToLower(strings.TrimSpace(m.Tag)), strings.ToLower(strings.TrimSpace(release.Tag))
-	if have != "" && want != "" && have != want && strings.HasPrefix(have, want+"-") {
-		return true
-	}
 	return emuWinUpdateAvailable(hakuxAsWinManifest(m), release)
 }
 
@@ -491,17 +492,15 @@ func hakuxIsXboxFolder(name, folder string) bool {
 	return regularFile(filepath.Join(folder, hakuxManifestName))
 }
 
-// hakuxLauncherIn is a launcher folder's entry point, or "" when it has none.
+// hakuxLauncherIn is a launcher folder's entry point, or "" when it has none:
+// the script MainUI would start, by the rules every Emus/ folder follows
+// (emuFolderLauncher) — the .sh its config.json names in "launch", which on
+// CrossMix may be another script than launch.sh, then launch.sh and launch.
 func hakuxLauncherIn(folder string) string {
 	if strings.TrimSpace(folder) == "" {
 		return ""
 	}
-	for _, name := range []string{"launch.sh", "launch"} {
-		if p := filepath.Join(folder, name); regularFile(p) {
-			return p
-		}
-	}
-	return ""
+	return emuFolderLauncher(folder, emuFolderConfig(folder))
 }
 
 // hakuxInstalled finds the Xbox launcher folder under the Emus roots (the SD
@@ -904,6 +903,52 @@ func hakuxApplyMerge(root *os.Root, src string, plan hakuxMergePlan, keep string
 	return res, nil
 }
 
+// hakuxSetAsideDropped moves the files the previous install laid down that the
+// new package no longer ships into keep (the pending kept copy, relative to
+// root), so they stop lingering in Data/ and Emus/ and a rollback can put them
+// back. Only a file whose bytes are still the ones that install recorded is
+// moved: a changed one now belongs to hakuX or the user (settings it rewrote,
+// an edited config) and stays where it is, as does one that cannot be read or
+// moved. It returns the files it moved, as card paths.
+func hakuxSetAsideDropped(root *os.Root, previous hakuxManifest, plan hakuxMergePlan, keep string) []string {
+	shipped := make(map[string]bool, len(plan.Files))
+	for _, f := range plan.Files {
+		// FAT does not tell case apart, so neither does this.
+		shipped[strings.ToLower(f.To)] = true
+	}
+	var moved []string
+	for _, rec := range previous.Files {
+		rel, err := hakuxCardRel(rec.Path)
+		if err != nil || shipped[strings.ToLower(rel)] || strings.TrimSpace(rec.SHA256) == "" {
+			continue
+		}
+		info, err := root.Lstat(hakuxOS(rel))
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		sum, _, err := hakuxHashIn(root, rel)
+		if err != nil {
+			continue
+		}
+		if !strings.EqualFold(sum, strings.TrimSpace(rec.SHA256)) {
+			logInfo("emulators", "hakuX: %s left in place — the new package drops it, but it changed since it was installed", rel)
+			continue
+		}
+		kept := path.Join(keep, rel)
+		if err := root.MkdirAll(hakuxOS(path.Dir(kept)), 0o755); err != nil {
+			logWarn("emulators", "hakuX: could not set %s aside: %v", rel, err)
+			continue
+		}
+		if err := hakuxMove(root, rel, kept); err != nil {
+			logWarn("emulators", "hakuX: could not set %s aside: %v", rel, err)
+			continue
+		}
+		moved = append(moved, rel)
+	}
+	sort.Strings(moved)
+	return moved
+}
+
 // hakuxRescuePending deals with a pending copy left on the card before a merge
 // or after a failed one. Empty, it is removed. Holding files — originals a merge
 // stopped by a power cut moved there, or ones an undo could not put back — it is
@@ -941,6 +986,10 @@ type hakuxBackupInfo struct {
 	Replaced []string `json:"replaced"`
 	Added    []string `json:"added"`
 	Created  []string `json:"created,omitempty"`
+	// Dropped are files the previous version shipped and the update's package
+	// no longer does, moved here unchanged (hakuxSetAsideDropped); a rollback
+	// puts them back with the replaced ones.
+	Dropped []string `json:"dropped,omitempty"`
 	// Manifest says the previous provenance file is kept too.
 	Manifest bool `json:"manifest"`
 }
@@ -990,12 +1039,13 @@ func hakuxKeptTag(p hakuxPaths) string {
 	return "previous files"
 }
 
-// hakuxRollback puts back what the last update replaced: the kept files return,
-// the files and folders that update added are removed, and the provenance file
-// goes back to the kept version's (or away, when that version was not installed
-// by JukaHub). Every path comes from JukaHub's own record but is still held to
-// the card's Data/ and Emus/ folders. The kept copy is used up; Update installs
-// the newer release again.
+// hakuxRollback puts back what the last update replaced: the kept files return
+// (the replaced ones, and the ones it set aside because its package dropped
+// them), the files and folders that update added are removed, and the
+// provenance file goes back to the kept version's (or away, when that version
+// was not installed by JukaHub). Every path comes from JukaHub's own record but
+// is still held to the card's Data/ and Emus/ folders. The kept copy is used
+// up; Update installs the newer release again.
 func hakuxRollback(root *os.Root, p hakuxPaths) (hakuxBackupInfo, error) {
 	info, ok := hakuxReadBackupInfo(p)
 	if !ok {
@@ -1006,7 +1056,10 @@ func hakuxRollback(root *os.Root, p hakuxPaths) (hakuxBackupInfo, error) {
 		return info, errors.New("the kept hakuX version is unreadable")
 	}
 	missing := 0
-	for _, rel := range info.Replaced {
+	// The replaced files and the ones the update set aside come back alike:
+	// both sit in the kept copy under their card paths.
+	restore := append(append([]string(nil), info.Replaced...), info.Dropped...)
+	for _, rel := range restore {
 		clean, err := hakuxCardRel(rel)
 		if err != nil {
 			return info, err
@@ -1055,7 +1108,7 @@ func hakuxRollback(root *os.Root, p hakuxPaths) (hakuxBackupInfo, error) {
 	if missing > 0 {
 		logWarn("emulators", "hakuX rollback: %d kept file(s) were no longer in %s", missing, p.backup())
 	}
-	logInfo("emulators", "rolled hakuX back to %q (%d file(s) restored, %d removed)", info.Tag, len(info.Replaced)-missing, len(info.Added))
+	logInfo("emulators", "rolled hakuX back to %q (%d file(s) restored, %d removed)", info.Tag, len(restore)-missing, len(info.Added))
 	return info, nil
 }
 
@@ -1291,6 +1344,14 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 		logInfo("emulators", "hakuX: %d file(s) the user changed are kept in %s", result.Edited, result.EditedDir)
 	}
 
+	// Files the installed version shipped and this package no longer does go
+	// into the kept copy as well, so they do not linger on the card; only
+	// unchanged ones move (hakuxSetAsideDropped).
+	var dropped []string
+	if managed && hadInstall && !repair {
+		dropped = hakuxSetAsideDropped(root, installed, plan, pending)
+	}
+
 	launcherDir := path.Dir(plan.Launcher)
 	records := merged.Records
 	if repair {
@@ -1310,13 +1371,14 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 		}
 		result.Restored = len(merged.Added)
 		hakuxRescuePending(root, p)
-	} else if len(merged.Replaced) > 0 || (hadInstall && len(merged.Added) > 0) {
+	} else if len(merged.Replaced) > 0 || len(dropped) > 0 || (hadInstall && len(merged.Added) > 0) {
 		info := hakuxBackupInfo{
 			SavedAt:  time.Now().UTC().Format(time.RFC3339),
 			Launcher: plan.Launcher,
 			Replaced: merged.Replaced,
 			Added:    merged.Added,
 			Created:  merged.Created,
+			Dropped:  dropped,
 		}
 		if managed {
 			info.Tag = installed.Tag
@@ -1365,7 +1427,7 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 	}
 	result.Updated = hadInstall && !repair
 	result.Launcher = filepath.Join(p.SDRoot, hakuxOS(plan.Launcher))
-	logInfo("emulators", "hakuX %s merged into %s: %d added, %d replaced, %d unchanged, skipped %v, verified by %q",
-		release.Tag, p.SDRoot, len(merged.Added), len(merged.Replaced), len(merged.Unchanged), plan.Skipped, verified)
+	logInfo("emulators", "hakuX %s merged into %s: %d added, %d replaced, %d unchanged, %d dropped and set aside, skipped %v, verified by %q",
+		release.Tag, p.SDRoot, len(merged.Added), len(merged.Replaced), len(merged.Unchanged), len(dropped), plan.Skipped, verified)
 	return result, nil
 }

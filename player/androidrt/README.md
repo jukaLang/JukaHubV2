@@ -13,34 +13,47 @@ NativeActivity and androidx GameActivity entry points, an EGL present layer
 that uses the stock firmware's own PowerVR libEGL (or lets the firmware's
 SDL2 own the window and context), and honest failure messages that name
 exactly which bionic symbol or Java member a game needs next. The host smoke
-suite (186 assertions) is the proof so far.
+suite (about 200 assertions) is the proof so far.
 
-## Directory contract (what `/mnt/SDCARD/Apps/AndroidRT` must look like)
+**CI builds it; every TrimUI archive carries it at `Apps/JukaHub/androidrt`.**
+The release's helper job (`.github/workflows/remote-play-helpers.yml`) runs
+`build-tsp.sh` natively on an arm64 runner inside an Ubuntu 20.04 root (glibc
+2.31, older than the Smart Pro's 2.33) and
+[`../native/build-runtimes.sh`](../native/build-runtimes.sh) checks and packages
+the result: AArch64, the standard glibc loader, nothing NEEDED beyond the C
+library, no glibc symbol newer than 2.31, `apak_tls` at TLS offset 0, and
+`loader --version` starts. JukaHub's TrimUI archives carry that folder beside the
+binary, and each release also attaches it alone as
+`JukaHub-AndroidRT-linux-arm64.zip`, which the APK Store installs
+(`../androidrt_install.go`) for a JukaHub that has no copy. The same job runs the
+host smoke suite on arm64 as an advisory step, and the weekly checks run it on
+x86_64 (TEST-4).
+
+## Directory contract
 
 ```text
-AndroidRT/
-  loader            the runner (aarch64 ELF, main() from src/runner.c)
-  launch.sh         the launcher form (used when `loader` is missing)
-  shims/
-    liblog.so       __android_log_* — from src/logshim.c
-    libandroid.so   ANativeActivity/ANativeWindow/ALooper/AAsset/AInputQueue —
-                    src/androidshim.c + src/inputshim.c
-    libOpenSLES.so  OpenSL ES audio path over libasound — src/openslessim.c
+androidrt/            (Apps/JukaHub/androidrt, Apps/AndroidRT, or JUKAHUB_ANDROIDRT)
+  loader              the runner: the bionic loader, the compat layer and the
+                      liblog/libandroid/OpenSL ES/EGL-present shims, all in one
+                      aarch64 executable (src/*.c); `loader --version` proves it
+                      starts on a device without running anything
+  launch.sh           the launcher form (used when `loader` is missing)
+  surface-probe       the milestone-3 GPU stack measurement
+  props.txt.example   ro.* property overrides (copy to props.txt)
+  BUILDINFO.txt       CI packages only: sources, compiler, glibc ceiling, SHA-256s
+  SHA256SUMS          CI packages only: every other file, checked before an install
 ```
 
-`build-tsp.sh` produces exactly this. The Go launcher resolves the
-directory via `JUKAHUB_ANDROIDRT` or the `Apps/AndroidRT`/PortMaster
-candidate list, and either runs `loader <apk>` or
-`sh launch.sh <apk>` — with `ANDROIDPAK_APK`, `ANDROIDPAK_STAGED`,
-`ANDROIDPAK_MAINLIB`, `ANDROIDPAK_ABIS` and `ANDROIDPAK_RT` in the child
-environment. For the direct-loader form the Go side itself sets
-`ANDROIDPAK_SHIMS` and folds staged `lib/<abi>` + `shims/` first into
-`LD_LIBRARY_PATH`; `launch.sh` arranges the same for itself when `loader`
-is missing. Every shim is linked with its exact SONAME (`build-tsp.sh`
-`-Wl,-soname`), so glibc satisfies a game's `DT_NEEDED
-liblog.so`/`libandroid.so`/`libOpenSLES.so` straight out of the preloaded
-`RTLD_GLOBAL` shims instead of resolving them to a different bionic copy
-on the search path.
+`build-tsp.sh` produces the first four. The shims are not separate libraries:
+the runner is linked with `-fvisibility=hidden` and `--export-dynamic`, so it
+exports exactly the game-facing Android ABI (the `ANDROIDRT_EXPORT` functions),
+and its own bionic loader binds a game's `liblog.so`/`libandroid.so`/
+`libOpenSLES.so` imports to those. The Go launcher (`../androidpak.go`) finds the
+folder (`JUKAHUB_ANDROIDRT`, then a copy the user put on the card such as
+`Apps/AndroidRT`, then the one beside the binary, then the APK Store's download)
+and either runs `loader <apk>` or `sh launch.sh <apk>` — with `ANDROIDPAK_APK`,
+`ANDROIDPAK_STAGED`, `ANDROIDPAK_MAINLIB`, `ANDROIDPAK_ABIS` and `ANDROIDPAK_RT`
+in the child environment.
 
 ## Smoke test (host, no device needed)
 
@@ -76,8 +89,20 @@ the device sources run two smoke paths on this repo host.
 CROSS=aarch64-linux-gnu- ./build-tsp.sh            # distro cross-gcc
 # or
 SDK_ROOT=/opt/sdk-tg5050 ./build-tsp.sh            # TG5050 SDK toolchain
+# or, on an aarch64 machine, its own gcc (what CI does)
+./build-tsp.sh
 ANDROIDRT_OUT=/mnt/SDCARD/Apps/AndroidRT ./build-tsp.sh   # straight to card
+ANDROIDRT_VERSION=v1.2 ./build-tsp.sh              # what `loader --version` prints (default "dev")
 ```
+
+A cross gcc from a current distribution links against its own, newer glibc
+(2.34 and later version `pthread_create` and friends), and such a loader does
+not start on the Smart Pro's glibc 2.33. The release package therefore comes
+from an Ubuntu 20.04 arm64 root; to make the same package locally, run
+`sh ../native/build-runtimes.sh androidrt` on an aarch64 machine with glibc 2.31 or
+older (a 20.04 arm64 container works). It writes
+`../native/bin/JukaHub-AndroidRT-linux-arm64.zip`, which `release.sh` and
+`package-sdcard.sh` then put into the TrimUI archives.
 
 Host-side sanity (this is Windows here; `run-smoke.sh` above also cross-builds
 the runner natively with no cross toolchain):
@@ -91,6 +116,7 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
 | Piece | Status |
 |---|---|
 | Runtime directory contract, launch.sh env, ANDROIDPAK handoff | **Done** (`player/androidpak.go`); its Go tests were retired in the November 2026 suite cut — the smoke suite drives the env contract end to end. |
+| A prebuilt runtime in every release (AND-14) | **Wired, first CI run pending.** The helper job builds and checks it on arm64 (glibc 2.31), the TrimUI archives carry `androidrt/`, the release attaches `JukaHub-AndroidRT-linux-arm64.zip`; *unproven until that job has run green once*. |
 | Lifecycle bridge (`ANativeActivity` struct layout, callback order) | **Done** — proven end-to-end by the host smoke test (`tests/smoke/run-smoke.sh`, exit 0); *unproven on a real bionic game*. |
 | `liblog.so` | **Done.** Full `__android_log_*` surface to stderr. |
 | `libandroid.so` | **Subset.** Window/ALooper/assets finish + `AConfiguration` minimum. The *surface* is a stub: games get a real number-sized window, no pixels. |

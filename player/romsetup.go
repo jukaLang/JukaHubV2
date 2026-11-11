@@ -93,6 +93,11 @@ var romSystemAliases = map[string]romSystem{
 	"nintendo - gamecube":             {"GameCube", "Nintendo - GameCube"},
 	"wii":                             {"Wii", "Nintendo - Wii"},
 	"nintendo - wii":                  {"Wii", "Nintendo - Wii"},
+	// The Xbox 360, which Xenia Canary plays on Windows (emusystems.go).
+	"xbox360":              {"Xbox 360", "Microsoft - Xbox 360"},
+	"x360":                 {"Xbox 360", "Microsoft - Xbox 360"},
+	"xbox 360":             {"Xbox 360", "Microsoft - Xbox 360"},
+	"microsoft - xbox 360": {"Xbox 360", "Microsoft - Xbox 360"},
 }
 
 var romFileExtensions = map[string]bool{

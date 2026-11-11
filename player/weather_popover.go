@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -169,6 +170,118 @@ func weatherPopoverClick(mx, my int32, config *Config) bool {
 	return true
 }
 
+// weatherWeekEffect draws one compact, animated condition mark for a forecast
+// day. It is only called while the weekly card is open, so rain, snow and sun
+// effects never keep the full-screen background awake.
+func weatherWeekEffect(renderer *sdl.Renderer, rect sdl.Rect, day WeatherDay, tick uint64, animate bool) {
+	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	kind := "cloud"
+	tempColor := weatherTemperatureTint(day.TMax)
+	color := tempColor
+	switch {
+	case day.Code == 0:
+		kind = "sun"
+	case day.Code == 1 || day.Code == 2:
+		kind = "partly"
+	case day.Code >= 45 && day.Code <= 48:
+		kind, color = "fog", sdl.Color{R: 166, G: 190, B: 213, A: 255}
+	case day.Code >= 51 && day.Code <= 67 || day.Code >= 80 && day.Code <= 82:
+		kind, color = "rain", sdl.Color{R: 103, G: 181, B: 248, A: 255}
+	case day.Code >= 71 && day.Code <= 77 || day.Code == 85 || day.Code == 86:
+		kind, color = "snow", sdl.Color{R: 162, G: 222, B: 255, A: 255}
+	case day.Code >= 95:
+		kind, color = "storm", sdl.Color{R: 185, G: 158, B: 255, A: 255}
+	}
+
+	size := min(rect.W, rect.H)
+	base := sdl.Rect{X: rect.X + (rect.W-size)/2, Y: rect.Y + (rect.H-size)/2, W: size, H: size}
+	oldR, oldG, oldB, oldA, _ := renderer.GetDrawColor()
+	switch kind {
+	case "sun":
+		var pulse int32
+		if animate {
+			pulse = int32((math.Sin(float64(tick%1800)/1800*2*math.Pi) + 1) * 1.5)
+		}
+		sun := base
+		sun.X -= pulse / 2
+		sun.Y -= pulse / 2
+		sun.W += pulse
+		sun.H += pulse
+		drawHomeGlyphTinted(renderer, "sun", sun, color)
+	case "partly":
+		sun := sdl.Rect{X: base.X, Y: base.Y, W: size * 3 / 4, H: size * 3 / 4}
+		drawHomeGlyphTinted(renderer, "sun", sun, weatherTemperatureTint(day.TMax))
+		cloud := sdl.Rect{X: base.X + size/4, Y: base.Y + size/4, W: size * 3 / 4, H: size * 3 / 4}
+		drawHomeGlyphTinted(renderer, "cloud", cloud, color)
+	case "fog":
+		drawHomeGlyphTinted(renderer, "cloud", base, color)
+		_ = renderer.SetDrawColor(color.R, color.G, color.B, 190)
+		for i := int32(0); i < 2; i++ {
+			y := rect.Y + rect.H*2/3 + i*3
+			shift := int32(0)
+			if animate {
+				phase := float64(tick%2200)/2200*2*math.Pi + float64(i)*math.Pi
+				shift = int32(math.Round(math.Sin(phase) * 2))
+			}
+			_ = renderer.DrawLine(rect.X+size/4+shift, y, rect.X+size*3/4+shift, y)
+		}
+	case "rain", "snow", "storm":
+		drawHomeGlyphTinted(renderer, "cloud", base, color)
+		if kind == "storm" {
+			if animate && tick%900 < 260 {
+				bolt := sdl.Rect{X: base.X + size/3, Y: base.Y + size/2, W: size / 3, H: size / 2}
+				drawHomeGlyphTinted(renderer, "bolt", bolt, sdl.Color{R: 255, G: 221, B: 120, A: 255})
+			}
+		} else {
+			_ = renderer.SetDrawColor(color.R, color.G, color.B, 255)
+			for i := int32(0); i < 3; i++ {
+				x := rect.X + size/4 + i*size/4
+				offset := int32((tick/90 + uint64(i*3)) % 7)
+				y := rect.Y + rect.H - 7 + offset
+				if y > rect.Y+rect.H-3 {
+					y = rect.Y + rect.H - 7
+				}
+				if kind == "snow" {
+					_ = renderer.DrawLine(x-2, y, x+2, y)
+					_ = renderer.DrawLine(x, y-2, x, y+2)
+				} else {
+					_ = renderer.DrawLine(x, y, x-1, y+3)
+				}
+			}
+		}
+	default:
+		drift := int32(0)
+		if animate {
+			drift = int32(math.Round(math.Sin(float64(tick%2600)/2600*2*math.Pi) * 2))
+		}
+		base.X += drift
+		drawHomeGlyphTinted(renderer, "cloud", base, color)
+	}
+	_ = renderer.SetDrawColor(tempColor.R, tempColor.G, tempColor.B, tempColor.A)
+	tempMark := sdl.Rect{X: rect.X + (rect.W-size)/2 + size/4, Y: rect.Y + rect.H - 2, W: size / 2, H: 2}
+	_ = renderer.FillRect(&tempMark)
+	_ = renderer.SetDrawColor(oldR, oldG, oldB, oldA)
+}
+
+// weatherTemperatureTint gives each day's condition mark a compact cold-to-hot
+// cue while the printed temperatures retain their normal text contrast.
+func weatherTemperatureTint(celsius float64) sdl.Color {
+	switch {
+	case celsius < 0:
+		return sdl.Color{R: 112, G: 177, B: 255, A: 255}
+	case celsius < 12:
+		return sdl.Color{R: 105, G: 211, B: 218, A: 255}
+	case celsius < 22:
+		return sdl.Color{R: 145, G: 219, B: 159, A: 255}
+	case celsius < 30:
+		return sdl.Color{R: 255, G: 199, B: 111, A: 255}
+	default:
+		return sdl.Color{R: 255, G: 137, B: 115, A: 255}
+	}
+}
+
 // renderWeatherPopover draws the local forecast card. It is called by the
 // shared render loop on every screen, after the scene chrome so it floats
 // above the content.
@@ -230,6 +343,8 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 	convert := func(c float64) float64 { return weatherTemp(c, unit) }
 	lineH := int32(font.Height()) + weatherRowGap
 	rowY := r.Y + 52
+	tick := sdl.GetTicks64()
+	animate := uiMotionEnabled(config)
 	// Rows are labelled by their own date. The first row used to be "Today"
 	// whatever it was, so a forecast restored from yesterday's cache showed
 	// yesterday's weather as today's; days already past are left out.
@@ -258,7 +373,9 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 		if d.Date == today {
 			col = ColorTextPrimary()
 		}
-		renderText(renderer, config, font, ellipsize(font, line, r.W-36), col, r.X+18, rowY)
+		effectRect := sdl.Rect{X: r.X + 18, Y: rowY, W: 24, H: lineH - 1}
+		weatherWeekEffect(renderer, effectRect, d, tick, animate)
+		renderText(renderer, config, font, ellipsize(font, line, r.W-66), col, r.X+48, rowY)
 		rowY += lineH
 	}
 }

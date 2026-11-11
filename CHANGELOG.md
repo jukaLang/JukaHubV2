@@ -13,6 +13,99 @@ For anything older, the git log and the
 
 ### Added
 
+- **A VPN for the whole device.** Settings → Network → VPN sends all traffic —
+  games and netplay, the browser, YouTube, downloads, Remote Play away from
+  home — through a WireGuard tunnel while the switch is on and a configuration
+  is set. A provider's or your own server's `.conf` comes from the card
+  (Settings lists the ones it finds), from **A** on it in Files, or from the
+  phone companion's new VPN card (paste or pick the file). **Send through the
+  VPN** is Everything (the default; the Wi-Fi network itself stays reachable)
+  or only the networks the file lists; the file's DNS servers answer every
+  lookup meanwhile, and IPv6 cannot slip past an IPv4-only tunnel. Quick
+  Settings has the switch, and the Wi-Fi meter wears a lock — in the warning
+  colour while the VPN is on but not connected. On the handheld JukaHub runs
+  its own WireGuard in a small root process (`JukaHub --vpn-daemon`) that makes
+  the `jukavpn0` interface, routes `0.0.0.0/1` + `128.0.0.0/1` into it, keeps
+  its own packets on Wi-Fi with `SO_BINDTODEVICE`, puts `resolv.conf` back
+  even after a crash, survives Remote Play's screen handoff and stops with the
+  JukaHub session; handshake timestamps never go backwards, so a handheld that
+  boots in the past is not refused. The handshake and transport were checked
+  byte for byte against the Linux kernel's WireGuard (`tmp/wgref`,
+  `wg_test.go`). On Windows the tunnel is WireGuard for Windows' service,
+  installed and removed through one permission prompt. The configuration
+  lives in `data/vpn.json`, never in `jukauser.json` or backups
+  ([player/vpn.go](player/vpn.go), [player/vpnd_linux.go](player/vpnd_linux.go),
+  [player/wg_device.go](player/wg_device.go), [docs/VPN.md](docs/VPN.md)).
+
+- **Each screen names itself once.** The status bar now carries only the
+  JukaHub wordmark and the system status, and page headers own the screen
+  title at Heading size (22 px) or larger, Title for a big header, so
+  "JukaHub - Settings" no longer repeats what the page says
+  ([player/extras.go](player/extras.go),
+  [player/components.go](player/components.go)).
+
+- **One five-step type scale.** Every screen now asks for Caption, Label, Body,
+  Heading or Title (14 / 16 / 18 / 22 / 28 px) instead of passing a pixel size,
+  and `FontForRole` is the single resolver, so the accessibility text size and
+  the legibility floor apply to all of them at once. The former literal sizes
+  across the media hub, Packages, files, Wi-Fi, Tools and the rest of the UI
+  are gone, and a test rejects new ones
+  ([player/design.go](player/design.go)).
+
+- **A legible reading font.** Settings → Accessibility → Legible reading font
+  draws the whole UI in the best low-vision face the device already has —
+  Atkinson Hyperlegible, Lexend, Verdana, Tahoma or Segoe UI, in that fixed
+  order — and keeps bundled Inter when none is installed, so nothing is
+  downloaded and text never disappears. Bold text follows the chosen face's
+  bold cut, the choice persists with the rest of the accessibility store, and
+  it takes effect without a restart
+  ([player/legiblefont.go](player/legiblefont.go),
+  [player/home_fonts.go](player/home_fonts.go)).
+
+- **Switch access.** Accessibility now offers one- and two-button scanning for
+  players who cannot use a d-pad: the focus walks a screen's controls on its
+  own at a configurable interval, A presses the highlighted control, and a
+  two-button setup adds B as an early next. It drives the same focus the pad
+  drives, so every screen's ring and activation path work unchanged
+  ([player/switchaccess.go](player/switchaccess.go),
+  [player/focus.go](player/focus.go)).
+
+- **A magnifier that follows the focus.** Quick Settings → Magnifier draws a
+  2× or 3× lens beside the focused control; the copy is one bounded read-back
+  per refresh into a single reusable texture, and the lens is placed clear of
+  the picture it magnifies. Settings → Accessibility carries the same switch
+  and the zoom choice, and Quick Settings now scrolls its rows so they fit a
+  720-line screen ([player/magnifier.go](player/magnifier.go),
+  [player/quicksettings.go](player/quicksettings.go)).
+
+- **Accessibility is a Settings section.** Text size, contrast, transparency,
+  bold text, the colour-blind palettes, mono audio and balance, captions, input
+  timing, button remaps, one-handed mode, key repeat, power mode and vibration
+  strength now sit on one Settings page instead of only inside the
+  Accessibility panel, and the Start menu's Accessibility entry opens it
+  ([player/a11y_settings.go](player/a11y_settings.go),
+  [player/a11y.go](player/a11y.go), [player/setmodel.go](player/setmodel.go)).
+
+- **Adjustable timing and sticky chords.** Accessibility now exposes the
+  long-press delay, held-direction repeat delay and speed, and toast
+  duration. The values feed the on-screen keyboard, menu repeat and toast
+  timer directly. Sticky chords leave the one-handed chord armed after a
+  direction so several face buttons can be pressed in sequence
+  ([player/a11y.go](player/a11y.go), [player/navrepeat.go](player/navrepeat.go),
+  [player/vkedit.go](player/vkedit.go), [player/core.go](player/core.go)).
+
+- **Audio access and readable captions.** Accessibility now has Mono audio,
+  an adjustable left/right balance for video and music, captions that start
+  on, and Small/Medium/Large caption text with an optional background. The
+  audio settings run in the shared PCM queue used by both the video decoder
+  and the music player, and the caption settings apply in the live subtitle
+  renderer ([player/a11y.go](player/a11y.go),
+  [player/sound.go](player/sound.go), [player/videosubs.go](player/videosubs.go)).
+
+- **The weekly weather card now brings each forecast to life.** Sunlight
+  pulses, rain and snow fall, fog drifts, and storm clouds flash; condition
+  icons get a color strip for the day's high temperature. Reduce Motion and
+  Battery Saver keep the effects still ([player/weather_popover.go](player/weather_popover.go)).
 - **An old video finishing no longer clears a newer play.** The embedded
   player's stop path now owns a session: a decoder that finishes after the
   next video started only stops itself, keeps its own page for the Watch

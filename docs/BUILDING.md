@@ -250,6 +250,52 @@ SDK_ROOT=/opt/sdk-tg5050 ./native/build-helpers.sh
 See [`player/native/README.md`](../player/native/README.md) for the
 session-file contract and the Brick Pro runtime note.
 
+### AndroidRT and the Box64 pack
+
+Two more native pieces are built beside the helpers by
+[`player/native/build-runtimes.sh`](../player/native/build-runtimes.sh). Each is
+one zip holding one folder with `BUILDINFO.txt` (sources, compiler, glibc
+ceiling, SHA-256 of every binary, what was checked) and a `SHA256SUMS` that
+lists every other file; JukaHub installs such a package only when every file is
+listed and matches.
+
+| Package | Folder | What it holds | Where it goes |
+|---------|--------|---------------|---------------|
+| `JukaHub-AndroidRT-linux-arm64.zip` | `androidrt/` | AndroidRT, the Android-app runtime ([`player/androidrt`](../player/androidrt/README.md)): `loader`, `launch.sh`, `surface-probe`, `props.txt.example` | every TrimUI archive's `Apps/JukaHub/androidrt/`, and the release on its own |
+| `JukaHub-Wine-linux-arm64.zip` | `wine-runtime/` | Box64 for the Windows-app runtime: `box64/box64`, the x86_64 libraries its install puts beside it (`box64/x64lib/`), its default settings (`box64/box64.box64rc`) and licence, and `wine.json`, the Wine build to download | the release only; JukaHub installs it when Windows apps are set up |
+
+```bash
+cd player
+sh native/build-runtimes.sh androidrt    # an aarch64 host, or CROSS=aarch64-linux-gnu- (the loader is then not started)
+sh native/build-runtimes.sh wine         # an aarch64 host only
+sh native/build-runtimes.sh verify native/bin/JukaHub-Wine-linux-arm64.zip
+```
+
+Both land in `player/native/bin/`, where `release.sh` and `package-sdcard.sh`
+pick them up. The release builds them natively in the same Ubuntu 20.04 arm64
+root as the helpers and refuses a binary that is not AArch64, asks for another
+loader, needs anything but the C library, or needs a glibc symbol newer than
+2.31 (or a private one). The AndroidRT loader must also keep its TLS slot at
+offset 0 and answer `loader --version`; Box64 must start (`box64 --version`)
+and name its pinned version. Box64 is fetched by the full id of its pinned
+release commit (v0.4.4) and built as a generic ARM64 build (`-DARM_DYNAREC=ON
+-DCMAKE_BUILD_TYPE=RelWithDebInfo`; no BOX32, because Wine's WoW64 build runs
+32-bit Windows programs under Box64 alone), with gcc 10 from Ubuntu 20.04's
+universe, its DWARF stripped. `wine.json` names Kron4ek's Wine 10.0 amd64 WoW64
+build with its pinned SHA-256 and the size of the verified download; Wine 10.0
+is pinned on purpose, because Wine 11.x aborts on the handheld's 4.9 kernel.
+Two more checks only inform the run's summary: AndroidRT's host smoke suite run
+on arm64, and `box64 wine --version` with that Wine.
+
+| Environment variable | Default | Effect |
+|----------------------|---------|--------|
+| `OUT_DIR` | `player/native/bin` | where the zips go |
+| `WORK_DIR`, `LOG_DIR` | `/tmp/jukahub-runtime-build`, `/tmp/jukahub-runtime-logs` | build folders, and one log per step (the console shows one line per step; a failed step prints the end of its log) |
+| `GLIBC_MAX` | `2.31` | newest glibc symbol version a binary may need |
+| `CROSS` | unset | cross-build AndroidRT (passed on to `build-tsp.sh`) |
+| `BOX64_CC` | `gcc-10` when installed, else `cc` | Box64's compiler |
+| `JOBS` | number of CPUs | parallel build jobs |
+
 ## Release artifacts
 
 ```bash
@@ -266,6 +312,10 @@ and writes to `dist/`:
   `trimui-smart-pro-s`, `trimui-brick`, `trimui-brick-pro`, `trimui-hammer`.
   The Brick family runs the compact 4:3 UI canvas; the Smart Pro family keeps
   the 1280×720 canvas.
+- `JukaHub-RemotePlay-linux-arm64.zip`, `JukaHub-AndroidRT-linux-arm64.zip`
+  and `JukaHub-Wine-linux-arm64.zip` when `native/bin` holds the helpers and
+  verified runtime packages (each TrimUI archive then also carries `bin/` and
+  `androidrt/`)
 - `manifest.json` — `schema`, `product`, `version`, `channel`, `published_at`
   and one `targets[]` entry per asset (`device`, `os`, `arch`, `asset`,
   `sha256`, `size`, `min_firmware`, `files`)
@@ -281,11 +331,11 @@ numbers. See [Patch and package format](PACKAGES.md) for what consumes it.
 | Workflow | Trigger | Output |
 |----------|---------|--------|
 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push to `main`, pull requests | two jobs: the web builder checks (workflow pins, syntax, jsdom tests, ESLint) and the player's `go vet`, staticcheck and `go test` |
-| [`.github/workflows/weekly.yml`](../.github/workflows/weekly.yml) | Mondays, manual | the slow checks: race detector, `govulncheck`, cold-boot budget, the Chromium smoke test, the CI helper scripts' and the game-audio plugin's tests, and a native Windows build with its tests |
-| [`.github/workflows/build-sdcard.yml`](../.github/workflows/build-sdcard.yml) | manual only | `JukaHub-SDCARD` artifact (the SD-card package, Remote Play helpers included), built in the community TrimUI toolchain image |
-| [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` (its `bin/` holds the Remote Play helpers), `JukaHub-Windows.zip` and, when the helpers were built, `JukaHub-RemotePlay-linux-arm64.zip` (the helpers alone: `bin/` plus `SHA256SUMS`, which a JukaHub without them downloads by itself; optional, so the release is published without it), each carrying `release-info.json` (`tag` + RFC3339 `date`). The release is created as a draft and published only after both archives are attached, so a download link never points at an empty release. Pull-request runs stop at the draft. The Windows job and the TrimUI compile (`build-trimui`, the toolchain image under `docker run` through [`trimui-build.sh`](../.github/scripts/trimui-build.sh)) each start from the Go build cache an earlier push-to-main run of the same workflow left as an artifact, so a release normally compiles only the player; [`.github/scripts/go-build-cache.sh`](../.github/scripts/go-build-cache.sh) explains why it is not `actions/cache`. The TrimUI compile runs beside the Remote Play helpers, and a short packaging job waits for both. |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` (with the Remote Play helpers in `native/bin`) on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json`, `SHA256SUMS` and (when the helpers were built) `JukaHub-RemotePlay-linux-arm64.zip` to the GitHub release, then publishes it once the draft upload is complete |
-| [`.github/workflows/remote-play-helpers.yml`](../.github/workflows/remote-play-helpers.yml) | called by the three workflows above, or manual | `remote-play-helpers` artifact: `chiaki-stream`, `chiaki-regist` and `BUILDINFO.txt`, built by `build-helpers.sh` in native mode on an arm64 runner inside a debootstrapped Ubuntu 20.04 root, or reused from an earlier push-to-main run of the same calling workflow when nothing they are built from changed (the artifact `remote-play-helpers-<hash of the sources>`, under the build cache's provenance rules). It may fail without stopping anything: the callers run regardless and their packages then ship without Remote Play streaming, with a warning. |
+| [`.github/workflows/weekly.yml`](../.github/workflows/weekly.yml) | Mondays, manual | the slow checks: race detector, `govulncheck`, cold-boot budget, the Chromium smoke test, the CI helper scripts', the game-audio plugin's and AndroidRT's host tests (the AndroidRT smoke suite, TEST-4), and a native Windows build with its tests |
+| [`.github/workflows/build-sdcard.yml`](../.github/workflows/build-sdcard.yml) | manual only | `JukaHub-SDCARD` artifact (the SD-card package, Remote Play helpers and AndroidRT included), built in the community TrimUI toolchain image |
+| [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` (its `bin/` holds the Remote Play helpers, its `androidrt/` AndroidRT), `JukaHub-Windows.zip` and, when they were built, `JukaHub-RemotePlay-linux-arm64.zip` (the helpers alone: `bin/` plus `SHA256SUMS`, which a JukaHub without them downloads by itself), `JukaHub-AndroidRT-linux-arm64.zip` and `JukaHub-Wine-linux-arm64.zip` (the Box64 pack of the Windows-app runtime) — all three optional, so the release is published without them — the two app archives each carrying `release-info.json` (`tag` + RFC3339 `date`). The release is created as a draft and published only after both archives are attached, so a download link never points at an empty release. Pull-request runs stop at the draft. The Windows job and the TrimUI compile (`build-trimui`, the toolchain image under `docker run` through [`trimui-build.sh`](../.github/scripts/trimui-build.sh)) each start from the Go build cache an earlier push-to-main run of the same workflow left as an artifact, so a release normally compiles only the player; [`.github/scripts/go-build-cache.sh`](../.github/scripts/go-build-cache.sh) explains why it is not `actions/cache`. The TrimUI compile runs beside the Remote Play helpers, and a short packaging job waits for both. |
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` (with the Remote Play helpers and the two runtime packages in `native/bin`) on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json`, `SHA256SUMS` and (when they were built) `JukaHub-RemotePlay-linux-arm64.zip`, `JukaHub-AndroidRT-linux-arm64.zip` and `JukaHub-Wine-linux-arm64.zip` to the GitHub release, then publishes it once the draft upload is complete |
+| [`.github/workflows/remote-play-helpers.yml`](../.github/workflows/remote-play-helpers.yml) | called by the three workflows above, or manual | `remote-play-helpers` artifact: `chiaki-stream`, `chiaki-regist` and `BUILDINFO.txt`, built by `build-helpers.sh` in native mode on an arm64 runner inside a debootstrapped Ubuntu 20.04 root; `androidrt-package` (`JukaHub-AndroidRT-linux-arm64.zip`) and `wine-runtime-package` (`JukaHub-Wine-linux-arm64.zip`), built by `build-runtimes.sh` in the same root, with AndroidRT's smoke suite on arm64 and Wine 10.0 under the new Box64 as advisory steps. Each part is reused from an earlier push-to-main run of the same calling workflow when nothing it is built from changed (the artifacts `remote-play-helpers-<hash>`, `androidrt-pack-<hash>` and `wine-runtime-pack-<hash>`, each hash over that part's sources, under the build cache's provenance rules). Each may fail without stopping anything, the others included: the callers run regardless and their packages then ship without that part, with a warning. |
 
 Both the updater and the version line in the UI read `release-info.json`, so a
 release built by CI advertises itself correctly without any extra steps.

@@ -23,10 +23,10 @@ type xpackKitFonts struct {
 // xpackKitLoadFonts resolves the screens' fonts; false when they are not ready.
 func xpackKitLoadFonts(c *Config) (xpackKitFonts, bool) {
 	f := xpackKitFonts{
-		big:   getFontSized(c, "medium", 24),
-		title: getFontSized(c, "medium", 19),
-		body:  getFontSized(c, "small", 16),
-		small: getFontSized(c, "small", 15),
+		big:   FontForRole(c, TypeHeading),
+		title: FontForRole(c, TypeBody),
+		body:  FontForRole(c, TypeLabel),
+		small: FontForRole(c, TypeLabel),
 	}
 	return f, f.big != nil && f.title != nil && f.body != nil && f.small != nil
 }

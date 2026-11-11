@@ -793,7 +793,7 @@ func trophyDrawCountBadge(renderer *sdl.Renderer, config *Config, medal sdl.Rect
 	if config == nil || n <= 0 {
 		return
 	}
-	font := getFontSized(config, "small", 12)
+	font := FontForRole(config, TypeCaption)
 	if font == nil {
 		return
 	}

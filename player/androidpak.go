@@ -26,8 +26,11 @@ package main
 //      ANDROIDPAK_* environment variables pointing at the staged tree and
 //      the chosen main library.
 //
-// The runtime itself is user-installed (JUKAHUB_ANDROIDRT override or the
-// usual SD-card layouts). Without it a profile lists as Unavailable with the
+// The runtime ships with JukaHub: every TrimUI archive carries androidrt/
+// beside the binary, and the APK Store can install the same build from
+// JukaHub's releases into the data folder (androidrt_install.go). A copy the
+// user put on the card (Apps/AndroidRT, or JUKAHUB_ANDROIDRT) wins over both
+// (findAndroidRuntime). Without any, a profile lists as Unavailable with the
 // exact reason — the same posture as Wine/Box64 profiles.
 
 import (
@@ -38,6 +41,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,6 +80,15 @@ var androidPakABIOrder = []string{"arm64-v8a", "armeabi-v7a"}
 // and signatures are deliberately skipped: this Tier-1 path never runs Java.
 var androidPakStagePrefixes = []string{"lib/", "assets/", "res/"}
 
+// androidPakStageAssetsMax is the most a game's assets/ and res/ may unpack
+// to and still be staged into memory. A bigger game stages only its native
+// libraries (with the manifest and the resource table), and AndroidRT reads
+// its assets straight from the APK on the card — stored entries in place,
+// deflated ones inflated (androidrt/src/androidshim.c). Hundreds of MB of
+// assets in tmpfs are RAM a 1 GB handheld does not have: such a launch used to
+// fail the memory pre-flight or the 512 MiB stage cap.
+const androidPakStageAssetsMax = 64 << 20
+
 func isAndroidPakStageEntry(name string) bool {
 	if name == "AndroidManifest.xml" || name == "resources.arsc" {
 		return true
@@ -86,6 +99,36 @@ func isAndroidPakStageEntry(name string) bool {
 		}
 	}
 	return false
+}
+
+// androidPakAssetsStaged reports whether a launch stages the APK's assets/
+// and res/ into memory (their unpacked total is at most
+// androidPakStageAssetsMax), and that total.
+func androidPakAssetsStaged(files []*zip.File) (bool, int64) {
+	var total int64
+	for _, f := range files {
+		slash := filepath.ToSlash(f.Name)
+		if strings.HasPrefix(slash, "assets/") || strings.HasPrefix(slash, "res/") {
+			total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
+		}
+	}
+	return total <= androidPakStageAssetsMax, total
+}
+
+// androidPakStageWanted reports whether staging extracts the entry: the
+// manifest and resource table, the chosen ABI's libraries, and assets/ and
+// res/ when assets says they are staged too.
+func androidPakStageWanted(slash, chosenPrefix string, assets bool) bool {
+	if !isAndroidPakStageEntry(slash) {
+		return false
+	}
+	if strings.HasPrefix(slash, "lib/") {
+		return strings.HasPrefix(slash, chosenPrefix)
+	}
+	if strings.HasPrefix(slash, "assets/") || strings.HasPrefix(slash, "res/") {
+		return assets
+	}
+	return true
 }
 
 // ── launch-time memory pre-flight ──────────────────────────────────────
@@ -111,9 +154,9 @@ const (
 )
 
 // androidPakStageFootprint sums the uncompressed sizes of the entries
-// staging would extract (the chosen ABI's libraries + assets +
-// res + manifest), without touching the disk. Rejected ABIs and DEX are
-// skipped, matching the real staging work.
+// staging would extract (the chosen ABI's libraries + manifest, and assets +
+// res when they are small enough to stage), without touching the disk.
+// Rejected ABIs and DEX are skipped, matching the real staging work.
 func androidPakStageFootprint(apk string, libs androidPakLibs) (int64, error) {
 	zr, err := zip.OpenReader(apk)
 	if err != nil {
@@ -121,16 +164,12 @@ func androidPakStageFootprint(apk string, libs androidPakLibs) (int64, error) {
 	}
 	defer zr.Close()
 	chosenPrefix := filepath.ToSlash(filepath.Join("lib", libs.Chosen)) + "/"
+	assets, _ := androidPakAssetsStaged(zr.File)
 	var total int64
 	for _, f := range zr.File {
-		slash := filepath.ToSlash(f.Name)
-		if !isAndroidPakStageEntry(slash) {
-			continue
+		if androidPakStageWanted(filepath.ToSlash(f.Name), chosenPrefix, assets) {
+			total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
 		}
-		if strings.HasPrefix(slash, "lib/") && !strings.HasPrefix(slash, chosenPrefix) {
-			continue
-		}
-		total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
 	}
 	return total, nil
 }
@@ -271,10 +310,124 @@ func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error)
 	return androidPakLibs{Abis: abils, Chosen: chosen, MainLib: mainLib, Title: title}, nil
 }
 
-// resolveAndroidRuntime finds the installed bionic translation runtime. The
-// runtime contract is its own directory, either with a `loader` executable
-// (bionic loader) or a runtime-provided `launch.sh` that owns the details.
-func resolveAndroidRuntime(lookPath func(string) (string, error)) (string, error) {
+// ── Where AndroidRT is ────────────────────────────────────────────────────
+//
+// The runtime contract is its own directory, either with a `loader`
+// executable (the bionic loader) or a runtime-provided `launch.sh` that owns
+// the details. Up to four copies can exist, looked for in this order:
+//
+//  1. JUKAHUB_ANDROIDRT, used as given (diagnostics, a runtime elsewhere);
+//  2. a copy the user put on the card (Apps/AndroidRT and the other layouts
+//     below): someone who builds the runtime themselves wants that one;
+//  3. the copy bundled with JukaHub (androidrt/ beside the binary, which every
+//     TrimUI archive carries; it updates with JukaHub itself);
+//  4. the copy the APK Store downloaded into the data folder
+//     (androidrt_install.go), for a JukaHub that has no bundled one.
+//
+// A folder from 2–4 counts only when it can start games: it holds a loader
+// this device can run (or a launch.sh), so an empty or broken Apps/AndroidRT
+// does not hide the bundled copy. The ones passed over are named in the
+// "not installed" message.
+
+// androidRuntimeSource says which copy of AndroidRT was found.
+type androidRuntimeSource int
+
+const (
+	androidRTSourceNone androidRuntimeSource = iota
+	androidRTSourceOverride
+	androidRTSourceUser
+	androidRTSourceBundled
+	androidRTSourceDownloaded
+	androidRTSourcePath
+)
+
+// androidRuntimeUserDirs are the layouts a user-installed AndroidRT may use.
+var androidRuntimeUserDirs = []string{
+	"/mnt/SDCARD/Apps/AndroidRT",
+	"/mnt/SDCARD/Apps/androidrt",
+	"/mnt/SDCARD/Apps/bionic-translation",
+	"/mnt/SDCARD/PortMaster/AndroidRT",
+	"/mnt/SDCARD/PortMaster/runtimes/androidrt",
+	"/mnt/SDCARD/Emus/PortMaster/AndroidRT",
+}
+
+// The bundled and downloaded folders, as seams for tests.
+var (
+	androidRuntimeBundledDirFn  = androidRuntimeBundledDir
+	androidRuntimeDownloadDirFn = androidRuntimeDownloadDir
+)
+
+// errAndroidRuntimeMissing marks "no usable AndroidRT anywhere": the APK Store
+// offers the install when a launch fails with it.
+var errAndroidRuntimeMissing = errors.New("AndroidRT is not installed")
+
+// androidRuntimeFound is the copy a launch would use, and the folders that
+// exist but were passed over ("folder: why").
+type androidRuntimeFound struct {
+	Dir     string
+	Source  androidRuntimeSource
+	Skipped []string
+}
+
+// androidRuntimeBundledDir is androidrt/ beside the running binary
+// (Apps/JukaHub/androidrt on the handheld).
+func androidRuntimeBundledDir() string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	return filepath.Join(filepath.Dir(exe), "androidrt")
+}
+
+// androidRuntimeDownloadDir is where the APK Store installs AndroidRT.
+func androidRuntimeDownloadDir() string {
+	dir, err := P().DataDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "androidrt")
+}
+
+// androidLoaderProblem says why the loader at path cannot start on this
+// device ("" when it can, as far as the file tells). A loader that lost its
+// execute bit (unpacked by a tool that drops permissions, onto an ext4 card)
+// gets it back — JukaHub runs as root on the handheld; FAT and exFAT cards
+// grant the bit to every file. The ELF check is elfcompat.go's: the CPU, and
+// the glibc versions the binary needs against the firmware's own libraries.
+func androidLoaderProblem(path string) string {
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o111 == 0 {
+			if err := os.Chmod(path, 0o755); err != nil {
+				return "its loader is not executable (" + err.Error() + ")"
+			}
+			if again, err := os.Stat(path); err != nil || again.Mode().Perm()&0o111 == 0 {
+				return "its loader is not executable"
+			}
+		}
+	}
+	if problem := nativeLoadProblem(path); problem != "" {
+		return "its loader cannot start here: " + problem
+	}
+	return ""
+}
+
+// androidRuntimeProblem says why the folder dir cannot start games ("" when it
+// can).
+func androidRuntimeProblem(dir string) string {
+	if loader := filepath.Join(dir, "loader"); regularFile(loader) {
+		return androidLoaderProblem(loader)
+	}
+	if regularFile(filepath.Join(dir, "launch.sh")) {
+		return ""
+	}
+	return "it has no loader or launch.sh"
+}
+
+// findAndroidRuntime finds the copy of AndroidRT a launch uses (see above).
+func findAndroidRuntime(lookPath func(string) (string, error)) (androidRuntimeFound, error) {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_ANDROIDRT")); override != "" {
 		info, err := os.Stat(override)
 		if err != nil {
@@ -282,37 +435,64 @@ func resolveAndroidRuntime(lookPath func(string) (string, error)) (string, error
 			if errors.Is(err, os.ErrNotExist) {
 				err = withLaunchFailureKind(launchFailureRuntimeMissing, err)
 			}
-			return "", err
+			return androidRuntimeFound{}, err
 		}
 		if !info.IsDir() {
-			return "", fmt.Errorf("JUKAHUB_ANDROIDRT %q is not a directory", override)
+			return androidRuntimeFound{}, fmt.Errorf("JUKAHUB_ANDROIDRT %q is not a directory", override)
 		}
 		abs, err := filepath.Abs(filepath.Clean(override))
 		if err != nil {
-			return "", err
+			return androidRuntimeFound{}, err
 		}
-		return abs, nil
+		return androidRuntimeFound{Dir: abs, Source: androidRTSourceOverride}, nil
 	}
-	candidates := []string{
-		"/mnt/SDCARD/Apps/AndroidRT",
-		"/mnt/SDCARD/Apps/androidrt",
-		"/mnt/SDCARD/Apps/bionic-translation",
-		"/mnt/SDCARD/PortMaster/AndroidRT",
-		"/mnt/SDCARD/PortMaster/runtimes/androidrt",
-		"/mnt/SDCARD/Emus/PortMaster/AndroidRT",
-	}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate, nil
+	var found androidRuntimeFound
+	try := func(dir string, source androidRuntimeSource) bool {
+		if strings.TrimSpace(dir) == "" {
+			return false
 		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return false
+		}
+		if problem := androidRuntimeProblem(dir); problem != "" {
+			found.Skipped = append(found.Skipped, dir+": "+problem)
+			return false
+		}
+		found.Dir, found.Source = dir, source
+		return true
+	}
+	for _, dir := range androidRuntimeUserDirs {
+		if try(dir, androidRTSourceUser) {
+			return found, nil
+		}
+	}
+	if try(androidRuntimeBundledDirFn(), androidRTSourceBundled) || try(androidRuntimeDownloadDirFn(), androidRTSourceDownloaded) {
+		return found, nil
 	}
 	if lookPath != nil {
-		if path, err := lookPath("androidrt"); err == nil && path != "" {
-			return filepath.Dir(path), nil
+		if path, err := lookPath("androidrt"); err == nil && path != "" && try(filepath.Dir(path), androidRTSourcePath) {
+			return found, nil
 		}
 	}
-	err := errors.New("android runtime not found (install the bionic translation runtime or set JUKAHUB_ANDROIDRT)")
-	return "", withLaunchFailureKind(launchFailureRuntimeMissing, err)
+	hint := " — it runs on the handheld (arm64 Linux)"
+	if androidRTSupported() {
+		hint = " — the APK Store's Runtime tab installs it"
+	}
+	if len(found.Skipped) > 0 {
+		hint += " (passed over " + strings.Join(found.Skipped, "; ") + ")"
+	}
+	err := fmt.Errorf("%w%s", errAndroidRuntimeMissing, hint)
+	return found, withLaunchFailureKind(launchFailureRuntimeMissing, err)
+}
+
+// resolveAndroidRuntime is findAndroidRuntime's folder (planGameRuntime and
+// the launch use it).
+func resolveAndroidRuntime(lookPath func(string) (string, error)) (string, error) {
+	found, err := findAndroidRuntime(lookPath)
+	if err != nil {
+		return "", err
+	}
+	return found.Dir, nil
 }
 
 // androidRuntimeCommand picks how the runtime is started. The loader runs the
@@ -320,6 +500,10 @@ func resolveAndroidRuntime(lookPath func(string) (string, error)) (string, error
 // the APK as its first argument, like the WestonPack wrapper.
 func androidRuntimeCommand(rt string, lookPath func(string) (string, error)) (string, []string, error) {
 	if loader := filepath.Join(rt, "loader"); regularFile(loader) {
+		if problem := androidLoaderProblem(loader); problem != "" {
+			err := fmt.Errorf("AndroidRT at %s: %s", rt, problem)
+			return "", nil, withLaunchFailureKind(launchFailureRuntimeMissing, err)
+		}
 		return loader, nil, nil
 	}
 	if script := filepath.Join(rt, "launch.sh"); regularFile(script) {
@@ -351,9 +535,21 @@ func androidPakStageDir(id string) string {
 // game exits; relaunching the same game inside that window re-staged the same
 // directory, and the old cleanup then deleted the files the new run was using.
 // Cleanup now only removes a stage that is still the one its launch wrote.
+// live holds the stages whose launch has not been released yet: their game
+// runs (or exited in the last few seconds), so AndroidRT's own files must not
+// be replaced under it (androidPakAnyRunning).
 var androidPakStages struct {
 	sync.Mutex
-	gen map[string]uint64
+	gen  map[string]uint64
+	live map[string]bool
+}
+
+// androidPakAnyRunning reports whether an AndroidPak game is running (or has
+// exited so recently that its stage is not released yet).
+func androidPakAnyRunning() bool {
+	androidPakStages.Lock()
+	defer androidPakStages.Unlock()
+	return len(androidPakStages.live) > 0
 }
 
 // stageAndroidPakGen stages an APK for a launch and returns the stage's
@@ -368,11 +564,18 @@ func stageAndroidPakGen(id, apk string, libs androidPakLibs) (stageDir, libDir s
 	}
 	androidPakStages.gen[stageDir]++
 	gen = androidPakStages.gen[stageDir]
+	if androidPakStages.live == nil {
+		androidPakStages.live = map[string]bool{}
+	}
 	libDir, err = stageAndroidPakInto(stageDir, apk, libs)
 	if err != nil {
+		// Nothing runs from this folder now: a relaunch can only follow a
+		// game that has exited (launchGameProfile refuses a running one).
 		_ = os.RemoveAll(stageDir)
+		delete(androidPakStages.live, stageDir)
 		return "", "", 0, err
 	}
+	androidPakStages.live[stageDir] = true
 	return stageDir, libDir, gen, nil
 }
 
@@ -394,15 +597,17 @@ func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir stri
 		return "", fmt.Errorf("APK has %d entries (limit %d)", len(zr.File), androidPakStageMaxEntries)
 	}
 	chosenPrefix := filepath.ToSlash(filepath.Join("lib", libs.Chosen)) + "/"
+	assets, assetBytes := androidPakAssetsStaged(zr.File)
+	if !assets {
+		logInfo("androidpak", "%s: %d MiB of assets stay in the APK on the card (staging only the native libraries)",
+			filepath.Base(apk), assetBytes>>20)
+	}
 	var total int64
 	for _, f := range zr.File {
 		slash := filepath.ToSlash(f.Name)
-		if !isAndroidPakStageEntry(slash) {
-			continue
-		}
-		// Only the chosen ABI's libraries go to RAM; other ABIs (if any)
-		// stay in the APK on the card.
-		if strings.HasPrefix(slash, "lib/") && !strings.HasPrefix(slash, chosenPrefix) {
+		// Only the chosen ABI's libraries go to RAM (other ABIs stay in the
+		// APK on the card), and a big game's assets stay there too.
+		if !androidPakStageWanted(slash, chosenPrefix, assets) {
 			continue
 		}
 		if err := sanitizeArchiveEntry(slash, f.Mode(), f.FileInfo().IsDir()); err != nil {
@@ -436,19 +641,29 @@ func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir stri
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
 			rc.Close()
-			return "", fmt.Errorf("create %q: %w", slash, err)
+			return "", androidPakStageWriteErr("create", slash, err)
 		}
 		_, copyErr := io.Copy(out, io.LimitReader(rc, androidPakStageMaxBytes+1))
 		rc.Close()
 		closeErr := out.Close()
 		if copyErr != nil {
-			return "", fmt.Errorf("extract %q: %w", slash, copyErr)
+			return "", androidPakStageWriteErr("extract", slash, copyErr)
 		}
 		if closeErr != nil {
-			return "", fmt.Errorf("extract %q: %w", slash, closeErr)
+			return "", androidPakStageWriteErr("extract", slash, closeErr)
 		}
 	}
 	return libDir, nil
+}
+
+// androidPakStageWriteErr words a failed write into the stage. The stage is
+// tmpfs — RAM — on the handheld, so a full one says so and what helps.
+func androidPakStageWriteErr(verb, name string, err error) error {
+	if relPackOutOfSpace(err) {
+		return fmt.Errorf("the game's files do not fit in %s (memory on the handheld) — close other apps, or set "+
+			"JUKAHUB_ANDROID_STAGE to a folder on the card: %w", androidPakStageRoot(), err)
+	}
+	return fmt.Errorf("%s %q: %w", verb, name, err)
 }
 
 // removeAndroidPakStage removes a staging dir, tolerating a missing one.
@@ -480,6 +695,7 @@ func androidPakStageRelease(stageDir string, gen uint64) {
 	if androidPakStages.gen[stageDir] != gen {
 		return
 	}
+	delete(androidPakStages.live, stageDir)
 	removeAndroidPakStage(stageDir)
 }
 

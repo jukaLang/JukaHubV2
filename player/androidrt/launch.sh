@@ -24,7 +24,11 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 export ANDROIDPAK_APK ANDROIDPAK_RT
 
 RUNNER="$HERE/loader"
-[ -x "$RUNNER" ] || RUNNER="$HERE/bin/loader"
-[ -x "$RUNNER" ] || { echo "[androidrt] launch.sh: no usable loader binary next to this script" >&2; exit 70; }
+[ -f "$RUNNER" ] || RUNNER="$HERE/bin/loader"
+[ -f "$RUNNER" ] || { echo "[androidrt] launch.sh: no loader binary next to this script" >&2; exit 70; }
+# A copy that lost its permissions (unpacked by a tool that drops them, on an
+# ext4 card) gets its execute bit back; FAT and exFAT cards grant it to all.
+[ -x "$RUNNER" ] || chmod +x "$RUNNER" 2>/dev/null || true
+[ -x "$RUNNER" ] || { echo "[androidrt] launch.sh: $RUNNER is not executable — copy the runtime again, or install it from JukaHub's APK Store" >&2; exit 70; }
 
 exec "$RUNNER" "$APK" "$@"

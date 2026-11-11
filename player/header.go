@@ -120,6 +120,15 @@ func headerBackPillHeight() int32 {
 
 // headerCaptionText is the muted line after the wordmark: the version, and the
 // scene on every screen but Home.
+// statusBarCaption is what the bar adds after the wordmark. UX-2: the bar
+// carries the brand and the system status, and the screen names itself in its
+// page header, so there is nothing to append here. Home has always drawn the
+// bare wordmark through headerCaptionText("", "") for the same reason.
+func statusBarCaption(scene SceneConfig) string {
+	_ = scene
+	return ""
+}
+
 func headerCaptionText(version, scene string) string {
 	var b strings.Builder
 	if v := strings.TrimSpace(version); v != "" {

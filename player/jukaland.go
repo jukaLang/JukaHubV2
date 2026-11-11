@@ -179,7 +179,7 @@ func jlandDrawPause(r *sdl.Renderer, config *Config) {
 	if r == nil || config == nil {
 		return
 	}
-	font := getFontSized(config, "small", 20)
+	font := FontForRole(config, TypeBody)
 	hintFont, _ := getCachedFont(config, "small")
 	if font == nil || hintFont == nil {
 		return

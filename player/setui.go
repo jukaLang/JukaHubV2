@@ -105,12 +105,12 @@ type setHubFonts struct {
 
 func setHubLoadFonts(c *Config) (setHubFonts, bool) {
 	f := setHubFonts{
-		rail:   getFontSized(c, "small", 17),
-		title:  getFontSized(c, "medium", 24),
-		sub:    getFontSized(c, "small", 15),
-		label:  getFontSized(c, "medium", 19),
-		detail: getFontSized(c, "small", 15),
-		value:  getFontSized(c, "small", 17),
+		rail:   FontForRole(c, TypeBody),
+		title:  FontForRole(c, TypeHeading),
+		sub:    FontForRole(c, TypeLabel),
+		label:  FontForRole(c, TypeBody),
+		detail: FontForRole(c, TypeLabel),
+		value:  FontForRole(c, TypeBody),
 	}
 	ok := f.rail != nil && f.title != nil && f.sub != nil && f.label != nil && f.detail != nil && f.value != nil
 	return f, ok

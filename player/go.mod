@@ -9,7 +9,7 @@ require (
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/pkg/sftp v1.13.12
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/tidwall/gjson v1.20.0
+	github.com/tidwall/gjson v1.20.1
 	github.com/ulikunitz/xz v0.5.17
 	github.com/veandco/go-sdl2 v0.4.40
 	go.etcd.io/bbolt v1.5.0
@@ -21,7 +21,7 @@ require (
 )
 
 require (
-	github.com/dlclark/regexp2/v2 v2.12.0
+	github.com/dlclark/regexp2/v2 v2.13.0
 	github.com/dop251/goja v0.0.0-20261102223426-a177d211bf60
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/google/pprof v0.0.0-20261102214848-0031fcd306b0 // indirect
@@ -43,5 +43,5 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )

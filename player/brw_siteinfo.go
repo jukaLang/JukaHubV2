@@ -576,8 +576,8 @@ func brwInfoRender(r *sdl.Renderer, config *Config) {
 		brwInfoEnsure(brwInfo.url, brwInfo.https)
 	}
 	small, _ := getCachedFont(config, "small")
-	body := getFontSized(config, "small", 17)
-	label := getFontSized(config, "small", 15)
+	body := FontForRole(config, TypeBody)
+	label := FontForRole(config, TypeLabel)
 	if small == nil || body == nil || label == nil {
 		return
 	}
@@ -686,8 +686,8 @@ func brwInfoRender(r *sdl.Renderer, config *Config) {
 // brwInfoNotice is a centred state block with an optional button; it returns
 // the button's rect.
 func brwInfoNotice(r *sdl.Renderer, config *Config, area sdl.Rect, icon, title, text, button string) sdl.Rect {
-	titleFont := getFontSized(config, "small", 22)
-	bodyFont := getFontSized(config, "small", 16)
+	titleFont := FontForRole(config, TypeHeading)
+	bodyFont := FontForRole(config, TypeLabel)
 	if titleFont == nil || bodyFont == nil {
 		return sdl.Rect{}
 	}

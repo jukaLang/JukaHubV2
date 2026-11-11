@@ -10,13 +10,19 @@ package main
 //
 // So a daily pass runs by itself. What it does is the Emulator updates setting
 // (Settings → Games & emulators, or Start on the Core builds page). It covers
-// the libretro cores here and JukaHub's own PPSSPP, whose daily pass reads the
-// same mode (emuCoreUpdateModeNow):
+// the libretro cores here; JukaHub's own PPSSPP, whose daily pass reads the
+// same mode (emuCoreUpdateModeNow); and everything registered in
+// emuautoupdate_registry.go — hakuX, the Windows-app runtime, AndroidRT —
+// which this pass brings forward after the cores, at the same moment, with one
+// install card and one toast for the lot (emuautoupdate_runtimes.go). A PC runs
+// the same pass over the emulators JukaHub installed there and its RetroArch's
+// cores (emuautoupdate_desktop.go):
 //
 //   - Install automatically (the default): the pass described below.
-//   - Notify me: read the index, compare it with the installed cores, and say
-//     once which have a different build. Nothing is downloaded; the Emulators
-//     and Core builds pages install on a press.
+//   - Notify me: read the index, compare it with the installed cores, ask the
+//     other updaters whether they have a newer build, and say once what does.
+//     Nothing is downloaded; the Emulators and Core builds pages install on a
+//     press.
 //   - Off: no pass at all.
 //
 // The default has moved twice. It began as one switch, on unless switched off.
@@ -63,7 +69,9 @@ package main
 // centre keeps.
 //
 // What it will not do:
-//   - run on a desktop, where the Emulators page updates on a press;
+//   - touch, on a PC, anything JukaHub did not install there: an emulator
+//     installed by hand, or the cores of a RetroArch someone else installed
+//     (Steam's included), keeps its own way of updating;
 //   - stand down for a whole interval when the check failed or was stopped.
 //     Only a pass that read the index and finished is stamped, so a device that
 //     boots before its Wi-Fi associates tries again at the next poll, and a pass
@@ -85,6 +93,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -342,13 +351,29 @@ func emuStoreCoreUpdateMode(config *Config, m coreUpdateMode, chosen bool) {
 	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
-// coreUpdateModeOptions, coreUpdateModeIndex and coreUpdateModeChoose are the
-// Settings row (setmodel.go).
+// coreUpdateModeVisible, coreUpdateModeDetail, coreUpdateModeOptions,
+// coreUpdateModeIndex and coreUpdateModeChoose are the Settings row
+// (setmodel.go). The row shows wherever the setting looks after something —
+// the TrimUI handhelds and a PC — and says what that is.
+func coreUpdateModeVisible(*Config) bool { return emuAutoUpdateCovers() != "" }
+
+func coreUpdateModeDetail(*Config) string {
+	covers := emuAutoUpdateCovers()
+	if covers == "" {
+		return "What the daily check does; the old build is always kept"
+	}
+	return "Covers " + covers + " · the old build is always kept"
+}
+
 func coreUpdateModeOptions(*Config) []setOption {
+	when := "while charging or idle"
+	if !IsTrimuiDevice() {
+		when = "while JukaHub sits idle"
+	}
 	notes := map[coreUpdateMode]string{
 		coreUpdateOff:     "No daily check; update from the Emulators page",
 		coreUpdateNotify:  "A daily check says what has a new build; nothing is installed",
-		coreUpdateInstall: "Installs new cores and PPSSPP while charging or idle, keeping the old build",
+		coreUpdateInstall: "Installs new builds " + when + ", keeping the old one",
 	}
 	out := make([]setOption, 0, len(coreUpdateModes))
 	for _, m := range coreUpdateModes {
@@ -374,13 +399,18 @@ func coreUpdateModeChoose(c *Config, value string) string {
 	return "Emulator updates: " + m.label()
 }
 
-// coreUpdateMigratedNotice is the one toast the migration leaves. It is shown
-// by the scheduler at its first look that is not over a game, not during boot,
-// where the splash would hide it.
-const coreUpdateMigratedNotice = "Emulator updates now install automatically, keeping the old build for a one-press roll back · " +
-	"change it in Settings → Games & emulators → Emulator updates"
+// coreUpdateMigratedNotice is the one toast the migration leaves, naming what
+// the setting covers on this device. It is shown by the scheduler at its first
+// look that is not over a game, not during boot, where the splash would hide
+// it.
+func coreUpdateMigratedNotice() string {
+	return "Emulator updates now install automatically (" + emuAutoUpdateCovers() + "), keeping the old build for a one-press roll back · " +
+		"change it in Settings → Games & emulators → Emulator updates"
+}
 
-// coreUpdateMigrationPending holds that notice until it can be seen.
+// coreUpdateMigrationPending holds that notice until it can be seen. A PC
+// uses it for its own one-time notice (emuDesktopNotice): a choice made in
+// the meantime retires either.
 var coreUpdateMigrationPending atomic.Bool
 
 // coreAutoUpdateDisabled reports the environment opt-out. It mirrors
@@ -489,7 +519,9 @@ func coreAutoUpdateRanRecently() bool {
 // startCoreAutoUpdate starts the scheduler. It is best-effort: every reason it
 // cannot run is a log line, never a startup error, and a device with nothing to
 // update sees only the install bar settling. It runs from the boot queue, on
-// the main thread, which is where the setting may be read and written.
+// the main thread, which is where the setting may be read and written. A
+// device that is not a TrimUI handheld — a PC — gets the desktop scheduler
+// (emuautoupdate_desktop.go) instead, under the same setting.
 func startCoreAutoUpdate(config *Config) {
 	if config != nil && IsTrimuiDevice() && coreUpdateModeNeedsMigration(config.Variables.Custom) {
 		// LIB-16 stored "notify" for every card whose user never chose. It is
@@ -500,14 +532,22 @@ func startCoreAutoUpdate(config *Config) {
 	}
 	mode := coreUpdateModeFor(config)
 	emuCoreUpdateMode.Store(int32(mode))
+	chosen := false
 	// The resolved mode is written once, beside the old switch, so it stops
 	// depending on how the old switch is read, and a build from before the
 	// mode reads a switch that matches (on only for Install automatically).
 	if config != nil {
+		chosen = coreUpdateModeChosen(config.Variables.Custom)
 		if _, stored := customValue(config.Variables.Custom, coreUpdateModeSetting); !stored {
 			logInfo("emulators", "core updates: storing the setting as %q", mode.key())
 			emuStoreCoreUpdateMode(config, mode, false)
 		}
+	}
+	if !IsTrimuiDevice() {
+		// Nothing on a PC updated by itself before; the default does now, so a
+		// PC whose user never chose is told once (emuDesktopNotice).
+		startDesktopEmuAutoUpdate(IsWindows() && mode == coreUpdateInstall && !chosen)
+		return
 	}
 	if !coreAutoUpdateAllowed(coreAutoUpdateDisabled(), emuCoreInstallSupported(), IsTrimuiDevice(), true) {
 		return
@@ -528,10 +568,12 @@ func startCoreAutoUpdate(config *Config) {
 // coreAutoUpdateTick runs the pass once if it is allowed, due and the moment is
 // right. ran reports that a pass ran; waiting that one is due and the scheduler
 // should look again soon (the moment was wrong, the network or the patch slot
-// was not there, or a game stopped the pass part-way).
+// was not there, or a game stopped the pass part-way). The pass is due when the
+// cores are, or when one of the other updaters is (emuRuntimesForPass, which
+// lets the nearly due ones ride along with a pass that runs anyway).
 func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	if !gameScreenSuspended() && coreUpdateMigrationPending.Swap(false) {
-		ShowToast(coreUpdateMigratedNotice, ToastKindInfo)
+		ShowToast(coreUpdateMigratedNotice(), ToastKindInfo)
 	}
 	mode := emuCoreUpdateModeNow()
 	if mode == coreUpdateOff {
@@ -541,8 +583,16 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	if !coreAutoUpdateAllowed(coreAutoUpdateDisabled(), emuCoreInstallSupported(), IsTrimuiDevice(), true) {
 		return false, false
 	}
+	if gameScreenSuspended() {
+		// Nothing runs over a game, and nothing is looked at during one (the
+		// updaters' checks of what is installed read the card): the first
+		// look after it decides, a minute at most after the game ends.
+		return false, true
+	}
 	last := coreAutoUpdateLastCheck()
-	if !coreAutoUpdateDue(last, now) || coreAutoUpdateRanRecently() {
+	coresDue := coreAutoUpdateDue(last, now) && !coreAutoUpdateRanRecently()
+	extras := emuRuntimesForPass(now, coresDue)
+	if !coresDue && len(extras) == 0 {
 		coreAutoUpdateStopWaiting()
 		return false, false
 	}
@@ -554,77 +604,161 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	// installed core once to checksum it, which is card work a game, a video
 	// or a scrolling list should not compete with.
 	busy := installBarActive() || videoHoldsScreenAwake()
-	if !coreAutoUpdateMoment(gameScreenSuspended(), busy, getBatteryCharging(),
-		userInputAge(now), coreAutoUpdateOverdueFor(last, now, waited)) {
+	overdue := (coresDue && coreAutoUpdateOverdueFor(last, now, waited)) || emuRuntimesOverdue(extras, now, waited)
+	if !coreAutoUpdateMoment(gameScreenSuspended(), busy, getBatteryCharging(), userInputAge(now), overdue) {
 		return false, true
 	}
 	coreAutoUpdateStopWaiting()
-	if mode == coreUpdateNotify {
-		return coreAutoUpdateNotifyPass(now), false
-	}
-	if len(emuInstalledCoreSet()) == 0 {
-		// Nothing to update; check again tomorrow rather than every poll.
+	if coresDue && len(emuInstalledCoreSet()) == 0 {
+		// No cores to update: they are looked at again tomorrow rather than
+		// at every poll.
 		coreAutoUpdateStamp(now)
+		coresDue = false
+	}
+	if mode == coreUpdateNotify {
+		var active func() map[string]coreBuild
+		if coresDue {
+			active = func() map[string]coreBuild { return scanCoreInventory().Active }
+		}
+		return emuAutoNotifyPass(now, active, extras), false
+	}
+	var cores emuAutoCoreRunner
+	if coresDue {
+		cores = runInstalledCoreUpdates
+	}
+	return emuAutoInstallPass(now, cores, extras)
+}
+
+// emuAutoCoreRunner brings cores forward for a pass: runInstalledCoreUpdates
+// on the handheld, the managed RetroArch's cores on a PC
+// (emuDesktopCoreRunner). progress drives the install card.
+type emuAutoCoreRunner func(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport
+
+// emuAutoInstallPass is the Install automatically pass, on the handheld and on
+// a PC alike: the cores when cores is not nil, then every updater in extras,
+// under one install card and one toast. ran reports that a pass ran; waiting
+// that the scheduler should look again soon (the patch slot was taken, or a
+// game stopped the pass part-way).
+//
+// It is the same work the pages' actions do — for the cores: download, verify
+// the CRC32 the index states, check that the build can load here, activate,
+// keep the replaced build as a .bak up to maxCoreBackups — reported through the
+// same install bar, and it ends with a toast ("Updated 3 emulator cores (…) ·
+// updated hakuX v0.1.5") that the notification centre keeps.
+func emuAutoInstallPass(now time.Time, cores emuAutoCoreRunner, extras []emuRuntimeUpdater) (ran, waiting bool) {
+	if cores == nil && len(extras) == 0 {
 		return false, false
 	}
 	// Looked at every minute while due, so these two say so in the debug log
 	// only.
 	if !tryBeginPatchOp() {
-		logDebug("emulators", "core auto-update: waiting, another Patch operation is running")
+		logDebug("emulators", "auto-update: waiting, another Patch operation is running")
 		return false, true
 	}
 	defer endPatchOp()
 
 	// A helper-tool download runs outside the Patch lock and may own the card
 	// right now — on a first boot ffmpeg is often still arriving — and a begin
-	// would retire its token and stop it. The cores wait; the check stamp is
-	// untouched, so they are still due at the next look.
+	// would retire its token and stop it. The pass waits; nothing is stamped,
+	// so everything is still due at the next look.
 	if installBarActive() {
-		logDebug("emulators", "core auto-update: waiting, an install is running")
+		logDebug("emulators", "auto-update: waiting, an install is running")
 		return false, true
 	}
-	logPatch("core auto-update: checking installed cores")
-	installBarBeginLabelled("Emulator cores", "Updating emulator cores")
-	// The timeout derives from the card's run token (minted by the begin
-	// above), so a cancel from the card or the strip stops the transfers.
-	ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
-	defer cancel()
+	bar := &emuAutoBar{label: "Updating emulator cores"}
+	if len(extras) > 0 {
+		bar.label = "Updating emulators"
+	}
 	// A game that starts while the pass runs gets the device back: the
-	// watcher cancels the pass, which stops between cores.
+	// watcher stops the pass, which ends between cores and between updaters.
+	pass, stopPass := context.WithCancel(context.Background())
+	defer stopPass()
 	var stoppedForGame atomic.Bool
-	stopWatch := make(chan struct{})
-	defer close(stopWatch)
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-stopWatch:
-				return
-			case <-ctx.Done():
+			case <-pass.Done():
 				return
 			case <-ticker.C:
 				if gameScreenSuspended() {
-					logPatch("core auto-update: a game started, stopping")
+					logPatch("emulator auto-update: a game started, stopping")
 					stoppedForGame.Store(true)
-					cancel()
+					stopPass()
 					return
 				}
 			}
 		}
 	}()
 
-	report := runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
-	installBarPhase(installPhaseDone)
-	installBarDone()
+	var coreReport *emuInstallReport
+	coreResume, cardCancelled := false, false
+	if cores != nil {
+		logPatch("core auto-update: checking installed cores")
+		bar.begin()
+		report, timedOut, cancelled := emuAutoRunCores(pass, cores)
+		// A run another install took over (its begin retires this run's
+		// token) is not the user's "not now": what it did not reach follows
+		// at the next quiet moment, as after a game.
+		_, coresTaken := bar.lost()
+		cardCancelled = cancelled && !coresTaken
+		coreReport, coreResume = coreAutoUpdateSettle(now, report, timedOut, stoppedForGame.Load() || coresTaken)
+	}
+	var extrasReport emuRuntimeReport
+	_, taken := bar.lost()
+	switch {
+	case len(extras) == 0:
+	case taken:
+		// Another run took the card while the cores ran (a helper-tool
+		// download starts outside the Patch lock): the updaters wait for the
+		// next quiet moment rather than run behind its card.
+		extrasReport.Resume = true
+	case cardCancelled:
+		// Cancelled from the card while the cores ran: a "not now" for the
+		// whole pass, not only for its first half.
+		for _, u := range extras {
+			emuRuntimeDefer(u.Key, coreAutoUpdateInterval)
+		}
+	case pass.Err() == nil:
+		extrasReport = emuRunRuntimeUpdaters(pass, coreUpdateInstall, extras, bar, now)
+	}
+	bar.finish()
+	emuAutoPassToast(coreReport, extrasReport)
+	// Whatever a game stopped follows at the next quiet moment: it was not
+	// stamped.
+	return true, coreResume || stoppedForGame.Load() || extrasReport.Resume
+}
 
+// emuAutoRunCores runs the core half of a pass under the card the pass has
+// begun. The deadline derives from the card's run token, so a cancel from the
+// card or the activity strip stops the transfers, and the pass's own stop (a
+// game starting) reaches it too. cardCancelled reports the first.
+func emuAutoRunCores(pass context.Context, cores emuAutoCoreRunner) (report emuInstallReport, timedOut, cardCancelled bool) {
+	ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
+	defer cancel()
+	stop := context.AfterFunc(pass, cancel)
+	defer stop()
+	report = cores(ctx, newEmulatorUpdateClient(), installBarProgressHook())
+	timedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
+	cardCancelled = errors.Is(ctx.Err(), context.Canceled) && pass.Err() == nil
+	return report, timedOut, cardCancelled
+}
+
+// coreAutoUpdateSettle records what the core half of a pass did: the stamp,
+// the log lines and the caches its updates outdate. stopped reports a run
+// stopped by something other than the user — a game starting, or another
+// install taking the card. It returns the report when it has news for the
+// toast (nil otherwise), and whether the rest of the cores should follow at the
+// next quiet moment.
+func coreAutoUpdateSettle(now time.Time, report emuInstallReport, timedOut, stopped bool) (*emuInstallReport, bool) {
 	if !report.Checked {
 		// The index never arrived (offline mid-poll, a redirect refused).
 		// Leaving the stamp alone means the next poll tries again.
 		for _, e := range report.Errors {
 			logPatch("core auto-update: %s", e)
 		}
-		return true, false
+		return nil, false
 	}
 	// A pass a game stopped, or one that ran out of time on a card with a
 	// hundred cores to bring forward, is not stamped: what it updated stays
@@ -633,9 +767,8 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	// link too slow to bring one build in before the deadline, resuming would
 	// start the same downloads again a minute later, all day. One the user
 	// cancelled from the card is stamped — that was a "not now".
-	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	settled := len(report.Updated)+len(report.Refused) > 0
-	resume := report.Interrupted && (stoppedForGame.Load() || (timedOut && settled))
+	resume := report.Interrupted && (stopped || (timedOut && settled))
 	if resume {
 		logPatch("core auto-update: stopped after %d update(s); the rest at the next quiet moment", len(report.Updated))
 	} else {
@@ -644,16 +777,6 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	if report.KnownRefused > 0 {
 		logPatch("core auto-update: %d core(s) kept, their new build was refused before", report.KnownRefused)
 	}
-
-	if len(report.Updated) == 0 && len(report.Errors) == 0 && len(report.Refused) == 0 && report.LowSpace == "" {
-		switch {
-		case !report.Interrupted:
-			logPatch("core auto-update: %d core(s) checked, all current", report.Current)
-		case !resume:
-			logPatch("core auto-update: stopped before any core was updated; the next pass is tomorrow's")
-		}
-		return true, resume
-	}
 	if len(report.Updated) > 0 {
 		// The tile list, the compatibility panel and the footer's rollback
 		// cache all read the cores folder.
@@ -661,16 +784,17 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 		invalidateCompatCache()
 		emuForgetAllUpdates()
 		coreBuildsRequestReload()
-		PlaySuccessSound()
 	}
-	kind := ToastKindSuccess
-	if len(report.Errors) > 0 || len(report.Updated) == 0 || report.LowSpace != "" {
-		kind = ToastKindWarning
+	if len(report.Updated) == 0 && len(report.Errors) == 0 && len(report.Refused) == 0 && report.LowSpace == "" {
+		switch {
+		case !report.Interrupted:
+			logPatch("core auto-update: %d core(s) checked, all current", report.Current)
+		case !resume:
+			logPatch("core auto-update: stopped before any core was updated; the next pass is tomorrow's")
+		}
+		return nil, resume
 	}
-	summary := emuAutoUpdateSummary(report)
-	ShowToast(summary, kind)
-	logPatch("core auto-update: %s", summary)
-	return true, resume
+	return &report, resume
 }
 
 // coreAutoUpdateStamp records a pass that read the index (or found nothing to
@@ -685,14 +809,33 @@ func coreAutoUpdateStamp(now time.Time) {
 	coreAutoUpdateSession.mu.Unlock()
 }
 
-// coreAutoUpdateNotifyPass is the Notify mode's daily pass: it reads the build
-// index, compares it with the installed cores and, when some have a different
-// build, says so once. Nothing is downloaded or replaced. It reports whether a
-// pass ran.
-func coreAutoUpdateNotifyPass(now time.Time) bool {
-	if len(emuInstalledCoreSet()) == 0 {
+// emuAutoNotifyPass is the Notify mode's daily pass: the cores active returns
+// (nil when they are not due) compared with the build index, and every updater
+// in extras asked whether it has a newer build. What is new is said once, in
+// one toast; nothing is downloaded or replaced. It reports whether a pass ran.
+func emuAutoNotifyPass(now time.Time, active func() map[string]coreBuild, extras []emuRuntimeUpdater) bool {
+	ran := false
+	coreMsg := ""
+	if active != nil {
+		coreMsg, ran = coreAutoUpdateNotifyCheck(now, active())
+	}
+	var report emuRuntimeReport
+	if len(extras) > 0 {
+		report = emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, extras, nil, now)
+		ran = true
+	}
+	emuAutoNotifyToast(coreMsg, report.Available)
+	return ran
+}
+
+// coreAutoUpdateNotifyCheck is the cores' share of the Notify pass: it reads
+// the build index and compares it with active. It returns the sentence to
+// announce — "" when nothing differs, or when the same builds were announced
+// before — and whether a check ran.
+func coreAutoUpdateNotifyCheck(now time.Time, active map[string]coreBuild) (string, bool) {
+	if len(active) == 0 {
 		coreAutoUpdateStamp(now)
-		return false
+		return "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -701,25 +844,24 @@ func coreAutoUpdateNotifyPass(now time.Time) bool {
 		// Not stamped: a device that boots before its Wi-Fi associates asks
 		// again at the next poll.
 		logPatch("core update check: %v", err)
-		return true
+		return "", true
 	}
 	coreAutoUpdateStamp(now)
-	stale, _ := emuCompareCores(index, scanCoreInventory().Active)
+	stale, _ := emuCompareCores(index, active)
 	if len(stale) == 0 {
 		logPatch("core update check: the installed cores match the index")
-		return true
+		return "", true
 	}
 	if !coreUpdateAnnounce(coreUpdateSignature(stale)) {
 		logPatch("core update check: %d core update(s), already announced", len(stale))
-		return true
+		return "", true
 	}
 	msg := coreUpdateNotifyMessage(stale)
-	ShowToast(msg, ToastKindInfo)
 	logPatch("core update check: %s", msg)
 	// The Emulators and Core builds pages badge the same cores from their own
 	// check; starting it now means they already know when opened.
 	emuStartUpdateCheck(0)
-	return true
+	return msg, true
 }
 
 // coreUpdateSignature names a set of available builds ("mgba@1a2b3c4d,…"), so

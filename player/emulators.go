@@ -94,6 +94,9 @@ var winEmuCatalog = []winEmuSpec{
 	{"Cemu", []string{"Cemu.exe"}},
 	{"Vita3K", []string{"Vita3K.exe", "vita3k.exe"}},
 	{"xemu", []string{"xemu.exe"}},
+	// Xbox 360: Xenia Canary's build is xenia_canary.exe; xenia.exe is the
+	// upstream master build, found when it is on PATH.
+	{emuXeniaName, []string{"xenia_canary.exe", "xenia.exe"}},
 	{"melonDS", []string{"melonDS.exe"}},
 	{"mGBA", []string{"mGBA.exe", "mgba.exe"}},
 	{"FCEUX", []string{"fceux.exe"}},
@@ -152,6 +155,11 @@ func windowsEmulatorEntries(dirs []string, lookPath func(string) (string, error)
 				if e.Version != "" {
 					e.Detail = e.Version + " · " + found
 				}
+			}
+			// What still stands between the emulator and a game, said on its
+			// tile: xemu without the Xbox files, Xenia without its runtime.
+			if note := emuWinSetupNote(spec.name, found); note != "" {
+				e.Detail = note + " · " + e.Detail
 			}
 		} else {
 			e.Status = emuMissing
@@ -745,8 +753,10 @@ func emulatorEntries() []emuEntry {
 	entries = append(entries, pin(gamesLibraryEmuEntry(), "rom"))
 	entries = append(entries, pin(gameProfilesEmuEntry(), "list"))
 	entries = append(entries, pin(compatibilityEmuEntry(), "speed"))
+	// Windows Apps runs .exe files through Wine on the handheld and directly
+	// on Windows (windowsapps.go).
+	entries = append(entries, pin(windowsAppsEmuEntry(), "apps"))
 	if !IsWindows() {
-		entries = append(entries, pin(windowsAppsEmuEntry(), "apps"))
 		// PortMaster is a handheld app; listing it on Windows would only offer
 		// an installer that cannot produce a working runtime there.
 		entries = append(entries, pin(portMasterEmuEntry(), "packages"))
@@ -830,7 +840,7 @@ func windowsAppsEmuEntry() emuEntry {
 		return e
 	}
 	e.Status = emuAvailable
-	e.Detail = fmt.Sprintf("%d app(s) · Wine ready · %s", len(entries), runtime.displayLabel())
+	e.Detail = windowsAppsSummary(entries, runtime)
 	return e
 }
 
@@ -969,6 +979,12 @@ func launchEmulatorEntry(e emuEntry) {
 		return
 	}
 	logDebug("emulators", "launching %s (%s)", e.Name, path)
+	// xemu started from its tile takes up Xbox files the setup sheet found but
+	// nobody applied yet; what is still missing goes into the launch toast.
+	launchNote := ""
+	if IsWindows() && emuIsXemuLauncher(path) {
+		launchNote = emuXemuPrepareLaunch(path)
+	}
 	// No shell ever sees a command line here: path comes from the scan roots
 	// and catalog (never from JukaHub's config input) and goes to the program
 	// as one argument.
@@ -1025,6 +1041,10 @@ func launchEmulatorEntry(e emuEntry) {
 		recorder.Stop()
 	}()
 	PlaySuccessSound()
+	if launchNote != "" {
+		ShowToast("Launching "+e.Name+" · "+launchNote, ToastKindInfo)
+		return
+	}
 	ShowToast("Launching "+e.Name, ToastKindSuccess)
 }
 

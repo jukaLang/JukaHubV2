@@ -496,6 +496,54 @@ func setTextSizeOptions(*Config) []setOption {
 	return out
 }
 
+// setPowerModeRow is Power & battery's first row and Accessibility's Power
+// mode row: one setting, answered by the same helper both pages use.
+func setPowerModeRow() setRow {
+	return setRow{
+		ID: "powerMode", Label: "Power mode", Kind: setKindChoice,
+		Detail: setStatic("Battery Saver slows the interface to stretch a charge"),
+		Options: func(*Config) []setOption {
+			out := make([]setOption, 0, len(powerModeOrder))
+			for _, m := range powerModeOrder {
+				out = append(out, setOption{Value: m, Label: powerModeLabel(m)})
+			}
+			return out
+		},
+		Current: func(c *Config) int { return powerModeIndex(currentPowerMode(c)) },
+		Choose: func(c *Config, value string) {
+			label := cyclePowerModeTo(c, value)
+			if len(qs.cycles) > qsCycleRowPowerMode {
+				qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
+			}
+			setToast("Power mode: " + label)
+		},
+	}
+}
+
+// setVibrationLevelRow is Sound & haptics' strength row, shared with
+// Accessibility: feedback strength reads as one value wherever it is set.
+func setVibrationLevelRow() setRow {
+	return setRow{
+		ID: "vibrationLevel", Label: "Vibration strength", Kind: setKindChoice,
+		Detail:   setStatic("How hard the motor pulses"),
+		Visible:  func(*Config) bool { return hapticsAvailable() },
+		Disabled: func(c *Config) bool { return !hapticsConfiguredOn(c) },
+		Options: func(*Config) []setOption {
+			out := make([]setOption, 0, len(hapticLevels))
+			for _, level := range hapticLevels {
+				out = append(out, setOption{Value: level.key, Label: level.label})
+			}
+			return out
+		},
+		Current: func(*Config) int { return hapticsLevelIndex(hapticsLevelNow().key) },
+		Choose: func(c *Config, value string) {
+			hapticsSetLevel(c, hapticsLevelIndex(value))
+			saveUserConfigDebounced(userConfigFromVariables(c))
+			playHaptic(hapticActivatePulse)
+		},
+	}
+}
+
 // setHomeLayoutOptions are the stops of Display & theme → Home layout, in the
 // order Home's edit strip lists them, each with the line the list sheet shows.
 func setHomeLayoutOptions(*Config) []setOption {
@@ -835,6 +883,13 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
+			// Every accessibility setting as an ordinary page, so the modal is
+			// no longer the only way in (a11y_settings.go).
+			ID: a11ySettingsSection, Title: "Accessibility", Glyph: "user",
+			Subtitle: "Text, contrast, audio and controls, on every screen",
+			Rows:     a11ySettingsRows(),
+		},
+		{
 			ID: "sound", Title: "Sound & haptics", Glyph: "music",
 			Subtitle: "Volume, interface sounds and vibration",
 			Rows: []setRow{
@@ -913,25 +968,7 @@ func setBuildSections() []setSection {
 						}
 					},
 				},
-				{
-					ID: "vibrationLevel", Label: "Vibration strength", Kind: setKindChoice,
-					Detail:   setStatic("How hard the motor pulses"),
-					Visible:  func(*Config) bool { return hapticsAvailable() },
-					Disabled: func(c *Config) bool { return !hapticsConfiguredOn(c) },
-					Options: func(*Config) []setOption {
-						out := make([]setOption, 0, len(hapticLevels))
-						for _, level := range hapticLevels {
-							out = append(out, setOption{Value: level.key, Label: level.label})
-						}
-						return out
-					},
-					Current: func(*Config) int { return hapticsLevelIndex(hapticsLevelNow().key) },
-					Choose: func(c *Config, value string) {
-						hapticsSetLevel(c, hapticsLevelIndex(value))
-						saveUserConfigDebounced(userConfigFromVariables(c))
-						playHaptic(hapticActivatePulse)
-					},
-				},
+				setVibrationLevelRow(),
 				{
 					ID: "ledsync", Label: "Lights follow the music", Kind: setKindToggle, Quiet: true,
 					Detail:  setStatic("The stick lights pulse with what is playing"),
@@ -954,13 +991,19 @@ func setBuildSections() []setSection {
 		},
 		{
 			ID: "network", Title: "Network", Glyph: "wifi",
-			Subtitle: "Wi-Fi, radios and your phone",
+			Subtitle: "Wi-Fi, VPN, radios and your phone",
 			Rows: []setRow{
 				{
 					ID: "wifi", Label: "Wi-Fi", Kind: setKindAction,
 					Detail: setStatic("Networks, passwords and signal"),
 					Open:   wifiScrOpen,
 				},
+				// The WireGuard VPN (vpn.go): the switch, the configuration,
+				// what goes through it, and how the tunnel is doing.
+				vpnToggleRow(),
+				vpnProfileRow(),
+				vpnRouteRow(),
+				vpnStatusRow(),
 				{
 					ID: "bluetooth", Label: "Bluetooth", Kind: setKindToggle, Quiet: true,
 					Detail:  setStatic("Headphones and controllers"),
@@ -1244,8 +1287,8 @@ func setBuildSections() []setSection {
 				},
 				{
 					ID: "coreUpdate", Label: "Emulator updates", Kind: setKindChoice,
-					Detail:  setStatic("What the daily check does for cores and PPSSPP; the old build is always kept"),
-					Visible: func(*Config) bool { return setHandheld() },
+					Detail:  coreUpdateModeDetail,
+					Visible: coreUpdateModeVisible,
 					Options: coreUpdateModeOptions,
 					Current: coreUpdateModeIndex,
 					Choose:  func(c *Config, value string) { setToast(coreUpdateModeChoose(c, value)) },
@@ -1324,25 +1367,7 @@ func setBuildSections() []setSection {
 			ID: "power", Title: "Power & battery", Glyph: "battery",
 			Subtitle: "Battery life, sleep and the idle screen",
 			Rows: []setRow{
-				{
-					ID: "powerMode", Label: "Power mode", Kind: setKindChoice,
-					Detail: setStatic("Battery Saver slows the interface to stretch a charge"),
-					Options: func(*Config) []setOption {
-						out := make([]setOption, 0, len(powerModeOrder))
-						for _, m := range powerModeOrder {
-							out = append(out, setOption{Value: m, Label: powerModeLabel(m)})
-						}
-						return out
-					},
-					Current: func(c *Config) int { return powerModeIndex(currentPowerMode(c)) },
-					Choose: func(c *Config, value string) {
-						label := cyclePowerModeTo(c, value)
-						if len(qs.cycles) > qsCycleRowPowerMode {
-							qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
-						}
-						setToast("Power mode: " + label)
-					},
-				},
+				setPowerModeRow(),
 				{
 					// The level and how long it will last (battery_eta.go);
 					// the detail says what the estimate rests on. Second, so

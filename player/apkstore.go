@@ -283,6 +283,9 @@ func apkStoreStartScan() {
 			apkStoreUI.truncated = res.truncated
 			apkStoreUI.took = res.took
 			apkStoreUI.runtime, apkStoreUI.waydroid, apkStoreUI.probed = rt, wd, true
+			if apkStoreUI.tab == apkTabRuntime {
+				apkStoreMaybeCheckUpdate()
+			}
 			if focusPath != "" {
 				for i, info := range res.apks {
 					if info.Path == focusPath {
@@ -373,6 +376,76 @@ func apkStoreSwitchTab(i int) {
 	apkStoreUI.nav.scroll = 0
 	apkStoreUI.nav.focus = "tab" + strconv.Itoa(i)
 	PlayNavSound()
+	if i == apkTabRuntime {
+		apkStoreMaybeCheckUpdate()
+	}
+}
+
+// apkStoreMaybeCheckUpdate asks, in the background, whether a newer AndroidRT
+// than the downloaded copy exists — only when that copy is the one in use
+// (the bundled one updates with JukaHub). The Runtime tab then offers Update.
+func apkStoreMaybeCheckUpdate() {
+	rt := apkStoreUI.runtime
+	if !apkStoreScanEnabled || !apkStoreUI.probed || rt.dir == "" || rt.source != androidRTSourceDownloaded {
+		return
+	}
+	androidRTCheckUpdate(false)
+}
+
+// apkStoreRuntimeChanged reads where AndroidRT is again after an install, and
+// which added games can start now (render thread; the reading runs behind).
+func apkStoreRuntimeChanged() {
+	if !apkStoreScanEnabled {
+		apkStoreRebuildText()
+		return
+	}
+	gen := apkStoreUI.gen
+	go func() {
+		rt := apkStoreProbeRuntime()
+		tbxPost(func() {
+			if gen == apkStoreUI.gen {
+				apkStoreUI.runtime, apkStoreUI.probed = rt, true
+			}
+			apkStoreRebuildText()
+		})
+	}()
+	if apkStoreOnScreen() {
+		apkStoreRefreshGames()
+	}
+}
+
+// apkStoreRuntimeMissing reports whether this machine could run AndroidRT but
+// has no usable copy — the case where Play and Add offer to install it.
+func apkStoreRuntimeMissing() bool {
+	rt := apkStoreUI.runtime
+	return apkStoreUI.probed && rt.canRun && rt.dir == ""
+}
+
+// apkStoreOfferRuntime is the one-press offer Play and Add make when AndroidRT
+// is missing: what it is, where it comes from, and a button that installs it
+// and then does what was asked (then runs only after a successful install).
+func apkStoreOfferRuntime(config *Config, title, what string, then func()) {
+	tbxOpenSheet(config, tbxSheetSpec{
+		title: "AndroidRT is not installed", subtitle: title, icon: "chip",
+		body: title + " runs on AndroidRT, the runtime JukaHub uses for Android games, and this device does not " +
+			"have it yet. JukaHub can install it now from its own GitHub releases: a few MB, checked against the " +
+			"release before it is used. The install bar shows its progress; the Runtime tab's AndroidRT row can " +
+			"stop it.",
+		buttons: []tbxSheetButton{
+			{label: "Not now"},
+			{label: what, primary: true, run: func() {
+				androidRTStartInstall(func(err error) {
+					// Only where it was asked for: someone who left the store
+					// meanwhile gets the toast, not a game starting.
+					if err == nil && then != nil && apkStoreOnScreen() {
+						then()
+					}
+				})
+			}},
+		},
+		focus: 1,
+	})
+	PlayActivateSound()
 }
 
 // apkStoreOnAction is the screen's input, whatever device it came from.
@@ -550,8 +623,8 @@ func apkStoreCanPlay() (bool, string) {
 	case !rt.canRun:
 		return false, "AndroidRT runs on arm64 Linux (the handheld); this machine is " + rt.host + "."
 	case rt.dir == "":
-		return false, "AndroidRT is not installed. JukaHub does not ship it yet — see the Runtime tab for how to build " +
-			"and copy it to /mnt/SDCARD/Apps/AndroidRT."
+		return false, "AndroidRT, the runtime these games run on, is not installed yet: JukaHub can install it from " +
+			"its own releases (Runtime tab)."
 	case rt.err != "":
 		return false, "AndroidRT at " + rt.dir + " is incomplete: " + rt.err + "."
 	}
@@ -595,9 +668,37 @@ func apkStoreAdd(config *Config, info apkStoreInfo) {
 			apkStoreUI.games[info.Path] = apkStoreGameState{ID: p.ID, Ours: true, Title: p.Title}
 			apkStoreRefreshGames()
 			PlaySuccessSound()
-			ShowToast("Added "+p.Title+" to Game Profiles (Start → Games → Game Profiles)", ToastKindSuccess)
+			ShowToast("Added "+p.Title+" to Games — on the Games Library's Android row and in Game Profiles", ToastKindSuccess)
 		})
 	}()
+}
+
+// apkStoreAddOrOffer is Add to Games: with AndroidRT missing on a device that
+// can run it, it first offers the install (one press installs it, then adds
+// the game); otherwise it adds at once.
+func apkStoreAddOrOffer(config *Config, info apkStoreInfo) {
+	if !apkStoreRuntimeMissing() {
+		apkStoreAdd(config, info)
+		return
+	}
+	tbxOpenSheet(config, tbxSheetSpec{
+		title: "Add " + info.Label + " to Games", subtitle: "AndroidRT is not installed yet", icon: "chip",
+		body: info.Label + " will run on AndroidRT, the runtime JukaHub uses for Android games, and this device " +
+			"does not have it yet. JukaHub can install it from its own GitHub releases (a few MB, checked against the " +
+			"release before it is used) and add the game. Adding it alone is fine too: it is ready the moment " +
+			"AndroidRT is.",
+		buttons: []tbxSheetButton{
+			{label: "Just add", run: func() { apkStoreAdd(config, info) }},
+			{label: "Install and add", primary: true, run: func() {
+				// The game is added at once (it needs nothing to be added);
+				// the install runs beside it on the install bar.
+				apkStoreAdd(config, info)
+				androidRTStartInstall(nil)
+			}},
+		},
+		focus: 1,
+	})
+	PlayActivateSound()
 }
 
 // apkStoreRemove takes the store's own profile away again; the APK stays.
@@ -622,7 +723,7 @@ func apkStoreRemove(info apkStoreInfo) {
 			delete(apkStoreUI.games, info.Path)
 			apkStoreRefreshGames()
 			PlayBackSound()
-			ShowToast("Removed "+info.Label+" from Game Profiles — the APK stays on the card", ToastKindInfo)
+			ShowToast("Removed "+info.Label+" from Games — the APK stays on the card", ToastKindInfo)
 		})
 	}()
 }
@@ -645,8 +746,12 @@ func apkStorePlay(config *Config, info apkStoreInfo) {
 	go func() {
 		entry, found := apkStoreFindEntry(st.ID)
 		var err error
+		rtMissing := false
 		if found && entry.ready() {
 			err = launchGameProfile(entry)
+		} else if found {
+			// The one thing Play can put right itself: no AndroidRT yet.
+			rtMissing = androidRTSupported() && androidRuntimeMissingNow()
 		}
 		tbxPost(func() {
 			apkStoreSetBusy(path, "")
@@ -655,6 +760,8 @@ func apkStorePlay(config *Config, info apkStoreInfo) {
 				PlayErrorSound()
 				ShowToast("The game profile is gone — add it again", ToastKindError)
 				apkStoreRefreshGames()
+			case rtMissing && apkStoreOnScreen():
+				apkStoreOfferRuntime(config, entry.Profile.Title, "Install and play", func() { apkStorePlay(config, info) })
 			case !entry.ready():
 				PlayErrorSound()
 				if !apkStoreOnScreen() {
@@ -797,16 +904,29 @@ func apkStoreOpenAPK(config *Config, info apkStoreInfo) {
 		if st.Ours {
 			buttons = append(buttons, tbxSheetButton{label: "Remove from Games", run: func() { apkStoreRemove(info) }})
 		}
-		if canPlay {
+		switch {
+		case canPlay:
 			buttons = append(buttons, tbxSheetButton{label: "Play", primary: !wontRun, run: func() { apkStorePlay(config, info) }})
-		} else {
+		case apkStoreRuntimeMissing():
+			body.WriteString("\n\n" + why + " The button below installs it (a few MB, checked against the release " +
+				"before it is used) and then starts the game.")
+			buttons = append(buttons, tbxSheetButton{label: "Install AndroidRT and play", primary: !wontRun, run: func() {
+				androidRTStartInstall(func(err error) {
+					// A game starts only where it was asked for: someone who
+					// left the store meanwhile gets the toast, not a launch.
+					if err == nil && apkStoreOnScreen() {
+						apkStorePlay(config, info)
+					}
+				})
+			}})
+		default:
 			body.WriteString("\n\n" + why)
 		}
 	case info.Tier.canAdd():
 		if !canPlay {
 			body.WriteString("\n\n" + why + " Adding it now is fine: it is ready the moment AndroidRT is.")
 		}
-		buttons = append(buttons, tbxSheetButton{label: "Add to Games", primary: true, run: func() { apkStoreAdd(config, info) }})
+		buttons = append(buttons, tbxSheetButton{label: "Add to Games", primary: true, run: func() { apkStoreAddOrOffer(config, info) }})
 	}
 	focus := 0
 	for i, b := range buttons {
@@ -983,30 +1103,71 @@ func apkStoreOpenCatalogEntry(config *Config, e apkStoreCatalogEntry) {
 // apkStoreRuntimeText is the AndroidRT sheet.
 func apkStoreRuntimeText(rt apkStoreRuntime) string {
 	var b strings.Builder
+	line, installing := androidRTInstallLine()
+	newer, newerTag := androidRTUpdateKnown()
 	switch {
+	case installing:
+		b.WriteString(line + "\n\nThe install bar shows it on every screen; Stop ends it.\n\n")
 	case rt.dir != "" && rt.err == "":
-		b.WriteString("AndroidRT is installed at " + rt.dir + " (started through its " + rt.form + ").\n\n")
+		b.WriteString("AndroidRT is ready: " + apkStoreRuntimeWhere(rt) + ".\nFolder: " + rt.dir + " (started through its " +
+			rt.form + ").\n\n")
+		if rt.source == androidRTSourceDownloaded && newer {
+			b.WriteString(newerTag + " is out. Update installs it; the copy you have stays in use until the new one " +
+				"has been checked.\n\n")
+		}
 	case rt.dir != "":
 		b.WriteString("AndroidRT was found at " + rt.dir + ", but " + rt.err + ".\n\n")
+	case rt.canRun:
+		b.WriteString("AndroidRT is not installed. Install downloads it from JukaHub's own GitHub releases (a few MB). " +
+			"The package is checked against the release (its signed manifest, or GitHub's checksum) and its own " +
+			"checksum list, and its loader has to start on this device before it is kept.\n\n")
 	default:
-		b.WriteString("AndroidRT is not installed. JukaHub does not ship a prebuilt runtime yet: it is built from the " +
-			"source in player/androidrt.\n\n")
+		b.WriteString("AndroidRT is an arm64 Linux runtime: Android games run on the handheld, and this machine reads " +
+			"APKs only.\n\n")
 	}
-	b.WriteString("## Installing it\n" +
-		"• Build it with an aarch64 toolchain: CROSS=aarch64-linux-gnu- player/androidrt/build-tsp.sh\n" +
-		"• Copy the output folder to /mnt/SDCARD/Apps/AndroidRT (JUKAHUB_ANDROIDRT can point elsewhere).\n" +
-		"• Come back here: the Runtime tab and every added game pick it up.\n\n" +
+	if len(rt.skipped) > 0 {
+		b.WriteString("## Passed over\n")
+		for _, s := range rt.skipped {
+			b.WriteString("• " + s + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("## Where it comes from\n" +
+		"• Every TrimUI JukaHub package carries it beside the app (Apps/JukaHub/androidrt); it updates with JukaHub.\n" +
+		"• Without that copy, Install puts the same build in JukaHub's data folder, and the Emulator updates " +
+		"setting keeps it current.\n" +
+		"• A runtime you built yourself (player/androidrt/build-tsp.sh) in /mnt/SDCARD/Apps/AndroidRT is used " +
+		"first; JUKAHUB_ANDROIDRT can point anywhere.\n\n" +
 		"## What it is\n" +
 		"AndroidRT loads an Android game's native library with its own bionic loader, answers the game's Java calls " +
-		"itself (it has no Java runtime), and draws through the handheld's own EGL. It is experimental: no game has " +
-		"been run on a handheld with it yet. docs/ANDROID.md has the details and the device-trial steps.")
+		"itself (it has no Java runtime), and draws through the firmware's own SDL2 and EGL. It is experimental: no " +
+		"game has been run on a handheld with it yet. docs/ANDROID.md has the details and the device-trial steps.")
 	return b.String()
 }
 
 func apkStoreOpenRuntimeSheet(config *Config) {
+	rt := apkStoreUI.runtime
+	_, installing := androidRTInstallLine()
+	newer, newerTag := androidRTUpdateKnown()
+	var buttons []tbxSheetButton
+	switch {
+	case installing:
+		buttons = []tbxSheetButton{{label: "Close"}, {label: "Stop", run: androidRTStopInstall}}
+	case !apkStoreUI.probed:
+	case rt.dir == "" && rt.canRun:
+		buttons = []tbxSheetButton{{label: "Close"}, {label: "Install", primary: true, run: func() { androidRTStartInstall(nil) }}}
+	case rt.dir != "" && rt.source == androidRTSourceDownloaded && newer:
+		buttons = []tbxSheetButton{{label: "Close"}, {label: "Update to " + newerTag, primary: true, run: func() { androidRTStartInstall(nil) }}}
+	case rt.dir != "" && rt.source == androidRTSourceDownloaded:
+		buttons = []tbxSheetButton{{label: "Close"}, {label: "Check for an update", run: func() { androidRTCheckUpdate(true) }}}
+	}
+	focus := 0
+	if len(buttons) > 0 {
+		focus = len(buttons) - 1
+	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title: "AndroidRT", subtitle: "The runtime the APK Store's games run on", icon: "chip",
-		body: apkStoreRuntimeText(apkStoreUI.runtime), tall: true,
+		body: apkStoreRuntimeText(rt), tall: true, buttons: buttons, focus: focus,
 	})
 	PlayActivateSound()
 }

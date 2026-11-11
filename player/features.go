@@ -416,6 +416,13 @@ func feEnterFocused(config *Config) {
 			return
 		}
 	}
+	// A WireGuard configuration offers itself as the VPN's; A again imports
+	// it (vpn.go). Any other .conf opens as text below.
+	if strings.EqualFold(filepath.Ext(entry.Path), ".conf") {
+		if confPath, err := resolveExplorerEntry(config, entry.Path); err == nil && vpnFilesOpen(config, confPath) {
+			return
+		}
+	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if isImageExtension(ext) {
 		imagePath, err := resolveExplorerEntry(config, entry.Path)

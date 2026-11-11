@@ -17,6 +17,12 @@ package main
 //   - The EEPROM is optional: xemu creates one.
 //   - "Apply to xemu" writes the found paths into xemu.toml's [sys.files], the
 //     settings xemu itself reads, so nothing has to be browsed to by hand.
+//     Starting xemu applies them too, and a game started without them stops
+//     with what to add and where (emuStandaloneLaunchCheck) instead of opening
+//     an xemu window that cannot boot it.
+//
+// The Xbox 360 has no setup sheet: Xenia Canary needs no console files, only
+// the Visual C++ runtime its tile and install toast name when it is missing.
 //
 // On the TrimUI Smart Pro the Xbox runs through the experimental hakuX port
 // instead (hakux.go installs it, hakuxpage.go builds its checklist), and the
@@ -408,7 +414,13 @@ func emuXboxScan() emuXboxReport {
 	if !IsWindows() {
 		return hakuxSheetReport()
 	}
-	xemuExe := emuWinExe("xemu")
+	return emuXemuScan(emuWinExe("xemu"))
+}
+
+// emuXemuScan is the Windows checklist for one xemu: the one the catalog finds,
+// or the launcher a game is about to start, whose portable xemu.toml is the one
+// that counts.
+func emuXemuScan(xemuExe string) emuXboxReport {
 	report := emuXboxReport{Folder: emuXboxFolder(), XemuExe: xemuExe, Emulator: "xemu", Installed: xemuExe != "", Supported: true}
 	report.Files = []emuXboxFile{
 		{Key: "bootrom", Label: "MCPX boot ROM", Want: "mcpx_1.0.bin · 512 bytes", Required: true},
@@ -624,6 +636,151 @@ func emuXboxAfterInstall(ctx context.Context, client *http.Client) {
 	}
 }
 
+// ── Starting xemu and Xenia ─────────────────────────────────────────────────
+
+// emuXemuMissingMessage says what the checklist still lacks and how to get it,
+// with subject ("xemu", "it") as the sentence's subject; "" when nothing is
+// missing. The firmware is the user's own dump; the hard-disk image is the
+// free one the sheet downloads.
+func emuXemuMissingMessage(report emuXboxReport, subject string) string {
+	var firmware []string
+	hdd := false
+	for _, f := range report.Files {
+		if !f.Required || f.ok() {
+			continue
+		}
+		if f.Key == "hdd" {
+			hdd = true
+			continue
+		}
+		item := f.Label
+		if f.Problem != "" {
+			item += " (" + f.Problem + ")"
+		}
+		firmware = append(firmware, item)
+	}
+	folder := report.Folder
+	if folder == "" {
+		folder = "the BIOS\\xbox folder"
+	}
+	switch {
+	case len(firmware) > 0 && hdd:
+		return subject + " needs " + strings.Join(firmware, " and ") + " — put your own dumps in " + folder +
+			" — and a hard-disk image (Emulators → xemu → Y, then X gets a free one)"
+	case len(firmware) > 0:
+		return subject + " needs " + strings.Join(firmware, " and ") + " — put your own dumps in " + folder +
+			" (Emulators → xemu → Y lists them)"
+	case hdd:
+		return subject + " needs a hard-disk image — Emulators → xemu → Y, then X downloads a free one"
+	}
+	return ""
+}
+
+// emuXemuApplyFound writes the files the checklist found into xemu.toml when
+// xemu does not name them yet, so a user who only dropped them into the folder
+// never has to open the sheet. ready is false while a required file is still
+// missing; nothing is written then.
+func emuXemuApplyFound(report emuXboxReport) (ready bool, err error) {
+	if !report.ready() {
+		return false, nil
+	}
+	if report.Configured {
+		return true, nil
+	}
+	path, err := emuXboxApply(report)
+	if err != nil {
+		return true, err
+	}
+	logInfo("emulators", "xemu: wrote the Xbox files the checklist found into %s", path)
+	return true, nil
+}
+
+// emuStandaloneLaunchCheck is asked before the Games Library starts a game in
+// a standalone Windows emulator. For xemu it is the difference between a game
+// and an empty window: without the MCPX boot ROM, a flash ROM and a hard-disk
+// image xemu boots no disc and says why only inside its own window. So the
+// files the checklist found are applied first, and a missing one stops the
+// launch with what to add and where. nil for every other launcher, and off
+// Windows.
+func emuStandaloneLaunchCheck(launcher string) error {
+	if !IsWindows() || !emuIsXemuLauncher(launcher) {
+		return nil
+	}
+	report := emuXemuScan(launcher)
+	ready, err := emuXemuApplyFound(report)
+	if !ready {
+		return errors.New(emuXemuMissingMessage(report, "xemu"))
+	}
+	if err != nil {
+		return fmt.Errorf("could not give xemu the Xbox files: %v", err)
+	}
+	return nil
+}
+
+// emuXemuPrepareLaunch is emuStandaloneLaunchCheck for xemu started from its
+// own tile, where it never stops the start — xemu's own menus are a way to
+// set it up too. It returns what is still missing, for the launch toast.
+func emuXemuPrepareLaunch(xemuExe string) string {
+	report := emuXemuScan(xemuExe)
+	ready, err := emuXemuApplyFound(report)
+	switch {
+	case !ready:
+		return emuXemuMissingMessage(report, "it")
+	case err != nil:
+		logWarn("emulators", "xemu: could not apply the Xbox files: %v", err)
+		return "the Xbox files could not be written into xemu.toml (" + firstLine(err.Error()) + ")"
+	}
+	return ""
+}
+
+// emuWinSetupNote starts a Windows emulator tile's detail line while something
+// outside the emulator still stands between it and a game: xemu's Xbox files,
+// Xenia's Visual C++ runtime. "" when nothing does, and off Windows.
+func emuWinSetupNote(name, exe string) string {
+	if !IsWindows() {
+		return ""
+	}
+	switch {
+	case strings.EqualFold(name, "xemu"):
+		report := emuXemuScan(exe)
+		switch {
+		case report.ready() && report.Configured:
+			return ""
+		case report.ready():
+			return "Xbox files found · Y applies them"
+		}
+		return "Xbox files missing · Y sets them up"
+	case strings.EqualFold(name, emuXeniaName) && !emuWinHasVCRuntime():
+		return "needs the Visual C++ Redistributable (x64)"
+	}
+	return ""
+}
+
+// emuIsXeniaLauncher reports whether a launcher path is Xenia's executable:
+// Canary's xenia_canary.exe, or upstream's xenia.exe.
+func emuIsXeniaLauncher(launcher string) bool {
+	base := launcher
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.ToLower(strings.TrimSpace(base))
+	return base == "xenia_canary.exe" || base == "xenia.exe"
+}
+
+// emuStandaloneGameArgs is the documented command line that boots a game full
+// screen in xemu ("-full-screen -dvd_path <iso>", xemu.app/docs/cli) and in
+// Xenia ("<game> --fullscreen=true": the game's path comes before the
+// options). ok is false for every other launcher.
+func emuStandaloneGameArgs(launcher, romPath string) ([]string, bool) {
+	switch {
+	case emuIsXemuLauncher(launcher):
+		return []string{"-full-screen", "-dvd_path", romPath}, true
+	case emuIsXeniaLauncher(launcher):
+		return []string{romPath, "--fullscreen=true"}, true
+	}
+	return nil, false
+}
+
 // ── Setup sheet ─────────────────────────────────────────────────────────────
 
 // emuXboxSheet is the setup checklist drawn over the Emulators page.
@@ -636,10 +793,20 @@ var emuXboxSheet struct {
 	again   bool
 	report  emuXboxReport
 	scanned bool
-	focus   int // index into emuXboxSheetButtons
-	buttons []emuXboxButtonHit
-	rect    sdl.Rect
+	// scannedAt is when the last scan finished: the open sheet looks again
+	// every emuXboxSheetRescanEvery, so files dropped into the folder while
+	// it is up turn green on their own.
+	scannedAt time.Time
+	focus     int // index into emuXboxSheetButtons
+	buttons   []emuXboxButtonHit
+	rect      sdl.Rect
 }
+
+// emuXboxSheetRescanEvery is how often the open sheet checks the folders again.
+const emuXboxSheetRescanEvery = 4 * time.Second
+
+// emuXboxHDDTool names the HDD image download on the install card.
+const emuXboxHDDTool = "Xbox HDD image"
 
 type emuXboxButtonHit struct {
 	index int
@@ -647,7 +814,8 @@ type emuXboxButtonHit struct {
 }
 
 // emuXboxAction is what one of the sheet's buttons does: Apply, HDD and Folder
-// are xemu's (Windows), Install and Games are hakuX's (the handheld).
+// are xemu's (Windows), Games is hakuX's (the handheld), and Install installs
+// whichever of the two the device uses.
 type emuXboxAction int
 
 const (
@@ -679,6 +847,15 @@ func emuXboxSheetButtons(report emuXboxReport, scanned bool) []emuXboxButton {
 		return []emuXboxButton{
 			{Label: install, Action: emuXboxActInstall, Key: "X", Disabled: !report.Supported},
 			{Label: "Xbox games", Action: emuXboxActGames, Key: "Y", Disabled: !report.Installed},
+			{Label: "Back", Action: emuXboxActBack},
+		}
+	}
+	if scanned && !report.Installed {
+		// xemu itself first: its install also fetches the free HDD image, and
+		// the firmware can go into the folder meanwhile.
+		return []emuXboxButton{
+			{Label: "Install xemu", Action: emuXboxActInstall, Key: "X"},
+			{Label: "Open folder", Action: emuXboxActFolder, Key: "Y"},
 			{Label: "Back", Action: emuXboxActBack},
 		}
 	}
@@ -764,6 +941,7 @@ func emuXboxRescan() {
 			emuXboxSheet.mu.Lock()
 			emuXboxSheet.report = report
 			emuXboxSheet.scanned = true
+			emuXboxSheet.scannedAt = time.Now()
 			if !emuXboxSheet.again {
 				emuXboxSheet.scanning = false
 				emuXboxSheet.mu.Unlock()
@@ -773,6 +951,39 @@ func emuXboxRescan() {
 			emuXboxSheet.mu.Unlock()
 		}
 	}()
+}
+
+// emuXboxRescanIfStale starts a rescan when the open sheet's last one finished
+// more than emuXboxSheetRescanEvery ago and none is running. The sheet asks
+// every frame; the scan itself runs off the event thread.
+func emuXboxRescanIfStale() {
+	emuXboxSheet.mu.Lock()
+	stale := emuXboxSheet.open && emuXboxSheet.scanned && !emuXboxSheet.scanning &&
+		time.Since(emuXboxSheet.scannedAt) > emuXboxSheetRescanEvery
+	emuXboxSheet.mu.Unlock()
+	if stale {
+		emuXboxRescan()
+	}
+}
+
+// emuXboxInstallLine is the sheet's progress line while an Xbox download it
+// started runs (hakuX, xemu or the HDD image): the install card's phase and
+// percentage, so the sheet itself shows the work its X began. "" otherwise.
+func emuXboxInstallLine() string {
+	visible, tool, phase, _, done, total, _, _, ending := installBarSnapshot()
+	if !visible || ending {
+		return ""
+	}
+	switch tool {
+	case hakuxName, "xemu", emuXboxHDDTool:
+	default:
+		return ""
+	}
+	line := tool + " · " + phase
+	if total > 0 && done > 0 {
+		line += fmt.Sprintf(" %d%%", done*100/total)
+	}
+	return line
 }
 
 // emuXboxSnapshot is the sheet's report for drawing and actions.
@@ -835,6 +1046,12 @@ func emuXboxPressAction(action emuXboxAction) {
 		PlayActivateSound()
 		ShowToast("Put the Xbox files in "+folder, ToastKindInfo)
 	case emuXboxActInstall:
+		if IsWindows() {
+			if spec, ok := emuWinSpecFor("xemu"); ok {
+				emuWinStartInstall(spec)
+			}
+			return
+		}
 		hakuxStartInstall()
 	case emuXboxActGames:
 		if !report.Installed {
@@ -865,7 +1082,7 @@ func emuXboxStartHDDDownload() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	installBarBegin("Xbox HDD image")
+	installBarBegin(emuXboxHDDTool)
 	installBarPhase(installPhaseResolving)
 	go func() {
 		defer endPatchOp()
@@ -914,8 +1131,8 @@ func emuXboxFocused() int {
 
 // ctrlEmuXboxSheet is the pad on the sheet: Left/Right walk the buttons, A
 // presses the focused one, X and Y press the buttons they are printed on
-// (xemu: the HDD image and the folder; hakuX: install or update, and the Xbox
-// games), B closes the sheet.
+// (xemu: install it or fetch the HDD image, and the folder; hakuX: install or
+// update, and the Xbox games), B closes the sheet.
 func ctrlEmuXboxSheet(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -1021,10 +1238,12 @@ func emuXboxSheetHeading(report emuXboxReport, scanned bool) (string, string, sd
 		return "Ready — Y opens your Xbox games", "Ready", ToastSuccessInk()
 	}
 	switch {
+	case !report.Installed:
+		return "xemu is not installed — X installs it, and the files can go in the folder first", "Not installed", ColorTextTertiary()
 	case report.ready() && report.Configured:
 		return "Ready — xemu has everything it needs", "Ready", ToastSuccessInk()
 	case report.ready():
-		return "All files found — A applies them to xemu", "Not applied", ToastWarnInk()
+		return "All files found — A applies them to xemu (starting xemu does too)", "Not applied", ToastWarnInk()
 	}
 	return "Missing: " + strings.Join(missing, ", "), itoa(len(missing)) + " missing", ToastWarnInk()
 }
@@ -1037,16 +1256,17 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	if renderer == nil || config == nil || !emuXboxSheetOpen() {
 		return
 	}
+	emuXboxRescanIfStale()
 	report, scanned, scanning := emuXboxSnapshot()
 	small, _ := getCachedFont(config, "small")
 	if small == nil {
 		return
 	}
-	label := getFontSized(config, "small", 18)
+	label := FontForRole(config, TypeBody)
 	if label == nil {
 		label = small
 	}
-	note := getFontSized(config, "small", 15)
+	note := FontForRole(config, TypeLabel)
 	if note == nil {
 		note = small
 	}
@@ -1059,6 +1279,11 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	subtitle, statusText, statusColor := emuXboxSheetHeading(report, scanned)
 	if scanning && scanned {
 		statusText = "Checking…"
+	}
+	if line := emuXboxInstallLine(); line != "" {
+		// The X just pressed is running: its progress replaces what is
+		// missing until it ends and the rescan after it updates the rows.
+		subtitle, statusText, statusColor = line, "Working…", ColorTextSecondary()
 	}
 	header := UIPanelHeader("Xbox setup", subtitle, "emu-xbox")
 	header.Status = statusText
@@ -1073,7 +1298,7 @@ func renderEmuXboxSheet(renderer *sdl.Renderer, config *Config, page sdl.Rect) {
 	rowH := labelH + noteH + 18
 
 	buttons := emuXboxSheetButtons(report, scanned)
-	btnFont := getFontSized(config, "small", 17)
+	btnFont := FontForRole(config, TypeBody)
 	if btnFont == nil {
 		btnFont = small
 	}

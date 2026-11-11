@@ -265,7 +265,9 @@ clock and the notification bell are in the bar itself.
   pools newer builds of the installed cores, checksum-checked and checked to
   load on this firmware; the daily **Emulator updates** pass installs them by
   itself (keeping the replaced build for a one-press roll back) unless set to
-  Notify me or Off, and keeps JukaHub's own PPSSPP current the same way. Reports
+  Notify me or Off, and keeps JukaHub's own PPSSPP, hakuX and the downloaded
+  runtimes current the same way — on a PC, the emulators JukaHub installed and
+  its RetroArch's cores. Reports
   and core pools live in `Apps/JukaHub/data/performance`; see
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 * **Windows Apps** — scan for `.exe` files and launch basic Windows programs
@@ -683,6 +685,7 @@ four the same way, with controller hints; see
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
+| [VPN](docs/VPN.md) | WireGuard: importing a configuration (card, Files or phone), what goes through the tunnel, how it works on the handheld and on Windows |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
 | [Recordings](docs/RECORDINGS.md) | captures the emulator writes: one folder for both sides, listed and playable, and what an in-game overlay cannot do |

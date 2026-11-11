@@ -120,7 +120,7 @@ func mediaHubDrawFavUndo(renderer *sdl.Renderer, config *Config, list sdl.Rect) 
 	if !mediaFavUndoActive() || mediaHub.confirm.open {
 		return
 	}
-	font := getFontSized(config, "small", 16)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}
@@ -137,7 +137,7 @@ func mediaHubDrawFavUndo(renderer *sdl.Renderer, config *Config, list sdl.Rect) 
 	fillRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, btn.H/2, WithAlpha(glassAccent(), 60))
 	strokeRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, btn.H/2, 1, glassAccent())
 	drawText(renderer, font, label, btn.X+16, btn.Y+(btn.H-bh)/2, ColorTextPrimary(), textAlignLeft)
-	if small := getFontSized(config, "small", 13); small != nil {
+	if small := FontForRole(config, TypeCaption); small != nil {
 		yw, yh := measureText(small, "Y")
 		drawText(renderer, small, "Y", btn.X+btn.W-18-yw, btn.Y+(btn.H-yh)/2, ColorTextTertiary(), textAlignLeft)
 	}

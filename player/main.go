@@ -51,6 +51,11 @@ func main() {
 	if handled, code := handleSecretCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	// The VPN's tunnel process (vpnd_linux.go) and its elevated helper on
+	// Windows (vpn_windows.go) are this binary started with their own flags.
+	if handled, code := handleVPNCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 
 	InitLogging()
 	// What the last session's crash left is filed as a report, and this
@@ -279,6 +284,11 @@ func main() {
 	// probe, telemetry, the update check and the network/companion listeners all
 	// compete with cold font rasterisation, and none of them are needed to paint
 	// the home screen. See runDeferredStartupFor.
+	//
+	// The VPN goes first (vpn.go), so the tunnel is up, or on its way, before
+	// anything below goes online. It is queued in safe mode too: there it
+	// keeps the tunnel down, stopping one an earlier run left behind.
+	deferStartupTask("vpn", func() { vpnStartup(config) })
 	if safeModeAllows(SafeFeatureNetwork) {
 		deferStartupTask("weather", func() { startWeather(config) })
 	}
@@ -2821,6 +2831,11 @@ func main() {
 					} else if activeSceneIndex != -1 {
 						// Input field active - handled by virtualKeyboardActive
 					} else {
+						// Switch access takes A (select) and, in two-button mode, B
+						// (next) before the screen's own bindings (switchaccess.go).
+						if switchScanPadPress(renderer, e, config) {
+							continue
+						}
 						// The top bar, the home layout, the Patch list and the screen's
 						// own module, in that order: a focused bar button answers to A
 						// before the screen binds it, and Up on a screen with nothing
@@ -3293,6 +3308,9 @@ func main() {
 		// Which words the hints use this frame: the pad's buttons or the
 		// keyboard's keys (inputhints.go).
 		inputHintsTick(config)
+		// Switch access steps the focus on its own while the mode is on
+		// (switchaccess.go).
+		switchScanTick(config)
 		// A video whose decoder reached the end releases the player here, even
 		// when its scene is not the one on screen (the flag used to wait for a
 		// repaint of a scene the user had already left).
@@ -3742,6 +3760,11 @@ func main() {
 		// The virtual cursor goes on last, after both captures, so it is on
 		// screen but never in a screenshot (virtualcursor.go).
 		vcursorRender(renderer)
+		// The accessibility magnifier draws after the captures above, so a
+		// screenshot or a shared frame is the screen and not the lens, and
+		// before the dimmer, because it copies the finished frame
+		// (magnifier.go).
+		magnifierRender(renderer, config)
 		// The brightness controller's main-thread work for the frame (the
 		// probe, a saved level, the header cards a full-screen surface now
 		// covers), then — where no brightness control exists — the software

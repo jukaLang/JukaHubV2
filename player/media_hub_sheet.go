@@ -243,7 +243,7 @@ func mediaHubDrawSheet(renderer *sdl.Renderer, config *Config) {
 		art.X = card.X + pad + (leftW-pad-art.W)/2
 	}
 	mediaDrawCardArt(renderer, &s.card, art)
-	small := getFontSized(config, "small", 13)
+	small := FontForRole(config, TypeCaption)
 	if small != nil && s.card.duration != "" {
 		mediaDrawDurationBadge(renderer, small, s.card.duration, art)
 	}
@@ -251,8 +251,8 @@ func mediaHubDrawSheet(renderer *sdl.Renderer, config *Config) {
 		mediaDrawProgress(renderer, art, s.card.progress)
 	}
 
-	titleFont := getFontSized(config, "small", 20)
-	metaFont := getFontSized(config, "small", 15)
+	titleFont := FontForRole(config, TypeBody)
+	metaFont := FontForRole(config, TypeLabel)
 	textX := card.X + pad
 	textW := leftW - pad
 	y := art.Y + art.H + 14
@@ -282,7 +282,7 @@ func mediaHubDrawSheet(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Actions: a column of rows on the right.
-	rowFont := getFontSized(config, "small", 17)
+	rowFont := FontForRole(config, TypeBody)
 	colX := card.X + leftW + pad
 	colW := card.X + card.W - pad - colX
 	rowH := int32(44)
@@ -354,9 +354,9 @@ func mediaHubDrawConfirm(renderer *sdl.Renderer, config *Config) {
 	if limit := screenWidth - 48; w > limit {
 		w = limit
 	}
-	titleFont := getFontSized(config, "small", 20)
-	bodyFont := getFontSized(config, "small", 15)
-	btnFont := getFontSized(config, "small", 17)
+	titleFont := FontForRole(config, TypeBody)
+	bodyFont := FontForRole(config, TypeLabel)
+	btnFont := FontForRole(config, TypeBody)
 	if titleFont == nil || bodyFont == nil || btnFont == nil {
 		return
 	}

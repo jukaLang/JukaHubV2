@@ -739,8 +739,8 @@ func drawTextBrowserLoading(renderer *sdl.Renderer, config *Config, element Elem
 		fillRoundedRect(renderer, left, track.Y, right-left, track.H, 2, accent)
 	}
 
-	titleFont := getFontSized(config, "small", 19)
-	labelFont := getFontSized(config, "small", 15)
+	titleFont := FontForRole(config, TypeBody)
+	labelFont := FontForRole(config, TypeLabel)
 	if titleFont == nil || labelFont == nil {
 		return
 	}

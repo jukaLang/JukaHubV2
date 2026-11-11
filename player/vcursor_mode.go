@@ -535,7 +535,7 @@ func evdevFaceCode(button uint8) uint16 {
 }
 
 // mbridgeParamsFor reads, on the main thread, what the games bridge needs from
-// the settings: which evdev buttons are A, B and X once the handheld's
+// the settings: which evdev buttons are A, B, X and Y once the handheld's
 // face-button swaps are undone (padFaceButton — the printed A is the pad's
 // BTN_EAST on a TrimUI), and both sticks' calibration.
 func mbridgeParamsFor(config *Config) mbridgeParams {
@@ -543,7 +543,28 @@ func mbridgeParamsFor(config *Config) mbridgeParams {
 		codeA: evdevFaceCode(padFaceButton(config, sdl.CONTROLLER_BUTTON_A)),
 		codeB: evdevFaceCode(padFaceButton(config, sdl.CONTROLLER_BUTTON_B)),
 		codeX: evdevFaceCode(padFaceButton(config, sdl.CONTROLLER_BUTTON_X)),
+		codeY: evdevFaceCode(padFaceButton(config, sdl.CONTROLLER_BUTTON_Y)),
 		calL:  stickCalFor(config, stickLeft),
 		calR:  stickCalFor(config, stickRight),
+	}
+}
+
+// mbridgeDefaultParams is mbridgeParamsFor with every setting at its default
+// (the handheld swaps A/B and X/Y, the sticks are uncalibrated), for a launch
+// that started off the main thread with no settings read for it. It reads no
+// config, so any goroutine may call it.
+func mbridgeDefaultParams() mbridgeParams {
+	a, b := uint8(sdl.CONTROLLER_BUTTON_A), uint8(sdl.CONTROLLER_BUTTON_B)
+	x, y := uint8(sdl.CONTROLLER_BUTTON_X), uint8(sdl.CONTROLLER_BUTTON_Y)
+	if P().IsHandheld() {
+		a, b, x, y = b, a, y, x
+	}
+	return mbridgeParams{
+		codeA: evdevFaceCode(a),
+		codeB: evdevFaceCode(b),
+		codeX: evdevFaceCode(x),
+		codeY: evdevFaceCode(y),
+		calL:  stickCalDefault(),
+		calR:  stickCalDefault(),
 	}
 }

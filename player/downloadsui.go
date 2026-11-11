@@ -796,7 +796,7 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 // drawDownloadSectionLabel paints a group heading with a hairline, like the
 // Tools panel, so the list reads in sections without spending a row on a rule.
 func drawDownloadSectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, w int32) {
-	font := getFontSized(config, "small", 15)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}

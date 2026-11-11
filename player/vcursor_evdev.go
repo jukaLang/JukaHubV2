@@ -47,8 +47,25 @@ const (
 	evdevBtnNorth  = 0x133
 	evdevBtnWest   = 0x134
 	evdevBtnTL     = 0x136
+	evdevBtnTR     = 0x137
 	evdevBtnSelect = 0x13a
+	evdevBtnStart  = 0x13b
 	evdevBtnMode   = 0x13c
+
+	// Keyboard keys the Windows-app layout sends.
+	evdevKeyEsc     = 1
+	evdevKeyTab     = 15
+	evdevKeyEnter   = 28
+	evdevKeyLeftAlt = 56
+	evdevKeySpace   = 57
+	evdevKeyF4      = 62
+	evdevKeyUp      = 103
+	evdevKeyLeft    = 105
+	evdevKeyRight   = 106
+	evdevKeyDown    = 108
+	// evdevKeyLast is the last keyboard key a full keyboard declares (the
+	// codes from 1 up to here; mouse and pad buttons start at 0x100).
+	evdevKeyLast = 255
 
 	evdevAbsX     = 0x00
 	evdevAbsY     = 0x01
@@ -381,10 +398,13 @@ func evdevPickPad(devs []evdevDevice) (evdevDevice, bool) {
 
 // mbridgeParams is what the games bridge takes from the settings, read on the
 // main thread when it starts (mbridgeParamsFor): the evdev buttons that are
-// A, B and X under the face-button swap, and the sticks' calibration.
+// A, B, X and Y under the face-button swap, and the sticks' calibration.
+// keys turns on the Windows-app layout (a Wine session, wineInputStart): the
+// pad also types the few keys a Windows program needs without a keyboard.
 type mbridgeParams struct {
-	codeA, codeB, codeX uint16
-	calL, calR          stickCal
+	codeA, codeB, codeX, codeY uint16
+	calL, calR                 stickCal
+	keys                       bool
 }
 
 const (
@@ -397,10 +417,36 @@ const (
 	// mbridgeTrigDown / mbridgeTrigUp latch L2 / R2 into wheel presses.
 	mbridgeTrigDown = 0.5
 	mbridgeTrigUp   = 0.3
+	// mbridgeQuitHold is how long Select + Start are held in a Windows
+	// program before JukaHub ends it (a tap only sends Alt+F4).
+	mbridgeQuitHold = 2 * time.Second
 )
 
 // evdevMouseButtons are the virtual mouse's buttons: left, right, middle.
 var evdevMouseButtons = [3]uint16{evdevBtnLeft, evdevBtnRight, evdevBtnMiddle}
+
+// The keys of the Windows-app layout, as indexes into mbridgeKeyCodes and the
+// engine's kbd.
+const (
+	mbKeyEsc = iota
+	mbKeyTab
+	mbKeyEnter
+	mbKeySpace
+	mbKeyUp
+	mbKeyDown
+	mbKeyLeft
+	mbKeyRight
+	mbKeyAlt
+	mbKeyF4
+	mbKeyCount
+)
+
+// mbridgeKeyCodes are the evdev codes of the layout's keys, in mbKey order.
+var mbridgeKeyCodes = [mbKeyCount]uint16{
+	evdevKeyEsc, evdevKeyTab, evdevKeyEnter, evdevKeySpace,
+	evdevKeyUp, evdevKeyDown, evdevKeyLeft, evdevKeyRight,
+	evdevKeyLeftAlt, evdevKeyF4,
+}
 
 // mbridgeEngine turns the pad's evdev events into mouse events. It does no
 // I/O: the bridge feeds it what it read and writes out what it returns.
@@ -411,7 +457,10 @@ var evdevMouseButtons = [3]uint16{evdevBtnLeft, evdevBtnRight, evdevBtnMiddle}
 // mouse, btn the mouse's buttons held down (left, right, middle), acc the
 // motion not sent yet (under a count), dpadAt when the D-pad started moving
 // the pointer, trig and trigAt the L2 / R2 wheel latch and its next repeat,
-// last the previous tick.
+// last the previous tick. The Windows-app layout (p.keys) adds kbd, the keys
+// held down on the virtual device; combo, Start pressed while Select was held
+// (Alt+F4 instead of Enter); quitAt, when that hold started; and quit, set
+// once the hold lasted mbridgeQuitHold, for the bridge to end the program.
 type mbridgeEngine struct {
 	p      mbridgeParams
 	ranges [18]evdevAbsRange
@@ -426,6 +475,10 @@ type mbridgeEngine struct {
 	trig   [2]bool
 	trigAt time.Time
 	last   time.Time
+	kbd    [mbKeyCount]bool
+	combo  bool
+	quitAt time.Time
+	quit   bool
 }
 
 // setRange records an axis's range and value (EVIOCGABS when the pad opens).
@@ -461,6 +514,113 @@ func (g *mbridgeEngine) reconcileButtons(out []evdevEvent) []evdevEvent {
 		if g.btn[b] && !g.key(code) {
 			g.btn[b] = false
 			out = append(out, evdevEvent{Type: evdevEvKey, Code: evdevMouseButtons[b], Value: 0})
+		}
+	}
+	if g.p.keys && g.on {
+		out = g.reconcileKeys(out)
+	}
+	return out
+}
+
+// reconcileKeys is reconcileButtons for the Windows-app layout: a key whose
+// button is no longer held is let go, Alt+F4 never stays down, and the arrows
+// follow the D-pad as it is now.
+func (g *mbridgeEngine) reconcileKeys(out []evdevEvent) []evdevEvent {
+	for _, src := range [...]struct {
+		key  int
+		code uint16
+	}{{mbKeyEsc, g.p.codeY}, {mbKeyTab, evdevBtnTL}, {mbKeyEnter, evdevBtnStart}, {mbKeySpace, evdevBtnTR}} {
+		if g.kbd[src.key] && !g.key(src.code) {
+			out = g.keyEvent(src.key, false, out)
+		}
+	}
+	out = g.keyEvent(mbKeyF4, false, out)
+	out = g.keyEvent(mbKeyAlt, false, out)
+	if g.combo && !(g.key(evdevBtnSelect) && g.key(evdevBtnStart)) {
+		g.combo, g.quitAt = false, time.Time{}
+	}
+	return g.syncArrows(out)
+}
+
+// keyEvent puts one of the layout's keys down or up, adding the event only
+// when that changes it.
+func (g *mbridgeEngine) keyEvent(k int, down bool, out []evdevEvent) []evdevEvent {
+	if g.kbd[k] == down {
+		return out
+	}
+	g.kbd[k] = down
+	return append(out, evdevEvent{Type: evdevEvKey, Code: mbridgeKeyCodes[k], Value: evdevBool(down)})
+}
+
+// dpadKeys reports whether the D-pad types arrow keys rather than moving the
+// pointer: the Windows-app layout on a pad with a stick to point with. The
+// Brick, which has none, keeps the D-pad as its pointer.
+func (g *mbridgeEngine) dpadKeys() bool {
+	return g.p.keys && (g.ranges[evdevAbsX].valid() || g.ranges[evdevAbsRX].valid())
+}
+
+// syncArrows makes the arrow keys match the D-pad (all up when the D-pad is
+// not typing them).
+func (g *mbridgeEngine) syncArrows(out []evdevEvent) []evdevEvent {
+	on := g.on && g.dpadKeys()
+	x, y := evdevHatDir(g.abs[evdevAbsHat0X]), evdevHatDir(g.abs[evdevAbsHat0Y])
+	out = g.keyEvent(mbKeyLeft, on && x < 0, out)
+	out = g.keyEvent(mbKeyRight, on && x > 0, out)
+	out = g.keyEvent(mbKeyUp, on && y < 0, out)
+	return g.keyEvent(mbKeyDown, on && y > 0, out)
+}
+
+// letGo appends a release for every mouse button and key the virtual device
+// holds down, for the moment the pad is given back.
+func (g *mbridgeEngine) letGo(out []evdevEvent) []evdevEvent {
+	for i, held := range g.btn {
+		if held {
+			out = append(out, evdevEvent{Type: evdevEvKey, Code: evdevMouseButtons[i], Value: 0})
+		}
+	}
+	for i, held := range g.kbd {
+		if held {
+			out = append(out, evdevEvent{Type: evdevEvKey, Code: mbridgeKeyCodes[i], Value: 0})
+		}
+	}
+	return out
+}
+
+// layoutKey is the Windows-app layout for one button while the pad is the
+// mouse: Y is Escape, Start is Enter, L1 is Tab, R1 is Space. Start pressed
+// while Select is held is Alt+F4 instead (close the window), and holding that
+// pair for mbridgeQuitHold asks the bridge to end the program (tick). L1
+// pressed while Select is held belongs to the Select + L1 chord.
+func (g *mbridgeEngine) layoutKey(code uint16, down, selectHeld bool, now time.Time, out []evdevEvent) []evdevEvent {
+	switch code {
+	case g.p.codeY:
+		return g.keyEvent(mbKeyEsc, down, out)
+	case evdevBtnTR:
+		return g.keyEvent(mbKeySpace, down, out)
+	case evdevBtnTL:
+		if down && selectHeld {
+			return out
+		}
+		return g.keyEvent(mbKeyTab, down, out)
+	case evdevBtnStart:
+		if down && selectHeld {
+			g.combo, g.quitAt = true, now
+			out = g.keyEvent(mbKeyAlt, true, out)
+			out = g.keyEvent(mbKeyF4, true, out)
+			// A frame of its own for the press, so nothing downstream folds
+			// the press and the release of F4 into one.
+			out = append(out, evdevEvent{Type: evdevEvSyn, Code: evdevSynReport})
+			out = g.keyEvent(mbKeyF4, false, out)
+			return g.keyEvent(mbKeyAlt, false, out)
+		}
+		if !down && g.combo {
+			g.combo, g.quitAt = false, time.Time{}
+			return out
+		}
+		return g.keyEvent(mbKeyEnter, down, out)
+	case evdevBtnSelect:
+		if !down && g.combo {
+			g.combo, g.quitAt = false, time.Time{}
 		}
 	}
 	return out
@@ -499,6 +659,10 @@ func (g *mbridgeEngine) feed(ev evdevEvent, now time.Time, out []evdevEvent) ([]
 			// The D-pad starts moving the pointer: its speed ramp starts.
 			g.dpadAt = now
 		}
+		if hat && g.on && g.p.keys {
+			// Or it types the arrow keys (dpadKeys).
+			out = g.syncArrows(out)
+		}
 	}
 	return out, false
 }
@@ -511,6 +675,9 @@ func (g *mbridgeEngine) feedKey(ev evdevEvent, now time.Time, out []evdevEvent) 
 		return out, false
 	}
 	down := ev.Value != 0
+	// Whether Select was already held when this button moved: L1 and Start
+	// mean something else with it (layoutKey).
+	selectHeld := g.key(evdevBtnSelect)
 	g.keys[i] = down
 	off := false
 	switch ev.Code {
@@ -532,6 +699,9 @@ func (g *mbridgeEngine) feedKey(ev evdevEvent, now time.Time, out []evdevEvent) 
 			g.btn[b] = down
 			out = append(out, evdevEvent{Type: evdevEvKey, Code: evdevMouseButtons[b], Value: evdevBool(down)})
 		}
+		if g.p.keys {
+			out = g.layoutKey(ev.Code, down, selectHeld, now, out)
+		}
 	}
 	return out, off
 }
@@ -546,6 +716,11 @@ func (g *mbridgeEngine) tick(now time.Time, out []evdevEvent) ([]evdevEvent, boo
 	g.last = now
 	if !g.on {
 		return out, toggle
+	}
+	if g.combo && !g.quitAt.IsZero() && now.Sub(g.quitAt) >= mbridgeQuitHold &&
+		g.key(evdevBtnSelect) && g.key(evdevBtnStart) {
+		// Select + Start held: the window did not close, so the program ends.
+		g.quit, g.quitAt = true, time.Time{}
 	}
 	vx, vy := g.velocity(now)
 	g.acc[0] += vx * dt
@@ -573,6 +748,10 @@ func (g *mbridgeEngine) velocity(now time.Time) (float64, float64) {
 	rx, ry := g.p.calR.shape(g.stick(evdevAbsRX), g.stick(evdevAbsRY))
 	vx, vy := vcursorStickVelocity(lx, ly)
 	ax, ay := vcursorStickVelocity(rx, ry)
+	if g.dpadKeys() {
+		// The D-pad types arrows instead (dpadKeys).
+		return vcursorClampSpeed(vx+ax, vy+ay)
+	}
 	dx, dy := evdevHatDir(g.abs[evdevAbsHat0X]), evdevHatDir(g.abs[evdevAbsHat0Y])
 	bx, by := vcursorDpadVelocity(dx, dy, now.Sub(g.dpadAt))
 	return vcursorClampSpeed(vx+ax+bx, vy+ay+by)
@@ -661,6 +840,8 @@ func (g *mbridgeEngine) setOn(on bool, now time.Time) {
 	g.btn = [3]bool{}
 	g.acc = [2]float64{}
 	g.trig = [2]bool{}
+	g.kbd = [mbKeyCount]bool{}
+	g.combo, g.quitAt, g.quit = false, time.Time{}, false
 	g.last = now
 	if on {
 		g.chord = vcursorChordState{}

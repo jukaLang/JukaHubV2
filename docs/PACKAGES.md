@@ -355,13 +355,21 @@ PATCH_SIGN_KEY=<hex private key> go run ./tools/sign-release \
   -asset JukaHub-Windows.zip=dist/JukaHub-Windows.zip \
   -asset JukaHub-Trimui.zip=dist/JukaHub-Trimui.zip \
   -asset JukaHub-RemotePlay-linux-arm64.zip=dist/JukaHub-RemotePlay-linux-arm64.zip \
+  -asset JukaHub-AndroidRT-linux-arm64.zip=dist/JukaHub-AndroidRT-linux-arm64.zip \
+  -asset JukaHub-Wine-linux-arm64.zip=dist/JukaHub-Wine-linux-arm64.zip \
   -out dist/release.json
 ```
 
-List `JukaHub-RemotePlay-linux-arm64.zip` whenever the release carries it: the
-PS Remote Play panel installs its helpers from that package, and it passes over
-a release whose signed manifest leaves the package out
-([REMOTE_PLAY.md → Installing the helpers](REMOTE_PLAY.md#installing-the-helpers)).
+List `JukaHub-RemotePlay-linux-arm64.zip`, `JukaHub-AndroidRT-linux-arm64.zip`
+and `JukaHub-Wine-linux-arm64.zip` whenever the release carries them: the PS
+Remote Play panel installs its helpers from the first, the APK Store installs
+AndroidRT from the second, and Windows-app setup installs Box64 from the third,
+and each of them passes over a release whose signed manifest leaves its package
+out ([REMOTE_PLAY.md → Installing the helpers](REMOTE_PLAY.md#installing-the-helpers);
+`player/relpack.go` for the two runtimes). Each of those zips also carries its
+own `SHA256SUMS` listing every file inside, which the installer checks after
+the archive's own digest (see [BUILDING.md → AndroidRT and the Box64
+pack](BUILDING.md#androidrt-and-the-box64-pack)).
 
 Upload `release.json` as a release asset. Until the release pipeline runs that
 step with the signing key in CI, releases stay unsigned and the updater keeps

@@ -1020,6 +1020,8 @@ func cfgdocRefresh(config *Config) {
 	a11yInit(config)
 	// The background Remote Play download's switch (psremote_helpers_bg.go).
 	psBgBind(config)
+	// The VPN's switch and route, which its worker reads from a copy (vpn.go).
+	vpnPublish(config, false)
 }
 
 // ── Importing ─────────────────────────────────────────────────────────────

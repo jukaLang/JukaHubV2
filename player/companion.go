@@ -431,6 +431,9 @@ func (s *companionServer) handler() http.Handler {
 	// The Groq API key card: whether a key is saved, and a new one from the
 	// phone, checked with Groq before it is saved (companion_groq.go).
 	mux.HandleFunc("/api/groq-key", s.guard(s.handleGroqKey))
+	// The VPN card: whether a WireGuard configuration is saved (its name,
+	// never its keys), and a new one pasted or picked on the phone (vpn.go).
+	mux.HandleFunc("/api/vpn", s.guard(s.handleVPN))
 	return mux
 }
 
@@ -808,6 +811,16 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <small id=groqNote>Voice typing, voice commands and the Juka chat use it. Get a free key at console.groq.com (API Keys), copy it and paste it here. The handheld checks it with Groq and never shows it again.</small>
 </div>
 
+<div class=card>
+  <h2>VPN (WireGuard)</h2>
+  <p class=note id=vpnStatus>Checking the handheld...</p>
+  <textarea id=vpnConf placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..." autocomplete=off autocapitalize=off autocorrect=off spellcheck=false></textarea>
+  <input type=file id=vpnFile accept=".conf,text/plain">
+  <div class=row><button id=sendVPN>Save on handheld</button></div>
+  <div class=msg id=vpnMsg></div>
+  <small>Paste the WireGuard configuration your VPN provider or your own server gives you, or pick its .conf file. Got a QR code? Scan it with the phone's camera and paste the text. The handheld keeps it to itself and never sends it back; send it over your own Wi-Fi, then switch the VPN on in Settings &gt; Network.</small>
+</div>
+
 <div id=toast></div>
 <script>
 const pin = new URL(location.href).searchParams.get('p') || '';
@@ -996,6 +1009,56 @@ document.getElementById('sendGroq').onclick = async () => {
     toast(err.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+
+// The VPN card. The configuration holds a private key, so the handheld only
+// ever says whether one is saved, its name and whether the VPN is on.
+const vpnStatusEl = document.getElementById('vpnStatus');
+const vpnMsgEl = document.getElementById('vpnMsg');
+let vpnName = '';
+function vpnSay(text, bad) { vpnMsgEl.textContent = text || ''; vpnMsgEl.className = bad ? 'msg bad' : 'msg'; }
+function showVPN(s) {
+  if (!s || !s.set) { vpnStatusEl.textContent = 'No VPN configuration is saved on the handheld yet.'; return; }
+  let line = 'Saved on the handheld: ' + s.name + '. ';
+  line += s.enabled ? 'VPN on' + (s.state ? ': ' + s.state : '') + '.' : 'The VPN is off.';
+  vpnStatusEl.textContent = line;
+}
+fetch('/api/vpn', {headers: hdr(), cache: 'no-store'})
+  .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+  .then(showVPN)
+  .catch(() => { vpnStatusEl.textContent = 'Paste a WireGuard configuration to save it on the handheld.'; });
+document.getElementById('vpnFile').onchange = e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  if (f.size > 65536) { vpnSay('That file is too big to be a WireGuard configuration', true); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('vpnConf').value = String(reader.result || '');
+    vpnName = f.name.replace(/\.conf$/i, '');
+    vpnSay('Loaded ' + f.name + ': tap Save on handheld');
+  };
+  reader.onerror = () => vpnSay('Could not read that file', true);
+  reader.readAsText(f);
+};
+// Text typed or pasted over a picked file is not that file any more.
+document.getElementById('vpnConf').oninput = () => { vpnName = ''; };
+document.getElementById('sendVPN').onclick = async () => {
+  const input = document.getElementById('vpnConf');
+  const config = input.value.trim();
+  if (!config) { toast('Paste the configuration or pick the file first', true); input.focus(); return; }
+  const btn = document.getElementById('sendVPN');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/vpn', {name: vpnName, config}, true);
+    input.value = ''; vpnName = ''; document.getElementById('vpnFile').value = '';
+    showVPN(r);
+    vpnSay(r.message || 'Saved on the handheld.');
+    toast('VPN configuration saved');
+  } catch (err) {
+    vpnSay(err.message, true);
+  } finally {
+    btn.disabled = false;
   }
 };
 

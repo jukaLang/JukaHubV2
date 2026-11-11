@@ -45,13 +45,13 @@ func (t *navRepeatTracker) step(now uint64, dx, dy int) (int, int) {
 		return 0, 0
 	}
 	if dx != t.dx || dy != t.dy {
-		*t = navRepeatTracker{dx: dx, dy: dy, next: now + uint64(a11yRepeatMs(navRepeatDelayMs))}
+		*t = navRepeatTracker{dx: dx, dy: dy, next: now + uint64(a11yRepeatDelayMs())}
 		return 0, 0
 	}
 	if now < t.next {
 		return 0, 0
 	}
-	t.next = now + uint64(a11yRepeatMs(navRepeatIntervalMs))
+	t.next = now + uint64(a11yRepeatRateMs())
 	return dx, dy
 }
 

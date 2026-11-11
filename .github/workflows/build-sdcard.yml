@@ -27,9 +27,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The PS Remote Play helpers for Apps/JukaHub/bin; see remote-play-helpers.yml.
+  # The PS Remote Play helpers for Apps/JukaHub/bin and AndroidRT for
+  # Apps/JukaHub/androidrt; see remote-play-helpers.yml. (Its Box64 pack is a
+  # release asset JukaHub installs by itself, so the card does not carry it.)
   helpers:
-    name: Remote Play helpers
+    name: Remote Play helpers and runtimes
     uses: ./.github/workflows/remote-play-helpers.yml
     # What the helpers job asks for (actions read finds helpers an earlier run
     # built); a called workflow asking for more than this grants cannot start.
@@ -86,6 +88,17 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: remote-play-helpers
+          path: player/native/bin
+
+      - name: Download AndroidRT
+        # JukaHub-AndroidRT-linux-arm64.zip into native/bin, which
+        # package-sdcard.sh checks and unpacks into Apps/JukaHub/androidrt.
+        # Absent when its build failed; the card then goes without it.
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: androidrt-package
           path: player/native/bin
 
       - name: Build and package

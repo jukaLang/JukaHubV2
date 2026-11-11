@@ -281,7 +281,7 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 	// 30px lines would need a 96px row. At 80 the title clears the preview and
 	// the metadata instead of printing through them, as the old 64px row did.
 	lineH := int32(80)
-	subFont := getFontSized(config, "small", 16)
+	subFont := FontForRole(config, TypeLabel)
 	if subFont == nil {
 		subFont = font
 	}
@@ -496,7 +496,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 			}
 		case sdl.K_s:
 			notes.search = ""
-			notes.tab = 3 // search mode
+			notes.tab = 3        // search mode
 			notes.skipText = "s" // the S's own text must not start the query
 			PlayActivateSound()
 		case sdl.K_f:

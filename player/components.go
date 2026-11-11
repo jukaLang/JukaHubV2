@@ -752,8 +752,24 @@ func uiPageHeaderFont(config *Config, role string, size int) *ttf.Font {
 	return font
 }
 
+// uiPageHeaderTitleFont is the title line's face. UX-2: a page title is at
+// least a Heading, whatever the theme's "medium" role happens to be, and a
+// larger role or size steps up to Title. Subtitles and status lines keep the
+// theme's own roles through uiPageHeaderFont.
+func uiPageHeaderTitleFont(config *Config, h UIPageHeader) *ttf.Font {
+	if config == nil {
+		return nil
+	}
+	large := h.TitleSize >= int(TypeTitle.Size()) ||
+		(h.TitleSize <= 0 && strings.EqualFold(strings.TrimSpace(h.TitleRole), "large"))
+	if large {
+		return FontForRole(config, TypeTitle)
+	}
+	return FontForRole(config, TypeHeading)
+}
+
 func uiPageHeaderMetricsFor(config *Config, h UIPageHeader) UIPageHeaderMetrics {
-	title := uiPageHeaderFont(config, h.TitleRole, h.TitleSize)
+	title := uiPageHeaderTitleFont(config, h)
 	sub := uiPageHeaderFont(config, h.SubtitleRole, 0)
 	status := uiPageHeaderFont(config, h.StatusRole, 0)
 	if sub == nil {
@@ -945,7 +961,7 @@ func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) in
 		return h.Y
 	}
 	m := uiPageHeaderMetricsFor(config, h)
-	title := uiPageHeaderFont(config, h.TitleRole, h.TitleSize)
+	title := uiPageHeaderTitleFont(config, h)
 	sub := uiPageHeaderFont(config, h.SubtitleRole, 0)
 	status := uiPageHeaderFont(config, h.StatusRole, 0)
 
@@ -1151,7 +1167,7 @@ func UICategoryTileDraw(renderer *sdl.Renderer, config *Config, tile UICategoryT
 // title, and a hairline running to the panel edge. The Tools page and the Tools
 // overlay both group their tiles this way.
 func UISectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, w int32, glyph func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color)) {
-	font := getFontSized(config, "small", 15)
+	font := FontForRole(config, TypeLabel)
 	if renderer == nil || font == nil {
 		return
 	}

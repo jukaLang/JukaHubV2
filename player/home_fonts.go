@@ -29,10 +29,16 @@ const (
 	homeUIFontBoldFile = "Inter-SemiBold.ttf"
 )
 
-// homeUIFontForRole is the face every UI role resolves to. Bold text replaces
-// the configured Inter cut for every role at once, while still going through
-// the normal path/cache/fallback chain in loadCachedFont.
+// homeUIFontForRole is the face every UI role resolves to. Legible reading
+// text replaces the face with the best system face the machine has
+// (legiblefont.go), falling back to the bundled Inter when none is installed;
+// Bold text then prefers that face's bold cut, or the bundled SemiBold. Every
+// role still goes through the normal path/cache/fallback chain in
+// loadCachedFont.
 func homeUIFontForRole(path string) string {
+	if legible := legibleFontFile(); legible != "" {
+		return legible
+	}
 	if a11y.boldText {
 		return homeUIFontBoldFile
 	}
@@ -55,7 +61,13 @@ var homeUIFontSourceCache = struct {
 // openHomeUIFont opens one size from the shared in-memory source instead of
 // asking SDL_ttf to reopen the font file from the card for every size.
 func openHomeUIFont(path string, size int) (*ttf.Font, error) {
-	path = homeUIFontForRole(path)
+	return openUIFontFile(homeUIFontForRole(path), size)
+}
+
+// openUIFontFile opens exactly the file it is given, with no role substitution.
+// The fallback to the bundled Inter uses it so a broken or unreadable legible
+// face cannot send the open back into the chain that chose it.
+func openUIFontFile(path string, size int) (*ttf.Font, error) {
 	source, err := homeUIFontSourceFor(path)
 	if err != nil {
 		return nil, err

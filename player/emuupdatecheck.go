@@ -14,7 +14,12 @@ package main
 // ever read it.
 //
 // The check is throttled — a page opening does not hit GitHub's rate limit —
-// and skipped outright when the device is offline.
+// and skipped outright when the device is offline. Its GitHub lookups go
+// through the automatic pass's transport (emuPassTransport): a release asked
+// about before is asked conditionally (an unchanged one answers a bodiless
+// 304), and they stand down while a 403 or 429 holds GitHub lookups. The
+// automatic pass, in turn, takes this check's answers while they are fresh
+// (emuWinCachedAnswer) instead of asking again.
 
 import (
 	"context"
@@ -53,6 +58,9 @@ var emuUpdateState struct {
 	// win maps a managed emulator — a Windows one, or the handheld's Xbox tile
 	// for hakuX — to its newer release.
 	win map[string]emuWinRelease
+	// winAnswered records that every release lookup of the last check
+	// answered, so a managed emulator missing from win is current.
+	winAnswered bool
 	// offline records that the last check could not run for lack of a
 	// connection.
 	offline bool
@@ -90,6 +98,34 @@ func emuWinUpdateKnown(name string) (emuWinRelease, bool) {
 	defer emuUpdateState.mu.Unlock()
 	rel, ok := emuUpdateState.win[strings.ToLower(strings.TrimSpace(name))]
 	return rel, ok
+}
+
+// emuWinCachedAnswer is the last check's answer about one managed emulator (a
+// Windows one by name, or emuXboxEntryName for hakuX), when it is fresh enough
+// for the automatic pass to use instead of asking GitHub again: the newer
+// release it found, or — when every lookup of that check answered — that there
+// is none. fresh is false when the pass has to ask for itself.
+func emuWinCachedAnswer(name string) (rel emuWinRelease, newer, fresh bool) {
+	emuUpdateState.mu.Lock()
+	defer emuUpdateState.mu.Unlock()
+	if emuUpdateState.checking || emuUpdateState.checkedAt.IsZero() || time.Since(emuUpdateState.checkedAt) >= emuUpdateCheckInterval {
+		return emuWinRelease{}, false, false
+	}
+	if rel, ok := emuUpdateState.win[strings.ToLower(strings.TrimSpace(name))]; ok {
+		return rel, true, true
+	}
+	return emuWinRelease{}, false, emuUpdateState.winAnswered
+}
+
+// emuNoteWinUpdate records a newer release the automatic pass found, so the
+// tile shows "Update available" without a check of its own.
+func emuNoteWinUpdate(name string, rel emuWinRelease) {
+	emuUpdateState.mu.Lock()
+	defer emuUpdateState.mu.Unlock()
+	if emuUpdateState.win == nil {
+		emuUpdateState.win = map[string]emuWinRelease{}
+	}
+	emuUpdateState.win[strings.ToLower(strings.TrimSpace(name))] = rel
 }
 
 // emuUpdateCount is how many updates the last check found.
@@ -236,7 +272,7 @@ func emuStartUpdateCheck(maxAge time.Duration) {
 func emuRunUpdateCheck() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	client := newEmulatorUpdateClient()
+	client := emuPassClient(newEmulatorUpdateClient())
 
 	var stale map[string]coreIndexEntry
 	var current map[string]bool
@@ -256,6 +292,10 @@ func emuRunUpdateCheck() {
 	}
 
 	win := map[string]emuWinRelease{}
+	// winAnswered stays true only if every lookup answered: a lookup that
+	// failed, or one GitHub's hold kept from running, leaves its emulator's
+	// answer unknown rather than "current".
+	winAnswered := true
 	if IsWindows() {
 		for _, spec := range emuWinSpecs {
 			if !spec.installable() {
@@ -265,8 +305,15 @@ func emuRunUpdateCheck() {
 			if !ok {
 				continue
 			}
+			// RetroArch comes from the buildbot; every other release lookup
+			// is GitHub's, and waits out a hold.
+			if !spec.Buildbot && emuGitHubHeld() {
+				winAnswered = false
+				continue
+			}
 			release, err := emuWinResolve(ctx, client, spec)
 			if err != nil {
+				winAnswered = false
 				if errText == "" {
 					errText = emuFriendlyError(err)
 				}
@@ -276,12 +323,17 @@ func emuRunUpdateCheck() {
 				win[strings.ToLower(spec.Name)] = release
 			}
 		}
+	} else if emuGitHubHeld() {
+		winAnswered = false
 	} else {
 		// The handheld's one standalone install: hakuX, when JukaHub put it
 		// there. Its badge sits on the Xbox tile, keyed by the tile's name.
 		release, newer, err := hakuxUpdateFor(ctx, client)
-		if err != nil && errText == "" {
-			errText = emuFriendlyError(err)
+		if err != nil {
+			winAnswered = false
+			if errText == "" {
+				errText = emuFriendlyError(err)
+			}
 		}
 		if newer {
 			win[strings.ToLower(emuXboxEntryName)] = release
@@ -297,6 +349,7 @@ func emuRunUpdateCheck() {
 		emuUpdateState.indexed = indexed
 	}
 	emuUpdateState.win = win
+	emuUpdateState.winAnswered = winAnswered
 	emuUpdateState.err = errText
 	emuUpdateState.mu.Unlock()
 }

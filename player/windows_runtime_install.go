@@ -1,32 +1,50 @@
 package main
 
-// windows_runtime_install.go — one-click runtime setup for Windows Apps.
+// windows_runtime_install.go — one-press runtime setup for Windows Apps.
 //
 // A stock TrimUI has no Wine, and asking a handheld user to assemble Wine,
-// Box64 and a display stack by hand is unrealistic. This installer fetches the
-// current ARM64 Hangover release (ARM64 Wine plus its emulator DLLs), unpacks
-// its Debian packages into data/windows-runtime, and writes a small launcher
-// wrapper that resolveWine already understands.
+// Box64 and a display stack by hand is unrealistic. The setup chain here
+// installs what a launch still needs, in order, from one confirming press:
 //
-// It also offers the WestonPack display runtime. WestonPack ships as SquashFS;
-// extracting it needs unsquashfs, and mounting it needs a privileged helper.
-// JukaHub therefore extracts it when unsquashfs is available and otherwise
-// leaves the downloaded image for PortMaster, rather than pretending it can
-// mount it.
+//   - the runtime: Box64 + Wine 10.0 on ARM64 Linux, Wine 10.0 on an x86-64
+//     Linux PC without a Wine of its own (wine_pack.go). The Hangover installer
+//     below stays available only as an opt-in (JUKAHUB_WINE_FLAVOR=hangover or
+//     JUKAHUB_WINE_RUNTIME_URL) on a firmware whose glibc can load it: its
+//     Debian 12 build needs glibc 2.36 and the Smart Pro has 2.33;
+//   - the display: WestonPack, the PortMaster runtime ports use to show X11
+//     and Wayland programs on devices with neither. PortMaster's own copy is
+//     used when it is there; else the image is downloaded from PortMaster's
+//     repository and checked (SquashFS header and size, not a Git LFS pointer),
+//     and kept as an image for the launch to mount. A Linux PC that cannot
+//     mount (not root) unpacks it with unsquashfs instead;
+//   - DXVK, only where it can run: automatically on an x86-64 PC whose Vulkan
+//     driver declares 1.3, by hand elsewhere. On the Smart Pro (Vulkan 1.1)
+//     the setup page offers DXVK 1.10.3, the last release that runs on 1.1,
+//     as an experiment; it is never part of the automatic chain there.
+//
+// Then the prefix is prepared (wine_prefix.go), so the first launch is quick.
 
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
+	"context"
+	"crypto/md5"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,10 +55,23 @@ import (
 
 const (
 	windowsRuntimeReleaseAPI = "https://api.github.com/repos/AndreRH/hangover/releases/latest"
-	windowsWestonRuntimeURL  = "https://raw.githubusercontent.com/PortsMaster/PortMaster-New/main/runtimes/weston_pkg_0.2.aarch64.squashfs"
-	windowsDXVKReleaseAPI    = "https://api.github.com/repos/doitsujin/dxvk/releases/latest"
-	windowsRuntimeMaxBytes   = int64(2 << 30) // 2 GiB safety limit
-	windowsRuntimeMaxFiles   = 100000
+	// windowsWestonRuntimeURL is WestonPack in PortMaster-New's repository.
+	// GitHub answers it with a redirect to raw.githubusercontent.com (or to
+	// media.githubusercontent.com for a file kept in Git LFS); westonDownloadClient
+	// admits exactly those two places for this repository.
+	windowsWestonRuntimeURL = "https://github.com/PortsMaster/PortMaster-New/raw/main/runtimes/weston_pkg_0.2.aarch64.squashfs"
+	windowsDXVKReleaseAPI   = "https://api.github.com/repos/doitsujin/dxvk/releases/latest"
+	windowsRuntimeMaxBytes  = int64(2 << 30) // 2 GiB safety limit
+	windowsRuntimeMaxFiles  = 100000
+	// The last DXVK release that runs on Vulkan 1.1, for devices whose driver
+	// is no newer. GitHub publishes no digest for it; the MD5 is the one
+	// Bottles' component index lists for this tarball.
+	windowsDXVKLegacyURL     = "https://github.com/doitsujin/dxvk/releases/download/v1.10.3/dxvk-1.10.3.tar.gz"
+	windowsDXVKLegacyVersion = "1.10.3"
+	windowsDXVKLegacyMD5     = "1c07b9d70ecc5df6c3ba9d13efaa351e"
+	// WestonPack 0.2 is about 53 MB; anything far outside this is not it.
+	westonMinImage = int64(20 << 20)
+	westonMaxImage = int64(200 << 20)
 )
 
 var (
@@ -50,9 +81,11 @@ var (
 	windowsRuntimeState   struct {
 		mu      sync.Mutex
 		running bool
-		target  string // "wine" or "weston", while running
+		target  string // "wine", "weston" or "dxvk", while running
 		status  string
 		lastErr string
+		// failed holds, per target, why its last install failed.
+		failed map[string]string
 	}
 )
 
@@ -110,11 +143,8 @@ func windowsRuntimeInstallLine() string {
 	if windowsRuntimeState.status == "" {
 		return ""
 	}
-	if windowsRuntimeState.running {
-		return "Installer: " + windowsRuntimeState.status
-	}
-	if windowsRuntimeState.lastErr != "" {
-		return "Installer: " + windowsRuntimeState.lastErr
+	if !windowsRuntimeState.running && windowsRuntimeState.lastErr != "" {
+		return "Installer: " + windowsRuntimeState.status + " · " + windowsRuntimeState.lastErr
 	}
 	return "Installer: " + windowsRuntimeState.status
 }
@@ -133,20 +163,42 @@ func windowsRuntimeInstallTarget() string {
 	return windowsRuntimeState.target
 }
 
-// windowsWineInstallFailed reports whether the last Wine install ended with an
-// error, so the setup page can label the row "failed" rather than "missing".
-func windowsWineInstallFailed() bool {
+// markWindowsRuntimeFailed records why target's install failed, for its
+// setup row.
+func markWindowsRuntimeFailed(target, reason string) {
 	windowsRuntimeState.mu.Lock()
 	defer windowsRuntimeState.mu.Unlock()
-	return !windowsRuntimeState.running && windowsRuntimeState.status == "Wine install failed"
+	if windowsRuntimeState.failed == nil {
+		windowsRuntimeState.failed = map[string]string{}
+	}
+	if reason == "" {
+		reason = "failed"
+	}
+	windowsRuntimeState.failed[target] = reason
 }
 
-// windowsWestonInstallFailed is the display-runtime counterpart.
-func windowsWestonInstallFailed() bool {
+// windowsRuntimeFailed is why target's last install failed ("" when it did
+// not, or is running again).
+func windowsRuntimeFailed(target string) string {
 	windowsRuntimeState.mu.Lock()
 	defer windowsRuntimeState.mu.Unlock()
-	return !windowsRuntimeState.running && windowsRuntimeState.status == "WestonPack not installed"
+	if windowsRuntimeState.running && windowsRuntimeState.target == target {
+		return ""
+	}
+	return windowsRuntimeState.failed[target]
 }
+
+// windowsWineInstallFailed reports whether the last runtime install ended with
+// an error, so the setup page can label the row "failed" rather than
+// "missing".
+func windowsWineInstallFailed() bool { return windowsRuntimeFailed("wine") != "" }
+
+// windowsWestonInstallFailed is the display-runtime counterpart.
+func windowsWestonInstallFailed() bool { return windowsRuntimeFailed("weston") != "" }
+
+// windowsDXVKInstallFailed reports whether the last DXVK install ended with an
+// error, so the setup page can say so on the row.
+func windowsDXVKInstallFailed() bool { return windowsRuntimeFailed("dxvk") != "" }
 
 // beginWindowsRuntimeInstall marks the target runtime as installing. It
 // returns false when another install already owns the slot.
@@ -160,6 +212,7 @@ func beginWindowsRuntimeInstall(target, status string) bool {
 	windowsRuntimeState.target = target
 	windowsRuntimeState.status = status
 	windowsRuntimeState.lastErr = ""
+	delete(windowsRuntimeState.failed, target)
 	return true
 }
 
@@ -175,44 +228,60 @@ func endWindowsRuntimeInstall() {
 func setWindowsRuntimeInstallTarget(target string) {
 	windowsRuntimeState.mu.Lock()
 	windowsRuntimeState.target = target
+	delete(windowsRuntimeState.failed, target)
 	windowsRuntimeState.mu.Unlock()
 }
 
-// windowsDXVKInstallFailed reports whether the last DXVK install ended with an
-// error, so the setup page can say so on the row.
-func windowsDXVKInstallFailed() bool {
-	windowsRuntimeState.mu.Lock()
-	defer windowsRuntimeState.mu.Unlock()
-	return !windowsRuntimeState.running && windowsRuntimeState.status == "DXVK install failed"
+// startWindowsRuntimeInstall runs the whole setup chain in the background
+// (the setup page's runtime row): the runtime, the display, the prefix.
+func startWindowsRuntimeInstall() error {
+	return startWindowsProvisioning(nil)
 }
 
-// startWindowsRuntimeInstall launches the Wine install in the background; the
-// UI keeps rendering and the setup page shows the current step.
-func startWindowsRuntimeInstall() error {
+// wineHangoverWanted reports the opt-in to Hangover instead of Box64 + Wine:
+// JUKAHUB_WINE_FLAVOR=hangover, or JUKAHUB_WINE_RUNTIME_URL naming an
+// archive.
+func wineHangoverWanted() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("JUKAHUB_WINE_FLAVOR")), "hangover") ||
+		strings.TrimSpace(os.Getenv("JUKAHUB_WINE_RUNTIME_URL")) != ""
+}
+
+// hostGlibcBelow reports positive evidence that this device's glibc is older
+// than want ("GLIBC_2.36") and names the newest version it has. Like
+// elfcompat.go it says nothing when it cannot tell.
+func hostGlibcBelow(want string) (string, bool) {
+	class, machine := elfHostArch(runtime.GOARCH)
+	dirs := elfLibrarySearchDirs(nil, os.Getenv("JUKAHUB_ORIG_LD_LIBRARY_PATH"), os.Getenv("LD_LIBRARY_PATH"))
+	info, state := elfFindLibrary("libc.so.6", class, machine, dirs)
+	if state != elfLibFound || len(info.defs) == 0 {
+		return "", false
+	}
+	have := elfHighestInFamily(info.defs, "GLIBC")
+	if have == "" {
+		return "", false
+	}
+	return have, elfVersionLess(have, want)
+}
+
+// windowsInstallRuntime installs the runtime step: JukaHub's Box64 + Wine (or
+// Wine on an x86-64 PC), or Hangover when opted into and this firmware's
+// glibc can load it. Progress goes to the installer line.
+func windowsInstallRuntime(ctx context.Context) error {
 	if IsWindows() {
 		return errors.New("Windows runs .exe files directly; the Wine runtime is only needed on the handheld")
 	}
-	if !beginWindowsRuntimeInstall("wine", "contacting the Hangover release") {
-		return errors.New("a runtime install is already running")
+	if wineProgramsRunning() {
+		return errors.New("close the running Windows app first")
 	}
-
-	go func() {
-		releaseURL := strings.TrimSpace(os.Getenv("JUKAHUB_WINE_RUNTIME_URL"))
-		if releaseURL == "" {
-			releaseURL = windowsRuntimeRelease
+	if wineHangoverWanted() {
+		if have, old := hostGlibcBelow("GLIBC_2.36"); old {
+			return fmt.Errorf("Hangover needs glibc 2.36 or newer, and this firmware has %s; unset JUKAHUB_WINE_FLAVOR to use Box64 + Wine", strings.TrimPrefix(have, "GLIBC_"))
 		}
-		err := installWineRuntime(releaseURL)
-		endWindowsRuntimeInstall()
-		invalidateWindowsAppsCache()
-		if err != nil {
-			setWindowsRuntimeStatus("Wine install failed", err.Error(), false)
-			ShowToast("Wine install failed: "+err.Error(), ToastKindError)
-			return
-		}
-		setWindowsRuntimeStatus("Wine installed", "", false)
-		ShowToast("Wine installed — open an .exe to run it", ToastKindSuccess)
-	}()
-	return nil
+		return installWineRuntime(strings.TrimSpace(os.Getenv("JUKAHUB_WINE_RUNTIME_URL")))
+	}
+	return installWindowsRuntimeCore(ctx, nil, false, func(line string) {
+		setWindowsRuntimeStatus(line, "", true)
+	})
 }
 
 // installWineRuntime downloads and installs the Hangover archive. releaseURL
@@ -599,7 +668,10 @@ func extractRuntimeTar(r io.Reader, dest string) error {
 				return err
 			}
 			if err := root.Link(sourceRel, rel); err != nil {
-				return err
+				// exFAT and FAT have no hard links: a copy reads the same.
+				if copyErr := copyRootFile(root, sourceRel, rel, info.Mode().Perm()); copyErr != nil {
+					return copyErr
+				}
 			}
 		}
 	}
@@ -949,61 +1021,186 @@ func copyTree(src, dst string) error {
 	})
 }
 
+// copyRootFile copies src to dst inside root, for a hard link the file system
+// cannot make.
+func copyRootFile(root *os.Root, src, dst string, mode os.FileMode) error {
+	in, err := root.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if mode == 0 {
+		mode = 0o644
+	}
+	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
 // ── Display runtime ──────────────────────────────────────────────────────
 
-// installWestonRuntime downloads WestonPack. The official package is SquashFS,
-// which cannot be mounted without privileges; if unsquashfs exists we extract
-// it userland, otherwise the archive is kept for PortMaster and the caller gets
-// a clear explanation.
+// westonRedirectAllowed admits the two places GitHub serves a repository file
+// from, for PortMaster-New only: raw.githubusercontent.com for a plain file,
+// media.githubusercontent.com for one kept in Git LFS. The download
+// allowlist leaves both hosts out because every repository's files are there;
+// this exception covers one repository and nothing else.
+func westonRedirectAllowed(u *url.URL) bool {
+	if u == nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	p := path.Clean("/" + u.Path)
+	switch strings.ToLower(u.Hostname()) {
+	case "raw.githubusercontent.com":
+		return strings.HasPrefix(p, "/PortsMaster/PortMaster-New/")
+	case "media.githubusercontent.com":
+		return strings.HasPrefix(p, "/media/PortsMaster/PortMaster-New/")
+	}
+	return false
+}
+
+// westonDownloadClient is the Patch client with westonRedirectAllowed added to
+// what its redirects may reach.
+func westonDownloadClient() *http.Client {
+	client := newPatchClient()
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 5 {
+			return errors.New("too many redirects")
+		}
+		if westonRedirectAllowed(req.URL) {
+			return nil
+		}
+		if err := validatePatchURL(req.URL.String()); err != nil {
+			return fmt.Errorf("redirect rejected: %w", err)
+		}
+		return nil
+	}
+	return client
+}
+
+// westonImageProblem says why the file at p is not a WestonPack image, ""
+// when it looks right: SquashFS's "hsqs" magic and a plausible size, and with
+// deep a SquashFS 4 superblock whose block size, compression and length make
+// sense. It reads 96 bytes at most.
+func westonImageProblem(p string, deep bool) string {
+	info, err := os.Stat(p)
+	if err != nil || !info.Mode().IsRegular() {
+		return "it is not there"
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "it cannot be read"
+	}
+	defer f.Close()
+	head := make([]byte, 96)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+	switch {
+	case bytes.HasPrefix(head, []byte("version https://git-lfs")):
+		return "GitHub sent a Git LFS pointer instead of the image"
+	case n < 4 || string(head[:4]) != "hsqs":
+		return "it is not a SquashFS image"
+	case info.Size() < westonMinImage || info.Size() > westonMaxImage:
+		return fmt.Sprintf("it is %s, which is not WestonPack's size", formatInstallBytes(info.Size()))
+	case !deep:
+		return ""
+	case n < 96:
+		return "its SquashFS header is cut short"
+	}
+	le := binary.LittleEndian
+	blockSize := le.Uint32(head[12:])
+	compression := le.Uint16(head[20:])
+	blockLog := le.Uint16(head[22:])
+	major := le.Uint16(head[28:])
+	used := le.Uint64(head[40:])
+	switch {
+	case major != 4:
+		return "it is not a SquashFS 4 image"
+	case blockSize < 4096 || blockSize > 1<<20 || blockLog > 20 || uint32(1)<<blockLog != blockSize:
+		return "its SquashFS block size is wrong"
+	case compression < 1 || compression > 6:
+		return "it uses an unknown compression"
+	case used == 0 || used > uint64(info.Size()):
+		return "it is cut short"
+	}
+	return ""
+}
+
+// installWestonRuntime makes WestonPack available: PortMaster's copy when it
+// is there, else the image downloaded from PortMaster's repository and checked,
+// kept in data/windows-runtime for the launch to mount. A Linux PC that cannot
+// mount (not root) unpacks it with unsquashfs instead, when it has one.
 func installWestonRuntime() error {
 	if IsWindows() {
 		return errors.New("WestonPack is only used by the handheld/Linux build")
 	}
+	if src := findWestonPackSource(); src.Image != "" || src.Wrapper != "" {
+		return nil
+	}
+	if runtime.GOARCH != "arm64" {
+		return errors.New("WestonPack exists for ARM handhelds only; on this computer, start JukaHub inside an X11 or Wayland desktop")
+	}
 	base := windowsRuntimeDir()
-	installDir := filepath.Join(base, "weston")
 	if err := os.MkdirAll(base, 0o755); err != nil {
+		if disk := relPackDiskErr(err); disk != nil {
+			return disk
+		}
 		return err
 	}
-	archive := filepath.Join(base, "weston_pkg_0.2.aarch64.squashfs")
-	if _, err := os.Stat(archive); err != nil {
-		setWindowsRuntimeStatus("downloading WestonPack", "", true)
-		if err := downloadRuntimeFile(windowsWestonRuntimeURL, archive); err != nil {
-			return fmt.Errorf("WestonPack download: %w", err)
-		}
+	if free, err := freeBytes(base); err == nil && free < 2*westonMinImage+relPackSpare {
+		return fmt.Errorf("%w · WestonPack needs about 60 MB, the card has %s", errRelPackNoSpace, formatInstallBytes(max64(free, 0)))
 	}
-	unsquashfs, err := exec.LookPath("unsquashfs")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	image := filepath.Join(base, westonPackImageName)
+	spec := wineTarballSpec{Asset: westonPackImageName, URL: windowsWestonRuntimeURL}
+	err := wineDownload(ctx, westonDownloadClient(), spec, image, func(got, total int64) {
+		setWindowsRuntimeStatus("Downloading WestonPack · "+formatInstallBytes(got)+" of about 53 MB", "", true)
+	})
 	if err != nil {
-		setWindowsRuntimeStatus("WestonPack downloaded; install it with PortMaster", "", true)
-		return errors.New("WestonPack downloaded to " + archive + ", but unsquashfs is not installed; use PortMaster to install the runtime, or set JUKAHUB_WESTON to an existing westonwrap.sh")
+		return err
 	}
-	setWindowsRuntimeStatus("extracting WestonPack", "", true)
+	if problem := westonImageProblem(image, true); problem != "" {
+		_ = os.Remove(image)
+		if strings.Contains(problem, "LFS") {
+			return fmt.Errorf("%w: %s · install WestonPack through PortMaster instead", errRelPackUnverified, problem)
+		}
+		return fmt.Errorf("%w: the WestonPack download %s", errRelPackUnverified, problem)
+	}
+	logInfo("windowsapps", "WestonPack image saved in %s", image)
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	unsquashfs, lookErr := exec.LookPath("unsquashfs")
+	if lookErr != nil {
+		return errors.New("WestonPack is downloaded, but mounting it needs root and unpacking it needs unsquashfs; install squashfs-tools, or set JUKAHUB_WESTON to an existing westonwrap.sh")
+	}
+	setWindowsRuntimeStatus("Unpacking WestonPack…", "", true)
+	installDir := filepath.Join(base, "weston")
 	staging := filepath.Join(base, fmt.Sprintf("staging-%d", time.Now().UnixNano()))
 	defer os.RemoveAll(staging)
-	cmd := exec.Command(unsquashfs, "-f", "-d", staging, archive)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("extract WestonPack: %w: %s", err, strings.TrimSpace(string(out)))
+	if out, err := exec.CommandContext(ctx, unsquashfs, "-f", "-d", staging, image).CombinedOutput(); err != nil {
+		return fmt.Errorf("unpack WestonPack: %w: %s", err, firstLine(strings.TrimSpace(string(out))))
 	}
 	wrapper, err := findWestonWrapper(staging)
 	if err != nil {
 		return err
 	}
-	root := filepath.Dir(wrapper)
-	if filepath.Clean(root) != filepath.Clean(installDir) {
-		// Move the extracted tree into the stable location resolveWestonPack
-		// checks: data/windows-runtime/weston/westonwrap.sh. A relay script
-		// would break westonwrap.sh's lookups relative to its own directory.
-		if err := os.RemoveAll(installDir); err != nil {
-			return err
-		}
-		if err := os.Rename(root, installDir); err != nil {
-			return err
-		}
-		wrapper = filepath.Join(installDir, filepath.Base(wrapper))
-	} else {
-		wrapper = filepath.Join(installDir, filepath.Base(wrapper))
+	// The unpacked tree goes where findWestonPackSource looks:
+	// data/windows-runtime/weston/westonwrap.sh. A relay script would break
+	// westonwrap.sh's lookups relative to its own folder.
+	if err := os.RemoveAll(installDir); err != nil {
+		return err
 	}
-	_ = os.Chmod(wrapper, 0o755)
-	setWindowsRuntimeStatus("WestonPack installed", "", false)
+	if err := os.Rename(filepath.Dir(wrapper), installDir); err != nil {
+		return err
+	}
+	_ = os.Chmod(filepath.Join(installDir, filepath.Base(wrapper)), 0o755)
 	return nil
 }
 
@@ -1030,41 +1227,159 @@ func findWestonWrapper(root string) (string, error) {
 // selectDXVKAsset picks the release tarball that carries the D3D DLLs. Hash
 // files and source archives are skipped: only the binary .tar.gz (or .zip)
 // contains x64/d3d11.dll, which is what makes DXVK usable.
-func selectDXVKAsset(assets []hangoverAsset) (string, string, error) {
+func selectDXVKAsset(assets []githubAsset) (githubAsset, error) {
 	for _, a := range assets {
 		lower := strings.ToLower(a.Name)
-		if strings.Contains(lower, "sha256") || strings.Contains(lower, ".asc") || strings.Contains(lower, "source") {
+		if strings.Contains(lower, "sha256") || strings.Contains(lower, ".asc") || strings.Contains(lower, "source") || strings.Contains(lower, "native") {
 			continue
 		}
 		if !strings.HasSuffix(lower, ".tar.gz") && !strings.HasSuffix(lower, ".tgz") && !strings.HasSuffix(lower, ".zip") {
 			continue
 		}
-		return a.Name, a.BrowserDownloadURL, nil
+		return a, nil
 	}
-	return "", "", errors.New("the latest DXVK release has no .tar.gz binary archive")
+	return githubAsset{}, errors.New("the latest DXVK release has no .tar.gz binary archive")
 }
 
-func latestDXVKAsset(apiURL string) (string, error) {
-	req, err := http.NewRequest("GET", apiURL, nil)
+// dxvkLegacyOnly reports a device whose Vulkan is known to be older than the
+// 1.3 DXVK 2.x needs: there only DXVK 1.10.3 can try.
+func dxvkLegacyOnly() bool {
+	major, minor, known := wineVulkanLevel()
+	return known && (major < 1 || (major == 1 && minor < 3))
+}
+
+// dxvkPick is the DXVK build to install here: 1.10.3 where Vulkan is older
+// than 1.3, else the latest release (checked against GitHub's digest when it
+// publishes one).
+func dxvkPick(ctx context.Context, client *http.Client) (spec wineTarballSpec, version, md5sum string, err error) {
+	if dxvkLegacyOnly() {
+		return wineTarballSpec{Asset: path.Base(windowsDXVKLegacyURL), URL: windowsDXVKLegacyURL}, windowsDXVKLegacyVersion, windowsDXVKLegacyMD5, nil
+	}
+	data, err := fetchBounded(ctx, client, windowsDXVKRelease, patchMaxMetadata)
+	if err != nil {
+		return spec, "", "", relPackNetErr("checking the DXVK release", err)
+	}
+	var rel githubRelease
+	if err := json.Unmarshal(data, &rel); err != nil {
+		return spec, "", "", fmt.Errorf("read DXVK release: %w", err)
+	}
+	asset, err := selectDXVKAsset(rel.Assets)
+	if err != nil {
+		return spec, "", "", err
+	}
+	spec = wineTarballSpec{Asset: sanitizeFileName(asset.Name), URL: asset.BrowserDownloadURL, SHA256: releaseAssetDigest(asset.Digest), Size: asset.Size}
+	return spec, strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v"), "", nil
+}
+
+// installDXVKRuntime downloads DXVK and installs its DLL trees in
+// data/windows-runtime/dxvk, which resolveDXVK checks, recording the release
+// so applyWineCompatibilityEnv can tell whether this device's Vulkan runs it.
+// DXVK is only useful with a Vulkan loader, so installing it without one is
+// refused rather than leaving a directory that silently changes nothing.
+func installDXVKRuntime() error {
+	if windowsResolveVulkan() == "" {
+		return errors.New("DXVK needs a Vulkan loader (libvulkan.so.1); install a Vulkan driver first, or set JUKAHUB_VULKAN")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	client := newPatchClient()
+	setWindowsRuntimeStatus("Looking for DXVK on GitHub…", "", true)
+	spec, version, md5sum, err := dxvkPick(ctx, client)
+	if err != nil {
+		return err
+	}
+	base := windowsRuntimeDir()
+	downloads := filepath.Join(base, "downloads")
+	if err := os.MkdirAll(downloads, 0o755); err != nil {
+		return fmt.Errorf("create runtime folder: %w", err)
+	}
+	archive := filepath.Join(downloads, spec.Asset)
+	title := "DXVK " + version
+	err = wineDownload(ctx, client, spec, archive, func(got, total int64) {
+		if total > 0 {
+			setWindowsRuntimeStatus(fmt.Sprintf("Downloading %s · %s of %s", title, formatInstallBytes(got), formatInstallBytes(total)), "", true)
+			return
+		}
+		setWindowsRuntimeStatus("Downloading "+title+" · "+formatInstallBytes(got), "", true)
+	})
+	if err != nil {
+		return err
+	}
+	defer os.Remove(archive)
+	if md5sum != "" {
+		if got, err := windowsFileMD5(archive); err != nil || !strings.EqualFold(got, md5sum) {
+			return fmt.Errorf("%w: %s does not match its published checksum", errRelPackUnverified, spec.Asset)
+		}
+	}
+	staging := filepath.Join(base, fmt.Sprintf("staging-%d", time.Now().UnixNano()))
+	defer os.RemoveAll(staging)
+	setWindowsRuntimeStatus("Unpacking "+title+"…", "", true)
+	if err := extractRuntimeArchive(archive, staging); err != nil {
+		return err
+	}
+	tree := findDXVKTree(runtimeArchiveRoot(staging))
+	if tree == "" {
+		return errors.New("the DXVK archive contains no x64/d3d11.dll")
+	}
+	installDir := filepath.Join(base, "dxvk")
+	stage := installDir + relPackStageSuffix
+	_ = os.RemoveAll(stage)
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return err
+	}
+	for _, dir := range []string{"x64", "x32"} {
+		src := filepath.Join(tree, dir)
+		if info, err := os.Stat(src); err == nil && info.IsDir() {
+			if err := copyTree(src, filepath.Join(stage, dir)); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tree, "x64")); err != nil {
+		// A flat archive has the DLLs at its root instead of inside x64/.
+		entries, readErr := os.ReadDir(tree)
+		if readErr != nil {
+			return readErr
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".dll") {
+				continue
+			}
+			if err := copyArchiveFile(filepath.Join(tree, entry.Name()), filepath.Join(stage, entry.Name()), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	if !dxvkBuild(stage) {
+		_ = os.RemoveAll(stage)
+		return fmt.Errorf("the DXVK archive did not install a usable build in %s", installDir)
+	}
+	marker := map[string]string{"version": version, "url": spec.URL, "installed_at": time.Now().UTC().Format(time.RFC3339)}
+	if err := wineWriteJSON(filepath.Join(stage, dxvkMarkerName), marker); err != nil {
+		_ = os.RemoveAll(stage)
+		return err
+	}
+	if err := relPackSwap(stage, installDir); err != nil {
+		_ = os.RemoveAll(stage)
+		return err
+	}
+	logInfo("windowsapps", "DXVK %s installed in %s", version, installDir)
+	return nil
+}
+
+// windowsFileMD5 is a file's MD5, for a release whose only published checksum
+// is one.
+func windowsFileMD5(p string) (string, error) {
+	f, err := os.Open(p)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "JukaHub/0.4")
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := windowsRuntimeClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("check DXVK release: %w", err)
+	defer f.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("check DXVK release: HTTP %d", resp.StatusCode)
-	}
-	var release hangoverRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&release); err != nil {
-		return "", fmt.Errorf("read DXVK release: %w", err)
-	}
-	_, assetURL, err := selectDXVKAsset(release.Assets)
-	return assetURL, err
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // findDXVKTree locates the directory that holds x64/d3d11.dll inside an
@@ -1094,85 +1409,6 @@ func findDXVKTree(root string) string {
 	return ""
 }
 
-// installDXVKRuntime downloads the latest DXVK and installs its DLL trees in
-// data/windows-runtime/dxvk, which resolveDXVK already checks. DXVK is only
-// useful with a Vulkan loader, so installing it without one is refused rather
-// than leaving a directory that silently changes nothing.
-func installDXVKRuntime() error {
-	if windowsResolveVulkan() == "" {
-		return errors.New("DXVK needs a Vulkan loader (libvulkan.so.1); install a Vulkan driver first, or set JUKAHUB_VULKAN")
-	}
-	assetURL, err := latestDXVKAsset(windowsDXVKRelease)
-	if err != nil {
-		return err
-	}
-	if !strings.HasPrefix(assetURL, "http://") && !strings.HasPrefix(assetURL, "https://") {
-		return fmt.Errorf("DXVK URL must be http(s): %s", assetURL)
-	}
-	base := windowsRuntimeDir()
-	downloads := filepath.Join(base, "downloads")
-	if err := os.MkdirAll(downloads, 0o755); err != nil {
-		return fmt.Errorf("create runtime folder: %w", err)
-	}
-	name := filepath.Base(assetURL)
-	if i := strings.IndexAny(name, "?#"); i >= 0 {
-		name = name[:i]
-	}
-	if name == "" || name == "." || name == "/" {
-		name = "dxvk.tar.gz"
-	}
-	archive := filepath.Join(downloads, name)
-	setWindowsRuntimeStatus("downloading "+name, "", true)
-	if err := downloadRuntimeFile(assetURL, archive); err != nil {
-		return err
-	}
-	staging := filepath.Join(base, fmt.Sprintf("staging-%d", time.Now().UnixNano()))
-	defer os.RemoveAll(staging)
-	setWindowsRuntimeStatus("extracting "+name, "", true)
-	if err := extractRuntimeArchive(archive, staging); err != nil {
-		return err
-	}
-	tree := findDXVKTree(runtimeArchiveRoot(staging))
-	if tree == "" {
-		return errors.New("the DXVK archive contains no x64/d3d11.dll")
-	}
-	installDir := filepath.Join(base, "dxvk")
-	if err := os.RemoveAll(installDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(installDir, 0o755); err != nil {
-		return err
-	}
-	for _, dir := range []string{"x64", "x32"} {
-		src := filepath.Join(tree, dir)
-		if info, err := os.Stat(src); err == nil && info.IsDir() {
-			if err := copyTree(src, filepath.Join(installDir, dir)); err != nil {
-				return err
-			}
-		}
-	}
-	if _, err := os.Stat(filepath.Join(tree, "x64")); err != nil {
-		// A flat archive has the DLLs at its root instead of inside x64/.
-		entries, readErr := os.ReadDir(tree)
-		if readErr != nil {
-			return readErr
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".dll") {
-				continue
-			}
-			if err := copyArchiveFile(filepath.Join(tree, entry.Name()), filepath.Join(installDir, entry.Name()), 0o644); err != nil {
-				return err
-			}
-		}
-	}
-	if !dxvkBuild(installDir) {
-		return fmt.Errorf("the DXVK archive did not install a usable build in %s", installDir)
-	}
-	setWindowsRuntimeStatus("DXVK installed", "", false)
-	return nil
-}
-
 // ── Provisioning ─────────────────────────────────────────────────────────
 
 // windowsRuntimeStep is one runtime component a launch may need.
@@ -1199,7 +1435,7 @@ func (s windowsRuntimeStep) key() string {
 func (s windowsRuntimeStep) label() string {
 	switch s {
 	case windowsStepWine:
-		return "Wine"
+		return windowsRuntimeLabel()
 	case windowsStepDisplay:
 		return "WestonPack"
 	default:
@@ -1207,18 +1443,58 @@ func (s windowsRuntimeStep) label() string {
 	}
 }
 
+// windowsRuntimeLabel names the runtime a setup brings to this device.
+func windowsRuntimeLabel() string {
+	switch {
+	case wineHangoverWanted():
+		return "Hangover"
+	case winePackSupported():
+		return "Box64 + Wine " + wineExpectedVersion()
+	case wineNativeSupported():
+		return "Wine " + wineNativeSpec.Version
+	}
+	return "Wine"
+}
+
+// windowsDisplayNeeded reports an ARM Linux device with no X11 or Wayland
+// session and no WestonPack yet.
+func windowsDisplayNeeded(status windowsRuntimeStatus) bool {
+	if status.Display != "" || !winePackSupported() {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("DISPLAY")) != "" || strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) != "" {
+		return false
+	}
+	src := findWestonPackSource()
+	return src.Image == "" && src.Wrapper == ""
+}
+
+// windowsDXVKAutomatic reports whether the automatic chain installs DXVK: on an
+// x86-64 PC whose Vulkan driver declares 1.3, never on a handheld.
+func windowsDXVKAutomatic(status windowsRuntimeStatus) bool {
+	if runtime.GOARCH != "amd64" || status.DXVK != "" || !status.Vulkan || IsTrimuiDevice() {
+		return false
+	}
+	major, minor, known := vulkanICDVersion()
+	return known && (major > 1 || (major == 1 && minor >= 3))
+}
+
 // windowsRuntimePlan lists what a Wine launch still needs, in install order:
-// the Wine runtime first, then the display bridge, then DXVK (only when a
-// Vulkan loader makes it usable). An empty plan means the runtime is ready.
+// the runtime first, then the display bridge, then DXVK where it belongs in
+// the automatic chain. An empty plan means nothing is left to install.
 func windowsRuntimePlan(status windowsRuntimeStatus) []windowsRuntimeStep {
+	if IsWindows() {
+		return nil
+	}
 	var plan []windowsRuntimeStep
-	if strings.TrimSpace(status.Wine) == "" {
+	wine := strings.TrimSpace(status.Wine)
+	if (wine == "" || (status.Box64 == "" && needsBox64(wine))) && (windowsRuntimeInstallable() || wineHangoverWanted()) {
 		plan = append(plan, windowsStepWine)
 	}
-	if strings.TrimSpace(status.Display) == "" {
+	if windowsDisplayNeeded(status) {
 		plan = append(plan, windowsStepDisplay)
 	}
-	if status.Vulkan && strings.TrimSpace(status.DXVK) == "" {
+	if windowsDXVKAutomatic(status) {
 		plan = append(plan, windowsStepDXVK)
 	}
 	return plan
@@ -1234,30 +1510,66 @@ func windowsPlanLabel(plan []windowsRuntimeStep) string {
 }
 
 // The install steps and the status lookup are variables so the provisioning
-// chain can be tested without a network or a 300 MB download.
+// chain can be tested without a network or a 100 MB download.
 var (
 	windowsRuntimeStatusFor   = currentWindowsRuntimeStatus
-	windowsInstallWineFn      = func() error { return installWineRuntime("") }
+	windowsInstallWineFn      = func() error { return windowsWithTimeout(windowsInstallRuntime) }
 	windowsInstallDisplayFn   = installWestonRuntime
 	windowsInstallDXVKFn      = installDXVKRuntime
+	windowsPrepareFn          = func() error { return windowsWithTimeout(windowsPrepare) }
 	windowsLaunchAfterInstall = launchWindowsApp
 	windowsResolveVulkan      = resolveVulkan
 	windowsDXVKRelease        = windowsDXVKReleaseAPI
 )
 
-// startWindowsProvisioning installs every missing piece in the background and
-// launches pending when the last one succeeds. It returns an error when an
-// install is already running or there is nothing to do for pending.
+// windowsWithTimeout runs one setup step with an hour's bound: downloads
+// resume, but a step must not hold the installer forever.
+func windowsWithTimeout(step func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	return step(ctx)
+}
+
+// windowsPrepare prepares the shared prefix, with its line on the installer
+// status.
+func windowsPrepare(ctx context.Context) error {
+	return prepareWineRuntime(ctx, func(line string) { setWindowsRuntimeStatus(line, "", true) })
+}
+
+// startWindowsProvisioning installs every missing piece in the background,
+// prepares the prefix, and launches pending when all of it succeeded. It
+// returns an error when an install is already running or there is nothing to
+// do.
 func startWindowsProvisioning(pending *windowsAppEntry) error {
+	if IsWindows() {
+		return errors.New("Windows runs .exe files directly; nothing needs installing")
+	}
 	status := windowsRuntimeStatusFor()
 	plan := windowsRuntimePlan(status)
+	facts := currentWineRuntimeFacts()
+	if facts.PrefixProblem != "" {
+		// Known before anything is downloaded: there is nowhere to keep
+		// Windows, so the runtime would be of no use.
+		return errors.New(facts.PrefixProblem)
+	}
 	if len(plan) == 0 {
-		if pending == nil {
+		switch {
+		case pending != nil && facts.PrefixReady:
+			return windowsLaunchAfterInstall(*pending)
+		case facts.Flavor == "":
+			return errors.New("JukaHub has no Windows runtime for this device")
+		case pending == nil && facts.PrefixReady:
 			return errors.New("the Windows runtime is already installed")
 		}
-		return windowsLaunchAfterInstall(*pending)
 	}
-	if !beginWindowsRuntimeInstall(plan[0].key(), "checking the Windows runtime") {
+	if wineProgramsRunning() {
+		return errors.New("close the running Windows app first")
+	}
+	target := "wine"
+	if len(plan) > 0 {
+		target = plan[0].key()
+	}
+	if !beginWindowsRuntimeInstall(target, "checking the Windows runtime") {
 		return errors.New("a runtime install is already running")
 	}
 	if pending != nil {
@@ -1268,10 +1580,19 @@ func startWindowsProvisioning(pending *windowsAppEntry) error {
 	return nil
 }
 
+// windowsStepFailed records and announces a step that failed.
+func windowsStepFailed(key, label string, err error) {
+	reason := relPackFriendly(err)
+	markWindowsRuntimeFailed(key, reason)
+	setWindowsRuntimeStatus(label+" failed", reason, false)
+	ShowToast(label+" failed: "+reason, ToastKindError)
+}
+
 // windowsProvisionLoop re-checks what is missing before every step, so an
 // install that also provides a later piece (or a component someone added by
 // hand meanwhile) is not installed twice. A step that reports success but
 // leaves its component missing stops the chain instead of looping forever.
+// The prefix is prepared last, so the app's first start is quick.
 func windowsProvisionLoop(pending *windowsAppEntry) {
 	defer func() {
 		endWindowsRuntimeInstall()
@@ -1286,13 +1607,12 @@ func windowsProvisionLoop(pending *windowsAppEntry) {
 		}
 		step := plan[0]
 		if attempted[step] {
-			setWindowsRuntimeStatus(step.label()+" not installed", "still missing after install", false)
-			ShowToast(step.label()+" is still missing after installing it", ToastKindError)
+			windowsStepFailed(step.key(), step.label()+" install", errors.New("it is still missing after installing it"))
 			return
 		}
 		attempted[step] = true
 		setWindowsRuntimeInstallTarget(step.key())
-		setWindowsRuntimeStatus("installing "+step.label(), "", true)
+		setWindowsRuntimeStatus("Installing "+step.label()+"…", "", true)
 		var err error
 		switch step {
 		case windowsStepWine:
@@ -1302,11 +1622,16 @@ func windowsProvisionLoop(pending *windowsAppEntry) {
 		case windowsStepDXVK:
 			err = windowsInstallDXVKFn()
 		}
+		invalidateWindowsAppsCache()
 		if err != nil {
-			setWindowsRuntimeStatus(step.label()+" install failed", err.Error(), false)
-			ShowToast(step.label()+" install failed: "+err.Error(), ToastKindError)
+			windowsStepFailed(step.key(), step.label()+" install", err)
 			return
 		}
+	}
+	setWindowsRuntimeInstallTarget("wine")
+	if err := windowsPrepareFn(); err != nil {
+		windowsStepFailed("wine", "Preparing Windows", err)
+		return
 	}
 	setWindowsRuntimeStatus("Windows runtime ready", "", false)
 	invalidateWindowsAppsCache()

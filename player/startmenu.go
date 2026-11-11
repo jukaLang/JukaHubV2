@@ -165,9 +165,10 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "RetroAchievements", icon: "R", action: func(*Config) { openRetroAchievementsPanel() }},
 		{name: "Save Manager", icon: "S", action: func(*Config) { openSaveManagerPanel() }},
 	}
+	// Windows Apps: Wine on the handheld, the programs themselves on Windows.
+	games = append(games, startMenuEntry{name: windowsAppsEntryName, icon: "W", action: func(*Config) { openWindowsAppsPanel(false) }})
 	if !IsWindows() {
 		games = append(games,
-			startMenuEntry{name: windowsAppsEntryName, icon: "W", action: func(*Config) { openWindowsAppsPanel(false) }},
 			startMenuEntry{name: portMasterEntryName, icon: "P", action: func(*Config) { openPortsPanel(false) }},
 			// Android games through AndroidRT (apkstore.go).
 			startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }},
@@ -191,7 +192,7 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		// Say what to open (voicecmd.go); the phone's keyboard microphone works
 		// too, so the row stays on a device without a microphone.
 		{name: "Voice command", icon: "O", action: func(c *Config) { voiceOpen(c) }},
-		{name: "Accessibility", icon: "Y", action: func(c *Config) { openAccessibilityPanel(c) }},
+		{name: "Accessibility", icon: "Y", action: func(c *Config) { a11yOpenSettings(c) }},
 	}
 	if IsTrimuiDevice() || hasPPSSPPInstall(ppssppSearchRoots()) {
 		tools = append(tools, startMenuEntry{name: "Stick Calibration", icon: "K", action: func(c *Config) { openStickCalibrationPanel(c) }})

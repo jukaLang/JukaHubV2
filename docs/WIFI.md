@@ -307,7 +307,7 @@ the scan, the saved profiles, the join and the signal meter all come from
 * **Hidden networks are not listed.** Joining one by typed name is not exposed
   yet; add it to `wpa_supplicant.conf` on the card if you need it.
 * **No static address, DNS or proxy settings.** DHCP is used, as on the stock
-  firmware.
+  firmware. To send traffic through a VPN (and its DNS), see [VPN.md](VPN.md).
 * **SSID collapse.** On a mesh or dual-band network with one name, JukaHub keeps
   the strongest access point; it does not show one row per band.
 * **Session-only saves are reported.** If the supplicant runs with

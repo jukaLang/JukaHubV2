@@ -167,7 +167,7 @@ func renderCalendarCard(renderer *sdl.Renderer, config *Config, cx, cy int32) {
 	if small == nil {
 		return
 	}
-	tiny := getFontSized(config, "small", 11)
+	tiny := FontForRole(config, TypeCaption)
 	if tiny == nil {
 		tiny = small
 	}

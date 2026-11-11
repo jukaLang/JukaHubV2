@@ -65,16 +65,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # The PS Remote Play helpers (Apps/JukaHub/bin/chiaki-stream and
-  # chiaki-regist), built natively on an arm64 runner; why there, and why a
-  # failure is allowed, is in remote-play-helpers.yml. It starts at once,
+  # chiaki-regist), AndroidRT (Apps/JukaHub/androidrt) and the Box64 pack of
+  # the Windows-app runtime, built natively on an arm64 runner; why there, and
+  # why a failure is allowed, is in remote-play-helpers.yml. It starts at once,
   # beside create-tag.
   build-remote-play-helpers:
-    name: Remote Play helpers
+    name: Remote Play helpers and runtimes
     uses: ./.github/workflows/remote-play-helpers.yml
     # The helpers job asks for exactly these: actions read is how it finds the
-    # helpers an earlier release run built from the same sources. A called
-    # workflow cannot be given more than its caller grants, and asking for
-    # more fails the whole run before it starts.
+    # helpers and runtimes an earlier release run built from the same sources.
+    # A called workflow cannot be given more than its caller grants, and asking
+    # for more fails the whole run before it starts.
     permissions:
       contents: read
       actions: read
@@ -265,8 +266,9 @@ jobs:
           if-no-files-found: error
 
   # Packaging only: the binary and the game-audio plugin come from build-trimui,
-  # the Remote Play helpers from their own job. Waiting for those here, rather
-  # than making the compile wait for the helpers, lets both build at once.
+  # the Remote Play helpers and the two runtime packages from their own job.
+  # Waiting for those here, rather than making the compile wait for the
+  # helpers, lets both build at once.
   build-and-publish-ubuntu:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -322,6 +324,27 @@ jobs:
           name: remote-play-helpers
           path: remote-play-helpers
 
+      - name: Download AndroidRT
+        # JukaHub-AndroidRT-linux-arm64.zip from the helper job; absent when its
+        # build failed, and then the archive ships without androidrt/. Bounded
+        # like the download above.
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: androidrt-package
+          path: runtime-packages
+
+      - name: Download the Box64 pack
+        # JukaHub-Wine-linux-arm64.zip from the helper job; absent when its
+        # build failed, and then the release goes out without it.
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wine-runtime-package
+          path: runtime-packages
+
       - name: Package Artifacts
         id: package
         run: |
@@ -357,6 +380,41 @@ jobs:
             fi
           else
             echo "::warning title=Remote Play helpers::not built for this run; JukaHub-Trimui.zip ships without Remote Play streaming (see the Remote Play helpers job)"
+          fi
+          # AndroidRT, the Android-app runtime: androidrt/ beside the binary
+          # (Apps/JukaHub/androidrt on the handheld), and the same folder alone
+          # as JukaHub-AndroidRT-linux-arm64.zip for a JukaHub installed from a
+          # package without it. build-runtimes.sh checks the package first (one
+          # folder, every file in its SHA256SUMS and matching). Optional like
+          # the helpers: a failure here costs the archive its androidrt/ and
+          # the release that zip, never JukaHub-Trimui.zip.
+          rm -rf JukaHub-Trimui/androidrt JukaHub-AndroidRT-linux-arm64.zip
+          if [ -f runtime-packages/JukaHub-AndroidRT-linux-arm64.zip ]; then
+            if sh player/native/build-runtimes.sh unpack runtime-packages/JukaHub-AndroidRT-linux-arm64.zip JukaHub-Trimui/androidrt &&
+              cp runtime-packages/JukaHub-AndroidRT-linux-arm64.zip .; then
+              echo "androidrt_package=true" >> "$GITHUB_OUTPUT"
+              sed -n '1,4p' JukaHub-Trimui/androidrt/BUILDINFO.txt 2>/dev/null || true
+            else
+              rm -rf JukaHub-Trimui/androidrt JukaHub-AndroidRT-linux-arm64.zip
+              echo "::warning title=AndroidRT::the AndroidRT package did not verify; JukaHub-Trimui.zip ships without androidrt/ and the release without JukaHub-AndroidRT-linux-arm64.zip"
+            fi
+          else
+            echo "::warning title=AndroidRT::not built for this run; JukaHub-Trimui.zip ships without androidrt/ (see the Remote Play helpers and runtimes job)"
+          fi
+          # The Box64 pack of the Windows-app runtime: only a release asset,
+          # which JukaHub installs when Windows apps are first set up (or the
+          # emulator update pass brings a newer one).
+          rm -f JukaHub-Wine-linux-arm64.zip
+          if [ -f runtime-packages/JukaHub-Wine-linux-arm64.zip ]; then
+            if sh player/native/build-runtimes.sh verify runtime-packages/JukaHub-Wine-linux-arm64.zip &&
+              cp runtime-packages/JukaHub-Wine-linux-arm64.zip .; then
+              echo "wine_package=true" >> "$GITHUB_OUTPUT"
+            else
+              rm -f JukaHub-Wine-linux-arm64.zip
+              echo "::warning title=Box64::the Box64 pack did not verify; this release goes out without JukaHub-Wine-linux-arm64.zip"
+            fi
+          else
+            echo "::warning title=Box64::not built for this run; this release goes out without JukaHub-Wine-linux-arm64.zip (see the Remote Play helpers and runtimes job)"
           fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
@@ -396,6 +454,34 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-RemotePlay-linux-arm64.zip
           asset_name: JukaHub-RemotePlay-linux-arm64.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the AndroidRT package
+        # Optional in the same way: a JukaHub that finds none on the newest
+        # release takes it from the newest release that has one (relpack.go).
+        if: steps.package.outputs.androidrt_package == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-AndroidRT-linux-arm64.zip
+          asset_name: JukaHub-AndroidRT-linux-arm64.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the Box64 pack
+        if: steps.package.outputs.wine_package == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-Wine-linux-arm64.zip
+          asset_name: JukaHub-Wine-linux-arm64.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

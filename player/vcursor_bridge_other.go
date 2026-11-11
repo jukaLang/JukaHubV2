@@ -7,9 +7,20 @@ package main
 // and uinput, which Windows and macOS do not have. A PC has a mouse of its
 // own, so the switch is hidden there and the parked loop's tick does nothing.
 
+import "errors"
+
 // vcursorBridgeSupported reports whether this device can lend its pad to a
 // game as a mouse: never here.
 func vcursorBridgeSupported() bool { return false }
 
 // vcursorBridgeTick is the parked loop's tick: nothing to watch here.
 func vcursorBridgeTick(*Config) {}
+
+// wineInputStart lends the pad to a Windows-app session on the handheld; a PC
+// has its own mouse and keyboard.
+func wineInputStart(p mbridgeParams, quit func()) (func(), error) {
+	return func() {}, errors.New("the pad is only lent as a mouse on the Linux handheld")
+}
+
+// wineInputActive reports a Windows-app session holding the pad: never here.
+func wineInputActive() bool { return false }

@@ -9,6 +9,9 @@
 #   JukaHub-win-x64.zip
 #   JukaHub-{trimui-smart-pro,trimui-smart-pro-s,trimui-brick,trimui-brick-pro,trimui-hammer}-linux-arm64.tar.gz
 #   JukaHub-RemotePlay-linux-arm64.zip   (when the Remote Play helpers were built)
+#   JukaHub-AndroidRT-linux-arm64.zip    (when native/bin has a verified AndroidRT package;
+#                                         every TrimUI archive then carries its androidrt/)
+#   JukaHub-Wine-linux-arm64.zip         (when native/bin has a verified Box64 pack)
 #   manifest.json
 #   SHA256SUMS
 #
@@ -93,6 +96,36 @@ else
     echo "WARNING: no Remote Play helpers in native/bin; the TrimUI archives will ship without Remote Play streaming" >&2
 fi
 
+# --- AndroidRT and the Box64 pack (native/build-runtimes.sh) ---
+# Built on an aarch64 host (in CI the remote-play-helpers workflow, which hands
+# them over in native/bin): JukaHub-AndroidRT-linux-arm64.zip, whose androidrt/
+# folder every TrimUI archive carries beside the binary, and
+# JukaHub-Wine-linux-arm64.zip, Box64 for the Windows-app runtime, which only
+# the release carries. Both are attached on their own as well, and both are
+# optional: a package that is missing or does not verify (one folder, every
+# file in its SHA256SUMS and matching) is left out with a warning.
+ANDROIDRT_ZIP=""
+if [ -f native/bin/JukaHub-AndroidRT-linux-arm64.zip ]; then
+    if sh native/build-runtimes.sh verify native/bin/JukaHub-AndroidRT-linux-arm64.zip &&
+        cp native/bin/JukaHub-AndroidRT-linux-arm64.zip "$OUT/"; then
+        ANDROIDRT_ZIP="$OUT/JukaHub-AndroidRT-linux-arm64.zip"
+    else
+        rm -f "$OUT/JukaHub-AndroidRT-linux-arm64.zip"
+        echo "WARNING: the AndroidRT package in native/bin does not verify; the TrimUI archives ship without androidrt/" >&2
+    fi
+else
+    echo "WARNING: no AndroidRT package in native/bin; the TrimUI archives ship without androidrt/" >&2
+fi
+if [ -f native/bin/JukaHub-Wine-linux-arm64.zip ]; then
+    if ! { sh native/build-runtimes.sh verify native/bin/JukaHub-Wine-linux-arm64.zip &&
+        cp native/bin/JukaHub-Wine-linux-arm64.zip "$OUT/"; }; then
+        rm -f "$OUT/JukaHub-Wine-linux-arm64.zip"
+        echo "WARNING: the Box64 pack in native/bin does not verify; the release goes out without it" >&2
+    fi
+else
+    echo "WARNING: no Box64 pack in native/bin; the release goes out without JukaHub-Wine-linux-arm64.zip" >&2
+fi
+
 # --- JukaHub Spatial, the game-audio plugin (spatialfx/README.md) ---
 # Built once with the aarch64 cross gcc and copied into every TrimUI archive's
 # lib/, where spatial_games.go looks for it. build.sh refuses a library that
@@ -143,6 +176,15 @@ for device in "${TRIMUI_DEVICES[@]}"; do
         cp "$SPATIAL_SO" "$TARGET_DIR/lib/"
         PKG_FILES+=(lib/jukahub-spatial.so)
     fi
+    # AndroidRT beside the binary (see ANDROIDRT_ZIP above).
+    if [ -n "$ANDROIDRT_ZIP" ]; then
+        if sh native/build-runtimes.sh unpack "$ANDROIDRT_ZIP" "$TARGET_DIR/androidrt" > /dev/null; then
+            PKG_FILES+=(androidrt)
+        else
+            rm -rf "$TARGET_DIR/androidrt"
+            echo "WARNING: ${device} ships without androidrt/ (the package did not unpack)" >&2
+        fi
+    fi
     # The Brick Pro needs the bundled FFmpeg/OpenSSL runtime next to the app.
     if [ -d native/libs/brick-stock ]; then
         mkdir -p "$TARGET_DIR/libs/brick-stock"
@@ -181,9 +223,11 @@ ${TARGETS_JSON},
 }
 EOF
 (cd "$OUT" && sha256sum manifest.json JukaHub-*-linux-arm64.tar.gz JukaHub-win-x64.zip > SHA256SUMS)
-if [ -f "$OUT/JukaHub-RemotePlay-linux-arm64.zip" ]; then
-    (cd "$OUT" && sha256sum JukaHub-RemotePlay-linux-arm64.zip >> SHA256SUMS)
-fi
+for pkg in JukaHub-RemotePlay-linux-arm64.zip JukaHub-AndroidRT-linux-arm64.zip JukaHub-Wine-linux-arm64.zip; do
+    if [ -f "$OUT/$pkg" ]; then
+        (cd "$OUT" && sha256sum "$pkg" >> SHA256SUMS)
+    fi
+done
 
 echo
 echo "Built release v${VERSION}:"

@@ -222,10 +222,16 @@ func biosDoctorXboxLines(xbox *emuXboxReport) []string {
 	switch {
 	case xbox.Emulator == hakuxName && !xbox.Installed:
 		status = name + " · not installed — the Xbox tile in Emulators installs it (experimental)"
+	case !xbox.Installed:
+		// xemu on Windows: the firmware can be put in place before xemu is.
+		status = name + " · xemu is not installed (Emulators → xemu → X)"
+		if len(missing) > 0 {
+			status += " · missing " + strings.Join(missing, ", ")
+		}
 	case len(missing) > 0:
 		status = name + " · missing " + strings.Join(missing, ", ")
 	case !xbox.Configured:
-		status = name + " · files found · apply them from the xemu tile (Y Setup)"
+		status = name + " · files found · starting xemu applies them, or Y Setup on its tile"
 	}
 	lines := []string{status}
 	for _, f := range xbox.Files {

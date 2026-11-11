@@ -52,8 +52,9 @@ func bootEnqueueChecks(config *Config) {
 	if safeModeAllows(SafeFeatureUpdates) {
 		// EMU's scheduler reads its setting from config, so it starts on the
 		// main thread: as a queued step on the handheld (with a row), straight
-		// away elsewhere, where a desktop RetroArch manages its own cores and
-		// the row would only ever say "nothing to do".
+		// away elsewhere — on a PC startCoreAutoUpdate starts the desktop
+		// scheduler (emuautoupdate_desktop.go), which waits for JukaHub to sit
+		// idle, so a boot row would only ever say "scheduled".
 		if IsTrimuiDevice() {
 			bootEnqueue("cores", func() { bootCheckCores(config) })
 		} else {
@@ -175,10 +176,12 @@ func bootDeferredToolHealth() {
 	startToolHealthCheck()
 }
 
-// bootCheckCores starts the emulator cores' background updater — EMU's
+// bootCheckCores starts the emulators' background updater — EMU's
 // startCoreAutoUpdate, which decides for itself when a pass is due and waits
-// until the interface is up — and says what it will do. It replaced the
-// deferred "core-update" task, so the scheduler is started exactly once.
+// until the interface is up — and says what it will do and for what: the
+// cores, PPSSPP, hakuX and the runtimes, as far as this device has them. It
+// replaced the deferred "core-update" task, so the scheduler is started
+// exactly once.
 func bootCheckCores(config *Config) {
 	startCoreAutoUpdate(config)
 	startPPSSPPAutoUpdate(config)
@@ -188,9 +191,9 @@ func bootCheckCores(config *Config) {
 	case localIPv4() == "":
 		bootStepNote("will check when online")
 	case coreUpdateModeFor(config) == coreUpdateInstall:
-		bootStepNote("auto-update scheduled")
+		bootStepNote("auto: " + emuAutoUpdateCoversShort())
 	default:
-		bootStepNote("update check scheduled")
+		bootStepNote("notify: " + emuAutoUpdateCoversShort())
 	}
 }
 

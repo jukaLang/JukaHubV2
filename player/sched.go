@@ -1134,8 +1134,8 @@ func renderSchedScreen(renderer *sdl.Renderer, config *Config) {
 		},
 	})
 
-	font := getFontSized(config, "small", 17)
-	small := getFontSized(config, "small", 15)
+	font := FontForRole(config, TypeBody)
+	small := FontForRole(config, TypeLabel)
 	if font == nil || small == nil {
 		renderStatusBar(renderer, config)
 		renderFooter(renderer, config)

@@ -277,7 +277,7 @@ func brwDrawFullscreenStatus(renderer *sdl.Renderer, config *Config, elem Elemen
 	if busy || brwMenu.open {
 		return
 	}
-	font := getFontSized(config, "small", 15)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}

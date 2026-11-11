@@ -714,17 +714,13 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 		scene = config.Scenes[currentSceneIndex]
 	}
-	sceneName := ""
-	if scene.Layout != "home" && scene.Name != "" {
-		sceneName = sceneDisplayName(scene.Name)
-	}
-
 	// One brand block, one caption type and one button height on every screen:
 	// the bar decides those in header.go, so Home and a scene cannot drift into
-	// two different headers again. The caption names the screen only: the build
-	// number is developer information and lives in About and the Start menu.
+	// two different headers again. UX-2: the screen's name is its page header's,
+	// so the bar repeats neither it nor the build number (which lives in About
+	// and the Start menu).
 	headerTextW := drawHeaderBrand(renderer, config, barH,
-		headerCaptionText("", sceneName))
+		headerCaptionText("", statusBarCaption(scene)))
 	nextX := headerTextW + SpaceMD
 
 	// The Back control is the bar's loudest button: larger than the rest, in

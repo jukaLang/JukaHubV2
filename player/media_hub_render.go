@@ -388,7 +388,7 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 	statusText := ""
 	statusKind := 0
 	backOnline := online && mediaHub.backOnlineAt != 0 && sdl.GetTicks64()-mediaHub.backOnlineAt < 4000
-	statusFont := getFontSized(config, "small", 15)
+	statusFont := FontForRole(config, TypeLabel)
 	switch {
 	case !online && mediaHub.tab == mediaTabLibrary:
 		statusText, statusKind = "Not connected — your library works offline", 1
@@ -489,7 +489,7 @@ func mediaHubDrawSearch(renderer *sdl.Renderer, config *Config, rect sdl.Rect, o
 	}
 	glyph := int32(22)
 	DrawHomeIcon(renderer, "search", sdl.Rect{X: rect.X + 16, Y: rect.Y + (rect.H-glyph)/2, W: glyph, H: glyph}, false)
-	font := getFontSized(config, "small", 18)
+	font := FontForRole(config, TypeBody)
 	if font == nil {
 		return
 	}
@@ -517,7 +517,7 @@ func mediaHubDrawSearch(renderer *sdl.Renderer, config *Config, rect sdl.Rect, o
 	_, th := measureText(font, text)
 	drawText(renderer, font, ellipsize(font, text, textW), textX, rect.Y+(rect.H-th)/2, ink, textAlignLeft)
 	if focused && !editing {
-		hint := getFontSized(config, "small", 14)
+		hint := FontForRole(config, TypeCaption)
 		if hint != nil {
 			label := hintSentence("%s to type", "A", "Type")
 			hw, hh := measureText(hint, label)
@@ -562,7 +562,7 @@ var mediaTabsScroll float64
 // chip under the pad ring lifts with Home's ring. The strip scrolls sideways on
 // a narrow canvas so the focused chip is always whole.
 func mediaHubDrawTabs(renderer *sdl.Renderer, config *Config, rect sdl.Rect, online bool) {
-	font := getFontSized(config, "small", 16)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}
@@ -679,7 +679,7 @@ func mediaDrawTabChip(renderer *sdl.Renderer, font *ttf.Font, chip sdl.Rect, t m
 func mediaHubDrawState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body, button string, action int, loading bool) {
 	if loading {
 		renderSpinner(renderer, rect.X+rect.W/2, rect.Y+rect.H/2-30, 24, glassAccent())
-		font := getFontSized(config, "small", 17)
+		font := FontForRole(config, TypeBody)
 		if font != nil {
 			tw, _ := measureText(font, title)
 			drawText(renderer, font, title, rect.X+(rect.W-tw)/2, rect.Y+rect.H/2+8, ColorTextSecondary(), textAlignLeft)
@@ -694,7 +694,7 @@ func mediaHubDrawState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, gl
 	if button == "" {
 		return
 	}
-	font := getFontSized(config, "small", 17)
+	font := FontForRole(config, TypeBody)
 	if font == nil {
 		return
 	}
@@ -718,11 +718,11 @@ func mediaHubDrawOffline(renderer *sdl.Renderer, config *Config, rect sdl.Rect, 
 // mediaHubDrawRows paints For you: rows of cards that scroll sideways, the
 // whole page scrolling to keep the focused row in view.
 func mediaHubDrawRows(renderer *sdl.Renderer, config *Config, rect sdl.Rect, online bool) {
-	headFont := getFontSized(config, "small", 19)
-	titleFont := getFontSized(config, "small", 16)
-	metaFont := getFontSized(config, "small", 14)
-	badgeFont := getFontSized(config, "small", 13)
-	chipFont := getFontSized(config, "small", 16)
+	headFont := FontForRole(config, TypeBody)
+	titleFont := FontForRole(config, TypeLabel)
+	metaFont := FontForRole(config, TypeCaption)
+	badgeFont := FontForRole(config, TypeCaption)
+	chipFont := FontForRole(config, TypeLabel)
 	if headFont == nil || titleFont == nil || metaFont == nil {
 		return
 	}
@@ -908,10 +908,10 @@ func mediaHubDrawChipRow(renderer *sdl.Renderer, font *ttf.Font, row *mediaRow, 
 // mediaHubDrawGrid paints a grid tab with its loading, offline, error and
 // empty states.
 func mediaHubDrawGrid(renderer *sdl.Renderer, config *Config, rect sdl.Rect, online bool) {
-	titleFont := getFontSized(config, "small", 16)
-	metaFont := getFontSized(config, "small", 14)
-	badgeFont := getFontSized(config, "small", 13)
-	headFont := getFontSized(config, "small", 15)
+	titleFont := FontForRole(config, TypeLabel)
+	metaFont := FontForRole(config, TypeCaption)
+	badgeFont := FontForRole(config, TypeCaption)
+	headFont := FontForRole(config, TypeLabel)
 	if titleFont == nil || metaFont == nil {
 		return
 	}
@@ -1076,10 +1076,10 @@ func mediaHubDrawGridEmpty(renderer *sdl.Renderer, config *Config, rect sdl.Rect
 // mediaHubDrawDownloads paints the Downloads list: the storage summary and its
 // two settings, the transfers, then the files on the card.
 func mediaHubDrawDownloads(renderer *sdl.Renderer, config *Config, rect sdl.Rect) {
-	small := getFontSized(config, "small", 15)
-	titleFont := getFontSized(config, "small", 17)
-	metaFont := getFontSized(config, "small", 14)
-	badgeFont := getFontSized(config, "small", 13)
+	small := FontForRole(config, TypeLabel)
+	titleFont := FontForRole(config, TypeBody)
+	metaFont := FontForRole(config, TypeCaption)
+	badgeFont := FontForRole(config, TypeCaption)
 	if small == nil || titleFont == nil || metaFont == nil {
 		return
 	}

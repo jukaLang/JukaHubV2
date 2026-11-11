@@ -100,6 +100,28 @@ Cartridge folders are not touched at all: a `.bin` in `Roms/GBA` is a game
 file, not a disc image. The action reports what it added, so pressing it again
 on an already-fixed card says so instead of writing anything.
 
+## Android games
+
+Games added with **Add to Games** in the APK Store ([ANDROID.md](ANDROID.md))
+appear as one more console, **Android**. The title is the APK's own label and
+the cover is the launcher icon the store saved when it added the game
+(`data/game-art/Android/<APK name>.png`); a game added before covers were saved
+gets its icon at a later scan, once the store has read that APK again. **A**
+opens the game's page like any other, and **Play** starts it through its game
+profile — the same path as the store's Play and Game Profiles: the APK is
+triaged again, the free memory is checked, the game's files are staged into
+memory and AndroidRT starts it. A launch that stops shows the launch-failure
+dialog with the game's launch log; with no AndroidRT on the device, Play says
+so and points at the APK Store's Runtime tab, which installs it.
+
+The row lists only the store's own profiles, read from
+`data/game-profiles/local/apkstore-*.json` at every library scan (at most 300;
+no APK is opened for it), so **Remove from Games** in the store takes a game off
+the row at the next scan. A hand-written AndroidPak profile stays in Game
+Profiles. The cover fetch (**L1** / **F**) leaves Android games alone, LAN play
+(**X**) says it is for emulator games, **E** opens the game in Game Profiles,
+and a game started here joins Continue.
+
 ## Completeness
 
 The header carries a ring that fills as the library gains covers, with the

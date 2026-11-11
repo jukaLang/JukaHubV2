@@ -655,10 +655,10 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 		// With WPE Browser first on the card, the way-out sentence names it.
 		detail = brwWpeWallDetail(detail)
 	}
-	titleFont := getFontSized(config, "small", 28)
-	bodyFont := getFontSized(config, "small", 18)
-	smallFont := getFontSized(config, "small", 15)
-	buttonFont := getFontSized(config, "small", 19)
+	titleFont := FontForRole(config, TypeTitle)
+	bodyFont := FontForRole(config, TypeBody)
+	smallFont := FontForRole(config, TypeLabel)
+	buttonFont := FontForRole(config, TypeBody)
 	if titleFont == nil || bodyFont == nil || smallFont == nil || buttonFont == nil {
 		return
 	}
@@ -873,7 +873,7 @@ func brwDrawOnlinePill(r *sdl.Renderer, config *Config, view sdl.Rect) {
 		brwGame.notified = true
 		PlaySuccessSound()
 	}
-	font := getFontSized(config, "small", 17)
+	font := FontForRole(config, TypeBody)
 	if font == nil {
 		return
 	}

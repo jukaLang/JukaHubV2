@@ -43,6 +43,11 @@ const (
 // no launcher. It names the fix where the device is offered one, and the actual
 // reason elsewhere, instead of the generic "no launcher for Xbox".
 func xboxLibraryLauncherHintFor(device DeviceModel) string {
+	if device == DeviceDevBuild {
+		// Windows (DetectDevice's answer there): xemu plays Roms/XBOX, and the
+		// Emulators page installs it.
+		return "Install xemu: Emulators → xemu → X"
+	}
 	support := hakuxSupportFor(device)
 	if support.Offer {
 		return "Install hakuX: Emulators → Xbox → X"
@@ -333,28 +338,36 @@ func hakuxFinish(result hakuxInstallResult, err error) {
 }
 
 // hakuxStartRollback is R1 on the Xbox tile: the files the last update
-// replaced come back. It is a handful of renames on the card, so it runs on the
-// event thread like the other rollbacks, inside the patch lock so it cannot
-// meet an install half way.
+// replaced or set aside come back. On an SD card a rename can take a moment
+// and a copy (two file systems) much longer, so it runs off the event thread
+// like the install, inside the patch lock so it cannot meet an install half
+// way.
 func hakuxStartRollback() {
 	if !tryBeginPatchOp() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	info, err := hakuxRollbackCard(hakuxDevicePaths())
-	endPatchOp()
-	if err != nil {
-		ShowToast("hakuX: "+err.Error(), ToastKindError)
-		return
-	}
-	invalidateEmulatorCache()
-	emuForgetUpdate(emuXboxEntryName)
-	PlaySuccessSound()
-	label := strings.TrimSpace(info.Tag)
-	if label == "" {
-		label = "the files the update replaced"
-	}
-	ShowToast("hakuX rolled back to "+label+" · X installs the newest again", ToastKindSuccess)
+	paths := hakuxDevicePaths()
+	ShowToast("Rolling hakuX back…", ToastKindInfo)
+	go func() {
+		defer endPatchOp()
+		info, err := hakuxRollbackCard(paths)
+		if err != nil {
+			ShowToast("hakuX: "+err.Error(), ToastKindError)
+			return
+		}
+		invalidateEmulatorCache()
+		emuForgetUpdate(emuXboxEntryName)
+		if emuXboxSheetOpen() {
+			emuXboxRescan()
+		}
+		PlaySuccessSound()
+		label := strings.TrimSpace(info.Tag)
+		if label == "" {
+			label = "the files the update replaced"
+		}
+		ShowToast("hakuX rolled back to "+label+" · X installs the newest again", ToastKindSuccess)
+	}()
 }
 
 // hakuxManagedOnCard reports a hakuX JukaHub installed on this device, which

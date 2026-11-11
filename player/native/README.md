@@ -14,6 +14,7 @@ the host store) is Go in the parent folder.
 | `chiaki-regist.c` | PS5 pairing handshake (PSN Account-ID + PIN), writes a result file |
 | `CMakeLists.txt` | Adds both targets to a chiaki-ng build |
 | `build-helpers.sh` | Fetches the pinned chiaki-ng commit, builds both helpers and installs them into `bin/` here (`player/native/bin`) |
+| `build-runtimes.sh` | Not part of Remote Play: builds, checks and zips the two runtime packages, AndroidRT and the Box64 pack of the Windows-app runtime, into `bin/` (see below) |
 | `tests/` | Host tests (only a C compiler needed): `sh tests/run-host-tests.sh` |
 
 ## Build
@@ -49,6 +50,33 @@ FFmpeg/OpenSSL dynamically, so the Brick Pro then needs that runtime in
 PS4 pairing is **not** here: it is implemented in Go in
 [`../psremote_ps4.go`](../psremote_ps4.go), including the registration crypto for
 firmware 8, 9 and 10.
+
+## The runtime packages (`build-runtimes.sh`)
+
+The same CI job builds two packages that have nothing to do with Remote Play
+but need the same thing, an aarch64 build against a glibc no newer than the
+handheld's:
+
+```sh
+sh build-runtimes.sh androidrt        # bin/JukaHub-AndroidRT-linux-arm64.zip  (androidrt/)
+sh build-runtimes.sh wine             # bin/JukaHub-Wine-linux-arm64.zip       (wine-runtime/)
+sh build-runtimes.sh verify ZIP       # one folder, every file in its SHA256SUMS and matching
+sh build-runtimes.sh unpack ZIP DEST  # verify, then put the folder at DEST
+```
+
+`androidrt` runs `../androidrt/build-tsp.sh` and packages `loader`, `launch.sh`,
+`surface-probe` and `props.txt.example`; every TrimUI archive carries that
+folder as `Apps/JukaHub/androidrt/`. `wine` builds Box64 from its pinned commit
+(v0.4.4, generic ARM64) with the x86_64 libraries its install puts beside it
+(`box64/x64lib/`), and writes `wine.json`: the pinned Wine 10.0 WoW64 build,
+its SHA-256 and size, which JukaHub downloads itself. Each package holds
+`BUILDINFO.txt` and a `SHA256SUMS` listing every other file, the form JukaHub's
+installer (`../relpack.go`) accepts. Both binaries are held to the helpers'
+rules (AArch64, the standard loader, only the C library, no glibc symbol newer
+than 2.31) and must start once on the build machine. `wine-check` and `smoke`
+are the job's two advisory steps: `box64 wine --version` with the pinned Wine,
+and AndroidRT's host smoke suite. [docs/BUILDING.md](../../docs/BUILDING.md#androidrt-and-the-box64-pack)
+lists the variables.
 
 ## Controls during a stream
 

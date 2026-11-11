@@ -177,8 +177,8 @@ func setSheetDraw(renderer *sdl.Renderer, config *Config, s *setSheetState) {
 	if renderer == nil || !s.open {
 		return
 	}
-	label := getFontSized(config, "medium", 19)
-	small := getFontSized(config, "small", 15)
+	label := FontForRole(config, TypeBody)
+	small := FontForRole(config, TypeLabel)
 	if label == nil || small == nil {
 		return
 	}

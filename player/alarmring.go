@@ -404,7 +404,7 @@ func renderAlarmRing(renderer *sdl.Renderer, config *Config) {
 	if medium == nil {
 		medium = small
 	}
-	clockFont := getFontSized(config, "big", 150)
+	clockFont := FontForRole(config, TypeTitle)
 	if clockFont == nil {
 		clockFont = medium
 	}

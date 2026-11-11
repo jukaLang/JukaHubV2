@@ -692,9 +692,9 @@ func upchRenderSheet(renderer *sdl.Renderer, config *Config) {
 	if upchUI.sheet == upchSheetHistory && uhistVersion() != upchUI.entriesVer {
 		upchSetHistory()
 	}
-	titleFont := getFontSized(config, "small", 18)
-	subFont := getFontSized(config, "small", 14)
-	btnFont := getFontSized(config, "small", 15)
+	titleFont := FontForRole(config, TypeBody)
+	subFont := FontForRole(config, TypeCaption)
+	btnFont := FontForRole(config, TypeLabel)
 	if titleFont == nil || subFont == nil || btnFont == nil {
 		return
 	}

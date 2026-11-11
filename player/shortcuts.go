@@ -227,7 +227,7 @@ func renderShortcutsOverlay(renderer *sdl.Renderer, config *Config) {
 	headerH := UIPanelHeaderBand(config, header, 10)
 	UIPageHeaderDraw(renderer, config, header)
 
-	font := getFontSized(config, "small", 14)
+	font := FontForRole(config, TypeCaption)
 	if font == nil {
 		return
 	}

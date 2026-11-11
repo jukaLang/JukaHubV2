@@ -1,26 +1,33 @@
 package main
 
-// windowsapps.go — a small Windows-app launcher for the ARM64 handheld build.
+// windowsapps.go — Windows Apps: finds Windows programs and starts them, on
+// the handheld through Wine and a display, on Windows directly.
 //
-// Wine is only half of the problem. It still needs a display server, and a
-// stock TrimUI Smart Pro has neither X11 nor Wayland. This module detects the
-// pieces that can bridge that gap:
+// A launch has two halves. The runtime half — Box64 and Wine, the prefix — is
+// planWineRuntime's (wine_runtime.go). The display half — WestonPack on a
+// handheld with no X11 or Wayland — is prepareWineDisplay's (wine_display.go).
+// This file runs the two together for Windows Apps and for Wine game profiles
+// (wineStart), so both get the same launch:
 //
-//   * a native ARM64 Wine (Hangover, or a PortMaster build), optionally with
-//     Box64 when the Wine binary is x86-64;
-//   * an existing X11 or Wayland session; or
-//   * WestonPack's westonwrap.sh, which starts a minimal Weston/Xwayland
-//     session on DRM/KMS so basic Win32 windows can be shown on the handheld.
+//   - the slow part (a first run creates the prefix for minutes; later ones
+//     still take tens of seconds) runs on a goroutine, its progress on the
+//     app's row, and a second A on a starting app does nothing;
+//   - on the handheld the pad is the program's mouse, with a few keys, from
+//     before its compositor starts until the session ends (wineInputStart);
+//   - the screen is handed over and back like any game's (gamesuspend.go):
+//     parked while anything the launch started still runs;
+//   - each app writes its own log: the runtime, the display, the exact command
+//     line (secret values hidden) and the program's output;
+//   - when the program exits, `westonwrap.sh cleanup` runs, the runtime puts
+//     its things away (plan.After), leftovers are stopped, the WestonPack image
+//     is unmounted — each step bounded, so nothing keeps the screen parked.
 //
-// The setup page can install the runtime itself (windows_runtime_install.go):
-// it fetches the current ARM64 Hangover release into data/windows-runtime and
-// writes the bin/wine wrapper this file resolves. Box64 is still detected but
-// not downloaded, because it has to match the firmware's glibc.
-//
-// "Basic" is deliberate: console programs and simple Win32 windows are the
-// target. Direct3D games still need DXVK/VKD3D and a capable Vulkan driver.
+// On Windows the same launcher starts .exe files directly, and .bat / .cmd
+// files through cmd.exe, in the program's own folder.
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -31,56 +38,40 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	windowsAppsEntryName = "Windows Apps"
 
-	windowsDisplayAuto     = "auto"
-	windowsDisplayX11      = "x11"
-	windowsDisplayWayland  = "wayland"
-	windowsDisplayWeston   = "weston"
-	windowsDisplayHeadless = "headless"
-
 	windowsAppMaxScanDepth = 4
 	windowsAppMaxEntries   = 200
+
+	// wineQuickExit: a session that ends with an error sooner than this is
+	// reported like a launch that failed (the program, or its display, did not
+	// come up), with its log.
+	wineQuickExit = 30 * time.Second
+	// wineGroupGrace is how long what a program left in its process group
+	// (Wine's helper processes, a compositor the clean-up missed) gets to exit
+	// after the clean-up before it is stopped.
+	wineGroupGrace = 6 * time.Second
+	// wineAfterLimit bounds the runtime's clean-up (plan.After).
+	wineAfterLimit = 45 * time.Second
 )
 
-var windowsAppDisplayNames = map[string]string{
-	windowsDisplayX11:      "X11",
-	windowsDisplayWayland:  "Wayland",
-	windowsDisplayWeston:   "WestonPack (DRM/KMS)",
-	windowsDisplayHeadless: "Headless",
-}
-
-// windowsAppEntry is one executable found by the scanner. Path is the real
-// file; Rel keeps the row readable when several apps share a title.
+// windowsAppEntry is one program found by the scanner. Path is the real file;
+// Rel keeps the row readable when several apps share a title.
 type windowsAppEntry struct {
 	Title string
 	Path  string
 	Rel   string
 }
 
-// wineHost abstracts the environment so display selection is testable without
-// touching the process environment or a real WestonPack install.
-type wineHost struct {
-	getenv    func(string) string
-	weston    string
-	westonErr string
-}
-
-func currentWineHost() wineHost {
-	weston, err := resolveWestonPack()
-	host := wineHost{getenv: os.Getenv, weston: weston}
-	if err != nil {
-		host.westonErr = err.Error()
-	}
-	return host
-}
-
 // windowsRuntimeStatus is the single "can this device launch an exe?" answer
-// used by the panel, the Emulators row and the start menu detail.
+// used by the panel, the Emulators row and the setup page. The runtime part
+// comes from currentWineRuntimeFacts, the display part from
+// resolveWineDisplay.
 type windowsRuntimeStatus struct {
 	Wine    string
 	Box64   string
@@ -89,306 +80,64 @@ type windowsRuntimeStatus struct {
 	DXVK    string
 	Vulkan  bool
 	Problem string
+	// Flavor names the runtime ("Box64 + Wine 10.0", "Windows"); Prefix is
+	// where the shared prefix is or would be.
+	Flavor string
+	Prefix string
 }
 
 func (s windowsRuntimeStatus) ready() bool { return s.Problem == "" }
 
 func (s windowsRuntimeStatus) displayLabel() string {
-	if label, ok := windowsAppDisplayNames[s.Display]; ok {
-		return label
-	}
-	return s.Display
+	return windowsDisplayLabel(s.Display)
 }
 
-// currentWindowsRuntimeStatus resolves Wine and the display backend. It is
-// cheap enough to call when a panel opens or a row is built, but not per row
-// per frame.
+// windowsDisplayLabel names a display mode for people.
+func windowsDisplayLabel(mode string) string {
+	if label, ok := windowsAppDisplayNames[mode]; ok {
+		return label
+	}
+	return mode
+}
+
+// currentWindowsRuntimeStatus resolves the runtime and the display without
+// installing, mounting or starting anything. It reads files, so the panel
+// keeps a copy (windowsRuntimeStatusCached) instead of calling it per frame.
 func currentWindowsRuntimeStatus() windowsRuntimeStatus {
-	var status windowsRuntimeStatus
+	facts := currentWineRuntimeFacts()
+	status := windowsRuntimeStatus{
+		Wine:   facts.Wine,
+		Box64:  facts.Box64,
+		Flavor: facts.Flavor,
+		Prefix: facts.Prefix,
+	}
 	if IsWindows() {
-		status.Problem = "this launcher is for the handheld/Linux build"
+		// Windows runs the programs itself: nothing to install, nothing missing.
+		status.Display = windowsDisplayDesktop
 		return status
-	}
-	wine, err := resolveWine(exec.LookPath)
-	if err != nil {
-		status.Problem = err.Error()
-		return status
-	}
-	status.Wine = wine
-	if needsBox64(wine) {
-		box, boxErr := resolveBox64(exec.LookPath)
-		if boxErr != nil {
-			status.Problem = "Wine is x86 and needs Box64: " + boxErr.Error()
-			return status
-		}
-		status.Box64 = box
 	}
 	host := currentWineHost()
-	display, displayErr := resolveWineDisplay("", host)
-	status.Weston = host.weston
-	if dxvk, dxvkErr := resolveDXVK(); dxvkErr == nil {
+	status.Weston = host.westonPath()
+	if dxvk, err := resolveDXVK(); err == nil {
 		status.DXVK = dxvk
 	}
 	status.Vulkan = resolveVulkan() != ""
-	if displayErr != nil {
-		status.Problem = displayErr.Error()
-		return status
+	display, displayErr := resolveWineDisplay("", host)
+	if displayErr == nil {
+		status.Display = display
 	}
-	status.Display = display
+	switch {
+	case facts.Problem != "":
+		status.Problem = facts.Problem
+	case displayErr != nil:
+		status.Problem = displayErr.Error()
+	}
 	return status
 }
 
-// resolveWineDisplay picks a display backend. "auto" prefers a real desktop
-// session, then falls back to WestonPack on DRM/KMS. It intentionally refuses
-// to pretend that a bare framebuffer is enough for a Win32 window.
-func resolveWineDisplay(requested string, host wineHost) (string, error) {
-	requested = strings.ToLower(strings.TrimSpace(requested))
-	if requested == "" {
-		if host.getenv != nil {
-			requested = strings.ToLower(strings.TrimSpace(host.getenv("JUKAHUB_WINE_DISPLAY")))
-		}
-	}
-	if requested == "" {
-		requested = windowsDisplayAuto
-	}
-
-	hasWayland := host.getenv != nil && strings.TrimSpace(host.getenv("WAYLAND_DISPLAY")) != ""
-	hasX11 := host.getenv != nil && strings.TrimSpace(host.getenv("DISPLAY")) != ""
-
-	switch requested {
-	case windowsDisplayAuto:
-		// Prefer X11 when both are present: Wine and Hangover default to
-		// winex11, and XWayland usually exports DISPLAY alongside Wayland.
-		switch {
-		case hasX11:
-			return windowsDisplayX11, nil
-		case hasWayland:
-			return windowsDisplayWayland, nil
-		case host.weston != "":
-			return windowsDisplayWeston, nil
-		default:
-			if host.westonErr != "" {
-				return "", errors.New(host.westonErr)
-			}
-			return "", errors.New("no display server: Wine needs X11 or Wayland, or WestonPack on DRM/KMS (install WestonPack or set JUKAHUB_WESTON)")
-		}
-	case windowsDisplayX11:
-		if !hasX11 {
-			return "", errors.New("display=x11, but DISPLAY is not set")
-		}
-		return windowsDisplayX11, nil
-	case windowsDisplayWayland:
-		if !hasWayland {
-			return "", errors.New("display=wayland, but WAYLAND_DISPLAY is not set")
-		}
-		return windowsDisplayWayland, nil
-	case windowsDisplayWeston:
-		if host.weston == "" {
-			if host.westonErr != "" {
-				return "", errors.New(host.westonErr)
-			}
-			err := errors.New("display=weston, but westonwrap.sh was not found (install WestonPack or set JUKAHUB_WESTON)")
-			return "", withLaunchFailureKind(launchFailureRuntimeMissing, err)
-		}
-		return windowsDisplayWeston, nil
-	case windowsDisplayHeadless:
-		return windowsDisplayHeadless, nil
-	default:
-		return "", fmt.Errorf("unknown display %q (use auto, x11, wayland, weston or headless)", requested)
-	}
-}
-
-// wrapWineCommand adapts an already-built Wine command for the selected
-// display. On WestonPack, the wrapper owns the compositor and takes the app
-// command as its final arguments; environment variables are passed explicitly
-// because westonwrap.sh does not inherit them for the wrapped app.
-func wrapWineCommand(displayRequest, command string, args []string, env map[string]string, host wineHost) (string, []string, error) {
-	mode, err := resolveWineDisplay(displayRequest, host)
-	if err != nil {
-		return "", nil, err
-	}
-	if env == nil {
-		env = map[string]string{}
-	}
-	switch mode {
-	case windowsDisplayWeston:
-		if host.weston == "" {
-			return "", nil, errors.New("WestonPack is not available")
-		}
-		wrapped := []string{"drm", "gl", "kiosk", "system"}
-		keys := make([]string, 0, len(env))
-		for key := range env {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			wrapped = append(wrapped, key+"="+env[key])
-		}
-		wrapped = append(wrapped, command)
-		wrapped = append(wrapped, args...)
-		return host.weston, wrapped, nil
-	case windowsDisplayHeadless:
-		// An explicitly headless profile must not accidentally pick up the
-		// parent session's display connection.
-		env["DISPLAY"] = ""
-		env["WAYLAND_DISPLAY"] = ""
-		return command, args, nil
-	default:
-		return command, args, nil
-	}
-}
-
-// windowsWineCommand builds the Wine (or Box64 + Wine) command for an exe.
-func windowsWineCommand(exe string, args []string, lookPath func(string) (string, error)) (string, []string, error) {
-	wine, err := resolveWine(lookPath)
-	if err != nil {
-		return "", nil, err
-	}
-	if needsBox64(wine) {
-		box, boxErr := resolveBox64(lookPath)
-		if boxErr != nil {
-			return "", nil, fmt.Errorf("wine is x86 and needs box64: %w", boxErr)
-		}
-		return box, append([]string{wine, exe}, args...), nil
-	}
-	return wine, append([]string{exe}, args...), nil
-}
-
-// ── DXVK / Vulkan ────────────────────────────────────────────────────────
-
-// resolveDXVK finds a DXVK build installed beside Wine, by JukaHub's own
-// installer or by PortMaster. The DLLs must match the Wine prefix's
-// architecture, which the x64/x32 layout of a release provides. A detected
-// build is only used when a Vulkan loader is also present, because DXVK cannot
-// start without one.
-func resolveDXVK() (string, error) {
-	if override := strings.TrimSpace(os.Getenv("JUKAHUB_DXVK")); override != "" {
-		if !dxvkBuild(override) {
-			return "", fmt.Errorf("JUKAHUB_DXVK does not point at a DXVK directory or its d3d11.dll: %s", override)
-		}
-		abs, err := filepath.Abs(override)
-		if err != nil {
-			return "", err
-		}
-		return abs, nil
-	}
-	candidates := []string{
-		filepath.Join(windowsRuntimeDir(), "dxvk"),
-		filepath.Join(windowsRuntimeDir(), "bin", "dxvk"),
-		"/mnt/SDCARD/Apps/DXVK",
-		"/mnt/SDCARD/PortMaster/runtimes/dxvk",
-		"/mnt/SDCARD/PortMaster/dxvk",
-		"/mnt/SDCARD/Apps/Wine/dxvk",
-		"/mnt/SDCARD/PortMaster/wine/dxvk",
-	}
-	for _, candidate := range candidates {
-		if dxvkBuild(candidate) {
-			return candidate, nil
-		}
-	}
-	return "", nil
-}
-
-func dxvkBuild(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	if !info.IsDir() {
-		return strings.EqualFold(filepath.Base(path), "d3d11.dll") || strings.EqualFold(filepath.Base(path), "d3d9.dll")
-	}
-	for _, rel := range []string{"x64/d3d11.dll", "d3d11.dll", "x64/d3d9.dll", "d3d9.dll"} {
-		if info, err := os.Stat(filepath.Join(path, rel)); err == nil && info.Size() > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// resolveVulkan returns the first Vulkan loader found. DXVK is a Vulkan
-// consumer; Wine's built-in D3D path does not require this. The lookup is
-// intentionally filesystem-only so a Linux device without vulkaninfo still
-// gets a useful diagnostic.
-func resolveVulkan() string {
-	if override := strings.TrimSpace(os.Getenv("JUKAHUB_VULKAN")); override != "" {
-		if info, err := os.Stat(override); err == nil && !info.IsDir() {
-			return override
-		}
-		return ""
-	}
-	candidates := []string{
-		"/usr/lib/libvulkan.so.1",
-		"/usr/lib64/libvulkan.so.1",
-		"/lib/libvulkan.so.1",
-		"/usr/trimui/lib/libvulkan.so.1",
-		"/usr/lib/aarch64-linux-gnu/libvulkan.so.1",
-	}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	for _, pattern := range []string{"/usr/lib/*/libvulkan.so.1", "/lib/*/libvulkan.so.1"} {
-		if matches, err := filepath.Glob(pattern); err == nil {
-			for _, match := range matches {
-				if info, err := os.Stat(match); err == nil && !info.IsDir() {
-					return match
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// applyWineCompatibilityEnv enables DXVK through Wine's DLL overrides only when
-// both the DLLs and a Vulkan loader are present. Existing user overrides win;
-// silently replacing them would make a working setup stop working.
-func applyWineCompatibilityEnv(env map[string]string) (dxvk string, vulkan bool) {
-	if env == nil {
-		return "", false
-	}
-	dxvk, _ = resolveDXVK()
-	vulkan = resolveVulkan() != ""
-	if dxvk == "" || !vulkan {
-		return dxvk, vulkan
-	}
-	if !hasEnvKey(env, "WINEDLLOVERRIDES") {
-		env["WINEDLLOVERRIDES"] = "dxgi,d3d9,d3d10core,d3d11,d3d12=n,b"
-	}
-	return dxvk, vulkan
-}
-
-func resolveWestonPack() (string, error) {
-	if override := strings.TrimSpace(os.Getenv("JUKAHUB_WESTON")); override != "" {
-		if !executableFile(override) {
-			return "", fmt.Errorf("JUKAHUB_WESTON does not point at an executable file: %s", override)
-		}
-		abs, err := filepath.Abs(override)
-		if err != nil {
-			return "", err
-		}
-		return abs, nil
-	}
-	candidates := []string{
-		filepath.Join(windowsRuntimeDir(), "westonwrap.sh"),
-		filepath.Join(windowsRuntimeDir(), "weston", "westonwrap.sh"),
-		"/mnt/SDCARD/PortMaster/runtimes/westonpack/westonwrap.sh",
-		"/mnt/SDCARD/PortMaster/runtimes/weston/westonwrap.sh",
-		"/mnt/SDCARD/PortMaster/weston/westonwrap.sh",
-		"/mnt/SDCARD/Apps/WestonPack/westonwrap.sh",
-		"/tmp/weston/westonwrap.sh",
-	}
-	for _, candidate := range candidates {
-		if executableFile(candidate) {
-			return candidate, nil
-		}
-	}
-	return "", nil
-}
-
-// executableFile is the stricter check used for the WestonPack wrapper. A
-// regular but non-executable script would otherwise be reported as ready and
-// then fail at exec time.
+// executableFile is the stricter check used for wrapper scripts. A regular
+// but non-executable script would otherwise be reported as ready and then
+// fail at exec time.
 func executableFile(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -425,16 +174,20 @@ func windowsAppsDir() string {
 // into. It is best-effort, like InitGameProfiles: a read-only data folder must
 // not stop JukaHub from booting.
 func InitWindowsApps() {
-	for _, dir := range []string{windowsAppsDir(), filepath.Join(windowsRuntimeDir(), "bin")} {
+	dirs := []string{windowsAppsDir()}
+	if !IsWindows() {
+		dirs = append(dirs, filepath.Join(windowsRuntimeDir(), "bin"))
+	}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			logWarn("windowsapps", "setup failed: %v", err)
 		}
 	}
 }
 
-// windowsAppRoots lists where .exe files are discovered. The app-folder copy
-// is always available; on the handheld the usual PC/Windows game folders are
-// included so a user does not have to copy a game twice.
+// windowsAppRoots lists where programs are discovered. The app folder is
+// always there; on the handheld the usual PC/Windows game folders are included
+// so a user does not have to copy a game twice.
 func windowsAppRoots() []string {
 	if len(windowsAppsRootsOverride) > 0 {
 		return dedupeCleanPaths(windowsAppsRootsOverride)
@@ -458,6 +211,8 @@ var windowsAppsCache struct {
 	roots   []string
 }
 
+// invalidateWindowsAppsCache drops the scan and the panel's runtime status, so
+// both are read again (after an install, on rescan, when the panel opens).
 func invalidateWindowsAppsCache() {
 	windowsAppsCache.mu.Lock()
 	windowsAppsCache.built = false
@@ -465,6 +220,7 @@ func invalidateWindowsAppsCache() {
 	windowsAppsCache.issues = nil
 	windowsAppsCache.roots = nil
 	windowsAppsCache.mu.Unlock()
+	windowsRuntimeStatusForget()
 }
 
 func windowsAppEntries() []windowsAppEntry {
@@ -484,6 +240,17 @@ func windowsAppEntries() []windowsAppEntry {
 	out := make([]windowsAppEntry, len(windowsAppsCache.entries))
 	copy(out, windowsAppsCache.entries)
 	return out
+}
+
+// windowsAppKnown reports whether path is a program the scanner found: the
+// only files the launcher starts.
+func windowsAppKnown(path string) bool {
+	for _, entry := range windowsAppEntries() {
+		if entry.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 // windowsAppRootsCached returns the roots used by the current scan, so the
@@ -531,7 +298,7 @@ func scanWindowsApps(roots []string) ([]windowsAppEntry, []string) {
 			if d.Type()&os.ModeSymlink != 0 || !d.Type().IsRegular() {
 				return nil
 			}
-			if !strings.EqualFold(filepath.Ext(d.Name()), ".exe") || skipWindowsExecutable(d.Name()) {
+			if !windowsAppLaunchable(d.Name()) || skipWindowsExecutable(d.Name()) {
 				return nil
 			}
 			real, evalErr := filepath.EvalSymlinks(path)
@@ -553,7 +320,7 @@ func scanWindowsApps(roots []string) ([]windowsAppEntry, []string) {
 			issues = append(issues, root+": "+walkErr.Error())
 		}
 		if len(entries) >= windowsAppMaxEntries {
-			issues = append(issues, fmt.Sprintf("more than %d executables found; only the first %d are listed", windowsAppMaxEntries, windowsAppMaxEntries))
+			issues = append(issues, fmt.Sprintf("more than %d programs found; only the first %d are listed", windowsAppMaxEntries, windowsAppMaxEntries))
 			break
 		}
 	}
@@ -568,6 +335,24 @@ func scanWindowsApps(roots []string) ([]windowsAppEntry, []string) {
 	return entries, issues
 }
 
+// windowsAppLaunchable reports a file the launcher lists: an .exe everywhere,
+// and on Windows also a batch file, which runs through cmd.exe.
+func windowsAppLaunchable(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".exe":
+		return true
+	case ".bat", ".cmd":
+		return IsWindows()
+	}
+	return false
+}
+
+// windowsBatchFile reports a Windows batch file (.bat, .cmd).
+func windowsBatchFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".bat" || ext == ".cmd"
+}
+
 func skipWindowsScanDir(name string) bool {
 	switch strings.ToLower(name) {
 	case "windows", "system32", "syswow64", "winsxs", "$recycle.bin",
@@ -579,7 +364,7 @@ func skipWindowsScanDir(name string) bool {
 
 func skipWindowsExecutable(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasPrefix(lower, "unins") // Wine's uninstaller stubs
+	return strings.HasPrefix(lower, "unins") // uninstallers
 }
 
 func windowsAppTitle(name string) string {
@@ -600,8 +385,97 @@ func windowsAppDetail(entry windowsAppEntry) string {
 	return entry.Rel
 }
 
+// ── Per-app display ──────────────────────────────────────────────────────
+
+// windowsAppPrefs remembers the apps that use WestonPack's OpenGL mode instead
+// of the Windows (GDI) one (Y on a row, windowsapps_ui.go). It is kept in
+// data/windows-apps/display.json as the list of those apps' paths; every
+// other app uses the default.
+var windowsAppPrefs struct {
+	mu     sync.Mutex
+	loaded bool
+	openGL map[string]bool
+}
+
+// windowsAppPrefsFile is display.json.
+type windowsAppPrefsFile struct {
+	SchemaVersion int      `json:"schemaVersion"`
+	OpenGL        []string `json:"opengl,omitempty"`
+}
+
+func windowsAppPrefsPath() string { return filepath.Join(windowsAppsDir(), "display.json") }
+
+// windowsAppPrefsLoadLocked reads display.json once. A missing file is the
+// default; one that cannot be read is logged and taken as empty, and the next
+// change replaces it.
+func windowsAppPrefsLoadLocked() {
+	if windowsAppPrefs.loaded {
+		return
+	}
+	windowsAppPrefs.loaded = true
+	windowsAppPrefs.openGL = map[string]bool{}
+	data, err := os.ReadFile(windowsAppPrefsPath())
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			logWarn("windowsapps", "display choices not read: %v", err)
+		}
+		return
+	}
+	var file windowsAppPrefsFile
+	if err := json.Unmarshal(stripUTF8BOM(data), &file); err != nil {
+		logWarn("windowsapps", "display choices not read (%s): %v", windowsAppPrefsPath(), err)
+		return
+	}
+	for _, path := range file.OpenGL {
+		if path = strings.TrimSpace(path); path != "" {
+			windowsAppPrefs.openGL[path] = true
+		}
+	}
+}
+
+// windowsAppOpenGL reports whether the app at path uses the OpenGL mode.
+func windowsAppOpenGL(path string) bool {
+	windowsAppPrefs.mu.Lock()
+	defer windowsAppPrefs.mu.Unlock()
+	windowsAppPrefsLoadLocked()
+	return windowsAppPrefs.openGL[path]
+}
+
+// windowsAppSetOpenGL stores the app's display choice. The file is written
+// whole and atomically; when that fails, the choice is not changed.
+func windowsAppSetOpenGL(path string, on bool) error {
+	windowsAppPrefs.mu.Lock()
+	defer windowsAppPrefs.mu.Unlock()
+	windowsAppPrefsLoadLocked()
+	was := windowsAppPrefs.openGL[path]
+	if on {
+		windowsAppPrefs.openGL[path] = true
+	} else {
+		delete(windowsAppPrefs.openGL, path)
+	}
+	file := windowsAppPrefsFile{SchemaVersion: 1}
+	for p := range windowsAppPrefs.openGL {
+		file.OpenGL = append(file.OpenGL, p)
+	}
+	sort.Strings(file.OpenGL)
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err == nil {
+		err = AtomicWrite(windowsAppPrefsPath(), append(data, '\n'), 0o644)
+	}
+	if err != nil {
+		if was {
+			windowsAppPrefs.openGL[path] = true
+		} else {
+			delete(windowsAppPrefs.openGL, path)
+		}
+		return err
+	}
+	return nil
+}
+
 // ── Launching ────────────────────────────────────────────────────────────
 
+// windowsAppRunning holds the pid of each Windows app that runs, by path.
 var windowsAppRunning struct {
 	mu   sync.Mutex
 	pids map[string]int
@@ -624,21 +498,6 @@ func windowsAppSetRunning(path string, pid int) {
 		return
 	}
 	windowsAppRunning.pids[path] = pid
-}
-
-// ensureWinePrefix creates one shared prefix unless the caller supplied a
-// different WINEPREFIX. Sharing keeps the first launch (wineboot) cost out of
-// every subsequent app.
-func ensureWinePrefix(env map[string]string) error {
-	if hasEnvKey(env, "WINEPREFIX") {
-		return nil
-	}
-	prefix := filepath.Join(windowsRuntimeDir(), "prefix")
-	if err := os.MkdirAll(prefix, 0o755); err != nil {
-		return fmt.Errorf("create wine prefix: %w", err)
-	}
-	env["WINEPREFIX"] = prefix
-	return nil
 }
 
 func windowsAppLogPath(entry windowsAppEntry) string {
@@ -664,89 +523,421 @@ func windowsAppLogPath(entry windowsAppEntry) string {
 	return filepath.Join(windowsRuntimeDir(), "logs", fmt.Sprintf("%s-%08x.log", name, h.Sum32()))
 }
 
-// launchWindowsApp starts one exe detached from the UI thread and reaps it in
-// the background. The command is planned before anything is created, so a
-// missing runtime or display never leaves a half-launched process behind.
-func launchWindowsApp(entry windowsAppEntry) error {
-	if IsWindows() {
-		return errors.New("Windows apps are launched directly by Windows")
+// wineLaunchSettings is what a launch needs from the settings. The launch runs
+// on a goroutine, which must not read the config, so the main thread takes a
+// copy whenever a launch may follow (wineLaunchSettingsTake): when Windows Apps
+// opens, and when an app or a Wine profile is started.
+type wineLaunchSettings struct {
+	bridge mbridgeParams
+	power  powerProfileConfig
+}
+
+var wineLaunchSettingsCopy atomic.Pointer[wineLaunchSettings]
+
+// wineLaunchSettingsTake copies the settings a launch needs. Main thread only.
+func wineLaunchSettingsTake(config *Config) {
+	// The pad session buzzes from its goroutine: find the motor here, on the
+	// main thread, as vcursorBridgeTick does.
+	hapticsAvailable()
+	bridge := mbridgeDefaultParams()
+	if config != nil {
+		bridge = mbridgeParamsFor(config)
 	}
+	wineLaunchSettingsCopy.Store(&wineLaunchSettings{
+		bridge: bridge,
+		power:  loadPowerProfileConfig(config),
+	})
+}
+
+// wineLaunchSettingsNow is the last copy, or the defaults when no screen took
+// one (a launch from somewhere that never opened Windows Apps).
+func wineLaunchSettingsNow() wineLaunchSettings {
+	if s := wineLaunchSettingsCopy.Load(); s != nil {
+		return *s
+	}
+	return wineLaunchSettings{bridge: mbridgeDefaultParams(), power: loadPowerProfileConfig(nil)}
+}
+
+// wineLaunch is one Windows program to start, from Windows Apps or a Wine game
+// profile.
+type wineLaunch struct {
+	Title string
+	// Key is what the starting and running state is kept under: the app's
+	// path, or "profile:" and the profile's id.
+	Key  string
+	Exe  string
+	Args []string
+	Dir  string
+	// Env is the caller's own environment (a profile's), which wins over the
+	// runtime's defaults.
+	Env map[string]string
+	// Display is the requested display ("" = automatic); OpenGL picks
+	// WestonPack's OpenGL mode where WestonPack is the display.
+	Display string
+	OpenGL  bool
+	LogPath string
+	// Started runs once the program is up, Ended once its whole session is
+	// over; Failed reports a launch that did not start, or ended with an error
+	// right away (wineQuickExit). All three run on the launch's goroutine:
+	// none may touch config or SDL.
+	Started func(pid int)
+	Ended   func(err error)
+	Failed  func(err error, logPath string)
+}
+
+// wineLaunches is the state of Windows programs from A to the end of their
+// session: what a starting one is doing (phase, by key; gone once it runs),
+// the one session that owns the screen and the pad (busy, named busyTitle),
+// and the last Windows Apps launch that failed after A returned, for the panel
+// to show (windowsAppsTakeFailure).
+var wineLaunches struct {
+	mu        sync.Mutex
+	phase     map[string]string
+	busy      string
+	busyTitle string
+	failed    *windowsAppFailure
+}
+
+// windowsAppFailure is a Windows Apps launch that failed on its goroutine.
+type windowsAppFailure struct {
+	entry windowsAppEntry
+	err   error
+	log   string
+}
+
+// wineLaunchPhase is what a starting program is doing, "" when it is not
+// starting.
+func wineLaunchPhase(key string) string {
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	return wineLaunches.phase[key]
+}
+
+func wineSetPhase(key, phase string) {
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	if wineLaunches.busy != key {
+		return
+	}
+	if phase == "" {
+		delete(wineLaunches.phase, key)
+		return
+	}
+	if wineLaunches.phase == nil {
+		wineLaunches.phase = map[string]string{}
+	}
+	wineLaunches.phase[key] = phase
+}
+
+// wineLaunchEnded frees the launcher for the next program.
+func wineLaunchEnded(key string) {
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	delete(wineLaunches.phase, key)
+	if wineLaunches.busy == key {
+		wineLaunches.busy, wineLaunches.busyTitle = "", ""
+	}
+}
+
+// wineStart checks a launch and runs it on a goroutine (wineRun). An error
+// here means nothing started; later failures go to l.Failed. One Windows
+// program runs at a time: there is one screen and one pad to lend.
+func wineStart(l wineLaunch) error {
+	if !regularFile(l.Exe) {
+		return withLaunchFailureKind(launchFailureProfileExecutableMissing, fmt.Errorf("%s is no longer there", l.Exe))
+	}
+	if gameScreenSuspended() {
+		return errors.New("another game or app is on screen; close it first")
+	}
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	if wineLaunches.busy != "" {
+		if wineLaunches.busy == l.Key {
+			return fmt.Errorf("%s is already starting", l.Title)
+		}
+		return fmt.Errorf("%s is still running; one Windows program runs at a time", wineLaunches.busyTitle)
+	}
+	wineLaunches.busy, wineLaunches.busyTitle = l.Key, l.Title
+	if wineLaunches.phase == nil {
+		wineLaunches.phase = map[string]string{}
+	}
+	wineLaunches.phase[l.Key] = "Preparing Windows…"
+	if IsWindows() {
+		wineLaunches.phase[l.Key] = "Starting…"
+	}
+	go wineRun(l, wineLaunchSettingsNow())
+	return nil
+}
+
+// wineRun is one launch, from planning to the screen handed back.
+func wineRun(l wineLaunch, settings wineLaunchSettings) {
+	log := wineOpenLog(l.LogPath, l.Title)
+	defer log.close()
+	restorePower := beginGamePowerProfileWith(settings.power)
+	failed := func(err error) {
+		restorePower()
+		log.printf("launch failed: %v\n", err)
+		logWarn("windowsapps", "%s did not start: %v", l.Title, err)
+		wineLaunchEnded(l.Key)
+		if l.Failed != nil {
+			l.Failed(err, log.path)
+		}
+	}
+	progress := func(line string) {
+		if line = strings.TrimSpace(line); line != "" {
+			wineSetPhase(l.Key, line)
+			log.printf("runtime: %s\n", line)
+		}
+	}
+	plan, err := planWineRuntime(context.Background(), l.Exe, l.Args, l.Env, progress)
+	if err != nil {
+		failed(err)
+		return
+	}
+	after := plan.After
+	if after == nil {
+		after = func() {}
+	}
+	wineSetPhase(l.Key, "Starting…")
+	disp, err := prepareWineDisplay(l.Display, l.OpenGL, plan, log)
+	if err != nil {
+		wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
+		failed(err)
+		return
+	}
+
+	// The pad is the mouse from before the compositor starts, so it finds the
+	// device; quit is Select + Start held (wineQuit).
+	var running atomic.Pointer[exec.Cmd]
+	stopInput := func() {}
+	if disp.lendsPad() {
+		stop, inputErr := wineInputStart(settings.bridge, func() { wineQuit(running.Load(), log) })
+		if inputErr != nil {
+			log.printf("input: the pad stays a pad: %v\n", inputErr)
+			ShowToast("The pad could not become a mouse: "+inputErr.Error(), ToastKindWarning)
+		} else {
+			stopInput = stop
+			log.printf("input: the pad is the mouse; Select + L1 hands it back\n")
+		}
+		wineSettleInput(log)
+	}
+
+	cmd, err := disp.command(l.Dir)
+	if err == nil {
+		log.printf("runtime: %s\n", plan.Flavor)
+		if plan.Prefix != "" {
+			log.printf("prefix: %s\n", plan.Prefix)
+		}
+		if disp.Detail != "" {
+			log.printf("display: %s (%s)\n", windowsDisplayLabel(disp.Mode), disp.Detail)
+		} else {
+			log.printf("display: %s\n", windowsDisplayLabel(disp.Mode))
+		}
+		// A profile's own variables are named but their values stay out of
+		// the log (a token in "env" is not copied there); the runtime's are
+		// shown, and secret-looking names are hidden either way.
+		hide := map[string]bool{}
+		for key := range l.Env {
+			if !strings.EqualFold(key, "WINEPREFIX") {
+				hide[key] = true
+			}
+		}
+		if len(plan.Env) > 0 {
+			log.printf("environment: %s\n", wineLogEnv(plan.Env, hide))
+		}
+		log.printf("command: %s\nworking dir: %s\n", wineLogCommand(disp.Command, disp.Args, hide), l.Dir)
+		if log.f != nil {
+			cmd.Stdout, cmd.Stderr = log.f, log.f
+		}
+		configureGameChild(cmd)
+		// The program leads its own process group, so whatever the wrapper
+		// starts in the background keeps the screen parked until it is gone.
+		screenChildGroupConfigure(cmd)
+		err = cmd.Start()
+	}
+	if err != nil {
+		stopInput()
+		disp.stop(log)
+		wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
+		disp.release(log)
+		failed(fmt.Errorf("start %s: %w", filepath.Base(disp.Command), err))
+		return
+	}
+	running.Store(cmd)
+	started := time.Now()
+	noteGameChildStarted(cmd)
+	wineSetPhase(l.Key, "")
+	if l.Started != nil {
+		l.Started(cmd.Process.Pid)
+	}
+	logInfo("windowsapps", "started %s (pid %d, %s, %s)", l.Title, cmd.Process.Pid, plan.Flavor, windowsDisplayLabel(disp.Mode))
+
+	waitErr := cmd.Wait()
+	ran := time.Since(started).Round(time.Second)
+	if waitErr != nil {
+		log.printf("exit after %s: %v\n", ran, waitErr)
+	} else {
+		log.printf("exit after %s: 0\n", ran)
+	}
+	// Put everything away before the launcher is free again: the next launch
+	// could otherwise reuse the WestonPack mount this one is about to take
+	// down. The screen comes back last, with the failure (if any) waiting.
+	stopInput()
+	disp.stop(log)
+	wineDrainGroup(cmd, log)
+	wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
+	disp.release(log)
+	if waitErr != nil {
+		logWarn("windowsapps", "%s exited after %s: %v", l.Title, ran, waitErr)
+		if ran < wineQuickExit && l.Failed != nil {
+			l.Failed(fmt.Errorf("%s closed after %s (%v); the log says why", l.Title, ran, waitErr), log.path)
+		}
+	}
+	if l.Ended != nil {
+		l.Ended(waitErr)
+	}
+	wineLaunchEnded(l.Key)
+	screenChildReaped(cmd)
+	restorePower()
+}
+
+// wineOpenLog opens a launch's log (appending, rotated past its cap like a
+// game profile's) and writes the start line. A log that cannot be opened is
+// skipped, not a reason to refuse the launch.
+func wineOpenLog(path, title string) wineLog {
+	if path == "" {
+		return wineLog{}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return wineLog{}
+	}
+	rotateGameProfileLog(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return wineLog{}
+	}
+	fmt.Fprintf(f, "\n=== %s start %s ===\n", title, time.Now().Format(time.RFC3339))
+	return wineLog{f: f, path: path}
+}
+
+// wineBounded runs one clean-up step and waits for it at most limit: a step
+// that hangs keeps running on its own, but cannot keep the screen parked.
+func wineBounded(log wineLog, what string, limit time.Duration, fn func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				log.printf("%s failed: %v\n", what, r)
+			}
+		}()
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		log.printf("%s took longer than %s; going on without it\n", what, limit)
+	}
+}
+
+// wineDrainGroup gives what the program left in its process group — Wine's
+// helper processes, a compositor the clean-up missed — wineGroupGrace to exit,
+// then stops it: an interrupt, and a kill for what ignores that. Until the
+// group is empty the screen stays parked (screenChildReaped).
+func wineDrainGroup(cmd *exec.Cmd, log wineLog) {
+	deadline := time.Now().Add(wineGroupGrace)
+	for screenChildGroupAlive(cmd) && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !screenChildGroupAlive(cmd) {
+		return
+	}
+	log.printf("processes were still running %s after the program; stopping them\n", wineGroupGrace)
+	_ = screenChildSignal(cmd, screenSignalInterrupt)
+	for i := 0; i < 20 && screenChildGroupAlive(cmd); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if screenChildGroupAlive(cmd) {
+		_ = screenChildKill(cmd)
+	}
+}
+
+// wineQuit ends a session's program from the pad (Select + Start held, after
+// Alt+F4 did not close it): an interrupt to its process group, then a kill.
+// The session's own goroutine does the rest of the clean-up.
+func wineQuit(cmd *exec.Cmd, log wineLog) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	log.printf("Select + Start held: ending the program\n")
+	_ = screenChildSignal(cmd, screenSignalInterrupt)
+	for i := 0; i < 30 && screenChildGroupAlive(cmd); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if screenChildGroupAlive(cmd) || IsWindows() {
+		_ = screenChildKill(cmd)
+	}
+}
+
+// launchWindowsApp starts one app found by the scanner. It returns once the
+// launch is under way; the slow part and its failures happen on a goroutine
+// (wineStart). The provisioning chain (windows_runtime_install.go) calls it
+// too, from its own goroutine, once the runtime is installed.
+func launchWindowsApp(entry windowsAppEntry) error {
 	if !regularFile(entry.Path) {
 		return fmt.Errorf("%s is no longer present", entry.Path)
+	}
+	if !windowsAppKnown(entry.Path) {
+		return fmt.Errorf("%s is not in the Windows Apps folders", entry.Path)
 	}
 	if pid := windowsAppRunningPID(entry.Path); pid > 0 {
 		return fmt.Errorf("%s is already running (pid %d)", entry.Title, pid)
 	}
+	return wineStart(wineLaunch{
+		Title:   entry.Title,
+		Key:     entry.Path,
+		Exe:     entry.Path,
+		Dir:     filepath.Dir(entry.Path),
+		OpenGL:  windowsAppOpenGL(entry.Path),
+		LogPath: windowsAppLogPath(entry),
+		Started: func(pid int) {
+			windowsAppSetRunning(entry.Path, pid)
+			trophyEvent(tkAppLaunch)
+		},
+		Ended:  func(error) { windowsAppSetRunning(entry.Path, 0) },
+		Failed: func(err error, logPath string) { windowsAppsLaunchFailed(entry, err, logPath) },
+	})
+}
 
-	command, args, err := windowsWineCommand(entry.Path, nil, exec.LookPath)
-	if err != nil {
-		return err
-	}
-	env := map[string]string{}
-	if err := ensureWinePrefix(env); err != nil {
-		return err
-	}
-	applyWineCompatibilityEnv(env)
-	command, args, err = wrapWineCommand("", command, args, env, currentWineHost())
-	if err != nil {
-		return err
-	}
+// windowsAppsLaunchFailed reports a Windows Apps launch that failed on its
+// goroutine: a toast now, and the launch-failure dialog — or the setup page,
+// for a missing runtime — when the panel is next drawn (windowsAppsTakeFailure;
+// both are main-thread state).
+func windowsAppsLaunchFailed(entry windowsAppEntry, err error, logPath string) {
+	wineLaunches.mu.Lock()
+	wineLaunches.failed = &windowsAppFailure{entry: entry, err: err, log: logPath}
+	wineLaunches.mu.Unlock()
+	ShowToast(entry.Title+": "+firstLine(err.Error()), ToastKindError)
+}
 
-	cmd := exec.Command(command, args...)
-	cmd.Dir = filepath.Dir(entry.Path)
-	cmd.Env = mergeGameProfileEnv(os.Environ(), env)
-	configureGameChild(cmd)
-
-	var logFile *os.File
-	logPath := windowsAppLogPath(entry)
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err == nil {
-		if opened, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); logErr == nil {
-			logFile = opened
-			fmt.Fprintf(logFile, "\n=== %s start %s ===\n", entry.Title, time.Now().Format(time.RFC3339))
-			fmt.Fprintf(logFile, "command: %s (args: %d)\nworking dir: %s\n", command, len(args), cmd.Dir)
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
-		}
+// windowsAppsTakeFailure hands the panel the last failure, once.
+func windowsAppsTakeFailure() (windowsAppFailure, bool) {
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	f := wineLaunches.failed
+	wineLaunches.failed = nil
+	if f == nil {
+		return windowsAppFailure{}, false
 	}
-
-	// Same hand-off rule as the emulator launchers: the child leads its own
-	// process group, so a wrapper script that backgrounds the game keeps the
-	// screen parked until the game itself exits.
-	screenChildGroupConfigure(cmd)
-	if err := cmd.Start(); err != nil {
-		if logFile != nil {
-			fmt.Fprintf(logFile, "start failed: %v\n", err)
-			logFile.Close()
-		}
-		return fmt.Errorf("start %s: %w", filepath.Base(command), err)
-	}
-	windowsAppSetRunning(entry.Path, cmd.Process.Pid)
-	trophyEvent(tkAppLaunch)
-	noteGameChildStarted(cmd)
-	logDebug("windowsapps", "launched %s (pid %d)", entry.Title, cmd.Process.Pid)
-
-	go func() {
-		waitErr := cmd.Wait()
-		screenChildReaped(cmd)
-		windowsAppSetRunning(entry.Path, 0)
-		if logFile != nil {
-			if waitErr != nil {
-				fmt.Fprintf(logFile, "exit: %v\n", waitErr)
-			} else {
-				fmt.Fprint(logFile, "exit: 0\n")
-			}
-			logFile.Close()
-		}
-		if waitErr != nil {
-			logWarn("windowsapps", "%s exited: %v", entry.Title, waitErr)
-		}
-	}()
-	return nil
+	return *f, true
 }
 
 func windowsAppStatus(entry windowsAppEntry, runtime windowsRuntimeStatus) string {
 	if windowsAppRunningPID(entry.Path) > 0 {
 		return "Running"
+	}
+	if wineLaunchPhase(entry.Path) != "" {
+		return "Starting…"
 	}
 	if !runtime.ready() {
 		return "Unavailable"

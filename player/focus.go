@@ -563,6 +563,25 @@ func (fe *FocusEngine) Confirm() int {
 	return node.Index
 }
 
+// ScanStep walks the installed graph in node order, the order the scene
+// declares its controls (then the top bar). It is switch access's move: the
+// spatial graph would jump around the screen instead of reading it. It returns
+// the scene element index now focused, or -1 when there is nothing to scan.
+func (fe *FocusEngine) ScanStep(delta int) int {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	if fe.graph == nil || len(fe.graph.Nodes) == 0 {
+		return -1
+	}
+	n := len(fe.graph.Nodes)
+	if fe.current < 0 || fe.current >= n {
+		fe.current = 0
+	} else {
+		fe.current = ((fe.current+delta)%n + n) % n
+	}
+	return fe.graph.Nodes[fe.current].Index
+}
+
 // Persist saves the current focus for the given scene name.
 func (fe *FocusEngine) Persist(sceneName string) {
 	fe.mu.Lock()

@@ -32,6 +32,11 @@ const (
 	qsActionQuiet
 	qsActionFullscreen
 	qsActionNetplay
+	// The zoom lens (magnifier.go) is a comfort switch, not a radio: it has no
+	// backend to probe and works on every device.
+	qsActionMagnifier
+	// The WireGuard VPN (vpn.go), offered once a configuration is set.
+	qsActionVPN
 )
 
 type qsToggle struct {
@@ -95,6 +100,10 @@ type qsState struct {
 	lastVolume     int
 	lastBrightness int
 
+	// scroll is the first row's offset in the list, in pixels. The panel caps
+	// its height and scrolls the rows when they do not fit a short screen.
+	scroll int32
+
 	// Airplane mode remembers what the radios were doing before it blocked them,
 	// so switching it off restores the user's setup instead of switching every
 	// radio on behind their back.
@@ -120,6 +129,8 @@ func qsInit() {
 				OnColor: sdl.Color{R: 90, G: 130, B: 245, A: 255}, OffColor: qsToggleOff},
 			{Label: "Airplane Mode", Icon: "[A]", Action: qsActionAirplane,
 				OnColor: sdl.Color{R: 240, G: 180, B: 60, A: 255}, OffColor: qsToggleOff},
+			{Label: "VPN", Icon: "[K]", Action: qsActionVPN,
+				OnColor: sdl.Color{R: 70, G: 190, B: 150, A: 255}, OffColor: qsToggleOff},
 			{Label: "LED Sync", Icon: "[R]", Action: qsActionLedSync,
 				OnColor: sdl.Color{R: 255, G: 105, B: 180, A: 255}, OffColor: qsToggleOff},
 			{Label: "Low Power", Icon: "[=]", Action: qsActionLowPower,
@@ -134,6 +145,8 @@ func qsInit() {
 			// whether the Game Library offers the panel.
 			{Label: "LAN Play", Icon: "[G]", Action: qsActionNetplay,
 				OnColor: sdl.Color{R: 80, G: 200, B: 170, A: 255}, OffColor: qsToggleOff},
+			{Label: "Magnifier", Icon: "[+]", Action: qsActionMagnifier,
+				OnColor: sdl.Color{R: 120, G: 200, B: 255, A: 255}, OffColor: qsToggleOff},
 		},
 		sliders: []qsSlider{
 			{Label: "Volume", Icon: "[V]", Action: "volume", Value: 0.8, Min: 0, Max: 1},
@@ -188,12 +201,15 @@ func qsRefreshAvailability() {
 		qsActionQuiet:         true,
 		qsActionFullscreen:    true,
 		qsActionNetplay:       true,
+		qsActionMagnifier:     true,
+		qsActionVPN:           vpnQSAvailable() || vpnEnabledIn(appConfig), // on can always go off
 	}
 	detail := map[qsAction]string{
 		qsActionWifi:      "no nmcli/rfkill",
 		qsActionBluetooth: "no bluetoothctl/rfkill",
 		qsActionAirplane:  "no rfkill",
 		qsActionLedSync:   "no addressable LED",
+		qsActionVPN:       vpnQSDetail(),
 	}
 	for i := range qs.toggles {
 		t := &qs.toggles[i]
@@ -370,6 +386,10 @@ func qsSyncFromConfig(config *Config) {
 				qs.toggles[i].Value = config.Variables.LEDSync
 			case qsActionNetplay:
 				qs.toggles[i].Value = netplayEnabled(config)
+			case qsActionMagnifier:
+				qs.toggles[i].Value = a11y.magnifier
+			case qsActionVPN:
+				qs.toggles[i].Value = vpnSettingOn(config)
 			}
 		}
 		if config.Variables.ScreensaverTimeout > 0 {
@@ -702,6 +722,21 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 			appConfig.Variables.LEDSync = want
 		}
 		return nil
+	case qsActionMagnifier:
+		// The lens reads its own switch, so the panel writes the same store
+		// the Accessibility page does; qsPersist saves it with the batch.
+		if a11ySetMagnifier(want) {
+			a11yStore(appConfig)
+		}
+		return nil
+	case qsActionVPN:
+		// The same switch as Settings → Network → VPN: it saves, wakes the
+		// tunnel's worker and says what happens next (vpn.go).
+		if want && !vpnQSAvailable() {
+			return fmt.Errorf("add a WireGuard configuration in Settings > Network first")
+		}
+		vpnSettingSet(appConfig, want)
+		return nil
 	case qsActionLowPower:
 		if appConfig != nil {
 			appConfig.Variables.LowPower = want
@@ -993,8 +1028,38 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		itemH--
 		panelH = qsPanelHeight(rows, itemH)
 	}
+	// The tenth toggle no longer fits a 720-line screen at the old floor:
+	// cap the card and scroll the rows instead of running the title and the
+	// footer off the glass.
+	if panelH > maxH {
+		panelH = maxH
+	}
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
+	listH := panelH - qsHeaderH - qsFooterH
+	if listH < 0 {
+		listH = 0
+	}
+	contentH := int32(rows) * (itemH + qsItemGap)
+	maxScroll := contentH - listH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	// Keep the focused row in view: the cursor is the only thing that moves
+	// the list.
+	cursorTop := int32(qs.cursor) * (itemH + qsItemGap)
+	if cursorTop < qs.scroll {
+		qs.scroll = cursorTop
+	}
+	if cursorTop+itemH > qs.scroll+listH {
+		qs.scroll = cursorTop + itemH - listH
+	}
+	if qs.scroll > maxScroll {
+		qs.scroll = maxScroll
+	}
+	if qs.scroll < 0 {
+		qs.scroll = 0
+	}
 
 	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, func() {
 		// The shared overlay sheet: Home's glass, made opaque.
@@ -1009,7 +1074,15 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 
 		itemX := panelX + qsPadX
 		itemW := panelW - 2*qsPadX
-		y := panelY + qsHeaderH
+		y := panelY + qsHeaderH - qs.scroll
+
+		// Rows that scroll past the list area stop at its edges, so none of
+		// them draws over the title or the footer.
+		prevClip := renderer.GetClipRect()
+		if listH > 0 {
+			listClip := sdl.Rect{X: panelX, Y: panelY + qsHeaderH, W: panelW, H: listH}
+			_ = renderer.SetClipRect(&listClip)
+		}
 
 		for i := range qs.toggles {
 			drawQSToggleRow(renderer, config, font, itemX, y, itemW, itemH, &qs.toggles[i], qs.cursor == i)
@@ -1030,6 +1103,7 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 				qs.cursor == len(qs.toggles)+len(qs.sliders)+len(qs.links)+i)
 			y += itemH + qsItemGap
 		}
+		_ = renderer.SetClipRect(&prevClip)
 
 		// System info at the bottom: battery on the left, connectivity right.
 		// Both lines are positioned from the font height rather than fixed

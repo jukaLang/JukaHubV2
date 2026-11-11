@@ -47,10 +47,10 @@ func loadHomeSearchFonts(config *Config) (homeSearchFonts, bool) {
 		config = &Config{}
 	}
 	f := homeSearchFonts{
-		field:  getFontSized(config, "small", 21),
-		title:  getFontSized(config, "small", 18),
-		meta:   getFontSized(config, "small", 14),
-		header: getFontSized(config, "small", 13),
+		field:  FontForRole(config, TypeHeading),
+		title:  FontForRole(config, TypeBody),
+		meta:   FontForRole(config, TypeCaption),
+		header: FontForRole(config, TypeCaption),
 	}
 	return f, f.field != nil && f.title != nil && f.meta != nil && f.header != nil
 }

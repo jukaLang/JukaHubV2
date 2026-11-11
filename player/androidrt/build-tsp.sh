@@ -11,7 +11,14 @@
 #     props.txt.example       ro.* property overrides (copy to props.txt)
 #
 # Set CROSS to an aarch64-linux-gnu- prefixed toolchain (SDK or distro
-# cross-gcc); unset CROSS tries plain aarch64-linux-gnu-gcc on PATH.
+# cross-gcc); unset CROSS tries plain aarch64-linux-gnu-gcc on PATH, then
+# SDK_ROOT, and on an aarch64 machine the native gcc. JukaHub's CI builds it
+# natively that way, inside an Ubuntu 20.04 arm64 root (glibc 2.31, older than
+# the handheld's 2.33), and packages it with ../native/build-runtimes.sh as
+# JukaHub-AndroidRT-linux-arm64.zip and every TrimUI archive's androidrt/.
+#
+# ANDROIDRT_VERSION (letters, digits and ._+- only) is what `loader --version`
+# prints; unset, it says "dev".
 set -eu
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -28,9 +35,24 @@ elif [ -n "${SDK_ROOT:-}" ] && [ -x "$SDK_ROOT/host/bin/aarch64-none-linux-gnu-g
     CC="$SDK_ROOT/host/bin/aarch64-none-linux-gnu-gcc"
     READELF="$SDK_ROOT/host/bin/aarch64-none-linux-gnu-readelf"
 else
-    echo "build-tsp.sh: no aarch64 cross compiler found." >&2
-    echo "  set CROSS=<prefix> (with <prefix>gcc on PATH) or SDK_ROOT like the TG5050 SDK" >&2
-    exit 1
+    case "$(uname -m)" in
+        aarch64|arm64)
+            # Already on an aarch64 machine (a distribution whose gcc has no
+            # aarch64-linux-gnu- name): its own compiler builds for it.
+            CC="gcc"
+            READELF="readelf"
+            ;;
+        *)
+            echo "build-tsp.sh: no aarch64 cross compiler found." >&2
+            echo "  set CROSS=<prefix> (with <prefix>gcc on PATH) or SDK_ROOT like the TG5050 SDK" >&2
+            exit 1
+            ;;
+    esac
+fi
+# The binutils beside a cross gcc may lack the readelf name; the host's reads
+# any ELF file, which is all the TLS check below needs.
+if ! command -v "$READELF" >/dev/null 2>&1 && command -v readelf >/dev/null 2>&1; then
+    READELF="readelf"
 fi
 
 # -fvisibility=hidden + --export-dynamic: the runner exports exactly the
@@ -38,12 +60,24 @@ fi
 # bionic loader binds a game's liblog/libandroid/libOpenSLES imports to.
 CFLAGS="-O2 -g0 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fvisibility=hidden"
 
+# The version stamp goes to the runner only; anything but a plain word is
+# refused rather than passed to the compiler half-quoted.
+VERSION_DEF=""
+case "${ANDROIDRT_VERSION:-}" in
+    "") ;;
+    *[!A-Za-z0-9._+-]*)
+        echo "build-tsp.sh: ANDROIDRT_VERSION may hold only letters, digits and ._+- (got '$ANDROIDRT_VERSION')" >&2
+        exit 1
+        ;;
+    *) VERSION_DEF="-DANDROIDRT_VERSION=\"$ANDROIDRT_VERSION\"" ;;
+esac
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
 echo "== AndroidRT → $OUT (CC=$CC) =="
 
-$CC $CFLAGS -DJUKAHUB_EVDEV -I"$SRC" \
+$CC $CFLAGS -DJUKAHUB_EVDEV $VERSION_DEF -I"$SRC" \
     "$SRC/runner.c" "$SRC/activity.c" "$SRC/androidshim.c" "$SRC/inputshim.c" "$SRC/looper.c" \
     "$SRC/jnienv.c" "$SRC/jnibase.c" "$SRC/jnipack_minecraft.c" "$SRC/gameactivity.c" "$SRC/apkzip.c" \
     "$SRC/apkmeta.c" "$SRC/device.c" "$SRC/evdev.c" "$SRC/logshim.c" "$SRC/openslessim.c" "$SRC/surface.c" \

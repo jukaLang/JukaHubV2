@@ -456,7 +456,7 @@ func mediaHubDrawLibrary(renderer *sdl.Renderer, config *Config, rect sdl.Rect, 
 // returns to, then the list's name and what it holds — and returns the height
 // it took. The chip is the pointer's way back; the pad's is B.
 func mlibDrawCrumb(renderer *sdl.Renderer, config *Config, rect sdl.Rect, d mlibDrill) int32 {
-	font := getFontSized(config, "small", 16)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return 0
 	}
@@ -478,7 +478,7 @@ func mlibDrawCrumb(renderer *sdl.Renderer, config *Config, rect sdl.Rect, d mlib
 	title := ellipsize(font, d.title, avail)
 	tw, th := measureText(font, title)
 	drawText(renderer, font, title, x, chip.Y+(h-th)/2, ColorTextPrimary(), textAlignLeft)
-	if small := getFontSized(config, "small", 14); small != nil && d.sub != "" {
+	if small := FontForRole(config, TypeCaption); small != nil && d.sub != "" {
 		if left := avail - tw - 14; left > 60 {
 			sub := ellipsize(small, d.sub, left)
 			_, sh := measureText(small, sub)

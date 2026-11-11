@@ -4,11 +4,15 @@ package main
 // without a press. Three things have to hold for that to be safe enough to run
 // unattended: it only runs where cores can be installed at all, a failed check
 // is retried rather than standing down for a day, and the builds it replaces
-// are kept to a fixed number so the card cannot fill with them.
+// are kept to a fixed number so the card cannot fill with them. The other
+// updaters of the same pass (emuautoupdate_runtimes.go) keep their records
+// across a restart, back off and respect GitHub's refusals, and never install
+// a build again that the user rolled back from.
 
 import (
 	"context"
 	"debug/elf"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -565,5 +569,148 @@ func TestCoreUpdatesSayTheyStoppedForANearlyFullCard(t *testing.T) {
 	}
 	if got := reports[0].summary(); !strings.Contains(got, "almost full") || strings.Contains(got, "stopped early") {
 		t.Errorf("summary = %q", got)
+	}
+}
+
+// useTempEmuRuntimeState points the updaters' records at a temporary file and
+// starts from a clean session, as a fresh start would.
+func useTempEmuRuntimeState(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), emuRuntimeStateName)
+	prev := emuRuntimeStatePath
+	emuRuntimeStatePath = func() string { return path }
+	emuRuntimeResetForTest()
+	t.Cleanup(func() {
+		emuRuntimeStatePath = prev
+		emuRuntimeResetForTest()
+	})
+	return path
+}
+
+// emuRuntimeResetForTest forgets the records and the session, as a restart
+// does; only the file stays.
+func emuRuntimeResetForTest() {
+	emuRuntimeState.mu.Lock()
+	defer emuRuntimeState.mu.Unlock()
+	emuRuntimeState.loaded = false
+	emuRuntimeState.path = ""
+	emuRuntimeState.file = emuRuntimeFile{}
+	emuRuntimeState.checked = nil
+	emuRuntimeState.attempt = nil
+	emuRuntimeState.retryAt = nil
+	emuRuntimeState.failures = nil
+	emuRuntimeState.hold = time.Time{}
+	emuRuntimeState.notes = nil
+}
+
+// TestEmuRuntimeUpdaterRules pins the rules the pass applies to the updaters:
+// a stamp the clock cannot vouch for is due, a failure waits an hour and
+// doubles up to a day, only GitHub's refusals start the hour's hold, and a
+// build's label tells a rebuild under the same tag from the installed one.
+func TestEmuRuntimeUpdaterRules(t *testing.T) {
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		last string
+		want bool
+	}{
+		{"", true},
+		{"garbled", true},
+		{"2019-06-01T00:00:00Z", true},
+		{now.Add(time.Hour).Format(time.RFC3339), true},
+		{now.Add(-time.Hour).Format(time.RFC3339), false},
+		{now.Add(-25 * time.Hour).Format(time.RFC3339), true},
+	} {
+		if got := emuRuntimeStampDue(tc.last, now, coreAutoUpdateInterval); got != tc.want {
+			t.Errorf("due(%q) = %v, want %v", tc.last, got, tc.want)
+		}
+	}
+	for n, want := range map[int]time.Duration{1: time.Hour, 2: 2 * time.Hour, 3: 4 * time.Hour, 5: 16 * time.Hour, 6: 24 * time.Hour, 40: 24 * time.Hour} {
+		if got := emuRuntimeRetryAfter(n); got != want {
+			t.Errorf("wait after failure %d = %v, want %v", n, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{fmt.Errorf("%w (listing JukaHub releases: HTTP 403)", errRelPackRateLimited), true},
+		{errors.New("HTTP 429 from https://api.github.com/repos/a/b/releases/latest"), true},
+		{errors.New("HTTP 403 from https://buildbot.libretro.com/stable/"), false},
+		{errors.New("HTTP 404 from https://api.github.com/repos/a/b/releases/latest"), false},
+	} {
+		if got := emuRateLimited(tc.err); got != tc.want {
+			t.Errorf("rate limited(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+	at := "2026-11-10T14:03:05Z"
+	for _, tc := range []struct {
+		installed string
+		rel       emuWinRelease
+		want      string
+	}{
+		{"v0.1.4", emuWinRelease{Tag: "v0.1.5", AssetDate: at}, "v0.1.5"},
+		{"v0.1.5", emuWinRelease{Tag: "v0.1.5", AssetDate: at}, "v0.1.5 (2026-11-10 14:03)"},
+		{"continuous", emuWinRelease{Tag: "continuous", AssetDate: at}, "continuous (2026-11-10 14:03)"},
+		{"v1.0", emuWinRelease{}, "new build"},
+	} {
+		if got := emuReleaseLabel(tc.installed, tc.rel); got != tc.want {
+			t.Errorf("label(%q, %+v) = %q, want %q", tc.installed, tc.rel, got, tc.want)
+		}
+	}
+}
+
+// TestEmuRuntimeRecordsSurviveARestart: an updater checked an hour before a
+// restart is not asked again after it, and is once its day is over.
+func TestEmuRuntimeRecordsSurviveARestart(t *testing.T) {
+	path := useTempEmuRuntimeState(t)
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	emuRuntimeChecked("hakux", now)
+	emuRuntimeUpdateRecord("hakux", func(r *emuRuntimeRecord) { r.Installed = "v0.1.5" })
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("no record file: %v", err)
+	}
+	emuRuntimeResetForTest()
+	rec := emuRuntimeRecordFor("hakux")
+	if rec.Installed != "v0.1.5" || rec.CheckedAt != "2026-11-11T12:00:00Z" {
+		t.Fatalf("record after a restart = %+v", rec)
+	}
+	if emuRuntimeDue("hakux", now.Add(time.Hour), coreAutoUpdateInterval) {
+		t.Error("checked an hour before the restart, but due again")
+	}
+	if !emuRuntimeDue("hakux", now.Add(25*time.Hour), coreAutoUpdateInterval) {
+		t.Error("checked a day before, but not due")
+	}
+}
+
+// TestEmuRuntimeNotifyPassSaysEachBuildOnce runs the updaters' share of a
+// Notify pass: a new build is announced once, and a build the pass installed
+// that is offered again (the user rolled back from it) is left alone.
+func TestEmuRuntimeNotifyPassSaysEachBuildOnce(t *testing.T) {
+	useTempEmuRuntimeState(t)
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	offer := func(label string) func(context.Context, *http.Client) (bool, string, error) {
+		return func(context.Context, *http.Client) (bool, string, error) { return true, label, nil }
+	}
+	never := func(context.Context, *http.Client, func(string)) error {
+		t.Error("Notify mode installed something")
+		return nil
+	}
+	installed := func() bool { return true }
+	emuRuntimeUpdateRecord("test:rolledback", func(r *emuRuntimeRecord) { r.Installed = "v2" })
+	list := []emuRuntimeUpdater{
+		{Key: "test:new", Title: "Newemu", Installed: installed, Check: offer("v3"), Install: never},
+		{Key: "test:rolledback", Title: "Oldemu", Installed: installed, Check: offer("v2"), Install: never},
+	}
+	report := emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, list, nil, now)
+	if len(report.Available) != 1 || report.Available[0] != "Newemu v3" {
+		t.Fatalf("first pass announced %q, want only Newemu v3", report.Available)
+	}
+	if emuRuntimeRecordFor("test:new").CheckedAt == "" {
+		t.Error("the check that answered was not stamped")
+	}
+	report = emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, list, nil, now.Add(25*time.Hour))
+	if len(report.Available) != 0 {
+		t.Errorf("second pass announced %q again", report.Available)
 	}
 }

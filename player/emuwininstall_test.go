@@ -262,6 +262,98 @@ func TestEmuExtractZipStaysInsideItsFolder(t *testing.T) {
 	}
 }
 
+// TestEmuPickWinAssetXbox: the asset lists xemu and Xenia Canary publish. xemu
+// ships a debug build, symbols, AppImages and a macOS zip beside the Windows
+// build, sometimes its older name too, and an ARM64 build that only Windows on
+// ARM takes; Xenia Canary ships a 7z beside a Linux AppImage (older releases
+// a zip).
+func TestEmuPickWinAssetXbox(t *testing.T) {
+	asset := func(name string) emuGitHubAsset {
+		return emuGitHubAsset{Name: name, BrowserDownloadURL: "https://example.invalid/" + name}
+	}
+	release := []emuGitHubAsset{
+		asset("xemu-0.8.139-aarch64.AppImage"),
+		asset("xemu-0.8.139-dbg-windows-arm64-pdb.zip"),
+		asset("xemu-0.8.139-dbg-windows-arm64.zip"),
+		asset("xemu-0.8.139-dbg-windows-x86_64.zip"),
+		asset("xemu-0.8.139-macos-universal.zip"),
+		asset("xemu-0.8.139-windows-arm64.zip"),
+		asset("xemu-0.8.139-windows-x86_64.zip"),
+		asset("xemu-0.8.139-x86_64.AppImage"),
+	}
+	legacy := append([]emuGitHubAsset{asset("xemu-win-aarch64-release.zip"), asset("xemu-win-x86_64-release.zip")}, release...)
+	x64Only := []emuGitHubAsset{asset("xemu-0.8.139-dbg-windows-x86_64.zip"), asset("xemu-0.8.139-windows-x86_64.zip")}
+	xemu, _ := emuWinSpecFor("xemu")
+	for _, tc := range []struct {
+		assets []emuGitHubAsset
+		goarch string
+		want   string
+	}{
+		{release, "amd64", "xemu-0.8.139-windows-x86_64.zip"},
+		{release, "arm64", "xemu-0.8.139-windows-arm64.zip"},
+		{legacy, "amd64", "xemu-win-x86_64-release.zip"},
+		{legacy, "arm64", "xemu-win-aarch64-release.zip"},
+		// No ARM64 build: Windows on ARM runs the x64 one.
+		{x64Only, "arm64", "xemu-0.8.139-windows-x86_64.zip"},
+	} {
+		if got, ok := emuPickWinAssetFor(xemu, tc.assets, tc.goarch); !ok || got.Name != tc.want {
+			t.Errorf("xemu on %s picked %q (%v), want %q", tc.goarch, got.Name, ok, tc.want)
+		}
+	}
+	debugOnly := []emuGitHubAsset{asset("xemu-0.8.139-dbg-windows-x86_64.zip"), asset("xemu-0.8.139-x86_64.AppImage")}
+	if got, ok := emuPickWinAssetFor(xemu, debugOnly, "amd64"); ok {
+		t.Errorf("picked %q: a debug build or an AppImage is not the Windows release", got.Name)
+	}
+
+	xenia, ok := emuWinSpecFor(emuXeniaName)
+	if !ok {
+		t.Fatal("no Xenia Canary install rules")
+	}
+	for _, tc := range []struct {
+		assets []emuGitHubAsset
+		want   string
+	}{
+		{[]emuGitHubAsset{asset("README.md"), asset("xenia_canary_linux.AppImage"), asset("xenia_canary_windows.7z")}, "xenia_canary_windows.7z"},
+		{[]emuGitHubAsset{asset("xenia_canary.zip")}, "xenia_canary.zip"},
+	} {
+		if got, ok := emuPickWinAssetFor(xenia, tc.assets, "amd64"); !ok || got.Name != tc.want {
+			t.Errorf("Xenia Canary picked %q (%v), want %q", got.Name, ok, tc.want)
+		}
+	}
+}
+
+// TestEmuCompareReleaseVersions: release tags order as releases — a final
+// release after its candidates — so an update never offers an rc over the
+// final release it led up to.
+func TestEmuCompareReleaseVersions(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"v0.1.3", "v0.1.3-rc1", 1},
+		{"0.1.3-rc2", "0.1.3-rc1", 1},
+		{"v0.1.4-rc1", "v0.1.3", 1},
+		{"v0.8.139", "v0.8.138", 1},
+		{"v2.6", "2.6", 0},
+		{"1.0-beta2", "1.0-rc1", -1},
+		{"v0.1-11800", "v0.1-11752", 1},
+		{"v0.1-11752", "v0.1", 1},
+	} {
+		if got := emuCompareReleaseVersions(tc.a, tc.b); got != tc.want {
+			t.Errorf("compare(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+		if got := emuCompareReleaseVersions(tc.b, tc.a); got != -tc.want {
+			t.Errorf("compare(%q, %q) = %d, want %d", tc.b, tc.a, got, -tc.want)
+		}
+	}
+	if !emuWinUpdateAvailable(emuWinManifest{Tag: "v0.1.4-rc1"}, emuWinRelease{Tag: "v0.1.4"}) {
+		t.Error("the final release must replace its release candidate")
+	}
+	if emuWinUpdateAvailable(emuWinManifest{Tag: "v0.1.4"}, emuWinRelease{Tag: "v0.1.4-rc2"}) {
+		t.Error("a release candidate must never replace its final release")
+	}
+}
+
 func TestEmuDigestMatches(t *testing.T) {
 	sum := sha256.Sum256([]byte("payload"))
 	hexSum := hex.EncodeToString(sum[:])

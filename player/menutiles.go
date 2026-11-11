@@ -278,7 +278,7 @@ func menuTilesLayoutFor(config *Config, scene SceneConfig, elems []Element) (men
 	l.bodyTop = l.titleY + header.Height + 18
 
 	sectionH := int32(28)
-	if f := getFontSized(config, "small", 15); f != nil {
+	if f := FontForRole(config, TypeLabel); f != nil {
 		sectionH = int32(f.Height()) + 12
 		if sectionH < 26 {
 			sectionH = 26

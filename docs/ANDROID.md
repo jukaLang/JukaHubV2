@@ -1,14 +1,22 @@
 # Android engine
 
-JukaHub does not ship a complete Android runtime. The **AndroidPak** path runs
-a limited class of native-only (NDK) games through **AndroidRT**, a small
-runtime whose source is included; a target-built runtime must be installed
-separately, and real-game support is still unverified on hardware. The **APK
-Store** (Start → Games → APK Store) is the front door to it: it finds the APKs
-on the card, says what each one is and whether it can run, and adds the ones
-worth trying to the game profiles in one press. Running arbitrary Android apps
-would require more than the loader and shims described below — where a real
-Android container (Waydroid) exists, the store can install APKs into it.
+JukaHub does not ship a complete Android. The **AndroidPak** path runs a
+limited class of native-only (NDK) games through **AndroidRT**, a small runtime
+JukaHub builds and ships: every TrimUI package carries it beside the app, and
+the APK Store installs the same build from JukaHub's releases on a device that
+lacks it. Real-game support is still unverified on hardware. The **APK Store**
+(Start → Games → APK Store) is the front door to it: it finds the APKs on the
+card, says what each one is and whether it can run, and adds the ones worth
+trying to Games in one press — the Games Library's Android row and Game
+Profiles. Java apps (almost every Android app) cannot run on AndroidRT and the
+store says so; where a real Android container (Waydroid) exists, on Linux
+machines with a binder kernel, the store can install APKs into it.
+
+**On a Smart Pro, in short:** copy an NDK game's APK to `/mnt/SDCARD/APKs`
+(or send it from a phone), open the APK Store, press **A** on the game →
+**Add to Games**, then play it from the Games Library's **Android** row (or the
+store's Play). If AndroidRT is missing, the store offers to install it with one
+press first.
 
 ## APK Store
 
@@ -62,19 +70,23 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   A on an APK offers **Add to Games**: the store writes one profile per APK to
   `<data>/game-profiles/local/apkstore-<id>.json` (runtime `androidpak`; the
   manifest's NativeActivity library — `android.app.lib_name` X is `libX.so`,
-  as Android maps it — as `mainLib` whenever the APK carries it), and the
-  profile appears in **Start → Games → Game Profiles** like any other — the
-  Games Library does not list game profiles. Two APKs of one package (two
+  as Android maps it — as `mainLib` whenever the APK carries it) and saves the
+  launcher icon as the game's cover. The game then appears on the **Games
+  Library's Android row** ([GAME_LIBRARY.md](GAME_LIBRARY.md#android-games))
+  and in **Start → Games → Game Profiles**. Two APKs of one package (two
   versions of a game) get two profiles: the second id carries a short hash of
   its path. **Play** launches through the same path (triage, memory pre-flight,
   tmpfs staging, launch log, first-run report) in the background — the row
   says "Starting…" while a big game is staged — and **Remove from Games**
-  deletes only the store's own profile file; the APK stays. X shows everything
-  the store read, the profile's state and how the last run ended (from its
-  launch log). The APK must sit inside the folders game profiles launch from
-  (the card on a handheld). A hand-written profile for an APK the verdict says
-  cannot run shows as "In Games · won't run", with Play offered but not
-  suggested.
+  deletes only the store's own profile file and the cover it saved; the APK
+  stays. When AndroidRT is missing, Play offers **Install and play** and Add
+  offers **Install and add**: one press installs the runtime (below), then the
+  game starts or is added; nothing downloads without that press. X shows
+  everything the store read, the profile's state and how the last run ended
+  (from its launch log). The APK must sit inside the folders game profiles
+  launch from (the card on a handheld). A hand-written profile for an APK the
+  verdict says cannot run shows as "In Games · won't run", with Play offered
+  but not suggested.
 * **Store.** A short catalogue ([apkstore_catalog.json](../player/apkstore_catalog.json),
   also served as `apk-catalog.json` from the builder site) of titles and kinds
   of APK: status (experimental / won't run / works), how to get the APK
@@ -90,10 +102,17 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   it is newer, dated no more than three days past today (or past the built-in
   list's date, on a handheld whose clock has not been set), and at least half
   of its entries are readable.
-* **Runtime.** Whether AndroidRT is installed (and where), whether this machine
-  can run it (aarch64 Linux only — on a PC the store reads APKs but games run on
-  the handheld), the RAM, whether Waydroid is usable here, and what AndroidRT
-  can and cannot run.
+* **Runtime.** Whether AndroidRT is ready and which copy is in use (bundled
+  with JukaHub, installed from its releases, or your own), with **Install**
+  when there is none and **Update to …** when a newer release than the
+  installed copy is out (asked at most every half hour, only for the copy the
+  store installed); whether this machine can run it (aarch64 Linux only — on a
+  PC the store reads APKs but games run on the handheld), the RAM, whether
+  Waydroid is usable here, and what AndroidRT can and cannot run. An install
+  shows its progress on the row and on the install bar (Stop on the AndroidRT
+  sheet ends it), and a failure says why in one line (offline, GitHub
+  refusing, the card full, the download not verifying, the runtime not
+  starting on this device).
 
 **Waydroid.** Where the `waydroid` command exists, the kernel exposes a
 binder device and Waydroid's session is running, A on an APK also offers
@@ -140,11 +159,17 @@ profile runtime](GAME_PROFILES.md) is the hub's side of exactly this path:
   with a reason for packages that are pure Java/Dalvik or ship only x86 ABIs.
 * **Staging.** The native subset (`lib/<chosen abi>`, `assets/`, `res/`,
   manifest, `resources.arsc`) is extracted into a bounded tmpfs staging dir
-  (`$TMPDIR/jukahub-android/pak-<id>`, 512 MiB cap), so play sessions never
-  re-read the APK from the SD card and never soak the whole package into RAM —
-  `classes.dex` and signatures are never extracted.
-* **Launch.** The user-installed runtime is started as `loader <apk>` or via
-  its own `launch.sh`, with `ANDROIDPAK_APK`, `ANDROIDPAK_STAGED`,
+  (`$TMPDIR/jukahub-android/pak-<id>`, 512 MiB cap), so a small game's
+  session never re-reads the APK from the SD card and never soaks the whole
+  package into RAM — `classes.dex` and signatures are never extracted. A game
+  whose `assets/` and `res/` unpack to more than 64 MiB stages only its
+  libraries, the manifest and `resources.arsc`: AndroidRT reads its assets
+  straight from the APK on the card (stored entries in place, deflated ones
+  inflated), because hundreds of MB of assets in tmpfs are RAM the handheld
+  does not have. A tmpfs that fills up anyway is named in the error, with
+  `JUKAHUB_ANDROID_STAGE` (a folder on the card) as the way round it.
+* **Launch.** AndroidRT (see [Where AndroidRT comes from](#where-androidrt-comes-from))
+  is started as `loader <apk>` or via its own `launch.sh`, with `ANDROIDPAK_APK`, `ANDROIDPAK_STAGED`,
   `ANDROIDPAK_MAINLIB`, `ANDROIDPAK_ABIS` and `ANDROIDPAK_RT` in the child
   environment. The direct-loader form additionally gets `ANDROIDPAK_SHIMS`
   (the runtime's `shims/` directory, which the runner preloads with
@@ -171,18 +196,54 @@ The AndroidRT source, cross-build script, and **headless smoke check** live in
 with its own bionic ELF loader (NDK imports are versioned `@LIBC` symbols that
 glibc's `dlopen` refuses), gives it a Java side through its own JNI
 environment (below), drives NativeActivity and androidx GameActivity entry
-points, and presents through the device's EGL. The host smoke suite (186
-assertions, about 15 s with the host compiler) exercises the loader, the
-bionic compatibility layer, the JNI environment with the Minecraft class pack,
-the GameActivity bridge with a fake GameActivity glue,
-the present layer against a mock GPU stack (including the stock-TrimUI
-default) and its SDL-hosted backend against a fake firmware SDL2, the
-looper/input queue and the OpenSL ES path — without a device.
+points, and presents through the firmware's SDL2 and EGL. The host smoke
+suite (202 assertions, about 15 s with the host compiler) exercises the loader
+(and its harmless `loader --version`), the bionic compatibility layer, the JNI
+environment with the Minecraft class pack, the GameActivity bridge with a fake
+GameActivity glue, the present layer against a mock GPU stack (including the
+stock-TrimUI defaults) and its SDL-hosted backend against a fake firmware
+SDL2, the looper/input queue and the OpenSL ES path — without a device.
 JukaHub's AndroidPak profile support triages and stages an APK and hands it to
-an installed runtime; JukaHub does not ship a prebuilt AndroidRT package
-(`player/androidrt/build-tsp.sh` builds it with an aarch64 toolchain). **No
-real game has been run on hardware yet.** Camera, identity, privacy and
-framework features stay out of scope by design.
+AndroidRT, which JukaHub's CI builds for the handheld
+(`player/androidrt/build-tsp.sh`) and ships. **No real game has been run on
+hardware yet.** Camera, identity, privacy and framework features stay out of
+scope by design.
+
+### Where AndroidRT comes from
+
+* **Bundled.** Every TrimUI JukaHub package carries the runtime beside the app,
+  in `Apps/JukaHub/androidrt/` (`loader`, `launch.sh`, `surface-probe`,
+  `props.txt.example`, `BUILDINFO.txt`, `SHA256SUMS`). It is replaced with
+  JukaHub itself, so nothing else updates it.
+* **Installed from JukaHub's releases.** Each release also carries
+  `JukaHub-AndroidRT-linux-arm64.zip`. The Runtime tab's **Install** (or the
+  one-press offer when Play or Add finds no runtime) puts it in
+  `<data>/androidrt` (`Apps/JukaHub/data/androidrt` on the handheld): the
+  newest release carrying it, stable before beta; the archive must match the
+  release's signed manifest (or GitHub's checksum) and every file its own
+  `SHA256SUMS`; and its loader has to start on this device —
+  `loader --version`, which touches no game, file or GPU — before the new copy
+  replaces anything ([player/relpack.go](../player/relpack.go),
+  [player/androidrt_install.go](../player/androidrt_install.go)). The daily
+  **Emulator updates** pass keeps this copy current under the same setting as
+  the emulators (Settings → Games & emulators → Emulator updates: Off / Notify
+  me / Install automatically), never while an Android game runs.
+* **Your own.** A runtime you built (`CROSS=aarch64-linux-gnu-
+  player/androidrt/build-tsp.sh`) and copied to `/mnt/SDCARD/Apps/AndroidRT`
+  (also `Apps/androidrt`, `Apps/bionic-translation`, `PortMaster/AndroidRT`,
+  `PortMaster/runtimes/androidrt`, `Emus/PortMaster/AndroidRT`) is used before
+  both; `JUKAHUB_ANDROIDRT` points at any folder and is used as given.
+
+A launch takes `JUKAHUB_ANDROIDRT`, then your own copy, then the bundled one,
+then the installed one. A folder counts only when it can start games: it holds
+a `loader` this device can run — the right CPU, and no glibc newer than the
+firmware's (the same ELF check JukaHub applies to emulator cores) — or a
+`launch.sh`, so an empty or half-copied `Apps/AndroidRT` does not hide the
+bundled runtime; the folders passed over are named in the Runtime tab and in
+the "not installed" message. A loader that lost its execute bit (unpacked onto
+an ext4 card by a tool that drops permissions) gets it back; FAT and exFAT
+cards give every file that bit, which is how JukaHub itself runs from the
+card.
 
 ### The Java side: AndroidRT's JNI environment
 
@@ -228,48 +289,64 @@ behaviour), `ANDROIDPAK_JNI_TRACE=1` (log every lookup), `ANDROIDPAK_JNI_UNKNOWN
 recognises) and `ANDROIDPAK_DEVICE` (JukaHub's device id: panel size, DPI and
 the display contract).
 
-### Display: the stock firmware's own EGL
+### Display: the stock firmware's own SDL2 and EGL
 
 The stock TrimUI Smart Pro and Brick firmware has no DRM card: its PowerVR
 GE8300 userspace draws straight to the panel, and the firmware's SDL2 reaches
-it through SDL's `mali` fbdev video driver, which passes
-`eglCreateWindowSurface` a `{uint16 width, height}` struct as the native
-window. On that firmware (`ANDROIDPAK_DEVICE=trimui-*`, or `/usr/trimui`
-present) the present layer loads the firmware's `/usr/lib/libEGL.so` first and
-hands the game's window to EGL as that struct, sized to the panel (1280×720
-Smart Pro, 1024×768 Brick). A DRM/KMS + GBM stack (for example a community GPU
+it through SDL's `mali` fbdev video driver — SDL's generic fbdev-EGL driver,
+whatever the GPU is called. On that firmware (`ANDROIDPAK_DEVICE=trimui-*`, or
+`/usr/trimui` present) the present layer loads the firmware's
+`/usr/lib/libEGL.so` first. A DRM/KMS + GBM stack (for example a community GPU
 driver package) still selects the `gbm` backend automatically.
 
-**SDL-hosted fallback (`sdl`).** A public report from this firmware says raw
-EGL contexts on the display of SDL's `mali` driver stayed black while
-SDL-created ones showed. The `sdl` backend therefore lets the firmware's own
-SDL2 (`/usr/lib/libSDL2-2.0.so.0`, loaded at run time — nothing links against
-it) create the fullscreen window, its EGL surface and the GLES context, and
-hands the game exactly those: its window surface is SDL's, its context is
-SDL's (re-created when the game asks for another GLES version; a context the
-game makes before its window, on a window config, builds SDL's window),
-`eglMakeCurrent` becomes `SDL_GL_MakeCurrent` and every `eglSwapBuffers` an
-`SDL_GL_SwapWindow`. SDL is pointed at the game's own libEGL and the GLES
+**The stock default: the SDL-hosted backend (`sdl`).** Two ports on this
+firmware found that GLES contexts made with raw EGL draw nothing — a black
+panel, sound playing, no error — while contexts SDL owns show:
+[NextOS ports issue #1](https://github.com/NextOs-Ports/nextos-universal-ports/issues/1)
+(Horizon Chase on the Brick Pro, fixed by `HC_PURE_SDL_CONTEXTS=1`) and
+[nx-redux PR #152](https://github.com/mohammadsyuhada/nx-redux/pull/152)
+(keep the contexts SDL-owned on tg5040). A black panel without an error is the
+one failure the runtime cannot notice and fall back from, and every program
+that draws on the stock firmware — JukaHub, RetroArch, the ports — draws
+through that SDL2. So on the PowerVR models (Smart Pro, Brick, Brick Pro,
+Hammer) `auto` starts on `sdl`: the firmware's own SDL2
+(`/usr/lib/libSDL2-2.0.so.0`, loaded at run time — nothing links against it)
+creates the fullscreen window, its EGL surface and the GLES context, and the
+game gets exactly those: its window surface is SDL's, its context is SDL's
+(re-created when the game asks for another GLES version; a context the game
+makes before its window, on a window config, builds SDL's window and is SDL's
+too), `eglMakeCurrent` becomes `SDL_GL_MakeCurrent` and every `eglSwapBuffers`
+an `SDL_GL_SwapWindow`. SDL is pointed at the game's own libEGL and the GLES
 library beside it, the game's config sizes (colour, depth, stencil, samples)
 become SDL's GL attributes, and SDL's signal handlers stay off so JukaHub can
 still stop the game. `SDL_GL_SwapWindow` returns nothing, so on this backend
-a failed swap (even a lost context) never reaches the game.
-`auto` switches to it by itself when the native backend fails — the game's
-`eglInitialize` of the default display fails (SDL starts there and the call
-is made once more), or EGL refuses the game's window surface — and says so in
-the log (`backend sdl (fallback: ...)`). Only the window surface is SDL's
-after that second kind of fallback when the game made its GLES context
-before its window: that context stays raw EGL, its frames go through plain
-`eglSwapBuffers`, and the log says so. A black screen without an error is
-invisible to the runtime: then add `ANDROIDPAK_PRESENT=sdl` to the profile's
-`env`, which gives the game SDL's context from its first `eglCreateContext`.
+a failed swap (even a lost context) never reaches the game. The log says
+`stock firmware (Smart Pro): auto chose the SDL-hosted backend` followed by
+`backend sdl (...)`. When the firmware's SDL2 does not start, the log says why
+and `auto` uses the native backend.
+
+**Native (`native`).** The game's window goes to EGL as the `{uint16 width,
+height}` struct SDL's `mali` driver passes, sized to the panel (1280×720 Smart
+Pro, 1024×768 Brick). It is `auto`'s choice on the Smart Pro S (tg5050), whose
+GPU really is a Mali, and the fallback above. On native, `auto` switches to
+`sdl` by itself when the native backend fails — the game's `eglInitialize` of
+the default display fails (SDL starts there and the call is made once more), or
+EGL refuses the game's window surface — and says so in the log
+(`backend sdl (fallback: ...)`). Only the window surface is SDL's after that
+second kind of fallback when the game made its GLES context before its window:
+that context stays raw EGL, its frames go through plain `eglSwapBuffers`, and
+the log says so (then set `ANDROIDPAK_PRESENT=sdl`). TrimUI's own GE8300 build
+of SDL2 is said to create its surface with a NULL native window
+([mpv-tsp](https://github.com/matweew/mpv-tsp)); if a device run ever needs
+the native backend and EGL refuses the struct, `ANDROIDPAK_EGL_WINDOW=null` is
+the setting to try.
 
 `ANDROIDPAK_PRESENT=auto|gbm|native|sdl|off`, `ANDROIDPAK_EGL_WINDOW=fbdev|null`,
 `ANDROIDPAK_EGL_LIB=<path>` and `ANDROIDPAK_SDL_LIB=<path>` override each
-choice (an explicit `native` never falls back, for diagnostics; an explicit
-`sdl` whose SDL2 does not start is chosen like `auto`). The first
-device run's `[androidrt][present] backend ...` line is the evidence of which
-one works.
+choice (an explicit `native` never falls back, for diagnostics — it is how to
+try raw EGL on the stock firmware; an explicit `sdl` whose SDL2 does not start
+is chosen like `auto`). The first device run's `[androidrt][present] backend
+...` line is the evidence of which one works.
 
 ### Titles triage recognises
 
@@ -285,17 +362,27 @@ one works.
 
 ### Trying a game on the device
 
-1. Build the runtime (`CROSS=aarch64-linux-gnu- player/androidrt/build-tsp.sh`)
-   and copy the output to `/mnt/SDCARD/Apps/AndroidRT`.
-2. Put the APK in `/mnt/SDCARD/APKs` and press **Add to Games** on it in the
-   APK Store (or write an `androidpak` [game profile](GAME_PROFILES.md) by
-   hand).
-3. Launch it, then send back the profile's launch log: the
-   `[androidrt] manifest:`, `[androidrt][present] backend`, `undefined symbol`
-   and `[androidrt][jni] report:` lines say exactly what is missing.
+1. Open **Start → Games → APK Store → Runtime**. The AndroidRT row should say
+   **Ready · Bundled with JukaHub**. If it says **Missing**, press **A** →
+   **Install** (Wi-Fi needed); if it names folders it passed over, those say
+   why (a copy for another CPU, a glibc too new, no loader).
+2. Put the APK in `/mnt/SDCARD/APKs` (or send it with the Phone Companion),
+   press **Y** in the store to read the card again, then **A** on the game →
+   **Add to Games** (or write an `androidpak` [game profile](GAME_PROFILES.md)
+   by hand).
+3. Play it from the Games Library's **Android** row or the store's **Play**,
+   then send back the profile's launch log
+   (`Apps/JukaHub/data/game-profiles/logs/<id>.log`; **X** on the APK in the
+   store names it). The lines that matter: `[androidrt] manifest:`,
+   `[androidrt][present] stock firmware …` and `[androidrt][present] backend …`
+   (which display path ran), `SDL2 … video driver …`, `undefined symbol`,
+   `trap:` and `[androidrt][jni] report:` (what the game needed that AndroidRT
+   lacks), and the final `exit:` line.
 4. If the game runs (sound, input) but the panel stays black, launch it once
-   more with `ANDROIDPAK_PRESENT=sdl` in the profile's `env` and send both
-   logs.
+   more with `ANDROIDPAK_PRESENT=native` in the profile's `env` (raw EGL, the
+   other display path) and send both logs. JukaHub's own log (**Tools →
+   Logs**) adds the `androidpak`, `androidrt` and `relpack` lines of the launch
+   and of an install.
 
 ## The ways Android could exist here, ranked
 
@@ -304,7 +391,7 @@ one works.
 | **Container integration (Waydroid)** — Android runs in a container on the device kernel. | **Install only.** The only approach that runs real Android apps. The APK Store detects Waydroid (binary + binder device) and installs APKs into it; the earlier engine that listed and launched container apps through a display bridge (`android.go`) is no longer in the tree. A stock TrimUI kernel has no binder device. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
-| **AndroidPak — NDK games via AndroidRT** | **Profile support and runtime source shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches a separately built/installed runtime with its own bionic loader, JNI environment and EGL present layer; real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
+| **AndroidPak — NDK games via AndroidRT** | **Shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches AndroidRT — bundled with JukaHub's TrimUI packages, or installed from its releases by the APK Store — with its own bionic loader, JNI environment and SDL2/EGL present layer; real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
 | **Sideloading APKs into the container** | **Shipped in the APK Store.** The package is read and triaged first; `waydroid app install <file>` gets a validated path. |
 | **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
@@ -312,13 +399,19 @@ one works.
 ## What ships now
 
 * **The APK Store** (above): scan, manifest and resource-table reading,
-  triage, engine and verdict, one-press game profiles, Play/Remove, the
-  catalogue and its verified downloads, the runtime and Waydroid status.
+  triage, engine and verdict, one-press Add to Games (game profile, Games
+  Library row and cover), Play/Remove, the catalogue and its verified
+  downloads, the runtime (Install / Update) and Waydroid status.
 * **AndroidPak** profile support: triage, the memory pre-flight, tmpfs
   staging, the runtime contract and the first-run report
   ([player/androidpak.go](../player/androidpak.go)).
-* **AndroidRT** source and its host smoke suite
-  ([player/androidrt](../player/androidrt/README.md)); no prebuilt runtime.
+* **AndroidRT**, built by CI for the handheld: in every TrimUI package
+  (`Apps/JukaHub/androidrt`) and as `JukaHub-AndroidRT-linux-arm64.zip` on each
+  release, which the Runtime tab installs and the Emulator updates pass keeps
+  current; its source and host smoke suite are in
+  [player/androidrt](../player/androidrt/README.md).
+* **The Games Library's Android row**
+  ([GAME_LIBRARY.md](GAME_LIBRARY.md#android-games)).
 * **Waydroid**: detection (the `waydroid` command, a binder device at
   `/dev/binder`, `/dev/binderfs/binder`, `/dev/binderfs/anbox-binder` or
   `/dev/anbox-binder`, `waydroid status`) and APK install. Listing and
@@ -328,9 +421,9 @@ one works.
 ## Requirements
 
 * **AndroidPak / AndroidRT:** an aarch64 Linux handheld (the TrimUI Smart Pro
-  and Brick), the runtime built from `player/androidrt` and copied to
-  `/mnt/SDCARD/Apps/AndroidRT` (or `JUKAHUB_ANDROIDRT`), and the APK on the
-  card.
+  and Brick), AndroidRT (bundled with JukaHub's TrimUI package, or installed
+  from the Runtime tab), and the APK on the card. A PC reads APKs in the store
+  but does not run them.
 * **Waydroid install:** a kernel with the binder module (`binder_linux`) —
   the hard gate — and Waydroid installed, initialised and with its session
   running (a one-time root step that belongs to Waydroid).
@@ -339,7 +432,11 @@ one works.
 
 * AndroidRT runs native (NDK) games only; Java apps and the engines that start
   in Java (Unity, Unreal, Godot, GameMaker, LÖVE, SDL, Cocos2d-x) cannot run
-  on it, and the store says so instead of offering them.
+  on it, and the store says so instead of offering them — with the route that
+  works instead where there is one (a PortMaster build, PortMaster's GMLoader
+  for GameMaker games). JukaHub has no Java runtime and does not try to fake
+  one. Real Android apps need Waydroid, which needs a binder kernel: Linux PCs
+  and community firmware, not the stock TrimUI kernel.
 * Memory is shared with everything else on a 1 GB device: a launch that would
   not leave the hub alive is refused with the numbers.
 * **Nothing here is verified on hardware yet.** The store's reading, triage,
@@ -349,13 +446,11 @@ one works.
 
 ## Next slices
 
-1. **A prebuilt AndroidRT** — build it in CI next to the TrimUI package and
-   install it from the Runtime tab (hash-checked), so "Missing" has a button.
+1. **The first device run** — the bundled runtime on a Smart Pro and a Brick:
+   which display path shows a frame, then one real NativeActivity game.
 2. **Verified catalogue entries** — free NDK games whose authors publish APKs
    on GitHub releases, with their SHA-256 and size, so Store rows can download.
-3. **Library integration** — list added Android games in the Games Library
-   (today they live in Game Profiles).
-4. **Container data** — expose Waydroid's data directory to the Save Manager
+3. **Container data** — expose Waydroid's data directory to the Save Manager
    so an app's state can be snapshotted like a game save.
 
 ## Related

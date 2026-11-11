@@ -533,7 +533,8 @@ func bkupCollect(cats map[string]bool, opts bkupOptions) []bkupItem {
 				lower := strings.ToLower(name)
 				if e.IsDir() || !strings.HasSuffix(lower, ".json") || bkupOtherDataDeny[name] ||
 					strings.Contains(lower, "cache") || strings.Contains(lower, "cookie") ||
-					strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
+					strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+					vpnBackupExcluded(name) {
 					continue
 				}
 				info, err := e.Info()
@@ -1033,6 +1034,8 @@ func bkupPlanRestore(path string, m bkupManifest, cats map[string]bool) bkupRest
 			rf.Skip = "not chosen"
 		case token == "doc":
 			rf.Skip = "the config document is for reading and importing"
+		case vpnBackupExcluded(rel):
+			rf.Skip = "the VPN configuration stays on its device"
 		case f.Platform && plan.CrossPlatform:
 			rf.Skip = "made for " + bkupPlatformLabel(m.Platform)
 		default:

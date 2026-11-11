@@ -49,19 +49,20 @@ var (
 func rememberMediaPaging(resultVar, command string) {
 	mediaPaging.mu.Lock()
 	defer mediaPaging.mu.Unlock()
+	// Try to extract page size from YouTube search pattern first
 	match := ytSearchSpec().FindStringSubmatch(command)
-	if match == nil {
-		delete(mediaPaging.byVar, resultVar)
-		return
+	pageSize := mediaHubPageSize
+	if match != nil {
+		size, err := strconv.Atoi(match[1])
+		if err == nil && size > 0 {
+			pageSize = size
+		}
 	}
-	size, err := strconv.Atoi(match[1])
-	if err != nil || size <= 0 {
-		delete(mediaPaging.byVar, resultVar)
-		return
-	}
+	// For non-YouTube commands (like Vault tab URL fetches), still remember the paging state
+	// so that pagination works via playlist-start/playlist-end parameters
 	mediaPaging.byVar[resultVar] = &mediaResultsPage{
 		command:  command,
-		pageSize: size,
+		pageSize: pageSize,
 	}
 }
 
@@ -282,6 +283,13 @@ func loadMoreMediaResults(config *Config) bool {
 		return true
 	}
 	next := state.page + 1
+	// A Vault list pages through the site's API instead of a rewritten yt-dlp
+	// search; the remembered command carries the tag it was built for.
+	if tag, ok := vaultQueryFromPagingCommand(state.command); ok {
+		markMediaPageRequested(element.Variable, next)
+		mediaHubLoadVaultPage(config, tag, next+1, true)
+		return true
+	}
 	command := buildMediaPageCommand(state.command, state.pageSize, next)
 	markMediaPageRequested(element.Variable, next)
 	mediaExecutePage(config, command, element.Variable, snapshotVars(config), true)

@@ -707,8 +707,8 @@ func tzPickerDraw(renderer *sdl.Renderer, config *Config) {
 	if renderer == nil || !tzPicker.open {
 		return
 	}
-	label := getFontSized(config, "medium", 19)
-	small := getFontSized(config, "small", 15)
+	label := FontForRole(config, TypeBody)
+	small := FontForRole(config, TypeLabel)
 	if label == nil || small == nil {
 		return
 	}

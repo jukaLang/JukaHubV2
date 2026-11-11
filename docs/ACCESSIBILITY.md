@@ -163,6 +163,7 @@ accessibility-specific keys below are kept in `variables.Custom`:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `a11y_font_scale` | number | 0.85 – 1.45, `1.0` is the shipped size |
+| `a11y_legible_font` | bool | draw the UI in the first installed legible system face (Atkinson Hyperlegible, Lexend, Verdana, Tahoma, Segoe UI), else bundled Inter |
 | `a11y_high_contrast` | bool | high-contrast palette on |
 | `a11y_colorblind` | string | `""`, `deuteranopia`, `protanopia`, `tritanopia` |
 | `a11y_swap_ab` | bool | face buttons A/B swapped |

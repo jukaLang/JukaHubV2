@@ -818,36 +818,48 @@ func apkStoreHasSplitSiblings(p string) bool {
 
 // apkStoreRuntime is what the Runtime tab reports.
 type apkStoreRuntime struct {
-	dir     string // the AndroidRT folder, "" when none was found
-	err     string // why not
-	form    string // "loader" or "launch.sh"
-	host    string // GOOS/GOARCH
-	canRun  bool   // AndroidRT runs arm64 Android code on aarch64 Linux only
-	memMB   int64  // total RAM, 0 when unknown
-	handset bool   // a TrimUI handheld
+	dir     string               // the AndroidRT folder, "" when none was found
+	err     string               // why not
+	form    string               // "loader" or "launch.sh"
+	source  androidRuntimeSource // which copy: bundled, downloaded, the user's own
+	tag     string               // the downloaded copy's release
+	skipped []string             // folders passed over, and why
+	host    string               // GOOS/GOARCH
+	canRun  bool                 // AndroidRT runs arm64 Android code on aarch64 Linux only
+	memMB   int64                // total RAM, 0 when unknown
+	handset bool                 // a TrimUI handheld
 }
 
 // apkStoreProbeRuntime looks for AndroidRT the way a launch does.
 func apkStoreProbeRuntime() apkStoreRuntime {
 	rt := apkStoreRuntime{
 		host:    runtime.GOOS + "/" + runtime.GOARCH,
-		canRun:  runtime.GOOS == "linux" && runtime.GOARCH == "arm64",
+		canRun:  androidRTSupported(),
 		handset: IsTrimuiDevice(),
 		memMB:   apkStoreMemTotalMB("/proc/meminfo"),
 	}
-	dir, err := resolveAndroidRuntime(exec.LookPath)
+	found, err := findAndroidRuntime(exec.LookPath)
+	rt.skipped = found.Skipped
 	if err != nil {
 		rt.err = err.Error()
 		return rt
 	}
-	rt.dir = dir
+	rt.dir, rt.source = found.Dir, found.Source
+	if found.Source == androidRTSourceDownloaded {
+		if info, ok := relPackRead(found.Dir); ok {
+			rt.tag = info.Tag
+		}
+	}
 	switch {
-	case regularFile(filepath.Join(dir, "loader")):
+	case regularFile(filepath.Join(found.Dir, "loader")):
 		rt.form = "loader"
-	case regularFile(filepath.Join(dir, "launch.sh")):
+	case regularFile(filepath.Join(found.Dir, "launch.sh")):
 		rt.form = "launch.sh"
-	default:
-		rt.err = "the folder has no loader or launch.sh"
+	}
+	// The launch's own check: a JUKAHUB_ANDROIDRT folder is taken as given, so
+	// what is wrong with it shows here.
+	if _, _, cmdErr := androidRuntimeCommand(found.Dir, exec.LookPath); cmdErr != nil {
+		rt.err = cmdErr.Error()
 	}
 	return rt
 }

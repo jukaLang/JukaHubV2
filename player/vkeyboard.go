@@ -2519,7 +2519,9 @@ func vkTriggerSceneSearch(config *Config) {
 		return
 	}
 	trophyEvent(tkVideoSearch)
-	executeYouTubeSearch(config, ytSearchCmd(config), "search_results", snapshotVars(config))
+	// Typed here just like the Media bar: the query is the user's, so a page
+	// fetched an hour ago must not answer it (executeYouTubeSearchFresh).
+	executeYouTubeSearchFresh(config, ytSearchCmd(config), "search_results", snapshotVars(config))
 }
 
 // toggleKeyboardCase is Shift, without losing the focused key: a tap shifts

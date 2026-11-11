@@ -44,6 +44,21 @@ const (
 	a11yKeyReduceTransparency = "a11y_reduce_transparency"
 	a11yKeyIncreaseContrast   = "a11y_increase_contrast"
 	a11yKeyBoldText           = "a11y_bold_text"
+	a11yKeyMonoAudio          = "a11y_mono_audio"
+	a11yKeyAudioBalance       = "a11y_audio_balance"
+	a11yKeyCaptionsAlways     = "a11y_captions_always"
+	a11yKeyCaptionSize        = "a11y_caption_size"
+	a11yKeyCaptionBackground  = "a11y_caption_background"
+	a11yKeyLongPress          = "a11y_long_press_ms"
+	a11yKeyRepeatDelay        = "a11y_repeat_delay_ms"
+	a11yKeyRepeatRate         = "a11y_repeat_rate_ms"
+	a11yKeyToastDuration      = "a11y_toast_duration_pct"
+	a11yKeyStickyChords       = "a11y_sticky_chords"
+	a11yKeyMagnifier          = "a11y_magnifier"
+	a11yKeyMagnifierZoom      = "a11y_magnifier_zoom"
+	a11yKeyLegibleFont        = "a11y_legible_font"
+	a11yKeySwitchMode         = "a11y_switch_mode"
+	a11yKeySwitchInterval     = "a11y_switch_interval_ms"
 
 	a11yPanelTitle = "Accessibility"
 
@@ -84,10 +99,35 @@ type a11ySettings struct {
 	// boldText swaps the single UI face for Inter SemiBold. The size floor is
 	// still applied by getCachedFont/loadRoleFont, so bold never buys legibility
 	// by shrinking a caption.
-	boldText   bool
-	colorblind string
-	swapAB     bool
-	swapXY     bool
+	boldText bool
+	// Audio access: mono playback and a left/right balance for stereo
+	// decoders, plus captions that start on and their reading style.
+	monoAudio         bool
+	audioBalance      int
+	captionsAlways    bool
+	captionSize       int
+	captionBackground bool
+	// Timing: long-press, held-direction cadence and toast lifetime, plus a
+	// sticky one-handed chord that stays armed across several directions.
+	longPressMs   int
+	repeatDelayMs int
+	repeatRateMs  int
+	toastPercent  int
+	stickyChords  bool
+	// legibleFont draws the UI in the best legible system face the machine has
+	// (legiblefont.go), or the bundled Inter when none is installed.
+	legibleFont bool
+	// magnifier is the zoom lens over the focus (magnifier.go); zoom is the
+	// factor it captures at, 2 or 3.
+	magnifier     bool
+	magnifierZoom int
+	// switchMode is the one-/two-button scanning mode (switchaccess.go): off,
+	// one or two; switchIntervalMs is the dwell of each highlight.
+	switchMode       string
+	switchIntervalMs int
+	colorblind       string
+	swapAB           bool
+	swapXY           bool
 	// One-handed mode turns the chord button plus the d-pad into the four
 	// face buttons, so a player who can only reach one side of the device can
 	// still navigate and confirm.
@@ -129,7 +169,9 @@ type a11yChordRuntime struct {
 	pressed map[uint8]uint8
 }
 
-var a11y a11ySettings
+var a11y = a11ySettings{captionSize: 1, captionBackground: true,
+	longPressMs: 450, repeatDelayMs: 320, repeatRateMs: 70, toastPercent: 100,
+	magnifierZoom: 2, switchMode: a11ySwitchOff, switchIntervalMs: a11ySwitchDefaultIntervalMS}
 var a11yChordState a11yChordRuntime
 
 var a11yPanelRect sdl.Rect
@@ -143,7 +185,10 @@ var a11yRowHits []struct {
 // a11yInit loads the saved settings and applies them before the first frame, so
 // a user who needs large text never sees a launch at the default size.
 func a11yInit(config *Config) {
-	a11y = a11ySettings{fontScale: 1.0, keys: map[uint8]uint8{}}
+	a11y = a11ySettings{fontScale: 1.0, captionSize: 1, captionBackground: true,
+		longPressMs: 450, repeatDelayMs: 320, repeatRateMs: 70, toastPercent: 100,
+		magnifierZoom: 2, switchMode: a11ySwitchOff, switchIntervalMs: a11ySwitchDefaultIntervalMS,
+		keys: map[uint8]uint8{}}
 	a11yLoad(config)
 	a11yRefreshFonts()
 }
@@ -164,6 +209,29 @@ func a11yLoad(config *Config) {
 	a11y.reduceTransparency = a11yCustomBool(config, a11yKeyReduceTransparency)
 	a11y.increaseContrast = a11yCustomBool(config, a11yKeyIncreaseContrast)
 	a11y.boldText = a11yCustomBool(config, a11yKeyBoldText)
+	a11y.legibleFont = a11yCustomBool(config, a11yKeyLegibleFont)
+	a11y.monoAudio = a11yCustomBool(config, a11yKeyMonoAudio)
+	a11y.audioBalance = a11yInt(config, a11yKeyAudioBalance, 0, -100, 100)
+	a11y.captionsAlways = a11yCustomBool(config, a11yKeyCaptionsAlways)
+	a11y.captionSize = a11yInt(config, a11yKeyCaptionSize, 1, 0, 2)
+	a11y.longPressMs = a11yInt(config, a11yKeyLongPress, 450, 250, 1000)
+	a11y.repeatDelayMs = a11yInt(config, a11yKeyRepeatDelay, 320, 100, 800)
+	a11y.repeatRateMs = a11yInt(config, a11yKeyRepeatRate, 70, 30, 200)
+	a11y.toastPercent = a11yInt(config, a11yKeyToastDuration, 100, 50, 200)
+	a11y.stickyChords = a11yCustomBool(config, a11yKeyStickyChords)
+	a11y.magnifier = a11yCustomBool(config, a11yKeyMagnifier)
+	a11y.magnifierZoom = a11yClampMagnifierZoom(a11yInt(config, a11yKeyMagnifierZoom, 2, 2, 3))
+	a11y.switchMode = a11ySwitchOff
+	if s, ok := customString(config.Variables.Custom, a11yKeySwitchMode); ok {
+		a11y.switchMode = a11ySwitchModeValue(s)
+	}
+	a11y.switchIntervalMs = a11yInt(config, a11yKeySwitchInterval, a11ySwitchDefaultIntervalMS, 400, 5000)
+	a11y.captionBackground = true
+	if v, ok := customString(config.Variables.Custom, a11yKeyCaptionBackground); ok {
+		if b, err := strconv.ParseBool(strings.ToLower(strings.TrimSpace(v))); err == nil {
+			a11y.captionBackground = b
+		}
+	}
 	a11y.swapAB = a11yCustomBool(config, a11yKeySwapAB)
 	a11y.swapXY = a11yCustomBool(config, a11yKeySwapXY)
 	a11y.oneHanded = a11yCustomBool(config, a11yKeyOneHanded)
@@ -218,6 +286,21 @@ func a11yStore(config *Config) {
 	config.Variables.Custom[a11yKeyReduceTransparency] = a11y.reduceTransparency
 	config.Variables.Custom[a11yKeyIncreaseContrast] = a11y.increaseContrast
 	config.Variables.Custom[a11yKeyBoldText] = a11y.boldText
+	config.Variables.Custom[a11yKeyLegibleFont] = a11y.legibleFont
+	config.Variables.Custom[a11yKeyMonoAudio] = a11y.monoAudio
+	config.Variables.Custom[a11yKeyAudioBalance] = a11y.audioBalance
+	config.Variables.Custom[a11yKeyCaptionsAlways] = a11y.captionsAlways
+	config.Variables.Custom[a11yKeyCaptionSize] = a11y.captionSize
+	config.Variables.Custom[a11yKeyCaptionBackground] = a11y.captionBackground
+	config.Variables.Custom[a11yKeyLongPress] = a11y.longPressMs
+	config.Variables.Custom[a11yKeyRepeatDelay] = a11y.repeatDelayMs
+	config.Variables.Custom[a11yKeyRepeatRate] = a11y.repeatRateMs
+	config.Variables.Custom[a11yKeyToastDuration] = a11y.toastPercent
+	config.Variables.Custom[a11yKeyStickyChords] = a11y.stickyChords
+	config.Variables.Custom[a11yKeyMagnifier] = a11y.magnifier
+	config.Variables.Custom[a11yKeyMagnifierZoom] = a11y.magnifierZoom
+	config.Variables.Custom[a11yKeySwitchMode] = a11y.switchMode
+	config.Variables.Custom[a11yKeySwitchInterval] = a11y.switchIntervalMs
 	config.Variables.Custom[a11yKeyColorblind] = a11y.colorblind
 	config.Variables.Custom[a11yKeySwapAB] = a11y.swapAB
 	config.Variables.Custom[a11yKeySwapXY] = a11y.swapXY
@@ -307,6 +390,67 @@ func a11yScaleIndex() int {
 		}
 	}
 	return idx
+}
+
+func a11yInt(config *Config, key string, def, lo, hi int) int {
+	if config == nil {
+		return def
+	}
+	v, ok := config.Variables.Custom[key]
+	if !ok {
+		return def
+	}
+	n := 0
+	switch t := v.(type) {
+	case float64:
+		n = int(math.Round(t))
+	case int:
+		n = t
+	case string:
+		p, err := strconv.Atoi(strings.TrimSpace(t))
+		if err != nil {
+			return def
+		}
+		n = p
+	default:
+		return def
+	}
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
+}
+
+func a11yAudioBalanceLabel() string {
+	if a11y.audioBalance == 0 {
+		return "Centre"
+	}
+	side := "Right"
+	if a11y.audioBalance < 0 {
+		side = "Left"
+	}
+	return side + " " + strconv.Itoa(absInt(a11y.audioBalance)) + "%"
+}
+
+func a11yCaptionSizeLabel() string {
+	switch a11y.captionSize {
+	case 0:
+		return "Small"
+	case 2:
+		return "Large"
+	default:
+		return "Medium"
+	}
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func a11yScaleLabel() string {
@@ -696,7 +840,7 @@ func a11yRemapEvent(e *sdl.ControllerButtonEvent) bool {
 		}
 		if a11yChordState.latched {
 			if logical, ok := a11yChordTarget(e.Button); ok {
-				a11yChordState.latched = false
+				a11yChordState.latched = a11y.stickyChords
 				if a11yChordState.pressed == nil {
 					a11yChordState.pressed = map[uint8]uint8{}
 				}
@@ -724,6 +868,397 @@ func a11yRepeatMs(base int64) int64 {
 	return base
 }
 
+func a11yLongPressMs() uint64  { return uint64(clampInt(a11y.longPressMs, 250, 1000)) }
+func a11yRepeatDelayMs() int64 { return a11yRepeatMs(int64(clampInt(a11y.repeatDelayMs, 100, 800))) }
+func a11yRepeatRateMs() int64  { return a11yRepeatMs(int64(clampInt(a11y.repeatRateMs, 30, 200))) }
+
+func a11yToastMs(base uint64) uint64 {
+	pct := clampInt(a11y.toastPercent, 50, 200)
+	return base * uint64(pct) / 100
+}
+
+// ── Setters ───────────────────────────────────────────────────────────────
+//
+// One function per value. The Accessibility panel's rows (a11yAdjust), the
+// Settings page (a11y_settings.go) and the stored config all land here, so a
+// value is clamped, applied to live state and announced in one place. The
+// caller saves: the panel saves once for the row it moved, a Settings row saves
+// for its own change.
+
+func a11ySetScale(scale float64) bool {
+	scale = a11yClampScale(scale)
+	if scale == a11y.fontScale {
+		return false
+	}
+	a11y.fontScale = scale
+	a11yRefreshFonts()
+	ShowToast("Text size: "+a11yScaleLabel(), ToastKindInfo)
+	return true
+}
+
+// a11yColorblindStep is the next palette in the panel's order, wrapping.
+func a11yColorblindStep(dir int) string {
+	n := len(a11yColorblindModes)
+	idx := ((a11yColorblindIndex(a11y.colorblind)+dir)%n + n) % n
+	return a11yColorblindModes[idx].key
+}
+
+func a11ySetColorblind(config *Config, key string) bool {
+	if key != "" && a11yColorblindPreset(key) == "" {
+		key = ""
+	}
+	if key == a11y.colorblind {
+		return false
+	}
+	a11y.colorblind = key
+	a11yApplyPalette(config)
+	ShowToast("Colour-blind palette: "+a11yColorblindLabel(key), ToastKindInfo)
+	return true
+}
+
+func a11ySetMonoAudio(on bool) bool {
+	if on == a11y.monoAudio {
+		return false
+	}
+	a11y.monoAudio = on
+	ShowToast("Mono audio: "+a11yOnOff(on), ToastKindInfo)
+	return true
+}
+
+func a11ySetAudioBalance(v int) bool {
+	v = clampInt(v, -100, 100)
+	if v == a11y.audioBalance {
+		return false
+	}
+	a11y.audioBalance = v
+	ShowToast("Audio balance: "+a11yAudioBalanceLabel(), ToastKindInfo)
+	return true
+}
+
+func a11ySetCaptionsAlways(on bool) bool {
+	if on == a11y.captionsAlways {
+		return false
+	}
+	a11y.captionsAlways = on
+	ShowToast("Captions always on: "+a11yOnOff(on), ToastKindInfo)
+	return true
+}
+
+func a11ySetCaptionSize(n int) bool {
+	n = clampInt(n, 0, 2)
+	if n == a11y.captionSize {
+		return false
+	}
+	a11y.captionSize = n
+	ShowToast("Caption size: "+a11yCaptionSizeLabel(), ToastKindInfo)
+	return true
+}
+
+func a11ySetCaptionBackground(on bool) bool {
+	if on == a11y.captionBackground {
+		return false
+	}
+	a11y.captionBackground = on
+	ShowToast("Caption background: "+a11yOnOff(on), ToastKindInfo)
+	return true
+}
+
+// a11ySetLongPress, a11ySetRepeatDelay, a11ySetRepeatRate and
+// a11ySetToastPercent clamp to the range the handlers read, so a Settings stop
+// and a panel step can never leave a value outside it.
+func a11ySetLongPress(ms int) bool {
+	ms = clampInt(ms, 250, 1000)
+	if ms == a11y.longPressMs {
+		return false
+	}
+	a11y.longPressMs = ms
+	ShowToast("Long press: "+strconv.Itoa(ms)+" ms", ToastKindInfo)
+	return true
+}
+
+func a11ySetRepeatDelay(ms int) bool {
+	ms = clampInt(ms, 100, 800)
+	if ms == a11y.repeatDelayMs {
+		return false
+	}
+	a11y.repeatDelayMs = ms
+	ShowToast("Repeat delay: "+strconv.Itoa(ms)+" ms", ToastKindInfo)
+	return true
+}
+
+func a11ySetRepeatRate(ms int) bool {
+	ms = clampInt(ms, 30, 200)
+	if ms == a11y.repeatRateMs {
+		return false
+	}
+	a11y.repeatRateMs = ms
+	ShowToast("Repeat speed: "+strconv.Itoa(ms)+" ms", ToastKindInfo)
+	return true
+}
+
+func a11ySetToastPercent(pct int) bool {
+	pct = clampInt(pct, 50, 200)
+	if pct == a11y.toastPercent {
+		return false
+	}
+	a11y.toastPercent = pct
+	ShowToast("Toast duration: "+strconv.Itoa(pct)+"%", ToastKindInfo)
+	return true
+}
+
+func a11ySetStickyChords(on bool) bool {
+	if on == a11y.stickyChords {
+		return false
+	}
+	a11y.stickyChords = on
+	ShowToast("Sticky chords: "+a11yOnOff(on), ToastKindInfo)
+	return true
+}
+
+func a11ySetOneHanded(on bool) bool {
+	if on == a11y.oneHanded {
+		return false
+	}
+	a11y.oneHanded = on
+	a11yChordReset()
+	if on {
+		ShowToast("One-handed: tap "+a11yChordLabel(a11y.chordButton)+", then a direction", ToastKindInfo)
+	} else {
+		ShowToast("One-handed mode off", ToastKindInfo)
+	}
+	return true
+}
+
+// a11yChordStep is the next chord modifier in a11yChordButtons, wrapping.
+func a11yChordStep(dir int) string {
+	idx := 0
+	for i, option := range a11yChordButtons {
+		if option.key == a11yChordKey(a11y.chordButton) {
+			idx = i
+		}
+	}
+	if dir < 0 {
+		idx += len(a11yChordButtons) - 1
+	} else {
+		idx++
+	}
+	return a11yChordButtons[idx%len(a11yChordButtons)].key
+}
+
+func a11ySetChordButton(key string) bool {
+	key = a11yChordKey(key)
+	if key == a11yChordKey(a11y.chordButton) {
+		return false
+	}
+	a11y.chordButton = key
+	a11yChordReset()
+	ShowToast("Chord button: "+a11yChordLabel(a11y.chordButton), ToastKindInfo)
+	return true
+}
+
+func a11ySetSlowRepeat(on bool) bool {
+	if on == a11y.slowRepeat {
+		return false
+	}
+	a11y.slowRepeat = on
+	label := "Normal"
+	if on {
+		label = "Slow"
+	}
+	ShowToast("Key repeat: "+label, ToastKindInfo)
+	return true
+}
+
+// a11ySetMagnifier switches the zoom lens (magnifier.go). Turning it off drops
+// the cached copy instead of leaving a hidden texture behind.
+func a11ySetMagnifier(on bool) bool {
+	if on == a11y.magnifier {
+		return false
+	}
+	a11y.magnifier = on
+	if on {
+		ShowToast("Magnifier: On · "+strconv.Itoa(a11yClampMagnifierZoom(a11y.magnifierZoom))+"×", ToastKindInfo)
+	} else {
+		ShowToast("Magnifier off", ToastKindInfo)
+		magnifierReset()
+	}
+	return true
+}
+
+func a11ySetMagnifierZoom(zoom int) bool {
+	zoom = a11yClampMagnifierZoom(zoom)
+	if zoom == a11yClampMagnifierZoom(a11y.magnifierZoom) {
+		return false
+	}
+	a11y.magnifierZoom = zoom
+	ShowToast("Magnifier zoom: "+strconv.Itoa(zoom)+"×", ToastKindInfo)
+	return true
+}
+
+// a11ySetLegibleFont turns the legible reading face on or off. The face is
+// resolved from the machine's installed fonts at the next frame, and every
+// font-dependent cache is dropped so the change is visible without a restart.
+func a11ySetLegibleFont(on bool) bool {
+	if on == a11y.legibleFont {
+		return false
+	}
+	a11y.legibleFont = on
+	legibleFontReset()
+	a11yRefreshFonts()
+	if !on {
+		ShowToast("Legible reading font: Off", ToastKindInfo)
+		return true
+	}
+	if face := legibleFontFaceName(); face != "" {
+		ShowToast("Legible reading font: "+face, ToastKindInfo)
+	} else {
+		ShowToast("Legible reading font on · no system face found, using Inter", ToastKindInfo)
+	}
+	return true
+}
+
+// a11ySetSwitchMode turns one-/two-button scanning on, off or into its other
+// button count. The dwell clock restarts, so the newly highlighted control
+// gets a full interval before it moves.
+func a11ySetSwitchMode(mode string) bool {
+	mode = a11ySwitchModeValue(mode)
+	if mode == a11ySwitchModeValue(a11y.switchMode) {
+		return false
+	}
+	a11y.switchMode = mode
+	switchScanReset()
+	switch mode {
+	case a11ySwitchOne:
+		ShowToast("Switch access: one button · A selects", ToastKindInfo)
+	case a11ySwitchTwo:
+		ShowToast("Switch access: two buttons · B next, A selects", ToastKindInfo)
+	default:
+		ShowToast("Switch access off", ToastKindInfo)
+	}
+	return true
+}
+
+func a11ySetSwitchInterval(ms int) bool {
+	ms = clampInt(ms, 400, 5000)
+	if ms == clampInt(a11y.switchIntervalMs, 400, 5000) {
+		return false
+	}
+	a11y.switchIntervalMs = ms
+	switchScanReset()
+	ShowToast("Scan interval: "+a11ySwitchIntervalLabel(ms), ToastKindInfo)
+	return true
+}
+
+// a11ySetLayoutPreset applies a whole layout, not a delta: it clears the
+// per-button entries so the two ways of describing the keys cannot disagree.
+func a11ySetLayoutPreset(nintendo bool) bool {
+	if nintendo == (a11y.swapAB && a11y.swapXY && len(a11y.keys) == 0) {
+		return false
+	}
+	a11y.swapAB, a11y.swapXY = nintendo, nintendo
+	a11y.keys = map[uint8]uint8{}
+	if nintendo {
+		ShowToast("Button layout: Nintendo order · remaps cleared", ToastKindInfo)
+	} else {
+		ShowToast("Button layout: standard order", ToastKindInfo)
+	}
+	return true
+}
+
+// a11ySetButtonTarget points one physical button at another action. target ==
+// button clears the entry (sends itself); a11yDisabledButton swallows the
+// press. The preset that covered the button is dropped first, so an explicit
+// remap is not rewritten a second time on the way out of a11yResolveButton.
+func a11ySetButtonTarget(button, target uint8) bool {
+	if a11y.keys == nil {
+		a11y.keys = map[uint8]uint8{}
+	}
+	if target == button {
+		delete(a11y.keys, button)
+	} else {
+		a11y.keys[button] = target
+	}
+	a11yClearSwapFor(button)
+	ShowToast(a11yButtonLabel(button)+" sends "+a11yButtonTargetLabel(button), ToastKindInfo)
+	return true
+}
+
+// a11ySelectNextMode is the Select row's three-state cycle.
+func a11ySelectNextMode() string {
+	switch a11ySelectKeyMode() {
+	case a11ySelectDefault:
+		return a11ySelectSwapped
+	case a11ySelectSwapped:
+		return a11ySelectDisabled
+	}
+	return a11ySelectDefault
+}
+
+func a11ySetSelectMode(mode string) bool {
+	a11ySetSelectKeyMode(mode)
+	switch mode {
+	case a11ySelectSwapped:
+		ShowToast("Select now sends Start", ToastKindInfo)
+	case a11ySelectDisabled:
+		ShowToast("Select disabled · Start still opens the menu", ToastKindInfo)
+	default:
+		ShowToast("Select restored", ToastKindInfo)
+	}
+	return true
+}
+
+// a11yResetDefaults is the panel's Reset row and Settings' Reset action.
+func a11yResetDefaults(config *Config) {
+	a11y.fontScale = 1.0
+	a11y.highContrast = false
+	a11y.reduceTransparency = false
+	a11y.increaseContrast = false
+	a11y.boldText = false
+	a11y.legibleFont = false
+	legibleFontReset()
+	a11y.monoAudio = false
+	a11y.audioBalance = 0
+	a11y.captionsAlways = false
+	a11y.captionSize = 1
+	a11y.captionBackground = true
+	a11y.longPressMs = 450
+	a11y.repeatDelayMs = 320
+	a11y.repeatRateMs = 70
+	a11y.toastPercent = 100
+	a11y.stickyChords = false
+	a11y.magnifier = false
+	a11y.magnifierZoom = 2
+	a11y.switchMode = a11ySwitchOff
+	a11y.switchIntervalMs = a11ySwitchDefaultIntervalMS
+	switchScanReset()
+	a11y.colorblind = ""
+	a11y.swapAB = false
+	a11y.swapXY = false
+	a11y.oneHanded = false
+	a11y.chordButton = "l1"
+	a11y.slowRepeat = false
+	a11y.keys = map[uint8]uint8{}
+	a11yChordReset()
+	a11yRefreshFonts()
+	a11yApplyVision()
+	a11yApplyPalette(config)
+	magnifierReset()
+	// The reset owns the stored values too, so a caller that only resets (a
+	// test, a future shortcut) cannot leave the old ones in the config.
+	a11yStore(config)
+	ShowToast("Accessibility settings reset", ToastKindInfo)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 // ── Panel ─────────────────────────────────────────────────────────────────
 
 type a11yRowKind int
@@ -734,6 +1269,16 @@ const (
 	a11yRowReduceTransparency
 	a11yRowIncreaseContrast
 	a11yRowBoldText
+	a11yRowMonoAudio
+	a11yRowAudioBalance
+	a11yRowCaptionsAlways
+	a11yRowCaptionSize
+	a11yRowCaptionBackground
+	a11yRowLongPress
+	a11yRowRepeatDelay
+	a11yRowRepeatRate
+	a11yRowToastDuration
+	a11yRowStickyChords
 	a11yRowColorblind
 	a11yRowLayoutPreset
 	// a11yRowButton edits one physical → logical entry of the keymap. The list
@@ -799,6 +1344,16 @@ func a11yRows() []a11yRow {
 		{label: "Reduce transparency", detail: "Makes every glass tile, row, sheet and chip opaque, so wallpaper and background motion cannot show through them.", value: reducedTransparency, kind: a11yRowReduceTransparency},
 		{label: "Increase contrast", detail: "Strengthens glass edges, widens focus outlines and keeps text at 7:1 or better on the surfaces it sits on.", value: increasedContrast, kind: a11yRowIncreaseContrast},
 		{label: "Bold text", detail: "Draws every menu, list and Home label in Inter SemiBold. Captions stay at the 14 px legibility floor.", value: boldText, kind: a11yRowBoldText},
+		{label: "Mono audio", detail: "Downmixes video and music to one channel for a single speaker or one-ear listening.", value: a11yOnOff(a11y.monoAudio), kind: a11yRowMonoAudio},
+		{label: "Audio balance", detail: "Moves stereo video and music between the left and right channels. Interface sounds stay centred on the mono UI device.", value: a11yAudioBalanceLabel(), kind: a11yRowAudioBalance},
+		{label: "Captions always on", detail: "Each video starts with its subtitles enabled; CC still turns them off for the current video.", value: a11yOnOff(a11y.captionsAlways), kind: a11yRowCaptionsAlways},
+		{label: "Caption size", detail: "Small, Medium or Large cue text above the bottom of the picture.", value: a11yCaptionSizeLabel(), kind: a11yRowCaptionSize},
+		{label: "Caption background", detail: "Draws a dark panel behind cues. Turn it off to keep only the text over the picture.", value: a11yOnOff(a11y.captionBackground), kind: a11yRowCaptionBackground},
+		{label: "Long press", detail: "How long a letter or the globe must be held before its alternate action opens.", value: strconv.Itoa(a11y.longPressMs) + " ms", kind: a11yRowLongPress},
+		{label: "Repeat delay", detail: "How long a direction waits before it starts repeating.", value: strconv.Itoa(a11y.repeatDelayMs) + " ms", kind: a11yRowRepeatDelay},
+		{label: "Repeat speed", detail: "The gap between repeated direction steps. Larger is slower.", value: strconv.Itoa(a11y.repeatRateMs) + " ms", kind: a11yRowRepeatRate},
+		{label: "Toast duration", detail: "How long a message stays on screen before it fades.", value: strconv.Itoa(a11y.toastPercent) + "%", kind: a11yRowToastDuration},
+		{label: "Sticky chords", detail: "Leaves the one-handed chord armed after a direction, so several face buttons can be pressed in sequence.", value: a11yOnOff(a11y.stickyChords), kind: a11yRowStickyChords},
 		{label: "Colour-blind palette", detail: "Replaces the theme colours with a safer set.", value: a11yColorblindLabel(a11y.colorblind), kind: a11yRowColorblind},
 		{label: "Button layout", detail: "Nintendo order swaps A/B and X/Y together, for players used to the Japanese layout. Applying a preset clears the per-button remaps below.", value: a11yLayoutPresetLabel(), kind: a11yRowLayoutPreset},
 	}
@@ -1023,19 +1578,8 @@ func a11yAdjust(dir int, config *Config) {
 	changed := false
 	switch rows[a11y.cursor].kind {
 	case a11yRowTextSize:
-		idx := a11yScaleIndex() + dir
-		if dir > 0 && idx >= len(a11yFontScaleSteps) {
-			idx = len(a11yFontScaleSteps) - 1
-		}
-		if dir < 0 && idx < 0 {
-			idx = 0
-		}
-		if a11yFontScaleSteps[idx] != a11y.fontScale {
-			a11y.fontScale = a11yFontScaleSteps[idx]
-			a11yRefreshFonts()
-			changed = true
-			ShowToast("Text size: "+a11yScaleLabel(), ToastKindInfo)
-		}
+		idx := clampInt(a11yScaleIndex()+dir, 0, len(a11yFontScaleSteps)-1)
+		changed = a11ySetScale(a11yFontScaleSteps[idx])
 	case a11yRowContrast:
 		a11y.highContrast = !a11y.highContrast
 		a11yApplyPalette(config)
@@ -1054,85 +1598,42 @@ func a11yAdjust(dir int, config *Config) {
 		a11yRefreshFonts()
 		ShowToast("Bold text: "+a11yOnOff(a11y.boldText), ToastKindInfo)
 		changed = true
+	case a11yRowMonoAudio:
+		changed = a11ySetMonoAudio(!a11y.monoAudio)
+	case a11yRowAudioBalance:
+		changed = a11ySetAudioBalance(a11y.audioBalance + dir*10)
+	case a11yRowCaptionsAlways:
+		changed = a11ySetCaptionsAlways(!a11y.captionsAlways)
+	case a11yRowCaptionSize:
+		changed = a11ySetCaptionSize((a11y.captionSize + dir + 3) % 3)
+	case a11yRowCaptionBackground:
+		changed = a11ySetCaptionBackground(!a11y.captionBackground)
+	case a11yRowLongPress:
+		changed = a11ySetLongPress(a11y.longPressMs + dir*50)
+	case a11yRowRepeatDelay:
+		changed = a11ySetRepeatDelay(a11y.repeatDelayMs + dir*20)
+	case a11yRowRepeatRate:
+		changed = a11ySetRepeatRate(a11y.repeatRateMs + dir*10)
+	case a11yRowToastDuration:
+		changed = a11ySetToastPercent(a11y.toastPercent + dir*25)
+	case a11yRowStickyChords:
+		changed = a11ySetStickyChords(!a11y.stickyChords)
 	case a11yRowColorblind:
-		idx := a11yColorblindIndex(a11y.colorblind) + dir
-		if idx < 0 {
-			idx = len(a11yColorblindModes) - 1
-		}
-		if idx >= len(a11yColorblindModes) {
-			idx = 0
-		}
-		a11y.colorblind = a11yColorblindModes[idx].key
-		a11yApplyPalette(config)
-		changed = true
+		changed = a11ySetColorblind(config, a11yColorblindStep(dir))
 	case a11yRowButton:
-		if a11y.keys == nil {
-			a11y.keys = map[uint8]uint8{}
-		}
 		button := rows[a11y.cursor].button
-		next := a11yCycleButtonTarget(button, dir)
-		if next == button {
-			delete(a11y.keys, button)
-		} else {
-			a11y.keys[button] = next
-		}
-		// The row the user just moved wins over the preset that covered it.
-		a11yClearSwapFor(button)
-		ShowToast(a11yButtonLabel(button)+" sends "+a11yButtonTargetLabel(button), ToastKindInfo)
-		changed = true
+		changed = a11ySetButtonTarget(button, a11yCycleButtonTarget(button, dir))
 	case a11yRowLayoutPreset:
-		// A preset is a whole state, not a delta: it clears the per-button
-		// entries so the two ways of describing the layout cannot disagree.
 		nintendo := a11y.swapAB && a11y.swapXY && len(a11y.keys) == 0
-		a11y.swapAB, a11y.swapXY = !nintendo, !nintendo
-		a11y.keys = map[uint8]uint8{}
-		if !nintendo {
-			ShowToast("Button layout: Nintendo order · remaps cleared", ToastKindInfo)
-		} else {
-			ShowToast("Button layout: standard order", ToastKindInfo)
-		}
-		changed = true
+		changed = a11ySetLayoutPreset(!nintendo)
 	case a11yRowSelectKey:
-		switch a11ySelectKeyMode() {
-		case a11ySelectDefault:
-			a11ySetSelectKeyMode(a11ySelectSwapped)
-			ShowToast("Select now sends Start", ToastKindInfo)
-		case a11ySelectSwapped:
-			a11ySetSelectKeyMode(a11ySelectDisabled)
-			ShowToast("Select disabled · Start still opens the menu", ToastKindInfo)
-		default:
-			a11ySetSelectKeyMode(a11ySelectDefault)
-			ShowToast("Select restored", ToastKindInfo)
-		}
-		changed = true
+		changed = a11ySetSelectMode(a11ySelectNextMode())
 	case a11yRowOneHanded:
-		a11y.oneHanded = !a11y.oneHanded
-		a11yChordReset()
-		if a11y.oneHanded {
-			ShowToast("One-handed: tap "+a11yChordLabel(a11y.chordButton)+", then a direction", ToastKindInfo)
-		} else {
-			ShowToast("One-handed mode off", ToastKindInfo)
-		}
-		changed = true
+		changed = a11ySetOneHanded(!a11y.oneHanded)
 	case a11yRowChordButton:
-		idx := 0
-		for i, option := range a11yChordButtons {
-			if option.key == a11yChordKey(a11y.chordButton) {
-				idx = i
-			}
-		}
-		if dir < 0 {
-			idx += len(a11yChordButtons) - 1
-		} else {
-			idx++
-		}
-		a11y.chordButton = a11yChordButtons[idx%len(a11yChordButtons)].key
-		a11yChordReset()
-		ShowToast("Chord button: "+a11yChordLabel(a11y.chordButton), ToastKindInfo)
-		changed = true
+		changed = a11ySetChordButton(a11yChordStep(dir))
 	case a11yRowSlowRepeat:
-		a11y.slowRepeat = !a11y.slowRepeat
-		changed = true
+		changed = a11ySetSlowRepeat(!a11y.slowRepeat)
 	case a11yRowPowerMode:
 		// Stepping the named mode reuses the Quick Settings helper, so there is
 		// still exactly one place where a mode becomes live state.
@@ -1148,24 +1649,8 @@ func a11yAdjust(dir int, config *Config) {
 		ShowToast("Vibration: "+level.label, ToastKindInfo)
 		changed = true
 	case a11yRowReset:
-		a11y.fontScale = 1.0
-		a11y.highContrast = false
-		a11y.reduceTransparency = false
-		a11y.increaseContrast = false
-		a11y.boldText = false
-		a11y.colorblind = ""
-		a11y.swapAB = false
-		a11y.swapXY = false
-		a11y.oneHanded = false
-		a11y.chordButton = "l1"
-		a11y.slowRepeat = false
-		a11y.keys = map[uint8]uint8{}
-		a11yChordReset()
-		a11yRefreshFonts()
-		a11yApplyVision()
-		a11yApplyPalette(config)
+		a11yResetDefaults(config)
 		changed = true
-		ShowToast("Accessibility settings reset", ToastKindInfo)
 	}
 	if changed {
 		PlayNavSound()

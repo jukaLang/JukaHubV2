@@ -201,6 +201,20 @@ step (BUILD-4). TEST-13 was dropped, TEST-14 is done, and TEST-3, 4, 5, 7, 8,
 9, 11, 12 and 17, SEC-10, INP-12 and INP-18 were rewritten so that no task adds
 a per-push CI job: 320 tasks in the file.
 
+VPN (**2026-11-11**, unbuilt): Settings → Network → VPN sends the whole device
+through a WireGuard tunnel while it is on and a configuration is set
+([docs/VPN.md](../docs/VPN.md)). On the handheld JukaHub runs its own
+WireGuard (`wg_noise.go`, `wg_device.go`) in a root tunnel process that
+outlives the app's process across Remote Play's screen handoff
+(`vpnd_linux.go`: TUN, `/1` routes, `SO_BINDTODEVICE`, `resolv.conf` with crash
+recovery, handshake timestamps that never go backwards); on Windows it is
+WireGuard for Windows' tunnel service, changed through one permission prompt
+(`vpn_windows.go`). Configurations come from the card, from Files or from the
+companion's VPN card; Quick Settings has the switch and the Wi-Fi meter a lock.
+The handshake and transport were checked against the Linux kernel's WireGuard
+in a network namespace (`tmp/wgref`), and `wg_test.go` replays those
+exchanges. NET-8 is now the device check; follow-ups NET-17 and NET-18.
+
 ## How to use this file (agents read this first)
 
 1. **Pick** the highest-priority task you can actually verify. Tags tell you what
@@ -1008,23 +1022,29 @@ release — a reviewer found `f7e9383b…` in Buildroot only.
 The review behind these is [docs/UX_REVIEW.md](../docs/UX_REVIEW.md) (30
 findings, 21 implemented in November).
 
-### UX-1 — Role-based type scale (P1, M)
-**Why.** Screens still pass literal pixel sizes (the media hub uses seven).
-**Where.** `media_hub_render.go`, `media_hub_sheet.go`, `pkgui.go`, `tbxui.go`,
-`wifiscreen.go`, `toolsgrid.go`, `favorites.go`, `jland_render.go`,
-`homesearch_render.go`, `vksettings.go`; roles in `design.go`.
-**Done when.** Five roles only — Caption 14, Label 16, Body 18, Heading 22,
-Title 28 — through `FontForRole`; no literal sizes outside `design.go`; the Brick
-canvas stays ≥ 12 px.
-**Verify.** [TEST-1](#test-1--a-scene-dump-tool-not-a-test-p1-m-win) dumps of six
-scenes on both canvases reviewed.
+### UX-1 — Role-based type scale (P1, M) [shipped]
+**Shipped.** The whole type scale is five roles in `design.go` — Caption 14,
+Label 16, Body 18, Heading 22, Title 28 (`TypeRole.Size`) — and `FontForRole`
+resolves each role's face at that size through `getFontSized`, so the
+accessibility text size and the legibility floor still apply. Every literal
+pixel size handed to `getFontSized` is gone: 140 call sites across 45 files,
+including the media hub, its sheet, Packages, the text browser, Wi-Fi, Tools,
+Favorites, JLand, Home search and the settings keyboard, now name a role. A
+test scans the package and fails if a literal size comes back, and another
+checks every role stays at or above the 12 px floor on the 960-wide canvas.
+**Remainder.** The scene-dump review on both canvases is TEST-1's [WIN] tool
+pass, not code.
 
-### UX-2 — Each screen shows its name once (P1, S)
-**Why.** The bar shows "JukaHub - <Screen>" while most pages repeat the title in
-a `UIPageHeader` under it.
-**Where.** `header.go`, `extras.go` (`renderStatusBar`), `UIPageHeader` users.
-**Done when.** One pattern everywhere (the page header owns the title, the bar
-shows brand + status), at Heading size or larger.
+### UX-2 — Each screen shows its name once (P1, S) [shipped]
+**Shipped.** The status bar paints the wordmark and the system status only:
+`renderStatusBar` passes `statusBarCaption(scene)`, which contributes nothing,
+so "JukaHub - <Screen>" is gone (Home already drew the bare wordmark). The
+screen's name is its page header's, and `UIPageHeaderDraw` now resolves the
+title through `uiPageHeaderTitleFont`, which is never below `TypeHeading`
+(22 px) and steps to `TypeTitle` (28 px) for a large role or size; subtitles
+and status lines keep their own theme roles. The band and the draw share that
+resolver, so the reserved height matches the face.
+**Remainder.** The two-canvas visual walk is UX-7's [HW] design walk.
 
 ### UX-3 — Copy sweep (P2, S)
 **Done when.** No user-visible `(s)` plurals (use `pluralizeCount`), no `N/A`
@@ -2973,34 +2993,87 @@ both off-thread; focus changes in `focus.go`, Home, Settings, lists and toasts.
 label, value and hint ("Vibration, on, A toggles"); a new focus interrupts the
 old speech (XAG 106); speed and voice are settings; narration of the settings
 dialog itself works.
+**Status.** Out of scope in this environment: narration needs a platform TTS
+engine (Windows SAPI or TrimUI `espeak-ng`) and an audible device to verify
+interruption and voice settings; neither is available in this build environment.
 
-### A11Y-4 — Audio access: mono, balance, captions (P2, S)
-**Where.** `videoplayer.go:1122` forces stereo (`-ac 2`); captions are on/off
-per session (`videosubs.go`).
-**Done when.** Mono audio and L/R balance apply to video, music and UI sounds;
-captions can be always on with size and background settings.
-
-### A11Y-5 — Timing (P2, S)
-**Done when.** Long-press duration, repeat delay/rate (INP-10) and toast
-duration are adjustable; chords can be "sticky" (press in sequence).
+### A11Y-4a — Interface-sound balance on the mono UI device (P3, S) [out of scope]
+**Why.** A11Y-4 shipped mono audio, stereo balance for video and music, and
+always-on/size/background captions. UI sounds use the separate mono S16 UI
+device; SDL cannot pan a mono device, and changing that device to stereo
+previously made the interface sounds play at the wrong pitch and length.
+**Status.** Out of scope here: a safe fix needs a new stereo UI-output path
+and a hardware listen test, not a flag or a helper. The mono UI path already
+matches the Mono audio setting by construction.
 
 ### A11Y-6 — Accessibility is a Settings section (P2, S)
-**Why.** It is a modal reached from Display & theme or the Start menu.
-**Done when.** Settings has an Accessibility section with every row; a shortcut
-(hold Select + Start for 3 s, or Win+Ctrl+Enter-like chord on keyboard) toggles
-narration.
+**Shipped.** Settings → Accessibility is an ordinary rail section
+(`a11y_settings.go`) with a row for every setting the panel carries: text size,
+high contrast, reduce transparency, increase contrast, bold text, the
+colour-blind palettes, mono audio and balance, the caption rows, the timing
+rows, button layout and the six per-button remaps, Select, one-handed mode and
+its chord button, key repeat, power mode, vibration strength and Reset. Each row
+calls the same setter the panel uses, so a change is live at once and saved; the
+Start menu's Accessibility entry opens the section, and Display & theme keeps its
+shortcut to the panel.
 
-### A11Y-7 — Magnifier (P3, M)
-**Done when.** A zoom lens (2×/3×) follows the focus, toggled from Quick
-Settings; uses a render-target copy, bounded memory.
+### A11Y-6a — The narration shortcut (P3, S) [out of scope]
+**Why.** The other half of A11Y-6 was a shortcut — hold Select + Start for three
+seconds, or a Win+Ctrl+Enter-like chord — that toggles narration. Narration is
+A11Y-1, which is out of scope in this environment: it needs a platform TTS
+engine (Windows SAPI or TrimUI `espeak-ng`) and an audible device to verify
+interruption and voice settings.
+**Status.** Out of scope for the same reason as A11Y-1; until narration exists
+the shortcut has nothing to toggle.
 
-### A11Y-8 — Reading fonts (P3, S)
-**Done when.** Atkinson Hyperlegible (OFL) is offered as an interface font;
-licence noted in `docs/DEPENDENCIES.md`.
+### A11Y-7 — Magnifier (P3, M) [shipped]
+**Shipped.** Quick Settings has a Magnifier switch; with it on, a 2×/3× lens
+sits beside the focused control (below it, or above it when there is no room)
+and enlarges a bounded copy of the finished frame (`magnifier.go`). The copy is
+one read-back of the lens-sized region per refresh (at most ten a second, sooner
+when the focus moves) uploaded into a single reusable streaming texture, so
+memory stays at one lens-sized buffer and nothing is re-rendered. The lens never
+covers its own source, which is what keeps the copy from feeding the picture
+back into itself. Settings → Accessibility carries the same switch plus the
+2×/3× choice, both persisted with the rest of the accessibility store. Quick
+Settings now caps its height and scrolls its rows, so the extra switch fits a
+720-line screen.
+**Why not a render target.** Re-rendering every screen into an offscreen target
+would double the frame cost on the tile-based handheld GPU; reading back the one
+region is the cheaper copy of the same picture, and the memory is still bounded
+by the lens rectangle.
 
-### A11Y-9 — Switch access (P3, L)
-**Done when.** A one- or two-button scanning mode walks the focus graph
-(`focus.go` `BuildGraph`) with a configurable interval.
+### A11Y-8 — Reading fonts (P3, S) [shipped]
+**Shipped.** Settings -> Accessibility has **Legible reading font**. With it on,
+every UI role resolves its face through `homeUIFontForRole`, which picks the
+first installed face from a fixed chain — Atkinson Hyperlegible, Lexend,
+Verdana, Tahoma, Segoe UI — out of the system font folders, using that face's
+bold cut for Bold text when it has one, and keeping bundled Inter when none is
+installed (`legiblefont.go`, `home_fonts.go`, `core.go`). The choice lives in
+the accessibility store (`a11y_legible_font`), survives load and reset, and
+drops the font and label caches so the whole UI redraws in the new face
+without a restart. A face that fails to open falls back to Inter, so text is
+never blank.
+**Remainder (parked).** Atkinson Hyperlegible itself is not bundled and its
+OFL licence text is not in the repository; adding the file, its entry in
+`docs/DEPENDENCIES.md` and the installer asset lists is a licensing/asset
+change, not a code change. The setting already uses the face wherever the
+device has it installed, and `docs/ACCESSIBILITY.md` records the key.
+
+### A11Y-9 — Switch access (P3, L) [shipped]
+**Shipped.** Settings -> Accessibility has Switch access (Off, One button, Two
+buttons) and Scan interval (0.8 s to 3 s), both persisted with the rest of the
+accessibility store. With it on, the focus walks the scene's focus graph in the
+order the scene declares its controls, one control at a time; one button
+presses A on the highlighted control, two buttons add B as an early next, and
+the dwell restarts after every press. It moves the same focus the d-pad moves
+(`FocusEngine.ScanStep`, `focus.go`), so every screen's ring, hints and
+activation path apply unchanged, and it stands aside while the on-screen
+keyboard is up. The loop ticks it once a frame and the pad hook sits just
+before the screen's own bindings, so overlays still own their buttons
+(`switchaccess.go`, `main.go`).
+**Done when.** A one- or two-button scanning mode walks the focus graph with a
+configurable interval. Shipped as above.
 
 ---
 
@@ -3087,11 +3160,41 @@ probe result is recorded either way.
 (credentials in the secret store), browsed, copied from, and used as a read-only
 ROM or media source with local caching.
 
-### NET-8 — VPN that can be switched on (P3, M)
-**Where.** `smart_home.go` (Tailscale up/down, WireGuard interfaces listed only).
-**Done when.** A WireGuard config can be imported (file or QR) and brought
-up/down from Quick Settings, with status in the Wi-Fi chip; Tailscale shows its
-IP and peers.
+### NET-8 — Check the VPN on the device (P2, S) [HW]
+**Why.** The VPN (Settings → Network → VPN) was written without a device or a
+toolchain; its protocol was checked against the kernel's WireGuard, its routes
+and sockets in a network namespace, but never on the TrimUI's kernel.
+**Where.** `vpn.go`, `vpn_linux.go`, `vpnd_linux.go`, `wg_*.go`,
+`docs/VPN.md`.
+**Done when.** On a Smart Pro and a Brick: a provider's `.conf` imported from
+the card and from the phone connects within seconds of switching the VPN on
+(the row says Connected; Logs show "connected to …"); the browser shows the
+VPN's address; netplay and a PS Remote Play stream away from home go through
+it while the LAN (companion, FTP, Remote Play at home) stays reachable;
+switching it off restores the routes and `resolv.conf`; a cold boot with the
+clock in the past still connects; `kill -9` of the tunnel process falls back
+to Wi-Fi and the next start restores `resolv.conf`. Whether the firmware has
+`/dev/net/tun` (or the `tun` module) and runs JukaHub as root is recorded here
+either way. On Windows, with WireGuard for Windows installed: one prompt per
+change, a service named JukaHub, the LAN still reachable.
+**Status 2026-11-11.** Code done, unbuilt; `wg_test.go` replays the kernel
+transcripts and is the first thing to run (`go test -run TestWG ./...`).
+
+### NET-17 — A VPN kill switch (P3, S) [HW]
+**Why.** While the VPN is on, a tunnel process that dies takes its routes with
+it and the device falls back to its normal connection until the worker starts
+a new one (5 s to a minute): traffic leaks meanwhile.
+**Where.** `vpnd_linux.go`, `vpn.go`.
+**Done when.** An optional "Block traffic while the VPN is down" adds
+unreachable `0.0.0.0/1` and `128.0.0.0/1` routes at a higher metric than the
+tunnel's, which outlive the tunnel process and go when the VPN is switched off
+(and at boot); the LAN route still wins.
+
+### NET-18 — Tailscale's address and peers (P3, S)
+**Why.** The old NET-8 asked for it; `smart_home.go` only switches Tailscale.
+**Where.** `smart_home.go` (`parseTailscaleStatus`), `smart_home_ui.go`.
+**Done when.** The Tailscale row shows this device's Tailscale address and
+lists the peers (name, address, online) from `tailscale status --json`.
 
 ### NET-9 — mDNS discovery (P2, M)
 **Why.** Peers are found by UDP broadcast only; mDNS/DNS-SD is how phones,
@@ -3545,6 +3648,7 @@ From the liquid background, animated wallpaper and Screen Share pass: GPU-5,
 PERF-17, PERF-18, SYS-18.
 From the APK Store, Voice command and spatial audio pass: AND-17, INP-20,
 SND-7, SND-8, SND-13, GAME-17.
+From the VPN pass: NET-8, NET-17.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 

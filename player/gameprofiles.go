@@ -512,9 +512,9 @@ func validateGameProfile(p *GameProfile) error {
 	}
 	p.Display = strings.ToLower(strings.TrimSpace(p.Display))
 	switch p.Display {
-	case "", windowsDisplayAuto, windowsDisplayX11, windowsDisplayWayland, windowsDisplayWeston, windowsDisplayHeadless:
+	case "", windowsDisplayAuto, windowsDisplayX11, windowsDisplayWayland, windowsDisplayWeston, windowsDisplayWestonGL, windowsDisplayHeadless:
 	default:
-		return fmt.Errorf("invalid display %q (use auto, x11, wayland, weston or headless)", p.Display)
+		return fmt.Errorf("invalid display %q (use auto, x11, wayland, weston, weston-gl or headless)", p.Display)
 	}
 	if len(p.Env) > gameProfileMaxEnv {
 		return fmt.Errorf("more than %d environment variables", gameProfileMaxEnv)
@@ -704,9 +704,10 @@ func resolveProfileFile(base, name string) (string, error) {
 	return real, nil
 }
 
-// planGameRuntime builds the command that actually starts the game. Wine is
-// run directly when it is a native ARM binary or wrapper script; an x86 Wine
-// ELF is prefixed with Box64.
+// planGameRuntime builds the command that actually starts the game. Wine and
+// Box64 come from resolveWineRT and box64Launch (wine_runtime.go): JukaHub's
+// own runtime through its wrapper scripts, run with sh, or another Wine with
+// Box64 in front when it is an x86 program on an ARM device.
 func planGameRuntime(p GameProfile, exe string, lookPath func(string) (string, error)) (string, []string, error) {
 	args := append([]string{}, p.Args...)
 	switch p.Runtime {
@@ -730,24 +731,23 @@ func planGameRuntime(p GameProfile, exe string, lookPath func(string) (string, e
 		}
 		return sh, append([]string{exe}, args...), nil
 	case gameRuntimeBox64:
-		box, err := resolveBox64(lookPath)
+		command, lead, err := box64Launch(lookPath)
 		if err != nil {
 			return "", nil, err
 		}
-		return box, append([]string{exe}, args...), nil
+		return command, append(append(lead, exe), args...), nil
 	case gameRuntimeWine:
-		wine, err := resolveWine(lookPath)
+		if IsWindows() {
+			// Windows runs the program itself; planWineRuntime does the same
+			// at launch, so the profile is listed as ready, not "wine not
+			// found".
+			return exe, args, nil
+		}
+		rt, err := resolveWineRT(lookPath)
 		if err != nil {
 			return "", nil, err
 		}
-		if needsBox64(wine) {
-			box, boxErr := resolveBox64(lookPath)
-			if boxErr != nil {
-				return "", nil, fmt.Errorf("wine is x86 and needs box64: %w", boxErr)
-			}
-			return box, append([]string{wine, exe}, args...), nil
-		}
-		return wine, append([]string{exe}, args...), nil
+		return rt.Command, rt.args(append([]string{exe}, args...)...), nil
 	default:
 		return "", nil, fmt.Errorf("unknown runtime %q", p.Runtime)
 	}
@@ -758,6 +758,8 @@ func resolveBox64(lookPath func(string) (string, error)) (string, error) {
 		return absoluteRegularFile(override)
 	}
 	candidates := []string{
+		// JukaHub's own Box64, from the Windows app runtime pack.
+		filepath.Join(winePackDir(), "box64", "box64"),
 		"/usr/trimui/bin/box64",
 		"/mnt/SDCARD/Apps/Box64/box64",
 		"/mnt/SDCARD/Apps/box64/box64",
@@ -783,8 +785,11 @@ func resolveWine(lookPath func(string) (string, error)) (string, error) {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_WINE")); override != "" {
 		return absoluteRegularFile(override)
 	}
+	// JukaHub's own wrapper only counts while what it runs is still there
+	// (and, for the old Hangover install, while this firmware can load it).
+	own := filepath.Join(windowsRuntimeDir(), "bin", "wine")
 	candidates := []string{
-		filepath.Join(windowsRuntimeDir(), "bin", "wine"),
+		own,
 		filepath.Join(windowsRuntimeDir(), "wine"),
 		"/usr/trimui/bin/wine",
 		"/usr/trimui/bin/wine64",
@@ -796,7 +801,7 @@ func resolveWine(lookPath func(string) (string, error)) (string, error) {
 		"/mnt/SDCARD/PortMaster/runtimes/wine/bin/wine",
 	}
 	for _, candidate := range candidates {
-		if regularFile(candidate) {
+		if regularFile(candidate) && (candidate != own || wineWrapperUsable(candidate)) {
 			return candidate, nil
 		}
 	}
@@ -825,8 +830,9 @@ func absoluteRegularFile(path string) (string, error) {
 	return abs, nil
 }
 
-// needsBox64 reports whether path is an x86 ELF, which an ARM device cannot
-// execute directly. Scripts and ARM binaries return false.
+// needsBox64 reports whether path is an x86 ELF this device cannot execute
+// directly (an ARM device; an x86-64 PC runs it natively). Scripts and ARM
+// binaries return false.
 func needsBox64(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -842,7 +848,7 @@ func needsBox64(path string) bool {
 	}
 	// e_machine is little-endian for the x86 ELFs we care about.
 	machine := uint16(header[18]) | uint16(header[19])<<8
-	return machine == 0x03 || machine == 0x3E
+	return (machine == 0x03 || machine == 0x3E) && !hostRunsX86(machine)
 }
 
 // launchGameProfile re-resolves the profile (the SD card may have changed since
@@ -858,6 +864,9 @@ func launchGameProfile(entry gameProfileEntry) error {
 	gameDir, exe, err := resolveGameProfilePaths(entry.Profile, gameProfileRoots())
 	if err != nil {
 		return err
+	}
+	if entry.Profile.Runtime == gameRuntimeWine {
+		return launchWineProfile(entry, gameDir, exe)
 	}
 	command, args, err := planGameRuntime(entry.Profile, exe, exec.LookPath)
 	if err != nil {
@@ -893,24 +902,6 @@ func launchGameProfile(entry gameProfileEntry) error {
 			return buildErr
 		}
 	}
-	if entry.Profile.Runtime == gameRuntimeWine {
-		if !hasEnvKey(env, "WINEPREFIX") {
-			prefix := filepath.Join(gameProfilesDir(), "wineprefix")
-			if err := os.MkdirAll(prefix, 0o755); err != nil {
-				return fmt.Errorf("create wine prefix: %w", err)
-			}
-			env["WINEPREFIX"] = prefix
-		}
-		applyWineCompatibilityEnv(env)
-		// Route through WestonPack when the handheld has no X11/Wayland.
-		// The wrapper owns the compositor and receives the profile's
-		// environment explicitly, so WINEPREFIX and DLL overrides survive.
-		command, args, err = wrapWineCommand(entry.Profile.Display, command, args, env, currentWineHost())
-		if err != nil {
-			return err
-		}
-	}
-
 	cmd := exec.Command(command, args...)
 	cmd.Dir = gameDir
 	cmd.Env = mergeGameProfileEnv(os.Environ(), env)
@@ -945,6 +936,46 @@ func launchGameProfile(entry gameProfileEntry) error {
 		androidPakStageRelease(stageDir, stageGen)
 	}
 	return startErr
+}
+
+// launchWineProfile starts a Wine profile the way Windows Apps starts an app
+// (wineStart, windowsapps.go): the same runtime, display, pad and clean-up, on
+// a goroutine, with the progress and failures reported from there. The
+// profile's env wins over the runtime's defaults, its "display" picks the
+// display, and its log is the profile's. It runs on the main thread (the Game
+// Profiles panel), which is where the settings the launch needs are read.
+func launchWineProfile(entry gameProfileEntry, gameDir, exe string) error {
+	id := entry.Profile.ID
+	env := cloneGameProfileEnv(entry.Profile.Env)
+	if !hasEnvKey(env, "WINEPREFIX") && !IsWindows() {
+		// JukaHub's old default for profiles: the runtime keeps it only where a
+		// prefix already is (chooseWinePrefix), else it uses the shared one.
+		env["WINEPREFIX"] = filepath.Join(gameProfilesDir(), "wineprefix")
+	}
+	wineLaunchSettingsTake(appConfig)
+	return wineStart(wineLaunch{
+		Title:   entry.Profile.Title,
+		Key:     "profile:" + id,
+		Exe:     exe,
+		Args:    append([]string{}, entry.Profile.Args...),
+		Dir:     gameDir,
+		Env:     env,
+		Display: entry.Profile.Display,
+		LogPath: filepath.Join(gameProfilesLogsDir(), id+".log"),
+		Started: func(pid int) {
+			gameProfileSetRunning(id, pid)
+			trophyEvent(tkGameLaunch) // a PC game (a Wine profile) started
+			trophyEventDistinct(tkGameTitles, id)
+		},
+		Ended: func(error) { gameProfileSetRunning(id, 0) },
+		Failed: func(err error, logPath string) {
+			msg := entry.Profile.Title + ": " + firstLine(err.Error())
+			if logPath != "" {
+				msg += " · log: " + filepath.Base(logPath)
+			}
+			ShowToast(msg, ToastKindError)
+		},
+	})
 }
 
 // gameProfileLogMaxBytes caps one game's launch log. Every launch appends a

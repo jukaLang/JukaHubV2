@@ -245,7 +245,8 @@ no footer names may have no key.
 | Downloads | Left / Right tabs · X remove · Y pause | Left / Right or Tab · X · Y |
 | Save manager | X delete | X or Del |
 | Curation Hub | X · Y | X or Del · Y; R refreshes |
-| Game profiles, Windows apps | X · Y | X · Y or R |
+| Game profiles | X · Y | X · Y or R |
+| Windows apps | X setup · Y display · Start rescan | X · Y or D · R or F5 |
 | APK Store | A options · X details · Y rescan · L1 / R1 tabs | Enter · X or Del · Y · Tab / Shift+Tab or PgUp / PgDn |
 | Power tools, Memory scanner | X · Y | X · Y (R picks the target in the scanner) |
 | Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
@@ -373,6 +374,12 @@ Select + L1 may be one of its shortcuts (often *Load State*): change that
 shortcut or leave this switch off. While the pad is the mouse, neither the
 game nor the firmware's own pad shortcuts see its buttons, and an alarm that
 rings gives the pad back to JukaHub.
+
+A **Windows program** (Windows Apps, a Wine game profile) gets the mouse
+without the switch: the pad is its mouse from the start, the D-pad types arrow
+keys and a few buttons type Enter, Esc, Tab and Space, and Select + Start
+closes the window (held, it ends the program). The table is under
+[Windows apps](#windows-apps).
 
 ### Stick calibration
 
@@ -1019,9 +1026,12 @@ those launcher scripts belong to the firmware, and the standalone emulators
 upstream publishes are desktop builds that would install a launcher that cannot
 start. On Windows the same keys install and update a portable RetroArch, its
 cores from the buildbot's Windows tree, and the standalone emulators from their
-official releases.
+official releases. Whatever JukaHub installed — cores, hakuX, those Windows
+emulators — is also kept current without a press by the daily **Emulator
+updates** pass (Settings → Games & emulators; Install automatically by
+default), which keeps the replaced version for the same roll back.
 
-### Xbox (hakuX on the Smart Pro)
+### Xbox (hakuX on the Smart Pro, xemu on Windows) and Xbox 360 (Windows)
 
 The **Xbox** tile is always on the page. What it offers depends on the device:
 
@@ -1033,25 +1043,45 @@ The **Xbox** tile is always on the page. What it offers depends on the device:
 | Smart Pro S | Not supported: the port is built for the Smart Pro's A133P and PowerVR GPU; no build exists for the A523 |
 | Windows | xemu, installed from its official release; **Y** on its tile opens the BIOS checklist |
 
-On the handheld tile, **X** installs or updates hakuX, **A** opens the Xbox
-games in the Games Library (before the install, the setup sheet), **Y** opens
-the setup sheet and **R1** rolls the last update back; **L1** includes hakuX
-when JukaHub installed it. The install:
+The Xbox 360 is played on Windows only, by Xenia Canary (below). On a handheld
+a `Roms/XBOX360` folder shows a **Not supported** tile that says why: Xenia
+needs a 64-bit x86 CPU with AVX and a Direct3D 12 or Vulkan GPU.
 
-1. asks GitHub for the newest release (pre-releases included, since an
-   experimental port may publish nothing else) and takes its
-   `xbox-trimui-smart-pro-v<version>.zip`;
+#### hakuX on the Smart Pro
+
+On the handheld tile, **X** installs or updates hakuX, **A** opens the Xbox
+games in the Games Library (before the install, the setup sheet, where **X**
+installs too), **Y** opens the setup sheet and **R1** rolls the last update
+back, in the background like the install; **L1** includes hakuX when JukaHub
+installed it, and the daily **Emulator updates** pass updates it by itself
+(never during a game; a version you rolled back from is not put back). While
+a download runs, the sheet's subtitle shows its progress.
+The install:
+
+1. asks GitHub for the newest release, and for the newest pre-release when no
+   release carries the package (an experimental port may publish nothing
+   else), and takes its `xbox-trimui-smart-pro-v<version>.zip`; between two
+   packages of one version the final release wins over its release candidate
+   (`0.1.3` over `0.1.3-rc1`), and an installed final release is never
+   "updated" to a candidate;
 2. checks the download against GitHub's SHA-256 digest for that file, and
    against a checksum file attached to the release when there is one; the
    download's SHA-256 is recorded either way;
 3. unpacks it into `Apps/JukaHub/data/hakux/stage/` on the same card and only
    then merges the package's `Data/` and `Emus/` folders into the card's root,
-   file by file. Files the package does not ship (saves, shader caches,
-   settings) are never touched; a file it replaces is kept in
-   `Apps/JukaHub/data/hakux/backup/`, which is what **R1** restores; a merge
-   that fails half way puts back everything it moved;
+   file by file. Files no version of the package shipped (saves, shader
+   caches, settings) are never touched; a file it replaces is kept in
+   `Apps/JukaHub/data/hakux/backup/`, which is what **R1** restores. A file
+   the previous version installed and the new one no longer ships goes into
+   that kept copy too, if it is still exactly as installed (a changed one is
+   hakuX's or yours by now and stays). A merge that fails half way puts back
+   everything it moved;
 4. writes `Emus/XBOX/.jukahub-hakux.json`: the release, the asset URL, the
    digest, how the download was verified and every file laid down.
+
+A failed install says why in plain words: no connection, GitHub limiting
+downloads, a download that was cut off or arrived damaged, a full card, or a
+clock so far off that the secure connection fails.
 
 Games go in `Roms/XBOX` as `.iso` (XISO) images and start through the
 package's own `Emus/XBOX/launch.sh`, like any other system. In a game,
@@ -1069,6 +1099,50 @@ Set expectations accordingly: this is an experimental port on a handheld with
 1 GB of RAM. Not every game boots, 30 fps is a target rather than a promise, and
 some games show graphics glitches. JukaHub installs the published package;
 rebuilding it from the port's source is not automated.
+
+#### xemu on Windows
+
+**A** or **X** on the xemu tile installs xemu from its official GitHub release
+(`xemu-project/xemu`): the Windows x64 build, `xemu-<version>-windows-x86_64.zip`
+or its older name `xemu-win-x86_64-release.zip`, never the debug build or the
+symbols published beside it. A JukaHub built for Windows on ARM takes the ARM64
+build and falls back to the x64 one. The install also fetches the free
+hard-disk image the xemu project publishes (`xbox_hdd.qcow2` from
+`xemu-project/xemu-dashboard`) into `BIOS\xbox` next to JukaHub (in its data
+folder when JukaHub's own folder is read-only).
+
+What xemu cannot ship is the Xbox's own firmware: the MCPX boot ROM
+(`mcpx_1.0.bin`, 512 bytes) and a flash ROM (BIOS, such as `Complex_4627.bin`)
+are your own dumps; JukaHub never downloads them. **Y** on the xemu tile opens
+the checklist: what each file is, where it goes, which ones were found (the boot
+ROM's MD5 tells a good dump from the known-bad one), and buttons to fetch the
+HDD image, open the folder and apply. The sheet looks again every few seconds,
+so files dropped into the folder turn green while it is open. **Apply** writes
+the files into xemu's own `xemu.toml` (`[sys.files]`); starting xemu from its
+tile does the same when the files are there, and the tile says while something
+is still missing.
+
+Games go in `Roms\XBOX` as `.iso` or `.xiso` images and start from the Games
+Library full screen, with xemu's documented `-full-screen -dvd_path <image>`.
+A game started while a file is still missing does not open an xemu window that
+cannot boot it: JukaHub says which file is missing and where it goes.
+
+#### Xenia Canary (Xbox 360) on Windows
+
+**A** or **X** on the Xenia Canary tile — or on the tile of a `Roms\XBOX360`
+folder that has games but no emulator yet — installs Xenia Canary from its
+official releases (`xenia-canary/xenia-canary`). Canary has no version
+numbers: every build is its own release, tagged after its commit
+(`7a7b089_canary_experimental`) and marked Latest, and its Windows build is
+`xenia_canary_windows.7z` (older builds were `.zip`), unpacked with 7-Zip like
+PCSX2. A newer build shows as an update like any other emulator's, and **R1**
+puts the previous one back.
+
+Xenia needs no console files, but it does need a 64-bit x86 CPU with AVX, a
+Direct3D 12 or Vulkan GPU and the Microsoft Visual C++ Redistributable (x64);
+the tile and the install toast say when that runtime is missing. Games go in
+`Roms\XBOX360` as `.iso` images, which the Games Library lists under
+**Xbox 360** and starts with `xenia_canary.exe "<game>" --fullscreen=true`.
 
 ## Game profiles
 
@@ -1093,19 +1167,37 @@ closes the panel.
 ## Windows apps
 
 Open **Start → Windows Apps**, or the pinned **Windows Apps** row in
-**Emulators**. The panel lists discovered `.exe` files and launches basic
-Windows programs through Wine. On TrimUI's no-X11 firmware it can use
-WestonPack's DRM/KMS compositor; see [WINDOWS_APPS.md](WINDOWS_APPS.md).
+**Emulators**. The panel lists the Windows programs it found and starts them:
+through Box64 and Wine inside WestonPack on the handheld, directly on Windows;
+see [WINDOWS_APPS.md](WINDOWS_APPS.md).
 
 | Button | Action |
 |--------|--------|
 | D-pad Up / Down | Move through apps |
-| A | Launch the selected app |
-| X / H | Show the runtime setup page |
-| Y / R | Rescan the app folders |
+| A | Start the selected app; its row shows the progress (the first start prepares Windows for a few minutes) |
+| Y | Display for this app: Windows (GDI) or OpenGL (handheld) |
+| X | The runtime setup page (handheld) |
+| Start | Rescan the app folders |
 | B | Close setup, then the launcher |
 
-Tapping a row launches it; tapping outside closes the panel.
+On a keyboard, **Enter** starts, **Y** or **D** switches the display, **X** or
+**H** opens setup, **R** or **F5** rescans and **Esc** goes back. Tapping a row
+starts it; tapping outside closes the panel.
+
+While a Windows program runs on the handheld, the pad is its mouse and types a
+few keys:
+
+| Button | In the Windows program |
+|--------|------------------------|
+| Either stick | Move the pointer |
+| D-pad | Arrow keys (on the Brick, which has no sticks, the pointer) |
+| A / B / X | Left / right / middle click (hold A to drag) |
+| L2 / R2 | Wheel up / down |
+| Y | Esc |
+| Start | Enter |
+| L1 / R1 | Tab / Space |
+| Select + Start | Alt+F4 (close the window); held 2 s, end the program |
+| Select + L1 (hold), Menu | Give the pad to the program as a gamepad (Select + L1 again takes it back) |
 
 ## PortMaster ports
 

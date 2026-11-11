@@ -1,0 +1,9 @@
+{
+  "yt-dlp": {
+    "tag": "2026.10.26",
+    "asset": "yt-dlp.exe",
+    "sha256": "f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d",
+    "verified": true,
+    "installed_at": "2026-11-11T04:34:20Z"
+  }
+}

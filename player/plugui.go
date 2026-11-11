@@ -419,10 +419,10 @@ func plugHints() []FooterHint {
 func plugRender(renderer *sdl.Renderer, c *Config) {
 	drawAppBackdrop(renderer, c, screenWidth, screenHeight)
 	plugEnsureVisit(c)
-	title := getFontSized(c, "medium", 19)
-	small := getFontSized(c, "small", 15)
-	big := getFontSized(c, "medium", 24)
-	body := getFontSized(c, "small", 16)
+	title := FontForRole(c, TypeBody)
+	small := FontForRole(c, TypeLabel)
+	big := FontForRole(c, TypeHeading)
+	body := FontForRole(c, TypeLabel)
 	if title == nil || small == nil || big == nil || body == nil {
 		renderStatusBar(renderer, c)
 		renderFooter(renderer, c)

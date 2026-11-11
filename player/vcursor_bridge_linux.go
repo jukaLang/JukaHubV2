@@ -35,6 +35,14 @@ package main
 // Nothing JukaHub draws is on screen during a game, so the feedback is the
 // vibration motor: a firm pulse when the mouse comes on, a short one when it
 // goes, a long one when it could not.
+//
+// A Windows program (a Wine session through WestonPack) gets the same bridge
+// differently (wineInputStart): the device is made before Weston starts, so
+// Weston finds it, whatever the switch says; the pad is the mouse from the
+// start; the device also types the keys of the Windows-app layout (layoutKey,
+// vcursor_evdev.go); and the chord or Menu only lets go of the pad — the
+// device stays until the session ends, because a compositor that looks for
+// devices once would not find a new one.
 
 import (
 	"errors"
@@ -77,10 +85,20 @@ var mbridge struct {
 	want atomic.Bool
 }
 
+// wineInput is the bridge lent to a Windows-app session (wineInputStart): at
+// most one, from before its program starts until the session ends.
+var wineInput struct {
+	mu      sync.Mutex
+	running bool
+	stop    chan struct{}
+	done    chan struct{}
+	once    *sync.Once
+}
+
 func init() {
 	// Quitting gives the pad back and removes the mouse even with a game
 	// still running.
-	Cleanup = append(Cleanup, mbridgeShutdown)
+	Cleanup = append(Cleanup, mbridgeShutdown, wineInputShutdown)
 }
 
 // vcursorBridgeSupported reports whether this device can lend its pad to a
@@ -91,7 +109,8 @@ func vcursorBridgeSupported() bool { return IsTrimuiDevice() }
 // game owns the screen. It mirrors the switch for the goroutine and starts
 // one per game while the switch is on; the goroutine ends with the game.
 func vcursorBridgeTick(config *Config) {
-	want := vcursorGamesEnabled(config) && vcursorBridgeSupported()
+	// A Windows-app session has the pad already (wineInputStart).
+	want := vcursorGamesEnabled(config) && vcursorBridgeSupported() && !wineInputActive()
 	mbridge.want.Store(want)
 	if !want {
 		return
@@ -134,8 +153,140 @@ func mbridgeShutdown() {
 	}
 }
 
+// wineInputActive reports a Windows-app session holding the pad.
+func wineInputActive() bool {
+	wineInput.mu.Lock()
+	defer wineInput.mu.Unlock()
+	return wineInput.running
+}
+
+// wineInputStart lends the pad to a Windows-app session until the returned
+// stop is called: the device ("JukaHub Mouse", with the keys of the
+// Windows-app layout) is made and the pad grabbed now, before the program and
+// its compositor start, so they find the device; Select + L1 or Menu lets go
+// of the pad and Select + L1 takes it again. quit (may be nil) is called, on a
+// goroutine of its own, when Select + Start are held to end the program. p is
+// read on the main thread (mbridgeParamsFor) or is mbridgeDefaultParams: the
+// goroutine reads no config. An error means the pad stays the program's.
+func wineInputStart(p mbridgeParams, quit func()) (func(), error) {
+	if !vcursorBridgeSupported() {
+		return func() {}, errors.New("this device cannot lend its pad as a mouse")
+	}
+	p.keys = true
+	wineInput.mu.Lock()
+	defer wineInput.mu.Unlock()
+	if wineInput.running {
+		return func() {}, errors.New("the pad is already a mouse for another Windows program")
+	}
+	s := &mbridgeSession{padFD: -1, mouseFD: -1, buf: make([]byte, mbridgeReadEvents*evdevEventSize), wine: true, wantOn: true, quit: quit}
+	s.eng.p = p
+	now := time.Now()
+	if err := s.openPad(now); err != nil {
+		return func() {}, err
+	}
+	if err := s.mouseOn(now); err != nil {
+		s.closeAll()
+		return func() {}, err
+	}
+	stop, done, once := make(chan struct{}), make(chan struct{}), &sync.Once{}
+	wineInput.running, wineInput.stop, wineInput.done, wineInput.once = true, stop, done, once
+	go mbridgeRunWine(s, stop, done)
+	return func() { wineInputStop(stop, done, once) }, nil
+}
+
+// wineInputStop ends a Windows-app session's bridge and waits a moment for the
+// pad to be given back; the kernel lets go of it with JukaHub anyway.
+func wineInputStop(stop chan struct{}, done chan struct{}, once *sync.Once) {
+	once.Do(func() { close(stop) })
+	select {
+	case <-done:
+	case <-time.After(2 * mbridgeExitGrace):
+		logWarn("vcursor", "the Windows-app mouse did not stop within %s", 2*mbridgeExitGrace)
+	}
+}
+
+// wineInputShutdown is the Cleanup hook for a session still running when
+// JukaHub quits.
+func wineInputShutdown() {
+	wineInput.mu.Lock()
+	running, stop, done, once := wineInput.running, wineInput.stop, wineInput.done, wineInput.once
+	wineInput.mu.Unlock()
+	if running && once != nil {
+		wineInputStop(stop, done, once)
+	}
+}
+
+// mbridgeRunWine is a Windows-app session's goroutine: the pad stays the
+// mouse until the session ends (stop), the user hands it back (the chord or
+// Menu, and the chord again takes it), or an alarm rings — JukaHub then needs
+// the pad, and the mouse comes back once the alarm is done.
+func mbridgeRunWine(s *mbridgeSession, stop <-chan struct{}, done chan<- struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			logWarn("vcursor", "Windows-app mouse stopped after a fault: %v", r)
+		}
+	}()
+	defer func() {
+		wineInput.mu.Lock()
+		wineInput.running = false
+		wineInput.mu.Unlock()
+		close(done)
+	}()
+	defer s.closeAll()
+	var retryAt time.Time
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		now := time.Now()
+		if alarmFiringActive() {
+			// The pad is let go and closed (the device stays): the presses
+			// that answer the alarm must not reach the program afterwards as
+			// clicks. It is opened afresh once the alarm is done.
+			if s.padFD >= 0 {
+				s.close()
+			}
+			time.Sleep(4 * mbridgeWatchEvery)
+			continue
+		}
+		if s.padFD < 0 {
+			if now.Before(retryAt) {
+				time.Sleep(4 * mbridgeWatchEvery)
+				continue
+			}
+			if err := s.openPad(now); err != nil {
+				s.note("no pad to watch: " + err.Error())
+				retryAt = now.Add(mbridgeRetryEvery)
+				continue
+			}
+		}
+		if s.wantOn && !s.eng.on {
+			// Back after an alarm or a pad that went away and came back. A
+			// failure is buzzed once; the chord tries again.
+			if err := s.mouseOn(now); err != nil {
+				s.wantOn = false
+			}
+		}
+		if err := s.step(now); err != nil {
+			s.note("lost the pad: " + err.Error())
+			s.close()
+			retryAt = now.Add(mbridgeRetryEvery)
+			continue
+		}
+		if s.eng.on {
+			time.Sleep(mbridgeMoveEvery)
+		} else {
+			time.Sleep(mbridgeWatchEvery)
+		}
+	}
+}
+
 // mbridgeSession is one game's bridge: the pad, the mouse and the engine
-// between them. The goroutine owns it.
+// between them. The goroutine owns it. wine marks a Windows-app session
+// (wineInputStart): its device stays between toggles, wantOn is whether the
+// user wants the pad to be the mouse, and quit ends the program.
 type mbridgeSession struct {
 	eng      mbridgeEngine
 	padFD    int
@@ -149,6 +300,9 @@ type mbridgeSession struct {
 	events   []evdevEvent
 	out      []evdevEvent
 	lastNote string
+	wine     bool
+	wantOn   bool
+	quit     func()
 }
 
 // mbridgeRun is the goroutine: it watches the pad while the game runs and
@@ -314,20 +468,39 @@ func (s *mbridgeSession) step(now time.Time) error {
 		if err := s.writeEvents(s.mouseFD, out); err != nil {
 			s.note("the mouse stopped: " + err.Error())
 			s.mouseOff(now, false)
+			if s.wine {
+				// A device that cannot be written to is gone for good.
+				s.destroyMouse()
+				s.wantOn = false
+			}
 			return nil
+		}
+	}
+	if s.eng.quit {
+		// Select + Start held in a Windows program: end it. quit signals
+		// and waits, so it runs beside the bridge.
+		s.eng.quit = false
+		if s.quit != nil {
+			playHaptic(hapticBackPulse)
+			logInfo("vcursor", "Select + Start held: ending the Windows program")
+			go s.quit()
 		}
 	}
 	switch {
 	case s.eng.on && (toggle || off):
+		s.wantOn = false
 		s.mouseOff(now, true)
 	case toggle:
-		s.mouseOn(now)
+		s.wantOn = true
+		_ = s.mouseOn(now)
 	}
 	return nil
 }
 
 // mouseOn lends the pad to the game as a mouse: the steps in the file comment.
-func (s *mbridgeSession) mouseOn(now time.Time) {
+// A Windows-app session keeps its device between toggles, so only the grab is
+// taken again. A failure is buzzed and logged (fail) and returned.
+func (s *mbridgeSession) mouseOn(now time.Time) error {
 	if s.canWrite {
 		if rel := s.eng.releaseEvents(nil); len(rel) > 0 {
 			rel = append(rel, evdevEvent{Type: evdevEvSyn, Code: evdevSynReport})
@@ -338,39 +511,37 @@ func (s *mbridgeSession) mouseOn(now time.Time) {
 	}
 	if err := mbridgeIoctl(s.padFD, evdevGrab, 1); err != nil {
 		s.fail("could not take the pad from the game", err)
-		return
+		return err
 	}
 	s.grabbed = true
-	fd, err := mbridgeCreateMouse()
-	if err != nil {
-		_ = mbridgeIoctl(s.padFD, evdevGrab, 0)
-		s.grabbed = false
-		s.fail("could not create the mouse", err)
-		return
+	if s.mouseFD < 0 {
+		fd, err := mbridgeCreateMouse(s.eng.p.keys)
+		if err != nil {
+			_ = mbridgeIoctl(s.padFD, evdevGrab, 0)
+			s.grabbed = false
+			s.fail("could not create the mouse", err)
+			return err
+		}
+		s.mouseFD = fd
 	}
-	s.mouseFD = fd
 	s.eng.setOn(true, now)
 	playHaptic(hapticSuccessPulse)
 	logInfo("vcursor", "games mouse on: %q is the mouse until Select + L1 or Menu", s.padName)
+	return nil
 }
 
-// mouseOff gives the pad back: the mouse's held buttons are let go, the mouse
-// is removed and the grab released. pulse buzzes when the mouse was on.
+// mouseOff gives the pad back: the mouse's held buttons (and keys) are let
+// go, the mouse is removed — kept, for a Windows-app session — and the grab
+// released. pulse buzzes when the mouse was on.
 func (s *mbridgeSession) mouseOff(now time.Time, pulse bool) {
 	if s.mouseFD >= 0 {
-		var ups []evdevEvent
-		for i, held := range s.eng.btn {
-			if held {
-				ups = append(ups, evdevEvent{Type: evdevEvKey, Code: evdevMouseButtons[i], Value: 0})
-			}
-		}
-		if len(ups) > 0 {
+		if ups := s.eng.letGo(nil); len(ups) > 0 {
 			ups = append(ups, evdevEvent{Type: evdevEvSyn, Code: evdevSynReport})
 			_ = s.writeEvents(s.mouseFD, ups)
 		}
-		_ = mbridgeIoctl(s.mouseFD, evdevUIDevDestroy, 0)
-		_ = syscall.Close(s.mouseFD)
-		s.mouseFD = -1
+		if !s.wine {
+			s.destroyMouse()
+		}
 	}
 	if s.grabbed && s.padFD >= 0 {
 		_ = mbridgeIoctl(s.padFD, evdevGrab, 0)
@@ -384,6 +555,16 @@ func (s *mbridgeSession) mouseOff(now time.Time, pulse bool) {
 	}
 }
 
+// destroyMouse removes the virtual device.
+func (s *mbridgeSession) destroyMouse() {
+	if s.mouseFD < 0 {
+		return
+	}
+	_ = mbridgeIoctl(s.mouseFD, evdevUIDevDestroy, 0)
+	_ = syscall.Close(s.mouseFD)
+	s.mouseFD = -1
+}
+
 // close gives everything back and closes the pad; the engine forgets the pad
 // but keeps the settings, for a pad opened again.
 func (s *mbridgeSession) close() {
@@ -393,6 +574,12 @@ func (s *mbridgeSession) close() {
 		s.padFD = -1
 	}
 	s.eng = mbridgeEngine{p: s.eng.p}
+}
+
+// closeAll is close plus the device a Windows-app session kept.
+func (s *mbridgeSession) closeAll() {
+	s.close()
+	s.destroyMouse()
 }
 
 // writeEvents writes events in one write(), the way the kernel reads them.
@@ -428,8 +615,11 @@ func (s *mbridgeSession) fail(what string, err error) {
 
 // mbridgeCreateMouse makes the virtual mouse: EV_KEY with the three buttons
 // and EV_REL with X, Y and the wheel, then UI_DEV_SETUP (Linux 4.5 and later)
-// or, failing that, the older uinput_user_dev write, then UI_DEV_CREATE.
-func mbridgeCreateMouse() (int, error) {
+// or, failing that, the older uinput_user_dev write, then UI_DEV_CREATE. keys
+// adds every keyboard key, as PortMaster's gptokeyb does for its device: a
+// device with the whole first row is what udev tags as a keyboard, and only
+// a tagged keyboard's keys reach a Weston session.
+func mbridgeCreateMouse(keys bool) (int, error) {
 	fd, err := -1, error(os.ErrNotExist)
 	for _, path := range mbridgeUinputPaths {
 		if fd, err = syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0); err == nil {
@@ -459,6 +649,13 @@ func mbridgeCreateMouse() (int, error) {
 	for _, st := range steps {
 		if err := mbridgeIoctl(fd, st.req, st.arg); err != nil {
 			return fail("uinput bits", err)
+		}
+	}
+	if keys {
+		for code := uintptr(1); code <= evdevKeyLast; code++ {
+			if err := mbridgeIoctl(fd, evdevUISetKeyBit, code); err != nil {
+				return fail("uinput keys", err)
+			}
 		}
 	}
 	if err := mbridgeIoctlBuf(fd, evdevUIDevSetup, evdevSetupBytes(mbridgeMouseName, evdevBusVirtual, 0, 0, 1)); err != nil {

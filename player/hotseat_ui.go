@@ -512,9 +512,9 @@ func hotseatUIHints() []FooterHint {
 func hotseatUIRender(renderer *sdl.Renderer, c *Config) {
 	drawAppBackdrop(renderer, c, screenWidth, screenHeight)
 	hotseatUIEnsureVisit()
-	title := getFontSized(c, "medium", 19)
-	small := getFontSized(c, "small", 15)
-	big := getFontSized(c, "medium", 34)
+	title := FontForRole(c, TypeBody)
+	small := FontForRole(c, TypeLabel)
+	big := FontForRole(c, TypeTitle)
 	if title == nil || small == nil || big == nil {
 		renderStatusBar(renderer, c)
 		renderFooter(renderer, c)

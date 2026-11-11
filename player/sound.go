@@ -616,6 +616,10 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	if len(pcm) == 0 {
 		return
 	}
+	pcm = a11yProcessAudio(pcm)
+	if len(pcm) == 0 {
+		return
+	}
 	if volume < 0.999 {
 		n := len(pcm) / 2
 		for i := 0; i < n; i++ {
@@ -634,6 +638,37 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	// stereo S16 at the device's rate; the analyser reads at most 2048 frames.
 	publishAudioLevel(pcm, int(videoAudioRate), 2)
 	_ = sdl.QueueAudio(videoAudioDev, pcm)
+}
+
+// a11yProcessAudio applies the Accessibility audio settings in place: a mono
+// downmix and a left/right balance. It works on the stereo S16 frames the
+// video decoder and the music decoder both feed into QueueVideoAudio. UI
+// sounds use the separate mono device and stay centred there.
+func a11yProcessAudio(pcm []byte) []byte {
+	if !a11y.monoAudio && a11y.audioBalance == 0 {
+		return pcm
+	}
+	left, right := 1.0, 1.0
+	if a11y.audioBalance < 0 {
+		right = 1 + float64(a11y.audioBalance)/100
+	} else if a11y.audioBalance > 0 {
+		left = 1 - float64(a11y.audioBalance)/100
+	}
+	for i := 0; i+3 < len(pcm); i += 4 {
+		l := int16(uint16(pcm[i]) | uint16(pcm[i+1])<<8)
+		r := int16(uint16(pcm[i+2]) | uint16(pcm[i+3])<<8)
+		if a11y.monoAudio {
+			m := int16((int32(l) + int32(r)) / 2)
+			l, r = m, m
+		}
+		l = int16(float64(l) * left)
+		r = int16(float64(r) * right)
+		pcm[i] = byte(l)
+		pcm[i+1] = byte(uint16(l) >> 8)
+		pcm[i+2] = byte(r)
+		pcm[i+3] = byte(uint16(r) >> 8)
+	}
+	return pcm
 }
 
 // PauseVideoAudio pauses/resumes playback of the queued video audio device.

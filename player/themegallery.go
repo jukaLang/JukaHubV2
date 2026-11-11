@@ -15,7 +15,7 @@ func themeGalleryTabFont(config *Config) *ttf.Font {
 	if config == nil {
 		return nil
 	}
-	if f := getFontSized(config, "small", 16); f != nil {
+	if f := FontForRole(config, TypeLabel); f != nil {
 		return f
 	}
 	f, _ := getCachedFont(config, "small")

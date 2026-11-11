@@ -62,9 +62,12 @@ and it never modifies or skips the game's own checks:
 
 ## Running it (when you want to try)
 
-1. Use an APK of a copy you own (JukaHub does not download APKs).
-2. Build and install AndroidRT (see [ANDROID.md](ANDROID.md#trying-a-game-on-the-device)),
-   create an `androidpak` game profile for the APK and launch it.
+1. Use an APK of a copy you own (JukaHub does not download APKs), the 64-bit
+   (arm64-v8a) build, copied to `/mnt/SDCARD/APKs`.
+2. In the APK Store, check that the Runtime tab says AndroidRT is ready (it
+   ships with JukaHub; **Install** there if it says Missing), then **A** on the
+   APK → **Add to Games** and play it from the Games Library's Android row (see
+   [ANDROID.md](ANDROID.md#trying-a-game-on-the-device)).
 3. Send back the launch log. The lines that matter:
    * `[androidrt] manifest:` — package, version and activity the runtime read;
    * `[androidrt][jni] minecraft:` — which superclass and store state it chose;

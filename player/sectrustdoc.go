@@ -339,9 +339,9 @@ type sectrustDocFonts struct {
 
 func sectrustLoadDocFonts(config *Config, fonts tbxFonts) sectrustDocFonts {
 	f := sectrustDocFonts{
-		h1:    getFontSized(config, "small", 28),
-		h2:    getFontSized(config, "small", 22),
-		h3:    getFontSized(config, "small", 19),
+		h1:    FontForRole(config, TypeTitle),
+		h2:    FontForRole(config, TypeHeading),
+		h3:    FontForRole(config, TypeBody),
 		body:  fonts.body,
 		small: fonts.small,
 	}

@@ -32,7 +32,7 @@ data/game-profiles/
 ├── export/            files written by X in the panel
 ├── logs/              one log per launched game
 ├── games/             optional portable game folders
-└── wineprefix/        created on the first Wine launch
+└── wineprefix/        an older Wine prefix, still used when one is there
 ```
 
 On a TrimUI this is `Apps/JukaHub/data/game-profiles`. The folder is reachable
@@ -99,7 +99,7 @@ load. A malformed single-profile file is skipped as a whole.
 | `mainLib` | no | `androidpak` only: the native entry `.so` by base name (for example `libgame.so`). Omit it to use the largest library of the best-supported ABI. |
 | `args` | no | Up to 128 arguments passed directly to the program (no shell parsing). |
 | `env` | no | Up to 64 environment variables for the game process. |
-| `display` | no | Wine display backend: `auto` (default), `x11`, `wayland`, `weston` or `headless`. |
+| `display` | no | Wine display: `auto` (default), `x11`, `wayland`, `weston` (WestonPack, Windows/GDI mode), `weston-gl` (WestonPack, OpenGL mode) or `headless`. |
 | `controller` | no | Informational label such as `xinput` or `keyboard`. |
 | `testedFirmware` | no | Firmware/device combination you tested, shown in the panel. |
 | `notes` | no | Free text shown in the panel; max 2000 characters. |
@@ -111,18 +111,25 @@ load. A malformed single-profile file is skipped as a whole.
 | `native` | The executable directly. | Any regular file. |
 | `script` | `sh <executable> <args…>` | Must be `.sh`. |
 | `box64` | `box64 <executable> <args…>` | `.sh`, `.bat`, `.cmd`, `.lnk` and `.url` are rejected. |
-| `wine` | `wine <executable> <args…>`, or `box64 wine …` when the Wine ELF is x86. | `.exe`, `.bat`, `.cmd` or `.com`. |
+| `wine` | The Windows Apps launch: Box64 + Wine (or another Wine) inside the display — WestonPack on the handheld — with the pad as the mouse; on Windows the program itself. | `.exe`, `.bat`, `.cmd` or `.com`. |
 | `androidpak` | The installed bionic translation runtime (`loader <apk> <args…>`, or its `launch.sh`), with the APK's native subset staged to tmpfs first. | Must be `.apk`, and the APK must ship an ABI this device runs — see [ANDROID.md](ANDROID.md). |
 
-If Wine is configured with `WINEPREFIX` in the profile's `env`, that prefix is
-used. Otherwise JukaHub creates and uses
-`data/game-profiles/wineprefix` and replaces any inherited prefix.
+A Wine profile starts exactly like an app in Windows Apps: the same runtime,
+display, pad-as-mouse, log and clean-up, with the slow first run off the UI
+thread. The profile's `env` wins over the runtime's defaults. If it sets
+`WINEPREFIX`, that prefix is used (when its folder can hold Wine's links);
+otherwise the shared Windows folder of Windows Apps is used, or
+`data/game-profiles/wineprefix` when an older JukaHub already made a prefix
+there.
 
-Wine still needs a display server. Profiles default to `display: "auto"`:
-JukaHub uses an existing Wayland or X11 session, then falls back to
-WestonPack's `westonwrap.sh` on DRM/KMS. On a stock TrimUI with no X11, install
-WestonPack and set `JUKAHUB_WESTON`, or use `display: "headless"` for a console
-program. See [WINDOWS_APPS.md](WINDOWS_APPS.md) for the full setup.
+Wine needs a display. Profiles default to `display: "auto"`: an existing X11 or
+Wayland session on a Linux desktop, else WestonPack's Windows (GDI) mode on the
+handheld. `display: "weston-gl"` asks for WestonPack's OpenGL mode (OpenGL 2
+games through gl4es), `display: "weston"` for the Windows (GDI) mode, and
+`display: "headless"` runs a console program with no window. On Windows the
+program runs directly whatever `display` says. See
+[WINDOWS_APPS.md](WINDOWS_APPS.md) for the display modes, the controls inside a
+program and the setup.
 
 When DXVK is installed in `data/windows-runtime/dxvk` (or `JUKAHUB_DXVK`) and a
 Vulkan loader is present, JukaHub adds the DXVK DLL overrides automatically. A
@@ -204,7 +211,9 @@ with Box64. Wrapper scripts and native ARM Wine binaries run directly.
 Each launch appends to `data/game-profiles/logs/<id>.log`: timestamp, command
 path, argument count, working directory, and the child's stdout/stderr. The log
 does not contain the profile's environment values, so a token in `env` is not
-copied there.
+copied there. A Wine profile's log also has the runtime, the display and the
+whole command line: the profile's own variables appear there by name with
+their values hidden, and so does any variable whose name looks secret.
 
 JukaHub starts the game in its own process group and reaps it in the background.
 It never waits for a game on the UI thread. Closing JukaHub does not terminate a
@@ -240,7 +249,7 @@ the normal user and never elevates privileges for a game.
 | `executable: ... no such file` | Check the file name and case inside the game folder. |
 | `wine not found` | Install Wine, or set `JUKAHUB_WINE` to its binary. |
 | `box64 not found` | Install Box64, or set `JUKAHUB_BOX64` to its binary. |
-| `no display server` | Install WestonPack and set `JUKAHUB_WESTON`, or use `display: "headless"` for a console program. |
+| `no display for Windows programs` | Install WestonPack from Windows Apps → Setup (or set `JUKAHUB_WESTON`), or use `display: "headless"` for a console program. |
 | `outside the allowed game folders` | Move the game under the SD card (or the data-folder `games/`) and use a relative `dir`. |
 | `already running (pid …)` | Wait for the current instance to exit; the panel shows **Running** until it is reaped. |
 | Game exits immediately | Read `data/game-profiles/logs/<id>.log`; Wine DLL overrides and missing prefixes are the usual causes. |
@@ -249,7 +258,9 @@ the normal user and never elevates privileges for a game.
 
 * There is no on-device profile editor yet; profiles are authored as JSON and
   copied over FTP/SFTP or the SD card.
-* All Wine profiles share one prefix unless they set `WINEPREFIX` themselves.
+* All Wine profiles share one prefix with Windows Apps unless they set
+  `WINEPREFIX` themselves.
+* One Windows program runs at a time, a Wine profile or a Windows app.
 * `controller` and `testedFirmware` are informational; JukaHub does not remap
   controller buttons per game.
 * A profile starts one process. If a launcher script needs to set up a game

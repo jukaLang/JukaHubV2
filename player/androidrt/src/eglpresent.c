@@ -31,10 +31,12 @@
  *           "the SDL-hosted backend" below for why and how).
  *   off     no interposition at all (diagnostics only).
  *   auto    gbm when a DRM card with a connected connector, libgbm and
- *           libdrm are all present; native otherwise — and sdl takes over
- *           when the native backend fails: the game's eglInitialize of the
- *           default display fails (retried once after SDL's video driver
- *           ran), or EGL refuses its window surface.
+ *           libdrm are all present; on the stock firmware of the PowerVR
+ *           TrimUI models (see onPowerVrTrimui) sdl, or native when its SDL2
+ *           does not start; native otherwise — and sdl takes over when the
+ *           native backend fails: the game's eglInitialize of the default
+ *           display fails (retried once after SDL's video driver ran), or
+ *           EGL refuses its window surface.
  *
  * The stock TrimUI firmware (ANDROIDPAK_DEVICE=trimui-* from JukaHub, or its
  * /usr/trimui system folder) has no DRM card: its PowerVR userspace draws
@@ -44,9 +46,10 @@
  * is loaded first (ahead of anything LD_LIBRARY_PATH would find) and the
  * native window defaults to that struct; elsewhere it defaults to null.
  *
- * UNVERIFIED ON HARDWARE: which backend the stock TrimUI firmware needs (its
- * display may be fbdev-only) and whether the hub releases the display while
- * a game runs. The smoke test drives the whole gbm path against mock
+ * UNVERIFIED ON HARDWARE: AndroidRT itself has not drawn on the stock TrimUI
+ * firmware yet. The sdl default there rests on other ports' reports from the
+ * same firmware (onPowerVrTrimui); the hub parks its own drawing while a game
+ * runs (gamesuspend.go). The smoke test drives the whole gbm path against mock
  * libEGL/libgbm/libdrm (tests/smoke/mock_gpu.c) and the sdl backend against
  * a fake libSDL2 (tests/smoke/fake_sdl.c); `ANDROIDPAK_SURFACE=1` prints
  * the device's real answer.
@@ -1086,6 +1089,23 @@ static int onStockTrimui(void) {
     return access("/usr/trimui", F_OK) == 0;
 }
 
+/* The stock firmware of the PowerVR GE8300 models (Smart Pro, Brick, Brick
+ * Pro, Hammer — every board but the Smart Pro S, tg5050, whose GPU really is
+ * a Mali). Their SDL2 calls its only real video driver "mali" (SDL's generic
+ * fbdev-EGL driver over PowerVR's fbdev EGL), and two ports on this firmware
+ * found the same thing: GLES contexts made with raw EGL draw nothing (a black
+ * panel, sound playing, no error) while SDL-owned ones show (NextOS ports
+ * issue #1, Horizon Chase on the Brick Pro: HC_PURE_SDL_CONTEXTS=1; nx-redux
+ * PR #152: keep the contexts SDL-owned on tg5040). A black panel without an
+ * error is the one failure auto's native-to-sdl fallback cannot see, so on
+ * these boards auto starts on the SDL-hosted backend. */
+static int onPowerVrTrimui(void) {
+    const ApakDevice *dev;
+    if (!onStockTrimui()) return 0;
+    dev = apak_device();
+    return !(dev && dev->board && strcmp(dev->board, "tg5050") == 0);
+}
+
 void apak_presentInit(void) {
     static const char *const firmwareEgl[] = {
         "/usr/lib/libEGL.so", "/usr/lib/libEGL.so.1", "/usr/trimui/lib/libEGL.so", NULL,
@@ -1096,6 +1116,7 @@ void apak_presentInit(void) {
     const char *eglOverride = getenv("ANDROIDPAK_EGL_LIB");
     char why[512];
     int layers, want, trimui = onStockTrimui(), fbdev, backend;
+    int sdlAsked = 0, autoSdl = 0, scanRun = scan && *scan && strcmp(scan, "0") != 0;
 
     if (mode && strcmp(mode, "off") == 0) {
         fprintf(stderr, PR_TAG "disabled (ANDROIDPAK_PRESENT=off): EGL calls go to the host unchanged\n");
@@ -1137,6 +1158,7 @@ void apak_presentInit(void) {
         want = BACKEND_NATIVE;
     }
     if (want == BACKEND_SDL) {
+        sdlAsked = 1;
         sdlEnvDefaults(); /* SDL reads them in SDL_InitSubSystem, next */
         pthread_mutex_lock(&P.lock);
         if (sdlStartLocked()) setBackendLocked(BACKEND_SDL);
@@ -1156,6 +1178,20 @@ void apak_presentInit(void) {
             fprintf(stderr, PR_TAG "ANDROIDPAK_PRESENT=gbm but the GBM/KMS stack is not usable (%s) — using native\n",
                     why[0] ? why : "no DRM card");
     }
+    /* auto on the PowerVR stock firmware with no KMS panel: SDL-owned
+     * contexts first (see onPowerVrTrimui), native when SDL2 does not start.
+     * An import scan draws nothing and starts no SDL. */
+    if (want == -1 && !sdlAsked && !scanRun && backendNow() != BACKEND_GBM && onPowerVrTrimui()) {
+        sdlEnvDefaults(); /* SDL reads them in SDL_InitSubSystem, next */
+        pthread_mutex_lock(&P.lock);
+        if (sdlStartLocked()) setBackendLocked(BACKEND_SDL);
+        pthread_mutex_unlock(&P.lock);
+        if (backendNow() == BACKEND_SDL)
+            autoSdl = 1;
+        else
+            fprintf(stderr, PR_TAG "stock firmware (%s): SDL2 is not usable (%s) — using the native backend\n",
+                    apak_device()->model, S.why);
+    }
     fbdev = trimui; /* the firmware's window contract; ANDROIDPAK_EGL_WINDOW decides when set */
     if (window && strcmp(window, "fbdev") == 0) fbdev = 1;
     else if (window && strcmp(window, "null") == 0) fbdev = 0;
@@ -1173,6 +1209,10 @@ void apak_presentInit(void) {
     if (P.fallback) sdlEnvDefaults(); /* SDL may start later, on a game thread: set while single-threaded */
     apak_compatAddOverrides(kEglOverrides);
     if (backend == BACKEND_SDL) {
+        if (autoSdl)
+            fprintf(stderr, PR_TAG "stock firmware (%s): auto chose the SDL-hosted backend — raw EGL contexts on this "
+                            "firmware's mali fbdev display stay black (ANDROIDPAK_PRESENT=native forces them)\n",
+                    apak_device()->model);
         fprintf(stderr, PR_TAG "backend sdl (EGL %s, SDL %s, video driver %s)\n", P.gpu.eglName, S.sdl.name, S.driver);
         return;
     }

@@ -157,19 +157,26 @@ func buildGameLibraryWith(report romScanReport, artRoot string, playtimeSeconds 
 		lib.Total += len(games)
 		lib.WithArt += withArt
 	}
-	sort.SliceStable(lib.Systems, func(i, j int) bool {
-		ri, iKnown := consoleOrder[lib.Systems[i].Name]
-		rj, jKnown := consoleOrder[lib.Systems[j].Name]
+	sortLibrarySystems(lib.Systems)
+	return lib
+}
+
+// sortLibrarySystems puts the consoles in browsing order: the well-known ones
+// in consoleOrder first, the rest alphabetically (the Android row of
+// game_library_androidgames.go joins after the build and is sorted the same way).
+func sortLibrarySystems(systems []librarySystem) {
+	sort.SliceStable(systems, func(i, j int) bool {
+		ri, iKnown := consoleOrder[systems[i].Name]
+		rj, jKnown := consoleOrder[systems[j].Name]
 		switch {
 		case iKnown && jKnown:
 			return ri < rj
 		case iKnown != jKnown:
 			return iKnown
 		default:
-			return strings.ToLower(lib.Systems[i].Name) < strings.ToLower(lib.Systems[j].Name)
+			return strings.ToLower(systems[i].Name) < strings.ToLower(systems[j].Name)
 		}
 	})
-	return lib
 }
 
 // countCoveredGames is the number of games in a list whose cover exists.
@@ -214,6 +221,7 @@ var systemLauncherAliases = map[string][]string{
 	"PlayStation":          {"ps", "psx", "pcsxrearmed", "duckstation", "pcsx"},
 	"PlayStation Portable": {"psp", "ppsspp"},
 	"Xbox":                 {"xbox", "xemu"},
+	"Xbox 360":             {"xbox360", "x360", "xenia", "xeniacanary"},
 	"Master System":        {"ms", "sms", "mastersystem", "smsplus", "gearsystem"},
 	"Game Gear":            {"gg", "gamegear"},
 	"PC Engine":            {"pce", "pcengine", "tg16", "turbografx16"},
@@ -371,6 +379,11 @@ func configuredGameLauncher(system string, overrides map[string]string) string {
 // detected emulator. Shared so Continue and the library cannot disagree about
 // which emulator a system should use.
 func resolveGameLauncher(system string) string {
+	// An Android game starts through its game profile, not an emulator
+	// (game_library_androidgames.go); the stand-in keeps "no emulator" from showing.
+	if system == androidLibrarySystem {
+		return androidLibraryLauncher
+	}
 	if launcher := configuredGameLauncher(system, loadGameLauncherOverrides(gameLauncherOverridesPath())); launcher != "" {
 		return launcher
 	}
@@ -407,10 +420,11 @@ func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []
 		name, args = emuRetroArchForCore(launcher), []string{"-L", launcher, romPath}
 	default:
 		name, args = launcher, []string{romPath}
-		// xemu boots a disc image only through -dvd_path (its documented
-		// command line); a bare path is handed to QEMU and ignored.
-		if emuIsXemuLauncher(launcher) {
-			args = []string{"-dvd_path", romPath}
+		// xemu boots a disc image only through -dvd_path, and xemu and Xenia
+		// start full screen only when asked: their documented command lines
+		// (emuStandaloneGameArgs).
+		if own, ok := emuStandaloneGameArgs(launcher, romPath); ok {
+			args = own
 		}
 	}
 	if len(extra) == 0 {
@@ -452,6 +466,10 @@ func gameLaunchExec(launcher, name string, args []string) (*exec.Cmd, error) {
 // launchLibraryGame starts the game detached, records it in the recents list
 // and returns an error instead of toasting so the caller can pick the message.
 func launchLibraryGame(game libraryGame, launcher string) error {
+	// The Android row's games run through their game profile (AND-16).
+	if game.System == androidLibrarySystem {
+		return launchAndroidLibraryGame(game)
+	}
 	if strings.TrimSpace(game.Path) == "" {
 		return fmt.Errorf("no ROM selected")
 	}
@@ -459,15 +477,22 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return fmt.Errorf("ROM is missing: %s", filepath.Base(game.Path))
 	}
 	if strings.TrimSpace(launcher) == "" {
-		// The Xbox row has a specific, actionable answer: install hakuX, or the
-		// reason this device cannot run it.
-		if strings.EqualFold(strings.TrimSpace(game.System), emuXboxEntryName) {
-			return fmt.Errorf("%s", xboxLibraryLauncherHintFor(hakuxDevice()))
+		// The Xbox, the Xbox 360 and the other consoles only a desktop runs
+		// have a specific, actionable answer: what to install, or why this
+		// device cannot run them (emuLibraryLauncherHint).
+		if hint := emuLibraryLauncherHint(game.System); hint != "" {
+			return errors.New(hint)
 		}
 		return fmt.Errorf("no launcher for %s", game.System)
 	}
 	if !regularFile(launcher) {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
+	}
+	// xemu without the Xbox firmware opens a window that cannot boot the
+	// disc: what it lacks is said here instead, and files the setup found
+	// but never applied are written into xemu.toml first.
+	if err := emuStandaloneLaunchCheck(launcher); err != nil {
+		return err
 	}
 	if err := playtimeAllowGameLaunch(game.Title); err != nil {
 		return err
@@ -623,6 +648,13 @@ func recordGameLaunch(game libraryGame) []recentGame {
 	trophyEvent(tkGameLaunch)
 	trophyEventDistinct(tkGameTitles, game.Title)
 	trophyEventDistinct(tkGameSystems, game.System)
+	return recordGameRecent(game)
+}
+
+// recordGameRecent is recordGameLaunch without the trophy events: an Android
+// game's launch is counted where every game profile's is
+// (startGameProfileCommand), so its library launch only joins the recents.
+func recordGameRecent(game libraryGame) []recentGame {
 	gameRecentsMu.Lock()
 	defer gameRecentsMu.Unlock()
 	if !gameRecentsLoaded {

@@ -8,11 +8,12 @@ package main
 //     the Core builds page filters by ("mupen64plus_next" is Nintendo 64, a
 //     Nintendo core), so a list of file names reads as a list of consoles.
 //   - emuDesktopSystems are the consoles a handheld of this class cannot
-//     emulate: the Windows emulator that plays each one, and the honest reason
-//     the handheld cannot, so a Roms/PS2 folder on the Smart Pro says "Not
-//     supported" instead of offering an install that could never work. The
-//     original Xbox is the exception on the Smart Pro, which plays it through
-//     the experimental hakuX port (hakux.go); its tile is built there.
+//     emulate: the Windows emulator that plays each one (Roms/XBOX360 → Xenia
+//     Canary), and the honest reason the handheld cannot, so a Roms/PS2 folder
+//     on the Smart Pro says "Not supported" instead of offering an install that
+//     could never work. The original Xbox is the exception on the Smart Pro,
+//     which plays it through the experimental hakuX port (hakux.go); its tile
+//     is built there.
 //   - emuGlyphFor turns a catalog entry into one of the shared emu-* icons by
 //     asking ICONS' iconEmuGlyphFor, with the core's system as a second guess.
 
@@ -208,9 +209,10 @@ var emuDesktopSystems = []emuDesktopSystem{
 		Reason:  "Switch emulation needs a desktop-class CPU and GPU, far beyond the A133P.",
 	},
 	{
-		System:  "Xbox 360",
-		Folders: []string{"xbox360", "x360", "xbox 360", "microsoft - xbox 360"},
-		Reason:  "Xbox 360 emulation needs a desktop-class x86-64 CPU and GPU.",
+		System:   "Xbox 360",
+		Folders:  []string{"xbox360", "x360", "xbox 360", "microsoft - xbox 360"},
+		Emulator: emuXeniaName,
+		Reason:   "Xbox 360 games run in Xenia Canary on a Windows PC: it needs a 64-bit x86 CPU with AVX and a Direct3D 12 or Vulkan GPU, far beyond the A133P.",
 	},
 }
 
@@ -237,6 +239,36 @@ func emuDesktopSystemFor(name string) (emuDesktopSystem, bool) {
 // emuXboxEntryName is the Xbox tile the handheld always lists (hakuxpage.go),
 // and the Games Library's name for the console.
 const emuXboxEntryName = "Xbox"
+
+// emuXeniaName is the Windows emulator for the Xbox 360: Xenia Canary, the
+// maintained build of Xenia. It names its catalog entry, its install rules
+// (emuwininstall.go) and the folder it is installed into.
+const emuXeniaName = "Xenia Canary"
+
+// emuLibraryLauncherHint is the Games Library's answer for a game whose
+// console has no launcher yet, instead of a bare "no launcher": for the Xbox,
+// how this device plays it (hakuX on the Smart Pro, xemu on Windows); for a
+// console only a desktop runs, the Windows emulator JukaHub installs for it,
+// or on a handheld the reason it cannot run there. "" for any other console.
+func emuLibraryLauncherHint(system string) string {
+	if strings.EqualFold(strings.TrimSpace(system), emuXboxEntryName) {
+		return xboxLibraryLauncherHintFor(hakuxDevice())
+	}
+	sys, ok := emuDesktopSystemFor(system)
+	if !ok {
+		return ""
+	}
+	if !IsWindows() {
+		return sys.System + " is not supported here — " + sys.Reason
+	}
+	if sys.Emulator == "" {
+		return sys.System + " has no emulator JukaHub can set up yet"
+	}
+	if spec, ok := emuWinSpecFor(sys.Emulator); ok && !spec.installable() {
+		return "Get " + sys.Emulator + " from " + spec.Site + ", then rescan the library"
+	}
+	return "Install " + sys.Emulator + ": Emulators → " + sys.Emulator + " → X"
+}
 
 // emuGlyphFor picks the shared vector icon for a catalog entry: ICONS'
 // iconEmuGlyphFor on the entry's name, then on the system its core runs, and

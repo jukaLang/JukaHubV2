@@ -940,7 +940,7 @@ func jlandDrawHUD(r *sdl.Renderer, config *Config, g *jlandGame, atlas *sdl.Text
 	if config == nil {
 		return
 	}
-	if small := getFontSized(config, "small", 13); small != nil && slot >= 32 {
+	if small := FontForRole(config, TypeCaption); small != nil && slot >= 32 {
 		for i := range jlandHotbar {
 			s := jlandSlotRect(bar, slot, gap, i)
 			renderText(r, config, small, jlandSlotKeys[i], WithAlpha(ColorTextPrimary(), 210), s.X+4, s.Y+1)
@@ -950,7 +950,7 @@ func jlandDrawHUD(r *sdl.Renderer, config *Config, g *jlandGame, atlas *sdl.Text
 	// The block's name, for a moment after the selection changes.
 	now := sdl.GetTicks64()
 	if age := now - rt.slotShownAt; rt.slotShownAt != 0 && age < 1600 {
-		if font := getFontSized(config, "small", 18); font != nil {
+		if font := FontForRole(config, TypeBody); font != nil {
 			name := jlandDef(g.selected()).Name
 			tw, th := measureText(font, name)
 			alpha := 1.0
@@ -964,7 +964,7 @@ func jlandDrawHUD(r *sdl.Renderer, config *Config, g *jlandGame, atlas *sdl.Text
 	}
 
 	// Ore found so far, top left; nothing until the first one.
-	if font := getFontSized(config, "small", 16); font != nil {
+	if font := FontForRole(config, TypeLabel); font != nil {
 		x, y := view.X+12, view.Y+12
 		for i, count := range g.Stats.Ores {
 			if count <= 0 {
@@ -992,7 +992,7 @@ func jlandDrawHUD(r *sdl.Renderer, config *Config, g *jlandGame, atlas *sdl.Text
 	if !rt.pointerActive(now) {
 		return
 	}
-	font := getFontSized(config, "small", 16)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}

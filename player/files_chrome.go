@@ -31,7 +31,7 @@ type filesChip struct {
 // filesChipFont is the chips' type: the footer's 16px hint size, so the
 // toolbar reads as chrome and never as content.
 func filesChipFont(config *Config) *ttf.Font {
-	if f := getFontSized(config, "small", 16); f != nil {
+	if f := FontForRole(config, TypeLabel); f != nil {
 		return f
 	}
 	f, _ := getCachedFont(config, "small")

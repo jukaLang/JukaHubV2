@@ -313,7 +313,7 @@ type toolsHubSheet struct {
 
 // toolsHubSheetFont is the report's type size.
 func toolsHubSheetFont(config *Config) *ttf.Font {
-	if f := getFontSized(config, "small", 17); f != nil {
+	if f := FontForRole(config, TypeBody); f != nil {
 		return f
 	}
 	f, _ := getCachedFont(config, "small")
@@ -391,7 +391,7 @@ func toolsHubDrawSheet(renderer *sdl.Renderer, config *Config, s *toolsHubSheet)
 	}
 	font := toolsHubSheetFont(config)
 	pillFont, _ := getCachedFont(config, "small")
-	hintFont := getFontSized(config, "small", 15)
+	hintFont := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}

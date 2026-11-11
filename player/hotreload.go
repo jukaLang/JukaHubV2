@@ -344,6 +344,9 @@ func applyConfigReload(prev, next *Config) *Config {
 	// So does the background Remote Play download's switch
 	// (psremote_helpers_bg.go), which its goroutine reads from a copy.
 	psBgBind(next)
+	// And the VPN's switch and route, which its worker reads from a copy
+	// (vpn.go).
+	vpnPublish(next, false)
 	showToast("Config reloaded", ColorToastSuccess)
 	return next
 }

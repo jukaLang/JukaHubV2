@@ -21,9 +21,14 @@ func init() {
 }
 
 func resetA11yForTest() {
-	a11y = a11ySettings{fontScale: 1.0}
+	a11y = a11ySettings{fontScale: 1.0, captionSize: 1, captionBackground: true,
+		longPressMs: 450, repeatDelayMs: 320, repeatRateMs: 70, toastPercent: 100,
+		magnifierZoom: 2, switchMode: a11ySwitchOff, switchIntervalMs: a11ySwitchDefaultIntervalMS}
 	a11yChordReset()
 	a11yApplyVision()
+	magnifierReset()
+	switchScanReset()
+	legibleFontReset()
 }
 
 func chordEvent(kind uint32, button uint8) *sdl.ControllerButtonEvent {

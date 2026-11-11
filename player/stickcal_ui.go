@@ -716,8 +716,8 @@ func stickCalRender(renderer *sdl.Renderer, c *Config) {
 	stickCalEnsureVisit()
 	now := stickCalClock()
 	stickCalTick(c, now)
-	title := getFontSized(c, "medium", 19)
-	small := getFontSized(c, "small", 15)
+	title := FontForRole(c, TypeBody)
+	small := FontForRole(c, TypeLabel)
 	if title == nil || small == nil {
 		renderStatusBar(renderer, c)
 		renderFooter(renderer, c)

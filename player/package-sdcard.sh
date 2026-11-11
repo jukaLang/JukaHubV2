@@ -89,6 +89,20 @@ if [ -d native/libs/brick-stock ]; then
     mkdir -p "$PKG/libs/brick-stock"
     cp -a native/libs/brick-stock/. "$PKG/libs/brick-stock/"
 fi
+# AndroidRT, the Android-app runtime, when native/build-runtimes.sh (in CI the
+# remote-play-helpers workflow) has produced its package: checked (one folder,
+# every file in its SHA256SUMS and matching) and unpacked into androidrt/
+# beside the binary. Without it the card simply has no Android-app runtime.
+if [ -f native/bin/JukaHub-AndroidRT-linux-arm64.zip ]; then
+    if sh native/build-runtimes.sh unpack native/bin/JukaHub-AndroidRT-linux-arm64.zip "$PKG/androidrt"; then
+        echo "    AndroidRT: $PKG/androidrt"
+    else
+        rm -rf "$PKG/androidrt"
+        echo "    WARNING: the AndroidRT package in native/bin does not verify; the package ships without it" >&2
+    fi
+else
+    echo "    (no AndroidRT package in native/bin: the package ships without androidrt/)"
+fi
 
 # JukaHub Spatial, the game-audio plugin (spatialfx/README.md), with the same
 # cross compiler ($CC above) into lib/, where spatial_games.go looks for it. A

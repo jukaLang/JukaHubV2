@@ -193,6 +193,14 @@ func TestRaScopeRestoreAfterRetroArchRewrote(t *testing.T) {
 // A crash or a power cut mid-game leaves the journal; the next start puts the
 // values back, and an earlier launch's record keeps the user's value even
 // when a new launch edits the same key before anything was restored.
+// raScopeWaitForRecovery blocks until the recovery goroutine releases its
+// mutex, then reads the timer state under that lock as a synchronization point.
+func raScopeWaitForRecovery() {
+	raScope.mu.Lock()
+	_ = raScope.timer
+	raScope.mu.Unlock()
+}
+
 func TestRaScopeJournalRecovery(t *testing.T) {
 	dir := raScopeTestSetup(t)
 	cfg := filepath.Join(dir, "retroarch.cfg")
@@ -211,8 +219,7 @@ func TestRaScopeJournalRecovery(t *testing.T) {
 	for fileExists(filepath.Join(dir, raScopeJournalName)) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	raScope.mu.Lock() // the recovery goroutine has finished once it lets go
-	raScope.mu.Unlock()
+	raScopeWaitForRecovery()
 	text := raScopeRead(t, cfg)
 	if v, _ := raConfigGet(text, savestateAutoLoadKey); v != "false" {
 		t.Fatalf("auto-load = %q after recovery, want false\n%s", v, text)
@@ -254,8 +261,7 @@ func TestRaScopeFailsafe(t *testing.T) {
 	for fileExists(filepath.Join(dir, raScopeJournalName)) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	raScope.mu.Lock()
-	raScope.mu.Unlock()
+	raScopeWaitForRecovery()
 	if v, _ := raConfigGet(raScopeRead(t, cfg), savestateAutoLoadKey); v != "false" {
 		t.Fatalf("failsafe did not restore: auto-load = %q", v)
 	}

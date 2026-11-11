@@ -766,8 +766,8 @@ func brwMenuRender(renderer *sdl.Renderer, config *Config) {
 	if renderer == nil || config == nil || !brwMenu.open || brwMenuYield() {
 		return
 	}
-	label := getFontSized(config, "medium", 17)
-	small := getFontSized(config, "small", 14)
+	label := FontForRole(config, TypeBody)
+	small := FontForRole(config, TypeCaption)
 	if label == nil || small == nil {
 		return
 	}

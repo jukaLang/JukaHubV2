@@ -201,12 +201,16 @@ remembered the same way.
 A save state is a snapshot of the core's memory in that core's own format, so
 a new build of a core can refuse a state an older build wrote. On the handheld,
 **Settings → Games & emulators → Emulator updates** decides what the daily check
-does — for the libretro cores and for the PPSSPP build JukaHub manages:
+does — for the libretro cores, the PPSSPP build JukaHub manages, hakuX when
+JukaHub installed it, and the runtimes JukaHub downloads (the Windows-app
+runtime, AndroidRT); the row says which of those this device has. On a PC the
+same setting covers the emulators JukaHub installed there (see
+[below](#beyond-the-cores-hakux-runtimes-and-a-pcs-emulators)):
 
 | Setting | What happens |
 | --- | --- |
-| **Install automatically** (default) | Once a day, while the device charges or after two idle minutes — never during a game or while a video plays — JukaHub reads the buildbot index, compares it with the installed cores and installs the builds that differ, keeping each replaced build as a `.bak`. A game that starts mid-pass stops it between cores; the rest follow at the next quiet moment. The pass ends with one toast ("Updated 3 emulator cores (…)") that the notification centre keeps. |
-| **Notify me** | The same daily check, but nothing is downloaded: cores with a different build are announced once, and the Emulators page or the Core-builds page installs them on a press. |
+| **Install automatically** (default) | Once a day, while the device charges or after two idle minutes — never during a game or while a video plays — JukaHub reads the buildbot index, compares it with the installed cores and installs the builds that differ, keeping each replaced build as a `.bak`; then it brings hakuX and the runtimes forward the same way, each keeping what its own install keeps for a roll back. A game that starts mid-pass stops it between cores (and between the others); the rest follow at the next quiet moment. The pass ends with one toast ("Updated 3 emulator cores (…) · updated hakuX v0.1.5") that the notification centre keeps. |
+| **Notify me** | The same daily check, but nothing is downloaded: cores with a different build, and new versions of the rest, are announced once, and the Emulators page or the Core-builds page installs them on a press. |
 | **Off** | No daily check. The pages still update on a press. |
 
 **Start** on the Core builds page steps through the same three settings. The
@@ -273,6 +277,54 @@ launcher runs the libretro core (`mgba`, `flycast`, `ppsspp`), that core is
 updated like every other; the standalone PPSSPP that JukaHub installs and
 manages itself for the PSP launchers follows the same **Emulator updates**
 setting. An old `data/emulator-updates/` folder can be deleted.
+
+#### Beyond the cores: hakuX, runtimes and a PC's emulators
+
+Everything else JukaHub installs and can bring forward by itself runs in the
+same pass, after the cores, under the same setting: hakuX on the Smart Pro
+(when JukaHub installed it; a copy put there by hand is never replaced), the
+Windows-app runtime and AndroidRT when they were downloaded, and on a PC every
+emulator JukaHub installed. Each is checked once a day and keeps its own record
+(`emu-autoupdate.json` beside the patch state), so:
+
+- one that is running — an Xbox game, an Android game, an emulator open on the
+  PC — is skipped and updated at the next quiet moment;
+- one whose install fails is tried again after an hour, then two, four… up to a
+  day; only its first failure is named in the toast;
+- a build the pass installed that is offered again means it was rolled back
+  (R1 on the Xbox tile, Roll back on a Windows tile): the pass leaves it alone
+  and installs the next build when one comes out;
+- nothing that only checks puts a card on screen: the install card appears when
+  something is downloaded.
+
+Nearly all of these ask GitHub, which answers 60 requests an hour per address
+to an app that does not sign in. One pass asks about each project once (the
+install reuses the check's answer), the Emulators page's own check is reused
+while it is fresh, and a release asked about before is asked conditionally, so
+an unchanged one comes back without its body (that saves the connection; GitHub
+still counts the request, since JukaHub does not sign in). When
+GitHub refuses (HTTP 403 or 429, or no requests left) every GitHub lookup —
+the pass's and the page's — waits an hour; what it kept from running is done
+when the hour is over, not the next day.
+
+On a PC (Windows) the pass covers the emulators JukaHub installed and manages
+(each folder's `.jukahub-emu.json`), including ones added later such as the Xbox
+360 emulator, and the cores of the RetroArch JukaHub installed, from the
+buildbot's Windows tree. An emulator installed by hand, and the cores of a
+RetroArch someone else installed (Steam's included), are never touched. An
+update lays the new release over the folder and keeps every file it replaces,
+which **Roll back** on the tile restores. The pass runs once JukaHub has been
+left alone for three minutes, never while a game or emulator it started is on
+screen, another install runs or a video plays, and not while a laptop runs on
+its battery — unless it is three days overdue. An emulator that is running,
+whoever started it, waits; so do RetroArch's cores while that RetroArch runs.
+RetroArch itself is moved only from stable release to stable release: when the
+buildbot's stable folder cannot be read the installer would take today's
+nightly, which the pass leaves for a press on the tile. The first time a PC
+whose user never chose a mode has something JukaHub installed, a toast says
+that its emulators now update by themselves and where to change it. The Core
+builds page shows the mode (and **Start** steps it) when RetroArch is
+JukaHub's.
 
 ## Controls
 

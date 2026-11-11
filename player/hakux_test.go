@@ -4,8 +4,8 @@ package main
 // TG5040 package is ever picked from a release, a package merges under Data/
 // and Emus/ and nowhere else, a merge keeps every file the package does not
 // ship (and the ones it replaces), a failed merge leaves the card as it was, a
-// rollback puts the replaced files back, and each model gets the offer or the
-// reason it should.
+// rollback puts the replaced files back (and the unchanged ones a newer package
+// dropped), and each model gets the offer or the reason it should.
 
 import (
 	"crypto/sha256"
@@ -39,6 +39,62 @@ func TestHakuxPickAsset(t *testing.T) {
 	}
 	if got := hakuxAssetVersion("xbox-trimui-smart-pro-v0.1.3-rc1.zip"); got != "0.1.3-rc1" {
 		t.Fatalf("version = %q, want 0.1.3-rc1", got)
+	}
+	// On equal numbers the final release beats its release candidate, even
+	// listed after it (a plain numeric compare read rc1 as 0.1.4.1).
+	rc := []emuGitHubAsset{
+		{Name: "xbox-trimui-smart-pro-v0.1.4-rc1.zip", BrowserDownloadURL: "u/rc"},
+		{Name: "xbox-trimui-smart-pro-v0.1.4.zip", BrowserDownloadURL: "u/final"},
+	}
+	if a, ok := hakuxPickAsset(rc, "nightly"); !ok || a.BrowserDownloadURL != "u/final" {
+		t.Fatalf("picked %+v (%v), want the final v0.1.4 over its rc1", a, ok)
+	}
+}
+
+// TestHakuxSetAsideDropped: a file the previous version laid down and the new
+// package no longer ships moves into the kept copy when it is unchanged and
+// stays when it was changed; a rollback puts the moved one back.
+func TestHakuxSetAsideDropped(t *testing.T) {
+	p, write, read := hakuxTestCard(t)
+	write("Emus/XBOX/launch.sh", "v2 launcher")
+	write("Data/XBOX/lib/libold.so", "old lib")
+	write("Data/XBOX/hakux.cfg", "edited by the user")
+	sum := func(s string) string {
+		h := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(h[:])
+	}
+	previous := hakuxManifest{Tag: "v0.1.2", Files: []hakuxFileRecord{
+		{Path: "Emus/XBOX/launch.sh", SHA256: sum("v1 launcher")},
+		{Path: "Data/XBOX/lib/libold.so", SHA256: sum("old lib")},
+		{Path: "Data/XBOX/hakux.cfg", SHA256: sum("as shipped")},
+	}}
+	plan := hakuxMergePlan{
+		Launcher: "Emus/XBOX/launch.sh",
+		Files:    []hakuxPlanFile{{From: "Emus/XBOX/launch.sh", To: "Emus/XBOX/launch.sh"}},
+	}
+	root, err := os.OpenRoot(p.SDRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	moved := hakuxSetAsideDropped(root, previous, plan, p.pending())
+	if !reflect.DeepEqual(moved, []string{"Data/XBOX/lib/libold.so"}) {
+		t.Fatalf("moved = %v, want only the unchanged file the new package dropped", moved)
+	}
+	if read("Data/XBOX/lib/libold.so") != "<missing>" || read(p.pending()+"/Data/XBOX/lib/libold.so") != "old lib" {
+		t.Fatal("the dropped file did not move into the kept copy")
+	}
+	if read("Data/XBOX/hakux.cfg") != "edited by the user" {
+		t.Fatal("a changed file the package dropped must stay where it is")
+	}
+	if err := hakuxKeepBackup(root, p, hakuxBackupInfo{Tag: "v0.1.2", Launcher: plan.Launcher, Dropped: moved}); err != nil {
+		t.Fatalf("keep: %v", err)
+	}
+	if _, err := hakuxRollback(root, p); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if read("Data/XBOX/lib/libold.so") != "old lib" {
+		t.Fatal("the rollback did not put the dropped file back")
 	}
 }
 

@@ -1410,7 +1410,7 @@ func drawFavoritesRemoveButton(renderer *sdl.Renderer, config *Config, row sdl.R
 	strokeRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, h/2, 1, WithAlpha(ink, 170))
 	glyph := h - 16
 	DrawHomeIcon(renderer, "trash", sdl.Rect{X: btn.X + 12, Y: btn.Y + 8, W: glyph, H: glyph}, false)
-	if font := getFontSized(config, "small", 15); font != nil {
+	if font := FontForRole(config, TypeLabel); font != nil {
 		label := "Remove"
 		_, th := measureText(font, label)
 		drawText(renderer, font, label, btn.X+12+glyph+8, btn.Y+(btn.H-th)/2, ink, textAlignLeft)
@@ -1425,7 +1425,7 @@ func drawFavoritesUndoBar(renderer *sdl.Renderer, config *Config, list sdl.Rect)
 	if !favoritesUndoActive() || favoritesDeletePrompt.open {
 		return
 	}
-	font := getFontSized(config, "small", 16)
+	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}
@@ -1442,7 +1442,7 @@ func drawFavoritesUndoBar(renderer *sdl.Renderer, config *Config, list sdl.Rect)
 	fillRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, btn.H/2, WithAlpha(glassAccent(), 60))
 	strokeRoundedRect(renderer, btn.X, btn.Y, btn.W, btn.H, btn.H/2, 1, glassAccent())
 	drawText(renderer, font, btnLabel, btn.X+16, btn.Y+(btn.H-bh)/2, ColorTextPrimary(), textAlignLeft)
-	if small := getFontSized(config, "small", 13); small != nil {
+	if small := FontForRole(config, TypeCaption); small != nil {
 		yw, yh := measureText(small, "Y")
 		drawText(renderer, small, "Y", btn.X+btn.W-16-yw, btn.Y+(btn.H-yh)/2, ColorTextTertiary(), textAlignLeft)
 	}
@@ -1458,8 +1458,8 @@ func drawFavoritesDeletePrompt(renderer *sdl.Renderer, config *Config, panel sdl
 	if !p.open {
 		return
 	}
-	titleFont := getFontSized(config, "small", 19)
-	bodyFont := getFontSized(config, "small", 15)
+	titleFont := FontForRole(config, TypeBody)
+	bodyFont := FontForRole(config, TypeLabel)
 	if titleFont == nil || bodyFont == nil {
 		return
 	}

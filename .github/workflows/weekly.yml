@@ -4,9 +4,9 @@
 # and tests). What costs more than it catches per push runs here, Mondays and
 # by hand (Actions -> Weekly checks -> Run workflow): the race detector over
 # the tests that run real goroutines, the Go vulnerability scan, the
-# cold-boot budget, the builder's Chromium smoke test, the CI helper scripts'
-# and the game-audio plugin's own tests, and the player built and tested on
-# native Windows (the release pipeline only cross-compiles it).
+# cold-boot budget, the builder's Chromium smoke test, the CI helper scripts',
+# the game-audio plugin's and AndroidRT's host tests, and the player built and
+# tested on native Windows (the release pipeline only cross-compiles it).
 # Nothing waits for this workflow; a red run means main broke something these
 # catch, so triage it like a failing check.
 name: Weekly checks
@@ -162,14 +162,15 @@ jobs:
           retention-days: 7
 
   scripts:
-    name: CI helper scripts and the game-audio plugin
+    name: CI helper scripts, the game-audio plugin and AndroidRT
     # `make test-scripts` and `make test-spatialfx`. The SDL installer must
     # refuse a tampered archive; the release build caches and the reused
     # Remote Play helpers must come only from an earlier push-to-main run of
     # the same workflow; the TrimUI build must start its container offline and
     # refuse a binary the handhelds could not start; the C game-audio plugin
-    # must match its DSP spec. A stock Git Bash lacks the tools most of these
-    # need and skips them, so this is where they run.
+    # must match its DSP spec; AndroidRT's runner must pass its host smoke
+    # suite (TEST-4). A stock Git Bash lacks the tools most of these need and
+    # skips them, so this is where they run.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -184,6 +185,16 @@ jobs:
         # built with -Werror).
         continue-on-error: true
         run: sh player/spatialfx/tests/run-tests.sh
+      - name: AndroidRT host smoke suite (player/androidrt)
+        # The runner, a fake NativeActivity game and the probes built with the
+        # host gcc and driven headlessly (about 200 assertions, seconds). The
+        # helper job runs the same suite on arm64 whenever it rebuilds
+        # AndroidRT; here it runs every week whatever changed. Advisory until it
+        # has been green on the runner's gcc, like the step above.
+        continue-on-error: true
+        env:
+          SMOKE_WORK: ${{ runner.temp }}/androidrt-smoke
+        run: sh player/androidrt/tests/smoke/run-smoke.sh
 
   windows:
     name: "Windows: native build + tests"

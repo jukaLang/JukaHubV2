@@ -79,7 +79,8 @@ reads as itself.
 
 **WireGuard** — status only. `wg show interfaces` lists tunnels but bringing one
 up needs root, and a switch that always fails is worse than a line that says
-why.
+why. To send the device's own traffic through a WireGuard server, use
+Settings → Network → VPN instead ([VPN.md](VPN.md)), which needs no `wg` tool.
 
 ## Limits worth knowing
 

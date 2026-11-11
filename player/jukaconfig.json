@@ -446,6 +446,19 @@
           "y": 72
         },
         {
+          "type": "button",
+          "text": "Vault",
+          "trigger": "vault_search",
+          "x": 692,
+          "y": 72,
+          "width": "116",
+          "height": "48",
+          "bgColor": "$buttonColor",
+          "color": "$labelColor",
+          "style": "dark",
+          "icon": "shield"
+        },
+        {
           "autoRefresh": false,
           "bgColor": "$buttonColor",
           "color": "$labelColor",
@@ -472,7 +485,7 @@
           "variableChangeValue": "",
           "video": "",
           "width": "116",
-          "x": 692,
+          "x": 820,
           "y": 72
         },
         {
@@ -502,7 +515,7 @@
           "variableChangeValue": "",
           "video": "",
           "width": "128",
-          "x": 820,
+          "x": 948,
           "y": 72
         },
         {
@@ -532,7 +545,7 @@
           "variableChangeValue": "",
           "video": "",
           "width": "116",
-          "x": 960,
+          "x": 1080,
           "y": 72
         },
         {

@@ -307,16 +307,26 @@ func apkStoreRuntimeRows() []apkStoreRow {
 	rt, wd := apkStoreUI.runtime, apkStoreUI.waydroid
 	checking := !apkStoreUI.probed
 	rtSpec := tbxRowSpec{icon: "chip", title: "AndroidRT"}
+	installLine, installing := androidRTInstallLine()
+	newer, newerTag := androidRTUpdateKnown()
 	switch {
+	case installing:
+		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = installLine, "Installing…", tbxToneAccent
 	case checking:
 		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = "Checking…", "…", tbxToneNeutral
+	case rt.dir != "" && rt.err == "" && rt.source == androidRTSourceDownloaded && newer:
+		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = apkStoreRuntimeWhere(rt)+" · "+newerTag+" is out — A updates it",
+			"Update", tbxToneAccent
 	case rt.dir != "" && rt.err == "":
-		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = "Installed at "+rt.dir, "Ready", tbxToneGood
+		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = apkStoreRuntimeWhere(rt), "Ready", tbxToneGood
 	case rt.dir != "":
 		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = "Found at "+rt.dir+", but "+rt.err, "Incomplete", tbxToneWarn
-	default:
-		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = "Not installed — JukaHub does not ship it yet; A shows how to add it",
+	case rt.canRun:
+		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = "Not installed — A installs it from JukaHub's own releases (a few MB)",
 			"Missing", tbxToneBad
+	default:
+		rtSpec.subtitle, rtSpec.pill, rtSpec.tone = "Runs on the handheld (arm64 Linux), not on this machine",
+			"Not here", tbxToneNeutral
 	}
 	devSpec := tbxRowSpec{icon: "hardware", title: "This device"}
 	devSub := rt.host
@@ -348,10 +358,28 @@ func apkStoreRuntimeRows() []apkStoreRow {
 		{"rt-device", devSpec},
 		{"rt-waydroid", wdSpec},
 		{"rt-profiles", tbxRowSpec{icon: "controller", title: "Game Profiles",
-			subtitle: "Where added games live: Start → Games → Game Profiles"}},
+			subtitle: "Added games are here and on the Games Library's Android row"}},
 		{"rt-about", tbxRowSpec{icon: "info", title: "What AndroidRT can run",
 			subtitle: "Native games, experimentally; Java apps and most engines' games, no — and why"}},
 	}
+}
+
+// apkStoreRuntimeWhere says which copy of AndroidRT is in use, in a few words.
+func apkStoreRuntimeWhere(rt apkStoreRuntime) string {
+	switch rt.source {
+	case androidRTSourceBundled:
+		return "Bundled with JukaHub · updates with JukaHub"
+	case androidRTSourceDownloaded:
+		if rt.tag != "" {
+			return "Installed from JukaHub's releases (" + rt.tag + ")"
+		}
+		return "Installed from JukaHub's releases"
+	case androidRTSourceUser:
+		return "Your own copy at " + rt.dir
+	case androidRTSourceOverride:
+		return "JUKAHUB_ANDROIDRT: " + rt.dir
+	}
+	return "Installed at " + rt.dir
 }
 
 func apkStoreDrawRuntime(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame tbxFrame, body sdl.Rect, top, y int32) {

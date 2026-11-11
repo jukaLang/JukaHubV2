@@ -590,12 +590,12 @@ func toolsHubLoadFonts(config *Config) toolsHubFonts {
 		return f
 	}
 	return toolsHubFonts{
-		title: pick(getFontSized(config, "small", 20)),
-		value: pick(getFontSized(config, "small", 15)),
-		tag:   pick(getFontSized(config, "small", 13)),
-		hero:  pick(getFontSized(config, "medium", 24)),
-		chip:  pick(getFontSized(config, "small", 17)),
-		body:  pick(getFontSized(config, "small", 17)),
+		title: pick(FontForRole(config, TypeBody)),
+		value: pick(FontForRole(config, TypeLabel)),
+		tag:   pick(FontForRole(config, TypeCaption)),
+		hero:  pick(FontForRole(config, TypeHeading)),
+		chip:  pick(FontForRole(config, TypeBody)),
+		body:  pick(FontForRole(config, TypeBody)),
 	}
 }
 
@@ -668,7 +668,7 @@ func toolsHubMeasureFrame(config *Config, header UIPageHeader, fonts toolsHubFon
 	if tileH > 132 {
 		tileH = 132
 	}
-	headingH := toolsHubFontH(getFontSized(config, "small", 15), 18) + 20
+	headingH := toolsHubFontH(FontForRole(config, TypeLabel), 18) + 20
 	f.spec = toolsHubGridSpec{
 		x:          0,
 		width:      f.contentW,

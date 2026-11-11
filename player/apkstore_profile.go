@@ -8,20 +8,25 @@ package main
 // launch log and the first-run report all hang off a profile. So the store
 // does not grow a second launcher; it writes one profile per APK into the
 // local layer, <data>/game-profiles/local/apkstore-<id>.json, and the Game
-// Profiles panel (Start → Games → Game Profiles) lists it like any other.
-// The file name prefix is how the store knows which profiles it may take
-// away again: a profile someone wrote by hand is shown as "in Games" and can
-// be played, but Remove leaves it alone.
+// Profiles panel (Start → Games → Game Profiles) lists it like any other —
+// so does the Games Library's Android row (game_library_androidgames.go), with the
+// launcher icon saved here as the game's cover. The file name prefix is how
+// the store knows which profiles it may take away again: a profile someone
+// wrote by hand is shown as "in Games" and can be played, but Remove leaves
+// it alone.
 //
 // Everything here touches the disk (and launching stages the game), so the
 // store calls it from goroutines and posts the outcome back (apkstore.go).
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,12 +171,50 @@ func apkStoreAddProfile(info apkStoreInfo) (GameProfile, error) {
 		return GameProfile{}, err
 	}
 	invalidateGameProfileCache()
+	// The launcher icon becomes the game's cover in the Games Library (best
+	// effort: a game without one shows the library's placeholder).
+	if err := apkStoreSaveIcon(info.Icon, androidLibraryArtPath(info.Path)); err != nil {
+		logDebug("apkstore", "cover for %s: %v", p.ID, err)
+	}
 	return p, nil
 }
 
+// apkStoreSaveIcon writes an APK's launcher icon as a PNG at art, where the
+// Games Library looks for the game's cover. Nothing to write is not an error.
+func apkStoreSaveIcon(icon *image.NRGBA, art string) error {
+	if icon == nil || strings.TrimSpace(art) == "" {
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, icon); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(art), 0o755); err != nil {
+		return err
+	}
+	tmp := art + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	// Windows will not rename over a file; a cover is not worth more care.
+	_ = os.Remove(art)
+	if err := os.Rename(tmp, art); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
 // apkStoreRemoveProfile deletes the store's own profile for id (and the
-// backup AtomicWrite keeps beside it). A missing file is not an error.
+// backup AtomicWrite keeps beside it), and the cover it saved for the Games
+// Library. A missing file is not an error.
 func apkStoreRemoveProfile(id string) error {
+	if apk, ok := apkStoreProfileTarget(id); ok {
+		if art := androidLibraryArtPath(apk); art != "" {
+			_ = os.Remove(art)
+		}
+	}
 	p := apkStoreProfilePath(id)
 	err := os.Remove(p)
 	_ = os.Remove(p + ".bak")
