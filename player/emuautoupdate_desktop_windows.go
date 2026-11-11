@@ -3,8 +3,9 @@
 package main
 
 // emuautoupdate_desktop_windows.go — what the PC's Emulator updates pass asks
-// Windows: is a program running from an emulator's folder, and is this a
-// laptop on its battery.
+// Windows: is a program running from an emulator's folder, is this a laptop on
+// its battery, when did the user last touch the keyboard or mouse, and does
+// another program fill the screen.
 
 import (
 	"strings"
@@ -100,7 +101,28 @@ type emuSystemPowerStatus struct {
 	BatteryFullLifeTime uint32
 }
 
-var procEmuGetSystemPowerStatus = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetSystemPowerStatus")
+// emuLastInputInfo is Windows' LASTINPUTINFO.
+type emuLastInputInfo struct {
+	CbSize uint32
+	DwTime uint32
+}
+
+// Windows' QUERY_USER_NOTIFICATION_STATE values that mean another program owns
+// the screen: a full-screen application, a full-screen Direct3D game, or the
+// presentation settings switched on.
+const (
+	emuQUNSBusy                 = 2
+	emuQUNSRunningD3DFullScreen = 3
+	emuQUNSPresentationMode     = 4
+)
+
+var (
+	modEmuKernel32              = windows.NewLazySystemDLL("kernel32.dll")
+	procEmuGetSystemPowerStatus = modEmuKernel32.NewProc("GetSystemPowerStatus")
+	procEmuGetTickCount         = modEmuKernel32.NewProc("GetTickCount")
+	procEmuGetLastInputInfo     = windows.NewLazySystemDLL("user32.dll").NewProc("GetLastInputInfo")
+	procEmuSHQueryUNS           = windows.NewLazySystemDLL("shell32.dll").NewProc("SHQueryUserNotificationState")
+)
 
 // emuDesktopOnBattery reports a laptop running on its battery: the charger is
 // unplugged and a battery is there. Anything unknown counts as mains power, so
@@ -113,4 +135,59 @@ func emuDesktopOnBattery() bool {
 	// ACLineStatus: 0 unplugged, 1 plugged in, 255 unknown. BatteryFlag 128
 	// means no system battery, 255 unknown.
 	return s.ACLineStatus == 0 && s.BatteryFlag != 128 && s.BatteryFlag != 255
+}
+
+// emuDesktopSystemIdle is how long ago the user last pressed a key or moved
+// the mouse in any window of this session (GetLastInputInfo), or -1 when
+// Windows cannot say. Game controllers are not input to Windows here: JukaHub's
+// own input age hears its controllers, and emuDesktopFullScreenApp the game
+// another program plays.
+func emuDesktopSystemIdle() time.Duration {
+	if procEmuGetLastInputInfo.Find() != nil || procEmuGetTickCount.Find() != nil {
+		return -1
+	}
+	li := emuLastInputInfo{CbSize: uint32(unsafe.Sizeof(emuLastInputInfo{}))}
+	if r, _, _ := procEmuGetLastInputInfo.Call(uintptr(unsafe.Pointer(&li))); r == 0 {
+		return -1
+	}
+	now, _, _ := procEmuGetTickCount.Call()
+	// Both are 32-bit millisecond tick counts, so the difference survives the
+	// counter wrapping every 49.7 days. Windows may stamp an input a moment
+	// after the tick count it hands out: that is no idle time at all.
+	ms := int32(uint32(now) - li.DwTime)
+	if ms < 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// emuDesktopFullScreenApp reports another program filling the screen — a game,
+// a film, a slide show — or the presentation settings switched on
+// (SHQueryUserNotificationState). JukaHub's own full-screen window answers
+// "busy" too, and is not another program: the foreground window's process
+// tells them apart. Anything Windows cannot say counts as not busy.
+func emuDesktopFullScreenApp() bool {
+	if procEmuSHQueryUNS.Find() != nil {
+		return false
+	}
+	var state uint32
+	if r, _, _ := procEmuSHQueryUNS.Call(uintptr(unsafe.Pointer(&state))); uint32(r) != 0 {
+		return false // not S_OK
+	}
+	switch state {
+	case emuQUNSPresentationMode:
+		return true
+	case emuQUNSBusy, emuQUNSRunningD3DFullScreen:
+	default:
+		return false
+	}
+	hwnd := windows.GetForegroundWindow()
+	if hwnd == 0 {
+		return true
+	}
+	var pid uint32
+	if _, err := windows.GetWindowThreadProcessId(hwnd, &pid); err != nil {
+		return true
+	}
+	return pid != windows.GetCurrentProcessId()
 }

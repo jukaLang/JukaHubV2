@@ -1,6 +1,6 @@
-# Python packages for player/native/build-helpers.sh, exactly as the release
-# installs them into its Ubuntu 20.04 build root (Python 3.8, aarch64) in
-# .github/workflows/remote-play-helpers.yml:
+# Python packages for player/native/build-helpers.sh (and the CMake the Box64
+# pack builds with), exactly as the release installs them into its Ubuntu 20.04
+# build root (Python 3.8, aarch64) in .github/scripts/build-root.sh:
 #
 #   python3 -m pip install --no-cache-dir --only-binary=:all: -r helper-build-requirements.txt
 #

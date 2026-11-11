@@ -131,7 +131,7 @@ const (
 
 // ppssppDigestPattern is the only digest an install accepts: GitHub's own
 // "sha256:<64 hex>" for the asset.
-var ppssppDigestPattern = regexp.MustCompile(`(?i)^sha256:[0-9a-f]{64}$`)
+var ppssppDigestPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)^sha256:[0-9a-f]{64}$`) })
 
 // errPPSSPPUnusable marks a release whose package cannot be used on this
 // device at all (no build for the model, no assets, a binary this firmware
@@ -142,12 +142,16 @@ var errPPSSPPUnusable = errors.New("not usable on this device")
 var (
 	// ppssppNotesVersionRe finds the PPSSPP version a release names in its
 	// title or notes ("update ppsspp 1.20.3", "PPSSPP to v1.20.4").
-	ppssppNotesVersionRe = regexp.MustCompile(`(?i)ppsspp[^0-9\n]{0,16}?v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+	ppssppNotesVersionRe = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)ppsspp[^0-9\n]{0,16}?v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+	})
 	// ppssppNameVersionRe finds the version in a file or folder name:
 	// CrossMix's ppsspp_1.17.1_gl.sh and PPSSPP_1.18.1/.
-	ppssppNameVersionRe = regexp.MustCompile(`(?i)ppsspp[ _-]?v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+	ppssppNameVersionRe = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)ppsspp[ _-]?v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+	})
 	// ppssppPlatformDirRe is a TrimUI platform folder name (tg5040, tg5050).
-	ppssppPlatformDirRe = regexp.MustCompile(`^tg[0-9]{4}$`)
+	ppssppPlatformDirRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^tg[0-9]{4}$`) })
 )
 
 // The paths and roots the manager works in. They are variables so the tests
@@ -573,7 +577,7 @@ func ppssppNewer(a, b string) bool {
 func ppssppVersionFromNotes(texts ...string) string {
 	best := ""
 	for _, text := range texts {
-		for _, m := range ppssppNotesVersionRe.FindAllStringSubmatch(text, -1) {
+		for _, m := range ppssppNotesVersionRe().FindAllStringSubmatch(text, -1) {
 			if best == "" || compareCoreVersions(m[1], best) > 0 {
 				best = m[1]
 			}
@@ -585,7 +589,7 @@ func ppssppVersionFromNotes(texts ...string) string {
 // ppssppVersionFromName is the version a file or folder name carries
 // ("ppsspp_1.17.1_gl.sh", "PPSSPP_1.18.1"), or "".
 func ppssppVersionFromName(name string) string {
-	if m := ppssppNameVersionRe.FindStringSubmatch(name); m != nil {
+	if m := ppssppNameVersionRe().FindStringSubmatch(name); m != nil {
 		return m[1]
 	}
 	return ""
@@ -712,7 +716,7 @@ func ppssppReleaseFrom(data []byte) (ppssppRelease, error) {
 			continue
 		}
 		digest := strings.TrimSpace(a.Digest)
-		if !ppssppDigestPattern.MatchString(digest) {
+		if !ppssppDigestPattern().MatchString(digest) {
 			return ppssppRelease{}, fmt.Errorf("minui-psp %s publishes no SHA-256 digest for %s — an unverifiable build is not installed", tag, ppssppPakAsset)
 		}
 		if a.Size > ppssppMaxDownload {
@@ -827,7 +831,7 @@ func ppssppPickBinary(dir string, rels []string, platform string) string {
 			switch {
 			case seg == platform:
 				score++
-			case ppssppPlatformDirRe.MatchString(seg):
+			case ppssppPlatformDirRe().MatchString(seg):
 				foreign = true
 			}
 		}
@@ -1175,7 +1179,7 @@ func ppssppBreakMarkers(text, sep string) string {
 }
 
 // ppssppScriptValue is shellQuote for a value the script assigns, with every
-// marker split by an empty quoted string: 'Retro''Arch' is the same word to the
+// marker split by an empty quoted string: 'Retro”Arch' is the same word to the
 // shell. A firmware launcher, a pinned launcher or a tag that happens to name
 // RetroArch must not make JukaHub configure RetroArch for a PSP game. A marker
 // never holds a quote or a backslash, so it always sits inside quotes.
@@ -1785,7 +1789,7 @@ func ppssppLauncherVersion(launcher string, scan *ppssppBinaryScan) string {
 		head, _ := io.ReadAll(io.LimitReader(f, 64<<10))
 		_ = f.Close()
 		best := ""
-		for _, m := range ppssppNameVersionRe.FindAllStringSubmatch(string(head), -1) {
+		for _, m := range ppssppNameVersionRe().FindAllStringSubmatch(string(head), -1) {
 			if best == "" || compareCoreVersions(m[1], best) > 0 {
 				best = m[1]
 			}
@@ -2065,7 +2069,7 @@ func ppssppInstall(ctx context.Context, client *http.Client, rel ppssppRelease, 
 		return ppssppBuild{}, errors.New("JukaHub has no data folder to install PPSSPP into")
 	case platform == "":
 		return ppssppBuild{}, errors.New("no PPSSPP build is published for this model")
-	case !ppssppDigestPattern.MatchString(rel.Digest):
+	case !ppssppDigestPattern().MatchString(rel.Digest):
 		return ppssppBuild{}, fmt.Errorf("%s comes without a SHA-256 digest and is not installed", ppssppPakAsset)
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {

@@ -196,10 +196,35 @@ func (p relPackProgress) line(title string) string {
 	return capitalizeFirst(title) + " is installed"
 }
 
-// relPackBusy holds the keys of the installs that are running.
+// relPackBusy holds the keys of the installs that are running, and the
+// folders they install into (relPackRecover leaves those alone: between the
+// swap's two renames the folder is legitimately missing, and putting the old
+// copy back then would make the second rename fail).
 var relPackBusy struct {
 	mu   sync.Mutex
 	keys map[string]bool
+	dirs map[string]bool
+}
+
+// relPackMarkDir records that an install into dir is running (on) or over.
+func relPackMarkDir(dir string, on bool) {
+	relPackBusy.mu.Lock()
+	defer relPackBusy.mu.Unlock()
+	if relPackBusy.dirs == nil {
+		relPackBusy.dirs = map[string]bool{}
+	}
+	if on {
+		relPackBusy.dirs[filepath.Clean(dir)] = true
+		return
+	}
+	delete(relPackBusy.dirs, filepath.Clean(dir))
+}
+
+// relPackDirInstalling reports whether an install into dir is running.
+func relPackDirInstalling(dir string) bool {
+	relPackBusy.mu.Lock()
+	defer relPackBusy.mu.Unlock()
+	return relPackBusy.dirs[filepath.Clean(dir)]
 }
 
 // relPackBegin claims key for one install; false when one is running.
@@ -251,8 +276,12 @@ func relPackRead(dir string) (relPackInfo, bool) {
 }
 
 // relPackRecover repairs an install interrupted between its two renames: the
-// install folder is gone but the copy set aside is there, so it goes back.
+// install folder is gone but the copy set aside is there, so it goes back. It
+// does nothing while an install into dir is running in this process.
 func relPackRecover(dir string) {
+	if relPackDirInstalling(dir) {
+		return
+	}
 	old := dir + relPackOldSuffix
 	if _, err := os.Stat(dir); err == nil || !errors.Is(err, fs.ErrNotExist) {
 		return
@@ -763,6 +792,8 @@ func relPackInstall(ctx context.Context, client *http.Client, spec relPackSpec, 
 	}
 	dir = filepath.Clean(dir)
 	relPackRecover(dir)
+	relPackMarkDir(dir, true)
+	defer relPackMarkDir(dir, false)
 	parent := filepath.Dir(dir)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		if disk := relPackDiskErr(err); disk != nil {

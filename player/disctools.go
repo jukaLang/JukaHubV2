@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // discSystemFolders maps a lower-cased Roms/<folder> name to the cue track
@@ -47,15 +48,17 @@ var discSystemFolders = map[string]string{
 // of its name: "(Disc 1)", "(Disk 2)", "[CD 3]", "(Disc 1 of 2)" and the
 // " - Disc 1" spelling some rippers use. The bracketed form is tried first so
 // "Game (Disc 1)" keeps its name.
-var discSuffixPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)[\(\[]\s*(?:disc|disk|cd)\s*([0-9]{1,2})(?:\s*(?:of|/)\s*[0-9]{1,2})?\s*[\)\]]\s*$`),
-	regexp.MustCompile(`(?i)(?:^|\s)-\s*(?:disc|disk|cd)\s*([0-9]{1,2})\s*$`),
-}
+var discSuffixPatterns = sync.OnceValue(func() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`(?i)[\(\[]\s*(?:disc|disk|cd)\s*([0-9]{1,2})(?:\s*(?:of|/)\s*[0-9]{1,2})?\s*[\)\]]\s*$`),
+		regexp.MustCompile(`(?i)(?:^|\s)-\s*(?:disc|disk|cd)\s*([0-9]{1,2})\s*$`),
+	}
+})
 
 // discTrackPattern matches per-track rips ("Game (Track 2).bin"). Those already
 // belong to a multi-track cue sheet, so writing a one-track cue for them would
 // be wrong.
-var discTrackPattern = regexp.MustCompile(`(?i)[\(\[]\s*track\s*[0-9]{1,2}`)
+var discTrackPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)[\(\[]\s*track\s*[0-9]{1,2}`) })
 
 // discHelperReport is what one run changed, for the toast and the log.
 type discHelperReport struct {
@@ -75,10 +78,10 @@ func (r discHelperReport) Summary() string {
 	}
 	parts := make([]string, 0, 2)
 	if r.Cues > 0 {
-		parts = append(parts, itoa(r.Cues)+" cue sheet(s)")
+		parts = append(parts, pluralizeCount(r.Cues, "cue sheet", "cue sheets"))
 	}
 	if r.Playlists > 0 {
-		parts = append(parts, itoa(r.Playlists)+" multi-disc playlist(s)")
+		parts = append(parts, pluralizeCount(r.Playlists, "multi-disc playlist", "multi-disc playlists"))
 	}
 	if len(parts) == 0 {
 		if len(r.Errors) > 0 {
@@ -108,7 +111,7 @@ func cueSheetText(binary, mode string) string {
 // splitDiscNumber separates "Final Fantasy VII (Disc 2)" into its set name and
 // disc number. ok is false when the name carries no disc marker.
 func splitDiscNumber(name string) (base string, disc int, ok bool) {
-	for _, pattern := range discSuffixPatterns {
+	for _, pattern := range discSuffixPatterns() {
 		loc := pattern.FindStringSubmatchIndex(name)
 		if loc == nil {
 			continue
@@ -161,7 +164,7 @@ func writeDiscHelpers(dir, mode string) (cues, playlists int, errs []string) {
 		if !strings.EqualFold(filepath.Ext(f.name), ".bin") || f.size == 0 {
 			continue
 		}
-		if discTrackPattern.MatchString(f.name) {
+		if discTrackPattern().MatchString(f.name) {
 			continue
 		}
 		base := strings.TrimSuffix(f.name, filepath.Ext(f.name))
@@ -191,7 +194,7 @@ func writeDiscHelpers(dir, mode string) (cues, playlists int, errs []string) {
 		default:
 			continue
 		}
-		if discTrackPattern.MatchString(f.name) {
+		if discTrackPattern().MatchString(f.name) {
 			continue
 		}
 		base, disc, ok := splitDiscNumber(strings.TrimSuffix(f.name, filepath.Ext(f.name)))

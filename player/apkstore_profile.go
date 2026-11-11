@@ -181,6 +181,9 @@ func apkStoreAddProfile(info apkStoreInfo) (GameProfile, error) {
 
 // apkStoreSaveIcon writes an APK's launcher icon as a PNG at art, where the
 // Games Library looks for the game's cover. Nothing to write is not an error.
+// The store's Add and the library's scan can both write one cover at once, so
+// each write goes through a temporary file of its own and a rename
+// (writeFileReplace): a shared ".tmp" let one writer truncate the other's.
 func apkStoreSaveIcon(icon *image.NRGBA, art string) error {
 	if icon == nil || strings.TrimSpace(art) == "" {
 		return nil
@@ -192,35 +195,25 @@ func apkStoreSaveIcon(icon *image.NRGBA, art string) error {
 	if err := os.MkdirAll(filepath.Dir(art), 0o755); err != nil {
 		return err
 	}
-	tmp := art + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	// Windows will not rename over a file; a cover is not worth more care.
-	_ = os.Remove(art)
-	if err := os.Rename(tmp, art); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return writeFileReplace(art, buf.Bytes())
 }
 
 // apkStoreRemoveProfile deletes the store's own profile for id (and the
 // backup AtomicWrite keeps beside it), and the cover it saved for the Games
 // Library. A missing file is not an error.
 func apkStoreRemoveProfile(id string) error {
-	if apk, ok := apkStoreProfileTarget(id); ok {
-		if art := androidLibraryArtPath(apk); art != "" {
-			_ = os.Remove(art)
-		}
-	}
+	apk, hasAPK := apkStoreProfileTarget(id)
 	p := apkStoreProfilePath(id)
 	err := os.Remove(p)
 	_ = os.Remove(p + ".bak")
 	invalidateGameProfileCache()
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	if hasAPK {
+		// After the profile: a cover under the APK's bare name stays while
+		// another of the store's games still has that name.
+		androidLibraryRemoveCover(apk)
 	}
 	return nil
 }

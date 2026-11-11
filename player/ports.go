@@ -221,7 +221,7 @@ func portMasterEmuEntry() emuEntry {
 	}
 	ports := scanPortLaunchers(portRoots(portMasterSDRoot))
 	e.Status = emuAvailable
-	e.Detail = fmt.Sprintf("PortMaster installed · %d port(s)", len(ports))
+	e.Detail = "PortMaster installed · " + pluralizeCount(len(ports), "port", "ports")
 	return e
 }
 
@@ -628,7 +628,7 @@ func portsSummary(entries []portEntry) string {
 	if ports == 0 {
 		return "PortMaster installed · no ports yet"
 	}
-	summary := fmt.Sprintf("PortMaster installed · %d port(s)", ports)
+	summary := "PortMaster installed · " + pluralizeCount(ports, "port", "ports")
 	if unsupported > 0 {
 		// Say it up front, so nobody opens a port that cannot start.
 		summary += fmt.Sprintf(" · %d cannot run here (32-bit only)", unsupported)

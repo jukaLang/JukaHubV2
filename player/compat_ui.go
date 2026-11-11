@@ -799,7 +799,7 @@ func renderCompatCoreDetail(renderer *sdl.Renderer, config *Config, rows []coreB
 	lineY += 8
 
 	reports := compatCoreReportCount(build.Core)
-	renderText(renderer, config, font, fmt.Sprintf("Suggested by %d catalog report(s)", reports), ColorTextSecondary(), x, lineY)
+	renderText(renderer, config, font, "Suggested by "+pluralizeCount(reports, "catalog report", "catalog reports"), ColorTextSecondary(), x, lineY)
 	lineY += smallH + 8
 
 	action := "This is the active build."

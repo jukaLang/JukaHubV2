@@ -46,8 +46,8 @@ const (
 	gameProfileMaxEnv       = 64
 )
 
-var gameProfileIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-var gameProfileEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+var gameProfileIDPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`) })
+var gameProfileEnvKeyPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`) })
 
 // GameProfile is one entry in the catalog. SchemaVersion is required in every
 // file so an older build refuses a newer profile instead of misreading it.
@@ -436,7 +436,7 @@ func validateGameProfile(p *GameProfile) error {
 		return fmt.Errorf("unsupported schemaVersion %d (this build supports %d)", p.SchemaVersion, gameProfileSchemaVersion)
 	}
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
-	if !gameProfileIDPattern.MatchString(p.ID) {
+	if !gameProfileIDPattern().MatchString(p.ID) {
 		return fmt.Errorf("invalid id %q (use lowercase letters, digits, dot, dash or underscore)", p.ID)
 	}
 	p.Title = strings.TrimSpace(p.Title)
@@ -520,7 +520,7 @@ func validateGameProfile(p *GameProfile) error {
 		return fmt.Errorf("more than %d environment variables", gameProfileMaxEnv)
 	}
 	for key, value := range p.Env {
-		if !gameProfileEnvKeyPattern.MatchString(key) {
+		if !gameProfileEnvKeyPattern().MatchString(key) {
 			return fmt.Errorf("invalid environment key %q", key)
 		}
 		if strings.ContainsRune(value, '\x00') {
@@ -851,11 +851,30 @@ func needsBox64(path string) bool {
 	return (machine == 0x03 || machine == 0x3E) && !hostRunsX86(machine)
 }
 
-// launchGameProfile re-resolves the profile (the SD card may have changed since
-// the panel was built), starts it in its own process group, and reaps it in a
-// goroutine so JukaHub stays responsive. A per-game log captures the child's
-// output without exposing environment values.
+// launchGameProfile starts a profile from the render thread (the Game Profiles
+// panel): it claims the profile's start for the whole launch, so no other
+// Play — the Games Library's, the APK Store's — starts the game a second time
+// meanwhile, and reads the time-lapse settings here, where the config may be
+// read.
 func launchGameProfile(entry gameProfileEntry) error {
+	id := entry.Profile.ID
+	if !gameProfileClaimStart(id) {
+		return fmt.Errorf("%s is already starting", entry.Profile.Title)
+	}
+	defer gameProfileReleaseStart(id)
+	return launchGameProfileClaimed(entry, timelapseSettingsFor(appConfig))
+}
+
+// launchGameProfileClaimed re-resolves the profile (the SD card may have
+// changed since the panel was built), starts it in its own process group, and
+// reaps it in a goroutine so JukaHub stays responsive. A per-game log captures
+// the child's output without exposing environment values. The caller holds
+// the profile's start claim (gameProfileClaimStart) until this returns — the
+// PID is recorded by then, so the running check takes over — and tl is the
+// time-lapse settings it read on the render thread: the Games Library and the
+// APK Store run this in the background (they start AndroidPak profiles only; a
+// Wine profile's launch reads its settings where it runs, the panel).
+func launchGameProfileClaimed(entry gameProfileEntry, tl timelapseSettings) error {
 	id := entry.Profile.ID
 	if pid := gameProfileRunningPID(id); pid > 0 {
 		return fmt.Errorf("%s is already running (pid %d)", entry.Profile.Title, pid)
@@ -925,7 +944,7 @@ func launchGameProfile(entry gameProfileEntry) error {
 		afterExit = func(err error) { androidPakFirstRunReport(id, err) }
 	}
 
-	startErr := startGameProfileCommand(cmd, id, gameDir, logFile, func() {
+	startErr := startGameProfileCommand(cmd, id, gameDir, logFile, tl, func() {
 		if stageDir != "" {
 			androidPakStageCleanupGC(stageDir, stageGen)
 		}
@@ -934,6 +953,11 @@ func launchGameProfile(entry gameProfileEntry) error {
 		// Nothing started, so nothing will run the cleanup above: the
 		// extracted libraries would sit in tmpfs (RAM) until a reboot.
 		androidPakStageRelease(stageDir, stageGen)
+	}
+	if startErr == nil && entry.Profile.Runtime == gameRuntimeAndroidPak {
+		// Android is one more system played, wherever the game was started
+		// (a ROM's system counts in recordGameLaunch).
+		trophyEventDistinct(tkGameSystems, androidLibrarySystem)
 	}
 	return startErr
 }
@@ -945,6 +969,10 @@ func launchGameProfile(entry gameProfileEntry) error {
 // display, and its log is the profile's. It runs on the main thread (the Game
 // Profiles panel), which is where the settings the launch needs are read.
 func launchWineProfile(entry gameProfileEntry, gameDir, exe string) error {
+	if !IsWindows() && windowsRuntimeInstalling() {
+		// The launch would run on files being replaced.
+		return errors.New("the Windows runtime is being installed or updated; start the game when it is done")
+	}
 	id := entry.Profile.ID
 	env := cloneGameProfileEnv(entry.Profile.Env)
 	if !hasEnvKey(env, "WINEPREFIX") && !IsWindows() {
@@ -968,13 +996,9 @@ func launchWineProfile(entry gameProfileEntry, gameDir, exe string) error {
 			trophyEventDistinct(tkGameTitles, id)
 		},
 		Ended: func(error) { gameProfileSetRunning(id, 0) },
-		Failed: func(err error, logPath string) {
-			msg := entry.Profile.Title + ": " + firstLine(err.Error())
-			if logPath != "" {
-				msg += " · log: " + filepath.Base(logPath)
-			}
-			ShowToast(msg, ToastKindError)
-		},
+		// A toast now and the launch-failure dialog once the main loop draws
+		// again (wineShowProfileFailure): this runs on the launch's goroutine.
+		Failed: func(err error, logPath string) { wineProfileLaunchFailed(entry.Profile.Title, err, logPath) },
 	})
 }
 
@@ -1000,7 +1024,9 @@ func rotateGameProfileLog(path string) {
 // startGameProfileCommand starts cmd, records its PID, and waits in the
 // background. logFile is closed and cleanup runs after the child exits;
 // afterExit (optional, nil on ignore) runs once after it with the wait error.
-func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File, cleanup func(), afterExit func(error)) error {
+// tl is the time-lapse settings, read on the render thread by the caller
+// (this may run on a launch goroutine, which must not read the config).
+func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File, tl timelapseSettings, cleanup func(), afterExit func(error)) error {
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
@@ -1018,7 +1044,7 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 	trophyEvent(tkGameLaunch) // a PC or Android game (a game profile) started
 	trophyEventDistinct(tkGameTitles, id)
 	logDebug("gameprofiles", "launched %s (pid %d, dir %s)", id, pid, gameDir)
-	recorder := startTimelapse(appConfig, id)
+	recorder := startTimelapseWith(appConfig, id, tl)
 	go func() {
 		err := cmd.Wait()
 		screenChildReaped(cmd)
@@ -1070,6 +1096,46 @@ func gameProfileSetRunning(id string, pid int) {
 		return
 	}
 	gameProfileRunning.pids[id] = pid
+}
+
+// gameProfileStarting marks the profiles whose launch is under way: from the
+// Play press (or the top of launchGameProfile) until the child has started —
+// its PID is recorded by then — or the start failed. An AndroidPak start
+// triages the APK and stages it to tmpfs first, which takes seconds; without
+// the mark a second Play in that window passed the running check, staged
+// again over the first launch's files and started the game twice.
+var gameProfileStarting struct {
+	mu  sync.Mutex
+	ids map[string]bool
+}
+
+// gameProfileClaimStart marks id as starting; false when it already is. The
+// caller releases the claim (gameProfileReleaseStart) on every way out.
+func gameProfileClaimStart(id string) bool {
+	gameProfileStarting.mu.Lock()
+	defer gameProfileStarting.mu.Unlock()
+	if gameProfileStarting.ids[id] {
+		return false
+	}
+	if gameProfileStarting.ids == nil {
+		gameProfileStarting.ids = make(map[string]bool)
+	}
+	gameProfileStarting.ids[id] = true
+	return true
+}
+
+// gameProfileReleaseStart drops id's starting mark.
+func gameProfileReleaseStart(id string) {
+	gameProfileStarting.mu.Lock()
+	defer gameProfileStarting.mu.Unlock()
+	delete(gameProfileStarting.ids, id)
+}
+
+// gameProfileStartingNow reports whether a launch of id is under way.
+func gameProfileStartingNow(id string) bool {
+	gameProfileStarting.mu.Lock()
+	defer gameProfileStarting.mu.Unlock()
+	return gameProfileStarting.ids[id]
 }
 
 func cloneGameProfileEnv(src map[string]string) map[string]string {

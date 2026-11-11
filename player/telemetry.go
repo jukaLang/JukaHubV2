@@ -55,7 +55,10 @@ func telemetryOptedIn() bool {
 	return telemetryOptedInFrom(user.Variables.Custom)
 }
 
-// setTelemetryOptedIn persists the choice and mirrors it onto the live config.
+// setTelemetryOptedIn records the choice in the cached user config (which
+// telemetryOptedIn reads) and on the live config, then saves the live config.
+// Saving the cache instead would write its boot copy of every other setting
+// back, and a section-style save of it no longer carries a changed key.
 func setTelemetryOptedIn(config *Config, on bool) error {
 	user := loadUserConfig()
 	if user == nil {
@@ -65,13 +68,18 @@ func setTelemetryOptedIn(config *Config, on bool) error {
 		user.Variables.Custom = make(map[string]interface{})
 	}
 	user.Variables.Custom[telemetryOptInKey] = on
-	saveUserConfig(user)
-	if config != nil {
-		if config.Variables.Custom == nil {
-			config.Variables.Custom = make(map[string]interface{})
-		}
-		config.Variables.Custom[telemetryOptInKey] = on
+	if config == nil {
+		config = appConfig
 	}
+	if config == nil {
+		saveUserConfig(user)
+		return nil
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = make(map[string]interface{})
+	}
+	config.Variables.Custom[telemetryOptInKey] = on
+	saveUserConfig(userConfigFromVariables(config))
 	return nil
 }
 

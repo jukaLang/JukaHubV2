@@ -28,25 +28,34 @@ package main
 //     pass that runs anyway, so several stamps do not drift into several passes
 //     (and several install cards) a day.
 //   - A failure is logged and tried again after an hour, then two, four… up to
-//     a day. Only the first failed install in a row reaches the toast; a check
-//     that could not reach its server is a log line, as the cores' is.
+//     a day. Checks and installs count their failures in a row apart: a check
+//     that answers ends the checks' run, so a failed check (Wi-Fi up, DNS not
+//     yet) neither doubles the wait after the install that follows nor keeps
+//     that install's failure out of the toast. Only the first failed install
+//     in a row reaches the toast; a check that could not reach its server is a
+//     log line, as the cores' is.
 //   - GitHub answers 60 requests an hour per address to a client that does not
 //     sign in, and nearly all of these ask GitHub. One pass asks about one
-//     project once: emuPassTransport answers an install's second look at a
-//     release from the check's answer, the Emulators page's own check is used
-//     while it is fresh, and a 403 or 429 holds every GitHub lookup for an
-//     hour. (A lookup asked before is asked conditionally, so an unchanged
-//     release comes back as a bodiless 304 — that saves the connection, not the
-//     hour's count: GitHub only spares a 304 to a client that signs in.) The
-//     updaters a hold kept from running are not stamped, so they run when the
-//     hour is over rather than tomorrow, and the oldest attempt goes first, so
-//     one that keeps failing cannot spend the hour's requests for the others.
+//     project once: emuPassTransport answers every later look at a release
+//     from the first answer — an install's, and relpack's own conditional
+//     lookups of JukaHub's release list for the Windows-app runtime and
+//     AndroidRT — the Emulators page's own check is used while it is fresh,
+//     and a 403 or 429 holds every GitHub lookup for an hour, including the
+//     fallback request of the lookup that met it. (A lookup asked before is
+//     asked conditionally, so an unchanged release comes back as a bodiless
+//     304 — that saves the connection, not the hour's count: GitHub only spares
+//     a 304 to a client that signs in.) The updaters a hold kept from running
+//     are not stamped, so they run when the hour is over rather than tomorrow,
+//     and the oldest attempt goes first, so one that keeps failing cannot spend
+//     the hour's requests for the others.
 //   - An updater whose program is running (InUse: an Xbox game, an emulator
 //     open on the PC) is skipped and runs at the next quiet moment.
-//   - A build this pass installed that is no longer installed was put back by
-//     the user — a rollback is a choice — so it is not installed again; the
-//     next build is installed as usual. The same rule stops a loop if an
-//     install ever reports success without taking effect.
+//   - A build the user rolled back from — after the pass installed it, or
+//     after an Update, X or L1 by hand; the rollbacks record it
+//     (emuWinNoteRolledBack, hakuxNoteRolledBack) — is not installed again: a
+//     rollback is a choice. The next build is installed as usual. The same
+//     rule stops a loop if an install ever reports success without taking
+//     effect. (A rollback made before this rule existed left no record.)
 
 import (
 	"bytes"
@@ -78,13 +87,19 @@ const (
 	emuGitHubHold = time.Hour
 	// emuRuntimeCheckTimeout bounds one check: a release lookup or two.
 	emuRuntimeCheckTimeout = 2 * time.Minute
+	// emuMemoMaxBody is the largest answer a pass remembers — a page of
+	// JukaHub's release list, every asset of twenty releases spelled out,
+	// runs past a megabyte — and emuMemoMaxTotal what one pass keeps in all.
+	emuMemoMaxBody  = 4 << 20
+	emuMemoMaxTotal = 16 << 20
 )
 
 // emuRuntimeRecord is what is kept about one updater between runs.
 type emuRuntimeRecord struct {
 	// CheckedAt is the last check that answered, RFC 3339 in UTC.
 	CheckedAt string `json:"checked_at,omitempty"`
-	// Installed is the build the pass last installed, as its check named it.
+	// Installed is the build the pass last installed, or the one a rollback
+	// gave up, as the pass's check names it.
 	Installed string `json:"installed,omitempty"`
 	// Announced is the build Notify mode last announced.
 	Announced string `json:"announced,omitempty"`
@@ -102,18 +117,20 @@ type emuRuntimeFile struct {
 // emuRuntimeState is the record file and the session's memory. The session
 // half runs on the monotonic clock: the last check of each updater that
 // answered, the last attempt (the order), the earliest retry after a failure
-// and how many failed in a row, GitHub's hold, and notes for the toast.
+// and how many checks and how many installs failed in a row (apart: see
+// emuRuntimeFailed), GitHub's hold, and notes for the toast.
 var emuRuntimeState struct {
-	mu       sync.Mutex
-	loaded   bool
-	path     string
-	file     emuRuntimeFile
-	checked  map[string]time.Time
-	attempt  map[string]time.Time
-	retryAt  map[string]time.Time
-	failures map[string]int
-	hold     time.Time
-	notes    []string
+	mu           sync.Mutex
+	loaded       bool
+	path         string
+	file         emuRuntimeFile
+	checked      map[string]time.Time
+	attempt      map[string]time.Time
+	retryAt      map[string]time.Time
+	checkFails   map[string]int
+	installFails map[string]int
+	hold         time.Time
+	notes        []string
 }
 
 // emuRuntimeStatePath is where the record lives; a variable so a test can use
@@ -134,7 +151,8 @@ func emuRuntimeLoadLocked() {
 		emuRuntimeState.checked = map[string]time.Time{}
 		emuRuntimeState.attempt = map[string]time.Time{}
 		emuRuntimeState.retryAt = map[string]time.Time{}
-		emuRuntimeState.failures = map[string]int{}
+		emuRuntimeState.checkFails = map[string]int{}
+		emuRuntimeState.installFails = map[string]int{}
 	}
 	if emuRuntimeState.loaded {
 		return
@@ -193,25 +211,44 @@ func emuRuntimeUpdateRecord(key string, change func(r *emuRuntimeRecord)) {
 	emuRuntimeSaveLocked()
 }
 
-// emuRuntimeChecked records a check of key that answered (or an install that
-// finished): the stamp, the session guard, and the end of a run of failures.
+// emuRuntimeChecked records a check of key that answered "nothing to do" (or
+// an install that finished): the stamp, the session guard, and the end of both
+// runs of failures.
 func emuRuntimeChecked(key string, now time.Time) {
 	emuRuntimeUpdateRecord(key, func(r *emuRuntimeRecord) { r.CheckedAt = now.UTC().Format(time.RFC3339) })
 	emuRuntimeState.mu.Lock()
 	emuRuntimeState.checked[key] = time.Now()
 	delete(emuRuntimeState.retryAt, key)
-	delete(emuRuntimeState.failures, key)
+	delete(emuRuntimeState.checkFails, key)
+	delete(emuRuntimeState.installFails, key)
 	emuRuntimeState.mu.Unlock()
 }
 
-// emuRuntimeFailed records a failed check or install of key, starts its wait
-// before the next try and returns how many have failed in a row.
-func emuRuntimeFailed(key string) int {
+// emuRuntimeAnswered ends a run of failed checks of key: its check answered
+// (with a newer build, which the install then fetches).
+func emuRuntimeAnswered(key string) {
 	emuRuntimeState.mu.Lock()
 	defer emuRuntimeState.mu.Unlock()
 	emuRuntimeLoadLocked()
-	n := emuRuntimeState.failures[key] + 1
-	emuRuntimeState.failures[key] = n
+	delete(emuRuntimeState.checkFails, key)
+}
+
+// emuRuntimeFailed records a failed check or install of key, starts its wait
+// before the next try and returns how many of that kind have failed in a row.
+// The two kinds are counted apart: a check that could not reach its server
+// and an install that failed after the next check answered are two first
+// failures, each waiting an hour, and the install's is the one the toast
+// names.
+func emuRuntimeFailed(key string, install bool) int {
+	emuRuntimeState.mu.Lock()
+	defer emuRuntimeState.mu.Unlock()
+	emuRuntimeLoadLocked()
+	streak := emuRuntimeState.checkFails
+	if install {
+		streak = emuRuntimeState.installFails
+	}
+	n := streak[key] + 1
+	streak[key] = n
 	emuRuntimeState.retryAt[key] = time.Now().Add(emuRuntimeRetryAfter(n))
 	return n
 }
@@ -333,28 +370,42 @@ func emuRateLimited(err error) bool {
 // emuPassTransport is the HTTP transport of one pass (and of the Emulators
 // page's background check). For GitHub's API — and nothing else — it:
 //
-//   - answers a question this pass already asked from memory: the check and
-//     the install of hakuX, of a Windows emulator or of a runtime each ask for
-//     the same release;
+//   - answers a question this pass already asked from memory, whoever asks:
+//     the check and the install of hakuX, of a Windows emulator or of a
+//     runtime each ask for the same release, and relpack's lookups of
+//     JukaHub's release list (the Windows-app runtime's and AndroidRT's checks
+//     and installs all ask for the same page) come through fetchBounded,
+//     which asks conditionally itself. A remembered answer carries the
+//     validators it came with, so such a caller keeps its conditional copy;
 //   - asks conditionally where this process holds an earlier answer
 //     (httpcache.go), unless the caller does that itself: an unchanged release
 //     answers a bodiless 304, which spares the handheld's connection (not the
 //     hour's count — GitHub spares that only to a client that signs in);
 //   - starts the hour's hold on a 403 or 429, or when GitHub says none of the
-//     hour's requests are left.
+//     hour's requests are left, and sends GitHub nothing while it lasts
+//     (errEmuGitHubHeld) — not even the fallback request of the lookup that
+//     met the refusal.
 type emuPassTransport struct {
-	base http.RoundTripper
-	mu   sync.Mutex
-	memo map[string]emuMemoEntry
+	base  http.RoundTripper
+	mu    sync.Mutex
+	memo  map[string]emuMemoEntry
+	bytes int
 }
 
 // emuMemoEntry is one answer kept for the rest of a pass: a release (200), or
 // GitHub saying there is none (404 — "latest" of a project that publishes
-// only pre-releases), which the install would otherwise ask again too.
+// only pre-releases), which the install would otherwise ask again too. header
+// holds the answer's validators and cache rule (emuMemoHeader).
 type emuMemoEntry struct {
 	status int
 	body   []byte
+	header http.Header
 }
+
+// errEmuGitHubHeld is a GitHub lookup the pass did not send because GitHub's
+// hold lasts. It is worded like the refusal it stands for, so what recognises
+// a refusal (emuRateLimited, relpack's error sorting) reads it as one.
+var errEmuGitHubHeld = errors.New("HTTP 429 from api.github.com (GitHub lookups wait out the hour's hold)")
 
 // emuPassClient is a copy of client that goes through a new pass transport;
 // the caller's client is not changed. A client without a transport gets the
@@ -391,16 +442,22 @@ func (t *emuPassTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return t.base.RoundTrip(req)
 	}
 	key := req.URL.String()
+	t.mu.Lock()
+	hit, ok := t.memo[key]
+	t.mu.Unlock()
+	if ok {
+		// Whoever asks — fetchBounded asks conditionally itself — the pass
+		// has the answer already, and asking again would spend one of the
+		// hour's requests on it.
+		return emuMemoResponse(req, hit), nil
+	}
+	if emuGitHubHeld() {
+		return nil, errEmuGitHubHeld
+	}
 	// fetchBounded asks conditionally itself and answers its own 304.
 	callerConditional := req.Header.Get("If-None-Match") != "" || req.Header.Get("If-Modified-Since") != ""
 	original := req
 	if !callerConditional {
-		t.mu.Lock()
-		kept, ok := t.memo[key]
-		t.mu.Unlock()
-		if ok {
-			return emuMemoResponse(req, kept), nil
-		}
 		if etag, modified := conditionalCache.validators(key); etag != "" || modified != "" {
 			req = req.Clone(req.Context())
 			if etag != "" {
@@ -422,29 +479,34 @@ func (t *emuPassTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	case resp.Header.Get("X-RateLimit-Remaining") == "0":
 		emuGitHubRefused("none of the hour's requests are left")
 	}
-	if callerConditional {
-		return resp, nil
-	}
 	switch resp.StatusCode {
 	case http.StatusNotModified:
-		_ = resp.Body.Close()
-		if body, ok := conditionalBody(key); ok {
-			kept := emuMemoEntry{status: http.StatusOK, body: body}
-			t.remember(key, kept)
-			return emuMemoResponse(req, kept), nil
+		body, cached := conditionalBody(key)
+		if !cached {
+			if callerConditional {
+				return resp, nil // the caller reports its own missing copy
+			}
+			_ = resp.Body.Close()
+			// The earlier answer was dropped in between: ask again outright.
+			return t.base.RoundTrip(original)
 		}
-		// The earlier answer was dropped in between: ask again outright.
-		return t.base.RoundTrip(original)
+		_ = resp.Body.Close()
+		kept := emuMemoEntry{status: http.StatusOK, body: body, header: emuMemoHeader(key, nil)}
+		t.remember(key, kept)
+		// Answered whole, to a caller that asked conditionally itself too: a
+		// full answer is always a valid reply to a conditional request, and
+		// it carries the validators the caller stores again.
+		return emuMemoResponse(req, kept), nil
 	case http.StatusOK, http.StatusNotFound:
 	default:
 		return resp, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, httpCacheMaxBody+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, emuMemoMaxBody+1))
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
-	if len(body) > httpCacheMaxBody {
+	if len(body) > emuMemoMaxBody {
 		// Larger than anything worth keeping: handed on whole, not remembered.
 		resp.Body = emuJoinedBody{Reader: io.MultiReader(bytes.NewReader(body), resp.Body), Closer: resp.Body}
 		return resp, nil
@@ -453,17 +515,52 @@ func (t *emuPassTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if resp.StatusCode == http.StatusOK {
 		storeConditionalResponse(key, resp, body)
 	}
-	t.remember(key, emuMemoEntry{status: resp.StatusCode, body: body})
+	t.remember(key, emuMemoEntry{status: resp.StatusCode, body: body, header: emuMemoHeader(key, resp.Header)})
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))
 	return resp, nil
 }
 
-// remember keeps one answer for the rest of the pass.
+// remember keeps one answer for the rest of the pass, while the pass keeps
+// less than emuMemoMaxTotal.
 func (t *emuPassTransport) remember(key string, kept emuMemoEntry) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	if old, ok := t.memo[key]; ok {
+		t.bytes -= len(old.body)
+		delete(t.memo, key)
+	}
+	if t.bytes+len(kept.body) > emuMemoMaxTotal {
+		return
+	}
 	t.memo[key] = kept
-	t.mu.Unlock()
+	t.bytes += len(kept.body)
+}
+
+// emuMemoHeader is the header a remembered answer is served with: the
+// validators and cache rule of the response it came from (from), or, for an
+// answer rebuilt from httpcache.go's copy after a 304, the validators kept
+// there for key. A caller that stores answers for its own conditional requests
+// (fetchBounded) then stores them again rather than dropping its copy for a
+// header-less one.
+func emuMemoHeader(key string, from http.Header) http.Header {
+	out := http.Header{"Content-Type": []string{"application/json"}}
+	var etag, modified, cache string
+	if from != nil {
+		etag, modified, cache = from.Get("ETag"), from.Get("Last-Modified"), from.Get("Cache-Control")
+	} else {
+		etag, modified = conditionalCache.validators(key)
+	}
+	if etag != "" {
+		out.Set("ETag", etag)
+	}
+	if modified != "" {
+		out.Set("Last-Modified", modified)
+	}
+	if cache != "" {
+		out.Set("Cache-Control", cache)
+	}
+	return out
 }
 
 // emuJoinedBody is a response body whose start was already read: the rest is
@@ -475,13 +572,17 @@ type emuJoinedBody struct {
 
 // emuMemoResponse is an answer from memory, shaped like the server's.
 func emuMemoResponse(req *http.Request, kept emuMemoEntry) *http.Response {
+	header := kept.header.Clone()
+	if header == nil {
+		header = http.Header{"Content-Type": []string{"application/json"}}
+	}
 	return &http.Response{
 		Status:        fmt.Sprintf("%d %s", kept.status, http.StatusText(kept.status)),
 		StatusCode:    kept.status,
 		Proto:         "HTTP/1.1",
 		ProtoMajor:    1,
 		ProtoMinor:    1,
-		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Header:        header,
 		Body:          io.NopCloser(bytes.NewReader(kept.body)),
 		ContentLength: int64(len(kept.body)),
 		Request:       req,
@@ -605,16 +706,32 @@ type emuAutoBar struct {
 	label string
 	begun bool
 	gen   uint64
+	ctx   context.Context
 }
 
-// begin shows the card if it is not up yet.
+// begin shows the card if it is not up yet. The run's number and token are
+// read under the lock the begin takes, as installBarBeginRun does (it has no
+// labelled form): read in a second call, a helper-tool begin landing in
+// between — those start outside the Patch lock — would hand the pass that
+// run's identity, its card to settle and its token to install under.
 func (b *emuAutoBar) begin() {
 	if b == nil || b.begun {
 		return
 	}
 	b.begun = true
-	installBarBeginLabelled("Emulators", b.label)
-	b.gen = installBarGeneration()
+	installBar.mu.Lock()
+	installBarBeginLocked("Emulators", b.label)
+	b.gen, b.ctx = installBar.gen, installBar.runCtx
+	installBar.mu.Unlock()
+}
+
+// runContext is the token of the pass's card, which a cancel from the card
+// or another run's begin ends; before the card is up nothing can cancel it.
+func (b *emuAutoBar) runContext() context.Context {
+	if b == nil || !b.begun || b.ctx == nil {
+		return context.Background()
+	}
+	return b.ctx
 }
 
 // lost reports that the card is no longer the pass's: cancelled from the card
@@ -672,6 +789,7 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 			emuRuntimeFailure(&report, u, "check", err)
 			continue
 		}
+		emuRuntimeAnswered(u.Key)
 		label = strings.TrimSpace(label)
 		if !newer {
 			emuRuntimeChecked(u.Key, now)
@@ -681,7 +799,7 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 		rec := emuRuntimeRecordFor(u.Key)
 		if label != "" && label == rec.Installed {
 			emuRuntimeChecked(u.Key, now)
-			logPatch("emulator updates: %s %s, which this pass installed, was put back by hand; it is not installed again", u.Title, label)
+			logPatch("emulator updates: %s %s was rolled back (or installed before and put back by hand); it is not installed again", u.Title, label)
 			continue
 		}
 		name := emuRuntimeBuildName(u.Title, label)
@@ -713,7 +831,7 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 		// The install's deadline derives from the card's run token, so a
 		// cancel from the card stops the transfer; a game starting stops it
 		// through the pass.
-		installCtx, cancelInstall := context.WithTimeout(installBarRunContext(), emuWinInstallTimeout)
+		installCtx, cancelInstall := context.WithTimeout(bar.runContext(), emuWinInstallTimeout)
 		stopLink := context.AfterFunc(pass, cancelInstall)
 		logPatch("emulator updates: installing %s", name)
 		title := u.Title
@@ -788,11 +906,16 @@ func emuRuntimeLostCard(report *emuRuntimeReport, rest []emuRuntimeUpdater, take
 func emuRuntimeFailure(report *emuRuntimeReport, u emuRuntimeUpdater, what string, err error) {
 	logPatch("emulator updates: %s %s failed: %v", u.Title, what, err)
 	if emuRateLimited(err) {
-		emuGitHubRefused("rate limit")
+		// The transport started the hold when GitHub refused; a lookup it
+		// held back since (errEmuGitHubHeld) must not stretch it.
+		if !emuGitHubHeld() {
+			emuGitHubRefused("rate limit")
+		}
 		report.Held = true
 		return
 	}
-	if emuRuntimeFailed(u.Key) == 1 && what == "install" {
+	install := what == "install"
+	if emuRuntimeFailed(u.Key, install) == 1 && install {
 		report.Failed = append(report.Failed, u.Title)
 		if report.FailedNote == "" {
 			report.FailedNote = u.Title + ": " + emuRuntimeFriendly(err)

@@ -49,6 +49,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -298,7 +299,18 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 		return fail(errors.New("WestonPack has no westonwrap.sh at " + wrapper))
 	}
 	if westonWrapperResetsDevices(wrapper) {
-		return fail(errors.New("this WestonPack is the preview build that resets the SD card on TrimUI; install WestonPack again from Windows Apps → Setup"))
+		if src.Wrapper != "" {
+			// Only JUKAHUB_WESTON can name such a script: findWestonPackSource
+			// passes over it everywhere else.
+			return fail(errors.New("WestonPack at " + wrapper + " is the preview build that resets the SD card on TrimUI; point JUKAHUB_WESTON at the official WestonPack, or unset it"))
+		}
+		// An image only shows what it holds once mounted. From now on it does
+		// not count as WestonPack, so Setup offers JukaHub's own copy, and the
+		// panel opens Setup for this app (a missing runtime).
+		westonRefuseImage(src.Image)
+		invalidateWindowsAppsCache()
+		invalidateWindowsSetupSnapshot()
+		return fail(withLaunchFailureKind(launchFailureRuntimeMissing, errors.New("this WestonPack is the preview build that resets the SD card on TrimUI; install WestonPack from Windows Apps → Setup")))
 	}
 	d.wrapper = wrapper
 
@@ -569,7 +581,7 @@ func parseWestonEnv(text string) (env map[string]string, modes map[string][]stri
 		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
 		key, value, ok := strings.Cut(line, "=")
 		key = strings.TrimSpace(key)
-		if !ok || !gameProfileEnvKeyPattern.MatchString(key) || strings.ContainsRune(value, '\x00') {
+		if !ok || !gameProfileEnvKeyPattern().MatchString(key) || strings.ContainsRune(value, '\x00') {
 			bad = append(bad, line)
 			continue
 		}
@@ -605,6 +617,41 @@ func westonModeWordsOK(words []string) bool {
 		}
 	}
 	return true
+}
+
+// westonRefusedImages holds the WestonPack images whose westonwrap.sh turned out
+// to be the preview build when a launch mounted one: cleaned path → the file's
+// size and time then, so a new file at the same path counts again.
+// findWestonPackSource passes over them, so the setup page does not call
+// WestonPack installed. Kept until JukaHub restarts; by then JukaHub's own
+// image, which is looked for first, is normally there.
+var westonRefusedImages sync.Map
+
+// westonImageStamp is a file's size and modification time, "" when it is not
+// there.
+func westonImageStamp(p string) string {
+	info, err := os.Stat(p)
+	if err != nil {
+		return ""
+	}
+	return strconv.FormatInt(info.Size(), 10) + "@" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
+}
+
+func westonRefuseImage(image string) {
+	if stamp := westonImageStamp(image); stamp != "" {
+		westonRefusedImages.Store(filepath.Clean(image), stamp)
+	}
+}
+
+// westonImageRefused reports an image westonRefuseImage turned down, while it
+// is still the same file.
+func westonImageRefused(image string) bool {
+	stamp, ok := westonRefusedImages.Load(filepath.Clean(image))
+	if !ok {
+		return false
+	}
+	s, _ := stamp.(string)
+	return s != "" && s == westonImageStamp(image)
 }
 
 // westonWrapperResetsDevices reads westonwrap.sh and reports the build that
@@ -724,7 +771,7 @@ func wineSecretName(name string) bool {
 // variables, whose values stay out of logs), and a word with spaces or quotes
 // is quoted.
 func wineLogWord(word string, hide map[string]bool) string {
-	if name, _, ok := strings.Cut(word, "="); ok && gameProfileEnvKeyPattern.MatchString(name) && (wineSecretName(name) || hide[name]) {
+	if name, _, ok := strings.Cut(word, "="); ok && gameProfileEnvKeyPattern().MatchString(name) && (wineSecretName(name) || hide[name]) {
 		word = name + "=<hidden>"
 	}
 	if word == "" || strings.ContainsAny(word, " \t\"'\\$`") {

@@ -302,7 +302,7 @@ func renderBrightnessPopover(renderer *sdl.Renderer, config *Config) {
 	if dimmed {
 		dimLabel = "Brighten"
 	}
-	hint := hintLine(FooterHint{"Left / Right", "Adjust"}, FooterHint{"A", dimLabel}, FooterHint{"B", "Close"})
+	hint := hintLine(FooterHint{"Left/Right", "Adjust"}, FooterHint{"A", dimLabel}, FooterHint{"B", "Close"})
 	textW := lay.card.W - 2*volumePanelPad
 	renderText(renderer, config, font, ellipsize(font, hint, textW), ColorTextTertiary(), left, lay.hintY)
 	if note != "" {

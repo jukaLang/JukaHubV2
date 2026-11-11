@@ -86,13 +86,17 @@ var mbridge struct {
 }
 
 // wineInput is the bridge lent to a Windows-app session (wineInputStart): at
-// most one, from before its program starts until the session ends.
+// most one, from before its program starts until the session ends. live is
+// set once the program has started (wineInputLive): until then the mouse and
+// keys stay quiet, because JukaHub's own screen is still up and would take
+// them (Y is Escape, A a click).
 var wineInput struct {
 	mu      sync.Mutex
 	running bool
 	stop    chan struct{}
 	done    chan struct{}
 	once    *sync.Once
+	live    atomic.Bool
 }
 
 func init() {
@@ -160,6 +164,10 @@ func wineInputActive() bool {
 	return wineInput.running
 }
 
+// wineInputLive lets the session's mouse and keys through: its program has
+// the screen now (wineRun calls it right after the start).
+func wineInputLive() { wineInput.live.Store(true) }
+
 // wineInputStart lends the pad to a Windows-app session until the returned
 // stop is called: the device ("JukaHub Mouse", with the keys of the
 // Windows-app layout) is made and the pad grabbed now, before the program and
@@ -190,6 +198,7 @@ func wineInputStart(p mbridgeParams, quit func()) (func(), error) {
 	}
 	stop, done, once := make(chan struct{}), make(chan struct{}), &sync.Once{}
 	wineInput.running, wineInput.stop, wineInput.done, wineInput.once = true, stop, done, once
+	wineInput.live.Store(false)
 	go mbridgeRunWine(s, stop, done)
 	return func() { wineInputStop(stop, done, once) }, nil
 }
@@ -462,7 +471,9 @@ func (s *mbridgeSession) step(now time.Time) error {
 	}
 	out, toggle := s.eng.tick(now, out)
 	s.out = out
-	if s.eng.on && len(out) > 0 {
+	// A Windows-app session's events are dropped until its program has
+	// started (wineInputLive); the pad is still read, so nothing queues up.
+	if s.eng.on && len(out) > 0 && (!s.wine || wineInput.live.Load()) {
 		out = append(out, evdevEvent{Type: evdevEvSyn, Code: evdevSynReport})
 		s.out = out
 		if err := s.writeEvents(s.mouseFD, out); err != nil {

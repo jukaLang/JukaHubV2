@@ -58,10 +58,12 @@ var (
 	reCommentBlock = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)<!--.*?-->`) })
 	reHeadBlock    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<head\b.*?</head>`) })
 	reTag          = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?s)<[^>]*>`) })
-	reLineBreakTag = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)</?(p|div|section|article|li|ul|ol|h[1-6]|tr|table|blockquote|pre|figure|figcaption)\b[^>]*>|<br\s*/?>`) })
-	reBulletTag    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)<li\b[^>]*>`) })
-	reHeading      = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<h[12][^>]*>(.*?)</h[12]>`) })
-	reDocTitleTag  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`) })
+	reLineBreakTag = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)</?(p|div|section|article|li|ul|ol|h[1-6]|tr|table|blockquote|pre|figure|figcaption)\b[^>]*>|<br\s*/?>`)
+	})
+	reBulletTag   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)<li\b[^>]*>`) })
+	reHeading     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<h[12][^>]*>(.*?)</h[12]>`) })
+	reDocTitleTag = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`) })
 )
 
 // epubOpenFile validates and loads one EPUB from the File Explorer. The path

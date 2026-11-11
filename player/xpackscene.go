@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // xpackSceneTypes are the element types a pack scene may use.
@@ -56,7 +57,7 @@ var xpackSceneTriggers = map[string]bool{
 
 // xpackSceneNamePattern is what a pack scene may be called: short, plain, and
 // safe to show in the Start menu.
-var xpackSceneNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]{0,39}$`)
+var xpackSceneNamePattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]{0,39}$`) })
 
 // xpackMaxSceneElements bounds a pack scene; a real page has a few dozen.
 const xpackMaxSceneElements = 64
@@ -75,7 +76,7 @@ func xpackValidateScene(raw json.RawMessage, dir string) (SceneConfig, []string,
 		return SceneConfig{}, nil, fmt.Errorf("is not a scene (%v)", err)
 	}
 	scene.Name = strings.TrimSpace(scene.Name)
-	if !xpackSceneNamePattern.MatchString(scene.Name) {
+	if !xpackSceneNamePattern().MatchString(scene.Name) {
 		return SceneConfig{}, nil, fmt.Errorf("name %q must be 1-40 letters, digits, spaces or dashes", scene.Name)
 	}
 	if strings.TrimSpace(scene.Layout) != "" {
@@ -180,7 +181,7 @@ func xpackScrubSecrets(text string) string {
 	if !strings.Contains(text, "$") {
 		return text
 	}
-	return varPattern.ReplaceAllStringFunc(text, func(m string) string {
+	return varPattern().ReplaceAllStringFunc(text, func(m string) string {
 		if cfgdocIsSecretKey(m[1:]) {
 			return ""
 		}

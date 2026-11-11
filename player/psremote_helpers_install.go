@@ -629,11 +629,11 @@ func psHelpersEnsure(ctx context.Context) error {
 
 // psHelperGlibcGap is elfcompat's "needs GLIBC_2.38; this firmware's libc.so.6
 // has up to GLIBC_2.33", which psHelperCompact shortens for a panel row.
-var psHelperGlibcGap = regexp.MustCompile(`needs (\S+); this firmware's \S+ has up to (\S+)`)
+var psHelperGlibcGap = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`needs (\S+); this firmware's \S+ has up to (\S+)`) })
 
 // psHelperCompact shortens a loader verdict to fit a row.
 func psHelperCompact(problem string) string {
-	return psHelperGlibcGap.ReplaceAllString(strings.TrimSpace(problem), "needs $1 · firmware has $2")
+	return psHelperGlibcGap().ReplaceAllString(strings.TrimSpace(problem), "needs $1 · firmware has $2")
 }
 
 // psHelperNoInternetText is how offline reads: no internet, or a Wi-Fi that

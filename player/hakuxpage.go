@@ -341,17 +341,21 @@ func hakuxFinish(result hakuxInstallResult, err error) {
 // replaced or set aside come back. On an SD card a rename can take a moment
 // and a copy (two file systems) much longer, so it runs off the event thread
 // like the install, inside the patch lock so it cannot meet an install half
-// way.
+// way; the lock is released before the result is shown.
 func hakuxStartRollback() {
 	if !tryBeginPatchOp() {
-		ShowToast("An update is already running", ToastKindInfo)
+		ShowToast("An update is running — roll back when it finishes", ToastKindInfo)
 		return
 	}
 	paths := hakuxDevicePaths()
 	ShowToast("Rolling hakuX back…", ToastKindInfo)
 	go func() {
-		defer endPatchOp()
+		_, from, _ := hakuxInstalled(deviceEmuRoots)
 		info, err := hakuxRollbackCard(paths)
+		if err == nil {
+			hakuxNoteRolledBack(from)
+		}
+		endPatchOp()
 		if err != nil {
 			ShowToast("hakuX: "+err.Error(), ToastKindError)
 			return
@@ -368,6 +372,23 @@ func hakuxStartRollback() {
 		}
 		ShowToast("hakuX rolled back to "+label+" · X installs the newest again", ToastKindSuccess)
 	}()
+}
+
+// hakuxNoteRolledBack records, for the daily pass, the package a rollback gave
+// up (from, the provenance before it): the pass does not install that package
+// again, whoever had installed it — the pass, X or L1. It is recorded under the
+// label the pass's next check computes for it (hakuxAutoCheck: emuReleaseLabel
+// of the release against the restored provenance's tag), so the two match; a
+// newer package installs as usual. A rollback to a hakuX JukaHub did not
+// install leaves nothing for the pass to update, and nothing is recorded.
+func hakuxNoteRolledBack(from hakuxManifest) {
+	_, now, managed := hakuxInstalled(deviceEmuRoots)
+	if !managed || strings.TrimSpace(from.Tag) == "" {
+		return
+	}
+	label := emuReleaseLabel(now.Tag, emuWinRelease{Tag: from.Tag, AssetDate: from.AssetDate})
+	emuRuntimeUpdateRecord("hakux", func(r *emuRuntimeRecord) { r.Installed = label })
+	logInfo("emulators", "hakuX rolled back from %s; the daily update leaves that package alone", label)
 }
 
 // hakuxManagedOnCard reports a hakuX JukaHub installed on this device, which

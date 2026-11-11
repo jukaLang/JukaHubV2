@@ -20,9 +20,11 @@
 # matches (../relpack.go), and every TrimUI archive also carries androidrt/
 # beside the binary (Apps/JukaHub/androidrt).
 #
-# The release builds both in the Remote Play helper job
-# (.github/workflows/remote-play-helpers.yml): on an arm64 runner inside an
-# Ubuntu 20.04 root, whose glibc 2.31 is older than the Smart Pro's 2.33, so the
+# The release builds AndroidRT in the Remote Play helper job
+# (.github/workflows/remote-play-helpers.yml) and the Box64 pack in a job of
+# its own (.github/workflows/wine-runtime.yml), each on an arm64 runner inside
+# an Ubuntu 20.04 root (.github/scripts/build-root.sh makes it and runs this
+# script there), whose glibc 2.31 is older than the Smart Pro's 2.33, so the
 # binaries start there. The same commands work on any aarch64 Linux machine
 # whose glibc is no newer than the handheld's (a 20.04 arm64 container works).
 #

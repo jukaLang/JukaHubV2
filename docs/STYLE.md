@@ -68,6 +68,22 @@ The build and test loop lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
 - Keyboard, controller, mouse and touch all reach the same action. If a row can
   be activated with A, it needs a click target and a key binding too.
 
+## Hints and user-facing text
+
+- **One vocabulary for the pad.** A footer names the control the player has,
+  then the keyboard twin after ` / `: `A / Enter`, `B / Esc`, `Up/Down`,
+  `Left/Right` (no spaces around the slash inside one control name) and
+  `D-Pad`. A keyboard-only surface (the shortcuts sheet, a keyboard game)
+  names the key it actually uses (`Arrows`, `Space`) because there is no pad
+  control to put first. [player/inputhints.go](../player/inputhints.go) still
+  accepts the older spellings when it parses a stored hint, so a config written
+  before the sweep keeps working; new text uses the canonical one.
+- **A count says its noun.** "1 game", "2 games": call `pluralizeCount`
+  ([player/favorites.go](../player/favorites.go)) instead of appending "(s)".
+- **Nothing available is a dash.** A setting that cannot run here reads
+  "Unavailable" (or `hwUnknown` for hardware fields), never "N/A", "n/a" or
+  "-".
+
 ## Tests
 
 - Table-driven unit tests for logic, parsing and safety checks; offscreen pixel

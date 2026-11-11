@@ -796,7 +796,7 @@ func gameProfilesEmuEntry() emuEntry {
 	if total > 0 {
 		detail = fmt.Sprintf("%d profile(s) · %d ready", total, ready)
 		if issues > 0 {
-			detail += fmt.Sprintf(" · %d file issue(s)", issues)
+			detail += " · " + pluralizeCount(issues, "file issue", "file issues")
 		}
 	}
 	return emuEntry{
@@ -812,7 +812,7 @@ func gameProfilesEmuEntry() emuEntry {
 // Emulators stays fast on a large SD card.
 func compatibilityEmuEntry() emuEntry {
 	reports, verified, systems := compatStats()
-	detail := fmt.Sprintf("%d report(s) · %d system(s)", reports, systems)
+	detail := pluralizeCount(reports, "report", "reports") + " · " + pluralizeCount(systems, "system", "systems")
 	if verified > 0 {
 		detail += fmt.Sprintf(" · %d verified", verified)
 	}
@@ -1372,7 +1372,7 @@ func emuSummary(entries []emuEntry) string {
 		parts = append(parts, fmt.Sprintf("%d not supported", unsupported))
 	}
 	if updates := emuUpdateCount(); updates > 0 {
-		parts = append(parts, fmt.Sprintf("%d update(s)", updates))
+		parts = append(parts, pluralizeCount(updates, "update", "updates"))
 	}
 	return strings.Join(parts, " · ")
 }

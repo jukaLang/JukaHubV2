@@ -77,11 +77,14 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   versions of a game) get two profiles: the second id carries a short hash of
   its path. **Play** launches through the same path (triage, memory pre-flight,
   tmpfs staging, launch log, first-run report) in the background — the row
-  says "Starting…" while a big game is staged — and **Remove from Games**
-  deletes only the store's own profile file and the cover it saved; the APK
-  stays. When AndroidRT is missing, Play offers **Install and play** and Add
-  offers **Install and add**: one press installs the runtime (below), then the
-  game starts or is added; nothing downloads without that press. X shows
+  says "Starting…" while a big game is staged, and a second Play meanwhile
+  (here, in the Games Library or in Game Profiles) says it is already starting
+  — and **Remove from Games** deletes only the store's own profile file and the
+  cover it saved; the APK stays. When AndroidRT is missing, Play offers
+  **Install and play** and Add offers **Install and add**: one press installs
+  the runtime (below), then the game starts or is added; nothing downloads
+  without that press, and while it is being installed the sheets say so
+  instead of offering a second install. X shows
   everything the store read, the profile's state and how the last run ended
   (from its launch log). The APK must sit inside the folders game profiles
   launch from (the card on a handheld). A hand-written profile for an APK the

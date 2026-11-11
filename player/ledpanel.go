@@ -242,26 +242,16 @@ func ledPanelEnsureKeys(config *Config) {
 	}
 }
 
-// ledPanelPersist copies only the LED keys into the user config and saves. The
-// whole config is not written back: the panel does not own the rest of it.
+// ledPanelPersist saves the live config, which holds the LED keys the panel
+// just wrote and the sync switch (ledsync.go reads them from there). It used
+// to copy them into the cached user config and save that, whose other
+// settings are the boot copy: every LED change put those back over everything
+// changed since.
 func ledPanelPersist(config *Config) {
 	if config == nil {
 		return
 	}
-	user := loadUserConfig()
-	if user == nil {
-		return
-	}
-	if user.Variables.Custom == nil {
-		user.Variables.Custom = map[string]interface{}{}
-	}
-	for _, key := range []string{ledKeyPolicy, ledKeyColor, ledKeyEffect, ledKeyBrightness} {
-		if v, ok := config.Variables.Custom[key]; ok {
-			user.Variables.Custom[key] = v
-		}
-	}
-	user.Variables.LedSync = config.Variables.LEDSync
-	saveUserConfigDebounced(user)
+	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
 // ledPanelSelectPolicy writes a policy into the config, so the running loop

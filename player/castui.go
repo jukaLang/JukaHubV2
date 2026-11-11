@@ -556,7 +556,7 @@ func renderCastPanel(renderer *sdl.Renderer, config *Config) {
 		})
 	}
 
-	hints := hintLine(FooterHint{"↑ ↓", "Select"}, FooterHint{"← →", "Change"}, FooterHint{"A", "Choose"},
+	hints := hintLine(FooterHint{"Up/Down", "Select"}, FooterHint{"Left/Right", "Change"}, FooterHint{"A", "Choose"},
 		FooterHint{"Y", "New link"}, FooterHint{"B", "Close"})
 	hints = ellipsize(small, hints, l.card.W-2*pad)
 	hw, _ := measureText(small, hints)

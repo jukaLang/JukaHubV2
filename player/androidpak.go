@@ -196,18 +196,24 @@ func androidPakMemAvailable(path string) int64 {
 	return 0
 }
 
-// androidPakPreflightFloor returns the minimum MemAvailable the launch
-// needs: staged bytes + runtime overhead + the hub's own reserve.
-// JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB (in MiB) replaces the hub reserve —
-// set it to 0 to disable the check entirely on a device where it misfires.
-func androidPakPreflightFloor(stageFootprint int64) int64 {
+// androidPakHubReserveBytes is the room kept for the hub itself:
+// androidPakHubReserve, or JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB (in MiB) when
+// set — 0 turns the pre-flight off on a device where it misfires.
+func androidPakHubReserveBytes() int64 {
 	reserve := int64(androidPakHubReserve)
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB")); override != "" {
 		if mb, err := strconv.ParseInt(override, 10, 64); err == nil && mb >= 0 {
 			reserve = mb << 20
 		}
 	}
-	return stageFootprint + androidPakRuntimeOverhead + reserve
+	return reserve
+}
+
+// androidPakPreflightFloor returns the minimum MemAvailable the launch
+// needs: staged bytes + runtime overhead + the hub's own reserve. The sums
+// saturate: a size an APK declares cannot wrap the floor below zero.
+func androidPakPreflightFloor(stageFootprint int64) int64 {
+	return satAddBytes(satAddBytes(stageFootprint, androidPakRuntimeOverhead), androidPakHubReserveBytes())
 }
 
 // androidPakPreflight checks, before anything is staged, that the device
@@ -216,6 +222,13 @@ func androidPakPreflightFloor(stageFootprint int64) int64 {
 // lets the launch proceed — this check must never block a launch it cannot
 // actually know about.
 func androidPakPreflight(apk string, libs androidPakLibs) error {
+	// JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB=0 is the documented way past the
+	// check (the refusal below says so, docs/ANDROID.md too): the floor
+	// without the reserve still refused such a launch.
+	reserve := androidPakHubReserveBytes()
+	if reserve == 0 {
+		return nil
+	}
 	footprint, err := androidPakStageFootprint(apk, libs)
 	if err != nil {
 		return err
@@ -229,8 +242,10 @@ func androidPakPreflight(apk string, libs androidPakLibs) error {
 		return nil
 	}
 	mib := func(n int64) string { return fmt.Sprintf("%d MiB", n>>20) }
+	// The floor is staged + runtime + reserve: the hub keeps the reserve, not
+	// the runtime's share a second time.
 	return fmt.Errorf("not enough free memory for this launch: %s available, launch needs ~%s (staged %s + runtime %s, keeping %s for the hub itself) — free memory or set JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB=0 to launch anyway",
-		mib(available), mib(floor), mib(footprint), mib(androidPakRuntimeOverhead), mib(androidPakPreflightFloor(footprint)-footprint))
+		mib(available), mib(floor), mib(footprint), mib(androidPakRuntimeOverhead), mib(reserve))
 }
 
 // inspectAndroidPak triages an APK read-only. If the profile asks for a
@@ -570,7 +585,8 @@ func stageAndroidPakGen(id, apk string, libs androidPakLibs) (stageDir, libDir s
 	libDir, err = stageAndroidPakInto(stageDir, apk, libs)
 	if err != nil {
 		// Nothing runs from this folder now: a relaunch can only follow a
-		// game that has exited (launchGameProfile refuses a running one).
+		// game that has exited (launchGameProfile refuses a running one, and
+		// a second start while one is staging: gameProfileClaimStart).
 		_ = os.RemoveAll(stageDir)
 		delete(androidPakStages.live, stageDir)
 		return "", "", 0, err

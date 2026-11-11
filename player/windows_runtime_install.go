@@ -75,19 +75,54 @@ const (
 )
 
 var (
-	windowsRuntimeClient  = httpClientLong
+	windowsRuntimeClient  = windowsRuntimeLongClient()
 	windowsRuntimeRelease = windowsRuntimeReleaseAPI
 	windowsRuntimeVerify  = verifyWineRuntime
 	windowsRuntimeState   struct {
-		mu      sync.Mutex
+		mu sync.Mutex
+		// running is the installer slot: set by beginWindowsRuntimeInstall,
+		// cleared by endWindowsRuntimeInstall (or the setup chain's end), and
+		// by nothing else, so one install never starts beside another.
 		running bool
 		target  string // "wine", "weston" or "dxvk", while running
 		status  string
 		lastErr string
 		// failed holds, per target, why its last install failed.
 		failed map[string]string
+		// pendingApp is the app the running setup chain was asked to start
+		// (Install & Run); readyApp is that app once the chain has finished,
+		// for the panel to start on the main thread. Leaving setup or the
+		// panel drops both (windowsDropPendingLaunch).
+		pendingApp *windowsAppEntry
+		readyApp   *windowsAppEntry
 	}
 )
+
+// windowsRuntimeLongClient is the client for the Hangover opt-in: the release
+// query and an archive of several hundred MB, which no 30-second request
+// (httpClientLong) finishes on handheld Wi-Fi. The answer's headers must
+// still come within 30 s, the whole transfer within 30 minutes, and a
+// redirect may not leave HTTPS.
+func windowsRuntimeLongClient() *http.Client {
+	client := &http.Client{
+		Timeout: 30 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 5 {
+				return errors.New("too many redirects")
+			}
+			if req.URL.Scheme != "https" {
+				return errors.New("redirect rejected: the runtime download must stay on HTTPS")
+			}
+			return nil
+		},
+	}
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr := base.Clone()
+		tr.ResponseHeaderTimeout = 30 * time.Second
+		client.Transport = tr
+	}
+	return client
+}
 
 type hangoverAsset struct {
 	Name               string `json:"name"`
@@ -127,11 +162,16 @@ func selectHangoverAsset(assets []hangoverAsset) (string, string, error) {
 	return "", "", errors.New("the latest Hangover release has no ARM64 runtime archive")
 }
 
-func setWindowsRuntimeStatus(status, lastErr string, running bool) {
+// setWindowsRuntimeStatus sets the installer line and its error. The flag at
+// the end tells the reader whether the line is progress (true) or an outcome
+// (false); it does not touch the installer slot, which belongs to
+// beginWindowsRuntimeInstall and endWindowsRuntimeInstall alone: a status
+// update that freed it while its owner was still working let a second install
+// start beside the first.
+func setWindowsRuntimeStatus(status, lastErr string, _ bool) {
 	windowsRuntimeState.mu.Lock()
 	windowsRuntimeState.status = status
 	windowsRuntimeState.lastErr = lastErr
-	windowsRuntimeState.running = running
 	windowsRuntimeState.mu.Unlock()
 }
 
@@ -291,6 +331,12 @@ func installWineRuntime(releaseURL string) error {
 	if releaseURL == "" {
 		releaseURL = windowsRuntimeRelease
 	}
+	// Nothing about this archive is checked against a published hash, so it
+	// at least comes over HTTPS: a plain-HTTP download could be swapped on
+	// the way, and its wine then runs as root.
+	if u, err := url.Parse(releaseURL); err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("the runtime URL must be an https:// address: %s", releaseURL)
+	}
 	assetURL := releaseURL
 	if strings.HasSuffix(strings.ToLower(releaseURL), "/latest") || strings.Contains(releaseURL, "api.github.com") {
 		setWindowsRuntimeStatus("checking the latest Hangover release", "", true)
@@ -298,10 +344,12 @@ func installWineRuntime(releaseURL string) error {
 		if err != nil {
 			return err
 		}
+		// What the release names must be a download from the approved hosts,
+		// like every other runtime JukaHub fetches.
+		if err := validatePatchURL(asset); err != nil {
+			return fmt.Errorf("the Hangover release's archive: %w", err)
+		}
 		assetURL = asset
-	}
-	if !strings.HasPrefix(assetURL, "http://") && !strings.HasPrefix(assetURL, "https://") {
-		return fmt.Errorf("runtime URL must be http(s): %s", assetURL)
 	}
 
 	base := windowsRuntimeDir()
@@ -804,7 +852,11 @@ type archiveLink struct {
 // materializeArchiveLinks creates the links after every member has been
 // extracted. Wine archives use them for the winecfg/notepad aliases; on a
 // filesystem without symlink support (the FAT/exFAT card) the target is copied
-// instead, and losing a link must not abort an otherwise valid install.
+// instead, and losing a link must not abort an otherwise valid install. A link
+// that can be neither made nor copied (to a folder, to nothing, or a chain too
+// long) is skipped and logged: whether the install still works is decided by
+// its own check of what it needs (wineTreeProblem for Wine, x64/d3d11.dll for
+// DXVK, `wine --version` for Hangover), not by an alias it may never use.
 func materializeArchiveLinks(root *os.Root, dest string, links []archiveLink) error {
 	var copyNeeded []archiveLink
 	for _, link := range links {
@@ -873,7 +925,16 @@ func materializeArchiveLinks(root *os.Root, dest string, links []archiveLink) er
 		links = pending
 	}
 	if len(links) > 0 {
-		return fmt.Errorf("could not create %d archive link(s) on this filesystem", len(links))
+		names := make([]string, 0, 3)
+		for _, link := range links {
+			if len(names) == cap(names) {
+				break
+			}
+			if rel, err := filepath.Rel(dest, link.target); err == nil {
+				names = append(names, filepath.ToSlash(rel))
+			}
+		}
+		logWarn("windowsapps", "%d archive link(s) skipped: this file system cannot hold them, and they could not be copied (%s)", len(links), strings.Join(names, ", "))
 	}
 	return nil
 }
@@ -1470,9 +1531,12 @@ func windowsDisplayNeeded(status windowsRuntimeStatus) bool {
 }
 
 // windowsDXVKAutomatic reports whether the automatic chain installs DXVK: on an
-// x86-64 PC whose Vulkan driver declares 1.3, never on a handheld.
+// x86-64 PC whose Vulkan driver declares 1.3, never on a handheld. DXVK is
+// optional: once its install failed (offline, say), later plans leave it out,
+// so A starts the app with Wine's own Direct3D instead of offering the same
+// download again; its setup row still installs it by hand.
 func windowsDXVKAutomatic(status windowsRuntimeStatus) bool {
-	if runtime.GOARCH != "amd64" || status.DXVK != "" || !status.Vulkan || IsTrimuiDevice() {
+	if runtime.GOARCH != "amd64" || status.DXVK != "" || !status.Vulkan || IsTrimuiDevice() || windowsDXVKInstallFailed() {
 		return false
 	}
 	major, minor, known := vulkanICDVersion()
@@ -1537,9 +1601,10 @@ func windowsPrepare(ctx context.Context) error {
 }
 
 // startWindowsProvisioning installs every missing piece in the background,
-// prepares the prefix, and launches pending when all of it succeeded. It
-// returns an error when an install is already running or there is nothing to
-// do.
+// prepares the prefix, and — when all of it succeeded and setup still waits
+// for it — has the panel start pending (windowsTakeReadyLaunch). When nothing
+// is missing, pending starts at once. It returns an error when an install is
+// already running or there is nothing to do. Main thread.
 func startWindowsProvisioning(pending *windowsAppEntry) error {
 	if IsWindows() {
 		return errors.New("Windows runs .exe files directly; nothing needs installing")
@@ -1555,6 +1620,9 @@ func startWindowsProvisioning(pending *windowsAppEntry) error {
 	if len(plan) == 0 {
 		switch {
 		case pending != nil && facts.PrefixReady:
+			if windowsRuntimeInstalling() {
+				return errors.New("the Windows runtime is being installed or updated; start the app when it is done")
+			}
 			return windowsLaunchAfterInstall(*pending)
 		case facts.Flavor == "":
 			return errors.New("JukaHub has no Windows runtime for this device")
@@ -1572,12 +1640,59 @@ func startWindowsProvisioning(pending *windowsAppEntry) error {
 	if !beginWindowsRuntimeInstall(target, "checking the Windows runtime") {
 		return errors.New("a runtime install is already running")
 	}
-	if pending != nil {
-		copy := *pending
-		pending = &copy
-	}
-	go windowsProvisionLoop(pending)
+	windowsSetPendingLaunch(pending)
+	go windowsProvisionLoop()
 	return nil
+}
+
+// windowsSetPendingLaunch records the app the setup chain that just began was
+// asked to start (nil for none).
+func windowsSetPendingLaunch(pending *windowsAppEntry) {
+	windowsRuntimeState.mu.Lock()
+	defer windowsRuntimeState.mu.Unlock()
+	windowsRuntimeState.pendingApp, windowsRuntimeState.readyApp = nil, nil
+	if pending != nil {
+		app := *pending
+		windowsRuntimeState.pendingApp = &app
+	}
+}
+
+// windowsDropPendingLaunch forgets the app a setup chain would start once it
+// is done: the user left setup or the panel, and did not ask for the app to
+// open later by itself. The install itself carries on.
+func windowsDropPendingLaunch() {
+	windowsRuntimeState.mu.Lock()
+	windowsRuntimeState.pendingApp, windowsRuntimeState.readyApp = nil, nil
+	windowsRuntimeState.mu.Unlock()
+}
+
+// windowsTakeReadyLaunch hands the panel, once, the app a finished setup chain
+// was asked to start. The panel starts it on the main thread, and only while
+// setup still waits for it (windowsAppsStartReady).
+func windowsTakeReadyLaunch() (windowsAppEntry, bool) {
+	windowsRuntimeState.mu.Lock()
+	defer windowsRuntimeState.mu.Unlock()
+	ready := windowsRuntimeState.readyApp
+	windowsRuntimeState.readyApp = nil
+	if ready == nil {
+		return windowsAppEntry{}, false
+	}
+	return *ready, true
+}
+
+// windowsEndProvisioning frees the installer slot the setup chain held. When
+// the chain finished (ready), the app it was asked to start — if setup was not
+// left meanwhile — goes to the panel in the same step, so the panel never
+// sees the slot still taken by the chain that asked for the launch.
+func windowsEndProvisioning(ready bool) {
+	windowsRuntimeState.mu.Lock()
+	defer windowsRuntimeState.mu.Unlock()
+	if ready {
+		windowsRuntimeState.readyApp = windowsRuntimeState.pendingApp
+	}
+	windowsRuntimeState.pendingApp = nil
+	windowsRuntimeState.running = false
+	windowsRuntimeState.target = ""
 }
 
 // windowsStepFailed records and announces a step that failed.
@@ -1591,23 +1706,40 @@ func windowsStepFailed(key, label string, err error) {
 // windowsProvisionLoop re-checks what is missing before every step, so an
 // install that also provides a later piece (or a component someone added by
 // hand meanwhile) is not installed twice. A step that reports success but
-// leaves its component missing stops the chain instead of looping forever.
-// The prefix is prepared last, so the app's first start is quick.
-func windowsProvisionLoop(pending *windowsAppEntry) {
+// leaves its component missing stops the chain instead of looping forever —
+// except DXVK, which is optional: when it fails, Windows is still prepared and
+// the app starts with Wine's own Direct3D. The prefix is prepared last, so the
+// app's first start is quick. The chain starts no app itself: the one it was
+// asked for goes to the panel (windowsEndProvisioning), which starts it on the
+// main thread if setup still waits for it.
+func windowsProvisionLoop() {
+	ready := false
 	defer func() {
-		endWindowsRuntimeInstall()
+		windowsEndProvisioning(ready)
 		invalidateWindowsAppsCache()
 	}()
 	attempted := map[windowsRuntimeStep]bool{}
+	// skipped holds optional steps that failed in this chain: while the chain
+	// runs, windowsRuntimeFailed does not report its own target yet, so the
+	// plan alone would offer DXVK again.
+	skipped := map[windowsRuntimeStep]bool{}
 	for {
-		status := windowsRuntimeStatusFor()
-		plan := windowsRuntimePlan(status)
+		var plan []windowsRuntimeStep
+		for _, step := range windowsRuntimePlan(windowsRuntimeStatusFor()) {
+			if !skipped[step] {
+				plan = append(plan, step)
+			}
+		}
 		if len(plan) == 0 {
 			break
 		}
 		step := plan[0]
 		if attempted[step] {
 			windowsStepFailed(step.key(), step.label()+" install", errors.New("it is still missing after installing it"))
+			if step == windowsStepDXVK {
+				skipped[step] = true
+				continue
+			}
 			return
 		}
 		attempted[step] = true
@@ -1625,6 +1757,10 @@ func windowsProvisionLoop(pending *windowsAppEntry) {
 		invalidateWindowsAppsCache()
 		if err != nil {
 			windowsStepFailed(step.key(), step.label()+" install", err)
+			if step == windowsStepDXVK {
+				skipped[step] = true
+				continue
+			}
 			return
 		}
 	}
@@ -1634,14 +1770,6 @@ func windowsProvisionLoop(pending *windowsAppEntry) {
 		return
 	}
 	setWindowsRuntimeStatus("Windows runtime ready", "", false)
-	invalidateWindowsAppsCache()
-	if pending == nil {
-		ShowToast("Windows runtime ready", ToastKindSuccess)
-		return
-	}
-	if err := windowsLaunchAfterInstall(*pending); err != nil {
-		showLaunchFailureDialog(pending.Title, err, "")
-		return
-	}
-	ShowToast("Launching "+pending.Title, ToastKindSuccess)
+	ShowToast("Windows runtime ready", ToastKindSuccess)
+	ready = true
 }

@@ -23,10 +23,15 @@ package main
 //     today's nightly, a quarter of a gigabyte that would otherwise be fetched
 //     again every day. A press on its tile still installs that nightly;
 //   - the moment: never while a game or emulator JukaHub started is on screen,
-//     another install runs or a video plays, and not while a laptop runs on its
-//     battery; otherwise once JukaHub has been left alone for a few minutes. A
-//     pass three days overdue (or a first one that has waited a poll) runs at
-//     the next moment that is not a game, an install or a video.
+//     another install runs, a video plays or another program fills the screen
+//     (a game, a film, a presentation: Windows' notification state), and not
+//     while a laptop runs on its battery; otherwise once the PC has been left
+//     alone for a few minutes — no key or mouse in any window (Windows' last
+//     input), no controller in JukaHub. A pass three days overdue stops
+//     waiting for the charger, never for the idle minutes. The handheld's
+//     first-pass rule (overdue once it has waited a poll) is not used here: a
+//     PC keeps its time and is normally on mains, so only a real three-day gap
+//     — or three days of waiting — counts.
 //
 // Runtimes registered by other files run here too wherever they say they
 // apply, which is all a Linux desktop gets.
@@ -135,9 +140,12 @@ func emuDesktopTick(now time.Time) (ran, waiting bool) {
 	if !IsOnline() {
 		return false, true
 	}
-	busy := installBarActive() || videoHoldsScreenAwake()
-	overdue := (coresDue && coreAutoUpdateOverdueFor(last, now, waited)) || emuRuntimesOverdue(extras, now, waited)
-	if !emuDesktopMoment(gameScreenSuspended(), busy, emuDesktopOnBattery(), userInputAge(now), overdue) {
+	busy := installBarActive() || videoHoldsScreenAwake() || emuDesktopFullScreenApp()
+	overdue := coresDue && emuDesktopOverdueFor(last, now, waited)
+	for _, u := range extras {
+		overdue = overdue || emuDesktopOverdueFor(emuRuntimeRecordFor(u.Key).CheckedAt, now, waited)
+	}
+	if !emuDesktopMoment(gameScreenSuspended(), busy, emuDesktopOnBattery(), emuDesktopIdleFor(now), overdue) {
 		return false, true
 	}
 	coreAutoUpdateStopWaiting()
@@ -155,7 +163,7 @@ func emuDesktopTick(now time.Time) (ran, waiting bool) {
 		if coresDue {
 			active = func() map[string]coreBuild { return managed }
 		}
-		return emuAutoNotifyPass(now, active, extras), false
+		return emuAutoNotifyPass(now, active, extras)
 	}
 	var cores emuAutoCoreRunner
 	if coresDue {
@@ -165,17 +173,39 @@ func emuDesktopTick(now time.Time) (ran, waiting bool) {
 }
 
 // emuDesktopMoment is a PC's "is now a good time": never over a game or an
-// emulator JukaHub started, another install or a playing video; at once when
-// long overdue; otherwise not on a laptop's battery, and only once JukaHub has
-// been left alone for emuDesktopIdle.
+// emulator JukaHub started, another install, a playing video or another
+// program's full screen (busy); only once the PC has been left alone for
+// emuDesktopIdle; and not on a laptop's battery unless long overdue.
 func emuDesktopMoment(inGame, busy, onBattery bool, idle time.Duration, overdue bool) bool {
 	if inGame || busy {
 		return false
 	}
-	if overdue {
-		return true
+	return idle >= emuDesktopIdle && (!onBattery || overdue)
+}
+
+// emuDesktopOverdueFor is coreAutoUpdateOverdueFor for a PC: a real stamp three
+// days old, or — no stamp yet (the first pass on this PC, an updater never
+// checked) or one the clock cannot place — three days of waiting this session.
+// The handheld's "a first pass that waited a poll is overdue" is for a device
+// that is always on battery; a PC's first pass waits for mains like any other.
+func emuDesktopOverdueFor(last string, now time.Time, waited time.Duration) bool {
+	t, ok := parseReleaseTimestamp(last)
+	if !ok || now.Before(t) || t.Before(minSaneClock) || now.Before(minSaneClock) {
+		return waited >= coreAutoUpdateOverdue
 	}
-	return !onBattery && idle >= emuDesktopIdle
+	return now.Sub(t) >= coreAutoUpdateOverdue
+}
+
+// emuDesktopIdleFor is how long the PC has been left alone: the shorter of
+// JukaHub's own input age, which hears its controllers, and Windows' last
+// keyboard or mouse input in any window (emuDesktopSystemIdle; unknown off
+// Windows), so a user busy in another program is not "idle".
+func emuDesktopIdleFor(now time.Time) time.Duration {
+	idle := userInputAge(now)
+	if sys := emuDesktopSystemIdle(); sys >= 0 && sys < idle {
+		idle = sys
+	}
+	return idle
 }
 
 // emuDesktopHasManaged reports that JukaHub installed something on this PC

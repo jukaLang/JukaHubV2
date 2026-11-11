@@ -1,8 +1,8 @@
 package main
 
-// trophy_set2.go — the second trophy set: 288 trophies here and 12 more
-// collection rungs in playtime.go, 300 in all, which take the room from 101 to
-// 401.
+// trophy_set2.go — the second trophy set: 274 trophies here and 11 more
+// collection rungs in playtime.go, 285 in all, which take the room from 101 to
+// 386.
 //
 // The first set reads only the clock. This one reads it more finely (the hour
 // of the day, the days of the year, the longest runs) and counts things done:
@@ -24,6 +24,12 @@ package main
 // earned. Scene names a screen the trophy cannot be earned without, so a setup
 // without it leaves the trophy out of the room and the platinum; Gate does the
 // same for a platform or an account.
+//
+// Nothing here is earned by starting JukaHub. The rows a start handed out —
+// low rungs on the first set's time, day, streak and weekly ladders and on Home
+// time, which any old save already met, and the "Start JukaHub N times" counts
+// — were taken out on 2026-11-11 (trophyRetiredIDs in playtime.go lists them,
+// and their ids may not come back).
 
 // t2Count is a row that counts a key (Unit says how progress reads).
 func t2Count(id, title, desc, group string, tier trophyTier, key trophyKey, goal int64, unit string) playtimeAchievement {
@@ -93,8 +99,6 @@ func trophySetTwo() []playtimeAchievement {
 	)
 	return []playtimeAchievement{
 		// ── Lifetime ──
-		trophyNew("two_hours", "Warming Up", "Spend 2 hours in JukaHub", "Lifetime", trophyBronze, trophyMetricTotal, 2*h),
-		trophyNew("three_hours", "Settling In", "Spend 3 hours in JukaHub", "Lifetime", trophyBronze, trophyMetricTotal, 3*h),
 		trophyNew("twenty_hours", "Part of the Furniture", "Spend 20 hours in JukaHub", "Lifetime", trophySilver, trophyMetricTotal, 20*h),
 		trophyNew("seventyfive_hours", "Old Hand", "Spend 75 hours in JukaHub", "Lifetime", trophyGold, trophyMetricTotal, 75*h),
 		trophyNew("hundred_fifty_hours", "Seasoned", "Spend 150 hours in JukaHub", "Lifetime", trophyGold, trophyMetricTotal, 150*h),
@@ -102,34 +106,27 @@ func trophySetTwo() []playtimeAchievement {
 		trophyNew("seven_fifty_hours", "Hall of Famer", "Spend 750 hours in JukaHub", "Lifetime", trophyGold, trophyMetricTotal, 750*h).secret(),
 
 		// ── Days (every day ever) ──
-		trophyNew("two_days", "Came Back", "Use JukaHub on 2 days", "Days", trophyBronze, trophyMetricLifeDays, 2),
-		trophyNew("five_days", "High Five", "Use JukaHub on 5 days", "Days", trophyBronze, trophyMetricLifeDays, 5),
 		trophyNew("fortyfive_days", "Six Weeks In", "Use JukaHub on 45 days", "Days", trophySilver, trophyMetricLifeDays, 45),
 		trophyNew("days_120", "Third of a Year", "Use JukaHub on 120 days", "Days", trophyGold, trophyMetricLifeDays, 120),
 		trophyNew("days_180", "Half a Year", "Use JukaHub on 180 days", "Days", trophyGold, trophyMetricLifeDays, 180),
 		trophyNew("days_365", "Full Orbit", "Use JukaHub on 365 days", "Days", trophyGold, trophyMetricLifeDays, 365),
 
 		// ── Streaks (the longest run ever) ──
-		trophyNew("run_2", "Back to Back", "Use JukaHub 2 days in a row", "Streaks", trophyBronze, trophyMetricBestStreak, 2),
 		trophyNew("run_5", "Workweek", "Use JukaHub 5 days in a row", "Streaks", trophyBronze, trophyMetricBestStreak, 5),
 		trophyNew("run_10", "Perfect Ten", "Use JukaHub 10 days in a row", "Streaks", trophySilver, trophyMetricBestStreak, 10),
 		trophyNew("run_21", "Habit Formed", "Use JukaHub 21 days in a row", "Streaks", trophySilver, trophyMetricBestStreak, 21),
 		trophyNew("run_100", "Centurion", "Use JukaHub 100 days in a row", "Streaks", trophyGold, trophyMetricBestStreak, 100).secret(),
 
 		// ── Records ──
-		trophyNew("best_day_3h", "Triple Feature", "Spend 3 hours in a single day", "Records", trophySilver, trophyMetricBestDay, 3*h),
-		trophyNew("best_day_6h", "Long Haul", "Spend 6 hours in a single day", "Records", trophyGold, trophyMetricBestDay, 6*h).secret(),
 		t2Best("session_1h", "One Sitting", "Spend 1 hour in JukaHub in one go", "Records", trophyBronze, tkSessionBest, h, "time"),
 		t2Best("session_3h", "Glued to the Screen", "Spend 3 hours in JukaHub in one go", "Records", trophySilver, tkSessionBest, 3*h, "time"),
 		t2Best("session_6h", "No Pause Button", "Spend 6 hours in JukaHub in one go", "Records", trophyGold, tkSessionBest, 6*h, "time").secret(),
 
 		// ── This week ──
-		trophyNew("week_1h", "Weekly Check-In", "Spend 1 hour in the last 7 days", "This week", trophyBronze, trophyMetricWeek, h),
 		trophyNew("week_15h", "Busy Bee", "Spend 15 hours in the last 7 days", "This week", trophySilver, trophyMetricWeek, 15*h),
 		trophyNew("week_30h", "Second Job", "Spend 30 hours in the last 7 days", "This week", trophyGold, trophyMetricWeek, 30*h).secret(),
 
 		// ── Explorer ──
-		trophyNew("explorer_3", "Look Around", "Use 3 different screens", "Explorer", trophyBronze, trophyMetricScreens, 3),
 		trophyNew("explorer_60", "No Stone Unturned", "Use 60 different screens", "Explorer", trophyGold, trophyMetricScreens, 60),
 
 		// ── Screens: a visit to each screen the first set left out, and longer
@@ -148,8 +145,6 @@ func trophySetTwo() []playtimeAchievement {
 		t2Screen("visit_rom_manager", rommSceneName, "ROM Ranger", "Open the ROM manager", trophyVisitSeconds),
 		t2Screen("visit_speed_test", "NetSpeed", "Speedometer", "Open Speed test", trophyVisitSeconds),
 		t2Screen("visit_trophies", playtimeSceneName, "Trophy Case", "Open Trophies", trophyVisitSeconds),
-		t2Screen("home_1h", "Main", "Homebody", "Spend 1 hour on Home", h),
-		t2Screen("home_10h", "Main", "Home Owner", "Spend 10 hours on Home", 10*h),
 		t2Screen("tube_25h", "Tube", "Season Finale", "Spend 25 hours in Media", 25*h),
 		t2Screen("music_5h", "MusicPlayer", "Mixtape", "Spend 5 hours in Music", 5*h),
 		t2Screen("browser_25h", browserSceneName, "Netizen", "Browse for 25 hours", 25*h),
@@ -374,9 +369,6 @@ func trophySetTwo() []playtimeAchievement {
 		t2Count("screenshot_1", "Say Cheese", "Take a screenshot", "System", trophyBronze, tkScreenshot, 1, "screenshots"),
 		t2Count("screenshot_10", "Shutterbug", "Take 10 screenshots", "System", trophyBronze, tkScreenshot, 10, "screenshots"),
 		t2Count("screenshot_100", "Photo Album", "Take 100 screenshots", "System", trophySilver, tkScreenshot, 100, "screenshots"),
-		t2Count("boot_10", "Power On", "Start JukaHub 10 times", "System", trophyBronze, tkBoot, 10, "starts"),
-		t2Count("boot_100", "Boot Camp", "Start JukaHub 100 times", "System", trophySilver, tkBoot, 100, "starts"),
-		t2Count("boot_1000", "Perpetual Motion", "Start JukaHub 1,000 times", "System", trophyGold, tkBoot, 1000, "starts").secret(),
 		t2Count("wake_1", "Power Nap", "Wake JukaHub from the screensaver", "System", trophyBronze, tkWake, 1, "wakes"),
 		t2Count("update_1", "Up to Date", "Install a JukaHub update", "System", trophyBronze, tkUpdate, 1, "updates"),
 		t2Count("backup_1", "Belt and Braces", "Create a backup", "System", trophyBronze, tkBackup, 1, "backups"),

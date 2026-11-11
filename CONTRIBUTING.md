@@ -47,6 +47,11 @@ go vet ./...
 go test ./...
 ```
 
+Without a Go toolchain, the static ones run as Python: `python3
+tools/gocheck/gocheck.py --tests player/` finds the alignment and style problems
+`gofmt` cannot, and its two companions check import order and tabwriter column
+alignment ([tools/gocheck/README.md](tools/gocheck/README.md)).
+
 CI on every push and pull request is two jobs (`.github/workflows/ci.yml`): the
 web builder checks, and the player's `go vet`, staticcheck and `go test`. The
 slow checks run once a week and by hand (`.github/workflows/weekly.yml`): the

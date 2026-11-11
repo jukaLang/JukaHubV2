@@ -259,7 +259,7 @@ func curationHomeRows(panel *curationPanelState) []curationRow {
 		essentialsValue = "Unavailable"
 	}
 	voted := len(panel.votes.Votes)
-	profilesValue := fmt.Sprintf("%d profile(s)", len(panel.profiles))
+	profilesValue := pluralizeCount(len(panel.profiles), "profile", "profiles")
 	return []curationRow{
 		{
 			label:   panel.essentials.Bundle.Name,
@@ -365,7 +365,7 @@ func curationProfileRows(panel *curationPanelState) []curationRow {
 		},
 		{
 			label:   "Import folder",
-			value:   fmt.Sprintf("%d file issue(s)", len(panel.profileIssues)),
+			value:   pluralizeCount(len(panel.profileIssues), "file issue", "file issues"),
 			detail:  "Drop profile JSON into data/curation/import, then refresh.",
 			hint:    hintLine(FooterHint{"A", "Rescan"}),
 			action:  curationActionRefreshProfiles,

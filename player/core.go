@@ -457,17 +457,18 @@ func loadConfig(filename string) (*Config, error) {
 	return &config, nil
 }
 
-// varPattern is compiled once. It used to be compiled inside substituteVars,
-// which every renderText call reaches, so a frame with 40 labels paid for 40
-// regex compilations (~1.4us and 1.7KB of garbage each on the handheld).
-var varPattern = regexp.MustCompile(`\$(\w+)`)
+// varPattern is compiled once, on first use. It used to be compiled inside
+// substituteVars, which every renderText call reaches, so a frame with 40
+// labels paid for 40 regex compilations (~1.4us and 1.7KB of garbage each on
+// the handheld).
+var varPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\$(\w+)`) })
 
 func substituteVars(text string, vars map[string]interface{}) string {
 	// Fast path: almost every string on screen has no substitutions at all.
 	if text == "" || !strings.Contains(text, "$") || len(vars) == 0 {
 		return text
 	}
-	return varPattern.ReplaceAllStringFunc(text, func(m string) string {
+	return varPattern().ReplaceAllStringFunc(text, func(m string) string {
 		varName := m[1:]
 		// Labels can be captured in screenshots or shared by the companion;
 		// never resolve a protected name or an encrypted value into visible text.

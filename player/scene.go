@@ -22,7 +22,6 @@ package main
 //	handleController   consume a controller button; false falls through
 
 import (
-
 	"github.com/veandco/go-sdl2/sdl"
 )
 

@@ -329,7 +329,7 @@ func psLastRunToast(run psLastRun, name string) (string, ToastKind, bool) {
 	// hint vocabulary, with the console's name kept out of the format.
 	if run.PINRejected {
 		return "The login passcode saved for " + name + " was refused — " +
-			hintSentence("change or remove it in its options (%s on its row in PS Remote Play).", "Start / O", "Options"),
+				hintSentence("change or remove it in its options (%s on its row in PS Remote Play).", "Start / O", "Options"),
 			ToastKindWarning, true
 	}
 	reason := psLastRunReason(run.QuitReason)

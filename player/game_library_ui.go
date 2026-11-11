@@ -124,6 +124,10 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 				Path:   it.Path,
 				System: it.System,
 			}, libraryArtworkRoot())
+			if it.System == androidLibrarySystem {
+				// An Android game's cover is named per APK (every phone APK is base.apk).
+				art = androidLibraryCoverPath(it.Path)
+			}
 			game := libraryGame{
 				Path:   it.Path,
 				System: it.System,

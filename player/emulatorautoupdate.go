@@ -620,7 +620,7 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 		if coresDue {
 			active = func() map[string]coreBuild { return scanCoreInventory().Active }
 		}
-		return emuAutoNotifyPass(now, active, extras), false
+		return emuAutoNotifyPass(now, active, extras)
 	}
 	var cores emuAutoCoreRunner
 	if coresDue {
@@ -671,33 +671,15 @@ func emuAutoInstallPass(now time.Time, cores emuAutoCoreRunner, extras []emuRunt
 	}
 	// A game that starts while the pass runs gets the device back: the
 	// watcher stops the pass, which ends between cores and between updaters.
-	pass, stopPass := context.WithCancel(context.Background())
+	pass, stopPass, stoppedForGame := emuAutoGameWatch()
 	defer stopPass()
-	var stoppedForGame atomic.Bool
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-pass.Done():
-				return
-			case <-ticker.C:
-				if gameScreenSuspended() {
-					logPatch("emulator auto-update: a game started, stopping")
-					stoppedForGame.Store(true)
-					stopPass()
-					return
-				}
-			}
-		}
-	}()
 
 	var coreReport *emuInstallReport
 	coreResume, cardCancelled := false, false
 	if cores != nil {
 		logPatch("core auto-update: checking installed cores")
 		bar.begin()
-		report, timedOut, cancelled := emuAutoRunCores(pass, cores)
+		report, timedOut, cancelled := emuAutoRunCores(pass, bar.runContext(), cores)
 		// A run another install took over (its begin retires this run's
 		// token) is not the user's "not now": what it did not reach follows
 		// at the next quiet moment, as after a game.
@@ -730,12 +712,38 @@ func emuAutoInstallPass(now time.Time, cores emuAutoCoreRunner, extras []emuRunt
 	return true, coreResume || stoppedForGame.Load() || extrasReport.Resume
 }
 
+// emuAutoGameWatch is a pass's stop for a game: pass ends once a game or
+// emulator JukaHub started takes the screen (looked at every two seconds), and
+// stopped then reports it. stop ends the watch; call it when the pass is over.
+func emuAutoGameWatch() (pass context.Context, stop context.CancelFunc, stopped *atomic.Bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped = new(atomic.Bool)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if gameScreenSuspended() {
+					logPatch("emulator auto-update: a game started, stopping")
+					stopped.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel, stopped
+}
+
 // emuAutoRunCores runs the core half of a pass under the card the pass has
-// begun. The deadline derives from the card's run token, so a cancel from the
-// card or the activity strip stops the transfers, and the pass's own stop (a
-// game starting) reaches it too. cardCancelled reports the first.
-func emuAutoRunCores(pass context.Context, cores emuAutoCoreRunner) (report emuInstallReport, timedOut, cardCancelled bool) {
-	ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
+// begun. The deadline derives from run, the card's run token, so a cancel from
+// the card or the activity strip stops the transfers, and the pass's own stop
+// (a game starting) reaches it too. cardCancelled reports the first.
+func emuAutoRunCores(pass, run context.Context, cores emuAutoCoreRunner) (report emuInstallReport, timedOut, cardCancelled bool) {
+	ctx, cancel := context.WithTimeout(run, 20*time.Minute)
 	defer cancel()
 	stop := context.AfterFunc(pass, cancel)
 	defer stop()
@@ -812,20 +820,25 @@ func coreAutoUpdateStamp(now time.Time) {
 // emuAutoNotifyPass is the Notify mode's daily pass: the cores active returns
 // (nil when they are not due) compared with the build index, and every updater
 // in extras asked whether it has a newer build. What is new is said once, in
-// one toast; nothing is downloaded or replaced. It reports whether a pass ran.
-func emuAutoNotifyPass(now time.Time, active func() map[string]coreBuild, extras []emuRuntimeUpdater) bool {
-	ran := false
+// one toast; nothing is downloaded or replaced. ran reports that a pass ran;
+// waiting that a game stopped the updaters' checks part-way, so the scheduler
+// looks again soon (what was not checked is not stamped).
+func emuAutoNotifyPass(now time.Time, active func() map[string]coreBuild, extras []emuRuntimeUpdater) (ran, waiting bool) {
 	coreMsg := ""
 	if active != nil {
 		coreMsg, ran = coreAutoUpdateNotifyCheck(now, active())
 	}
 	var report emuRuntimeReport
 	if len(extras) > 0 {
-		report = emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, extras, nil, now)
+		// A game that starts stops the checks between updaters, as it stops
+		// an install pass: the network and the card are the game's.
+		pass, stopPass, _ := emuAutoGameWatch()
+		report = emuRunRuntimeUpdaters(pass, coreUpdateNotify, extras, nil, now)
+		stopPass()
 		ran = true
 	}
 	emuAutoNotifyToast(coreMsg, report.Available)
-	return ran
+	return ran, report.Resume
 }
 
 // coreAutoUpdateNotifyCheck is the cores' share of the Notify pass: it reads
@@ -847,7 +860,11 @@ func coreAutoUpdateNotifyCheck(now time.Time, active map[string]coreBuild) (stri
 		return "", true
 	}
 	coreAutoUpdateStamp(now)
-	stale, _ := emuCompareCores(index, active)
+	stale, current := emuCompareCores(index, active)
+	// The Emulators and Core builds pages badge these cores from this answer
+	// at once. (Starting their whole check here, as this once did, asked every
+	// emulator's project on GitHub a second time in the same pass.)
+	emuNoteCoreCheck(index, active, stale, current)
 	if len(stale) == 0 {
 		logPatch("core update check: the installed cores match the index")
 		return "", true
@@ -858,9 +875,6 @@ func coreAutoUpdateNotifyCheck(now time.Time, active map[string]coreBuild) (stri
 	}
 	msg := coreUpdateNotifyMessage(stale)
 	logPatch("core update check: %s", msg)
-	// The Emulators and Core builds pages badge the same cores from their own
-	// check; starting it now means they already know when opened.
-	emuStartUpdateCheck(0)
 	return msg, true
 }
 

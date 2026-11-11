@@ -246,8 +246,6 @@ const (
 
 	// tkScreenshot: a screenshot saved.
 	tkScreenshot trophyKey = "screenshot"
-	// tkBoot: JukaHub started (the playtime tracker writes it).
-	tkBoot trophyKey = "boot"
 	// tkWake: a press woke the screen (the screensaver, or the dock's darkened
 	// panel). JukaHub never sees the handheld's own suspend and resume.
 	tkWake trophyKey = "wake"

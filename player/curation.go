@@ -323,7 +323,7 @@ func buildCurationEssentials(bundle curationBundle, env curationEnv) curationEss
 			}
 		case curationStepCores:
 			status.Done = env.Cores > 0
-			status.Value = fmt.Sprintf("%d build(s)", env.Cores)
+			status.Value = pluralizeCount(env.Cores, "build", "builds")
 			if env.Cores == 0 {
 				status.Value = "Not found"
 				status.Line = "No cores in " + curationCoresLocation(env) + " — install RetroArch first."
@@ -455,7 +455,7 @@ func applyCurationStep(config *Config, step curationStep) (string, error) {
 		if len(inv.Builds) == 0 {
 			return "", errors.New("no RetroArch cores found — install RetroArch first")
 		}
-		return fmt.Sprintf("%d core build(s)", len(inv.Builds)), nil
+		return pluralizeCount(len(inv.Builds), "core build", "core builds"), nil
 	case curationStepDisplay:
 		if config == nil {
 			return "", errors.New("no config")

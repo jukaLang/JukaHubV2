@@ -358,10 +358,11 @@ func a11yButtonSettingRow(button uint8) setRow {
 		Options: func(*Config) []setOption { return a11yButtonTargetOptions(button) },
 		Current: func(*Config) int { return a11yButtonTargetIndex(button) },
 		Choose: func(c *Config, value string) {
+			// A blank value is "leave this button as it is", so the initial
+			// value is the one that reaches the call on that path.
 			target := button
 			switch value {
 			case "":
-				target = button
 			case a11yButtonNone:
 				target = a11yDisabledButton
 			default:

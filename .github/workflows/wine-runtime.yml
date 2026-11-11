@@ -1,0 +1,241 @@
+name: Windows-app runtime (Box64)
+
+# Builds the Box64 pack of JukaHub's Windows-app runtime natively on an arm64
+# runner, checks that it will start on the handhelds, and hands it on as the
+# artifact "wine-runtime-package": JukaHub-Wine-linux-arm64.zip, one
+# wine-runtime/ folder (box64, the x86_64 libraries it installs for itself,
+# wine.json naming the Wine build it runs). docker-image.yml attaches it to the
+# release of every push to main and release.yml (release.sh) to a v* tag's
+# release; JukaHub installs it from the newest release that carries it.
+#
+# player/native/build-runtimes.sh builds, checks and zips it: Box64 fetched by
+# the full id of its pinned release commit, nothing NEEDED beyond the C
+# library, no symbol newer than GLIBC 2.31, `box64 --version` starts and names
+# the pinned version, and the Wine build wine.json names is checked against its
+# pinned SHA-256. The pack holds BUILDINFO.txt and a SHA256SUMS listing every
+# other file, which JukaHub checks before installing it.
+#
+# The build runs in the same Ubuntu 20.04 arm64 root as the Remote Play helpers
+# (.github/scripts/build-root.sh; why that root: remote-play-helpers.yml), on
+# a runner of its own. It used to run in the helpers' job, after them, and
+# JukaHub-Trimui.zip, which waits for that job, waited the ten minutes a Box64
+# build takes for a pack it does not carry. On a push to main nothing waits
+# for it now: docker-image.yml attaches the pack whenever it is ready, apart
+# from publishing the release. A v* tag's release (release.yml) waits for
+# whichever of this job and the helpers' finishes last.
+#
+# A failure here never stops a release: the job is continue-on-error and its
+# callers carry on whatever its result. A release without the pack makes
+# JukaHub install it from an older release that has one. An advisory step
+# starts Wine 10.0 once under the new Box64 and reports.
+#
+# Everything the pack is made from is pinned in build-runtimes.sh (with CMake
+# from the Python tool pins and the root from build-root.sh), so the job first
+# looks for the pack an earlier run built from exactly those: the artifact
+# wine-runtime-pack-<hash>, named by `build-root.sh key box64`. What it takes
+# has to pass the provenance rules of the release build cache in
+# .github/scripts/go-build-cache.sh: an earlier push-to-main run of the same
+# calling workflow, whose commit is in the history being built. A fresh build
+# on a push to main keeps its pack under that name for 90 days. The callers
+# grant this job `actions: read` for the lookup; without it the run would not
+# start.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Box64 pack (linux/arm64, glibc 2.31)
+    runs-on: ubuntu-24.04-arm
+    # The build root and a Box64 build from scratch, with room to spare; a
+    # reused pack takes seconds.
+    timeout-minutes: 50
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read     # find and download what an earlier run built
+    env:
+      ROOTFS: /srv/jukahub-focal
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The workspace is bind-mounted into the build root, where third-party
+          # build code runs as root; nothing here pushes, so no token stays in
+          # .git/config for it to read.
+          persist-credentials: false
+
+      - name: Look for a Box64 pack an earlier run built from these sources
+        id: cache
+        # A pack is only taken when it still verifies (one wine-runtime/
+        # folder, every file listed in its SHA256SUMS and matching). A miss,
+        # or any trouble here, only means the steps below build it: this step
+        # must not fail, since a failed step would skip them too.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The default shell is bash -e: nothing below may end the step early.
+          set +e
+          zip=JukaHub-Wine-linux-arm64.zip
+          miss() {
+            rm -f "player/native/bin/$zip"
+            exit 0
+          }
+          if ! name=$(sh .github/scripts/build-root.sh key box64); then
+            echo "::warning title=Box64::could not list the pack's sources; building it"
+            miss
+          fi
+          echo "artifact=$name" >> "$GITHUB_OUTPUT"
+          echo "Box64 pack sources: $name"
+          if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin "$zip"; then
+            miss
+          fi
+          if ! sh player/native/build-runtimes.sh verify "player/native/bin/$zip"; then
+            echo "::warning title=Box64::the earlier pack does not verify; building Box64 instead"
+            miss
+          fi
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create the Ubuntu 20.04 build root
+        id: root
+        if: steps.cache.outputs.hit != 'true'
+        run: sh .github/scripts/build-root.sh create
+
+      - name: Build the Box64 pack
+        id: box64
+        # Box64 at its pinned commit (a generic ARM64 build, with gcc 10 from
+        # the root's universe), checked like the helpers (box64 --version
+        # starts and names the pinned version), with the x86_64 libraries its
+        # install puts beside it, and wine.json for the pinned Wine build, whose
+        # download is checked against its SHA-256. When gcc 10 cannot be
+        # installed it builds with gcc 9 and sets the output reusable=false:
+        # that pack ships with this run but is not kept for later ones.
+        if: steps.cache.outputs.hit != 'true'
+        timeout-minutes: 30
+        run: sh .github/scripts/build-root.sh build box64
+
+      - name: Start Wine 10.0 under the new Box64 (advisory)
+        id: wine_check
+        # box64 <wine>/bin/wine --version, once, bounded, with the pack's
+        # x64lib as BOX64_LD_LIBRARY_PATH: proof that the pair starts on
+        # aarch64 Linux, for the summary. The handheld's own start (its kernel,
+        # its display) is still to be seen on a device.
+        if: ${{ !cancelled() && steps.box64.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: sh .github/scripts/build-root.sh check box64
+
+      - name: Report the Box64 pack
+        if: always()
+        # Only a report: its failure must not cost the pack its upload.
+        continue-on-error: true
+        env:
+          ROOT_OUTCOME: ${{ steps.root.outcome }}
+          BOX64_OUTCOME: ${{ steps.box64.outcome }}
+          BOX64_REUSED: ${{ steps.cache.outputs.hit == 'true' && steps.cache.outputs.run || '' }}
+          WINE_CHECK_OUTCOME: ${{ steps.wine_check.outcome }}
+        run: |
+          logs="$ROOTFS/tmp/jukahub-runtime-logs/wine"
+          zip=JukaHub-Wine-linux-arm64.zip
+          # fenced <file>: the file in a tilde fence (a log line of three
+          # backticks would end a backtick fence early), bounded.
+          fenced() {
+            echo ""
+            echo '~~~text'
+            head -c 30000 "$1"
+            echo ""
+            echo '~~~'
+          }
+          {
+            echo "### Box64 (the Windows-app runtime)"
+            echo ""
+            if [ -n "$BOX64_REUSED" ]; then
+              echo "Reused \`$zip\` from run $BOX64_REUSED, which built and verified it from the same sources."
+            elif [ "$BOX64_OUTCOME" = success ]; then
+              echo "Built and verified: \`$zip\`."
+            else
+              echo "Not built (${BOX64_OUTCOME:-not run}): the release goes out without the Box64 pack; JukaHub then installs it from an older release that has one."
+              if [ "$ROOT_OUTCOME" = failure ]; then
+                echo "The **Create the Ubuntu 20.04 build root** step says why."
+              fi
+              if [ -f "$logs/failure.txt" ]; then
+                fenced "$logs/failure.txt"
+                echo ""
+                echo "Every step's whole log is in the run's \`wine-runtime-build-logs\` artifact."
+              fi
+            fi
+            if [ -f "player/native/bin/$zip" ] && unzip -p "player/native/bin/$zip" wine-runtime/BUILDINFO.txt > "$RUNNER_TEMP/buildinfo.txt" 2>/dev/null; then
+              echo ""
+              echo '```'
+              cat "$RUNNER_TEMP/buildinfo.txt"
+              echo '```'
+            fi
+            if [ -n "$WINE_CHECK_OUTCOME" ] && [ "$WINE_CHECK_OUTCOME" != skipped ]; then
+              echo ""
+              echo "**Wine 10.0 under this Box64 (advisory):** ${WINE_CHECK_OUTCOME}"
+              if [ -f "$logs/wine-check.txt" ]; then
+                fenced "$logs/wine-check.txt"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$BOX64_REUSED" ] && [ "$BOX64_OUTCOME" != success ]; then
+            echo "::warning title=Box64::not built; the release goes out without JukaHub-Wine-linux-arm64.zip"
+          fi
+
+      - name: Keep the logs of a failed Box64 build
+        # build-runtimes.sh writes one log per step inside the build root,
+        # which goes away with the runner. Only a help for the next fix:
+        # bounded, and its failure changes nothing.
+        if: ${{ always() && steps.box64.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wine-runtime-build-logs
+          path: |
+            ${{ env.ROOTFS }}/tmp/jukahub-runtime-logs/wine/
+            ${{ env.ROOTFS }}/tmp/jukahub-runtime-build/box64-build/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+      - name: Upload the Box64 pack
+        if: ${{ !cancelled() && (steps.box64.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wine-runtime-package
+          # The zip keeps the file modes an artifact would lose.
+          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
+          if-no-files-found: error
+          # Zipped already: zipping it again would only cost time.
+          compression-level: 0
+          retention-days: 30
+          # A re-run of this job replaces its own earlier upload instead of
+          # failing on the name.
+          overwrite: true
+
+      - name: Keep the Box64 pack for later runs
+        # A fresh build that passed its checks, on a push to main: the only
+        # kind the lookup above accepts. A reused pack is kept already, and a
+        # gcc 9 one is not what its sources' name stands for.
+        if: ${{ !cancelled() && steps.box64.outcome == 'success' && steps.box64.outputs.reusable != 'false' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.cache.outputs.artifact }}
+          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+
+      - name: Release the build root
+        if: always()
+        run: sh .github/scripts/build-root.sh release

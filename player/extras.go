@@ -82,11 +82,37 @@ var (
 	// scheduled. A debounced write must land where the change was made even if
 	// the process (or a test) has changed directory by the time the timer fires.
 	pendingUserConfigDir string
+	// pendingUserConfigSections marks the pending save as a section save: the
+	// cached user config handed in for its favourites, chat or JukaLand
+	// (saveUserConfigFile).
+	pendingUserConfigSections bool
 
 	// userConfigSaveDelay is the debounce window; a variable so tests can
 	// exercise the timer without sleeping two seconds.
 	userConfigSaveDelay = 2 * time.Second
 )
+
+// userConfigLatest holds the Variables of the newest jukauser.json written by
+// a full save (every save but a section save), decoded from the bytes written
+// so that nothing in it is shared with a live map. The cached user config's own
+// Variables are the ones read at boot — no save updates them — and a section
+// save hands that cache to the writer; writing its Variables back put the boot
+// copy of every setting, recent list and trophy over everything saved since,
+// at every exit too (the teardown saves the favourites after the playtime
+// flush), so a start awarded the same trophies again each time. A section
+// save writes these instead.
+var userConfigLatest struct {
+	mu   sync.Mutex
+	vars *UserVariables
+}
+
+// userConfigLatestVars returns the newest full save's Variables, or nil before
+// the first full save of the run. The value is never written once stored.
+func userConfigLatestVars() *UserVariables {
+	userConfigLatest.mu.Lock()
+	defer userConfigLatest.mu.Unlock()
+	return userConfigLatest.vars
+}
 
 // saveUserConfigDebounced batches rapid successive config changes into a single
 // disk write after a short quiet period. This avoids excessive I/O on handheld
@@ -98,7 +124,7 @@ var (
 var userConfigWritesEnabled = true
 
 func saveUserConfigDebounced(user *UserConfig) {
-	if !userConfigWritesEnabled {
+	if user == nil || !userConfigWritesEnabled {
 		return
 	}
 	// The write runs on a timer goroutine two seconds from now, and the Custom
@@ -106,10 +132,26 @@ func saveUserConfigDebounced(user *UserConfig) {
 	// counters every second, background updates, every keystroke). Iterating
 	// it there was a fatal "concurrent map iteration and map write". It is
 	// copied here, on the caller's goroutine, so the timer owns everything it
-	// touches.
-	user = detachUserConfig(user)
+	// touches. A section save (the cached user config) needs no copy once a
+	// full save is on record: the writer takes its settings from that and its
+	// sections from the cache as they are then (saveUserConfigFile).
+	sections := user == userConfigCache
+	if sections && userConfigLatestVars() != nil {
+		user = &UserConfig{}
+	} else {
+		user = detachUserConfig(user)
+	}
 	userConfigSaveMutex.Lock()
+	if sections && pendingUserConfig != nil && !pendingUserConfigSections {
+		// A full save waiting in the slot carries this change already — it
+		// fills its sections from the cache when it is written — with newer
+		// settings. Its timer is left as it is, so a busy chat cannot keep
+		// putting it off.
+		userConfigSaveMutex.Unlock()
+		return
+	}
 	pendingUserConfig = user
+	pendingUserConfigSections = sections
 	pendingUserConfigDir, _ = os.Getwd()
 	if userConfigSaveTimer != nil {
 		userConfigSaveTimer.Stop()
@@ -118,7 +160,7 @@ func saveUserConfigDebounced(user *UserConfig) {
 		userConfigSaveMutex.Lock()
 		defer userConfigSaveMutex.Unlock()
 		if pendingUserConfig != nil {
-			saveUserConfigToDir(pendingUserConfigDir, pendingUserConfig)
+			saveUserConfigFile(pendingUserConfigDir, pendingUserConfig, pendingUserConfigSections)
 			pendingUserConfig = nil
 			pendingUserConfigDir = ""
 		}
@@ -135,7 +177,7 @@ func flushPendingUserConfig() {
 		userConfigSaveTimer.Stop()
 	}
 	if pendingUserConfig != nil {
-		saveUserConfigToDir(pendingUserConfigDir, pendingUserConfig)
+		saveUserConfigFile(pendingUserConfigDir, pendingUserConfig, pendingUserConfigSections)
 		pendingUserConfig = nil
 		pendingUserConfigDir = ""
 	}
@@ -223,6 +265,11 @@ func userConfigFromVariables(config *Config) *UserConfig {
 		LedSync:            config.Variables.LEDSync,
 		Custom:             config.Variables.Custom,
 	}}
+	// Netplay's switch is a pointer in the file (a file without it keeps the
+	// shipped default), and only Quick Settings used to fill it: a file last
+	// written by any other save started the next run on the default.
+	netplay := config.Variables.NetPlayEnabled
+	user.Variables.NetPlayEnabled = &netplay
 	// Levels are owned by Quick Settings and live only in jukauser.json. Carry
 	// them through so a save triggered by any other screen does not reset them.
 	if userConfigCache != nil {
@@ -1757,28 +1804,67 @@ func migrateWeatherUnitAuto(user *UserConfig) bool {
 	return changed
 }
 
+// saveUserConfig writes user now. It takes the debounced writer's lock, so the
+// two cannot interleave, and drops a queued save it supersedes instead of
+// letting that land after it with older data: a full save is built from the
+// live config this instant and fills its sections from the cache, and a
+// section save writes the cache's sections as they are now. A full save queued
+// before a section save stays: its settings are newer than any on disk.
 func saveUserConfig(user *UserConfig) {
-	saveUserConfigToDir("", user)
+	if user == nil || !userConfigWritesEnabled {
+		return
+	}
+	sections := user == userConfigCache
+	userConfigSaveMutex.Lock()
+	defer userConfigSaveMutex.Unlock()
+	if pendingUserConfig != nil && (!sections || pendingUserConfigSections) {
+		pendingUserConfig = nil
+		pendingUserConfigDir = ""
+	}
+	saveUserConfigFile("", user, sections)
 }
 
 // saveUserConfigToDir persists jukauser.json into dir (empty means the current
 // working directory). The debounced writer uses it so a pending save cannot
 // land in whatever directory happens to be current two seconds later.
 func saveUserConfigToDir(dir string, user *UserConfig) {
+	saveUserConfigFile(dir, user, false)
+}
+
+// saveUserConfigFile writes user into dir's jukauser.json. sections marks a
+// section save: the cached user config — or the debounced writer's copy of it
+// — handed in for its favourites, chat or JukaLand. The cache's Variables are
+// the boot copy, so the newest full save's (userConfigLatest) are written in
+// their place; before the run's first full save the cache's are the newest
+// there are. A full save's Variables become the newest once they are on disk.
+func saveUserConfigFile(dir string, user *UserConfig, sections bool) {
 	if user == nil || !userConfigWritesEnabled {
 		return
 	}
+	sections = sections || user == userConfigCache
 	path := "jukauser.json"
 	if dir != "" {
 		path = filepath.Join(dir, "jukauser.json")
 	}
+	vars := user.Variables
+	if sections {
+		if latest := userConfigLatestVars(); latest != nil {
+			vars = *latest
+		}
+	}
 	userCopy := *user
-	userCopy.Variables.Custom = make(map[string]interface{})
-	for k, v := range user.Variables.Custom {
+	userCopy.Variables = vars
+	userCopy.Variables.Custom = make(map[string]interface{}, len(vars.Custom))
+	for k, v := range vars.Custom {
 		if volatileCustomVars[k] {
 			continue
 		}
 		userCopy.Variables.Custom[k] = v
+	}
+	// A section save writes the sections as they are now: a queued one holds
+	// those it was queued with, and a newer one may have been written since.
+	if sections && userConfigCache != nil {
+		userCopy.Favorites, userCopy.Chat, userCopy.JukaLand = userConfigCache.Favorites, userConfigCache.Chat, userConfigCache.JukaLand
 	}
 	// Preserve sections (favorites / chat / jukaland) the caller didn't
 	// supply, so a settings-only save never drops user data.
@@ -1815,7 +1901,25 @@ func saveUserConfigToDir(dir string, user *UserConfig) {
 		logWarn("extras", "saveUserConfig: write error: %v", err)
 		return
 	}
+	if !sections {
+		userConfigNoteLatest(data)
+	}
 	LogScene("config").Info("user config saved", "path", path)
+}
+
+// userConfigNoteLatest keeps the Variables of a full save just written as the
+// newest (userConfigLatest), decoded afresh from the bytes on disk so a section
+// save on any goroutine can marshal them while the live maps change.
+func userConfigNoteLatest(data []byte) {
+	var written struct {
+		Variables UserVariables `json:"variables"`
+	}
+	if err := json.Unmarshal(data, &written); err != nil {
+		return
+	}
+	userConfigLatest.mu.Lock()
+	userConfigLatest.vars = &written.Variables
+	userConfigLatest.mu.Unlock()
 }
 
 func mergeUserConfig(config *Config, user *UserConfig) {

@@ -259,7 +259,7 @@ var (
 		{Button: "B", Label: "Close"},
 	}
 	vkClipKeyHints = [...]FooterHint{
-		{Button: "↑↓", Label: "Choose"},
+		{Button: "Up/Down", Label: "Choose"},
 		{Button: "Enter", Label: "Copy"},
 		{Button: "Del", Label: "Remove"},
 		{Button: "Esc", Label: "Close"},

@@ -459,6 +459,11 @@ func homeVideoPreviewJob(v VideoInfo) homePreviewJob {
 func homeArtPreviewJob(g recentGame) homePreviewJob {
 	root := libraryArtworkRoot()
 	art := romArtworkPath(scannedROM{Path: g.Path, System: g.System}, root)
+	if g.System == androidLibrarySystem {
+		// Android covers are named per APK path (every APK copied off a phone
+		// is called base.apk), with the old bare-name cover as a fallback.
+		art = androidLibraryCoverPath(g.Path)
+	}
 	if !artworkCoverPresent(art) {
 		return homePreviewJob{}
 	}

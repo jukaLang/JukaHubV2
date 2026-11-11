@@ -251,3 +251,36 @@ func trophyRoomNoteSeen(config *Config) {
 	trophySeenGen++
 	saveUserConfigDebounced(userConfigFromVariables(config))
 }
+
+// trophySeenClamp brings the record, and the session's baseline once taken,
+// down to earned when they are above it: a loaded snapshot whose retired
+// trophies left it (trophyRetire), or a restored backup with fewer. Left
+// above, the cup would stay at nothing for that many new trophies.
+func trophySeenClamp(config *Config, earned int) {
+	if seen, ok := trophySeenRecord(config); ok && seen > earned {
+		config.Variables.Custom[trophySeenKey] = strconv.Itoa(earned)
+		trophySeenGen++
+	}
+	if trophyBaseline.set && trophyBaseline.n > earned {
+		trophyBaseline.n = earned
+		trophySeenGen++
+	}
+}
+
+// trophySeenSkip keeps n trophies just recorded without a celebration (what a
+// start finds the saved history already earned, trophyCatchUpQuietly) off the
+// cup's count: the stored record moves up by n, and so does the session's
+// baseline once it is taken. A baseline taken later includes them already. The
+// record is saved with the playtime snapshot's next write.
+func trophySeenSkip(config *Config, n int) {
+	if n <= 0 {
+		return
+	}
+	if seen, ok := trophySeenRecord(config); ok {
+		config.Variables.Custom[trophySeenKey] = strconv.Itoa(seen + n)
+	}
+	if trophyBaseline.set {
+		trophyBaseline.n += n
+	}
+	trophySeenGen++
+}

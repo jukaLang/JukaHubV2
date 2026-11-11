@@ -217,7 +217,7 @@ func saveManagerRows() []saveManagerRow {
 	}
 	syncValue := "Not set up"
 	if savePanel.syncReady {
-		syncValue = fmt.Sprintf("%d folder(s)", len(savePanel.sync.Folders))
+		syncValue = pluralizeCount(len(savePanel.sync.Folders), "folder", "folders")
 	}
 	resumeValue := "None"
 	if savePanel.resumeOK {

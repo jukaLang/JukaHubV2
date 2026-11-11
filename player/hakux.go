@@ -63,6 +63,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -167,12 +168,14 @@ func hakuxCPUIsA133P() bool {
 // xbox-trimui-smart-pro-v0.1.3.zip. "-v" must follow "smart-pro" directly, so
 // a later Smart Pro S package (xbox-trimui-smart-pro-s-…) or a checksum side-car
 // (….zip.sha256) can never be taken for it.
-var hakuxAssetPattern = regexp.MustCompile(`(?i)^xbox-trimui-smart-pro-v([0-9]+(?:\.[0-9]+)*(?:[-+.][0-9a-z.]+)?)\.zip$`)
+var hakuxAssetPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`(?i)^xbox-trimui-smart-pro-v([0-9]+(?:\.[0-9]+)*(?:[-+.][0-9a-z.]+)?)\.zip$`)
+})
 
 // hakuxAssetVersion is the version a package asset name carries, or "" when
 // the name is not the TG5040 package.
 func hakuxAssetVersion(name string) string {
-	m := hakuxAssetPattern.FindStringSubmatch(strings.TrimSpace(name))
+	m := hakuxAssetPattern().FindStringSubmatch(strings.TrimSpace(name))
 	if m == nil {
 		return ""
 	}
@@ -1210,15 +1213,21 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 	folder, installed, managed := hakuxInstalled([]string{filepath.Join(p.SDRoot, "Emus")})
 	hadInstall := hakuxLauncherIn(folder) != ""
 	newest := managed && hadInstall && !hakuxNewer(installed, release)
-	if newest && hakuxIntact(p.SDRoot, installed) {
+	// "Not newer" is also a release older than the installed one (a
+	// pre-release installed from the list while "latest" is the stable before
+	// it): that leaves the card alone, missing files or not — a repair from
+	// another release would mix two versions and relabel the install.
+	same := strings.EqualFold(strings.TrimSpace(installed.Tag), strings.TrimSpace(release.Tag))
+	if newest && (!same || hakuxIntact(p.SDRoot, installed)) {
 		result.Current = true
+		result.Tag = installed.Tag
 		result.Launcher = hakuxLauncherIn(folder)
 		return result, nil
 	}
 	// The newest release is installed but files it laid down are gone: a
 	// repair puts the missing files back and touches nothing else — not the
 	// files hakuX rewrote, and not the kept copy of the previous version.
-	repair := newest
+	repair := newest // only the same release gets here
 	// The zip and the unpacked tree sit on the card together; the exact
 	// unpacked size is checked again once the zip is here.
 	if release.Size > 0 {

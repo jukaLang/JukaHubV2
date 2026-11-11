@@ -597,7 +597,7 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 		m[ComponentAssets] = m[ComponentApp]
 	}
 	if repo, err := LoadPackageRepo(); err == nil {
-		m[ComponentPackages] = fmt.Sprintf("%d package(s)", len(repo.Packages))
+		m[ComponentPackages] = pluralizeCount(len(repo.Packages), "package", "packages")
 	}
 	// Cached reads only: the probes run in the background (see toolVersionCache).
 	if v := helperToolVersion("yt-dlp"); v != "" {
@@ -2823,7 +2823,7 @@ func RepairJukaHub(config *Config) PatchRepairReport {
 			}
 		}
 		if removed > 0 {
-			r.Fixed = append(r.Fixed, fmt.Sprintf("cleared %d stale Patch download/staging file(s)", removed))
+			r.Fixed = append(r.Fixed, "cleared "+pluralizeCount(removed, "stale Patch download/staging file", "stale Patch download/staging files"))
 		}
 	}
 	// 5. Font/asset presence.

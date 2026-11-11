@@ -24,3 +24,7 @@ func wineInputStart(p mbridgeParams, quit func()) (func(), error) {
 
 // wineInputActive reports a Windows-app session holding the pad: never here.
 func wineInputActive() bool { return false }
+
+// wineInputLive lets a session's mouse and keys through once its program
+// started: there is no such session here.
+func wineInputLive() {}

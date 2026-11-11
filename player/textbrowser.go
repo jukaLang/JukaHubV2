@@ -2398,12 +2398,12 @@ func getRunningServices() (result string) {
 		}
 	}()
 	if runtime.GOOS != "linux" {
-		return "N/A (not Linux)"
+		return "Unavailable (not Linux)"
 	}
 
 	out, err := exec.Command("systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--plain").Output()
 	if err != nil {
-		return "N/A"
+		return "Unavailable"
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var sb strings.Builder
@@ -2469,11 +2469,11 @@ func getProcessTree() (result string) {
 		}
 	}()
 	if runtime.GOOS != "linux" {
-		return "N/A (not Linux)"
+		return "Unavailable (not Linux)"
 	}
 	out, err := exec.Command("ps", "-eo", "pid,ppid,user,%cpu,%mem,cmd", "--sort=-%cpu").Output()
 	if err != nil {
-		return "N/A"
+		return "Unavailable"
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var sb strings.Builder

@@ -16,7 +16,6 @@ package main
 // is filtered out.
 
 import (
-	"fmt"
 	"math/rand"
 	"strings"
 
@@ -94,7 +93,7 @@ func buildGameRandomScopes() []gameRandomScope {
 		scopes = append(scopes, gameRandomScope{
 			console: system.Name,
 			title:   "This console",
-			detail:  fmt.Sprintf("%s · %d game(s)", system.Name, len(system.Games)),
+			detail:  system.Name + " · " + pluralizeCount(len(system.Games), "game", "games"),
 			games:   system.Games,
 		})
 	}
@@ -108,9 +107,9 @@ func buildGameRandomScopes() []gameRandomScope {
 		all = append(all, system.Games...)
 	}
 	if len(all) > 0 {
-		detail := fmt.Sprintf("%d game(s) in %d console(s)", len(all), consoles)
+		detail := pluralizeCount(len(all), "game", "games") + " in " + pluralizeCount(consoles, "console", "consoles")
 		if gameLib.query != "" {
-			detail = fmt.Sprintf("%d match(es) in %d console(s)", len(all), consoles)
+			detail = pluralizeCount(len(all), "match", "matches") + " in " + pluralizeCount(consoles, "console", "consoles")
 		}
 		scopes = append(scopes, gameRandomScope{
 			title:  "Whole library",

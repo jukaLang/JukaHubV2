@@ -354,18 +354,22 @@ func bzMergeInfo(dst *bzDevice, src bzDevice) {
 var (
 	// bzANSIPattern matches the colour and cursor sequences bluetoothctl prints
 	// even into a pipe, and readline's prompt markers (\x01, \x02).
-	bzANSIPattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|[\x01\x02]`)
+	bzANSIPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|[\x01\x02]`)
+	})
 	// bzPromptPattern matches the prompt left at the start of a line
 	// ("[bluetooth]# ", "[DualSense Wireless Controller]> "). Events ("[NEW]
 	// Device …") are followed by a space, never by # or >, so they are kept.
-	bzPromptPattern = regexp.MustCompile(`^\[[^\[\]]*\][#>]\s*`)
+	bzPromptPattern = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^\[[^\[\]]*\][#>]\s*`)
+	})
 )
 
 // bzCleanLine strips colour codes, prompts and padding from one output line.
 func bzCleanLine(s string) string {
-	s = strings.TrimSpace(bzANSIPattern.ReplaceAllString(s, ""))
+	s = strings.TrimSpace(bzANSIPattern().ReplaceAllString(s, ""))
 	for {
-		loc := bzPromptPattern.FindStringIndex(s)
+		loc := bzPromptPattern().FindStringIndex(s)
 		if loc == nil {
 			return s
 		}
@@ -998,7 +1002,7 @@ func (f *bzFlow) note(line string) string {
 		return line
 	}
 	rest := strings.TrimSpace(strings.TrimLeft(line[i+len(bzNoDaemonPrompt):], "."))
-	f.waiting = !bzPromptPattern.MatchString(rest)
+	f.waiting = !bzPromptPattern().MatchString(rest)
 	return bzCleanLine(rest)
 }
 

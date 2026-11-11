@@ -14,6 +14,8 @@ func wineMountWestonImage(image string, log wineLog) (string, bool, error) {
 
 func wineUnmountWeston(dir string, log wineLog) {}
 
+func wineReleaseLoop(dev string, log wineLog) {}
+
 func wineLabelInputDevices(log wineLog) {}
 
 func wineSettleInput(log wineLog) {}

@@ -600,7 +600,7 @@ func (s *mediaRelayServer) servePlaylist(w http.ResponseWriter, resp *http.Respo
 
 // mediaRelayURIAttr matches a quoted URI attribute in an HLS tag
 // (#EXT-X-KEY, -MAP, -MEDIA, -I-FRAME-STREAM-INF, -PART, -PRELOAD-HINT, ...).
-var mediaRelayURIAttr = regexp.MustCompile(`([:,])URI="([^"]*)"`)
+var mediaRelayURIAttr = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`([:,])URI="([^"]*)"`) })
 
 // mediaRelayRewritePlaylist points every URI line and URI attribute of an HLS
 // playlist at route(absolute URL), keeping each line's ending.
@@ -622,8 +622,8 @@ func mediaRelayRewritePlaylist(body string, base *url.URL, route func(string) st
 			b.WriteString(raw)
 			continue
 		case strings.HasPrefix(trimmed, "#"):
-			line = mediaRelayURIAttr.ReplaceAllStringFunc(line, func(m string) string {
-				sub := mediaRelayURIAttr.FindStringSubmatch(m)
+			line = mediaRelayURIAttr().ReplaceAllStringFunc(line, func(m string) string {
+				sub := mediaRelayURIAttr().FindStringSubmatch(m)
 				return sub[1] + `URI="` + mediaRelayRewriteRef(sub[2], base, route) + `"`
 			})
 		default:

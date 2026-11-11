@@ -106,8 +106,11 @@ func clearChatImageCache() {
 var chatImageDownloads = make(map[string][]byte)
 var chatImageFetching = make(map[string]bool)
 var chatImageDLMutex sync.Mutex
-var urlRegex = regexp.MustCompile(`https?://[^\s<>"]+`)
-var imageURLRegex = regexp.MustCompile(`\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$`)
+
+// Compiled on first use, so a session that never opens Chat does not pay for
+// them; the render path still compiles each one exactly once.
+var urlRegex = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`https?://[^\s<>"]+`) })
+var imageURLRegex = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$`) })
 
 func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 	chatImageMutex.Lock()
@@ -631,9 +634,9 @@ func trimChatURL(u string) string {
 // firstChatImageURL returns the first URL in a message that points at an image,
 // so pasting an image link shows a thumbnail instead of a bare address.
 func firstChatImageURL(text string) string {
-	for _, m := range urlRegex.FindAllString(text, -1) {
+	for _, m := range urlRegex().FindAllString(text, -1) {
 		u := trimChatURL(m)
-		if imageURLRegex.MatchString(u) {
+		if imageURLRegex().MatchString(u) {
 			return u
 		}
 	}
@@ -673,7 +676,7 @@ const chatLinkCardLimit = 3
 func allChatLinks(text string) []string {
 	links := make([]string, 0, chatLinkCardLimit)
 	seen := make(map[string]bool, chatLinkCardLimit)
-	for _, m := range urlRegex.FindAllString(text, -1) {
+	for _, m := range urlRegex().FindAllString(text, -1) {
 		u := trimChatURL(m)
 		if u == "" || seen[u] {
 			continue
@@ -733,7 +736,7 @@ func chatYouTubeID(u string) string {
 // its 64px site icon: a few KB instead of downloading a preview picture for
 // every link on a 1 GB device.
 func chatLinkPreviewURL(u string) string {
-	if imageURLRegex.MatchString(u) {
+	if imageURLRegex().MatchString(u) {
 		return u
 	}
 	if isYouTubeURL(u) {
@@ -1022,7 +1025,9 @@ func discordMessageParts(m *discordgo.Message) (string, string) {
 // user ping (<@id> or the nickname form <@!id>), a role ping (<@&id>) and a
 // channel link (<#id>). The raw markup is unreadable on the handheld - a ping
 // showed up as "@417829…", an id nobody can recognise.
-var discordMentionPattern = regexp.MustCompile(`<(@!?|@&|#)([0-9]+)>`)
+var discordMentionPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`<(@!?|@&|#)([0-9]+)>`)
+})
 
 // discordResolveMentions rewrites those tokens into names. User names come from
 // the message itself (Discord lists every pinged user in the payload); roles and
@@ -1031,8 +1036,8 @@ func discordResolveMentions(text string, m *discordgo.Message) string {
 	if text == "" || !strings.Contains(text, "<") {
 		return text
 	}
-	return discordMentionPattern.ReplaceAllStringFunc(text, func(token string) string {
-		parts := discordMentionPattern.FindStringSubmatch(token)
+	return discordMentionPattern().ReplaceAllStringFunc(text, func(token string) string {
+		parts := discordMentionPattern().FindStringSubmatch(token)
 		if len(parts) != 3 {
 			return token
 		}

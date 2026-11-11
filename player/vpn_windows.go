@@ -427,6 +427,7 @@ func vpnWinUp(reqPath, wantSum string) int {
 		return vpnWinExitFolder
 	}
 	if err := exec.Command(exe, "/installtunnelservice", confPath).Run(); err != nil {
+		_ = os.Remove(confPath) // no service will read it; it holds the key
 		return vpnWinExitInstall
 	}
 	return vpnWinExitOK

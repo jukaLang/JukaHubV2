@@ -1,9 +1,10 @@
 package main
 
-// Tests for the second trophy set: its shape (401 trophies, unique ids and
-// titles, every old id kept), the event counters and their drain, the lifetime
-// days and runs, the clock and the calendar, availability gates, the burst
-// announcement and the room's category list and progress lines.
+// Tests for the second trophy set: its shape (386 trophies, unique ids and
+// titles, every old id kept, no retired id back), the event counters and their
+// drain, the lifetime days and runs, a loaded save's quiet catch-up, the clock
+// and the calendar, availability gates, the burst announcement and the room's
+// category list and progress lines.
 
 import (
 	"os"
@@ -72,8 +73,8 @@ func trophyTestDay(base time.Time, n int) string {
 }
 
 func TestTrophySetShape(t *testing.T) {
-	if len(playtimeAchievements) != playtimeAchievementCount || playtimeAchievementCount != 401 {
-		t.Fatalf("the set has %d trophies, declared %d, want 401", len(playtimeAchievements), playtimeAchievementCount)
+	if len(playtimeAchievements) != playtimeAchievementCount || playtimeAchievementCount != 386 {
+		t.Fatalf("the set has %d trophies, declared %d, want 386", len(playtimeAchievements), playtimeAchievementCount)
 	}
 	ids := map[string]int{}
 	titles := map[string]string{}
@@ -132,8 +133,14 @@ func TestTrophySetShape(t *testing.T) {
 	if len(trophyFirstSetIDs) != 101 {
 		t.Fatalf("the first set lists %d ids", len(trophyFirstSetIDs))
 	}
-	if n := len(trophySetTwo()); n != 288 {
-		t.Errorf("the second set's table has %d rows, want 288 (+12 collection rungs = 300)", n)
+	if n := len(trophySetTwo()); n != 274 {
+		t.Errorf("the second set's table has %d rows, want 274 (+11 collection rungs = 285)", n)
+	}
+	// A retired id coming back would read an old save's unlock as its own.
+	for _, id := range trophyRetiredIDs {
+		if i, ok := ids[id]; ok {
+			t.Errorf("retired id %q is trophy #%d again", id, i+1)
+		}
 	}
 }
 
@@ -523,13 +530,18 @@ func TestPlaytimeCrossedMidnight(t *testing.T) {
 }
 
 func TestTrophySeedFromHistory(t *testing.T) {
-	keepTrophyState(t)
+	keepTrophyCupState(t)
 	keepTrophyEvents(t)
+	keepTrophyCelebrations(t)
 	now := time.Now()
+	const stamp = "2026-11-10T12:00:00Z"
 	old := map[string]interface{}{
-		"total":    float64(7200),
-		"scenes":   map[string]interface{}{"Main": float64(7200)},
-		"unlocked": map[string]interface{}{},
+		"total":  float64(7200),
+		"scenes": map[string]interface{}{"Main": float64(7200)},
+		// Retired trophies leave the record with their counter, and so does a
+		// collection rung only they had made up.
+		"unlocked": map[string]interface{}{"two_days": stamp, "home_1h": stamp, "boot_10": stamp, "badges_20": stamp},
+		"counts":   map[string]interface{}{"boot": float64(12)},
 		"days": map[string]interface{}{
 			trophyTestDay(now, 0): float64(1000), trophyTestDay(now, -2): float64(1000),
 			trophyTestDay(now, -4): float64(1000), trophyTestDay(now, -6): float64(1000),
@@ -538,7 +550,7 @@ func TestTrophySeedFromHistory(t *testing.T) {
 		"games": map[string]interface{}{"Super Mario World": float64(3000), "Tetris": float64(1200)},
 	}
 	config := &Config{}
-	config.Variables.Custom = map[string]interface{}{playtimeCustomKey: old}
+	config.Variables.Custom = map[string]interface{}{playtimeCustomKey: old, trophySeenKey: "0"}
 	playtimeInit(config)
 	d := playtime.data
 	if d.Life.Days != 5 {
@@ -547,9 +559,31 @@ func TestTrophySeedFromHistory(t *testing.T) {
 	if trophyCountOf(d, tkGameSecs) != 4200 || trophySetLen(d, tkGameTitles) != 2 {
 		t.Fatalf("game time %d, titles %d; want 4200 and 2", trophyCountOf(d, tkGameSecs), trophySetLen(d, tkGameTitles))
 	}
-	i := trophyIndexByID("five_days")
+	for _, id := range []string{"two_days", "home_1h", "boot_10", "badges_20"} {
+		if _, ok := d.Unlocked[id]; ok {
+			t.Errorf("%s is still in the loaded record", id)
+		}
+	}
+	if _, ok := d.Counts["boot"]; ok {
+		t.Error("the retired start count is still in the loaded record")
+	}
+	// What the history earns is recorded by the load itself, with no card and
+	// no count on the cup: starting JukaHub is not an achievement.
+	i := trophyIndexByID("three_days")
 	if i < 0 || !playtimeAchievements[i].Check(d) {
-		t.Fatal("five days in the window do not earn \"Use JukaHub on 5 days\"")
+		t.Fatal("five days in the window do not earn \"Use JukaHub on 3 days\"")
+	}
+	if _, ok := d.Unlocked["three_days"]; !ok {
+		t.Fatal("the load did not record what the history earns")
+	}
+	trophyQueue.mu.Lock()
+	cards := len(trophyQueue.items)
+	trophyQueue.mu.Unlock()
+	if cards != 0 {
+		t.Fatalf("loading a save queued %d celebrations", cards)
+	}
+	if n, ok := trophySeenRecord(config); !ok || n != trophyEarnedCount(d) || trophyUnseenCount(config) != 0 {
+		t.Fatalf("cup record %d (stored %v) for %d earned, count %d", n, ok, trophyEarnedCount(d), trophyUnseenCount(config))
 	}
 	// The game time is seeded once: a second start does not add the ledger again.
 	config.Variables.Custom[playtimeCustomKey] = d
@@ -688,7 +722,7 @@ func TestTrophyGroupOptions(t *testing.T) {
 	if len(opts) < 2 || opts[0].Value != "" || opts[0].Label != "All categories" {
 		t.Fatalf("options start %+v", opts[:1])
 	}
-	if opts[0].Note != "1 of 401 earned" {
+	if opts[0].Note != "1 of 386 earned" {
 		t.Errorf("all categories note = %q", opts[0].Note)
 	}
 	if opts[1].Value != "Lifetime" || !strings.HasPrefix(opts[1].Note, "1 of ") {

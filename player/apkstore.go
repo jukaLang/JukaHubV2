@@ -415,8 +415,13 @@ func apkStoreRuntimeChanged() {
 }
 
 // apkStoreRuntimeMissing reports whether this machine could run AndroidRT but
-// has no usable copy — the case where Play and Add offer to install it.
+// has no usable copy — the case where Play and Add offer to install it. Not
+// while it is being installed: the sheets then say so and the install bar
+// shows the progress.
 func apkStoreRuntimeMissing() bool {
+	if androidRTInstalling() {
+		return false
+	}
 	rt := apkStoreUI.runtime
 	return apkStoreUI.probed && rt.canRun && rt.dir == ""
 }
@@ -425,6 +430,10 @@ func apkStoreRuntimeMissing() bool {
 // is missing: what it is, where it comes from, and a button that installs it
 // and then does what was asked (then runs only after a successful install).
 func apkStoreOfferRuntime(config *Config, title, what string, then func()) {
+	if androidRTInstalling() {
+		ShowToast("AndroidRT is being installed — "+title+" can start once the install bar is done", ToastKindInfo)
+		return
+	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title: "AndroidRT is not installed", subtitle: title, icon: "chip",
 		body: title + " runs on AndroidRT, the runtime JukaHub uses for Android games, and this device does not " +
@@ -622,6 +631,9 @@ func apkStoreCanPlay() (bool, string) {
 			"APKs but not play them."
 	case !rt.canRun:
 		return false, "AndroidRT runs on arm64 Linux (the handheld); this machine is " + rt.host + "."
+	case rt.dir == "" && androidRTInstalling():
+		return false, "AndroidRT, the runtime these games run on, is being installed right now: the install bar shows " +
+			"its progress, and Play works once it is done."
 	case rt.dir == "":
 		return false, "AndroidRT, the runtime these games run on, is not installed yet: JukaHub can install it from " +
 			"its own releases (Runtime tab)."
@@ -732,7 +744,9 @@ func apkStoreRemove(info apkStoreInfo) {
 // whole launch runs in the background: finding the profile rebuilds the
 // catalogue (every profile read, every AndroidPak APK triaged) and starting it
 // stages the game's libraries and assets to tmpfs, which takes seconds for a
-// big game. The row says "Starting…" until the answer is back.
+// big game. The row says "Starting…" until the answer is back. The start is
+// claimed here, on the render thread, so a Play in the Games Library meanwhile
+// cannot start the game a second time (launchGameProfile).
 func apkStorePlay(config *Config, info apkStoreInfo) {
 	st, ok := apkStoreUI.games[info.Path]
 	if !ok {
@@ -741,18 +755,34 @@ func apkStorePlay(config *Config, info apkStoreInfo) {
 	if _, busy := apkStoreUI.busy[info.Path]; busy {
 		return
 	}
+	if gameProfileRunningPID(st.ID) > 0 {
+		ShowToast(info.Label+" is already running", ToastKindInfo)
+		return
+	}
+	if !gameProfileClaimStart(st.ID) {
+		ShowToast(info.Label+" is already starting", ToastKindInfo)
+		return
+	}
+	// Read here: the launch goroutine must not read the config.
+	tl := timelapseSettingsFor(appConfig)
 	apkStoreSetBusy(info.Path, "Starting…")
 	path := info.Path
 	go func() {
-		entry, found := apkStoreFindEntry(st.ID)
+		var entry gameProfileEntry
 		var err error
-		rtMissing := false
-		if found && entry.ready() {
-			err = launchGameProfile(entry)
-		} else if found {
-			// The one thing Play can put right itself: no AndroidRT yet.
-			rtMissing = androidRTSupported() && androidRuntimeMissingNow()
-		}
+		found, rtMissing := false, false
+		func() {
+			// Released once the game has started (its PID is recorded by
+			// then) or the start failed, before the answer is posted.
+			defer gameProfileReleaseStart(st.ID)
+			entry, found = apkStoreFindEntry(st.ID)
+			if found && entry.ready() {
+				err = launchGameProfileClaimed(entry, tl)
+			} else if found {
+				// The one thing Play can put right itself: no AndroidRT yet.
+				rtMissing = androidRTSupported() && androidRuntimeMissingNow()
+			}
+		}()
 		tbxPost(func() {
 			apkStoreSetBusy(path, "")
 			switch {

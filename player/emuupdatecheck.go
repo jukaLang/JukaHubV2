@@ -19,7 +19,8 @@ package main
 // about before is asked conditionally (an unchanged one answers a bodiless
 // 304), and they stand down while a 403 or 429 holds GitHub lookups. The
 // automatic pass, in turn, takes this check's answers while they are fresh
-// (emuWinCachedAnswer) instead of asking again.
+// (emuWinCachedAnswer) instead of asking again, and in Notify mode hands its
+// own core comparison back (emuNoteCoreCheck) rather than starting this check.
 
 import (
 	"context"
@@ -126,6 +127,48 @@ func emuNoteWinUpdate(name string, rel emuWinRelease) {
 		emuUpdateState.win = map[string]emuWinRelease{}
 	}
 	emuUpdateState.win[strings.ToLower(strings.TrimSpace(name))] = rel
+}
+
+// emuNoteCoreCheck records a comparison of the cores in compared with the build
+// index that the automatic pass made (Notify mode reads the index this check
+// reads), so the Emulators and Core builds pages badge those cores at once
+// without the whole check, which would ask every emulator's project on GitHub
+// again right after the pass did. The cores the pass did not compare (on a PC,
+// another RetroArch's) keep what the last check said; while a check runs it
+// answers for all of them in a moment, and this is left out.
+func emuNoteCoreCheck(index []coreIndexEntry, compared map[string]coreBuild, stale map[string]coreIndexEntry, current map[string]bool) {
+	emuUpdateState.mu.Lock()
+	defer emuUpdateState.mu.Unlock()
+	if emuUpdateState.checking {
+		return
+	}
+	cores := make(map[string]coreIndexEntry, len(emuUpdateState.cores)+len(stale))
+	for core, entry := range emuUpdateState.cores {
+		if _, ours := compared[core]; !ours {
+			cores[core] = entry
+		}
+	}
+	for core, entry := range stale {
+		cores[core] = entry
+	}
+	known := make(map[string]bool, len(emuUpdateState.current)+len(current))
+	for core, ok := range emuUpdateState.current {
+		if _, ours := compared[core]; ok && !ours {
+			known[core] = true
+		}
+	}
+	for core, ok := range current {
+		if ok {
+			known[core] = true
+		}
+	}
+	indexed := make(map[string]coreIndexEntry, len(index))
+	for _, entry := range index {
+		indexed[entry.Core] = entry
+	}
+	emuUpdateState.cores = cores
+	emuUpdateState.current = known
+	emuUpdateState.indexed = indexed
 }
 
 // emuUpdateCount is how many updates the last check found.

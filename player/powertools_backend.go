@@ -1068,7 +1068,18 @@ func setPowerSyncSetting(key, value string) error {
 		user.Variables.Custom = make(map[string]interface{})
 	}
 	user.Variables.Custom[key] = value
-	saveUserConfig(user)
+	// Saved through the live config, which gets the key too: the cached user
+	// config powerSyncSetting reads holds the boot copy of every other setting,
+	// and saving it wrote those back over everything changed since.
+	if appConfig == nil {
+		saveUserConfig(user)
+		return nil
+	}
+	if appConfig.Variables.Custom == nil {
+		appConfig.Variables.Custom = make(map[string]interface{})
+	}
+	appConfig.Variables.Custom[key] = value
+	saveUserConfig(userConfigFromVariables(appConfig))
 	return nil
 }
 

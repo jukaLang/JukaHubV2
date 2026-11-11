@@ -1076,16 +1076,17 @@ func vpnQSDetail() string {
 
 // vpnHeaderBadge says whether the Wi-Fi meter wears the VPN's lock, and
 // whether in the warning colour: on but not connected, or switched off while
-// WireGuard's service on Windows still carries the traffic. It runs every
-// frame, so it reads the published switch, not the config.
+// WireGuard's service on Windows still runs and carries the traffic. It runs
+// every frame, so it reads the published switch, not the config.
 func vpnHeaderBadge() (show, warn bool) {
 	auto := vpnPlatformAuto()
 	vpnMgr.mu.Lock()
 	on := vpnMgr.enabled && vpnMgr.parsed != nil && (!vpnMgr.safe || !auto)
-	state, present := vpnMgr.probe.State, vpnMgr.probe.Running || vpnMgr.probe.Installed
+	state, running := vpnMgr.probe.State, vpnMgr.probe.Running
 	vpnMgr.mu.Unlock()
 	if !on {
-		stray := present && !auto
+		// Only a service that runs carries traffic; a stopped one does not.
+		stray := running && !auto
 		return stray, stray
 	}
 	return true, state != vpnStateConnected && state != vpnStateActive

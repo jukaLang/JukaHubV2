@@ -372,7 +372,7 @@ func renderVolumePopover(renderer *sdl.Renderer, config *Config) {
 	if muted {
 		muteLabel = "Unmute"
 	}
-	hint := hintLine(FooterHint{"Left / Right", "Adjust"}, FooterHint{"A", muteLabel}, FooterHint{"B", "Close"})
+	hint := hintLine(FooterHint{"Left/Right", "Adjust"}, FooterHint{"A", muteLabel}, FooterHint{"B", "Close"})
 	textW := lay.card.W - 2*volumePanelPad
 	renderText(renderer, config, font, ellipsize(font, hint, textW), ColorTextTertiary(), left, lay.hintY)
 	if note != "" {

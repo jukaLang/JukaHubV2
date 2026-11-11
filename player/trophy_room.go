@@ -10,7 +10,7 @@ package main
 // silhouette with a progress bar when not, a "?" while a hidden one is still to
 // be found — with a chip row above it: filters (All, Earned, Locked and the four
 // tiers, applied as the focus moves along them), the category (a list of the
-// set's groups with how much of each is earned: with 401 trophies, "show me
+// set's groups with how much of each is earned: with 386 trophies, "show me
 // the Arcade ones" is how the room is browsed), the sort order and the
 // celebration style. A opens a card's details sheet: the trophy large, its tier
 // and rarity, what it asks for, how far along it is or when it was earned, and

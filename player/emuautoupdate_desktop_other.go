@@ -6,9 +6,19 @@ package main
 // are no JukaHub-managed Windows emulator folders here to ask about, and the
 // battery is the kernel's power-supply class.
 
+import "time"
+
 // emuProcessUnder says no: off Windows no managed emulator folder exists for
 // the pass to ask about.
 func emuProcessUnder(string) bool { return false }
+
+// emuDesktopSystemIdle cannot be asked here (-1): JukaHub's own input age
+// decides.
+func emuDesktopSystemIdle() time.Duration { return -1 }
+
+// emuDesktopFullScreenApp says no: no desktop's full-screen state is asked off
+// Windows.
+func emuDesktopFullScreenApp() bool { return false }
 
 // emuDesktopOnBattery reports a laptop whose battery says it is discharging.
 // The TrimUI handhelds never ask: their pass has its own charger rule.

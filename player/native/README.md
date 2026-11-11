@@ -34,7 +34,9 @@ player/native/bin/BUILDINFO.txt   native mode: versions, commits, NEEDED, highes
 
 CI builds them in native mode with
 [`remote-play-helpers.yml`](../../.github/workflows/remote-play-helpers.yml)
-(an Ubuntu 20.04 arm64 root, glibc 2.31); the release workflows, `release.sh`
+(an Ubuntu 20.04 arm64 root, glibc 2.31, which
+[`build-root.sh`](../../.github/scripts/build-root.sh) makes; the five static
+dependencies build side by side); the release workflows, `release.sh`
 and `package-sdcard.sh` copy them into every TrimUI package as
 `Apps/JukaHub/bin/`, and `docker-image.yml` and `release.sh` also attach them
 alone to the release as `JukaHub-RemotePlay-linux-arm64.zip` (`bin/` plus
@@ -74,8 +76,9 @@ its SHA-256 and size, which JukaHub downloads itself. Each package holds
 installer (`../relpack.go`) accepts. Both binaries are held to the helpers'
 rules (AArch64, the standard loader, only the C library, no glibc symbol newer
 than 2.31) and must start once on the build machine. `wine-check` and `smoke`
-are the job's two advisory steps: `box64 wine --version` with the pinned Wine,
-and AndroidRT's host smoke suite. [docs/BUILDING.md](../../docs/BUILDING.md#androidrt-and-the-box64-pack)
+are advisory steps in CI: `box64 wine --version` with the pinned Wine in the
+Box64 job (`wine-runtime.yml`), and AndroidRT's host smoke suite in the helper
+job. [docs/BUILDING.md](../../docs/BUILDING.md#androidrt-and-the-box64-pack)
 lists the variables.
 
 ## Controls during a stream

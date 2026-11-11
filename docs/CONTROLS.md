@@ -480,7 +480,7 @@ footer names the scene the menu was opened over.
 
 | Group | Holds |
 |-------|-------|
-| Screens | Home, then Trophies (with how many you have earned, e.g. "12/401"), then every other screen in `jukaconfig.json` — the quickest way to switch screen |
+| Screens | Home, then Trophies (with how many you have earned, e.g. "12/386"), then every other screen in `jukaconfig.json` — the quickest way to switch screen |
 | Games | Emulators, Games Library, Game Profiles, PS Remote Play, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, APK Store, Smart Pro Compatibility |
 | Tools | Downloads, Curation Hub, Audio settings, Smart Home, Screen Share, Voice command, Accessibility, Stick Calibration (when the install has one) |
 | Device | Quick Settings, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, Edit Home, About, Quit JukaHub |

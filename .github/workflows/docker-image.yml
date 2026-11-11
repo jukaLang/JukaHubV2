@@ -65,17 +65,30 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # The PS Remote Play helpers (Apps/JukaHub/bin/chiaki-stream and
-  # chiaki-regist), AndroidRT (Apps/JukaHub/androidrt) and the Box64 pack of
-  # the Windows-app runtime, built natively on an arm64 runner; why there, and
-  # why a failure is allowed, is in remote-play-helpers.yml. It starts at once,
-  # beside create-tag.
+  # chiaki-regist) and AndroidRT (Apps/JukaHub/androidrt), built natively on an
+  # arm64 runner; why there, and why a failure is allowed, is in
+  # remote-play-helpers.yml. It starts at once, beside create-tag.
   build-remote-play-helpers:
-    name: Remote Play helpers and runtimes
+    name: Remote Play helpers and AndroidRT
     uses: ./.github/workflows/remote-play-helpers.yml
     # The helpers job asks for exactly these: actions read is how it finds the
-    # helpers and runtimes an earlier release run built from the same sources.
+    # helpers and AndroidRT an earlier release run built from the same sources.
     # A called workflow cannot be given more than its caller grants, and asking
     # for more fails the whole run before it starts.
+    permissions:
+      contents: read
+      actions: read
+
+  # The Box64 pack of the Windows-app runtime (JukaHub-Wine-linux-arm64.zip),
+  # on an arm64 runner of its own, also from the start. It is in neither app
+  # archive, so nothing on the way to the release waits for it:
+  # attach-wine-runtime below puts it on the release whenever it is ready. (In
+  # the helpers' job it held up JukaHub-Trimui.zip by the ten minutes a Box64
+  # build takes.)
+  build-wine-runtime:
+    name: Windows-app runtime (Box64)
+    uses: ./.github/workflows/wine-runtime.yml
+    # What its job asks for, as above.
     permissions:
       contents: read
       actions: read
@@ -266,9 +279,9 @@ jobs:
           if-no-files-found: error
 
   # Packaging only: the binary and the game-audio plugin come from build-trimui,
-  # the Remote Play helpers and the two runtime packages from their own job.
-  # Waiting for those here, rather than making the compile wait for the
-  # helpers, lets both build at once.
+  # the Remote Play helpers and AndroidRT from their own job. Waiting for those
+  # here, rather than making the compile wait for the helpers, lets both build
+  # at once.
   build-and-publish-ubuntu:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -335,16 +348,6 @@ jobs:
           name: androidrt-package
           path: runtime-packages
 
-      - name: Download the Box64 pack
-        # JukaHub-Wine-linux-arm64.zip from the helper job; absent when its
-        # build failed, and then the release goes out without it.
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: wine-runtime-package
-          path: runtime-packages
-
       - name: Package Artifacts
         id: package
         run: |
@@ -399,22 +402,7 @@ jobs:
               echo "::warning title=AndroidRT::the AndroidRT package did not verify; JukaHub-Trimui.zip ships without androidrt/ and the release without JukaHub-AndroidRT-linux-arm64.zip"
             fi
           else
-            echo "::warning title=AndroidRT::not built for this run; JukaHub-Trimui.zip ships without androidrt/ (see the Remote Play helpers and runtimes job)"
-          fi
-          # The Box64 pack of the Windows-app runtime: only a release asset,
-          # which JukaHub installs when Windows apps are first set up (or the
-          # emulator update pass brings a newer one).
-          rm -f JukaHub-Wine-linux-arm64.zip
-          if [ -f runtime-packages/JukaHub-Wine-linux-arm64.zip ]; then
-            if sh player/native/build-runtimes.sh verify runtime-packages/JukaHub-Wine-linux-arm64.zip &&
-              cp runtime-packages/JukaHub-Wine-linux-arm64.zip .; then
-              echo "wine_package=true" >> "$GITHUB_OUTPUT"
-            else
-              rm -f JukaHub-Wine-linux-arm64.zip
-              echo "::warning title=Box64::the Box64 pack did not verify; this release goes out without JukaHub-Wine-linux-arm64.zip"
-            fi
-          else
-            echo "::warning title=Box64::not built for this run; this release goes out without JukaHub-Wine-linux-arm64.zip (see the Remote Play helpers and runtimes job)"
+            echo "::warning title=AndroidRT::not built for this run; JukaHub-Trimui.zip ships without androidrt/ (see the Remote Play helpers and AndroidRT job)"
           fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
@@ -473,18 +461,77 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload the Box64 pack
-        if: steps.package.outputs.wine_package == 'true'
+  # The Box64 pack of the Windows-app runtime: only a release asset, which
+  # JukaHub installs when Windows apps are first set up (or the emulator update
+  # pass brings a newer one). Attached as soon as wine-runtime.yml has it,
+  # before or after publish-release, which does not wait for it: JukaHub takes
+  # the pack from the newest release that carries one, so a release that gets
+  # it a few minutes after it went public costs nothing. (With immutable
+  # releases turned on for the repository, a release that went public first
+  # can no longer take the pack: the upload then warns, and JukaHub keeps
+  # installing it from an older release until a later one carries it.) A
+  # separate job rather than a step of that workflow, so the job that runs
+  # Box64's third-party build as root never holds a token that can write to
+  # the repository.
+  attach-wine-runtime:
+    name: Attach the Box64 pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [create-tag, build-wine-runtime]
+    # Whatever became of the build: without a pack this only warns.
+    if: ${{ !cancelled() && needs.create-tag.result == 'success' }}
+    permissions:
+      contents: write   # attach the pack to the release
+    steps:
+      - name: Check out build-runtimes.sh
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Only the script that checks the pack; nothing here pushes.
+          sparse-checkout: player/native/build-runtimes.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Download the Box64 pack
+        # Absent when its build failed. Bounded, because continue-on-error
+        # does not end a step that hangs.
         continue-on-error: true
         timeout-minutes: 5
-        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          upload_url: ${{ needs.create-tag.outputs.upload_url }}
-          asset_path: ./JukaHub-Wine-linux-arm64.zip
-          asset_name: JukaHub-Wine-linux-arm64.zip
-          asset_content_type: application/zip
+          name: wine-runtime-package
+          path: runtime-packages
+
+      - name: Check the Box64 pack
+        id: pack
+        # One wine-runtime/ folder, every file in its SHA256SUMS and matching:
+        # what JukaHub checks before it installs the pack.
+        run: |
+          zip=runtime-packages/JukaHub-Wine-linux-arm64.zip
+          if [ ! -f "$zip" ]; then
+            echo "::warning title=Box64::not built for this run; this release goes out without JukaHub-Wine-linux-arm64.zip (see the Windows-app runtime job)"
+          elif sh player/native/build-runtimes.sh verify "$zip"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Box64::the Box64 pack did not verify; this release goes out without JukaHub-Wine-linux-arm64.zip"
+          fi
+
+      - name: Upload the Box64 pack
+        # Optional like the other runtime packages: without it JukaHub installs
+        # the pack from an older release that has one, so a failure only warns.
+        # --clobber: a re-run replaces the pack an earlier attempt attached,
+        # which keeps the release's pack the one later runs reuse.
+        if: steps.pack.outputs.ready == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
+        run: |
+          if ! gh release upload "$TAG_NAME" runtime-packages/JukaHub-Wine-linux-arm64.zip \
+              --clobber --repo "$GITHUB_REPOSITORY" 2> "$RUNNER_TEMP/upload.err"; then
+            cat "$RUNNER_TEMP/upload.err"
+            echo "::warning title=Box64::could not attach JukaHub-Wine-linux-arm64.zip to $TAG_NAME ($(head -n 1 "$RUNNER_TEMP/upload.err")); JukaHub installs the pack from an older release. With immutable releases on, a release published before the pack was ready cannot take it."
+          fi
 
   # Cross-compiled on Ubuntu with the distribution's MinGW-w64. This job used
   # to cross-compile the same way on macos-latest with Homebrew's MinGW, but

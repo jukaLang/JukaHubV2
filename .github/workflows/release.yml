@@ -11,11 +11,11 @@ permissions:
   contents: read
 
 jobs:
-  # The PS Remote Play helpers for every TrimUI archive's bin/, AndroidRT for
-  # its androidrt/ and the Box64 pack of the Windows-app runtime; see
-  # remote-play-helpers.yml for how they are built and why they may fail.
+  # The PS Remote Play helpers for every TrimUI archive's bin/ and AndroidRT
+  # for its androidrt/; see remote-play-helpers.yml for how they are built and
+  # why they may fail.
   helpers:
-    name: Remote Play helpers and runtimes
+    name: Remote Play helpers and AndroidRT
     uses: ./.github/workflows/remote-play-helpers.yml
     # What the helpers job asks for: actions read, to reuse helpers an earlier
     # push-to-main run of this workflow built. A tag run never finds any (it
@@ -25,9 +25,20 @@ jobs:
       contents: read
       actions: read
 
+  # The Box64 pack of the Windows-app runtime, on a runner of its own beside
+  # the helpers (wine-runtime.yml): the tag's release waits for the slower of
+  # the two, not for both one after the other.
+  wine-runtime:
+    name: Windows-app runtime (Box64)
+    uses: ./.github/workflows/wine-runtime.yml
+    # What its job asks for, as above.
+    permissions:
+      contents: read
+      actions: read
+
   build:
     runs-on: ubuntu-24.04
-    needs: helpers
+    needs: [helpers, wine-runtime]
     # Runs whatever became of the helpers: without them release.sh warns and
     # the archives ship without Remote Play streaming, which must not cost the
     # tag its release.
@@ -62,8 +73,8 @@ jobs:
           path: player/native/bin
 
       - name: Download the Box64 pack
-        # JukaHub-Wine-linux-arm64.zip, which release.sh attaches when it
-        # verifies. Absent when its build failed.
+        # JukaHub-Wine-linux-arm64.zip from the Box64 job, which release.sh
+        # attaches when it verifies. Absent when its build failed.
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

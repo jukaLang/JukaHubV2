@@ -67,13 +67,17 @@ const (
 // emuXboxFile is one item of the setup checklist.
 type emuXboxFile struct {
 	// Key is the xemu.toml name without "_path": bootrom, flashrom, hdd, eeprom.
-	Key      string
-	Label    string
-	Want     string
-	Path     string
-	Note     string
-	Problem  string
-	Required bool
+	Key     string
+	Label   string
+	Want    string
+	Path    string
+	Note    string
+	Problem string
+	// ConfigValue is the path the emulator's settings name for this file, as
+	// the emulator reads it (xemu: relative to its folder), working or not;
+	// "" when they name none.
+	ConfigValue string
+	Required    bool
 }
 
 // ok reports a file that is there and usable.
@@ -133,6 +137,14 @@ func emuIsXemuLauncher(launcher string) bool {
 	return base == "xemu.exe" || base == "xemu"
 }
 
+// emuXboxBaseProbe keeps the answer to "does JukaHub's own folder take files":
+// the open sheet asks for the folder twice a scan, every few seconds, and each
+// probe writes and deletes a file there.
+var emuXboxBaseProbe struct {
+	once     sync.Once
+	writable bool
+}
+
 // emuXboxFolder is where the sheet asks for the Xbox files: BIOS\xbox next to
 // JukaHub when that is writable, else the data folder's BIOS\xbox. Both are
 // inside the BIOS doctor's roots.
@@ -145,7 +157,8 @@ func emuXboxFolder() string {
 		}
 		// Probing the JukaHub folder itself leaves nothing behind; the BIOS
 		// folder is only created when something is put in it.
-		if emuDirWritable(base) {
+		emuXboxBaseProbe.once.Do(func() { emuXboxBaseProbe.writable = emuDirWritable(base) })
+		if emuXboxBaseProbe.writable {
 			return dir
 		}
 	}
@@ -155,8 +168,9 @@ func emuXboxFolder() string {
 	return filepath.Join("BIOS", "xbox")
 }
 
-// emuXemuConfigPaths lists the xemu.toml files xemu may read: the per-user one
-// under %APPDATA%\xemu\xemu, and a portable one beside xemu.exe when present.
+// emuXemuConfigPaths lists the xemu.toml files xemu may read, the one it
+// reads first: a portable one beside xemu.exe when present (then the only one
+// xemu reads), and the per-user one under %APPDATA%\xemu\xemu.
 func emuXemuConfigPaths(xemuExe string) []string {
 	var out []string
 	if xemuExe != "" {
@@ -168,6 +182,18 @@ func emuXemuConfigPaths(xemuExe string) []string {
 		out = append(out, filepath.Join(appData, "xemu", "xemu", "xemu.toml"))
 	}
 	return out
+}
+
+// emuXemuConfigPath is a [sys.files] value as xemu reads it. xemu opens those
+// paths from its working folder, and JukaHub starts it in its own folder (the
+// tile and the Games Library alike), so a relative path ('bios/mcpx_1.0.bin',
+// as portable setups write) is relative to xemu's folder, not to JukaHub's.
+func emuXemuConfigPath(xemuExe, value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" || xemuExe == "" || filepath.IsAbs(v) || strings.HasPrefix(v, `\`) || strings.HasPrefix(v, "/") {
+		return v
+	}
+	return filepath.Join(filepath.Dir(xemuExe), v)
 }
 
 // emuXemuTomlFiles reads the [sys.files] paths out of an xemu.toml.
@@ -437,7 +463,6 @@ func emuXemuScan(xemuExe string) emuXboxReport {
 	if len(configs) > 0 {
 		report.ConfigPath = configs[0]
 	}
-	configured := map[string]string{}
 	for _, cfg := range configs {
 		raw, err := os.ReadFile(cfg)
 		if err != nil {
@@ -445,19 +470,19 @@ func emuXemuScan(xemuExe string) emuXboxReport {
 		}
 		report.ConfigPath = cfg
 		for key, value := range emuXemuTomlFiles(string(raw)) {
-			k := strings.TrimSuffix(key, "_path")
-			if _, ok := index[k]; ok && strings.TrimSpace(value) != "" {
-				configured[k] = value
+			i, ok := index[strings.TrimSuffix(key, "_path")]
+			path := emuXemuConfigPath(xemuExe, value)
+			if !ok || path == "" {
+				continue
+			}
+			f := &report.Files[i]
+			f.ConfigValue = path
+			if regularFile(path) {
+				f.Path = path
+				f.Note = "set in xemu"
 			}
 		}
 		break
-	}
-	for key, value := range configured {
-		f := &report.Files[index[key]]
-		if regularFile(value) {
-			f.Path = value
-			f.Note = "set in xemu"
-		}
 	}
 
 	for _, dir := range emuXboxSearchDirs(xemuExe) {
@@ -476,33 +501,53 @@ func emuXemuScan(xemuExe string) emuXboxReport {
 			path := filepath.Join(dir, entry.Name())
 			key := emuXboxClassify(path, info.Size())
 			i, ok := index[key]
-			if !ok || report.Files[i].Path != "" {
+			if !ok {
 				continue
 			}
-			report.Files[i].Path = path
+			if cur := report.Files[i].Path; cur != "" {
+				// The first file found stays unless it has a problem (a known
+				// bad or wrong-size MCPX dump): a later folder may hold a good
+				// one, and a bad pick would refuse every launch.
+				probe := emuXboxFile{Key: key, Path: cur}
+				emuXboxCheckFile(&probe)
+				if probe.Problem == "" {
+					continue
+				}
+			}
+			report.Files[i].Path, report.Files[i].Note = path, ""
 		}
 	}
-	allSet := true
+	allSet, named := true, false
 	for i := range report.Files {
 		emuXboxCheckFile(&report.Files[i])
 		f := report.Files[i]
-		if f.Required && (!f.ok() || !strings.EqualFold(configured[f.Key], f.Path)) {
+		named = named || f.ConfigValue != ""
+		if f.Required && (!f.ok() || !strings.EqualFold(f.ConfigValue, f.Path)) {
 			allSet = false
 		}
 	}
-	report.Configured = allSet && len(configured) > 0
+	report.Configured = allSet && named
 	return report
 }
 
-// emuXboxApply writes the found files into every xemu.toml xemu may read,
-// creating the per-user one when there is none, and returns where it wrote.
+// emuXboxApply writes the found files into the xemu.toml xemu reads — the
+// portable one beside xemu.exe when there is one, else the per-user one, which
+// it creates when missing; the one emuXemuScan read — and returns where it
+// wrote. Only what is missing or dead is filled in: an entry that already names
+// a working file stays as the user wrote it (a relative path included), and
+// the EEPROM, which is optional and carries the console's hard-disk key, is
+// written only where the settings already name one that is gone.
 func emuXboxApply(report emuXboxReport) (string, error) {
 	if !report.ready() {
 		return "", fmt.Errorf("still missing: %s", strings.Join(report.missing(), ", "))
 	}
 	files := map[string]string{}
 	for _, f := range report.Files {
-		if f.ok() {
+		switch {
+		case !f.ok():
+		case f.ConfigValue != "" && strings.EqualFold(f.ConfigValue, f.Path):
+		case !f.Required && f.ConfigValue == "":
+		default:
 			files[f.Key+"_path"] = f.Path
 		}
 	}
@@ -510,23 +555,21 @@ func emuXboxApply(report emuXboxReport) (string, error) {
 	if len(targets) == 0 {
 		return "", errors.New("xemu's settings folder is unknown (no APPDATA)")
 	}
-	written := ""
-	for _, target := range targets {
-		old, err := os.ReadFile(target)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return written, err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return written, err
-		}
-		if err := AtomicWrite(target, []byte(emuXemuTomlSetFiles(string(old), files)), 0o644); err != nil {
-			return written, err
-		}
-		if written == "" {
-			written = target
-		}
+	target := targets[0]
+	if len(files) == 0 {
+		return target, nil
 	}
-	return written, nil
+	old, err := os.ReadFile(target)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", err
+	}
+	if err := AtomicWrite(target, []byte(emuXemuTomlSetFiles(string(old), files)), 0o644); err != nil {
+		return "", err
+	}
+	return target, nil
 }
 
 // emuXboxFetchHDD downloads the copyright-free HDD image into folder unless
@@ -793,9 +836,9 @@ var emuXboxSheet struct {
 	again   bool
 	report  emuXboxReport
 	scanned bool
-	// scannedAt is when the last scan finished: the open sheet looks again
-	// every emuXboxSheetRescanEvery, so files dropped into the folder while
-	// it is up turn green on their own.
+	// scannedAt is when the last scan finished: on Windows the open sheet
+	// looks again every emuXboxSheetRescanEvery, so files dropped into the
+	// folder while it is up turn green on their own.
 	scannedAt time.Time
 	focus     int // index into emuXboxSheetButtons
 	buttons   []emuXboxButtonHit
@@ -955,10 +998,14 @@ func emuXboxRescan() {
 
 // emuXboxRescanIfStale starts a rescan when the open sheet's last one finished
 // more than emuXboxSheetRescanEvery ago and none is running. The sheet asks
-// every frame; the scan itself runs off the event thread.
+// every frame; the scan itself runs off the event thread. Only on Windows,
+// where xemu's checklist is a few file reads and the user drops the firmware
+// in while the sheet is up: the handheld's checklist reads the Emus folders,
+// the ROMs and every hakuX config off the SD card, and it is read again after
+// an install or a rollback, which is when it changes.
 func emuXboxRescanIfStale() {
 	emuXboxSheet.mu.Lock()
-	stale := emuXboxSheet.open && emuXboxSheet.scanned && !emuXboxSheet.scanning &&
+	stale := IsWindows() && emuXboxSheet.open && emuXboxSheet.scanned && !emuXboxSheet.scanning &&
 		time.Since(emuXboxSheet.scannedAt) > emuXboxSheetRescanEvery
 	emuXboxSheet.mu.Unlock()
 	if stale {

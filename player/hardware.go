@@ -123,17 +123,21 @@ func exportLogs() {
 // Hardware Monitor
 // ---------------------------------------------------------------------------
 
+// hwUnknown is what a hardware read that found nothing reports. It used to be
+// "N/A", which the copy sweep bans from user-visible text.
+const hwUnknown = "Unknown"
+
 func readProcFirstMatch(path, prefix string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "N/A"
+		return hwUnknown
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
 		}
 	}
-	return "N/A"
+	return hwUnknown
 }
 
 func parseKilobytes(s string) int64 {
@@ -150,7 +154,7 @@ func getCPUTempC() string {
 	if v, ok := cpuTempValueC(); ok {
 		return fmt.Sprintf("%.1f C", v)
 	}
-	return "N/A"
+	return hwUnknown
 }
 
 // cpuTempValueC is the same read without the display formatting, for callers
@@ -245,7 +249,7 @@ func refreshDiskPie() {
 
 func getCPUModel() string {
 	model := readProcFirstMatch("/proc/cpuinfo", "model name")
-	if model == "N/A" {
+	if model == hwUnknown {
 		model = readProcFirstMatch("/proc/cpuinfo", "Hardware")
 	}
 	return model
@@ -254,7 +258,7 @@ func getCPUModel() string {
 func getCoreCount() string {
 	data, err := os.ReadFile("/proc/cpuinfo")
 	if err != nil {
-		return "N/A"
+		return hwUnknown
 	}
 	cores := 0
 	for _, line := range strings.Split(string(data), "\n") {
@@ -263,7 +267,7 @@ func getCoreCount() string {
 		}
 	}
 	if cores == 0 {
-		return "N/A"
+		return hwUnknown
 	}
 	return strconv.Itoa(cores)
 }
@@ -283,7 +287,7 @@ func getNetworkInfo() string {
 	var sb strings.Builder
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return "Network: N/A"
+		return "Network: " + hwUnknown
 	}
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
@@ -307,7 +311,7 @@ func getNetworkInfo() string {
 }
 
 // getHardwareInfo builds a multi-line hardware summary. All reads are
-// best-effort and degrade to "N/A" on non-Linux/dev environments.
+// best-effort and degrade to hwUnknown on non-Linux/dev environments.
 func getHardwareInfo() string {
 	total := parseKilobytes(readProcFirstMatch("/proc/meminfo", "MemTotal:"))
 	avail := parseKilobytes(readProcFirstMatch("/proc/meminfo", "MemAvailable:"))

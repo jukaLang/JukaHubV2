@@ -185,7 +185,9 @@ var (
 	// the host stays, the rest goes, as for bugrepURL.
 	bugrepWWW    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)\b(www\.[^/\s"'<>]+)/[^\s"'<>]*`) })
 	bugrepWinAbs = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\b[A-Za-z]:\\[^\s"'<>|]*`) })
-	bugrepUnix   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?:^|[\s"'=(])(/(?:mnt|home|root|userdata|storage|media|tmp|var|opt|usr|etc|sdcard|data|Users|Volumes|private)(?:/[^\s"'<>)]*)?)`) })
+	bugrepUnix   = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?:^|[\s"'=(])(/(?:mnt|home|root|userdata|storage|media|tmp|var|opt|usr|etc|sdcard|data|Users|Volumes|private)(?:/[^\s"'<>)]*)?)`)
+	})
 )
 
 // bugrepScrub removes what must never leave the device from text about to be

@@ -1926,7 +1926,7 @@ func compatibilitySummary(games []gameAssessment) string {
 			boosted++
 		}
 	}
-	parts := []string{fmt.Sprintf("%d game(s)", len(games)), fmt.Sprintf("%d playable", playable)}
+	parts := []string{pluralizeCount(len(games), "game", "games"), fmt.Sprintf("%d playable", playable)}
 	if mixed > 0 {
 		parts = append(parts, fmt.Sprintf("%d with caveats", mixed))
 	}

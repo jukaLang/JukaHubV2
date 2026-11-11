@@ -173,11 +173,12 @@ const trophyBurstSingles = 3
 const trophyBurstNamed = 3
 
 // trophyAnnounceBatch announces what one unlock pass awarded. A few are
-// announced one by one. More at once — the first start of a version whose new
-// trophies an old save already qualifies for, a restore, a big import — still
-// queue a card each (the queue folds them into "+N more"), but the
-// notification centre gets one row for them instead of a page of rows that
+// announced one by one. More at once — a day that completes several, a big
+// import — still queue a card each (the queue folds them into "+N more"), but
+// the notification centre gets one row for them instead of a page of rows that
 // would push everything else out of its fifty. A platinum keeps its own row.
+// What a loaded save already earns never comes here: it is recorded quietly
+// (trophyCatchUpQuietly).
 func trophyAnnounceBatch(list []playtimeAchievement) {
 	if len(list) <= trophyBurstSingles {
 		for _, a := range list {

@@ -598,7 +598,8 @@ func emuRuntimeResetForTest() {
 	emuRuntimeState.checked = nil
 	emuRuntimeState.attempt = nil
 	emuRuntimeState.retryAt = nil
-	emuRuntimeState.failures = nil
+	emuRuntimeState.checkFails = nil
+	emuRuntimeState.installFails = nil
 	emuRuntimeState.hold = time.Time{}
 	emuRuntimeState.notes = nil
 }
@@ -657,6 +658,37 @@ func TestEmuRuntimeUpdaterRules(t *testing.T) {
 		if got := emuReleaseLabel(tc.installed, tc.rel); got != tc.want {
 			t.Errorf("label(%q, %+v) = %q, want %q", tc.installed, tc.rel, got, tc.want)
 		}
+	}
+	// Checks and installs fail in a row apart: the first failed install after
+	// a failed check is a first failure (the toast names it).
+	useTempEmuRuntimeState(t)
+	if n := emuRuntimeFailed("test:a", false); n != 1 {
+		t.Errorf("first failed check = %d in a row, want 1", n)
+	}
+	emuRuntimeAnswered("test:a")
+	if n := emuRuntimeFailed("test:a", true); n != 1 {
+		t.Errorf("first failed install after a failed check = %d in a row, want 1", n)
+	}
+	if n := emuRuntimeFailed("test:a", true); n != 2 {
+		t.Errorf("second failed install = %d in a row, want 2", n)
+	}
+	emuRuntimeChecked("test:a", now)
+	if n := emuRuntimeFailed("test:a", true); n != 1 {
+		t.Errorf("failed install after a check that answered = %d in a row, want 1", n)
+	}
+	// A PC: no stamp is overdue only after three days of waiting, and overdue
+	// spares the battery rule, never the idle minutes.
+	if emuDesktopOverdueFor("", now, coreAutoUpdatePoll) || !emuDesktopOverdueFor("", now, coreAutoUpdateOverdue) {
+		t.Error("a PC's first pass: overdue after one poll, or not after three days")
+	}
+	if !emuDesktopOverdueFor(now.Add(-73*time.Hour).Format(time.RFC3339), now, 0) {
+		t.Error("a stamp three days old is not overdue on a PC")
+	}
+	if emuDesktopMoment(false, false, false, time.Minute, true) {
+		t.Error("an overdue pass ran on a PC in use")
+	}
+	if !emuDesktopMoment(false, false, true, emuDesktopIdle, true) || emuDesktopMoment(false, false, true, emuDesktopIdle, false) {
+		t.Error("on battery a PC pass should run only when overdue")
 	}
 }
 

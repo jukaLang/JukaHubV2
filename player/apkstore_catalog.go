@@ -58,8 +58,8 @@ const (
 )
 
 var (
-	apkStoreCatalogIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	apkStoreSHA256Pattern    = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	apkStoreCatalogIDPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`) })
+	apkStoreSHA256Pattern    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[0-9a-fA-F]{64}$`) })
 )
 
 // apkStoreCatalogEntry is one row of the Store tab.
@@ -159,7 +159,7 @@ func parseApkStoreCatalog(raw []byte) (apkStoreCatalogData, error) {
 			break
 		}
 		e.ID = strings.TrimSpace(e.ID)
-		if !apkStoreCatalogIDPattern.MatchString(e.ID) || seen[e.ID] {
+		if !apkStoreCatalogIDPattern().MatchString(e.ID) || seen[e.ID] {
 			continue
 		}
 		e.Title = apkStoreCatalogText(e.Title, "title")
@@ -220,7 +220,7 @@ func apkStoreCatalogDownloadValid(e apkStoreCatalogEntry) bool {
 	if e.URL == "" && e.SHA256 == "" && e.Size == 0 {
 		return false
 	}
-	if validatePatchURL(e.URL) != nil || !apkStoreSHA256Pattern.MatchString(e.SHA256) {
+	if validatePatchURL(e.URL) != nil || !apkStoreSHA256Pattern().MatchString(e.SHA256) {
 		return false
 	}
 	if e.Size <= 0 || e.Size > patchMaxDownload {

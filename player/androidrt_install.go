@@ -152,6 +152,15 @@ func androidRTInstallLine() (string, bool) {
 	return androidRTUI.line, androidRTUI.running
 }
 
+// androidRTInstalling reports whether AndroidRT is being installed right now,
+// from a press or by the daily updates pass (relpack's key is held while
+// either works). An offer to install it then would only say "Already
+// installing" and drop the game it was to start.
+func androidRTInstalling() bool {
+	_, pressed := androidRTInstallLine()
+	return pressed || relPackRunning(androidRTKey)
+}
+
 // androidRTUpdateKnown is the last update check's answer: whether a newer
 // build than the downloaded copy exists, and its tag.
 func androidRTUpdateKnown() (bool, string) {

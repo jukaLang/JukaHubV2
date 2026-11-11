@@ -221,7 +221,7 @@ func termFooterHints() []FooterHint {
 	if hintsUseKeyboard() {
 		if termHist.open {
 			return []FooterHint{
-				{Button: "↑ ↓", Label: "Choose"},
+				{Button: "Up/Down", Label: "Choose"},
 				{Button: "Enter", Label: "Insert"},
 				{Button: "Ctrl+Enter", Label: "Run"},
 				{Button: "Del", Label: "Delete"},

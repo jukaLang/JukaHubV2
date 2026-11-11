@@ -23,7 +23,7 @@ apps and Windows — 144 new tasks. Sections:
 [ARCH](#architecture-and-build-arch) · [TEST](#tests-and-ci-test) ·
 [UX](#ux-and-design-ux) · [GAME](#games-and-emulation-game) ·
 [PSR](#ps-remote-play-psr) ·
-[XBX](#xbox-on-the-smart-pro-xbx) · [AND](#android-games-and) ·
+[XBX](#xbox-and-xbox-360-xbx) · [AND](#android-games-and) ·
 [MED](#media-med) · [SYS](#system-and-connectivity-sys) ·
 [SND](#sound-and-haptics-snd) · [WEB](#web-builder-web) ·
 [SEC](#security-and-privacy-sec) · [DOC](#docs-and-project-doc) ·
@@ -215,6 +215,40 @@ The handshake and transport were checked against the Linux kernel's WireGuard
 in a network namespace (`tmp/wgref`), and `wg_test.go` replays those
 exchanges. NET-8 is now the device check; follow-ups NET-17 and NET-18.
 
+A faster Remote Play helper job (**2026-11-11**, not yet run on GitHub; the
+owner: "It now takes too long to get JukaHub-Trimui.zip built"): the Box64
+pack builds in a workflow of its own, `wine-runtime.yml`, on a runner of its
+own, and `attach-wine-runtime` puts it on the release whenever it is ready, so
+the TrimUI archive waits only for the helpers and AndroidRT, which it carries.
+`.github/scripts/build-root.sh` makes the Ubuntu 20.04 root and runs every
+build in it, and the reuse keys hash it instead of the workflow files, which
+every recent push had edited; the helper build's five dependencies build side
+by side while chiaki-ng and miniupnpc download. Follow-ups: BUILD-6 and SEC-29
+(two new tasks).
+
+Windows apps, Android and Xbox (**2026-11-11**, unbuilt; the owner: "Make sure
+that WINE works and can run windows applications whenever possible (especially
+on Trimui Smart pro)… Make sure Android works… xbox emulator can be properly
+downloaded and run… auto update emulators"): on the Smart Pro one press in
+Windows Apps installs Box64 + Wine 10.0, WestonPack and a prepared prefix and
+starts the program with the pad as mouse and keys (`wine_pack.go`,
+`wine_prefix.go`, `wine_display*.go`, `windowsapps.go`); on Windows the same
+screen runs `.exe` and `.bat` files directly. CI builds AndroidRT into every
+TrimUI archive and the Box64 pack for every release (`build-runtimes.sh`); the
+APK Store installs and updates AndroidRT from a release (`relpack.go`,
+`androidrt_install.go`), the Games Library has an Android row, and the stock
+PowerVR models present through SDL. The Emulators page installs Xenia Canary
+for Xbox 360 and sets xemu up on Windows, hakuX got its housekeeping, and the
+daily Emulator updates pass also updates hakuX, the runtimes and, on a PC, the
+emulators JukaHub installed (`emuautoupdate_*.go`). Every workstream was
+reviewed and its findings fixed; Juka's Windows build at 03:36 compiled the
+first round (not the fixes), nothing has run on a handheld, and neither pack
+has come out of a green CI run. AND-16, XBX-6 and TEST-4 are done; AND-14 is
+down to its first green run; AND-1, AND-6, AND-13, AND-17, XBX-1, LIB-17,
+REL-3, TEST-15 and BUILD-2 were rewritten, and BUILD-6 got the Box64 pack's
+checks. Follow-ups: APP-17 to APP-24, AND-19, XBX-7 to XBX-9, LIB-20, LIB-21,
+GAME-18, DESK-12, TEST-18 and TEST-19.
+
 ## How to use this file (agents read this first)
 
 1. **Pick** the highest-priority task you can actually verify. Tags tell you what
@@ -257,10 +291,10 @@ Priorities: **P0** broken or blocks everything · **P1** users feel it now ·
 - **Modules:** never edit `go.mod`/`go.sum` without a Go toolchain (the
   git-ignored `vendor/` would become inconsistent). With one, finish with
   `go mod tidy && go mod vendor`.
-- **No toolchain?** `tmp/gocheck/gocheck.py --tests player/` (git-ignored copy;
-  see [TEST-6](#test-6--ship-the-static-checker-in-the-repo-p2-s)) catches syntax,
+- **No toolchain?** `tools/gocheck/gocheck.py --tests player/` catches syntax,
   undefined names, unused imports and gofmt alignment for linux/arm64 and
-  windows/amd64. It does not type-check — read the code you call.
+  windows/amd64 ([tools/gocheck/README.md](../tools/gocheck/README.md)). It does
+  not type-check — read the code you call.
 - **Line endings:** `.go/.json/.sh` are LF; most other text files are CRLF on
   Windows checkouts — preserve what a file has.
 - **Honesty rules:** never fake a license, entitlement or purchase for a game or
@@ -288,13 +322,13 @@ What exists, by area, so nobody rebuilds it. `player/` is one Go `package main`
 | Input | `controller.go`, `brickkeys.go`, `inputhints.go` (pad or keyboard words in every hint, keyboard detection), `inmap*.go` (input mapping language), `vkeyboard.go`/`vk*.go`, `touchtarget.go`, `exit_chord.go`, `shortcuts.go` (keyboard sheet, global F1/Ctrl+Q), `voicecmd*.go` (Voice command: capture, intent parser, resolver, the companion's `/voice` page) |
 | Settings | `setmodel.go` (rows), `setui.go` (page), `a11y.go`, `powermode.go`, `powerprofile.go`, `datetime.go` + `tzpicker.go` (Date & time, zone picker) |
 | Games | `game_library*.go`, `emulators.go`, `emu*.go`, `emulatorinstall.go`, `hakux*.go` (Xbox on Smart Pro), `retroachievements.go`, `savemanager*.go`, `savestate_resume.go`, `gamesuspend.go`, `gmeta_*.go`, `romsetup.go`, `romm_*.go`, `ports.go`, `netplay*.go`, `hotseat*.go`, `trophy_*.go`, `playtime.go`, `wrapped.go` |
-| Android games | `androidpak*.go` (Go side) and `androidrt/` (C runtime, `docs/ANDROID.md`, `docs/ANDROID-MINECRAFT.md`); `apkstore*.go` (APK Store: scan, manifest and resource reader, verdicts, profiles, catalogue, Waydroid install) |
+| Android games | `androidpak*.go` (Go side) and `androidrt/` (C runtime, `docs/ANDROID.md`, `docs/ANDROID-MINECRAFT.md`); `apkstore*.go` (APK Store: scan, manifest and resource reader, verdicts, profiles, catalogue, Waydroid install); `androidrt_install.go` (AndroidRT from JukaHub's releases, through `relpack.go`), `game_library_androidgames.go` (the library's Android row) |
 | Media | `videoplayer.go` (ffmpeg decode → IYUV texture), `streaming.go`, `musicplayer.go`, `media_hub*.go`, `podcasts.go`, `tvchannels.go`, `ipstreams.go`, `shorts.go`, `youtube*.go`, `playbackqueue.go`; `spatial.go` + `spatial_dsp.go` + `spatial_ui.go` (spatial audio for JukaHub's media, hooked into `QueueVideoAudio`), `spatial_games.go` + `spatialfx/` (the same DSP as a RetroArch filter / LADSPA plugin; `spatialfx/jh_spatial_ref.py` is the spec) |
-| Web and apps | `browser*.go`, `textbrowser.go`, `webpage*.go`, `webscript.go` + `webdom_*.go` + `webdom/*.js` (page JavaScript on goja: DOM prelude, HTML parser, module rewrite, the scripts' network), `apps.go`, `winbatch*.go` (cmd.exe quoting for `.bat`/`.cmd` launches), `appgrid.go`, `windowsapps*.go`, `plugx.go`/`plug*.go` (plugins), `toolbox.go`, `xpack*.go` |
+| Web and apps | `browser*.go`, `textbrowser.go`, `webpage*.go`, `webscript.go` + `webdom_*.go` + `webdom/*.js` (page JavaScript on goja: DOM prelude, HTML parser, module rewrite, the scripts' network), `apps.go`, `winbatch*.go` (cmd.exe quoting for `.bat`/`.cmd` launches), `appgrid.go`, `windowsapps*.go` + `wine_*.go` + `windows_runtime_install.go` (Windows apps: the Box64 + Wine pack, prefix, WestonPack display, setup page, launch), `plugx.go`/`plug*.go` (plugins), `toolbox.go`, `xpack*.go` |
 | Files and transfer | `files_*.go`, `fileeditor.go`, `ftp_server.go`, `ssh_server.go`, `sftp_root.go`, `fileserver_guard.go` (FTP/SFTP auto-stop, clients), `filetransfer.go`, `companion*.go` (Phone Companion; `companion_cast.go` serves Screen Share), `castcap*.go` + `castui.go` (Screen Share capture, framebuffer source, panel) |
 | System | `wifi*.go`, `systemcontrol.go`, `audiooutput.go`, `bluetooth_devices*.go` (Bluetooth devices page), `hardware.go`, `systool_*.go`, `sdhealth.go`, `batteryhealth.go`, `ledsync.go`, `haptics.go`, `screensaver*.go`, `alarm*.go`, `sched*.go`, `ntpsync.go` + `clockjump.go` (network time, re-anchoring after a clock jump) |
 | Social and LAN | `chat*.go` (Discord), `party*.go`, `peer*.go`, `nearby*.go`, `psremote*.go`, `smart_home*.go` |
-| Packages, updates, backup | `patch_*.go`, `packages.go`, `pkg*.go` (`pkgstage.go`/`pkgverify.go`: verified, staged installs with a rollback), `autoupdate.go`, `emulatorautoupdate.go` + `corebuilds_history.go` (core updates, build history), `upch*.go` (offline update channel), `jdelta_update.go`, `bkup*.go`, `ssync*.go` (save sync), `cfgdoc*.go` (config as code) |
+| Packages, updates, backup | `patch_*.go`, `packages.go`, `pkg*.go` (`pkgstage.go`/`pkgverify.go`: verified, staged installs with a rollback), `autoupdate.go`, `emulatorautoupdate.go` + `emuautoupdate_*.go` + `corebuilds_history.go` (core updates; hakuX, the runtimes and a PC's emulators in the same pass; build history), `relpack.go` (the release packs JukaHub's CI builds: AndroidRT, Box64), `upch*.go` (offline update channel), `jdelta_update.go`, `bkup*.go`, `ssync*.go` (save sync), `cfgdoc*.go` (config as code) |
 | Config and storage | `config*.go`, `xmlconfig.go`, `jukaconfig.json` + `trimui/jukaconfig.device.json` (device twin), `paths.go`, `platform.go`, `cache.go` (bbolt) |
 | Logging and diagnostics | `logging.go`, `hardware.go` (`appLog` ring), `systool_logs.go`, `diagnostics_bundle.go`, `bugrep*.go`, `telemetry.go` |
 | Web builder | `index.html`, `script.js`, `style.css`, `builder-*.js`, `gallery/`, tests in `tests/web` + `tests/e2e`; the device-side receiver is `player/livebuilder.go` |
@@ -407,8 +441,10 @@ lint) passes, `go vet` printf checks pass on the new `log*` helpers.
 **Where.** `.github/workflows/build-sdcard.yml`, `player/package-sdcard.sh`,
 `player/androidrt/build-tsp.sh`.
 **Done when.** CI (or a local TG5040 toolchain, e.g. `ghcr.io/loveretro/tg5040-toolchain`)
-produces the SD-card zip including `Apps/AndroidRT`; artifact attached to the run.
-**Verify.** Unzip the artifact; `file JukaHub` reports aarch64; `loader` runs `--help`.
+produces the SD-card zip including `Apps/JukaHub/androidrt` (the CI-built
+AndroidRT, AND-14); artifact attached to the run.
+**Verify.** Unzip the artifact; `file JukaHub` reports aarch64;
+`androidrt/loader --version` prints `AndroidRT loader …`.
 
 ### BUILD-3 — Refresh or drop the local `vendor/` tree (P0, S) [WIN]
 **Why.** `player/vendor/` (git-ignored) pins older goja/pprof versions than
@@ -481,6 +517,41 @@ than 2.33); the next push's step summary says the build cache was restored and
 release starts on a Smart Pro and a Brick.
 **Verify.** The two runs' step summaries (`go build: N s`, `Go build cache: ...`)
 and a device start.
+
+### BUILD-6 — First run of the split helper and Box64 jobs (P0, S) [NET]
+**Why.** The 2026-11-11 pass moved the Box64 pack out of the Remote Play
+helper job into `wine-runtime.yml` (an arm64 runner of its own;
+`attach-wine-runtime` in `docker-image.yml` attaches the pack and nothing else
+waits for it), moved the build root and every build command into
+`.github/scripts/build-root.sh` (the reuse keys hash it, no longer the
+workflow files) and made `build-helpers.sh` build its five dependencies side by
+side. None of it has run on GitHub, and the times are estimates: a cold helper
+job of about three and a half minutes, against about sixteen with Box64 in it.
+**Where.** `.github/workflows/remote-play-helpers.yml`,
+`.github/workflows/wine-runtime.yml`, `.github/workflows/docker-image.yml`
+(`build-wine-runtime`, `attach-wine-runtime`), `.github/scripts/build-root.sh`,
+`player/native/build-helpers.sh` (`start_part`, `wait_parts`).
+**Done when.** On the first push: the helper job builds both parts (its log
+shows each dependency part's lines after "build side by side"), the Box64 job
+builds its pack, `attach-wine-runtime` attaches `JukaHub-Wine-linux-arm64.zip`
+(before or after the release is published), and `build-and-publish-ubuntu`
+starts once `build-trimui` and the helper job are done, not after Box64. On the
+next push that changes none of a part's key inputs (`build-root.sh key` lists
+them: `player/native` for the helpers, `player/androidrt`'s sources with
+`build-runtimes.sh` for AndroidRT, `build-runtimes.sh` and the Python tool pins
+for Box64, and `build-root.sh` and `.gitattributes` for all three), that part
+says "Reused ... from run N". If the helper job still finishes after
+`build-trimui`, carry the dependency prefix (`/opt/jukahub-deps`, keyed on
+`build-helpers.sh` and `build-root.sh`) between runs as one more
+`go-build-cache.sh fetch` artifact, so a change to the helper sources skips the
+dependency builds. The Box64 pack's own first build (`build-runtimes.sh wine`)
+counts as green when its BUILDINFO shows only C-library NEEDED, GLIBC ≤ 2.31 and
+`box64 --version` naming 0.4.4, and the advisory step prints `wine-10.0` or its
+log names the next fix — likely box64's configure wanting a newer CMake policy
+or Python, the folder its install puts the x86-64 libraries in, or a `libresolv`
+in NEEDED (add it to `ALLOWED_NEEDED`; do not loosen the other checks).
+**Verify.** The runs' job times and step summaries ("Remote Play helpers",
+"AndroidRT", "Box64 (the Windows-app runtime)").
 
 ### HW-1 — First device run of the November pass (P0, M) [HW]
 **Why.** Nothing from this pass has run on a Smart Pro or a Brick.
@@ -567,6 +638,26 @@ release for every same-repo PR and publishes a release on every push to main —
 the builds the updater installs.
 **Done when.** One release workflow (see REL-8); PRs build artifacts but never
 tag.
+
+### FIX-15 — Restores and reloads still start from the boot copy of the settings (P1, S) [WIN]
+**Why.** `userConfigCache.Variables` is the copy read at boot and no save
+updates it; since 2026-11-11 a favourites/chat save writes the newest full
+save's settings (`userConfigLatest`, `extras.go`) instead of it, but three paths
+still build on it. A backup restore (`bkup.go` `bkupCommit`: `current :=
+loadUserConfig()`, then `bkupMergeUser` keeps the categories not restored from
+it) and Recovery's "Reset settings" / last-good restore (`recoverysettings.go`
+`recoveryResetUser`, Fullscreen and the device keys) lose what changed in the
+session, playtime and trophies included. `reloadUserConfigFromDisk` falls back
+to the cache when the read fails (a Windows scanner holding the file), and the
+hot reload merges that. Power tools' config-history restore sets
+`userConfigCache = nil` and asks for a restart, but the exit's `playtimeFlush`
+writes the live config over the restored file first.
+**Done when.** A restore merges against the live config
+(`userConfigFromVariables(config)`, detached, with `playtime.data` written into
+it first); a failed reload read uses a JSON clone of `userConfigLatestVars()`;
+the history restore applies live (`mergeUserConfig(appConfig,
+reloadUserConfigFromDisk())` and a full save) or skips the exit's saves; a case
+in `config_persist_test.go` covers the restore merge.
 
 ---
 
@@ -680,13 +771,6 @@ as tests) show 0 allocs/frame on Home, Library and Downloads at rest.
 **Done when.** Size per package measured (`go tool nm -size -sort size`); the top
 10 contributors listed in `docs/PERFORMANCE.md` with a plan; `-trimpath` added to
 release builds.
-
-### PERF-14 — Lazy regexps in the sub-packages (P3, S)
-**Why.** The November pass removed the last eager package-level regexp from
-`package main`; `internal/`, `web/` and `tools/` still compile theirs during init.
-**Where.** `player/internal/`, `web/`, `player/tools/`.
-**Done when.** No package-level `regexp.MustCompile` outside a `sync.OnceValue`
-remains in those trees and their tests pass.
 
 ### PERF-15 — What page scripts cost on the handheld (P1, S) [HW]
 **Why.** The Browser's JavaScript pass has only run under node. On the device the
@@ -915,27 +999,9 @@ unnoticed.
 scene's focus graph at both canvases and reports unreachable focusables; a
 `make` target runs it.
 
-### TEST-4 — The weekly checks run AndroidRT's smoke suite (P2, S) [NET]
-**Where.** `.github/workflows/weekly.yml`,
-`player/androidrt/tests/smoke/run-smoke.sh` (~190 asserts, ~7 s, host gcc).
-**Done when.** `weekly.yml` runs the smoke suite (the release pipeline already
-cross-builds the device binary on every push).
-
 ### TEST-5 — `go vet` for Windows too (P2, S) [NET]
 **Done when.** The weekly Windows job (`weekly.yml`) runs `go vet ./...` before
 its tests, so Windows-only files cannot rot.
-
-### TEST-6 — Ship the static checker in the repo (P2, S)
-**Why.** Agents without a toolchain rely on `gocheck.py`, which lives in the
-git-ignored `tmp/`.
-**Done when.** `tools/gocheck/` holds `gocheck.py`, `alignchk.py`,
-`importchk.py` and a README; `CONTRIBUTING.md` mentions it.
-
-### TEST-7 — Relative-link check for the docs in `make check` (P3, S)
-**Why.** The Go test that checked doc links went with the test cut; links to
-deleted files then pile up (the November cut left 98).
-**Done when.** A small script (Python or Node, no Go) fails `make check` on a
-broken relative link in any `*.md` outside `node_modules`/`vendor`.
 
 ### TEST-8 — Fuzz the parsers (P2, M)
 **Done when.** `go test -fuzz` targets exist for M3U, CUE/GDI/M3U sheets, the
@@ -959,11 +1025,11 @@ on Windows) and the release workflow links it.
 234 tasks while 238 existed, and the recovery row cited a task that had already
 been deleted. A reader cannot see a dangling ID or a stale count.
 **Where.** `player/MODERNIZATION.md`; a dependency-free script under `tools/`
-(Python or Node, like TEST-7).
+(Python or Node, like `tests/scripts/docs-links.py`).
 **Done when.** The script fails on a duplicate task ID, an ID named in prose
 that matches no heading, an anchor that matches no heading, and a header count
 that differs from the number of task headings; `make check` runs it beside the
-docs link check (TEST-7).
+docs link check (`make docs-links`).
 
 ### TEST-12 — First run of the browser-engine tests (P1, S) [WIN]
 **Why.** The Browser's DOM pass (`webdom_runtime.go`, `webdom_parse.go`,
@@ -984,10 +1050,12 @@ the two `webdom` suites.
 **Why.** The Ubuntu 20.04 root is debootstrapped from the day's focal-updates
 and the pip packages are pinned by version only, so two runs of one commit can
 link different OpenSSL or compiler builds.
-**Where.** `.github/workflows/remote-play-helpers.yml`,
-`player/native/build-helpers.sh`.
+**Where.** `.github/scripts/build-root.sh` (`create`, which every arm64 build
+uses), `player/native/build-helpers.sh`, `player/native/build-runtimes.sh`.
 **Done when.** The root comes from a dated `snapshot.ubuntu.com` archive, pip
-installs with `--require-hashes`, and `BUILDINFO.txt` names the snapshot.
+installs with `--require-hashes`, and the `BUILDINFO.txt` of the helpers,
+AndroidRT and the Box64 pack (built in the same root, Box64 with gcc 10 from
+focal's universe) names the snapshot.
 
 ### TEST-16 — A supported OpenSSL in the Remote Play helpers (P2, S) [NET]
 **Why.** The helpers link OpenSSL statically from Ubuntu 20.04: 1.1.1f with
@@ -1014,6 +1082,42 @@ BUILDINFO lists nothing fetched by configure, and libevent is 2.1.13-stable
 (2026-07, security fixes in evbuffer, bufferevent, evdns and evhttp; chiaki-ng
 1.10.1 moved to it) once its tarball's SHA-256 is checked against its signed
 release — a reviewer found `f7e9383b…` in Buildroot only.
+
+### TEST-18 — A packager's digest for the Box64 source (P3, S) [NET]
+**Why.** The Box64 pack's source is pinned by commit id (`2f130fab…`, v0.4.4)
+and fetched with `git fetch --depth 1`. When it was pinned no distribution's
+digest for the v0.4.4 tarball could be read (AUR's PKGBUILD was unreachable,
+Debian was at 0.4.3, nixpkgs pins a NAR hash), so nothing outside GitHub vouches
+for that tree.
+**Where.** `player/native/build-runtimes.sh` (`BOX64_COMMIT`).
+**Done when.** A packager's digest for the v0.4.4 release tarball (AUR, or
+Debian or Alpine once they reach it) is checked once against the tree at the
+pinned commit, and the comment above `BOX64_COMMIT` names that source.
+
+### TEST-19 — Bounds and order in the runtime jobs (P1, S) [NET]
+**Why.** The review of the AndroidRT and Box64 jobs (2026-11-11) left five
+findings open. `build-and-publish-ubuntu` allows 15 minutes, but its four
+optional 5-minute steps (download and upload of the helpers and of AndroidRT)
+add up to 20, and a timed-out packaging job leaves the release a draft. In
+`remote-play-helpers.yml` and `wine-runtime.yml` a built package is uploaded
+only after an advisory step (the arm64 smoke suite, the Wine start), so a hang
+there runs into the job's timeout and the verified package is lost. The weekly
+AndroidRT smoke step has no bound of its own inside its job's 10 minutes, so a
+few hung cases turn the weekly run red. The helper build's bound fell from 35
+to 20 minutes without a measured time. And `docs/BUILDING.md` and
+`build-runtimes.sh` offer `CROSS=aarch64-linux-gnu-` for AndroidRT, which
+today's cross toolchains (glibc 2.34 or newer) always fail at the GLIBC 2.31
+check.
+**Where.** `.github/workflows/docker-image.yml` (`build-and-publish-ubuntu`),
+`.github/workflows/remote-play-helpers.yml`, `.github/workflows/wine-runtime.yml`,
+`.github/workflows/weekly.yml`, `docs/BUILDING.md`,
+`player/native/build-runtimes.sh` (usage text).
+**Done when.** `build-and-publish-ubuntu` has room for every optional bound plus
+its required steps (25 minutes, or 3-minute bounds); each package's upload and
+keep steps run right after its build, before the advisory step; the weekly
+smoke step has `timeout-minutes: 5`; the helper build's bound comes from the
+first cold run's time (BUILD-6); and the docs say a cross build needs a sysroot
+whose glibc is no newer than 2.31.
 
 ---
 
@@ -1045,12 +1149,6 @@ title through `uiPageHeaderTitleFont`, which is never below `TypeHeading`
 and status lines keep their own theme roles. The band and the draw share that
 resolver, so the reserved height matches the face.
 **Remainder.** The two-canvas visual walk is UX-7's [HW] design walk.
-
-### UX-3 — Copy sweep (P2, S)
-**Done when.** No user-visible `(s)` plurals (use `pluralizeCount`), no `N/A`
-(say "Unknown" or hide the row), no raw placeholders like `<system>`.
-**Verify.** `grep` for `(s)"`, `"N/A"`, `<system>` in user-visible strings is
-empty.
 
 ### UX-4 — One icon stroke weight (P2, M)
 **Where.** `icondefs.go`, `icondraw.go`, `iconatlas.go`.
@@ -1106,13 +1204,6 @@ colours), `pomodoro.go`, `media_hub_render.go` (19 literal sizes),
 `colorNew(`/`sdl.Color{R:` in UI code lists only documented exceptions (art,
 game palettes).
 
-### UX-13 — One hint vocabulary (P2, S)
-**Why.** The D-pad is spelled seven ways ("D-Pad", "Up/Down", "↑ ↓", "←/→",
-"←→", "↑↓", "Arrows"); badges mix "A / Enter" with pad-only rows.
-**Done when.** `docs/STYLE.md` defines the spellings ("D-Pad", "Up/Down",
-"Left/Right", pad name first, keyboard twin after " / "), every hint follows it,
-and `inputhints.go` relies on it.
-
 ### UX-14 — Destructive confirmations default to safety (P2, S) [OWNER]
 **Why.** UX principle 8 (docs/UX_REVIEW.md) says confirmations open on the safe
 choice; the new Home Exit card focuses Exit on purpose (`home_power.go:55`, see
@@ -1127,7 +1218,8 @@ Cancel; the choice is remembered nowhere.
 Start menu, sheets and toasts share one entrance.
 
 ### UX-16 — Trophy set two on a device, and its leftovers (P2, S) [HW]
-**Why.** The 2026-11-10 pass took Trophies from 101 to 401 (`trophy_set2.go`,
+**Why.** The 2026-11-10 pass took Trophies from 101 to 401 — 386 after the
+2026-11-11 cut of what a start handed out (`trophy_set2.go`,
 the event API in `trophy_events.go`, about 175 one-line hooks across the
 features) — all from reading, none of it compiled or run. A few counters were
 left short on purpose: RetroAchievements counts at most 12 unlocks per sync
@@ -1138,7 +1230,8 @@ carried over (`gmeta` milestones, the saved JukaLand stats could seed them).
 **Where.** `trophy_events.go`, `playtime.go`, `trophy_set2.go`, `trophy_room.go`
 and the hook sites (grep `trophyEvent`).
 **Done when.** On a Smart Pro and on Windows: the first start on an old save
-shows its catch-up as a few cards (golds first) and one notification row; the
+records its catch-up quietly (no card, no row, no count on the cup) and a
+restart keeps every trophy and setting the session saved; the
 Category chip lists the groups with their counts; a screenshot, a track, a page
 and a Snake round move their trophies' progress; the platinum's count leaves out
 what the setup cannot award and the bonus trophies; the leftovers above are
@@ -1278,6 +1371,33 @@ per-system config that never sees them.
 **Done when.** The configs CrossMix's launchers pass are known and are part of
 a launch's targets for all four, and a CrossMix game's RetroArch log shows the
 values.
+
+### GAME-18 — Device pass for the emulator updates (P1, S) [HW] [WIN]
+**Why.** Since 2026-11-11 the daily pass also updates hakuX, the Windows-app
+runtime, AndroidRT and, on a PC, the emulators JukaHub installed and its
+RetroArch's cores — all from reading: the PC's moment (system-wide idle, no
+full-screen program, mains power), the rollback record, the GitHub hold and the
+Windows process and power calls have not run.
+**Where.** `emuautoupdate_runtimes.go`, `emuautoupdate_desktop.go`,
+`emuautoupdate_desktop_windows.go`, `emulatorautoupdate.go`; log lines
+`[patch] emulator updates: …`.
+**Done when.** On a Smart Pro: with a newer hakuX release out, about 22 minutes
+after boot on the charger one toast says "Updated hakuX v…"; after R1 the next
+day's pass logs that it was put back by hand and leaves it; the downloaded
+Windows-app runtime and AndroidRT update in the same pass, card and toast; and
+a game started while the card shows "Updating emulators" stops the pass within
+about 2 seconds, the rest following after the game. On Windows: PPSSPP
+installed from the Emulators page, with its manifest's tag edited older, updates
+after about 4 idle minutes (`.backup\PPSSPP` kept, Roll back works, the next
+day's pass leaves it); an emulator started from Explorer is skipped; an
+unplugged laptop, typing in another app or a full-screen game outside JukaHub
+holds the pass, JukaHub itself full screen and idle does not; R1 during an
+update is refused; with only Steam's RetroArch the Core builds page says
+"Updates on demand" and its cores are never touched; Notify me lists new builds
+once and installs nothing; and an unchosen mode with a JukaHub-installed
+emulator shows the one-time notice.
+**Verify.** The toasts and the `[patch] emulator updates:` lines, recorded in
+the HW log.
 
 ---
 
@@ -1522,14 +1642,21 @@ handheld.* after.
 
 ---
 
-## Xbox on the Smart Pro (XBX)
+## Xbox and Xbox 360 (XBX)
+
+hakuX runs original-Xbox games on the Smart Pro; on Windows, xemu runs them and
+Xenia Canary runs Xbox 360 games (both installed and updated from the Emulators
+page since 2026-11-11).
 
 ### XBX-1 — On-device hakuX validation (P1, M) [HW]
 **Where.** `hakux.go`, `hakuxpage.go`.
 **Done when.** On a Smart Pro: install from the Xbox tile, confirm the real zip
 layout and launcher name, launch one XISO from the Games Library and from the
-stock launcher, exit with Start+Select, R1 rollback after a second release;
-provenance (`Emus/XBOX/.jukahub-hakux.json`) lists every file.
+stock launcher, exit with Start+Select, R1 rollback after a second release (R1
+returns at once and its toast follows; a file the update dropped waits in
+`Apps/JukaHub/data/hakux/backup/` and comes back with R1); provenance
+(`Emus/XBOX/.jukahub-hakux.json`) lists every file; with the clock set to 2001,
+X answers "A secure connection could not be made — check the date and time".
 
 ### XBX-2 — Settle the port's firmware needs (P2, S) [NET]
 **Done when.** From the port's README: if it needs MCPX/flash/HDD files, their
@@ -1550,31 +1677,64 @@ TG4040. Detection (and the hakuX offer) may miss real units.
 **Done when.** Once the package's per-title settings layout is known, the game
 options sheet opens it for Xbox games.
 
-### XBX-6 — hakuX housekeeping (P3, S)
-**Where.** `hakux.go`, `hakuxpage.go`.
-**Done when.** Rollback (renames + deleting the kept copy) runs off the event
-thread like the install; files an older release shipped but a newer one dropped
-move into the kept copy instead of lingering in `Data/`; on equal version
-numbers the asset without a pre-release suffix wins (`0.1.3` over `0.1.3-rc1`).
+### XBX-7 — Xenia Canary on a Windows PC (P2, S) [WIN] [NET]
+**Why.** Since 2026-11-11 the Emulators page installs and updates Xenia Canary
+and the Games Library starts Xbox 360 games with it — written from its release
+pages and wiki, never run on a PC.
+**Where.** `emuwininstall.go` (the Xenia Canary spec, `emuWinHasVCRuntime`),
+`emuxbox.go` (`emuStandaloneGameArgs`), `emusystems.go`, `game_library.go`.
+**Done when.** On a Windows PC the newest Canary release installs
+(`xenia_canary_windows.7z`; `xenia_canary.exe` found at the top or one folder
+down), the manifest's tag is the release tag, a later build shows as an update
+and R1 restores the one before, an `.iso` in `Roms\XBOX360` starts full screen
+from the Games Library (`--fullscreen=true`), and the Visual C++ hint shows
+only on a PC without the redistributable (also on Windows on ARM).
+
+### XBX-8 — xemu on Windows, end to end (P2, S) [WIN] [NET]
+**Why.** xemu's asset rules, the automatic `xemu.toml` fill and the
+missing-firmware refusal (2026-11-11) have not met a real xemu release.
+**Where.** `emuwininstall.go` (the xemu rules), `emuxbox.go` (`emuXemuScan`,
+`emuXboxApply`, `emuStandaloneLaunchCheck`), `game_library.go`.
+**Done when.** v0.8.139 or newer installs the non-debug build (the ARM64 one
+from a windows/arm64 JukaHub), the HDD image lands in `BIOS\xbox`, BIOS files
+dropped into that folder turn green on the open sheet within seconds, the
+library refuses an ISO with the "xemu needs …" sentence until they are there
+and then starts it full screen with `-dvd_path`, and a portable xemu whose
+`xemu.toml` names its files by relative path launches with that file
+unchanged.
+
+### XBX-9 — Xbox 360 library extras (P3, S)
+**Why.** The library scans `Roms/XBOX360` with the global ROM extensions, so a
+`.zip`, `.7z`, `.bin` or `.chd` there becomes an entry Xenia is started with and
+cannot open, while extracted games (`default.xex`) and `.zar` never appear; and
+the ROM manager files a trimmed Xbox 360 ISO under XBOX, since it carries the
+same `MICROSOFT*XBOX*MEDIA` magic as an original-Xbox disc.
+**Where.** `romsetup.go` (`romFileExtensions`), `game_library.go`
+(`gameDisplayTitle`), `romm_detect.go`.
+**Done when.** `.xex` is scanned with a `default.xex` titled after its folder,
+the Xbox 360 row lists only Xenia's formats, the ROM manager tells a 360 ISO
+from an original-Xbox one (`default.xex` or `default.xbe` in its root), and
+Xenia's `.zar` support is confirmed or left out.
 
 ---
 
 ## Android games (AND)
 
 ### AND-1 — First device run of AndroidRT (P1, M) [HW]
-**Where.** `player/androidrt/build-tsp.sh`, `docs/ANDROID.md` (device trial
-steps).
-**Done when.** On Smart Pro and Brick: the aarch64 fake games run, then one real
-NativeActivity NDK game; the log shows which present backend worked
-(`[androidrt][present] backend …`) and a game frame appears on the panel. If the
-native backend shows a black panel, the same run with `ANDROIDPAK_PRESENT=sdl` is
-logged (`SDL2 … video driver mali`, SDL loading `/usr/lib/libGLESv2.so*` — set
-`ANDROIDPAK_GLES2_LIB` if `SDL_GL_LoadLibrary` fails), and the backend that shows
-a frame becomes the stock-TrimUI default in `eglpresent.c` (today native, with
-sdl as the automatic fallback). With sdl, the hub can still stop the game
+**Where.** `player/androidrt/src/eglpresent.c` (the stock-TrimUI default),
+`docs/ANDROID.md` (device trial steps and log lines).
+**Done when.** On Smart Pro and Brick, with the runtime the TrimUI archive
+carries (no build step): the aarch64 fake games run, then one real
+NativeActivity NDK game; the log shows `stock firmware (<model>): auto chose the
+SDL-hosted backend`, `SDL2 … video driver mali` and `backend sdl (…)`, and a
+game frame appears on the panel. `sdl` has been the stock-TrimUI default on the
+PowerVR models since 2026-11-11, chosen from other ports' reports (NextOS ports
+issue #1, nx-redux PR #152); if it stays black, the same run with
+`ANDROIDPAK_PRESENT=native` (and `ANDROIDPAK_EGL_WINDOW=null` if EGL refuses the
+window struct) is logged and the default revisited — set `ANDROIDPAK_GLES2_LIB`
+if `SDL_GL_LoadLibrary` fails. With sdl, the hub can still stop the game
 (SIGTERM), the controller still reaches it, and a game that pauses and resumes
-keeps presenting. An `auto` run that logs "the game made its GLES context before
-its window" decides AND-13.
+keeps presenting.
 
 ### AND-3 — Minecraft Bedrock first light (P2, L) [HW] [OWNER]
 **Why.** The class pack is built from public knowledge only; it needs an owned
@@ -1593,9 +1753,18 @@ license answers stay honest.
 `openslessim.c` latency is acceptable; an AAudio shim only if FMOD insists.
 
 ### AND-6 — Memory of big APKs (P2, S) [HW]
-**Where.** `androidpak.go` (`androidPakRuntimeOverhead`, preflight floor).
-**Done when.** RSS and page-cache pressure of a large APK run are measured and
-the preflight refuses runs that cannot fit in 1 GB, with a clear message.
+**Why.** Since 2026-11-11 a game whose assets unpack to more than 64 MiB keeps
+them in the APK on the card (`androidPakStageAssetsMax`): only its libraries,
+manifest and resources are staged into tmpfs and the runtime reads assets from
+the APK, so the pre-flight counts far less. What such a run really costs in RSS
+and page cache is unknown.
+**Where.** `androidpak.go` (`androidPakRuntimeOverhead`, preflight floor,
+`androidPakStageAssetsMax`).
+**Done when.** On a Smart Pro a game with more than 64 MiB of assets logs
+`… MiB of assets stay in the APK on the card` and
+`[androidrt] assets: APK indexed …`, its asset reads work, its RSS and
+page-cache pressure are measured, and the preflight refuses runs that cannot
+fit in 1 GB, with a clear message.
 
 ### AND-7 — Class packs by demand (P3, M)
 **Done when.** SDL2's Java glue (`org/libsdl/app/SDLActivity`) and Unity's
@@ -1633,7 +1802,11 @@ it against `fake_sdl.c`.
 its GLES context first (GLSurfaceView order) keeps that raw EGL context, so its
 frames bypass `SDL_GL_SwapWindow` — exactly the path the stock-firmware report
 says stays black. Today the log names `ANDROIDPAK_PRESENT=sdl` and the docs say
-so; moot if AND-1 makes `sdl` the stock-TrimUI default.
+so. Since 2026-11-11 the PowerVR TrimUI models start on `sdl`, which owns the
+context from the first `eglCreateContext`, so this is left only where `auto`
+still starts native: the Smart Pro S (tg5050, Mali) and firmware other than
+stock. An `auto` run there that logs "the game made its GLES context before its
+window" decides it.
 **Where.** `androidrt/src/eglpresent.c` (`pr_eglMakeCurrent`,
 `pr_eglCreateContext`, `pr_eglDestroyContext`), `tests/smoke`
 (`EGLTEST_CONTEXT_FIRST`).
@@ -1643,18 +1816,27 @@ is mapped to SDL's context at its first `eglMakeCurrent` with SDL's surface
 today's log, and the window-fallback context-first smoke case asserts 5
 `SDL_GL_SwapWindow` frames.
 
-### AND-14 — A prebuilt AndroidRT in the release (P1, M)
-**Why.** The APK Store reads, judges and adds APKs, but no release carries
-AndroidRT: on a fresh card its Runtime tab says the runtime is missing, and
-building it needs an aarch64 toolchain few users have.
-**Where.** `player/androidrt/build-tsp.sh`, the TrimUI packaging
-(`.github/workflows/docker-image.yml`, `player/release.sh`,
-`player/package-sdcard.sh`), `androidpak.go` (`resolveAndroidRuntime`),
-`apkstore.go` (Runtime tab).
-**Done when.** CI builds AndroidRT for the handheld with the host smoke suite
-passing, every TrimUI archive carries it where `resolveAndroidRuntime` looks (or
-the Runtime tab installs it, hash-checked), and on a fresh card the Runtime row
-says it is ready.
+### AND-14 — The prebuilt AndroidRT, first green run (P1, S) [NET]
+**Why.** Since 2026-11-11 the Remote Play helper job builds, checks and ships
+AndroidRT (`build-runtimes.sh androidrt`): every TrimUI archive carries it at
+`Apps/JukaHub/androidrt`, each release attaches
+`JukaHub-AndroidRT-linux-arm64.zip`, and the APK Store's Runtime tab installs
+and updates it from there. None of it has met focal's gcc 9.4 on aarch64.
+**Where.** `player/native/build-runtimes.sh`, `player/androidrt/build-tsp.sh`,
+`.github/workflows/remote-play-helpers.yml`, `player/androidrt_install.go`.
+**Done when.** The job's *Build AndroidRT* step is green; its BUILDINFO shows
+only C-library NEEDED, GLIBC ≤ 2.31 and `loader --version` answering
+`AndroidRT loader <version> (aarch64, bionic loader)`, and `build-runtimes.sh`
+refuses any other answer, as the device's probe does (today any clean exit
+passes); `JukaHub-Trimui.zip` holds `androidrt/` and the release carries the
+zip; on a fresh Smart Pro card the Runtime row says ready (the device half is
+AND-17). A rebuild from unchanged runtime sources (any edit to
+`build-runtimes.sh` or `build-root.sh` causes one) gives a byte-identical zip —
+the version stamped from the last commit that touched `player/androidrt`,
+BUILDINFO's `built:` line replaced by that commit's date, the tree `touch -d`'d
+to it before `zip -X` — so a downloaded copy is not offered a redundant update.
+**Verify.** The run's step summary ("AndroidRT", "Host smoke suite on arm64")
+and `unzip -l JukaHub-Trimui.zip | grep androidrt/`.
 
 ### AND-15 — Verified downloads in the APK Store catalogue (P2, S) [NET]
 **Why.** A catalogue entry may offer a free-software APK with its SHA-256, but
@@ -1666,21 +1848,21 @@ written.
 arm64 APK is listed with its URL, size and SHA-256 checked by hand, and it
 downloads, verifies and shows under Your APKs as a native game to try.
 
-### AND-16 — Android games in the Games Library (P2, M)
-**Why.** A game added from the APK Store becomes a game profile, and only Game
-Profiles lists those; the Games Library never reads profiles.
-**Where.** `game_library*.go`, `gameprofiles.go`, `apkstore_profile.go`.
-**Done when.** An added APK shows in the library with its icon and title,
-launches from there through the profile path, and leaves the library when the
-store removes it.
-
-### AND-17 — First APK Store run on a Smart Pro (P1, S) [HW]
-**Done when.** On a real card the scan lists the APKs in the store's folders and
-`PhoneDrop`; a Minecraft arm64 APK gets the class-pack verdict and a Java app
-the "needs Android's Java runtime" one; labels and icons read right; Add puts
-the game in Game Profiles; and Play reaches AndroidRT's launch log, or names the
-missing runtime. The scan's time and memory on a full card are noted in
-`docs/ANDROID.md`.
+### AND-17 — First APK Store run on a Smart Pro (P1, M) [HW]
+**Done when.** On a fresh card with the new TrimUI package the scan lists the
+APKs in the store's folders and `PhoneDrop`; a Minecraft arm64 APK gets the
+class-pack verdict and a Java app the "needs Android's Java runtime" one; labels
+and icons read right; the Runtime row says "Ready · Bundled with JukaHub" and
+Play reaches AndroidRT's launch log with that runtime (no build step). Add puts
+the game in Game Profiles and on the Games Library's Android row with its icon,
+and Play works from there; a second quick Play on a big game says "… is already
+starting" (one game process); two phone-pulled `base.apk` games keep their own
+covers and Remove takes only its own. With `Apps/JukaHub/androidrt` renamed
+away the row says Missing and Install brings it from the release ("Installed
+from JukaHub's releases (<tag>)", log `relpack androidrt … installed`); an
+empty `Apps/AndroidRT` is listed under "Passed over"; leaving the store during
+"Install and play" finishes the install without starting the game. The scan's
+time and memory on a full card are noted in `docs/ANDROID.md`.
 
 ### AND-18 — Split APKs and app bundles (P3, M)
 **Why.** Apps copied off a phone often come as split APKs (`base.apk` plus
@@ -1691,6 +1873,20 @@ cannot be added as one game yet.
 **Done when.** The store groups a base APK with its splits (same package and
 version, side by side or inside a bundle), judges them as one app, and
 AndroidPak stages the native libraries from the matching split.
+
+### AND-19 — Android launches from the Game Profiles panel (P3, S)
+**Why.** The APK Store and the Games Library start an Android game on a
+goroutine and offer a one-press AndroidRT install (2026-11-11), but the Game
+Profiles panel still launches AndroidPak profiles on the render thread, where
+staging can take seconds, offers no install for a missing runtime, and cannot
+show a game that is starting.
+**Where.** `gameprofiles_ui.go`, `gameprofiles.go` (`launchGameProfileClaimed`,
+`gameProfileStartingNow`), `androidrt_install.go` (`androidRTStartInstall`),
+`timelapse.go` (`startTimelapseWith`).
+**Done when.** The panel's launch runs on a goroutine, with the starting claim
+taken and the timelapse settings read on the render thread as the library does;
+a missing AndroidRT offers "Install and play"; and the row's status reads
+"Starting" while `gameProfileStartingNow(id)` holds.
 
 ---
 
@@ -2500,6 +2696,25 @@ are tracked).
 **Verify.** A unit test: a paired address polling while another guesses still
 locks the guesser out.
 
+### SEC-29 — Build the arm64 parts as an unprivileged user inside the build root (P3, S)
+**Why.** `.github/scripts/build-root.sh` runs every third-party build
+(FFmpeg, opus, json-c, libevent, SDL2, chiaki-ng with curl, Box64, the pip
+wheels) as root in a chroot with the runner's `/proc` mounted. Root there can
+read the runner's own processes, and so the token any job holds for uploading
+artifacts: a compromised pinned source could leave a poisoned
+`remote-play-helpers-<hash>` (or `androidrt-pack-`, `wine-runtime-pack-`)
+artifact that later runs reuse. `go-build-cache.sh` reasons that any job of an
+accepted run can already write the release; these two jobs cannot, so the
+artifacts are the weaker spot. Found in the review of the split helper and
+Box64 jobs (2026-11-11); the exposure predates it.
+**Where.** `.github/scripts/build-root.sh` (`in_root`, `build`, `check`),
+`player/native/build-helpers.sh` and `build-runtimes.sh` (the folders they
+write: `DEPS_PREFIX`, `/tmp/jukahub-*`, `player/native/bin` through `/src`).
+**Done when.** `build` and `check` run the scripts as a build user
+(`chroot --userspec`) that owns only the folders they write, `create` and the
+package installs stay root, and the builds still pass.
+**Verify.** One helper and one Box64 run on GitHub, and `id` in a build log.
+
 ---
 
 ## Docs and project (DOC)
@@ -2879,9 +3094,12 @@ REL-10 proves it on a device, and these build on it.
 update is checked by the GitHub digest alone; TUF is a design note
 (`docs/UPDATER_TUF.md`).
 **Done when.** CI signs every release manifest with a production key held as a
-secret (ceremony in `docs/UPDATER_TUF.md`), the app embeds that key plus one
-rotation slot, and an unsigned or expired manifest is refused with a clear
-message (sideload keeps its explicit trust prompt).
+secret (ceremony in `docs/UPDATER_TUF.md`), listing every asset the release
+carries — the app archives and the `JukaHub-RemotePlay`, `JukaHub-AndroidRT` and
+`JukaHub-Wine` zips, which the helper installer and `relpack.go` check against
+it when present (`docs/PACKAGES.md` shows the command) — the app embeds that key
+plus one rotation slot, and an unsigned or expired manifest is refused with a
+clear message (sideload keeps its explicit trust prompt).
 
 ### REL-4 — Update channels (P2, S)
 **Done when.** Settings → Updates offers Stable / Beta; Beta follows
@@ -3358,12 +3576,18 @@ strip and Play / Resume / Options as the first three actions.
 **Why.** The libretro buildbot has no stable per-core tree for linux/aarch64 and
 states only CRC32 (checked over HTTPS), so "Install automatically" always takes
 the newest nightly. JukaHub records each installed build's SHA-256 and keeps the
-replaced one, but cannot tell a good nightly from a bad one.
-**Where.** `player/emulatorautoupdate.go`, `player/emulatorinstall.go`,
-`player/corebuilds_ui.go`, `player/corebuilds_history.go`.
+replaced one, but cannot tell a good nightly from a bad one. Since 2026-11-11
+hakuX, the runtimes and a PC's emulators are never reinstalled after a rollback
+(every rollback records the build it gave up, `emuRuntimeRecord.Installed`);
+the cores still are, on the handheld and now on a PC too.
+**Where.** `player/emulatorautoupdate.go`, `player/emulatorinstall.go`
+(`planCoreUpdates`, `startEmulatorRollback`), `player/corebuilds_ui.go`,
+`player/corebuilds_history.go`.
 **Done when.** A core can be pinned on the Core builds page (the automatic pass
-and "Update all" skip it, the badge says "pinned"), the automatic pass skips a
-build whose CRC32 the user rolled back from before, and a test covers both.
+and "Update all" skip it, the badge says "pinned"); every core rollback
+(Emulators R1 and both Core builds page paths) records the CRC32 it gave up in a
+per-core record that the automatic pass skips (not `coreRefusalRecord`, whose
+wording says the core cannot run here); and a test covers both.
 
 ### LIB-18 — Save-state warning on the device (P2, S) [HW]
 **Why.** The game page's "made with another build" line is driven by
@@ -3392,6 +3616,29 @@ a fetch ends.
 `startLibraryArtworkFetch(romsMissingArtwork(…))`; the fetcher saves misses every
 N titles; the first pass waits for a trusted clock on the handheld.
 **Verify.** Unit tests; time a pass on a 5 000-ROM card.
+
+### LIB-20 — One core-update loop with a filter (P3, S)
+**Why.** `emuDesktopCoreRunner` copies `runInstalledCoreUpdates`' loop to keep a
+PC's automatic pass to the cores of the RetroArch JukaHub manages (an unattended
+pass must not touch Steam's, `C:\RetroArch-Win64` or Program Files' RetroArch).
+**Where.** `emulatorinstall.go`, `emuautoupdate_desktop.go`.
+**Done when.** `runInstalledCoreUpdates` takes a `keep func(coreBuild) bool`
+and the PC runner is a one-liner.
+**Verify.** The existing core tests still pass.
+
+### LIB-21 — The runtimes' automatic updates show progress and reach their pages (P3, S)
+**Why.** The daily pass installs the Windows-app runtime and AndroidRT through
+closures that forward only text, so the card stays on "Resolving download" with
+no bar for a 100 MB pack; AndroidRT's Notify result never reaches the Runtime
+tab, and the APK Store is not told after an automatic install; and both
+updaters label a build with the release tag alone, so a pack CI re-uploads
+under the same release reads as "put back by hand" and waits for the next tag.
+**Where.** `androidrt_install.go` and `wine_pack.go` (their updaters' Check and
+Install), `emuautoupdate_runtimes.go`.
+**Done when.** Both installs drive the card's phase and bytes as
+`androidRTInstallProgress` does; Notify sets the Runtime tab's update line and
+an automatic install calls `apkStoreRuntimeChanged`; and the label carries the
+first 8 characters of the asset's digest.
 
 ---
 
@@ -3546,6 +3793,113 @@ card stops saying "restart JukaHub" after an app install; CI's `RACE_TESTS`
 includes `BrwWpe`.
 **Verify.** Unit tests; HW-2 step 8 for the device parts.
 
+### APP-17 — The Windows runtime on a stock Smart Pro (P1, M) [HW] [NET]
+**Why.** Box64 + Wine 10.0, WestonPack and the prefix rules (2026-11-11) were
+written from upstream docs and HWSTD's port without a device; the first-run
+time, the unpacked Wine size and the stock firmware's mount, loop and mkfs
+tools are guesses.
+**Where.** `wine_pack.go`, `wine_prefix.go`, `windows_runtime_install.go`,
+`wine_setup.go`; `data/windows-runtime/logs/wineboot.log`.
+**Done when.** Once a release carries the Box64 pack (BUILD-6), on a stock Smart
+Pro: Windows Apps → Setup lists the runtime as missing (about 130 MB),
+WestonPack ("from PortMaster" when PortMaster already has it) and DXVK 1.10.3 as
+optional; A on the first row goes from the downloads through "Unpacking Wine
+10.0" and "Preparing Windows (first run, a few minutes)…" to "Windows runtime
+ready", leaving `data/windows-runtime/{pack,wine-10.0,bin}` and
+`/mnt/UDISK/jukahub/wine-prefix` with `system.reg` and `dosdevices/c:`; an
+older Hangover install is gone; Wi-Fi off and a nearly full card give their
+plain errors; after a session on the image prefix nothing is left mounted or
+bound to `prefix.img` (`mount`, `losetup -a`). The first-run time and the
+unpacked size are recorded, and `wineUnpackFactor` and the "about 700 MB" text
+follow them.
+**Verify.** `wineboot.log` and a bug report from the device.
+
+### APP-18 — The first Windows program on a Smart Pro (P1, M) [HW]
+**Why.** The launch path (WestonPack mounted from its image, udev labelling,
+the pad as mouse and keys, a bounded clean-up) has only been read and reviewed.
+The default display mode, `drm gl kiosk system`, uses Weston's DRM/GBM backend,
+which the stock firmware may not offer, and `docs/WINDOWS_APPS.md` says that
+mode is shown through Crusty, which the Westonpack wiki does not.
+**Where.** `windowsapps.go` (`wineRun`), `wine_display.go`,
+`wine_display_linux.go`, `vcursor_bridge_linux.go`, `docs/WINDOWS_APPS.md`.
+**Done when.** A small 32-bit GDI program in `data/windows-apps` (an old Notepad
+clone, WinMine) opens a window with a visible pointer; the sticks, A, the D-pad,
+Start, Y, Select + Start (Alt+F4) and Select + L1 (pad to the program and back)
+behave as `docs/CONTROLS.md` says, and Y, A and Start do nothing in JukaHub
+before the window appears; after the program closes the list is back, the pad
+works in JukaHub, `ps` shows no weston, Xwayland or wineserver and
+`/proc/mounts` no `/tmp/jukahub-weston`; a second start is faster. Leaving Setup
+during Install & Run installs without starting the program, A during an install
+or update is refused, and a game started during "Preparing Windows…" keeps the
+screen. Whatever a black screen needed (the OpenGL toggle, `JUKAHUB_WESTON_MODE`
+in `weston.env`, `CFW_NAME=TrimUI`) becomes the default, and the doc says which
+mode works. On Windows, Windows Apps runs an `.exe` and a `.bat` from
+`%APPDATA%\JukaHub\windows-apps`.
+**Verify.** The app's log, `cat /proc/bus/input/devices`, `cat /proc/mounts`,
+`ls -l /run/udev/rules.d /tmp/run/udev/rules.d` and a bug report.
+
+### APP-19 — A pinned checksum for WestonPack (P2, S) [NET]
+**Why.** WestonPack is the only executed part of the Windows runtime without a
+checksum: its image is checked by content alone (SquashFS 4 superblock,
+compression id, 20–200 MB), then loop-mounted, and its scripts run as root. No
+full published hash could be read when it was written; nx-redux PR #207 shows
+truncated MD5s (official Westonwrap 0.2.7.1 `0a761c28…`, CrossMix preview
+`91dc57a0…`).
+**Where.** `windows_runtime_install.go` (`installWestonRuntime`,
+`windowsWestonRuntimeURL`).
+**Done when.** The download URL names a PortMaster-New commit instead of `main`,
+the file's SHA-256 is pinned beside it (read from portmaster.games' runtimes
+page, PortMaster-New's `.md5` files or harbourmaster's runtime index), and
+`wineDownload` checks it before the rename.
+
+### APP-20 — Unpacking Wine fast enough on the A133P (P3, S) [HW]
+**Why.** Wine 10.0's tarball (about 62 MB of xz) is unpacked with the pure-Go
+xz reader, which may take minutes on a Cortex-A53.
+**Where.** `wine_pack.go` (the Wine tarball unpack).
+**Done when.** The unpack time on a Smart Pro is measured; if it is several
+minutes, a system `xz -dc` (when present) streams into the same Go tar
+extractor, with the pure-Go reader kept as the fallback.
+
+### APP-21 — DXVK 1.10.3 on the GE8300, or no DXVK row (P3, S) [HW]
+**Why.** The Smart Pro's Vulkan 1.1 driver can run at most DXVK 1.x; Setup
+offers 1.10.3 as an experiment nobody has tried on PowerVR.
+**Where.** `windows_runtime_install.go` (`dxvkPick`), `wine_setup.go`,
+`wine_runtime.go` (`dxvkUsableHere`).
+**Done when.** One D3D9 and one D3D11 title are tried with DXVK on and off; if
+DXVK never works there, the row is gone on TrimUI and `docs/WINDOWS_APPS.md`
+says why.
+
+### APP-22 — Typing in Windows programs (P2, M)
+**Why.** The pad's keys in a Windows program cover arrows, Enter, Esc, Tab,
+Space and Alt+F4, so a program that asks for a name, a path or a serial cannot
+be used on the handheld.
+**Where.** `vcursor_bridge_linux.go` (the "JukaHub Mouse" uinput device, which
+already declares keys 1–255), `companion*.go`.
+**Done when.** Text typed on the phone companion (or picked letter by letter
+with a pad chord) reaches the running program as key presses through the
+JukaHub Mouse device, and the pad is the mouse again afterwards.
+
+### APP-23 — Launcher programs that start the real program and exit (P2, S)
+**Why.** A Windows session ends when the program JukaHub started exits, so a
+launcher or setup program that starts the real `.exe` and quits ends the
+session: WestonPack is cleaned up and the real program loses its screen and pad.
+**Where.** `windowsapps.go` (`wineRun`), `wine_prefix.go` (sessions,
+`wineserver -w`).
+**Done when.** The session lasts while Wine user processes remain in the prefix
+(a bounded `wineserver -w`, or the process group), a launcher that starts its
+game keeps WestonPack and the pad until the game exits, and holding Select +
+Start still ends everything.
+
+### APP-24 — Timelapse for Wine sessions (P3, S)
+**Why.** Wine game profiles stopped starting a timelapse when their launch moved
+to a goroutine (2026-11-11): `startTimelapse` reads the config, which only the
+main thread may do.
+**Where.** `gameprofiles.go` (`launchWineProfile`), `windowsapps.go`,
+`timelapse.go` (`startTimelapseWith`).
+**Done when.** `launchWineProfile` reads `timelapseSettingsFor(appConfig)` on
+the main thread and the session starts `startTimelapseWith` once the program
+runs, as Android profiles do.
+
 ---
 
 ## Windows desktop (DESK)
@@ -3630,6 +3984,17 @@ drawn on the shutdown card and the boot animation (`shutdown.go`, `bootos.go`
 present their own frames), so a dimmed PC flashes to full brightness there —
 call `brightnessSoftRender` before their `Present`.
 
+### DESK-12 — Emulator updates on a PC, round two (P2, S) [WIN]
+**Why.** A PC's daily pass (2026-11-11) restarts a cut-off download from zero
+(RetroArch is about 250 MB), cannot be told to leave one emulator alone, and
+installs `RetroArch.7z`, for which the buildbot publishes no digest, on the
+strength of HTTPS alone.
+**Where.** `emuautoupdate_desktop.go`, `emuwininstall.go`, `emulators.go`.
+**Done when.** A cut-off emulator download resumes where it stopped; an
+emulator's version can be pinned from its tile (the pass skips it and the tile
+says so); and `RetroArch.7z` is checked against a second channel before it is
+installed.
+
 ---
 
 ## Hardware validation queue
@@ -3649,6 +4014,8 @@ PERF-17, PERF-18, SYS-18.
 From the APK Store, Voice command and spatial audio pass: AND-17, INP-20,
 SND-7, SND-8, SND-13, GAME-17.
 From the VPN pass: NET-8, NET-17.
+From the Windows apps, Android, Xbox and emulator updates pass: APP-17, APP-18,
+APP-20, APP-21, GAME-18 (AND-1, AND-6, AND-17 and XBX-1 grew).
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 

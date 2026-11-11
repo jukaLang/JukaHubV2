@@ -11,7 +11,6 @@ package main
 // finds the pad already open and changes nothing.
 
 import (
-
 	"github.com/veandco/go-sdl2/sdl"
 )
 

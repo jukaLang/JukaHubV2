@@ -946,11 +946,12 @@ func installWindowsRuntimeCore(ctx context.Context, client *http.Client, refresh
 	return nil
 }
 
-// wineProgramsRunning reports a Wine session JukaHub planned, or a Windows
-// app or game profile still running: replacing the runtime now would pull it
-// from under them.
+// wineProgramsRunning reports a Wine session JukaHub planned, a Windows
+// program still starting (its first run prepares Windows for minutes before
+// any session or pid exists), or a Windows app or game profile still running:
+// replacing the runtime now would pull it from under them.
 func wineProgramsRunning() bool {
-	if wineSessionsOpen() > 0 {
+	if wineSessionsOpen() > 0 || wineLaunchBusy() {
 		return true
 	}
 	windowsAppRunning.mu.Lock()
@@ -999,6 +1000,13 @@ func wineUpdateInstall(ctx context.Context, client *http.Client, progress func(s
 		endWindowsRuntimeInstall()
 		invalidateWindowsAppsCache()
 	}()
+	// The pass checked InUse a moment ago; a program started since then is
+	// seen here, now that the slot refuses new launches.
+	if wineProgramsRunning() {
+		logInfo("windowsapps", "a Windows program started; the runtime update waits for the next pass")
+		setWindowsRuntimeStatus("The runtime update waits while a Windows program runs", "", false)
+		return errRelPackBusy
+	}
 	err := installWindowsRuntimeCore(ctx, client, true, func(line string) {
 		setWindowsRuntimeStatus(line, "", true)
 		if progress != nil {

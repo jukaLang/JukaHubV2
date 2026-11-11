@@ -157,6 +157,7 @@ type vpnDaemon struct {
 	cast        []vpndCastRoute // broadcast/multicast routes this run added
 	castWanted  bool
 	castWarned  bool
+	bindFailed  string // the uplink a bind last failed on, reported once
 	uplink      string
 	uplinkIndex int
 	uplinkUp    bool
@@ -200,6 +201,11 @@ func (d *vpnDaemon) run(raw []byte) int {
 		fmt.Fprintln(os.Stderr, "vpn daemon: another one is already running")
 		return 3
 	}
+	// What a run that died left behind goes first — before anything here can
+	// fail and tidy up — so the original DNS settings are what this run keeps
+	// aside.
+	recoveredDNS := vpndRecoverDNS(d.stateDir)
+	vpndRecoverRoutes(d.runDir)
 	d.status = vpnDaemonStatus{PID: os.Getpid(), Hash: d.hash, State: "starting", HandshakeAgo: -1}
 	d.writeStatus()
 
@@ -225,12 +231,9 @@ func (d *vpnDaemon) run(raw []byte) int {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 
-	// What a run that died left behind goes first, so the original DNS
-	// settings are what this run keeps aside.
-	if vpndRecoverDNS(d.stateDir) {
+	if recoveredDNS {
 		d.event("put back the DNS settings a previous run left behind", false)
 	}
-	vpndRecoverRoutes(d.runDir)
 	d.dns.setup(d.stateDir, cfg.DNS, cfg.DNSSearch)
 	if err := vpndEnsureTUN(); err != nil {
 		return d.fail(err.Error(), true)
@@ -632,9 +635,13 @@ func (d *vpnDaemon) checkUplink() {
 	}
 	if index != d.uplinkIndex || !d.uplinkUp {
 		if err := vpndBindToDevice(d.conn, name); err != nil {
-			d.event(fmt.Sprintf("cannot use %s for the tunnel: %v", name, err), true)
+			if key := fmt.Sprintf("%s/%d", name, index); key != d.bindFailed {
+				d.bindFailed = key
+				d.event(fmt.Sprintf("cannot use %s for the tunnel: %v", name, err), true)
+			}
 			return
 		}
+		d.bindFailed = ""
 		if d.uplink != "" && d.uplink != name {
 			d.event(fmt.Sprintf("the network moved from %s to %s; reconnecting", d.uplink, name), false)
 		}

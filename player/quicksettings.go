@@ -226,7 +226,7 @@ func qsRefreshAvailability() {
 			l.Available = wifiEntryReachable()
 			// The row is 400 px wide; the full reason lives in the picker's
 			// header and in the toast, so the row only says there is no backend.
-			l.Detail = "N/A"
+			l.Detail = "Unavailable"
 		case qsLinkControls:
 			// The legend card runs local to the app, so this row is always
 			// offered, even on a host with no radios at all.
@@ -234,7 +234,7 @@ func qsRefreshAvailability() {
 		case qsLinkLEDPanel:
 			l.Available = ledSyncAvailable()
 			if !l.Available {
-				l.Detail = "N/A"
+				l.Detail = "Unavailable"
 			}
 		}
 	}
@@ -1182,12 +1182,12 @@ func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	detail := ""
 	if !t.Available {
 		// A row with no backend is dimmed; the switch is not drawn because
-		// there is nothing for it to represent. The row says only "N/A": the
-		// specific reason ("no nmcli/rfkill") is too long for a 400 px row and
-		// is shown in the toast when A is pressed.
+		// there is nothing for it to represent. The specific reason
+		// ("no nmcli/rfkill") is too long for a 400 px row and is shown in the
+		// toast when A is pressed, so the row says only what the state is.
 		labelCol = WithAlpha(ColorTextTertiary(), 180)
 		iconCol = labelCol
-		detail = "N/A"
+		detail = "Unavailable"
 	}
 
 	renderText(renderer, config, font, t.Icon, iconCol, x+8, y+10)
@@ -1231,7 +1231,7 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	if !s.Available {
 		// See drawQSToggleRow: the full reason belongs in the toast, not in a
 		// row that also has to fit its label.
-		detail = "N/A"
+		detail = "Unavailable"
 	}
 	renderText(renderer, config, font, s.Icon, iconCol, x+8, y+6)
 	renderText(renderer, config, font, ellipsize(font, s.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+6)

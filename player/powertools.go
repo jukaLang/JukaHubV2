@@ -306,7 +306,7 @@ func powerToolRows(config *Config) []powerToolRow {
 		sameValue := "No results yet"
 		sameDetail := "Run the benchmark or refresh the online board"
 		if sameModel > 0 {
-			sameValue = fmt.Sprintf("%d result(s)", sameModel)
+			sameValue = pluralizeCount(sameModel, "result", "results")
 			sameDetail = fmt.Sprintf("Best on this model: %.1f MB/s", bestSame)
 		}
 		rows := []powerToolRow{

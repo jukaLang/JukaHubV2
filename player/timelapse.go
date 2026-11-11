@@ -307,7 +307,13 @@ type timelapseRecorder struct {
 // unavailable, so callers can invoke it unconditionally and pass the result to
 // Stop, which tolerates nil.
 func startTimelapse(config *Config, title string) *timelapseRecorder {
-	settings := timelapseSettingsFor(config)
+	return startTimelapseWith(config, title, timelapseSettingsFor(config))
+}
+
+// startTimelapseWith is startTimelapse with the settings already read, for a
+// launch that runs off the render thread: timelapseSettingsFor reads the
+// config's settings map, which only the render thread may read.
+func startTimelapseWith(config *Config, title string, settings timelapseSettings) *timelapseRecorder {
 	if !settings.enabled {
 		return nil
 	}

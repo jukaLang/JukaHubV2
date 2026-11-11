@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -44,7 +45,7 @@ type webVideoPos struct {
 }
 
 // webSourceRe pulls the src of the first <source> child of a raw element.
-var webSourceRe = regexp.MustCompile(`(?i)<source[^>]*\bsrc\s*=\s*["']([^"']+)["']`)
+var webSourceRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)<source[^>]*\bsrc\s*=\s*["']([^"']+)["']`) })
 
 // webVideoHosts are the embed hosts yt-dlp supports that pages use for
 // video, matched against the URL's host suffix (dot-boundary checked).
@@ -62,7 +63,7 @@ var webVideoFileExts = []string{".mp4", ".webm", ".m3u8", ".mkv", ".mov"}
 // a <source> child first (the canonical HTML way), then the element's own
 // src attribute or its lazy-loading data-src.
 func webVideoSrcFromElement(attrs, inner string) string {
-	if m := webSourceRe.FindStringSubmatch(inner); len(m) > 1 && m[1] != "" {
+	if m := webSourceRe().FindStringSubmatch(inner); len(m) > 1 && m[1] != "" {
 		return htmlAttrValue(m[1])
 	}
 	for _, name := range []string{"src", "data-src"} {

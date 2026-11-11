@@ -60,6 +60,23 @@ func withWindowsRuntimeRoot(t *testing.T) string {
 	return dir
 }
 
+// serveHangoverArchive serves archive over HTTPS — the installer refuses
+// plain HTTP — and points the installer's client at the test certificate.
+func serveHangoverArchive(t *testing.T, archive []byte) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-tar")
+		_, _ = w.Write(archive)
+	}))
+	prev := windowsRuntimeClient
+	windowsRuntimeClient = srv.Client()
+	t.Cleanup(func() {
+		windowsRuntimeClient = prev
+		srv.Close()
+	})
+	return srv
+}
+
 // installWineRuntime must download, extract, and leave a wrapper that
 // resolveWine finds at data/windows-runtime/bin/wine.
 func TestInstallWineRuntimeFromArchive(t *testing.T) {
@@ -69,11 +86,10 @@ func TestInstallWineRuntimeFromArchive(t *testing.T) {
 		"hangover/lib/wine/libwine.so": "payload",
 		"hangover/usr/bin/other":       "x",
 	})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-tar")
-		_, _ = w.Write(archive)
-	}))
-	defer srv.Close()
+	srv := serveHangoverArchive(t, archive)
+	if err := installWineRuntime("http://127.0.0.1/hangover.tar"); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("a plain-HTTP runtime URL gave %v, want a refusal", err)
+	}
 
 	if err := installWineRuntime(srv.URL + "/hangover_11.16_debian12_bookworm_arm64.tar"); err != nil {
 		t.Fatal(err)
@@ -117,10 +133,7 @@ func TestInstallWineRuntimeRejectsTraversal(t *testing.T) {
 		"../../escaped.txt": "nope",
 		"bin/wine":          "#!/bin/sh\n",
 	})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	defer srv.Close()
+	srv := serveHangoverArchive(t, archive)
 
 	err := installWineRuntime(srv.URL + "/hangover.tar")
 	if err == nil || !strings.Contains(err.Error(), "escapes") {
@@ -203,13 +216,15 @@ func TestWineTarballSpecValidate(t *testing.T) {
 		"no version":      func(s *wineTarballSpec) { s.Version = "" },
 		"path in version": func(s *wineTarballSpec) { s.Version = "10.0/../x" },
 		"other host":      func(s *wineTarballSpec) { s.URL = "https://example.com/wine-10.0-amd64-wow64.tar.xz" },
-		"plain http":      func(s *wineTarballSpec) { s.URL = "http://github.com/Kron4ek/Wine-Builds/releases/download/10.0/wine-10.0-amd64-wow64.tar.xz" },
-		"asset mismatch":  func(s *wineTarballSpec) { s.Asset = "wine-10.0-amd64.tar.xz" },
-		"not tar.xz":      func(s *wineTarballSpec) { s.Asset = "wine.zip" },
-		"short sha":       func(s *wineTarballSpec) { s.SHA256 = "abc" },
-		"other sha":       func(s *wineTarballSpec) { s.SHA256 = strings.Repeat("0", 64) },
-		"negative size":   func(s *wineTarballSpec) { s.Size = -1 },
-		"huge size":       func(s *wineTarballSpec) { s.Size = wineMaxTarball + 1 },
+		"plain http": func(s *wineTarballSpec) {
+			s.URL = "http://github.com/Kron4ek/Wine-Builds/releases/download/10.0/wine-10.0-amd64-wow64.tar.xz"
+		},
+		"asset mismatch": func(s *wineTarballSpec) { s.Asset = "wine-10.0-amd64.tar.xz" },
+		"not tar.xz":     func(s *wineTarballSpec) { s.Asset = "wine.zip" },
+		"short sha":      func(s *wineTarballSpec) { s.SHA256 = "abc" },
+		"other sha":      func(s *wineTarballSpec) { s.SHA256 = strings.Repeat("0", 64) },
+		"negative size":  func(s *wineTarballSpec) { s.Size = -1 },
+		"huge size":      func(s *wineTarballSpec) { s.Size = wineMaxTarball + 1 },
 	}
 	for name, change := range bad {
 		spec := wineNativeSpec

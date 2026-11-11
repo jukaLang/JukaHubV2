@@ -72,13 +72,15 @@ type playtimeState struct {
 	// dirty is set when trophy events changed the snapshot since the last save,
 	// so they are written even while no time accrues (the screensaver, a game).
 	dirty bool
+	// catchUpDue is set by a load and cleared by the first second recorded on a
+	// clock that can be believed, which records quietly what the history
+	// before today earns (trophyHistoryCatchUp): the load could not judge the
+	// streaks and the last seven days on a clock still at its power-on default,
+	// nor the platinum before it knew what this setup can award.
+	catchUpDue bool
 }
 
 var playtime playtimeState
-
-// trophyBootCounted keeps the start count at one per process: playtimeInit
-// runs again after a backup restore, which is not a start.
-var trophyBootCounted bool
 
 func newPlaytimeData() playtimeData {
 	return playtimeData{
@@ -99,6 +101,13 @@ func newPlaytimeData() playtimeData {
 // the Start menu badge cached from the snapshot before it. The session's own
 // counters (the one-sitting time, the last recorded day) carry on too: a
 // restore is not a new start.
+//
+// Loading never celebrates. Retired trophies leave the record, and whatever
+// the saved history already earns — a trophy added since the last start that
+// its time, days or counts reach, one the history seed credits, one whose
+// unlock was not saved — is recorded quietly (trophyCatchUpQuietly). A start
+// used to announce a dozen of them, every start, while the record kept being
+// written back to its boot copy (saveUserConfigFile).
 func playtimeInit(config *Config) {
 	prev := playtime
 	playtime = playtimeState{data: newPlaytimeData(), rev: prev.rev,
@@ -134,17 +143,20 @@ func playtimeInit(config *Config) {
 			}
 		}
 	}
-	trophySeedFromHistory(&playtime.data, time.Now())
+	now := time.Now()
+	trophySeedFromHistory(&playtime.data, now)
+	retired := trophyRetire(&playtime.data)
+	// The cup's record may count trophies that are gone; what is earned from
+	// here on is measured from what is left.
+	trophySeenClamp(config, trophyEarnedCount(playtime.data))
+	caught := trophyCatchUpQuietly(config, &playtime.data, now)
 	playtime.loaded = true
-	playtime.lastTick = time.Now()
-	playtime.lastSave = time.Now()
+	playtime.lastTick = now
+	playtime.lastSave = now
 	playtime.rev++
-	// One start per process: main.go loads the snapshot before the first tick,
-	// and a backup restore loads it again, which is not a start.
-	if !trophyBootCounted {
-		trophyBootCounted = true
-		trophyEvent(tkBoot)
-	}
+	playtime.catchUpDue = true
+	// Saved within the interval, like a trophy event, even if no time accrues.
+	playtime.dirty = retired || caught > 0
 }
 
 // trophySeedFromHistory fills what the second trophy set reads from what a
@@ -265,16 +277,17 @@ func playtimeRecord(seconds int64, scene string) {
 	}
 	now := time.Now()
 	d := &playtime.data
-	d.Total += seconds
-	d.Scenes[scene] += seconds
 	day := playtimeTodayKey()
 	// What the second set reads off the clock — days, hours, dates — waits for
 	// a clock that has been set: a handheld boots at its RTC's default until
-	// network time arrives.
+	// network time arrives. The day is noted before this second is added: a
+	// seed it takes then is history, recorded quietly, and this second is not.
 	sane := trophyClockSane(now)
 	if sane {
 		trophyNoteSaneDay(d, day, now)
 	}
+	d.Total += seconds
+	d.Scenes[scene] += seconds
 	d.Days[day] += seconds
 	playtimeRunNote(day, seconds)
 	if sane {
@@ -327,14 +340,41 @@ func trophyClockSane(t time.Time) bool {
 }
 
 // trophyNoteSaneDay counts day into the lifetime record once the clock is
-// known to be set. The start's seed may have seen an unset clock and taken
-// nothing from the 90-day window; the record then takes it now, before the
-// day itself is counted.
+// known to be set. The first such second after a load catches up on the
+// history first (trophyHistoryCatchUp) — the start's seed may have seen an
+// unset clock and taken nothing from the 90-day window — and then today is
+// counted like any day.
 func trophyNoteSaneDay(d *playtimeData, day string, now time.Time) {
-	if d.Life.Last == "" {
-		trophyLifeSeed(d, now)
+	if d.Life.Last == "" || playtime.catchUpDue {
+		trophyHistoryCatchUp(d, day, now)
 	}
 	trophyNoteDay(d, day)
+}
+
+// trophyHistoryCatchUp records quietly, as a load does, what the days before
+// today earn: the lifetime record seeded from the 90-day window when it has
+// none, the streaks, the last seven days, the calendar, and the platinum now
+// that this setup's trophies are known. Today stays out of it: network time
+// moves the seconds this run counted under the power-on date into today's key
+// (playtimeReanchorDays), and what today completes is announced as it happens.
+// d's maps are shared with the copy the history is read from, so the unlocks,
+// flags and weekdays land in d; the seeded record is copied back.
+func trophyHistoryCatchUp(d *playtimeData, day string, now time.Time) {
+	playtime.catchUpDue = false
+	hist := *d
+	hist.Days = make(map[string]int64, len(d.Days))
+	for k, v := range d.Days {
+		if k != day {
+			hist.Days[k] = v
+		}
+	}
+	if d.Life.Last == "" {
+		trophyLifeSeed(&hist, now)
+		d.Life = hist.Life
+	}
+	trophyCatchUpQuietly(appConfig, &hist, now)
+	// A map the copy had to create (one d did not have yet) is d's now too.
+	d.Unlocked, d.Counts, d.Sets = hist.Unlocked, hist.Counts, hist.Sets
 }
 
 // playtimeCrossedMidnight reports whether the day key moved forward between
@@ -571,14 +611,16 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 		playtime.data.Unlocked = map[string]string{}
 	}
 	d := &playtime.data
-	d.Games[title] += secs
-	d.GameDays[playtimeTodayKey()] += secs
-	d.Total += secs
 	day := playtimeTodayKey()
+	// The day first, as in playtimeRecord: a seed it takes is history, recorded
+	// quietly, and this session's trophies are announced below.
 	sane := trophyClockSane(gapEnd)
 	if sane {
 		trophyNoteSaneDay(d, day, gapEnd)
 	}
+	d.Games[title] += secs
+	d.GameDays[day] += secs
+	d.Total += secs
 	d.Days[day] += secs
 	playtimeRunNote(day, secs)
 	// The second set's game trophies: the lifetime game time (the ledger above
@@ -997,11 +1039,13 @@ func playtimeSceneSeconds(d playtimeData, scene string) int64 {
 	return total
 }
 
-// daysUsed counts the days the app was used at all.
+// daysUsed counts the days the app was used at all. A date before JukaHub
+// existed is a clock still at its power-on default, not a day: counted, a
+// second start before network time could award the next "days" trophy.
 func daysUsed(d playtimeData) int {
 	n := 0
-	for _, seconds := range d.Days {
-		if seconds > 0 {
+	for day, seconds := range d.Days {
+		if seconds > 0 && day >= trophyFirstDay {
 			n++
 		}
 	}
@@ -1264,9 +1308,9 @@ var playtimeHiddenTrophies = map[string]bool{
 }
 
 // playtimeAchievementCount is what the room's totals and the tests use: the 100
-// trophies of the original set, the 300 of the second (trophy_set2.go) and the
+// trophies of the original set, the 285 of the second (trophy_set2.go) and the
 // platinum.
-const playtimeAchievementCount = 401
+const playtimeAchievementCount = 386
 
 // trophyPlatinumID is the platinum: earned for every other trophy.
 const trophyPlatinumID = "platinum"
@@ -1350,6 +1394,10 @@ func buildPlaytimeAchievements() []playtimeAchievement {
 	// count, and the unlock pass walks the list in order, so each one sees the
 	// unlocks before it. The rungs past 90 came with the second set; the
 	// availability pass drops any a setup offers too few trophies to reach.
+	// The top rung must stay under the 372 trophies that are neither the
+	// platinum nor a bonus one (a rung does not count itself, and no setup
+	// offers them all): after the 2026-11-11 cut a 375 rung was one no setup
+	// could ever offer.
 	ladder := []struct {
 		n    int
 		tier trophyTier
@@ -1358,7 +1406,7 @@ func buildPlaytimeAchievements() []playtimeAchievement {
 		{50, trophyGold}, {60, trophyGold}, {70, trophyGold}, {80, trophyGold}, {90, trophyGold},
 		{100, trophyGold}, {125, trophyGold}, {150, trophyGold}, {175, trophyGold}, {200, trophyGold},
 		{225, trophyGold}, {250, trophyGold}, {275, trophyGold}, {300, trophyGold}, {325, trophyGold},
-		{350, trophyGold}, {375, trophyGold},
+		{350, trophyGold},
 	}
 	for _, step := range ladder {
 		list = append(list, trophyNew(
@@ -1458,34 +1506,119 @@ func trophyIndexByID(id string) int {
 
 // playtimeCheckAchievements awards every trophy the snapshot now earns and
 // announces them (trophyAnnounceBatch: one by one, or as one notification for
-// a burst). The stats are measured once for the whole pass; the collection
-// trophies and the platinum see the unlocks made earlier in it.
+// a burst).
 func playtimeCheckAchievements() {
-	if playtime.data.Unlocked == nil {
-		playtime.data.Unlocked = map[string]string{}
+	if awarded := trophyUnlockPass(&playtime.data, time.Now()); len(awarded) > 0 {
+		playtime.rev += uint64(len(awarded))
+		trophyAnnounceBatch(awarded)
 	}
-	now := time.Now()
-	st := trophyStatsOf(playtime.data, now)
+}
+
+// trophyUnlockPass records in d every trophy it now earns, stamped now, and
+// returns them in the set's order. The stats are measured once for the whole
+// pass; the collection trophies and the platinum see the unlocks made earlier
+// in it.
+func trophyUnlockPass(d *playtimeData, now time.Time) []playtimeAchievement {
+	if d.Unlocked == nil {
+		d.Unlocked = map[string]string{}
+	}
+	st := trophyStatsOf(*d, now)
 	var awarded []playtimeAchievement
 	for i := range playtimeAchievements {
 		a := &playtimeAchievements[i]
-		if _, ok := playtime.data.Unlocked[a.ID]; ok {
+		if _, ok := d.Unlocked[a.ID]; ok {
 			continue
 		}
-		cur, goal := trophyProgressWith(a, playtime.data, &st)
+		cur, goal := trophyProgressWith(a, *d, &st)
 		if goal <= 0 || cur < goal {
 			continue
 		}
-		playtime.data.Unlocked[a.ID] = now.Format(time.RFC3339)
+		d.Unlocked[a.ID] = now.Format(time.RFC3339)
 		if a.Metric != trophyMetricPlatinum {
 			st.earned++
 		}
-		playtime.rev++
 		awarded = append(awarded, *a)
 	}
-	if len(awarded) > 0 {
-		trophyAnnounceBatch(awarded)
+	return awarded
+}
+
+// trophyCatchUpQuietly records what d already earns without a celebration: a
+// card, a sound or a notification row for something nobody did just now would
+// only say "you started JukaHub". The cup does not count them either
+// (trophySeenSkip). It is for a loaded record (playtimeInit) and the history
+// the lifetime seed credits once the clock is set; a trophy earned by what
+// happens from then on is announced as ever. It returns how many it recorded.
+func trophyCatchUpQuietly(config *Config, d *playtimeData, now time.Time) int {
+	n := len(trophyUnlockPass(d, now))
+	if n > 0 {
+		trophySeenSkip(config, n)
 	}
+	return n
+}
+
+// trophyRetiredIDs are the trophies taken out of the set on 2026-11-11 (see
+// trophy_set2.go): second-set rows any long-time user's history already met,
+// so all of them came at once on the first start after the update — time with
+// JukaHub open, a second day and a second day in a row, Home left on, three
+// screens — the "Start JukaHub N times" counts, and the 375 rung the cut left
+// out of reach. An id here may never be used again: a save can still hold its
+// unlock.
+var trophyRetiredIDs = []string{
+	"two_hours", "three_hours", "two_days", "five_days", "run_2", "best_day_3h", "best_day_6h",
+	"week_1h", "explorer_3", "home_1h", "home_10h", "boot_10", "boot_100", "boot_1000", "badges_375",
+}
+
+// trophyRetiredKeys are counters no trophy reads any more ("boot", the start
+// count).
+var trophyRetiredKeys = []string{"boot"}
+
+// trophyRetire drops the retired trophies' unlocks and counters from d, then
+// takes back a collection trophy the unlocks left no longer reach — one only
+// the retired trophies had made up. The rungs are replayed the way the unlock
+// pass counts: every other earned trophy, each kept rung below included. It
+// reports whether d changed.
+func trophyRetire(d *playtimeData) bool {
+	changed := false
+	for _, id := range trophyRetiredIDs {
+		if _, ok := d.Unlocked[id]; ok {
+			delete(d.Unlocked, id)
+			changed = true
+		}
+	}
+	for _, key := range trophyRetiredKeys {
+		if _, ok := d.Counts[key]; ok {
+			delete(d.Counts, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return false
+	}
+	earned := int64(0)
+	for i := range playtimeAchievements {
+		a := &playtimeAchievements[i]
+		if a.Metric == trophyMetricPlatinum || a.Metric == trophyMetricTrophies {
+			continue
+		}
+		if _, ok := d.Unlocked[a.ID]; ok {
+			earned++
+		}
+	}
+	for i := range playtimeAchievements {
+		a := &playtimeAchievements[i]
+		if a.Metric != trophyMetricTrophies {
+			continue
+		}
+		if _, ok := d.Unlocked[a.ID]; !ok {
+			continue
+		}
+		if earned >= a.Goal {
+			earned++
+		} else {
+			delete(d.Unlocked, a.ID)
+		}
+	}
+	return true
 }
 
 // ── Availability ──────────────────────────────────────────────────────────────
@@ -1697,7 +1830,7 @@ func trophySummary() (earned, shown int) {
 }
 
 // trophySummaryBadge is the short count a menu row shows beside "Trophies",
-// "12/401", or "" before there is anything to count.
+// "12/386", or "" before there is anything to count.
 func trophySummaryBadge() string {
 	earned, shown := trophySummary()
 	if shown <= 0 {

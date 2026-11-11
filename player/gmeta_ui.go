@@ -539,6 +539,12 @@ func gmetaPlay(st *gmetaState) {
 	gameLib.recents = recentGames()
 	gmetaUI.launched = time.Now()
 	PlaySuccessSound()
+	if game.System == androidLibrarySystem {
+		// Staged in the background first; a failure opens the launch-failure
+		// dialog (launchAndroidLibraryGame).
+		ShowToast("Starting "+game.Title+"…", ToastKindSuccess)
+		return
+	}
 	ShowToast("Playing "+game.Title+suffix, ToastKindSuccess)
 }
 

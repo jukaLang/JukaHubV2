@@ -11,7 +11,246 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Fixed
+
+- **An x86-64 PC no longer asks for Box64 to run its own Wine.** A Wine on
+  `PATH` is used as before; without one, Setup's first row installs the same
+  Wine 10.0 build natively, pinned to its published SHA-256
+  ([player/gameprofiles.go](player/gameprofiles.go),
+  [player/wine_pack.go](player/wine_pack.go)).
+- **The Smart Pro no longer installs Hangover, which its firmware cannot
+  load.** Hangover needs glibc 2.36 and the Smart Pro has 2.33: an existing
+  copy the firmware refuses is removed (about 2.5 GB) before the new runtime is
+  unpacked, and its wrapper no longer counts as an installed Wine. Hangover is
+  opt-in now (`JUKAHUB_WINE_FLAVOR=hangover`), HTTPS only, and its download is
+  no longer cut off after 30 seconds
+  ([player/windows_runtime_install.go](player/windows_runtime_install.go)).
+- **Runtime archives unpack on exFAT and FAT cards.** Hard links inside an
+  archive are copied, and a link the card cannot hold is skipped and logged
+  instead of failing the install; each install still checks its essential files
+  afterwards
+  ([player/windows_runtime_install.go](player/windows_runtime_install.go)).
+- **A WestonPack that resets every device is refused.** CrossMix's preview
+  build runs a bare `udevadm trigger`, after which the stock firmware unmounts
+  the SD card JukaHub runs from; JukaHub refuses it with the reason, no longer
+  counts it as installed, and Setup fetches the official build
+  ([player/wine_display.go](player/wine_display.go),
+  [player/wine_runtime.go](player/wine_runtime.go)).
+- **An empty or broken `Apps/AndroidRT` no longer hides the AndroidRT that
+  ships with JukaHub.** A folder counts only when its loader can start on this
+  firmware (CPU and glibc checked as for emulator cores) or it has `launch.sh`;
+  the folders passed over are named, and a loader that lost its execute
+  permission is repaired before launch
+  ([player/androidpak.go](player/androidpak.go),
+  [player/androidrt/launch.sh](player/androidrt/launch.sh)).
+- **xemu installs can no longer take the debug build.** Debug builds and symbol
+  files are never picked, xemu's versioned asset names are matched beside the
+  old ones, and a Windows-on-ARM build of JukaHub takes xemu's ARM64 build
+  ([player/emuwininstall.go](player/emuwininstall.go)).
+- **A final release beats its release candidate.** Updates read `0.1.3-rc1` as
+  newer than `0.1.3` and offered it; release numbers now come first and a
+  pre-release ranks below its final release, for hakuX and every Windows
+  emulator ([player/emuwininstall.go](player/emuwininstall.go),
+  [player/hakux.go](player/hakux.go)).
+- **hakuX housekeeping (XBX-6).** R1 no longer freezes the screen while it
+  restores files; files a newer package dropped move into the kept copy, and R1
+  puts them back, instead of lingering in `Data/`; the launcher a folder's
+  `config.json` names is honoured; and a different release that is not newer no
+  longer "repairs" the install ([player/hakux.go](player/hakux.go),
+  [player/hakuxpage.go](player/hakuxpage.go)).
+- **Install failures say what went wrong.** A damaged or cut-off download, full
+  storage, an unusable archive or a clock that breaks the secure connection
+  (the TrimUI loses its time) is named in plain words for every emulator
+  install ([player/emuwininstall.go](player/emuwininstall.go)).
+- **Rolling back waits for a running update.** R1 on a Windows emulator, hakuX
+  or a core, and a kept build on the Core builds page, now take the lock
+  installs hold, so a rollback can no longer mix two versions in one folder;
+  meanwhile they say "An update is running — roll back when it finishes", and a
+  Windows emulator's rollback runs off the screen thread
+  ([player/emuwininstall.go](player/emuwininstall.go),
+  [player/emulatorinstall.go](player/emulatorinstall.go),
+  [player/corebuilds_ui.go](player/corebuilds_ui.go)).
+- **The Core builds page no longer says "Auto-update on" on a Linux desktop.**
+  Nothing updates by itself there
+  ([player/corebuilds_ui.go](player/corebuilds_ui.go)).
+- **Starting JukaHub no longer hands out trophies.** Every start awarded the
+  same dozen at once — Warming Up, Settling In, Came Back, High Five, Back to
+  Back, Triple Feature, Long Haul, Weekly Check-In, Look Around, Homebody and
+  Home Owner, plus the collection rungs they pushed you past — because an old
+  save's history already met them. Those eleven are gone, with the three
+  "Start JukaHub N times" trophies and the 375 rung the cut left out of reach:
+  386 trophies now. What a loaded save already earns is recorded quietly — no
+  card, no notification row, no count on the trophy cup — and a save's unlocks
+  of the retired trophies are dropped, with any collection rung only they had
+  made up ([player/trophy_set2.go](player/trophy_set2.go),
+  [player/playtime.go](player/playtime.go),
+  [player/header_trophy.go](player/header_trophy.go)).
+- **What changed in a session survives the restart.** A favourites or chat
+  save wrote the user settings as they were read at boot (the cache keeps them
+  for its sections) over everything saved since — every five seconds while a
+  video played, and at every exit right after the playtime was saved — so
+  jukauser.json went back to its boot state: settings, recent searches, the
+  trophy cup's record and the trophies themselves, which the next start then
+  awarded again. A section save now writes the newest full save's settings and
+  never takes the debounced slot from a full save waiting there; the LED panel,
+  the telemetry switch and the Power tools sync paths save the live config
+  instead of the boot copy; and every save writes the Netplay switch, not only
+  Quick Settings ([player/extras.go](player/extras.go),
+  [player/ledpanel.go](player/ledpanel.go),
+  [player/telemetry.go](player/telemetry.go),
+  [player/powertools_backend.go](player/powertools_backend.go)).
+- **No `(s)` plurals and no `N/A` in the UI.** Counts read "1 file" /
+  "2 files" through `pluralizeCount` (BIOS Doctor, the compatibility report,
+  Emulators, game profiles, Ports, Saves, Windows apps, curation, the Patch
+  engine and more), a hardware reading that found nothing says "Unknown"
+  (`hwUnknown`) instead of "N/A", Quick Settings rows say "Unavailable", and
+  footer hints name "D-Pad", "Up/Down" and "Left/Right" instead of arrow
+  glyphs (Screen Share, Clipboard, the memory tool, Music, the terminal and
+  JukaLand), and the brightness, volume and onboarding footers spell them
+  `Left/Right` and `Up/Down` (UX-3, UX-13).
+- **Regexps compile on first use.** The last package-level patterns in
+  `package main` — Chat's links and mentions, label substitution, the APK
+  store's ID and digest checks, bluetoothctl parsing, disc and PPSSPP version
+  parsing, the theme and Xbox asset checks and the per-track rip match — are
+  `sync.OnceValue`, so boot no longer compiles patterns a session may never
+  reach (PERF-16).
+- **Attribute values serialize like a browser's.** The Browser's DOM prelude
+  escapes `<` and `>` in attribute values in `innerHTML`/`outerHTML`, matching
+  jsdom and the current HTML serialization rules, so a value such as
+  `title="<b>"` can no longer be read back as markup by a page or by the
+  reader's tag scanner (found by `make check`'s WebDOM parity suite).
+
 ### Added
+
+- **Windows programs on the Smart Pro.** Windows Apps now runs `.exe` programs
+  under Box64 and Wine 10.0. One press — **A** on a program, or Setup's first
+  row — installs everything, with progress on the page: JukaHub's own Box64
+  build (`JukaHub-Wine-linux-arm64.zip` from JukaHub's releases, checked
+  against the signed manifest or GitHub's digest and its `SHA256SUMS`, and
+  started once before it replaces anything), Kron4ek's Wine 10.0 WoW64 build
+  for 32- and 64-bit programs (checked against its pinned SHA-256 and unpacked
+  in-process; Wine 11 is refused, as it aborts on the handheld's 4.9 kernel),
+  WestonPack, and a Windows folder prepared once without a display; then the
+  program starts. About 130 MB is downloaded and about 700 MB of space used.
+  Box64 runs with its own `box64.box64rc` and with its DynaCache off (Box64
+  0.4.4 writes up to 2 GB of cache, and a stale one has crashed Wine's
+  first-run setup), and the wrappers run through `sh`, so a card that drops the
+  execute bit cannot stop them. Nothing from this pass — Windows apps, Android,
+  Xbox, emulator updates — has run on a handheld yet
+  ([player/wine_pack.go](player/wine_pack.go),
+  [player/windows_runtime_install.go](player/windows_runtime_install.go),
+  [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)).
+- **WestonPack puts Windows programs on the handheld's screen.** JukaHub uses
+  its own copy or PortMaster's image when the card has one, otherwise downloads
+  it from PortMaster's repository and checks that it is a real SquashFS image;
+  it mounts the image read-only for the program, labels input devices for udev
+  so Weston starts on the stock TrimUI firmware, and cleans up and unmounts
+  afterwards. **Y** on a program switches it between Windows (GDI) and OpenGL
+  display, a Wine game profile can ask for `"display": "weston-gl"`, and
+  `data/windows-runtime/weston.env` tries other WestonPack modes without a
+  rebuild ([player/wine_display.go](player/wine_display.go),
+  [player/windowsapps.go](player/windowsapps.go)).
+- **The pad is a mouse and keyboard in Windows programs.** The sticks move the
+  pointer, A / B / X click left, right and middle (hold A to drag), L2 / R2
+  scroll, the D-pad types arrows, Y is Esc, Start Enter, L1 Tab, R1 Space and
+  Select + Start Alt+F4; holding Select + Start for 2 seconds ends a stuck
+  program, and Select + L1 hands the pad to the program as a gamepad and back.
+  The mouse and keys stay quiet until the program has started, so they cannot
+  press anything in JukaHub
+  ([player/vcursor_bridge_linux.go](player/vcursor_bridge_linux.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md)).
+- **Windows Apps on Windows.** The Start menu and the Emulators page open
+  Windows Apps on a PC too: it lists the `.exe`, `.bat` and `.cmd` files in
+  `%APPDATA%\JukaHub\windows-apps` and runs them directly, with nothing to
+  install, and Wine game profiles run directly there and are listed as ready
+  ([player/windowsapps.go](player/windowsapps.go),
+  [player/gameprofiles.go](player/gameprofiles.go)).
+- **AndroidRT ships with JukaHub.** Every TrimUI archive carries the
+  Android-app runtime beside the binary (`Apps/JukaHub/androidrt`), where
+  JukaHub finds it. Without it, the APK Store's Runtime tab installs it from
+  JukaHub's releases — checked against the signed manifest or GitHub's digest
+  and its `SHA256SUMS`, and kept only if its loader starts on the device — and
+  offers its updates; **Play** or **Add** on a game with no runtime installs it
+  with one press and then plays or adds the game (only while the store is still
+  on screen). Nothing downloads without that press or the Emulator updates
+  setting ([player/androidrt_install.go](player/androidrt_install.go),
+  [player/relpack.go](player/relpack.go),
+  [player/apkstore.go](player/apkstore.go),
+  [docs/ANDROID.md](docs/ANDROID.md)).
+- **Android games in the Games Library (AND-16).** Games added in the APK Store
+  appear on the library's own **Android** row with the APK's label and launcher
+  icon, start through the game-profile path, show on Home's Continue card and
+  leave the row when the store removes them. Each APK keeps its own cover
+  (games pulled from a phone are all called `base.apk`), the toast says
+  "Starting" until the game is up, and a second Play while it starts says so
+  instead of starting it twice
+  ([player/game_library_androidgames.go](player/game_library_androidgames.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md)).
+- **Xbox 360 on Windows.** The Emulators page installs Xenia Canary from its
+  official releases (the digest-checked 7z; each Canary build is its own
+  release, so a new build shows as an update and R1 rolls it back), and
+  `Roms/XBOX360` becomes the Games Library's Xbox 360, whose games start full
+  screen. A PC without the Visual C++ Redistributable gets a hint, never a
+  block; on the handheld the folder says what Xbox 360 needs (an x86-64 PC with
+  AVX and D3D12 or Vulkan) ([player/emuwininstall.go](player/emuwininstall.go),
+  [player/emusystems.go](player/emusystems.go),
+  [player/game_library.go](player/game_library.go)).
+- **xemu sets itself up.** Starting xemu, from its tile or the library, writes
+  the Xbox files the setup sheet found into the `xemu.toml` xemu reads, filling
+  only missing or dead entries (a relative path counts from xemu's folder); a
+  game started without the MCPX boot ROM, the flash ROM or the HDD image says
+  which file is missing and where it goes; library games start full screen. On
+  Windows the setup sheet looks at the folder again every few seconds, shows
+  the running download and offers **Install xemu**, and the Games Library tells
+  Xbox players to install xemu instead of hakuX
+  ([player/emuxbox.go](player/emuxbox.go),
+  [player/hakuxpage.go](player/hakuxpage.go)).
+- **Emulator updates keep everything JukaHub installed current.** The daily
+  pass (Settings → Games & emulators → Emulator updates) now brings hakuX, the
+  Windows-app runtime and AndroidRT forward after the cores, never while one of
+  them is in use, at the same quiet moment and under one install card and one
+  toast, and stops when a game starts. On a PC it updates the emulators JukaHub
+  installed (Xenia Canary included) and its own RetroArch's cores — never while
+  one of them runs, under a full-screen game or within 3 minutes of input
+  anywhere on the PC, and on a laptop's battery only when three days overdue —
+  keeping the old version for Roll back. A build you rolled back from is not
+  installed again (one rolled back before this update may come back once with
+  the first pass; roll back again and it stays), and Notify me names each new
+  build once and installs nothing
+  ([player/emuautoupdate_runtimes.go](player/emuautoupdate_runtimes.go),
+  [player/emuautoupdate_desktop.go](player/emuautoupdate_desktop.go),
+  [player/emuautoupdate_hakux.go](player/emuautoupdate_hakux.go)).
+- **CI builds AndroidRT for the handheld.** The Remote Play helper job builds
+  AndroidRT natively on arm64 in its Ubuntu 20.04 root (glibc 2.31) and checks
+  it — AArch64, nothing needed but the C library, no glibc symbol newer than
+  2.31, the TLS slot NDK code reads, `loader --version` starts — and runs its
+  host smoke suite there as an advisory step. `JukaHub-Trimui.zip`, the release
+  script's five device archives and the SD-card package carry it as
+  `androidrt/`, and each release also attaches
+  `JukaHub-AndroidRT-linux-arm64.zip` (one `androidrt/` folder with
+  `BUILDINFO.txt` and a `SHA256SUMS` of every file)
+  ([player/native/build-runtimes.sh](player/native/build-runtimes.sh),
+  [.github/workflows/remote-play-helpers.yml](.github/workflows/remote-play-helpers.yml)).
+- **CI builds a Box64 for the handheld.** `wine-runtime.yml` builds Box64
+  v0.4.4 in the same kind of root — fetched by the full id of its release
+  commit; a generic ARM64 build without BOX32, since Wine's WoW64 build runs
+  32-bit programs under Box64 alone — holds it to the same checks
+  (`box64 --version` must name 0.4.4) and attaches
+  `JukaHub-Wine-linux-arm64.zip` to the release: `box64`, the x86-64 libraries
+  it installs for itself, its default settings and licence, and a `wine.json`
+  naming Kron4ek's Wine 10.0 WoW64 build with its pinned SHA-256. An advisory
+  step starts `box64 wine --version` on the runner. Neither pack has come out
+  of a green CI run yet
+  ([player/native/build-runtimes.sh](player/native/build-runtimes.sh),
+  [.github/workflows/wine-runtime.yml](.github/workflows/wine-runtime.yml)).
+- **The static checker ships with the repo.** `tools/gocheck/` holds
+  `gocheck.py`, `alignchk.py` and `importchk.py` with a README, so a checkout
+  without a Go toolchain runs the same syntax, scope, alignment and import
+  checks the `tmp/` copy did (TEST-6).
+- **A broken doc link fails `make check`.** `tests/scripts/docs-links.py`
+  checks every relative link in every `*.md` outside `node_modules`/`vendor`
+  and names the file and target when one does not resolve; `make docs-links`
+  runs it alone (TEST-7).
 
 - **A VPN for the whole device.** Settings → Network → VPN sends all traffic —
   games and netplay, the browser, YouTube, downloads, Remote Play away from
@@ -21,19 +260,23 @@ For anything older, the git log and the
   phone companion's new VPN card (paste or pick the file). **Send through the
   VPN** is Everything (the default; the Wi-Fi network itself stays reachable)
   or only the networks the file lists; the file's DNS servers answer every
-  lookup meanwhile, and IPv6 cannot slip past an IPv4-only tunnel. Quick
-  Settings has the switch, and the Wi-Fi meter wears a lock — in the warning
-  colour while the VPN is on but not connected. On the handheld JukaHub runs
-  its own WireGuard in a small root process (`JukaHub --vpn-daemon`) that makes
-  the `jukavpn0` interface, routes `0.0.0.0/1` + `128.0.0.0/1` into it, keeps
-  its own packets on Wi-Fi with `SO_BINDTODEVICE`, puts `resolv.conf` back
-  even after a crash, survives Remote Play's screen handoff and stops with the
-  JukaHub session; handshake timestamps never go backwards, so a handheld that
-  boots in the past is not refused. The handshake and transport were checked
-  byte for byte against the Linux kernel's WireGuard (`tmp/wgref`,
-  `wg_test.go`). On Windows the tunnel is WireGuard for Windows' service,
-  installed and removed through one permission prompt. The configuration
-  lives in `data/vpn.json`, never in `jukauser.json` or backups
+  lookup meanwhile, IPv6 cannot slip past an IPv4-only tunnel, and broadcast
+  and multicast stay on the Wi-Fi so LAN play and device discovery still work.
+  Quick Settings has the switch, and the Wi-Fi meter wears a lock — in the
+  warning colour while the VPN is on but not connected. On the handheld
+  JukaHub runs its own WireGuard in a small root process
+  (`JukaHub --vpn-daemon`) that makes the `jukavpn0` interface, adds
+  `0.0.0.0/1` + `128.0.0.0/1` beside the network's routes, keeps its own
+  packets on Wi-Fi with `SO_BINDTODEVICE` (bound again when the network or the
+  Wi-Fi driver changes), puts `resolv.conf` back even after a crash, survives
+  Remote Play's screen handoff and stops with the JukaHub session; handshake
+  timestamps never go backwards, so a handheld that boots in the past is not
+  refused. The handshake and transport were checked byte for byte against the
+  Linux kernel's WireGuard, and the routes in a network namespace
+  (`tmp/wgref`, `wg_test.go`). On Windows the tunnel is WireGuard for
+  Windows' service, changed only through a permission prompt naming JukaHub,
+  with the key in an administrators-only folder. The configuration lives in
+  `data/vpn.json`, never in `jukauser.json` or backups
   ([player/vpn.go](player/vpn.go), [player/vpnd_linux.go](player/vpnd_linux.go),
   [player/wg_device.go](player/wg_device.go), [docs/VPN.md](docs/VPN.md)).
 
@@ -226,6 +469,56 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Wine's Windows folder lives where symbolic links work.** A Wine prefix
+  needs links, which the exFAT/FAT card cannot hold, so JukaHub uses, in order:
+  `JUKAHUB_WINEPREFIX`, a profile's own prefix, `data/windows-runtime/prefix`
+  on a card that takes links, the Smart Pro's internal storage
+  (`/mnt/UDISK/jukahub/wine-prefix`, with 1 GB free), or a 1–2 GB ext4 image on
+  the card, mounted only while a program runs. An existing prefix is kept, and
+  Windows is prepared once without a display, so later starts are quick
+  ([player/wine_prefix.go](player/wine_prefix.go)).
+- **DXVK only where it can run.** Wine's own Direct3D is the default; an
+  installed DXVK is used only when this device's Vulkan driver can run its
+  version (2.x needs Vulkan 1.3, 1.x needs 1.1), and its DLLs are now copied
+  into the prefix, so an enabled DXVK actually loads. A PC whose driver reports
+  Vulkan 1.3 gets the latest DXVK automatically, and a failed DXVK download no
+  longer keeps a program from starting; on the Smart Pro (Vulkan 1.1) Setup
+  offers DXVK 1.10.3 as an experiment, installed on a second press
+  ([player/wine_runtime.go](player/wine_runtime.go),
+  [player/windows_runtime_install.go](player/windows_runtime_install.go)).
+- **A Windows program starts in the background.** Its row says **Starting…**
+  with the step on its second line ("Preparing Windows…" for a few minutes the
+  first time), the list stays open and is back when the program ends, and one
+  Windows program runs at a time. Wine game profiles start the same way, with
+  the same runtime, display, pad and clean-up, and a failure of either opens
+  the launch-failure card with the log. A start is refused with a note while
+  the runtime is being installed or updated, Install & Run starts the program
+  only if Setup is still open when the install ends, and a game started
+  meanwhile keeps the screen. The game power profile covers the session, and
+  Rescan moved to **Start** ([player/windowsapps.go](player/windowsapps.go),
+  [player/windowsapps_ui.go](player/windowsapps_ui.go)).
+- **Android games draw through the firmware's SDL2 on stock TrimUI.** On the
+  PowerVR models (Smart Pro, Brick, Brick Pro, Hammer) AndroidRT now starts on
+  its SDL-hosted backend, because other ports found raw EGL stays black there;
+  the Smart Pro S (Mali) keeps the native one, and `ANDROIDPAK_PRESENT=native`
+  brings the old path back
+  ([player/androidrt/src/eglpresent.c](player/androidrt/src/eglpresent.c),
+  [docs/ANDROID.md](docs/ANDROID.md)).
+- **Big Android games stay on the card.** When a game's assets unpack to more
+  than 64 MiB they are read from the APK on the card instead of being copied
+  into memory, so games with hundreds of MB of assets pass the memory check;
+  `JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB=0` now really turns that check off, as its
+  refusal says ([player/androidpak.go](player/androidpak.go)).
+- **The Emulator updates setting says what it covers.** Its Settings row, the
+  boot card, the Core builds page and a one-time notice name what updates on
+  this device, and the row now shows on Windows. The pass and the Emulators
+  page's check ask GitHub about each project once per pass and wait an hour
+  after GitHub refuses a lookup instead of failing one by one
+  ([player/emulatorautoupdate.go](player/emulatorautoupdate.go),
+  [player/emuupdatecheck.go](player/emuupdatecheck.go)).
+- **The weekly checks run AndroidRT's host smoke suite (TEST-4).** It stays
+  advisory until it has been green on the runner's compiler
+  ([.github/workflows/weekly.yml](.github/workflows/weekly.yml)).
 - **CI checks less on every push, and the test suite is back to its core.** A
   push or pull request now runs two CI jobs — the web builder checks, and the
   player's `go vet`, staticcheck and `go test` — instead of eight, beside the
@@ -379,30 +672,31 @@ For anything older, the git log and the
 
 ### Added
 
-- **300 more trophies — 401 in all.** The first hundred only counted time; the
+- **285 more trophies — 386 in all.** The first hundred only counted time; the
   new ones count what you do: games launched, finished and played on different
   systems, the minigames' best scores (Snake, Tetris lines and four-line clears,
   the 2048 tile, Pong goals, Minesweeper boards, Flappy pipes), blocks placed
   and ores mined in JukaLand, tracks and artists, videos and Shorts, downloads
   and gigabytes, web pages and sites, ads blocked, chat messages, files copied,
   moved and extracted, Terminal commands, Pomodoros, alarms, screenshots,
-  starts, themes, wallpapers and Home edits — plus the clock (Night Owl, Dawn
+  themes, wallpapers and Home edits — plus the clock (Night Owl, Dawn
   Patrol, weekends, staying up past midnight, the longest sitting), the
   calendar (New Year's Day, Pi Day, Halloween, a Friday the 13th, your
   Hubiversary…), every day JukaHub was ever used, the longest run of days, a
-  visit to each screen and twelve more collection rungs, up to 375. Features
+  visit to each screen and eleven more collection rungs, up to 350. Features
   report what happens through a small goroutine-safe API that the tracker folds
   into the saved playtime record; distinct things (sites, games, networks) are
   kept as hashes, never as names, and dates from a clock that was never set
   (a handheld before network time) are not believed. An old save is credited
-  from what it already holds — the last 90 days and the per-game time — and a
-  burst of unlocks gets its cards, the rarest first, and one notification row
-  instead of dozens. A trophy that needs something this setup lacks (Remote
+  from what it already holds — the last 90 days and the per-game time —
+  without a celebration, and a burst of unlocks earned in play gets its cards,
+  the rarest first, and one notification row instead of dozens. A trophy that
+  needs something this setup lacks (Remote
   Play or Bluetooth on Windows, an AI key, a Home Assistant server, a
   RetroAchievements account) stays out of the room until it has it, and
   **bonus** trophies (another device, another player, more controllers, a leap
   day) do not hold up the platinum. The room gets a **Category** chip: a list
-  of the 24 groups with "12 of 40 earned" each, so 401 cards stay browsable
+  of the 24 groups with "12 of 40 earned" each, so 386 cards stay browsable
   ([player/trophy_set2.go](player/trophy_set2.go),
   [player/trophy_events.go](player/trophy_events.go),
   [player/playtime.go](player/playtime.go),
@@ -1749,7 +2043,7 @@ For anything older, the git log and the
   follower" alerts in the real notification centre. The generator, its
   settings row, its panel and its `socialNotifs` key are deleted; older
   configs drop the key instead of re-saving it
-  ([player/social.go](player/social.go) removed).
+  (`player/social.go` removed).
 
 ### Fixed
 
@@ -2511,6 +2805,33 @@ For anything older, the git log and the
   job that calls a workflow of this repository grants less than that workflow
   asks for, which GitHub answers by refusing the whole run before it starts.
 
+- **JukaHub-Trimui.zip no longer waits for the Box64 build, and the Remote Play
+  helpers build faster and less often.** The helpers' arm64 job had grown into
+  one long queue (the Ubuntu 20.04 build root, the helpers, AndroidRT, then
+  about ten minutes of Box64 and a Wine start-up check), and the TrimUI
+  packaging job waited for all of it, although the Box64 pack is not in the
+  archive. Box64 now builds in a workflow of its own on a runner of its own,
+  started with everything else, and a small job attaches its pack to the
+  release whenever it is ready: neither the TrimUI archive nor the
+  publication waits for it (JukaHub installs the pack from the newest release
+  that carries one). The reuse keys of the three parts no longer hash the
+  workflow file, which every one of the last four pushes had edited: what
+  decides a build's output (the build root and the command that builds each
+  part in it) moved into `.github/scripts/build-root.sh`, and the keys hash
+  that instead, so an edit to a workflow costs no rebuild. In a helper build,
+  SDL2, opus, FFmpeg, json-c and libevent now build side by side while
+  chiaki-ng and miniupnpc download, instead of one mostly single-threaded
+  configure after another (`DEPS_PARALLEL=0` keeps the old order), and the
+  build root no longer has dpkg sync every file to disk or unpack manuals,
+  documentation and translations no build reads. Tag releases build the
+  helpers and Box64 side by side as well, and the SD-card workflow, which does
+  not ship the pack, no longer builds Box64 at all
+  ([.github/workflows/remote-play-helpers.yml](.github/workflows/remote-play-helpers.yml),
+  [.github/workflows/wine-runtime.yml](.github/workflows/wine-runtime.yml),
+  [.github/workflows/docker-image.yml](.github/workflows/docker-image.yml),
+  [.github/scripts/build-root.sh](.github/scripts/build-root.sh),
+  [player/native/build-helpers.sh](player/native/build-helpers.sh)).
+
 - **staticcheck is clean again.** An unconditional `strings.TrimSuffix`
   (S1017), a struct conversion instead of a field-by-field literal (S1016), a
   merged declaration (S1021) and a `delete` without its redundant guard (S1033)
@@ -2656,7 +2977,7 @@ For anything older, the git log and the
   here: …", naming what is missing
   ([player/psremote_preflight.go](player/psremote_preflight.go),
   [player/psremote.go](player/psremote.go); tests in
-  [player/psremote_preflight_test.go](player/psremote_preflight_test.go)).
+  `player/psremote_preflight_test.go`).
 
 - **Starting a stream reset Quality and Volume and erased the PSN Account-ID.**
   A on a console closed the panel before the stream was started, and closing
@@ -4078,7 +4399,7 @@ the guesses come after every structural one
   canonical form), and `go test` runs every seed as an ordinary test. The nightly
   fuzz job now lists its targets per package — `-fuzz` accepts one package at a
   time — and installs the SDL headers the player package needs to build
-  ([.github/workflows/nightly.yml](.github/workflows/nightly.yml),
+  (`.github/workflows/nightly.yml`,
   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#fuzzing)).
 
 - **The browser follows a redirect, and the address bar says where it landed.**

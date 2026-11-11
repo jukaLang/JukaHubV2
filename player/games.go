@@ -126,7 +126,7 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 
 	// Footer
 	if smallFont != nil {
-		footer := hintLine(FooterHint{"↑ ↓ ← →", "Navigate"}, FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
+		footer := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
 		fw, _, _ := smallFont.SizeUTF8(footer)
 		drawText(renderer, smallFont, footer, (screenWidth-int32(fw))/2, screenHeight-40, ColorTextTertiary(), textAlignLeft)
 	}
@@ -1123,7 +1123,7 @@ func renderPong(renderer *sdl.Renderer, config *Config) {
 	if !gameOver {
 		smallFont, _ := getCachedFont(config, "small")
 		if smallFont != nil {
-			hint := hintLine(FooterHint{"↑ ↓", "Move Paddle"}, FooterHint{"Q", "Quit"})
+			hint := hintLine(FooterHint{"Up/Down", "Move Paddle"}, FooterHint{"Q", "Quit"})
 			hw, _, _ := smallFont.SizeUTF8(hint)
 			drawText(renderer, smallFont, hint, (screenWidth-int32(hw))/2, offsetY+pongH+16, ColorTextTertiary(), textAlignLeft)
 		}
@@ -1802,7 +1802,7 @@ func renderFlappy(renderer *sdl.Renderer, config *Config) {
 		drawText(renderer, font, score, (screenWidth-int32(sw))/2, offsetY+18, sdl.Color{R: 255, G: 255, B: 255, A: 240}, textAlignLeft)
 	}
 	if small != nil {
-		hint := hintLine(FooterHint{"Space / A", "Flap"}, FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
+		hint := hintLine(FooterHint{"A / Space", "Flap"}, FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
 		hw, _, _ := small.SizeUTF8(hint)
 		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+flappyH+12, ColorTextTertiary(), textAlignLeft)
 	}

@@ -58,7 +58,14 @@ const (
 	wineGroupGrace = 6 * time.Second
 	// wineAfterLimit bounds the runtime's clean-up (plan.After).
 	wineAfterLimit = 45 * time.Second
+	// wineUnmountLimit bounds unmounting WestonPack after a session; a lazy
+	// unmount is quick, so only a kernel that hangs reaches it.
+	wineUnmountLimit = 10 * time.Second
 )
+
+// errWineScreenTaken is a launch that found another game or app on screen
+// once Windows was ready: that one keeps the screen and the pad.
+var errWineScreenTaken = errors.New("another game or app took the screen while Windows was being prepared; close it, then start this again")
 
 // windowsAppEntry is one program found by the scanner. Path is the real file;
 // Rel keeps the row readable when several apps share a title.
@@ -588,14 +595,25 @@ type wineLaunch struct {
 // wineLaunches is the state of Windows programs from A to the end of their
 // session: what a starting one is doing (phase, by key; gone once it runs),
 // the one session that owns the screen and the pad (busy, named busyTitle),
-// and the last Windows Apps launch that failed after A returned, for the panel
-// to show (windowsAppsTakeFailure).
+// the last Windows Apps launch that failed after A returned, for the panel
+// to show (windowsAppsTakeFailure), and the last Wine game profile launch
+// that did, for the main loop to show (wineShowProfileFailure).
 var wineLaunches struct {
-	mu        sync.Mutex
-	phase     map[string]string
-	busy      string
-	busyTitle string
-	failed    *windowsAppFailure
+	mu            sync.Mutex
+	phase         map[string]string
+	busy          string
+	busyTitle     string
+	failed        *windowsAppFailure
+	profileFailed *windowsAppFailure
+}
+
+// wineLaunchBusy reports a Windows program between A and the end of its
+// session, the minutes it may spend preparing Windows included. Any
+// goroutine.
+func wineLaunchBusy() bool {
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	return wineLaunches.busy != ""
 }
 
 // windowsAppFailure is a Windows Apps launch that failed on its goroutine.
@@ -699,7 +717,18 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		after = func() {}
 	}
 	wineSetPhase(l.Key, "Starting…")
+	// Unmounting WestonPack is bounded like every other clean-up step: the
+	// screen comes back only after it.
+	release := func(d wineDisplayPlan) {
+		wineBounded(log, "the WestonPack unmount", wineUnmountLimit, func() { d.release(log) })
+	}
 	disp, err := prepareWineDisplay(l.Display, l.OpenGL, plan, log)
+	if err == nil && gameScreenSuspended() {
+		// Planning took minutes with JukaHub on screen: whatever started
+		// meanwhile owns the screen and the pad now, and must keep them.
+		release(disp)
+		err = errWineScreenTaken
+	}
 	if err != nil {
 		wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
 		failed(err)
@@ -707,7 +736,9 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	}
 
 	// The pad is the mouse from before the compositor starts, so it finds the
-	// device; quit is Select + Start held (wineQuit).
+	// device; quit is Select + Start held (wineQuit). The mouse and keys stay
+	// quiet until the program has started (wineInputLive): until then
+	// JukaHub's own screen is up and would take them.
 	var running atomic.Pointer[exec.Cmd]
 	stopInput := func() {}
 	if disp.lendsPad() {
@@ -720,6 +751,14 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 			log.printf("input: the pad is the mouse; Select + L1 hands it back\n")
 		}
 		wineSettleInput(log)
+	}
+	if gameScreenSuspended() {
+		// A game started during the few seconds udev took: same as above.
+		stopInput()
+		wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
+		release(disp)
+		failed(errWineScreenTaken)
+		return
 	}
 
 	cmd, err := disp.command(l.Dir)
@@ -745,7 +784,14 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		if len(plan.Env) > 0 {
 			log.printf("environment: %s\n", wineLogEnv(plan.Env, hide))
 		}
-		log.printf("command: %s\nworking dir: %s\n", wineLogCommand(disp.Command, disp.Args, hide), l.Dir)
+		// The program's own arguments (a profile's "args") are the last words
+		// in every display mode; they are not copied to the log either, since
+		// one can be a password or a token.
+		logArgs := append([]string{}, disp.Args...)
+		for i := len(logArgs) - len(l.Args); i >= 0 && i < len(logArgs); i++ {
+			logArgs[i] = "<argument>"
+		}
+		log.printf("command: %s\nworking dir: %s\n", wineLogCommand(disp.Command, logArgs, hide), l.Dir)
 		if log.f != nil {
 			cmd.Stdout, cmd.Stderr = log.f, log.f
 		}
@@ -759,13 +805,14 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		stopInput()
 		disp.stop(log)
 		wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
-		disp.release(log)
+		release(disp)
 		failed(fmt.Errorf("start %s: %w", filepath.Base(disp.Command), err))
 		return
 	}
 	running.Store(cmd)
 	started := time.Now()
 	noteGameChildStarted(cmd)
+	wineInputLive()
 	wineSetPhase(l.Key, "")
 	if l.Started != nil {
 		l.Started(cmd.Process.Pid)
@@ -786,7 +833,7 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	disp.stop(log)
 	wineDrainGroup(cmd, log)
 	wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
-	disp.release(log)
+	release(disp)
 	if waitErr != nil {
 		logWarn("windowsapps", "%s exited after %s: %v", l.Title, ran, waitErr)
 		if ran < wineQuickExit && l.Failed != nil {
@@ -930,6 +977,30 @@ func windowsAppsTakeFailure() (windowsAppFailure, bool) {
 		return windowsAppFailure{}, false
 	}
 	return *f, true
+}
+
+// wineProfileLaunchFailed reports a Wine game profile launch that failed on
+// its goroutine: a toast now, and the launch-failure dialog — the reason, the
+// suggested fix, the log — on the next frame the main loop draws
+// (wineShowProfileFailure): the Game Profiles panel has closed by then.
+func wineProfileLaunchFailed(title string, err error, logPath string) {
+	wineLaunches.mu.Lock()
+	wineLaunches.profileFailed = &windowsAppFailure{entry: windowsAppEntry{Title: title}, err: err, log: logPath}
+	wineLaunches.mu.Unlock()
+	ShowToast(title+": "+firstLine(err.Error()), ToastKindError)
+}
+
+// wineShowProfileFailure shows, on the main thread, a Wine game profile launch
+// that failed on its goroutine. The main loop calls it on every frame it
+// draws, so the dialog appears once JukaHub has the screen back.
+func wineShowProfileFailure() {
+	wineLaunches.mu.Lock()
+	f := wineLaunches.profileFailed
+	wineLaunches.profileFailed = nil
+	wineLaunches.mu.Unlock()
+	if f != nil {
+		showLaunchFailureDialog(f.entry.Title, f.err, f.log)
+	}
 }
 
 func windowsAppStatus(entry windowsAppEntry, runtime windowsRuntimeStatus) string {

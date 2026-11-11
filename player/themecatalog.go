@@ -62,7 +62,7 @@ var themeCatalogState struct {
 	loading bool
 }
 
-var communityThemeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,40}$`)
+var communityThemeIDPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,40}$`) })
 
 // communityThemeSlug normalises the id an entry is installed under. The id is a
 // file name, so it stays lowercase, short and free of path separators; an entry
@@ -70,7 +70,7 @@ var communityThemeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,40}$`)
 func communityThemeSlug(raw string) (string, error) {
 	id := strings.ToLower(strings.TrimSpace(raw))
 	id = strings.Join(strings.Fields(id), "-")
-	if !communityThemeIDPattern.MatchString(id) {
+	if !communityThemeIDPattern().MatchString(id) {
 		return "", fmt.Errorf("id %q is not a slug (lowercase letters, digits and dashes)", raw)
 	}
 	return id, nil

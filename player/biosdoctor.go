@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -267,7 +266,8 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 	lineH := int32(font.Height()) + 7
 	// Under the shared page header's measured band, not a number guessed here.
 	y := panelY + headerH + 16
-	status := fmt.Sprintf("Checked %d location(s) · found %d file(s)", len(report.Roots), len(report.Files))
+	status := "Checked " + pluralizeCount(len(report.Roots), "location", "locations") +
+		" · found " + pluralizeCount(len(report.Files), "file", "files")
 	if scanning {
 		status = "Scanning the BIOS folders…"
 		if len(report.Roots) > 0 {

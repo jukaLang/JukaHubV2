@@ -587,14 +587,14 @@ var (
 // emuStableVersionPattern finds the version folders a buildbot listing links
 // to ("1.22.2/"). The guard before the number keeps a dated folder
 // ("2026.10.25/") from being read as a version.
-var emuStableVersionPattern = regexp.MustCompile(`(?:^|[^0-9.])([0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3})/`)
+var emuStableVersionPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?:^|[^0-9.])([0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3})/`) })
 
 // emuRetroArchStableVersions lists the stable versions a buildbot listing
 // names, newest first.
 func emuRetroArchStableVersions(listing string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, m := range emuStableVersionPattern.FindAllStringSubmatch(listing, -1) {
+	for _, m := range emuStableVersionPattern().FindAllStringSubmatch(listing, -1) {
 		if len(m) < 2 || seen[m[1]] {
 			continue
 		}
@@ -685,7 +685,7 @@ func emuWinResolve(ctx context.Context, client *http.Client, spec emuWinSpec) (e
 // emuVersionTag matches a release tag that is a version number ("v1.20.4",
 // "2.6", "v0.1-11752"), as opposed to a rolling name or a commit
 // ("build-e8979d31…"), whose digits mean nothing in order.
-var emuVersionTag = regexp.MustCompile(`^[vV]?[0-9]+(\.[0-9]+)+([-.][0-9A-Za-z]+)*$`)
+var emuVersionTag = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[vV]?[0-9]+(\.[0-9]+)+([-.][0-9A-Za-z]+)*$`) })
 
 // emuReleasePreWords start the suffixes that mark a pre-release of a version
 // ("v0.1.3-rc1", "2.0-beta2"), which comes before the final release of the
@@ -814,7 +814,7 @@ func emuWinUpdateAvailable(installed emuWinManifest, latest emuWinRelease) bool 
 		return false
 	}
 	if have != want {
-		if emuVersionTag.MatchString(have) && emuVersionTag.MatchString(want) {
+		if emuVersionTag().MatchString(have) && emuVersionTag().MatchString(want) {
 			return emuCompareReleaseVersions(want, have) > 0
 		}
 		return true
@@ -1613,19 +1613,56 @@ func emuWinFinish(spec emuWinSpec, result emuWinInstallResult, err error) {
 	}
 }
 
-// emuWinStartRollback restores the kept version of a managed emulator.
+// emuWinStartRollback restores the kept version of a managed emulator. It
+// takes the patch lock like every install: the daily pass may be laying a
+// release over the same folder, and a rollback between its renames would leave
+// files of both versions and lose the kept one. The renames run off the event
+// thread (RetroArch keeps thousands of files), and the lock is released before
+// the result is shown.
 func emuWinStartRollback(name string) {
-	info, err := emuWinRollback(name)
-	if err != nil {
-		ShowToast(name+": "+err.Error(), ToastKindError)
+	if !tryBeginPatchOp() {
+		ShowToast("An update is running — roll back when it finishes", ToastKindInfo)
 		return
 	}
-	invalidateEmulatorCache()
-	emuForgetUpdate(name)
-	PlaySuccessSound()
-	label := info.Tag
-	if label == "" {
-		label = "the previous version"
+	ShowToast("Rolling "+name+" back…", ToastKindInfo)
+	go func() {
+		_, from, _ := emuWinManaged(name)
+		info, err := emuWinRollback(name)
+		if err == nil {
+			emuWinNoteRolledBack(name, from)
+		}
+		endPatchOp()
+		if err != nil {
+			ShowToast(name+": "+err.Error(), ToastKindError)
+			return
+		}
+		invalidateEmulatorCache()
+		emuForgetUpdate(name)
+		PlaySuccessSound()
+		label := info.Tag
+		if label == "" {
+			label = "the previous version"
+		}
+		ShowToast(name+" rolled back to "+label, ToastKindSuccess)
+	}()
+}
+
+// emuWinNoteRolledBack records, for the daily pass, the build a rollback of
+// name gave up (from, the manifest before it): a rollback is a choice, so the
+// pass does not install that build again, whoever had installed it — the pass,
+// Update or L1. It is recorded under the label the pass's next check computes
+// for it (emuWinAutoCheck: emuReleaseLabel of the release against the restored
+// manifest's tag), so the two match; a build after it installs as usual.
+func emuWinNoteRolledBack(name string, from emuWinManifest) {
+	_, now, ok := emuWinManaged(name)
+	if !ok || strings.TrimSpace(from.Tag) == "" {
+		return
 	}
-	ShowToast(name+" rolled back to "+label, ToastKindSuccess)
+	key := name
+	if spec, found := emuWinSpecFor(name); found {
+		key = spec.Name
+	}
+	label := emuReleaseLabel(now.Tag, emuWinRelease{Tag: from.Tag, AssetDate: from.AssetDate})
+	emuRuntimeUpdateRecord("win:"+key, func(r *emuRuntimeRecord) { r.Installed = label })
+	logInfo("emulators", "%s rolled back from %s; the daily update leaves that build alone", key, label)
 }

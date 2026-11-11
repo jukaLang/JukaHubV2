@@ -26,7 +26,8 @@ type windowsAppsPanelState struct {
 	returnEmu bool
 	// notice explains what the setup page is about to install when the user
 	// pressed A on an app the runtime cannot start yet. pending is that app:
-	// it launches by itself once the install finishes.
+	// it starts once the install finishes, unless setup or the panel was
+	// closed first (windowsAppsStartReady).
 	notice  string
 	pending *windowsAppEntry
 }
@@ -60,9 +61,12 @@ func openWindowsAppsPanel(returnEmu bool) {
 	setupCursor = windowsSetupRowWine
 	invalidateWindowsAppsCache()
 	// A launch from here runs on a goroutine: the settings it needs are read
-	// now, on the main thread. A failure from an earlier visit is old news.
+	// now, on the main thread. A failure from an earlier visit is old news,
+	// and so is an app an earlier visit's setup was waiting for (another
+	// screen can close this panel without closeWindowsAppsPanel).
 	wineLaunchSettingsTake(appConfig)
 	windowsAppsTakeFailure()
+	windowsDropPendingLaunch()
 	PlayActivateSound()
 }
 
@@ -73,6 +77,7 @@ func closeWindowsAppsPanel() {
 	returnEmu := winAppsPanel.returnEmu
 	// Leaving the panel abandons the pending launch: the runtime install keeps
 	// running, but the app must not start behind the user's back later.
+	windowsDropPendingLaunch()
 	winAppsPanel = windowsAppsPanelState{}
 	windowsAppPanelRect = sdl.Rect{}
 	windowsAppRowHits = nil
@@ -247,7 +252,7 @@ func windowsAppsPanelRescan() {
 		winAppsPanel.cursor = 0
 	}
 	runtime := windowsRuntimeStatusCached()
-	detail := fmt.Sprintf("Found %d app(s)", len(entries))
+	detail := "Found " + pluralizeCount(len(entries), "app", "apps")
 	if !runtime.ready() {
 		detail += " · runtime setup needed"
 	}
@@ -276,6 +281,9 @@ func windowsAppsPanelActivate() {
 		// Already starting: the row says how far it got.
 		return
 	}
+	if windowsAppsRuntimeBusy() {
+		return
+	}
 	wineLaunchSettingsTake(appConfig)
 	runtime := windowsRuntimeStatusCached()
 	if windowsAppsOfferSetup(entry, runtime) {
@@ -285,12 +293,55 @@ func windowsAppsPanelActivate() {
 		showLaunchFailureDialog(entry.Title, errors.New(runtime.Problem), "")
 		return
 	}
+	windowsAppsLaunch(entry)
+}
+
+// windowsAppsLaunch starts entry from the panel, on the main thread; a launch
+// that cannot start shows the launch-failure dialog with the app's log.
+func windowsAppsLaunch(entry windowsAppEntry) {
 	if err := launchWindowsApp(entry); err != nil {
 		showLaunchFailureDialog(entry.Title, err, windowsAppLogIfAny(entry))
 		return
 	}
 	PlaySuccessSound()
 	ShowToast("Starting "+entry.Title, ToastKindSuccess)
+}
+
+// windowsAppsRuntimeBusy refuses, politely, to start an app while the Windows
+// runtime is being installed or updated (the setup chain, a setup row, the
+// daily Emulator updates): the launch would run on files being replaced.
+func windowsAppsRuntimeBusy() bool {
+	if IsWindows() || !windowsRuntimeInstalling() {
+		return false
+	}
+	ShowToast("The Windows runtime is being installed or updated · start the app when it is done", ToastKindInfo)
+	return true
+}
+
+// windowsAppsStartReady starts, on the main thread, the app a finished setup
+// chain was asked to start (Install & Run) — only while the setup page still
+// waits for that app; leaving setup or the panel dropped it already. The page
+// gives way to the list, where the app's row shows how far its start got.
+func windowsAppsStartReady() {
+	entry, ok := windowsTakeReadyLaunch()
+	if !ok {
+		return
+	}
+	if pending := winAppsPanel.pending; !winAppsPanel.help || pending == nil || pending.Path != entry.Path {
+		return
+	}
+	winAppsPanel.help, winAppsPanel.pending, winAppsPanel.notice = false, nil, ""
+	for i, e := range windowsAppEntries() {
+		if e.Path == entry.Path {
+			winAppsPanel.cursor = i
+			break
+		}
+	}
+	if windowsAppsRuntimeBusy() {
+		return
+	}
+	wineLaunchSettingsTake(appConfig)
+	windowsAppsLaunch(entry)
 }
 
 // windowsAppsOfferSetup opens the setup page on what entry still needs, when
@@ -382,6 +433,7 @@ func windowsAppsPanelToggleHelp() {
 	}
 	// Closing setup drops a launch that was waiting for the runtime; the user
 	// asked for the launcher, not for the app to open later by itself.
+	windowsDropPendingLaunch()
 	winAppsPanel.pending = nil
 	winAppsPanel.notice = ""
 	PlayBackSound()
@@ -567,7 +619,7 @@ func windowsRuntimeStatusForget() {
 }
 
 func windowsAppsSummary(entries []windowsAppEntry, runtime windowsRuntimeStatus) string {
-	parts := []string{fmt.Sprintf("%d app(s)", len(entries))}
+	parts := []string{pluralizeCount(len(entries), "app", "apps")}
 	if len(entries) == 1 {
 		parts[0] = "1 app"
 	}
@@ -671,8 +723,10 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	if !winAppsPanel.open || renderer == nil {
 		return
 	}
-	// A launch that failed on its goroutine is shown here, on the main thread.
+	// A launch that failed on its goroutine is shown here, on the main thread,
+	// and the app a finished setup chain was asked for starts here.
 	windowsAppsShowFailure()
+	windowsAppsStartReady()
 	entries := windowsAppEntries()
 	runtime := windowsRuntimeStatusCached()
 	if winAppsPanel.cursor >= len(entries) {

@@ -34,7 +34,9 @@ var (
 	// diagnosticSecret matches "key: value" pairs whose name says the value is
 	// a credential. The value runs to whitespace, a comma or a semicolon, which
 	// is how these appear in log lines: "token=abc123," or "api_key: sk-...".
-	diagnosticSecret = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|authorization|token|secret|password|passwd)\b(\s*[:=]\s*)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s,;]+)`) })
+	diagnosticSecret = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|authorization|token|secret|password|passwd)\b(\s*[:=]\s*)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s,;]+)`)
+	})
 	// diagnosticBearer catches the credential in "Authorization: Bearer <x>"
 	// even when the header name was already scrubbed.
 	diagnosticBearer = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}`) })

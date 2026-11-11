@@ -1033,11 +1033,11 @@ func saveManagerSummary(roots []saveRoot, snaps []saveSnapshot) string {
 	if len(roots) == 0 {
 		return "No save folders found yet — start a game once"
 	}
-	parts := []string{fmt.Sprintf("%d save folder(s)", len(roots))}
+	parts := []string{pluralizeCount(len(roots), "save folder", "save folders")}
 	if len(snaps) == 0 {
 		parts = append(parts, "no snapshots")
 	} else {
-		parts = append(parts, fmt.Sprintf("%d snapshot(s)", len(snaps)))
+		parts = append(parts, pluralizeCount(len(snaps), "snapshot", "snapshots"))
 	}
 	if sync, ok := saveSyncStatus(); ok {
 		parts = append(parts, fmt.Sprintf("sync prepared for %d", len(sync.Folders)))

@@ -1054,8 +1054,10 @@ func emuRollbackHintLabel(e emuEntry) string {
 
 // startEmulatorRollback restores the newest backup of the highlighted tile's
 // core, or the kept previous version of a Windows emulator JukaHub installed.
-// It runs on the event thread: a core rollback is one small file copy on the
-// card, and the user needs the result before the next press.
+// A core rollback runs on the event thread: it is one small file copy on the
+// card, and the user needs the result before the next press. Every rollback
+// takes the patch lock, as the installs do, so it cannot land in the middle of
+// the daily pass replacing the same files.
 func startEmulatorRollback() {
 	entries := emulatorEntries()
 	if emuPanel.cursor < 0 || emuPanel.cursor >= len(entries) {
@@ -1088,7 +1090,12 @@ func startEmulatorRollback() {
 		ShowToast("No previous "+coreConfigDisplayName(core)+" build to roll back to", ToastKindInfo)
 		return
 	}
+	if !tryBeginPatchOp() {
+		ShowToast("An update is running — roll back when it finishes", ToastKindInfo)
+		return
+	}
 	build, err := rollbackCoreBuild(backup)
+	endPatchOp()
 	if err != nil {
 		ShowToast(coreConfigDisplayName(core)+": "+err.Error(), ToastKindError)
 		return

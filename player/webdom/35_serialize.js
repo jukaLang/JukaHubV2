@@ -13,7 +13,10 @@ var VOID_ELEMENTS = { area: 1, base: 1, basefont: 1, bgsound: 1, br: 1, col: 1, 
 var RAW_TEXT_PARENTS = { style: 1, script: 1, xmp: 1, iframe: 1, noembed: 1, noframes: 1, plaintext: 1, noscript: 1 };
 
 var TEXT_ESC = /[&<>\u00A0]/g;
-var ATTR_ESC = /[&"\u00A0]/g;
+// Attribute values escape '<' and '>' as well as '&', '"' and NBSP: that is what the HTML serialization
+// algorithm now specifies and what browsers emit, and it keeps a value like title="<b>" from being read
+// back as markup by the reader's tag scanner or by a page's own innerHTML round trip.
+var ATTR_ESC = /[&"<>\u00A0]/g;
 function escChar(c) {
   switch (c) {
     case '&': return '&amp;';
@@ -31,7 +34,7 @@ function escapeText(s) {
   return s.replace(TEXT_ESC, escChar);
 }
 function escapeAttr(s) {
-  if (s.indexOf('&') < 0 && s.indexOf('"') < 0 && s.indexOf('\u00A0') < 0) return s;
+  if (s.indexOf('&') < 0 && s.indexOf('"') < 0 && s.indexOf('<') < 0 && s.indexOf('>') < 0 && s.indexOf('\u00A0') < 0) return s;
   return s.replace(ATTR_ESC, escChar);
 }
 

@@ -28,10 +28,11 @@ concurrency:
 
 jobs:
   # The PS Remote Play helpers for Apps/JukaHub/bin and AndroidRT for
-  # Apps/JukaHub/androidrt; see remote-play-helpers.yml. (Its Box64 pack is a
-  # release asset JukaHub installs by itself, so the card does not carry it.)
+  # Apps/JukaHub/androidrt; see remote-play-helpers.yml. (The Box64 pack is a
+  # release asset JukaHub installs by itself, built by wine-runtime.yml, so the
+  # card neither carries nor waits for it.)
   helpers:
-    name: Remote Play helpers and runtimes
+    name: Remote Play helpers and AndroidRT
     uses: ./.github/workflows/remote-play-helpers.yml
     # What the helpers job asks for (actions read finds helpers an earlier run
     # built); a called workflow asking for more than this grants cannot start.

@@ -274,7 +274,7 @@ func chatURLSpans(s string) [][2]int {
 	if !strings.Contains(s, "://") {
 		return nil
 	}
-	found := urlRegex.FindAllStringIndex(s, -1)
+	found := urlRegex().FindAllStringIndex(s, -1)
 	if len(found) == 0 {
 		return nil
 	}

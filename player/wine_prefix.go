@@ -283,14 +283,20 @@ func chooseWinePrefix(env map[string]string, probe bool) winePrefixPlace {
 	}
 	if caller := strings.TrimSpace(wineEnvValue(env, "WINEPREFIX")); caller != "" {
 		dir := filepath.Clean(caller)
-		if wineIsPrefix(dir) {
+		legacy := wineLegacyProfilePrefix(dir)
+		switch {
+		case wineIsPrefix(dir) && (!legacy || winePrefixLinksOK(dir, probe)):
 			return winePrefixPlace{Dir: dir, Source: "WINEPREFIX"}
-		}
-		if !wineLegacyProfilePrefix(dir) {
+		case !legacy:
 			if winePrefixLinksOK(dir, probe) {
 				return winePrefixPlace{Dir: dir, Source: "WINEPREFIX"}
 			}
 			return winePrefixPlace{Problem: "WINEPREFIX " + dir + " is on a card that cannot hold Wine's links · leave WINEPREFIX out to use JukaHub's shared Windows folder"}
+		case wineIsPrefix(dir) && probe:
+			// JukaHub's old default, half made on a card without links: its
+			// drive links can never be made there, so every launch would fail.
+			// The shared prefix below is used instead; the folder is left alone.
+			logInfo("windowsapps", "the old profile prefix %s is on a card that cannot hold Wine's links; using the shared Windows folder", dir)
 		}
 	}
 	runtimeDir := windowsRuntimeDir()
@@ -475,9 +481,27 @@ func wineImageSize(free int64) (int64, error) {
 	return 0, fmt.Errorf("%w · Windows needs a 1 GB space on the card, which has %s free", errRelPackNoSpace, formatInstallBytes(max64(free, 0)))
 }
 
+// wineImageReadyPath marks, beside the prefix image on the card, that the
+// prefix inside it was prepared: the image cannot be looked into without
+// mounting it, and a fresh image whose first wineboot failed is not ready.
+func wineImageReadyPath(image string) string { return image + ".ready" }
+
+// wineMarkImageReady records that the prefix in image is prepared.
+func wineMarkImageReady(image string) {
+	marker := wineImageReadyPath(image)
+	if regularFile(marker) {
+		return
+	}
+	if err := os.WriteFile(marker, nil, 0o644); err != nil {
+		logDebug("windowsapps", "could not mark %s as prepared: %v", image, err)
+	}
+}
+
 // wineCreateImage makes the ext4 image the prefix lives in when the card
 // cannot hold links itself.
 func wineCreateImage(ctx context.Context, image string, progress func(string)) error {
+	// A new image holds no prefix yet, whatever an older one held.
+	_ = os.Remove(wineImageReadyPath(image))
 	free, err := freeBytes(filepath.Dir(image))
 	if err != nil {
 		free = -1
@@ -561,15 +585,27 @@ func wineMountImage(ctx context.Context, image, mount string) error {
 	return fmt.Errorf("could not open Windows' space on the card (%s): %w", filepath.Base(image), lastErr)
 }
 
-// wineUnmount releases the prefix image. A program still holding a file there
-// gets a lazy unmount: the kernel lets go once it exits.
+// wineUnmount releases the prefix image and the loop device under it: -d asks
+// umount to free the device too (BusyBox and util-linux both know it), since
+// BusyBox's mount does not always set autoclear. A umount that refuses -d is
+// run plain, and a device it left bound to the image is detached here. A
+// program still holding a file there gets a lazy unmount: the kernel lets go
+// once it exits.
 func wineUnmount(mount string) {
 	tool := wineFindTool("umount")
 	if tool == "" || !wineIsMounted(mount) {
 		return
 	}
+	loop := wineMountSource(mount)
 	for try := 0; try < 3; try++ {
-		if _, err := wineRunOutput(context.Background(), 15*time.Second, tool, mount); err == nil && !wineIsMounted(mount) {
+		for _, args := range [][]string{{"-d", mount}, {mount}} {
+			_, _ = wineRunOutput(context.Background(), 15*time.Second, tool, args...)
+			if wineIsMounted(mount) {
+				continue
+			}
+			if len(args) == 1 {
+				wineReleaseLoop(loop, wineLog{})
+			}
 			_ = os.Remove(mount)
 			return
 		}
@@ -578,6 +614,28 @@ func wineUnmount(mount string) {
 	if out, err := wineRunOutput(context.Background(), 15*time.Second, tool, "-l", mount); err != nil {
 		logWarn("windowsapps", "could not unmount %s: %v %s", mount, err, firstLine(strings.TrimSpace(out)))
 	}
+}
+
+// wineMountSource is the device mounted at dir ("" when nothing is): for the
+// prefix image, the loop device to free after the unmount.
+func wineMountSource(dir string) string {
+	data, err := wineReadSmall("/proc/mounts", 4<<20)
+	if err != nil {
+		return ""
+	}
+	want := filepath.Clean(dir)
+	alt := want
+	if real, err := filepath.EvalSymlinks(want); err == nil {
+		alt = real
+	}
+	source := ""
+	for _, m := range parseProcMounts(string(data)) {
+		if m.dir == want || m.dir == alt {
+			// The last mount there is the one in use.
+			source = m.source
+		}
+	}
+	return source
 }
 
 // wineEnsureImage makes, mounts and opens the image a prefix lives in.
@@ -799,6 +857,9 @@ func openWineSession(ctx context.Context, rt wineRT, env map[string]string, prog
 			wineReleaseIdleMount(place)
 			return nil, err
 		}
+	}
+	if place.Image != "" {
+		wineMarkImageReady(place.Image)
 	}
 	wineSessions.mu.Lock()
 	if wineSessions.refs == nil {

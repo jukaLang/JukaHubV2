@@ -58,6 +58,12 @@ func playRecentGame(g recentGame) {
 		return
 	}
 	PlaySuccessSound()
+	if g.System == androidLibrarySystem {
+		// An Android game is staged in the background first (seconds for a
+		// big one); a failure there opens the launch-failure dialog.
+		ShowToast("Starting "+g.Title+"…", ToastKindSuccess)
+		return
+	}
 	ShowToast("Playing "+g.Title, ToastKindSuccess)
 }
 

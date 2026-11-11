@@ -233,12 +233,12 @@ func gameProfileSummary(entries []gameProfileEntry, issues int) string {
 			ready++
 		}
 	}
-	parts := []string{fmt.Sprintf("%d profile(s)", len(entries)), fmt.Sprintf("%d ready", ready)}
+	parts := []string{pluralizeCount(len(entries), "profile", "profiles"), fmt.Sprintf("%d ready", ready)}
 	if unavailable := len(entries) - ready; unavailable > 0 {
 		parts = append(parts, fmt.Sprintf("%d unavailable", unavailable))
 	}
 	if issues > 0 {
-		parts = append(parts, fmt.Sprintf("%d file issue(s)", issues))
+		parts = append(parts, pluralizeCount(issues, "file issue", "file issues"))
 	}
 	return strings.Join(parts, " · ")
 }

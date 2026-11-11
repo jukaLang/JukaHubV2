@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -365,7 +366,7 @@ type pdfvFile struct {
 	crypt   *pdfvCrypt
 }
 
-var rePDFVObjHead = regexp.MustCompile(`(\d+)\s+(\d+)\s+obj\b`)
+var rePDFVObjHead = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(\d+)\s+(\d+)\s+obj\b`) })
 
 // pdfvMaxFileBytes bounds what the reader loads: the whole file stays in
 // memory while it is open, and the handheld has 1 GB for everything.
@@ -377,7 +378,7 @@ func pdfvOpenBytes(data []byte) (*pdfvFile, error) {
 		return nil, errors.New("the file is empty")
 	}
 	f := &pdfvFile{objs: map[int]*pdfvIndirect{}, trailer: map[string]pdfvObj{}}
-	for _, m := range rePDFVObjHead.FindAllSubmatchIndex(data, -1) {
+	for _, m := range rePDFVObjHead().FindAllSubmatchIndex(data, -1) {
 		num, err1 := strconv.Atoi(string(data[m[2]:m[3]]))
 		gen, err2 := strconv.Atoi(string(data[m[4]:m[5]]))
 		if err1 != nil || err2 != nil {

@@ -187,7 +187,9 @@ func currentWineRuntimeFacts() wineRuntimeFacts {
 	}
 	place := chooseWinePrefix(nil, false)
 	facts.Prefix, facts.PrefixImage, facts.PrefixProblem = place.Dir, place.Image, place.Problem
-	facts.PrefixReady = wineIsPrefix(place.Dir) || (place.Image != "" && regularFile(place.Image))
+	// An image prefix is ready once a session finished preparing it (the
+	// marker beside the image): the image alone may hold a failed first run.
+	facts.PrefixReady = wineIsPrefix(place.Dir) || (place.Image != "" && regularFile(place.Image) && regularFile(wineImageReadyPath(place.Image)))
 	if facts.Problem == "" {
 		facts.Problem = facts.PrefixProblem
 	}
@@ -411,8 +413,9 @@ func westonImageCandidates() []string {
 }
 
 // findWestonPackSource looks for WestonPack without mounting or downloading
-// anything (it reads four bytes of an image to see that it is SquashFS). It
-// must never call resolveWestonPack (the display half calls this).
+// anything (it reads the first bytes of an image to see that it is SquashFS,
+// and a westonwrap.sh's text). It must never call resolveWestonPack (the
+// display half calls this).
 //
 // The order is: an explicit override; JukaHub's own copy (unpacked, then the
 // image its setup row downloaded); PortMaster's images; and only then a
@@ -420,14 +423,23 @@ func westonImageCandidates() []string {
 // come last because one of them can be the CrossMix preview build whose bare
 // `udevadm trigger` unmounts the SD card — the launch refuses that script
 // (westonTextResetsDevices), and an earlier, official copy must not be
-// shadowed by it.
+// shadowed by it. Such a script, or an image a launch found it in
+// (westonImageRefused), does not count as WestonPack at all: the setup page
+// then offers JukaHub's own download instead of calling it installed. Only
+// JUKAHUB_WESTON is taken as it is, and the launch says why it refuses it.
 func findWestonPackSource() westonPackSource {
 	var src westonPackSource
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_WESTON")); override != "" && executableFile(override) {
 		src.Wrapper = override
 		return src
 	}
-	if image := strings.TrimSpace(os.Getenv("JUKAHUB_WESTON_IMAGE")); image != "" && westonImageProblem(image, false) == "" {
+	usableImage := func(image string) bool {
+		return westonImageProblem(image, false) == "" && !westonImageRefused(image)
+	}
+	usableWrapper := func(wrapper string) bool {
+		return executableFile(wrapper) && !westonWrapperResetsDevices(wrapper)
+	}
+	if image := strings.TrimSpace(os.Getenv("JUKAHUB_WESTON_IMAGE")); image != "" && usableImage(image) {
 		src.Image = image
 		return src
 	}
@@ -435,13 +447,13 @@ func findWestonPackSource() westonPackSource {
 		filepath.Join(windowsRuntimeDir(), "westonwrap.sh"),
 		filepath.Join(windowsRuntimeDir(), "weston", "westonwrap.sh"),
 	} {
-		if executableFile(candidate) {
+		if usableWrapper(candidate) {
 			src.Wrapper = candidate
 			return src
 		}
 	}
 	for _, image := range westonImageCandidates() {
-		if westonImageProblem(image, false) == "" {
+		if usableImage(image) {
 			src.Image = image
 			return src
 		}
@@ -453,7 +465,7 @@ func findWestonPackSource() westonPackSource {
 		"/mnt/SDCARD/Apps/WestonPack/westonwrap.sh",
 		"/tmp/weston/westonwrap.sh",
 	} {
-		if executableFile(candidate) {
+		if usableWrapper(candidate) {
 			src.Wrapper = candidate
 			return src
 		}

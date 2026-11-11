@@ -449,7 +449,10 @@ func sysToolBenchClick(mx, my int32, config *Config) bool {
 // sysToolBenchScene is the registered module for the "Benchmark" scene.
 type sysToolBenchScene struct{ sceneBase }
 
-func (sysToolBenchScene) render(r *sdl.Renderer, c *Config) bool { renderSysToolBench(r, c); return true }
+func (sysToolBenchScene) render(r *sdl.Renderer, c *Config) bool {
+	renderSysToolBench(r, c)
+	return true
+}
 
 func (sysToolBenchScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {

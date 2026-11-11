@@ -1034,7 +1034,7 @@ func bkupPlanRestore(path string, m bkupManifest, cats map[string]bool) bkupRest
 			rf.Skip = "not chosen"
 		case token == "doc":
 			rf.Skip = "the config document is for reading and importing"
-		case vpnBackupExcluded(rel):
+		case vpnBackupExcluded(rel) && (token == "data" || strings.HasPrefix(strings.ToLower(rel), "data/")):
 			rf.Skip = "the VPN configuration stays on its device"
 		case f.Platform && plan.CrossPlatform:
 			rf.Skip = "made for " + bkupPlatformLabel(m.Platform)

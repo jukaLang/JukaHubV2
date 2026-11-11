@@ -105,12 +105,16 @@ on an already-fixed card says so instead of writing anything.
 Games added with **Add to Games** in the APK Store ([ANDROID.md](ANDROID.md))
 appear as one more console, **Android**. The title is the APK's own label and
 the cover is the launcher icon the store saved when it added the game
-(`data/game-art/Android/<APK name>.png`); a game added before covers were saved
-gets its icon at a later scan, once the store has read that APK again. **A**
-opens the game's page like any other, and **Play** starts it through its game
-profile — the same path as the store's Play and Game Profiles: the APK is
-triaged again, the free memory is checked, the game's files are staged into
-memory and AndroidRT starts it. A launch that stops shows the launch-failure
+(`data/game-art/Android/<APK name>-<hash>.png`, the hash of the APK's path
+keeping apart the many APKs named `base.apk`; a cover an earlier build saved as
+`<APK name>.png` is still shown until the game's own is there); a game added
+before covers were saved gets its icon at a later scan, once the store has read
+that APK again. **A** opens the game's page like any other, and **Play** starts
+it through its game profile — the same path as the store's Play and Game
+Profiles, in the background: the APK is triaged again, the free memory is
+checked, the game's files are staged into memory and AndroidRT starts it. While
+it starts, a second **Play** (here, in the store or in Game Profiles) says the
+game is already starting instead of starting it twice. A launch that stops shows the launch-failure
 dialog with the game's launch log; with no AndroidRT on the device, Play says
 so and points at the APK Store's Runtime tab, which installs it.
 

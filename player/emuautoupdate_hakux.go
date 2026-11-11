@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -125,7 +126,7 @@ func emuAutoWinProgress(progress func(string)) emuWinProgress {
 // emuLabelVersion matches a tag that carries a version number ("v0.1.5",
 // "2.6", "v0.0.43-17000"), as opposed to a rolling name ("continuous",
 // "latest") or a commit.
-var emuLabelVersion = regexp.MustCompile(`[0-9]+\.[0-9]+`)
+var emuLabelVersion = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`[0-9]+\.[0-9]+`) })
 
 // emuReleaseLabel names a release in the toast and in the pass's record: its
 // tag, plus the asset's upload time when the tag alone does not tell it from
@@ -137,7 +138,7 @@ func emuReleaseLabel(installedTag string, rel emuWinRelease) string {
 	if label == "" {
 		label = "new build"
 	}
-	if strings.EqualFold(label, strings.TrimSpace(installedTag)) || !emuLabelVersion.MatchString(label) {
+	if strings.EqualFold(label, strings.TrimSpace(installedTag)) || !emuLabelVersion().MatchString(label) {
 		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(rel.AssetDate)); err == nil {
 			label += " (" + t.UTC().Format("2006-01-02 15:04") + ")"
 		}

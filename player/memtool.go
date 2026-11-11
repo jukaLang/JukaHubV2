@@ -279,7 +279,7 @@ func memRows() []memRow {
 		{label: "Width", value: memWidthLabel(), detail: "Left/Right to change", action: memActionWidth, enabled: true},
 		{label: "Scan", value: scanValue, detail: scanDetail, action: memActionScan, enabled: memPanel.pid > 0},
 		{label: "Narrow", value: "Keep only the new value", detail: "Change the value in game, then narrow", action: memActionNarrow, enabled: memPanel.search != nil},
-		{label: "Results", value: fmt.Sprintf("%d address(es)", matches), detail: "Browse and write to a match", action: memActionResults, enabled: memPanel.search != nil},
+		{label: "Results", value: pluralizeCount(matches, "address", "addresses"), detail: "Browse and write to a match", action: memActionResults, enabled: memPanel.search != nil},
 		{label: "Reset", value: "Clear the scan", detail: "Start over with a new target", action: memActionReset, enabled: memPanel.search != nil || memPanel.pid > 0},
 	}
 }
@@ -879,7 +879,7 @@ func memFooter() string {
 		}
 		return hintLine(FooterHint{"A", "Write Value"}, FooterHint{"Y", "Narrow"}, FooterHint{"B", "Back"})
 	}
-	return hintLine(FooterHint{"A", "Select"}, FooterHint{"←→", "Width"}, FooterHint{"B", "Close"})
+	return hintLine(FooterHint{"A", "Select"}, FooterHint{"Left/Right", "Width"}, FooterHint{"B", "Close"})
 }
 
 // renderMemTargetBody draws the process picker.

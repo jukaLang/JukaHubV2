@@ -474,7 +474,14 @@ func coreBuildsActivate() {
 		ShowToast("No kept builds to restore", ToastKindInfo)
 		return
 	}
+	// The automatic pass and the install bar hold the patch lock while they
+	// replace cores; a restore in the middle would be overwritten or mixed.
+	if !tryBeginPatchOp() {
+		ShowToast("An update is running — roll back when it finishes", ToastKindInfo)
+		return
+	}
 	build, err := rollbackCoreBuild(backup)
+	endPatchOp()
 	if err != nil {
 		ShowToast("Restore failed: "+err.Error(), ToastKindError)
 		return
@@ -521,7 +528,12 @@ func coreBuildsRollbackSelected() {
 		ShowToast("No previous "+c.Name+" build is kept — one is kept after the next update", ToastKindInfo)
 		return
 	}
+	if !tryBeginPatchOp() {
+		ShowToast("An update is running — roll back when it finishes", ToastKindInfo)
+		return
+	}
 	build, err := rollbackCoreBuild(backup)
+	endPatchOp()
 	if err != nil {
 		ShowToast(c.Name+": "+err.Error(), ToastKindError)
 		return

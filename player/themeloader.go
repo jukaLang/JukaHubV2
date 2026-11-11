@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // themeDir holds user-supplied theme files (one JSON file per theme).
@@ -32,7 +33,7 @@ func captureBuiltinThemeIDs() {
 }
 
 // themeLoaderColorPattern accepts #rrggbb and #rrggbbaa colours.
-var themeLoaderColorPattern = regexp.MustCompile(`^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+var themeLoaderColorPattern = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`) })
 
 // themeFile is the on-disk form of a theme. Keys mirror ThemePreset.
 type themeFile struct {
@@ -83,7 +84,7 @@ func (f themeFile) toPreset() (ThemePreset, error) {
 		"info": f.Info, "overlay": f.Overlay,
 	}
 	for key, value := range colours {
-		if !themeLoaderColorPattern.MatchString(value) {
+		if !themeLoaderColorPattern().MatchString(value) {
 			return ThemePreset{}, fmt.Errorf("%s: %q is not #rrggbb or #rrggbbaa", key, value)
 		}
 	}

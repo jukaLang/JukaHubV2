@@ -256,7 +256,7 @@ func sysToolHWReadInfo() sysToolHWInfo {
 	info.host, _ = os.Hostname()
 	if runtime.GOOS == "linux" {
 		info.os = getOSName()
-		if model := getCPUModel(); model != "N/A" {
+		if model := getCPUModel(); model != hwUnknown {
 			info.model = model
 		}
 	}

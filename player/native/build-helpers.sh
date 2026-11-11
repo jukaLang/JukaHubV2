@@ -54,6 +54,12 @@
 # and say nothing until something fails; a failed step prints the end of its
 # log (the compiler's own error for a compile) and stops the build.
 #
+# In native mode the five dependency builds run side by side, while chiaki-ng
+# and miniupnpc download: each configure runs mostly on one core, so one after
+# the other they left most of the machine idle. Each part's lines appear once
+# it has finished, in a fixed order. DEPS_PARALLEL=0 builds them one after the
+# other, the way to read a dependency's lines as they happen.
+#
 # Usage: ./build-helpers.sh
 #        JOBS=4 ./build-helpers.sh
 #        JUKAHUB_HELPERS_NATIVE=1 DEPS_PREFIX=/opt/jukahub-deps ./build-helpers.sh
@@ -77,15 +83,22 @@ MINIUPNPC_TAG="${MINIUPNPC_TAG:-miniupnpc_2_2_8}"
 MINIUPNPC_COMMIT="${MINIUPNPC_COMMIT:-b55145ec095652289a59c33603f3abafee898273}"
 OUTPUT_BIN="${OUTPUT_BIN:-$NATIVE_DIR/bin}"
 LOG_DIR="${LOG_DIR:-/tmp/jukahub-helper-logs}"
+# Why the build stopped, for the CI summary. A part that runs beside others
+# (start_part) keeps its own until wait_parts gathers them here.
+FAILURE_FILE="$LOG_DIR/failure.txt"
 PYTHON="${PYTHON:-$(command -v python3 || echo /usr/bin/python3)}"
 if [ -z "${JOBS:-}" ]; then
     JOBS="$(nproc 2>/dev/null || echo 4)"
 fi
 
-# Native mode: where the static dependencies are built and installed.
+# Native mode: where the static dependencies are built and installed, and
+# whether they build side by side (1) or one after the other (0).
 DEPS_PREFIX="${DEPS_PREFIX:-/opt/jukahub-deps}"
 DEPS_SRC="${DEPS_SRC:-/tmp/jukahub-deps-src}"
+DEPS_PARALLEL="${DEPS_PARALLEL:-1}"
 GLIBC_MAX="${GLIBC_MAX:-2.31}"
+# Set once fetch_sources has run as one of those side-by-side parts.
+SOURCES_FETCHED=0
 
 # Pinned dependency sources. Each digest was published by, or cross-checked
 # against, the project or a distribution that verified the release signature;
@@ -106,19 +119,22 @@ say() {
     STAGE="$*"
     printf '\n==> %s\n' "$*"
 }
-# A stop also goes into LOG_DIR/failure.txt, which the CI job shows in its
-# summary; the EXIT trap below covers a command that stops the script through
-# set -e without saying why.
+# A stop also goes into FAILURE_FILE (LOG_DIR/failure.txt), which the CI job
+# shows in its summary; the EXIT trap below covers a command that stops the
+# script through set -e without saying why.
 die() {
     printf 'build-helpers: %s\n' "$*" >&2
-    printf 'build-helpers: %s\n' "$*" >> "$LOG_DIR/failure.txt" 2>/dev/null || true
+    printf 'build-helpers: %s\n' "$*" >> "$FAILURE_FILE" 2>/dev/null || true
     exit 1
 }
 on_exit() {
     rc=$?
-    if [ "$rc" -ne 0 ] && [ ! -s "$LOG_DIR/failure.txt" ]; then
+    # Parts still running when the script stops (it failed while waiting for
+    # them) must not build on behind it.
+    stop_running_parts
+    if [ "$rc" -ne 0 ] && [ ! -s "$FAILURE_FILE" ]; then
         printf 'build-helpers: stopped (exit %s) during "%s"; the job log above says why\n' "$rc" "$STAGE" \
-            >> "$LOG_DIR/failure.txt" 2>/dev/null || true
+            >> "$FAILURE_FILE" 2>/dev/null || true
     fi
 }
 trap on_exit EXIT
@@ -140,7 +156,7 @@ show_failure() {
 
 # quietly NAME CMD... runs CMD with its output in LOG_DIR/NAME.log and prints
 # one line for it. On failure it shows the end of that log, keeps the same
-# text in LOG_DIR/failure.txt (the CI job puts it in its summary) and stops.
+# text in FAILURE_FILE (the CI job puts it in its summary) and stops.
 # CMD runs as an if condition, where set -e is off: it must be one program,
 # or a function whose status is its last command's (in_dir), never a
 # function of several steps.
@@ -153,8 +169,121 @@ quietly() {
         echo "    $q_name: done in $(( $(date +%s) - q_start )) s"
         return 0
     fi
-    show_failure "$q_log" 2>&1 | tee "$LOG_DIR/failure.txt" >&2
+    show_failure "$q_log" 2>&1 | tee "$FAILURE_FILE" >&2
     die "$q_name failed (whole log: $q_log)"
+}
+
+# start_part NAME FUNCTION runs FUNCTION in the background, beside the other
+# parts started: its console lines go to LOG_DIR/part-NAME.out (its steps'
+# logs stay where quietly puts them) and its reason for stopping to
+# LOG_DIR/failure-NAME.txt. Each part must leave nothing behind for the
+# others but files: it runs in a subshell. PARTS lists the parts not waited
+# for yet, as NAME:PID.
+PARTS=""
+start_part() {
+    sp_name="$1"
+    sp_func="$2"
+    rm -f "$LOG_DIR/part-$sp_name.out" "$LOG_DIR/failure-$sp_name.txt"
+    (
+        FAILURE_FILE="$LOG_DIR/failure-$sp_name.txt"
+        "$sp_func"
+    ) > "$LOG_DIR/part-$sp_name.out" 2>&1 &
+    PARTS="$PARTS $sp_name:$!"
+}
+
+# wait_parts waits for every part started, in the order they were started,
+# prints each one's lines, and stops the build when any of them failed, with
+# the reason of every failed part in FAILURE_FILE.
+wait_parts() {
+    wp_failed=""
+    for wp_part in $PARTS; do
+        wp_name="${wp_part%%:*}"
+        wp_rc=0
+        wait "${wp_part##*:}" || wp_rc=$?
+        # Waited for, so no longer one for stop_running_parts to stop.
+        PARTS="${PARTS# $wp_part}"
+        cat "$LOG_DIR/part-$wp_name.out" 2>/dev/null || true
+        if [ "$wp_rc" -ne 0 ]; then
+            wp_failed="$wp_failed $wp_name"
+            {
+                if [ -s "$LOG_DIR/failure-$wp_name.txt" ]; then
+                    cat "$LOG_DIR/failure-$wp_name.txt"
+                else
+                    # Stopped by set -e (a git fetch, say), which says
+                    # nothing of its own: the end of what the part printed
+                    # does.
+                    echo "---- the end of what the $wp_name part printed ----"
+                    tail -n 15 "$LOG_DIR/part-$wp_name.out"
+                    printf 'build-helpers: %s stopped (exit %s)\n' "$wp_name" "$wp_rc"
+                fi
+            } >> "$FAILURE_FILE" 2>/dev/null || true
+        fi
+    done
+    if [ -n "$wp_failed" ]; then
+        die "stopped by:$wp_failed"
+    fi
+}
+
+# stop_tree PID... sends TERM to each PID and to every process it started,
+# found in /proc in one pass. The configures, makes and compilers a part runs
+# would not stop on their own when the script does: a script's background jobs
+# start with Ctrl-C (SIGINT) ignored, and they keep it ignored.
+stop_tree() {
+    st_pids="$(for st_stat in /proc/[0-9]*/stat; do
+            cat "$st_stat" 2>/dev/null
+            echo
+        done | awk -v roots="$*" '
+            # "PID (COMMAND) STATE PPID ...": COMMAND may hold spaces and
+            # parentheses, so PPID is counted from its last ") ".
+            NF { rest = $0; sub(/.*\) /, "", rest); split(rest, f, " "); parent[$1] = f[2] }
+            END {
+                n = split(roots, r, " ")
+                for (i = 1; i <= n; i++) want[r[i]] = 1
+                do {
+                    added = 0
+                    for (p in parent)
+                        if (!(p in want) && (parent[p] in want)) { want[p] = 1; added = 1 }
+                } while (added)
+                for (p in want) print p
+            }')"
+    # shellcheck disable=SC2086 # one PID per word
+    kill -TERM $st_pids 2>/dev/null || true
+}
+
+# stop_running_parts stops the parts not waited for yet, with everything they
+# started, and reaps them, so nothing is left writing into LOG_DIR, DEPS_SRC
+# or the prefix behind a script that has stopped.
+stop_running_parts() {
+    [ -n "$PARTS" ] || return 0
+    sr_pids=""
+    for sr_part in $PARTS; do
+        sr_pids="$sr_pids ${sr_part##*:}"
+    done
+    PARTS=""
+    stop_tree $sr_pids
+    for sr_pid in $sr_pids; do
+        wait "$sr_pid" 2>/dev/null || true
+    done
+}
+
+# stop_parts is what Ctrl-C, TERM or HUP do while parts run.
+stop_parts() {
+    trap '' INT TERM HUP
+    stop_running_parts
+    exit 130
+}
+
+# locked CMD... runs CMD holding DEPS_SRC/.install.lock while parts run side
+# by side, so the five installs into DEPS_PREFIX take turns: libtool's finish
+# step in opus's install runs `ldconfig -n` over the prefix's lib/, which makes
+# the same symbolic link SDL2's install makes. Without flock (util-linux), CMD
+# simply runs.
+locked() {
+    if [ "$DEPS_PARALLEL" = "1" ] && command -v flock >/dev/null 2>&1; then
+        flock "$DEPS_SRC/.install.lock" "$@"
+    else
+        "$@"
+    fi
 }
 
 # in_dir DIR CMD... runs CMD in DIR, in a subshell.
@@ -218,7 +347,7 @@ build_sdl2() {
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_RPATH=OFF
     quietly sdl2-build cmake --build "$DEPS_SRC/sdl2-build" -j "$JOBS"
-    quietly sdl2-install cmake --install "$DEPS_SRC/sdl2-build"
+    quietly sdl2-install locked cmake --install "$DEPS_SRC/sdl2-build"
 }
 
 build_opus() {
@@ -236,7 +365,7 @@ build_opus() {
         --enable-static --disable-shared --with-pic \
         --disable-doc --disable-extra-programs
     quietly opus-build make -C "$src" -j "$JOBS"
-    quietly opus-install make -C "$src" install
+    quietly opus-install locked make -C "$src" install
 }
 
 build_ffmpeg() {
@@ -271,7 +400,7 @@ build_ffmpeg() {
         --enable-parser=h264 --enable-parser=hevc \
         --enable-pthreads
     quietly ffmpeg-build make -C "$src" -j "$JOBS"
-    quietly ffmpeg-install make -C "$src" install
+    quietly ffmpeg-install locked make -C "$src" install
 }
 
 build_jsonc() {
@@ -291,7 +420,7 @@ build_jsonc() {
         -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
         -DBUILD_TESTING=OFF -DBUILD_APPS=OFF -DDISABLE_WERROR=ON
     quietly json-c-build cmake --build "$DEPS_SRC/json-c-build" -j "$JOBS"
-    quietly json-c-install cmake --install "$DEPS_SRC/json-c-build"
+    quietly json-c-install locked cmake --install "$DEPS_SRC/json-c-build"
 }
 
 # libevent_cmake_dir prints the folder holding a libevent CMake package file
@@ -343,7 +472,7 @@ build_libevent() {
         -DEVENT__DISABLE_SAMPLES=ON -DEVENT__DISABLE_BENCHMARK=ON \
         -DOPENSSL_USE_STATIC_LIBS=TRUE
     quietly libevent-build cmake --build "$DEPS_SRC/libevent-build" -j "$JOBS"
-    quietly libevent-install cmake --install "$DEPS_SRC/libevent-build"
+    quietly libevent-install locked cmake --install "$DEPS_SRC/libevent-build"
     if [ ! -f "$DEPS_PREFIX/lib/libevent_core.a" ]; then
         die "libevent $LIBEVENT_VERSION installed no lib/libevent_core.a under $DEPS_PREFIX"
     fi
@@ -493,10 +622,64 @@ explain_configure_failure() {
             CMakeLists.txt lib/CMakeLists.txt ) >&2 || true
 }
 
+# ── Sources: chiaki-ng and miniupnpc ─────────────────────────────────────
+
+# fetch_sources puts chiaki-ng (with the submodules the helpers build) and
+# miniupnpc at their pinned commits, each fetched by its full id and checked
+# against all of it. A transfer that stalls (under 1 KB/s for a minute) fails
+# instead of holding the build until its time runs out.
+fetch_sources() {
+    GIT_HTTP_LOW_SPEED_LIMIT=1000
+    GIT_HTTP_LOW_SPEED_TIME=60
+    export GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME
+    if [ ! -d "$CHIAKI_SOURCE/.git" ]; then
+        mkdir -p "$CHIAKI_SOURCE"
+        git -C "$CHIAKI_SOURCE" init -q
+        git -C "$CHIAKI_SOURCE" remote add origin "$CHIAKI_REPO"
+    fi
+    # The build edits two of chiaki-ng's files (the hook in the top-level
+    # CMakeLists.txt, the curl target in lib/CMakeLists.txt); put both back
+    # first so a reused checkout can move to another commit and never stacks
+    # edits.
+    for tracked in CMakeLists.txt lib/CMakeLists.txt; do
+        git -C "$CHIAKI_SOURCE" checkout -q -- "$tracked" 2>/dev/null || true
+    done
+    if [ "$(git -C "$CHIAKI_SOURCE" rev-parse HEAD 2>/dev/null || true)" != "$CHIAKI_COMMIT" ]; then
+        git -C "$CHIAKI_SOURCE" fetch -q --depth 1 origin "$CHIAKI_COMMIT"
+        git -C "$CHIAKI_SOURCE" checkout -q --detach "$CHIAKI_COMMIT"
+    fi
+    if [ "$(git -C "$CHIAKI_SOURCE" rev-parse HEAD)" != "$CHIAKI_COMMIT" ]; then
+        die "chiaki-ng checkout is not at $CHIAKI_COMMIT"
+    fi
+    git -C "$CHIAKI_SOURCE" submodule update --init --depth 1 \
+        third-party/curl third-party/nanopb third-party/gf-complete third-party/jerasure
+
+    # miniupnpc, fetched by its full commit id like chiaki-ng.
+    if [ ! -d "$MINIUPNPC_SOURCE/.git" ]; then
+        mkdir -p "$MINIUPNPC_SOURCE"
+        git -C "$MINIUPNPC_SOURCE" init -q
+        git -C "$MINIUPNPC_SOURCE" remote add origin "$MINIUPNPC_REPO"
+    fi
+    if [ "$(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD 2>/dev/null || true)" != "$MINIUPNPC_COMMIT" ]; then
+        git -C "$MINIUPNPC_SOURCE" fetch -q --depth 1 origin "$MINIUPNPC_COMMIT"
+        git -C "$MINIUPNPC_SOURCE" checkout -q --detach "$MINIUPNPC_COMMIT"
+    fi
+    if [ "$(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD)" != "$MINIUPNPC_COMMIT" ]; then
+        die "miniupnp checkout is not the $MINIUPNPC_TAG commit $MINIUPNPC_COMMIT"
+    fi
+}
+
+# fetch_sources_part: fetch_sources as a part beside the dependency builds,
+# with a heading of its own for its lines.
+fetch_sources_part() {
+    say "Fetching chiaki-ng $CHIAKI_COMMIT and miniupnpc $MINIUPNPC_TAG"
+    fetch_sources
+}
+
 # ── Mode setup ───────────────────────────────────────────────────────────
 
 mkdir -p "$LOG_DIR"
-rm -f "$LOG_DIR"/*.log "$LOG_DIR/failure.txt"
+rm -f "$LOG_DIR"/*.log "$LOG_DIR"/*.out "$LOG_DIR"/failure*.txt
 
 if [ "$NATIVE_MODE" = "1" ]; then
     case "$(uname -m)" in
@@ -507,11 +690,32 @@ if [ "$NATIVE_MODE" = "1" ]; then
     PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     export PKG_CONFIG_PATH
     say "Dependencies (logs in $LOG_DIR)"
-    build_sdl2
-    build_opus
-    build_ffmpeg
-    build_jsonc
-    build_libevent
+    if [ "$DEPS_PARALLEL" = "1" ]; then
+        # Five independent builds, each from its own download into its own
+        # folder, installing (one at a time: locked) files no other installs,
+        # and the two git downloads beside them. Nothing a part sets is needed
+        # afterwards but files: libevent's CMake package is looked up below.
+        # The downloads come last in the list, so a slow one does not hold
+        # back the lines of the builds.
+        echo "    SDL2, opus, FFmpeg, json-c and libevent build side by side while chiaki-ng and miniupnpc download;"
+        echo "    each part's lines follow once it has finished"
+        trap stop_parts INT TERM HUP
+        start_part sdl2 build_sdl2
+        start_part opus build_opus
+        start_part ffmpeg build_ffmpeg
+        start_part json-c build_jsonc
+        start_part libevent build_libevent
+        start_part sources fetch_sources_part
+        wait_parts
+        trap - INT TERM HUP
+        SOURCES_FETCHED=1
+    else
+        build_sdl2
+        build_opus
+        build_ffmpeg
+        build_jsonc
+        build_libevent
+    fi
     # Where libevent's CMake package is: handed to chiaki-ng's configure as
     # libevent_DIR, so its find_package(libevent) looks there first.
     LIBEVENT_CMAKE_DIR="$(libevent_cmake_dir)"
@@ -532,39 +736,8 @@ fi
 # ── chiaki-ng ────────────────────────────────────────────────────────────
 
 say "chiaki-ng $CHIAKI_COMMIT"
-if [ ! -d "$CHIAKI_SOURCE/.git" ]; then
-    mkdir -p "$CHIAKI_SOURCE"
-    git -C "$CHIAKI_SOURCE" init -q
-    git -C "$CHIAKI_SOURCE" remote add origin "$CHIAKI_REPO"
-fi
-# The build edits two of chiaki-ng's files (the hook in the top-level
-# CMakeLists.txt, the curl target in lib/CMakeLists.txt); put both back first
-# so a reused checkout can move to another commit and never stacks edits.
-for tracked in CMakeLists.txt lib/CMakeLists.txt; do
-    git -C "$CHIAKI_SOURCE" checkout -q -- "$tracked" 2>/dev/null || true
-done
-if [ "$(git -C "$CHIAKI_SOURCE" rev-parse HEAD 2>/dev/null || true)" != "$CHIAKI_COMMIT" ]; then
-    git -C "$CHIAKI_SOURCE" fetch -q --depth 1 origin "$CHIAKI_COMMIT"
-    git -C "$CHIAKI_SOURCE" checkout -q --detach "$CHIAKI_COMMIT"
-fi
-if [ "$(git -C "$CHIAKI_SOURCE" rev-parse HEAD)" != "$CHIAKI_COMMIT" ]; then
-    die "chiaki-ng checkout is not at $CHIAKI_COMMIT"
-fi
-git -C "$CHIAKI_SOURCE" submodule update --init --depth 1 \
-    third-party/curl third-party/nanopb third-party/gf-complete third-party/jerasure
-
-# miniupnpc, fetched by its full commit id like chiaki-ng.
-if [ ! -d "$MINIUPNPC_SOURCE/.git" ]; then
-    mkdir -p "$MINIUPNPC_SOURCE"
-    git -C "$MINIUPNPC_SOURCE" init -q
-    git -C "$MINIUPNPC_SOURCE" remote add origin "$MINIUPNPC_REPO"
-fi
-if [ "$(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD 2>/dev/null || true)" != "$MINIUPNPC_COMMIT" ]; then
-    git -C "$MINIUPNPC_SOURCE" fetch -q --depth 1 origin "$MINIUPNPC_COMMIT"
-    git -C "$MINIUPNPC_SOURCE" checkout -q --detach "$MINIUPNPC_COMMIT"
-fi
-if [ "$(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD)" != "$MINIUPNPC_COMMIT" ]; then
-    die "miniupnp checkout is not the $MINIUPNPC_TAG commit $MINIUPNPC_COMMIT"
+if [ "$SOURCES_FETCHED" != "1" ]; then
+    fetch_sources
 fi
 
 # chiaki-lib links the bundled curl as CURL::libcurl_shared, the target curl's
@@ -644,7 +817,7 @@ else
 fi
 CONFIGURE_LOG="$LOG_DIR/chiaki-configure.log"
 if ! cmake -S "$CHIAKI_SOURCE" -B "$BUILD_DIR" -G Ninja "$@" > "$CONFIGURE_LOG" 2>&1; then
-    explain_configure_failure "$CONFIGURE_LOG" 2>&1 | tee "$LOG_DIR/failure.txt" >&2
+    explain_configure_failure "$CONFIGURE_LOG" 2>&1 | tee "$FAILURE_FILE" >&2
     die "chiaki-ng's configure failed (whole log: $CONFIGURE_LOG)"
 fi
 echo "    configured, after $(grep -cE "$PROBES" "$CONFIGURE_LOG") compiler probes (whole log: $CONFIGURE_LOG)"

@@ -54,9 +54,13 @@ the program takes the screen the panel stays as it was underneath; when the
 program ends, JukaHub cleans up and the list is back.
 
 One Windows program runs at a time. If the runtime is missing a piece, **A**
-opens the setup page instead (see [Automatic setup](#automatic-setup)). A
-launch that fails, or a program that closes with an error within about thirty
-seconds, opens the *Couldn't launch* card with the reason and the log's name.
+opens the setup page instead (see [Automatic setup](#automatic-setup)); while
+the runtime is being installed or updated, **A** asks you to wait. A launch
+that fails, or a program that closes with an error within about thirty
+seconds, opens the *Couldn't launch* card with the reason and the log's name —
+for a Wine game profile too. If another game took the screen while Windows was
+being prepared, the launch stops there and that game keeps the screen and the
+pad.
 
 ## Display modes
 
@@ -106,7 +110,9 @@ to it:
 * **A build that must not run.** CrossMix's preview of WestonPack
   ("Westonwrap 0.2.8 Preview 1") re-announces *every* device on a TrimUI, and
   the firmware then unmounts the SD card. JukaHub refuses a `westonwrap.sh`
-  with such a bare `udevadm trigger` and asks for the official WestonPack.
+  with such a bare `udevadm trigger` and asks for the official WestonPack. Such
+  a copy does not count as installed: the setup page offers the official
+  download instead.
 
 ### Trying other settings on a device
 
@@ -142,13 +148,16 @@ and named in the app's log.
 
 On the setup page, **Up / Down** picks a row and **A** installs it (after a
 needs-runtime launch, **A** installs everything missing and then starts the
-program).
+program, if the setup page is still open by then; leaving it lets the install
+finish without starting anything).
 
 ### In a Windows program
 
 On the handheld the pad is the program's mouse from the moment it starts — no
 setting needed. JukaHub takes the pad for itself and adds a virtual device,
-*JukaHub Mouse*, before WestonPack starts, so Weston finds it:
+*JukaHub Mouse*, before WestonPack starts, so Weston finds it; the device stays
+quiet until the program has started, so a press in those seconds cannot reach
+JukaHub's own screen:
 
 | Pad | In the program |
 |-----|----------------|
@@ -176,7 +185,7 @@ programs that need typing are out of reach for now.
 
 | Log | What it holds |
 |-----|---------------|
-| `data/windows-runtime/logs/<name>-<number>.log` | One per app: the runtime and its progress, the Windows folder, the display and how WestonPack was found or mounted, the input steps, the exact command line (values of names like `TOKEN`, `KEY` or `PASSWORD` hidden), everything WestonPack, Wine and the program printed, the exit and the clean-up. It is rotated past 1 MB. |
+| `data/windows-runtime/logs/<name>-<number>.log` | One per app: the runtime and its progress, the Windows folder, the display and how WestonPack was found or mounted, the input steps, the exact command line (values of names like `TOKEN`, `KEY` or `PASSWORD` hidden, and a game profile's own `env` values and arguments), everything WestonPack, Wine and the program printed, the exit and the clean-up. It is rotated past 1 MB. |
 | `data/game-profiles/logs/<id>.log` | The same for a Wine game profile. |
 | A bug report from JukaHub ([BUG_REPORTS.md](BUG_REPORTS.md)) | JukaHub's own recent log, with the `windowsapps` and `vcursor` lines. |
 
@@ -263,7 +272,9 @@ On Windows nothing needs installing: `.exe` files run directly.
 
 **Direct3D.** Wine's own Direct3D (wined3d) is the default. DXVK is used only
 when this device's Vulkan driver can run it: on a PC whose driver reports
-Vulkan 1.3, the setup installs the latest DXVK automatically. The Smart Pro's
+Vulkan 1.3, the setup installs the latest DXVK automatically (it is optional:
+if that download fails, Windows is still prepared and the program starts with
+wined3d, and **A** does not offer it again until JukaHub restarts). The Smart Pro's
 driver is Vulkan 1.1, which DXVK 2 cannot use; the third row offers **DXVK
 1.10.3** as an experiment (press **A** twice).
 
@@ -295,7 +306,7 @@ Environment overrides:
 | `JUKAHUB_WINE_PREFIX_IMAGE_MB` | Size of the card image when one is needed (512–3500). |
 | `JUKAHUB_WINE` / `JUKAHUB_BOX64` | Use this Wine / Box64 instead of JukaHub's. |
 | `JUKAHUB_WINE_ALLOW_NEWER=1` | Accept a runtime pack that names Wine 11 or newer. |
-| `JUKAHUB_WINE_FLAVOR=hangover` | Install Hangover instead of Box64 + Wine (needs glibc 2.36; refused on the Smart Pro). `JUKAHUB_WINE_RUNTIME_URL` points at a specific archive. |
+| `JUKAHUB_WINE_FLAVOR=hangover` | Install Hangover instead of Box64 + Wine (needs glibc 2.36; refused on the Smart Pro). `JUKAHUB_WINE_RUNTIME_URL` points at a specific archive (`https://` only). |
 | `JUKAHUB_WESTON_IMAGE` / `JUKAHUB_WESTON` | Use this WestonPack image / unpacked `westonwrap.sh`. |
 | `JUKAHUB_DXVK` / `JUKAHUB_VULKAN` | Force this DXVK folder on / name the Vulkan loader. |
 | `JUKAHUB_WINE_DISPLAY` | `auto`, `x11`, `wayland`, `weston`, `weston-gl` or `headless` for every launch. |

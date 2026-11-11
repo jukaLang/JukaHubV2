@@ -109,7 +109,7 @@ const (
 var nativeSearchURL = youtubeSearchEndpoint
 
 // nativeSearchSpec matches the yt-dlp search pseudo-URL a command carries.
-var nativeSearchSpec = regexp.MustCompile(`^ytsearch(\d+):(.*)$`)
+var nativeSearchSpec = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^ytsearch(\d+):(.*)$`) })
 
 // cacheMediaSearchResults stores one page of results under its command's key,
 // so a repeat visit — or the yt-dlp run after a failed native attempt — costs
@@ -228,7 +228,7 @@ func nativeSearchRequestFor(command string) (nativeSearchRequest, bool) {
 	if !flat || !singleJSON {
 		return nativeSearchRequest{}, false
 	}
-	match := nativeSearchSpec.FindStringSubmatch(positional)
+	match := nativeSearchSpec().FindStringSubmatch(positional)
 	if match == nil {
 		return nativeSearchRequest{}, false
 	}

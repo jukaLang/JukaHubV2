@@ -7,5 +7,4 @@ package main
 // tree names only the SoC. It now records the same answer the rest of the app
 // uses.
 
-import (
-)
+import ()

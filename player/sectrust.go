@@ -686,7 +686,7 @@ func sectrustOpenRowSheet(config *Config, r securityRow) {
 					return
 				}
 				sectrustScreen.model.builtAt = time.Time{}
-				ShowToast(fmt.Sprintf("Forgot %d cookie(s)", n), ToastKindSuccess)
+				ShowToast("Forgot "+pluralizeCount(n, "cookie", "cookies"), ToastKindSuccess)
 			}})
 		}
 	case "telemetry":

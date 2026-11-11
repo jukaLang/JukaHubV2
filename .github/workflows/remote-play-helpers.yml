@@ -1,6 +1,6 @@
-name: Remote Play helpers and runtimes
+name: Remote Play helpers and AndroidRT
 
-# Builds JukaHub's native pieces for the TrimUI handhelds on one arm64 runner,
+# Builds the native pieces every TrimUI archive carries, on one arm64 runner,
 # checks that they will start there, and hands them to the packaging jobs:
 #
 #   * the two PS Remote Play helpers in player/native (chiaki-stream and
@@ -9,22 +9,21 @@ name: Remote Play helpers and runtimes
 #   * AndroidRT, the Android-app runtime (player/androidrt), as the artifact
 #     "androidrt-package": JukaHub-AndroidRT-linux-arm64.zip, one androidrt/
 #     folder that every TrimUI archive carries as Apps/JukaHub/androidrt and
-#     the release also carries on its own;
-#   * Box64 for the Windows-app runtime, as the artifact
-#     "wine-runtime-package": JukaHub-Wine-linux-arm64.zip, one wine-runtime/
-#     folder (box64, the x86_64 libraries it installs for itself, wine.json
-#     naming the Wine build it runs) that JukaHub installs from the release.
+#     the release also carries on its own. player/native/build-runtimes.sh
+#     builds, checks and zips it; the package holds BUILDINFO.txt and a
+#     SHA256SUMS listing every other file, which JukaHub checks before
+#     installing it.
 #
-# The two packages are built, checked and zipped by
-# player/native/build-runtimes.sh; each holds BUILDINFO.txt and a SHA256SUMS
-# listing every other file, which JukaHub checks before installing one.
+# The Box64 pack of the Windows-app runtime is built in the same kind of root
+# by wine-runtime.yml, on a runner of its own: it is in no archive, and the ten
+# minutes a Box64 build takes used to hold up JukaHub-Trimui.zip, which waits
+# for this workflow.
 #
 # docker-image.yml (every push to main), release.yml (v* tags) and
 # build-sdcard.yml call this workflow. No release before this workflow carried
 # the helpers, so on every handheld the PS Remote Play panel said "Helper
-# missing"; none carried AndroidRT or a Box64 built for the handheld's glibc.
-# It can also be run on its own: Actions -> Remote Play helpers and runtimes ->
-# Run workflow.
+# missing"; none carried AndroidRT. It can also be run on its own: Actions ->
+# Remote Play helpers and AndroidRT -> Run workflow.
 #
 # Why an arm64 runner and an Ubuntu 20.04 root:
 #   * The Smart Pro has glibc 2.33 (firmware 1.0.4 and later), and a binary
@@ -38,40 +37,40 @@ name: Remote Play helpers and runtimes
 #     no ubuntu:20.04 digest that could be verified from here; debootstrap and
 #     apt check every package against the Ubuntu archive signing key instead,
 #     which is what the digest would have guaranteed.
+# .github/scripts/build-root.sh makes the root and runs every build in it, so
+# that what decides a build's output is in scripts and never in a workflow.
 #
 # What the helpers link is decided in player/native/build-helpers.sh (native
 # mode): FFmpeg, opus, json-c and libevent from pinned, checksum-verified
-# sources, all static, and OpenSSL static from Ubuntu. Each step's output goes
-# to a log in the build root and the job log shows one line per step (a failed
-# step prints the end of its log). Only SDL2 and the C library are left
-# to the handheld, and the script fails the build if anything else is NEEDED,
-# if a symbol needs a glibc newer than 2.31, or if a binary does not start.
-# build-runtimes.sh holds the runtimes to the same rules (AndroidRT and Box64
-# need nothing but the C library), fetches Box64 by the full id of its pinned
-# release commit and checks the Wine build wine.json names against its pinned
-# SHA-256.
+# sources, all static, and OpenSSL static from Ubuntu. Those dependencies and
+# SDL2 build side by side while chiaki-ng and miniupnpc download. Each step's
+# output goes to a log in the build root and the job log shows one line per
+# step (a failed step prints the end of its log). Only SDL2 and the C library
+# are left to the handheld, and the script fails the build if anything else is
+# NEEDED, if a symbol needs a glibc newer than 2.31, or if a binary does not
+# start. build-runtimes.sh holds AndroidRT to the same rules (it needs nothing
+# but the C library).
 #
 # A failure here never stops a JukaHub release: this job is continue-on-error,
 # the callers run whatever its result, and an archive without the helpers ships
 # without Remote Play streaming (exactly what every release did before), with a
-# warning on the run. The three parts are independent after the shared build
-# root: each build step is continue-on-error and each upload depends only on its
-# own part, so a failed AndroidRT or Box64 build costs the run that package and
-# nothing else. Two advisory steps report without deciding anything: AndroidRT's
-# host smoke suite run natively on arm64 (written on x86_64), and Wine 10.0
-# started once under the new Box64.
+# warning on the run. The two parts are independent after the shared build
+# root: the AndroidRT steps run whatever became of the helpers, so a failed
+# build costs the run that part and nothing else. An advisory step runs
+# AndroidRT's host smoke suite natively on arm64 (written on x86_64) and only
+# reports.
 #
-# A helper build takes about a quarter of an hour and Box64 about ten minutes,
-# the TrimUI archive waits for this job, and the sources rarely change. So each
-# part first looks for what an earlier run built from exactly the same sources
-# (the artifacts remote-play-helpers-<hash>, androidrt-pack-<hash> and
-# wine-runtime-pack-<hash>, each hash covering only that part's sources) and
-# builds only when there is none. What it takes has to pass the provenance
-# rules of the release build cache in .github/scripts/go-build-cache.sh: an
-# earlier push-to-main run of the same calling workflow, whose commit is in the
-# history being built. A fresh build on a push to main leaves its output under
-# that name for 90 days. The callers grant this job `actions: read` for the
-# lookup; without it the run would not start.
+# Most pushes change neither part, and the TrimUI archive waits for this job.
+# So each part first looks for what an earlier run built from exactly the same
+# sources (the artifacts remote-play-helpers-<hash> and androidrt-pack-<hash>,
+# named by `build-root.sh key`, each hash covering only that part's sources and
+# build-root.sh, not the workflow files) and builds only when there is none.
+# What it takes has to pass the provenance rules of the release build cache in
+# .github/scripts/go-build-cache.sh: an earlier push-to-main run of the same
+# calling workflow, whose commit is in the history being built. A fresh build
+# on a push to main leaves its output under that name for 90 days. The callers
+# grant this job `actions: read` for the lookup; without it the run would not
+# start.
 
 on:
   workflow_call:
@@ -82,11 +81,12 @@ permissions:
 
 jobs:
   build:
-    name: Remote Play helpers, AndroidRT and Box64 (linux/arm64, glibc 2.31)
+    name: Remote Play helpers and AndroidRT (linux/arm64, glibc 2.31)
     runs-on: ubuntu-24.04-arm
-    # Room for the worst case: the build root, a helper build and a Box64
-    # build, all from scratch. Reused parts take seconds.
-    timeout-minutes: 60
+    # Room for the worst case: the build root and both parts from scratch.
+    # Reused parts take seconds. The TrimUI archive waits for this job, so a
+    # hang must not hold it up for long.
+    timeout-minutes: 40
     continue-on-error: true
     permissions:
       contents: read
@@ -104,16 +104,13 @@ jobs:
 
       - name: Look for helpers an earlier run built from these sources
         id: cache
-        # The key covers everything the helpers are built from: the native
-        # sources, build-helpers.sh with its pinned versions and checksums, the
-        # Python tool pins, this workflow, which makes the build root, and
-        # .gitattributes, which decides the bytes those files are checked out
-        # as. git's blob ids hash the committed content, so every runner gets
-        # the same key; the host tests, the README and build-runtimes.sh (the
-        # runtime packages below) change nothing the helpers are built from
-        # and stay out of it. A miss, or any trouble here, only means the
-        # steps below build the helpers: this step must not fail, since a
-        # failed step would skip them too.
+        # The key covers everything the helpers are built from (build-root.sh
+        # lists it: the native sources, build-helpers.sh with its pinned
+        # versions and checksums, the Python tool pins, build-root.sh itself,
+        # which makes the build root, and .gitattributes, which decides the
+        # bytes those files are checked out as). A miss, or any trouble here,
+        # only means the steps below build the helpers: this step must not
+        # fail, since a failed step would skip them too.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,16 +121,10 @@ jobs:
             rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/BUILDINFO.txt
             exit 0
           }
-          inputs=$(git ls-files -s -- player/native ':(exclude)player/native/tests' \
-            ':(exclude)player/native/*.md' ':(exclude)player/native/build-runtimes.sh' \
-            .github/workflows/remote-play-helpers.yml .gitattributes)
-          case "$inputs" in
-            *player/native/build-helpers.sh*) ;;
-            *)
-              echo "::warning title=Remote Play helpers::could not list the helper sources; building them"
-              miss ;;
-          esac
-          name="remote-play-helpers-$(printf '%s\n' "$inputs" | sha256sum | cut -c1-16)"
+          if ! name=$(sh .github/scripts/build-root.sh key helpers); then
+            echo "::warning title=Remote Play helpers::could not list the helper sources; building them"
+            miss
+          fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           echo "helper sources: $name"
           if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin \
@@ -158,7 +149,7 @@ jobs:
         # The same lookup for JukaHub-AndroidRT-linux-arm64.zip. Its key covers
         # what the package is made from: player/androidrt's sources,
         # build-tsp.sh and launch.sh (copied into the package), the script that
-        # checks and packages it, this workflow and .gitattributes; the smoke
+        # checks and packages it, build-root.sh and .gitattributes; the smoke
         # tests and the README stay out. A package is only taken when it still
         # verifies (one androidrt/ folder, every file listed in its SHA256SUMS
         # and matching). Like the step above, this one must not fail.
@@ -172,16 +163,10 @@ jobs:
             rm -f "player/native/bin/$zip"
             exit 0
           }
-          inputs=$(git ls-files -s -- player/androidrt/src player/androidrt/build-tsp.sh \
-            player/androidrt/launch.sh player/native/build-runtimes.sh \
-            .github/workflows/remote-play-helpers.yml .gitattributes)
-          case "$inputs" in
-            *player/androidrt/build-tsp.sh*) ;;
-            *)
-              echo "::warning title=AndroidRT::could not list its sources; building it"
-              miss ;;
-          esac
-          name="androidrt-pack-$(printf '%s\n' "$inputs" | sha256sum | cut -c1-16)"
+          if ! name=$(sh .github/scripts/build-root.sh key androidrt); then
+            echo "::warning title=AndroidRT::could not list its sources; building it"
+            miss
+          fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           echo "AndroidRT sources: $name"
           if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin "$zip"; then
@@ -193,107 +178,19 @@ jobs:
           fi
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
-      - name: Look for a Box64 pack an earlier run built from these sources
-        id: box64_cache
-        # The same lookup for JukaHub-Wine-linux-arm64.zip. Everything the pack
-        # is made from is pinned in build-runtimes.sh (the Box64 commit, the
-        # build options, the Wine build and its SHA-256), so its key is that
-        # script, this workflow and .gitattributes.
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          zip=JukaHub-Wine-linux-arm64.zip
-          miss() {
-            rm -f "player/native/bin/$zip"
-            exit 0
-          }
-          inputs=$(git ls-files -s -- player/native/build-runtimes.sh \
-            .github/workflows/remote-play-helpers.yml .gitattributes)
-          case "$inputs" in
-            *player/native/build-runtimes.sh*) ;;
-            *)
-              echo "::warning title=Box64::could not list the pack's sources; building it"
-              miss ;;
-          esac
-          name="wine-runtime-pack-$(printf '%s\n' "$inputs" | sha256sum | cut -c1-16)"
-          echo "artifact=$name" >> "$GITHUB_OUTPUT"
-          echo "Box64 pack sources: $name"
-          if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin "$zip"; then
-            miss
-          fi
-          if ! sh player/native/build-runtimes.sh verify "player/native/bin/$zip"; then
-            echo "::warning title=Box64::the earlier pack does not verify; building Box64 instead"
-            miss
-          fi
-          echo "hit=true" >> "$GITHUB_OUTPUT"
-
       - name: Create the Ubuntu 20.04 build root
         id: root
         # Needed by whichever part an earlier run did not leave behind.
-        if: steps.cache.outputs.hit != 'true' || steps.androidrt_cache.outputs.hit != 'true' || steps.box64_cache.outputs.hit != 'true'
-        run: |
-          set -euo pipefail
-          # Nothing here reads man pages: skip man-db's index rebuild.
-          sudo rm -f /var/lib/man-db/auto-update || true
-          sudo apt-get -o Acquire::Retries=3 update -q
-          sudo apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends debootstrap
-          # Naming the keyring makes an unsigned or wrongly signed archive fatal;
-          # without it debootstrap only warns and carries on.
-          sudo debootstrap --variant=minbase --arch=arm64 \
-            --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg \
-            focal "$ROOTFS" http://ports.ubuntu.com/ubuntu-ports
-          # The security and bug-fix updates too: OpenSSL is linked statically,
-          # so whatever libssl-dev holds is what ships. Focal's public update
-          # pockets froze when its standard support ended (2025-05-31), so a
-          # fresh build links the same OpenSSL as a reused one (TEST-16).
-          printf '%s\n' \
-            "deb http://ports.ubuntu.com/ubuntu-ports focal main universe" \
-            "deb http://ports.ubuntu.com/ubuntu-ports focal-updates main universe" \
-            "deb http://ports.ubuntu.com/ubuntu-ports focal-security main universe" \
-            | sudo tee "$ROOTFS/etc/apt/sources.list" >/dev/null
-          sudo cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
-          sudo mkdir -p "$ROOTFS/src"
-          sudo mount --bind "$GITHUB_WORKSPACE" "$ROOTFS/src"
-          sudo mount -t proc proc "$ROOTFS/proc"
-          sudo mount --bind /dev "$ROOTFS/dev"
-          in_root() {
-            sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
-              DEBIAN_FRONTEND=noninteractive \
-              PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
-          }
-          in_root apt-get -o Acquire::Retries=3 update -q
-          # zip and unzip: build-runtimes.sh packages and checks the runtimes.
-          in_root apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends \
-            build-essential ca-certificates curl file git libssl-dev make \
-            ninja-build patchelf pkg-config python3 python3-pip \
-            python3-setuptools python3-wheel unzip xz-utils zip
-          # 20.04's pip predates the wheel tags current cmake and grpcio-tools
-          # publish (manylinux_2_17), and would fall back to compiling them.
-          in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: 'pip==24.0'
-          # CMake, and the grpcio-tools protoc that player/native/protoc-wrapper.py
-          # runs for nanopb: exact versions, wheels only (no source builds, no
-          # setup.py), from player/native/helper-build-requirements.txt, which
-          # says why each one and why hashes are not pinned yet. Box64 builds
-          # with the same CMake.
-          in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: \
-            -r /src/player/native/helper-build-requirements.txt
-          in_root cmake --version
-          in_root python3 -c 'import grpc_tools.protoc, google.protobuf; print("protoc wrapper ready")'
+        if: steps.cache.outputs.hit != 'true' || steps.androidrt_cache.outputs.hit != 'true'
+        run: sh .github/scripts/build-root.sh create
 
       - name: Build the helpers
         id: build
         if: steps.cache.outputs.hit != 'true'
-        # A quarter of an hour normally; the bound leaves the runtime builds
-        # below their share of the job when a helper build hangs.
-        timeout-minutes: 35
-        run: |
-          set -euo pipefail
-          sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
-            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            JOBS="$(nproc)" JUKAHUB_HELPERS_NATIVE=1 DEPS_PREFIX=/opt/jukahub-deps \
-            /bin/sh /src/player/native/build-helpers.sh
+        # A few minutes normally; the bound leaves AndroidRT its share of the
+        # job when a helper build hangs.
+        timeout-minutes: 20
+        run: sh .github/scripts/build-root.sh build helpers
 
       - name: Report what was built
         if: always()
@@ -374,9 +271,8 @@ jobs:
           overwrite: true
 
       - name: Upload the helpers
-        # Built or reused helpers, whatever became of the other parts (a build
-        # root that failed for the runtimes must not cost reused helpers their
-        # upload).
+        # Built or reused helpers, whatever became of AndroidRT (a build root
+        # that failed for AndroidRT must not cost reused helpers their upload).
         if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -409,7 +305,7 @@ jobs:
           retention-days: 90
           overwrite: true
 
-      # ── The runtimes: AndroidRT and the Box64 pack ─────────────────────────
+      # ── AndroidRT ──────────────────────────────────────────────────────────
       # Every step from here on names !cancelled() itself, so a failed helper
       # build does not skip it, and is continue-on-error, so its own failure
       # skips nothing else.
@@ -423,15 +319,7 @@ jobs:
         if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.androidrt_cache.outputs.hit != 'true' }}
         continue-on-error: true
         timeout-minutes: 10
-        env:
-          SOURCE_KEY: ${{ steps.androidrt_cache.outputs.artifact }}
-        run: |
-          set -euo pipefail
-          sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
-            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            SOURCE_COMMIT="$GITHUB_SHA" SOURCE_KEY="$SOURCE_KEY" \
-            OUT_DIR=/src/player/native/bin LOG_DIR=/tmp/jukahub-runtime-logs/androidrt \
-            /bin/sh /src/player/native/build-runtimes.sh androidrt
+        run: sh .github/scripts/build-root.sh build androidrt
 
       - name: AndroidRT host smoke suite on arm64 (advisory)
         id: androidrt_smoke
@@ -441,71 +329,20 @@ jobs:
         if: ${{ !cancelled() && steps.androidrt.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 10
-        run: |
-          sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
-            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            LOG_DIR=/tmp/jukahub-runtime-logs/androidrt \
-            /bin/sh /src/player/native/build-runtimes.sh smoke
+        run: sh .github/scripts/build-root.sh check androidrt
 
-      - name: Build the Box64 pack
-        id: box64
-        # Box64 at its pinned commit (a generic ARM64 build), checked like
-        # AndroidRT (box64 --version starts and names the pinned version), with
-        # the x86_64 libraries its install puts beside it, and wine.json for the
-        # pinned Wine build, whose download is checked against its SHA-256.
-        if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.box64_cache.outputs.hit != 'true' }}
-        continue-on-error: true
-        timeout-minutes: 30
-        env:
-          SOURCE_KEY: ${{ steps.box64_cache.outputs.artifact }}
-        run: |
-          set -euo pipefail
-          in_root() {
-            sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
-              DEBIAN_FRONTEND=noninteractive \
-              PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
-          }
-          # gcc 10 from 20.04's universe, nearer than its default gcc 9 to the
-          # compilers box64 is developed with; signed by the archive like the
-          # rest of the root. Optional: without it Box64 builds with gcc 9.
-          if ! in_root apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends gcc-10 \
-              > "$RUNNER_TEMP/gcc-10.log" 2>&1; then
-            tail -n 20 "$RUNNER_TEMP/gcc-10.log"
-            echo "::warning title=Box64::gcc-10 could not be installed in the build root; building Box64 with gcc 9"
-          fi
-          in_root env JOBS="$(nproc)" SOURCE_COMMIT="$GITHUB_SHA" SOURCE_KEY="$SOURCE_KEY" \
-            OUT_DIR=/src/player/native/bin LOG_DIR=/tmp/jukahub-runtime-logs/wine \
-            /bin/sh /src/player/native/build-runtimes.sh wine
-
-      - name: Start Wine 10.0 under the new Box64 (advisory)
-        id: wine_check
-        # box64 <wine>/bin/wine --version, once, bounded, with the pack's
-        # x64lib as BOX64_LD_LIBRARY_PATH: proof that the pair starts on
-        # aarch64 Linux, for the summary. The handheld's own start (its kernel,
-        # its display) is still to be seen on a device.
-        if: ${{ !cancelled() && steps.box64.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        run: |
-          sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
-            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            LOG_DIR=/tmp/jukahub-runtime-logs/wine \
-            /bin/sh /src/player/native/build-runtimes.sh wine-check
-
-      - name: Report the runtimes
+      - name: Report AndroidRT
         if: always()
-        # Only a report: its failure must not cost the packages their upload.
+        # Only a report: its failure must not cost the package its upload.
         continue-on-error: true
         env:
           ROOT_OUTCOME: ${{ steps.root.outcome }}
           ANDROIDRT_OUTCOME: ${{ steps.androidrt.outcome }}
           ANDROIDRT_REUSED: ${{ steps.androidrt_cache.outputs.hit == 'true' && steps.androidrt_cache.outputs.run || '' }}
           SMOKE_OUTCOME: ${{ steps.androidrt_smoke.outcome }}
-          BOX64_OUTCOME: ${{ steps.box64.outcome }}
-          BOX64_REUSED: ${{ steps.box64_cache.outputs.hit == 'true' && steps.box64_cache.outputs.run || '' }}
-          WINE_CHECK_OUTCOME: ${{ steps.wine_check.outcome }}
         run: |
-          logs="$ROOTFS/tmp/jukahub-runtime-logs"
+          logs="$ROOTFS/tmp/jukahub-runtime-logs/androidrt"
+          zip=JukaHub-AndroidRT-linux-arm64.zip
           # fenced <file>: the file in a tilde fence (a log line of three
           # backticks would end a backtick fence early), bounded.
           fenced() {
@@ -515,72 +352,52 @@ jobs:
             echo ""
             echo '~~~'
           }
-          # part <title> <zip> <folder> <outcome> <reused-from> <log dir> <what a missing package costs>
-          part() {
-            echo "### $1"
+          {
+            echo "### AndroidRT"
             echo ""
-            if [ -n "$5" ]; then
-              echo "Reused \`$2\` from run $5, which built and verified it from the same sources."
-            elif [ "$4" = success ]; then
-              echo "Built and verified: \`$2\`."
+            if [ -n "$ANDROIDRT_REUSED" ]; then
+              echo "Reused \`$zip\` from run $ANDROIDRT_REUSED, which built and verified it from the same sources."
+            elif [ "$ANDROIDRT_OUTCOME" = success ]; then
+              echo "Built and verified: \`$zip\`."
             else
-              echo "Not built (${4:-not run}): $7"
+              echo "Not built (${ANDROIDRT_OUTCOME:-not run}): this run's TrimUI packages ship without \`androidrt/\` and the release without the AndroidRT package."
               if [ "$ROOT_OUTCOME" = failure ]; then
                 echo "The **Create the Ubuntu 20.04 build root** step says why."
               fi
-              if [ -f "$6/failure.txt" ]; then
-                fenced "$6/failure.txt"
+              if [ -f "$logs/failure.txt" ]; then
+                fenced "$logs/failure.txt"
                 echo ""
-                echo "Every step's whole log is in the run's \`runtime-build-logs\` artifact."
+                echo "Every step's whole log is in the run's \`androidrt-build-logs\` artifact."
               fi
             fi
-            if [ -f "player/native/bin/$2" ] && unzip -p "player/native/bin/$2" "$3/BUILDINFO.txt" > "$RUNNER_TEMP/buildinfo.txt" 2>/dev/null; then
+            if [ -f "player/native/bin/$zip" ] && unzip -p "player/native/bin/$zip" androidrt/BUILDINFO.txt > "$RUNNER_TEMP/buildinfo.txt" 2>/dev/null; then
               echo ""
               echo '```'
               cat "$RUNNER_TEMP/buildinfo.txt"
               echo '```'
             fi
-            echo ""
-          }
-          {
-            part "AndroidRT" JukaHub-AndroidRT-linux-arm64.zip androidrt "$ANDROIDRT_OUTCOME" "$ANDROIDRT_REUSED" \
-              "$logs/androidrt" "this run's TrimUI packages ship without \`androidrt/\` and the release without the AndroidRT package."
             if [ -n "$SMOKE_OUTCOME" ] && [ "$SMOKE_OUTCOME" != skipped ]; then
+              echo ""
               echo "**Host smoke suite on arm64 (advisory):** ${SMOKE_OUTCOME}"
-              if [ -f "$logs/androidrt/smoke-summary.txt" ]; then
-                fenced "$logs/androidrt/smoke-summary.txt"
+              if [ -f "$logs/smoke-summary.txt" ]; then
+                fenced "$logs/smoke-summary.txt"
               fi
-              echo ""
-            fi
-            part "Box64 (the Windows-app runtime)" JukaHub-Wine-linux-arm64.zip wine-runtime "$BOX64_OUTCOME" "$BOX64_REUSED" \
-              "$logs/wine" "the release goes out without the Box64 pack; JukaHub then installs it from an older release that has one."
-            if [ -n "$WINE_CHECK_OUTCOME" ] && [ "$WINE_CHECK_OUTCOME" != skipped ]; then
-              echo "**Wine 10.0 under this Box64 (advisory):** ${WINE_CHECK_OUTCOME}"
-              if [ -f "$logs/wine/wine-check.txt" ]; then
-                fenced "$logs/wine/wine-check.txt"
-              fi
-              echo ""
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$ANDROIDRT_REUSED" ] && [ "$ANDROIDRT_OUTCOME" != success ]; then
             echo "::warning title=AndroidRT::not built; this run's TrimUI packages ship without androidrt/ and the release without JukaHub-AndroidRT-linux-arm64.zip"
           fi
-          if [ -z "$BOX64_REUSED" ] && [ "$BOX64_OUTCOME" != success ]; then
-            echo "::warning title=Box64::not built; the release goes out without JukaHub-Wine-linux-arm64.zip"
-          fi
 
-      - name: Keep the logs of a failed runtime build
+      - name: Keep the logs of a failed AndroidRT build
         # As for the helpers: one log per step, inside the build root, only a
         # help for the next fix.
-        if: ${{ always() && (steps.androidrt.outcome == 'failure' || steps.box64.outcome == 'failure') }}
+        if: ${{ always() && steps.androidrt.outcome == 'failure' }}
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: runtime-build-logs
-          path: |
-            ${{ env.ROOTFS }}/tmp/jukahub-runtime-logs/
-            ${{ env.ROOTFS }}/tmp/jukahub-runtime-build/box64-build/CMakeFiles/CMakeConfigureLog.yaml
+          name: androidrt-build-logs
+          path: ${{ env.ROOTFS }}/tmp/jukahub-runtime-logs/androidrt/
           if-no-files-found: ignore
           retention-days: 14
           overwrite: true
@@ -613,35 +430,6 @@ jobs:
           retention-days: 90
           overwrite: true
 
-      - name: Upload the Box64 pack
-        if: ${{ !cancelled() && (steps.box64.outcome == 'success' || steps.box64_cache.outputs.hit == 'true') }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: wine-runtime-package
-          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-          overwrite: true
-
-      - name: Keep the Box64 pack for later runs
-        if: ${{ !cancelled() && steps.box64.outcome == 'success' && steps.box64_cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ steps.box64_cache.outputs.artifact }}
-          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 90
-          overwrite: true
-
       - name: Release the build root
         if: always()
-        run: |
-          sudo umount "$ROOTFS/dev" 2>/dev/null || true
-          sudo umount "$ROOTFS/proc" 2>/dev/null || true
-          sudo umount "$ROOTFS/src" 2>/dev/null || true
+        run: sh .github/scripts/build-root.sh release

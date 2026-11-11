@@ -806,10 +806,10 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	// (30px at 1280), so anchoring it at cy+cardH-18 drew it across the card's
 	// bottom border and against the Next button. Below the card is the dimmed
 	// band — centred, and with nothing left to collide with.
-	footer := hintLine(FooterHint{"Left / Right", "Move"}, FooterHint{"A / Enter", "Next"},
+	footer := hintLine(FooterHint{"Left/Right", "Move"}, FooterHint{"A / Enter", "Next"},
 		FooterHint{"F / X", "Action"}, FooterHint{"B", "Skip"})
 	if step.kind == "setup" {
-		footer = hintLine(FooterHint{"Up / Down", "Choose"}, FooterHint{"A / Enter", "Open"},
+		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Open"},
 			FooterHint{"B", "Done"})
 	}
 	fw, fh, _ := smallFont.SizeUTF8(footer)

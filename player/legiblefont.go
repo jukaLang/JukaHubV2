@@ -132,30 +132,9 @@ func currentLegibleFont() legibleFont {
 func resolveLegibleFont(dirs []string) legibleFont {
 	files := map[string]string{}
 	seen := map[string]bool{}
-	var addDir func(dir string) []string
-	addDir = func(dir string) []string {
-		if dir == "" || seen[dir] {
-			return nil
-		}
-		seen[dir] = true
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil
-		}
-		var subdirs []string
-		for _, e := range entries {
-			if e.IsDir() {
-				subdirs = append(subdirs, filepath.Join(dir, e.Name()))
-				continue
-			}
-			files[strings.ToLower(e.Name())] = filepath.Join(dir, e.Name())
-		}
-		sort.Strings(subdirs)
-		return subdirs
-	}
 	for _, dir := range dirs {
-		for _, sub := range addDir(dir) {
-			addDir(sub)
+		for _, sub := range legibleCollectDir(dir, seen, files) {
+			legibleCollectDir(sub, seen, files)
 		}
 	}
 	for _, face := range legibleFontFaces {
@@ -175,6 +154,31 @@ func resolveLegibleFont(dirs []string) legibleFont {
 		}
 	}
 	return legibleFont{}
+}
+
+// legibleCollectDir indexes one directory's regular files into files, and
+// returns its subdirectories sorted. It is a package function rather than a
+// closure because the walk is recursive, and a self-referencing closure needs
+// the `var f func(...); f = func(...)` split that staticcheck's S1021 reports.
+func legibleCollectDir(dir string, seen map[string]bool, files map[string]string) []string {
+	if dir == "" || seen[dir] {
+		return nil
+	}
+	seen[dir] = true
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var subdirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			subdirs = append(subdirs, filepath.Join(dir, e.Name()))
+			continue
+		}
+		files[strings.ToLower(e.Name())] = filepath.Join(dir, e.Name())
+	}
+	sort.Strings(subdirs)
+	return subdirs
 }
 
 // legibleFontFile is the face homeUIFontForRole substitutes when the setting is

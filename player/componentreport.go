@@ -13,7 +13,6 @@ package main
 // the same facts land in the report a user pastes into an issue.
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -157,7 +156,7 @@ func componentVersions(config *Config) []componentReportRow {
 				break
 			}
 		}
-		note := fmt.Sprintf("package · %d file(s)", len(p.Files))
+		note := "package · " + pluralizeCount(len(p.Files), "file", "files")
 		if p.Held {
 			note += " · held"
 		}

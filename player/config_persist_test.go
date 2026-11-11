@@ -74,10 +74,26 @@ func TestSaveConfigPersistsDesignDataOnly(t *testing.T) {
 	}
 }
 
+// keepUserConfigLatest starts a test with no full save on record
+// (userConfigLatest) and puts the run's back when it ends.
+func keepUserConfigLatest(t *testing.T) {
+	t.Helper()
+	userConfigLatest.mu.Lock()
+	prev := userConfigLatest.vars
+	userConfigLatest.vars = nil
+	userConfigLatest.mu.Unlock()
+	t.Cleanup(func() {
+		userConfigLatest.mu.Lock()
+		userConfigLatest.vars = prev
+		userConfigLatest.mu.Unlock()
+	})
+}
+
 // A settings-only save must preserve favorites/chat state that the caller did
 // not supply, and must not persist runtime-only custom keys.
 func TestSaveUserConfigPreservesSections(t *testing.T) {
 	t.Chdir(t.TempDir())
+	keepUserConfigLatest(t)
 
 	prevCache, prevTimer, prevPending := userConfigCache, userConfigSaveTimer, pendingUserConfig
 	prevWrites := userConfigWritesEnabled
@@ -153,6 +169,85 @@ func TestSaveUserConfigPreservesSections(t *testing.T) {
 	}
 }
 
+// A section save (favourites, chat) hands over the cached user config, whose
+// settings are the ones read at boot. It writes the newest full save's
+// settings instead: it used to put the boot copy back over every setting and
+// trophy saved since, at every exit too, so each start re-awarded the same
+// trophies. A full save waiting in the debounced slot keeps the slot.
+func TestSectionSaveKeepsTheNewestSettings(t *testing.T) {
+	t.Chdir(t.TempDir())
+	keepUserConfigLatest(t)
+	prevCache, prevWrites := userConfigCache, userConfigWritesEnabled
+	userConfigWritesEnabled = true
+	cancelPendingUserConfigSave(t)
+	t.Cleanup(func() {
+		cancelPendingUserConfigSave(t)
+		userConfigCache, userConfigWritesEnabled = prevCache, prevWrites
+	})
+	read := func() UserConfig {
+		t.Helper()
+		// Polled like the debounced test's read: on Windows a scanner can hold
+		// a freshly renamed file for a moment.
+		var data []byte
+		var err error
+		for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if data, err = os.ReadFile("jukauser.json"); (err == nil && len(data) > 0) || time.Now().After(deadline) {
+				break
+			}
+		}
+		if err != nil {
+			t.Fatalf("read jukauser.json: %v", err)
+		}
+		var uc UserConfig
+		if err := json.Unmarshal(data, &uc); err != nil {
+			t.Fatalf("parse jukauser.json: %v", err)
+		}
+		return uc
+	}
+	// The cache as boot read it.
+	userConfigCache = &UserConfig{Variables: UserVariables{Volume: 40, VolumeSet: true, Custom: map[string]interface{}{
+		"theme_preset": "Boot", playtimeCustomKey: map[string]interface{}{"total": float64(10)},
+	}}}
+	// Before any full save the cache is the newest there is.
+	userConfigCache.Favorites = &FavoritesStore{Videos: []FavoriteItem{{Type: "video"}}}
+	saveUserConfig(userConfigCache)
+	if got := read(); got.Variables.Custom["theme_preset"] != "Boot" {
+		t.Fatalf("the first section save wrote theme %v", got.Variables.Custom["theme_preset"])
+	}
+	// A full save from the live config, then a favourites save.
+	live := &Config{}
+	live.Variables.Custom = map[string]interface{}{
+		"theme_preset": "Midnight", playtimeCustomKey: map[string]interface{}{"total": float64(99)},
+	}
+	saveUserConfig(userConfigFromVariables(live))
+	userConfigCache.Favorites = &FavoritesStore{Videos: []FavoriteItem{{Type: "video"}, {Type: "video"}}}
+	saveUserConfig(userConfigCache)
+	got := read()
+	if got.Variables.Custom["theme_preset"] != "Midnight" {
+		t.Fatalf("a section save put back theme %v", got.Variables.Custom["theme_preset"])
+	}
+	if pt, _ := got.Variables.Custom[playtimeCustomKey].(map[string]interface{}); pt == nil || pt["total"] != float64(99) {
+		t.Fatalf("a section save put back playtime %v", got.Variables.Custom[playtimeCustomKey])
+	}
+	if got.Favorites == nil || len(got.Favorites.Videos) != 2 {
+		t.Fatal("the section save lost its own section")
+	}
+	if got.Variables.Volume != 40 || !got.Variables.VolumeSet {
+		t.Fatalf("levels = %d/%v, want the cache's 40", got.Variables.Volume, got.Variables.VolumeSet)
+	}
+	if got.Variables.NetPlayEnabled == nil || *got.Variables.NetPlayEnabled {
+		t.Fatal("the netplay switch (off) was not saved")
+	}
+	// A section save queued after a full save does not take its slot.
+	live.Variables.Custom["theme_preset"] = "Dawn"
+	saveUserConfigDebounced(userConfigFromVariables(live))
+	saveUserConfigDebounced(userConfigCache)
+	flushPendingUserConfig()
+	if got := read(); got.Variables.Custom["theme_preset"] != "Dawn" {
+		t.Fatalf("a queued section save replaced the waiting full save (theme %v)", got.Variables.Custom["theme_preset"])
+	}
+}
+
 // A pending debounced save must not follow the process into a different working
 // directory. This used to dirty a test-runner's checkout two seconds after the
 // change was made.
@@ -164,6 +259,7 @@ func TestDebouncedUserConfigSaveStaysInScheduledDir(t *testing.T) {
 	// Restore the working directory before the testing package removes the temp
 	// directories; Windows cannot delete a directory that is still the cwd.
 	defer func() { _ = os.Chdir(prevWD) }()
+	keepUserConfigLatest(t)
 	prevDelay := userConfigSaveDelay
 	prevCache := userConfigCache
 	prevWrites := userConfigWritesEnabled

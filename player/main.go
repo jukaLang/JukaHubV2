@@ -3718,6 +3718,8 @@ func main() {
 		if onboarding.active {
 			renderOnboarding(renderer, config)
 		}
+		// A Wine game profile that failed on its goroutine (windowsapps.go).
+		wineShowProfileFailure()
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
 		}
