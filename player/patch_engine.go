@@ -555,6 +555,10 @@ func savePatchState() error {
 // startup or prevents JukaHub from launching.
 func InitPatchModule() {
 	loadPatchState()
+	// A swap whose helper stopped after it had put the new JukaHub in place is
+	// finished first (update_resume.go), so the version history below adopts
+	// it like a swap the helper committed instead of discarding its backups.
+	resumeInterruptedUpdates()
 	// A swap the helper committed keeps what it replaced as a saved version
 	// (uhist.go). It must run before the journal check purges those backups.
 	uhistAdoptCommittedSwaps()
@@ -2654,6 +2658,10 @@ func checkInterruptedJournal() {
 		// silently restoring the old binary and jukaconfig.json each time.
 		j.path = p
 		j.skipPath = self
+		// A swap that put the new JukaHub in place was finished before this
+		// runs (resumeInterruptedUpdates); what is left here is undone, and the
+		// user is told instead of the update silently looking unpressed.
+		noteUndoneSwap(&j)
 		if err := j.rollback(); err == nil {
 			recovered++
 		} else {

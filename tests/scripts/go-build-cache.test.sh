@@ -469,4 +469,27 @@ if run_script fetch-nolist fetch remote-play-helpers-unlisted "$s/bin" "${helper
 fi
 grep -q 'could not list' "$s/log" || fail "a failed artifact list produced no warning: $(cat "$s/log")"
 
+# A folder where a file goes: mv would move the file into it and succeed, so
+# fetch refuses, and keeps what was there.
+s="$work/fetch-inway"
+mkdir -p "$s/bin/chiaki-regist"
+echo "older build" > "$s/bin/BUILDINFO.txt"
+if run_script fetch-inway fetch "$hname" "$s/bin" "${helpers[@]}"; then
+  fail "fetch succeeded with a folder in the way of chiaki-regist"
+fi
+grep -q 'in the way' "$s/log" || fail "the folder in the way was not reported: $(cat "$s/log")"
+[ -d "$s/bin/chiaki-regist" ] && [ ! -e "$s/bin/chiaki-stream" ] || fail "fetch moved files although the set could not be placed"
+grep -qx 'older build' "$s/bin/BUILDINFO.txt" || fail "fetch touched a file it never placed"
+
+# A workflow id that is not a number (gh prints "null" for a missing field)
+# matches nothing, for restore and fetch alike.
+printf '{"id":101}\n' | fixture "repos/$repo/actions/runs/101"
+s="$work/noid"
+self_run=101 run_script noid fetch "$hname" "$s/bin" "${helpers[@]}" && fail "fetch went on without this run's workflow id"
+grep -q "could not look up this run's workflow" "$s/log" || fail "a missing workflow id was not reported: $(cat "$s/log")"
+s="$work/noid-restore"
+self_run=101 run_script noid-restore restore "$name" || fail "restore failed the step without a workflow id"
+state_of noid-restore | grep -q '^restored=0$' || fail "restore used a cache without knowing this run's workflow"
+grep -q "could not look up this run's workflow" "$s/log" || fail "restore did not report the missing workflow id: $(cat "$s/log")"
+
 echo "go-build-cache: ok"

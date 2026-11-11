@@ -398,6 +398,7 @@ func bkupBackupNow(c *Config) {
 			ShowToast("The backup failed: "+firstLine(err.Error()), ToastKindWarning)
 			return
 		}
+		trophyEvent(tkBackup)
 		ShowToast("Saved "+xpackClip(bkupBaseName(path), 60)+" · "+humanBytes(m.TotalBytes)+" in "+dir, ToastKindSuccess)
 		bkupRefreshAsync()
 	}()
@@ -567,6 +568,7 @@ func bkupPoll(c *Config) {
 		msg += fmt.Sprintf(" · %d left out", len(res.Skipped))
 		LogScene("bkup").Info("restore left files out", "files", strings.Join(res.Skipped, "; "))
 	}
+	trophyEvent(tkRestore)
 	ShowToast(msg, ToastKindSuccess)
 	bkupUI.stage = 0
 	bkupUI.list.cursor, bkupUI.list.top = 0, 0

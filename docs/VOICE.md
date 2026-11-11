@@ -24,9 +24,16 @@ lights follow your voice. Say a command or a question:
 
 * it stops listening by itself about a second after you stop talking (at most
   8 seconds), or press **Menu** again to send at once;
-* **hold** Menu (or F4) and it listens for as long as you hold it — let go to
-  send, like a walkie-talkie;
+* **hold** Menu (or F4) and it listens for as long as you hold it (up to 8
+  seconds) — let go to send, like a walkie-talkie;
 * **B** (Esc) cancels at any point, before or after it understood you.
+
+Menu is read the way the TrimUI's own launchers read it: a tap acts when the
+button comes up, a hold opens the orb after about half a second, and a press
+that another button joins is a chord, not a voice press — so the firmware's
+**Menu + volume** (brightness) never opens the orb, and **Menu + Start** still
+quits like **Select + Start**. A Bluetooth pad's PS or Xbox button is the
+same Menu button on the handheld.
 
 Then the orb says what it did, in a glass bubble beside it: "Volume 50%",
 "Wi-Fi off", "It is 6:15 PM". A command that opens something says so
@@ -41,13 +48,14 @@ the bubble in a sentence or two.
 
 An answer lingers for as long as it takes to read and does not hold the
 controls: any button puts it away and does its own job, **Menu** asks again.
-Music pauses while the orb listens (the speaker sits next to the microphone)
-and plays on as soon as the clip ends, before the command runs, so "pause" and
+Music and a playing video pause while the orb listens (the speaker sits next
+to the microphone; a video in a Watch Party keeps playing for the room) and
+play on as soon as the clip ends, before the command runs, so "pause" and
 "next song" act on the music that was playing.
 
 With the on-screen keyboard up, **Menu** (or F4) is voice typing into the
-field instead, and on the Voice command page it is that page's own
-microphone. Over a modal panel, the first-run tour, the arcade, JukaLand or a
+field instead (not in the browser's address bar, which has its own keyboard),
+and on the Voice command page it is that page's own microphone. Over a modal panel, the first-run tour, the arcade, JukaLand or a
 running game, Menu keeps its old job (Back). **Settings → Controls → Menu
 button: voice** gives Menu back to Back for good; on a keyboard F4 stays the
 voice key.
@@ -63,7 +71,8 @@ speak. The first 0.3 seconds after the start chime are ignored, so the chime
 itself never counts as speech. Listening stops by itself about a second after
 you stop talking (at most 8 seconds); the clip is turned into words by Groq's
 Whisper — the same service voice typing on the keyboard uses — and the command
-runs. It needs the Groq API key from **Settings → General** and an internet
+runs. It needs the Groq API key from **Settings → General** (or pasted on
+the phone: the companion page has a **Groq API key** card) and an internet
 connection. Along with the clip, Groq receives a short list of the names on
 this handheld (screen, app and game titles) so that "JukaLand" or a game's
 title comes back spelled right. Nothing is recorded until you ask, the
@@ -81,12 +90,14 @@ device the kernel lists in `/proc/asound/pcm` through ALSA's plug layer
 (`plughw:0,0`, which converts the codec's own rate and channels), every
 capture device SDL lists, and finally `arecord` on the same devices. A device
 that opens but stays silent for 1.2 seconds is swapped for the next one, and
-the one that gave sound is tried first the next time. The Smart Pro's and the
+the one that gave sound is tried first the next time (on a PC only a device
+that fails or gives no data at all is passed over: silence there is a muted
+microphone, and the next device could be a webcam). The Smart Pro's and the
 Brick's codec ships with its microphone inputs switched off, so before the
 first recording JukaHub switches on the capture-side microphone switches
 ("ADCL Input MIC1 Boost Switch", "ADCR Input MIC2 Boost Switch" — never a
-playback path) and lifts a microphone or ADC level that sits at zero; all of
-it is put back when JukaHub quits. If the orb still says **No microphone
+playback path) and lifts a microphone or ADC level whose bottom is mute when it
+sits there; all of it is put back when JukaHub quits. If the orb still says **No microphone
 found** or **The microphone gives no sound**, the log (category `mic`) lists
 what was tried and why each one failed — the line a bug report needs — and the
 phone (below) works without the handheld's microphone.

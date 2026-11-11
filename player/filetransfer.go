@@ -804,6 +804,7 @@ func feRemoteDownloadAsync(config *Config) {
 		if err != nil {
 			return feRemoteEvent{}, err
 		}
+		trophyEvent(tkFileTransfer)
 		return feRemoteEvent{kind: feRemoteFinished, message: "Downloaded " + remoteName, localChanged: true}, nil
 	})
 }
@@ -869,6 +870,7 @@ func feRemoteUploadAsync(config *Config) {
 				continue
 			}
 			uploaded++
+			trophyEvent(tkFileTransfer)
 		}
 		if uploaded == 0 && lastErr != nil {
 			return feRemoteEvent{}, lastErr

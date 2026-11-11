@@ -211,7 +211,10 @@ step starts itself (the TrimUI compile's `TOOLCHAIN_IMAGE`).
 All three pinning rules live in
 [`.github/scripts/check-workflows.sh`](.github/scripts/check-workflows.sh), and
 `make check` runs that same script, so a workflow edit that breaks one fails
-before the push rather than after it.
+before the push rather than after it. The script also checks that every job
+calling a workflow of this repository (`uses: ./.github/workflows/...`) grants
+each permission that workflow's jobs ask for: GitHub does not downgrade such a
+request, it refuses the whole calling run before it starts.
 
 ## Which files to commit
 

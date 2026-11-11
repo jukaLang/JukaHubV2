@@ -1381,6 +1381,7 @@ func ApplyThemePreset(config *Config, presetName string) {
 // announce themselves as if the user had chosen them.
 func applyThemePreset(config *Config, presetName string, notify bool) {
 	preset := GetThemePreset(presetName)
+	prevPreset, _ := config.Variables.Custom["theme_preset"].(string) // for the light/dark trophy
 	// Route through applyColorVar so stale custom colour strings from an older
 	// theme cannot override the preset chosen now.
 	applyColorVar(config, "buttonColor", preset.ButtonColor)
@@ -1423,6 +1424,15 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	// field intact when the theme changes.
 	saveUserConfig(userConfigFromVariables(config))
 	if notify {
+		// notify marks a theme the user picked; automatic switches pass false.
+		// Picking the theme already in use is not another change.
+		if presetName != prevPreset {
+			trophyEvent(tkTheme)
+		}
+		trophyEventDistinct(tkThemes, presetName)
+		if themePresetIsLight(prevPreset) != themePresetIsLight(presetName) {
+			trophyEvent(tkColorMode)
+		}
 		message := fmt.Sprintf("Theme: %s", preset.Name)
 		if preset.Summary != "" {
 			message += " · " + preset.Summary

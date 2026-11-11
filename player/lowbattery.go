@@ -417,6 +417,7 @@ func lowBatteryTick(config *Config) {
 	switch batteryGuardActionFor(percent, charging, retroArchRunning(), acted, warned) {
 	case batteryGuardWarn:
 		if markLowBatteryWarned() {
+			trophyEvent(tkLowBattery)
 			showToast(lowBatteryMessage(config, percent, getBatteryCharging()), ToastWarn())
 		}
 	case batteryGuardProtect:

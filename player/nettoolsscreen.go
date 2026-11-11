@@ -199,6 +199,9 @@ func netToolsRun(id, target string, fn func(context.Context) netToolsOutcome) bo
 			}
 		}
 		cur.at = time.Now()
+		if spec, ok := netToolsSpecFor(id); ok && out.err == nil && spec.mode != netToolsModeAuto && spec.need != toolsHubNeedNothing {
+			trophyEvent(tkNetTool) // a probe the user ran; the page's own runs on open are not counted
+		}
 	})
 	if !started {
 		netToolsJobs.mu.Lock()

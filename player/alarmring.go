@@ -211,6 +211,7 @@ func alarmSnoozeFiring() {
 		}
 	}
 	alarmSave()
+	trophyEvent(tkAlarmSnooze)
 	showToast(fmt.Sprintf("Snoozed %d minutes — rings again at %s", alarmSnoozeMinutes, clockDigits(appConfig, until)), ToastInfo())
 	PlayActivateSound()
 }
@@ -218,6 +219,9 @@ func alarmSnoozeFiring() {
 // alarmDismissFiring silences the ring and clears any pending snooze: the alarm
 // is done until its next scheduled time.
 func alarmDismissFiring() {
+	if alarmFiringActive() {
+		trophyEvent(tkAlarmWake) // the user's dismiss; a ring that times out is not one
+	}
 	alarmDismissWith("Alarm dismissed")
 }
 

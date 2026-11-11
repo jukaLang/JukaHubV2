@@ -418,6 +418,7 @@ func (r *timelapseRecorder) finish(config *Config) {
 		logWarn("timelapse", "cannot clean %s: %v", r.dir, err)
 	}
 	logDebug("timelapse", "%q ready: %s (%d frames)", r.title, out, len(r.frames))
+	trophyEvent(tkRecording)
 	r.notify("Time-lapse ready: "+filepath.Base(out), ToastKindSuccess)
 }
 

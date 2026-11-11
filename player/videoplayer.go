@@ -338,6 +338,7 @@ func subtitleToggleFeedback(result subtitleToggle, msg string) {
 	case subtitleToggleOff:
 		showToast("Subtitles off", ToastInfo())
 	case subtitleToggleOn:
+		trophyEvent(tkSubtitles) // shown at once; a fetch counts when it lands (videosubs.go)
 		showToast("Subtitles on", ToastInfo())
 	default:
 		if strings.TrimSpace(msg) == "" {
@@ -1190,6 +1191,13 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 				// open starts again (videorecover.go).
 				mediaNoteStreamOpened(sess.pageURL)
 			}
+			// Trophies: a Live TV channel showed its first picture (every channel
+			// in the library has a group). A quality switch restarts a live
+			// stream at zero too, so the same channel again does not count.
+			if g, _ := tvRowMeta(sess.pageURL); g != "" && startSec == 0 && trophyFirstFor(tkTVPlay, sess.pageURL) {
+				trophyEvent(tkTVPlay)
+				trophyEventDistinct(tkTVChannels, sess.pageURL)
+			}
 		}
 	}
 
@@ -1356,6 +1364,11 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		// know their source, or Watch Party would see an empty URL and think
 		// the room had switched streams.
 		currentPlaybackURL = pageURL
+	}
+	// Trophies: once per video. A quality switch, the download fallback and a
+	// Watch Party resync restart the page whose start is committed just below.
+	if _, same := playingVideoQuality(pageURL); !same {
+		trophyEvent(tkVideoPlay)
 	}
 	// A stream is starting, so this ceiling is now the one on screen. The
 	// Quality row reads it back if a later switch is cancelled before it plays,

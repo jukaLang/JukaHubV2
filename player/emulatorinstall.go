@@ -418,6 +418,7 @@ func startEmulatorInstall(e emuEntry) {
 			ShowToast(err.Error(), ToastKindError)
 			return
 		}
+		trophyEvent(tkEmuInstall) // one per press, also when a RetroArch came first
 		PlaySuccessSound()
 		if plan.Action == emuInstallNew {
 			note := coreConfigDisplayName(plan.Core) + " core installed · " + build.Version
@@ -656,6 +657,7 @@ func startEmulatorUpdateInstalled() {
 			invalidateCompatCache()
 			emuForgetAllUpdates()
 			coreBuildsRequestReload()
+			trophyEventN(tkEmuInstall, int64(len(report.Updated)))
 			PlaySuccessSound()
 		}
 		kind := ToastKindSuccess

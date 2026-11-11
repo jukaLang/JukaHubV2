@@ -218,6 +218,8 @@ func sysToolNetRun(ctx context.Context, gen uint64) {
 		d.phase, d.progress, d.live = sysToolNetDone, 1, 0
 		d.at = time.Now()
 	})
+	trophyEvent(tkSpeedTest)
+	trophyEventPeak(tkSpeedBest, int64(down))
 }
 
 // sysToolNetFail ends the run with a sentence a person can act on.

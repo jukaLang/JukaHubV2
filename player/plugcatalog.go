@@ -212,6 +212,9 @@ func plugSetEnabled(config *Config, name string, on bool) {
 	config.Variables.Custom[plugStateKey] = next
 	saveUserConfigDebounced(userConfigFromVariables(config))
 	LoadPlugins(config)
+	if on {
+		trophyEvent(tkPlugin) // switched on by the user (the Plugins page or Settings)
+	}
 }
 
 // plugEntryNamed finds one plugin in the last scan.

@@ -777,6 +777,7 @@ func (g *jlandGame) placeAt(tx, ty int) jlandResult {
 	}
 	g.World.set(tx, ty, t)
 	g.Stats.Placed++
+	trophyEvent(tkJlandPlace)
 	g.dirty = true
 	return jlandOK
 }
@@ -789,8 +790,11 @@ func (g *jlandGame) breakAt(tx, ty int) (jlandTile, jlandResult) {
 	was := g.World.at(tx, ty)
 	g.World.set(tx, ty, jlandAir)
 	g.Stats.Mined++
+	trophyEvent(tkJlandBreak)
 	if ore := jlandDef(was).Ore; ore >= 1 && ore <= len(g.Stats.Ores) {
 		g.Stats.Ores[ore-1]++
+		trophyEvent(tkJlandOre)
+		trophyEventDistinct(tkJlandOreKinds, jlandOreNames[ore-1])
 	}
 	g.dirty = true
 	return was, jlandOK

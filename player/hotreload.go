@@ -352,6 +352,12 @@ func StartConfigWatcher(path string, reloadFn func(*Config)) {
 	globalConfigWatcher = NewConfigWatcher(path)
 	globalConfigWatcher.SetOnReload(reloadFn)
 	globalConfigWatcher.Start()
+	// An update finished at startup (update_resume.go) replaced the design
+	// file after it was loaded; the watcher's baseline already holds the new
+	// file's time, so it is reloaded here, like an edit pushed from the builder.
+	if updateResumeReplacedConfig.Swap(false) {
+		globalConfigWatcher.NotifyWritten(path, XMLSidecarPath(path))
+	}
 }
 
 // StopConfigWatcher halts the config file watcher.

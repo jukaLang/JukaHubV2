@@ -2,9 +2,10 @@ package main
 
 // Tests for psremote_helpers_install.go: which release the Remote Play helpers
 // come from, what makes a download unusable, that an install only ever adds
-// what is missing, and what happens to a Play press or a PS5 PIN prompt that
-// waits for it. A TLS test server stands in for GitHub; the start-it-once
-// probe is replaced, since the packaged "helpers" here are shell scripts.
+// what is missing, what a refusal by the firmware does, and what happens to a
+// Play press or a PIN prompt that waits for the install. A TLS test server
+// stands in for GitHub; the start-it-once probe is replaced, since the
+// packaged "helpers" here are shell scripts.
 
 import (
 	"archive/zip"
@@ -31,6 +32,7 @@ const (
 	psHelperTestRegist = "#!/bin/sh\necho 'usage: chiaki-regist INPUT_FILE RESULT_FILE' >&2\nexit 2\n"
 	psHelperTestInfo   = "chiaki-ng: a9a2805\n"
 	psHelperTestTag    = "JukaHub-20261110120000"
+	psHelperTestGlibc  = "needs GLIBC_2.34; this firmware's libc.so.6 has up to GLIBC_2.33"
 )
 
 // psHelperTestPackage is the helper package as CI builds it.
@@ -154,7 +156,8 @@ func psHelperResetJob() {
 }
 
 // psHelperTestEnv points the installer at a test server and an empty
-// Apps/JukaHub/bin, with Remote Play supported and a probe that accepts.
+// Apps/JukaHub/bin, online, with Remote Play supported and a probe that
+// accepts.
 func psHelperTestEnv(t *testing.T) *psHelperTestServer {
 	t.Helper()
 	s := &psHelperTestServer{files: map[string][]byte{}}
@@ -197,7 +200,7 @@ func psHelperTestEnv(t *testing.T) *psHelperTestServer {
 	prevDir, prevAPI, prevClient := psHelperInstallDirOverride, psHelperReleasesAPI, psHelperClientFn
 	prevSupported, prevProbe := psHelperSupportedFn, psHelperProbeFn
 	prevStream, prevRegist := psEngineStreamOverride, psEngineRegistOverride
-	prevOpen := chiakiPanel.open
+	prevOpen, prevCode := chiakiPanel.open, chiakiPanel.code
 	// Online, whatever another test left the monitor at: offline presses are
 	// refused before any install starts.
 	netMon.mu.Lock()
@@ -215,12 +218,12 @@ func psHelperTestEnv(t *testing.T) *psHelperTestServer {
 	t.Setenv("JUKAHUB_SD_ROOT", root)
 	psHelperResetJob()
 	t.Cleanup(func() {
-		// An install a failed test left running ends before the folders and
-		// the seams it uses go away.
+		// An install a failed test left behind ends, its result posted,
+		// before the folders and the seams it uses go away.
 		psHelperJob.mu.Lock()
-		run, running := psHelperJob.run, psHelperJob.running
+		run := psHelperJob.run
 		psHelperJob.mu.Unlock()
-		if running && run != nil {
+		if run != nil {
 			select {
 			case <-run.done:
 			case <-time.After(30 * time.Second):
@@ -231,6 +234,9 @@ func psHelperTestEnv(t *testing.T) *psHelperTestServer {
 		psHelperSupportedFn, psHelperProbeFn = prevSupported, prevProbe
 		psEngineStreamOverride, psEngineRegistOverride = prevStream, prevRegist
 		chiakiPanel.open = prevOpen
+		psPanelMu.Lock()
+		chiakiPanel.code = prevCode
+		psPanelMu.Unlock()
 		netMon.mu.Lock()
 		netMon.checked, netMon.online = prevChecked, prevOnline
 		netMon.mu.Unlock()
@@ -240,25 +246,11 @@ func psHelperTestEnv(t *testing.T) *psHelperTestServer {
 	return s
 }
 
-func TestPSHelpersRefuseAPressWhileOffline(t *testing.T) {
-	psHelperTestEnv(t)
+// psHelperTestOffline turns the network monitor's answer to offline.
+func psHelperTestOffline() {
 	netMon.mu.Lock()
 	netMon.online = false
 	netMon.mu.Unlock()
-	c := psConsole{Host: "192.168.1.50", Name: "Den", PS5: true, RegistKey: "0a1b2c3d", RPKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
-	if !psHelpersHoldPlay(c) {
-		t.Fatal("an offline Play went on to a stream with no helper")
-	}
-	if psHelpersRunning() || psHelpersPressHeld() {
-		t.Error("an offline Play started an install or was kept")
-	}
-	if msg := psHelperTestToast(); !strings.Contains(msg, "connect to Wi-Fi") {
-		t.Errorf("toast = %q", msg)
-	}
-	rows := psHelperRows()
-	if len(rows) != 1 || !strings.HasPrefix(rows[0].detail, "Connect to Wi-Fi first") {
-		t.Errorf("rows offline = %+v", rows)
-	}
 }
 
 // psHelperTestNothingInstalled fails when any helper file reached bin/.
@@ -289,12 +281,29 @@ func psHelperTestToast() string {
 	return currentToast.Message
 }
 
+// psHelperTestClearToast takes the toast off the screen.
+func psHelperTestClearToast() {
+	currentToastMu.Lock()
+	currentToast = ToastState{}
+	currentToastMu.Unlock()
+}
+
 // psHelperTestOneRelease publishes the package on one release.
 func psHelperTestOneRelease(t *testing.T, s *psHelperTestServer) {
 	t.Helper()
 	a := s.asset(psHelperTestTag, psHelperTestZip(t, psHelperTestPackage()), "")
 	s.releases(t, []psHelperRelease{{TagName: psHelperTestTag, PublishedAt: "2026-11-10T12:05:00Z", Assets: []githubAsset{a}}})
 }
+
+// psHelperTestRefuseStream is a probe that refuses chiaki-stream only.
+func psHelperTestRefuseStream(stream, regist, binDir string) string {
+	if stream != "" {
+		return "chiaki-stream: " + psHelperTestGlibc
+	}
+	return ""
+}
+
+var psHelperTestConsole = psConsole{Host: "192.168.1.50", Name: "Den", PS5: true, RegistKey: "0a1b2c3d", RPKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
 
 func TestPSHelperPickPrefersTheNewestStableRelease(t *testing.T) {
 	pkg := func(url string) githubAsset {
@@ -343,8 +352,12 @@ func TestPSHelpersInstallFromTheNewestReleaseThatHasThem(t *testing.T) {
 	var probed []string
 	psHelperProbeFn = func(stream, regist, binDir string) string {
 		mu.Lock()
-		probed = append(probed, filepath.Base(stream), filepath.Base(regist), binDir)
-		mu.Unlock()
+		defer mu.Unlock()
+		for _, p := range []string{stream, regist} {
+			if p != "" {
+				probed = append(probed, filepath.Base(p)+"@"+binDir)
+			}
+		}
 		return ""
 	}
 	var phases []psHelperPhase
@@ -371,8 +384,8 @@ func TestPSHelpersInstallFromTheNewestReleaseThatHasThem(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(probed) != 3 || probed[0] != "chiaki-stream" || probed[1] != "chiaki-regist" || probed[2] != bin {
-		t.Errorf("the probe saw %q, want the unpacked chiaki-stream and chiaki-regist with the install folder", probed)
+	if strings.Join(probed, ",") != "chiaki-stream@"+bin+",chiaki-regist@"+bin {
+		t.Errorf("the probe saw %q, want each unpacked helper on its own, with the install folder", probed)
 	}
 	if len(phases) == 0 || phases[0] != psHelperLooking || phases[len(phases)-1] != psHelperChecking {
 		t.Errorf("progress = %v, want looking first and checking last", phases)
@@ -430,30 +443,37 @@ func TestPSHelpersRefuseFilesThatDoNotMatchSHA256SUMS(t *testing.T) {
 	psHelperTestNothingInstalled(t)
 }
 
-func TestPSHelpersRefuseWhatTheFirmwareWillNotRun(t *testing.T) {
+func TestPSHelpersInstallWhatTheFirmwareRunsAndRefuseTheRest(t *testing.T) {
 	s := psHelperTestEnv(t)
 	psHelperTestOneRelease(t, s)
-	psHelperProbeFn = func(stream, regist, binDir string) string {
-		return "chiaki-stream: needs GLIBC_2.34; this firmware's libc.so.6 has up to GLIBC_2.33"
-	}
+	psHelperProbeFn = psHelperTestRefuseStream
 	_, err := psInstallHelpers(context.Background(), nil)
 	if !errors.Is(err, errPSHelpersWontRun) {
 		t.Fatalf("err = %v, want errPSHelpersWontRun", err)
 	}
-	if text := psHelpersFailText(err); !strings.Contains(text, "needs GLIBC_2.34 · firmware has GLIBC_2.33") {
+	if text := psHelpersFailText(err); !strings.Contains(text, "chiaki-stream: needs GLIBC_2.34 · firmware has GLIBC_2.33") {
 		t.Errorf("fail text = %q, want the loader's reason, shortened", text)
 	}
-	psHelperTestNothingInstalled(t)
-	if _, err := os.Stat(filepath.Join(psHelperInstallDir(), psHelperWorkDirName)); !os.IsNotExist(err) {
+	bin := psHelperInstallDir()
+	if _, err := os.Stat(filepath.Join(bin, "chiaki-stream")); err == nil {
+		t.Error("the refused chiaki-stream was installed")
+	}
+	if got, _ := os.ReadFile(filepath.Join(bin, "chiaki-regist")); string(got) != psHelperTestRegist {
+		t.Errorf("chiaki-regist, which runs, = %q; want it installed", got)
+	}
+	if _, err := os.Stat(filepath.Join(bin, psHelperWorkDirName)); !os.IsNotExist(err) {
 		t.Errorf("a refused package was kept: %v", err)
+	}
+	if tag, problem, ok := psHelperLoadRefusal(); !ok || tag != psHelperTestTag || !strings.Contains(problem, "chiaki-stream") {
+		t.Errorf("remembered refusal = %q / %q / %v", tag, problem, ok)
 	}
 }
 
-func TestPSHelpersAreNotRetriedByThemselvesAfterARefusal(t *testing.T) {
+func TestPSHelpersAreNotRetriedAfterARefusalExceptByRetry(t *testing.T) {
 	s := psHelperTestEnv(t)
 	psHelperTestOneRelease(t, s)
-	psHelperProbeFn = func(stream, regist, binDir string) string { return "chiaki-stream: its program loader is missing" }
-	if !psHelpersStart(true) {
+	psHelperProbeFn = psHelperTestRefuseStream
+	if !psHelpersStart(psStartAuto) {
 		t.Fatal("the first automatic start did not start")
 	}
 	if err := psHelperTestWait(t); !errors.Is(err, errPSHelpersWontRun) {
@@ -462,17 +482,83 @@ func TestPSHelpersAreNotRetriedByThemselvesAfterARefusal(t *testing.T) {
 	psHelperJob.mu.Lock()
 	psHelperJob.endedAt = time.Now().Add(-time.Hour)
 	psHelperJob.mu.Unlock()
-	if psHelpersStart(true) {
+	if psHelpersStart(psStartAuto) {
 		t.Error("the panel's opening tried a refused package again")
 	}
+	if psHelpersStart(psStartPress) {
+		t.Error("a press tried a refused package again")
+	}
+	if psHelpersHoldPlay(psHelperTestConsole) && psHelpersRunning() {
+		t.Error("Play started a download of a refused package")
+	}
+	if msg := psHelperTestToast(); !strings.Contains(msg, "won't run on this firmware") {
+		t.Errorf("toast for Play after a refusal = %q", msg)
+	}
 	rows := psHelperRows()
-	if len(rows) != 1 || rows[0].label != "Remote Play won't run on this firmware" || rows[0].action != psActionInstallHelpers {
+	if len(rows) != 1 || rows[0].label != "Remote Play won't run on this firmware" || rows[0].action != psActionInstallHelpers || rows[0].status != "Retry" {
 		t.Errorf("rows after a refusal = %+v", rows)
 	}
-	if !psHelpersStart(false) {
-		t.Error("Retry did not try again")
+	downloads := s.downloadCount()
+	if !psHelpersStart(psStartRetry) {
+		t.Fatal("Retry did not try again")
 	}
 	_ = psHelperTestWait(t)
+	if s.downloadCount() != downloads+1 {
+		t.Error("Retry did not download again")
+	}
+}
+
+func TestPSRemoteEngineFindsALonePairingHelper(t *testing.T) {
+	psHelperTestEnv(t)
+	bin := psHelperInstallDir()
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "chiaki-regist"), []byte(psHelperTestRegist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	engine := psRemoteEngine()
+	if engine.installed() || engine.Regist != filepath.Join(bin, "chiaki-regist") {
+		t.Errorf("engine = %+v, want chiaki-regist on its own and no stream", engine)
+	}
+	psHelpersForgetPresence()
+	if stream, regist := psHelpersPresent(); stream || !regist {
+		t.Errorf("present = %v, %v; want only the pairing helper", stream, regist)
+	}
+}
+
+func TestPSHelpersRememberARefusalAcrossStarts(t *testing.T) {
+	s := psHelperTestEnv(t)
+	psHelperTestOneRelease(t, s)
+	psHelperProbeFn = psHelperTestRefuseStream
+	if _, err := psInstallHelpers(context.Background(), nil); !errors.Is(err, errPSHelpersWontRun) {
+		t.Fatalf("err = %v", err)
+	}
+	// A new start of JukaHub: no install in memory, the note on the card.
+	psHelperResetJob()
+	downloads := s.downloadCount()
+	psHelpersAutoStart()
+	if psHelpersRunning() || s.downloadCount() != downloads {
+		t.Error("the panel's opening downloaded the refused package again")
+	}
+	v := psHelpersView()
+	if v.phase != psHelperFailed || v.refused != "stream" || !strings.Contains(v.reason, "GLIBC_2.34") {
+		t.Errorf("view = %+v, want the remembered refusal", v)
+	}
+	if !psHelpersStart(psStartRetry) {
+		t.Fatal("Retry did not start")
+	}
+	_ = psHelperTestWait(t)
+	psHelperProbeFn = func(stream, regist, binDir string) string { return "" }
+	if !psHelpersStart(psStartRetry) {
+		t.Fatal("a second Retry did not start")
+	}
+	if err := psHelperTestWait(t); err != nil {
+		t.Fatalf("install once the firmware runs it: %v", err)
+	}
+	if _, _, ok := psHelperLoadRefusal(); ok {
+		t.Error("the refusal is still remembered after a good install")
+	}
 }
 
 func TestPSHelpersRefuseABadSignedManifest(t *testing.T) {
@@ -519,9 +605,14 @@ func TestPSHelpersNeverReplaceOneThatIsThere(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "chiaki-stream"), []byte(own), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var probedStream, probedRegist string
+	var probedStream, probedRegist []string
 	psHelperProbeFn = func(stream, regist, binDir string) string {
-		probedStream, probedRegist = stream, regist
+		if stream != "" {
+			probedStream = append(probedStream, stream)
+		}
+		if regist != "" {
+			probedRegist = append(probedRegist, regist)
+		}
 		return ""
 	}
 	if _, err := psInstallHelpers(context.Background(), nil); err != nil {
@@ -536,7 +627,7 @@ func TestPSHelpersNeverReplaceOneThatIsThere(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bin, "BUILDINFO.txt")); err == nil {
 		t.Error("BUILDINFO.txt, which describes the packaged pair, was installed beside a helper of another build")
 	}
-	if probedStream != "" || filepath.Base(probedRegist) != "chiaki-regist" {
+	if len(probedStream) != 0 || len(probedRegist) != 1 {
 		t.Errorf("probed %q and %q, want only the chiaki-regist about to be installed", probedStream, probedRegist)
 	}
 }
@@ -571,7 +662,7 @@ func TestPSHelpersHoldPlayUntilInstalled(t *testing.T) {
 	psHelperTestOneRelease(t, s)
 	release := s.gateDownloads(t)
 
-	c := psConsole{Host: "192.168.1.50", Name: "Den", PS5: true, RegistKey: "0a1b2c3d", RPKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	c := psHelperTestConsole
 	if !psHelpersHoldPlay(c) {
 		t.Fatal("Play was not held while chiaki-stream is missing")
 	}
@@ -580,6 +671,9 @@ func TestPSHelpersHoldPlayUntilInstalled(t *testing.T) {
 	}
 	if rows := psHelperRows(); len(rows) != 1 || !strings.HasPrefix(rows[0].label, "Installing Remote Play") || rows[0].action != psActionNone {
 		t.Errorf("rows while installing = %+v", rows)
+	}
+	if note, ok := psHelperConsoleNote(c); !ok || !strings.HasPrefix(note, "Streams by itself when Remote Play is installed") {
+		t.Errorf("the console's row while its Play waits = %q, %v", note, ok)
 	}
 	if !psHelpersHoldPlay(c) || !strings.HasPrefix(psHelperTestToast(), "Still installing") {
 		t.Errorf("a second Play during the install: toast %q", psHelperTestToast())
@@ -618,47 +712,83 @@ func TestPSHelpersLetGoOfAHeldPressOnB(t *testing.T) {
 	psHelperTestOneRelease(t, s)
 	release := s.gateDownloads(t)
 
-	if !psHelpersHoldPIN("192.168.1.50", "Account-ID saved. ") {
+	if !psHelpersHoldPIN("192.168.1.50", "Account-ID saved. ", true) {
 		t.Fatal("the PS5's PIN prompt was not held while chiaki-regist is missing")
 	}
-	if msg := psHelperTestToast(); !strings.HasPrefix(msg, "Account-ID saved. Installing Remote Play first") || !strings.Contains(msg, "PIN is asked for when it is done") {
+	if msg := psHelperTestToast(); !strings.HasPrefix(msg, "Account-ID saved. Installing Remote Play first") || !strings.Contains(msg, "PIN keyboard opens when it is done") {
 		t.Errorf("toast = %q", msg)
 	}
-	if !psHelpersCancelHeld() {
+	if note, ok := psHelperConsoleNote(psConsole{Host: "192.168.1.50", PS5: true}); !ok || !strings.HasPrefix(note, "PIN keyboard opens") {
+		t.Errorf("the PS5's row while its PIN waits = %q, %v", note, ok)
+	}
+	if !psHelpersCancelHeld(true) {
 		t.Fatal("B did not let go of the held PIN prompt")
 	}
-	if psHelpersPressHeld() || psHelpersCancelHeld() {
+	if psHelpersPressHeld() || psHelpersCancelHeld(true) {
 		t.Error("the prompt is still held after B")
 	}
 	if !psHelpersRunning() {
 		t.Error("B stopped the install itself")
 	}
-	if !psHelpersHoldPlay(psConsole{Host: "192.168.1.51", Name: "Den", PS5: true, RegistKey: "0a1b2c3d", RPKey: "AAAAAAAAAAAAAAAAAAAAAA=="}) {
+	other := psConsole{Host: "192.168.1.51", Name: "Attic", PS5: true, RegistKey: "0a1b2c3d", RPKey: "AAAAAAAAAAAAAAAAAAAAAA=="}
+	if !psHelpersHoldPlay(other) {
 		t.Fatal("Play was not held")
 	}
-	psHelpersDropHeld()
-	if psHelpersPressHeld() {
-		t.Error("closing the panel kept the held Play")
+	if !psHelpersCancelHeld(false) || !strings.Contains(psHelperTestToast(), "Attic") {
+		t.Errorf("closing the panel let go of the held Play without saying so: %q", psHelperTestToast())
 	}
+	// What is on screen now must not be taken for a press that came back.
+	psHelperTestClearToast()
 	release()
 	if err := psHelperTestWait(t); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if msg := psHelperTestToast(); strings.Contains(msg, "Den") || strings.Contains(msg, "pair it") {
+	if msg := psHelperTestToast(); strings.Contains(msg, "Attic") || strings.Contains(msg, "pair it") {
 		t.Errorf("a press that was let go came back: %q", msg)
+	}
+}
+
+func TestPSHelpersAPressReplacesAnotherAndSaysSo(t *testing.T) {
+	s := psHelperTestEnv(t)
+	psHelperTestOneRelease(t, s)
+	release := s.gateDownloads(t)
+	if !psHelpersHoldPlay(psHelperTestConsole) {
+		t.Fatal("Play was not held")
+	}
+	if !psHelpersHoldPIN("192.168.1.60", "", true) {
+		t.Fatal("the PIN prompt was not held")
+	}
+	if msg := psHelperTestToast(); !strings.HasPrefix(msg, "Den · PS5 won't start by itself now") {
+		t.Errorf("toast = %q, want it to say the held Play is gone", msg)
+	}
+	release()
+	_ = psHelperTestWait(t)
+}
+
+func TestPSHelpersTypedAddressIsAskedAtOnceWhenNoInstallCanCome(t *testing.T) {
+	psHelperTestEnv(t)
+	psHelperTestOffline()
+	if psHelpersHoldPIN("192.168.1.70", "", false) {
+		t.Error("an address that may be a PS4 waited for an install that cannot come")
+	}
+	if psHelpersRunning() || psHelpersPressHeld() {
+		t.Error("an offline prompt started an install or was kept")
+	}
+	if !psHelpersHoldPIN("192.168.1.70", "", true) {
+		t.Error("a known PS5 was asked for a PIN it cannot use")
+	}
+	if msg := psHelperTestToast(); !strings.Contains(msg, "no internet") {
+		t.Errorf("toast = %q", msg)
 	}
 }
 
 func TestPSHelpersHeldPINSaysTheInstallFailed(t *testing.T) {
 	s := psHelperTestEnv(t)
 	s.releases(t, []psHelperRelease{})
-	if !psHelpersHoldPIN("192.168.1.50", "") {
-		// The install may have failed before the press was queued; it then
-		// says so itself.
-		if msg := psHelperTestToast(); !strings.Contains(msg, "Could not install Remote Play") {
-			t.Fatalf("the PIN prompt was neither held nor refused: %q", msg)
-		}
-		return
+	// Held or refused at once, depending on how fast the install fails:
+	// either way the PIN is not asked for, and the toast says why.
+	if !psHelpersHoldPIN("192.168.1.50", "", true) {
+		t.Fatal("the PIN was asked for although the pairing helper is missing")
 	}
 	_ = psHelperTestWait(t)
 	if msg := psHelperTestToast(); !strings.Contains(msg, "Could not install Remote Play") || !strings.Contains(msg, "no recent JukaHub release") {
@@ -666,16 +796,37 @@ func TestPSHelpersHeldPINSaysTheInstallFailed(t *testing.T) {
 	}
 }
 
+func TestPSHelpersRefuseAPressWhileOffline(t *testing.T) {
+	psHelperTestEnv(t)
+	psHelperTestOffline()
+	if !psHelpersHoldPlay(psHelperTestConsole) {
+		t.Fatal("an offline Play went on to a stream with no helper")
+	}
+	if psHelpersRunning() || psHelpersPressHeld() {
+		t.Error("an offline Play started an install or was kept")
+	}
+	if msg := psHelperTestToast(); !strings.Contains(msg, "no internet right now") {
+		t.Errorf("toast = %q", msg)
+	}
+	rows := psHelperRows()
+	if len(rows) != 1 || !strings.HasPrefix(rows[0].detail, "No internet right now") {
+		t.Errorf("rows offline = %+v", rows)
+	}
+	if note, ok := psHelperConsoleNote(psHelperTestConsole); !ok || !strings.Contains(note, "no internet") {
+		t.Errorf("a paired console's row offline = %q, %v", note, ok)
+	}
+}
+
 func TestPSHelpersAutoStartLeavesARecentFailureToRetry(t *testing.T) {
 	s := psHelperTestEnv(t)
 	s.releases(t, []psHelperRelease{})
-	if !psHelpersStart(true) {
+	if !psHelpersStart(psStartAuto) {
 		t.Fatal("the panel's first opening did not start an install")
 	}
 	if err := psHelperTestWait(t); !errors.Is(err, errPSHelpersNotPublished) {
 		t.Fatalf("err = %v, want errPSHelpersNotPublished", err)
 	}
-	if psHelpersStart(true) {
+	if psHelpersStart(psStartAuto) {
 		t.Error("the panel's opening repeated a failure seconds old")
 	}
 	rows := psHelperRows()
@@ -685,8 +836,8 @@ func TestPSHelpersAutoStartLeavesARecentFailureToRetry(t *testing.T) {
 	if !strings.Contains(psHelperSubtitle(), "not installed") {
 		t.Errorf("subtitle = %q", psHelperSubtitle())
 	}
-	if !psHelpersStart(false) {
-		t.Error("Retry did not start another install")
+	if !psHelpersStart(psStartPress) {
+		t.Error("a press did not start another install after a failure")
 	}
 	_ = psHelperTestWait(t)
 }
@@ -694,7 +845,7 @@ func TestPSHelpersAutoStartLeavesARecentFailureToRetry(t *testing.T) {
 func TestPSHelpersWaitReturnsItsOwnRun(t *testing.T) {
 	s := psHelperTestEnv(t)
 	s.releases(t, []psHelperRelease{})
-	psHelpersStart(false)
+	psHelpersStart(psStartPress)
 	if err := psHelperTestWait(t); !errors.Is(err, errPSHelpersNotPublished) {
 		t.Fatalf("first: %v", err)
 	}
@@ -714,13 +865,22 @@ func TestPSHelpersForPS5PairingSaysWhyTheInstallFailed(t *testing.T) {
 		t.Fatalf("err = %v, want the install's reason", err)
 	}
 	toast, code, ok := psPairNoHelpersText(err)
-	if !ok || !strings.HasPrefix(toast, "Could not pair — Remote Play is not installed yet") || !strings.Contains(code, "see its row") {
+	if !ok || !strings.HasPrefix(toast, "Could not pair — Remote Play is not installed yet") || code != psPairCodeNoHelpers {
 		t.Errorf("pairing texts = %q / %q / %v", toast, code, ok)
+	}
+	if toast, code, ok := psPairNoHelpersText(errPSPairStillInstalling); !ok || !strings.HasPrefix(toast, "Not paired yet") || code != psPairCodeStillInstalling {
+		t.Errorf("still-installing texts = %q / %q / %v", toast, code, ok)
 	}
 	if _, _, ok := psPairNoHelpersText(errors.New("PS5 pairing failed at protocol: wrong PIN")); ok {
 		t.Error("a handshake's own error was taken for a missing helper")
 	}
-	tbxDrainUI()
+	psPanelMu.Lock()
+	chiakiPanel.code = code
+	psPanelMu.Unlock()
+	psPanelClearHelperCode()
+	if chiakiPanel.code != "" {
+		t.Errorf("a finished install left the Last error %q", chiakiPanel.code)
+	}
 }
 
 func TestPSHelperRowsOnlyWhereRemotePlayRuns(t *testing.T) {
@@ -732,19 +892,25 @@ func TestPSHelperRowsOnlyWhereRemotePlayRuns(t *testing.T) {
 	if line := psHelperSubtitle(); line != "" {
 		t.Errorf("subtitle where Remote Play cannot run = %q", line)
 	}
-	if psHelpersStart(false) {
+	if psHelpersStart(psStartRetry) {
 		t.Error("an install started where Remote Play cannot run")
 	}
-	if psHelpersHoldPlay(psConsole{Host: "192.168.1.50", RegistKey: "0a1b2c3d", RPKey: "AAAAAAAAAAAAAAAAAAAAAA=="}) {
+	if psHelpersHoldPlay(psHelperTestConsole) {
 		t.Error("Play was held where Remote Play cannot run")
 	}
-	if psHelpersHoldPIN("192.168.1.50", "") {
+	if psHelpersHoldPIN("192.168.1.50", "", true) {
 		t.Error("a PIN prompt was held where Remote Play cannot run")
+	}
+	if _, ok := psHelperConsoleNote(psHelperTestConsole); ok {
+		t.Error("a console row changed where Remote Play cannot run")
 	}
 	psHelperSupportedFn = func() bool { return true }
 	rows := psHelperRows()
 	if len(rows) != 1 || rows[0].status != "Install" || rows[0].action != psActionInstallHelpers {
 		t.Errorf("rows with nothing installed = %+v, want the Install offer", rows)
+	}
+	if note, ok := psHelperConsoleNote(psHelperTestConsole); !ok || !strings.HasPrefix(note, "Needs Remote Play installed first") {
+		t.Errorf("a paired console with no stream helper = %q, %v", note, ok)
 	}
 }
 
@@ -799,7 +965,9 @@ func TestPSHelperNetErrSaysWhatToDo(t *testing.T) {
 		{errors.New("tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 1970-01-01T00:00:12Z is before 2026-01-01T00:00:00Z"), errPSHelpersClock},
 		{errors.New("tls: failed to verify certificate: x509: certificate signed by unknown authority"), errPSHelpersTrust},
 		{errors.New("download failed after 3.1 MB: unexpected EOF"), errPSHelpersCutOff},
+		{errors.New("the partial download does not match https://github.com/x; retry to start over"), errPSHelpersCutOff},
 		{errors.New("write /mnt/SDCARD/Apps/JukaHub/bin/.remote-play-install/x.part: no space left on device"), errPSHelpersNoSpace},
+		{errors.New("open /mnt/SDCARD/Apps/JukaHub/bin/.remote-play-install/x.part: read-only file system"), errPSHelpersSDWrite},
 	}
 	for _, c := range cases {
 		if got := psHelperNetErr("listing", c.err); !errors.Is(got, c.want) {
@@ -816,14 +984,17 @@ func TestPSHelperNetErrSaysWhatToDo(t *testing.T) {
 }
 
 func TestPSHelperFailTextsFitARow(t *testing.T) {
-	for _, err := range []error{errPSHelpersOffline, errPSHelpersCutOff, errPSHelpersRateLimited, errPSHelpersClock,
-		errPSHelpersTrust, errPSHelpersNotPublished, errPSHelpersUnverified, context.DeadlineExceeded,
-		psHelperNoSpace(40<<20, 12<<20)} {
+	for _, err := range []error{errPSHelpersOffline, errPSHelpersNoInternet, errPSHelpersCutOff, errPSHelpersRateLimited,
+		errPSHelpersClock, errPSHelpersTrust, errPSHelpersSDWrite, errPSHelpersNotPublished, errPSHelpersUnverified,
+		context.DeadlineExceeded, psHelperNoSpace(40<<20, 12<<20)} {
 		if text := psHelpersFailText(err); len([]rune(text)) > 62 {
 			t.Errorf("%q is %d characters, more than a Smart Pro row shows", text, len([]rune(text)))
 		}
 	}
-	if got := psHelperCompact("needs GLIBC_2.38; this firmware's libc.so.6 has up to GLIBC_2.33"); got != "needs GLIBC_2.38 · firmware has GLIBC_2.33" {
+	if got := psHelperCompact(psHelperTestGlibc); got != "needs GLIBC_2.34 · firmware has GLIBC_2.33" {
 		t.Errorf("compact = %q", got)
+	}
+	if got := psHelperFailToast("Account-ID saved. ", errPSHelpersNotPublished); !strings.HasPrefix(got, "Account-ID saved, but Remote Play could not install") {
+		t.Errorf("a press's news was lost: %q", got)
 	}
 }

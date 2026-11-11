@@ -339,7 +339,12 @@ func brwWpeFreeMemory() {
 	// An animated wallpaper's frames are the largest set of textures JukaHub
 	// holds (up to 40 MB on the handheld, gifwall.go); the parked loop shows
 	// none of them, and the first backdrop drawn after WPE decodes it again.
-	gifWallEvict()
+	// One that failed to decode, or that memory pressure already froze on its
+	// first frame, holds next to nothing: evicting it would only start it over
+	// (and a failed one would warn again).
+	if gifWall.failedPath != gifWall.path && gifWall.frozenPath != gifWall.path {
+		gifWallEvict()
+	}
 	go debug.FreeOSMemory()
 }
 

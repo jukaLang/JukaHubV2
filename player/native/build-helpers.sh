@@ -174,10 +174,17 @@ build_ffmpeg() {
     # stream and converts odd pixel formats, nothing else. --disable-autodetect
     # keeps every optional system library (zlib, VA-API, X11...) out, so the
     # static archives pull in nothing the handheld might lack.
-    if [ -f "$DEPS_PREFIX/lib/pkgconfig/libavcodec.pc" ]; then
+    #
+    # libavformat is built too, with no demuxer, muxer or protocol in it:
+    # chiaki-ng's configure asks for it (find_package(FFMPEG ...) names
+    # avformat, and CHIAKI_ENABLE_FFMPEG_DECODER=ON stops the configure with
+    # "Could NOT find FFMPEG (missing: avformat)" without it), although the
+    # decoder never opens a container. Static and empty, it adds next to
+    # nothing to the binaries and no NEEDED library.
+    if [ -f "$DEPS_PREFIX/lib/pkgconfig/libavcodec.pc" ] && [ -f "$DEPS_PREFIX/lib/pkgconfig/libavformat.pc" ]; then
         return 0
     fi
-    say "FFmpeg $FFMPEG_VERSION (static, H.264 + HEVC decoders, swscale)"
+    say "FFmpeg $FFMPEG_VERSION (static, H.264 + HEVC decoders, swscale, an empty avformat)"
     fetch "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256" \
         "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" \
         "https://www.ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
@@ -189,7 +196,7 @@ build_ffmpeg() {
             --enable-static --disable-shared --enable-pic \
             --disable-programs --disable-doc --disable-debug \
             --disable-autodetect --disable-network --disable-everything \
-            --disable-avdevice --disable-avformat --disable-avfilter \
+            --disable-avdevice --disable-avfilter \
             --disable-swresample --disable-postproc \
             --enable-decoder=h264 --enable-decoder=hevc \
             --enable-parser=h264 --enable-parser=hevc \
@@ -258,7 +265,7 @@ verify_native() {
         echo "built:      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "chiaki-ng:  $CHIAKI_REPO @ $CHIAKI_COMMIT"
         echo "miniupnpc:  $MINIUPNPC_TAG @ $(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD 2>/dev/null || echo unknown)"
-        echo "FFmpeg:     $FFMPEG_VERSION (static: h264, hevc, swscale)"
+        echo "FFmpeg:     $FFMPEG_VERSION (static: h264, hevc, swscale; avformat without formats)"
         echo "opus:       $OPUS_VERSION (static)"
         echo "json-c:     $JSONC_VERSION (static)"
         echo "OpenSSL:    $(pkg-config --modversion openssl 2>/dev/null || echo unknown) (static, distribution)"

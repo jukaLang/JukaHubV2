@@ -232,9 +232,9 @@ func closeChiakiPanel() {
 	psSignInQRRect = sdl.Rect{}
 	psPanelEditField = psEditNone
 	psPanelPairAfterAccount = false
-	// A Play or a PIN prompt waiting for the helpers' install must not start
-	// by itself in a later session (the install itself goes on).
-	psHelpersDropHeld()
+	// A Play or a PIN prompt waiting for the helpers' install must not act
+	// by itself later; the toast says it was let go (the install goes on).
+	psHelpersCancelHeld(false)
 	PlayBackSound()
 }
 
@@ -359,12 +359,13 @@ func psPanelPair(host, pin string, target int) {
 					break
 				}
 			}
-			// A typed address may be a PS5; with an Account-ID saved, try the
-			// PS5 handshake before giving up. A PS4 a scan found never waits
-			// for the PS5 helper, and keeps its own reason: the PS5's replaces
-			// it only when a PS5 answered there and refused.
+			// A typed address may be a PS5; with an Account-ID saved and the
+			// PS5 helper in place, try the PS5 handshake before giving up
+			// (its PIN prompt waited for an install that could come). A PS4
+			// a scan found never tries it, and keeps its own reason: the
+			// PS5's replaces it only when a PS5 answered there and refused.
 			if err != nil && unidentified && strings.TrimSpace(account) != "" {
-				if helperErr := psHelpersForPS5Pairing(); helperErr == nil {
+				if _, regist := psHelpersPresent(); regist {
 					c5, err5 := ps5Register(psRemoteEngine(), host, pin, account, 25*time.Second)
 					switch {
 					case err5 == nil:
@@ -481,11 +482,13 @@ func chiakiRows() []chiakiRow {
 		row := chiakiRow{label: c.label(), host: c.Host}
 		menu := psPanelLinkDeviceName(psConsoleKind(c))
 		switch {
-		case busy != "" && strings.Contains(busy, c.Host):
+		case busy != "" && busy == "Pairing "+c.Host+"…":
+			// The whole busy text, so 192.168.1.6 is not busy while
+			// 192.168.1.60 pairs.
 			row.detail = "Pairing — keep " + menu + " open on the console"
 			if wait := psHelperPairingWait(); wait != "" {
-				// A typed address waits for chiaki-regist before it tries
-				// the PS5 handshake (psremote_helpers_install.go).
+				// A PS5 pairing waits for a chiaki-regist that went missing
+				// (psremote_helpers_install.go).
 				row.detail = wait
 			}
 			row.status = "…"
@@ -493,10 +496,18 @@ func chiakiRows() []chiakiRow {
 		case c.paired():
 			// Ready, in rest mode, being woken, or silent (psremote_wake.go).
 			row.detail, row.status, row.action = psPanelPairedRow(c.Host, quality)
+			if note, ok := psHelperConsoleNote(c); ok {
+				// A held Play, or what A does while chiaki-stream is missing.
+				row.detail = note
+			}
 		default:
 			row.detail = hintSentence("Not paired — press %s, then type the PIN from "+menu, "A", "Select")
 			row.status = "Pair"
 			row.action = psActionPair
+			if note, ok := psHelperConsoleNote(c); ok {
+				// A PIN prompt waiting for the pairing helper.
+				row.detail = note
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -680,7 +691,7 @@ func psPanelBeginPair(host string) {
 		// The handshake needs chiaki-regist: a missing one installs while
 		// the Account-ID is being found (a no-op when it is there or
 		// already installing). Offline, the PIN prompt says what is needed.
-		psHelpersStart(false)
+		psHelpersStart(psStartPress)
 	}
 	if psTargetNeedsAccount(isPS5, chiakiPanel.pairTarget) && strings.TrimSpace(chiakiPanel.account) == "" {
 		psPanelOpenAccountPage(true)
@@ -747,10 +758,12 @@ func psPanelLinkDeviceHint(kind int) string {
 // psPanelPromptPIN opens the PIN keyboard with the console's menu path in a
 // toast. prefix leads the toast ("Account-ID saved. "). A PS5 whose pairing
 // helper is still to install is asked once it is in: the PIN its Link Device
-// shows lasts five minutes (psremote_helpers_install.go).
+// shows lasts five minutes. So is an address typed by hand while that install
+// can come now, since it may be a PS5 (psremote_helpers_install.go).
 func psPanelPromptPIN(prefix string) {
 	kind := psPanelPairKind(chiakiPanel.pairHost)
-	if (kind == 5 || chiakiPanel.pairTarget >= psTargetPS5) && psHelpersHoldPIN(chiakiPanel.pairHost, prefix) {
+	ps5 := kind == 5 || chiakiPanel.pairTarget >= psTargetPS5
+	if (ps5 || kind == 0) && psHelpersHoldPIN(chiakiPanel.pairHost, prefix, ps5) {
 		return
 	}
 	ShowToast(prefix+psPanelLinkDeviceHint(kind), ToastKindInfo)
@@ -808,7 +821,7 @@ func psPanelBack() {
 	}
 	// B first lets go of a Play or a PIN prompt waiting for the helpers'
 	// install, then stops a wake that is still waiting; the next B closes.
-	if psHelpersCancelHeld() {
+	if psHelpersCancelHeld(true) {
 		return
 	}
 	if psWakeCancelRunning() {

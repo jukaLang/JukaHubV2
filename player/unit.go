@@ -437,6 +437,7 @@ func handleUnitInput(e *sdl.KeyboardEvent, config *Config) {
 			var val float64
 			if _, err := fmt.Sscanf(unitInputValue, "%f", &val); err == nil {
 				if res, ok := convertUnit(val, unitFrom, unitTo, unitCategory); ok {
+					trophyEvent(tkUnitConvert)
 					if unitCategory == "temperature" {
 						if unitTo == "C" || unitTo == "c" {
 							unitResult = fmt.Sprintf("%.2f °C", res)

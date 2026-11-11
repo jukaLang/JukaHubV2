@@ -113,6 +113,9 @@ func notesSaveCurrentEdit() {
 	}
 	for i := range notes.store.Notes {
 		if notes.store.Notes[i].ID == notes.editID {
+			if notes.store.Notes[i].Title != notes.editTitle || notes.store.Notes[i].Content != notes.editContent {
+				trophyEvent(tkNoteSave) // only a save that changed the note
+			}
 			notes.store.Notes[i].Title = notes.editTitle
 			notes.store.Notes[i].Content = notes.editContent
 			notes.store.Notes[i].UpdatedAt = time.Now()

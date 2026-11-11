@@ -336,6 +336,9 @@ func voicePhoneRunOnMain(req voicePhoneRequest) voicePhoneReply {
 		voiceShow(config, out, voiceFromPhone)
 		return rep
 	}
+	if out.Done {
+		trophyEvent(tkVoiceCmd) // it already ran (a level, a switch, the music)
+	}
 	switch {
 	case out.Cancel:
 	case len(out.Choices) == 1:
@@ -344,6 +347,7 @@ func voicePhoneRunOnMain(req voicePhoneRequest) voicePhoneReply {
 		ShowToast("Your phone found a few matches — pick one there", ToastKindInfo)
 	case out.Act != nil:
 		ShowToast("From your phone: "+out.Say, ToastKindInfo)
+		trophyEvent(tkVoiceCmd)
 		out.Act(config)
 	case out.Search != "":
 		ShowToast("From your phone: "+out.Say, ToastKindWarning)
@@ -393,6 +397,7 @@ func voicePhonePick(config *Config, req voicePhoneRequest) voicePhoneReply {
 		voiceRunPending(config)
 	} else {
 		ShowToast("From your phone: "+out.Say, ToastKindInfo)
+		trophyEvent(tkVoiceCmd)
 		out.Act(config)
 	}
 	return voicePhoneReply{OK: true, Say: out.Say}

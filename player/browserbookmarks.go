@@ -209,6 +209,7 @@ func browserBookmarkAdd(address, title string) bool {
 		browserBookmarks.list = browserBookmarks.list[:browserBookmarkMaxRecords]
 	}
 	browserBookmarksSaveLocked()
+	trophyEvent(tkBookmark)
 	return true
 }
 

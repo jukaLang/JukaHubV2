@@ -70,14 +70,16 @@ jobs:
       # CI download, not what devices install (docker-image.yml's TrimUI build
       # carries its cache with go-build-cache.sh instead). The workflow file is
       # in the key because it pins the image, whose headers cgo compiles
-      # against and Go's cache keys cannot see.
+      # against and Go's cache keys cannot see; go.mod for its toolchain line
+      # and package-sdcard.sh for the build flags, because an exact key match
+      # is never saved again and would otherwise pin a stale cache.
       - name: Cache Go modules and build cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             /github/home/go/pkg/mod
             /github/home/.cache/go-build
-          key: tspsdcard-${{ hashFiles('.github/workflows/build-sdcard.yml') }}-${{ hashFiles('player/go.sum') }}
+          key: tspsdcard-${{ hashFiles('.github/workflows/build-sdcard.yml') }}-${{ hashFiles('player/go.mod', 'player/go.sum', 'player/package-sdcard.sh') }}
           restore-keys: |
             tspsdcard-${{ hashFiles('.github/workflows/build-sdcard.yml') }}-
 

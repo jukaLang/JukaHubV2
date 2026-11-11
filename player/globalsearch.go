@@ -307,6 +307,9 @@ func homeSearchActivate(config *Config, i int) {
 		return
 	}
 	homeSearchRemember(gsQuery)
+	if strings.TrimSpace(gsQuery) != "" {
+		trophyEvent(tkSearch) // a typed query led to a result (once: the sheet closes)
+	}
 	homeSearchClose()
 	PlayActivateSound()
 	if r.Action != nil {
@@ -423,8 +426,10 @@ func handleGSInput(e *sdl.KeyboardEvent, config *Config) {
 		homeSearchClose()
 		PlayBackSound()
 	case sdl.K_F4:
-		// Say it instead, as Y does on the pad. The global F4 is read after
-		// this sheet, so it is answered here; Alt+F4 stays the window's quit.
+		// Say it instead, as Y does on the pad. F4 is the voice orb's key and
+		// main.go reads it before this sheet (voiceorb.go); it only gets here
+		// when the orb could not come up, and then the page opens. Alt+F4
+		// stays the window's quit.
 		if e.Repeat == 0 && e.Keysym.Mod&(sdl.KMOD_ALT|sdl.KMOD_CTRL) == 0 {
 			voiceOpen(config)
 		}

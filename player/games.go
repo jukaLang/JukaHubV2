@@ -185,18 +185,25 @@ func startGame(id gameID) {
 	gameOver = false
 	gameScore = 0
 	gameStartTime = time.Now()
+	trophyEvent(tkArcadePlay)
 	switch id {
 	case gameSnake:
+		trophyEventDistinct(tkArcadeGames, "snake")
 		initSnake()
 	case gameTetris:
+		trophyEventDistinct(tkArcadeGames, "tetris")
 		initTetris()
 	case game2048:
+		trophyEventDistinct(tkArcadeGames, "2048")
 		init2048()
 	case gamePong:
+		trophyEventDistinct(tkArcadeGames, "pong")
 		initPong()
 	case gameMinesweeper:
+		trophyEventDistinct(tkArcadeGames, "minesweeper")
 		initMinesweeper()
 	case gameFlappy:
+		trophyEventDistinct(tkArcadeGames, "flappy")
 		initFlappy()
 	}
 }
@@ -397,6 +404,7 @@ func tickSnake() {
 
 	if newHead == snakeFood {
 		gameScore += 10
+		trophyEventPeak(tkSnakeBest, int64(gameScore))
 		placeSnakeFood()
 	} else {
 		snakeBody = snakeBody[:len(snakeBody)-1]
@@ -573,6 +581,10 @@ func tetrisPlace() {
 	}
 	tetrisLines += linesCleared
 	gameScore += linesCleared * linesCleared * 100
+	trophyEventN(tkTetrisLines, int64(linesCleared))
+	if linesCleared >= 4 {
+		trophyEvent(tkTetrisQuad)
+	}
 	spawnTetrisPiece()
 	if !tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x, tetrisPiece.y) {
 		gameOver = true
@@ -768,6 +780,7 @@ func g2048SlideRow(row [g2048Grid]int) ([g2048Grid]int, int) {
 		if compacted[i] != 0 && compacted[i] == compacted[i+1] {
 			compacted[i] *= 2
 			score += compacted[i]
+			trophyEventPeak(tk2048Tile, int64(compacted[i])) // only real moves slide rows
 			compacted[i+1] = 0
 		}
 	}
@@ -1069,6 +1082,7 @@ func tickPong() {
 		pongBall.vx = -pongSpeed
 		pongBall.vy = pongSpeed * (rand.Float64()*0.6 - 0.3)
 		gameScore += 5
+		trophyEvent(tkPongPoint)
 	}
 }
 
@@ -1468,6 +1482,7 @@ func msRevealAtCursor() {
 	if revealed == msW*msH-msMines {
 		gameOver = true
 		msWon = true
+		trophyEvent(tkMinesWin)
 	}
 }
 
@@ -1713,6 +1728,7 @@ func tickFlappy() {
 		if !p.Passed && p.X+flappyPipeW < float64(flappyBirdX) {
 			p.Passed = true
 			gameScore++
+			trophyEventPeak(tkFlappyBest, int64(gameScore))
 			PlayNavSound()
 		}
 	}

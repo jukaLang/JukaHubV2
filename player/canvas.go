@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
 )
 
 // --- Canvas Sandbox ---
@@ -89,7 +88,7 @@ func executeCanvasCode(code string) *sdl.Surface {
 	fill(sdl.Color{R: 255, G: 255, B: 255, A: 255})
 
 	// optional TTF font for real text rendering in fillText()
-	textFont, fontErr := ttf.OpenFont(resolvePath("Inter-Regular.ttf"), 20)
+	textFont, fontErr := openHomeUIFont(homeUIFontFile, 20)
 	if fontErr == nil {
 		defer textFont.Close()
 		registerFontPath(textFont, "Inter-Regular.ttf")

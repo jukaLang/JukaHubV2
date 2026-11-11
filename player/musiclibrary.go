@@ -284,6 +284,7 @@ func musicToggleFavorite(path string) bool {
 		delete(musicFavData.paths, key)
 	} else {
 		musicFavData.paths[key] = true
+		trophyEvent(tkFavorite)
 	}
 	_ = musicFavoritesSaveLocked()
 	return musicFavData.paths[key]

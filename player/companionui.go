@@ -679,6 +679,9 @@ func companionTextEvent(text string) *sdl.TextInputEvent {
 // drainCompanionQueue runs once per frame on the main loop. Everything the
 // phone sent since the last frame is applied here, in order.
 func drainCompanionQueue(config *Config) {
+	// The phone's Groq key card reads a copy of the key status; this is the
+	// main loop, where the settings may be read (companion_groq.go).
+	companionRefreshGroqStatus(config)
 	events := drainCompanionEvents()
 	if len(events) == 0 {
 		return
@@ -700,6 +703,11 @@ func drainCompanionQueue(config *Config) {
 			// A PlayStation sign-in (the phone's /psn page, or a "redirect"
 			// address pasted on this device) produced the PSN Account-ID.
 			psPanelAccountArrived(ev.Text)
+		case companionEventGroqKey:
+			// The phone's Groq key card, saved the way the key field in
+			// Keyboard settings saves it (companion_groq.go).
+			vkSaveGroqKey(config, ev.Text)
+			companionRefreshGroqStatus(config)
 		}
 	}
 }

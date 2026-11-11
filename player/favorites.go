@@ -292,6 +292,7 @@ func addFavoriteVideo(v VideoInfo) {
 	defer favoritesMutex.Unlock()
 	favoritesStore.Videos = removeDuplicateFavorite(favoritesStore.Videos, v.GetURL(), "video", v)
 	favoritesStore.Videos = append([]FavoriteItem{{Type: "video", Data: v, Timestamp: time.Now()}}, favoritesStore.Videos...)
+	trophyEvent(tkFavorite)
 }
 
 // addRecentVideo records a video at the top of the recently-played list. The

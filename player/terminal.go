@@ -822,6 +822,7 @@ func termExecute(input string) {
 	if cmdline == "" {
 		return
 	}
+	trophyEvent(tkTermCmd)
 
 	parts := strings.Fields(cmdline)
 	command := strings.ToLower(parts[0])

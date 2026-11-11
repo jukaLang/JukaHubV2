@@ -227,6 +227,7 @@ func hotseatUISetupChange(dir int) {
 // hotseatUIStartTurns starts pass and play on its first card.
 func hotseatUIStartTurns() {
 	hotseat.turns.start(hotseatUI.setupSeats, hotseatTimerSteps[hotseatUI.setupTimer])
+	trophyEvent(tkLocalPlay) // pass and play always has two seats or more
 	hotseatUI.view = hotseatViewTurns
 	hotseatUI.button = 0
 	PlayActivateSound()

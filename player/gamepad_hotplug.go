@@ -29,6 +29,7 @@ func handleControllerDevice(e *sdl.ControllerDeviceEvent) {
 	defer hotseatDeviceChanged(e)
 	switch e.Type {
 	case sdl.CONTROLLERDEVICEADDED:
+		trophyEventDistinct(tkPads, sdl.GameControllerNameForIndex(int(e.Which)))
 		if gameController != nil && gameController.Attached() {
 			return
 		}

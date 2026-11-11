@@ -136,6 +136,7 @@ func psRemoteShowLastRun() {
 	if run.Result == psLastRunStarted {
 		run = psLastRunFromLog(run, psLastRunLogText(psLastRunLogPath(), run.LogOffset))
 	}
+	trophyEventN(tkRemotePlay, min(run.Frames, 1)) // the last stream showed video (n < 1 is ignored)
 	name, host := psLastRunConsole(&run)
 	msg, kind, show := psLastRunToast(run, name)
 	if !show {

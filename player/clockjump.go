@@ -192,6 +192,10 @@ func playtimeClockJumpCheck() {
 			playtime.rev++
 			logInfo("clock", "playtime days re-anchored to %s after a clock change", today)
 		}
+		// The trophies' lifetime record of days follows (playtime.go).
+		if trophyLifeReanchor(&playtime.data, before, today, shift.wall) {
+			playtime.rev++
+		}
 	}
 	// What was recorded so far sits where it belongs now; a later jump moves
 	// only what is recorded after this one.

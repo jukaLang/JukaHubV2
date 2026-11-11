@@ -251,6 +251,9 @@ func pdfvPollLoaded() {
 		return
 	}
 	pdf.doc = *done
+	if done.Error == "" && done.Format == "PDF" {
+		trophyEvent(tkPdfOpen)
+	}
 	if pdf.page < 1 {
 		pdf.page = 1
 	}

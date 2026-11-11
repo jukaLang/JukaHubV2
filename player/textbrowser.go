@@ -1176,6 +1176,10 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	if useCache {
 		if page, ok := browserCachedPage(address); ok {
 			showBrowserPage(config, outputVariable, page)
+			if recordHistory || address != back { // a navigation, not the page on screen again
+				trophyEvent(tkPageVisit)
+				trophyEventDistinct(tkSites, brwRegistrableDomain(browserAdBlockSiteKey(page.FinalURL)))
+			}
 			if recordHistory {
 				browserRecordURL(address)
 			}
@@ -1263,6 +1267,11 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		// A failure draws its card (brw_offline.go); a page clears the last one.
 		brwSetFailure(variable, page.Fail)
 		publishCustom(variable, page.Text)
+		trophyEventN(tkAdsBlocked, int64(page.Blocked))
+		if page.Fail == nil && (recordHistory || (useCache && pageURL != back)) { // not Reload
+			trophyEvent(tkPageVisit)
+			trophyEventDistinct(tkSites, brwRegistrableDomain(browserAdBlockSiteKey(page.FinalURL)))
+		}
 	}(outputVariable, address, requestID)
 }
 

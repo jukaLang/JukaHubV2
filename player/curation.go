@@ -448,6 +448,7 @@ func applyCurationStep(config *Config, step curationStep) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		trophyEvent(tkSaveBackup)
 		return "snapshot " + snap.Manifest.ID, nil
 	case curationStepCores:
 		inv := scanCoreInventory()

@@ -243,6 +243,12 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 // interrupted update. scriptDir is where the helper script is written.
 func swapInstallFiles(tag string, files []stagedInstallFile, scriptDir, exePath, reason string) error {
 	exeDir := filepath.Dir(exePath)
+	// The helper only copies files: every folder it copies into must exist
+	// before it starts (ensureInstallDirs says why).
+	if err := ensureInstallDirs(files, exeDir); err != nil {
+		patchRowStatus(ComponentApp, StatusFailed)
+		return err
+	}
 	patchRowStatus(ComponentApp, StatusBackingUp)
 	journal := newJournal("juka-update", tag)
 	for _, f := range files {
@@ -298,6 +304,32 @@ func swapInstallFiles(tag string, files []stagedInstallFile, scriptDir, exePath,
 	patchRowStatus(ComponentApp, StatusRestartReq)
 	// Let the render loop quit so the helper can replace the executable.
 	appRestartRequested.Store(true)
+	return nil
+}
+
+// ensureInstallDirs creates every folder below the executable's that a swap
+// copies into. The helper scripts only copy files (cp + mv, copy /y), and the
+// journal records a file that does not exist yet without making its folder. So
+// the first release to ship files in folders an installation did not have yet
+// (bin/ for the Remote Play helpers, lib/ for the game-audio plugin) stopped
+// the helper at its first file there, right after it had replaced the binary:
+// the new build started, the startup rollback put every other file back,
+// release-info.json still named the old release, and the same update was
+// offered again on every start. The scripts make the folders too
+// (writeSwapScriptFor); doing it here first turns a folder that cannot be made
+// into an error the user sees instead of a helper that dies in the background.
+func ensureInstallDirs(files []stagedInstallFile, exeDir string) error {
+	made := map[string]bool{}
+	for _, f := range files {
+		dir := filepath.Dir(f.Dest)
+		if made[dir] || sameFilePath(dir, exeDir) {
+			continue
+		}
+		made[dir] = true
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("cannot create %s for the update: %w", dir, err)
+		}
+	}
 	return nil
 }
 

@@ -302,6 +302,7 @@ func ppssppStartInstall(tile string, use bool) {
 				ShowToast("PPSSPP: "+emuFriendlyError(err), ToastKindError)
 				return
 			}
+			trophyEvent(tkEmuInstall) // a new build; "already the newest" installs nothing
 		}
 		installBarPhase(installPhaseDone)
 		installBarDone()

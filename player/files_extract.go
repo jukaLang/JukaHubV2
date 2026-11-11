@@ -1742,6 +1742,7 @@ func feExtractRun(ctx context.Context, job feExtractJob, meter *feExtractMeter) 
 	if fi, err := os.Stat(target); err == nil {
 		out.IsDir = fi.IsDir()
 	}
+	trophyEvent(tkExtract)
 	return out
 }
 

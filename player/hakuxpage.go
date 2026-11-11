@@ -310,6 +310,9 @@ func hakuxFinish(result hakuxInstallResult, err error) {
 	if result.Edited > 0 {
 		edited = fmt.Sprintf(" · %s you had changed replaced, your copies are in %s", pluralizeCount(result.Edited, "file", "files"), result.EditedDir)
 	}
+	if !result.Current && result.Restored == 0 {
+		trophyEvent(tkEmuInstall) // installed or updated; a repair of the same version is neither
+	}
 	switch {
 	case result.Current:
 		ShowToast("hakuX is already the newest version ("+result.Tag+")", ToastKindInfo)

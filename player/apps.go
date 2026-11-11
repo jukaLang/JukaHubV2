@@ -450,10 +450,12 @@ func launchAppEntry(config *Config, entry FileEntry) {
 		// The audio player is created on demand: older jukaconfig.json files do
 		// not list a MusicPlayer scene.
 		if scene == "MusicPlayer" {
+			trophyEvent(tkAppLaunch)
 			openAudioPlayerBrowser(config, musicDefaultDir(config))
 			return
 		}
 		if idx := findSceneIndex(config, scene); idx >= 0 && config.Scenes[idx].Name == scene {
+			trophyEvent(tkAppLaunch)
 			changeSceneTo(config, idx)
 			return
 		}
@@ -518,6 +520,7 @@ func builtinAppActionSupported(action string) bool {
 func launchBuiltinAppAction(action string) {
 	switch action {
 	case "chiaki":
+		trophyEvent(tkAppLaunch)
 		openChiakiPanel()
 	default:
 		logWarn("apps", "unknown built-in app action %q", action)
@@ -602,6 +605,7 @@ func launchInstalledApp(path string) bool {
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
 		return false
 	}
+	trophyEvent(tkAppLaunch)
 	noteGameChildStarted(cmd)
 	go func() {
 		_ = cmd.Wait() // reap the child, keep JukaHub responsive

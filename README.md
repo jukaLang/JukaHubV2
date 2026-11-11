@@ -406,6 +406,9 @@ Typing a search on a D-pad is slow. **Tools → Phone companion** shows a QR
 code; scan it with your phone camera (phone and handheld on the same Wi-Fi) and
 the phone opens a small page with:
 
+* **The handheld's screen**, pinned at the top while everything below it
+  scrolls. It refreshes a moment after each press, text, link or upload;
+  **Live** keeps it moving and **Hide screen** folds it away.
 * **Type** — a text box whose contents appear in whichever field has focus,
   with an optional Enter after each send.
 * **Remote** — D-pad, A/B/X/Y, Start, Back and the shoulder buttons.
@@ -413,6 +416,10 @@ the phone opens a small page with:
   playing on the handheld.
 * **Send a file** — uploads land in the `PhoneDrop` folder of the shared folder
   (the same one FTP publishes), ready for the file browser or player.
+* **Groq API key** — paste the key from console.groq.com instead of typing 56
+  characters on the handheld. It is checked with Groq, saved for voice typing,
+  voice commands and the Juka chat, and never shown again (the page only
+  learns its last four characters).
 
 The QR code carries a fresh six-digit PIN, so nothing has to be typed on the
 device. The server runs in the background for the whole session, and **Y**

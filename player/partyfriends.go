@@ -101,7 +101,11 @@ func partyFriendAdd(name, invite string) error {
 	if len(partyFriendsStore.items) > partyFriendsLimit {
 		partyFriendsStore.items = partyFriendsStore.items[:partyFriendsLimit]
 	}
-	return partyFriendsSaveLocked()
+	if err := partyFriendsSaveLocked(); err != nil {
+		return err
+	}
+	trophyEvent(tkFriend)
+	return nil
 }
 
 func partyFriendRemove(invite string) {

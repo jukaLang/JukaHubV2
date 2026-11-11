@@ -84,32 +84,37 @@ func releaseInfoPath(dir string) string {
 	return filepath.Join(dir, releaseInfoFileName)
 }
 
-// releaseInfoOnce caches the installation stamp: it cannot change while the
-// process runs, and the UI reads it every frame.
+// releaseInfoCache holds the installation stamp: the UI reads it every frame,
+// so the file is read once. Only a startup that finishes an interrupted update
+// (update_resume.go) rewrites the stamp while the process runs; it calls
+// invalidateInstalledReleaseInfo so the next read sees the new file.
 var (
-	releaseInfoOnce  sync.Once
-	releaseInfoCache releaseInfo
+	releaseInfoMu     sync.Mutex
+	releaseInfoLoaded bool
+	releaseInfoCache  releaseInfo
 )
 
 // readInstalledReleaseInfo reads the stamp file next to the executable.
 // A missing or malformed file is simply an unknown stamp.
 func readInstalledReleaseInfo() releaseInfo {
-	releaseInfoOnce.Do(func() {
-		dir, err := P().ExecutableDir()
-		if err != nil || dir == "" {
-			return
+	releaseInfoMu.Lock()
+	defer releaseInfoMu.Unlock()
+	if !releaseInfoLoaded {
+		releaseInfoLoaded = true
+		releaseInfoCache = releaseInfo{}
+		if dir, err := P().ExecutableDir(); err == nil && dir != "" {
+			releaseInfoCache = readReleaseInfoFromDir(dir)
 		}
-		data, err := os.ReadFile(releaseInfoPath(dir))
-		if err != nil {
-			return
-		}
-		var info releaseInfo
-		if json.Unmarshal(data, &info) != nil {
-			return
-		}
-		releaseInfoCache = info
-	})
+	}
 	return releaseInfoCache
+}
+
+// invalidateInstalledReleaseInfo drops the cached stamp, so the next read
+// takes release-info.json from disk again.
+func invalidateInstalledReleaseInfo() {
+	releaseInfoMu.Lock()
+	releaseInfoLoaded = false
+	releaseInfoMu.Unlock()
 }
 
 // readReleaseInfoFromDir reads a release stamp from any directory. The staged
@@ -968,7 +973,15 @@ func writeSwapScriptFor(goos, scriptPath, exePath string, files []stagedInstallF
 		// helper's stdin is NUL, so the old script never waited for JukaHub to
 		// exit and burned its 30 copy retries in a blink.
 		b.WriteString("ping -n 3 127.0.0.1 >nul\r\n")
+		exeDir := swapParentDir(exePath)
+		made := map[string]bool{}
 		for _, f := range files {
+			// copy /y cannot create a folder; a release file in one this
+			// installation lacks would fail every retry (ensureInstallDirs).
+			if dir := swapParentDir(f.Dest); dir != "" && !strings.EqualFold(dir, exeDir) && !made[strings.ToLower(dir)] {
+				made[strings.ToLower(dir)] = true
+				b.WriteString("if not exist " + quoteWindowsArg(dir+`\`) + " mkdir " + quoteWindowsArg(dir) + " >nul 2>nul\r\n")
+			}
 			b.WriteString("call :copyloop " + quoteWindowsArg(f.Src) + " " + quoteWindowsArg(f.Dest) + " || goto fail\r\n")
 		}
 		b.WriteString("del /f /q \"%JOURNAL%\" >nul 2>nul\r\n")
@@ -1004,11 +1017,25 @@ func writeSwapScriptFor(goos, scriptPath, exePath string, files []stagedInstallF
 		b.WriteString("SWAPPED=\"$DIR/" + restartSwappedName + "\"\n")
 		b.WriteString("FAILED=\"$DIR/" + restartFailedName + "\"\n")
 		b.WriteString("LAUNCHER_PID=" + strconv.Itoa(launcherPID) + "\n")
+		// The helper runs detached with nowhere to print. Its errors (cp's
+		// "cannot create ...") go to a log beside it, which the next start
+		// quotes in its own log when it has to finish or undo this swap
+		// (update_resume.go). touch first: exec is a special built-in, and a
+		// redirection it cannot open would end the script before any copy.
+		b.WriteString("LOG=" + quotePOSIXArg(path.Join(path.Dir(filepath.ToSlash(scriptPath)), swapHelperLogName)) + "\n")
+		b.WriteString("if touch \"$LOG\" 2>/dev/null; then exec 2>\"$LOG\"; fi\n")
 		b.WriteString("sleep 2\n")
+		made := map[string]bool{}
 		for _, f := range files {
 			// Write next to the target and rename: works even if the old binary
 			// is still mapped by the exiting process.
 			src, dest := filepath.ToSlash(f.Src), filepath.ToSlash(f.Dest)
+			// cp cannot create the folder of a file a release adds in a new
+			// one (bin/, lib/); see ensureInstallDirs.
+			if dir := path.Dir(dest); dir != posixDir && !made[dir] {
+				made[dir] = true
+				b.WriteString("mkdir -p " + quotePOSIXArg(dir) + " 2>/dev/null\n")
+			}
 			b.WriteString("cp -f " + quotePOSIXArg(src) + " " + quotePOSIXArg(dest+".new") + " || { : > \"$FAILED\"; exit 5; }\n")
 			b.WriteString("mv -f " + quotePOSIXArg(dest+".new") + " " + quotePOSIXArg(dest) + " || { : > \"$FAILED\"; exit 6; }\n")
 		}
@@ -1071,7 +1098,10 @@ func confirmAppliedUpdate() {
 		staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag))
 		_ = os.RemoveAll(staging)
 		_ = os.Remove(stagedReadyMarker(staging))
+		// Releases staged by updates that never finished are dead weight now.
+		pruneStaleStagingTrees(dir)
 	}
+	trophyEvent(tkUpdate)
 	logPatch("JukaHub updated to release %s", tag)
 }
 

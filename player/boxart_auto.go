@@ -638,7 +638,7 @@ func boxArtRunBatches(todo []scannedROM, dest string) boxArtRun {
 		}
 		batch := todo[start:end]
 		gen := artworkFetchGeneration()
-		if !startLibraryArtworkFetch(batch) {
+		if !startLibraryArtworkFetchAs(batch, false) {
 			// The user started a fetch from the library between two batches;
 			// it covers these titles too.
 			run.stop = boxArtStopBusy

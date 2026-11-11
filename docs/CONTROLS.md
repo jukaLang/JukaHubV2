@@ -473,7 +473,7 @@ footer names the scene the menu was opened over.
 
 | Group | Holds |
 |-------|-------|
-| Screens | Home, then Trophies (with how many you have earned, e.g. "12/101"), then every other screen in `jukaconfig.json` — the quickest way to switch screen |
+| Screens | Home, then Trophies (with how many you have earned, e.g. "12/401"), then every other screen in `jukaconfig.json` — the quickest way to switch screen |
 | Games | Emulators, Games Library, Game Profiles, PS Remote Play, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, APK Store, Smart Pro Compatibility |
 | Tools | Downloads, Curation Hub, Audio settings, Smart Home, Screen Share, Voice command, Accessibility, Stick Calibration (when the install has one) |
 | Device | Quick Settings, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, Edit Home, About, Quit JukaHub |
@@ -1707,18 +1707,21 @@ See [VOICE.md](VOICE.md#the-voice-orb).
 
 | Button | Action |
 |--------|--------|
-| Menu (F4) | Open the orb and listen; while it listens, stop and send; on an answer, ask again. Held: talk until you let go |
+| Menu (F4) | A tap opens the orb and listens (it acts when Menu comes up); while it listens, stop and send; on an answer, ask again. Held about half a second: talk until you let go |
 | A (Enter) | While it listens, stop and send; during "Opening…", open now; in a list, open the highlighted match; on an answer, its fix ("Add Groq key", "Use my phone", "Search for it") |
 | B (Esc) | Cancel: stop listening, drop the command, put the orb away |
 | D-pad (↑ ↓) | Choose when it lists matches |
 | Any other button | Puts a finished answer away and does its own job |
 
-With the on-screen keyboard up, **Menu** (or **F4**) is voice typing into the
-field instead, and on the Voice command page it is that page's own
-microphone. Over a modal panel, the first-run tour, the arcade, JukaLand or a
-running game, **Menu** keeps its old job (Back). **Settings → Controls → Menu
-button: voice** turns the Menu binding off for good; **F4** stays the voice key
-on a keyboard.
+A press of Menu that another button joins is a chord, not a voice press: the
+firmware's **Menu + volume** (brightness) never opens the orb, and **Menu +
+Start** still quits like **Select + Start**. With the on-screen keyboard up,
+**Menu** (or **F4**) is voice typing into the field instead, and on the Voice
+command page it is that page's own microphone. Over a modal panel, the
+first-run tour, the dock, the arcade, JukaLand, a browser game or a running
+game, **Menu** keeps its old job (Back). **Settings → Controls → Menu button:
+voice** turns the Menu binding off for good; **F4** stays the voice key on a
+keyboard.
 
 ## Voice command
 

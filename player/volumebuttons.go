@@ -192,6 +192,11 @@ func volumeButtonPress(dir int, down bool) {
 	// same (brightnessctl.go).
 	volumeNoteHardwareKey()
 	brightnessNoteHardwareKey()
+	// Menu + volume is the firmware's brightness chord: the voice orb must not
+	// take that Menu press for itself (voiceorb.go).
+	if down {
+		voiceOrbNoteVolumeKey()
+	}
 }
 
 // volumeButtonSkip performs the long-press action. It works from any scene,

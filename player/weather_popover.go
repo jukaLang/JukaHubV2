@@ -113,6 +113,7 @@ func weatherPopoverRect(config *Config) sdl.Rect {
 func toggleWeatherPopover() {
 	weatherPopoverOpen = !weatherPopoverOpen
 	if weatherPopoverOpen {
+		trophyEvent(tkWeather)
 		homeCalendarOpen = false
 		tb.startOpen = false
 		nc.open = false

@@ -962,20 +962,27 @@ var artworkFetchState = struct {
 }{}
 
 func startROMArtworkFetch(roms []scannedROM) bool {
-	return startArtworkFetch(roms, nil, romArtworkDir())
+	return startArtworkFetch(roms, nil, romArtworkDir(), true)
 }
 
 // startLibraryArtworkFetch downloads the covers for a scanned list and keeps the
 // not-found cache, so pressing the action again only asks about new titles.
 func startLibraryArtworkFetch(roms []scannedROM) bool {
+	return startLibraryArtworkFetchAs(roms, true)
+}
+
+// startLibraryArtworkFetchAs is startLibraryArtworkFetch for a caller that says
+// whether the user asked for it: the automatic pass (boxart_auto.go) does not
+// count toward the box-art trophies.
+func startLibraryArtworkFetchAs(roms []scannedROM, byUser bool) bool {
 	dest := romArtworkDir()
 	if strings.TrimSpace(dest) == "" {
 		return false
 	}
-	return startArtworkFetch(roms, loadArtworkMisses(dest), dest)
+	return startArtworkFetch(roms, loadArtworkMisses(dest), dest, byUser)
 }
 
-func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest string) bool {
+func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest string, byUser bool) bool {
 	artworkFetchState.Lock()
 	if artworkFetchState.running {
 		artworkFetchState.Unlock()
@@ -999,6 +1006,12 @@ func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest stri
 				artworkFetchState.done = done
 				artworkFetchState.Unlock()
 			})
+		// Covers written to the card: the library's fetch, onboarding's and the
+		// automatic pass (boxart_auto.go) all run through here; only the ones
+		// the user asked for count toward the box-art trophies.
+		if byUser {
+			trophyEventN(tkBoxArt, int64(fetched))
+		}
 		cancel()
 		if misses != nil {
 			if err := saveArtworkMisses(dest, misses); err != nil {

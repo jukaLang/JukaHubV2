@@ -231,7 +231,9 @@ jobs:
         with:
           name: trimui-build
           path: ${{ runner.temp }}/trimui-build.tar
-          retention-days: 1
+          # Long enough to re-run only a failed packaging job a few days on;
+          # after that "Re-run all jobs" makes a new tag and draft anyway.
+          retention-days: 3
           if-no-files-found: error
           # A re-run of this job replaces its own earlier upload.
           overwrite: true

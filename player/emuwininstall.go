@@ -1376,6 +1376,9 @@ func emuWinFinish(spec emuWinSpec, result emuWinInstallResult, err error) {
 	if result.Exe != "" {
 		requestAppIconExtraction([]string{result.Exe})
 	}
+	if !result.Current {
+		trophyEvent(tkEmuInstall) // installed or updated
+	}
 	switch {
 	case result.Current:
 		ShowToast(spec.Name+" is already the newest version ("+result.Tag+")", ToastKindInfo)

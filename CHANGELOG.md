@@ -13,22 +13,75 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **"Use JukaHub on 90 days" meant 90 of the last 91.** The days trophies read
+  the 90-day window the tracker keeps, so they could only be earned with an
+  almost unbroken run; they now count every day ever, from a lifetime record
+  seeded from that window, so nothing earned is lost. Shorts and Live TV, which
+  play in Media's player, now credit their watching time to their own screens,
+  so "Watch Shorts for 2 hours" can be earned, and several first-set
+  descriptions now say where the time counts ("Spend 1 hour in Media", "Play
+  the minigames for 30 minutes"). Coming back to Trophies starts a fresh visit
+  again — the Trophies tab, the top of the grid, no details sheet left open —
+  which the screen's same index on return used to hide
+  ([player/playtime.go](player/playtime.go),
+  [player/trophy_room.go](player/trophy_room.go)).
+- **An update that kept coming back after it was installed is fixed.** The first
+  release that ships files in folders an installation does not have yet — `bin/`
+  for the PS Remote Play helpers, `lib/` for the game-audio plugin — could not
+  be installed: the swap helper only copies files, so it stopped at
+  `bin/chiaki-regist` right after replacing the JukaHub binary. The new build
+  started, the startup rollback put every other file back, `release-info.json`
+  still named the previous release, and the same update was offered again after
+  every install. The helpers now create the folders they copy into (JukaHub
+  creates them first too, so a folder that cannot be made is an error on screen
+  rather than a helper failing in the background), and the POSIX helper keeps
+  its errors in `apply-update.log`. A swap that stopped after the new binary was
+  in place is now finished at the next start, its new design loaded at once,
+  instead of half undone — which is also what gets an installation already
+  caught in the loop out of it with one
+  more press of **Update**: its old helper still stops at `bin/`, but only after
+  it has put the fixed build in place. A rollback of a swap that never reached
+  the binary now says so in the notifications instead of passing silently, and
+  the trees staged by updates that never finished are deleted once a release is
+  confirmed ([player/update_resume.go](player/update_resume.go),
+  [player/patch_swap.go](player/patch_swap.go),
+  [player/autoupdate.go](player/autoupdate.go),
+  [player/patch_engine.go](player/patch_engine.go),
+  [player/hotreload.go](player/hotreload.go)).
+- **Thermal throttling is visible on the handheld.** JukaHub watches the
+  kernel's CPU cooling state while its screen is visible, shows that state in
+  Hardware, and raises one toast when the thermal limit engages
+  ([player/thermal.go](player/thermal.go), [player/systool_hw.go](player/systool_hw.go)).
+- **Labels no longer expand protected settings.** Secret variable names and
+  encrypted `ENC:` values stay as placeholders instead of exposing their stored
+  contents in the UI ([player/core.go](player/core.go),
+  [player/livebuilder.go](player/livebuilder.go)).
+- **Animated wallpapers release frames while a game owns the screen.** The
+  decoder stops and extra frame textures are freed; when JukaHub returns, it
+  reloads the current wallpaper ([player/gifwall.go](player/gifwall.go),
+  [player/main.go](player/main.go)).
 - **Focused game covers no longer decode during drawing.** The selected cover
   is decoded and reduced on one background worker, then uploaded as a texture
   on the render thread. Missing, damaged or oversized images keep the instant
   monogram fallback ([player/game_library_ui.go](player/game_library_ui.go)).
+- **UI font sizes share one in-memory source.** The font file is read once per
+  path; SDL_ttf opens each size from pinned bytes, held until the fonts close
+  at shutdown ([player/home_fonts.go](player/home_fonts.go),
+  [player/core.go](player/core.go), [player/canvas.go](player/canvas.go)).
 - **Voice finds the Smart Pro's microphone.** Voice typing (and the Voice
   command page) said "No microphone found" on a TrimUI Smart Pro, which has
   one: they only ever asked SDL for its default capture device, ALSA's
   "default" PCM, and gave up when that would not open. All three voice
   features now share one microphone that also tries every capture device the
   kernel lists (through ALSA's plug layer, `plughw:0,0`), SDL's own list and
-  `arecord`, swaps a device that opens but stays silent for the next one, and
-  remembers the one that worked. Before the first recording it switches on the
-  codec's microphone inputs, which the Smart Pro's and the Brick's codec ships
-  switched off ("ADCL Input MIC1 Boost Switch" and its MIC2 twin; never a
-  playback path), lifts a microphone level found at zero, and puts both back on
-  quit; every attempt is logged under `mic`. The mic chip no longer hides when
+  `arecord`, swaps a device that opens but stays silent for the next one (on
+  a PC only one that fails or gives no data: silence there is a muted
+  microphone), and remembers the one that worked. Before the first recording
+  it switches on the codec's microphone inputs, which the Smart Pro's and the
+  Brick's codec ships switched off ("ADCL Input MIC1 Boost Switch" and its
+  MIC2 twin, by numid; never a playback path), lifts a microphone level parked
+  at a muted bottom, and puts both back on quit; every attempt is logged under
+  `mic`. The mic chip no longer hides when
   SDL lists no capture device but the kernel does
   ([player/voicemic.go](player/voicemic.go), [player/vkvoice.go](player/vkvoice.go),
   [player/voicecmd.go](player/voicecmd.go), [docs/VOICE.md](docs/VOICE.md)).
@@ -67,6 +120,50 @@ For anything older, the git log and the
 
 ### Added
 
+- **300 more trophies — 401 in all.** The first hundred only counted time; the
+  new ones count what you do: games launched, finished and played on different
+  systems, the minigames' best scores (Snake, Tetris lines and four-line clears,
+  the 2048 tile, Pong goals, Minesweeper boards, Flappy pipes), blocks placed
+  and ores mined in JukaLand, tracks and artists, videos and Shorts, downloads
+  and gigabytes, web pages and sites, ads blocked, chat messages, files copied,
+  moved and extracted, Terminal commands, Pomodoros, alarms, screenshots,
+  starts, themes, wallpapers and Home edits — plus the clock (Night Owl, Dawn
+  Patrol, weekends, staying up past midnight, the longest sitting), the
+  calendar (New Year's Day, Pi Day, Halloween, a Friday the 13th, your
+  Hubiversary…), every day JukaHub was ever used, the longest run of days, a
+  visit to each screen and twelve more collection rungs, up to 375. Features
+  report what happens through a small goroutine-safe API that the tracker folds
+  into the saved playtime record; distinct things (sites, games, networks) are
+  kept as hashes, never as names, and dates from a clock that was never set
+  (a handheld before network time) are not believed. An old save is credited
+  from what it already holds — the last 90 days and the per-game time — and a
+  burst of unlocks gets its cards, the rarest first, and one notification row
+  instead of dozens. A trophy that needs something this setup lacks (Remote
+  Play or Bluetooth on Windows, an AI key, a Home Assistant server, a
+  RetroAchievements account) stays out of the room until it has it, and
+  **bonus** trophies (another device, another player, more controllers, a leap
+  day) do not hold up the platinum. The room gets a **Category** chip: a list
+  of the 24 groups with "12 of 40 earned" each, so 401 cards stay browsable
+  ([player/trophy_set2.go](player/trophy_set2.go),
+  [player/trophy_events.go](player/trophy_events.go),
+  [player/playtime.go](player/playtime.go),
+  [player/trophy_room.go](player/trophy_room.go),
+  [player/trophy_celebrate.go](player/trophy_celebrate.go)).
+- **The phone companion keeps the handheld's screen at the top.** The screen
+  picture moved from the bottom of the page into a bar pinned at the top, so it
+  stays in view while the cards (Type, Voice, Remote, links, files) scroll under
+  it; on a phone held sideways it gets a column of its own on the left. It
+  refreshes a moment after every remote press, text, link or upload, **Live**
+  follows it continuously (only while the page is in view), and **Hide screen**
+  folds it away, remembered on that phone
+  ([player/companion.go](player/companion.go)).
+- **Enter the Groq API key from your phone.** A **Groq API key** card on the
+  phone companion page takes the key pasted from console.groq.com. The handheld
+  checks it with Groq first (a key Groq refuses is not saved; a handheld that
+  cannot reach Groq saves it anyway and says it could not check) and saves it
+  exactly as the key field in Keyboard settings does. The key is never sent back
+  to the page — only whether one is saved and its last four characters
+  ([player/companion_groq.go](player/companion_groq.go)).
 - **The voice orb: press Menu and talk.** On a TrimUI the Menu button (F4 on a
   keyboard) now opens a glowing, Siri-style orb in the bottom-right corner of
   any screen that says "Listening…" and follows your voice. It stops by itself
@@ -77,9 +174,12 @@ For anything older, the git log and the
   pick from, and handing a question that names nothing on the handheld to Juka,
   whose answer streams into the bubble. Missing pieces come with their fix one
   press away (add the Groq key, use the phone, search for it). With the
-  keyboard up, Menu is voice typing; music pauses while it listens. Menu was
-  Back before: it still is over modal panels, the tour and JukaHub's own games,
-  and Settings → Controls → **Menu button: voice** turns the binding off
+  keyboard up, Menu is voice typing; music and video pause while it listens.
+  Menu is read like the TrimUI's own launchers read it — on release, so a
+  chord stays a chord: the firmware's Menu + volume brightness never opens the
+  orb, and Menu + Start still quits. Menu was Back before: it still is over
+  modal panels, the dock, the tour and JukaHub's own games, and Settings →
+  Controls → **Menu button: voice** turns the binding off
   ([player/voiceorb.go](player/voiceorb.go), [player/main.go](player/main.go),
   [docs/VOICE.md](docs/VOICE.md), [docs/CONTROLS.md](docs/CONTROLS.md)).
 - **Eight new themed Total conversions.** Moonbase opens a lunar dashboard;
@@ -114,12 +214,15 @@ For anything older, the git log and the
   checks it against GitHub's digest (and a signed `release.json` when the
   release has one) and its own `SHA256SUMS`, starts each helper once to make
   sure this firmware loads it, and installs only the missing ones beside the
-  binary, `chiaki-stream` last; a cut-off download resumes. The console list
-  shows the progress; a PS5 is asked for its PIN once its pairing helper is in
-  (the PIN Link Device shows lasts five minutes), and Play streams by itself
-  when the install is done; **B** or closing the panel lets go of either.
-  Offline or after a failure the row says why, in words that fit it, and **A**
-  tries again. `docker-image.yml` and `release.sh` attach the package to every
+  binary, `chiaki-stream` last; a cut-off download resumes, and a helper the
+  firmware refuses is not installed, remembered (`bin/.remote-play-refused`)
+  and only downloaded again by Retry. The console list shows the progress; a
+  PS5 (and an address typed by hand, while an install can come) is asked for
+  its PIN once its pairing helper is in (the PIN Link Device shows lasts five
+  minutes), and Play streams by itself when the install is done; the console's
+  row says which, and **B** or closing the panel lets go of either. With no
+  internet or after a failure the row says why, in words that fit it, and
+  **A** tries again. `docker-image.yml` and `release.sh` attach the package to every
   release that built the helpers
   ([player/psremote_helpers_install.go](player/psremote_helpers_install.go),
   [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md#installing-the-helpers)).
@@ -1391,13 +1494,21 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **The Remote Play helper build gets past chiaki-ng's configure.** Its first
+  CI run stopped at `Could NOT find FFMPEG (missing: avformat)`: the pinned
+  chiaki-ng asks for libavformat whenever its FFmpeg decoder is on, and the
+  static FFmpeg was built without it. `build-helpers.sh` now builds an empty
+  libavformat too (no demuxer, muxer or protocol), and rebuilds a cached
+  prefix that lacks it ([player/native/build-helpers.sh](player/native/build-helpers.sh)).
 - **Remote Play looks for its helpers where an update puts them.** The lookup
   only knew `/mnt/SDCARD/Apps/JukaHub/bin`, while an update unpacks a release's
   `bin/` beside the running binary; it now looks there first. A PS5 pairing
   checks that `chiaki-regist` loads before the handshake instead of failing at
   "start". A failed PS4 pairing no longer turns into a PS5 error: only an
-  address no scan has identified tries the PS5 handshake after the PS4 ones,
-  and its error replaces the PS4's only when a PS5 answered and refused. On
+  address no scan has identified tries the PS5 handshake after the PS4 ones
+  (and only with the PS5 helper in place, never waiting for it), and its error
+  replaces the PS4's only when a PS5 answered and refused. While 192.168.1.60
+  pairs, 192.168.1.6's row no longer says it is pairing too. On
   Windows the panel says streaming runs on the TrimUI handhelds instead of
   naming a missing Linux file, and a status row's footer no longer offers an A
   that does nothing
@@ -2137,7 +2248,9 @@ For anything older, the git log and the
   [.github/workflows/build-sdcard.yml](.github/workflows/build-sdcard.yml);
   tested by [tests/scripts/trimui-build.test.sh](tests/scripts/trimui-build.test.sh)
   and [tests/scripts/go-build-cache.test.sh](tests/scripts/go-build-cache.test.sh)
-  in `make test-scripts` and in CI).
+  in `make test-scripts` and in CI). `check-workflows.sh` now also fails when a
+  job that calls a workflow of this repository grants less than that workflow
+  asks for, which GitHub answers by refusing the whole run before it starts.
 
 - **staticcheck is clean again.** An unconditional `strings.TrimSuffix`
   (S1017), a struct conversion instead of a field-by-field literal (S1016), a

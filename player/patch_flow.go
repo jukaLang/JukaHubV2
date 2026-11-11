@@ -331,6 +331,7 @@ func OpInstallPackage(ctx context.Context, config *Config, id string) error {
 			return err
 		}
 	}
+	trophyEvent(tkPatch)
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }
@@ -372,6 +373,7 @@ func opInstallFromSigned(ctx context.Context, config *Config, idx *SignedRepoInd
 		return err
 	}
 	recordInstallTx(plan, "committed")
+	trophyEvent(tkPatch)
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }

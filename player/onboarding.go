@@ -175,6 +175,9 @@ func onboardingFinish(config *Config, skipped bool) {
 	if !skipped && !onboardingCoveredByOverlay() {
 		openControlsLegend()
 	}
+	if !skipped {
+		trophyEvent(tkTourDone)
+	}
 }
 
 func onboardingAdvance(config *Config) {

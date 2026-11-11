@@ -176,14 +176,14 @@ jobs:
         continue-on-error: true
         run: sh spatialfx/tests/run-tests.sh
       - name: go.mod and go.sum are tidy
-        # The Windows release builds the committed module graph (go mod
-        # download, not go mod tidy), so an import added without running
-        # `go mod tidy` fails that release. This says so on the pull request
-        # instead. Advisory until it has been green for a while.
+        # The release builds (Windows and TrimUI) compile the committed module
+        # graph (go mod download, not go mod tidy), so an import added without
+        # running `go mod tidy` fails the release. This says so on the pull
+        # request instead. Advisory until it has been green for a while.
         continue-on-error: true
         run: |
           if ! go mod tidy -diff; then
-            echo "::warning title=go.mod is not tidy::run 'go mod tidy' in player/ and commit go.mod and go.sum, or the Windows release build fails"
+            echo "::warning title=go.mod is not tidy::run 'go mod tidy' in player/ and commit go.mod and go.sum, or the Windows and TrimUI release builds fail"
             exit 1
           fi
 

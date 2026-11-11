@@ -159,7 +159,8 @@ helper) and installs the missing helpers beside the binary; a PS5 pairing waits
 for it and Play streams afterwards (`psremote_helpers_install.go`).
 `docker-image.yml` and `release.sh` attach the package; the helper lookup now
 starts beside the binary, where an update puts `bin/`; PSR-4 is code-done.
-Follow-up: PSR-13 (one new task).
+Follow-ups: PSR-13 and PSR-14 (two new tasks); BUILD-4 got the first run's
+fix (an empty libavformat for chiaki-ng's configure).
 
 Faster TrimUI release build (**2026-11-10**, evening, not yet run on GitHub):
 the handheld binary compiles in its own job, `build-trimui`, which starts at
@@ -395,6 +396,13 @@ release also carries `JukaHub-RemotePlay-linux-arm64.zip` (what a JukaHub
 without `bin/` downloads by itself); PSR-7 and PSR-13 then take them to a
 handheld.
 **Verify.** The run's step summary and an unzip of the release archive.
+**Status 2026-11-10 (evening).** The first run got through every pinned
+dependency and stopped at chiaki-ng's configure: `Could NOT find FFMPEG
+(missing: avformat)` — the pinned commit's `find_package(FFMPEG ...)` names
+avformat, and `CHIAKI_ENABLE_FFMPEG_DECODER=ON` makes that fatal.
+`build_ffmpeg` now also builds libavformat, with no demuxer, muxer or protocol
+in it (a prefix without `libavformat.pc` is rebuilt). Next run: whatever comes
+after the configure.
 
 ### BUILD-5 — First run of the split TrimUI release build (P0, S) [NET]
 **Why.** The 2026-11-10 evening pass moved the handheld compile out of the
@@ -539,12 +547,15 @@ UI textures (nearest kept for pixel art: minigames, JukaLand) or native
 1024×768 rendering; decision recorded in `docs/DEVICE_TUNING.md`.
 **Verify.** Before/after photos of Home and Settings on a Brick.
 
-### PERF-5 — Load the UI font once (P2, S)
-**Why.** `getCachedFont` opens `Inter-Regular.ttf` from the card for every size.
-**Where.** `core.go` (`getCachedFont`, `getFontSized`), `home_fonts.go`.
-**Done when.** The file is read once into memory and every size opens through
-`ttf.OpenFontRW` on a shared buffer; the buffer outlives every font.
-**Verify.** `strace -e openat` on the device shows one open; fonts render.
+### PERF-5 — Verify shared UI font loading on the handheld (P2, S) [HW]
+**Why.** UI fonts now open from a shared, pinned in-memory source, but the
+TrimUI still needs a read-count and rendering check across the sizes it uses.
+**Where.** `home_fonts.go`, `core.go` (`getCachedFont`, `getFontSized`),
+`canvas.go`.
+**Done when.** `strace -e openat` shows one read of `Inter-Regular.ttf` for all
+font sizes, and the UI and canvas preview render normally at the 14 px floor,
+the regular role sizes and the larger headings.
+**Verify.** Record the open count and check the fonts on a Smart Pro.
 
 ### PERF-6 — Config watcher only while the live builder is connected (P2, S)
 **Why.** `hotreload.go` stats the config every 2 s for the whole session.
@@ -656,7 +667,7 @@ frame and logs it.
 **Verify.** `framestats` histogram while a GIF loads, Power tools → memory,
 `logs.txt`.
 
-### PERF-18 — Give the animated wallpaper's memory back before big tenants (P2, S)
+### PERF-18 — Give the animated wallpaper's memory back before big tenants (P2, S) [HW]
 **Why.** An animated wallpaper keeps up to 40 MB of textures for as long as it
 is the wallpaper. Only a wallpaper change or critical memory pressure frees
 them — not the WPE Browser hand-off, not a game, not shutdown — and on a 1 GB
@@ -671,8 +682,10 @@ game launch frees all but the first frame (the decoder already sleeps during a
 game) and decodes again after it; Power tools → memory shows the drop on a
 Smart Pro with a 1080p GIF wallpaper.
 **Progress (2026-11-10).** The WPE hand-off (`brwWpeFreeMemory`) and the
-shutdown card (`shutdownReleaseTextures`) call `gifWallEvict`; the game launch
-and the device measurement are still open.
+shutdown card (`shutdownReleaseTextures`) call `gifWallEvict`. On game entry,
+the decoder is cancelled and all but the first frame texture are released; on
+return, the retained frame is released and the current wallpaper is decoded
+again. The Smart Pro memory measurement is still open.
 
 ---
 
@@ -1064,6 +1077,24 @@ Cancel; the choice is remembered nowhere.
 `motion.go` everywhere (one duration scale), all honour reduced motion, and the
 Start menu, sheets and toasts share one entrance.
 
+### UX-16 — Trophy set two on a device, and its leftovers (P2, S) [HW]
+**Why.** The 2026-11-10 pass took Trophies from 101 to 401 (`trophy_set2.go`,
+the event API in `trophy_events.go`, about 175 one-line hooks across the
+features) — all from reading, none of it compiled or run. A few counters were
+left short on purpose: RetroAchievements counts at most 12 unlocks per sync
+(`trophyRANewUnlocksMax`), an artist is only known once Media's library was
+opened in the session (`mlibCurrentModel`), WPE Browser page loads are not seen,
+and games marked Completed or JukaLand blocks placed before the update are not
+carried over (`gmeta` milestones, the saved JukaLand stats could seed them).
+**Where.** `trophy_events.go`, `playtime.go`, `trophy_set2.go`, `trophy_room.go`
+and the hook sites (grep `trophyEvent`).
+**Done when.** On a Smart Pro and on Windows: the first start on an old save
+shows its catch-up as a few cards (golds first) and one notification row; the
+Category chip lists the groups with their counts; a screenshot, a track, a page
+and a Snake round move their trophies' progress; the platinum's count leaves out
+what the setup cannot award and the bonus trophies; the leftovers above are
+done or written off here.
+
 ---
 
 ## Games and emulation (GAME)
@@ -1396,6 +1427,20 @@ list offers *Install Remote Play* and Retry works once it is back; a download
 cut off mid-way resumes.
 **Verify.** [HW] the steps above; the Logs screen shows `Remote Play helpers
 installed from JukaHub-…`.
+
+### PSR-14 — An address typed by hand gets a row while it pairs (P3, S)
+**Why.** **Add console by address** pairs an address that no scan found, and
+the console list only shows it once the pairing has succeeded: up to about a
+minute of PS4 and PS5 handshakes (three PS4 generations, then PS5) with
+nothing on screen but the PIN toast, and no row to say *Pairing*. Found while
+reviewing the helper install, which no longer adds a wait of its own there.
+**Where.** `psremote_ui.go` (`psPanelApplyEdit` for `psEditHost`,
+`psPanelPair`, `chiakiRows`).
+**Done when.** A typed address shows a row (an unsaved, unpaired console named
+by its address, without a PS4/PS5 guess) from the PIN prompt until the pairing
+ends, with the busy line while the handshakes run; a failure leaves it
+listed as unpaired until the panel closes.
+**Verify.** A unit test on `chiakiRows` with a typed host and a busy pairing.
 
 ---
 
@@ -2361,6 +2406,9 @@ screenshot.
 (`liveBuilderSensitiveKey`).
 **Done when.** Substitution skips protected names and `ENC:` values, with a
 test.
+**Status 2026-11-10.** Protected names and encrypted values now remain as their
+`$name` placeholder in labels, keeping the stored value out of the UI. The
+focused substitution test is still to add.
 
 ### SEC-21 — Package swap on Windows and FAT, on the device (P2, S) [HW]
 **Why.** The store's crash safety rests on sync/fsync ordering on the handheld and
@@ -2829,11 +2877,6 @@ nothing switches on the charger (SteamOS issue #3034 asks for the same).
 **Done when.** Every launch path goes through one `launchPowerProfile(target)`;
 profiles exist per game, per system and per power source (battery / charger),
 most specific wins; the game options sheet shows which one applies.
-
-### PWR-7 — Thermal awareness (P2, S)
-**Done when.** A background reading of the SoC temperature (`hardware.go`
-`cpuTempValueC`, parked while hidden) raises one toast when throttling starts
-and logs it; the Hardware screen shows the throttle state.
 
 ### PWR-8 — Low-battery warning visible in games (P2, S) [HW]
 **Why.** The 5% toast is drawn by JukaHub, which is not on screen during a game.
@@ -3561,7 +3604,7 @@ from the evening pass: MED-19, MED-20, MED-22, MED-25, SND-5, SND-6, INP-15;
 from the late-night pass: PERF-15; archives: SYS-15; brightness: SYS-16.
 From the Remote Play passes: PSR-1, PSR-2, PSR-6, PSR-7, PSR-10, PSR-13.
 From the liquid background, animated wallpaper and Screen Share pass: GPU-5,
-PERF-17, SYS-18.
+PERF-17, PERF-18, SYS-18.
 From the APK Store, Voice command and spatial audio pass: AND-17, INP-20,
 SND-7, SND-8, SND-13, GAME-17.
 Also still open from earlier passes: the browser's touch accuracy and link-mode

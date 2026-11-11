@@ -60,13 +60,39 @@ func TestMicParseAmixerContents(t *testing.T) {
 	}, "\n")
 	got := micParseAmixerContents(out)
 	want := []micAmixerControl{
-		{name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"31"}},
-		{name: "ADCL Input MIC1 Boost Switch", boolean: true, count: 1, values: []string{"off"}},
-		{name: "ADCR Input MIC2 Boost Switch", boolean: true, count: 1, values: []string{"on"}, on: true},
-		{name: "Mic1 Capture Switch", boolean: true, count: 2, values: []string{"on", "off"}},
+		{numid: 5, name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"31"}},
+		{numid: 12, name: "ADCL Input MIC1 Boost Switch", boolean: true, count: 1, values: []string{"off"}},
+		{numid: 13, name: "ADCR Input MIC2 Boost Switch", boolean: true, count: 1, values: []string{"on"}, on: true},
+		{numid: 20, name: "Mic1 Capture Switch", boolean: true, count: 2, values: []string{"on", "off"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("micParseAmixerContents =\n%+v\nwant\n%+v", got, want)
+	}
+	// The second "Mic1 Capture Switch" (index=1) is set by its numid, not by a
+	// name that would reach the first.
+	if id := got[3].ident(); id != "numid=20" {
+		t.Errorf("ident = %q, want numid=20", id)
+	}
+	if id := (micAmixerControl{name: "X Switch"}).ident(); id != "name='X Switch'" {
+		t.Errorf("ident without a numid = %q", id)
+	}
+}
+
+// A level's bottom counts as silent only when its dB scale says mute, or at
+// least 60 dB down: a gain whose bottom is -12 dB is a quieter microphone, and
+// lifting it would only add gain next to the speaker's mouth.
+func TestMicDBMinSilent(t *testing.T) {
+	for line, want := range map[string]bool{
+		"| dBscale-min=-12.00dB,step=1.00dB,mute=0": false,
+		"| dBscale-min=-12.00dB,step=1.00dB,mute=1": true,
+		"| dBminmax-min=-74.25dB,max=0.00dB":        true,
+		"| dBminmax-min=-30.00dB,max=0.00dB":        false,
+		"| dBrange-min=-119.25dB,max=0.00dB,mute=0": true,
+		"| dBminmaxmute-min=-12.00dB,max=0.00dB":    true,
+	} {
+		if got := micDBMinSilent(line); got != want {
+			t.Errorf("micDBMinSilent(%q) = %v, want %v", line, got, want)
+		}
 	}
 }
 
@@ -83,11 +109,12 @@ func TestMicMixerChange(t *testing.T) {
 		{micAmixerControl{name: "Mic1 Capture Switch", boolean: true, count: 2, values: []string{"on", "off"}}, "on,on", "on,off", true},
 		{micAmixerControl{name: "ADCR Input MIC2 Boost Switch", boolean: true, count: 1, values: []string{"on"}, on: true}, "", "", false},
 		{micAmixerControl{name: "Left Output Mixer MIC1 Switch", boolean: true, count: 1, values: []string{"off"}}, "", "", false},
-		{micAmixerControl{name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"0"}}, "20", "0", true},
-		{micAmixerControl{name: "ADC volume", integer: true, count: 2, max: 255, values: []string{"0", "0"}}, "170,170", "0,0", true},
-		{micAmixerControl{name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"31"}}, "", "", false},
-		{micAmixerControl{name: "DAC volume", integer: true, count: 2, max: 255, values: []string{"0", "0"}}, "", "", false},
-		{micAmixerControl{name: "LINEOUT volume", integer: true, count: 1, max: 31, values: []string{"0"}}, "", "", false},
+		{micAmixerControl{name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"0"}, minSilent: true}, "20", "0", true},
+		{micAmixerControl{name: "ADC volume", integer: true, count: 2, max: 255, values: []string{"0", "0"}, minSilent: true}, "170,170", "0,0", true},
+		{micAmixerControl{name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"0"}}, "", "", false},
+		{micAmixerControl{name: "MIC1 gain volume", integer: true, count: 1, max: 31, values: []string{"31"}, minSilent: true}, "", "", false},
+		{micAmixerControl{name: "DAC volume", integer: true, count: 2, max: 255, values: []string{"0", "0"}, minSilent: true}, "", "", false},
+		{micAmixerControl{name: "LINEOUT volume", integer: true, count: 1, max: 31, values: []string{"0"}, minSilent: true}, "", "", false},
 	} {
 		value, before, ok := micMixerChange(c.ctl)
 		if value != c.value || before != c.before || ok != c.ok {
@@ -112,6 +139,8 @@ func TestMicMixerSwitchWanted(t *testing.T) {
 		"HpSpeaker Switch":                   false,
 		"MIC1 gain volume":                   false,
 		"Mic Boost Volume":                   false,
+		"HP Mixer Mic1 Boost Switch":         false,
+		"Out Mixer MIC1 Boost Switch":        false,
 	} {
 		if got := micMixerSwitchWanted(name); got != want {
 			t.Errorf("micMixerSwitchWanted(%q) = %v, want %v", name, got, want)
@@ -132,7 +161,7 @@ func TestMicRepeatValue(t *testing.T) {
 }
 
 // micPrepareMixer, against a stub amixer: the off microphone switch is turned
-// on (with its name as one argument, never a shell line), nothing else is
+// on (by its numid, as one argument, never a shell line), nothing else is
 // touched, it runs once a run, and the exit path turns it off again.
 func TestMicPrepareMixerTurnsOnOnlyTheMicInputs(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -179,7 +208,7 @@ func TestMicPrepareMixerTurnsOnOnlyTheMicInputs(t *testing.T) {
 	micPrepareMixer()
 	want := [][]string{
 		{"amixer", "-c", "0", "contents"},
-		{"amixer", "-q", "-c", "0", "cset", "name='ADCL Input MIC1 Boost Switch'", "on"},
+		{"amixer", "-q", "-c", "0", "cset", "numid=12", "on"},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %q\nwant %q", calls, want)
@@ -190,7 +219,7 @@ func TestMicPrepareMixerTurnsOnOnlyTheMicInputs(t *testing.T) {
 		t.Fatalf("a second open ran amixer again: %q", calls)
 	}
 	micRestoreMixer()
-	want = [][]string{{"amixer", "-q", "-c", "0", "cset", "name='ADCL Input MIC1 Boost Switch'", "off"}}
+	want = [][]string{{"amixer", "-q", "-c", "0", "cset", "numid=12", "off"}}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("restore calls = %q\nwant %q", calls, want)
 	}
@@ -261,6 +290,13 @@ func TestMicHasSound(t *testing.T) {
 	if !micHasSound(micStereo(make([]int16, 64), micTone(64, 40))) {
 		t.Error("a quiet room's noise did not count as sound")
 	}
+	offset := make([]int16, 64)
+	for i := range offset {
+		offset[i] = 500
+	}
+	if micHasSound(micStereo(offset, make([]int16, 64))) {
+		t.Error("a constant offset on an unused channel counted as sound")
+	}
 }
 
 // The device that last gave sound is tried first; the rest keep their order.
@@ -281,5 +317,13 @@ func TestMicPreferCandidate(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cands, []micCandidate{def, plug, named}) {
 		t.Error("micPreferCandidate changed its input")
+	}
+	// A device that gave no data this run is tried last; the rest keep order.
+	got := micDemoteCandidates(cands, map[micCandidate]bool{def: true})
+	if !reflect.DeepEqual(got, []micCandidate{plug, named, def}) {
+		t.Errorf("demote the default: %+v", got)
+	}
+	if got := micDemoteCandidates(cands, nil); !reflect.DeepEqual(got, cands) {
+		t.Errorf("demote nothing: %+v", got)
 	}
 }

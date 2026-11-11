@@ -784,6 +784,7 @@ func notifSetOpen(open, focusBell bool) {
 		}
 	}
 	if nc.open {
+		trophyEvent(tkNotifCenter)
 		nc.enter.begin(uiClockMS(), uiPanelEnterMS)
 		// The top-bar overlays are exclusive.
 		tb.startOpen = false

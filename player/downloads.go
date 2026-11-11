@@ -831,6 +831,10 @@ func downloadsWorker() {
 		downloads.mu.Unlock()
 
 		if justSaved {
+			trophyEvent(tkDownload)
+			if st, err := os.Stat(saved.Path); err == nil { // the file, not yt-dlp's estimate
+				trophyEventN(tkDownloadMB, st.Size()>>20)
+			}
 			ShowToast("Saved "+title, ToastKindSuccess)
 			noteAwayDownloadSaved(title)
 			// The queue forgets its rows on exit; the library keeps the file

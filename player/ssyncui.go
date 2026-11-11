@@ -730,6 +730,9 @@ func ssyncStartSync() {
 			}
 			peerLastSync.m[job.PeerID] = time.Now()
 			peerLastSync.mu.Unlock()
+			if res.Pulled+res.Pushed > 0 {
+				trophyEvent(tkSaveBackup) // a sync that copied at least one save
+			}
 			kind := ToastKindSuccess
 			if res.Failed > 0 {
 				kind = ToastKindWarning
@@ -798,6 +801,7 @@ func ssyncStartExport(config *Config, passphrase string) {
 				return
 			}
 			ssyncScreen.resultLine = fmt.Sprintf("Exported %d saves to %s", n, filepath.Base(file))
+			trophyEvent(tkSaveBackup)
 			PlaySuccessSound()
 			tbxOpenSheet(config, tbxSheetSpec{
 				title:    "Saves exported",

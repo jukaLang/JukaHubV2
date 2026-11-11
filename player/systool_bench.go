@@ -141,6 +141,9 @@ func sysToolBenchEnd(run uint64, cancelled bool) {
 		d.cancelled = cancelled
 		if !cancelled {
 			d.at = time.Now()
+			if d.seqOK || d.rndOK {
+				trophyEvent(tkBenchmark) // a finished run that measured something
+			}
 		}
 	})
 }

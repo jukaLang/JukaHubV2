@@ -132,6 +132,7 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 		if pom.remaining <= 0 {
 			pom.remaining = 0
 			if pom.phase == pomWork {
+				trophyEvent(tkPomodoro) // the focus period ran out; a skip (X) is not counted
 				pomodoroFinishWork()
 			} else {
 				pomodoroFinishBreak()

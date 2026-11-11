@@ -717,6 +717,7 @@ func toggleTVFavorite() {
 	}
 	PlayActivateSound()
 	if nowFav {
+		trophyEvent(tkFavorite)
 		ShowToast("Added "+ch.Name+" to favorites", ToastKindSuccess)
 	} else {
 		ShowToast("Removed "+ch.Name+" from favorites", ToastKindInfo)

@@ -190,6 +190,12 @@ func main() {
 	ensureRommScene(config)
 	// The APK Store (Start → Games) likewise (apkstore.go).
 	ensureApkStoreScene(config)
+	// Voice command and Bluetooth were only injected when first opened (or by a
+	// reload), so their trophies came and went from the room mid-run.
+	ensureVoiceScene(config)
+	if btDevicesAvailable() {
+		btEnsureScene(config)
+	}
 	// Control profiles and Local play are Go-owned screens reached from Tools
 	// and Settings → Controls, injected in memory the same way.
 	inmapEnsureScenes(config)
@@ -347,6 +353,10 @@ func main() {
 	// chip can name a connected headset while nothing plays. Local probes only,
 	// on their own ticker.
 	deferStartupTask("audio-output", startAudioOutputMonitor)
+
+	// Watch the kernel's CPU thermal limit on the handheld; the poller parks
+	// whenever a game owns the screen or the desktop window is hidden.
+	deferStartupTask("thermal-monitor", startThermalMonitor)
 
 	// A USB or Bluetooth keyboard plugged into the handheld turns the hints into
 	// keyboard keys (inputhints.go); a PC always has one, so this is a no-op there.
@@ -729,6 +739,7 @@ func main() {
 	// goes, because under the old behaviour every completion raced its own
 	// invisible toast and only the last one survived, unreadable.
 	whileAwayWasActive := false
+	wallpaperParkedForGame := false
 	for running {
 		// The frame clock starts here, before this iteration's input and scene
 		// work: what the frame-time histogram measures is everything a frame
@@ -748,6 +759,10 @@ func main() {
 		// until it is snoozed or dismissed.
 		if gameScreenSuspended() && !alarmFiringActive() {
 			whileAwayWasActive = true
+			if !wallpaperParkedForGame {
+				gifWallPauseForGame()
+				wallpaperParkedForGame = true
+			}
 			for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 				if _, quit := event.(*sdl.QuitEvent); quit {
 					running = false
@@ -775,6 +790,10 @@ func main() {
 			sdl.Delay(100)
 			frameCount++
 			continue
+		}
+		if wallpaperParkedForGame && !gameScreenSuspended() {
+			gifWallResumeAfterGame()
+			wallpaperParkedForGame = false
 		}
 		// The game handed the screen back. One summary replaces the burst of
 		// toasts that piled up while no frame was being presented. (An alarm
@@ -2683,8 +2702,9 @@ func main() {
 				// The voice orb (voiceorb.go): the Menu button — the physical
 				// GUIDE, before its fold into Back — opens and stops it, and
 				// while it listens or offers a choice it owns the pad. It runs
-				// before the quit chord and feeds that chord itself, so Menu never
-				// counts as Select there.
+				// before the quit chord and feeds that chord the presses it
+				// keeps (Menu still counts as Select there, so Menu + Start
+				// quits).
 				if voiceOrbController(e, padEventRaw, config) {
 					continue
 				}
@@ -3791,6 +3811,7 @@ func main() {
 	for _, font := range fontCache {
 		font.Close()
 	}
+	closeHomeUIFontSources()
 	closeSplashFonts()
 }
 

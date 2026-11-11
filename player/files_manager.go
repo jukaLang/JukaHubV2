@@ -440,6 +440,7 @@ func feRenameEntry(config *Config, path, newName string) (string, error) {
 	if err := os.Rename(src, dest); err != nil {
 		return "", err
 	}
+	trophyEvent(tkFileRename)
 	return dest, nil
 }
 
@@ -486,6 +487,7 @@ func feNewFolder(config *Config, name string) (string, error) {
 	if err := os.Mkdir(dest, 0o755); err != nil {
 		return "", err
 	}
+	trophyEvent(tkFolderNew)
 	return dest, nil
 }
 
@@ -508,7 +510,11 @@ func fePaste(config *Config) (int, error) {
 		if feClipboard.Cut {
 			if err := feDeleteEntry(config, src); err != nil {
 				lastErr = err
+			} else {
+				trophyEvent(tkFileMove)
 			}
+		} else {
+			trophyEvent(tkFileCopy)
 		}
 		done++
 	}
@@ -1564,6 +1570,7 @@ func feSheetActivate(config *Config) {
 				lastErr = err
 			}
 		}
+		trophyEventN(tkFileDelete, int64(len(targets)-failed))
 		feSelectionClear()
 		feListDirectory(config)
 		switch {

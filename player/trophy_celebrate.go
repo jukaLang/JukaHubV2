@@ -140,6 +140,13 @@ func trophyPointsLabel(t trophyTier) string {
 // trophyAnnounce queues the celebration for a trophy that was just earned and
 // files it in the notification centre, so it can be read again from the bell.
 func trophyAnnounce(a playtimeAchievement) {
+	trophyAnnounceCard(a)
+	notifRecord(trophyEarnedNotice(a), notifSuccess)
+}
+
+// trophyAnnounceCard queues a trophy's card and notes it for the "while you
+// were playing" banner, without the notification row.
+func trophyAnnounceCard(a playtimeAchievement) {
 	caption := "TROPHY EARNED"
 	if a.Tier == trophyPlatinum {
 		caption = "PLATINUM TROPHY EARNED"
@@ -151,8 +158,75 @@ func trophyAnnounce(a playtimeAchievement) {
 		detail:  trophyPointsLabel(a.Tier),
 		tier:    a.Tier,
 	})
-	notifRecord("Trophy earned: "+a.Title+" ("+trophyTierName(a.Tier)+")", notifSuccess)
 	noteAwayAchievement(a.Title)
+}
+
+// trophyEarnedNotice is one trophy's row in the notification centre.
+func trophyEarnedNotice(a playtimeAchievement) string {
+	return "Trophy earned: " + a.Title + " (" + trophyTierName(a.Tier) + ")"
+}
+
+// trophyBurstSingles is the most trophies one unlock pass announces one by one.
+const trophyBurstSingles = 3
+
+// trophyBurstNamed is how many titles a burst's notification row names.
+const trophyBurstNamed = 3
+
+// trophyAnnounceBatch announces what one unlock pass awarded. A few are
+// announced one by one. More at once — the first start of a version whose new
+// trophies an old save already qualifies for, a restore, a big import — still
+// queue a card each (the queue folds them into "+N more"), but the
+// notification centre gets one row for them instead of a page of rows that
+// would push everything else out of its fifty. A platinum keeps its own row.
+func trophyAnnounceBatch(list []playtimeAchievement) {
+	if len(list) <= trophyBurstSingles {
+		for _, a := range list {
+			trophyAnnounce(a)
+		}
+		return
+	}
+	// The rarest first: the queue gives the first few their own cards and the
+	// row names the first three, so a burst opens with its golds rather than
+	// with the first rungs of the Lifetime ladder.
+	list = append([]playtimeAchievement(nil), list...)
+	sort.SliceStable(list, func(x, y int) bool { return list[x].Tier > list[y].Tier })
+	others := make([]playtimeAchievement, 0, len(list))
+	for _, a := range list {
+		trophyAnnounceCard(a)
+		if a.Tier == trophyPlatinum {
+			notifRecord(trophyEarnedNotice(a), notifSuccess)
+			continue
+		}
+		others = append(others, a)
+	}
+	if msg := trophyBurstNotice(others); msg != "" {
+		notifRecord(msg, notifSuccess)
+	}
+}
+
+// trophyBurstNotice is a burst's notification row: "12 trophies earned: First
+// Steps, Night Owl, Bookworm and 9 more". "" for none.
+func trophyBurstNotice(list []playtimeAchievement) string {
+	switch len(list) {
+	case 0:
+		return ""
+	case 1:
+		return trophyEarnedNotice(list[0])
+	}
+	n := len(list)
+	named := n
+	if named > trophyBurstNamed {
+		named = trophyBurstNamed
+	}
+	titles := make([]string, 0, named)
+	for _, a := range list[:named] {
+		titles = append(titles, a.Title)
+	}
+	msg := strconv.Itoa(n) + " trophies earned: "
+	if rest := n - named; rest > 0 {
+		return msg + strings.Join(titles, ", ") + " and " + strconv.Itoa(rest) + " more"
+	}
+	return msg + strings.Join(titles[:named-1], ", ") + " and " + titles[named-1]
 }
 
 // trophyRATier grades a RetroAchievements unlock by its points: the site's own
@@ -189,6 +263,8 @@ func trophyCelebrateRA(title, game string, points int) {
 		detail:  detail,
 		tier:    trophyRATier(points),
 	})
+	// JukaHub's own RetroAchievements trophies count the unlocks a sync brings.
+	trophyEvent(tkRAUnlock)
 }
 
 // trophyRANewUnlocksMax bounds the cards one sync can queue; the queue folds
@@ -259,6 +335,7 @@ func trophyReplay(id string) bool {
 		caption = "PLATINUM TROPHY EARNED"
 	}
 	trophyEnqueue(trophyToast{id: a.ID, title: a.Title, caption: caption, detail: trophyPointsLabel(a.Tier), tier: a.Tier})
+	trophyEvent(tkReplay)
 	return true
 }
 
@@ -314,6 +391,7 @@ func trophyCycleCelebrationMode(config *Config) string {
 	}
 	config.Variables.Custom[trophyCelebrationVar] = next
 	saveUserConfigDebounced(userConfigFromVariables(config))
+	trophyEvent(tkConfetti)
 	return next
 }
 

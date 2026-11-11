@@ -192,6 +192,7 @@ func peerPairNotifyIncoming(token int64, name string) {
 // peerPairNotifyDone confirms a pairing.
 func peerPairNotifyDone(name string) {
 	ShowToast("Paired with "+name+" — sync saves and continue games between you", ToastKindSuccess)
+	trophyEvent(tkPeerPair)
 }
 
 // peerPairCancelView cancels the session a sheet or card shows.

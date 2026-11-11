@@ -77,29 +77,37 @@ jobs:
         id: cache
         # The key covers everything the helpers are built from: the native
         # sources, build-helpers.sh with its pinned versions and checksums, the
-        # Python tool pins, and this workflow, which makes the build root.
-        # git's blob ids hash the committed content, so every runner gets the
-        # same key; the host tests and the README change nothing that is built
-        # and stay out of it. Never fails: a miss, or any trouble here, only
-        # means the steps below build the helpers.
+        # Python tool pins, this workflow, which makes the build root, and
+        # .gitattributes, which decides the bytes those files are checked out
+        # as. git's blob ids hash the committed content, so every runner gets
+        # the same key; the host tests and the README change nothing that is
+        # built and stay out of it. A miss, or any trouble here, only means the
+        # steps below build the helpers: this step must not fail, since a
+        # failed step would skip them too.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -uo pipefail
+          # The default shell is bash -e: nothing below may end the step early.
+          set +e
+          miss() {
+            rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/BUILDINFO.txt
+            exit 0
+          }
           inputs=$(git ls-files -s -- player/native ':(exclude)player/native/tests' \
-            ':(exclude)player/native/*.md' .github/workflows/remote-play-helpers.yml)
+            ':(exclude)player/native/*.md' .github/workflows/remote-play-helpers.yml .gitattributes)
           case "$inputs" in
             *player/native/build-helpers.sh*) ;;
             *)
               echo "::warning title=Remote Play helpers::could not list the helper sources; building them"
-              exit 0 ;;
+              miss ;;
           esac
           name="remote-play-helpers-$(printf '%s\n' "$inputs" | sha256sum | cut -c1-16)"
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           echo "helper sources: $name"
           if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin \
               chiaki-stream chiaki-regist BUILDINFO.txt; then
-            exit 0
+            miss
           fi
           # The binaries must be the ones their BUILDINFO.txt describes, which
           # is what the step summary and the release's helper package show.
@@ -109,13 +117,13 @@ jobs:
             have=$(sha256sum "player/native/bin/$bin" | cut -d' ' -f1)
             if [ -z "$want" ] || [ "$want" != "$have" ]; then
               echo "::warning title=Remote Play helpers::the earlier $bin does not match its BUILDINFO.txt; building the helpers instead"
-              rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/BUILDINFO.txt
-              exit 0
+              miss
             fi
           done
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
       - name: Create the Ubuntu 20.04 build root
+        id: root
         if: steps.cache.outputs.hit != 'true'
         run: |
           set -euo pipefail
@@ -129,7 +137,9 @@ jobs:
             --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg \
             focal "$ROOTFS" http://ports.ubuntu.com/ubuntu-ports
           # The security and bug-fix updates too: OpenSSL is linked statically,
-          # so whatever libssl-dev holds today is what ships.
+          # so whatever libssl-dev holds is what ships. Focal's public update
+          # pockets froze when its standard support ended (2025-05-31), so a
+          # fresh build links the same OpenSSL as a reused one (TEST-16).
           printf '%s\n' \
             "deb http://ports.ubuntu.com/ubuntu-ports focal main universe" \
             "deb http://ports.ubuntu.com/ubuntu-ports focal-updates main universe" \
@@ -174,8 +184,11 @@ jobs:
 
       - name: Report what was built
         if: always()
+        # Only a report: its failure must not cost the helpers their upload.
+        continue-on-error: true
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
+          ROOT_OUTCOME: ${{ steps.root.outcome }}
           REUSED_FROM: ${{ steps.cache.outputs.hit == 'true' && steps.cache.outputs.run || '' }}
         run: |
           info=player/native/bin/BUILDINFO.txt
@@ -193,7 +206,11 @@ jobs:
               echo "Built and verified; the TrimUI packages of this run carry them in \`Apps/JukaHub/bin\`."
             else
               echo "Not built (${BUILD_OUTCOME:-not run}): the TrimUI packages of this run ship without Remote Play streaming."
-              echo "The **Build the helpers** step says why."
+              if [ "$ROOT_OUTCOME" = failure ]; then
+                echo "The **Create the Ubuntu 20.04 build root** step says why."
+              else
+                echo "The **Build the helpers** step says why."
+              fi
             fi
             if [ -f "$info" ]; then
               echo ""
@@ -224,7 +241,7 @@ jobs:
       - name: Keep the helpers for later runs
         # A fresh build that passed its checks, on a push to main: the only
         # kind the lookup above accepts. Reused helpers are kept already.
-        if: steps.build.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -151,7 +151,7 @@ restore() {
     return 0
   fi
 
-  if ! self_wf=$(this_workflow "$repo" "$self") || [ -z "$self_wf" ]; then
+  if ! self_wf=$(this_workflow "$repo" "$self") || ! [[ $self_wf =~ ^[0-9]+$ ]]; then
     warn "could not look up this run's workflow; building without a cache"
     return 0
   fi
@@ -409,7 +409,7 @@ fetch() { # <name> <dir> <file>...
       return 1
     fi
   done
-  if ! self_wf=$(this_workflow "$repo" "$self") || [ -z "$self_wf" ]; then
+  if ! self_wf=$(this_workflow "$repo" "$self") || ! [[ $self_wf =~ ^[0-9]+$ ]]; then
     warn "could not look up this run's workflow; not using an earlier $name"
     return 1
   fi
@@ -421,6 +421,11 @@ fetch() { # <name> <dir> <file>...
     warn "no temporary directory; not using an earlier $name"
     return 1
   fi
+  # A fetch cut short (the workflow bounds it with timeout) leaves no download
+  # behind; whatever it moved into <dir> the caller removes on its exit 1.
+  # shellcheck disable=SC2064 # the path is fixed now, and holds no quote
+  trap "rm -rf '$work'" EXIT
+  trap 'exit 1' INT TERM
   while read -r run art created; do
     [ -n "${run:-}" ] || continue
     [ "$run" = "$self" ] && continue
@@ -479,13 +484,22 @@ take_files() { # <repo> <run> <art> <name> <dir> <work> <file>...
     warn "cannot create $dir"
     return 1
   fi
+  # mv would put a file into a folder of the same name and still succeed.
+  for f in "$@"; do
+    if [ -L "$dir/$f" ] || { [ -e "$dir/$f" ] && [ ! -f "$dir/$f" ]; }; then
+      warn "$dir/$f is in the way and is not a regular file"
+      return 1
+    fi
+  done
+  local moved=()
   for f in "$@"; do
     if ! mv -f "$work/files/$f" "$dir/$f"; then
       warn "could not move $f into $dir"
       # All or nothing: the caller builds the set instead.
-      for f in "$@"; do rm -f "$dir/$f"; done
+      for f in ${moved[@]+"${moved[@]}"}; do rm -f "$dir/$f"; done
       return 1
     fi
+    moved+=("$f")
   done
 }
 

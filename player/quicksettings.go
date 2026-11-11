@@ -507,6 +507,7 @@ func qsApplyProbe(r qsProbe) {
 func qsToggleOpen() {
 	qs.open = !qs.open
 	if qs.open {
+		trophyEvent(tkQuickSettings)
 		qs.cursor = 0
 		qs.enter.begin(uiClockMS(), uiPanelEnterMS)
 		// The top-bar cards would otherwise stay open under the panel: a

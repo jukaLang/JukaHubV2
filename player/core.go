@@ -469,7 +469,15 @@ func substituteVars(text string, vars map[string]interface{}) string {
 	}
 	return varPattern.ReplaceAllStringFunc(text, func(m string) string {
 		varName := m[1:]
+		// Labels can be captured in screenshots or shared by the companion;
+		// never resolve a protected name or an encrypted value into visible text.
+		if liveBuilderSensitiveKey(varName) {
+			return m
+		}
 		if val, ok := vars[varName]; ok {
+			if encrypted, ok := val.(string); ok && strings.HasPrefix(strings.TrimSpace(encrypted), "ENC:") {
+				return m
+			}
 			return fmt.Sprintf("%v", val)
 		}
 		return m
@@ -907,13 +915,13 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 	}
 
 	opened := fontPath
-	font, err := ttf.OpenFont(resolvePath(fontPath), size)
+	font, err := openHomeUIFont(fontPath, size)
 	if err != nil && fontPath != homeUIFontFile {
 		// A missing Inter weight falls back to the bundled regular cut. There
 		// is deliberately no chain past it: DejaVu, Arial and Roboto are not
 		// shipped, and borrowing a system face made every device draw a
 		// different UI.
-		if f, e2 := ttf.OpenFont(resolvePath(homeUIFontFile), size); e2 == nil {
+		if f, e2 := openHomeUIFont(homeUIFontFile, size); e2 == nil {
 			font, err, opened = f, nil, homeUIFontFile
 		}
 	}
@@ -2487,6 +2495,7 @@ func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
 	// The search belongs to the screen that asked for it: runSceneTask, not a
 	// bare goroutine, so leaving the results screen stops the run
 	// (executeYouTubeSearch spawns the scene task).
+	trophyEvent(tkVideoSearch)
 	executeYouTubeSearch(config, plan.command, plan.resultVar, snapshotVars(config))
 	return true
 }
@@ -6217,6 +6226,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			var val float64
 			if _, err := fmt.Sscanf(unitInputValue, "%f", &val); err == nil {
 				if res, ok := convertUnit(val, unitFrom, unitTo, unitCategory); ok {
+					trophyEvent(tkUnitConvert)
 					if unitCategory == "temperature" {
 						if unitTo == "C" || unitTo == "c" {
 							unitResult = fmt.Sprintf("%.2f °C", res)
@@ -6457,6 +6467,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		tbVar := findTextBrowserVariable(config)
 		config.Variables.Custom[tbVar] = browseSystemInfo(element)
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
@@ -6475,6 +6486,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 		}(tbVar, element)
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 	case "textbrowser_json":
 		tbVar := findTextBrowserVariable(config)
 		go func(v string, el Element) {
@@ -6484,10 +6496,12 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 		}(tbVar, element)
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 	case "textbrowser_processes":
 		tbVar := findTextBrowserVariable(config)
 		config.Variables.Custom[tbVar] = getProcessTree()
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
@@ -6523,6 +6537,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			tbVar := findTextBrowserVariable(config)
 			config.Variables.Custom[tbVar] = sb.String()
 			textBrowserLastUpdate = time.Now().Unix()
+			trophyEvent(tkTextPage)
 			if element.AutoRefresh {
 				startTextBrowserAutoRefresh(config, element)
 			}
@@ -6531,6 +6546,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		tbVar := findTextBrowserVariable(config)
 		config.Variables.Custom[tbVar] = getSystemTemperature()
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
@@ -6538,6 +6554,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		tbVar := findTextBrowserVariable(config)
 		config.Variables.Custom[tbVar] = getRunningServices()
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
@@ -6545,6 +6562,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		tbVar := findTextBrowserVariable(config)
 		config.Variables.Custom[tbVar] = scanLocalFiles("/media")
 		textBrowserLastUpdate = time.Now().Unix()
+		trophyEvent(tkTextPage)
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
@@ -6977,6 +6995,7 @@ func completeSceneTransition(config *Config) {
 	benchmarkAutoStartOnOpen(config, config.Scenes[currentSceneIndex])
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "textlog" && e.Variable == "weather_screen_text" {
+			trophyEvent(tkWeather) // the Weather screen opened
 			runSceneTask(func(ctx context.Context) {
 				fetchWeatherOnceContext(ctx)
 				if ctx.Err() != nil {

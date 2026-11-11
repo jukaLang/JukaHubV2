@@ -570,6 +570,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 		restoreProfile()
 		recorder.Stop()
 	}()
+	trophyEvent(tkNetplay) // hosted or joined, RetroArch started
 	recordGameLaunch(plan.Session.Game)
 	return nil
 }

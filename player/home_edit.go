@@ -234,6 +234,7 @@ func homeEditClose(config *Config) {
 func homeEditCommit(config *Config) {
 	homeTilesSet(config, homeEdit.work)
 	homeEdit.dirty = false
+	trophyEvent(tkHomeEdit) // every caller commits a real change (after homeEditChanged or when dirty)
 }
 
 // homeEditChanged records a change to the list being edited and lays the
@@ -447,7 +448,11 @@ func homeEditChooseLayout(config *Config, i int) {
 	homeEdit.holding = false
 	homeEdit.resetAt = 0
 	name := homeArrangementChoiceList[i]
+	changed := normalizeHomeArrangement(name) != homeArrangement(config)
 	homeSetArrangement(config, name)
+	if changed { // A on the layout already in use is not an edit
+		trophyEvent(tkHomeEdit)
+	}
 	homeEdit.stripIdx = i
 	if !homeArrangementIsDynamic(name) {
 		homeEdit.strip = true

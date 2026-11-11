@@ -426,6 +426,8 @@ func measureNetSpeed(ctx context.Context, client *http.Client, url string) (stri
 		dur = 0.001
 	}
 	mbps := (float64(n) * 8 / dur) / 1e6
+	trophyEvent(tkSpeedTest)
+	trophyEventPeak(tkSpeedBest, int64(mbps))
 	return fmt.Sprintf("Downloaded %.1f MiB in %.2fs\nSpeed: %.1f Mbit/s", float64(n)/(1024*1024), dur, mbps), nil
 }
 

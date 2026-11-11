@@ -9,7 +9,9 @@ package main
 // Trophies is a grid of cards — the trophy in its metal when earned, a dim
 // silhouette with a progress bar when not, a "?" while a hidden one is still to
 // be found — with a chip row above it: filters (All, Earned, Locked and the four
-// tiers, applied as the focus moves along them), the sort order and the
+// tiers, applied as the focus moves along them), the category (a list of the
+// set's groups with how much of each is earned: with 401 trophies, "show me
+// the Arcade ones" is how the room is browsed), the sort order and the
 // celebration style. A opens a card's details sheet: the trophy large, its tier
 // and rarity, what it asks for, how far along it is or when it was earned, and
 // Left/Right to step through the list.
@@ -23,6 +25,7 @@ package main
 // back so the top bar can take it.
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -56,10 +59,12 @@ const (
 	trophySortClosest     = 3
 	trophySortCount       = 4
 
-	// The chip row: the filters, then the sort chip, then the style chip.
-	trophyChipSort  = trophyFilterCount
-	trophyChipStyle = trophyFilterCount + 1
-	trophyChipCount = trophyFilterCount + 2
+	// The chip row: the filters, then the category chip, the sort chip and the
+	// style chip.
+	trophyChipGroup = trophyFilterCount
+	trophyChipSort  = trophyFilterCount + 1
+	trophyChipStyle = trophyFilterCount + 2
+	trophyChipCount = trophyFilterCount + 3
 
 	// trophyCardsMax bounds the cards one frame can draw (and hit-test).
 	trophyCardsMax = 64
@@ -168,14 +173,82 @@ func trophyProgressText(a *playtimeAchievement, cur, goal int64) string {
 	switch a.Metric {
 	case trophyMetricTotal, trophyMetricBestDay, trophyMetricWeek, trophyMetricScene:
 		return formatPlaytime(cur) + " of " + formatPlaytime(goal)
-	case trophyMetricDays:
+	case trophyMetricDays, trophyMetricLifeDays:
 		return fmt.Sprintf("%d of %d days", cur, goal)
 	case trophyMetricStreak:
 		return fmt.Sprintf("%d of %d days in a row", cur, goal)
+	case trophyMetricBestStreak:
+		return fmt.Sprintf("Best %d of %d days in a row", cur, goal)
 	case trophyMetricScreens:
 		return fmt.Sprintf("%d of %d screens", cur, goal)
+	case trophyMetricGameBest:
+		return "Best " + formatPlaytime(cur) + " of " + formatPlaytime(goal)
+	case trophyMetricCount, trophyMetricSet:
+		if goal == 1 {
+			return "Not yet"
+		}
+		return trophyAmountText(a.Unit, cur, goal)
+	case trophyMetricBest:
+		return "Best " + trophyAmountText(a.Unit, cur, goal)
 	}
 	return fmt.Sprintf("%d of %d trophies", cur, goal)
+}
+
+// trophyAmountText is "37 of 100 tracks" in a trophy's unit: durations for
+// "time", sizes for "MB", a plain count with the unit's noun otherwise.
+func trophyAmountText(unit string, cur, goal int64) string {
+	switch unit {
+	case "time":
+		return formatPlaytime(cur) + " of " + formatPlaytime(goal)
+	case "MB":
+		return trophySizeText(cur) + " of " + trophySizeText(goal)
+	case "":
+		return trophyNum(cur) + " of " + trophyNum(goal)
+	}
+	return trophyNum(cur) + " of " + trophyNum(goal) + " " + unit
+}
+
+// trophySizeText is a size in MiB as the progress line says it: "340 MB",
+// "1 GB", "2.5 GB".
+func trophySizeText(mb int64) string {
+	if mb < 1024 {
+		return trophyNum(mb) + " MB"
+	}
+	tenths := mb * 10 / 1024
+	if tenths%10 == 0 || tenths >= 1000 {
+		return trophyNum(tenths/10) + " GB"
+	}
+	return fmt.Sprintf("%d.%d GB", tenths/10, tenths%10)
+}
+
+// trophyNum is n with thousands grouped: "12,345".
+func trophyNum(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	if len(s) <= 3 {
+		if neg {
+			return "-" + s
+		}
+		return s
+	}
+	var b strings.Builder
+	if neg {
+		b.WriteByte('-')
+	}
+	lead := len(s) % 3
+	if lead > 0 {
+		b.WriteString(s[:lead])
+	}
+	for i := lead; i < len(s); i += 3 {
+		if b.Len() > 0 && !(neg && b.Len() == 1) {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 // trophyRow is one trophy's display data, formatted when the list is rebuilt
@@ -216,6 +289,9 @@ type trophyRoomState struct {
 	filter int
 	sort   int
 	cursor int // position in list
+	// group is the category the grid shows, "" for all of them. Like the
+	// filter and the sort it is kept for the session.
+	group string
 
 	sheet      bool
 	sheetIdx   int // index into playtimeAchievements
@@ -230,6 +306,8 @@ type trophyRoomState struct {
 	builtFilt int
 	builtSort int
 	builtDay  int
+	// builtGroup is the category the list was built for.
+	builtGroup string
 
 	// Header numbers, formatted once per rebuild.
 	shown      int
@@ -281,13 +359,25 @@ var (
 	playtimeHeatRect sdl.Rect
 )
 
+// trophyRoomVisitCtx is the scene-work generation (scenetasks.go) the room's
+// state belongs to. Every entry into a scene makes a new one; the screensaver,
+// a game launched over the room, a slow frame or the cup's press keep it. The
+// scene index alone could not tell: the room has the same index when it is
+// entered again.
+var trophyRoomVisitCtx context.Context
+
 // trophyRoomSyncVisit starts a fresh visit when the scene was left and entered
-// again: the Trophies tab, the focus on the active filter, the grid at the top
-// and no sheet. Filter and sort are kept for the session.
+// again (or the cup asked for it): the Trophies tab, the focus on the active
+// filter, the grid at the top, no details and no category list. Filter, sort
+// and category are kept for the session. A real entry is a visit for the
+// visit trophies; the cup's press inside the room is not.
 func trophyRoomSyncVisit() {
-	if playtimeScrollFor == currentSceneIndex {
+	ctx := sceneWorkContext()
+	entered := ctx != trophyRoomVisitCtx
+	if !entered && playtimeScrollFor == currentSceneIndex {
 		return
 	}
+	trophyRoomVisitCtx = ctx
 	playtimeScrollFor = currentSceneIndex
 	playtimeScroll = 0
 	r := &trophyRoom
@@ -298,6 +388,10 @@ func trophyRoomSyncVisit() {
 	r.cursor = 0
 	r.sheet = false
 	r.chipScroll = 0
+	trophyGroupSheet.open, trophyGroupSheet.choose = false, nil
+	if entered {
+		trophyEvent(tkRoomVisit)
+	}
 }
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -310,11 +404,12 @@ func trophyRoomRefresh(config *Config) {
 	now := time.Now()
 	day := now.Year()*400 + now.YearDay()
 	if r.built && r.builtRev == playtime.rev && r.builtGen == trophyAvail.gen &&
-		r.builtFilt == r.filter && r.builtSort == r.sort && r.builtDay == day {
+		r.builtFilt == r.filter && r.builtSort == r.sort && r.builtDay == day && r.builtGroup == r.group {
 		return
 	}
 	r.built = true
 	r.builtRev, r.builtGen, r.builtFilt, r.builtSort, r.builtDay = playtime.rev, trophyAvail.gen, r.filter, r.sort, day
+	r.builtGroup = r.group
 
 	d := playtime.data
 	st := trophyStatsOf(d, now)
@@ -368,7 +463,7 @@ func trophyRoomRefresh(config *Config) {
 				r.tierEarned[a.Tier]++
 			}
 		}
-		if trophyFilterMatch(r.filter, a, earned) {
+		if trophyFilterMatch(r.filter, a, earned) && (r.group == "" || a.Group == r.group) {
 			r.list = append(r.list, i)
 		}
 	}
@@ -509,9 +604,14 @@ func trophyRoomBuildStats(d playtimeData, now time.Time) {
 		fmt.Sprintf("%d of %d", s.ins.ActiveDays, wrappedDays),
 	}
 	r := &trophyRoom
+	// Every day ever, not just the 90 the window keeps.
+	daysEver := int64(daysUsed(d))
+	if d.Life.Days > daysEver {
+		daysEver = d.Life.Days
+	}
 	s.totals = [6][2]string{
 		{"TOTAL TIME", formatPlaytime(d.Total)},
-		{"DAYS USED", strconv.Itoa(daysUsed(d))},
+		{"DAYS USED", trophyNum(daysEver)},
 		{"SCREENS", strconv.Itoa(len(allScenes))},
 		{"TROPHIES", strconv.Itoa(r.earned) + " of " + strconv.Itoa(r.shown)},
 		{"TROPHY POINTS", strconv.Itoa(r.points)},
@@ -700,15 +800,130 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	}
 
 	renderStatusBar(renderer, config)
-	renderFooter(renderer, config)
 	if r.sheet {
 		trophyRoomDrawSheet(renderer, config, f, l)
 	} else {
 		r.sheetRect = sdl.Rect{}
 	}
+	// The category list, over everything (it owns the input while open).
+	setSheetDraw(renderer, config, &trophyGroupSheet)
+	// The footer goes last so its hints stay readable over the list's dim (the
+	// details sheet's own dim stops above the footer band).
+	renderFooter(renderer, config)
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	renderer.SetClipRect(nil)
+}
+
+// ── Categories ────────────────────────────────────────────────────────────────
+
+// trophyGroupSheet is the category list the chip opens.
+var trophyGroupSheet setSheetState
+
+// trophyGroupCache is the set's groups in the order they first appear, made
+// once: the set is fixed for the process.
+var trophyGroupCache []string
+
+// trophyGroups is the set's groups in order ("Lifetime", "Days", …).
+func trophyGroups() []string {
+	if trophyGroupCache != nil {
+		return trophyGroupCache
+	}
+	seen := make(map[string]bool)
+	groups := make([]string, 0, 32)
+	for i := range playtimeAchievements {
+		g := playtimeAchievements[i].Group
+		if g == "" || seen[g] {
+			continue
+		}
+		seen[g] = true
+		groups = append(groups, g)
+	}
+	trophyGroupCache = groups
+	return groups
+}
+
+// trophyGroupCounts counts, for each group, the trophies the room shows and
+// how many of them are earned (the same rule as the header: trophyShown).
+func trophyGroupCounts(d playtimeData) (earned, shown map[string]int) {
+	earned, shown = map[string]int{}, map[string]int{}
+	for i := range playtimeAchievements {
+		if !trophyShown(i, d) {
+			continue
+		}
+		g := playtimeAchievements[i].Group
+		shown[g]++
+		if _, ok := d.Unlocked[playtimeAchievements[i].ID]; ok {
+			earned[g]++
+		}
+	}
+	return earned, shown
+}
+
+// trophyGroupOptions is the category list's rows: every category, then each
+// group the room shows anything of, with how much of it is earned.
+func trophyGroupOptions(d playtimeData) []setOption {
+	earned, shown := trophyGroupCounts(d)
+	allEarned, allShown := 0, 0
+	for _, n := range shown {
+		allShown += n
+	}
+	for _, n := range earned {
+		allEarned += n
+	}
+	opts := []setOption{{Value: "", Label: "All categories", Note: trophyGroupNote(allEarned, allShown)}}
+	for _, g := range trophyGroups() {
+		if shown[g] == 0 {
+			continue
+		}
+		opts = append(opts, setOption{Value: g, Label: g, Note: trophyGroupNote(earned[g], shown[g])})
+	}
+	return opts
+}
+
+// trophyGroupNote is a category row's second line: "12 of 40 earned".
+func trophyGroupNote(earned, shown int) string {
+	return trophyNum(int64(earned)) + " of " + trophyNum(int64(shown)) + " earned"
+}
+
+// trophyGroupLabel is the category chip's text.
+func trophyGroupLabel(group string) string {
+	if group == "" {
+		return "All categories"
+	}
+	return group
+}
+
+// trophyRoomOpenGroups opens the category list on the current category.
+func trophyRoomOpenGroups(config *Config) {
+	r := &trophyRoom
+	r.zone = trophyZoneChips
+	r.chip = trophyChipGroup
+	// A click while the top bar held the pad's focus: the bar reads the D-pad
+	// and A before the scene does, so the list would open without its keys.
+	if chromeTier(focusEngine.ElementIndex()) != 0 {
+		focusEngine.ClearFocus()
+		selectedButtonIndex = -1
+	}
+	setSheetOpen(&trophyGroupSheet, "Categories", "Show one kind of trophy", trophyGroupOptions(playtime.data), r.group,
+		func(value string) {
+			trophyRoomSetGroup(config, value)
+		})
+}
+
+// trophyRoomSetGroup shows one category ("" for all) from the top of its list.
+func trophyRoomSetGroup(config *Config, group string) {
+	r := &trophyRoom
+	if r.group == group {
+		return
+	}
+	r.group = group
+	r.cursor = 0
+	playtimeScroll = 0
+	r.scrollF = 0
+	if config != nil {
+		trophyRoomRefresh(config)
+	}
 }
 
 // trophyRoomFocusVisible reports whether the room's own focus ring is shown:
@@ -895,6 +1110,8 @@ func trophyRoomChipLabel(config *Config, i int) string {
 	switch {
 	case i < trophyFilterCount:
 		return trophyFilterLabels[i]
+	case i == trophyChipGroup:
+		return trophyGroupLabel(trophyRoom.group)
 	case i == trophyChipSort:
 		return trophySortLabels[trophyRoom.sort]
 	}
@@ -906,7 +1123,7 @@ func trophyRoomChipHasGlyph(i int) bool {
 	if _, ok := trophyFilterTier(i); ok && i < trophyFilterCount {
 		return true
 	}
-	return i == trophyChipSort || i == trophyChipStyle
+	return i == trophyChipGroup || i == trophyChipSort || i == trophyChipStyle
 }
 
 // trophyRoomDrawTabs draws the tab pills and, on the Trophies tab, the chip
@@ -996,7 +1213,9 @@ func trophyRoomDrawTabs(renderer *sdl.Renderer, config *Config, f trophyFonts, l
 			}
 			visible := glassIntersect(rect, area)
 			r.chipRects[i] = visible
-			active := i < trophyFilterCount && i == r.filter
+			// A filter is lit while it is the one applied; the category chip
+			// while it narrows the grid to one category.
+			active := (i < trophyFilterCount && i == r.filter) || (i == trophyChipGroup && r.group != "")
 			focused := focusOn && i == r.chip
 			trophyRoomDrawChip(renderer, config, f, rect, i, active, focused)
 		}
@@ -1029,6 +1248,8 @@ func trophyRoomDrawChip(renderer *sdl.Renderer, config *Config, f trophyFonts, r
 		box := sdl.Rect{X: x, Y: rect.Y + (rect.H-16)/2, W: 16, H: 16}
 		if tier, ok := trophyFilterTier(i); ok && i < trophyFilterCount {
 			trophyDrawCupFlat(renderer, box, trophyTierColor(tier))
+		} else if i == trophyChipGroup {
+			DrawHomeIcon(renderer, "grid", box, false)
 		} else if i == trophyChipSort {
 			DrawHomeIcon(renderer, "sort", box, false)
 		} else {
@@ -1048,8 +1269,18 @@ func trophyRoomDrawGrid(renderer *sdl.Renderer, config *Config, f trophyFonts, l
 		switch r.filter {
 		case trophyFilterLocked:
 			title, body = "Nothing left to earn", "Every trophy on this device is yours."
+			if r.group != "" {
+				body = "Every trophy in " + r.group + " is yours."
+			}
 		case trophyFilterPlatinum, trophyFilterGold, trophyFilterSilver, trophyFilterBronze:
-			body = "None of this tier yet — keep going."
+			// A tier lists earned and locked trophies alike, so an empty one has
+			// none of that tier at all (on this setup).
+			tier, _ := trophyFilterTier(r.filter)
+			title = "No " + trophyTierName(tier) + " trophies here"
+			body = "This setup has no " + strings.ToLower(trophyTierName(tier)) + " trophies to show."
+			if r.group != "" {
+				body = r.group + " has no " + strings.ToLower(trophyTierName(tier)) + " trophies."
+			}
 		}
 		UIEmptyState(renderer, config, grid, "@trophy", title, body)
 		return
@@ -1480,6 +1711,7 @@ func trophyRoomOpenSheet(pos int) {
 	r.sheetIdx = r.list[pos]
 	r.sheetEnter.begin(uiClockMS(), uiPanelEnterMS)
 	trophyRoomReveal()
+	trophyEventDistinct(tkRoomDetails, playtimeAchievements[r.sheetIdx].ID)
 }
 
 // trophyRoomStepSheet moves the sheet to the next or previous trophy.
@@ -1496,6 +1728,8 @@ func trophyRoomStepSheet(dir int) bool {
 	r.cursor = next
 	r.sheetIdx = r.list[next]
 	trophyRoomReveal()
+	// Stepping to the next trophy is reading its details too.
+	trophyEventDistinct(tkRoomDetails, playtimeAchievements[r.sheetIdx].ID)
 	return true
 }
 
@@ -1617,7 +1851,7 @@ func trophyRoomDrawSheet(renderer *sdl.Renderer, config *Config, f trophyFonts, 
 			status = row.whenLong
 		case secret:
 			status = "Progress is hidden"
-		case status != "":
+		case status != "" && status != "Not yet":
 			status += " · " + row.pct
 		}
 		if f.small != nil && status != "" {
@@ -1633,6 +1867,9 @@ func trophyRoomDrawSheet(renderer *sdl.Renderer, config *Config, f trophyFonts, 
 		meta := "#" + a.Icon + " · " + a.Group
 		if a.Metric == trophyMetricScene && !secret {
 			meta += " · " + trophySceneLabel(a.Scene)
+		}
+		if a.Bonus {
+			meta += " · Bonus, not needed for the platinum"
 		}
 		if f.small != nil {
 			t := ellipsize(f.small, meta, inner)
@@ -1806,6 +2043,9 @@ func trophyRoomAction(config *Config, act trophyAction) bool {
 			}
 		case trophyActConfirm:
 			switch {
+			case r.chip == trophyChipGroup:
+				// The list sheet plays its own sound as it opens.
+				trophyRoomOpenGroups(config)
 			case r.chip == trophyChipSort:
 				trophyRoomCycleSort(config)
 				PlayActivateSound()
@@ -1912,7 +2152,7 @@ func trophyRoomKeyAction(e *sdl.KeyboardEvent) (trophyAction, bool) {
 		return trophyActLeft, true
 	case sdl.K_RIGHT:
 		return trophyActRight, true
-	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
 		return trophyActConfirm, true
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
 		return trophyActBack, true
@@ -1969,6 +2209,9 @@ func trophyRoomPadAction(button uint8) (trophyAction, bool) {
 // trophyRoomFooterHints are the footer's hints for the room's current state.
 func trophyRoomFooterHints() []FooterHint {
 	r := &trophyRoom
+	if trophyGroupSheet.open {
+		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Show"}, {Button: "B", Label: "Close"}}
+	}
 	if r.sheet {
 		hints := []FooterHint{{Button: "Left/Right", Label: "Previous / next"}}
 		if r.sheetIdx >= 0 && r.sheetIdx < len(r.rows) && r.rows[r.sheetIdx].earned {
@@ -1987,6 +2230,8 @@ func trophyRoomFooterHints() []FooterHint {
 	confirm := "Details"
 	if r.zone == trophyZoneChips {
 		switch {
+		case r.chip == trophyChipGroup:
+			confirm = "Categories"
 		case r.chip == trophyChipSort:
 			confirm = "Sort"
 		case r.chip == trophyChipStyle:
@@ -2012,6 +2257,10 @@ func trophyRoomFooterHints() []FooterHint {
 func trophyRoomClick(mx, my int32) bool {
 	trophyRoomSyncVisit()
 	r := &trophyRoom
+	if trophyGroupSheet.open {
+		setSheetMouse(&trophyGroupSheet, mx, my)
+		return true
+	}
 	if r.sheet {
 		switch {
 		case r.prevRect.W > 0 && hitTouchTarget(r.prevRect, mx, my):
@@ -2067,6 +2316,8 @@ func trophyRoomClick(mx, my int32) bool {
 				playtimeScroll = 0
 			}
 			PlayNavSound()
+		case i == trophyChipGroup:
+			trophyRoomOpenGroups(appConfig)
 		case i == trophyChipSort:
 			trophyRoomCycleSort(nil)
 			PlayActivateSound()
@@ -2093,6 +2344,10 @@ func trophyRoomWheel(y int32) bool {
 	}
 	trophyRoomSyncVisit()
 	r := &trophyRoom
+	if trophyGroupSheet.open {
+		setSheetWheel(&trophyGroupSheet, y)
+		return true
+	}
 	if r.sheet {
 		if y > 0 {
 			trophyRoomStepSheet(-1)
@@ -2124,6 +2379,15 @@ func (playtimeScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
 	}
+	// A stale list or sheet from the last visit must not take the first key.
+	trophyRoomSyncVisit()
+	if e.Repeat != 0 && trophyRoomActivateKey(e.Keysym.Sym) {
+		// A held Enter would open the list, pick from it, open it again…
+		return true
+	}
+	if trophyGroupSheet.open {
+		return trophyGroupSheetKey(e.Keysym.Sym, e.Keysym.Mod&sdl.KMOD_SHIFT != 0)
+	}
 	act, ok := trophyRoomKeyAction(e)
 	if !ok {
 		return false
@@ -2135,11 +2399,63 @@ func (playtimeScene) handleController(e *sdl.ControllerButtonEvent, c *Config) b
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return false
 	}
+	trophyRoomSyncVisit()
+	if trophyGroupSheet.open {
+		return trophyGroupSheetPad(e.Button)
+	}
 	act, ok := trophyRoomPadAction(e.Button)
 	if !ok {
 		return false
 	}
 	return trophyRoomAction(c, act)
+}
+
+// trophyRoomActivateKey reports whether a key activates (the keys a held
+// press must not repeat).
+func trophyRoomActivateKey(sym sdl.Keycode) bool {
+	switch sym {
+	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
+		return true
+	}
+	return false
+}
+
+// trophyGroupSheetKey routes a key to the open category list: the list's own
+// keys, A/B the way the room reads them, and Tab / Shift+Tab paging like the
+// pad's shoulders. Any other key is left to the app.
+func trophyGroupSheetKey(sym sdl.Keycode, shift bool) bool {
+	s := &trophyGroupSheet
+	switch sym {
+	case sdl.K_a:
+		setSheetPick(s, s.cursor)
+	case sdl.K_b:
+		setSheetClose(s)
+	case sdl.K_TAB:
+		if shift {
+			setSheetKey(s, sdl.K_PAGEUP)
+		} else {
+			setSheetKey(s, sdl.K_PAGEDOWN)
+		}
+	case sdl.K_UP, sdl.K_DOWN, sdl.K_LEFT, sdl.K_RIGHT, sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END,
+		sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_ESCAPE, sdl.K_BACKSPACE:
+		setSheetKey(s, sym)
+	default:
+		return false
+	}
+	return true
+}
+
+// trophyGroupSheetPad routes a controller button to the open category list;
+// buttons the list does not use are left to the app.
+func trophyGroupSheetPad(button uint8) bool {
+	switch button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_DOWN, sdl.CONTROLLER_BUTTON_DPAD_LEFT,
+		sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER,
+		sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		setSheetPad(&trophyGroupSheet, button)
+		return true
+	}
+	return false
 }
 
 // handlePlaytimeWheel scrolls the room from a mouse wheel or a touchpad drag.

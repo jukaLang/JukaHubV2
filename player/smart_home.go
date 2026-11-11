@@ -1194,6 +1194,7 @@ func toggleSmartHomeEntity(config *Config, entityID string) error {
 	if err := callHAService(settings, entityID); err != nil {
 		return err
 	}
+	trophyEvent(tkSmartHome)
 	state := ""
 	smartHome.mu.Lock()
 	for i := range smartHome.entities {

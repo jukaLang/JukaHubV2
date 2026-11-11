@@ -498,6 +498,8 @@ func wifiJoinAsync(ssid, pass string, secured bool) {
 		if err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
+		trophyEvent(tkWifiJoin)
+		trophyEventDistinct(tkWifiNets, res.SSID)
 		u := wifiUpdate{kind: wifiUpdateJoin, msg: wifiJoinMessage(res)}
 		if snap, snapErr := wifiReadSnapshot(); snapErr == nil {
 			u.snap = &snap
@@ -519,6 +521,8 @@ func wifiSelectSavedAsync(id int) {
 			}
 			return u
 		}
+		trophyEvent(tkWifiJoin)
+		trophyEventDistinct(tkWifiNets, res.SSID)
 		u := wifiUpdate{kind: wifiUpdateJoin, msg: wifiJoinMessage(res)}
 		if snap, snapErr := wifiReadSnapshot(); snapErr == nil {
 			u.snap = &snap

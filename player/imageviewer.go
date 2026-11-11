@@ -135,6 +135,7 @@ func openImageViewerURL(url string) {
 	imageViewerPanY = 0
 	imageViewerPath = url
 	imageViewerLockBtn = sdl.Rect{}
+	trophyEvent(tkImageView) // a chat picture: the chat's cache draws it, not imgvDecodeWorker
 }
 
 // webpProbe is a 36-byte 1x1 lossless WebP. SDL_image reaches WebP through
@@ -389,6 +390,7 @@ func imgvDecodeWorker(gen int, path string, maxDim, fitW, fitH int) {
 		res.full = imgvOrient(res.full, orient)
 		res.fit = imgvOrient(res.fit, orient)
 	}
+	trophyEvent(tkImageView) // decoded and still the picture asked for
 }
 
 // imgvFileOrientation is a JPEG's EXIF orientation (1 when it has none, or for

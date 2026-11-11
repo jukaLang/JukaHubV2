@@ -984,6 +984,8 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 	pid := cmd.Process.Pid
 	noteGameChildStarted(cmd)
 	gameProfileSetRunning(id, pid)
+	trophyEvent(tkGameLaunch) // a PC or Android game (a game profile) started
+	trophyEventDistinct(tkGameTitles, id)
 	logDebug("gameprofiles", "launched %s (pid %d, dir %s)", id, pid, gameDir)
 	recorder := startTimelapse(appConfig, id)
 	go func() {

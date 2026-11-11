@@ -16,8 +16,10 @@ jobs:
   helpers:
     name: Remote Play helpers
     uses: ./.github/workflows/remote-play-helpers.yml
-    # What the helpers job asks for (actions read finds helpers an earlier run
-    # built); a called workflow asking for more than this grants cannot start.
+    # What the helpers job asks for: actions read, to reuse helpers an earlier
+    # push-to-main run of this workflow built. A tag run never finds any (it
+    # is no push to main), so tags always build them; but a called workflow
+    # asking for more than its caller grants does not start at all.
     permissions:
       contents: read
       actions: read

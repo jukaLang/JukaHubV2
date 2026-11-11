@@ -517,6 +517,7 @@ func stickCalPress(c *Config, i int) {
 			for s := 0; s < 2; s++ {
 				stickCalStore(c, s, stickCalUI.result[s])
 			}
+			trophyEvent(tkStickCal)
 			PlaySuccessSound()
 			ShowToast("Stick calibration saved", ToastKindSuccess)
 			stickCalUI.step, stickCalUI.button = stickCalIntro, 0

@@ -412,6 +412,7 @@ func alarmSaveAlarm() {
 		}
 		alarmArmFrom(&entry, time.Now())
 		alarmStore.Alarms = append(alarmStore.Alarms, entry)
+		trophyEvent(tkAlarmSet)
 	}
 	// Sort by time
 	sort.Slice(alarmStore.Alarms, func(i, j int) bool {

@@ -255,6 +255,7 @@ func wallpaperApply(config *Config, path string) bool {
 		// left at its first frame) tries it again at once.
 		gifWallRetryPick(path)
 	}
+	prevWallpaper := config.Variables.BackgroundImage // for the wallpaper trophies
 	value := path
 	if path == "" {
 		config.Variables.BackgroundImage = xpackDefaultWallpaper
@@ -273,6 +274,9 @@ func wallpaperApply(config *Config, path string) bool {
 	wallpaperRestoreRemember(config)
 	wpPreview = path
 	xpackDropDynamicWallpaper()
+	if path != "" && path != prevWallpaper {
+		trophyEvent(tkWallpaper) // an image or a GIF chosen (not "off", not the same one again)
+	}
 	switch {
 	case path == "":
 		ShowToast("Wallpaper off — the glass backdrop is back", ToastKindSuccess)

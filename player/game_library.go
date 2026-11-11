@@ -523,6 +523,10 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		restoreProfile()
 		recorder.Stop()
 	}()
+	// Two or more Local play seats make this a local multiplayer session.
+	if len(hotseat.players) >= 2 {
+		trophyEvent(tkLocalPlay)
+	}
 	// Before the recents learn about it: a game that is not there yet is
 	// starting for the first time, which is a milestone (gmeta_store.go).
 	gmetaNoteLaunch(game)
@@ -612,6 +616,10 @@ func recentGames() []recentGame {
 // recordGameLaunch puts a game at the top of the recents list, removes the
 // older duplicate and caps the list, then persists it.
 func recordGameLaunch(game libraryGame) []recentGame {
+	// Every ROM launch that started ends here (launchLibraryGame, netplayLaunch).
+	trophyEvent(tkGameLaunch)
+	trophyEventDistinct(tkGameTitles, game.Title)
+	trophyEventDistinct(tkGameSystems, game.System)
 	gameRecentsMu.Lock()
 	defer gameRecentsMu.Unlock()
 	if !gameRecentsLoaded {

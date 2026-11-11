@@ -15,12 +15,13 @@ import (
 // orbResetForTest puts the orb away before and after a test.
 func orbResetForTest(t *testing.T) {
 	t.Helper()
-	voiceOrbHideNow()
-	voiceOrb.menuTaken, voiceOrb.keyTaken, voiceOrb.mouseTaken = false, false, false
-	t.Cleanup(func() {
+	reset := func() {
 		voiceOrbHideNow()
 		voiceOrb.menuTaken, voiceOrb.keyTaken, voiceOrb.mouseTaken = false, false, false
-	})
+		voiceOrb.menuDown, voiceOrb.menuCombo, voiceOrb.menuHeldOpen = false, false, false
+	}
+	reset()
+	t.Cleanup(reset)
 }
 
 // A quiet room: the floor is learnt and nothing is speech. A word is, the pause
@@ -103,8 +104,22 @@ func TestVoiceOrbWantsJukaOnlyForQuestions(t *testing.T) {
 	if voiceOrbWantsJuka(in, voiceOutcome{Act: func(*Config) {}}) {
 		t.Error("a question that matched a screen went to Juka")
 	}
-	if voiceOrbWantsJuka(in, voiceOutcome{Choices: []voiceMatch{{}}}) {
-		t.Error("a question with choices went to Juka")
+	if voiceOrbWantsJuka(in, voiceOutcome{Choices: []voiceMatch{{Score: 1000}}}) {
+		t.Error("a question with a clear match among its choices went to Juka")
+	}
+}
+
+// Only spelling near-misses and weak matches leave a question to Juka; one
+// clear match keeps the list.
+func TestOrbOnlyNearMisses(t *testing.T) {
+	if !orbOnlyNearMisses([]voiceMatch{{Fuzzy: true, Score: 900}, {Score: voiceConfidentMin - 1}}) {
+		t.Error("near-misses and a weak match were taken for a clear match")
+	}
+	if orbOnlyNearMisses([]voiceMatch{{Fuzzy: true}, {Score: voiceConfidentMin}}) {
+		t.Error("a clear match was taken for a near-miss")
+	}
+	if !orbOpensWithQuestionWord("how far is the moon") || orbOpensWithQuestionWord("moonbase") {
+		t.Error("orbOpensWithQuestionWord is wrong")
 	}
 }
 
@@ -202,9 +217,12 @@ func TestVoiceOrbShowsEachOutcome(t *testing.T) {
 	}
 }
 
-// The Menu button on a handheld: off in Settings it stays Back; on, it opens
-// the orb, which without a Groq key says so with the fix one press away, takes
-// the button's release too, and goes at B.
+// The Menu button on a handheld, read the way the TrimUI's own launchers read
+// it: off in Settings it stays Back; a tap opens the orb when it comes up
+// (which, without a Groq key, says so with the fix one press away) and takes
+// its release; a press another button joins is a chord and opens nothing, nor
+// does one the firmware's Menu + volume brightness chord joins; a hold opens
+// the orb while it is still down.
 func TestVoiceOrbMenuButton(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the Menu button is a handheld's")
@@ -217,28 +235,70 @@ func TestVoiceOrbMenuButton(t *testing.T) {
 	appConfig = config
 	press := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_BACK}
 	release := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONUP, Button: sdl.CONTROLLER_BUTTON_BACK}
-	if voiceOrbController(press, sdl.CONTROLLER_BUTTON_GUIDE, config) {
+	xDown := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_X}
+	menu := func(e *sdl.ControllerButtonEvent) bool {
+		ev := *e
+		return voiceOrbController(&ev, sdl.CONTROLLER_BUTTON_GUIDE, config)
+	}
+	if menu(press) {
 		t.Fatal("with the setting off, Menu was taken from Back")
 	}
-	if why := modalPanelBlockReason(); why != "" || virtualKeyboardActive || !voiceOrbCanOpen(config) {
+	if why := voiceOrbBlocked(config); why != "" || virtualKeyboardActive {
 		t.Skipf("another test left the screen covered (%q, keyboard %v)", why, virtualKeyboardActive)
 	}
 	config.Variables.Custom[voiceOrbMenuKey] = true
-	if !voiceOrbController(press, sdl.CONTROLLER_BUTTON_GUIDE, config) {
-		t.Fatal("Menu did not open the orb")
+
+	// A tap.
+	if !menu(press) {
+		t.Fatal("Menu's press went to the screen")
+	}
+	if voiceOrb.phase != orbHidden {
+		t.Fatal("the orb opened on the press; it must wait for a chord or the release")
+	}
+	if !menu(release) {
+		t.Fatal("the release of a tap reached the screen")
 	}
 	if voiceOrb.phase != orbAnswer || voiceOrb.offer != orbOfferGroqKey {
-		t.Fatalf("without a key: phase %d offer %d, want the Groq key fix", voiceOrb.phase, voiceOrb.offer)
+		t.Fatalf("a tap without a key: phase %d offer %d, want the Groq key fix", voiceOrb.phase, voiceOrb.offer)
 	}
-	if !voiceOrbController(release, sdl.CONTROLLER_BUTTON_GUIDE, config) {
-		t.Error("the release of the Menu press that opened the orb reached the screen")
-	}
-	if voiceOrbController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_X},
-		sdl.CONTROLLER_BUTTON_X, config) {
+	if voiceOrbController(xDown, sdl.CONTROLLER_BUTTON_X, config) {
 		t.Error("X on a lingering answer was kept from the screen")
 	}
 	if voiceOrbActive() {
 		t.Error("another button did not put the answer away")
+	}
+	voiceOrbHideNow()
+
+	// A chord with another button: the button does its job, the orb stays down.
+	menu(press)
+	if voiceOrbController(xDown, sdl.CONTROLLER_BUTTON_X, config) {
+		t.Error("the chord's second button was swallowed")
+	}
+	if !menu(release) || voiceOrb.phase != orbHidden {
+		t.Errorf("Menu + X opened the orb (phase %d)", voiceOrb.phase)
+	}
+
+	// The firmware's Menu + volume brightness chord.
+	menu(press)
+	voiceOrbNoteVolumeKey()
+	menu(release)
+	if voiceOrb.phase != orbHidden {
+		t.Errorf("Menu + volume opened the orb (phase %d)", voiceOrb.phase)
+	}
+
+	// A hold opens it while Menu is still down.
+	now := orbNow()
+	if now <= orbHoldMs+1 {
+		t.Skip("the clock is too young to fake a hold")
+	}
+	menu(press)
+	voiceOrb.menuDownAt = now - orbHoldMs - 1
+	voiceOrbMenuTick(config)
+	if voiceOrb.phase == orbHidden || !voiceOrb.menuHeldOpen {
+		t.Fatal("holding Menu did not open the orb")
+	}
+	if !menu(release) || voiceOrb.menuDown {
+		t.Error("the end of the hold was not the orb's")
 	}
 }
 

@@ -238,8 +238,13 @@ func sysToolDiskRead() {
 // screen is up.
 func sysToolDiskEnter() {
 	runSceneTask(func(ctx context.Context) {
+		counted := false
 		for {
 			sysToolDiskRead()
+			if !counted { // the read as the screen opens; the 5 s refreshes are not counted
+				counted = true
+				trophyEvent(tkDiskScan)
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -255,6 +260,7 @@ func sysToolDiskAgain() {
 	runSceneTask(func(ctx context.Context) {
 		if ctx.Err() == nil {
 			sysToolDiskRead()
+			trophyEvent(tkDiskScan)
 		}
 	})
 }

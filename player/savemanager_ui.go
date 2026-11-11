@@ -349,6 +349,7 @@ func saveManagerActivate() {
 			saveManagerError("Could not snapshot saves", err)
 			return
 		}
+		trophyEvent(tkSaveBackup)
 		refreshSaveManager()
 		ShowToast("Snapshot "+snap.Manifest.ID+" saved ("+humanBytes(snap.Manifest.TotalBytes)+")", ToastKindSuccess)
 	case saveActionRestoreLatest:

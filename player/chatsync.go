@@ -348,6 +348,7 @@ func chatSyncDiscord(now time.Time) {
 			}
 		})
 		chatPostingEnd()
+		trophyEvent(tkChatSend)
 		if !posted && discordID != "" && chatTakeUnsend(msg.ID, nil) {
 			// Deleted here while the post was on its way: taken back.
 			chatDropRemote(discordID)
@@ -589,6 +590,7 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 		return
 	}
 	chatAIRetryReset()
+	trophyEvent(tkAIAsk)
 	groqStatus = "Groq: connected"
 	answer := ChatMessage{ID: newChatMessageID(), Sender: chatAISender, Text: reply, Timestamp: now}
 	chatMutex.Lock()

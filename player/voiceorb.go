@@ -24,9 +24,14 @@ package main
 // what it did before (Back), and Settings → Controls → "Menu button: voice"
 // gives it back for good.
 //
-// The microphone is voicemic.go's, music is paused while the orb listens (the
-// speaker is next to the microphone) and resumes as soon as the clip ends, and
-// neither the audio nor the words are kept.
+// Menu is read the way the TrimUI's own launchers read it: a tap acts when the
+// button comes up, a hold opens the orb after orbHoldMs, and a press that
+// another button — or the firmware's Menu + volume brightness chord — joins is
+// no voice press at all (the quit chord still counts Menu as Select).
+//
+// The microphone is voicemic.go's, the music and a playing video are paused
+// while the orb listens (the speaker is next to the microphone) and resume as
+// soon as the clip ends, and neither the audio nor the words are kept.
 //
 // Main thread only, apart from the two request goroutines, which hand their
 // results back through tbxPost (and Juka's streaming text through orbAIText).
@@ -37,6 +42,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -73,6 +79,25 @@ const (
 	orbFromKey
 	orbFromClick
 )
+
+// orbMenuRoute is what a Menu press will do when it is read.
+type orbMenuRoute int
+
+const (
+	orbRouteOrb      orbMenuRoute = iota
+	orbRouteKeyboard              // voice typing into the open keyboard's field
+	orbRoutePage                  // the Voice command page's own microphone
+)
+
+// orbVolumeKeys counts the hardware volume-key presses volumebuttons.go reads
+// off the kernel's input devices (on its own goroutine; SDL never sees those
+// keys). One that lands while Menu is down is the firmware's Menu + volume
+// brightness chord, not a voice press.
+var orbVolumeKeys atomic.Int64
+
+// voiceOrbNoteVolumeKey is volumebuttons.go's word that a volume key went
+// down. Any goroutine.
+func voiceOrbNoteVolumeKey() { orbVolumeKeys.Add(1) }
 
 const (
 	// orbRadius is the sphere's radius on a 720-line canvas.
@@ -122,16 +147,17 @@ var voiceOrb struct {
 	hideAt  uint64 // an answer starts to fade (0: it stays)
 	fadeAt  uint64 // a fade-out began (0: none)
 
-	// Capture.
-	mic         *micStream
-	buf         []byte
-	chunk       []byte
-	started     uint64
-	level       float64
-	shownLevel  float64
-	peak        float64
-	vad         orbVAD
-	musicHushed bool
+	// Capture, and the music and video paused while it runs.
+	mic        *micStream
+	buf        []byte
+	chunk      []byte
+	started    uint64
+	level      float64
+	shownLevel float64
+	peak       float64
+	vad        orbVAD
+	hushMusic  bool
+	hushVideo  bool
 
 	// The press of the voice button that opened the listen, for push-to-talk.
 	pressAt  uint64
@@ -142,6 +168,17 @@ var voiceOrb struct {
 	menuTaken  bool
 	keyTaken   bool
 	mouseTaken bool
+
+	// A Menu press waiting to be read the way the TrimUI's own launchers read
+	// it (voiceOrbMenuDown): a tap acts when it comes up, a hold opens the orb
+	// to talk while held, and a press another button joins — or the
+	// firmware's Menu + volume brightness chord — is no voice press at all.
+	menuDown     bool
+	menuDownAt   uint64
+	menuRoute    orbMenuRoute
+	menuCombo    bool
+	menuHeldOpen bool
+	menuVolume   int64
 
 	// What was heard and what the orb says.
 	heard string
@@ -269,20 +306,23 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 		return false
 	}
 	down := e.Type == sdl.CONTROLLERBUTTONDOWN
-	if raw == sdl.CONTROLLER_BUTTON_GUIDE && voiceOrbMenuOwnsGuide(config, e.Which) {
+	if raw == sdl.CONTROLLER_BUTTON_GUIDE {
 		if !down {
-			if voiceOrb.menuTaken {
-				voiceOrb.menuTaken = false
-				voiceOrbRelease(config, orbFromPad)
-				return true
-			}
-			return false
+			// The release goes where the press went, whatever has changed
+			// since (a command may have opened the arcade meanwhile).
+			return voiceOrbMenuUp(e, config)
 		}
-		if voiceOrbMenuPress(config) {
-			voiceOrb.menuTaken = true
-			return true
+		voiceOrb.menuTaken, voiceOrb.menuDown = false, false
+		if voiceOrbMenuOwnsGuide(config, e.Which) {
+			return voiceOrbMenuDown(e, config)
 		}
-		return false
+		// Not the voice button here (Back, or a pad's Guide on a PC): it falls
+		// through like any other button, so an open orb still answers it.
+	}
+	// Another button joining a Menu press makes it a chord, never a voice
+	// press; the button still does its own job.
+	if down && voiceOrb.menuDown && !voiceOrb.menuHeldOpen {
+		voiceOrb.menuCombo = true
 	}
 	// Releases always pass: a hold that began before the orb ends where it
 	// began.
@@ -296,11 +336,13 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 			requestAppExit()
 			return true
 		}
-		b, dropped := a11yResolveButton(e.Button)
-		if dropped {
+		// Accessibility's remap, swaps and one-handed chord, as the scene would
+		// have had them: a chord modifier only arms the next press.
+		// A queued repeat or a control profile's press is remapped already.
+		if e.Which != padRepeatWhich && e.Which != inmapSynthWhich && a11yRemapEvent(e) {
 			return true
 		}
-		switch b {
+		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_A:
 			voiceOrbConfirmButton(config)
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
@@ -315,7 +357,10 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 	}
 	// An answer: A runs its fix, B puts it away; any other button puts it
 	// away and does its own job.
-	b, _ := a11yResolveButton(e.Button)
+	b := e.Button
+	if e.Which != padRepeatWhich && e.Which != inmapSynthWhich {
+		b, _ = a11yResolveButton(e.Button)
+	}
 	switch b {
 	case sdl.CONTROLLER_BUTTON_A:
 		if voiceOrb.offer != orbOfferNone {
@@ -332,11 +377,12 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 }
 
 // voiceOrbMenuOwnsGuide reports whether the Menu button means voice here: a
-// handheld, the setting on, not a game JukaHub runs itself (the arcade and
-// JukaLand read their own buttons), and a pad whose mapping has a Select of
-// its own — on one that reports Select as GUIDE, GUIDE stays Back.
+// handheld, the setting on, not a game JukaHub runs itself (the arcade,
+// JukaLand and a browser game read their own buttons), and a pad whose
+// mapping has a Select of its own — on one that reports Select as GUIDE,
+// GUIDE stays Back.
 func voiceOrbMenuOwnsGuide(config *Config, which sdl.JoystickID) bool {
-	if !P().IsHandheld() || !voiceOrbMenuEnabled(config) {
+	if !P().IsHandheld() || !voiceOrbMenuEnabled(config) || brwGameActive() {
 		return false
 	}
 	switch tbxCurrentScene(config) {
@@ -370,34 +416,153 @@ func orbMappingHasMenu(mapping string) bool {
 	return strings.Contains(m, ",back:") && strings.Contains(m, ",guide:")
 }
 
-// voiceOrbMenuPress is a press of the Menu button: voice typing while the
-// keyboard is up, the Voice command page's own microphone on that page, the
-// orb everywhere else. false leaves the press to do what Menu did before.
-func voiceOrbMenuPress(config *Config) bool {
-	if virtualKeyboardActive && !voiceOrbActive() {
-		if vkToolEnabled(vkToolMic) {
-			vkVoiceToggle(config)
-			return true
-		}
-		return false
+// voiceOrbRouteFor is what the voice button means right now, and whether it
+// means anything: voice typing while the keyboard is up (when its field takes
+// voice), the Voice command page's own microphone on that page (when nothing
+// covers it), the orb everywhere else it can come up (voiceOrbBlocked). With
+// the orb already up it is always the orb.
+func voiceOrbRouteFor(config *Config) (orbMenuRoute, bool) {
+	switch {
+	case voiceOrbActive():
+		return orbRouteOrb, true
+	case voiceOrbBlockingCard(), ambientIsActive():
+		return orbRouteOrb, false
+	case virtualKeyboardActive:
+		return orbRouteKeyboard, vkToolEnabled(vkToolMic)
+	case voiceOnPage(config):
+		return orbRoutePage, !voiceCovered()
 	}
-	if !voiceOrbActive() && voiceOnPage(config) {
-		voiceToggle(config)
-		return true
-	}
-	return voiceOrbPress(config, orbFromPad)
+	return orbRouteOrb, voiceOrbBlocked(config) == ""
 }
 
-// voiceOrbF4 is the keyboard's voice key, the same choices as Menu. It is
-// used up even when nothing can listen, so F4 never falls through to a screen.
-func voiceOrbF4(config *Config) bool {
-	if virtualKeyboardActive && !voiceOrbActive() {
-		if vkToolEnabled(vkToolMic) {
-			vkVoiceToggle(config)
-		}
+// voiceOrbMenuDown is the Menu button going down. While the orb owns the
+// controls it answers at once (send the clip, go now, listen again). Any other
+// time the press is held back and read the way the TrimUI's own launchers read
+// Menu — when it comes up, so that a chord can still form (voiceOrbMenuUp,
+// voiceOrbMenuTick) — and the quit chord sees it as Select meanwhile. false:
+// Menu does what it did before (Back).
+func voiceOrbMenuDown(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if voiceOrbModal() {
+		voiceOrbPress(config, orbFromPad)
+		voiceOrb.menuTaken = true
 		return true
 	}
-	if !voiceOrbActive() && voiceOnPage(config) {
+	route, ok := voiceOrbRouteFor(config)
+	if !ok {
+		return false
+	}
+	voiceOrb.menuDown, voiceOrb.menuDownAt, voiceOrb.menuRoute = true, orbNow(), route
+	voiceOrb.menuCombo, voiceOrb.menuHeldOpen = false, false
+	voiceOrb.menuVolume = orbVolumeKeys.Load()
+	if exitChordPressed(e) {
+		voiceOrb.menuDown = false
+		requestAppExit()
+	}
+	return true
+}
+
+// voiceOrbMenuUp is the Menu button coming up: the end of a push-to-talk hold,
+// or a tap, read now — voice typing, the page's microphone or the orb. A chord
+// does nothing. It reports whether the release was the voice button's.
+func voiceOrbMenuUp(e *sdl.ControllerButtonEvent, config *Config) bool {
+	switch {
+	case voiceOrb.menuTaken:
+		voiceOrb.menuTaken = false
+		voiceOrbRelease(config, orbFromPad)
+		return true
+	case !voiceOrb.menuDown:
+		return false
+	}
+	voiceOrb.menuDown = false
+	_ = exitChordPressed(e)
+	if orbVolumeKeys.Load() != voiceOrb.menuVolume {
+		voiceOrbMenuChord()
+	}
+	switch {
+	case voiceOrb.menuCombo:
+	case voiceOrb.menuHeldOpen:
+		if voiceOrb.phase == orbListening && orbNow()-voiceOrb.started < voiceChimeMs+vkVoiceMinMs {
+			// Let go before there was a clip to send: it listens on like a tap.
+			voiceOrb.held = false
+		} else {
+			voiceOrbRelease(config, orbFromPad)
+		}
+	case voiceOrb.menuRoute == orbRouteKeyboard:
+		if virtualKeyboardActive && vkToolEnabled(vkToolMic) {
+			vkVoiceToggle(config)
+		}
+	case voiceOrb.menuRoute == orbRoutePage:
+		if voiceOnPage(config) && !voiceCovered() {
+			voiceToggle(config)
+		}
+	default:
+		// A tap: the orb opens and listens until the speaker stops.
+		if voiceOrbPress(config, orbFromPad) {
+			voiceOrb.held = false
+		}
+	}
+	return true
+}
+
+// voiceOrbMenuTick follows a Menu press that is still down, once a frame: a
+// volume key pressed meanwhile is the firmware's brightness chord, and a hold
+// of orbHoldMs on the orb's route opens the orb to talk while it is held.
+func voiceOrbMenuTick(config *Config) {
+	if !voiceOrb.menuDown {
+		return
+	}
+	if alarmFiringActive() || gameScreenSuspended() {
+		// The alarm or a game takes the pad, and with it Menu's release.
+		voiceOrbForgetMenu()
+		return
+	}
+	if orbVolumeKeys.Load() != voiceOrb.menuVolume {
+		voiceOrbMenuChord()
+		return
+	}
+	if voiceOrb.menuCombo || voiceOrb.menuHeldOpen || voiceOrb.menuRoute != orbRouteOrb ||
+		orbNow()-voiceOrb.menuDownAt < orbHoldMs {
+		return
+	}
+	voiceOrb.menuHeldOpen = true
+	if !voiceOrbPress(config, orbFromPad) {
+		voiceOrb.menuCombo = true
+		return
+	}
+	// The hold counts from the press (orbHintLine says "let go to send").
+	voiceOrb.pressAt = voiceOrb.menuDownAt
+}
+
+// voiceOrbForgetMenu drops a Menu press whose release will never arrive (the
+// alarm or a game took the pad), and gives the quit chord its Select back.
+func voiceOrbForgetMenu() {
+	if voiceOrb.menuDown {
+		exitChord.update(sdl.CONTROLLER_BUTTON_BACK, false, exitChordClock())
+	}
+	voiceOrb.menuDown, voiceOrb.menuTaken, voiceOrb.menuHeldOpen = false, false, false
+}
+
+// voiceOrbMenuChord marks the Menu press in progress as a chord. If a hold had
+// already opened the orb to talk, the orb goes, quietly.
+func voiceOrbMenuChord() {
+	voiceOrb.menuCombo = true
+	if voiceOrb.menuHeldOpen && voiceOrb.phase == orbListening && voiceOrbActive() {
+		voiceOrb.buf = voiceOrb.buf[:0]
+		voiceOrbHideNow()
+	}
+}
+
+// voiceOrbF4 is the keyboard's voice key: Menu's routes, read at once (a
+// keyboard has no Menu + volume chord). false when nothing can listen here.
+func voiceOrbF4(config *Config) bool {
+	route, ok := voiceOrbRouteFor(config)
+	switch {
+	case !ok:
+		return false
+	case route == orbRouteKeyboard:
+		vkVoiceToggle(config)
+		return true
+	case route == orbRoutePage:
 		voiceToggle(config)
 		return true
 	}
@@ -418,6 +583,7 @@ func voiceOrbKey(e *sdl.KeyboardEvent, config *Config) bool {
 			// A held F4 repeats: the first press already acted.
 			return voiceOrb.keyTaken
 		}
+		voiceOrb.keyTaken = false
 		if voiceOrbF4(config) {
 			voiceOrb.keyTaken = true
 			return true
@@ -482,6 +648,9 @@ func voiceOrbMouse(down bool, mx, my int32, config *Config) bool {
 		}
 		return false
 	}
+	// A press starts afresh: a release lost elsewhere must not cost the next
+	// click its release.
+	voiceOrb.mouseTaken = false
 	if !voiceOrbActive() {
 		return false
 	}
@@ -595,22 +764,43 @@ func voiceOrbRelease(config *Config, src orbSource) {
 	}
 }
 
-// voiceOrbCanOpen reports whether the orb may come up now, putting away the
-// light overlays it replaces: the Start menu, Quick Settings, the search
-// sheet, the help cards, the notification list and the header's popovers. A
-// modal panel, a card (the first-run tour, recovery, a failed launch, an
-// update), the alarm, a game, a video being prepared and the controller test
-// keep the screen.
-func voiceOrbCanOpen(config *Config) bool {
-	if config == nil || alarmFiringActive() || gameScreenSuspended() || onboarding.active ||
-		recoveryCard.open || launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open ||
-		qrZoomActive() || wpOpen || clipSearchOpen || patchModal != nil || chatOverlayOpen() {
-		return false
+// voiceOrbBlockingCard reports a card that owns the whole screen: the alarm, a
+// game, the first-run tour, recovery, a failed launch, an update offer, a
+// video being prepared, the controller test.
+func voiceOrbBlockingCard() bool {
+	return alarmFiringActive() || gameScreenSuspended() || onboarding.active || recoveryCard.open ||
+		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open
+}
+
+// voiceOrbBlocked names what keeps the orb from coming up, or "": those cards,
+// the dock, and every panel, sheet and card that takes the pad — over them
+// Menu keeps its old job. The header's popovers give way (as they did to
+// Menu's Back), and the light overlays — the Start menu, Quick Settings, the
+// search sheet, the help cards — are put away by voiceOrbCanOpen.
+func voiceOrbBlocked(config *Config) string {
+	switch {
+	case config == nil:
+		return "no config"
+	case voiceOrbBlockingCard():
+		return "a card owns the screen"
+	case ambientIsActive():
+		return "the dock"
+	case qrZoomActive(), wpOpen, clipSearchOpen, patchModal != nil, chatOverlayOpen(), chatFileSheet.open,
+		homePowerConfirm.open, podPanel.open, ledPanel.open, browserCookiePanel.open, browserBookmarkPanel.open,
+		brwInfo.open, themeCommunityPanel.open, feRemotePanelOnScreen(config), tbxSheetVisible(config):
+		return "an overlay owns the pad"
 	}
 	dismissWeatherPopover()
 	dismissVolumePopover()
 	dismissBrightnessPopover()
-	if why := modalPanelBlockReason(); why != "" {
+	return modalPanelBlockReason()
+}
+
+// voiceOrbCanOpen reports whether the orb may come up now (voiceOrbBlocked),
+// putting away the light overlays it replaces: the Start menu, Quick
+// Settings, the search sheet, the help cards and the notification list.
+func voiceOrbCanOpen(config *Config) bool {
+	if why := voiceOrbBlocked(config); why != "" {
 		logDebug("voice", "orb not opened: %s", why)
 		return false
 	}
@@ -667,8 +857,8 @@ func voiceOrbListen(config *Config) {
 	voiceOrb.title = "Listening…"
 	voiceOrb.sub = "Say “open YouTube”, “volume 50” — or ask a question"
 	voiceOrb.tone, voiceOrb.offer = tbxToneNeutral, orbOfferNone
-	// Music would be heard as speech: it waits while the orb listens.
-	voiceOrbHushMusic()
+	// Music and video would be heard as speech: they wait while it listens.
+	voiceOrbHushMedia()
 	PlayActivateSound()
 }
 
@@ -791,6 +981,12 @@ func voiceOrbFinish(config *Config) {
 	PlayActivateSound()
 	go func() {
 		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				logWarn("voice", "the speech request stopped: %v", r)
+				tbxPost(func() { voiceOrbTranscribed(gen, "", errors.New("Speech failed — try again")) })
+			}
+		}()
 		text, err := voiceTranscribe(ctx, key, wav, prompt)
 		tbxPost(func() { voiceOrbTranscribed(gen, text, err) })
 	}()
@@ -888,6 +1084,7 @@ func voiceOrbShowOutcome(out voiceOutcome) {
 		voiceOrb.words = words
 		switch {
 		case out.Done:
+			trophyEvent(tkVoiceCmd)
 			PlaySuccessSound()
 		case tone == tbxToneWarn || tone == tbxToneBad:
 			PlayErrorSound()
@@ -923,6 +1120,7 @@ func voiceOrbRunPending(config *Config) {
 	if config == nil {
 		config = appConfig
 	}
+	trophyEvent(tkVoiceCmd)
 	act(config)
 }
 
@@ -974,26 +1172,42 @@ var orbQuestionWords = voiceSet("what", "who", "whom", "whose", "why", "how", "w
 
 // voiceOrbWantsJuka reports whether what was heard is a question for Juka: a
 // sentence the grammar read as a bare name ("what is the capital of France")
-// that matched nothing, while Juka can be reached.
+// that matched nothing — or, when it opens with a question word ("how far is
+// the moon"), only near-misses spelt like a title ("Moonbase") — while Juka
+// can be reached.
 func voiceOrbWantsJuka(in voiceIntent, out voiceOutcome) bool {
-	if in.Kind != voiceIntentOpen || in.Verb != "" || out.Act != nil || len(out.Choices) > 0 {
+	if in.Kind != voiceIntentOpen || in.Verb != "" || out.Act != nil || !orbLooksLikeQuestion(in.Heard) {
 		return false
 	}
-	if !orbLooksLikeQuestion(in.Heard) {
+	if len(out.Choices) > 0 && !(orbOpensWithQuestionWord(in.Heard) && orbOnlyNearMisses(out.Choices)) {
 		return false
 	}
 	return strings.TrimSpace(groqAPIKey()) != "" && IsOnline()
+}
+
+// orbOpensWithQuestionWord reports whether a folded sentence starts with a
+// question word. Pure.
+func orbOpensWithQuestionWord(folded string) bool {
+	words := strings.Fields(folded)
+	return len(words) > 0 && orbQuestionWords[words[0]]
+}
+
+// orbOnlyNearMisses reports whether every match is a spelling near-miss or a
+// weak one — nothing a sentence was clearly naming. Pure.
+func orbOnlyNearMisses(m []voiceMatch) bool {
+	for _, x := range m {
+		if !x.Fuzzy && x.Score >= voiceConfidentMin {
+			return false
+		}
+	}
+	return true
 }
 
 // orbLooksLikeQuestion reports whether a folded sentence reads as a question
 // or a request rather than a name: it opens with a question word, or it is
 // four words or more. Pure.
 func orbLooksLikeQuestion(folded string) bool {
-	words := strings.Fields(folded)
-	if len(words) == 0 {
-		return false
-	}
-	return orbQuestionWords[words[0]] || len(words) >= 4
+	return orbOpensWithQuestionWord(folded) || len(strings.Fields(folded)) >= 4
 }
 
 // voiceOrbAsk puts a question to Juka and streams the answer into the bubble.
@@ -1062,6 +1276,7 @@ func voiceOrbAnswered(gen int, question, reply string, err error) {
 		return
 	}
 	voiceOrbSay(reply, orbQuote(question), tbxToneNeutral, orbOfferNone)
+	trophyEvent(tkAIAsk)
 	voiceOrb.hideAt = voiceOrb.phaseAt + orbReadMs(reply, false, true)
 	PlayNavSound()
 }
@@ -1144,18 +1359,20 @@ func voiceOrbHideNow() {
 // voiceOrbAway is the main loop's word that a game or an app has the screen:
 // nothing may listen behind it.
 func voiceOrbAway() {
+	voiceOrbForgetMenu()
 	if voiceOrb.phase != orbHidden {
 		voiceOrbHideNow()
 	}
 }
 
-// voiceOrbStopCapture closes the microphone and lets the music play again.
+// voiceOrbStopCapture closes the microphone and lets the music and the video
+// play again.
 func voiceOrbStopCapture() {
 	if voiceOrb.mic != nil {
 		voiceOrb.mic.Close()
 		voiceOrb.mic = nil
 	}
-	voiceOrbRestoreMusic()
+	voiceOrbRestoreMedia()
 }
 
 // voiceOrbCancelRequest stops the request in flight; whatever it still sends
@@ -1168,23 +1385,57 @@ func voiceOrbCancelRequest() {
 	voiceOrb.gen++
 }
 
-// voiceOrbHushMusic pauses the music player while the orb listens.
-func voiceOrbHushMusic() {
-	if st := voiceMusicNow(); st.playing && !st.paused {
-		musicTogglePause()
-		voiceOrb.musicHushed = true
+// voiceOrbHushMedia pauses the music and a playing video while the orb
+// listens — the speaker sits next to the microphone — silently, the way the
+// alarm does (alarmHoldMedia). A video in a Watch Party plays on: pausing it
+// would pause it for the whole room.
+func voiceOrbHushMedia() {
+	music.mu.Lock()
+	playing := music.playing && !music.paused
+	if playing {
+		music.paused = true
+	}
+	music.mu.Unlock()
+	if playing {
+		ClearVideoAudioQueue()
+		voiceOrb.hushMusic = true
+	}
+	if playerPhase() == "playing" && !partyActive() {
+		ToggleVideoPlayback()
+		voiceOrb.hushVideo = true
 	}
 }
 
-// voiceOrbRestoreMusic resumes what voiceOrbHushMusic paused, before the
+// voiceOrbRestoreMedia lets what voiceOrbHushMedia paused play on, before the
 // command runs — so "pause" or "next song" acts on music that is playing.
-func voiceOrbRestoreMusic() {
-	if !voiceOrb.musicHushed {
-		return
+func voiceOrbRestoreMedia() {
+	if voiceOrb.hushVideo {
+		voiceOrb.hushVideo = false
+		if playerPhase() == "paused" {
+			ToggleVideoPlayback()
+		}
 	}
-	voiceOrb.musicHushed = false
-	if st := voiceMusicNow(); st.playing && st.paused {
-		musicTogglePause()
+	if voiceOrb.hushMusic {
+		voiceOrb.hushMusic = false
+		music.mu.Lock()
+		if music.playing && music.paused {
+			music.paused = false
+		}
+		music.mu.Unlock()
+	}
+}
+
+// voiceOrbHandMediaToAlarm gives what the orb paused to a ringing alarm, which
+// resumes it when the ring ends: resuming it now would play it under the ring
+// (the alarm found it paused already, so it did not hold it itself).
+func voiceOrbHandMediaToAlarm() {
+	if voiceOrb.hushMusic {
+		voiceOrb.hushMusic = false
+		alarmHeld.music = true
+	}
+	if voiceOrb.hushVideo {
+		voiceOrb.hushVideo = false
+		alarmHeld.video = true
 	}
 }
 
@@ -1360,7 +1611,12 @@ func voiceOrbTick(config *Config) {
 		}
 		return
 	}
-	if alarmFiringActive() || gameScreenSuspended() {
+	if alarmFiringActive() {
+		voiceOrbHandMediaToAlarm()
+		voiceOrbHideNow()
+		return
+	}
+	if gameScreenSuspended() {
 		voiceOrbHideNow()
 		return
 	}
@@ -1509,6 +1765,9 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 // everything but the virtual cursor. main.go calls it once a frame, after the
 // screenshot capture, so a "take a screenshot" it ran shows the screen alone.
 func voiceOrbRender(renderer *sdl.Renderer, config *Config) {
+	// A Menu press still down is followed even while the orb is hidden: a
+	// hold opens it.
+	voiceOrbMenuTick(config)
 	if voiceOrb.phase == orbHidden || renderer == nil {
 		return
 	}
@@ -1530,6 +1789,8 @@ func voiceOrbRender(renderer *sdl.Renderer, config *Config) {
 	voiceOrb.bubbleRect = g.bubble
 	voiceOrb.rowRects = g.rows
 	voiceOrb.offerRect = g.offer
+	// A clip rect a screen left behind would cut the corner off.
+	_ = renderer.SetClipRect(nil)
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	voiceOrbDrawBubble(renderer, config, fonts, g, vis)
 	voiceOrbDrawOrb(renderer, g, vis, now)

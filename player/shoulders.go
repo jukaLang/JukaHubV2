@@ -194,7 +194,7 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 // hidden behind them. Those overlays now swallow the trigger instead.
 func triggerOwnedByOverlay() bool {
 	switch {
-	case ambientIsActive(), launchFailure.open, videoPrepareActive(),
+	case ambientIsActive(), launchFailure.open, videoPrepareActive(), voiceOrbModal(),
 		onboarding.active && !onboardingCoveredByOverlay():
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,

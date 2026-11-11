@@ -321,7 +321,11 @@ func calcEvaluate() {
 		resultStr = fmt.Sprintf("%d", int64(val))
 	}
 
-	calc.history = append(calc.history, calc.expression+" = "+resultStr)
+	entry := calc.expression + " = " + resultStr
+	// "=" pressed again on the same sum is not another calculation for the
+	// trophies.
+	repeat := len(calc.history) > 0 && calc.history[len(calc.history)-1] == entry
+	calc.history = append(calc.history, entry)
 	if len(calc.history) > 20 {
 		calc.history = calc.history[len(calc.history)-20:]
 	}
@@ -330,6 +334,9 @@ func calcEvaluate() {
 	calc.result = resultStr
 	calc.display = resultStr
 	calc.hasResult = true
+	if !repeat {
+		trophyEvent(tkCalc)
+	}
 	PlaySuccessSound()
 }
 

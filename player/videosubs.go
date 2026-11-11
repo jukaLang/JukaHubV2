@@ -1019,6 +1019,11 @@ func runSubtitleFetch(ctx context.Context, cancel context.CancelFunc, sess *play
 	if !current || !enabled {
 		return
 	}
+	if res.ok && trophyFirstFor(tkSubtitles, spec.page) {
+		// Fetched for the video on screen, pressed or carried over; a restart
+		// of the same video (a quality switch) fetches them again, uncounted.
+		trophyEvent(tkSubtitles)
+	}
 	switch {
 	case res.ok && notify:
 		ShowToast(subtitleLanguageName(spec.lang)+" subtitles on", ToastKindSuccess)

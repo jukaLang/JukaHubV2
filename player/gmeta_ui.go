@@ -532,6 +532,10 @@ func gmetaPlay(st *gmetaState) {
 		ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
 		return
 	}
+	if game.Path == gameRandomPick {
+		trophyEvent(tkGameRandom) // the game the last roll landed on (game_random.go)
+	}
+	gameRandomPick = ""
 	gameLib.recents = recentGames()
 	gmetaUI.launched = time.Now()
 	PlaySuccessSound()
@@ -563,6 +567,7 @@ func gmetaToggleTag(tag string) {
 			}
 		})
 		if m, ok := gmetaMilestoneByID(gmetaMilestoneCompleted); ok && celebrate {
+			trophyEvent(tkGameComplete) // the first time this game is marked Completed
 			gmetaCelebrate(m, g.Title)
 		}
 	}

@@ -59,6 +59,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
+	"unicode"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -85,6 +88,14 @@ const (
 	micDecideFrames = micRate / 2
 	// micMaxSDLNames bounds how many of SDL's own capture devices are tried.
 	micMaxSDLNames = 6
+	// micReadMaxFrames bounds one Read: two seconds, as much as the arecord
+	// pipe keeps, so a caller's last read after a stalled frame still gets the
+	// end of the clip.
+	micReadMaxFrames = micRate * 2
+	// micSwapWaitMs is how long the next candidate waits for a dropped device
+	// to finish closing; micExitWait how long the exit path waits for it.
+	micSwapWaitMs = 1500
+	micExitWait   = 11 * time.Second
 )
 
 var (
@@ -140,6 +151,9 @@ type micStream struct {
 	picker   micPicker
 	stereo   []byte
 	closed   bool
+	// swapAt is set while the next candidate waits for the one just dropped
+	// to finish closing in the background (it may hold the same codec).
+	swapAt uint64
 }
 
 // micOpen opens the first capture device that works and starts it. errMicNone
@@ -272,10 +286,29 @@ func micCandidates() []micCandidate {
 		}
 	}
 	micLogInventory(driver, n, pcms)
+	out = micDemoteCandidates(out, micNoData)
 	if micLastGood.set {
 		out = micPreferCandidate(out, micLastGood.c)
 	}
 	return out
+}
+
+// micDemoteCandidates moves the candidates in bad to the end, keeping the order
+// of both groups. Pure.
+func micDemoteCandidates(cands []micCandidate, bad map[micCandidate]bool) []micCandidate {
+	if len(bad) == 0 {
+		return cands
+	}
+	good := make([]micCandidate, 0, len(cands))
+	var last []micCandidate
+	for _, c := range cands {
+		if bad[c] {
+			last = append(last, c)
+		} else {
+			good = append(good, c)
+		}
+	}
+	return append(good, last...)
 }
 
 // micLastGood is the candidate that last gave sound. The next open tries it
@@ -365,7 +398,24 @@ func (m *micStream) Read(dst []byte) int {
 	if m == nil || m.closed {
 		return 0
 	}
+	if m.swapAt != 0 {
+		// The dropped device may still hold the codec: the next one opens once
+		// it has let go, or after micSwapWaitMs in any case.
+		if micClosing.n.Load() > 0 && sdl.GetTicks64()-m.swapAt < micSwapWaitMs {
+			return 0
+		}
+		m.swapAt = 0
+		if err := m.openFrom(m.cands); err != nil {
+			logWarn("mic", "no other device opened: %v", err)
+		}
+		return 0
+	}
 	frames := len(dst) / 2
+	if frames > micReadMaxFrames {
+		// Voice typing hands in room for its whole clip; two seconds a call
+		// keeps the stereo scratch small.
+		frames = micReadMaxFrames
+	}
 	if frames <= 0 {
 		return 0
 	}
@@ -403,7 +453,12 @@ func (m *micStream) Read(dst []byte) int {
 			micLastGood.set, micLastGood.c = true, m.cur
 		}
 	}
-	if !m.heard && (dead || sdl.GetTicks64()-m.openedAt >= micNoSoundMs) && len(m.cands) > 0 {
+	// A device that stopped, or gave no data at all, is replaced anywhere. One
+	// that only gave silence is replaced on Linux, where that is a codec input
+	// left off; on a PC silence is a muted microphone or noise suppression,
+	// and the next device in SDL's list could be a webcam or "Stereo Mix".
+	quiet := !m.heard && sdl.GetTicks64()-m.openedAt >= micNoSoundMs && (!m.gotBytes || runtime.GOOS == "linux")
+	if (dead || quiet) && len(m.cands) > 0 {
 		why := "only silence"
 		switch {
 		case dead:
@@ -412,9 +467,14 @@ func (m *micStream) Read(dst []byte) int {
 			why = "no data"
 		}
 		logInfo("mic", "%s gave %s; trying the next device", m.cur.label(), why)
+		if dead || !m.gotBytes {
+			// Not worth trying first again this run.
+			micNoData[m.cur] = true
+		}
 		m.closeDevice()
-		if err := m.openFrom(m.cands); err != nil {
-			logWarn("mic", "no other device opened: %v", err)
+		m.swapAt = sdl.GetTicks64()
+		if m.swapAt == 0 {
+			m.swapAt = 1
 		}
 		return 0
 	}
@@ -434,12 +494,20 @@ func (m *micStream) Close() {
 	m.cands = nil
 }
 
-// closeDevice closes the open device, whichever kind it is.
+// closeDevice closes the open device, whichever kind it is. An SDL device that
+// never delivered is closed off the main thread (micCloseAsync): SDL's capture
+// thread may sit in a read the kernel only gives up on after seconds, and
+// closing waits for that thread.
 func (m *micStream) closeDevice() {
 	if m.dev != 0 {
-		sdl.PauseAudioDevice(m.dev, true)
-		sdl.CloseAudioDevice(m.dev)
+		dev := m.dev
 		m.dev = 0
+		if m.gotBytes {
+			sdl.PauseAudioDevice(dev, true)
+			sdl.CloseAudioDevice(dev)
+		} else {
+			micCloseAsync(dev)
+		}
 	}
 	if m.pipe != nil {
 		m.pipe.close()
@@ -447,24 +515,75 @@ func (m *micStream) closeDevice() {
 	}
 }
 
-// micHasSound reports whether any sample in interleaved 16-bit audio is at
-// least micHeardPeak away from zero. Pure.
+// micClosing counts the devices closing in the background.
+var micClosing struct {
+	wg sync.WaitGroup
+	n  atomic.Int32
+}
+
+// micNoData marks the candidates that opened and gave no data at all (or
+// stopped) this run: micCandidates tries them last. Main thread.
+var micNoData = map[micCandidate]bool{}
+
+// micCloseAsync closes an SDL capture device on a goroutine.
+func micCloseAsync(dev sdl.AudioDeviceID) {
+	micClosing.n.Add(1)
+	micClosing.wg.Add(1)
+	go func() {
+		defer micClosing.wg.Done()
+		defer micClosing.n.Add(-1)
+		sdl.PauseAudioDevice(dev, true)
+		sdl.CloseAudioDevice(dev)
+	}()
+}
+
+// micCloseWait lets the background closes finish before SDL shuts audio down
+// (Cleanup runs before sdl.Quit): SDL closing the same device again would
+// join its capture thread twice. Bounded by micExitWait, which outlasts the
+// kernel's own ten-second give-up on a stalled capture read.
+func micCloseWait() {
+	if micClosing.n.Load() == 0 {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		micClosing.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(micExitWait):
+		logWarn("mic", "a capture device was still closing at exit")
+	}
+}
+
+// micHasSound reports whether either channel of interleaved 16-bit stereo
+// moves by at least micHeardPeak*2 within b: a dead input reads zeros, a few
+// bits of dither or a constant offset, a live microphone's own noise moves
+// far more. Pure.
 func micHasSound(b []byte) bool {
-	for i := 0; i+1 < len(b); i += 2 {
-		s := int(int16(binary.LittleEndian.Uint16(b[i:])))
-		if s >= micHeardPeak || s <= -micHeardPeak {
-			return true
+	lo := [2]int{math.MaxInt16, math.MaxInt16}
+	hi := [2]int{math.MinInt16, math.MinInt16}
+	for i := 0; i+micFrameBytes <= len(b); i += micFrameBytes {
+		for c := 0; c < 2; c++ {
+			s := int(int16(binary.LittleEndian.Uint16(b[i+2*c:])))
+			if s < lo[c] {
+				lo[c] = s
+			}
+			if s > hi[c] {
+				hi[c] = s
+			}
 		}
 	}
-	return false
+	return hi[0]-lo[0] >= 2*micHeardPeak || hi[1]-lo[1] >= 2*micHeardPeak
 }
 
 // ── Channels ─────────────────────────────────────────────────────────────
 
 // micPicker chooses which of the two captured channels Read returns. Until
-// half a second of voice-loud audio has been heard it takes the louder
-// channel of each chunk; then it settles on left, right or the average for
-// the rest of the clip.
+// half a second of voice-loud audio has been heard it decides chunk by chunk
+// (one channel when it carries clearly more, else the average); then it
+// settles on left, right or the average for the rest of the clip.
 type micPicker struct {
 	mode       int // 0 undecided, micPickLeft, micPickRight, micPickMix
 	sumL, sumR float64
@@ -759,6 +878,7 @@ func (t *micTail) String() string {
 // had, which micRestoreMixer puts back.
 type micMixerControl struct {
 	card    int
+	id      string // the control as amixer's cset names it: numid=N
 	name    string
 	restore string
 }
@@ -775,8 +895,9 @@ var micMixer struct {
 var micHaveAmixer = func() bool { return commandExists("amixer") }
 
 func init() {
-	// What was changed for the microphone goes back when JukaHub quits.
-	Cleanup = append(Cleanup, micRestoreMixer)
+	// What was changed for the microphone goes back when JukaHub quits, and a
+	// capture device still closing in the background is waited for.
+	Cleanup = append(Cleanup, micRestoreMixer, micCloseWait)
 }
 
 // micPrepareMixer switches on the microphone inputs of every card that can
@@ -809,12 +930,13 @@ func micPrepareMixer() {
 			if !ok {
 				continue
 			}
-			if _, err := systemCommandRunner("amixer", "-q", "-c", cardArg, "cset", "name='"+ctl.name+"'", value); err != nil {
+			id := ctl.ident()
+			if _, err := systemCommandRunner("amixer", "-q", "-c", cardArg, "cset", id, value); err != nil {
 				logInfo("mic", "could not set %q to %s (card %d): %v", ctl.name, value, card, err)
 				continue
 			}
 			logInfo("mic", "set %q from %s to %s (card %d) for the microphone", ctl.name, restore, value, card)
-			micMixer.changed = append(micMixer.changed, micMixerControl{card: card, name: ctl.name, restore: restore})
+			micMixer.changed = append(micMixer.changed, micMixerControl{card: card, id: id, name: ctl.name, restore: restore})
 		}
 	}
 }
@@ -827,7 +949,7 @@ func micRestoreMixer() {
 	micMixer.mu.Unlock()
 	for _, c := range list {
 		if _, err := systemCommandRunner("amixer", "-q", "-c", strconv.Itoa(c.card), "cset",
-			"name='"+c.name+"'", c.restore); err != nil {
+			c.id, c.restore); err != nil {
 			logDebug("mic", "could not put %q back to %s: %v", c.name, c.restore, err)
 		}
 	}
@@ -835,8 +957,10 @@ func micRestoreMixer() {
 
 // micMixerChange decides what to do with one control: a capture-side
 // microphone switch that is off is switched on; a microphone gain or ADC level
-// at the very bottom of its range goes to two thirds of it. It returns the new
-// value, the old one and whether to change anything. Pure.
+// at the very bottom of its range, where that bottom is mute (or at least
+// 60 dB down), goes to two thirds of it — a bottom that only means a quieter
+// microphone is left alone. It returns the new value, the old one and whether
+// to change anything. Pure.
 func micMixerChange(ctl micAmixerControl) (value, restore string, ok bool) {
 	switch {
 	case ctl.boolean:
@@ -845,7 +969,7 @@ func micMixerChange(ctl micAmixerControl) (value, restore string, ok bool) {
 		}
 		return micRepeatValue("on", ctl.count), strings.Join(ctl.values, ","), true
 	case ctl.integer:
-		if !micMixerLevelWanted(ctl.name) || ctl.max <= ctl.min || len(ctl.values) == 0 {
+		if !micMixerLevelWanted(ctl.name) || ctl.max <= ctl.min || len(ctl.values) == 0 || !ctl.minSilent {
 			return "", "", false
 		}
 		for _, v := range ctl.values {
@@ -876,13 +1000,24 @@ func micRepeatValue(v string, count int) string {
 
 // micAmixerControl is one control of `amixer contents`.
 type micAmixerControl struct {
-	name     string
-	boolean  bool
-	integer  bool
-	count    int
-	min, max int
-	values   []string
-	on       bool // a boolean whose every value is on
+	numid     int
+	name      string
+	boolean   bool
+	integer   bool
+	count     int
+	min, max  int
+	values    []string
+	on        bool // a boolean whose every value is on
+	minSilent bool // its dB scale says the bottom is mute, or 60 dB down
+}
+
+// ident is the control as cset takes it: its numid, which also tells two
+// controls of one name apart (index=1); the quoted name when there is none.
+func (c micAmixerControl) ident() string {
+	if c.numid > 0 {
+		return "numid=" + strconv.Itoa(c.numid)
+	}
+	return "name='" + c.name + "'"
 }
 
 // micParseAmixerContents reads `amixer -c N contents`:
@@ -893,6 +1028,7 @@ type micAmixerControl struct {
 //	numid=5,iface=MIXER,name='MIC1 gain volume'
 //	  ; type=INTEGER,access=rw------,values=1,min=0,max=31,step=0
 //	  : values=31
+//	  | dBscale-min=-12.00dB,step=1.00dB,mute=0
 //
 // Pure.
 func micParseAmixerContents(out string) []micAmixerControl {
@@ -909,7 +1045,13 @@ func micParseAmixerContents(out string) []micAmixerControl {
 					name = rest[:j]
 				}
 			}
-			list = append(list, micAmixerControl{name: name})
+			numid := 0
+			if rest, ok := strings.CutPrefix(line, "numid="); ok {
+				if head, _, _ := strings.Cut(rest, ","); head != "" {
+					numid, _ = strconv.Atoi(head)
+				}
+			}
+			list = append(list, micAmixerControl{numid: numid, name: name})
 			cur = len(list) - 1
 		case cur >= 0 && strings.HasPrefix(line, "; type="):
 			for _, kv := range strings.Split(strings.TrimPrefix(line, "; "), ",") {
@@ -945,22 +1087,61 @@ func micParseAmixerContents(out string) []micAmixerControl {
 			}
 			list[cur].values = vals
 			list[cur].on = on
+		case cur >= 0 && strings.HasPrefix(line, "| dB"):
+			list[cur].minSilent = list[cur].minSilent || micDBMinSilent(line)
 		}
 	}
 	return list
 }
 
-// micMixerOutWords mark a control on the playback side, or one that silences:
-// never changed for the microphone.
-var micMixerOutWords = [...]string{"playback", "output", "lineout", "line out", "speaker", "spk", "headphone",
-	"hpout", "dac", "loop", "bypass", "monitor", "sidetone", "mute"}
+// micDBMinSilent reads a dB-scale line of `amixer contents`
+// ("| dBscale-min=-12.00dB,step=1.00dB,mute=0", "| dBminmax-min=-74.25dB,max=0.00dB",
+// "| dBminmaxmute-min=-12.00dB,max=0.00dB")
+// and reports whether the bottom of the range is mute or at least 60 dB down.
+// Pure.
+func micDBMinSilent(line string) bool {
+	for _, kv := range strings.Split(strings.TrimSpace(strings.TrimPrefix(line, "|")), ",") {
+		k, v, _ := strings.Cut(strings.TrimSpace(kv), "=")
+		switch {
+		case strings.HasPrefix(k, "dBminmaxmute"):
+			// A min/max scale whose bottom is mute, whatever its number says.
+			return true
+		case k == "mute":
+			if v == "1" {
+				return true
+			}
+		case strings.HasSuffix(k, "-min"):
+			db, err := strconv.ParseFloat(strings.TrimSuffix(v, "dB"), 64)
+			if err == nil && db <= -60 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// micMixerOutWords mark a control on the playback side, or one that silences,
+// anywhere in its name; micMixerOutTokens do so as whole words ("HP Mixer",
+// "Out Mixer"). Neither is ever changed for the microphone.
+var (
+	micMixerOutWords = [...]string{"playback", "output", "lineout", "line out", "speaker", "spk", "headphone",
+		"hpout", "earpiece", "dac", "loop", "bypass", "monitor", "sidetone", "mute"}
+	micMixerOutTokens = [...]string{"hp", "out", "ear", "lo", "pa"}
+)
 
 // micMixerOutside reports whether a lower-cased control name is on the
-// playback side.
+// playback side. Pure.
 func micMixerOutside(n string) bool {
 	for _, w := range micMixerOutWords {
 		if strings.Contains(n, w) {
 			return true
+		}
+	}
+	for _, word := range strings.FieldsFunc(n, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		for _, t := range micMixerOutTokens {
+			if word == t {
+				return true
+			}
 		}
 	}
 	return false

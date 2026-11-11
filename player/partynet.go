@@ -706,6 +706,7 @@ func partyHost(name string) error {
 	partySession.lastWatch = time.Now()
 	partySession.dismissed = ""
 	partySession.mu.Unlock()
+	trophyEvent(tkWatchParty)
 	return nil
 }
 
@@ -761,6 +762,7 @@ func partyJoin(invite, name string) error {
 	partySession.lastWatch = time.Now()
 	partySession.dismissed = ""
 	partySession.mu.Unlock()
+	trophyEvent(tkWatchParty)
 	return nil
 }
 

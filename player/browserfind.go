@@ -235,6 +235,8 @@ func browserFindApply(config *Config, elem Element) {
 		ShowToast("No matches for \u201c"+truncate(query, 24)+"\u201d", ToastKindInfo)
 		return
 	}
+	// A new search that found something (a repeat returned above).
+	trophyEvent(tkFindInPage)
 	browserFindReveal(elem, layout, rows[0])
 	PlayActivateSound()
 }

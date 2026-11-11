@@ -929,6 +929,7 @@ func mediaHubRunSearch(config *Config, query string) {
 		playVideoURL(config, query)
 		return
 	}
+	trophyEvent(tkVideoSearch) // online, or offline through the downloads
 	mediaHub.query = query
 	mediaHub.hasSearch = true
 	if !IsOnline() {

@@ -46,6 +46,10 @@ var gameRandomUI gameRandomPickerState
 // gameRandomIntn is a seam: the picker must not roll real dice in a unit test.
 var gameRandomIntn = rand.Intn
 
+// gameRandomPick is the game the last roll landed on, until the next launch:
+// playing it is a game started from the random pick (gmetaPlay, tkGameRandom).
+var gameRandomPick string
+
 // randomPickerConsoles is the library without the Continue row: recents are a
 // view over games that are already in their console, so rolling from them would
 // weight a recently played title twice.
@@ -229,6 +233,7 @@ func chooseGameRandomScope(index int) bool {
 		ShowToast("That game is no longer on the card — press Y to rescan", ToastKindWarning)
 		return true
 	}
+	gameRandomPick = game.Path
 	ShowToast("Random: "+game.Title+" — A plays it, R for another", ToastKindInfo)
 	PlayActivateSound()
 	return true

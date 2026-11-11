@@ -503,6 +503,7 @@ func playPodcastEpisode(config *Config, show podcastShow, index int) bool {
 	// The queue alone plays nothing: this said "Playing" over a silent player
 	// until the user found the play button.
 	musicPlayTrack(index)
+	trophyEvent(tkPodcastPlay)
 	// The Continue timeline is the one place that answers "what was I in the
 	// middle of?" across every media type, so a started episode belongs on it.
 	addRecentPodcast(podcastEpisode{
@@ -745,6 +746,7 @@ func podcastSubmitFeed(raw string) {
 		showToast("Could not save the feed: "+firstLine(err.Error()), ToastError())
 		return
 	}
+	trophyEvent(tkPodcastSub)
 	showToast("Subscribed to "+podcastFeedLabel(feed), ToastSuccess())
 	podcastPanelClamp()
 	podcastPanelRefresh()

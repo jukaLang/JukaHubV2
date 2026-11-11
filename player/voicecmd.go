@@ -693,6 +693,7 @@ func voiceShow(config *Config, out voiceOutcome, src voiceSource) {
 			voicePage.nav.focus = "search"
 		}
 		if out.Done {
+			trophyEvent(tkVoiceCmd)
 			PlaySuccessSound()
 		} else if tone == tbxToneWarn || tone == tbxToneBad {
 			PlayErrorSound()
@@ -712,6 +713,7 @@ func voiceRunPending(config *Config) {
 	if act == nil {
 		return
 	}
+	trophyEvent(tkVoiceCmd)
 	if config == nil {
 		config = appConfig
 	}

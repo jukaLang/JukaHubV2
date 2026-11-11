@@ -153,6 +153,10 @@ func startShortAt(config *Config, index int) {
 	// thrown away (see ensureShortsPreload).
 	shortsPreloadIdx = -1
 	prefetchShortsFocused(config, videos)
+	// Trophies: a Short other than the video started last (A on it restarts it).
+	if _, same := playingVideoQuality(videos[index].GetURL()); !same {
+		trophyEvent(tkShorts)
+	}
 	playVideoInfo(config, videos[index])
 	shortsAutoplay = true
 }

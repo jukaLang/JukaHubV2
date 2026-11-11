@@ -490,7 +490,7 @@ func bugrepActivate(config *Config, id string) {
 			body:     bugrepWhereText(bugrepEndpointURL()) + bugrepPreviewText(r),
 			tall:     true,
 			buttons: []tbxSheetButton{
-				{label: "Send", primary: true, run: func() { bugrepSubmit(config) }},
+				{label: "Send", primary: true, run: func() { bugrepSend(config, false) }},
 				{label: "Close"},
 			},
 		})
@@ -502,6 +502,12 @@ func bugrepActivate(config *Config, id string) {
 // ── Submit ───────────────────────────────────────────────────────────────
 
 func bugrepSubmit(config *Config) {
+	bugrepSend(config, true)
+}
+
+// bugrepSend is Submit. sound is false when the press already played the
+// activation sound: the preview's Send button (tbxSheetActivate plays it).
+func bugrepSend(config *Config, sound bool) {
 	if bugrepScreen.sending {
 		return
 	}
@@ -525,7 +531,9 @@ func bugrepSubmit(config *Config) {
 	r.ID = bugrepDraftRef()
 	endpoint := bugrepEndpointURL()
 	if endpoint == "" {
-		PlayActivateSound()
+		if sound {
+			PlayActivateSound()
+		}
 		bugrepPhoneSheet(config, r, "", false)
 		return
 	}
@@ -541,7 +549,9 @@ func bugrepSubmit(config *Config) {
 	// when that fails: queued first, the outbox flush on the next frame would
 	// send the same report a second time.
 	bugrepScreen.sending = true
-	PlayActivateSound()
+	if sound {
+		PlayActivateSound()
+	}
 	go func() {
 		sent, kind, err := bugrepPostFunc(endpoint, r)
 		tbxPost(func() {
@@ -550,6 +560,7 @@ func bugrepSubmit(config *Config) {
 			switch {
 			case err == nil:
 				bugrepFormDone()
+				trophyEvent(tkBugReport)
 				// The collector works, so anything that waited for it goes now.
 				bugrepCollectorAnswered(endpoint)
 				if away {
@@ -663,6 +674,7 @@ func bugrepHold(config *Config, r bugrepReport, why bugrepHoldWhy) {
 		copied = cerr == nil
 	}
 	bugrepFormDone()
+	trophyEvent(tkBugReport)
 	switch {
 	case away && why == bugrepHoldClock:
 		ShowToast("Bug report saved — set the date and time so it can be sent", ToastKindWarning)

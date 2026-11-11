@@ -149,6 +149,7 @@ func jlandPersist(config *Config) {
 // jlandNewWorld replaces the world with a fresh one and saves it.
 func jlandNewWorld(config *Config) {
 	jlandRT.game = newJlandGame(time.Now().UnixNano())
+	trophyEvent(tkJlandWorld) // only the pause sheet's New world calls this
 	jlandRT.camReady = false
 	jlandRT.parts = [96]jlandParticle{}
 	jlandRT.walking = false

@@ -1150,7 +1150,7 @@ func psPanelConsoleHints(rows []chiakiRow, cursor int) string {
 	case psHelpersPressHeld():
 		// A Play or a PIN prompt waits for the helpers' install
 		// (psremote_helpers_install.go); B lets go of it first.
-		back = FooterHint{"B", "Stop"}
+		back = FooterHint{"B", "Stop waiting"}
 	case waking:
 		back = FooterHint{"B", "Stop waking"}
 	}
@@ -1172,6 +1172,9 @@ func psPanelConsoleHints(rows []chiakiRow, cursor int) string {
 	case psActionNone:
 		// A does nothing on a status line (a pairing, a scan, an install).
 		return hintLine(back)
+	case psActionInstallHelpers:
+		// "Install" or "Retry", as the row's status says.
+		return hintLine(FooterHint{"A", rows[cursor].status}, back)
 	}
 	return hintLine(FooterHint{"A", "Select"}, back)
 }

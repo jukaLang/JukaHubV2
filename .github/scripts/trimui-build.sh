@@ -21,7 +21,8 @@
 # needs go, check needs readelf. <out-dir> must be inside the checkout, which
 # is all the container sees. The container runs as the image's own user (root,
 # as the release job always did) and gives what it wrote into the mounted
-# folders back to the calling user before it ends.
+# folders back to the calling user before it ends; under rootless Docker that
+# user owns them already. Podman is untested.
 #
 # The release job (docker-image.yml, build-trimui) runs the three in turn. On a
 # Linux machine with Docker and Go (WSL 2 works) the same commands build the
@@ -61,17 +62,31 @@ toolchain_image() {
 		die "set TOOLCHAIN_IMAGE to the toolchain image by digest (the TOOLCHAIN_IMAGE value in .github/workflows/docker-image.yml)"
 	fi
 	command -v docker > /dev/null 2>&1 || die "docker is not installed"
+	# docker run --pull never: the release job pulls the image in its own step,
+	# and a local build should say what is missing instead of fetching it.
+	docker image inspect "$TOOLCHAIN_IMAGE" > /dev/null 2>&1 ||
+		die "the toolchain image is not here yet: docker pull $TOOLCHAIN_IMAGE"
 	printf '%s\n' "$TOOLCHAIN_IMAGE"
 }
 
 # Creates <out-dir> and prints its absolute path, which must lie in the checkout.
 output_dir() {
-	mkdir -p "$1"
-	dir=$(cd "$1" && pwd)
+	mkdir -p "$1" || die "cannot create $1"
+	dir=$(cd "$1" && pwd) || die "cannot enter $1"
 	case "$dir/" in
 	"$repo"/*) printf '%s\n' "$dir" ;;
 	*) die "the output folder must be inside the checkout ($repo): the container sees nothing else" ;;
 	esac
+}
+
+# uid:gid the container hands what it wrote back to. Under rootless Docker the
+# container's root already is the calling user, and a chown to that uid inside
+# would map it to some other one, so then nobody.
+owner() {
+	if docker info --format '{{println .SecurityOptions}}' 2> /dev/null | grep -q rootless; then
+		return 0
+	fi
+	printf '%s:%s\n' "$(id -u)" "$(id -g)"
 }
 
 host_go() {
@@ -89,22 +104,27 @@ host_go() {
 	fi
 	mkdir -p "$gomodcache" "$gocache" "$(dirname "$log")"
 	# Every module the linux/arm64 build reads is fetched out here, because the
-	# container gets no network: go list resolves the packages go build will.
+	# container gets no network: go list resolves the packages go build will,
+	# with the same settings and tags.
 	if ! (cd "$repo/player" && go mod download &&
-		GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go list -deps . > /dev/null); then
+		GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go list -tags dynamic -deps . > /dev/null); then
 		die "could not fetch the Go modules"
 	fi
+	hand_back=$(owner)
 	status_file=$(mktemp)
 	{
 		rc=0
-		docker run --rm --pull never --network none \
+		# --init: a stop request (a cancelled job, a step timeout, Ctrl-C)
+		# reaches the script inside, which ends the build; with the shell as
+		# the container's first process it would be ignored.
+		docker run --rm --init --pull never --network none \
 			--entrypoint /bin/sh \
 			-e JUKAHUB_IN_TOOLCHAIN_IMAGE=1 \
 			-e HOME=/tmp/jukahub-home \
 			-e GOROOT="$goroot" -e GOMODCACHE="$gomodcache" -e GOCACHE="$gocache" \
 			-e GOTOOLCHAIN=local -e GOPROXY=off \
 			-e BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%d)}" \
-			-e OWNER="$(id -u):$(id -g)" \
+			-e OWNER="$hand_back" \
 			-v "$repo:$repo" \
 			-v "$goroot:$goroot:ro" \
 			-v "$gomodcache:$gomodcache:ro" \
@@ -121,11 +141,12 @@ host_go() {
 host_spatial() {
 	image=$(toolchain_image)
 	out=$(output_dir "$1")
-	docker run --rm --pull never --network none \
+	hand_back=$(owner)
+	docker run --rm --init --pull never --network none \
 		--entrypoint /bin/sh \
 		-e JUKAHUB_IN_TOOLCHAIN_IMAGE=1 \
 		-e HOME=/tmp/jukahub-home \
-		-e OWNER="$(id -u):$(id -g)" \
+		-e OWNER="$hand_back" \
 		-v "$repo:$repo" \
 		-w "$repo" \
 		"$image" "$self" spatial "$out"
@@ -182,6 +203,18 @@ toolchain_env() {
 	say "gcc: $(aarch64-linux-gnu-gcc --version 2> /dev/null | sed -n 1p)"
 }
 
+# Runs "$@" in the background and waits for it: a shell waiting on a command in
+# the foreground runs its traps only once that command ends, so a stop request
+# would wait for the whole build. This way the trap stops the work at once and
+# the EXIT trap still hands the files back.
+run_stoppable() {
+	"$@" &
+	child=$!
+	trap 'kill "$child" 2> /dev/null; wait "$child" 2> /dev/null; exit 130' INT HUP
+	trap 'kill "$child" 2> /dev/null; wait "$child" 2> /dev/null; exit 143' TERM
+	wait "$child"
+}
+
 inside_go() {
 	out=$1
 	export PATH="$GOROOT/bin:$PATH"
@@ -203,21 +236,23 @@ inside_go() {
 	# stamp, and git in the image would refuse a checkout owned by another
 	# user. go-sdl2 links SDL dynamically unless built with -tags static;
 	# "dynamic" names that default and selects nothing.
-	go build -v -buildvcs=false -tags dynamic \
+	run_stoppable go build -v -buildvcs=false -tags dynamic \
 		-ldflags "-s -w -X main.buildDate=$BUILD_DATE" \
 		-o "$out/JukaHub" .
 }
 
 inside_spatial() {
 	out=$1
-	CROSS=aarch64-linux-gnu- OUT="$out/lib" sh "$repo/player/spatialfx/build.sh"
+	export CROSS=aarch64-linux-gnu- OUT="$out/lib"
+	run_stoppable sh "$repo/player/spatialfx/build.sh"
 }
 
 inside() {
 	mode=$1
 	out=$2
 	mkdir -p "$HOME"
-	# OWNER is uid:gid of whoever started the container (host_go, host_spatial).
+	# OWNER is uid:gid of whoever started the container, or empty when nothing
+	# needs handing back (see owner()).
 	case "$mode" in
 	go) trap '[ -z "${OWNER:-}" ] || chown -R "$OWNER" "$GOCACHE" "$out/JukaHub" 2> /dev/null || true' EXIT ;;
 	spatial) trap '[ -z "${OWNER:-}" ] || chown -R "$OWNER" "$out/lib" 2> /dev/null || true' EXIT ;;

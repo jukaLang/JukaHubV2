@@ -432,6 +432,13 @@ func psRemoteEngine() psEngine {
 		}
 		return engine
 	}
+	// No chiaki-stream anywhere (this firmware refused it, say): a
+	// chiaki-regist on its own still pairs a PS5. installed() stays false.
+	for _, root := range psHelperDirs() {
+		if regist := filepath.Join(root, "chiaki-regist"); regularFile(regist) {
+			return psEngine{Regist: regist, Root: root}
+		}
+	}
 	return psEngine{}
 }
 

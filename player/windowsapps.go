@@ -721,6 +721,7 @@ func launchWindowsApp(entry windowsAppEntry) error {
 		return fmt.Errorf("start %s: %w", filepath.Base(command), err)
 	}
 	windowsAppSetRunning(entry.Path, cmd.Process.Pid)
+	trophyEvent(tkAppLaunch)
 	noteGameChildStarted(cmd)
 	logDebug("windowsapps", "launched %s (pid %d)", entry.Title, cmd.Process.Pid)
 

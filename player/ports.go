@@ -263,6 +263,7 @@ func startPortMasterInstall() error {
 		logDebug("portmaster", "installed into %s", filepath.Join(portMasterSDRoot, "Apps", "PortMaster"))
 		ShowToast("PortMaster installed — open Ports to add games", ToastKindSuccess)
 		noteAwayToolInstalled("PortMaster")
+		trophyEvent(tkPortMaster)
 	}()
 	return nil
 }
@@ -484,6 +485,15 @@ func launchPortScript(name, path string) {
 		restoreProfile()
 		recorder.Stop()
 	}()
+	if name != portMasterAppName { // a port is a game; PortMaster's own menu is not
+		trophyEvent(tkGameLaunch)
+		trophyEventDistinct(tkGameTitles, name)
+		trophyEventDistinct(tkGameSystems, "PORTS") // the library's name for the ports folder
+	} else {
+		// PortMaster opened: a card that shipped with it never installs it, so
+		// opening it earns the PortMaster trophy too (a best, so once is enough).
+		trophyEventPeak(tkPortMaster, 1)
+	}
 	PlaySuccessSound()
 	ShowToast("Launching "+name, ToastKindSuccess)
 }

@@ -1917,6 +1917,7 @@ func vkActivateFocused(config *Config) {
 		vkSubmit(config, true)
 	default:
 		if value, ok := vkKeyValue(key); ok {
+			trophyEvent(tkKeyChars) // one on-screen key typed (not paste, suggestions or a hardware keyboard)
 			vkInsertText(value, config)
 		}
 	}
@@ -2517,6 +2518,7 @@ func vkTriggerSceneSearch(config *Config) {
 	if q, _ := config.Variables.Custom["search_query"].(string); strings.TrimSpace(q) == "" {
 		return
 	}
+	trophyEvent(tkVideoSearch)
 	executeYouTubeSearch(config, ytSearchCmd(config), "search_results", snapshotVars(config))
 }
 

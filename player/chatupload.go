@@ -906,6 +906,8 @@ func chatRunUpload(target chatUploadTarget, msg ChatMessage) {
 	case err == nil:
 		chatUploadRetryReset()
 		chatFileSent(msg.ID, sent)
+		trophyEventN(tkChatFile, int64(len(msg.Files)))
+		trophyEvent(tkChatSend) // a message with files is a message too
 	case cancelled:
 		chatUploadRetryReset()
 		if totalBytes == 0 || sentBytes < totalBytes {

@@ -50,6 +50,7 @@ func onHomeKeyPress(key string) {
 		fw.sequence = fw.sequence[len(fw.sequence)-len(jukaSequence):]
 	}
 	if fw.sequence == jukaSequence {
+		trophyEvent(tkEasterJuka)
 		triggerFireworks()
 		fw.sequence = ""
 	}

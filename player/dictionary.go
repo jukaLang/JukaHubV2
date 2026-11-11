@@ -110,6 +110,7 @@ func dictDrain() {
 	dict.result = *r
 	dict.searching = false
 	if r.Found {
+		trophyEvent(tkDictLookup)
 		dict.history = append([]string{r.Query}, dict.history...)
 		if len(dict.history) > 20 {
 			dict.history = dict.history[:20]

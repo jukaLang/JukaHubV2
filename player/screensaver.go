@@ -264,6 +264,9 @@ func screensaverAsleep() bool {
 func screensaverWakeOnPress() bool {
 	asleep := screensaverAsleep()
 	screensaverNotifyInput()
+	if asleep {
+		trophyEvent(tkWake) // a press woke the sleeping screen (the starfield, a dark dock)
+	}
 	return asleep
 }
 

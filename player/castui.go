@@ -225,6 +225,7 @@ func castPanelToggle() bool {
 	}
 	castSetEnabled(on)
 	if on {
+		trophyEvent(tkCast)
 		ShowToast("Screen Share on — open the link on a TV, laptop or phone", ToastKindSuccess)
 	} else {
 		ShowToast("Screen Share off", ToastKindInfo)

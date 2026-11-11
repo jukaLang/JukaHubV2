@@ -239,6 +239,12 @@ func ipStreamRecordResult(url string, ok bool) bool {
 	if !found {
 		return false
 	}
+	// Trophies: a saved channel started; one Live TV also lists is counted by
+	// the decoder when its picture comes (videoplayer.go).
+	if g, _ := tvRowMeta(url); ok && g == "" {
+		trophyEvent(tkTVPlay)
+		trophyEventDistinct(tkTVChannels, url)
+	}
 	if err := saveIPStreams(); err != nil {
 		logWarn("ipstream", "saving the play result: %v", err)
 	}

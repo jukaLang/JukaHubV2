@@ -210,6 +210,7 @@ func pdfGoToPage(page int) bool {
 	pdf.page = page
 	pdf.scrollY = 0
 	pdfvView.scrollY = 0
+	trophyEvent(tkPdfPage)
 	PlayNavSound()
 	return true
 }

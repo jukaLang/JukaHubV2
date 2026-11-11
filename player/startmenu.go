@@ -736,6 +736,7 @@ func startMenuHandleClick(x, y int32, config *Config) {
 func startMenuToggle() {
 	tb.startOpen = !tb.startOpen
 	if tb.startOpen {
+		trophyEvent(tkStartMenu)
 		tb.group, tb.cursor, tb.scroll, tb.focus = 0, 0, 0, 1
 		tb.enter.begin(uiClockMS(), uiMenuEnterMS)
 		// The top-bar overlays are exclusive: a dropdown behind the menu

@@ -132,6 +132,7 @@ func pkgInstall(config *Config, p Package) bool {
 		logWarn("packages", "%s: not verified — the catalogue publishes no SHA-256 for it (the download's is %s)", p.Name, res.SHA256)
 	}
 	pkgRecordInstalled(p, res.Verified, res.SHA256)
+	trophyEvent(tkPackage)
 
 	msg := "Installed " + p.Name
 	if res.Kept {

@@ -761,6 +761,7 @@ func fileEditorSaveAndReport() bool {
 		showToast("This file is open read-only", ToastWarn())
 		return false
 	}
+	edited := fileEditorDirty() // the save resets what "unchanged" means
 	if err := fileEditorSave(); err != nil {
 		fileEditor.err = err.Error()
 		showToast("Not saved: "+err.Error(), ToastError())
@@ -768,6 +769,9 @@ func fileEditorSaveAndReport() bool {
 	}
 	fileEditor.confirm = false
 	showToast("Saved "+fileEditor.title, ToastSuccess())
+	if edited {
+		trophyEvent(tkFileEdit)
+	}
 	return true
 }
 

@@ -351,7 +351,7 @@ while :; do
         sleep 1
     done
     if [ -f "$FAILED" ]; then
-        say "swap helper reported a failure; startup rollback will restore the installed build"
+        say "swap helper reported a failure; JukaHub finishes or undoes the update as it starts"
     elif [ ! -f "$SWAPPED" ]; then
         say "no swap verdict after 30s; starting the installed build"
     fi

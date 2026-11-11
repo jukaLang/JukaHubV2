@@ -63,8 +63,9 @@ const (
 	tkRemotePlay trophyKey = "remote_play"
 	// tkEmuInstall: an emulator, a core or an emulator update installed.
 	tkEmuInstall trophyKey = "emu_install"
-	// tkPortInstall: a PortMaster port installed.
-	tkPortInstall trophyKey = "port_install"
+	// tkPortMaster: PortMaster installed by JukaHub, or its own menu opened
+	// (it is the app that installs ports; JukaHub never installs a port itself).
+	tkPortMaster trophyKey = "portmaster"
 	// tkSaveBackup: a game save backed up or synced.
 	tkSaveBackup trophyKey = "save_backup"
 	// tkBoxArt: box art saved for a game (n per batch).
@@ -86,8 +87,9 @@ const (
 	tkTetrisQuad trophyKey = "tetris_quad"
 	// tk2048Tile (best): the highest tile made in 2048.
 	tk2048Tile trophyKey = "2048_tile"
-	// tkPongWin: a Pong match won by the player.
-	tkPongWin trophyKey = "pong_win"
+	// tkPongPoint: a point the player scored past the AI in Pong (a match never
+	// ends, so there is no win to count).
+	tkPongPoint trophyKey = "pong_point"
 	// tkMinesWin: a Minesweeper board cleared.
 	tkMinesWin trophyKey = "mines_win"
 	// tkFlappyBest (best): pipes passed in one Flappy run.
@@ -103,8 +105,8 @@ const (
 	tkJlandOre trophyKey = "jland_ore"
 	// tkJlandWorld: a new world made on request (the pause sheet's New world).
 	tkJlandWorld trophyKey = "jland_world"
-	// tkJlandRespawn: the player respawned.
-	tkJlandRespawn trophyKey = "jland_respawn"
+	// tkJlandOreKinds (distinct): the kind of ore broken ("Coal" … "Diamond").
+	tkJlandOreKinds trophyKey = "jland_ore_kinds"
 
 	// ── Music and podcasts ──
 
@@ -136,7 +138,8 @@ const (
 	tkTVPlay trophyKey = "tv_play"
 	// tkTVChannels (distinct): the started channel's name or address.
 	tkTVChannels trophyKey = "tv_channels"
-	// tkRecording: a recording saved (a screen recording, a timelapse).
+	// tkRecording: a game time-lapse made (JukaHub has no screen recorder; the
+	// time-lapse of a game played long enough is its recording).
 	tkRecording trophyKey = "recording"
 	// tkCast: screen sharing or casting started.
 	tkCast trophyKey = "cast"
@@ -178,11 +181,11 @@ const (
 	tkChatFile trophyKey = "chat_file"
 	// tkAIAsk: a question put to the AI assistant.
 	tkAIAsk trophyKey = "ai_ask"
-	// tkPeerPair: paired with another device (Devices, Nearby, the companion).
+	// tkPeerPair: paired with another device (Devices, Nearby).
 	tkPeerPair trophyKey = "peer_pair"
 	// tkFileTransfer: a file sent to or received from another device.
 	tkFileTransfer trophyKey = "file_transfer"
-	// tkFriend: a party friend added.
+	// tkFriend: a Watch Party room saved to the list of friends' rooms.
 	tkFriend trophyKey = "friend"
 
 	// ── Files ──
@@ -197,6 +200,8 @@ const (
 	tkFileRename trophyKey = "file_rename"
 	// tkFolderNew: a folder created.
 	tkFolderNew trophyKey = "folder_new"
+	// tkFileEdit: a text file edited and saved in the file editor.
+	tkFileEdit trophyKey = "file_edit"
 	// tkExtract: an archive extracted successfully.
 	tkExtract trophyKey = "extract"
 
@@ -234,8 +239,6 @@ const (
 	tkAlarmWake trophyKey = "alarm_wake"
 	// tkAlarmSnooze: a ringing alarm snoozed.
 	tkAlarmSnooze trophyKey = "alarm_snooze"
-	// tkCron: a scheduled task created.
-	tkCron trophyKey = "cron"
 	// tkWeather: the forecast opened by the user (the popover or the screen).
 	tkWeather trophyKey = "weather"
 
@@ -245,7 +248,8 @@ const (
 	tkScreenshot trophyKey = "screenshot"
 	// tkBoot: JukaHub started (the playtime tracker writes it).
 	tkBoot trophyKey = "boot"
-	// tkWake: the device woke from sleep or rest.
+	// tkWake: a press woke the screen (the screensaver, or the dock's darkened
+	// panel). JukaHub never sees the handheld's own suspend and resume.
 	tkWake trophyKey = "wake"
 	// tkUpdate: a JukaHub update installed.
 	tkUpdate trophyKey = "update"
@@ -265,7 +269,7 @@ const (
 	tkPads trophyKey = "pads"
 	// tkPackage: a package installed from Packages.
 	tkPackage trophyKey = "package"
-	// tkPatch: a patch applied.
+	// tkPatch: a package installed, updated or reinstalled on the Patch screen.
 	tkPatch trophyKey = "patch"
 	// tkPlugin: a plugin installed or turned on.
 	tkPlugin trophyKey = "plugin"
@@ -278,11 +282,13 @@ const (
 	tkQuickSettings trophyKey = "quick_settings"
 	// tkVoiceCmd: a voice command understood and carried out.
 	tkVoiceCmd trophyKey = "voice_cmd"
-	// tkKeyChars: n characters typed on the on-screen keyboard.
+	// tkKeyChars: a character typed with an on-screen keyboard key (not a
+	// hardware keyboard, a paste, a suggestion or dictation).
 	tkKeyChars trophyKey = "key_chars"
 	// tkFavorite: something added to Favorites.
 	tkFavorite trophyKey = "favorite"
-	// tkAppLaunch: an app launched from Apps.
+	// tkAppLaunch: an app launched (from Apps, Home search, voice or the
+	// Windows apps panel).
 	tkAppLaunch trophyKey = "app_launch"
 	// tkLowBattery: the low-battery warning shown.
 	tkLowBattery trophyKey = "low_battery"
@@ -313,7 +319,7 @@ const (
 
 	// tkRoomVisit: the trophy room opened (a new visit).
 	tkRoomVisit trophyKey = "room_visit"
-	// tkRoomDetails: a trophy's details opened.
+	// tkRoomDetails (distinct): a trophy whose details were opened (its id).
 	tkRoomDetails trophyKey = "room_details"
 	// tkReplay: a celebration replayed from the details.
 	tkReplay trophyKey = "replay"
@@ -336,7 +342,8 @@ const (
 	tkClockMonday  trophyKey = "dow_monday"  // Mondays
 	// tkWeekdays (distinct): the days of the week JukaHub was used on.
 	tkWeekdays trophyKey = "weekdays"
-	// tkMidnight: in JukaHub as one day turned into the next.
+	// tkMidnight: in JukaHub (or a game started from it) as one day turned into
+	// the next.
 	tkMidnight trophyKey = "midnight"
 	// The days of the year (1 when JukaHub was used on one).
 	tkDayNewYear     trophyKey = "day_new_year"    // 1 January
@@ -354,9 +361,10 @@ const (
 	tkDayAnniversary trophyKey = "day_anniversary" // a year after the first day
 )
 
-// trophySetCap bounds one set. The largest distinct goal is a few hundred, so
-// a thousand values is room to spare and keeps the save small.
-const trophySetCap = 1024
+// trophySetCap bounds one set. The largest distinct goal is a hundred, so 512
+// values is room to spare and keeps the save small (it is copied as JSON on
+// every save).
+const trophySetCap = 512
 
 // trophyPendingSetsCap bounds the distinct values waiting for a drain. A tick
 // sees a handful; this only stops a runaway loop from growing it.
@@ -552,4 +560,28 @@ func trophyCountOf(d playtimeData, key trophyKey) int64 {
 // trophySetLen is how many distinct values key's set in d holds.
 func trophySetLen(d playtimeData, key trophyKey) int64 {
 	return int64(len(d.Sets[string(key)]))
+}
+
+// trophyFirstFor reports whether value differs from the last one key let
+// through, and remembers it. A site whose event can repeat for the same thing —
+// a quality switch restarts a Live TV channel, a restart fetches the same
+// subtitles again — counts only the first. A→B→A still counts three times.
+// Any goroutine.
+func trophyFirstFor(key trophyKey, value string) bool {
+	trophyLast.mu.Lock()
+	defer trophyLast.mu.Unlock()
+	if trophyLast.last == nil {
+		trophyLast.last = make(map[trophyKey]string, 4)
+	}
+	if trophyLast.last[key] == value {
+		return false
+	}
+	trophyLast.last[key] = value
+	return true
+}
+
+// trophyLast is trophyFirstFor's memory: the last value let through per key.
+var trophyLast struct {
+	mu   sync.Mutex
+	last map[trophyKey]string
 }

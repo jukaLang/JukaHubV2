@@ -123,7 +123,10 @@ case "$1" in
       GOMODCACHE) echo "$FAKE_GOMODCACHE" ;;
       GOCACHE) echo "$FAKE_GOCACHE" ;;
     esac ;;
-  mod | list) [ "${FAKE_FETCH_FAIL:-0}" = 0 ] ;;
+  mod) [ "${FAKE_FETCH_FAIL:-0}" = 0 ] ;;
+  list)
+    echo "go list env GOOS=${GOOS:-} GOARCH=${GOARCH:-} CGO_ENABLED=${CGO_ENABLED:-}" >> "$FAKE_LOG"
+    [ "${FAKE_FETCH_FAIL:-0}" = 0 ] ;;
   *) exit 2 ;;
 esac
 EOF
@@ -134,13 +137,21 @@ EOF
 cat > "$work/host/docker" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "$1" = image ] && [ "$2" = inspect ]; then
+  [ "${FAKE_NO_IMAGE:-0}" = 0 ]
+  exit
+fi
+if [ "$1" = info ]; then
+  if [ "${FAKE_ROOTLESS:-0}" = 1 ]; then echo "[name=seccomp,profile=builtin name=rootless]"; else echo "[name=seccomp,profile=builtin]"; fi
+  exit 0
+fi
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
-[ "$1" = run ] || { echo "fake docker: only run" >&2; exit 2; }
+[ "$1" = run ] || { echo "fake docker: only info and run" >&2; exit 2; }
 shift
 envs=() workdir=/ entry=
 while [ $# -gt 0 ]; do
   case "$1" in
-    --rm) shift ;;
+    --rm | --init) shift ;;
     --pull | --network | -v) shift 2 ;;
     --entrypoint) entry=$2; shift 2 ;;
     -e) envs+=("$2"); shift 2 ;;
@@ -150,7 +161,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 shift # the image
-image_env=(PATH="$FAKE_IMAGE_PATH" FAKE_RECORD="$FAKE_RECORD" FAKE_BUILD_EXIT="${FAKE_BUILD_EXIT:-0}" FAKE_ELF="$FAKE_ELF")
+image_env=(PATH="$FAKE_IMAGE_PATH" FAKE_RECORD="$FAKE_RECORD" FAKE_BUILD_EXIT="${FAKE_BUILD_EXIT:-0}"
+  FAKE_ELF="$FAKE_ELF" FAKE_CHOWN_LOG="$FAKE_CHOWN_LOG")
 if [ -n "${FAKE_IMAGE_SYSROOT:-}" ]; then image_env+=(SYSROOT="$FAKE_IMAGE_SYSROOT"); fi
 cd "$workdir"
 exec env -i "${image_env[@]}" "${envs[@]}" "$entry" "$@"
@@ -176,6 +188,10 @@ case "$1" in
       shift
     done
     printf '%s\n' runtime github.com/veandco/go-sdl2/sdl jukahub/JukaHub
+    if [ -n "${FAKE_BUILD_SLEEP:-}" ]; then
+      echo $$ > "$FAKE_BUILD_SLEEP"
+      exec sleep 60
+    fi
     if [ "$FAKE_BUILD_EXIT" != 0 ]; then
       echo "./main.go:1:1: undefined: nothing" >&2
       exit "$FAKE_BUILD_EXIT"
@@ -194,6 +210,10 @@ cat > "$work/image/pkg-config" << 'EOF'
 #!/bin/sh
 echo "-I/usr/include/SDL2 -D_REENTRANT -lSDL2"
 EOF
+cat > "$work/image/chown" << 'EOF'
+#!/bin/sh
+echo "chown $*" >> "$FAKE_CHOWN_LOG"
+EOF
 
 # The game-audio plugin's build script, as the copy of the repository has it.
 cat > "$repo/player/spatialfx/build.sh" << 'EOF'
@@ -203,7 +223,8 @@ echo "spatial CC=$CC CROSS=$CROSS OUT=$OUT" > "$FAKE_RECORD"
 mkdir -p "$OUT"
 echo plugin > "$OUT/jukahub-spatial.so"
 EOF
-chmod +x "$work/host/go" "$work/host/docker" "$work/goroot/bin/go" "$work/image/aarch64-linux-gnu-gcc" "$work/image/pkg-config"
+chmod +x "$work/host/go" "$work/host/docker" "$work/goroot/bin/go" "$work/image/aarch64-linux-gnu-gcc" \
+  "$work/image/pkg-config" "$work/image/chown"
 
 run_script() { # <scenario> <args...>
   local scenario=$1
@@ -212,6 +233,8 @@ run_script() { # <scenario> <args...>
   : > "$work/$scenario/docker.log"
   : > "$work/$scenario/go.log"
   : > "$work/$scenario/record"
+  : > "$work/$scenario/chown.log"
+  FAKE_CHOWN_LOG="$work/$scenario/chown.log" \
   PATH="$work/host:$PATH" \
     FAKE_LOG="$work/$scenario/go.log" \
     FAKE_DOCKER_LOG="$work/$scenario/docker.log" \
@@ -230,7 +253,10 @@ s="$work/build"
 run_script build go "$repo/JukaHub-Trimui" "$s/go-build.log" || fail "the build failed: $(cat "$s/out")"
 [ -f "$repo/JukaHub-Trimui/JukaHub" ] || fail "no binary in the output folder"
 args=$(cat "$s/docker.log")
-for want in "--network none" "--pull never" "--entrypoint /bin/sh" \
+owner_ids="$(id -u):$(id -g)"
+grep -qx "chown -R $owner_ids $work/gocache $repo/JukaHub-Trimui/JukaHub" "$s/chown.log" ||
+  fail "the build cache and the binary were not handed back: $(cat "$s/chown.log")"
+for want in "--init" "--network none" "--pull never" "--entrypoint /bin/sh" "-e OWNER=$owner_ids" \
   "-v $repo:$repo" "-v $work/goroot:$work/goroot:ro" \
   "-v $work/gomodcache:$work/gomodcache:ro" "-v $work/gocache:$work/gocache" \
   "-w $repo/player" "$image $script go $repo/JukaHub-Trimui"; do
@@ -254,7 +280,8 @@ if grep -vE '^trimui-build: |^[A-Za-z0-9._~+-]+(/[A-Za-z0-9._~+-]+)*$' "$s/go-bu
   fail "the log has lines go-build-cache.sh save could mistake for packages: $(cat "$s/go-build.log")"
 fi
 grep -q "go mod download (in $repo/player)" "$s/go.log" || fail "the modules were not fetched on the host first: $(cat "$s/go.log")"
-grep -q "go list -deps . (in $repo/player)" "$s/go.log" || fail "the arm64 package graph was not resolved on the host: $(cat "$s/go.log")"
+grep -q "go list -tags dynamic -deps . (in $repo/player)" "$s/go.log" || fail "the arm64 package graph was not resolved on the host: $(cat "$s/go.log")"
+grep -qx "go list env GOOS=linux GOARCH=arm64 CGO_ENABLED=1" "$s/go.log" || fail "go list did not resolve for linux/arm64 with cgo: $(cat "$s/go.log")"
 
 # 2. The image's own SYSROOT wins over the default.
 s="$work/sysroot"
@@ -270,6 +297,7 @@ FAKE_BUILD_EXIT=2 run_script broken go "$repo/JukaHub-Trimui" "$s/go-build.log" 
 [ "$rc" = 2 ] || fail "a failed build exited $rc, not the build's 2: $(cat "$s/out")"
 grep -q 'undefined: nothing' "$s/go-build.log" || fail "the compiler error is not in the log"
 [ ! -e "$repo/JukaHub-Trimui/JukaHub" ] || fail "a failed build left a binary"
+grep -q "chown -R $owner_ids $work/gocache" "$s/chown.log" || fail "a failed build did not hand the build cache back: $(cat "$s/chown.log")"
 
 # 4. Modules that will not download stop the build before the container.
 s="$work/nofetch"
@@ -284,12 +312,46 @@ run_script spatial spatial "$repo/JukaHub-Trimui" || fail "the plugin build fail
 [ -f "$repo/JukaHub-Trimui/lib/jukahub-spatial.so" ] || fail "no plugin in lib/"
 grep -q "^spatial CC=aarch64-linux-gnu-gcc --sysroot=/usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot CROSS=aarch64-linux-gnu- OUT=$repo/JukaHub-Trimui/lib\$" "$s/record" ||
   fail "the plugin was built with the wrong settings: $(cat "$s/record")"
+grep -qx "chown -R $owner_ids $repo/JukaHub-Trimui/lib" "$s/chown.log" || fail "the plugin folder was not handed back: $(cat "$s/chown.log")"
 case "$(cat "$s/docker.log")" in
   *"--network none"*"-v $repo:$repo"*"-w $repo "*) ;;
   *) fail "the plugin container is not started the same way: $(cat "$s/docker.log")" ;;
 esac
 
-# 6. Refusals: an image by tag, an output folder outside the checkout, and
+# 6. Rootless Docker: the container's root already is the caller, so nothing
+#    is handed back (a chown there would give the files to another uid).
+s="$work/rootless"
+FAKE_ROOTLESS=1 run_script rootless go "$repo/JukaHub-Trimui" "$s/go-build.log" || fail "the rootless build failed: $(cat "$s/out")"
+[ ! -s "$s/chown.log" ] || fail "files were handed to another uid under rootless Docker: $(cat "$s/chown.log")"
+grep -q -- "-e OWNER= " "$s/docker.log" || fail "rootless Docker still got an owner: $(cat "$s/docker.log")"
+
+# 7. A stop request (what --init forwards when a job is cancelled or a step
+#    times out) ends a running build at once, kills it, and still hands the
+#    files back.
+s="$work/stop"
+mkdir -p "$s"
+: > "$s/chown.log"
+env -i PATH="$work/image:/usr/bin:/bin" JUKAHUB_IN_TOOLCHAIN_IMAGE=1 HOME="$s/home" \
+  GOROOT="$work/goroot" GOCACHE="$work/gocache" GOMODCACHE="$work/gomodcache" BUILD_DATE=2026-11-10 \
+  OWNER="$(id -u):$(id -g)" FAKE_CHOWN_LOG="$s/chown.log" FAKE_RECORD="$s/record" FAKE_BUILD_EXIT=0 \
+  FAKE_ELF="$work/elf/good" FAKE_BUILD_SLEEP="$s/build.pid" \
+  sh "$script" go "$repo/JukaHub-Trimui" > "$s/out" 2>&1 &
+inside_pid=$!
+for _ in $(seq 1 50); do [ -s "$s/build.pid" ] && break; sleep 0.1; done
+[ -s "$s/build.pid" ] || fail "the stop test's build never started: $(cat "$s/out")"
+start=$(date +%s)
+kill -TERM "$inside_pid"
+rc=0
+wait "$inside_pid" || rc=$?
+[ "$rc" = 143 ] || fail "a stopped build exited $rc, not 143: $(cat "$s/out")"
+[ $(($(date +%s) - start)) -lt 10 ] || fail "the stop request waited for the build to finish"
+if kill -0 "$(cat "$s/build.pid")" 2> /dev/null; then
+  kill "$(cat "$s/build.pid")" 2> /dev/null || true
+  fail "the build kept running after the stop request"
+fi
+grep -q "chown -R" "$s/chown.log" || fail "a stopped build did not hand the files back"
+
+# 8. Refusals: an image by tag, an output folder outside the checkout, and
 #    usage errors.
 if TOOLCHAIN_IMAGE=anibaldeboni/trimui-smart-pro-toolchain:latest run_script tag go "$repo/JukaHub-Trimui" "$work/tag/log"; then
   fail "an image by tag was accepted"
@@ -299,6 +361,11 @@ if run_script outside go "$work/elsewhere" "$work/outside/log"; then
   fail "an output folder outside the checkout was accepted"
 fi
 grep -q 'inside the checkout' "$work/outside/out" || fail "the outside-folder refusal does not say why: $(cat "$work/outside/out")"
+if FAKE_NO_IMAGE=1 run_script noimage go "$repo/JukaHub-Trimui" "$work/noimage/log"; then
+  fail "the build went on without the toolchain image"
+fi
+grep -q 'docker pull' "$work/noimage/out" || fail "a missing image does not say how to get it: $(cat "$work/noimage/out")"
+[ ! -s "$work/noimage/docker.log" ] || fail "docker run was tried without the image"
 for bad in "go $repo/x" "spatial" "check" "build $repo/x" ""; do
   # shellcheck disable=SC2086 # word splitting is the point
   if sh "$script" $bad > /dev/null 2>&1; then fail "'trimui-build.sh $bad' did not fail"; fi

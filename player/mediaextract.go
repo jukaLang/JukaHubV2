@@ -231,6 +231,7 @@ func mediaExtractAudio(config *Config, videoPath, title, page string) bool {
 			return
 		}
 		logInfo("downloads", "extracted the audio of %s into %s", filepath.Base(videoPath), filepath.Base(dest))
+		trophyEvent(tkAudioExtract)
 		ShowToast("Audio saved: "+dlShortTitle(meta.Title, 40), ToastKindSuccess)
 	}()
 	return true

@@ -1478,6 +1478,7 @@ func bzPair(ctx context.Context, mac, name string, stage func(string)) (bzPairOu
 		say("Waiting for the controller…")
 		out.Controller = bzWaitForPad(ctx, mac, before, bzInputWait)
 	}
+	trophyEvent(tkBTPair)
 	logInfo("bluetooth", "paired %s: connected=%v controller=%v", bzShortMAC(mac), out.Connected, out.Controller)
 	return out, nil
 }

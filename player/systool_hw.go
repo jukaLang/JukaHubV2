@@ -293,27 +293,29 @@ func sysToolGopsutilInfo() (osName, model string) {
 // sysToolHWSample is one round of readings. The slow readings are only taken
 // on some rounds; their read flags say which.
 type sysToolHWSample struct {
-	cpuPct    float64
-	cpuOK     bool
-	memUsed   uint64
-	memTotal  uint64
-	memOK     bool
-	tempC     float64
-	tempOK    bool
-	freqMHz   int
-	battery   int
-	charging  bool
-	uptime    time.Duration
-	uptimeOK  bool
-	load      string
-	diskRead  bool
-	diskTotal uint64
-	diskFree  uint64
-	netRead   bool
-	iface     string
-	ip        string
-	procsRead bool
-	procs     []procRow
+	cpuPct     float64
+	cpuOK      bool
+	memUsed    uint64
+	memTotal   uint64
+	memOK      bool
+	tempC      float64
+	tempOK     bool
+	throttle   bool
+	throttleOK bool
+	freqMHz    int
+	battery    int
+	charging   bool
+	uptime     time.Duration
+	uptimeOK   bool
+	load       string
+	diskRead   bool
+	diskTotal  uint64
+	diskFree   uint64
+	netRead    bool
+	iface      string
+	ip         string
+	procsRead  bool
+	procs      []procRow
 }
 
 // sysToolHWProcRow is one line of the busy-process card.
@@ -388,6 +390,7 @@ func sysToolHWRead(tick int, prev *sysToolCPUTimes, havePrev *bool) sysToolHWSam
 	}
 	s.memUsed, s.memTotal, s.memOK = sysToolMemory()
 	s.tempC, s.tempOK = cpuTempValueC()
+	s.throttle, s.throttleOK = cpuThermalThrottleState()
 	s.freqMHz = sysToolCPUFreqMHz()
 	s.battery = getBatteryPercent()
 	if s.battery >= 0 {
@@ -455,16 +458,31 @@ func sysToolHWApply(d *sysToolHWData, s sysToolHWSample) {
 		if d.tempFrac > 1 {
 			d.tempFrac = 1
 		}
-		switch {
-		case s.tempC < 50:
-			d.tempSub = "Cool"
-		case s.tempC < 70:
-			d.tempSub = "Warm"
-		default:
-			d.tempSub = "Hot — give it a rest"
+		if s.throttleOK {
+			if s.throttle {
+				d.tempSub = "CPU limit active"
+			} else {
+				d.tempSub = "CPU limit clear"
+			}
+		} else {
+			switch {
+			case s.tempC < 50:
+				d.tempSub = "Cool · limit unknown"
+			case s.tempC < 70:
+				d.tempSub = "Warm · limit unknown"
+			default:
+				d.tempSub = "Hot · limit unknown"
+			}
 		}
 	} else {
-		d.tempVal, d.tempSub, d.tempFrac = "—", "Not reported on this system", 0
+		d.tempVal, d.tempSub, d.tempFrac = "—", "Thermal data unavailable", 0
+		if s.throttleOK {
+			if s.throttle {
+				d.tempSub = "CPU limit active"
+			} else {
+				d.tempSub = "CPU limit clear"
+			}
+		}
 	}
 
 	d.batOK = s.battery >= 0

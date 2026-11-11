@@ -425,6 +425,9 @@ func (s *companionServer) handler() http.Handler {
 	// call that runs one command and answers with what it did (voicecmd_phone.go).
 	mux.HandleFunc("/voice", s.handleVoicePage)
 	mux.HandleFunc("/api/voice", s.guard(s.handleVoice))
+	// The Groq API key card: whether a key is saved, and a new one from the
+	// phone, checked with Groq before it is saved (companion_groq.go).
+	mux.HandleFunc("/api/groq-key", s.guard(s.handleGroqKey))
 	return mux
 }
 
@@ -647,6 +650,7 @@ func (s *companionServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sink(companionEvent{Kind: companionEventUpload, Text: saved})
+	trophyEvent(tkFileTransfer)
 	writeCompanionJSON(w, map[string]interface{}{"ok": true, "name": saved, "size": written})
 }
 
@@ -671,13 +675,26 @@ const companionPageHTML = `<!doctype html>
 :root{--bg:#0b0d12;--card:#151923;--line:#232a38;--ink:#e6e8ef;--dim:#8b93a7;--accent:#6f86ff;--ok:#3ecf8e;--bad:#ff6b6b}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,sans-serif}
-body{padding:16px 16px 40px;max-width:560px;margin:0 auto}
-header{display:flex;align-items:baseline;justify-content:space-between;margin:8px 0 16px}
+body{padding:0 16px calc(40px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto}
+/* The handheld's screen stays pinned at the top while the cards scroll under
+   it, so the picture is in view while the remote or the keyboard is used. */
+.top{position:-webkit-sticky;position:sticky;top:0;z-index:10;background:var(--bg);margin:0 -16px 14px;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;border-bottom:1px solid var(--line);box-shadow:0 10px 18px -14px #000}
+header{display:flex;align-items:baseline;justify-content:space-between;margin:0 0 8px}
 h1{font-size:20px;margin:0}
 #state{font-size:12px;color:var(--dim)}
+.shot{position:relative;min-height:56px;background:#0f131b;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+/* At most 30% of the height (16:9 and the Brick's 4:3 alike), and less while
+   the phone's keyboard is up, so the cards keep room to type in. */
+.shot img{display:block;margin:0 auto;width:auto;height:auto;max-width:100%;max-height:30vh}
+body.typing .shot img{max-height:16vh}
+.shot img:not([src]){display:none}
+.shotmsg{padding:18px 12px;text-align:center;color:var(--dim);font-size:13px}
+.top .row{margin-top:8px;flex-wrap:nowrap}
+.top .row>*{flex:1 1 0;padding:8px 6px;min-height:38px;font-size:14px}
+body.noshot .shot,body.noshot .shotonly{display:none}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
 h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
-textarea,input[type=url]{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:15px/1.4 inherit;resize:vertical}
+textarea,input[type=url],input[type=password],input[type=text]{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:15px/1.4 inherit;resize:vertical}
 textarea{min-height:88px}
 button{font:600 15px inherit;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:12px 16px;min-height:44px}
 button.ghost{background:#1d2330;color:var(--ink);border:1px solid var(--line)}
@@ -693,8 +710,20 @@ label.check input{width:20px;height:20px;accent-color:var(--accent)}
 #toast.show{opacity:1}
 #toast.bad{border-color:var(--bad)}
 small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
+.note{color:var(--dim);font-size:14px;margin:0 0 10px}
+/* A phone on its side has little height: the screen moves to a column of its
+   own on the left and the cards scroll on the right. */
+@media (orientation:landscape) and (max-height:540px){
+  body:not(.noshot){max-width:none;padding-left:calc(46vw + 16px)}
+  body:not(.noshot) .top{position:fixed;left:0;top:0;bottom:0;width:46vw;margin:0;overflow-y:auto;border-bottom:0;border-right:1px solid var(--line);box-shadow:none;padding:calc(8px + env(safe-area-inset-top)) 12px 10px max(12px,env(safe-area-inset-left))}
+  body:not(.noshot) .shot img{max-height:calc(100vh - 120px)}
+}
 </style>
-<header><h1>JukaHub</h1><span id=state>connecting</span></header>
+<div class=top id=top>
+  <header><h1>JukaHub</h1><span id=state>connecting</span></header>
+  <div class=shot><img id=screen alt="Handheld screen"><div class=shotmsg id=shotMsg>Loading the handheld's screen...</div></div>
+  <div class=row><button class="ghost shotonly" id=shotScreen>Refresh</button><button class="ghost shotonly" id=autoScreen>Live: off</button><button class=ghost id=pinScreen>Hide screen</button></div>
+</div>
 
 <div class=card>
   <h2>Type</h2>
@@ -735,10 +764,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 </div>
 
 <div class=card>
-  <h2>Screen</h2>
-  <img id=screen alt="Handheld screen" style="width:100%;border-radius:10px;background:#0f131b;display:block">
-  <div class=row><button id=shotScreen>Refresh</button><button class=ghost id=autoScreen>Auto: off</button></div>
-  <small>The image is captured on the handheld, not mirrored from a stream.</small>
+  <h2>Groq API key</h2>
+  <p class=note id=groqStatus>Checking the handheld...</p>
+  <input type=password id=groqKey placeholder="gsk_..." autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <label class=check><input type=checkbox id=groqShow>Show the key</label>
+  <div class=row><button id=sendGroq>Save on handheld</button></div>
+  <small id=groqNote>Voice typing, voice commands and the Juka chat use it. Get a free key at console.groq.com (API Keys), copy it and paste it here. The handheld checks it with Groq and never shows it again.</small>
 </div>
 
 <div id=toast></div>
@@ -787,18 +818,19 @@ async function sendText() {
   if (enter) await api('/api/key', {key: 'enter'}, true);
   toast('Sent');
   el.value = '';
+  refreshSoon();
 }
 document.getElementById('sendText').onclick = () => sendText().catch(e => toast(e.message, true));
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
 document.querySelectorAll('[data-key]').forEach(btn => {
-  btn.onclick = () => api('/api/key', {key: btn.dataset.key}, true).catch(e => toast(e.message, true));
+  btn.onclick = () => api('/api/key', {key: btn.dataset.key}, true).then(refreshSoon).catch(e => toast(e.message, true));
 });
 document.getElementById('sendURL').onclick = () => {
   const el = document.getElementById('url');
   const url = el.value.trim();
   if (!url) return;
-  api('/api/open', {url}, true).then(() => { toast('Opening on handheld'); el.value = ''; })
+  api('/api/open', {url}, true).then(() => { toast('Opening on handheld'); el.value = ''; refreshSoon(); })
     .catch(e => toast(e.message, true));
 };
 document.getElementById('file').onchange = e => {
@@ -815,6 +847,7 @@ document.getElementById('sendFile').onclick = async () => {
   try {
     await api('/api/upload', fd, false);
     toast('Uploaded');
+    refreshSoon();
     input.value = '';
     document.getElementById('fileName').textContent = 'Files land in the PhoneDrop folder on the SD card.';
   } catch (err) {
@@ -823,30 +856,112 @@ document.getElementById('sendFile').onclick = async () => {
     btn.disabled = false; btn.textContent = 'Upload';
   }
 };
+// The screen pinned at the top. Each picture is a capture on the handheld, so
+// it is fetched on demand: Refresh, Live (every 1.2 s while this page is in
+// view), and a moment after every remote press, text, link or upload, so the
+// picture follows what the phone just did without polling all the time.
 const screenEl = document.getElementById('screen');
+const shotMsg = document.getElementById('shotMsg');
 let shotURL = '';
 let autoTimer = 0;
+let soonTimer = 0;
+let shotBusy = false;
+let shotAgain = false;
+function screenShown() { return !document.body.classList.contains('noshot'); }
 async function loadScreen() {
-  const res = await fetch('/api/screen', {headers: hdr()});
-  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
-  const blob = await res.blob();
-  const next = URL.createObjectURL(blob);
-  screenEl.src = next;
-  if (shotURL) URL.revokeObjectURL(shotURL);
-  shotURL = next;
-}
-document.getElementById('shotScreen').onclick = () => loadScreen().catch(e => toast(e.message, true));
-document.getElementById('autoScreen').onclick = e => {
-  clearInterval(autoTimer);
-  if (autoTimer) {
-    autoTimer = 0;
-    e.target.textContent = 'Auto: off';
-    return;
+  if (shotBusy) { shotAgain = true; return; }
+  shotBusy = true;
+  try {
+    const res = await fetch('/api/screen', {headers: hdr(), cache: 'no-store'});
+    if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+    const blob = await res.blob();
+    const next = URL.createObjectURL(blob);
+    screenEl.src = next;
+    if (shotURL) URL.revokeObjectURL(shotURL);
+    shotURL = next;
+    shotMsg.hidden = true;
+  } finally {
+    shotBusy = false;
+    if (shotAgain) { shotAgain = false; setTimeout(() => { loadScreen().catch(() => {}); }, 0); }
   }
-  e.target.textContent = 'Auto: on';
-  autoTimer = setInterval(() => { loadScreen().catch(() => {}); }, 1200);
+}
+function shotFailed(e) {
+  // Keep the last picture; only an empty frame gets the reason.
+  if (screenEl.getAttribute('src')) return;
+  shotMsg.textContent = 'The screen is not available right now (' + e.message + '). Tap Refresh to try again.';
+  shotMsg.hidden = false;
+}
+function refreshSoon() {
+  if (!screenShown() || autoTimer) return;
+  clearTimeout(soonTimer);
+  soonTimer = setTimeout(() => { loadScreen().catch(shotFailed); }, 450);
+}
+function setLive(on) {
+  clearInterval(autoTimer);
+  autoTimer = 0;
+  if (on) {
+    autoTimer = setInterval(() => { if (!document.hidden) loadScreen().catch(() => {}); }, 1200);
+    loadScreen().catch(shotFailed);
+  }
+  document.getElementById('autoScreen').textContent = on ? 'Live: on' : 'Live: off';
+}
+function showScreen(shown) {
+  document.body.classList.toggle('noshot', !shown);
+  document.getElementById('pinScreen').textContent = shown ? 'Hide screen' : 'Show screen';
+  try { localStorage.setItem('jukahubCompanionNoScreen', shown ? '' : '1'); } catch (e) {}
+  if (!shown) { setLive(false); return; }
+  loadScreen().catch(shotFailed);
+}
+document.getElementById('shotScreen').onclick = () => loadScreen().catch(e => { shotFailed(e); toast(e.message, true); });
+document.getElementById('autoScreen').onclick = () => setLive(!autoTimer);
+document.getElementById('pinScreen').onclick = () => showScreen(!screenShown());
+// While a text field has the phone's keyboard up, the picture shrinks (CSS
+// body.typing) so the field and the keyboard both fit under the bar.
+document.addEventListener('focusin', e => {
+  if (e.target.matches && e.target.matches('textarea, input[type=url], input[type=password], input[type=text]')) document.body.classList.add('typing');
+});
+document.addEventListener('focusout', () => { document.body.classList.remove('typing'); });
+// Coming back to the page (another app, a locked phone) shows the screen as
+// it is now, not as it was when the page was left.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && screenShown()) loadScreen().catch(() => {});
+});
+let startShown = true;
+try { startShown = localStorage.getItem('jukahubCompanionNoScreen') !== '1'; } catch (e) {}
+showScreen(startShown);
+
+// The Groq API key card. The handheld never sends the key back: only whether
+// one is saved and its last four characters.
+const groqStatusEl = document.getElementById('groqStatus');
+function showGroqStatus(set, tail) {
+  if (!set) { groqStatusEl.textContent = 'No key is saved on the handheld yet.'; return; }
+  groqStatusEl.textContent = tail ? 'A key is saved on the handheld (it ends in ' + tail + ').' : 'A key is saved on the handheld.';
+}
+fetch('/api/groq-key', {headers: hdr(), cache: 'no-store'})
+  .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+  .then(s => showGroqStatus(!!s.set, s.tail || ''))
+  .catch(() => { groqStatusEl.textContent = 'Paste a key to save it on the handheld.'; });
+document.getElementById('groqShow').onchange = e => {
+  document.getElementById('groqKey').type = e.target.checked ? 'text' : 'password';
 };
-loadScreen().catch(() => {});
+document.getElementById('sendGroq').onclick = async () => {
+  const input = document.getElementById('groqKey');
+  const key = input.value.trim();
+  if (!key) { toast('Paste your Groq key first', true); input.focus(); return; }
+  const btn = document.getElementById('sendGroq');
+  btn.disabled = true; btn.textContent = 'Checking with Groq...';
+  try {
+    const r = await api('/api/groq-key', {key}, true);
+    input.value = '';
+    showGroqStatus(true, r.tail || '');
+    document.getElementById('groqNote').textContent = r.message || 'Saved on the handheld.';
+    toast(r.verified ? 'Groq key saved' : 'Groq key saved, not checked');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
 stateEl.textContent = pin ? 'paired' : 'no PIN';
 </script>
 </html>`

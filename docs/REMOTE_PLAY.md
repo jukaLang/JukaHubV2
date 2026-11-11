@@ -46,12 +46,16 @@ them itself, once:
    can go on choosing a console or getting the Account-ID meanwhile.
 2. A PS5 is asked for its PIN only once its pairing helper is in, because the
    PIN Link Device shows lasts five minutes: **A** on it during the download
-   says so, and the PIN keyboard opens by itself when the install ends (open
-   Link Device then). **Play** on a paired console waits too, and the stream
-   starts by itself when the helpers are in, as long as the panel is still on
-   the console list. **B** lets go of a waiting Play or PIN prompt (the install
-   goes on), and so does closing the panel. A PS4 pairs without the helpers;
-   only its stream needs `chiaki-stream`.
+   says so, its row says *PIN keyboard opens when Remote Play is installed*,
+   and the PIN keyboard opens by itself when the install ends (open Link
+   Device then). An address typed under **Add console by address** waits the
+   same way while an install can come (it may be a PS5), and is asked at once
+   otherwise. **Play** on a paired console waits too, and the stream starts by
+   itself when the helpers are in, as long as the panel is still on the
+   console list with nothing over it. **B** lets go of a waiting Play or PIN
+   prompt (the install goes on), and so does closing the panel; both say so,
+   and a newer press takes the place of an older one. A PS4 pairs without the
+   helpers; only its stream needs `chiaki-stream`.
 3. The list then says **Remote Play is installed** for the rest of that visit,
    and a toast says so too (not over the PIN keyboard or the Account-ID card).
    JukaHub updates bring their own `bin/`, so this happens once.
@@ -68,20 +72,22 @@ for an older one. Before anything is installed:
   must match the archive's `SHA256SUMS`;
 * each helper about to be installed is started once without arguments, as the
   stream's own check does before a hand-off: one this firmware's loader refuses
-  (a newer glibc, a missing library) is not installed, the panel names the
-  reason, and only **Retry** tries that again;
+  (a newer glibc, a missing library) is not installed (the other one still
+  is), the panel names the reason, and the refusal is kept in
+  `bin/.remote-play-refused`: neither opening the panel nor a press downloads
+  that again, only **Retry** does;
 * there must be room: the download first, then twice what it unpacks to;
 * only a missing helper is written, into `bin/` beside the JukaHub binary,
   under a temporary name renamed into place, `chiaki-stream` last, so an
   interrupted install never looks finished. A helper that is there is never
   replaced.
 
-A dropped connection is resumed: at once, up to three times in one install,
-when the download had made progress, and otherwise on the next try (the
-download waits in `bin/.remote-play-install/`, which is removed once the
-helpers are installed or a download fails its check). Offline, the list offers
-**Install Remote Play** for when the Wi-Fi is back; after a failure the row
-says why, and **A** on it (**Retry**) tries again.
+A dropped connection is resumed: at once, up to twice in one install, when
+the download had made progress, and otherwise on the next try (the download
+waits in `bin/.remote-play-install/`, which is removed once the helpers are
+installed, or when a download fails its check or the firmware refuses it).
+With no internet the list offers **Install Remote Play** for when it is back;
+after a failure the row says why, and **A** on it (**Retry**) tries again.
 
 ## Using it
 
@@ -93,7 +99,7 @@ scan found.
 |---|---|
 | `Name · PS4/PS5` (paired) | Starts the stream, waking the console first if it is in rest mode ([Waking the console](#waking-the-console)) |
 | `Name · PS4/PS5` (not paired) | Asks for the PSN Account-ID once (if none is saved), then for the PIN the console shows |
-| Installing Remote Play… / Remote Play is not installed / Install Remote Play | Only while a helper is missing: the install's progress, why it failed (A tries again), or the offer to install ([Installing the helpers](#installing-the-helpers)); *Remote Play is installed* once it is done |
+| Installing Remote Play… / Remote Play is not installed / Install Remote Play | Only while a helper is missing: the install's progress, why it failed (A tries again), or the offer to install ([Installing the helpers](#installing-the-helpers)); *Remote Play is installed* once it is done, and *Remote Play won't run on this firmware* (or *PS5 pairing won't run on this firmware*) when the firmware refused the helpers |
 | Scan for consoles | Sweeps the LAN for three seconds |
 | Add console by address | Type `192.168.1.x` when discovery cannot see it |
 | PSN Account-ID | Opens the Account-ID card: sign in with your phone or browser, or type it |
@@ -109,8 +115,9 @@ scan found.
 **X** wakes the selected console without streaming. **Start** (O on a
 keyboard) opens the selected console's options. **Y** (or Delete) forgets the
 selected console, including its keys. **B** closes the panel; on the
-Account-ID card and the console options it goes back to the console list, and
-while a wake is waiting it stops the wake first.
+Account-ID card and the console options it goes back to the console list,
+while a Play or a PIN prompt waits for the helpers' install it lets go of that
+first, and while a wake is waiting it stops the wake first.
 
 ### Console options
 
@@ -138,7 +145,8 @@ forgets what was typed when it closes.
    straight on to the PIN.
 3. On the PS5: **Settings → System → Remote Play → Link Device**. Type the 8
    numbers it shows (spaces are fine) and confirm. Keep Link Device open until
-   the row turns into **Play**.
+   the row turns into **Play** (an address typed by hand gets its row once it
+   is paired; the toast says when).
 
 The PS5 checks the Account-ID against the accounts on the console, so a wrong
 one fails before the PIN is even looked at. JukaHub says which stage failed.
@@ -421,7 +429,8 @@ What happens around the stream depends on the launcher that started JukaHub:
 |---|---|
 | `Apps/JukaHub/data/psremote.json` | Paired consoles, quality, volume, Account-ID (0600) |
 | `Apps/JukaHub/psremote.log` | Helper output for the last streams |
-| `Apps/JukaHub/bin/` | `chiaki-stream` and `chiaki-regist`: from the JukaHub package, or installed by the panel, which also writes `BUILDINFO.txt` |
+| `Apps/JukaHub/bin/` | `chiaki-stream` and `chiaki-regist`: from the JukaHub package, or installed by the panel, which also writes `BUILDINFO.txt` when it installs both |
+| `Apps/JukaHub/bin/.remote-play-refused` | The release whose helpers this firmware refused, and why; Retry on the panel's row clears it |
 | `Apps/JukaHub/bin/.remote-play-install/` | A helper download under way, or one cut off and waiting to be resumed (removed once the helpers are installed or a download fails its check) |
 | `Apps/JukaHub/data/psremote-last.txt` | How the last stream ended, written by the helper; JukaHub reads and removes it on its next start |
 | `/tmp/jukahub-ps-*.conf` | Session file; deleted by the helper after reading |
@@ -440,12 +449,12 @@ connected**, so remove it there too if you want a clean slate.
 | `Remote Play is not installed` · `no recent JukaHub release has them · try after an update` | None of the last 100 releases carries `JukaHub-RemotePlay-linux-arm64.zip` (its CI build failed or has not run): update JukaHub when the next release is out |
 | `… no connection to GitHub` / `… GitHub is limiting downloads` / `… the download was cut off` | The helpers download from GitHub: connect to Wi-Fi, or wait a few minutes, then **A** on the row; a cut-off download resumes |
 | `… the clock is wrong · set the date and time, then try again` | The certificate check needs a sane date: set the date and time, then **A** on the row |
-| `… can't verify GitHub · copy JukaHub's package from a PC` | This firmware has no certificate store to check GitHub with: copy `JukaHub-Trimui.zip` (it carries `bin/`) onto the card from a PC |
+| `… can't verify GitHub · copy JukaHub's package from a PC` | This firmware has no certificate store to check GitHub with: copy `JukaHub-Trimui.zip` from a release whose helper build succeeded (its `bin/` holds the helpers) onto the card from a PC |
 | `… the download did not verify · try again` | The archive or a helper in it did not match its checksum; if it keeps happening, wait for the next release |
-| `Remote Play won't run on this firmware` · `chiaki-stream: needs GLIBC_… · firmware has GLIBC_…` | The downloaded helpers need something this firmware lacks (the row names it); nothing was installed, and only **Retry** tries again |
+| `Remote Play won't run on this firmware` (or `PS5 pairing won't run on this firmware`) · `chiaki-stream: needs GLIBC_… · firmware has GLIBC_…` | The downloaded helper named there needs something this firmware lacks; it was not installed (a helper that runs was), and only **Retry** downloads again |
 | `… SD card full · needs …, has … · free some space` | The install needs the download plus twice what it unpacks to: free some space, then **A** on the row |
 | `Could not pair — Remote Play is not installed yet: …` | The pairing needed `chiaki-regist`, which did not install; the rest names why, and the list's Remote Play row has **Retry** |
-| `Pairing failed — chiaki-regist won't run here: …` | The `chiaki-regist` in `bin/` was built for another firmware (the line names what it needs): delete it, and on Wi-Fi the panel installs the release's |
+| `Pairing failed — chiaki-regist won't run here: …` | The `chiaki-regist` in `bin/` was built for another firmware (the line names what it needs): delete it, and on Wi-Fi the panel installs the release's, which it starts once first, so a refusal is said, not installed |
 | No consoles found | Different network, or Remote Play is off on the console — add the address by hand |
 | `Pairing failed at network: …` | Console unreachable; check the address and that Link Device is open |
 | `Pairing failed at protocol: …` | Wrong/expired PIN, or a PS5 Account-ID that does not own Remote Play |
@@ -462,7 +471,7 @@ connected**, so remove it there too if you want a clean slate.
 | `… did not answer — press A to connect anyway. To wake it, turn on Enable Turning On PS5 from Network …` | The console is shut down (not in rest mode), on another network, or its rest-mode network switches are off ([Waking the console](#waking-the-console)); A again connects anyway |
 | `… did not come out of rest mode within a minute` | **Enable Turning On PS5/PS4 from Network** is off, or the console is busy, for example installing an update |
 | `… is not at 192.168.1.51 any more — looking for it on this network` | Something else answers at the console's old address: the router gave the console a new one. JukaHub scans, and the pairing moves to the new address when the console answers there. The wake signal is never sent to a device that is not this console |
-| `Could not start Remote Play — the helper won't run here: …` | The helper was built for a newer firmware (its glibc) or misses a library; the rest of the line names it. JukaHub stays open instead of quitting into a stream that cannot start; delete `bin/chiaki-stream`, and on Wi-Fi the panel installs the release's |
+| `Could not start Remote Play — the helper won't run here: …` | The helper was built for a newer firmware (its glibc) or misses a library; the rest of the line names it. JukaHub stays open instead of quitting into a stream that cannot start; delete `bin/chiaki-stream`, and on Wi-Fi the panel installs the release's, which it starts once first |
 | A Bluetooth pad shows **No input**, or *did not connect: this system has no driver for that kind of device* | The firmware cannot use that pad over Bluetooth ([Bluetooth controllers](#bluetooth-controllers)); use a USB cable or a 2.4 GHz adapter |
 
 The helpers are built from chiaki-ng's library sources for aarch64 by the

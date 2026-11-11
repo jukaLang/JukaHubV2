@@ -902,6 +902,9 @@ var gifWall struct {
 	// frozenPath is a wallpaper that memory pressure left at its first frame
 	// (gifWallShrinkForPressure); it stays still until it is picked again.
 	frozenPath string
+	// gamePaused means a game owns the screen. Only the first frame is retained
+	// while away; the animation is decoded again after JukaHub returns.
+	gamePaused bool
 }
 
 // gifWallTicks is the animation clock; tests replace it.
@@ -1012,6 +1015,61 @@ func gifWallRelease(destroy bool) {
 	gifWall.final, gifWall.pos, gifWall.posStart, gifWall.posSet = 0, 0, 0, false
 	gifWall.upValid = false
 	gifWall.pickValid = false
+	gifWall.gamePaused = false
+}
+
+// gifWallPauseForGame releases every animation texture after the first one
+// while a game owns the framebuffer. The generation bump also lets the decoder
+// drop its queued pixels instead of retaining them for the whole game session.
+// Render thread only.
+func gifWallPauseForGame() {
+	if gifWall.path == "" || gifWall.gamePaused {
+		return
+	}
+	gifWall.gamePaused = true
+	gifWallGen.Add(1)
+	gifWall.job = nil
+	if len(gifWall.frames) > 1 {
+		for _, f := range gifWall.frames[1:] {
+			if f.tex != nil {
+				_ = f.tex.Destroy()
+			}
+		}
+		gifWall.frames = gifWall.frames[:1]
+	}
+	if len(gifWall.frames) == 1 {
+		gifWall.frames[0].delay = max(gifWall.frames[0].delay, 1)
+		gifWall.ends = []int64{int64(gifWall.frames[0].delay)}
+		gifWall.loop = gifWall.ends[0]
+		gifWall.complete = true
+		gifWall.final = 1
+		gifWall.pos, gifWall.posStart, gifWall.posSet = 0, 0, false
+	} else {
+		gifWall.ends = nil
+		gifWall.loop = 0
+		gifWall.complete = false
+		gifWall.final = 0
+		gifWall.pos, gifWall.posStart, gifWall.posSet = 0, 0, false
+	}
+	gifWall.pickValid = false
+	gifWall.upValid = false
+	logInfo("wallpaper", "paused animated wallpaper for game")
+}
+
+// gifWallResumeAfterGame drops the retained cover and lets the next backdrop
+// sync decode the current configured wallpaper afresh. That sync also honours
+// any settings or wallpaper change made while the game owned the screen.
+// Render thread only.
+func gifWallResumeAfterGame() {
+	if !gifWall.gamePaused {
+		return
+	}
+	path := gifWall.path
+	gifWallRelease(true)
+	if gifWall.failedPath == path {
+		return
+	}
+	gifWall.path = ""
 }
 
 // gifWallEvict frees an animated wallpaper's textures and whatever its decoder
