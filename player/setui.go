@@ -574,6 +574,10 @@ func setHubActivate(c *Config, i, dir int) {
 		switch {
 		case v.index >= 0:
 			next = setCycleIndex(v.index, dir, n)
+			if row.Clamp && next != v.index+dir {
+				// A level at its end stays there (setRow.Clamp).
+				return
+			}
 		case dir < 0:
 			next = n - 1
 		}
@@ -927,7 +931,13 @@ func setHubDrawRow(renderer *sdl.Renderer, f setHubFonts, i int, r sdl.Rect, foc
 			hoverPart = part
 		}
 		many := len(v.options) > 1 && !v.disabled
-		parts = setCarouselDraw(renderer, f.value, rect, v.value, v.swatch, focused, many, many, hoverPart)
+		canPrev, canNext := many, many
+		if row.Clamp && v.index >= 0 {
+			// A level at its end dims the arrow that has nowhere to go.
+			canPrev = many && v.index > 0
+			canNext = many && v.index < len(v.options)-1
+		}
+		parts = setCarouselDraw(renderer, f.value, rect, v.value, v.swatch, focused, canPrev, canNext, hoverPart)
 		ctrlW = w
 	case setKindAction, setKindText:
 		ink := ColorTextSecondary()

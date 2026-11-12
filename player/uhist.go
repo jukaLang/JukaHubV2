@@ -186,11 +186,38 @@ func uhistKeepIndex(c *Config) int { return uhistKeepFromConfig(c) }
 
 // uhistChooseKeep stores a new limit (main thread) and, when it is lower than
 // what is kept, frees the oldest copies now rather than at the next update.
+// The Settings row is a carousel that wraps — A on "3 versions" lands on Off —
+// so a limit that would delete saved copies asks first; a rollback copy is the
+// one thing a bad update cannot give back.
 func uhistChooseKeep(c *Config, value string) {
 	n, err := strconv.Atoi(value)
 	if err != nil || n < 0 || n > uhistKeepMax {
 		return
 	}
+	if kept, _ := uhistCount(); n < kept {
+		drop := kept - n
+		what := "the oldest saved version"
+		if drop > 1 {
+			what = "the " + strconv.Itoa(drop) + " oldest saved versions"
+		}
+		note := "Keeping " + strconv.Itoa(n) + " deletes " + what + " now"
+		if n == 0 {
+			note = "Turning this off deletes every saved version now"
+		}
+		setSheetOpen(&setHub.sheet, "Remove saved versions?", note,
+			[]setOption{{Value: "keep", Label: "Keep them"}, {Value: "remove", Label: "Remove"}}, "keep",
+			func(choice string) {
+				if choice == "remove" {
+					uhistApplyKeep(c, n)
+				}
+			})
+		return
+	}
+	uhistApplyKeep(c, n)
+}
+
+// uhistApplyKeep is uhistChooseKeep once the choice is settled.
+func uhistApplyKeep(c *Config, n int) {
 	uhistKeep.Store(int32(n))
 	if c != nil {
 		if c.Variables.Custom == nil {

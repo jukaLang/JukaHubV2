@@ -130,11 +130,11 @@ type HomeLayout struct {
 	Items  map[HomeFocusID]HomeItem
 	Order  []HomeFocusID
 
-	// Hover/focus lift: the focused card grows by a couple of pixels, eased so
-	// it settles instead of snapping. Motion is disabled by reduced motion.
-	Motion  bool
-	hover   uiHover
-	hoverID HomeFocusID
+	// The focused card grows by a few pixels, then settles after a tiny
+	// overshoot. Motion is disabled by reduced motion.
+	Motion     bool
+	focusEnter uiEnter
+	focusID    HomeFocusID
 
 	// Arrangement is the alternative layout in force (homeArrangementCustom
 	// when the scene's own geometry is authoritative).
@@ -947,13 +947,16 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	h.drawFooter(renderer, fonts, data.ShowBackHint)
 
 	focused := h.Focus.Current()
-	if h.hoverID != focused {
-		// A new card takes the lift: restart the ease so the growth reads as a
-		// hover response rather than a jump.
-		h.hoverID = focused
-		h.hover.weight = 0
+	if h.focusID != focused {
+		h.focusID = focused
+		h.focusEnter.begin(uiClockMS(), uiFocusBounceMS)
 	}
-	lift := h.hover.update(1, h.Motion)
+	lift := 1.0
+	if h.Motion {
+		lift = uiFocusBounce.at(h.focusEnter.progress(uiClockMS()))
+	} else {
+		h.focusEnter.cancel()
+	}
 	// The Carousel and Widgets bodies draw their own tiles (home_dynbody.go);
 	// the loop below then draws only the controls around them.
 	if h.dyn.active {
@@ -1038,6 +1041,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	homeUpdateRect = sdl.Rect{}
 	headerTrophyClear()
 	headerBugClear()
+	headerSlotRectsClear()
 	// A scene's release pill is not on Home: left over, its rect would still
 	// take a click (handleChromeBarClick) where Home draws something else.
 	updatePrompt.badge = sdl.Rect{}
@@ -1093,10 +1097,12 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	sep := "   "
 	sepW, _ := measureText(fonts.Small, sep)
+	partW := func(p string) int32 {
+		return statusClusterPartWidth(fonts.Small, p)
+	}
 	total := int32(0)
 	for i, part := range data.StatusParts {
-		w := statusClusterPartWidth(fonts.Small, part)
-		total += w
+		total += partW(part)
 		if i > 0 {
 			total += sepW
 		}
@@ -1111,10 +1117,78 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		// so the chip cannot be a different size before the view data is built.
 		bellW, bellH = notifBellSize(headerConfig)
 	}
-	bellRight := h.Width - StatusBarMargin
-	bellX := bellRight - bellW
+	right := h.Width - StatusBarMargin
 	bellY := (header.H - bellH) / 2
-	renderHomeBell(renderer, headerConfig, bellFont, bellX, bellY, bellW, bellH)
+	// The corner's buttons are decided the way they always were: the bell and
+	// Report a bug always; the trophy room's cup unless the cluster beside it
+	// would reach the wordmark; the release offer unless it would push the
+	// cluster into the greeting column (on such a screen the modal prompt and
+	// the scene headers still reach the release). usedW is the room they
+	// take, each with its corner gap.
+	var corner [hsCount]int32
+	usedW := int32(0)
+	if bellW > 0 {
+		corner[hsBell] = bellW
+		usedW += bellW + headerCornerGap
+	}
+	if bugW, _ := headerBugSize(headerConfig); bugW > 0 && !headerSlotHidden(headerConfig, hsBug) {
+		corner[hsBug] = bugW
+		usedW += bugW + headerCornerGap
+	}
+	if trophyW, _ := headerTrophySize(headerConfig); trophyW > 0 && !headerSlotHidden(headerConfig, hsTrophy) &&
+		right-usedW-trophyW-headerCornerGap-total >= brandEnd+Space2XL {
+		corner[hsTrophy] = trophyW
+		usedW += trophyW + headerCornerGap
+	}
+	if updateAvailable() && !headerSlotHidden(headerConfig, hsUpdate) {
+		if chipW, _ := homeUpdateChipSize(headerCaptionFont(headerConfig)); chipW > 0 &&
+			right-usedW-chipW-headerCornerGap-total >= scaleX(480, h.Width) {
+			corner[hsUpdate] = chipW
+			usedW += chipW + headerCornerGap
+		}
+	}
+	// The whole right of the bar in the user's order (Edit Home → Top bar,
+	// header_arrange.go); the shipped order puts the corner's buttons last,
+	// the bell at the margin. Home's cluster is never trimmed.
+	plan := headerPlan(headerConfig, data.StatusParts, partW, &corner, sepW, headerCornerGap, right)
+	bellDrawn := false
+	for _, it := range plan {
+		switch it.slot {
+		case hsBell:
+			renderHomeBell(renderer, headerConfig, bellFont, it.x, bellY, bellW, bellH)
+			bellDrawn = true
+			headerSlotRects[hsBell] = nc.bellRect
+		case hsBug:
+			if bug := drawHeaderBug(renderer, headerConfig, it.x+it.w, barH,
+				h.Focus.Current() == HomeFocusBug); bug.W > 0 {
+				item := h.Items[HomeFocusBug]
+				item.Rect = bug
+				h.Items[HomeFocusBug] = item
+				headerSlotRects[hsBug] = bug
+			}
+		case hsTrophy:
+			if cup := drawHeaderTrophy(renderer, headerConfig, it.x+it.w, barH,
+				h.Focus.Current() == HomeFocusTrophy); cup.W > 0 {
+				item := h.Items[HomeFocusTrophy]
+				item.Rect = cup
+				h.Items[HomeFocusTrophy] = item
+				headerSlotRects[hsTrophy] = cup
+			}
+		case hsUpdate:
+			if pill := drawHeaderUpdatePill(renderer, headerConfig, it.x+it.w, barH,
+				h.Focus.Current() == HomeFocusUpdate); pill.W > 0 {
+				homeUpdateRect = pill
+				item := h.Items[HomeFocusUpdate]
+				item.Rect = pill
+				h.Items[HomeFocusUpdate] = item
+				headerSlotRects[hsUpdate] = pill
+			}
+		}
+	}
+	if !bellDrawn {
+		// No bell this frame: its last rect must not stay a focus stop.
+		nc.bellRect = sdl.Rect{}
+	}
 	// The bell is a full member of the home focus graph: record the rect it was
 	// actually drawn at, and only let the D-pad land on it while it is visible.
 	if nc.bellRect.W > 0 {
@@ -1123,52 +1197,8 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		h.Items[HomeFocusBell] = item
 	}
 	h.Focus.SetEnabled(HomeFocusBell, nc.bellRect.W > 0)
-
-	// Report a bug stays between the bell and the trophy room's cup.
-	cornerX := bellX
-	if bug := drawHeaderBug(renderer, headerConfig, bellX-headerCornerGap, barH,
-		h.Focus.Current() == HomeFocusBug); bug.W > 0 {
-		item := h.Items[HomeFocusBug]
-		item.Rect = bug
-		h.Items[HomeFocusBug] = item
-		cornerX = bug.X
-	}
 	h.Focus.SetEnabled(HomeFocusBug, headerBugRect.W > 0)
-
-	// The trophy room's cup sits left of Report a bug. It gives
-	// way only if the cluster beside it would reach the wordmark.
-	if trophyW, _ := headerTrophySize(headerConfig); trophyW > 0 &&
-		cornerX-headerCornerGap-trophyW-headerCornerGap-total >= brandEnd+Space2XL {
-		if cup := drawHeaderTrophy(renderer, headerConfig, cornerX-headerCornerGap, barH,
-			h.Focus.Current() == HomeFocusTrophy); cup.W > 0 {
-			item := h.Items[HomeFocusTrophy]
-			item.Rect = cup
-			h.Items[HomeFocusTrophy] = item
-			cornerX = cup.X
-		}
-	}
 	h.Focus.SetEnabled(HomeFocusTrophy, headerTrophyRect.W > 0)
-
-	// The release offer is the same pill in the same corner as on every scene
-	// header: immediately left of the trophy room's cup. It is dropped when it
-	// would push the cluster into the greeting column; on such a screen the
-	// modal prompt and the scene headers still reach the release.
-	updatePill := sdl.Rect{}
-	if updateAvailable() {
-		chipW, _ := homeUpdateChipSize(headerCaptionFont(headerConfig))
-		if cornerX-headerCornerGap-total-headerCornerGap-chipW >= scaleX(480, h.Width) {
-			updatePill = drawHeaderUpdatePill(renderer, headerConfig, cornerX-headerCornerGap, barH,
-				h.Focus.Current() == HomeFocusUpdate)
-			if updatePill.W > 0 {
-				homeUpdateRect = updatePill
-				item := h.Items[HomeFocusUpdate]
-				item.Rect = updatePill
-				h.Items[HomeFocusUpdate] = item
-				total += updatePill.W + headerCornerGap
-			}
-		}
-	}
-	x := cornerX - headerCornerGap - total
 
 	// Header controls, in the band under the system cluster and clear of the
 	// greeting column: the phone-pairing code and the PS4/PS5 launcher pills.
@@ -1259,38 +1289,39 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	drawStatusText := func(text string, color sdl.Color, x, y int32) {
 		drawText(renderer, fonts.Small, text, x, y, color, textAlignLeft)
 	}
-	for _, part := range data.StatusParts {
-		w := statusClusterPartWidth(fonts.Small, part)
+	clockDrawn := false
+	for _, it := range plan {
+		if it.part == "" {
+			continue
+		}
+		part, x, w := it.part, it.x, it.w
 		r := sdl.Rect{
 			X: x - scaleX(8, h.Width),
 			Y: y - scaleY(6, h.Height),
 			W: w + scaleX(16, h.Width),
 			H: int32(fonts.Small.Height()) + scaleY(12, h.Height),
 		}
-		if isClockStatusPart(part) {
+		headerSlotRects[it.slot] = r
+		switch {
+		case isClockStatusPart(part):
 			item := h.Items[HomeFocusClock]
 			item.Rect = r
 			h.Items[HomeFocusClock] = item
-		}
-		if isWeatherStatusPart(part) {
+			clockDrawn = true
+		case isWeatherStatusPart(part):
 			item := h.Items[HomeFocusWeather]
 			item.Rect = r
 			h.Items[HomeFocusWeather] = item
 			weatherStatusRect = r
-		}
-		if isWiFiStatusPart(part) {
+		case isWiFiStatusPart(part):
 			statusWiFiRect = r
-		}
-		if isVolumeStatusPart(part) {
+		case isVolumeStatusPart(part):
 			statusVolumeRect = r
-		}
-		if isBluetoothStatusPart(part) {
+		case isBluetoothStatusPart(part):
 			statusBluetoothRect = r
-		}
-		if isBrightnessStatusPart(part) {
+		case isBrightnessStatusPart(part):
 			statusBrightnessRect = r
-		}
-		if isChipStatusPart(part) {
+		case isChipStatusPart(part):
 			// The now-playing chip is a header button: clicks land on the
 			// measured chip and the D-pad reaches it from the clock. The idle
 			// output chip is measured the same way so it draws in the same
@@ -1301,14 +1332,16 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			h.Items[HomeFocusNowPlaying] = item
 		}
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
-		x += w + sepW
 	}
+	// The clock is a button (the calendar) while it is drawn; the user may
+	// have hidden it (Edit Home → Top bar).
+	h.Focus.SetEnabled(HomeFocusClock, clockDrawn)
 	// The network meter, the Bluetooth rune, the speaker and the sun are tap
 	// targets as well as readings, so grow their hit areas to finger size once
-	// the cluster is placed: the meter stops short of the forecast and the
-	// clock so their taps still belong to them, and each gap between two of the
-	// buttons is split.
-	growStatusButtonRects(header.H, weatherStatusRect, h.Items[HomeFocusClock].Rect)
+	// the bar is placed: none grows over another control (the forecast, the
+	// clock, the corner's buttons, wherever the user put them), and each gap
+	// between two of the buttons is split.
+	headerGrowStatusButtons(header.H)
 	// The meter is a button, not just a reading: the D-pad focuses the same
 	// grown hit area a fingertip taps, and the entry is disabled whenever the
 	// cluster had to drop the network slot for space.
@@ -1374,6 +1407,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, homeFocusRingWidth, ColorAccent)
 	}
+	// Edit Home's Top bar row rings the control its focus is on, here in the
+	// live bar (home_edit_header.go).
+	drawEditBarLiveRing(renderer)
 }
 
 // CardUnderTile returns the card sitting directly below a header tile: same
@@ -1760,14 +1796,15 @@ func homePressOffset(depth float64, layoutHeight int32) int32 {
 	return int32(math.Round(uiClamp01(depth) * float64(scaleY(3, layoutHeight))))
 }
 
-// scaleHomeCard grows a card by up to three pixels for the hover/focus lift.
+// scaleHomeCard grows a card by three pixels at rest, and by four for the
+// brief focus bounce.
 // The rect is only used for drawing; hit areas keep their settled geometry so
 // clicks land where the card actually is.
 func scaleHomeCard(rect sdl.Rect, lift float64) sdl.Rect {
 	if lift <= 0.01 {
 		return rect
 	}
-	grow := int32(math.Round(uiClamp01(lift) * 3))
+	grow := int32(math.Round(math.Min(lift, 1.3) * 3))
 	return sdl.Rect{X: rect.X - grow, Y: rect.Y - grow, W: rect.W + grow*2, H: rect.H + grow*2}
 }
 
@@ -1791,9 +1828,10 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	if art, _, _ := homePreviewTexture(renderer, state.Preview, item.Rect.W, item.Rect.H); art != nil {
 		_ = renderer.Copy(art, nil, &draw)
 		// A scrim from the middle down keeps the labels readable over any
-		// frame, the same ramp the ambient artwork uses.
-		fillVerticalScrim(renderer, draw, draw.Y+draw.H/3,
-			sdl.Color{R: 0, G: 0, B: 0, A: 0}, sdl.Color{R: 0, G: 0, B: 0, A: 215})
+		// frame, the same ramp the ambient artwork uses, in the theme's page
+		// colour so the theme's text colours read on it (continueScrim).
+		from, to := continueScrim(215)
+		fillVerticalScrim(renderer, draw, draw.Y+draw.H/3, from, to)
 	} else {
 		drawContinueThumb(renderer, draw)
 	}
@@ -1949,6 +1987,59 @@ type footerHint struct {
 	label  string
 }
 
+// Home paints its hint row every frame. Its text and button vocabulary change
+// only with focus, input device or settings, so keep the measured widths until
+// one of those inputs changes.
+var homeFooterWidthCache struct {
+	valid    bool
+	font     *ttf.Font
+	width    int32
+	height   int32
+	vocab    hintVocab
+	remap    *hintPadRemap
+	language string
+	hints    [len(homeFooterHintsStart)]footerHint
+	n        int
+	badgeW   [len(homeFooterHintsStart)]int32
+	groupW   [len(homeFooterHintsStart)]int32
+	total    int32
+}
+
+func homeFooterWidths(font *ttf.Font, hints []footerHint, width, height int32) (*[len(homeFooterHintsStart)]int32, *[len(homeFooterHintsStart)]int32, int32) {
+	c := &homeFooterWidthCache
+	vocab, remap, language := hintVocabNow(), hintRemapNow.Load(), uiLanguageCode()
+	if c.valid && c.font == font && c.width == width && c.height == height &&
+		c.vocab == vocab && c.remap == remap && c.language == language && c.n == len(hints) {
+		same := true
+		for i, hint := range hints {
+			if c.hints[i] != hint {
+				same = false
+				break
+			}
+		}
+		if same {
+			return &c.badgeW, &c.groupW, c.total
+		}
+	}
+	c.font, c.width, c.height = font, width, height
+	c.vocab, c.remap, c.language = vocab, remap, language
+	c.n, c.total = len(hints), 0
+	badgeD, itemGap := scaleY(22, height), scaleX(18, width)
+	for i, hint := range hints {
+		c.hints[i] = hint
+		bw, _ := measureText(font, homeHintKey(hint.button, hint.label))
+		lw, _ := measureText(font, hint.label)
+		c.badgeW[i] = max32(badgeD, bw+scaleX(12, width))
+		c.groupW[i] = c.badgeW[i] + scaleX(7, width) + lw
+		c.total += c.groupW[i]
+	}
+	if len(hints) > 1 {
+		c.total += itemGap * int32(len(hints)-1)
+	}
+	c.valid = font != nil
+	return &c.badgeW, &c.groupW, c.total
+}
+
 func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBack bool) {
 	// The footer is a 56px translucent band with rounded top corners, inset by
 	// the frame margin like every other row: the power button at its left end
@@ -2005,18 +2096,7 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	badgeGap := scaleX(7, h.Width)
 	fh := int32(fonts.Small.Height())
 
-	var badgeWs, groupWs [len(homeFooterHintsStart)]int32
-	total := int32(0)
-	for i, g := range hints {
-		bw, _ := measureText(fonts.Small, homeHintKey(g.button, g.label))
-		lw, _ := measureText(fonts.Small, g.label)
-		badgeWs[i] = max32(badgeD, bw+scaleX(12, h.Width))
-		groupWs[i] = badgeWs[i] + badgeGap + lw
-		total += groupWs[i]
-	}
-	if len(hints) > 1 {
-		total += itemGap * int32(len(hints)-1)
-	}
+	badgeWs, groupWs, total := homeFooterWidths(fonts.Small, hints, h.Width, h.Height)
 	// The hints must stay inside the band and clear of the power button at its
 	// left end: on a narrow canvas the least specific hint (the D-pad) is
 	// dropped first.

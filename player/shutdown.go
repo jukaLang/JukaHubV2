@@ -334,8 +334,10 @@ func runShutdownStepsUntil(steps []shutdownStep, track *stageTrack, frame func()
 
 // renderShutdownFrameAt draws one teardown frame. dissolve runs 0 → 1 at the
 // very end: the wordmark dissolves into the glass, the pane fades and the light
-// goes out to black.
-func renderShutdownFrameAt(renderer *sdl.Renderer, config *Config, snap *stageSnapshot, elapsedMS, dissolve float64, motion bool) {
+// goes out to black. farewell is the goodbye to the user by name ("" for none,
+// bootgreet.go); bye runs 0 → 1 over the held card, as the steps step back
+// and the farewell comes in.
+func renderShutdownFrameAt(renderer *sdl.Renderer, config *Config, snap *stageSnapshot, elapsedMS, dissolve float64, motion bool, farewell string, bye float64) {
 	if renderer == nil {
 		return
 	}
@@ -358,10 +360,16 @@ func renderShutdownFrameAt(renderer *sdl.Renderer, config *Config, snap *stageSn
 		motion:  motion,
 		footer:  "Shutting down safely",
 	}
+	if farewell != "" {
+		// The steps, the track and the footer step back for the farewell;
+		// the wordmark stays on the pane above it.
+		style.content *= 1 - bootSmoothstep(0, 0.45, bye)
+	}
 	if motion {
 		style.scale = 1 - 0.02*out
 	}
 	stageDrawCard(renderer, config, snap, style)
+	shutdownDrawFarewell(renderer, config, farewell, bye, dissolve, motion)
 	if veil := bootSmoothstep(0.55, 1, dissolve); veil > 0 {
 		renderer.SetDrawColor(0, 0, 0, uint8(255*veil))
 		bootLiquidR = sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}
@@ -431,6 +439,14 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	frameBudget := splashFrameBudget()
 	var snap stageSnapshot
 	lastFrame := time.Time{}
+	// With Settings → Your name set, the held card ends on a goodbye by name,
+	// held long enough to read (bootgreet.go).
+	farewell := shutdownFarewellText(bootGreetName(config))
+	hold := shutdownHoldMS
+	if farewell != "" {
+		hold = shutdownFarewellHoldMS
+	}
+	bye := 0.0
 	draw := func(dissolve float64) {
 		// Nothing is drawn while a game still owns the framebuffer: the card
 		// would only flicker against it. It appears once the child is gone.
@@ -438,7 +454,7 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 			return
 		}
 		track.snapshotInto(&snap)
-		renderShutdownFrameAt(renderer, config, &snap, float64(time.Since(start).Microseconds())/1000, dissolve, motion)
+		renderShutdownFrameAt(renderer, config, &snap, float64(time.Since(start).Microseconds())/1000, dissolve, motion, farewell, bye)
 		renderer.Present()
 	}
 	frame := func() {
@@ -460,10 +476,13 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 
 	// Hold the finished card, then dissolve, inside whatever is left of the
 	// budget.
-	holdEnd := time.Now().Add(time.Duration(shutdownHoldMS) * time.Millisecond)
+	holdStart := time.Now()
+	holdEnd := holdStart.Add(time.Duration(hold) * time.Millisecond)
 	for time.Now().Before(holdEnd) && time.Now().Before(deadline) {
+		bye = bootClamp01(float64(time.Since(holdStart).Milliseconds()) / hold)
 		frame()
 	}
+	bye = 1
 	dissolveStart := time.Now()
 	for time.Now().Before(deadline) {
 		d := float64(time.Since(dissolveStart).Milliseconds()) / shutdownDissolveMS

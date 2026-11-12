@@ -127,6 +127,8 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 			if it.System == androidLibrarySystem {
 				// An Android game's cover is named per APK (every phone APK is base.apk).
 				art = androidLibraryCoverPath(it.Path)
+			} else if it.System == html5LibrarySystem {
+				art = html5CoverPath(it.Path)
 			}
 			game := libraryGame{
 				Path:   it.Path,
@@ -270,7 +272,9 @@ func selectedLibraryGame() (libraryGame, bool) {
 }
 
 func scanGameLibrary() gameLibraryReport {
-	return buildGameLibrary(scanROMLibrary(romLibraryRoots()), libraryArtworkRoot())
+	lib := buildGameLibrary(scanROMLibrary(romLibraryRoots()), libraryArtworkRoot())
+	libraryAddHTML5Games(&lib, nil, html5LibraryRoots(), html5DataRoot())
+	return lib
 }
 
 func openGameLibraryPanel() {
@@ -358,6 +362,8 @@ func startGameLibraryScan() {
 	gameLib.scanning = true
 	invalidateGameLibrarySystemsCache()
 	roots := append([]string(nil), romLibraryRoots()...)
+	html5Roots := append([]string(nil), html5LibraryRoots()...)
+	html5DemoRoot := html5DataRoot()
 	artRoot := libraryArtworkRoot()
 	// Copy the playtime map on the render thread; the background build must not
 	// read it while the ticker is writing it. The snapshot is never nil, so the
@@ -371,6 +377,7 @@ func startGameLibraryScan() {
 		lib := buildGameLibraryWith(report, artRoot, seconds)
 		// The APK Store's Android games join as one more console (AND-16).
 		libraryAddAndroidGames(&lib, seconds)
+		libraryAddHTML5Games(&lib, seconds, html5Roots, html5DemoRoot)
 		tbxPost(func() {
 			if !applyGameLibraryScan(&gameLib, gen, lib, recentGames()) {
 				return
@@ -443,18 +450,18 @@ func gameLibraryStatus() string {
 		if games == 0 {
 			return "No match for \"" + query + "\" — press S to change it"
 		}
-		return pluralizeCount(games, "match", "matches") + " for \"" + query + "\" in " + pluralizeCount(systems, "console", "consoles")
+		return pluralizeCount(games, "match", "matches") + " for \"" + query + "\" in " + pluralizeCount(systems, "system", "systems")
 	}
 	if gameLib.lib.Total == 0 {
 		if len(gameLib.recents) > 0 {
 			return pluralizeCount(len(gameLib.recents), "recent game", "recent games") + " — no game folders found, Y rescans"
 		}
-		return "No games yet — copy them to the card's Roms folder, then press Y"
+		return "No games yet — copy ROMs or HTML5 games to the card, then press Y"
 	}
 	if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 && len(currentGameSystems()) == 0 {
 		return pluralizeCount(hidden, "hidden game", "hidden games") + " — Game options → Show hidden reveals them"
 	}
-	status := pluralizeCount(gameLib.lib.Total, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "console", "consoles")
+	status := pluralizeCount(gameLib.lib.Total, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "system", "systems")
 	status += " · " + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "% with covers"
 	// The clip count, from the same census the Settings row reads — the figure
 	// that matters most on this screen, because this is where the previews
@@ -1440,7 +1447,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	gameLib.gameHits = gameLib.gameHits[:0]
 	if !hasSystem || len(system.Games) == 0 {
 		message := "No games yet"
-		detail := "Put games in the Roms folder on the card, one folder per console (Roms/GBA, Roms/PS), then press Y to rescan."
+		detail := "Put ROMs in Roms/<system> or HTML5 games in Games/HTML5/<game>, then press Y to rescan."
 		if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 {
 			message = "All games are hidden"
 			detail = "Game options → Show hidden reveals them again."

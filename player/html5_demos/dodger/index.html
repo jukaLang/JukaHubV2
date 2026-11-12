@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Star Dodger</title>
+<style>
+  :root { color-scheme: dark; font: 600 16px system-ui, sans-serif; background: #090f20; color: #e5f0ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 16px; background: radial-gradient(circle at 50% 0%, #25375c, #090f20 68%); }
+  main { width: min(920px, 100%); text-align: center; }
+  header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  h1 { margin: 0; font-size: clamp(26px, 5vw, 42px); color: #82b9ff; }
+  .score { color: #b4c9e9; font-variant-numeric: tabular-nums; }
+  canvas { display: block; width: 100%; aspect-ratio: 16/9; border: 2px solid #496893; border-radius: 16px; background: #0b1630; box-shadow: 0 15px 60px #0008; touch-action: none; }
+  .controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 16px 0; }
+  button { min-width: 70px; min-height: 50px; border: 1px solid #6689bc; border-radius: 12px; background: #21385e; color: #e5f0ff; font: inherit; cursor: pointer; touch-action: none; }
+  button:active, button:focus-visible { background: #355d8f; outline: 2px solid #82b9ff; }
+  #start { padding: 0 24px; background: #275a82; }
+  .move { display: flex; gap: 6px; }
+  p { color: #b4c9e9; font-size: 14px; margin: 8px 0 0; }
+</style>
+<main>
+  <header><h1>Star Dodger</h1><div class="score">Stars <span id="score">0</span> · Shields <span id="lives">3</span></div></header>
+  <canvas id="game" width="960" height="540" aria-label="Spaceship dodging game board"></canvas>
+  <div class="controls"><button id="start">Start / Restart</button><div class="move"><button data-move="-1" aria-label="Move left">◀</button><button data-move="1" aria-label="Move right">▶</button></div></div>
+  <p>Arrow keys or A/D · Stick or D-pad · Drag the ship · Collect stars, dodge rocks</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const canvas=document.querySelector('#game'),ctx=canvas.getContext('2d');
+  const scoreEl=document.querySelector('#score'),livesEl=document.querySelector('#lives');
+  const W=960,H=540,shipY=465;
+  let ship=480,objects=[],stars=[],score=0,lives=3,running=false,ended=false,last=0,spawn=0,invincible=0,background=0;
+  const keys={left:false,right:false},touch={left:false,right:false};
+  for(let i=0;i<70;i++)stars.push({x:Math.random()*W,y:Math.random()*H,size:Math.random()*2+1});
+  function reset(){ship=480;objects=[];score=0;lives=3;running=true;ended=false;last=0;spawn=0;invincible=0;scoreEl.textContent='0';livesEl.textContent='3';}
+  function update(delta){
+    const dt=Math.min(40,delta),factor=dt/16.7,pad=Array.from(navigator.getGamepads?.()||[]).find(p=>p),axis=pad?.axes[0]||0;
+    const move=(keys.right||touch.right||pad?.buttons[15]?.pressed||axis>.3?1:0)-(keys.left||touch.left||pad?.buttons[14]?.pressed||axis<-.3?1:0);
+    ship=Math.max(28,Math.min(W-28,ship+move*8*factor));
+    background=(background+dt*.06)%H;
+    spawn+=dt;
+    const gap=Math.max(240,650-score*8);
+    if(spawn>gap){spawn=0;objects.push({x:30+Math.random()*(W-60),y:-30,speed:3+Math.random()*2+score*.03,star:Math.random()<.32,size:16+Math.random()*11});}
+    invincible=Math.max(0,invincible-dt);
+    for(const obj of objects){
+      obj.y+=obj.speed*factor;
+      if(Math.abs(obj.x-ship)<obj.size+23&&Math.abs(obj.y-shipY)<obj.size+24){
+        obj.y=H+100;
+        if(obj.star){score++;scoreEl.textContent=score;}
+        else if(invincible===0){lives--;livesEl.textContent=lives;invincible=1300;if(lives<=0){running=false;ended=true;}}
+      }
+    }
+    objects=objects.filter(o=>o.y<H+40);
+  }
+  function draw(){
+    ctx.fillStyle='#0b1630';ctx.fillRect(0,0,W,H);
+    for(const s of stars){ctx.fillStyle='#d7e9ff99';ctx.fillRect(s.x,(s.y+background)%H,s.size,s.size);}
+    for(const o of objects){
+      if(o.star){ctx.fillStyle='#ffe07a';ctx.shadowColor='#ffca4c';ctx.shadowBlur=17;ctx.beginPath();for(let i=0;i<10;i++){const a=i*Math.PI/5-Math.PI/2,r=i%2?o.size*.45:o.size,px=o.x+Math.cos(a)*r,py=o.y+Math.sin(a)*r;i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.closePath();ctx.fill();ctx.shadowBlur=0;}
+      else {ctx.fillStyle='#a26883';ctx.beginPath();ctx.arc(o.x,o.y,o.size,0,Math.PI*2);ctx.fill();ctx.fillStyle='#d2939b';ctx.beginPath();ctx.arc(o.x-6,o.y-6,o.size*.24,0,Math.PI*2);ctx.fill();}
+    }
+    if(!invincible||Math.floor(invincible/100)%2===0){ctx.fillStyle='#82b9ff';ctx.beginPath();ctx.moveTo(ship,shipY-29);ctx.lineTo(ship-25,shipY+24);ctx.lineTo(ship,shipY+13);ctx.lineTo(ship+25,shipY+24);ctx.closePath();ctx.fill();ctx.fillStyle='#f7bd76';ctx.fillRect(ship-5,shipY+18,10,14);}
+    if(!running){ctx.fillStyle='#071124d9';ctx.fillRect(0,0,W,H);ctx.textAlign='center';ctx.fillStyle='#e5f0ff';ctx.font='bold 48px system-ui';ctx.fillText(ended?'Out of shields':'Star Dodger',W/2,255);ctx.font='24px system-ui';ctx.fillText('Press Start, Enter, or gamepad A',W/2,304);}
+  }
+  function frame(now){const pad=Array.from(navigator.getGamepads?.()||[]).find(p=>p);if(!running&&(pad?.buttons[0]?.pressed||pad?.buttons[9]?.pressed))reset();if(running)update(last?now-last:16.7);last=now;draw();requestAnimationFrame(frame);}
+  window.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','a','d',' ','Enter'].includes(e.key))e.preventDefault();if(e.key==='ArrowLeft'||e.key==='a')keys.left=true;if(e.key==='ArrowRight'||e.key==='d')keys.right=true;if((e.key===' '||e.key==='Enter')&&!running)reset();});
+  window.addEventListener('keyup',e=>{if(e.key==='ArrowLeft'||e.key==='a')keys.left=false;if(e.key==='ArrowRight'||e.key==='d')keys.right=false;});
+  canvas.addEventListener('pointermove',e=>{if(e.buttons||e.pointerType==='touch'){const r=canvas.getBoundingClientRect();ship=Math.max(28,Math.min(W-28,(e.clientX-r.left)*W/r.width));}});
+  document.querySelectorAll('[data-move]').forEach(b=>{const side=b.dataset.move==='-1'?'left':'right';b.addEventListener('pointerdown',e=>{e.preventDefault();touch[side]=true;b.setPointerCapture(e.pointerId);});b.addEventListener('pointerup',()=>touch[side]=false);b.addEventListener('pointercancel',()=>touch[side]=false);});
+  document.querySelector('#start').addEventListener('click',reset);
+  draw();requestAnimationFrame(frame);
+})();
+</script>
+</html>

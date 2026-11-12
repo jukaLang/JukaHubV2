@@ -690,6 +690,7 @@ func (r *bootOSRun) drawArrival(ms, am float64) {
 	} else {
 		r.drawWord(&f, out)
 	}
+	r.drawGreeting(&f, out)
 	r.drawProgress(f.track*(1-bootSmoothstep(0, b.progressOut, am)), f.dawn)
 }
 

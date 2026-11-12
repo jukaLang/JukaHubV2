@@ -46,8 +46,8 @@ const (
 	// band above ends at y=149 (headerQRRect keeps that gap free).
 	homeDynClipPad     int32 = 11
 	homeDynClipPadEdit int32 = 16
-	// homeDynEaseRate is the share of the remaining distance an animation
-	// covers per 60 Hz frame — uiHover's settle.
+	// homeDynEaseRate is the share of the remaining distance a tile or the
+	// carousel covers per 60 Hz frame.
 	homeDynEaseRate = 0.28
 	// homeDynAppsRefreshMS is how often app tiles re-read the Start menu: a
 	// plugin switched on or off changes what an app tile can open.
@@ -114,9 +114,12 @@ type homeDyn struct {
 	// baseOrder is Order as the standard layouts have it, kept so leaving a
 	// dynamic layout puts it back exactly.
 	baseOrder []HomeFocusID
-	// first is the first grid row the body shows; scroll eases toward it.
-	first  int
-	scroll float64
+	// first is the first grid row the body shows; scroll settles just past it.
+	first        int
+	scroll       float64
+	scrollFrom   float64
+	scrollTarget float64
+	scrollEnter  uiEnter
 	// carIdx is the carousel's focused card; carPos eases toward it along
 	// the shorter way round.
 	carIdx int
@@ -456,6 +459,18 @@ func homeDynEase(cur, target, dtMS float64) float64 {
 	return cur + (target-cur)*k
 }
 
+// homeDynScrollAt gives a row scroll a small settle past its destination.
+// Even a jump across many rows can overshoot by no more than three pixels.
+func homeDynScrollAt(from, target, progress float64) float64 {
+	weight := uiScrollBounce.at(progress)
+	delta := target - from
+	if weight <= 1 {
+		return from + delta*weight
+	}
+	over := math.Min(math.Abs(delta)*(weight-1), 3/float64(homeDynPitch))
+	return target + math.Copysign(over, delta)
+}
+
 // dynStep advances the animations to now. With motion off everything snaps.
 func (h *HomeLayout) dynStep(now uint64) {
 	d := &h.dyn
@@ -496,7 +511,23 @@ func (h *HomeLayout) dynStep(now uint64) {
 		t.x = settle(t.x, tx, 0.5)
 		t.y = settle(t.y, ty, 0.5)
 	}
-	d.scroll = settle(d.scroll, float64(d.first), 0.004)
+	scrollTarget := float64(d.first)
+	if snap {
+		d.scroll = scrollTarget
+		d.scrollFrom, d.scrollTarget = scrollTarget, scrollTarget
+		d.scrollEnter.cancel()
+	} else {
+		if d.scrollTarget != scrollTarget {
+			d.scrollFrom, d.scrollTarget = d.scroll, scrollTarget
+			d.scrollEnter.begin(now, uiScrollBounceMS)
+		}
+		if d.scrollEnter.active {
+			d.scroll = homeDynScrollAt(d.scrollFrom, d.scrollTarget, d.scrollEnter.progress(now))
+			moving = moving || d.scrollEnter.active
+		} else {
+			d.scroll = scrollTarget
+		}
+	}
 	// The carousel: the shorter way round, then back into [0, n).
 	if n := len(d.tiles); n > 0 {
 		target := d.carPos + homeCarouselWrap(float64(d.carIdx)-d.carPos, n)
@@ -511,7 +542,7 @@ func (h *HomeLayout) dynStep(now uint64) {
 	// report the animation as finished.
 	if snap {
 		d.anim = false
-	} else if dt > 0 {
+	} else if dt > 0 || d.scrollEnter.active {
 		d.anim = moving
 	}
 }
@@ -519,7 +550,8 @@ func (h *HomeLayout) dynStep(now uint64) {
 // homeLayoutAnimating reports whether Home's dynamic body is still moving,
 // so the frame rate stays at its interactive cadence until it settles.
 func homeLayoutAnimating() bool {
-	return homeLayoutActive && homeLayout != nil && homeLayout.dyn.active && homeLayout.dyn.anim
+	return homeLayoutActive && homeLayout != nil &&
+		(homeLayout.focusEnter.active || (homeLayout.dyn.active && homeLayout.dyn.anim))
 }
 
 // dynClampScroll keeps the first shown row inside the grid.
@@ -1007,8 +1039,9 @@ func (h *HomeLayout) dynRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 	if renderer == nil || !h.dynActive() {
 		return
 	}
-	if homeEdit.open && homeEdit.strip {
-		// The strip has the focus: no tile wears the ring.
+	if homeEdit.open && (homeEdit.strip || homeEditBar.open) {
+		// The strip (or its Top bar row) has the focus: no tile wears the
+		// ring.
 		focused = ""
 	}
 	if h.dynCarousel() {
@@ -1112,7 +1145,7 @@ func (h *HomeLayout) dynPaintTile(renderer *sdl.Renderer, fonts HomeFonts, data 
 		h.drawEditAddTile(renderer, fonts, item, draw, focused, pressed)
 	}
 	if homeEdit.open && t.Kind != homeTileAdd {
-		h.drawEditBadges(renderer, fonts, t, draw, !h.dynCarousel() && focused && !homeEdit.strip)
+		h.drawEditBadges(renderer, fonts, t, draw, !h.dynCarousel() && focused && !homeEdit.strip && !homeEditBar.open)
 	}
 }
 

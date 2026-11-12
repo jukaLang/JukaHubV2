@@ -7,7 +7,7 @@ package main
 // The store is the front door: it finds the APKs on the card (and the ones a
 // phone sends), says plainly what each one is and whether it can run here, adds
 // the ones worth trying to the game profiles in one press, and plays them
-// through the same launch path. Its three tabs:
+// through the same launch path. Its four tabs:
 //
 //   - Your APKs: every APK found, with a verdict (apkstore_verdict.go) — "Native
 //     game — try it", "Minecraft class pack", "May not run", "Needs Android's
@@ -15,6 +15,8 @@ package main
 //   - Store: a short, honest catalogue (apkstore_catalog.go) of titles and
 //     kinds of APK, where to get them legally and the route that works when
 //     AndroidRT cannot.
+//   - F-Droid: its signed repository index, searchable here; downloads are
+//     checked and only compatible native APKs are added to Games.
 //   - Runtime: whether AndroidRT is installed, whether this machine can run it,
 //     and whether a real Android (Waydroid) is there to install APKs into.
 //
@@ -51,11 +53,12 @@ const (
 const (
 	apkTabMine = iota
 	apkTabStore
+	apkTabFDroid
 	apkTabRuntime
 	apkTabCount
 )
 
-var apkStoreTabNames = [apkTabCount]string{"Your APKs", "Store", "Runtime"}
+var apkStoreTabNames = [apkTabCount]string{"Your APKs", "Store", "F-Droid", "Runtime"}
 
 // apkStoreUIState is the screen's state; render-thread only (goroutines post
 // their results through tbxPost).
@@ -78,8 +81,19 @@ type apkStoreUIState struct {
 	waydroid apkStoreWaydroid
 	probed   bool
 
-	catalog    apkStoreCatalogData
-	catalogSrc string
+	catalog                    apkStoreCatalogData
+	catalogSrc                 string
+	fdroid                     fdroidCatalog
+	fdroidReady, fdroidLoading bool
+	fdroidGen                  int
+	fdroidError                string
+	fdroidQuery                string
+	fdroidGamesOnly            bool
+	fdroidPage                 int
+	fdroidMatches              []int
+	fdroidMatchQuery           string
+	fdroidMatchSHA             string
+	fdroidMatchGamesOnly       bool
 
 	// busy names work in flight by APK path or catalogue id ("Installing…").
 	busy map[string]string
@@ -199,6 +213,8 @@ func init() { registerScene(apkStoreScene{sceneBase{name: apkStoreSceneName}}) }
 // catalogue's first read touches the disk, which a frame must not wait for).
 func apkStoreEnter() {
 	apkStoreDropIcons()
+	apkStoreUI.fdroidGen++
+	apkStoreUI.fdroidLoading = false
 	apkStoreUI.nav.scroll = 0
 	apkStoreUI.nav.focus = "tab" + strconv.Itoa(apkStoreUI.tab)
 	apkStoreStartScan()
@@ -208,6 +224,9 @@ func apkStoreEnter() {
 		apkStoreUI.catalog, apkStoreUI.catalogSrc = apkStoreCatalog()
 		apkStoreRebuildText()
 		return
+	}
+	if apkStoreUI.tab == apkTabFDroid {
+		apkStoreStartFDroid(false)
 	}
 	runSceneTask(func(ctx context.Context) {
 		data, src := apkStoreCatalog()
@@ -378,6 +397,9 @@ func apkStoreSwitchTab(i int) {
 	if i == apkTabRuntime {
 		apkStoreMaybeCheckUpdate()
 	}
+	if i == apkTabFDroid && !apkStoreUI.fdroidLoading {
+		apkStoreStartFDroid(false)
+	}
 }
 
 // apkStoreMaybeCheckUpdate asks, in the background, whether a newer AndroidRT
@@ -435,7 +457,7 @@ func apkStoreOfferRuntime(config *Config, title, what string, then func()) {
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title: "AndroidRT is not installed", subtitle: title, icon: "chip",
-		body: title + " runs on AndroidRT, the runtime JukaHub uses for Android games, and this device does not " +
+		body: title + " may run on AndroidRT, the runtime JukaHub uses for native Android apps and games, and this device does not " +
 			"have it yet. JukaHub can install it now from its own GitHub releases: a few MB, checked against the " +
 			"release before it is used. The install bar shows its progress; the Runtime tab's AndroidRT row can " +
 			"stop it.",
@@ -469,12 +491,14 @@ func apkStoreOnAction(config *Config, act tbxAction) bool {
 			return true
 		}
 		if i, ok := apkStoreRowIndex(nav.focus, "cat"); ok {
-			apkStoreOpenCatalogEntry(config, apkStoreUI.catalog.Entries[i])
+			apkStoreOpenCatalogEntry(config, apkStoreEntries(apkStoreUI.catalog.Entries, apkStoreUI.apks)[i])
 			return true
 		}
 		return true
 	case tbxActY:
-		if !apkStoreUI.scanning {
+		if apkStoreUI.tab == apkTabFDroid {
+			apkStoreStartFDroid(true)
+		} else if !apkStoreUI.scanning {
 			PlayActivateSound()
 			apkStoreStartScan()
 		}
@@ -506,7 +530,9 @@ func apkStoreRowIndex(id, prefix string) (int, bool) {
 	case "apk":
 		return i, i < len(apkStoreUI.apks)
 	case "cat":
-		return i, i < len(apkStoreUI.catalog.Entries)
+		return i, i < len(apkStoreEntries(apkStoreUI.catalog.Entries, apkStoreUI.apks))
+	case "fd":
+		return i, i < len(apkStoreFDroidPage())
 	}
 	return 0, false
 }
@@ -522,6 +548,10 @@ func apkStoreActivate(config *Config, id string) {
 		}
 		return
 	case id == "rescan":
+		if apkStoreUI.tab == apkTabFDroid {
+			apkStoreStartFDroid(true)
+			return
+		}
 		// The button is drawn disabled while a scan runs; A on it then does
 		// nothing rather than starting a second walk of the card.
 		if !apkStoreUI.scanning {
@@ -545,13 +575,39 @@ func apkStoreActivate(config *Config, id string) {
 	case id == "rt-about":
 		apkStoreOpenAboutSheet(config)
 		return
+	case id == "fd-search":
+		apkStoreFDroidSearchKeyboard()
+		return
+	case id == "fd-filter":
+		apkStoreUI.fdroidGamesOnly = !apkStoreUI.fdroidGamesOnly
+		apkStoreUI.fdroidPage = 0
+		apkStoreUI.nav.scroll = 0
+		return
+	case id == "fd-prev":
+		if apkStoreUI.fdroidPage > 0 {
+			apkStoreUI.fdroidPage--
+			apkStoreUI.nav.scroll = 0
+			apkStoreUI.nav.focus = "fd0"
+		}
+		return
+	case id == "fd-next":
+		if (apkStoreUI.fdroidPage+1)*fdroidPageSize < len(apkStoreFDroidMatches()) {
+			apkStoreUI.fdroidPage++
+			apkStoreUI.nav.scroll = 0
+			apkStoreUI.nav.focus = "fd0"
+		}
+		return
 	}
 	if i, ok := apkStoreRowIndex(id, "apk"); ok {
 		apkStoreOpenAPK(config, apkStoreUI.apks[i])
 		return
 	}
 	if i, ok := apkStoreRowIndex(id, "cat"); ok {
-		apkStoreOpenCatalogEntry(config, apkStoreUI.catalog.Entries[i])
+		apkStoreOpenCatalogEntry(config, apkStoreEntries(apkStoreUI.catalog.Entries, apkStoreUI.apks)[i])
+		return
+	}
+	if i, ok := apkStoreRowIndex(id, "fd"); ok {
+		apkStoreOpenFDroidEntry(config, apkStoreFDroidPage()[i])
 	}
 }
 
@@ -607,16 +663,20 @@ func apkStoreFooterHints(config *Config) []FooterHint {
 		hints = append(hints, FooterHint{Button: "A", Label: "Rescan"})
 	case strings.HasPrefix(focus, "apk"):
 		hints = append(hints, FooterHint{Button: "A", Label: "Options"}, FooterHint{Button: "X", Label: "Details"})
-	case strings.HasPrefix(focus, "cat"), strings.HasPrefix(focus, "rt-"):
+	case strings.HasPrefix(focus, "cat"), strings.HasPrefix(focus, "rt-"), strings.HasPrefix(focus, "fd"):
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
 	}
 	hints = append(hints, FooterHint{Button: "B", Label: "Back"})
 	if pkgHubEnabled() && pkgStores.leftFor && pkgStores.leftScene == "Packages" {
 		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Stores"})
 	}
-	if !apkStoreUI.scanning {
+	if apkStoreUI.tab == apkTabFDroid || !apkStoreUI.scanning {
 		// Y does nothing while a scan runs, so it is not offered then.
-		hints = append(hints, FooterHint{Button: "Y", Label: "Rescan"})
+		label := "Rescan"
+		if apkStoreUI.tab == apkTabFDroid {
+			label = "Refresh"
+		}
+		hints = append(hints, FooterHint{Button: "Y", Label: label})
 	}
 	return append(hints, FooterHint{Button: "L1/R1", Label: "Tabs"})
 }
@@ -629,15 +689,15 @@ func apkStoreCanPlay() (bool, string) {
 	rt := apkStoreUI.runtime
 	switch {
 	case !rt.canRun && IsWindows():
-		return false, "Android games run on the handheld: AndroidRT is a Linux arm64 runtime, so this PC can check " +
+		return false, "Android apps and games run on the handheld: AndroidRT is a Linux arm64 runtime, so this PC can check " +
 			"APKs but not play them."
 	case !rt.canRun:
 		return false, "AndroidRT runs on arm64 Linux (the handheld); this machine is " + rt.host + "."
 	case rt.dir == "" && androidRTInstalling():
-		return false, "AndroidRT, the runtime these games run on, is being installed right now: the install bar shows " +
+		return false, "AndroidRT, the runtime these apps and games run on, is being installed right now: the install bar shows " +
 			"its progress, and Play works once it is done."
 	case rt.dir == "":
-		return false, "AndroidRT, the runtime these games run on, is not installed yet: JukaHub can install it from " +
+		return false, "AndroidRT, the runtime these apps and games run on, is not installed yet: JukaHub can install it from " +
 			"its own releases (Runtime tab)."
 	case rt.err != "":
 		return false, "AndroidRT at " + rt.dir + " is incomplete: " + rt.err + "."
@@ -697,9 +757,9 @@ func apkStoreAddOrOffer(config *Config, info apkStoreInfo) {
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title: "Add " + info.Label + " to Games", subtitle: "AndroidRT is not installed yet", icon: "chip",
-		body: info.Label + " will run on AndroidRT, the runtime JukaHub uses for Android games, and this device " +
+		body: info.Label + " can try AndroidRT, the runtime JukaHub uses for native Android apps and games. This device " +
 			"does not have it yet. JukaHub can install it from its own GitHub releases (a few MB, checked against the " +
-			"release before it is used) and add the game. Adding it alone is fine too: it is ready the moment " +
+			"release before it is used) and add the APK. Adding it alone is fine too: it is ready the moment " +
 			"AndroidRT is.",
 		buttons: []tbxSheetButton{
 			{label: "Just add", run: func() { apkStoreAdd(config, info) }},
@@ -1244,6 +1304,10 @@ func apkStoreCatalogStatusLabel(status string) (string, tbxTone) {
 // apkStoreOpenCatalogEntry is A on a Store row.
 func apkStoreOpenCatalogEntry(config *Config, e apkStoreCatalogEntry) {
 	status, _ := apkStoreCatalogStatusLabel(e.Status)
+	local := apkStoreCatalogMatchOnCard(e, apkStoreUI.apks, apkStoreUI.games)
+	if local.Found && !local.Info.Tier.canAdd() && e.Status != apkStatusWontRun {
+		status = local.Info.Tier.pill()
+	}
 	var b strings.Builder
 	b.WriteString(e.Summary)
 	if e.Get != "" {
@@ -1276,15 +1340,39 @@ func apkStoreOpenCatalogEntry(config *Config, e apkStoreCatalogEntry) {
 			}
 		}
 		focus = len(buttons) - 1
-	} else if e.downloadable() {
-		b.WriteString("\n\nThe APK is checked against its SHA-256 before it is kept (" + humanBytes(e.Size) + ").")
-		if e.installable() && androidRTSupported() {
-			b.WriteString(" Its package and native ARM64 entry are checked before it is added to Games. This does not guarantee the app will run: AndroidRT is experimental.")
-			buttons = append(buttons, tbxSheetButton{label: "Install", primary: true, run: func() { apkStoreInstallEntry(e) }})
-		} else {
-			buttons = append(buttons, tbxSheetButton{label: "Download", primary: true, run: func() { apkStoreDownloadEntry(e) }})
+	} else {
+		if local.Found {
+			b.WriteString("\n\n## On your card\n" + filepath.Base(local.Info.Path) + ": " + local.Info.Verdict + ". " + local.Info.Why)
+			buttons = append(buttons, tbxSheetButton{label: "Open local APK", run: func() { apkStoreOpenAPK(config, local.Info) }})
+			if e.Status != apkStatusWontRun && local.Info.Tier.canAdd() {
+				if local.InGames {
+					b.WriteString("\n\nThis copy is already in Games.")
+					if canPlay, why := apkStoreCanPlay(); canPlay {
+						buttons = append(buttons, tbxSheetButton{label: "Run local APK", primary: true, run: func() { apkStorePlay(config, local.Info) }})
+					} else {
+						b.WriteString("\n\n" + why)
+					}
+				} else {
+					buttons = append(buttons, tbxSheetButton{label: "Add local APK", primary: true, run: func() { apkStoreAddOrOffer(config, local.Info) }})
+				}
+			}
 		}
-		focus = len(buttons) - 1
+		if e.downloadable() {
+			b.WriteString("\n\nThe publisher's APK is checked against its SHA-256 before it is kept (" + humanBytes(e.Size) + ").")
+			if e.installable() && androidRTSupported() {
+				b.WriteString(" Its package and native ARM64 entry are checked before it is added to Games. This does not guarantee the app will run: AndroidRT is experimental.")
+				buttons = append(buttons, tbxSheetButton{label: "Install verified APK", primary: !local.Found, run: func() { apkStoreInstallEntry(e) }})
+			} else {
+				buttons = append(buttons, tbxSheetButton{label: "Download", primary: !local.Found, run: func() { apkStoreDownloadEntry(e) }})
+			}
+		} else if e.Kind == "title" && e.Status == apkStatusExperimental && !local.Found {
+			b.WriteString("\n\nListed for reference. There is no verified Store download for this title yet.")
+		}
+		for i, button := range buttons {
+			if button.primary {
+				focus = i
+			}
+		}
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title:    e.Title,
@@ -1319,7 +1407,7 @@ func apkStoreRuntimeText(rt apkStoreRuntime) string {
 			"The package is checked against the release (its signed manifest, or GitHub's checksum) and its own " +
 			"checksum list, and its loader has to start on this device before it is kept.\n\n")
 	default:
-		b.WriteString("AndroidRT is an arm64 Linux runtime: Android games run on the handheld, and this machine reads " +
+		b.WriteString("AndroidRT is an arm64 Linux runtime: native Android apps and games run on the handheld, and this machine reads " +
 			"APKs only.\n\n")
 	}
 	if len(rt.skipped) > 0 {
@@ -1337,8 +1425,8 @@ func apkStoreRuntimeText(rt apkStoreRuntime) string {
 		"first; JUKAHUB_ANDROIDRT can point anywhere.\n\n" +
 		"## What it is\n" +
 		"AndroidRT loads an Android game's native library with its own bionic loader, answers the game's Java calls " +
-		"itself (it has no Java runtime), and draws through the firmware's own SDL2 and EGL. It is experimental: no " +
-		"game has been run on a handheld with it yet. docs/ANDROID.md has the details and the device-trial steps.")
+		"itself (it has no Java runtime), and draws through the firmware's own SDL2 and EGL. It is experimental: " +
+		"Penguin Dash has run on a Smart Pro; other games still need testing. docs/ANDROID.md has the details.")
 	return b.String()
 }
 
@@ -1402,7 +1490,7 @@ func apkStoreOpenWaydroidSheet(config *Config) {
 			"included, and opens from Waydroid's own window.")
 	} else {
 		b.WriteString(wd.reason + "\n\nWaydroid runs a whole Android in a container, which needs the binder kernel " +
-			"module. A stock TrimUI kernel has none, so on the handheld AndroidRT (native games only) is the route; " +
+			"module. A stock TrimUI kernel has none, so on the handheld AndroidRT (native apps and games) is the route; " +
 			"on a Linux machine with Waydroid set up, the store can install APKs into it.")
 	}
 	tbxOpenSheet(config, tbxSheetSpec{title: "Android container (Waydroid)", icon: "devices", body: b.String()})
@@ -1412,10 +1500,9 @@ func apkStoreOpenWaydroidSheet(config *Config) {
 func apkStoreOpenAboutSheet(config *Config) {
 	body := "An APK is a zip of Java bytecode, native libraries and resources. Running an ordinary app needs " +
 		"Android's runtime (ART) and framework — several hundred megabytes of RAM before the app starts, on a 1 GB " +
-		"handheld. AndroidRT takes the other road: it runs the native part of a game directly, and answers the few " +
-		"Java calls a native game makes itself.\n\n" +
-		"## Can run (experimental)\n" +
-		"• Games started by NativeActivity or GameActivity, built for 64-bit ARM (arm64-v8a)\n" +
+		"handheld. AndroidRT runs a native app or game directly and answers some Android and Java calls itself.\n\n" +
+		"## Can try (experimental)\n" +
+		"• Apps and games with a native entry started by NativeActivity or GameActivity, built for 64-bit ARM (arm64-v8a)\n" +
 		"• Minecraft: Bedrock Edition (64-bit), through its class pack\n\n" +
 		"## Cannot run\n" +
 		"• Java and Kotlin apps — almost every app on Android, including the ones that carry helper libraries\n" +
@@ -1443,6 +1530,9 @@ func apkStoreRebuildText() {
 	if ui.scanned {
 		ui.tabLabels[apkTabMine] += " · " + strconv.Itoa(len(ui.apks))
 	}
+	if ui.fdroidReady {
+		ui.tabLabels[apkTabFDroid] += " · " + strconv.Itoa(len(ui.fdroid.Apps))
+	}
 	ui.subs = ui.subs[:0]
 	for _, info := range ui.apks {
 		ui.subs = append(ui.subs, apkStoreRowSubtitle(info))
@@ -1454,7 +1544,7 @@ func apkStoreRebuildText() {
 	if src == "" {
 		src = "built in"
 	}
-	ui.catalogNote = "What is known about Android titles here, and where to get them legally. Catalogue: " + src + "."
+	ui.catalogNote = "Known native games and native APKs on your card are listed even when AndroidRT cannot add them. Catalogue: " + src + "."
 }
 
 // apkStoreHeaderStatus is the read-out opposite the title.

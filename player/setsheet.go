@@ -150,8 +150,11 @@ func setSheetPad(s *setSheetState, button uint8) {
 // setSheetMouse handles a click while the sheet is open: a row chooses, a
 // click outside the card closes, anything else on the card is ignored.
 func setSheetMouse(s *setSheetState, mx, my int32) {
+	// Only inside the list's view: a row scrolled half under the header keeps
+	// its full rect, so a click on the title chose a row the user could not see.
+	inView := pointInRect(mx, my, s.view)
 	for i, r := range s.rects {
-		if r.W > 0 && r.H > 0 && pointInRect(mx, my, r) {
+		if inView && r.W > 0 && r.H > 0 && pointInRect(mx, my, r) {
 			s.cursor = i
 			setSheetPick(s, i)
 			return

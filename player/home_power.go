@@ -24,6 +24,7 @@ package main
 // every button but Cancel waits out homePowerArmMS. A desktop keeps the two.
 
 import (
+	"math"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -63,6 +64,7 @@ var homePowerConfirm struct {
 	open     bool
 	focus    int
 	openedAt uint64
+	enter    uiEnter
 	// full is the handheld's card with Sleep, Restart and Power off, decided
 	// when the card opens.
 	full bool
@@ -86,6 +88,7 @@ func homePowerOpen() {
 	homePowerConfirm.full = devPowerSupported()
 	homePowerConfirm.focus = homePowerExit
 	homePowerConfirm.openedAt = sdl.GetTicks64()
+	homePowerConfirm.enter.begin(uiClockMS(), homePowerEnterMS)
 	homePowerConfirm.card = sdl.Rect{}
 	homePowerConfirm.btn = [homePowerButtons]sdl.Rect{}
 	homePowerConfirm.mouseX, homePowerConfirm.mouseY = mouseX, mouseY
@@ -124,6 +127,7 @@ func homePowerOpenFromKey(config *Config) bool {
 // homePowerClose dismisses the card without doing anything.
 func homePowerClose() {
 	homePowerConfirm.open = false
+	homePowerConfirm.enter.cancel()
 	homePowerConfirm.card = sdl.Rect{}
 	homePowerConfirm.btn = [homePowerButtons]sdl.Rect{}
 }
@@ -512,11 +516,14 @@ func renderHomePowerConfirm(renderer *sdl.Renderer, config *Config) {
 	}
 	card, btn := homePowerCardLayout(pill, screenWidth, screenHeight, c.full)
 
-	progress := 1.0
+	t := 1.0
 	if uiMotionEnabled(config) {
-		progress = uiEaseOutCubic(float64(sdl.GetTicks64()-c.openedAt) / homePowerEnterMS)
+		t = c.enter.progress(uiClockMS())
+	} else {
+		c.enter.cancel()
 	}
-	rise := int32((1 - progress) * float64(scaleY(10, screenHeight)))
+	progress := uiEaseOutCubic(t)
+	rise := int32(math.Round(uiPanelRise.at(t)))
 	card.Y += rise
 	for i := range btn {
 		if btn[i].W > 0 {

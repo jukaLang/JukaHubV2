@@ -322,9 +322,11 @@ var allowedPatchHosts = map[string]bool{
 	"objects.githubusercontent.com":        true,
 	"release-assets.githubusercontent.com": true,
 	"codeload.github.com":                  true,
+	// The APK Store verifies F-Droid's signed repository entry and each APK's
+	// SHA-256 before adding a native title to Games.
+	"f-droid.org": true,
 	// The libretro buildbot is where the aarch64 core builds come from
-	// (emulatorupdates.go). It is the only non-GitHub host: nothing else has a
-	// reason to be here, and it is still HTTPS-only.
+	// (emulatorupdates.go). Both non-GitHub hosts remain HTTPS-only.
 	"buildbot.libretro.com": true,
 }
 

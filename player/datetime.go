@@ -620,7 +620,9 @@ func dateTimeSettingsRows() []setRow {
 			// missing.)
 			ID: "clockSource", Label: "Set time automatically", Kind: setKindAction,
 			Detail: func(c *Config) string {
-				return clockLastSetDetail(c) + hintSentence(" · %s opens the date & time settings", "A", "Open")
+				// "its settings", as the zone row says: the longer wording ran
+				// past the row beside the "On · in Windows" value.
+				return clockLastSetDetail(c) + hintSentence(" · %s opens its settings", "A", "Open")
 			},
 			Visible: func(*Config) bool { return !clockSetSupported() },
 			Value: func(*Config) string {

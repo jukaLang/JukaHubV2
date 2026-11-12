@@ -98,12 +98,63 @@ const (
 )
 
 const (
+	// Auto keeps the reader's historic cover crop when no object-fit is
+	// declared; fill is an explicit author request to stretch.
+	webObjectFitAuto = iota
+	webObjectFitFill
+	webObjectFitContain
+	webObjectFitCover
+	webObjectFitNone
+	webObjectFitScaleDown
+)
+
+const (
+	webBorderSolid = iota
+	webBorderDashed
+	webBorderDotted
+	webBorderDouble
+	webBorderNone
+	webBorderHidden
+)
+
+const (
+	webDecorationSolid = iota
+	webDecorationDouble
+	webDecorationDotted
+	webDecorationDashed
+	webDecorationWavy
+)
+
+const (
+	webVerticalBaseline = iota
+	webVerticalMiddle
+	webVerticalTop
+	webVerticalBottom
+	webVerticalTextTop
+	webVerticalTextBottom
+	webVerticalLength
+)
+
+const (
 	webJustifyStart = iota
 	webJustifyCenter
 	webJustifyEnd
 	webJustifyBetween
 	webJustifyAround
 )
+
+const webMaxBackgroundLayers = 4
+
+// webBackgroundLayerStyle is one CSS background layer. Pointers keep the
+// style comparable, so runs can still merge on style equality.
+type webBackgroundLayerStyle struct {
+	Image       string
+	Gradient    *webGradient
+	HasGradient bool
+	Size        string
+	Position    string
+	Repeat      string
+}
 
 // webStyle is a resolved style for one element. Zero values are meaningful:
 // HasColor/HasBg distinguish "author asked for this" from "inherit".
@@ -112,6 +163,19 @@ type webStyle struct {
 	HasColor   bool
 	Background sdl.Color
 	HasBg      bool
+	// BackgroundImage is a resolved url() background. The layout carries a
+	// background layer into layout.Images so it paints under the text.
+	BackgroundImage string
+	// BackgroundSize keeps the raw CSS size; the layout resolves it against
+	// the padding box and the image's natural dimensions.
+	BackgroundSize     string
+	BackgroundPosition string
+	BackgroundRepeat   string
+	// BackgroundLayers holds the full comma-separated layer list in CSS order
+	// (first layer on top). The single fields above mirror layer zero for
+	// compatibility with code and tests that predate the layer list.
+	BackgroundLayers     [webMaxBackgroundLayers]webBackgroundLayerStyle
+	BackgroundLayerCount int
 	// Gradient is the ramp a background-image gradient resolved to. HasBg is
 	// still set (to the ramp's average) so contrast, fade and inheritance keep
 	// working with one colour; the ramp wins where the reader paints. It is a
@@ -128,10 +192,22 @@ type webStyle struct {
 	Align       int
 	Pre         bool
 	Hidden      bool
-	Indent      float64
-	TextIndent  float64
-	MarginTop   float64
-	MarginBot   float64
+	// Invisible is CSS visibility:hidden. Unlike Hidden (display:none or an
+	// aria-hidden helper), it keeps the element's box and text metrics in the
+	// flow and suppresses only the paint. It inherits, and visibility:visible
+	// on a descendant clears it.
+	Invisible bool
+	// VerticalAlign is the inline alignment mode and VerticalAlignPx its
+	// explicit length. The measured run carries the resulting pixel offset.
+	VerticalAlign   int
+	VerticalAlignPx float64
+	// OverflowX/Y: 0 visible, 1 hidden, 2 clip.
+	OverflowX  int
+	OverflowY  int
+	Indent     float64
+	TextIndent float64
+	MarginTop  float64
+	MarginBot  float64
 	// Transform is the author's text-transform (0 none, 1 uppercase,
 	// 2 lowercase, 3 capitalise). It is applied when a word is measured so
 	// the wrapped width matches the glyphs that get drawn.
@@ -145,6 +221,38 @@ type webStyle struct {
 	BorderBottom   bool
 	BorderColor    sdl.Color
 	HasBorderColor bool
+	// BorderStyle is the shared style for the border box and side bars;
+	// none/hidden suppress paint while keeping the width state.
+	BorderStyle int
+	// Outline is a separate box edge from the border, so outline-offset can
+	// move it without moving a border that shares the same element.
+	Outline       bool
+	OutlineOffset float64
+	// DecorationColor paints underlines and strikethroughs when the sheet
+	// sets text-decoration-color. HasDecorationColor keeps the text colour as
+	// the default, which is what a browser does.
+	DecorationColor    sdl.Color
+	HasDecorationColor bool
+	// DecorationThickness is a pixel line thickness for underlines and
+	// strikethroughs. Zero keeps the historical one-pixel line.
+	DecorationThickness float64
+	DecorationStyle     int
+	// TextShadow is one offset shadow behind the glyphs. Blur is not
+	// modelled; the offset and colour are, which is what makes a heading
+	// lift off a tinted hero. HasShadowColor distinguishes an author colour
+	// from currentColor.
+	HasTextShadow      bool
+	TextShadowX        float64
+	TextShadowY        float64
+	TextShadowColor    sdl.Color
+	HasTextShadowColor bool
+	// BoxShadow is the first outer shadow of a block. Inset shadows are not
+	// modelled; an outer offset still gives cards and menus their depth.
+	HasBoxShadow      bool
+	BoxShadowX        float64
+	BoxShadowY        float64
+	BoxShadowColor    sdl.Color
+	HasBoxShadowColor bool
 	// BorderWidth is the widest declared border in CSS px; 0 keeps the
 	// reader's own default (3 for a side bar, 2 for a rule or an outline).
 	// A card written as `border: 3px` used to draw 2px, which reads as a
@@ -159,6 +267,11 @@ type webStyle struct {
 	// row grid in charge. It inherits, so `body { line-height: 1.6 }` spaces
 	// every paragraph the way the design intended.
 	LineHeight float64
+	// LetterSpacing and WordSpacing are CSS px; 0 is normal. Both inherit,
+	// and both change wrapping because the measured word/space grows by the
+	// same amount that drawing advances by.
+	LetterSpacing float64
+	WordSpacing   float64
 	// Radius is border-radius in CSS px; 0 keeps the reader's crisp corners.
 	// A percentage (or a large value) is clamped to half the box at draw time.
 	Radius float64
@@ -186,23 +299,45 @@ type webStyle struct {
 	// repeat(auto-fit|auto-fill, minmax(Npx, 1fr)); 0 means the track count
 	// is explicit (or not a grid).
 	GridMin float64
-	// FlexGrow/Basis describe the element as a flex item. Basis is -1 when the
-	// author did not state one (auto), which is different from 0px.
-	FlexGrow  float64
-	FlexBasis float64
-	BasisPct  float64
+	// FlexGrow/Shrink/Basis describe the element as a flex item. Basis is -1
+	// when the author did not state one (auto), which is different from 0px.
+	FlexGrow   float64
+	FlexShrink float64
+	FlexBasis  float64
+	BasisPct   float64
 	// Order is the flex/grid `order` value; stable sorting keeps source order
 	// for equal values, as a browser does.
 	Order     int
 	AlignSelf int
 	// Width/WidthPct size a flex item explicitly, the way a card with
-	// `width: 33%` or `width: 240px` does.
-	Width    float64
-	WidthPct float64
-	Height   float64
+	// `width: 33%` or `width: 240px` does. On an ordinary block they bound
+	// the text measure and the painted box in layoutBlocks.
+	Width       float64
+	WidthPct    float64
+	Height      float64
+	MinWidth    float64
+	MaxWidth    float64
+	MinWidthPct float64
+	MaxWidthPct float64
+	MinHeight   float64
+	MaxHeight   float64
+	// BoxSizing is 1 for border-box: an explicit width includes the
+	// horizontal padding the parser folded into Indent/IndentRight.
+	BoxSizing int
+	// FloatSide is 0 none, 1 left, 2 right. Clear is 0 none, 1 left,
+	// 2 right, 3 both. These are per element and do not inherit.
+	FloatSide int
+	Clear     int
 	// AspectRatio is a CSS width/height ratio (16/9), used by replaced
 	// elements when the stylesheet supplies it.
 	AspectRatio float64
+	// ObjectFit controls how replaced content fills its box: 0 fill, 1 contain,
+	// 2 cover, 3 none, 4 scale-down. It is stored on the image box so paint can
+	// crop or letterbox without re-reading CSS.
+	ObjectFit int
+	// ObjectPosition is the raw object-position pair; the paint path resolves
+	// percentages and lengths against the fitted box.
+	ObjectPosition string
 	// ContainerType marks a CSS containment container: 0 normal, 1
 	// inline-size and 2 size. The parser uses the nearest one to resolve
 	// container-relative units in an image sizes attribute and to evaluate
@@ -231,6 +366,17 @@ type webStyle struct {
 	// instead of following anything. Deliberately not inherited from a parent:
 	// a control is one run, not a subtree.
 	Control *webControl
+	// Content is the cascaded value of the `content` property. It is only
+	// consulted on a generated box (::before, ::after, ::marker); ordinary
+	// elements keep it empty.
+	Content string
+	// CounterReset, CounterIncrement and CounterSet are the raw counter
+	// operations for this element. They are applied to the parser's counter
+	// scopes when the element opens, so `content: counter(...)` in the same
+	// element's ::before sees the new value.
+	CounterReset     string
+	CounterIncrement string
+	CounterSet       string
 	// Vars is the custom-property scope in force for this element. Every
 	// var() is already resolved by the time a style reaches a block, so this
 	// only carries inheritance down the parse; it stays a pointer so a
@@ -283,13 +429,18 @@ type webBlock struct {
 	// ContainerIDs lists the CSS containment containers enclosing this block,
 	// outermost first. It is the parse-time element ancestry, kept separately
 	// from the visual style so layout can find the nearest measured size.
-	ContainerIDs   []int
-	Align          int
-	Indent         float64
-	TextIndent     float64
-	MarginTop      float64
-	MarginBot      float64
-	Bullet         string
+	ContainerIDs []int
+	Align        int
+	Indent       float64
+	TextIndent   float64
+	MarginTop    float64
+	MarginBot    float64
+	Bullet       string
+	// MarkerStyle is the resolved ::marker style for this list item. Its
+	// colour and font size paint the bullet; HasMarkerStyle separates an
+	// author marker from the reader's default bullet.
+	MarkerStyle    webStyle
+	HasMarkerStyle bool
 	Pre            bool
 	HasBg          bool
 	Background     sdl.Color
@@ -303,6 +454,9 @@ type webBlock struct {
 	BorderColor    sdl.Color
 	HasBorderColor bool
 	BorderWidth    float64
+	BorderStyle    int
+	Outline        bool
+	OutlineOffset  float64
 	Rule           bool
 	// FlexGroup/FlexItem tie a block to its flex container and direct child.
 	// Zero means "not in a flex container". The container's own row settings
@@ -321,14 +475,15 @@ type webBlock struct {
 	// FlexTrail holds nested container memberships after the outermost one.
 	// Each sub-layout consumes one entry, so an inner row stays inside its
 	// parent card instead of being measured across the full page width.
-	FlexTrail []webFlexMembership
-	FlexGrow  float64
-	FlexBasis float64
-	BasisPct  float64
-	Order     int
-	Width     float64
-	WidthPct  float64
-	AlignSelf int
+	FlexTrail  []webFlexMembership
+	FlexGrow   float64
+	FlexShrink float64
+	FlexBasis  float64
+	BasisPct   float64
+	Order      int
+	Width      float64
+	WidthPct   float64
+	AlignSelf  int
 	// Float marks an absolutely or fixed-positioned block: it is measured on
 	// its own and painted over the flow in ZIndex order.
 	Float     bool
@@ -382,7 +537,7 @@ type webFlexMembership struct {
 	wrap                             bool
 	gridCols                         int
 	gridMin                          float64
-	grow, basis, basisPct            float64
+	grow, shrink, basis, basisPct    float64
 	order                            int
 	width, widthPct                  float64
 	alignSelf                        int
@@ -392,7 +547,7 @@ func webFlexMembershipFromFrame(f *webFlexFrame) webFlexMembership {
 	return webFlexMembership{
 		group: f.group, item: f.item, dir: f.dir, justify: f.justify, align: f.align,
 		gapX: f.gapX, gapY: f.gapY, wrap: f.wrap, gridCols: f.gridCols, gridMin: f.gridMin,
-		grow: f.itemStyle.FlexGrow, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
+		grow: f.itemStyle.FlexGrow, shrink: f.itemStyle.FlexShrink, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
 		order: f.itemStyle.Order, width: f.itemStyle.Width, widthPct: f.itemStyle.WidthPct, alignSelf: f.itemStyle.AlignSelf,
 	}
 }
@@ -401,7 +556,7 @@ func (b *webBlock) setFlexMembership(m webFlexMembership) {
 	b.FlexGroup, b.FlexItem = m.group, m.item
 	b.FlexDir, b.FlexJustify, b.FlexAlign = m.dir, m.justify, m.align
 	b.FlexGapX, b.FlexGapY, b.FlexWrap, b.GridCols, b.GridMin = m.gapX, m.gapY, m.wrap, m.gridCols, m.gridMin
-	b.FlexGrow, b.FlexBasis, b.BasisPct = m.grow, m.basis, m.basisPct
+	b.FlexGrow, b.FlexShrink, b.FlexBasis, b.BasisPct = m.grow, m.shrink, m.basis, m.basisPct
 	b.Order = m.order
 	b.Width, b.WidthPct, b.AlignSelf = m.width, m.widthPct, m.alignSelf
 }
@@ -472,6 +627,18 @@ type webRunPos struct {
 	Bold      bool
 	Underline bool
 	Strike    bool
+	// DecorationColor overrides the text colour for the underline and
+	// strikethrough; HasDecorationColor distinguishes an author colour from
+	// the default currentColor.
+	DecorationColor     sdl.Color
+	HasDecorationColor  bool
+	DecorationThickness int32
+	DecorationStyle     int
+	// Text shadow offsets and colour, resolved to layout pixels.
+	HasShadow        bool
+	ShadowX, ShadowY int32
+	ShadowColor      sdl.Color
+	HasShadowColor   bool
 	// Href is set when this run is part of a link, so the browser can outline
 	// and follow it without re-parsing the page.
 	Href string
@@ -480,8 +647,12 @@ type webRunPos struct {
 	HasBg bool
 	Bg    sdl.Color
 	// Control carries the form control this run draws, if any.
-	Control    *webControl
-	BoxW, BoxH int32
+	Control        *webControl
+	BoxW, BoxH     int32
+	Invisible      bool
+	VerticalOffset int32
+	Clip           sdl.Rect
+	HasClip        bool
 }
 
 // webRow is one line slot in the uniform layout grid. Tall lines (headings)
@@ -498,6 +669,11 @@ type webRect struct {
 	Color     sdl.Color
 	Stroke    bool
 	Thickness int32
+	// BorderStyle selects solid, dashed, dotted or double geometry for a
+	// border/outline rect. The zero value is solid.
+	BorderStyle int
+	Clip        sdl.Rect
+	HasClip     bool
 	// Gradient paints this rect as a ramp instead of a flat fill; Color is then
 	// the average, used for the corner rounding and as the fallback.
 	Gradient    webGradient
@@ -524,10 +700,14 @@ type webFloat struct {
 
 // webLayout is the measured page for one width and font configuration.
 type webLayout struct {
-	Rows   []webRow
-	Rects  []webRect
-	RowH   int32
-	Height int32
+	Rows  []webRow
+	Rects []webRect
+	// Backgrounds paint in CSS order beneath borders and content: the block
+	// colour first, then background layers bottom-to-top. Keeping layers in
+	// one list lets image and gradient layers interleave correctly.
+	Backgrounds []webBackgroundPaint
+	RowH        int32
+	Height      int32
 	// ContainerSizes holds the used border-box size of each containment
 	// container, in CSS px, measured by this layout. Container units in the
 	// next pass resolve against these numbers.
@@ -544,6 +724,19 @@ type webLayout struct {
 	// Videos are the reader's <video>/embed play cards, in the same layout-
 	// local coordinates. They draw right after the images, before the text.
 	Videos []webVideoPos
+}
+
+type webBackgroundPaint struct {
+	Rect           sdl.Rect
+	Color          sdl.Color
+	Gradient       webGradient
+	HasGradient    bool
+	Image          string
+	ObjectFit      int
+	ObjectPosition string
+	Opacity        float64
+	Radius         int32
+	Z              int
 }
 
 // webLinkHit is one link on a laid-out page: the row it starts on and its
@@ -739,6 +932,11 @@ type webFrame struct {
 	el    webElement
 	style webStyle
 	kind  string // "block", "inline", "list", "skip"
+	// attrs and counterResets are kept for the closing tag: ::after resolves
+	// with the counters its children produced, and a counter-reset scope ends
+	// with the element that opened it.
+	attrs         string
+	counterResets []string
 	// flexGroup is non-zero when this element opened a flex container. The
 	// matching frame is popped when the element closes.
 	flexGroup int
@@ -2065,8 +2263,8 @@ func webSupportsCSSWideKeyword(value string) bool {
 	return false
 }
 
-// webUnprefixedValueAlias maps the vendor-prefixed value spellings Chromium
-// accepts to the standard value the reader implements. It only handles values
+// webUnprefixedValueAlias maps the vendor-prefixed value spellings browsers
+// shipped to the standard value the reader implements. It only handles values
 // with a known equivalent; anything else is left for the normal grammar check
 // to reject.
 func webUnprefixedValueAlias(name, value string) (string, bool) {
@@ -2083,10 +2281,6 @@ func webUnprefixedValueAlias(name, value string) (string, bool) {
 			return "flex", true
 		case "-webkit-inline-box":
 			return "inline-flex", true
-		}
-	case "position":
-		if lower == "-webkit-sticky" {
-			return "sticky", true
 		}
 	case "background", "background-image":
 		for _, function := range []string{
@@ -2347,11 +2541,15 @@ func webSupportsBackground(value string) bool {
 	if _, ok := webParseGradient(value); ok {
 		return true
 	}
-	// Radial, conic and repeating gradients are painted as their averaged
-	// colour by the reader, so they are supported even though they are not a
-	// linear ramp.
-	_, ok := webGradientColor(value)
-	return ok
+	// The WebKit radial aliases normalize to these unprefixed forms. The
+	// reader paints them as their averaged colour, so they are supported even
+	// though they are not a linear ramp. Conic gradients are deliberately not
+	// accepted: no prefixed conic alias is supported by Chromium.
+	if strings.Contains(lower, "radial-gradient(") {
+		_, ok := webGradientColor(value)
+		return ok
+	}
+	return false
 }
 
 func webSupportsBorder(value string) bool {
@@ -3339,10 +3537,10 @@ func (p *webCalcParser) functionFactor() (value webCalcValue, ok, handled bool) 
 //
 // Selectors are compiled once, when a sheet is parsed, and matched against the
 // chain of open elements: outermost first, the element being styled last. The
-// streaming parser keeps no DOM, so a few selectors cannot be decided from a
-// start tag — those that depend on a later sibling (:last-child), on the
-// element's content (:empty, :has()) or on the previous sibling (+, ~). They
-// answer "maybe".
+// streaming parser keeps no DOM, but rules that need sibling structure
+// (:first-child, :last-child, :nth-child and :has()) get a small selector tree
+// built ahead of the walk. Selectors that still depend on content the parser
+// has not reached (:empty) or on the previous sibling (+, ~) answer "maybe".
 //
 // The matcher used to assume that every attribute selector and every pseudo
 // held. That was harmless for a colour and fatal for display:none: a reset
@@ -3389,11 +3587,25 @@ type webSelector struct {
 	// compounds run left to right; compounds[i].comb joins compounds[i] to
 	// compounds[i-1].
 	compounds []webSelCompound
+	// pseudo names the generated box this selector targets: before, after or
+	// marker. Zero means an ordinary element selector. A rule for a generated
+	// box never styles the originating element itself.
+	pseudo uint8
 	// never marks a selector that cannot match an element: one aimed at a
-	// pseudo-element (its declarations style a generated box such as ::before,
-	// never the element) or one that does not parse, which a browser drops too.
+	// pseudo-element the reader does not generate, or one that does not parse,
+	// which a browser drops too.
 	never bool
 }
+
+// Generated boxes the reader knows how to lay out. Other pseudo-elements
+// (::first-line, ::first-letter, ::selection, form-control parts) still mark
+// their selector never, so their declarations cannot leak onto the element.
+const (
+	webPseudoElemNone uint8 = iota
+	webPseudoElemBefore
+	webPseudoElemAfter
+	webPseudoElemMarker
+)
 
 // webSelCompound is one compound selector, such as `div.note[data-x]:hover`.
 type webSelCompound struct {
@@ -3411,6 +3623,8 @@ type webSelSimple struct {
 	fold  bool
 	name  string // id, class, attribute name, or the direction of :dir()
 	value string
+	// nthA and nthB are the An+B coefficients of :nth-child().
+	nthA, nthB int
 	// words are the language ranges of :lang(); args are the selectors of
 	// :not(), :is() and :where(); hasArgs are the relative selectors of :has().
 	words   []string
@@ -3447,7 +3661,7 @@ const (
 )
 
 // The pseudo-classes the matcher tells apart. webPseudoMaybe is every one it
-// cannot decide from a start tag (:nth-child(), :last-child, :has(), :valid…);
+// cannot decide from a start tag or the selector tree (:nth-of-type(), :valid…);
 // webPseudoNever is a state that is false on a page nobody is playing, and
 // webPseudoUser a pointer or focus state (:hover, :focus…), false too except
 // for a rule that reveals (webSelReveal). webPseudoTarget is :target, decided
@@ -3475,6 +3689,9 @@ const (
 	webPseudoNot
 	webPseudoIs
 	webPseudoHas
+	webPseudoFirstChild
+	webPseudoLastChild
+	webPseudoNthChild
 )
 
 // webSelMaxDepth bounds nested :not()/:is() arguments, so a hostile sheet
@@ -3911,9 +4128,27 @@ func (p *webSelParser) pseudo(c *webSelCompound) bool {
 		element = true // the CSS2 single-colon spelling of a pseudo-element
 	}
 	if element {
-		// The declarations style a generated box (::before, ::marker, a
-		// placeholder, a scrollbar), never the element itself.
-		p.sel.never = true
+		// The declarations style a generated box, never the element itself.
+		// Only before, after and marker are generated; the rest keep their
+		// selector unmatchable so a ::first-line colour cannot repaint the
+		// whole paragraph. A pseudo-element inside :is()/:not()/:has() is
+		// not a valid element selector, so it stays unmatchable too.
+		pseudo := webPseudoElemNone
+		if p.depth == 0 {
+			switch name {
+			case "before":
+				pseudo = webPseudoElemBefore
+			case "after":
+				pseudo = webPseudoElemAfter
+			case "marker":
+				pseudo = webPseudoElemMarker
+			}
+		}
+		if pseudo == webPseudoElemNone || p.sel.pseudo != webPseudoElemNone {
+			p.sel.never = true
+		} else {
+			p.sel.pseudo = pseudo
+		}
 		p.spec.c++
 		return true
 	}
@@ -3967,6 +4202,26 @@ func (p *webSelParser) pseudo(c *webSelCompound) bool {
 	case "dir":
 		s.op = webPseudoDir
 		s.name = asciiLower(strings.TrimSpace(args))
+	case "first-child":
+		if hasArgs {
+			return false
+		}
+		s.op = webPseudoFirstChild
+	case "last-child":
+		if hasArgs {
+			return false
+		}
+		s.op = webPseudoLastChild
+	case "nth-child":
+		if !hasArgs {
+			return false
+		}
+		a, b, ok := webSelParseNth(args)
+		if !ok {
+			return false
+		}
+		s.op = webPseudoNthChild
+		s.nthA, s.nthB = a, b
 	case "not", "is", "matches", "where", "has", "-webkit-any", "-moz-any":
 		if !hasArgs {
 			return false
@@ -4112,39 +4367,69 @@ func webSplitSelectorList(text string) []string {
 	return append(parts, text[start:])
 }
 
-// webMaxSelectorTreeNodes bounds the structural copy built for :has(). A page
-// larger than this simply leaves :has() undecidable rather than spending the
-// handheld's memory on a second DOM.
+// webMaxSelectorTreeNodes bounds the structural copy built for selectors that
+// need sibling structure. A page larger than this leaves those tests
+// undecidable rather than spending the handheld's memory on a second DOM.
 const webMaxSelectorTreeNodes = 8192
 
-// webRulesNeedSelectorTree reports whether any rule has a :has() pseudo-class,
-// including one nested inside :is(), :not() or :where().
+// webRulesPseudoMask records which generated boxes have rules. Selecting the
+// pseudo-element is already part of each rule; this only lets the element walk
+// skip the generated-box cascade entirely on sheets that never mention one.
+func webRulesPseudoMask(rules []webRule) uint8 {
+	var mask uint8
+	for i := range rules {
+		pseudo := rules[i].sel.pseudo
+		if pseudo == webPseudoElemNone || pseudo >= 8 {
+			continue
+		}
+		// A ::before/::after without `content` generates no box. Icon-font
+		// sheets are full of colour/font rules for ::before, and those must
+		// not cost every element a second rule scan. ::marker is different:
+		// its colour and font paint the default bullet even without content.
+		if pseudo != webPseudoElemMarker {
+			if _, ok := rules[i].decls["content"]; !ok {
+				if _, ok := rules[i].important["content"]; !ok {
+					continue
+				}
+			}
+		}
+		mask |= 1 << pseudo
+	}
+	return mask
+}
+
+// webRulesNeedSelectorTree reports whether any rule needs the selector tree:
+// :has(), or one of the sibling-counting pseudo-classes, including one nested
+// inside :is(), :not() or :where().
 func webRulesNeedSelectorTree(rules []webRule) bool {
 	for i := range rules {
-		if webSelectorUsesHas(rules[i].sel) {
+		if webSelectorUsesTree(rules[i].sel) {
 			return true
 		}
 	}
 	return false
 }
 
-func webSelectorUsesHas(sel *webSelector) bool {
+func webSelectorUsesTree(sel *webSelector) bool {
 	if sel == nil {
 		return false
 	}
 	for i := range sel.compounds {
 		for j := range sel.compounds[i].simples {
 			s := &sel.compounds[i].simples[j]
-			if s.op == webPseudoHas && s.kind == webSelPseudo {
-				return true
+			if s.kind == webSelPseudo {
+				switch s.op {
+				case webPseudoHas, webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild:
+					return true
+				}
 			}
 			for _, arg := range s.args {
-				if webSelectorUsesHas(arg) {
+				if webSelectorUsesTree(arg) {
 					return true
 				}
 			}
 			for _, arg := range s.hasArgs {
-				if webSelectorUsesHas(arg.sel) {
+				if webSelectorUsesTree(arg.sel) {
 					return true
 				}
 			}
@@ -4570,6 +4855,19 @@ func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) 
 			return webSelNo
 		}
 		return webSelBool(s.hasMatches(el.node, mode))
+	case webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild:
+		position, siblings, ok := webSelChildPosition(el.node)
+		if !ok {
+			return webSelMaybe
+		}
+		switch s.op {
+		case webPseudoFirstChild:
+			return webSelBool(position == 1)
+		case webPseudoLastChild:
+			return webSelBool(position == siblings)
+		default:
+			return webSelBool(webSelNthMatches(s.nthA, s.nthB, position))
+		}
 	}
 	return webSelMaybe
 }
@@ -4668,6 +4966,86 @@ func webSelHasSubtree(root *webElement, arg webHasArg, rootBound bool, mode webS
 		}
 	}
 	return false
+}
+
+// webSelParseNth reads the An+B argument of :nth-child(). Whitespace around
+// the sign is allowed as it is in CSS; an `of S` clause is not supported.
+func webSelParseNth(arg string) (a, b int, ok bool) {
+	text := asciiLower(arg)
+	text = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\r', '\f':
+			return -1
+		}
+		return r
+	}, text)
+	if text == "odd" {
+		return 2, 1, true
+	}
+	if text == "even" {
+		return 2, 0, true
+	}
+	if text == "" {
+		return 0, 0, false
+	}
+	if n := strings.IndexByte(text, 'n'); n >= 0 {
+		coef := text[:n]
+		switch coef {
+		case "", "+":
+			a = 1
+		case "-":
+			a = -1
+		default:
+			var err error
+			if a, err = strconv.Atoi(coef); err != nil {
+				return 0, 0, false
+			}
+		}
+		rest := text[n+1:]
+		if rest == "" {
+			return a, 0, true
+		}
+		if rest[0] != '+' && rest[0] != '-' {
+			return 0, 0, false
+		}
+		var err error
+		if b, err = strconv.Atoi(rest); err != nil {
+			return 0, 0, false
+		}
+		return a, b, true
+	}
+	var err error
+	if b, err = strconv.Atoi(text); err != nil {
+		return 0, 0, false
+	}
+	return 0, b, true
+}
+
+// webSelNthMatches reports whether the 1-based child position n satisfies
+// An+B for some integer n >= 0.
+func webSelNthMatches(a, b, position int) bool {
+	if a == 0 {
+		return position == b
+	}
+	d := position - b
+	if a > 0 {
+		return d >= 0 && d%a == 0
+	}
+	return d <= 0 && (-d)%(-a) == 0
+}
+
+// webSelChildPosition returns an element's one-based position among its
+// element siblings and the sibling count.
+func webSelChildPosition(el *webElement) (position, siblings int, ok bool) {
+	if el == nil || el.parent == nil {
+		return 0, 0, false
+	}
+	for i, sibling := range el.parent.children {
+		if sibling == el {
+			return i + 1, len(el.parent.children), true
+		}
+	}
+	return 0, 0, false
 }
 
 // webSelNextElement returns the next element sibling in the selector tree.
@@ -5124,6 +5502,17 @@ func webLength(value string, rel float64) float64 {
 	return n * mult
 }
 
+// webHeightLength ignores percentage heights: the flow has no parent height to
+// resolve them against, and treating 50% as 0.5em made a percentage height
+// silently become a tiny pixel height. CSS_SUPPORT.md documents the gap.
+func webHeightLength(value string, rel float64) float64 {
+	v := strings.TrimSpace(value)
+	if strings.HasSuffix(v, "%") {
+		return 0
+	}
+	return webLength(v, rel)
+}
+
 // webMathLength evaluates the CSS math functions modern layouts use for fluid
 // sizing: min(), max() and clamp(). The arguments are resolved against the same
 // relative width as a plain length; viewport units still resolve to zero
@@ -5256,6 +5645,476 @@ func webTextTransform(value string) int {
 		return 3
 	}
 	return 0
+}
+
+func webBorderStyleInValue(value string) int {
+	lower := strings.ToLower(value)
+	for _, field := range strings.FieldsFunc(lower, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ',' || r == '/'
+	}) {
+		switch field {
+		case "none":
+			return webBorderNone
+		case "hidden":
+			return webBorderHidden
+		case "dashed":
+			return webBorderDashed
+		case "dotted":
+			return webBorderDotted
+		case "double":
+			return webBorderDouble
+		case "solid":
+			return webBorderSolid
+		}
+	}
+	return -1
+}
+
+// webBackgroundURL pulls the URL out of the common url("...") and url(...)
+// spellings. Gradients and colours deliberately return empty.
+func webBackgroundURL(value string) string {
+	lower := strings.ToLower(value)
+	start := strings.Index(lower, "url(")
+	if start < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(value[start+4:])
+	end := strings.IndexByte(rest, ')')
+	if end < 0 {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[:end])
+	rest = strings.Trim(rest, "\"'")
+	if rest == "" || strings.HasPrefix(strings.ToLower(rest), "data:image/svg") {
+		return ""
+	}
+	return rest
+}
+
+func webLayerListValue(values []string, index int) string {
+	if len(values) == 0 || index < 0 {
+		return ""
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return strings.TrimSpace(values[index])
+}
+
+func webSplitBackgroundSlash(value string) (string, string) {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth > 0 {
+				depth--
+			}
+		case c == '/' && depth == 0:
+			return value[:i], value[i+1:]
+		}
+	}
+	return value, ""
+}
+
+func webBackgroundPositionToken(token string) bool {
+	lower := strings.ToLower(strings.TrimSpace(token))
+	switch lower {
+	case "left", "right", "top", "bottom", "center":
+		return true
+	case "", "auto", "scroll", "fixed", "local", "border-box", "padding-box", "content-box":
+		return false
+	}
+	if _, ok := webPercentValue(lower); ok {
+		return true
+	}
+	if webLength(lower, 16) != 0 || strings.HasPrefix(lower, "0") || strings.HasPrefix(lower, "calc(") || strings.HasPrefix(lower, "min(") || strings.HasPrefix(lower, "max(") {
+		return true
+	}
+	return false
+}
+
+func webExtractBackgroundPosition(value string) string {
+	var out []string
+	for _, field := range webCSSSpaceFields(value) {
+		if webBackgroundPositionToken(field) {
+			out = append(out, field)
+		}
+	}
+	if len(out) > 2 {
+		out = out[:2]
+	}
+	return strings.Join(out, " ")
+}
+
+func webBackgroundShorthandLayer(segment string) webBackgroundLayerStyle {
+	layer := webBackgroundLayerStyle{Repeat: "repeat"}
+	if src := webBackgroundURL(segment); src != "" {
+		layer.Image = src
+	} else if g, valid := webParseGradient(segment); valid {
+		ramp := g
+		layer.Gradient, layer.HasGradient = &ramp, true
+	}
+	left, right := webSplitBackgroundSlash(segment)
+	if right != "" {
+		var size []string
+		for _, field := range webCSSSpaceFields(right) {
+			lower := strings.ToLower(strings.TrimSpace(field))
+			if webIsBackgroundRepeat(lower) || lower == "scroll" || lower == "fixed" || lower == "local" ||
+				lower == "border-box" || lower == "padding-box" || lower == "content-box" {
+				continue
+			}
+			size = append(size, field)
+		}
+		layer.Size = strings.Join(size, " ")
+	}
+	layer.Position = webExtractBackgroundPosition(left)
+	for _, field := range webCSSSpaceFields(segment) {
+		if webIsBackgroundRepeat(field) {
+			layer.Repeat = strings.ToLower(field)
+			break
+		}
+	}
+	return layer
+}
+
+// webBackgroundLayerRect resolves background-size against the block's paint
+// box. A cover layer keeps the full box and lets object-fit crop the image;
+// contain and explicit sizes produce a smaller layer, and background-position
+// anchors that layer inside the box. Gradients have no intrinsic pixels, so
+// they keep the box unless an explicit size was declared.
+func webBackgroundLayerRect(box sdl.Rect, style webStyle, doc *webDocument, scale float64) (sdl.Rect, int) {
+	layer := webBackgroundLayerStyle{Image: style.BackgroundImage, Size: style.BackgroundSize, Position: style.BackgroundPosition}
+	if style.BackgroundLayerCount > 0 {
+		layer = style.BackgroundLayers[0]
+	}
+	return webBackgroundLayerGeometry(box, layer, doc, scale)
+}
+
+func webBackgroundLayerGeometry(box sdl.Rect, layer webBackgroundLayerStyle, doc *webDocument, scale float64) (sdl.Rect, int) {
+	if box.W <= 0 || box.H <= 0 {
+		return box, webObjectFitFill
+	}
+	natW, natH := box.W, box.H
+	if doc != nil && layer.Image != "" {
+		if meta, ok := doc.imageMeta(layer.Image); ok && meta.HasSize {
+			natW = int32(math.Round(float64(meta.W) * scale))
+			natH = int32(math.Round(float64(meta.H) * scale))
+		}
+	}
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(layer.Size)))
+	if len(fields) > 0 && fields[0] == "cover" {
+		return box, webObjectFitCover
+	}
+	if len(fields) > 0 && fields[0] == "contain" {
+		if natW > 0 && natH > 0 {
+			return webObjectFitBoxAt(box, natW, natH, false, 0.5, 0.5), webObjectFitFill
+		}
+		return box, webObjectFitFill
+	}
+	w, h := natW, natH
+	sized := false
+	if len(fields) > 0 && fields[0] != "auto" {
+		if pct, ok := webPercentValue(fields[0]); ok {
+			w = int32(math.Round(float64(box.W) * pct / 100))
+			sized = true
+		} else if px := webLength(fields[0], 16); px > 0 {
+			w = int32(math.Round(px * scale))
+			sized = true
+		}
+	}
+	if len(fields) > 1 {
+		if pct, ok := webPercentValue(fields[1]); ok {
+			h = int32(math.Round(float64(box.H) * pct / 100))
+			sized = true
+		} else if px := webLength(fields[1], 16); px > 0 {
+			h = int32(math.Round(px * scale))
+			sized = true
+		}
+	}
+	if !sized {
+		if layer.Image == "" || natW <= 0 || natH <= 0 {
+			return box, webObjectFitFill
+		}
+	}
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	posX, posY := webObjectPositionFraction(layer.Position, box.W, box.H)
+	return sdl.Rect{
+		X: box.X + int32(math.Round(float64(box.W-w)*posX)),
+		Y: box.Y + int32(math.Round(float64(box.H-h)*posY)),
+		W: w, H: h,
+	}, webObjectFitFill
+}
+
+const webMaxBackgroundTiles = 512
+
+func webIsBackgroundRepeat(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round":
+		return true
+	}
+	return false
+}
+
+type webRepeatMode int
+
+const (
+	webRepeatNone webRepeatMode = iota
+	webRepeatTile
+	webRepeatSpace
+	webRepeatRound
+)
+
+func webRepeatModeFor(value string, horizontal bool) webRepeatMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "no-repeat":
+		return webRepeatNone
+	case "repeat-x":
+		if horizontal {
+			return webRepeatTile
+		}
+		return webRepeatNone
+	case "repeat-y":
+		if horizontal {
+			return webRepeatNone
+		}
+		return webRepeatTile
+	case "space":
+		return webRepeatSpace
+	case "round":
+		return webRepeatRound
+	}
+	return webRepeatTile
+}
+
+func webBackgroundRepeatModes(value string) (webRepeatMode, webRepeatMode) {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 0 {
+		return webRepeatTile, webRepeatTile
+	}
+	if len(fields) == 1 {
+		return webRepeatModeFor(fields[0], true), webRepeatModeFor(fields[0], false)
+	}
+	return webRepeatModeFor(fields[0], true), webRepeatModeFor(fields[1], false)
+}
+
+type webAxisTile struct {
+	Pos  int32
+	Size int32
+}
+
+func webRepeatAxis(origin, boxStart, boxSize, tileSize int32, mode webRepeatMode) []webAxisTile {
+	if tileSize <= 0 || boxSize <= 0 {
+		return nil
+	}
+	boxEnd := boxStart + boxSize
+	switch mode {
+	case webRepeatNone:
+		return []webAxisTile{{Pos: origin, Size: tileSize}}
+	case webRepeatSpace:
+		count := int(boxSize / tileSize)
+		if count < 1 {
+			count = 1
+		}
+		if count == 1 {
+			return []webAxisTile{{Pos: boxStart, Size: tileSize}}
+		}
+		gap := (boxSize - int32(count)*tileSize) / int32(count-1)
+		out := make([]webAxisTile, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, webAxisTile{Pos: boxStart + int32(i)*(tileSize+gap), Size: tileSize})
+		}
+		return out
+	case webRepeatRound:
+		count := int(math.Round(float64(boxSize) / float64(tileSize)))
+		if count < 1 {
+			count = 1
+		}
+		size := boxSize / int32(count)
+		if size < 1 {
+			size = 1
+		}
+		out := make([]webAxisTile, 0, count)
+		for i := 0; i < count; i++ {
+			pos := boxStart + int32(i)*size
+			tileEnd := pos + size
+			if i == count-1 {
+				tileEnd = boxEnd
+			}
+			out = append(out, webAxisTile{Pos: pos, Size: tileEnd - pos})
+		}
+		return out
+	}
+	start := webTileStart(origin, boxStart, tileSize, true)
+	out := make([]webAxisTile, 0, 8)
+	for pos := start; pos < boxEnd && len(out) < webMaxBackgroundTiles; pos += tileSize {
+		out = append(out, webAxisTile{Pos: pos, Size: tileSize})
+	}
+	return out
+}
+
+func webClipTile(tile, box sdl.Rect) (sdl.Rect, bool) {
+	left, top := max32(tile.X, box.X), max32(tile.Y, box.Y)
+	right := min32(tile.X+tile.W, box.X+box.W)
+	bottom := min32(tile.Y+tile.H, box.Y+box.H)
+	if right <= left || bottom <= top {
+		return sdl.Rect{}, false
+	}
+	return sdl.Rect{X: left, Y: top, W: right - left, H: bottom - top}, true
+}
+
+func webTileStart(origin, boxStart, size int32, repeat bool) int32 {
+	if !repeat || size <= 0 {
+		return origin
+	}
+	delta := (origin - boxStart) % size
+	if delta < 0 {
+		delta += size
+	}
+	start := boxStart + delta
+	if start > boxStart {
+		start -= size
+	}
+	return start
+}
+
+// webBackgroundTiles repeats the positioned layer from its own origin, then
+// clips each copy to the block's padding box. Space keeps the tile size and
+// distributes equal gaps; round rescales each axis so an integer count fills
+// the box. A single full-size layer (the common gradient case) yields exactly
+// one tile, so tiling never changes the cover/contain or default full-box path.
+func webBackgroundTiles(box, layer sdl.Rect, repeat string) []sdl.Rect {
+	if box.W <= 0 || box.H <= 0 || layer.W <= 0 || layer.H <= 0 {
+		return nil
+	}
+	modeX, modeY := webBackgroundRepeatModes(repeat)
+	xs := webRepeatAxis(layer.X, box.X, box.W, layer.W, modeX)
+	ys := webRepeatAxis(layer.Y, box.Y, box.H, layer.H, modeY)
+	tiles := make([]sdl.Rect, 0, 8)
+	for _, x := range xs {
+		for _, y := range ys {
+			if len(tiles) >= webMaxBackgroundTiles {
+				return tiles
+			}
+			if tile, ok := webClipTile(sdl.Rect{X: x.Pos, Y: y.Pos, W: x.Size, H: y.Size}, box); ok {
+				tiles = append(tiles, tile)
+			}
+		}
+	}
+	return tiles
+}
+
+func webDecorationStyleInValue(value string) int {
+	lower := strings.ToLower(value)
+	for _, field := range strings.FieldsFunc(lower, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ',' || r == '/'
+	}) {
+		switch field {
+		case "double":
+			return webDecorationDouble
+		case "dotted":
+			return webDecorationDotted
+		case "dashed":
+			return webDecorationDashed
+		case "wavy":
+			return webDecorationWavy
+		case "solid":
+			return webDecorationSolid
+		}
+	}
+	return -1
+}
+
+func webVerticalAlignValue(value string) (int, float64) {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	switch lower {
+	case "middle":
+		return webVerticalMiddle, 0
+	case "top":
+		return webVerticalTop, 0
+	case "bottom":
+		return webVerticalBottom, 0
+	case "text-top":
+		return webVerticalTextTop, 0
+	case "text-bottom":
+		return webVerticalTextBottom, 0
+	case "baseline", "sub", "super":
+		return webVerticalBaseline, 0
+	}
+	if px := webLength(lower, 16); px != 0 {
+		return webVerticalLength, px
+	}
+	return webVerticalBaseline, 0
+}
+
+func webVerticalOffset(style webStyle, font *ttf.Font, baseSize float64) int32 {
+	if font == nil {
+		return 0
+	}
+	h := int32(font.Height())
+	if h < 1 {
+		h = 1
+	}
+	switch style.VerticalAlign {
+	case webVerticalTop:
+		return -h / 2
+	case webVerticalBottom:
+		return h / 2
+	case webVerticalTextTop:
+		return -h / 4
+	case webVerticalTextBottom:
+		return h / 4
+	case webVerticalLength:
+		if baseSize > 0 {
+			return -int32(math.Round(style.VerticalAlignPx * baseSize / 16))
+		}
+	}
+	return 0
+}
+
+func webOverflowValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "hidden":
+		return 1
+	case "clip":
+		return 2
+	}
+	return 0
+}
+
+func webPaintOpacity(style webStyle) float64 {
+	if !style.HasOpacity {
+		return 1
+	}
+	return webClampOpacity(style.Opacity)
+}
+
+func webScaleColorAlpha(color sdl.Color, opacity float64) sdl.Color {
+	if opacity >= 0.999 {
+		return color
+	}
+	if opacity <= 0 {
+		color.A = 0
+		return color
+	}
+	color.A = uint8(math.Round(float64(color.A) * opacity))
+	return color
 }
 
 // webTransformWord applies text-transform. It runs before measurement so the
@@ -5458,7 +6317,7 @@ func webColorInValue(value string) (sdl.Color, bool) {
 // --- Style resolution -----------------------------------------------------
 
 func webBaseStyle() webStyle {
-	return webStyle{FontPx: 16}
+	return webStyle{FontPx: 16, FlexShrink: 1}
 }
 
 // applyWebTagDefaults gives the reader its browser-ish baseline: headings are
@@ -5568,28 +6427,64 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			}
 		}
 	}
-	// A linear gradient becomes a ramp the reader paints band by band, so the
-	// header keeps its light and dark ends instead of one flat colour. The
-	// average is still stored as the background: contrast and fade decisions
-	// need a single colour. A background-image paints over background-color,
-	// so declaring a fallback colour must not suppress the gradient.
-	for _, key := range []string{"background-image", "background"} {
-		v, ok := decls[key]
-		if !ok {
-			continue
-		}
-		if g, valid := webParseGradient(v); valid {
-			ramp := g
-			st.Gradient, st.HasGradient = &ramp, true
-			st.Background, st.HasBg = webGradientAverage(g), true
-			break
-		}
-		if !st.HasBg {
-			if c, valid := webGradientColor(v); valid {
-				st.Background, st.HasBg = c, true
-				break
+	// Resolve the comma-separated background layer list. Each layer keeps its
+	// own image/gradient, size, position and repeat; the longhand lists repeat
+	// their last value when they are shorter than the image list, as CSS does.
+	var backgroundLayers []webBackgroundLayerStyle
+	if value, ok := decls["background-image"]; ok {
+		for _, part := range webSplitSelectorList(value) {
+			layer := webBackgroundLayerStyle{Repeat: "repeat"}
+			if src := webBackgroundURL(part); src != "" {
+				layer.Image = src
+			} else if g, valid := webParseGradient(part); valid {
+				ramp := g
+				layer.Gradient, layer.HasGradient = &ramp, true
+			} else if !st.HasBg {
+				if c, valid := webGradientColor(part); valid {
+					st.Background, st.HasBg = c, true
+				}
 			}
+			backgroundLayers = append(backgroundLayers, layer)
 		}
+	} else if value, ok := decls["background"]; ok {
+		for _, part := range webSplitSelectorList(value) {
+			backgroundLayers = append(backgroundLayers, webBackgroundShorthandLayer(part))
+		}
+	}
+	if sizeList, ok := decls["background-size"]; ok {
+		sizes := webSplitSelectorList(sizeList)
+		for i := range backgroundLayers {
+			backgroundLayers[i].Size = webLayerListValue(sizes, i)
+		}
+	}
+	if positionList, ok := decls["background-position"]; ok {
+		positions := webSplitSelectorList(positionList)
+		for i := range backgroundLayers {
+			backgroundLayers[i].Position = webLayerListValue(positions, i)
+		}
+	}
+	if repeatList, ok := decls["background-repeat"]; ok {
+		repeats := webSplitSelectorList(repeatList)
+		for i := range backgroundLayers {
+			backgroundLayers[i].Repeat = webLayerListValue(repeats, i)
+		}
+	}
+	if len(backgroundLayers) > webMaxBackgroundLayers {
+		backgroundLayers = backgroundLayers[:webMaxBackgroundLayers]
+	}
+	st.BackgroundLayerCount = len(backgroundLayers)
+	for i, layer := range backgroundLayers {
+		st.BackgroundLayers[i] = layer
+	}
+	if len(backgroundLayers) > 0 {
+		first := backgroundLayers[0]
+		st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = first.Image, first.Size, first.Position, first.Repeat
+		if first.HasGradient && first.Gradient != nil {
+			st.Gradient, st.HasGradient = first.Gradient, true
+			st.Background, st.HasBg = webGradientAverage(*first.Gradient), true
+		}
+	} else {
+		st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = "", "", "", ""
 	}
 	if v, ok := decls["font-weight"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
@@ -5608,7 +6503,44 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			lower := strings.ToLower(v)
 			st.Underline = strings.Contains(lower, "underline")
 			st.Strike = strings.Contains(lower, "line-through")
+			if style := webDecorationStyleInValue(v); style >= 0 {
+				st.DecorationStyle = style
+			}
+			if c, valid := webColorInValue(v); valid {
+				st.DecorationColor, st.HasDecorationColor = c, true
+			}
 			break
+		}
+	}
+	if v, ok := decls["text-decoration-color"]; ok {
+		if c, valid := webColorInValue(v); valid {
+			st.DecorationColor, st.HasDecorationColor = c, true
+		}
+	}
+	if v, ok := decls["text-decoration-thickness"]; ok {
+		if px := webLength(v, st.FontPx); px > 0 {
+			st.DecorationThickness = px
+		}
+	}
+	if v, ok := decls["text-decoration-style"]; ok {
+		if style := webDecorationStyleInValue(v); style >= 0 {
+			st.DecorationStyle = style
+		}
+	}
+	if v, ok := decls["text-shadow"]; ok {
+		if x, y, color, valid := webShadowValue(v, st.FontPx); valid {
+			st.HasTextShadow, st.TextShadowX, st.TextShadowY = true, x, y
+			if color != nil {
+				st.TextShadowColor, st.HasTextShadowColor = *color, true
+			}
+		}
+	}
+	if v, ok := decls["box-shadow"]; ok && !strings.Contains(strings.ToLower(v), "inset") {
+		if x, y, color, valid := webShadowValue(v, st.FontPx); valid {
+			st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = true, x, y
+			if color != nil {
+				st.BoxShadowColor, st.HasBoxShadowColor = *color, true
+			}
 		}
 	}
 	if v, ok := decls["text-transform"]; ok {
@@ -5617,18 +6549,55 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["text-align"]; ok {
 		st.Align = webTextAlign(v)
 	}
+	if v, ok := decls["vertical-align"]; ok {
+		st.VerticalAlign, st.VerticalAlignPx = webVerticalAlignValue(v)
+	}
+	if v, ok := decls["overflow"]; ok {
+		fields := strings.Fields(v)
+		st.OverflowX = webOverflowValue(v)
+		st.OverflowY = st.OverflowX
+		if len(fields) > 1 {
+			st.OverflowY = webOverflowValue(fields[1])
+		}
+	}
+	if v, ok := decls["overflow-x"]; ok {
+		st.OverflowX = webOverflowValue(v)
+	}
+	if v, ok := decls["overflow-y"]; ok {
+		st.OverflowY = webOverflowValue(v)
+	}
 	if v, ok := decls["text-indent"]; ok {
 		st.TextIndent = webLength(v, st.FontPx)
 	}
 	if v, ok := decls["white-space"]; ok {
 		st.Pre = strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "pre")
 	}
-	for _, key := range []string{"display", "visibility"} {
-		if v, ok := decls[key]; ok {
-			lower := strings.ToLower(strings.TrimSpace(v))
-			if lower == "none" || lower == "hidden" {
-				st.Hidden = true
-			}
+	if v, ok := decls["display"]; ok {
+		if strings.EqualFold(strings.TrimSpace(v), "none") {
+			st.Hidden = true
+		}
+	}
+	if v, ok := decls["visibility"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "hidden", "collapse":
+			st.Invisible = true
+		case "visible":
+			st.Invisible = false
+		}
+	}
+	// The content of a generated box is resolved when that box is created,
+	// because attr() needs the originating element's attributes. Keeping the
+	// raw value here preserves the cascade (and var() substitution) first.
+	if v, ok := decls["content"]; ok {
+		st.Content = v
+	}
+	for name, target := range map[string]*string{
+		"counter-reset":     &st.CounterReset,
+		"counter-increment": &st.CounterIncrement,
+		"counter-set":       &st.CounterSet,
+	} {
+		if v, ok := decls[name]; ok {
+			*target = v
 		}
 	}
 	if v, ok := decls["margin"]; ok {
@@ -5721,6 +6690,12 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			st.LineHeight = px
 		}
 	}
+	if v, ok := decls["letter-spacing"]; ok {
+		st.LetterSpacing = webSpacingPx(v, st.FontPx)
+	}
+	if v, ok := decls["word-spacing"]; ok {
+		st.WordSpacing = webSpacingPx(v, st.FontPx)
+	}
 	if v, ok := decls["border-radius"]; ok {
 		st.Radius = webFirstLength(v, st.FontPx)
 	}
@@ -5748,11 +6723,19 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	// A border shorthand carries its own colour (`border: 1px solid #f00`),
 	// which is the only place most sheets set one.
-	for _, key := range []string{"border", "border-left", "border-right", "border-top", "border-bottom"} {
+	for _, key := range []string{"border", "border-left", "border-right", "border-top", "border-bottom", "outline"} {
 		if v, ok := decls[key]; ok {
 			if c, valid := webColorInValue(v); valid {
 				st.BorderColor, st.HasBorderColor = c, true
 			}
+			if style := webBorderStyleInValue(v); style >= 0 {
+				st.BorderStyle = style
+			}
+		}
+	}
+	if v, ok := decls["outline-color"]; ok {
+		if c, valid := webColorInValue(v); valid {
+			st.BorderColor, st.HasBorderColor = c, true
 		}
 	}
 	// Each edge maps to its own side: `border-right` used to set the left
@@ -5795,6 +6778,26 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			st.BoxBorder = true
 			st.BorderWidth = webMaxAbs(st.BorderWidth, px)
 		}
+	}
+	if v, ok := decls["border-style"]; ok {
+		if style := webBorderStyleInValue(v); style >= 0 {
+			st.BorderStyle = style
+		}
+	}
+	// Outline is its own box edge: keeping it separate from the border lets
+	// outline-offset move the ring without moving the card's border.
+	if v, ok := decls["outline"]; ok && webBorderVisible(v) {
+		st.Outline = true
+		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
+	}
+	if v, ok := decls["outline-width"]; ok {
+		if px := webLength(v, st.FontPx); px > 0 {
+			st.Outline = true
+			st.BorderWidth = webMaxAbs(st.BorderWidth, px)
+		}
+	}
+	if v, ok := decls["outline-offset"]; ok {
+		st.OutlineOffset = webLength(v, st.FontPx)
 	}
 	for _, key := range []string{"list-style-type", "list-style"} {
 		if v, ok := decls[key]; ok {
@@ -5956,16 +6959,23 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["row-gap"]; ok {
 		st.GapY = webLength(v, st.FontPx)
 	}
+	// The flex shorthand resets grow, shrink and basis together, so it must
+	// run before its longhands: a later flex-shrink on the same element wins.
+	if v, ok := decls["flex"]; ok {
+		webFlexShorthand(st, v)
+	}
 	if v, ok := decls["flex-grow"]; ok {
 		if grow, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && grow >= 0 {
 			st.FlexGrow = grow
 		}
 	}
+	if v, ok := decls["flex-shrink"]; ok {
+		if shrink, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && shrink >= 0 {
+			st.FlexShrink = shrink
+		}
+	}
 	if v, ok := decls["flex-basis"]; ok {
 		webFlexBasis(st, v)
-	}
-	if v, ok := decls["flex"]; ok {
-		webFlexShorthand(st, v)
 	}
 	if v, ok := decls["width"]; ok {
 		if pct, valid := webPercentValue(v); valid {
@@ -5975,8 +6985,58 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["height"]; ok {
-		if px := webLength(v, st.FontPx); px > 0 {
+		if px := webHeightLength(v, st.FontPx); px > 0 {
 			st.Height = px
+		}
+	}
+	if v, ok := decls["min-width"]; ok {
+		if pct, valid := webPercentValue(v); valid {
+			st.MinWidthPct = pct
+		} else if px := webLength(v, st.FontPx); px > 0 {
+			st.MinWidth = px
+		}
+	}
+	if v, ok := decls["max-width"]; ok {
+		if pct, valid := webPercentValue(v); valid {
+			st.MaxWidthPct = pct
+		} else if px := webLength(v, st.FontPx); px > 0 {
+			st.MaxWidth = px
+		}
+	}
+	if v, ok := decls["min-height"]; ok {
+		if px := webHeightLength(v, st.FontPx); px > 0 {
+			st.MinHeight = px
+		}
+	}
+	if v, ok := decls["max-height"]; ok {
+		if px := webHeightLength(v, st.FontPx); px > 0 {
+			st.MaxHeight = px
+		}
+	}
+	if v, ok := decls["box-sizing"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "border-box":
+			st.BoxSizing = 1
+		case "content-box":
+			st.BoxSizing = 0
+		}
+	}
+	if v, ok := decls["float"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "left":
+			st.FloatSide = 1
+		case "right":
+			st.FloatSide = 2
+		}
+	}
+	if v, ok := decls["clear"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "left":
+			st.Clear = 1
+		case "right":
+			st.Clear = 2
+		case "both":
+			st.Clear = 3
 		}
 	}
 	if v, ok := decls["aspect-ratio"]; ok {
@@ -5984,12 +7044,25 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 			st.AspectRatio = ratio
 		}
 	}
-	if v, ok := decls["position"]; ok {
-		lower := strings.ToLower(strings.TrimSpace(v))
-		if alias, valid := webUnprefixedValueAlias("position", v); valid {
-			lower = alias
+	if v, ok := decls["object-fit"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "contain":
+			st.ObjectFit = webObjectFitContain
+		case "cover":
+			st.ObjectFit = webObjectFitCover
+		case "none":
+			st.ObjectFit = webObjectFitNone
+		case "scale-down":
+			st.ObjectFit = webObjectFitScaleDown
+		default:
+			st.ObjectFit = webObjectFitFill
 		}
-		switch lower {
+	}
+	if v, ok := decls["object-position"]; ok {
+		st.ObjectPosition = strings.TrimSpace(v)
+	}
+	if v, ok := decls["position"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "relative":
 			st.Position = webPositionRelative
 		case "absolute", "fixed", "sticky":
@@ -6146,23 +7219,25 @@ func webFlexBasis(st *webStyle, value string) {
 }
 
 // webFlexShorthand reads the common `flex: 1`, `flex: 1 1 200px` and
-// `flex: 0 0 33%` forms. The shrink factor has no meaning in a one-pass text
-// layout, so it is accepted and ignored.
+// `flex: 0 0 33%` forms. The shrink factor is kept for the row layout.
 func webFlexShorthand(st *webStyle, value string) {
 	lower := strings.ToLower(strings.TrimSpace(value))
 	switch lower {
 	case "none":
 		st.FlexGrow = 0
+		st.FlexShrink = 0
 		st.FlexBasis = -1
 		st.BasisPct = 0
 		return
 	case "auto":
 		st.FlexGrow = 1
+		st.FlexShrink = 1
 		st.FlexBasis = -1
 		st.BasisPct = 0
 		return
 	case "initial":
 		st.FlexGrow = 0
+		st.FlexShrink = 1
 		st.FlexBasis = -1
 		st.BasisPct = 0
 		return
@@ -6171,6 +7246,7 @@ func webFlexShorthand(st *webStyle, value string) {
 	if len(fields) == 0 {
 		return
 	}
+	st.FlexShrink = 1
 	if grow, err := strconv.ParseFloat(fields[0], 64); err == nil {
 		st.FlexGrow = grow
 	} else if pct, ok := webPercentValue(fields[0]); ok {
@@ -6179,6 +7255,9 @@ func webFlexShorthand(st *webStyle, value string) {
 		return
 	}
 	if len(fields) > 2 {
+		if shrink, err := strconv.ParseFloat(fields[1], 64); err == nil {
+			st.FlexShrink = shrink
+		}
 		webFlexBasis(st, fields[2])
 		return
 	}
@@ -6188,9 +7267,10 @@ func webFlexShorthand(st *webStyle, value string) {
 			if pct == 0 {
 				st.FlexBasis = 0
 			}
-		} else if _, err := strconv.ParseFloat(fields[1], 64); err == nil {
+		} else if shrink, err := strconv.ParseFloat(fields[1], 64); err == nil {
 			// A plain number in the second slot is flex-shrink, not a
 			// length. For `flex: 1 1`, the omitted basis is zero.
+			st.FlexShrink = shrink
 			st.FlexBasis, st.BasisPct = 0, 0
 		} else if px := webLength(fields[1], st.FontPx); px > 0 {
 			st.FlexBasis, st.BasisPct = px, 0
@@ -6258,23 +7338,39 @@ type webPictureFrame struct {
 }
 
 type webParser struct {
-	doc               *webDocument
-	rules             []webRule
-	css               strings.Builder
-	stack             []webFrame
-	blocks            []webBlock
-	current           *webBlock
-	lists             []webListState
-	inHead            bool
-	textLen           int
-	trunc             bool
-	space             bool
-	pendingB          string
-	mainDepth         int
-	flexSeq           int
-	containerSeq      int
-	hasContainerUnits bool
-	flexStack         []webFlexFrame
+	doc     *webDocument
+	rules   []webRule
+	css     strings.Builder
+	stack   []webFrame
+	blocks  []webBlock
+	current *webBlock
+	lists   []webListState
+	inHead  bool
+	textLen int
+	trunc   bool
+	space   bool
+	// pseudoMask is the set of generated boxes (webPseudoElem*) this sheet
+	// has rules for. It keeps the common page, with no pseudo-element rules,
+	// from scanning every rule set once more per element.
+	pseudoMask uint8
+	// pendingBefore carries ::before from startTag to push, where the
+	// element's frame and block are in place. pendingB/pendingBStyle carry
+	// the list marker the same way.
+	pendingBefore      string
+	pendingBeforeStyle webStyle
+	pendingB           string
+	pendingBStyle      webStyle
+	hasPendingBStyle   bool
+	// counters holds the active CSS counter instances. Each name is a stack:
+	// counter-reset pushes a nested instance and the element's end tag pops
+	// it, while counter-increment changes the nearest one.
+	counters             map[string][]int
+	pendingCounterResets []string
+	mainDepth            int
+	flexSeq              int
+	containerSeq         int
+	hasContainerUnits    bool
+	flexStack            []webFlexFrame
 	// form is the <form> the parser is inside, so a control knows where its
 	// value goes. Nested forms are invalid HTML, so one is enough. formSeq
 	// numbers them, so a later <form> never inherits an earlier one's ID.
@@ -6333,6 +7429,7 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	if p.css.Len() > 0 {
 		p.rules = parseWebCSS(p.css.String())
 	}
+	p.pseudoMask = webRulesPseudoMask(p.rules)
 	if webRulesNeedSelectorTree(p.rules) {
 		p.selTree = webBuildSelectorTree(source)
 	}
@@ -6754,7 +7851,12 @@ func (p *webParser) walk(source string) {
 func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "head" {
 		p.inHead = true
-		p.push(webNewElement(name, attrs), webBaseStyle(), "skip")
+		el := webNewElement(name, attrs)
+		if p.selTreePos < len(p.selTree) {
+			el.node = p.selTree[p.selTreePos]
+			p.selTreePos++
+		}
+		p.push(el, webBaseStyle(), "skip", attrs)
 		return
 	}
 	// An unclosed <head> ends at the first element that cannot live in it, as
@@ -6779,6 +7881,17 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	}
 	el.target = p.target != "" && el.id == p.target
 	style := p.computeStyle(el, attrs)
+	// Counter operations belong to the element that declares them and must be
+	// in force before its ::before/::marker content is resolved. Increments
+	// stay in the enclosing scope for following siblings; resets are recorded
+	// on the frame and popped by its end tag.
+	p.applyCounters(name, style)
+	p.pendingBefore, p.pendingBeforeStyle = "", webStyle{}
+	if p.pseudoMask&(1<<webPseudoElemBefore) != 0 {
+		if generated := p.pseudoContent(el, attrs, style, webPseudoElemBefore); generated.Matched && generated.HasContent {
+			p.pendingBefore, p.pendingBeforeStyle = generated.Text, generated.Style
+		}
+	}
 	if name == "body" || name == "html" {
 		if style.HasBg {
 			p.doc.Paper = style.Background
@@ -6815,14 +7928,14 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			}
 			return
 		}
-		p.push(el, style, "block")
+		p.push(el, style, "block", attrs)
 		return
 	}
 	if name == "summary" {
 		if n := len(p.details); n > 0 {
 			// No flush: the summary continues the line the marker opened.
 			p.details[n-1].inSummary = true
-			p.push(el, style, "block")
+			p.push(el, style, "block", attrs)
 			return
 		}
 	}
@@ -6948,24 +8061,35 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "ul" || name == "ol" {
 		p.flush()
 		p.lists = append(p.lists, webListState{ordered: name == "ol"})
-		p.push(el, style, "list")
+		p.push(el, style, "list", attrs)
 		return
 	}
 	if name == "li" {
 		p.flush()
 		p.pendingB = p.nextBullet(style)
-		p.push(el, style, "block")
+		p.pendingBStyle, p.hasPendingBStyle = webStyle{}, false
+		// A ::marker rule can replace the bullet and style it. The list
+		// counter still advances above, so ordered items keep their numbers.
+		if p.pseudoMask&(1<<webPseudoElemMarker) != 0 {
+			if generated := p.pseudoContent(el, attrs, style, webPseudoElemMarker); generated.Matched {
+				p.pendingBStyle, p.hasPendingBStyle = generated.Style, true
+				if generated.HasContent {
+					p.pendingB = generated.Text
+				}
+			}
+		}
+		p.push(el, style, "block", attrs)
 		return
 	}
 	if webBlockElement(name) {
 		p.flush()
-		p.push(el, style, "block")
+		p.push(el, style, "block", attrs)
 		if selfClose {
 			p.endTag(name)
 		}
 		return
 	}
-	p.push(el, style, "inline")
+	p.push(el, style, "inline", attrs)
 	if selfClose {
 		p.endTag(name)
 	}
@@ -7016,6 +8140,14 @@ func (p *webParser) endTag(name string) {
 		if p.stack[i].el.tag != name {
 			continue
 		}
+		// ::after resolves at the closing tag, after descendants have run
+		// their counter increments, which is when a browser computes it.
+		if p.pseudoMask&(1<<webPseudoElemAfter) != 0 {
+			frame := &p.stack[i]
+			if generated := p.pseudoContent(frame.el, frame.attrs, frame.style, webPseudoElemAfter); generated.Matched && generated.HasContent && generated.Text != "" {
+				p.addTextStyled(generated.Text, generated.Style)
+			}
+		}
 		if p.stack[i].kind == "block" || p.stack[i].kind == "list" {
 			p.flush()
 		}
@@ -7031,7 +8163,7 @@ func (p *webParser) endTag(name string) {
 			}
 		}
 		if name == "li" {
-			p.pendingB = ""
+			p.pendingB, p.pendingBStyle, p.hasPendingBStyle = "", webStyle{}, false
 		}
 		if name == "form" {
 			p.form = webForm{}
@@ -7041,12 +8173,13 @@ func (p *webParser) endTag(name string) {
 		for len(p.flexStack) > 0 && p.flexStack[len(p.flexStack)-1].depth >= i {
 			p.flexStack = p.flexStack[:len(p.flexStack)-1]
 		}
+		p.popCounterResets(p.stack[i].counterResets)
 		p.stack = p.stack[:i]
 		return
 	}
 }
 
-func (p *webParser) push(el webElement, style webStyle, kind string) {
+func (p *webParser) push(el webElement, style webStyle, kind string, attrs string) {
 	depth := len(p.stack)
 	containerID := 0
 	if style.ContainerType != 0 {
@@ -7110,7 +8243,19 @@ func (p *webParser) push(el webElement, style webStyle, kind string) {
 			gridMin:  style.GridMin,
 		})
 	}
-	p.stack = append(p.stack, webFrame{el: el, style: style, kind: kind, flexGroup: group, containerID: containerID})
+	frame := webFrame{
+		el: el, style: style, kind: kind, flexGroup: group, containerID: containerID,
+		attrs: attrs, counterResets: p.pendingCounterResets,
+	}
+	p.pendingCounterResets = nil
+	p.stack = append(p.stack, frame)
+	// The frame is open before ::before is added, so the generated text lands
+	// inside the element rather than before it.
+	before, beforeStyle := p.pendingBefore, p.pendingBeforeStyle
+	p.pendingBefore, p.pendingBeforeStyle = "", webStyle{}
+	if before != "" {
+		p.addTextStyled(before, beforeStyle)
+	}
 }
 
 // beginFlexLeaf assigns a direct replaced/void child its own flex item.
@@ -7146,10 +8291,15 @@ func (p *webParser) nearestBlockStyle() webStyle {
 	return p.topStyle()
 }
 
-func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
-	st := p.topStyle()
-	// Non-inherited properties start clean for every element.
+// webResetElementStyle clears the properties that do not inherit. It is used
+// both for an element and for a generated box, whose inherited font, colour,
+// alignment and line height come from the originating element.
+func webResetElementStyle(st *webStyle) {
 	st.HasBg, st.Background = false, sdl.Color{}
+	st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition = "", "", ""
+	st.BackgroundRepeat = ""
+	st.BackgroundLayers = [webMaxBackgroundLayers]webBackgroundLayerStyle{}
+	st.BackgroundLayerCount = 0
 	st.HasGradient, st.Gradient = false, nil
 	st.Indent, st.TextIndent, st.MarginTop, st.MarginBot = 0, 0, 0, 0
 	st.BorderLeft, st.BorderRight, st.ListNone = false, false, false
@@ -7159,20 +8309,42 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st.Radius, st.IndentRight = 0, 0
 	st.BoxBorder, st.BorderTop, st.BorderBottom = false, false, false
 	st.BorderColor, st.HasBorderColor = sdl.Color{}, false
+	st.BorderStyle, st.Outline, st.OutlineOffset = webBorderSolid, false, 0
 	// Layout properties are per element too: a child of a flex container is
 	// not itself a container, and an item's grow factor belongs to it alone.
 	st.Display, st.FlexDir = webDisplayBlock, webFlexRow
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
 	st.GapX, st.GapY, st.FlexWrap, st.GridCols, st.GridMin = 0, 0, false, 0, 0
-	st.FlexGrow, st.FlexBasis, st.BasisPct = 0, -1, 0
+	st.FlexGrow, st.FlexShrink, st.FlexBasis, st.BasisPct = 0, 1, -1, 0
 	st.Order = 0
 	st.Width, st.WidthPct, st.Height = 0, 0, 0
+	st.MinWidth, st.MaxWidth, st.MinWidthPct, st.MaxWidthPct = 0, 0, 0, 0
+	st.MinHeight, st.MaxHeight = 0, 0
+	st.BoxSizing, st.FloatSide, st.Clear = 0, 0, 0
 	st.AspectRatio = 0
+	st.ObjectFit = 0
+	st.ObjectPosition = ""
 	st.ContainerType, st.ContainerName = 0, ""
 	st.CQ = nil
 	st.ZIndex, st.Position = 0, webPositionStatic
 	st.Top, st.Right, st.Bottom, st.Left = 0, 0, 0, 0
 	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
+	st.Content = ""
+	st.CounterReset, st.CounterIncrement, st.CounterSet = "", "", ""
+	st.HasTextShadow, st.TextShadowX, st.TextShadowY = false, 0, 0
+	st.TextShadowColor, st.HasTextShadowColor = sdl.Color{}, false
+	st.DecorationThickness = 0
+	st.DecorationStyle = 0
+	st.VerticalAlign, st.VerticalAlignPx = 0, 0
+	st.OverflowX, st.OverflowY = 0, 0
+	st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = false, 0, 0
+	st.BoxShadowColor, st.HasBoxShadowColor = sdl.Color{}, false
+}
+
+func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
+	st := p.topStyle()
+	// Non-inherited properties start clean for every element.
+	webResetElementStyle(&st)
 	// Link colour, underline and strikethrough are not reset: a decoration
 	// on <a> or <s> has to keep showing on the <strong>/<span> inside it,
 	// which is how every browser renders `<a><b>text</b></a>`.
@@ -7194,6 +8366,9 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	var matched []*webRule
 	for i := range p.rules {
 		rule := &p.rules[i]
+		if rule.sel.pseudo != webPseudoElemNone {
+			continue
+		}
 		if !rule.sel.matchesIn(chain, rule.mode()) {
 			continue
 		}
@@ -7279,6 +8454,21 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
 	}
 	applyWebDecls(&st, merged)
+	if st.BackgroundImage != "" {
+		st.BackgroundImage = p.webImageURL(st.BackgroundImage)
+		if st.BackgroundImage == "" {
+			st.HasBg = false
+		}
+	}
+	for i := 0; i < st.BackgroundLayerCount && i < webMaxBackgroundLayers; i++ {
+		if st.BackgroundLayers[i].Image == "" {
+			continue
+		}
+		st.BackgroundLayers[i].Image = p.webImageURL(st.BackgroundLayers[i].Image)
+	}
+	if st.BackgroundLayerCount > 0 {
+		st.BackgroundImage = st.BackgroundLayers[0].Image
+	}
 	if needsCQ {
 		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars}
 		p.hasContainerUnits = true
@@ -7309,6 +8499,416 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		}
 	}
 	return st
+}
+
+// webPseudoResult is the resolved style and generated text of one pseudo
+// element. Matched is true when the pseudo-element had at least one rule;
+// HasContent distinguishes `content: none` (valid, empty) from no content
+// declaration (which leaves ::marker with the reader's default bullet).
+type webPseudoResult struct {
+	Text       string
+	Style      webStyle
+	HasContent bool
+	Matched    bool
+}
+
+// pseudoContent computes the style and text of one generated box for el. It
+// starts from el's resolved style, clears what does not inherit, then applies
+// only the rules whose selector names the same pseudo-element. attr() and
+// counter() are resolved against the originating element and the parser's
+// counter scopes, which is why this runs during the walk rather than in
+// applyWebDecls.
+func (p *webParser) pseudoContent(el webElement, attrs string, base webStyle, pseudo uint8) webPseudoResult {
+	var result webPseudoResult
+	if base.Hidden {
+		return result
+	}
+	st := base
+	webResetElementStyle(&st)
+	// A generated box is not a form control, even on a <button>.
+	st.Control = nil
+
+	chain := make([]webElement, 0, len(p.stack)+1)
+	for _, frame := range p.stack {
+		chain = append(chain, frame.el)
+	}
+	chain = append(chain, el)
+
+	var matched []*webRule
+	for i := range p.rules {
+		rule := &p.rules[i]
+		if rule.sel.pseudo != pseudo {
+			continue
+		}
+		if !rule.sel.matchesIn(chain, rule.mode()) {
+			continue
+		}
+		if len(rule.containers) > 0 && !p.webContainerRulesApply(rule.containers) {
+			continue
+		}
+		matched = append(matched, rule)
+	}
+	if len(matched) == 0 {
+		return result
+	}
+	result.Matched = true
+	slices.SortStableFunc(matched, func(a, b *webRule) int {
+		switch {
+		case a.specificity != b.specificity:
+			return a.specificity - b.specificity
+		case a.order < b.order:
+			return -1
+		case a.order > b.order:
+			return 1
+		}
+		return 0
+	})
+	merged := make(map[string]string, 8)
+	for _, rule := range matched {
+		for name, value := range rule.decls {
+			merged[name] = value
+		}
+	}
+	for _, rule := range matched {
+		for name, value := range rule.important {
+			merged[name] = value
+		}
+	}
+	// Custom properties inherit from the originating element, and a pseudo
+	// rule may add its own. Resolve var() before the declarations are parsed.
+	st.Vars = webVarScopeFor(base.Vars, merged)
+	for name := range merged {
+		if strings.HasPrefix(name, "--") {
+			delete(merged, name)
+		}
+	}
+	em := st.FontPx
+	cw, ch := p.webOrdinaryContainerSize()
+	if raw, ok := merged["font-size"]; ok {
+		if px, valid := webFontSizePx(p.webResolveStyleValueIn(raw, st.Vars, em, cw, ch), em); valid {
+			em = px
+		}
+	}
+	for name, value := range merged {
+		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
+	}
+	applyWebDecls(&st, merged)
+	if st.Hidden {
+		return result
+	}
+	text, hasContent := webGeneratedContent(st.Content, attrs, p.counters)
+	result.Text, result.Style, result.HasContent = text, st, hasContent
+	return result
+}
+
+// webGeneratedContent turns a `content` value into the text a generated box
+// shows. Strings, attr(), counter() and counters() are supported, along with
+// the quote keywords; image values have no text equivalent here and are
+// skipped. The second result reports whether the value was a valid content
+// value at all: `none` is valid and contributes no text, while `normal` falls
+// back to the element's own marker (for ::marker) and has no generated text.
+func webGeneratedContent(raw, attrs string, counters map[string][]int) (string, bool) {
+	s := strings.TrimSpace(raw)
+	lower := asciiLower(s)
+	switch lower {
+	case "", "normal":
+		return "", false
+	case "none":
+		return "", true
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if webAttrSpaceByte(s[i]) {
+			i++
+			continue
+		}
+		switch s[i] {
+		case '"', '\'':
+			q := webSelParser{src: s, pos: i}
+			value, ok := q.str()
+			if !ok {
+				return "", false
+			}
+			b.WriteString(value)
+			i = q.pos
+			continue
+		case '/':
+			// The part after the slash is alternative text for assistive
+			// technology, not something the page draws.
+			return b.String(), true
+		}
+		rest := asciiLower(s[i:])
+		switch {
+		case strings.HasPrefix(rest, "open-quote"):
+			b.WriteByte('"')
+			i += len("open-quote")
+		case strings.HasPrefix(rest, "close-quote"):
+			b.WriteByte('"')
+			i += len("close-quote")
+		case strings.HasPrefix(rest, "no-open-quote"):
+			i += len("no-open-quote")
+		case strings.HasPrefix(rest, "no-close-quote"):
+			i += len("no-close-quote")
+		case strings.HasPrefix(rest, "attr("):
+			open := i + len("attr")
+			end := webSelParenEnd(s, open)
+			if end < 0 {
+				return "", false
+			}
+			name := strings.TrimSpace(s[open+1 : end])
+			if fields := strings.Fields(name); len(fields) > 0 {
+				name = strings.Trim(fields[0], `"'`)
+			}
+			if name != "" {
+				b.WriteString(htmlTagAttribute(attrs, name))
+			}
+			i = end + 1
+		case strings.HasPrefix(rest, "counters(") || strings.HasPrefix(rest, "counter("):
+			word := "counter"
+			many := strings.HasPrefix(rest, "counters(")
+			if many {
+				word = "counters"
+			}
+			open := i + len(word)
+			end := webSelParenEnd(s, open)
+			if end < 0 {
+				return "", false
+			}
+			args := webSplitSelectorList(s[open+1 : end])
+			name, sep, numberStyle := "", "", "decimal"
+			if len(args) > 0 {
+				name = strings.Trim(strings.TrimSpace(args[0]), `"'`)
+			}
+			if many {
+				if len(args) > 1 {
+					sep = strings.Trim(strings.TrimSpace(args[1]), `"'`)
+				}
+				if len(args) > 2 {
+					numberStyle = strings.TrimSpace(args[2])
+				}
+				values := counters[name]
+				parts := make([]string, len(values))
+				for k, value := range values {
+					parts[k] = webCounterText(value, numberStyle)
+				}
+				b.WriteString(strings.Join(parts, sep))
+			} else {
+				if len(args) > 1 {
+					numberStyle = strings.TrimSpace(args[1])
+				}
+				value := 0
+				if stack := counters[name]; len(stack) > 0 {
+					value = stack[len(stack)-1]
+				}
+				b.WriteString(webCounterText(value, numberStyle))
+			}
+			i = end + 1
+		case strings.HasPrefix(rest, "url("), strings.HasPrefix(rest, "image("),
+			strings.HasPrefix(rest, "image-set("), strings.HasPrefix(rest, "cross-fade("),
+			strings.HasPrefix(rest, "linear-gradient("), strings.HasPrefix(rest, "radial-gradient("),
+			strings.HasPrefix(rest, "conic-gradient("):
+			// An image has no text equivalent in this reader. Skip the
+			// functional value without losing the strings around it.
+			open := strings.IndexByte(s[i:], '(')
+			if open < 0 {
+				return "", false
+			}
+			open += i
+			end := webSelParenEnd(s, open)
+			if end < 0 {
+				return "", false
+			}
+			i = end + 1
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+// webCounterText formats one counter value in the list styles a page can ask
+// for in counter(name, style). Unknown styles fall back to decimal, which is
+// also what a browser does.
+func webCounterText(value int, style string) string {
+	switch asciiLower(strings.TrimSpace(style)) {
+	case "none":
+		return ""
+	case "decimal-leading-zero":
+		if value < 0 {
+			return "-" + webPadCounter(-value)
+		}
+		return webPadCounter(value)
+	case "lower-alpha", "lower-latin":
+		return webAlphaCounter(value, false)
+	case "upper-alpha", "upper-latin":
+		return webAlphaCounter(value, true)
+	case "lower-roman":
+		return webRomanCounter(value, false)
+	case "upper-roman":
+		return webRomanCounter(value, true)
+	}
+	return strconv.Itoa(value)
+}
+
+func webPadCounter(value int) string {
+	s := strconv.Itoa(value)
+	if len(s) < 2 {
+		return "0" + s
+	}
+	return s
+}
+
+func webAlphaCounter(value int, upper bool) string {
+	if value <= 0 {
+		return strconv.Itoa(value)
+	}
+	var digits []byte
+	for value > 0 {
+		value--
+		digits = append(digits, byte('a'+value%26))
+		value /= 26
+	}
+	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
+		digits[i], digits[j] = digits[j], digits[i]
+	}
+	if upper {
+		for i := range digits {
+			digits[i] -= 'a' - 'A'
+		}
+	}
+	return string(digits)
+}
+
+func webRomanCounter(value int, upper bool) string {
+	if value <= 0 || value >= 4000 {
+		return strconv.Itoa(value)
+	}
+	values := [...]struct {
+		value int
+		text  string
+	}{
+		{1000, "m"}, {900, "cm"}, {500, "d"}, {400, "cd"},
+		{100, "c"}, {90, "xc"}, {50, "l"}, {40, "xl"},
+		{10, "x"}, {9, "ix"}, {5, "v"}, {4, "iv"}, {1, "i"},
+	}
+	var b strings.Builder
+	for _, entry := range values {
+		for value >= entry.value {
+			b.WriteString(entry.text)
+			value -= entry.value
+		}
+	}
+	result := b.String()
+	if upper {
+		result = strings.ToUpper(result)
+	}
+	return result
+}
+
+// webCounterOp is one counter name and the amount it resets, increments or
+// sets. CSS allows several operations in one declaration.
+type webCounterOp struct {
+	name  string
+	value int
+}
+
+// webCounterOps parses `counter-reset`, `counter-increment` or `counter-set`.
+// A name without a number uses the property's default. `reversed()` and other
+// functions this reader does not model are skipped rather than treated as a
+// name.
+func webCounterOps(value string, fallback int) []webCounterOp {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	fields := webCSSSpaceFields(value)
+	var ops []webCounterOp
+	for i := 0; i < len(fields); {
+		name := fields[i]
+		i++
+		switch asciiLower(name) {
+		case "none", "initial", "inherit", "unset", "revert", "revert-layer":
+			continue
+		}
+		if name == "" || !webSelIdentStart(name, 0) || strings.ContainsAny(name, "()") {
+			continue
+		}
+		op := webCounterOp{name: name, value: fallback}
+		if i < len(fields) {
+			if n, err := strconv.Atoi(fields[i]); err == nil {
+				op.value = n
+				i++
+			}
+		}
+		ops = append(ops, op)
+	}
+	return ops
+}
+
+// applyCounters runs the counter declarations of one element. A counter-reset
+// pushes a nested instance, recorded on the element's frame so its end tag can
+// pop it; counter-increment changes the nearest instance and therefore carries
+// across following siblings. Lists get the implicit list-item counter every
+// browser exposes.
+func (p *webParser) applyCounters(tag string, style webStyle) {
+	p.pendingCounterResets = p.pendingCounterResets[:0]
+	if tag == "ul" || tag == "ol" {
+		p.pushCounterReset("list-item", 0)
+	}
+	for _, op := range webCounterOps(style.CounterReset, 0) {
+		p.pushCounterReset(op.name, op.value)
+	}
+	for _, op := range webCounterOps(style.CounterIncrement, 1) {
+		p.incrementCounter(op.name, op.value)
+	}
+	for _, op := range webCounterOps(style.CounterSet, 0) {
+		p.setCounter(op.name, op.value)
+	}
+	if tag == "li" {
+		p.incrementCounter("list-item", 1)
+	}
+}
+
+func (p *webParser) pushCounterReset(name string, value int) {
+	if p.counters == nil {
+		p.counters = make(map[string][]int, 4)
+	}
+	p.counters[name] = append(p.counters[name], value)
+	p.pendingCounterResets = append(p.pendingCounterResets, name)
+}
+
+func (p *webParser) incrementCounter(name string, by int) {
+	stack := p.counters[name]
+	if len(stack) == 0 {
+		stack = append(stack, 0)
+	}
+	stack[len(stack)-1] += by
+	p.counters[name] = stack
+}
+
+func (p *webParser) setCounter(name string, value int) {
+	stack := p.counters[name]
+	if len(stack) == 0 {
+		stack = append(stack, value)
+	} else {
+		stack[len(stack)-1] = value
+	}
+	p.counters[name] = stack
+}
+
+func (p *webParser) popCounterResets(names []string) {
+	for _, name := range names {
+		stack := p.counters[name]
+		if len(stack) == 0 {
+			continue
+		}
+		stack = stack[:len(stack)-1]
+		if len(stack) == 0 {
+			delete(p.counters, name)
+		} else {
+			p.counters[name] = stack
+		}
+	}
 }
 
 func (p *webParser) nextBullet(style webStyle) string {
@@ -7344,11 +8944,17 @@ func (p *webParser) ensureBlock() *webBlock {
 		BorderTop:      st.BorderTop,
 		BorderBottom:   st.BorderBottom,
 		BorderWidth:    st.BorderWidth,
+		BorderStyle:    st.BorderStyle,
+		Outline:        st.Outline,
+		OutlineOffset:  st.OutlineOffset,
 		BorderColor:    st.BorderColor,
 		HasBorderColor: st.HasBorderColor,
 		Bullet:         p.pendingB,
+		MarkerStyle:    p.pendingBStyle,
+		HasMarkerStyle: p.hasPendingBStyle,
 		InMain:         p.mainDepth > 0,
 		FlexGrow:       st.FlexGrow,
+		FlexShrink:     st.FlexShrink,
 		FlexBasis:      st.FlexBasis,
 		BasisPct:       st.BasisPct,
 		Width:          st.Width,
@@ -7373,7 +8979,7 @@ func (p *webParser) ensureBlock() *webBlock {
 	}
 	p.tagFlexBlock(block, st)
 	block.Details, block.DetailsShown = p.detailsTag()
-	p.pendingB = ""
+	p.pendingB, p.pendingBStyle, p.hasPendingBStyle = "", webStyle{}, false
 	p.current = block
 	return block
 }
@@ -7696,6 +9302,13 @@ func (p *webParser) endSelect() {
 }
 
 func (p *webParser) addText(raw string) {
+	p.addTextStyled(raw, p.topStyle())
+}
+
+// addTextStyled adds a text node with a style that is not necessarily the top
+// of the element stack. Generated content uses the style it resolved for the
+// pseudo-element; everything else goes through addText above.
+func (p *webParser) addTextStyled(raw string, style webStyle) {
 	if p.inHead || raw == "" {
 		return
 	}
@@ -7710,7 +9323,6 @@ func (p *webParser) addText(raw string) {
 		p.selectOptionText.WriteString(htmlstd.UnescapeString(raw))
 		return
 	}
-	style := p.topStyle()
 	if style.Hidden {
 		return
 	}
@@ -7891,7 +9503,7 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	layout := &webLayout{RowH: rowH}
 
 	fonts := make(map[int]*ttf.Font, 8)
-	fontAt := func(cssPx float64) *ttf.Font {
+	fontSize := func(cssPx float64) int {
 		size := int(math.Round(cssPx * baseSize / 16))
 		minSize := int(math.Round(baseSize * 0.72))
 		maxSize := int(math.Round(baseSize * 1.5))
@@ -7904,11 +9516,31 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		if size < 8 {
 			size = 8
 		}
+		return size
+	}
+	fontAt := func(cssPx float64) *ttf.Font {
+		size := fontSize(cssPx)
 		if font, ok := fonts[size]; ok {
 			return font
 		}
 		font := getFontSized(config, elem.Font, size)
 		fonts[size] = font
+		return font
+	}
+	italicFonts := make(map[int]*ttf.Font, 4)
+	fontAtStyle := func(style webStyle) *ttf.Font {
+		if !style.Italic {
+			return fontAt(style.FontPx)
+		}
+		size := fontSize(style.FontPx)
+		if font, ok := italicFonts[size]; ok {
+			return font
+		}
+		font := getFontSizedStyled(config, elem.Font, size, ttf.STYLE_ITALIC)
+		if font == nil {
+			font = fontAt(style.FontPx)
+		}
+		italicFonts[size] = font
 		return font
 	}
 
@@ -7928,7 +9560,7 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		pageWidth := float64(contentW) * 16 / baseSize
 		sizes := webNewContainerSizes(d.Containers, pageWidth)
 		l := &webLayouter{
-			doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt,
+			doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt, fontAtStyle: fontAtStyle,
 			spaceWidths:    map[*ttf.Font]int32{},
 			sanitized:      make(map[webSanitizeKey]string, 256),
 			containerSizes: sizes,
@@ -8167,6 +9799,9 @@ type webLayouter struct {
 	rowH     int32
 	baseSize float64
 	fontAt   func(float64) *ttf.Font
+	// fontAtStyle resolves a face including its synthetic italic style. It is
+	// separate from fontAt so metrics-only callers stay cheap.
+	fontAtStyle func(webStyle) *ttf.Font
 
 	// containerSizes is shared with every flex-item sub-layout, so a measured
 	// column width is visible to the containing block after the merge.
@@ -8227,6 +9862,149 @@ func (l *webLayouter) sanitizedWord(font *ttf.Font, text string) string {
 	return out
 }
 
+// webConstraintLength resolves a min/max length in CSS px. Percentages are
+// relative to avail, the containing block's measure in device pixels.
+func webConstraintLength(px, pct float64, avail int32, scale float64) float64 {
+	if scale <= 0 {
+		scale = 1
+	}
+	if pct > 0 {
+		return float64(avail) * pct / 100 / scale
+	}
+	if px > 0 {
+		return px
+	}
+	return 0
+}
+
+// webBlockContentWidth resolves the text measure of an ordinary block. Auto
+// width fills the space left after its horizontal margins/padding. An explicit
+// width (or a max-width) shrinks that measure, and min-width is applied last so
+// a contradictory min>max pair resolves the way CSS does: the minimum wins.
+func webBlockContentWidth(block webBlock, contentW int32, baseSize float64) int32 {
+	if contentW <= 0 {
+		return 0
+	}
+	scale := baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	cssAvail := float64(contentW) / scale
+	pad := block.Indent + block.Style.IndentRight
+	maxW := webConstraintLength(block.Style.MaxWidth, block.Style.MaxWidthPct, contentW, scale)
+	minW := webConstraintLength(block.Style.MinWidth, block.Style.MinWidthPct, contentW, scale)
+	borderBox := block.Style.BoxSizing == 1
+	explicit := 0.0
+	if block.Style.WidthPct > 0 {
+		explicit = cssAvail * block.Style.WidthPct / 100
+	} else if block.Style.Width > 0 {
+		explicit = block.Style.Width
+	}
+	content := 0.0
+	if explicit > 0 || borderBox {
+		box := explicit
+		if box <= 0 {
+			box = cssAvail
+		}
+		// max-width/min-width apply to the border box in border-box mode, so
+		// the padding is removed after the constraint, not before it.
+		if maxW > 0 && box > maxW {
+			box = maxW
+		}
+		if minW > 0 && box < minW {
+			box = minW
+		}
+		content = box
+		if borderBox {
+			content -= pad
+		}
+	} else {
+		// Auto width fills the containing block, then max/min bound the
+		// content box for content-box sizing.
+		content = cssAvail - pad
+		if maxW > 0 && content > maxW {
+			content = maxW
+		}
+		if minW > 0 && content < minW {
+			content = minW
+		}
+	}
+	if content < 0 {
+		content = 0
+	}
+	// Keep the box inside the containing block: no negative or overflowing
+	// measures when a percentage/min-width asks for more than the page has.
+	limit := cssAvail - block.Indent
+	if limit < 0 {
+		limit = 0
+	}
+	if content > limit {
+		content = limit
+	}
+	return int32(math.Round(content * scale))
+}
+
+// webFloatReserve is the part of the flow a CSS float occupies. Following
+// blocks narrow (left/right) while their first row is inside the reserve, and
+// clear moves a block below its end row.
+type webFloatReserve struct {
+	side     int
+	width    int32
+	startRow int32
+	endRow   int32
+}
+
+func webFloatWidthsAt(reserves []webFloatReserve, row int32) (left, right int32) {
+	for _, r := range reserves {
+		if row < r.startRow || row >= r.endRow {
+			continue
+		}
+		if r.side == 1 {
+			left += r.width
+		} else if r.side == 2 {
+			right += r.width
+		}
+	}
+	return left, right
+}
+
+func webClearRow(reserves []webFloatReserve, row int32, clear int) int32 {
+	target := row
+	for _, r := range reserves {
+		if r.endRow <= target {
+			continue
+		}
+		if clear == 3 || clear == r.side {
+			target = r.endRow
+		}
+	}
+	return target
+}
+
+// webRelativeOffset converts top/right/bottom/left into the paint offset of a
+// relatively positioned box. Relative offsets move the box without changing
+// the flow, which is exactly what the reader needs for badges and nudged
+// labels. CSS resolves left before right and top before bottom, and so does
+// this.
+func webRelativeOffset(st webStyle, baseSize float64) (int32, int32) {
+	if st.Position != webPositionRelative || baseSize <= 0 {
+		return 0, 0
+	}
+	scale := baseSize / 16
+	dx, dy := int32(0), int32(0)
+	if st.HasLeft {
+		dx = int32(math.Round(st.Left * scale))
+	} else if st.HasRight {
+		dx = -int32(math.Round(st.Right * scale))
+	}
+	if st.HasTop {
+		dy = int32(math.Round(st.Top * scale))
+	} else if st.HasBottom {
+		dy = -int32(math.Round(st.Bottom * scale))
+	}
+	return dx, dy
+}
+
 // layoutBlocks lays out a column of blocks into l.layout. Positions are
 // relative to the column's own width, with padX as its left edge, so a flex
 // item can be laid out at 0 and moved later.
@@ -8235,6 +10013,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	rowH := l.rowH
 	baseSize := l.baseSize
 	fontAt := l.fontAt
+	fontAtStyle := l.fontAtStyle
+	if fontAtStyle == nil {
+		fontAtStyle = func(style webStyle) *ttf.Font { return fontAt(style.FontPx) }
+	}
 	d := l.doc
 	nextY := func() int32 { return int32(len(layout.Rows)) * rowH }
 	skipRows := func(n int32) {
@@ -8279,12 +10061,47 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	// does it. Summing them stacked a heading's own spacing on top of the
 	// previous block's and filled real pages with holes on a small screen.
 	previousMarginBot := 0.0
+	flowPadX, flowContentW := padX, contentW
+	var floatReserves []webFloatReserve
 	for i := 0; i < len(blocks); i++ {
 		block := blocks[i]
 		if len(layout.Rows) >= webMaxRows {
 			break
 		}
+		// A float only narrows the rows it overlaps. Start each block with the
+		// full column and subtract the reserves that are active at its top row.
+		padX, contentW = flowPadX, flowContentW
 		blockStart := int32(len(layout.Rows))
+		rectStart, imageStart := len(layout.Rects), len(layout.Images)
+		videoStart, floatStart := len(layout.Videos), len(layout.Floats)
+		dx, dy := webRelativeOffset(block.Style, baseSize)
+		shiftRelative := func() {
+			if dx == 0 && dy == 0 {
+				return
+			}
+			for i := int(blockStart); i < len(layout.Rows); i++ {
+				layout.Rows[i].Y += dy
+				for j := range layout.Rows[i].Runs {
+					layout.Rows[i].Runs[j].X += dx
+				}
+			}
+			for i := rectStart; i < len(layout.Rects); i++ {
+				layout.Rects[i].Rect.X += dx
+				layout.Rects[i].Rect.Y += dy
+			}
+			for i := imageStart; i < len(layout.Images); i++ {
+				layout.Images[i].Rect.X += dx
+				layout.Images[i].Rect.Y += dy
+			}
+			for i := videoStart; i < len(layout.Videos); i++ {
+				layout.Videos[i].Rect.X += dx
+				layout.Videos[i].Rect.Y += dy
+			}
+			for i := floatStart; i < len(layout.Floats); i++ {
+				layout.Floats[i].X += dx
+				layout.Floats[i].Y += dy
+			}
+		}
 		// A run of blocks tagged with one flex group is that container's
 		// items. In a row they become side-by-side columns; in a column they
 		// are ordinary blocks separated by the container's gap.
@@ -8303,6 +10120,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			l.layoutFlexRow(blocks[i:j], padX, contentW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = 0
+			shiftRelative()
 			i = j - 1
 			continue
 		}
@@ -8336,6 +10154,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = blocks[j-1].MarginBot
+			shiftRelative()
 			i = j - 1
 			continue
 		}
@@ -8348,6 +10167,31 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			skipRows(marginRows(gap))
 		}
 		previousMarginBot = block.MarginBot
+		// `clear` moves the block below the floats it names instead of letting
+		// it slide into the narrowed band beside them.
+		if block.Style.Clear != 0 && len(floatReserves) > 0 {
+			row := int32(len(layout.Rows))
+			if target := webClearRow(floatReserves, row, block.Style.Clear); target > row {
+				skipRows(target - row)
+			}
+		}
+		row := int32(len(layout.Rows))
+		leftFloat, rightFloat := webFloatWidthsAt(floatReserves, row)
+		if leftFloat+rightFloat > 0 && contentW-leftFloat-rightFloat >= 24 {
+			padX += leftFloat
+			contentW -= leftFloat + rightFloat
+		}
+		if block.Style.FloatSide != 0 {
+			endRow, floatW := l.layoutCSSFloat(block, flowPadX, flowContentW, row, leftFloat, rightFloat)
+			if endRow > row {
+				floatReserves = append(floatReserves, webFloatReserve{
+					side: block.Style.FloatSide, width: floatW, startRow: row, endRow: endRow,
+				})
+			}
+			previousMarginBot = 0
+			shiftRelative()
+			continue
+		}
 		if block.Rule {
 			y := nextY() + rowH/2
 			color := sdl.Color{R: 200, G: 206, B: 216, A: 255}
@@ -8370,22 +10214,31 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if indent < 0 || indent > contentW/2 {
 				indent = 0
 			}
-			layout.Rects = append(layout.Rects, webRect{
-				Rect:  sdl.Rect{X: padX + indent, Y: y, W: contentW - indent, H: barW},
-				Color: webFadeColor(color, d.Paper, block.Style),
-			})
+			ruleW := webBlockContentWidth(block, contentW, baseSize)
+			if ruleW < 0 {
+				ruleW = 0
+			}
+			if !block.Style.Invisible {
+				layout.Rects = append(layout.Rects, webRect{
+					Rect:  sdl.Rect{X: padX + indent, Y: y, W: ruleW, H: barW},
+					Color: webFadeColor(color, d.Paper, block.Style),
+				})
+			}
 			skipRows(1)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
+			shiftRelative()
 			continue
 		}
 		if block.Image {
 			l.layoutImage(block, padX, contentW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
+			shiftRelative()
 			continue
 		}
 		if block.Video {
 			l.layoutVideo(block, padX, contentW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
+			shiftRelative()
 			continue
 		}
 		startGrid := int32(len(layout.Rows))
@@ -8406,6 +10259,18 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if indentRight > contentW/3 {
 			indentRight = contentW / 3
 		}
+		// Resolve width/min-width/max-width (and box-sizing) for this block.
+		// blockW is the measure from the text's left edge; paintW is the full
+		// box including the right gutter, so an unconstrained block keeps the
+		// page-wide box it always had.
+		blockW := webBlockContentWidth(block, contentW, baseSize)
+		paintW := indent + blockW + indentRight
+		if paintW > contentW {
+			paintW = contentW
+		}
+		if paintW < 0 {
+			paintW = 0
+		}
 		// One radius per box, in design pixels; the draw clamps it to half the
 		// box so `border-radius: 999px` is a pill rather than an error.
 		radius := int32(block.Style.Radius * baseSize / 16)
@@ -8422,28 +10287,34 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 		bullet := ""
 		bulletW := int32(0)
+		markerStyle := block.Style
+		if block.HasMarkerStyle {
+			markerStyle = block.MarkerStyle
+		}
+		markerFont := fontAtStyle(markerStyle)
 		if block.Bullet != "" {
 			bullet = block.Bullet
-			if font := fontAt(16); font != nil {
-				if w, _, err := font.SizeUTF8(bullet + " "); err == nil {
+			if markerFont != nil {
+				if w, _, err := markerFont.SizeUTF8(bullet + " "); err == nil {
 					bulletW = int32(w)
 				}
 			}
 		}
 		textIndent := indent + bulletW
-		avail := contentW - textIndent - indentRight
+		avail := blockW - bulletW
 		if avail < 48 {
 			textIndent = indent
-			avail = contentW - textIndent - indentRight
+			avail = blockW
 		}
-		if avail < 48 {
-			avail = contentW - textIndent
+		if avail < 0 {
+			avail = 0
 		}
 
 		var line []webRunPos
 		var lineMax, lineFontH int32
 		firstLine := true
 		lineStart := padX + textIndent
+		lineRight := lineStart + avail
 		x := lineStart + firstLineIndent
 
 		flushLine := func() {
@@ -8455,12 +10326,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				lineWidth = 0
 			}
 			if firstLine && bullet != "" {
-				if font := fontAt(16); font != nil {
+				if markerFont != nil {
 					line = append([]webRunPos{{
 						Text:  bullet,
 						X:     padX + indent,
-						Font:  font,
-						Color: webResolveColor(block.Style, d),
+						Font:  markerFont,
+						Color: webResolveColor(markerStyle, d),
+						Bold:  markerStyle.Bold,
 					}}, line...)
 				}
 			}
@@ -8547,7 +10419,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					if word == "" {
 						continue
 					}
-					font := fontAt(run.Style.FontPx)
+					font := fontAtStyle(run.Style)
 					if font == nil {
 						continue
 					}
@@ -8556,11 +10428,29 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					if text == "" {
 						continue
 					}
-					width, height, err := font.SizeUTF8(text)
+					_, height, err := font.SizeUTF8(text)
 					if err != nil {
 						continue
 					}
-					wordW := int32(width)
+					letterSpacing := int32(math.Round(run.Style.LetterSpacing * baseSize / 16))
+					if run.Style.Control != nil {
+						letterSpacing = 0 // a field's label stays one painted box
+					}
+					measure := func(s string) int32 {
+						w, _, err := font.SizeUTF8(s)
+						if err != nil {
+							return 0
+						}
+						total := int32(w)
+						if n := utf8.RuneCountInString(s); n > 1 {
+							total += letterSpacing * int32(n-1)
+						}
+						if total < 0 {
+							return 0
+						}
+						return total
+					}
+					wordW := measure(text)
 					boxW, boxH := int32(0), int32(0)
 					if ctrl := run.Style.Control; ctrl != nil && (ctrl.Kind == "text" || ctrl.Kind == "textarea") {
 						boxW = int32(ctrl.Width * baseSize / 16)
@@ -8589,21 +10479,22 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						wordW = boxW
 					}
 					if len(line) > 0 && (wi > 0 || leadingSpace) {
-						spaceW := l.spaceWidth(font)
-						if x+spaceW+wordW > padX+contentW {
+						spaceW := l.spaceWidth(font) + int32(math.Round(run.Style.WordSpacing*baseSize/16)) + letterSpacing
+						if spaceW < 0 {
+							spaceW = 0
+						}
+						if x+spaceW+wordW > lineRight {
 							flushLine()
 						} else {
 							x += spaceW
 						}
 					}
-					if boxW > 0 && len(line) > 0 && x+boxW > padX+contentW-indentRight {
+					if boxW > 0 && len(line) > 0 && x+boxW > lineRight {
 						flushLine()
 					}
 					if boxW == 0 && wordW > avail {
 						text = ellipsize(font, text, avail)
-						if w2, _, e := font.SizeUTF8(text); e == nil {
-							wordW = int32(w2)
-						}
+						wordW = measure(text)
 					}
 					color := webResolveColor(run.Style, d)
 					if run.Style.Control != nil && run.Style.Control.PlaceholderShown() {
@@ -8618,20 +10509,50 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							A: color.A,
 						}
 					}
-					line = append(line, webRunPos{
-						Text:      text,
-						X:         x,
-						Font:      font,
-						Color:     color,
-						Bold:      run.Style.Bold,
-						Underline: run.Style.Underline,
-						Strike:    run.Style.Strike,
-						Href:      run.Style.Href,
-						HasBg:     run.Style.HasBg && (!block.HasBg || boxW > 0),
-						Bg:        run.Style.Background,
-						Control:   run.Style.Control,
-						BoxW:      boxW, BoxH: boxH,
-					})
+					pos := webRunPos{
+						Text:                text,
+						X:                   x,
+						Font:                font,
+						Color:               color,
+						Bold:                run.Style.Bold,
+						Underline:           run.Style.Underline,
+						Strike:              run.Style.Strike,
+						DecorationColor:     run.Style.DecorationColor,
+						HasDecorationColor:  run.Style.HasDecorationColor,
+						DecorationThickness: int32(math.Round(run.Style.DecorationThickness * baseSize / 16)),
+						DecorationStyle:     run.Style.DecorationStyle,
+						HasShadow:           run.Style.HasTextShadow,
+						ShadowX:             int32(math.Round(run.Style.TextShadowX * baseSize / 16)),
+						ShadowY:             int32(math.Round(run.Style.TextShadowY * baseSize / 16)),
+						ShadowColor:         run.Style.TextShadowColor,
+						HasShadowColor:      run.Style.HasTextShadowColor,
+						Href:                run.Style.Href,
+						HasBg:               run.Style.HasBg && (!block.HasBg || boxW > 0),
+						Bg:                  run.Style.Background,
+						Control:             run.Style.Control,
+						BoxW:                boxW, BoxH: boxH,
+						Invisible:      run.Style.Invisible,
+						VerticalOffset: webVerticalOffset(run.Style, font, baseSize),
+					}
+					// Letter spacing changes the advance between glyphs. A run with
+					// an inline background or a control frame is kept whole so its
+					// box does not become one box per character; those are rare and
+					// their spacing is visually irrelevant.
+					if letterSpacing != 0 && boxW == 0 && !pos.HasBg && pos.Control == nil {
+						drawX := x
+						for _, r := range text {
+							glyph := string(r)
+							pos.Text, pos.X = glyph, drawX
+							line = append(line, pos)
+							gw, _, err := font.SizeUTF8(glyph)
+							if err != nil {
+								gw = 0
+							}
+							drawX += int32(gw) + letterSpacing
+						}
+					} else {
+						line = append(line, pos)
+					}
 					x += wordW
 					if x > lineMax {
 						lineMax = x
@@ -8648,22 +10569,117 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		flushLine()
 
 		endGrid := int32(len(layout.Rows))
+		// A pixel height is a floor for the flow box: short content pads out,
+		// taller content keeps its rows (CSS overflow is not clipped).
+		if minBoxH := block.Style.Height * baseSize / 16; minBoxH > 0 {
+			rows := int32(math.Ceil(minBoxH / float64(rowH)))
+			if endGrid-startGrid < rows {
+				skipRows(rows - (endGrid - startGrid))
+				endGrid = int32(len(layout.Rows))
+			}
+		}
+		// max-height clips the block's own rows; min-height pads it out. Both
+		// are expressed in CSS px and rounded on the row grid, so a box never
+		// ends up with a negative or fractional height.
+		if maxH := block.Style.MaxHeight * baseSize / 16; maxH > 0 {
+			rows := int32(math.Ceil(maxH / float64(rowH)))
+			if rows < 1 {
+				rows = 1
+			}
+			if endGrid-startGrid > rows {
+				endGrid = startGrid + rows
+				if int(endGrid) < len(layout.Rows) {
+					layout.Rows = layout.Rows[:endGrid]
+				}
+			}
+		}
+		if minH := block.Style.MinHeight * baseSize / 16; minH > 0 {
+			rows := int32(math.Ceil(minH / float64(rowH)))
+			if endGrid-startGrid < rows {
+				skipRows(rows - (endGrid - startGrid))
+				endGrid = int32(len(layout.Rows))
+			}
+		}
 		l.recordContainerRows(block, blockStart, endGrid)
 		height := (endGrid - startGrid) * rowH
-		if block.HasBg && height > 0 {
-			rect := webRect{
-				Rect:   sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: contentW + 8, H: height},
-				Color:  webFadeColor(block.Background, d.Paper, block.Style),
-				Z:      block.ZIndex,
+		if block.Style.HasBoxShadow && !block.Style.Invisible && height > 0 {
+			shadowColor := sdl.Color{R: 0, G: 0, B: 0, A: 70}
+			if block.Style.HasBoxShadowColor {
+				shadowColor = block.Style.BoxShadowColor
+			}
+			layout.Rects = append(layout.Rects, webRect{
+				Rect: sdl.Rect{
+					X: padX - 4 + int32(math.Round(block.Style.BoxShadowX*baseSize/16)),
+					Y: startGrid*rowH + int32(math.Round(block.Style.BoxShadowY*baseSize/16)),
+					W: paintW + 8, H: height,
+				},
+				Color:  webFadeColor(shadowColor, d.Paper, block.Style),
+				Z:      block.ZIndex - 1,
 				Radius: radius,
-			}
-			if block.HasGradient {
-				rect.Gradient = webFadeGradient(block.Gradient, d.Paper, block.Style)
-				rect.HasGradient = true
-			}
-			layout.Rects = append(layout.Rects, rect)
+			})
 		}
-		if height > 0 && (block.BorderLeft || block.BorderRight || block.BoxBorder || block.BorderTop || block.BorderBottom) {
+		if block.HasBg && !block.Style.Invisible && height > 0 {
+			layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
+				Rect:   sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: paintW + 8, H: height},
+				Color:  webFadeColor(block.Background, d.Paper, block.Style),
+				Radius: radius,
+				Z:      block.ZIndex,
+			})
+		}
+		if !block.Style.Invisible && height > 0 {
+			tileBox := sdl.Rect{X: padX + indent, Y: startGrid * rowH, W: blockW + indentRight, H: height}
+			layers := make([]webBackgroundLayerStyle, 0, webMaxBackgroundLayers)
+			for i := 0; i < block.Style.BackgroundLayerCount && i < webMaxBackgroundLayers; i++ {
+				layers = append(layers, block.Style.BackgroundLayers[i])
+			}
+			if len(layers) == 0 && (block.HasGradient || block.Style.BackgroundImage != "") {
+				layers = append(layers, webBackgroundLayerStyle{
+					Image: block.Style.BackgroundImage, Gradient: &block.Gradient,
+					HasGradient: block.HasGradient, Size: block.Style.BackgroundSize,
+					Position: block.Style.BackgroundPosition, Repeat: block.Style.BackgroundRepeat,
+				})
+			}
+			remaining := webMaxBackgroundTiles
+			for i := len(layers) - 1; i >= 0 && remaining > 0; i-- {
+				layer := layers[i]
+				if layer.Image == "" && !layer.HasGradient {
+					continue
+				}
+				layerRect, fit := webBackgroundLayerGeometry(tileBox, layer, d, baseSize/16)
+				tiles := webBackgroundTiles(tileBox, layerRect, layer.Repeat)
+				if len(tiles) > remaining {
+					tiles = tiles[:remaining]
+				}
+				remaining -= len(tiles)
+				if layer.HasGradient && layer.Gradient != nil {
+					layerColor := webGradientAverage(*layer.Gradient)
+					for _, tile := range tiles {
+						layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
+							Rect:        tile,
+							Color:       webFadeColor(layerColor, d.Paper, block.Style),
+							Gradient:    webFadeGradient(*layer.Gradient, d.Paper, block.Style),
+							HasGradient: true,
+							Radius:      radius,
+							Z:           block.ZIndex,
+						})
+					}
+				}
+				if layer.Image != "" {
+					for _, tile := range tiles {
+						layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
+							Rect:           tile,
+							Image:          layer.Image,
+							ObjectFit:      fit,
+							ObjectPosition: layer.Position,
+							Opacity:        webPaintOpacity(block.Style),
+							Z:              block.ZIndex,
+						})
+					}
+				}
+			}
+		}
+		borderPaint := block.BorderStyle != webBorderNone && block.BorderStyle != webBorderHidden
+		if height > 0 && !block.Style.Invisible && ((borderPaint && (block.BorderLeft || block.BorderRight || block.BoxBorder || block.BorderTop || block.BorderBottom)) || block.Outline) {
 			// One colour for every edge the block draws: an uncoloured border is
 			// the reader's light hairline, a coloured one is what the sheet
 			// asked for — a `border-left: 4px solid #c00` quote used to render a
@@ -8687,54 +10703,100 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				ruleH = 2
 			}
 			top := startGrid * rowH
-			if block.BorderLeft {
+			if borderPaint && block.BorderLeft {
 				layout.Rects = append(layout.Rects, webRect{
-					Rect:  sdl.Rect{X: padX + indent - 8, Y: top, W: barW, H: height},
-					Color: color,
-					Z:     block.ZIndex,
+					Rect:        sdl.Rect{X: padX + indent - 8, Y: top, W: barW, H: height},
+					Color:       color,
+					Z:           block.ZIndex,
+					BorderStyle: block.BorderStyle,
 				})
 			}
-			if block.BorderRight {
+			if borderPaint && block.BorderRight {
 				// Mirrors the left bar into the same gutter on the other side.
-				x := padX + contentW - int32(block.Style.IndentRight) + 5
+				x := padX + indent + blockW + 5
 				layout.Rects = append(layout.Rects, webRect{
-					Rect:  sdl.Rect{X: x, Y: top, W: barW, H: height},
-					Color: color,
-					Z:     block.ZIndex,
+					Rect:        sdl.Rect{X: x, Y: top, W: barW, H: height},
+					Color:       color,
+					Z:           block.ZIndex,
+					BorderStyle: block.BorderStyle,
 				})
 			}
-			if block.BoxBorder {
+			if borderPaint && block.BoxBorder {
 				x := padX + indent - 6
-				w := contentW - indent + 12
+				w := blockW + indentRight + 12
 				if x < padX {
 					x = padX
-					w = contentW
+					w = paintW
 				}
 				layout.Rects = append(layout.Rects, webRect{
-					Rect:      sdl.Rect{X: x, Y: top, W: w, H: height},
+					Rect:        sdl.Rect{X: x, Y: top, W: w, H: height},
+					Color:       color,
+					Stroke:      true,
+					Thickness:   ruleH,
+					Z:           block.ZIndex,
+					Radius:      radius,
+					BorderStyle: block.BorderStyle,
+				})
+			} else {
+				if borderPaint && block.BorderTop {
+					layout.Rects = append(layout.Rects, webRect{
+						Rect:        sdl.Rect{X: padX, Y: top, W: paintW, H: ruleH},
+						Color:       color,
+						Z:           block.ZIndex,
+						BorderStyle: block.BorderStyle,
+					})
+				}
+				if borderPaint && block.BorderBottom {
+					layout.Rects = append(layout.Rects, webRect{
+						Rect:        sdl.Rect{X: padX, Y: top + height - ruleH, W: paintW, H: ruleH},
+						Color:       color,
+						Z:           block.ZIndex,
+						BorderStyle: block.BorderStyle,
+					})
+				}
+			}
+			if block.Outline {
+				off := int32(math.Round(block.OutlineOffset * baseSize / 16))
+				x := padX + indent - 6 - off
+				w := blockW + indentRight + 12 + off*2
+				if x < padX && off <= 0 {
+					x = padX
+					w = paintW
+				}
+				layout.Rects = append(layout.Rects, webRect{
+					Rect:      sdl.Rect{X: x, Y: top - off, W: w, H: height + off*2},
 					Color:     color,
 					Stroke:    true,
 					Thickness: ruleH,
 					Z:         block.ZIndex,
-					Radius:    radius,
+					Radius:    radius + off,
 				})
-			} else {
-				if block.BorderTop {
-					layout.Rects = append(layout.Rects, webRect{
-						Rect:  sdl.Rect{X: padX, Y: top, W: contentW, H: ruleH},
-						Color: color,
-						Z:     block.ZIndex,
-					})
-				}
-				if block.BorderBottom {
-					layout.Rects = append(layout.Rects, webRect{
-						Rect:  sdl.Rect{X: padX, Y: top + height - ruleH, W: contentW, H: ruleH},
-						Color: color,
-						Z:     block.ZIndex,
-					})
-				}
 			}
 		}
+		if block.Style.OverflowX != 0 || block.Style.OverflowY != 0 {
+			clip := sdl.Rect{X: 0, Y: 0, W: contentW, H: 1 << 30}
+			if block.Style.OverflowX != 0 {
+				clip.X, clip.W = padX+indent, blockW+indentRight
+			}
+			if block.Style.OverflowY != 0 {
+				clip.Y, clip.H = startGrid*rowH, height
+			}
+			for i := int(startGrid); i < len(layout.Rows) && i < int(endGrid); i++ {
+				for j := range layout.Rows[i].Runs {
+					layout.Rows[i].Runs[j].Clip, layout.Rows[i].Runs[j].HasClip = clip, true
+				}
+			}
+			for i := rectStart; i < len(layout.Rects); i++ {
+				layout.Rects[i].Clip, layout.Rects[i].HasClip = clip, true
+			}
+			for i := imageStart; i < len(layout.Images); i++ {
+				layout.Images[i].Clip, layout.Images[i].HasClip = clip, true
+			}
+			for i := videoStart; i < len(layout.Videos); i++ {
+				layout.Videos[i].Clip, layout.Videos[i].HasClip = clip, true
+			}
+		}
+		shiftRelative()
 	}
 
 }
@@ -8950,6 +11012,187 @@ func webGradientCornerInset(radius, height, dy int32) int32 {
 	return 0
 }
 
+// webBorderPaintRects turns a border style into the rectangles the painter
+// fills. Solid returns nil because the rounded stroke path already draws it;
+// none/hidden return no geometry. The rectangle is layout-local, so callers
+// translate it before filling.
+func webBorderPaintRects(rect sdl.Rect, thickness int32, style int, closed bool) []sdl.Rect {
+	if rect.W <= 0 || rect.H <= 0 || style == webBorderNone || style == webBorderHidden {
+		return nil
+	}
+	if thickness < 1 {
+		thickness = 1
+	}
+	if style == webBorderSolid {
+		return nil
+	}
+	if style == webBorderDouble {
+		t := thickness / 3
+		if t < 1 {
+			t = 1
+		}
+		gap := t
+		out := make([]sdl.Rect, 0, 8)
+		if closed {
+			out = append(out,
+				sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: t},
+				sdl.Rect{X: rect.X, Y: rect.Y + 2*(t+gap), W: rect.W, H: t},
+				sdl.Rect{X: rect.X, Y: rect.Y + rect.H - t, W: rect.W, H: t},
+				sdl.Rect{X: rect.X, Y: rect.Y + rect.H - 2*(t+gap) - t, W: rect.W, H: t},
+				sdl.Rect{X: rect.X, Y: rect.Y, W: t, H: rect.H},
+				sdl.Rect{X: rect.X + 2*(t+gap), Y: rect.Y, W: t, H: rect.H},
+				sdl.Rect{X: rect.X + rect.W - t, Y: rect.Y, W: t, H: rect.H},
+				sdl.Rect{X: rect.X + rect.W - 2*(t+gap) - t, Y: rect.Y, W: t, H: rect.H},
+			)
+			return out
+		}
+		if rect.W >= rect.H {
+			return []sdl.Rect{
+				{X: rect.X, Y: rect.Y, W: rect.W, H: t},
+				{X: rect.X, Y: rect.Y + rect.H - t, W: rect.W, H: t},
+			}
+		}
+		return []sdl.Rect{
+			{X: rect.X, Y: rect.Y, W: t, H: rect.H},
+			{X: rect.X + rect.W - t, Y: rect.Y, W: t, H: rect.H},
+		}
+	}
+	dotted := style == webBorderDotted
+	dash := thickness * 3
+	gap := thickness * 2
+	if dash < 4 {
+		dash = 4
+	}
+	if dotted {
+		dash = thickness
+		gap = thickness * 2
+	}
+	line := func(x, y, w, h int32, horizontal bool) []sdl.Rect {
+		out := make([]sdl.Rect, 0, int(max32(w, h)/max32(dash+gap, 1))+1)
+		length := w
+		if !horizontal {
+			length = h
+		}
+		for pos := int32(0); pos < length; pos += dash + gap {
+			end := min32(pos+dash, length)
+			if horizontal {
+				out = append(out, sdl.Rect{X: x + pos, Y: y, W: end - pos, H: h})
+			} else {
+				out = append(out, sdl.Rect{X: x, Y: y + pos, W: w, H: end - pos})
+			}
+		}
+		return out
+	}
+	if !closed {
+		if rect.W >= rect.H {
+			return line(rect.X, rect.Y, rect.W, rect.H, true)
+		}
+		return line(rect.X, rect.Y, rect.W, rect.H, false)
+	}
+	out := make([]sdl.Rect, 0, 8)
+	out = append(out, line(rect.X, rect.Y, rect.W, thickness, true)...)
+	out = append(out, line(rect.X, rect.Y+rect.H-thickness, rect.W, thickness, true)...)
+	out = append(out, line(rect.X, rect.Y, thickness, rect.H, false)...)
+	out = append(out, line(rect.X+rect.W-thickness, rect.Y, thickness, rect.H, false)...)
+	return out
+}
+
+// webClipPaint applies an item's overflow clip in page coordinates and returns
+// a restore function. The clip is layout-local, so it is translated by the
+// page origin and the current row offset before intersecting the page rect.
+func webClipPaint(renderer *sdl.Renderer, page, clip sdl.Rect, has bool, pageX, pageY int32) func() {
+	if renderer == nil || !has {
+		return func() {}
+	}
+	abs := sdl.Rect{X: pageX + clip.X, Y: pageY + clip.Y, W: clip.W, H: clip.H}
+	left, top := max32(abs.X, page.X), max32(abs.Y, page.Y)
+	right := min32(abs.X+abs.W, page.X+page.W)
+	bottom := min32(abs.Y+abs.H, page.Y+page.H)
+	if right <= left || bottom <= top {
+		empty := sdl.Rect{}
+		old := renderer.GetClipRect()
+		renderer.SetClipRect(&empty)
+		return func() { webRestoreClip(renderer, old) }
+	}
+	abs = sdl.Rect{X: left, Y: top, W: right - left, H: bottom - top}
+	old := renderer.GetClipRect()
+	renderer.SetClipRect(&abs)
+	return func() { webRestoreClip(renderer, old) }
+}
+
+func webRestoreClip(renderer *sdl.Renderer, old sdl.Rect) {
+	if old.W > 0 && old.H > 0 {
+		renderer.SetClipRect(&old)
+		return
+	}
+	renderer.SetClipRect(nil)
+}
+
+// webDecorationPaintRects is the underline/strikethrough equivalent of the
+// border geometry helper: one solid bar, paired bars for double, and broken or
+// wavy runs for the other styles. Coordinates are relative to the page rect.
+func webDecorationPaintRects(x, y, width, thickness int32, style int) []sdl.Rect {
+	if width <= 0 {
+		return nil
+	}
+	if thickness < 1 {
+		thickness = 1
+	}
+	switch style {
+	case webDecorationDouble:
+		t := thickness / 3
+		if t < 1 {
+			t = 1
+		}
+		gap := t
+		return []sdl.Rect{
+			{X: x, Y: y, W: width, H: t},
+			{X: x, Y: y + t + gap, W: width, H: t},
+		}
+	case webDecorationDotted:
+		step := thickness * 2
+		if step < 3 {
+			step = 3
+		}
+		out := make([]sdl.Rect, 0, int(width/step)+1)
+		for pos := int32(0); pos < width; pos += step {
+			w := min32(thickness, width-pos)
+			out = append(out, sdl.Rect{X: x + pos, Y: y, W: w, H: thickness})
+		}
+		return out
+	case webDecorationDashed:
+		dash := thickness * 3
+		if dash < 4 {
+			dash = 4
+		}
+		gap := thickness * 2
+		if gap < 2 {
+			gap = 2
+		}
+		out := make([]sdl.Rect, 0, int(width/(dash+gap))+1)
+		for pos := int32(0); pos < width; pos += dash + gap {
+			w := min32(dash, width-pos)
+			out = append(out, sdl.Rect{X: x + pos, Y: y, W: w, H: thickness})
+		}
+		return out
+	case webDecorationWavy:
+		step := int32(4)
+		h := thickness / 2
+		if h < 1 {
+			h = 1
+		}
+		out := make([]sdl.Rect, 0, int(width/step)+1)
+		for pos := int32(0); pos < width; pos += step {
+			w := min32(step, width-pos)
+			dy := int32(math.Round(math.Sin(float64(pos)/6) * 2))
+			out = append(out, sdl.Rect{X: x + pos, Y: y + dy, W: w, H: h})
+		}
+		return out
+	default:
+		return []sdl.Rect{{X: x, Y: y, W: width, H: thickness}}
+	}
+}
+
 // drawWebGradient paints a ramp inside rect, band by band. The band count is
 // capped so a tall hero card costs a bounded number of fills per frame while a
 // small header still gets one band per row: at 96 bands a 40-px header is
@@ -9046,6 +11289,24 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		if len(layout.Floats) > 0 {
 			drawWebFloats(r, config, doc, layout, rect, offset, true)
 		}
+		for _, bg := range layout.Backgrounds {
+			y := rect.Y + bg.Rect.Y - offset
+			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H || bg.Rect.W <= 0 || bg.Rect.H <= 0 {
+				continue
+			}
+			if bg.Image != "" {
+				drawWebImage(r, config, doc, webImagePos{
+					Key: bg.Image, Rect: bg.Rect, ObjectFit: bg.ObjectFit,
+					ObjectPosition: bg.ObjectPosition, Opacity: bg.Opacity,
+				}, rect.X+bg.Rect.X, y)
+				continue
+			}
+			if bg.HasGradient {
+				drawWebGradient(r, sdl.Rect{X: rect.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, bg.Radius, bg.Gradient)
+				continue
+			}
+			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
+		}
 		for _, bg := range layout.Rects {
 			y := rect.Y + bg.Rect.Y - offset
 			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
@@ -9056,7 +11317,19 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				if thickness < 1 {
 					thickness = 1
 				}
+				if segs := webBorderPaintRects(bg.Rect, thickness, bg.BorderStyle, true); len(segs) > 0 {
+					for _, seg := range segs {
+						fillRoundedRect(r, rect.X+seg.X, y+seg.Y, seg.W, seg.H, 0, bg.Color)
+					}
+					continue
+				}
 				strokeRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
+				continue
+			}
+			if segs := webBorderPaintRects(bg.Rect, bg.Thickness, bg.BorderStyle, false); len(segs) > 0 {
+				for _, seg := range segs {
+					fillRoundedRect(r, rect.X+seg.X, y+seg.Y, seg.W, seg.H, 0, bg.Color)
+				}
 				continue
 			}
 			if bg.HasGradient {
@@ -9069,21 +11342,31 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		// with a header image scrolls the photo away like a normal line.
 		for i := range layout.Images {
 			im := layout.Images[i]
+			if im.Invisible {
+				continue
+			}
 			y := rect.Y + im.Rect.Y - offset
 			if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
 				continue
 			}
+			restore := webClipPaint(r, rect, im.Clip, im.HasClip, rect.X, rect.Y-offset)
 			drawWebImage(r, config, doc, im, rect.X+im.Rect.X, y)
+			restore()
 		}
 		// Video play cards come after the images on the same terms: they
 		// own their reserved rows and draw before the text rows.
 		for i := range layout.Videos {
 			v := layout.Videos[i]
+			if v.Invisible {
+				continue
+			}
 			y := rect.Y + v.Rect.Y - offset
 			if v.Rect.H <= 0 || y >= rect.Y+rect.H || y+v.Rect.H <= rect.Y {
 				continue
 			}
+			restore := webClipPaint(r, rect, v.Clip, v.HasClip, rect.X, rect.Y-offset)
 			drawWebVideo(r, config, doc, v, rect.X+v.Rect.X, y)
+			restore()
 		}
 		for i := startRow; i < len(layout.Rows); i++ {
 			row := layout.Rows[i]
@@ -9096,7 +11379,7 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 			// word.
 			for i := 0; i < len(row.Runs); i++ {
 				run := row.Runs[i]
-				if !run.HasBg || run.Font == nil {
+				if run.Invisible || !run.HasBg || run.Font == nil {
 					continue
 				}
 				if run.BoxW > 0 && run.BoxH > 0 {
@@ -9124,10 +11407,21 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				fillRoundedRect(r, startX, y, endX-startX+4, int32(h), 3, run.Bg)
 			}
 			for _, run := range row.Runs {
-				x, textY := rect.X+run.X, y
+				if run.Invisible {
+					continue
+				}
+				x, textY := rect.X+run.X, y+run.VerticalOffset
+				restore := webClipPaint(r, rect, run.Clip, run.HasClip, rect.X, rect.Y-offset)
 				if run.BoxW > 0 && run.BoxH > 0 && run.Font != nil {
 					x += 6
 					textY += (run.BoxH - int32(run.Font.Height())) / 2
+				}
+				if run.HasShadow {
+					shadow := run.ShadowColor
+					if !run.HasShadowColor {
+						shadow = run.Color
+					}
+					drawTextRun(r, config, run.Font, run.Text, shadow, x+run.ShadowX, textY+run.ShadowY)
 				}
 				drawTextRun(r, config, run.Font, run.Text, run.Color, x, textY)
 				if run.Bold {
@@ -9137,25 +11431,28 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				}
 				if (run.Underline || run.Strike) && run.Font != nil {
 					if w, _, err := run.Font.SizeUTF8(run.Text); err == nil {
-						r.SetDrawColor(run.Color.R, run.Color.G, run.Color.B, 220)
+						decoration := run.Color
+						if run.HasDecorationColor {
+							decoration = run.DecorationColor
+						}
+						r.SetDrawColor(decoration.R, decoration.G, decoration.B, 220)
+						thickness := run.DecorationThickness
+						if thickness < 1 {
+							thickness = 1
+						}
 						if run.Underline {
-							r.FillRect(&sdl.Rect{
-								X: rect.X + run.X,
-								Y: y + int32(run.Font.Height()) - 5,
-								W: int32(w),
-								H: 1,
-							})
+							for _, seg := range webDecorationPaintRects(rect.X+run.X, textY+int32(run.Font.Height())-5, int32(w), thickness, run.DecorationStyle) {
+								r.FillRect(&seg)
+							}
 						}
 						if run.Strike {
-							r.FillRect(&sdl.Rect{
-								X: rect.X + run.X,
-								Y: y + int32(run.Font.Height())/2,
-								W: int32(w),
-								H: 1,
-							})
+							for _, seg := range webDecorationPaintRects(rect.X+run.X, textY+int32(run.Font.Height())/2, int32(w), thickness, run.DecorationStyle) {
+								r.FillRect(&seg)
+							}
 						}
 					}
 				}
+				restore()
 			}
 		}
 		if len(layout.Floats) > 0 {

@@ -80,6 +80,14 @@ func playtimeDurationLabel(minutes int) string {
 	case 180:
 		return "3 hours"
 	}
+	// Longer sittings (the break reminder's later rounds) read as hours.
+	if minutes > 60 {
+		h, m := strconv.Itoa(minutes/60), minutes%60
+		if m == 0 {
+			return h + " hours"
+		}
+		return h + " h " + strconv.Itoa(m) + " min"
+	}
 	return strconv.Itoa(minutes) + " min"
 }
 
@@ -213,7 +221,9 @@ func playtimeLimitsTick(config *Config) {
 	playtimeLimits.breakBucket = bucket
 	// A game leaves the main loop parked, so the reminder arrives when the
 	// user comes back to JukaHub, which is the first moment it can be seen.
+	// The sitting so far is whole intervals, not one: the second reminder of a
+	// 30-minute setting used to say "30 min" an hour in.
 	if playtime.session >= seconds {
-		ShowToast("Time for a break — you've been at it for "+playtimeDurationLabel(breakMinutes), ToastKindInfo)
+		ShowToast("Time for a break — you've been at it for "+playtimeDurationLabel(int(bucket)*breakMinutes), ToastKindInfo)
 	}
 }

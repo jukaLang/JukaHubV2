@@ -664,8 +664,8 @@ without changing anything puts the layout you had back, so a stray L2 costs
 nothing.
 
 While editing, the greeting and the search pill give way to a strip:
-**Edit Home**, a chip for each layout (the one in force tinted), **Reset** and
-**Done**; the PS4 / PS5 pills and the pairing QR step aside. Every tile wears
+**Edit Home**, a chip for each layout (the one in force tinted), **Top bar**,
+**Reset** and **Done**; the PS4 / PS5 pills and the pairing QR step aside. Every tile wears
 a remove badge (a minus) on its top-right corner, and on Widgets the focused
 tile shows its size ("2×1") on a tab in the middle of its bottom edge and a
 resize handle (the expand arrows) on its bottom-right corner. An
@@ -673,7 +673,7 @@ resize handle (the expand arrows) on its bottom-right corner. An
 
 | Pad | Keyboard | In edit mode |
 |-----|----------|--------------|
-| D-pad | Arrow keys | Move between the tiles and up to the strip. Holding a tile, move it: Left / Right one place earlier / later, Up / Down to the place of the tile above / below (Down past the end makes it the last) |
+| D-pad | Arrow keys | Move between the tiles and up to the strip (Up from the strip: the Top bar row). Holding a tile, move it: Left / Right one place earlier / later, Up / Down to the place of the tile above / below (Down past the end makes it the last) |
 | A | Enter | Pick the tile up, or put it down. On **Add**: the list of tiles to add. On the strip: that chip |
 | X | X or R | Resize (Widgets only): the D-pad then grows the tile (Right a column, Down a row) or shrinks it (Left, Up) a cell at a time, the grid making room as it goes; **A**, **B** or **X** finish. The tab and the handle turn the accent colour while resizing |
 | Y | Delete or Backspace | Remove the tile (**Add** stays) |
@@ -696,6 +696,32 @@ again"), a second press within three seconds resets. Choosing Standard or the
 Hero grid on the strip shows that layout veiled behind the strip, with
 nothing to arrange: the focus stays on the strip until you pick the Carousel
 or Widgets, or Done.
+
+**Arranging the top bar.** **Up** from the strip, or **A** on its **Top bar**
+chip, swaps the strip for the **Top bar** row: one square chip per control on
+the right of the top bar (brightness, volume, Bluetooth, Wi-Fi, weather,
+clock, battery, now playing, the update offer, Trophies, Report a bug and
+Notifications) in their order, then **Reset** and **Done**. The control the
+focus is on is ringed in the live bar above, and the line beside **Edit Home**
+names it.
+
+| Pad | Keyboard | On the Top bar row |
+|-----|----------|--------------------|
+| Left / Right | Left / Right | Move between the chips. Holding a control: carry it one place left / right; the bar follows at once |
+| A | Enter | Pick the control up, or put it down. On **Reset** / **Done**: that chip |
+| Y | Delete or Backspace | Hide the control, or show it again (a hidden one is faded and struck through; Notifications cannot be hidden) |
+| X | X or R | Reset: the shipped order with everything shown, on a second press within three seconds |
+| B / Down | Esc / Down | Holding a control: put it down. Otherwise back to the strip |
+| L2 | Q | Done |
+
+The footer reads **D-Pad Choose · A Move · Y / Del Hide/Show · X Reset · B
+Back**, and while a control is held **D-Pad Move · A Drop · B Drop**. The
+order is saved when a control is put down, hidden or shown, on a reset and
+when the row closes, and it holds on every screen's top bar. With a mouse:
+click a chip to focus it, drag it along the row to carry it, and click the
+badge on the focused chip's corner (a minus, or a plus on a hidden one) to
+hide or show it. A crowded bar still gives way the usual way: the forecast and
+the Wi-Fi meter first, the clock and the battery last.
 
 **Adding a tile.** **A** on the **Add** tile opens **Add to Home**, a card
 over Home with three sections (Widgets, Home cards, Apps and tools) listing
@@ -1068,6 +1094,12 @@ The first launch opens a short, skippable tour of the D-pad controls, top-bar
 clock and notification bell, Appearance settings, and the Start menu. **A** or
 **Enter** advances, **Left** goes back, and **B** or **Esc** skips.
 
+Right after the welcome it asks **What should we call you?** **A** (or **X**)
+opens the on-screen keyboard on your name; submit saves it, **B** leaves it as
+it was, and after that **A** goes on (so does **Right**: the name is optional).
+It is the same name as **Settings → General → Your name**: Home's greeting, the
+chat and the startup and shutdown animations use it.
+
 Its **Get set up** page is a live checklist: Wi-Fi, RetroAchievements, the media
 tools YouTube and IPTV use, Remote Play and the phone companion. Each row shows
 whether it is already done and what is still missing; **Up**/**Down** chooses a
@@ -1331,8 +1363,8 @@ and in the grid and the list `s` changes
 the sort and **Tab** walks the filter chips; **B** closes the sheet, then leaves.
 
 Under the toolbar, in every view and even while the list is empty or offline,
-the **More stores** strip opens the [APK Store](#apk-store) and PortMaster's
-ports (on the handheld) and Windows Apps. **Up** from the top row of a view (or
+the **More stores** strip opens the [APK Store](#apk-store), PortMaster's
+ports (on the handheld), and Windows Apps. **Up** from the top row of a view (or
 from the grid's chips) moves onto the strip, **Left** / **Right** pick a store
 and **A** opens it; **Up** again reaches the top bar and **Down** goes back to
 the packages. Back from the APK Store returns to its pill. A click or tap on a
@@ -1346,11 +1378,13 @@ sheet keeps its own controls until it is closed.
 ## APK Store
 
 Open it from **Packages → More stores**, **Start → Games → APK Store** or search
-("android", "apk"); it is not on Windows. It has three tabs: **Your
-APKs** (the APKs found on the card, in the Phone Companion's `PhoneDrop` folder
-and in the download folders, each with a verdict), **Store** (known titles and
-kinds of APK, and how to get them legally) and **Runtime** (AndroidRT, this
-device and Waydroid). See [ANDROID.md](ANDROID.md#apk-store).
+("android", "apk"), including on Windows. It has four tabs: **Your APKs**
+(APKs found on the card or PC, in the Phone Companion's `PhoneDrop` folder and
+in the download folders, each with a verdict), **Store** (known titles and
+kinds of APK, and how to get them legally), **F-Droid** (browse and download
+verified APKs), and **Runtime** (AndroidRT, this device and Waydroid). A PC can
+inspect and download APKs; AndroidRT runs them on the handheld. See
+[ANDROID.md](ANDROID.md#apk-store).
 
 | Button | Action |
 |--------|--------|
@@ -1901,9 +1935,9 @@ Diagnostics export**. In their cards they are a few hundred pixels square over
 a dimmed screen, which is the shape a phone camera reads worst, so each one can
 also be enlarged on its own.
 
-The **Phone Companion** card also shows a browser address: `jukahub.local` when
-JukaHub can publish it, and the numeric IP address as a fallback. Type the
-address shown on the card, including any port, then enter its six-digit PIN.
+The **Phone Companion** card also shows a browser address: the handheld's IP
+address. Type it as shown on the card, including any port, then enter its
+six-digit PIN.
 The code already contains the PIN.
 
 | Input | Action |

@@ -76,7 +76,7 @@ func a11ySettingsRows() []setRow {
 			Set:    setBoldText,
 		},
 		a11yToggleRow("legibleFont", "Legible reading font",
-			"Atkinson Hyperlegible, Lexend, Verdana, Tahoma or Segoe UI from this device, whichever is installed; bundled Inter when none is",
+			"Atkinson Hyperlegible, Lexend, Verdana or Segoe UI if installed; Inter otherwise",
 			func() bool { return a11y.legibleFont }, a11ySetLegibleFont),
 		a11yToggleRow("magnifier", "Magnifier",
 			"A 2× or 3× lens beside the focused control, on every screen",
@@ -87,7 +87,7 @@ func a11ySettingsRows() []setRow {
 			"Downmixes video and music to one channel for a single speaker or one-ear listening",
 			func() bool { return a11y.monoAudio }, a11ySetMonoAudio),
 		a11yNumberRow("audioBalance", "Audio balance",
-			"Moves stereo video and music between the left and right channels; interface sounds stay centred",
+			"Moves video and music between the left and right channels; UI sounds stay centred",
 			-100, 100, 10, "%", func() int { return a11y.audioBalance }, a11ySetAudioBalance),
 		a11yToggleRow("captionsAlways", "Captions always on",
 			"Each video starts with its subtitles enabled; CC still turns them off for the current video",
@@ -109,7 +109,7 @@ func a11ySettingsRows() []setRow {
 			"How long a message stays on screen before it fades",
 			50, 200, 25, "%", func() int { return a11y.toastPercent }, a11ySetToastPercent),
 		a11yToggleRow("stickyChords", "Sticky chords",
-			"Leaves the one-handed chord armed after a direction, so several face buttons can be pressed in sequence",
+			"Keeps the chord armed after a direction, so face buttons can follow in sequence",
 			func() bool { return a11y.stickyChords }, a11ySetStickyChords),
 		a11yLayoutSettingRow(),
 	}
@@ -143,7 +143,7 @@ func a11ySettingsRows() []setRow {
 // walks.
 func a11yScaleSettingRow() setRow {
 	return setRow{
-		ID: "textSize", Label: "Text size", Kind: setKindChoice,
+		ID: "textSize", Label: "Text size", Kind: setKindChoice, Clamp: true,
 		Detail:  setStatic("Scales every menu, overlay and keyboard label"),
 		Options: setTextSizeOptions,
 		Current: func(*Config) int { return a11yScaleIndex() },
@@ -198,7 +198,7 @@ func a11yNumberRow(id, label, detail string, lo, hi, step int, unit string,
 	current func() int, apply func(int) bool) setRow {
 	options := a11yNumberOptions(lo, hi, step, unit)
 	return setRow{
-		ID: id, Label: label, Kind: setKindChoice,
+		ID: id, Label: label, Kind: setKindChoice, Clamp: true,
 		Detail:  setStatic(detail),
 		Options: func(*Config) []setOption { return options },
 		Current: func(*Config) int { return a11yNumberIndex(lo, hi, step, current()) },
@@ -290,7 +290,7 @@ func a11yColorblindSettingRow() setRow {
 func a11yLayoutSettingRow() setRow {
 	return setRow{
 		ID: "layoutPreset", Label: "Button layout", Kind: setKindChoice,
-		Detail: setStatic("Nintendo order swaps A/B and X/Y together; applying a preset clears the per-button remaps below"),
+		Detail: setStatic("Nintendo swaps A/B and X/Y; a preset clears the per-button remaps below"),
 		Options: func(*Config) []setOption {
 			return []setOption{
 				{Value: "standard", Label: "Standard"},
@@ -382,7 +382,7 @@ func a11yButtonSettingRow(button uint8) setRow {
 func a11ySelectSettingRow() setRow {
 	return setRow{
 		ID: "selectKey", Label: "Select button", Kind: setKindChoice,
-		Detail: setStatic("Moves the Select action to Start (both stay reachable), or disables Select entirely; Start keeps opening the menu"),
+		Detail: setStatic("Swap Select with Start (both keep working) or turn Select off"),
 		Options: func(*Config) []setOption {
 			return []setOption{
 				{Value: a11ySelectDefault, Label: "Default"},
@@ -414,7 +414,7 @@ func a11yChordSettingRow() setRow {
 	}
 	return setRow{
 		ID: "chordButton", Label: "Chord button", Kind: setKindChoice,
-		Detail:  setStatic("The button that arms the one-handed chord; pick one your other hand's index finger can reach"),
+		Detail:  setStatic("The button that arms the one-handed chord; pick one your other hand can reach"),
 		Options: func(*Config) []setOption { return options },
 		Current: func(*Config) int {
 			for i, option := range a11yChordButtons {
@@ -435,7 +435,7 @@ func a11yChordSettingRow() setRow {
 func a11ySwitchSettingRow() setRow {
 	return setRow{
 		ID: "switchAccess", Label: "Switch access", Kind: setKindChoice,
-		Detail: setStatic("Walks the focus through every control on its own: one button presses the highlighted control, two buttons add B as next"),
+		Detail: setStatic("The focus walks the controls by itself; one button presses, two add B as next"),
 		Options: func(*Config) []setOption {
 			return []setOption{
 				{Value: a11ySwitchOff, Label: "Off"},
@@ -504,7 +504,7 @@ func a11ySwitchIntervalSettingRow() setRow {
 func a11ySlowRepeatSettingRow() setRow {
 	return setRow{
 		ID: "slowRepeat", Label: "Key repeat", Kind: setKindChoice,
-		Detail: setStatic("How fast a held direction repeats on the on-screen keyboard; Slow is for hands that overshoot"),
+		Detail: setStatic("How fast a held direction repeats on the keyboard; Slow stops overshooting"),
 		Options: func(*Config) []setOption {
 			return []setOption{
 				{Value: "normal", Label: "Normal"},

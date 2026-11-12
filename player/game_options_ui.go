@@ -354,6 +354,11 @@ func gameOptionsRows() int {
 	if n := gameOptionsChoiceRows(); n > 0 {
 		return n
 	}
+	if gameOptsUI.game.System == html5LibrarySystem {
+		// The first five rows are title, visibility, sort and view. Emulator
+		// launch options and reset controls do not apply to browser games.
+		return gameOptionsRowShowHidden + 1
+	}
 	return gameOptionsRowCount
 }
 
@@ -754,6 +759,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 
 	noteY := bodyY + rowH*int32(visible) + 4
 	note := "Display, visibility, sort and view are saved; launch rows apply to this game only."
+	if gameOptsUI.game.System == html5LibrarySystem {
+		note = "Display, visibility, sort and view are saved for browser games."
+	}
 	if choosing {
 		note = gameOptionsChoiceNote()
 	}

@@ -744,9 +744,10 @@ func homeViewData(config *Config) HomeViewData {
 		age := float64(sdl.GetTicks64() - homePressedAt)
 		data.PressDepth = uiPressProgress(config, age, float64(homePressDuration))
 	}
-	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok {
-		data.Greeting = homeGreeting(name)
-	}
+	// The name is Settings → Your name, shared with the chat (userName). The
+	// old lookup read Custom["TSPUsername"], a key Settings never writes (it
+	// stores "tspUsername"), so a set name never reached the greeting.
+	data.Greeting = homeGreeting(userName(config))
 
 	// The Continue card shows exactly what A on it resumes (home_continue.go):
 	// the music session when a track is loaded, otherwise the newest item on

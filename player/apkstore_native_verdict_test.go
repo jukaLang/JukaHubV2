@@ -28,3 +28,17 @@ func TestApkStoreJavaEngineStillNeedsAndroid(t *testing.T) {
 		}
 	}
 }
+
+func TestApkStoreNativeEntryBehindJavaLauncherIsExperimental(t *testing.T) {
+	in := apkStoreVerdictInput{
+		ChosenABI: "arm64-v8a", Engine: apkEngineNativeActivity,
+		HasCode: true, Launcher: "org.example.NativeLauncher", Entry: apkEntryFound,
+	}
+	if tier, _, _ := apkStoreVerdict(in); tier != apkTierMaybe || !tier.canAdd() {
+		t.Errorf("Java subclass with native entry = %v, want addable but uncertain", tier)
+	}
+	in.Entry = apkEntryNone
+	if tier, _, _ := apkStoreVerdict(in); tier != apkTierJava || tier.canAdd() {
+		t.Errorf("Java subclass without native entry = %v, want Java-only", tier)
+	}
+}

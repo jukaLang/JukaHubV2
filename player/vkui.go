@@ -218,7 +218,7 @@ func vkStripTip() string {
 // so its dim stays light enough to read them.
 func vkLiveFilterTarget() bool {
 	switch vkTarget {
-	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
 		return true
 	}
 	return false

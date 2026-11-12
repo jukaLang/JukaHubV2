@@ -87,9 +87,11 @@ it back.
 * **Hear it around you** — spatial audio places videos and music (and RetroArch
   games, through a filter JukaHub ships) around you on headphones, or widens the
   speakers.
-* **Try Android games** — the APK Store reads the APKs on the card and says
-  plainly which ones AndroidRT can try (experimental: nothing has been verified
-  on a handheld yet).
+* **Try native Android apps and games** — the APK Store reads APKs on the card,
+  browses F-Droid's signed app list, downloads verified APKs, and adds native
+  candidates to Games through AndroidRT. Penguin Dash has been played on a
+  Smart Pro; other titles need individual testing. Java apps stay available
+  for inspection but need Android to run.
 * **Extend** — signed packages from a repository with rollback, and plugins.
 
 Most of these have a page in the [documentation table](#documentation) below.
@@ -278,12 +280,14 @@ clock and the notification bell are in the bar itself.
   are enabled automatically; see [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)
   for the runtime setup.
 * **Games Library** — **Emulators → Games Library** browses `Roms/<system>/`
-  console by console, shows the box art downloaded for each title, and launches
-  the game with the emulator that owns its system. Drop a short clip in
+  console by console, plus Android games and local HTML5 games. The HTML5 row
+  includes three open source demos and plays compatible `Games/HTML5/` folders in
+  JukaHub's own game browser on TrimUI. The library shows box art and launches
+  ROMs with the emulator that owns each system. Drop a short clip in
   `data/game-snaps/` and the preview box plays it while the focus rests on that
   game. Every launch is recorded, so
-  the **Continue** row at the top resumes the last game in one press. **X** on a
-  game opens **Netplay**: host it, join a room another JukaHub is hosting on
+  the **Continue** row at the top resumes the last game in one press. **X** on an
+  emulator game opens **Netplay**: host it, join a room another JukaHub is hosting on
   your Wi-Fi, or play online through RetroArch's lobby and relays, so link
   cable titles like Mario Kart and Four Swords play without a cable. **Tools →
   Disc helpers** fills in the cue sheets and multi-disc playlists that
@@ -435,13 +439,11 @@ the phone opens a small page with:
   handheld, with **Download now** when it is missing (the page only learns the
   Account-ID's first and last characters).
 
-The pairing card shows `http://jukahub.local` when the short address is
-available, with the device's IP address underneath as a fallback. If port 80
-is unavailable, the shown addresses include the Companion's port (usually
-`:8317`). Type either address into a browser on the same Wi-Fi and enter the
-six-digit PIN shown on the device. The QR code opens the page with that PIN
-already filled in. Some networks block `.local` discovery; use the IP address
-shown on the card in that case. The server runs in the background for the
+The pairing card shows the device's IP address (for example
+`http://192.168.1.42`). If port 80 is unavailable, the address includes the
+Companion's port (usually `:8317`). Type it into a browser on the same Wi-Fi
+and enter the six-digit PIN shown on the device. The QR code opens the page
+with that PIN already filled in. The server runs in the background for the
 whole session, and **Y**
 issues a new PIN on the spot (which also invalidates every companion link
 already shared; a Screen Share link has its own token and keeps working).
@@ -691,7 +693,7 @@ four the same way, with controller hints; see
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
 | [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
-| [Android and the APK Store](docs/ANDROID.md) | the APK Store's verdicts on the APKs you have, AndroidPak/AndroidRT for native Android games (experimental), Waydroid installs, and what cannot run and why |
+| [Android and the APK Store](docs/ANDROID.md) | the APK Store's verdicts on the APKs you have, AndroidPak/AndroidRT for native Android apps and games (experimental), Waydroid installs, and what cannot run and why |
 | [PS Remote Play](docs/REMOTE_PLAY.md) | the built-in PS4/PS5 client, pairing, quality profiles and troubleshooting |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Voice command](docs/VOICE.md) | the voice orb (Menu, or F4) and saying what to open — through the handheld's microphone or your phone's keyboard — what it understands, and how it finds the microphone |

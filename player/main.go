@@ -883,6 +883,38 @@ func main() {
 			if powerSleepDropInput(event) {
 				continue
 			}
+			// Moving around, choosing and going back stir the liquid
+			// background (liquidbg.go; a no-op while it is off or not drawn).
+			liquidNoteEvent(event)
+			// The in-app HTML5 game owns its keys, pad and pointer until Back.
+			// Keep Quit and window events in the normal event loop.
+			if html5GameActive() {
+				switch gameEvent := event.(type) {
+				case *sdl.KeyboardEvent:
+					html5GameKey(gameEvent)
+					continue
+				case *sdl.TextInputEvent:
+					continue
+				case *sdl.ControllerButtonEvent:
+					if exitChordPressed(gameEvent) {
+						requestAppExit()
+					} else {
+						html5GamePad(gameEvent)
+					}
+					continue
+				case *sdl.ControllerAxisEvent:
+					html5GameAxis(gameEvent)
+					continue
+				case *sdl.MouseButtonEvent:
+					html5GamePointer(gameEvent)
+					continue
+				case *sdl.MouseMotionEvent:
+					html5GameMotion(gameEvent)
+					continue
+				case *sdl.MouseWheelEvent:
+					continue
+				}
+			}
 			switch e := event.(type) {
 			case *sdl.QuitEvent:
 				running = false
@@ -1144,6 +1176,10 @@ func main() {
 					}
 					// PortMaster Ports is modal too.
 					if portsPanel.open && handlePortsKey(e) {
+						continue
+					}
+					// Apps → Steam is modal too (steam_ui.go).
+					if steamPanel.open && !virtualKeyboardActive && handleSteamKey(e) {
 						continue
 					}
 					// The browser's link picker is modal too.
@@ -2158,6 +2194,11 @@ func main() {
 						// PortMaster Ports is modal the same way.
 						if portsPanel.open {
 							handlePortsMouse(mx, my)
+							break
+						}
+						// Apps → Steam is modal the same way.
+						if steamPanel.open {
+							handleSteamMouse(mx, my)
 							break
 						}
 						// Browser link picker floats above the browser scene.
@@ -3483,7 +3524,10 @@ func main() {
 		// Loading overlay (spinner, status line and a wrapped JukaLang slogan).
 		// A video being resolved by yt-dlp uses the same card: it is the moment
 		// the app has nothing else to show, and it also blocks input below.
-		if config.Variables.LoadingSpinner || transitionPhase != "none" || videoPrepareActive() {
+		// Media draws loading states inside its own lists. Keep those lists
+		// usable while cached results are shown and refreshed in the background.
+		// Video preparation still needs the modal card and its Cancel control.
+		if (config.Variables.LoadingSpinner && !mediaHubIsCurrent(config)) || transitionPhase != "none" || videoPrepareActive() {
 			renderLoadingCard(renderer, config)
 		}
 
@@ -3695,6 +3739,11 @@ func main() {
 			renderPortsPanel(renderer, config)
 		}
 
+		// Apps → Steam: the Steam library (steam_ui.go).
+		if steamPanel.open {
+			renderSteamPanel(renderer, config)
+		}
+
 		// Browser link picker (anchors extracted from the current page).
 		if browserLinkPanel.open {
 			renderBrowserLinkPanel(renderer, config)
@@ -3801,6 +3850,7 @@ func main() {
 		// A finished time-lapse is assembled off the render thread; its notice is
 		// shown here, where the toast state belongs.
 		timelapseDrainNotice()
+		renderHTML5GameInApp(renderer, config)
 		renderToast(renderer, config)
 		renderInstallBar(renderer, config)
 		// The activity strip sits with the installer card so it is drawn over
@@ -3881,7 +3931,7 @@ func main() {
 
 		// Adaptive frame rate: faster while interacting/animating, slower when
 		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
-		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
+		animating := html5GameActive() || transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
 			trophyOverlayActive()
 		frameRateCtrl.SetAnimationActive(animating)
 		// A moving backdrop — the liquid background's water, an animated

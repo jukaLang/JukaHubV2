@@ -237,12 +237,14 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Chat", where: "Apps", icon: "chat", keys: "chat messages ai assistant discord groq", scene: "Chat"},
 		{title: "Browser", where: "Apps", icon: "browser", keys: "browser web internet www website pages", open: openBrowserHome},
 		{title: "Browser settings", where: "Settings", icon: "browser", keys: "browser search engine default engine home page homepage start page google duckduckgo bing startpage", open: brwOpenSettings},
+		{title: "Synth", where: "Apps", icon: "synth", keys: "synth synthesizer music maker beat beats drum machine groovebox sequencer piano keyboard instrument make music hum", scene: synthSceneName},
 		{title: "JukaLand", where: "Games", icon: "gamepad", keys: "jukaland game sandbox craft blocks", scene: "JukaLand"},
 		{title: "Apps", where: "Apps", icon: "apps", keys: "apps applications launcher programs", scene: "Apps"},
 		{title: "Packages", where: "Apps", icon: "packages", keys: "packages store install updates repository", scene: "Packages"},
 		{title: "Emulators", where: "Games", icon: "emulator", keys: "emulators emulator retroarch cores consoles", open: func(*Config) { openEmulatorPanel() }},
 		{title: "Games Library", where: "Games", icon: "gamepad", keys: "games game library roms play", open: func(*Config) { openGameLibraryPanel() }},
 		{title: "PS Remote Play", where: "Games", icon: "gamepad", keys: "ps5 ps4 playstation remote play chiaki stream console", open: func(*Config) { openChiakiPanel() }},
+		{title: "Steam", where: "Apps", icon: "gamepad", keys: "steam valve pc games library store sign in account", open: func(*Config) { openSteamPanel() }},
 		{title: "Phone companion", where: "Device", icon: "phone", keys: "phone companion qr pair remote control", open: func(*Config) { openCompanionOverlay() }},
 		{title: "Screen Share", where: "Device", icon: "devices", keys: "screen share sharing cast mirror stream tv hdmi watch broadcast remote cast", open: openCastPanel},
 		{title: "Trophies", where: "Games", icon: "trophy", keys: "trophies achievements playtime stats", scene: playtimeSceneName},
@@ -256,16 +258,16 @@ func homeSearchCatalog() []homeSearchEntry {
 // Start menu lists them under Games by name, but people search for what they
 // hold — "android", "apk", "wine", "ports" — so the words go with them. The
 // titles are the Start menu's own, which keeps its rows from coming back as
-// duplicates. The APK Store and PortMaster are the handheld's, as in the menu.
+// duplicates. PortMaster is handheld-only, as in the menu.
 func homeSearchStoreEntries() []homeSearchEntry {
 	entries := []homeSearchEntry{
 		{title: windowsAppsEntryName, where: "Games", icon: "apps", keys: "windows apps wine exe programs pc software box64 desktop", open: func(*Config) { openWindowsAppsPanel(false) }},
+		{title: apkStoreEntryName, where: "Games", icon: apkStoreGlyph, keys: "apk apks android android games play store google play sideload install apk minecraft aptoide f droid fdroid", open: apkStoreOpen},
 	}
 	if IsWindows() {
 		return entries
 	}
 	return append(entries,
-		homeSearchEntry{title: apkStoreEntryName, where: "Games", icon: apkStoreGlyph, keys: "apk apks android android games play store google play sideload install apk minecraft aptoide f droid fdroid", open: apkStoreOpen},
 		homeSearchEntry{title: portMasterEntryName, where: "Games", icon: "packages", keys: "portmaster port master ports pc games linux ports indie", open: func(*Config) { openPortsPanel(false) }},
 	)
 }

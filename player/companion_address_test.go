@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/miekg/dns"
 )
 
 func TestCompanionBrowserAddresses(t *testing.T) {
@@ -19,8 +17,6 @@ func TestCompanionBrowserAddresses(t *testing.T) {
 		port int
 		base string
 	}{
-		{"jukahub.local", 80, "http://jukahub.local"},
-		{"jukahub.local", 8317, "http://jukahub.local:8317"},
 		{"192.168.1.42", 80, "http://192.168.1.42"},
 		{"192.168.1.42", 8317, "http://192.168.1.42:8317"},
 	} {
@@ -33,34 +29,16 @@ func TestCompanionBrowserAddresses(t *testing.T) {
 	}
 }
 
-func TestCompanionLocalNameAnswersBrowserQuery(t *testing.T) {
-	service, err := companionMDNSRecords("192.168.1.42", 8317)
-	if err != nil {
-		t.Fatal(err)
-	}
-	records := service.Records(dns.Question{Name: "jukahub.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET})
-	if len(records) != 1 {
-		t.Fatalf("host lookup returned %d records, want one A record", len(records))
-	}
-	a, ok := records[0].(*dns.A)
-	if !ok || !a.A.Equal(net.ParseIP("192.168.1.42")) {
-		t.Fatalf("host lookup = %v, want 192.168.1.42", records)
-	}
-	if service.HostName != "jukahub.local." || service.Port != 8317 {
-		t.Fatalf("service = %s:%d", service.HostName, service.Port)
-	}
-}
-
 func TestCompanionTypedPINOpensPage(t *testing.T) {
 	srv, _ := newTestCompanion(t)
 	handler := srv.handler()
 	locked := httptest.NewRecorder()
-	handler.ServeHTTP(locked, httptest.NewRequest(http.MethodGet, "http://jukahub.local/", nil))
+	handler.ServeHTTP(locked, httptest.NewRequest(http.MethodGet, "http://192.168.1.42/", nil))
 	if locked.Code != http.StatusUnauthorized || !strings.Contains(locked.Body.String(), "name=p") {
 		t.Fatalf("unpaired browser did not get the PIN form: %d", locked.Code)
 	}
 	paired := httptest.NewRecorder()
-	handler.ServeHTTP(paired, httptest.NewRequest(http.MethodGet, "http://jukahub.local/?p=123456", nil))
+	handler.ServeHTTP(paired, httptest.NewRequest(http.MethodGet, "http://192.168.1.42/?p=123456", nil))
 	if paired.Code != http.StatusOK || !strings.Contains(paired.Body.String(), "JukaHub Companion") {
 		t.Fatalf("typed PIN did not open the companion: %d", paired.Code)
 	}

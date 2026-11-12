@@ -30,8 +30,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/hashicorp/mdns"
 )
 
 const (
@@ -269,13 +267,12 @@ type companionServer struct {
 	srv  *http.Server
 	port int
 	// Port 80 is an optional second listener so the browser can open
-	// http://jukahub.local without a port. The configured port stays live for
-	// existing companion and screen-share links.
+	// http://<IP> without a port. The configured port stays live for
+	// existing companion and screen-share links. There is deliberately no
+	// mDNS name: many routers and phones answer jukahub.local with NXDOMAIN,
+	// so the numeric address is the only one shown.
 	browserPort int
 	webSrv      *http.Server
-	mdns        *mdns.Server
-	mdnsIP      string
-	mdnsRetry   time.Time
 	// throttles is the PIN failure budget and lockout escalation per remote
 	// address (SEC-28): a paired phone polling on one address must not keep
 	// clearing a guesser's count on another.
@@ -354,20 +351,13 @@ func (s *companionServer) Stop() {
 	s.mu.Lock()
 	srv := s.srv
 	webSrv := s.webSrv
-	mdnsSrv := s.mdns
 	s.srv = nil
 	s.webSrv = nil
 	s.ln = nil
-	s.mdns = nil
-	s.mdnsIP = ""
-	s.mdnsRetry = time.Time{}
 	s.diagnosticToken = ""
 	s.diagnosticText = ""
 	s.diagnosticUntil = time.Time{}
 	s.mu.Unlock()
-	if mdnsSrv != nil {
-		_ = mdnsSrv.Shutdown()
-	}
 	if srv == nil {
 		return
 	}
@@ -411,12 +401,7 @@ func (s *companionServer) BrowserPort() int {
 }
 
 func (s *companionServer) URL() string {
-	ip := localIPv4()
-	host := ip
-	if s.mdnsReady(ip) {
-		host = companionLocalHost
-	}
-	return companionURL(host, s.BrowserPort(), s.pin)
+	return companionURL(localIPv4(), s.BrowserPort(), s.pin)
 }
 
 // authorized compares the request PIN in constant time. The header is what
@@ -552,6 +537,12 @@ func (s *companionServer) handler() http.Handler {
 	// The VPN card: whether a WireGuard configuration is saved (its name,
 	// never its keys), and a new one pasted or picked on the phone (vpn.go).
 	mux.HandleFunc("/api/vpn", s.guard(s.handleVPN))
+	// Steam: the sign-in through Steam's own page (a one-use token, never the
+	// PIN, goes to Steam) and the card's profile link, Web API key and Sign
+	// out (steam_signin.go).
+	mux.HandleFunc("/steam", s.handleSteamStart)
+	mux.HandleFunc("/steam/return", s.handleSteamReturn)
+	mux.HandleFunc("/api/steam", s.guard(s.handleSteamAPI))
 	// The Files card: the FTP server's shares, browsed and changed from the
 	// page, every route behind the PIN (companion_files.go).
 	s.registerFileRoutes(mux)
@@ -985,6 +976,17 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <small id=groqNote>Voice typing, voice commands and the Juka chat use it. Get a free key at <a href="https://console.groq.com/keys" target=_blank rel="noopener noreferrer">console.groq.com/keys</a>, copy it and paste it here. The handheld checks it with Groq and never shows it again.</small>
 </div>
 
+<div class=card id=steamCard>
+  <h2>Steam</h2>
+  <p class=note id=steamStatus>Checking the handheld...</p>
+  <div class=row><button id=steamSignIn>Sign in through Steam</button><button class=ghost id=steamSignOut hidden>Sign out</button></div>
+  <input type=text id=steamProfile placeholder="Or your profile link: steamcommunity.com/id/..." autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input type=password id=steamKey placeholder="Web API key (optional)" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <div class=row><button id=sendSteam>Save on handheld</button></div>
+  <div class=msg id=steamMsg></div>
+  <small>Steam's website sign-in gives the handheld your Steam ID, never your password. For your full library, use Sign in with the Steam app on the handheld, or add a Web API key from <a href="https://steamcommunity.com/dev/apikey" target=_blank rel="noopener noreferrer">steamcommunity.com/dev/apikey</a>. Steam may ask for a login even when Game details are Public. Games start on a PC with Steam; on the handheld they start on your paired PC.</small>
+</div>
+
 <div class=card id=vpnCard>
   <h2>VPN (WireGuard)</h2>
   <p class=note id=vpnStatus>Checking the handheld...</p>
@@ -1250,6 +1252,56 @@ document.getElementById('sendGroq').onclick = async () => {
     showGroqStatus(true, r.tail || '');
     document.getElementById('groqNote').textContent = r.message || 'Saved on the handheld.';
     toast(r.verified ? 'Groq key saved' : 'Groq key saved, not checked');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+
+// The Steam card. Sign in goes to Steam's own page through /steam (the
+// handheld's one-use link, never the PIN, goes to Steam); a profile link, the
+// Web API key and Sign out go to /api/steam. The key is never sent back.
+const steamStatusEl = document.getElementById('steamStatus');
+function showSteamStatus(s) {
+  const out = document.getElementById('steamSignOut');
+  out.hidden = !(s.signedIn && s.via !== 'app');
+  let text = 'Not signed in yet.';
+  if (s.signedIn) {
+    const who = s.persona || s.steamId;
+    text = s.via === 'app' ? 'Using the Steam app\'s account: ' + who + '.' : 'Signed in as ' + who + '.';
+  }
+  if (s.key) text += s.keyTail ? ' A Web API key is saved (it ends in ' + s.keyTail + ').' : ' A Web API key is saved.';
+  steamStatusEl.textContent = text;
+}
+function loadSteamStatus() {
+  fetch('/api/steam', {headers: hdr(), cache: 'no-store'})
+    .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+    .then(showSteamStatus)
+    .catch(() => { steamStatusEl.textContent = 'Sign in to show your Steam library on the handheld.'; });
+}
+loadSteamStatus();
+document.getElementById('steamSignIn').onclick = () => { location.href = '/steam?p=' + encodeURIComponent(pin); };
+document.getElementById('steamSignOut').onclick = async () => {
+  try {
+    const r = await api('/api/steam', {signOut: true}, true);
+    document.getElementById('steamMsg').textContent = r.message || 'Signed out.';
+    toast('Signed out of Steam');
+    loadSteamStatus();
+  } catch (err) { toast(err.message, true); }
+};
+document.getElementById('sendSteam').onclick = async () => {
+  const profile = document.getElementById('steamProfile');
+  const key = document.getElementById('steamKey');
+  if (!profile.value.trim() && !key.value.trim()) { toast('Paste a profile link or a key first', true); profile.focus(); return; }
+  const btn = document.getElementById('sendSteam');
+  btn.disabled = true; btn.textContent = 'Checking with Steam...';
+  try {
+    const r = await api('/api/steam', {profile: profile.value.trim(), key: key.value.trim()}, true);
+    profile.value = ''; key.value = '';
+    document.getElementById('steamMsg').textContent = r.message || 'Saved on the handheld.';
+    toast('Saved on the handheld');
+    loadSteamStatus();
   } catch (err) {
     toast(err.message, true);
   } finally {

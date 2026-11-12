@@ -906,6 +906,11 @@ func applyScreensaverTimeout(config *Config, seconds int) int {
 	}
 	if config != nil {
 		config.Variables.ScreensaverTimeout = seconds
+		if config.Variables.Custom == nil {
+			// A config with no custom block (a bare jukaconfig) would panic on
+			// the writes below.
+			config.Variables.Custom = map[string]interface{}{}
+		}
 		config.Variables.Custom["screensaverTimeout"] = strconv.Itoa(seconds)
 		// The Settings row shows $screensaverTimeoutLabel, and substitution
 		// reads only the custom block: keep the derived text in step with the

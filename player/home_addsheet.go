@@ -7,6 +7,7 @@ package main
 // on Home after the tile that had the focus; B closes the sheet.
 
 import (
+	"math"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -38,16 +39,16 @@ type homeAddHit struct {
 
 // homeAddSheetState is the open sheet.
 type homeAddSheetState struct {
-	open     bool
-	entries  []homeCatalogEntry
-	rows     []homeAddRow
-	cursor   int // index into entries
-	scroll   int // first row drawn
-	after    HomeFocusID
-	openedAt uint64
-	card     sdl.Rect
-	list     sdl.Rect
-	hits     []homeAddHit
+	open    bool
+	entries []homeCatalogEntry
+	rows    []homeAddRow
+	cursor  int // index into entries
+	scroll  int // first row drawn
+	after   HomeFocusID
+	enter   uiEnter
+	card    sdl.Rect
+	list    sdl.Rect
+	hits    []homeAddHit
 }
 
 // homeAddSheetOpen builds the catalogue and shows the sheet; a chosen entry
@@ -66,7 +67,8 @@ func homeAddSheetOpen(config *Config, after HomeFocusID) {
 		return
 	}
 	s := &homeEdit.sheet
-	*s = homeAddSheetState{open: true, after: after, openedAt: sdl.GetTicks64()}
+	*s = homeAddSheetState{open: true, after: after}
+	s.enter.begin(uiClockMS(), homeAddSheetEnterMS)
 	homeEdit.holding = false
 	s.entries = homeTileCatalog(config, homeTilesPresent(homeEdit.work))
 	section := ""
@@ -83,6 +85,7 @@ func homeAddSheetOpen(config *Config, after HomeFocusID) {
 // homeAddSheetClose hides the sheet.
 func homeAddSheetClose() {
 	homeEdit.sheet.open = false
+	homeEdit.sheet.enter.cancel()
 	homeEdit.sheet.hits = homeEdit.sheet.hits[:0]
 }
 
@@ -328,10 +331,13 @@ func renderHomeAddSheet(renderer *sdl.Renderer, config *Config) {
 	}
 	fonts := loadHomeFonts()
 	w, h := screenWidth, screenHeight
-	progress := 1.0
+	t := 1.0
 	if uiMotionEnabled(config) {
-		progress = uiEaseOutCubic(float64(sdl.GetTicks64()-s.openedAt) / homeAddSheetEnterMS)
+		t = s.enter.progress(uiClockMS())
+	} else {
+		s.enter.cancel()
 	}
+	progress := uiEaseOutCubic(t)
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	scrim := glassScrimColor(progress)
 	scrim.A = uint8(float64(scrim.A) * 0.75)
@@ -340,7 +346,7 @@ func renderHomeAddSheet(renderer *sdl.Renderer, config *Config) {
 
 	cw := min32(scaleX(homeAddSheetW, w), w-2*scaleX(24, w))
 	ch := min32(scaleY(homeAddSheetH, h), h-2*scaleY(20, h))
-	rise := int32((1 - progress) * float64(scaleY(12, h)))
+	rise := int32(math.Round(uiPanelRise.at(t)))
 	card := sdl.Rect{X: (w - cw) / 2, Y: (h-ch)/2 + rise, W: cw, H: ch}
 	s.card = card
 	fillRoundedRect(renderer, card.X+3, card.Y+8, card.W, card.H, OverlayCardRadius, sdl.Color{R: 0, G: 0, B: 0, A: 90})

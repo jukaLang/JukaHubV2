@@ -392,6 +392,9 @@ func resolveGameLauncher(system string) string {
 	if system == androidLibrarySystem {
 		return androidLibraryLauncher
 	}
+	if system == html5LibrarySystem {
+		return html5LibraryLauncher
+	}
 	if launcher := configuredGameLauncher(system, loadGameLauncherOverrides(gameLauncherOverridesPath())); launcher != "" {
 		return launcher
 	}
@@ -477,6 +480,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// The Android row's games run through their game profile (AND-16).
 	if game.System == androidLibrarySystem {
 		return launchAndroidLibraryGame(game)
+	}
+	if game.System == html5LibrarySystem {
+		return launchHTML5Game(game)
 	}
 	if strings.TrimSpace(game.Path) == "" {
 		return fmt.Errorf("no ROM selected")
@@ -676,7 +682,7 @@ func recordGameLaunch(game libraryGame) []recentGame {
 	trophyEventDistinct(tkGameTitles, game.Title)
 	trophyEventDistinct(tkGameSystems, game.System)
 	recent := recordGameRecent(game)
-	if appConfig != nil && playtime.loaded && len(recent) > 0 {
+	if appConfig != nil && playtime.loaded && len(recent) > 0 && game.System != html5LibrarySystem {
 		gameHistoryLaunch(game, recent[0].PlayedAt)
 	}
 	return recent

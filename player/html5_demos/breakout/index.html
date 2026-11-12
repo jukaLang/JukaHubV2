@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brick Bounce</title>
+<style>
+  :root { color-scheme: dark; font: 600 16px system-ui, sans-serif; background: #100d25; color: #fff2ef; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 16px; background: radial-gradient(circle at 50% 5%, #462462, #100d25 70%); }
+  main { width: min(920px, 100%); text-align: center; }
+  header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  h1 { margin: 0; font-size: clamp(26px, 5vw, 42px); color: #ffb87e; }
+  .score { color: #d5bee9; font-variant-numeric: tabular-nums; }
+  canvas { display: block; width: 100%; aspect-ratio: 16/9; border: 2px solid #7a528d; border-radius: 16px; background: #130e2a; box-shadow: 0 15px 60px #0008; touch-action: none; }
+  .controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 16px 0; }
+  button { min-width: 70px; min-height: 50px; border: 1px solid #a272b0; border-radius: 12px; background: #432953; color: #fff2ef; font: inherit; cursor: pointer; touch-action: none; }
+  button:active, button:focus-visible { background: #75416d; outline: 2px solid #ffb87e; }
+  #start { padding: 0 24px; background: #a25453; border-color: #ffb87e; }
+  .move { display: flex; gap: 6px; }
+  p { color: #d5bee9; font-size: 14px; margin: 8px 0 0; }
+</style>
+<main>
+  <header><h1>Brick Bounce</h1><div class="score">Score <span id="score">0</span> · Lives <span id="lives">3</span></div></header>
+  <canvas id="game" width="960" height="540" aria-label="Brick breaker game board"></canvas>
+  <div class="controls"><button id="start">Start / Restart</button><div class="move"><button data-move="-1" aria-label="Move left">◀</button><button data-move="1" aria-label="Move right">▶</button></div></div>
+  <p>Arrow keys or A/D · Stick or D-pad · Drag on the board · Clear every brick</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const canvas=document.querySelector('#game'), ctx=canvas.getContext('2d');
+  const scoreEl=document.querySelector('#score'), livesEl=document.querySelector('#lives');
+  const W=960,H=540,paddleY=490,paddleW=132,paddleH=14,ballR=9;
+  const colors=['#ff7e88','#ffa76e','#ffcf73','#a48cff','#69c5e6'];
+  let paddle=480,ball={x:480,y:460,vx:4.3,vy:-5.2},bricks=[],score=0,lives=3,running=false,ended=false,win=false,last=0;
+  const keys={left:false,right:false}, touch={left:false,right:false};
+  function resetBall(){ ball={x:paddle,y:460,vx:(Math.random()<.5?-1:1)*4.3,vy:-5.2}; }
+  function reset(){
+    paddle=480;score=0;lives=3;running=true;ended=false;win=false;last=0;
+    bricks=[];for(let row=0;row<5;row++)for(let col=0;col<10;col++)bricks.push({x:32+col*91,y:55+row*38,alive:true,row});
+    scoreEl.textContent='0';livesEl.textContent='3';resetBall();
+  }
+  function update(delta){
+    const factor=Math.min(2,delta/16.7),pad=Array.from(navigator.getGamepads?.()||[]).find(p=>p);
+    const axis=pad?.axes[0]||0;
+    const motion=(keys.right||touch.right||pad?.buttons[15]?.pressed||axis>.3?1:0)-(keys.left||touch.left||pad?.buttons[14]?.pressed||axis<-.3?1:0);
+    paddle=Math.max(paddleW/2,Math.min(W-paddleW/2,paddle+motion*8*factor));
+    ball.x+=ball.vx*factor;ball.y+=ball.vy*factor;
+    if(ball.x<ballR||ball.x>W-ballR){ball.vx*=-1;ball.x=Math.max(ballR,Math.min(W-ballR,ball.x));}
+    if(ball.y<ballR){ball.vy=Math.abs(ball.vy);ball.y=ballR;}
+    if(ball.vy>0&&ball.y+ballR>=paddleY&&ball.y-ballR<paddleY+paddleH&&Math.abs(ball.x-paddle)<paddleW/2+ballR){
+      ball.y=paddleY-ballR;ball.vy=-Math.abs(ball.vy);ball.vx=(ball.x-paddle)/(paddleW/2)*5.4;
+    }
+    for(const brick of bricks){
+      if(!brick.alive||ball.x+ballR<brick.x||ball.x-ballR>brick.x+83||ball.y+ballR<brick.y||ball.y-ballR>brick.y+28)continue;
+      brick.alive=false;ball.vy*=-1;score+=10;scoreEl.textContent=score;break;
+    }
+    if(ball.y>H+ballR){lives--;livesEl.textContent=lives;if(lives<=0){running=false;ended=true;}else resetBall();}
+    if(bricks.every(b=>!b.alive)){running=false;ended=true;win=true;}
+  }
+  function draw(){
+    ctx.fillStyle='#130e2a';ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle='#30274b';for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    for(const b of bricks){if(!b.alive)continue;ctx.fillStyle=colors[b.row];ctx.fillRect(b.x,b.y,83,28);ctx.fillStyle='#ffffff45';ctx.fillRect(b.x,b.y,83,5);}
+    ctx.fillStyle='#ffb87e';ctx.fillRect(paddle-paddleW/2,paddleY,paddleW,paddleH);
+    ctx.fillStyle='#fff1cc';ctx.shadowColor='#ffd091';ctx.shadowBlur=18;ctx.beginPath();ctx.arc(ball.x,ball.y,ballR,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+    if(!running){ctx.fillStyle='#110e21d9';ctx.fillRect(0,0,W,H);ctx.textAlign='center';ctx.fillStyle='#fff2ef';ctx.font='bold 48px system-ui';ctx.fillText(ended?(win?'You cleared them!':'Game over'):'Brick Bounce',W/2,255);ctx.font='24px system-ui';ctx.fillText('Press Start, Enter, or gamepad A',W/2,304);}
+  }
+  function frame(now){
+    const pad=Array.from(navigator.getGamepads?.()||[]).find(p=>p);
+    if(!running&&(pad?.buttons[0]?.pressed||pad?.buttons[9]?.pressed))reset();
+    if(running)update(last?now-last:16.7);last=now;draw();requestAnimationFrame(frame);
+  }
+  window.addEventListener('keydown',e=>{
+    if(['ArrowLeft','ArrowRight','a','d',' ','Enter'].includes(e.key))e.preventDefault();
+    if(e.key==='ArrowLeft'||e.key==='a')keys.left=true;
+    if(e.key==='ArrowRight'||e.key==='d')keys.right=true;
+    if((e.key===' '||e.key==='Enter')&&!running)reset();
+  });
+  window.addEventListener('keyup',e=>{if(e.key==='ArrowLeft'||e.key==='a')keys.left=false;if(e.key==='ArrowRight'||e.key==='d')keys.right=false;});
+  canvas.addEventListener('pointermove',e=>{if(e.buttons||e.pointerType==='touch'){const r=canvas.getBoundingClientRect();paddle=Math.max(paddleW/2,Math.min(W-paddleW/2,(e.clientX-r.left)*W/r.width));}});
+  document.querySelectorAll('[data-move]').forEach(b=>{const side=b.dataset.move==='-1'?'left':'right';b.addEventListener('pointerdown',e=>{e.preventDefault();touch[side]=true;b.setPointerCapture(e.pointerId);});b.addEventListener('pointerup',()=>touch[side]=false);b.addEventListener('pointercancel',()=>touch[side]=false);});
+  document.querySelector('#start').addEventListener('click',reset);
+  draw();requestAnimationFrame(frame);
+})();
+</script>
+</html>

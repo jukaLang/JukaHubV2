@@ -75,7 +75,7 @@ settings such as `search_query` or `stream_url`.
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
-| `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `off`): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. Anything else reads as off. Reduce Motion keeps only the ripples you make. The water is drawn between its steps on a mesh twice as fine as its grid, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld falls back to the coarse mesh by itself if the water costs more than 5 ms a frame |
+| `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `gentle` when unset; `off` turns it off): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile (a step where no focus ring moves still ripples near the highlight), choosing something splashes, going back swells the water up, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. An unrecognised value reads as off. Reduce Motion halves the rain and softens the ripples. The water is drawn between its steps, its light and shadow over the whole backdrop, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld steps down to a coarser one still by itself if the water costs more than 5 ms a frame |
 | `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `autoSleep` | minutes as text, `"0"`/`"3"`/`"5"`/`"10"`/`"15"`/`"30"` | Settings → Power → **Auto sleep** (handheld only; default `"0"`, Off): suspend the handheld after that many minutes without input — never while a game owns the screen, while charging, while music or a video plays (or is paused), while a download, install, extraction or Screen Share viewer is running, while a panel is open, or while any alarm is enabled (a sleeping device cannot ring). The wake counts as input. |
@@ -527,6 +527,53 @@ Tiles are placed in list order, row by row on seven columns: each goes at the
 first place after the previous tile where it fits, wrapping to the next row,
 and a hole left beside a wide or tall tile is never filled from further down
 the list, so the reading order is always the list order.
+
+### Top bar (`headerLayout`)
+
+The order of the controls on the right of every top bar, and which are hidden,
+is the `headerLayout` custom variable; Edit Home's **Top bar** row writes it
+([CONTROLS](CONTROLS.md#edit-home)). It is a comma-separated list of ids, left
+to right; a leading `-` hides that control:
+
+```
+brightness,volume,-bluetooth,wifi,weather,clock,battery,media,update,trophies,bug,notifications
+```
+
+| Id | Control |
+|----|---------|
+| `brightness` | the brightness button (sun) |
+| `volume` | the volume button (speaker) |
+| `bluetooth` | the Bluetooth button |
+| `wifi` | the Wi-Fi meter (or the Offline badge) |
+| `weather` | today's high / low |
+| `clock` | the clock (the calendar button) |
+| `battery` | the battery gauge |
+| `media` | the now-playing / output chip |
+| `update` | the release offer, while one is advertised |
+| `trophies` | the trophy room's cup |
+| `bug` | Report a bug |
+| `notifications` | the notification bell (cannot be hidden) |
+
+Missing or blank is the shipped order above with nothing hidden, and Reset
+stores it that way. Ids are read without regard to case; unknown ones and
+repeats are skipped, a `-` on `notifications` is ignored, and a control the
+list does not name goes back after the one that comes before it in the
+shipped order. A control is still only drawn while it has something to show
+(no forecast, nothing playing, no release offered), and a crowded bar drops
+parts the usual way.
+
+### Background music (`bgMusic`, `bgMusicSource`, `bgMusicVolume`)
+
+Settings → Sound & haptics writes three custom variables. `bgMusic` is the
+switch (`"true"` / `"false"`; missing is off). `bgMusicSource` is the music:
+`calm`, `lofi` and `chip` are the built-in songs, `synth` plays the Synth's
+saved `synth.json` (its demo when there is none) and `library` shuffles the
+music library's songs (not videos or audiobooks), falling back to the downloads
+music folder; an unknown value is `calm`. `bgMusicVolume` is 0–100 (missing is
+40). The music pauses while a game, the music player, a video, the Synth, Quiet
+Mode, the voice orb, dictation or an alarm has the speaker, and while the
+screen sleeps. `library` needs ffmpeg already installed (it is never downloaded
+for this) and otherwise plays `calm`.
 
 ## `elements`
 

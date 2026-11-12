@@ -13,6 +13,42 @@ For anything older, the git log and the
 
 ### Added
 
+- **Background music.** Settings → Sound & haptics has a **Background music** switch (off by
+  default), a **Music** choice and a **Music level**. The music is one of three built-in songs —
+  **Calm**, **Lo-fi** and **Chiptune**, written as Synth projects and rendered live, so nothing ships as
+  audio — your own **Synth song**, or **My music**, the music library shuffled through ffmpeg (with
+  **Next song**). It fades out whenever anything else wants the speaker: the music player, a video,
+  the Synth, Quiet Mode, a sleeping screen, the voice orb, dictation and an alarm; it ducks under Juka's
+  voice, and a launched game closes its device at once. A library song carries on where it stopped.
+  Stored as `bgMusic`, `bgMusicSource`, `bgMusicVolume` (`bgmusic.go`).
+- **The boot and the shutdown greet you by name.** With **Settings → Your name** set, the boot
+  animation fades in "Welcome back, *name*" under the JukaHub wordmark (the full power-on boot, the
+  quick app-launch hello and Watch the boot animation), and the shutdown card ends on "Goodbye,
+  *name*" ("See you soon, *name*" for a restart), held about a second before the light goes out.
+  No name, no change; screenshots leave it out; the phrases are translated in all six languages
+  (`bootgreet.go`). The first-run tour now asks for the name right after the welcome (**What should we
+  call you?**: A opens the keyboard, optional, same setting; `onboarding_name.go`).
+- **Arrange the top bar.** Edit Home (L2 on Home) has a **Top bar** row: Up from the strip, or its
+  **Top bar** chip, shows one chip per control on the right of the top bar — brightness, volume,
+  Bluetooth, Wi-Fi, weather, clock, battery, now playing, the update offer, Trophies, Report a bug and
+  Notifications — in their order. **A** picks the focused one up and **Left / Right** carry it (the bar
+  above follows live, with the control ringed), **Y** hides it or shows it again (the bell always stays),
+  and **X** / **Reset** puts the shipped order back. The order holds on every screen; the pointer can
+  drag the chips and use the hide badge. Stored as `headerLayout` (docs/CONFIGURATION.md).
+- **Steam library in Apps.** Apps → **Steam** lists every game of your Steam account with its cover,
+  play time, size and where it is installed, in three tabs (L1/R1: All games, Installed, Downloads),
+  sorted by last played, name or play time (R2) and narrowed by a search (L2). **Sign in with the Steam
+  app** (X → Account): scan the code with the Steam app on your phone (Steam Guard → Scan a QR code)
+  and approve — no password is typed and JukaHub never sees one; that sign-in also lists a private
+  profile's games. Steam's website sign-in (phone or the PC's browser) and a profile link identify the
+  account; if Steam asks for a login to show its games, use the Steam app sign-in or a Web API key.
+  The companion page's Steam card accepts profile links and keys. On a PC with the Steam
+  app, A plays a game or installs it, Y opens the game's sheet (bigger cover, details, Uninstall, store
+  page), and downloads show a progress bar until Steam finishes them. On the handheld, A plays the game
+  on one of your PCs: with the Steam app sign-in, any PC signed in to Steam shows what it has installed
+  and is downloading, and A installs or starts a game there with nothing else running on the PC (pick
+  the PC in the game's sheet); a paired JukaHub PC (Nearby devices) works without it. The list is kept
+  for offline use in `data/steam/`; it is also in Search.
 - **PS4 / PS5 controllers over Bluetooth in Remote Play.** A DualShock 4 or DualSense paired with
   the handheld now works fully in a stream: its gyroscope and accelerometer reach the console with an
   orientation worked out from them (motion aiming and steering), next to Create, the touchpad and
@@ -69,7 +105,9 @@ For anything older, the git log and the
   (polyBLEP oscillators, TPT state-variable filters, synthesized drums) on
   its own stereo device that closes when the page is left. Start plays and
   stops; keyboard twins throughout. Saved to `synth.json` (in backups);
-  four trophies. `synth.go`, `synth_engine.go`.
+  four trophies. `synth.go`, `synth_engine.go`. Reachable from the Apps
+  screen (built-in tile), Start → Tools, the Tools hub, Home search and voice
+  ("open synth", "make music", "drum machine").
 - **Ideas from Mosaik CFW (TrimUI Smart Pro / Brick Pro).** A pass over
   diapolon/mosaik_cfw's features that JukaHub did not have yet:
   - **Phone Companion → Files.** Browse the folders the FTP server shares
@@ -299,6 +337,49 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The liquid background moves like water, not stamped circles.** Ripples
+  are now short wave trains (a dip with a raised rim, so two or three crests
+  roll out) with a stretched, wobbly outline, and each lands a little off the
+  mark and a little larger or smaller than the last. Moving the focus rolls a
+  wave along the way it went instead of dropping one ring at the end, and a
+  slow swell of three long waves drifts across the whole pool while you use
+  it, easing out 25 s after the last touch so the water can rest. Overlapping
+  drops round off instead of hitting the height limit (`player/liquidbg.go`).
+- **The liquid background is on, and moving around stirs it.** It was off
+  unless switched on, so Home showed nothing; a setup that never chose a level
+  now gets Gentle (choosing Off still turns it off). Every step through a menu
+  ripples the water near the highlight even on screens without a glass focus
+  ring, A / Enter / a click splashes under the choice, and B / Escape swells
+  the water up under the focus (`player/liquidbg.go` `liquidNoteEvent`, hooked
+  in the main event loop in `player/main.go`).
+- **The liquid background is easy to see.** The calmer water was hard to see at
+  all: bending Home's soft gradients shows next to nothing, the wallpaper's dim
+  hid most of the shading, and wide drops made fog instead of rings. The grid
+  is now twice as fine (the same vertex count — the mesh is the grid itself),
+  drops are rings again, and the light and a real shadow are two small
+  textures, a texel per node, that the GPU stretches with linear filtering over
+  everything, dim included — no Gouraud staircase on a ring's edge. Rain is
+  more frequent, and Reduce Motion (on by default on the handheld) now keeps
+  rain at half the rate and 85% ripples instead of none and 60%
+  (`player/liquidbg.go`).
+- **The liquid background is calm and smooth.** A tester still found the water
+  pixelated and not calming after the smoother mesh: its ripples were a node or
+  two of the simulation grid across, so they rang as jagged crumbs with
+  flickering glints, and they crossed the screen at ~13 px a frame. Waves now
+  spread at a quarter of the screen width a second, a little
+  viscosity fades the short waves a grid draws badly, drops are at least 2.5
+  grid nodes wide, pressed in over four steps and mostly from rest (no
+  every-frequency kick, no one-frame pop), rain is rarer and wider, and the
+  glint is broad and half as bright. A numerical replay of the Low Power grid
+  measured the picture's frame-to-frame change falling from 8.0 to 1.9 per
+  channel (`player/liquidbg.go`).
+- **A small Home bounce.** Focused cards briefly grow one extra pixel before settling, and the
+  scrollable Widgets grid eases up to three pixels past its resting row. Overlays now settle in their
+  arrival direction: dropdowns dip a few pixels below their resting point, while rising sheets pass
+  slightly above it before returning. Reduced Motion still snaps.
+- **Phone Companion shows only the IP address.** The `jukahub.local` name (mDNS) is gone: many
+  routers and phones answered it with an NXDOMAIN error. The card, the QR code and every pairing link
+  now use the handheld's numeric address (`http://<IP>`, plus `:8317` when port 80 is taken).
 - **The VPN's "Send one from your phone" opens the VPN card.** Its QR code
   now opens the companion page at the VPN card (moved to the top, the cursor
   in the text box) and closes itself when the configuration arrives, instead
@@ -365,6 +446,26 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **APK Store appears in Packages on Windows.** It can inspect APKs from the
+  PC's Downloads folder and download verified APKs there; Start → Games and
+  Home search also show it. AndroidRT playback remains on the handheld.
+- **One name for you everywhere.** Settings → Your name, the chat's name chip and the Home greeting
+  are one setting: change it in either place and the other follows, and Home now says "Good
+  afternoon, Andy" (it looked the name up under a key Settings never writes). Clearing it, or typing
+  "You", signs the chat as "You" again. A chat name set on an older build carries over.
+- **The Continue card follows the theme.** With no thumbnail it was a fixed navy card with a violet
+  glow, and its label scrim was black even over thumbnails, so Paper got a blue card with dark ink on
+  near-black. It now uses the theme's surfaces, backdrop blooms and page colour.
+- **Settings audit.** Volume, Brightness, Text size and the Accessibility delays stop at their ends
+  instead of wrapping (one more Right no longer mutes the speaker; one more Left no longer sets full
+  brightness). Display → Text size confirms the new size; list sheets no longer pick a row hidden
+  under their title; cut-off Accessibility and "Set time automatically" details are shorter.
+  "Startup & shutdown sound" is greyed with a reason under Quiet Mode; Network rows that need
+  Nearby devices say so; the Games button-swap rows mention the Accessibility swap that cancels
+  them; About → Keep previous versions asks before deleting saved versions; a plugin switched on in
+  Settings runs its enable hook; break reminders give the real time played; Clear cache reports a
+  failure instead of always "Cache cleared".
 
 - **Bluetooth can start the XR829 on the TrimUI Smart Pro when the firmware
   left it off.** The fallback now enables the chip's `btwrite` wake control,

@@ -1,7 +1,7 @@
 # Android engine
 
 JukaHub does not ship a complete Android. The **AndroidPak** path runs a
-limited class of native-only (NDK) games through **AndroidRT**, a small runtime
+limited class of native (NDK) apps and games through **AndroidRT**, a small runtime
 JukaHub builds and ships: every TrimUI package carries it beside the app, and
 the APK Store installs the same build from JukaHub's releases on a device that
 lacks it. Penguin Dash v0.5.0 has been played on a Smart Pro with AndroidRT;
@@ -12,7 +12,13 @@ run, and adds the ones worth trying to Games in one press — the Games
 Library's Android row and Game Profiles. Java apps (almost every Android app)
 cannot run on AndroidRT and the store says so; where a real Android container
 (Waydroid) exists, on Linux machines with a binder kernel, the store can
-install APKs into it.
+install APKs into it. The **F-Droid** tab browses F-Droid's signed repository
+inside JukaHub and downloads APKs for inspection; a native ARM64 APK is added
+to Games only after the same compatibility check.
+
+On Windows, the APK Store is available from Packages, Start → Games and search.
+It scans the PC's Downloads folder and can inspect or download APKs; AndroidRT
+runs them on the handheld.
 
 **On a Smart Pro, in short:** copy an NDK game's APK to `/mnt/SDCARD/APKs`
 (or send it from a phone), open the APK Store, press **A** on the game →
@@ -20,7 +26,7 @@ install APKs into it.
 store's Play). If AndroidRT is missing, the store offers to install it with one
 press first.
 
-For a Store download, open **Store → Penguin Dash → Install**. The APK is
+For the device-tested Store download, open **Store → Penguin Dash → Install**. The APK is
 checked against its pinned SHA-256, its package and native arm64 launcher are
 checked, and its profile is added to Games. The **Run** button starts it through
 AndroidRT. A fresh Store download, install and Run were tested on a Smart Pro:
@@ -29,9 +35,17 @@ With the physical Smart Pro controls, A entered the menu, the left stick
 steered a race, X jumped, and B exited back to JukaHub normally. Sound and
 other controllers still need testing.
 
+The Store also offers the author's **Glory of Rome** APK as an experimental
+native candidate. Its package, arm64 library, NativeActivity entry and GLES2 /
+OpenSL ES imports were inspected, but it has not been launched on a Smart Pro.
+The Store checks its pinned hash and repeats the native compatibility check
+before adding it. The **Cedinia** entry points to the author's NativeActivity
+file app; it is listed for local APK inspection and has no automatic download
+because its touch and storage behavior on the handheld are untested.
+
 ## APK Store
 
-The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
+The screen has four tabs ([player/apkstore.go](../player/apkstore.go)):
 
 * **Your APKs.** A bounded scan (two folders deep, at most 300 files, a few
   seconds) of `/mnt/SDCARD/APKs`, `Android`, common `Roms/Android` and
@@ -66,7 +80,9 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
     dynamic string table), a compressed one as a stream, at most 64 MiB per
     APK. None means a Java app with helper libraries. Only when one is found
     are the DEX files searched (bounded) for a NativeActivity or GameActivity
-    subclass.
+    subclass. For a direct NativeActivity or GameActivity launcher without a
+    named library, the same search selects the library that exports the
+    corresponding entry instead of guessing from library size.
 
   The verdict is one of: **Native APK — try it (experimental)**, **Minecraft
   class pack (experimental)**, **Native entry, Java start — may not run**,
@@ -84,7 +100,7 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   A on an APK offers **Add to Games**: the store writes one profile per APK to
   `<data>/game-profiles/local/apkstore-<id>.json` (runtime `androidpak`; the
   manifest's NativeActivity library — `android.app.lib_name` X is `libX.so`,
-  as Android maps it — as `mainLib` whenever the APK carries it) and saves the
+  as Android maps it — or the discovered native entry as `mainLib`) and saves the
   launcher icon as the game's cover. The game then appears on the **Games
   Library's Android row** ([GAME_LIBRARY.md](GAME_LIBRARY.md#android-games))
   and in **Start → Games → Game Profiles**. Two APKs of one package (two
@@ -110,23 +126,46 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   legally (your own APK — JukaHub never hands out paid apps) and what works
   instead. An entry may carry a direct download for free software, but only
   with a SHA-256 and a size, from the HTTPS hosts JukaHub's patch downloader
-  trusts (GitHub and the libretro buildbot); the file is checked before it is
+  trusts (GitHub, F-Droid and the libretro buildbot); the file is checked before it is
   kept, it is saved as `<id>.apk` (or `<id>-<hash>.apk` when a different file
   already has that name — a download never replaces a file it did not write),
-  and an entry without a hash offers no download. The built-in list carries
-  the author-published Penguin Dash v0.5.0 APK, which has rendered on a Smart
-  Pro. Its APK identity is pinned in the app so a fetched catalogue cannot
-  replace it with a different executable download. A newer list is
-  fetched at most once a day (256 KiB cap, schema-checked) and used only when
+  and an entry without a hash offers no download. A catalogue title with a
+  package matching an APK already on the card shows that APK's actual verdict
+  and can add it to Games directly when the scan finds a native candidate.
+  Native candidates with no catalogue entry also appear as local Store rows,
+  including 32-bit-only and split APKs that cannot be added. An eligible APK
+  has an Add action in both tabs; blocked APKs keep their actual scan verdict
+  and an Open action. This lists candidates, not a promise that each app works
+  on the handheld. Named game rows include Reset Generation Revived,
+  OpenGothic, ReChan, Horizon, SuperTuxKart and Downhill Revived even though
+  none has a verified Store download. Their entries explain the current
+  AndroidRT blocker or what still needs a device trial.
+  The built-in list carries author-published Penguin Dash v0.5.0 and Glory of
+  Rome APKs. Penguin Dash has rendered on a Smart Pro; Glory of Rome is only a
+  structurally checked candidate. Built-in title rows and both APK identities
+  are pinned in the app: a fetched catalogue cannot hide them, change a known
+  blocker, or replace an executable download. A newer list is fetched at most
+  once a day (256 KiB cap, schema-checked) and used only when
   it is newer, dated no more than three days past today (or past the built-in
   list's date, on a handheld whose clock has not been set), and at least half
   of its entries are readable.
+* **F-Droid.** Reads the official repository's signed entry file with a pinned
+  F-Droid key, then checks the index's SHA-256 before making a compact local
+  app list. The first read fetches the full index (about 73 MB in November
+  2026); later visits use the saved list and check for updates once a day.
+  Search by name, package or summary, narrow to Games, and page through all
+  listed apps. **Download & check** verifies the selected APK against the
+  signed index's SHA-256 and saves it in the APKs folder. The store then
+  checks the actual package and native entry: an eligible ARM64 native APK is
+  added to Games; a Java app remains in **Your APKs** with its cannot-run
+  verdict. The downloaded app is not claimed to run until tested on the
+  handheld. The F-Droid Android client itself still needs Android.
 * **Runtime.** Whether AndroidRT is ready and which copy is in use (bundled
   with JukaHub, installed from its releases, or your own), with **Install**
   when there is none and **Update to …** when a newer release than the
   installed copy is out (asked at most every half hour, only for the copy the
   store installed); whether this machine can run it (aarch64 Linux only — on a
-  PC the store reads APKs but games run on the handheld), the RAM, whether
+  PC the store reads APKs but apps and games run on the handheld), the RAM, whether
   Waydroid is usable here, and what AndroidRT can and cannot run. An install
   shows its progress on the row and on the install bar (Stop on the AndroidRT
   sheet ends it), and a failure says why in one line (offline, GitHub
@@ -158,9 +197,31 @@ resources. Running it needs:
   permissions live in `system_server`;
 * **SurfaceFlinger** to put pixels on the panel.
 
-Reimplementing that stack is a multi-year project, and it would not fit the
-device: the Android system image alone wants several hundred megabytes of RAM
-before an app starts, on a 1 GB handheld.
+Reimplementing that stack inside AndroidRT would be a multi-year project.
+A tuned Android image can run on this hardware, as GammaOS Core demonstrates;
+running Android alongside stock Linux and JukaHub is harder because both
+systems would share the handheld's limited memory, and the stock kernel and
+display path need additional integration.
+
+### An actual Android store APK
+
+The official F-Droid APK was checked on 2026-11-12. It contains three DEX
+files and one ARM64 native library, a graphics helper. It has no NativeActivity
+or GameActivity launcher for AndroidRT to start. F-Droid also needs Android's
+package manager to install apps, so copying its APK to the card cannot turn it
+into a working store on stock TrimUI. The APK Store lists F-Droid with this
+verdict; it does not offer an AndroidRT install for it. A full Android firmware
+is required to run that APK on the handheld.
+
+For the original **TrimUI Smart Pro (A133P)**, that firmware already exists:
+[GammaOS Core Beta 3](https://github.com/TheGammaSqueeze/GammaOSCore/releases/tag/beta3_a133p)
+is an Android 13 build that boots from a separate microSD card. It is a
+different operating system from the stock TrimUI Linux environment where
+JukaHub runs. With GammaOS booted, install F-Droid using Android's normal APK
+installer and try apps there; this has not been tested as a JukaHub flow. The
+release notes document hardware limitations, including Bluetooth and sleep
+issues. Use the release's device-specific image and instructions; the Smart Pro
+S has different hardware and must not use the A133P image.
 
 ## AndroidPak: NDK-only games without Android (Tier 1)
 
@@ -174,7 +235,8 @@ profile runtime](GAME_PROFILES.md) is the hub's side of exactly this path:
 
 * **Triage.** An APK is inspected read-only before launch: which ABIs it ships
   (`arm64-v8a` wins, matching the A133P), which `.so` is the native entry
-  (the largest of the best ABI, or the profile's `mainLib`), and a hard refusal
+  (the manifest's `android.app.lib_name`, an exported activity entry found by
+  the APK Store, or the largest library as a fallback), and a hard refusal
   with a reason for packages that are pure Java/Dalvik or ship only x86 ABIs.
 * **Staging.** The native subset (`lib/<chosen abi>`, `assets/`, `res/`,
   manifest, `resources.arsc`) is extracted into a bounded tmpfs staging dir
@@ -414,12 +476,12 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
 
 | Approach | Verdict |
 |----------|---------|
-| **Container integration (Waydroid)** — Android runs in a container on the device kernel. | **Install only.** The only approach that runs real Android apps. The APK Store detects Waydroid (binary + binder device) and installs APKs into it; the earlier engine that listed and launched container apps through a display bridge (`android.go`) is no longer in the tree. A stock TrimUI kernel has no binder device. |
+| **Container integration (Waydroid)** — Android runs in a container on the device kernel. | **Install only in JukaHub today.** The APK Store detects Waydroid (binary + binder device) and installs APKs into it; the earlier engine that listed and launched container apps through a display bridge (`android.go`) is no longer in the tree. A stock TrimUI kernel has no binder device. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
 | **AndroidPak — NDK games via AndroidRT** | **Shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches AndroidRT — bundled with JukaHub's TrimUI packages, or installed from its releases by the APK Store — with its own bionic loader, JNI environment and SDL2/EGL present layer. Penguin Dash v0.5.0 raced on a Smart Pro with physical A, B, stick and X controls; B exited cleanly. Sound and other titles remain unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
 | **Sideloading APKs into the container** | **Shipped in the APK Store.** The package is read and triaged first; `waydroid app install <file>` gets a validated path. |
-| **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
+| **Full Android firmware** | **Available for the original Smart Pro.** [GammaOS Core Beta 3](https://github.com/TheGammaSqueeze/GammaOSCore/releases/tag/beta3_a133p) boots Android 13 from microSD. It can run ordinary APKs through Android itself, subject to app and device compatibility. JukaHub's stock-Linux build does not run in that Android session. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
 
 ## What ships now
@@ -456,13 +518,15 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
 
 ## Limits
 
-* AndroidRT runs native (NDK) games only; Java apps and the engines that start
+* AndroidRT runs native (NDK) apps and games only; Java apps and the engines that start
   in Java (Unity, Unreal, Godot, GameMaker, LÖVE, SDL, Cocos2d-x) cannot run
   on it, and the store says so instead of offering them — with the route that
   works instead where there is one (a PortMaster build, PortMaster's GMLoader
   for GameMaker games). JukaHub has no Java runtime and does not try to fake
-  one. Real Android apps need Waydroid, which needs a binder kernel: Linux PCs
-  and community firmware, not the stock TrimUI kernel.
+  one. Real Android apps need a full Android system: the separate GammaOS Core
+  boot on the original Smart Pro, or Waydroid on Linux with a binder kernel.
+  Installing OpenJDK on stock TrimUI would not execute APK DEX code or provide
+  Android's app framework, package manager, graphics and system services.
 * Memory is shared with everything else on a 1 GB device: a launch that would
   not leave the hub alive is refused with the numbers.
 * **One game has been played on hardware.** Penguin Dash v0.5.0 reached its main

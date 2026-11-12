@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neon Snake</title>
+<style>
+  :root { color-scheme: dark; font: 600 16px system-ui, sans-serif; background: #07111e; color: #e5f7ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 16px; background: radial-gradient(circle at 50% 10%, #123457, #07111e 65%); }
+  main { width: min(920px, 100%); text-align: center; }
+  header { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { margin: 0; font-size: clamp(26px, 5vw, 42px); letter-spacing: .04em; color: #5df7c8; }
+  .score { font-variant-numeric: tabular-nums; color: #a5c7df; }
+  canvas { display: block; width: 100%; aspect-ratio: 24/14; border: 2px solid #2f6684; border-radius: 16px; background: #091827; box-shadow: 0 15px 60px #0008; touch-action: none; }
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 16px 0; }
+  button { min-width: 56px; min-height: 50px; border: 1px solid #4280a5; border-radius: 12px; background: #153954; color: #e5f7ff; font: inherit; cursor: pointer; touch-action: manipulation; }
+  button:active, button:focus-visible { background: #24749b; outline: 2px solid #5df7c8; }
+  #start { padding: 0 24px; background: #176b66; border-color: #5df7c8; }
+  .pad { display: grid; grid-template-columns: repeat(3, 56px); gap: 4px; }
+  .pad button:nth-child(1) { grid-column: 2; }
+  .pad button:nth-child(2) { grid-column: 1; grid-row: 2; }
+  .pad button:nth-child(3) { grid-column: 2; grid-row: 2; }
+  .pad button:nth-child(4) { grid-column: 3; grid-row: 2; }
+  p { margin: 8px 0 0; color: #a5c7df; font-size: 14px; }
+</style>
+<main>
+  <header><h1>Neon Snake</h1><div class="score">Score <span id="score">0</span> · Best <span id="best">0</span></div></header>
+  <canvas id="game" width="960" height="560" aria-label="Snake game board"></canvas>
+  <div class="controls"><button id="start">Start / Restart</button><div class="pad" aria-label="Direction controls"><button data-dir="up" aria-label="Up">▲</button><button data-dir="left" aria-label="Left">◀</button><button data-dir="down" aria-label="Down">▼</button><button data-dir="right" aria-label="Right">▶</button></div></div>
+  <p>Arrow keys or WASD · D-pad or stick · Tap the controls · Eat the gold dots</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.querySelector('#game'), ctx = canvas.getContext('2d');
+  const scoreEl = document.querySelector('#score'), bestEl = document.querySelector('#best');
+  const cols = 24, rows = 14, cell = 40;
+  const dirs = { up: [0,-1], down: [0,1], left: [-1,0], right: [1,0] };
+  let snake, food, dir, queued, score = 0, running = false, dead = false, tick = 0, padDir = '';
+  let best = 0;
+  try { best = Number(localStorage.getItem('jukahub-neon-snake-best') || 0); } catch (_) { /* private browsing may disable storage */ }
+  bestEl.textContent = best;
+  function randomFood() {
+    const free = [];
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++)
+      if (!snake.some(s => s[0] === x && s[1] === y)) free.push([x,y]);
+    return free.length ? free[Math.floor(Math.random() * free.length)] : null;
+  }
+  function reset() {
+    snake = [[11,7],[10,7],[9,7]]; dir = dirs.right; queued = dir;
+    food = randomFood(); score = 0; scoreEl.textContent = '0';
+    running = true; dead = false; tick = performance.now(); draw();
+  }
+  function steer(name) {
+    const next = dirs[name];
+    if (!next || !snake) return;
+    if (next[0] !== -dir[0] || next[1] !== -dir[1]) queued = next;
+  }
+  function step() {
+    dir = queued;
+    const head = [(snake[0][0]+dir[0]+cols)%cols, (snake[0][1]+dir[1]+rows)%rows];
+    const ate = food && head[0] === food[0] && head[1] === food[1];
+    const body = ate ? snake : snake.slice(0, -1);
+    if (body.some(s => s[0] === head[0] && s[1] === head[1])) { running = false; dead = true; return; }
+    snake.unshift(head);
+    if (ate) {
+      score += 10; scoreEl.textContent = score;
+      if (score > best) { best = score; bestEl.textContent = best; try { localStorage.setItem('jukahub-neon-snake-best', best); } catch (_) {} }
+      food = randomFood(); if (!food) { running = false; dead = true; }
+    } else snake.pop();
+  }
+  function draw() {
+    ctx.fillStyle = '#091827'; ctx.fillRect(0,0,960,560);
+    ctx.strokeStyle = '#12304a'; ctx.lineWidth = 1;
+    for (let x=0;x<=cols;x++) { ctx.beginPath();ctx.moveTo(x*cell,0);ctx.lineTo(x*cell,560);ctx.stroke(); }
+    for (let y=0;y<=rows;y++) { ctx.beginPath();ctx.moveTo(0,y*cell);ctx.lineTo(960,y*cell);ctx.stroke(); }
+    if (food) { ctx.fillStyle='#ffdc73';ctx.shadowColor='#ffce3b';ctx.shadowBlur=22;ctx.beginPath();ctx.arc(food[0]*cell+20,food[1]*cell+20,12,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0; }
+    if (snake) snake.forEach((s,i) => { ctx.fillStyle=i?'#34bf9f':'#79ffe0';ctx.fillRect(s[0]*cell+3,s[1]*cell+3,34,34); });
+    if (!running) {
+      ctx.fillStyle='#06121bc9';ctx.fillRect(0,0,960,560);
+      ctx.textAlign='center';ctx.fillStyle='#e5f7ff';ctx.font='bold 48px system-ui';ctx.fillText(dead?'Game over':'Neon Snake',480,255);
+      ctx.font='24px system-ui';ctx.fillText('Press Start, Enter, or gamepad A',480,305);
+    }
+  }
+  function gamepad() {
+    const pad = Array.from(navigator.getGamepads?.() || []).find(p => p);
+    if (!pad) { padDir=''; return; }
+    const x = pad.axes[0] || 0, y = pad.axes[1] || 0;
+    const name = pad.buttons[12]?.pressed || y < -.5 ? 'up' : pad.buttons[13]?.pressed || y > .5 ? 'down' : pad.buttons[14]?.pressed || x < -.5 ? 'left' : pad.buttons[15]?.pressed || x > .5 ? 'right' : '';
+    if (name && name !== padDir) steer(name);
+    padDir = name;
+    if ((pad.buttons[0]?.pressed || pad.buttons[9]?.pressed) && !running) reset();
+  }
+  function frame(now) { gamepad(); if (running && now-tick >= Math.max(75,145-score/20)) { step();tick=now; } draw();requestAnimationFrame(frame); }
+  window.addEventListener('keydown', e => {
+    const key = {ArrowUp:'up',w:'up',ArrowDown:'down',s:'down',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right'}[e.key];
+    if (key) { e.preventDefault();steer(key); } else if (e.key==='Enter' || e.key===' ') { e.preventDefault(); if (!running) reset(); }
+  });
+  document.querySelector('#start').addEventListener('click', reset);
+  document.querySelectorAll('[data-dir]').forEach(button => button.addEventListener('pointerdown', e => { e.preventDefault();steer(button.dataset.dir); }));
+  draw(); requestAnimationFrame(frame);
+})();
+</script>
+</html>

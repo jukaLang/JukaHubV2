@@ -26,6 +26,9 @@ package main
 //   - Y (Delete, Backspace) removes a tile; the "+" tile at the end opens the
 //     add sheet (home_addsheet.go), which inserts after the tile that had the
 //     focus;
+//   - Up from the strip, or its Top bar chip, opens the Top bar row: the
+//     controls on the right of the top bar, to put in any order and to hide
+//     or show (home_edit_header.go);
 //   - B (Esc) or L2 (Q) ends editing. So does opening the Start menu, the
 //     notification list or search, and leaving Home.
 //
@@ -50,10 +53,12 @@ import (
 )
 
 const (
-	// The strip's chips after the four layouts.
-	homeEditStripReset = 4
-	homeEditStripDone  = 5
-	homeEditStripCount = 6
+	// The strip's chips after the four layouts: Top bar (the row that
+	// arranges the top bar, home_edit_header.go), Reset and Done.
+	homeEditStripBar   = 4
+	homeEditStripReset = 5
+	homeEditStripDone  = 6
+	homeEditStripCount = 7
 
 	// homeEditResetArmMS is how long Reset waits for its second press.
 	homeEditResetArmMS = 3000
@@ -224,6 +229,7 @@ func homeEditBegin(config *Config) {
 	homeEdit.press.active, homeEdit.press.drag, homeEdit.press.resize = false, false, false
 	homeEdit.sheet = homeAddSheetState{}
 	homeEdit.mouseX, homeEdit.mouseY = mouseX, mouseY
+	homeEditBar.open, homeEditBar.holding, homeEditBar.dirty = false, false, false
 	homeEdit.open = true
 	homeLayout.dynSync(config)
 	if !homeLayout.dynIsTile(homeLayout.Focus.Current()) {
@@ -239,6 +245,8 @@ func homeEditClose(config *Config) {
 	if config == nil {
 		config = appConfig
 	}
+	// The Top bar row saves what it has not saved yet.
+	homeEditBarClose(config, false)
 	homeEdit.holding = false
 	homeEdit.resizing = false
 	homeEdit.press.active, homeEdit.press.drag, homeEdit.press.resize = false, false, false
@@ -667,6 +675,10 @@ func homeEditNavigate(config *Config, dir FocusDirection) {
 	if h == nil {
 		return
 	}
+	if homeEditBar.open {
+		homeEditBarNavigate(config, dir)
+		return
+	}
 	if homeEdit.resizing {
 		homeEditResizeStep(config, dir)
 		return
@@ -705,11 +717,15 @@ func homeEditNavigate(config *Config, dir FocusDirection) {
 	}
 }
 
-// homeEditStripMove walks the strip; Down returns to the tiles.
+// homeEditStripMove walks the strip; Down returns to the tiles and Up goes
+// on to the Top bar row.
 func homeEditStripMove(dir FocusDirection) {
 	dynamic := homeLayout != nil && homeLayout.dynActive()
 	step := 0
 	switch dir {
+	case FocusUp:
+		homeEditBarOpen(appConfig)
+		return
 	case FocusLeft:
 		step = -1
 	case FocusRight:
@@ -743,6 +759,8 @@ func homeEditStripActivate(config *Config, i int) {
 	switch {
 	case i >= 0 && i < len(homeArrangementChoiceList):
 		homeEditChooseLayout(config, i)
+	case i == homeEditStripBar:
+		homeEditBarOpen(config)
 	case i == homeEditStripReset:
 		if homeLayout != nil && homeLayout.dynActive() {
 			homeEditReset(config)
@@ -818,6 +836,9 @@ func homeEditPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if homeEdit.sheet.open {
 		return homeAddSheetPad(e, config)
 	}
+	if homeEditBar.open {
+		return homeEditBarPad(e, config)
+	}
 	if homeEdit.resizing {
 		// Resize mode: the D-pad sizes the tile, A, B and X end it. Y and
 		// the shoulders wait (a layout switch or a removal mid-resize would
@@ -886,6 +907,9 @@ func homeEditKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	if homeEdit.sheet.open {
 		return homeAddSheetKey(e, config)
+	}
+	if homeEditBar.open {
+		return homeEditBarKey(e, config)
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
@@ -1041,6 +1065,9 @@ func homeEditClick(mx, my int32, config *Config) bool {
 		homeAddSheetClick(mx, my, config)
 		return true
 	}
+	if homeEditBarClick(config, mx, my) {
+		return true
+	}
 	for i, r := range homeEdit.chips {
 		if r.W > 0 && pointInRect(mx, my, growTouchTarget(r)) {
 			// A resize in progress ends (and is saved) first: the D-pad must
@@ -1147,6 +1174,9 @@ func homeEditPointerMotion(config *Config, mx, my int32, held bool) bool {
 		if moved {
 			homeAddSheetHover(mx, my)
 		}
+		return true
+	}
+	if homeEditBarPointerMotion(config, mx, my, held) {
 		return true
 	}
 	h := homeLayout
@@ -1311,7 +1341,10 @@ func homeEditCarouselDrag(config *Config, mx int32) {
 // homeEditPointerUp ends a press: a drag puts the tile down and saves, and so
 // does letting go of the corner handle.
 func homeEditPointerUp(config *Config, mx, my int32) {
-	if !homeEdit.open || !homeEdit.press.active {
+	if !homeEdit.open {
+		return
+	}
+	if homeEditBarPointerUp(config) || !homeEdit.press.active {
 		return
 	}
 	dragged, sized := homeEdit.press.drag, homeEdit.press.resize
@@ -1478,6 +1511,19 @@ var (
 		{button: "L1/R1 / Tab", label: "Layout"},
 		{button: "B", label: "Done"},
 	}
+	// The Top bar row (home_edit_header.go), and a control carried along it.
+	homeFooterHintsBar = [len(homeFooterHintsStart)]footerHint{
+		{button: "D-Pad", label: "Choose"},
+		{button: "A", label: "Move"},
+		{button: "Y / Del", label: "Hide/Show"},
+		{button: "X", label: "Reset"},
+		{button: "B", label: "Back"},
+	}
+	homeFooterHintsBarHold = [len(homeFooterHintsStart)]footerHint{
+		{button: "D-Pad", label: "Move"},
+		{button: "A", label: "Drop"},
+		{button: "B", label: "Drop"},
+	}
 	homeFooterHintsSheet = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Add"},
@@ -1495,6 +1541,17 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 		if len(homeEdit.sheet.entries) == 0 {
 			// Nothing left to add: A does nothing, so it is not offered.
 			set[1], set[2] = footerHint{}, footerHint{}
+		}
+		return set
+	case homeEdit.open && homeEditBar.open && homeEditBar.holding:
+		return homeFooterHintsBarHold
+	case homeEdit.open && homeEditBar.open:
+		set := homeFooterHintsBar
+		if s, ok := homeEditBarSlot(); !ok || !headerSlotHideable(s) {
+			set[2] = footerHint{}
+		}
+		if homeEditBar.idx >= int(hsCount) {
+			set[1] = footerHint{button: "A", label: "Select"}
 		}
 		return set
 	case homeEdit.open && (homeEdit.strip || !h.dynActive()):
@@ -1638,7 +1695,8 @@ func homeEditCaption(arrangement string) string {
 }
 
 // drawEditStrip draws edit mode's strip where the greeting and the search
-// pill are: the title, the four layouts, Reset and Done.
+// pill are: the title, the four layouts, Top bar, Reset and Done — or, while
+// it has the focus, the Top bar row (home_edit_header.go).
 func (h *HomeLayout) drawEditStrip(renderer *sdl.Renderer, fonts HomeFonts) {
 	for i := range homeEdit.chips {
 		homeEdit.chips[i] = sdl.Rect{}
@@ -1657,7 +1715,11 @@ func (h *HomeLayout) drawEditStrip(renderer *sdl.Renderer, fonts HomeFonts) {
 			cx := x0 + tw + scaleX(18, h.Width)
 			if maxW := right - cx; maxW > scaleX(80, h.Width) {
 				cy := titleY + int32(f.Height()) - int32(note.Height()) - scaleY(4, h.Height)
-				drawText(renderer, note, ellipsize(note, homeEditCaption(h.Arrangement), maxW), cx, cy, ColorTextMuted(), textAlignLeft)
+				caption := homeEditCaption(h.Arrangement)
+				if homeEditBar.open {
+					caption = homeEditBarCaption()
+				}
+				drawText(renderer, note, ellipsize(note, caption, maxW), cx, cy, ColorTextMuted(), textAlignLeft)
 			}
 		}
 	}
@@ -1670,6 +1732,11 @@ func (h *HomeLayout) drawEditStrip(renderer *sdl.Renderer, fonts HomeFonts) {
 	}
 	y := scaleY(homeSearchPillY, h.Height)
 	hh := scaleY(homeSearchPillH, h.Height)
+	if homeEditBar.open {
+		// The Top bar row has the strip's place (home_edit_header.go).
+		h.drawEditBarRow(renderer, font, x0, y, hh, right)
+		return
+	}
 	pad := scaleX(18, h.Width)
 	active := homeArrangementChoiceIndex(h.Arrangement)
 	x := x0
@@ -1679,6 +1746,18 @@ func (h *HomeLayout) drawEditStrip(renderer *sdl.Renderer, fonts HomeFonts) {
 		r := sdl.Rect{X: x, Y: y, W: lw + 2*pad, H: hh}
 		h.drawEditChip(renderer, font, r, label, "", i == active, homeEdit.strip && homeEdit.stripIdx == i)
 		homeEdit.chips[i] = r
+		x += r.W + scaleX(10, h.Width)
+	}
+	{
+		// Top bar: the row that arranges the controls on the right of the
+		// top bar, a little apart from the layouts.
+		const label = "Top bar"
+		glyph := min32(scaleY(18, h.Height), hh-scaleY(14, h.Height))
+		lw, _ := measureText(font, label)
+		x += scaleX(8, h.Width)
+		r := sdl.Rect{X: x, Y: y, W: lw + 2*pad + glyph + scaleX(8, h.Width), H: hh}
+		h.drawEditChip(renderer, font, r, label, "edit", false, homeEdit.strip && homeEdit.stripIdx == homeEditStripBar)
+		homeEdit.chips[homeEditStripBar] = r
 		x += r.W + scaleX(10, h.Width)
 	}
 	glyph := min32(scaleY(18, h.Height), hh-scaleY(14, h.Height))

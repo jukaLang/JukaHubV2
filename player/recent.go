@@ -44,7 +44,11 @@ func getRecentItems() []FavoriteItem {
 // the card was last scanned.
 func playRecentGame(g recentGame) {
 	if g.Path == "" || !regularFile(g.Path) {
-		ShowToast("ROM is missing: "+filepath.Base(g.Path), ToastKindError)
+		label := "ROM"
+		if g.System == html5LibrarySystem {
+			label = "HTML5 game"
+		}
+		ShowToast(label+" is missing: "+filepath.Base(g.Path), ToastKindError)
 		return
 	}
 	launcher := resolveGameLauncher(g.System)

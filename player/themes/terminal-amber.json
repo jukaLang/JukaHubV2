@@ -1,0 +1,23 @@
+{
+  "name": "Terminal Amber",
+  "background": "#0a0805",
+  "buttonColor": "#1c1508",
+  "labelColor": "#ffb000",
+  "inputColor": "#14100a",
+  "surface": "#0d0a06",
+  "surfaceAlt": "#171207",
+  "surfaceRaised": "#241b0a",
+  "textPrimary": "#ffc65c",
+  "textSecondary": "#d79a3a",
+  "textTertiary": "#96703a",
+  "borderSubtle": "#ffb00018",
+  "borderDefault": "#ffb00033",
+  "borderFocus": "#ffb000",
+  "success": "#6ed47a",
+  "warning": "#ffc65c",
+  "danger": "#e05252",
+  "info": "#59b6e8",
+  "overlay": "#0a0805cc",
+  "summary": "",
+  "arrangement": ""
+}

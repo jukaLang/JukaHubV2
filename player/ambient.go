@@ -226,6 +226,7 @@ func ambientEntryBlockReason(config *Config) string {
 		{"game profiles panel", gpPanel.open},
 		{"Windows apps panel", winAppsPanel.open},
 		{"ports panel", portsPanel.open},
+		{"Steam panel", steamPanel.open},
 		{"save manager", savePanel.open},
 		{"curation panel", curationPanel.open},
 		{"remote play panel", chiakiPanel.open},

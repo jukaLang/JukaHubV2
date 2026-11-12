@@ -867,7 +867,10 @@ func mediaHubLoadTrending(config *Config, force bool) {
 		return
 	}
 	mediaTrendingLoadedAt = time.Now()
-	executeYouTubeSearch(config, mediaHubCommand(config, "trending"), mediaTrendingVar, snapshotVars(config))
+	// Show the last saved list immediately, then replace it with a fresh page.
+	// The regular search path stops at a still-valid cache entry, even when
+	// Media's shorter refresh interval says this list is due for an update.
+	executeYouTubeSearchFresh(config, mediaHubCommand(config, "trending"), mediaTrendingVar, snapshotVars(config))
 }
 
 // mediaHubLoadShorts fetches the Shorts feed the Shorts scene also plays from.
@@ -1253,8 +1256,9 @@ func mediaHubBuildKey(config *Config) mediaBuildKey {
 	}
 }
 
-// mediaHubEnsureBuilt rebuilds the visible list when its inputs changed, and
-// every couple of seconds so progress bars follow the player.
+// mediaHubEnsureBuilt rebuilds the visible list when its inputs changed. A
+// live player also gets a periodic refresh so its progress bars keep moving;
+// an idle list has no reason to copy and rebuild its cards every two seconds.
 func mediaHubEnsureBuilt(config *Config) {
 	now := sdl.GetTicks64()
 	if mediaHub.tab == mediaTabDownloads && now-mediaHub.queueAt >= mediaQueuePollEvery {
@@ -1262,10 +1266,11 @@ func mediaHubEnsureBuilt(config *Config) {
 		mediaHub.queueN = mediaQueueSignature()
 	}
 	key := mediaHubBuildKey(config)
-	// The Library only changes with its model (the key's mlib), so it skips
-	// the periodic rebuild that keeps the web lists' progress bars current.
+	// A video in the mini player can change a card's progress without changing
+	// the list signature. All other changes are represented in the key.
+	refreshProgress := mediaHub.tab != mediaTabLibrary && playerPhase() != "idle"
 	if key == mediaHub.built && mediaHub.builtAt != 0 &&
-		(now-mediaHub.builtAt < mediaRebuildEvery || mediaHub.tab == mediaTabLibrary) {
+		(!refreshProgress || now-mediaHub.builtAt < mediaRebuildEvery) {
 		return
 	}
 	mediaHub.built = key
@@ -1379,29 +1384,36 @@ type mediaCardContext struct {
 	position   map[string]float64
 	byPath     map[string]int
 	library    []dlLibraryEntry
+	saved      FavoritesStore
 	libLoaded  bool
 	libCount   int
 }
 
 func mediaNewCardContext() mediaCardContext {
 	ctx := mediaCardContext{
-		downloaded: dlLibrarySourceSet(),
-		favorite:   map[string]bool{},
-		position:   map[string]float64{},
+		favorite: map[string]bool{},
+		position: map[string]float64{},
 	}
 	ctx.library, _, ctx.libLoaded = dlLibrarySnapshot()
 	ctx.libCount = len(ctx.library)
+	ctx.downloaded = make(map[string]bool, ctx.libCount)
 	ctx.byPath = make(map[string]int, len(ctx.library))
 	for i := range ctx.library {
-		ctx.byPath[dlPathKey(ctx.library[i].Path)] = i
+		e := ctx.library[i]
+		ctx.byPath[dlPathKey(e.Path)] = i
+		if e.Video {
+			if key := dlLibraryKey(e.Source); key != "" {
+				ctx.downloaded[key] = true
+			}
+		}
 	}
-	snap := favoritesSnapshot()
-	for _, it := range snap.Videos {
+	ctx.saved = favoritesSnapshot()
+	for _, it := range ctx.saved.Videos {
 		if v, ok := it.Data.(VideoInfo); ok {
 			ctx.favorite[strings.TrimSpace(v.GetURL())] = true
 		}
 	}
-	for _, it := range snap.Recent {
+	for _, it := range ctx.saved.Recent {
 		if v, ok := it.Data.(VideoInfo); ok && v.Position > 0 {
 			ctx.position[strings.TrimSpace(v.GetURL())] = v.Position
 		}
@@ -1516,7 +1528,7 @@ func mediaCardFromEntry(e dlLibraryEntry, over map[string]bool, ctx mediaCardCon
 // rebuild when they are still there.
 func mediaHubBuildRows(config *Config, ctx mediaCardContext, prev []mediaRow) []mediaRow {
 	rows := make([]mediaRow, 0, 5)
-	snap := favoritesSnapshot()
+	snap := ctx.saved
 
 	if items := favoritesInProgress(snap.Recent); len(items) > 0 {
 		row := mediaRow{kind: mediaRowContinue, title: "Continue watching"}
@@ -1643,7 +1655,7 @@ func mediaHubBuildGrid(config *Config, ctx mediaCardContext, t mediaTab) []media
 			cards = append(cards, c)
 		}
 	case mediaTabHistory:
-		snap := favoritesSnapshot()
+		snap := ctx.saved
 		cards = make([]mediaCard, 0, len(snap.Recent))
 		for _, it := range snap.Recent {
 			v, ok := it.Data.(VideoInfo)
@@ -1660,7 +1672,7 @@ func mediaHubBuildGrid(config *Config, ctx mediaCardContext, t mediaTab) []media
 			cards = append(cards, c)
 		}
 	case mediaTabFavorites:
-		snap := favoritesSnapshot()
+		snap := ctx.saved
 		cards = make([]mediaCard, 0, len(snap.Videos))
 		for _, it := range favoritesWithResume(snap.Videos, snap.Recent) {
 			if v, ok := it.Data.(VideoInfo); ok {

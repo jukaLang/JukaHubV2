@@ -27,7 +27,9 @@ login launcher asks for it.)
    runs once around the glass pane's rim, the backdrop's four lights come up
    one after another with the four bells of the startup chime, the name
    catches a glint, and a thin progress line shows the startup checks still
-   running, with the current one named under it.
+   running, with the current one named under it. With a name set in
+   **Settings → Your name**, "Welcome back, *name*" fades in under the
+   JukaHub name as it comes into focus (the app-launch hello shows it too).
 3. **Home builds itself.** The tile fades through, the name glides up into its
    place in the header, the cards rise into place in reading order and the rest
    of the screen fades in. Then Home is live.
@@ -54,6 +56,16 @@ the menu instead of running the queue is not shown the menu again. Loops the
 hook has to pause for a direct start are recorded by process id in
 `/tmp/jukahub-paused`, which `launch.sh` resumes when JukaHub hands the screen
 back.
+
+## Shutting down
+
+The shutdown card lists its steps (stopping games and playback, saving
+settings, syncing) and then dissolves to black. With a name set it ends on
+"Goodbye, *name*" ("See you soon, *name*" for a restart): the steps step back,
+the farewell comes in under the wordmark for about a second, and it goes out
+with the light. Without a name the card holds a quarter second, as before. A
+screenshot never shows the name; the phrases follow the interface language,
+the name is drawn as written (`bootgreet.go`).
 
 ## Opening JukaHub as an app
 

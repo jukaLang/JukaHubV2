@@ -14,8 +14,8 @@ package main
 // manifest (the launcher activity, hasCode, android.app.lib_name) and the
 // engine the library names give away. The words are the user's: what it is,
 // whether it can run here, and — when it cannot — the route that works instead.
-// Nothing here pretends: "try it" is as far as a verdict goes, because no game
-// has been verified on a handheld yet.
+// Nothing here pretends: "try it" is as far as a verdict goes for an untested
+// title, although Penguin Dash has been played on a Smart Pro.
 
 import (
 	"strconv"
@@ -283,7 +283,7 @@ func apkStoreVerdict(in apkStoreVerdictInput) (apkStoreTier, string, string) {
 		case strings.Contains(lower, "no native libraries"):
 			return apkTierJava, "Needs Android's Java runtime — can't run on AndroidRT",
 				"It has no native code: the whole app is Java/Kotlin bytecode, which only Android's own runtime (ART) " +
-					"can run. AndroidRT runs native (NDK) games only; a full Android firmware is the way to run apps like this."
+					"can run. AndroidRT runs native (NDK) apps and games only; a full Android firmware is the way to run apps like this."
 		case strings.Contains(lower, "minecraft"):
 			return apkTierWrongCPU, "Wrong build for the handheld", in.TriageErr + "."
 		case strings.Contains(lower, "no abi"):
@@ -333,14 +333,14 @@ func apkStoreVerdict(in apkStoreVerdictInput) (apkStoreTier, string, string) {
 			"reports, so it may refuse to start."
 	}
 	switch {
-	case in.Engine == apkEngineNativeActivity || in.Engine == apkEngineGameActivity || !in.HasCode:
+	case !in.HasCode:
 		engine := in.Engine
 		if engine == "" {
 			engine = "no Java code"
 		}
 		return apkTierNative, "Native APK — try it (experimental)", "It starts in native code (" + engine + "), the kind " +
-			"of game AndroidRT is built for. No game has been verified on a handheld yet: try it, and if it stops, the " +
-			"launch log says what is missing." + note
+			"of APK AndroidRT is built for. Penguin Dash has run on a Smart Pro; this APK still needs its own test. " +
+			"If it stops, the launch log says what is missing." + note
 	}
 	launcher := in.Launcher
 	if launcher == "" {

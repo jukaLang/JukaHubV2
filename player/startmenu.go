@@ -168,12 +168,10 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	// Windows Apps: Wine on the handheld, the programs themselves on Windows.
 	games = append(games, startMenuEntry{name: windowsAppsEntryName, icon: "W", action: func(*Config) { openWindowsAppsPanel(false) }})
 	if !IsWindows() {
-		games = append(games,
-			startMenuEntry{name: portMasterEntryName, icon: "P", action: func(*Config) { openPortsPanel(false) }},
-			// Android games through AndroidRT (apkstore.go).
-			startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }},
-		)
+		games = append(games, startMenuEntry{name: portMasterEntryName, icon: "P", action: func(*Config) { openPortsPanel(false) }})
 	}
+	// PCs can inspect and download APKs even though AndroidRT runs on the handheld.
+	games = append(games, startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }})
 	// RetroAchievements is only meaningful where a card can hold credentials.
 	if !retroAchievementsSupported() {
 		games = withoutStartMenuEntry(games, "RetroAchievements")
@@ -187,6 +185,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "Downloads", icon: "D", action: func(*Config) { openDownloadsPanel() }},
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
+		// The pocket groovebox (synth.go); listing it here moves it out of Screens.
+		{name: "Synth", icon: "S", action: func(c *Config) { toolsHubOpenScene(c, synthSceneName) }},
 		{name: "Smart Home", icon: "M", action: func(c *Config) { openSmartHomePanel(c) }},
 		{name: "Screen Share", icon: "V", action: func(c *Config) { openCastPanel(c) }},
 		// Say what to open (voicecmd.go); the phone's keyboard microphone works
@@ -286,7 +286,7 @@ var (
 		"PS Remote Play": "tv", "RetroAchievements": "trophy", "Save Manager": "saves",
 		"Windows Apps": "apps", "PortMaster Ports": "packages", "APK Store": "phone", "Smart Pro Compatibility": "check",
 		"Network tools": "network", "Downloads": "download", "Curation Hub": "sparkles",
-		"Audio": "music", "Smart Home": "home", "Screen Share": "tv", "Accessibility": "user",
+		"Audio": "music", "Synth": "synth", "Smart Home": "home", "Screen Share": "tv", "Accessibility": "user",
 		"Stick Calibration": "controller", "Quick Settings": "preferences", "Voice command": "mic",
 		"Wi-Fi Networks": "wifi", "Screenshot": "camera", "Sleep Screen": "moon",
 		"Ambient": "clock", "Wallpapers": "image", "Edit Home": "edit", "Quit JukaHub": "power",

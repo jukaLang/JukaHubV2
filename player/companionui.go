@@ -19,14 +19,13 @@ import (
 )
 
 type companionOverlay struct {
-	open        bool
-	pin         string
-	url         string // pairing link, including PIN, for QR codes
-	browserURL  string // address to type, without the PIN
-	fallbackURL string // numeric address when the local name is available
-	err         string
-	qr          [][]bool
-	srv         *companionServer
+	open       bool
+	pin        string
+	url        string // pairing link, including PIN, for QR codes
+	browserURL string // http://<IP>[:port] to type, without the PIN
+	err        string
+	qr         [][]bool
+	srv        *companionServer
 }
 
 var companion companionOverlay
@@ -103,7 +102,6 @@ func stopCompanionServer() {
 	companion.pin = ""
 	companion.url = ""
 	companion.browserURL = ""
-	companion.fallbackURL = ""
 	companion.err = ""
 	companion.qr = nil
 	companionHeaderRect = sdl.Rect{}
@@ -129,7 +127,6 @@ func companionStart() {
 	companion.err = ""
 	companion.url = ""
 	companion.browserURL = ""
-	companion.fallbackURL = ""
 	companion.qr = nil
 	if localIPv4() == "" {
 		companion.err = "No Wi-Fi address - connect the handheld to a network"
@@ -190,22 +187,15 @@ func companionRefreshURL() {
 	}
 	ip := localIPv4()
 	if ip == "" {
-		companion.srv.refreshMDNS("")
 		companion.err = "No Wi-Fi address - connect the handheld to a network"
 		companion.url = ""
 		companion.browserURL = ""
-		companion.fallbackURL = ""
 		companion.qr = nil
 		return
 	}
-	companion.srv.refreshMDNS(ip)
-	port := companion.srv.BrowserPort()
-	companion.browserURL = companionBaseURL(ip, port)
-	companion.fallbackURL = ""
-	if companion.srv.mdnsReady(ip) {
-		companion.browserURL = companionBaseURL(companionLocalHost, port)
-		companion.fallbackURL = companionBaseURL(ip, port)
-	}
+	// Always the numeric address: a .local name fails with NXDOMAIN on many
+	// routers and phones, the IP works everywhere.
+	companion.browserURL = companionBaseURL(ip, companion.srv.BrowserPort())
 	url := companion.srv.URL()
 	if url == companion.url && len(companion.qr) > 0 {
 		companion.err = ""
@@ -537,12 +527,6 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 				for _, addressLine := range companionWrapAddress(smallFont, companion.browserURL, layout.right.W) {
 					drawText(r, smallFont, addressLine, layout.right.X, y, accent, textAlignLeft)
 					y += line
-				}
-				if companion.fallbackURL != "" {
-					for _, addressLine := range companionWrapAddress(smallFont, "or "+companion.fallbackURL, layout.right.W) {
-						drawText(r, smallFont, addressLine, layout.right.X, y, dim, textAlignLeft)
-						y += line
-					}
 				}
 				y += 10
 			}

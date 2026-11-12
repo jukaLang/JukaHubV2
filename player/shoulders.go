@@ -110,6 +110,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 		openCoreBuildsPanel(true)
 		return true
 	}
+	// Apps → Steam: L2 searches, R2 changes the sort (steam_ui.go).
+	if steamPanel.open && !virtualKeyboardActive {
+		steamPanelTrigger(s)
+		return true
+	}
 	// Panels that draw their own modal list own the pad; a trigger must not
 	// page the scene behind them.
 	if modalPanelBlocksShoulders() {
@@ -261,6 +266,7 @@ func modalPanelBlockReason() string {
 		{"save manager", savePanel.open},
 		{"curation panel", curationPanel.open},
 		{"ports panel", portsPanel.open},
+		{"Steam panel", steamPanel.open},
 		{"Tools panel", toolsPanel.open},
 		{"netplay panel", netplayPanel.open},
 		{"game library", gameLib.open},

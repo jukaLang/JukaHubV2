@@ -827,46 +827,47 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		headerTextW += SpaceSM + w
 	}
 
-	// Right-side status cluster in the canonical shared order (network,
-	// weather, time, battery) — identical to the home header so the right
-	// side of the top bar stays put across screens. The notification bell
-	// sits to the right of the cluster as the top-right system corner, and
-	// Report a bug and the trophy cup to its left.
+	// Right side of the bar: the status cluster (brightness, volume,
+	// Bluetooth, network, weather, time, battery, the chip) and the corner's
+	// buttons (the release offer, the trophy room's cup, Report a bug, the
+	// notification bell), identical to the home header so the right side of
+	// the top bar stays put across screens. They stand in the user's order
+	// (Edit Home → Top bar, header_arrange.go); the shipped order ends in
+	// the corner, bell at the margin.
+	headerSlotRectsClear()
 	parts := headerStatusParts(config)
 	statusFont := headerStatusFont()
 	if statusFont == nil {
 		statusFont = font
 	}
 	bellW, bellH := notifBellSize(config)
-	rightX := screenWidth - StatusBarMargin
+	right := screenWidth - StatusBarMargin
+	// The corner's buttons are decided first, the way they always were: the
+	// bell and Report a bug always, the cup only on a bar with room for the
+	// clock and the battery beside it, the offer while a release is
+	// advertised. Each sits one corner gap from its neighbour (the same
+	// spacing Home uses), not at the wider spacing the cluster parts use.
+	// usedW is the room they take, each with its gap.
+	var corner [hsCount]int32
+	usedW := int32(0)
 	if bellW > 0 {
-		// The corner's controls (bell, bug, cup, offer) sit one corner gap apart, the
-		// same way Home places them, not at the wider spacing the cluster parts
-		// use, so they read as one group on both headers instead of 6px apart
-		// on Home and 16px apart in a scene.
-		rightX -= bellW + headerCornerGap
+		corner[hsBell] = bellW
+		usedW += bellW + headerCornerGap
 	}
-	// Report a bug is the middle fixed control, between the bell and cup.
-	if chip := drawHeaderBug(renderer, config, rightX, barH,
-		focusEngine.ElementIndex() == ChromeBugIndex); chip.W > 0 {
-		rightX = chip.X - headerCornerGap
+	if bugW, _ := headerBugSize(config); bugW > 0 && !headerSlotHidden(config, hsBug) {
+		corner[hsBug] = bugW
+		usedW += bugW + headerCornerGap
 	}
-	// The trophy room's cup sits immediately left of Report a bug. It gives
-	// way only on a bar too crowded to keep the clock and the battery beside it.
-	if trophyW, _ := headerTrophySize(config); trophyW > 0 &&
-		rightX-trophyW-headerCornerGap-(StatusBarMargin+headerTextW+Space2XL) >= headerTrophyMinCluster {
-		if cup := drawHeaderTrophy(renderer, config, rightX, barH,
-			focusEngine.ElementIndex() == ChromeTrophyIndex); cup.W > 0 {
-			rightX = cup.X - headerCornerGap
+	if trophyW, _ := headerTrophySize(config); trophyW > 0 && !headerSlotHidden(config, hsTrophy) &&
+		right-usedW-trophyW-headerCornerGap-(StatusBarMargin+headerTextW+Space2XL) >= headerTrophyMinCluster {
+		corner[hsTrophy] = trophyW
+		usedW += trophyW + headerCornerGap
+	}
+	if updateAvailable() && !headerSlotHidden(config, hsUpdate) {
+		if pillW, _ := updatePillSize(headerCaptionFont(config)); pillW > 0 {
+			corner[hsUpdate] = pillW
+			usedW += pillW + headerCornerGap
 		}
-	}
-	// The release offer (only while an update is advertised) is the same pill
-	// in the same corner as on Home: immediately left of the trophy room's cup,
-	// inside the system corner rather than floating in the status cluster.
-	if pill := drawHeaderUpdatePill(renderer, config, rightX, barH,
-		focusEngine.ElementIndex() == ChromeUpdateIndex); pill.W > 0 {
-		updatePrompt.badge = pill
-		rightX = pill.X - headerCornerGap
 	}
 	gap := StatusPartGap
 
@@ -875,13 +876,17 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	// the user needs at a glance, so the network name goes first. The room is
 	// what is left between that cluster and the corner (bell, cup, offer): the
 	// screen's width alone let a crowded cluster run under the Menu pill.
-	maxW := rightX - StatusBarMargin - headerTextW - Space2XL
+	maxW := right - usedW - StatusBarMargin - headerTextW - Space2XL
 	if maxW < 120 {
 		maxW = 120
 	}
-	parts = fitStatusParts(parts, func(p string) int32 {
+	partW := func(p string) int32 {
 		return statusClusterPartWidth(statusFont, p)
-	}, gap, maxW)
+	}
+	parts = fitStatusParts(parts, partW, gap, maxW)
+	// A corner button the user moved in among the parts adds a gap or two:
+	// the plan trims on until it fits the same room.
+	_, plan := headerPlanFit(config, parts, partW, &corner, gap, headerCornerGap, right, right-usedW-maxW)
 
 	// Vertically center the cluster in the bar (same 16px font and position
 	// as the home header).
@@ -889,84 +894,73 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if statusY < 0 {
 		statusY = 0
 	}
-	clusterW := int32(0)
-	for _, p := range parts {
-		clusterW += statusClusterPartWidth(statusFont, p)
-	}
-	if len(parts) > 1 {
-		clusterW += gap * int32(len(parts)-1)
-	}
-	startX := rightX - clusterW
-	// Two parts are drawn as gauges rather than text: the leading network slot
+	// Two parts are drawn as gauges rather than text: the network slot
 	// (signal bars, empty without a link) and the battery (a colour-coded cell).
 	// drawStatusClusterPart returns the same width statusClusterPartWidth
 	// measured, so the clock and the bell never move.
 	drawStatusText := func(text string, color sdl.Color, x, y int32) {
 		renderText(renderer, config, statusFont, text, color, x, y)
 	}
-	for _, p := range parts {
-		pw := statusClusterPartWidth(statusFont, p)
+	focusIdx := focusEngine.ElementIndex()
+	for _, it := range plan {
+		switch it.slot {
+		case hsBell:
+			// Notification bell: always reachable with the D-pad.
+			headerSlotRects[hsBell] = renderNotifBell(renderer, config, it.x+it.w, (barH-bellH)/2)
+			continue
+		case hsBug:
+			headerSlotRects[hsBug] = drawHeaderBug(renderer, config, it.x+it.w, barH, focusIdx == ChromeBugIndex)
+			continue
+		case hsTrophy:
+			headerSlotRects[hsTrophy] = drawHeaderTrophy(renderer, config, it.x+it.w, barH, focusIdx == ChromeTrophyIndex)
+			continue
+		case hsUpdate:
+			// The release offer (only while an update is advertised) is the
+			// same pill as on Home.
+			pill := drawHeaderUpdatePill(renderer, config, it.x+it.w, barH, focusIdx == ChromeUpdateIndex)
+			updatePrompt.badge = pill
+			headerSlotRects[hsUpdate] = pill
+			continue
+		}
+		p, startX, pw := it.part, it.x, it.w
 		drawStatusClusterPart(renderer, statusFont, p, startX, statusY, drawStatusText)
-		if isClockStatusPart(p) {
+		r := sdl.Rect{
+			X: startX - 6, Y: statusY - 6,
+			W: pw + 12, H: int32(statusFont.Height()) + 12,
+		}
+		headerSlotRects[it.slot] = r
+		switch {
+		case isClockStatusPart(p):
 			// Measure the clock so it can hold focus like any other button.
-			statusClockRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
-		}
-		if isWeatherStatusPart(p) {
+			statusClockRect = r
+		case isWeatherStatusPart(p):
 			// The hi/lo chip is the Local weather button.
-			weatherStatusRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
-		}
-		if isWiFiStatusPart(p) {
+			weatherStatusRect = r
+		case isWiFiStatusPart(p):
 			// The meter is the Wi-Fi button on every screen.
-			statusWiFiRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
-		}
-		if isVolumeStatusPart(p) {
+			statusWiFiRect = r
+		case isVolumeStatusPart(p):
 			// The speaker is the volume button on every screen.
-			statusVolumeRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
-		}
-		if isBluetoothStatusPart(p) {
-			// The rune between the speaker and the meter opens the
-			// Bluetooth page (statusbar_bluetooth.go).
-			statusBluetoothRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
-		}
-		if isBrightnessStatusPart(p) {
-			// The sun beside it is the brightness button.
-			statusBrightnessRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
-		}
-		if isChipStatusPart(p) {
+			statusVolumeRect = r
+		case isBluetoothStatusPart(p):
+			// The rune opens the Bluetooth page (statusbar_bluetooth.go).
+			statusBluetoothRect = r
+		case isBrightnessStatusPart(p):
+			// The sun is the brightness button.
+			statusBrightnessRect = r
+		case isChipStatusPart(p):
 			// The now-playing chip opens the player it is naming; the idle
 			// output chip is measured the same way so it draws in the same
 			// spot, but it does not join the focus graph.
-			statusMediaRect = sdl.Rect{
-				X: startX - 6, Y: statusY - 6,
-				W: pw + 12, H: int32(statusFont.Height()) + 12,
-			}
+			statusMediaRect = r
 		}
-		startX += pw + gap
 	}
 	// The meter, the Bluetooth rune, the speaker and the sun are buttons, so
-	// their hit areas are grown to finger-sized targets once the cluster is
-	// placed and the neighbours' rects are known. They sit side by side, so
-	// each gap between two of them is split at its middle
-	// (statusGapNeighbours) instead of being claimed by both.
-	growStatusButtonRects(barH, weatherStatusRect, statusClockRect)
+	// their hit areas are grown to finger-sized targets once the bar is
+	// placed and the neighbours' rects are known. Each gap between two of
+	// them is split at its middle (statusGapNeighbours) instead of being
+	// claimed by both, and none grows over another control.
+	headerGrowStatusButtons(barH)
 	// Focused header chips wear the ring Home's header draws: a rounded 3px
 	// accent outline (glassFocusRingWidth), not a square hairline box.
 	for _, chip := range []struct {
@@ -981,16 +975,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		{ChromeWiFiIndex, statusWiFiRect},
 		{ChromeMediaIndex, statusMediaRect},
 	} {
-		if focusEngine.ElementIndex() == chip.index && chip.rect.W > 0 {
+		if focusIdx == chip.index && chip.rect.W > 0 {
 			r := chip.rect
 			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, glassFocusRingWidth, glassAccent())
 		}
-	}
-
-	// Notification bell: top-right corner, always reachable with the D-pad.
-	if bellW > 0 {
-		by := (barH - bellH) / 2
-		renderNotifBell(renderer, config, screenWidth-StatusBarMargin, by)
 	}
 }
 
@@ -1078,7 +1066,8 @@ func statusDropIndex(parts []string) int {
 }
 
 // headerStatusParts returns the right-side status cluster in one canonical
-// order shared by the home header and every scene's status bar: brightness,
+// order shared by the home header and every scene's status bar (both lay it
+// out in the user's own order with headerPlan, header_arrange.go): brightness,
 // volume, Bluetooth, network, weather (hi/lo), time (HH:MM), battery, and the
 // chip — the now-playing title while something plays, the connected output's
 // name while nothing does. Both headers draw this exact list, so the right side
@@ -1130,7 +1119,10 @@ func headerStatusParts(config *Config) []string {
 	if chip, ok := statusMediaPart(); ok {
 		parts = append(parts, chip)
 	}
-	return parts
+	// The controls the user hid in Edit Home → Top bar stay off every bar
+	// (header_arrange.go). The order is applied where the bar is laid out
+	// (headerPlan): trimming a crowded bar still reads this canonical order.
+	return headerPartsVisible(config, parts)
 }
 
 // headerStatusFont returns the small 16px Inter font both headers use for the
@@ -1435,7 +1427,7 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 			hints = append([]FooterHint{voice}, hints...)
 		}
 	}
-	plan := planFooterHints(config, hints, band.W-2*pad)
+	plan := cachedFooterPlan(config, hints, band.W-2*pad)
 	if plan.font == nil {
 		return
 	}
@@ -1477,6 +1469,61 @@ type footerPlan struct {
 	groupGap   int32
 	badgePad   int32
 	badgeGap   int32
+}
+
+// The footer is drawn every frame, but its hints usually stay unchanged for
+// many frames. Keep the measured layout until the available width, font or
+// button vocabulary changes. This saves repeated font measurements across
+// every non-Home scene while still following contextual hint changes.
+var footerLayoutCache struct {
+	valid    bool
+	font     *ttf.Font
+	avail    int32
+	screenW  int32
+	screenH  int32
+	vocab    hintVocab
+	remap    *hintPadRemap
+	language string
+	hints    []FooterHint
+	plan     footerPlan
+}
+
+func sameFooterHints(a, b []FooterHint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cachedFooterPlan(config *Config, hints []FooterHint, avail int32) footerPlan {
+	font := getFontSized(config, "small", footerHintSize)
+	vocab, remap, language := hintVocabNow(), hintRemapNow.Load(), uiLanguageCode()
+	c := &footerLayoutCache
+	if font != nil && c.valid && c.font == font && c.avail == avail &&
+		c.screenW == screenWidth && c.screenH == screenHeight &&
+		c.vocab == vocab && c.remap == remap && c.language == language &&
+		sameFooterHints(c.hints, hints) {
+		return c.plan
+	}
+	plan := planFooterHints(config, hints, avail)
+	if font == nil || plan.font == nil {
+		c.valid = false
+		return plan
+	}
+	// Both the key and the returned plan own their slices. Callers may reuse or
+	// edit the hints they assembled for this frame.
+	plan.hints = append([]FooterHint(nil), plan.hints...)
+	c.hints = append(c.hints[:0], hints...)
+	c.font, c.avail = font, avail
+	c.screenW, c.screenH = screenWidth, screenHeight
+	c.vocab, c.remap, c.language = vocab, remap, language
+	c.plan, c.valid = plan, true
+	return plan
 }
 
 // planFooterHints picks the largest type and the tightest spacing that keep the

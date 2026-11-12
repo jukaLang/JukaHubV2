@@ -379,6 +379,9 @@ func alarmCheck(config *Config, now time.Time) {
 	// a game, dark panel, normal frame), so the UI-sound settings are re-read
 	// here: a switch flipped in Settings applies within a second (sound.go).
 	bootSfxBind(config)
+	// Background music re-reads its settings and starts or stays away on the
+	// same tick (bgmusic.go).
+	bgmTick(config)
 	// Network time or a new zone moved the clock: re-anchor first (clockjump.go).
 	alarmClockJumpCheck(now)
 	// A ring in progress keeps the idle screens away and ends itself if nobody

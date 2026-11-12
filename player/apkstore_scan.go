@@ -67,8 +67,8 @@ type apkStoreInfo struct {
 	ManifestErr string
 	ABIs        []string // every lib/<abi> the APK ships
 	ChosenABI   string   // the ABI the game would run
-	EntryLib    string   // the native entry triage picked: lib/<abi>/<name>.so
-	MainLib     string   // the profile's mainLib: NativeActivity's library, "" for triage's pick
+	EntryLib    string   // the native entry selected: lib/<abi>/<name>.so
+	MainLib     string   // the profile's mainLib: manifest or exported entry, "" for triage's pick
 	LibCount    int      // native libraries in the chosen ABI
 	Engine      string
 	TriageErr   string
@@ -492,7 +492,27 @@ func apkStoreAnalyze(p string, withIcon bool) (info apkStoreInfo) {
 			for _, want := range []string{"lib" + lib + ".so", "lib" + strings.TrimPrefix(strings.TrimSuffix(lib, ".so"), "lib") + ".so"} {
 				if _, ok := byName[prefix+want]; ok {
 					info.MainLib = want
+					info.EntryLib = prefix + want
 					break
+				}
+			}
+		}
+		// Without android.app.lib_name, the largest .so is only a guess. In
+		// multi-library APKs it may be a helper that fails to load before the
+		// actual NativeActivity or GameActivity entry is reached. Select the
+		// library exporting the entry when the bounded scan can find one.
+		if info.MainLib == "" && libs.Chosen == "arm64-v8a" && m.Split == "" && !splitsRequired {
+			var needles [][]byte
+			switch m.Launcher {
+			case "android.app.NativeActivity":
+				needles = apkStoreNativeActivityEntryNeedles
+			case "com.google.androidgamesdk.GameActivity":
+				needles = apkStoreGameActivityLaunchNeedles
+			}
+			if len(needles) > 0 {
+				if entry, check := apkStoreFindEntryLibrary(p, chosenLibs, needles); check == apkEntryFound {
+					info.EntryLib = entry
+					info.MainLib = filepath.Base(entry)
 				}
 			}
 		}
@@ -505,7 +525,12 @@ func apkStoreAnalyze(p string, withIcon bool) (info apkStoreInfo) {
 		// side: it starts the game from a native entry point, so first ask
 		// the libraries for one. A Java app with helper libraries has none,
 		// and that answer needs no DEX search.
-		info.Entry = apkStoreFindEntryPoint(p, chosenLibs)
+		var entry string
+		entry, info.Entry = apkStoreFindEntryLibrary(p, chosenLibs, apkStoreEntryNeedles)
+		if info.Entry == apkEntryFound {
+			info.EntryLib = entry
+			info.MainLib = filepath.Base(entry)
+		}
 		if info.Entry != apkEntryNone && len(dex) > 0 {
 			dexNative, dexGameActivity = apkStoreScanDex(dex)
 			engine = apkStoreDetectEngine(libNames, m.Activities, m.Launcher, dexNative, dexGameActivity)
@@ -616,6 +641,14 @@ func apkStoreScanDex(files []*zip.File) (native, gameActivity bool) {
 // (player/androidrt/src/runner.c): NativeActivity's onCreate, GameActivity's
 // native glue, and the JNI name of GameActivity's initializeNativeCode. Each
 // ends in the NUL that ends it in the dynamic string table.
+var apkStoreNativeActivityEntryNeedles = [][]byte{
+	[]byte("ANativeActivity_onCreate\x00"),
+}
+
+var apkStoreGameActivityLaunchNeedles = [][]byte{
+	[]byte("Java_com_google_androidgamesdk_GameActivity_initializeNativeCode\x00"),
+}
+
 var apkStoreEntryNeedles = [][]byte{
 	[]byte("ANativeActivity_onCreate\x00"),
 	[]byte("GameActivity_onCreate\x00"),
@@ -623,8 +656,8 @@ var apkStoreEntryNeedles = [][]byte{
 }
 
 // apkStoreHasEntryName reports whether b holds one of the entry names.
-func apkStoreHasEntryName(b []byte) bool {
-	for _, n := range apkStoreEntryNeedles {
+func apkStoreHasEntryName(b []byte, needles [][]byte) bool {
+	for _, n := range needles {
 		if bytes.Contains(b, n) {
 			return true
 		}
@@ -632,21 +665,21 @@ func apkStoreHasEntryName(b []byte) bool {
 	return false
 }
 
-// apkStoreFindEntryPoint asks the chosen ABI's libraries whether one exports
-// an entry point AndroidRT can start. A library stored uncompressed (the
-// usual case) is read through its ELF section headers — only its dynamic
-// string table; a compressed one is searched as a stream. Both stay within
-// apkStoreEntryReadMax bytes per APK; past it the answer is "unknown".
-func apkStoreFindEntryPoint(apk string, libs []*zip.File) apkStoreEntryCheck {
+// apkStoreFindEntryLibrary returns the chosen ABI's library that exports one
+// of needles. A stored library is read through its ELF dynamic string table;
+// a compressed one is searched as a stream. Reads are bounded per APK.
+func apkStoreFindEntryLibrary(apk string, libs []*zip.File, needles [][]byte) (string, apkStoreEntryCheck) {
 	if len(libs) == 0 {
-		return apkEntryUnchecked
+		return "", apkEntryUnchecked
 	}
-	// The biggest library is usually the game, so it is asked first.
-	sort.Slice(libs, func(i, j int) bool {
-		if libs[i].UncompressedSize64 != libs[j].UncompressedSize64 {
-			return libs[i].UncompressedSize64 > libs[j].UncompressedSize64
+	// Ask smaller libraries first. A large engine/helper could exhaust the
+	// bounded read before a small activity glue library is inspected.
+	ordered := append([]*zip.File(nil), libs...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].UncompressedSize64 != ordered[j].UncompressedSize64 {
+			return ordered[i].UncompressedSize64 < ordered[j].UncompressedSize64
 		}
-		return libs[i].Name < libs[j].Name
+		return ordered[i].Name < ordered[j].Name
 	})
 	var file *os.File
 	defer func() {
@@ -656,16 +689,16 @@ func apkStoreFindEntryPoint(apk string, libs []*zip.File) apkStoreEntryCheck {
 	}()
 	budget := int64(apkStoreEntryReadMax)
 	complete := true
-	for _, f := range libs {
+	for _, f := range ordered {
 		if f.Method == zip.Store {
 			if file == nil {
 				file, _ = os.Open(apk)
 			}
 			if file != nil {
 				if off, err := f.DataOffset(); err == nil {
-					found, ok := apkStoreELFExportsEntry(io.NewSectionReader(file, off, int64(f.CompressedSize64)), &budget)
+					found, ok := apkStoreELFExportsEntry(io.NewSectionReader(file, off, int64(f.CompressedSize64)), &budget, needles)
 					if found {
-						return apkEntryFound
+						return strings.TrimPrefix(filepath.ToSlash(f.Name), "/"), apkEntryFound
 					}
 					if ok {
 						continue
@@ -677,25 +710,25 @@ func apkStoreFindEntryPoint(apk string, libs []*zip.File) apkStoreEntryCheck {
 			complete = false
 			break
 		}
-		found, whole := apkStoreStreamHasEntry(f, &budget)
+		found, whole := apkStoreStreamHasEntry(f, &budget, needles)
 		if found {
-			return apkEntryFound
+			return strings.TrimPrefix(filepath.ToSlash(f.Name), "/"), apkEntryFound
 		}
 		if !whole {
 			complete = false
 		}
 	}
 	if complete {
-		return apkEntryNone
+		return "", apkEntryNone
 	}
-	return apkEntryUnknown
+	return "", apkEntryUnknown
 }
 
 // apkStoreELFExportsEntry reads a 64-bit little-endian ELF library's dynamic
 // string table (the string table its .dynsym links to) and searches it.
 // ok is false when the file is not such an ELF or its tables do not add up;
 // the caller then searches the bytes as a stream instead.
-func apkStoreELFExportsEntry(r *io.SectionReader, budget *int64) (found, ok bool) {
+func apkStoreELFExportsEntry(r *io.SectionReader, budget *int64, needles [][]byte) (found, ok bool) {
 	size := r.Size()
 	var hdr [64]byte
 	if size < int64(len(hdr)) {
@@ -743,7 +776,7 @@ func apkStoreELFExportsEntry(r *io.SectionReader, budget *int64) (found, ok bool
 		if _, err := r.ReadAt(dynstr, int64(off)); err != nil {
 			return false, false
 		}
-		return apkStoreHasEntryName(dynstr), true
+		return apkStoreHasEntryName(dynstr, needles), true
 	}
 	// No dynamic symbols at all: nothing is exported, so there is no entry.
 	return false, true
@@ -752,14 +785,14 @@ func apkStoreELFExportsEntry(r *io.SectionReader, budget *int64) (found, ok bool
 // apkStoreStreamHasEntry searches a library's bytes for the entry names,
 // charging what it reads to budget. whole reports that the library was read to
 // its end.
-func apkStoreStreamHasEntry(f *zip.File, budget *int64) (found, whole bool) {
+func apkStoreStreamHasEntry(f *zip.File, budget *int64, needles [][]byte) (found, whole bool) {
 	rc, err := f.Open()
 	if err != nil {
 		return false, false
 	}
 	defer rc.Close()
 	overlap := 0
-	for _, n := range apkStoreEntryNeedles {
+	for _, n := range needles {
 		if len(n) > overlap {
 			overlap = len(n)
 		}
@@ -775,7 +808,7 @@ func apkStoreStreamHasEntry(f *zip.File, budget *int64) (found, whole bool) {
 		if n > 0 {
 			*budget -= int64(n)
 			window := buf[:keep+n]
-			if apkStoreHasEntryName(window) {
+			if apkStoreHasEntryName(window, needles) {
 				return true, false
 			}
 			keep = overlap

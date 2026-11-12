@@ -438,7 +438,9 @@ func shotTourAdvance(renderer *sdl.Renderer, c *Config, now time.Time) {
 // shotBusy reports whether the loading card is up (a feed or a video still
 // loading), which a capture waits out.
 func shotBusy(c *Config) bool {
-	return c.Variables.LoadingSpinner || videoPrepareActive()
+	// Media paints its own loading state, so a feed refresh does not cover the
+	// frame or need to delay a capture. Video preparation remains modal.
+	return (c.Variables.LoadingSpinner && !mediaHubIsCurrent(c)) || videoPrepareActive()
 }
 
 // shotTourNext closes the current screen and moves on to the next one.

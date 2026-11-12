@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -69,8 +70,14 @@ type webImageMeta struct {
 // webImagePos is one image in a laid-out page: its key (resolved URL or data
 // URI) and the rect reserved for it, in layout-local coordinates like Rects.
 type webImagePos struct {
-	Key  string
-	Rect sdl.Rect
+	Key            string
+	Rect           sdl.Rect
+	ObjectFit      int
+	ObjectPosition string
+	Invisible      bool
+	Clip           sdl.Rect
+	HasClip        bool
+	Opacity        float64
 }
 
 // webSrcsetTargetWidth is the design-pixel width a responsive image should
@@ -654,6 +661,44 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 	default:
 		h = w * 3 / 4
 	}
+	// width/min-width/max-width and the height constraints apply to the
+	// replaced element's box too. Keep the source ratio when one side moves.
+	scaleF := float64(scale)
+	if b.Style.BoxSizing == 1 && (b.Style.Width > 0 || b.Style.WidthPct > 0) {
+		w -= int32((b.Indent + b.Style.IndentRight) * scaleF)
+		if w < webMinImagePx {
+			w = webMinImagePx
+		}
+	}
+	resizeW := func(next int32) {
+		if next == w || w <= 0 || next < webMinImagePx {
+			return
+		}
+		h = int32(float64(h) * float64(next) / float64(w))
+		w = next
+	}
+	resizeH := func(next int32) {
+		if next == h || h <= 0 || next < webMinImagePx {
+			return
+		}
+		w = int32(float64(w) * float64(next) / float64(h))
+		h = next
+		if w > contentW {
+			w = contentW
+		}
+	}
+	if maxW := webConstraintLength(b.Style.MaxWidth, b.Style.MaxWidthPct, contentW, scaleF); maxW > 0 && float64(w)/scaleF > maxW {
+		resizeW(int32(math.Round(maxW * scaleF)))
+	}
+	if minW := webConstraintLength(b.Style.MinWidth, b.Style.MinWidthPct, contentW, scaleF); minW > 0 && float64(w)/scaleF < minW {
+		resizeW(int32(math.Round(minW * scaleF)))
+	}
+	if maxH := b.Style.MaxHeight * scaleF; maxH > 0 && float64(h) > maxH {
+		resizeH(int32(math.Round(maxH)))
+	}
+	if minH := b.Style.MinHeight * scaleF; minH > 0 && float64(h) < minH {
+		resizeH(int32(math.Round(minH)))
+	}
 	// A portrait photograph taller than a couple of screens pushes a hundred
 	// blank rows onto a page the reader scrolls through empty. Cap the box
 	// and keep the ratio.
@@ -721,7 +766,7 @@ func browserFaviconURL(source string, base *url.URL) string {
 
 func drawBrowserFavicon(r *sdl.Renderer, config *Config, doc *webDocument, rect sdl.Rect) {
 	if doc != nil && doc.Favicon != "" && len(doc.imageBytes(doc.Favicon)) > 0 {
-		drawWebImage(r, config, doc, webImagePos{Key: doc.Favicon, Rect: rect}, rect.X, rect.Y)
+		drawWebImage(r, config, doc, webImagePos{Key: doc.Favicon, Rect: rect, Opacity: 1}, rect.X, rect.Y)
 		return
 	}
 	// A neutral globe is the fallback, not a claim about site identity.
@@ -749,6 +794,19 @@ func fetchWebImages(doc *webDocument) {
 		}
 		seen[b.ImageSrc] = true
 		srcs = append(srcs, b.ImageSrc)
+	}
+	for _, b := range doc.Blocks {
+		for i := 0; i < b.Style.BackgroundLayerCount && i < webMaxBackgroundLayers; i++ {
+			src := b.Style.BackgroundLayers[i].Image
+			if src == "" || seen[src] {
+				continue
+			}
+			if len(srcs) >= webMaxImagesPerPage {
+				break
+			}
+			seen[src] = true
+			srcs = append(srcs, src)
+		}
 	}
 	// Video play cards (YouTube embeds) carry a thumbnail URL on the block;
 	// the same pass fetches it so a card paints the video's real artwork with
@@ -935,8 +993,12 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 		x = padX
 	}
 	layout.Images = append(layout.Images, webImagePos{
-		Key:  b.ImageSrc,
-		Rect: sdl.Rect{X: x, Y: idx * rowH, W: w, H: h},
+		Key:            b.ImageSrc,
+		Rect:           sdl.Rect{X: x, Y: idx * rowH, W: w, H: h},
+		ObjectFit:      b.Style.ObjectFit,
+		ObjectPosition: b.Style.ObjectPosition,
+		Invisible:      b.Style.Invisible,
+		Opacity:        webPaintOpacity(b.Style),
 	})
 	for i := int32(0); i < slots && len(layout.Rows) < webMaxRows; i++ {
 		layout.Rows = append(layout.Rows, webRow{Y: (idx + i) * rowH})
@@ -974,7 +1036,7 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 	}
 	key := webImageCacheKey(im.Key)
 	if tex := getThumbnailTextures().Get(key); tex != nil {
-		_ = r.Copy(tex, nil, &rect)
+		drawWebImageTexture(r, tex, rect, im.ObjectFit, im.ObjectPosition, im.Opacity)
 		return
 	}
 	data := doc.imageBytes(im.Key)
@@ -998,15 +1060,168 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 		tw, th = qw, qh
 	}
 	getThumbnailTextures().Put(key, tex, tw, th)
-	if err := r.Copy(tex, nil, &rect); err != nil {
+	if err := drawWebImageTexture(r, tex, rect, im.ObjectFit, im.ObjectPosition, im.Opacity); err != nil {
 		drawWebImagePlaceholder(r, config, rect)
 	}
 }
 
-// copyWebImageCover blits one texture across an image/video card, cropping
-// its center rectangle so a narrower source covers the target without
-// letterboxing.
-func copyWebImageCover(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect) {
+// drawWebImageTexture applies object-fit to one decoded texture. Fill is the
+// reader's historic stretch; contain letterboxes inside the reserved box,
+// cover crops the source centre, and none/scale-down preserve the natural
+// pixel size when it fits.
+func drawWebImageTexture(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect, fit int, position string, opacity float64) error {
+	if tex == nil || rect.W <= 0 || rect.H <= 0 {
+		return nil
+	}
+	if opacity < 0.999 {
+		_ = tex.SetAlphaMod(uint8(math.Round(opacity * 255)))
+		defer tex.SetAlphaMod(255)
+	}
+	tw, th := int32(0), int32(0)
+	if _, _, qw, qh, err := tex.Query(); err == nil {
+		tw, th = qw, qh
+	}
+	if tw <= 0 || th <= 0 {
+		return r.Copy(tex, nil, &rect)
+	}
+	posX, posY := webObjectPositionFraction(position, rect.W, rect.H)
+	switch fit {
+	case webObjectFitAuto, webObjectFitCover:
+		copyWebImageCoverAt(r, tex, rect, posX, posY)
+		return nil
+	case webObjectFitFill:
+		return r.Copy(tex, nil, &rect)
+	case webObjectFitContain:
+		dst := webObjectFitBoxAt(rect, tw, th, false, posX, posY)
+		return r.Copy(tex, nil, &dst)
+	case webObjectFitNone:
+		dst := sdl.Rect{
+			X: rect.X + int32(math.Round(float64(rect.W-tw)*posX)),
+			Y: rect.Y + int32(math.Round(float64(rect.H-th)*posY)),
+			W: tw, H: th,
+		}
+		return r.Copy(tex, nil, &dst)
+	case webObjectFitScaleDown:
+		if tw > rect.W || th > rect.H {
+			dst := webObjectFitBoxAt(rect, tw, th, false, posX, posY)
+			return r.Copy(tex, nil, &dst)
+		}
+		dst := sdl.Rect{
+			X: rect.X + int32(math.Round(float64(rect.W-tw)*posX)),
+			Y: rect.Y + int32(math.Round(float64(rect.H-th)*posY)),
+			W: tw, H: th,
+		}
+		return r.Copy(tex, nil, &dst)
+	default:
+		copyWebImageCover(r, tex, rect)
+		return nil
+	}
+}
+
+// webObjectPositionFraction resolves the common object-position keywords,
+// percentages and pixel lengths against the fitted box. The default is the
+// centre, which is the previous behaviour.
+func webObjectPositionFraction(value string, boxW, boxH int32) (float64, float64) {
+	x, y := 0.5, 0.5
+	fields := strings.Fields(strings.ReplaceAll(value, ",", " "))
+	if len(fields) == 0 {
+		return x, y
+	}
+	parse := func(token string, extent int32) (float64, bool, int) {
+		switch strings.ToLower(strings.TrimSpace(token)) {
+		case "left":
+			return 0, true, 0
+		case "right":
+			return 1, true, 0
+		case "top":
+			return 0, true, 1
+		case "bottom":
+			return 1, true, 1
+		case "center":
+			return 0.5, true, -1
+		}
+		if pct, ok := webPercentValue(token); ok {
+			return math.Max(0, math.Min(1, pct/100)), true, -1
+		}
+		if strings.HasSuffix(strings.ToLower(token), "px") {
+			if extent <= 0 {
+				extent = 1
+			}
+			if px := webLength(token, 16); px != 0 {
+				return math.Max(0, math.Min(1, px/float64(extent))), true, -1
+			}
+		}
+		return 0, false, -1
+	}
+	if len(fields) == 1 {
+		f, ok, axis := parse(fields[0], boxW)
+		if !ok {
+			return x, y
+		}
+		if axis == 1 {
+			y = f
+		} else {
+			x = f
+		}
+		return x, y
+	}
+	for i := 0; i < 2; i++ {
+		extent := boxW
+		if i == 1 {
+			extent = boxH
+		}
+		f, ok, axis := parse(fields[i], extent)
+		if !ok {
+			continue
+		}
+		if axis == 0 {
+			x = f
+		} else if axis == 1 {
+			y = f
+		} else if i == 0 && x == 0.5 {
+			x = f
+		} else {
+			y = f
+		}
+	}
+	return x, y
+}
+
+// webObjectFitBox fits a source size inside a box for contain. The returned
+// rectangle is centred, so a wide photo leaves equal bars above and below.
+func webObjectFitBox(box sdl.Rect, tw, th int32, cover bool) sdl.Rect {
+	return webObjectFitBoxAt(box, tw, th, cover, 0.5, 0.5)
+}
+
+func webObjectFitBoxAt(box sdl.Rect, tw, th int32, cover bool, posX, posY float64) sdl.Rect {
+	if tw <= 0 || th <= 0 || box.W <= 0 || box.H <= 0 {
+		return box
+	}
+	sx := float64(box.W) / float64(tw)
+	sy := float64(box.H) / float64(th)
+	scale := math.Min(sx, sy)
+	if cover {
+		scale = math.Max(sx, sy)
+	}
+	w := int32(math.Round(float64(tw) * scale))
+	h := int32(math.Round(float64(th) * scale))
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	return sdl.Rect{
+		X: box.X + int32(math.Round(float64(box.W-w)*posX)),
+		Y: box.Y + int32(math.Round(float64(box.H-h)*posY)),
+		W: w, H: h,
+	}
+}
+
+// copyWebImageCoverAt blits one texture across an image/video card, cropping
+// the source around object-position so a narrower source covers the target
+// without letterboxing.
+func copyWebImageCoverAt(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect, posX, posY float64) {
 	tw, th := int32(0), int32(0)
 	if _, _, qw, qh, qerr := tex.Query(); qerr == nil {
 		tw, th = qw, qh
@@ -1017,13 +1232,17 @@ func copyWebImageCover(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect) {
 		srcAspect := float64(tw) / float64(th)
 		if srcAspect > targetAspect { // source too wide: crop its sides
 			sw := int32(float64(th)*targetAspect + 0.5)
-			src = &sdl.Rect{X: (tw - sw) / 2, Y: 0, W: sw, H: th}
+			src = &sdl.Rect{X: int32(math.Round(float64(tw-sw) * posX)), Y: 0, W: sw, H: th}
 		} else if srcAspect < targetAspect { // source too tall: crop top/bottom
 			sh := int32(float64(tw)/targetAspect + 0.5)
-			src = &sdl.Rect{X: 0, Y: (th - sh) / 2, W: tw, H: sh}
+			src = &sdl.Rect{X: 0, Y: int32(math.Round(float64(th-sh) * posY)), W: tw, H: sh}
 		}
 	}
 	_ = r.Copy(tex, src, &rect)
+}
+
+func copyWebImageCover(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect) {
+	copyWebImageCoverAt(r, tex, rect, 0.5, 0.5)
 }
 
 // drawWebImagePlaceholder fills a failed image's reserved box with quiet

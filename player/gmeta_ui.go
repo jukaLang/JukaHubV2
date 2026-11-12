@@ -244,7 +244,7 @@ func gmetaOpenDetails(game libraryGame) {
 	gen := gmetaGen
 	rec, _ := gmetaGet(game.System, game.Title)
 	ctx, cancel := context.WithCancel(context.Background())
-	lookup := gmetaLookupEnabled && gmetaAutoLookup(appConfig) && rec.Scraped == ""
+	lookup := game.System != html5LibrarySystem && gmetaLookupEnabled && gmetaAutoLookup(appConfig) && rec.Scraped == ""
 	gmetaUI = gmetaDetails{
 		open:    true,
 		game:    game,
@@ -281,6 +281,14 @@ func gmetaStartLoad(ctx context.Context, gen int, game libraryGame, rec gmetaRec
 // gmetaLoadLocal finds the save states and the RetroAchievements progress, then
 // decodes the state screenshots one by one.
 func gmetaLoadLocal(ctx context.Context, gen int, game libraryGame, rec gmetaRecord) {
+	if game.System == html5LibrarySystem {
+		tbxPost(func() {
+			if gmetaUI.open && gmetaUI.gen == gen {
+				gmetaUI.loading = false
+			}
+		})
+		return
+	}
 	launcher := resolveGameLauncher(game.System)
 	isRA := launcher != "" && retroArchLauncher(launcher)
 	var states []gmetaState
@@ -548,6 +556,10 @@ func gmetaPlay(st *gmetaState) {
 		// Staged in the background first; a failure opens the launch-failure
 		// dialog (launchAndroidLibraryGame).
 		ShowToast("Starting "+game.Title+"…", ToastKindSuccess)
+		return
+	}
+	if game.System == html5LibrarySystem {
+		ShowToast("Playing "+game.Title+" in JukaHub", ToastKindSuccess)
 		return
 	}
 	ShowToast("Playing "+game.Title+suffix, ToastKindSuccess)
@@ -1379,6 +1391,13 @@ func gmetaDrawInfo(renderer *sdl.Renderer, config *Config, fonts tbxFonts, r sdl
 // gmetaDrawStates draws the save-state strip.
 func gmetaDrawStates(renderer *sdl.Renderer, config *Config, fonts tbxFonts, r sdl.Rect) {
 	gmetaUI.stateHits = gmetaUI.stateHits[:0]
+	if gmetaUI.game.System == html5LibrarySystem {
+		renderText(renderer, config, fonts.tiny, "BROWSER GAME", ColorTextTertiary(), r.X, r.Y)
+		renderText(renderer, config, fonts.small,
+			ellipsize(fonts.small, "Plays in JukaHub on TrimUI. Game saves, when available, stay in the browser.", r.W),
+			ColorTextTertiary(), r.X, r.Y+fonts.tinyH+8)
+		return
+	}
 	renderText(renderer, config, fonts.tiny, "SAVE STATES", ColorTextTertiary(), r.X, r.Y)
 	y := r.Y + fonts.tinyH + 8
 	if gmetaUI.loading {

@@ -22,11 +22,11 @@ var apkStoreTruncatedNote = "The scan stopped early (it reads at most " + strcon
 	" APKs, two folders deep, for a few seconds) — keep the ones you want in /mnt/SDCARD/APKs."
 
 // apkStoreTabIDs are the tab strip's focus ids.
-var apkStoreTabIDs = [apkTabCount]string{"tab0", "tab1", "tab2"}
+var apkStoreTabIDs = [apkTabCount]string{"tab0", "tab1", "tab2", "tab3"}
 
 // apkStoreHeader is the page bar.
 func apkStoreHeader() UIPageHeader {
-	return tbxHeader(apkStoreEntryName, "Install native Android games — Penguin Dash played on Smart Pro",
+	return tbxHeader(apkStoreEntryName, "Try native Android apps and games — Penguin Dash played on Smart Pro",
 		apkStoreGlyph, apkStoreUI.status, ColorTextTertiary())
 }
 
@@ -54,6 +54,8 @@ func apkStoreRender(renderer *sdl.Renderer, config *Config) {
 	switch apkStoreUI.tab {
 	case apkTabStore:
 		apkStoreDrawStore(renderer, config, fonts, frame, body, top, y)
+	case apkTabFDroid:
+		apkStoreDrawFDroid(renderer, config, fonts, frame, body, top, y)
 	case apkTabRuntime:
 		apkStoreDrawRuntime(renderer, config, fonts, frame, body, top, y)
 	default:
@@ -85,7 +87,12 @@ func apkStoreDrawTabs(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fr
 		x += w + 10
 	}
 	label := "Rescan"
-	if apkStoreUI.scanning {
+	disabled := apkStoreUI.scanning
+	if apkStoreUI.tab == apkTabFDroid {
+		label = "Refresh"
+		disabled = apkStoreUI.fdroidLoading
+	}
+	if disabled {
 		label = "Reading…"
 	}
 	w := tbxButtonWidth(fonts.body, label, 120)
@@ -93,8 +100,8 @@ func apkStoreDrawTabs(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fr
 		rect := sdl.Rect{X: right, Y: 0, W: w, H: apkStoreTabH}
 		screen := rect
 		screen.Y += top
-		tbxDrawButton(renderer, config, fonts.body, screen, label, false, nav.focused("rescan"), apkStoreUI.scanning)
-		nav.add("rescan", rect, 0, apkStoreUI.scanning)
+		tbxDrawButton(renderer, config, fonts.body, screen, label, false, nav.focused("rescan"), disabled)
+		nav.add("rescan", rect, 0, disabled)
 	}
 	nav.extend(apkStoreTabH)
 	return apkStoreTabH + 18
@@ -136,7 +143,7 @@ func apkStoreDrawMine(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fr
 		return
 	}
 	y = apkStoreDrawNote(renderer, config, fonts, frame, body, top, y,
-		"Experimental: AndroidRT runs native (NDK) games only. Penguin Dash has raced on a Smart Pro.")
+		"Experimental: AndroidRT runs native (NDK) apps and games. Penguin Dash has raced on a Smart Pro.")
 	rowH := tbxRowHeight(fonts)
 	for i, info := range apkStoreUI.apks {
 		id := apkStoreRowID("apk", i)
@@ -262,7 +269,7 @@ func apkStoreDrawAPKRow(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 
 func apkStoreDrawStore(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame tbxFrame, body sdl.Rect, top, y int32) {
 	nav := &apkStoreUI.nav
-	entries := apkStoreUI.catalog.Entries
+	entries := apkStoreEntries(apkStoreUI.catalog.Entries, apkStoreUI.apks)
 	y = apkStoreDrawNote(renderer, config, fonts, frame, body, top, y, apkStoreUI.catalogNote)
 	if len(entries) == 0 {
 		rect := sdl.Rect{X: frame.x, Y: top + y, W: frame.w, H: 200}
@@ -278,12 +285,25 @@ func apkStoreDrawStore(renderer *sdl.Renderer, config *Config, fonts tbxFonts, f
 			screen := rect
 			screen.Y += top
 			pill, tone := apkStoreCatalogStatusLabel(e.Status)
-			if _, installed := apkStoreCatalogInstalled(e); installed {
+			local := apkStoreCatalogMatchOnCard(e, apkStoreUI.apks, apkStoreUI.games)
+			_, installed := apkStoreCatalogInstalled(e)
+			switch {
+			case installed:
 				pill, tone = "In Games", tbxToneGood
-			} else if e.installable() && androidRTSupported() {
+			case e.Status == apkStatusWontRun:
+				// The catalogue knows a blocker that a structural APK scan may miss.
+			case local.Found && local.InGames:
+				pill, tone = "In Games", tbxToneGood
+			case local.Found && local.Info.Tier.canAdd():
+				pill, tone = "On card", tbxToneAccent
+			case local.Found:
+				pill, tone = local.Info.Tier.pill(), local.Info.Tier.tone()
+			case e.installable() && androidRTSupported():
 				pill, tone = "Install", tbxToneAccent
-			} else if e.downloadable() {
+			case e.downloadable():
 				pill, tone = "Download", tbxToneAccent
+			case e.Kind == "title" && e.Status == apkStatusExperimental:
+				pill, tone = "Listed", tbxToneNeutral
 			}
 			if busy := apkStoreUI.busy[e.ID]; busy != "" {
 				pill, tone = busy, tbxToneAccent
@@ -340,7 +360,7 @@ func apkStoreRuntimeRows() []apkStoreRow {
 	if rt.canRun {
 		devSpec.pill, devSpec.tone = "Can run", tbxToneGood
 	} else {
-		devSub += " — Android games run on the handheld"
+		devSub += " — native Android apps and games run on the handheld"
 		devSpec.pill, devSpec.tone = "Checks only", tbxToneNeutral
 	}
 	devSpec.subtitle = devSub

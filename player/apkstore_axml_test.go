@@ -364,7 +364,8 @@ func TestApkStoreCatalogueValidation(t *testing.T) {
 	}
 }
 
-// The built-in catalogue parses and carries only device-tested downloads.
+// The built-in catalogue carries only pinned, structurally checked native
+// downloads. An experimental entry does not claim a handheld test.
 func TestApkStoreBuiltinCatalogue(t *testing.T) {
 	data, err := parseApkStoreCatalog(apkStoreCatalogJSON)
 	if err != nil {
@@ -374,18 +375,28 @@ func TestApkStoreBuiltinCatalogue(t *testing.T) {
 		t.Fatalf("only %d entries", len(data.Entries))
 	}
 	ids := map[string]bool{}
+	downloads := map[string]bool{"penguin-dash": true, "glory-of-rome": true}
 	for _, e := range data.Entries {
 		if e.downloadable() {
-			if e.ID != "penguin-dash" || !e.installable() || !apkStoreCatalogDownloadValid(e) {
+			if !downloads[e.ID] || !e.installable() || !apkStoreCatalogDownloadValid(e) || e.Status != apkStatusExperimental {
 				t.Errorf("%s ships an unexpected or invalid APK download", e.ID)
 			}
+			delete(downloads, e.ID)
 		}
 		if e.Status == apkStatusWontRun && e.Route == "" {
 			t.Errorf("%s says it won't run but names no route that works", e.ID)
 		}
 		ids[e.ID] = true
 	}
-	for _, want := range []string{"penguin-dash", "minecraft-bedrock", "terraria-mobile", "unity-games", "java-apps"} {
+	for missing := range downloads {
+		t.Errorf("%s has no pinned download", missing)
+	}
+	for _, want := range []string{
+		"penguin-dash", "glory-of-rome", "gameactivity-games", "native-java-subclass", "cedinia",
+		"minecraft-bedrock", "reset-generation-revived", "opengothic", "rechan-android",
+		"horizon-android", "supertuxkart-android", "downhill-revived-android",
+		"terraria-mobile", "unity-games", "java-apps",
+	} {
 		if !ids[want] {
 			t.Errorf("missing entry %s", want)
 		}

@@ -531,22 +531,77 @@ type ChatSection struct {
 	Version int `json:"version,omitempty"`
 }
 
-// chatDisplayName returns the name the local user's messages are signed with.
-func chatDisplayName() string {
-	if userConfigCache != nil && userConfigCache.Chat != nil {
-		if n := strings.TrimSpace(userConfigCache.Chat.Name); n != "" {
+// userName is the one name the user goes by: Settings → General → Your name,
+// the chat's name chip and the Home greeting all read and write this same
+// value (the "tspUsername" setting). Empty means no name is set.
+//
+// Before the two were tied together the chat kept its own name (Chat.Name).
+// That older name still counts while the Settings name has never been
+// written, so a chat name picked on an earlier build shows up in Settings and
+// on Home; once the Settings name exists (even cleared to empty) it wins.
+func userName(c *Config) string {
+	if c != nil {
+		if n := strings.TrimSpace(c.Variables.TSPUsername); n != "" {
 			return n
 		}
+		if _, set := customValue(c.Variables.Custom, "tspUsername"); set {
+			return ""
+		}
+	}
+	if userConfigCache != nil && userConfigCache.Chat != nil {
+		if n := strings.TrimSpace(userConfigCache.Chat.Name); n != "" && !strings.EqualFold(n, "You") {
+			return n
+		}
+	}
+	return ""
+}
+
+// chatNameCache is userName as last read on the main thread. chatDisplayName
+// is also called off it (the sender loop's chatIsOwn, Discord handlers), where
+// reading the config's variables map races the main thread's writes and a
+// concurrent map read and write kills the process; it reads this copy instead.
+var chatNameCache struct {
+	sync.Mutex
+	name  string
+	valid bool
+}
+
+// chatRefreshName copies userName into chatNameCache (main thread: chatTick
+// every frame, and the chat's own rename).
+func chatRefreshName(c *Config) {
+	n := userName(c)
+	chatNameCache.Lock()
+	chatNameCache.name, chatNameCache.valid = n, true
+	chatNameCache.Unlock()
+}
+
+// chatDisplayName returns the name the local user's messages are signed with:
+// the user's name (userName), or "You" when none is set. Safe off the main
+// thread: it never reads the config itself.
+func chatDisplayName() string {
+	chatNameCache.Lock()
+	n, valid := chatNameCache.name, chatNameCache.valid
+	chatNameCache.Unlock()
+	if !valid && userConfigCache != nil && userConfigCache.Chat != nil {
+		// Before the first frame: the older chat name, as userName would.
+		if old := strings.TrimSpace(userConfigCache.Chat.Name); !strings.EqualFold(old, "You") {
+			n = old
+		}
+	}
+	if n != "" {
+		return n
 	}
 	return "You"
 }
 
-// setChatDisplayName updates and persists the local user's chat name. An empty
-// (or whitespace-only) name resets to the default.
+// setChatDisplayName updates and persists the local user's name from the chat's
+// name chip. It is the same setting as Settings → Your name (and the Home
+// greeting), so both change together. An empty name — or "You", the chat's
+// placeholder — clears it, and the chat signs as "You" again.
 func setChatDisplayName(name string) string {
 	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "You"
+	if strings.EqualFold(name, "You") {
+		name = ""
 	}
 	if userConfigCache == nil {
 		userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
@@ -554,8 +609,21 @@ func setChatDisplayName(name string) string {
 	if userConfigCache.Chat == nil {
 		userConfigCache.Chat = &ChatSection{}
 	}
+	// Chat.Name is kept equal so an older build reading this jukauser.json
+	// still signs the chat with the same name.
 	userConfigCache.Chat.Name = name
-	saveUserConfig(userConfigCache)
+	if appConfig != nil {
+		// setStoreString also refreshes Variables.TSPUsername; the full save
+		// carries the chat section along from the cache.
+		setStoreString(appConfig, "tspUsername", name)
+		saveUserConfig(userConfigFromVariables(appConfig))
+	} else {
+		saveUserConfig(userConfigCache)
+	}
+	chatRefreshName(appConfig)
+	if name == "" {
+		return "You"
+	}
 	return name
 }
 

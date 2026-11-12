@@ -10,7 +10,9 @@ package main
 // — for free software whose author publishes the APK — but only with a
 // SHA-256, and only from the HTTPS hosts JukaHub's downloader trusts
 // (validatePatchURL): a download without a hash is refused, never "probably
-// fine". The built-in list pins the APK of a game tested on a Smart Pro.
+// fine". The built-in list pins one device-tested game and one structurally
+// eligible native candidate; an experimental label never promises that a new
+// title ran on the handheld.
 //
 // The list is embedded (apkstore_catalog.json). A newer copy may be published
 // at generate.jukalang.com/apk-catalog.json (the builder site is deployed from
@@ -90,6 +92,97 @@ func (e apkStoreCatalogEntry) downloadable() bool {
 // still be downloaded for inspection, but it is not silently added to Games.
 func (e apkStoreCatalogEntry) installable() bool {
 	return e.downloadable() && e.Package != "" && e.Kind != "category" && e.Status != apkStatusWontRun
+}
+
+// apkStoreCatalogLocalMatch links a catalogue title to a scanned APK already
+// on the card. A package name is only a match for discovery: the APK's own
+// scan verdict still decides whether AndroidRT may add it to Games.
+type apkStoreCatalogLocalMatch struct {
+	Info    apkStoreInfo
+	Found   bool
+	InGames bool
+}
+
+func apkStoreCatalogMatchOnCard(e apkStoreCatalogEntry, apks []apkStoreInfo, games map[string]apkStoreGameState) apkStoreCatalogLocalMatch {
+	if e.Package == "" || e.Kind == "category" {
+		return apkStoreCatalogLocalMatch{}
+	}
+	var best apkStoreCatalogLocalMatch
+	bestScore := -1
+	for _, info := range apks {
+		if info.Manifest.Package != e.Package {
+			continue
+		}
+		_, inGames := games[info.Path]
+		score := 0
+		if info.Tier.canAdd() {
+			score += 2
+		}
+		if inGames {
+			score++
+		}
+		if score > bestScore || score == bestScore && info.Manifest.VersionCode > best.Info.Manifest.VersionCode {
+			best = apkStoreCatalogLocalMatch{Info: info, Found: true, InGames: inGames}
+			bestScore = score
+		}
+	}
+	return best
+}
+
+// apkStoreNativeCandidate reports a scanned APK whose native start is worth
+// showing in the Store, even when its CPU or split packaging blocks AndroidRT.
+// Java games with native helper libraries are not native-start candidates.
+func apkStoreNativeCandidate(info apkStoreInfo) bool {
+	if info.Manifest.Package == "" || info.ManifestErr != "" || info.Tier == apkTierBroken {
+		return false
+	}
+	if info.Tier.canAdd() || info.Entry == apkEntryFound {
+		return true
+	}
+	nativeLauncher := info.Manifest.Launcher == "android.app.NativeActivity" ||
+		info.Manifest.Launcher == "com.google.androidgamesdk.GameActivity"
+	nativeLibrary := strings.TrimSpace(info.Manifest.NativeLib) != ""
+	if info.Tier == apkTierSplit && (nativeLauncher || nativeLibrary) {
+		return true // the base piece may have no library; its splits carry it
+	}
+	if len(info.ABIs) == 0 {
+		return false
+	}
+	return !info.Manifest.HasCode || nativeLauncher || nativeLibrary
+}
+
+// apkStoreEntries adds locally scanned native candidates to the Store,
+// including those AndroidRT cannot install. A package already in the
+// catalogue keeps its authored entry and local-match actions.
+func apkStoreEntries(catalog []apkStoreCatalogEntry, apks []apkStoreInfo) []apkStoreCatalogEntry {
+	entries := append([]apkStoreCatalogEntry(nil), catalog...)
+	known := make(map[string]bool, len(catalog))
+	for _, e := range catalog {
+		if e.Package != "" {
+			known[e.Package] = true
+		}
+	}
+	for i, info := range apks {
+		pkg := info.Manifest.Package
+		if known[pkg] || !apkStoreNativeCandidate(info) {
+			continue
+		}
+		known[pkg] = true
+		get := "Already on your card. Open the local APK or add it to Games here."
+		if !info.Tier.canAdd() {
+			get = "Already on your card. Open the local APK to see why AndroidRT cannot add it."
+		}
+		entries = append(entries, apkStoreCatalogEntry{
+			ID:      fmt.Sprintf("local-%d", i),
+			Title:   info.Label,
+			Package: pkg,
+			Kind:    "title",
+			Status:  apkStatusExperimental,
+			Summary: info.Verdict,
+			Get:     get,
+		})
+	}
+	return entries
 }
 
 // apkStoreCatalogData is the file: a dated list.
@@ -200,14 +293,14 @@ func parseApkStoreCatalog(raw []byte) (apkStoreCatalogData, error) {
 	return data, nil
 }
 
-// apkStorePinDownloads keeps executable downloads anchored to the catalogue
-// compiled into JukaHub. A fetched JSON file is useful for updated wording,
-// but it is not signed as code: it must not point the handheld's root process
-// at a new APK or claim a pinned experimental APK has been proven to work.
-func apkStorePinDownloads(data, builtin apkStoreCatalogData) apkStoreCatalogData {
+// apkStorePinBuiltins keeps known titles and executable downloads anchored to
+// this JukaHub build. An online catalogue may add entries and update category
+// guidance, but cannot hide a built-in game, claim its blocker has been fixed,
+// or point the handheld's root process at a different APK.
+func apkStorePinBuiltins(data, builtin apkStoreCatalogData) apkStoreCatalogData {
 	pinned := make(map[string]apkStoreCatalogEntry, len(builtin.Entries))
 	for _, e := range builtin.Entries {
-		if e.downloadable() {
+		if e.Kind == "title" || e.downloadable() {
 			pinned[e.ID] = e
 		}
 	}
@@ -222,7 +315,7 @@ func apkStorePinDownloads(data, builtin apkStoreCatalogData) apkStoreCatalogData
 		}
 	}
 	for _, e := range builtin.Entries {
-		if !e.downloadable() || seen[e.ID] {
+		if _, keep := pinned[e.ID]; !keep || seen[e.ID] {
 			continue
 		}
 		if len(data.Entries) < apkStoreCatalogMax {
@@ -312,7 +405,7 @@ func apkStoreCatalog() (apkStoreCatalogData, string) {
 		if raw, err := os.ReadFile(apkStoreCatalogPath()); err == nil {
 			if saved, err := parseApkStoreCatalog(raw); err == nil && saved.Updated > builtin.Updated && saved.usable() &&
 				!apkStoreCatalogTooNew(saved.Updated, builtin.Updated) {
-				saved = apkStorePinDownloads(saved, builtin)
+				saved = apkStorePinBuiltins(saved, builtin)
 				apkStoreCatalogState.data, apkStoreCatalogState.source = saved, "updated "+saved.Updated
 			}
 		}
@@ -385,7 +478,7 @@ func apkStoreRefreshCatalog(ctx context.Context, client *http.Client, rawURL str
 		apkStoreTouchCatalog()
 		return false, nil
 	}
-	fetched = apkStorePinDownloads(fetched, builtin)
+	fetched = apkStorePinBuiltins(fetched, builtin)
 	if err := AtomicWrite(apkStoreCatalogPath(), raw, 0o644); err != nil {
 		return false, err
 	}

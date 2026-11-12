@@ -204,6 +204,13 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if portsPanel.open {
 		return ctrlPortsPanel(e)
 	}
+	// Apps → Steam is modal too; its search keyboard takes the pad while up.
+	if steamPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
+		return ctrlSteamPanel(e)
+	}
 	// LAN play is modal over the game library; its host-address keyboard takes
 	// the pad while it is up, as the key chain already lets it take the keys.
 	if netplayPanel.open {

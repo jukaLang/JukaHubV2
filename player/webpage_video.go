@@ -23,6 +23,7 @@ package main
 // all rather than a dead box.
 
 import (
+	"math"
 	"net/url"
 	"regexp"
 	"strings"
@@ -40,8 +41,14 @@ type webVideoPos struct {
 	// Thumb is the real thumbnail URL for this video — set only when it can
 	// be derived without yt-dlp (YouTube pages by convention). "" keeps the
 	// plain chrome-only card.
-	Thumb string
-	Rect  sdl.Rect
+	Thumb          string
+	Rect           sdl.Rect
+	ObjectFit      int
+	ObjectPosition string
+	Invisible      bool
+	Clip           sdl.Rect
+	HasClip        bool
+	Opacity        float64
 }
 
 // webSourceRe pulls the src of the first <source> child of a raw element.
@@ -190,6 +197,10 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	title = strings.Join(strings.Fields(title), " ")
 	p.flush()
 	block := p.ensureBlock()
+	videoStyle := p.computeStyle(webNewElement(name, attrs), attrs)
+	block.Style = videoStyle
+	block.Align = videoStyle.Align
+	block.Indent = videoStyle.Indent
 	block.Video = true
 	block.VideoSrc = resolved
 	block.ImageW = htmlTagAttributeFloat(attrs, "width")
@@ -217,16 +228,51 @@ func (l *webLayouter) layoutVideo(b webBlock, padX, contentW int32) {
 		scale = 1
 	}
 	w := contentW
-	if b.ImageW > 0 {
+	if b.Style.WidthPct > 0 {
+		w = int32(float64(contentW) * b.Style.WidthPct / 100)
+	} else if b.Style.Width > 0 {
+		w = int32(b.Style.Width * scale)
+		if b.Style.BoxSizing == 1 {
+			w -= int32((b.Indent + b.Style.IndentRight) * scale)
+		}
+	} else if b.ImageW > 0 {
+		w = int32(b.ImageW * scale)
+	}
+	if w < 0 {
+		w = 0
+	}
+	if maxW := webConstraintLength(b.Style.MaxWidth, b.Style.MaxWidthPct, contentW, scale); maxW > 0 && float64(w)/scale > maxW {
+		w = int32(math.Round(maxW * scale))
+	}
+	if minW := webConstraintLength(b.Style.MinWidth, b.Style.MinWidthPct, contentW, scale); minW > 0 && float64(w)/scale < minW {
+		w = int32(math.Round(minW * scale))
+	}
+	if w > 0 {
+		if w < webMinImagePx {
+			w = webMinImagePx
+		}
+		if w > contentW {
+			w = contentW
+		}
+	} else {
+		w = contentW
+	}
+	if b.ImageW > 0 && b.Style.Width <= 0 && b.Style.WidthPct <= 0 && b.Style.MaxWidth <= 0 && b.Style.MaxWidthPct <= 0 && w < webMinImagePx {
 		w = int32(b.ImageW * scale)
 		if w < webMinImagePx {
 			w = webMinImagePx
 		}
 	}
-	if w > contentW {
-		w = contentW
-	}
 	h := w * 9 / 16 // 16:9, the ratio nearly every web video leans on
+	if b.Style.Height > 0 {
+		h = int32(b.Style.Height * scale)
+	}
+	if maxH := b.Style.MaxHeight * scale; maxH > 0 && float64(h) > maxH {
+		h = int32(math.Round(maxH))
+	}
+	if minH := b.Style.MinHeight * scale; minH > 0 && float64(h) < minH {
+		h = int32(math.Round(minH))
+	}
 	if h < rowH {
 		h = rowH
 	}
@@ -256,10 +302,14 @@ func (l *webLayouter) layoutVideo(b webBlock, padX, contentW int32) {
 		x = padX
 	}
 	layout.Videos = append(layout.Videos, webVideoPos{
-		Src:   b.VideoSrc,
-		Title: b.VideoTitle,
-		Thumb: b.VideoThumb,
-		Rect:  sdl.Rect{X: x, Y: idx * rowH, W: w, H: h},
+		Src:            b.VideoSrc,
+		Title:          b.VideoTitle,
+		Thumb:          b.VideoThumb,
+		Rect:           sdl.Rect{X: x, Y: idx * rowH, W: w, H: h},
+		ObjectFit:      b.Style.ObjectFit,
+		ObjectPosition: b.Style.ObjectPosition,
+		Invisible:      b.Style.Invisible,
+		Opacity:        webPaintOpacity(b.Style),
 	})
 	for i := int32(0); i < slots && len(layout.Rows) < webMaxRows; i++ {
 		layout.Rows = append(layout.Rows, webRow{Y: (idx + i) * rowH})
@@ -302,10 +352,11 @@ func drawWebVideo(r *sdl.Renderer, config *Config, doc *webDocument, v webVideoP
 	if r == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
-	if !drawWebVideoThumb(r, doc, v.Thumb, rect) {
-		fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 4, sdl.Color{R: 16, G: 18, B: 24, A: 255})
+	opacity := webVideoPaintOpacity(v)
+	if !drawWebVideoThumb(r, doc, v.Thumb, rect, v.ObjectFit, v.ObjectPosition, opacity) {
+		fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 4, webScaleColorAlpha(sdl.Color{R: 16, G: 18, B: 24, A: 255}, opacity))
 	}
-	strokeRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 4, 1, WithAlpha(accentColor, 110))
+	strokeRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 4, 1, webScaleColorAlpha(WithAlpha(accentColor, 110), opacity))
 
 	// A centered play glyph: the card is tappable, so the affordance is
 	// drawn where the finger already is.
@@ -325,7 +376,7 @@ func drawWebVideo(r *sdl.Renderer, config *Config, doc *webDocument, v webVideoP
 		}
 	}
 	fillTriangleFilled(r, at(0.10, 0.02), at(0.10, 0.98), at(0.94, 0.50),
-		sdl.Color{R: 250, G: 250, B: 250, A: 255})
+		webScaleColorAlpha(sdl.Color{R: 250, G: 250, B: 250, A: 255}, opacity))
 
 	// The title runs along the card's top-left, clipped to fit, with the
 	// small font the rest of the chrome uses.
@@ -346,20 +397,24 @@ func drawWebVideo(r *sdl.Renderer, config *Config, doc *webDocument, v webVideoP
 		return
 	}
 	// Height is ignored: the row's baseline alignment accounts for it.
-	renderText(r, config, font, label, ColorTextSecondary(), rect.X+pad, rect.Y+pad)
+	renderText(r, config, font, label, webScaleColorAlpha(ColorTextSecondary(), opacity), rect.X+pad, rect.Y+pad)
+}
+
+func webVideoPaintOpacity(v webVideoPos) float64 {
+	return webClampOpacity(v.Opacity)
 }
 
 // drawWebVideoThumb blits the video's thumbnail art over its play card,
 // return true when it did. Bytes come from the document (the same image pass
 // that fetched <img>s), decode once through the shared texture cache, and a
 // narrow image is cover-cropped so the card never letterboxes a hole in it.
-func drawWebVideoThumb(r *sdl.Renderer, doc *webDocument, thumb string, rect sdl.Rect) bool {
+func drawWebVideoThumb(r *sdl.Renderer, doc *webDocument, thumb string, rect sdl.Rect, fit int, position string, opacity float64) bool {
 	if r == nil || doc == nil || thumb == "" {
 		return false
 	}
 	key := webImageCacheKey(thumb)
 	if tex := getThumbnailTextures().Get(key); tex != nil {
-		copyWebImageCover(r, tex, rect)
+		_ = drawWebImageTexture(r, tex, rect, fit, position, opacity)
 		return true
 	}
 	data := doc.imageBytes(thumb)
@@ -380,6 +435,6 @@ func drawWebVideoThumb(r *sdl.Renderer, doc *webDocument, thumb string, rect sdl
 		tw, th = qw, qh
 	}
 	getThumbnailTextures().Put(key, tex, tw, th)
-	copyWebImageCover(r, tex, rect)
+	_ = drawWebImageTexture(r, tex, rect, fit, position, opacity)
 	return true
 }

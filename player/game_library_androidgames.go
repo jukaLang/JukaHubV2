@@ -208,6 +208,10 @@ func libraryOpenNetplay() {
 		ShowToast("LAN play is for emulator games — Android games have none here", ToastKindInfo)
 		return
 	}
+	if game, ok := selectedLibraryGame(); ok && game.System == html5LibrarySystem {
+		ShowToast("LAN play is for emulator games — HTML5 games have none here", ToastKindInfo)
+		return
+	}
 	openNetplayForSelectedGame()
 }
 

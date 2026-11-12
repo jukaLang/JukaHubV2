@@ -280,6 +280,10 @@ func peerHandler() http.Handler {
 	mux.HandleFunc("/peer/v1/saves/prepare", peerGuard(true, ssyncHandlePrepare))
 	mux.HandleFunc("/peer/v1/saves/file", peerGuard(true, ssyncHandleFile))
 	mux.HandleFunc("/peer/v1/saves/done", peerGuard(true, ssyncHandleDone))
+	// A handheld asks this PC to start a Steam game (steam.go).
+	mux.HandleFunc(steamPeerRunPath, peerGuard(true, steamHandlePeerRun))
+	// ... and which Steam games it has installed or downloading (steam_remote.go).
+	mux.HandleFunc(steamPeerLibraryPath, peerGuard(true, steamHandlePeerLibrary))
 	return mux
 }
 

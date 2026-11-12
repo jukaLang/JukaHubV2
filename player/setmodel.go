@@ -75,6 +75,10 @@ type setRow struct {
 	Sheet      func(c *Config) []setOption
 	SheetValue func(c *Config) string
 	SheetTitle string
+	// Clamp makes a choice stop at its ends instead of wrapping: a level
+	// (volume, brightness, a delay) must not jump from 100% to 0% on one more
+	// Right, or from the dimmest backlight to full on one more Left.
+	Clamp      bool
 
 	// Quiet rows give their own feedback (the Quick Settings paths play their
 	// sound), so the hub does not play a second one.
@@ -307,7 +311,7 @@ func setSliderRow(id, label, detail string, idx int) setRow {
 		return int(qs.sliders[idx].Value*100 + 0.5)
 	}
 	return setRow{
-		ID: id, Label: label, Kind: setKindChoice, Quiet: true,
+		ID: id, Label: label, Kind: setKindChoice, Quiet: true, Clamp: true,
 		Detail: setStatic(detail),
 		Visible: func(*Config) bool {
 			return idx >= 0 && idx < len(qs.sliders) && qs.sliders[idx].Available
@@ -639,9 +643,9 @@ func setBuildSections() []setSection {
 			Rows: []setRow{
 				{
 					ID: "name", Label: "Your name", Kind: setKindText, Field: "tspUsername",
-					Detail: setStatic("Home greets you with it"),
+					Detail: setStatic("Home greets you with it · Chat signs with it"),
 					Value: func(c *Config) string {
-						return setOr(strings.TrimSpace(c.Variables.TSPUsername), "Not set")
+						return setOr(userName(c), "Not set")
 					},
 				},
 				{
@@ -807,18 +811,21 @@ func setBuildSections() []setSection {
 				wallpaperAnimateRow(),
 				setSliderRow("brightness", "Brightness", "The screen's backlight", 1),
 				{
-					ID: "textSize", Label: "Text size", Kind: setKindChoice,
+					ID: "textSize", Label: "Text size", Kind: setKindChoice, Clamp: true,
 					Detail:  setStatic("Every label in JukaHub, Home included"),
 					Options: setTextSizeOptions,
 					Current: func(*Config) int { return a11yScaleIndex() },
+					// The Accessibility page's setter (a11y_settings.go): it
+					// confirms the size with a toast, like every other row
+					// here, and skips the save when nothing changed.
 					Choose: func(c *Config, value string) {
 						f, err := strconv.ParseFloat(value, 64)
 						if err != nil {
 							return
 						}
-						a11y.fontScale = a11yClampScale(f)
-						a11yRefreshFonts()
-						a11ySave(c)
+						if a11ySetScale(f) {
+							a11ySave(c)
+						}
 					},
 				},
 				{
@@ -950,16 +957,77 @@ func setBuildSections() []setSection {
 						if !setUISoundsOn(c) {
 							return "Turn Interface sounds on to use it"
 						}
+						if quietModeOn() || quietModeFromConfig(c) {
+							return "Quiet Mode is on: no chimes until it is off"
+						}
 						return "A chime when JukaHub starts and closes"
 					},
-					Disabled: func(c *Config) bool { return !setUISoundsOn(c) },
-					Get:      bootChimeOn,
+					// bootChimeOn also answers false under Quiet Mode, so the
+					// row is greyed then too: a live switch reading Off that
+					// cannot be turned on (every press stored "on" and still
+					// showed Off) looked broken.
+					Disabled: func(c *Config) bool {
+						return !setUISoundsOn(c) || quietModeOn() || quietModeFromConfig(c)
+					},
+					Get: bootChimeOn,
 					Set: func(c *Config, on bool) {
 						setStoreBool(c, bootChimeEnabledKey, on)
 						saveUserConfigDebounced(userConfigFromVariables(c))
 						if on {
 							bootChimePreview(c)
 						}
+					},
+				},
+				// Music under the menus (bgmusic.go): the switch, which music,
+				// how loud, and a skip for the shuffled library.
+				{
+					ID: "bgMusic", Label: "Background music", Kind: setKindToggle,
+					Detail: bgmStatus,
+					Get:    bgmEnabledIn,
+					Set: func(c *Config, on bool) {
+						bgmSetPrefs(c, on, bgmSourceIn(c), bgmVolumeIn(c))
+					},
+				},
+				{
+					ID: "bgMusicSource", Label: "Music", Kind: setKindChoice,
+					Detail: func(c *Config) string {
+						if !bgmEnabledIn(c) {
+							return "Turn Background music on to use it"
+						}
+						return "Built-in songs, your Synth song or your own music"
+					},
+					Disabled:   func(c *Config) bool { return !bgmEnabledIn(c) },
+					Options:    bgmSourceOptions,
+					Current:    bgmSourceIndex,
+					Choose:     func(c *Config, value string) { bgmSetPrefs(c, true, value, bgmVolumeIn(c)) },
+					Sheet:      bgmSourceOptions,
+					SheetValue: bgmSourceIn,
+					SheetTitle: "Background music",
+				},
+				{
+					ID: "bgMusicVolume", Label: "Music level", Kind: setKindChoice, Clamp: true,
+					Detail: func(c *Config) string {
+						if !bgmEnabledIn(c) {
+							return "Turn Background music on to use it"
+						}
+						return "Kept low under the menus; media keeps its own volume"
+					},
+					Disabled: func(c *Config) bool { return !bgmEnabledIn(c) },
+					Options:  func(*Config) []setOption { return setLevelOptions(10) },
+					Current:  func(c *Config) int { return setNearestStop(setLevelOptions(10), bgmVolumeIn(c)) },
+					Choose: func(c *Config, value string) {
+						if pct, err := strconv.Atoi(value); err == nil {
+							bgmSetPrefs(c, true, bgmSourceIn(c), pct)
+						}
+					},
+				},
+				{
+					ID: "bgMusicSkip", Label: "Next song", Kind: setKindAction,
+					Detail:  setStatic("Skip to another song from your library"),
+					Visible: func(c *Config) bool { return bgmEnabledIn(c) && bgmSourceIn(c) == bgmSrcLibrary },
+					Open: func(*Config) {
+						bgmSkip()
+						setToast("Next song")
 					},
 				},
 				{
@@ -1108,15 +1176,27 @@ func setBuildSections() []setSection {
 					Set:      nearbySettingSetShare,
 				},
 				{
+					// Greyed with Nearby devices off, so the line says why, as
+					// Share what I'm playing does.
 					ID: "hoffOffers", Label: "Continue from other devices", Kind: setKindToggle,
-					Detail:   setStatic("Home offers to pick up what you were doing on a paired device"),
+					Detail: func(c *Config) string {
+						if !peerSettingEnabled(c) {
+							return "Turn Nearby devices on to use it"
+						}
+						return "Home offers to pick up what you were doing on a paired device"
+					},
 					Disabled: func(c *Config) bool { return !peerSettingEnabled(c) },
 					Get:      hoffSettingOffers,
 					Set:      hoffSettingSetOffers,
 				},
 				{
 					ID: "hoffSettings", Label: "Bring my settings along", Kind: setKindToggle,
-					Detail:   setStatic("Theme, text size and clock travel with a handoff when both devices allow it"),
+					Detail: func(c *Config) string {
+						if !peerSettingEnabled(c) {
+							return "Turn Nearby devices on to use it"
+						}
+						return "Theme, text size and clock travel with a handoff when both devices allow it"
+					},
 					Disabled: func(c *Config) bool { return !peerSettingEnabled(c) },
 					Get:      hoffSettingShareSettings,
 					Set:      hoffSettingSetShareSettings,
@@ -1217,9 +1297,18 @@ func setBuildSections() []setSection {
 			Subtitle: "Buttons, previews and emulator care",
 			Rows: []setRow{
 				{
+					// Accessibility's button layout swaps on top of this switch
+					// (a11ySwapButton), so with both on A and B are back where
+					// they were and this row alone seemed not to work; the
+					// line says so.
 					ID: "swapAB", Label: "Swap A and B", Kind: setKindToggle,
-					Detail: setStatic("For pads that put confirm on the other button"),
-					Get:    abButtonsSwapped,
+					Detail: func(*Config) string {
+						if a11y.swapAB {
+							return "Accessibility's button layout swaps A and B too; both on cancel out"
+						}
+						return "For pads that put confirm on the other button"
+					},
+					Get: abButtonsSwapped,
 					Set: func(c *Config, on bool) {
 						setStoreBool(c, "swapABButtons", on)
 						if on {
@@ -1235,6 +1324,9 @@ func setBuildSections() []setSection {
 					// elsewhere it is for a pad with Nintendo-style labels.
 					ID: "swapXY", Label: "Swap X and Y", Kind: setKindToggle,
 					Detail: func(*Config) string {
+						if a11y.swapXY {
+							return "Accessibility's button layout swaps X and Y too; both on cancel out"
+						}
 						if P().IsHandheld() {
 							return "On by default here: the firmware reports X and Y mirrored"
 						}
@@ -1565,7 +1657,9 @@ func setBuildSections() []setSection {
 				},
 				{
 					ID: "clearCache", Label: "Clear cache", Kind: setKindAction,
-					Detail: setStatic("Thumbnails and saved pages; your files stay"),
+					// "Saved pages" is the Browser's bookmarks list, which this
+					// keeps: the old line read as if it deleted them.
+					Detail: setStatic("Thumbnails and cached pages; files and saved pages stay"),
 					Open: func(c *Config) {
 						browserClearPageCache()
 						handleTrigger(nil, c, Element{Trigger: "cache_clear"})
@@ -1689,8 +1783,10 @@ func setPluginRows(*Config) []setRow {
 			},
 			Set: func(c *Config, on bool) {
 				plugSetEnabled(c, name, on)
-				entry, _ := plugEntryNamed(name)
-				setToast(setOr(entry.Title, name) + ": " + setOnOff(on))
+				// The Plugins page's own switch path: switched on, the plugin's
+				// onEnable action runs, and the toast says what it added or
+				// withdrew. This row used to skip both (plughooks.go).
+				plugAfterToggle(c, name, on)
 			},
 		})
 	}

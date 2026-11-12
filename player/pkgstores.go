@@ -200,19 +200,15 @@ func pkgStoreLinks() []pkgStoreLink {
 	return pkgStoreLinkCache
 }
 
-// pkgBuildStoreLinks is the pills for a platform. The APK Store and PortMaster
-// are the handheld's, the same rule the Start menu's Games group follows;
-// Windows Apps is everywhere (Wine on the handheld, the programs themselves on
-// Windows).
+// pkgBuildStoreLinks is the pills for a platform. The APK Store can inspect
+// and download APKs on a PC, while PortMaster is handheld-only. Windows Apps
+// is everywhere (Wine on the handheld, the programs themselves on Windows).
 func pkgBuildStoreLinks(windows bool) []pkgStoreLink {
-	links := make([]pkgStoreLink, 0, 3)
+	links := []pkgStoreLink{{title: apkStoreEntryName, sub: "Native Android APKs", glyph: apkStoreGlyph, screen: true,
+		open: apkStoreOpen}}
 	if !windows {
-		links = append(links,
-			pkgStoreLink{title: apkStoreEntryName, sub: "Native Android APKs", glyph: apkStoreGlyph, screen: true,
-				open: apkStoreOpen},
-			pkgStoreLink{title: portMasterAppName, sub: "PC and indie ports", glyph: "packages",
-				open: func(*Config) { openPortsPanel(false) }},
-		)
+		links = append(links, pkgStoreLink{title: portMasterAppName, sub: "PC and indie ports", glyph: "packages",
+			open: func(*Config) { openPortsPanel(false) }})
 	}
 	sub := "Windows programs through Wine"
 	if windows {

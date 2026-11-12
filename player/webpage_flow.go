@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // flexCell is one measured item of a flex row, held until every sibling is
@@ -100,21 +101,129 @@ func (l *webLayouter) layoutBlocksFlat(blocks []webBlock, padX, contentW int32) 
 // flexible and should share whatever room is left over.
 func (l *webLayouter) itemWidth(b webBlock, avail int32) int32 {
 	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	width := int32(0)
 	// flex-basis overrides width when both are present. A zero basis stays
 	// zero here and receives its share through flex-grow below.
 	if b.BasisPct > 0 {
-		return int32(float64(avail) * b.BasisPct / 100)
+		width = int32(float64(avail) * b.BasisPct / 100)
+	} else if b.FlexBasis >= 0 {
+		width = int32(b.FlexBasis * scale)
+	} else if b.WidthPct > 0 {
+		width = int32(float64(avail) * b.WidthPct / 100)
+	} else if b.Width > 0 {
+		width = int32(b.Width * scale)
 	}
-	if b.FlexBasis >= 0 {
-		return int32(b.FlexBasis * scale)
+	if b.Style.BoxSizing == 1 && width > 0 {
+		width -= int32((b.Indent + b.Style.IndentRight) * scale)
 	}
-	if b.WidthPct > 0 {
-		return int32(float64(avail) * b.WidthPct / 100)
+	if width < 0 {
+		width = 0
 	}
-	if b.Width > 0 {
-		return int32(b.Width * scale)
+	maxW := webConstraintLength(b.Style.MaxWidth, b.Style.MaxWidthPct, avail, scale)
+	minW := webConstraintLength(b.Style.MinWidth, b.Style.MinWidthPct, avail, scale)
+	if width == 0 && maxW > 0 {
+		width = int32(math.Round(maxW * scale))
 	}
-	return 0
+	if maxW > 0 && float64(width)/scale > maxW {
+		width = int32(math.Round(maxW * scale))
+	}
+	if minW > 0 && float64(width)/scale < minW {
+		width = int32(math.Round(minW * scale))
+	}
+	if width > avail {
+		width = avail
+	}
+	if width < 0 {
+		width = 0
+	}
+	return width
+}
+
+// layoutCSSFloat measures a `float: left/right` block at its own width and
+// parks it in the layer list at the current flow row. The caller records the
+// returned row span so following siblings shorten beside it (or move below it
+// for clear). A float does not advance the flow itself, exactly like CSS.
+func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, leftActive, rightActive int32) (endRow, width int32) {
+	if contentW <= 0 || l.rowH <= 0 {
+		return startRow, 0
+	}
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	style := block.Style
+	autoWidth := style.Width <= 0 && style.WidthPct <= 0 &&
+		style.MinWidth <= 0 && style.MaxWidth <= 0 && style.MinWidthPct <= 0 && style.MaxWidthPct <= 0
+	if autoWidth {
+		width = l.intrinsicContainerWidth([]webBlock{block})
+		if width <= 0 {
+			width = int32(120 * scale)
+		}
+		if maxW := webConstraintLength(style.MaxWidth, style.MaxWidthPct, contentW, scale); maxW > 0 && float64(width)/scale > maxW {
+			width = int32(math.Round(maxW * scale))
+		}
+		if minW := webConstraintLength(style.MinWidth, style.MinWidthPct, contentW, scale); minW > 0 && float64(width)/scale < minW {
+			width = int32(math.Round(minW * scale))
+		}
+	} else {
+		width = webBlockContentWidth(block, contentW, l.baseSize)
+	}
+	if style.BoxSizing == 1 && !autoWidth {
+		// webBlockContentWidth already removed the padding from an explicit
+		// border-box width; nothing further to do here.
+	}
+	maxWidth := contentW - leftActive - rightActive
+	if maxWidth < 16 {
+		maxWidth = contentW
+	}
+	if width > maxWidth {
+		width = maxWidth
+	}
+	if width < 16 {
+		width = 16
+	}
+	x := padX + leftActive
+	if style.FloatSide == 2 {
+		x = padX + contentW - width
+		if x < padX+leftActive {
+			x = padX + leftActive
+		}
+	}
+
+	inner := block
+	inner.MarginTop, inner.MarginBot = 0, 0
+	inner.Float = false
+	inner.Style.FloatSide = 0
+	inner.Style.Clear = 0
+	inner.Style.Position = webPositionStatic
+	inner.Style.Width, inner.Style.WidthPct = 0, 0
+	inner.Style.MinWidth, inner.Style.MaxWidth = 0, 0
+	inner.Style.MinWidthPct, inner.Style.MaxWidthPct = 0, 0
+	sub := &webLayout{RowH: l.rowH}
+	sl := &webLayouter{
+		doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+		spaceWidths:    map[*ttf.Font]int32{},
+		sanitized:      make(map[webSanitizeKey]string, 64),
+		containerSizes: l.containerSizes,
+		containerRows:  make(map[int]webContainerRowSpan),
+	}
+	sl.layoutBlocks([]webBlock{inner}, 0, width)
+	if len(sub.Rows) == 0 {
+		return startRow, width
+	}
+	endRow = startRow + int32(len(sub.Rows))
+	l.layout.Floats = append(l.layout.Floats, webFloat{
+		Z:      block.ZIndex,
+		X:      x,
+		Y:      startRow * l.rowH,
+		Rows:   sub.Rows,
+		Rects:  sub.Rects,
+		Images: sub.Images,
+	})
+	return endRow, width
 }
 
 // itemContainerID finds the containment container that is the flex item's own
@@ -371,19 +480,46 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 
 	if fixed > avail {
-		// The author's widths do not fit. Scale them down together so the row
-		// still reads as a row instead of pushing the last card off the page.
-		shrink := float64(avail) / float64(fixed)
-		fixed = 0
-		for i := range widths {
+		// Subtract the overflow in proportion to each item's shrink factor and
+		// basis, which is the visible participation flex-shrink describes. If
+		// every item refuses to shrink (shrink: 0), the later overflow check
+		// stacks the row rather than squeezing an item the author protected.
+		excess := fixed - avail
+		totalWeight := 0.0
+		for i, item := range grouped {
 			if widths[i] <= 0 {
 				continue
 			}
-			widths[i] = int32(float64(widths[i]) * shrink)
-			if widths[i] < 24 {
-				widths[i] = 24
+			shrink := item.blocks[0].FlexShrink
+			if shrink < 0 {
+				shrink = 0
 			}
-			fixed += widths[i]
+			totalWeight += float64(widths[i]) * shrink
+		}
+		if totalWeight > 0 {
+			fixed = 0
+			for i, item := range grouped {
+				if widths[i] <= 0 {
+					continue
+				}
+				shrink := item.blocks[0].FlexShrink
+				if shrink < 0 {
+					shrink = 0
+				}
+				cut := int32(math.Round(float64(excess) * float64(widths[i]) * shrink / totalWeight))
+				widths[i] -= cut
+				if widths[i] < 24 {
+					widths[i] = 24
+				}
+				fixed += widths[i]
+			}
+		} else {
+			fixed = 0
+			for i := range widths {
+				if widths[i] > 0 {
+					fixed += widths[i]
+				}
+			}
 		}
 	}
 
@@ -464,7 +600,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	for i, item := range grouped {
 		b := item.blocks[0]
 		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
 			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
 			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
 		subLayouter.primeItemContainerWidths(item.blocks, widths[i])
@@ -570,7 +706,7 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 		}
 
 		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
 			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
 			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
 		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
@@ -625,6 +761,9 @@ func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *we
 			continue
 		}
 		for _, im := range f.Images {
+			if im.Invisible {
+				continue
+			}
 			y := top + im.Rect.Y
 			if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
 				continue
@@ -656,6 +795,9 @@ func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *we
 				break
 			}
 			for _, run := range row.Runs {
+				if run.Invisible {
+					continue
+				}
 				if run.Font == nil {
 					continue
 				}

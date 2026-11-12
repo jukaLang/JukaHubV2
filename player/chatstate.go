@@ -465,6 +465,8 @@ func chatSceneActive(config *Config) bool {
 func chatTick(config *Config) {
 	chatEnsureLoaded()
 	chatRefreshCreds(config, time.Now(), false)
+	// The signing name, for callers off the main thread (chat.go).
+	chatRefreshName(config)
 	chatSyncVisibility(config)
 	// Picking in Files, and files saved from the chat that should open now.
 	chatFilesTick(config)

@@ -36,6 +36,14 @@ var onboardingSteps = []onboardingStep{
 		hint:  "You can skip the setup or replay it later from Settings.",
 	},
 	{
+		// The user's name (onboarding_name.go): Home's greeting, the chat and
+		// the boot and shutdown greetings use it.
+		title: "What should we call you?",
+		body:  "JukaHub greets you by name on Home, at startup and at shutdown.",
+		hint:  "Optional. Settings > General > Your name changes it later.",
+		kind:  "name",
+	},
+	{
 		title: "Connect to Wi-Fi",
 		body:  "Wi-Fi enables updates, weather, companion controls and artwork downloads. The button opens the Wi-Fi settings.",
 		hint:  "Network status is shown below. Press F or select the button to open Wi-Fi settings.",
@@ -162,6 +170,7 @@ func onboardingStart() {
 	onboarding.setupHits = nil
 	onboarding.setupAt = 0
 	onboardingLangReset(appConfig)
+	onboardingNameReset()
 	toolsHubTourReset()
 }
 
@@ -302,6 +311,8 @@ func onboardingSetupClick(mx, my int32, config *Config) bool {
 
 func onboardingActionLabel(kind string) string {
 	switch kind {
+	case "name":
+		return onboardingNameActionLabel(appConfig)
 	case "wifi":
 		return "Open Wi-Fi settings"
 	case "timezone":
@@ -332,6 +343,8 @@ func onboardingActionLabel(kind string) string {
 
 func onboardingStatus(config *Config, kind string) string {
 	switch kind {
+	case "name":
+		return onboardingNameStatus(config)
 	case "wifi":
 		return "Network: " + NetworkStatus()
 	case "timezone":
@@ -472,6 +485,9 @@ func onboardingPerformAction(config *Config) {
 	}
 	kind := onboardingSteps[onboarding.step].kind
 	switch kind {
+	case "name":
+		// The keyboard is a modal: the tour steps aside until it closes.
+		onboardingNameOpen()
 	case "wifi", "timezone":
 		info, err := openFirstRunSettings(config, kind)
 		if err != nil {
@@ -578,6 +594,10 @@ func handleOnboardingKey(e *sdl.KeyboardEvent) bool {
 			onboardingSetupActivate(appConfig)
 			break
 		}
+		if onboardingNameAOpens(appConfig) {
+			onboardingPerformAction(appConfig)
+			break
+		}
 		onboardingAdvance(appConfig)
 	case sdl.K_f:
 		onboardingPerformAction(appConfig)
@@ -628,6 +648,10 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 	case sdl.CONTROLLER_BUTTON_A:
 		if setup {
 			onboardingSetupActivate(config)
+			break
+		}
+		if onboardingNameAOpens(config) {
+			onboardingPerformAction(config)
 			break
 		}
 		onboardingAdvance(config)
@@ -895,6 +919,10 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if step.kind == "language" {
 		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Next"},
 			FooterHint{"B", "Skip"})
+	}
+	if step.kind == "name" {
+		footer = hintLine(FooterHint{"Left/Right", "Move"}, FooterHint{"A / Enter", onboardingNameAHint(config)},
+			FooterHint{"F / X", "Type name"}, FooterHint{"B", "Skip"})
 	}
 	fw, fh, _ := smallFont.SizeUTF8(footer)
 	footerY := cy + cardH + 10

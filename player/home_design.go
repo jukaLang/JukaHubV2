@@ -300,15 +300,33 @@ func drawPlayBadge(renderer *sdl.Renderer, rect sdl.Rect) {
 	}, ColorIconDark)
 }
 
-// drawContinueThumb paints the Continue card's artwork: a deep navy ramp, the
-// two colour blooms the design sheet uses where a thumbnail would be, and a
-// scrim that keeps the labels readable on any panel brightness.
+// continueScrim is the top and bottom of the Continue card's label scrim: the
+// theme's own page colour, clear at the top and dense behind the labels. The
+// labels are drawn in the theme's text colours, which are made to read on that
+// page — dark ink on Paper or Light, white on the dark themes. A black scrim
+// (the old one) put Paper's dark ink on near-black. Both ends share the RGB so
+// the ramp fades only in alpha (lerpColorRGBA blends every channel).
+func continueScrim(alpha uint8) (sdl.Color, sdl.Color) {
+	bg := ColorBackground
+	top, bottom := bg, bg
+	top.A, bottom.A = 0, alpha
+	return top, bottom
+}
+
+// drawContinueThumb paints the Continue card's artwork where there is no
+// thumbnail: a ramp between the theme's raised and base surfaces, the theme's
+// two backdrop blooms (themeBackdropBlooms — the same glows the page behind it
+// uses), and a scrim in the theme's page colour that keeps the labels
+// readable. It used to be a fixed navy ramp with Home's violet bloom, so a
+// light theme such as Paper got a blue card.
 func drawContinueThumb(renderer *sdl.Renderer, rect sdl.Rect) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
-	fillRoundedGradient(renderer, rect, homeTileRadius,
-		sdl.Color{R: 11, G: 34, B: 50, A: 255}, sdl.Color{R: 8, G: 14, B: 26, A: 255}, false)
+	top, bottom := ColorSurfaceRaised, ColorSurface
+	top.A, bottom.A = 255, 255
+	fillRoundedGradient(renderer, rect, homeTileRadius, top, bottom, false)
+	bloom1, bloom2 := themeBackdropBlooms(nil)
 	// The blooms are clipped just inside the card so they cannot bleed past its
 	// rounded corners into the next tile — inside whatever clip the caller set
 	// (the Widgets grid clips its scrolling body), which is put back after.
@@ -325,11 +343,11 @@ func drawContinueThumb(renderer *sdl.Renderer, rect sdl.Rect) {
 			homeGlowBlob(renderer, sdl.Rect{
 				X: inner.X - inner.W/3, Y: inner.Y - inner.H/2,
 				W: inner.W * 3 / 2, H: inner.W * 3 / 2,
-			}, ColorAccent, 92)
+			}, bloom1, 92)
 			homeGlowBlob(renderer, sdl.Rect{
 				X: inner.X + inner.W/4, Y: inner.Y - inner.H/3,
 				W: inner.W, H: inner.W,
-			}, sdl.Color{R: 124, G: 58, B: 237}, 84)
+			}, bloom2, 84)
 		}
 		if hadClip {
 			_ = renderer.SetClipRect(&prevClip)
@@ -337,12 +355,13 @@ func drawContinueThumb(renderer *sdl.Renderer, rect sdl.Rect) {
 			_ = renderer.SetClipRect(nil)
 		}
 	}
-	// Scrim: transparent where the artwork shows, near-black behind the labels.
-	// It starts without corner rounding and follows the card's radius only at
-	// the bottom, so it cannot draw a seam across the middle of the card.
+	// Scrim: transparent where the artwork shows, the theme's page colour
+	// behind the labels. It starts without corner rounding and follows the
+	// card's radius only at the bottom, so it cannot draw a seam across the
+	// middle of the card.
 	scrimTop := rect.Y + rect.H/4
-	fillVerticalScrim(renderer, rect, scrimTop,
-		sdl.Color{R: 0, G: 0, B: 0, A: 0}, sdl.Color{R: 0, G: 0, B: 0, A: 200})
+	from, to := continueScrim(200)
+	fillVerticalScrim(renderer, rect, scrimTop, from, to)
 }
 
 // fillVerticalScrim ramps from top to bottom inside a rounded card, starting at

@@ -77,6 +77,76 @@ func webClampLineHeight(px float64) (float64, bool) {
 	return px, true
 }
 
+// webSpacingPx resolves letter-spacing/word-spacing. Negative values pull
+// glyphs together, so they are kept, but bounded to one em so a hostile page
+// cannot make a word's measured width negative. `normal` is zero.
+func webSpacingPx(value string, fontPx float64) float64 {
+	value = strings.TrimSpace(value)
+	switch strings.ToLower(value) {
+	case "", "normal", "initial", "inherit", "unset", "revert":
+		return 0
+	}
+	if fontPx <= 0 {
+		fontPx = 16
+	}
+	px := webLength(value, fontPx)
+	if px < -fontPx {
+		px = -fontPx
+	}
+	if px > 64 {
+		px = 64
+	}
+	return px
+}
+
+// webShadowLength recognises a shadow offset without resolving it. `0px` has
+// to count as a length even though its value is zero: `box-shadow: 0 4px`
+// uses a zero horizontal offset, and treating the token as absent dropped the
+// whole shadow.
+func webShadowLength(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "0" {
+		return true
+	}
+	for _, function := range []string{"calc(", "min(", "max(", "clamp("} {
+		if strings.HasPrefix(v, function) {
+			return true
+		}
+	}
+	for _, unit := range []string{"px", "em", "rem", "ex", "ch", "vw", "vh", "vmin", "vmax", "%", "pt", "pc", "cm", "mm", "in"} {
+		if strings.HasSuffix(v, unit) {
+			return true
+		}
+	}
+	return false
+}
+
+// webShadowValue reads the first shadow of a text-shadow/box-shadow value.
+// The reader paints offsets and colour; blur and spread are not modelled, so
+// they are ignored rather than turning the shadow off.
+func webShadowValue(value string, fontPx float64) (x, y float64, color *sdl.Color, ok bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "none") {
+		return 0, 0, nil, false
+	}
+	fields := webCSSSpaceFields(value)
+	var lengths []float64
+	for _, field := range fields {
+		if c, valid := webColorInValue(field); valid {
+			copy := c
+			color = &copy
+			continue
+		}
+		if webShadowLength(field) {
+			lengths = append(lengths, webLength(field, fontPx))
+		}
+	}
+	if len(lengths) < 2 {
+		return 0, 0, color, false
+	}
+	return lengths[0], lengths[1], color, true
+}
+
 // webOpacityValue reads `opacity` (0..1, percentages accepted).
 func webOpacityValue(value string) (float64, bool) {
 	value = strings.TrimSpace(strings.ToLower(value))

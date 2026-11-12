@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,12 +250,14 @@ func statusGapNeighbours(left, right sdl.Rect) (forLeft, forRight sdl.Rect) {
 
 // growStatusButtonRects grows the brightness button's, the volume button's,
 // the Bluetooth button's and the Wi-Fi meter's hit areas once they are
-// measured (both headers call it after placing the cluster). They sit side by
-// side in that order, and each gap between two of them is split at its
-// middle; the rightmost one still stops short of the forecast and the clock on
-// its right (rightOfWiFi), and the leftmost grows into the empty space on its
-// left. Any of them may be missing: the bar drops parts when it is crowded.
-func growStatusButtonRects(barH int32, rightOfWiFi ...sdl.Rect) {
+// measured (both headers call it after placing the bar, through
+// headerGrowStatusButtons). They are taken left to right wherever the user
+// put them (Edit Home → Top bar), and each gap between two neighbouring ones
+// is split at its middle; every other control drawn in the bar (others: the
+// forecast, the clock, the bell, ...) is a neighbour none of them may grow
+// over, and the leftmost grows into the empty space on its left. Any of them
+// may be missing: the bar drops parts when it is crowded.
+func growStatusButtonRects(barH int32, others ...sdl.Rect) {
 	var live [4]*sdl.Rect
 	n := 0
 	for _, r := range []*sdl.Rect{&statusBrightnessRect, &statusVolumeRect, &statusBluetoothRect, &statusWiFiRect} {
@@ -263,31 +266,24 @@ func growStatusButtonRects(barH int32, rightOfWiFi ...sdl.Rect) {
 			n++
 		}
 	}
+	sort.Slice(live[:n], func(i, j int) bool { return live[i].X < live[j].X })
 	var drawn [4]sdl.Rect
 	for i := 0; i < n; i++ {
 		drawn[i] = *live[i]
 	}
+	nb := make([]sdl.Rect, 0, 2+len(others))
 	for i := 0; i < n; i++ {
-		var nb [6]sdl.Rect
-		k := 0
+		nb = nb[:0]
 		if i > 0 {
 			_, forRight := statusGapNeighbours(drawn[i-1], drawn[i])
-			nb[k] = forRight
-			k++
+			nb = append(nb, forRight)
 		}
 		if i+1 < n {
 			forLeft, _ := statusGapNeighbours(drawn[i], drawn[i+1])
-			nb[k] = forLeft
-			k++
-		} else {
-			for _, r := range rightOfWiFi {
-				if k < len(nb) {
-					nb[k] = r
-					k++
-				}
-			}
+			nb = append(nb, forLeft)
 		}
-		*live[i] = statusFingerRect(drawn[i], barH, nb[:k]...)
+		nb = append(nb, others...)
+		*live[i] = statusFingerRect(drawn[i], barH, nb...)
 	}
 }
 

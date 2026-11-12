@@ -309,7 +309,7 @@ func vkActionLabel() string {
 	switch vkTarget {
 	case vkTargetTerm:
 		return "Run"
-	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
 		return "Search"
 	case vkTargetWiFi, vkTargetNetplay:
 		return "Join"
@@ -873,6 +873,10 @@ func vkCurrentText() string {
 		return homeSearchText()
 	case tzPickerVKTarget:
 		return tzPicker.query
+	case steamSearchVKTarget:
+		return steamPanel.query
+	case fdroidSearchVKTarget:
+		return apkStoreUI.fdroidQuery
 	case alarmLabelVKTarget:
 		return alarmLabelBuffer
 	case vkTargetGroqKey:
@@ -937,6 +941,11 @@ func vkSetText(text string, config *Config) {
 	case tzPickerVKTarget:
 		// The zone list behind the keyboard narrows on every key.
 		tzPickerSetQuery(text)
+	case steamSearchVKTarget:
+		// So does the Steam library.
+		steamPanelSetQuery(text)
+	case fdroidSearchVKTarget:
+		apkStoreFDroidSetQuery(text)
 	case alarmLabelVKTarget:
 		// The editor takes the label on Done only (alarmLabelSubmit).
 		alarmLabelBuffer = text
@@ -1122,6 +1131,10 @@ func vkTitle() string {
 		return "SEARCH JUKAHUB"
 	case tzPickerVKTarget:
 		return "SEARCH TIME ZONES"
+	case steamSearchVKTarget:
+		return "SEARCH STEAM GAMES"
+	case fdroidSearchVKTarget:
+		return "SEARCH F-DROID"
 	case alarmLabelVKTarget:
 		return "ALARM LABEL"
 	case vkTargetDownloads:
@@ -1244,6 +1257,10 @@ func vkPlaceholder() string {
 		return "Apps, settings, files or the web"
 	case tzPickerVKTarget:
 		return "City or country: berlin"
+	case steamSearchVKTarget:
+		return "Game name: portal"
+	case fdroidSearchVKTarget:
+		return "App name or package"
 	case alarmLabelVKTarget:
 		return "Wake up, Medicine, Bus…"
 	case vkTargetDownloads:
@@ -1357,7 +1374,9 @@ func vkOpenName() {
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
-	vkNameBuffer = chatDisplayName()
+	// The shared name (Settings → Your name), empty when unset, so the field
+	// does not open holding the "You" placeholder.
+	vkNameBuffer = userName(appConfig)
 	virtualKeyboardActive = true
 	vkAnimStart = sdl.GetTicks64()
 	sdl.StartTextInput()
@@ -2347,6 +2366,12 @@ func vkSubmit(config *Config, askAI bool) {
 		// The zone list already narrowed while typing; Search drops the
 		// keyboard with the cursor on the first match.
 		vkCloseKeyboard()
+	case steamSearchVKTarget:
+		// The Steam list narrowed while typing too.
+		vkCloseKeyboard()
+	case fdroidSearchVKTarget:
+		vkCloseKeyboard()
+		apkStoreFDroidKeyboardDone()
 	case alarmLabelVKTarget:
 		// The text was read above; closing clears the buffer, and B leaves
 		// the editor's label as it was.
@@ -2376,10 +2401,15 @@ func vkSubmit(config *Config, askAI bool) {
 			ShowToast(fmt.Sprintf("Saved %s · %d tracks", pl.Name, len(pl.Tracks)), ToastKindSuccess)
 		}
 	case vkTargetName:
-		// Empty input resets to the default name ("You").
+		// The chat's name is the user's name (Settings → Your name, the Home
+		// greeting). Empty input clears it and the chat signs as "You".
 		name := setChatDisplayName(text)
 		vkCloseKeyboard()
-		showToast("Chat name set to "+name, ToastInfo())
+		if userName(appConfig) == "" {
+			showToast("Name cleared · Chat signs as You", ToastInfo())
+		} else {
+			showToast("Name set to "+name+" · Home and Settings use it too", ToastInfo())
+		}
 	case vkTargetParty:
 		vkCloseKeyboard()
 		partySubmitInput(text)

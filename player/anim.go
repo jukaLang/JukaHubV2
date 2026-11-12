@@ -36,9 +36,11 @@ var uiClockMS = func() uint64 { return sdl.GetTicks64() }
 // Entrance durations. They are short on purpose: on a handheld screen a panel
 // that takes longer than ~200ms to arrive reads as lag, not polish.
 const (
-	uiMenuEnterMS  = 170
-	uiPanelEnterMS = 190
-	uiFadeMS       = 120 // scrim fade, faster than the panel
+	uiMenuEnterMS    = 170
+	uiPanelEnterMS   = 190
+	uiFadeMS         = 120 // scrim fade, faster than the panel
+	uiFocusBounceMS  = 170
+	uiScrollBounceMS = 190
 )
 
 // uiKey is one keyframe.
@@ -76,10 +78,16 @@ func (k uiKeyframe) at(t float64) float64 {
 // The shared motions. Menus drop down from under the Apps pill; centred panels
 // rise a little; the fade lags the slide slightly so the motion reads first.
 var (
-	uiMenuDrop  = uiKeyframe{{At: 0, Value: -18}, {At: 0.62, Value: 3}, {At: 1, Value: 0}}
-	uiDropDown  = uiKeyframe{{At: 0, Value: -10}, {At: 0.62, Value: 2}, {At: 1, Value: 0}}
-	uiPanelRise = uiKeyframe{{At: 0, Value: 14}, {At: 0.62, Value: -2}, {At: 1, Value: 0}}
+	// Keep the panel's size fixed: a dropdown travels down a little past its
+	// resting point, while a rising sheet travels up past it, then returns.
+	uiMenuDrop  = uiKeyframe{{At: 0, Value: -18}, {At: 0.72, Value: 4}, {At: 1, Value: 0}}
+	uiDropDown  = uiKeyframe{{At: 0, Value: -10}, {At: 0.72, Value: 3}, {At: 1, Value: 0}}
+	uiPanelRise = uiKeyframe{{At: 0, Value: 14}, {At: 0.72, Value: -3}, {At: 1, Value: 0}}
 	uiFadeIn    = uiKeyframe{{At: 0, Value: 0}, {At: 0.45, Value: 0.75}, {At: 1, Value: 1}}
+	// A focused card grows one extra pixel before resting. The grid scroll
+	// crosses its destination by at most three pixels (capped by its caller).
+	uiFocusBounce  = uiKeyframe{{At: 0, Value: 0}, {At: 0.72, Value: 1.3}, {At: 1, Value: 1}}
+	uiScrollBounce = uiKeyframe{{At: 0, Value: 0}, {At: 0.78, Value: 1.02}, {At: 1, Value: 1}}
 )
 
 // uiEnter is one entrance animation's bookkeeping. The zero value is "already
@@ -162,7 +170,10 @@ func uiClamp01(v float64) float64 {
 // Carousel or Widgets Home that is still sliding counts too
 // (home_dynbody.go).
 func uiAnimating() bool {
-	return tb.enter.active || nc.enter.active || qs.enter.active || homeLayoutAnimating() || synthAnimating()
+	return tb.enter.active || nc.enter.active || qs.enter.active ||
+		(homeEdit.sheet.open && homeEdit.sheet.enter.active) ||
+		(homePowerConfirm.open && homePowerConfirm.enter.active) ||
+		homeLayoutAnimating() || synthAnimating()
 }
 
 // ── Layer compositing ─────────────────────────────────────────────────
@@ -305,32 +316,6 @@ func uiLayerRects(area sdl.Rect, offsetY int32) (sdl.Rect, sdl.Rect, bool) {
 	dst := src
 	dst.Y += offsetY
 	return src, dst, true
-}
-
-// ── Hover weight ──────────────────────────────────────────────────────
-
-// uiHover eases a 0..1 weight toward its target once per frame. It is used for
-// the small hover/focus scale lift on cards, so the growth settles instead of
-// snapping when the pointer or D-pad moves.
-type uiHover struct {
-	weight float64
-}
-
-// update steps the weight toward target. stepped=false snaps (reduced motion,
-// or the first frame of a new focus).
-func (h *uiHover) update(target float64, stepped bool) float64 {
-	target = uiClamp01(target)
-	if !stepped {
-		h.weight = target
-		return h.weight
-	}
-	// Frame-rate independent exponential settle: ~90% of the distance in 120ms
-	// at 60fps, without needing the frame delta.
-	h.weight += (target - h.weight) * 0.28
-	if math.Abs(target-h.weight) < 0.01 {
-		h.weight = target
-	}
-	return h.weight
 }
 
 // ── Click feedback ────────────────────────────────────────────────────

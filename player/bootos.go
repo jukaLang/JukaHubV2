@@ -518,6 +518,8 @@ type bootOSBeats struct {
 	glintMS    float64
 	trackFrom  float64
 	trackTo    float64
+	greetFrom  float64
+	greetTo    float64
 	bells      [4]float64
 }
 
@@ -539,6 +541,8 @@ var bootOSPowerBeats = bootOSBeats{
 	glintMS:    600,
 	trackFrom:  1500,
 	trackTo:    1900,
+	greetFrom:  900,
+	greetTo:    1500,
 	bells:      [4]float64{700, 820, 940, 1060},
 }
 
@@ -561,6 +565,8 @@ var bootOSQuickBeats = bootOSBeats{
 	glintMS:    450,
 	trackFrom:  900,
 	trackTo:    1200,
+	greetFrom:  120,
+	greetTo:    380,
 	bells:      [4]float64{300, 420, 540, 660},
 }
 
@@ -580,6 +586,7 @@ type bootOSFrame struct {
 	dawn      float64
 	emerge    float64
 	track     float64
+	greet     float64
 	blob      [4]float64
 }
 
@@ -619,6 +626,7 @@ func bootOSTimeline(ms float64, powerOn, motion, continuity bool) bootOSFrame {
 	f.halo = bootSmoothstep(b.haloFrom, b.haloPeak, ms) - 0.35*bootSmoothstep(b.haloPeak, b.haloPeak+800, ms)
 	f.dawn = bootSmoothstep(b.dawnFrom, b.dawnTo, ms)
 	f.track = bootSmoothstep(b.trackFrom, b.trackTo, ms)
+	f.greet = bootSmoothstep(b.greetFrom, b.greetTo, ms)
 	for i := range f.blob {
 		bell := b.bells[bootOSBlobBell[i]]
 		flash := (ms - (bell + 180)) / 120
@@ -835,6 +843,7 @@ type bootOSRun struct {
 	motion     bool
 	continuity bool
 	preview    bool
+	greet      string // "Welcome back, <name>", or "" (bootgreet.go)
 	deadlineMS float64
 	layout     bootLogoLayout
 	cx         float64
@@ -899,6 +908,7 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 		powerOn:  preview || bootOS.mode == bootOSModePowerOn,
 		motion:   bootOSMotion(config),
 		preview:  preview,
+		greet:    bootWelcomeText(bootGreetName(config)),
 	}
 	// The firmware's boot logo is only known to be on screen when a boot hook
 	// started this power-on and the logo is ours: then the boot starts from
@@ -1147,6 +1157,7 @@ func (r *bootOSRun) drawHold(ms float64) {
 	r.drawBackdrop(ms, &f)
 	r.drawLayer(&f, 1, 1)
 	r.drawWord(&f, 1)
+	r.drawGreeting(&f, 1)
 	r.drawProgress(f.track, f.dawn)
 }
 

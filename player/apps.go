@@ -54,6 +54,12 @@ const builtinActionPrefix = "action:"
 // testers looked for "the trophies app" among the apps and found nothing (it
 // is injected at startup, so no config lists it), and it is the screen people
 // open for fun.
+//
+// The Synth (synth.go) is the other: a music app people look for among the
+// apps, and it is injected in memory like the Trophies, so no config lists it.
+//
+// Steam (steam_ui.go) is a panel like PS Remote Play: the user's Steam library,
+// read from the Steam app on this PC and/or the signed-in account.
 var builtinApplets = []struct {
 	Name   string
 	Scene  string
@@ -62,6 +68,8 @@ var builtinApplets = []struct {
 	{"JukaLand", "JukaLand", ""},
 	{"Browser", "Browser", ""},
 	{"Trophies", playtimeSceneName, ""},
+	{"Synth", synthSceneName, ""},
+	{"Steam", "", "steam"},
 	{"PS Remote Play", "", "chiaki"},
 }
 
@@ -510,6 +518,10 @@ func builtinAppActionSupported(action string) bool {
 	switch action {
 	case "chiaki":
 		return psRemoteSupported()
+	case "steam":
+		// The library reads on every device; a handheld starts the games on
+		// a paired PC (steam.go).
+		return true
 	}
 	return false
 }
@@ -522,6 +534,8 @@ func launchBuiltinAppAction(action string) {
 	case "chiaki":
 		trophyEvent(tkAppLaunch)
 		openChiakiPanel()
+	case "steam":
+		openSteamPanel()
 	default:
 		logWarn("apps", "unknown built-in app action %q", action)
 	}

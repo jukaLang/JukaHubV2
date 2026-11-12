@@ -1,6 +1,10 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"strings"
 	"testing"
 )
@@ -95,6 +99,569 @@ func TestWebFunctionalPseudoClassMatching(t *testing.T) {
 				t.Fatalf("colour %+v / has=%v, want red=%v", style.Color, style.HasColor, tc.red)
 			}
 		})
+	}
+}
+
+func TestWebStructuralPseudoClassMatching(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		text   string
+		red    bool
+	}{
+		{"first child hit among text and comments", `<style>.item:first-child{color:#cc0000}</style><div>text<!--c--><span class="item">Hit</span><span>Second</span></div>`, "Hit", true},
+		{"first child miss", `<style>.item:first-child{color:#cc0000}</style><div><span>First</span><span class="item">Miss</span></div>`, "Miss", false},
+		{"last child hit", `<style>.item:last-child{color:#cc0000}</style><div><span>First</span><span class="item">Hit</span></div>`, "Hit", true},
+		{"last child miss", `<style>.item:last-child{color:#cc0000}</style><div><span class="item">Miss</span><span>Last</span></div>`, "Miss", false},
+		{"nth child hit", `<style>.item:nth-child(2){color:#cc0000}</style><ul><li>One</li><li class="item">Hit</li><li>Three</li></ul>`, "Hit", true},
+		{"nth child miss", `<style>.item:nth-child(2){color:#cc0000}</style><ul><li class="item">Miss</li><li>Two</li></ul>`, "Miss", false},
+		{"nth child odd", `<style>.item:nth-child(odd){color:#cc0000}</style><div><i>One</i><i>Two</i><i class="item">Hit</i></div>`, "Hit", true},
+		{"nth child even", `<style>.item:nth-child(even){color:#cc0000}</style><div><i>One</i><i class="item">Hit</i><i>Three</i></div>`, "Hit", true},
+		{"nth child 2n+1", `<style>.item:nth-child(2n+1){color:#cc0000}</style><div><i>One</i><i>Two</i><i class="item">Hit</i></div>`, "Hit", true},
+		{"nth child negative range", `<style>.item:nth-child(-n+2){color:#cc0000}</style><div><i>One</i><i class="item">Hit</i><i>Three</i></div>`, "Hit", true},
+		{"nth child negative range miss", `<style>.item:nth-child(-n+2){color:#cc0000}</style><div><i>One</i><i>Two</i><i class="item">Miss</i></div>`, "Miss", false},
+		{"nth child inside has", `<style>.card:has(> .item:nth-child(2)){color:#cc0000}</style><div class="card"><span>Hit</span><i class="item"></i></div>`, "Hit", true},
+		{"first child with explicit head", `<html><head><style>.item:first-child{color:#cc0000}</style></head><body><div><span class="item">Hit</span><span>Second</span></div></body></html>`, "Hit", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := parseWebPage(tc.source, "", "https://example.com/")
+			style, ok := webTestStyleForText(doc, tc.text)
+			if !ok {
+				t.Fatalf("text %q was not drawn", tc.text)
+			}
+			gotRed := style.HasColor && style.Color.R == 0xcc && style.Color.G == 0 && style.Color.B == 0
+			if gotRed != tc.red {
+				t.Fatalf("colour %+v / has=%v, want red=%v", style.Color, style.HasColor, tc.red)
+			}
+		})
+	}
+}
+
+func TestWebGeneratedContentPseudoElements(t *testing.T) {
+	source := `<style>` +
+		`.price::before{content:"$"}` +
+		`.price::after{content:" USD"}` +
+		`.price{color:#123456}` +
+		`.badge::before{content:attr(data-label) ": "}` +
+		`.badge{color:#654321}` +
+		`.skip::before{content:"SKIP"}` +
+		`.skip::before{content:none}` +
+		`.old:before{content:"[old]"}` +
+		`.escaped::before{content:"\2192  Arrow"}` +
+		`.hidden::after{content:"HIDDEN";display:none}` +
+		`li::marker{content:"* "}` +
+		`.red::before{content:"!";color:#cc0000}` +
+		`</style>` +
+		`<p class="price">9.99</p>` +
+		`<p class="badge" data-label="New &amp; Hot">Item</p>` +
+		`<p class="skip">Plain</p>` +
+		`<p class="old">Old</p>` +
+		`<p class="escaped">Arrow</p>` +
+		`<p class="hidden">Tail</p>` +
+		`<ul><li>First</li><li>Second</li></ul>` +
+		`<p class="red">Text</p>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	var all strings.Builder
+	for _, block := range doc.Blocks {
+		all.WriteString(block.Bullet)
+		for _, run := range block.Runs {
+			all.WriteString(run.Text)
+		}
+	}
+	got := all.String()
+	for _, want := range []string{"$9.99 USD", "New & Hot: Item", "[old]Old", "→ Arrow"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated text %q missing from %q", want, got)
+		}
+	}
+	if strings.Contains(got, "SKIP") {
+		t.Fatalf("content:none still generated text: %q", got)
+	}
+	if strings.Contains(got, "HIDDEN") {
+		t.Fatalf("a hidden pseudo-element generated text: %q", got)
+	}
+	if strings.Count(got, "* ") < 2 {
+		t.Fatalf("::marker content did not replace both bullets: %q", got)
+	}
+	// The pseudo-element's colour must reach its own text and not the
+	// originating element's text.
+	mark, ok := webTestStyleForText(doc, "!")
+	if !ok || !mark.HasColor || mark.Color.R != 0xcc || mark.Color.G != 0 || mark.Color.B != 0 {
+		t.Fatalf("::before did not take its own colour: %+v", mark.Color)
+	}
+	text, ok := webTestStyleForText(doc, "Text")
+	if !ok || text.HasColor && text.Color.R == 0xcc && text.Color.G == 0 && text.Color.B == 0 {
+		t.Fatalf("::before colour leaked onto the element: %+v", text.Color)
+	}
+}
+
+func TestWebGeneratedContentParsing(t *testing.T) {
+	if sel, _ := webCompileSelector(".x::before"); sel.never || sel.pseudo != webPseudoElemBefore {
+		t.Fatalf("::before was not recorded: never=%v pseudo=%d", sel.never, sel.pseudo)
+	}
+	if sel, _ := webCompileSelector(".x:after"); sel.never || sel.pseudo != webPseudoElemAfter {
+		t.Fatalf("the single-colon :after spelling was not recorded: never=%v pseudo=%d", sel.never, sel.pseudo)
+	}
+	if sel, _ := webCompileSelector("li::marker"); sel.never || sel.pseudo != webPseudoElemMarker {
+		t.Fatalf("::marker was not recorded: never=%v pseudo=%d", sel.never, sel.pseudo)
+	}
+	for _, text := range []string{".x::first-line", ".x::selection", ".x::before::after", ".x:not(::before)"} {
+		if sel, _ := webCompileSelector(text); !sel.never {
+			t.Fatalf("%q should not match an element", text)
+		}
+	}
+	if got, ok := webGeneratedContent(`"A" attr(data-x) "B"`, `p data-x="Y"`, nil); !ok || got != "AYB" {
+		t.Fatalf("content strings and attr() resolved to %q, ok=%v", got, ok)
+	}
+	if got, ok := webGeneratedContent(`none`, "", nil); !ok || got != "" {
+		t.Fatalf("content:none resolved to %q, ok=%v", got, ok)
+	}
+	if _, ok := webGeneratedContent(`normal`, "", nil); ok {
+		t.Fatal("content:normal should ask for the default marker")
+	}
+}
+
+func TestWebCSSNestedCountersAndMarkerStyle(t *testing.T) {
+	source := `<style>` +
+		`ol{counter-reset:section;list-style:none}` +
+		`li{counter-increment:section}` +
+		`li::before{content:counters(section,".") " "}` +
+		`li::marker{content:counter(section,upper-roman) ". ";color:#cc0000;font-size:24px}` +
+		`ol::after{content:" [" counter(section) "]"}` +
+		`</style>` +
+		`<ol><li>One</li><li>Two<ol><li>Nested</li><li>Deep</li></ol></li><li>Three</li></ol>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	var all strings.Builder
+	var markerSeen bool
+	var markerStyle webStyle
+	for _, block := range doc.Blocks {
+		all.WriteString(block.Bullet)
+		all.WriteString(" ")
+		for _, run := range block.Runs {
+			all.WriteString(run.Text)
+		}
+		all.WriteString("\n")
+		if block.Bullet != "" && block.HasMarkerStyle {
+			markerSeen = true
+			markerStyle = block.MarkerStyle
+		}
+	}
+	got := all.String()
+	for _, want := range []string{"1 One", "2 Two", "2.1 Nested", "2.2 Deep", "3 Three", "[3]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("nested counter output %q missing from %q", want, got)
+		}
+	}
+	if !markerSeen {
+		t.Fatalf("::marker style was not attached to a list block: %q", got)
+	}
+	if !markerStyle.HasColor || markerStyle.Color.R != 0xcc || markerStyle.Color.G != 0 || markerStyle.Color.B != 0 {
+		t.Fatalf("::marker colour was not resolved: %+v", markerStyle.Color)
+	}
+	if markerStyle.FontPx != 24 {
+		t.Fatalf("::marker font-size was not resolved: %v", markerStyle.FontPx)
+	}
+}
+
+func TestWebCSSMarkerDefaultBulletStyle(t *testing.T) {
+	source := `<style>li::marker{color:#cc0000;font-size:20px}</style><ul><li>Item</li></ul>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	for _, block := range doc.Blocks {
+		if block.Bullet == "" {
+			continue
+		}
+		if !block.HasMarkerStyle || block.MarkerStyle.FontPx != 20 || block.MarkerStyle.Color.R != 0xcc {
+			t.Fatalf("default bullet did not take ::marker style: %+v", block.MarkerStyle)
+		}
+		return
+	}
+	t.Fatal("the list bullet was not laid out")
+}
+
+func TestWebCSSContentCounterStyles(t *testing.T) {
+	counters := map[string][]int{"n": {3}}
+	cases := map[string]string{
+		`counter(n)`:                       "3",
+		`counter(n, decimal-leading-zero)`: "03",
+		`counter(n, lower-alpha)`:          "c",
+		`counter(n, upper-alpha)`:          "C",
+		`counter(n, lower-roman)`:          "iii",
+		`counter(n, upper-roman)`:          "III",
+	}
+	for raw, want := range cases {
+		if got, ok := webGeneratedContent(raw, "", counters); !ok || got != want {
+			t.Fatalf("%s resolved to %q, ok=%v, want %q", raw, got, ok, want)
+		}
+	}
+}
+
+func TestWebCSSLetterAndWordSpacingChangeLayout(t *testing.T) {
+	legibleTestInitFonts(t)
+	findX := func(layout *webLayout, prefix string) int32 {
+		t.Helper()
+		for _, row := range layout.Rows {
+			for _, run := range row.Runs {
+				if strings.HasPrefix(run.Text, prefix) {
+					return run.X
+				}
+			}
+		}
+		t.Fatalf("no run starts with %q", prefix)
+		return 0
+	}
+	baseLayout := parseWebPage(`<p><span>AB</span> <span>CD</span></p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	spacedLayout := parseWebPage(`<style>p{letter-spacing:10px;word-spacing:20px}</style><p><span>AB</span> <span>CD</span></p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	baseA, baseC := findX(baseLayout, "A"), findX(baseLayout, "C")
+	spacedA, spacedC := findX(spacedLayout, "A"), findX(spacedLayout, "C")
+	if spacedC-spacedA <= baseC-baseA+15 {
+		t.Fatalf("spacing did not advance the second word: base %d->%d, spaced %d->%d", baseA, baseC, spacedA, spacedC)
+	}
+	style, ok := webTestStyleForText(parseWebPage(`<style>p{letter-spacing:10px;word-spacing:20px}</style><p>Styled</p>`, "", "https://example.com/"), "Styled")
+	if !ok || style.LetterSpacing != 10 || style.WordSpacing != 20 {
+		t.Fatalf("spacing was not parsed into the run style: %+v", style)
+	}
+}
+
+func TestWebCSSOutlineAndDecorationColor(t *testing.T) {
+	legibleTestInitFonts(t)
+	doc := parseWebPage(`<style>.box{outline:3px solid #cc0000}</style><div class="box">Boxed</div>`, "", "https://example.com/")
+	var boxed bool
+	for _, block := range doc.Blocks {
+		for _, run := range block.Runs {
+			if run.Text == "Boxed" {
+				boxed = true
+				if !block.Outline || block.BoxBorder || block.BorderWidth != 3 || !block.HasBorderColor || block.BorderColor.R != 0xcc {
+					t.Fatalf("outline did not paint a box edge: %+v", block)
+				}
+			}
+		}
+	}
+	if !boxed {
+		t.Fatal("the outlined box was not laid out")
+	}
+	doc = parseWebPage(`<style>a{text-decoration:underline;text-decoration-color:#cc0000}</style><a href="#x">Link</a>`, "", "https://example.com/")
+	style, ok := webTestStyleForText(doc, "Link")
+	if !ok || !style.HasDecorationColor || style.DecorationColor.R != 0xcc || !style.Underline {
+		t.Fatalf("text-decoration-color was not resolved: %+v", style)
+	}
+	layout := doc.computeLayout(&Config{}, Element{Font: "body"}, 800)
+	for _, row := range layout.Rows {
+		for _, run := range row.Runs {
+			if run.Text == "Link" {
+				if !run.HasDecorationColor || run.DecorationColor.R != 0xcc {
+					t.Fatalf("decoration colour was not carried into paint state: %+v", run)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("the decorated link was not laid out")
+}
+
+func TestWebCSSTextShadowRendersOffsetAndColor(t *testing.T) {
+	doc := parseWebPage(`<style>.s{text-shadow:2px 3px #cc0000}</style><p class="s">Shadow</p>`, "", "https://example.com/")
+	style, ok := webTestStyleForText(doc, "Shadow")
+	if !ok || !style.HasTextShadow || style.TextShadowX != 2 || style.TextShadowY != 3 || !style.HasTextShadowColor || style.TextShadowColor.R != 0xcc {
+		t.Fatalf("text-shadow was not resolved: %+v", style)
+	}
+	layout := doc.computeLayout(&Config{}, Element{Font: "body"}, 800)
+	for _, row := range layout.Rows {
+		for _, run := range row.Runs {
+			if run.Text != "Shadow" {
+				continue
+			}
+			if !run.HasShadow || run.ShadowColor.R != 0xcc {
+				t.Fatalf("text-shadow was not carried into paint state: %+v", run)
+			}
+			return
+		}
+	}
+	t.Fatal("the shadowed text was not laid out")
+}
+
+func TestWebCSSCounterSetChangesRenderedValue(t *testing.T) {
+	source := `<style>` +
+		`ol{counter-reset:n;list-style:none}` +
+		`li{counter-increment:n}` +
+		`li::before{content:counter(n) " "}` +
+		`.set{counter-set:n 10}` +
+		`</style><ol><li>One</li><li class="set">Ten</li><li>Eleven</li></ol>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	var all strings.Builder
+	for _, block := range doc.Blocks {
+		for _, run := range block.Runs {
+			all.WriteString(run.Text)
+		}
+	}
+	got := all.String()
+	for _, want := range []string{"1 One", "10 Ten", "11 Eleven"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("counter-set output %q missing from %q", want, got)
+		}
+	}
+}
+
+func TestWebCSSBoxShadowPaintsOffsetRect(t *testing.T) {
+	if x, y, _, ok := webShadowValue("0px 4px #cc0000", 16); !ok || x != 0 || y != 4 {
+		t.Fatalf("zero horizontal offset dropped the shadow: x=%v y=%v ok=%v", x, y, ok)
+	}
+	doc := parseWebPage(`<style>.card{box-shadow:4px 6px #cc0000}</style><div class="card">Card</div>`, "", "https://example.com/")
+	style, ok := webTestStyleForText(doc, "Card")
+	if !ok || !style.HasBoxShadow || style.BoxShadowX != 4 || style.BoxShadowY != 6 || !style.HasBoxShadowColor || style.BoxShadowColor.R != 0xcc {
+		t.Fatalf("box-shadow was not resolved: %+v", style)
+	}
+	layout := doc.computeLayout(&Config{}, Element{Font: "body"}, 800)
+	for _, rect := range layout.Rects {
+		if rect.Color.R == 0xcc && rect.Color.G == 0 && rect.Color.B == 0 && rect.Rect.W > 0 && rect.Rect.H > 0 {
+			return
+		}
+	}
+	t.Fatal("box-shadow did not produce a painted rectangle")
+}
+
+func TestWebCSSUnsupportedConstructsAreDocumented(t *testing.T) {
+	data, err := os.ReadFile("CSS_SUPPORT.md")
+	if err != nil {
+		t.Fatalf("CSS support contract is missing: %v", err)
+	}
+	doc := string(data)
+	for _, construct := range []string{
+		"font-family", "Percentage heights", "float: inline-start",
+		"aspect-ratio on an ordinary block",
+		"display: table", "block/inline conversion", "Width/min-width/max-width on a flex/grid container",
+		"margin: auto",
+		"position: sticky",
+		"text-overflow", "transform",
+		"transition", "animation", "filter", "clip-path", "grid-template-rows",
+		"grid-row", "grid-column", "grid-area", "white-space",
+		"table-layout", "border-collapse", "list-style-image", "list-style-position",
+		"::first-line", "::first-letter", "::selection", "::placeholder", "::backdrop",
+		"content: url", "@font-face", "@keyframes", "@page", "@layer", "@import",
+		"text-align: justify",
+	} {
+		if !strings.Contains(doc, construct) {
+			t.Fatalf("unsupported CSS %q is not documented in CSS_SUPPORT.md", construct)
+		}
+	}
+}
+
+// TestWebCSSAcceptedPropertiesHaveCoverage is the audit's tripwire. It reads
+// the cascade's own decls[...] lookups from webpage.go and fails when a new
+// property is accepted without being classified here. Every classified name
+// is rendered by a TestWeb test or listed in CSS_SUPPORT.md's unsupported
+// table (and the guard above asserts that table stays present).
+func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
+	data, err := os.ReadFile("webpage.go")
+	if err != nil {
+		t.Fatalf("cascade source is missing: %v", err)
+	}
+	classified := map[string]bool{}
+	for _, name := range []string{
+		"align-items", "align-self", "aspect-ratio", "background", "background-color",
+		"background-image", "background-size", "background-position", "background-repeat", "border", "border-bottom", "border-bottom-left-radius",
+		"border-bottom-right-radius", "border-bottom-width", "border-color", "border-left",
+		"border-left-width", "border-radius", "border-right", "border-right-width",
+		"border-style", "border-top", "border-top-left-radius", "border-top-right-radius", "border-top-width",
+		"border-width", "bottom", "box-shadow", "box-sizing", "clear", "color", "column-gap",
+		"container", "container-name", "container-type", "content", "counter-increment",
+		"counter-reset", "counter-set", "display", "flex",
+		"flex-basis", "flex-direction", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-size",
+		"font-style", "font-weight", "gap", "grid-template-columns", "height", "inset",
+		"justify-content", "left", "letter-spacing", "line-height", "list-style", "list-style-type", "margin", "margin-block",
+		"margin-block-end", "margin-block-start", "margin-bottom", "margin-inline",
+		"margin-inline-end", "margin-inline-start", "margin-left", "margin-right", "margin-top",
+		"max-height", "max-width", "min-height", "min-width", "object-fit", "object-position", "opacity", "order", "outline",
+		"outline-color", "outline-offset", "outline-width", "padding", "padding-block", "padding-block-end",
+		"padding-block-start", "padding-bottom", "padding-inline", "padding-inline-end",
+		"padding-inline-start", "padding-left", "padding-right", "padding-top", "place-items",
+		"position", "right", "row-gap", "text-align", "text-decoration", "text-decoration-color", "text-decoration-thickness",
+		"text-decoration-line", "text-decoration-style", "text-indent", "text-shadow", "text-transform", "top",
+		"overflow", "overflow-x", "overflow-y", "vertical-align", "visibility", "white-space", "width", "word-spacing", "z-index",
+	} {
+		classified[name] = true
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "webpage.go", data, 0)
+	if err != nil {
+		t.Fatalf("cascade source does not parse: %v", err)
+	}
+	addKey := func(lit *ast.BasicLit) {
+		if lit == nil || lit.Kind != token.STRING {
+			return
+		}
+		name := strings.Trim(lit.Value, "`\"")
+		if !classified[name] {
+			t.Fatalf("accepted CSS property %q is not classified as rendered or documented-unsupported", name)
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || (fn.Name.Name != "applyWebDecls" && fn.Name.Name != "applyWebLayoutDecls") {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.IndexExpr:
+				if id, ok := node.X.(*ast.Ident); ok && id.Name == "decls" {
+					if lit, ok := node.Index.(*ast.BasicLit); ok {
+						addKey(lit)
+					}
+				}
+			case *ast.RangeStmt:
+				if cl, ok := node.X.(*ast.CompositeLit); ok {
+					for _, elt := range cl.Elts {
+						switch e := elt.(type) {
+						case *ast.BasicLit:
+							addKey(e)
+						case *ast.KeyValueExpr:
+							if lit, ok := e.Key.(*ast.BasicLit); ok {
+								addKey(lit)
+							}
+						case *ast.CompositeLit:
+							for _, inner := range e.Elts {
+								if lit, ok := inner.(*ast.BasicLit); ok {
+									addKey(lit)
+								}
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+		return false
+	})
+}
+
+func TestWebCSSMaxWidthWrapsTextAndNarrowsBox(t *testing.T) {
+	legibleTestInitFonts(t)
+	text := "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron"
+	base := parseWebPage(`<style>p{background:#eef}</style><p>`+text+`</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	narrowDoc := parseWebPage(`<style>p{max-width:180px;background:#eef}</style><p>`+text+`</p>`, "", "https://example.com/")
+	narrow := narrowDoc.computeLayout(&Config{}, Element{Font: "body"}, 800)
+	countRows := func(layout *webLayout) int {
+		n := 0
+		for _, row := range layout.Rows {
+			if len(row.Runs) > 0 {
+				n++
+			}
+		}
+		return n
+	}
+	baseRows, narrowRows := countRows(base), countRows(narrow)
+	if narrowRows < baseRows+2 {
+		t.Fatalf("max-width did not force extra wrapped lines: base %d rows, narrow %d rows", baseRows, narrowRows)
+	}
+	boxWidth := func(layout *webLayout) int32 {
+		for _, rect := range layout.Rects {
+			if rect.Color.R == 0xee && rect.Color.G == 0xee && rect.Color.B == 0xff && rect.Rect.W > 0 {
+				return rect.Rect.W
+			}
+		}
+		return 0
+	}
+	baseBox, narrowBox := boxWidth(base), boxWidth(narrow)
+	if baseBox == 0 || narrowBox == 0 {
+		t.Fatal("the max-width paragraph painted no background box")
+	}
+	if narrowBox*2 >= baseBox {
+		t.Fatalf("max-width did not narrow the box: full=%d narrow=%d", baseBox, narrowBox)
+	}
+}
+
+func TestWebCSSFloatDisplacesSiblingAndClearMovesItDown(t *testing.T) {
+	legibleTestInitFonts(t)
+	base := parseWebPage(`<div>Float</div><p>Following</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	floated := parseWebPage(`<style>.f{float:left;width:120px}</style><div class="f">Float</div><p>Following</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	_, baseX := webTestTextPosition(t, base, "Following")
+	_, floatX := webTestTextPosition(t, floated, "Following")
+	if floatX <= baseX+60 {
+		t.Fatalf("float did not displace the following sibling: base x=%d, floated x=%d", baseX, floatX)
+	}
+	if len(floated.Floats) != 1 || len(floated.Floats[0].Rows) == 0 {
+		t.Fatalf("float was not laid out as its own box: %+v", floated.Floats)
+	}
+
+	moving := `<style>.f{float:left;width:120px;min-height:160px}</style>` +
+		`<div class="f">Float</div><p>Following</p><p class="after">After</p>`
+	clearSource := `<style>.f{float:left;width:120px;min-height:160px}.after{clear:both}</style>` +
+		`<div class="f">Float</div><p>Following</p><p class="after">After</p>`
+	movingLayout := parseWebPage(moving, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	clearLayout := parseWebPage(clearSource, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	freeRow, _ := webTestTextPosition(t, movingLayout, "After")
+	clearRow, _ := webTestTextPosition(t, clearLayout, "After")
+	if clearRow < freeRow+4 {
+		t.Fatalf("clear did not move the sibling below the float: free row %d, clear row %d", freeRow, clearRow)
+	}
+}
+
+func TestWebCSSMinMaxSizeBoxSizingAndPercentage(t *testing.T) {
+	legibleTestInitFonts(t)
+	boxWidth := func(layout *webLayout) int32 {
+		t.Helper()
+		for _, rect := range layout.Rects {
+			if rect.Color.R == 0xee && rect.Color.G == 0xee && rect.Color.B == 0xff && rect.Rect.W > 0 {
+				return rect.Rect.W
+			}
+		}
+		t.Fatal("no background box was painted")
+		return 0
+	}
+	contentDoc := parseWebPage(`<style>p{width:240px;padding:20px;box-sizing:content-box;background:#eef}</style><p>Body</p>`, "", "https://example.com/")
+	contentBox := contentDoc.computeLayout(&Config{}, Element{Font: "body"}, 800)
+	borderBox := parseWebPage(`<style>p{width:240px;padding:20px;box-sizing:border-box;background:#eef}</style><p>Body</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	cw, bw := boxWidth(contentBox), boxWidth(borderBox)
+	if cw-bw < 20 {
+		t.Fatalf("box-sizing did not remove the horizontal padding from the width: content-box=%d border-box=%d", cw, bw)
+	}
+
+	percent := parseWebPage(`<style>p{width:50%;background:#eef}</style><p>Body</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if pw := boxWidth(percent); pw <= 0 || pw >= boxWidth(parseWebPage(`<style>p{background:#eef}</style><p>Body</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)) {
+		t.Fatalf("width:50%% did not narrow the box: %d", pw)
+	}
+
+	contradictory := parseWebPage(`<style>p{min-width:500px;max-width:100px;background:#eef}</style><p>Body</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	maxOnly := parseWebPage(`<style>p{max-width:100px;background:#eef}</style><p>Body</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if got, small := boxWidth(contradictory), boxWidth(maxOnly); got <= small+100 {
+		t.Fatalf("min-width did not win over a smaller max-width: min+max=%d max-only=%d", got, small)
+	}
+}
+
+func TestWebCSSMinMaxHeightChangesRows(t *testing.T) {
+	legibleTestInitFonts(t)
+	maxLayout := parseWebPage(`<style>p{max-height:60px}</style><p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	maxRows := int32((60 + maxLayout.RowH - 1) / maxLayout.RowH)
+	if int32(len(maxLayout.Rows)) > maxRows {
+		t.Fatalf("max-height kept %d rows, want at most %d", len(maxLayout.Rows), maxRows)
+	}
+	minLayout := parseWebPage(`<style>p{min-height:120px}</style><p>Tiny</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if height := int32(len(minLayout.Rows)) * minLayout.RowH; height < 120 {
+		t.Fatalf("min-height produced only %d px", height)
+	}
+	heightLayout := parseWebPage(`<style>p{height:120px}</style><p>Tiny</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if height := int32(len(heightLayout.Rows)) * heightLayout.RowH; height < 120 {
+		t.Fatalf("height produced only %d px", height)
+	}
+}
+
+func TestWebCSSRelativePositionOffsetsWithoutMovingFlow(t *testing.T) {
+	legibleTestInitFonts(t)
+	source := `<p>Before</p><p class="move">Move</p><p>After</p>`
+	base := parseWebPage(source, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	rel := parseWebPage(`<style>.move{position:relative;left:24px;top:8px}</style>`+source, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	baseRow, baseX := webTestTextPosition(t, base, "Move")
+	relRow, relX := webTestTextPosition(t, rel, "Move")
+	if relX <= baseX+10 {
+		t.Fatalf("relative left did not move the run: base x=%d, moved x=%d", baseX, relX)
+	}
+	if rel.Rows[relRow].Y <= base.Rows[baseRow].Y+3 {
+		t.Fatalf("relative top did not move the row: base y=%d, moved y=%d", base.Rows[baseRow].Y, rel.Rows[relRow].Y)
+	}
+	baseAfterRow, baseAfterX := webTestTextPosition(t, base, "After")
+	relAfterRow, relAfterX := webTestTextPosition(t, rel, "After")
+	if relAfterRow != baseAfterRow || relAfterX != baseAfterX {
+		t.Fatalf("relative position changed the following flow: base (%d,%d), relative (%d,%d)", baseAfterRow, baseAfterX, relAfterRow, relAfterX)
 	}
 }
 
@@ -214,8 +781,10 @@ func TestWebSupportsConditions(t *testing.T) {
 		{"@supports (display: -webkit-made-up)", false},
 		{"@supports (display: -moz-flex)", false},
 		{"@supports (display: -ms-flexbox)", false},
-		{"@supports (position: -webkit-sticky)", true},
+		{"@supports (position: -webkit-sticky)", false},
+		{"@supports (position: -moz-sticky)", false},
 		{"@supports (position: -webkit-absolute)", false},
+		{"@supports (position: sticky)", true},
 		{"@supports (background-image: -webkit-linear-gradient(red, blue))", true},
 		{"@supports (background-image: -webkit-repeating-linear-gradient(red, blue))", true},
 		{"@supports (background-image: -webkit-radial-gradient(red, blue))", true},
@@ -226,7 +795,7 @@ func TestWebSupportsConditions(t *testing.T) {
 		{"@supports (background-image: -webkit-linear-gradient(nope))", false},
 		{"@supports (background-image: -webkit-image-set(url(a.png) 1x))", false},
 		{"@supports (background-image: radial-gradient(red, blue))", true},
-		{"@supports (background-image: conic-gradient(red, blue))", true},
+		{"@supports (background-image: conic-gradient(red, blue))", false},
 		{"@supports (-webkit-background-clip: text)", true},
 		{"@supports (background-clip: text)", true},
 		{"@supports (-webkit-background-clip: made-up)", false},
@@ -286,7 +855,7 @@ func TestWebCSSSupportsKeepsVendorPrefixedBlock(t *testing.T) {
 	t.Fatal("the styled notice was not drawn")
 }
 
-func TestWebPrefixedDisplayAndPositionValuesApply(t *testing.T) {
+func TestWebPrefixedDisplayValuesApply(t *testing.T) {
 	for value, want := range map[string]int{
 		"-webkit-flex":        webDisplayFlex,
 		"-webkit-inline-flex": webDisplayFlex,
@@ -298,11 +867,6 @@ func TestWebPrefixedDisplayAndPositionValuesApply(t *testing.T) {
 		if style.Display != want {
 			t.Errorf("display:%s produced %d, want %d", value, style.Display, want)
 		}
-	}
-	style := webBaseStyle()
-	applyWebDecls(&style, map[string]string{"position": "-webkit-sticky"})
-	if style.Position != webPositionAbsolute {
-		t.Errorf("position:-webkit-sticky produced %d, want absolute-compatible %d", style.Position, webPositionAbsolute)
 	}
 }
 

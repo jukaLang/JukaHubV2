@@ -769,6 +769,12 @@ func boolString(b bool) string {
 // of times per startup.
 var fontCache = make(map[string]*ttf.Font)
 
+// fontStyleCache holds the same faces opened with a synthetic style flag. It
+// is separate from fontCache because SDL_ttf's style belongs to the font
+// object: mutating the shared regular face would slant every paragraph on the
+// page instead of the one run that asked for italic.
+var fontStyleCache = make(map[string]*ttf.Font)
+
 func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 	// Resolve the path and size for this logical font name. A role may name a
 	// file, but only an Inter one is honoured (homeUIFontPath): the UI is drawn
@@ -817,6 +823,38 @@ func loadRoleFont(config *Config, fontName string, size int) *ttf.Font {
 		}
 	}
 	return loadCachedFont(homeUIFontForRole(fontPath), size)
+}
+
+// getFontSizedStyled opens a logical face with a synthetic SDL_ttf style
+// (italic/oblique for the reader), cached separately from the regular face.
+func getFontSizedStyled(config *Config, fontName string, size, style int) *ttf.Font {
+	fontPath := homeUIFontFile
+	for k, p := range config.Variables.Fonts {
+		if strings.EqualFold(k, fontName) {
+			fontPath = homeUIFontPath(p)
+			break
+		}
+	}
+	fontPath = homeUIFontForRole(fontPath)
+	key := fontPath + "\n" + strconv.Itoa(size) + "\n" + strconv.Itoa(style)
+	if font, ok := fontStyleCache[key]; ok {
+		return font
+	}
+	font, err := openHomeUIFont(fontPath, size)
+	opened := fontPath
+	if err != nil && fontPath != homeUIFontFile {
+		if f, e2 := openUIFontFile(homeUIFontFile, size); e2 == nil {
+			font, err, opened = f, nil, homeUIFontFile
+		}
+	}
+	if err != nil {
+		logWarn("core", "Error loading styled font %s: %v", fontPath, err)
+		return nil
+	}
+	font.SetStyle(style)
+	registerFontPath(font, opened)
+	fontStyleCache[key] = font
+	return font
 }
 
 // fontRoleSize is the size a logical font role is authored at on this canvas,
@@ -4388,7 +4426,8 @@ func inputVariableValue(config *Config, variable string) string {
 	case "weatherUnit":
 		return config.Variables.WeatherUnit
 	case "tspUsername":
-		return config.Variables.TSPUsername
+		// The name shared with the chat (chat.go userName).
+		return userName(config)
 	case "playbackResolution":
 		return config.Variables.PlaybackResolution
 	case "subtitleLanguage":
@@ -6545,8 +6584,16 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		textBrowserScrollVelocity = 0
 		textBrowserScrollCooldown = 0
 	case "cache_clear":
-		if db, err := openSharedCache("jukahub.cache"); err == nil {
-			cacheClear(db)
+		// Say what happened either way: it used to report success when the
+		// clear failed and stay silent when the cache could not be opened.
+		db, err := openSharedCache("jukahub.cache")
+		if err == nil {
+			err = cacheClear(db)
+		}
+		if err != nil {
+			logWarn("cache", "clear: %v", err)
+			showToast("Could not clear the cache", ToastWarn())
+		} else {
 			showToast("Cache cleared", ToastInfo())
 		}
 	case "tools_open":

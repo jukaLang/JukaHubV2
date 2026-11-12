@@ -485,6 +485,15 @@ func (f *HomeFocusController) Restore() HomeFocusID {
 
 // neighbor returns the neighbor HomeFocusID in the given direction.
 func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection) HomeFocusID {
+	// The top bar's controls stand in the user's order (Edit Home → Top bar,
+	// header_arrange.go), so Left, Right and Down from one of them follow
+	// where they are drawn; the graph below is the shipped order's answer
+	// for when that is not known.
+	if direction != FocusUp {
+		if next, ok := homeHeaderNeighbor(f, id, direction); ok {
+			return next
+		}
+	}
 	// The pairing code is entered from the PS5 launcher on its left (Right)
 	// and from the bell above it (Down), but only while it is drawn: a hidden
 	// code is not a stop on the way, so those presses keep the targets they

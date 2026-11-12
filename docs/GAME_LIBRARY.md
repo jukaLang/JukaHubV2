@@ -1,9 +1,8 @@
 # Games Library
 
-The Games Library is JukaHub's front end for the ROM folders on the card: one
-screen that lists every console, every game, the box art for the highlighted
-title and the emulator that will run it. It opens from **Emulators → Games
-Library** (the pinned row above Game Profiles).
+The Games Library lists ROMs, Android games and local HTML5 games in one place,
+with covers and a Continue row. It opens from **Emulators → Games Library** (the
+pinned row above Game Profiles).
 
 ## What it reads
 
@@ -126,12 +125,46 @@ Profiles. The cover fetch (**L1** / **F**) leaves Android games alone, LAN play
 (**X**) says it is for emulator games, **E** opens the game in Game Profiles,
 and a game started here joins Continue.
 
+## HTML5 games
+
+The **HTML5** row includes three offline demos: **Neon Snake**, **Brick Bounce**
+and **Star Dodger**. Their source is bundled with JukaHub under
+`player/html5_demos/` and licensed under MIT. The first library scan copies
+them into `data/HTML5/Demos/` on the handheld (or the JukaHub data folder on a
+PC) without replacing changes you make there.
+
+To add a game, copy its whole folder, including `index.html` and its assets, to
+`Games/HTML5/<Game name>/` beside JukaHub or at the SD card root. A standalone
+`Games/HTML5/<Game name>.html` also works. JukaHub scans game folders up to
+three levels deep; it treats HTML files *inside* a folder with `index.html` as
+that game's assets. Put `cover.png`, `cover.jpg` or `cover.jpeg` beside
+`index.html` for artwork. Press **Y** in the library after copying files.
+
+On the TrimUI Smart Pro, **Play** opens JukaHub's own full-screen game browser.
+The three demos run offline with the D-pad or stick; press **A** to start and
+**B** to return to the library. A touchscreen or mouse can use the on-screen
+arrows, move the paddle or ship on the board, and tap **Start** below it. No
+separate browser install or Wi-Fi connection is needed. The built-in game view
+supports Canvas 2D drawing, JavaScript animation, local scripts, keys, pointer
+input and local storage. WebGL, image and audio loading, and JavaScript modules
+are not yet supported in this game view. Games that need those features may not
+run on the stock handheld; JukaHub shows a launch error when it can detect one.
+
+On a PC, **Play** uses your system browser with a private local address. That
+browser can handle games with more web features, relative assets and its own
+storage.
+
+HTML5 launches join **Continue** like other games. Their saves, if a game has
+them, live in the browser. JukaHub's RetroArch save states, LAN play and cover
+download do not apply to this row. On a PC, the browser is a separate app, so
+JukaHub records the launch but cannot measure time spent in the browser tab.
+
 ## Completeness
 
 The header carries a ring that fills as the library gains covers, with the
-percentage inside it, and every console row has a thin meter showing that
-console's share. The status line spells the same figure out
-(`412 game(s) in 9 console(s) · 330 cover(s) (80%)`), so a card with a few gaps
+percentage inside it, and every system row has a thin meter showing that
+system's share. The status line spells the same figure out
+(`412 games in 9 systems · 330 covers (80%)`), so a card with a few gaps
 is visible without opening a settings panel.
 
 The numbers are counted from the files on the card, not from the download

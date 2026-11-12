@@ -27,8 +27,9 @@ func apkStoreCheckInstall(e apkStoreCatalogEntry, info apkStoreInfo) error {
 		return errors.New("the download is one piece of a split app; AndroidRT needs a complete APK")
 	}
 	if info.Manifest.Launcher != "android.app.NativeActivity" &&
-		info.Manifest.Launcher != "com.google.androidgamesdk.GameActivity" {
-		return errors.New("the APK does not launch a native Android activity; AndroidRT cannot start its Java activity")
+		info.Manifest.Launcher != "com.google.androidgamesdk.GameActivity" &&
+		info.Entry != apkEntryFound {
+		return errors.New("the APK does not expose a native activity entry; AndroidRT cannot start its Java activity")
 	}
 	if info.ChosenABI != "arm64-v8a" || !info.Tier.canAdd() {
 		return fmt.Errorf("this APK cannot run on AndroidRT: %s", info.Verdict)

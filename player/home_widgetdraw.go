@@ -141,8 +141,8 @@ func (h *HomeLayout) drawHomeContinueCompact(renderer *sdl.Renderer, fonts HomeF
 	homeRequestPreview(state.Preview, item.Rect.W, item.Rect.H)
 	if art, _, _ := homePreviewTexture(renderer, state.Preview, item.Rect.W, item.Rect.H); art != nil {
 		_ = renderer.Copy(art, nil, &draw)
-		fillVerticalScrim(renderer, draw, draw.Y+draw.H/3,
-			sdl.Color{R: 0, G: 0, B: 0, A: 0}, sdl.Color{R: 0, G: 0, B: 0, A: 215})
+		from, to := continueScrim(215) // theme page colour (home_design.go)
+		fillVerticalScrim(renderer, draw, draw.Y+draw.H/3, from, to)
 	} else {
 		hwpContinueThumb(renderer, draw)
 	}

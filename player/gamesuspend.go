@@ -54,6 +54,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	mediaStopForScreenChild()
 	// And for Juka, mid-sentence (tts_api.go).
 	jukaSpeakStop()
+	// Background music lets go of the speaker at once (bgmusic.go).
+	bgmHaltForGame()
 	if cmd == nil {
 		return
 	}

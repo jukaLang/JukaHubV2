@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updated": "2026-11-11",
+  "updated": "2026-11-12",
   "entries": [
     {
       "id": "penguin-dash",
@@ -8,22 +8,65 @@
       "package": "com.anathemasit.penguindash",
       "kind": "title",
       "status": "experimental",
-      "summary": "Free native Android game. Its APK rendered and ran on a Trimui Smart Pro with AndroidRT.",
+      "summary": "Free native Android game. Installed and raced on a Trimui Smart Pro with AndroidRT.",
       "get": "Install the author's free Android release directly from this Store entry.",
-      "notes": "The game rendered on a Smart Pro, and its A button advanced from player selection to the main menu. Gameplay steering, sound and clean exit need further testing.",
+      "notes": "Tested on a Smart Pro: A enters menus, the left stick steers, X jumps, and B backs out cleanly to JukaHub. Sound and other controllers still need testing.",
       "license": "GPL-2.0",
       "url": "https://github.com/nathanrcast/penguin-dash/releases/download/v0.5.0/penguin-dash-v0.5.0.apk",
       "sha256": "d19811693cd2ee882a9ff8ff121c0c7499f7d4fd6e79e7cc7c1e400f54b24ec6",
       "size": 43301757
     },
     {
+      "id": "glory-of-rome",
+      "title": "Glory of Rome",
+      "package": "com.danheskett.gloryofrome",
+      "kind": "title",
+      "status": "experimental",
+      "summary": "Free turn-based native game. Its ARM64 APK exports a NativeActivity entry and uses GLES2 and OpenSL ES; it has not been run on a Smart Pro.",
+      "get": "Install the author's Android release from this entry. The APK is checked before it is added to Games.",
+      "notes": "Its launcher is a small Java subclass of NativeActivity. AndroidRT skips that Java setup and starts the native entry directly, so menus, controls, graphics and sound all need a handheld test.",
+      "license": "MIT",
+      "url": "https://github.com/dannyheskett/openbounty/releases/download/release-48/gloryofrome-build-48-android-arm64.apk",
+      "sha256": "bf1d3254adbbc1469b34991779f5f9db5d4139d5fc0202a4daaf829b6da097a2",
+      "size": 25846400
+    },
+    {
       "id": "native-games",
       "title": "Native (NDK) apps and games",
       "kind": "category",
       "status": "experimental",
-      "summary": "Apps and games started from a native arm64 library by NativeActivity or GameActivity are what AndroidRT can try. Penguin Dash has rendered on a Smart Pro; other titles need individual testing.",
+      "summary": "Apps and games started from a native arm64 library by NativeActivity or GameActivity are what AndroidRT can try. Penguin Dash has been played on a Smart Pro; other titles need individual testing.",
       "get": "Copy APKs you own into the APKs folder on the card, or send them from your phone with the Phone Companion. Your APKs tab checks each one and marks the ones worth trying.",
       "notes": "Use the 64-bit (arm64-v8a) build when an app offers one. If it stops, its launch log names what AndroidRT is missing; Java and Kotlin apps still need a full Android runtime."
+    },
+    {
+      "id": "gameactivity-games",
+      "title": "GameActivity games",
+      "kind": "category",
+      "status": "experimental",
+      "summary": "AndroidRT can try ARM64 games that start through androidx GameActivity and export its native entry. Each game needs a separate handheld test.",
+      "get": "Copy an author's universal ARM64 APK into the APKs folder. Your APKs inspects its launcher and libraries; a matching local title can be added from here.",
+      "notes": "A GameActivity APK may still call Android Java services or graphics features that AndroidRT does not provide."
+    },
+    {
+      "id": "native-java-subclass",
+      "title": "Native entry behind a Java launcher",
+      "kind": "category",
+      "status": "experimental",
+      "summary": "Some apps start in a Java activity but export a NativeActivity entry. AndroidRT can try the native code directly, although skipped Java setup may stop it.",
+      "get": "Copy your ARM64 APK into the APKs folder. Your APKs looks for the exported native entry and shows a May not run verdict when it finds one.",
+      "notes": "The Store installs a publisher download in this class only after checking its package, ARM64 ABI and exported native entry."
+    },
+    {
+      "id": "cedinia",
+      "title": "Cedinia file finder",
+      "package": "io.github.qarmin.cedinia",
+      "kind": "title",
+      "status": "experimental",
+      "summary": "An ARM64 NativeActivity app with no Java code. Its file UI and storage access have not been tested on the Smart Pro.",
+      "get": "Get cedinia.apk from the author's Czkawka releases at https://github.com/qarmin/czkawka/releases and copy it into the APKs folder; this Store entry will find your local copy.",
+      "notes": "This app is designed for touch and requests broad storage access on Android. AndroidRT has no Android permission system, so test its controls and file access carefully.",
+      "license": "GPL-3.0-only"
     },
     {
       "id": "minecraft-bedrock",
@@ -34,6 +77,67 @@
       "summary": "AndroidRT ships a class pack for Minecraft's Java side. Nobody has run it on a handheld yet.",
       "get": "Buy Minecraft on Google Play, then copy your own APK off your phone (an APK backup app, or adb). Use the 64-bit (arm64-v8a) build.",
       "notes": "The store, the license check and Xbox Live answer as unavailable, never as granted, so a Google Play build may refuse to start without its license. It needs OpenGL ES 3.0 and most of the 1 GB of RAM. Details: docs/ANDROID-MINECRAFT.md."
+    },
+    {
+      "id": "reset-generation-revived",
+      "title": "Reset Generation Revived",
+      "package": "com.appliedflux.resetgeneration",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "ARM64 NativeActivity game. Its published test APK needs AAudio, which AndroidRT does not provide yet.",
+      "get": "See the author's Android build at https://github.com/rcadden/reset-generation-revived. JukaHub has no verified download for it.",
+      "notes": "The APK's native launcher, ARM64 library and AAudio dependency were inspected; it has not run on a Smart Pro.",
+      "route": "Use the Android test build on a supported Android device. A Smart Pro trial needs AAudio support in AndroidRT."
+    },
+    {
+      "id": "opengothic",
+      "title": "OpenGothic (Gothic II)",
+      "package": "org.opengothic.app",
+      "kind": "title",
+      "status": "experimental",
+      "summary": "ARM64 NativeActivity game. Listed for a future handheld trial; no verified Store download or Smart Pro run yet.",
+      "get": "Follow the author's Android build instructions at https://github.com/Try/OpenGothic/blob/master/android/README.md and supply your own Gothic II game files.",
+      "notes": "The Android port's own notes say controller input and game-file importing are unfinished. Vulkan graphics, storage paths and memory still need checking on a Smart Pro."
+    },
+    {
+      "id": "rechan-android",
+      "title": "ReChan (Jackie Chan Stuntmaster)",
+      "package": "com.deivid22srk.rechan",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "ARM64 native game, but its Android APK starts in a Java setup screen to import a legally owned game disc.",
+      "get": "See the Android port at https://github.com/deivid22srk/ReChan-Android. No game disc or assets are supplied by JukaHub.",
+      "notes": "The game itself uses GLES3 and a native activity after setup. AndroidRT cannot run the Java disc picker and extraction flow.",
+      "route": "Use the Android port on an Android device with your own supported NTSC-U game disc image."
+    },
+    {
+      "id": "horizon-android",
+      "title": "Horizon (Minecraft Java client)",
+      "package": "dev.horizonlab.horizon",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "ARM64 NativeActivity game, but its Android build uses AAudio and has measured about 2.2 GB of RAM in a world.",
+      "get": "See the Android port at https://github.com/Rayan-XOO/horizon/blob/android-port/ANDROID.md. JukaHub has no verified download for it.",
+      "notes": "It also needs prepared game resources and Android setup features. The Smart Pro has 1 GB of RAM.",
+      "route": "Use its Android build on a device with enough memory and its required game resources."
+    },
+    {
+      "id": "supertuxkart-android",
+      "title": "SuperTuxKart (Android)",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "Native C++ kart game, but its current Android APK launches through SDL's Java activity that AndroidRT cannot start.",
+      "get": "See the official Android project at https://github.com/supertuxkart/stk-code. JukaHub does not install its Android APK.",
+      "route": "Use the official Android build on Android, or a native Linux port suited to the handheld."
+    },
+    {
+      "id": "downhill-revived-android",
+      "title": "Downhill Revived (Android)",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "Native game core, but the Android APK launches through SDL's Java activity and needs Vulkan and at least 4 GB of RAM.",
+      "get": "See the author's Android releases at https://github.com/skuza-oss/downhill-revived/releases. Bring your own game disc.",
+      "route": "Use the experimental APK on a supported Android phone or tablet with your own disc."
     },
     {
       "id": "terraria-mobile",
@@ -66,6 +170,17 @@
       "status": "wontrun",
       "summary": "Their Android builds start in Java (GodotApp, LÖVE's activity, SDLActivity), which AndroidRT does not provide.",
       "route": "These engines all build for Linux: the game's PC version, or its .love file with LÖVE for Linux, usually runs on the handheld through PortMaster."
+    },
+    {
+      "id": "f-droid-android",
+      "title": "F-Droid (Android app store)",
+      "package": "org.fdroid.fdroid",
+      "kind": "title",
+      "status": "wontrun",
+      "summary": "A real Android app store. Its APK runs Java/Kotlin code and needs Android's package manager; AndroidRT cannot start it on stock TrimUI.",
+      "get": "F-Droid publishes its official APK at https://f-droid.org/F-Droid.apk. You can copy it to the APKs folder to inspect its compatibility here.",
+      "notes": "The official APK checked for this entry includes a native graphics helper, but its store and installer still need Android itself.",
+      "route": "On the original TrimUI Smart Pro, boot GammaOS Core from a separate microSD card, then install F-Droid in Android. Waydroid needs Linux binder support, which stock TrimUI lacks."
     },
     {
       "id": "java-apps",

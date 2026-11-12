@@ -131,6 +131,11 @@ func inmapProfileDetail(*Config) string {
 		return "This screen uses " + effective.name
 	}
 	if chosen == nil || chosen.description == "" {
+		// The hotkey can be switched off two rows down; naming it then sent
+		// the user to a chord that does nothing.
+		if !inmapHotkeyEnabled() {
+			return hintSentence("%s lists every profile", "A", "Open")
+		}
 		return "Hold Select and press R1 to switch"
 	}
 	return chosen.description
