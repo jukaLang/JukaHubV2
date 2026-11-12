@@ -5,13 +5,12 @@
  * itself then classifies each device (gamepad vs keyboard vs touchscreen)
  * and maps Linux codes onto Android keycodes and AMotionEvent axes. This
  * file is that layer for Tier 1, minus everything the Smart Pro lacks —
- * one fixed mapping, latent devices skipped with a one-line note, and the
- * parking lot stays honest:
+ * native Android gamepad mapping plus a keyboard-control mode for ports such
+ * as Penguin Dash:
  *
- *   EV_KEY  BTN_*        → AKeyEvent_* with AKEYCODE_BUTTON_/DPAD_*
- *   EV_ABS  ABS_X/Y/...  → AMotionEvent_* axis slots at the same value
- *                          (Linux sticks/trimmers are ±full-scale int32;
- *                          Android joysticks are ±1 floats)
+ *   EV_KEY  BTN_*        → Android gamepad buttons (or keyboard controls)
+ *   EV_ABS  ABS_X/Y/...  → calibrated Android joystick axes; the D-pad hat
+ *                          also becomes DPAD key events on every controller
  *   EV_SYN, EV_MSC       → ignored; Freebuff read events are already
  *                          complete states
  *
@@ -25,12 +24,14 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "actbridge.h"
+#include "gamepadmap.h"
 
 /* This file is the device build's producer: Linux-only paths, POSIX open
  * flags, aarch64 struct layout. Guarded so it compiles (as a no-op file)
@@ -56,66 +57,29 @@ struct input_event64 {
     int value;
 };
 
-/* ── EV_KEY → AKEYCODE_* (android/keycodes.h values) ───────────────── */
-struct keyMap {
-    unsigned short code; /* BTN_* evdev code */
-    int keyCode;         /* AKEYCODE_* */
-    const char *name;    /* for the probe printout */
-};
-
-static const struct keyMap g_keys[] = {
-    /* Linux gamepad spec buttons; C (0x132) duplicates X because the spec
-     * deprecates it and Android has no KEYCODE_BUTTON_C. */
-    { 0x130,  96, "SOUTH→A" },   /* AKEYCODE_BUTTON_A */
-    { 0x131,  97, "EAST→B" },    /* AKEYCODE_BUTTON_B */
-    { 0x132,  99, "C→X" },       /* AKEYCODE_BUTTON_X */
-    { 0x133, 100, "NORTH→Y" },   /* AKEYCODE_BUTTON_Y */
-    { 0x134,  99, "WEST→X" },    /* AKEYCODE_BUTTON_X */
-    { 0x136, 102, "TL→L1" },     /* AKEYCODE_BUTTON_L1 */
-    { 0x137, 103, "TR→R1" },     /* AKEYCODE_BUTTON_R1 */
-    { 0x138, 104, "TL2→L2" },    /* AKEYCODE_BUTTON_L2 */
-    { 0x139, 105, "TR2→R2" },    /* AKEYCODE_BUTTON_R2 */
-    { 0x13a, 109, "SELECT" },    /* AKEYCODE_BUTTON_SELECT */
-    { 0x13b, 108, "START" },     /* AKEYCODE_BUTTON_START */
-    { 0x13d, 106, "THUMBL" },    /* AKEYCODE_BUTTON_THUMBL */
-    { 0x13e, 107, "THUMBR" },    /* AKEYCODE_BUTTON_THUMBR */
-    /* D-pad hard buttons of the gamepad spec */
-    { 0x220,  19, "DPAD_UP" },   /* AKEYCODE_DPAD_UP */
-    { 0x221,  20, "DPAD_DOWN" }, /* AKEYCODE_DPAD_DOWN */
-    { 0x222,  21, "DPAD_LEFT" }, /* AKEYCODE_DPAD_LEFT */
-    { 0x223,  22, "DPAD_RIGHT" },/* AKEYCODE_DPAD_RIGHT */
-};
-
-/* ── EV_ABS → AMotionEvent_AXIS_* ──────────────────────────────────── */
-struct axisMap {
-    unsigned short code; /* ABS_* */
-    int axis;            /* AMotionEvent_AXIS_* (enumerated in inputshim.c) */
-    int fullScale;       /* ±full-scale magnitude; 0 = hat, already ±1 */
-};
-
-static const struct axisMap g_axes[] = {
-    /* 1:1 by name, exactly how Android's generic axis mapping does it:
-     * ABS_Z/RZ are the trimmers on the gamepad spec, not a second stick. */
-    { 0x00,  0, 32767 }, /* ABS_X    → AXIS_X (left stick)  */
-    { 0x01,  1, 32767 }, /* ABS_Y    → AXIS_Y               */
-    { 0x02, 11, 32767 }, /* ABS_Z    → AXIS_Z (L trigger)   */
-    { 0x03, 12, 32767 }, /* ABS_RX   → AXIS_RX (right stick) */
-    { 0x04, 13, 32767 }, /* ABS_RY   → AXIS_RY              */
-    { 0x05, 14, 32767 }, /* ABS_RZ   → AXIS_RZ (R trigger)  */
-    { 0x10, 15, 0 },     /* ABS_HAT0X → AXIS_HAT_X          */
-    { 0x11, 16, 0 },     /* ABS_HAT0Y → AXIS_HAT_Y          */
-};
+/* Axis order matches gamepadmap.c. Query the controller's actual min/max:
+ * Smart Pro triggers are 0..255 while its sticks are -32767..32767. */
+static const unsigned short g_axisCodes[8] = {0, 1, 2, 3, 4, 5, 0x10, 0x11};
+struct apak_absinfo { int value, minimum, maximum, fuzz, flat, resolution; };
+#define APAK_EVIOCGABS(axis) ((2u << 30) | ((unsigned)sizeof(struct apak_absinfo) << 16) | ('E' << 8) | (0x40u + (axis)))
+struct axisRange { int min, max; };
 
 /* ── the reader ────────────────────────────────────────────────────── */
 
 static int g_devfds[16];
 static int g_devnodes[16]; /* N of /dev/input/eventN: the Android deviceId */
+static struct axisRange g_ranges[16][8];
+static ApakGamepadMap g_maps[16];
 static int g_devcount;
+static ApakGamepadMode g_mode;
 
 /* EVIOCGNAME(len): _IOC(_IOC_READ, 'E', 0x06, len) */
 #define APAK_EVIOCGNAME(len) ((2u << 30) | ((unsigned)(len) << 16) | ('E' << 8) | 0x06u)
+#define APAK_EVIOCGBIT(type, len) ((2u << 30) | ((unsigned)(len) << 16) | ('E' << 8) | (0x20u + (type)))
 
 static void openEvdevDevices(void) {
+    static const int defaultMin[8] = {-32767, -32767, 0, -32767, -32767, 0, -1, -1};
+    static const int defaultMax[8] = {32767, 32767, 255, 32767, 32767, 255, 1, 1};
     int i;
     char path[64];
     g_devcount = 0;
@@ -128,11 +92,33 @@ static void openEvdevDevices(void) {
          * only honest verdict. */
         int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) continue;
+        /* A keyboard or power switch is not an Android gamepad. Ignore it
+         * so InputDevice enumeration contains only real controllers. */
+        {
+            unsigned char keys[64] = {0};
+            struct apak_absinfo stick = {0};
+            int hasButtons = ioctl(fd, APAK_EVIOCGBIT(EV_KEY, sizeof keys), keys) >= 0 &&
+                             (keys[0x130 / 8] & (1u << (0x130 % 8)));
+            int hasStick = ioctl(fd, APAK_EVIOCGABS(0), &stick) >= 0 && stick.maximum > stick.minimum;
+            if (!hasButtons && !hasStick) { close(fd); continue; }
+        }
         if (ioctl(fd, APAK_EVIOCGNAME(sizeof name - 1), name) < 0) name[0] = '\0';
+        int slot = g_devcount;
         g_devnodes[g_devcount] = i;
         g_devfds[g_devcount++] = fd;
+        apak_gamepadInit(&g_maps[slot], g_mode);
+        for (int a = 0; a < 8; a++) {
+            struct apak_absinfo info = {0};
+            g_ranges[slot][a].min = defaultMin[a];
+            g_ranges[slot][a].max = defaultMax[a];
+            if (ioctl(fd, APAK_EVIOCGABS(g_axisCodes[a]), &info) >= 0 && info.maximum > info.minimum) {
+                g_ranges[slot][a].min = info.minimum;
+                g_ranges[slot][a].max = info.maximum;
+            }
+        }
         android_inputRegisterDevice(i, name[0] ? name : "TrimUI Gamepad");
-        fprintf(stderr, "[androidrt] input: reading %s (%s) as device %d\n", path, name[0] ? name : "unnamed", i);
+        fprintf(stderr, "[androidrt] input: reading %s (%s) as device %d, map %s\n", path,
+                name[0] ? name : "unnamed", i, apak_gamepadModeName(g_mode));
     }
     if (!g_devcount)
         fprintf(stderr, "[androidrt] input: no /dev/input/event* readable — "
@@ -140,39 +126,32 @@ static void openEvdevDevices(void) {
                 "input group would fix that\n");
 }
 
-/* feed: keys always look like a gamepad to games; source 0 lets the input
- * shim apply its default (SOURCE_GAMEPAD for keys, SOURCE_JOYSTICK for
- * axes), which is what Android's classifier would have concluded. */
-static void feed(int deviceId, unsigned short type, unsigned short code, int value) {
-    int i;
+static void emitKey(void *ctx, int keyCode, int action) {
+    int deviceId = *(int *)ctx;
+    android_inputInjectKey(deviceId, 0, action, keyCode, 0);
+}
+
+static void emitAxis(void *ctx, int axis, float value) {
+    int deviceId = *(int *)ctx;
+    android_inputInjectAxis(deviceId, 0, axis, value);
+}
+
+static void feed(int slot, unsigned short type, unsigned short code, int value) {
+    ApakGamepadMap *map = &g_maps[slot];
+    void *ctx = &g_devnodes[slot];
     if (type == EV_SYN || type == EV_MSC) return;
 
     if (type == EV_KEY) {
-        for (i = 0; i < (int)(sizeof(g_keys) / sizeof(g_keys[0])); i++) {
-            if (g_keys[i].code == code) {
-                android_inputInjectKey(deviceId, /* the eventN node: stable per device */
-                                       0, /* default gamepad source */
-                                       value ? 0 /* AKEY_EVENT_ACTION_DOWN */ : 1,
-                                       g_keys[i].keyCode, 0);
-                return;
-            }
-        }
-        return; /* other buttons (system keys) stay with the hub's SDL loop */
+        apak_gamepadFeedKey(map, code, value, emitKey, ctx);
+        return;
     }
 
     if (type == EV_ABS) {
-        for (i = 0; i < (int)(sizeof(g_axes) / sizeof(g_axes[0])); i++) {
-            if (g_axes[i].code == code) {
-                float v;
-                if (g_axes[i].fullScale)
-                    v = value / (float)g_axes[i].fullScale;
-                else
-                    v = (float)value; /* hats are ±1 already */
-                if (v > 1.0f) v = 1.0f;
-                if (v < -1.0f) v = -1.0f;
-                android_inputInjectAxis(deviceId, /* one device per node: X and Y share an event */
-                                        0, /* default joystick source */
-                                        g_axes[i].axis, v);
+        for (int a = 0; a < 8; a++) {
+            if (g_axisCodes[a] == code) {
+                float normalized = apak_gamepadNormalize(code, value, g_ranges[slot][a].min,
+                                                         g_ranges[slot][a].max);
+                apak_gamepadFeedAxis(map, code, normalized, emitKey, emitAxis, ctx);
                 return;
             }
         }
@@ -194,7 +173,7 @@ static void *evdevThread(void *arg) {
                 size_t e;
                 any = 1;
                 for (e = 0; e < count; e++)
-                    feed(g_devnodes[i], buf[e].type, buf[e].code, buf[e].value);
+                    feed(i, buf[e].type, buf[e].code, buf[e].value);
             }
             /* n < 0 with EAGAIN just means "no events now"; anything else is
              * a device that went away mid-read (unplug): leak nothing, but
@@ -208,9 +187,11 @@ static void *evdevThread(void *arg) {
     return NULL;
 }
 
-void android_inputStartEvdev(void) {
+void android_inputStartEvdev(const char *packageName) {
     pthread_t thread;
-    fprintf(stderr, "[androidrt] input: starting evdev reader\n");
+    const char *option = getenv("ANDROIDPAK_GAMEPAD_MAP");
+    g_mode = apak_gamepadMode(packageName, option);
+    fprintf(stderr, "[androidrt] input: starting evdev reader (map %s)\n", apak_gamepadModeName(g_mode));
     if (pthread_create(&thread, NULL, evdevThread, NULL) != 0) {
         fprintf(stderr, "[androidrt] input: could not start evdev reader thread\n");
         return;

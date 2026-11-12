@@ -155,7 +155,7 @@ int android_windowBackend(int width, int height);
  * BTN/ABS evdev codes to Android keycodes/axes (linux/input-event-codes.h)
  * and feeds android_inputInject*. Guarded by JUKAHUB_EVDEV: the device
  * cross build compiles it and only the runner calls this. */
-void android_inputStartEvdev(void);
+void android_inputStartEvdev(const char *packageName);
 
 /* ── input shim bridge (inputshim.c) ────────────────────────────────── */
 AInputQueue *android_inputQueueCreate(void);

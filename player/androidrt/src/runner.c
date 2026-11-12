@@ -376,7 +376,7 @@ int main(int argc, char **argv) {
 #ifdef JUKAHUB_EVDEV
         {
             const char *inputOpt = getenv("ANDROIDPAK_INPUT");
-            if (!inputOpt || strcmp(inputOpt, "off") != 0) android_inputStartEvdev();
+            if (!inputOpt || strcmp(inputOpt, "off") != 0) android_inputStartEvdev(manifest.package);
         }
 #endif
         runner.running = 1;
@@ -404,7 +404,7 @@ int main(int argc, char **argv) {
      * ANDROIDPAK_INPUT=off. */
     {
         const char *inputOpt = getenv("ANDROIDPAK_INPUT");
-        if (!inputOpt || strcmp(inputOpt, "off") != 0) android_inputStartEvdev();
+        if (!inputOpt || strcmp(inputOpt, "off") != 0) android_inputStartEvdev(manifest.package);
         else fprintf(stderr, "[androidrt] input: reader disabled by ANDROIDPAK_INPUT=off\n");
     }
 #endif

@@ -84,6 +84,13 @@ case "$(uname -s)" in
     *) PLATFORM=linux ;;
 esac
 
+MAPBIN="$WORK/gamepadmap"
+[ "$PLATFORM" = windows ] && MAPBIN="$MAPBIN.exe"
+$CC -O0 -g0 -std=gnu11 $WARN -I"$SRC" "$HERE/fake_gamepadmap.c" "$SRC/gamepadmap.c" \
+    -o "$MAPBIN" -lm
+run_to "$WORK/gamepadmap.log" "$MAPBIN"
+expect_rc "controller mapping and axis calibration" 0
+
 if [ "$PLATFORM" = windows ]; then
     echo "== Windows host: legacy subset (no ELF loader here) =="
     LOADER="$WORK/loader.exe"
