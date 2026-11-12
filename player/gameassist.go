@@ -3,8 +3,8 @@ package main
 // gameassist.go — the game assistant: Juka knows which game is being played,
 // and on the handheld can be asked about it from inside the game.
 //
-// Two halves, both behind Settings → Voice & AI → Game assistant (off until
-// turned on; gameassist_settings.go):
+// Two halves, both behind Settings → Voice & AI → Game assistant (on until
+// turned off; gameassist_settings.go):
 //
 //   - What Juka knows. The main thread follows the screen children
 //     (gamesuspend.go): a launch, the recents entry the library writes for it
@@ -31,8 +31,10 @@ package main
 //     leave the game paused behind it). With "Juka can see the game screen" on,
 //     the picture goes with the question to the vision model (groqvision.go);
 //     the answer streams into the bubble, stays until the player leaves, and
-//     is spoken (tts_api.go). A asks again; B, Menu or the chord again goes
-//     back to the game: the orb goes, the watcher gives the pad back once
+//     is read aloud (ttsFromGame: "Read answers aloud in games", on by
+//     default, decides there instead of "Juka's voice"). A asks again; B,
+//     Menu or Select + R2 pressed again (no hold this time) goes back to the
+//     game: the orb goes, the watcher gives the pad back once
 //     nothing is held, and the game runs on (SIGCONT).
 //
 // Guard rails: the overlay lasts at most gaOverlayCap; an alarm that rings
@@ -90,7 +92,7 @@ const (
 // gaVoicePrompt is added to Juka's system prompt for a question asked over a
 // paused game.
 const gaVoicePrompt = "The player paused their game on the handheld and asked this out loud; the answer is shown " +
-	"in a small bubble over the paused game and may be read aloud: answer in two or three short sentences of " +
+	"in a bubble over the paused game and read aloud: answer in two or three short sentences of " +
 	"plain text, with no lists and no markdown."
 
 // gaButton is a press the overlay acts on, from the pad watcher or from an
@@ -98,11 +100,23 @@ const gaVoicePrompt = "The player paused their game on the handheld and asked th
 type gaButton int
 
 const (
-	gaBtnA     gaButton = iota // ask, or send what was said
-	gaBtnB                     // back to the game
-	gaBtnR2                    // like A: the finger is still on it after the chord
-	gaBtnMenu                  // back to the game
-	gaBtnChord                 // Select + R2 again: back to the game
+	gaBtnA         gaButton = iota // ask, or send what was said
+	gaBtnB                         // back to the game
+	gaBtnR2                        // like A: the finger is still on it after the chord
+	gaBtnMenu                      // back to the game
+	gaBtnChord                     // Select + R2 again: back to the game
+	gaBtnUp                        // the D-pad up: the in-game menu's highlight
+	gaBtnDown                      // the D-pad down
+	gaBtnMenuChord                 // Select + L2 again: the in-game menu, or back to the game from it
+)
+
+// gaMode is what the overlay is for: the assistant listening (Select + R2) or
+// the in-game menu (Select + L2, gamemenu.go).
+type gaMode int32
+
+const (
+	gaModeAsk gaMode = iota
+	gaModeMenu
 )
 
 // ── What Juka knows ──────────────────────────────────────────────────────
@@ -218,8 +232,10 @@ func gameAssistFrame(config *Config) {
 // share. request: the chord fired and the pad is held, the overlay should
 // open. held: the watcher holds the pad. lost: the pad went away while held.
 // release: the main thread wants the pad given back. live: the overlay is up.
+// mode: which chord took the pad (a gaMode), set before request.
 // presses: what was pressed on the held pad, oldest first.
 var gaLink struct {
+	mode    atomic.Int32
 	request atomic.Bool
 	held    atomic.Bool
 	lost    atomic.Bool
@@ -265,6 +281,12 @@ var gaOverlay struct {
 	title, system string
 	// shot: "Juka can see the game screen" was on when it opened.
 	shot bool
+	// mode: the assistant or the in-game menu; sel: the menu's highlighted
+	// row; fromMenu: the assistant was opened from the menu, so B goes back
+	// to it rather than to the game.
+	mode     gaMode
+	sel      int
+	fromMenu bool
 	// The game's last frame (nil when the framebuffer gave none) and its
 	// texture, made on the first frame drawn.
 	frame      *image.RGBA
@@ -283,20 +305,29 @@ func init() {
 // is on, and the overlay opened when the watcher saw the chord.
 func gameAssistParkedTick(config *Config) {
 	gameAssistFrame(config)
-	want := gameAssistLive.on.Load() && gameAssistSupported() && !wineInputActive() && !alarmFiringActive()
-	gaPadSync(config, want)
-	if gaLink.request.Swap(false) && !gaOpen(config) {
+	// A game quitting from the in-game menu is left alone: pausing it now
+	// would stop it mid-save, and the quit watch would kill it stopped.
+	can := gameAssistSupported() && !wineInputActive() && !alarmFiringActive() && !gmQuitting.Load()
+	gaPadSync(config, can && gameAssistLive.on.Load(), can && gameMenuEnabled(config))
+	if gaLink.request.Swap(false) && !gaOpen(config, gaMode(gaLink.mode.Load())) {
 		gaLink.release.Store(true)
 	}
 }
 
-// gaOpen pauses the game and brings the assistant up over it. false: it
-// cannot open now, and the caller gives the pad back.
-func gaOpen(config *Config) bool {
+// gaOpen pauses the game and brings the assistant (or the in-game menu) up
+// over it. false: it cannot open now, and the caller gives the pad back.
+func gaOpen(config *Config, mode gaMode) bool {
 	if gaOverlay.active {
 		return true
 	}
-	if !gameAssistEnabled(config) || !gameScreenSuspended() || alarmFiringActive() || wineInputActive() ||
+	if gmQuitting.Load() {
+		return false
+	}
+	enabled := gameAssistEnabled(config)
+	if mode == gaModeMenu {
+		enabled = gameMenuEnabled(config)
+	}
+	if !enabled || !gameScreenSuspended() || alarmFiringActive() || wineInputActive() ||
 		!alarmCanPauseChildren() {
 		return false
 	}
@@ -332,6 +363,7 @@ func gaOpen(config *Config) bool {
 		gaOverlay.system = gameAssistClean(gaTrack.game.system)
 	}
 	gaOverlay.shot = gameAssistScreenEnabled(config)
+	gaOverlay.mode, gaOverlay.sel, gaOverlay.fromMenu = mode, 0, false
 	// The game is stopped and JukaHub has not drawn yet, so the framebuffer
 	// still holds the game's last frame: it is read now, before the first
 	// frame of the overlay replaces it.
@@ -342,11 +374,16 @@ func gaOpen(config *Config) bool {
 	// gaTick's nudge) would put the saver up over the overlay.
 	screensaverNotifyInput()
 	gaLink.live.Store(true)
-	gaListen(config)
 	name := gaOverlay.title
 	if name == "" {
 		name = "a game the library did not start"
 	}
+	if mode == gaModeMenu {
+		PlayActivateSound()
+		logInfo("gamemenu", "%s is paused under the in-game menu (picture: %t)", name, gaOverlay.frame != nil)
+		return true
+	}
+	gaListen(config)
 	logInfo("gameassist", "%s is paused while Juka listens (picture: %t)", name, gaOverlay.frame != nil)
 	return true
 }
@@ -377,6 +414,11 @@ func gaListen(config *Config) {
 func gameAssistHeard(text string) bool {
 	if !gaOverlay.active {
 		return false
+	}
+	if gaOverlay.mode != gaModeAsk {
+		// The menu has no orb; a late transcript from before it opened is
+		// dropped rather than run as a command behind the paused game.
+		return true
 	}
 	gaAsk(text)
 	return true
@@ -488,13 +530,32 @@ func gaAnswered(gen int, question, reply string, err error) {
 	voiceOrb.hideAt = 0
 	trophyEvent(tkAIAsk)
 	PlayNavSound()
-	jukaSpeak(ttsKindVoice, reply)
+	// Shown and read aloud: Read answers aloud in games, on by default,
+	// decides here instead of "Juka's voice" (tts_api.go ttsBegin).
+	ttsSpeakFrom(ttsFromGame, ttsKindVoice, reply)
 }
 
 // gaPress acts on one press while the overlay is up.
 func gaPress(config *Config, b gaButton) {
+	if gaOverlay.mode == gaModeMenu {
+		gmPress(config, b)
+		return
+	}
 	switch b {
-	case gaBtnB, gaBtnMenu, gaBtnChord:
+	case gaBtnMenuChord:
+		// Select + L2 over the assistant: the in-game menu.
+		if gameMenuEnabled(config) {
+			PlayNavSound()
+			gmShowMenu()
+		}
+	case gaBtnB:
+		PlayBackSound()
+		if gaOverlay.fromMenu && gameMenuEnabled(config) {
+			gmShowMenu()
+			return
+		}
+		gaClose("the player went back", true)
+	case gaBtnMenu, gaBtnChord:
 		PlayBackSound()
 		gaClose("the player went back", true)
 	case gaBtnA, gaBtnR2:
@@ -525,6 +586,10 @@ func gameAssistController(e *sdl.ControllerButtonEvent, config *Config) {
 		gaPress(config, gaBtnA)
 	case sdl.CONTROLLER_BUTTON_B:
 		gaPress(config, gaBtnB)
+	default:
+		if b, ok := gmController(e.Button); ok {
+			gaPress(config, b)
+		}
 	}
 }
 
@@ -535,6 +600,9 @@ func gameAssistOrbHint() (string, bool) {
 		return "", false
 	}
 	back := orbKeyName("B") + " back to the game"
+	if gaOverlay.fromMenu && gameMenuEnabled(appConfig) {
+		back = orbKeyName("B") + " menu"
+	}
 	switch voiceOrb.phase {
 	case orbListening:
 		return orbKeyName("A") + " send · " + back, true
@@ -697,9 +765,15 @@ func gameAssistRender(renderer *sdl.Renderer, config *Config) {
 	gaDrawBackdrop(renderer, true)
 	if fonts, ok := tbxLoadFonts(config); ok {
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		gaDrawHeader(renderer, fonts)
-		if voiceOrb.phase == orbHidden {
-			gaDrawPrompt(renderer, fonts)
+		switch {
+		case gaOverlay.mode == gaModeMenu:
+			// The menu card names the game itself (gamemenu.go).
+			gmDraw(renderer, config, fonts)
+		default:
+			gaDrawHeader(renderer, fonts)
+			if voiceOrb.phase == orbHidden {
+				gaDrawPrompt(renderer, fonts)
+			}
 		}
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
@@ -812,6 +886,9 @@ func gaDrawHeader(renderer *sdl.Renderer, fonts tbxFonts) {
 // puts it away): how to ask and how to go back.
 func gaDrawPrompt(renderer *sdl.Renderer, fonts tbxFonts) {
 	line := orbKeyName("A") + " ask Juka · " + orbKeyName("B") + " back to the game"
+	if gaOverlay.fromMenu && gameMenuEnabled(appConfig) {
+		line = orbKeyName("A") + " ask Juka · " + orbKeyName("B") + " menu"
+	}
 	tw, _ := measureText(fonts.body, line)
 	w, h := tw+4*orbPad, fonts.bodyH+2*orbPad
 	r := sdl.Rect{X: (screenWidth - w) / 2, Y: screenHeight*2/3 - h/2, W: w, H: h}

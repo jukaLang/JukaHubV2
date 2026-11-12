@@ -549,6 +549,16 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 		PlayActivateSound()
 		homeEditOpen(config)
+	case sdl.K_q:
+		// Q is L2's twin on Home (the section keys Q/E mirror L2/R2): it
+		// opens Edit Home in any layout (home_edit.go). A video playing full
+		// size keeps it: Q ends playback there.
+		if snapshotVideoState().phase != "idle" && !videoMiniVisible() {
+			return false
+		}
+		if e.Repeat == 0 {
+			homeEditTrigger(config)
+		}
 	case sdl.K_ESCAPE:
 		// Escape dismisses the calendar popover first.
 		if homeCalendarOpen {

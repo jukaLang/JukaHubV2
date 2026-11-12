@@ -394,15 +394,30 @@ func wifiBackend() string {
 	return ""
 }
 
-// bluetoothBackend names how Bluetooth is switched on this device.
+// bluetoothBackend names how Bluetooth is switched on this device. The tools
+// are found beyond PATH as well and run with the firmware's environment
+// (bluetooth_tools.go): a launcher's PATH can miss where a handheld keeps them.
 func bluetoothBackend() string {
-	if commandExists("bluetoothctl") {
+	if btToolExists("bluetoothctl") {
 		return "bluetoothctl"
 	}
-	if commandExists("rfkill") {
+	if btToolExists("rfkill") {
 		return "rfkill"
 	}
 	return ""
+}
+
+// btRfkillSet switches the Bluetooth radio with rfkill (runRfkill's verbs:
+// on is "unblock").
+func btRfkillSet(on bool) error {
+	verb := "block"
+	if on {
+		verb = "unblock"
+	}
+	if _, err := btToolRun("rfkill", verb, "bluetooth"); err != nil {
+		return fmt.Errorf("rfkill %s bluetooth: %w", verb, err)
+	}
+	return nil
 }
 
 // airplaneBackend reports whether rfkill can block every radio at once.
@@ -489,7 +504,7 @@ func setWifiEnabled(on bool) error {
 func bluetoothEnabled() (bool, bool) {
 	switch bluetoothBackend() {
 	case "bluetoothctl":
-		out, err := systemCommandRunner("bluetoothctl", "show")
+		out, err := btToolRun("bluetoothctl", "show")
 		if err != nil {
 			return false, false
 		}
@@ -501,7 +516,7 @@ func bluetoothEnabled() (bool, bool) {
 		}
 		return false, false
 	case "rfkill":
-		out, err := systemCommandRunner("rfkill", "list", "bluetooth")
+		out, err := btToolRun("rfkill", "list", "bluetooth")
 		if err != nil {
 			return false, false
 		}
@@ -518,25 +533,15 @@ func setBluetoothEnabled(on bool) error {
 		if on {
 			arg = "on"
 		}
-		if _, err := systemCommandRunner("bluetoothctl", "power", arg); err == nil {
+		if _, err := btToolRun("bluetoothctl", "power", arg); err == nil {
 			return nil
 		}
-		if !commandExists("rfkill") {
-			return errors.New("bluetoothctl could not change the radio")
+		if btToolExists("rfkill") {
+			return btRfkillSet(on)
 		}
-		if err := runRfkill("bluetooth", on); err != nil || !on {
-			return err
-		}
-		// An unblocked radio is not a powered one yet: BlueZ refuses a "power
-		// on" while rfkill holds the radio (org.bluez.Error.Blocked) and does
-		// not remember it, so it is asked again once the block is gone.
-		time.Sleep(500 * time.Millisecond)
-		if _, err := systemCommandRunner("bluetoothctl", "power", "on"); err != nil {
-			return errors.New("Bluetooth was unblocked but did not switch on — try again")
-		}
-		return nil
+		return errors.New("bluetoothctl could not change the radio")
 	case "rfkill":
-		return runRfkill("bluetooth", on)
+		return btRfkillSet(on)
 	}
 	return errors.New("no Bluetooth control (bluetoothctl/rfkill) on this device")
 }

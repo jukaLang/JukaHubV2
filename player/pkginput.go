@@ -979,6 +979,13 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 		return
 	case pkgHitCard, pkgHitChip, pkgHitSort, pkgHitHeroPrimary, pkgHitHeroDetails, pkgHitHeroDot, pkgHitShelfArrow:
 		pkgStores.focus = false
+	case pkgHitBody:
+		// Blank content counts too (a gap between cards, the hero's
+		// background, the empty state's text); the band of the toolbar and
+		// the strip above it does not.
+		if pointInRect(mx, my, st.contentClip) {
+			pkgStores.focus = false
+		}
 	}
 	m := st.model
 	switch hit.Kind {

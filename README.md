@@ -422,7 +422,9 @@ the phone opens a small page with:
 * **Groq API key** — paste the key from console.groq.com instead of typing 56
   characters on the handheld. It is checked with Groq, saved for voice typing,
   voice commands and the Juka chat, and never shown again (the page only
-  learns its last four characters).
+  learns its last four characters). Settings → General → **Groq API key** →
+  **Paste it from your phone** shows a code that opens the page straight at
+  this card, and closes itself when the key arrives.
 * **PlayStation Remote Play** — save the PSN Account-ID that pairing a PS5 (or
   a PS4 on firmware 7 or newer) needs: paste it, the long account number, or
   the address of Sony's *redirect* page, or tap **Sign in to get it** for

@@ -1319,7 +1319,7 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		if alarmUI.pickOpen {
 			// The music picker sheet owns the pad while it is open.
 			hints = []FooterHint{{"D-Pad", "Move"}, {"L1/R1", "Page"}, {"A", "Choose"}, {"B", "Back"}}
-		} else if alarmUI.tab == 0 {
+		} else if alarmUI.tab == alarmTabList {
 			hints[1] = FooterHint{Button: "A", Label: "Edit"}
 			hints = append(hints,
 				FooterHint{Button: "X", Label: "Toggle"},
@@ -1327,11 +1327,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 				// "/ Del": the keyboard deletes with Delete (handleAlarmInput).
 				FooterHint{Button: "L1 / Del", Label: "Delete"},
 			)
-		} else if alarmUI.tab == 4 {
-			// The ringtone row: X opens the music picker (alarmpick.go).
-			hints = []FooterHint{{"D-Pad", "Change"}, {"X", "Music"}, {"A", "Save"}, {"B", "Back"}}
 		} else {
-			hints = []FooterHint{{"D-Pad", "Change"}, {"A", "Next"}, {"B", "Back"}}
+			// The editor names the focused row's keys (alarmedit.go).
+			hints = alarmEditFooterHints()
 		}
 	case "Pomodoro":
 		// A starts and pauses, X skips the phase, Y resets the cycle.

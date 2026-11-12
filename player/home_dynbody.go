@@ -4,8 +4,9 @@ package main
 //
 // Standard, the dashboard and the Hero grid place a fixed set of cards
 // (rebuildItems). The two "dynamic" layouts place whatever the tile list
-// (home_tiles.go) holds instead: Widgets packs the tiles on a six-column grid
-// that scrolls by whole rows once it outgrows the three rows Home shows,
+// (home_tiles.go) holds instead: Widgets packs the tiles on a grid of square
+// cells, seven across, that scrolls by whole rows once it outgrows the three
+// rows Home shows,
 // Carousel shows them as one row of cards centred on the focus
 // (home_carousel.go). Both share this file's bookkeeping:
 //
@@ -29,9 +30,9 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// The widget grid in 1280x720 design units: the dashboard's body box, six
-// columns with 16px gutters and rows of the dashboard's 152px tiles. The body
-// shows exactly three rows.
+// The widget grid in 1280x720 design units: the dashboard's body box, seven
+// columns with 16px gutters and rows of the dashboard's 152px tiles — cells
+// of 160 x 152, square to the eye. The body shows exactly three rows.
 const (
 	homeDynBodyX   int32 = 32
 	homeDynBodyW   int32 = 1216

@@ -8,7 +8,9 @@ package main
 //	L1 / R1  previous / next page of whatever is focused, or a -10/+10 s skip
 //	         while a video is playing
 //	L2 / R2  bigger jump: previous / next results page (fetching when needed),
-//	         previous / next video while playing, first / last row in a list
+//	         previous / next video while playing, first / last row in a list;
+//	         on Home L2 opens Edit Home (and is Done there) and R2 steps to
+//	         the next section
 //
 // Analog triggers report a stream of axis values, so they are latched into
 // discrete presses here instead of paging on every sample.
@@ -70,8 +72,12 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 		return false
 	}
 	// Edit Home owns the pad: a trigger must not page Home away mid-edit
-	// (its L1/R1 switch the layout, home_edit.go).
+	// (its L1/R1 switch the layout, home_edit.go). L2 opened it, and L2 is
+	// Done.
 	if homeEditActive() {
+		if s == padL2 {
+			homeEditTrigger(config)
+		}
 		return true
 	}
 	// The editor's one destructive key lives on R2. A/X/Y/B are already editing
@@ -112,11 +118,12 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	if handleListShoulder(s, config) {
 		return true
 	}
-	// On Home the triggers keep their long-standing meaning: previous / next
-	// section, which is what the footer advertises there.
+	// On Home L2 edits Home (home_edit.go), in every layout: Home is the
+	// first section, so its old "previous section" had nowhere to go. R2
+	// keeps stepping to the next section.
 	if homeLayoutActive && (s == padL2 || s == padR2) {
 		if s == padL2 {
-			changeScene(config, -1)
+			homeEditTrigger(config)
 		} else {
 			changeScene(config, 1)
 		}
@@ -195,7 +202,7 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 func triggerOwnedByOverlay() bool {
 	switch {
 	case ambientIsActive(), launchFailure.open, videoPrepareActive(), voiceOrbModal(),
-		onboarding.active && !onboardingCoveredByOverlay():
+		onboarding.active && !onboardingCoveredByOverlay(), recoveryCard.open:
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
 		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, brwMenu.open, homeCalendarOpen,

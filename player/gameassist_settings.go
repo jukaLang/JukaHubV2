@@ -4,11 +4,13 @@ package main
 // Juka knowing the game being played (voiceai_settings.go), and what
 // jukaSystemPrompt says about it.
 //
-// Both switches are off until turned on, as the tester who asked for the
-// feature wanted: nothing about the games leaves the handheld while they are
-// off. On, the running cost during a game is one goroutine reading the pad
-// every 25 ms (the same watcher "Mouse in games and apps" uses); the picture
-// of the screen, the microphone and the network are touched only when the
+// The assistant itself is ON until turned off (Juka, 2026-11-11: on the
+// TrimUI Smart Pro it is the point of the feature), and so is reading its
+// answers aloud over the game; only "Juka can see the game screen" stays off
+// until turned on, since it sends a picture. On, the running cost during a
+// game is one goroutine reading the pad every 25 ms (the same watcher "Mouse
+// in games and apps" uses); the game's title goes with questions to Juka, and
+// the picture, the microphone and the network are touched only when the
 // player holds the chord and asks (gameassist.go).
 
 import (
@@ -21,11 +23,15 @@ import (
 )
 
 const (
-	// gameAssistKey is the Custom setting behind "Game assistant" (off unless
-	// it is true).
+	// gameAssistKey is the Custom setting behind "Game assistant" (on unless
+	// it is false).
 	gameAssistKey = "gameAssist"
 	// gameAssistScreenKey is "Juka can see the game screen" (off unless true).
 	gameAssistScreenKey = "gameAssistScreen"
+	// gameAssistSpeakKey is "Read answers aloud in games" (on unless false):
+	// the answer over a paused game is spoken whatever "Juka's voice" says,
+	// since the player is holding a handheld, not reading a screen of text.
+	gameAssistSpeakKey = "gameAssistSpeak"
 	// gameAssistRecent is how long after a game ends Juka still knows it was
 	// played: long enough to ask about it back on Home, short enough that an
 	// evening's first question is not about the afternoon's game.
@@ -49,7 +55,15 @@ func gameAssistEnabled(c *Config) bool {
 	if c == nil {
 		return false
 	}
-	return customBool(c.Variables.Custom, gameAssistKey, false)
+	return customBool(c.Variables.Custom, gameAssistKey, true)
+}
+
+// gameAssistSpeakEnabled reports "Read answers aloud in games".
+func gameAssistSpeakEnabled(c *Config) bool {
+	if c == nil {
+		return true
+	}
+	return customBool(c.Variables.Custom, gameAssistSpeakKey, true)
 }
 
 // gameAssistScreenEnabled reports "Juka can see the game screen".
@@ -79,7 +93,7 @@ func gameAssistStore(c *Config, key string, on bool) {
 // own window).
 func gameAssistDetail(*Config) string {
 	if gameAssistSupported() {
-		return "Hold Select + R2 in a game to ask Juka about it"
+		return "Hold Select + R2 in a game to ask Juka about it; press them again to play on"
 	}
 	return "The voice orb (F4) and Chat know the game you play"
 }
@@ -106,6 +120,17 @@ func gameAssistSettingsRows() []setRow {
 			Set: func(c *Config, on bool) {
 				gameAssistStore(c, gameAssistScreenKey, on)
 				setToast("Juka can see the game screen: " + setOnOff(on))
+			},
+		},
+		{
+			ID: gameAssistSpeakKey, Label: "Read answers aloud in games", Kind: setKindToggle,
+			Detail: setStatic("Juka says the answer as well as showing it, even with Juka's voice off"),
+			// Only the handheld draws the answer over a paused game.
+			Visible: func(c *Config) bool { return gameAssistSupported() && gameAssistEnabled(c) },
+			Get:     gameAssistSpeakEnabled,
+			Set: func(c *Config, on bool) {
+				gameAssistStore(c, gameAssistSpeakKey, on)
+				setToast("Read answers aloud in games: " + setOnOff(on))
 			},
 		},
 	}

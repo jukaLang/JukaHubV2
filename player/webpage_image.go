@@ -31,6 +31,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,369 @@ type webImageMeta struct {
 type webImagePos struct {
 	Key  string
 	Rect sdl.Rect
+}
+
+// webSrcsetTargetWidth is the design-pixel width a responsive image should
+// cover on the handheld. The reader lays pages out around this width, so a
+// "1280w" candidate is a better fit than the tiny fallback many pages put in
+// src for old browsers.
+const (
+	webSrcsetTargetWidth   = 960.0
+	webSrcsetTargetDensity = 2.0
+)
+
+// webSrcsetCandidate is one entry from an img srcset attribute. Exactly one of
+// W (a "640w" width descriptor) and D (a "2x" density descriptor) is usually
+// set; an entry without a descriptor is treated as 1x.
+type webSrcsetCandidate struct {
+	URL string
+	W   float64
+	D   float64
+}
+
+// webSplitSrcset splits entries without cutting a data URI in half: its
+// base64 payload contains a comma that is part of the URL, not a separator.
+func webSplitSrcset(srcset string) []string {
+	var entries []string
+	start, inData := 0, false
+	for i := 0; i < len(srcset); i++ {
+		c := srcset[i]
+		if !inData && strings.HasPrefix(srcset[i:], "data:") {
+			inData = true
+		}
+		if inData && webAttrSpaceByte(c) {
+			inData = false
+		}
+		if c == ',' && (!inData || i+1 < len(srcset) && webAttrSpaceByte(srcset[i+1])) {
+			entries = append(entries, srcset[start:i])
+			start = i + 1
+			inData = false
+		}
+	}
+	return append(entries, srcset[start:])
+}
+
+// webSrcsetPick chooses the srcset entry closest to the reader's width. Width
+// descriptors win over density descriptors when both appear (mixed srcsets are
+// invalid HTML). If every candidate is narrower than the target, the widest is
+// still better than the fallback; if every one is wider, the smallest wastes
+// the least bandwidth.
+func webSrcsetCandidates(srcset string) []webSrcsetCandidate {
+	var candidates []webSrcsetCandidate
+	for _, entry := range webSplitSrcset(srcset) {
+		fields := strings.Fields(entry)
+		if len(fields) == 0 {
+			continue
+		}
+		c := webSrcsetCandidate{URL: fields[0], D: 1}
+		if len(fields) > 1 {
+			desc := strings.ToLower(fields[1])
+			switch {
+			case strings.HasSuffix(desc, "w"):
+				if n, err := strconv.ParseFloat(strings.TrimSuffix(desc, "w"), 64); err == nil && n > 0 {
+					c.W, c.D = n, 0
+				}
+			case strings.HasSuffix(desc, "x"):
+				if n, err := strconv.ParseFloat(strings.TrimSuffix(desc, "x"), 64); err == nil && n > 0 {
+					c.D = n
+				}
+			}
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates
+}
+
+func webSrcsetPick(srcset string, targetW float64) string {
+	candidates := webSrcsetCandidates(srcset)
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.W > 0 {
+			if best.W <= 0 || (best.W < targetW && c.W > best.W) || (c.W >= targetW && c.W < best.W) {
+				best = c
+			}
+			continue
+		}
+		if best.W <= 0 && c.W <= 0 {
+			if best.D < webSrcsetTargetDensity && c.D > best.D {
+				best = c
+			} else if best.D >= webSrcsetTargetDensity && c.D >= webSrcsetTargetDensity && c.D < best.D {
+				best = c
+			}
+		}
+	}
+	return best.URL
+}
+
+// webSrcsetHasWidth reports whether a srcset uses width descriptors. Only
+// those need a `sizes` target; a density srcset is chosen independently of the
+// rendered width.
+func webSrcsetHasWidth(srcset string) bool {
+	for _, c := range webSrcsetCandidates(srcset) {
+		if c.W > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// webSizesLength resolves one entry of an img sizes attribute. The reader has
+// a real CSS viewport for media queries, so viewport units can be used here
+// even though the styled reader's layout rejects them elsewhere. calc() is
+// evaluated with those same viewport dimensions, not merely stripped down to
+// its px/em operands.
+func webSizesLength(value string, vw, vh float64) (float64, bool) {
+	return webSizesLengthIn(value, vw, vh, vw, vh)
+}
+
+// webSizesLengthIn is webSizesLength with the dimensions of the nearest query
+// container. With no container, callers pass the viewport, which is the CSS
+// fallback for container-relative units.
+func webSizesLengthIn(value string, vw, vh, cw, ch float64) (float64, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "auto" {
+		return 0, false
+	}
+	if strings.HasPrefix(value, "calc(") && strings.HasSuffix(value, ")") {
+		if px, ok := webEvalCalcContainer(value[len("calc("):len(value)-1], 16, vw, vh, cw, ch); ok && px >= 0 {
+			return px, true
+		}
+		return 0, false
+	}
+	unit := func(suffix string) (float64, bool) {
+		if !strings.HasSuffix(value, suffix) {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, suffix)), 64)
+		return n, err == nil && n >= 0
+	}
+	switch {
+	case strings.HasSuffix(value, "vw"):
+		if n, ok := unit("vw"); ok {
+			return vw * n / 100, true
+		}
+	case strings.HasSuffix(value, "vh"):
+		if n, ok := unit("vh"); ok {
+			return vh * n / 100, true
+		}
+	case strings.HasSuffix(value, "vmin"):
+		if n, ok := unit("vmin"); ok {
+			return min(vw, vh) * n / 100, true
+		}
+	case strings.HasSuffix(value, "vmax"):
+		if n, ok := unit("vmax"); ok {
+			return max(vw, vh) * n / 100, true
+		}
+	case strings.HasSuffix(value, "cqw"), strings.HasSuffix(value, "cqi"):
+		suffix := "cqw"
+		if strings.HasSuffix(value, "cqi") {
+			suffix = "cqi"
+		}
+		if n, ok := unit(suffix); ok {
+			return cw * n / 100, true
+		}
+	case strings.HasSuffix(value, "cqh"), strings.HasSuffix(value, "cqb"):
+		suffix := "cqh"
+		if strings.HasSuffix(value, "cqb") {
+			suffix = "cqb"
+		}
+		if n, ok := unit(suffix); ok {
+			return ch * n / 100, true
+		}
+	case strings.HasSuffix(value, "cqmin"):
+		if n, ok := unit("cqmin"); ok {
+			return min(cw, ch) * n / 100, true
+		}
+	case strings.HasSuffix(value, "cqmax"):
+		if n, ok := unit("cqmax"); ok {
+			return max(cw, ch) * n / 100, true
+		}
+	}
+	if px := webLength(value, 16); px > 0 {
+		return px, true
+	}
+	return 0, false
+}
+
+// webSizesEntry separates a sizes entry into its optional media condition and
+// its length. A condition can contain parentheses and the length can be a math
+// function, so the split is on the matching top-level close parenthesis.
+func webSizesEntry(entry string) (condition, value string, ok bool) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return "", "", false
+	}
+	if entry[0] != '(' {
+		return "", entry, true
+	}
+	depth := 0
+	for i := 0; i < len(entry); i++ {
+		switch entry[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return entry[:i+1], strings.TrimSpace(entry[i+1:]), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// webSizesTarget picks the rendered image width from a sizes attribute: the
+// first media condition that matches wins, and a bare length is the fallback
+// when no condition does. Zero means no usable size was supplied.
+func webSizesTarget(sizes string, vw, vh float64) float64 {
+	return webSizesTargetIn(sizes, vw, vh, vw, vh)
+}
+
+// webSizesTargetIn evaluates sizes with viewport dimensions for media
+// conditions and container dimensions for cq* lengths.
+func webSizesTargetIn(sizes string, vw, vh, cw, ch float64) float64 {
+	fallback := 0.0
+	for _, part := range webSplitSelectorList(sizes) {
+		condition, value, ok := webSizesEntry(part)
+		if !ok {
+			continue
+		}
+		px, valid := webSizesLengthIn(value, vw, vh, cw, ch)
+		if !valid {
+			continue
+		}
+		if condition == "" {
+			fallback = px
+			continue
+		}
+		if webMediaQueryApplies(condition, vw, vh) {
+			return px
+		}
+	}
+	return fallback
+}
+
+// webSrcsetPickSized applies sizes only to width-descriptor srcsets. A dense
+// srcset keeps the fixed target, because its descriptors are already relative
+// to the output density rather than to the rendered width.
+func webSrcsetPickSized(srcset, sizes string) string {
+	vw, vh := webMediaViewport()
+	return webSrcsetPickSizedIn(srcset, sizes, vw, vh)
+}
+
+// webSrcsetPickSizedIn selects with explicit container dimensions. The sizes
+// list still judges media conditions against the viewport, as CSS does.
+func webSrcsetPickSizedIn(srcset, sizes string, cw, ch float64) string {
+	target := webSrcsetTargetWidth
+	if webSrcsetHasWidth(srcset) {
+		vw, vh := webMediaViewport()
+		if rendered := webSizesTargetIn(sizes, vw, vh, cw, ch); rendered > 0 {
+			target = rendered
+		}
+	}
+	return webSrcsetPick(srcset, target)
+}
+
+// webImageContainerSize resolves the nearest query container around the image
+// being parsed. Widths follow the ancestor chain the way an auto-width block
+// does; without a container, the small viewport is the CSS fallback.
+func (p *webParser) webImageContainerSize() (w, h float64) {
+	w, h = webMediaViewport()
+	idx := -1
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		if p.stack[i].style.ContainerType != 0 {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return w, h
+	}
+	for i := 0; i <= idx; i++ {
+		st := p.stack[i].style
+		if st.WidthPct > 0 {
+			w = w * st.WidthPct / 100
+		} else if st.Width > 0 {
+			w = st.Width
+		}
+		if st.Height > 0 {
+			h = st.Height
+		}
+	}
+	if w <= 0 {
+		w = 1
+	}
+	if h <= 0 {
+		h = 1
+	}
+	return w, h
+}
+
+func (p *webParser) webSrcsetPickForImage(srcset, sizes string) string {
+	cw, ch := p.webImageContainerSize()
+	return webSrcsetPickSizedIn(srcset, sizes, cw, ch)
+}
+
+// webImageTypeSupported reports whether the <source type> MIME is one this
+// build can actually decode. Picture art direction must not pick an AVIF or
+// SVG source only to render the placeholder.
+func webImageTypeSupported(value string) bool {
+	mime := strings.ToLower(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]))
+	switch mime {
+	case "image/png", "image/apng", "image/jpeg", "image/jpg", "image/gif", "image/bmp":
+		return true
+	case "image/webp":
+		return webpDecodable()
+	}
+	return false
+}
+
+// considerPictureSource evaluates one <source> in document order. A matching
+// source stays chosen and later sources are ignored; a source whose media or
+// type does not match, or whose srcset cannot be resolved, lets the walk move
+// on to the next one.
+func (p *webParser) considerPictureSource(attrs string) {
+	n := len(p.pictures)
+	if n == 0 || p.pictures[n-1].selected {
+		return
+	}
+	if media := htmlAttrValue(htmlTagAttribute(attrs, "media")); media != "" && !webMediaBlockApplies(media) {
+		return
+	}
+	if typ := htmlAttrValue(htmlTagAttribute(attrs, "type")); typ != "" && !webImageTypeSupported(typ) {
+		return
+	}
+	srcset := htmlAttrValue(htmlTagAttribute(attrs, "srcset"))
+	if srcset == "" {
+		return
+	}
+	picked := p.webSrcsetPickForImage(srcset, htmlAttrValue(htmlTagAttribute(attrs, "sizes")))
+	if picked == "" {
+		return
+	}
+	if resolved := p.webImageURL(picked); resolved != "" {
+		p.pictures[n-1].chosen = resolved
+		p.pictures[n-1].selected = true
+	}
+}
+
+// webImageSource picks the URL an <img> should use: the matching <picture>
+// source first, then its own srcset, then src. A bad srcset candidate falls
+// back to src rather than dropping the image entirely.
+func (p *webParser) webImageSource(attrs string) string {
+	if n := len(p.pictures); n > 0 && p.pictures[n-1].selected {
+		return p.pictures[n-1].chosen
+	}
+	if srcset := htmlAttrValue(htmlTagAttribute(attrs, "srcset")); srcset != "" {
+		picked := p.webSrcsetPickForImage(srcset, htmlAttrValue(htmlTagAttribute(attrs, "sizes")))
+		if resolved := p.webImageURL(picked); picked != "" && resolved != "" {
+			return resolved
+		}
+	}
+	return p.webImageURL(htmlAttrValue(htmlTagAttribute(attrs, "src")))
 }
 
 // webImageURL resolves an img src into either a data:image/...;base64 URI or

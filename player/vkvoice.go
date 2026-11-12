@@ -406,17 +406,18 @@ func vkVoiceRunAction(config *Config) {
 	}
 }
 
-// vkVoiceOpenKeySettings closes the keyboard and opens the screen where the
-// Groq key is entered: Settings → General, or Keyboard settings when a config
-// has no such page.
+// vkVoiceOpenKeySettings closes the keyboard and opens the place where the
+// Groq key is entered: Settings → General's key sheet, or Keyboard settings
+// when a config has no Settings screen.
 func vkVoiceOpenKeySettings(config *Config) {
 	vkCloseKeyboard()
 	if config == nil {
 		return
 	}
-	if idx := sceneIndexExact(config, "SettingsGeneral"); idx >= 0 {
-		changeSceneTo(config, idx)
-		ShowToast("Paste your key into Groq API Key", ToastKindInfo)
+	// Settings → General → Groq API key with its sheet open: paste the key
+	// from the phone, or type or paste it here (groqkey_sheet.go).
+	if sceneIndexExact(config, "Settings") >= 0 {
+		groqKeyOpenFromAnywhere(config)
 		return
 	}
 	vkOpenSettings(config)

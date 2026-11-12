@@ -630,8 +630,9 @@ func hintKeyboardTwin(tok string, ctx hintCtx) (string, bool) {
 }
 
 // homeHintKey names a button of Home's footer. Home's keyboard twins differ
-// from the generic ones in two places: "/" opens search there (handleHomeKey)
-// and Q/E step the sections like L2/R2 (the global scene keys in main.go).
+// from the generic ones in three places: "/" opens search there
+// (handleHomeKey), Q/E step the sections like L2/R2 (the global scene keys in
+// main.go), and Q alone is L2's Edit Home.
 func homeHintKey(button, label string) string {
 	if hintsUseKeyboard() {
 		switch button {
@@ -639,6 +640,8 @@ func homeHintKey(button, label string) string {
 			return "/"
 		case "L2/R2":
 			return "Q/E"
+		case "L2":
+			return "Q"
 		}
 	}
 	return hintKeyFor(button, label)

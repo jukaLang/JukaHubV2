@@ -3,9 +3,12 @@ package main
 // home_edit.go — Edit Home: arranging the Carousel and Widgets layouts, and
 // switching between Home's layouts.
 //
-// X on a tile (the X key on a keyboard), the footer's Edit pill, a
-// right-click on a tile, Start → Device → Edit Home or Settings → Display &
-// theme → Edit Home open it. While it is open:
+// L2 on Home in any layout (Q on a keyboard), X on a Carousel or Widgets
+// tile, the footer's Edit pill, a right-click on a tile, Start → Device →
+// Edit Home or Settings → Display & theme → Edit Home open it. Standard and
+// the Hero grid keep their cards in place, so editing from them switches Home
+// to Widgets — and back again if editing ends with nothing changed, so a
+// stray L2 costs nothing. While it is open:
 //
 //   - a strip replaces the greeting and the search pill: the four layouts
 //     (Standard, Hero grid, Carousel, Widgets), Reset and Done. L1/R1 (Tab and
@@ -14,24 +17,32 @@ package main
 //   - A picks the focused tile up and the D-pad carries it (Left/Right one
 //     place earlier or later, Up/Down to the place of the tile above or
 //     below); A or B puts it down;
-//   - X steps a widget-grid tile through its sizes; Y (Delete, Backspace)
-//     removes a tile; the "+" tile at the end opens the add sheet
-//     (home_addsheet.go), which inserts after the tile that had the focus;
-//   - B (Esc) ends editing. So does opening the Start menu, the notification
-//     list or search, and leaving Home.
+//   - X resizes a widget-grid tile: the D-pad grows it (Right, Down) and
+//     shrinks it (Left, Up) a square cell at a time, from one cell to the
+//     grid's width and three rows (home_tiles.go homeTileLimits); A, B or X
+//     ends resizing. With the pointer, the handle on the focused tile's
+//     corner drags its size and a click on its size chip steps through the
+//     usual sizes;
+//   - Y (Delete, Backspace) removes a tile; the "+" tile at the end opens the
+//     add sheet (home_addsheet.go), which inserts after the tile that had the
+//     focus;
+//   - B (Esc) or L2 (Q) ends editing. So does opening the Start menu, the
+//     notification list or search, and leaving Home.
 //
 // The list being edited is a copy (homeEdit.work); every finished edit — a
 // tile put down, resized, removed or added, a reset, a layout switch — saves
 // it through homeTilesSet, so nothing is lost if the app quits mid-edit, but
-// carrying a tile across the grid is not a save per step. On Standard and the
-// Hero grid the strip is all there is: those layouts keep their cards where
-// they are, and the body under the strip says so.
+// carrying a tile across the grid or growing it a cell at a time is not a
+// save per step. On Standard and the Hero grid the strip is all there is:
+// those layouts keep their cards where they are, and the body under the
+// strip says so.
 //
 // Every control has a pointer twin: a click focuses a tile, the badges on it
 // remove or resize it, dragging carries it (the grid makes room as it goes),
-// and the strip's chips are buttons.
+// dragging its corner handle sizes it, and the strip's chips are buttons.
 
 import (
+	"math"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -71,6 +82,12 @@ var homeEdit struct {
 
 	// holding: the focused tile is picked up.
 	holding bool
+	// resizing: the D-pad grows and shrinks the focused tile (X).
+	resizing bool
+	// restore is the layout editing switched Home away from (Standard or the
+	// Hero grid). It comes back when editing ends with nothing changed; any
+	// saved change, or a layout picked on the strip, clears it.
+	restore string
 	// strip: the strip has the focus, on chip stripIdx.
 	strip    bool
 	stripIdx int
@@ -84,13 +101,19 @@ var homeEdit struct {
 	// press is a pointer press on a tile that may turn into a drag. lastSwap
 	// is the tile a drag last traded places with: it is not traded with again
 	// until the pointer has left it, or a tile wider than the carried one
-	// would swap back and forth under a still pointer.
+	// would swap back and forth under a still pointer. A press on the corner
+	// handle (resize) sizes the tile instead: its size follows the pointer
+	// from the tile's top-left corner where the press found it (anchorX,
+	// anchorY), so a tile the packing moves to another row keeps its size;
+	// resized says the press changed the size at least once.
 	press struct {
-		active, drag bool
-		id           HomeFocusID
-		x, y         int32
-		offX, offY   int32
-		lastSwap     string
+		active, drag     bool
+		resize, resized  bool
+		id               HomeFocusID
+		x, y             int32
+		offX, offY       int32
+		anchorX, anchorY int32
+		lastSwap         string
 	}
 	mouseX, mouseY int32
 	// scrollAt is when a drag last scrolled the grid at its edge.
@@ -173,9 +196,16 @@ func homeEditBegin(config *Config) {
 	if homeLayout == nil || config == nil {
 		return
 	}
-	if !homeArrangementIsDynamic(homeArrangement(config)) {
-		homeSetArrangement(config, homeArrangementWidgets)
-		ShowToast("Home layout: Widgets", ToastKindInfo)
+	// Standard and the Hero grid have nothing to arrange: Home shows Widgets
+	// while editing, without saving it (homeArrangement answers Widgets while
+	// restore is set). The first saved change keeps it (homeEditCommit);
+	// otherwise the stored layout was never touched, so even quitting
+	// mid-edit leaves it as it was.
+	homeEdit.restore = ""
+	if from := homeArrangement(config); !homeArrangementIsDynamic(from) {
+		homeEdit.restore = from
+		homeLayout.SetArrangement(homeArrangementWidgets)
+		ShowToast("Home layout: Widgets — change something to keep it", ToastKindInfo)
 	}
 	homeCalendarOpen = false
 	dismissWeatherPopover()
@@ -188,9 +218,10 @@ func homeEditBegin(config *Config) {
 	homeEdit.gen++
 	homeEdit.dirty = false
 	homeEdit.holding = false
+	homeEdit.resizing = false
 	homeEdit.strip = false
 	homeEdit.resetAt = 0
-	homeEdit.press.active, homeEdit.press.drag = false, false
+	homeEdit.press.active, homeEdit.press.drag, homeEdit.press.resize = false, false, false
 	homeEdit.sheet = homeAddSheetState{}
 	homeEdit.mouseX, homeEdit.mouseY = mouseX, mouseY
 	homeEdit.open = true
@@ -209,7 +240,8 @@ func homeEditClose(config *Config) {
 		config = appConfig
 	}
 	homeEdit.holding = false
-	homeEdit.press.active, homeEdit.press.drag = false, false
+	homeEdit.resizing = false
+	homeEdit.press.active, homeEdit.press.drag, homeEdit.press.resize = false, false, false
 	homeEdit.sheet.open = false
 	if homeEdit.dirty {
 		homeEditCommit(config)
@@ -218,6 +250,16 @@ func homeEditClose(config *Config) {
 	homeEdit.strip = false
 	homeEdit.resetAt = 0
 	homeEdit.work = nil
+	// Nothing was changed on the Widgets Home editing borrowed: the stored
+	// layout, which editing never wrote, is shown again.
+	if homeEdit.restore != "" {
+		homeEdit.restore = ""
+		back := homeArrangement(config)
+		if homeLayout != nil {
+			homeLayout.SetArrangement(back)
+		}
+		ShowToast("Home layout: "+homeArrangementChoiceLabel(back), ToastKindInfo)
+	}
 	if homeLayout == nil {
 		return
 	}
@@ -234,7 +276,30 @@ func homeEditClose(config *Config) {
 func homeEditCommit(config *Config) {
 	homeTilesSet(config, homeEdit.work)
 	homeEdit.dirty = false
+	// A real change keeps the Widgets Home it was made on: the layout editing
+	// only borrowed is saved now.
+	if homeEdit.restore != "" {
+		homeEdit.restore = ""
+		homeSetArrangement(config, homeArrangementWidgets)
+	}
 	trophyEvent(tkHomeEdit) // every caller commits a real change (after homeEditChanged or when dirty)
+}
+
+// homeEditEndForExit ends Edit Home on the way out of the app (shutdown.go):
+// what is not saved yet is saved — which keeps a borrowed Widgets layout when
+// something changed — and nothing is put back on a screen that is going away.
+func homeEditEndForExit(config *Config) {
+	if !homeEdit.open {
+		return
+	}
+	if config == nil {
+		config = appConfig
+	}
+	if homeEdit.dirty {
+		homeEditCommit(config)
+	}
+	homeEdit.restore = ""
+	homeEditClose(config)
 }
 
 // homeEditChanged records a change to the list being edited and lays the
@@ -358,17 +423,131 @@ func homeTilesMove(tiles []homeTile, i, j int) []homeTile {
 	return tiles
 }
 
-// homeEditResize steps the focused tile to its next size (Widgets only).
-func homeEditResize(config *Config) {
+// homeEditResizable is the focused tile's ref and list index when it is a
+// widget-grid tile that can change size; ok=false otherwise.
+func homeEditResizable() (ref string, i int, ok bool) {
 	h := homeLayout
-	ref, i := homeEditCurrent()
-	if h == nil || i < 0 || h.dynCarousel() || !homeTileCanResize(ref) {
+	ref, i = homeEditCurrent()
+	if h == nil || i < 0 || !h.dynActive() || h.dynCarousel() || !homeTileCanResize(ref) {
+		return ref, i, false
+	}
+	return ref, i, true
+}
+
+// homeEditResizeToggle is X on a tile: it starts resize mode, where the D-pad
+// grows and shrinks the tile, and X again ends it. A carried tile is put down
+// first.
+func homeEditResizeToggle(config *Config) {
+	if homeEdit.resizing {
+		homeEditResizeEnd(config)
+		return
+	}
+	if _, _, ok := homeEditResizable(); !ok {
+		return
+	}
+	if homeEdit.holding {
+		homeEdit.holding = false
+		if homeEdit.dirty {
+			homeEditCommit(config)
+		}
+	}
+	homeEdit.resizing = true
+	PlayActivateSound()
+}
+
+// homeEditResizeEnd leaves resize mode and saves the size it reached.
+func homeEditResizeEnd(config *Config) {
+	if !homeEdit.resizing {
+		return
+	}
+	homeEdit.resizing = false
+	if homeEdit.dirty {
+		homeEditCommit(config)
+	}
+	PlayActivateSound()
+}
+
+// homeEditResizeStep is a D-pad press in resize mode: Right and Down add a
+// column or a row, Left and Up take one away, inside the tile's limits. The
+// grid packs again at once (the other tiles make room or close up), and the
+// focus stays with the tile wherever the packing puts it.
+func homeEditResizeStep(config *Config, dir FocusDirection) {
+	ref, i, ok := homeEditResizable()
+	if !ok {
+		homeEdit.resizing = false
+		return
+	}
+	dw, dh := 0, 0
+	switch dir {
+	case FocusLeft:
+		dw = -1
+	case FocusRight:
+		dw = 1
+	case FocusUp:
+		dh = -1
+	case FocusDown:
+		dh = 1
+	}
+	cur := homeTileSnapSize(ref, homeEdit.work[i].Size)
+	next := homeTileResized(ref, cur, dw, dh)
+	if next == cur {
+		// Already as small (or as large) as the tile goes that way.
+		PlayBackSound()
+		return
+	}
+	homeEdit.work[i].Size = next
+	homeEditChanged(config)
+	homeEditFocusRef(ref)
+	PlayNavSound()
+}
+
+// homeEditResizeCycle steps the focused tile to the next of the usual sizes
+// and saves: a click on its size chip (home_tiles.go homeTileNextSize).
+func homeEditResizeCycle(config *Config) {
+	ref, i, ok := homeEditResizable()
+	if !ok {
 		return
 	}
 	homeEdit.work[i].Size = homeTileNextSize(ref, homeEdit.work[i].Size)
 	homeEditChanged(config)
 	homeEditCommit(config)
 	homeEditFocusRef(ref)
+	PlayNavSound()
+}
+
+// homeEditResizeDragTo sizes the tile whose corner handle the pointer holds:
+// the pointer (less where on the handle it was grabbed) is the tile's
+// bottom-right corner, measured in whole cells from the corner the tile had
+// when the press began.
+func homeEditResizeDragTo(config *Config, mx, my int32) {
+	h := homeLayout
+	if h == nil || !h.dynActive() || h.dynCarousel() {
+		return
+	}
+	i := homeTilesIndex(homeEdit.work, string(homeEdit.press.id))
+	if i < 0 {
+		return
+	}
+	ref := homeEdit.work[i].Ref
+	colPitch := float64(scaleX(int32(math.Round(homeDynColX(1)-homeDynColX(0))), h.Width))
+	rowPitch := float64(scaleY(homeDynPitch, h.Height))
+	gapX := float64(scaleX(homeDynGap, h.Width))
+	gapY := float64(scaleY(homeDynGap, h.Height))
+	if colPitch <= 0 || rowPitch <= 0 {
+		return
+	}
+	w := float64(mx+homeEdit.press.offX-homeEdit.press.anchorX) + gapX
+	ht := float64(my+homeEdit.press.offY-homeEdit.press.anchorY) + gapY
+	next := homeTileSnapSize(ref, homeTileSize{W: int(math.Round(w / colPitch)), H: int(math.Round(ht / rowPitch))})
+	if next == homeTileSnapSize(ref, homeEdit.work[i].Size) {
+		return
+	}
+	homeEdit.work[i].Size = next
+	homeEdit.press.resized = true
+	homeEditChanged(config)
+	if h.Focus.Set(homeEdit.press.id) {
+		h.Focus.Remember()
+	}
 	PlayNavSound()
 }
 
@@ -380,6 +559,7 @@ func homeEditRemove(config *Config) {
 		return
 	}
 	homeEdit.holding = false
+	homeEdit.resizing = false
 	homeEdit.work = append(homeEdit.work[:i:i], homeEdit.work[i+1:]...)
 	homeEditChanged(config)
 	homeEditCommit(config)
@@ -424,6 +604,7 @@ func homeEditReset(config *Config) {
 	}
 	homeEdit.resetAt = 0
 	homeEdit.holding = false
+	homeEdit.resizing = false
 	homeEdit.work = homeDefaultTiles()
 	homeEditChanged(config)
 	homeEditCommit(config)
@@ -446,7 +627,11 @@ func homeEditChooseLayout(config *Config, i int) {
 		homeEditCommit(config)
 	}
 	homeEdit.holding = false
+	homeEdit.resizing = false
 	homeEdit.resetAt = 0
+	// A layout picked here is the user's choice: editing must not put the old
+	// one back when it ends.
+	homeEdit.restore = ""
 	name := homeArrangementChoiceList[i]
 	changed := normalizeHomeArrangement(name) != homeArrangement(config)
 	homeSetArrangement(config, name)
@@ -480,6 +665,10 @@ func homeEditCycleLayout(config *Config, step int) {
 func homeEditNavigate(config *Config, dir FocusDirection) {
 	h := homeLayout
 	if h == nil {
+		return
+	}
+	if homeEdit.resizing {
+		homeEditResizeStep(config, dir)
 		return
 	}
 	if !h.dynActive() {
@@ -565,8 +754,12 @@ func homeEditStripActivate(config *Config, i int) {
 }
 
 // homeEditPrimary is A: the strip's chip, the add sheet, or picking up and
-// putting down the focused tile.
+// putting down the focused tile. In resize mode it is done resizing.
 func homeEditPrimary(config *Config) {
+	if homeEdit.resizing {
+		homeEditResizeEnd(config)
+		return
+	}
 	if homeEdit.strip {
 		homeEditStripActivate(config, homeEdit.stripIdx)
 		return
@@ -601,8 +794,13 @@ func homeEditDrop(config *Config) {
 	PlayActivateSound()
 }
 
-// homeEditBack is B: put the held tile down, else finish editing.
+// homeEditBack is B: end resizing, put the held tile down, else finish
+// editing.
 func homeEditBack(config *Config) {
+	if homeEdit.resizing {
+		homeEditResizeEnd(config)
+		return
+	}
 	if homeEdit.holding {
 		homeEditDrop(config)
 		return
@@ -620,6 +818,29 @@ func homeEditPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if homeEdit.sheet.open {
 		return homeAddSheetPad(e, config)
 	}
+	if homeEdit.resizing {
+		// Resize mode: the D-pad sizes the tile, A, B and X end it. Y and
+		// the shoulders wait (a layout switch or a removal mid-resize would
+		// lose track of the tile); Start falls through to the menu, which
+		// ends editing and saves.
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			homeEditResizeStep(config, FocusUp)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			homeEditResizeStep(config, FocusDown)
+		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			homeEditResizeStep(config, FocusLeft)
+		case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			homeEditResizeStep(config, FocusRight)
+		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_X:
+			homeEditResizeEnd(config)
+		case sdl.CONTROLLER_BUTTON_Y, sdl.CONTROLLER_BUTTON_LEFTSHOULDER, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER,
+			sdl.CONTROLLER_BUTTON_BACK:
+		default:
+			return false
+		}
+		return true
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		homeEditNavigate(config, FocusUp)
@@ -633,7 +854,7 @@ func homeEditPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 		homeEditPrimary(config)
 	case sdl.CONTROLLER_BUTTON_X:
 		if !homeEdit.strip {
-			homeEditResize(config)
+			homeEditResizeToggle(config)
 		}
 	case sdl.CONTROLLER_BUTTON_Y:
 		if !homeEdit.strip {
@@ -656,8 +877,9 @@ func homeEditPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 }
 
 // homeEditKey is the keyboard while editing: the arrows, Enter (A), X or R
-// (size), Delete, Backspace or Y (remove), Tab / Shift+Tab (layout) and Esc
-// (B). Q and E, the section keys, are kept from paging away mid-edit.
+// (resize; the arrows then size the tile), Delete, Backspace or Y (remove),
+// Tab / Shift+Tab (layout), Esc (B) and Q, L2's twin on Home, which is Done.
+// E, the other section key, is kept from paging away mid-edit.
 func homeEditKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return true
@@ -680,14 +902,14 @@ func homeEditKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 	case sdl.K_x, sdl.K_r:
 		if e.Repeat == 0 && !homeEdit.strip {
-			homeEditResize(config)
+			homeEditResizeToggle(config)
 		}
 	case sdl.K_DELETE, sdl.K_BACKSPACE, sdl.K_y:
-		if e.Repeat == 0 && !homeEdit.strip {
+		if e.Repeat == 0 && !homeEdit.strip && !homeEdit.resizing {
 			homeEditRemove(config)
 		}
 	case sdl.K_TAB:
-		if e.Repeat == 0 {
+		if e.Repeat == 0 && !homeEdit.resizing {
 			step := 1
 			if e.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
 				step = -1
@@ -698,21 +920,48 @@ func homeEditKey(e *sdl.KeyboardEvent, config *Config) bool {
 		if e.Repeat == 0 {
 			homeEditBack(config)
 		}
-	case sdl.K_q, sdl.K_e:
+	case sdl.K_q:
+		if e.Repeat == 0 {
+			homeEditTrigger(config)
+		}
+	case sdl.K_e:
 	default:
 		return false
 	}
 	return true
 }
 
-// homeEditBadgeRects are a tile's remove badge and size chip for a tile drawn
-// at draw. The badge sits on the tile's top-right corner, most of it in the
-// gutter, so it covers neither a tile's content (the Continue card's play
-// button, a clock's figures) nor its neighbour. The size chip is a tab on the
-// middle of the bottom edge, and only the focused tile of the grid wears one
-// (withSize): one tile's chip over the gutter reads as its label, a chip on
-// every tile covered their names.
-func (h *HomeLayout) homeEditBadgeRects(fonts HomeFonts, t homeDynTile, draw sdl.Rect, withSize bool) (remove, size sdl.Rect) {
+// homeEditTrigger is L2 on Home (shoulders.go) and Q, its keyboard twin: it
+// opens Edit Home, and while editing it is Done, as B is — a carried tile is
+// put down and a resize kept. The add sheet ignores it (B closes the sheet).
+// It opens only while Home itself is in front: under a menu, a popover or the
+// keyboard the trigger belongs to what is on top.
+func homeEditTrigger(config *Config) {
+	if homeEdit.open {
+		if homeEdit.sheet.open {
+			return
+		}
+		PlayBackSound()
+		homeEditClose(config)
+		return
+	}
+	if !homeOwnsPointer() {
+		return
+	}
+	PlayActivateSound()
+	homeEditOpen(config)
+}
+
+// homeEditBadgeRects are a tile's edit badges for a tile drawn at draw: the
+// remove badge, and on the focused grid tile (withSize) the size chip and the
+// resize handle. The remove badge sits on the tile's top-right corner, most
+// of it in the gutter, so it covers neither a tile's content (the Continue
+// card's play button, a clock's figures) nor its neighbour; the handle
+// mirrors it on the bottom-right corner. The size chip is a tab on the middle
+// of the bottom edge, and only the focused tile of the grid wears one: one
+// tile's chip over the gutter reads as its label, a chip on every tile
+// covered their names.
+func (h *HomeLayout) homeEditBadgeRects(fonts HomeFonts, t homeDynTile, draw sdl.Rect, withSize bool) (remove, size, handle sdl.Rect) {
 	d := max32(18, scaleY(26, h.Height))
 	over := min32(d/2, max32(4, scaleX(10, h.Width)))
 	remove = sdl.Rect{X: draw.X + draw.W - d + over, Y: draw.Y - over, W: d, H: d}
@@ -721,8 +970,65 @@ func (h *HomeLayout) homeEditBadgeRects(fonts HomeFonts, t homeDynTile, draw sdl
 		hh := max32(18, scaleY(24, h.Height))
 		w := lw + scaleX(16, h.Width)
 		size = sdl.Rect{X: draw.X + (draw.W-w)/2, Y: draw.Y + draw.H - hh/2 - scaleY(2, h.Height), W: w, H: hh}
+		handle = sdl.Rect{X: draw.X + draw.W - d + over, Y: draw.Y + draw.H - d + over, W: d, H: d}
 	}
-	return remove, size
+	return remove, size, handle
+}
+
+// homeEditBadgeClick runs a tap on the focused grid tile's badges — remove,
+// the size chip (the next usual size) or the corner handle (a press that
+// sizes the tile as it moves). They hang over the tile's edges, where the
+// tile itself is not hit, so they are tried before the tile under the
+// pointer. It reports whether the tap was theirs.
+func homeEditBadgeClick(config *Config, mx, my int32) bool {
+	h := homeLayout
+	if h == nil || !h.dynActive() || h.dynCarousel() || homeEdit.strip {
+		return false
+	}
+	id := h.Focus.Current()
+	i := h.dynTileIndex(id)
+	if i < 0 || h.dyn.tiles[i].Kind == homeTileAdd || !h.dynVisible(i) {
+		return false
+	}
+	draw := h.Items[id].Rect
+	if draw.W <= 0 || draw.H <= 0 {
+		return false
+	}
+	remove, size, handle := h.homeEditBadgeRects(loadHomeFonts(), h.dyn.tiles[i], draw, true)
+	// A tile the pad is carrying is put down where it is first, quietly: the
+	// badge's own sound follows.
+	putDown := func() {
+		if homeEdit.holding {
+			homeEdit.holding = false
+			if homeEdit.dirty {
+				homeEditCommit(config)
+			}
+		}
+	}
+	switch {
+	// The handle is hit as drawn, not grown to a touch target: grown, it
+	// reached over the gutter onto the remove badge of the tile below.
+	case handle.W > 0 && pointInRect(mx, my, handle):
+		putDown()
+		r := h.dynTargetRect(i)
+		homeEdit.press.active, homeEdit.press.drag, homeEdit.press.resize = true, false, true
+		homeEdit.press.resized = false
+		homeEdit.press.id = id
+		homeEdit.press.x, homeEdit.press.y = mx, my
+		homeEdit.press.anchorX, homeEdit.press.anchorY = r.X, r.Y
+		homeEdit.press.offX, homeEdit.press.offY = r.X+r.W-mx, r.Y+r.H-my
+		homeEdit.press.lastSwap = ""
+		PlayActivateSound()
+		return true
+	case size.W > 0 && pointInRect(mx, my, growTouchTarget(size)):
+		putDown()
+		homeEditResizeCycle(config)
+		return true
+	case pointInRect(mx, my, growTouchTarget(remove)):
+		homeEditRemove(config)
+		return true
+	}
+	return false
 }
 
 // homeEditClick is a tap while editing. Every tap is edit mode's.
@@ -737,6 +1043,11 @@ func homeEditClick(mx, my int32, config *Config) bool {
 	}
 	for i, r := range homeEdit.chips {
 		if r.W > 0 && pointInRect(mx, my, growTouchTarget(r)) {
+			// A resize in progress ends (and is saved) first: the D-pad must
+			// not go on sizing a tile behind a focused strip.
+			if homeEdit.resizing {
+				homeEditResizeEnd(config)
+			}
 			homeEdit.strip = true
 			homeEdit.stripIdx = i
 			homeEditStripActivate(config, i)
@@ -745,6 +1056,9 @@ func homeEditClick(mx, my int32, config *Config) bool {
 	}
 	h := homeLayout
 	if h == nil || !h.dynActive() {
+		return true
+	}
+	if homeEditBadgeClick(config, mx, my) {
 		return true
 	}
 	id := h.dynTileAt(mx, my)
@@ -756,9 +1070,14 @@ func homeEditClick(mx, my int32, config *Config) bool {
 		return true
 	}
 	// A tile the pad is carrying is put down before the tap does anything
-	// else: the held state must not pass to the tile that was tapped.
-	if homeEdit.holding {
-		homeEditDrop(config)
+	// else: the held state must not pass to the tile that was tapped. A resize
+	// in progress ends (and is saved) the same way.
+	if homeEdit.holding || homeEdit.resizing {
+		if homeEdit.holding {
+			homeEditDrop(config)
+		} else {
+			homeEditResizeEnd(config)
+		}
 		i = h.dynTileIndex(id)
 		if i < 0 {
 			return true
@@ -768,16 +1087,10 @@ func homeEditClick(mx, my int32, config *Config) bool {
 	draw := h.Items[id].Rect
 	centre := !h.dynCarousel() || (i == h.dyn.carIdx && h.carSettled())
 	if t.Kind != homeTileAdd && centre {
-		remove, size := h.homeEditBadgeRects(loadHomeFonts(), t, draw, !h.dynCarousel() && id == h.Focus.Current())
+		remove, _, _ := h.homeEditBadgeRects(loadHomeFonts(), t, draw, false)
 		if pointInRect(mx, my, growTouchTarget(remove)) {
 			if h.Focus.Set(id) {
 				homeEditRemove(config)
-			}
-			return true
-		}
-		if size.W > 0 && pointInRect(mx, my, growTouchTarget(size)) {
-			if h.Focus.Set(id) {
-				homeEditResize(config)
 			}
 			return true
 		}
@@ -846,6 +1159,11 @@ func homeEditPointerMotion(config *Config, mx, my int32, held bool) bool {
 			homeEditPointerUp(config, mx, my)
 			return true
 		}
+		if homeEdit.press.resize {
+			// The corner handle: the tile's size follows the pointer.
+			homeEditResizeDragTo(config, mx, my)
+			return true
+		}
 		if !homeEdit.press.drag {
 			slop := max32(4, scaleX(homeEditDragSlop, h.Width))
 			if homeAbsInt(int(mx-homeEdit.press.x)) > int(slop) || homeAbsInt(int(my-homeEdit.press.y)) > int(slop) {
@@ -866,7 +1184,9 @@ func homeEditPointerMotion(config *Config, mx, my int32, held bool) bool {
 		}
 		return true
 	}
-	if !moved || homeEdit.holding {
+	// A carried tile and one being resized keep the focus: hovering another
+	// tile must not hand the D-pad to it.
+	if !moved || homeEdit.holding || homeEdit.resizing {
 		return true
 	}
 	for i, r := range homeEdit.chips {
@@ -988,15 +1308,34 @@ func homeEditCarouselDrag(config *Config, mx int32) {
 	}
 }
 
-// homeEditPointerUp ends a press: a drag puts the tile down and saves.
+// homeEditPointerUp ends a press: a drag puts the tile down and saves, and so
+// does letting go of the corner handle.
 func homeEditPointerUp(config *Config, mx, my int32) {
 	if !homeEdit.open || !homeEdit.press.active {
 		return
 	}
-	dragged := homeEdit.press.drag
-	homeEdit.press.active, homeEdit.press.drag = false, false
+	dragged, sized := homeEdit.press.drag, homeEdit.press.resize
+	homeEdit.press.active, homeEdit.press.drag, homeEdit.press.resize = false, false, false
 	homeEdit.press.lastSwap = ""
 	homeEdit.mouseX, homeEdit.mouseY = mx, my
+	if sized {
+		if homeEdit.dirty {
+			homeEditCommit(config)
+		}
+		h := homeLayout
+		if h == nil {
+			return
+		}
+		h.dynEnsureVisible(homeEdit.press.id)
+		// A click on the handle that did not drag toggles resize mode, so
+		// the arrow keys can size the tile too.
+		slop := int(max32(4, scaleX(homeEditDragSlop, h.Width)))
+		if !homeEdit.press.resized && homeAbsInt(int(mx-homeEdit.press.x)) <= slop &&
+			homeAbsInt(int(my-homeEdit.press.y)) <= slop && h.Focus.Current() == homeEdit.press.id {
+			homeEditResizeToggle(config)
+		}
+		return
+	}
 	if dragged {
 		homeEdit.holding = false
 		if homeEdit.dirty {
@@ -1020,7 +1359,7 @@ func homeWheel(config *Config, dy int32) bool {
 		homeAddSheetWheel(dy)
 		return true
 	}
-	if homeEdit.open && (homeEdit.holding || homeEdit.press.active) {
+	if homeEdit.open && (homeEdit.holding || homeEdit.resizing || homeEdit.press.active) {
 		return true
 	}
 	return homeLayout.dynWheel(dy)
@@ -1108,8 +1447,8 @@ var (
 	homeFooterHintsDynamic = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
-		{button: "X", label: "Edit"},
 		{button: "Y", label: "Search"},
+		{button: "L2", label: "Edit"},
 		{button: "Start", label: "Menu"},
 		{button: "Select+Start", label: "Quit"},
 		{}, // Menu/F4 Talk to Juka, when available
@@ -1117,7 +1456,7 @@ var (
 	homeFooterHintsEdit = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Move"},
-		{button: "X", label: "Size"},
+		{button: "X", label: "Resize"},
 		{button: "Y / Del", label: "Remove"},
 		{button: "L1/R1 / Tab", label: "Layout"},
 		{button: "B", label: "Done"},
@@ -1125,8 +1464,13 @@ var (
 	homeFooterHintsHold = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Move"},
 		{button: "A", label: "Drop"},
-		{button: "X", label: "Size"},
+		{button: "X", label: "Resize"},
 		{button: "B", label: "Drop"},
+	}
+	// Resize mode: the D-pad grows and shrinks the tile a cell at a time.
+	homeFooterHintsResize = [len(homeFooterHintsStart)]footerHint{
+		{button: "D-Pad", label: "Resize"},
+		{button: "A / B", label: "Done"},
 	}
 	homeFooterHintsStrip = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Choose"},
@@ -1155,15 +1499,17 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 		return set
 	case homeEdit.open && (homeEdit.strip || !h.dynActive()):
 		return homeFooterHintsStrip
+	case homeEdit.open && homeEdit.resizing:
+		return homeFooterHintsResize
 	case homeEdit.open && homeEdit.holding:
 		set := homeFooterHintsHold
-		if carousel {
+		if _, _, ok := homeEditResizable(); !ok || carousel {
 			set[2] = footerHint{}
 		}
 		return set
 	case homeEdit.open:
 		set := homeFooterHintsEdit
-		if carousel {
+		if _, _, ok := homeEditResizable(); !ok || carousel {
 			set[2] = footerHint{}
 		}
 		if h.Focus.Current() == HomeFocusID(homeTileAddRef) {
@@ -1173,18 +1519,30 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 		return set
 	case h.dynActive():
 		set := homeFooterHintsDynamic
-		if h.Focus.Current() == HomeFocusNowPlaying {
-			// X closes the mini player there (handleHomeController).
-			set[2] = footerHint{}
-		}
 		if showBack {
 			set[5] = footerHint{button: "B", label: "Back"}
 		}
-		return set
+		return homeFooterL2(set)
 	case showBack:
-		return homeFooterHintsBack
+		return homeFooterL2(homeFooterHintsBack)
 	}
-	return homeFooterHintsStart
+	return homeFooterL2(homeFooterHintsStart)
+}
+
+// homeFooterL2 drops "L2 Edit" from a row while a video plays: the pad's
+// shoulders are the player's then (shoulders.go handleVideoShoulder), and L2
+// is its previous video. Q, the keyboard's Edit, still works beside the mini
+// player, so a keyboard row keeps it.
+func homeFooterL2(set [len(homeFooterHintsStart)]footerHint) [len(homeFooterHintsStart)]footerHint {
+	if hintsUseKeyboard() || snapshotVideoState().phase == "idle" {
+		return set
+	}
+	for i := range set {
+		if set[i].button == "L2" {
+			set[i] = footerHint{}
+		}
+	}
+	return set
 }
 
 // ── The edit pill ─────────────────────────────────────────────────────────
@@ -1408,26 +1766,50 @@ func (h *HomeLayout) drawEditVeil(renderer *sdl.Renderer, fonts HomeFonts) {
 }
 
 // drawEditBadges draws a tile's edit-mode badges: the remove disc and, on the
-// grid, the size chip.
+// focused grid tile, the size chip and the resize handle. In resize mode the
+// chip and the handle take the accent, so the tile the D-pad sizes is plain.
 func (h *HomeLayout) drawEditBadges(renderer *sdl.Renderer, fonts HomeFonts, t homeDynTile, draw sdl.Rect, withSize bool) {
 	if renderer == nil {
 		return
 	}
-	remove, size := h.homeEditBadgeRects(fonts, t, draw, withSize)
+	remove, size, handle := h.homeEditBadgeRects(fonts, t, draw, withSize)
+	resizing := withSize && homeEdit.resizing
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	cx, cy, r := remove.X+remove.W/2, remove.Y+remove.H/2, remove.W/2
 	fillCircle(renderer, cx, cy, r+1, sdl.Color{R: 0, G: 0, B: 0, A: 70})
 	fillCircle(renderer, cx, cy, r, WithAlpha(ColorDanger, 235))
 	g := remove.W * 11 / 20
 	drawHomeGlyphTinted(renderer, "minus", sdl.Rect{X: cx - g/2, Y: cy - g/2, W: g, H: g}, contrastText(ColorDanger))
+	if handle.W > 0 {
+		// The handle: a glass disc with the expand arrows on the bottom-right
+		// corner, on an opaque sheet like the chip.
+		hx, hy, hr := handle.X+handle.W/2, handle.Y+handle.H/2, handle.W/2
+		fillCircle(renderer, hx, hy, hr+1, sdl.Color{R: 0, G: 0, B: 0, A: 70})
+		fillCircle(renderer, hx, hy, hr, glassSheetFill())
+		ink := glassChipInk()
+		if resizing {
+			fillCircle(renderer, hx, hy, hr, WithAlpha(ColorAccent, 235))
+			ink = contrastText(ColorAccent)
+		} else {
+			fillCircle(renderer, hx, hy, hr, glassChipFill())
+		}
+		hg := handle.W * 11 / 20
+		drawHomeGlyphTinted(renderer, "fullscreen", sdl.Rect{X: hx - hg/2, Y: hy - hg/2, W: hg, H: hg}, ink)
+	}
 	if size.W > 0 && fonts.Small != nil {
 		// The tab hangs over the tile's edge and its ring: an opaque sheet
 		// under the glass chip keeps its words clear of the lines behind it.
 		fillRoundedRect(renderer, size.X, size.Y, size.W, size.H, size.H/2, glassSheetFill())
-		fillRoundedRect(renderer, size.X, size.Y, size.W, size.H, size.H/2, glassChipFill())
-		strokeRoundedRect(renderer, size.X, size.Y, size.W, size.H, size.H/2, 1, glassChipEdge())
+		ink := glassChipInk()
+		if resizing {
+			fillRoundedRect(renderer, size.X, size.Y, size.W, size.H, size.H/2, WithAlpha(ColorAccent, 235))
+			ink = contrastText(ColorAccent)
+		} else {
+			fillRoundedRect(renderer, size.X, size.Y, size.W, size.H, size.H/2, glassChipFill())
+			strokeRoundedRect(renderer, size.X, size.Y, size.W, size.H, size.H/2, 1, glassChipEdge())
+		}
 		drawText(renderer, fonts.Small, homeTileSizeLabel(t.Size), size.X+size.W/2,
-			size.Y+(size.H-int32(fonts.Small.Height()))/2, glassChipInk(), textAlignCenter)
+			size.Y+(size.H-int32(fonts.Small.Height()))/2, ink, textAlignCenter)
 	}
 }
 

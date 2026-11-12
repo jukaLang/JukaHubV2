@@ -13,6 +13,115 @@ For anything older, the git log and the
 
 ### Added
 
+- **In-game menu: hold Select + L2 to leave any game.** On a TrimUI, holding
+  **Select + L2** for half a second in any game JukaHub launched — RetroArch,
+  PPSSPP, a port — pauses it under a small glass menu: **Resume game**,
+  **Ask Juka** (with the game assistant on) and **Quit to JukaHub**, which asks
+  the emulator to quit the way quitting JukaHub does (SRAM and settings are
+  written) and brings Home back, ending one that hangs after six seconds. It
+  reuses the game assistant's pad grab and pause, so it needs nothing from the
+  emulator. D-pad moves, A chooses, B or the chord again resumes. Settings →
+  Controls → **In-game menu** turns it off (`gameMenu`).
+
+- **Paste the Groq key from your phone.** Settings → General → **Groq API
+  key** now sits right under Your name, with the weather after it. A opens a
+  sheet like the VPN configuration's: **Paste it from your phone** shows a
+  full-screen QR code that opens the Phone Companion straight at its Groq key
+  card — moved to the top, cursor in the field, with a link to
+  console.groq.com/keys — and the code closes itself when the key arrives;
+  **Type or paste it here** opens the key field (Paste chip, L1 + Y, Ctrl+V);
+  **Get a free key** opens Groq's console on Windows; **Remove the key** asks
+  first. Chat's "Add key" and the voice orb's "Add Groq key" land on the same
+  sheet (`player/groqkey_sheet.go`, `player/companion_phonecard.go`,
+  `player/companion.go`).
+
+- **L2 edits Home.** On Home, in every layout, **L2** (**Q** on a keyboard)
+  opens Edit Home and L2 again is Done; the footer says **L2 Edit**. From
+  Standard or the Hero grid it switches to Widgets, and leaving without
+  changing anything puts the layout back. R2 still steps to the next section
+  (`player/shoulders.go`, `player/home_edit.go`).
+
+- **Resize any Home tile, on square cells.** The Widgets layout is now a grid
+  of square cells, seven across (160 × 152 design px), and every tile can be
+  any size from one cell up to the grid's width and three rows (Continue from
+  2 × 2, Media from 2 × 1). In Edit Home, **X** resizes the focused tile: Right
+  / Down grow it a cell, Left / Up shrink it, A, B or X finish. With a mouse,
+  drag the handle on the tile's bottom-right corner, or click the size tab to
+  step through 1×1, 2×1, 2×2, 3×2, 4×2 and 3×3. The default tiles were laid
+  out again for seven columns (`player/home_tiles.go`, `player/home_edit.go`,
+  `player/home_dynbody.go`).
+
+- **The game assistant is on out of the box, and talks back.** Settings →
+  Voice & AI → **Game assistant** now starts on, so on a TrimUI Smart Pro
+  holding **Select + R2** in any game JukaHub launched pauses it and Juka
+  listens. The answer shows in a wider bubble (up to 12 lines) and is read
+  aloud by the new **Read answers aloud in games** switch (on by default,
+  independent of Juka's voice). Pressing **Select + R2** again — a press, no
+  hold — goes straight back to the game. **Juka can see the game screen**
+  stays off until turned on (`player/gameassist*.go`, `player/tts_api.go`,
+  `player/voiceorb.go`).
+
+- **Set the date and time by hand.** Settings → Date & time has a new **Set
+  date & time** row. On the handheld it opens a sheet — Year, Month, Day, Hour,
+  Minute with Left / Right, Y or Set clock to apply — that sets the system
+  clock, re-anchors the alarms and turns Set time automatically off so the next
+  sync does not undo it. On Windows, macOS and Linux PCs the row (and the
+  former read-only "Clock" row, now **Set time automatically** with Windows'
+  own On / Off) opens the system's date & time page. Home search finds it under
+  "set time", "adjust time" and "auto sync".
+
+- **Bluetooth in every top bar.** A Bluetooth button now sits immediately
+  left of the Wi-Fi meter on Home and on every screen: struck through while
+  the radio is off, in the accent with a dot either side while a device is
+  connected. A, a click or a tap opens the Bluetooth page with the ring on the
+  first paired device, and the D-pad reaches the button between the speaker
+  and the meter. Its state comes from the kernel — the adapters and live links
+  in `/sys/class/bluetooth` and the adapter's powered flag — at most every two
+  seconds while the bar is on screen, never from a command. A crowded scene
+  bar gives it up after the forecast; on a crowded Home the trophy cup and the
+  update offer give way a little sooner
+  ([player/statusbar_bluetooth.go](player/statusbar_bluetooth.go),
+  [player/bluetooth_quick.go](player/bluetooth_quick.go),
+  [player/homelayout.go](player/homelayout.go),
+  [player/homefocus.go](player/homefocus.go), [player/focus.go](player/focus.go),
+  [player/icondefs.go](player/icondefs.go)).
+- **Connect or disconnect a Bluetooth device with one press.** On the
+  Bluetooth page A on a paired device connects it or disconnects it, Y opens
+  its details and Forget, and X searches. The page opens on the first paired
+  device (a connected one first) and searches by itself only when nothing is
+  paired; a device that connects or drops on its own — a pad woken with its PS
+  button, a headset switched off — shows on its row within about two seconds.
+  Until the list has loaded, A on the switch row cannot turn a powered radio
+  off by accident
+  ([player/bluetooth_devices_ui.go](player/bluetooth_devices_ui.go),
+  [player/bluetooth_devices.go](player/bluetooth_devices.go)).
+- **Bluetooth starts itself when the firmware left it stopped.** Switching
+  Bluetooth on, Connect, Pair and Search first bring the stack up on the
+  TrimUI handhelds, a step at a time and only where one is missing: the
+  firmware's own bring-up script when the chip is not attached, `bluetoothd`
+  when it is not running, an rfkill block, then power. Every step has a time
+  limit and runs only the firmware's own programs at fixed paths. A radio
+  whose `bluetoothd` is not running reads as off, so the switch offers **Turn
+  on** instead of contradicting the error under it; pairing still registers
+  its own agent, so a pairing is bonded and kept
+  ([player/bluetooth_bringup.go](player/bluetooth_bringup.go),
+  [player/bluetooth_bringup_linux.go](player/bluetooth_bringup_linux.go)).
+- **The system's own Bluetooth settings, one press from JukaHub on a PC.** On
+  Windows and macOS the top bar's Bluetooth button opens a page whose **Open
+  Bluetooth settings** row goes to Settings → Bluetooth & devices or the macOS
+  Bluetooth pane; a Linux PC without `bluetoothctl` gets the same row for
+  GNOME's or Blueman's settings ([player/onboarding.go](player/onboarding.go),
+  [player/bluetooth_devices_ui.go](player/bluetooth_devices_ui.go)).
+- **The APK Store is one press from Packages.** A **More stores** strip under
+  the Packages toolbar — in the rows, grid and list views and in the empty and
+  offline states, since none of it needs the package list — opens the APK
+  Store (Android games) and PortMaster on the handheld and Windows Apps
+  everywhere. Up from the top of a view reaches it, Left and Right pick a
+  store, A opens it, and Back from the APK Store lands on its pill again. Home
+  search now finds the three by what they hold ("android", "apk", "play
+  store", "wine", "ports") ([player/pkgstores.go](player/pkgstores.go),
+  [player/pkginput.go](player/pkginput.go), [player/pkgui.go](player/pkgui.go),
+  [player/homesearch_index.go](player/homesearch_index.go)).
 - **Juka talks.** The voice orb says Juka's answers out loud — and the time,
   the date, the battery and the help line — and keeps its bubble up until it
   has finished; any button stops it. **Settings → Voice & AI** (a new page)
@@ -82,6 +191,35 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The VPN's "Send one from your phone" opens the VPN card.** Its QR code
+  now opens the companion page at the VPN card (moved to the top, the cursor
+  in the text box) and closes itself when the configuration arrives, instead
+  of showing the general pairing card (`player/vpn.go`).
+
+- **Alarm editor rebuilt for the pad.** It is one page of rows — Hour,
+  Minute, Label, Ringtone, then Save and Delete buttons: Up / Down moves,
+  Left / Right changes (held, it repeats), L1 / R1 move the time 10 minutes, Y
+  saves from any row, and B asks once before throwing changes away. The label
+  is typed on the on-screen keyboard (A on Label, or a tap); before, it only
+  took a physical keyboard, so on the handheld it could not be edited at all.
+  The page previews the time and says when it rings ("Rings tomorrow · in 9 h
+  12 min"); the day-of-week strip, which suggested repeat days alarms do not
+  have, is gone.
+
+- **Bluetooth's state comes from the kernel, not from `bluetoothctl show`.**
+  The Bluetooth page and the PS Remote Play panel read the radio from the
+  adapter's powered flag (one ioctl) and `/sys/class/bluetooth` instead of
+  starting `bluetoothctl show` every five seconds, which also sat out its
+  three-second timeout whenever `bluetoothd` was down; `bluetoothctl` stays the
+  fallback where the kernel cannot be asked
+  ([player/bluetooth_devices.go](player/bluetooth_devices.go),
+  [player/bluetooth_bringup_linux.go](player/bluetooth_bringup_linux.go)).
+- **Quick Settings switches Bluetooth on through the same bring-up.** The
+  switch flips at once and the bring-up runs off the render thread, so the
+  panel no longer freezes while `bluetoothctl` answers; the switch then shows
+  what the radio really did, and a failure says why
+  ([player/quicksettings.go](player/quicksettings.go),
+  [player/bluetooth_bringup.go](player/bluetooth_bringup.go)).
 - **The liquid background moves smoothly.** The water is drawn between its
   30 Hz steps, on a mesh twice as fine as its grid with smooth heights and a
   linearly filtered wallpaper, so ripples no longer jump in 33 ms steps or show
@@ -120,6 +258,67 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Box art is found for games again, automatically and from Fill gaps.** The
+  fetcher only guessed file names, so a ROM not named exactly like the
+  No-Intro title on the libretro thumbnail server ("Super Mario World.sfc",
+  "Pokemon Emerald (U).gba", "The Legend of Zelda - …") never got a cover, and
+  the month-long not-found cache kept it that way. It now reads the server's
+  cover list for each console once (kept on the card for two weeks under
+  `data/game-art/.server-index`) and matches against it: exact name, then the
+  title with tags, "The", "&"/"and", punctuation and Roman numerals folded,
+  then "Version"/"Edition" and spaces ignored, then a subtitle the ROM's name
+  left out; the ROM's region, disc and revision tags pick the release
+  (otherwise USA, World, Europe, Japan; betas and demos last). A title the list
+  does not know gets one more try through the game database's CRC match when
+  that database is already on the card. Also fixed: requests used Go's default
+  client, so on a firmware with no certificate bundle every one failed and the
+  automatic pass backed off for good (now the firmware CA fallback, then plain
+  http for these public pictures, as RetroArch does); the name guesses spent
+  half their budget on underscored names the server does not have and never
+  applied its rule that `&`, `:`, `?`, `*` and similar characters become `_`; Atari, Sega CD and arcade
+  games asked for folders the server does not have ("Atari - 2600",
+  "Sega - Mega-CD - Sega CD", "MAME" now); covers the firmware or CrossMix
+  already keep in `Roms/<console>/Imgs` (or MinUI's `.res`) are shown and no
+  longer looked up; a cover cut short by a power cut no longer counts as
+  present. CrossMix's `ATARI`, `PICO`, `CPS1-3` and `MEGACD` folders are now
+  scanned. The not-found cache is reset once so every title is asked again.
+
+- **Bluetooth on the TrimUI Smart Pro: the chip is found and started.** With
+  TrimUI's own switch off there is no adapter (`hci0`) at all, and JukaHub's
+  bring-up relied on a generic Allwinner script (`/etc/bluetooth/bt_init.sh`)
+  that no TrimUI image was shown to have, so Turn on, Search and Connect ended
+  in "Bluetooth is not started". On the Smart Pro, Brick, Brick Pro and Hammer
+  JukaHub now attaches the XR829 chip on `ttyS1` itself when no script does
+  (rfkill power pulse, then `hciattach -n ttyS1 xradio` or
+  `rtk_hciattach -n -s 3000000 ttyS1 xradio`, a stuck attach stopped first),
+  and also tries chip-named scripts such as `bt_init.sh_xr829`. Every Bluetooth
+  tool (`bluetoothctl`, `rfkill`, `hciattach`, `bluetoothd`) is now found
+  beyond the launcher's PATH (system sbin/libexec directories,
+  `/usr/trimui/bin`, CrossMix's `System/bin`) and run with the firmware's
+  library path; `bluetoothctl show`/`power` used to run with JukaHub's. The
+  connected-headset name no longer asks BlueZ 5.54 for `devices Connected`,
+  which it refuses. A **Bluetooth** section — tools and where they are,
+  adapters and links, HCI_UP, rfkill switches, the chip port, bluetoothd /
+  hciattach / trimui_btmanager processes and their command lines, pairing
+  stores per adapter address, `system.json`'s Bluetooth keys — is written to
+  the log when the Bluetooth page first opens and on every failed bring-up,
+  and rides in the diagnostics bundle (`player/bluetooth_tools.go`,
+  `player/bluetooth_attach.go`, `player/bluetooth_diag.go`,
+  `player/bluetooth_bringup.go`, `player/systemcontrol.go`,
+  `player/audiooutput.go`).
+- **Quick Settings no longer leaves Bluetooth unpowered behind an rfkill
+  block.** With the radio soft-blocked, the switch lifted the block but never
+  asked the adapter for power again, so it went back to off a moment later;
+  switching on now unblocks and then powers the adapter
+  ([player/quicksettings.go](player/quicksettings.go),
+  [player/bluetooth_bringup.go](player/bluetooth_bringup.go)).
+- **A Bluetooth device that does not connect gets advice on the stock
+  firmware.** BlueZ 5.54, which the TrimUI handhelds run, reports a failed
+  connection only as "Failed", and the page said "Bluetooth said: Failed"; it
+  now says the device did not answer — switch it on and keep it close — and
+  newer BlueZ's reasons ("Host is down", "le-connection-abort-by-local",
+  "Connection refused") get advice of their own
+  ([player/bluetooth_devices.go](player/bluetooth_devices.go)).
 - **Leaving JukaHub no longer leaves CrossMix glitchy.** `launch.sh` started a
   second stock menu when the firmware took more than ten seconds to bring its
   own back, and both drew to the screen; it now waits for the firmware's

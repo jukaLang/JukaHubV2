@@ -61,7 +61,8 @@ var shortcutCategories = []struct {
 		items: []shortcutEntry{
 			{"Enter", "Open the focused card"},
 			{"/", "Search"},
-			{"Q / E", "Previous / next section"},
+			{"Q", "Edit Home (pad: L2); in it, X or R resizes a tile"},
+			{"E", "Next section"},
 			{"Esc", "Close the calendar or the playing video"},
 			{"J U K A", "Fireworks"},
 		},

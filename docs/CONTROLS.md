@@ -4,25 +4,36 @@ JukaHub is controller-first: every screen is reachable with the D-pad and the
 four face buttons. Keyboard and mouse are supported on desktop builds.
 
 The top bar always shows the system status — a brightness button, a volume
-button, a Wi-Fi meter, the weather chip, the clock, a battery gauge, the
-now-playing title and the notification bell on the right, the **Apps** pill and
-a **back** pill on the left. The bottom of every screen is the hint bar for real
-controller bindings; there is no second clock or battery indicator down there.
+button, a Bluetooth button, a Wi-Fi meter, the weather chip, the clock, a
+battery gauge, the now-playing title and the notification bell on the right,
+the **Apps** pill and a **back** pill on the left. The bottom of every screen is
+the hint bar for real controller bindings; there is no second clock or battery
+indicator down there.
 
-The **Wi-Fi meter** sits immediately right of the volume button and is a button
+The **Wi-Fi meter** sits immediately right of the Bluetooth button and is a button
 on every screen: four bars that are hollow when there is no link and fill with
 signal strength, plus `! Offline` while the device has no network at all. A
 click or tap opens the Wi-Fi picker (scan, connect, enter a password). From a
 controller it is part of the same focus row as the clock and the forecast: on
 Home **Up** from the Settings card reaches the header, then **Left**/**Right**
-walk the brightness and volume buttons, the meter, the forecast, the clock, the now-playing
+walk the brightness, volume and Bluetooth buttons, the meter, the forecast, the clock, the now-playing
 chip, the update offer and the bell; in any other scene **Up** leaves the content for the top bar and
 **Left**/**Right** walk it. **A** on the meter opens the picker, exactly like a
 tap. The same picker is also
 **Start → Wi-Fi Networks** and the Wi-Fi row in Quick Settings.
 
-The **volume button**, a speaker, leads the cluster, immediately left of the
-Wi-Fi meter, wherever JukaHub can drive a mixer: the codec on a TrimUI,
+The **Bluetooth button**, the Bluetooth rune, sits between the volume button and
+the Wi-Fi meter wherever JukaHub can pair devices (a TrimUI, or a Linux PC with
+`bluetoothctl`) and on Windows and macOS. The rune is struck through while the
+radio is off and turns the accent colour, with a dot either side, while a device
+is connected. **A** on it, or a click or tap, opens the
+[Bluetooth page](#bluetooth-devices) with the ring on the first paired device,
+so a second **A** connects or disconnects it; on Windows and macOS the page
+offers the system's own Bluetooth settings. A crowded screen bar gives the
+button up after the forecast.
+
+The **volume button**, a speaker, sits immediately left of the Bluetooth
+button, wherever JukaHub can drive a mixer: the codec on a TrimUI,
 JukaHub's own entry in the Windows volume mixer, PulseAudio or ALSA on a Linux
 PC. Its glyph follows the level, with a cross while muted. **A** on it, or a
 click or tap, opens the **volume card**: the level, a slider and a mute button.
@@ -114,7 +125,8 @@ its own (Playtime, the terminal, the audio player) there is nothing to step up
 from, so **Up** goes straight to the bar and **Down** hands the pad back to the
 page. Once a bar button holds the ring it answers to **A** before the screen
 underneath: the back pill goes back, the Apps pill opens the menu, the clock and
-the forecast open their cards, the Wi-Fi meter opens the picker, the trophy
+the forecast open their cards, the Bluetooth button opens the Bluetooth page,
+the Wi-Fi meter opens the picker, the trophy
 opens Trophies and the bell opens the notification centre, even where the same button does something else
 in the scene below.
 
@@ -172,7 +184,7 @@ and why.
 | Quick Settings | Ctrl+Q, which also closes it |
 | Search | F2 anywhere, **/** on Home |
 | Menu: the voice orb (hold it to talk) | F4 anywhere (hold it to talk) |
-| L2 / R2 on Home (sections) | Q / E |
+| L2 on Home (Edit Home) · R2 on Home (next section) | Q · E |
 | Select + L1 held (mouse mode) | F6 |
 
 A shoulder that does something else on a screen (seeks a video, clears the
@@ -215,10 +227,11 @@ no footer names may have no key.
 | Screen | Pad | Keyboard |
 |--------|-----|----------|
 | Everywhere | A · B · D-pad · Start · Menu (the voice orb) · Select + Start · Select + L1 held (mouse mode) | Enter (or Space) · Esc · arrows · F10 · F4 · Alt+F4 on a PC · F6 |
-| Home | L2 / R2 sections · Y search | Q / E · **/** (F2 anywhere) |
+| Home | L2 edit Home · R2 next section · Y search | Q · E · **/** (F2 anywhere) |
 | Home search sheet | X edit the search · Y voice command | type to edit |
-| Home (Carousel, Widgets) | X edit | X |
-| Home edit mode | X size · Y remove · L1 / R1 layout · B done | X · Del or Backspace · Shift+Tab / Tab · Esc |
+| Home (Carousel, Widgets) | X edit (L2 too) | X (Q too) |
+| Home edit mode | X resize · Y remove · L1 / R1 layout · B or L2 done | X or R · Del or Backspace · Shift+Tab / Tab · Esc or Q |
+| Home edit mode, resizing | D-pad size · A or B done | arrows · Enter or Esc |
 | Start menu | L1 / R1 · L2 / R2 · X power | PgUp / PgDn · Home / End · X |
 | Notification centre | L1 / R1 · L2 / R2 | PgUp / PgDn · Home / End |
 | Media | L1 / R1 tabs · R2 more · X search · Y details | Tab or [ / ] · PgDn · X or **/** · Y or I; U undo, Del remove |
@@ -252,7 +265,7 @@ no footer names may have no key.
 | Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
 | Calculator | X insert x · Y graph · L1 clear · R1 delete | X · Y or G · C · Backspace |
 | Pomodoro | A start / pause · X skip · Y reset | Enter · X · Y |
-| Alarm | X toggle · Y new · L1 delete (press twice) | X · Y or N · Del |
+| Alarm | List: X toggle · Y new · L1 delete (press twice). Editor: Y save · X music / clear label · L1 / R1 ±10 min | X · Y or N · Del; editor Y or S · PgUp / PgDn |
 | Ambient | Y sleep timer · X screen off | Y or S · X; N next photo |
 | Patch | Hold A to confirm a risky step | Hold Enter |
 | Controller test | Hold Select closes | Esc closes, Enter or R resets |
@@ -274,7 +287,7 @@ they used to do nothing in JukaHub. Now:
 | Start | The Start menu: every scene, game and tool |
 | Select + Start (hold both) | Quit JukaHub |
 | Select + L1 (hold) | Mouse mode: the D-pad moves a pointer and A clicks (see Virtual cursor) |
-| L2 / R2 (the small top buttons) | Previous / next section on Home, bigger jumps in lists |
+| L2 / R2 (the small top buttons) | On Home: L2 edits Home, R2 the next section; bigger jumps in lists |
 
 The audio player keeps L3 / R3 for lyrics and the sleep timer, the web browser
 keeps L3 for switching between scrolling and walking links, and the game
@@ -294,7 +307,7 @@ had nothing to go back to.
 | X | Secondary action — delete, toggle, search, depending on the screen |
 | Y | Tertiary action — new/create, save, submit in the chat keyboard |
 | L1 / R1 | Previous / next page of the focused list, or a −10/+10 s skip in the player |
-| L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list, previous / next section on Home |
+| L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list; on Home L2 edits Home and R2 steps to the next section |
 | Start | Open the Start menu (scenes, games, tools, device) |
 | Back / Select | Back one screen, falling back to Home |
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
@@ -381,17 +394,47 @@ keys and a few buttons type Enter, Esc, Tab and Space, and Select + Start
 closes the window (held, it ends the program). The table is under
 [Windows apps](#windows-apps).
 
+#### In-game menu (hold Select + L2)
+
+With **Settings → Controls → In-game menu** on (TrimUI handhelds; on by
+default), hold **Select + L2** for half a second in any game, emulator
+(RetroArch, PPSSPP, …) or port JukaHub started. The game pauses, its picture
+stays on screen, dimmed, and a small menu opens over it:
+
+| Row | What it does |
+|-----|--------------|
+| Resume game | The game carries on where it was |
+| Ask Juka | The game assistant listens (only with Game assistant on); B comes back to the menu |
+| Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
+
+| Button | Action |
+|--------|--------|
+| D-pad up / down | Move the highlight |
+| A | Choose |
+| B, Menu, or Select + L2 again (a press, no hold) | Back to the game |
+| Select + R2 | Ask Juka straight away |
+
+Nothing is asked of the emulator, so the menu works the same over all of
+them. Like the assistant, the game sees Select and L2 go down before JukaHub
+takes the pad (an emulator hotkey on Select + L2 still fires), the game
+resumes by itself after three minutes, and a ringing alarm takes over. Save
+states are the emulator's own (RetroArch's menu on Menu); quitting keeps what
+the game itself saved. Holding Select + L2 over the assistant switches to the
+menu.
+
 #### Ask Juka in a game (hold Select + R2)
 
-With **Settings → Voice & AI → Game assistant** on (TrimUI handhelds; off until
-you turn it on), hold **Select + R2** for about a second (0.7 s) in a game, an
+With **Settings → Voice & AI → Game assistant** on (TrimUI handhelds; on by
+default), hold **Select + R2** for about a second (0.7 s) in a game, an
 emulator or a port JukaHub started. The game pauses, its picture stays on
-screen, dimmed, and the voice orb listens: ask about the game.
+screen, dimmed, and the voice orb listens: ask about the game. Juka's answer
+appears in a wide bubble and is read aloud (**Read answers aloud in games**,
+on by default, even with Juka's voice off).
 
 | Button | Action |
 |--------|--------|
 | A or R2 | While Juka listens, send now; on an answer, ask again |
-| B, Menu, or Select + R2 again | Back to the game (it carries on where it was) |
+| B, Menu, or Select + R2 again (a press, no hold) | Back to the game (it carries on where it was) |
 
 The game sees Select and R2 go down before JukaHub takes the pad, then nothing
 until it carries on; it also resumes by itself after three minutes, and a
@@ -454,7 +497,7 @@ behaves the same in a menu as it does in a media grid.
 | Notification centre, clipboard history, global search | One window of rows | First / last row |
 | Quick Settings | Five rows, or ±5 on a slider | First / last row |
 | Start menu | One window of the open group | First / last row of the open group |
-| Home | — | Previous / next section |
+| Home | — | L2: Edit Home (L2 again is Done) · R2: the next section |
 
 ### Liquid background
 
@@ -525,14 +568,16 @@ their way, and no panel is covered by a menu drawn beneath it.
 |--------|--------|
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
-| D-pad | Move between tiles, the header chips (brightness button, volume button, Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5, pairing QR) and the footer row |
+| D-pad | Move between tiles, the header chips (brightness button, volume button, Bluetooth button, Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5, pairing QR) and the footer row |
 | Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
-| Left (from the Wi-Fi meter) | Move onto the volume button; **A** opens the volume card |
+| Left (from the Wi-Fi meter) | Move onto the Bluetooth button; **A** opens the Bluetooth page |
+| Left (from the Bluetooth button) | Move onto the volume button; **A** opens the volume card |
 | Left (from the volume button) | Move onto the brightness button; **A** opens the brightness card |
 | Right (from the clock) | Move onto the now-playing chip while something plays, then the update offer while a release is advertised, then the notification bell; **A** opens that player, installs the release, or opens the notification centre |
 | Left (from the bell) | Move onto the update offer while a release is advertised; **A** installs it |
 | Right (from the PS5 pill), Down (from the bell) | Move onto the pairing QR while it is shown; **A** (or a click or tap) shows it full screen at full brightness with the PIN and address under it, and **A** or **B** closes it |
-| L2 / R2 | Previous / next section of the grid |
+| L2 | Edit Home, in any layout; L2 again is Done ([Edit Home](#edit-home)) |
+| R2 | The next section |
 
 ### Home layouts
 
@@ -548,10 +593,11 @@ neighbours smaller on either side, wrapping around at the ends. The focused
 card's title and description sit under it, over a dot for each card (with
 more than 15 cards, a count such as "7 / 24").
 
-**Widgets** is a grid of tiles six columns wide, each as big as you make it. A
-tile is a Home card, any Start-menu entry (a screen, a tool, a device action,
-a plugin's button) or an info widget. Three rows fit on the screen and the
-grid scrolls past them.
+**Widgets** is a grid of square cells, seven across, and each tile covers as
+many of them as you make it: from one cell up to the grid's width and three
+rows (Continue from 2 × 2, Media from 2 × 1). A tile is a Home card, any
+Start-menu entry (a screen, a tool, a device action, a plugin's button) or an
+info widget. Three rows fit on the screen and the grid scrolls past them.
 
 | Widget | Shows | A opens |
 |--------|-------|---------|
@@ -568,47 +614,53 @@ grid scrolls past them.
 | Left / Right | Arrow keys | Previous / next card | The tile beside |
 | Up / Down | Arrow keys | Up to Search (or the PS4 / PS5 pill or the pairing QR); Down to the power pill; Down from the header back to the card | The tile above / below, scrolled into view; Up from the top row reaches the header, Down from the bottom row the footer pills |
 | A | Enter | Open the card | Open the tile |
-| X | X | Edit Home | Edit Home |
+| L2 or X | Q or X | Edit Home | Edit Home |
 | Y | **/** (F2 anywhere) | Search | Search |
 | Mouse | — | Click a side card to bring it to the middle, the middle card to open it; the wheel turns one card | Click a tile to open it; the wheel scrolls a row, and a focused tile it scrolls away hands the focus to one still shown (pointing alone never scrolls) |
 
 #### Edit Home
 
-There are five ways in:
+There are six ways in:
 
+- **L2** (the **Q** key) on Home, in any layout; L2 again is Done;
 - **X** (the **X** key) on Home while the Carousel or Widgets is showing;
 - the **Edit** pill beside the power pill in Home's footer;
 - a right-click on a tile, which starts editing on that tile;
 - **Start → Device → Edit Home**;
 - **Settings → Display & theme → Edit Home**.
 
-The last two work from any screen: they open Home first, and on Standard or
-the Hero grid they switch to Widgets (a message says so).
+The last two work from any screen: they open Home first. On Standard or the
+Hero grid every way in switches to Widgets (a message says so), and leaving
+without changing anything puts the layout you had back, so a stray L2 costs
+nothing.
 
 While editing, the greeting and the search pill give way to a strip:
 **Edit Home**, a chip for each layout (the one in force tinted), **Reset** and
 **Done**; the PS4 / PS5 pills and the pairing QR step aside. Every tile wears
 a remove badge (a minus) on its top-right corner, and on Widgets the focused
-tile shows its size ("2×1") on a tab in the middle of its bottom edge. An
+tile shows its size ("2×1") on a tab in the middle of its bottom edge and a
+resize handle (the expand arrows) on its bottom-right corner. An
 **Add** tile with a plus ends the list (Home holds up to 64 tiles).
 
 | Pad | Keyboard | In edit mode |
 |-----|----------|--------------|
 | D-pad | Arrow keys | Move between the tiles and up to the strip. Holding a tile, move it: Left / Right one place earlier / later, Up / Down to the place of the tile above / below (Down past the end makes it the last) |
 | A | Enter | Pick the tile up, or put it down. On **Add**: the list of tiles to add. On the strip: that chip |
-| X | X | The next size (Widgets only) |
+| X | X or R | Resize (Widgets only): the D-pad then grows the tile (Right a column, Down a row) or shrinks it (Left, Up) a cell at a time, the grid making room as it goes; **A**, **B** or **X** finish. The tab and the handle turn the accent colour while resizing |
 | Y | Delete or Backspace | Remove the tile (**Add** stays) |
 | L1 / R1 | Shift+Tab / Tab | The previous / next layout: Standard, Hero grid, Carousel, Widgets |
-| B | Esc | Holding a tile: put it down where it is. Otherwise: Done |
+| B | Esc | Holding a tile: put it down where it is. Resizing: keep the size. Otherwise: Done |
 | Start | F10 | The Start menu, which ends editing |
 | Select | — | Nothing on its own, so the Select + L1 (virtual mouse) and Select + R1 (control profile) chords still work |
-| L2 / R2 | Q / E | Nothing: Home does not page away mid-edit |
+| L2 | Q | Done (as **B**) |
+| R2 | E | Nothing: Home does not page away mid-edit |
 
 Leaving Home ends editing too. Every finished change (a drop, a resize, a
 removal, an addition, a reset) is saved straight away, and again when editing
-ends. The footer reads **D-Pad Navigate · A Move · X Size · Y / Del Remove ·
-L1/R1 / Tab Layout · B Done** (no Size on the Carousel), and while a tile is
-held **D-Pad Move · A Drop · X Size · B Drop**.
+ends. The footer reads **D-Pad Navigate · A Move · X Resize · Y / Del Remove ·
+L1/R1 / Tab Layout · B Done** (no Resize on the Carousel), while a tile is
+held **D-Pad Move · A Drop · X Resize · B Drop**, and while resizing **D-Pad
+Resize · A / B Done**.
 
 **Reset** puts the default tiles back: the first press arms it ("Press
 again"), a second press within three seconds resets. Choosing Standard or the
@@ -623,8 +675,10 @@ move, **L1** / **R1** (PgUp / PgDn) jump between sections, **A** (Enter) adds
 the highlighted entry, closes the card and puts the focus on the new tile, and
 **B** (Esc) closes the card; the mouse and the wheel work too.
 
-**With a mouse**: click a tile to focus it, its remove badge to remove it and
-the focused tile's size tab to resize it. Press on a tile and drag (12 px or
+**With a mouse**: click a tile to focus it and its remove badge to remove it.
+On the focused tile, drag the handle on its bottom-right corner to any size (it
+snaps to whole cells), click the handle to resize with the arrow keys, or
+click the size tab to step through 1×1, 2×1, 2×2, 3×2, 4×2 and 3×3. Press on a tile and drag (12 px or
 more) to carry it: the tiles make room as it passes over them, and holding it
 at the top or bottom edge of the grid scrolls the grid a row at a time. On the
 Carousel, drag the middle card sideways: every half card of travel moves it
@@ -1237,9 +1291,27 @@ then every port launcher in `Ports/`, `Roms/Ports`, `Roms/PORTS` and
 
 Tapping a row activates it; tapping outside closes the panel.
 
+## Packages
+
+The Packages store shows the package list as shelves (the default), a grid or a
+list. **A** opens a package's sheet, **X** (or `r`, **F5**) refreshes the list,
+**Y** (or `v`, `1`–`3`) switches the view, **L1** / **R1** page (and step
+between packages while a sheet is open; `[` / `]` on a keyboard), **L2** /
+**R2** jump to the first and last row, and in the grid and the list `s` changes
+the sort and **Tab** walks the filter chips; **B** closes the sheet, then leaves.
+
+Under the toolbar, in every view and even while the list is empty or offline,
+the **More stores** strip opens the [APK Store](#apk-store) and PortMaster's
+ports (on the handheld) and Windows Apps. **Up** from the top row of a view (or
+from the grid's chips) moves onto the strip, **Left** / **Right** pick a store
+and **A** opens it; **Up** again reaches the top bar and **Down** goes back to
+the packages. Back from the APK Store returns to its pill. A click or tap on a
+pill opens it.
+
 ## APK Store
 
-Open **Start → Games → APK Store** (not on Windows). It has three tabs: **Your
+Open it from **Packages → More stores**, **Start → Games → APK Store** or search
+("android", "apk"); it is not on Windows. It has three tabs: **Your
 APKs** (the APKs found on the card, in the Phone Companion's `PhoneDrop` folder
 and in the download folders, each with a verdict), **Store** (known titles and
 kinds of APK, and how to get them legally) and **Runtime** (AndroidRT, this
@@ -1637,20 +1709,29 @@ returns to the network list.
 
 ## Bluetooth devices
 
-Open it from **Settings → Network → Bluetooth devices**, **Quick Settings →
-Bluetooth Devices**, **Start → Bluetooth**, search ("connect headphones" finds it
-too), or the **Controllers** row in PS Remote Play. It needs `bluetoothctl`,
-so Windows pairs in its own Settings instead.
+Open it from the **Bluetooth button** in the top bar, **Settings → Network →
+Bluetooth devices**, **Quick Settings → Bluetooth Devices**, **Start →
+Bluetooth**, search ("connect headphones" finds it too), or the **Controllers**
+row in PS Remote Play. It needs `bluetoothctl`; without it — on Windows, macOS
+or a Linux desktop with GNOME's or Blueman's settings — the page offers **Open
+Bluetooth settings**, the system's own pairing screen, instead.
 
 | Input | Action |
 |-------|--------|
 | D-pad / arrows | Move through the rows |
-| A / Enter | Switch Bluetooth on or off, pair a device under Nearby, open a paired device's sheet (Connect or Disconnect, Forget), search, or show how to put a pad in pairing mode |
-| X / `x` | Search again (ten seconds) |
+| A / Enter | Switch Bluetooth on or off, connect or disconnect a paired device, pair a device under Nearby, search, or show how to put a pad in pairing mode |
+| Y / `y` | A paired device's sheet: what it is, whether it reconnects by itself, Connect or Disconnect, Forget |
+| X / `x` | Search (ten seconds) |
 | L1 / R1, PgUp / PgDn | Page up and down; Home / End jump to the ends |
 | B / Esc | Close the sheet, then leave the page |
 
-The page searches once as it opens. Pairing a controller, what its row says and
+The page opens with the ring on the first paired device (a connected one
+first) and searches by itself only when nothing is paired; a pad woken with its
+PS button, or a headset switched off, shows on its row within about two seconds.
+Until the list has loaded, **A** on the switch cannot turn a powered radio off.
+When the firmware left Bluetooth stopped, switching it on — or Connect, Pair
+and Search — starts it first, and the switch or the device's row says what it
+is doing meanwhile. Pairing a controller, what its row says and
 what to do when a pad shows **No input** are in
 [REMOTE_PLAY.md](REMOTE_PLAY.md#bluetooth-controllers).
 
@@ -1972,14 +2053,31 @@ screen like any other key.
 
 ## Alarm
 
+On the list:
+
 | Button | Action |
 |--------|--------|
-| Up / Down | Move through alarms and fields |
-| A | Select / save |
+| Up / Down | Move through the alarms |
+| A | Edit the focused alarm |
 | X | Toggle the focused alarm |
 | Y | New alarm |
 | L1 (keyboard **Del**) | Delete the focused alarm (press twice) |
 | B | Back |
+
+In the editor (rows: Hour, Minute, Label, Ringtone, then Save and Delete):
+
+| Button | Action |
+|--------|--------|
+| Up / Down | Move between the rows |
+| Left / Right | Change the focused value (hold to repeat) |
+| L1 / R1 | Time minus / plus 10 minutes |
+| A | Next row; on Label, type it on the on-screen keyboard; on a button, press it |
+| X | Ringtone: pick a track from your music · Label: clear it |
+| Y | Save from any row |
+| B | Back to the list (with unsaved changes, press twice) |
+
+On a keyboard the number keys type the hour or minute, Enter on Label opens the
+keyboard (or just start typing), PgUp / PgDn step 10 minutes and Y or S saves.
 
 ### When an alarm rings
 

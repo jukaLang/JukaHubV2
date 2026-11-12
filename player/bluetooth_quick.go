@@ -17,7 +17,9 @@ package main
 //   - whether the radio is powered is the HCI_UP flag, which one ioctl on an
 //     HCI socket reports for every adapter at once (bluetooth_bringup_linux.go).
 //     Only where that socket cannot be opened does the reading fall back to
-//     the bluetoothctl probe.
+//     the bluetoothctl probe;
+//   - on the handhelds a radio whose bluetoothd is not running reads off, the
+//     way the page's switch does (a look in /proc stands for ten seconds).
 //
 // The reading is refreshed off the render thread, at most every two seconds and
 // only while something asks: the bar is not drawn while a game owns the screen,
@@ -126,6 +128,12 @@ func btQuickReadHost() btQuick {
 		// No adapter registered: the firmware's switch is off (it takes the
 		// chip away, not only the power), or the chip was never attached.
 		// Either way nothing can connect, which is what "off" tells the user.
+		q.Known = true
+		return q
+	}
+	if links == 0 && IsTrimuiDevice() && !btDaemonRunningCached() {
+		// No bluetoothd on the handheld: nothing pairs or connects, so the
+		// button reads off, as the page's switch does (btProbeRadio).
 		q.Known = true
 		return q
 	}

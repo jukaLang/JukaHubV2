@@ -375,7 +375,9 @@ func openSystemSettingsPage(kind string) error {
 		case "timezone":
 			target = "x-apple.systempreferences:com.apple.Date-Time-Settings.extension"
 		case "bluetooth":
-			target = "x-apple.systempreferences:com.apple.preferences.Bluetooth"
+			// System Settings' pane (macOS 13 and later); an older macOS opens
+			// System Preferences at its start instead.
+			target = "x-apple.systempreferences:com.apple.BluetoothSettings"
 		}
 		args = []string{target}
 	default:

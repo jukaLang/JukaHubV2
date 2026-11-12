@@ -108,8 +108,9 @@ speak. The first 0.3 seconds after the start chime are ignored, so the chime
 itself never counts as speech. Listening stops by itself about a second after
 you stop talking (at most 8 seconds); the clip is turned into words by Groq's
 Whisper — the same service voice typing on the keyboard uses — and the command
-runs. It needs the Groq API key from **Settings → General** (or pasted on
-the phone: the companion page has a **Groq API key** card) and an internet
+runs. It needs the Groq API key from **Settings → General → Groq API key**
+(its **Paste it from your phone** shows a code that opens the companion page
+at its **Groq API key** card) and an internet
 connection. Along with the clip, Groq receives a short list of the names on
 this handheld (screen, app and game titles) so that "JukaLand" or a game's
 title comes back spelled right. Nothing is recorded until you ask, the
@@ -239,7 +240,7 @@ were before you spoke, not to the voice page.
 
 ## Asking about the game you're playing
 
-**Settings → Voice & AI → Game assistant** (off by default) lets Juka know
+**Settings → Voice & AI → Game assistant** (on by default) lets Juka know
 which game you play. JukaHub notes the library game it launches; while it
 runs, and for half an hour after it ends, every question to Juka — in Chat,
 with the voice orb, about a picture — is told "the player is playing *Title*
@@ -249,9 +250,11 @@ not named, and only the title and the system go to Groq, with your question.
 On a TrimUI, hold **Select + R2** for a moment in a game. The game pauses (as
 it does under a ringing alarm), its last picture stays on screen, dimmed, with
 the game's name in the corner, and the orb listens: "Ask about *Title*". Stop
-talking and Juka answers in the bubble, and out loud when Juka's voice is on.
-**A** (or R2) sends early or asks again; **B**, **Menu** or Select + R2 again
-goes back to the game. Over a game every sentence is a question — a command
+talking and Juka answers in a wide bubble and out loud — **Read answers aloud
+in games** (on by default) speaks it even when Juka's voice is off, and
+turning it off leaves the text alone. **A** (or R2) sends early or asks again;
+**B**, **Menu** or pressing Select + R2 again (no hold needed this time) goes
+back to the game. Over a game every sentence is a question — a command
 such as "open YouTube" is not run, because it would leave the game paused
 behind another screen. The game resumes by itself after three minutes, and an
 alarm that rings meanwhile takes over.

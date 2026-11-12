@@ -168,6 +168,7 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	// The time-zone picker closes too, unless a deep link opened it for this
 	// visit (tzpicker.go).
 	tzPickerHubEnter()
+	clockSheetHubEnter()
 	setHub.viewSection = -1
 	if c != nil {
 		// A real arrival (the transition that opened this scene, not a redraw)
@@ -188,6 +189,9 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 		setHubEnterPane(false)
 		setHubFocusRow(pendingRow, pendingLabel)
 	}
+	// Chat's "Add key" lands on the Groq key row with its sheet open
+	// (groqkey_sheet.go).
+	groqKeyHubEnter(c)
 }
 
 // ── Reading the rows ──────────────────────────────────────────────────────
@@ -687,6 +691,7 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 		setSheetDraw(renderer, c, &setHub.sheet)
 	}
 	tzPickerDraw(renderer, c)
+	clockSheetDraw(renderer, c)
 	// The footer goes last so its hints stay readable over a sheet's dim.
 	renderFooter(renderer, c)
 }
@@ -1017,6 +1022,10 @@ func setHubKey(e *sdl.KeyboardEvent, c *Config) bool {
 		tzPickerKey(e)
 		return true
 	}
+	if clockSheet.open {
+		clockSheetKey(e, c)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetKey(&setHub.sheet, e.Keysym.Sym)
 		return true
@@ -1075,6 +1084,10 @@ func setHubPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 		tzPickerPad(e.Button)
 		return true
 	}
+	if clockSheet.open {
+		clockSheetPad(e.Button, c)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetPad(&setHub.sheet, e.Button)
 		return true
@@ -1107,6 +1120,10 @@ func setHubMouse(mx, my int32, c *Config) bool {
 	setHubEnsureVisit(c)
 	if tzPicker.open {
 		tzPickerMouse(mx, my)
+		return true
+	}
+	if clockSheet.open {
+		clockSheetMouse(mx, my, c)
 		return true
 	}
 	if setHub.sheet.open {
@@ -1154,6 +1171,10 @@ func setHubWheel(dy int32) {
 		tzPickerWheel(dy)
 		return
 	}
+	if clockSheet.open {
+		clockSheetWheel(dy)
+		return
+	}
 	if setHub.sheet.open {
 		setSheetWheel(&setHub.sheet, dy)
 		return
@@ -1169,6 +1190,9 @@ func setHubWheel(dy int32) {
 func setHubHints() []FooterHint {
 	if tzPicker.open {
 		return tzPickerHints()
+	}
+	if clockSheet.open {
+		return clockSheetHints()
 	}
 	if setHub.sheet.open {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}

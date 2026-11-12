@@ -5,12 +5,13 @@ limited class of native-only (NDK) games through **AndroidRT**, a small runtime
 JukaHub builds and ships: every TrimUI package carries it beside the app, and
 the APK Store installs the same build from JukaHub's releases on a device that
 lacks it. Real-game support is still unverified on hardware. The **APK Store**
-(Start → Games → APK Store) is the front door to it: it finds the APKs on the
-card, says what each one is and whether it can run, and adds the ones worth
-trying to Games in one press — the Games Library's Android row and Game
-Profiles. Java apps (almost every Android app) cannot run on AndroidRT and the
-store says so; where a real Android container (Waydroid) exists, on Linux
-machines with a binder kernel, the store can install APKs into it.
+(Packages → More stores, or Start → Games → APK Store) is the front door to
+it: it finds the APKs on the card, says what each one is and whether it can
+run, and adds the ones worth trying to Games in one press — the Games
+Library's Android row and Game Profiles. Java apps (almost every Android app)
+cannot run on AndroidRT and the store says so; where a real Android container
+(Waydroid) exists, on Linux machines with a binder kernel, the store can
+install APKs into it.
 
 **On a Smart Pro, in short:** copy an NDK game's APK to `/mnt/SDCARD/APKs`
 (or send it from a phone), open the APK Store, press **A** on the game →

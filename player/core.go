@@ -5110,22 +5110,22 @@ func drawThemeArrangementSketch(renderer *sdl.Renderer, arrangement string, x, y
 			dx += dw + dot
 		}
 	case homeArrangementWidgets:
-		// The default tiles on six columns: Continue 2×2, the Media strip 4×1
-		// beside it, then cards and widgets one cell each.
+		// The default tiles on the seven square columns (home_tiles.go):
+		// Continue 3×2, the Media strip 4×1 beside it, a wide Games tile
+		// under the strip, then cards and the clock one cell each.
 		gap := int32(4)
-		cw := (w - 5*gap) / 6
+		cw := (w - 6*gap) / 7
 		ch := (h - 2*gap) / 3
-		tile(sdl.Rect{X: x, Y: y, W: 2*cw + gap, H: 2*ch + gap}, accent)
-		tile(sdl.Rect{X: x + 2*(cw+gap), Y: y, W: 4*cw + 3*gap, H: ch}, soft)
-		for _, cellPos := range [][2]int32{
-			{2, 1}, {3, 1}, {4, 1}, {5, 1},
-			{0, 2}, {1, 2}, {2, 2}, {3, 2}, {4, 2}, {5, 2},
-		} {
-			tile(sdl.Rect{
-				X: x + cellPos[0]*(cw+gap),
-				Y: y + cellPos[1]*(ch+gap),
-				W: cw, H: ch,
-			}, soft)
+		span := func(col, row, cols, rows int32) sdl.Rect {
+			return sdl.Rect{X: x + col*(cw+gap), Y: y + row*(ch+gap), W: cols*cw + (cols-1)*gap, H: rows*ch + (rows-1)*gap}
+		}
+		tile(span(0, 0, 3, 2), accent)
+		tile(span(3, 0, 4, 1), soft)
+		tile(span(3, 1, 2, 1), soft)
+		tile(span(5, 1, 1, 1), soft)
+		tile(span(6, 1, 1, 1), soft)
+		for col := int32(0); col < 7; col++ {
+			tile(span(col, 2, 1, 1), soft)
 		}
 	default:
 		gap := int32(4)

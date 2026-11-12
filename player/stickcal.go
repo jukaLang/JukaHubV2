@@ -522,6 +522,8 @@ func stickCalSettingsRows() []setRow {
 	out := make([]setRow, 0, len(rows)+3)
 	out = append(out, rows[0])
 	out = append(out, vcursorModeSettingsRows()...)
+	// "In-game menu": Select + L2 over a game (gamemenu.go), a handheld's row.
+	out = append(out, gameMenuSettingsRow())
 	// "Menu button: voice" (voiceorb.go), a handheld's row.
 	out = append(out, voiceOrbSettingsRows()...)
 	return append(out, rows[1:]...)

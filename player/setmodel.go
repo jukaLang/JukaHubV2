@@ -635,7 +635,7 @@ func setBuildSections() []setSection {
 	return []setSection{
 		{
 			ID: "general", Title: "General", Glyph: "settings",
-			Subtitle: "You, the weather and everyday basics",
+			Subtitle: "You, your Groq key, the weather and everyday basics",
 			Rows: []setRow{
 				{
 					ID: "name", Label: "Your name", Kind: setKindText, Field: "tspUsername",
@@ -644,6 +644,10 @@ func setBuildSections() []setSection {
 						return setOr(strings.TrimSpace(c.Variables.TSPUsername), "Not set")
 					},
 				},
+				// The key Juka AI, voice typing and voice commands need, with
+				// a sheet that takes it from the phone or the keyboard
+				// (groqkey_sheet.go). The stored key is never shown.
+				groqKeyRow(),
 				{
 					ID: "weather", Label: "Weather", Kind: setKindToggle,
 					Detail: func(c *Config) string {
@@ -718,20 +722,6 @@ func setBuildSections() []setSection {
 						return setOr(strings.TrimSpace(c.Variables.FileExplorerRoot), "Default")
 					},
 				},
-				{
-					// The keyboard's own key field (vksettings.go): it starts
-					// empty, never shows the stored key and keeps the old one
-					// when submitted empty. Voice typing uses the same key.
-					ID: "aiKey", Label: "Juka AI key", Kind: setKindAction,
-					Detail: setStatic("Groq API key for Juka AI in Chat and voice typing"),
-					Value: func(*Config) string {
-						if hint := vkGroqKeyHint(); hint != "" {
-							return "Saved · " + hint
-						}
-						return "Not set"
-					},
-					Open: func(*Config) { vkOpenGroqKeyKeyboard() },
-				},
 			},
 		},
 		{
@@ -779,8 +769,13 @@ func setBuildSections() []setSection {
 					// Home's edit mode from here (home_edit.go): it opens Home
 					// first, switching to Widgets when Home is not a tile layout.
 					ID: "homeEdit", Label: "Edit Home", Kind: setKindAction,
-					Detail: setStatic("Move, resize, add and remove Home tiles"),
-					Open:   homeEditOpen,
+					Detail: func(*Config) string {
+						if hintsUseKeyboard() {
+							return "Move, resize, add and remove Home tiles — Q on Home"
+						}
+						return "Move, resize, add and remove Home tiles — L2 on Home"
+					},
+					Open: homeEditOpen,
 				},
 				{
 					ID: "community", Label: "Community themes", Kind: setKindAction,

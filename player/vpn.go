@@ -855,7 +855,7 @@ func vpnOpenProfileSheet(c *Config) {
 	v := vpnSnapshot()
 	opts := []setOption{
 		{Value: "file", Label: "Import a .conf file", Note: "From the SD card, its Downloads or VPN folder, or what your phone sent"},
-		{Value: "phone", Label: "Send one from your phone", Note: "The companion page's VPN card takes the text or the file"},
+		{Value: "phone", Label: "Send one from your phone", Note: "Scan a code: your phone opens the VPN card for the text or the file"},
 	}
 	if ok, _ := vpnPlatformSupport(); !ok && runtime.GOOS == "windows" {
 		opts = append(opts, setOption{Value: "wireguard", Label: "Get WireGuard for Windows", Note: "wireguard.com/install; JukaHub hands it the tunnel"})
@@ -886,8 +886,10 @@ func vpnProfileAction(c *Config, value string) {
 			tbxPost(func() { vpnOpenFileSheet(c, found) })
 		}()
 	case "phone":
-		openCompanionOverlay()
-		setToast("Open the page on your phone and use its VPN card")
+		// A code that opens the companion page at its VPN card; it closes
+		// when the configuration arrives (companion_phonecard.go).
+		phoneCardOpen(phoneCardVPN, "Send a VPN configuration from your phone",
+			"Scan it, paste the text or pick the .conf and tap Save on handheld")
 	case "wireguard":
 		if err := openExternalURL("https://www.wireguard.com/install/"); err != nil {
 			setToast("Open wireguard.com/install in a browser")
@@ -1116,7 +1118,10 @@ func (s *companionServer) handleVPN(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not a usable WireGuard configuration: "+err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		tbxPost(func() { vpnImportToast(name, nil) })
+		tbxPost(func() {
+			phoneCardArrived(phoneCardVPN)
+			vpnImportToast(name, nil)
+		})
 		writeCompanionJSON(w, vpnCompanionStatus("saved"))
 	default:
 		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)

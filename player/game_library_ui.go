@@ -120,7 +120,7 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 			if title == "" {
 				title = gameDisplayTitle(it.Path)
 			}
-			art := romArtworkPath(scannedROM{
+			art := romCoverPath(scannedROM{
 				Path:   it.Path,
 				System: it.System,
 			}, libraryArtworkRoot())

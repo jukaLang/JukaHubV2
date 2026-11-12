@@ -712,6 +712,9 @@ func drainCompanionQueue(config *Config) {
 			// Keyboard settings saves it (companion_groq.go).
 			vkSaveGroqKey(config, ev.Text)
 			companionRefreshGroqStatus(config)
+			// The code Settings showed for it has done its job
+			// (companion_phonecard.go).
+			phoneCardArrived(phoneCardGroq)
 		}
 	}
 }

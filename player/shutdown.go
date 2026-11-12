@@ -91,6 +91,9 @@ func shutdownSteps(config *Config) []shutdownStep {
 		// map, which every frame of the card reads (text substitution, the
 		// backdrop), and the notes and favorites are main-loop state.
 		{label: "Saving your place", group: 1, inline: true, fn: func() (string, error) {
+			// Edit Home left open saves its tiles (home_edit.go); the save
+			// below writes them out.
+			homeEditEndForExit(config)
 			playtimeFlush(config)
 			partyHistoryFlush()
 			saveFavorites()

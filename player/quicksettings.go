@@ -489,7 +489,10 @@ func qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume bool) qsProbe
 		r.wifi, r.wifiOK = wifiEnabled()
 	}
 	if wantBT {
-		r.bluetooth, r.bluetoothOK = bluetoothEnabled()
+		// The kernel's answer first (btProbeRadio): no adapter, or no
+		// bluetoothd on the handhelds, is off without a bluetoothctl that
+		// would only wait out its timeout.
+		r.bluetooth, r.bluetoothOK = btProbeRadio()
 	}
 	if wantAirplane {
 		r.airplane, r.airplaneOK = airplaneEnabled()
@@ -721,7 +724,29 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 		qsStartProbe()
 		return nil
 	case qsActionBluetooth:
-		if err := setBluetoothEnabled(want); err != nil {
+		if want {
+			// Switching on may have to start what the firmware left stopped
+			// (bluetooth_bringup.go), which takes seconds: it runs off the
+			// render thread, the switch shows on meanwhile, and the probe the
+			// bring-up ends with shows what really happened.
+			btBringUpAsync(func(err error) {
+				// A start that failed puts the switch back off: the probe
+				// cannot always tell (no adapter, no bluetoothd to ask).
+				if btBringUpFailed(err) {
+					for i := range qs.toggles {
+						if qs.toggles[i].Action == qsActionBluetooth {
+							qs.toggles[i].Value = false
+						}
+					}
+				}
+				qsNoteEdit()
+				qsStartProbe()
+			})
+			qsNoteEdit()
+			return nil
+		}
+		btCancelBringUpAsync()
+		if err := setBluetoothEnabled(false); err != nil {
 			return err
 		}
 		qsNoteEdit()

@@ -13,8 +13,9 @@ package main
 // card while it animates, and the size the Continue preview is made at. draw
 // is where the tile is this frame — lifted, pressed, scrolled or scaled by the
 // carousel — and it picks the composition, in 1280x720 design units: wide from
-// 300 across, tall from 250 down (a 1x1 grid tile is 189x152, a 2x1 395x152,
-// a 2x2 395x320; the carousel's centre card 520x330, its side cards 260x165).
+// 300 across, tall from 250 down (a 1x1 grid tile is 160x152, a 2x1 336x152,
+// a 2x2 336x320, a 3x3 512x488; the carousel's centre card 520x330, its side
+// cards 260x165).
 //
 // A frame that shows what the last one showed formats nothing: each widget
 // keeps its strings with the values they were made from (the minute, the

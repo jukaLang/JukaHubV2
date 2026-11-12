@@ -139,7 +139,7 @@ func buildGameLibraryWith(report romScanReport, artRoot string, playtimeSeconds 
 		if title == "" || strings.TrimSpace(rom.System) == "" {
 			continue
 		}
-		art := romArtworkPath(rom, artRoot)
+		art := romCoverPath(rom, artRoot)
 		grouped[rom.System] = append(grouped[rom.System], libraryGame{
 			Path:   rom.Path,
 			System: rom.System,

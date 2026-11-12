@@ -61,6 +61,11 @@ type pkgStoresState struct {
 	// leftFor marks a screen opened from the strip: the visit that comes back
 	// from it keeps the pad on the strip instead of starting on the content.
 	leftFor bool
+	// leftScene is the scene the last scene change left (packageActionsForget
+	// records it on every change). leftFor only counts when the arrival comes
+	// straight from the screen the strip opened: a user who went on from the
+	// APK Store to Home and later opens Packages again starts on the content.
+	leftScene string
 }
 
 var pkgStores pkgStoresState
@@ -123,13 +128,25 @@ func pkgStoresHasPad() bool {
 }
 
 // pkgStoresOnEnter runs on every arrival (pkgOnSceneEnter): a visit starts on
-// the content, except the one coming back from a screen the strip opened.
+// the content, except the one coming straight back from the screen the strip
+// opened. The mark is spent either way, so it can never carry over to a later,
+// unrelated visit.
 func pkgStoresOnEnter() {
-	if pkgStores.leftFor {
-		pkgStores.leftFor = false
-		return
+	back := pkgStores.leftFor && pkgStores.leftScene == apkStoreSceneName
+	pkgStores.leftFor = false
+	if !back {
+		pkgStores.focus = false
 	}
-	pkgStores.focus = false
+}
+
+// pkgStoresNoteDeparture records the scene a scene change is leaving
+// (packageActionsForget calls it from switchScene, while currentSceneIndex is
+// still that scene).
+func pkgStoresNoteDeparture() {
+	pkgStores.leftScene = ""
+	if c := appConfig; c != nil && currentSceneIndex >= 0 && currentSceneIndex < len(c.Scenes) {
+		pkgStores.leftScene = c.Scenes[currentSceneIndex].Name
+	}
 }
 
 // pkgStoresEnterFromContent is Up from the top of a view: the strip takes the
@@ -180,11 +197,16 @@ func pkgStoresDo(config *Config, act pkgAct) bool {
 			PlayNavSound()
 		}
 	case pkgActLast:
-		// L2 / End jump to the content's last row.
+		// L2 / End jump to the content's last row. A strip entered from the
+		// grid's or the list's filter chips would hand the jump back to the
+		// chips, which ignore it, so the chips let go of the pad first.
 		if pkgStoresOnly() {
 			return true
 		}
 		pkgStores.focus = false
+		if pkgUI.view != pkgViewRows {
+			pkgUI.chipFocus = false
+		}
 		return false
 	case pkgActConfirm:
 		pkgStoresOpen(config, cur)
@@ -194,10 +216,13 @@ func pkgStoresDo(config *Config, act pkgAct) bool {
 	return true
 }
 
-// pkgStoresOpen opens pill i.
+// pkgStoresOpen opens pill i. Nothing opens while Packages is fading out: input
+// is not gated during a scene fade, and a panel opened then would float over
+// the screen being arrived at (packageActionsForget drops the sheet and the
+// press for the same reason).
 func pkgStoresOpen(config *Config, i int) {
 	links := pkgStoreLinks()
-	if i < 0 || i >= len(links) || links[i].open == nil {
+	if i < 0 || i >= len(links) || links[i].open == nil || transitionPhase == "fade-out" {
 		return
 	}
 	if config == nil {
@@ -205,10 +230,19 @@ func pkgStoresOpen(config *Config, i int) {
 	}
 	l := links[i]
 	if l.screen {
-		pkgStores.leftFor = true
+		// No scene change can start while the arrival fade still runs
+		// (switchScene refuses it), so the press is not answered with a sound.
+		if transitionPhase != "none" {
+			return
+		}
 		PlayActivateSound()
 	}
 	l.open(config)
+	if l.screen {
+		// Marked only when the scene change really started: a switch refused
+		// (or a screen already up) must not send a later visit to the strip.
+		pkgStores.leftFor = transitionPhase == "fade-out"
+	}
 }
 
 // pkgStoresClick is a press on pill i: the pad's focus moves there and the
@@ -234,8 +268,8 @@ func pkgStoresFooterHints() []FooterHint {
 // pkgDrawStores paints the strip in r: its label and the pills, left to
 // right, and records each pill as a click target. A canvas too narrow for
 // everything (the Brick, a large text size) drops the label first, then the
-// sub-labels, and only then shortens the titles, the pills sharing what is
-// left.
+// sub-labels — the label returns when the bare pills leave room for it — and
+// only then shortens the titles, the pills sharing what is left.
 func pkgDrawStores(renderer *sdl.Renderer, config *Config, ft *pkgType, r sdl.Rect) {
 	links := pkgStoreLinks()
 	if renderer == nil || ft == nil || ft.body == nil || ft.meta == nil || len(links) == 0 || r.W <= 0 {
@@ -267,12 +301,16 @@ func pkgDrawStores(renderer *sdl.Renderer, config *Config, ft *pkgType, r sdl.Re
 		}
 		return w
 	}
-	showLabel, showSubs := true, true
-	if need(true, true) > r.W {
+	// A single pill (Windows Apps on Windows) is not a row of stores, so it
+	// goes without the label.
+	showLabel, showSubs := n > 1, true
+	if need(showLabel, true) > r.W {
 		showLabel = false
 	}
 	if need(false, true) > r.W {
 		showSubs = false
+		// Without the sub-labels the label may fit again.
+		showLabel = n > 1 && need(true, false) <= r.W
 	}
 	// limit > 0 caps every title: what is left once the pills' own chrome
 	// and the gaps between them are paid for, shared equally.

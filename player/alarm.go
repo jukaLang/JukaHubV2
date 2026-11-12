@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -128,7 +129,7 @@ func alarmSave() {
 
 type alarmScene struct {
 	cursor    int // which row is focused
-	tab       int // 0=list, 1=hour, 2=minute, 3=label, 4=ringtone, 5=confirm delete
+	tab       int // alarmTabList, or the editor row with the focus (alarmedit.go)
 	editHour  int
 	editMin   int
 	editLabel string
@@ -141,10 +142,8 @@ type alarmScene struct {
 	pickCursor  int
 	pickScroll  int
 	pickPreview time.Time
-	// skipText drops the character of the key that just moved the focus onto
-	// the label (Space on the minute row, B back from the ringtone): SDL sends
-	// it after the key, and it would type into the field the key opened.
-	skipText bool
+	// orig is what the editor opened with, so B can tell unsaved changes.
+	orig alarmEditValues
 }
 
 var alarmUI alarmScene
@@ -227,79 +226,37 @@ func openAlarmScene(config *Config) bool {
 
 // --- Navigation ---
 
+// alarmNavigate moves the list's focus (the editor moves with alarmEditMove).
 func alarmNavigate(dr int) {
-	if alarmUI.tab == 0 {
-		// List mode
-		total := len(alarmStore.Alarms)
-		if total == 0 {
-			return
-		}
-		alarmUI.cursor += dr
-		if alarmUI.cursor < 0 {
-			alarmUI.cursor = total - 1
-		}
-		if alarmUI.cursor >= total {
-			alarmUI.cursor = 0
-		}
-		PlayNavSound()
-	} else if alarmUI.tab >= 1 && alarmUI.tab <= 4 {
-		// Edit mode: adjust value
-		switch alarmUI.tab {
-		case 1: // hour
-			alarmUI.editHour = (alarmUI.editHour + dr + 24) % 24
-			PlayNavSound()
-		case 2: // minute
-			alarmUI.editMin = (alarmUI.editMin + dr + 60) % 60
-			PlayNavSound()
-		case 4: // ringtone
-			alarmSoundStep(dr)
-		}
+	total := len(alarmStore.Alarms)
+	if alarmUI.tab != alarmTabList || total == 0 {
+		return
 	}
+	alarmUI.cursor += dr
+	if alarmUI.cursor < 0 {
+		alarmUI.cursor = total - 1
+	}
+	if alarmUI.cursor >= total {
+		alarmUI.cursor = 0
+	}
+	PlayNavSound()
 }
 
+// alarmSelect is A on the list: edit the focused alarm, or start one when
+// there are none. In the editor A is alarmEditActivate.
 func alarmSelect() {
-	now := time.Now()
-	switch alarmUI.tab {
-	case 0: // List
-		if len(alarmStore.Alarms) == 0 {
-			// Start creating a new alarm
-			alarmStartNew(now)
-			PlayActivateSound()
-			return
-		}
-		// Enter edit mode for the focused alarm
-		if alarmUI.cursor >= 0 && alarmUI.cursor < len(alarmStore.Alarms) {
-			a := alarmStore.Alarms[alarmUI.cursor]
-			alarmUI.editHour = a.Hour
-			alarmUI.editMin = a.Minute
-			alarmUI.editLabel = a.Label
-			alarmUI.editSound = alarmSoundByID(a.Sound).ID
-			alarmUI.editID = a.ID
-			alarmUI.tab = 1
-			PlayActivateSound()
-		}
-	case 1: // Hour → advance to minute
-		alarmUI.tab = 2
+	if alarmUI.tab != alarmTabList {
+		alarmEditActivate()
+		return
+	}
+	if len(alarmStore.Alarms) == 0 {
+		alarmStartNew(time.Now())
 		PlayActivateSound()
-	case 2: // Minute → advance to label
-		alarmUI.tab = 3
-		alarmUI.cursor = 0 // label character cursor
-		PlayActivateSound()
-	case 3: // Label → ringtone
-		alarmUI.tab = 4
-		PlayActivateSound()
-	case 4: // Ringtone → save, or pick a track first on "Choose from music…"
-		if alarmUI.editSound == alarmMusicPickID {
-			alarmPickOpen(appConfig)
-			return
-		}
-		alarmPlayStop()
-		alarmSaveAlarm()
-		alarmUI.tab = 0
-		PlaySuccessSound()
-	case 5: // Confirm delete
-		alarmDeleteFocused()
-		alarmUI.tab = 0
+		return
+	}
+	if alarmUI.cursor >= 0 && alarmUI.cursor < len(alarmStore.Alarms) {
+		a := alarmStore.Alarms[alarmUI.cursor]
+		alarmEditOpen(a, a.ID)
 		PlayActivateSound()
 	}
 }
@@ -309,16 +266,12 @@ func alarmBack() {
 		alarmPickClose()
 		return
 	}
-	if alarmUI.tab > 0 && alarmUI.tab < 5 {
-		if alarmUI.tab == 4 {
-			alarmPlayStop() // a ringtone preview ends with its row
-		}
-		alarmUI.tab--
-		PlayBackSound()
-	} else if alarmUI.tab == 0 {
-		goBackScene(appConfig)
-		PlayBackSound()
+	if alarmUI.tab != alarmTabList {
+		alarmEditBack()
+		return
 	}
+	goBackScene(appConfig)
+	PlayBackSound()
 }
 
 // alarmStartNew opens the editor on a new alarm five minutes from now. The
@@ -326,12 +279,7 @@ func alarmBack() {
 // 10:58 to 10:03, a time already gone.
 func alarmStartNew(now time.Time) {
 	soon := now.Add(5 * time.Minute)
-	alarmUI.tab = 1
-	alarmUI.editHour = soon.Hour()
-	alarmUI.editMin = soon.Minute()
-	alarmUI.editLabel = ""
-	alarmUI.editSound = alarmDefaultSound
-	alarmUI.editID = -1
+	alarmEditOpen(alarmEntry{Hour: soon.Hour(), Minute: soon.Minute(), Sound: alarmDefaultSound}, -1)
 }
 
 // alarmDeleteArm is the first L1 of a delete: a second one on the same alarm
@@ -346,7 +294,7 @@ const alarmDeleteWindow = 3 * time.Second
 
 // alarmRequestDelete is L1 on the list: arm, then confirm.
 func alarmRequestDelete() {
-	if alarmUI.tab != 0 || alarmUI.cursor < 0 || alarmUI.cursor >= len(alarmStore.Alarms) {
+	if alarmUI.tab != alarmTabList || alarmUI.cursor < 0 || alarmUI.cursor >= len(alarmStore.Alarms) {
 		return
 	}
 	a := alarmStore.Alarms[alarmUI.cursor]
@@ -363,7 +311,7 @@ func alarmRequestDelete() {
 }
 
 func alarmToggleFocused() {
-	if alarmUI.tab == 0 && alarmUI.cursor >= 0 && alarmUI.cursor < len(alarmStore.Alarms) {
+	if alarmUI.tab == alarmTabList && alarmUI.cursor >= 0 && alarmUI.cursor < len(alarmStore.Alarms) {
 		a := &alarmStore.Alarms[alarmUI.cursor]
 		a.Enabled = !a.Enabled
 		if a.Enabled {
@@ -472,6 +420,17 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	// It is Home's backdrop, the one every screen stands on (ui_glass.go).
 	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
+	// The editor has the whole page: its own preview of the time being set
+	// replaces the live clock, the countdown and the calendar.
+	if alarmUI.tab != alarmTabList {
+		renderAlarmEditor(renderer, config)
+		renderStatusBar(renderer, config)
+		renderFooter(renderer, config)
+		alarmBackRect = sceneTitleBackRect
+		renderAlarmPicker(renderer, config)
+		return
+	}
+
 	// The app's one bar owns the top of the screen; the clock starts under it.
 	barH := headerBarHeight()
 	font, _ := getCachedFont(config, "medium")
@@ -533,13 +492,7 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	listY := alarmListTop()
 	listW := alarmListW
 
-	if alarmUI.tab == 0 {
-		// List mode
-		renderAlarmList(renderer, config, listX, listY, listW)
-	} else {
-		// Editor mode
-		renderAlarmEditor(renderer, config, listX, listY, listW)
-	}
+	renderAlarmList(renderer, config, listX, listY, listW)
 
 	// The shared bars last. The Back pill is the bar's own, so touch users get
 	// the same control every other screen has instead of a bespoke text pill.
@@ -654,11 +607,8 @@ func handleAlarmMouseClick(mx, my int32, config *Config) bool {
 		alarmBack()
 		return true
 	}
-	if alarmUI.tab == 4 && alarmRingtoneClick(config, mx, my) {
-		return true
-	}
-	if alarmUI.tab != 0 {
-		return false
+	if alarmUI.tab != alarmTabList {
+		return alarmEditClick(mx, my)
 	}
 	if alarmAddRect.W > 0 && pointInRect(mx, my, alarmAddRect) {
 		// The same new alarm the pad's Y starts — five minutes from now, the
@@ -680,136 +630,6 @@ func handleAlarmMouseClick(mx, my int32, config *Config) bool {
 	alarmUI.cursor = idx
 	alarmSelect()
 	return true
-}
-
-func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
-	font, _ := getCachedFont(config, "medium")
-	bigFont, _ := getCachedFont(config, "big")
-	smallFont, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
-
-	editY := y + 40
-
-	// Title
-	title := "Set Alarm"
-	if alarmUI.editID >= 0 {
-		title = "Edit Alarm"
-	}
-	tw, _, _ := font.SizeUTF8(title)
-	renderText(renderer, config, font, title,
-		WithAlpha(ColorTextPrimary(), 220),
-		(screenWidth-int32(tw))/2, editY)
-
-	editY += 50
-
-	// Hour and minute display
-	hourStr := fmt.Sprintf("%02d", alarmUI.editHour)
-	minStr := fmt.Sprintf("%02d", alarmUI.editMin)
-	colonStr := ":"
-
-	if bigFont == nil {
-		bigFont = font
-	}
-
-	// Hour
-	hourCol := WithAlpha(ColorTextPrimary(), 220)
-	if alarmUI.tab == 1 {
-		hourCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255}
-	}
-	hw, hh, _ := bigFont.SizeUTF8(hourStr)
-	hx := screenWidth/2 - int32(hw) - 30
-	hy := editY
-	if alarmUI.tab == 1 {
-		// Highlight background
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 40)
-		renderer.FillRect(&sdl.Rect{X: hx - 8, Y: hy - 4, W: int32(hw) + 16, H: int32(hh) + 8})
-	}
-	renderText(renderer, config, bigFont, hourStr, hourCol, hx, hy)
-
-	// Colon (blinking)
-	if alarmUI.now.Second()%2 == 0 {
-		cw, ch, _ := bigFont.SizeUTF8(colonStr)
-		renderText(renderer, config, bigFont, colonStr,
-			WithAlpha(ColorTextSecondary(), 180),
-			screenWidth/2-int32(cw)/2, editY)
-		_ = ch
-	}
-
-	// Minute
-	minCol := WithAlpha(ColorTextPrimary(), 220)
-	if alarmUI.tab == 2 {
-		minCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255}
-	}
-	mw, mh, _ := bigFont.SizeUTF8(minStr)
-	mx := screenWidth/2 + 30
-	if alarmUI.tab == 2 {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 40)
-		renderer.FillRect(&sdl.Rect{X: mx - 8, Y: hy - 4, W: int32(mw) + 16, H: int32(mh) + 8})
-	}
-	renderText(renderer, config, bigFont, minStr, minCol, mx, hy)
-
-	editY += 80
-
-	// Label input
-	if smallFont != nil {
-		labelTitle := "Label:"
-		renderText(renderer, config, smallFont, labelTitle,
-			WithAlpha(ColorTextSecondary(), 200), x+20, editY)
-
-		editY += 28
-		// The label field is a scene input: recessed glass, the accent edge
-		// while it is the field being edited.
-		labelBg, labelEdge, labelEdgeW := glassA(10), glassA(26), int32(1)
-		if alarmUI.tab == 3 {
-			labelBg, labelEdge, labelEdgeW = glassFillFocus(), glassAccent(), 2
-		}
-		fillRoundedRect(renderer, x+20, editY, w-40, 36, 8, labelBg)
-		strokeRoundedRect(renderer, x+20, editY, w-40, 36, 8, labelEdgeW, labelEdge)
-
-		displayLabel := alarmUI.editLabel
-		if displayLabel == "" && alarmUI.tab != 3 {
-			displayLabel = "(no label)"
-		}
-		if alarmUI.tab == 3 {
-			displayLabel += "_" // cursor
-		}
-		renderText(renderer, config, smallFont, displayLabel,
-			WithAlpha(ColorTextSecondary(), 220), x+32, editY+8)
-	}
-
-	// Clear the label field the block above drew at editY before starting the
-	// next row; without this the picker would paint over the input.
-	editY += 60
-
-	// Ringtone: the list cycles in place, the way the hour does, because a
-	// handheld has no dropdown, and every step previews the sound it lands on.
-	// The stop after the synthesised tones is music: X (or A on "Choose from
-	// music…") opens the picker.
-	if smallFont != nil {
-		renderText(renderer, config, smallFont, "Ringtone:",
-			WithAlpha(ColorTextSecondary(), 200), x+20, editY)
-		alarmDrawRingtoneRow(renderer, config, font, smallFont, sdl.Rect{X: x + 20, Y: editY + 24, W: w - 40, H: 44})
-		editY += 84
-	}
-
-	// Day of week indicators
-	if smallFont != nil {
-		days := []string{"S", "M", "T", "W", "T", "F", "S"}
-		today := alarmUI.now.Weekday()
-		for i, d := range days {
-			dx := x + 60 + int32(i)*40
-			// Highlight today's column
-			col := WithAlpha(ColorTextTertiary(), 150)
-			if i == int(today) {
-				col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200}
-			}
-			dw, _, _ := smallFont.SizeUTF8(d)
-			renderText(renderer, config, smallFont, d, col,
-				dx-int32(dw)/2, editY)
-		}
-	}
 }
 
 // --- Mini Calendar (top-right of alarm scene) ---
@@ -963,22 +783,11 @@ func alarmTimeToday(a *alarmEntry) time.Time {
 		a.Hour, a.Minute, 0, 0, now.Location())
 }
 
-// handleAlarmInput processes keyboard/controller input for the alarm scene.
+// handleAlarmInput processes keyboard input for the alarm scene.
 func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return
 	}
-	// A key's text event follows it before the next key, so the skip is armed
-	// by this key or by none. Only the two keys that both open the label and
-	// type a character arm it — Space from the minute row, B back from the
-	// ringtone row; Enter and Esc type nothing.
-	alarmUI.skipText = false
-	fromTab := alarmUI.tab
-	defer func() {
-		if alarmUI.tab == 3 && fromTab != 3 && (e.Keysym.Sym == sdl.K_SPACE || e.Keysym.Sym == sdl.K_b) {
-			alarmUI.skipText = true
-		}
-	}()
 	if alarmUI.pickOpen {
 		switch e.Keysym.Sym {
 		case sdl.K_UP:
@@ -996,108 +805,53 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 		}
 		return
 	}
-	switch alarmUI.tab {
-	case 0: // List
-		switch e.Keysym.Sym {
-		case sdl.K_UP:
-			alarmNavigate(-1)
-		case sdl.K_DOWN:
-			alarmNavigate(1)
-		case sdl.K_RETURN, sdl.K_SPACE:
-			alarmSelect()
-		case sdl.K_x:
-			// Once per press: a held key's auto-repeat flipped it on and off.
-			if e.Repeat == 0 {
-				alarmToggleFocused()
-			}
-		case sdl.K_y, sdl.K_n:
-			// New alarm
-			alarmStartNew(time.Now())
-			PlayActivateSound()
-		case sdl.K_DELETE:
-			// The pad's L1: delete, pressed twice (the footer says "L1 / Del").
-			// Two presses, not one held key: its auto-repeat would confirm.
-			if e.Repeat == 0 {
-				alarmRequestDelete()
-			}
-		case sdl.K_ESCAPE, sdl.K_b:
-			alarmBack()
+	if alarmUI.tab != alarmTabList {
+		alarmEditKey(e)
+		return
+	}
+	switch e.Keysym.Sym {
+	case sdl.K_UP:
+		alarmNavigate(-1)
+	case sdl.K_DOWN:
+		alarmNavigate(1)
+	case sdl.K_RETURN, sdl.K_SPACE:
+		alarmSelect()
+	case sdl.K_x:
+		// Once per press: a held key's auto-repeat flipped it on and off.
+		if e.Repeat == 0 {
+			alarmToggleFocused()
 		}
-	case 1: // Hour
-		switch e.Keysym.Sym {
-		case sdl.K_UP:
-			alarmNavigate(-1)
-		case sdl.K_DOWN:
-			alarmNavigate(1)
-		case sdl.K_RETURN, sdl.K_SPACE:
-			alarmSelect()
-		case sdl.K_ESCAPE, sdl.K_b:
-			alarmBack()
+	case sdl.K_y, sdl.K_n:
+		// New alarm
+		alarmStartNew(time.Now())
+		PlayActivateSound()
+	case sdl.K_DELETE:
+		// The pad's L1: delete, pressed twice (the footer says "L1 / Del").
+		// Two presses, not one held key: its auto-repeat would confirm.
+		if e.Repeat == 0 {
+			alarmRequestDelete()
 		}
-	case 2: // Minute
-		switch e.Keysym.Sym {
-		case sdl.K_UP:
-			alarmNavigate(-1)
-		case sdl.K_DOWN:
-			alarmNavigate(1)
-		case sdl.K_RETURN, sdl.K_SPACE:
-			alarmSelect()
-		case sdl.K_ESCAPE, sdl.K_b:
-			alarmBack()
-		}
-	case 3: // Label
-		switch e.Keysym.Sym {
-		case sdl.K_RETURN, sdl.K_SPACE:
-			alarmSelect()
-		case sdl.K_ESCAPE:
-			// Escape only: B is the first letter of half the labels, so it
-			// cannot also be the way out of the field.
-			alarmBack()
-		case sdl.K_BACKSPACE:
-			alarmUI.editLabel = trimLastRune(alarmUI.editLabel)
-		}
-	case 4: // Ringtone
-		switch e.Keysym.Sym {
-		case sdl.K_LEFT, sdl.K_UP:
-			alarmSoundStep(-1)
-		case sdl.K_RIGHT, sdl.K_DOWN:
-			alarmSoundStep(1)
-		case sdl.K_RETURN, sdl.K_SPACE:
-			alarmSelect()
-		case sdl.K_x, sdl.K_m:
-			alarmPickOpen(config)
-		case sdl.K_ESCAPE, sdl.K_b:
-			alarmBack()
-		}
-	case 5: // Confirm delete
-		switch e.Keysym.Sym {
-		case sdl.K_RETURN, sdl.K_SPACE:
-			alarmSelect()
-		case sdl.K_ESCAPE, sdl.K_b:
-			alarmUI.tab = 0
-			PlayBackSound()
-		}
+	case sdl.K_ESCAPE, sdl.K_b:
+		alarmBack()
 	}
 }
 
-// handleAlarmTextInput processes text input for the label field.
+// handleAlarmTextInput takes text that arrives with no key of its own on the
+// Label row — the phone companion's, a non-Latin layout's, an input method's —
+// and starts the label keyboard with it. While that keyboard is up it takes
+// the text itself (main.go), so nothing lands twice.
 func handleAlarmTextInput(e *sdl.TextInputEvent) {
-	if alarmUI.tab != 3 {
+	if e == nil || alarmUI.tab != alarmTabLabel || alarmUI.pickOpen || virtualKeyboardActive {
 		return
 	}
-	if alarmUI.skipText {
-		alarmUI.skipText = false
-		// Only that key's own character is dropped: text that arrives without
-		// a key of its own (the phone companion's) is typed as usual.
-		if t := e.GetText(); t == " " || t == "b" || t == "B" {
-			return
-		}
+	// Space on the Minute row moves the focus here and then sends its " ":
+	// that is the key's own character, not a label.
+	text := e.GetText()
+	if strings.TrimSpace(text) == "" {
+		return
 	}
-	for _, r := range e.GetText() {
-		if r >= 32 && r <= 126 && len(alarmUI.editLabel) < 40 {
-			alarmUI.editLabel += string(r)
-		}
-	}
+	alarmOpenLabelKeyboard(false)
+	vkInsertText(text, appConfig)
 }
 
 // Scene controller mapping, moved here from controller.go so the scene owns
@@ -1122,6 +876,9 @@ func ctrlAlarm(e *sdl.ControllerButtonEvent) bool {
 		}
 		return true
 	}
+	if alarmUI.tab != alarmTabList {
+		return alarmEditPad(e.Button)
+	}
 	// Each handler below plays its own feedback sound; the extra Play* calls
 	// this mapping used to add made every press tick twice.
 	switch e.Button {
@@ -1129,40 +886,20 @@ func ctrlAlarm(e *sdl.ControllerButtonEvent) bool {
 		alarmNavigate(-1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		alarmNavigate(1)
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		// Only the ringtone row uses left/right; elsewhere the scene's own
-		// element navigation owns the direction, so let it through.
-		if alarmUI.tab == 4 {
-			if e.Button == sdl.CONTROLLER_BUTTON_DPAD_LEFT {
-				alarmSoundStep(-1)
-			} else {
-				alarmSoundStep(1)
-			}
-			return true
-		}
-		return false
 	case sdl.CONTROLLER_BUTTON_A:
 		alarmSelect()
 	case sdl.CONTROLLER_BUTTON_B:
 		alarmBack()
 	case sdl.CONTROLLER_BUTTON_Y:
-		// Y is "New alarm" — the legend and the empty list both say so; it
-		// used to reset the screen instead.
-		if alarmUI.tab == 0 {
-			alarmStartNew(time.Now())
-			PlayActivateSound()
-		}
+		// Y is "New alarm" — the legend and the empty list both say so.
+		alarmStartNew(time.Now())
+		PlayActivateSound()
 	case sdl.CONTROLLER_BUTTON_X:
-		// X toggles an alarm on the list, and opens the music picker on the
-		// ringtone row.
-		if alarmUI.tab == 4 {
-			alarmPickOpen(appConfig)
-		} else {
-			alarmToggleFocused()
-		}
+		alarmToggleFocused()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		alarmRequestDelete()
 	default:
+		// Left/Right included: the scene's own element navigation owns them.
 		return false
 	}
 	return true

@@ -271,6 +271,34 @@ Linux-only files and the review fixes are not compiled yet. Follow-ups: HW-3,
 INP-23, SND-14, SND-15, GAME-19, SYS-21, MED-33 to MED-35, NET-18 and
 PERF-19; GPU-5 grew: 321 tasks in the file.
 
+Bluetooth in the top bar and the APK Store in Packages (**2026-11-11**, late
+evening, unbuilt; the owner asked for the APK Store to be easy to find, maybe
+in Packages, for Bluetooth left of the Wi-Fi meter on every page, and for
+connecting and disconnecting devices to work, especially on the Smart Pro): a
+Bluetooth button left of the Wi-Fi meter in every top bar, struck through while
+the radio is off and in the accent while a device is connected, its state read
+from the kernel rather than from `bluetoothctl` (`statusbar_bluetooth.go`,
+`bluetooth_quick.go`); on the Bluetooth page A connects or disconnects a paired
+device and Y opens its sheet (`bluetooth_devices_ui.go`); a step-by-step
+bring-up for a firmware that left Bluetooth stopped, also behind Quick
+Settings' switch (`bluetooth_bringup*.go`); and a **More stores** strip in
+Packages for the APK Store, PortMaster and Windows Apps, which Home search now
+finds too (`pkgstores.go`). Every part was reviewed and its findings fixed;
+nothing is compiled or has run on a handheld. SYS-1 grew; still 321 tasks.
+
+The Groq key from the phone, L2 Edit Home and square tiles (**2026-11-11**,
+night, unbuilt; the owner asked for the Groq key right under Your name in
+General with a phone paste like the VPN's, for L2 to edit Home, and for every
+tile to resize like square tiles): Settings → General → **Groq API key** opens
+a sheet whose **Paste it from your phone** shows a QR code that opens the
+companion page at its Groq card and closes when the key arrives
+(`groqkey_sheet.go`, `companion_phonecard.go`; the VPN's phone option uses it
+too); L2 (Q) opens and closes Edit Home in every layout, going back to Standard
+or the Hero grid when nothing changed (`home_edit.go`, `shoulders.go`); the
+Widgets grid has seven square columns and X resizes any tile a cell at a time
+up to 7 × 3, with a corner handle for the mouse (`home_tiles.go`). HW-4 is new:
+322 tasks.
+
 ## How to use this file (agents read this first)
 
 1. **Pick** the highest-priority task you can actually verify. Tags tell you what
@@ -707,6 +735,28 @@ and the dock keep their own cadence; ten minutes of battery on Home with
 Gentle water against none is recorded (see GPU-5).
 **Verify.** Record results, firmware and CrossMix versions in the HW log; file a
 FIX task for anything that differs.
+
+### HW-4 — Groq key from the phone, L2 Edit Home and square tiles (P1, S) [HW]
+**Why.** Juka asked (2026-11-11) for the Groq key at the top of General with a
+way to paste it from the phone like the VPN's import, for L2 to edit Home, and
+for every Home tile to resize on square tiles. Written without a device or a
+compiler: `groqkey_sheet.go`, `companion_phonecard.go`, the companion page's
+`#groq` / `#vpn` links, `home_edit.go`'s resize mode and the seven-column grid.
+**Where.** Smart Pro, a Windows PC with and without a pad, an Android and an
+iPhone browser.
+**Done when.** (1) General shows Your name, Groq API key, Weather; A on the key
+row → **Paste it from your phone** → the phone's camera opens the page with the
+Groq card first and the cursor in it; Save closes the code on the handheld and
+the row reads "Saved · ••••abcd"; Remove asks first; Chat's "Add key" and the
+orb's "Add Groq key" land on the sheet; the VPN's phone option opens the VPN
+card the same way. (2) L2 on Home opens Edit Home on all four layouts and L2
+closes it; from Standard with no change Home comes back to Standard; Q does the
+same on a keyboard and the footers say Q there. (3) On Widgets, X then the
+D-pad grows a tile to 3 × 3 and back to 1 × 1 with the grid making room and the
+focus staying on it; the corner handle drags a size with the mouse; the cells
+look square on the 1280 × 720 panel and on the Brick; no painter (Continue at
+7 × 3, a widget at 1 × 3) draws outside its tile.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
 
 ---
 
@@ -2235,6 +2285,41 @@ the Start menu, search and PS Remote Play's Controllers row) scans, pairs,
 trusts, connects, disconnects and forgets through bounded `bluetoothctl`
 sessions (a pseudo-terminal, pipes as the fallback) and calls a pad ready only
 with evidence from `/proc/bus/input/devices`.
+**Status 2026-11-11 (evening).** Also built, unverified on hardware: the top
+bar's Bluetooth button left of the Wi-Fi meter (`statusbar_bluetooth.go`; state
+from the adapters and `hciN:M` links in `/sys/class/bluetooth` and the
+HCIGETDEVLIST ioctl's HCI_UP flag, `bluetooth_quick.go`, with
+`bluetoothctl show` only as the fallback), one-press Connect / Disconnect on
+the page (A; Y = the device sheet; the ring starts on the first paired device;
+the page searches by itself only when nothing is paired and re-reads the list
+when the link count changes), and `btBringUp` (`bluetooth_bringup*.go`) for a
+firmware that left Bluetooth stopped: `/etc/bluetooth/bt_init.sh start` when
+there is no adapter, `bluetoothd` through `/etc/bluetooth/bluetoothd`,
+`/etc/init.d/bluetoothd`, `/etc/init.d/bluetooth` or the binary, an rfkill
+unblock, then power on — the chip and daemon rungs on TrimUI only, each step
+bounded, fixed paths only. Search, Pair, Connect, the page's switch and Quick
+Settings' Bluetooth "on" (off the render thread) all go through it. On TrimUI a
+radio whose `bluetoothd` is not running reads as off. Facts used (spruceOS PRs
+#1757/#1761/#1763/#1765): stock BlueZ 5.54, `bluetoothd` started by
+`runtrimui.sh` with the stock `main.conf` next to `trimui_btmanager`, pairings
+in `/etc/lib/bluetooth`, bondable only while a default agent is registered
+(JukaHub's pairing session registers its own). TrimUI's `system.json`
+Bluetooth key is not written (its meaning is unknown), so the firmware's own
+switch may still read off after JukaHub switched Bluetooth on.
+**Status 2026-11-11 (night).** Juka: "Bluetooth doesn't work on the Smart
+Pro". No device log existed, so the guesses were removed or made observable:
+when no firmware script brings `hci0` up, A133P models attach the XR829 on
+`ttyS1` themselves (`bluetooth_attach.go`: rfkill pulse, `hciattach -n ttyS1
+xradio`, then `rtk_hciattach -n -s 3000000 ttyS1 xradio` — Knulli #453 and the
+Tina XR829 guide); Bluetooth tools are found beyond PATH and run with the
+firmware's environment (`bluetooth_tools.go`); `bluetooth_diag.go` logs the
+whole stack once per run when the page opens and on every failed bring-up,
+and adds it to the diagnostics bundle. **Next step on a device:** open
+Settings → Network → Bluetooth devices once, then send a bug report with the
+log (or export the diagnostics bundle) and read its "Bluetooth" block:
+which tools exist, whether `hci0` is there, which processes run, and whether
+the pairing store holds more than one adapter address (Knulli saw the Brick's
+XR829 take a random address each boot, which orphans every pairing).
 **Why.** The page was written without a device. TrimUI's firmware notes promise
 only "BLE hid", so classic-Bluetooth pads (DualShock 4, DualSense) may connect
 without input, and spruceOS found stock pairings lost after a reboot or a radio
@@ -2250,7 +2335,20 @@ DualSense, a DualShock 4, an Xbox pad and an 8BitDo pad in pairing mode within
 10 s; record which get an input device (Bus=0005 with the pad's address) and
 which show **No input**; pairings after a reboot and a radio toggle;
 `bluetoothd` running when the stock menu has Bluetooth off; Remote Play
-stutter with a pad connected against Wi-Fi alone.
+stutter with a pad connected against Wi-Fi alone. Since 2026-11-11: with the
+stock switch off, is `hci0` gone from `/sys/class/bluetooth` or only DOWN, and
+does the bar's rune show struck through (a connected pad: an `hci0:N` entry and
+the accent rune; the log shows no fallback to `bluetoothctl show`); which
+bring-up rungs run on stock 1.1.x and CrossMix (the log's `bring-up:` lines —
+does `/etc/bluetooth/bt_init.sh` exist and take `start`, does
+`/etc/bluetooth/bluetoothd` exist); whether `trimui_btmanager` or keymon switch
+the radio back off within about 30 s of JukaHub switching it on; A connects and
+disconnects a paired DualSense, an 8BitDo pad and a headset from the page the
+bar opens, Y → Forget works, and a pad woken with its PS button shows as
+connected within about 2 s; a pairing leaves a LinkKey under
+`/etc/lib/bluetooth/<adapter>/<device>/info` and survives a reboot and a radio
+toggle; what `system.json`'s Bluetooth key, if there is one, does; no new Wi-Fi
+stutter from the bar's two-second reading.
 
 ### SYS-2 — Wi-Fi verified on both stock images (P1, S) [HW]
 **Where.** `wifi*.go`, `docs/WIFI.md`.
@@ -4036,6 +4134,7 @@ From the VPN pass: NET-8, NET-17.
 From the Windows apps, Android, Xbox and emulator updates pass: APP-17, APP-18,
 APP-20, APP-21, GAME-18 (AND-1, AND-6, AND-17 and XBX-1 grew).
 From the 2026-11-11 tester pass: HW-3 (with GPU-5) and MED-33.
+From the Groq key, L2 Edit Home and square tiles pass: HW-4.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 

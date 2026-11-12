@@ -873,6 +873,8 @@ func vkCurrentText() string {
 		return homeSearchText()
 	case tzPickerVKTarget:
 		return tzPicker.query
+	case alarmLabelVKTarget:
+		return alarmLabelBuffer
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
 	case vkTargetBrowserURL:
@@ -935,6 +937,9 @@ func vkSetText(text string, config *Config) {
 	case tzPickerVKTarget:
 		// The zone list behind the keyboard narrows on every key.
 		tzPickerSetQuery(text)
+	case alarmLabelVKTarget:
+		// The editor takes the label on Done only (alarmLabelSubmit).
+		alarmLabelBuffer = text
 	case vkTargetDownloads:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
@@ -1117,6 +1122,8 @@ func vkTitle() string {
 		return "SEARCH JUKAHUB"
 	case tzPickerVKTarget:
 		return "SEARCH TIME ZONES"
+	case alarmLabelVKTarget:
+		return "ALARM LABEL"
 	case vkTargetDownloads:
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
@@ -1237,6 +1244,8 @@ func vkPlaceholder() string {
 		return "Apps, settings, files or the web"
 	case tzPickerVKTarget:
 		return "City or country: berlin"
+	case alarmLabelVKTarget:
+		return "Wake up, Medicine, Bus…"
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
@@ -1820,6 +1829,9 @@ func vkCloseKeyboard() {
 	if vkTarget == vkTargetBrowserURL {
 		brwPref.buffer = ""
 	}
+	if vkTarget == alarmLabelVKTarget {
+		alarmLabelBuffer = ""
+	}
 	if vkTarget == vkTargetRA {
 		// The API-key field starts in uppercase; do not leak that into the
 		// next keyboard target.
@@ -2335,6 +2347,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// The zone list already narrowed while typing; Search drops the
 		// keyboard with the cursor on the first match.
 		vkCloseKeyboard()
+	case alarmLabelVKTarget:
+		// The text was read above; closing clears the buffer, and B leaves
+		// the editor's label as it was.
+		vkCloseKeyboard()
+		alarmLabelSubmit(text)
 	case vkTargetDownloads:
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.

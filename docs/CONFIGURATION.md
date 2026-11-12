@@ -78,7 +78,7 @@ settings such as `search_query` or `stream_url`.
 | `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
-| `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
+| `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself; there the row shows the system's own switch (read from the Windows Time service on Windows) and opens the system's date & time page. **Set date & time** sets the clock by hand on the handheld (and turns this switch off, so the next sync does not undo it); elsewhere it opens the system's page. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
 | `liveBuilder`, `liveBuilderLAN` | bool | Settings → Network → **Live Builder**: whether the web builder's receiver starts with JukaHub (default off on the handheld, on on a PC; either way it switches itself off after 30 minutes without use), and whether a PC listens on the network instead of that computer only. `JUKAHUB_LIVE_BUILDER` and `JUKAHUB_LIVE_LAN` win over both, and the older `liveBuilderDisabled: true` still keeps it off; see [SECURITY.md](../SECURITY.md#live-builder-the-web-builders-receiver) |
 | `vpnEnabled`, `vpnRoute` | bool, `""`/`"config"` | Settings → Network → **VPN** (default off): send the device's traffic through the WireGuard configuration in `data/vpn.json` (imported in Settings, Files or the phone companion; never stored here), and **Send through the VPN**: everything (`""`) or only the configuration's `AllowedIPs` (`"config"`). On without a configuration does nothing; see [VPN.md](VPN.md) |
 | `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (on the handheld the libretro cores, JukaHub's PPSSPP, hakuX and the downloaded runtimes; on a PC the emulators JukaHub installed and its RetroArch's cores; default `install`: once a day, while charging or idle — on a PC once JukaHub sits idle, not on a laptop's battery — and never during a game or a video, builds that differ are installed after a check that they can load here, and the replaced one is kept for a one-press roll back; each updater's last check is kept in `emu-autoupdate.json` beside the patch state). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
@@ -167,12 +167,19 @@ and files), `command` (a voice command line) or `url` (http or https). An
 entry that cannot be used is skipped, and a second entry with the same phrase
 is dropped ([Voice](VOICE.md#your-own-words)).
 
-`gameAssist` (Settings → Voice & AI → **Game assistant**, off by default) tells
+`gameMenu` (Settings → Controls → **In-game menu**, on by default; TrimUI
+handhelds) makes holding **Select + L2** in a game pause it under a menu:
+Resume game, Ask Juka, Quit to JukaHub
+([Controls](CONTROLS.md#in-game-menu-hold-select--l2)).
+
+`gameAssist` (Settings → Voice & AI → **Game assistant**, on by default) tells
 Juka which library game is being played, or was in the last 30 minutes, and on
 a TrimUI makes **Select + R2** in a game pause it and open the voice orb over
 it. `gameAssistScreen` (**Juka can see the game screen**, off by default; a
 TrimUI with `gameAssist` on) sends the paused game's picture, read from
-`/dev/fb0`, with the question to Groq's vision model
+`/dev/fb0`, with the question to Groq's vision model. `gameAssistSpeak`
+(**Read answers aloud in games**, on by default; a TrimUI with `gameAssist`
+on) speaks the answer over the paused game whatever `jukaVoice` says
 ([Voice](VOICE.md#asking-about-the-game-youre-playing)).
 
 `vkVoiceAuto` (Settings → Voice & AI → **Start voice typing when the keyboard
@@ -421,7 +428,7 @@ four of them: Standard, Hero grid, Carousel and Widgets.
 | `dashboard` | Standard | the built-in composition: the wide Continue card with the smaller cards beside it |
 | `grid` | Hero grid | a 4×3 mosaic with the Continue card standing two rows tall as a hero tile and the other ten cards filling the rest |
 | `carousel` | Carousel | one row of big cards centred on the focused one and wrapping around, with its title and description under it and a row of position dots; the cards are the tiles of `homeTiles` (below), in order, all at one size |
-| `widgets` | Widgets | a six-column grid of the tiles of `homeTiles`, each at its own size: Home cards, Start-menu entries and info widgets; three rows fit on the screen and the grid scrolls past them |
+| `widgets` | Widgets | a grid of square cells, seven across, holding the tiles of `homeTiles`, each at its own size: Home cards, Start-menu entries and info widgets; three rows fit on the screen and the grid scrolls past them |
 
 `dashboard` and `grid` ignore the tiles' `x`/`y`/`width`/`height` (and their
 titles and icons) while they are in force, and **never rewrite them**: the
@@ -429,8 +436,9 @@ scene's elements are left exactly as authored, so switching back to `custom`
 puts the user's arrangement back untouched. That is what makes an arrangement
 safe to try. `carousel` and `widgets` leave the scene alone too: what they
 show, and what edit mode changes, is `homeTiles`. Standard and the Hero grid
-cannot be edited on the device; **Edit Home** opened on one of them switches
-to Widgets first.
+cannot be edited on the device; **Edit Home** (L2 on Home) opened on one of
+them switches to Widgets first, and back again when editing ends with nothing
+changed.
 
 An experience pack's `homeLayout` takes the same five values. A pack picks the
 arrangement, never the tiles: on `carousel` or `widgets` Home shows the user's
@@ -458,13 +466,13 @@ joined by `;`. Each entry is a tile reference, optionally followed by `@` and
 a size in grid cells written `WxH` (width, a lowercase `x`, height):
 
 ```text
-continue@2x2;media@4x1;emulator;packages;apps;w:clock;favorites;browser;chat;tools;files;settings
+continue@3x2;media@4x1;emulator@2x1;packages;apps;favorites;browser;chat;tools;files;settings;w:clock
 ```
 
-That is the default list, and what **Reset** in edit mode puts back. On six
-columns it packs into exactly three rows: Continue 2×2 at the top left, Media
-4×1 beside it, Games, Packages, Apps and the Clock widget under Media, and
-Favorites, Browser, Chat, Tools, Files and Settings along the bottom.
+That is the default list, and what **Reset** in edit mode puts back. On the
+seven columns it packs into exactly three rows: Continue 3×2 at the top left,
+Media 4×1 beside it, Games 2×1, Packages and Apps under Media, and Favorites,
+Browser, Chat, Tools, Files, Settings and the Clock widget along the bottom.
 
 | Reference | Tile |
 |---|---|
@@ -477,24 +485,24 @@ The Start menu's "Send to …" rows cannot be tiles. Inside a reference, `%` is
 written `%25`, `;` is `%3B` and `@` is `%40`. The **Add** tile edit mode shows
 (`edit:add`) is never stored.
 
-The sizes a tile can take, width × height in cells. The first one listed is the
-size of an entry without `@` and of a newly added tile, and **X** in edit mode
-steps through them in this order:
+The grid's cells are square (160 × 152 design pixels, seven across the
+1216-pixel body) and a tile can be any whole number of them: 1 to 7 across and
+1 to 3 down. Two have a floor. In edit mode **X** starts resizing the focused
+tile and the D-pad grows or shrinks it a cell at a time; a click on its size
+tab steps through 1×1, 2×1, 2×2, 3×2, 4×2 and 3×3. An entry without `@` (and a
+newly added tile) has the tile's default size:
 
-| Tile | Sizes |
-|---|---|
-| `continue` | 2×2, 3×2, 4×2 (never shorter than two rows: its chip, progress bar and button would collide) |
-| `media` | 2×1, 3×1, 4×1, 2×2, 4×2 |
-| every other card and every `app:` tile | 1×1, 2×1, 2×2 |
-| `w:clock`, `w:weather` | 1×1, 2×1, 2×2 |
-| `w:battery`, `w:storage`, `w:playtime` | 1×1, 2×1 |
-| `w:nowplaying` | 2×1, 2×2, 1×1 |
-| `w:calendar` | 2×2, 1×1 |
+| Tile | Default | Smallest |
+|---|---|---|
+| `continue` | 2×2 | 2×2 (shorter, its chip, progress bar and button would collide) |
+| `media` | 2×1 | 2×1 (its waveform needs the second column) |
+| `w:calendar` | 2×2 | 1×1 |
+| `w:nowplaying` | 2×1 | 1×1 |
+| every other card, widget and `app:` tile | 1×1 | 1×1 |
 
-A stored size that is not in the tile's list snaps to the nearest one that is
-(the smallest difference in width plus height; on a tie, the one listed
-first). The carousel draws every tile at the same size, so sizes only matter
-on Widgets.
+A stored size outside those limits is clamped to them (`@9x5` becomes the
+largest the grid allows). The carousel draws every tile at the same size, so
+sizes only matter on Widgets.
 
 Reading the value is tolerant, so a hand edit never breaks Home:
 
@@ -511,7 +519,7 @@ Reading the value is tolerant, so a hand edit never breaks Home:
   works again wherever it resolves. The name after `app:scene:` / `app:do:`
   is matched without regard to case.
 
-Tiles are placed in list order, row by row on six columns: each goes at the
+Tiles are placed in list order, row by row on seven columns: each goes at the
 first place after the previous tile where it fits, wrapping to the next row,
 and a hole left beside a wide or tall tile is never filled from further down
 the list, so the reading order is always the list order.

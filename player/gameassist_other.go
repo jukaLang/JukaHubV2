@@ -15,7 +15,7 @@ import "os/exec"
 func gameAssistSupported() bool { return false }
 
 // gaPadSync would start the pad watcher: there is none here.
-func gaPadSync(*Config, bool) {}
+func gaPadSync(*Config, bool, bool) {}
 
 // gaPadStop would stop the pad watcher.
 func gaPadStop() {}
@@ -28,3 +28,7 @@ func gaPausedClear() {}
 
 // gaRecoverPaused would let go of a game a killed JukaHub left paused.
 func gaRecoverPaused() {}
+
+// gmInterruptGame asks a game to quit from the in-game menu: the exit path's
+// request (the menu itself only opens on a Linux handheld).
+func gmInterruptGame(cmd *exec.Cmd) { _ = screenChildSignal(cmd, screenSignalInterrupt) }

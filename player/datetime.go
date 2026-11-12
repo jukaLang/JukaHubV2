@@ -368,6 +368,42 @@ func dateTimeOpenSettings(config *Config, pickZone bool) {
 	}
 }
 
+// dateTimeClockOwnerName names what sets the clock where JukaHub does not:
+// the operating system or desktop that owns the zone, else "the system" (a
+// Linux PC with its own time service, or a handheld run without root).
+func dateTimeClockOwnerName() string {
+	if o := dateTimeZoneOwner(); o != tzOwnerJukaHub {
+		return dateTimeOwnerName(o)
+	}
+	return "the system"
+}
+
+// dateTimeOpenSystemClock opens the system's date and time page (on Windows
+// the one with "Set time automatically" and "Set the time manually").
+func dateTimeOpenSystemClock(*Config) {
+	if err := openSystemSettingsPage("timezone"); err != nil {
+		ShowToast("The system's time service sets this clock: there is no settings page to open here", ToastKindInfo)
+	}
+}
+
+// sysTimeAuto caches systemTimeAutoRead for the Settings row, which asks every
+// frame (main thread only).
+var sysTimeAuto struct {
+	at        time.Time
+	on, known bool
+}
+
+// systemTimeAuto is the system's own "set time automatically" switch, and
+// whether it is known here (Windows only), read at most every few seconds so
+// a change made in Windows' page shows on return.
+func systemTimeAuto() (on, known bool) {
+	if sysTimeAuto.at.IsZero() || time.Since(sysTimeAuto.at) > 3*time.Second {
+		sysTimeAuto.on, sysTimeAuto.known = systemTimeAutoRead()
+		sysTimeAuto.at = time.Now()
+	}
+	return sysTimeAuto.on, sysTimeAuto.known
+}
+
 // dateTimeSettingsOpen is Home search's "Date & time" entry.
 func dateTimeSettingsOpen(config *Config) { dateTimeOpenSettings(config, false) }
 
@@ -578,16 +614,42 @@ func dateTimeSettingsRows() []setRow {
 			},
 		},
 		{
-			ID: "clockSource", Label: "Clock", Kind: setKindInfo,
-			Detail:  clockLastSetDetail,
+			// Where JukaHub may not set the clock, the same switch is the
+			// system's: the row says how it stands and opens its page. (It was
+			// an info row named "Clock", which read as if the switch were
+			// missing.)
+			ID: "clockSource", Label: "Set time automatically", Kind: setKindAction,
+			Detail: func(c *Config) string {
+				return clockLastSetDetail(c) + hintSentence(" · %s opens the date & time settings", "A", "Open")
+			},
 			Visible: func(*Config) bool { return !clockSetSupported() },
 			Value: func(*Config) string {
-				if o := dateTimeZoneOwner(); o != tzOwnerJukaHub {
-					return "Set by " + dateTimeOwnerName(o)
+				on, known := systemTimeAuto()
+				if !known {
+					return "Set by " + dateTimeClockOwnerName()
 				}
-				// JukaHub picks the zone here but may not set the clock (not
-				// the handheld, or not root).
-				return "Set by the system"
+				return setOnOff(on) + " · in " + dateTimeClockOwnerName()
+			},
+			Open: dateTimeOpenSystemClock,
+		},
+		{
+			ID: "setTime", Label: "Set date & time", Kind: setKindAction,
+			Detail: func(c *Config) string {
+				switch {
+				case !clockSetSupported():
+					return "Set by " + dateTimeClockOwnerName() + hintSentence(" · %s opens the date & time settings", "A", "Open")
+				case netTimeEnabledIn(c):
+					return "By hand; turns Set time automatically off so the network does not undo it"
+				}
+				return "Set the clock by hand"
+			},
+			Value: func(c *Config) string { return formatDateTime(c, shotClock(time.Now())) },
+			Open: func(*Config) {
+				if clockSetSupported() {
+					clockSheetOpen()
+					return
+				}
+				dateTimeOpenSystemClock(nil)
 			},
 		},
 		{

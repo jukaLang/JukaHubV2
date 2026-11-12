@@ -1045,11 +1045,12 @@ func xpackDrawPreview(renderer *sdl.Renderer, c *Config, pv xpackPreview, r sdl.
 		return
 	}
 	if arrangement == homeArrangementWidgets {
-		// The tiles the user arranges, on six columns, in the default list's
-		// sizes: Continue 2×2 with the Media strip 4×1 beside it, then cards
-		// and widgets one cell each.
-		colW := (body.W - 5*gap) / 6
-		cell6 := func(col, row, spanC, spanR int32) sdl.Rect {
+		// The tiles the user arranges, on the seven square columns, in the
+		// default list's sizes (home_tiles.go): Continue 3×2 with the Media
+		// strip 4×1 beside it, a wide Games tile under the strip, then cards
+		// and the clock one cell each.
+		colW := (body.W - 6*gap) / 7
+		cell7 := func(col, row, spanC, spanR int32) sdl.Rect {
 			return sdl.Rect{
 				X: body.X + col*(colW+gap),
 				Y: body.Y + row*(cellH+gap),
@@ -1057,13 +1058,13 @@ func xpackDrawPreview(renderer *sdl.Renderer, c *Config, pv xpackPreview, r sdl.
 				H: spanR*cellH + (spanR-1)*gap,
 			}
 		}
-		tile(cell6(0, 0, 2, 2), true)
-		tile(cell6(2, 0, 4, 1), false)
-		for col := int32(2); col < 6; col++ {
-			tile(cell6(col, 1, 1, 1), false)
-		}
-		for col := int32(0); col < 6; col++ {
-			tile(cell6(col, 2, 1, 1), false)
+		tile(cell7(0, 0, 3, 2), true)
+		tile(cell7(3, 0, 4, 1), false)
+		tile(cell7(3, 1, 2, 1), false)
+		tile(cell7(5, 1, 1, 1), false)
+		tile(cell7(6, 1, 1, 1), false)
+		for col := int32(0); col < 7; col++ {
+			tile(cell7(col, 2, 1, 1), false)
 		}
 		return
 	}

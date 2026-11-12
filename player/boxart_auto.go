@@ -39,9 +39,12 @@ package main
 // asked every half hour, and a pass the user stopped from the library is left
 // alone for a day.
 //
-// What leaves the device is what Fill gaps sends: game titles, as GET requests
-// to the public libretro thumbnails server (thumbnails.libretro.com). Nothing is
-// uploaded.
+// What leaves the device is what Fill gaps sends: a request for each console's
+// cover list and then the covers' names, as GET requests to the public libretro
+// thumbnails server (thumbnails.libretro.com; over plain http only when the
+// firmware cannot verify its certificate — artwork_match.go). Nothing is
+// uploaded. Games that already have a cover on the card (the firmware's Imgs
+// folder, MinUI's .res) are not looked up at all.
 
 import (
 	"encoding/json"
@@ -410,7 +413,7 @@ func boxArtTitlesToTry(missing []scannedROM, misses map[string]time.Time, now ti
 func boxArtTally(batch []scannedROM, dest string, misses map[string]time.Time, now time.Time) (found, notFound, unanswered int) {
 	for _, rom := range batch {
 		switch {
-		case artworkCoverPresent(romArtworkPath(rom, dest)):
+		case artworkCoverPresent(romArtworkPath(rom, dest)), romLocalCoverPath(rom) != "":
 			found++
 		case artworkRecentlyMissing(misses, boxArtMissKey(rom), now, artworkMissTTL):
 			notFound++

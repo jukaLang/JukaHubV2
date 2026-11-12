@@ -60,8 +60,9 @@ const (
 	HomeFocusVolume HomeFocusID = "volume"
 	// HomeFocusBluetooth is the Bluetooth rune between the speaker and the
 	// signal meter (statusbar_bluetooth.go). A opens the Bluetooth page. It is
-	// a chrome control on every other scene; enabled only while it is drawn
-	// (no Bluetooth page to open here, or a bar too crowded to keep it).
+	// a chrome control on every other scene; enabled only while it is drawn,
+	// which on Home is wherever the Bluetooth page can do something (Home
+	// never trims its cluster; a crowded scene bar does drop the rune).
 	HomeFocusBluetooth HomeFocusID = "bluetooth"
 	// HomeFocusBrightness is the sun at the left end of the status cluster,
 	// immediately left of the speaker. A opens the brightness card

@@ -75,6 +75,193 @@ func TestWebPlaceItemsSetsCrossAxisAlignment(t *testing.T) {
 	}
 }
 
+func TestWebSrcsetPicksWidthNearestTarget(t *testing.T) {
+	got := webSrcsetPick("small.png 320w, medium.png 800w, large.png 1600w", 960)
+	if got != "large.png" {
+		t.Fatalf("srcset picked %q, want the 1600w candidate for a 960px layout", got)
+	}
+	got = webSrcsetPick("small.png 1x, medium.png 2x, large.png 3x", 960)
+	if got != "medium.png" {
+		t.Fatalf("density srcset picked %q, want the 2x candidate", got)
+	}
+}
+
+func TestWebImageUsesSrcsetCandidate(t *testing.T) {
+	doc := parseWebPage(`<img src="fallback.png" srcset="small.png 320w, large.png 1280w" alt="photo">`, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/large.png"; got != want {
+		t.Fatalf("image src %q, want srcset candidate %q", got, want)
+	}
+}
+
+func TestWebSrcsetKeepsDataURIIntact(t *testing.T) {
+	data := "data:image/png;base64,AAAA 1x"
+	if got := webSrcsetPick(data, 960); got != "data:image/png;base64,AAAA" {
+		t.Fatalf("srcset data URI = %q, want the full data URL", got)
+	}
+}
+
+func TestWebPictureUsesFirstMatchingSource(t *testing.T) {
+	source := `<picture>` +
+		`<source media="all" srcset="wide.png 1200w">` +
+		`<source media="print" srcset="narrow.png 400w">` +
+		`<img src="fallback.png" alt="photo">` +
+		`</picture>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/wide.png"; got != want {
+		t.Fatalf("picture image src %q, want first matching source %q", got, want)
+	}
+}
+
+func TestWebPictureFallsBackToImg(t *testing.T) {
+	source := `<picture>` +
+		`<source media="print" srcset="print.png 400w">` +
+		`<source type="image/avif" srcset="avif.png 400w">` +
+		`<img src="fallback.png" srcset="fallback-large.png 1280w" alt="photo">` +
+		`</picture>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/fallback-large.png"; got != want {
+		t.Fatalf("picture fallback src %q, want img srcset candidate %q", got, want)
+	}
+}
+
+func TestWebSizesTargetPicksMatchingConditionAndFallback(t *testing.T) {
+	cases := []struct {
+		sizes string
+		want  float64
+	}{
+		{"(min-width: 1200px) 400px, (min-width: 700px) 700px, 100vw", 400},
+		{"(max-width: 600px) 480px, 800px", 800},
+		{"(max-width: 600px) 480px, 100vw", 1280},
+		{"calc(100vw - 20px)", 1260},
+		{"calc((100vw - 40px) / 2)", 620},
+		{"(min-width: 1200px) calc(50vw + 10px), 100vw", 650},
+	}
+	for _, tc := range cases {
+		if got := webSizesTarget(tc.sizes, 1280, 720); got != tc.want {
+			t.Errorf("webSizesTarget(%q) = %g, want %g", tc.sizes, got, tc.want)
+		}
+	}
+}
+
+func TestWebImageSizesSelectsCandidate(t *testing.T) {
+	source := `<img src="fallback.png" srcset="small.png 320w, medium.png 640w, large.png 1280w" ` +
+		`sizes="(max-width: 1px) 320px, (min-width: 1px) 500px, 1000px" alt="photo">`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/medium.png"; got != want {
+		t.Fatalf("sizes selected %q, want resolved candidate %q", got, want)
+	}
+}
+
+func TestWebSizesTargetUsesContainerUnits(t *testing.T) {
+	cases := []struct {
+		sizes string
+		want  float64
+	}{
+		{"50cqw", 200},
+		{"100cqi", 400},
+		{"100cqh", 300},
+		{"100cqb", 300},
+		{"100cqmin", 300},
+		{"100cqmax", 400},
+		{"calc(50cqw - 20px)", 180},
+		{"calc(50cqmax + 10px)", 210},
+	}
+	for _, tc := range cases {
+		if got := webSizesTargetIn(tc.sizes, 1280, 720, 400, 300); got != tc.want {
+			t.Errorf("webSizesTargetIn(%q) = %g, want %g", tc.sizes, got, tc.want)
+		}
+	}
+	if got := webSizesTarget("50cqw", 1280, 720); got != 640 {
+		t.Errorf("container units without a container = %g, want viewport fallback 640", got)
+	}
+}
+
+func TestWebImageSizesUsesNearestContainer(t *testing.T) {
+	source := `<div style="container-type:inline-size;width:500px">` +
+		`<img src="fallback.png" srcset="small.png 160w, medium.png 320w, large.png 800w" sizes="50cqw" alt="photo">` +
+		`</div>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/medium.png"; got != want {
+		t.Fatalf("container sizes selected %q, want resolved candidate %q", got, want)
+	}
+}
+
+func TestWebImageSizesUsesContainerShorthand(t *testing.T) {
+	source := `<div style="container:card / inline-size;width:600px">` +
+		`<img src="fallback.png" srcset="small.png 200w, large.png 640w" sizes="50cqw" alt="photo">` +
+		`</div>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/large.png"; got != want {
+		t.Fatalf("container shorthand selected %q, want resolved candidate %q", got, want)
+	}
+}
+
+func TestWebImageSizesCalcSelectsCandidate(t *testing.T) {
+	source := `<img src="fallback.png" srcset="small.png 320w, medium.png 640w, large.png 1280w" ` +
+		`		sizes="(min-width: 1px) calc(1000px - 500px), 100vw" alt="photo">`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/medium.png"; got != want {
+		t.Fatalf("calc sizes selected %q, want resolved candidate %q", got, want)
+	}
+}
+
+func TestWebImageSizesFallsBackToFinalLength(t *testing.T) {
+	source := `<img src="fallback.png" srcset="small.png 320w, medium.png 640w, large.png 1280w" ` +
+		`sizes="(max-width: 1px) 320px, 1000px" alt="photo">`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/large.png"; got != want {
+		t.Fatalf("default sizes length selected %q, want resolved candidate %q", got, want)
+	}
+}
+
+func TestWebImageFetchesSelectedSrcsetDataURI(t *testing.T) {
+	const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+	doc := parseWebPage(`<img src="fallback.png" srcset="`+pixel+` 1x" alt="pixel">`, "", "https://example.com/")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got := doc.Blocks[0].ImageSrc; got != pixel {
+		t.Fatalf("selected image %q, want the srcset data URI", got)
+	}
+	fetchWebImages(doc)
+	if len(doc.imageBytes(pixel)) == 0 {
+		t.Fatal("fetchWebImages did not fetch the selected srcset data URI")
+	}
+}
+
+func TestWebImageTypeSupport(t *testing.T) {
+	if !webImageTypeSupported("image/png") {
+		t.Fatal("image/png should be supported")
+	}
+	if webImageTypeSupported("image/avif") {
+		t.Fatal("image/avif should not be treated as supported")
+	}
+}
+
 func TestWebImageAspectRatioUsesCSSWidth(t *testing.T) {
 	style := webBaseStyle()
 	style.Width = 300

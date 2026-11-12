@@ -631,6 +631,12 @@ func netTimeSync(maySet bool) {
 		logInfo("clock", "system clock is %s off %s (left to the system)", offset, source)
 		clockNoteCheck(clockCheck{At: time.Now(), Offset: offset, Source: source})
 	case clockSet:
+		if !netTime.enabled.Load() {
+			// Switched off while this sync measured — the clock set by hand
+			// (clocksheet.go) does that — so its offset no longer applies.
+			logInfo("clock", "network time switched off during the sync; clock left alone")
+			return
+		}
 		if err := clockSetSystem(time.Now().Add(offset)); err != nil {
 			netTimeFailed(clockCheck{At: time.Now(), Offset: offset, Source: source, Err: "could not set it: " + err.Error()},
 				"clock is %s off %s but could not be set: %v", offset, source, err)

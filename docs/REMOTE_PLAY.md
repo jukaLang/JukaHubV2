@@ -346,10 +346,10 @@ Pairing a Bluetooth pad: [Bluetooth controllers](#bluetooth-controllers).
 ## Bluetooth controllers
 
 **Settings → Network → Bluetooth devices** pairs a controller with the
-handheld. The Start menu (**Bluetooth**, next to Wi-Fi Networks), Quick
-Settings (**Bluetooth Devices**), search (*Pair a controller*, or words like
-"connect headphones") and the Remote Play panel's **Controllers** row open the
-same page.
+handheld. The Bluetooth button in the top bar (left of the Wi-Fi meter), the
+Start menu (**Bluetooth**, next to Wi-Fi Networks), Quick Settings (**Bluetooth
+Devices**), search (*Pair a controller*, or words like "connect headphones")
+and the Remote Play panel's **Controllers** row open the same page.
 
 1. Switch Bluetooth on (the page's first row).
 2. Put the pad in pairing mode — DualSense: hold **Create + PS** until the light
@@ -357,8 +357,8 @@ same page.
    Wireless Controller: switch it on, then hold the pair button on top until the
    Xbox button flashes fast; 8BitDo: choose its mode, then hold its pair button.
    **Put a controller in pairing mode** on the page shows the same list.
-3. The page searches for ten seconds as it opens; **Search again** (or **X**)
-   runs another. Pick the pad under **Nearby**.
+3. With nothing paired yet the page searches for ten seconds as it opens;
+   **Search** (or **X**) runs another. Pick the pad under **Nearby**.
 4. JukaHub pairs, trusts and connects it, then waits up to four seconds for the
    system to make a controller of it.
 
@@ -369,8 +369,8 @@ same page.
 | **No input** · *no controller appeared* | It connected, but the system made no controller for it |
 | **Connect** | Paired but not connected: press the pad's PS or Home button, or choose the row and **Connect** |
 
-**A** on a paired device opens its sheet: **Connect** or **Disconnect**, and
-**Forget**. A pad is only called ready when the kernel has made a controller
+**A** on a paired device connects or disconnects it; **Y** opens its sheet:
+**Connect** or **Disconnect**, and **Forget**. A pad is only called ready when the kernel has made a controller
 with its address. **No input**, or a pairing that ends with *did not connect:
 this system has no driver for that kind of device*, is what firmware that
 supports only Bluetooth LE input (the stock firmware's notes promise "BLE hid")

@@ -77,14 +77,23 @@ type btScreenState struct {
 	// stackWord is what the Bluetooth bring-up is doing, for the switch's row
 	// ("Starting the Bluetooth service…"); "" while nothing is being started.
 	stackWord string
-	// moved: the focus was moved (or a row clicked) during this visit, so the
-	// first listing leaves it where the user put it.
+	// moved: the focus was moved, a row pressed or clicked during this visit,
+	// so the first listing leaves the focus where the user put it.
 	moved bool
-	// links is the number of live links when the list was last read (-1
-	// before that); a different count later means a device came or went
-	// without the page doing it, and the list is read again (relisting).
-	links     int
-	relisting bool
+	// links is the number of live links when the list was last read or the
+	// page last acted (-1 before that); a different count later means a
+	// device came or went without the page doing it, and the list is read
+	// again (relisting). opSeq counts the page's own operations: a reading
+	// that one started or ended during is dropped, because the operation's
+	// result is newer than it. relistScan is the switch's follow-up (focus the
+	// first device, or search when nothing is paired) waiting for a reading;
+	// relistFails counts readings that failed for the same change, so a dead
+	// daemon is not asked again every two seconds.
+	links       int
+	relisting   bool
+	opSeq       int
+	relistScan  bool
+	relistFails int
 	// noAdapter: the last listing found no adapter registered at all, so
 	// there was nothing to list (the firmware's switch is off).
 	noAdapter bool
@@ -185,13 +194,21 @@ func btScreenEnter() {
 	btScreen.moved = false
 	btScreen.links = -1
 	btScreen.relisting = false
+	btScreen.relistScan = false
+	btScreen.relistFails = 0
 	btScreen.noAdapter = false
 	btScreen.showUnnamed = false
 	if !btDevicesAvailable() {
 		return
 	}
-	gen := btScreen.gen
-	runSceneTask(func(ctx context.Context) {
+	gen, seq := btScreen.gen, btScreen.opSeq
+	// The first reading counts as a re-reading in flight, so none starts
+	// beside it (the switch's follow-up waits for it in relistScan).
+	btScreen.relisting = true
+	started := runSceneTask(func(ctx context.Context) {
+		// What the stack looks like, once per run, for the log a bug report
+		// carries (bluetooth_diag.go).
+		btLogDiagnosticsOnce()
 		on, known := btProbeRadio()
 		bzNoteRadio(on, known)
 		var devs []bzDevice
@@ -214,6 +231,7 @@ func btScreenEnter() {
 			if btScreen.gen != gen {
 				return
 			}
+			btScreen.relisting = false
 			btScreen.listed = true
 			btScreen.links = links
 			btScreen.noAdapter = noAdapter
@@ -222,22 +240,42 @@ func btScreenEnter() {
 			if err != nil {
 				btScreen.listErr = bzErrText(err)
 			}
-			btFocusFirstDevice(on && known)
-			if on && known && err == nil && len(btPairedList()) == 0 {
+			if btScreen.opSeq != seq || btScreen.relistScan {
+				// The switch was used while the list was being read: this
+				// reading may predate it, so the devices are read again (and
+				// that reading carries the switch's follow-up).
+				btRelist(false)
+				return
+			}
+			btFocusFirstDevice(on && known, false)
+			// A search the user started while the list was being read is
+			// already the search this would start.
+			if on && known && err == nil && len(btPairedList()) == 0 && !btScreen.scanning {
 				btStartScan()
 			}
 		})
 	})
+	if !started {
+		btScreen.relisting = false
+	}
 }
 
 // btFocusFirstDevice puts the focus on the first paired device — connected
-// ones sort first — once the list is in, unless the user has already moved it
-// or the radio is off (then the switch is the row to press).
-func btFocusFirstDevice(radioOn bool) {
-	if btScreen.moved || !radioOn {
+// ones sort first — once the list is in. After the visit's first listing it
+// does so only while the user has not touched the page (moved); after the
+// switch turned the radio on (afterSwitch), only while the focus is still on
+// the switch that was pressed. Never with the radio off: then the switch is
+// the row to press.
+func btFocusFirstDevice(radioOn, afterSwitch bool) {
+	if !radioOn {
 		return
 	}
-	if f := btScreen.nav.focus; f != "" && f != "radio" {
+	f := btScreen.nav.focus
+	if afterSwitch {
+		if f != "radio" {
+			return
+		}
+	} else if btScreen.moved || (f != "" && f != "radio") {
 		return
 	}
 	if paired := btPairedList(); len(paired) > 0 {
@@ -248,17 +286,22 @@ func btFocusFirstDevice(radioOn bool) {
 // btRelist reads the devices again while the page is up: after the radio came
 // on, when the number of live links changed without the page doing it (a pad
 // woken with its PS button, a headset switched off), and when the top bar's
-// button is pressed on the page. It waits for nothing the page is doing: a
+// button is pressed on the page. It does not start while the page is busy (a
 // pairing, a connection, a search or the switch each end with their own word on
-// the list. scanIfEmpty is the switch's own call once the radio is on: the focus
-// then moves to the first paired device, or a search starts when nothing is
-// paired.
+// the list), and a reading that one of those started or ended during is
+// dropped: the operation's result is newer than it. scanIfEmpty is the switch's
+// own call once the radio is on: the focus then moves to the first paired
+// device, or a search starts when nothing is paired. That follow-up waits in
+// relistScan for a reading that lands, so one already in flight carries it.
 func btRelist(scanIfEmpty bool) {
+	if scanIfEmpty {
+		btScreen.relistScan = true
+	}
 	if btScreen.relisting || btScreen.busyMAC != "" || btScreen.scanning || btScreen.radioBusy || !btDevicesAvailable() {
 		return
 	}
 	btScreen.relisting = true
-	gen := btScreen.gen
+	gen, seq := btScreen.gen, btScreen.opSeq
 	started := runSceneTask(func(ctx context.Context) {
 		on, known := btProbeRadio()
 		bzNoteRadio(on, known)
@@ -278,41 +321,67 @@ func btRelist(scanIfEmpty bool) {
 				return
 			}
 			btScreen.relisting = false
-			btScreen.links = links
-			btScreen.noAdapter = noAdapter
+			if btScreen.opSeq != seq || btScreen.busyMAC != "" || btScreen.scanning || btScreen.radioBusy {
+				// Stale: the page acted while this was read. Nothing is
+				// applied and the count stays, so a later tick reads again.
+				switch {
+				case btScreen.busyMAC != "" || btScreen.scanning:
+					// The user has moved on: a follow-up would only get in
+					// the way.
+					btScreen.relistScan = false
+				case !btScreen.radioBusy && btScreen.relistScan:
+					btRelist(false)
+				}
+				return
+			}
 			if err != nil {
 				// The list on screen stays: a failed reading says nothing
-				// about what is paired.
+				// about what is paired. The same change is asked about once
+				// more on the next tick, then left until the count changes
+				// again (a dead daemon is not asked every two seconds).
 				logDebug("bluetooth", "reading the devices again: %v", err)
+				btScreen.relistFails++
+				if btScreen.relistFails >= 2 {
+					btScreen.links = links
+				}
+				if len(btPairedList()) == 0 || btScreen.noAdapter {
+					// Nothing listed to keep (or the "off" card from a
+					// reading without an adapter): say why instead.
+					btScreen.listErr = bzErrText(err)
+					btScreen.noAdapter = false
+				}
+				btScreen.relistScan = false
 				return
 			}
-			if btScreen.busyMAC == "" && !btScreen.scanning {
-				was := map[string]bool{}
-				for mac, d := range btScreen.devices {
-					if d != nil && d.Connected {
-						was[mac] = true
-					}
+			btScreen.relistFails = 0
+			btScreen.links = links
+			btScreen.noAdapter = noAdapter
+			was := map[string]bool{}
+			for mac, d := range btScreen.devices {
+				if d != nil && d.Connected {
+					was[mac] = true
 				}
-				btReplaceList(devs)
-				// A pad that connected by itself reads "Checking…" for the
-				// time it gets to make its controller, not "No input" at once.
-				for mac, d := range btScreen.devices {
-					if d != nil && d.Connected && !was[mac] {
-						btScreen.connectedAt[mac] = time.Now()
-					}
-				}
-				btApplyPadReading(pads, anon)
-				btScreen.listed = true
-				btScreen.listErr = ""
 			}
-			if !scanIfEmpty {
+			btReplaceList(devs)
+			// A pad that connected by itself reads "Checking…" for the time it
+			// gets to make its controller, not "No input" at once.
+			for mac, d := range btScreen.devices {
+				if d != nil && d.Connected && !was[mac] {
+					btScreen.connectedAt[mac] = time.Now()
+				}
+			}
+			btApplyPadReading(pads, anon)
+			btScreen.listed = true
+			btScreen.listErr = ""
+			if !btScreen.relistScan {
 				return
 			}
+			btScreen.relistScan = false
 			// Just switched on from its row: the next press is most likely
 			// Connect, so the focus goes to the first paired device, or a
 			// search starts when there is none.
-			btFocusFirstDevice(on && known)
-			if on && known && len(btPairedList()) == 0 {
+			btFocusFirstDevice(on && known, true)
+			if on && known && len(btPairedList()) == 0 && !btScreen.scanning {
 				btStartScan()
 			}
 		})
@@ -392,16 +461,23 @@ func btBusyText() string {
 
 // btClaimBusy starts an operation for mac, or says why it cannot start yet.
 // word is the row's progress word ("Pairing…"), verb the toast's ("pairing").
-// A search in flight is stopped: pairing and connecting want the radio.
+// A search in flight is stopped: pairing and connecting want the radio. While
+// the switch is turning the radio on or off nothing starts: a connection would
+// race the switch for the radio.
 func btClaimBusy(mac, word, verb string) bool {
 	if btScreen.busyMAC != "" {
 		ShowToast(btBusyText(), ToastKindInfo)
+		return false
+	}
+	if btScreen.radioBusy {
+		ShowToast("Bluetooth is switching — try again in a moment", ToastKindInfo)
 		return false
 	}
 	if btScreen.scanCancel != nil {
 		btScreen.scanCancel()
 	}
 	btScreen.busyMAC, btScreen.busyWord, btScreen.busyVerb = mac, word, verb
+	btScreen.opSeq++
 	return true
 }
 
@@ -409,12 +485,23 @@ func btClaimBusy(mac, word, verb string) bool {
 func btReleaseBusy(gen int, mac string) {
 	if btScreen.gen == gen && btScreen.busyMAC == mac {
 		btScreen.busyMAC, btScreen.busyWord, btScreen.busyVerb = "", "", ""
+		btScreen.opSeq++
 	}
 }
 
 // btClearBusy drops an operation that could not start.
 func btClearBusy() {
 	btScreen.busyMAC, btScreen.busyWord, btScreen.busyVerb = "", "", ""
+	btScreen.opSeq++
+}
+
+// btNoteLinks takes the kernel's link count after one of the page's own
+// operations as the count the list stands for: the change is the page's doing,
+// and its result is already on the row, so it is not a reason to read again.
+func btNoteLinks(gen, links int) {
+	if btScreen.gen == gen {
+		btScreen.links = links
+	}
 }
 
 // btStageFunc reports a flow's progress words on the device's row.
@@ -513,12 +600,14 @@ func btStartScan() {
 	btScreen.scanErr = ""
 	btScreen.scanUntil = time.Now().Add(bzScanDuration + 2*time.Second)
 	btScreen.scanCancel = cancel
+	btScreen.opSeq++
 	started := runSceneTask(func(context.Context) {
 		defer cancel()
 		var devs []bzDevice
 		// The bring-up waits the moment a freshly powered adapter needs
 		// before it searches; the countdown starts once it is done.
-		err := btBringUp(ctx, btRadioStageFunc(gen))
+		bringErr := btBringUp(ctx, btRadioStageFunc(gen))
+		err := bringErr
 		btClearStackWord(gen)
 		tbxPost(func() {
 			if btScreen.gen == gen && btScreen.scanning {
@@ -549,6 +638,7 @@ func btStartScan() {
 			btScreen.scanning = false
 			btScreen.scanCancel = nil
 			btScreen.scans++
+			btScreen.opSeq++
 			switch {
 			case err == nil && len(devs) > 0:
 				// A finished search's listing is the daemon's word on everything.
@@ -559,6 +649,11 @@ func btStartScan() {
 			}
 			if err != nil && !errors.Is(err, context.Canceled) {
 				btScreen.scanErr = bzErrText(err)
+			}
+			if bringErr != nil && !errors.Is(bringErr, context.Canceled) {
+				// Bluetooth could not be started for the search: the Nearby
+				// card says why too, but the press deserves an answer now.
+				ShowToast("Could not search: "+bzErrText(bringErr), ToastKindError)
 			}
 		})
 	})
@@ -644,10 +739,14 @@ func btToggleConnection(mac string) {
 
 // btPostOutcome reports a pairing or a connection on the main loop: the row
 // updates, and one toast says what happened in words that match the evidence.
+// It runs on the operation's goroutine, so it also reads the link count the
+// operation left (btNoteLinks).
 func btPostOutcome(gen int, dev bzDevice, out bzPairOutcome, err error, pairing bool) {
+	links := btSysfsLinkCount()
 	tbxPost(func() {
 		btQuickKick()
 		if btScreen.gen == gen {
+			btNoteLinks(gen, links)
 			btReleaseBusy(gen, dev.MAC)
 			if err == nil {
 				d := btScreen.devices[dev.MAC]
@@ -681,6 +780,10 @@ func btPostOutcome(gen int, dev bzDevice, out bzPairOutcome, err error, pairing 
 	})
 }
 
+// btPadWakeHint follows "it did not answer" for a controller: a pad that is
+// off connects when its own button wakes it.
+const btPadWakeHint = ". Press its PS or Home button to wake it, then try again"
+
 // btOutcomeMessage is the one toast a pairing or a connection ends with. A pad
 // is only called ready when the kernel made a controller for it.
 func btOutcomeMessage(dev bzDevice, out bzPairOutcome, err error, pairing bool) (string, ToastKind) {
@@ -688,22 +791,29 @@ func btOutcomeMessage(dev bzDevice, out bzPairOutcome, err error, pairing bool) 
 	if out.Device.Name != "" {
 		name = out.Device.Name
 	}
+	isPad := out.Device.kind() == bzKindController || dev.kind() == bzKindController
 	if err != nil {
 		verb := "connect"
 		if pairing {
 			verb = "pair"
 		}
-		return "Could not " + verb + " " + name + ": " + bzErrText(err), ToastKindError
+		msg := "Could not " + verb + " " + name + ": " + bzErrText(err)
+		if isPad && !pairing && bzIsNoAnswer(err) {
+			msg += btPadWakeHint
+		}
+		return msg, ToastKindError
 	}
-	isPad := out.Device.kind() == bzKindController || dev.kind() == bzKindController
 	switch {
 	case !out.Connected && out.ConnectErr != nil:
 		msg := "Paired " + name + ", but it did not connect: " + bzErrText(out.ConnectErr)
 		if !pairing {
 			msg = "Could not connect " + name + ": " + bzErrText(out.ConnectErr)
 		}
-		if isPad && bzIsProfileUnavailable(out.ConnectErr) {
+		switch {
+		case isPad && bzIsProfileUnavailable(out.ConnectErr):
 			msg += ". Classic-Bluetooth controllers may not work on this firmware; a USB cable or a 2.4 GHz adapter does."
+		case isPad && bzIsNoAnswer(out.ConnectErr):
+			msg += btPadWakeHint
 		}
 		return msg, ToastKindWarning
 	case !out.Connected:
@@ -728,8 +838,10 @@ func btStartDisconnect(mac string) {
 		if ctx.Err() != nil {
 			return
 		}
+		links := btSysfsLinkCount()
 		tbxPost(func() {
 			btQuickKick()
+			btNoteLinks(gen, links)
 			btReleaseBusy(gen, dev.MAC)
 			if err != nil {
 				ShowToast("Could not disconnect "+dev.label()+": "+bzErrText(err), ToastKindError)
@@ -763,8 +875,10 @@ func btStartForget(mac string) {
 		if ctx.Err() != nil {
 			return
 		}
+		links := btSysfsLinkCount()
 		tbxPost(func() {
 			btQuickKick()
+			btNoteLinks(gen, links)
 			btReleaseBusy(gen, dev.MAC)
 			if err != nil {
 				ShowToast("Could not forget "+dev.label()+": "+bzErrText(err), ToastKindError)
@@ -787,9 +901,19 @@ func btStartForget(mac string) {
 // btToggleRadio switches the radio off-thread. Switching it on goes through the
 // Bluetooth bring-up, which also starts what the firmware left stopped (the
 // chip, bluetoothd); once it is on, the devices are read again, and a search
-// starts only when nothing is paired.
+// starts only when nothing is paired. While a search is bringing Bluetooth up,
+// or a device is being paired or connected, the switch waits: a second
+// bring-up, or "off" under a connection being made, would only fight it.
 func btToggleRadio() {
 	if btScreen.radioBusy {
+		return
+	}
+	if btScreen.stackWord != "" {
+		ShowToast("Bluetooth is starting — one moment", ToastKindInfo)
+		return
+	}
+	if btScreen.busyMAC != "" {
+		ShowToast(btBusyText(), ToastKindInfo)
 		return
 	}
 	on, known := btRadioCachedState()
@@ -797,7 +921,13 @@ func btToggleRadio() {
 	if !want && btScreen.scanCancel != nil {
 		btScreen.scanCancel()
 	}
+	if !want {
+		// A start Quick Settings left running must not bring the radio back
+		// on behind this press.
+		btCancelBringUpAsync()
+	}
 	btScreen.radioBusy = true
+	btScreen.opSeq++
 	gen := btScreen.gen
 	PlayToggleSound()
 	started := runSceneTask(func(ctx context.Context) {
@@ -810,6 +940,7 @@ func btToggleRadio() {
 		now, nowKnown := btProbeRadio()
 		now, nowKnown = btRadioAfterSwitch(want, err, now, nowKnown)
 		bzNoteRadio(now, nowKnown)
+		links := btSysfsLinkCount()
 		if ctx.Err() != nil {
 			return
 		}
@@ -819,6 +950,8 @@ func btToggleRadio() {
 			}
 			btScreen.radioBusy = false
 			btScreen.stackWord = ""
+			btScreen.opSeq++
+			btNoteLinks(gen, links)
 			switch {
 			case err != nil:
 				ShowToast("Could not switch Bluetooth: "+firstLine(err.Error()), ToastKindError)
@@ -979,17 +1112,34 @@ func btNearbyList() ([]bzDevice, int) {
 
 // ── Rows ──────────────────────────────────────────────────────────────────
 
+// btNoHardware reports a computer without a Bluetooth adapter: nothing the
+// page can switch on (the handhelds' "no adapter" is the firmware's switch
+// being off, which the bring-up undoes).
+func btNoHardware() bool {
+	return btScreen.noAdapter && !IsTrimuiDevice()
+}
+
+// btRadioBusy reports the switch or the bring-up at work: the switch's row
+// shows the work, and A on it has nothing to do until that ends.
+func btRadioBusy() bool {
+	return btScreen.radioBusy || btScreen.stackWord != ""
+}
+
 // btRadioRow is the switch row.
 func btRadioRow(on, known bool) tbxRowSpec {
 	spec := tbxRowSpec{icon: "bluetooth", title: "Bluetooth"}
 	switch {
 	case btScreen.stackWord != "":
-		// The bring-up runs for the switch, a search or a connection.
+		// The bring-up runs for the switch or a search here; Connect and
+		// Pair report theirs on the device's own row.
 		spec.subtitle = btScreen.stackWord
 		spec.pill, spec.tone = "…", tbxToneNeutral
 	case btScreen.radioBusy:
 		spec.subtitle = "Switching…"
 		spec.pill, spec.tone = "…", tbxToneNeutral
+	case btNoHardware():
+		spec.subtitle = "No Bluetooth adapter on this computer"
+		spec.pill, spec.tone = "None", tbxToneNeutral
 	case !known:
 		spec.subtitle = "Its state is unknown — choose to switch it on"
 		spec.pill, spec.tone = "Turn on", tbxToneNeutral
@@ -1057,7 +1207,13 @@ func btScanRow() tbxRowSpec {
 	if btScreen.scans > 0 {
 		spec.title = "Search again"
 	}
-	if btScreen.scanning {
+	switch {
+	case btScreen.scanning && btScreen.stackWord != "":
+		// Bluetooth is still being started for the search: the countdown
+		// begins once it is on.
+		spec.subtitle = btScreen.stackWord + " The search starts when it is on."
+		spec.pill, spec.tone = "…", tbxToneNeutral
+	case btScreen.scanning:
 		spec.subtitle = "Searching… " + strconv.Itoa(btSecondsLeft()) + " s left — put the pad in pairing mode now"
 		spec.pill, spec.tone = "Searching", tbxToneGood
 	}
@@ -1073,7 +1229,13 @@ func btHeader() UIPageHeader {
 	on, known := btRadioCachedState()
 	switch {
 	case !btDevicesAvailable():
-		status = "Unavailable"
+		// Where the page opens the system's own settings it works, if not
+		// here: "Unavailable" would contradict its one row.
+		if btSystemSettingsWhere() == "" {
+			status = "Unavailable"
+		}
+	case btNoHardware():
+		status = "No adapter"
 	case btScreen.radioBusy || btScreen.stackWord != "":
 		status, ink = "Switching on", ColorTextSecondary()
 		if btScreen.radioBusy && on && known {
@@ -1174,6 +1336,8 @@ func btRenderBody(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame 
 		card("bluetooth", "Reading your devices…", "", 110)
 	case btScreen.listErr != "":
 		card("warning", "Could not read the paired devices", btScreen.listErr, 132)
+	case btNoHardware():
+		card("bluetooth", "No Bluetooth adapter", "This computer has no Bluetooth adapter the system can use. Plug one in, then come back to this page.", 132)
 	case known && !on && btScreen.noAdapter:
 		// No adapter, no list: BlueZ only shows the devices of an adapter it
 		// has. Switching on brings the chip up and reads them.
@@ -1188,13 +1352,17 @@ func btRenderBody(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame 
 		addRow("near:"+d.MAC, btNearbyRow(d))
 	}
 	if len(nearby) == 0 {
+		// A search under way, then why the last one did not run (Bluetooth
+		// could not be started for it), then the radio being off.
 		switch {
-		case known && !on:
-			card("bluetooth", "Bluetooth is off", "Switch it on to search for controllers and headphones.", 132)
 		case btScreen.scanning:
 			card("radar", "Searching…", "Put the controller in pairing mode now — it appears here within a few seconds.", 132)
 		case btScreen.scanErr != "":
 			card("warning", "The search did not run", btScreen.scanErr, 132)
+		case btNoHardware():
+			// The Paired card above already says there is no adapter.
+		case known && !on:
+			card("bluetooth", "Bluetooth is off", "Switch it on to search for controllers and headphones.", 132)
 		case btScreen.scans > 0:
 			card("radar", "Nothing new found", "Hold the pad's pairing buttons until its light blinks, then search again.", 132)
 		}
@@ -1277,6 +1445,11 @@ func btScreenHints() []FooterHint {
 	id := btScreen.nav.focus
 	switch {
 	case id == "radio":
+		// While the switch or a bring-up is at work A has nothing to do
+		// there, and with no adapter nothing to switch.
+		if btRadioBusy() || btNoHardware() {
+			break
+		}
 		label := "Turn on"
 		if on, known := btRadioCachedState(); on && known {
 			label = "Turn off"
@@ -1315,9 +1488,23 @@ func btScreenAction(config *Config, act tbxAction) bool {
 	nav := &btScreen.nav
 	switch act {
 	case tbxActConfirm:
+		if nav.focus == "radio" && !btScreen.moved && !btScreen.listed {
+			if on, known := btRadioCachedState(); on && known {
+				// The page has only just opened — often from the top bar,
+				// to connect something — and the devices are still being
+				// read, so the focus is on the switch: A there now would
+				// switch Bluetooth off under a connected pad or headset.
+				// Switching it on is never held back.
+				ShowToast("Reading your devices…", ToastKindInfo)
+				return true
+			}
+		}
+		// A deliberate press: the first listing leaves the focus alone.
+		btScreen.moved = true
 		btScreenActivate(config, nav.focus)
 		return true
 	case tbxActX:
+		btScreen.moved = true
 		if btDevicesAvailable() {
 			PlayActivateSound()
 			btStartScan()
@@ -1326,6 +1513,7 @@ func btScreenAction(config *Config, act tbxAction) bool {
 	case tbxActY:
 		// Y is a paired device's sheet: its details and Forget (A connects
 		// or disconnects it directly).
+		btScreen.moved = true
 		if mac, ok := strings.CutPrefix(nav.focus, "dev:"); ok {
 			btOpenDeviceSheet(config, mac)
 		}

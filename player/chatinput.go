@@ -494,33 +494,11 @@ func chatStartAttach(config *Config) {
 	}
 }
 
-// chatOpenGroqKeySetting takes the user to the Groq key field — the input
-// bound to groq_api_key in whichever scene has it — with its keyboard open.
+// chatOpenGroqKeySetting takes the user to Settings → General → Groq API key
+// with its sheet open: paste the key from the phone, or type or paste it here
+// (groqkey_sheet.go). B comes back to Chat.
 func chatOpenGroqKeySetting(config *Config) {
-	if config == nil {
-		return
-	}
-	for si, scene := range config.Scenes {
-		for ei, elem := range scene.Elements {
-			if elem.Type != "input" || !strings.EqualFold(elem.Variable, "groq_api_key") {
-				continue
-			}
-			PlayActivateSound()
-			if si != currentSceneIndex {
-				changeSceneTo(config, si)
-			}
-			vkOpenSceneInput(config, si, ei)
-			return
-		}
-	}
-	for _, name := range []string{"SettingsGeneral", "Settings"} {
-		if idx := sceneIndexExact(config, name); idx >= 0 {
-			PlayActivateSound()
-			changeSceneTo(config, idx)
-			return
-		}
-	}
-	showToast("Set groq_api_key in jukaconfig.json to talk to Juka", ToastInfo())
+	groqKeyOpenFromAnywhere(config)
 }
 
 // chatBannerActivate runs the banner's button.

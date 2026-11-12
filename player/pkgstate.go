@@ -259,6 +259,13 @@ type pkgState struct {
 	hits  []pkgHit
 	viewW int32
 
+	// contentClip is where the content (shelves, grid, list, empty state) was
+	// visible on the last frame, under the toolbar, the "More stores" strip
+	// and the offline banner. Hits of controls that scroll with the page are
+	// cut to it, so one scrolled out of view cannot take a click meant for the
+	// strip or the toolbar above it.
+	contentClip sdl.Rect
+
 	lastTick uint64
 	iconDims map[string][2]int32
 }
@@ -536,6 +543,8 @@ func packageActionsForget() {
 	st.press = pkgPress{}
 	st.chipFocus = false
 	st.hits = st.hits[:0]
+	// The "More stores" strip needs to know where an arrival comes from.
+	pkgStoresNoteDeparture()
 }
 
 // pkgMigrateLegacy moves the registry list older builds kept inside
@@ -710,7 +719,12 @@ func pkgSync(config *Config) {
 	if !st.prefsLoaded {
 		pkgLoadPrefs(config)
 	}
-	if !st.entered && pkgSceneIsLive(config) {
+	// Only a screen drawn with no transition running is an arrival here (a hot
+	// reload): during the departure fade switchScene has already said goodbye
+	// (packageActionsForget) while the scene index still names Packages, and
+	// arriving again then would restart the visit's work and spend the strip's
+	// return mark (pkgstores.go) before the visit it was meant for.
+	if !st.entered && transitionPhase == "none" && pkgSceneIsLive(config) {
 		pkgOnSceneEnter(config)
 	}
 	pkgDrainEvents()

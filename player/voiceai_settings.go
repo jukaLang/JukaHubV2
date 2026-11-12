@@ -5,7 +5,7 @@ package main
 // rows in its own file (tts_settings.go, voiceshortcuts_settings.go,
 // gameassist_settings.go, vkvoice_settings.go); this section only puts them
 // on one page, in the order they are listed here. The Groq key they all need
-// stays in Settings → General ("Juka AI key").
+// stays in Settings → General ("Groq API key", groqkey_sheet.go).
 
 // voiceAISettingsSection is the rail section's id, used by deep links and search.
 const voiceAISettingsSection = "voiceai"

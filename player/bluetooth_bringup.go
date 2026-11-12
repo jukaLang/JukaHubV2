@@ -27,7 +27,8 @@ package main
 // rung is bounded (the stock BusyBox has no `timeout`, so the bound is
 // JukaHub's), runs only programs at fixed paths that the firmware itself ships,
 // never anything a config names, and is logged. It runs only for something the
-// user asked for — the radio switch, Connect, Pair, Search — never on a timer.
+// user asked for — the radio switch, Connect, Pair, Search, Quick Settings'
+// switch — never on a timer, and only one runs at a time.
 
 import (
 	"bytes"
@@ -37,7 +38,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,7 +61,19 @@ const (
 	btPowerSlow = 2500 * time.Millisecond
 	// btRfkillRoot lists the kernel's radio switches.
 	btRfkillRoot = "/sys/class/rfkill"
+	// btDaemonCacheFor is how long a look for bluetoothd in /proc stands for
+	// the readings that ask often (the radio probe, the bar's button).
+	btDaemonCacheFor = 10 * time.Second
+	// btBringUpAsyncLimit bounds a bring-up that a switch starts and does not
+	// wait for (Quick Settings).
+	btBringUpAsyncLimit = 60 * time.Second
 )
+
+// btBringUpGate lets one bring-up run at a time. A second one started meanwhile
+// (the switch pressed while a search brings Bluetooth up) would run the
+// firmware's script again, and Tina's kills the hciattach the first one
+// started; instead it waits here and then finds the stack up.
+var btBringUpGate = make(chan struct{}, 1)
 
 var (
 	// btFirmwareInitScripts are the firmware bring-up scripts, tried in order.
@@ -86,22 +101,34 @@ var (
 // has registered, bluetoothd running, the radio unblocked and powered. On a
 // stack that is already up it costs a directory listing, a walk of /proc and
 // one ioctl. stage reports progress in words for the page ("Starting
-// Bluetooth…") and may be nil. A nil error means the radio is on.
+// Bluetooth…") and may be nil. A nil error means the radio is on. Ending ctx
+// stops it between rungs; a bluetoothctl run already under way is killed with
+// it (btPowerOn).
 func btBringUp(ctx context.Context, stage func(string)) error {
 	if runtime.GOOS != "linux" {
 		return errBzNoTool
 	}
+	select {
+	case btBringUpGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-btBringUpGate }()
 	say := func(text string) {
 		if stage != nil {
 			stage(text)
 		}
 	}
-	if btAdapterPresent() && btDaemonRunning() {
-		if up, ok := btHCIUp(); ok && up {
-			return nil
-		}
-	}
 	firmware := IsTrimuiDevice()
+	// bluetoothd is only this code's business on the handhelds. On a desktop a
+	// stopped daemon is the owner's choice, and a PID namespace or hidepid can
+	// hide a running one from /proc, so bluetoothctl's own answer decides there.
+	daemonOK := func() bool { return !firmware || btDaemonRunning() }
+	// btRadioIsOn asks the kernel, or bluetoothctl where the kernel cannot be
+	// asked: a radio that is on is never powered "on" again.
+	if btAdapterPresent() && daemonOK() && btRadioIsOn() {
+		return nil
+	}
 
 	if !btAdapterPresent() {
 		if !firmware {
@@ -109,22 +136,30 @@ func btBringUp(ctx context.Context, stage func(string)) error {
 			// none at all is no Bluetooth hardware, or no driver for it.
 			return errBtNoAdapter
 		}
-		if !btRunFirmwareInit(ctx, say) {
-			return errBtNoChip
-		}
-		if !btWaitFor(ctx, btAdapterWait, btAdapterPresent) {
+		// The firmware's own script where there is one; where there is none, or
+		// it ran and no adapter came, the chip is attached the way that script
+		// would (bluetooth_attach.go). The generic Tina script was never shown to
+		// exist on a TrimUI image, and without this rung a Smart Pro whose menu
+		// left Bluetooth off could never get an adapter from JukaHub.
+		ran := btRunFirmwareInit(ctx, say)
+		if !ran || !btWaitFor(ctx, btAdapterWait, btAdapterPresent) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			logWarn("bluetooth", "bring-up: no adapter after the firmware script")
-			return errBtNoChip
+			if ran {
+				logWarn("bluetooth", "bring-up: no adapter after the firmware script; attaching the chip directly")
+			}
+			if !btAttachChip(ctx, say) {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				btLogDiagnostics("no adapter after the bring-up")
+				return errBtNoChip
+			}
 		}
 	}
 
-	if !btDaemonRunning() {
-		if !firmware {
-			return errBzNoDaemon
-		}
+	if !daemonOK() {
 		say("Starting the Bluetooth service…")
 		btStartDaemon(ctx)
 		if !btWaitFor(ctx, btDaemonWait, btDaemonRunning) {
@@ -132,6 +167,7 @@ func btBringUp(ctx context.Context, stage func(string)) error {
 				return err
 			}
 			logWarn("bluetooth", "bring-up: bluetoothd did not start")
+			btLogDiagnostics("bluetoothd did not start")
 			return errBzNoDaemon
 		}
 		// The daemon puts the adapter on the bus a moment after it starts;
@@ -141,10 +177,15 @@ func btBringUp(ctx context.Context, stage func(string)) error {
 		}
 	}
 
+	// Left the page while the daemon came up: nothing is unblocked or powered
+	// for a user who is no longer there (Bluetooth on costs Wi-Fi airtime).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := btUnblockRfkill(); err != nil {
 		return err
 	}
-	if up, ok := btHCIUp(); ok && up {
+	if btRadioIsOn() {
 		btNoteOn()
 		return nil
 	}
@@ -155,19 +196,27 @@ func btBringUp(ctx context.Context, stage func(string)) error {
 		if attempt > 0 && !btSleep(ctx, 800*time.Millisecond) {
 			return ctx.Err()
 		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		started := time.Now()
-		if err = setBluetoothEnabled(true); err == nil || time.Since(started) > btPowerSlow {
+		if err = btPowerOn(ctx); err == nil || time.Since(started) > btPowerSlow || ctx.Err() != nil {
 			break
 		}
 		logDebug("bluetooth", "bring-up: power on (try %d): %v", attempt+1, err)
 	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	if err != nil {
+		btLogDiagnostics("power on failed: " + err.Error())
 		return err
 	}
 	if !btWaitFor(ctx, btPowerWait, btRadioIsOn) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		btLogDiagnostics("the radio did not power on")
 		return errBtNoPower
 	}
 	btNoteOn()
@@ -196,11 +245,109 @@ func btRadioIsOn() bool {
 	return on && known
 }
 
+// btPowerOn asks bluetoothctl to power the radio, bounded by ctx as well as by
+// the probes' own timeout, so leaving the page kills a `power on` still waiting
+// for its answer. A radio switched by rfkill alone is setBluetoothEnabled's.
+// The daemon's usual refusals come back in the page's words; the rfkill block
+// the old fallback lifted is already gone (btUnblockRfkill runs first).
+func btPowerOn(ctx context.Context) error {
+	if bluetoothBackend() != "bluetoothctl" {
+		return setBluetoothEnabled(true)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, systemCommandTimeout)
+	defer cancel()
+	cmd := btToolCmd(runCtx, "bluetoothctl", "power", "on")
+	if cmd == nil {
+		return errBzNoTool
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	text := string(out)
+	logDebug("bluetooth", "bring-up: power on: %v: %s", err, firstLine(strings.TrimSpace(text)))
+	switch {
+	case strings.Contains(text, bzNoDaemonPrompt):
+		return errBzNoDaemon
+	case strings.Contains(text, "No default controller available"):
+		return errBzNoAdapter
+	}
+	return errBtNoPower
+}
+
+// btAsyncBringUp is the bring-up a switch started without waiting for it, so a
+// later press can call it off (btCancelBringUpAsync).
+var btAsyncBringUp struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	seq    int
+}
+
+// btBringUpAsync brings Bluetooth up off the caller's thread, for a switch that
+// has to answer at once — Quick Settings' row runs on the render thread, and
+// where the firmware left Bluetooth stopped the bring-up takes seconds. The
+// result comes back to the main loop: a toast when it failed, the bar's button
+// read again, then done (which may be nil). A newer call replaces an older one
+// still running.
+func btBringUpAsync(done func(error)) {
+	ctx, cancel := context.WithTimeout(context.Background(), btBringUpAsyncLimit)
+	a := &btAsyncBringUp
+	a.mu.Lock()
+	if a.cancel != nil {
+		a.cancel()
+	}
+	a.cancel = cancel
+	a.seq++
+	seq := a.seq
+	a.mu.Unlock()
+	go func() {
+		defer cancel()
+		err := btBringUp(ctx, nil)
+		a.mu.Lock()
+		if a.seq == seq {
+			a.cancel = nil
+		}
+		a.mu.Unlock()
+		tbxPost(func() {
+			btQuickKick()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				ShowToast("Could not switch Bluetooth on: "+bzErrText(err), ToastKindError)
+			}
+			if done != nil {
+				done(err)
+			}
+		})
+	}()
+}
+
+// btCancelBringUpAsync calls off a bring-up btBringUpAsync started, before the
+// same switch turns Bluetooth off: the radio must not come on behind a press
+// that asked for it off.
+func btCancelBringUpAsync() {
+	a := &btAsyncBringUp
+	a.mu.Lock()
+	if a.cancel != nil {
+		a.cancel()
+		a.cancel = nil
+	}
+	a.mu.Unlock()
+}
+
+// btBringUpFailed reports a bring-up that ended without Bluetooth on: an error
+// other than being called off (a later press, or a newer bring-up taking over,
+// says what the switch shows then).
+func btBringUpFailed(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled)
+}
+
 // btRunFirmwareInit runs the first firmware bring-up script there is and
 // reports whether there was one. Its result does not matter: what counts is
 // whether an adapter appears after it.
 func btRunFirmwareInit(ctx context.Context, say func(string)) bool {
-	for _, script := range btFirmwareInitScripts {
+	for _, script := range btFirmwareInitScriptList() {
 		name, args, ok := btScriptCommand(script)
 		if !ok {
 			continue
@@ -213,8 +360,27 @@ func btRunFirmwareInit(ctx context.Context, say func(string)) bool {
 	return false
 }
 
-// btStartDaemon starts bluetoothd: through the first init script that brings it
-// up, else from the first daemon binary there is.
+// btFirmwareInitScriptList is btFirmwareInitScripts, then the variant named
+// for this board's chip that Allwinner's base images may carry next to it
+// ("bt_init.sh_xr829"). Only the known chip's: an image often ships one script
+// per chip it supports, and another chip's would attach with the wrong type
+// and speed (and kill whatever attach is running).
+func btFirmwareInitScriptList() []string {
+	list := append([]string(nil), btFirmwareInitScripts...)
+	u, ok := btChipUART(btBoardModel())
+	if !ok || u.chip == "" {
+		return list
+	}
+	for _, s := range btFirmwareInitScripts {
+		list = append(list, s+"_"+u.chip)
+	}
+	return list
+}
+
+// btStartDaemon starts bluetoothd: through the first init script there is, else
+// — or when that script did not bring it up — from the first daemon binary.
+// Only one script is tried: on Tina the procd wrapper and the init.d script are
+// often the same service, and trying each in turn tripled the wait.
 func btStartDaemon(ctx context.Context) {
 	for _, script := range btDaemonInitScripts {
 		name, args, ok := btScriptCommand(script)
@@ -226,12 +392,13 @@ func btStartDaemon(ctx context.Context) {
 		if btWaitFor(ctx, btDaemonWait, btDaemonRunning) || ctx.Err() != nil {
 			return
 		}
+		break
 	}
 	for _, bin := range btDaemonBinaries {
 		if !btIsExecutable(bin) {
 			continue
 		}
-		if err := btStartDetached(bin); err != nil {
+		if _, err := btStartDetached(bin); err != nil {
 			logWarn("bluetooth", "bring-up: starting %s: %v", bin, err)
 			continue
 		}
@@ -259,27 +426,32 @@ func btRunBounded(ctx context.Context, limit time.Duration, name string, args ..
 
 // btStartDetached starts a daemon binary in a session of its own and leaves it
 // running. bluetoothd stays in the foreground or forks, depending on the build:
-// either way its exit is collected here, so it never lingers as a zombie.
-func btStartDetached(bin string) error {
-	cmd := exec.Command(bin)
+// either way its exit is collected here, so it never lingers as a zombie. The
+// channel closes when it has exited (hciattach -n that gave up on the chip).
+func btStartDetached(bin string, args ...string) (<-chan struct{}, error) {
+	cmd := exec.Command(bin, args...)
 	cmd.Env = screenChildEnv(os.Environ())
 	cmd.Dir = "/"
 	cmd.SysProcAttr = btDetachedAttr()
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
+	exited := make(chan struct{})
 	go func() {
 		err := cmd.Wait()
+		close(exited)
 		logInfo("bluetooth", "%s exited: %v", filepath.Base(bin), err)
 	}()
-	return nil
+	return exited, nil
 }
 
 // btScriptCommand is how to run the script at path, or false when there is no
-// such script. An executable file runs as itself, so its own first line picks
-// the interpreter (Tina's init scripts name /etc/rc.common there). One that
-// lost its execute bit runs through the interpreter its first line names, as
-// long as that is a shell at a known path; a binary never runs this way.
+// such script. An executable file with a "#!" line runs as itself, so that line
+// picks the interpreter (Tina's init scripts name /etc/rc.common there). Any
+// other script — one that lost its execute bit, or one with no "#!" line, which
+// the kernel refuses to start — runs through the interpreter its first line
+// names, or /bin/sh, as long as that is a shell at a known path; a binary never
+// runs this way.
 func btScriptCommand(path string) (string, []string, bool) {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -296,7 +468,7 @@ func btScriptCommand(path string) (string, []string, bool) {
 	if !btLooksLikeScript(head) {
 		return "", nil, false
 	}
-	if info.Mode().Perm()&0o111 != 0 {
+	if info.Mode().Perm()&0o111 != 0 && bytes.HasPrefix(head, []byte("#!")) {
 		return path, nil, true
 	}
 	first, _, _ := bytes.Cut(head, []byte("\n"))
@@ -340,17 +512,59 @@ func btIsExecutable(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }
 
-// btDaemonRunning reports whether bluetoothd is running.
-func btDaemonRunning() bool { return btProcessRunning("/proc", "bluetoothd") }
+// btDaemonCache is the last look for bluetoothd, kept for the readings that
+// ask often.
+var btDaemonCache struct {
+	mu      sync.Mutex
+	at      time.Time
+	running bool
+}
+
+// btDaemonRunning reports whether bluetoothd is running, looking now; the
+// answer also refreshes the cache btDaemonRunningCached reads.
+func btDaemonRunning() bool {
+	running := btProcessRunning("/proc", "bluetoothd")
+	c := &btDaemonCache
+	c.mu.Lock()
+	c.running, c.at = running, time.Now()
+	c.mu.Unlock()
+	return running
+}
+
+// btDaemonRunningCached is btDaemonRunning at most btDaemonCacheFor old: the
+// radio probe and the bar's button ask every few seconds, and a walk of /proc
+// is too much for that. The bring-up always looks now.
+func btDaemonRunningCached() bool {
+	c := &btDaemonCache
+	c.mu.Lock()
+	fresh := !c.at.IsZero() && time.Since(c.at) < btDaemonCacheFor
+	running := c.running
+	c.mu.Unlock()
+	if fresh {
+		return running
+	}
+	return btDaemonRunning()
+}
 
 // btProcessRunning reports whether a live process called name is in proc. A
 // zombie is not one: the stock BusyBox's pidof counts zombies, which is how a
 // dead daemon once passed for a running one on these handhelds.
 func btProcessRunning(proc, name string) bool {
+	return len(btProcessPIDs(proc, name)) > 0
+}
+
+// btProcessPIDs lists the live processes called name in proc (zombies left
+// out, btProcStatLive). The kernel keeps only the first 15 bytes of a name in
+// comm ("trimui_btmanage"), so a longer name is matched on those.
+func btProcessPIDs(proc, name string) []int {
 	entries, err := os.ReadDir(proc)
 	if err != nil {
-		return false
+		return nil
 	}
+	if len(name) > 15 {
+		name = name[:15]
+	}
+	var pids []int
 	for _, e := range entries {
 		if !btAllDigits(e.Name()) {
 			continue
@@ -361,11 +575,14 @@ func btProcessRunning(proc, name string) bool {
 			continue
 		}
 		stat, err := os.ReadFile(filepath.Join(dir, "stat"))
-		if err == nil && btProcStatLive(string(stat)) {
-			return true
+		if err != nil || !btProcStatLive(string(stat)) {
+			continue
+		}
+		if pid, err := strconv.Atoi(e.Name()); err == nil {
+			pids = append(pids, pid)
 		}
 	}
-	return false
+	return pids
 }
 
 // btProcStatLive reads the state out of a /proc/<pid>/stat line ("1234
@@ -399,8 +616,8 @@ func btUnblockRfkill() error {
 	if len(soft) == 0 {
 		return nil
 	}
-	if commandExists("rfkill") {
-		err := runRfkill("bluetooth", true)
+	if btToolExists("rfkill") {
+		err := btRfkillSet(true)
 		if err == nil {
 			return nil
 		}

@@ -197,7 +197,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Tools", where: "Tools", icon: "tools", keys: "tools utilities misc system", open: toolsHubOpen},
 		{title: "Settings", where: "Settings", icon: "settings", keys: "settings preferences options configuration setup", scene: "Settings"},
 		{title: "General settings", where: "Settings", icon: "settings", keys: "general name username language sleep timeout power", scene: "SettingsGeneral"},
-		{title: "Date & time", where: "Settings", icon: "clock", keys: "date time clock 12 hour 24 hour am pm time zone timezone ntp network time sync date format calendar", open: dateTimeSettingsOpen},
+		{title: "Date & time", where: "Settings", icon: "clock", keys: "date time clock 12 hour 24 hour am pm time zone timezone ntp network time sync auto sync automatic set time adjust time change time manual date format calendar", open: dateTimeSettingsOpen},
 		{title: "Appearance", where: "Settings", icon: "palette", keys: "appearance look design colors colours accent dark light mode wallpaper background motion animations", scene: "SettingsAppearance"},
 		{title: "Theme presets", where: "Settings", icon: "theme", keys: "theme themes presets skins colors colours dark mode light mode", scene: "ThemePresets"},
 		{title: "Plugins", where: "Settings", icon: "plugin", keys: "plugins extensions addons add ons mods", scene: "Plugins"},

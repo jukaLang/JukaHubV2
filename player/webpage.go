@@ -22,6 +22,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -61,6 +62,12 @@ type webElement struct {
 	classes []string
 	attrs   *webAttrSet
 	target  bool
+	// node points at the selector tree node for this element. The streaming
+	// parser keeps no DOM, so a page with :has() builds a small structural tree
+	// ahead of the walk; ordinary pages leave this nil.
+	node     *webElement
+	parent   *webElement
+	children []*webElement
 }
 
 // The layout enums are small integers rather than strings: they are copied into
@@ -196,6 +203,12 @@ type webStyle struct {
 	// AspectRatio is a CSS width/height ratio (16/9), used by replaced
 	// elements when the stylesheet supplies it.
 	AspectRatio float64
+	// ContainerType marks a CSS containment container: 0 normal, 1
+	// inline-size and 2 size. The parser uses the nearest one to resolve
+	// container-relative units in an image sizes attribute and to evaluate
+	// @container size queries. ContainerName is the optional query name.
+	ContainerType int
+	ContainerName string
 	// ZIndex and Position place an element in the stacking order. Absolute and
 	// fixed elements leave the flow and are painted over the text in z order.
 	ZIndex    int
@@ -674,6 +687,11 @@ type webRule struct {
 	sel     *webSelector
 	hides   bool
 	reveals bool
+	// containers holds the enclosing @container conditions. They are
+	// evaluated against the parser's open element stack when the rule is
+	// matched, because a rule sheet is parsed before the HTML that supplies
+	// the containers.
+	containers []*webContainerQuery
 }
 
 // mode is how the rule is matched against an element (webSelMode).
@@ -1096,14 +1114,305 @@ func webMediaRatio(value string) (float64, bool) {
 	return a / b, true
 }
 
+// webContainerQuery is one parsed @container condition. The sheet is parsed
+// before the HTML, so the query is kept on each enclosed rule and evaluated
+// against the parser's open element stack when that rule is matched.
+type webContainerQuery struct {
+	name      string
+	condition string
+}
+
+func webParseContainerQuery(text string) *webContainerQuery {
+	text = strings.TrimSpace(text)
+	lower := strings.ToLower(text)
+	if !strings.HasPrefix(lower, "@container") {
+		return nil
+	}
+	rest := strings.TrimSpace(text[len("@container"):])
+	if rest == "" {
+		return nil
+	}
+	lower = strings.ToLower(rest)
+	name := ""
+	if !strings.HasPrefix(lower, "(") && !strings.HasPrefix(lower, "style(") && !strings.HasPrefix(lower, "not ") {
+		end := 0
+		for end < len(rest) && !webAttrSpaceByte(rest[end]) && rest[end] != '(' {
+			end++
+		}
+		candidate := strings.ToLower(rest[:end])
+		if !webContainerNameIdent(candidate) || candidate == "none" || candidate == "and" || candidate == "or" || candidate == "not" {
+			return nil
+		}
+		name = candidate
+		rest = strings.TrimSpace(rest[end:])
+	}
+	if rest == "" || !strings.HasPrefix(rest, "(") {
+		return nil
+	}
+	return &webContainerQuery{name: name, condition: strings.ToLower(rest)}
+}
+
+// webContainerConditionsApply tests all enclosing @container queries. Each
+// resolves its own nearest named and typed container, as nested container
+// rules do.
+func (p *webParser) webContainerRulesApply(queries []*webContainerQuery) bool {
+	for _, query := range queries {
+		if !p.webContainerQueryApplies(query) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *webParser) webContainerQueryApplies(query *webContainerQuery) bool {
+	if query == nil || query.condition == "" {
+		return false
+	}
+	idx := p.webNearestContainer(query)
+	if idx < 0 {
+		return false
+	}
+	w, h := p.webContainerDimensions(idx)
+	return webContainerCondition(webMediaTokens(query.condition), w, h)
+}
+
+// webNearestContainer finds the inner-most ancestor that can answer this
+// query. A height or aspect-ratio test needs size containment; width tests are
+// answered by inline-size and size containers.
+func (p *webParser) webNearestContainer(query *webContainerQuery) int {
+	needsHeight := webContainerQueryNeedsHeight(query.condition)
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		st := p.stack[i].style
+		if st.ContainerType == 0 {
+			continue
+		}
+		if query.name != "" && st.ContainerName != query.name {
+			continue
+		}
+		if needsHeight && st.ContainerType != 2 {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func webContainerQueryNeedsHeight(condition string) bool {
+	condition = strings.ToLower(condition)
+	return strings.Contains(condition, "height") || strings.Contains(condition, "block-size") ||
+		strings.Contains(condition, "aspect-ratio") || strings.Contains(condition, "orientation")
+}
+
+// webContainerDimensions resolves the size of one container from the same
+// width-and-height chain the image sizes code uses: the viewport is the base,
+// and each ancestor's explicit width or height narrows it.
+func (p *webParser) webContainerDimensions(idx int) (w, h float64) {
+	w, h = webMediaViewport()
+	for i := 0; i <= idx && i < len(p.stack); i++ {
+		st := p.stack[i].style
+		if st.WidthPct > 0 {
+			w = w * st.WidthPct / 100
+		} else if st.Width > 0 {
+			w = st.Width
+		}
+		if st.Height > 0 {
+			h = st.Height
+		}
+	}
+	if w <= 0 {
+		w = 1
+	}
+	if h <= 0 {
+		h = 1
+	}
+	return w, h
+}
+
+func webContainerCondition(tokens []string, w, h float64) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	if tokens[0] == "not" {
+		if len(tokens) == 2 {
+			return !webContainerInParens(tokens[1], w, h)
+		}
+		return false
+	}
+	result := webContainerInParens(tokens[0], w, h)
+	for i := 1; i+1 < len(tokens); i += 2 {
+		next := webContainerInParens(tokens[i+1], w, h)
+		switch tokens[i] {
+		case "and":
+			result = result && next
+		case "or":
+			result = result || next
+		default:
+			return false
+		}
+	}
+	return result
+}
+
+func webContainerInParens(group string, w, h float64) bool {
+	if len(group) < 2 || group[0] != '(' || group[len(group)-1] != ')' {
+		return false
+	}
+	inner := strings.TrimSpace(group[1 : len(group)-1])
+	if inner == "" || strings.HasPrefix(inner, "style(") || strings.HasPrefix(inner, "scroll-state(") {
+		return false
+	}
+	if words := webMediaTokens(inner); len(words) > 1 || strings.HasPrefix(inner, "(") {
+		if words[0] == "not" || strings.HasPrefix(words[0], "(") {
+			return webContainerCondition(words, w, h)
+		}
+	}
+	return webContainerFeature(inner, w, h)
+}
+
+func webContainerFeature(inner string, w, h float64) bool {
+	inner = strings.ToLower(strings.TrimSpace(inner))
+	if colon := strings.IndexByte(inner, ':'); colon >= 0 {
+		name := strings.TrimSpace(inner[:colon])
+		value := strings.TrimSpace(inner[colon+1:])
+		prefix := ""
+		if strings.HasPrefix(name, "min-") || strings.HasPrefix(name, "max-") {
+			prefix, name = name[:3], name[4:]
+		}
+		name = webContainerFeatureAlias(name)
+		switch name {
+		case "orientation":
+			switch value {
+			case "landscape":
+				return w > h
+			case "portrait":
+				return h >= w
+			}
+			return false
+		case "aspect-ratio":
+			want, ok := webMediaRatio(value)
+			return ok && webMediaCompare(w/h, prefix, want)
+		case "width":
+			want, ok := webContainerLength(value, w, h)
+			return ok && webMediaCompare(w, prefix, want)
+		case "height":
+			want, ok := webContainerLength(value, w, h)
+			return ok && webMediaCompare(h, prefix, want)
+		}
+		return false
+	}
+	if strings.ContainsAny(inner, "<>= ") {
+		return webContainerRange(inner, w, h)
+	}
+	switch webContainerFeatureAlias(inner) {
+	case "width":
+		return w > 0
+	case "height":
+		return h > 0
+	case "aspect-ratio":
+		return w > 0 && h > 0
+	}
+	return false
+}
+
+func webContainerFeatureAlias(name string) string {
+	switch name {
+	case "inline-size":
+		return "width"
+	case "block-size":
+		return "height"
+	}
+	return name
+}
+
+func webContainerLength(value string, w, h float64) (float64, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, unit := range []string{"cqmin", "cqmax", "cqw", "cqi", "cqh", "cqb"} {
+		if !strings.HasSuffix(value, unit) {
+			continue
+		}
+		n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, unit)), 64)
+		if err != nil {
+			return 0, false
+		}
+		switch unit {
+		case "cqw", "cqi":
+			return n * w / 100, true
+		case "cqh", "cqb":
+			return n * h / 100, true
+		case "cqmin":
+			return n * min(w, h) / 100, true
+		default:
+			return n * max(w, h) / 100, true
+		}
+	}
+	return webMediaLength(value)
+}
+
+func webContainerRange(inner string, w, h float64) bool {
+	var parts, ops []string
+	start := 0
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if c != '<' && c != '>' && c != '=' {
+			continue
+		}
+		parts = append(parts, strings.TrimSpace(inner[start:i]))
+		op := string(c)
+		if c != '=' && i+1 < len(inner) && inner[i+1] == '=' {
+			op += "="
+			i++
+		}
+		ops = append(ops, op)
+		start = i + 1
+	}
+	parts = append(parts, strings.TrimSpace(inner[start:]))
+	if len(ops) == 0 || len(ops) > 2 || len(parts) != len(ops)+1 {
+		return false
+	}
+	feature := func(name string) (float64, func(string) (float64, bool), bool) {
+		switch webContainerFeatureAlias(name) {
+		case "width":
+			return w, func(value string) (float64, bool) { return webContainerLength(value, w, h) }, true
+		case "height":
+			return h, func(value string) (float64, bool) { return webContainerLength(value, w, h) }, true
+		case "aspect-ratio":
+			return w / h, webMediaRatio, true
+		}
+		return 0, nil, false
+	}
+	if len(ops) == 2 {
+		have, parse, ok := feature(parts[1])
+		if !ok {
+			return false
+		}
+		low, okLow := parse(parts[0])
+		high, okHigh := parse(parts[2])
+		if !okLow || !okHigh {
+			return false
+		}
+		return webMediaCmp(low, ops[0], have) && webMediaCmp(have, ops[1], high)
+	}
+	if have, parse, ok := feature(parts[0]); ok {
+		want, valid := parse(parts[1])
+		return valid && webMediaCmp(have, ops[0], want)
+	}
+	if have, parse, ok := feature(parts[1]); ok {
+		want, valid := parse(parts[0])
+		return valid && webMediaCmp(want, ops[0], have)
+	}
+	return false
+}
+
 // parseWebCSS turns a stylesheet into rules. An at-rule block is skipped unless
-// it describes this screen: @media (except print/speech), @supports (a modern
-// reader supports what it implements) and @layer (the cascade order is
+// it describes this screen: @media (except print/speech), @supports (evaluated
+// against the declarations and selectors this reader implements), @container
+// (kept as a condition on each enclosed rule and resolved against the parser's
+// open container stack at match time), and @layer (the cascade order is
 // approximated, but the rules are the site's real styling).
 func parseWebCSS(src string) []webRule {
 	rules := make([]webRule, 0, 32)
 	order := 0
-	parseWebCSSInto(stripWebCSSComments(src), 0, &order, &rules)
+	parseWebCSSInto(stripWebCSSComments(src), 0, &order, &rules, nil)
 	return rules
 }
 
@@ -1119,7 +1428,7 @@ const (
 )
 
 // parseWebCSSInto appends the rules of one (comment-free) block to rules.
-func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule) {
+func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, containers []*webContainerQuery) {
 	for i := 0; i < len(src) && len(*rules) < webCSSMaxRules; {
 		open := strings.IndexByte(src[i:], '{')
 		if open < 0 {
@@ -1138,14 +1447,25 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule) {
 		}
 		if strings.HasPrefix(selectorText, "@") {
 			lower := strings.ToLower(selectorText)
-			keep := strings.HasPrefix(lower, "@supports") || strings.HasPrefix(lower, "@layer")
+			if strings.HasPrefix(lower, "@container") {
+				query := webParseContainerQuery(selectorText)
+				if query != nil && depth < webCSSMaxNesting {
+					next := append(append([]*webContainerQuery(nil), containers...), query)
+					parseWebCSSInto(body, depth+1, order, rules, next)
+				}
+				continue
+			}
+			keep := strings.HasPrefix(lower, "@layer")
+			if strings.HasPrefix(lower, "@supports") {
+				keep = webSupportsApplies(selectorText)
+			}
 			if strings.HasPrefix(lower, "@media") {
 				keep = webMediaBlockApplies(selectorText)
 			}
 			// A conditional group rule nests: `@media` inside `@layer` still
 			// has to be judged on its own query.
 			if keep && depth < webCSSMaxNesting {
-				parseWebCSSInto(body, depth+1, order, rules)
+				parseWebCSSInto(body, depth+1, order, rules, containers)
 			}
 			continue
 		}
@@ -1181,10 +1501,558 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule) {
 				sel:         sel,
 				hides:       hides,
 				reveals:     reveals,
+				containers:  containers,
 			})
 			*order++
 		}
 	}
+}
+
+// webSupportedProperties is the CSS surface this reader implements. It is
+// deliberately a declaration whitelist rather than a blanket "modern browser"
+// answer: @supports exists to select fallbacks, and claiming a property we
+// ignore would make the fallback styling win over the one that actually works.
+var webSupportedProperties = map[string]bool{
+	"align-items": true, "align-self": true, "aspect-ratio": true,
+	"background": true, "background-color": true, "background-image": true,
+	"border": true, "border-bottom": true, "border-color": true,
+	"border-left": true, "border-radius": true, "border-right": true,
+	"border-top": true, "border-width": true, "color": true,
+	"column-gap": true, "container": true, "container-name": true, "container-type": true,
+	"display": true, "flex": true, "flex-basis": true, "flex-direction": true,
+	"flex-grow": true, "flex-wrap": true, "font": true, "font-size": true,
+	"font-style": true, "font-weight": true, "gap": true,
+	"grid-template-columns": true, "height": true, "inset": true,
+	"justify-content": true, "line-height": true, "margin": true,
+	"margin-block": true, "margin-bottom": true, "margin-left": true,
+	"margin-right": true, "margin-top": true, "opacity": true,
+	"order": true, "padding": true, "padding-block": true,
+	"padding-bottom": true, "padding-left": true, "padding-right": true,
+	"padding-top": true, "place-items": true, "position": true,
+	"row-gap": true, "text-align": true, "text-indent": true,
+	"text-transform": true, "visibility": true, "white-space": true,
+	"width": true, "z-index": true,
+}
+
+// webSupportsApplies evaluates an @supports condition. It understands
+// declaration tests, selector(), and the and/or/not combinators; an unreadable
+// or unsupported condition is false, which lets the page's real fallback run.
+func webSupportsApplies(query string) bool {
+	query = strings.TrimSpace(query)
+	if strings.HasPrefix(asciiLower(query), "@supports") {
+		query = strings.TrimSpace(query[len("@supports"):])
+	}
+	if query == "" {
+		return false
+	}
+	return webSupportsCondition(webSupportsTokens(query))
+}
+
+// webSupportsTokens splits a condition into words and whole parenthesised or
+// function groups, so selector(:has(*)) stays one token.
+func webSupportsTokens(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		if webAttrSpaceByte(s[i]) {
+			i++
+			continue
+		}
+		start := i
+		if s[i] == '(' {
+			if end := webCSSParenEnd(s, i); end >= 0 {
+				i = end + 1
+			} else {
+				i = len(s)
+			}
+			out = append(out, s[start:i])
+			continue
+		}
+		for i < len(s) && !webAttrSpaceByte(s[i]) && s[i] != '(' {
+			i++
+		}
+		if i < len(s) && s[i] == '(' {
+			if end := webCSSParenEnd(s, i); end >= 0 {
+				i = end + 1
+			} else {
+				i = len(s)
+			}
+		}
+		out = append(out, s[start:i])
+	}
+	return out
+}
+
+func webSupportsCondition(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	if strings.EqualFold(tokens[0], "not") {
+		return !webSupportsCondition(tokens[1:])
+	}
+	result := webSupportsInParens(tokens[0])
+	for i := 1; i+1 < len(tokens); i += 2 {
+		next := webSupportsInParens(tokens[i+1])
+		switch strings.ToLower(tokens[i]) {
+		case "and":
+			result = result && next
+		case "or":
+			result = result || next
+		default:
+			return false
+		}
+	}
+	return result
+}
+
+func webSupportsInParens(token string) bool {
+	if strings.HasPrefix(asciiLower(token), "selector(") && strings.HasSuffix(token, ")") {
+		return webSupportsSelector(token[len("selector(") : len(token)-1])
+	}
+	if len(token) < 2 || token[0] != '(' || token[len(token)-1] != ')' {
+		return false
+	}
+	inner := strings.TrimSpace(token[1 : len(token)-1])
+	if inner == "" {
+		return false
+	}
+	if strings.HasPrefix(asciiLower(inner), "selector(") && strings.HasSuffix(inner, ")") {
+		return webSupportsSelector(inner[len("selector(") : len(inner)-1])
+	}
+	if name, value, ok := webSupportsDeclaration(inner); ok {
+		return webSupportsValue(name, value)
+	}
+	return webSupportsCondition(webSupportsTokens(inner))
+}
+
+// webSupportsDeclaration splits a declaration test at its top-level colon. A
+// nested condition such as `not (display: grid)` has only a nested colon, so
+// it is not mistaken for a declaration.
+func webSupportsDeclaration(text string) (name, value string, ok bool) {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ':':
+			if depth == 0 {
+				return strings.ToLower(strings.TrimSpace(text[:i])), strings.TrimSpace(text[i+1:]), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func webSupportsValue(name, value string) bool {
+	value = strings.TrimSpace(value)
+	if strings.HasSuffix(strings.ToLower(value), "!important") {
+		value = strings.TrimSpace(value[:len(value)-len("!important")])
+	}
+	if name == "" || value == "" {
+		return false
+	}
+	if strings.HasPrefix(name, "--") {
+		return true
+	}
+	if !webSupportedProperties[name] {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(value))
+	// Keywords that mean "the engine's initial value" do not necessarily
+	// change a probe style, so validate them by property group instead.
+	switch lower {
+	case "inherit", "initial", "unset", "revert", "revert-layer":
+		return true
+	case "none":
+		switch name {
+		case "display", "background", "background-image", "border", "border-left", "border-right", "border-top", "border-bottom", "text-decoration", "text-decoration-line", "grid-template-columns", "flex", "container", "container-name":
+			return true
+		}
+		return false
+	case "normal":
+		switch name {
+		case "font-style", "font-weight", "line-height", "white-space", "container-type":
+			return true
+		}
+		return false
+	case "auto":
+		switch name {
+		case "width", "height", "margin", "margin-block", "margin-bottom", "margin-left", "margin-right", "margin-top", "inset", "flex-basis":
+			return true
+		}
+		return false
+	}
+	if strings.Contains(lower, "var(") {
+		return true
+	}
+	value = webResolveValue(value, nil, 16)
+	if ok, handled := webSupportsParsedValue(name, value); handled {
+		return ok
+	}
+	// Run every remaining declaration through the real property parsers. A
+	// supported value changes at least one field of a probe; an unknown value
+	// leaves every probe untouched. Display is varied because
+	// grid-template-columns only parses on a grid, and booleans are varied so
+	// both `bold` and `normal` style values are observable.
+	for _, display := range []int{webDisplayBlock, webDisplayFlex, webDisplayGrid} {
+		for _, flag := range []bool{false, true} {
+			probe := webSupportsProbeStyle(display, flag)
+			before := probe
+			applyWebDecls(&probe, map[string]string{name: value})
+			if !reflect.DeepEqual(before, probe) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// webSupportsProbeStyle makes every populated scalar field distinct from the
+// value a declaration would normally write, so a no-op parse and a rejected
+// value are both visible as a lack of change.
+func webSupportsProbeStyle(display int, flag bool) webStyle {
+	st := webBaseStyle()
+	v := reflect.ValueOf(&st).Elem()
+	colorType := reflect.TypeOf(sdl.Color{})
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if !f.CanSet() {
+			continue
+		}
+		switch f.Kind() {
+		case reflect.Bool:
+			f.SetBool(flag)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			f.SetInt(97)
+		case reflect.Float32, reflect.Float64:
+			f.SetFloat(97.5)
+		case reflect.String:
+			f.SetString("probe")
+		case reflect.Struct:
+			if f.Type() == colorType {
+				f.Set(reflect.ValueOf(sdl.Color{R: 11, G: 22, B: 33, A: 44}))
+			}
+		}
+	}
+	st.Display = display
+	return st
+}
+
+// webSupportsParsedValue checks the properties whose parsers accept a broad
+// value space and therefore need their own grammar test. The bool result is
+// whether the declaration is supported; handled reports that the property was
+// answered here and should not fall through to the probe.
+func webSupportsParsedValue(name, value string) (supported, handled bool) {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	switch name {
+	case "display":
+		return webSupportsEnum(lower, "block", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "flow-root", "none"), true
+	case "position":
+		return webSupportsEnum(lower, "static", "relative", "absolute", "fixed", "sticky"), true
+	case "visibility":
+		return webSupportsEnum(lower, "visible", "hidden", "collapse"), true
+	case "font-style":
+		return webSupportsEnum(lower, "normal", "italic", "oblique") || strings.HasPrefix(lower, "oblique "), true
+	case "font-weight":
+		return webSupportsEnum(lower, "normal", "bold", "bolder", "lighter", "100", "200", "300", "400", "500", "600", "700", "800", "900"), true
+	case "text-align":
+		return webSupportsEnum(lower, "left", "right", "center", "justify", "start", "end"), true
+	case "text-transform":
+		return webSupportsEnum(lower, "none", "uppercase", "lowercase", "capitalize"), true
+	case "white-space":
+		return webSupportsEnum(lower, "normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"), true
+	case "flex-direction":
+		return webSupportsEnum(lower, "row", "row-reverse", "column", "column-reverse"), true
+	case "flex-wrap":
+		return webSupportsEnum(lower, "nowrap", "wrap", "wrap-reverse"), true
+	case "justify-content":
+		return webSupportsEnum(lower, "start", "end", "left", "right", "center", "flex-start", "flex-end", "space-between", "space-around", "space-evenly"), true
+	case "align-items", "align-self":
+		return webSupportsEnum(lower, "start", "end", "center", "stretch", "baseline", "flex-start", "flex-end"), true
+	case "place-items":
+		fields := webCSSSpaceFields(lower)
+		if len(fields) == 0 || len(fields) > 2 {
+			return false, true
+		}
+		for _, field := range fields {
+			if !webSupportsEnum(field, "start", "end", "center", "stretch", "baseline", "flex-start", "flex-end") {
+				return false, true
+			}
+		}
+		return true, true
+	case "container-type":
+		return webSupportsEnum(lower, "normal", "inline-size", "size"), true
+	case "flex":
+		return webSupportsFlex(lower), true
+	case "width", "height":
+		return webSupportsLengthToken(lower, true), true
+	case "margin", "margin-block", "inset":
+		return webSupportsBoxTokens(lower, true), true
+	case "margin-top", "margin-right", "margin-bottom", "margin-left":
+		return webSupportsLengthToken(lower, true), true
+	case "padding", "padding-block", "padding-top", "padding-right", "padding-bottom", "padding-left":
+		return webSupportsBoxTokens(lower, false), true
+	case "gap", "row-gap", "column-gap":
+		return webSupportsLengthToken(lower, false), true
+	case "text-indent":
+		return webSupportsLengthToken(lower, false), true
+	case "font-size":
+		_, ok := webFontSizePx(lower, 16)
+		return ok, true
+	case "line-height":
+		if lower == "normal" {
+			return true, true
+		}
+		_, ok := webLineHeightPx(lower, 16)
+		return ok, true
+	case "opacity":
+		_, ok := webOpacityValue(lower)
+		return ok, true
+	case "order", "z-index":
+		if name == "z-index" && lower == "auto" {
+			return true, true
+		}
+		_, err := strconv.Atoi(lower)
+		return err == nil, true
+	case "flex-grow":
+		n, err := strconv.ParseFloat(lower, 64)
+		return err == nil && n >= 0, true
+	case "flex-basis":
+		return webSupportsEnum(lower, "auto", "content", "max-content", "min-content") || webSupportsLengthToken(lower, false), true
+	case "aspect-ratio":
+		if lower == "auto" {
+			return true, true
+		}
+		_, ok := webMediaRatio(lower)
+		return ok, true
+	case "grid-template-columns":
+		return webSupportsGridTemplate(lower), true
+	case "border-width":
+		return webSupportsBoxTokens(lower, false), true
+	case "border-radius":
+		v := strings.TrimSpace(lower)
+		if v == "0" || v == "0px" || webSupportsZeroLength(v) {
+			return true, true
+		}
+		return webFirstLength(v, 16) != 0, true
+	case "color":
+		_, ok := parseWebColor(lower)
+		return ok, true
+	case "background-color", "border-color":
+		_, ok := webColorInValue(lower)
+		return ok, true
+	case "background", "background-image":
+		return webSupportsBackground(lower), true
+	case "border", "border-top", "border-right", "border-bottom", "border-left":
+		return webSupportsBorder(lower), true
+	}
+	return false, false
+}
+
+func webSupportsEnum(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func webSupportsLengthToken(value string, allowAuto bool) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "0" || webSupportsZeroLength(value) {
+		return true
+	}
+	if allowAuto && value == "auto" {
+		return true
+	}
+	if pct, ok := webPercentValue(value); ok {
+		return pct >= 0
+	}
+	return webLength(value, 16) != 0
+}
+
+func webSupportsZeroLength(value string) bool {
+	for _, unit := range []string{"px", "em", "rem", "ex", "ch", "pt", "pc", "in", "cm", "mm", "q", "%"} {
+		if strings.HasSuffix(value, unit) {
+			n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, unit)), 64)
+			return err == nil && n == 0
+		}
+	}
+	return false
+}
+
+func webSupportsBoxTokens(value string, allowAuto bool) bool {
+	fields := webCSSSpaceFields(value)
+	if len(fields) < 1 || len(fields) > 4 {
+		return false
+	}
+	for _, field := range fields {
+		if !webSupportsLengthToken(field, allowAuto) {
+			return false
+		}
+	}
+	return true
+}
+
+func webSupportsFlex(value string) bool {
+	switch value {
+	case "none", "auto", "initial":
+		return true
+	}
+	fields := webCSSSpaceFields(value)
+	if len(fields) < 1 || len(fields) > 3 {
+		return false
+	}
+	if _, err := strconv.ParseFloat(fields[0], 64); err != nil {
+		if _, ok := webPercentValue(fields[0]); !ok || len(fields) != 1 {
+			return false
+		}
+	}
+	if len(fields) >= 2 {
+		second := fields[1]
+		if _, err := strconv.ParseFloat(second, 64); err != nil {
+			if second != "auto" && second != "content" && !webSupportsLengthToken(second, true) {
+				return false
+			}
+			return len(fields) == 2
+		}
+	}
+	if len(fields) == 3 {
+		basis := fields[2]
+		if basis != "auto" && basis != "content" && !webSupportsLengthToken(basis, true) {
+			return false
+		}
+	}
+	return true
+}
+
+func webSupportsBackground(value string) bool {
+	if value == "none" {
+		return true
+	}
+	if _, ok := webColorInValue(value); ok {
+		return true
+	}
+	_, ok := webParseGradient(value)
+	return ok
+}
+
+func webSupportsBorder(value string) bool {
+	if value == "none" || value == "hidden" || value == "0" {
+		return true
+	}
+	fields := webCSSSpaceFields(value)
+	if len(fields) == 0 {
+		return false
+	}
+	recognized := false
+	for _, field := range fields {
+		field = strings.ToLower(field)
+		if webSupportsLengthToken(field, false) {
+			recognized = true
+			continue
+		}
+		switch field {
+		case "thin", "medium", "thick", "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset", "none", "hidden":
+			recognized = true
+			continue
+		}
+		if _, ok := parseWebColor(field); ok {
+			recognized = true
+			continue
+		}
+		return false
+	}
+	return recognized
+}
+
+func webSupportsGridTemplate(value string) bool {
+	if value == "none" {
+		return true
+	}
+	if strings.HasPrefix(value, "repeat(") {
+		open := len("repeat")
+		end := webCSSParenEnd(value, open)
+		if end <= open {
+			return false
+		}
+		parts := webSplitTopLevel(value[open+1:end], ',')
+		if len(parts) < 2 {
+			return false
+		}
+		count := strings.TrimSpace(parts[0])
+		if count != "auto-fit" && count != "auto-fill" {
+			n, err := strconv.Atoi(count)
+			if err != nil || n < 1 || n > 6 {
+				return false
+			}
+		}
+		return webSupportsGridTrack(strings.TrimSpace(parts[1]))
+	}
+	fields := webCSSSpaceFields(value)
+	if len(fields) < 1 || len(fields) > 6 {
+		return false
+	}
+	for _, field := range fields {
+		if !webSupportsGridTrack(field) {
+			return false
+		}
+	}
+	return true
+}
+
+func webSupportsGridTrack(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "auto" || value == "min-content" || value == "max-content" {
+		return true
+	}
+	if strings.HasSuffix(value, "fr") {
+		n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "fr")), 64)
+		return err == nil && n >= 0
+	}
+	if strings.HasPrefix(value, "minmax(") || strings.HasPrefix(value, "fit-content(") {
+		open := strings.IndexByte(value, '(')
+		end := webCSSParenEnd(value, open)
+		if end <= open {
+			return false
+		}
+		parts := webSplitTopLevel(value[open+1:end], ',')
+		if strings.HasPrefix(value, "fit-content(") {
+			return len(parts) == 1 && webSupportsLengthToken(parts[0], false)
+		}
+		if len(parts) != 2 {
+			return false
+		}
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if !webSupportsGridTrack(part) && !webSupportsLengthToken(part, false) {
+				return false
+			}
+		}
+		return true
+	}
+	return webSupportsLengthToken(value, false)
+}
+
+func webSupportsSelector(selector string) bool {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return false
+	}
+	sel, _ := webCompileSelector(selector)
+	return sel != nil && !sel.never
 }
 
 // webSkipCSSStatementRules drops the statement at-rules — @charset, @import,
@@ -1612,13 +2480,28 @@ type webCalcValue struct {
 // nested brackets and px/em/rem operands; anything else fails and the caller
 // keeps the original text.
 type webCalcParser struct {
-	src string
-	pos int
-	em  float64
+	src    string
+	pos    int
+	em     float64
+	vw, vh float64
+	cw, ch float64
 }
 
 func webEvalCalc(expr string, em float64) (float64, bool) {
-	p := &webCalcParser{src: expr, em: em}
+	return webEvalCalcViewport(expr, em, 0, 0)
+}
+
+// webEvalCalcViewport evaluates calc() with the page viewport available for
+// vw/vh/vmin/vmax. Sizes attributes use this form because their lengths are
+// resolved against the same viewport as their media conditions.
+func webEvalCalcViewport(expr string, em, vw, vh float64) (float64, bool) {
+	return webEvalCalcContainer(expr, em, vw, vh, vw, vh)
+}
+
+// webEvalCalcContainer is webEvalCalcViewport with the nearest query container
+// dimensions available for cqw/cqh/cqi/cqb/cqmin/cqmax.
+func webEvalCalcContainer(expr string, em, vw, vh, cw, ch float64) (float64, bool) {
+	p := &webCalcParser{src: expr, em: em, vw: vw, vh: vh, cw: cw, ch: ch}
 	value, ok := p.sum()
 	if !ok {
 		return 0, false
@@ -1746,6 +2629,38 @@ func (p *webCalcParser) factor() (webCalcValue, bool) {
 		return webCalcValue{px: number * p.em}, true
 	case "rem":
 		return webCalcValue{px: number * 16}, true
+	case "vw":
+		if p.vw > 0 {
+			return webCalcValue{px: number * p.vw / 100}, true
+		}
+	case "vh":
+		if p.vh > 0 {
+			return webCalcValue{px: number * p.vh / 100}, true
+		}
+	case "vmin":
+		if p.vw > 0 && p.vh > 0 {
+			return webCalcValue{px: number * min(p.vw, p.vh) / 100}, true
+		}
+	case "vmax":
+		if p.vw > 0 && p.vh > 0 {
+			return webCalcValue{px: number * max(p.vw, p.vh) / 100}, true
+		}
+	case "cqw", "cqi":
+		if p.cw > 0 {
+			return webCalcValue{px: number * p.cw / 100}, true
+		}
+	case "cqh", "cqb":
+		if p.ch > 0 {
+			return webCalcValue{px: number * p.ch / 100}, true
+		}
+	case "cqmin":
+		if p.cw > 0 && p.ch > 0 {
+			return webCalcValue{px: number * min(p.cw, p.ch) / 100}, true
+		}
+	case "cqmax":
+		if p.cw > 0 && p.ch > 0 {
+			return webCalcValue{px: number * max(p.cw, p.ch) / 100}, true
+		}
 	}
 	return webCalcValue{}, false
 }
@@ -1827,9 +2742,17 @@ type webSelSimple struct {
 	name  string // id, class, attribute name, or the direction of :dir()
 	value string
 	// words are the language ranges of :lang(); args are the selectors of
-	// :not(), :is() and :where().
-	words []string
-	args  []*webSelector
+	// :not(), :is() and :where(); hasArgs are the relative selectors of :has().
+	words   []string
+	args    []*webSelector
+	hasArgs []webHasArg
+}
+
+// webHasArg is one relative selector argument of :has(), with the relationship
+// between the subject and the argument's leftmost compound.
+type webHasArg struct {
+	sel  *webSelector
+	lead byte
 }
 
 // Simple selector kinds, in the order a compound tests them: the cheap checks
@@ -1881,6 +2804,7 @@ const (
 	webPseudoDir
 	webPseudoNot
 	webPseudoIs
+	webPseudoHas
 )
 
 // webSelMaxDepth bounds nested :not()/:is() arguments, so a hostile sheet
@@ -2407,7 +3331,7 @@ func (p *webSelParser) selectorArgs(c *webSelCompound, s webSelSimple, name, arg
 	case "not":
 		s.op = webPseudoNot
 	case "has":
-		s.op = webPseudoMaybe
+		s.op = webPseudoHas
 	default:
 		s.op = webPseudoIs
 	}
@@ -2415,8 +3339,13 @@ func (p *webSelParser) selectorArgs(c *webSelCompound, s webSelSimple, name, arg
 	if p.depth < webSelMaxDepth {
 		for _, part := range webSplitSelectorList(args) {
 			part = strings.TrimSpace(part)
-			if name == "has" {
-				part = strings.TrimSpace(strings.TrimLeft(part, ">+~"))
+			lead := byte(' ')
+			if name == "has" && part != "" {
+				switch part[0] {
+				case '>', '+', '~':
+					lead = part[0]
+					part = strings.TrimSpace(part[1:])
+				}
 			}
 			if part == "" {
 				continue
@@ -2429,11 +3358,15 @@ func (p *webSelParser) selectorArgs(c *webSelCompound, s webSelSimple, name, arg
 			} else if best.less(spec) {
 				best = spec
 			}
-			if name != "has" {
+			if name == "has" {
+				if !arg.never {
+					s.hasArgs = append(s.hasArgs, webHasArg{sel: arg, lead: lead})
+				}
+			} else {
 				s.args = append(s.args, arg)
 			}
 		}
-		if name == "not" && len(s.args) == 0 {
+		if (name == "not" && len(s.args) == 0) || (name == "has" && len(s.hasArgs) == 0) {
 			p.sel.never = true
 		}
 	} else {
@@ -2507,6 +3440,125 @@ func webSplitSelectorList(text string) []string {
 		}
 	}
 	return append(parts, text[start:])
+}
+
+// webMaxSelectorTreeNodes bounds the structural copy built for :has(). A page
+// larger than this simply leaves :has() undecidable rather than spending the
+// handheld's memory on a second DOM.
+const webMaxSelectorTreeNodes = 8192
+
+// webRulesNeedSelectorTree reports whether any rule has a :has() pseudo-class,
+// including one nested inside :is(), :not() or :where().
+func webRulesNeedSelectorTree(rules []webRule) bool {
+	for i := range rules {
+		if webSelectorUsesHas(rules[i].sel) {
+			return true
+		}
+	}
+	return false
+}
+
+func webSelectorUsesHas(sel *webSelector) bool {
+	if sel == nil {
+		return false
+	}
+	for i := range sel.compounds {
+		for j := range sel.compounds[i].simples {
+			s := &sel.compounds[i].simples[j]
+			if s.op == webPseudoHas && s.kind == webSelPseudo {
+				return true
+			}
+			for _, arg := range s.args {
+				if webSelectorUsesHas(arg) {
+					return true
+				}
+			}
+			for _, arg := range s.hasArgs {
+				if webSelectorUsesHas(arg.sel) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// webBuildSelectorTree parses the same markup walk sees into a lightweight
+// parent/children tree. It deliberately skips raw-text elements and title/style
+// exactly as walk does, so the node cursor stays aligned with startTag. Parser
+// implicit closing rules are mirrored only where they affect ancestry.
+func webBuildSelectorTree(source string) []*webElement {
+	var nodes []*webElement
+	var stack []*webElement
+	// A synthetic root gives top-level elements a common parent, so :has(+ …)
+	// can see their siblings even when the page omits <html> or <body>.
+	root := &webElement{tag: "#document"}
+	root.node = root
+	for i := 0; i < len(source); {
+		if source[i] != '<' {
+			i++
+			continue
+		}
+		if strings.HasPrefix(source[i:], "<!--") {
+			if end := strings.Index(source[i+4:], "-->"); end >= 0 {
+				i += 4 + end + 3
+			} else {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(source[i:], "<!") || strings.HasPrefix(source[i:], "<?") {
+			if end := strings.IndexByte(source[i:], '>'); end >= 0 {
+				i += end + 1
+			} else {
+				break
+			}
+			continue
+		}
+		end := findTextBrowserTagEnd(source, i+1)
+		if end < 0 {
+			break
+		}
+		name, closing, selfClose, attrs := parseWebTag(source[i+1 : end])
+		i = end + 1
+		if name == "" {
+			continue
+		}
+		if closing {
+			for j := len(stack) - 1; j >= 0; j-- {
+				if stack[j].tag == name {
+					stack = stack[:j]
+					break
+				}
+			}
+			continue
+		}
+		if name == "title" || name == "style" || webRawTextElement(name) {
+			_, i, _ = webRawElement(source, i, name)
+			continue
+		}
+		if len(nodes) >= webMaxSelectorTreeNodes {
+			return nil
+		}
+		if n := len(stack); n > 0 && stack[n-1].tag == "head" && name != "head" && !webHeadContentElement(name) {
+			stack = stack[:n-1]
+		}
+		el := webNewElement(name, attrs)
+		node := &el
+		node.node = node
+		if n := len(stack); n > 0 {
+			node.parent = stack[n-1]
+			stack[n-1].children = append(stack[n-1].children, node)
+		} else {
+			node.parent = root
+			root.children = append(root.children, node)
+		}
+		nodes = append(nodes, node)
+		if !webVoidElement(name) && !selfClose {
+			stack = append(stack, node)
+		}
+	}
+	return nodes
 }
 
 // webDeclsHide reports whether declarations would hide what they style, the
@@ -2840,29 +3892,29 @@ func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) 
 		return webSelNot(webSelAnyArg(s.args, chain, idx, webSelMaybe, mode))
 	case webPseudoIs:
 		return webSelAnyArg(s.args, chain, idx, webSelNo, mode)
+	case webPseudoHas:
+		if el.node == nil {
+			// No structural tree was built (or the page exceeded its cap).
+			// :has() cannot be affirmed without descendants, so a miss is the
+			// honest answer rather than styling every candidate.
+			return webSelNo
+		}
+		return webSelBool(s.hasMatches(el.node, mode))
 	}
 	return webSelMaybe
 }
 
 // webSelAnyArg answers the argument list of :is() or :not(): yes as soon as one
-// argument matches. An argument with a combinator would need its own walk up
-// the chain for every ancestor tried, so it stays undecidable — unless its
-// subject, the last compound, already fails on this element. One that does
-// not parse answers invalid (dropped from :is(); a :not() holding one is
-// dropped whole when compiled, see selectorArgs).
+// argument matches. Each argument is matched against the same element and full
+// ancestor chain, so a complex argument such as `.card .title` checks both
+// compounds instead of only its subject. An invalid argument follows the
+// forgiving-list rules set by the caller.
 func webSelAnyArg(args []*webSelector, chain []webElement, idx int, invalid webSelTri, mode webSelMode) webSelTri {
 	result := webSelNo
 	for _, arg := range args {
-		r := webSelMaybe
-		switch {
-		case arg.never:
-			r = invalid
-		case len(arg.compounds) == 1:
-			r = webSelCompoundTest(&arg.compounds[0], chain, idx, mode)
-		case len(arg.compounds) > 1:
-			if webSelCompoundTest(&arg.compounds[len(arg.compounds)-1], chain, idx, mode) == webSelNo {
-				r = webSelNo
-			}
+		r := invalid
+		if arg != nil && !arg.never {
+			r = webSelBool(arg.matchesIn(chain, mode))
 		}
 		if r == webSelYes {
 			return webSelYes
@@ -2872,6 +3924,93 @@ func webSelAnyArg(args []*webSelector, chain []webElement, idx int, invalid webS
 		}
 	}
 	return result
+}
+
+// hasMatches answers :has() against the structural tree. The prebuilt nodes
+// give it descendants and following siblings that the open-element stack alone
+// cannot see.
+func (s *webSelSimple) hasMatches(anchor *webElement, mode webSelMode) bool {
+	for _, arg := range s.hasArgs {
+		if webSelHasRelative(anchor, arg, mode) {
+			return true
+		}
+	}
+	return false
+}
+
+func webSelHasRelative(anchor *webElement, arg webHasArg, mode webSelMode) bool {
+	switch arg.lead {
+	case '>':
+		for _, child := range anchor.children {
+			if webSelHasSubtree(child, arg, true, mode) {
+				return true
+			}
+		}
+		return false
+	case '+':
+		if sibling := webSelNextElement(anchor); sibling != nil {
+			return webSelHasSubtree(sibling, arg, true, mode)
+		}
+		return false
+	case '~':
+		for sibling := webSelNextElement(anchor); sibling != nil; sibling = webSelNextElement(sibling) {
+			if webSelHasSubtree(sibling, arg, true, mode) {
+				return true
+			}
+		}
+		return false
+	default:
+		for _, child := range anchor.children {
+			if webSelHasSubtree(child, arg, false, mode) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// webSelHasSubtree tests one relative-selector root and everything below it.
+// rootBound requires the argument's leftmost compound to sit on the root, which
+// is what makes `> img` a child test and `+ .x` a next-sibling test.
+func webSelHasSubtree(root *webElement, arg webHasArg, rootBound bool, mode webSelMode) bool {
+	type pending struct {
+		el   *webElement
+		path []webElement
+	}
+	stack := []pending{{el: root}}
+	visited := 0
+	for len(stack) > 0 {
+		next := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		path := append(next.path, *next.el)
+		if arg.sel.matchesIn(path, mode) {
+			if !rootBound || len(arg.sel.compounds) == 0 ||
+				webSelCompoundTest(&arg.sel.compounds[0], path, 0, mode) != webSelNo {
+				return true
+			}
+		}
+		visited++
+		if visited > webMaxSelectorTreeNodes {
+			return false
+		}
+		for i := len(next.el.children) - 1; i >= 0; i-- {
+			stack = append(stack, pending{el: next.el.children[i], path: path})
+		}
+	}
+	return false
+}
+
+// webSelNextElement returns the next element sibling in the selector tree.
+func webSelNextElement(el *webElement) *webElement {
+	if el == nil || el.parent == nil {
+		return nil
+	}
+	for i, sibling := range el.parent.children {
+		if sibling == el && i+1 < len(el.parent.children) {
+			return el.parent.children[i+1]
+		}
+	}
+	return nil
 }
 
 // webSelCanDisable lists the elements :disabled and :enabled apply to.
@@ -4001,10 +5140,85 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	applyWebLayoutDecls(st, decls)
 }
 
+// webContainerTypeValue reads the containment type of a container-type or
+// container declaration. Anything the reader does not model stays normal.
+func webContainerTypeValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "inline-size":
+		return 1
+	case "size":
+		return 2
+	}
+	return 0
+}
+
+// webContainerNameValue reads one container name. The reader tracks one name
+// per container, which is enough for the common `container-name: card` form;
+// `none` clears it.
+func webContainerNameValue(value string) string {
+	fields := webCSSSpaceFields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	name := strings.ToLower(strings.TrimSpace(fields[0]))
+	if name == "none" || !webContainerNameIdent(name) {
+		return ""
+	}
+	return name
+}
+
+func webContainerNameIdent(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// webContainerShorthand reads `container: name / type` or its name-only and
+// type-only forms. A name-only shorthand establishes a named container but no
+// size containment, so size queries still walk past it.
+func webContainerShorthand(value string) (name string, typ int) {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	if lower == "none" {
+		return "", 0
+	}
+	if slash := strings.IndexByte(lower, '/'); slash >= 0 {
+		name = webContainerNameValue(value[:slash])
+		typ = webContainerTypeValue(value[slash+1:])
+		return name, typ
+	}
+	fields := webCSSSpaceFields(value)
+	if len(fields) == 1 {
+		if t := webContainerTypeValue(fields[0]); t != 0 {
+			return "", t
+		}
+		return webContainerNameValue(fields[0]), 0
+	}
+	return "", 0
+}
+
 // applyWebLayoutDecls reads the flex and stacking properties. They are kept
 // separate from the text properties because the layout engine consumes them as
 // a unit: a flex container's settings describe its children, not its text.
 func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
+	if v, ok := decls["container-type"]; ok {
+		st.ContainerType = webContainerTypeValue(v)
+	}
+	if v, ok := decls["container-name"]; ok {
+		st.ContainerName = webContainerNameValue(v)
+	}
+	if v, ok := decls["container"]; ok {
+		name, typ := webContainerShorthand(v)
+		st.ContainerName, st.ContainerType = name, typ
+	}
 	if v, ok := decls["display"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "flex", "inline-flex":
@@ -4357,6 +5571,14 @@ type webDetailsFrame struct {
 	inSummary bool
 }
 
+// webPictureFrame is one open <picture>. Its sources are evaluated in order
+// while the parser walks them; the first matching source is remembered for the
+// <img> that follows, which is the page's fallback when none match.
+type webPictureFrame struct {
+	chosen   string
+	selected bool
+}
+
 type webParser struct {
 	doc       *webDocument
 	rules     []webRule
@@ -4396,6 +5618,14 @@ type webParser struct {
 	// body is parsed and kept either way; the stack decides which blocks are
 	// laid out and which section a summary's toggle belongs to.
 	details []webDetailsFrame
+	// pictures is the stack of open <picture> elements. <source> children are
+	// considered in document order and the chosen URL is carried to <img>.
+	pictures []webPictureFrame
+	// selTree is a structural copy of the markup used only when a stylesheet
+	// has :has() rules, whose descendant checks cannot be answered from the
+	// open-element stack alone. selTreePos advances one node per startTag.
+	selTree    []*webElement
+	selTreePos int
 	// target is the page address's fragment: the element whose id it names is
 	// the one :target matches.
 	target string
@@ -4421,6 +5651,9 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	webCollectInlineCSS(source, &p.css)
 	if p.css.Len() > 0 {
 		p.rules = parseWebCSS(p.css.String())
+	}
+	if webRulesNeedSelectorTree(p.rules) {
+		p.selTree = webBuildSelectorTree(source)
 	}
 	if u, err := url.Parse(baseURL); err == nil {
 		p.target = u.Fragment
@@ -4854,7 +6087,14 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "body" || name == "html" {
 		p.inHead = false
 	}
+	if name == "picture" {
+		p.pictures = append(p.pictures, webPictureFrame{})
+	}
 	el := webNewElement(name, attrs)
+	if p.selTreePos < len(p.selTree) {
+		el.node = p.selTree[p.selTreePos]
+		p.selTreePos++
+	}
 	el.target = p.target != "" && el.id == p.target
 	style := p.computeStyle(el, attrs)
 	if name == "body" || name == "html" {
@@ -4956,13 +6196,22 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		rule.Details, rule.DetailsShown = p.detailsTag()
 		p.blocks = append(p.blocks, rule)
 		return
+	case "source":
+		// <source> is only meaningful inside <picture>. Outside one it is
+		// the void element the reader has always skipped.
+		if len(p.pictures) > 0 {
+			p.considerPictureSource(attrs)
+		}
+		return
 	case "img":
 		if p.inHead {
 			return
 		}
-		src := htmlAttrValue(htmlTagAttribute(attrs, "src"))
 		alt := strings.TrimSpace(htmlTagAttribute(attrs, "alt"))
-		resolved := p.webImageURL(src)
+		// A <picture> source wins when one matched. Otherwise srcset is how
+		// responsive pages offer several renditions of one image; choose the
+		// one that covers the size this image will actually render at.
+		resolved := p.webImageSource(attrs)
 		if resolved == "" {
 			// A dead or undecodable src keeps its alt text; a loadable one
 			// becomes a real image block below.
@@ -5041,6 +6290,11 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 }
 
 func (p *webParser) endTag(name string) {
+	if name == "picture" {
+		if n := len(p.pictures); n > 0 {
+			p.pictures = p.pictures[:n-1]
+		}
+	}
 	// A section's summary ends before its body, and the body's first block must
 	// start after that flush or it would join the visible marker line.
 	if name == "summary" {
@@ -5201,6 +6455,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st.Order = 0
 	st.Width, st.WidthPct, st.Height = 0, 0, 0
 	st.AspectRatio = 0
+	st.ContainerType, st.ContainerName = 0, ""
 	st.ZIndex, st.Position = 0, webPositionStatic
 	st.Top, st.Right, st.Bottom, st.Left = 0, 0, 0, 0
 	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
@@ -5224,9 +6479,14 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// reflection.
 	var matched []*webRule
 	for i := range p.rules {
-		if rule := &p.rules[i]; rule.sel.matchesIn(chain, rule.mode()) {
-			matched = append(matched, rule)
+		rule := &p.rules[i]
+		if !rule.sel.matchesIn(chain, rule.mode()) {
+			continue
 		}
+		if len(rule.containers) > 0 && !p.webContainerRulesApply(rule.containers) {
+			continue
+		}
+		matched = append(matched, rule)
 	}
 	slices.SortStableFunc(matched, func(a, b *webRule) int {
 		switch {

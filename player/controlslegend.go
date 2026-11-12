@@ -81,6 +81,10 @@ func systemLegendRows() []FooterHint {
 	if row, ok := vcursorLegendRow(false); ok {
 		rows = append(rows, row)
 	}
+	// Hold Select + L2 in a game: the in-game menu (gamemenu.go).
+	if gameAssistSupported() && gameMenuEnabled(appConfig) {
+		rows = append(rows, FooterHint{Button: "Select + L2", Label: "In-game menu (hold, in a game)"})
+	}
 	if controlsLegend.brick {
 		// On a Brick "F1" is a key on the device, not the keyboard's: it opens
 		// this card, F2 opens Quick Settings, and Menu is voice (listed above)

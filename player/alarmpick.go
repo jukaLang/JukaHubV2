@@ -2,8 +2,8 @@ package main
 
 // alarmpick.go — choosing an alarm's ringtone.
 //
-// The editor's ringtone row cycles in place with Left/Right, the way the hour
-// does, through the synthesised tones and one more stop for music; every step
+// The editor's ringtone row (alarmedit.go) cycles in place with Left/Right
+// through the synthesised tones and one more stop for music; every step
 // previews the sound it lands on. X (or A on "Choose from music…") opens the
 // music picker: a glass sheet listing the tracks in the music player's folders
 // (alarmMusicRoots), scanned in the background, where moving the focus previews
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
 )
 
 const (
@@ -29,7 +28,6 @@ const (
 
 // Hit rects written by the renderer and read by the mouse handler.
 var (
-	alarmRingtoneRowRect   sdl.Rect
 	alarmRingtoneMusicRect sdl.Rect
 	alarmPickSheetRect     sdl.Rect
 	alarmPickRowRects      [alarmPickMaxRows]sdl.Rect
@@ -83,58 +81,6 @@ func alarmDrawChevron(renderer *sdl.Renderer, cx, cy, size int32, dir int32, c s
 		_ = renderer.DrawLine(armX-dir*o, cy-size, tipX-dir*o, cy)
 		_ = renderer.DrawLine(tipX-dir*o, cy, armX-dir*o, cy+size)
 	}
-}
-
-// alarmDrawRingtoneRow paints the ringtone row: chevrons at both ends, the
-// ringtone's name, and — while the row has focus — the X badge for music.
-func alarmDrawRingtoneRow(renderer *sdl.Renderer, config *Config, font, small *ttf.Font, row sdl.Rect) {
-	if renderer == nil || font == nil || small == nil {
-		return
-	}
-	focused := alarmUI.tab == 4
-	drawGlassSurface(renderer, row, 10, glassState{Focused: focused, NoLift: true})
-	alarmRingtoneRowRect = row
-	ink := ColorTextTertiary()
-	if focused {
-		ink = glassAccent()
-	}
-	alarmDrawChevron(renderer, row.X+18, row.Y+row.H/2, 6, -1, ink)
-	alarmDrawChevron(renderer, row.X+row.W-18, row.Y+row.H/2, 6, 1, ink)
-
-	nameRight := row.X + row.W - 40
-	alarmRingtoneMusicRect = sdl.Rect{}
-	if focused {
-		label := "Music"
-		bw, th := measureText(small, hintKeyFor("X", label))
-		lw, _ := measureText(small, label)
-		badge := sdl.Rect{W: bw + 20, H: th + 6}
-		badge.X = nameRight - lw - 8 - badge.W
-		badge.Y = row.Y + (row.H-badge.H)/2
-		drawGlassHintBadge(renderer, config, small, badge, "X", label, badge.X+badge.W+8, badge.Y+3)
-		alarmRingtoneMusicRect = sdl.Rect{X: badge.X - 6, Y: row.Y, W: nameRight - badge.X + 6, H: row.H}
-		nameRight = badge.X - 12
-	}
-	name := ellipsize(font, alarmSoundName(alarmUI.editSound), nameRight-(row.X+40))
-	_, nh := measureText(font, name)
-	renderText(renderer, config, font, name, WithAlpha(ColorTextPrimary(), 230), row.X+40, row.Y+(row.H-nh)/2)
-}
-
-// alarmRingtoneClick handles a tap on the ringtone row: the music badge opens
-// the picker, the left and right halves step the list.
-func alarmRingtoneClick(config *Config, mx, my int32) bool {
-	switch {
-	case alarmRingtoneMusicRect.W > 0 && pointInRect(mx, my, alarmRingtoneMusicRect):
-		alarmPickOpen(config)
-	case alarmRingtoneRowRect.W > 0 && pointInRect(mx, my, alarmRingtoneRowRect):
-		if mx < alarmRingtoneRowRect.X+alarmRingtoneRowRect.W/2 {
-			alarmSoundStep(-1)
-		} else {
-			alarmSoundStep(1)
-		}
-	default:
-		return false
-	}
-	return true
 }
 
 // ── The music picker ─────────────────────────────────────────────────────

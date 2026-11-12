@@ -170,17 +170,31 @@ func bluetoothAudioName(devicesOut string, infoFor func(string) string) string {
 // it is an audio sink. A missing bluetoothctl, a radio that is off, or a daemon
 // that does not answer all mean "no wireless output" rather than an error worth
 // surfacing.
+//
+// `devices Connected` only exists from BlueZ 5.65 on. The handhelds' 5.54
+// refuses the argument ("Too many arguments") and an in-between build may
+// ignore it and list every device, so without it the paired devices are asked
+// instead, and only one whose info says "Connected: yes" counts either way.
 func systemBluetoothAudioName() string {
-	if !commandExists("bluetoothctl") {
+	if !btToolExists("bluetoothctl") {
 		return ""
 	}
-	out, err := systemCommandRunner("bluetoothctl", "devices", "Connected")
-	if err != nil {
-		return ""
+	// No live link in the kernel's list (bluetooth_quick.go): nothing is
+	// connected, and no process needs to start to say so.
+	if names := btSysfsNames(btSysfsRoot); names != nil {
+		if _, links := btSysfsCount(names); links == 0 {
+			return ""
+		}
+	}
+	out, err := btToolRun("bluetoothctl", "devices", "Connected")
+	if err != nil || len(parseBluetoothDevices(out)) == 0 {
+		if out, err = btToolRun("bluetoothctl", "paired-devices"); err != nil {
+			return ""
+		}
 	}
 	return bluetoothAudioName(out, func(addr string) string {
-		info, err := systemCommandRunner("bluetoothctl", "info", addr)
-		if err != nil {
+		info, err := btToolRun("bluetoothctl", "info", addr)
+		if err != nil || !strings.Contains(info, "Connected: yes") {
 			return ""
 		}
 		return info

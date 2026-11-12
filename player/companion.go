@@ -751,6 +751,9 @@ body.typing .shot img{max-height:16vh}
 .top .row>*{flex:1 1 0;padding:8px 6px;min-height:38px;font-size:14px}
 body.noshot .shot,body.noshot .shotonly{display:none}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+/* The card a handheld's code asked for ("#groq", "#vpn"): moved to the top and
+   ringed, so the phone opens where the paste goes. */
+.card.picked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
 /* A shorthand cannot take "inherit" for the family, so the fonts are named;
    16 px in the fields keeps iOS from zooming in on focus. */
@@ -870,16 +873,16 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   </div>
 </div>
 
-<div class=card>
+<div class=card id=groqCard>
   <h2>Groq API key</h2>
   <p class=note id=groqStatus>Checking the handheld...</p>
   <input type=password id=groqKey placeholder="gsk_..." autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
   <label class=check><input type=checkbox id=groqShow>Show the key</label>
   <div class=row><button id=sendGroq>Save on handheld</button></div>
-  <small id=groqNote>Voice typing, voice commands and the Juka chat use it. Get a free key at console.groq.com (API Keys), copy it and paste it here. The handheld checks it with Groq and never shows it again.</small>
+  <small id=groqNote>Voice typing, voice commands and the Juka chat use it. Get a free key at <a href="https://console.groq.com/keys" target=_blank rel="noopener noreferrer">console.groq.com/keys</a>, copy it and paste it here. The handheld checks it with Groq and never shows it again.</small>
 </div>
 
-<div class=card>
+<div class=card id=vpnCard>
   <h2>VPN (WireGuard)</h2>
   <p class=note id=vpnStatus>Checking the handheld...</p>
   <textarea id=vpnConf placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = ...&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..." autocomplete=off autocapitalize=off autocorrect=off spellcheck=false></textarea>
@@ -1313,5 +1316,27 @@ document.getElementById('psStart').onclick = async () => {
   }
 };
 stateEl.textContent = pin ? 'paired' : 'no PIN';
+// A code on the handheld that asks for one card ("#groq", "#vpn") opens the
+// page there: the card moves to the top under the screen bar, ringed, with the
+// cursor in its field, so the paste goes straight in (companion_phonecard.go).
+// A second code scanned into the same tab only changes the part after "#", so
+// the page listens for that too.
+function pickCard() {
+  const want = (location.hash || '').slice(1).toLowerCase();
+  if (!/^[a-z]{1,16}$/.test(want)) return;
+  const card = document.getElementById(want + 'Card');
+  const bar = document.getElementById('top');
+  if (!card || !bar || !card.classList.contains('card')) return;
+  document.querySelectorAll('.card.picked').forEach(c => { if (c !== card) c.classList.remove('picked'); });
+  bar.after(card);
+  card.classList.add('picked');
+  window.scrollTo(0, 0);
+  const field = card.querySelector('input[type=password], input[type=text], input[type=url], textarea');
+  if (field) {
+    try { field.focus({preventScroll: true}); } catch (e) { field.focus(); }
+  }
+}
+pickCard();
+window.addEventListener('hashchange', pickCard);
 </script>
 </html>`

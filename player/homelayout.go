@@ -298,6 +298,11 @@ func homeSetArrangement(config *Config, name string) {
 // the shipped configs place their own cards, so an unset value must not move
 // anything.
 func homeArrangement(config *Config) string {
+	// Edit Home opened on Standard or the Hero grid shows Widgets without
+	// saving it until something is changed (home_edit.go homeEdit.restore).
+	if homeEdit.open && homeEdit.restore != "" {
+		return homeArrangementWidgets
+	}
 	if config == nil {
 		return homeArrangementCustom
 	}
@@ -1314,8 +1319,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	h.Focus.SetEnabled(HomeFocusWiFi, statusWiFiRect.W > 0)
 	// So is the Bluetooth rune: A opens the Bluetooth page. Where there is no
-	// page to open, or the cluster dropped it, the entry is disabled and Left
-	// from the meter goes on to the speaker.
+	// page to open (Home's cluster is never trimmed, so that is the only
+	// reason it is missing here) the entry is disabled and Left from the meter
+	// goes on to the speaker.
 	if statusBluetoothRect.W > 0 {
 		item := h.Items[HomeFocusBluetooth]
 		item.Rect = statusBluetoothRect
@@ -2070,7 +2076,7 @@ var (
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
-		{button: "L2/R2", label: "Sections"},
+		{button: "L2", label: "Edit"}, // Edit Home (home_edit.go homeEditTrigger)
 		{button: "Start", label: "Menu"},
 		{button: "Select+Start", label: "Quit"},
 		{}, // Menu/F4 Talk to Juka, when available
@@ -2079,7 +2085,7 @@ var (
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
-		{button: "L2/R2", label: "Sections"},
+		{button: "L2", label: "Edit"},
 		{button: "B", label: "Back"},
 		{button: "Select+Start", label: "Quit"},
 		{}, // Menu/F4 Talk to Juka, when available

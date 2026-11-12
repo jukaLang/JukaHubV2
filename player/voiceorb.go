@@ -1745,10 +1745,19 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 	if bw > orbBubbleMaxW {
 		bw = orbBubbleMaxW
 	}
+	// Over a paused game the answer is the whole point and nothing else is on
+	// screen: a wider bubble with room for more lines (gameassist.go).
+	overGame := gameAssistOverlayActive()
+	if overGame {
+		bw = screenWidth * 62 / 100
+	}
 	textW := bw - 2*orbPad
 	maxTitle := 2
 	if (voiceOrb.phase == orbAnswer || voiceOrb.phase == orbThinking) && utf8.RuneCountInString(voiceOrb.title) > 60 {
 		maxTitle = 8
+		if overGame {
+			maxTitle = 12
+		}
 	}
 	g.titleLines = voiceOrb.wrapTitle.get(fonts.body, voiceOrb.title, textW, maxTitle)
 	if voiceOrb.sub != "" {
@@ -1776,7 +1785,12 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 	}
 	h += 10 + fonts.tinyH + orbPad
 	b := sdl.Rect{X: g.cx - g.r - 14 - bw, Y: g.cy + g.r - h, W: bw, H: h}
-	if top := int32(56); b.Y < top {
+	top := int32(56)
+	if overGame {
+		// Below the "GAME PAUSED" card in the top-left corner.
+		top = screenHeight * 18 / 100
+	}
+	if b.Y < top {
 		b.Y = top
 	}
 	if b.X < 8 {

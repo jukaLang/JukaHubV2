@@ -21,7 +21,9 @@ package main
 //     never stored.
 //
 // The stored form is the refs joined by ";", each with an optional "@WxH"
-// size: "continue@2x2;media@4x1;emulator;…;w:clock;…". Inside a ref "%", ";"
+// size in grid cells: "continue@3x2;media@4x1;emulator@2x1;…". The cells are
+// square and any size inside a tile's limits is allowed (homeTileLimits): Edit
+// Home grows and shrinks a tile a cell at a time. Inside a ref "%", ";"
 // and "@" are written %25, %3B and %40. A missing or blank value is the
 // default list, "none" is an empty Home. Parsing forgives hand edits: blank
 // entries, unknown cards and widgets, duplicates and the add tile are dropped;
@@ -46,18 +48,21 @@ const (
 	homeTileActionPrefix = "app:do:"
 
 	// homeGridCols is the widget grid's width in cells; homeGridRowsShown how
-	// many rows the body shows at once (it scrolls past them).
-	homeGridCols      = 6
+	// many rows the body shows at once (it scrolls past them). Seven columns
+	// over the dashboard's 1216-px body make the cells square: 160 x 152
+	// design px (home_dynbody.go).
+	homeGridCols      = 7
 	homeGridRowsShown = 3
-	// homeTileMaxH is the tallest a tile can be.
-	homeTileMaxH = 2
+	// homeTileMaxH is the tallest a tile can be: the rows the body shows.
+	homeTileMaxH = 3
 )
 
 // homeDefaultTilesText is the default list, and what Reset restores: the
-// dashboard's cards on the six-column grid, with the clock widget in the slot
-// the dashboard's wider Games/Packages/Apps row leaves over. It packs into
-// exactly the three rows Home shows (homePackTiles).
-const homeDefaultTilesText = "continue@2x2;media@4x1;emulator;packages;apps;w:clock;favorites;browser;chat;tools;files;settings"
+// dashboard's cards on the seven-column grid — Continue three cells by two,
+// the Media strip beside it, a wide Games tile under the strip, the clock
+// widget at the end. It packs into exactly the three rows Home shows
+// (homePackTiles).
+const homeDefaultTilesText = "continue@3x2;media@4x1;emulator@2x1;packages;apps;favorites;browser;chat;tools;files;settings;w:clock"
 
 // homeTileKind is what a ref names.
 type homeTileKind uint8
@@ -79,39 +84,42 @@ type homeTile struct {
 	Size homeTileSize
 }
 
-// The sizes a tile can take, in the order X steps through them. The first is
-// the size a new tile gets. Continue never goes below two rows: its chip, its
-// progress line and its pill collide on one (homeGridRects says the same).
+// Every tile can take any size of whole cells from its floor up to the grid's
+// width and homeTileMaxH rows (homeTileLimits). Two have a higher floor:
+// Continue never goes below two cells each way — its chip, its progress line
+// and its pill collide on one row (homeGridRects says the same) — and the
+// Media strip needs two columns for its waveform beside the badge.
 var (
-	homeSizesCard       = []homeTileSize{{1, 1}, {2, 1}, {2, 2}}
-	homeSizesContinue   = []homeTileSize{{2, 2}, {3, 2}, {4, 2}}
-	homeSizesMedia      = []homeTileSize{{2, 1}, {3, 1}, {4, 1}, {2, 2}, {4, 2}}
-	homeSizesSmallWide  = []homeTileSize{{1, 1}, {2, 1}}
-	homeSizesNowPlaying = []homeTileSize{{2, 1}, {2, 2}, {1, 1}}
-	homeSizesCalendar   = []homeTileSize{{2, 2}, {1, 1}}
-	homeSizesAdd        = []homeTileSize{{1, 1}}
+	homeTileSizeOne = homeTileSize{W: 1, H: 1}
+	homeTileSizeMax = homeTileSize{W: homeGridCols, H: homeTileMaxH}
 )
+
+// homeSizePresets are the sizes a click on the size chip steps through,
+// smallest first: the square cell, the wide cell, the medium square, two
+// wide ones and the large square. A tile's floor and the size it is added at
+// join them where missing (homeTileSizeCycle).
+var homeSizePresets = [...]homeTileSize{{1, 1}, {2, 1}, {2, 2}, {3, 2}, {4, 2}, {3, 3}}
 
 // homeWidgetSpec is one built-in widget: its name (the ref without "w:"),
 // what the add sheet and the carousel call it, the glyph it is listed with
-// and the sizes it can take.
+// and the size it is added at.
 type homeWidgetSpec struct {
 	Name  string
 	Title string
 	Note  string
 	Glyph string
-	Sizes []homeTileSize
+	Size  homeTileSize
 }
 
 // homeWidgetSpecs is the widget catalogue, in the add sheet's order.
 var homeWidgetSpecs = []homeWidgetSpec{
-	{Name: "clock", Title: "Clock", Note: "The time, the date and your next alarm", Glyph: "clock", Sizes: homeSizesCard},
-	{Name: "weather", Title: "Weather", Note: "Today's forecast and the days after", Glyph: "weather", Sizes: homeSizesCard},
-	{Name: "calendar", Title: "Calendar", Note: "Today's date, or the whole month", Glyph: "calendar", Sizes: homeSizesCalendar},
-	{Name: "nowplaying", Title: "Now playing", Note: "What is playing, one press from the player", Glyph: "music", Sizes: homeSizesNowPlaying},
-	{Name: "battery", Title: "Battery", Note: "Charge level and whether it is charging", Glyph: "battery", Sizes: homeSizesSmallWide},
-	{Name: "storage", Title: "Storage", Note: "Free space where JukaHub is installed", Glyph: "disk", Sizes: homeSizesSmallWide},
-	{Name: "playtime", Title: "Playtime", Note: "Time played today and trophies earned", Glyph: "trophy", Sizes: homeSizesSmallWide},
+	{Name: "clock", Title: "Clock", Note: "The time, the date and your next alarm", Glyph: "clock", Size: homeTileSize{1, 1}},
+	{Name: "weather", Title: "Weather", Note: "Today's forecast and the days after", Glyph: "weather", Size: homeTileSize{1, 1}},
+	{Name: "calendar", Title: "Calendar", Note: "Today's date, or the whole month", Glyph: "calendar", Size: homeTileSize{2, 2}},
+	{Name: "nowplaying", Title: "Now playing", Note: "What is playing, one press from the player", Glyph: "music", Size: homeTileSize{2, 1}},
+	{Name: "battery", Title: "Battery", Note: "Charge level and whether it is charging", Glyph: "battery", Size: homeTileSize{1, 1}},
+	{Name: "storage", Title: "Storage", Note: "Free space where JukaHub is installed", Glyph: "disk", Size: homeTileSize{1, 1}},
+	{Name: "playtime", Title: "Playtime", Note: "Time played today and trophies earned", Glyph: "trophy", Size: homeTileSize{1, 1}},
 }
 
 // homeWidgetSpecFor finds a widget by name.
@@ -204,67 +212,131 @@ func homeTileNormalizeRef(ref string) string {
 	return lower
 }
 
-// homeTileSizesFor is the size cycle of a ref (homeSizesCard for an unknown one).
-func homeTileSizesFor(ref string) []homeTileSize {
+// homeTileLimits are the smallest and the largest size a ref can take. The
+// add tile is one cell and nothing else; an unknown widget is never resized
+// (homeTileCanResize) and keeps the size it was saved with (homeTileSnapSize).
+func homeTileLimits(ref string) (lo, hi homeTileSize) {
 	switch homeTileKindOf(ref) {
 	case homeTileAdd:
-		return homeSizesAdd
+		return homeTileSizeOne, homeTileSizeOne
 	case homeTileCard:
 		switch HomeFocusID(ref) {
 		case HomeFocusContinue:
-			return homeSizesContinue
+			return homeTileSize{W: 2, H: 2}, homeTileSizeMax
 		case HomeFocusMedia:
-			return homeSizesMedia
-		}
-	case homeTileWidget:
-		if spec, ok := homeWidgetSpecFor(homeTileWidgetName(ref)); ok && len(spec.Sizes) > 0 {
-			return spec.Sizes
+			return homeTileSize{W: 2, H: 1}, homeTileSizeMax
 		}
 	}
-	return homeSizesCard
+	return homeTileSizeOne, homeTileSizeMax
 }
 
 // homeTileDefaultSize is the size a ref gets when it is added or stored
-// without one.
+// without one. A size equal to it is stored without "@WxH", so these values
+// are part of the stored form and must not change.
 func homeTileDefaultSize(ref string) homeTileSize {
-	return homeTileSizesFor(ref)[0]
+	switch homeTileKindOf(ref) {
+	case homeTileCard:
+		switch HomeFocusID(ref) {
+		case HomeFocusContinue:
+			return homeTileSize{W: 2, H: 2}
+		case HomeFocusMedia:
+			return homeTileSize{W: 2, H: 1}
+		}
+	case homeTileWidget:
+		if spec, ok := homeWidgetSpecFor(homeTileWidgetName(ref)); ok && spec.Size.W > 0 && spec.Size.H > 0 {
+			return spec.Size
+		}
+	}
+	return homeTileSizeOne
 }
 
-// homeTileSnapSize maps any size onto the nearest one the ref can take (the
-// smallest |dW|+|dH|; a tie keeps the earlier size of the cycle).
+// homeTileSnapSize keeps a size inside the ref's limits: a hand-edited
+// "@9x5" becomes the largest the grid allows, a Continue saved at 1x1 its
+// two-by-two floor.
 func homeTileSnapSize(ref string, s homeTileSize) homeTileSize {
 	if homeTileUnknownWidget(ref) {
 		// A widget this build cannot draw keeps the size it was saved with,
 		// for the build that can.
 		return homeTileSize{W: homeClampInt(s.W, 1, homeGridCols), H: homeClampInt(s.H, 1, homeTileMaxH)}
 	}
-	sizes := homeTileSizesFor(ref)
-	best, bestD := sizes[0], -1
-	for _, c := range sizes {
-		d := homeAbsInt(c.W-s.W) + homeAbsInt(c.H-s.H)
-		if bestD < 0 || d < bestD {
-			best, bestD = c, d
-		}
-	}
-	return best
+	lo, hi := homeTileLimits(ref)
+	return homeTileSize{W: homeClampInt(s.W, lo.W, hi.W), H: homeClampInt(s.H, lo.H, hi.H)}
 }
 
-// homeTileNextSize is the size after s in the ref's cycle, wrapping. A size
-// that is not in the cycle snaps first.
-func homeTileNextSize(ref string, s homeTileSize) homeTileSize {
-	sizes := homeTileSizesFor(ref)
+// homeTileResized is s grown by dw columns and dh rows (shrunk when they are
+// negative), kept inside the ref's limits: one D-pad press in Edit Home's
+// resize mode.
+func homeTileResized(ref string, s homeTileSize, dw, dh int) homeTileSize {
 	s = homeTileSnapSize(ref, s)
-	for i, c := range sizes {
-		if c == s {
-			return sizes[(i+1)%len(sizes)]
-		}
-	}
-	return sizes[0]
+	return homeTileSnapSize(ref, homeTileSize{W: s.W + dw, H: s.H + dh})
 }
 
-// homeTileCanResize reports whether X does anything on the ref.
+// homeTileSizeCycle is what a click on the size chip steps through for ref:
+// the presets inside its limits, its floor and the size it is added at,
+// smallest first (by cells, then the shorter of two equal ones).
+func homeTileSizeCycle(ref string) []homeTileSize {
+	lo, hi := homeTileLimits(ref)
+	out := make([]homeTileSize, 0, len(homeSizePresets)+2)
+	add := func(c homeTileSize) {
+		if c.W < lo.W || c.H < lo.H || c.W > hi.W || c.H > hi.H {
+			return
+		}
+		for _, have := range out {
+			if have == c {
+				return
+			}
+		}
+		// Insertion keeps the order: by area, then by height.
+		at := len(out)
+		for at > 0 {
+			p := out[at-1]
+			if p.W*p.H < c.W*c.H || (p.W*p.H == c.W*c.H && p.H <= c.H) {
+				break
+			}
+			at--
+		}
+		out = append(out, homeTileSize{})
+		copy(out[at+1:], out[at:])
+		out[at] = c
+	}
+	add(lo)
+	for _, c := range homeSizePresets {
+		add(c)
+	}
+	add(homeTileDefaultSize(ref))
+	return out
+}
+
+// homeTileNextSize is the size after s on the chip's cycle, wrapping past the
+// largest to the smallest. A size between the cycle's (one the D-pad made)
+// goes on to the first larger one.
+func homeTileNextSize(ref string, s homeTileSize) homeTileSize {
+	s = homeTileSnapSize(ref, s)
+	cycle := homeTileSizeCycle(ref)
+	if len(cycle) == 0 {
+		return s
+	}
+	for i, c := range cycle {
+		if c == s {
+			return cycle[(i+1)%len(cycle)]
+		}
+	}
+	for _, c := range cycle {
+		if c.W*c.H > s.W*s.H {
+			return c
+		}
+	}
+	return cycle[0]
+}
+
+// homeTileCanResize reports whether the ref has more than one size: every
+// tile but the add tile and a widget this build does not know.
 func homeTileCanResize(ref string) bool {
-	return !homeTileUnknownWidget(ref) && len(homeTileSizesFor(ref)) > 1
+	if homeTileUnknownWidget(ref) {
+		return false
+	}
+	lo, hi := homeTileLimits(ref)
+	return lo != hi
 }
 
 // homeTileUnknownWidget reports a "w:" ref this build has no widget for.

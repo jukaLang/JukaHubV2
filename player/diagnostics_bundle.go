@@ -141,6 +141,9 @@ func DiagnosticsBundleText(config *Config) string {
 	// last collection rides along, so a "no networks" thread does not have to
 	// ask the user to open the sheet, read it out and retype it.
 	sb.WriteString("\n" + wifiDiagBundleFacts())
+	// Bluetooth's stack as it stands (bluetooth_diag.go): files and /proc only,
+	// read now, so a "Bluetooth does not work" report carries the answer.
+	sb.WriteString("\n" + btDiagBundleFacts())
 	sb.WriteString("\nRecent log\n----------\n")
 	tail := diagnosticLogTail(appLog.String())
 	if strings.TrimSpace(tail) == "" {

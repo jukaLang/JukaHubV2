@@ -504,6 +504,9 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 		y += pkgBannerH + 10
 	}
 	content := sdl.Rect{X: inner.X, Y: y, W: inner.W, H: body.Y + body.H - y}
+	// The rows view clips its page to this band (pkgDrawRows); the hero's
+	// buttons and dots and the shelves' arrows cut their hits to it too.
+	st.contentClip = sdl.Rect{X: body.X, Y: content.Y, W: body.W, H: content.H}
 	live := pkgLiveNow()
 	m := st.model
 	switch {
@@ -941,7 +944,7 @@ func pkgDrawShelfArrow(renderer *sdl.Renderer, config *Config, ft *pkgType, r sd
 	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, 1, glassA(40))
 	gw, gh := measureText(ft.shelf, glyph)
 	renderText(renderer, config, ft.shelf, glyph, ColorTextPrimary(), r.X+(r.W-gw)/2, r.Y+(r.H-gh)/2-1)
-	pkgAddHit(pkgHit{Kind: pkgHitShelfArrow, Rect: r, Row: row, Index: dir})
+	pkgAddHit(pkgHit{Kind: pkgHitShelfArrow, Rect: glassIntersect(r, pkgUI.contentClip), Row: row, Index: dir})
 }
 
 // pkgWrapKey is what a wrapped text block was laid out for. It is compared
@@ -1051,8 +1054,10 @@ func pkgDrawHero(renderer *sdl.Renderer, config *Config, ft *pkgType, r sdl.Rect
 	sr := sdl.Rect{X: bx, Y: by + btnH + 12, W: btnW, H: btnH}
 	pkgDrawActionButton(renderer, config, ft, pr, primary, pkgBtnPrimary, primaryOff, focused && st.heroBtn == 0, -1)
 	pkgDrawActionButton(renderer, config, ft, sr, secondary, pkgBtnGlass, false, focused && st.heroBtn == 1, -1)
-	pkgAddHit(pkgHit{Kind: pkgHitHeroPrimary, Rect: pr, Key: it.Key})
-	pkgAddHit(pkgHit{Kind: pkgHitHeroDetails, Rect: sr, Key: it.Key})
+	// The hero scrolls with the page: once it is partly under the strip or the
+	// toolbar, only the part still on view takes a click.
+	pkgAddHit(pkgHit{Kind: pkgHitHeroPrimary, Rect: glassIntersect(pr, st.contentClip), Key: it.Key})
+	pkgAddHit(pkgHit{Kind: pkgHitHeroDetails, Rect: glassIntersect(sr, st.contentClip), Key: it.Key})
 
 	// Text between the tile and the buttons.
 	tx := tile.X + tile.W + 24
@@ -1102,7 +1107,7 @@ func pkgDrawHero(renderer *sdl.Renderer, config *Config, ft *pkgType, r sdl.Rect
 					color = glassAccent()
 				}
 				fillRoundedRect(renderer, dx, dy-3, w, 6, 3, color)
-				pkgAddHit(pkgHit{Kind: pkgHitHeroDot, Rect: sdl.Rect{X: dx - 3, Y: dy - 9, W: w + 6, H: 18}, Index: i})
+				pkgAddHit(pkgHit{Kind: pkgHitHeroDot, Rect: glassIntersect(sdl.Rect{X: dx - 3, Y: dy - 9, W: w + 6, H: 18}, st.contentClip), Index: i})
 				dx += w + 6
 			}
 		}

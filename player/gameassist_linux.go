@@ -32,6 +32,14 @@ package main
 // While the pad is the games mouse the bridge holds it, so the chord is not
 // seen then.
 //
+// The same watcher serves the in-game menu (Settings → Controls → In-game
+// menu, on until turned off): Select + L2 held for half a second takes the
+// pad the same way and asks for the menu instead — resume, ask Juka, quit to
+// JukaHub — over any game or emulator (RetroArch, PPSSPP, a port), since it
+// never asks the game for anything. While the pad is held for either, the
+// D-pad's up and down go to the main loop too, and either chord pressed again
+// (no hold) is passed on: the overlay decides what it means there.
+//
 // Before the overlay is up the feedback is the motor: a firm pulse when the
 // pad is taken, a long one when it could not be.
 //
@@ -59,9 +67,24 @@ const (
 	// gaEvdevBtnTR2 is BTN_TR2: R2 on a pad whose triggers are buttons. The
 	// Smart Pro's are axes (ABS_RZ); both are read.
 	gaEvdevBtnTR2 = 0x139
+	// gaEvdevBtnTL2 is BTN_TL2: L2 on a pad whose triggers are buttons (the
+	// Smart Pro's is ABS_Z).
+	gaEvdevBtnTL2 = 0x138
+	// gaEvdevBtnDpadUp / gaEvdevBtnDpadDown are a D-pad sent as buttons; the
+	// TrimUI pads send a hat (ABS_HAT0Y), and both are read.
+	gaEvdevBtnDpadUp   = 0x220
+	gaEvdevBtnDpadDown = 0x221
 	// gaChordHold is how long Select + R2 are held: the games mouse's hold, so
 	// the two chords feel the same.
 	gaChordHold = vcursorChordHold
+	// gaMenuHold is how long Select + L2 are held for the in-game menu:
+	// shorter, since leaving a game should be quick, and still a hold, so a
+	// game's own Select + L2 tap does not pause it.
+	gaMenuHold = 500 * time.Millisecond
+	// gaChordCloseHold is the chord's hold while the overlay is up: pressing
+	// Select + R2 again plays on at once (Juka, 2026-11-11), with just enough
+	// of a hold that two buttons landing a few milliseconds apart count.
+	gaChordCloseHold = 40 * time.Millisecond
 	// gaHeldEvery paces the reads while the pad is held, so the overlay's
 	// buttons answer at once; watching for the chord uses the bridge's pace.
 	gaHeldEvery = 16 * time.Millisecond
@@ -83,18 +106,24 @@ var gaPad struct {
 	running bool
 	stop    chan struct{}
 	done    chan struct{}
-	// want mirrors the switch for the goroutine, which must not read the
-	// config.
-	want atomic.Bool
+	// want mirrors the switches for the goroutine, which must not read the
+	// config: want is either, wantAsk the assistant's chord (Select + R2),
+	// wantMenu the in-game menu's (Select + L2).
+	want     atomic.Bool
+	wantAsk  atomic.Bool
+	wantMenu atomic.Bool
 }
 
 // gameAssistSupported reports whether the assistant can come up over a game
 // here: a TrimUI handheld (its pad's evdev node, root, the framebuffer).
 func gameAssistSupported() bool { return IsTrimuiDevice() }
 
-// gaPadSync runs on the main thread, from the parked loop: it mirrors whether
-// the watcher is wanted and starts one per game while it is.
-func gaPadSync(config *Config, want bool) {
+// gaPadSync runs on the main thread, from the parked loop: it mirrors which
+// chords are wanted and starts one watcher per game while either is.
+func gaPadSync(config *Config, ask, menu bool) {
+	want := ask || menu
+	gaPad.wantAsk.Store(ask)
+	gaPad.wantMenu.Store(menu)
 	gaPad.want.Store(want)
 	if !want {
 		return
@@ -150,16 +179,18 @@ type gaPadSession struct {
 	events   []evdevEvent
 	lastNote string
 
-	// The chord: since when Select and R2 have both been down, and whether
-	// this hold already fired (both must come up before the next one counts).
-	since time.Time
-	fired bool
+	// The chords: Select + R2 (the assistant) and Select + L2 (the menu).
+	ask  gaChord
+	menu gaChord
 	// R2: the trigger past half (with hysteresis), and R2 down by the trigger
 	// or a button. r2Latched: R2 was held when the pad was taken, so its next
-	// press counts only after a release.
+	// press counts only after a release. L2 the same, without the latch (L2
+	// alone means nothing over the overlay).
 	r2Axis    bool
 	r2        bool
 	r2Latched bool
+	l2Axis    bool
+	l2        bool
 
 	// The pad held for the overlay: since when, until when presses are the
 	// firmware re-sending buttons still held (the bridge's quiet window), and
@@ -255,9 +286,17 @@ func (s *gaPadSession) open(now time.Time) error {
 	s.fd, s.name, s.dropping = fd, dev.Name, false
 	s.resync(now)
 	// A chord already held when the watch starts does not fire from it.
-	s.fired, s.since = s.eng.key(evdevBtnSelect) && s.r2, time.Time{}
-	logInfo("gameassist", "watching %q (%s) for Select + R2", dev.Name, path)
+	s.resetChords()
+	logInfo("gameassist", "watching %q (%s) for Select + R2 and Select + L2", dev.Name, path)
 	return nil
+}
+
+// resetChords starts both chords over: one still held must be let go before
+// it counts again.
+func (s *gaPadSession) resetChords() {
+	sel := s.eng.key(evdevBtnSelect)
+	s.ask.reset(sel && s.r2)
+	s.menu.reset(sel && s.l2)
 }
 
 // resync reads the pad whole — the buttons held, each axis's range and value
@@ -281,6 +320,8 @@ func (s *gaPadSession) resync(now time.Time) {
 	if !s.r2 {
 		s.r2Latched = false
 	}
+	s.l2Axis = s.eng.ranges[evdevAbsZ].trigger(s.eng.abs[evdevAbsZ]) >= mbridgeTrigDown
+	s.l2 = s.l2Axis || s.eng.key(gaEvdevBtnTL2)
 	s.chord(now)
 }
 
@@ -325,8 +366,10 @@ func (s *gaPadSession) step(now time.Time) error {
 	switch {
 	case s.held:
 		s.heldTick(now)
-	case s.chordDue(now):
-		s.take(now)
+	case gaPad.wantMenu.Load() && s.menu.due(now, gaMenuHold):
+		s.take(now, gaModeMenu)
+	case gaPad.wantAsk.Load() && s.ask.due(now, gaChordHold):
+		s.take(now, gaModeAsk)
 	}
 	return nil
 }
@@ -336,6 +379,18 @@ func (s *gaPadSession) step(now time.Time) error {
 func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 	switch ev.Type {
 	case evdevEvKey:
+		if ev.Code == gaEvdevBtnDpadUp || ev.Code == gaEvdevBtnDpadDown {
+			// A D-pad sent as buttons: outside the pad's button range, read
+			// only to move the menu's highlight while the pad is held.
+			if s.held && ev.Value == 1 && !now.Before(s.quiet) {
+				if ev.Code == gaEvdevBtnDpadUp {
+					gaPush(gaBtnUp)
+				} else {
+					gaPush(gaBtnDown)
+				}
+			}
+			return
+		}
 		i := int(ev.Code) - mbridgeKeyBase
 		if i < 0 || i >= len(s.eng.keys) || ev.Value == 2 {
 			// Not one of the pad's buttons, or a key repeat.
@@ -347,6 +402,8 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 		switch ev.Code {
 		case gaEvdevBtnTR2:
 			s.setR2(now)
+		case gaEvdevBtnTL2:
+			s.setL2(now)
 		case evdevBtnSelect:
 			s.chord(now)
 		}
@@ -370,9 +427,23 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 		if int(ev.Code) >= len(s.eng.abs) {
 			return
 		}
+		prev := s.eng.abs[ev.Code]
 		s.eng.abs[ev.Code] = ev.Value
-		if ev.Code == evdevAbsRZ {
+		switch ev.Code {
+		case evdevAbsRZ:
 			s.setR2(now)
+		case evdevAbsZ:
+			s.setL2(now)
+		case evdevAbsHat0Y:
+			// The D-pad leaving the middle, up or down, while the pad is held:
+			// the menu's highlight moves once per press.
+			if d := evdevHatDir(ev.Value); s.held && d != 0 && d != evdevHatDir(prev) && !now.Before(s.quiet) {
+				if d < 0 {
+					gaPush(gaBtnUp)
+				} else {
+					gaPush(gaBtnDown)
+				}
+			}
 		}
 	}
 }
@@ -418,32 +489,80 @@ func (s *gaPadSession) setR2(now time.Time) {
 	}
 }
 
-// chord follows the Select + R2 hold: both down starts the clock (once per
-// hold), either coming up stops it, and both up let the next hold fire.
-func (s *gaPadSession) chord(now time.Time) {
-	sel := s.eng.key(evdevBtnSelect)
+// setL2 follows L2 — the trigger past half, with the bridge's hysteresis, or
+// its button — for the Select + L2 chord.
+func (s *gaPadSession) setL2(now time.Time) {
+	v := s.eng.ranges[evdevAbsZ].trigger(s.eng.abs[evdevAbsZ])
 	switch {
-	case !sel && !s.r2:
-		s.fired, s.since = false, time.Time{}
-	case !sel || !s.r2:
-		s.since = time.Time{}
-	case s.since.IsZero() && !s.fired:
-		s.since = now
+	case !s.l2Axis && v >= mbridgeTrigDown:
+		s.l2Axis = true
+	case s.l2Axis && v < mbridgeTrigUp:
+		s.l2Axis = false
+	}
+	down := s.l2Axis || s.eng.key(gaEvdevBtnTL2)
+	if down == s.l2 {
+		return
+	}
+	s.l2 = down
+	s.chord(now)
+}
+
+// gaChord is one chord's hold: since when Select and its trigger have both
+// been down, and whether this hold already fired (both must come up before
+// the next one counts).
+type gaChord struct {
+	since time.Time
+	fired bool
+}
+
+// follow takes the chord's two buttons as they are now: both down starts the
+// clock (once per hold), either coming up stops it, and both up let the next
+// hold fire.
+func (c *gaChord) follow(sel, trig bool, now time.Time) {
+	switch {
+	case !sel && !trig:
+		c.fired, c.since = false, time.Time{}
+	case !sel || !trig:
+		c.since = time.Time{}
+	case c.since.IsZero() && !c.fired:
+		c.since = now
 	}
 }
 
-// chordDue reports a hold that has just lasted gaChordHold. It fires once.
-func (s *gaPadSession) chordDue(now time.Time) bool {
-	if s.fired || s.since.IsZero() || now.Sub(s.since) < gaChordHold {
+// due reports a hold that has just lasted hold. It fires once.
+func (c *gaChord) due(now time.Time, hold time.Duration) bool {
+	if c.fired || c.since.IsZero() || now.Sub(c.since) < hold {
 		return false
 	}
-	s.fired, s.since = true, time.Time{}
+	c.fired, c.since = true, time.Time{}
 	return true
 }
 
-// chordHeldNow asks the pad itself whether Select and R2 are down: the events
-// may be stale (a release that went to the games mouse while it held the pad).
-func (s *gaPadSession) chordHeldNow() bool {
+// reset stops the clock; held: the chord is down now, so it must be let go
+// before it counts again.
+func (c *gaChord) reset(held bool) {
+	c.fired, c.since = held, time.Time{}
+}
+
+// chord follows both holds: Select + R2 and Select + L2.
+func (s *gaPadSession) chord(now time.Time) {
+	sel := s.eng.key(evdevBtnSelect)
+	s.ask.follow(sel, s.r2, now)
+	s.menu.follow(sel, s.l2, now)
+}
+
+// gaChordKeys is the trigger of a mode's chord: its button and its axis.
+func gaChordKeys(mode gaMode) (btn, axis uint16) {
+	if mode == gaModeMenu {
+		return gaEvdevBtnTL2, evdevAbsZ
+	}
+	return gaEvdevBtnTR2, evdevAbsRZ
+}
+
+// chordHeldNow asks the pad itself whether Select and the mode's trigger are
+// down: the events may be stale (a release that went to the games mouse while
+// it held the pad).
+func (s *gaPadSession) chordHeldNow(mode gaMode) bool {
 	bitmap := make([]byte, evdevKeyBitmapSize)
 	if mbridgeIoctlBuf(s.fd, evdevGetKey(evdevKeyBitmapSize), bitmap) != nil {
 		// The pad cannot be asked: the events are all there is.
@@ -452,24 +571,26 @@ func (s *gaPadSession) chordHeldNow() bool {
 	if !evdevKeyBit(bitmap, evdevBtnSelect) {
 		return false
 	}
-	if evdevKeyBit(bitmap, gaEvdevBtnTR2) {
+	btn, axis := gaChordKeys(mode)
+	if evdevKeyBit(bitmap, btn) {
 		return true
 	}
 	info := make([]byte, evdevAbsInfoSize)
-	if mbridgeIoctlBuf(s.fd, evdevGetAbs(evdevAbsRZ), info) != nil {
+	if mbridgeIoctlBuf(s.fd, evdevGetAbs(axis), info) != nil {
 		return false
 	}
 	v, r, ok := evdevParseAbsInfo(info)
 	return ok && r.trigger(v) >= mbridgeTrigUp
 }
 
-// take holds the pad for the overlay: the steps in the file comment.
-func (s *gaPadSession) take(now time.Time) {
-	if !s.chordHeldNow() {
+// take holds the pad for the overlay — the assistant or the menu, by mode:
+// the steps in the file comment.
+func (s *gaPadSession) take(now time.Time, mode gaMode) {
+	if !s.chordHeldNow(mode) {
 		// The events said both were down and the pad says not: a release went
 		// missing. It is read whole, and a real hold is waited for.
 		s.resync(now)
-		s.fired = s.eng.key(evdevBtnSelect) && s.r2
+		s.resetChords()
 		return
 	}
 	injected := false
@@ -496,26 +617,45 @@ func (s *gaPadSession) take(now time.Time) {
 	// presses, and nothing read before the grab matters now.
 	s.drain()
 	s.held, s.heldAt, s.quiet, s.giveBackAt = true, now, now.Add(mbridgeQuiet), time.Time{}
-	s.fired, s.since, s.menuDown = true, time.Time{}, false
-	s.r2Latched = true
+	s.menuDown = false
+	// R2 still held from the Select + R2 hold must come up before it sends;
+	// after Select + L2 it was never down, so its first press counts.
+	s.r2Latched = s.r2
 	if injected {
 		s.r2Axis, s.r2 = false, false
+		s.l2Axis, s.l2 = false, false
 	} else {
 		s.resync(now)
 	}
+	// The chord that opened it is held still: neither counts again until
+	// let go.
+	s.ask.reset(true)
+	s.menu.reset(true)
 	gaLink.release.Store(false)
 	gaLink.lost.Store(false)
+	gaLink.mode.Store(int32(mode))
 	gaLink.held.Store(true)
 	gaLink.request.Store(true)
 	playHaptic(hapticSuccessPulse)
-	logInfo("gameassist", "Select + R2 held: %q is JukaHub's while Juka listens", s.name)
+	if mode == gaModeMenu {
+		logInfo("gameassist", "Select + L2 held: %q is JukaHub's while the in-game menu is up", s.name)
+	} else {
+		logInfo("gameassist", "Select + R2 held: %q is JukaHub's while Juka listens", s.name)
+	}
 }
 
-// heldTick is the held pad's upkeep: the chord again, the give-back the main
-// loop asked for, and the pad given back when no overlay came up for it.
+// heldTick is the held pad's upkeep: either chord again, the give-back the
+// main loop asked for, and the pad given back when no overlay came up for it.
 func (s *gaPadSession) heldTick(now time.Time) {
-	if s.chordDue(now) {
-		gaPush(gaBtnChord)
+	// The firmware re-sending buttons still held (the quiet window) is no
+	// press of a chord.
+	if !now.Before(s.quiet) {
+		if s.ask.due(now, gaChordCloseHold) {
+			gaPush(gaBtnChord)
+		}
+		if s.menu.due(now, gaChordCloseHold) {
+			gaPush(gaBtnMenuChord)
+		}
 	}
 	switch {
 	case gaLink.release.Load():
@@ -541,7 +681,8 @@ func (s *gaPadSession) idle() bool {
 			return false
 		}
 	}
-	return !s.r2 && s.eng.ranges[evdevAbsZ].trigger(s.eng.abs[evdevAbsZ]) < mbridgeTrigUp
+	return !s.r2 && !s.l2 && s.eng.ranges[evdevAbsZ].trigger(s.eng.abs[evdevAbsZ]) < mbridgeTrigUp &&
+		s.eng.abs[evdevAbsHat0X] == 0 && s.eng.abs[evdevAbsHat0Y] == 0
 }
 
 // giveBack lets go of the grab: the pad is the game's again.
@@ -551,7 +692,7 @@ func (s *gaPadSession) giveBack() {
 	}
 	s.held, s.giveBackAt, s.menuDown = false, time.Time{}, false
 	// A chord still held must be let go before it counts again.
-	s.fired, s.since = s.eng.key(evdevBtnSelect) && s.r2, time.Time{}
+	s.resetChords()
 	gaLink.held.Store(false)
 	gaLink.release.Store(false)
 	gaLink.request.Store(false)
@@ -588,8 +729,9 @@ func (s *gaPadSession) close() {
 		s.fd = -1
 	}
 	s.eng = mbridgeEngine{p: s.eng.p}
-	s.since, s.fired = time.Time{}, false
+	s.ask, s.menu = gaChord{}, gaChord{}
 	s.r2Axis, s.r2, s.r2Latched = false, false, false
+	s.l2Axis, s.l2 = false, false
 	s.menuDown = false
 }
 
@@ -778,4 +920,44 @@ func gaParseProcStat(s string) (gaProcInfo, bool) {
 		return gaProcInfo{}, false
 	}
 	return gaProcInfo{pgrp: pgrp, start: f[19]}, true
+}
+
+// gmInterruptGame asks a game to quit from the in-game menu (gamemenu.go): an
+// interrupt to every process in its group that is not a shell, so a launch
+// script lives on to do what it does after the emulator exits (restore the
+// CPU, sync the SD card); with only shells in the group, or no group, the
+// whole group gets it, as on the exit path. A stopped process keeps the
+// interrupt until it is continued.
+func gmInterruptGame(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if screenChildGroupConfigured(cmd) {
+		sent := 0
+		for _, pid := range gaGroupMembers(cmd.Process.Pid) {
+			if gmIsShell(pid) {
+				continue
+			}
+			if syscall.Kill(pid, syscall.SIGINT) == nil {
+				sent++
+			}
+		}
+		if sent > 0 {
+			return
+		}
+	}
+	_ = screenChildSignal(cmd, screenSignalInterrupt)
+}
+
+// gmIsShell reports whether pid runs a shell (a launch script).
+func gmIsShell(pid int) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
+	if err != nil {
+		return false
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "sh", "bash", "ash", "dash", "hush", "busybox":
+		return true
+	}
+	return false
 }

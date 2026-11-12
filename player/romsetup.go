@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -101,26 +99,37 @@ var romSystemAliases = map[string]romSystem{
 	// The rest of the TrimUI core inventory (emusystems.go): the folder names
 	// the firmware, CrossMix and No-Intro sets use for systems the library
 	// already had a core for but no scan alias.
-	"arcade":   {"Arcade", "MAME - Arcade"},
-	"mame":     {"Arcade", "MAME - Arcade"},
-	"fbneo":    {"Arcade", "MAME - Arcade"},
-	"fba":      {"Arcade", "MAME - Arcade"},
-	"mame2003": {"Arcade", "MAME - Arcade"},
-	"mame2010": {"Arcade", "MAME - Arcade"},
+	"arcade":   {"Arcade", "MAME"},
+	"mame":     {"Arcade", "MAME"},
+	"fbneo":    {"Arcade", "MAME"},
+	"fba":      {"Arcade", "MAME"},
+	"mame2003": {"Arcade", "MAME"},
+	"mame2010": {"Arcade", "MAME"},
+	"cps1":     {"Arcade", "MAME"},
+	"cps2":     {"Arcade", "MAME"},
+	"cps3":     {"Arcade", "MAME"},
 
-	"a2600":              {"Atari 2600", "Atari - Atari 2600"},
-	"atari2600":          {"Atari 2600", "Atari - Atari 2600"},
-	"atari - atari 2600": {"Atari 2600", "Atari - Atari 2600"},
-	"a5200":              {"Atari 5200", "Atari - Atari 5200"},
-	"atari5200":          {"Atari 5200", "Atari - Atari 5200"},
-	"a7800":              {"Atari 7800", "Atari - Atari 7800"},
-	"atari7800":          {"Atari 7800", "Atari - Atari 7800"},
-	"atari - atari 7800": {"Atari 7800", "Atari - Atari 7800"},
-	"jaguar":             {"Atari Jaguar", "Atari - Atari Jaguar"},
-	"atarijaguar":        {"Atari Jaguar", "Atari - Atari Jaguar"},
-	"lynx":               {"Atari Lynx", "Atari - Atari Lynx"},
-	"atarilynx":          {"Atari Lynx", "Atari - Atari Lynx"},
-	"atari - atari lynx": {"Atari Lynx", "Atari - Atari Lynx"},
+	"a2600":              {"Atari 2600", "Atari - 2600"},
+	"atari2600":          {"Atari 2600", "Atari - 2600"},
+	"atari - atari 2600": {"Atari 2600", "Atari - 2600"},
+	"a5200":              {"Atari 5200", "Atari - 5200"},
+	"atari5200":          {"Atari 5200", "Atari - 5200"},
+	"a7800":              {"Atari 7800", "Atari - 7800"},
+	"atari7800":          {"Atari 7800", "Atari - 7800"},
+	"atari - atari 7800": {"Atari 7800", "Atari - 7800"},
+
+	// CrossMix files Atari 2600 games under Roms/ATARI; the libretro names
+	// ("Atari - 2600") are what its thumbnail and database folders are called.
+	"atari":        {"Atari 2600", "Atari - 2600"},
+	"atari - 2600": {"Atari 2600", "Atari - 2600"},
+	"atari - 7800": {"Atari 7800", "Atari - 7800"},
+	"atari - lynx": {"Atari Lynx", "Atari - Lynx"},
+
+	"jaguar":             {"Atari Jaguar", "Atari - Jaguar"},
+	"atarijaguar":        {"Atari Jaguar", "Atari - Jaguar"},
+	"lynx":               {"Atari Lynx", "Atari - Lynx"},
+	"atarilynx":          {"Atari Lynx", "Atari - Lynx"},
+	"atari - atari lynx": {"Atari Lynx", "Atari - Lynx"},
 
 	"ws":                        {"WonderSwan", "Bandai - WonderSwan"},
 	"wonderswan":                {"WonderSwan", "Bandai - WonderSwan"},
@@ -138,10 +147,11 @@ var romSystemAliases = map[string]romSystem{
 	"snk - neo geo pocket color": {"Neo Geo Pocket Color", "SNK - Neo Geo Pocket Color"},
 	"neocd":                      {"Neo Geo CD", "SNK - Neo Geo CD"},
 
-	"segacd":         {"Sega CD", "Sega - Sega CD"},
-	"sega cd":        {"Sega CD", "Sega - Sega CD"},
-	"scd":            {"Sega CD", "Sega - Sega CD"},
-	"sega - sega cd": {"Sega CD", "Sega - Sega CD"},
+	"segacd":         {"Sega CD", "Sega - Mega-CD - Sega CD"},
+	"sega cd":        {"Sega CD", "Sega - Mega-CD - Sega CD"},
+	"scd":            {"Sega CD", "Sega - Mega-CD - Sega CD"},
+	"sega - sega cd": {"Sega CD", "Sega - Mega-CD - Sega CD"},
+	"megacd":         {"Sega CD", "Sega - Mega-CD - Sega CD"},
 	"32x":            {"32X", "Sega - 32X"},
 	"sega32x":        {"32X", "Sega - 32X"},
 	"sega - 32x":     {"32X", "Sega - 32X"},
@@ -149,6 +159,7 @@ var romSystemAliases = map[string]romSystem{
 	// Systems with no libretro core: their own program plays the folder.
 	"pico8":  {"PICO-8", "PICO-8"},
 	"pico-8": {"PICO-8", "PICO-8"},
+	"pico":   {"PICO-8", "PICO-8"}, // CrossMix's Roms/PICO
 	"dos":    {"DOS", "DOS"},
 	"dosbox": {"DOS", "DOS"},
 }
@@ -454,13 +465,14 @@ const artworkMissFile = ".missing-art.json"
 // artworkMissVersion stamps the not-found cache. It is bumped whenever title
 // matching changes: a title that was "not found" under the old lookup deserves
 // one more try instead of waiting out the 30-day window.
-const artworkMissVersion = 2
+const artworkMissVersion = 3
 
 // artworkVariantLimit caps how many names one ROM asks the thumbnail server
 // for. A library fetch walks every ROM, so a title that generates ten lookups
 // would multiply the whole job; eight covers the shapes the matcher builds
-// (exact, tags off, subtitle off, article off, each spaced and underscored)
-// without turning a miss into a sweep.
+// (exact, tags off, subtitle off, article off, then spelling guesses) without
+// turning a miss into a sweep. It only applies when the server gives no cover
+// list to match against (artwork_match.go).
 const artworkVariantLimit = 8
 
 // artworkBaseURL is a variable so the tests can point at an httptest server.
@@ -578,7 +590,10 @@ func artworkRecentlyMissing(misses map[string]time.Time, key string, now time.Ti
 // again scans the disk and only asks about what is still missing.
 func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string, misses map[string]time.Time, now time.Time, ttl time.Duration, progress func(done int)) (fetched, skipped, missing int, stopped bool) {
 	if client == nil {
-		client = &http.Client{Timeout: 8 * time.Second}
+		client = artworkHTTPClient()
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if now.IsZero() {
 		now = time.Now()
@@ -595,7 +610,9 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		if path == "" {
 			return artMissing
 		}
-		if artworkCoverPresent(path) {
+		// A cover another front end left on the card (Imgs, .res) is shown
+		// as it is; asking the server would only replace the user's choice.
+		if artworkCoverPresent(path) || romLocalCoverPath(rom) != "" {
 			return artSkipped
 		}
 		stem := strings.TrimSuffix(filepath.Base(rom.Path), filepath.Ext(rom.Path))
@@ -606,7 +623,7 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		if misses != nil && artworkRecentlyMissing(misses, key, now, ttl) {
 			return artMissing
 		}
-		image, err := fetchROMArtworkImage(ctx, client, baseURL, rom.Collection, stem)
+		image, err := fetchROMArtworkFor(ctx, client, baseURL, rom, stem)
 		if err != nil {
 			// A 404 is a real answer worth remembering. A timeout or a dropped
 			// connection is not: retrying that next time is the whole point.
@@ -615,10 +632,9 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 			}
 			return artMissing
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return artMissing
-		}
-		if err := os.WriteFile(path, image, 0o644); err != nil {
+		// Through a temporary file: a cover cut short by a power cut would
+		// otherwise count as present for ever.
+		if err := gmetaWriteCache(path, image); err != nil {
 			return artMissing
 		}
 		if misses != nil {
@@ -645,45 +661,6 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 	return fetched, skipped, missing, false
 }
 
-func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, collection, title string) ([]byte, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 8 * time.Second}
-	}
-	base := strings.TrimRight(baseURL, "/")
-	if base == "" || collection == "" || title == "" {
-		return nil, os.ErrNotExist
-	}
-	for _, variant := range artworkTitleVariants(title) {
-		u := base + "/" + url.PathEscape(collection) + "/Named_Boxarts/" + url.PathEscape(variant) + ".png"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
-		resp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if resp.StatusCode == http.StatusNotFound {
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			// A 5xx or a throttling response is not a missing cover; the caller
-			// must not cache it as "not found" and give up for a month.
-			return nil, fmt.Errorf("thumbnail server returned %s", resp.Status)
-		}
-		if len(data) < 8 || len(data) > 8<<20 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
-			continue
-		}
-		return data, nil
-	}
-	return nil, os.ErrNotExist
-}
-
 // artworkTitleVariants lists the names to try for one ROM stem, best first.
 //
 // The thumbnail set names a file exactly as the reference title reads, and the
@@ -694,7 +671,7 @@ func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, col
 //     Link") while a trimmed ROM name may only say "Zelda II";
 //   - a reference title may open with an article the local name drops, or the
 //     other way round;
-//   - the server accepts either spaces or underscores.
+//   - the server writes & * / : ` < > ? \ | as "_" (artworkServerName).
 //
 // Ordering matters more than reach. Every step below is a guess, so the exact
 // name is asked first and the guesses only run after it 404s: a truncated title
@@ -707,9 +684,10 @@ func artworkTitleVariants(title string) []string {
 		return nil
 	}
 
-	// Build the spaced forms first, in widening order of guesswork, then give
-	// each one its underscored twin. The server's own convention is underscores,
-	// so that twin belongs beside the name it came from rather than at the end.
+	// Build the names in widening order of guesswork, then write each the way
+	// the server names its files. (An earlier version also asked for every name
+	// with its spaces as underscores; the server has no such files, and those
+	// guesses used up half of the limit.)
 	spaced := []string{base}
 	add := func(name string) {
 		name = strings.TrimSpace(name)
@@ -756,8 +734,7 @@ func artworkTitleVariants(title string) []string {
 		out = append(out, name)
 	}
 	for _, name := range spaced {
-		push(name)
-		push(strings.ReplaceAll(name, " ", "_"))
+		push(artworkServerName(name))
 	}
 	return out
 }
@@ -1130,7 +1107,8 @@ func artworkFetchGeneration() uint64 {
 	return artworkFetchState.finished
 }
 
-// romsMissingArtwork filters a scan down to the games with no local image.
+// romsMissingArtwork filters a scan down to the games with no local image:
+// neither a downloaded cover nor one another front end left (romLocalCoverPath).
 func romsMissingArtwork(roms []scannedROM, artRoot string) []scannedROM {
 	missing := make([]scannedROM, 0, len(roms))
 	for _, rom := range roms {
@@ -1139,6 +1117,9 @@ func romsMissingArtwork(roms []scannedROM, artRoot string) []scannedROM {
 			continue
 		}
 		if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		if romLocalCoverPath(rom) != "" {
 			continue
 		}
 		missing = append(missing, rom)

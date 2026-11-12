@@ -44,11 +44,12 @@ const (
 type ttsOrigin int
 
 const (
-	ttsFromOther ttsOrigin = iota // a jukaSpeak caller (the game assistant)
+	ttsFromOther ttsOrigin = iota // a jukaSpeak caller
 	ttsFromOrb                    // the voice orb
 	ttsFromPage                   // the Voice command page
 	ttsFromChat                   // Chat's AI tab
 	ttsFromTest                   // Settings → Voice & AI → Hear Juka
+	ttsFromGame                   // the game assistant's answer over a paused game
 )
 
 const (
@@ -199,7 +200,13 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, posted ti
 	case !test && time.Since(posted) > ttsStaleAfter:
 		refuse(ttsFailNone)
 		return
-	case !test && !ttsModeAllows(cfg, kind):
+	case origin == ttsFromGame && !gameAssistSpeakEnabled(cfg):
+		// An answer over a paused game has its own switch (Read answers
+		// aloud in games, on by default), which takes the place of "Juka's
+		// voice" there.
+		refuse(ttsFailNone)
+		return
+	case !test && origin != ttsFromGame && !ttsModeAllows(cfg, kind):
 		refuse(ttsFailNone)
 		return
 	case quietModeOn():

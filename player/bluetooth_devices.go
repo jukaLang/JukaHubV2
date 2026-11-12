@@ -101,23 +101,41 @@ var (
 	errBzNoAdapter = errors.New("no Bluetooth adapter answered — switch Bluetooth on and try again")
 	errBzEnded     = errors.New("bluetoothctl stopped answering — try again")
 	errBzNotFound  = errors.New("the device is not visible — put it in pairing mode and search again")
+	// errBzNoDaemonDesktop is errBzNoDaemon where JukaHub does not start the
+	// service itself (bzErrText picks it): a computer's bluetoothd is its
+	// owner's to start.
+	errBzNoDaemonDesktop = errors.New("the Bluetooth service (bluetoothd) is not running on this computer — start it (systemctl start bluetooth), then try again")
 )
 
-// bzError is a failed step, in words a player can act on.
+// bzError is a failed step, in words a player can act on. noAnswer marks the
+// device not answering at all — switched off or out of range — where the page
+// adds a controller's wake-up hint.
 type bzError struct {
-	step string // "pair", "connect", …
-	code string // BlueZ's error name, for the log
-	msg  string
+	step     string // "pair", "connect", …
+	code     string // BlueZ's error name, for the log
+	msg      string
+	noAnswer bool
 }
 
 func (e *bzError) Error() string { return e.msg }
 
+// bzNoAnswerConnect and bzNoAnswerPair are what the page says about a device
+// that never answered, by step; neither names a controller's buttons, which
+// the page adds where it knows the device is one.
+const (
+	bzNoAnswerConnect = "it did not answer — switch it on and keep it close to the handheld"
+	bzNoAnswerPair    = "it did not answer — keep it in pairing mode, close to the handheld"
+)
+
 // bzStepError turns a failure line ("Failed to pair:
 // org.bluez.Error.AuthenticationFailed") into a sentence. BlueZ words the same
-// failure differently from one release to the next — 5.54 on the handhelds
-// says "Host is down" or "le-connection-abort-by-local" where 5.6x says
-// "br-connection-page-timeout" — so the reasons are matched by their words, in
-// either spelling.
+// failure differently from one release to the next: 5.54 and 5.55, on the
+// handhelds, print only the error's name ("Failed to connect:
+// org.bluez.Error.Failed"), while 5.56 and later add a reason
+// ("…Error.Failed br-connection-page-timeout", "le-connection-abort-by-local",
+// "Host is down"). So reasons are matched by their words where a line has any,
+// and a bare Failed on a connection reads as its usual cause on the handhelds:
+// the device is off or out of range.
 func bzStepError(step, line string) error {
 	code := line
 	if i := strings.Index(line, "org.bluez.Error."); i >= 0 {
@@ -134,6 +152,7 @@ func bzStepError(step, line string) error {
 		return false
 	}
 	msg := ""
+	noAnswer := false
 	switch {
 	case strings.Contains(code, "AuthenticationFailed"), strings.Contains(code, "AuthenticationRejected"),
 		strings.Contains(code, "AuthenticationCanceled"), strings.Contains(code, "AuthenticationTimeout"):
@@ -142,11 +161,15 @@ func bzStepError(step, line string) error {
 		msg = "this system has no driver for that kind of device"
 	case strings.Contains(code, "ConnectionAttemptFailed"),
 		has("page timeout", "page-timeout", "host is down", "connection timed out", "connection-timeout",
-			"abort-by-local", "aborted-by-local", "software caused connection abort"):
-		msg = "it did not answer — switch it on (its PS or Home button) and keep it close"
+			"abort-by-local", "aborted-by-local", "software caused connection abort"),
+		code == "Failed" && (step == "connect" || step == "pair"):
+		noAnswer = true
+		msg = bzNoAnswerConnect
 		if step == "pair" {
-			msg = "it did not answer — keep it in pairing mode, close to the handheld"
+			msg = bzNoAnswerPair
 		}
+	case has("key-missing"):
+		msg = "it no longer has this pairing — forget it here and pair it again"
 	case has("connection refused", "-refused"):
 		msg = "it refused the connection — forget it here and pair it again"
 	case has("abort-by-remote", "aborted-by-remote", "connection reset by peer"):
@@ -162,7 +185,13 @@ func bzStepError(step, line string) error {
 	default:
 		msg = "Bluetooth said: " + code
 	}
-	return &bzError{step: step, code: code, msg: msg}
+	return &bzError{step: step, code: code, msg: msg, noAnswer: noAnswer}
+}
+
+// bzIsNoAnswer reports a device that did not answer at all (bzError.noAnswer).
+func bzIsNoAnswer(err error) bool {
+	var be *bzError
+	return errors.As(err, &be) && be.noAnswer
 }
 
 // bzErrText is an error as the page and its toasts print it.
@@ -176,6 +205,9 @@ func bzErrText(err error) string {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "Bluetooth took too long to answer — try again"
+	}
+	if errors.Is(err, errBzNoDaemon) && runtime.GOOS == "linux" && !IsTrimuiDevice() {
+		return errBzNoDaemonDesktop.Error()
 	}
 	return firstLine(err.Error())
 }
@@ -814,12 +846,15 @@ func bzChildEnv() []string {
 }
 
 func bzStartProcess(ctx context.Context, limit time.Duration, args ...string) (bzSession, error) {
-	if !commandExists("bluetoothctl") {
+	// Found beyond PATH too (bluetooth_tools.go): a launcher's PATH can miss
+	// the directory the firmware keeps it in.
+	tool, ok := btToolPath("bluetoothctl")
+	if !ok {
 		return nil, errBzNoTool
 	}
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	newCmd := func() *exec.Cmd {
-		cmd := exec.CommandContext(runCtx, "bluetoothctl", args...)
+		cmd := exec.CommandContext(runCtx, tool, args...)
 		cmd.Env = bzChildEnv()
 		return cmd
 	}
@@ -1341,8 +1376,8 @@ func (f *bzFlow) connectStep(mac string) (connected bool, stepErr error, err err
 		return false, stepErr, nil
 	}
 	if !done {
-		return false, &bzError{step: "connect", code: "timeout",
-			msg: "it did not connect in time — press its PS or Home button, then choose Connect"}, nil
+		return false, &bzError{step: "connect", code: "timeout", noAnswer: true,
+			msg: "it did not connect in time — switch it on, keep it close and choose Connect again"}, nil
 	}
 	return true, nil, nil
 }
@@ -1934,9 +1969,17 @@ func bzRefreshRadio() {
 // chip away), and an adapter's HCI_UP flag is its power. Only where the kernel
 // cannot be asked does `bluetoothctl show` (bzRadioProbe) decide, which costs a
 // process and, while bluetoothd is down, its whole timeout.
+//
+// On the handhelds a radio without bluetoothd reads off too, whatever its flag
+// says (a daemon that crashed leaves the adapter up): nothing pairs or connects
+// then, and "off" makes the switch offer "Turn on", which starts the daemon
+// (btBringUp) — the error the page shows says the same.
 func btProbeRadio() (on, known bool) {
 	if runtime.GOOS == "linux" {
 		if !btAdapterPresent() {
+			return false, true
+		}
+		if IsTrimuiDevice() && !btDaemonRunningCached() {
 			return false, true
 		}
 		if up, ok := btHCIUp(); ok {
@@ -1967,8 +2010,9 @@ var bzToolCache struct {
 	busy bool
 }
 
-// bzToolLookup reports whether bluetoothctl is on PATH; tests replace it.
-var bzToolLookup = func() bool { return commandExists("bluetoothctl") }
+// bzToolLookup reports whether bluetoothctl exists — on PATH or in one of the
+// system directories a launcher's PATH can miss (btToolPath); tests replace it.
+var bzToolLookup = func() bool { return btToolExists("bluetoothctl") }
 
 // btDevicesAvailable reports whether this system can pair devices: Linux with
 // bluetoothctl. Settings, the Start menu and the page ask on every frame, so
