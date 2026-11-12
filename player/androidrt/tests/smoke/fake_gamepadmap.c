@@ -59,7 +59,18 @@ int main(void) {
     expectKey(3, 96, 0);
 
     keyCount = axisCount = 0;
+    apak_gamepadInit(&map, APAK_GAMEPAD_NATIVE);
+    apak_gamepadSetSwapAB(&map, 1);
+    apak_gamepadFeedKey(&map, 0x131, 1, keyOut, NULL);
+    expectKey(1, 96, 0); /* physical TrimUI A, reported as BTN_EAST */
+    apak_gamepadFeedKey(&map, 0x131, 0, keyOut, NULL);
+    expectKey(2, 96, 1);
+    apak_gamepadFeedKey(&map, 0x130, 1, keyOut, NULL);
+    expectKey(3, 97, 0); /* physical TrimUI B, reported as BTN_SOUTH */
+
+    keyCount = axisCount = 0;
     apak_gamepadInit(&map, APAK_GAMEPAD_PENGUIN_DASH);
+    apak_gamepadSetSwapAB(&map, 1);
     apak_gamepadFeedAxis(&map, 0, -0.7f, keyOut, axisOut, NULL);
     expectKey(1, 21, 0); /* left stick steers via the game's arrow-key path */
     if (axisCount != 0) return 6; /* Penguin treats joystick motion as touch */
@@ -67,11 +78,11 @@ int main(void) {
     if (keyCount != 1) return 7; /* stick hysteresis */
     apak_gamepadFeedAxis(&map, 0, 0.f, keyOut, axisOut, NULL);
     expectKey(2, 21, 1);
-    apak_gamepadFeedKey(&map, 0x130, 1, keyOut, NULL);
+    apak_gamepadFeedKey(&map, 0x131, 1, keyOut, NULL);
     expectKey(3, 96, 0); /* A selects */
     apak_gamepadFeedKey(&map, 0x134, 1, keyOut, NULL);
     expectKey(4, 62, 0); /* X jumps */
-    apak_gamepadFeedKey(&map, 0x131, 1, keyOut, NULL);
+    apak_gamepadFeedKey(&map, 0x130, 1, keyOut, NULL);
     expectKey(5, 4, 0); /* B backs out */
     apak_gamepadFeedKey(&map, 0x13b, 1, keyOut, NULL);
     expectKey(6, 44, 0); /* Start pauses */

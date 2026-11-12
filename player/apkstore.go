@@ -18,7 +18,7 @@ package main
 //   - Runtime: whether AndroidRT is installed, whether this machine can run it,
 //     and whether a real Android (Waydroid) is there to install APKs into.
 //
-// AndroidRT has rendered one native game on a Smart Pro. Other APKs remain
+// AndroidRT has run one native game on a Smart Pro. Other APKs remain
 // experimental, and a Java app is never offered as something it can start.
 //
 // The screen uses the tool screens' frame (tbxui.go): Home's glass, the shared
@@ -1013,6 +1013,7 @@ func apkStoreOpenAPK(config *Config, info apkStoreInfo) {
 			body.WriteString("\n\n## Last run\n" + st.LastRun)
 		}
 		if st.Ours {
+			buttons = append(buttons, tbxSheetButton{label: "Controls", run: func() { apkStoreOpenControls(config, info, st) }})
 			buttons = append(buttons, tbxSheetButton{label: "Remove from Games", run: func() { apkStoreRemove(info) }})
 		}
 		switch {
@@ -1054,6 +1055,73 @@ func apkStoreOpenAPK(config *Config, info apkStoreInfo) {
 		focus:    focus,
 	})
 	PlayActivateSound()
+}
+
+// apkStoreOpenControls lets an installed native game keep Android gamepad
+// input or use arrow-key controls when the game only handles keyboard events.
+func apkStoreOpenControls(config *Config, info apkStoreInfo, st apkStoreGameState) {
+	current := "Automatic (standard Android gamepad)"
+	if info.Manifest.Package == "com.anathemasit.penguindash" {
+		current = "Automatic (Penguin Dash controls)"
+	}
+	switch st.Controls {
+	case "native":
+		current = "Android gamepad"
+	case "keyboard":
+		current = "Keyboard controls"
+	case "penguin-dash":
+		current = "Penguin Dash controls"
+	}
+	choices := []struct {
+		label, mode string
+	}{
+		{"Automatic", ""},
+		{"Gamepad", "native"},
+		{"Keyboard", "keyboard"},
+	}
+	buttons := make([]tbxSheetButton, 0, len(choices))
+	focus := 0
+	for i, choice := range choices {
+		mode := choice.mode
+		if st.Controls == mode {
+			focus = i
+		}
+		buttons = append(buttons, tbxSheetButton{label: choice.label, primary: st.Controls == mode,
+			run: func() { apkStoreSaveControls(config, info, st, mode) }})
+	}
+	body := "Current: " + current + "\n\n" +
+		"Automatic uses Penguin Dash controls for that game and Android gamepad controls for other APKs. " +
+		"Gamepad sends Xbox-style buttons and analog sticks. On the Smart Pro, the printed A and B buttons are corrected. " +
+		"Keyboard uses D-pad and left stick as arrow keys, A as Enter, B as Back, and X as Space. " +
+		"Choose Keyboard for a native game whose menus ignore gamepad buttons. Changes apply on the next launch."
+	tbxOpenSheet(config, tbxSheetSpec{title: "Game controls", subtitle: info.Label, icon: "gamepad",
+		body: body, buttons: buttons, focus: focus})
+	PlayActivateSound()
+}
+
+func apkStoreSaveControls(config *Config, info apkStoreInfo, st apkStoreGameState, mode string) {
+	if apkStoreUI.busy[info.Path] != "" {
+		ShowToast("This APK is busy — try its controls again shortly", ToastKindInfo)
+		return
+	}
+	apkStoreSetBusy(info.Path, "Saving controls…")
+	go func() {
+		err := apkStoreWriteControls(apkStoreProfilePath(st.ID), st.ID, info.Path, mode)
+		tbxPost(func() {
+			apkStoreSetBusy(info.Path, "")
+			if err != nil {
+				PlayErrorSound()
+				ShowToast("Could not save game controls: "+err.Error(), ToastKindError)
+				return
+			}
+			st.Controls = mode
+			apkStoreUI.games[info.Path] = st
+			ShowToast("Game controls saved for "+info.Label, ToastKindSuccess)
+			if apkStoreOnScreen() {
+				apkStoreOpenAPK(config, info)
+			}
+		})
+	}()
 }
 
 // apkStoreDetailsText is everything the store read, for the details sheet.

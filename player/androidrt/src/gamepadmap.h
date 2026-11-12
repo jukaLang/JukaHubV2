@@ -13,6 +13,7 @@ typedef enum {
 
 typedef struct {
     ApakGamepadMode mode;
+    unsigned char swapAB; /* TrimUI Player1 labels A on east, B on south. */
     unsigned char buttons[20];
     unsigned char held[128];
     unsigned char stickDirs[4]; /* left, right, up, down */
@@ -25,6 +26,7 @@ typedef void (*ApakGamepadEmitAxis)(void *ctx, int axis, float value);
 ApakGamepadMode apak_gamepadMode(const char *packageName, const char *option);
 const char *apak_gamepadModeName(ApakGamepadMode mode);
 void apak_gamepadInit(ApakGamepadMap *map, ApakGamepadMode mode);
+void apak_gamepadSetSwapAB(ApakGamepadMap *map, int enabled);
 float apak_gamepadNormalize(unsigned short code, int value, int min, int max);
 void apak_gamepadFeedKey(ApakGamepadMap *map, unsigned short code, int value,
                          ApakGamepadEmitKey emit, void *ctx);

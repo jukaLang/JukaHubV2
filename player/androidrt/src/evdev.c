@@ -72,6 +72,7 @@ static struct axisRange g_ranges[16][8];
 static ApakGamepadMap g_maps[16];
 static int g_devcount;
 static ApakGamepadMode g_mode;
+static int g_traceInput;
 
 /* EVIOCGNAME(len): _IOC(_IOC_READ, 'E', 0x06, len) */
 #define APAK_EVIOCGNAME(len) ((2u << 30) | ((unsigned)(len) << 16) | ('E' << 8) | 0x06u)
@@ -107,6 +108,7 @@ static void openEvdevDevices(void) {
         g_devnodes[g_devcount] = i;
         g_devfds[g_devcount++] = fd;
         apak_gamepadInit(&g_maps[slot], g_mode);
+        apak_gamepadSetSwapAB(&g_maps[slot], strncmp(name, "TRIMUI Player", 13) == 0);
         for (int a = 0; a < 8; a++) {
             struct apak_absinfo info = {0};
             g_ranges[slot][a].min = defaultMin[a];
@@ -117,8 +119,9 @@ static void openEvdevDevices(void) {
             }
         }
         android_inputRegisterDevice(i, name[0] ? name : "TrimUI Gamepad");
-        fprintf(stderr, "[androidrt] input: reading %s (%s) as device %d, map %s\n", path,
-                name[0] ? name : "unnamed", i, apak_gamepadModeName(g_mode));
+        fprintf(stderr, "[androidrt] input: reading %s (%s) as device %d, map %s, A/B %s\n", path,
+                name[0] ? name : "unnamed", i, apak_gamepadModeName(g_mode),
+                g_maps[slot].swapAB ? "TrimUI" : "standard");
     }
     if (!g_devcount)
         fprintf(stderr, "[androidrt] input: no /dev/input/event* readable — "
@@ -128,11 +131,17 @@ static void openEvdevDevices(void) {
 
 static void emitKey(void *ctx, int keyCode, int action) {
     int deviceId = *(int *)ctx;
-    android_inputInjectKey(deviceId, 0, action, keyCode, 0);
+    if (g_traceInput)
+        fprintf(stderr, "[androidrt] input: device %d key %d %s\n", deviceId, keyCode,
+                action ? "up" : "down");
+    android_inputInjectKey(deviceId, g_mode == APAK_GAMEPAD_NATIVE ? AINPUT_SOURCE_GAMEPAD : AINPUT_SOURCE_KEYBOARD,
+                           action, keyCode, 0);
 }
 
 static void emitAxis(void *ctx, int axis, float value) {
     int deviceId = *(int *)ctx;
+    if (g_traceInput)
+        fprintf(stderr, "[androidrt] input: device %d axis %d %.3f\n", deviceId, axis, value);
     android_inputInjectAxis(deviceId, 0, axis, value);
 }
 
@@ -190,7 +199,9 @@ static void *evdevThread(void *arg) {
 void android_inputStartEvdev(const char *packageName) {
     pthread_t thread;
     const char *option = getenv("ANDROIDPAK_GAMEPAD_MAP");
+    const char *traceInput = getenv("ANDROIDPAK_INPUT_TRACE");
     g_mode = apak_gamepadMode(packageName, option);
+    g_traceInput = traceInput && strcmp(traceInput, "1") == 0;
     fprintf(stderr, "[androidrt] input: starting evdev reader (map %s)\n", apak_gamepadModeName(g_mode));
     if (pthread_create(&thread, NULL, evdevThread, NULL) != 0) {
         fprintf(stderr, "[androidrt] input: could not start evdev reader thread\n");

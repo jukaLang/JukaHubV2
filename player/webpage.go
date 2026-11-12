@@ -1205,11 +1205,15 @@ func webParseContainerQuery(text string) *webContainerQuery {
 		}
 		name = candidate
 		rest = strings.TrimSpace(rest[end:])
+		lower = strings.ToLower(rest)
 	}
-	if rest == "" || !strings.HasPrefix(rest, "(") {
+	// A style query is written as style(...) rather than a parenthesised
+	// feature. Keep its body's case: custom-property names and values are
+	// case-sensitive even though the feature names around them are not.
+	if rest == "" || (!strings.HasPrefix(rest, "(") && !strings.HasPrefix(lower, "style(") && !strings.HasPrefix(lower, "not ")) {
 		return nil
 	}
-	return &webContainerQuery{name: name, condition: strings.ToLower(rest)}
+	return &webContainerQuery{name: name, condition: strings.TrimSpace(rest)}
 }
 
 // webContainerConditionsApply tests all enclosing @container queries. Each
@@ -1228,12 +1232,82 @@ func (p *webParser) webContainerQueryApplies(query *webContainerQuery) bool {
 	if query == nil || query.condition == "" {
 		return false
 	}
+	if webContainerQueryUsesStyle(query.condition) {
+		idx := p.webNearestStyleContainer(query)
+		if webContainerQueryUsesSize(query.condition) {
+			// A mixed style/size condition must use a box that can answer
+			// the size half; a plain style container has no measured size.
+			idx = p.webNearestContainer(query)
+		}
+		if idx < 0 {
+			return false
+		}
+		w, h := p.webContainerDimensions(idx)
+		return webContainerConditionWithStyle(query.condition, w, h, p.stack[idx].style.Vars)
+	}
 	idx := p.webNearestContainer(query)
 	if idx < 0 {
 		return false
 	}
 	w, h := p.webContainerDimensions(idx)
-	return webContainerCondition(webMediaTokens(query.condition), w, h)
+	return webContainerCondition(webMediaTokens(strings.ToLower(query.condition)), w, h)
+}
+
+// webContainerQueryUsesStyle reports whether a condition contains a style()
+// feature. Style features use the queried container's inherited custom
+// properties, while size features use its measured box.
+func webContainerQueryUsesStyle(condition string) bool {
+	return strings.Contains(strings.ToLower(condition), "style(")
+}
+
+// webContainerQueryUsesSize reports whether the condition also asks for a
+// box measurement, which needs a size query container rather than any style
+// container.
+func webContainerQueryUsesSize(condition string) bool {
+	terms, _, ok := webSplitContainerLogic(condition)
+	if !ok {
+		return false
+	}
+	for _, term := range terms {
+		if webContainerTermUsesSize(term) {
+			return true
+		}
+	}
+	return false
+}
+
+func webContainerTermUsesSize(term string) bool {
+	term = strings.TrimSpace(term)
+	lower := strings.ToLower(term)
+	if strings.HasPrefix(lower, "not ") {
+		return webContainerTermUsesSize(term[len("not "):])
+	}
+	if strings.HasPrefix(lower, "style(") {
+		return false
+	}
+	if term != "" && term[0] == '(' {
+		if close := webCSSParenEnd(term, 0); close == len(term)-1 {
+			inner := strings.TrimSpace(term[1:close])
+			if webContainerQueryUsesStyle(inner) {
+				return webContainerQueryUsesSize(inner)
+			}
+		}
+	}
+	return true
+}
+
+// webNearestStyleContainer finds the container whose variable scope answers a
+// style query. Style queries do not need size containment, so an ordinary
+// ancestor (container-type: normal) is valid; a named query still requires the
+// nearest ancestor with that name.
+func (p *webParser) webNearestStyleContainer(query *webContainerQuery) int {
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		if query.name != "" && p.stack[i].style.ContainerName != query.name {
+			continue
+		}
+		return i
+	}
+	return -1
 }
 
 // webNearestContainer finds the inner-most ancestor that can answer this
@@ -1318,7 +1392,8 @@ func webContainerInParens(group string, w, h float64) bool {
 		return false
 	}
 	inner := strings.TrimSpace(group[1 : len(group)-1])
-	if inner == "" || strings.HasPrefix(inner, "style(") || strings.HasPrefix(inner, "scroll-state(") {
+	lower := strings.ToLower(inner)
+	if inner == "" || strings.HasPrefix(lower, "style(") || strings.HasPrefix(lower, "scroll-state(") {
 		return false
 	}
 	if words := webMediaTokens(inner); len(words) > 1 || strings.HasPrefix(inner, "(") {
@@ -1327,6 +1402,154 @@ func webContainerInParens(group string, w, h float64) bool {
 		}
 	}
 	return webContainerFeature(inner, w, h)
+}
+
+// webContainerConditionWithStyle evaluates a container condition that may mix
+// style() and size features. Style features look at the queried container's
+// inherited variable scope; size features keep using the existing size parser.
+func webContainerConditionWithStyle(condition string, w, h float64, scope *webVarScope) bool {
+	condition = strings.TrimSpace(condition)
+	lower := strings.ToLower(condition)
+	if strings.HasPrefix(lower, "not ") {
+		return !webContainerConditionWithStyle(condition[len("not "):], w, h, scope)
+	}
+	terms, ops, ok := webSplitContainerLogic(condition)
+	if !ok || len(terms) == 0 {
+		return false
+	}
+	result := webContainerTermWithStyle(terms[0], w, h, scope)
+	for i, op := range ops {
+		next := webContainerTermWithStyle(terms[i+1], w, h, scope)
+		switch op {
+		case "and":
+			result = result && next
+		case "or":
+			result = result || next
+		default:
+			return false
+		}
+	}
+	return result
+}
+
+// webSplitContainerLogic divides a condition on top-level and/or operators.
+// Parenthesised arguments (including style() values) stay whole.
+func webSplitContainerLogic(text string) ([]string, []string, bool) {
+	var terms, ops []string
+	depth, start := 0, 0
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+			continue
+		case c == '\'' || c == '"':
+			quote = c
+			continue
+		case c == '(':
+			depth++
+			continue
+		case c == ')':
+			depth--
+			if depth < 0 {
+				return nil, nil, false
+			}
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		for _, op := range []string{"and", "or"} {
+			if i+len(op) > len(text) || !strings.EqualFold(text[i:i+len(op)], op) {
+				continue
+			}
+			if i == 0 || !webAttrSpaceByte(text[i-1]) {
+				continue
+			}
+			if i+len(op) == len(text) || !webAttrSpaceByte(text[i+len(op)]) {
+				continue
+			}
+			terms = append(terms, strings.TrimSpace(text[start:i]))
+			ops = append(ops, op)
+			i += len(op) - 1
+			start = i + 1
+			break
+		}
+	}
+	if depth != 0 || quote != 0 {
+		return nil, nil, false
+	}
+	terms = append(terms, strings.TrimSpace(text[start:]))
+	return terms, ops, true
+}
+
+func webContainerTermWithStyle(term string, w, h float64, scope *webVarScope) bool {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return false
+	}
+	lower := strings.ToLower(term)
+	if strings.HasPrefix(lower, "style(") {
+		return webStyleQueryFeature(term, scope)
+	}
+	if strings.HasPrefix(lower, "not ") {
+		return !webContainerTermWithStyle(term[len("not "):], w, h, scope)
+	}
+	if term[0] == '(' {
+		close := webCSSParenEnd(term, 0)
+		if close == len(term)-1 {
+			inner := strings.TrimSpace(term[1:close])
+			if strings.Contains(strings.ToLower(inner), "style(") {
+				return webContainerConditionWithStyle(inner, w, h, scope)
+			}
+			return webContainerInParens(term, w, h)
+		}
+	}
+	return false
+}
+
+// webStyleQueryFeature evaluates style(--name: value) or style(--name). The
+// value comes from the queried element's inherited custom-property scope, so a
+// declaration on an ancestor is visible here and a closer redeclaration wins.
+func webStyleQueryFeature(term string, scope *webVarScope) bool {
+	lower := strings.ToLower(term)
+	if !strings.HasPrefix(lower, "style(") {
+		return false
+	}
+	open := strings.IndexByte(term, '(')
+	close := webCSSParenEnd(term, open)
+	if open < 0 || close < 0 || strings.TrimSpace(term[close+1:]) != "" {
+		return false
+	}
+	inner := strings.TrimSpace(term[open+1 : close])
+	if inner == "" {
+		return false
+	}
+	colon := strings.IndexByte(inner, ':')
+	if colon < 0 {
+		name := strings.TrimSpace(inner)
+		if !strings.HasPrefix(name, "--") {
+			return false
+		}
+		_, ok := scope.lookup(name)
+		return ok
+	}
+	name := strings.TrimSpace(inner[:colon])
+	want := strings.TrimSpace(inner[colon+1:])
+	if !strings.HasPrefix(name, "--") || want == "" {
+		return false
+	}
+	have, ok := scope.lookup(name)
+	if !ok {
+		return false
+	}
+	want = webSubstituteVars(want, scope)
+	return strings.TrimSpace(have) == strings.TrimSpace(want)
 }
 
 func webContainerFeature(inner string, w, h float64) bool {
@@ -1574,7 +1797,7 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 // ignore would make the fallback styling win over the one that actually works.
 var webSupportedProperties = map[string]bool{
 	"align-items": true, "align-self": true, "aspect-ratio": true,
-	"background": true, "background-color": true, "background-image": true,
+	"background": true, "background-clip": true, "background-color": true, "background-image": true,
 	"border": true, "border-bottom": true, "border-color": true,
 	"border-left": true, "border-radius": true, "border-right": true,
 	"border-top": true, "border-width": true, "color": true,
@@ -1725,15 +1948,27 @@ func webSupportsValue(name, value string) bool {
 	if strings.HasPrefix(name, "--") {
 		return true
 	}
-	if !webSupportedProperties[name] {
-		return false
+	// Vendor-prefixed aliases share the grammar of the standard property the
+	// reader implements. An unknown base name stays unsupported, so a prefix
+	// cannot turn an unimplemented property into a false positive.
+	if base, prefixed := webVendorPropertyBase(name); prefixed {
+		name = base
 	}
 	lower := strings.ToLower(strings.TrimSpace(value))
+	if alias, ok := webUnprefixedValueAlias(name, value); ok {
+		value = alias
+		lower = strings.ToLower(value)
+	}
+	if webSupportsCSSWideKeyword(lower) {
+		// `all` exists only to apply a CSS-wide keyword to every property.
+		return webSupportedProperties[name] || name == "all"
+	}
+	if name == "all" || !webSupportedProperties[name] {
+		return false
+	}
 	// Keywords that mean "the engine's initial value" do not necessarily
 	// change a probe style, so validate them by property group instead.
 	switch lower {
-	case "inherit", "initial", "unset", "revert", "revert-layer":
-		return true
 	case "none":
 		switch name {
 		case "display", "background", "background-image", "border", "border-left", "border-right", "border-top", "border-bottom", "text-decoration", "text-decoration-line", "grid-template-columns", "flex", "container", "container-name":
@@ -1807,6 +2042,66 @@ func webSupportsProbeStyle(display int, flag bool) webStyle {
 	}
 	st.Display = display
 	return st
+}
+
+// webVendorPropertyBase strips a recognised CSS vendor prefix. The boolean
+// reports whether the name actually carried one; validation still checks the
+// resulting base property against the reader's supported surface.
+func webVendorPropertyBase(name string) (string, bool) {
+	for _, prefix := range []string{"-webkit-", "-moz-", "-ms-", "-o-"} {
+		if strings.HasPrefix(name, prefix) {
+			base := strings.TrimPrefix(name, prefix)
+			return base, base != "" && !strings.HasPrefix(base, "-")
+		}
+	}
+	return name, false
+}
+
+func webSupportsCSSWideKeyword(value string) bool {
+	switch value {
+	case "inherit", "initial", "unset", "revert", "revert-layer":
+		return true
+	}
+	return false
+}
+
+// webUnprefixedValueAlias maps the vendor-prefixed value spellings Chromium
+// accepts to the standard value the reader implements. It only handles values
+// with a known equivalent; anything else is left for the normal grammar check
+// to reject.
+func webUnprefixedValueAlias(name, value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	switch name {
+	case "display":
+		switch lower {
+		case "-webkit-flex":
+			return "flex", true
+		case "-webkit-inline-flex":
+			return "inline-flex", true
+		case "-webkit-box":
+			return "flex", true
+		case "-webkit-inline-box":
+			return "inline-flex", true
+		}
+	case "position":
+		if lower == "-webkit-sticky" {
+			return "sticky", true
+		}
+	case "background", "background-image":
+		for _, function := range []string{
+			"linear-gradient",
+			"repeating-linear-gradient",
+			"radial-gradient",
+			"repeating-radial-gradient",
+		} {
+			prefix := "-webkit-" + function + "("
+			if strings.HasPrefix(lower, prefix) {
+				return function + "(" + value[len(prefix):], true
+			}
+		}
+	}
+	return value, false
 }
 
 // webSupportsParsedValue checks the properties whose parsers accept a broad
@@ -1918,6 +2213,8 @@ func webSupportsParsedValue(name, value string) (supported, handled bool) {
 	case "color":
 		_, ok := parseWebColor(lower)
 		return ok, true
+	case "background-clip":
+		return webSupportsEnum(lower, "border-box", "padding-box", "content-box", "text"), true
 	case "background-color", "border-color":
 		_, ok := webColorInValue(lower)
 		return ok, true
@@ -2031,13 +2328,29 @@ func webSupportsFlex(value string) bool {
 }
 
 func webSupportsBackground(value string) bool {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	// Only the aliases mapped above have an implementation here. Another
+	// engine's prefix must not make an otherwise-unknown image function look
+	// supported merely because the value contains "gradient(".
+	for _, prefix := range []string{"-webkit-", "-moz-", "-ms-", "-o-"} {
+		if strings.HasPrefix(lower, prefix) {
+			return false
+		}
+	}
 	if value == "none" {
 		return true
 	}
 	if _, ok := webColorInValue(value); ok {
 		return true
 	}
-	_, ok := webParseGradient(value)
+	if _, ok := webParseGradient(value); ok {
+		return true
+	}
+	// Radial, conic and repeating gradients are painted as their averaged
+	// colour by the reader, so they are supported even though they are not a
+	// linear ramp.
+	_, ok := webGradientColor(value)
 	return ok
 }
 
@@ -5577,7 +5890,11 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		st.ContainerName, st.ContainerType = name, typ
 	}
 	if v, ok := decls["display"]; ok {
-		switch strings.ToLower(strings.TrimSpace(v)) {
+		lower := strings.ToLower(strings.TrimSpace(v))
+		if alias, valid := webUnprefixedValueAlias("display", v); valid {
+			lower = alias
+		}
+		switch lower {
 		case "flex", "inline-flex":
 			st.Display = webDisplayFlex
 		case "grid", "inline-grid":
@@ -5668,7 +5985,11 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["position"]; ok {
-		switch strings.ToLower(strings.TrimSpace(v)) {
+		lower := strings.ToLower(strings.TrimSpace(v))
+		if alias, valid := webUnprefixedValueAlias("position", v); valid {
+			lower = alias
+		}
+		switch lower {
 		case "relative":
 			st.Position = webPositionRelative
 		case "absolute", "fixed", "sticky":

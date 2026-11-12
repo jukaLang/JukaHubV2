@@ -4,7 +4,7 @@ JukaHub does not ship a complete Android. The **AndroidPak** path runs a
 limited class of native-only (NDK) games through **AndroidRT**, a small runtime
 JukaHub builds and ships: every TrimUI package carries it beside the app, and
 the APK Store installs the same build from JukaHub's releases on a device that
-lacks it. Penguin Dash v0.5.0 has rendered on a Smart Pro with AndroidRT;
+lacks it. Penguin Dash v0.5.0 has been played on a Smart Pro with AndroidRT;
 other games need individual testing. The **APK Store**
 (Packages → More stores, or Start → Games → APK Store) is the front door to
 it: it finds the APKs on the card, says what each one is and whether it can
@@ -24,9 +24,10 @@ For a Store download, open **Store → Penguin Dash → Install**. The APK is
 checked against its pinned SHA-256, its package and native arm64 launcher are
 checked, and its profile is added to Games. The **Run** button starts it through
 AndroidRT. A fresh Store download, install and Run were tested on a Smart Pro:
-the game's SHA-256 matched, its main loop presented frames at 1280×720, and
-the A button advanced its menu. Gameplay steering, sound and clean exit still
-need testing.
+the game's SHA-256 matched and its main loop presented frames at 1280×720.
+With the physical Smart Pro controls, A entered the menu, the left stick
+steered a race, X jumped, and B exited back to JukaHub normally. Sound and
+other controllers still need testing.
 
 ## APK Store
 
@@ -207,7 +208,14 @@ profile runtime](GAME_PROFILES.md) is the hub's side of exactly this path:
   device's `/dev/input/event*` by the evdev reader; `ANDROIDPAK_INPUT=off`
   launches without it (the game keeps running, just blind), and a node set
   the process cannot read prints the missing-`input`-group note instead of
-  failing the launch. See [player/androidrt/README.md](../player/androidrt/README.md).
+  failing the launch. The Smart Pro's printed A/B buttons are corrected for
+  its `TRIMUI Player1` input node, while external Xbox-style pads keep their
+  standard layout. In **Your APKs → game → Controls**, Automatic picks the
+  Penguin Dash preset or standard Android gamepad input; Keyboard converts
+  the D-pad and left stick to arrow keys, A to Enter, B to Back and X to Space
+  for native games with keyboard-only controls. A profile may also set
+  `ANDROIDPAK_GAMEPAD_MAP` to `native`, `keyboard` or `penguin-dash`.
+  See [player/androidrt/README.md](../player/androidrt/README.md).
 
 The AndroidRT source, cross-build script, and **headless smoke check** live in
 [`player/androidrt/`](../player/androidrt/README.md). AndroidRT loads the game
@@ -223,9 +231,9 @@ stock-TrimUI defaults) and its SDL-hosted backend against a fake firmware
 SDL2, the looper/input queue and the OpenSL ES path — without a device.
 JukaHub's AndroidPak profile support triages and stages an APK and hands it to
 AndroidRT, which JukaHub's CI builds for the handheld
-(`player/androidrt/build-tsp.sh`) and ships. **No real game has been run on
-hardware yet.** Camera, identity, privacy and framework features stay out of
-scope by design.
+(`player/androidrt/build-tsp.sh`) and ships. Penguin Dash has been played on a
+Smart Pro; other titles need individual tests. Camera, identity, privacy and
+framework features stay out of scope by design.
 
 ### Where AndroidRT comes from
 
@@ -409,7 +417,7 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
 | **Container integration (Waydroid)** — Android runs in a container on the device kernel. | **Install only.** The only approach that runs real Android apps. The APK Store detects Waydroid (binary + binder device) and installs APKs into it; the earlier engine that listed and launched container apps through a display bridge (`android.go`) is no longer in the tree. A stock TrimUI kernel has no binder device. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
-| **AndroidPak — NDK games via AndroidRT** | **Shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches AndroidRT — bundled with JukaHub's TrimUI packages, or installed from its releases by the APK Store — with its own bionic loader, JNI environment and SDL2/EGL present layer. Penguin Dash v0.5.0 rendered on a Smart Pro and its A button advanced the menu; gameplay steering, sound and clean exit remain unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
+| **AndroidPak — NDK games via AndroidRT** | **Shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches AndroidRT — bundled with JukaHub's TrimUI packages, or installed from its releases by the APK Store — with its own bionic loader, JNI environment and SDL2/EGL present layer. Penguin Dash v0.5.0 raced on a Smart Pro with physical A, B, stick and X controls; B exited cleanly. Sound and other titles remain unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
 | **Sideloading APKs into the container** | **Shipped in the APK Store.** The package is read and triaged first; `waydroid app install <file>` gets a validated path. |
 | **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
@@ -457,18 +465,18 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
   and community firmware, not the stock TrimUI kernel.
 * Memory is shared with everything else on a 1 GB device: a launch that would
   not leave the hub alive is refused with the numbers.
-* **One game has rendered on hardware.** Penguin Dash v0.5.0 reached its main
+* **One game has been played on hardware.** Penguin Dash v0.5.0 reached its main
   loop and presented frames through the Smart Pro's PowerVR GLES display.
-  Its A button advanced the menu; gameplay steering, sound and normal exit
-  have not yet been proven. The store's
+  Physical A, B, left stick and X controls worked through menus and a race;
+  backing out returned to JukaHub with exit status 0. Sound remains untested. The store's
   reading, triage, verdicts, profiles, catalogue and Waydroid probe also have
   host-side tests; other Android games need individual device tests.
 
 ## Next slices
 
-1. **Complete the first device run** — exercise Penguin Dash's gameplay
-   steering, audio and normal exit. The Store's Install and Run buttons have
-   already added its profile and launched it full screen on a Smart Pro.
+1. **Verify game audio** — exercise Penguin Dash's sound output on the Smart
+   Pro. The Store's Install and Run buttons, race controls and normal exit have
+   been tested on the device.
 2. **More catalogue entries** — test other free NDK games on hardware before
    offering their author-published APKs in the Store.
 3. **Container data** — expose Waydroid's data directory to the Save Manager

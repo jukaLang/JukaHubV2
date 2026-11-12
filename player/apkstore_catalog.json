@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updated": "2026-11-11",
+  "updated": "2026-11-12",
   "entries": [
     {
       "id": "penguin-dash",
@@ -8,9 +8,9 @@
       "package": "com.anathemasit.penguindash",
       "kind": "title",
       "status": "experimental",
-      "summary": "Free native Android game. Its APK rendered and ran on a Trimui Smart Pro with AndroidRT.",
+      "summary": "Free native Android game. Installed and raced on a Trimui Smart Pro with AndroidRT.",
       "get": "Install the author's free Android release directly from this Store entry.",
-      "notes": "The game rendered on a Smart Pro, and its A button advanced from player selection to the main menu. Gameplay steering, sound and clean exit need further testing.",
+      "notes": "Tested on a Smart Pro: A enters menus, the left stick steers, X jumps, and B backs out cleanly to JukaHub. Sound and other controllers still need testing.",
       "license": "GPL-2.0",
       "url": "https://github.com/nathanrcast/penguin-dash/releases/download/v0.5.0/penguin-dash-v0.5.0.apk",
       "sha256": "d19811693cd2ee882a9ff8ff121c0c7499f7d4fd6e79e7cc7c1e400f54b24ec6",
@@ -21,7 +21,7 @@
       "title": "Native (NDK) apps and games",
       "kind": "category",
       "status": "experimental",
-      "summary": "Apps and games started from a native arm64 library by NativeActivity or GameActivity are what AndroidRT can try. Penguin Dash has rendered on a Smart Pro; other titles need individual testing.",
+      "summary": "Apps and games started from a native arm64 library by NativeActivity or GameActivity are what AndroidRT can try. Penguin Dash has been played on a Smart Pro; other titles need individual testing.",
       "get": "Copy APKs you own into the APKs folder on the card, or send them from your phone with the Phone Companion. Your APKs tab checks each one and marks the ones worth trying.",
       "notes": "Use the 64-bit (arm64-v8a) build when an app offers one. If it stops, its launch log names what AndroidRT is missing; Java and Kotlin apps still need a full Android runtime."
     },

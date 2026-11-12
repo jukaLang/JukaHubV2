@@ -44,6 +44,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "actbridge.h"
 #include "bioniccompat.h"
 
 /* setjmp family, bionicjmp.S (bionic jmp_buf layout) */
@@ -388,7 +389,42 @@ static int bw_pthread_getattr_np(pthread_t t, BAttr *out) {
 typedef struct {
     void *(*fn)(void *);
     void *arg;
+    int primary;
 } StartInfo;
+
+static pthread_mutex_t g_primaryLock = PTHREAD_MUTEX_INITIALIZER;
+static ActivityRunner *g_primaryRunner;
+static int g_capturePrimary;
+
+void apak_bionicCapturePrimaryThread(ActivityRunner *runner) {
+    pthread_mutex_lock(&g_primaryLock);
+    g_primaryRunner = runner;
+    g_capturePrimary = 1;
+    pthread_mutex_unlock(&g_primaryLock);
+}
+
+void apak_bionicEndPrimaryCapture(void) {
+    pthread_mutex_lock(&g_primaryLock);
+    g_capturePrimary = 0;
+    pthread_mutex_unlock(&g_primaryLock);
+}
+
+void apak_bionicStopWatchingPrimaryThread(void) {
+    pthread_mutex_lock(&g_primaryLock);
+    g_capturePrimary = 0;
+    g_primaryRunner = NULL;
+    pthread_mutex_unlock(&g_primaryLock);
+}
+
+static void primaryThreadEnded(void *arg) {
+    if (!(uintptr_t)arg) return;
+    pthread_mutex_lock(&g_primaryLock);
+    if (g_primaryRunner) {
+        __atomic_store_n(&g_primaryRunner->primaryThreadExited, 1, __ATOMIC_RELEASE);
+        runner_requestExit(g_primaryRunner, 0);
+    }
+    pthread_mutex_unlock(&g_primaryLock);
+}
 
 #define APAK_TIDS 512
 static struct {
@@ -427,9 +463,13 @@ static void tidRemember(void) {
 
 static void *threadStart(void *p) {
     StartInfo s = *(StartInfo *)p;
+    void *result;
     free(p);
     tidRemember();
-    return s.fn(s.arg);
+    pthread_cleanup_push(primaryThreadEnded, (void *)(uintptr_t)s.primary);
+    result = s.fn(s.arg);
+    pthread_cleanup_pop(1);
+    return result;
 }
 
 static int bw_pthread_create(pthread_t *t, const BAttr *ba, void *(*fn)(void *), void *arg) {
@@ -440,6 +480,10 @@ static int bw_pthread_create(pthread_t *t, const BAttr *ba, void *(*fn)(void *),
     if (!s) return EAGAIN;
     s->fn = fn;
     s->arg = arg;
+    pthread_mutex_lock(&g_primaryLock);
+    s->primary = g_capturePrimary;
+    if (s->primary) g_capturePrimary = 0;
+    pthread_mutex_unlock(&g_primaryLock);
     pthread_attr_init(&ga);
     if (ba) {
         pthread_attr_setdetachstate(&ga, (ba->flags & BATTR_DETACHED) ? PTHREAD_CREATE_DETACHED
@@ -462,7 +506,14 @@ static int bw_pthread_create(pthread_t *t, const BAttr *ba, void *(*fn)(void *),
     }
     rc = pthread_create(t, &ga, threadStart, s);
     pthread_attr_destroy(&ga);
-    if (rc) free(s);
+    if (rc) {
+        if (s->primary) {
+            pthread_mutex_lock(&g_primaryLock);
+            if (g_primaryRunner) g_capturePrimary = 1;
+            pthread_mutex_unlock(&g_primaryLock);
+        }
+        free(s);
+    }
     return rc;
 }
 

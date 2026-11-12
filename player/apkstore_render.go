@@ -26,7 +26,7 @@ var apkStoreTabIDs = [apkTabCount]string{"tab0", "tab1", "tab2"}
 
 // apkStoreHeader is the page bar.
 func apkStoreHeader() UIPageHeader {
-	return tbxHeader(apkStoreEntryName, "Install native Android games — Penguin Dash rendered on Smart Pro",
+	return tbxHeader(apkStoreEntryName, "Install native Android games — Penguin Dash played on Smart Pro",
 		apkStoreGlyph, apkStoreUI.status, ColorTextTertiary())
 }
 
@@ -136,7 +136,7 @@ func apkStoreDrawMine(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fr
 		return
 	}
 	y = apkStoreDrawNote(renderer, config, fonts, frame, body, top, y,
-		"Experimental: AndroidRT runs native (NDK) games only. Penguin Dash has rendered on a Smart Pro.")
+		"Experimental: AndroidRT runs native (NDK) games only. Penguin Dash has raced on a Smart Pro.")
 	rowH := tbxRowHeight(fonts)
 	for i, info := range apkStoreUI.apks {
 		id := apkStoreRowID("apk", i)

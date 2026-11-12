@@ -179,6 +179,53 @@ func apkStoreAddProfile(info apkStoreInfo) (GameProfile, error) {
 	return p, nil
 }
 
+// apkStoreWriteControls changes only the store-owned profile for this APK.
+// Keeping the choice in the profile makes it follow every launch path, including
+// Games and Continue Playing, without a second store-specific input setting.
+func apkStoreWriteControls(path, id, expectedAPK, mode string) error {
+	switch mode {
+	case "", "native", "keyboard", "penguin-dash":
+	default:
+		return fmt.Errorf("unknown controller mode %q", mode)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var p GameProfile
+	if err := json.Unmarshal(stripUTF8BOM(raw), &p); err != nil {
+		return err
+	}
+	if p.ID != id || p.Runtime != gameRuntimeAndroidPak ||
+		apkStorePathKey(apkStoreRealPath(filepath.Join(filepath.FromSlash(p.Dir), filepath.FromSlash(p.Executable)))) !=
+			apkStorePathKey(apkStoreRealPath(expectedAPK)) {
+		return errors.New("this game profile has changed; reopen the APK and try again")
+	}
+	if p.Env == nil {
+		p.Env = map[string]string{}
+	}
+	if mode == "" {
+		delete(p.Env, "ANDROIDPAK_GAMEPAD_MAP")
+	} else {
+		p.Env["ANDROIDPAK_GAMEPAD_MAP"] = mode
+	}
+	if len(p.Env) == 0 {
+		p.Env = nil
+	}
+	if err := validateGameProfile(&p); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	invalidateGameProfileCache()
+	return nil
+}
+
 // apkStoreSaveIcon writes an APK's launcher icon as a PNG at art, where the
 // Games Library looks for the game's cover. Nothing to write is not an error.
 // The store's Add and the library's scan can both write one cover at once, so
@@ -220,12 +267,13 @@ func apkStoreRemoveProfile(id string) error {
 
 // apkStoreGameState is how an APK relates to the game profiles.
 type apkStoreGameState struct {
-	ID      string // the profile's id, "" when the APK is in none
-	Ours    bool   // the store wrote it (Remove is offered)
-	Ready   bool   // the profile can launch now
-	Issue   string // why not
-	Title   string
-	LogPath string // the launch log, when a run left one
+	ID       string // the profile's id, "" when the APK is in none
+	Ours     bool   // the store wrote it (Remove is offered)
+	Ready    bool   // the profile can launch now
+	Issue    string // why not
+	Title    string
+	Controls string // AndroidRT controller mode; empty uses its automatic choice
+	LogPath  string // the launch log, when a run left one
 	// LastRun says how the most recent run ended, read from its log: the
 	// first thing AndroidRT was missing when it failed ("" without a log).
 	LastRun string
@@ -259,7 +307,8 @@ func apkStoreGameStates(apks []apkStoreInfo) map[string]apkStoreGameState {
 		if !ok {
 			continue
 		}
-		st := apkStoreGameState{ID: e.Profile.ID, Ready: e.ready(), Issue: e.Issue, Title: e.Profile.Title}
+		st := apkStoreGameState{ID: e.Profile.ID, Ready: e.ready(), Issue: e.Issue,
+			Title: e.Profile.Title, Controls: e.Profile.Env["ANDROIDPAK_GAMEPAD_MAP"]}
 		st.Ours = regularFile(apkStoreProfilePath(e.Profile.ID))
 		logPath := filepath.Join(gameProfilesLogsDir(), e.Profile.ID+".log")
 		if regularFile(logPath) {

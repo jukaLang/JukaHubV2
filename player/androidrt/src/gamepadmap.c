@@ -55,6 +55,10 @@ void apak_gamepadInit(ApakGamepadMap *map, ApakGamepadMode mode) {
     map->mode = mode;
 }
 
+void apak_gamepadSetSwapAB(ApakGamepadMap *map, int enabled) {
+    map->swapAB = enabled != 0;
+}
+
 /* Linux triggers may report 0..255 or -32768..32767. Android's Z/RZ
  * triggers are 0..1; sticks and hats are -1..1. The actual EVIOCGABS limits
  * come from the opened controller, not a guessed fixed divisor. */
@@ -138,6 +142,11 @@ static void refreshKeys(ApakGamepadMap *map, ApakGamepadEmitKey emit, void *ctx)
 
 void apak_gamepadFeedKey(ApakGamepadMap *map, unsigned short code, int value,
                          ApakGamepadEmitKey emit, void *ctx) {
+    /* The Smart Pro's printed A/B positions follow Nintendo's layout while
+     * its evdev node uses Xbox button codes. Translate those two buttons
+     * before either the native Android or keyboard map sees them. */
+    if (map->swapAB && (code == 0x130 || code == 0x131))
+        code = code == 0x130 ? 0x131 : 0x130;
     int i = buttonIndex(code);
     if (i < 0 || value == 2) return; /* ignore unrelated and auto-repeat */
     map->buttons[i] = value != 0;

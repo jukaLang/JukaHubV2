@@ -284,6 +284,10 @@ int main(int argc, char **argv) {
         else if (err[0])
             fprintf(stderr, "[androidrt] dex: %s\n", err);
         gameActivity = manifestGameActivity(&manifest);
+        runner.finishOnPrimaryThreadExit =
+            strcmp(manifest.package, "com.anathemasit.penguindash") == 0 ||
+            (getenv("ANDROIDPAK_EXIT_ON_MAIN_THREAD") &&
+             strcmp(getenv("ANDROIDPAK_EXIT_ON_MAIN_THREAD"), "1") == 0);
     }
 
     /* The Java environment exists before any game code runs: a library's

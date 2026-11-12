@@ -122,6 +122,56 @@ func TestWebPictureUsesFirstMatchingSource(t *testing.T) {
 	}
 }
 
+func TestWebPictureUsesFirstApplicableArtDirectionSource(t *testing.T) {
+	source := `<picture>` +
+		`<source media="(max-width: 600px)" srcset="small.png 320w">` +
+		`<source media="(min-width: 700px)" srcset="medium.png 640w">` +
+		`<img src="fallback.png" alt="photo">` +
+		`</picture>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/medium.png"; got != want {
+		t.Fatalf("picture image src %q, want first applicable art-direction source %q", got, want)
+	}
+}
+
+func TestWebPictureSkipsUnsupportedSourceType(t *testing.T) {
+	source := `<picture>` +
+		`<source type="image/avif" srcset="avif.png 640w">` +
+		`<source type="image/png" srcset="png.png 640w">` +
+		`<img src="fallback.png" alt="photo">` +
+		`</picture>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/png.png"; got != want {
+		t.Fatalf("picture image src %q, want supported source %q", got, want)
+	}
+}
+
+func TestWebPictureSourceSizesUseContainerUnits(t *testing.T) {
+	// The first source must be skipped by media. If source filtering is
+	// bypassed, 100cqw would select large.png and this test would catch it.
+	source := `<div style="container-type:inline-size;width:500px">` +
+		`<picture>` +
+		`<source media="(max-width: 600px)" sizes="100cqw" ` +
+		`srcset="wrong.png 100w, wide.png 800w">` +
+		`<source media="(min-width: 1px)" sizes="50cqw" ` +
+		`srcset="small.png 160w, medium.png 320w, large.png 800w">` +
+		`<img src="fallback.png" alt="photo">` +
+		`</picture></div>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/medium.png"; got != want {
+		t.Fatalf("picture source sizes selected %q, want container-resolved candidate %q", got, want)
+	}
+}
+
 func TestWebPictureFallsBackToImg(t *testing.T) {
 	source := `<picture>` +
 		`<source media="print" srcset="print.png 400w">` +

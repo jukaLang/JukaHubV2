@@ -7,9 +7,10 @@ image the 1 GB device cannot afford.
 
 It is **experimental**. Penguin Dash v0.5.0 has run on a TrimUI Smart Pro:
 its native library loaded, its frames appeared through the firmware's SDL2/EGL
-path at 1280×720, and a gamepad A press advanced the menu. A fresh APK Store
-download and Run also reached the player selection screen on the device.
-Gameplay steering, sound and normal exit still need testing. AndroidRT includes
+path at 1280×720, and a fresh APK Store download and Run reached a race on the
+device. Physical A entered menus, the left stick steered, X jumped, and B
+returned to JukaHub with exit status 0. Sound and other controllers still need
+testing. AndroidRT includes
 the directory contract the Go launcher resolves, its own bionic ELF loader
 with a compatibility layer, a JNI environment for a game's Java calls (with
 class packs per game family, Minecraft first —
@@ -119,14 +120,14 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
 |---|---|
 | Runtime directory contract, launch.sh env, ANDROIDPAK handoff | **Done** (`player/androidpak.go`); its Go tests were retired in the November 2026 suite cut — the smoke suite drives the env contract end to end. |
 | A prebuilt runtime in every release (AND-14) | **Wired, first CI run pending.** The helper job builds and checks it on arm64 (glibc 2.31), the TrimUI archives carry `androidrt/`, the release attaches `JukaHub-AndroidRT-linux-arm64.zip`; *unproven until that job has run green once*. |
-| Lifecycle bridge (`ANativeActivity` struct layout, callback order) | **Done** — covered by the host smoke test (`tests/smoke/run-smoke.sh`, exit 0) and exercised through Penguin Dash's NativeActivity on the Smart Pro. Normal game exit is still unverified. |
+| Lifecycle bridge (`ANativeActivity` struct layout, callback order) | **Done** — covered by the host smoke test (`tests/smoke/run-smoke.sh`, exit 0) and exercised through Penguin Dash's NativeActivity on the Smart Pro. Returning from its native game thread now ends the run; B backed out to JukaHub with exit status 0 on the device. |
 | `liblog.so` | **Done.** Full `__android_log_*` surface to stderr. |
 | `libandroid.so` | **Subset.** Window, looper, assets and `AConfiguration` support; Penguin Dash's native window rendered visible frames on the Smart Pro. Other games may need more Android APIs. |
 | `libOpenSLES.so` | **Audio path done.** `slCreateEngine` → `CreateAudioPlayer` (S16 1/2-ch BufferQueue → OutputMix) → `Enqueue`/`SetPlayState` streams PCM through ALSA `default` (`snd_pcm_*` via `dlopen("libasound.so.2")`); missing libasound degrades to silence at real-time pacing instead of failing. Per-buffer callbacks fire from the worker, `Destroy` from inside a callback is safe, and unknown interfaces answer `SL_RESULT_FEATURE_UNSUPPORTED` with the real UUID table. Proven by the host audio probe; *unproven with real device sound on the A133P*. |
 | Loading bionic-linked game `.so` files | **Own loader** (`src/bionicld.c`, `src/elfdyn.c`): versioned `@LIBC` imports bound through the compat resolver; missing functions become named traps (`ANDROIDPAK_MISSING=trap|zero|strict`), `loader --scan lib.so` lists them. |
 | Java side (JNI) | **Shipped** (`src/jni.h`, `src/jnienv.c`, `src/jnibase.c`): JNI 1.6 tables over a C object model, manifest + DEX class index (`src/apkmeta.c`), `JNI_OnLoad` in dependency order, `RegisterNatives`, once-per-name log of everything unimplemented and an exit report in the order the game asked (JukaHub's failure toast names its first entry). Class packs: Minecraft (`src/jnipack_minecraft.c`). GameActivity bridge: `src/gameactivity.c`. Smoke: `tests/smoke/fake_jnigame.c` (JNI + Minecraft pack), `tests/smoke/fake_gameact.c` (GameActivity glue). |
 | PowerVR EGL present | **Shipped, tested with Penguin Dash on Smart Pro** (`src/eglpresent.c`): gbm/KMS when a DRM card exists; on the stock TrimUI firmware the firmware's `/usr/lib/libEGL.so` with SDL's mali-fbdev `{width, height}` window. **SDL-hosted backend** (`ANDROIDPAK_PRESENT=sdl`, `src/sdlhost.h`): the firmware's `libSDL2-2.0.so.0` (dlopen'ed, `ANDROIDPAK_SDL_LIB` overrides) creates the window, EGL surface and GLES context and the game gets exactly those — `eglMakeCurrent` → `SDL_GL_MakeCurrent`, `eglSwapBuffers` → `SDL_GL_SwapWindow`; `auto` falls back to it when the game's `eglInitialize` of the default display fails (retried once after SDL's video driver ran) or the native window surface is refused — a context the game made before that window stays raw EGL, and the log names `ANDROIDPAK_PRESENT=sdl`. Smoke: `tests/smoke/fake_sdl.c` (a fake firmware SDL2 that drives the mock EGL like SDL's mali driver). Penguin Dash reached its main loop and presented frames at 1280×720 with this backend. |
-| Input (`AInputQueue` from the TSP's controller) | **Shim shipped, menu input tested on Smart Pro.** `src/inputshim.c` implements the NDK queue semantics (getEvent/hasEvents/preDispatch/finish, axis coalescing, held-slot immutability, `LOOPER_ID_INPUT` wakeups through `ALooper_pollAll`), and `src/evdev.c` reads `/dev/input/event*` on the device (`-DJUKAHUB_EVDEV`, off via `ANDROIDPAK_INPUT=off`). The device reader opened the Smart Pro's `TRIMUI Player1` input node; a virtual gamepad A press travelled through the same reader and advanced Penguin Dash's menu. Gameplay steering with the physical controls remains untested. |
+| Input (`AInputQueue` from the TSP's controller) | **Shim shipped, Penguin Dash gameplay tested on Smart Pro.** `src/inputshim.c` implements the NDK queue semantics (getEvent/hasEvents/preDispatch/finish, axis coalescing, held-slot immutability, `LOOPER_ID_INPUT` wakeups through `ALooper_pollAll`), and `src/evdev.c` reads `/dev/input/event*` on the device (`-DJUKAHUB_EVDEV`, off via `ANDROIDPAK_INPUT=off`). Its `TRIMUI Player1` node reports printed A as BTN_EAST and B as BTN_SOUTH; the reader corrects them while leaving external pads standard. Calibrated analog sticks, trigger values and D-pad hats feed native gamepad events, or keyboard events for games that need them. Physical A, B, left stick and X were tested in Penguin Dash's menus and race. |
 
 ## Milestone order
 
@@ -164,10 +165,21 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
    `default` ALSA device naming on stock firmware, latency tuning
    (`ALSA_LATENCY_US` in [src/openslessim.c](src/openslessim.c)), and
    end-to-end sound from a real bionic game.
-5. **Input** — **menu path tested on hardware.** The evdev reader opened the
-   Smart Pro's `TRIMUI Player1` node, and a virtual gamepad A press advanced
-   Penguin Dash's menu through the same input path. Physical controls during
-   gameplay and Bluetooth controllers still need testing.
+5. **Input** — **Penguin Dash gameplay tested on hardware.** The evdev reader
+   opened the Smart Pro's `TRIMUI Player1` node; physical A, B, left stick and X
+   worked through its menus, race and clean exit. Other native games and
+   Bluetooth controllers still need individual tests.
+
+The APK Store offers **Controls** for each game it installed. **Automatic**
+uses the Penguin Dash preset for that package and native Android gamepad input
+for others. **Gamepad** forces native buttons and axes. **Keyboard** turns the
+D-pad and left stick into arrows, A into Enter, B into Back and X into Space.
+The same choice can be set in a game profile with `ANDROIDPAK_GAMEPAD_MAP`:
+`native`, `keyboard` or `penguin-dash`. Penguin Dash's preset also maps Y to
+tricks, Start to pause, shoulder buttons to turns and triggers to paddle/brake.
+`ANDROIDPAK_EXIT_ON_MAIN_THREAD=1` enables its clean-exit behavior for another
+NativeActivity game that returns from its primary game thread without calling
+`ANativeActivity_finish`.
 
 ## Related
 

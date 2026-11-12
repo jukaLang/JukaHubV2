@@ -106,6 +106,8 @@ typedef struct ActivityRunner {
     const char *internalDataPath; /* persistent: <ANDROIDPAK_DATA>/files  */
     const char *externalDataPath; /* persistent: <ANDROIDPAK_DATA>/external */
     const char *obbPath;          /* <ANDROIDPAK_DATA>/obb                */
+    int finishOnPrimaryThreadExit; /* NDK glue thread returning means quit */
+    int primaryThreadExited;       /* set before waking the framework loop */
 } ActivityRunner;
 
 /* ── jnienv.c: the JavaVM / JNIEnv / activity object handed to games
@@ -134,6 +136,11 @@ const char *android_inputDeviceName(int32_t deviceId);
  * games, which drive their own loop through ALooper_pollAll). */
 void runOneActivity(ActivityRunner *runner, void *onCreate, void *onFrame);
 void runner_requestExit(ActivityRunner *runner, int code);
+/* bionicpthread.c: watch the first bionic thread created during onCreate.
+ * Some native games return from android_main without calling finish(). */
+void apak_bionicCapturePrimaryThread(ActivityRunner *runner);
+void apak_bionicEndPrimaryCapture(void);
+void apak_bionicStopWatchingPrimaryThread(void);
 /* gameactivity.c: drive an androidx GameActivity game (Minecraft since
  * 1.21.80 and other AGDK titles) through the Java side of GameActivity —
  * initializeNativeCode / onStartNative / onSurfaceCreatedNative ... — the
@@ -171,6 +178,7 @@ void android_inputInjectAxis(int32_t deviceId, int32_t source, int32_t axis, flo
 enum {
     AINPUT_EVENT_TYPE_KEY    = 1,
     AINPUT_EVENT_TYPE_MOTION = 2,
+    AINPUT_SOURCE_KEYBOARD = 0x00000101,
     AINPUT_SOURCE_GAMEPAD  = 0x00000401,
     AINPUT_SOURCE_JOYSTICK = 0x01000101,
     AKEY_EVENT_ACTION_DOWN = 0,

@@ -189,11 +189,55 @@ func TestWebSupportsConditions(t *testing.T) {
 		{"@supports (background: made-up)", false},
 		{"@supports (font: made-up)", false},
 		{"@supports (flex: made-up)", false},
+		{"@supports (display: inherit)", true},
+		{"@supports (display: initial)", true},
+		{"@supports (display: unset)", true},
+		{"@supports (display: revert)", true},
+		{"@supports (display: revert-layer)", true},
+		{"@supports (all: inherit)", true},
+		{"@supports (all: initial)", true},
+		{"@supports (all: revert-layer)", true},
+		{"@supports (all: none)", false},
+		{"@supports (unknown-property: initial)", false},
+		{"@supports (-webkit-border-radius: 4px)", true},
+		{"@supports (-moz-border-radius: 4px)", true},
+		{"@supports (-webkit-border-radius: inherit)", true},
+		{"@supports (-webkit-border-radius: made-up)", false},
+		{"@supports (-webkit-color: not-a-colour)", false},
+		{"@supports (-webkit-unknown-property: 1)", false},
+		{"@supports (-webkit-unknown-property: initial)", false},
+		{"@supports (display: -webkit-flex)", true},
+		{"@supports (display: -webkit-inline-flex)", true},
+		{"@supports (display: -webkit-box)", true},
+		{"@supports (display: -webkit-inline-box)", true},
+		{"@supports (display: -webkit-grid)", false},
+		{"@supports (display: -webkit-made-up)", false},
+		{"@supports (display: -moz-flex)", false},
+		{"@supports (display: -ms-flexbox)", false},
+		{"@supports (position: -webkit-sticky)", true},
+		{"@supports (position: -webkit-absolute)", false},
+		{"@supports (background-image: -webkit-linear-gradient(red, blue))", true},
+		{"@supports (background-image: -webkit-repeating-linear-gradient(red, blue))", true},
+		{"@supports (background-image: -webkit-radial-gradient(red, blue))", true},
+		{"@supports (background-image: -webkit-repeating-radial-gradient(red, blue))", true},
+		{"@supports (background: -webkit-linear-gradient(red, blue))", true},
+		{"@supports (background-image: -moz-linear-gradient(red, blue))", false},
+		{"@supports (background-image: -webkit-conic-gradient(red, blue))", false},
+		{"@supports (background-image: -webkit-linear-gradient(nope))", false},
+		{"@supports (background-image: -webkit-image-set(url(a.png) 1x))", false},
+		{"@supports (background-image: radial-gradient(red, blue))", true},
+		{"@supports (background-image: conic-gradient(red, blue))", true},
+		{"@supports (-webkit-background-clip: text)", true},
+		{"@supports (background-clip: text)", true},
+		{"@supports (-webkit-background-clip: made-up)", false},
+		{"@supports (-webkit-background-clip: inherit)", true},
 	}
 	for _, tc := range cases {
-		if got := webSupportsApplies(tc.query); got != tc.want {
-			t.Errorf("webSupportsApplies(%q) = %v, want %v", tc.query, got, tc.want)
-		}
+		t.Run(tc.query, func(t *testing.T) {
+			if got := webSupportsApplies(tc.query); got != tc.want {
+				t.Errorf("webSupportsApplies(%q) = %v, want %v", tc.query, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -217,6 +261,49 @@ func TestWebCSSSupportsChoosesSupportedFallback(t *testing.T) {
 		}
 	}
 	t.Fatal("the styled notice was not drawn")
+}
+
+func TestWebCSSSupportsKeepsVendorPrefixedBlock(t *testing.T) {
+	source := `<style>` +
+		`.notice{color:#111111}` +
+		`@supports (-webkit-border-radius: 4px){.notice{color:#cc0000}}` +
+		`@supports (-webkit-border-radius: made-up){.notice{color:#0000cc}}` +
+		`@supports (display: -webkit-flex){.notice{color:#cc0000}}` +
+		`@supports (display: -webkit-grid){.notice{color:#0000cc}}` +
+		`</style><p class="notice">Visible notice</p>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	for _, block := range doc.Blocks {
+		for _, run := range block.Runs {
+			if !strings.Contains(run.Text, "Visible notice") {
+				continue
+			}
+			if !run.Style.HasColor || run.Style.Color.R != 0xcc || run.Style.Color.G != 0 || run.Style.Color.B != 0 {
+				t.Fatalf("vendor-prefixed @supports block did not win: %+v", run.Style.Color)
+			}
+			return
+		}
+	}
+	t.Fatal("the styled notice was not drawn")
+}
+
+func TestWebPrefixedDisplayAndPositionValuesApply(t *testing.T) {
+	for value, want := range map[string]int{
+		"-webkit-flex":        webDisplayFlex,
+		"-webkit-inline-flex": webDisplayFlex,
+		"-webkit-box":         webDisplayFlex,
+		"-webkit-inline-box":  webDisplayFlex,
+	} {
+		style := webBaseStyle()
+		applyWebDecls(&style, map[string]string{"display": value})
+		if style.Display != want {
+			t.Errorf("display:%s produced %d, want %d", value, style.Display, want)
+		}
+	}
+	style := webBaseStyle()
+	applyWebDecls(&style, map[string]string{"position": "-webkit-sticky"})
+	if style.Position != webPositionAbsolute {
+		t.Errorf("position:-webkit-sticky produced %d, want absolute-compatible %d", style.Position, webPositionAbsolute)
+	}
 }
 
 func TestWebCSSBudgetKeepsCompleteNestedRules(t *testing.T) {
@@ -402,6 +489,101 @@ func TestWebContainerQueryRules(t *testing.T) {
 			if !found {
 				t.Fatal("the card text was not drawn")
 			}
+		})
+	}
+}
+
+func TestWebContainerStyleQueries(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		html  string
+		red   bool
+	}{
+		{
+			name:  "inherited custom property hit",
+			query: `@container style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:dark"><p class="card">Card</p></div>`,
+			red:   true,
+		},
+		{
+			name:  "inherited through intermediate element",
+			query: `@container style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:dark"><section><p class="card">Card</p></section></div>`,
+			red:   true,
+		},
+		{
+			name:  "value miss",
+			query: `@container style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:light"><p class="card">Card</p></div>`,
+		},
+		{
+			name:  "nearest redeclaration wins",
+			query: `@container style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:dark"><div style="--theme:light"><p class="card">Card</p></div></div>`,
+		},
+		{
+			name:  "boolean property hit",
+			query: `@container style(--compact){.card{color:#cc0000}}`,
+			html:  `<div style="--compact:1"><p class="card">Card</p></div>`,
+			red:   true,
+		},
+		{
+			name:  "boolean property miss",
+			query: `@container style(--compact){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:dark"><p class="card">Card</p></div>`,
+		},
+		{
+			name:  "named style container hit",
+			query: `@container sidebar style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="container-name:sidebar;--theme:dark"><p class="card">Card</p></div>`,
+			red:   true,
+		},
+		{
+			name:  "named style container miss",
+			query: `@container sidebar style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="container-name:other;--theme:dark"><p class="card">Card</p></div>`,
+		},
+		{
+			name:  "not style hit",
+			query: `@container not style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:light"><p class="card">Card</p></div>`,
+			red:   true,
+		},
+		{
+			name:  "combined style and size hit",
+			query: `@container style(--theme: dark) and (min-width:500px){.card{color:#cc0000}}`,
+			html:  `<div style="container-type:inline-size;width:600px;--theme:dark"><p class="card">Card</p></div>`,
+			red:   true,
+		},
+		{
+			name:  "combined style and size miss",
+			query: `@container style(--theme: dark) and (min-width:500px){.card{color:#cc0000}}`,
+			html:  `<div style="container-type:inline-size;width:320px;--theme:dark"><p class="card">Card</p></div>`,
+		},
+		{
+			name:  "custom property value is case sensitive",
+			query: `@container style(--theme: dark){.card{color:#cc0000}}`,
+			html:  `<div style="--theme:Dark"><p class="card">Card</p></div>`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := `<style>.card{color:#111111}` + tc.query + `</style>` + tc.html
+			doc := parseWebPage(source, "", "https://example.com/")
+			for _, block := range doc.Blocks {
+				for _, run := range block.Runs {
+					if !strings.Contains(run.Text, "Card") {
+						continue
+					}
+					gotRed := run.Style.HasColor && run.Style.Color.R == 0xcc && run.Style.Color.G == 0 && run.Style.Color.B == 0
+					if gotRed != tc.red {
+						t.Fatalf("card color = %v, want red=%v (%+v)", run.Style.Color, tc.red, run.Style)
+					}
+					return
+				}
+			}
+			t.Fatal("the card text was not drawn")
 		})
 	}
 }

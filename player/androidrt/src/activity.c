@@ -163,7 +163,13 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
 
     apak_jniEvent(APAK_JNI_EV_BEFORE_ONCREATE);
     trace("onCreate");
+#if defined(__linux__)
+    if (runner->finishOnPrimaryThreadExit) apak_bionicCapturePrimaryThread(runner);
+#endif
     onCreate(&activity, NULL, 0);
+#if defined(__linux__)
+    if (runner->finishOnPrimaryThreadExit) apak_bionicEndPrimaryCapture();
+#endif
     apak_jniExceptionReport(activity.env, "onCreate");
     apak_jniEvent(APAK_JNI_EV_AFTER_ONCREATE);
 
@@ -228,6 +234,17 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
                 break;
         }
         if (onFrame) onFrame(&activity);
+    }
+
+#if defined(__linux__)
+    if (runner->finishOnPrimaryThreadExit) apak_bionicStopWatchingPrimaryThread();
+#endif
+    if (__atomic_load_n(&runner->primaryThreadExited, __ATOMIC_ACQUIRE)) {
+        /* The game's android_main has returned. NDK glue lifecycle callbacks
+         * post commands to that thread and wait for it, so calling them now
+         * would hang forever. The runner exits and the OS reclaims resources. */
+        fprintf(stderr, "[androidrt] lifecycle: game thread ended; returning to launcher\n");
+        return;
     }
 
     if (focused) {
