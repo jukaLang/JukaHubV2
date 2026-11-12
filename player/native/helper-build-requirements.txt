@@ -21,4 +21,4 @@ cmake==3.31.6
 # with security fixes and also ships a pure-Python wheel.
 grpcio-tools==1.62.3
 grpcio==1.62.3
-protobuf==4.25.8
+protobuf==5.29.6
