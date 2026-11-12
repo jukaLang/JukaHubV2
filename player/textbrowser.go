@@ -1587,7 +1587,10 @@ func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address stri
 	if err != nil {
 		return fail(brwFailOther, "That address can't be opened.")
 	}
-	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return fail(brwFailOther, "That address can't be opened.")
+	}
+	browserChromeNavigate(req.Header)
 	resp, err := client.Do(req)
 	if err != nil {
 		// Nothing below shows the transport error itself: a resolver failure
@@ -1741,7 +1744,7 @@ func browserReaderText(title, address string, linkCount int, pageText string, bl
 	if filterOff {
 		text.WriteString("Ad filtering is off for this site\n")
 	} else if blocked > 0 {
-		fmt.Fprintf(&text, "Blocked: %d ad/tracker request(s)\n", blocked)
+		fmt.Fprintf(&text, "Blocked: %s\n", pluralizeCount(blocked, "ad/tracker request", "ad/tracker requests"))
 	}
 	if truncated {
 		text.WriteString(strings.TrimSpace(textBrowserTruncationNote()))

@@ -269,6 +269,9 @@ func chatSyncDiscord(now time.Time) {
 		chatSetNet(chatNetOffline)
 		return
 	}
+	// Back from a sleep or an offline spell: a gateway that is not known to be
+	// alive is reopened now, not after discordgo's back-off (wake_resume.go).
+	chatGatewayKickIfWanted(now)
 	if !chatDiscordReady() {
 		if now.Before(chatDiscordRetryAt) {
 			return
@@ -512,7 +515,10 @@ func chatSyncAI(now time.Time) {
 		})
 		return
 	}
-	if !IsOnline() || !chatAIRetryDue(now) {
+	// Just after a wake the question waits for the Wi-Fi rather than going out
+	// on a radio that is still off; the probe that finds the internet wakes
+	// this loop (chatNetworkBack, wake_resume.go).
+	if !IsOnline() || netReconnecting() || !chatAIRetryDue(now) {
 		return
 	}
 	chatAIBusy.Store(true)
@@ -561,10 +567,17 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 	}
 	groqStatus = "Groq: thinking..."
 	chatStreamBegin(prompt.ID)
-	messages := buildGroqMessagesFrom(history, question)
-	reply, err := chatGroqAsk(key, models, messages, func(partial string) {
-		chatStreamUpdate(prompt.ID, partial)
-	})
+	var reply string
+	var err error
+	if media, earlier := visionChatMedia(prompt, history); len(media) > 0 {
+		// Pictures, videos and recordings are seen and heard (vision_chat.go).
+		reply, err = visionChatAsk(key, models, prompt.ID, history, question, media, earlier)
+	} else {
+		messages := buildGroqMessagesFrom(history, question)
+		reply, err = chatGroqAsk(key, models, messages, func(partial string) {
+			chatStreamUpdate(prompt.ID, partial)
+		})
+	}
 	chatStreamEnd()
 	now := time.Now()
 	if err != nil {
@@ -607,11 +620,16 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 	chatMutex.Unlock()
 	chatDirty.Store(true)
 	noteScreensaverChat(chatAISender, reply)
+	ttsSpeakChatReply(reply) // read out when Settings says so (tts_api.go)
 	chatWakeSync()
 }
 
 // chatFriendlyAIError turns a Groq failure into one sentence for the bubble.
 func chatFriendlyAIError(err error) string {
+	// A picture or a video Juka could not take in says why (groqvision.go).
+	if msg := visionFriendlyError(err); msg != "" {
+		return msg
+	}
 	var apiErr *groqError
 	if errors.As(err, &apiErr) {
 		switch {

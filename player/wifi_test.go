@@ -323,3 +323,32 @@ func TestWiFiForgetRemovesSavedNetwork(t *testing.T) {
 		t.Fatal("forgetting an unsaved network succeeded")
 	}
 }
+
+// After a wake DHCP is asked again only for a link without a default route,
+// and only a udhcpc serving the Wi-Fi interface is signalled (wifi_resume.go).
+func TestWiFiResumeParsers(t *testing.T) {
+	const header = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+	const subnet = "wlan0\t0001A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+	const deflt = "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+	if !procRouteHasDefault(header+deflt+subnet, "wlan0") {
+		t.Fatal("the default route through wlan0 was missed")
+	}
+	if procRouteHasDefault(header+subnet, "wlan0") || procRouteHasDefault(header+deflt, "eth0") {
+		t.Fatal("a subnet route, or another interface's route, counted as wlan0's default")
+	}
+	for _, c := range []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"udhcpc", "-b", "-i", "wlan0", "-t", "5"}, true},
+		{[]string{"/sbin/udhcpc", "-iwlan0"}, true},
+		{[]string{"busybox", "udhcpc", "--interface=wlan0"}, true},
+		{[]string{"udhcpc", "-i", "eth0"}, false},
+		{[]string{"busybox", "ash", "-i", "wlan0"}, false},
+		{[]string{"wpa_supplicant", "-i", "wlan0"}, false},
+	} {
+		if got := udhcpcServes(c.argv, "wlan0"); got != c.want {
+			t.Errorf("udhcpcServes(%q) = %v, want %v", c.argv, got, c.want)
+		}
+	}
+}

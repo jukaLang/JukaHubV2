@@ -24,6 +24,12 @@ const (
 	HomeFooterHSmall int32 = 42
 )
 
+// designTrackAlpha is how strongly a progress track sits over its surface: a
+// hairline-strength surface, not a fill. ApplyThemeColors re-inks the track
+// from the preset's text colour at this alpha, so a light theme gets a dark
+// track instead of white on white.
+const designTrackAlpha uint8 = 34
+
 var (
 	// Spacing scale (4pt base grid). Every explicit gap in the UI should
 	// resolve to one of these values so the layout reads as a single system.
@@ -171,7 +177,7 @@ var (
 	ColorToastSuccess = sdl.Color{R: 52, G: 211, B: 153, A: 255}
 
 	// Progress / track tokens
-	ColorTrack           = sdl.Color{R: 255, G: 255, B: 255, A: 34}
+	ColorTrack           = sdl.Color{R: 255, G: 255, B: 255, A: designTrackAlpha}
 	ColorProgress        = sdl.Color{R: 85, G: 216, B: 255, A: 255}
 	ColorProgressIntense = sdl.Color{R: 60, G: 190, B: 255, A: 255}
 
@@ -344,6 +350,14 @@ func hexRGBA(hex string) sdl.Color {
 	}
 }
 
+// trackSwatch is the track token as an opaque patch, for the legend key beside
+// a bar drawn in the translucent ColorTrack.
+func trackSwatch() sdl.Color {
+	c := ColorTrack
+	c.A = 255
+	return c
+}
+
 // ApplyThemeColors retints the core design tokens from a theme preset so the
 // entire UI (backgrounds, surfaces, text, borders, accents) reflects the
 // chosen theme.
@@ -393,6 +407,13 @@ func ApplyThemeColors(p ThemePreset) {
 	ColorChipHover = hexRGBA(p.SurfaceRaised)
 	ColorChipFocus = hexRGBA(p.SurfaceRaised)
 	ColorDivider = hexRGBA(p.BorderSubtle)
+	// The track is a surface, not art: take its ink from the preset's text
+	// colour. The token used to stay white 34/255 for every theme, so on the
+	// shipped Light preset every progress track (downloads, installs, seeks,
+	// the activity rail) was white on a #f0f2f5 page and vanished.
+	track := hexRGBA(p.TextPrimary)
+	track.A = designTrackAlpha
+	ColorTrack = track
 	// Re-derive the inks against this preset: a status colour that reads well
 	// as a fill may not read as a label on this background, and the gallery
 	// ships 25 different ones.

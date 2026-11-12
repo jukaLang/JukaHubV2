@@ -143,6 +143,10 @@ func OpCheckUpdates(ctx context.Context, config *Config) error {
 		savePatchState()
 		return fmt.Errorf("checking JukaHub releases: %w", err)
 	}
+	if err := fillMissingReleaseNotes(ctx, rel); err != nil {
+		logPatch("patch: release notes unavailable for %s: %v", rel.TagName, err)
+	}
+	storeReleaseNotes(rel)
 	patchStateMu.Lock()
 	patchState.LastCheckAt = time.Now().UTC().Format(time.RFC3339)
 	patchState.LastCheckError = ""

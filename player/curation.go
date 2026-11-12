@@ -435,7 +435,7 @@ func applyCurationStep(config *Config, step curationStep) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%d folder(s) prepared", len(manifest.Folders)), nil
+		return pluralizeCount(len(manifest.Folders), "folder", "folders") + " prepared", nil
 	case curationStepSaveSnapshot:
 		if _, ok := latestSaveSnapshot(); ok {
 			return "snapshot already exists", nil

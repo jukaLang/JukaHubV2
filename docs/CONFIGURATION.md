@@ -74,7 +74,7 @@ settings such as `search_query` or `stream_url`.
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
-| `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `off`): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. Anything else reads as off. Reduce Motion keeps only the ripples you make; Low Power uses a coarser grid; the handheld steps down by itself if the water costs more than 5 ms a frame |
+| `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `off`): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. Anything else reads as off. Reduce Motion keeps only the ripples you make. The water is drawn between its steps on a mesh twice as fine as its grid, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld falls back to the coarse mesh by itself if the water costs more than 5 ms a frame |
 | `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
@@ -148,6 +148,38 @@ voice orb, and hold-to-talk with it ([Voice](VOICE.md#the-voice-orb)). Off,
 Menu goes back like B, as it did before. On a keyboard F4 opens the orb either
 way.
 
+`jukaVoice` (Settings → Voice & AI → **Juka's voice**): `"voice"` (the
+default) speaks the voice assistant's answers — the orb, the Voice command
+page, the game assistant — `"all"` Chat's Juka AI replies as well, and `"off"`
+none; `false` reads as off. `jukaVoiceName` (**Voice**): `"hannah"` (the
+default), `"autumn"`, `"diana"`, `"austin"`, `"daniel"` or `"troy"` — Groq's
+Orpheus voices — or `"device"` for the device's own voice where it has one
+(Windows' speech on a PC; espeak-ng, espeak, flite, pico2wave or piper on
+Linux); anything else is the default. Groq's voice uses the same Groq key as
+Chat ([Voice](VOICE.md#jukas-voice)).
+
+`voiceShortcuts` (Settings → Voice & AI → **Voice shortcuts**; none by
+default) is the list of words taught to the voice assistant, at most 50. Each
+entry has `phrase` (what you say, up to 40 letters) and `kind` — `screen`,
+`setting`, `app`, `game`, `file`, `media`, `command` or `web` — with, by kind,
+`title` and `where` (the row's title and subtitle), `path` and `system` (games
+and files), `command` (a voice command line) or `url` (http or https). An
+entry that cannot be used is skipped, and a second entry with the same phrase
+is dropped ([Voice](VOICE.md#your-own-words)).
+
+`gameAssist` (Settings → Voice & AI → **Game assistant**, off by default) tells
+Juka which library game is being played, or was in the last 30 minutes, and on
+a TrimUI makes **Select + R2** in a game pause it and open the voice orb over
+it. `gameAssistScreen` (**Juka can see the game screen**, off by default; a
+TrimUI with `gameAssist` on) sends the paused game's picture, read from
+`/dev/fb0`, with the question to Groq's vision model
+([Voice](VOICE.md#asking-about-the-game-youre-playing)).
+
+`vkVoiceAuto` (Settings → Voice & AI → **Start voice typing when the keyboard
+opens**, off by default) starts voice typing as a Chat message's keyboard
+opens; password, key, address and search fields never listen
+([Voice](VOICE.md#voice-typing)).
+
 `autoStart` (Settings → General → **Start JukaHub at login**) writes exactly
 one launcher and removes exactly that file again. It is off by default on a
 desktop. On a TrimUI the first start switches it on once when nobody has set it
@@ -168,11 +200,15 @@ stock launcher (MainUI) has been up for two seconds and has stopped writing
 (eight seconds at most), closes it, so the
 firmware's launcher loop runs `launch.sh` with its own environment and brings
 MainUI back when JukaHub exits (a loop that reads the queue first starts
-JukaHub before MainUI ever shows). It starts JukaHub at most once per boot,
+JukaHub before MainUI ever shows; when the menu did show, the queued command
+puts black on the screen first and the boot fades in from it, instead of the
+menu's last picture staying frozen). It starts JukaHub at most once per boot,
 steps aside when JukaHub is already running, when another app (a CrossMix
 resume, an app picked in the first seconds) is queued, or when MainUI does not
 appear within two minutes, and only falls back to running `launch.sh` itself
-(with the launcher loop paused) when the loop ignores the queue. A start that
+(with the launcher loop paused by process id and recorded in
+`/tmp/jukahub-paused`, which `launch.sh` resumes when JukaHub exits) when the
+loop ignores the queue. A start that
 hangs leaves `Apps/JukaHub/.autostart-pending` behind (it goes when JukaHub
 exits or has been up for 15 s), and the next boot then stays on the stock menu
 once. Each boot is logged to
@@ -652,7 +688,7 @@ Anonymous diagnostics are controlled by `variables.Custom.telemetryOptIn` in
 | Field | Example |
 |-------|---------|
 | `kind` | `device` on launch, `crash` on a panic |
-| `version`, `release` | `v0.4.0`, `JukaHub-20261017…` |
+| `version`, `release` | `v1.2.3`, `JukaHub-20261017…` |
 | `device`, `platform` | `TrimUI Smart Pro`, `Trimui` |
 | `os`, `arch` | `linux`, `arm64` |
 | `crash` | `panic` (crash events only) |

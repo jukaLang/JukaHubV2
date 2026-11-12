@@ -140,6 +140,10 @@ func companionStart() {
 	}
 	companion.pin = pin
 	srv := newCompanionServer(pin, ftpRootDir(), enqueueCompanion)
+	srv.reportEndpoint = bugrepEndpointURL()
+	if appConfig != nil {
+		srv.reportVersion = versionString(appConfig)
+	}
 	if err := srv.Start(); err != nil {
 		companion.err = err.Error()
 		return

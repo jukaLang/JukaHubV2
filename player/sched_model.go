@@ -596,7 +596,20 @@ func schedParseCrontab(text, source, group, defaultUser string, withUser bool, n
 			it.Icon = "power"
 		default:
 			it.Status = "Enabled"
-			if next, ok := schedCronNext(spec, now); ok {
+			// The run decision is jump-aware (clockjump.go): a forward jump
+			// collapses the runs it passed into one, and a backward jump cannot
+			// re-arm one already handled. This screen does not run the task —
+			// the OS does — but it is the one caller that computes its runs, and
+			// it must not show a handled run as still ahead.
+			nextFn := func(t time.Time) (time.Time, bool) { return schedCronNext(spec, t) }
+			key := source + "\x00" + command
+			handled := schedHandledRun(key, now)
+			if run, advance, due := schedJumpAwareRun(handled, now, nextFn); due {
+				schedRememberHandledRun(key, advance)
+				handled = advance
+				logDebug("sched", "%s: the clock moved past %s; its missed runs count as one", it.Name, run.Format(time.RFC3339))
+			}
+			if next, ok := nextFn(handled); ok {
 				it.nextAt = next
 				it.Next = schedFormatWhen(next, now)
 			}

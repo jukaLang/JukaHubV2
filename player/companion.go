@@ -249,14 +249,20 @@ type companionServer struct {
 	pin  string
 	root string
 	sink func(companionEvent)
+	// Captured on the main thread before the listener starts. HTTP handlers
+	// never read the live config map while it is being edited on screen.
+	reportEndpoint string
+	reportVersion  string
+	bugMu          sync.Mutex
 
-	mu              sync.Mutex
-	ln              net.Listener
-	srv             *http.Server
-	port            int
-	fails           int
-	failSince       time.Time
-	lockouts        int
+	mu   sync.Mutex
+	ln   net.Listener
+	srv  *http.Server
+	port int
+	// throttles is the PIN failure budget and lockout escalation per remote
+	// address (SEC-28): a paired phone polling on one address must not keep
+	// clearing a guesser's count on another.
+	throttles       map[string]*companionThrottle
 	diagnosticToken string
 	diagnosticUntil time.Time
 	diagnosticText  string
@@ -364,40 +370,81 @@ func (s *companionServer) authorized(r *http.Request) bool {
 // hour). A fixed 30 s window let a script on the network try 2,400 PINs an
 // hour — a few percent of the whole six-digit space every day, for a PIN that
 // unlocks the keyboard and with it the Terminal.
-func (s *companionServer) throttled() bool {
+func (s *companionServer) throttled(addr string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.fails < companionFailLimit {
+	t := s.throttleLocked(addr, now)
+	if t.fails < companionFailLimit {
 		return false
 	}
-	window := companionFailWindow << min(s.lockouts, 7)
-	if time.Since(s.failSince) > window {
-		s.fails = 0
-		s.lockouts++
+	window := companionFailWindow << min(t.lockouts, 7)
+	if now.Sub(t.since) > window {
+		t.fails = 0
+		t.lockouts++
 		return false
 	}
 	return true
 }
 
-func (s *companionServer) noteFailure() {
+func (s *companionServer) noteFailure(addr string, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.fails == 0 {
-		s.failSince = time.Now()
+	t := s.throttleLocked(addr, now)
+	if t.fails == 0 {
+		t.since = now
 	}
-	s.fails++
+	t.fails++
 }
 
-// noteSuccess clears the lockout escalation once the right PIN arrives, so a
-// phone that mistyped a few times is not slowed down for the session.
-func (s *companionServer) noteSuccess() {
+// noteSuccess clears the lockout escalation for addr only once the right PIN
+// arrives, so a phone that mistyped a few times is not slowed down for the
+// session — while a guesser on another address keeps its own budget.
+func (s *companionServer) noteSuccess(addr string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.fails == 0 && s.lockouts == 0 {
+	t := s.throttles[addr]
+	if t == nil || (t.fails == 0 && t.lockouts == 0) {
 		return
 	}
-	s.fails = 0
-	s.lockouts = 0
+	t.fails = 0
+	t.lockouts = 0
+	t.since = time.Time{}
+}
+
+// companionTrackedAddrs caps the per-address budgets: a network of pinned
+// devices must not grow the map without bound. The least recently seen address
+// is dropped for a new one.
+const companionTrackedAddrs = 64
+
+type companionThrottle struct {
+	fails    int
+	since    time.Time
+	lockouts int
+	last     time.Time
+}
+
+// throttleLocked returns addr's budget, creating it (and pruning the oldest
+// entry at the cap) as needed. The caller holds s.mu.
+func (s *companionServer) throttleLocked(addr string, now time.Time) *companionThrottle {
+	if s.throttles == nil {
+		s.throttles = make(map[string]*companionThrottle)
+	}
+	t := s.throttles[addr]
+	if t == nil {
+		if len(s.throttles) >= companionTrackedAddrs {
+			oldest, at := "", time.Time{}
+			for k, v := range s.throttles {
+				if oldest == "" || v.last.Before(at) {
+					oldest, at = k, v.last
+				}
+			}
+			delete(s.throttles, oldest)
+		}
+		t = &companionThrottle{}
+		s.throttles[addr] = t
+	}
+	t.last = now
+	return t
 }
 
 func (s *companionServer) handler() http.Handler {
@@ -409,6 +456,7 @@ func (s *companionServer) handler() http.Handler {
 	mux.HandleFunc("/api/open", s.guard(s.handleOpenURL))
 	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
 	mux.HandleFunc("/api/screen", s.guard(s.handleScreen))
+	mux.HandleFunc("/api/bug-report", s.guard(s.handleBugReport))
 	// Screen Share (companion_cast.go): the viewer page, its MJPEG feed, single
 	// frames for browsers without MJPEG, and the state the page shows. They
 	// take the view-only share token or this PIN; the feed and the frames
@@ -482,16 +530,18 @@ func (s *companionServer) handleDiagnostics(w http.ResponseWriter, r *http.Reque
 
 func (s *companionServer) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.throttled() {
+		addr := castHost(r.RemoteAddr)
+		now := time.Now()
+		if s.throttled(addr, now) {
 			http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 			return
 		}
 		if !s.authorized(r) {
-			s.noteFailure()
+			s.noteFailure(addr, now)
 			http.Error(w, "bad PIN", http.StatusUnauthorized)
 			return
 		}
-		s.noteSuccess()
+		s.noteSuccess(addr)
 		next(w, r)
 	}
 }
@@ -504,12 +554,14 @@ func (s *companionServer) handlePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	if s.throttled() {
+	addr := castHost(r.RemoteAddr)
+	now := time.Now()
+	if s.throttled(addr, now) {
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
 	}
 	if !s.authorized(r) {
-		s.noteFailure()
+		s.noteFailure(addr, now)
 		w.WriteHeader(http.StatusUnauthorized)
 		io.WriteString(w, companionLockedPage)
 		return
@@ -702,8 +754,9 @@ body.noshot .shot,body.noshot .shotonly{display:none}
 h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
 /* A shorthand cannot take "inherit" for the family, so the fonts are named;
    16 px in the fields keeps iOS from zooming in on focus. */
-textarea,input[type=url],input[type=password],input[type=text]{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:16px/1.4 system-ui,-apple-system,sans-serif;resize:vertical}
+textarea,input[type=url],input[type=password],input[type=text],select{width:100%;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:16px/1.4 system-ui,-apple-system,sans-serif;resize:vertical}
 textarea{min-height:88px}
+a{color:#a8b5ff}
 button{font:600 15px system-ui,-apple-system,sans-serif;color:#fff;background:var(--accent);border:0;border-radius:10px;padding:12px 16px;min-height:44px}
 button.ghost{background:#1d2330;color:var(--ink);border:1px solid var(--line)}
 button:active{transform:translateY(1px)}
@@ -761,6 +814,21 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <h2>Voice</h2>
   <div class=row><button id=voicePage>Say what to open</button></div>
   <small>Your keyboard's microphone sends commands like "open YouTube" or "volume 50".</small>
+</div>
+
+<div class=card id=bugCard>
+  <h2>Report a bug</h2>
+  <p class=note>Describe the problem here. The handheld sends it to the JukaHub report service, which files a public GitHub issue. Your device model and a reference are included; logs are not.</p>
+  <select id=bugCategory aria-label="Problem category">
+    <option value=other>Other problem</option><option value=crash>Crash</option><option value=ui>UI</option>
+    <option value=controls>Controls</option><option value=media>Media</option><option value=network>Network</option>
+  </select>
+  <input type=text id=bugTitle placeholder="Short title" maxlength=120 autocomplete=off>
+  <textarea id=bugDescription placeholder="What happened? What did you expect?" maxlength=4000></textarea>
+  <div class=row><button id=submitBug>Submit report</button></div>
+  <div class=msg id=bugMsg aria-live=polite></div>
+  <div class=row><a id=bugLink target=_blank rel="noopener noreferrer" hidden></a></div>
+  <div class=split id=bugQueued hidden><p class=note>Saved reports on the handheld</p><div id=bugQueuedList></div></div>
 </div>
 
 <div class=card>
@@ -872,6 +940,77 @@ async function sendText() {
 document.getElementById('sendText').onclick = () => sendText().catch(e => toast(e.message, true));
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
+
+// A report typed on the phone keeps its reference across a retry, so a lost
+// response cannot create a second issue. Saved device reports have the same
+// GitHub option as the handheld's queued sheet.
+let bugDraft = null;
+const bugMsgEl = document.getElementById('bugMsg');
+const bugLinkEl = document.getElementById('bugLink');
+function bugSay(text, bad) { bugMsgEl.textContent = text || ''; bugMsgEl.className = bad ? 'msg bad' : 'msg'; }
+function bugShowLink(url, label) {
+  bugLinkEl.hidden = !url;
+  if (url) { bugLinkEl.href = url; bugLinkEl.textContent = label; }
+}
+function bugShowQueued(items) {
+  const section = document.getElementById('bugQueued');
+  const list = document.getElementById('bugQueuedList');
+  list.replaceChildren();
+  section.hidden = !items || !items.length;
+  for (const item of items || []) {
+    const row = document.createElement('p');
+    row.className = 'note';
+    row.textContent = (item.title || 'Bug report') + ' · ' + item.id + ' ';
+    const link = document.createElement('a');
+    link.href = item.github_url;
+    link.target = '_blank'; link.rel = 'noopener noreferrer';
+    link.textContent = 'Open on GitHub';
+    row.append(link);
+    list.append(row);
+  }
+}
+async function bugLoadDraft() {
+  const res = await fetch('/api/bug-report', {headers: hdr(), cache: 'no-store'});
+  if (!res.ok) throw new Error('Could not reach the handheld');
+  const data = await res.json();
+  bugDraft = {id: data.id, created: data.created};
+  bugShowQueued(data.queued);
+}
+bugLoadDraft().catch(e => bugSay(e.message, true));
+document.getElementById('submitBug').onclick = async () => {
+  const title = document.getElementById('bugTitle').value.trim();
+  const description = document.getElementById('bugDescription').value.trim();
+  if (!title && !description) { bugSay('Add a title or description first', true); return; }
+  const button = document.getElementById('submitBug');
+  button.disabled = true; button.textContent = 'Sending...';
+  try {
+    if (!bugDraft) await bugLoadDraft();
+    const result = await api('/api/bug-report', {
+      ...bugDraft, category: document.getElementById('bugCategory').value, title, description,
+    }, true);
+    if (result.status === 'sent') {
+      bugSay(result.issue ? 'Filed as issue #' + result.issue + ' · reference ' + result.reference :
+        'Report sent · reference ' + result.reference);
+      bugShowLink(result.issue_url, 'View GitHub issue');
+    } else if (result.status === 'queued') {
+      bugSay('Saved on the handheld · reference ' + result.reference + '. It will retry automatically.');
+      bugShowLink(result.github_url, 'Submit on GitHub instead');
+    } else {
+      bugSay(result.message || 'Open the prefilled issue on GitHub to submit it.', true);
+      bugShowLink(result.github_url, 'Submit on GitHub');
+    }
+    if (result.status === 'sent' || result.status === 'queued') {
+      document.getElementById('bugTitle').value = '';
+      document.getElementById('bugDescription').value = '';
+      bugDraft = null;
+      try { await bugLoadDraft(); } catch (_) { /* the confirmation above still stands */ }
+    }
+  } catch (e) {
+    bugSay(e.message, true);
+  } finally {
+    button.disabled = false; button.textContent = 'Submit report';
+  }
+};
 document.querySelectorAll('[data-key]').forEach(btn => {
   btn.onclick = () => api('/api/key', {key: btn.dataset.key}, true).then(refreshSoon).catch(e => toast(e.message, true));
 });

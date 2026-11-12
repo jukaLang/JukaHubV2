@@ -102,6 +102,12 @@ type chiakiPanelState struct {
 	quality int
 	volume  int
 
+	// typedHost is the address entered under "Add console by address": it is
+	// listed while it pairs, even before a scan or the handshake knows what
+	// console answers there (PSR-14). It is cleared once the pairing saves it
+	// or the panel closes, so a failure stays visible until the user leaves.
+	typedHost string
+
 	// page is the view on screen; listCursor keeps the console list's place
 	// while the Account-ID card is up.
 	page       psPanelPage
@@ -316,6 +322,14 @@ func psPanelReload() {
 	state := loadPSHosts()
 	psPanelMu.Lock()
 	chiakiPanel.consoles = state.Hosts
+	// A typed address that now has a saved console no longer needs its
+	// pending row; a failed pairing keeps it until the panel closes.
+	for _, c := range state.Hosts {
+		if c.Host == chiakiPanel.typedHost {
+			chiakiPanel.typedHost = ""
+			break
+		}
+	}
 	psPanelMu.Unlock()
 }
 
@@ -469,6 +483,7 @@ func chiakiRows() []chiakiRow {
 	psPanelMu.Lock()
 	consoles := append([]psConsole{}, chiakiPanel.consoles...)
 	busy := chiakiPanel.busy
+	typedHost := chiakiPanel.typedHost
 	scanning := chiakiPanel.scanning
 	scanErr := chiakiPanel.scanErr
 	code := chiakiPanel.code
@@ -508,6 +523,32 @@ func chiakiRows() []chiakiRow {
 				// A PIN prompt waiting for the pairing helper.
 				row.detail = note
 			}
+		}
+		rows = append(rows, row)
+	}
+	// A typed address gets a row of its own while it pairs: the handshakes can
+	// take a minute, and without this the panel showed only the PIN toast.
+	// No PS4/PS5 guess is made for it — nothing has answered yet.
+	typedListed := false
+	for _, c := range consoles {
+		if c.Host == typedHost {
+			typedListed = true
+			break
+		}
+	}
+	if typedHost != "" && !typedListed {
+		row := chiakiRow{label: typedHost, host: typedHost}
+		if busy == "Pairing "+typedHost+"…" {
+			row.detail = "Pairing — keep " + psPanelLinkDeviceName(0) + " open on the console"
+			if wait := psHelperPairingWait(); wait != "" {
+				row.detail = wait
+			}
+			row.status = "…"
+			row.action = psActionNone
+		} else {
+			row.detail = hintSentence("Not paired — press %s, then type the PIN from "+psPanelLinkDeviceName(0), "A", "Select")
+			row.status = "Pair"
+			row.action = psActionPair
 		}
 		rows = append(rows, row)
 	}
@@ -1162,6 +1203,9 @@ func psPanelApplyEdit(text string) {
 			return
 		}
 		chiakiPanel.host = text
+		psPanelMu.Lock()
+		chiakiPanel.typedHost = text
+		psPanelMu.Unlock()
 		// A typed address is paired straight away; the panel asks for the PIN.
 		psPanelBeginPair(text)
 	case psEditAccount:

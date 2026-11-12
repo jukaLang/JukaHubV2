@@ -14,7 +14,6 @@ package main
 // release notes and documentation.
 
 import (
-	"fmt"
 	htmlstd "html"
 	"net/url"
 	"strconv"
@@ -1137,7 +1136,7 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 	// the panel and the bar drawn into it measure the same height. Trailing 9
 	// gives back the exact band this panel has always reserved.
 	header := UIPanelHeader("Links on this page",
-		fmt.Sprintf("%d link(s) · ", len(links))+hintSentence2("%s opens · %s closes", "A", "Open", "B", "Close"), "browser")
+		pluralizeCount(len(links), "link", "links")+" · "+hintSentence2("%s opens · %s closes", "A", "Open", "B", "Close"), "browser")
 	header.SubtitleColor = ColorTextSecondary()
 	headerH := UIPanelHeaderBand(config, header, 9)
 	footerH := 12 + smallH

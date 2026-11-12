@@ -361,7 +361,7 @@ func renderGameRandomPicker(renderer *sdl.Renderer, config *Config) {
 		if selected {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
 		}
-		renderText(renderer, config, medium, scope.title, ColorTextPrimary(), rect.X+14, rect.Y+8)
+		renderText(renderer, config, medium, ellipsize(medium, scope.title, rect.W-28), ColorTextPrimary(), rect.X+14, rect.Y+8)
 		detailColor := ColorTextTertiary()
 		if selected {
 			detailColor = ColorTextSecondary()

@@ -44,7 +44,16 @@ On stock and CrossMix firmware JukaHub is started by its boot hook through the
 firmware's own launcher queue (see **Start JukaHub at login** in
 [CONFIGURATION.md](CONFIGURATION.md)). Depending on how that firmware's
 launcher loop reads its queue, the stock launcher can still show for a moment
-between the boot logo and JukaHub.
+between the boot logo and JukaHub. When it does, the hook leaves `menu` in
+`/tmp/jukahub-autostart.lock` as it closes the menu, the queued command puts
+black on `/dev/fb0` before `launch.sh` runs (instead of leaving the menu's last
+picture frozen on the screen), and the boot fades in from that black rather
+than starting from the logo's still frame, which is no longer on screen
+(`bootos.go`, through `trimuiAutostartMenuShown`). A launcher loop that reopens
+the menu instead of running the queue is not shown the menu again. Loops the
+hook has to pause for a direct start are recorded by process id in
+`/tmp/jukahub-paused`, which `launch.sh` resumes when JukaHub hands the screen
+back.
 
 ## Opening JukaHub as an app
 
@@ -230,6 +239,9 @@ This was written without a TrimUI on the desk, and it says so:
   boot logo", so 1.0.x and 1.1.x devices may not store it the same way.
 - CrossMix's BootLogo tool says it is not compatible after firmware 1.0.4
   hotfix 6, which points the same way.
+- The black hand-over at boot: whether writing black to `/dev/fb0` blanks the
+  PowerVR panel cleanly, and whether CrossMix's launcher loop runs the queue
+  once the menu is closed (`autostart.log` says which path started JukaHub).
 
 If **Boot logo** says **Unavailable** on your device, its second line says what
 was missing; **Tools → Logs** has the details for a report.
@@ -242,6 +254,7 @@ was missing; **Tools → Logs** has the details for a report.
 | `player/bootos.go` | the boot sequence: power-on or app launch, the timeline, the chime's timing |
 | `player/bootarrive.go` | Home building itself out of the first screen's warm render |
 | `player/splash.go` | the startup entry point that hands over to the boot sequence |
+| `player/autostart.go` | the boot hook (in its template): the queue, closing the menu, the black hand-over, `trimuiAutostartMenuShown` |
 | `player/bootlogo.go`, `bootlogo_linux.go`, `bootlogo_other.go` | the installer: finding the partition, the BMP rewrite, backups, Restore, the Settings row |
 | `branding/mkbootlogo.py` | the reference pictures above |
 

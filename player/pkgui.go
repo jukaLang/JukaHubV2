@@ -133,10 +133,11 @@ func pkgAddHit(h pkgHit) {
 	pkgUI.hits = append(pkgUI.hits, h)
 }
 
-// pkgBodyFocused reports whether the pad is on the store rather than on the
-// header's buttons.
+// pkgBodyFocused reports whether the pad is on the store's content rather
+// than on the header's buttons or the "More stores" strip above the content
+// (pkgstores.go), which draws its own ring.
 func pkgBodyFocused() bool {
-	return chromeTier(focusEngine.ElementIndex()) == 0
+	return chromeTier(focusEngine.ElementIndex()) == 0 && !pkgStoresFocused()
 }
 
 // ── Live install state ───────────────────────────────────────────────────
@@ -490,6 +491,13 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	toolbar := sdl.Rect{X: inner.X, Y: inner.Y, W: inner.W, H: pkgToolbarH}
 	pkgDrawToolbar(renderer, config, ft, toolbar, now)
 	y := toolbar.Y + toolbar.H + 8
+	// The other stores (APK Store, PortMaster, Windows Apps) sit under the
+	// toolbar in every view and in the empty state: they need no package list
+	// and, apart from a download, no network (pkgstores.go).
+	if len(pkgStoreLinks()) > 0 {
+		pkgDrawStores(renderer, config, ft, sdl.Rect{X: inner.X, Y: y, W: inner.W, H: pkgStoresH})
+		y += pkgStoresH + 10
+	}
 	if !st.online {
 		banner := sdl.Rect{X: inner.X, Y: y, W: inner.W, H: pkgBannerH}
 		pkgDrawOfflineBanner(renderer, config, ft, banner)

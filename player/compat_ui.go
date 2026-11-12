@@ -214,7 +214,7 @@ func compatPanelRevert() {
 	}
 	setCompatibilityBoostState(assessment.Key, false)
 	PlayBackSound()
-	ShowToast(fmt.Sprintf("Reverted %s · %d file(s) removed", assessment.Title, len(removed)), ToastKindSuccess)
+	ShowToast("Reverted "+assessment.Title+" · "+pluralizeCount(len(removed), "file", "files")+" removed", ToastKindSuccess)
 }
 
 func compatPanelRescan() {

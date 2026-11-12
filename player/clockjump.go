@@ -74,6 +74,76 @@ func clockJumpSeen(v *clockJumpView) (clockShift, bool) {
 	return d, true
 }
 
+// ── Scheduled tasks ───────────────────────────────────────────────────────
+
+// schedJumpAwareRun decides which single scheduled run a tick at now handles.
+// handled is the run the caller last recorded as handled, and next returns the
+// first run strictly after a time (schedCronNext). It returns the run to
+// handle, the time to record as handled, and whether one is due.
+//
+// A forward jump can pass several runs at once: only the latest run at or
+// before now is returned, and the record moves with it, so the following tick
+// sees the next run still ahead instead of replaying the missed ones in a
+// burst. A backward jump leaves handled ahead of now, and nothing is due until
+// the clock passes the run after the one already handled, so an interval that
+// already ran is not run a second time. A normal tick that crosses one run
+// returns that run exactly once.
+func schedJumpAwareRun(handled, now time.Time, next func(time.Time) (time.Time, bool)) (run, advance time.Time, due bool) {
+	if next == nil {
+		return time.Time{}, handled, false
+	}
+	first, ok := next(handled)
+	if !ok || now.Before(first) {
+		return time.Time{}, handled, false
+	}
+	// Walk to the last run at or before now: on a jump this is the loop over
+	// the missed intervals, on a normal tick it stops at the first.
+	latest := first
+	for more, ok := next(latest); ok && !more.After(now); more, ok = next(latest) {
+		latest = more
+	}
+	return latest, latest, true
+}
+
+// schedHandledRuns is the run each scheduled item last handled, keyed by its
+// source and command. The scheduler screen is its only consumer today: it
+// recomputes next runs on every refresh, and this record is what makes the
+// jump-aware decision apply on the shipped path. A task runner, when one is
+// added, reads and writes the same record.
+var schedHandledRuns struct {
+	sync.Mutex
+	runs map[string]time.Time
+}
+
+// schedHandledRun returns the run key last handled. An item seen for the first
+// time starts at now, so opening the screen does not count a run that predates
+// it as missed.
+func schedHandledRun(key string, now time.Time) time.Time {
+	schedHandledRuns.Lock()
+	defer schedHandledRuns.Unlock()
+	if schedHandledRuns.runs == nil {
+		schedHandledRuns.runs = map[string]time.Time{}
+	}
+	if t, ok := schedHandledRuns.runs[key]; ok {
+		return t
+	}
+	schedHandledRuns.runs[key] = now
+	return now
+}
+
+// schedRememberHandledRun records at as handled, never moving the record
+// backwards.
+func schedRememberHandledRun(key string, at time.Time) {
+	schedHandledRuns.Lock()
+	defer schedHandledRuns.Unlock()
+	if schedHandledRuns.runs == nil {
+		schedHandledRuns.runs = map[string]time.Time{}
+	}
+	if cur, ok := schedHandledRuns.runs[key]; !ok || at.After(cur) {
+		schedHandledRuns.runs[key] = at
+	}
+}
+
 // ── Alarms ────────────────────────────────────────────────────────────────
 
 // alarmJumpView is the alarms' view of the jumps (main thread).

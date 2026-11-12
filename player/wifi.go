@@ -1639,9 +1639,20 @@ func wifiWaitForAssociation(ssid string, timeout time.Duration) (wifiStatus, err
 // supplicant did not already get one. It is best-effort: a connected network
 // without an address is still worth reporting as connected.
 func wifiObtainAddress(iface string) (string, error) {
+	// A join just finished: the connectivity probe looks now rather than at
+	// its next turn, so Chat and Juka see the network at once (netmon.go).
+	defer netNudge()
 	if st, err := wifiReadStatus(); err == nil && st.IP != "" {
 		return st.IP, nil
 	}
+	return wifiRunDHCP(iface)
+}
+
+// wifiRunDHCP runs the firmware's one-shot DHCP client for iface and returns
+// the address the supplicant then reports. The wake watcher calls it too
+// (wifi_resume.go), where "the supplicant has an address" is not the question:
+// a link that went down and up keeps its address but loses its route.
+func wifiRunDHCP(iface string) (string, error) {
 	type dhcpClient struct {
 		name string
 		args []string

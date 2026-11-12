@@ -72,6 +72,21 @@ func TestEmuCoreForEntryResolvesSystemsAndCores(t *testing.T) {
 	}
 }
 
+func TestPublishedTrimuiCoresCanBeInstalledWithoutROMFolders(t *testing.T) {
+	index := parseCoreIndex("2026-11-11 1234abcd mgba_libretro.so.zip\n" +
+		"2026-11-11 5678abcd mednafen_supergrafx_libretro.so.zip\n" +
+		"2026-11-11 9abc1234 snes9x_libretro.so.zip\n")
+	installed := map[string]bool{"snes9x": true}
+	existing := map[string]emuEntry{"mgba": {Name: "mgba", Status: emuAvailable}}
+	rows := emuPublishedCoreRows(index, installed, existing)
+	if len(rows) != 1 || rows[0].Core != "mednafen_supergrafx" || rows[0].Status != emuMissing {
+		t.Fatalf("published rows = %+v; want only the missing SuperGrafx core", rows)
+	}
+	if plan := planEmuInstall(rows[0], coreInventory{Active: map[string]coreBuild{}}, index); plan.Action != emuInstallNew {
+		t.Fatalf("published core install = %v (%s), want a new install", plan.Action, plan.Reason)
+	}
+}
+
 func TestPlanEmuInstallReportsNewUpdateAndCurrent(t *testing.T) {
 	coresDir, _ := installHistoryFixture(t, map[string]string{
 		"mgba_libretro.so":     "old mgba build",

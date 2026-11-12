@@ -308,27 +308,37 @@ func psChooseStreamHost(c psConsole) (host string, remote bool) {
 	if lan == "" {
 		return internet, true
 	}
-	if psStreamProbe(lan, psConsoleIsPS5(c), psStreamProbeTimeout) {
+	if psStreamProbe(lan, psConsoleIsPS5(c), c, psStreamProbeTimeout) {
 		return lan, false
 	}
 	logInfo("psremote", "console not on this network; streaming to its internet address")
 	return internet, true
 }
 
+// psProbeAcceptsConsole reports whether a discovery answer can be the console
+// being streamed to. The wake worker already refuses another console's answer
+// by comparing host-id with the pairing's server_mac; the stream probe uses
+// the same rule, so on another network a different PlayStation holding this
+// console's private address is not taken as "at home" (PSR-11). One unknown
+// MAC cannot settle it and counts as this console.
+func psProbeAcceptsConsole(c psConsole, d psDiscovered) bool {
+	return psWakeSameConsole(c, d)
+}
+
 // psStreamProbeLAN sends one discovery request straight to host and reports
-// whether a discovery answer came back before the timeout. A refused port (an
-// ICMP reply from some other machine at that address) ends it early.
-func psStreamProbeLAN(host string, ps5 bool, timeout time.Duration) bool {
+// whether this console answered before the timeout. A refused port (an ICMP
+// reply from some other machine at that address) ends it early.
+func psStreamProbeLAN(host string, ps5 bool, pairing psConsole, timeout time.Duration) bool {
 	port, version := psRemotePortPS4, psProtoVersionPS4
 	if ps5 {
 		port, version = psRemotePortPS5, psProtoVersionPS5
 	}
-	return psStreamProbeAt(net.JoinHostPort(host, strconv.Itoa(port)), version, timeout)
+	return psStreamProbeAt(net.JoinHostPort(host, strconv.Itoa(port)), version, pairing, timeout)
 }
 
 // psStreamProbeAt is psStreamProbeLAN for an explicit host:port, so a test can
 // answer on a local port.
-func psStreamProbeAt(address, version string, timeout time.Duration) bool {
+func psStreamProbeAt(address, version string, pairing psConsole, timeout time.Duration) bool {
 	if timeout <= 0 {
 		timeout = psStreamProbeTimeout
 	}
@@ -349,9 +359,11 @@ func psStreamProbeAt(address, version string, timeout time.Duration) bool {
 		if err != nil {
 			return false
 		}
-		if _, ok := psParseDiscoveryResponse(buf[:n], conn.RemoteAddr()); ok {
+		if answer, ok := psParseDiscoveryResponse(buf[:n], conn.RemoteAddr()); ok && psProbeAcceptsConsole(pairing, answer) {
 			return true
 		}
+		// Another console answered at this address: not at home. Keep waiting
+		// for this one's answer until the deadline.
 	}
 	return false
 }

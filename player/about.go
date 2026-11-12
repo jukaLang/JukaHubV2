@@ -49,13 +49,11 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	bottom := screenHeight - bottomBarHeight("About") - 16
 
 	// Brand block: the logo beside the shared page header in its centred form.
-	// The wordmark, the version and the tagline are the three lines every
-	// header can carry, and the cards start where this one says the band ends.
+	// The wordmark and tagline lead the page; the build date appears on Home.
 	headerBottom := drawAboutBrand(renderer, config, UIPageHeader{
 		X: margin, Y: top, W: screenWidth - 2*margin,
 		Title:        "JukaHub",
 		TitleRole:    "big",
-		Subtitle:     versionDisplayString(config),
 		SubtitleRole: "medium",
 		Status:       "Your device. Your way.",
 		Centered:     true,
@@ -105,24 +103,18 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		return y + lineH
 	}
 
-	// Build info.
-	y := cardTitle(buildRect, "Build")
-	build := installedBuildTimeLabel()
-	if build == "" {
-		build = "unknown (source build)"
-	}
-	release := readInstalledReleaseInfo().Tag
-	if release == "" {
-		release = "—"
-	}
+	// System info.
+	y := cardTitle(buildRect, "System")
 	info := []struct{ label, value string }{
-		{"Version", versionString(config)},
-		{"Compiled", build},
-		{"Release", release},
 		{"Platform", P().Name()},
 		{"OS", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)},
 		{"CPUs", fmt.Sprintf("%d", runtime.NumCPU())},
 		{"Renderer", "SDL2"},
+	}
+	// What JukaHub itself holds and what the system has left, read off the
+	// render thread and cached (memstat.go).
+	if mem := selfMemoryCachedText(); mem != "" {
+		info = append(info, struct{ label, value string }{"Memory", mem})
 	}
 	// The value column is measured from the widest label so no label runs into
 	// its value ("Compiledunknown" was the old bug).
@@ -132,9 +124,12 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 			labelW = int32(lw)
 		}
 	}
+	// The value column gets exactly the room the label leaves, so a long
+	// platform or OS name ellipsizes instead of running past the card edge.
+	valueW := buildRect.W - 48 - labelW - 18
 	for _, line := range info {
 		renderText(renderer, config, font, line.label, ColorTextTertiary(), buildRect.X+24, y)
-		renderText(renderer, config, font, line.value, ColorTextSecondary(), buildRect.X+24+labelW+18, y)
+		renderText(renderer, config, font, ellipsize(font, line.value, valueW), ColorTextSecondary(), buildRect.X+24+labelW+18, y)
 		y = note(y, 21)
 	}
 
@@ -149,7 +144,10 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	for _, c := range credits {
 		renderText(renderer, config, font, c.name, WithAlpha(ColorAccent, 230), creditsRect.X+24, y)
 		nameW, _, _ := font.SizeUTF8(c.name)
-		renderText(renderer, config, font, " - "+c.role, ColorTextSecondary(), creditsRect.X+24+int32(nameW), y)
+		// The role shares the line with the name; a long device name must not
+		// push it through the card border.
+		roleW := creditsRect.W - 48 - int32(nameW)
+		renderText(renderer, config, font, ellipsize(font, " - "+c.role, roleW), ColorTextSecondary(), creditsRect.X+24+int32(nameW), y)
 		y = note(y, 22)
 	}
 

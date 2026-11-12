@@ -676,7 +676,7 @@ func finalizeConfig(config *Config) {
 	if config.SchemaVersion == 0 {
 		config.SchemaVersion = ConfigSchemaVersion
 	}
-	if config.AppName == "" {
+	if config.AppName == "" || config.AppName == "JukaHub 0.4.0" {
 		config.AppName = "JukaHub"
 	}
 	if config.Version == "" {
@@ -1750,27 +1750,48 @@ func drawScrollbar(renderer *sdl.Renderer, x, y, w, h int32, thumbFrac, scrollFr
 	if thumbFrac >= 1.0 || h <= 0 {
 		return
 	}
-	if thumbFrac < 0.05 {
-		thumbFrac = 0.05
-	}
-	if scrollFrac < 0 {
-		scrollFrac = 0
-	}
-	if scrollFrac > 1 {
-		scrollFrac = 1
-	}
 	// Glass ink, not white: on a light preset a white track and thumb vanished
 	// into the page.
 	track := glassA(22)
 	renderer.SetDrawColor(track.R, track.G, track.B, track.A)
 	renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
-	thumbH := int32(float64(h) * thumbFrac)
+	thumb := scrollbarThumbRect(y, h, thumbFrac, scrollFrac)
+	fillRoundedRect(renderer, x, thumb.Y, w, thumb.H, w/2, glassA(75))
+}
+
+// scrollbarThumbRect is the thumb's geometry inside a track h tall at y. A
+// thumb never leaves its track: on a track shorter than the 24 px minimum it
+// fills the track instead of spilling past either end, which is what the old
+// inline math did (the thumb was drawn above the track for a scroll fraction
+// below its own overflow, or below it at the end, over the row underneath).
+// An unmeasurable fraction (0/0 from a caller's ratio) is treated as a track
+// with no thumb rather than converted to an undefined integer.
+func scrollbarThumbRect(y, h int32, thumbFrac, scrollFrac float64) sdl.Rect {
+	if h <= 0 {
+		return sdl.Rect{}
+	}
+	if math.IsNaN(thumbFrac) || thumbFrac < 0.05 {
+		thumbFrac = 0.05
+	} else if thumbFrac > 1 {
+		thumbFrac = 1
+	}
+	if math.IsNaN(scrollFrac) || scrollFrac < 0 {
+		scrollFrac = 0
+	} else if scrollFrac > 1 {
+		scrollFrac = 1
+	}
+	thumbH := int32(math.Round(float64(h) * thumbFrac))
 	if thumbH < 24 {
 		thumbH = 24
 	}
-	maxOff := h - thumbH
-	thumbY := y + int32(float64(maxOff)*scrollFrac)
-	fillRoundedRect(renderer, x, thumbY, w, thumbH, w/2, glassA(75))
+	if thumbH > h {
+		thumbH = h
+	}
+	thumbY := y
+	if maxOff := h - thumbH; maxOff > 0 {
+		thumbY = y + int32(math.Round(float64(maxOff)*scrollFrac))
+	}
+	return sdl.Rect{Y: thumbY, H: thumbH}
 }
 
 // renderButtonElement draws a sleek glass-like button with soft shadows,
@@ -3854,197 +3875,15 @@ func videoFormatSelectorFor(config *Config, source string) string {
 	return fmt.Sprintf("best[height<=%d]/best", effectivePlaybackMaxHeight(config, source))
 }
 
-// playWithTempFile downloads the stream with yt-dlp and hands the file to the
-// embedded player. Downloading first (instead of piping) keeps seeking and
-// resume positions working and avoids holding two decoders in memory.
-// It reports whether playback started; every failure path (spawn, download,
-// empty file, cancel) returns false, so callers never mistake "the process
-// exited" for "something played".
+// playWithTempFile downloads the stream and hands the file to the embedded
+// player. Downloading first (instead of piping) keeps seeking and resume
+// positions working and avoids holding two decoders in memory. It reports
+// whether playback started; every failure path returns false, so callers
+// never mistake "the process exited" for "something played". The work —
+// the attempts, the progress on the loading card, the time cap and the native
+// fallback — is in ytdownload.go.
 func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url string, startSec float64, prepareSeq uint64) bool {
-	// The caller's spinner covers the download; every way out of here has to
-	// clear it, including failures, or the media screen stays blocked.
-	defer finishVideoPrepare(prepareSeq)
-	logDebug("core", "playWithTempFile: downloading to temp file for %s (resume %.1fs)", sanitizeLogURL(url), startSec)
-
-	videoPlaybackMutex.Lock()
-	videoPlaybackPhase = "downloading"
-	videoPlaybackPhaseAt = sdl.GetTicks64()
-	videoPlaybackProgress = 0
-	videoPlaybackSpeed = ""
-	videoPlaybackETA = ""
-	videoPlaybackError = ""
-	videoPlaybackMutex.Unlock()
-
-	// Stage the download where removeTempVideo will look for it. On the
-	// handheld that is the SD card (see defaultVideoTempDir), not /tmp: the
-	// tmpfs is RAM-backed and a video there can get the app killed.
-	tempPath := tempVideoPath()
-
-	// Clean up any stale temp file from a previous attempt
-	os.Remove(tempPath)
-
-	// yt-dlp prints its [download] progress on stdout, so both streams feed
-	// the parser; the buffer is locked because the loop below reads it while
-	// the helper is still writing.
-	stderrBuf := &lockedTailBuffer{max: 64 << 10}
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
-	defer cancel()
-	dlArgs := []string{
-		"-o", tempPath,
-		"--no-check-certificate",
-		"--geo-bypass",
-		"--no-continue",
-		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		// The clients that still carry a muxed format (streaming.go explains
-		// the list and why android_vr and plain web left it).
-		"--extractor-args", ytDlpDownloadClients,
-		"-f", videoFormatSelectorFor(config, url),
-		url,
-	}
-	dlArgs = append(dlArgs, ytDlpExtraArgsSlice(config)...)
-	dlCmd := exec.CommandContext(ctx, ytDlpPath, dlArgs...)
-	dlCmd.Env = helperToolEnv(ytDlpPath)
-	dlCmd.Stdout = stderrBuf
-	dlCmd.Stderr = stderrBuf
-
-	if err := dlCmd.Start(); err != nil {
-		logError("core", "playWithTempFile: download failed to start: %v", err)
-		showToast("Download failed to start.", ToastError())
-		videoPlaybackMutex.Lock()
-		videoPlaybackPhase = "error"
-		videoPlaybackPhaseAt = sdl.GetTicks64()
-		videoPlaybackError = err.Error()
-		videoPlaybackMutex.Unlock()
-		return false
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- dlCmd.Wait()
-	}()
-
-	downloadOK := false
-	for !downloadOK {
-		select {
-		case err := <-done:
-			if err != nil {
-				if ctx.Err() != nil {
-					// Cancelled by B / Esc: not a network failure, so no error
-					// toast and no half-download left behind.
-					logDebug("stream", "download cancelled for %s", sanitizeLogURL(url))
-					removeTempVideoArtifacts(tempPath)
-					if parent.Err() == nil && ctx.Err() == context.DeadlineExceeded {
-						// The five-minute cap, not the user: a long video on a
-						// slow link used to end here with nothing on screen.
-						showToast("This video took too long to download — try a lower quality in Settings", ToastWarn())
-					}
-					return false
-				}
-				// A failed fetch leaves its partial pieces too; each attempt has
-				// a new name, so nothing would ever reuse or remove them.
-				removeTempVideoArtifacts(tempPath)
-				logError("core", "playWithTempFile: download failed: %v", err)
-				// Same redaction as the search path: these arguments include the
-				// cookies path.
-				logError("core", "playWithTempFile: stderr: %s", redactDiagnosticText(stderrBuf.String()))
-				// The cause in words (ytfailure.go), not "Check network." for a
-				// 403, a missing format or an outdated helper — which also
-				// starts the yt-dlp update that fixes those.
-				showToast(youTubePlaybackFailureMessage(config, url, stderrBuf.String()), ToastError())
-				videoPlaybackMutex.Lock()
-				videoPlaybackPhase = "error"
-				videoPlaybackPhaseAt = sdl.GetTicks64()
-				videoPlaybackError = err.Error()
-				videoPlaybackMutex.Unlock()
-				return false
-			}
-			downloadOK = true
-		case <-time.After(200 * time.Millisecond):
-			// Parse progress from stderr
-			parseDownloadProgress(stderrBuf.String())
-		}
-	}
-
-	if ctx.Err() != nil {
-		logDebug("stream", "download cancelled after it finished for %s", sanitizeLogURL(url))
-		removeTempVideoArtifacts(tempPath)
-		return false
-	}
-
-	// Verify the downloaded file is valid before playing
-	info, err := os.Stat(tempPath)
-	if err != nil || info.Size() == 0 {
-		size := int64(0)
-		if info != nil {
-			size = info.Size()
-		}
-		logError("core", "playWithTempFile: downloaded file is missing or empty (size=%d)", size)
-		showToast("Download failed. File is empty.", ToastError())
-		videoPlaybackMutex.Lock()
-		videoPlaybackPhase = "error"
-		videoPlaybackPhaseAt = sdl.GetTicks64()
-		videoPlaybackError = "downloaded file is empty"
-		videoPlaybackMutex.Unlock()
-		removeTempVideoArtifacts(tempPath)
-		return false
-	}
-	videoPlaybackMutex.Lock()
-	videoPlaybackPhase = "playing"
-	videoPlaybackPhaseAt = sdl.GetTicks64()
-	videoPlaybackProgress = 1.0
-	videoPlaybackMutex.Unlock()
-
-	// tempFile=true: this session owns the downloaded copy and removes it when
-	// playback ends. User media files are never deleted.
-	startEmbeddedPlayback(config, tempPath, startSec, true)
-	logDebug("core", "playWithTempFile: embedded playback started for %s (resume %.1fs)", tempPath, startSec)
-	return true
-}
-
-func parseDownloadProgress(stderr string) {
-	lines := strings.Split(stderr, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "[download]") && strings.Contains(line, "%") {
-			parts := strings.Fields(line)
-			for _, part := range parts {
-				if strings.HasSuffix(part, "%") {
-					val := strings.TrimSuffix(part, "%")
-					if f, err := strconv.ParseFloat(val, 64); err == nil {
-						videoPlaybackMutex.Lock()
-						videoPlaybackProgress = f / 100.0
-						videoPlaybackMutex.Unlock()
-					}
-				}
-				if strings.HasSuffix(part, "MiB/s") || strings.HasSuffix(part, "KiB/s") {
-					videoPlaybackSpeed = part
-					embeddedPlayer.mu.Lock()
-					embeddedPlayer.downloadSpeed = parseSpeedToken(part)
-					embeddedPlayer.mu.Unlock()
-				}
-				if strings.HasPrefix(part, "ETA") {
-					videoPlaybackETA = part
-				}
-			}
-		}
-	}
-}
-
-// parseSpeedToken converts a yt-dlp speed token such as "1.20MiB/s" or
-// "850.5KiB/s" into bytes per second.
-func parseSpeedToken(token string) float64 {
-	mult := 1024.0
-	if strings.HasSuffix(token, "MiB/s") {
-		mult = 1024.0 * 1024.0
-	}
-	num := strings.TrimSuffix(strings.TrimSuffix(token, "MiB/s"), "KiB/s")
-	f, err := strconv.ParseFloat(num, 64)
-	if err != nil {
-		return 0
-	}
-	return f * mult
+	return ytDownloadAndPlay(parent, config, ytDlpPath, url, startSec, prepareSeq)
 }
 
 // --- Input handling ---
@@ -4169,6 +4008,9 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 				if vkHandleControllerButton(e.Button, config) && !virtualKeyboardActive {
 					exitInput = true
 				}
+			case *sdl.ControllerAxisEvent:
+				// R2 is voice typing here too (vkvoice_button.go).
+				vkVoiceModalAxis(e, config)
 			case *sdl.MouseButtonEvent:
 				if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
 					// The keyboard routes the click (tools, strip, field, keys,
@@ -7319,6 +7161,10 @@ func activateChromeFocus(config *Config) bool {
 		// notifToggle plays its own activation sound.
 		notifToggle()
 		return true
+	case ChromeBugIndex:
+		PlayActivateSound()
+		headerBugActivate(config)
+		return true
 	case ChromeTrophyIndex:
 		// The cup beside the bell opens the trophy room (header_trophy.go).
 		PlayActivateSound()
@@ -7352,6 +7198,12 @@ func activateChromeFocus(config *Config) bool {
 		PlayActivateSound()
 		toggleBrightnessPopover()
 		return true
+	case ChromeBluetoothIndex:
+		// The rune between the speaker and the meter opens the Bluetooth
+		// page, where paired devices connect and disconnect with one press.
+		PlayActivateSound()
+		btHeaderActivate(config)
+		return true
 	}
 	return false
 }
@@ -7376,6 +7228,11 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 		headerTrophyActivate(config)
 		return true
 	}
+	if headerBugHit(mx, my) {
+		PlayActivateSound()
+		headerBugActivate(config)
+		return true
+	}
 	if sceneTitleBackRect.W > 0 && hitTouchTarget(sceneTitleBackRect, mx, my) {
 		goBackScene(config)
 		return true
@@ -7389,9 +7246,9 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 		return true
 	}
 	// The speaker opens the volume popover. Its rect is already finger-sized
-	// and split from the meter's at the gap's middle (growStatusButtonRects),
-	// so it is tested as drawn, and before the meter, whose grown target may
-	// reach a few pixels over it.
+	// and split from its neighbours' at each gap's middle
+	// (growStatusButtonRects), so it is tested as drawn, and before the meter,
+	// whose grown target may reach a few pixels over it.
 	if statusVolumeRect.W > 0 && pointInRect(mx, my, statusVolumeRect) {
 		PlayActivateSound()
 		toggleVolumePopover()
@@ -7402,6 +7259,15 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	if statusBrightnessRect.W > 0 && pointInRect(mx, my, statusBrightnessRect) {
 		PlayActivateSound()
 		toggleBrightnessPopover()
+		return true
+	}
+	// The Bluetooth rune right of the speaker opens the Bluetooth page. Its
+	// target is split from the speaker's and the meter's the same way, so it
+	// is tested as drawn, and before the meter, whose grown target may reach
+	// a few pixels over it.
+	if statusBluetoothRect.W > 0 && pointInRect(mx, my, statusBluetoothRect) {
+		PlayActivateSound()
+		btHeaderActivate(config)
 		return true
 	}
 	// The Wi-Fi meter opens the network picker (scan, connect, enter a

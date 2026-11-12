@@ -435,6 +435,11 @@ func bootSfxPlay(kind bootSfxKind) {
 			data[i+1] = byte(uint16(v) >> 8)
 		}
 	}
+	// While Juka speaks, the sound is mixed into the voice instead of waiting
+	// behind it in the queue (tts_play.go).
+	if ttsMixUISound(data) {
+		return
+	}
 	// Feed the LED sync with the same samples the speaker is about to play.
 	publishAudioLevel(data, int(rate), 1)
 	_ = sdl.QueueAudio(audioDev, data)
@@ -604,6 +609,8 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	defer videoAudioMutex.Unlock()
+	// While Juka speaks, the music and the video play softer (tts_play.go).
+	volume *= ttsMediaDuck()
 	// Spatial audio (spatial.go) runs here, under the lock. It applies the
 	// volume itself, before its limiter, so the loop below then has nothing to
 	// do; off, pcm comes back unprocessed, cut to whole frames (a read that

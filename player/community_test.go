@@ -27,7 +27,7 @@ func TestDiagnosticsTextRedactsConfigValues(t *testing.T) {
 			t.Fatalf("diagnostics leaked %q:\n%s", secret, text)
 		}
 	}
-	if !strings.Contains(text, "9.9.9") || !strings.Contains(text, "1 scene(s), 1 element(s)") {
+	if !strings.Contains(text, "9.9.9") || !strings.Contains(text, "1 scene, 1 element") {
 		t.Fatalf("diagnostics missing build facts:\n%s", text)
 	}
 }
@@ -73,10 +73,12 @@ func TestBugReportBundlesRedactedDiagnostics(t *testing.T) {
 	if parsed.Host != "github.com" || !strings.HasPrefix(parsed.Path, "/jukaLang/JukaHubV2/issues/new") {
 		t.Fatalf("unexpected issue URL: %s", raw)
 	}
-	if !strings.Contains(parsed.Query().Get("title"), "[Bug]") {
+	if !strings.Contains(parsed.Query().Get("title"), "[Bug]") ||
+		!strings.Contains(parsed.Query().Get("title"), "("+r.ID+")") {
 		t.Fatalf("issue title was not prefilled: %q", parsed.Query().Get("title"))
 	}
-	if body := parsed.Query().Get("body"); !strings.Contains(body, "1.2.3") || !strings.Contains(body, r.ID) {
+	if body := parsed.Query().Get("body"); !strings.Contains(body, "1.2.3") || !strings.Contains(body, r.ID) ||
+		!strings.Contains(body, "| Created | "+r.Created+" |") {
 		t.Fatalf("issue body lost the build or the reference:\n%s", body)
 	}
 }

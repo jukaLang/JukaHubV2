@@ -138,6 +138,7 @@ var vkMemo struct {
 	anim        uint64
 	valid       bool
 	keys        hintStamp // the hints' vocabulary and remap (inputhints.go)
+	voice       bool      // the footer offers voice typing (vkVoiceHintShown)
 	title       string
 	placeholder string
 	hints       []FooterHint
@@ -146,10 +147,13 @@ var vkMemo struct {
 
 func vkMemoRefresh() {
 	keys := hintStampNow()
-	if vkMemo.valid && vkMemo.key == vkLayoutKeyBuilt && vkMemo.anim == vkAnimStart && vkMemo.keys == keys {
+	// The microphone probe answers after the keyboard opens, so the voice
+	// badge can come and go within a session.
+	voice := vkVoiceHintShown()
+	if vkMemo.valid && vkMemo.key == vkLayoutKeyBuilt && vkMemo.anim == vkAnimStart && vkMemo.keys == keys && vkMemo.voice == voice {
 		return
 	}
-	vkMemo.key, vkMemo.anim, vkMemo.valid, vkMemo.keys = vkLayoutKeyBuilt, vkAnimStart, true, keys
+	vkMemo.key, vkMemo.anim, vkMemo.valid, vkMemo.keys, vkMemo.voice = vkLayoutKeyBuilt, vkAnimStart, true, keys, voice
 	vkMemo.title = vkTitle()
 	vkMemo.placeholder = vkPlaceholder()
 	vkMemo.hints = vkHintList()
@@ -172,13 +176,17 @@ func vkHintList() []FooterHint {
 	if hintsUseKeyboard() {
 		// A real keyboard types straight into the field (handleTextInputEvent);
 		// Backspace deletes and Shift is the keyboard's own.
-		return []FooterHint{
+		keys := []FooterHint{
 			{Button: "Enter", Label: action},
 			{Button: "Esc", Label: "Close"},
 			{Button: "Backspace", Label: "Delete"},
 			{Button: "Ctrl+V", Label: "Paste"},
 			{Button: "Ctrl+C", Label: "Copy"},
 		}
+		if vkVoiceHintShown() {
+			keys = append(keys, vkVoiceHint()) // F4 (vkvoice_button.go)
+		}
+		return keys
 	}
 	hints := []FooterHint{
 		{Button: "A", Label: "Type"},
@@ -187,6 +195,10 @@ func vkHintList() []FooterHint {
 		{Button: "Y", Label: action},
 		{Button: "L1", Label: "Shift"},
 		{Button: "R1", Label: layer},
+	}
+	// R2 toggles voice typing (vkvoice_button.go).
+	if vkVoiceHintShown() {
+		hints = append(hints, vkVoiceHint())
 	}
 	if len(vkEnabledLayouts()) > 1 {
 		hints = append(hints, FooterHint{Button: "L1+R1", Label: "Language"})

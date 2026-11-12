@@ -18,19 +18,18 @@ package main
 //     builder's site, netlify/functions/bug-report.mjs, that files the report
 //     as a public GitHub issue with the maintainers' token. Any 2xx is success;
 //     a {"id", "issue", "url"} answer names the reference and the issue.
-//   - Through the user's phone only when the device cannot send it: a QR code
-//     opens a prefilled GitHub issue (a handheld has no browser of its own).
-//     Reports used to take this path every time, because no build carried a
-//     collector.
+//   - An optional phone path when a report cannot be saved or is refused: a
+//     QR code opens a prefilled GitHub issue. Reports used to take this path
+//     every time, because no build carried a collector.
 //
 // The handheld is where sending usually fails, so each failure has its own
 // answer: no network → the report waits in an outbox file under the app data
 // folder and goes out on its own when the device is back online ("Queued");
 // a clock reset to 1970 makes every certificate look invalid → "Set the date
 // and time first"; a firmware without a certificate store → a CA bundle shipped
-// next to the app or a firmware one is used, and if none exists the phone path
-// is offered instead; a collector that is not there (no function, not set up)
-// → the phone path, or the outbox with one try per start. The outbox backs off
+// next to the app or a firmware one is used, and if none exists the report is
+// saved with a readable copy; a collector that is not there → the outbox with
+// one try per start. A service missing GitHub access keeps retrying. The outbox backs off
 // while the collector keeps failing and retires a report it could not deliver
 // in a month to a file, so no report is lost and none is retried forever.
 
@@ -355,10 +354,12 @@ const (
 	// bugrepErrServer: the collector failed; retry later.
 	bugrepErrServer
 	// bugrepErrUnavailable: there is no collector at that address, or it is
-	// not set up (404, 405, 410, 501, 503, a web page instead of an answer,
-	// or {"fallback": "phone"}). Retrying in a minute will not help; the phone
-	// can, or the next start.
+	// not answering (404, 405, 410, 501, a web page instead of an answer).
+	// Try again after the next start.
 	bugrepErrUnavailable
+	// bugrepErrSetup: the collector answered but cannot file issues until its
+	// GitHub token or repository access is fixed. Keep retrying the outbox.
+	bugrepErrSetup
 )
 
 // bugrepClockFloor is the earliest plausible "now": the build date when the
@@ -519,11 +520,12 @@ func bugrepPost(endpoint string, r bugrepReport) (bugrepSent, bugrepSendErr, err
 // bugrepAnswer is the collector's JSON answer. Every field is optional: a
 // collector that answers 204 with no body has still taken the report.
 type bugrepAnswer struct {
-	ID       string `json:"id"`
-	Issue    int    `json:"issue"`
-	URL      string `json:"url"`
-	Fallback string `json:"fallback"`
-	Error    string `json:"error"`
+	ID         string `json:"id"`
+	Issue      int    `json:"issue"`
+	URL        string `json:"url"`
+	Fallback   string `json:"fallback"`
+	Configured *bool  `json:"configured"`
+	Error      string `json:"error"`
 }
 
 // bugrepReadAnswer reads the collector's answer to report ref: what to show
@@ -542,8 +544,9 @@ func bugrepReadAnswer(status int, contentType string, data []byte, ref string) (
 		// A field of an unexpected type leaves only that field empty.
 		_ = json.Unmarshal(trimmed, &answer)
 	}
-	if strings.EqualFold(strings.TrimSpace(answer.Fallback), "phone") {
-		return bugrepSent{}, bugrepErrUnavailable, fmt.Errorf("the report service is not set up (HTTP %d)", status)
+	if strings.EqualFold(strings.TrimSpace(answer.Fallback), "phone") ||
+		(answer.Configured != nil && !*answer.Configured) {
+		return bugrepSent{}, bugrepErrSetup, fmt.Errorf("the report service is not set up (HTTP %d)", status)
 	}
 	switch status {
 	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
@@ -698,9 +701,8 @@ var bugrepOutbox struct {
 	// failures counts the flushes in a row the network or the collector
 	// failed; each one doubles the wait before the next (bugrepOutboxDelay).
 	failures int
-	// stopped is set when the collector is not there at all (no function, not
-	// set up) or cannot be trusted on this firmware: queued reports wait for
-	// the next start instead of asking a dead address every few minutes.
+	// stopped is set when the collector is not there at all or cannot be
+	// trusted on this firmware: queued reports wait for the next start.
 	stopped bool
 }
 
@@ -902,6 +904,15 @@ func bugrepNoteSendFailed(now time.Time) {
 	bugrepOutbox.mu.Unlock()
 }
 
+// A setup response proves the collector is present. An earlier missing-route
+// response must not leave its outbox stopped once the function is deployed.
+func bugrepNoteServiceSetupPending(now time.Time) {
+	bugrepNoteSendFailed(now)
+	bugrepOutbox.mu.Lock()
+	bugrepOutbox.stopped = false
+	bugrepOutbox.mu.Unlock()
+}
+
 // bugrepOutboxTick runs on the main loop. It counts the outbox once after
 // startup and, while there is something in it, a collector and a network,
 // sends it in the background every so often — less often while the collector
@@ -969,6 +980,9 @@ func bugrepRetire(r bugrepReport, why string) {
 	}
 	bugrepRecount()
 	logPatch("[bugreport] %s retired (%s); %s in the Patch reports folder", r.ID, why, bugrepBaseName(copyPath))
+	tbxPost(func() {
+		notifPush("Bug report "+r.ID+" could not be sent — a copy is saved in Patch reports", notifWarning)
+	})
 }
 
 // bugrepFlush sends every queued report in the background. done, when set, is
@@ -984,6 +998,7 @@ func bugrepFlush(endpoint string, done func(sent int)) {
 	bugrepOutbox.mu.Unlock()
 	go func() {
 		sent := 0
+		var firstSent bugrepSent
 		failed, stop := false, false
 		now := time.Now()
 		for _, r := range bugrepQueued() {
@@ -991,10 +1006,13 @@ func bugrepFlush(endpoint string, done func(sent int)) {
 				bugrepRetire(r, "it could not be sent for a month")
 				continue
 			}
-			_, kind, err := bugrepPostFunc(endpoint, r)
+			receipt, kind, err := bugrepPostFunc(endpoint, r)
 			if err == nil {
 				bugrepUnqueue(r.ID)
 				sent++
+				if sent == 1 {
+					firstSent = receipt
+				}
 				continue
 			}
 			if kind == bugrepErrRejected {
@@ -1012,7 +1030,7 @@ func bugrepFlush(endpoint string, done func(sent int)) {
 			// certificate really expired — cost a handshake, so it backs off
 			// like any other failure.
 			stop = kind == bugrepErrUnavailable || kind == bugrepErrTrust
-			failed = kind == bugrepErrOffline || kind == bugrepErrServer ||
+			failed = kind == bugrepErrOffline || kind == bugrepErrServer || kind == bugrepErrSetup ||
 				(kind == bugrepErrClock && !bugrepClockWrong(time.Now()))
 			if stop {
 				logPatch("[bugreport] the report service is not available (%v); queued reports wait for the next start", err)
@@ -1039,11 +1057,11 @@ func bugrepFlush(endpoint string, done func(sent int)) {
 					done(sent)
 					return
 				}
-				word := "report"
-				if sent > 1 {
-					word = "reports"
+				if sent == 1 {
+					notifPush(bugrepSentToast(firstSent), notifSuccess)
+				} else {
+					notifPush(fmt.Sprintf("Sent %d queued bug reports", sent), notifSuccess)
 				}
-				ShowToast(fmt.Sprintf("Sent %d queued bug %s", sent, word), ToastKindSuccess)
 			})
 		}
 	}()
@@ -1066,8 +1084,8 @@ func bugrepIssueURL(r bugrepReport, maxLen int) string {
 	facts := "JukaHub " + r.Version + " · " + r.Device + " · " + r.OS + "/" + r.Arch + " · ref " + r.ID
 	desc := r.Description
 	build := func(d string) string {
-		body := d + "\n\n" + facts
-		return jukaHubIssuesNew + "?title=" + url.QueryEscape("[Bug] "+title) + "&body=" + url.QueryEscape(body)
+		body := d + "\n\n" + facts + "\n\n| Field | Value |\n|---|---|\n| Created | " + r.Created + " |"
+		return jukaHubIssuesNew + "?title=" + url.QueryEscape("[Bug] "+title+" ("+r.ID+")") + "&body=" + url.QueryEscape(body)
 	}
 	out := build(desc)
 	for len(out) > maxLen && desc != "" {

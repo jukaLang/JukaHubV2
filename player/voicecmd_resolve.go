@@ -63,6 +63,9 @@ type voiceTarget struct {
 	// under the same names.
 	Builtin bool
 	Action  func(*Config)
+	// Path is a game's or a file's path: what a voice shortcut keeps to find
+	// it again (voiceshortcuts.go).
+	Path string
 }
 
 // voiceMatch is a ranked target.
@@ -430,6 +433,10 @@ func voiceTargetsFromApp(config *Config) []voiceTarget {
 		}
 		out = append(out, t)
 	}
+	// The emulators — the pages around them and every tile of the Emulators
+	// page (voiceemu.go) — and the Voice shortcuts page (voiceshortcuts.go).
+	out = append(out, voiceEmulatorTargets(out)...)
+	out = append(out, voiceShortcutScreenTarget())
 	// A fresh slice: recentGames' answer must not have the index appended
 	// into its spare capacity.
 	recentList := recentGames()
@@ -452,7 +459,7 @@ func voiceTargetsFromApp(config *Config) []voiceTarget {
 			where = g.System
 		}
 		out = append(out, voiceTarget{Title: title, Where: where, Icon: "gamepad", Keys: g.System, Kind: voiceTargetGame,
-			Action: func(*Config) { playRecentGame(game) }})
+			Path: g.Path, Action: func(*Config) { playRecentGame(game) }})
 	}
 	recent := getRecentItems()
 	seenFiles := map[string]bool{}
@@ -467,7 +474,7 @@ func voiceTargetsFromApp(config *Config) []voiceTarget {
 			parent = filepath.Base(filepath.Dir(path))
 		}
 		out = append(out, voiceTarget{Title: name, Where: parent, Icon: homeSearchFileKind(name, isDir), Kind: voiceTargetFile,
-			Action: func(c *Config) { homeSearchOpenFile(c, p, n, dir) }})
+			Path: p, Action: func(c *Config) { homeSearchOpenFile(c, p, n, dir) }})
 	}
 	for _, it := range recent {
 		if it.Type != "file" {
@@ -508,6 +515,9 @@ func voiceTargetsFromApp(config *Config) []voiceTarget {
 func voiceWhisperPrompt(targets []voiceTarget) string {
 	const maxRunes = 600
 	var b strings.Builder
+	// The user's own words first, so they come back spelled the way they were
+	// taught (voiceshortcuts.go).
+	b.WriteString(voiceShortcutPromptWords())
 	b.WriteString("JukaHub, JukaLand, RetroArch, YouTube, Wi-Fi, Bluetooth, screenshot, volume, brightness")
 	seen := map[string]bool{}
 	for _, t := range targets {

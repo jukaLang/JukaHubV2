@@ -346,8 +346,9 @@ Pairing a Bluetooth pad: [Bluetooth controllers](#bluetooth-controllers).
 ## Bluetooth controllers
 
 **Settings → Network → Bluetooth devices** pairs a controller with the
-handheld. The Start menu (**Bluetooth**, next to Wi-Fi Networks), search
-(*Pair a controller*) and the Remote Play panel's **Controllers** row open the
+handheld. The Start menu (**Bluetooth**, next to Wi-Fi Networks), Quick
+Settings (**Bluetooth Devices**), search (*Pair a controller*, or words like
+"connect headphones") and the Remote Play panel's **Controllers** row open the
 same page.
 
 1. Switch Bluetooth on (the page's first row).

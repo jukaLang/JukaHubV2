@@ -821,7 +821,7 @@ func TestConfigMigrationPreservesUnknownFields(t *testing.T) {
 	path := filepath.Join(dir, "jukaconfig.json")
 	raw := `{
 		"AppName": "JukaHub",
-		"Version": "v0.4.0",
+		"Version": "v1.2.3",
 		"scenes": [{"name": "Main", "elements": [{"type": "button", "text": "X"}]}],
 		"future_field": {"nested": [1, 2, 3]}
 	}`
@@ -847,7 +847,7 @@ func TestConfigMigrationPreservesUnknownFields(t *testing.T) {
 		t.Fatalf("scenes mangled: %v", m["scenes"])
 	}
 	// Normalized version.
-	if v, _ := m["Version"].(string); v != "0.4.0" {
+	if v, _ := m["Version"].(string); v != "1.2.3" {
 		t.Errorf("version not normalized: %q", v)
 	}
 	_ = origCfgPath

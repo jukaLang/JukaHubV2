@@ -98,7 +98,7 @@ const (
 	// webJSUserAgent is what navigator.userAgent reports. It matches the
 	// header every browser request sends, so a site's server-side and
 	// script-side checks agree.
-	webJSUserAgent = "JukaHub Browser/1.1"
+	webJSUserAgent = browserChromeUserAgent
 	// webJSRegexpTimeout bounds one regular-expression match (see init).
 	webJSRegexpTimeout = 2 * time.Second
 	// webJSMinBudget is the least time worth starting a pass with: a script

@@ -72,6 +72,12 @@ func voiceExecute(config *Config, in voiceIntent, src voiceSource) voiceOutcome 
 	if config == nil {
 		config = appConfig
 	}
+	// A word the user taught (Settings → Voice & AI → Voice shortcuts) comes
+	// before the grammar: they said what it means. Cancel and help still win
+	// (voiceshortcuts.go).
+	if out, ok := voiceShortcutExecute(config, in, src); ok {
+		return out
+	}
 	switch in.Kind {
 	case voiceIntentNone:
 		// Nothing usable was heard: silence, a breath Whisper wrote down as
@@ -81,7 +87,8 @@ func voiceExecute(config *Config, in voiceIntent, src voiceSource) voiceOutcome 
 		return voiceOutcome{Say: "Cancelled", Cancel: true}
 	case voiceIntentHelp:
 		return voiceOutcome{Done: true, Say: "Say “open” and a name — a screen, an app or a game — or “play” a game or " +
-			"music, “volume 50”, “brighter”, “take a screenshot”, “turn off Wi-Fi”, “next song”, “what time is it”."}
+			"music, “volume 50”, “brighter”, “take a screenshot”, “turn off Wi-Fi”, “next song”, “what time is it”. " +
+			"Teach your own words in Settings → Voice & AI → Voice shortcuts."}
 	case voiceIntentTime:
 		return voiceOutcome{Done: true, Say: "It is " + clockDigits(config, time.Now())}
 	case voiceIntentDate:

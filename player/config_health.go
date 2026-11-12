@@ -32,7 +32,7 @@ func (cv *ConfigValidator) Validate(config *Config) error {
 	}
 
 	// Ensure top-level fields.
-	if config.AppName == "" {
+	if config.AppName == "" || config.AppName == "JukaHub 0.4.0" {
 		config.AppName = "JukaHub"
 	}
 	if config.Version == "" {

@@ -1146,8 +1146,18 @@ var validationMixin = {
 
 // ---------------------------------------------------------------- interface table
 
+// A customized built-in element extends its interface (HTMLButtonElement …),
+// whose constructor must hand the existing element to ceConstruct during an
+// upgrade, while a direct `new HTMLButtonElement()` stays illegal.
+function htmlInterfaceCtor(target) {
+  if (typeof ceUpgradeStack !== 'undefined' && ceUpgradeStack.length) return ceConstruct(target);
+  illegalConstructor();
+}
+
 function htmlIface(name, tags, parent) {
-  var C = iface(name, parent || HTMLElement);
+  // A fresh wrapper per interface: sharing one constructor and re-parenting it
+  // for every interface makes its prototype chain cyclic.
+  var C = iface(name, parent || HTMLElement, function () { return htmlInterfaceCtor(new.target); });
   if (tags) tags.split(' ').forEach(function (t) { HTML_PROTOS[t] = C.prototype; });
   return C;
 }

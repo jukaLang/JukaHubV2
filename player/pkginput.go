@@ -11,6 +11,9 @@ package main
 // A press on a card opens it on release, and only if the press did not turn
 // into a drag: that is what lets a finger swipe a shelf on a touch screen
 // without opening every card it starts on.
+//
+// Up at the top of any view reaches the "More stores" strip above the content
+// (pkgstores.go), and Up from the strip the top bar.
 
 import (
 	"github.com/veandco/go-sdl2/sdl"
@@ -211,6 +214,11 @@ func pkgDo(config *Config, act pkgAct) {
 		}
 		return
 	}
+	// The "More stores" strip takes the D-pad and A while it holds the focus;
+	// what it leaves (Tab's chips, the jump to the last row) goes to the view.
+	if pkgStoresFocused() && pkgStoresDo(config, act) {
+		return
+	}
 	if st.view == pkgViewRows {
 		pkgRowsDo(config, act)
 		return
@@ -365,7 +373,7 @@ func pkgRowsDo(config *Config, act pkgAct) {
 	rows := pkgRowCount(m)
 	if rows == 0 {
 		if act == pkgActUp {
-			focusChromeBar()
+			pkgStoresEnterFromContent()
 		}
 		return
 	}
@@ -381,7 +389,8 @@ func pkgRowsDo(config *Config, act pkgAct) {
 	switch act {
 	case pkgActUp:
 		if st.rowFocus == 0 {
-			focusChromeBar()
+			// Above the hero (or the first shelf) is the "More stores" strip.
+			pkgStoresEnterFromContent()
 			return
 		}
 		moveRow(st.rowFocus - 1)
@@ -466,7 +475,8 @@ func pkgGridDo(config *Config, act pkgAct) {
 				PlayNavSound()
 			}
 		case pkgActUp:
-			focusChromeBar()
+			// Above the chips is the "More stores" strip.
+			pkgStoresEnterFromContent()
 		case pkgActConfirm:
 			if st.chipCursor >= len(m.Chips) {
 				pkgCycleSort(config)
@@ -770,6 +780,9 @@ func pkgFooterHints() []FooterHint {
 			{Button: "L1/R1 / [ ]", Label: "Previous / next"},
 		}
 	}
+	if pkgStoresFocused() {
+		return pkgStoresFooterHints()
+	}
 	if st.chipFocus && st.view != pkgViewRows {
 		return []FooterHint{
 			{Button: "D-Pad", Label: "Choose"},
@@ -957,6 +970,15 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 	if st.sheet.open {
 		pkgSheetClick(config, hit, mx, my)
 		return
+	}
+	// A pill of the "More stores" strip opens at once; a press on the content
+	// takes the pad's focus off the strip, so the ring follows the pointer.
+	switch hit.Kind {
+	case pkgHitStore:
+		pkgStoresClick(config, hit.Index)
+		return
+	case pkgHitCard, pkgHitChip, pkgHitSort, pkgHitHeroPrimary, pkgHitHeroDetails, pkgHitHeroDot, pkgHitShelfArrow:
+		pkgStores.focus = false
 	}
 	m := st.model
 	switch hit.Kind {

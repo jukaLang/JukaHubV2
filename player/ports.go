@@ -463,9 +463,7 @@ func launchPortScript(name, path string) {
 	// The ALSA workaround and the CPU profile are scoped to this child: the
 	// environment is replaced for the port only, so JukaHub's own audio and the
 	// next launch are untouched even if the port crashes.
-	if env := portLaunchEnv(appConfig); len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
+	cmd.Env = append(childEnvWithTZ(os.Environ(), gameChildZone()), portLaunchEnv(appConfig)...)
 	restoreProfile := beginGamePowerProfile(appConfig)
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the
@@ -730,19 +728,16 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
 		}
 
-		renderText(renderer, config, medium, e.Name, ColorTextPrimary(), r.X+16, r.Y+8)
-		if badge := portCompatBadge(e.Compat.State); badge != "" {
-			// The chip verdict sits next to the name, before the title can push
-			// it off the row: it is the first thing to know about a port.
-			nw, _, _ := medium.SizeUTF8(e.Name)
-			badgeColor := ColorTextTertiary()
-			if e.Compat.State == portCompat32BitOnly {
-				badgeColor = ColorToastWarn
-			}
-			renderText(renderer, config, font, badge, badgeColor, r.X+24+int32(nw), r.Y+10+(medH-smallH)/2)
+		badge := portCompatBadge(e.Compat.State)
+		badgeW := int32(0)
+		if badge != "" {
+			bw, _, _ := font.SizeUTF8(badge)
+			badgeW = int32(bw)
 		}
+		label, labelColor := "", ColorTextSecondary()
+		statusW := int32(0)
 		if !e.Info {
-			label, labelColor := emuStatusLabel(e.Status)
+			label, labelColor = emuStatusLabel(e.Status)
 			if e.Install {
 				label, labelColor = "Install", installHighlight()
 			}
@@ -750,7 +745,26 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 				label, labelColor = "32-bit only", ColorToastWarn
 			}
 			lw, _, _ := font.SizeUTF8(label)
-			renderText(renderer, config, font, label, labelColor, r.X+r.W-16-int32(lw), r.Y+8+(medH-smallH)/2)
+			statusW = int32(lw)
+		}
+
+		// The name gets every pixel the status and compatibility chip leave.
+		// Without this budget a long port title ran through the chip and the
+		// right-aligned status, then off the row entirely.
+		name := ellipsize(medium, e.Name, portsRowNameWidth(r.W, badgeW, statusW))
+		nw, _, _ := medium.SizeUTF8(name)
+		renderText(renderer, config, medium, name, ColorTextPrimary(), r.X+16, r.Y+8)
+		if badge != "" {
+			// The chip verdict sits next to the (fitted) name, before the title
+			// can push it off the row: it is the first thing to know about a port.
+			badgeColor := ColorTextTertiary()
+			if e.Compat.State == portCompat32BitOnly {
+				badgeColor = ColorToastWarn
+			}
+			renderText(renderer, config, font, badge, badgeColor, r.X+24+int32(nw), r.Y+10+(medH-smallH)/2)
+		}
+		if label != "" {
+			renderText(renderer, config, font, label, labelColor, r.X+r.W-16-statusW, r.Y+8+(medH-smallH)/2)
 		}
 		if e.Detail != "" {
 			renderText(renderer, config, font, ellipsize(font, e.Detail, r.W-32),
@@ -766,6 +780,21 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",
 			portsPanel.scroll+1, portsPanel.scroll+int(visible), len(entries))}}, hints...)
 	}
-	hint := hintLine(hints...)
+	hint := ellipsize(font, hintLine(hints...), panelW-2*padX)
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
+}
+
+// portsRowNameWidth is the width left for a Ports row title after the row
+// padding, the right-aligned status and the compatibility chip. Keeping the
+// measurement in one place is what stops a long title from painting through
+// those parts of the row.
+func portsRowNameWidth(rowW, badgeW, statusW int32) int32 {
+	w := rowW - 32 - statusW
+	if badgeW > 0 {
+		w -= badgeW + 8
+	}
+	if w < 0 {
+		return 0
+	}
+	return w
 }

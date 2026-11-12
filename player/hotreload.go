@@ -18,6 +18,7 @@ type ConfigWatcher struct {
 	paths    []string
 	lastMod  map[string]time.Time
 	running  bool
+	paused   bool // poller off while no Live Builder session is paired (PERF-6)
 	stopCh   chan struct{}
 	reloadCh chan struct{}
 	onReload func(*Config)
@@ -97,6 +98,37 @@ func (cw *ConfigWatcher) IgnoreWrite(paths ...string) {
 	}
 }
 
+// SetPolling turns the modification poller on or off. The handheld only needs
+// to poll while a Live Builder session is paired: a design pushed from the
+// browser calls NotifyWritten itself, so an unpaired session was paying a stat
+// of every config file every two seconds for nothing (PERF-6). Desktop keeps
+// polling always, where hand-editing the file is the usual way it changes.
+// Resuming takes a fresh baseline, so a write made while the poller was off is
+// not replayed as a reload when the session pairs.
+func (cw *ConfigWatcher) SetPolling(active bool) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	if cw.paused == !active {
+		return
+	}
+	cw.paused = !active
+	if active {
+		for _, p := range cw.paths {
+			if info, err := os.Stat(p); err == nil {
+				cw.lastMod[p] = info.ModTime()
+			}
+		}
+	}
+}
+
+// setConfigWatcherPolling switches the shared watcher's poller, when there is
+// one. The live builder calls it as its server starts and stops (PERF-6).
+func setConfigWatcherPolling(active bool) {
+	if globalConfigWatcher != nil {
+		globalConfigWatcher.SetPolling(active)
+	}
+}
+
 // Start begins the background file watcher. It polls the modification times
 // every 2 seconds and debounces changes for 500ms to avoid rapid reloads while
 // a file is still being written.
@@ -150,9 +182,14 @@ func (cw *ConfigWatcher) watchLoop() {
 // (including a file that has just been created - the editor's first XML export,
 // for example, which previously was ignored until a restart).
 func (cw *ConfigWatcher) checkFile() {
-	changed := false
-
 	cw.mu.Lock()
+	// A paused poller does no I/O at all: the paired builder pushes through
+	// NotifyWritten, which is the only change a session can produce.
+	if cw.paused {
+		cw.mu.Unlock()
+		return
+	}
+	changed := false
 	for _, p := range cw.paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -358,6 +395,12 @@ func StartConfigWatcher(path string, reloadFn func(*Config)) {
 	globalConfigWatcher = NewConfigWatcher(path)
 	globalConfigWatcher.SetOnReload(reloadFn)
 	globalConfigWatcher.Start()
+	// On the handheld the poller starts off: it only matters while a Live
+	// Builder session is paired, and liveBuilderServer.Start switches it on
+	// (PERF-6). Desktop keeps it on, where the file is edited by hand.
+	if P().IsHandheld() {
+		globalConfigWatcher.SetPolling(false)
+	}
 	// An update finished at startup (update_resume.go) replaced the design
 	// file after it was loaded; the watcher's baseline already holds the new
 	// file's time, so it is reloaded here, like an edit pushed from the builder.

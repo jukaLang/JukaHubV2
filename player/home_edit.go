@@ -1112,6 +1112,7 @@ var (
 		{button: "Y", label: "Search"},
 		{button: "Start", label: "Menu"},
 		{button: "Select+Start", label: "Quit"},
+		{}, // Menu/F4 Talk to Juka, when available
 	}
 	homeFooterHintsEdit = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
@@ -1177,7 +1178,7 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 			set[2] = footerHint{}
 		}
 		if showBack {
-			set[4] = footerHint{button: "B", label: "Back"}
+			set[5] = footerHint{button: "B", label: "Back"}
 		}
 		return set
 	case showBack:

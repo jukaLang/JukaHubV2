@@ -831,10 +831,29 @@ jobs:
             if (missing.length) {
               throw new Error(`${tag} is missing ${missing.join(', ')}; keeping the release as a draft`);
             }
+            // The timestamped release workflow previously published an empty
+            // body. Generate notes only after the assets are verified, so
+            // published releases always have a useful changelog.
+            const previous = releases
+              .filter((r) => !r.draft && r.tag_name.startsWith('JukaHub-') && r.tag_name < tag)
+              .sort((a, b) => b.tag_name.localeCompare(a.tag_name))[0];
+            const {data: generated} = await github.request(
+              'POST /repos/{owner}/{repo}/releases/generate-notes',
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                ...(previous ? {previous_tag_name: previous.tag_name} : {}),
+              }
+            );
+            if (!generated.body || !generated.body.trim()) {
+              throw new Error(`${tag} has no generated notes; keeping the release as a draft`);
+            }
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.id,
+              body: generated.body,
               draft: false,
             });
             core.info(`published ${tag} with ${names.join(', ')}`);

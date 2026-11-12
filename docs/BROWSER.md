@@ -90,9 +90,13 @@ they were, and Select still opens the menu. The choice is the
 * Run the page's own JavaScript, so content a script builds — a framework app,
   a list fetched as JSON, lazy-loaded images, web components — is drawn too.
   See [JavaScript](#javascript).
-* Keep the page's shape: type scale, colours, boxes and rules, flex rows (cards
-  and icon+label pairs side by side), and absolutely positioned or fixed
-  layers painted over the text in `z-index` order.
+* Keep the page's shape: type scale, colours, boxes and rules, flex rows and
+  simple CSS grids (cards and icon+label pairs side by side), wrapped into
+  further rows when needed, and absolutely positioned or fixed layers painted
+  over the text in `z-index` order. Flex rows wrap at each card's stated
+  width or basis, share spare space according to `flex-grow`, and keep nested
+  rows inside their parent cards. Adjacent images directly under a flex row
+  occupy separate cells. A card with several paragraphs stays one item.
 * Read the typography and box properties real sheets actually use: `font-size`,
   the `font` shorthand (`font: italic 700 18px/1.8 Georgia, serif` sets the
   size, weight, style and leading in one declaration; the family is the one part
@@ -127,7 +131,10 @@ they were, and Select still opens the menu. The choice is the
   (`:root { --brand: #0af }`, `var(--brand, #fff)`), `!important`, and `calc()`
   over `px`, `em` and `rem`. A page whose palette lives in `--custom`
   properties keeps its colours instead of falling back to the reader's paper.
-* Apply the stylesheet rules that describe a screen. Every `<style>` block
+* Apply the stylesheet rules that describe a screen. Large inline sheets are
+  read through a bounded 1 MiB prefix of complete rules, so a site that puts
+  all its component CSS in one multi-megabyte `<style>` block still contributes
+  its first usable styles instead of losing that entire block. Every `<style>` block
   applies to the whole page, as in a browser, together with the linked sheets.
   `@media` width, height, orientation and aspect-ratio queries are answered for
   the handheld's own screen — the same size page scripts see — so a site's
@@ -344,7 +351,7 @@ web** row in Home search (its second line names the engine too), and the
 | Engine | Results address | Without JavaScript |
 |--------|-----------------|--------------------|
 | DuckDuckGo (the default) | `lite.duckduckgo.com/lite/?q=` | Results: the Lite page is made for simple browsers |
-| Startpage | `www.startpage.com/sp/search?query=` | Results: Google's, served as plain HTML |
+| Startpage | `www.startpage.com/sp/search?query=` | May show a verification challenge, including on its home page |
 | Google | `www.google.com/search?q=` | No results — see [Google needs a full web browser](#google-needs-a-full-web-browser) |
 | Bing | `www.bing.com/search?q=` | Results; its links are unwrapped (see [Result links](#result-links)) |
 | Brave Search | `search.brave.com/search?q=` | Results |
@@ -353,9 +360,11 @@ web** row in Home search (its second line names the engine too), and the
 | Wikipedia | `en.m.wikipedia.org/w/index.php?search=` | Opens the article when a title matches |
 | Custom | the address you type | Whatever that site serves without scripts |
 
-Search engines change what they send a script-less browser without notice, and
-DuckDuckGo and Mojeek answer a flood of searches from one address with a
-puzzle; the column is what each sent when this was written, not a promise.
+Search engines change what they send a small browser without notice. JukaHub
+recognizes Startpage's current verification page and offers Brave Search or a
+full browser instead of displaying a page stuck at “Verifying your request”.
+DuckDuckGo and Mojeek can also show puzzles after many searches from one
+address; the column is what each sent when this was written, not a promise.
 
 The **Search engine** row steps through the engines with Left/Right; **A** opens
 the list with a line about each, plus **Custom address…**, which opens the
@@ -387,6 +396,19 @@ The values live in `jukauser.json` as `browserSearchEngine`,
 `browserSearchCustom`, `browserHomePage` and `browserHomeTyped` (see
 [Configuration](CONFIGURATION.md)).
 
+### Startpage verification
+
+Startpage currently returns an Anubis verification challenge to JukaHub's
+reader for its home page and results pages. The challenge needs a full browser
+and its own verification process; JukaHub cannot render search results from
+that response. The reader detects it before running page scripts and shows a
+card instead. **Open Brave Search** opens Brave's start page from a challenged
+Startpage home page; **Search on Brave Search** carries over the words from a
+challenged Startpage search. **Always use Brave Search** changes the search
+engine. A PC can open Startpage in its web browser; a handheld can try WPE
+Browser when installed. Reload asks Startpage again in case its response
+changes.
+
 ### Google needs a full web browser
 
 Since January 2025 Google's results page is not a page of results but a robot
@@ -401,15 +423,15 @@ catch, so the reader does not try. It recognises Google's answer before running
 any of its scripts — they would only spend the page's script budget to end on
 the same wall — and shows a card instead:
 
-* On the handheld, **Search on Startpage** runs the same words on Startpage,
-  which serves Google's results as plain HTML; **Always use Startpage** does that
-  and makes Startpage the engine; **Change engine** opens Settings → Browser.
+* On the handheld, **Search on Brave Search** runs the same words there;
+  **Always use Brave Search** also makes it the search engine; **Change engine**
+  opens Settings → Browser.
 * On a PC, **Open in web browser** hands the search to the desktop's own
-  browser, which runs Google's scripts; **Search on Startpage** and **Change
+  browser, which runs Google's scripts; **Search on Brave Search** and **Change
   engine** follow it.
 * On a handheld with [WPE Browser](#wpe-browser) installed, **Open in WPE
-  Browser** comes first and runs the search there, where Google's check passes;
-  **Search on Startpage** and **Change engine** follow it. Where WPE Browser can
+  Browser** comes first and tries the search there;
+  **Search on Brave Search** and **Change engine** follow it. Where WPE Browser can
   be installed but is not, **Get WPE Browser** takes Change engine's place.
 
 Google stays on the list because its home page loads (so it works as a home
@@ -430,7 +452,8 @@ followed, and a wrapped YouTube link still plays in Media.
 ## WPE Browser
 
 Some sites only work in a full browser: Google's robot check, web apps, sites
-built entirely in script. On the Smart Pro, Brick and Brick Pro there is one —
+built entirely in script, and large news sites whose layouts use more CSS than
+the text reader can paint. On the Smart Pro, Brick and Brick Pro there is one —
 [WPE Browser](https://github.com/matweew/wpe-tsp), a community build of WPE
 WebKit for these handhelds with GPU rendering, hardware video and a gamepad
 pointer. JukaHub does not try to be it; it hands pages to it.

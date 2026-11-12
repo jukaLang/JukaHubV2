@@ -164,6 +164,15 @@ func trimuiAppDir() (string, error) {
 //     start can never lock the device up at boot. The marker goes once JukaHub
 //     exits (the device is then back on the menu) or has been up for
 //     autoStartSettleDelay.
+//   - The hand-over is one picture change, not three. Closing the menu leaves
+//     "menu" in the lock (trimuiAutostartMenuShown): the queued command puts
+//     black on the framebuffer before launch.sh runs, instead of the closed
+//     menu's frozen last picture, and JukaHub's power-on boot fades in from
+//     that black (bootos.go) rather than jumping to the boot logo, which is
+//     only on screen when the menu never opened. A loop the direct start
+//     pauses is written down in /tmp/jukahub-paused, which launch.sh resumes
+//     as it hands the screen back; the log names each process by pid, name
+//     and script, so a report shows how this firmware's loop looks.
 //
 // Go raw string: the script must not contain a backquote.
 const trimuiAutostartTemplate = `#!/bin/sh
@@ -197,8 +206,16 @@ LOCK=/tmp/jukahub-autostart.lock
 # put back later (a resume feature), or one left from a boot the hook called
 # off, does nothing.
 GO="$LOCK/go"
+# Left by the moment the menu is closed below: the queued command then puts
+# black on the screen instead of the closed menu's last picture, and JukaHub's
+# boot fades in from that black rather than starting from the boot logo.
+MENU="$LOCK/menu"
 RAN=/tmp/jukahub-autostart.ran
 TAG=jukahub-autostart-cmd
+# The launcher loops the direct start pauses, written down ("<pid> <start
+# time> <name>") for launch.sh, which resumes exactly those as it hands the
+# screen back (its paused record).
+PAUSED=/tmp/jukahub-paused
 
 say() {
 	up=
@@ -206,14 +223,38 @@ say() {
 	printf '[%s boot+%ss] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${up:-?}" "$*" >>"$LOG" 2>/dev/null
 }
 
-# A process's state and parent (st_state, st_ppid) from /proc/<pid>/stat. The
-# name in brackets may hold spaces, so the fields are read after its last ") ".
+# A process's state, parent and start time (st_state, st_ppid, st_start) from
+# /proc/<pid>/stat. The name in brackets may hold spaces, so the fields are
+# read after its last ") ".
 stat_of() {
 	line=
 	read -r line 2>/dev/null <"/proc/$1/stat" || return 1
 	set -- ${line##*) }
 	st_state="$1"
 	st_ppid="$2"
+	st_start="${20}"
+}
+
+# One process for the log: its pid, its name and, for a shell, the script it
+# runs (a busybox may name every script it runs plain "sh").
+who() {
+	wn=
+	read -r wn 2>/dev/null <"/proc/$1/comm"
+	wa=
+	case "$wn" in
+	sh | ash | bash | dash | busybox) wa=" $(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | cut -c1-100)" ;;
+	esac
+	printf '%s %s%s' "$1" "${wn:-?}" "${wa% }"
+}
+
+# Write paused pids down in $PAUSED with their start times.
+record() {
+	for p in "$@"; do
+		stat_of "$p" || continue
+		rn=
+		read -r rn 2>/dev/null <"/proc/$p/comm"
+		printf '%s %s %s\n' "$p" "$st_start" "${rn:-?}" >>"$PAUSED" 2>/dev/null
+	done
 }
 
 # Process ids of a running program (busybox pidof, else pgrep). A zombie is
@@ -336,6 +377,10 @@ queue_ours() {
 # jukahub-autostart-cmd: queued at boot by SDCARD/System/starts/jukahub-autostart.sh
 if [ -e /tmp/jukahub-autostart.lock/go ] && mkdir /tmp/jukahub-autostart.ran 2>/dev/null; then
 	rm -f /tmp/cmd_to_run.sh
+	# Black, not the closed menu's last picture, until JukaHub draws.
+	if [ -e /tmp/jukahub-autostart.lock/menu ]; then
+		dd if=/dev/zero of=/dev/fb0 bs=65536 count=512 2>/dev/null || :
+	fi
 	/bin/sh @LAUNCH@ || :
 	rm -f @PENDING@
 else
@@ -534,10 +579,13 @@ while [ "$try" -lt 2 ]; do
 	ui="$(pids MainUI)"
 	killed=
 	if [ -n "$ui" ]; then
+		from=
+		for p in $(parents $ui); do from="$from; $(who "$p")"; done
 		seen_parents="$seen_parents $(parents $ui)"
+		: >"$MENU" 2>/dev/null
 		kill -9 $ui 2>/dev/null
 		killed=" $ui "
-		say "closed the stock menu so the firmware starts JukaHub (try $try)"
+		say "closed the stock menu (pid ${ui% }${from:+, started by ${from#; }}) so the firmware starts JukaHub (try $try)"
 	fi
 	n=0
 	back=0
@@ -562,6 +610,19 @@ while [ "$try" -lt 2 ]; do
 	done
 	# Neither the queue nor the menu came back: start it below.
 	[ "$back" -ge $((2 * PER)) ] || break
+	# The loop that opened the menu opened it again and left the queue as it
+	# was: it ignores the queue after a kill, and one more try would only show
+	# the menu a third time. A menu from somewhere else, or a queue the loop
+	# did run (an app picked at the last moment took its place), is retried.
+	same=
+	[ "$(queued)" = ours ] && same=1
+	for p in $(parents $again); do
+		case " $seen_parents " in
+		*" $p "*) ;;
+		*) same= ;;
+		esac
+	done
+	[ -n "$same" ] && break
 done
 
 # The loop did not run the queue. Start JukaHub here the way launch.sh is run
@@ -588,6 +649,7 @@ resume() {
 }
 trap 'resume; withdraw' TERM INT
 [ -n "$paused" ] && kill -STOP $paused 2>/dev/null
+record $paused
 [ -e "$RAN" ] && { resume; started; }
 [ -n "$(pids JukaHub)" ] && { resume; give_up "JukaHub was started some other way"; }
 [ "$(queued)" = other ] && { resume; give_up "another app was queued to start, so JukaHub is not started"; }
@@ -595,7 +657,9 @@ trap 'resume; withdraw' TERM INT
 mkdir "$RAN" 2>/dev/null || { resume; started; }
 [ "$(queued)" = ours ] && rm -f "$Q"
 trap 'rm -f "$PENDING"; resume; say "JukaHub exited (the hook was told to stop)"; exit 0' TERM INT
-say "the firmware did not run the queue, so JukaHub is started directly${paused:+ (paused the launcher loop:$paused)}"
+pw=
+for p in $paused; do pw="$pw; $(who "$p")"; done
+say "the firmware did not run the queue, so JukaHub is started directly${pw:+ (paused the launcher loop: ${pw#; })}"
 /bin/sh "$APP_DIR/launch.sh" >>"$LOG" 2>&1 || :
 rm -f "$PENDING"
 resume
@@ -896,6 +960,19 @@ func trimuiAutostartBootNote() string {
 		return "boot hook: " + line
 	}
 	return ""
+}
+
+// trimuiAutostartMenuMarker is left in the boot hook's lock the moment the
+// hook closes the stock menu (trimuiAutostartTemplate).
+const trimuiAutostartMenuMarker = "menu"
+
+// trimuiAutostartMenuShown reports whether the boot hook had to close the
+// stock menu at this boot: the firmware's boot logo is then no longer on the
+// screen when JukaHub starts — the queued command left black there — so the
+// power-on boot fades in instead of continuing from the logo (bootos.go).
+func trimuiAutostartMenuShown() bool {
+	_, err := os.Stat(filepath.Join(trimuiAutostartLockDir, trimuiAutostartMenuMarker))
+	return err == nil
 }
 
 // readFileHead reads at most limit bytes of a file.

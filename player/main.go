@@ -785,12 +785,13 @@ func main() {
 		// suspend mid-game, and the battery saver via toastText), and let the
 		// child have the framebuffer to itself. A ringing alarm is the one
 		// exception: it paused the game (alarmvol.go) and takes the screen
-		// until it is snoozed or dismissed.
+		// until it is snoozed or dismissed. So does the game assistant, which
+		// pauses the game the same way to ask Juka about it (gameassist.go).
 		if gameScreenSuspended() && !wallpaperParkedForGame {
 			gifWallPauseForGame()
 			wallpaperParkedForGame = true
 		}
-		if gameScreenSuspended() && !alarmFiringActive() {
+		if gameScreenSuspended() && !alarmFiringActive() && !gameAssistOverlayActive() {
 			whileAwayWasActive = true
 			for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 				if _, quit := event.(*sdl.QuitEvent); quit {
@@ -803,6 +804,9 @@ func main() {
 			// Mouse in games and apps: a goroutine watches the pad for the
 			// Select + L1 chord while the child runs (vcursor_bridge_linux.go).
 			vcursorBridgeTick(config)
+			// The game assistant: another watches for Select + R2, and the
+			// overlay opens over the paused game (gameassist.go).
+			gameAssistParkedTick(config)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
 				alarmCheck(config, now)
@@ -839,8 +843,12 @@ func main() {
 		}
 		// Phone Companion actions arrive on an HTTP goroutine. They are queued
 		// and applied here, on the main loop, so a phone keypress takes the same
-		// path as the handheld's own input.
-		drainCompanionQueue(config)
+		// path as the handheld's own input. While the game assistant is up over
+		// a paused game they wait, as they do while the game owns the screen: a
+		// phone "launch" must not start something behind a stopped game.
+		if !gameAssistOverlayActive() {
+			drainCompanionQueue(config)
+		}
 		// Exit request (home Exit button or config "exit" trigger): leave the
 		// loop, then run the glass teardown below (stop children, persist, restore
 		// the CPU, close files) before the deferred SDL cleanup.
@@ -1832,6 +1840,10 @@ func main() {
 				if !virtualKeyboardActive && voiceSceneWheel(config, e.Y) {
 					continue
 				}
+				// Voice shortcuts scrolls its words and picks, or its sheet.
+				if !virtualKeyboardActive && vscSceneWheel(config, e.Y) {
+					continue
+				}
 				// Experience packs, Config and Backup & restore scroll their
 				// lists or open sheet (xpackroute.go).
 				if !virtualKeyboardActive && xpackRouteWheel(e.Y, config) {
@@ -2385,6 +2397,10 @@ func main() {
 						if voiceSceneClick(mx, my, config) {
 							break
 						}
+						// Voice shortcuts' microphone, buttons, words and picks.
+						if vscSceneClick(mx, my, config) {
+							break
+						}
 						// The Chat scene owns every click inside it: tabs, banner,
 						// pictures, links, names and avatars, message bodies, the
 						// action bar and the composer (chatinput.go).
@@ -2715,6 +2731,12 @@ func main() {
 				// used to see the press first (alarmring.go).
 				if alarmFiringActive() {
 					alarmHandleController(e)
+					continue
+				}
+				// So does the game assistant over a paused game: a Bluetooth pad's
+				// presses work it, and none reaches the screen behind it.
+				if gameAssistOverlayActive() {
+					gameAssistController(e, config)
 					continue
 				}
 				// The pad's version of that same clear button, matched to the hint
@@ -3162,8 +3184,9 @@ func main() {
 				// screen read them (stickcal.go).
 				stickNoteAxis(e)
 				// A ringing alarm is modal: the stick must not move the focus of
-				// the screen behind it (its two buttons answer the D-pad).
-				if alarmFiringActive() {
+				// the screen behind it (its two buttons answer the D-pad). So is
+				// the game assistant over a paused game (a Bluetooth pad's stick).
+				if alarmFiringActive() || gameAssistOverlayActive() {
 					continue
 				}
 				// Only a deliberate deflection is input (axisDeflected): a
@@ -3743,6 +3766,10 @@ func main() {
 		// A trophy unlock celebrates above every scene and panel (card, confetti,
 		// chime); only a ringing alarm, drawn next, covers it. trophy_celebrate.go.
 		trophyRenderOverlay(renderer, config)
+		// The game assistant over a paused game covers the screen behind it;
+		// the voice orb is drawn on it below. Every frame it also follows
+		// which game is played, for Juka's prompt (gameassist.go).
+		gameAssistRender(renderer, config)
 		// A ringing alarm covers everything: the toasts, the installer card, the
 		// first-run tour and any panel under them. It is the one thing on screen
 		// that cannot wait for the user to finish what they were doing.
@@ -3810,6 +3837,10 @@ func main() {
 		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
 			trophyOverlayActive()
 		frameRateCtrl.SetAnimationActive(animating)
+		// A moving backdrop — the liquid background's water, an animated
+		// wallpaper — asked for its cadence while it was drawn; this hands it
+		// over and logs the memory line now and then (adaptive.go).
+		adaptiveTick()
 		// A playing video is drawn from the loop, so the loop's cadence is
 		// its frame rate: it keeps the active one while the clip is visible.
 		frameRateCtrl.SetVideoActive(playerPhase() == "playing" && !ambientIsActive() && !ss.active)

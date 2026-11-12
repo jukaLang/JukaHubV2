@@ -2,15 +2,15 @@ package main
 
 // header_trophy.go — the trophy room's cup in the top bar.
 //
-// The system corner on every screen ends in two fixed controls: the
-// notification bell at the margin and, immediately left of it, the trophy
-// room's cup. A press, a click or a tap on it opens Trophies from anywhere;
+// The system corner on every screen ends in three fixed controls: the
+// notification bell at the margin, Report a bug to its left, then the trophy
+// room's cup. A press, a click or a tap on the cup opens Trophies from anywhere;
 // before, the room was a row in Start → Screens, a tile in Tools and a search
 // away. The cup is gold, an earned trophy's metal, so it reads as the room at a
 // glance and not as a second bell. A gold count hangs on it while trophies have
 // been earned since the room was last on screen, and it wears its open edge
 // while the room is the screen. The release offer, which comes and goes, sits
-// left of the cup, so neither fixed control ever moves.
+// left of the cup, so the fixed controls stay in place.
 //
 // Both headers place it — renderStatusBar (extras.go) on a scene, drawHeader
 // (homelayout.go) on Home — and both record the rect they drew in
@@ -83,7 +83,7 @@ type trophyCupState struct {
 var trophyUnseen trophyCupState
 
 // headerTrophySize is the cup chip's width and height: the bell's, so the
-// corner's two icon buttons are one size on every canvas.
+// corner's icon buttons are one size on every canvas.
 func headerTrophySize(config *Config) (int32, int32) {
 	return notifBellSize(config)
 }
@@ -140,6 +140,9 @@ func drawHeaderTrophy(renderer *sdl.Renderer, config *Config, rightX, barH int32
 // headerTrophyHit reports whether a click or a tap lands on the cup. The chip
 // is header-sized, so the hit area is the shared touch target centred on it.
 func headerTrophyHit(x, y int32) bool {
+	if headerBugRect.W > 0 && pointInRect(x, y, headerBugRect) {
+		return false
+	}
 	return headerTrophyRect.W > 0 && headerTrophyRect.H > 0 && hitTouchTarget(headerTrophyRect, x, y)
 }
 

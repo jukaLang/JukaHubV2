@@ -2,7 +2,7 @@ package main
 
 // header.go — the app's one top bar.
 //
-// Home and every scene draw the same band: the wordmark and version on the
+// Home and every scene draw the same band: the wordmark on the
 // left, that screen's own chrome (Back, Menu) after it, and the system corner on
 // the right — the bell at the margin, the trophy room's cup immediately left of
 // it (header_trophy.go), the release offer left of the cup, and the
@@ -34,7 +34,7 @@ import (
 const (
 	// headerBrandSize is the wordmark's size in design pixels.
 	headerBrandSize = 26
-	// headerCaptionSize is the muted " - vX.Y.Z - Scene" line. It is also the
+	// headerCaptionSize is the muted date or scene caption. It is also the
 	// size of every secondary label in the bar, so the bar reads as one row.
 	headerCaptionSize = 16
 	// headerBackFontSize is two steps larger than the caption: Back is the bar's

@@ -129,6 +129,13 @@ const (
 	// (header_trophy.go).
 	ChromeTrophyIndex = -12
 	ChromeTrophyType  = "trophy"
+	ChromeBugIndex    = -13
+	ChromeBugType     = "bug"
+
+	// The Bluetooth rune between the speaker and the Wi-Fi meter opens the
+	// Bluetooth page (statusbar_bluetooth.go).
+	ChromeBluetoothIndex = -14
+	ChromeBluetoothType  = "bluetooth"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -138,7 +145,7 @@ const (
 func chromeTier(idx int) int {
 	switch idx {
 	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex, ChromeWiFiIndex, ChromeVolumeIndex,
-		ChromeBrightnessIndex, ChromeTrophyIndex:
+		ChromeBrightnessIndex, ChromeTrophyIndex, ChromeBugIndex, ChromeBluetoothIndex:
 		return 1
 	}
 	return 0
@@ -235,14 +242,18 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		// It joins the bar so the D-pad can reach Wi-Fi (and the network list)
 		// without a touchscreen: on the handheld the meter used to be the one
 		// drawn control the pad could not select.
-		// The speaker beside it opens the volume popover. On the handheld the
-		// pad is the only way to reach it, so it joins the bar the same way,
-		// and so does the sun left of it (the brightness card).
+		// The Bluetooth rune beside it opens the Bluetooth page and the
+		// speaker left of the rune the volume popover. On the handheld the
+		// pad is the only way to reach them, so they join the bar the same
+		// way, and so does the sun left of the speaker (the brightness card).
 		if statusBrightnessRect.W > 0 {
 			addNode(ChromeBrightnessIndex, statusBrightnessRect, ChromeBrightnessType, "Brightness")
 		}
 		if statusVolumeRect.W > 0 {
 			addNode(ChromeVolumeIndex, statusVolumeRect, ChromeVolumeType, "Volume")
+		}
+		if statusBluetoothRect.W > 0 {
+			addNode(ChromeBluetoothIndex, statusBluetoothRect, ChromeBluetoothType, "Bluetooth")
 		}
 		if statusWiFiRect.W > 0 {
 			addNode(ChromeWiFiIndex, statusWiFiRect, ChromeWiFiType, "Wi-Fi")
@@ -250,8 +261,11 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		if nc.bellRect.W > 0 {
 			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")
 		}
-		// The trophy room's cup, beside the bell: the bar's chain is ordered by
-		// x below, so Left from the bell reaches it and Right from it the bell.
+		if headerBugRect.W > 0 {
+			addNode(ChromeBugIndex, headerBugRect, ChromeBugType, headerBugLabel)
+		}
+		// The trophy room's cup is left of Report a bug. The bar's chain is
+		// ordered by x below, so the D-pad visits all three corner controls.
 		if headerTrophyRect.W > 0 {
 			addNode(ChromeTrophyIndex, headerTrophyRect, ChromeTrophyType, headerTrophyLabel)
 		}

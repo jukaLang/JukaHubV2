@@ -2,7 +2,8 @@ package main
 
 // vkvoice.go — voice typing for the on-screen keyboard.
 //
-// The mic chip (or the Menu button, or F4, while the keyboard is up) records
+// The mic chip (or R2, the Menu button or F4 while the keyboard is up:
+// vkvoice_button.go) records
 // through the shared microphone (voicemic.go: SDL's default capture device,
 // then the kernel's capture PCMs and SDL's own list): 16 kHz mono 16-bit, at
 // most vkVoiceMaxSeconds, with a live level meter in the strip. A second press (A, Enter, a tap on the bar) stops it and
@@ -184,13 +185,14 @@ func vkVoiceToggle(config *Config) {
 	case strings.TrimSpace(groqAPIKey()) == "":
 		vkVoiceSay("Add your Groq API key in Settings to use voice typing", vkVoiceOpenKey)
 		return
-	case !IsOnline():
+	case !IsOnline() && !netReconnecting(): // just after a wake the clip waits for the Wi-Fi (wake_resume.go)
 		vkVoiceSay("Voice typing needs internet", vkVoiceNoAction)
 		return
 	}
 	// The shared microphone (voicemic.go) tries SDL's default device, then
 	// the kernel's capture PCMs and SDL's own list, and hands back 16 kHz mono
 	// 16-bit, which is exactly what Whisper wants.
+	jukaSpeakStop() // it must not hear Juka reading a reply (tts_api.go)
 	mic, err := micOpen()
 	if err != nil {
 		if errors.Is(err, errMicNone) {
@@ -287,6 +289,7 @@ func vkVoiceStop(config *Config) {
 	vkPlay(PlayActivateSound)
 	go func() {
 		defer cancel()
+		netWaitOnline(ctx, netWakeWaitMax) // after a wake: up to 15 s for the Wi-Fi, not a failure
 		text, err := vkTranscribe(ctx, key, wav, lang)
 		vkVoiceResult.mu.Lock()
 		vkVoiceResult.ready, vkVoiceResult.gen, vkVoiceResult.text, vkVoiceResult.err = true, gen, text, err
@@ -309,8 +312,10 @@ func vkVoiceCancel() {
 }
 
 // vkVoiceTick runs once per frame while the keyboard is open: it records,
-// stops at the time limit and applies a finished transcription.
+// stops at the time limit and applies a finished transcription. A message
+// field may start listening by itself first (vkvoice_button.go).
 func vkVoiceTick(config *Config) {
+	vkVoiceAutoTick(config)
 	switch vkVoice.phase {
 	case vkVoiceRecording:
 		vkVoiceDrain()
@@ -612,8 +617,9 @@ func vkDrawVoiceBar(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, bar 
 	cy := bar.Y + bar.H/2
 	_, th := measureText(font, "Ag")
 	textY := cy - th/2
-	hint := "A stop  ·  B cancel"
-	if !P().IsHandheld() {
+	// R2 started it and R2 sends it (vkvoice_button.go); A still stops too.
+	hint := "R2 stop  ·  B cancel"
+	if hintsUseKeyboard() {
 		hint = "Enter stop  ·  Esc cancel"
 	}
 	switch vkVoice.phase {
@@ -657,7 +663,7 @@ func vkDrawVoiceBar(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, bar 
 			a := uint8(110 + 145*(0.5+0.5*phase))
 			fillRoundedRect(renderer, x+int32(i)*14, cy-4, 8, 8, 4, WithAlpha(pal.accent, a))
 		}
-		drawText(renderer, font, "Transcribing…", x+50, textY, pal.ink, textAlignLeft)
+		drawText(renderer, font, netWaitLabel("Transcribing…"), x+50, textY, pal.ink, textAlignLeft)
 		cancel := "B cancel"
 		if !P().IsHandheld() {
 			cancel = "Esc cancel"

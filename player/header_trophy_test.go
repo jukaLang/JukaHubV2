@@ -18,19 +18,22 @@ func keepHeaderRects(t *testing.T) {
 	back, start, clock := sceneTitleBackRect, tb.startRect, statusClockRect
 	bell, wifi, weather := nc.bellRect, statusWiFiRect, weatherStatusRect
 	media, badge := statusMediaRect, updatePrompt.badge
-	volume, brightness, trophy := statusVolumeRect, statusBrightnessRect, headerTrophyRect
+	volume, brightness, trophy, bug := statusVolumeRect, statusBrightnessRect, headerTrophyRect, headerBugRect
+	bluetooth := statusBluetoothRect
 	home := homeLayoutActive
 	t.Cleanup(func() {
 		sceneTitleBackRect, tb.startRect, statusClockRect = back, start, clock
 		nc.bellRect, statusWiFiRect, weatherStatusRect = bell, wifi, weather
 		statusMediaRect, updatePrompt.badge = media, badge
 		statusVolumeRect, statusBrightnessRect, headerTrophyRect = volume, brightness, trophy
+		headerBugRect, statusBluetoothRect = bug, bluetooth
 		homeLayoutActive = home
 	})
 	sceneTitleBackRect, tb.startRect, statusClockRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	nc.bellRect, statusWiFiRect, weatherStatusRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	statusMediaRect, updatePrompt.badge = sdl.Rect{}, sdl.Rect{}
 	statusVolumeRect, statusBrightnessRect, headerTrophyRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	headerBugRect, statusBluetoothRect = sdl.Rect{}, sdl.Rect{}
 	homeLayoutActive = false
 }
 
@@ -40,8 +43,11 @@ func keepHeaderRects(t *testing.T) {
 func TestHomeFocusWalksThroughTheTrophyCup(t *testing.T) {
 	f := NewHomeFocusController()
 	f.Set(HomeFocusBell)
+	if got := f.Move(FocusLeft); got != HomeFocusBug {
+		t.Fatalf("Left from the bell = %s, want Report a bug", got)
+	}
 	if got := f.Move(FocusLeft); got != HomeFocusTrophy {
-		t.Fatalf("Left from the bell = %s, want the cup", got)
+		t.Fatalf("Left from Report a bug = %s, want the cup", got)
 	}
 	if got := f.Move(FocusLeft); got != HomeFocusUpdate {
 		t.Fatalf("Left from the cup = %s, want the release offer", got)
@@ -49,8 +55,11 @@ func TestHomeFocusWalksThroughTheTrophyCup(t *testing.T) {
 	if got := f.Move(FocusRight); got != HomeFocusTrophy {
 		t.Fatalf("Right from the offer = %s, want the cup", got)
 	}
+	if got := f.Move(FocusRight); got != HomeFocusBug {
+		t.Fatalf("Right from the cup = %s, want Report a bug", got)
+	}
 	if got := f.Move(FocusRight); got != HomeFocusBell {
-		t.Fatalf("Right from the cup = %s, want the bell", got)
+		t.Fatalf("Right from Report a bug = %s, want the bell", got)
 	}
 
 	// No release offered and nothing playing: the clock is the cup's neighbour.
@@ -67,12 +76,18 @@ func TestHomeFocusWalksThroughTheTrophyCup(t *testing.T) {
 	// No cup drawn: it is not a stop on the way.
 	f.SetEnabled(HomeFocusTrophy, false)
 	f.Set(HomeFocusBell)
+	if got := f.Move(FocusLeft); got != HomeFocusBug {
+		t.Fatalf("with no cup Left from the bell = %s, want Report a bug", got)
+	}
 	if got := f.Move(FocusLeft); got != HomeFocusClock {
-		t.Fatalf("with no cup Left from the bell = %s, want the clock", got)
+		t.Fatalf("with no cup Left from Report a bug = %s, want the clock", got)
 	}
 	f.Set(HomeFocusClock)
+	if got := f.Move(FocusRight); got != HomeFocusBug {
+		t.Fatalf("with no cup Right from the clock = %s, want Report a bug", got)
+	}
 	if got := f.Move(FocusRight); got != HomeFocusBell {
-		t.Fatalf("with no cup Right from the clock = %s, want the bell", got)
+		t.Fatalf("with no cup Right from Report a bug = %s, want the bell", got)
 	}
 }
 

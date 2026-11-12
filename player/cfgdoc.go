@@ -8,7 +8,7 @@ package main
 //
 //	{
 //	  "schemaVersion": 1,
-//	  "generatedBy": "JukaHub v0.4.0",
+//	  "generatedBy": "JukaHub v1.2.3",
 //	  "device":   {"model": "trimui-smart-pro", "platform": "trimui-linux", …},
 //	  "defaults": {"source": "trimui/jukaconfig.device.json", "stamp": "…", …},
 //	  "sections": {

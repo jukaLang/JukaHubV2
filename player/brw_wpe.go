@@ -415,7 +415,7 @@ func brwWpeLaunch(config *Config, address string) bool {
 // ── The "needs a full web browser" card ──────────────────────────────────
 
 // brwWpeWallButtonsFor is the wall card's buttons with WPE in them. Installed,
-// WPE comes first and "Always use Startpage" makes room, the way the desktop's
+// WPE comes first and "Always use Brave Search" makes room, the way the desktop's
 // card puts its own browser first; installable, "Get WPE Browser" takes the
 // third place from "Change engine" (Settings → Browser still has every
 // engine). Anything else keeps the card's own buttons. The card has room for
@@ -469,7 +469,7 @@ func brwWpeWallDetailFor(detail, wayOut, alt string, open bool) string {
 	if !open || wayOut == "" || !strings.HasSuffix(detail, wayOut) {
 		return detail
 	}
-	return strings.TrimSuffix(detail, wayOut) + "Open it in " + brwWpeName + ", or try " + alt + ": Google's results without the check."
+	return strings.TrimSuffix(detail, wayOut) + "Try opening it in " + brwWpeName + ", or search with " + alt + "."
 }
 
 // brwWpeWallDetail is brwWpeWallDetailFor for the device as it is now.

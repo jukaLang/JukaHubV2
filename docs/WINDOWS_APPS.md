@@ -64,6 +64,10 @@ pad.
 
 ## Display modes
 
+WestonPack's Crusty presenter is the SDL2 bridge for the TrimUI framebuffer;
+Wine still uses its normal X11 driver inside that display. The runtime setup
+installs WestonPack, so there is no separate SDL2 conversion package to add.
+
 On the handheld every program runs inside WestonPack. **Y** on a row switches
 that app between the two modes; the choice is kept per app in
 `data/windows-apps/display.json`, and an OpenGL app says *OpenGL* on its row.

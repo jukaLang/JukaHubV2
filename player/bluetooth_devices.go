@@ -32,8 +32,8 @@ package main
 //
 // Bluetooth also shares the radio with Wi-Fi on these handhelds (TrimUI's own
 // notes ask to switch it off while streaming), which is why a search is one
-// ten-second sweep — as the page opens with the radio on, and again when asked
-// for — and never a background loop.
+// ten-second sweep — as the page opens with the radio on and nothing paired,
+// and again when asked for — and never a background loop.
 
 import (
 	"bytes"
@@ -97,7 +97,7 @@ var (
 
 var (
 	errBzNoTool    = errors.New("this system has no bluetoothctl, so it cannot pair devices")
-	errBzNoDaemon  = errors.New("the Bluetooth service is not running — switch Bluetooth off and on, or restart the handheld")
+	errBzNoDaemon  = errors.New("the Bluetooth service is not running — switch Bluetooth on to start it, or restart the handheld")
 	errBzNoAdapter = errors.New("no Bluetooth adapter answered — switch Bluetooth on and try again")
 	errBzEnded     = errors.New("bluetoothctl stopped answering — try again")
 	errBzNotFound  = errors.New("the device is not visible — put it in pairing mode and search again")
@@ -113,7 +113,11 @@ type bzError struct {
 func (e *bzError) Error() string { return e.msg }
 
 // bzStepError turns a failure line ("Failed to pair:
-// org.bluez.Error.AuthenticationFailed") into a sentence.
+// org.bluez.Error.AuthenticationFailed") into a sentence. BlueZ words the same
+// failure differently from one release to the next — 5.54 on the handhelds
+// says "Host is down" or "le-connection-abort-by-local" where 5.6x says
+// "br-connection-page-timeout" — so the reasons are matched by their words, in
+// either spelling.
 func bzStepError(step, line string) error {
 	code := line
 	if i := strings.Index(line, "org.bluez.Error."); i >= 0 {
@@ -121,23 +125,40 @@ func bzStepError(step, line string) error {
 	}
 	code = strings.TrimSpace(code)
 	lower := strings.ToLower(line)
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(lower, w) {
+				return true
+			}
+		}
+		return false
+	}
 	msg := ""
 	switch {
 	case strings.Contains(code, "AuthenticationFailed"), strings.Contains(code, "AuthenticationRejected"),
 		strings.Contains(code, "AuthenticationCanceled"), strings.Contains(code, "AuthenticationTimeout"):
 		msg = "it refused the pairing — put it in pairing mode again and retry"
-	case strings.Contains(code, "ConnectionAttemptFailed"), strings.Contains(lower, "page timeout"),
-		strings.Contains(lower, "host is down"):
-		msg = "it did not answer — keep it in pairing mode, close to the handheld"
-	case strings.Contains(code, "InProgress"):
-		msg = "Bluetooth is still busy with another device — try again in a few seconds"
-	case strings.Contains(code, "NotReady"):
-		msg = "Bluetooth is off — switch it on first"
-	case strings.Contains(code, "DoesNotExist"), strings.Contains(lower, "not available"):
-		msg = "it is no longer visible — put it in pairing mode and search again"
-	case strings.Contains(lower, "profile-unavailable"), strings.Contains(code, "NotAvailable"),
-		strings.Contains(code, "NotSupported"):
+	case has("profile-unavailable"), strings.Contains(code, "NotAvailable"), strings.Contains(code, "NotSupported"):
 		msg = "this system has no driver for that kind of device"
+	case strings.Contains(code, "ConnectionAttemptFailed"),
+		has("page timeout", "page-timeout", "host is down", "connection timed out", "connection-timeout",
+			"abort-by-local", "aborted-by-local", "software caused connection abort"):
+		msg = "it did not answer — switch it on (its PS or Home button) and keep it close"
+		if step == "pair" {
+			msg = "it did not answer — keep it in pairing mode, close to the handheld"
+		}
+	case has("connection refused", "-refused"):
+		msg = "it refused the connection — forget it here and pair it again"
+	case has("abort-by-remote", "aborted-by-remote", "connection reset by peer"):
+		msg = "it dropped the connection — try again; if it keeps doing that, forget it and pair it again"
+	case has("canceled", "cancelled"):
+		msg = "the connection was cancelled — try again"
+	case strings.Contains(code, "InProgress"), has("already in progress", "-busy"):
+		msg = "Bluetooth is still busy with another device — try again in a few seconds"
+	case strings.Contains(code, "NotReady"), has("not-powered"):
+		msg = "Bluetooth is off — switch it on first"
+	case strings.Contains(code, "DoesNotExist"), has("not available"):
+		msg = "it is no longer visible — put it in pairing mode and search again"
 	default:
 		msg = "Bluetooth said: " + code
 	}
@@ -1900,10 +1921,7 @@ func btRadioCachedState() (on bool, known bool) {
 
 // bzRefreshRadio reads the radio into the cache.
 func bzRefreshRadio() {
-	on, known := false, false
-	if bzRadioBackend() != "" {
-		on, known = bzRadioProbe()
-	}
+	on, known := btProbeRadio()
 	bzRadioCache.mu.Lock()
 	bzRadioCache.on, bzRadioCache.known = on, known
 	bzRadioCache.at = time.Now()
@@ -1911,12 +1929,34 @@ func bzRefreshRadio() {
 	bzRadioCache.mu.Unlock()
 }
 
-// bzNoteRadio records a state the page has just set or read.
+// btProbeRadio reads the radio now. The kernel answers first, without waking
+// bluetoothd: no adapter registered is off (the firmware's switch takes the
+// chip away), and an adapter's HCI_UP flag is its power. Only where the kernel
+// cannot be asked does `bluetoothctl show` (bzRadioProbe) decide, which costs a
+// process and, while bluetoothd is down, its whole timeout.
+func btProbeRadio() (on, known bool) {
+	if runtime.GOOS == "linux" {
+		if !btAdapterPresent() {
+			return false, true
+		}
+		if up, ok := btHCIUp(); ok {
+			return up, true
+		}
+	}
+	if bzRadioBackend() != "" {
+		return bzRadioProbe()
+	}
+	return false, false
+}
+
+// bzNoteRadio records a state the page has just set or read. The bar's button
+// reads the radio again on its next frame.
 func bzNoteRadio(on, known bool) {
 	bzRadioCache.mu.Lock()
 	bzRadioCache.on, bzRadioCache.known = on, known
 	bzRadioCache.at = time.Now()
 	bzRadioCache.mu.Unlock()
+	btQuickKick()
 }
 
 // bzToolCache remembers whether bluetoothctl exists.

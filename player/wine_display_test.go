@@ -1,6 +1,39 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestWinebootUsesFirmwareLibraries(t *testing.T) {
+	t.Setenv("JUKAHUB_ORIG_ENV", "HOME PATH LD_LIBRARY_PATH")
+	t.Setenv("JUKAHUB_ORIG_HOME", "/firmware/home")
+	t.Setenv("JUKAHUB_ORIG_PATH", "/firmware/bin")
+	t.Setenv("JUKAHUB_ORIG_LD_LIBRARY_PATH", "/firmware/lib")
+	t.Setenv("HOME", "/jukahub")
+	t.Setenv("PATH", "/jukahub/required")
+	t.Setenv("LD_LIBRARY_PATH", "/jukahub/libs")
+	t.Setenv("DISPLAY", ":0")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+
+	env := wineCmdEnv(map[string]string{"WINEPREFIX": "/wine/prefix"}, true)
+	for key, want := range map[string]string{
+		"HOME": "/firmware/home", "PATH": "/firmware/bin",
+		"LD_LIBRARY_PATH": "/firmware/lib", "WINEPREFIX": "/wine/prefix",
+	} {
+		if got, ok := childEnvLookup(env, key); !ok || got != want {
+			t.Errorf("%s = %q (present %v), want %q", key, got, ok, want)
+		}
+	}
+	for _, key := range []string{"DISPLAY", "WAYLAND_DISPLAY", "JUKAHUB_ORIG_ENV"} {
+		if _, ok := childEnvLookup(env, key); ok {
+			t.Errorf("%s leaked into headless wineboot", key)
+		}
+	}
+	if strings.Contains(strings.Join(env, "\n"), "/jukahub/libs") {
+		t.Fatal("JukaHub's SDL libraries leaked into wineboot")
+	}
+}
 
 // weston.env is written by hand on a device: the lines that count, and the
 // ones that are ignored.

@@ -35,8 +35,10 @@ const (
 	HomeActionSearch         HomeAction = "search"
 	HomeActionVolume         HomeAction = "toggle_volume"
 	HomeActionBrightness     HomeAction = "toggle_brightness"
+	HomeActionBluetooth      HomeAction = "open_bluetooth"
 	HomeActionQR             HomeAction = "show_pairing_qr"
 	HomeActionTrophies       HomeAction = "open_trophies"
+	HomeActionBugReport      HomeAction = "report_bug"
 )
 
 // The search pill's place in the design grid (1280x720 canvas units): under
@@ -96,7 +98,7 @@ type HomeContinueState struct {
 type HomeViewData struct {
 	Greeting    string
 	Subtitle    string
-	Version     string
+	BuildDate   string
 	StatusParts []string // right-side header cluster, shared with scene headers
 	// The notification bell is sized and drawn from the same font/metrics on
 	// every screen, so the home header cannot drift from the scene status bar.
@@ -161,20 +163,21 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 		Height: height,
 		Motion: true,
 		Focus:  NewHomeFocusController(),
-		Items:  make(map[HomeFocusID]HomeItem, 22),
+		Items:  make(map[HomeFocusID]HomeItem, 23),
 		// The search pill comes after the cards: its grown touch target reaches
 		// a few pixels toward the Continue card, and a tap on the card's own
-		// edge must stay the card's.
+		// edge must stay the card's. The Bluetooth rune comes before the meter
+		// beside it, as core.go's bar click tests it.
 		Order: []HomeFocusID{
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
 			HomeFocusSettings, HomeFocusSearch, HomeFocusUpdate, HomeFocusBrightness,
-			HomeFocusVolume, HomeFocusWiFi, HomeFocusWeather, HomeFocusClock,
+			HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusWeather, HomeFocusClock,
 			// The bell is hit-tested before the trophy room's cup beside it,
 			// as main.go's click path tests it, so a hover and a click on the
 			// strip where their touch targets meet pick the same control.
-			HomeFocusNowPlaying, HomeFocusBell, HomeFocusTrophy, HomeFocusExit, HomeFocusQR,
+			HomeFocusNowPlaying, HomeFocusBell, HomeFocusBug, HomeFocusTrophy, HomeFocusExit, HomeFocusQR,
 		},
 	}
 	layout.rebuildItems()
@@ -452,12 +455,15 @@ func (h *HomeLayout) rebuildItems() {
 	// pill is drawn at its label's width inside it.
 	card(HomeFocusExit, "Exit", "Quit JukaHub", "power", HomeActionExit,
 		sdl.Rect{X: 48, Y: 674, W: 116, H: 36})
-	// The header chips (signal meter, weather, clock, now-playing, bell, update)
-	// are the header text itself: drawHeader replaces every one of these rects
-	// with what it measured this frame. They keep placeholders so a tap or a
-	// D-pad press before the first frame still resolves to a control.
+	// The header chips (sun, speaker, Bluetooth rune, signal meter, weather,
+	// clock, now-playing, bell, update) are the header text itself: drawHeader
+	// replaces every one of these rects with what it measured this frame. They
+	// keep placeholders so a tap or a D-pad press before the first frame still
+	// resolves to a control.
 	card(HomeFocusWiFi, "Wi-Fi", "Connect to a network", "wifi", HomeActionWiFi,
 		sdl.Rect{X: 930, Y: 10, W: 52, H: 36})
+	card(HomeFocusBluetooth, "Bluetooth", "Connect a device", "bluetooth", HomeActionBluetooth,
+		sdl.Rect{X: 890, Y: 10, W: 34, H: 36})
 	card(HomeFocusWeather, "Weather", "Local forecast", "weather", HomeActionToggleWeather,
 		sdl.Rect{X: 1000, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
@@ -466,14 +472,16 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 1160, Y: 10, W: 44, H: 36})
 	card(HomeFocusBell, "Notifications", "Recent alerts", "bell", HomeActionNotifications,
 		sdl.Rect{X: 1204, Y: 10, W: 46, H: 36})
+	card(HomeFocusBug, "Report a bug", "Send a report", "bug", HomeActionBugReport,
+		sdl.Rect{X: 1180, Y: 10, W: 36, H: 36})
 	card(HomeFocusTrophy, "Trophies", "Your trophies and playtime", "trophy", HomeActionTrophies,
 		sdl.Rect{X: 1160, Y: 10, W: 36, H: 36})
 	card(HomeFocusUpdate, "Update", "Install the new release", "update", HomeActionUpdate,
 		sdl.Rect{X: 900, Y: 12, W: 26, H: 24})
 	card(HomeFocusVolume, "Volume", "Change the volume", "volume", HomeActionVolume,
-		sdl.Rect{X: 890, Y: 10, W: 34, H: 36})
-	card(HomeFocusBrightness, "Brightness", "Change the screen brightness", "brightness", HomeActionBrightness,
 		sdl.Rect{X: 850, Y: 10, W: 34, H: 36})
+	card(HomeFocusBrightness, "Brightness", "Change the screen brightness", "brightness", HomeActionBrightness,
+		sdl.Rect{X: 810, Y: 10, W: 34, H: 36})
 	// The pairing code's slot in the header band; drawHeader replaces it with
 	// the tile renderCompanionHeaderQR drew (companionHeaderRect).
 	card(HomeFocusQR, "Pairing code", "Show the QR code full screen", "qr", HomeActionQR,
@@ -492,10 +500,12 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 		HomeFocusWeather:    false,
 		HomeFocusUpdate:     false,
 		HomeFocusBell:       false,
+		HomeFocusBug:        false,
 		HomeFocusTrophy:     false,
 		HomeFocusNowPlaying: false,
 		HomeFocusWiFi:       false,
 		HomeFocusVolume:     false,
+		HomeFocusBluetooth:  false,
 		HomeFocusBrightness: false,
 		HomeFocusQR:         false,
 		HomeFocusPS4:        false,
@@ -805,6 +815,13 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 	if h == nil || homePowerConfirm.open {
 		return false
 	}
+	// Keep the three corner chips' visible faces ahead of their overlapping
+	// finger-sized margins. A tap on the report icon must open its form.
+	for _, id := range []HomeFocusID{HomeFocusBell, HomeFocusBug, HomeFocusTrophy} {
+		if h.Focus.IsEnabled(id) && pointInRect(x, y, h.Items[id].Rect) {
+			return h.Focus.Set(id)
+		}
+	}
 	for _, id := range h.Order {
 		// A header chip that is not drawn (no weather forecast, no release on
 		// offer, nothing playing) keeps its placeholder rect; it must not
@@ -826,13 +843,13 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 		// fingertip, and a press a few pixels off does nothing. The drawn
 		// geometry never moves — only the invisible target grows.
 		//
-		// The speaker and the signal meter are already finger-sized
-		// (statusFingerRect), with the gap between them split and the meter
-		// stopped short of the forecast: growing them again reached into the
-		// forecast chip, and since the meter is tested first, a click on the
-		// forecast's left edge opened Wi-Fi.
+		// The sun, the speaker, the Bluetooth rune and the signal meter are
+		// already finger-sized (statusFingerRect), with each gap between them
+		// split and the meter stopped short of the forecast: growing them
+		// again reached into the forecast chip, and since the meter is tested
+		// first, a click on the forecast's left edge opened Wi-Fi.
 		r := item.Rect
-		if id != HomeFocusWiFi && id != HomeFocusVolume && id != HomeFocusBrightness {
+		if id != HomeFocusWiFi && id != HomeFocusVolume && id != HomeFocusBrightness && id != HomeFocusBluetooth {
 			r = growTouchTarget(item.Rect)
 		}
 		if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
@@ -870,8 +887,8 @@ func (h *HomeLayout) BoundsViolations() []string {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
 		switch id {
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying, HomeFocusWiFi,
-			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusBug, HomeFocusNowPlaying, HomeFocusWiFi,
+			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			continue
 		}
 		checked = append(checked, item)
@@ -971,8 +988,8 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			if h.Focus.IsEnabled(HomeFocusEditPill) {
 				h.drawEditPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 			}
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi,
-			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusBug, HomeFocusWiFi,
+			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
 			// (title and icon) over the header -- the now-playing entry sits on
@@ -1008,12 +1025,14 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	weatherStatusRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
 	statusVolumeRect = sdl.Rect{}
+	statusBluetoothRect = sdl.Rect{}
 	statusBrightnessRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
 	headerTrophyClear()
+	headerBugClear()
 	// A scene's release pill is not on Home: left over, its rect would still
 	// take a click (handleChromeBarClick) where Home draws something else.
 	updatePrompt.badge = sdl.Rect{}
@@ -1031,10 +1050,12 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if headerConfig == nil {
 		headerConfig = &Config{}
 	}
-	// The wordmark stands alone on Home. The build number is for whoever files
-	// a bug report, not for the person picking a game: it lives in About, the
-	// Start menu's footer and the update offer, which is where it gets read.
-	brandEnd := drawHeaderBrand(renderer, headerConfig, barH, headerCaptionText("", ""))
+	// The build date belongs beside the wordmark on Home alone.
+	caption := ""
+	if data.BuildDate != "" {
+		caption = " · " + data.BuildDate
+	}
+	brandEnd := drawHeaderBrand(renderer, headerConfig, barH, caption)
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
@@ -1047,15 +1068,19 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if fonts.Small == nil {
 		// No status bar, so no bell either. Keep it out of the D-pad path so
 		// focus can never land on a control that is not drawn — nor on the
-		// sun, the speaker, the meter or the pairing code, which are not drawn
-		// either and would otherwise keep their placeholder rects (and stay
-		// clickable through the rects the last frame left).
+		// sun, the speaker, the Bluetooth rune, the meter or the pairing code,
+		// which are not drawn either and would otherwise keep their
+		// placeholder rects (and stay clickable through the rects the last
+		// frame left).
 		companionHeaderRect = sdl.Rect{}
 		statusVolumeRect = sdl.Rect{}
+		statusBluetoothRect = sdl.Rect{}
 		statusBrightnessRect = sdl.Rect{}
 		h.Focus.SetEnabled(HomeFocusBell, false)
+		h.Focus.SetEnabled(HomeFocusBug, false)
 		h.Focus.SetEnabled(HomeFocusTrophy, false)
 		h.Focus.SetEnabled(HomeFocusVolume, false)
+		h.Focus.SetEnabled(HomeFocusBluetooth, false)
 		h.Focus.SetEnabled(HomeFocusBrightness, false)
 		h.Focus.SetEnabled(HomeFocusWiFi, false)
 		h.Focus.SetEnabled(HomeFocusQR, false)
@@ -1094,13 +1119,22 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	h.Focus.SetEnabled(HomeFocusBell, nc.bellRect.W > 0)
 
-	// The trophy room's cup is the corner's second fixed control, immediately
-	// left of the bell as on every scene header (header_trophy.go). It gives
-	// way only if the cluster beside it would reach the wordmark.
+	// Report a bug stays between the bell and the trophy room's cup.
 	cornerX := bellX
+	if bug := drawHeaderBug(renderer, headerConfig, bellX-headerCornerGap, barH,
+		h.Focus.Current() == HomeFocusBug); bug.W > 0 {
+		item := h.Items[HomeFocusBug]
+		item.Rect = bug
+		h.Items[HomeFocusBug] = item
+		cornerX = bug.X
+	}
+	h.Focus.SetEnabled(HomeFocusBug, headerBugRect.W > 0)
+
+	// The trophy room's cup sits left of Report a bug. It gives
+	// way only if the cluster beside it would reach the wordmark.
 	if trophyW, _ := headerTrophySize(headerConfig); trophyW > 0 &&
-		bellX-headerCornerGap-trophyW-headerCornerGap-total >= brandEnd+Space2XL {
-		if cup := drawHeaderTrophy(renderer, headerConfig, bellX-headerCornerGap, barH,
+		cornerX-headerCornerGap-trophyW-headerCornerGap-total >= brandEnd+Space2XL {
+		if cup := drawHeaderTrophy(renderer, headerConfig, cornerX-headerCornerGap, barH,
 			h.Focus.Current() == HomeFocusTrophy); cup.W > 0 {
 			item := h.Items[HomeFocusTrophy]
 			item.Rect = cup
@@ -1245,6 +1279,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		if isVolumeStatusPart(part) {
 			statusVolumeRect = r
 		}
+		if isBluetoothStatusPart(part) {
+			statusBluetoothRect = r
+		}
 		if isBrightnessStatusPart(part) {
 			statusBrightnessRect = r
 		}
@@ -1261,10 +1298,11 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
 		x += w + sepW
 	}
-	// The network meter, the speaker and the sun are tap targets as well as
-	// readings, so grow their hit areas to finger size once the cluster is
-	// placed: the meter stops short of the forecast and the clock so their taps
-	// still belong to them, and each gap between two of the buttons is split.
+	// The network meter, the Bluetooth rune, the speaker and the sun are tap
+	// targets as well as readings, so grow their hit areas to finger size once
+	// the cluster is placed: the meter stops short of the forecast and the
+	// clock so their taps still belong to them, and each gap between two of the
+	// buttons is split.
 	growStatusButtonRects(header.H, weatherStatusRect, h.Items[HomeFocusClock].Rect)
 	// The meter is a button, not just a reading: the D-pad focuses the same
 	// grown hit area a fingertip taps, and the entry is disabled whenever the
@@ -1275,8 +1313,17 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		h.Items[HomeFocusWiFi] = item
 	}
 	h.Focus.SetEnabled(HomeFocusWiFi, statusWiFiRect.W > 0)
+	// So is the Bluetooth rune: A opens the Bluetooth page. Where there is no
+	// page to open, or the cluster dropped it, the entry is disabled and Left
+	// from the meter goes on to the speaker.
+	if statusBluetoothRect.W > 0 {
+		item := h.Items[HomeFocusBluetooth]
+		item.Rect = statusBluetoothRect
+		h.Items[HomeFocusBluetooth] = item
+	}
+	h.Focus.SetEnabled(HomeFocusBluetooth, statusBluetoothRect.W > 0)
 	// So is the speaker: A opens the volume popover. No mixer, no part, so the
-	// entry is disabled and Left from the meter goes on to the sun.
+	// entry is disabled and Left from the rune goes on to the sun.
 	if statusVolumeRect.W > 0 {
 		item := h.Items[HomeFocusVolume]
 		item.Rect = statusVolumeRect
@@ -1304,13 +1351,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// playing it may still be drawn (naming the headphones), but pressing it
 	// would open nothing, so the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
-	// The text chips (clock, forecast, signal meter, speaker, sun, now playing)
-	// wear the header ring here. The bell, the release offer and the Remote
-	// Play pills draw their own ring with their own shape (drawNotifBell,
-	// drawUpdatePill, renderPSPillGroup); a second, square-cornered one on top
-	// of theirs was the double outline a focused bell showed. The pairing code
-	// wears its own (drawHeaderQRRing).
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBrightness, HomeFocusVolume, HomeFocusWiFi, HomeFocusNowPlaying} {
+	// The text chips (clock, forecast, signal meter, Bluetooth rune, speaker,
+	// sun, now playing) wear the header ring here. The bell, the release offer
+	// and the Remote Play pills draw their own ring with their own shape
+	// (drawNotifBell, drawUpdatePill, renderPSPillGroup); a second,
+	// square-cornered one on top of theirs was the double outline a focused
+	// bell showed. The pairing code wears its own (drawHeaderQRRing).
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBrightness, HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusNowPlaying} {
 		if h.Focus.Current() != id {
 			continue
 		}
@@ -1341,9 +1388,9 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	bestY := int32(0)
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell,
+		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusBug,
 			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate,
-			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy:
+			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			continue
 		}
 		item, ok := h.Items[id]
@@ -1925,6 +1972,11 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	// The tile layouts and Edit Home have rows of their own
 	// (homeFooterHintSet, home_edit.go); an empty slot in a row is skipped.
 	set := h.homeFooterHintSet(showBack)
+	if !homeEditActive() {
+		if voice, ok := voiceOrbFooterHint(appConfig); ok {
+			set[6] = footerHint{button: voice.Button, label: voice.Label}
+		}
+	}
 	if label := homeFooterActionLabel(h.Focus.Current()); label != "" && !homeEditActive() {
 		for i := range set {
 			if set[i].button == "A" {
@@ -2021,6 +2073,7 @@ var (
 		{button: "L2/R2", label: "Sections"},
 		{button: "Start", label: "Menu"},
 		{button: "Select+Start", label: "Quit"},
+		{}, // Menu/F4 Talk to Juka, when available
 	}
 	homeFooterHintsBack = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
@@ -2029,6 +2082,7 @@ var (
 		{button: "L2/R2", label: "Sections"},
 		{button: "B", label: "Back"},
 		{button: "Select+Start", label: "Quit"},
+		{}, // Menu/F4 Talk to Juka, when available
 	}
 )
 

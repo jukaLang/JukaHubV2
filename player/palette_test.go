@@ -30,6 +30,7 @@ type paletteSnapshot struct {
 	backgroundTop, backgroundBottom                sdl.Color
 	progress, progressIntense                      sdl.Color
 	chip, chipHover, chipFocus, divider            sdl.Color
+	track                                          sdl.Color
 	surfaceHighlight, topSheen                     sdl.Color
 	statusInks                                     [4]sdl.Color // success, warning, danger, info
 }
@@ -75,6 +76,7 @@ func capturePalette() paletteSnapshot {
 		chipHover:        ColorChipHover,
 		chipFocus:        ColorChipFocus,
 		divider:          ColorDivider,
+		track:            ColorTrack,
 		surfaceHighlight: surfaceHighlightColor,
 		topSheen:         topSheenColor,
 		statusInks:       [4]sdl.Color{successInk, warningInk, dangerInk, infoInk},
@@ -121,6 +123,7 @@ func restorePalette(s paletteSnapshot) {
 	ColorChipHover = s.chipHover
 	ColorChipFocus = s.chipFocus
 	ColorDivider = s.divider
+	ColorTrack = s.track
 	surfaceHighlightColor = s.surfaceHighlight
 	topSheenColor = s.topSheen
 	// A theme change drops the cached gradient, so a restore has to as well.

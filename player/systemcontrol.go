@@ -521,10 +521,20 @@ func setBluetoothEnabled(on bool) error {
 		if _, err := systemCommandRunner("bluetoothctl", "power", arg); err == nil {
 			return nil
 		}
-		if commandExists("rfkill") {
-			return runRfkill("bluetooth", on)
+		if !commandExists("rfkill") {
+			return errors.New("bluetoothctl could not change the radio")
 		}
-		return errors.New("bluetoothctl could not change the radio")
+		if err := runRfkill("bluetooth", on); err != nil || !on {
+			return err
+		}
+		// An unblocked radio is not a powered one yet: BlueZ refuses a "power
+		// on" while rfkill holds the radio (org.bluez.Error.Blocked) and does
+		// not remember it, so it is asked again once the block is gone.
+		time.Sleep(500 * time.Millisecond)
+		if _, err := systemCommandRunner("bluetoothctl", "power", "on"); err != nil {
+			return errors.New("Bluetooth was unblocked but did not switch on — try again")
+		}
+		return nil
 	case "rfkill":
 		return runRfkill("bluetooth", on)
 	}

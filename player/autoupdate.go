@@ -584,8 +584,11 @@ func checkForUpdateOnce(config *Config) error {
 	if err != nil {
 		return err
 	}
+	if err := fillMissingReleaseNotes(ctx, rel); err != nil {
+		logPatch("auto-update: release notes unavailable for %s: %v", rel.TagName, err)
+	}
 	// Keep the release notes even when the user does not install this
-	// build: the changelog screen can then show what is waiting.
+	// build: the update prompt can show what is waiting.
 	storeReleaseNotes(rel)
 	patchStateMu.Lock()
 	patchState.AutoUpdateCheckedAt = time.Now().UTC().Format(time.RFC3339)
@@ -1105,21 +1108,11 @@ func confirmAppliedUpdate() {
 	logPatch("JukaHub updated to release %s", tag)
 }
 
-// installedBuildTimeLabel renders the compile stamp for About: full UTC time
-// when the build carried one, otherwise the release/build date, or "" when
-// unknown.
+// installedBuildTimeLabel renders the compile stamp for diagnostics: full UTC
+// time when the build carried one, otherwise the release/build date.
 func installedBuildTimeLabel() string {
 	if t, ok := parseReleaseTimestamp(buildTime); ok {
 		return t.Format("2006-01-02 15:04 UTC")
 	}
 	return installedBuildDate()
-}
-
-// formatBuildLabel renders the version display suffix ("v0.4.0 · 2026-10-17").
-// It is split out so the UI call sites stay one-liners.
-func formatBuildLabel(version, date string) string {
-	if date == "" {
-		return version
-	}
-	return version + " · " + date
 }

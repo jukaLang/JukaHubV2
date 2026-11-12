@@ -271,7 +271,6 @@ func bkupBuildRows(c *Config, s bkupSnapshot) []xpackKitRow {
 			}
 			row.Label += " · " + it.Manifest.DeviceName
 			row.Detail = kind + humanBytes(it.Size) + " · " + it.Name
-			row.Value = it.Manifest.AppVersion
 		}
 		rows = append(rows, row)
 	}
@@ -288,7 +287,7 @@ func bkupRestoreRows(s bkupSnapshot) []xpackKitRow {
 		check.Label, check.Detail, check.Tone = "This backup cannot be restored", s.verifyErr, xpackKitToneBad
 	case s.verified:
 		check.Label = "Checked: " + xpackKitCount(len(s.manifest.Files), "file", "files") + ", all intact"
-		check.Detail, check.Tone = "Made by "+s.manifest.AppVersion+" on "+s.manifest.DeviceName, xpackKitToneGood
+		check.Detail, check.Tone = "Made on "+s.manifest.DeviceName, xpackKitToneGood
 	}
 	rows = append(rows, check)
 	if !s.verified {
@@ -908,7 +907,7 @@ func bkupPaneText(id string, s bkupSnapshot) (string, string, []string) {
 			m = s.manifest
 		}
 		body := []string{
-			"Made " + bkupUI.file.ModTime.Format("Monday, Jan 2 2006 at 15:04") + " by " + m.AppVersion + " on " + m.DeviceName + ".",
+			"Made " + bkupUI.file.ModTime.Format("Monday, Jan 2 2006 at 15:04") + " on " + m.DeviceName + ".",
 			"",
 		}
 		if m.Platform != P().Name() {
@@ -933,7 +932,7 @@ func bkupPaneText(id string, s bkupSnapshot) (string, string, []string) {
 				return "Backup", it.Name, body
 			}
 			m := it.Manifest
-			body = append(body, "Made "+it.ModTime.Format("Jan 2 2006, 15:04")+" by "+m.AppVersion+" on "+m.DeviceName+".")
+			body = append(body, "Made "+it.ModTime.Format("Jan 2 2006, 15:04")+" on "+m.DeviceName+".")
 			var cats []string
 			for _, cat := range m.Categories {
 				cats = append(cats, bkupCategoryLabel(cat))

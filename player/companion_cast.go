@@ -343,6 +343,7 @@ func (c castCredential) stillValid() bool {
 // counts as a failure like a wrong PIN.
 func (s *companionServer) castGuard(next func(http.ResponseWriter, *http.Request, castCredential)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		addr := castHost(r.RemoteAddr)
 		if token := r.URL.Query().Get("c"); token != "" {
 			ok, ready := castTokenCheck(token)
 			switch {
@@ -354,21 +355,21 @@ func (s *companionServer) castGuard(next func(http.ResponseWriter, *http.Request
 				// link is dead; there is no token yet that a guess could hit.
 				http.Error(w, "Screen Share is starting", http.StatusServiceUnavailable)
 			default:
-				s.noteFailure()
+				s.noteFailure(addr, time.Now())
 				http.Error(w, "this Screen Share link no longer works", http.StatusUnauthorized)
 			}
 			return
 		}
-		if s.throttled() {
+		if s.throttled(addr, time.Now()) {
 			http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 			return
 		}
 		if !s.authorized(r) {
-			s.noteFailure()
+			s.noteFailure(addr, time.Now())
 			http.Error(w, "bad PIN", http.StatusUnauthorized)
 			return
 		}
-		s.noteSuccess()
+		s.noteSuccess(addr)
 		pin := r.Header.Get("X-Companion-Pin")
 		if pin == "" {
 			pin = r.URL.Query().Get("p")

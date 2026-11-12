@@ -83,7 +83,7 @@ looks like:
   "schemaVersion": 1,
   "device": "smartpro",
   "platform": "trimui-linux",
-  "version": "v0.4.0",
+  "version": "v1.2.3",
   "generatedAt": "2026-10-21T18:20:00Z",
   "votes": [
     {"kind": "game", "key": "snes|super mario world", "title": "Super Mario World", "system": "SNES", "at": "2026-10-21T18:19:00Z"},

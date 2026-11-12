@@ -41,6 +41,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -843,7 +844,23 @@ type tailscaleSnapshot struct {
 	Running   bool
 	State     string
 	IPs       []string
+	Peers     []tailscalePeer
 	Err       string
+}
+
+// tailscalePeer is one other node in the tailnet, as `tailscale status` names
+// it (NET-18).
+type tailscalePeer struct {
+	Name   string
+	IPs    []string
+	Online bool
+}
+
+type tailscalePeerJSON struct {
+	HostName     string
+	DNSName      string
+	TailscaleIPs []string
+	Online       bool
 }
 
 type tailscaleStatusJSON struct {
@@ -852,6 +869,7 @@ type tailscaleStatusJSON struct {
 		HostName     string
 		TailscaleIPs []string
 	}
+	Peer map[string]tailscalePeerJSON
 }
 
 // parseTailscaleStatus reads `tailscale status --json`.
@@ -865,7 +883,48 @@ func parseTailscaleStatus(data []byte) (tailscaleSnapshot, error) {
 		Running:   strings.EqualFold(st.BackendState, "Running"),
 		State:     st.BackendState,
 		IPs:       st.Self.TailscaleIPs,
+		Peers:     tailscalePeers(st.Peer),
 	}, nil
+}
+
+// tailscalePeers lists the tailnet's other nodes by name, so the row reads the
+// same from one refresh to the next. The DNS name (without its trailing dot)
+// names a node; a status without one falls back to its host name.
+func tailscalePeers(peers map[string]tailscalePeerJSON) []tailscalePeer {
+	out := make([]tailscalePeer, 0, len(peers))
+	for _, p := range peers {
+		name := strings.TrimSuffix(strings.TrimSpace(p.DNSName), ".")
+		if name == "" {
+			name = strings.TrimSpace(p.HostName)
+		}
+		if name == "" {
+			continue
+		}
+		out = append(out, tailscalePeer{Name: name, IPs: p.TailscaleIPs, Online: p.Online})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// tailscalePeersLine is the row's one-line peer list: name, address and
+// whether it is online, as `tailscale status --json` reports them.
+func tailscalePeersLine(peers []tailscalePeer) string {
+	if len(peers) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(peers))
+	for _, p := range peers {
+		state := "offline"
+		if p.Online {
+			state = "online"
+		}
+		if addr := strings.Join(p.IPs, ", "); addr != "" {
+			parts = append(parts, p.Name+" ("+addr+", "+state+")")
+		} else {
+			parts = append(parts, p.Name+" ("+state+")")
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 // tailscaleToggleArgs is the command for the requested state. `up` with no

@@ -976,6 +976,28 @@ func musicAdjustVolume(delta float64) {
 // "Muted" at the bottom. The player card has its own volume bar, but the keys
 // also work from the ambient screen and with the player closed, where a bar
 // drawn under a panel is not visible at all.
+// nowPlayingLineMax is the width a full-screen now-playing line may use: the
+// canvas less 160 px, so the title never touches either edge.
+func nowPlayingLineMax(screenW int32) int32 {
+	return max32(0, screenW-160)
+}
+
+// nowPlayingLineX centres one line of the full-screen now-playing screen. It
+// takes the width of the string actually drawn, not the untruncated title: the
+// screen used to centre on big.SizeUTF8(title) and then draw the ellipsized
+// line at that x, so a long filename on a 1280 px canvas (a 2000 px title)
+// started at -360 and lost its left half off the screen instead of centring
+// the ellipsized line.
+func nowPlayingLineX(screenW, drawnW int32) int32 {
+	if drawnW >= screenW {
+		return 0
+	}
+	if drawnW < 0 {
+		drawnW = 0
+	}
+	return (screenW - drawnW) / 2
+}
+
 func musicVolumeLabel(v float64) string {
 	if v <= 0.001 {
 		return "Muted"
@@ -1173,11 +1195,13 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 		title = strings.TrimSuffix(tracks[cur].Name, filepath.Ext(tracks[cur].Name))
 		meta = fmt.Sprintf("Track %d of %d", cur+1, len(tracks))
 	}
-	tw, _, _ := big.SizeUTF8(title)
-	renderText(renderer, config, big, ellipsize(big, title, screenWidth-160),
-		ColorTextPrimary(), (screenWidth-int32(tw))/2, 54)
-	mw, _, _ := font.SizeUTF8(meta)
-	renderText(renderer, config, font, meta, ColorTextTertiary(), (screenWidth-int32(mw))/2, 54+int32(big.Height())+10)
+	titleLine := ellipsize(big, title, nowPlayingLineMax(screenWidth))
+	tw, _, _ := big.SizeUTF8(titleLine)
+	renderText(renderer, config, big, titleLine,
+		ColorTextPrimary(), nowPlayingLineX(screenWidth, int32(tw)), 54)
+	metaLine := ellipsize(font, meta, nowPlayingLineMax(screenWidth))
+	mw, _, _ := font.SizeUTF8(metaLine)
+	renderText(renderer, config, font, metaLine, ColorTextTertiary(), nowPlayingLineX(screenWidth, int32(mw)), 54+int32(big.Height())+10)
 
 	// Spectrum. 48 bars, mirrored around a centre line with a faint reflection.
 	bars := 48
@@ -1670,6 +1694,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		"M Shuffle   R Repeat   F Favorite   Q Play next   L Lyrics   G PEQ   / Search   O Screen off   B Back",
 	}
 	for i, line := range hints {
+		// The key list is longer than a narrow window at a large text scale;
+		// ellipsize it so the line cannot run off both edges of the screen.
+		line = ellipsize(font, line, screenWidth-32)
 		hw, _, _ := font.SizeUTF8(line)
 		renderText(renderer, config, font, line, sdl.Color{R: 110, G: 125, B: 150, A: 170},
 			(screenWidth-int32(hw))/2, screenHeight-52+int32(i)*18)

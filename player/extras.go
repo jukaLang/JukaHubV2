@@ -697,15 +697,16 @@ func sceneDisplayName(name string) string {
 		return apkStoreEntryName
 	case voiceSceneName:
 		return "Voice command"
+	case vscSceneName:
+		return "Voice shortcuts"
 	default:
 		return name
 	}
 }
 
 // versionString returns the canonical "vX.Y.Z" value. The repository's single
-// version source is config.Version (jukaconfig.json "Version", with a "0.4.0"
-// fallback in config_health); the prefix is normalized so the UI never shows
-// "vv0.4.0".
+// version source is config.Version (jukaconfig.json "Version", with a fallback
+// in config_health); the prefix is normalized for update and report metadata.
 func versionString(config *Config) string {
 	v := ""
 	if config != nil {
@@ -718,28 +719,19 @@ func versionString(config *Config) string {
 	return "v" + v
 }
 
-// versionDisplayString is the UI form of the version: the release build date
-// follows the version when it is known (from release-info.json, the release
-// build stamp, or the last applied update).
-//
-//	"v0.4.0 · 2026-10-17"
-//
-// Without a known build date it is exactly versionString.
-func versionDisplayString(config *Config) string {
-	return formatBuildLabel(versionString(config), installedBuildDate())
-}
-
-// --- Top status bar (brand + version + scene + clock/weather/battery) ---
+// --- Top status bar (brand + scene + clock/weather/battery) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	sceneTitleBackRect = sdl.Rect{}
 	statusClockRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
 	statusVolumeRect = sdl.Rect{}
+	statusBluetoothRect = sdl.Rect{}
 	statusBrightnessRect = sdl.Rect{}
 	weatherStatusRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
 	headerTrophyClear()
+	headerBugClear()
 	// The release pill is measured again below whenever it is drawn; a rect
 	// left from a frame that drew it (an offer since installed, screenshot
 	// mode) would still take a click and be a focus stop where the cup is now.
@@ -764,8 +756,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	// One brand block, one caption type and one button height on every screen:
 	// the bar decides those in header.go, so Home and a scene cannot drift into
 	// two different headers again. UX-2: the screen's name is its page header's,
-	// so the bar repeats neither it nor the build number (which lives in About
-	// and the Start menu).
+	// so the bar does not repeat it or Home's build date.
 	headerTextW := drawHeaderBrand(renderer, config, barH,
 		headerCaptionText("", statusBarCaption(scene)))
 	nextX := headerTextW + SpaceMD
@@ -840,7 +831,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	// weather, time, battery) — identical to the home header so the right
 	// side of the top bar stays put across screens. The notification bell
 	// sits to the right of the cluster as the top-right system corner, and
-	// the trophy room's cup immediately left of the bell.
+	// Report a bug and the trophy cup to its left.
 	parts := headerStatusParts(config)
 	statusFont := headerStatusFont()
 	if statusFont == nil {
@@ -849,14 +840,18 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	bellW, bellH := notifBellSize(config)
 	rightX := screenWidth - StatusBarMargin
 	if bellW > 0 {
-		// The corner's controls (bell, cup, offer) sit one corner gap apart, the
+		// The corner's controls (bell, bug, cup, offer) sit one corner gap apart, the
 		// same way Home places them, not at the wider spacing the cluster parts
 		// use, so they read as one group on both headers instead of 6px apart
 		// on Home and 16px apart in a scene.
 		rightX -= bellW + headerCornerGap
 	}
-	// The trophy room's cup is the corner's second fixed control, immediately
-	// left of the bell on every screen as on Home (header_trophy.go). It gives
+	// Report a bug is the middle fixed control, between the bell and cup.
+	if chip := drawHeaderBug(renderer, config, rightX, barH,
+		focusEngine.ElementIndex() == ChromeBugIndex); chip.W > 0 {
+		rightX = chip.X - headerCornerGap
+	}
+	// The trophy room's cup sits immediately left of Report a bug. It gives
 	// way only on a bar too crowded to keep the clock and the battery beside it.
 	if trophyW, _ := headerTrophySize(config); trophyW > 0 &&
 		rightX-trophyW-headerCornerGap-(StatusBarMargin+headerTextW+Space2XL) >= headerTrophyMinCluster {
@@ -940,6 +935,14 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 				W: pw + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
+		if isBluetoothStatusPart(p) {
+			// The rune between the speaker and the meter opens the
+			// Bluetooth page (statusbar_bluetooth.go).
+			statusBluetoothRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
 		if isBrightnessStatusPart(p) {
 			// The sun beside it is the brightness button.
 			statusBrightnessRect = sdl.Rect{
@@ -958,11 +961,11 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		}
 		startX += pw + gap
 	}
-	// The meter, the speaker and the sun are buttons, so their hit areas are
-	// grown to finger-sized targets once the cluster is placed and the
-	// neighbours' rects are known. They sit side by side, so each gap between
-	// two of them is split at its middle (statusGapNeighbours) instead of
-	// being claimed by both.
+	// The meter, the Bluetooth rune, the speaker and the sun are buttons, so
+	// their hit areas are grown to finger-sized targets once the cluster is
+	// placed and the neighbours' rects are known. They sit side by side, so
+	// each gap between two of them is split at its middle
+	// (statusGapNeighbours) instead of being claimed by both.
 	growStatusButtonRects(barH, weatherStatusRect, statusClockRect)
 	// Focused header chips wear the ring Home's header draws: a rounded 3px
 	// accent outline (glassFocusRingWidth), not a square hairline box.
@@ -974,6 +977,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		{ChromeWeatherIndex, weatherStatusRect},
 		{ChromeBrightnessIndex, statusBrightnessRect},
 		{ChromeVolumeIndex, statusVolumeRect},
+		{ChromeBluetoothIndex, statusBluetoothRect},
 		{ChromeWiFiIndex, statusWiFiRect},
 		{ChromeMediaIndex, statusMediaRect},
 	} {
@@ -1010,9 +1014,10 @@ func fitStatusParts(parts []string, width func(string) int32, gap, maxW int32) [
 }
 
 // statusDropIndex picks the least important part to remove when the bar is
-// crowded: the network meter first, then the forecast, then the offline badge,
-// then the brightness button, then the volume button. The clock and the
-// battery level are what the user glanced at, so they leave last.
+// crowded: the network meter first, then the forecast, then the Bluetooth
+// button, then the offline badge, then the brightness button, then the volume
+// button. The clock and the battery level are what the user glanced at, so
+// they leave last.
 //
 // The network slot used to be found as "index 0"; the volume button leads the
 // cluster now, so every slot is found by what it is. Left as index 0, the
@@ -1043,6 +1048,13 @@ func statusDropIndex(parts []string) int {
 		}
 	}
 	if len(parts) > 2 {
+		// The offline badge explains why things fail, so the Bluetooth rune
+		// gives way before it.
+		for i, p := range parts {
+			if isBluetoothStatusPart(p) {
+				return i
+			}
+		}
 		for i, p := range parts {
 			if strings.HasPrefix(p, "! Offline") {
 				return i
@@ -1067,12 +1079,12 @@ func statusDropIndex(parts []string) int {
 
 // headerStatusParts returns the right-side status cluster in one canonical
 // order shared by the home header and every scene's status bar: brightness,
-// volume, network, weather (hi/lo), time (HH:MM), battery, and the chip — the
-// now-playing title while something plays, the connected output's name while
-// nothing does. Both headers draw this exact list, so the right side of the top
-// bar never shifts or reorders between screens.
+// volume, Bluetooth, network, weather (hi/lo), time (HH:MM), battery, and the
+// chip — the now-playing title while something plays, the connected output's
+// name while nothing does. Both headers draw this exact list, so the right side
+// of the top bar never shifts or reorders between screens.
 func headerStatusParts(config *Config) []string {
-	parts := make([]string, 0, 7)
+	parts := make([]string, 0, 8)
 	// The brightness button leads the cluster, immediately left of the volume
 	// button, once the brightness controller knows what it drives
 	// (brightnessctl.go) — always, after a moment: its last resort is a
@@ -1080,10 +1092,15 @@ func headerStatusParts(config *Config) []string {
 	if statusBrightnessAvailable() {
 		parts = append(parts, statusBrightnessPart)
 	}
-	// The volume button follows, immediately left of the Wi-Fi meter,
-	// wherever there is a mixer for it to drive (volumectl.go).
+	// The volume button follows, wherever there is a mixer for it to drive
+	// (volumectl.go).
 	if statusVolumeAvailable() {
 		parts = append(parts, statusVolumePart)
+	}
+	// Then the Bluetooth button, immediately left of the Wi-Fi meter,
+	// wherever the Bluetooth page can do something (statusbar_bluetooth.go).
+	if statusBluetoothAvailable() {
+		parts = append(parts, statusBluetoothPart)
 	}
 	// Offline indicator takes priority over the SSID so the user instantly
 	// knows why network features are failing.
@@ -1340,6 +1357,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	case voiceSceneName:
 		// Voice command's keys follow what it is doing (voicecmd.go).
 		hints = voiceFooterHints(config)
+	case vscSceneName:
+		// Voice shortcuts follows its step and its focus (voiceshortcuts_ui.go).
+		hints = vscFooterHints(config)
 	}
 	return hints
 }
@@ -1406,7 +1426,13 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	// because on the Brick's 960-wide canvas the full Tube row used to run off
 	// both edges ("d Navigate" … "R2").
 	pad := scaleX(16, screenWidth)
-	plan := planFooterHints(config, footerHints(config, scene), band.W-2*pad)
+	hints := footerHints(config, scene)
+	if scene.Name != voiceSceneName {
+		if voice, ok := voiceOrbFooterHint(config); ok {
+			hints = append([]FooterHint{voice}, hints...)
+		}
+	}
+	plan := planFooterHints(config, hints, band.W-2*pad)
 	if plan.font == nil {
 		return
 	}

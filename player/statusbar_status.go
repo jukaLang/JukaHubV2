@@ -1,17 +1,19 @@
 package main
 
 // The system corner of the top bar: a brightness button, a volume button, a
-// Wi-Fi meter and a battery gauge.
+// Bluetooth button, a Wi-Fi meter and a battery gauge.
 //
 // The right-hand cluster is still the shared []string from headerStatusParts,
 // so layout, trimming (fitStatusParts) and the clock/weather hit rects keep
-// working unchanged. What changes here is how four of those parts are painted:
+// working unchanged. What changes here is how five of those parts are painted:
 // the leading brightness part is a sun (the button that opens the brightness
 // card, brightnesspopover.go), the volume part beside it a speaker glyph (the
-// button that opens the volume popover, volumepopover.go), the network slot
-// becomes signal bars (empty when there is no link) and the battery part grows
-// a gauge coloured green / yellow / red by the charge left, with a bolt over it
-// while a charger is plugged in.
+// button that opens the volume popover, volumepopover.go), the Bluetooth part
+// after it a rune (the button that opens the Bluetooth page,
+// statusbar_bluetooth.go), the network slot becomes signal bars (empty when
+// there is no link) and the battery part grows a gauge coloured green /
+// yellow / red by the charge left, with a bolt over it while a charger is
+// plugged in.
 //
 // Both the home header and every scene's status bar call the helpers below with
 // their own text drawing function, so the icons are pixel-identical on every
@@ -35,14 +37,14 @@ const (
 	statusWiFiMarker = "WiFi"
 
 	// statusVolumePart is the volume button's part: a marker like the media
-	// chip's "np|", never drawn as text. headerStatusParts puts it first, so
-	// the speaker sits immediately left of the Wi-Fi meter.
+	// chip's "np|", never drawn as text. headerStatusParts puts it after the
+	// sun, so the speaker sits immediately left of the Bluetooth button
+	// (statusbar_bluetooth.go), which sits immediately left of the Wi-Fi meter.
 	statusVolumePart = "vol|"
 
 	// statusBrightnessPart is the brightness button's part, a marker like the
 	// volume's. headerStatusParts puts it before the volume part, so the sun
-	// sits immediately left of the speaker and the speaker stays immediately
-	// left of the Wi-Fi meter.
+	// sits immediately left of the speaker.
 	statusBrightnessPart = "bri|"
 
 	// statusChipTextGap separates a gauge from its label and the bar gap.
@@ -166,9 +168,10 @@ func isBrightnessStatusPart(part string) bool {
 // controls so a tap on the clock or the forecast still belongs to them.
 //
 // Neighbours on either side bound it: the cluster now starts with the
-// brightness and volume buttons, so the meter is no longer the leftmost chip
-// and its target may not grow over the speaker beside it. A chip with nothing
-// on its left (the leading button) still grows into the empty space there.
+// brightness, volume and Bluetooth buttons, so the meter is no longer the
+// leftmost chip and its target may not grow over the Bluetooth button beside
+// it. A chip with nothing on its left (the leading button) still grows into
+// the empty space there.
 func statusFingerRect(chip sdl.Rect, barH int32, neighbours ...sdl.Rect) sdl.Rect {
 	if chip.W <= 0 || barH <= 0 {
 		return chip
@@ -241,23 +244,23 @@ func statusGapNeighbours(left, right sdl.Rect) (forLeft, forRight sdl.Rect) {
 	return forLeft, forRight
 }
 
-// growStatusButtonRects grows the brightness button's, the volume button's
-// and the Wi-Fi meter's hit areas once they are measured (both headers call it
-// after placing the cluster). They sit side by side in that order, and each
-// gap between two of them is split at its middle; the rightmost one still
-// stops short of the forecast and the clock on its right (rightOfWiFi), and
-// the leftmost grows into the empty space on its left. Any of them may be
-// missing: the bar drops parts when it is crowded.
+// growStatusButtonRects grows the brightness button's, the volume button's,
+// the Bluetooth button's and the Wi-Fi meter's hit areas once they are
+// measured (both headers call it after placing the cluster). They sit side by
+// side in that order, and each gap between two of them is split at its
+// middle; the rightmost one still stops short of the forecast and the clock on
+// its right (rightOfWiFi), and the leftmost grows into the empty space on its
+// left. Any of them may be missing: the bar drops parts when it is crowded.
 func growStatusButtonRects(barH int32, rightOfWiFi ...sdl.Rect) {
-	var live [3]*sdl.Rect
+	var live [4]*sdl.Rect
 	n := 0
-	for _, r := range []*sdl.Rect{&statusBrightnessRect, &statusVolumeRect, &statusWiFiRect} {
+	for _, r := range []*sdl.Rect{&statusBrightnessRect, &statusVolumeRect, &statusBluetoothRect, &statusWiFiRect} {
 		if r.W > 0 {
 			live[n] = r
 			n++
 		}
 	}
-	var drawn [3]sdl.Rect
+	var drawn [4]sdl.Rect
 	for i := 0; i < n; i++ {
 		drawn[i] = *live[i]
 	}
@@ -350,8 +353,9 @@ func statusVolumeIconWidth(iconH int32) int32 {
 func statusClusterPartWidth(font *ttf.Font, part string) int32 {
 	iconH := statusIconHeight(font)
 	switch {
-	case isVolumeStatusPart(part), isBrightnessStatusPart(part):
-		// The sun shares the speaker's box, so the two buttons read as a pair.
+	case isVolumeStatusPart(part), isBrightnessStatusPart(part), isBluetoothStatusPart(part):
+		// The sun and the Bluetooth rune share the speaker's box, so the three
+		// buttons read as a row.
 		return statusVolumeIconWidth(iconH)
 	case isWiFiStatusPart(part):
 		w := statusWiFiIconWidth(iconH) + statusVPNLockWidth(iconH)
@@ -654,6 +658,8 @@ func drawStatusClusterPart(renderer *sdl.Renderer, font *ttf.Font, part string, 
 		return drawStatusBrightnessChip(renderer, font, x, textTop)
 	case isVolumeStatusPart(part):
 		return drawStatusVolumeChip(renderer, font, x, textTop)
+	case isBluetoothStatusPart(part):
+		return drawStatusBluetoothChip(renderer, font, x, textTop)
 	case isWiFiStatusPart(part):
 		return drawStatusWiFiChip(renderer, font, part, x, textTop, draw)
 	case isBatteryStatusPart(part):

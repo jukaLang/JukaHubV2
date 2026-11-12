@@ -349,18 +349,24 @@ func TestCompanionThrottlesGuessing(t *testing.T) {
 // script on the network cannot keep trying forty PINs a minute.
 func TestCompanionLockoutEscalates(t *testing.T) {
 	srv, _ := newTestCompanion(t)
-	srv.fails = companionFailLimit
-	srv.failSince = time.Now().Add(-45 * time.Second)
-	if srv.throttled() {
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	const addr = "10.0.0.5"
+	for i := 0; i < companionFailLimit; i++ {
+		srv.noteFailure(addr, now)
+	}
+	// 45 s later the 30 s window has passed: the first lockout is over and
+	// the next one doubles.
+	if srv.throttled(addr, now.Add(45*time.Second)) {
 		t.Fatal("the first lockout outlived its 30 s window")
 	}
-	srv.fails = companionFailLimit
-	srv.failSince = time.Now().Add(-45 * time.Second)
-	if !srv.throttled() {
+	for i := 0; i < companionFailLimit; i++ {
+		srv.noteFailure(addr, now.Add(45*time.Second))
+	}
+	if !srv.throttled(addr, now.Add(45*time.Second)) {
 		t.Fatal("the second lockout did not escalate past 30 s")
 	}
-	srv.noteSuccess()
-	if srv.throttled() || srv.lockouts != 0 {
+	srv.noteSuccess(addr)
+	if srv.throttled(addr, now.Add(46*time.Second)) {
 		t.Fatal("the right PIN did not clear the escalation")
 	}
 }

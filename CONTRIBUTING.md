@@ -36,7 +36,11 @@ JukaHub .` elsewhere.
 
 ```bash
 make check   # gofmt, vet, builder syntax, config JSON, workflow pins, player + jsdom tests
+make e2e     # the builder in headless Chromium; installs the pinned browser on first run
 ```
+
+`make e2e` needs Node only: it downloads the Chromium build Playwright pins the
+first time it runs and reuses it afterwards, so there is no manual install step.
 
 Or run the pieces yourself, from `player/`:
 

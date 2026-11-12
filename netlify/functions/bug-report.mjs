@@ -19,7 +19,7 @@
 //   502                              GitHub did not take it; queue and retry
 //   503 {"fallback": "phone"}        the collector is not set up (no token, a
 //                                    bad repository, a token without access):
-//                                    use the phone path instead
+//                                    the device queues and retries the report
 //
 // Defence in depth: the device already removes personal data before anything
 // leaves it, but the text is scrubbed again here (e-mail, IPv4 and MAC

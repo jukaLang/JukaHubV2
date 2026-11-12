@@ -345,7 +345,8 @@ func startEmulatorInstall(e emuEntry) {
 		defer emuSetInstalling("")
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
-		timeout := 10 * time.Minute
+		// Large published cores need more time on handheld Wi-Fi.
+		timeout := 30 * time.Minute
 		if needRetroArch {
 			timeout = emuWinInstallTimeout
 		}
@@ -533,14 +534,14 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 
 // coreUpdateFreeFloor is the free space a core update must find on the card
 // before it starts: what the boot card warns below (bootLowSpaceBytes), plus
-// three copies of the core it replaces — the pool copy, the staged file and the
-// kept build — counting at least 16 MB for one.
+// four copies of the core it replaces — the downloaded archive, pool copy,
+// staged file and kept build — counting at least 16 MB for one.
 func coreUpdateFreeFloor(active string) int64 {
 	size := int64(16 << 20)
 	if info, err := os.Stat(active); err == nil && info.Size() > size {
 		size = info.Size()
 	}
-	return bootLowSpaceBytes + 3*size
+	return bootLowSpaceBytes + 4*size
 }
 
 // coreLowSpaceNote is how a toast says a run stopped for a nearly full card.

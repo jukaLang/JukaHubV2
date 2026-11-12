@@ -14,7 +14,6 @@ package main
 // home page's row says "Home" beside its date.
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -241,7 +240,7 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 	// The controls in this frame's words (inputhints.go).
 	actions := hintSentence2("%s opens · %s removes", "A", "Open", "X", "Remove") + " · " +
 		hintSentence2("%s sets home · %s closes", "Y", "Home", "B", "Close")
-	subtitle := fmt.Sprintf("%d page(s) · ", len(marks)) + actions
+	subtitle := pluralizeCount(len(marks), "page", "pages") + " · " + actions
 	if len(marks) == 1 {
 		subtitle = "1 page · " + actions
 	}

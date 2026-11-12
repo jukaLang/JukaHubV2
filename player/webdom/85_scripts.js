@@ -68,12 +68,22 @@ function scrReportResult(res, name, r) {
   scrStats.failed++;
   var err = res.error;
   var msg = str(res.message || (err && err.message) || 'Script error.');
+  // The debug log keeps the real text, the page does not: a classic script
+  // from another origin reports "Script error." with no file, line or column,
+  // as browsers do (SEC-25). The error's text and the file's address are the
+  // other origin's data.
   hostNoteError(msg);
   if (envReporting > 0) return;
+  // The URL the runtime named the script with is enough on its own: an inline
+  // script reports the document's URL and stays readable, a downloaded one
+  // from another origin does not.
+  var opaque = scrCrossOrigin(str(name || '')) || !!(r && r.xo);
+  var shown = opaque ? 'Script error.' : 'Uncaught ' + msg;
   envReporting++;
   try {
     var ev = fireEvent(global, 'error', {
-      message: 'Uncaught ' + msg, filename: str(name || ''), lineno: res.line | 0, colno: res.col | 0, error: err, cancelable: true
+      message: shown, filename: opaque ? '' : str(name || ''), lineno: opaque ? 0 : res.line | 0,
+      colno: opaque ? 0 : res.col | 0, error: opaque ? null : err, cancelable: true
     }, ErrorEvent);
     if (!ev || !ev.defaultPrevented) N.log('error', msg);
   } catch (e) {
@@ -81,6 +91,20 @@ function scrReportResult(res, name, r) {
   } finally {
     envReporting--;
   }
+}
+
+// scrCrossOrigin reports whether a script URL is served by another origin
+// than the document, which is what makes its errors opaque (SEC-25).
+function scrCrossOrigin(u) {
+  if (!u) return false;
+  // Scheme and authority only: the prelude's URL parser is a host call, and an
+  // error report must not depend on one succeeding.
+  return scrOriginOf(mainDoc.url) !== scrOriginOf(u);
+}
+
+function scrOriginOf(u) {
+  var m = /^([a-z][a-z0-9+.-]*:)(\/\/[^\/?#]*)?/i.exec(str(u));
+  return m ? asciiLower(m[1] + (m[2] || '')) : 'null';
 }
 
 // ---------------------------------------------------------------- classification
@@ -200,6 +224,7 @@ function scrExec(id, code, finalURL, errText) {
   if (!r || r.st0) return;
   r.st0 = true;
   var external = getAttr(r, 'src') !== null;
+  if (external) r.xo = scrCrossOrigin(str(finalURL || ''));
   if (errText !== null && errText !== undefined) {
     fireEvent(wrap(r), 'error', {}, Event);
     return;
@@ -426,12 +451,12 @@ function scrPrepareDynamic(r) {
     return;
   }
   r.st0 = true;
-  if (kind === 'importmap' || (kind === 'classic' && hasAttr(r, 'nomodule'))) return;
-  var url = resolveURL(mainDoc, src);
+  if (kind === 'importmap' || (kind === 'classic' && hasAttr(r, 'nomodule'))) return;	var url = resolveURL(mainDoc, src);
   if (!url) {
     scrQueueEvent(r, 'error');
     return;
   }
+  r.xo = scrCrossOrigin(url);
   var ordered = kind === 'classic' && !r.fa && !hasAttr(r, 'async');
   if (ordered) {
     r.ord = true;
@@ -460,6 +485,7 @@ function scrDrainOrdered() {
 function scrLoaded(id, code, finalURL, errText) {
   var r = scrById[id];
   if (!r) return;
+  r.xo = scrCrossOrigin(str(finalURL || ''));
   if (r.ord) {
     r.loaded = { code: code, url: finalURL, err: errText };
     scrDrainOrdered();

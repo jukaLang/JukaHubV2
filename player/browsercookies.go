@@ -783,5 +783,5 @@ func browserCookieKey(rec browserCookieRecord) string {
 //
 // The caller keeps its own timeout and redirect policy; only the jar is shared.
 func browserHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Jar: browserCookies()}
+	return &http.Client{Timeout: timeout, Jar: browserCookies(), Transport: browserTransport()}
 }

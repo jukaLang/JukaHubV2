@@ -16,12 +16,34 @@ package main
 // equation at a fixed 30 Hz, so it moves the same at the 15–30 fps the
 // handheld runs at. Nothing is rasterised per pixel on the CPU: the backdrop's
 // picture (the user's wallpaper, or a small texture of Home's own base and
-// blooms baked once per theme) is drawn through a mesh on that grid with
+// blooms baked once per theme) is drawn through a mesh with
 // SDL_RenderGeometry, each vertex's texture coordinate pushed along the local
 // slope (refraction) and its colour darkened on slopes facing away from the
 // light; a second, untextured mesh adds the light the ripples catch, over only
-// the cells that catch any. Per frame that is a grid step or two, ~2,400
-// vertices and two draw calls; once the water is calm it is one plain copy.
+// the cells that catch any. Once the water is calm it is one plain copy.
+//
+// What is drawn is smoother than what is simulated, because a tester found
+// the water "quite pixelated" with a "slow framerate":
+//
+//   - In time: the frame shows the two newest time levels blended by how far
+//     the clock is into the next step, so the surface moves on every frame
+//     instead of in 33 ms jumps — a frame landing between steps used to show
+//     the last step again, and the next one two steps at once. While it moves
+//     the water also asks for the active cadence (adaptive.go
+//     requestFrameEvery); it used to idle down to 15 fps under the user.
+//   - In space: the mesh has twice the grid's resolution (a vertex every
+//     10 px on the Smart Pro, 129×73 of them), its heights Catmull-Rom
+//     interpolated from the grid, so slopes, shade and glints vary smoothly
+//     instead of in 20 px facets, and the cells' diagonals alternate so no
+//     grain runs one way across the screen. The wallpaper is sampled with
+//     linear filtering (gifwall.go appWallpaperTextureSmooth): a ripple is a
+//     lens that enlarges the picture locally, and nearest sampling showed
+//     its pixels as blocks.
+//
+// Per frame that is a grid step or two, a blend and an interpolation of the
+// heights, ~9,400 vertices and two draw calls — about a millisecond of the
+// A53 for the vertices, the rest SDL expanding the ~55,000 indices
+// (liquidBudgetMs watches the whole of it and falls back to the coarse mesh).
 
 import (
 	"math"
@@ -60,6 +82,20 @@ const (
 	liquidMaxCols      = 80
 	liquidLowPowerCols = 48
 	liquidMinRows      = 8
+	// liquidMeshSub is how many mesh cells each grid cell is drawn as, each
+	// way. Two halves the facets for four times the vertices; the budget
+	// fallback (degraded) draws the grid itself.
+	liquidMeshSub = 2
+	// liquidLivingFrameMS is the cadence the living background asks for while
+	// it is drawn (requestFrameEvery): its lights drift a few pixels a second
+	// and its particles twinkle, which reads smooth at the idle cadence
+	// (about 24 fps on the handheld) and steps at deep idle's 15.
+	liquidLivingFrameMS = 42
+	// liquidLowPowerFrameMS is the cadence the moving water asks for under
+	// the Low Power setting, past its idle cap (adaptive.go
+	// requestFrameEveryPastLowPower): 30 fps, the handheld's active cadence,
+	// and on a PC no faster than Low Power's own cap there.
+	liquidLowPowerFrameMS = 33
 
 	liquidStepHz      = 30.0
 	liquidMaxSubsteps = 4
@@ -106,7 +142,8 @@ const (
 	liquidRainIdleStop = 120.0
 
 	// liquidBudgetMs is what the water may cost the handheld's CPU per frame
-	// (simulation and mesh) before it steps down for the session.
+	// (simulation, mesh, and SDL expanding the mesh in RenderGeometry) before
+	// it steps down for the session.
 	liquidBudgetMs   = 5.0
 	liquidBudgetHold = 3.0
 )
@@ -363,30 +400,10 @@ func (s *liquidSim) reset() {
 	s.maxAbs = 0
 }
 
-// slope is the height's change per node along x and y at node (i, j).
-func (s *liquidSim) slope(i, j int) (float32, float32) {
-	k := j*s.stride + i
-	var sx, sy float32
-	switch {
-	case i <= 0:
-		sx = s.cur[k+1] - s.cur[k]
-	case i >= s.cols:
-		sx = s.cur[k] - s.cur[k-1]
-	default:
-		sx = (s.cur[k+1] - s.cur[k-1]) * 0.5
-	}
-	switch {
-	case j <= 0:
-		sy = s.cur[k+s.stride] - s.cur[k]
-	case j >= s.rows:
-		sy = s.cur[k] - s.cur[k-s.stride]
-	default:
-		sy = (s.cur[k+s.stride] - s.cur[k-s.stride]) * 0.5
-	}
-	return sx, sy
-}
-
-// liquidGridIndices are the two triangles of every cell, built once per grid.
+// liquidGridIndices are the two triangles of every cell, six indices a cell
+// in row order, built once per mesh. The diagonal alternates like a
+// chequerboard: with every cell split the same way, the shading's linear
+// steps lined up into a grain running corner to corner across the screen.
 func liquidGridIndices(cols, rows int) []int32 {
 	if cols <= 0 || rows <= 0 {
 		return nil
@@ -399,10 +416,41 @@ func liquidGridIndices(cols, rows int) []int32 {
 			b := a + 1
 			c := a + st
 			d := c + 1
-			idx = append(idx, a, b, c, b, d, c)
+			if (i+j)&1 == 0 {
+				idx = append(idx, a, b, c, b, d, c)
+			} else {
+				idx = append(idx, a, b, d, a, d, c)
+			}
 		}
 	}
 	return idx
+}
+
+// liquidCubic is the Catmull-Rom weights of the four grid nodes around a
+// point t of the way (0 ≤ t < 1) from the second node to the third. The curve
+// passes through the nodes and its slope is continuous across them, which is
+// what lets the shading follow a ripple's curve instead of its grid.
+func liquidCubic(t float32) [4]float32 {
+	t2 := t * t
+	t3 := t2 * t
+	return [4]float32{
+		(-t3 + 2*t2 - t) / 2,
+		(3*t3 - 5*t2 + 2) / 2,
+		(-3*t3 + 4*t2 + t) / 2,
+		(t3 - t2) / 2,
+	}
+}
+
+// liquidClampNode keeps a neighbour's index on the grid: past an edge the
+// edge node stands in (it is held at zero anyway).
+func liquidClampNode(i, last int) int {
+	if i < 0 {
+		return 0
+	}
+	if i > last {
+		return last
+	}
+	return i
 }
 
 // ── Focus ────────────────────────────────────────────────────────────────
@@ -535,12 +583,19 @@ type liquidPoolState struct {
 	tiltFOK          bool
 	lightTX, lightTY float64
 
+	// alpha is how far the clock is into the next step (0–1): the frame draws
+	// the two newest time levels blended by it. blend, rowX and fine are the
+	// surface as drawn (surface): the blended grid, the grid interpolated
+	// along x, and the mesh's heights.
+	alpha             float32
+	blend, rowX, fine []float32
+
 	verts            []sdl.Vertex
 	spec             []sdl.Vertex
 	idx              []int32
-	idxCols, idxRows int // the grid idx was built for
+	idxCols, idxRows int // the mesh idx was built for
 	specIdx          []int32
-	// specRow[j] is where grid row j's cells start in specIdx (specRow[rows]
+	// specRow[j] is where mesh row j's cells start in specIdx (specRow[rows]
 	// is its end), so a clipped repaint can draw just the rows it covers.
 	specRow []int
 	meshKey liquidMeshKey
@@ -593,7 +648,7 @@ func liquidPoolOff() {
 }
 
 // release frees what the water holds once it is switched off: the baked
-// picture and the grid's buffers, about 400 KB between the GPU and the heap.
+// picture and the mesh's buffers, about 1 MB between the GPU and the heap.
 // The picture is destroyed only when it belongs to renderer, the one still
 // drawing; one made by an earlier renderer died with it and is forgotten. It
 // is called every frame the water is off, so it must cost nothing once
@@ -609,6 +664,7 @@ func (p *liquidPoolState) release(renderer *sdl.Renderer) {
 	p.baked, p.bakedKey, p.bakeFailed = nil, liquidBakeKey{}, false
 	p.sim = nil
 	p.verts, p.spec, p.idx, p.specIdx, p.specRow = nil, nil, nil, nil, nil
+	p.blend, p.rowX, p.fine = nil, nil, nil
 	p.idxCols, p.idxRows = 0, 0
 	p.meshOK, p.dirty, p.calm = false, false, true
 	p.haveRipple = false
@@ -707,6 +763,17 @@ func liquidUpdate(config *Config, w, h int32, now float64) {
 				p.acc = 0
 			}
 		}
+	}
+	// The frame draws the surface this far into the next step (surface), so
+	// every frame that moves the clock rebuilds the mesh, step or no step:
+	// that is what keeps the water moving between the 30 Hz steps.
+	alpha := float32(0)
+	if !p.calm {
+		alpha = float32(math.Min(1, math.Max(0, p.acc*liquidStepHz)))
+	}
+	if alpha != p.alpha {
+		p.alpha = alpha
+		p.dirty = true
 	}
 	p.frameCost += time.Since(start)
 }
@@ -932,7 +999,7 @@ func (p *liquidPoolState) noteCost(now float64) {
 	}
 	if now-p.slowFrom >= liquidBudgetHold {
 		p.degraded = true
-		logInfo("liquidbg", "the water costs %.1f ms a frame; using the coarse grid without the light pass", p.costEMA)
+		logInfo("liquidbg", "the water costs %.1f ms a frame; using the coarse grid and mesh without the light pass", p.costEMA)
 	}
 }
 
@@ -946,6 +1013,13 @@ func (p *liquidPoolState) noteCost(now float64) {
 // drawn (the header band is repainted from it too).
 func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liquidDrew {
 	p := &liquidPool
+	// Every backdrop draw starts here, water or not, so this is also where
+	// the living background — which has no hook of its own in the draw —
+	// asks for its cadence while it is on screen (adaptive.go). Low Power
+	// draws its reduced variant at the idle cadence anyway.
+	if config != nil && config.Variables.DynamicBg && !effectiveLowPower(config) {
+		requestFrameEvery(liquidLivingFrameMS)
+	}
 	level := liquidLevelOf(config)
 	if level == liquidLevelOff || renderer == nil || w <= 0 || h <= 0 {
 		if p.on || p.motionOn {
@@ -997,7 +1071,8 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 	var src *sdl.Texture
 	var srcRect *sdl.Rect
 	if wall {
-		src, srcRect = appWallpaperTexture(renderer, config)
+		// Linear filtering: the ripples enlarge the picture (gifwall.go).
+		src, srcRect = appWallpaperTextureSmooth(renderer, config)
 	}
 	if src == nil {
 		wall = false
@@ -1018,6 +1093,17 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 		_ = renderer.Copy(src, srcRect, &liquidFull)
 		return drew
 	}
+	// The water is moving and on screen: it asks for frames as fast as the
+	// active cadence goes, and stops asking the frame it settles into the
+	// plain copy above. Under the Low Power setting — the handheld's default,
+	// and the water at its 24 fps cap was the tester's "slow framerate" — it
+	// still asks for 30 fps; Battery Saver (the low battery's, or the power
+	// mode) keeps the cap.
+	if effectiveLowPower(config) && !batterySaverActive && currentPowerMode(config) != PowerModeBatterySaver {
+		requestFrameEveryPastLowPower(liquidLowPowerFrameMS)
+	} else {
+		requestFrameEvery(1)
+	}
 	u0, v0, u1, v1 := liquidTexWindow(src, srcRect)
 	p.buildMesh(w, h, u0, v0, u1, v1)
 	if len(p.verts) == 0 || len(p.idx) == 0 {
@@ -1034,7 +1120,12 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 			return drew
 		}
 	}
-	if err := renderer.RenderGeometry(src, p.verts, idx); err != nil {
+	// SDL expands the indexed mesh into its vertex buffer on this thread, in
+	// the call: that is part of what the water costs, so the budget counts it.
+	start := time.Now()
+	err := renderer.RenderGeometry(src, p.verts, idx)
+	p.frameCost += time.Since(start)
+	if err != nil {
 		p.markUnsupported(err)
 		_ = renderer.Copy(src, srcRect, &liquidFull)
 	}
@@ -1112,7 +1203,10 @@ func liquidBackdropLight(renderer *sdl.Renderer) {
 		return
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_ADD)
-	if err := renderer.RenderGeometry(nil, p.spec, idx); err != nil {
+	start := time.Now()
+	err := renderer.RenderGeometry(nil, p.spec, idx)
+	p.frameCost += time.Since(start)
+	if err != nil {
 		p.markUnsupported(err)
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
@@ -1158,7 +1252,72 @@ func liquidLight(tx, ty float64) (lx, ly, lz, hx, hy, hz float64) {
 	return lx, ly, lz, hx / n, hy / n, hz / n
 }
 
-// buildMesh lays the grid's vertices for the current water: positions on the
+// surface is the water as the frame draws it, in p.fine (or p.blend for a
+// mesh that is the grid itself): the two newest time levels blended by alpha
+// — the leapfrog keeps both, so this costs one pass — then, for a mesh sub
+// times finer than the grid, Catmull-Rom interpolated onto its nodes, along x
+// for every grid row and then along y. Buffers are made once per size, so a
+// frame allocates nothing.
+func (p *liquidPoolState) surface(sub int) []float32 {
+	s := p.sim
+	sub = min(sub, liquidMeshSub) // the weight table below holds no more
+	n := (s.cols + 1) * (s.rows + 1)
+	if len(p.blend) != n {
+		p.blend = make([]float32, n)
+	}
+	a := p.alpha
+	for k := range p.blend {
+		p.blend[k] = s.prev[k] + (s.cur[k]-s.prev[k])*a
+	}
+	if sub <= 1 {
+		return p.blend
+	}
+	fcols, frows := s.cols*sub, s.rows*sub
+	fst, st := fcols+1, s.cols+1
+	if len(p.rowX) != (s.rows+1)*fst {
+		p.rowX = make([]float32, (s.rows+1)*fst)
+	}
+	if len(p.fine) != (frows+1)*fst {
+		p.fine = make([]float32, (frows+1)*fst)
+	}
+	var wt [liquidMeshSub][4]float32
+	for k := 1; k < sub && k < liquidMeshSub; k++ {
+		wt[k] = liquidCubic(float32(k) / float32(sub))
+	}
+	for j := 0; j <= s.rows; j++ {
+		src := p.blend[j*st : (j+1)*st]
+		dst := p.rowX[j*fst : (j+1)*fst]
+		for fi := range dst {
+			i, k := fi/sub, fi%sub
+			if k == 0 {
+				dst[fi] = src[i]
+				continue
+			}
+			c := wt[k]
+			dst[fi] = c[0]*src[liquidClampNode(i-1, s.cols)] + c[1]*src[i] +
+				c[2]*src[liquidClampNode(i+1, s.cols)] + c[3]*src[liquidClampNode(i+2, s.cols)]
+		}
+	}
+	for fj := 0; fj <= frows; fj++ {
+		j, k := fj/sub, fj%sub
+		dst := p.fine[fj*fst : (fj+1)*fst]
+		if k == 0 {
+			copy(dst, p.rowX[j*fst:(j+1)*fst])
+			continue
+		}
+		c := wt[k]
+		r0 := p.rowX[liquidClampNode(j-1, s.rows)*fst:]
+		r1 := p.rowX[j*fst:]
+		r2 := p.rowX[liquidClampNode(j+1, s.rows)*fst:]
+		r3 := p.rowX[liquidClampNode(j+2, s.rows)*fst:]
+		for fi := range dst {
+			dst[fi] = c[0]*r0[fi] + c[1]*r1[fi] + c[2]*r2[fi] + c[3]*r3[fi]
+		}
+	}
+	return p.fine
+}
+
+// buildMesh lays the mesh's vertices for the current water: positions on the
 // nodes, texture coordinates pushed along the slope, shade for the picture
 // pass and light for the glint pass. Nothing is rebuilt when neither the water
 // nor anything the mesh depends on changed (the band repaint, a calm frame).
@@ -1167,10 +1326,16 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) {
 	if s == nil {
 		return
 	}
+	// The budget's fallback draws the grid itself: a quarter of the vertices.
+	sub := liquidMeshSub
+	if p.degraded {
+		sub = 1
+	}
+	cols, rows := s.cols*sub, s.rows*sub
 	light := glassLightTheme()
 	spec := glassMix(sdl.Color{R: 255, G: 255, B: 255, A: 255}, glassAccent(), 0.35)
 	key := liquidMeshKey{
-		w: w, h: h, cols: s.cols, rows: s.rows,
+		w: w, h: h, cols: cols, rows: rows,
 		u0: u0, v0: v0, u1: u1, v1: v1,
 		lx: float32(p.lightTX), ly: float32(p.lightTY),
 		spec: spec, light: light,
@@ -1179,17 +1344,18 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) {
 		return
 	}
 	start := time.Now()
-	nodes := (s.cols + 1) * (s.rows + 1)
+	nodes := (cols + 1) * (rows + 1)
 	if len(p.verts) != nodes {
 		p.verts = make([]sdl.Vertex, nodes)
 		p.spec = make([]sdl.Vertex, nodes)
 	}
-	if p.idxCols != s.cols || p.idxRows != s.rows || len(p.idx) != s.cols*s.rows*6 || len(p.specRow) != s.rows+1 {
-		p.idx = liquidGridIndices(s.cols, s.rows)
+	if p.idxCols != cols || p.idxRows != rows || len(p.idx) != cols*rows*6 || len(p.specRow) != rows+1 {
+		p.idx = liquidGridIndices(cols, rows)
 		p.specIdx = make([]int32, 0, len(p.idx))
-		p.specRow = make([]int, s.rows+1)
-		p.idxCols, p.idxRows = s.cols, s.rows
+		p.specRow = make([]int, rows+1)
+		p.idxCols, p.idxRows = cols, rows
 	}
+	height := p.surface(sub)
 	// Once the budget has stepped the water down there is no light pass to
 	// feed: the glint maths and the lit-cell scan are skipped with it.
 	glints := !p.degraded
@@ -1209,12 +1375,33 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) {
 	du, dv := u1-u0, v1-v0
 	umin, umax := u0+liquidUVInset, u1-liquidUVInset
 	vmin, vmax := v0+liquidUVInset, v1-liquidUVInset
-	stride := s.cols + 1
-	for j := 0; j <= s.rows; j++ {
-		fy := float32(j) / float32(s.rows)
-		for i := 0; i <= s.cols; i++ {
-			fx := float32(i) / float32(s.cols)
-			sx, sy := s.slope(i, j)
+	stride := cols + 1
+	// Slopes stay in height per grid node, the unit liquidRefraction and
+	// liquidSlopeGain are tuned in, whatever the mesh's step: a central
+	// difference spans two mesh nodes, 2/sub grid nodes.
+	edge, mid := float32(sub), float32(sub)/2
+	for j := 0; j <= rows; j++ {
+		fy := float32(j) / float32(rows)
+		for i := 0; i <= cols; i++ {
+			fx := float32(i) / float32(cols)
+			k := j*stride + i
+			var sx, sy float32
+			switch i {
+			case 0:
+				sx = (height[k+1] - height[k]) * edge
+			case cols:
+				sx = (height[k] - height[k-1]) * edge
+			default:
+				sx = (height[k+1] - height[k-1]) * mid
+			}
+			switch j {
+			case 0:
+				sy = (height[k+stride] - height[k]) * edge
+			case rows:
+				sy = (height[k] - height[k-stride]) * edge
+			default:
+				sy = (height[k+stride] - height[k-stride]) * mid
+			}
 			nx, ny := -float64(sx)*liquidSlopeGain, -float64(sy)*liquidSlopeGain
 			inv := 1 / math.Sqrt(nx*nx+ny*ny+1)
 			rel := (nx*lx+ny*ly+lz)*inv - lz
@@ -1234,7 +1421,6 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) {
 			} else if v > vmax {
 				v = vmax
 			}
-			k := j*stride + i
 			pos := sdl.FPoint{X: fx * fw, Y: fy * fh}
 			c := uint8(255*shade + 0.5)
 			p.verts[k] = sdl.Vertex{Position: pos, Color: sdl.Color{R: c, G: c, B: c, A: 255}, TexCoord: sdl.FPoint{X: u, Y: v}}
@@ -1261,25 +1447,25 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) {
 	}
 	// The glint pass covers only the cells with light in them: on a mostly
 	// calm screen that is a few dozen triangles instead of the whole canvas.
-	// specRow remembers where each grid row starts, for a clipped repaint.
+	// specRow remembers where each mesh row starts, for a clipped repaint.
 	p.specIdx = p.specIdx[:0]
 	if glints {
-		for j := 0; j < s.rows; j++ {
+		for j := 0; j < rows; j++ {
 			p.specRow[j] = len(p.specIdx)
-			for i := 0; i < s.cols; i++ {
+			for i := 0; i < cols; i++ {
 				a := j*stride + i
 				if p.spec[a].Color.A > 1 || p.spec[a+1].Color.A > 1 ||
 					p.spec[a+stride].Color.A > 1 || p.spec[a+stride+1].Color.A > 1 {
-					p.specIdx = append(p.specIdx, p.idx[(j*s.cols+i)*6:(j*s.cols+i)*6+6]...)
+					p.specIdx = append(p.specIdx, p.idx[(j*cols+i)*6:(j*cols+i)*6+6]...)
 				}
 			}
 		}
 	} else {
-		for j := 0; j < s.rows; j++ {
+		for j := 0; j < rows; j++ {
 			p.specRow[j] = 0
 		}
 	}
-	p.specRow[s.rows] = len(p.specIdx)
+	p.specRow[rows] = len(p.specIdx)
 	p.meshKey, p.meshOK, p.dirty = key, true, false
 	p.frameCost += time.Since(start)
 }
@@ -1291,11 +1477,11 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) {
 // pal.top), so turning the water on does not change what the background is;
 // the lights themselves are drawn over the water as usual.
 func (p *liquidPoolState) bakedSource(renderer *sdl.Renderer, config *Config, w, h int32) *sdl.Texture {
-	cols, rows := liquidGridSize(w, h, p.low)
-	if p.sim != nil {
-		cols, rows = p.sim.cols, p.sim.rows
-	}
-	key := liquidBakeKey{w: w, h: h, bw: cols * 4, bh: rows * 4}
+	// A texel every four pixels, filtered linearly: the picture is all soft
+	// gradients, so a finer one would show nothing more. It used to follow
+	// the grid (four texels a cell), which baked it again — coarser — every
+	// time Low Power switched the grid.
+	key := liquidBakeKey{w: w, h: h, bw: max(int(w)/4, 64), bh: max(int(h)/4, 36)}
 	if config != nil && config.Variables.DynamicBg {
 		pal := getTimePalette()
 		key.dynamic, key.top, key.bottom = true, pal.top, pal.top
@@ -1329,6 +1515,16 @@ func (p *liquidPoolState) bakedSource(renderer *sdl.Renderer, config *Config, w,
 	_ = tex.SetBlendMode(sdl.BLENDMODE_NONE)
 	p.baked = tex
 	return tex
+}
+
+// liquidTextureBytes is what the water holds as a texture — the baked
+// backdrop, when there is one — for the memory line (memstat.go).
+func liquidTextureBytes() int64 {
+	p := &liquidPool
+	if p.baked == nil {
+		return 0
+	}
+	return int64(p.bakedKey.bw) * int64(p.bakedKey.bh) * 4
 }
 
 // liquidBakePixels renders the baked picture in R,G,B,A byte order: the base

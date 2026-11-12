@@ -8,13 +8,13 @@ package main
 // would be sent, and Submit. Where it goes and what happens when the handheld
 // cannot reach it is bugrepsend.go's job; this file is the form and the sheets
 // that report the outcome: "Sent · issue #… · reference JH-…", "Queued", "Set
-// the date and time first", or — only when the device cannot send it itself —
-// the phone path with a QR code.
+// the date and time first", or — when it cannot be saved or is refused — the
+// optional phone path with a QR code.
 //
 // Submit used to end on that QR code every time: no build carried a collector,
 // so a tester had to finish every report on a phone signed in to GitHub. Every
 // build now sends to the JukaHub report service (bugrepDefaultEndpoint), which
-// files the report as a GitHub issue; the phone is the fallback.
+// files the report as a GitHub issue. A failed send is saved for retry.
 
 import (
 	"strconv"
@@ -240,7 +240,7 @@ func bugrepWhereLine(endpoint string, waiting bool) string {
 		return "This build has no report service: Submit shows a code your phone opens as a GitHub issue."
 	case waiting:
 		return bugrepCapital(bugrepServiceName(endpoint)) + " is not answering right now; queued reports go out on " +
-			"the next start. Submit offers your phone or a later try."
+			"the next start. Submit saves the report on this device."
 	case bugrepIsDefaultEndpoint(endpoint):
 		return "Sent from this device to the JukaHub report service, which files it as a public GitHub issue — " +
 			"not under your name, and without your address."
@@ -491,6 +491,7 @@ func bugrepActivate(config *Config, id string) {
 			tall:     true,
 			buttons: []tbxSheetButton{
 				{label: "Send", primary: true, run: func() { bugrepSend(config, false) }},
+				{label: "Use phone", run: func() { bugrepPhoneSheet(config, r, "", false) }},
 				{label: "Close"},
 			},
 		})
@@ -564,9 +565,10 @@ func bugrepSend(config *Config, sound bool) {
 				// The collector works, so anything that waited for it goes now.
 				bugrepCollectorAnswered(endpoint)
 				if away {
-					ShowToast(bugrepSentToast(sent), ToastKindSuccess)
+					notifPush(bugrepSentToast(sent), notifSuccess)
 					return
 				}
+				notifRecord(bugrepSentToast(sent), notifSuccess)
 				bugrepSentSheet(config, sent)
 			case kind == bugrepErrClock:
 				if !bugrepClockWrong(time.Now()) {
@@ -576,24 +578,15 @@ func bugrepSend(config *Config, sound bool) {
 				bugrepHold(config, r, bugrepHoldClock)
 			case kind == bugrepErrUnavailable:
 				bugrepCollectorUnavailable()
-				if away {
-					// Nothing on screen can show the code, so the report is
-					// kept and tried again on the next start.
-					bugrepHold(config, r, bugrepHoldService)
-					return
-				}
-				bugrepPhoneSheet(config, r, bugrepCapital(bugrepServiceName(endpoint))+" is not answering right now. "+
-					"Send the report from your phone with the code, or choose Send later to keep it on this device and "+
-					"send it on the next start.", true)
+				bugrepHold(config, r, bugrepHoldService)
+			case kind == bugrepErrSetup:
+				bugrepNoteServiceSetupPending(time.Now())
+				bugrepHold(config, r, bugrepHoldSetup)
 			case kind == bugrepErrTrust:
 				// The outbox would meet the same certificate, so it waits for
 				// the next start too.
 				bugrepCollectorUnavailable()
-				if away {
-					bugrepHold(config, r, bugrepHoldTrust)
-					return
-				}
-				bugrepPhoneSheet(config, r, "This firmware cannot check the report server's certificate, so the report goes through your phone instead.", false)
+				bugrepHold(config, r, bugrepHoldTrust)
 			case kind == bugrepErrRejected:
 				// A refusal retires nothing here: the words are kept as a copy
 				// on the device, and the phone can still send them.
@@ -641,6 +634,9 @@ const (
 	// bugrepHoldService: the report service is not answering; it is tried
 	// again on the next start.
 	bugrepHoldService
+	// bugrepHoldSetup: the service needs its GitHub token or repo access;
+	// the device retries after the maintainer fixes it.
+	bugrepHoldSetup
 	// bugrepHoldBusy: the report service answered but is busy or failing
 	// (429, 5xx); the outbox retries it with its backoff.
 	bugrepHoldBusy
@@ -675,23 +671,37 @@ func bugrepHold(config *Config, r bugrepReport, why bugrepHoldWhy) {
 	}
 	bugrepFormDone()
 	trophyEvent(tkBugReport)
+	message, priority := bugrepQueuedNotice(why, copied)
+	if away {
+		notifPush(message, priority)
+		return
+	}
+	notifRecord(message, priority)
 	switch {
-	case away && why == bugrepHoldClock:
-		ShowToast("Bug report saved — set the date and time so it can be sent", ToastKindWarning)
-	case away && why == bugrepHoldService:
-		ShowToast("Bug report saved — the report service is not answering, so it is sent on the next start", ToastKindInfo)
-	case away && why == bugrepHoldBusy:
-		ShowToast("Bug report queued — the report service is busy, so it is sent in a little while", ToastKindInfo)
-	case away && why == bugrepHoldTrust && copied:
-		ShowToast("Bug report saved, not sent — this firmware cannot check the report server; a copy is in the Patch reports folder", ToastKindWarning)
-	case away && why == bugrepHoldTrust:
-		ShowToast("Bug report saved, not sent — this firmware cannot check the report server", ToastKindWarning)
-	case away:
-		ShowToast("Bug report queued — it is sent when JukaHub is online", ToastKindInfo)
 	case why == bugrepHoldClock:
-		bugrepClockSheet(config)
+		bugrepClockSheet(config, r)
 	default:
-		bugrepQueuedSheet(config, r.ID, why, copied)
+		bugrepQueuedSheet(config, r, why, copied)
+	}
+}
+
+func bugrepQueuedNotice(why bugrepHoldWhy, copied bool) (string, notifPriority) {
+	switch why {
+	case bugrepHoldClock:
+		return "Bug report saved — set the date and time so it can be sent", notifWarning
+	case bugrepHoldService:
+		return "Bug report saved — the report service is not answering; it will retry after restart", notifWarning
+	case bugrepHoldSetup:
+		return "Bug report saved — the report service needs GitHub setup; it will retry automatically", notifWarning
+	case bugrepHoldBusy:
+		return "Bug report queued — the report service is busy; it will retry automatically", notifInfo
+	case bugrepHoldTrust:
+		if copied {
+			return "Bug report saved — this firmware cannot check the report server; a copy is in Patch reports", notifWarning
+		}
+		return "Bug report saved — this firmware cannot check the report server", notifWarning
+	default:
+		return "Bug report queued — it will send when JukaHub is online", notifInfo
 	}
 }
 
@@ -743,13 +753,16 @@ func bugrepSentSheet(config *Config, sent bugrepSent) {
 // network, a report service that is not answering, one that is busy, or a
 // certificate this firmware cannot check. copied says whether a readable copy
 // was saved next to the support reports (the certificate case writes one).
-func bugrepQueuedSheet(config *Config, ref string, why bugrepHoldWhy, copied bool) {
+func bugrepQueuedSheet(config *Config, r bugrepReport, why bugrepHoldWhy, copied bool) {
 	body := "There is no connection to the report service right now. The report is saved on this device and is sent " +
 		"automatically the next time JukaHub is online — you do not need to do anything."
 	switch why {
 	case bugrepHoldService:
 		body = "The report service is not answering right now. The report is saved on this device and JukaHub " +
 			"sends it on its own after the next start — you do not need to do anything."
+	case bugrepHoldSetup:
+		body = "The report service cannot file GitHub issues until its owner finishes setup. Your report is saved on this device. " +
+			"JukaHub retries automatically after setup, without a phone or GitHub account on this device."
 	case bugrepHoldBusy:
 		body = "The report service is busy right now. The report is saved on this device and is sent automatically " +
 			"in a little while — you do not need to do anything."
@@ -764,14 +777,20 @@ func bugrepQueuedSheet(config *Config, ref string, why bugrepHoldWhy, copied boo
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title:    "Queued",
-		subtitle: "Reference " + ref,
+		subtitle: "Reference " + r.ID,
 		icon:     "upload",
 		body:     body,
-		buttons:  []tbxSheetButton{{label: "Done", primary: true}},
+		buttons: []tbxSheetButton{
+			{label: "Use phone", run: func() {
+				bugrepPhoneSheet(config, r, "Your report stays saved on this device. You can submit the prefilled issue on GitHub now; JukaHub checks for that issue before retrying later.", true)
+			}},
+			{label: "Done", primary: true},
+		},
+		focus: 1,
 	})
 }
 
-func bugrepClockSheet(config *Config) {
+func bugrepClockSheet(config *Config, r bugrepReport) {
 	tbxOpenSheet(config, tbxSheetSpec{
 		title:    "Set the date and time first",
 		subtitle: "The device clock is wrong",
@@ -779,16 +798,22 @@ func bugrepClockSheet(config *Config) {
 		body: "This device thinks it is " + time.Now().Format("2 January 2006") + ". Secure connections check dates, " +
 			"so nothing can be sent until the clock is right.\n\nSet the date and time in the system settings (or connect to " +
 			"Wi-Fi so it can set itself). Your report is saved and goes out on its own afterwards.",
-		buttons: []tbxSheetButton{{label: "OK", primary: true}},
+		buttons: []tbxSheetButton{
+			{label: "Use phone", run: func() {
+				bugrepPhoneSheet(config, r, "Your report stays saved on this device while you submit it on GitHub from your phone.", true)
+			}},
+			{label: "Done", primary: true},
+		},
+		focus: 1,
 	})
 }
 
 // bugrepPhoneSheet is the path for a report the device cannot send itself: a
 // QR code that opens a prefilled GitHub issue on a phone, the full report saved
-// on the device, and — on a desktop — the same issue in the browser. later
-// adds "Send later", which keeps the report in the outbox instead (for a
-// report service that is only not answering right now).
-func bugrepPhoneSheet(config *Config, r bugrepReport, why string, later bool) {
+// on the device, and — on a desktop — the same issue in the browser. queued
+// means the report is already in the outbox and will be checked for a matching
+// GitHub issue when the service becomes available.
+func bugrepPhoneSheet(config *Config, r bugrepReport, why string, queued bool) {
 	link := bugrepIssueURL(r, 900)
 	var modules [][]bool
 	if code, err := qrcode.New(link, qrcode.Low); err == nil {
@@ -804,7 +829,7 @@ func bugrepPhoneSheet(config *Config, r bugrepReport, why string, later bool) {
 		body.WriteString(why + "\n\n")
 	}
 	body.WriteString("Scan the code with your phone: it opens a GitHub issue with your title, description and the device facts filled in. " +
-		"Sign in, check it and press Submit.\n\n")
+		"Sign in, choose Open a blank issue if GitHub shows templates, check it and press Submit.\n\n")
 	body.WriteString("## Reference\n" + r.ID + "\n")
 	if saved != "" {
 		body.WriteString("\n## Full report\nSaved on this device as " + bugrepBaseName(saved) +
@@ -827,10 +852,8 @@ func bugrepPhoneSheet(config *Config, r bugrepReport, why string, later bool) {
 			bugrepFormDone()
 		}})
 	}
-	if later {
-		buttons = append(buttons, tbxSheetButton{label: "Send later", run: func() {
-			bugrepHold(config, r, bugrepHoldService)
-		}})
+	if queued {
+		body.WriteString("\nThe saved report keeps its reference. If you file it on GitHub, JukaHub will look for that issue before sending again.\n")
 	}
 	buttons = append(buttons, tbxSheetButton{label: "Done", primary: true, run: bugrepFormDone})
 	tbxOpenSheet(config, tbxSheetSpec{

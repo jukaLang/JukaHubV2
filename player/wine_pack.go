@@ -162,7 +162,9 @@ func winePackProbe(dir string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, box, "--version")
-	cmd.Env = append(os.Environ(), "BOX64_NOBANNER=1", "BOX64_LOG=0", "BOX64_DYNACACHE=0")
+	cmd.Env = mergeGameProfileEnv(screenChildEnv(os.Environ()), map[string]string{
+		"BOX64_NOBANNER": "1", "BOX64_LOG": "0", "BOX64_DYNACACHE": "0",
+	})
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return "Box64 did not answer within 15 seconds"

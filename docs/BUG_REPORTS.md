@@ -1,15 +1,17 @@
 # Bug reports from the device
 
-**Start → Device → Report a bug** (also **Tools → Community & support → Report
-a bug**, and Home search) sends a report straight from the handheld. Nobody
-needs a phone, a browser or a GitHub account on the device: the report goes to
-the JukaHub report service, which files it as an issue on
+**Report a bug** in the top bar, between Notifications and Trophies (also
+**Start → Device → Report a bug**, **Tools → Community & support → Report a
+bug**, and Home search), sends a report from the handheld. The **Report a bug**
+card in the paired phone companion accepts a report typed on the phone and
+sends it through the handheld. Neither route needs a GitHub account on the
+device: the report goes to the JukaHub report service, which files an issue on
 [JukaHub's GitHub](https://github.com/jukaLang/JukaHubV2/issues), and the
-device shows the issue number.
+device or phone shows the issue number.
 
 Reports used to end on a QR code that had to be finished on a phone signed in
-to GitHub, because no build carried a collector. The phone is now only the
-fallback for a device that cannot send the report itself.
+to GitHub, because no build carried a collector. The phone remains an option
+before sending, while a report is queued, or if the service refuses it.
 
 ## What happens on Submit
 
@@ -28,20 +30,38 @@ fallback for a device that cannot send the report itself.
 3. The service checks that it looks like a report from the app, scrubs it once
    more, and files a public issue titled `[Bug] <your title> (JH-XXXXXX)`.
 4. The device shows **Thank you — report sent** with the issue number and the
-   reference. The sheet also has a QR code of the issue for anyone who wants to
-   follow it on a phone; that is optional.
+   reference, and records the result in Notifications. The sheet also has a QR
+   code of the issue for anyone who wants to follow it on a phone; that is
+   optional. When a queued report sends later, Notifications shows its issue
+   number and the bell gets an unread count.
 
-When the report cannot go out right away, the device says why and keeps it:
+When the report cannot go out right away, the device says why and keeps it.
+The queued sheet has **Use phone** beside **Done**: it opens a QR code to a
+prefilled GitHub issue that can be submitted from a signed-in phone. If GitHub
+shows its template chooser, choose **Open a blank issue**. The phone
+companion also lists saved reports with an **Open on GitHub** link. Using the
+phone is optional; the saved report remains in the outbox. The link includes
+the report's reference and creation time, which let the service recognize an
+issue submitted by phone when it retries. Leave those markers in the GitHub
+issue; if GitHub has not indexed it yet when the device retries, a duplicate
+issue is still possible.
 
 | Situation | What the device does |
 |-----------|----------------------|
 | No network | Queues the report (`data/bugreports/outbox`) and sends it on its own when JukaHub is online again. |
 | The clock is wrong (a reset to 1970) | Asks you to set the date and time; the report waits and goes afterwards. |
-| The firmware cannot check the service's certificate | Offers the phone path (QR code + a copy saved in the Patch reports folder). If you already left the screen, the report is queued, a readable copy is saved, and it is tried again on the next start. |
-| The report service is not answering (not deployed, not set up, or something else answers at its address — a web page, a proxy's refusal, a redirect) | Offers the phone path, or **Send later**, which keeps the report and tries again on the next start. |
+| The firmware cannot check the service's certificate | Saves the report and a readable copy in the Patch reports folder, then tries again on the next start. |
+| The report service is not answering (not deployed, a web page, a proxy's refusal, a redirect) | Saves the report on this device and tries again on the next start. |
+| The service has no GitHub token, or its token cannot file issues | Saves the report on this device and retries automatically with backoff. The report shortcut shows the queued count. Once a maintainer fixes the service, the report sends without a phone. |
 | The service is busy, or it or GitHub fails for a while (429, 5xx — a gateway's own error page included) | Keeps the report and retries, waiting longer after each failure (90 s, doubling, at most 6 h). The first retry also waits, so a failed Submit is not sent again at once. |
 | The service refuses the report | On Submit: says why and offers the phone path, with a readable copy saved on the device. From the outbox: retired like a month-old report (next row). |
 | A queued report could not be sent for a month | Moves it to `data/bugreports/retired` and saves a readable copy in the Patch reports folder. |
+
+The companion's report form sends the title, description, category, device
+model, build information, creation time and reference. It does not include
+device diagnostics or logs; use the handheld form if those are needed. Both
+forms scrub personal details before sending. A paired phone needs the
+companion PIN; the GitHub token stays on the server and is never sent to it.
 
 No report is lost, and none is retried for ever. A queued report only leaves
 the outbox once a readable copy of it exists: on a full or read-only card it
@@ -104,7 +124,8 @@ A collector receives the report as a JSON `POST` with
 | Answer | Meaning on the device |
 |--------|-----------------------|
 | `2xx`, optionally `{"id", "issue", "url"}` | Sent. `id` replaces the reference, `issue` and `url` (a GitHub issue address) are shown. |
-| `404`, `405`, `410`, `501`, `503`, a web page (any status), `{"fallback": "phone"}`, or a `4xx` with no JSON body | No collector here: phone path or Send later. |
+| `404`, `405`, `410`, `501`, a web page (any status), or a `4xx` with no JSON body | No collector here: saved on the device and retried after the next start. |
+| `503 {"fallback": "phone"}` or `{"configured": false}` | Service setup is missing: saved on the device and retried automatically. |
 | `429`, other `5xx` | Busy or failing: queued and retried later. |
 | any other `4xx` with a JSON body | Refused: the reason (`{"error": "…"}`) is shown; a queued report is retired (with a readable copy). |
 
@@ -121,7 +142,13 @@ site that serves the web builder (generate.jukalang.com, deployed from this
 repository). Netlify picks functions up from `netlify/functions` on every
 deploy; no `netlify.toml` is needed. It has no dependencies.
 
-1. **Make a token.** Ideally on a separate bot account, so reports are not filed
+1. **Make a token.** On GitHub, open your avatar → **Settings** → **Developer
+   settings** → **Personal access tokens** → **Fine-grained tokens** →
+   **Generate new token**. Choose `jukaLang` as the **Resource owner**, choose
+   **Only select repositories** and `JukaHubV2`, then set **Repository
+   permissions → Issues → Read and write**. Generate the token and copy it
+   immediately; GitHub shows its value once. Ideally use a separate bot
+   account, so reports are not filed
    under a maintainer's name. Which token works depends on who owns the
    repository:
    - A **fine-grained** personal access token only reaches repositories of its
@@ -137,18 +164,25 @@ deploy; no `netlify.toml` is needed. It has no dependencies.
    access to the repository. Without it GitHub files the issue and silently
    drops the labels (no error), so a non-collaborator bot's reports arrive
    unlabelled — give the bot triage access if you filter by `from-device`.
-2. **Add it to Netlify.** Site configuration → Environment variables → Add a
-   variable, for the generate.jukalang.com site:
+2. **Add it to Netlify.** In the Netlify site that serves
+   `generate.jukalang.com`, open **Project configuration** (called **Site
+   configuration** in some views) → **Environment variables** → **Add a
+   variable**. Set the key to `JUKAHUB_GITHUB_TOKEN` and paste the token as
+   its value. Make it available to **Functions**. Keep the token out of the
+   repository, GitHub Actions secrets, the device config and the phone page.
+   The service variables are:
 
    | Variable | Required | Default | Purpose |
    |----------|----------|---------|---------|
-   | `JUKAHUB_GITHUB_TOKEN` | yes | — | The token. Without it the service answers 503 `{"fallback": "phone"}`. |
+   | `JUKAHUB_GITHUB_TOKEN` | yes | — | The token. Without it the service answers 503 `{"fallback": "phone"}` and the device queues the report. |
    | `JUKAHUB_ISSUES_REPO` | no | `jukaLang/JukaHubV2` | Where issues are filed, as `owner/name`. A separate reports repository works. |
    | `JUKAHUB_ISSUE_LABELS` | no | `bug,from-device` | Comma-separated labels (up to five), applied when the token's account has triage access. Set it empty for none. |
    | `JUKAHUB_DISCORD_WEBHOOK` | no | — | A Discord webhook that gets a one-line notice with the issue link (mentions disabled, the title's markdown escaped). |
 
    Make sure the variables are available to Functions (the default scope).
-3. **Deploy.** Push to the branch the site builds, or use *Trigger deploy*.
+3. **Deploy.** Trigger a new Netlify deploy so the function reads the new
+   variable. Updating a GitHub repository secret alone does not configure the
+   live function.
 4. **Check it.** `curl -i https://generate.jukalang.com/api/bug-report` answers
    `405` with `{"configured": true}` once the token is set. A test report:
 
@@ -162,7 +196,47 @@ deploy; no `netlify.toml` is needed. It has no dependencies.
           "created":"2026-11-10T12:00:00Z"}'
    ```
 
-   It answers `201` with the new issue; close that issue afterwards.
+   It answers `201` with the new issue; close that issue afterwards. A normal
+   report from the handheld or phone companion is the simplest end-to-end
+   check after configuration.
+
+GitHub Issues is the destination, and Netlify runs the collector. GitHub Pages
+cannot run this function or hold its secret. The Netlify setup above is the
+shortest route for this repository.
+
+### Running it on your own server instead
+
+The repository also includes `server/bug-report-server.mjs`, which runs the
+same collector with Node.js 20 or newer. On a Linux server:
+
+1. Copy or clone this repository to the server and install Node.js 20 or newer.
+   No `npm install` is needed for the report service.
+2. Set `JUKAHUB_GITHUB_TOKEN` in the service's private environment, using the
+   token made in step 1 above. Optionally set `JUKAHUB_ISSUES_REPO` (default:
+   `jukaLang/JukaHubV2`). Keep the token in a protected service environment
+   file or secret manager, never in a public web directory or committed file.
+3. Start `node server/bug-report-server.mjs` under your process manager. It
+   listens on `127.0.0.1:8787` by default. `JUKAHUB_REPORT_PORT` changes the
+   port; `JUKAHUB_REPORT_HOST` changes the bind address.
+4. Put an HTTPS reverse proxy in front of it. For Nginx, add this location to
+   the site's existing TLS `server` block:
+
+   ```nginx
+   location = /api/bug-report {
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_pass http://127.0.0.1:8787;
+   }
+   ```
+
+   Keep the Node listener on loopback. It uses Nginx's `X-Real-IP` to apply
+   per-address rate limits; an internet client cannot supply that header
+   directly to the Node listener.
+5. Visit `https://YOUR-DOMAIN/api/bug-report`. A `405` response containing
+   `"configured":true` confirms the server sees its token. Put the full HTTPS
+   URL in the handheld's `JUKAHUB_BUGREPORT_URL` environment variable, or its
+   `bugReportURL` custom config value. Restart JukaHub and submit a normal
+   report to confirm GitHub receives it. The paired phone companion uses the
+   handheld's chosen report URL automatically.
 
 The service answers:
 

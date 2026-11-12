@@ -298,6 +298,7 @@ type sysToolHWSample struct {
 	memUsed    uint64
 	memTotal   uint64
 	memOK      bool
+	self       selfMemStat // JukaHub's own memory (memstat.go)
 	tempC      float64
 	tempOK     bool
 	throttle   bool
@@ -389,6 +390,7 @@ func sysToolHWRead(tick int, prev *sysToolCPUTimes, havePrev *bool) sysToolHWSam
 		s.cpuPct, s.cpuOK = sysToolGopsutilCPU()
 	}
 	s.memUsed, s.memTotal, s.memOK = sysToolMemory()
+	s.self = readSelfMemory()
 	s.tempC, s.tempOK = cpuTempValueC()
 	s.throttle, s.throttleOK = cpuThermalThrottleState()
 	s.freqMHz = sysToolCPUFreqMHz()
@@ -443,8 +445,18 @@ func sysToolHWApply(d *sysToolHWData, s sysToolHWSample) {
 		d.memHist.push(d.memFrac * 100)
 		d.memVal = fmt.Sprintf("%.0f", d.memFrac*100)
 		d.memSub = formatBytes(s.memUsed) + " of " + formatBytes(s.memTotal)
-	} else if d.memVal == "" {
-		d.memVal, d.memSub = "—", "Not reported here"
+		// What JukaHub itself holds, beside what is left: "how much of the
+		// RAM does this app use?" is the question people ask this tile.
+		if own := selfMemoryText(s.self, s.memUsed, s.memTotal, true); own != "" {
+			d.memSub = own
+		}
+	} else {
+		if d.memVal == "" {
+			d.memVal, d.memSub = "—", "Not reported here"
+		}
+		if own := selfMemoryText(s.self, 0, 0, false); own != "" {
+			d.memSub = own
+		}
 	}
 
 	d.tempOK = s.tempOK

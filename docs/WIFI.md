@@ -240,6 +240,32 @@ Everything that forks a process runs on a worker goroutine. The render loop
 drains one result slot per frame, which is also why a slow scan or a wedged
 supplicant cannot freeze the UI.
 
+## After the handheld sleeps
+
+The stock TrimUI firmware (since 1.0.4) and CrossMix turn Wi-Fi off while the
+handheld sleeps — keeping it on is what used to wake the device by itself after
+about 15 seconds — and there is no setting to keep it on. When the device
+wakes, the firmware starts Wi-Fi again and it rejoins your network, usually in
+five to ten seconds.
+
+JukaHub notices the wake within a second (the kernel's boot-time clock runs on
+through a sleep, the monotonic one does not) and checks the internet every 1.5
+seconds until it answers. Meanwhile Chat says **Reconnecting to Wi-Fi…**
+instead of **Offline**, a question for Juka waits and is sent the moment the
+network is back, and the voice orb and voice typing hold what you said for up
+to 15 seconds. The community chat reconnects at once and shows the messages
+you missed.
+
+If the radio is slow, JukaHub nudges it — gently, because the firmware owns
+it: after 2 seconds it asks the supplicant to reconnect, after 10 seconds to
+rejoin, and when it has joined but has no address or route it asks DHCP again.
+It never starts a supplicant of its own after a wake (the firmware starts one,
+and two on one radio fight). If Wi-Fi is still down after 20 seconds you get
+one toast, **Wi-Fi is still reconnecting…**; open the Wi-Fi page to see why
+(Diagnostics). Each wake leaves one line in the log, for example
+`wifi: back online 6.2 s after wake (reconnect sent)`. None of this has been
+timed on a Smart Pro yet.
+
 ## Windows
 
 Windows has no `wpa_supplicant`, no `/sys/class/net` and no `/proc/net/wireless`,
@@ -371,6 +397,7 @@ whole report.
 | `Wi-Fi control is unreachable — wpa_supplicant is not answering` | `wpa_cli` could not open the supplicant's control socket. Either `wpa_supplicant` is not running on this image, or it lives in a directory not covered by the config/known list — report the image with the output of `wpa_cli -i <iface> status` |
 | `Wi-Fi is not permitted for this app (… Permission denied)` | the control socket exists but this process may not open it: probably launched as a user that is not in the socket's group. Launch JukaHub the way the firmware's own launcher does |
 | `wpa_cli did not answer (exit status 255)` | the tool exited non-zero and printed nothing at all; check that the `wpa_cli` on the card matches the supplicant's version |
+| `Wi-Fi is still reconnecting…` (a toast) | the radio is still down 20 s after a wake. The log line `wifi: still offline … after wake (…)` says what was tried; `supplicant not running` means the firmware did not start Wi-Fi again — open the Wi-Fi page, which can start it |
 
 The panel's status line is the source of truth. A toast reports the result of an
 action, and the list is refreshed from the supplicant afterwards, so the row's

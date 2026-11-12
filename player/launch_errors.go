@@ -170,9 +170,9 @@ func renderLaunchFailure(renderer *sdl.Renderer, config *Config) {
 		if i := strings.LastIndexAny(name, `/\\`); i >= 0 {
 			name = name[i+1:]
 		}
-		renderText(renderer, config, font, "Log: "+name, ColorTextTertiary(), panelX+24, panelY+panelH-82)
+		renderText(renderer, config, font, ellipsize(font, "Log: "+name, panelW-48), ColorTextTertiary(), panelX+24, panelY+panelH-82)
 	}
-	footer := hintLine(FooterHint{"A / Enter / B", "Dismiss"})
+	footer := ellipsize(font, hintLine(FooterHint{"A / Enter / B", "Dismiss"}), panelW-48)
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(), panelX+(panelW-int32(fw))/2, panelY+panelH-34)
 }

@@ -1138,6 +1138,13 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
+			// Juka's voice, voice shortcuts, the game assistant and voice
+			// typing (voiceai_settings.go).
+			ID: voiceAISettingsSection, Title: "Voice & AI", Glyph: "mic",
+			Subtitle: "Juka's voice, voice shortcuts and the game assistant",
+			Rows:     voiceAISettingsRows(),
+		},
+		{
 			// Control profiles, D-pad modes and Local play (inmap_settings.go).
 			ID: "controls", Title: "Controls", Glyph: "gamepad",
 			Subtitle: "Control profiles, D-pad modes and local play",
@@ -1557,10 +1564,6 @@ func setBuildSections() []setSection {
 			ID: "about", Title: "About", Glyph: "info",
 			Subtitle: "This JukaHub, updates and help",
 			Rows: []setRow{
-				{
-					ID: "version", Label: "Version", Kind: setKindInfo,
-					Value: versionDisplayString,
-				},
 				{
 					ID: "device", Label: "Device", Kind: setKindInfo,
 					Value: func(*Config) string { return deviceDisplayName(DetectDevice()) },

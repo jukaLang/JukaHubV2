@@ -1114,7 +1114,7 @@ func downloadArgs(partDir string, job downloadJob, config *Config) []string {
 		"--print", "before_dl:%(title)s",
 		"--print", "before_dl:%(uploader)s",
 		"--user-agent", downloadUserAgent,
-		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
+		"--extractor-args", ytDlpQueueClients,
 		"-f", "bestaudio/best",
 		"--extract-audio", "--audio-format", "m4a", "--audio-quality", "0",
 	}
@@ -1150,7 +1150,7 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 		"--print", "before_dl:%(title)s",
 		"--print", "before_dl:%(uploader)s",
 		"--user-agent", downloadUserAgent,
-		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
+		"--extractor-args", ytDlpQueueClients,
 		// Video and audio arrive as separate streams on YouTube, so the two
 		// halves are merged rather than downloaded as video-only.
 		"-f", "bv*+ba/b",

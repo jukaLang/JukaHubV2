@@ -279,7 +279,8 @@ func bootArrivePlanFor(config *Config, w, h int32) bootArrivePlan {
 func bootArriveIsHeaderChip(id HomeFocusID) bool {
 	switch id {
 	case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying,
-		HomeFocusBell, HomeFocusWiFi, HomeFocusVolume, HomeFocusQR, HomeFocusTrophy:
+		HomeFocusBell, HomeFocusBug, HomeFocusWiFi, HomeFocusVolume, HomeFocusQR, HomeFocusTrophy,
+		HomeFocusBrightness, HomeFocusBluetooth:
 		return true
 	}
 	return false

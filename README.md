@@ -260,9 +260,10 @@ clock and the notification bell are in the bar itself.
   import/export workflow.
 * **Smart Pro Compatibility** — per-game community reports, an honest
   hardware tier when nobody has reported a title yet, one-press boost plans for
-  N64/Dreamcast/PSP, and a manager for multiple libretro core builds. **U**
-  (or **L1**) on the Core-builds tab checks the libretro aarch64 buildbot and
-  pools newer builds of the installed cores, checksum-checked and checked to
+  N64/Dreamcast/PSP, and a manager for multiple libretro core builds. The
+  **Emulators** page offers every core in the ARM64 buildbot index for a
+  one-press download. **U** (or **L1**) on the Core-builds tab pools newer
+  builds of installed cores, checksum-checked and checked to
   load on this firmware; the daily **Emulator updates** pass installs them by
   itself (keeping the replaced build for a one-press roll back) unless set to
   Notify me or Off, and keeps JukaHub's own PPSSPP, hakuX and the downloaded
@@ -271,8 +272,8 @@ clock and the notification bell are in the bar itself.
   and core pools live in `Apps/JukaHub/data/performance`; see
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 * **Windows Apps** — scan for `.exe` files and launch basic Windows programs
-  through Wine. On TrimUI's no-X11 firmware it can route through WestonPack's
-  DRM/KMS compositor instead of failing on a missing display. If DXVK is
+  through Wine. On TrimUI's no-X11 firmware WestonPack presents the display
+  through the firmware's SDL2, giving Wine a display on the handheld. If DXVK is
   installed beside Wine and a Vulkan loader is present, Direct3D DLL overrides
   are enabled automatically; see [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)
   for the runtime setup.
@@ -554,9 +555,9 @@ and every update after it restarts cleanly.
 
 After the restart, **What's new** opens once with that release's notes (the
 notes are cached before the swap, so it also works offline). You can reopen it
-any time from **Tools → Community & support**. The version line shows the
-release build date, e.g. `v0.4.0 · 2026-10-17`, so you can tell which build is
-installed. **Tools → Patch → Check for updates** runs the same check manually.
+any time from **Tools → Community & support**. Home shows the installed build
+date beside the JukaHub title. **Tools → Patch → Check for updates** runs the
+same check manually.
 Set `JUKAHUB_NO_AUTOUPDATE=1` to disable automatic updates, or extract a release
 archive over `Apps/JukaHub` by hand.
 
@@ -582,8 +583,9 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 | Black screen or closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log — and the newest `crash-*.txt` next to it (on Windows in `%LOCALAPPDATA%\JukaHub\logs`). |
 | A plugin, a setting or a bad update broke startup | Hold **L + R + Start** (Ctrl + Alt + R on a keyboard) while JukaHub starts: safe mode plus a recovery card (previous version, last good settings, reset settings). Three failed starts in a row start safe mode by themselves. Or create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). See [docs/RECOVERY.md](docs/RECOVERY.md). |
 | Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing at once: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
+| The stock menu glitches after you leave JukaHub, or JukaHub flickers when it starts with the device | Send `Apps/JukaHub/errors.txt` and `Apps/JukaHub/autostart.log`: `launch.sh` writes who started it, what it paused and let go, and when the stock menu came back, and JukaHub adds a `display:` line for anything else drawing on the screen. Say too what the glitch looks like, and whether you left with JukaHub's Exit or the firmware's MENU + POWER. |
 | YouTube search fails | Check Wi-Fi; open **Logs** from the Start menu for the app's own log. |
-| A video goes black for a second, then says it is downloading | The stream would not open, so JukaHub downloads the video and plays it from the card instead (**B** cancels). If that fails too, the message says why; `errors.txt` has a line starting `decoder for` with ffmpeg's reason. |
+| A video goes black for a second, then says it is downloading | The stream would not open, so JukaHub downloads the video and plays it from the card; the card shows the percentage, the speed and the time left (**B** cancels). If every way fails, the message says why; `errors.txt` has a `decoder for` line (the stream) and `youtube: download failed` lines (each way the download tried). |
 | Video stutters | Settings → playback resolution → try `480` or `360`. |
 | Text shows as boxes | `Inter-Regular.ttf` is missing from `Apps/JukaHub`. |
 

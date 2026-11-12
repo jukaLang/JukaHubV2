@@ -282,6 +282,43 @@ func TestStreamAttemptsOrder(t *testing.T) {
 	}
 }
 
+// The download's card and watchdog read yt-dlp's progress lines (an HLS
+// download's total is an estimate, "of ~"), and the native download reads
+// the CDN's Content-Range; a misread one is a bar that never moves, or a
+// transfer the watchdog takes for dead.
+func TestYtdlParseProgressAndRange(t *testing.T) {
+	size, _ := parseDownloadSize("35.21MiB")
+	speed, _ := parseDownloadSize("1.20MiB/s")
+	p, ok := ytdlParseProgress("[download]  12.3% of   35.21MiB at    1.20MiB/s ETA 00:25")
+	if !ok || p.percent != 12.3 || p.total != size || p.speed != float64(speed) || p.eta != 25*time.Second || p.estimate {
+		t.Errorf("plain line = %+v, %v", p, ok)
+	}
+	p, ok = ytdlParseProgress("[download]   3.3% of ~  35.21MiB at  1.20MiB/s ETA 01:02:03 (frag 4/120)")
+	if !ok || !p.estimate || p.total != size || p.eta != time.Hour+2*time.Minute+3*time.Second {
+		t.Errorf("estimate line = %+v, %v", p, ok)
+	}
+	done, _ := parseDownloadSize("12.10MiB")
+	if p, ok = ytdlParseProgress("[download]  12.10MiB at    1.20MiB/s (00:00:10)"); !ok || p.done != done || p.percent >= 0 {
+		t.Errorf("no-total line = %+v, %v", p, ok)
+	}
+	if _, ok = ytdlParseProgress("[download] Destination: /x/jukahub-video-1.f136.mp4"); ok {
+		t.Error("a Destination line is no progress")
+	}
+	if first, total, ok := ytdlContentRange("bytes 10485760-20971519/35210000"); !ok || first != 10485760 || total != 35210000 {
+		t.Errorf("content range = %d, %d, %v", first, total, ok)
+	}
+	if _, total, ok := ytdlContentRange("bytes 0-1023/*"); !ok || total != 0 {
+		t.Errorf("unknown size = %d, %v", total, ok)
+	}
+	// The runtime warning comes with every run on the handheld; it must not
+	// be read as the cause of the 403 below it.
+	text := ytdlErrorText("WARNING: [youtube] No supported JavaScript runtime could be found.\n" +
+		"[download]   2.9% of   35.21MiB at 1.20MiB/s ETA 00:25\nERROR: unable to download video data: HTTP Error 403: Forbidden")
+	if strings.Contains(text, "JavaScript") || classifyYouTubeFailureAt(text, false) != ytFailForbidden {
+		t.Errorf("error text = %q", text)
+	}
+}
+
 func TestParseYtOEmbed(t *testing.T) {
 	title, channel, ok := parseYtOEmbed([]byte(`{"title":"  Never  Gonna Give You Up ","author_name":"Rick Astley","type":"video"}`))
 	if !ok || title != "Never Gonna Give You Up" || channel != "Rick Astley" {

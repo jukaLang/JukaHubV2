@@ -14,8 +14,8 @@ package main
 //   - Files: recently opened files plus a bounded index of the media, book and
 //     ROM folders, built by a background scan.
 //   - Media history: the Continue timeline — videos, podcasts, games, music.
-//   - Web: "Search the web for '…'" in the Browser (and "Open …" for an
-//     address), dimmed with "Needs internet" while the device is offline.
+//   - Web: addresses open directly; words search through the chosen engine.
+//     The action is dimmed with "Needs internet" while the device is offline.
 //
 // Matching is case-insensitive and word-aware, and punctuation is ignored, so
 // "wi fi", "wifi" and "Wi-Fi" are the same query. Nothing in this file draws:
@@ -190,9 +190,9 @@ type homeSearchEntry struct {
 // of the app, and a package-level table of them would turn any future path from
 // one of those screens back into search into an initialization cycle.
 func homeSearchCatalog() []homeSearchEntry {
-	return []homeSearchEntry{
+	entries := []homeSearchEntry{
 		{title: "Wi-Fi", where: "Network", icon: "wifi", keys: "wifi wlan wireless network internet hotspot ssid connect password router", open: wifiScrOpen},
-		{title: "Pair a controller", where: "Network", icon: "bluetooth", keys: "bluetooth devices pair pairing controller gamepad pad headphones earbuds headset dualsense dualshock xbox 8bitdo", open: btScreenOpen},
+		{title: "Pair a controller", where: "Network", icon: "bluetooth", keys: "bluetooth devices pair pairing connect controller gamepad pad headphones earphones earbuds airpods headset speaker speakers keyboard mouse dualsense dualshock xbox 8bitdo", open: btScreenOpen},
 		{title: "Network tools", where: "Tools", icon: "network", keys: "ftp sftp ssh telnet ping dns port scan traceroute whois ip address server lan http https curl tls certificate headers", open: netToolsOpen},
 		{title: "Tools", where: "Tools", icon: "tools", keys: "tools utilities misc system", open: toolsHubOpen},
 		{title: "Settings", where: "Settings", icon: "settings", keys: "settings preferences options configuration setup", scene: "Settings"},
@@ -249,6 +249,25 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Smart Home", where: "Device", icon: "home", keys: "smart home lights home assistant", open: openSmartHomePanel},
 		{title: "Quit JukaHub", where: "Device", icon: "exit", keys: "exit quit power off shutdown close", open: func(*Config) { requestAppExit() }},
 	}
+	return append(entries, homeSearchStoreEntries()...)
+}
+
+// homeSearchStoreEntries are the stores beside Packages (pkgstores.go). The
+// Start menu lists them under Games by name, but people search for what they
+// hold — "android", "apk", "wine", "ports" — so the words go with them. The
+// titles are the Start menu's own, which keeps its rows from coming back as
+// duplicates. The APK Store and PortMaster are the handheld's, as in the menu.
+func homeSearchStoreEntries() []homeSearchEntry {
+	entries := []homeSearchEntry{
+		{title: windowsAppsEntryName, where: "Games", icon: "apps", keys: "windows apps wine exe programs pc software box64 desktop", open: func(*Config) { openWindowsAppsPanel(false) }},
+	}
+	if IsWindows() {
+		return entries
+	}
+	return append(entries,
+		homeSearchEntry{title: apkStoreEntryName, where: "Games", icon: apkStoreGlyph, keys: "apk apks android android games play store google play sideload install apk minecraft aptoide f droid fdroid", open: apkStoreOpen},
+		homeSearchEntry{title: portMasterEntryName, where: "Games", icon: "packages", keys: "portmaster port master ports pc games linux ports indie", open: func(*Config) { openPortsPanel(false) }},
+	)
 }
 
 // homeSearchSceneIcon picks the shared glyph for a screen the catalog does
@@ -747,6 +766,11 @@ func homeSearchResults(raw string, src homeSearchSources) []gsResult {
 	if q.empty() {
 		return homeSearchStartPage(src)
 	}
+	// A typed address has one unambiguous action. Keep it first even when a
+	// local file or app happens to share the domain's name.
+	if homeSearchLooksLikeURL(q.raw) {
+		return homeSearchWebRows(q, src.online)
+	}
 	var out []gsResult
 
 	var screens []homeSearchScored
@@ -936,19 +960,19 @@ func homeSearchStartPage(src homeSearchSources) []gsResult {
 	return out
 }
 
-// homeSearchLooksLikeURL reports whether the query is an address rather than
-// words: a scheme, or a single token with a dot and no spaces ("github.com").
+// homeSearchLooksLikeURL uses the Browser's address rules, so a domain typed
+// on Home and the same domain typed in Browser take the same direct route.
 func homeSearchLooksLikeURL(raw string) bool {
 	s := strings.TrimSpace(raw)
-	if s == "" || strings.ContainsAny(s, " \t") {
+	if s == "" {
 		return false
 	}
 	lower := strings.ToLower(s)
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return true
+		_, err := normalizeTextBrowserURL(s)
+		return err == nil
 	}
-	dot := strings.LastIndex(s, ".")
-	return dot > 0 && dot < len(s)-2 && !strings.HasSuffix(s, ".")
+	return textBrowserLooksLikeAddress(s)
 }
 
 // homeSearchWebURL is the Browser's search address for a query, on the engine
@@ -957,9 +981,8 @@ func homeSearchWebURL(raw string) string {
 	return brwSearchURLFor(appConfig, raw)
 }
 
-// homeSearchWebRows is the last group: open the typed address, and search the
-// web for the words. Offline both stay listed, dimmed, so the sheet says why
-// nothing happens rather than hiding the way out.
+// homeSearchWebRows opens a typed address or searches for words. Offline, the
+// action stays listed and explains why it cannot run.
 func homeSearchWebRows(q homeSearchQuery, online bool) []gsResult {
 	if q.empty() {
 		return nil
@@ -976,6 +999,7 @@ func homeSearchWebRows(q homeSearchQuery, online bool) []gsResult {
 		address := raw
 		out = append(out, mark(gsResult{Title: "Open " + raw, Subtitle: "Browser", Icon: "link",
 			Category: homeSearchGroupWeb, Action: func(c *Config) { openBrowserAtURL(c, address) }}))
+		return out
 	}
 	searchURL := homeSearchWebURL(raw)
 	out = append(out, mark(gsResult{Title: "Search the web for “" + raw + "”", Subtitle: brwEngineFor(appConfig).Name + " in the Browser",

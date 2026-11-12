@@ -28,6 +28,7 @@ package main
 import (
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -53,7 +54,37 @@ var childEnvAppDir = exeDir
 // app's own, os.Environ()) with the firmware's HOME, PATH and LD_LIBRARY_PATH
 // put back and JukaHub's markers removed. See the file comment.
 func screenChildEnv(environ []string) []string {
-	return screenChildEnvFor(environ, childEnvAppDir())
+	return childEnvWithTZ(screenChildEnvFor(environ, childEnvAppDir()), gameChildZone())
+}
+
+// gameChildZone is the zone a game child should run in: the one JukaHub uses
+// now. A zone picked in Settings updates time.Local, so the child gets it
+// without waiting for JukaHub to restart (NET-14). "Local" is the system's
+// zone, which a child already inherits, so it is not written as TZ.
+func gameChildZone() string {
+	zone := dateTimeTZName(time.Local.String())
+	if zone == "Local" {
+		return ""
+	}
+	return zone
+}
+
+// childEnvWithTZ returns environ with every TZ replaced by zone. An empty or
+// "Local" zone removes TZ, leaving the child on the system's zone; no other
+// variable is touched.
+func childEnvWithTZ(environ []string, zone string) []string {
+	out := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		if key == "TZ" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if zone != "" && zone != "Local" {
+		out = append(out, "TZ="+zone)
+	}
+	return out
 }
 
 // screenChildEnvFor is screenChildEnv with the app folder given, so the rule

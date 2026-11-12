@@ -225,6 +225,13 @@ var iconDefs = [...]iconDef{
 		s: M3 3 L21 21`},
 	{"bluetooth", `
 		s: M7 7 L17 17 L12 22 V2 L17 7 L7 17`},
+	{"bluetooth-off", `
+		s: M7 7 L17 17 L12 22 V2 L17 7 L7 17
+		Kw3: M6 2.5 L18 21.5
+		s: M6 2.5 L18 21.5`},
+	{"bluetooth-connected", `
+		s: M7 7 L17 17 L12 22 V2 L17 7 L7 17
+		sw1.25: M3.5 12 M20.5 12`},
 	{"globe", `
 		s: O12 12 10
 		s: E12 12 4.5 10

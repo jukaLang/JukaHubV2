@@ -15,7 +15,6 @@ package main
 // and says what would go, the second drops it.
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -289,7 +288,7 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 	armedNow := browserCookiePanel.armed != "" &&
 		time.Since(browserCookiePanel.armedAt) <= browserForgetConfirmWindow
 	// The controls in this frame's words (inputhints.go).
-	subtitle := fmt.Sprintf("%d site(s) · ", len(rows)-1) + hintSentence2("%s forgets one · %s closes", "A", "Forget", "B", "Close")
+	subtitle := pluralizeCount(len(rows)-1, "site", "sites") + " · " + hintSentence2("%s forgets one · %s closes", "A", "Forget", "B", "Close")
 	if len(rows)-1 == 1 {
 		subtitle = "1 site · " + hintSentence2("%s forgets it · %s closes", "A", "Forget", "B", "Close")
 	}

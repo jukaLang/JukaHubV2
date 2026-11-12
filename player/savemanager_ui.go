@@ -156,7 +156,7 @@ func saveSnapshotDetail(snap saveSnapshot) string {
 	if roots == 1 {
 		noun = "folder"
 	}
-	return fmt.Sprintf("%d file(s) across %d %s · %s", files, roots, noun, snap.Manifest.ID)
+	return pluralizeCount(files, "file", "files") + fmt.Sprintf(" across %d %s · %s", roots, noun, snap.Manifest.ID)
 }
 
 func saveFolderNames(roots []saveRoot) string {
@@ -380,7 +380,7 @@ func saveManagerActivate() {
 			return
 		}
 		refreshSaveManager()
-		ShowToast(fmt.Sprintf("Save sync prepared for %d folder(s) — add them in Syncthing", len(manifest.Folders)), ToastKindSuccess)
+		ShowToast("Save sync prepared for "+pluralizeCount(len(manifest.Folders), "folder", "folders")+" — add them in Syncthing", ToastKindSuccess)
 	case saveActionResume:
 		snap, ok := latestSaveSnapshot()
 		if !ok {

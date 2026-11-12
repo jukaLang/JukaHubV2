@@ -4,7 +4,8 @@ Say what to open, and JukaHub opens it: a screen, an app, a game, a settings
 page or a song. It also does the small things you would otherwise dig for:
 the volume, the brightness, a screenshot, Wi-Fi and Bluetooth, the music. And
 ask it anything else: a question that names nothing on the handheld goes to
-Juka, JukaHub's assistant.
+Juka, JukaHub's assistant. Juka can also answer out loud, learn words of your
+own and, while you play, help with the game in front of you.
 
 ## Opening it
 
@@ -64,6 +65,42 @@ On the page, **A** listens, **X** types a command instead, **Y** shows the
 phone QR code and **B** goes back. While it listens, **A** stops early and
 **B** cancels.
 
+## Juka's voice
+
+Juka says its answers out loud: a question asked on the orb, and the
+questions about the handheld itself — the time, the date, the battery, "help" —
+on the orb and on the Voice command page (a command sent from your phone is
+answered on the phone). A command that does something (the volume, Wi-Fi, the
+music) is not read back; its chime and the bubble say it. The bubble stays up
+while Juka talks; any button, **B**, or **Menu** to ask again stops the voice
+at once.
+
+**Settings → Voice & AI → Juka's voice** is *Voice assistant* by default;
+*Voice assistant and Chat* also reads a reply that arrives in Chat's **Juka
+AI** tab while you are looking at it (leaving the tab stops it); *Off* keeps
+every answer on screen. **Voice** picks one of Groq's six voices (Hannah,
+Autumn, Diana, Austin, Daniel, Troy) or, where the device has one, its own.
+**Hear Juka** says a short line in the chosen voice — or, when it can't, why.
+
+Groq's voice is free but small: about a hundred answers and a few minutes of
+speech a day. Only the first 600 characters of an answer are spoken ("The rest
+is on the screen."), in sentence-sized pieces so the first plays while the
+next is fetched; when the day's allowance is used up, Juka says so once and
+rests. The first time, Groq may ask the account's owner to accept the voice
+model's terms: Juka says so once and **Turn on Groq's voice** appears under
+Hear Juka — on a PC it opens Groq's page in your browser, on the handheld it
+shows a QR code for your phone. Accept, then press **Hear Juka**.
+
+When Groq's voice can't speak (no key, no internet, the allowance, the terms),
+a PC speaks with Windows' own voice, offline, and a Linux device with
+espeak-ng, espeak, flite, pico2wave or piper (with a voice) in JukaHub's
+`required/` folder or on its PATH uses that; the TrimUI firmwares have none,
+so there the answer stays on screen. Music and a video play softer while Juka
+talks. Quiet Mode, a ringing alarm and starting a game, a video or music
+silence the voice; the Interface sounds switch does not, and the system volume
+sets how loud it is. Nobody has heard it on a Smart Pro yet: the first device
+run will say how soon the first word comes.
+
 ## Three ways to say it
 
 **The handheld's microphone.** Press **A** (or **Menu** for the orb) and
@@ -79,6 +116,11 @@ title comes back spelled right. Nothing is recorded until you ask, the
 microphone closes as soon as the clip ends or the page is left (or something
 else covers it — the Start menu, Quick Settings, a panel), and neither the
 audio nor the words are saved or logged.
+
+Just after the handheld wakes from sleep — its firmware turns Wi-Fi off while
+it sleeps — the orb and voice typing work while Wi-Fi reconnects: the clip
+waits up to 15 seconds for the network, and the bubble or the keyboard's strip
+says **Reconnecting to Wi-Fi…** meanwhile.
 
 **Finding the microphone.** The TrimUI Smart Pro has a built-in mono
 microphone, but SDL's default capture device — ALSA's "default" PCM, which a
@@ -138,12 +180,33 @@ page doubles as a command line.
 | "search for mario", "find my notes" | the Home search sheet, with the words typed in |
 | "what time is it", "what's the date", "how much battery is left" | answers on the page |
 | "quit JukaHub" | the usual quit confirmation; on a setup without the Exit screen, a one-row list whose press is the confirmation |
+| "open the emulators", "RetroArch menu", "open PPSSPP", "GBA emulator", "Dolphin" | the Emulators page, or the emulator itself started without a game, on its own menu (RetroArch, a PC emulator, JukaHub's PPSSPP); other tiles open the Emulators page with that tile selected; nothing is installed by voice |
+| "control profiles", "update emulators", "core builds", "BIOS doctor", "RetroAchievements" | those pages |
+| "open voice shortcuts" | your own words (below) |
 
 "Hey Juka", "please", "can you" and a trailing full stop are ignored; numbers
 can be words ("seventy five"). "Hey Juka" on its own, and what speech
 recognition writes for a breath or a near-silent clip ("you", "thank you",
 "bye"), answer "Didn't catch a command" instead of opening something.
 Commands are English for now.
+
+## Your own words
+
+**Settings → Voice & AI → Voice shortcuts** teaches the voice assistant words
+of your own (the Voice command page's **Shortcuts** button and "open voice
+shortcuts" open the same page). **Teach a word**, then: say it — the way you
+will say it later, so speech recognition spells it the same way next time — or
+type it; pick what it opens — a screen, a setting, an app, a game, a file, an
+emulator, **A voice command…** ("brightness 10", "turn off Wi-Fi": the page
+shows what it will do) or **A web page…**; check it and **Save**. On the list,
+**A** changes a word, **X** deletes it and **Y** tries it.
+
+A taught word comes before the built-in commands — the page warns when a word
+is also one ("home", "back") — except "cancel" and "help". It also works after
+"open" or "play" and with "the" or "menu" around it, and a long phrase heard a
+letter off still counts when no other word is that close. Up to 50 words of up
+to 40 letters. A game or a file that has gone is said plainly ("“kart” was for
+Mario Kart, which is not here any more") instead of opening something else.
 
 ## How it decides
 
@@ -174,6 +237,60 @@ called "Super Mario …" — the page lists them. When nothing matches, it offer
 **Search the web**. **B** on the screen a command opened goes back to where you
 were before you spoke, not to the voice page.
 
+## Asking about the game you're playing
+
+**Settings → Voice & AI → Game assistant** (off by default) lets Juka know
+which game you play. JukaHub notes the library game it launches; while it
+runs, and for half an hour after it ends, every question to Juka — in Chat,
+with the voice orb, about a picture — is told "the player is playing *Title*
+(*System*)", so "this game" means that game. Games JukaHub did not start are
+not named, and only the title and the system go to Groq, with your question.
+
+On a TrimUI, hold **Select + R2** for a moment in a game. The game pauses (as
+it does under a ringing alarm), its last picture stays on screen, dimmed, with
+the game's name in the corner, and the orb listens: "Ask about *Title*". Stop
+talking and Juka answers in the bubble, and out loud when Juka's voice is on.
+**A** (or R2) sends early or asks again; **B**, **Menu** or Select + R2 again
+goes back to the game. Over a game every sentence is a question — a command
+such as "open YouTube" is not run, because it would leave the game paused
+behind another screen. The game resumes by itself after three minutes, and an
+alarm that rings meanwhile takes over.
+
+**Juka can see the game screen** (off by default, shown once the assistant is
+on) sends that paused picture with your question to Groq's vision model, so
+Juka can read the level, the menu or the puzzle in front of you; if the screen
+holds no picture JukaHub can read, the question goes as text. Nothing is
+loaded while you play: the only thing running during a game is a small watcher
+of the pad's buttons, and the screen, the microphone and the network are used
+only when you hold the chord. On a PC the orb (**F4**) and Chat know the game
+after you return to JukaHub; nothing is drawn over a game's own window. None
+of this has run on a handheld yet.
+
+## Pictures and videos
+
+In Chat's **Juka AI** tab, attach a picture, a video or a recording (the
+paperclip, or **X** in the composer) and ask about it — or send it alone and
+Juka says what is in it. Pictures go to Groq's vision model at most 1024
+pixels on their long side; a video is shown as three frames with the words of
+its first ten minutes (Whisper, the service voice typing uses); a recording is
+heard. Follow-up questions keep them until **New conversation**, the bubble
+says **Watching the video…** while the handheld prepares one, and HEIC and
+other formats JukaHub cannot open are refused when attached. Only what is sent
+to Groq with your key leaves the device. Videos need ffmpeg, which installs
+itself like the player's.
+
+## Voice typing
+
+Voice typing writes what you say into the on-screen keyboard's field (Groq's
+Whisper, with the key from **Settings → General**). Press **R2** while the
+keyboard is up — or the mic chip in its top row, **Menu** on a handheld,
+**F4** on a keyboard — and press again to send; **B** cancels. R2 works in the
+browser's address bar too, and with the pointer up over the page above the
+keyboard L2 and R2 still scroll. **Settings → Voice & AI → Start voice typing
+when the keyboard opens** makes a Chat message's keyboard listen as soon as it
+opens, for people who text by voice; it stops on its own when nothing is said
+for a few seconds, and password, key, address and search fields never listen.
+
 ## Files
 
 * `player/voiceorb.go` — the orb: the Menu button and F4, listening and
@@ -188,6 +305,19 @@ were before you spoke, not to the voice page.
 * `player/voicecmd_exec.go` — what each command does, through the existing
   controls.
 * `player/voicecmd_phone.go` — the phone page and `/api/voice`.
+* `player/tts_*.go` — Juka's voice: the answer made speakable, the Groq
+  request, WAV decoding, playback and the duck, the device's own voice, the
+  Settings rows.
+* `player/voiceshortcuts.go`, `player/voiceshortcuts_ui.go` — taught words:
+  storage, matching, what each does; the Voice shortcuts page.
+* `player/voiceemu.go` — the emulators and their pages as voice targets.
+* `player/gameassist.go`, `player/gameassist_linux.go` — the game assistant:
+  what Juka knows, the Select + R2 watcher, the overlay over a paused game.
+* `player/groqvision.go`, `player/vision_chat.go`, `player/vision_video.go` —
+  pictures and videos for Juka.
+* `player/vkvoice_button.go` — R2 on the keyboard, and voice typing that
+  starts by itself.
+* `player/voiceai_settings.go` — Settings → Voice & AI.
 
 ## Not yet
 
@@ -195,6 +325,9 @@ were before you spoke, not to the voice page.
   asked for English).
 * Offline speech recognition on the handheld: there is no small offline model
   in JukaHub, and Windows' built-in recogniser (System.Speech) is not used.
+* Juka's voice in languages other than English (Groq's Orpheus is English),
+  and an offline voice for the handheld (no speech engine ships with the
+  firmware, and JukaHub downloads none).
 * A wake word that is always listening: deliberately not — a handheld
   microphone open all the time costs battery and privacy.
 * Proof on the hardware: the microphone fallbacks and the codec switches come

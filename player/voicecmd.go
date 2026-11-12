@@ -180,6 +180,9 @@ func ensureVoiceScene(config *Config) {
 			config.Scenes[i].Layout = ""
 		}
 	}
+	// The Voice shortcuts page travels with this one: startup and every
+	// reload inject both (voiceshortcuts_ui.go).
+	vscEnsureScene(config)
 }
 
 // voiceOpen opens the page (the Start menu row, the search sheet's Y, F4).
@@ -297,6 +300,7 @@ func voiceSpeakOrStop(config *Config) {
 // voiceStartListening opens the microphone, unless something it needs is
 // missing — then the page says which, with the fix one press away.
 func voiceStartListening(config *Config) {
+	jukaSpeakStop() // the microphone must not hear Juka (tts_api.go)
 	// A device still open from an earlier listen (a phone command arrived
 	// mid-listen) is closed first: overwriting voicePage.mic leaked it, and the
 	// next open could then fail and mark the mic absent for voice typing too.
@@ -649,6 +653,7 @@ func voiceCommand(config *Config, text string, src voiceSource) {
 	voicePage.heard = text
 	logDebug("voice", "command understood as intent %d", int(in.Kind))
 	voiceShow(config, out, src)
+	ttsSpeakPageOutcome(in.Kind, out, src) // the time, the date… out loud (tts_api.go)
 }
 
 // voiceShow puts an outcome on the page: the answer, the choices, or the
@@ -907,6 +912,10 @@ func voiceActivate(config *Config, id string) {
 		voiceTypePrompt(config)
 	case id == "phone":
 		voiceOpenPhoneSheet(config)
+	case id == "shortcuts":
+		// The words the user taught (voiceshortcuts_ui.go).
+		voiceStopCapture()
+		vscOpen(config)
 	case id == "fix":
 		voiceRunFix(config)
 	case id == "cancel":
@@ -997,6 +1006,8 @@ func voiceFocusLabel() string {
 		return "Type"
 	case "phone":
 		return "Phone"
+	case "shortcuts":
+		return "Shortcuts"
 	case "fix":
 		if label := voiceFixLabel(voicePage.fix); label != "" {
 			return label
@@ -1157,6 +1168,10 @@ func voiceRender(renderer *sdl.Renderer, config *Config) {
 		}
 		if voicePage.fix != voiceFixPhone {
 			btns = append(btns, voiceButton{"phone", "Use my phone", false})
+		}
+		// Only beside Speak, Type and Phone: the row (and widthBuf) holds six.
+		if voicePage.fix == voiceFixNone && voicePage.search == "" {
+			btns = append(btns, voiceButton{"shortcuts", "Shortcuts", false})
 		}
 	}
 	totalW := int32(0)

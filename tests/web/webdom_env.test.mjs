@@ -889,3 +889,31 @@ test('modules: dynamic import with a JSON type, and import.meta.url after a redi
   assert.match(r.out, /data-u="https:\/\/example.test\/final\/m.js"/);
   assert.match(r.out, /data-j="42"/);
 });
+
+// SEC-25: a classic script's error is the page's to read only when the script
+// came from its own origin; another origin's script reports "Script error."
+// with no file, line or column, while the debug log keeps the real text.
+test('a script error from another origin is redacted, a same-origin one is not', async () => {
+  const r = await runPage(`<!doctype html><html><body>
+    <script>window.seen = []; window.addEventListener('error', function (e) { seen.push({ m: e.message, f: e.filename, l: e.lineno, c: e.colno }); });</script>
+    <script src="/own.js"></script>
+    <script async src="https://cdn.example/remote.js"></script>
+  </body></html>`, {
+    routes: {
+      '/own.js': { body: 'throw new Error("same origin detail")' },
+      'https://cdn.example/remote.js': { body: 'throw new Error("remote detail")' },
+    },
+  });
+  const seen = JSON.parse(r.run('JSON.stringify(seen)'));
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].m, 'Uncaught same origin detail');
+  assert.equal(seen[0].f, BASE + 'own.js');
+  // goja reports the script's first line as 0; the same-origin error keeps
+  // whatever position the runtime gave it, the opaque one is pinned to 0.
+  assert.equal(seen[0].l, 0);
+  assert.ok(seen[0].c >= 0);
+  assert.equal(seen[1].m, 'Script error.');
+  assert.equal(seen[1].f, '');
+  assert.equal(seen[1].l, 0);
+  assert.equal(seen[1].c, 0);
+});

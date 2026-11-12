@@ -159,7 +159,7 @@ helper) and installs the missing helpers beside the binary; a PS5 pairing waits
 for it and Play streams afterwards (`psremote_helpers_install.go`).
 `docker-image.yml` and `release.sh` attach the package; the helper lookup now
 starts beside the binary, where an update puts `bin/`; PSR-4 is code-done.
-Follow-ups: PSR-13 and PSR-14 (two new tasks); BUILD-4 got the first run's
+Follow-ups: PSR-13; BUILD-4 got the first run's
 fix (an empty libavformat for chiaki-ng's configure).
 
 Faster TrimUI release build (**2026-11-10**, evening, not yet run on GitHub):
@@ -213,7 +213,7 @@ WireGuard for Windows' tunnel service, changed through one permission prompt
 companion's VPN card; Quick Settings has the switch and the Wi-Fi meter a lock.
 The handshake and transport were checked against the Linux kernel's WireGuard
 in a network namespace (`tmp/wgref`), and `wg_test.go` replays those
-exchanges. NET-8 is now the device check; follow-ups NET-17 and NET-18.
+exchanges. NET-8 is now the device check; follow-up NET-17.
 
 A faster Remote Play helper job (**2026-11-11**, not yet run on GitHub; the
 owner: "It now takes too long to get JukaHub-Trimui.zip built"): the Box64
@@ -248,6 +248,28 @@ down to its first green run; AND-1, AND-6, AND-13, AND-17, XBX-1, LIB-17,
 REL-3, TEST-15 and BUILD-2 were rewritten, and BUILD-6 got the Box64 pack's
 checks. Follow-ups: APP-17 to APP-24, AND-19, XBX-7 to XBX-9, LIB-20, LIB-21,
 GAME-18, DESK-12, TEST-18 and TEST-19.
+
+Tester pass (**2026-11-11**, evening, unbuilt; a Smart Pro tester on
+CrossMix): Juka talks — Groq's Orpheus voice, a sentence at a time, with
+Windows' own voice on a PC when Groq's cannot (`tts_*.go`); words taught to
+the voice assistant, and the emulators as voice targets (`voiceshortcuts*.go`,
+`voiceemu.go`); a game assistant that tells Juka the game being played and, on
+a TrimUI, pauses it under the voice orb on Select + R2 (`gameassist*.go`);
+pictures and videos for Juka (`groqvision.go`, `vision_*.go`); R2 as the
+keyboard's voice-typing button (`vkvoice_button.go`) — all on a new Settings →
+Voice & AI page (`voiceai_settings.go`). Leaving JukaHub no longer starts a
+second MainUI beside a slow firmware loop, the loop is paused by process id,
+and the boot hook's hand-over goes through black (`launch.sh`, `autostart.go`,
+`displayguard*.go`); JukaHub notices a wake from sleep within a second and gets
+back online at once (`wake_resume*.go`, `wifi_resume*.go`, `netmon.go`);
+YouTube's download fallback joins picture and sound, shows its progress and
+ends with a native ranged download (`ytdownload*.go`); the liquid background
+is interpolated on a finer mesh at the active frame rate (`liquidbg.go`,
+`adaptive.go`); and JukaHub shows its own memory use (`memstat*.go`). Juka's
+Windows build at 18:29 compiled the Windows side of most of it; the
+Linux-only files and the review fixes are not compiled yet. Follow-ups: HW-3,
+INP-23, SND-14, SND-15, GAME-19, SYS-21, MED-33 to MED-35, NET-18 and
+PERF-19; GPU-5 grew: 321 tasks in the file.
 
 ## How to use this file (agents read this first)
 
@@ -320,13 +342,14 @@ What exists, by area, so nobody rebuilds it. `player/` is one Go `package main`
 | Design system | `design.go`, `ui_glass.go`, `components.go`, `themes.go`, `themeloader.go`, `motion.go`, `anim.go`; backdrop: `backgroundfx.go`, `dynamicbg.go`, `liquidbg.go` + `liquidbg_motion.go` (liquid background, tilt), `gifwall.go` + `wallpaper.go` (animated wallpapers, picker) |
 | Home and navigation | `home*.go`, `homelayout.go`, `homefocus.go`, `focus.go`, `navrepeat.go`, `navmode.go`, `startmenu.go`, `quicksettings.go`, `globalsearch.go`, `homesearch_*.go` |
 | Input | `controller.go`, `brickkeys.go`, `inputhints.go` (pad or keyboard words in every hint, keyboard detection), `inmap*.go` (input mapping language), `vkeyboard.go`/`vk*.go`, `touchtarget.go`, `exit_chord.go`, `shortcuts.go` (keyboard sheet, global F1/Ctrl+Q), `voicecmd*.go` (Voice command: capture, intent parser, resolver, the companion's `/voice` page) |
+| Voice and Juka AI | `voiceorb.go` + `voicemic.go` (the orb, the shared microphone), `voicecmd*.go`, `voiceshortcuts*.go` (taught words) + `voiceemu.go` (the emulators as voice targets), `tts_*.go` (Juka's voice: Groq's Orpheus, the device's own voice, the duck), `gameassist*.go` (the game assistant: Select + R2 over a paused game), `groqvision.go` + `vision_*.go` (pictures and videos for Juka), `vkvoice*.go` (voice typing; `vkvoice_button.go`: R2), `chat*.go` (the Juka AI tab), `voiceai_settings.go` (Settings → Voice & AI) |
 | Settings | `setmodel.go` (rows), `setui.go` (page), `a11y.go`, `powermode.go`, `powerprofile.go`, `datetime.go` + `tzpicker.go` (Date & time, zone picker) |
 | Games | `game_library*.go`, `emulators.go`, `emu*.go`, `emulatorinstall.go`, `hakux*.go` (Xbox on Smart Pro), `retroachievements.go`, `savemanager*.go`, `savestate_resume.go`, `gamesuspend.go`, `gmeta_*.go`, `romsetup.go`, `romm_*.go`, `ports.go`, `netplay*.go`, `hotseat*.go`, `trophy_*.go`, `playtime.go`, `wrapped.go` |
 | Android games | `androidpak*.go` (Go side) and `androidrt/` (C runtime, `docs/ANDROID.md`, `docs/ANDROID-MINECRAFT.md`); `apkstore*.go` (APK Store: scan, manifest and resource reader, verdicts, profiles, catalogue, Waydroid install); `androidrt_install.go` (AndroidRT from JukaHub's releases, through `relpack.go`), `game_library_androidgames.go` (the library's Android row) |
-| Media | `videoplayer.go` (ffmpeg decode → IYUV texture), `streaming.go`, `musicplayer.go`, `media_hub*.go`, `podcasts.go`, `tvchannels.go`, `ipstreams.go`, `shorts.go`, `youtube*.go`, `playbackqueue.go`; `spatial.go` + `spatial_dsp.go` + `spatial_ui.go` (spatial audio for JukaHub's media, hooked into `QueueVideoAudio`), `spatial_games.go` + `spatialfx/` (the same DSP as a RetroArch filter / LADSPA plugin; `spatialfx/jh_spatial_ref.py` is the spec) |
+| Media | `videoplayer.go` (ffmpeg decode → IYUV texture), `streaming.go`, `musicplayer.go`, `media_hub*.go`, `podcasts.go`, `tvchannels.go`, `ipstreams.go`, `shorts.go`, `youtube*.go`, `playbackqueue.go`; `spatial.go` + `spatial_dsp.go` + `spatial_ui.go` (spatial audio for JukaHub's media, hooked into `QueueVideoAudio`), `spatial_games.go` + `spatialfx/` (the same DSP as a RetroArch filter / LADSPA plugin; `spatialfx/jh_spatial_ref.py` is the spec); `ytdownload*.go` (the download a stream that would not open falls back to, and its progress card) |
 | Web and apps | `browser*.go`, `textbrowser.go`, `webpage*.go`, `webscript.go` + `webdom_*.go` + `webdom/*.js` (page JavaScript on goja: DOM prelude, HTML parser, module rewrite, the scripts' network), `apps.go`, `winbatch*.go` (cmd.exe quoting for `.bat`/`.cmd` launches), `appgrid.go`, `windowsapps*.go` + `wine_*.go` + `windows_runtime_install.go` (Windows apps: the Box64 + Wine pack, prefix, WestonPack display, setup page, launch), `plugx.go`/`plug*.go` (plugins), `toolbox.go`, `xpack*.go` |
 | Files and transfer | `files_*.go`, `fileeditor.go`, `ftp_server.go`, `ssh_server.go`, `sftp_root.go`, `fileserver_guard.go` (FTP/SFTP auto-stop, clients), `filetransfer.go`, `companion*.go` (Phone Companion; `companion_cast.go` serves Screen Share), `castcap*.go` + `castui.go` (Screen Share capture, framebuffer source, panel) |
-| System | `wifi*.go`, `systemcontrol.go`, `audiooutput.go`, `bluetooth_devices*.go` (Bluetooth devices page), `hardware.go`, `systool_*.go`, `sdhealth.go`, `batteryhealth.go`, `ledsync.go`, `haptics.go`, `screensaver*.go`, `alarm*.go`, `sched*.go`, `ntpsync.go` + `clockjump.go` (network time, re-anchoring after a clock jump) |
+| System | `wifi*.go`, `systemcontrol.go`, `audiooutput.go`, `bluetooth_devices*.go` (Bluetooth devices page), `hardware.go`, `systool_*.go`, `sdhealth.go`, `batteryhealth.go`, `ledsync.go`, `haptics.go`, `screensaver*.go`, `alarm*.go`, `sched*.go`, `ntpsync.go` + `clockjump.go` (network time, re-anchoring after a clock jump), `wake_resume*.go` + `wifi_resume*.go` (noticing a wake from sleep, the Wi-Fi nudge after it), `displayguard*.go` (other programs drawing beside JukaHub, the exit report), `memstat*.go` (JukaHub's own memory use) |
 | Social and LAN | `chat*.go` (Discord), `party*.go`, `peer*.go`, `nearby*.go`, `psremote*.go`, `smart_home*.go` |
 | Packages, updates, backup | `patch_*.go`, `packages.go`, `pkg*.go` (`pkgstage.go`/`pkgverify.go`: verified, staged installs with a rollback), `autoupdate.go`, `emulatorautoupdate.go` + `emuautoupdate_*.go` + `corebuilds_history.go` (core updates; hakuX, the runtimes and a PC's emulators in the same pass; build history), `relpack.go` (the release packs JukaHub's CI builds: AndroidRT, Box64), `upch*.go` (offline update channel), `jdelta_update.go`, `bkup*.go`, `ssync*.go` (save sync), `cfgdoc*.go` (config as code) |
 | Config and storage | `config*.go`, `xmlconfig.go`, `jukaconfig.json` + `trimui/jukaconfig.device.json` (device twin), `paths.go`, `platform.go`, `cache.go` (bbolt) |
@@ -610,6 +633,83 @@ FIX task for anything that differs.
 
 ---
 
+### HW-3 — First device run of the 2026-11-11 tester batch (P0, M) [HW]
+**Why.** A Smart Pro tester on CrossMix asked for a talking Juka, voice
+shortcuts, a game assistant, pictures for Juka and a voice-typing button, and
+reported CrossMix glitching after JukaHub, a flicker when JukaHub starts with
+the device, a minute of waiting for Wi-Fi after every wake, YouTube's
+"downloading instead" that never downloaded, and a choppy, pixelated liquid
+background. All of it was written and reviewed without a device, and the voice
+without a Groq account that has accepted Orpheus's terms.
+**Where.** Device (stock 1.1.x and CrossMix), `errors.txt`, `autostart.log`,
+`logs.txt` with `JUKAHUB_LOG_LEVEL=debug`, `ps`, `/proc/<pid>/status`, a phone.
+**Done when.** On a Smart Pro with CrossMix and one with stock firmware, then a
+Brick:
+(1) quitting five times (Exit, Select + Start, the power card) leaves
+`errors.txt` saying "MainUI is back after N s (… runtrimui.sh …)" — never "no
+launcher came back", "2 MainUIs" or a `display:` holder after the exit; `kill
+-9` of JukaHub on the idle dock leaves "CPU settings differed …; put back" and
+the firmware's governor; the "started by" line shows whether busybox names
+scripts "sh";
+(2) with Start at login on, a boot shows menu → black → JukaHub fading in, no
+flashes (does writing black to `/dev/fb0` blank the PowerVR panel cleanly?);
+`autostart.log` has one "closed the stock menu" and names the path that
+started JukaHub; the guard's one-time `display:` lines name the firmware
+daemons that keep `/dev/fb0` open — put the harmless ones on its ignore list;
+(3) a sleep of a minute or more on Wi-Fi with Chat open, then a wake: `wake:
+slept …` within a second, `wifi: back online N s after wake (…)` with N under
+about 10 s, no Offline / Network restored toasts, the community tab going
+Reconnecting… → Live by itself with a message sent meanwhile, and a Juka
+question, the orb and voice typing working in the first seconds; a wake with
+Wi-Fi switched off does nothing; record in `docs/WIFI.md` what the debug lines
+`wifi: after wake: <STATE> at N s` show the firmware doing to the supplicant;
+(4) a YouTube video whose stream fails shows "Downloading <title>" with a
+moving bar and then plays — record which way won (picture and sound, HLS,
+single file, native) and why the others lost; **B** mid-download leaves no
+`jukahub-video-*` file and no yt-dlp process; Save offline → Download video
+completes;
+(5) Juka's voice: the time from an orb answer to its first word, and no clicks
+with the liquid background on (else raise `ttsAheadMs` to 120); **B** is
+silent at once and its tap is heard; music ducks and comes back; an alarm takes
+over; on a fresh Groq account **Hear Juka** shows **Turn on Groq's voice**,
+whose QR code opens Groq's page on a phone, and speaks once the terms are
+accepted; Orpheus's daily-limit 429 matches `tts_groq.go`'s wording test and
+sends `Retry-After`; on Windows, the fallback voice's first-word delay;
+(6) the game assistant over RetroArch, PPSSPP and a PortMaster port: JukaHub's
+frames show over the stopped game without flicker and the game redraws
+cleanly after **B**; RetroArch sees none of the presses made in the overlay
+and nothing is stuck after it (hold R2 through the close); the log's `picture:
+true/false` says whether `/dev/fb0` holds the game's frame; the chime, Juka's
+voice and the microphone work while the stopped game holds ALSA; Select + R2
+is free in CrossMix's RetroArch hotkeys, DraStic and PPSSPP (a digital R2 on
+the Brick?); `kill -9` with the overlay up makes the next start ask the paused
+game to quit;
+(7) a word taught by voice on Voice shortcuts is recognised days later on the
+orb and the page; "RetroArch menu" and "open PPSSPP" open their menus on stock
+and CrossMix;
+(8) **R2** on the keyboard in Chat and the browser's address bar, and with the
+pointer up over the keyboard and over the page; **Start voice typing when the
+keyboard opens** ignores the chime, stops quietly after 7 s and never starts
+offline, without a key or on the Wi-Fi password field;
+(9) with a real key: a portrait phone photo (EXIF), a WebP, a 60 s phone video
+with speech and a silent screen recording sent to Juka — upright pictures, the
+"Watching the video…" time on the A133P, the work folder gone afterwards, Qwen
+answering and Muse skipped quietly where the account lacks it;
+(10) the Hardware screen's Memory tile and About's Memory row match `grep
+VmRSS /proc/<pid>/status` (Task Manager's working set on Windows) — write the
+number into the docs; the `[mem]` line is in `logs.txt` a minute after boot and
+every five minutes;
+(11) backgrounds: the moving water holds about 30 fps in `framestats`, with
+Low Power on too (the handheld's default; Battery Saver caps it at 24), and drops back to
+the idle cadence within seconds of calm (two minutes with rain);
+a 25 fps GIF plays at about 30 fps and a 10 fps one at about 20; the screensaver
+and the dock keep their own cadence; ten minutes of battery on Home with
+Gentle water against none is recorded (see GPU-5).
+**Verify.** Record results, firmware and CrossMix versions in the HW log; file a
+FIX task for anything that differs.
+
+---
+
 ## P0/P1 — defects found by the 2026-11-09 inventory (FIX)
 
 Found by reading, not by running: confirm each on a build before fixing, and
@@ -706,13 +806,6 @@ TrimUI still needs a read-count and rendering check across the sizes it uses.
 font sizes, and the UI and canvas preview render normally at the 14 px floor,
 the regular role sizes and the larger headings.
 **Verify.** Record the open count and check the fonts on a Smart Pro.
-
-### PERF-6 — Config watcher only while the live builder is connected (P2, S)
-**Why.** `hotreload.go` stats the config every 2 s for the whole session.
-**Where.** `hotreload.go`, `livebuilder.go`, `main.go` (`StartConfigWatcher`).
-**Done when.** On the handheld, polling runs only while a Live Builder session is
-paired (or uses inotify on Linux); desktop dev keeps today's behaviour.
-**Verify.** `strace` shows no periodic `stat` with the builder idle.
 
 ### PERF-7 — Trim heavy dependencies (P2, L) [WIN]
 **Why.** Compile time, binary size (~36 MB) and page-in time on the SD card.
@@ -830,6 +923,24 @@ the decoder is cancelled and all but the first frame texture are released; on
 return, the retained frame is released and the current wallpaper is decoded
 again. The Smart Pro memory measurement is still open.
 
+### PERF-19 — The weather and living backgrounds' frames (P2, S)
+**Why.** Since 2026-11-11 a moving backdrop asks for the frames it needs
+(`requestFrameEvery`, `adaptive.go`): the liquid water, a playing GIF, the
+living background. The Weather page's animated background
+(`weather_scene_background.go`) asks for none, so its rain and snow fall at the
+idle cadence; the living background (`dynamicbg.go`) draws its blobs and
+particles at whole-pixel positions, so their slow drift steps at any frame
+rate; and wallpapers are created with SDL's default nearest filter
+(`core.go` `fitBackgroundTexture`), which the water works around with a
+one-off conversion (`gifwall.go` `appWallpaperTextureSmooth`).
+**Where.** `weather_scene_background.go` (`renderWeatherSceneBackground`),
+`dynamicbg.go`, `core.go` (`fitBackgroundTexture`), `gifwall.go`.
+**Done when.** The weather background calls `requestFrameEvery(1)` for rain and
+snow and `requestFrameEvery(66)` for the sun while it animates; the living
+background draws with `CopyF` at sub-pixel positions; `fitBackgroundTexture`
+creates its texture with the linear hint (three lines around
+`CreateTextureFromSurface`), and the water's conversion goes.
+
 ---
 
 ## Graphics and GPU (GPU)
@@ -899,6 +1010,17 @@ IIO mount matrix.
 **Verify.** `framestats` before/after and the `liquidbg` lines in `logs.txt`
 with `JUKAHUB_LOG_LEVEL=debug`; retune the refraction and glint strengths in
 `liquidbg.go` from photos of the panel if they read too strong or too weak.
+
+**Grew on 2026-11-11.** The water is now drawn between its 30 Hz steps on a
+mesh twice as fine as its grid — 129×73 = 9,417 vertices and 55,296 indices
+(97×55: 5,335 and 31,104 on the Low Power grid) — every frame it moves, at the
+active cadence, and its first draw over a still wallpaper reads that picture
+back once to filter it linearly (an estimated 10–30 ms hitch). Also done when:
+the moving water holds about 30 fps in `framestats` — with Low Power on too
+(moving water passes Low Power's 24 fps cap; Battery Saver keeps it) — with
+no step-down line; ripples
+show no facets or blocky wallpaper pixels on the panel; the first draw over a
+new wallpaper hitches at most one frame.
 
 ---
 
@@ -990,14 +1112,6 @@ the `.bak` with it (`browsercookies*.go`), app launch path refusals
 (`isLaunchableAppPath`, `apps.go`), and the Wi-Fi supplicant socket transport
 (`wifi_ctrl.go`, stubbed socket).
 **Verify.** `go test -run` for the four; total suite time stays under ~10 s.
-
-### TEST-3 — D-pad reachability check as a tool (P2, S)
-**Why.** The dpad audit test was cut; an unreachable control on the Brick ships
-unnoticed.
-**Where.** `focus.go` (`BuildGraph`), both shipped configs.
-**Done when.** `go run ./tools/scenedump -reach` (or a sibling tool) walks every
-scene's focus graph at both canvases and reports unreachable focusables; a
-`make` target runs it.
 
 ### TEST-5 — `go vet` for Windows too (P2, S) [NET]
 **Done when.** The weekly Windows job (`weekly.yml`) runs `go vet ./...` before
@@ -1126,30 +1240,6 @@ whose glibc is no newer than 2.31.
 The review behind these is [docs/UX_REVIEW.md](../docs/UX_REVIEW.md) (30
 findings, 21 implemented in November).
 
-### UX-1 — Role-based type scale (P1, M) [shipped]
-**Shipped.** The whole type scale is five roles in `design.go` — Caption 14,
-Label 16, Body 18, Heading 22, Title 28 (`TypeRole.Size`) — and `FontForRole`
-resolves each role's face at that size through `getFontSized`, so the
-accessibility text size and the legibility floor still apply. Every literal
-pixel size handed to `getFontSized` is gone: 140 call sites across 45 files,
-including the media hub, its sheet, Packages, the text browser, Wi-Fi, Tools,
-Favorites, JLand, Home search and the settings keyboard, now name a role. A
-test scans the package and fails if a literal size comes back, and another
-checks every role stays at or above the 12 px floor on the 960-wide canvas.
-**Remainder.** The scene-dump review on both canvases is TEST-1's [WIN] tool
-pass, not code.
-
-### UX-2 — Each screen shows its name once (P1, S) [shipped]
-**Shipped.** The status bar paints the wordmark and the system status only:
-`renderStatusBar` passes `statusBarCaption(scene)`, which contributes nothing,
-so "JukaHub - <Screen>" is gone (Home already drew the bare wordmark). The
-screen's name is its page header's, and `UIPageHeaderDraw` now resolves the
-title through `uiPageHeaderTitleFont`, which is never below `TypeHeading`
-(22 px) and steps to `TypeTitle` (28 px) for a large role or size; subtitles
-and status lines keep their own theme roles. The band and the draw share that
-resolver, so the reserved height matches the face.
-**Remainder.** The two-canvas visual walk is UX-7's [HW] design walk.
-
 ### UX-4 — One icon stroke weight (P2, M)
 **Where.** `icondefs.go`, `icondraw.go`, `iconatlas.go`.
 **Done when.** Every 32 px glyph uses one stroke weight and outline style (the
@@ -1275,6 +1365,7 @@ options sheet toggles cheats per game and hands RetroArch the file at launch.
 **Done when.** A "Choose image" action picks a local image or a libretro
 thumbnail candidate list; users can add their own title aliases without a
 rebuild.
+**Deferred 2026-11-11.** Needs an image-picker and alias-editor UX decision, plus a thumbnail candidate source.
 
 ### GAME-8 — Rich metadata provider (P3, M) [NET] [OWNER]
 **Done when.** Descriptions/genres/dates come from a provider with an account
@@ -1398,6 +1489,17 @@ once and installs nothing; and an unchosen mode with a JukaHub-installed
 emulator shows the one-time notice.
 **Verify.** The toasts and the `[patch] emulator updates:` lines, recorded in
 the HW log.
+
+### GAME-19 — The game assistant, second round (P3, M)
+**Why.** The game assistant (`gameassist*.go`, 2026-11-11) treats every
+question as a new one, shows an answer of up to eight lines, names only games
+started from the library, and on a PC neither sees the game's window nor draws
+over it.
+**Where.** `gameassist.go`, `gameassist_linux.go`, `voiceorb.go`.
+**Done when.** A follow-up in the overlay keeps the last exchange; the D-pad
+scrolls a long answer; launches from Apps and ports are named in the prompt; on
+a PC **Juka can see the game screen** captures the game's window, and the
+answer shows in an always-on-top overlay.
 
 ---
 
@@ -1545,36 +1647,7 @@ battery warnings appear at 15, 10 and 5 %.
 **Verify.** [HW] `psremote.log` for each case; anything that is off becomes a
 fix or a task.
 
-### PSR-11 — Stream to the home address only when this console answers there (P2, S)
-**Why.** With an Internet address saved, Play first asks the home address
-(`psStreamProbeAt` in `psChooseStreamHost`) and takes any discovery answer as
-the console. On another network a different PlayStation can have the same
-private address, and the stream then goes to it with this console's keys and
-fails with a refusal instead of using the internet address. The wake already
-refuses an answer from another console (`psWakeSameConsole` compares the
-answer's `host-id` with the pairing's `server_mac`); the stream probe does not.
-**Where.** `psremote_stream_opts.go` (`psStreamProbeAt`, `psStreamProbeLAN`),
-`psremote_wake.go` (`psWakeSameConsole`).
-**Done when.** The probe accepts only an answer that can be this console (both
-MACs known and equal, or one unknown), a mismatch counts as "not at home", and
-a test covers match, mismatch and an unknown MAC.
-
 ---
-
-### PSR-12 — Every psremote.json writer holds the lock (P2, S)
-**Why.** Two writers of `psremote.json` — `psSaveStreamSettings`
-(psremote_stream_opts.go) and `psUpdateConsole` (psremote_console_opts.go) — load
-it without `psHostsMu` and save with it, so a pairing or an address move saved
-by a goroutine in between is written over (the panel's own quality, volume and
-Account-ID writes were fixed the same way on 2026-11-10).
-**Where.** psremote.go (`psHostsMu`, `savePSHostsLocked`), psremote_stream_opts.go,
-psremote_console_opts.go.
-**Done when.** Both hold `psHostsMu` from load to save (`psPanelReload` outside it).
-**Verify.** A unit test with two goroutines saving at once.
-**Status 2026-11-10.** Code done, unbuilt: `psUpdateConsole` and
-`psSaveStreamSettings` now hold `psHostsMu` from load to save and save with
-`savePSHostsLocked` (`psPanelReload` and `psStreamSettingsSet` run after the
-unlock). The two-goroutine test is still to write.
 
 ### PSR-13 — The helper install on a handheld (P1, S) [HW] [NET]
 **Why.** A JukaHub without `bin/` now downloads the helpers when PS Remote Play
@@ -1598,20 +1671,6 @@ list offers *Install Remote Play* and Retry works once it is back; a download
 cut off mid-way resumes.
 **Verify.** [HW] the steps above; the Logs screen shows `Remote Play helpers
 installed from JukaHub-…`.
-
-### PSR-14 — An address typed by hand gets a row while it pairs (P3, S)
-**Why.** **Add console by address** pairs an address that no scan found, and
-the console list only shows it once the pairing has succeeded: up to about a
-minute of PS4 and PS5 handshakes (three PS4 generations, then PS5) with
-nothing on screen but the PIN toast, and no row to say *Pairing*. Found while
-reviewing the helper install, which no longer adds a wait of its own there.
-**Where.** `psremote_ui.go` (`psPanelApplyEdit` for `psEditHost`,
-`psPanelPair`, `chiakiRows`).
-**Done when.** A typed address shows a row (an unsaved, unpaired console named
-by its address, without a PS4/PS5 guess) from the PIN prompt until the pairing
-ends, with the busy line while the handshakes run; a failure leaves it
-listed as unpaired until the panel closes.
-**Verify.** A unit test on `chiakiRows` with a typed host and a busy pairing.
 
 ### PSR-15 — The background download and the phone's PlayStation card on a handheld (P1, S) [HW] [NET]
 **Why.** The helpers now download by themselves after JukaHub starts, and the
@@ -1914,6 +1973,7 @@ music player, queued offline.
 ### MED-5 — Screenshot gallery by game (P3, S)
 **Where.** `screenshot.go`, `imageviewer.go`, `recordings.go`.
 **Done when.** Screenshots group by game/system in the image viewer.
+**Deferred 2026-11-11.** Needs a screenshot naming/grouping rule and gallery design decision.
 
 ### MED-6 — Audio and subtitle tracks (P2, M)
 **Why.** Only the first embedded subtitle or a sidecar file plays; there is no
@@ -2028,8 +2088,6 @@ fallback's limit follows size and speed instead of a fixed five minutes.
 youtube:player_client=visionos <id>` and play the URL with ffplay. Then a
 10-minute 720p video plays and seeks on a Smart Pro and on Windows.
 
-
-
 ### MED-22 — Send the stream's own user agent to the player (P2, S) [HW]
 **Why.** The native CDN check decides with the player's identity and, on a
 refusal, logs whether the producing client's own user agent would have been
@@ -2135,7 +2193,36 @@ unpacked child keeps running and `%TEMP%\juka-subs-*` folders pile up.
 falling back to `Process.Kill`) stops every process of a cancelled run and its
 temp folder is gone.
 
+### MED-33 — A JavaScript runtime for yt-dlp on the handheld (P1, M) [HW] [NET]
+**Why.** Without one, yt-dlp 2025.11 and later uses only the visionos client
+("some formats may be missing"), and some connections get 403 even there
+(baitd PR #8 fixed that by bundling Deno). yt-dlp supports QuickJS-NG
+(`--js-runtimes quickjs:PATH`), a single small binary, and JukaHub already
+passes it when a `qjs` sits next to yt-dlp (`ytdownload.go`).
+**Where.** `ytdownload.go` (`ytDlpJSRuntimeArgs`), `streaming.go`, the tools
+installer (`patch_engine.go`, `tools.go`).
+**Done when.** The installer fetches and checks a quickjs-ng `qjs` for
+linux-arm64 next to yt-dlp; a video's extraction time with it on the A133P is
+recorded (over about 30 s: decide per use); `yt-dlp -v` shows `[jsc:quickjs]`
+and the tv client in the default set.
 
+### MED-34 — Stream the separate picture and sound (P2, M)
+**Why.** YouTube no longer serves a single-file stream to this device, so every
+YouTube play pays for a failed stream before the download fallback
+(`ytdownload.go`). The player already runs two ffmpeg processes, one for the
+picture and one for the sound, so a video-only and an audio-only address could
+each feed its own.
+**Where.** `videoplayer.go` (`startEmbeddedPlayback`, `startFFmpegAudio`),
+`streaming.go`, `youtubenative.go` (adaptive formats).
+**Done when.** A YouTube video streams from an avc1 video address and an m4a
+audio address in sync, and seeking works.
+
+### MED-35 — The Downloads queue: no AV1, a height cap on the handheld (P2, S)
+**Why.** `downloads.go` asks yt-dlp for `bv*+ba/b`, which can pick AV1 (the
+firmware's ffmpeg has no decoder for it) or 1080p (heavy on the A133P).
+**Where.** `downloads.go`, `ytdownload.go` (`ytdlJoinedFormat`).
+**Done when.** On the handheld the queue prefers avc1 at or below the playback
+ceiling, as the play fallback does.
 
 ---
 
@@ -2205,14 +2292,6 @@ flow, with a summary of what moved.
 ### SYS-10 — Import from the stock launcher and other firmwares (P3, M)
 **Done when.** First run offers to import TrimUI MainUI favourites, recents and
 playtime, and NextUI/muOS collections where their files are on the card.
-
-### SYS-13 — Scheduled tasks after a clock jump (P2, S)
-**Why.** Alarms and playtime re-anchor after network time moves the clock
-(`clockjump.go`); scheduled tasks (`sched_model.go`) compute their next run from
-the wall clock and were not checked.
-**Where.** `sched_model.go`, `sched.go`, `clockjump.go` (`clockJumpView`).
-**Done when.** A jump forward does not fire every missed run at once and a jump
-back does not run a task twice; a table test covers both.
 
 ### SYS-14 — Chat files against the real channel (P1, S) [NET] [HW]
 **Why.** Sending files in chat (2026-11-09) uploads with a hand-written
@@ -2360,6 +2439,18 @@ unresolved; applying a choice snapshots both devices first, sets the selected
 version as the active filename on both, keeps the other version under its
 conflict name, and never advances the sync base for an unresolved file.
 
+### SYS-21 — Juka and pictures, second round (P3, M)
+**Why.** Pictures and videos reach Juka only from Chat's Juka AI tab
+(`vision_chat.go`, 2026-11-11), and a video's sound goes to Whisper as an
+uncompressed 16 kHz WAV (up to about 19 MB).
+**Where.** `vision_chat.go`, `vision_video.go`, `chatactions.go`,
+`imageviewer.go`.
+**Done when.** A Community message's actions offer **Ask Juka** for its
+picture (the Discord file is downloaded first); the image viewer sends the
+picture on screen to Juka; the transcript upload is compressed (FLAC or Opus)
+when the firmware's ffmpeg has the encoder, so a ten-minute clip goes faster
+on slow Wi-Fi.
+
 ---
 
 ## Sound and haptics (SND)
@@ -2385,6 +2476,7 @@ the LED analyser fed from the mix.
 ### SND-4 — A haptic tap on the chime's last bell (P3, S)
 **Done when.** When vibration is on, the startup chime's final bell fires a soft
 pulse through `playHaptic`.
+**Deferred 2026-11-11.** Needs a device with a working haptic motor to verify the pulse.
 
 ### SND-5 — The tg5040 mixer, checked on a device (P1, S) [HW]
 **Why.** Volume on the Smart Pro and the Brick now drives the codec's "digital
@@ -2484,6 +2576,28 @@ alsa-lib has the `ladspa` PCM or that games open `default`.
 proves the route on the device; only then does an opt-in switch, off by
 default, send standalone emulators through the plugin; where the probe fails,
 the row says why.
+
+### SND-14 — Juka's voice, second round (P3, S)
+**Why.** Juka's voice (`tts_*.go`, 2026-11-11) fetches each sentence whole
+before it plays, remembers only the terms and key refusals, plays at unity
+gain, and is English only (Groq's Orpheus English model).
+**Where.** `tts_play.go`, `tts_groq.go`, `tts_settings.go`.
+**Done when.** If the device run (HW-3 step 5) shows that the first-word delay
+is the download, the WAV body streams into the feeder as it arrives; a 400 or
+404 for the speech model is remembered for the run like the terms; a voice
+volume slider sits under **Voice**; a second language follows INP-18's choice
+where Groq has a voice for it.
+
+### SND-15 — An offline voice for the handheld (P3, M)
+**Why.** On a TrimUI Juka speaks only through Groq (free, a few minutes a
+day); with no key, offline or past the allowance the answer stays on screen,
+because the firmware has no speech engine and JukaHub downloads none.
+**Where.** `tts_local_other.go` (already uses espeak-ng, flite, pico2wave or
+piper from `required/`), the tools installer (`patch_engine.go`, `tools.go`).
+**Done when.** The installer can fetch a small engine and voice for
+linux-arm64 (flite, or a low-quality piper voice) into `required/`, checked
+like the other tools; its real-time factor and memory on the A133P are
+recorded; **This device** then appears in Settings → Voice & AI → Voice.
 
 ---
 
@@ -2600,6 +2714,7 @@ are not.
 **Done when.** The locked set is derived from the launchers that execute their
 argument and refreshed when the profile cache rebuilds, and writes through
 symlinks inside shares are refused; a test covers each.
+**Deferred 2026-11-11.** Needs a security review of launcher-derived paths and symlink handling before changing the FTP lock set.
 
 ### SEC-19 — The pairing code never crosses the network in clear (P2, M)
 **Why.** The Live Builder is plain HTTP: someone on the same Wi-Fi who sees one
@@ -2610,18 +2725,6 @@ layout push or a (redacted) pull would go through.
 hash and a timestamp/nonce keyed by the code (or TLS with a pinned self-signed
 certificate shown as a QR), the code itself is never sent, replays are refused,
 and tests cover a replay and a stale timestamp.
-
-### SEC-20 — Labels cannot show protected settings (P3, S)
-**Why.** `substituteVars` (`core.go`) puts any `$name` into a label, so a design
-can print `$discord_token` on screen, in the companion's screen view or in a
-screenshot.
-**Where.** `core.go` (`substituteVars`), `livebuilder.go`
-(`liveBuilderSensitiveKey`).
-**Done when.** Substitution skips protected names and `ENC:` values, with a
-test.
-**Status 2026-11-10.** Protected names and encrypted values now remain as their
-`$name` placeholder in labels, keeping the stored value out of the UI. The
-focused substitution test is still to add.
 
 ### SEC-21 — Package swap on Windows and FAT, on the device (P2, S) [HW]
 **Why.** The store's crash safety rests on sync/fsync ordering on the handheld and
@@ -2635,18 +2738,6 @@ while the store scans either retries and succeeds or fails with "the installed
 version is unchanged"; a card with less free space than the download is refused
 before any byte is written; an entry with a wrong `sha256` is refused and a
 correct one shows "Verified download".
-
-### SEC-25 — Mute errors from cross-origin scripts (P3, S)
-**Why.** A browser reports an error thrown by a cross-origin classic script that
-was loaded without CORS as "Script error." with no file, line or message, so a
-page cannot read another site's source or URLs through `window.onerror`. The
-Browser's DOM pass hands the page the real message and URL
-(`webdom/85_scripts.js`, `scrReportResult`), although `fetchScript` already
-marks such a script `opaque` (`webdom_net.go`).
-**Where.** `webdom_runtime.go` (script responses), `webdom/85_scripts.js`.
-**Done when.** An error from an opaque script reaches page handlers as "Script
-error." with an empty filename and zero line and column, the debug log keeps the
-real text, and a runtime test shows both.
 
 ### SEC-26 — Cookie records keyed like the jar (P2, S)
 **Why.** `browserCookieKey` is host + path + name, while the jar keys a cookie by
@@ -2681,21 +2772,6 @@ BCJ or delta is refused, where 7-Zip (when present) could unpack it.
 **Done when.** Each is closed, or accepted in SECURITY.md with the reason, with
 a test where one can be written.
 
-### SEC-28 — The Phone Companion's PIN budget is per phone, not per server (P2, S)
-**Why.** `noteSuccess` (`companion.go`) clears the failure count and the
-growing lockout on every request that has the right PIN. A paired phone that
-polls — the Live screen every 1.2 s, the PlayStation card every 1.5 s while
-Remote Play downloads — keeps clearing them, so a guesser on the same network
-never meets the lockouts while it does. Found in the review of the PlayStation
-card (2026-11-10), which made the polling more common.
-**Where.** `companion.go` (`throttled`, `noteFailure`, `noteSuccess`, `guard`,
-`handlePage`), `psn_signin.go` (`handlePSNPage`).
-**Done when.** Failures and lockouts are counted per remote address, and a
-success clears only its own address's count (with a cap on how many addresses
-are tracked).
-**Verify.** A unit test: a paired address polling while another guesses still
-locks the guesser out.
-
 ### SEC-29 — Build the arm64 parts as an unprivileged user inside the build root (P3, S)
 **Why.** `.github/scripts/build-root.sh` runs every third-party build
 (FFmpeg, opus, json-c, libevent, SDL2, chiaki-ng with curl, Box64, the pip
@@ -2721,8 +2797,6 @@ package installs stay root, and the builds still pass.
 
 ### DOC-1 — `docs/PERFORMANCE.md` (P1, S) [HW]
 **Done when.** Created by PERF-1 and kept as the place for every device number.
-
-
 
 ### DOC-4 — Decisions recorded (P3, S)
 **Done when.** ADRs exist for the input vocabulary (`inputhints.go`), the
@@ -2868,6 +2942,7 @@ forces) to clear an X/Y swap or an X↔Y remap it finds, with a marker so it
 asks once.
 
 ---
+**Deferred 2026-11-11.** Needs a one-time migration prompt design and confirmation wording.
 
 ### INP-17 — Mouse mode, second round (P2, S) [HW]
 **Why.** Mouse mode (hold Select + L1) and the games mouse (vcursor_bridge_linux.go)
@@ -2929,6 +3004,19 @@ opens Game Bar first, and a PlayStation pad's PS button is GUIDE too.
 **Done when.** An opt-in switch on Windows makes the pad's Guide (or a long
 press of Back) open the orb, with the Game Bar caveat in its second line and
 `docs/CONTROLS.md`.
+
+### INP-23 — Home search opens Settings rows instead of screens of the same name (P3, S)
+**Why.** Home search lists the Settings rows first and marks their titles
+taken, so "emulators" and "voice shortcuts" open Settings on those rows
+instead of the Emulators page and the Voice shortcuts page. Voice commands get
+the pages since 2026-11-11 (`voiceemu.go`, `voiceShortcutScreenTarget`); Home
+search does not.
+**Where.** `homesearch_index.go` (`homeSearchScreens`), `voiceemu.go`.
+**Done when.** Home search opens the Emulators page and the Voice shortcuts
+page for their names (a catalogue entry whose action is the row's own wins, or
+the rows are renamed), and the emulator targets are offered in Home search
+too.
+
 ---
 
 ## Shell, multitasking and notifications (SHELL)
@@ -3007,6 +3095,7 @@ renders SECURITY.md in-app.
 **Done when.** Settings → Help renders `docs/QUICK_START.md` and
 `docs/CONTROLS.md` offline; Home shows one dismissible tip a day drawn from a
 bounded list (never the same twice in a row).
+**Deferred 2026-11-11.** Needs the on-device manual/tip content and a Home-tip placement decision.
 
 ### SHELL-10 — Clock faces and a real standby screen (P3, M)
 **Done when.** The screensaver and dock offer three clock faces (analogue,
@@ -3104,6 +3193,7 @@ clear message (sideload keeps its explicit trust prompt).
 ### REL-4 — Update channels (P2, S)
 **Done when.** Settings → Updates offers Stable / Beta; Beta follows
 prereleases; the channel shows in About and in bug reports.
+**Deferred 2026-11-11.** Needs a release-feed and channel-policy decision (which prereleases Beta follows and where the channel is shown).
 
 ### REL-5 — Health-checked installs (P2, M)
 **Why.** `patch_swap.go` copies files with a journal; a new binary that starts
@@ -3224,74 +3314,22 @@ previously made the interface sounds play at the wrong pitch and length.
 and a hardware listen test, not a flag or a helper. The mono UI path already
 matches the Mono audio setting by construction.
 
-### A11Y-6 — Accessibility is a Settings section (P2, S)
-**Shipped.** Settings → Accessibility is an ordinary rail section
-(`a11y_settings.go`) with a row for every setting the panel carries: text size,
-high contrast, reduce transparency, increase contrast, bold text, the
-colour-blind palettes, mono audio and balance, the caption rows, the timing
-rows, button layout and the six per-button remaps, Select, one-handed mode and
-its chord button, key repeat, power mode, vibration strength and Reset. Each row
-calls the same setter the panel uses, so a change is live at once and saved; the
-Start menu's Accessibility entry opens the section, and Display & theme keeps its
-shortcut to the panel.
-
 ### A11Y-6a — The narration shortcut (P3, S) [out of scope]
-**Why.** The other half of A11Y-6 was a shortcut — hold Select + Start for three
-seconds, or a Win+Ctrl+Enter-like chord — that toggles narration. Narration is
+**Why.** A shortcut — hold Select + Start for three seconds, or a
+Win+Ctrl+Enter-like chord — would toggle narration. Narration is
 A11Y-1, which is out of scope in this environment: it needs a platform TTS
 engine (Windows SAPI or TrimUI `espeak-ng`) and an audible device to verify
 interruption and voice settings.
 **Status.** Out of scope for the same reason as A11Y-1; until narration exists
 the shortcut has nothing to toggle.
 
-### A11Y-7 — Magnifier (P3, M) [shipped]
-**Shipped.** Quick Settings has a Magnifier switch; with it on, a 2×/3× lens
-sits beside the focused control (below it, or above it when there is no room)
-and enlarges a bounded copy of the finished frame (`magnifier.go`). The copy is
-one read-back of the lens-sized region per refresh (at most ten a second, sooner
-when the focus moves) uploaded into a single reusable streaming texture, so
-memory stays at one lens-sized buffer and nothing is re-rendered. The lens never
-covers its own source, which is what keeps the copy from feeding the picture
-back into itself. Settings → Accessibility carries the same switch plus the
-2×/3× choice, both persisted with the rest of the accessibility store. Quick
-Settings now caps its height and scrolls its rows, so the extra switch fits a
-720-line screen.
-**Why not a render target.** Re-rendering every screen into an offscreen target
-would double the frame cost on the tile-based handheld GPU; reading back the one
-region is the cheaper copy of the same picture, and the memory is still bounded
-by the lens rectangle.
-
-### A11Y-8 — Reading fonts (P3, S) [shipped]
-**Shipped.** Settings -> Accessibility has **Legible reading font**. With it on,
-every UI role resolves its face through `homeUIFontForRole`, which picks the
-first installed face from a fixed chain — Atkinson Hyperlegible, Lexend,
-Verdana, Tahoma, Segoe UI — out of the system font folders, using that face's
-bold cut for Bold text when it has one, and keeping bundled Inter when none is
-installed (`legiblefont.go`, `home_fonts.go`, `core.go`). The choice lives in
-the accessibility store (`a11y_legible_font`), survives load and reset, and
-drops the font and label caches so the whole UI redraws in the new face
-without a restart. A face that fails to open falls back to Inter, so text is
-never blank.
-**Remainder (parked).** Atkinson Hyperlegible itself is not bundled and its
-OFL licence text is not in the repository; adding the file, its entry in
-`docs/DEPENDENCIES.md` and the installer asset lists is a licensing/asset
-change, not a code change. The setting already uses the face wherever the
-device has it installed, and `docs/ACCESSIBILITY.md` records the key.
-
-### A11Y-9 — Switch access (P3, L) [shipped]
-**Shipped.** Settings -> Accessibility has Switch access (Off, One button, Two
-buttons) and Scan interval (0.8 s to 3 s), both persisted with the rest of the
-accessibility store. With it on, the focus walks the scene's focus graph in the
-order the scene declares its controls, one control at a time; one button
-presses A on the highlighted control, two buttons add B as an early next, and
-the dwell restarts after every press. It moves the same focus the d-pad moves
-(`FocusEngine.ScanStep`, `focus.go`), so every screen's ring, hints and
-activation path apply unchanged, and it stands aside while the on-screen
-keyboard is up. The loop ticks it once a frame and the pad hook sits just
-before the screen's own bindings, so overlays still own their buttons
-(`switchaccess.go`, `main.go`).
-**Done when.** A one- or two-button scanning mode walks the focus graph with a
-configurable interval. Shipped as above.
+### A11Y-8 — Bundle the legible reading font (P3, S)
+**Why.** **Legible reading font** resolves Atkinson Hyperlegible from installed
+system fonts, but the face is not bundled and its OFL licence text is not in the
+repository; a device without it falls back to Inter.
+**Where.** `legiblefont.go`, `docs/DEPENDENCIES.md`, the installer asset lists.
+**Done when.** Atkinson Hyperlegible ships with its OFL licence, the dependency
+doc and installer lists name it, and the setting picks it up without a restart.
 
 ---
 
@@ -3408,12 +3446,6 @@ unreachable `0.0.0.0/1` and `128.0.0.0/1` routes at a higher metric than the
 tunnel's, which outlive the tunnel process and go when the VPN is switched off
 (and at boot); the LAN route still wins.
 
-### NET-18 — Tailscale's address and peers (P3, S)
-**Why.** The old NET-8 asked for it; `smart_home.go` only switches Tailscale.
-**Where.** `smart_home.go` (`parseTailscaleStatus`), `smart_home_ui.go`.
-**Done when.** The Tailscale row shows this device's Tailscale address and
-lists the peers (name, address, online) from `tailscale status --json`.
-
 ### NET-9 — mDNS discovery (P2, M)
 **Why.** Peers are found by UDP broadcast only; mDNS/DNS-SD is how phones,
 Kodi, Moonlight hosts and printers announce themselves.
@@ -3448,17 +3480,6 @@ one.
 (`RTC_SET_TIME` ioctl, or `hwclock -w` without a shell), logged at Info; with no
 RTC nothing changes.
 
-### NET-14 — A new time zone reaches games without a restart (P3, S)
-**Why.** JukaHub no longer calls `setenv("TZ")` at run time (libc's setenv races
-with SDL's getenv on other threads), so a zone chosen on the device reaches games
-only after JukaHub restarts; the Time zone row says so meanwhile.
-**Where.** `datetime.go` (`dateTimeChildrenHaveZone`); the launch paths
-`launchLibraryGame` (`game_library.go`), `launchEmulatorEntry` (`emulators.go`),
-`launchGameProfile` (`gameprofiles.go`), `ports.go`.
-**Done when.** One helper builds a game child's environment (`os.Environ` with TZ
-replaced by the zone in force), every game and emulator launch path uses it, a
-test covers the replacement, and the row's "after JukaHub restarts" note goes.
-
 ### NET-15 — FTPS (explicit TLS) for the FTP server (P3, M)
 **Why.** FTP sends the password and files in plaintext; SFTP covers clients that
 speak it, but Windows Explorer only speaks FTP.
@@ -3480,6 +3501,19 @@ DNS-rebinding hole the dial-time check closes.
 a page whose server is on the LAN reaches the LAN, a public page still cannot,
 and a test covers both.
 
+### NET-18 — A request in flight when the handheld sleeps (P3, S)
+**Why.** Since 2026-11-11 a new request after a wake waits for the network
+(`netWaitOnline`), but a Juka request already in flight when the device sleeps
+keeps its 90-second client timeout after the wake and holds the AI queue; and
+`IsOnline()` keeps the answer from before the sleep until the first probe, so
+another feature that starts a request in the first second after a wake can
+fail once.
+**Where.** `chatsync.go` (`chatRunAI`, `chatGroqAsk`), `wake_resume.go`,
+`netmon.go`.
+**Done when.** A wake cancels a Juka request that was in flight and asks again
+once the network answers; features that start requests at a wake wait through
+`netWaitOnline`.
+
 ---
 
 ## Game library and emulation (LIB)
@@ -3490,13 +3524,6 @@ an incremental index pattern.
 **Done when.** A background indexer keeps a bbolt index of ROM paths, sizes,
 mtimes, CRCs (≤ 64 MiB) and metadata; the library opens from it instantly and
 refreshes changed folders after a launch, a copy or a manual "Rescan".
-
-### LIB-2 — More systems (P2, S)
-**Why.** `romSystemAliases` maps 55 folder names to 20 systems: no
-Arcade/FBNeo/MAME, Atari 2600/7800/Lynx, WonderSwan, Neo Geo Pocket, Sega
-CD/32X, PICO-8, DOS.
-**Done when.** The alias table covers the systems the TrimUI cores run (from
-`compat.go`'s core inventory), with the right default core per system.
 
 ### LIB-3 — Collections that build themselves (P1, M)
 **Done when.** Smart collections — Recently added, Most played, Never played,
@@ -3747,14 +3774,6 @@ range across a change act on the wrong text.
 **Done when.** Live ranges are tracked per document and their boundaries move on
 insert, remove, `splitText` and `normalize` as the DOM standard says, covered by
 the jsdom comparison in `tests/web/webdom_dom.test.mjs`.
-
-### APP-13 — Customized built-in elements (P3, S)
-**Why.** `customElements.define(name, cls, { extends: "button" })` is
-registered, but a `<button is="name">` is never upgraded
-(`webdom/50_shadow_ce.js`), so components built that way do nothing.
-**Done when.** `is=` elements made by the parser, `innerHTML` and
-`createElement(tag, { is })` upgrade like autonomous custom elements, with a node
-test.
 
 ### APP-14 — Archives with a password (P3, S)
 **Why.** An encrypted zip, 7z or RAR is refused (`errFeArchiveEncrypted` in
@@ -4016,6 +4035,7 @@ SND-7, SND-8, SND-13, GAME-17.
 From the VPN pass: NET-8, NET-17.
 From the Windows apps, Android, Xbox and emulator updates pass: APP-17, APP-18,
 APP-20, APP-21, GAME-18 (AND-1, AND-6, AND-17 and XBX-1 grew).
+From the 2026-11-11 tester pass: HW-3 (with GPU-5) and MED-33.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 

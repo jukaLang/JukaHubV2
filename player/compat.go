@@ -679,6 +679,32 @@ func defaultCoreForSystem(system string) string {
 		return "genesis_plus_gx"
 	case "Saturn":
 		return "beetle_saturn"
+	// The rest of the TrimUI core inventory: every system romSystemAliases
+	// files a folder for has the core CrossMix and the stock firmware ship.
+	case "Arcade":
+		return "fbneo"
+	case "Atari 2600":
+		return "stella"
+	case "Atari 5200":
+		return "a5200"
+	case "Atari 7800":
+		return "prosystem"
+	case "Atari Jaguar":
+		return "virtualjaguar"
+	case "Atari Lynx":
+		return "handy"
+	case "WonderSwan", "WonderSwan Color":
+		return "mednafen_wswan"
+	case "Neo Geo Pocket", "Neo Geo Pocket Color":
+		return "mednafen_ngp"
+	case "Neo Geo CD":
+		return "neocd"
+	case "Sega CD":
+		return "genesis_plus_gx"
+	case "32X":
+		return "picodrive"
+	case "DOS":
+		return "dosbox"
 	default:
 		return ""
 	}
@@ -1275,7 +1301,7 @@ func coreLoadProblemFile(source, target string) string {
 		return ""
 	}
 	info, err := os.Stat(source)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > elfCheckMaxSize {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > coreUpdateMaxBinary {
 		return ""
 	}
 	f, err := os.Open(source)

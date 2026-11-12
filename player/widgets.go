@@ -629,6 +629,9 @@ func widgetsTick(config *Config) {
 	// A start from the TrimUI boot hook counts as working once the loop has
 	// run a little while (autostart.go).
 	autoStartBootSettleTick()
+	// Nothing else may draw beside JukaHub: a look once a second for the first
+	// minute and after each game (displayguard_linux.go).
+	displayGuardTick()
 }
 
 // --- settings scene ---------------------------------------------------------

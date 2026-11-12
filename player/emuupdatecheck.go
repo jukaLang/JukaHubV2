@@ -26,6 +26,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -85,6 +86,21 @@ func emuCoreIndexEntry(core string) (coreIndexEntry, bool) {
 	return entry, ok
 }
 
+// emuPublishedCores is a snapshot of the buildbot's complete core catalog.
+// The Emulators page uses it to offer installs even on a card with no cores or
+// ROM folders yet. Copying under the lock keeps its catalog build off the
+// network and independent of an update check finishing at the same time.
+func emuPublishedCores() []coreIndexEntry {
+	emuUpdateState.mu.Lock()
+	defer emuUpdateState.mu.Unlock()
+	out := make([]coreIndexEntry, 0, len(emuUpdateState.indexed))
+	for _, entry := range emuUpdateState.indexed {
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Core < out[j].Core })
+	return out
+}
+
 // emuCoreKnownCurrent reports that the last check found core matching the
 // index.
 func emuCoreKnownCurrent(core string) bool {
@@ -138,8 +154,8 @@ func emuNoteWinUpdate(name string, rel emuWinRelease) {
 // answers for all of them in a moment, and this is left out.
 func emuNoteCoreCheck(index []coreIndexEntry, compared map[string]coreBuild, stale map[string]coreIndexEntry, current map[string]bool) {
 	emuUpdateState.mu.Lock()
-	defer emuUpdateState.mu.Unlock()
 	if emuUpdateState.checking {
+		emuUpdateState.mu.Unlock()
 		return
 	}
 	cores := make(map[string]coreIndexEntry, len(emuUpdateState.cores)+len(stale))
@@ -169,6 +185,10 @@ func emuNoteCoreCheck(index []coreIndexEntry, compared map[string]coreBuild, sta
 	emuUpdateState.cores = cores
 	emuUpdateState.current = known
 	emuUpdateState.indexed = indexed
+	emuUpdateState.mu.Unlock()
+	if IsTrimuiDevice() {
+		invalidateEmulatorCache()
+	}
 }
 
 // emuUpdateCount is how many updates the last check found.
@@ -322,7 +342,7 @@ func emuRunUpdateCheck() {
 	var indexed map[string]coreIndexEntry
 	errText := ""
 	inv := scanCoreInventory()
-	if len(inv.Active) > 0 || IsWindows() {
+	if len(inv.Active) > 0 || IsWindows() || IsTrimuiDevice() {
 		if index, err := fetchCoreIndex(ctx, client); err == nil {
 			indexed = make(map[string]coreIndexEntry, len(index))
 			for _, entry := range index {
@@ -385,7 +405,14 @@ func emuRunUpdateCheck() {
 
 	emuUpdateState.mu.Lock()
 	emuUpdateState.checking = false
-	emuUpdateState.checkedAt = time.Now()
+	// A fresh handheld has no published-core catalog until the index answers.
+	// Let the next page open retry after a failed index request instead of
+	// treating that empty catalog as a six-hour-old success.
+	if indexed == nil && IsTrimuiDevice() {
+		emuUpdateState.checkedAt = time.Time{}
+	} else {
+		emuUpdateState.checkedAt = time.Now()
+	}
 	if indexed != nil {
 		emuUpdateState.cores = stale
 		emuUpdateState.current = current
@@ -395,4 +422,7 @@ func emuRunUpdateCheck() {
 	emuUpdateState.winAnswered = winAnswered
 	emuUpdateState.err = errText
 	emuUpdateState.mu.Unlock()
+	if indexed != nil && IsTrimuiDevice() {
+		invalidateEmulatorCache()
+	}
 }

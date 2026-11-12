@@ -9,8 +9,9 @@ package main
 // instead of a static launcher label. The catalog is built from the platform's
 // real emulator locations: known install folders on Windows (the portable
 // Emulators folder JukaHub installs into first), the SD-card Emus/ and Roms/
-// trees plus RetroArch cores on TrimUI. emutiles.go draws it as a page of
-// tiles; emuwininstall.go and emulatorinstall.go install what is missing, and
+// trees plus installed and published RetroArch cores on TrimUI. emutiles.go
+// draws it as a page of tiles; emuwininstall.go and emulatorinstall.go install
+// what is missing, and
 // hakux.go the handheld's one standalone install, hakuX for the Xbox.
 
 import (
@@ -533,11 +534,39 @@ func emuCoreEntries(coresDir string) ([]emuEntry, map[string]bool) {
 	return rows, installed
 }
 
+// emuPublishedCoreRows adds every core the handheld's buildbot channel offers
+// that is not already installed or represented by a launcher/system tile. The
+// index is fetched in the background; no catalog build waits for the network.
+func emuPublishedCoreRows(index []coreIndexEntry, installed map[string]bool, existing map[string]emuEntry) []emuEntry {
+	rows := make([]emuEntry, 0, len(index))
+	for _, entry := range index {
+		if entry.Core == "" || installed[entry.Core] {
+			continue
+		}
+		if _, present := existing[strings.ToLower(entry.Core)]; present {
+			continue
+		}
+		detail := "Downloadable RetroArch core · " + entry.Date
+		if system, _ := emuCoreInfo(entry.Core); system != "" {
+			detail = system + " · " + detail
+		}
+		rows = append(rows, emuEntry{
+			Name:   entry.Core,
+			Detail: detail,
+			Status: emuMissing,
+			Core:   entry.Core,
+			Glyph:  emuGlyphFor(entry.Core, entry.Core),
+		})
+	}
+	return rows
+}
+
 // deviceEmulatorEntries builds the handheld list: every emulator folder under
-// the Emus roots with its availability, every installed RetroArch core, every
-// ROM system that has games but no emulator at all, the consoles this hardware
-// cannot run (when their Roms/ folder exists), marked "Not supported" with the
-// reason instead of offering a dead end, and always one Xbox tile: hakuX where
+// the Emus roots with its availability, installed and published RetroArch
+// cores, every ROM system that has games but no emulator at all, and the
+// consoles this hardware cannot run (when their Roms/ folder exists), marked
+// "Not supported" with the reason instead of offering a dead end, and always
+// one Xbox tile: hakuX where
 // it is offered or installed, the honest reason where it is not.
 func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEntry {
 	byName := map[string]emuEntry{}
@@ -662,6 +691,11 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	// already on the card is the tile, whoever put it there.
 	xboxFolder, _, _ := hakuxInstalled(emuRoots)
 	add(hakuxXboxEntry(xboxFolder, romsRoot, hakuxDevice()))
+	if IsTrimuiDevice() {
+		for _, row := range emuPublishedCoreRows(emuPublishedCores(), installed, byName) {
+			add(row)
+		}
+	}
 
 	entries := make([]emuEntry, 0, len(byName))
 	for _, e := range byName {
@@ -794,7 +828,7 @@ func gameProfilesEmuEntry() emuEntry {
 	total, ready, issues := gameProfileStats()
 	detail := "Open the launcher · drop JSON into " + gameProfilesImportDir()
 	if total > 0 {
-		detail = fmt.Sprintf("%d profile(s) · %d ready", total, ready)
+		detail = pluralizeCount(total, "profile", "profiles") + fmt.Sprintf(" · %d ready", ready)
 		if issues > 0 {
 			detail += " · " + pluralizeCount(issues, "file issue", "file issues")
 		}

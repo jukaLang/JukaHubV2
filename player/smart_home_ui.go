@@ -149,6 +149,9 @@ func smartHomePanelRows(config *Config, snap smartHomeSnapshotData) []smartHomeR
 			} else {
 				ts.detail = state
 			}
+			if peers := tailscalePeersLine(snap.tailscale.Peers); peers != "" {
+				ts.detail += " · " + peers
+			}
 		} else {
 			ts.value = strings.ToLower(state)
 			ts.detail = "A toggles tailscale up / down"

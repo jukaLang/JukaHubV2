@@ -469,7 +469,7 @@ var envStorageManager = {
 };
 
 mix(Navigator.prototype, {
-  get userAgent() { return str(envCfg('userAgent', 'JukaHub Browser/1.1')); },
+  get userAgent() { return str(envCfg('userAgent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36')); },
   get appCodeName() { return 'Mozilla'; },
   get appName() { return 'Netscape'; },
   get appVersion() {

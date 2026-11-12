@@ -453,7 +453,7 @@ func ssyncRenderCompare(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 	row++
 	y += rowH + 8
 	if len(cmp.Plan.Skipped) > 0 {
-		note := fmt.Sprintf("%d save(s) left out: names or folders the other device cannot hold", len(cmp.Plan.Skipped))
+		note := pluralizeCount(len(cmp.Plan.Skipped), "save", "saves") + " left out: names or folders the other device cannot hold"
 		renderText(renderer, config, fonts.small, ellipsize(fonts.small, note, w), ToastWarnInk(), x, top+y)
 		y += fonts.smallH + 10
 	}
@@ -902,7 +902,7 @@ func ssyncOpenPreviewSheet(config *Config, prev ssyncImportPreview, passphrase s
 		"• " + strconv.Itoa(len(plan.Same)) + " are already the same\n\n" +
 		"Every save it replaces goes into a Save Manager snapshot first."
 	if len(plan.Skipped) > 0 {
-		body += "\n\n" + strconv.Itoa(len(plan.Skipped)) + " save(s) are left out: this device has no such save folder."
+		body += "\n\n" + pluralizeCount(len(plan.Skipped), "save is", "saves are") + " left out: this device has no such save folder."
 	}
 	buttons := []tbxSheetButton{{label: "Cancel"}}
 	if len(plan.Items) > 0 {

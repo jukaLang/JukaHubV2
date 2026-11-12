@@ -299,18 +299,6 @@ func dateTimeInit(config *Config) {
 	logInfo("clock", "time zone %s restored", name)
 }
 
-// dateTimeChildrenHaveZone reports whether the programs JukaHub starts run in
-// the zone in force: they inherit TZ from the environment JukaHub started
-// with (no TZ: the system's zone, which is then JukaHub's "Local" too), and a
-// zone chosen since reaches them after the next start.
-func dateTimeChildrenHaveZone() bool {
-	name := dateTimeTZName(time.Local.String())
-	if tz := dateTimeTZName(os.Getenv("TZ")); tz != "" {
-		return tz == name
-	}
-	return name == "Local"
-}
-
 // dateTimeTZName is the zone a TZ value (or a Location's name) stands for, in
 // the form the picker uses: a leading ":" (POSIX's implementation-defined
 // form) and a path's ".../zoneinfo/" prefix are dropped, so ":Europe/Berlin"
@@ -607,9 +595,6 @@ func dateTimeSettingsRows() []setRow {
 			Detail: func(*Config) string {
 				switch o := dateTimeZoneOwner(); o {
 				case tzOwnerJukaHub:
-					if !dateTimeChildrenHaveZone() {
-						return "In use now; games get it after JukaHub restarts"
-					}
 					return "JukaHub and the games it starts use this zone"
 				default:
 					return "Set by " + dateTimeOwnerName(o) + hintSentence(" · %s opens its settings", "A", "Open")

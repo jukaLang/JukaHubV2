@@ -725,6 +725,26 @@ test('custom elements created by innerHTML and cloning upgrade when connected', 
   assert.equal(r, 'detached:false|c:one|attached:true|c:two|3|0');
 });
 
+test('customized built-in elements upgrade from markup, innerHTML and createElement', async () => {
+  const page = await ours('<div id=w><button is="x-button">one</button></div>');
+  const r = page.run(`globalThis.seen = [];
+    customElements.define('x-button', class extends HTMLButtonElement {
+      connectedCallback() { seen.push('c:' + this.textContent); }
+    }, { extends: 'button' });
+    var b = document.querySelector('button');
+    seen.push('parsed:' + (b instanceof customElements.get('x-button')));
+    var holder = document.createElement('div');
+    holder.innerHTML = '<button is="x-button">two</button>';
+    document.getElementById('w').appendChild(holder);
+    seen.push('inner:' + (holder.firstChild instanceof customElements.get('x-button')));
+    var c = document.createElement('button', { is: 'x-button' });
+    c.textContent = 'three';
+    seen.push('created:' + (c instanceof customElements.get('x-button')), c.getAttribute('is'));
+    document.getElementById('w').appendChild(c);
+    seen.join('|')`);
+  assert.equal(r, 'c:one|parsed:true|c:two|inner:true|created:true|x-button|c:three');
+});
+
 test('window load handlers: body onload attribute and onerror signature', async () => {
   const page = await ours('<body onload="globalThis.loaded = (globalThis.loaded || 0) + 1"><p>x</p></body>');
   const r = page.run(`var T = globalThis.__jhTest;

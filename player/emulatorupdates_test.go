@@ -201,6 +201,9 @@ func TestFetchCoreUpdateRejectsAChecksumMismatch(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(pool, "mgba")); !os.IsNotExist(statErr) {
 		t.Fatalf("a rejected core was written to the pool")
 	}
+	if leftovers, err := os.ReadDir(pool); err != nil || len(leftovers) != 0 {
+		t.Fatalf("a rejected download left temporary files in the pool: %v, %v", leftovers, err)
+	}
 }
 
 func TestFetchCoreUpdateRejectsAnArchiveWithoutTheCore(t *testing.T) {

@@ -108,7 +108,7 @@ const (
 	webJSNetMaxLogLines = 16
 	// webJSNetUserAgent is what the page fetch sends (textbrowser.go): a site
 	// must see the same browser asking for the page and for its data.
-	webJSNetUserAgent = "JukaHub Browser/1.1"
+	webJSNetUserAgent = browserChromeUserAgent
 	// webJSNetBlockedByFilter and webJSNetBlockedPrivate are the Err texts of
 	// the two refusals the toolbar's blocked count includes.
 	webJSNetBlockedByFilter = "blocked by the filter"
@@ -309,6 +309,7 @@ func (n *webJSNet) fetch(ctx context.Context, req webJSRequest, kind webJSNetKin
 		header.Set("Accept", "*/*")
 	}
 	n.hopHeaders(header, u, method, mode != "no-cors")
+	browserChromeFetch(header, mode, n.page, u)
 
 	until := time.Now().Add(webJSNetMaxWait)
 	if !n.deadline.IsZero() && n.deadline.Before(until) {
@@ -1928,6 +1929,8 @@ func webJSNetNewTransport(guard webJSNetGuard) *http.Transport {
 	}
 	// A TLS dialer of its own would bypass DialContext for https.
 	tr.DialTLSContext = nil
+	tr.ForceAttemptHTTP2 = true
+	tr.TLSNextProto = nil
 	tr.MaxIdleConnsPerHost = webJSNetMaxParallel
 	tr.ResponseHeaderTimeout = webJSNetMaxWait
 	tr.MaxResponseHeaderBytes = webJSNetMaxResponseHeader

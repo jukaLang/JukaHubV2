@@ -253,6 +253,12 @@ func vcursorTrigger(e *sdl.ControllerAxisEvent, config *Config) bool {
 	if e.Axis == sdl.CONTROLLER_AXIS_TRIGGERRIGHT {
 		side = 1
 	}
+	// Over the on-screen keyboard R2 is voice typing (vkvoice_button.go); over
+	// the page above it the triggers still scroll.
+	if side == 1 && vkVoiceOwnsR2At(vcursor.x, vcursor.y) {
+		vcursor.trig[1] = false
+		return false
+	}
 	// Only a press the pointer saw start scrolls: one that began before the
 	// pointer came up stays the shoulder action it already was.
 	pressed := triggerPressedEdge(side, e.Value)

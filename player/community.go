@@ -77,11 +77,6 @@ var communityDiagnosticQR struct {
 // communityRows builds the hub's landing list. The telemetry row is the only
 // place consent can be changed, so it states the default explicitly.
 func communityRows(config *Config) []communityRow {
-	version := changelogVersionLabel(config)
-	detail := "Release notes for this build"
-	if version != "" {
-		detail = "Release notes for " + version
-	}
 	telemetryDetail := "Device model and crash counts only — off unless you opt in"
 	if telemetryOptedIn() && telemetryEndpointURL() == "" {
 		telemetryDetail = "No collector is configured in this build — nothing is sent"
@@ -90,7 +85,7 @@ func communityRows(config *Config) []communityRow {
 		{
 			label:  "What's new",
 			value:  "Changelog",
-			detail: detail,
+			detail: "Release notes for this build",
 			hint:   hintLine(FooterHint{"A", "Read"}),
 			action: communityActionWhatsNew,
 		},

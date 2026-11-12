@@ -250,7 +250,7 @@ func upchSheetOpen() bool { return upchUI.sheet != upchSheetNone }
 func upchOpenHistory(config *Config) {
 	upchUI.sheet = upchSheetHistory
 	upchUI.focus, upchUI.top = 0, 0
-	upchUI.headLine = "Installed now · JukaHub " + versionDisplayString(config)
+	upchUI.headLine = "Installed now"
 	upchSetHistory()
 }
 

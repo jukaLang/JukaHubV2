@@ -902,8 +902,11 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 	}
 	// The firmware's boot logo is only known to be on screen when a boot hook
 	// started this power-on and the logo is ours: then the boot starts from
-	// exactly that picture instead of fading in.
-	r.continuity = r.powerOn && !preview && bootOSContinuityReason(bootOS.reason) && bootLogoStateSaysOurs()
+	// exactly that picture instead of fading in. Not when the TrimUI hook had
+	// to close the stock menu first: the menu replaced the logo, and the hook
+	// left black in its place (autostart.go), which a fade-in continues.
+	r.continuity = r.powerOn && !preview && bootOSContinuityReason(bootOS.reason) && bootLogoStateSaysOurs() &&
+		!trimuiAutostartMenuShown()
 	r.deadlineMS = float64((allotted + splashCheckGrace).Milliseconds())
 
 	// The wordmark is Inter at the layout's size, without the accessibility
@@ -1373,7 +1376,11 @@ func (r *bootOSRun) drawProgress(alpha, dawn float64) {
 	if font == nil {
 		return
 	}
-	label := ellipsize(font, r.label, tr.W*2)
+	labelW := tr.W * 2
+	if maxLabel := screenWidth - 32; labelW > maxLabel {
+		labelW = maxLabel
+	}
+	label := ellipsize(font, r.label, labelW)
 	lw, _ := measureText(font, label)
 	ink := bootOSInkOn(bootOSStatusInk, ColorTextTertiary(), bootOSDawnColour(dawn), dawn, glassLightTheme())
 	renderText(renderer, r.config, font, label, stageInk(ink, alpha), int32(r.cx)-lw/2, r.layout.StatusY)

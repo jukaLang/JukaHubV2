@@ -31,6 +31,14 @@
 #  stream) leaves its pid in .screen-handoff. This script waits for that helper
 #  with the firmware UI still stopped, then starts JukaHub again, so nothing
 #  draws over the stream and the user comes back to JukaHub, not to MainUI.
+#
+#  jukahub-paused-record: 1
+#
+#  Whatever this script, the boot hook or the app pauses of the firmware's
+#  launcher is paused by process id and written down in /tmp/jukahub-paused;
+#  the hand-back at the end resumes exactly those processes, on every way out.
+#  (Pausing "runtrimui.sh" by name used to match nothing where busybox names
+#  every script it runs "sh", and resumed nothing either.)
 # ---------------------------------------------------------------------------
 
 APP_DIR=/mnt/SDCARD/Apps/JukaHub
@@ -64,6 +72,9 @@ HANDOFF="$APP_DIR/.screen-handoff"
 # boot guard reads and removes it). Not cleared below: that start may come from
 # a later launch of this script.
 LAST_EXIT="$APP_DIR/.last-exit"
+# The firmware launcher processes paused for this session, one per line:
+# "<pid> <start time> <name>" (see the header). /tmp is empty at every boot.
+PAUSED=/tmp/jukahub-paused
 
 say "=== JukaHub launched from $APP_DIR ==="
 
@@ -74,7 +85,36 @@ sync
 # failed update would make this launch wait for a helper that never arrives.
 rm -f "$PENDING" "$SWAPPED" "$FAILED" "$RESTART_NOW" "$HANDOFF"
 
-# --------------------------------------------------- take over the display
+# ------------------------------------------------------------- processes
+# A process's state, parent and start time (fields 3, 4 and 22 of
+# /proc/<pid>/stat) in ST_STATE, ST_PPID and ST_START. The name in brackets
+# may hold spaces, so the fields are read after its last ") ".
+stat_of() {
+    ST_LINE=""
+    read -r ST_LINE 2>/dev/null <"/proc/$1/stat" || return 1
+    # shellcheck disable=SC2086
+    set -- ${ST_LINE##*) }
+    ST_STATE="$1"
+    ST_PPID="$2"
+    ST_START="${20}"
+    [ -n "$ST_STATE" ]
+}
+
+# One process for the log: "name (pid N)", with the script a shell runs, so a
+# launcher loop that shows up as plain "sh" can still be told apart.
+describe() {
+    DS_C=""
+    read -r DS_C 2>/dev/null <"/proc/$1/comm"
+    case "$DS_C" in
+        sh | ash | bash | dash | busybox)
+            DS_S="$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | cut -c1-120)"
+            DS_S="${DS_S% }"
+            echo "${DS_C:-?} (pid $1: ${DS_S:-?})"
+            ;;
+        *) echo "${DS_C:-?} (pid $1)" ;;
+    esac
+}
+
 # MainUI can be found through pidof (busybox) or pgrep; when neither exists,
 # the checks below are skipped and the script behaves as it did before.
 #
@@ -100,15 +140,215 @@ ui_pid() {
     echo "$UI_LIST"
 }
 
-# Normally the launcher has already stepped aside before this script runs.
-# If it still holds the framebuffer, pause the supervisor and stop the UI
-# (SIGTERM first, SIGKILL only if it refuses to go).
-if command -v pgrep >/dev/null 2>&1; then
-    pkill -STOP runtrimui.sh 2>/dev/null
-    pkill -STOP trimui_launcher 2>/dev/null
+# The firmware's launcher loops, found by their command line, which names the
+# script even where the shell running it shows up as plain "sh" (a busybox
+# built to prefer its own applets names every script it runs that way, so
+# pkill and pidof by script name match nothing there): runtrimui.sh on stock
+# and CrossMix firmware, trimui_launcher elsewhere. The brackets keep grep from
+# finding its own command line.
+loop_pids() {
+    for LP_F in $(grep -l -e 'runtrimui[.]sh' -e 'trimui_launche[r]' /proc/[0-9]*/cmdline 2>/dev/null); do
+        LP_P="${LP_F#/proc/}"
+        LP_P="${LP_P%/cmdline}"
+        case "$LP_P" in "" | *[!0-9]*) continue ;; esac
+        stat_of "$LP_P" || continue
+        [ "$ST_STATE" = Z ] || printf '%s ' "$LP_P"
+    done
+}
+
+# Whether a process is a shell script or the firmware's launcher binary, by
+# name or by executable: the only kind of MainUI parent that is ever paused,
+# never a daemon that reads keys (the boot hook's rule too).
+pausable() {
+    PZ_C=""
+    read -r PZ_C 2>/dev/null <"/proc/$1/comm"
+    case "$PZ_C" in
+        sh | ash | bash | dash | busybox | *.sh | trimui_launcher) return 0 ;;
+    esac
+    case "$(readlink "/proc/$1/exe" 2>/dev/null)" in
+        */sh | */ash | */bash | */dash | */busybox) return 0 ;;
+    esac
+    return 1
+}
+
+# Pause a process and write it down in $PAUSED with its start time, so that
+# the hand-back resumes exactly it (never a process that got its pid later).
+pause_pid() {
+    stat_of "$1" || return 1
+    [ "$ST_STATE" = Z ] && return 1
+    PP_START="$ST_START"
+    kill -STOP "$1" 2>/dev/null || return 1
+    if ! grep -q "^$1 $PP_START " "$PAUSED" 2>/dev/null; then
+        PP_NAME=""
+        read -r PP_NAME 2>/dev/null <"/proc/$1/comm"
+        echo "$1 $PP_START ${PP_NAME:-?}" >>"$PAUSED" 2>/dev/null
+    fi
+    say "paused the firmware launcher: $(describe "$1")"
+    return 0
+}
+
+# Whether a process is paused already and written down in $PAUSED (the boot
+# hook's direct start). A line alone is not enough: one left behind by a start
+# that gave up names a loop that runs again, or a pid another process now has.
+paused_now() {
+    stat_of "$1" && [ "$ST_STATE" = T ] && grep -q "^$1 $ST_START " "$PAUSED" 2>/dev/null
+}
+
+# Let everything in $PAUSED run again — what this script, the boot hook or the
+# app paused — and forget it. RESUMED_PIDS keeps who was let go, for the
+# hand-back's watcher.
+RESUMED_PIDS=""
+resume_paused() {
+    [ -f "$PAUSED" ] || return 0
+    RS_DONE=""
+    while read -r RS_P RS_START RS_NAME; do
+        case "$RS_P" in "" | *[!0-9]*) continue ;; esac
+        case " $RS_DONE " in *" $RS_P "*) continue ;; esac
+        if stat_of "$RS_P" && [ "$ST_START" = "$RS_START" ]; then
+            kill -CONT "$RS_P" 2>/dev/null && RS_DONE="$RS_DONE $RS_P"
+        fi
+    done <"$PAUSED"
+    rm -f "$PAUSED"
+    if [ -n "$RS_DONE" ]; then
+        say "let the firmware launcher run again (pid$RS_DONE)"
+        RESUMED_PIDS="$RESUMED_PIDS$RS_DONE"
+    fi
+}
+
+# The processes holding the display: the framebuffer, or the PowerVR GPU's
+# nodes (anything that renders with GLES opens those). One pid per line.
+display_holders() {
+    ls -l /proc/[0-9]*/fd 2>/dev/null | {
+        DH_P=""
+        DH_LAST=""
+        while read -r DH_L; do
+            case "$DH_L" in
+                /proc/*/fd:)
+                    DH_P="${DH_L#/proc/}"
+                    DH_P="${DH_P%/fd:}"
+                    ;;
+                *" -> /dev/fb0" | *" -> /dev/dri/"* | *" -> /dev/pvr_sync" | *" -> /dev/mali"*)
+                    [ -n "$DH_P" ] && [ "$DH_P" != "$DH_LAST" ] && echo "$DH_P"
+                    DH_LAST="$DH_P"
+                    ;;
+            esac
+        done
+    }
+}
+
+# A JukaHub that holds the display (a running UI, not a helper started from the
+# same binary: the VPN tunnel or the update helper hold no display).
+drawing_jukahub() {
+    for DJ_P in $(pidof JukaHub 2>/dev/null || pgrep -x JukaHub 2>/dev/null); do
+        [ "$DJ_P" = "$$" ] && continue
+        stat_of "$DJ_P" || continue
+        [ "$ST_STATE" = Z ] && continue
+        if ls -l "/proc/$DJ_P/fd" 2>/dev/null | grep -q -e ' -> /dev/fb0$' -e ' -> /dev/dri/' -e ' -> /dev/pvr_sync$' -e ' -> /dev/mali'; then
+            echo "$DJ_P"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# This script's ancestors. The launcher loop that ran it (MainUI picked
+# JukaHub, or the boot hook queued it) is one of them: that loop is waiting for
+# the script to finish, so it can bring nothing back meanwhile, and it is never
+# paused — a paused ancestor would stay paused if this script were killed.
+ANCESTORS=" $$ "
+CHAIN=""
+AN_P=$$
+AN_N=0
+while [ "$AN_N" -lt 32 ] && stat_of "$AN_P"; do
+    case "$ST_PPID" in "" | 0 | 1 | *[!0-9]*) break ;; esac
+    AN_P="$ST_PPID"
+    ANCESTORS="$ANCESTORS$AN_P "
+    [ "$AN_N" -lt 3 ] && CHAIN="${CHAIN:+$CHAIN < }$(describe "$AN_P")"
+    AN_N=$((AN_N + 1))
+done
+say "started by ${CHAIN:-init}"
+
+# ------------------------------------------------------- stop from outside
+# The firmware's power handling (and any supervisor) stops an app by signalling
+# the process group. The script is part of that group, so it used to die before
+# reaching the handover below: MainUI stayed dead and the panel kept JukaHub's
+# last frame, with no input able to leave it — the "device locked on the power
+# button" report. Catching the stop keeps the script alive long enough to hand
+# the screen back — set before anything is paused, so a stop that lands in the
+# middle of the take-over still resumes what was paused.
+#
+# The signal is not forwarded: the app received the same one directly, and it
+# treats a repeat as impatience (force quit, no cleanup). If the app did not
+# get it, it is still running and still owns the screen; waiting for it is the
+# right answer either way.
+APP_PID=""
+STOPPED=0
+on_stop() {
+    STOPPED=1
+    say "stop request received; waiting for JukaHub to finish shutting down"
+}
+trap on_stop TERM INT HUP
+
+# --------------------------------------------------------- one JukaHub only
+# Two JukaHubs on one screen alternate frames just as two menus do. One that
+# is still on its way out (a restart) gets five seconds; one that stays is
+# left alone, and this start is called off without touching the firmware UI.
+OTHER="$(drawing_jukahub)"
+n=0
+while [ -n "$OTHER" ] && [ "$n" -lt 5 ]; do
+    n=$((n + 1))
+    sleep 1
+    OTHER="$(drawing_jukahub)"
+done
+if [ -n "$OTHER" ]; then
+    say "JukaHub is already on the screen ($(describe "$OTHER")); not starting a second one"
+    exit 0
 fi
 
+# --------------------------------------------------- take over the display
+# Normally the launcher has already stepped aside before this script runs.
+# What would bring it back is paused first, by process id, and only ever a
+# shell script (never init, never a daemon): MainUI's parent, the process that
+# restarts it; and, when this script was not started by a launcher loop (a
+# start over SSH, an older update helper), the loop itself even between two
+# MainUIs — the top one only, not the subshells it runs in the background
+# (they may watch keys or power). The loop that ran this script is waiting for
+# it and is never paused. Then MainUI is stopped (SIGTERM first, SIGKILL only
+# if it refuses to go).
+ANCESTOR_LOOPS=""
+OTHER_LOOPS=""
+ALL_LOOPS=" $(loop_pids)"
+for LP in $ALL_LOOPS; do
+    case "$ANCESTORS" in
+        *" $LP "*) ANCESTOR_LOOPS="$ANCESTOR_LOOPS $LP" ;;
+        *)
+            # A subshell of a loop has the loop's command line too.
+            stat_of "$LP" || continue
+            case "$ALL_LOOPS " in *" $ST_PPID "*) continue ;; esac
+            OTHER_LOOPS="$OTHER_LOOPS $LP"
+            ;;
+    esac
+done
+if [ -z "$ANCESTOR_LOOPS" ]; then
+    for LP in $OTHER_LOOPS; do
+        [ "$LP" -gt 1 ] 2>/dev/null || continue
+        pausable "$LP" || continue
+        paused_now "$LP" || pause_pid "$LP"
+    done
+fi
 UI_PID="$(ui_pid)"
+for UP in $UI_PID; do
+    stat_of "$UP" || continue
+    UP_PARENT="$ST_PPID"
+    case "$UP_PARENT" in "" | 0 | 1 | *[!0-9]*) continue ;; esac
+    case "$ANCESTORS" in *" $UP_PARENT "*) continue ;; esac
+    if pausable "$UP_PARENT"; then
+        paused_now "$UP_PARENT" || pause_pid "$UP_PARENT"
+    else
+        say "MainUI is started by $(describe "$UP_PARENT"), which is not paused"
+    fi
+done
+
 if [ -n "$UI_PID" ]; then
     say "stopping stock launcher (pid $UI_PID)"
     kill $UI_PID 2>/dev/null
@@ -132,8 +372,7 @@ if command -v pidof >/dev/null 2>&1 || command -v pgrep >/dev/null 2>&1; then
     done
     if [ -n "$(ui_pid)" ]; then
         say "FATAL: MainUI still holds the display after $n attempts; not starting JukaHub"
-        pkill -CONT runtrimui.sh 2>/dev/null
-        pkill -CONT trimui_launcher 2>/dev/null
+        resume_paused
         exit 1
     fi
 else
@@ -179,7 +418,10 @@ JUKAHUB_LAUNCHED_BY=launch.sh
 # protocol). Exported by the running script, so a newer launch.sh copied onto
 # the card under an older running one never makes the app expect a wait.
 JUKAHUB_SCREEN_HANDOFF=1
-export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY JUKAHUB_SCREEN_HANDOFF
+# This launcher resumes everything in /tmp/jukahub-paused at the hand-back
+# (the header's paused record), so the app leaves what it paused to it.
+JUKAHUB_PAUSED_RECORD=1
+export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY JUKAHUB_SCREEN_HANDOFF JUKAHUB_PAUSED_RECORD
 
 # ---------------------------------------------------------------- time zone
 # The zone chosen in Settings -> Date & time is kept in jukatimezone next to
@@ -213,35 +455,68 @@ fi
 CLR_OPENSSL_VERSION_OVERRIDE=1.1
 export CLR_OPENSSL_VERSION_OVERRIDE
 
+# ------------------------------------------------- CPU governor and limits
+# JukaHub sets the CPU governor and frequency limits for its power modes and
+# its idle screens, and puts back what it found when it quits. A JukaHub that
+# is killed, or that crashes off its main goroutine, cannot: the firmware menu
+# then ran on what JukaHub left (an idle screen's 600 MHz powersave ceiling)
+# until JukaHub next started. So the values are noted before each start and
+# put back after each exit wherever they differ; after a clean quit nothing
+# differs and nothing is written.
+cpu_dirs() {
+    CD_ANY=""
+    for CD_D in /sys/devices/system/cpu/cpufreq/policy[0-9]*; do
+        [ -d "$CD_D" ] && { echo "$CD_D"; CD_ANY=1; }
+    done
+    [ -n "$CD_ANY" ] && return 0
+    for CD_D in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+        [ -d "$CD_D" ] && echo "$CD_D"
+    done
+}
+CPU_SNAP=""
+cpu_snapshot() {
+    CPU_SNAP=""
+    for CS_D in $(cpu_dirs); do
+        for CS_K in scaling_governor scaling_min_freq scaling_max_freq; do
+            [ -f "$CS_D/$CS_K" ] || continue
+            CS_V="$(cat "$CS_D/$CS_K" 2>/dev/null)"
+            case "$CS_V" in "" | *[!A-Za-z0-9_]*) continue ;; esac
+            CPU_SNAP="$CPU_SNAP$CS_D/$CS_K $CS_V
+"
+        done
+    done
+}
+cpu_restore() {
+    [ -n "$CPU_SNAP" ] || return 0
+    CR_FIXED=""
+    # Twice: a floor cannot rise above the ceiling in force, nor the ceiling
+    # drop below the floor, so one of the pair may only land on the second go.
+    for CR_PASS in 1 2; do
+        while read -r CR_F CR_V; do
+            [ -n "$CR_F" ] || continue
+            CR_NOW="$(cat "$CR_F" 2>/dev/null)"
+            [ "$CR_NOW" = "$CR_V" ] && continue
+            echo "$CR_V" >"$CR_F" 2>/dev/null
+            if [ "$CR_PASS" = 1 ]; then
+                CR_FIXED="$CR_FIXED ${CR_F#/sys/devices/system/cpu/} $CR_NOW->$CR_V"
+            fi
+        done <<EOF
+$CPU_SNAP
+EOF
+    done
+    [ -n "$CR_FIXED" ] && say "CPU settings differed from before the start; put back:$CR_FIXED"
+}
+
 # --------------------------------------------------------------- run it
 if [ ! -x "$APP_DIR/JukaHub" ]; then
     say "FATAL: binary $APP_DIR/JukaHub not found or not executable"
     chmod +x "$APP_DIR/JukaHub" 2>/dev/null
 fi
 
-# ------------------------------------------------------- stop from outside
-# The firmware's power handling (and any supervisor) stops an app by signalling
-# the process group. The script is part of that group, so it used to die before
-# reaching the handover below: MainUI stayed dead and the panel kept JukaHub's
-# last frame, with no input able to leave it — the "device locked on the power
-# button" report. Catching the stop keeps the script alive long enough to hand
-# the screen back.
-#
-# The signal is not forwarded: the app received the same one directly, and it
-# treats a repeat as impatience (force quit, no cleanup). If the app did not
-# get it, it is still running and still owns the screen; waiting for it is the
-# right answer either way.
-APP_PID=""
-STOPPED=0
-on_stop() {
-    STOPPED=1
-    say "stop request received; waiting for JukaHub to finish shutting down"
-}
-trap on_stop TERM INT HUP
-
 while :; do
     # Also covers a stop that arrived while waiting for an update helper.
     [ "$STOPPED" -eq 1 ] && break
+    cpu_snapshot
     "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
     APP_PID=$!
     wait "$APP_PID"
@@ -277,6 +552,8 @@ while :; do
             fi
             ;;
     esac
+    # Before anything else runs: the menu, or the next build in an update.
+    cpu_restore
     sync
 
     # A helper took the display over (PS Remote Play): JukaHub quit so the
@@ -360,49 +637,102 @@ while :; do
 done
 
 # --------------------------------------------------- give the screen back
-if command -v pgrep >/dev/null 2>&1; then
-    pkill -CONT runtrimui.sh 2>/dev/null
-    pkill -CONT trimui_launcher 2>/dev/null
-fi
+# Everything paused for this session — by this script, by the boot hook, or by
+# the app's display guard — runs again, exactly those processes.
+resume_paused
 
 # Who brings MainUI back. On stock and CrossMix firmware MainUI started this
 # script (through /tmp/cmd_to_run.sh) and exited, and the firmware supervisor,
 # runtrimui.sh, is waiting for this script: it starts MainUI again the moment
 # the script returns. (Started by the boot hook instead, the supervisor's own
-# MainUI was the one stopped above, and the CONT above lets it start a new
-# one.) This script used to start a MainUI of its own two seconds before
-# returning — so the supervisor's made two, both drawing to /dev/fb0: the
-# glitchy, flickering screen after leaving JukaHub.
+# MainUI was the one stopped above, and resuming it lets it start a new one.)
+# This script used to start a MainUI of its own two seconds before returning —
+# so the supervisor's made two, both drawing to /dev/fb0: the glitchy,
+# flickering screen after leaving JukaHub.
 #
-# The supervisor now always gets the first go. A watcher left behind waits up
-# to ten seconds after this script is gone for a MainUI to appear and starts
-# one only if none has (a firmware without a supervisor, a start over SSH),
-# checking once more right before it does, so the user never ends up on a
-# black screen and never gets two launchers either.
+# The supervisor always gets the first go. A watcher left behind waits for a
+# MainUI to appear: ten seconds, or up to forty while a supervisor that will
+# bring one back is still alive (one left paused by anything is let go). Only
+# when none has come does it start one (a firmware without a supervisor, a
+# start over SSH), checking right before it does, and for a minute after that
+# it closes its own again if the firmware's appears after all: never a black
+# screen, never two launchers. Last, it notes in errors.txt anything other
+# than MainUI that still holds the display — a process JukaHub left behind
+# would draw over the menu, which reads as a glitching menu.
+KEEPERS="$ANCESTOR_LOOPS $RESUMED_PIDS"
 (
     # The nohup of the old code: a hang-up as the session ends must not take
     # the watcher (or the MainUI it starts) with it.
     trap '' HUP
     n=0
-    while [ "$n" -lt 10 ]; do
+    OWN_UI=""
+    while :; do
         sleep 1
-        [ -n "$(ui_pid)" ] && exit 0
         n=$((n + 1))
-    done
-    for UI in \
-        /usr/trimui/bin/MainUI \
-        /usr/bin/MainUI \
-        /usr/local/bin/MainUI \
-        /mnt/SDCARD/System/usr/trimui/bin/MainUI
-    do
-        if [ -x "$UI" ]; then
-            [ -n "$(ui_pid)" ] && exit 0
-            say "no launcher came back after 10s; starting $UI"
-            cd "$(dirname "$UI")" 2>/dev/null
-            exec "$UI" >/dev/null 2>&1
+        UI_NOW="$(ui_pid)"
+        if [ -n "$UI_NOW" ]; then
+            UI_FROM=""
+            for P in $UI_NOW; do stat_of "$P" && UI_FROM="$UI_FROM $(describe "$ST_PPID")"; done
+            say "MainUI is back after ${n}s (pid $UI_NOW, started by${UI_FROM:- ?})"
+            break
         fi
+        ALIVE=""
+        for K in $KEEPERS; do
+            stat_of "$K" || continue
+            case "$ST_STATE" in
+                Z) continue ;;
+                T)
+                    kill -CONT "$K" 2>/dev/null
+                    say "the firmware launcher was still paused; let it run: $(describe "$K")"
+                    ;;
+            esac
+            ALIVE=1
+        done
+        [ "$n" -lt 10 ] && continue
+        [ -n "$ALIVE" ] && [ "$n" -lt 40 ] && continue
+        for UI in \
+            /usr/trimui/bin/MainUI \
+            /usr/bin/MainUI \
+            /usr/local/bin/MainUI \
+            /mnt/SDCARD/System/usr/trimui/bin/MainUI
+        do
+            [ -x "$UI" ] || continue
+            [ -n "$(ui_pid)" ] && break
+            say "no launcher came back after ${n}s; starting $UI"
+            (cd "$(dirname "$UI")" 2>/dev/null && exec "$UI") >/dev/null 2>&1 &
+            OWN_UI=$!
+            break
+        done
+        [ -n "$OWN_UI" ] || [ -n "$(ui_pid)" ] || say "no launcher came back and none was found to start"
+        break
     done
-    say "no launcher came back and none was found to start"
+    # Never two menus: the firmware's own MainUI wins over the one started here.
+    if [ -n "$OWN_UI" ]; then
+        n=0
+        while [ "$n" -lt 60 ] && kill -0 "$OWN_UI" 2>/dev/null; do
+            sleep 1
+            n=$((n + 1))
+            for P in $(ui_pid); do
+                [ "$P" = "$OWN_UI" ] && continue
+                kill -9 "$OWN_UI" 2>/dev/null
+                say "the firmware started its own MainUI after all (pid $P); closed the one started here"
+                break 2
+            done
+        done
+    fi
+    # What still holds the display a few seconds after the menu is back.
+    sleep 3
+    UI_NOW=" $(ui_pid) "
+    UI_COUNT=0
+    for P in $UI_NOW; do UI_COUNT=$((UI_COUNT + 1)); done
+    [ "$UI_COUNT" -gt 1 ] && say "display: $UI_COUNT MainUIs are running (pid$UI_NOW)"
+    for P in $(display_holders); do
+        case "$UI_NOW" in *" $P "*) continue ;; esac
+        [ "$P" = "$$" ] && continue
+        stat_of "$P" || continue
+        [ "$ST_STATE" = Z ] && continue
+        say "display: still held after JukaHub exited by $(describe "$P"), parent $(describe "$ST_PPID")"
+    done
 ) </dev/null >/dev/null 2>&1 &
 
 exit 0

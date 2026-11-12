@@ -316,11 +316,12 @@ func chooseWinePrefix(env map[string]string, probe bool) winePrefixPlace {
 
 // ── Running Wine's own tools ─────────────────────────────────────────────
 
-// wineCmdEnv is the environment for a Wine helper: JukaHub's own with env on
-// top; headless also drops DISPLAY and WAYLAND_DISPLAY, so wineboot never
-// tries to open a window.
+// wineCmdEnv is the environment for a Wine helper: the firmware's library and
+// tool paths, as for a screen-taking child, with the runtime's env on top.
+// headless also drops DISPLAY and WAYLAND_DISPLAY, so wineboot never tries to
+// open a window. Wineboot must use the same libraries as the later Wine launch.
 func wineCmdEnv(env map[string]string, headless bool) []string {
-	list := mergeGameProfileEnv(os.Environ(), env)
+	list := mergeGameProfileEnv(screenChildEnv(os.Environ()), env)
 	if !headless {
 		return list
 	}

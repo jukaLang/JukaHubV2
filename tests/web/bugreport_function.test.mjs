@@ -15,7 +15,7 @@ function report(over = {}) {
   return {
     schema: 1, kind: 'bug_report', app: 'JukaHub', id: 'JH-7K2Q9M', category: 'media',
     title: 'Video freezes after resume', description: 'Paused a video, slept the device, woke it: frozen.',
-    version: 'v0.4.0', release: 'JukaHub-20261101000000', device: 'TrimUI Smart Pro', platform: 'TrimUI',
+    version: '2026-11-01', release: 'JukaHub-20261101000000', device: 'TrimUI Smart Pro', platform: 'TrimUI',
     os: 'linux', arch: 'arm64', created: '2026-11-10T12:00:00Z', ...over,
   };
 }
@@ -23,7 +23,7 @@ function report(over = {}) {
 function post(body, headers = {}) {
   return new Request(ENDPOINT, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'user-agent': 'JukaHub-BugReport/v0.4.0', ...headers },
+    headers: { 'content-type': 'application/json', 'user-agent': 'JukaHub-BugReport/test', ...headers },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
@@ -80,7 +80,7 @@ test('a valid report becomes an issue and the device gets its number', async () 
   const sent = JSON.parse(create.init.body);
   assert.equal(sent.title, '[Bug] Video freezes after resume (JH-7K2Q9M)');
   assert.deepEqual(sent.labels, ['bug', 'from-device']);
-  for (const want of ['frozen', '| Device | TrimUI Smart Pro |', '| Reference | JH-7K2Q9M |', 'v0.4.0 (JukaHub-20261101000000)']) {
+  for (const want of ['frozen', '| Device | TrimUI Smart Pro |', '| Reference | JH-7K2Q9M |', '2026-11-01 (JukaHub-20261101000000)']) {
     assert.ok(sent.body.includes(want), `issue body lacks ${want}:\n${sent.body}`);
   }
 });
@@ -125,7 +125,7 @@ test('a full report written with \\u escapes still fits under the size cap', asy
   assert.equal((await c.handle(post(text), at('203.0.113.9'))).status, 201);
 });
 
-test('without a token the device is told to use the phone', async () => {
+test('without a token the service reports missing setup', async () => {
   for (const env of [{ JUKAHUB_GITHUB_TOKEN: '' }, { JUKAHUB_ISSUES_REPO: 'not a repo' }]) {
     const c = collector(env);
     const resp = await c.handle(post(report()), at('203.0.113.9'));

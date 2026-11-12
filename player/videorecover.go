@@ -385,6 +385,23 @@ func mediaNoteStreamOpened(page string) {
 	mediaStreamHealth.mu.Unlock()
 }
 
+// mediaNoteDownloadFailed records that page's download failed as well. The
+// skip above sends a page (or every YouTube video) to the download because
+// the stream just failed; when the download fails too it is no better than
+// the stream, and keeping the skip would only send every next play into the
+// same failing download. The next play streams first again.
+func mediaNoteDownloadFailed(page string) {
+	page = strings.TrimSpace(page)
+	mediaStreamHealth.mu.Lock()
+	delete(mediaStreamHealth.skipPage, page)
+	if youtubeVideoID(page) != "" {
+		mediaStreamHealth.skipAll = time.Time{}
+		mediaStreamHealth.failures = 0
+		mediaStreamHealth.lastFailed = ""
+	}
+	mediaStreamHealth.mu.Unlock()
+}
+
 // mediaClaimRecovery reports whether page may fall back to a download now,
 // and records that it did.
 func mediaClaimRecovery(page string, now time.Time) bool {
@@ -470,6 +487,9 @@ func mediaRecoverStream(config *Config, f *mediaStreamFailure) {
 	// download is the same video, so Back from it does what Back from the
 	// stream would have.
 	mediaRestorePlayOrigin(f.origin)
+	// The URL that failed is the native download's last resort when yt-dlp
+	// finds no way (ytdownload.go): ffmpeg refused it, a ranged fetch may not.
+	ytdlRememberFailedStream(page, f.source)
 	mediaDownloadInstead(config, page, f.resumeAt())
 }
 

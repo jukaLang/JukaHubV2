@@ -88,7 +88,10 @@ stock menu has been up for two seconds and has stopped writing its settings
 then runs JukaHub with its own environment and services, and brings the stock
 menu back when you quit JukaHub, exactly as after an app started from the menu.
 On a firmware whose loop reads the queue before it opens the menu, JukaHub
-appears without the menu ever showing.
+appears without the menu ever showing. When the menu did open, the screen goes
+black as it closes (instead of keeping its last, frozen picture) and JukaHub's
+boot fades in from that black; a loop that reopens the menu instead of running
+the queue is not shown the menu a third time.
 
 The hook never holds the boot up (it queues JukaHub and does the waiting in the
 background), is safe whether the firmware runs or sources it, and starts
@@ -163,6 +166,7 @@ identical — a test rejects the build if they differ.
 | The app appears but exits immediately | Check `errors.txt` — usually `JukaHub` is not executable yet (`chmod +x`) or a library is missing. |
 | Text is missing or shows as boxes | `Inter-Regular.ttf` is missing from the app folder. |
 | **Start JukaHub at login** is on, but the device boots to the stock menu | Read `Apps/JukaHub/autostart.log`: each boot says what the hook did (no lines at all means the firmware never ran `System/starts/jukahub-autostart.sh`). One boot on the stock menu after a start that hung (and was forced off) is deliberate; the next boot tries again. Send the log with `errors.txt` if it keeps happening. |
+| The stock menu glitches or flickers after leaving JukaHub, or JukaHub flickers when it starts with the device | Send `errors.txt` and `autostart.log`. `launch.sh` writes who started it, what it paused (by process id — `/tmp/jukahub-paused`) and let go again, when MainUI came back and from where, and any program other than MainUI still holding the screen a few seconds later (`display: still held after JukaHub exited by …`); JukaHub itself logs a MainUI or another program drawing beside it (`display: …`) and what it left running as it quit (`exit: still running as JukaHub quits: …`). |
 | The screen flickers between MainUI and JukaHub after an update | The `launch.sh` on the card is older than the app. Update once more (the release archive replaces `launch.sh`), or copy `launch.sh` from the archive into `Apps/JukaHub/`, then reboot. |
 | YouTube search fails | Check that `required/yt-dlp` exists; Wi-Fi is required. Also see `logs.txt` (the **Logs** scene in the Start menu). |
 | A video goes black for a second, then says it is downloading | The stream would not open (`errors.txt`: `decoder for … stopped …`), so JukaHub downloads the video to the SD card and plays it from there. If the download fails too, the message says why. |

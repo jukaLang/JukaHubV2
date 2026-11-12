@@ -11,7 +11,171 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Added
+
+- **Juka talks.** The voice orb says Juka's answers out loud — and the time,
+  the date, the battery and the help line — and keeps its bubble up until it
+  has finished; any button stops it. **Settings → Voice & AI** (a new page)
+  picks when (the voice assistant, by default; Chat's AI tab too; or never)
+  and which of Groq's six Orpheus voices, and **Hear Juka** tests it. Groq's
+  free voice allows a few minutes a day, so only an answer's first 600
+  characters are spoken, a sentence at a time; without it (no key, offline,
+  the allowance used up, its one-time terms not accepted — Settings links
+  them) a PC speaks with Windows' own voice and the handheld keeps the answer
+  on screen. Music and video duck while Juka talks (`player/tts_*.go`,
+  `player/voiceai_settings.go`, `player/voiceorb.go`, `player/sound.go`).
+- **Teach the voice assistant your own words.** **Settings → Voice & AI →
+  Voice shortcuts** (or the Voice command page's **Shortcuts**, or "open voice
+  shortcuts"): say or type a word, pick what it opens — any screen, setting,
+  app, game, file or emulator, a voice command such as "brightness 10", or a
+  web page — and save. The orb, the Voice command page and the phone then put
+  it before the built-in commands ("cancel" and "help" excepted); up to 50
+  words (`player/voiceshortcuts.go`, `player/voiceshortcuts_ui.go`).
+- **Emulators and their menus by voice.** Every tile of the Emulators page is
+  a voice target ("open PPSSPP", "the GBA emulator"), as are "RetroArch menu",
+  "control profiles" and "update emulators": RetroArch, a PC emulator and
+  JukaHub's own PPSSPP start without a game, on their own menu; other tiles
+  open the Emulators page on that tile, and nothing is installed by voice.
+  "Open the emulators" used to land on the Settings row of that name
+  (`player/voiceemu.go`, `player/voicecmd_resolve.go`).
+- **Ask Juka about the game you're playing.** With **Settings → Voice & AI →
+  Game assistant** on (it is off by default), Juka is told which library game
+  is running, or ran in the last half hour, so "how do I beat this boss?" in
+  Chat or the orb means that game. On a TrimUI, hold **Select + R2** in a
+  game: the game pauses, its picture dims behind the voice orb and Juka
+  listens; **A** asks again, **B** or **Menu** goes back to the game, which
+  also resumes by itself after three minutes. **Juka can see the game screen**
+  sends the paused picture with the question. Nothing runs during a game but a
+  small button watcher (`player/gameassist*.go`, `player/main.go`).
+- **Juka looks at pictures and videos.** In the Juka AI tab a picture goes to
+  Groq's vision model (Qwen 3.8; Muse for more than three), a video as three
+  frames plus what is said in its first ten minutes, a recording as its words;
+  follow-ups keep them, the bubble says "Watching the video…" while ffmpeg
+  works, and HEIC and other formats nothing here opens are refused when
+  attached (`player/groqvision.go`, `player/vision_chat.go`,
+  `player/vision_video.go`, `player/chatsync.go`).
+- **R2 is the voice typing button.** With the on-screen keyboard up, R2 starts
+  listening and the next press sends — in the browser's address bar too; the
+  footer says "R2 Voice" (F4 on a keyboard). **Settings → Voice & AI → Start
+  voice typing when the keyboard opens** listens as soon as a Chat message's
+  keyboard opens and stops quietly when nothing is said; passwords, keys,
+  addresses and searches never listen (`player/vkvoice_button.go`,
+  `player/vkvoice_settings.go`, `player/controller.go`).
+- **JukaHub shows how much memory it uses.** The Hardware screen's Memory tile
+  and About's System card read "JukaHub N MB · M MB free" (resident memory on
+  Linux, the working set on Windows), and the log gets a memory line a minute
+  in and every five minutes after (`player/memstat*.go`,
+  `player/systool_hw.go`, `player/about.go`).
+- **Quick Settings opens the Bluetooth page.** A **Bluetooth Devices** row sits
+  under Wi-Fi Networks wherever `bluetoothctl` is present, and Home search
+  finds the page for "connect headphones", "bluetooth speaker", "keyboard" and
+  "mouse" (`player/quicksettings.go`, `player/homesearch_index.go`).
+- **The Smart Home Tailscale row names the device's address and its peers.**
+  `tailscale status --json` now yields each node's name, address and online
+  state, listed in a stable order beside this device's own address
+  (`player/smart_home.go`, `player/smart_home_ui.go`).
+- **Customized built-in elements work in the web DOM.** `customElements.define(name, cls, { extends: "button" })` now upgrades `<button is="name">` from parsed markup, `innerHTML` and `createElement(tag, { is })`, instead of registering a definition that never ran (`player/webdom/20_nodes.js`, `player/webdom/25_elements.js`, `player/webdom/50_shadow_ce.js`).
+- **A typed console address is listed while it pairs.** Adding a console by
+  address now shows an unsaved row with the busy line during the PS4 and PS5
+  handshakes, and a failure stays listed until the panel closes
+  (`player/psremote_ui.go`).
+
+### Changed
+
+- **The liquid background moves smoothly.** The water is drawn between its
+  30 Hz steps, on a mesh twice as fine as its grid with smooth heights and a
+  linearly filtered wallpaper, so ripples no longer jump in 33 ms steps or show
+  facets and blocky pixels, and while it moves it asks for the active frame
+  rate instead of idling down to about 15 fps — 30 fps on the handheld, also
+  under Low Power (its factory setting); Battery Saver keeps 24. A playing GIF
+  wallpaper and the living background ask for the frames they need the same
+  way (`player/liquidbg.go`, `player/gifwall.go`, `player/adaptive.go`).
+- **Back online faster after the handheld sleeps.** The TrimUI firmware turns
+  Wi-Fi off for every sleep; JukaHub now notices the wake within a second and
+  checks the internet every 1.5 s until it answers, instead of on its next
+  20-second tick, nudges a slow radio (reconnect, reassociate, a DHCP renew)
+  without starting anything behind the firmware's back, and reopens the
+  community chat at once so Discord replays what was missed. Meanwhile Chat
+  says "Reconnecting to Wi-Fi…", a question for Juka waits and goes out the
+  moment the network is back, and the orb and voice typing hold a clip for up
+  to 15 s; one log line per wake says how long it took
+  (`player/wake_resume*.go`, `player/wifi_resume*.go`, `player/netmon.go`,
+  `player/chatsync.go`).
+- **Starting with the device is one hand-over.** When the boot hook has to
+  close the stock menu, the screen goes black as it closes and JukaHub's boot
+  fades in from there, instead of freezing on the menu and then jumping to the
+  boot logo; a firmware that reopens the menu instead of starting JukaHub sees
+  it once less (`player/autostart.go`, `player/bootos.go`).
+
+- **A time zone picked in Settings reaches games without a restart.** Every
+  game child's `TZ` is replaced by the zone JukaHub is using now, so a new zone
+  applies to the next launch; the Date & time row no longer says a restart is
+  needed (`player/childenv.go`, `player/gameprofiles.go`, `player/ports.go`).
+
+- **The config watcher sleeps while the Live Builder is unpaired.** On the
+  handheld the two-second poll now runs only while a builder session is up, so
+  an idle speaker stops statting the config; a push still reloads through
+  `NotifyWritten`, and pairing takes a fresh baseline instead of replaying what
+  changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
+
 ### Fixed
+
+- **Leaving JukaHub no longer leaves CrossMix glitchy.** `launch.sh` started a
+  second stock menu when the firmware took more than ten seconds to bring its
+  own back, and both drew to the screen; it now waits for the firmware's
+  launcher while it is alive and closes its own if the firmware's appears. It
+  also pauses and resumes the launcher loop by process id (where busybox names
+  every script "sh", pausing "runtrimui.sh" by name found nothing), records
+  what it paused in `/tmp/jukahub-paused`, starts only one JukaHub, and puts
+  the CPU governor and limits back after any exit, a kill or a crash included.
+  For a minute after starting and after each game JukaHub logs any MainUI or
+  other program drawing beside it (and stops a stray MainUI), and as it quits
+  it lists what is still running (`player/launch.sh`, `player/autostart.go`,
+  `player/displayguard_linux.go`, `player/exitguard.go`).
+- **A video that would not stream now really downloads, and shows it.** The
+  fallback asked YouTube only for a single muxed file, which it no longer
+  gives a handheld without a JavaScript runtime, and its progress was never
+  drawn, so the card spun on "Loading…" until it failed. It now joins the
+  separate picture and sound with ffmpeg, tries the HLS copies and the muxed
+  file next and finally fetches the stream in 10 MB ranges without yt-dlp; the
+  card shows the percentage, speed and time left (**B** cancels), a slow
+  download runs while data keeps coming instead of stopping at five minutes,
+  cancelling stops yt-dlp's whole process group, and one toast says why when
+  nothing worked (`player/ytdownload.go`, `player/ytdownload_ui.go`,
+  `player/loadingcard.go`, `player/streaming.go`, `player/videorecover.go`).
+- **Saving YouTube videos uses yt-dlp's own clients.** The Downloads queue
+  forced the android and web clients (with a malformed second argument), which
+  YouTube refuses without tokens the handheld cannot make
+  (`player/downloads.go`).
+
+- **Labels cannot print a protected setting.** `$name` substitution leaves
+  protected names and `ENC:` values as their placeholder, so a design label
+  cannot show a token in a screenshot or the companion's screen view
+  (`player/core.go`).
+
+- **Long About values stay inside their cards.** Build and credit values are ellipsized against the width their label leaves, so a long platform or device name cannot run through the card border (`player/about.go`).
+- **Remote Play uses the home address only when this console answers there.**
+  The home-network probe compares the discovery answer's host-id with the
+  pairing's MAC, so another PlayStation at the same private address counts as
+  not at home and the internet address is used
+  (`player/psremote_stream_opts.go`).
+- **PS Remote Play's console options cannot overwrite a pairing saved at the
+  same moment.** `psUpdateConsole` and `psSaveStreamSettings` load and save
+  `psremote.json` under one lock, and a two-writer test now holds both to it
+  (`player/psremote_writers_test.go`).
+- **The Phone Companion's PIN budget is per address.** A paired phone polling
+  on its own address no longer clears a guesser's failures and lockout, and a
+  success clears only its own address's budget (`player/companion.go`,
+  `player/companion_cast.go`, `player/psn_signin.go`, `player/voicecmd_phone.go`).
+- **A clock jump cannot replay a scheduled task's missed runs.** The
+  scheduler's run decision is jump-aware: a forward jump collapses everything it
+  passed into a single run and records the last of them, and a backward jump
+  cannot re-arm a run already handled (`player/clockjump.go`,
+  `player/sched_model.go`).
+- **A cross-origin script's error no longer leaks its text or address.** A
+  classic script served by another origin reports `Script error.` with an empty
+  filename and a zero line and column, while the debug log keeps the real text
+  (`player/webdom/85_scripts.js`).
 
 - **An x86-64 PC no longer asks for Box64 to run its own Wine.** A Wine on
   `PATH` is used as before; without one, Setup's first row installs the same
@@ -107,7 +271,34 @@ For anything older, the git log and the
   footer hints name "D-Pad", "Up/Down" and "Left/Right" instead of arrow
   glyphs (Screen Share, Clipboard, the memory tool, Music, the terminal and
   JukaLand), and the brightness, volume and onboarding footers spell them
-  `Left/Right` and `Up/Down` (UX-3, UX-13).
+  `Left/Right` and `Up/Down` (UX-3, UX-13). The second sweep caught the
+  leftovers: the Browser's links line, the bookmarks and cookies panels,
+  curation, emulator and save-manager toasts, onboarding's ROM scan, the
+  terminal's skipped-line note, Syncthing's skipped-save note and the
+  diagnostics report now say "3 files", never "3 file(s)".
+- **The progress track follows the theme.** The track token was a hardcoded
+  white 34/255 for every preset, so on the shipped Light theme the track of
+  every progress bar (Download rows, the storage bar, installs, seeks, the
+  activity rail) was white on a #f0f2f5 page and vanished, leaving a fill
+  floating in space. `ApplyThemeColors` now re-inks the track from the
+  preset's text colour at the same alpha. Two Download bars that forced the
+  token to opaque white — a solid white "track" that read as a full bar at
+  0% — draw the translucent token, and the legend key uses its opaque swatch.
+- **A scrollbar thumb stays in its track.** The thumb geometry floored at
+  24 px and offset by `h - thumbH`, so a list body shorter than 24 px drew its
+  thumb above or below the track it belonged to. The geometry is one helper
+  now, clamps the thumb to the track and treats a NaN fraction as a thumbless
+  track instead of an undefined offset.
+- **The full-screen now-playing title centres on what it draws.** The screen
+  measured the raw filename, then drew the ellipsized line at that x, so a long
+  filename started left of the canvas (a 2000 px title on a 1280 px screen
+  began at -360) and lost its left half off the edge. The line is measured
+  after truncation now, the artist/meta line is ellipsized to the same budget,
+  and the placement never starts left of the screen.
+- **The Downloads list stays inside its panel.** When the tabs and the storage
+  card left no room, the viewport's fallback set the list bottom to
+  `listTop + rowH`, past the panel's footer, so the clipped list painted over
+  the card frame. A degenerate panel collapses the viewport instead.
 - **Regexps compile on first use.** The last package-level patterns in
   `package main` — Chat's links and mentions, label substitution, the APK
   store's ID and digest checks, bluetoothctl parsing, disc and PPSSPP version
@@ -121,6 +312,19 @@ For anything older, the git log and the
   reader's tag scanner (found by `make check`'s WebDOM parity suite).
 
 ### Added
+
+- **The D-pad reachability check is a test now.** `TestShippedConfigsAreDpadReachable`
+  walks every scene's focus graph in both shipped designs and names any control
+  a pad cannot reach, instead of relying on a manual sweep
+  (`player/reachability_test.go`).
+- **More console folders in the game library.** `romSystemAliases` now covers
+  Arcade/FBNeo/MAME, Atari 2600/5200/7800/Jaguar/Lynx, WonderSwan and its
+  Color, Neo Geo Pocket and its Color, Neo Geo CD, Sega CD, 32X, PICO-8 and
+  DOS under the folder names the stock firmware, CrossMix and No-Intro sets
+  use; every system with a libretro core names it in `defaultCoreForSystem`
+  (`fbneo`, `stella`, `prosystem`, `mednafen_wswan`, `mednafen_ngp`, `neocd`,
+  `genesis_plus_gx`, `picodrive`, `dosbox`), and the scan recognises their
+  cart extensions (LIB-2).
 
 - **Windows programs on the Smart Pro.** Windows Apps now runs `.exe` programs
   under Box64 and Wine 10.0. One press — **A** on a program, or Setup's first

@@ -585,18 +585,20 @@ func (s *companionServer) handlePSNPage(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-store")
 	// The page links out to Sony, and its own address carries the PIN.
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	if s.throttled() {
+	addr := castHost(r.RemoteAddr)
+	now := time.Now()
+	if s.throttled(addr, now) {
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
 	}
 	if !s.authorized(r) {
-		s.noteFailure()
+		s.noteFailure(addr, now)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, companionLockedPage)
 		return
 	}
-	s.noteSuccess()
+	s.noteSuccess(addr)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return

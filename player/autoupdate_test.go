@@ -23,7 +23,7 @@ func TestReleaseTimeFromTag(t *testing.T) {
 	if !got.Equal(want) {
 		t.Fatalf("releaseTimeFromTag = %s, want %s", got, want)
 	}
-	for _, bad := range []string{"", "v0.4.0", "JukaHub-latest", "JukaHub-2026"} {
+	for _, bad := range []string{"", "v1.2.3", "JukaHub-latest", "JukaHub-2026"} {
 		if _, ok := releaseTimeFromTag(bad); ok {
 			t.Errorf("tag %q must not parse as a release time", bad)
 		}

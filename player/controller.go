@@ -513,6 +513,11 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 		return false
 	case sdl.CONTROLLER_AXIS_TRIGGERRIGHT:
 		if triggerPressedEdge(1, e.Value) {
+			// R2 is voice typing while the on-screen keyboard is up
+			// (vkvoice_button.go).
+			if vkVoiceTrigger(config) {
+				return true
+			}
 			if inmapTriggerPress(inmapBtnR2, config) {
 				return true
 			}

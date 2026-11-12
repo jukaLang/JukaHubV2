@@ -331,7 +331,7 @@ func onboardingStatus(config *Config, kind string) string {
 		if onboarding.roms == nil {
 			return "ROM scan has not run yet."
 		}
-		return fmt.Sprintf("Found %d ROM(s) across %d system(s).", len(onboarding.roms.Games), len(onboarding.roms.Counts))
+		return "Found " + pluralizeCount(len(onboarding.roms.Games), "ROM", "ROMs") + " across " + pluralizeCount(len(onboarding.roms.Counts), "system", "systems") + "."
 	case "artwork":
 		return artworkFetchSummary()
 	case "tools":
@@ -348,11 +348,12 @@ func onboardingStatus(config *Config, kind string) string {
 	}
 }
 
-// openSystemSettingsPage opens the operating system's own Wi-Fi ("wifi") or
-// date and time ("timezone") page: a Settings deep link on Windows and macOS,
-// the desktop's settings app on a Linux desktop. It fails where there is no
-// such page — the handheld and any Linux without those tools, where JukaHub's
-// own screens answer instead (openFirstRunSettings).
+// openSystemSettingsPage opens the operating system's own Wi-Fi ("wifi"), date
+// and time ("timezone") or Bluetooth ("bluetooth") page: a Settings deep link
+// on Windows and macOS, the desktop's settings app on a Linux desktop. It fails
+// where there is no such page — the handheld and any Linux without those tools,
+// where JukaHub's own screens answer instead (openFirstRunSettings, the
+// Bluetooth page).
 func openSystemSettingsPage(kind string) error {
 	var command string
 	var args []string
@@ -360,15 +361,21 @@ func openSystemSettingsPage(kind string) error {
 	case "windows":
 		command = "rundll32"
 		target := "ms-settings:network-wifi"
-		if kind == "timezone" {
+		switch kind {
+		case "timezone":
 			target = "ms-settings:dateandtime"
+		case "bluetooth":
+			target = "ms-settings:bluetooth"
 		}
 		args = []string{"url.dll,FileProtocolHandler", target}
 	case "darwin":
 		command = "open"
 		target := "x-apple.systempreferences:com.apple.preference.network"
-		if kind == "timezone" {
+		switch kind {
+		case "timezone":
 			target = "x-apple.systempreferences:com.apple.Date-Time-Settings.extension"
+		case "bluetooth":
+			target = "x-apple.systempreferences:com.apple.preferences.Bluetooth"
 		}
 		args = []string{target}
 	default:
@@ -385,24 +392,34 @@ func openSystemSettingsPage(kind string) error {
 	return nil
 }
 
-// linuxDesktopSettingsCommand is the desktop tool for a first-run page on a
-// real Linux desktop: GNOME's settings for either page, NetworkManager's
-// editor for Wi-Fi when GNOME's is missing. Nothing on the handheld (which has
-// neither) or without a graphical session.
+// linuxDesktopSettingsCommand is the desktop tool for a system page on a real
+// Linux desktop: GNOME's settings for any of them, NetworkManager's editor for
+// Wi-Fi and Blueman for Bluetooth when GNOME's is missing. Nothing on the
+// handheld (which has none of them) or without a graphical session.
 func linuxDesktopSettingsCommand(kind string) (string, []string) {
 	if IsTrimuiDevice() || (os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "") {
 		return "", nil
 	}
 	if app := linuxDesktopSettingsApp(); app != "" {
 		page := "wifi"
-		if kind == "timezone" {
+		switch kind {
+		case "timezone":
 			page = "datetime"
+		case "bluetooth":
+			page = "bluetooth"
 		}
 		return app, []string{page}
 	}
-	if kind == "wifi" {
-		if p, err := exec.LookPath("nm-connection-editor"); err == nil && p != "" {
-			return "nm-connection-editor", nil
+	fallback := ""
+	switch kind {
+	case "wifi":
+		fallback = "nm-connection-editor"
+	case "bluetooth":
+		fallback = "blueman-manager"
+	}
+	if fallback != "" {
+		if p, err := exec.LookPath(fallback); err == nil && p != "" {
+			return fallback, nil
 		}
 	}
 	return "", nil
@@ -465,7 +482,7 @@ func onboardingPerformAction(config *Config) {
 	case "roms":
 		report := scanROMLibrary(romLibraryRoots())
 		onboarding.roms = &report
-		onboarding.info = fmt.Sprintf("Scan complete: %d ROM(s) across %d system(s).", len(report.Games), len(report.Counts))
+		onboarding.info = "Scan complete: " + pluralizeCount(len(report.Games), "ROM", "ROMs") + " across " + pluralizeCount(len(report.Counts), "system", "systems") + "."
 	case "artwork":
 		if onboarding.roms == nil {
 			report := scanROMLibrary(romLibraryRoots())

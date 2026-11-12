@@ -669,13 +669,10 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		}
 
 		// ── Footer ─────────────────────────────────────────────────────
-		// The build on the left (this is the system menu, where a bug report
-		// looks for it), and on the right the power key: X asks to quit.
+		// The power key stays on the right: X asks to quit.
 		if captionFont != nil {
 			footTop := menuY + menuH - startMenuFootH
 			textY := footTop + (startMenuFootH-int32(captionFont.Height()))/2
-			ver := versionDisplayString(config)
-			renderText(renderer, config, captionFont, ver, ColorTextTertiary(), menuX+20, textY)
 			const powerKey, powerLabel = "X", "Quit JukaHub"
 			badgeH := footerBadgeHeight(captionFont)
 			badgeW := footerBadgeWidth(captionFont, hintKeyFor(powerKey, powerLabel), 6, badgeH)

@@ -98,6 +98,59 @@ var romSystemAliases = map[string]romSystem{
 	"x360":                 {"Xbox 360", "Microsoft - Xbox 360"},
 	"xbox 360":             {"Xbox 360", "Microsoft - Xbox 360"},
 	"microsoft - xbox 360": {"Xbox 360", "Microsoft - Xbox 360"},
+	// The rest of the TrimUI core inventory (emusystems.go): the folder names
+	// the firmware, CrossMix and No-Intro sets use for systems the library
+	// already had a core for but no scan alias.
+	"arcade":   {"Arcade", "MAME - Arcade"},
+	"mame":     {"Arcade", "MAME - Arcade"},
+	"fbneo":    {"Arcade", "MAME - Arcade"},
+	"fba":      {"Arcade", "MAME - Arcade"},
+	"mame2003": {"Arcade", "MAME - Arcade"},
+	"mame2010": {"Arcade", "MAME - Arcade"},
+
+	"a2600":              {"Atari 2600", "Atari - Atari 2600"},
+	"atari2600":          {"Atari 2600", "Atari - Atari 2600"},
+	"atari - atari 2600": {"Atari 2600", "Atari - Atari 2600"},
+	"a5200":              {"Atari 5200", "Atari - Atari 5200"},
+	"atari5200":          {"Atari 5200", "Atari - Atari 5200"},
+	"a7800":              {"Atari 7800", "Atari - Atari 7800"},
+	"atari7800":          {"Atari 7800", "Atari - Atari 7800"},
+	"atari - atari 7800": {"Atari 7800", "Atari - Atari 7800"},
+	"jaguar":             {"Atari Jaguar", "Atari - Atari Jaguar"},
+	"atarijaguar":        {"Atari Jaguar", "Atari - Atari Jaguar"},
+	"lynx":               {"Atari Lynx", "Atari - Atari Lynx"},
+	"atarilynx":          {"Atari Lynx", "Atari - Atari Lynx"},
+	"atari - atari lynx": {"Atari Lynx", "Atari - Atari Lynx"},
+
+	"ws":                        {"WonderSwan", "Bandai - WonderSwan"},
+	"wonderswan":                {"WonderSwan", "Bandai - WonderSwan"},
+	"wsc":                       {"WonderSwan Color", "Bandai - WonderSwan Color"},
+	"wonderswan color":          {"WonderSwan Color", "Bandai - WonderSwan Color"},
+	"bandai - wonderswan":       {"WonderSwan", "Bandai - WonderSwan"},
+	"bandai - wonderswan color": {"WonderSwan Color", "Bandai - WonderSwan Color"},
+
+	"ngp":                        {"Neo Geo Pocket", "SNK - Neo Geo Pocket"},
+	"neogeopocket":               {"Neo Geo Pocket", "SNK - Neo Geo Pocket"},
+	"neogeo pocket":              {"Neo Geo Pocket", "SNK - Neo Geo Pocket"},
+	"ngpc":                       {"Neo Geo Pocket Color", "SNK - Neo Geo Pocket Color"},
+	"neogeo pocket color":        {"Neo Geo Pocket Color", "SNK - Neo Geo Pocket Color"},
+	"snk - neo geo pocket":       {"Neo Geo Pocket", "SNK - Neo Geo Pocket"},
+	"snk - neo geo pocket color": {"Neo Geo Pocket Color", "SNK - Neo Geo Pocket Color"},
+	"neocd":                      {"Neo Geo CD", "SNK - Neo Geo CD"},
+
+	"segacd":         {"Sega CD", "Sega - Sega CD"},
+	"sega cd":        {"Sega CD", "Sega - Sega CD"},
+	"scd":            {"Sega CD", "Sega - Sega CD"},
+	"sega - sega cd": {"Sega CD", "Sega - Sega CD"},
+	"32x":            {"32X", "Sega - 32X"},
+	"sega32x":        {"32X", "Sega - 32X"},
+	"sega - 32x":     {"32X", "Sega - 32X"},
+
+	// Systems with no libretro core: their own program plays the folder.
+	"pico8":  {"PICO-8", "PICO-8"},
+	"pico-8": {"PICO-8", "PICO-8"},
+	"dos":    {"DOS", "DOS"},
+	"dosbox": {"DOS", "DOS"},
 }
 
 var romFileExtensions = map[string]bool{
@@ -109,6 +162,10 @@ var romFileExtensions = map[string]bool{
 	".cdi": true, ".gdi": true, ".m3u": true, ".xiso": true,
 	".sms": true, ".gg": true, ".smd": true, ".fds": true, ".cso": true, ".rvz": true, ".wbfs": true,
 	".unf": true, ".unif": true, ".swc": true, ".fig": true,
+	// Atari, WonderSwan, Neo Geo Pocket, 32X and PICO-8 cart images. (.p8
+	// only: a .p8.png is also a picture the image viewer opens.)
+	".a26": true, ".a52": true, ".a78": true, ".lnx": true,
+	".ws": true, ".wsc": true, ".ngp": true, ".32x": true, ".p8": true,
 }
 
 // romSheetMaxBytes bounds how much of a .cue, .gdi or .m3u is read: real sheets
@@ -1106,5 +1163,5 @@ func artworkFetchSummary() string {
 		return "Stopped after " + itoa(artworkFetchState.done) + " of " + itoa(artworkFetchState.total) +
 			": " + itoa(artworkFetchState.fetched) + " saved. Press Fill Gaps to resume."
 	}
-	return "Saved " + itoa(artworkFetchState.fetched) + " image(s); " + itoa(artworkFetchState.skipped) + " already present; " + itoa(artworkFetchState.missing) + " not found."
+	return pluralizeCount(artworkFetchState.fetched, "image", "images") + " saved; " + itoa(artworkFetchState.skipped) + " already present; " + itoa(artworkFetchState.missing) + " not found."
 }

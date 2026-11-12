@@ -10,6 +10,7 @@ package main
 // styles working inside a card exactly as they do in the flow.
 
 import (
+	"math"
 	"sort"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -21,6 +22,49 @@ type flexCell struct {
 	sub   *webLayout
 	w     int32
 	align int
+}
+
+type webFlexItem struct {
+	blocks []webBlock
+}
+
+// A direct flex or grid child can contain several paragraphs. They share one
+// FlexItem number and must occupy one cell, rather than becoming separate
+// columns just because the child had an h2 followed by a p.
+func webGroupFlexItems(blocks []webBlock) []webFlexItem {
+	var grouped []webFlexItem
+	last := -1
+	for _, block := range blocks {
+		if block.FlexItem != last || block.FlexItem == 0 {
+			grouped = append(grouped, webFlexItem{})
+			last = block.FlexItem
+		}
+		grouped[len(grouped)-1].blocks = append(grouped[len(grouped)-1].blocks, block)
+	}
+	visible := grouped[:0]
+	for _, item := range grouped {
+		for _, block := range item.blocks {
+			if webItemVisible(block) {
+				visible = append(visible, item)
+				break
+			}
+		}
+	}
+	// `order` applies to flex and grid items, and equal values keep source
+	// order. The parser groups a card's paragraphs first, then this reorders
+	// whole cards rather than their individual blocks.
+	sort.SliceStable(visible, func(i, j int) bool {
+		return visible[i].blocks[0].Order < visible[j].blocks[0].Order
+	})
+	return visible
+}
+
+func webFlattenFlexItems(items []webFlexItem) []webBlock {
+	var blocks []webBlock
+	for _, item := range items {
+		blocks = append(blocks, item.blocks...)
+	}
+	return blocks
 }
 
 // webItemVisible reports whether a flex item has anything worth a column. A
@@ -40,7 +84,13 @@ func (l *webLayouter) layoutBlocksFlat(blocks []webBlock, padX, contentW int32) 
 	flat := make([]webBlock, len(blocks))
 	copy(flat, blocks)
 	for i := range flat {
-		flat[i].FlexGroup = 0
+		if len(flat[i].FlexTrail) > 0 {
+			flat[i].setFlexMembership(flat[i].FlexTrail[0])
+			flat[i].FlexTrail = flat[i].FlexTrail[1:]
+		} else {
+			flat[i].FlexGroup = 0
+			flat[i].FlexItem = 0
+		}
 	}
 	l.layoutBlocks(flat, padX, contentW)
 }
@@ -49,17 +99,19 @@ func (l *webLayouter) layoutBlocksFlat(blocks []webBlock, padX, contentW int32) 
 // flexible and should share whatever room is left over.
 func (l *webLayouter) itemWidth(b webBlock, avail int32) int32 {
 	scale := l.baseSize / 16
+	// flex-basis overrides width when both are present. A zero basis stays
+	// zero here and receives its share through flex-grow below.
+	if b.BasisPct > 0 {
+		return int32(float64(avail) * b.BasisPct / 100)
+	}
+	if b.FlexBasis >= 0 {
+		return int32(b.FlexBasis * scale)
+	}
 	if b.WidthPct > 0 {
 		return int32(float64(avail) * b.WidthPct / 100)
 	}
 	if b.Width > 0 {
 		return int32(b.Width * scale)
-	}
-	if b.BasisPct > 0 {
-		return int32(float64(avail) * b.BasisPct / 100)
-	}
-	if b.FlexBasis > 0 {
-		return int32(b.FlexBasis * scale)
 	}
 	return 0
 }
@@ -71,23 +123,18 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	if len(items) == 0 {
 		return
 	}
-	visible := make([]webBlock, 0, len(items))
-	for _, b := range items {
-		if webItemVisible(b) {
-			visible = append(visible, b)
-		}
-	}
-	if len(visible) == 0 {
+	grouped := webGroupFlexItems(items)
+	if len(grouped) == 0 {
 		return
 	}
-	items = visible
-	n := int32(len(items))
+	first := grouped[0].blocks[0]
+	n := int32(len(grouped))
 	if n == 1 {
-		l.layoutBlocksFlat(items, padX, contentW)
+		l.layoutBlocksFlat(grouped[0].blocks, padX, contentW)
 		return
 	}
 
-	gap := int32(items[0].FlexGapX * l.baseSize / 16)
+	gap := int32(first.FlexGapX * l.baseSize / 16)
 	if gap < 0 {
 		gap = 0
 	}
@@ -97,30 +144,117 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	// Wrapping containers on real pages are tag clouds and button rows: when
 	// the columns would be slivers, stacked text beats nine 40px columns.
 	minCol := int32(72)
-	if items[0].FlexWrap {
+	if first.FlexWrap {
 		minCol = 110
+	}
+	var rowEnds []int
+	gridCols := first.GridCols
+	if gridCols <= 0 && first.GridMin > 0 {
+		// `repeat(auto-fit, minmax(220px, 1fr))` has no fixed count: derive
+		// it from the measure. This is the card-grid recipe on most modern
+		// sites, and treating it as an unconstrained row produced slivers.
+		track := int32(first.GridMin * l.baseSize / 16)
+		if track < 1 {
+			track = 1
+		}
+		if track > contentW {
+			track = contentW
+		}
+		gridCols = int((contentW + gap) / (track + gap))
+		if gridCols < 1 {
+			gridCols = 1
+		}
+		if gridCols > len(grouped) {
+			gridCols = len(grouped)
+		}
+	}
+	if cols := gridCols; cols > 0 {
+		// Grid tracks may be explicit, but a handheld still needs readable
+		// columns. Reduce the count when the stated grid cannot fit here.
+		for cols > 1 && int32(cols)*minCol+int32(cols-1)*gap > contentW {
+			cols--
+		}
+		for end := min(cols, len(grouped)); ; end = min(end+cols, len(grouped)) {
+			rowEnds = append(rowEnds, end)
+			if end == len(grouped) {
+				break
+			}
+		}
+	} else if first.FlexWrap {
+		// Flex wrapping uses the items' own basis. Counting only a fixed
+		// minimum number of columns shrank 200px cards into 100px slivers
+		// just to keep every card on one line.
+		rowWidth := int32(0)
+		for i, item := range grouped {
+			basis := l.itemWidth(item.blocks[0], contentW)
+			if basis < minCol {
+				basis = minCol
+			}
+			if basis > contentW {
+				basis = contentW
+			}
+			if rowWidth > 0 && rowWidth+gap+basis > contentW {
+				rowEnds = append(rowEnds, i)
+				rowWidth = 0
+			}
+			if rowWidth > 0 {
+				rowWidth += gap
+			}
+			rowWidth += basis
+		}
+		rowEnds = append(rowEnds, len(grouped))
+	}
+	if len(rowEnds) > 1 {
+		start := 0
+		for _, end := range rowEnds {
+			if start > 0 {
+				gapPx := first.FlexGapY * l.baseSize / 16
+				gapRows := int(math.Ceil(gapPx / float64(l.rowH)))
+				if gapRows > 3 {
+					gapRows = 3
+				}
+				for j := 0; j < gapRows && len(l.layout.Rows) < webMaxRows; j++ {
+					l.layout.Rows = append(l.layout.Rows, webRow{Y: int32(len(l.layout.Rows)) * l.rowH})
+				}
+			}
+			l.layoutFlexRow(webFlattenFlexItems(grouped[start:end]), padX, contentW)
+			start = end
+		}
+		return
 	}
 	avail := contentW - gap*(n-1)
 	if avail < n*minCol {
-		l.layoutBlocksFlat(items, padX, contentW)
+		l.layoutBlocksFlat(webFlattenFlexItems(grouped), padX, contentW)
 		return
 	}
 
 	widths := make([]int32, n)
 	fixed := int32(0)
-	flexible := make([]int32, 0, n)
+	auto := make([]int, 0, n)
 	totalGrow := 0.0
-	for i, b := range items {
+	for _, item := range grouped {
+		if grow := item.blocks[0].FlexGrow; grow > 0 {
+			totalGrow += grow
+		}
+	}
+	for i, item := range grouped {
+		b := item.blocks[0]
 		w := l.itemWidth(b, avail)
+		if w <= 0 && totalGrow > 0 {
+			// An auto-sized label keeps a readable width while the item with
+			// flex-grow receives the rest. A growing zero-basis item needs a
+			// small floor so it does not disappear on a tight row.
+			w = 24
+			if b.FlexGrow <= 0 {
+				w = max(minCol, 110)
+			}
+		}
 		widths[i] = w
 		if w > 0 {
 			fixed += w
 			continue
 		}
-		flexible = append(flexible, int32(i))
-		if b.FlexGrow > 0 {
-			totalGrow += b.FlexGrow
-		}
+		auto = append(auto, i)
 	}
 
 	if fixed > avail {
@@ -140,24 +274,32 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		}
 	}
 
-	if left := avail - fixed; left > 0 && len(flexible) > 0 {
-		share := left / int32(len(flexible))
-		used := int32(0)
-		for k, idx := range flexible {
-			w := share
-			if totalGrow > 0 {
-				w = int32(float64(left) * items[idx].FlexGrow / totalGrow)
-			}
-			if w < 24 {
-				w = 24
-			}
-			if k == len(flexible)-1 {
-				if rest := left - used; rest > 0 {
-					w = rest
+	if left := avail - fixed; left > 0 {
+		if totalGrow > 0 {
+			// Every grow factor participates, including an item whose explicit
+			// flex-basis or width already gave it a starting size.
+			remaining := left
+			remainingGrow := totalGrow
+			for i, item := range grouped {
+				grow := item.blocks[0].FlexGrow
+				if grow <= 0 {
+					continue
 				}
+				add := remaining
+				if remainingGrow > grow {
+					add = int32(float64(remaining) * grow / remainingGrow)
+				}
+				widths[i] += add
+				remaining -= add
+				remainingGrow -= grow
 			}
-			widths[idx] = w
-			used += w
+		} else if len(auto) > 0 {
+			remaining := left
+			for i, idx := range auto {
+				share := remaining / int32(len(auto)-i)
+				widths[idx] = share
+				remaining -= share
+			}
 		}
 	}
 	for i := range widths {
@@ -172,7 +314,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	if totalW > contentW {
 		// The minimum column widths overflow the page: stack instead of
 		// painting text past the right edge.
-		l.layoutBlocksFlat(items, padX, contentW)
+		l.layoutBlocksFlat(webFlattenFlexItems(grouped), padX, contentW)
 		return
 	}
 
@@ -187,7 +329,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 	start := int32(0)
 	gapExtra := int32(0)
-	switch items[0].FlexJustify {
+	switch first.FlexJustify {
 	case webJustifyCenter:
 		start = free / 2
 	case webJustifyEnd:
@@ -206,12 +348,13 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	cells := make([]flexCell, 0, n)
 	maxRows := int32(0)
 	x := padX + start
-	for i, b := range items {
+	for i, item := range grouped {
+		b := item.blocks[0]
 		sub := &webLayout{RowH: l.rowH}
 		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
 			spaceWidths: l.spaceWidths, sanitized: l.sanitized}
-		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, widths[i])
-		align := items[i].FlexAlign
+		subLayouter.layoutBlocksFlat(item.blocks, 0, widths[i])
+		align := b.FlexAlign
 		if b.AlignSelf >= 0 {
 			align = b.AlignSelf
 		}

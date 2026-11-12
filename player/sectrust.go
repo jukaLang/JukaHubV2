@@ -155,7 +155,7 @@ func securityPostureRows(config *Config) []securityRow {
 	case !facts.loaded:
 		packages = "Checking…"
 	case facts.pkgIndex:
-		packages = fmt.Sprintf("%d package(s) available", facts.packages)
+		packages = pluralizeCount(facts.packages, "package", "packages") + " available"
 	}
 	rows = append(rows, securityRow{
 		ID:     "packages",

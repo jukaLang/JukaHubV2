@@ -167,6 +167,13 @@ recommendation therefore never points at a core the user does not have.
 
 ### Fetching newer builds
 
+On a TrimUI Smart Pro, opening **Emulators** also fetches the complete ARM64
+buildbot index in the background. Every published core that is not on the card
+appears as a **Not installed** tile, even when there is no ROM folder yet. Press
+**A** to download and activate that core; the same checksum and firmware-load
+checks apply. These are RetroArch cores, so installing one does not create a
+firmware `Emus/` launcher or make a console the hardware cannot run playable.
+
 **U** (or **L1**) on the Core-builds tab checks the libretro aarch64 buildbot
 and fills the pool with copies of any installed core whose build differs from
 the one the index lists. The comparison is the CRC32 the index publishes, so a
@@ -192,9 +199,10 @@ reason — "the 2026-11-09 build cannot load on this firmware: needs GLIBC_2.34;
 this firmware's libc.so.6 has up to GLIBC_2.33" — the installed core stays, and
 that exact build (by its checksum) is remembered in
 `data/performance/core-refused.json` so the daily check does not download it
-again; the next build the index lists is checked as usual. A core larger than
-the 96 MB a core download may be (a full MAME build can be) is refused and
-remembered the same way.
+again; the next build the index lists is checked as usual. Archives are
+streamed to the card, including MAME's build, which exceeds the old 96 MB
+limit. A corrupt archive over 512 MB or an extracted core over 1 GB is refused
+and remembered the same way.
 
 ### Core updates and your save states
 
@@ -237,10 +245,11 @@ firmware is refused before it replaces anything. Cores the buildbot does not
 carry, and cores on the firmware's read-only partition (`/usr/trimui/…`), are
 left alone.
 
-A pass stops while the card still has room. Every update writes the new build
-twice (the pool copy and the active file) and keeps the one it replaced, so a
+A pass stops while the card still has room. Every update stores the archive,
+writes the new build twice (the pool copy and the active file), and keeps the
+one it replaced, so a
 first pass over a whole shipped core set can need gigabytes; before each core
-the pass checks that 256 MB plus three copies of that core would stay free, and
+the pass checks that 256 MB plus four copies of that core would stay free, and
 otherwise ends with a toast that the card is almost full. The cores it did not
 reach keep their builds, and the next day's pass tries again.
 

@@ -904,8 +904,8 @@ func (h *HomeLayout) dynHeaderAbove(cur HomeFocusID) HomeFocusID {
 	if id := pick([]HomeFocusID{HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusQR}); id != "" {
 		return id
 	}
-	return pick([]HomeFocusID{HomeFocusBrightness, HomeFocusVolume, HomeFocusWiFi, HomeFocusWeather,
-		HomeFocusClock, HomeFocusNowPlaying, HomeFocusUpdate, HomeFocusTrophy, HomeFocusBell})
+	return pick([]HomeFocusID{HomeFocusBrightness, HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusWeather,
+		HomeFocusClock, HomeFocusNowPlaying, HomeFocusUpdate, HomeFocusTrophy, HomeFocusBug, HomeFocusBell})
 }
 
 // dynFooterBelow is where Down from a bottom tile goes: the power or edit

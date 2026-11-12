@@ -52,6 +52,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	snapPreviewHalt()
 	// The same goes for a video left playing (or floating) behind the launch.
 	mediaStopForScreenChild()
+	// And for Juka, mid-sentence (tts_api.go).
+	jukaSpeakStop()
 	if cmd == nil {
 		return
 	}
@@ -177,6 +179,10 @@ func stopScreenChildren(grace time.Duration) int {
 		// group so a wrapper's backgrounded emulator receives it too; not every
 		// target has SIGTERM, and none of the emulators handle it differently.
 		_ = screenChildSignal(cmd, screenSignalInterrupt)
+		// A child paused under the game assistant (or the alarm) would sit out
+		// the request until it was killed: it continues, and acts on it at
+		// once. A running child ignores the continue.
+		_ = alarmSignalChild(cmd, false)
 	}
 	deadline := time.Now().Add(grace)
 	for time.Now().Before(deadline) {

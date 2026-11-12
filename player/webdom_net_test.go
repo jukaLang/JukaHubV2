@@ -610,12 +610,16 @@ func TestWebJSNetFetchSameOrigin(t *testing.T) {
 	checks := []struct {
 		name, got, want string
 	}{
-		{"User-Agent", got.Get("User-Agent"), "JukaHub Browser/1.1"},
+		{"User-Agent", got.Get("User-Agent"), browserChromeUserAgent},
 		{"Origin", got.Get("Origin"), ""},
 		{"Referer", got.Get("Referer"), srv.URL + "/page?x=1"},
 		{"Cookie", got.Get("Cookie"), ""},
 		{"X-Custom", got.Get("X-Custom"), "ok"},
-		{"Sec-Fetch-Site", got.Get("Sec-Fetch-Site"), ""},
+		{"Sec-Fetch-Site", got.Get("Sec-Fetch-Site"), "same-origin"},
+		{"Sec-CH-UA", got.Get("Sec-CH-UA"), browserChromeBrands},
+		{"Sec-CH-UA-Mobile", got.Get("Sec-CH-UA-Mobile"), "?0"},
+		{"Sec-CH-UA-Platform", got.Get("Sec-CH-UA-Platform"), `"Windows"`},
+		{"Sec-Fetch-Dest", got.Get("Sec-Fetch-Dest"), "empty"},
 		{"Proxy-Authorization", got.Get("Proxy-Authorization"), ""},
 		{"Accept", got.Get("Accept"), "*/*"},
 		{"Host", host, strings.TrimPrefix(srv.URL, "http://")},

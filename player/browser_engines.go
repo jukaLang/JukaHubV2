@@ -31,8 +31,9 @@ package main
 // to catch, so the reader does not try. Google stays on the list — it is the
 // engine people ask for by name, its home page loads, and on a PC the desktop
 // browser is one press away — but a search that lands on that wall draws a card
-// (brwSearchWall) instead of Google's apology: the same words on Startpage,
-// which serves Google's results as plain HTML, or a switch to it for good.
+// (brwSearchWall) instead of Google's apology: the same words on Brave Search,
+// or a switch to it for good. Startpage now also sends this reader a verification
+// challenge, including on its home page; that response gets the same card.
 //
 // Result links are often click-tracking hops through the engine. DuckDuckGo's
 // and Google's redirect the reader on their own, but Bing's is a script that
@@ -64,9 +65,8 @@ const (
 	brwEngineDefault = "duckduckgo"
 	// brwEngineCustomID is the engine the custom address describes.
 	brwEngineCustomID = "custom"
-	// brwEngineWallAlt is where a search Google walls off goes instead:
-	// Startpage serves Google's own results as plain HTML.
-	brwEngineWallAlt = "startpage"
+	// brwEngineWallAlt serves results when Google or Startpage presents a check.
+	brwEngineWallAlt = "brave"
 	// brwSettingsSection is the Settings section with the browser's rows.
 	brwSettingsSection = "browser"
 )
@@ -96,15 +96,15 @@ type brwEngine struct {
 
 // brwEngines are the engines Settings offers, in the order it lists them.
 // DuckDuckGo Lite leads: it is the default, and its page is built for a simple
-// browser. Startpage follows — it serves Google's results as plain HTML — and
-// the rest serve HTML too, except Google (Wall).
+// browser. Startpage can now require verification even for its home page, so
+// the reader recognizes its challenge and offers another engine.
 var brwEngines = []brwEngine{
 	{ID: "duckduckgo", Name: "DuckDuckGo", Home: "https://lite.duckduckgo.com/lite/",
 		Search: "https://lite.duckduckgo.com/lite/?q=%s", Note: "Private · the Lite page is made for simple browsers"},
 	{ID: "startpage", Name: "Startpage", Home: "https://www.startpage.com/",
-		Search: "https://www.startpage.com/sp/search?query=%s", Note: "Google's results, privately, without JavaScript"},
+		Search: "https://www.startpage.com/sp/search?query=%s", Note: "May require verification · use a full browser"},
 	{ID: "google", Name: "Google", Home: "https://www.google.com/",
-		Search: "https://www.google.com/search?q=%s", Note: "Results need a full browser · each search offers Startpage", Wall: true},
+		Search: "https://www.google.com/search?q=%s", Note: "Results need a full browser · each search offers Brave Search", Wall: true},
 	{ID: "bing", Name: "Bing", Home: "https://www.bing.com/",
 		Search: "https://www.bing.com/search?q=%s", Note: "Microsoft's results"},
 	{ID: "brave", Name: "Brave Search", Home: "https://search.brave.com/",
@@ -135,7 +135,7 @@ func brwDefaultEngine() brwEngine {
 	return e
 }
 
-// brwWallAltEngine is Startpage: where a search Google walls off goes instead.
+// brwWallAltEngine is Brave Search: where a challenged search can go instead.
 func brwWallAltEngine() brwEngine {
 	e, _ := brwEngineByID(brwEngineWallAlt)
 	return e
@@ -480,20 +480,30 @@ func brwYahooTarget(escapedPath string) string {
 	return target
 }
 
-// ── Google's wall ────────────────────────────────────────────────────────
+// ── Search verification walls ────────────────────────────────────────────
 
-// brwSearchWall reports whether a load landed on Google's wall instead of its
-// results — the robot-check page (whose <noscript> says "turn on JavaScript"),
-// or the "unusual traffic" check behind it — and builds the card that replaces
-// it. It runs before the page's scripts on purpose: the check is built to turn
-// away everything but full browsers, so letting the reader's engine run it would
-// spend the whole script budget to end on the same wall.
+// brwSearchWall recognizes Google's robot check and Startpage's Anubis
+// verification response, then builds the card that replaces them. It runs
+// before page scripts: this reader cannot complete those full-browser checks.
 // requested is the address that was asked for (the search the card's buttons
 // run again), landed is where the redirects ended and body is that page. A
 // failure carries no FinalURL, so the wall is never cached and Reload asks
-// Google again.
+// the site again.
 func brwSearchWall(requested string, landed *url.URL, body []byte) (brwFailure, bool) {
-	if landed == nil || !brwIsGoogleHost(strings.ToLower(landed.Hostname())) {
+	if landed == nil {
+		return brwFailure{}, false
+	}
+	host := strings.ToLower(landed.Hostname())
+	if (host == "startpage.com" || strings.HasSuffix(host, ".startpage.com")) &&
+		(bytes.Contains(body, []byte("anubis_challenge")) ||
+			bytes.Contains(bytes.ToLower(body), []byte("verifying your request"))) {
+		f := brwNewFailure(brwFailWall, requested, "")
+		f.Host = landed.Hostname()
+		f.Title = "Startpage needs verification"
+		f.Detail = "Startpage is asking to verify this browser. " + brwWallWayOut()
+		return f, true
+	}
+	if !brwIsGoogleHost(host) {
 		return brwFailure{}, false
 	}
 	path := landed.Path
@@ -522,40 +532,46 @@ func brwSearchWall(requested string, landed *url.URL, body []byte) (brwFailure, 
 func brwWallWayOut() string {
 	alt := brwWallAltEngine().Name
 	if !brwHasDesktopBrowser() {
-		return alt + " shows Google's results without the check."
+		return "Try " + alt + " for web results."
 	}
-	return "Open the search in your web browser, or try " + alt + ": Google's results without the check."
+	return "Open this page in your web browser, or try " + alt + "."
 }
 
-// brwWallButtonSets caches the card's buttons per device kind (handheld, PC):
-// the card asks for them every frame it is drawn.
-var brwWallButtonSets [2][]brwCardButton
+// brwWallButtonSets caches the buttons per device and whether there is a query.
+var brwWallButtonSets [2][2][]brwCardButton
 
-// brwWallButtons are the wall card's buttons. On the handheld the way round is
-// Startpage, now or from now on; a PC opens the search in its own browser,
-// which runs Google's scripts. Both can change the engine in Settings.
-func brwWallButtons() []brwCardButton {
+// brwWallButtons offer Brave Search, a browser with full page support, and
+// Settings. A challenged home page opens Brave's home rather than a blank search.
+func brwWallButtons(hasQuery bool) []brwCardButton {
 	kind := 0
 	if brwHasDesktopBrowser() {
 		kind = 1
 	}
-	if brwWallButtonSets[kind] != nil {
-		return brwWallButtonSets[kind]
+	q := 0
+	if hasQuery {
+		q = 1
+	}
+	if brwWallButtonSets[kind][q] != nil {
+		return brwWallButtonSets[kind][q]
 	}
 	alt := brwWallAltEngine().Name
+	openLabel := "Open " + alt
+	if hasQuery {
+		openLabel = "Search on " + alt
+	}
 	buttons := []brwCardButton{
-		{action: brwActWallSearch, label: "Search on " + alt, icon: "search"},
+		{action: brwActWallSearch, label: openLabel, icon: "search"},
 		{action: brwActWallAlways, label: "Always use " + alt, icon: "check"},
 		{action: brwActWallEngines, label: "Change engine", icon: "settings"},
 	}
 	if kind == 1 {
 		buttons = []brwCardButton{
 			{action: brwActWallBrowser, label: "Open in web browser", icon: "link"},
-			{action: brwActWallSearch, label: "Search on " + alt, icon: "search"},
+			{action: brwActWallSearch, label: openLabel, icon: "search"},
 			{action: brwActWallEngines, label: "Change engine", icon: "settings"},
 		}
 	}
-	brwWallButtonSets[kind] = buttons
+	brwWallButtonSets[kind][q] = buttons
 	return buttons
 }
 

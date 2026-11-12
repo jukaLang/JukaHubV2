@@ -650,8 +650,9 @@ func chatAskAI(text string) bool {
 	return chatAskAIWith(text, nil)
 }
 
-// chatAskAIWith is chatAskAI for a question that carries text files: Juka is
-// shown an excerpt of each (chatAIFileContext). A file alone is a question too.
+// chatAskAIWith is chatAskAI for a question that carries files: Juka is shown
+// an excerpt of each text file (chatAIFileContext) and sees the pictures and
+// videos (vision_chat.go). A file alone is a question too.
 func chatAskAIWith(text string, files []ChatFile) bool {
 	text = strings.TrimSpace(text)
 	if text == "" && len(files) == 0 {

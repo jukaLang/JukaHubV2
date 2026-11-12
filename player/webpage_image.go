@@ -239,12 +239,29 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 	if ratio == 0 && meta.HasSize && meta.W > 0 {
 		ratio = float64(meta.H) / float64(meta.W)
 	}
-	w = int32(0)
-	if b.ImageW > 0 {
-		w = int32(b.ImageW * float64(scale))
+	aspect := b.Style.AspectRatio
+	cssW, cssH := int32(0), int32(0)
+	if b.Style.WidthPct > 0 {
+		cssW = int32(float64(contentW) * b.Style.WidthPct / 100)
+	} else if b.Style.Width > 0 {
+		cssW = int32(b.Style.Width * float64(scale))
 	}
-	if meta.HasSize && int32(meta.W) > w {
-		w = int32(meta.W)
+	if b.Style.Height > 0 {
+		cssH = int32(b.Style.Height * float64(scale))
+	}
+	w = int32(0)
+	if cssW > 0 {
+		w = cssW
+	} else {
+		if b.ImageW > 0 {
+			w = int32(b.ImageW * float64(scale))
+		}
+		if meta.HasSize && int32(meta.W) > w {
+			w = int32(meta.W)
+		}
+	}
+	if w <= 0 && cssH > 0 && aspect > 0 {
+		w = int32(float64(cssH) * aspect)
 	}
 	if w <= 0 {
 		// No size hint at all: a comfortable reading width beats a sliver.
@@ -256,9 +273,16 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 	if w < webMinImagePx {
 		w = webMinImagePx
 	}
-	if ratio > 0 {
+	switch {
+	case aspect > 0 && cssH > 0:
+		h = cssH
+	case aspect > 0:
+		h = int32(float64(w) / aspect)
+	case cssH > 0:
+		h = cssH
+	case ratio > 0:
 		h = int32(float64(w) * ratio)
-	} else {
+	default:
 		h = w * 3 / 4
 	}
 	// A portrait photograph taller than a couple of screens pushes a hundred
@@ -270,10 +294,14 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 	}
 	if h > maxH {
 		h = maxH
-		if ratio > 0 {
-			if w = int32(float64(h) / ratio); w > contentW {
-				w = contentW
-			}
+		switch {
+		case aspect > 0:
+			w = int32(float64(h) * aspect)
+		case ratio > 0:
+			w = int32(float64(h) / ratio)
+		}
+		if w > contentW {
+			w = contentW
 		}
 	}
 	if h < webMinImagePx {
@@ -477,7 +505,7 @@ func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte 
 	if err != nil {
 		return nil
 	}
-	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
+	browserChromeResource(req.Header, "image", browserAcceptImage, browserURL(pageURL), req.URL)
 	// Images share the page's jar: a picture behind a session cookie (a
 	// private avatar, a captcha-free gallery) otherwise drew as a placeholder.
 	client := browserHTTPClient(webImageFetchTimeout)

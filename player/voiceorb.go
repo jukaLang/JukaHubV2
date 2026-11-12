@@ -295,6 +295,19 @@ func voiceOrbLegendRow(keyboard bool) (FooterHint, bool) {
 	return FooterHint{Button: "Menu", Label: "Voice (hold to talk)"}, true
 }
 
+// voiceOrbFooterHint names the existing push-to-talk key in the button bar.
+// Groq powers transcription and Juka's answers; the shortcut itself remains
+// Menu on the handheld and F4 on a keyboard.
+func voiceOrbFooterHint(config *Config) (FooterHint, bool) {
+	if P().IsHandheld() {
+		if !voiceOrbMenuEnabled(config) {
+			return FooterHint{}, false
+		}
+		return FooterHint{Button: "Menu", Label: "Talk to Juka"}, true
+	}
+	return FooterHint{Button: "F4", Label: "Talk to Juka"}, true
+}
+
 // ── Input ────────────────────────────────────────────────────────────────
 
 // voiceOrbController routes a pad button to the orb. It runs before the quit
@@ -819,6 +832,7 @@ func voiceOrbCanOpen(config *Config) bool {
 // voiceOrbListen opens the microphone and starts a clip, or says what is
 // missing with the fix one press away.
 func voiceOrbListen(config *Config) {
+	jukaSpeakStop() // the microphone must not hear Juka (tts_api.go)
 	voiceOrbStopCapture()
 	voiceOrbCancelRequest()
 	voiceOrb.heard, voiceOrb.words = "", ""
@@ -828,10 +842,16 @@ func voiceOrbListen(config *Config) {
 		voiceOrbSay("Voice needs a Groq API key", "Add it in Settings → General — or say it on your phone", tbxToneWarn, orbOfferGroqKey)
 		PlayErrorSound()
 		return
-	case !IsOnline():
+	case !IsOnline() && !netReconnecting(): // just after a wake the clip waits for the Wi-Fi (wake_resume.go)
 		voiceOrbSay("Voice needs internet", "Your phone's keyboard microphone works over the same Wi-Fi", tbxToneWarn, orbOfferPhone)
 		PlayErrorSound()
 		return
+	}
+	// The Voice shortcuts page may be recording (Menu pressed mid-listen): its
+	// tick would close that capture a frame later, after this open had failed
+	// on a one-client capture device (voiceshortcuts_ui.go).
+	if vscPage.rec.on {
+		vscStopCapture()
 	}
 	mic, err := micOpen()
 	if err != nil {
@@ -987,6 +1007,7 @@ func voiceOrbFinish(config *Config) {
 				tbxPost(func() { voiceOrbTranscribed(gen, "", errors.New("Speech failed — try again")) })
 			}
 		}()
+		netWaitOnline(ctx, netWakeWaitMax) // after a wake: up to 15 s for the Wi-Fi, not a failure
 		text, err := voiceTranscribe(ctx, key, wav, prompt)
 		tbxPost(func() { voiceOrbTranscribed(gen, text, err) })
 	}()
@@ -1031,6 +1052,10 @@ func voiceOrbTranscribed(gen int, text string, err error) {
 // that names nothing here.
 func voiceOrbCommand(config *Config, text string) {
 	voiceOrb.heard = text
+	// Over a paused game every sentence is a question about it (gameassist.go).
+	if gameAssistHeard(text) {
+		return
+	}
 	in := voiceParse(text)
 	logDebug("voice", "orb: command understood as intent %d", int(in.Kind))
 	out := voiceExecute(config, in, voiceFromMic)
@@ -1039,6 +1064,7 @@ func voiceOrbCommand(config *Config, text string) {
 		return
 	}
 	voiceOrbShowOutcome(out)
+	ttsSpeakOutcome(ttsFromOrb, in.Kind, out) // the time, the date… out loud (tts_api.go)
 }
 
 // voiceOrbShowOutcome puts an outcome on the orb: the pause before its action
@@ -1176,13 +1202,20 @@ var orbQuestionWords = voiceSet("what", "who", "whom", "whose", "why", "how", "w
 // the moon"), only near-misses spelt like a title ("Moonbase") — while Juka
 // can be reached.
 func voiceOrbWantsJuka(in voiceIntent, out voiceOutcome) bool {
+	// A taught word already did what it was taught to, even when it is a long
+	// sentence (voiceshortcuts.go).
+	if voiceShortcutHandled(in.Heard) {
+		return false
+	}
 	if in.Kind != voiceIntentOpen || in.Verb != "" || out.Act != nil || !orbLooksLikeQuestion(in.Heard) {
 		return false
 	}
 	if len(out.Choices) > 0 && !(orbOpensWithQuestionWord(in.Heard) && orbOnlyNearMisses(out.Choices)) {
 		return false
 	}
-	return strings.TrimSpace(groqAPIKey()) != "" && IsOnline()
+	// Still reconnecting after a wake (the words just came back over the
+	// network, so it is nearly there): Juka gets the question all the same.
+	return strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting())
 }
 
 // orbOpensWithQuestionWord reports whether a folded sentence starts with a
@@ -1223,7 +1256,7 @@ func voiceOrbAsk(question string) {
 	orbAIText.gen, orbAIText.text = gen, ""
 	orbAIText.mu.Unlock()
 	messages := []map[string]string{
-		{"role": "system", "content": groqSystemPrompt + " " + orbJukaVoicePrompt},
+		{"role": "system", "content": jukaSystemPrompt() + " " + orbJukaVoicePrompt},
 		{"role": "user", "content": question},
 	}
 	go func() {
@@ -1279,6 +1312,7 @@ func voiceOrbAnswered(gen int, question, reply string, err error) {
 	trophyEvent(tkAIAsk)
 	voiceOrb.hideAt = voiceOrb.phaseAt + orbReadMs(reply, false, true)
 	PlayNavSound()
+	ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply) // Juka says it too (tts_api.go)
 }
 
 // orbPlainReplacer drops the markdown a model may still use.
@@ -1332,6 +1366,7 @@ func voiceOrbDismiss() {
 	if voiceOrb.phase == orbHidden {
 		return
 	}
+	jukaSpeakStop() // the answer goes, and its voice with it (tts_api.go)
 	voiceOrbStopCapture()
 	voiceOrbCancelRequest()
 	voiceOrb.act = nil
@@ -1343,6 +1378,7 @@ func voiceOrbDismiss() {
 
 // voiceOrbHideNow takes the orb off the screen at once.
 func voiceOrbHideNow() {
+	jukaSpeakStop() // the orb goes, and Juka's voice with it (tts_api.go)
 	voiceOrbStopCapture()
 	voiceOrbCancelRequest()
 	voiceOrb.phase = orbHidden
@@ -1532,6 +1568,10 @@ func orbQuote(s string) string {
 // Menu on the pad and F4 on a keyboard.
 func orbKeyName(button string) string {
 	if button == "Menu" {
+		if gameAssistOverlayActive() {
+			// Over a paused game A is the voice button (gameassist.go).
+			return hintKeyFor("A", "")
+		}
 		if hintsUseKeyboard() || !P().IsHandheld() {
 			return "F4"
 		}
@@ -1555,6 +1595,9 @@ func orbOfferLabel(o orbOffer) string {
 
 // orbHintLine is the bubble's last line: the controls of this phase.
 func orbHintLine() string {
+	if line, ok := gameAssistOrbHint(); ok {
+		return line
+	}
 	b := orbKeyName("B")
 	switch voiceOrb.phase {
 	case orbListening:
@@ -1616,7 +1659,9 @@ func voiceOrbTick(config *Config) {
 		voiceOrbHideNow()
 		return
 	}
-	if gameScreenSuspended() {
+	// A game owns the screen, unless the game assistant paused it to listen
+	// (gameassist.go).
+	if gameScreenSuspended() && !gameAssistOverlayActive() {
 		voiceOrbHideNow()
 		return
 	}
@@ -1626,12 +1671,15 @@ func voiceOrbTick(config *Config) {
 	case orbThinking:
 		if voiceOrb.ai {
 			voiceOrbTakeAIText()
+		} else {
+			voiceOrb.sub = orbNetWaitSub(voiceOrb.sub) // "Reconnecting to Wi-Fi…" while the clip waits
 		}
 	case orbConfirm:
 		if now >= voiceOrb.confirmAt {
 			voiceOrbRunPending(config)
 		}
 	case orbAnswer:
+		voiceOrb.hideAt = ttsOrbHold(voiceOrb.hideAt, now) // up while Juka says it (tts_api.go)
 		if voiceOrb.hideAt != 0 && now >= voiceOrb.hideAt {
 			voiceOrbDismiss()
 		}

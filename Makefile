@@ -81,9 +81,11 @@ test-web: ## Run the browser-free builder tests (jsdom)
 	@command -v $(NODE) >/dev/null 2>&1 || { echo "node is required for the web tests: https://nodejs.org"; exit 1; }
 	cd tests/web && npm ci --no-audit --no-fund && npm test
 
-e2e: ## Run the builder Chromium smoke test (needs npx playwright install chromium)
+e2e: ## Run the builder Chromium smoke test (installs the pinned Chromium on the first run)
 	@command -v $(NODE) >/dev/null 2>&1 || { echo "node is required for the browser test: https://nodejs.org"; exit 1; }
-	cd tests/e2e && npm ci --no-audit --no-fund && npx playwright test
+	cd tests/e2e && npm ci --no-audit --no-fund
+	@cd tests/e2e && npx playwright install chromium
+	cd tests/e2e && npx playwright test
 
 vet: ## go vet the player
 	cd $(PLAYER) && $(GO) vet ./...

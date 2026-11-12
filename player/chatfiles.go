@@ -21,7 +21,8 @@ package main
 //
 // The tray belongs to its tab, like the draft. Community sends its files to
 // the Discord channel (chatupload.go), Juka AI reads text files (the question
-// carries an excerpt), and Saved keeps a reference to files on this device.
+// carries an excerpt) and looks at pictures and videos (vision_chat.go), and
+// Saved keeps a reference to files on this device.
 
 import (
 	"bytes"
@@ -511,8 +512,9 @@ func chatStageFile(tab chatTab, path string) error {
 				name, chatSizeLabel(info.Size()), chatSizeLabel(most))
 		}
 	case chatTabAI:
-		if binary, err := chatLooksBinary(path); err != nil || binary {
-			return fmt.Errorf("Juka reads text files (logs, notes, configs) — %s isn't one", name)
+		// Text files, pictures, videos and recordings (vision_chat.go).
+		if err := visionStageCheck(path, name); err != nil {
+			return err
 		}
 	}
 	files := make([]ChatFile, 0, len(view.files)+1)
@@ -1685,8 +1687,8 @@ func chatAIFileContext(prompt ChatMessage, history []ChatMessage) (string, error
 	}
 	shown := 0
 	for _, f := range files {
-		if f.Path == "" {
-			continue
+		if f.Path == "" || visionKindOf(f) != visionNone {
+			continue // pictures, videos and recordings are seen and heard (vision_chat.go)
 		}
 		text, err := chatAIFileExcerpt(f.Path, budget)
 		if err != nil {

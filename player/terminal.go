@@ -267,7 +267,7 @@ func termDrainJob() {
 		termAppend(l.text, termKindOutput)
 	}
 	if dropped > 0 {
-		termAppend(fmt.Sprintf("… %d line(s) of output skipped", dropped), termKindSystem)
+		termAppend("… "+pluralizeCount(dropped, "line", "lines")+" of output skipped", termKindSystem)
 	}
 	if !done {
 		term.liveLine = termCleanOutput(partial)

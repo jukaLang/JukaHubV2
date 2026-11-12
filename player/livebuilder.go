@@ -398,6 +398,9 @@ func (s *liveBuilderServer) Start() error {
 		}(ln)
 	}
 	go s.watchIdle(stop)
+	// While the session is up the config is watched for external writes as
+	// well as pushed ones; the rest of the time the poller sleeps (PERF-6).
+	setConfigWatcherPolling(true)
 	return nil
 }
 
@@ -449,6 +452,11 @@ func (s *liveBuilderServer) detachLocked() *http.Server {
 	}
 	for _, ln := range lns {
 		_ = ln.Close()
+	}
+	if srv != nil {
+		// Back to no session: stop polling. Desktop keeps its watcher on, so
+		// only a handheld (where the watcher starts paused) is affected.
+		setConfigWatcherPolling(false)
 	}
 	return srv
 }

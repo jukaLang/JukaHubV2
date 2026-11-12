@@ -842,7 +842,7 @@ func feRemoteUploadAsync(config *Config) {
 		return
 	}
 	if skippedFolders > 0 {
-		showToast(fmt.Sprintf("Uploading files only — %d folder(s) skipped", skippedFolders), ToastInfo())
+		showToast("Uploading files only — "+pluralizeCount(skippedFolders, "folder", "folders")+" skipped", ToastInfo())
 	}
 	remoteDir := feRemotePanel.path
 	label := "Uploading " + filepath.Base(locals[0]) + "…"
@@ -1083,6 +1083,9 @@ func renderFeRemotePanel(renderer *sdl.Renderer, config *Config) {
 		case !feRemotePanel.busy:
 			message = "This folder has nothing in it"
 		}
+		// The panel is narrower than the sentence at a large text scale; keep
+		// the empty state inside the card instead of letting it run off.
+		message = ellipsize(font, message, panelW-32)
 		msgW, _, _ := font.SizeUTF8(message)
 		renderText(renderer, config, font, message, ink, panelX+(panelW-int32(msgW))/2, panelY+headerH+12)
 	} else {

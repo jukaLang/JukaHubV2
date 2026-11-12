@@ -905,6 +905,10 @@ var gifWall struct {
 	// gamePaused means a game owns the screen. Only the first frame is retained
 	// while away; the animation is decoded again after JukaHub returns.
 	gamePaused bool
+	// minDelay is the shortest settled frame time in ms, which the cadence a
+	// playing wallpaper asks for is worked out from (gifWallFrameNeed); 0
+	// until a frame's time is settled.
+	minDelay int
 }
 
 // gifWallTicks is the animation clock; tests replace it.
@@ -971,6 +975,7 @@ func gifWallStart() {
 	gifWall.job = job
 	gifWall.bg = ColorBackground
 	gifWall.final, gifWall.pos, gifWall.posStart, gifWall.posSet = 0, 0, 0, false
+	gifWall.minDelay = 0
 	lim := gifWallLimitsNow()
 	if still {
 		lim.frames = 1
@@ -1013,6 +1018,7 @@ func gifWallRelease(destroy bool) {
 	gifWall.complete = false
 	gifWall.renderer = nil
 	gifWall.final, gifWall.pos, gifWall.posStart, gifWall.posSet = 0, 0, 0, false
+	gifWall.minDelay = 0
 	gifWall.upValid = false
 	gifWall.pickValid = false
 	gifWall.gamePaused = false
@@ -1299,7 +1305,11 @@ func gifWallSettle(job *gifWallJob, n int, done bool) {
 	}
 	job.mu.Lock()
 	for i := gifWall.final; i < settled && i < len(job.frames); i++ {
-		gifWall.frames[i].delay = max(job.frames[i].delay, 1)
+		d := max(job.frames[i].delay, 1)
+		gifWall.frames[i].delay = d
+		if gifWall.minDelay == 0 || d < gifWall.minDelay {
+			gifWall.minDelay = d
+		}
 	}
 	job.mu.Unlock()
 	gifWall.final = settled
@@ -1323,10 +1333,14 @@ func gifWallFinish(job *gifWallJob, n int) {
 	}
 	gifWall.frames = gifWall.frames[:n]
 	gifWall.ends = make([]int64, n)
+	gifWall.minDelay = 0
 	var t int64
 	for i, f := range gifWall.frames {
 		t += int64(f.delay)
 		gifWall.ends[i] = t
+		if gifWall.minDelay == 0 || f.delay < gifWall.minDelay {
+			gifWall.minDelay = f.delay
+		}
 	}
 	gifWall.loop = t
 	gifWall.complete = true
@@ -1448,7 +1462,92 @@ func appWallpaperTexture(renderer *sdl.Renderer, config *Config) (*sdl.Texture, 
 	if len(gifWall.frames) == 0 {
 		return bgTexture, nil
 	}
+	// The frame is going on screen: a playing GIF asks for the cadence its
+	// frames need (adaptive.go), so a 25 fps clip is not shown at the 15 fps
+	// an untouched screen idles at.
+	if need := gifWallFrameNeed(config); need > 0 {
+		requestFrameEvery(need)
+	}
 	return gifWall.frames[gifWallPick(config)].tex, nil
+}
+
+// gifWallFrameNeed is the frame interval a playing GIF wallpaper asks the
+// frame-rate governor for: half its shortest frame, so every change of frame
+// lands within half a frame of its time (the governor never goes faster than
+// its active cadence, 30 fps on the handheld). It is 0 — nothing asked —
+// when the picture does not move: one frame, holding still, Low Power (whose
+// clock steps a GIF at fifteen frames a second, gifWallPick), or the living
+// background, whose opaque base is painted over the wallpaper.
+func gifWallFrameNeed(config *Config) uint32 {
+	if len(gifWall.frames) <= 1 || gifWallHoldStill(config) || effectiveLowPower(config) ||
+		(config != nil && config.Variables.DynamicBg) {
+		return 0
+	}
+	d := gifWall.minDelay
+	if d <= 0 {
+		// No frame's time is settled yet: the browsers' default frame.
+		d = gifWallDefaultDelay
+	}
+	return uint32(max(d/2, 1))
+}
+
+// wallSmooth is the static wallpaper appWallpaperTextureSmooth last looked
+// at: the texture, the path it was loaded from and its renderer.
+var wallSmooth struct {
+	tex      *sdl.Texture
+	path     string
+	renderer *sdl.Renderer
+}
+
+// appWallpaperTextureSmooth is appWallpaperTexture for a picture that is drawn
+// bent: the liquid background's refraction mesh (liquidbg.go), where a ripple
+// acts as a lens and enlarges the picture to twice its size and more. The
+// static wallpaper is loaded with SDL's default filter, nearest, which is
+// exact for the plain 1:1 copy every other screen draws but turned those
+// enlargements into blocks — the "pixelated" water a tester saw. go-sdl2 has
+// no per-texture filter, so the picture is made once more through the same
+// fit as at load (core.go fitBackgroundTexture: a 1:1 copy read back from a
+// scratch target) with the linear hint up, and the new texture takes the old
+// one's place in bgTexture: core.go still owns and frees it, and the 1:1
+// copies look the same with either filter. It runs once per picture; a
+// renderer without render targets keeps the original. A GIF frame already
+// has the filter it should have (pixel art keeps nearest on purpose).
+func appWallpaperTextureSmooth(renderer *sdl.Renderer, config *Config) (*sdl.Texture, *sdl.Rect) {
+	tex, src := appWallpaperTexture(renderer, config)
+	if tex == nil || renderer == nil || tex != bgTexture {
+		return tex, src
+	}
+	if wallSmooth.tex == tex && wallSmooth.renderer == renderer && wallSmooth.path == bgImagePath {
+		return tex, src
+	}
+	prev := sdl.GetHint(sdl.HINT_RENDER_SCALE_QUALITY)
+	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "linear")
+	smooth := fitBackgroundTexture(renderer, tex)
+	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, prev)
+	if smooth != nil && smooth != tex {
+		// fitBackgroundTexture destroyed the original.
+		bgTexture, tex = smooth, smooth
+	}
+	wallSmooth.tex, wallSmooth.path, wallSmooth.renderer = tex, bgImagePath, renderer
+	return tex, src
+}
+
+// gifWallTextureBytes is what the wallpaper holds as textures — an animated
+// one's frames, all the same size, and the static picture — for the memory
+// line (memstat.go). Main thread.
+func gifWallTextureBytes() int64 {
+	var n int64
+	if len(gifWall.frames) > 0 && gifWall.frames[0].tex != nil {
+		if _, _, w, h, err := gifWall.frames[0].tex.Query(); err == nil {
+			n += int64(w) * int64(h) * 4 * int64(len(gifWall.frames))
+		}
+	}
+	if bgTexture != nil {
+		if _, _, w, h, err := bgTexture.Query(); err == nil {
+			n += int64(w) * int64(h) * 4
+		}
+	}
+	return n
 }
 
 // gifWallpaperReady reports whether an animated GIF wallpaper has a frame to

@@ -503,7 +503,7 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 	renderer.SetDrawColor(ColorAccent.R, ColorAccent.G, ColorAccent.B, 255)
 	renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: 3})
 
-	renderText(renderer, config, medium, m.Title, ColorTextPrimary(), x+24, y+20)
+	renderText(renderer, config, medium, ellipsize(medium, m.Title, w-48), ColorTextPrimary(), x+24, y+20)
 
 	textY := layout.textY
 	renderWithClip(renderer, x+24, textY, w-48, h-160, func(r *sdl.Renderer) {
@@ -536,6 +536,7 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 			if item == "Remove" {
 				itemColor = DangerInk()
 			}
+			item = ellipsize(font, item, w-48)
 			iw, _, _ := font.SizeUTF8(item)
 			renderText(renderer, config, font, item, itemColor, x+24+(w-48-int32(iw))/2, itemY+9)
 		}

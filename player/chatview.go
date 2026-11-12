@@ -790,6 +790,9 @@ func chatDrawChip(renderer *sdl.Renderer, r sdl.Rect, hovered bool) {
 func chatStatusLine(tab chatTab) (string, sdl.Color) {
 	switch tab {
 	case chatTabCommunity:
+		if netReconnecting() {
+			return "Reconnecting…", WithAlpha(WarningInk(), 200)
+		}
 		if !IsOnline() {
 			return "Offline", WithAlpha(ColorTextTertiary(), 200)
 		}
@@ -848,6 +851,9 @@ func chatHasGroqKey() bool {
 
 // chatCurrentBanner is the banner a tab shows, if any.
 func chatCurrentBanner(tab chatTab) chatBanner {
+	if b, ok := chatReconnectBanner(tab); ok {
+		return b
+	}
 	online := IsOnline()
 	switch tab {
 	case chatTabCommunity:
@@ -1666,7 +1672,7 @@ func chatDrawEmpty(renderer *sdl.Renderer, config *Config, fonts chatFonts, list
 	title, body := "Say hi to the community", "Messages and files from the JukaHub Discord show up here."
 	switch tab {
 	case chatTabAI:
-		title, body = "Ask Juka anything", "Tips for JukaHub, help with settings, or attach a log and ask what went wrong."
+		title, body = "Ask Juka anything", "Tips, help with settings — or attach a picture, a video or a log."
 	case chatTabSaved:
 		title, body = "Notes to self", "Save links, files and ideas. Only this device can see them."
 	default:
@@ -1735,7 +1741,7 @@ func chatPlaceholder(tab chatTab) string {
 	if chatStagedCount(tab) > 0 {
 		// Files are waiting: words are optional now.
 		if tab == chatTabAI {
-			return "Ask about the file…"
+			return visionPlaceholder(chatStagedFiles(tab))
 		}
 		return "Add a message…"
 	}
@@ -1820,7 +1826,8 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	aw, ah := measureText(fonts.title, "↑")
 	chatText(renderer, config, fonts.title, "↑", arrowCol, send.X+(send.W-aw)/2, send.Y+(send.H-ah)/2)
 
-	// The paperclip: every tab takes files (Juka AI reads text files).
+	// The paperclip: every tab takes files (Juka AI reads text files and
+	// looks at pictures and videos).
 	x := rect.X
 	attach := sdl.Rect{X: x, Y: rect.Y + (h-btn)/2, W: btn, H: btn}
 	chatAttachBtnRect = attach

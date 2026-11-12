@@ -31,6 +31,39 @@ func TestStatusBarNamesTheBrandOnly(t *testing.T) {
 
 // TestPageHeaderTitlesAreAtLeastHeading drives the real title resolver: the
 // default page title is a Heading, and a larger role or size is a Title.
+// TestCenteredPageHeaderLinesFitTheBand covers the centered header path: it
+// must fit the line before centering it, not measure the raw title and let it
+// paint outside both edges on a narrow card.
+func TestCenteredPageHeaderLinesFitTheBand(t *testing.T) {
+	if err := ttf.Init(); err != nil {
+		t.Fatalf("initialize SDL_ttf: %v", err)
+	}
+	old := a11y
+	defer func() {
+		a11y = old
+		a11yRefreshFonts()
+	}()
+	resetA11yForTest()
+
+	cfg := &Config{}
+	font := FontForRole(cfg, TypeHeading)
+	if font == nil {
+		t.Fatal("the role scale resolved no faces")
+	}
+	const x, w = int32(100), int32(220)
+	text, tx := uiCenteredHeaderLine(font, "A centered page title that is much wider than its band", x, w)
+	tw, _, _ := font.SizeUTF8(text)
+	if int32(tw) > w {
+		t.Fatalf("fitted title measures %d px in a %d px band", tw, w)
+	}
+	if tx < x || tx+int32(tw) > x+w {
+		t.Fatalf("title spans %d..%d outside the band %d..%d", tx, tx+int32(tw), x, x+w)
+	}
+	if text == "" {
+		t.Fatal("a long title fitted to nothing")
+	}
+}
+
 func TestPageHeaderTitlesAreAtLeastHeading(t *testing.T) {
 	if err := ttf.Init(); err != nil {
 		t.Fatalf("initialize SDL_ttf: %v", err)

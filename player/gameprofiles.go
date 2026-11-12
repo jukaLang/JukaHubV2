@@ -923,7 +923,7 @@ func launchGameProfileClaimed(entry gameProfileEntry, tl timelapseSettings) erro
 	}
 	cmd := exec.Command(command, args...)
 	cmd.Dir = gameDir
-	cmd.Env = mergeGameProfileEnv(os.Environ(), env)
+	cmd.Env = mergeGameProfileEnv(childEnvWithTZ(os.Environ(), gameChildZone()), env)
 	configureGameChild(cmd)
 
 	var logFile *os.File

@@ -202,8 +202,9 @@ func TestBugrepReadAnswerClassifies(t *testing.T) {
 		{"no function", 404, "text/html", `Not Found`, bugrepErrUnavailable, bugrepSent{}},
 		{"method", 405, "", ``, bugrepErrUnavailable, bugrepSent{}},
 		{"gone", 410, "", ``, bugrepErrUnavailable, bugrepSent{}},
-		{"not set up", 503, "application/json", `{"error":"not set up","fallback":"phone"}`, bugrepErrUnavailable, bugrepSent{}},
-		{"fallback wins", 500, "application/json", `{"fallback":"phone"}`, bugrepErrUnavailable, bugrepSent{}},
+		{"not set up", 503, "application/json", `{"error":"not set up","fallback":"phone"}`, bugrepErrSetup, bugrepSent{}},
+		{"configured false", 503, "application/json", `{"configured":false}`, bugrepErrSetup, bugrepSent{}},
+		{"fallback wins", 500, "application/json", `{"fallback":"phone"}`, bugrepErrSetup, bugrepSent{}},
 		{"busy", 429, "application/json", `{"error":"slow down"}`, bugrepErrServer, bugrepSent{}},
 		{"github down", 502, "application/json", `{}`, bugrepErrServer, bugrepSent{}},
 		{"server error", 500, "", ``, bugrepErrServer, bugrepSent{}},
@@ -481,6 +482,58 @@ func TestBugrepFlushBacksOffWhileTheCollectorFails(t *testing.T) {
 	}
 }
 
+func TestBugrepFlushRetriesAfterServiceSetup(t *testing.T) {
+	bugrepTestOutbox(t)
+	r := bugrepReport{Schema: 1, ID: "JH-SETUP1", Created: time.Now().UTC().Format(time.RFC3339)}
+	if err := bugrepQueue(r); err != nil {
+		t.Fatal(err)
+	}
+	bugrepPostFunc = func(string, bugrepReport) (bugrepSent, bugrepSendErr, error) {
+		return bugrepSent{}, bugrepErrSetup, errors.New("GitHub token missing")
+	}
+	bugrepFlush("https://service.example/api/bug-report", nil)
+	bugrepWaitFlush(t)
+	bugrepOutbox.mu.Lock()
+	stopped, failures := bugrepOutbox.stopped, bugrepOutbox.failures
+	due := bugrepOutboxDueLocked(bugrepOutbox.lastTry.Add(bugrepOutboxDelay(failures)))
+	bugrepOutbox.mu.Unlock()
+	if stopped || failures != 1 || !due || len(bugrepQueued()) != 1 {
+		t.Fatalf("setup failure: stopped %v, failures %d, due %v, queued %d", stopped, failures, due, len(bugrepQueued()))
+	}
+	bugrepPostFunc = func(string, bugrepReport) (bugrepSent, bugrepSendErr, error) {
+		return bugrepSent{Ref: r.ID, Issue: 42}, bugrepErrNone, nil
+	}
+	bugrepFlush("https://service.example/api/bug-report", func(int) {})
+	bugrepWaitFlush(t)
+	if len(bugrepQueued()) != 0 {
+		t.Fatal("the saved report did not send after setup")
+	}
+}
+
+func TestBugrepQueuedReportAppearsInNotificationsWhenSent(t *testing.T) {
+	bugrepTestOutbox(t)
+	previous, added := notifHistoryState()
+	t.Cleanup(func() {
+		notifHistoryMu.Lock()
+		nc.history, notifAdded = previous, added
+		notifHistoryMu.Unlock()
+	})
+	r := bugrepReport{Schema: 1, ID: "JH-NOTIFY", Created: time.Now().UTC().Format(time.RFC3339)}
+	if err := bugrepQueue(r); err != nil {
+		t.Fatal(err)
+	}
+	bugrepPostFunc = func(string, bugrepReport) (bugrepSent, bugrepSendErr, error) {
+		return bugrepSent{Ref: r.ID, Issue: 73}, bugrepErrNone, nil
+	}
+	bugrepFlush("https://service.example/api/bug-report", nil)
+	bugrepWaitFlush(t)
+	tbxDrainUI()
+	rows, _ := notifHistoryState()
+	if len(rows) == 0 || rows[0].Message != "Bug report sent · issue #73" || rows[0].Read || rows[0].Priority != notifSuccess {
+		t.Fatalf("the sent report did not raise an unread success notification: %+v", rows)
+	}
+}
+
 func TestBugrepFlushRetiresRefusedAndStaleReports(t *testing.T) {
 	root := bugrepTestOutbox(t)
 	stale := bugrepReport{Schema: 1, ID: "JH-CCCCCC", Title: "stale", Created: time.Now().Add(-40 * 24 * time.Hour).UTC().Format(time.RFC3339)}
@@ -594,6 +647,44 @@ func TestBugrepFailedSendDelaysTheOutbox(t *testing.T) {
 	// post it again on the next frame.
 	if nextFrame || !later {
 		t.Fatalf("after a failed Submit: due next frame %v, due after the backoff %v", nextFrame, later)
+	}
+}
+
+func TestBugrepSetupResponseRestartsAStoppedOutbox(t *testing.T) {
+	bugrepTestOutbox(t)
+	if err := bugrepQueue(bugrepReport{Schema: 1, ID: "JH-HH0000", Created: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+		t.Fatal(err)
+	}
+	bugrepCollectorUnavailable()
+	now := time.Now()
+	bugrepNoteServiceSetupPending(now)
+	bugrepOutbox.mu.Lock()
+	stopped := bugrepOutbox.stopped
+	tooSoon := bugrepOutboxDueLocked(now.Add(time.Second))
+	due := bugrepOutboxDueLocked(now.Add(bugrepOutboxDelay(1)))
+	bugrepOutbox.mu.Unlock()
+	if stopped || tooSoon || !due {
+		t.Fatalf("a setup response left the outbox stopped %v, due too soon %v, due later %v", stopped, tooSoon, due)
+	}
+}
+
+func TestBugrepQueuedSheetOffersPhoneLink(t *testing.T) {
+	withTempPatchState(t)
+	previousSheet, previousScene := tbxSheet, currentSceneIndex
+	t.Cleanup(func() {
+		tbxSheet, currentSceneIndex = previousSheet, previousScene
+	})
+	config := &Config{Scenes: []SceneConfig{{Name: bugrepSceneName}}}
+	currentSceneIndex = 0
+	report := bugrepReport{ID: "JH-PHONE1", Title: "Menu is blank", Created: time.Now().UTC().Format(time.RFC3339)}
+	bugrepQueuedSheet(config, report, bugrepHoldSetup, false)
+	if len(tbxSheet.spec.buttons) != 2 || tbxSheet.spec.buttons[0].label != "Use phone" ||
+		tbxSheet.spec.buttons[1].label != "Done" {
+		t.Fatalf("queued sheet buttons = %+v", tbxSheet.spec.buttons)
+	}
+	tbxSheet.spec.buttons[0].run()
+	if tbxSheet.spec.title != "Send it from your phone" || len(tbxSheet.spec.qr) == 0 {
+		t.Fatal("Use phone did not open a prefilled GitHub QR code")
 	}
 }
 

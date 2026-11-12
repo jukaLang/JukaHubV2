@@ -1036,6 +1036,10 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(235), accentColor)
+	if element.Variable == "weather_screen_text" {
+		renderWeatherSceneBackground(renderer, config,
+			sdl.Rect{X: element.X + 4, Y: element.Y + 4, W: elemW - 8, H: elemH - 8})
+	}
 
 	// The ticker board gets a dedicated, richer layout.
 	if element.Variable == "ticker_text" {

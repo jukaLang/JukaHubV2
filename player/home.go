@@ -398,6 +398,10 @@ func homeActivate(config *Config) {
 		headerTrophyActivate(config)
 		return
 	}
+	if id == HomeFocusBug {
+		headerBugActivate(config)
+		return
+	}
 	if id == HomeFocusContinue {
 		if homeContinueResume(config) {
 			return
@@ -424,8 +428,15 @@ func homeActivate(config *Config) {
 		wifiScrOpen(config)
 		return
 	}
-	// The speaker beside it opens the volume popover (volumepopover.go), and
-	// the sun left of the speaker the brightness card (brightnesspopover.go).
+	// The Bluetooth rune beside it opens the Bluetooth page, where paired
+	// devices connect and disconnect (statusbar_bluetooth.go).
+	if id == HomeFocusBluetooth {
+		btHeaderActivate(config)
+		return
+	}
+	// The speaker left of the rune opens the volume popover
+	// (volumepopover.go), and the sun left of the speaker the brightness card
+	// (brightnesspopover.go).
 	if id == HomeFocusVolume {
 		toggleVolumePopover()
 		return
@@ -707,7 +718,7 @@ func homeViewData(config *Config) HomeViewData {
 	// which picks the longest placeholder that fits its width.
 	data := HomeViewData{
 		Greeting:     homeGreeting(""),
-		Version:      versionDisplayString(config),
+		BuildDate:    installedBuildDate(),
 		StatusParts:  headerStatusParts(config),
 		Pressed:      homePressedID,
 		ShowBackHint: false,

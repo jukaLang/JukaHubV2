@@ -7596,7 +7596,7 @@ if (typeof AI !== 'undefined' && typeof AI.init === 'function') {
           { type: 'label', text: 'Settings', color: '#e8eefc', bgColor: '', font: 'title', x: 48, y: 40, width: 480, height: 64 },
           { type: 'button', text: 'Theme · Dark', color: '#f0f2f5', bgColor: '#475569', font: 'medium', x: 48, y: 140, width: 420, height: 84, trigger: 'cycle_theme' },
           { type: 'button', text: 'Resolution · 720', color: '#f0f2f5', bgColor: '#475569', font: 'medium', x: 48, y: 240, width: 420, height: 84, trigger: 'cycle_resolution' },
-          { type: 'button', text: 'Update · v0.4.0 installed', color: '#e9fff1', bgColor: '#0e2418', font: 'medium', x: 48, y: 340, width: 420, height: 84, trigger: 'check_updates' },
+          { type: 'button', text: 'Check for updates', color: '#e9fff1', bgColor: '#0e2418', font: 'medium', x: 48, y: 340, width: 420, height: 84, trigger: 'check_updates' },
           { type: 'button', text: 'Back', color: '#f0f2f5', bgColor: '#334155', font: 'medium', x: 48, y: 464, width: 220, height: 72, sceneChange: 'Home', trigger: 'change_scene' }
         ]
       }

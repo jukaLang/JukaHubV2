@@ -212,10 +212,11 @@ func brwFullScreenSettingsRow() setRow {
 func brwClearChromeHits() {
 	sceneTitleBackRect, statusClockRect, statusWiFiRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	weatherStatusRect, statusMediaRect, statusVolumeRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
-	statusBrightnessRect = sdl.Rect{}
+	statusBrightnessRect, statusBluetoothRect = sdl.Rect{}, sdl.Rect{}
 	tb.startRect = sdl.Rect{}
 	updatePrompt.badge = sdl.Rect{}
 	headerTrophyClear()
+	headerBugClear()
 }
 
 // brwDrawFullscreenPaper paints the ground of the full-screen page before

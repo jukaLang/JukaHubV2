@@ -106,9 +106,22 @@ func sdlTeardownLeave(reason string) {
 func runCleanupHooks() {
 	cleanupHooksOnce.Do(func() {
 		for _, fn := range Cleanup {
-			fn()
+			runCleanupHook(fn)
 		}
 	})
+}
+
+// runCleanupHook runs one hook. A hook that panics is logged and the others
+// still run: the forced exit runs them on a goroutine of their own
+// (runCleanupHooksBounded), where a panic would end the process before the
+// hooks after it had put the CPU, the screen or a paused game back.
+func runCleanupHook(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			logWarn("exit", "a cleanup step failed: %v", r)
+		}
+	}()
+	fn()
 }
 
 // runCleanupHooksBounded is runCleanupHooks for a forced exit: it waits at

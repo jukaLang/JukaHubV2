@@ -133,6 +133,8 @@ const (
 	pkgHitSheetText
 	pkgHitSheet
 	pkgHitBody
+	// pkgHitStore is a pill of the "More stores" strip (pkgstores.go).
+	pkgHitStore
 )
 
 // pkgHit is one click target recorded by the last frame. Index is the view,
@@ -507,6 +509,9 @@ func pkgOnSceneEnter(config *Config) {
 	st.sheet = pkgSheet{}
 	st.press = pkgPress{}
 	st.chipFocus = false
+	// A visit starts on the content, unless it is the return from a screen
+	// the "More stores" strip opened (pkgstores.go).
+	pkgStoresOnEnter()
 	st.reveal = true
 	st.heroSince = sdl.GetTicks64()
 	// Whatever fetch the last visit started was cancelled with that visit.

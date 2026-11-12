@@ -150,7 +150,7 @@ func gameProfilePanelRescan() {
 			ready++
 		}
 	}
-	ShowToast(fmt.Sprintf("Rescanned %d profile(s) · %d ready", len(entries), ready), ToastKindInfo)
+	ShowToast("Rescanned "+pluralizeCount(len(entries), "profile", "profiles")+fmt.Sprintf(" · %d ready", ready), ToastKindInfo)
 	PlayNavSound()
 }
 

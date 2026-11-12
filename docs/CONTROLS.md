@@ -227,7 +227,7 @@ no footer names may have no key.
 | Browser | Select menu · L1 / R1 scroll · L2 / R2 zoom · X links · Y search · L3 mode | M or the Menu key · PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info, Backspace or Alt+← / Alt+→ back / forward, F5 reload |
 | Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
 | Chat | L1 / R1 tabs · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, R renames you, Del drops a waiting file |
-| On-screen keyboard | A type · B close · X delete · Y submit · L1 / R1 shift / layer | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V |
+| On-screen keyboard | A type · B close · X delete · Y submit · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
 | Settings | L1 / R1 sections · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · arrows (Left / Right page the sheet) |
 | Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
 | Voice command | A or Menu speak / stop · X type · Y phone QR · B back (cancels while listening or during the pause) | Enter · X · Y · Esc; F4 speak / stop |
@@ -380,6 +380,23 @@ without the switch: the pad is its mouse from the start, the D-pad types arrow
 keys and a few buttons type Enter, Esc, Tab and Space, and Select + Start
 closes the window (held, it ends the program). The table is under
 [Windows apps](#windows-apps).
+
+#### Ask Juka in a game (hold Select + R2)
+
+With **Settings → Voice & AI → Game assistant** on (TrimUI handhelds; off until
+you turn it on), hold **Select + R2** for about a second (0.7 s) in a game, an
+emulator or a port JukaHub started. The game pauses, its picture stays on
+screen, dimmed, and the voice orb listens: ask about the game.
+
+| Button | Action |
+|--------|--------|
+| A or R2 | While Juka listens, send now; on an answer, ask again |
+| B, Menu, or Select + R2 again | Back to the game (it carries on where it was) |
+
+The game sees Select and R2 go down before JukaHub takes the pad, then nothing
+until it carries on; it also resumes by itself after three minutes, and a
+ringing alarm takes over. See
+[VOICE.md](VOICE.md#asking-about-the-game-youre-playing).
 
 ### Stick calibration
 
@@ -903,10 +920,14 @@ on the tab:
   twice, **Cancel** in the message's actions stops it (deleting it while it
   goes out takes it back off the channel), and a file Discord refuses says why
   under the bubble, with **Retry**.
-- **Juka AI** — text files (logs, configs, notes), up to three with a
-  question. Juka is shown the file (the start and the end of a long one) with
-  the question, a follow-up keeps it, and a file sent alone asks what stands
-  out in it.
+- **Juka AI** — text files (logs, configs, notes), pictures (JPEG, PNG, GIF,
+  WebP, BMP), videos and recordings, up to three with a question. Juka is shown
+  a text file (the start and the end of a long one) and sees a picture; a
+  video is shown as three frames with what is said in its first ten minutes,
+  and a recording is heard. A follow-up keeps them, and a file sent alone asks
+  what is in it. HEIC and other formats JukaHub cannot open are refused when
+  attached. Videos need ffmpeg (installed like the player's when it is
+  missing).
 - **Saved** — any file, kept as a reference to where it is on this device.
 
 Files other people send show under their message. The first picture is drawn
@@ -950,6 +971,7 @@ Opens for search fields, the chat composer, the terminal and the unit converter.
 | L1 | Shift (upper/lower case), without losing the focused key |
 | R1 | Switch between the letters and the numbers/symbols layer |
 | Y | Submit (send in chat, search elsewhere) |
+| R2 | Voice typing: press to talk, press again to send (**F4** on a keyboard). With the pointer up over the page above the keyboard, R2 scrolls instead |
 | B / Back / Start | Close |
 
 It also closes with its own close button, by tapping outside the panel, or when
@@ -1615,8 +1637,9 @@ returns to the network list.
 
 ## Bluetooth devices
 
-Open it from **Settings → Network → Bluetooth devices**, **Start → Bluetooth**,
-search, or the **Controllers** row in PS Remote Play. It needs `bluetoothctl`,
+Open it from **Settings → Network → Bluetooth devices**, **Quick Settings →
+Bluetooth Devices**, **Start → Bluetooth**, search ("connect headphones" finds it
+too), or the **Controllers** row in PS Remote Play. It needs `bluetoothctl`,
 so Windows pairs in its own Settings instead.
 
 | Input | Action |
@@ -1815,6 +1838,12 @@ game, **Menu** keeps its old job (Back). **Settings → Controls → Menu button
 voice** turns the Menu binding off for good; **F4** stays the voice key on a
 keyboard.
 
+Juka's answers are spoken while **Settings → Voice & AI → Juka's voice** is on
+(the default); any button stops the voice. **R2** is voice typing on the
+on-screen keyboard whatever the Menu setting, and in a game **Select + R2**
+opens the orb over the paused game when the Game assistant is on
+([above](#ask-juka-in-a-game-hold-select--r2)).
+
 ## Voice command
 
 Open it from **Start → Tools → Voice command** or with **Y** in the Home search
@@ -1835,6 +1864,28 @@ On a keyboard, **Enter** listens (**F4**, and **Menu** on the pad, also start
 and stop listening on the page), **X** types, **Y** shows the QR code and **Esc** goes back. A command
 that opens a screen leaves the voice page behind, so **B** there returns to
 where you were.
+
+The page's **Shortcuts** button opens [Voice shortcuts](#voice-shortcuts).
+
+## Voice shortcuts
+
+**Settings → Voice & AI → Voice shortcuts**, the Voice command page's
+**Shortcuts** button, or "open voice shortcuts": the words you taught the voice
+assistant. See [VOICE.md](VOICE.md#your-own-words).
+
+| Button | Action |
+|--------|--------|
+| D-pad | Choose a word |
+| A (Enter) | Change the word; on **Teach a word**, start |
+| X (X / Delete) | Delete the word (it asks first) |
+| Y | Try it |
+| B (Esc) | Back |
+
+While teaching: **A** says the word (or goes on to the next step), **X** types
+it instead and **B** goes back a step; when picking what it opens, **L1 / R1**
+switch the group (All, Emulators, Screens, Apps, Games, Settings, Media,
+Files), **X** filters and **A** picks. Every button, row and the microphone
+disc also answer a mouse or a tap, and the wheel scrolls.
 
 ## Watch Party
 

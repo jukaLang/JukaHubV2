@@ -38,7 +38,6 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -68,8 +67,12 @@ const (
 	// reads this tree.
 	retroArchWinCoreIndexURL = "https://buildbot.libretro.com/nightly/windows/x86_64/latest/.index-extended"
 	retroArchWinCoreBaseURL  = "https://buildbot.libretro.com/nightly/windows/x86_64/latest/"
-	coreUpdateMaxDownload    = 96 << 20
-	standaloneMaxDownload    = 256 << 20
+	// Archives and extracted cores are streamed to the card. These limits
+	// bound a corrupt response or zip bomb without excluding published large
+	// cores such as MAME (its ARM64 archive exceeds the old 96 MB limit).
+	coreUpdateMaxDownload = 512 << 20
+	coreUpdateMaxBinary   = 1 << 30
+	standaloneMaxDownload = 256 << 20
 )
 
 // The URLs are variables so tests can point the checker at a local server. An
@@ -328,9 +331,11 @@ func fetchCoreIndex(ctx context.Context, client *http.Client) ([]coreIndexEntry,
 	return entries, nil
 }
 
-// fetchCoreUpdate downloads one core zip, checks the CRC32 the index promised
-// and writes the binary into the pool. A pool build is inert until something
-// activates it: the Emulators page does, and so does the automatic pass.
+// fetchCoreUpdate downloads one core zip to the card, checks the CRC32 the
+// index promised, and writes the binary into the pool. Neither the archive nor
+// its extracted binary needs to fit in RAM. A pool build is inert until
+// something activates it: the Emulators page does, and so does the automatic
+// pass.
 //
 // Two outcomes are refusals rather than failures (coreRefusedError): a build
 // larger than the download limit, and one that cannot load on this firmware.
@@ -338,22 +343,54 @@ func fetchCoreIndex(ctx context.Context, client *http.Client) ([]coreIndexEntry,
 // (coreBuildRefused) and the daily pass does not download it every day; the
 // next build the index lists gets its own check.
 func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, poolRoot string) (coreBuild, error) {
-	data, err := fetchUpdateBytes(ctx, client, upd.URL, coreUpdateMaxDownload)
-	if err != nil {
-		var tooLarge *updateTooLargeError
-		if errors.As(err, &tooLarge) {
-			return coreBuild{}, coreRefuse(upd, coreTooLargeReason())
-		}
+	if err := emulatorUpdateValidateURL(upd.URL); err != nil {
 		return coreBuild{}, err
 	}
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if upd.Core == "" || strings.ContainsAny(upd.Core, "/\\") || upd.Core == "." || upd.Core == ".." || !validCoreIndexDate(upd.Date) {
+		return coreBuild{}, errors.New("the core index names an invalid core or date")
+	}
+	if err := os.MkdirAll(poolRoot, 0o755); err != nil {
+		return coreBuild{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upd.URL, nil)
+	if err != nil {
+		return coreBuild{}, err
+	}
+	req.Header.Set("User-Agent", "JukaHub-EmulatorUpdates/"+versionString(nil))
+	resp, err := client.Do(req)
+	if err != nil {
+		return coreBuild{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return coreBuild{}, fmt.Errorf("HTTP %d from %s", resp.StatusCode, upd.URL)
+	}
+	if resp.ContentLength > coreUpdateMaxDownload {
+		return coreBuild{}, coreRefuse(upd, coreTooLargeReason(coreUpdateMaxDownload))
+	}
+	archive, err := os.CreateTemp(poolRoot, ".core-*.zip.part")
+	if err != nil {
+		return coreBuild{}, err
+	}
+	defer func() {
+		archive.Close()
+		_ = os.Remove(archive.Name())
+	}()
+	archiveSize, err := io.Copy(archive, io.LimitReader(resp.Body, coreUpdateMaxDownload+1))
+	if err != nil {
+		return coreBuild{}, err
+	}
+	if archiveSize > coreUpdateMaxDownload {
+		return coreBuild{}, coreRefuse(upd, coreTooLargeReason(coreUpdateMaxDownload))
+	}
+	zr, err := zip.NewReader(archive, archiveSize)
 	if err != nil {
 		return coreBuild{}, fmt.Errorf("core archive is not a zip: %w", err)
 	}
 	// The archive holds the binary under the name the index published: a
 	// shared object from the handheld tree, a DLL from the Windows tree.
 	want := coreUpdateBinary(upd)
-	var payload []byte
+	var selected *zip.File
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -361,31 +398,49 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		if !strings.EqualFold(filepath.Base(f.Name), want) {
 			continue
 		}
-		rc, err := f.Open()
-		if err != nil {
-			return coreBuild{}, err
-		}
-		payload, err = io.ReadAll(io.LimitReader(rc, coreUpdateMaxDownload+1))
-		rc.Close()
-		if err != nil {
-			return coreBuild{}, err
-		}
+		selected = f
 		break
 	}
-	if len(payload) == 0 {
+	if selected == nil || selected.UncompressedSize64 == 0 {
 		return coreBuild{}, fmt.Errorf("%s does not contain %s", upd.URL, want)
 	}
-	if int64(len(payload)) > coreUpdateMaxDownload {
-		return coreBuild{}, coreRefuse(upd, coreTooLargeReason())
+	if selected.UncompressedSize64 > coreUpdateMaxBinary {
+		return coreBuild{}, coreRefuse(upd, coreTooLargeReason(coreUpdateMaxBinary))
 	}
-	h := crc32.NewIEEE()
-	_, _ = h.Write(payload)
-	if got := fmt.Sprintf("%08x", h.Sum32()); got != upd.CRC32 {
+	binary, err := os.CreateTemp(poolRoot, ".core-*.so.part")
+	if err != nil {
+		return coreBuild{}, err
+	}
+	defer func() {
+		binary.Close()
+		_ = os.Remove(binary.Name())
+	}()
+	rc, err := selected.Open()
+	if err != nil {
+		return coreBuild{}, err
+	}
+	crc := crc32.NewIEEE()
+	sha := sha256.New()
+	size, copyErr := io.Copy(io.MultiWriter(binary, crc, sha), io.LimitReader(rc, coreUpdateMaxBinary+1))
+	closeErr := rc.Close()
+	if copyErr != nil {
+		return coreBuild{}, copyErr
+	}
+	if closeErr != nil {
+		return coreBuild{}, closeErr
+	}
+	if size > coreUpdateMaxBinary {
+		return coreBuild{}, coreRefuse(upd, coreTooLargeReason(coreUpdateMaxBinary))
+	}
+	if got := fmt.Sprintf("%08x", crc.Sum32()); got != upd.CRC32 {
 		return coreBuild{}, fmt.Errorf("core checksum mismatch (index %s, download %s)", upd.CRC32, got)
 	}
+	if err := binary.Sync(); err != nil {
+		return coreBuild{}, err
+	}
 	// The bytes are the build the index promised; whether this firmware can
-	// load them is a separate question, asked before anything is written.
-	if problem := coreLoadProblemData(payload, upd.Active); problem != "" {
+	// load them is a separate question, asked before the pool is changed.
+	if problem := coreLoadProblemFile(binary.Name(), upd.Active); problem != "" {
 		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
 	}
 
@@ -394,23 +449,23 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		return coreBuild{}, err
 	}
 	path := filepath.Join(dir, want)
-	tmp := path + ".part"
-	if err := os.WriteFile(tmp, payload, 0o755); err != nil {
+	if err := binary.Chmod(0o755); err != nil {
 		return coreBuild{}, err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := binary.Close(); err != nil {
+		return coreBuild{}, err
+	}
+	if err := os.Rename(binary.Name(), path); err != nil {
 		return coreBuild{}, err
 	}
 	// Provenance travels with the build: the pool is a folder a user can copy
 	// to another card, and the URL is the only record of where it came from.
 	// The buildbot states a CRC32 only; the SHA-256 of what was installed is
 	// recorded so a later check can tell this file from a changed one.
-	sum := sha256.Sum256(payload)
 	meta := map[string]string{
 		"source":     upd.URL,
 		"crc32":      upd.CRC32,
-		"sha256":     hex.EncodeToString(sum[:]),
+		"sha256":     hex.EncodeToString(sha.Sum(nil)),
 		"index_date": upd.Date,
 		"fetched_at": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -430,7 +485,7 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		File:    want,
 		Path:    path,
 		Pool:    true,
-		Size:    int64(len(payload)),
+		Size:    size,
 	}, nil
 }
 
@@ -456,10 +511,10 @@ func (e *coreRefusedError) Error() string {
 // refusal of that kind reads "… cannot load on this firmware: needs …".
 const coreCannotLoadReason = "cannot load on this firmware: "
 
-// coreTooLargeReason is the refusal of a build over coreUpdateMaxDownload (a
-// full MAME core can be).
-func coreTooLargeReason() string {
-	return fmt.Sprintf("is larger than the %d MB a core download may be", coreUpdateMaxDownload>>20)
+// coreTooLargeReason is the refusal of a corrupt or unreasonably large archive
+// or extracted binary.
+func coreTooLargeReason(limit int64) string {
+	return fmt.Sprintf("is larger than the %d MB a core may be", limit>>20)
 }
 
 // coreRefuse remembers that upd's build was refused and returns the error that
@@ -653,7 +708,7 @@ type emulatorUpdateReport struct {
 func (r emulatorUpdateReport) summary() string {
 	parts := make([]string, 0, 3)
 	if len(r.Cores) > 0 {
-		parts = append(parts, itoa(len(r.Cores))+" core(s) added to the pool")
+		parts = append(parts, pluralizeCount(len(r.Cores), "core", "cores")+" added to the pool")
 	}
 	if len(r.Refused) > 0 {
 		parts = append(parts, strings.Join(r.Refused, ", ")+": new build not usable here, current kept")
@@ -710,12 +765,12 @@ func runEmulatorUpdates(ctx context.Context, client *http.Client) emulatorUpdate
 }
 
 // newEmulatorUpdateClient is the patch client with a longer deadline: a core or
-// emulator archive is tens of megabytes, and the 25 s metadata timeout would
+// emulator archive can exceed 100 MB, and the 25 s metadata timeout would
 // cut a slow handheld download in half. Redirects are still checked against the
 // same host policy.
 func newEmulatorUpdateClient() *http.Client {
 	return &http.Client{
-		Timeout: 10 * time.Minute,
+		Timeout: 30 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 5 {
 				return errors.New("too many redirects")

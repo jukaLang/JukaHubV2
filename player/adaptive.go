@@ -90,6 +90,14 @@ type FrameRateController struct {
 	// videoActive is a video on screen that is playing: it gets the active
 	// cadence whatever the power setting, or a 30 fps clip judders at 24.
 	videoActive bool
+	// backdropMS is what the moving pictures drawn in the last frame asked
+	// for (requestFrameEvery): a new frame at least every backdropMS ms, 0
+	// when nothing on screen moves by itself.
+	backdropMS uint32
+	// backdropPastLowPower is a request the Low Power setting does not cap
+	// at its idle cadence (requestFrameEveryPastLowPower): the liquid
+	// background's moving water.
+	backdropPastLowPower bool
 }
 
 // NewFrameRateController creates a controller tuned for the given platform.
@@ -152,6 +160,38 @@ func (fc *FrameRateController) SetVideoActive(on bool) {
 	fc.mu.Unlock()
 }
 
+// SetBackdropFrame reports what the moving pictures drawn in the frame just
+// finished need: a new frame at least every ms milliseconds, or 0 when
+// nothing moves by itself (adaptiveTick feeds it from requestFrameEvery). A
+// moving backdrop is not someone using the screen, so it never shortens the
+// cadence below the active one, and under Low Power it keeps the idle cadence
+// — the cap that setting promises — but gets it whole (Pace): the liquid
+// background's water stepped at 30 Hz but drawn at 15–24 fps moved in jerks,
+// and an animated wallpaper of 25 frames a second played at 15. pastLowPower
+// lifts that cap for the frame (requestFrameEveryPastLowPower): the moving
+// water's request, which Low Power — the handheld's default — does not cap.
+func (fc *FrameRateController) SetBackdropFrame(ms uint32, pastLowPower bool) {
+	fc.mu.Lock()
+	fc.backdropMS = ms
+	fc.backdropPastLowPower = pastLowPower
+	fc.mu.Unlock()
+}
+
+// backdropDelay folds a moving backdrop's request into the delay a mode gave:
+// never faster than the active cadence, never past Low Power's idle cap (the
+// caller passes lowPower false for a request that may pass it), and never
+// slower than the mode already was.
+func (p frameProfile) backdropDelay(delay, want uint32, lowPower bool) uint32 {
+	if want == 0 {
+		return delay
+	}
+	want = max(want, p.Active)
+	if lowPower {
+		want = max(want, p.Idle)
+	}
+	return min(delay, want)
+}
+
 // Delay returns the recommended ms to sleep this frame and updates the
 // internal mode based on elapsed idle time.
 func (fc *FrameRateController) Delay() uint32 {
@@ -162,6 +202,8 @@ func (fc *FrameRateController) Delay() uint32 {
 	lowPower := fc.lowPower
 	pinned := fc.performancePinned
 	video := fc.videoActive
+	backdrop := fc.backdropMS
+	backdropPast := fc.backdropPastLowPower
 
 	fc.mu.Unlock()
 
@@ -193,7 +235,7 @@ func (fc *FrameRateController) Delay() uint32 {
 		// 30 frames a second judders, and the decoder is the real cost anyway.
 		return fc.profile.Active
 	}
-	return fc.profile.delayFor(mode, lowPower)
+	return fc.profile.backdropDelay(fc.profile.delayFor(mode, lowPower), backdrop, lowPower && !backdropPast)
 }
 
 // CurrentMode returns the current frame rate mode (for diagnostics).
@@ -205,16 +247,18 @@ func (fc *FrameRateController) CurrentMode() FrameRateMode {
 
 // Pace returns how long the loop should sleep after a frame that took spent.
 //
-// While the user is pressing buttons, something animates or a video plays,
-// the cadence is a frame budget: the frame's own cost comes out of it, so the
-// handheld's 33 ms profile really is 30 fps. A plain sleep after the frame
-// made it 33 ms plus the 10–20 ms the A53 spends drawing — about 20 fps while
-// navigating. Once nobody is touching anything the sleep stays whole, which is
-// the cheaper cadence idle screens are meant to have.
+// While the user is pressing buttons, something animates, a video plays or
+// the backdrop moves, the cadence is a frame budget: the frame's own cost
+// comes out of it, so the handheld's 33 ms profile really is 30 fps. A plain
+// sleep after the frame made it 33 ms plus the 10–20 ms the A53 spends
+// drawing — about 20 fps while navigating. Once nothing is touched and
+// nothing moves the sleep stays whole, which is the cheaper cadence idle
+// screens are meant to have.
 func (fc *FrameRateController) Pace(spent time.Duration) uint32 {
 	delay := fc.Delay()
 	fc.mu.Lock()
-	busy := fc.animationActive || fc.performancePinned || fc.videoActive || sdl.GetTicks64()-fc.lastInputTime < fc.idleThreshold
+	busy := fc.animationActive || fc.performancePinned || fc.videoActive || fc.backdropMS > 0 ||
+		sdl.GetTicks64()-fc.lastInputTime < fc.idleThreshold
 	fc.mu.Unlock()
 	if !busy || spent <= 0 {
 		return delay
@@ -226,6 +270,92 @@ func (fc *FrameRateController) Pace(spent time.Duration) uint32 {
 		return 1
 	}
 	return delay - ms
+}
+
+// ── Frame requests from moving pictures ─────────────────────────────────
+
+// frameWant is the shortest frame interval anything drawn in the current
+// frame asked for, and the frame (frameCount) it was asked in.
+var frameWant struct {
+	ms    uint32
+	frame uint64
+	// pastLowPower: a request of this frame may pass Low Power's cap
+	// (requestFrameEveryPastLowPower).
+	pastLowPower bool
+}
+
+// requestFrameEvery is how a picture that moves by itself — the liquid
+// background's water, an animated wallpaper, the living background — asks
+// the frame-rate governor for a new frame at least every ms milliseconds. It
+// is asked from the draw, every frame the picture is drawn moving, so it only
+// counts while the picture is on screen: a screen that stops drawing the
+// backdrop (a video, a game, a full-screen page) stops asking, and so does a
+// picture that has come to rest. 1 means as fast as the active cadence goes.
+// The shortest request of the frame wins. Main thread only.
+func requestFrameEvery(ms uint32) {
+	if ms == 0 {
+		ms = 1
+	}
+	if frameWant.frame != frameCount {
+		// The frame's first request: what an earlier frame asked is over.
+		frameWant.ms, frameWant.frame, frameWant.pastLowPower = ms, frameCount, false
+	} else if frameWant.ms == 0 || ms < frameWant.ms {
+		frameWant.ms = ms
+	}
+}
+
+// requestFrameEveryPastLowPower is requestFrameEvery for the one picture the
+// Low Power setting does not cap at its idle cadence: the liquid background's
+// moving water (liquidbg.go). Low Power is the handheld's default, and the
+// water at its 24 fps was the "slow framerate" a tester reported. The active
+// cadence still bounds it, the idle screens' own budget (saver_power.go)
+// still stretches the sleep, and under Battery Saver the water asks with
+// requestFrameEvery and keeps the cap.
+func requestFrameEveryPastLowPower(ms uint32) {
+	requestFrameEvery(ms)
+	frameWant.pastLowPower = true
+}
+
+// adaptiveTick is this file's per-frame work on the main loop, once the
+// frame is drawn and before its sleep is worked out: it hands the governor
+// what the frame's moving pictures asked for, and now and then logs how much
+// memory JukaHub uses. Modal loops (the on-screen keyboard, the shutdown
+// card) present without coming here; what they ask for lands in the frame
+// they return to.
+func adaptiveTick() {
+	want, past := uint32(0), false
+	if frameWant.frame == frameCount {
+		want, past = frameWant.ms, frameWant.pastLowPower
+	}
+	frameWant.ms, frameWant.pastLowPower = 0, false
+	if frameRateCtrl != nil {
+		frameRateCtrl.SetBackdropFrame(want, past)
+	}
+	memoryLogTick(time.Now())
+}
+
+// The memory line (memstat.go) is logged a minute in, once startup has
+// settled, and every five minutes after: often enough that a bug report's
+// log shows what the app held, rare enough to cost nothing.
+const (
+	memLogFirst = time.Minute
+	memLogEvery = 5 * time.Minute
+)
+
+var memLogNext time.Time
+
+// memoryLogTick logs the memory line when it is due. Main thread: the
+// texture caches it adds up are the render thread's.
+func memoryLogTick(now time.Time) {
+	if memLogNext.IsZero() {
+		memLogNext = now.Add(memLogFirst)
+		return
+	}
+	if now.Before(memLogNext) {
+		return
+	}
+	memLogNext = now.Add(memLogEvery)
+	logInfo("mem", "%s", memoryReportLine())
 }
 
 // ──────────────────────────────────────────────────────────────────────

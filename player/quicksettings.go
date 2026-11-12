@@ -76,6 +76,9 @@ const (
 	qsLinkWiFi
 	qsLinkControls
 	qsLinkLEDPanel
+	// The Bluetooth page (bluetooth_devices_ui.go): pads, headphones and
+	// keyboards are paired without leaving JukaHub.
+	qsLinkBluetooth
 )
 
 type qsLink struct {
@@ -177,6 +180,7 @@ func qsInit() {
 		lastVolume:     -1,
 		lastBrightness: -1,
 	}
+	qs.links = qsWithBluetoothLink(qs.links)
 	qsRefreshAvailability()
 	qsLoadPersisted()
 	// The saved brightness waits for the brightness controller to know its
@@ -186,6 +190,32 @@ func qsInit() {
 	if user := loadUserConfig(); user != nil && user.Variables.BrightnessSet {
 		brightnessNoteSavedLevel(user.Variables.Brightness)
 	}
+}
+
+// qsWithBluetoothLink puts "Bluetooth Devices" after "Wi-Fi Networks" where
+// this system can pair devices (btDevicesAvailable: Linux with bluetoothctl,
+// looked up once and cached). A tester asked for a way to connect a device
+// without leaving JukaHub — the page was there, behind Settings → Network and
+// the Start menu, but not next to the switch people reach for. The row is
+// decided once, when the panel is built: adding it later would move the rows
+// under an open panel's cursor.
+func qsWithBluetoothLink(links []qsLink) []qsLink {
+	if !btDevicesAvailable() {
+		return links
+	}
+	at := 0
+	for i, l := range links {
+		switch l.Action {
+		case qsLinkBluetooth:
+			return links
+		case qsLinkWiFi:
+			at = i + 1
+		}
+	}
+	out := make([]qsLink, 0, len(links)+1)
+	out = append(out, links[:at]...)
+	out = append(out, qsLink{Label: "Bluetooth Devices", Icon: "[B]", Action: qsLinkBluetooth})
+	return append(out, links[at:]...)
 }
 
 // qsRefreshAvailability probes which backends exist. It only looks for binaries
@@ -236,6 +266,11 @@ func qsRefreshAvailability() {
 			if !l.Available {
 				l.Detail = "Unavailable"
 			}
+		case qsLinkBluetooth:
+			// Offered only where bluetoothctl was found; one that went away
+			// since leaves the row dim instead of opening an empty page.
+			l.Available = btDevicesAvailable()
+			l.Detail = "Unavailable"
 		}
 	}
 	volumeOK := volumeBackend() != ""
@@ -589,8 +624,11 @@ func qsSelect() {
 func qsOpenLink(l qsLink) {
 	if !l.Available {
 		reason := l.Detail
-		if l.Action == qsLinkWiFi {
+		switch l.Action {
+		case qsLinkWiFi:
 			reason = wifiUnavailableReason()
+		case qsLinkBluetooth:
+			reason = "no bluetoothctl"
 		}
 		ShowToast(l.Label+" is unavailable on this device ("+reason+")", ToastKindInfo)
 		return
@@ -599,6 +637,9 @@ func qsOpenLink(l qsLink) {
 	case qsLinkWiFi:
 		// The Wi-Fi page replaces the panel (wifiScrOpen closes it).
 		wifiScrOpen(appConfig)
+	case qsLinkBluetooth:
+		// So does the Bluetooth page (btScreenOpen closes it).
+		btScreenOpen(appConfig)
 	case qsLinkControls:
 		// The legend is a modal of its own: the panel steps aside so two
 		// cards are never stacked.

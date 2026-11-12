@@ -954,6 +954,18 @@ func overlayPageHeader(card sdl.Rect, title, subtitle, glyph string) UIPageHeade
 	return overlayHeaderOnCard(UIPanelHeader(title, subtitle, glyph), card)
 }
 
+// uiCenteredHeaderLine fits one centered page-header line into the band and
+// returns its draw x. Centered headers used to measure the raw string, so a
+// long centered title or status painted through both sides of the band.
+func uiCenteredHeaderLine(font *ttf.Font, text string, x, w int32) (string, int32) {
+	if font == nil || w <= 0 {
+		return "", x
+	}
+	text = ellipsize(font, text, w)
+	tw, _, _ := font.SizeUTF8(text)
+	return text, x + (w-int32(tw))/2
+}
+
 // UIPageHeaderDraw paints the band and returns the y where the page's content
 // starts, so a caller never has to re-derive the header's height.
 func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) int32 {
@@ -976,20 +988,20 @@ func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) in
 
 	if h.Centered {
 		if title != nil {
-			tw, _, _ := title.SizeUTF8(h.Title)
-			renderText(renderer, config, title, h.Title, ColorTextPrimary(), h.X+(h.W-int32(tw))/2, h.Y+m.TitleY)
+			text, tx := uiCenteredHeaderLine(title, h.Title, h.X, h.W)
+			renderText(renderer, config, title, text, ColorTextPrimary(), tx, h.Y+m.TitleY)
 		}
 		if sub != nil && strings.TrimSpace(h.Subtitle) != "" {
-			sw, _, _ := sub.SizeUTF8(h.Subtitle)
-			renderText(renderer, config, sub, h.Subtitle, ColorTextSecondary(), h.X+(h.W-int32(sw))/2, h.Y+m.SubtitleY)
+			text, tx := uiCenteredHeaderLine(sub, h.Subtitle, h.X, h.W)
+			renderText(renderer, config, sub, text, ColorTextSecondary(), tx, h.Y+m.SubtitleY)
 		}
 		if status != nil && strings.TrimSpace(h.Status) != "" {
 			color := h.StatusColor
 			if color.A == 0 {
 				color = ColorTextTertiary()
 			}
-			sw, _, _ := status.SizeUTF8(h.Status)
-			renderText(renderer, config, status, h.Status, color, h.X+(h.W-int32(sw))/2, h.Y+m.StatusY)
+			text, tx := uiCenteredHeaderLine(status, h.Status, h.X, h.W)
+			renderText(renderer, config, status, text, color, tx, h.Y+m.StatusY)
 		}
 		return h.Y + m.Height
 	}
@@ -1184,6 +1196,7 @@ func UISectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, 
 		glyph(renderer, insetRect(sdl.Rect{X: x, Y: chipY, W: chip, H: chip}, 4), ColorTextSecondary())
 		textX += chip + 10
 	}
+	label = ellipsize(font, label, x+w-textX)
 	tw, _, _ := font.SizeUTF8(label)
 	renderText(renderer, config, font, label, ColorTextTertiary(), textX, textY)
 	if lx := textX + int32(tw) + 12; lx < x+w {

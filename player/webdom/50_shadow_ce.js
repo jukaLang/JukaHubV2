@@ -191,6 +191,19 @@ function ceDefinitionFor(name) {
   return def && !def.ext ? def : null;
 }
 
+// ceBuiltinDefinition is the definition a customized built-in element names
+// with its `is` attribute, provided it extends this element's tag.
+function ceBuiltinDefinition(r) {
+  var is = getAttrRaw(r, 'is');
+  if (!is) return null;
+  var def = ceRegistry[is];
+  return def && def.ext === r.ln ? def : null;
+}
+
+function ceDefinitionForRecord(r) {
+  return ceDefinitionFor(r.ln) || ceBuiltinDefinition(r);
+}
+
 function ceCall(r, def, name, args) {
   var cb = def.cb[name];
   if (typeof cb !== 'function') return;
@@ -282,11 +295,10 @@ function ceConnected(r) {
   if (r.ce === 'custom') {
     if (r.ceDef) ceCall(r, r.ceDef, 'connectedCallback');
     return;
-  }
-  if (r.ce === 'undefined' && r.ns === 0 && r.d === mainDoc) {
-    var def = ceDefinitionFor(r.ln);
-    if (def) ceUpgrade(r, def);
-  }
+  }	if ((r.ce === undefined || r.ce === 'undefined') && r.ns === 0 && r.d === mainDoc) {
+		var def = ceDefinitionForRecord(r);
+		if (def) ceUpgrade(r, def);
+	}
 }
 function ceDisconnected(r) {
   if (r.ceDef) ceCall(r, r.ceDef, 'disconnectedCallback');
@@ -307,14 +319,14 @@ function ceUpgradeTree(root, name) {
   while (stack.length) {
     var top = stack.pop();
     for (var e = top.t === 1 ? top : nextElement(top, top); e; e = nextElement(e, top)) {
-      if (e.ce === 'undefined' && e.ns === 0 && (name === null || e.ln === name)) found.push(e);
+      if ((e.ce === undefined || e.ce === 'undefined') && e.ns === 0) {
+        var d = ceDefinitionForRecord(e);
+        if (d && (name === null || d.name === name)) found.push({ e: e, def: d });
+      }
       if (e.sr) stack.push(e.sr);
     }
   }
-  for (var i = 0; i < found.length; i++) {
-    var def = ceDefinitionFor(found[i].ln);
-    if (def) ceUpgrade(found[i], def);
-  }
+  for (var i = 0; i < found.length; i++) ceUpgrade(found[i].e, found[i].def);
 }
 
 var CustomElementRegistry = iface('CustomElementRegistry', null);
@@ -345,7 +357,7 @@ mix(CustomElementRegistry.prototype, {
     var def = { name: name, ctor: ctor, proto: proto, cb: cb, observed: observed, ext: options && options.extends ? str(options.extends) : null };
     ceRegistry[name] = def;
     ceByCtor.set(ctor, def);
-    if (!def.ext && mainDoc) ceUpgradeTree(mainDoc, name);
+    if (mainDoc) ceUpgradeTree(mainDoc, name);
     var w = ceWaiting[name];
     if (w) {
       delete ceWaiting[name];

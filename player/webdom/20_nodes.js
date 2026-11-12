@@ -578,7 +578,9 @@ function afterConnect(els) {
   var main = mainDoc;
   for (var i = 0; i < els.length; i++) {
     var r = els[i];
-    if (r.ce !== undefined) ceConnected(r);
+    // A customized built-in has no `ce` marker until it is upgraded; it is
+    // identified by its `is` attribute, so every connected element asks.
+    if (r.t === 1) ceConnected(r);
     if (r.d === main && r.c) {
       try { hooks.connected(r); } catch (e) { reportException(e); }
     }
@@ -1886,9 +1888,18 @@ function createElementForDoc(d, localName, options) {
   var ns = d.html || d.ctype === 'application/xhtml+xml' ? 0 : 3;
   var def = ns === 0 ? ceDefinitionFor(name) : null;
   if (def) return ceCreateSync(d, def);
+  // createElement(tag, { is }) creates the built-in tag with its `is`
+  // attribute, then upgrades it through the definition that names that tag
+  // (APP-13).
+  var is = ns === 0 && options && options.is !== undefined && options.is !== null ? str(options.is) : null;
   var r = createElementRec(d, name, ns);
+  if (is !== null) setAttrRaw(r, 'is', is);
   if (ns === 3) r.nsu = null;
   if (name === 'script' && ns === 0) r.fa = true;
+  if (ns === 0) {
+    var builtin = ceBuiltinDefinition(r);
+    if (builtin) ceUpgrade(r, builtin);
+  }
   return wrap(r);
 }
 

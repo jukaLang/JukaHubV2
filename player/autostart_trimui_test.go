@@ -191,6 +191,10 @@ func TestTrimuiHookUsesTheFirmwareQueue(t *testing.T) {
 		{`[ "$old" != "$BOOT" ]`, "clearing a lock left by an earlier boot"},
 		{"if sleep 0.1 2>/dev/null; then STEP=0.5", "the busybox-without-fractions fallback"},
 		{`say "boot hook started (run as $0)"`, "logging whether it was run or sourced"},
+		{`record $paused`, "writing the paused loop down for launch.sh to resume"},
+		{`PAUSED=/tmp/jukahub-paused`, "the paused record launch.sh reads"},
+		{`: >"$MENU" 2>/dev/null`, "noting that the menu was on screen before it was closed"},
+		{`[ -n "$same" ] && break`, "not showing the menu a third time to a loop that ignores the queue"},
 	} {
 		if !strings.Contains(script, want[0]) {
 			t.Errorf("hook lacks %s (%q)", want[1], want[0])
@@ -220,6 +224,7 @@ func TestTrimuiHookUsesTheFirmwareQueue(t *testing.T) {
 		{"if [ -e /tmp/jukahub-autostart.lock/go ] && mkdir /tmp/jukahub-autostart.ran 2>/dev/null; then", "needs the go token and claims the start once per boot"},
 		{"/bin/sh '/mnt/SDCARD/Apps/JukaHub/launch.sh' || :", "runs launch.sh without failing a set -e loop"},
 		{"rm -f '/mnt/SDCARD/Apps/JukaHub/.autostart-pending'", "drops the marker once JukaHub exits"},
+		{"dd if=/dev/zero of=/dev/fb0 bs=65536 count=512 2>/dev/null || :", "blanks the closed menu without failing a set -e loop"},
 	} {
 		if !strings.Contains(queued, want[0]) {
 			t.Errorf("the queued command no longer %s:\n%s", want[1], queued)

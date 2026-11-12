@@ -197,6 +197,11 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 		} else {
 			status = "Loading video…"
 		}
+		// A failed stream's download says so, with its progress below in
+		// place of the slogan (ytdownload_ui.go).
+		if dl := ytDownloadCardStatus(prepareTitle); dl != "" {
+			status = ellipsize(statusFont, dl, cardW-2*loadingCardPad)
+		}
 	}
 	sw, _, _ := statusFont.SizeUTF8(status)
 	renderText(renderer, config, statusFont, status, ColorTextPrimary(),
@@ -212,6 +217,9 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 	sloganFont, _ := getCachedFont(config, "small")
 	if sloganFont == nil {
 		sloganFont = statusFont
+	}
+	if preparing && renderYtDownloadCardBody(renderer, config, sloganFont, cardX, cardY, cardW) {
+		return
 	}
 	idx := loadingJokeIndex(sdl.GetTicks64())
 	if idx < 0 {

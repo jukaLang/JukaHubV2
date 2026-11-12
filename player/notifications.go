@@ -917,6 +917,9 @@ func notifIsPointInBell(x, y int32) bool {
 	if nc.bellRect.W <= 0 || nc.bellRect.H <= 0 {
 		return false
 	}
+	if headerBugRect.W > 0 && pointInRect(x, y, headerBugRect) {
+		return false
+	}
 	return hitTouchTarget(nc.bellRect, x, y)
 }
 

@@ -501,10 +501,14 @@ type PatchState struct {
 	AvailableUpdateAsset string `json:"available_update_asset,omitempty"`
 	// Release notes are cached so the in-app changelog can open immediately
 	// after a restart, before (or without) a network round trip. The body is
-	// GitHub's release markdown, never user data.
+	// GitHub's release markdown or notes from its tagged commits.
 	ReleaseNotesTag  string `json:"release_notes_tag,omitempty"`
 	ReleaseNotesText string `json:"release_notes_text,omitempty"`
-	ChangelogSeenTag string `json:"changelog_seen_tag,omitempty"`
+	// The installed build keeps its own notes. Update checks may cache a newer
+	// release above without changing what the What's new page displays.
+	InstalledNotesTag  string `json:"installed_notes_tag,omitempty"`
+	InstalledNotesText string `json:"installed_notes_text,omitempty"`
+	ChangelogSeenTag   string `json:"changelog_seen_tag,omitempty"`
 }
 
 var (
@@ -2867,8 +2871,8 @@ func DiagnosticsText(config *Config) string {
 		for _, sc := range config.Scenes {
 			elements += len(sc.Elements)
 		}
-		sb.WriteString(fmt.Sprintf("Config       : %d scene(s), %d element(s), schema %d\n",
-			len(config.Scenes), elements, config.SchemaVersion))
+		sb.WriteString("Config       : " + pluralizeCount(len(config.Scenes), "scene", "scenes") + ", " +
+			pluralizeCount(elements, "element", "elements") + fmt.Sprintf(", schema %d\n", config.SchemaVersion))
 	}
 	// Support triage facts. Still no paths, addresses, names or config values:
 	// free space, connectivity state, how many emulators were detected and how
@@ -2928,7 +2932,8 @@ func DiagnosticsText(config *Config) string {
 		loadErrs, _ := snap["load_errors"].(int)
 		saveErrs, _ := snap["save_errors"].(int)
 		if loadErrs > 0 || saveErrs > 0 {
-			sb.WriteString(fmt.Sprintf("Config health: %d load error(s), %d save error(s)\n", loadErrs, saveErrs))
+			sb.WriteString("Config health: " + pluralizeCount(loadErrs, "load error", "load errors") +
+				", " + pluralizeCount(saveErrs, "save error", "save errors") + "\n")
 		}
 	}
 	// Frame cost as the device measured it. The desktop benchmarks answer "is
@@ -2950,7 +2955,7 @@ func DiagnosticsText(config *Config) string {
 		sb.WriteString("Last crash   : " + filepath.Base(report) + "\n")
 	}
 	backups, _ := ListBackupSets()
-	sb.WriteString(fmt.Sprintf("Backups      : %d set(s)\n", len(backups)))
+	sb.WriteString("Backups      : " + pluralizeCount(len(backups), "set", "sets") + "\n")
 	for _, b := range backups {
 		sb.WriteString("  - " + b + "\n")
 	}
@@ -3090,7 +3095,7 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 	repo, repoErr := LoadPackageRepo()
 	if repoErr == nil {
 		repoStatus = StatusCurrent
-		repoDetail = fmt.Sprintf("%d package(s) defined · %s", len(repo.Packages), mustRepoPath())
+		repoDetail = pluralizeCount(len(repo.Packages), "package", "packages") + " defined · " + mustRepoPath()
 		repoEnabled = len(repo.Packages) > 0
 	}
 	rows = append(rows, PatchRow{

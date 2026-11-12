@@ -300,13 +300,15 @@ func TestRommPlanFilesLooseGamesDuplicatesAndBIOS(t *testing.T) {
 	if it, ok := items["mystery.bin"]; !ok || it.Kind != rommKindUnknown || it.Action != rommActNone {
 		t.Errorf("the unknown .bin = %+v, want it listed and left alone", it)
 	}
-	for _, quiet := range []string{"notes.md", "sf2.zip", "Game.bin", "Game.cue", "Zelda.gba", "Game2 (Track 1).bin"} {
+	for _, quiet := range []string{"notes.md", "Game.bin", "Game.cue", "Zelda.gba", "Game2 (Track 1).bin"} {
 		if it, ok := items[quiet]; ok {
 			t.Errorf("%s should not be in the plan: %+v", quiet, it)
 		}
 	}
-	if plan.InPlace != 2 {
-		t.Errorf("in place = %d, want 2 (Zelda in Roms/GBA and the PS disc)", plan.InPlace)
+	// Roms/ARCADE is a known system since LIB-2, so the set there is a third
+	// game already in its place (it used to be an unknown folder).
+	if plan.InPlace != 3 {
+		t.Errorf("in place = %d, want 3 (Zelda in Roms/GBA, the PS disc and the arcade set)", plan.InPlace)
 	}
 	if changes, moved, deletes := rommPlanCounts(plan.Items); changes != 6 || moved != 6 || deletes != 0 {
 		t.Errorf("counts = %d changes, %d moves, %d deletes; want 6, 6, 0", changes, moved, deletes)

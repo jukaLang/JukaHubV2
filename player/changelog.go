@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +19,22 @@ import (
 )
 
 var changelogNotesLoading atomic.Bool
+var changelogNotesError struct {
+	sync.Mutex
+	text string
+}
+
+func setChangelogNotesError(message string) {
+	changelogNotesError.Lock()
+	changelogNotesError.text = message
+	changelogNotesError.Unlock()
+}
+
+func getChangelogNotesError() string {
+	changelogNotesError.Lock()
+	defer changelogNotesError.Unlock()
+	return changelogNotesError.text
+}
 
 // installedReleaseTag identifies the running build's release. The bundled
 // release-info.json wins; patch state covers installs whose stamp was written
@@ -69,10 +86,16 @@ func markChangelogSeen(tag string) {
 	_ = savePatchState()
 }
 
-// startChangelog prepares the notes page: it marks this release seen and, when
-// the cache does not cover it, fetches the latest notes in the background.
+// startChangelog prepares the notes page and retrieves this installed release.
 func startChangelog(config *Config) {
 	tag := installedReleaseTag()
+	if _, notes := cachedInstalledReleaseNotes(tag); notes == "" {
+		if cachedTag, legacy := cachedReleaseNotes(); strings.EqualFold(cachedTag, tag) && legacy != "" {
+			storeInstalledReleaseNotes(tag, legacy)
+		} else if dir, err := uhistDir(); err == nil {
+			storeInstalledReleaseNotes(tag, uhistNotesFor(dir, tag))
+		}
+	}
 	markChangelogSeen(tag)
 	refreshReleaseNotesAsync(config)
 }
@@ -83,93 +106,87 @@ func cachedReleaseNotes() (string, string) {
 	return patchState.ReleaseNotesTag, patchState.ReleaseNotesText
 }
 
+func cachedInstalledReleaseNotes(installed string) (string, string) {
+	patchStateMu.Lock()
+	defer patchStateMu.Unlock()
+	if installed != "" && strings.EqualFold(patchState.InstalledNotesTag, installed) {
+		return patchState.InstalledNotesTag, patchState.InstalledNotesText
+	}
+	return "", ""
+}
+
+func storeInstalledReleaseNotes(tag, body string) {
+	tag, body = strings.TrimSpace(tag), strings.TrimSpace(body)
+	if tag == "" || body == "" {
+		return
+	}
+	if len(body) > 200_000 {
+		body = strings.ToValidUTF8(body[:200_000], "")
+	}
+	patchStateMu.Lock()
+	if patchState.InstalledNotesTag == tag && patchState.InstalledNotesText == body {
+		patchStateMu.Unlock()
+		return
+	}
+	patchState.InstalledNotesTag, patchState.InstalledNotesText = tag, body
+	patchStateMu.Unlock()
+	_ = savePatchState()
+}
+
 // refreshReleaseNotesAsync avoids a blocking network call on the render path.
 // The result is stored in patch state, which the changelog renderer reads every
 // frame, so the page fills in when the request completes.
 func refreshReleaseNotesAsync(config *Config) {
-	if changelogNotesLoading.Load() {
-		return
-	}
 	installed := installedReleaseTag()
-	tag, notes := cachedReleaseNotes()
-	if notes != "" && (installed == "" || tag == installed) {
+	if installed == "" {
 		return
 	}
-	changelogNotesLoading.Store(true)
+	_, notes := cachedInstalledReleaseNotes(installed)
+	if notes != "" || !changelogNotesLoading.CompareAndSwap(false, true) {
+		return
+	}
+	setChangelogNotesError("")
 	go func() {
 		defer changelogNotesLoading.Store(false)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		rel, err := FetchLatestJukaHubRelease(ctx)
+		body, err := fetchPublishedReleaseNotes(ctx, installed)
 		if err != nil {
 			logPatch("changelog: notes fetch failed: %v", err)
+			setChangelogNotesError(err.Error())
 			return
 		}
-		storeReleaseNotes(rel)
+		storeInstalledReleaseNotes(installed, body)
 	}()
-}
-
-// changelogVersionLabel is the short value shown in the hub row and header.
-func changelogVersionLabel(config *Config) string {
-	if tag := installedReleaseTag(); tag != "" {
-		return tag
-	}
-	if info := readInstalledReleaseInfo(); strings.TrimSpace(info.Version) != "" {
-		return info.Version
-	}
-	if config != nil {
-		return versionString(config)
-	}
-	return ""
 }
 
 func changelogSubtitle(config *Config) string {
 	installed := installedReleaseTag()
-	tag, notes := cachedReleaseNotes()
+	_, notes := cachedInstalledReleaseNotes(installed)
 	if notes == "" && changelogNotesLoading.Load() {
 		return "Loading release notes…"
 	}
-	if tag != "" && installed != "" && tag != installed {
-		return "Latest release " + tag + " (installed: " + installed + ")"
-	}
-	parts := make([]string, 0, 3)
-	if label := changelogVersionLabel(config); label != "" {
-		parts = append(parts, label)
-	}
-	if date := readInstalledReleaseInfo().Date; date != "" {
-		if t, ok := parseReleaseTimestamp(date); ok {
-			parts = append(parts, t.Format("2006-01-02"))
-		}
-	}
-	if len(parts) == 0 {
-		return "Release notes for this build"
-	}
-	return strings.Join(parts, " · ")
+	return "Release notes for this build"
 }
 
-// communityChangelogText turns the cached markdown into display lines, with a
-// useful fallback for offline or externally installed builds.
+// communityChangelogText turns this build's markdown into display lines.
 func communityChangelogText(config *Config) []string {
-	_, body := cachedReleaseNotes()
+	installed := installedReleaseTag()
+	_, body := cachedInstalledReleaseNotes(installed)
 	lines := plainReleaseNotes(body)
 	if len(lines) > 0 {
 		return lines
 	}
-	label := changelogVersionLabel(config)
-	if label == "" {
-		label = "this build"
-	}
-	out := []string{
-		"Release notes aren't cached on this device.",
-		"",
-		"Installed: " + label,
-	}
 	if changelogNotesLoading.Load() {
-		out = append(out, "", "Fetching release notes…")
-	} else {
-		out = append(out, "", "The full changelog is on the JukaHub GitHub releases page.")
+		return []string{"Fetching release notes for this build…"}
 	}
-	return out
+	if installed == "" {
+		return []string{"This build has no release tag. Release notes are available for published builds."}
+	}
+	if getChangelogNotesError() != "" {
+		return []string{"Could not load notes for this build.", "", "Check Wi-Fi and reopen What's new to try again."}
+	}
+	return []string{"No release notes are available for this build.", "", "Reopen What's new to fetch them."}
 }
 
 // plainReleaseNotes removes the markdown decoration a GitHub release body uses

@@ -43,7 +43,7 @@ friction or inconsistency a user notices; P3 is polish.
 
 | ID | Sev | Finding | Evidence | Fix | Status |
 |---|---|---|---|---|---|
-| H1 | P1 | The header read "JukaHub - v0.4.0": a build number is developer information, and it took the space the brand should own. Every scene repeated it ("JukaHub - v0.4.0 - Settings"). | `homelayout.go` `drawHeader`, `extras.go` `renderStatusBar`, `headerTitle` | Wordmark alone on Home, "JukaHub - <screen>" on scenes; the version lives in About, the Start menu footer and the update offer. | Implemented |
+| H1 | P1 | The header repeated a semantic version on every screen and crowded the wordmark. | `homelayout.go` `drawHeader`, `extras.go` `renderStatusBar`, `headerTitle` | Home shows the build date beside the title; other screens show the wordmark and their screen name. | Implemented |
 | H2 | P2 | "Good morning" at 00:30 reads as a broken clock. | `defaultGreeting` | Morning starts at 05:00. | Implemented |
 | H3 | P1 | The bell showed "42": every toast — "Saved", "Copied", "Connected" — filed an unread notification, so the count measured activity, not things needing a look. The 11 px badge was also below the floor. | `ShowToast` → `notifRecord`; `drawNotifBell` | Confirmations (info/success) are filed already read; warnings, errors and unseen events still count. The badge caps at "9+" and is 13 px. | Implemented |
 | H4 | P2 | "● PS4 ● PS5" read as two status lights; nothing said that pressing one streams a console. On Windows each pill could only answer with a warning. | `pspills.go`, `homelayout.go` `drawHeader` | The capsule opens with a "Remote Play" caption (dropped first on a narrow band) and is not drawn where Remote Play cannot run (`psRemoteSupported`). | Implemented |

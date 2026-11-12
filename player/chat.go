@@ -1661,7 +1661,7 @@ func groqErrorFromResponse(status int, body []byte) *groqError {
 // buildGroqMessagesFrom builds the request from a history: the system prompt,
 // the exchanges since the last "New conversation" divider, and the question.
 func buildGroqMessagesFrom(history []ChatMessage, userText string) []map[string]string {
-	messages := []map[string]string{{"role": "system", "content": groqSystemPrompt}}
+	messages := []map[string]string{{"role": "system", "content": jukaSystemPrompt()}}
 
 	for i := len(history) - 1; i >= 0; i-- {
 		if chatIsSystem(history[i]) {

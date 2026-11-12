@@ -48,9 +48,8 @@ const (
 	brwFailHTTP
 	brwFailContent
 	brwFailOther
-	// brwFailWall is a search engine's wall instead of its results: Google's
-	// "turn on JavaScript" page (browser_engines.go builds the card's words
-	// and buttons).
+	// brwFailWall is a search engine's verification page instead of results.
+	// browser_engines.go builds the card's words and buttons.
 	brwFailWall
 )
 
@@ -296,8 +295,8 @@ const (
 	brwActRetry
 	brwActWiFi
 	brwActSearch
-	// The search-wall card's (brwWallButtons): the same words on Startpage,
-	// Startpage from now on, Settings → Browser, the desktop's own browser.
+	// The verification card's (brwWallButtons): Brave Search, Settings →
+	// Browser, and a full browser when available.
 	brwActWallSearch
 	brwActWallAlways
 	brwActWallEngines
@@ -338,7 +337,7 @@ func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
 	case f.Kind == brwFailWall:
 		// On the handheld WPE Browser goes first when it is installed, or
 		// is offered when it is not (brw_wpe.go).
-		return brwWpeWallButtons(brwWallButtons())
+		return brwWpeWallButtons(brwWallButtons(brwSearchQueryOf(f.URL) != ""))
 	}
 	return brwErrorButtons
 }
@@ -679,7 +678,7 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 	textH := titleH + 6 + int32(len(lines))*lineH + 6 + smallH
 	headH := max(badgeSize, textH)
 	// The wall card stacks too: its first button carries a longer label
-	// ("Search on Startpage") than a third of the row holds.
+	// ("Search on Brave Search") than a third of the row holds.
 	stacked := (offline || f.Kind == brwFailWall) && !compact && len(buttons) == 3
 	buttonsH := rowH
 	if stacked {

@@ -312,7 +312,8 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 		for i, note := range layout.notes {
 			// ASCII dash: the bundled handheld fonts are not guaranteed to
 			// carry a bullet glyph.
-			renderText(renderer, config, font, "- "+note, ColorTextSecondary(), x+OverlayPadX, layout.noteLabelY+smallH+6+int32(i)*smallH)
+			line := ellipsize(font, "- "+note, cardW-2*OverlayPadX)
+			renderText(renderer, config, font, line, ColorTextSecondary(), x+OverlayPadX, layout.noteLabelY+smallH+6+int32(i)*smallH)
 		}
 	}
 
@@ -441,7 +442,10 @@ func updatePromptHighlights(max int) []string {
 	if max <= 0 {
 		return nil
 	}
-	_, text := cachedReleaseNotes()
+	tag, text := cachedReleaseNotes()
+	if offered := availableUpdateTag(); offered == "" || !strings.EqualFold(tag, offered) {
+		return nil
+	}
 	var bullets, all []string
 	for _, line := range plainReleaseNotes(text) {
 		line = strings.TrimSpace(line)

@@ -157,9 +157,15 @@ func forceExit(reason string) {
 			dumpGoroutines()
 		}
 		killScreenChildren()
-		if inSDLTeardown {
-			runCleanupHooksBounded(sdlTeardownHooksGrace)
-		}
+		// The Cleanup hooks hold the restores that no other exit step makes —
+		// the brightness the QR card borrowed, the TrimUI volume and
+		// brightness written back to the firmware's file, the microphone
+		// switches, the idle screen's CPU cap, the display guard's report and
+		// pauses — so a forced exit runs them too, wherever the main goroutine
+		// is stuck, under the same bound: a hook that is itself the stuck part
+		// costs that bound, not the exit (they run once; one already running
+		// is waited for).
+		runCleanupHooksBounded(sdlTeardownHooksGrace)
 		_ = SetLEDSync(false)
 		exitLastChanceRestore(exitLastChanceGrace)
 		select {

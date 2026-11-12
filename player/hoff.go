@@ -23,7 +23,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"net/http"
 	"net/url"
@@ -929,7 +928,7 @@ func hoffResumeGame(o hoffOffer, launch bool) {
 			case syncErr != nil:
 				ShowToast("Saves not brought over ("+peerErrorText(syncErr, o.PeerName)+") — the saves here are used", ToastKindWarning)
 			case synced.Pulled+synced.Conflicts > 0:
-				ShowToast(fmt.Sprintf("Brought %d save file(s) from %s", synced.Pulled+synced.Conflicts, o.PeerName), ToastKindSuccess)
+				ShowToast("Brought "+pluralizeCount(synced.Pulled+synced.Conflicts, "save file", "save files")+" from "+o.PeerName, ToastKindSuccess)
 			case launch && found && !sameNames:
 				ShowToast("The ROM has another name on "+o.PeerName+" — sync its saves from Save sync", ToastKindInfo)
 			}

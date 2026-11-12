@@ -549,7 +549,7 @@ func curationActivate(config *Config) {
 			ShowToast("Profiles: "+strings.Join(curationPanel.profileIssues, " · "), ToastKindWarning)
 			return
 		}
-		ShowToast(fmt.Sprintf("%d profile(s) available", len(curationPanel.profiles)), ToastKindSuccess)
+		ShowToast(pluralizeCount(len(curationPanel.profiles), "profile", "profiles")+" available", ToastKindSuccess)
 	case curationActionApplyProfile:
 		if row.index < 0 || row.index >= len(curationPanel.profiles) {
 			return
@@ -884,8 +884,9 @@ func renderCurationPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		renderText(renderer, config, medium, ellipsize(medium, row.label, r.W-260), labelColor, r.X+16, r.Y+8)
 		if row.value != "" {
-			vw, _, _ := font.SizeUTF8(row.value)
-			renderText(renderer, config, font, ellipsize(font, row.value, 240), valueColor, r.X+r.W-16-int32(vw), r.Y+8+(medH-smallH)/2)
+			value := ellipsize(font, row.value, 240)
+			vw, _, _ := font.SizeUTF8(value)
+			renderText(renderer, config, font, value, valueColor, r.X+r.W-16-int32(vw), r.Y+8+(medH-smallH)/2)
 		}
 		if row.detail != "" {
 			renderText(renderer, config, font, ellipsize(font, row.detail, r.W-32), detailColor, r.X+16, r.Y+8+medH+4)
@@ -905,6 +906,7 @@ func renderCurationPanel(renderer *sdl.Renderer, config *Config) {
 		hint = hintLine(FooterHint{"L / R", fmt.Sprintf("Page %d-%d of %d",
 			curationPanel.scroll+1, curationPanel.scroll+int(visible), len(rows))}, FooterHint{Label: hint})
 	}
+	hint = ellipsize(font, hint, panelW-2*padX)
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 
 	if len(rows) > int(visible) {

@@ -554,7 +554,7 @@ func TestCoreRefusedSummaryNamesTheCores(t *testing.T) {
 // and in the daily pass's toast, whatever else it did — and the room it asks
 // for counts the core it would replace, at least 16 MB of it.
 func TestCoreUpdatesSayTheyStoppedForANearlyFullCard(t *testing.T) {
-	if got := coreUpdateFreeFloor(filepath.Join(t.TempDir(), "missing_libretro.so")); got != bootLowSpaceBytes+3*(16<<20) {
+	if got := coreUpdateFreeFloor(filepath.Join(t.TempDir(), "missing_libretro.so")); got != bootLowSpaceBytes+4*(16<<20) {
 		t.Errorf("floor for an unknown core = %d", got)
 	}
 	reports := []emuInstallReport{

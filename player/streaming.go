@@ -270,12 +270,14 @@ func streamAttempts(maxHeight int) []streamAttempt {
 	}
 }
 
-// ytDlpDownloadClients is the client list of the whole-file download, the
-// path every failed stream ends on: android for the muxed format 18, then
-// yt-dlp's defaults and web_embedded for a helper with a JavaScript runtime.
-// It replaced "android,web;youtube:player_skip=webpage", whose second
-// "youtube:" made player_skip an unknown argument and whose web client serves
-// nothing muxed any more.
+// ytDlpDownloadClients is the client list of the whole-file download's
+// single-file attempt: android for the muxed format 18, then yt-dlp's
+// defaults and web_embedded for a helper with a JavaScript runtime. It
+// replaced "android,web;youtube:player_skip=webpage", whose second "youtube:"
+// made player_skip an unknown argument and whose web client serves nothing
+// muxed any more. Since November 2026 that attempt comes last: YouTube
+// refuses format 18 without a PO token, and the download first joins the
+// separate picture and sound yt-dlp's defaults offer (ytdownload.go).
 const ytDlpDownloadClients = "youtube:player_client=android,default,web_embedded"
 
 // playbackMaxHeight reads the playback resolution ceiling from the config.
@@ -464,6 +466,13 @@ func streamFailureFatal(reason string) bool {
 func ytDlpGetURL(ctx context.Context, ytDlpPath string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, ytDlpPath, args...)
 	cmd.Env = helperToolEnv(ytDlpPath)
+	// The one-file helper runs the real yt-dlp as its child, and killing only
+	// the process started here left that child extracting on: every attempt
+	// that hit its 15 s bound, and every preload Play cancelled, kept a Python
+	// process of tens of megabytes alive beside the decoder on a 1 GB device.
+	// The run leads its own process group and a cancel stops all of it.
+	processGroupConfigure(cmd)
+	cmd.Cancel = func() error { return screenChildKill(cmd) }
 	// A killed extractor must not keep Wait blocked on a pipe its child still
 	// holds open: preload cancels these processes whenever the user presses Play.
 	cmd.WaitDelay = 3 * time.Second
@@ -502,7 +511,10 @@ func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source 
 	if ytDlpPath == "" || source == "" {
 		return "", false
 	}
-	direct, err := resolveWithRunner(ctx, source, maxHeight, ytDlpExtraArgsSlice(config),
+	// A QuickJS runtime next to the helper is named first (ytdownload.go);
+	// the user's own arguments still come last and win.
+	extra := append(ytDlpJSRuntimeArgs(ytDlpPath), ytDlpExtraArgsSlice(config)...)
+	direct, err := resolveWithRunner(ctx, source, maxHeight, extra,
 		func(ctx context.Context, args []string) (string, error) {
 			return ytDlpGetURL(ctx, ytDlpPath, args)
 		})
@@ -996,7 +1008,8 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 		return playbackStarted
 	}
 	if prepareCtx.Err() != nil {
-		// B during the download, or the five-minute cap: not the link's fault.
+		// B during the download, or a newer load: not the link's fault. (The
+		// download's own time cap ends an attempt, not the prepare.)
 		return playbackNotTried
 	}
 	return playbackAttemptFailed

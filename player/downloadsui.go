@@ -508,18 +508,14 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	rows := downloadCursorRows()
 	dlPanel.hits = dlPanel.hits[:0]
 
-	listTop := tabY + int32(small.Height()) + 16
 	footerH := int32(30)
-	listBottom := panelY + panelH - footerH - 8
+	listTop, listBottom := downloadListBounds(tabY+int32(small.Height())+16, panelY+panelH-footerH-8)
 	// Rows keep a readable height and the list scrolls instead of shrinking:
 	// squeezing six rows into the panel used to push the detail line out of its
 	// row and under the next section heading.
 	rowH := int32(68)
 	gap := int32(8)
 	sectionH := int32(24)
-	if listBottom <= listTop {
-		listBottom = listTop + rowH
-	}
 	if avail := listBottom - listTop; avail < 2*(rowH+gap)+sectionH {
 		rowH = 50
 		if avail < 2*(rowH+gap)+sectionH {
@@ -582,6 +578,9 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 		if dlPanel.tab == downloadTabActive {
 			msg = "Nothing downloading"
 		}
+		// The panel is narrower than the sentence at a large text scale; keep
+		// the empty state inside the card instead of letting it run off.
+		msg = ellipsize(small, msg, panelW-2*padX)
 		mw, _, _ := small.SizeUTF8(msg)
 		renderText(renderer, config, small, msg, ColorTextTertiary(),
 			panelX+(panelW-int32(mw))/2, listTop+rowH+gap+12)
@@ -593,6 +592,9 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	footer := hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Remove"},
 		FooterHint{"Y", pauseLabel}, FooterHint{"L1/R1", "Tabs"}, FooterHint{"B", "Close"})
+	// The five hints do not fit a narrow window at a large text scale; the
+	// footer ellipsizes rather than running off both edges of the panel.
+	footer = ellipsize(small, footer, panelW-2*padX)
 	fw, _, _ := small.SizeUTF8(footer)
 	renderText(renderer, config, small, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+2)
@@ -622,6 +624,18 @@ func downloadRowOffset(index int, sectionStarts []int, rowH, gap, sectionH int32
 		offset += sectionH
 	}
 	return offset
+}
+
+// downloadListBounds is the list viewport's top and bottom for a panel. When
+// the tabs and the storage card have already used the panel there is no room
+// for a row, so the viewport collapses onto the panel's bottom edge: the old
+// fallback (listTop + rowH) pushed the clipped list past the panel's own
+// footer and the last row painted over the card frame.
+func downloadListBounds(listTop, panelBottom int32) (top, bottom int32) {
+	if panelBottom <= listTop {
+		return panelBottom, panelBottom
+	}
+	return listTop, panelBottom
 }
 
 // downloadVisibleRowRange returns the row indices that overlap the viewport.
@@ -667,6 +681,11 @@ func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x,
 		tw, th, err := font.SizeUTF8(label)
 		if err != nil {
 			continue
+		}
+		// Check before drawing: the old check ran after the label was painted,
+		// so the last tab could spill past the strip's right edge.
+		if cx+int32(tw) > x+w {
+			break
 		}
 		dlPanel.tabs = append(dlPanel.tabs, sdl.Rect{
 			X: cx - 8, Y: y - 6, W: int32(tw) + 16, H: int32(th) + 14,
@@ -743,7 +762,7 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 	barY := titleY + rowH + 10
 	barW := rect.W - 40
 	barH := int32(8)
-	fillRoundedRect(renderer, barX, barY, barW, barH, barH/2, WithAlpha(ColorTrack, 255))
+	fillRoundedRect(renderer, barX, barY, barW, barH, barH/2, ColorTrack)
 	if stats.Available {
 		shares := downloadSpaceShares(stats)
 		music := int32(shares[0] * float64(barW))
@@ -779,16 +798,21 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 		// media, audio and video together.
 		{"Downloads", value(stats.Music), accentColor},
 		{"Other", value(stats.Other), WithAlpha(ColorTextTertiary(), 150)},
-		{"Free", value(stats.Free), WithAlpha(ColorTrack, 255)},
+		{"Free", value(stats.Free), trackSwatch()},
 	}
 	lx := barX
 	for _, e := range entries {
+		// An entry that does not fit would run under the card's right edge at a
+		// large text scale; stop before it instead of painting half a legend.
+		lw, _, _ := font.SizeUTF8(e.label)
+		vw, _, _ := font.SizeUTF8(e.value)
+		if lx+16+int32(lw)+6+int32(vw) > rect.X+rect.W-20 {
+			break
+		}
 		fillRoundedRect(renderer, lx, baseY, 10, 10, 3, e.color)
 		renderText(renderer, config, font, e.label, ColorTextTertiary(), lx+16, legendY)
-		lw, _, _ := font.SizeUTF8(e.label)
 		valueX := lx + 16 + int32(lw) + 6
 		renderText(renderer, config, font, e.value, ColorTextSecondary(), valueX, legendY)
-		vw, _, _ := font.SizeUTF8(e.value)
 		lx = valueX + int32(vw) + 20
 	}
 }
@@ -945,7 +969,7 @@ func drawDownloadItemRow(renderer *sdl.Renderer, config *Config, small, medium *
 			barH = 3
 		}
 		if labelW > 0 {
-			fillRoundedRect(renderer, textX, barY, labelW, barH, barH/2, WithAlpha(ColorTrack, 255))
+			fillRoundedRect(renderer, textX, barY, labelW, barH, barH/2, ColorTrack)
 			if p := it.percent(); p > 0 {
 				fillRoundedRect(renderer, textX, barY, int32(float64(labelW)*p), barH, barH/2, accentColor)
 			}

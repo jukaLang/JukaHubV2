@@ -1806,7 +1806,7 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	rowH := smallH + 14
 	selected := feSelectionCount()
-	subtitle := fmt.Sprintf("%d item(s) in this folder", len(feSelectablePaths(config)))
+	subtitle := pluralizeCount(len(feSelectablePaths(config)), "item", "items") + " in this folder"
 	if selected > 0 {
 		subtitle = fmt.Sprintf("%d selected · %d in this folder", selected, len(feSelectablePaths(config)))
 	}
