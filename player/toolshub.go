@@ -118,6 +118,8 @@ func toolsHubEnsureScenes(config *Config) {
 	toolsHubEnsureScene(config, netToolsSceneName, "", "Network tools")
 	toolsHubEnsureScene(config, wifiScrSceneName, "", "Wi-Fi")
 	toolsHubEnsureScene(config, "Calculator", "C", "Quick math with history")
+	// The Synth (synth.go) is reached from this hub and the Start menu.
+	synthEnsureScene(config)
 }
 
 // toolsHubEnsureScene appends a scene when no scene of that name exists.
@@ -489,6 +491,9 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	if has("Calculator") {
 		system = append(system, toolsHubTile{id: "calculator", label: "Calculator", icon: "calculator", value: "Quick math with history"})
 	}
+	if has(synthSceneName) {
+		system = append(system, toolsHubTile{id: "synth", label: "Synth", icon: "synth", value: "Pocket groovebox: beats, bass and melodies"})
+	}
 	// The trophy room is injected on demand (trophyOpenRoom), so its tile is
 	// there whatever the config carries. Its value is the live count, which is
 	// what makes the tile worth opening; trophySummary is cached between frames.
@@ -653,6 +658,8 @@ func toolsHubActivate(config *Config, idx int) {
 		rommOpen(config)
 	case "calculator":
 		toolsHubOpenScene(config, "Calculator")
+	case "synth":
+		toolsHubOpenScene(config, synthSceneName)
 	case "trophies":
 		trophyOpenRoom(config)
 	case "xpack":

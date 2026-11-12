@@ -46,7 +46,7 @@ import (
 
 const (
 	// mlibIndexVersion is the index format; another version is scanned afresh.
-	mlibIndexVersion = 1
+	mlibIndexVersion = 2
 	// mlibMaxDepth bounds how deep a root is walked: Show/Season/episode and
 	// Artist/Album/CD1/song fit with room to spare.
 	mlibMaxDepth = 6
@@ -78,11 +78,9 @@ const (
 	mlibRootsKey = "media_library_roots"
 )
 
-// mlibVideoExts and mlibAudioExts are the files the library lists.
-var (
-	mlibVideoExts = map[string]bool{".mp4": true, ".mkv": true, ".webm": true, ".avi": true, ".mov": true, ".m4v": true, ".ts": true}
-	mlibAudioExts = map[string]bool{".mp3": true, ".flac": true, ".ogg": true, ".opus": true, ".m4a": true, ".aac": true, ".wav": true}
-)
+// Videos have their own list; the library uses the music player's format list
+// for audio so a playable DSF/DFF file can also be found in the library.
+var mlibVideoExts = map[string]bool{".mp4": true, ".mkv": true, ".webm": true, ".avi": true, ".mov": true, ".m4v": true, ".ts": true}
 
 // mlibMediaKind reports whether a file name is a video or a song the library
 // lists.
@@ -91,7 +89,7 @@ func mlibMediaKind(name string) (video, ok bool) {
 	switch {
 	case mlibVideoExts[ext]:
 		return true, true
-	case mlibAudioExts[ext]:
+	case isAudioFile(name):
 		return false, true
 	}
 	return false, false
@@ -105,6 +103,7 @@ type mlibItem struct {
 	Size  int64  `json:"size"`
 	Mod   int64  `json:"mod"`
 	Video bool   `json:"video"`
+	Book  bool   `json:"book,omitempty"`
 	// Added is when the file arrived (its modification time, Unix seconds):
 	// Recently added sorts by it.
 	Added    int64   `json:"added"`
@@ -123,6 +122,8 @@ type mlibItem struct {
 	// (an episode's show folder), drawn on the show's card.
 	Art    string `json:"art,omitempty"`
 	Poster string `json:"poster,omitempty"`
+	// ArtLookup is the last MusicBrainz lookup for an album without local art.
+	ArtLookup int64 `json:"artLookup,omitempty"`
 	// Probed and ArtDone record the slow pass, so a rescan does not repeat it
 	// for a file that did not change.
 	Probed  bool `json:"probed,omitempty"`
@@ -381,6 +382,9 @@ func mlibNameItem(it *mlibItem, root string) {
 			album = filepath.Base(dir)
 		}
 		it.Album, it.Artist = album, artist
+		if it.Book && strings.EqualFold(it.Artist, "Audiobooks") {
+			it.Artist = ""
+		}
 		if artist != "" && strings.HasPrefix(it.Title, artist+" - ") {
 			if rest := strings.TrimSpace(it.Title[len(artist)+3:]); rest != "" {
 				it.Title = rest
@@ -428,7 +432,20 @@ type mlibFile struct {
 // name and folders say. The slow pass adds the tags, the length and the
 // poster.
 func mlibNewItem(f mlibFile) mlibItem {
-	it := mlibItem{Path: f.path, Size: f.size, Mod: f.mod, Video: f.video}
+	book := !f.video && strings.EqualFold(filepath.Base(f.root), "Audiobooks")
+	if !f.video && !book {
+		if rel, err := filepath.Rel(f.root, f.path); err == nil {
+			parts := strings.Split(filepath.Dir(rel), string(filepath.Separator))
+			for _, part := range parts {
+				if strings.EqualFold(part, "Audiobooks") {
+					book = true
+					break
+				}
+			}
+		}
+	}
+	it := mlibItem{Path: f.path, Size: f.size, Mod: f.mod, Video: f.video,
+		Book: book}
 	if f.mod > 0 {
 		it.Added = f.mod / int64(time.Second)
 	}
@@ -607,8 +624,8 @@ func mlibDefaultRoots() []string {
 		if base == "" {
 			base = "/mnt/SDCARD"
 		}
-		roots := make([]string, 0, 5)
-		for _, sub := range []string{"Videos", "Movies", "TV", "Music", "Media"} {
+		roots := make([]string, 0, 6)
+		for _, sub := range []string{"Videos", "Movies", "TV", "Music", "Audiobooks", "Media"} {
 			roots = append(roots, filepath.Join(base, sub))
 		}
 		return roots
@@ -617,7 +634,7 @@ func mlibDefaultRoots() []string {
 	if err != nil || strings.TrimSpace(home) == "" {
 		return nil
 	}
-	return []string{filepath.Join(home, "Videos"), filepath.Join(home, "Music")}
+	return []string{filepath.Join(home, "Videos"), filepath.Join(home, "Music"), filepath.Join(home, "Audiobooks")}
 }
 
 // mlibConfiguredRoots reads media_library_roots: a JSON list of folders, or
@@ -692,9 +709,13 @@ func mlibCleanRoots(roots []string) []string {
 func mlibStartScan(config *Config, force bool) {
 	var extra []string
 	toolsPath := ""
+	onlineArt := true
 	if config != nil {
 		extra = mlibConfiguredRoots(config.Variables.Custom[mlibRootsKey])
 		toolsPath = strings.TrimSpace(config.Variables.ToolsPath)
+		if value, ok := customValue(config.Variables.Custom, "music_art_online"); ok {
+			onlineArt = coerceBool(value)
+		}
 	}
 	mlibState.mu.Lock()
 	if mlibScanning.Load() || (!force && !mlibState.scanned.IsZero() && time.Since(mlibState.scanned) < mlibRescanAfter) {
@@ -708,7 +729,7 @@ func mlibStartScan(config *Config, force bool) {
 	mlibState.found = 0
 	mlibScanning.Store(true)
 	mlibState.mu.Unlock()
-	go mlibRunScan(ctx, ticket, extra, toolsPath)
+	go mlibRunScan(ctx, ticket, extra, toolsPath, onlineArt)
 }
 
 // mlibCancelScan stops a running scan; what it finished is kept, and the next
@@ -745,7 +766,7 @@ func mlibScanFinished(ticket uint64, completed bool) {
 
 // mlibRunScan is one scan: the index first (instant when it is on disk), then
 // each root, published as soon as it is walked, then the slow pass.
-func mlibRunScan(ctx context.Context, ticket uint64, extra []string, toolsPath string) {
+func mlibRunScan(ctx context.Context, ticket uint64, extra []string, toolsPath string, onlineArt bool) {
 	completed := false
 	defer func() { mlibScanFinished(ticket, completed) }()
 	mlibLoad()
@@ -797,6 +818,9 @@ func mlibRunScan(ctx context.Context, ticket uint64, extra []string, toolsPath s
 		return
 	}
 	mlibPruneArt()
+	if onlineArt {
+		mlibFindMissingAlbumArt(ctx)
+	}
 	completed = true
 }
 
@@ -816,9 +840,7 @@ func mlibLoad() {
 		}
 		file = mlibIndexFile{}
 	}
-	if file.Version != mlibIndexVersion {
-		file = mlibIndexFile{}
-	}
+	file = mlibUpgradeIndex(file)
 	mlibState.mu.Lock()
 	if !mlibState.loaded {
 		mlibState.items = file.Items
@@ -834,6 +856,15 @@ func mlibLoad() {
 	}
 	mlibState.mu.Unlock()
 	mlibRebuildModel()
+}
+
+func mlibUpgradeIndex(file mlibIndexFile) mlibIndexFile {
+	if file.Version == mlibIndexVersion {
+		return file
+	}
+	// A format change requires rebuilding file and folder entries, but video
+	// positions are still valid by path and must survive the scan.
+	return mlibIndexFile{Resume: file.Resume}
 }
 
 // mlibStatus is what the Library tab shows before it has anything to list:
@@ -1538,11 +1569,13 @@ type mlibModel struct {
 	movies   []int
 	shows    []mlibGroup
 	albums   []mlibGroup
+	books    []mlibGroup
 	recent   []mlibRef
 	cont     []int
 	byPath   map[string]int
 	showIdx  map[string]int
 	albumIdx map[string]int
+	bookIdx  map[string]int
 }
 
 // mlibAlbumKey groups songs: the artist and the album, without regard to case.
@@ -1580,6 +1613,7 @@ func mlibBuildModel(items []mlibItem, resume map[string]mlibResume) *mlibModel {
 		byPath:   make(map[string]int, len(items)),
 		showIdx:  map[string]int{},
 		albumIdx: map[string]int{},
+		bookIdx:  map[string]int{},
 	}
 	titleKey := make([]string, len(m.items))
 	for i := range m.items {
@@ -1594,6 +1628,20 @@ func mlibBuildModel(items []mlibItem, resume map[string]mlibResume) *mlibModel {
 			}
 		}
 		switch {
+		case it.Book:
+			k := mlibAlbumKey(it.Artist, it.Album)
+			gi, ok := m.bookIdx[k]
+			if !ok {
+				gi = len(m.books)
+				m.bookIdx[k] = gi
+				m.books = append(m.books, mlibGroup{key: k, title: dlFirstNonEmpty(it.Album, "Unknown book"),
+					sub: dlFirstNonEmpty(it.Artist, "Unknown author")})
+			}
+			g := &m.books[gi]
+			g.items = append(g.items, i)
+			if it.Added > g.newest {
+				g.newest = it.Added
+			}
 		case !it.Video:
 			k := mlibAlbumKey(it.Artist, it.Album)
 			gi, ok := m.albumIdx[k]
@@ -1635,6 +1683,7 @@ func mlibBuildModel(items []mlibItem, resume map[string]mlibResume) *mlibModel {
 	})
 	sort.SliceStable(m.shows, func(a, b int) bool { return m.shows[a].key < m.shows[b].key })
 	sort.SliceStable(m.albums, func(a, b int) bool { return m.albums[a].key < m.albums[b].key })
+	sort.SliceStable(m.books, func(a, b int) bool { return m.books[a].key < m.books[b].key })
 	for gi := range m.shows {
 		g := &m.shows[gi]
 		m.showIdx[g.key] = gi
@@ -1681,6 +1730,33 @@ func mlibBuildModel(items []mlibItem, resume map[string]mlibResume) *mlibModel {
 				return titleKey[x] < titleKey[y]
 			}
 			return m.items[x].Path < m.items[y].Path
+		})
+		for _, i := range g.items {
+			if g.art != "" {
+				break
+			}
+			g.art = m.items[i].Art
+		}
+	}
+	for gi := range m.books {
+		g := &m.books[gi]
+		m.bookIdx[g.key] = gi
+		sort.SliceStable(g.items, func(a, b int) bool {
+			x, y := m.items[g.items[a]], m.items[g.items[b]]
+			dx, dy := strings.ToLower(filepath.Dir(x.Path)), strings.ToLower(filepath.Dir(y.Path))
+			if dx != dy {
+				return dx < dy
+			}
+			if x.Track != y.Track {
+				if x.Track == 0 {
+					return false
+				}
+				if y.Track == 0 {
+					return true
+				}
+				return x.Track < y.Track
+			}
+			return strings.ToLower(x.Path) < strings.ToLower(y.Path)
 		})
 		for _, i := range g.items {
 			if g.art != "" {

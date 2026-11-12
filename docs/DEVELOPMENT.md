@@ -54,7 +54,7 @@ JukaHubV2/
 │   ├── patch_*.go, packages.go        # package manager
 │   ├── community.go, changelog.go     # community hub, bug report, release notes
 │   ├── powertools.go, powertools_backend.go  # developer tools overlay and probes
-│   ├── telemetry.go                   # opt-in device/crash telemetry
+│   ├── telemetry.go                   # opt-in diagnostics issues and crash telemetry
 │   ├── plugins.go                     # plugin loader and runner
 │   ├── widgets.go, autostart.go       # contextual widgets, start-at-login
 │   ├── config.go, xmlconfig.go        # config types and both loaders

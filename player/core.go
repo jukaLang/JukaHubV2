@@ -844,6 +844,8 @@ func buttonLabelFont(config *Config, fontName, label string, width int32) *ttf.F
 	if font == nil || label == "" {
 		return font
 	}
+	// Fit the label that is drawn: the interface language's (i18n.go).
+	label = uiT(label)
 	inner := width - 2*SpaceXS
 	if inner <= 0 {
 		return font
@@ -954,7 +956,9 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 // renders as a .notdef box. Supported text is passed through unchanged. See
 // fonts.go.
 func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text string, color sdl.Color, x, y int32) (int32, int32) {
-	processed := substituteVars(text, config.Variables.Custom)
+	// The interface language (i18n.go): the English literal becomes the
+	// catalogue's text before $variables are filled in.
+	processed := substituteVars(uiT(text), config.Variables.Custom)
 	if processed == "" || font == nil {
 		return 0, 0
 	}
@@ -5615,6 +5619,14 @@ func wrapMeasured(runes []rune, maxW int32, measure func(string) int32) []string
 // strings with \n straight to renderText, which drew them as one long line that
 // ran off the card, or cut a long body after two rune-split lines.
 func wrapTextLines(font *ttf.Font, text string, maxW int32, maxLines int) []string {
+	// Translate the whole text before it is cut into lines (i18n.go): a
+	// wrapped line is no longer a catalogue key.
+	return wrapTextLinesRaw(font, uiT(text), maxW, maxLines)
+}
+
+// wrapTextLinesRaw is wrapTextLines for content drawn as written (subtitles):
+// no interface-language translation.
+func wrapTextLinesRaw(font *ttf.Font, text string, maxW int32, maxLines int) []string {
 	if font == nil || maxLines <= 0 {
 		return nil
 	}
@@ -5660,6 +5672,7 @@ func wrapTextLines(font *ttf.Font, text string, maxW int32, maxLines int) []stri
 // within maxW, and reports whether it had to end in "…". It used wrapMeasured,
 // which cuts by pixel count into two lines ("…every fil" / "e on the…").
 func wrapToastLines(font *ttf.Font, message string, maxW int32) ([]string, bool) {
+	message = uiT(message)
 	if font == nil {
 		return []string{message}, false
 	}

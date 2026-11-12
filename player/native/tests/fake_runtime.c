@@ -31,7 +31,10 @@ static ChiakiFfmpegDecoder *frame_decoder;
 
 FakeRecord fake_record;
 
-typedef struct { bool gc; const char *name; SDL_JoystickID id; int refs; int buttons; Uint16 vendor, product; int type; int axes; } FakeDevice;
+typedef struct {
+    bool gc; const char *name; SDL_JoystickID id; int refs; int buttons; Uint16 vendor, product; int type; int axes;
+    int hats; bool no_touchpad; bool touch_button; bool sensors; int sensors_on; char guid[33];
+} FakeDevice;
 static FakeDevice devices[8];
 static int device_count;
 
@@ -53,7 +56,8 @@ void fake_reset(uint32_t limit)
 
 int fake_add_device(bool gc, const char *name, SDL_JoystickID id)
 {
-    devices[device_count] = (FakeDevice){gc, name, id, 0, 13, 0, 0, 0, 4};
+    devices[device_count] = (FakeDevice){gc, name, id, 0, 13, 0, 0, 0, 4, 0, false, false, false, 0, ""};
+    snprintf(devices[device_count].guid, sizeof(devices[device_count].guid), "%032x", (unsigned)(0x51 + device_count));
     return device_count++;
 }
 
@@ -262,6 +266,14 @@ int SDL_GameControllerAddMapping(const char *mapping)
     fake_record.mappings++;
     fake_record.mapping_before_open = !any_open;
     snprintf(fake_record.mapping, sizeof(fake_record.mapping), "%s", mapping);
+    /* As SDL: a device whose GUID the mapping names is a game controller now. */
+    for(int i = 0; i < device_count; i++) {
+        size_t n = strlen(devices[i].guid);
+        if(strncmp(mapping, devices[i].guid, n) == 0 && mapping[n] == ',') {
+            devices[i].gc = true;
+            devices[i].touch_button = strstr(mapping, ",touchpad:") != NULL;
+        }
+    }
     return 1;
 }
 SDL_GameController *SDL_GameControllerOpen(int i)
@@ -304,6 +316,64 @@ int SDL_JoystickRumble(SDL_Joystick *j, Uint16 low, Uint16 high, Uint32 ms)
 }
 Uint16 SDL_JoystickGetVendor(SDL_Joystick *j) { return devices[j->index].vendor; }
 Uint16 SDL_JoystickGetProduct(SDL_Joystick *j) { return devices[j->index].product; }
+int SDL_JoystickNumHats(SDL_Joystick *j) { return devices[j->index].hats; }
+SDL_JoystickGUID SDL_JoystickGetGUID(SDL_Joystick *j)
+{
+    SDL_JoystickGUID guid;
+    memset(&guid, 0, sizeof(guid));
+    guid.data[0] = (Uint8)j->index;
+    return guid;
+}
+void SDL_JoystickGetGUIDString(SDL_JoystickGUID guid, char *out, int size)
+{
+    snprintf(out, (size_t)size, "%s", devices[guid.data[0]].guid);
+}
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+SDL_bool SDL_GameControllerHasButton(SDL_GameController *c, SDL_GameControllerButton button)
+{
+    return button == SDL_CONTROLLER_BUTTON_TOUCHPAD && devices[c->index].touch_button ? SDL_TRUE : SDL_FALSE;
+}
+/* SDL's own PS4 / PS5 driver reports the touchpad. */
+int SDL_GameControllerGetNumTouchpads(SDL_GameController *c)
+{
+    const FakeDevice *d = &devices[c->index];
+    return (d->type == SDL_CONTROLLER_TYPE_PS4 || d->type == SDL_CONTROLLER_TYPE_PS5) && !d->no_touchpad ? 1 : 0;
+}
+SDL_bool SDL_GameControllerHasSensor(SDL_GameController *c, SDL_SensorType type)
+{
+    return devices[c->index].sensors && (type == SDL_SENSOR_GYRO || type == SDL_SENSOR_ACCEL) ? SDL_TRUE : SDL_FALSE;
+}
+int SDL_GameControllerSetSensorEnabled(SDL_GameController *c, SDL_SensorType type, SDL_bool enabled)
+{
+    if(!devices[c->index].sensors) return -1;
+    devices[c->index].sensors_on += enabled ? 1 : -1;
+    (void)type;
+    return 0;
+}
+void fake_sensor(uint32_t at, SDL_JoystickID which, int sensor, float x, float y, float z)
+{
+    SDL_Event e;
+    memset(&e, 0, sizeof(e));
+    e.type = SDL_CONTROLLERSENSORUPDATE;
+    e.csensor.which = which;
+    e.csensor.sensor = sensor;
+    e.csensor.data[0] = x;
+    e.csensor.data[1] = y;
+    e.csensor.data[2] = z;
+    fake_sdl_event(at, e);
+}
+#endif
+void fake_device_sony(int index, int buttons, int axes, int hats)
+{
+    devices[index].buttons = buttons;
+    devices[index].axes = axes;
+    devices[index].hats = hats;
+}
+void fake_device_no_touchpad(int index) { devices[index].no_touchpad = true; }
+void fake_device_sensors(int index) { devices[index].sensors = true; }
+int fake_device_sensors_on(int index) { return devices[index].sensors_on; }
+bool fake_device_is_gc(int index) { return devices[index].gc; }
+const char *fake_device_guid(int index) { return devices[index].guid; }
 #if SDL_VERSION_ATLEAST(2, 0, 12)
 SDL_GameControllerType SDL_GameControllerGetType(SDL_GameController *c) { return (SDL_GameControllerType)devices[c->index].type; }
 #endif

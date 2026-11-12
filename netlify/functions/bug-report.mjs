@@ -184,10 +184,16 @@ function capitalise(word) {
 export function validateReport(r) {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return 'the report is not a JSON object';
   if (r.schema !== 1) return 'unknown report schema';
-  if (r.kind !== 'bug_report') return 'not a bug report';
+  if (r.kind !== 'bug_report' && r.kind !== 'anonymous_diagnostics') return 'unknown report kind';
   if (r.app !== 'JukaHub') return 'not a JukaHub report';
   if (typeof r.id !== 'string' || !REF_PATTERN.test(r.id)) return 'bad report reference';
   if (typeof r.category !== 'string' || !CATEGORIES.has(r.category)) return 'unknown category';
+  if (r.kind === 'anonymous_diagnostics' &&
+      (r.category !== 'other' || r.title !== 'Anonymous device diagnostics' ||
+       r.description !== 'Informational report sent automatically after about ten opted-in launches. No bug is being reported.' ||
+       (r.log !== undefined && r.log !== ''))) {
+    return 'invalid anonymous diagnostics report';
+  }
   for (const [field, max] of Object.entries(TEXT_LIMITS)) {
     const value = r[field];
     if (value === undefined || value === null) continue;
@@ -220,7 +226,7 @@ export function issueTitle(r) {
   let title = defuse(scrub(cleanText(r.title)).replace(/\s+/g, ' ').trim());
   if (!title) title = `${capitalise(r.category || 'other')} problem`;
   if (title.length > 120) title = `${title.slice(0, 119).trimEnd()}…`;
-  return `[Bug] ${title} (${r.id})`;
+  return `[${r.kind === 'anonymous_diagnostics' ? 'Info' : 'Bug'}] ${title} (${r.id})`;
 }
 
 function factRow(label, value) {
@@ -246,6 +252,7 @@ function trimHead(text, max) {
 // body stays under maxBody characters: the log gives way first (its oldest
 // lines), then the diagnostics (their end).
 export function buildIssue(r, maxBody = ISSUE_BODY_MAX) {
+  const informational = r.kind === 'anonymous_diagnostics';
   const description = scrub(cleanText(r.description)).trim();
   let diagnostics = scrub(cleanText(r.diagnostics)).trim();
   let log = scrub(cleanText(r.log)).trim();
@@ -257,14 +264,16 @@ export function buildIssue(r, maxBody = ISSUE_BODY_MAX) {
     '| Field | Value |',
     '|---|---|',
     factRow('Reference', r.id),
-    factRow('Category', r.category),
+    ...(informational ? [factRow('Type', 'Informational diagnostics — not a bug report')] : [factRow('Category', r.category)]),
     factRow('JukaHub', version),
     factRow('Device', r.device),
     factRow('Platform', `${r.platform} · ${r.os}/${r.arch}`),
     factRow('Created', r.created),
   ].join('\n');
-  const foot = '<sub>Sent from the device through the JukaHub report service. The reporter reviewed ' +
-    'exactly this text before sending; names, paths, addresses and keys were removed on the device.</sub>';
+  const foot = informational
+    ? '<sub>Sent automatically after the owner enabled anonymous diagnostics. This informational issue does not report a bug. Only coarse device facts are included; no logs or full diagnostics bundle are sent.</sub>'
+    : '<sub>Sent from the device through the JukaHub report service. The reporter reviewed ' +
+      'exactly this text before sending; names, paths, addresses and keys were removed on the device.</sub>';
 
   const assemble = () => {
     const parts = [head];
@@ -541,7 +550,10 @@ export function createHandler(options = {}) {
     }
 
     const issue = buildIssue(report);
-    const labels = String(env('JUKAHUB_ISSUE_LABELS') ?? 'bug,from-device')
+    const labelSetting = report.kind === 'anonymous_diagnostics'
+      ? env('JUKAHUB_DIAGNOSTICS_LABELS') ?? 'non-issue,from-device'
+      : env('JUKAHUB_ISSUE_LABELS') ?? 'bug,from-device';
+    const labels = String(labelSetting)
       .split(',').map(s => s.trim()).filter(Boolean).slice(0, 5).map(s => s.slice(0, 50));
     let resp;
     try {
@@ -575,7 +587,9 @@ export function createHandler(options = {}) {
         const url = typeof data.html_url === 'string' ? data.html_url : '';
         remember(report, number, url);
         console.log(`bug-report: ${id}: filed as #${number}`);
-        const notice = notifyDiscord(env('JUKAHUB_DISCORD_WEBHOOK'), id, issue.title, url);
+        const notice = report.kind === 'anonymous_diagnostics'
+          ? Promise.resolve()
+          : notifyDiscord(env('JUKAHUB_DISCORD_WEBHOOK'), id, issue.title, url);
         if (context && typeof context.waitUntil === 'function') {
           // The device gets its answer now; the chat notice finishes after.
           context.waitUntil(notice);

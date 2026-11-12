@@ -125,6 +125,11 @@ func main() {
 	// a clean exit. (They run after the window and renderer are gone, before
 	// sdl.Quit.) Once per process: a wedged SDL teardown call runs them on its
 	// way out too (sdlteardown.go).
+	//
+	// Restart or Power off from Home's power card runs after the Cleanup hooks
+	// (defers run in reverse), so the brightness and TrimUI volume flushes
+	// land before the reboot (devpower.go). A no-op for a plain exit.
+	defer devPowerAfterShutdown()
 	defer runCleanupHooks()
 
 	// Try XML config first (exported by the web editor), then fall back to JSON.
@@ -329,7 +334,7 @@ func main() {
 	if safeModeAllows(SafeFeatureUpdates) {
 		maybeShowChangelogAfterUpdate(config)
 	}
-	// Opt-in device census (off by default, no identifier).
+	// Opt-in informational diagnostics issue every ten launches.
 	if safeModeAllows(SafeFeatureNetwork) {
 		deferStartupTask("telemetry", func() { TelemetryBoot(config) })
 	}
@@ -599,6 +604,11 @@ func main() {
 		// Add Xbox 360 controller mapping for Trimui Smart Pro / Linux
 		sdl.GameControllerAddMapping("030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,")
 
+		// A DualShock 4 / DualSense SDL has no mapping for (gamepad_sony.go).
+		for i := 0; i < sdl.NumJoysticks(); i++ {
+			sonyPadPrepare(i)
+		}
+
 		// Initialize gamepad support
 		if sdl.NumJoysticks() > 0 {
 			logDebug("gamepad", "Found %d joystick(s)", sdl.NumJoysticks())
@@ -675,6 +685,10 @@ func main() {
 	// is off or the player is in the background. The OS still owns the short
 	// press, so nothing about the volume itself changes.
 	bootEnqueue("volume-buttons", startVolumeButtonWatcher)
+	// The power key (powerkey.go): sleep on a press, the Exit card on a hold,
+	// on Home, every screen and in a game. Read the same way, never grabbed.
+	powerKeyNoteConfig(config)
+	bootEnqueue("power-key", startPowerKeyWatcher)
 
 	// An idle screen that died in its low-power state (saver_power.go) left
 	// the CPU clocked down: put it back first, so the values recorded next are
@@ -807,6 +821,8 @@ func main() {
 			// The game assistant: another watches for Select + R2, and the
 			// overlay opens over the paused game (gameassist.go).
 			gameAssistParkedTick(config)
+			// The power key's main-loop half; no Exit card over a game.
+			powerKeyTick(config, true)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
 				alarmCheck(config, now)
@@ -862,6 +878,11 @@ func main() {
 		wakeSwallowedText := false
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 			applyButtonSwap(config, event)
+			// Asleep, and a moment after the wake: presses are dropped, so
+			// neither a pocket nor the wake press acts (powersleep.go).
+			if powerSleepDropInput(event) {
+				continue
+			}
 			switch e := event.(type) {
 			case *sdl.QuitEvent:
 				running = false
@@ -1768,6 +1789,9 @@ func main() {
 				}
 				// The Media screen scrolls its rows and grids a row per notch.
 				if mediaHubWheel(config, e.Y) {
+					continue
+				}
+				if musicShelfWheel(e.Y) {
 					continue
 				}
 				// The Chat history scrolls smoothly under the wheel.
@@ -3214,6 +3238,14 @@ func main() {
 						handleControllerAxis(e, config)
 					}
 				}
+			case *sdl.JoyDeviceAddedEvent:
+				// A PlayStation pad SDL has no mapping for becomes a game
+				// controller here (gamepad_sony.go); SDL announced it as a
+				// plain joystick, so it is opened as if it had been announced.
+				if sonyPadPrepare(int(e.Which)) {
+					handleControllerDevice(&sdl.ControllerDeviceEvent{Type: sdl.CONTROLLERDEVICEADDED, Which: e.Which})
+					vcursorResetAxes()
+				}
 			case *sdl.ControllerDeviceEvent:
 				handleControllerDevice(e)
 				// After the pad is (re)opened, so the sticks are read from it
@@ -3316,6 +3348,16 @@ func main() {
 			// following it (saver_power.go), e.g. dropping to the quiet profile
 			// when the sleep timer stops the music.
 			saverPowerTick(time.Now())
+			// Auto sleep keeps counting while the dock is dark (devpower.go):
+			// screensaverAutoTick, which calls it otherwise, is skipped here.
+			autoSleepTick(config, time.Now())
+			// A sleep that started in the dark dock wakes to a lit panel, not
+			// to the dock's black frame with nothing presented.
+			if powerSleepJustWoke(time.Second) {
+				ambientNotifyInput()
+			}
+			// The power key too: a hold wakes the dock for the Exit card.
+			powerKeyTick(config, false)
 			sdl.Delay(200)
 			frameCount++
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
@@ -3743,6 +3785,8 @@ func main() {
 		}
 		// A Wine game profile that failed on its goroutine (windowsapps.go).
 		wineShowProfileFailure()
+		// A game that quit at once, and what it was missing (gamediag.go).
+		gameDiagShowPending()
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
 		}
@@ -3802,6 +3846,9 @@ func main() {
 		// darkened with it.
 		brightnessFrameTick()
 		brightnessSoftRender(renderer)
+		// The power key's main-loop half: the setting, the next alarm for a
+		// sleep's RTC wake, and the Exit card a hold asked for (powerkey.go).
+		powerKeyTick(config, false)
 
 		renderer.Present()
 		// Measured after Present, so the idle delay at the end of the loop is

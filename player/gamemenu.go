@@ -2,8 +2,9 @@ package main
 
 // gamemenu.go — the in-game menu: hold Select + L2 in any game or emulator
 // JukaHub started (RetroArch, PPSSPP, a port) and the game pauses under a
-// small glass menu: Resume game, Ask Juka (with the game assistant on) and
-// Quit to JukaHub.
+// small glass menu: Resume game, Save state and Load state (a RetroArch game
+// the library started: six slots with pictures, gamemenu_states.go), Ask
+// Juka (with the game assistant on), Sleep and Quit to JukaHub.
 //
 // It is the game assistant's overlay in another mode, so it inherits all of
 // its machinery and guard rails (gameassist.go): the pad watcher sees the
@@ -20,6 +21,11 @@ package main
 // hands the screen back to the game for its last frames, and once the group
 // is gone the parked main loop shows JukaHub again. A game that ignores the
 // interrupt is killed after gmQuitGrace.
+//
+// Sleep gives the game back as Resume does and puts the handheld to sleep the
+// way its power button does (sleepNow, powersleep.go): every kind of game —
+// RetroArch, PPSSPP, a port — is frozen with the rest of the system while it
+// sleeps and carries on when it wakes.
 //
 // A Linux handheld only, like the assistant's overlay: on a PC nothing can be
 // drawn over a game's own window.
@@ -53,6 +59,9 @@ const (
 	gmResume gmItem = iota
 	gmAsk
 	gmQuit
+	gmSave
+	gmLoad
+	gmSleep
 )
 
 // gameMenuEnabled reports Settings → Controls → In-game menu.
@@ -68,7 +77,7 @@ func gameMenuEnabled(c *Config) bool {
 func gameMenuSettingsRow() setRow {
 	return setRow{
 		ID: gameMenuKey, Label: "In-game menu", Kind: setKindToggle,
-		Detail:  setStatic("Hold Select + L2 in a game: resume, ask Juka or quit to JukaHub"),
+		Detail:  setStatic("Hold Select + L2 in a game: resume, save or load, sleep, ask Juka or quit"),
 		Visible: func(*Config) bool { return gameAssistSupported() },
 		Get:     gameMenuEnabled,
 		Set: func(c *Config, on bool) {
@@ -78,13 +87,18 @@ func gameMenuSettingsRow() setRow {
 	}
 }
 
-// gmItems is the menu's rows: Ask Juka only with the game assistant on.
+// gmItems is the menu's rows: the save slots only for a RetroArch game the
+// library started (gmStatesAvailable), Ask Juka only with the game assistant
+// on.
 func gmItems(config *Config) []gmItem {
 	items := []gmItem{gmResume}
+	if gmStatesAvailable() {
+		items = append(items, gmSave, gmLoad)
+	}
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
 	}
-	return append(items, gmQuit)
+	return append(items, gmSleep, gmQuit)
 }
 
 // gmLabel is a row's words: its label and the smaller line under it.
@@ -94,6 +108,12 @@ func gmLabel(it gmItem) (string, string) {
 		return "Ask Juka", "Say what you need help with"
 	case gmQuit:
 		return "Quit to JukaHub", "Progress since your last save is lost"
+	case gmSave:
+		return "Save state", "Six slots, each with a picture and its date"
+	case gmLoad:
+		return "Load state", "Go back to a moment you saved"
+	case gmSleep:
+		return "Sleep", "The game carries on when the handheld wakes"
 	}
 	return "Resume game", ""
 }
@@ -113,6 +133,10 @@ func gmShowMenu() {
 
 // gmPress acts on one press while the menu is up.
 func gmPress(config *Config, b gaButton) {
+	if gmPick.open {
+		gmPickPress(b)
+		return
+	}
 	items := gmItems(config)
 	if gaOverlay.sel >= len(items) {
 		gaOverlay.sel = len(items) - 1
@@ -141,6 +165,11 @@ func gmPress(config *Config, b gaButton) {
 			gmAskJuka(config)
 		case gmQuit:
 			gmQuitGame()
+		case gmSave, gmLoad:
+			PlayActivateSound()
+			gmPickOpen(items[gaOverlay.sel] == gmSave)
+		case gmSleep:
+			gmSleepNow()
 		}
 	}
 }
@@ -151,6 +180,15 @@ func gmAskJuka(config *Config) {
 	gaOverlay.mode = gaModeAsk
 	gaOverlay.fromMenu = true
 	gaListen(config)
+}
+
+// gmSleepNow gives the game back and puts the handheld to sleep: a stopped
+// game would sit out the wake-up stopped, and the overlay's three-minute cap
+// would end it the moment the handheld woke anyway.
+func gmSleepNow() {
+	PlayActivateSound()
+	gaClose("the player put the handheld to sleep", true)
+	sleepNow("game-menu")
 }
 
 // gmQuitGame asks the paused game to quit and hands it the screen for its way
@@ -187,7 +225,8 @@ func gmQuitWatch(cmds []*exec.Cmd) {
 		if !gmAnyLive(cmds) {
 			return
 		}
-		if alarmFiringActive() {
+		if alarmFiringActive() || powerSleepActive() {
+			// A sleep stops the game too (powersleep.go): no kill mid-save.
 			deadline = time.Now().Add(gmQuitGrace)
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -228,6 +267,10 @@ func gmController(button uint8) (gaButton, bool) {
 // gmDraw is the menu card in the middle of the screen: the game paused and
 // which game it is, the rows, and the buttons that work it.
 func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
+	if gmPick.open {
+		gmPickDraw(renderer, fonts)
+		return
+	}
 	items := gmItems(config)
 	if gaOverlay.sel >= len(items) {
 		gaOverlay.sel = len(items) - 1

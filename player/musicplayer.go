@@ -58,6 +58,7 @@ type musicState struct {
 	position float64 // seconds into the current track
 	duration float64 // seconds, 0 while unknown
 	dir      string  // folder the playlist was built from
+	bookKey  string  // nonempty when the playlist is one audiobook
 	cursor   int     // highlighted playlist row
 
 	// Playback modes and the play-next queue (see musiclibrary.go). The
@@ -179,12 +180,18 @@ func musicLoadPlaylist(dir, startPath string) int {
 	}
 
 	music.mu.Lock()
+	previousPath, previousPos, previousDur := "", 0.0, 0.0
+	if music.current >= 0 && music.current < len(music.tracks) {
+		previousPath = music.tracks[music.current].Path
+		previousPos, previousDur = music.position, music.duration
+	}
 	prev := musicRetireDecoderLocked()
 	// A new list starts with no failures behind it: a count left over from a
 	// list where nothing played stopped this one at its first bad track.
 	music.failRun = 0
 	music.tracks = tracks
 	music.dir = dir
+	music.bookKey = ""
 	music.cursor = start
 	music.current = -1
 	music.playing = false
@@ -200,6 +207,7 @@ func musicLoadPlaylist(dir, startPath string) int {
 	music.queueLen = 0
 	music.mu.Unlock()
 	musicKillDecoder(prev)
+	audioRememberPosition(previousPath, previousPos, previousDur)
 	return start
 }
 
@@ -249,12 +257,18 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 		start = 0
 	}
 	music.mu.Lock()
+	previousPath, previousPos, previousDur := "", 0.0, 0.0
+	if music.current >= 0 && music.current < len(music.tracks) {
+		previousPath = music.tracks[music.current].Path
+		previousPos, previousDur = music.position, music.duration
+	}
 	prev := musicRetireDecoderLocked()
 	// A new list starts with no failures behind it: a count left over from a
 	// list where nothing played stopped this one at its first bad track.
 	music.failRun = 0
 	music.tracks = append([]musicTrack(nil), tracks...)
 	music.dir = ""
+	music.bookKey = ""
 	music.cursor = start
 	music.current = -1
 	music.playing = false
@@ -268,6 +282,9 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 	music.queueLen = 0
 	music.mu.Unlock()
 	musicKillDecoder(prev)
+	audioRememberPosition(previousPath, previousPos, previousDur)
+	musicShelf.open = false
+	musicShelf.fromShelf = false
 	return true
 }
 
@@ -298,6 +315,8 @@ func musicKillDecoder(cmd *exec.Cmd) {
 // files in https://..." and never played. Remote audio now becomes its own
 // playlist (or the show's queue when the URL belongs to a subscription).
 func openAudioPlayer(config *Config, path string) {
+	musicShelf.open = false
+	musicShelf.fromShelf = false
 	if isHTTPMediaURL(path) {
 		if show, idx, ok := podcastEpisodeLookup(path); ok {
 			playPodcastEpisode(config, show, idx)
@@ -321,6 +340,8 @@ func openAudioPlayer(config *Config, path string) {
 // openAudioPlayerBrowser opens the player for a folder. It only restarts
 // playback when nothing from that folder is playing already.
 func openAudioPlayerBrowser(config *Config, dir string) {
+	musicShelf.open = false
+	musicShelf.fromShelf = false
 	if strings.TrimSpace(dir) == "" {
 		dir = musicDefaultDir(config)
 	}
@@ -368,9 +389,12 @@ func musicDefaultDir(config *Config) string {
 // musicSceneEnter prepares the player when its scene is opened. An active
 // playlist survives leaving and re-entering the scene.
 func musicSceneEnter() {
+	if musicShelf.open {
+		mlibStartScan(appConfig, false)
+		return
+	}
 	music.mu.Lock()
 	ready := music.ready
-	dir := music.dir
 	if music.speed <= 0 {
 		music.speed = audioSavedSpeed()
 	}
@@ -378,10 +402,9 @@ func musicSceneEnter() {
 	if ready {
 		return
 	}
-	if strings.TrimSpace(dir) == "" {
-		dir = musicDefaultDir(appConfig)
-	}
-	musicLoadPlaylist(dir, "")
+	musicShelf.open = true
+	mlibStartScan(appConfig, false)
+	return
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -407,6 +430,7 @@ func musicPlayTrackNow(index int) {
 		return
 	}
 	track := music.tracks[index]
+	bookKey := music.bookKey
 	previousPath, previousPos, previousDur := "", 0.0, 0.0
 	if music.current >= 0 && music.current < len(music.tracks) {
 		previousPath = music.tracks[music.current].Path
@@ -434,6 +458,12 @@ func musicPlayTrackNow(index int) {
 		}
 	}
 	resume := audioStartPosition(audioResumePosition(track.Path), track.Duration)
+	if bookKey != "" {
+		saved := audioResumePosition(track.Path)
+		if saved >= 5 && (track.Duration <= 0 || saved < track.Duration-audioResumeTailSeconds) {
+			resume = saved
+		}
+	}
 	music.position = resume
 	music.lyrics = loadLyricsFor(track.Path)
 	music.lastSave = time.Now()
@@ -441,6 +471,9 @@ func musicPlayTrackNow(index int) {
 
 	if previousPath != "" && !sameAudioPath(previousPath, track.Path) {
 		audioRememberPosition(previousPath, previousPos, previousDur)
+	}
+	if bookKey != "" {
+		audioBookRemember(bookKey, track.Path, false)
 	}
 
 	musicStartDecode(track.Path, resume)
@@ -664,11 +697,17 @@ loop:
 		} else if music.duration > 0 && !silent {
 			music.position = music.duration
 			reachedEnd = true
+		} else if music.bookKey != "" && music.duration <= 0 && waitErr == nil && !silent {
+			// A local chapter with no probed duration still has a real end
+			// when ffmpeg reaches EOF cleanly.
+			reachedEnd = true
 		}
 	}
 	// Where playback goes next: repeat-one restarts the same track, a queued
 	// track wins over the folder order, then the shuffled or sequential walk.
 	repeatOne := music.repeatMode == musicRepeatOne
+	bookKey := music.bookKey
+	lastBookTrack := music.current == len(music.tracks)-1
 	nextIdx, advance := 0, false
 	switch {
 	case cutShort:
@@ -698,6 +737,9 @@ loop:
 	if reachedEnd {
 		// A finished book or episode starts from the top next time.
 		audioForgetPosition(path)
+		if bookKey != "" && lastBookTrack && !advance {
+			audioBookRemember(bookKey, path, true)
+		}
 	}
 	if advance {
 		musicPlayTrack(nextIdx)
@@ -1295,6 +1337,10 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		renderMusicScreenOff(renderer)
 		return
 	}
+	if musicShelf.open {
+		renderMusicShelf(renderer, config)
+		return
+	}
 	music.mu.Lock()
 	fullVisualizer := music.visualizerFull
 	music.mu.Unlock()
@@ -1766,6 +1812,9 @@ func HandleMusicClick(mx, my int32) bool {
 		musicSetScreenOff(false)
 		return true
 	}
+	if musicShelfClick(mx, my, appConfig) {
+		return true
+	}
 	// The PEQ panel is modal too, and a tap on a band selects it.
 	if HandleMusicPEQClick(mx, my) {
 		return true
@@ -1894,6 +1943,9 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 			return
 		}
 	}
+	if musicShelfHandleKey(e, config) {
+		return
+	}
 	// The equaliser panel owns the D-pad while it is up.
 	if handleMusicPEQKey(e) {
 		return
@@ -2005,6 +2057,12 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 	case sdl.K_o:
 		musicToggleScreenOff()
 	case sdl.K_ESCAPE:
+		if musicShelf.fromShelf {
+			musicShelf.open = true
+			musicShelfInvalidate()
+			PlayBackSound()
+			return
+		}
 		music.mu.Lock()
 		full := music.visualizerFull
 		if full {
@@ -2107,6 +2165,9 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 			return true
 		}
 	}
+	if musicShelfHandlePad(e, appConfig) {
+		return true
+	}
 	// While the search panel is up it takes the D-pad and the face buttons.
 	if musicSearchActive() {
 		switch e.Button {
@@ -2179,6 +2240,12 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		// Select darkens the panel; the panel keeps playing. B still goes back.
 		musicToggleScreenOff()
 	case sdl.CONTROLLER_BUTTON_B:
+		if musicShelf.fromShelf {
+			musicShelf.open = true
+			musicShelfInvalidate()
+			PlayBackSound()
+			return true
+		}
 		music.mu.Lock()
 		full := music.visualizerFull
 		if full {

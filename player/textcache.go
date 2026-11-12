@@ -286,8 +286,14 @@ const maxTextFitEntries = 512
 const maxTextFitLen = 240
 
 // fitTextCached returns fitTextToWidth's result from the cache when the same
-// measurement has already been made.
+// measurement has already been made. The text is translated into the interface
+// language first, so the cache key is the drawn string and a language switch
+// needs no flush for correctness (uiSetLanguage still clears it to free the
+// old language's entries).
 func fitTextCached(font *ttf.Font, text string, maxW int32) string {
+	// Translate before clipping (i18n.go): a clipped English label is no
+	// longer a catalogue key, so translating after would draw it in English.
+	text = uiT(text)
 	if font == nil || maxW <= 0 || len(text) > maxTextFitLen {
 		return fitTextToWidth(font, text, maxW)
 	}
@@ -369,6 +375,18 @@ const maxTextMeasureEntries = 1024
 // for the same strings on every frame — the home footer alone measured eight
 // of them per frame — and each call is a FreeType trip through cgo.
 func measureText(font *ttf.Font, text string) (int32, int32) {
+	if font == nil || text == "" {
+		return 0, 0
+	}
+	// Measure what is drawn: renderText and drawText translate the same way
+	// (i18n.go), so centred and right-aligned labels line up in every language.
+	return measureTextRaw(font, uiT(text))
+}
+
+// measureTextRaw is measureText for content drawn as written (chat messages,
+// the composer): no interface-language translation, so a message word that
+// happens to be a catalogue key is measured at the width it is drawn at.
+func measureTextRaw(font *ttf.Font, text string) (int32, int32) {
 	if font == nil || text == "" {
 		return 0, 0
 	}

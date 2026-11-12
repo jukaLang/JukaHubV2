@@ -18,9 +18,8 @@ package main
 //   - Runtime: whether AndroidRT is installed, whether this machine can run it,
 //     and whether a real Android (Waydroid) is there to install APKs into.
 //
-// Nothing pretends. AndroidRT has not run a game on a handheld yet, so "try it"
-// is the strongest word on the screen, and a Java app is never offered as
-// something it can start.
+// AndroidRT has rendered one native game on a Smart Pro. Other APKs remain
+// experimental, and a Java app is never offered as something it can start.
 //
 // The screen uses the tool screens' frame (tbxui.go): Home's glass, the shared
 // header, a focus list that scrolls, the shared sheet. Reading the card is scene
@@ -612,6 +611,9 @@ func apkStoreFooterHints(config *Config) []FooterHint {
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
 	}
 	hints = append(hints, FooterHint{Button: "B", Label: "Back"})
+	if pkgHubEnabled() && pkgStores.leftFor && pkgStores.leftScene == "Packages" {
+		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Stores"})
+	}
 	if !apkStoreUI.scanning {
 		// Y does nothing while a scan runs, so it is not offered then.
 		hints = append(hints, FooterHint{Button: "Y", Label: "Rescan"})
@@ -885,6 +887,85 @@ func apkStoreDownloadEntry(e apkStoreCatalogEntry) {
 	}()
 }
 
+// apkStoreCatalogInstalled finds a Store entry that the store downloaded and
+// added to Games. It only uses the scanned card state, so drawing a row never
+// hashes a large APK or reads a profile from disk.
+func apkStoreCatalogInstalled(e apkStoreCatalogEntry) (apkStoreInfo, bool) {
+	if !e.installable() || !apkStoreCatalogDownloadValid(e) {
+		return apkStoreInfo{}, false
+	}
+	dir := apkStorePathKey(apkStoreSaveDir())
+	base := apkStoreDownloadName(e)
+	other := e.ID + "-" + strings.ToLower(e.SHA256[:8]) + ".apk"
+	for _, info := range apkStoreUI.apks {
+		name := filepath.Base(info.Path)
+		if apkStorePathKey(filepath.Dir(info.Path)) != dir || name != base && name != other ||
+			info.Manifest.Package != e.Package || !info.Tier.canAdd() {
+			continue
+		}
+		if st, ok := apkStoreUI.games[info.Path]; ok && st.Ours {
+			return info, true
+		}
+	}
+	return apkStoreInfo{}, false
+}
+
+// apkStoreInstallEntry downloads a pinned APK, checks its actual package and
+// native entry, then creates the Games profile. The row stays busy until both
+// the download and profile write have finished.
+func apkStoreInstallEntry(e apkStoreCatalogEntry) {
+	if _, busy := apkStoreUI.busy[e.ID]; busy {
+		return
+	}
+	if !androidRTSupported() {
+		apkStoreDownloadEntry(e)
+		return
+	}
+	apkStoreSetBusy(e.ID, "Installing…")
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), patchDownloadTimeout)
+		defer cancel()
+		info, p, err := apkStoreInstallCatalogAPK(ctx, e)
+		tbxPost(func() {
+			apkStoreSetBusy(e.ID, "")
+			if err != nil {
+				PlayErrorSound()
+				ShowToast("Could not install "+e.Title+": "+err.Error(), ToastKindError)
+				if info.Path != "" && apkStoreOnScreen() {
+					apkStoreStartScan() // show the downloaded APK and its verdict
+				}
+				return
+			}
+			if apkStoreUI.games == nil {
+				apkStoreUI.games = map[string]apkStoreGameState{}
+			}
+			apkStoreUI.games[info.Path] = apkStoreGameState{ID: p.ID, Ours: true, Title: p.Title}
+			found := false
+			for i := range apkStoreUI.apks {
+				if apkStoreUI.apks[i].Path == info.Path {
+					apkStoreUI.apks[i] = info
+					found = true
+					break
+				}
+			}
+			if !found {
+				apkStoreUI.apks = append(apkStoreUI.apks, info)
+			}
+			apkStoreSort(apkStoreUI.apks)
+			apkStoreUI.scanned = true
+			apkStoreRebuildText()
+			PlaySuccessSound()
+			ShowToast("Installed "+p.Title+" in Games — open it here to run it (experimental)", ToastKindSuccess)
+			if apkStoreOnScreen() {
+				apkStoreStartScan()
+			}
+			if apkStoreRuntimeMissing() {
+				androidRTStartInstall(nil)
+			}
+		})
+	}()
+}
+
 // ── Sheets ──────────────────────────────────────────────────────────────────
 
 // apkStoreOpenAPK is A on an APK: what it is, and what can be done with it.
@@ -1114,9 +1195,27 @@ func apkStoreOpenCatalogEntry(config *Config, e apkStoreCatalogEntry) {
 		buttons = append(buttons, tbxSheetButton{label: "Your APKs", run: func() { apkStoreSwitchTab(apkTabMine) }})
 	}
 	focus := 0
-	if e.downloadable() {
-		b.WriteString("\n\nThe download is checked against its published SHA-256 before it is kept (" + humanBytes(e.Size) + ").")
-		buttons = append(buttons, tbxSheetButton{label: "Download", primary: true, run: func() { apkStoreDownloadEntry(e) }})
+	if info, installed := apkStoreCatalogInstalled(e); installed {
+		b.WriteString("\n\nInstalled in Games from the Store. This native APK runs through AndroidRT; compatibility is still experimental.")
+		if canPlay, why := apkStoreCanPlay(); canPlay {
+			buttons = append(buttons, tbxSheetButton{label: "Run", primary: true, run: func() { apkStorePlay(config, info) }})
+		} else {
+			b.WriteString("\n\n" + why)
+			if apkStoreRuntimeMissing() {
+				buttons = append(buttons, tbxSheetButton{label: "Install runtime and run", primary: true, run: func() {
+					apkStoreOfferRuntime(config, e.Title, "Install and run", func() { apkStorePlay(config, info) })
+				}})
+			}
+		}
+		focus = len(buttons) - 1
+	} else if e.downloadable() {
+		b.WriteString("\n\nThe APK is checked against its SHA-256 before it is kept (" + humanBytes(e.Size) + ").")
+		if e.installable() && androidRTSupported() {
+			b.WriteString(" Its package and native ARM64 entry are checked before it is added to Games. This does not guarantee the app will run: AndroidRT is experimental.")
+			buttons = append(buttons, tbxSheetButton{label: "Install", primary: true, run: func() { apkStoreInstallEntry(e) }})
+		} else {
+			buttons = append(buttons, tbxSheetButton{label: "Download", primary: true, run: func() { apkStoreDownloadEntry(e) }})
+		}
 		focus = len(buttons) - 1
 	}
 	tbxOpenSheet(config, tbxSheetSpec{

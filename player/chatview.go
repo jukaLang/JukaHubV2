@@ -1781,14 +1781,14 @@ func chatComposerText(font *ttf.Font, draft string, maxW int32) (string, int32) 
 	}
 	shown := strings.ReplaceAll(draft, "\n", " ")
 	shown = sanitizeForFont(font, shown)
-	w, _ := measureText(font, shown)
+	w, _ := measureTextRaw(font, shown)
 	if w > maxW {
 		runes := []rune(shown)
 		lo, hi := 0, len(runes)
 		for lo < hi {
 			mid := (lo + hi) / 2
 			cand := "…" + string(runes[mid:])
-			cw, _ := measureText(font, cand)
+			cw, _ := measureTextRaw(font, cand)
 			if cw <= maxW {
 				hi = mid
 			} else {
@@ -1796,7 +1796,7 @@ func chatComposerText(font *ttf.Font, draft string, maxW int32) (string, int32) 
 			}
 		}
 		shown = "…" + string(runes[lo:])
-		w, _ = measureText(font, shown)
+		w, _ = measureTextRaw(font, shown)
 	}
 	c.src, c.maxW, c.font, c.out, c.w = draft, maxW, font, shown, w
 	return shown, w

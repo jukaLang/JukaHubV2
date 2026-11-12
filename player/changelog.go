@@ -142,7 +142,8 @@ func refreshReleaseNotesAsync(config *Config) {
 		return
 	}
 	_, notes := cachedInstalledReleaseNotes(installed)
-	if notes != "" || !changelogNotesLoading.CompareAndSwap(false, true) {
+	if (notes != "" && !releaseNotesNeedExpansion(notes)) ||
+		!changelogNotesLoading.CompareAndSwap(false, true) {
 		return
 	}
 	setChangelogNotesError("")
@@ -163,7 +164,7 @@ func refreshReleaseNotesAsync(config *Config) {
 func changelogSubtitle(config *Config) string {
 	installed := installedReleaseTag()
 	_, notes := cachedInstalledReleaseNotes(installed)
-	if notes == "" && changelogNotesLoading.Load() {
+	if (notes == "" || releaseNotesNeedExpansion(notes)) && changelogNotesLoading.Load() {
 		return "Loading release notes…"
 	}
 	return "Release notes for this build"
@@ -201,6 +202,11 @@ func plainReleaseNotes(body string) []string {
 	for _, raw := range strings.Split(body, "\n") {
 		line := strings.TrimRight(raw, "\r")
 		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "Changelog") || strings.Contains(trimmed, "changelog") {
+			if _, isLink := fullChangelogLinkLine(trimmed, ""); isLink {
+				continue
+			}
+		}
 		if inComment {
 			if strings.Contains(trimmed, "-->") {
 				inComment = false

@@ -395,6 +395,8 @@ func shutdownReleaseTextures() {
 func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	start := time.Now()
 	deadline := start.Add(shutdownBudget)
+	// Restart or Power off from Home's power card runs later, from main's
+	// defer after the Cleanup hooks have flushed (devpower.go).
 	// A ring still up ends first, here on the main thread that owns what it
 	// paused: the game it stopped must run again before it is asked to quit.
 	alarmStopRing()
@@ -408,7 +410,7 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	for i, step := range steps {
 		labels[i] = step.label
 	}
-	track := newStageTrack("Shutting down", labels)
+	track := newStageTrack(devPowerShutdownTitle(), labels)
 
 	if renderer == nil || exitRequestedBySignal.Load() {
 		runShutdownStepsUntil(steps, track, nil, deadline)

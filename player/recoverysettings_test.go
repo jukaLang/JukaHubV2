@@ -117,3 +117,32 @@ func TestLaunchScriptHonoursTheRestartRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingsRestoreAllDefaultsRequiresConfirmation(t *testing.T) {
+	section := setSections()[setSectionIndex("about")]
+	var restore *setRow
+	for i := range section.Rows {
+		if section.Rows[i].ID == "restoreDefaults" {
+			restore = &section.Rows[i]
+			break
+		}
+	}
+	if restore == nil || restore.Label != "Restore all defaults" || restore.Kind != setKindAction || restore.Open == nil {
+		t.Fatal("Settings → About must offer Restore all defaults as an action")
+	}
+
+	before := recoveryCard
+	defer func() { recoveryCard = before }()
+	restore.Open(&Config{})
+	if !recoveryCard.open || recoveryCard.title != "Restore all defaults?" {
+		t.Fatal("the Settings action must open the reset confirmation")
+	}
+	if recoveryCard.focus != 0 || len(recoveryCard.options) != 2 ||
+		recoveryCard.options[0].title != "Cancel" || recoveryCard.options[1].title != "Restore all defaults" {
+		t.Fatalf("the confirmation must focus Cancel before the reset action: %+v", recoveryCard.options)
+	}
+	recoveryCard.options[0].run(&Config{})
+	if recoveryCard.open {
+		t.Fatal("Cancel must close the confirmation without resetting settings")
+	}
+}

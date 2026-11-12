@@ -320,7 +320,9 @@ func gaOpen(config *Config, mode gaMode) bool {
 	if gaOverlay.active {
 		return true
 	}
-	if gmQuitting.Load() {
+	// Nor over a sleeping handheld (powersleep.go): the screen-off sleep keeps
+	// the game stopped and would continue it on the wake under the overlay.
+	if gmQuitting.Load() || powerSleepActive() {
 		return false
 	}
 	enabled := gameAssistEnabled(config)
@@ -629,7 +631,9 @@ func gaTick(config *Config) {
 	case gaLink.lost.Swap(false):
 		gaClose("the pad went away", true)
 		return
-	case time.Since(gaOverlay.openedAt) >= gaOverlayCap:
+	case time.Since(gaOverlay.openedAt) >= gaOverlayCap && !powerSleepActive():
+		// Not while the handheld sleeps: the screen-off sleep would hand the
+		// game back with the screen dark (a real suspend stops this clock).
 		gaClose("it was up for three minutes", true)
 		return
 	}
@@ -668,6 +672,7 @@ func gaClose(why string, handBack bool) {
 	gaLink.release.Store(true)
 	gaLink.live.Store(false)
 	gaTakePresses()
+	gmPickDrop() // the in-game menu's slot pictures (gamemenu_states.go)
 	jukaSpeakStop()
 	voiceOrbHideNow()
 	gaResume()

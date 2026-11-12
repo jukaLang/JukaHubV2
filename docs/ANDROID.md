@@ -4,7 +4,8 @@ JukaHub does not ship a complete Android. The **AndroidPak** path runs a
 limited class of native-only (NDK) games through **AndroidRT**, a small runtime
 JukaHub builds and ships: every TrimUI package carries it beside the app, and
 the APK Store installs the same build from JukaHub's releases on a device that
-lacks it. Real-game support is still unverified on hardware. The **APK Store**
+lacks it. Penguin Dash v0.5.0 has rendered on a Smart Pro with AndroidRT;
+other games need individual testing. The **APK Store**
 (Packages → More stores, or Start → Games → APK Store) is the front door to
 it: it finds the APKs on the card, says what each one is and whether it can
 run, and adds the ones worth trying to Games in one press — the Games
@@ -19,12 +20,21 @@ install APKs into it.
 store's Play). If AndroidRT is missing, the store offers to install it with one
 press first.
 
+For a Store download, open **Store → Penguin Dash → Install**. The APK is
+checked against its pinned SHA-256, its package and native arm64 launcher are
+checked, and its profile is added to Games. The **Run** button starts it through
+AndroidRT. A fresh Store download, install and Run were tested on a Smart Pro:
+the game's SHA-256 matched, its main loop presented frames at 1280×720, and
+the A button advanced its menu. Gameplay steering, sound and clean exit still
+need testing.
+
 ## APK Store
 
 The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
 
 * **Your APKs.** A bounded scan (two folders deep, at most 300 files, a few
-  seconds) of `/mnt/SDCARD/APKs`, `Android`, `Roms/ANDROID`, `Roms/APK`,
+  seconds) of `/mnt/SDCARD/APKs`, `Android`, common `Roms/Android` and
+  `Roms/APK` case variants, `Apps/Android`, `Apps/APK`, `Data/APKs`,
   `Downloads`, the Phone Companion's `PhoneDrop` folder (a phone sends an APK
   there in one tap), the store's own download folder and JukaHub's downloads;
   on a computer, the user's Downloads. `JUKAHUB_APK_DIRS` (a PATH-style list)
@@ -57,7 +67,7 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
     are the DEX files searched (bounded) for a NativeActivity or GameActivity
     subclass.
 
-  The verdict is one of: **Native game — try it (experimental)**, **Minecraft
+  The verdict is one of: **Native APK — try it (experimental)**, **Minecraft
   class pack (experimental)**, **Native entry, Java start — may not run**,
   **Needs Android's Java runtime — can't run on AndroidRT** (with the reason and
   the route that works instead, such as a PortMaster build or PortMaster's
@@ -66,7 +76,9 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   of an App Bundle install: it needs a single, universal APK), **Wrong CPU**
   (x86-only builds, and 32-bit-only `armeabi-v7a` builds: AndroidRT's loader
   takes 64-bit `arm64-v8a` libraries only) or **Not a readable APK**. A Java
-  app is never offered as something to try.
+  app is never offered as something to try. A native launcher takes precedence
+  over a bundled SDL or other engine library, so such an APK can be tried even
+  when its libraries also identify an engine that normally starts in Java.
 
   A on an APK offers **Add to Games**: the store writes one profile per APK to
   `<data>/game-profiles/local/apkstore-<id>.json` (runtime `androidpak`; the
@@ -101,7 +113,9 @@ The screen has three tabs ([player/apkstore.go](../player/apkstore.go)):
   kept, it is saved as `<id>.apk` (or `<id>-<hash>.apk` when a different file
   already has that name — a download never replaces a file it did not write),
   and an entry without a hash offers no download. The built-in list carries
-  none yet: none could be verified when it was written. A newer list is
+  the author-published Penguin Dash v0.5.0 APK, which has rendered on a Smart
+  Pro. Its APK identity is pinned in the app so a fetched catalogue cannot
+  replace it with a different executable download. A newer list is
   fetched at most once a day (256 KiB cap, schema-checked) and used only when
   it is newer, dated no more than three days past today (or past the built-in
   list's date, on a handheld whose clock has not been set), and at least half
@@ -395,7 +409,7 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
 | **Container integration (Waydroid)** — Android runs in a container on the device kernel. | **Install only.** The only approach that runs real Android apps. The APK Store detects Waydroid (binary + binder device) and installs APKs into it; the earlier engine that listed and launched container apps through a display bridge (`android.go`) is no longer in the tree. A stock TrimUI kernel has no binder device. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
-| **AndroidPak — NDK games via AndroidRT** | **Shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches AndroidRT — bundled with JukaHub's TrimUI packages, or installed from its releases by the APK Store — with its own bionic loader, JNI environment and SDL2/EGL present layer; real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
+| **AndroidPak — NDK games via AndroidRT** | **Shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches AndroidRT — bundled with JukaHub's TrimUI packages, or installed from its releases by the APK Store — with its own bionic loader, JNI environment and SDL2/EGL present layer. Penguin Dash v0.5.0 rendered on a Smart Pro and its A button advanced the menu; gameplay steering, sound and clean exit remain unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
 | **Sideloading APKs into the container** | **Shipped in the APK Store.** The package is read and triaged first; `waydroid app install <file>` gets a validated path. |
 | **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
@@ -443,17 +457,20 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
   and community firmware, not the stock TrimUI kernel.
 * Memory is shared with everything else on a 1 GB device: a launch that would
   not leave the hub alive is refused with the numbers.
-* **Nothing here is verified on hardware yet.** The store's reading, triage,
-  verdicts, profiles, catalogue and Waydroid probe are unit-tested with
-  generated APKs and fakes; AndroidPak staging and AndroidRT have host-side
-  tests and smokes. None of that proves a real game running on the handheld.
+* **One game has rendered on hardware.** Penguin Dash v0.5.0 reached its main
+  loop and presented frames through the Smart Pro's PowerVR GLES display.
+  Its A button advanced the menu; gameplay steering, sound and normal exit
+  have not yet been proven. The store's
+  reading, triage, verdicts, profiles, catalogue and Waydroid probe also have
+  host-side tests; other Android games need individual device tests.
 
 ## Next slices
 
-1. **The first device run** — the bundled runtime on a Smart Pro and a Brick:
-   which display path shows a frame, then one real NativeActivity game.
-2. **Verified catalogue entries** — free NDK games whose authors publish APKs
-   on GitHub releases, with their SHA-256 and size, so Store rows can download.
+1. **Complete the first device run** — exercise Penguin Dash's gameplay
+   steering, audio and normal exit. The Store's Install and Run buttons have
+   already added its profile and launched it full screen on a Smart Pro.
+2. **More catalogue entries** — test other free NDK games on hardware before
+   offering their author-published APKs in the Store.
 3. **Container data** — expose Waydroid's data directory to the Save Manager
    so an app's state can be snapshotted like a game save.
 

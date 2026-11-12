@@ -337,8 +337,25 @@ quits when both are on one pad; Start on one pad and Select on another are just
 buttons. Rumble reaches the pad in use for as long as the game asks. Pads with
 Nintendo labels (a Switch Pro, an 8BitDo in Switch mode) are read by position,
 so Cross is always the bottom button. Create and the touchpad need the
-firmware's SDL 2.0.14 or newer. There is no motion control (the TrimUI
-handhelds have no gyroscope, and a pad's own is not passed on yet).
+firmware's SDL 2.0.14 or newer.
+
+**DualShock 4 and DualSense over Bluetooth.** When SDL drives the pad itself
+(its own PlayStation driver), everything reaches the console: Create, the
+touchpad (click and two fingers), rumble, and **motion** — the pad's gyroscope
+and accelerometer, plus an orientation the helper works out from them, for
+games that aim or steer by tilting. When the pad comes through the kernel's
+event device instead, SDL often has no mapping for it (a DualShock 4 on the
+TrimUI's 4.9 kernel reports its buttons in the HID report's order); the helper
+then maps it itself, by its USB id and its kernel's button order, so Cross,
+Circle, the triggers and the PS button land where they should. That way the
+touchpad and motion stay on input nodes of their own: a DualSense's Create
+button then clicks the touchpad (the stream menu's **Select** row swaps it for
+Create), while a DualShock 4 on the older kernel still clicks its own touchpad.
+JukaHub's menus map such pads the same way, so a PlayStation pad drives the
+launcher too. `psremote.log` says which way each pad came
+(`PS4 pad mapped from the kernel's HID report order …`; `motion` and
+`touchpad` on the `controller added` line). The handheld's own controls have no
+gyroscope; with several motion pads the one used last is the console's.
 `psremote.log` lists every pad as it arrives and leaves
 (`[native] controller added: …`, marked `built-in` for the handheld's own).
 Pairing a Bluetooth pad: [Bluetooth controllers](#bluetooth-controllers).
@@ -376,7 +393,9 @@ this system has no driver for that kind of device*, is what firmware that
 supports only Bluetooth LE input (the stock firmware's notes promise "BLE hid")
 can do with a classic-Bluetooth pad such as a DualShock 4, a DualSense or many
 8BitDo modes. A USB-C cable or a 2.4 GHz USB adapter works instead. Which pads
-work on which firmware has not been recorded on hardware yet.
+work on which firmware has not been recorded on hardware yet; the Bluetooth
+block in a bug report's log has a `Pad HID` line (HIDP, uhid and Sony's kernel
+drivers present or not) that tells.
 
 * A PlayStation pad remembers one system at a time: pairing it with the
   handheld unpairs it from the console until it is plugged into the console

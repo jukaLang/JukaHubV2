@@ -1517,7 +1517,7 @@ func hwpLevelInk(pct int) sdl.Color {
 	switch {
 	case pct >= 50:
 		return ColorSuccess
-	case pct >= 20:
+	case pct >= 15:
 		return ColorWarning
 	}
 	return ColorDanger

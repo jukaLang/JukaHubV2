@@ -34,6 +34,19 @@ void fake_joy_axis(uint32_t at, SDL_JoystickID which, int axis, int value);
  * type (SDL_GameControllerGetType, a SDL_CONTROLLER_TYPE_ value). */
 void fake_device_ids(int index, unsigned vendor, unsigned product);
 void fake_device_type(int index, int type);
+/* A raw PlayStation pad's counts (SDL_JoystickNumButtons/Axes/Hats); its GUID
+ * string; whether a mapping made it a game controller since. */
+void fake_device_sony(int index, int buttons, int axes, int hats);
+const char *fake_device_guid(int index);
+bool fake_device_is_gc(int index);
+/* A PS4/PS5 controller whose touchpad SDL does not report (the kernel's event
+ * device); one with gyro + accelerometer, and how many of them are on. */
+void fake_device_no_touchpad(int index);
+void fake_device_sensors(int index);
+int fake_device_sensors_on(int index);
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+void fake_sensor(uint32_t at, SDL_JoystickID which, int sensor, float x, float y, float z);
+#endif
 /* The device a joystick handle belongs to (for a SDL_JoystickPath stand-in). */
 int fake_device_index(SDL_Joystick *joystick);
 void fake_sdl_event(uint32_t at, SDL_Event event);

@@ -1059,7 +1059,7 @@ func launchEmulatorEntry(e emuEntry) {
 	// Raise the CPU profile for the emulator and drop it back when the child
 	// exits. beginGamePowerProfile never fails a launch: an unsupported
 	// firmware only logs.
-	restoreProfile := beginGamePowerProfile(appConfig)
+	restoreProfile := beginLaunchPowerProfile(appConfig, path) // per-game profile, PWR-6
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
 		logWarn("emulators", "launch failed for %s: %v", path, err)

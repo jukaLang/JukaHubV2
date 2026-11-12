@@ -42,7 +42,7 @@ func TestPkgCompareVersions(t *testing.T) {
 // store metadata is read whatever shape it comes in.
 func TestPkgParseCatalogIsLenient(t *testing.T) {
 	raw := `[
-		{"name": "Beta", "version": "1.0", "device": "trimui_smart_pro", "category": ["Themes"], "size": "1.5 MB", "changelog": ["Faster", "Smaller"], "featured": "yes"},
+		{"name": "Beta", "version": "1.0", "device": "trimui_smart_pro", "category": ["Themes"], "icon": "https://example.com/beta.png", "size": "1.5 MB", "changelog": ["Faster", "Smaller"], "featured": "yes"},
 		{"name": "alpha", "version": 2, "size": 2048},
 		{"name": ""},
 		"not an object",
@@ -71,6 +71,9 @@ func TestPkgParseCatalogIsLenient(t *testing.T) {
 	}
 	if beta.Extra.Changelog != "• Faster\n• Smaller" {
 		t.Errorf("changelog = %q", beta.Extra.Changelog)
+	}
+	if beta.Extra.Icon != "https://example.com/beta.png" {
+		t.Errorf("icon = %q", beta.Extra.Icon)
 	}
 	if entries[0].Extra.Size != 2048 || entries[0].Pkg.Version != "" {
 		t.Errorf("alpha: size %d version %q", entries[0].Extra.Size, entries[0].Pkg.Version)

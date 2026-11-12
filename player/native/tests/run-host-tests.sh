@@ -31,7 +31,7 @@ $CC $FLAGS -I"$NATIVE" "$HERE/test_stream_input.c" "$OUT/stream_input.o" -o "$OU
 "$OUT/test_stream_input"
 
 echo "== stream_sys"
-$CC $FLAGS -I"$NATIVE" "$HERE/test_stream_sys.c" "$OUT/stream_sys.o" -o "$OUT/test_stream_sys"
+$CC $FLAGS -I"$NATIVE" "$HERE/test_stream_sys.c" "$OUT/stream_sys.o" -lm -o "$OUT/test_stream_sys"
 "$OUT/test_stream_sys" "$OUT"
 
 # The whole helper, against both generations of the stub SDL headers: 2.0.14+

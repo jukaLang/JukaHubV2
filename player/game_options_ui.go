@@ -4,8 +4,9 @@ package main
 //
 // The library is a browser: A plays, X opens LAN play, L1 fills covers. The
 // settings that belong to one title rather than the whole card live behind
-// Start (or O on a keyboard): a CPU ceiling for that game and extra arguments
-// for its launcher. Nothing here writes to the emulator or the firmware
+// Start (or O on a keyboard): a CPU profile and ceiling for that game, its
+// RetroArch video filter (videofilter.go) and extra arguments for its
+// launcher. Nothing here writes to the emulator or the firmware
 // directly — the sheet stores a small JSON record and the launch path
 // (game_library.go) applies it for that child only.
 
@@ -19,12 +20,26 @@ const (
 	gameOptionsRowTitle = iota
 	gameOptionsRowHidden
 	gameOptionsRowSort
+	gameOptionsRowLayout
 	gameOptionsRowShowHidden
+	gameOptionsRowCPUProfile
 	gameOptionsRowCeiling
+	gameOptionsRowVideo
 	gameOptionsRowArgs
 	gameOptionsRowOpenIn
+	gameOptionsRowDiagnose
+	gameOptionsRowCovers
 	gameOptionsRowReset
 	gameOptionsRowCount
+)
+
+// The sheet's second step: a short list of answers that replaces the rows
+// for a destructive action, with the safe answer first or last as the action
+// needs (gameOptionsChoiceRows).
+const (
+	gameOptionsChoiceNone = iota
+	gameOptionsChoiceReset
+	gameOptionsChoiceCovers
 )
 
 var gameOptsUI struct {
@@ -39,6 +54,16 @@ var gameOptsUI struct {
 	panel   sdl.Rect
 	// rowHits are the clickable rows, filled by the renderer.
 	rowHits []gameLibRowHit
+	// choice is the open second step (gameOptionsChoice*); mainCursor and
+	// mainScroll put the highlight back on its row when it closes.
+	choice     int
+	mainCursor int
+	mainScroll int
+	// coverFiles are the unused covers the cleanup found, waiting for the
+	// answer; coverWait is a scan started from this sheet.
+	coverFiles []artCleanupFile
+	coverBytes int64
+	coverWait  bool
 }
 
 // gameArgsBuffer is what the on-screen keyboard edits for the arguments row.
@@ -53,16 +78,26 @@ func gameOptionsRowName(row int) string {
 		return "Visibility"
 	case gameOptionsRowSort:
 		return "Library sort"
+	case gameOptionsRowLayout:
+		return "Library view"
 	case gameOptionsRowShowHidden:
 		return "Show hidden"
+	case gameOptionsRowCPUProfile:
+		return "CPU profile"
 	case gameOptionsRowCeiling:
 		return "CPU limit"
+	case gameOptionsRowVideo:
+		return "Video filter"
 	case gameOptionsRowArgs:
 		return "Extra arguments"
 	case gameOptionsRowOpenIn:
 		return "Open in…"
+	case gameOptionsRowDiagnose:
+		return "Check why it won't start"
+	case gameOptionsRowCovers:
+		return "Clean up covers"
 	case gameOptionsRowReset:
-		return "Reset"
+		return "Reset game…"
 	}
 	return ""
 }
@@ -77,16 +112,26 @@ func gameOptionsRowHint(row int) string {
 		return "Hide this game; Show hidden brings it back"
 	case gameOptionsRowSort:
 		return "Order of every console's games"
+	case gameOptionsRowLayout:
+		return "List, a horizontal cover row, or a vertical cover column"
 	case gameOptionsRowShowHidden:
 		return "Reveal games hidden from the library"
+	case gameOptionsRowCPUProfile:
+		return "Battery saver, Balanced or Performance while this game runs"
 	case gameOptionsRowCeiling:
-		return "Clock ceiling for this game, restored when it exits"
+		return "Clock ceiling for this game, over the profile's; restored on exit"
+	case gameOptionsRowVideo:
+		return "RetroArch's picture for this game; looks need shaders on the card"
 	case gameOptionsRowArgs:
 		return "Added after the ROM path, for launchers that read options"
 	case gameOptionsRowOpenIn:
 		return "Hand this game to its tool: profile, compatibility or emulator"
+	case gameOptionsRowDiagnose:
+		return "Missing BIOS, core or game files, and where to copy them"
+	case gameOptionsRowCovers:
+		return "Find downloaded box art no game in the library uses"
 	case gameOptionsRowReset:
-		return "Back to the global power profile and no extra arguments"
+		return "Settings, core overrides, remaps, DIP switches, high scores"
 	}
 	return ""
 }
@@ -106,13 +151,19 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return "Visible"
 	case gameOptionsRowSort:
 		return librarySortLabel()
+	case gameOptionsRowLayout:
+		return libraryLayoutLabel()
 	case gameOptionsRowShowHidden:
 		if libraryShowHidden() {
 			return "Shown"
 		}
 		return "Only visible"
+	case gameOptionsRowCPUProfile:
+		return gameCPUProfileLabel(opts.CPUProfile)
 	case gameOptionsRowCeiling:
 		return formatGameCeiling(opts.MaxFreqKHz)
+	case gameOptionsRowVideo:
+		return gameVideoFilterValue(opts.VideoFilter)
 	case gameOptionsRowArgs:
 		if strings.TrimSpace(opts.Args) == "" {
 			return "None"
@@ -120,13 +171,139 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return strings.TrimSpace(opts.Args)
 	case gameOptionsRowOpenIn:
 		return "→"
-	case gameOptionsRowReset:
-		if opts.empty() {
-			return "Defaults"
+	case gameOptionsRowDiagnose:
+		return "Check"
+	case gameOptionsRowCovers:
+		if gameOptsUI.coverWait || artCleanupBusy() {
+			return "Looking…"
 		}
-		return "Restore defaults"
+		return "→"
+	case gameOptionsRowReset:
+		return "Choose…"
 	}
 	return ""
+}
+
+// gameOptionsChoiceRows is the number of answers the open second step offers.
+func gameOptionsChoiceRows() int {
+	switch gameOptsUI.choice {
+	case gameOptionsChoiceReset:
+		return 3
+	case gameOptionsChoiceCovers:
+		return 2
+	}
+	return 0
+}
+
+// gameOptionsChoiceText is one answer's label and the line under it.
+func gameOptionsChoiceText(row int) (string, string) {
+	switch gameOptsUI.choice {
+	case gameOptionsChoiceReset:
+		switch row {
+		case 0:
+			return "Reset settings", "Options, core overrides, remaps, DIP switches, high scores"
+		case 1:
+			return "Reset settings and delete save states", "Also its save states, their screenshots and arcade NVRAM"
+		case 2:
+			return "Cancel", "Keep everything as it is"
+		}
+	case gameOptionsChoiceCovers:
+		switch row {
+		case 0:
+			return "Move to the trash", artCleanupSummary(len(gameOptsUI.coverFiles), gameOptsUI.coverBytes)
+		case 1:
+			return "Cancel", "Keep every cover"
+		}
+	}
+	return "", ""
+}
+
+// gameOptionsChoiceNote is the line under the answers.
+func gameOptionsChoiceNote() string {
+	switch gameOptsUI.choice {
+	case gameOptionsChoiceReset:
+		return "The ROM, battery saves and playtime stay; removed files go to reset-trash."
+	case gameOptionsChoiceCovers:
+		return "Only JukaHub's own game-art folder; the trash keeps them for a while."
+	}
+	return ""
+}
+
+// openGameOptionsChoice replaces the rows with a second step's answers.
+func openGameOptionsChoice(choice int) {
+	gameOptsUI.mainCursor = gameOptsUI.cursor
+	gameOptsUI.mainScroll = gameOptsUI.scroll
+	gameOptsUI.choice = choice
+	// The first answer is the highlighted one: "Reset settings" keeps the
+	// states, and "Move to the trash" is what the user just asked for — the
+	// trash keeps the covers, so nothing is lost on a slip.
+	gameOptsUI.cursor = 0
+	gameOptsUI.scroll = 0
+	PlayActivateSound()
+}
+
+// closeGameOptionsChoice goes back to the rows.
+func closeGameOptionsChoice(sound bool) {
+	gameOptsUI.choice = gameOptionsChoiceNone
+	gameOptsUI.cursor = gameOptsUI.mainCursor
+	gameOptsUI.scroll = gameOptsUI.mainScroll
+	gameOptsUI.coverFiles = nil
+	gameOptsUI.coverBytes = 0
+	if sound {
+		PlayBackSound()
+	}
+}
+
+// activateGameOptionsChoice runs the highlighted answer.
+func activateGameOptionsChoice() {
+	choice, row := gameOptsUI.choice, gameOptsUI.cursor
+	files := gameOptsUI.coverFiles
+	closeGameOptionsChoice(false)
+	switch choice {
+	case gameOptionsChoiceReset:
+		switch row {
+		case 0:
+			PlayActivateSound()
+			runGameReset(gameOptsUI.game, false)
+		case 1:
+			PlayActivateSound()
+			runGameReset(gameOptsUI.game, true)
+		default:
+			PlayBackSound()
+		}
+	case gameOptionsChoiceCovers:
+		if row == 0 {
+			PlayActivateSound()
+			runArtCleanup(files)
+			return
+		}
+		PlayBackSound()
+	}
+}
+
+// gameOptionsPollCovers picks up a cover scan this sheet started and opens its
+// question, or says there is nothing to clean. Render thread.
+func gameOptionsPollCovers() {
+	if !gameOptsUI.coverWait {
+		return
+	}
+	files, bytes, why, ok := artCleanupTake()
+	if !ok {
+		return
+	}
+	gameOptsUI.coverWait = false
+	switch {
+	case why != "":
+		ShowToast(why, ToastKindInfo)
+	case len(files) == 0:
+		ShowToast("No unused covers · every cover belongs to a game", ToastKindSuccess)
+	case !gameOptsUI.open || gameOptsUI.choice != gameOptionsChoiceNone:
+		ShowToast(artCleanupSummary(len(files), bytes)+" · Clean up covers moves them", ToastKindInfo)
+	default:
+		openGameOptionsChoice(gameOptionsChoiceCovers)
+		gameOptsUI.coverFiles = files
+		gameOptsUI.coverBytes = bytes
+	}
 }
 
 // openGameOptions opens the sheet for the highlighted game. It returns false
@@ -153,6 +330,9 @@ func openGameOptions() bool {
 	gameOptsUI.visible = 0
 	gameOptsUI.opts = gameOptionsFor(game.Path)
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
+	gameOptsUI.choice = gameOptionsChoiceNone
+	gameOptsUI.coverFiles = nil
+	gameOptsUI.coverWait = false
 	PlayActivateSound()
 	return true
 }
@@ -163,7 +343,18 @@ func closeGameOptions() {
 	}
 	gameOptsUI.open = false
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
+	gameOptsUI.choice = gameOptionsChoiceNone
+	gameOptsUI.coverFiles = nil
 	PlayBackSound()
+}
+
+// gameOptionsRows is how many rows the sheet shows now: its options, or the
+// open second step's answers.
+func gameOptionsRows() int {
+	if n := gameOptionsChoiceRows(); n > 0 {
+		return n
+	}
+	return gameOptionsRowCount
 }
 
 // gameOptionsMove keeps the highlight on a real row.
@@ -171,12 +362,13 @@ func gameOptionsMove(delta int) {
 	if delta == 0 {
 		return
 	}
+	rows := gameOptionsRows()
 	gameOptsUI.cursor += delta
 	if gameOptsUI.cursor < 0 {
 		gameOptsUI.cursor = 0
 	}
-	if gameOptsUI.cursor >= gameOptionsRowCount {
-		gameOptsUI.cursor = gameOptionsRowCount - 1
+	if gameOptsUI.cursor >= rows {
+		gameOptsUI.cursor = rows - 1
 	}
 	if gameOptsUI.visible > 0 {
 		if gameOptsUI.cursor < gameOptsUI.scroll {
@@ -191,7 +383,7 @@ func gameOptionsMove(delta int) {
 
 // adjustGameOptions changes the highlighted value with Left/Right.
 func adjustGameOptions(delta int) {
-	if delta == 0 {
+	if delta == 0 || gameOptsUI.choice != gameOptionsChoiceNone {
 		return
 	}
 	switch gameOptsUI.cursor {
@@ -204,10 +396,32 @@ func adjustGameOptions(delta int) {
 			o.MaxFreqKHz = next
 			return o
 		})
+	case gameOptionsRowCPUProfile:
+		next := cycleGameCPUProfile(gameOptsUI.opts.CPUProfile, delta)
+		if next == gameOptsUI.opts.CPUProfile {
+			return
+		}
+		gameOptsUI.opts = updateGameOptions(gameOptsUI.game.Path, func(o gameOptions) gameOptions {
+			o.CPUProfile = next
+			return o
+		})
+	case gameOptionsRowVideo:
+		next := cycleGameVideoFilter(gameOptsUI.opts.VideoFilter, delta)
+		if next == gameOptsUI.opts.VideoFilter {
+			return
+		}
+		gameOptsUI.opts = updateGameOptions(gameOptsUI.game.Path, func(o gameOptions) gameOptions {
+			o.VideoFilter = next
+			return o
+		})
 	case gameOptionsRowSort:
 		cycleLibrarySort(delta)
 		refreshLibraryView()
 		ShowToast("Sorted by "+strings.ToLower(librarySortLabel()), ToastKindInfo)
+	case gameOptionsRowLayout:
+		cycleLibraryLayout(delta)
+		gameLib.scroll = 0
+		ShowToast("Library view: "+libraryLayoutLabel(), ToastKindInfo)
 	case gameOptionsRowShowHidden:
 		setLibraryShowHidden(delta > 0)
 		refreshLibraryView()
@@ -226,6 +440,10 @@ func adjustGameOptions(delta int) {
 
 // activateGameOptionsRow runs the highlighted row.
 func activateGameOptionsRow() {
+	if gameOptsUI.choice != gameOptionsChoiceNone {
+		activateGameOptionsChoice()
+		return
+	}
 	switch gameOptsUI.cursor {
 	case gameOptionsRowTitle:
 		vkOpenGameTitle()
@@ -235,6 +453,10 @@ func activateGameOptionsRow() {
 		cycleLibrarySort(1)
 		refreshLibraryView()
 		ShowToast("Sorted by "+strings.ToLower(librarySortLabel()), ToastKindInfo)
+	case gameOptionsRowLayout:
+		cycleLibraryLayout(1)
+		gameLib.scroll = 0
+		ShowToast("Library view: "+libraryLayoutLabel(), ToastKindInfo)
 	case gameOptionsRowShowHidden:
 		setLibraryShowHidden(!libraryShowHidden())
 		refreshLibraryView()
@@ -243,14 +465,32 @@ func activateGameOptionsRow() {
 		} else {
 			ShowToast("Hidden games concealed", ToastKindInfo)
 		}
-	case gameOptionsRowCeiling:
+	case gameOptionsRowCeiling, gameOptionsRowCPUProfile, gameOptionsRowVideo:
 		adjustGameOptions(1)
 	case gameOptionsRowArgs:
 		vkOpenGameArgs()
 	case gameOptionsRowOpenIn:
 		openGameLibraryHandoffFromSheet()
+	case gameOptionsRowDiagnose:
+		// The answer opens as the launch-failure card (gamediag.go).
+		game := gameOptsUI.game
+		closeGameOptions()
+		gameDiagRunManual(game)
+	case gameOptionsRowCovers:
+		if gameOptsUI.coverWait || artCleanupBusy() {
+			ShowToast("Still looking for unused covers…", ToastKindInfo)
+			return
+		}
+		PlayActivateSound()
+		gameOptsUI.coverWait = startArtCleanupScan()
 	case gameOptionsRowReset:
-		resetGameOptions()
+		if gameOptsUI.game.System == androidLibrarySystem {
+			// An Android game keeps its data in the app runtime, not in
+			// RetroArch's folders: only the sheet's own record goes.
+			resetGameOptions()
+			return
+		}
+		openGameOptionsChoice(gameOptionsChoiceReset)
 	}
 }
 
@@ -300,9 +540,19 @@ func handleGameOptionsKey(e *sdl.KeyboardEvent) bool {
 	case sdl.K_RETURN, sdl.K_SPACE:
 		activateGameOptionsRow()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		closeGameOptions()
+		gameOptionsBack()
 	}
 	return true
+}
+
+// gameOptionsBack is B: out of a second step back to the rows, else the sheet
+// closes.
+func gameOptionsBack() {
+	if gameOptsUI.choice != gameOptionsChoiceNone {
+		closeGameOptionsChoice(true)
+		return
+	}
+	closeGameOptions()
 }
 
 func ctrlGameOptions(e *sdl.ControllerButtonEvent) bool {
@@ -321,7 +571,7 @@ func ctrlGameOptions(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		activateGameOptionsRow()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
-		closeGameOptions()
+		gameOptionsBack()
 	default:
 		return false
 	}
@@ -345,7 +595,7 @@ func handleGameOptionsMouse(mx, my int32) bool {
 	if gameOptsUI.panel.W > 0 && pointInRect(mx, my, gameOptsUI.panel) {
 		return true
 	}
-	closeGameOptions()
+	gameOptionsBack()
 	return true
 }
 
@@ -354,6 +604,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	if !gameOptsUI.open || renderer == nil {
 		return
 	}
+	gameOptionsPollCovers()
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
 	if font == nil {
@@ -375,7 +626,17 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	if system := strings.TrimSpace(gameOptsUI.game.System); system != "" {
 		subtitle += " · " + system
 	}
-	header := UIPanelHeader("Game options", subtitle, "gamepad")
+	title := "Game options"
+	switch gameOptsUI.choice {
+	case gameOptionsChoiceReset:
+		title = "Reset game"
+	case gameOptionsChoiceCovers:
+		title = "Clean up covers"
+		subtitle = "Box art no game in the library uses"
+	}
+	header := UIPanelHeader(title, subtitle, "gamepad")
+	rows := gameOptionsRows()
+	choosing := gameOptsUI.choice != gameOptionsChoiceNone
 	headerH := UIPanelHeaderBand(config, header, 14)
 	noteH := int32(12) + smallH
 	footerH := int32(14) + smallH
@@ -383,7 +644,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	if panelW > screenWidth-64 {
 		panelW = screenWidth - 64
 	}
-	panelH := headerH + rowH*gameOptionsRowCount + noteH + footerH
+	panelH := headerH + rowH*int32(rows) + noteH + footerH
 	if panelH > screenHeight-24 {
 		panelH = screenHeight - 24
 	}
@@ -409,14 +670,14 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	if visible < 1 {
 		visible = 1
 	}
-	if visible > gameOptionsRowCount {
-		visible = gameOptionsRowCount
+	if visible > rows {
+		visible = rows
 	}
-	if gameOptsUI.cursor >= gameOptionsRowCount {
-		gameOptsUI.cursor = gameOptionsRowCount - 1
+	if gameOptsUI.cursor >= rows {
+		gameOptsUI.cursor = rows - 1
 	}
-	if gameOptsUI.scroll > gameOptionsRowCount-visible {
-		gameOptsUI.scroll = gameOptionsRowCount - visible
+	if gameOptsUI.scroll > rows-visible {
+		gameOptsUI.scroll = rows - visible
 	}
 	if gameOptsUI.scroll < 0 {
 		gameOptsUI.scroll = 0
@@ -444,6 +705,15 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
 		}
 
+		if choosing {
+			// A second step's answer: its label and what it does, full width.
+			name, line := gameOptionsChoiceText(idx)
+			renderText(renderer, config, medium, ellipsize(medium, name, rect.W-28), ColorTextPrimary(),
+				rect.X+14, rect.Y+8)
+			renderText(renderer, config, font, ellipsize(font, line, rect.W-28), ColorTextTertiary(),
+				rect.X+14, rect.Y+8+medH+2)
+			continue
+		}
 		renderText(renderer, config, medium, gameOptionsRowName(idx), ColorTextPrimary(),
 			rect.X+14, rect.Y+8)
 		// Leave room for the right-aligned value instead of letting a long hint
@@ -462,12 +732,17 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		if idx == gameOptionsRowCeiling && gameOptsUI.opts.MaxFreqKHz > 0 {
 			valueColor = focusColor
 		}
+		if (idx == gameOptionsRowCPUProfile && gameOptsUI.opts.CPUProfile != "") ||
+			(idx == gameOptionsRowVideo && gameOptsUI.opts.VideoFilter != "") {
+			valueColor = focusColor
+		}
 		if idx == gameOptionsRowArgs && strings.TrimSpace(gameOptsUI.opts.Args) != "" {
 			valueColor = focusColor
 		}
 		// Ladders and toggles show which way they move; a static value would
 		// leave Left/Right undiscoverable.
-		if selected && (idx == gameOptionsRowCeiling || idx == gameOptionsRowSort ||
+		if selected && (idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
+			idx == gameOptionsRowVideo || idx == gameOptionsRowSort || idx == gameOptionsRowLayout ||
 			idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden) {
 			value = "‹  " + value + "  ›"
 		}
@@ -478,12 +753,19 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 
 	noteY := bodyY + rowH*int32(visible) + 4
-	renderText(renderer, config, font,
-		ellipsize(font, "Display, visibility and sort are saved; launch rows apply to this game only.", innerW),
+	note := "Display, visibility, sort and view are saved; launch rows apply to this game only."
+	if choosing {
+		note = gameOptionsChoiceNote()
+	}
+	renderText(renderer, config, font, ellipsize(font, note, innerW),
 		ColorTextTertiary(), panelX+pad, noteY)
 
 	hint := hintLine(FooterHint{"D-Pad", "Row"}, FooterHint{"A", "Change"},
 		FooterHint{"B", "Back"})
+	if choosing {
+		hint = hintLine(FooterHint{"D-Pad", "Row"}, FooterHint{"A", "Choose"},
+			FooterHint{"B", "Cancel"})
+	}
 	renderText(renderer, config, font, ellipsize(font, hint, innerW), ColorTextSecondary(),
 		panelX+pad, panelY+panelH-footerH+2)
 }

@@ -1428,10 +1428,16 @@ key stored through the secret store.
 **Done when.** Measured profiles for Smart Pro and Brick exist and the OSD preset
 can write menu/screenshot/fast-forward hotkeys for those devices only.
 
-### GAME-10 — Netplay lobby with QR invite (P2, M)
-**Where.** `netplay.go`, `netplay_ui.go`, `nearby*.go`, `party*.go`.
-**Done when.** Hosts announce a room on the LAN; joiners see a list and can join
-from a QR invite; the RetroArch netplay launch path is reused.
+### GAME-10 — Netplay: invites, passwords, plain RetroArch hosts (P3, S)
+**Why.** LAN rooms and the online lobby shipped 2026-11-11 (netplay_rooms.go);
+three gaps remain.
+**Where.** `netplay_rooms.go`, `netplay_ui.go`, `companion.go`.
+**Done when.** A hosted game can be shared as a link/QR the phone companion
+forwards to a friend's JukaHub; a password-protected online room asks for the
+password (vkTarget, submit-only) and passes it via the host overlay's
+`netplay_password`; RetroArch's own LAN discovery reply on UDP 55435 is parsed
+so a PC running plain RetroArch is listed too (read the ad-packet layout from
+RetroArch's `netplay_private.h` first; it changed in 1.10).
 
 ### GAME-11 — PC game streaming (Moonlight) tile (P2, M) [NET]
 **Why.** Streaming PC games is one of the best uses of a handheld on home Wi-Fi.
@@ -2355,9 +2361,13 @@ stutter from the bar's two-second reading.
 **Done when.** Interface name, `wpa_cli`/socket path and DHCP client confirmed on
 Smart Pro and Brick images; join, forget and the diagnostics sheet work.
 
-### SYS-3 — LAN Play end to end (P2, S) [HW]
-**Done when.** A RetroArch netplay session between two devices on one network
-completes through the LAN Play panel.
+### SYS-3 — Netplay end to end (P2, S) [HW]
+**Done when.** Through the Netplay panel: a LAN room hosted on one device is
+listed and joined on another; **Host online** shows up in lobby.libretro.com and
+a second device joins it from Online rooms through the relay (confirms
+ra64.trimui accepts `--appendconfig` and the `host|port|session` --connect form);
+check whether RetroArch writes the overlay's announce/relay keys back into
+retroarch.cfg on exit.
 
 ### SYS-4 — Focus mode with a PIN (P3, M) [OWNER]
 **Done when.** A persisted Simple mode shows only Home, Media, Games and
@@ -3244,6 +3254,7 @@ equivalent), Settings offers "Stop charging at 80%"; otherwise the probe result
 is recorded in `docs/DEVICE_TUNING.md` and the task closes.
 
 ### PWR-6 — Profiles that follow the situation (P2, M)
+**Status 2026-11-11: started** — per-game CPU profile (Auto / Battery saver / Balanced / Performance) in the options sheet; library, ports, emulators and LAN play launch through `beginLaunchPowerProfile(config, path)`. Open: per-system and per-power-source profiles; `raemu.go`, `brw_wpe.go` still use the global profile.
 **Why.** Per-game CPU caps apply only to launches from the library
 (`emulators.go:870`, `ports.go:468`, `netplay.go:509` use the global profile);
 nothing switches on the charger (SteamOS issue #3034 asks for the same).
@@ -3434,6 +3445,7 @@ doc and installer lists name it, and the setting picks it up without a restart.
 ## Languages and locales (I18N)
 
 ### I18N-1 — A string catalogue (P1, L)
+**Status 2026-11-11: partly done** — `i18n.go` + `player/i18n/*.json` (English text as key, %d/%s patterns), applied centrally in the measure/fit/draw helpers; Settings → General → Language (es, pt-BR, fr, de, it, ru, machine-translated). Open: plural rules, a weekly untranslated-strings report, ~330 direct `SizeUTF8` measurements, OS-locale default.
 **Why.** Every UI string is an English literal; no translation is possible.
 **Where.** New `internal/i18n` (message catalogue in `go:embed` JSON, keys are
 the English source, CLDR plural rules), an extraction tool under `tools/`, and
@@ -4205,7 +4217,6 @@ rough.
   ones, as a game-options row.
 - **Speech-to-text in chat** (L): needs an on-device model or the phone; Switch 2
   ships it for voice chat.
-- **Netplay beyond the LAN** (L): RetroArch's lobby and relay servers.
 - **"Play style" profile** (S): muOS-style summary of when and what you play,
   from LIB-13's session log.
 - **Screen Share sound** (L): the stock firmware has no ALSA loopback to capture

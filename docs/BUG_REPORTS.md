@@ -89,6 +89,23 @@ invisible zero-width space that breaks it while the text reads the same: a
 report cannot ping anyone, cross-link an issue or carry a clickable link.
 Diagnostics and the log go into collapsed code blocks, where nothing renders.
 
+## Automatic informational diagnostics
+
+**Send anonymous diagnostics** is a separate opt-in switch. About every ten
+launches while it is on, the device sends a small fixed report to this service.
+The service files a public `[Info] Anonymous device diagnostics` issue with
+`non-issue` and `from-device` labels when those labels exist and its GitHub
+account can apply them. The title and body also clearly say that no bug is
+being reported. It contains the build, device model, platform, OS/architecture,
+CPU core count, config scene/element/schema counts and safe-mode state. It
+contains no log or full diagnostics bundle. A failed report retries on a later
+launch with the same reference; turning the switch off deletes the pending
+report and launch count. No Discord notification is sent for these issues.
+
+Create the `non-issue` label in the destination repository before enabling
+automatic reports if you want the label to appear; GitHub can still file the
+issue when labels are unavailable, and the `[Info]` title remains.
+
 ## Privacy
 
 - The issue is **public**: anyone can read it and add to it. It is filed by
@@ -98,8 +115,9 @@ Diagnostics and the log go into collapsed code blocks, where nothing renders.
   address only in the function's memory (at most a day, usually much less,
   since instances are short-lived) to slow down a flood of reports, and logs
   only the reference, the issue number and error codes.
-- Nothing is sent unless you press Submit (or Send in the preview), and the
-  preview shows all of it.
+- Manual bug reports are sent only when you press Submit (or Send in the
+  preview), and the preview shows all of it. Automatic informational reports
+  require the separate diagnostics switch described above.
 
 ## Pointing reports elsewhere
 
@@ -177,6 +195,7 @@ deploy; no `netlify.toml` is needed. It has no dependencies.
    | `JUKAHUB_GITHUB_TOKEN` | yes | — | The token. Without it the service answers 503 `{"fallback": "phone"}` and the device queues the report. |
    | `JUKAHUB_ISSUES_REPO` | no | `jukaLang/JukaHubV2` | Where issues are filed, as `owner/name`. A separate reports repository works. |
    | `JUKAHUB_ISSUE_LABELS` | no | `bug,from-device` | Comma-separated labels (up to five), applied when the token's account has triage access. Set it empty for none. |
+   | `JUKAHUB_DIAGNOSTICS_LABELS` | no | `non-issue,from-device` | Labels for automatic informational diagnostics issues. Create them in the destination repository first. |
    | `JUKAHUB_DISCORD_WEBHOOK` | no | — | A Discord webhook that gets a one-line notice with the issue link (mentions disabled, the title's markdown escaped). |
 
    Make sure the variables are available to Functions (the default scope).

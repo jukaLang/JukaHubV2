@@ -451,7 +451,7 @@ func launchAppEntry(config *Config, entry FileEntry) {
 		// not list a MusicPlayer scene.
 		if scene == "MusicPlayer" {
 			trophyEvent(tkAppLaunch)
-			openAudioPlayerBrowser(config, musicDefaultDir(config))
+			musicShelfOpen(config)
 			return
 		}
 		if idx := findSceneIndex(config, scene); idx >= 0 && config.Scenes[idx].Name == scene {

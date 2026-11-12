@@ -55,7 +55,8 @@ Do not open a public issue for a security problem. Use GitHub's private vulnerab
 
 - The SD card: configs, plugins, ROMs and saves from someone else's card are untrusted input.
 - Plugins and script snippets run with the app's own permissions — on the handheld, root.
-- Telemetry is off by default; bug reports only send what you review.
+- Anonymous diagnostics are off by default; when enabled, every ten launches
+  file a public informational issue. Manual bug reports send what you review.
 `
 
 // sectrustMDKind is one Markdown block type the reader draws.

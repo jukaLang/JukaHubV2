@@ -303,7 +303,12 @@ func apkStoreVerdict(in apkStoreVerdictInput) (apkStoreTier, string, string) {
 			"Play build may refuse to start without its license. It needs OpenGL ES 3.0 and most of the 1 GB of RAM " +
 			"(docs/ANDROID-MINECRAFT.md)."
 	}
-	if why, javaOnly := apkStoreJavaEngine(in.Engine); javaOnly {
+	// A manifest that actually launches NativeActivity or GameActivity is a
+	// stronger signal than a bundled engine library. For example, a native
+	// game can ship libSDL2.so but never use SDLActivity's Java start. AndroidRT
+	// can attempt that APK; classifying it as a Java-only SDL app hid Play.
+	nativeStart := in.Launcher == "android.app.NativeActivity" || in.Launcher == "com.google.androidgamesdk.GameActivity"
+	if why, javaOnly := apkStoreJavaEngine(in.Engine); javaOnly && !nativeStart {
 		return apkTierJava, "Needs Android's Java runtime — can't run on AndroidRT", why
 	}
 	// Triage falls back to 32-bit libraries when there are no 64-bit ones, but
@@ -312,6 +317,15 @@ func apkStoreVerdict(in apkStoreVerdictInput) (apkStoreTier, string, string) {
 		return apkTierWrongCPU, "32-bit build only (" + in.ChosenABI + ")", "Its native code is 32-bit ARM (" +
 			in.ChosenABI + ") only. AndroidRT loads 64-bit (arm64-v8a) libraries only, so it cannot start this build — " +
 			"look for the 64-bit (arm64-v8a) APK of the same game."
+	}
+	if nativeStart {
+		detail := ""
+		if in.Engine != "" && in.Engine != apkEngineNativeActivity && in.Engine != apkEngineGameActivity {
+			detail = " It also includes " + in.Engine + " libraries."
+		}
+		return apkTierNative, "Native APK — try it (experimental)", "Its launcher starts native code (" + in.Launcher +
+			")." + detail + " AndroidRT has rendered a native game on a Smart Pro, but each APK needs its own test; " +
+			"the launch log names what is missing."
 	}
 	note := ""
 	if in.MinSDK > 28 {
@@ -324,7 +338,7 @@ func apkStoreVerdict(in apkStoreVerdictInput) (apkStoreTier, string, string) {
 		if engine == "" {
 			engine = "no Java code"
 		}
-		return apkTierNative, "Native game — try it (experimental)", "It starts in native code (" + engine + "), the kind " +
+		return apkTierNative, "Native APK — try it (experimental)", "It starts in native code (" + engine + "), the kind " +
 			"of game AndroidRT is built for. No game has been verified on a handheld yet: try it, and if it stops, the " +
 			"launch log says what is missing." + note
 	}

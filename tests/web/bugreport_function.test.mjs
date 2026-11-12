@@ -85,6 +85,42 @@ test('a valid report becomes an issue and the device gets its number', async () 
   }
 });
 
+test('opt-in diagnostics become an informational issue with separate labels', async () => {
+  const info = report({
+    kind: 'anonymous_diagnostics', category: 'other', title: 'Anonymous device diagnostics',
+    description: 'Informational report sent automatically after about ten opted-in launches. No bug is being reported.',
+    diagnostics: 'CPU cores: 4\nConfig: 2 scenes, 18 elements, schema 1\nSafe mode: off\n',
+    log: '',
+  });
+  const c = collector({}, [NOT_FOUND, CREATED]);
+  const resp = await c.handle(post(info), at('203.0.113.9'));
+  assert.equal(resp.status, 201);
+  const sent = JSON.parse(c.calls[1].init.body);
+  assert.equal(sent.title, '[Info] Anonymous device diagnostics (JH-7K2Q9M)');
+  assert.deepEqual(sent.labels, ['non-issue', 'from-device']);
+  assert.match(sent.body, /Informational diagnostics/);
+  assert.match(sent.body, /CPU cores: 4/);
+  assert.match(sent.body, /No bug is being reported/);
+  assert.doesNotMatch(sent.body, /reporter reviewed/);
+
+  const custom = collector({ JUKAHUB_DIAGNOSTICS_LABELS: 'information' }, [NOT_FOUND, CREATED]);
+  assert.equal((await custom.handle(post(info), at('203.0.113.9'))).status, 201);
+  assert.deepEqual(JSON.parse(custom.calls[1].init.body).labels, ['information']);
+});
+
+test('diagnostics kind cannot carry a log or user-written report fields', () => {
+  const info = report({
+    kind: 'anonymous_diagnostics', category: 'other', title: 'Anonymous device diagnostics',
+    description: 'Informational report sent automatically after about ten opted-in launches. No bug is being reported.',
+  });
+  assert.equal(validateReport(info), '');
+  for (const changed of [
+    { log: 'private log' }, { title: 'A real bug' }, { description: 'custom text' }, { category: 'crash' },
+  ]) {
+    assert.equal(validateReport({ ...info, ...changed }), 'invalid anonymous diagnostics report');
+  }
+});
+
 test('a report the device would never send is refused without asking GitHub', async () => {
   const bad = [
     report({ kind: 'feedback' }),

@@ -1819,7 +1819,7 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	if !state.HasRecent && strings.TrimSpace(state.Chip) == "" {
 		chipText = "Get started"
 	}
-	label := strings.ToUpper(chipText)
+	label := strings.ToUpper(uiT(chipText)) // translate before upper-casing (i18n.go)
 	chipW, _ := measureText(fonts.Small, label)
 	chipW += scaleX(20, h.Width)
 	maxChipW := draw.W - pad*2 - scaleY(72, h.Height)
@@ -2229,6 +2229,14 @@ func (c *homeTextCacheStore) put(key homeTextKey, texture *sdl.Texture, w, h int
 }
 
 func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, color sdl.Color, alignment textAlignment) {
+	// The interface language (i18n.go); English passes through unchanged.
+	drawTextRaw(renderer, font, uiT(text), x, y, color, alignment)
+}
+
+// drawTextRaw is drawText for content drawn exactly as written — what the
+// user is typing in the virtual keyboard's field — with no interface-language
+// translation (a typed "On" must not appear as "Activado").
+func drawTextRaw(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, color sdl.Color, alignment textAlignment) {
 	if renderer == nil || font == nil || strings.TrimSpace(text) == "" {
 		return
 	}

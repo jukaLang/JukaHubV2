@@ -52,6 +52,18 @@
  * adds it at run time). This helper is another process and does not inherit
  * it: a firmware SDL without this GUID in its database would otherwise open the
  * built-in pad as a raw joystick, whose layout is different. */
+/* SDL 2.0.14's pad functions are referenced weakly: on a firmware SDL older
+ * than that the helper still loads (LD_BIND_NOW included) and they are NULL,
+ * so a pad there just gets no motion and the older touchpad guess. */
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+extern __typeof__(SDL_GameControllerHasButton) SDL_GameControllerHasButton __attribute__((weak));
+extern __typeof__(SDL_GameControllerGetNumTouchpads) SDL_GameControllerGetNumTouchpads __attribute__((weak));
+extern __typeof__(SDL_GameControllerHasSensor) SDL_GameControllerHasSensor __attribute__((weak));
+extern __typeof__(SDL_GameControllerSetSensorEnabled) SDL_GameControllerSetSensorEnabled __attribute__((weak));
+#endif
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+extern __typeof__(SDL_GameControllerGetSensorDataRate) SDL_GameControllerGetSensorDataRate __attribute__((weak));
+#endif
 #define TRIMUI_PAD_MAPPING "030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,"
 /* While a pad rumbles, its rumble is sent again this often, well inside the
  * SS_MOTOR_SAFETY_MS duration each SDL rumble call is given. */
@@ -99,6 +111,10 @@ typedef struct {
     Uint8 hat;
     bool xpad_layout;       /* raw joystick with six axes: the X360 (xpad) order */
     bool builtin;           /* the handheld's own pad: its rumble is the GPIO motor */
+    bool motion;            /* gyro + accelerometer enabled (DualShock 4 / DualSense via SDL's driver) */
+    bool motion_started;    /* a gyro sample came since it became the motion pad */
+    float motion_step;      /* seconds between gyro samples, when SDL gives no timestamps */
+    uint64_t motion_last_us;
     uint32_t last_input;    /* SDL_GetTicks of its last press or deliberate stick move */
     Uint16 rumble_low;
     Uint16 rumble_high;
@@ -161,6 +177,8 @@ typedef struct {
     int8_t touch_ids[SI_MAX_TOUCHES];
     uint32_t touch_serials[SI_MAX_TOUCHES];
     bool modal;
+    SsMotion motion;          /* the motion pad's gyro, accelerometer, orientation */
+    SDL_JoystickID motion_pad; /* -1: none yet */
 
     /* display */
     Osd osd;
@@ -475,18 +493,35 @@ static void push_controller(StreamApp *app, uint32_t now)
 {
     SiOutput out;
     si_output(&app->input, now, &out);
-    if(app->output_valid && outputs_equal(&out, &app->last_output)) return;
-    app->last_output = out;
-    app->output_valid = true;
+    bool changed = !app->output_valid || !outputs_equal(&out, &app->last_output);
+    bool moved = ss_motion_take(&app->motion);
+    if(!changed && !moved) return;
     ChiakiControllerState *state = &app->controller_state;
-    state->buttons = to_chiaki_buttons(out.buttons);
-    state->l2_state = out.l2;
-    state->r2_state = out.r2;
-    state->left_x = out.lx;
-    state->left_y = out.ly;
-    state->right_x = out.rx;
-    state->right_y = out.ry;
-    sync_touches(app, &out);
+    if(changed) {
+        app->last_output = out;
+        app->output_valid = true;
+        state->buttons = to_chiaki_buttons(out.buttons);
+        state->l2_state = out.l2;
+        state->r2_state = out.r2;
+        state->left_x = out.lx;
+        state->left_y = out.ly;
+        state->right_x = out.rx;
+        state->right_y = out.ry;
+        sync_touches(app, &out);
+    }
+    if(moved) {
+        const SsMotion *motion = &app->motion;
+        state->gyro_x = motion->gyro[0];
+        state->gyro_y = motion->gyro[1];
+        state->gyro_z = motion->gyro[2];
+        state->accel_x = motion->accel[0];
+        state->accel_y = motion->accel[1];
+        state->accel_z = motion->accel[2];
+        state->orient_x = motion->orient[0];
+        state->orient_y = motion->orient[1];
+        state->orient_z = motion->orient[2];
+        state->orient_w = motion->orient[3];
+    }
     if(app->session_initialized)
         chiaki_session_set_controller_state(&app->session, state);
 }
@@ -714,11 +749,18 @@ static bool controller_has_touchpad(SDL_GameController *controller)
 #if SDL_VERSION_ATLEAST(2, 0, 12)
     if(!controller || !sdl_linked_at_least(2, 0, 12)) return false;
     SDL_GameControllerType type = SDL_GameControllerGetType(controller);
-    if(type == SDL_CONTROLLER_TYPE_PS4) return true;
+    bool sony = type == SDL_CONTROLLER_TYPE_PS4;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
-    if(type == SDL_CONTROLLER_TYPE_PS5) return true;
+    sony = sony || type == SDL_CONTROLLER_TYPE_PS5;
+    /* ...and only when its touchpad reaches this pad: SDL's own driver reports
+     * it, but through the kernel's event device (hid-playstation) the touchpad
+     * is a node of its own and the click is not in the mapping. Such a pad
+     * keeps the Select layout, so its Share button can still click the pad. */
+    if(sony && sdl_linked_at_least(2, 0, 14) && SDL_GameControllerHasButton && SDL_GameControllerGetNumTouchpads)
+        return SDL_GameControllerGetNumTouchpads(controller) > 0 ||
+               SDL_GameControllerHasButton(controller, SDL_CONTROLLER_BUTTON_TOUCHPAD);
 #endif
-    return false;
+    return sony;
 #else
     (void)controller;
     return false;
@@ -730,6 +772,121 @@ static void pad_note_input(StreamPad *pad, uint32_t now)
     pad->last_input = now ? now : 1;
 }
 
+static bool sdl_has_2_0_14(void)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    return sdl_linked_at_least(2, 0, 14);
+#else
+    return false;
+#endif
+}
+
+/* A DualShock 4 or DualSense SDL has no mapping for (it reached SDL through the
+ * kernel's event device, not SDL's own driver) gets one for its GUID, in the
+ * order its kernel driver uses (stream_sys.h ss_sony_mapping), so pad_open
+ * opens it as a game controller. Read raw it would come out scrambled. */
+static void sony_prepare(StreamApp *app, int index)
+{
+    if(SDL_IsGameController(index)) return;
+    SDL_Joystick *joystick = SDL_JoystickOpen(index);
+    if(!joystick) return;
+    int model = ss_sony_model(SDL_JoystickGetVendor(joystick), SDL_JoystickGetProduct(joystick));
+    if(model && !pad_find(app, SDL_JoystickInstanceID(joystick))) {
+        int buttons = SDL_JoystickNumButtons(joystick), axes = SDL_JoystickNumAxes(joystick);
+        int hats = SDL_JoystickNumHats(joystick);
+        SsSonyLayout layout = ss_sony_layout(buttons, axes, hats);
+        char guid[33];
+        char mapping[512];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid, sizeof(guid));
+        if(!ss_sony_mapping(mapping, sizeof(mapping), guid, model, layout, sdl_has_2_0_14())) {
+            fprintf(stdout, "[native] PS%d pad with an unknown layout (%d buttons, %d axes, %d hats), read raw\n", model,
+                    buttons, axes, hats);
+        } else if(SDL_GameControllerAddMapping(mapping) < 0) {
+            fprintf(stderr, "[native] could not add the PS%d pad mapping: %s\n", model, SDL_GetError());
+        } else {
+            fprintf(stdout, "[native] PS%d pad mapped from the kernel's %s (%d buttons, %d axes)\n", model,
+                    ss_sony_layout_name(layout), buttons, axes);
+        }
+        fflush(stdout);
+    }
+    SDL_JoystickClose(joystick);
+}
+
+/* Gyro and accelerometer on, where the pad has them (SDL's DualShock 4 /
+ * DualSense driver; the kernel's event device keeps them on a node of its own). */
+static void pad_enable_motion(StreamPad *pad)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    if(!pad->controller || !sdl_has_2_0_14() || !SDL_GameControllerHasSensor || !SDL_GameControllerSetSensorEnabled)
+        return;
+    if(!SDL_GameControllerHasSensor(pad->controller, SDL_SENSOR_GYRO) ||
+       !SDL_GameControllerHasSensor(pad->controller, SDL_SENSOR_ACCEL))
+        return;
+    if(SDL_GameControllerSetSensorEnabled(pad->controller, SDL_SENSOR_GYRO, SDL_TRUE) != 0 ||
+       SDL_GameControllerSetSensorEnabled(pad->controller, SDL_SENSOR_ACCEL, SDL_TRUE) != 0) {
+        SDL_GameControllerSetSensorEnabled(pad->controller, SDL_SENSOR_GYRO, SDL_FALSE);
+        SDL_GameControllerSetSensorEnabled(pad->controller, SDL_SENSOR_ACCEL, SDL_FALSE);
+        fprintf(stderr, "[native] motion sensors not enabled: %s\n", SDL_GetError());
+        return;
+    }
+    float rate = 0.0f;
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+    if(sdl_linked_at_least(2, 0, 16) && SDL_GameControllerGetSensorDataRate)
+        rate = SDL_GameControllerGetSensorDataRate(pad->controller, SDL_SENSOR_GYRO);
+#endif
+    pad->motion = true;
+    pad->motion_step = rate > 1.0f ? 1.0f / rate : 1.0f / 250.0f;
+#else
+    (void)pad;
+#endif
+}
+
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+/* The pad whose motion the console gets: of the pads with motion, the one used
+ * last (the first one before any is used). Another pad taking over starts the
+ * orientation afresh. */
+static StreamPad *motion_pad(StreamApp *app)
+{
+    StreamPad *best = NULL;
+    for(int i = 0; i < MAX_PADS; i++) {
+        StreamPad *pad = &app->pads[i];
+        if(pad->used && pad->motion && (!best || pad->last_input > best->last_input)) best = pad;
+    }
+    return best;
+}
+
+static void pad_sensor(StreamApp *app, const SDL_ControllerSensorEvent *sensor)
+{
+    StreamPad *pad = pad_find(app, sensor->which);
+    if(!pad || !pad->motion || motion_pad(app) != pad) return;
+    if(app->motion_pad != pad->id) {
+        ss_motion_reset(&app->motion);
+        app->motion_pad = pad->id;
+        pad->motion_started = false;
+        pad->motion_last_us = 0;
+    }
+    if(sensor->sensor == SDL_SENSOR_ACCEL) {
+        ss_motion_accel(&app->motion, sensor->data[0] / SDL_STANDARD_GRAVITY, sensor->data[1] / SDL_STANDARD_GRAVITY,
+                        sensor->data[2] / SDL_STANDARD_GRAVITY);
+        return;
+    }
+    if(sensor->sensor != SDL_SENSOR_GYRO) return;
+    float dt = 0.0f;
+    uint64_t us = 0;
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+    if(sdl_linked_at_least(2, 26, 0)) us = sensor->timestamp_us;
+#endif
+    if(us) {
+        if(pad->motion_last_us && us > pad->motion_last_us) dt = (float)(us - pad->motion_last_us) / 1000000.0f;
+        pad->motion_last_us = us;
+    } else if(pad->motion_started) {
+        dt = pad->motion_step;
+    }
+    pad->motion_started = true;
+    ss_motion_gyro(&app->motion, sensor->data[0], sensor->data[1], sensor->data[2], dt);
+}
+#endif
+
 /* Opens the device at index unless it is open already: every pad attached
  * when the stream starts, and every one that connects during it. */
 static void pad_open(StreamApp *app, int index, bool announce)
@@ -737,6 +894,7 @@ static void pad_open(StreamApp *app, int index, bool announce)
     SDL_GameController *controller = NULL;
     SDL_Joystick *joystick = NULL;
     const char *name = NULL;
+    sony_prepare(app, index);
     if(SDL_IsGameController(index)) {
         controller = SDL_GameControllerOpen(index);
         if(!controller) {
@@ -802,9 +960,10 @@ static void pad_open(StreamApp *app, int index, bool announce)
         memset(slot, 0, sizeof(*slot));
         return;
     }
-    fprintf(stdout, "[native] controller added: %s (%s%s%s)\n", slot->name,
+    pad_enable_motion(slot);
+    fprintf(stdout, "[native] controller added: %s (%s%s%s%s)\n", slot->name,
             controller ? "game controller" : slot->xpad_layout ? "joystick, X360 order" : "joystick",
-            slot->builtin ? ", built-in" : "", touchpad ? ", touchpad" : "");
+            slot->builtin ? ", built-in" : "", touchpad ? ", touchpad" : "", slot->motion ? ", motion" : "");
     fflush(stdout);
     if(announce) toast(app, "Controller connected", OSD_TOAST_GOOD, TOAST_SHORT_MS);
 }
@@ -814,6 +973,11 @@ static void pad_close(StreamApp *app, StreamPad *pad, uint32_t now, bool live)
 {
     if(!pad || !pad->used) return;
     si_pad_detach(&app->input, pad->id, now);
+    if(pad->id == app->motion_pad) {
+        /* The console's pad lies still again rather than keeping the last turn. */
+        ss_motion_reset(&app->motion);
+        app->motion_pad = -1;
+    }
     if(!live) pad_rumble(pad, 0, 0, now);
     if(pad->controller) SDL_GameControllerClose(pad->controller);
     else if(pad->joystick) SDL_JoystickClose(pad->joystick);
@@ -1080,6 +1244,9 @@ static void handle_event(StreamApp *app, const SDL_Event *event, uint32_t now, b
             break;
         }
 #if SDL_VERSION_ATLEAST(2, 0, 14)
+        case SDL_CONTROLLERSENSORUPDATE:
+            pad_sensor(app, &event->csensor);
+            break;
         case SDL_CONTROLLERTOUCHPADDOWN:
         case SDL_CONTROLLERTOUCHPADMOTION:
         case SDL_CONTROLLERTOUCHPADUP: {
@@ -1580,6 +1747,8 @@ static bool init_sdl(StreamApp *app)
     SDL_RenderClear(app->renderer);
     SDL_RenderPresent(app->renderer);
 
+    ss_motion_reset(&app->motion);
+    app->motion_pad = -1;
     int count = SDL_NumJoysticks();
     for(int index = 0; index < count; index++) pad_open(app, index, false);
     bool any = false;

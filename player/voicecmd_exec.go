@@ -450,7 +450,7 @@ func voiceMusic(config *Config, kind voiceIntentKind) voiceOutcome {
 		if kind == voiceIntentMusicResume {
 			return voiceOutcome{Say: "Nothing to resume — say “play music”", Tone: tbxToneWarn}
 		}
-		return voiceOutcome{Say: "Opening Music", Act: func(c *Config) { openAudioPlayerBrowser(c, musicDefaultDir(c)) }}
+		return voiceOutcome{Say: "Opening Music", Act: func(c *Config) { musicShelfOpen(c) }}
 	case voiceIntentMusicNext, voiceIntentMusicPrev:
 		if !st.hasTrack {
 			return voiceOutcome{Say: "Nothing is playing", Tone: tbxToneWarn}

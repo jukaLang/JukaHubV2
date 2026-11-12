@@ -133,6 +133,15 @@ void runOneActivity(ActivityRunner *runner, void *onCreateVoid, void *onFrameVoi
     AInputQueue *queue;
     int winW = 1280, winH = 720;
 
+    /* Android's UI thread already owns an ALooper before NativeActivity's
+     * onCreate. Rust's android-activity and other NDK glue query it with
+     * ALooper_forThread during onCreate and abort when it is absent. */
+    if (!ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS)) {
+        fprintf(stderr, "[androidrt] lifecycle: could not prepare the main thread looper\n");
+        runner->exitCode = 3;
+        return;
+    }
+
     memset(&g_callbacks, 0, sizeof g_callbacks);
     memset(&activity, 0, sizeof(activity));
     activity.callbacks = &g_callbacks;

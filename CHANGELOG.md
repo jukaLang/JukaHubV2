@@ -13,6 +13,114 @@ For anything older, the git log and the
 
 ### Added
 
+- **PS4 / PS5 controllers over Bluetooth in Remote Play.** A DualShock 4 or DualSense paired with
+  the handheld now works fully in a stream: its gyroscope and accelerometer reach the console with an
+  orientation worked out from them (motion aiming and steering), next to Create, the touchpad and
+  rumble. A pad that reaches SDL only as a raw joystick (a DualShock 4 on the TrimUI's 4.9 kernel,
+  hid-generic or hid-playstation) gets a mapping for its GUID in its driver's button order, in the
+  Remote Play helper and in JukaHub's menus alike, instead of being read scrambled or ignored. A
+  DualSense whose touchpad is a separate kernel node keeps the Select layout, so its Create button can
+  still click the touchpad. The Bluetooth diagnostics add a `Pad HID` line (HIDP, uhid, Sony drivers).
+- **Save slots in the in-game menu.** Hold Select + L2 in a RetroArch game started from the library:
+  **Save state** and **Load state** open the game's slots (three per page, six in all), each with its
+  picture and when it was saved; replacing a used slot takes a second press and empty slots cannot be
+  loaded. Uses RetroArch's `SAVE_STATE_SLOT`/`LOAD_STATE_SLOT` commands and falls back to the slot keys
+  on builds without them.
+- **Automatic save with a previous copy.** Before a RetroArch game starts, its last auto save is kept as
+  the "Previous auto save" (one copy, with picture and date) in the game's states strip; starting from it
+  swaps it with the current auto save, so it can be undone.
+- **Sleep on the power button, and in the in-game menu.** A short press of the power key sleeps the
+  handheld from Home, any screen, or mid-game (RetroArch, PPSSPP, ports): the game pauses, the screen goes
+  dark, the card is synced and the device suspends; on wake it carries on and the wake press is ignored.
+  Hold 1.5 s on a JukaHub screen for the Exit card. Settings → Power & battery → Power button: Sleep, Exit
+  card or Nothing. If the firmware already sleeps on the key, JukaHub leaves it to it. A JukaHub alarm
+  wakes the device in time to ring. The in-game menu has a **Sleep** row too.
+- **Game diagnosis.** When a game closes within seconds of starting, JukaHub says why: the BIOS file the
+  core needs (names, accepted alternatives, region variants) and the exact folder this device's RetroArch
+  reads it from, a missing or unloadable core, a game file that is gone, empty or a damaged zip, a
+  .cue/.m3u/.gdi with missing tracks, missing arcade ROM files or parent/BIOS sets (neogeo.zip) named from
+  the core's log, and PortMaster ports whose game files were never copied in. Otherwise it says so and
+  shows the emulator's last log lines. Game options → "Check why it won't start" runs it any time.
+  RetroArch's log goes to JukaHub's data folder for JukaHub launches only. The launch-failure card wraps
+  long paths, lists several problems and scrolls; BIOS Doctor now knows which BIOS each core really needs.
+- **Video filters for RetroArch games.** Settings → Video filter, and per game in the options sheet:
+  Sharp, Smooth, Pixel perfect, plus Scanlines, LCD grid and CRT when a matching shader or filter is
+  installed. Applied for JukaHub launches only (a temporary global auto-preset for shader looks) and undone
+  when the game exits; your own presets are never overwritten.
+- **CPU profile per game.** Game options → CPU profile: Auto, Battery saver, Balanced or Performance (the
+  CPU limit row still caps the clock). It also applies when the game starts from Ports, Emulators or LAN
+  play, and the library shows it beside the game.
+- **Interface language.** Settings → General → Language: English (default), Español, Português (Brasil),
+  Français, Deutsch, Italiano, Русский — immediate, saved as `uiLanguage`. ~1,100 strings per language
+  (machine-translated, awaiting native review); anything untranslated stays English. Web pages, PDFs, chat,
+  notes, subtitles, typed text, file names and game titles are never translated.
+
+- **Synth: a pocket groovebox** (Start menu → Synth, Tools → Synth), in
+  the spirit of HUM on the TrimUI Brick. Seven lanes — kick, snare, hat,
+  clap, bass, lead, chords — in a 16-step sequencer with eight patterns,
+  accents, ratchets, swing, mutes and pattern chaining; a Play page whose
+  D-pad and Y / X / A are seven pads in the song's key and scale (record
+  them into the running pattern); a Sound page per instrument (presets,
+  wave, low-pass filter with resonance and envelope, ADSR, length, glide,
+  detune, octave, level, pan, echo, "Surprise me") and drum kits with tune,
+  decay and level per drum; a Mix page (tempo with tap, key, nine scales,
+  steps, ping-pong echo, volume, copy / clear / random beat / demo) and
+  Export to WAV into Downloads/music. All sound is synthesized on the device
+  (polyBLEP oscillators, TPT state-variable filters, synthesized drums) on
+  its own stereo device that closes when the page is left. Start plays and
+  stops; keyboard twins throughout. Saved to `synth.json` (in backups);
+  four trophies. `synth.go`, `synth_engine.go`.
+- **Ideas from Mosaik CFW (TrimUI Smart Pro / Brick Pro).** A pass over
+  diapolon/mosaik_cfw's features that JukaHub did not have yet:
+  - **Phone Companion → Files.** Browse the folders the FTP server shares
+    (games, BIOS, saves, screenshots, media; the shared folder on a computer)
+    from a phone or PC browser and download, upload several files with
+    progress, make folders, rename and delete — no SD card removal. Uploads
+    stream onto the card under a hidden name and appear only when complete;
+    replacing asks first and never loses the old copy; delete takes a file or
+    an empty folder only; Roms/Ports and game-profile folders stay read-only.
+  - **Power card: Sleep, Restart, Power off** (TrimUI only) above Cancel /
+    Exit. Restart and Power off quit JukaHub cleanly first (games stopped,
+    settings, playtime and saves written, cleanup hooks run), then reboot or
+    switch off. Sleep uses the power button's sleep (`sleepNow`).
+  - **Auto sleep** — Settings → Power (`autoSleep`, Off by default; 3–30
+    min): sleeps after that long idle, never while a game runs, charging,
+    something plays, downloads, installs or is shared, or an alarm is set.
+  - **Real Screen off:** the dock's Screen off now switches the TrimUI
+    backlight off (DISP_LCD_BACKLIGHT_DISABLE, level-0 fallback); every wake
+    path and the next start after a crash turn it back on.
+  - **Reset game…** in game options: *Reset settings* drops the game's options
+    plus its RetroArch override/.opt/.rmp and MAME 2003-Plus / FBNeo DIP and
+    high-score files (exact ROM name only); *…and delete save states* also
+    takes states, their screenshots and arcade NVRAM. ROM and .srm saves
+    always stay; files go to `reset-trash/<date>/` with a `restore.txt`.
+  - **Clean up covers** (game options): unused downloaded box art goes to the
+    same trash after a confirmation; skipped when a games folder can't be read.
+  - **Tags:** X renames and Y deletes your own tags in the tag filter (L3 / T).
+  - A game with its own CPU limit says so when it hands the screen back.
+  - Header battery: red below 15%, blinks below 5%, fills in a loop on the
+    charger; the Wi-Fi meter breathes while a network is joining (both steady
+    with Reduced motion / Battery Saver).
+  - RetroArch games started from JukaHub write a changed battery save every
+    10 s (`autosave_interval`, only when the user had none; restored on exit).
+  - A JukaHub update installs below 30% battery only on the charger.
+  - **Playtime is per console:** the same title on two consoles keeps its own
+    hours. Old hours move under their console wherever only one console is
+    known for the title; totals and trophies are unchanged.
+
+- **Netplay: rooms on your Wi-Fi and online play.** **X** on a game now opens
+  **Netplay** instead of LAN Play. A JukaHub hosting on your network shows up
+  live in everyone else's panel, and **A** joins it with your own copy of the
+  ROM and the host's core, whatever game you opened the panel on: no more
+  typing an IP address. **Host online** hosts through one of libretro's public
+  relays (←/→ picks New York, Madrid, Montreal or Sao Paulo), so a friend on
+  another network joins without port forwarding, and **Online rooms** lists
+  RetroArch's public lobby, filtered to games in your library (**Y**
+  refreshes). A LAN host now always starts RetroArch with the public announce
+  and relay switched off, whatever `retroarch.cfg` says. Join by address is
+  still there for everything else. Password-protected online rooms are listed
+  but must be joined from RetroArch's own menu for now.
+
 - **In-game menu: hold Select + L2 to leave any game.** On a TrimUI, holding
   **Select + L2** for half a second in any game JukaHub launched — RetroArch,
   PPSSPP, a port — pauses it under a small glass menu: **Resume game**,
@@ -258,6 +366,16 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Bluetooth can start the XR829 on the TrimUI Smart Pro when the firmware
+  left it off.** The fallback now enables the chip's `btwrite` wake control,
+  resets its power through the firmware's rfkill `state` file, and starts
+  `rtk_hciattach` at the 115200 baud used by Knulli if the stock `hciattach`
+  is unavailable. Chip-specific firmware scripts are preferred over generic
+  ones, TrimUI's `rfkill.elf` is recognized, and diagnostics record the wake
+  control's value. A failed attach restores the previous wake state
+  (`player/bluetooth_attach.go`, `player/bluetooth_bringup.go`,
+  `player/systemcontrol.go`, `player/bluetooth_diag.go`).
+
 - **Box art is found for games again, automatically and from Fill gaps.** The
   fetcher only guessed file names, so a ROM not named exactly like the
   No-Intro title on the libretro thumbnail server ("Super Mario World.sfc",
@@ -290,7 +408,7 @@ For anything older, the git log and the
   in "Bluetooth is not started". On the Smart Pro, Brick, Brick Pro and Hammer
   JukaHub now attaches the XR829 chip on `ttyS1` itself when no script does
   (rfkill power pulse, then `hciattach -n ttyS1 xradio` or
-  `rtk_hciattach -n -s 3000000 ttyS1 xradio`, a stuck attach stopped first),
+  `rtk_hciattach -n -s 115200 ttyS1 xradio`, a stuck attach stopped first),
   and also tries chip-named scripts such as `bt_init.sh_xr829`. Every Bluetooth
   tool (`bluetoothctl`, `rfkill`, `hciattach`, `bluetoothd`) is now found
   beyond the launcher's PATH (system sbin/libexec directories,

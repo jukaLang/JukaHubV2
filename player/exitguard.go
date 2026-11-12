@@ -166,6 +166,9 @@ func forceExit(reason string) {
 		// costs that bound, not the exit (they run once; one already running
 		// is waited for).
 		runCleanupHooksBounded(sdlTeardownHooksGrace)
+		// A Restart or Power off the power card asked for still happens when
+		// the teardown overran (devpower.go; exactly once, a no-op otherwise).
+		devPowerAfterShutdown()
 		_ = SetLEDSync(false)
 		exitLastChanceRestore(exitLastChanceGrace)
 		select {

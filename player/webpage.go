@@ -236,6 +236,21 @@ type webStyle struct {
 	// only carries inheritance down the parse; it stays a pointer so a
 	// webStyle is still comparable and adjacent runs still merge.
 	Vars *webVarScope
+	// CQ keeps the declarations that used container-relative units, so layout
+	// can apply them again once a measured container size is known. It is a
+	// pointer for the same reason as Vars: styles stay comparable.
+	CQ *webCQContext
+}
+
+// webCQContext is the unresolved half of one element's style: the cascaded
+// declarations before var()/cq* substitution, the style they cascade onto,
+// and the custom properties in force. The streaming parser resolves a first
+// approximation against its modelled container; layout replays this context
+// when it has the container's real used size.
+type webCQContext struct {
+	base  webStyle
+	decls map[string]string
+	vars  *webVarScope
 }
 
 // webVarScope is one element's view of the custom properties: the ones it
@@ -263,8 +278,12 @@ type webRun struct {
 // webBlock is one laid-out unit: a paragraph, heading, list item, quote, code
 // block or horizontal rule.
 type webBlock struct {
-	Runs           []webRun
-	Style          webStyle
+	Runs  []webRun
+	Style webStyle
+	// ContainerIDs lists the CSS containment containers enclosing this block,
+	// outermost first. It is the parse-time element ancestry, kept separately
+	// from the visual style so layout can find the nearest measured size.
+	ContainerIDs   []int
 	Align          int
 	Indent         float64
 	TextIndent     float64
@@ -409,7 +428,13 @@ type webDocument struct {
 	Title   string
 	Favicon string
 	Blocks  []webBlock
-	Paper   sdl.Color
+	// Containers is every CSS containment container in document order, keyed by
+	// the stable ID carried on descendant blocks. HasContainerUnits records
+	// whether any style actually used cq*; pages without one skip the extra
+	// layout pass entirely.
+	Containers        map[int]webContainerInfo
+	HasContainerUnits bool
+	Paper             sdl.Color
 	// PaperGradient is a body/html background ramp: the page under the text is
 	// the one gradient that covers the whole panel, so it is painted too.
 	PaperGradient    webGradient
@@ -503,6 +528,10 @@ type webLayout struct {
 	Rects  []webRect
 	RowH   int32
 	Height int32
+	// ContainerSizes holds the used border-box size of each containment
+	// container, in CSS px, measured by this layout. Container units in the
+	// next pass resolve against these numbers.
+	ContainerSizes map[int]webContainerSize
 	// Links are the page's clickable runs in reading order, one entry per
 	// destination. The browser walks this list with the D-pad.
 	Links []webLinkHit
@@ -713,6 +742,37 @@ type webFrame struct {
 	// flexGroup is non-zero when this element opened a flex container. The
 	// matching frame is popped when the element closes.
 	flexGroup int
+	// containerID is non-zero when this element is a CSS containment
+	// container. Descendant blocks copy the open IDs so layout can find them.
+	containerID int
+}
+
+// webContainerInfo is one containment container's element facts. The size
+// fields are CSS px; WidthPct is kept unresolved because its parent's used
+// width is only known during layout.
+type webContainerInfo struct {
+	parent    int
+	width     float64
+	widthPct  float64
+	height    float64
+	flexGroup int
+	flexItem  int
+	// ancestors keeps the width-bearing boxes between the page column and this
+	// container, including ordinary non-container wrappers. A percentage on a
+	// plain parent still constrains the container's used inline size.
+	ancestors []webContainerAncestor
+}
+
+type webContainerAncestor struct {
+	width    float64
+	widthPct float64
+}
+
+// webContainerSize is a used container size in CSS px. Height is zero until
+// layout has measured the container's content (or the author set one).
+type webContainerSize struct {
+	Width  float64
+	Height float64
 }
 
 // webFlexFrame is one open flex container while parsing. item counts its
@@ -1808,10 +1868,16 @@ func webSupportsParsedValue(name, value string) (supported, handled bool) {
 	case "text-indent":
 		return webSupportsLengthToken(lower, false), true
 	case "font-size":
+		if webSupportsContainerUnitLength(lower) {
+			return true, true
+		}
 		_, ok := webFontSizePx(lower, 16)
 		return ok, true
 	case "line-height":
 		if lower == "normal" {
+			return true, true
+		}
+		if webSupportsContainerUnitLength(lower) {
 			return true, true
 		}
 		_, ok := webLineHeightPx(lower, 16)
@@ -1845,6 +1911,9 @@ func webSupportsParsedValue(name, value string) (supported, handled bool) {
 		if v == "0" || v == "0px" || webSupportsZeroLength(v) {
 			return true, true
 		}
+		if webSupportsContainerUnitLength(v) {
+			return true, true
+		}
 		return webFirstLength(v, 16) != 0, true
 	case "color":
 		_, ok := parseWebColor(lower)
@@ -1874,6 +1943,9 @@ func webSupportsLengthToken(value string, allowAuto bool) bool {
 	if value == "0" || webSupportsZeroLength(value) {
 		return true
 	}
+	if webSupportsContainerUnitLength(value) {
+		return true
+	}
 	if allowAuto && value == "auto" {
 		return true
 	}
@@ -1881,6 +1953,26 @@ func webSupportsLengthToken(value string, allowAuto bool) bool {
 		return pct >= 0
 	}
 	return webLength(value, 16) != 0
+}
+
+// webSupportsContainerUnitLength validates cq* values for @supports, where
+// there is no element/container to resolve them against. A dummy 100px
+// container is enough to prove the unit and any calc() around it are readable.
+func webSupportsContainerUnitLength(value string) bool {
+	if !strings.Contains(value, "cq") {
+		return false
+	}
+	resolved := webSubstituteContainerUnits(value, 100, 100)
+	if resolved == value {
+		return false
+	}
+	if strings.Contains(value, "calc(") {
+		resolved = webSubstituteCalcContainer(resolved, 16, 0, 0, 100, 100)
+	}
+	if _, ok := webContainerLength(resolved, 100, 100); ok {
+		return true
+	}
+	return webLength(resolved, 16) != 0
 }
 
 func webSupportsZeroLength(value string) bool {
@@ -2439,6 +2531,13 @@ func webResolveValue(value string, scope *webVarScope, em float64) string {
 // calc() that mixes in a unit the reader cannot resolve yet (`100% - 20px`)
 // is left as authored.
 func webSubstituteCalc(value string, em float64) string {
+	return webSubstituteCalcContainer(value, em, 0, 0, 0, 0)
+}
+
+// webSubstituteCalcContainer is webSubstituteCalc with query-container
+// dimensions available for cq* operands. Ordinary CSS values reach this after
+// their bare container units have already been substituted.
+func webSubstituteCalcContainer(value string, em, vw, vh, cw, ch float64) string {
 	if em <= 0 {
 		em = 16
 	}
@@ -2458,7 +2557,7 @@ func webSubstituteCalc(value string, em float64) string {
 			break
 		}
 		out.WriteString(value[i:idx])
-		if px, ok := webEvalCalc(value[idx+5:end], em); ok {
+		if px, ok := webEvalCalcContainer(value[idx+5:end], em, vw, vh, cw, ch); ok {
 			out.WriteString(strconv.FormatFloat(px, 'f', -1, 64))
 			out.WriteString("px")
 		} else {
@@ -2467,6 +2566,192 @@ func webSubstituteCalc(value string, em float64) string {
 		i = end + 1
 	}
 	return out.String()
+}
+
+// webOrdinaryContainerSize returns the nearest ancestor query container's
+// modeled inline and block size. Without a container, cq* units follow the
+// same viewport fallback the image sizes path uses.
+func (p *webParser) webOrdinaryContainerSize() (w, h float64) {
+	w, h = webMediaViewport()
+	idx := -1
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		if p.stack[i].style.ContainerType != 0 {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return w, h
+	}
+	return p.webContainerDimensions(idx)
+}
+
+// webResolveStyleValue prepares one declaration for the property parsers
+// while the element's containing query container is known: var() first, then
+// cq* units and calc(). The ordinary webResolveValue path is kept for callers
+// such as @supports that have no element stack.
+func (p *webParser) webResolveStyleValueIn(value string, scope *webVarScope, em, cw, ch float64) string {
+	value = webSubstituteVars(value, scope)
+	value = webSubstituteContainerUnits(value, cw, ch)
+	if strings.Contains(strings.ToLower(value), "calc(") {
+		value = webSubstituteCalcContainer(value, em, 0, 0, cw, ch)
+	}
+	return value
+}
+
+// resolve replays the declarations captured at parse time against a measured
+// container. It starts from the pre-declaration style rather than the style
+// already carrying modelled cq* values, so shorthand contributions such as
+// padding/margin are applied once, not added twice. The element's non-CSS
+// facts (link target, hidden flag, form control) are carried over from current.
+func (ctx *webCQContext) resolve(current webStyle, cw, ch float64) webStyle {
+	st := ctx.base
+	st.CQ = ctx
+	st.Vars = ctx.vars
+	em := st.FontPx
+	decls := make(map[string]string, len(ctx.decls))
+	for name, value := range ctx.decls {
+		if strings.HasPrefix(name, "--") {
+			continue
+		}
+		decls[name] = webSubstituteVars(value, ctx.vars)
+	}
+	if raw, ok := decls["font-size"]; ok {
+		if px, valid := webFontSizePx(declsValueAt(decls, "font-size", raw, em, cw, ch), em); valid {
+			em = px
+		}
+	}
+	for name, value := range decls {
+		decls[name] = webSubstituteContainerUnits(value, cw, ch)
+		if strings.Contains(strings.ToLower(value), "calc(") {
+			decls[name] = webSubstituteCalcContainer(decls[name], em, 0, 0, cw, ch)
+		}
+	}
+	applyWebDecls(&st, decls)
+	st.Href, st.Link, st.Hidden, st.Control = current.Href, current.Link, current.Hidden, current.Control
+	return st
+}
+
+// declsValueAt resolves var() in one value before font-size is parsed. It is a
+// small helper so resolve does not duplicate the substitution order.
+func declsValueAt(decls map[string]string, name, value string, em, cw, ch float64) string {
+	value = webSubstituteContainerUnits(value, cw, ch)
+	if strings.Contains(strings.ToLower(value), "calc(") {
+		value = webSubstituteCalcContainer(value, em, 0, 0, cw, ch)
+	}
+	return value
+}
+
+// webSubstituteContainerUnits replaces numeric cq* tokens with px. Quoted
+// strings, url() payloads and unresolved var() calls are copied untouched so
+// a file name or custom-property syntax cannot be mistaken for a length.
+func webSubstituteContainerUnits(value string, cw, ch float64) string {
+	if cw <= 0 || ch <= 0 {
+		cw, ch = webMediaViewport()
+	}
+	lower := strings.ToLower(value)
+	var out strings.Builder
+	out.Grow(len(value))
+	for i := 0; i < len(value); {
+		c := value[i]
+		if c == '"' || c == '\'' {
+			end := i + 1
+			for end < len(value) {
+				if value[end] == '\\' {
+					end += 2
+					continue
+				}
+				if value[end] == c {
+					end++
+					break
+				}
+				end++
+			}
+			out.WriteString(value[i:min(end, len(value))])
+			i = end
+			continue
+		}
+		if strings.HasPrefix(lower[i:], "url(") || strings.HasPrefix(lower[i:], "var(") {
+			open := i + 3
+			end := webCSSParenEnd(value, open)
+			if end < 0 {
+				out.WriteByte(c)
+				i++
+				continue
+			}
+			out.WriteString(value[i : end+1])
+			i = end + 1
+			continue
+		}
+		start := i
+		if start > 0 && webContainerUnitIdentByte(value[start-1]) {
+			if c != '+' && c != '-' {
+				out.WriteByte(c)
+				i++
+				continue
+			}
+		}
+		if c == '+' || c == '-' {
+			if i+1 >= len(value) || !(value[i+1] >= '0' && value[i+1] <= '9' || value[i+1] == '.') {
+				out.WriteByte(c)
+				i++
+				continue
+			}
+			if start >= 2 && webContainerUnitIdentByte(value[start-2]) {
+				out.WriteByte(c)
+				i++
+				continue
+			}
+			i++
+		}
+		digits := i
+		for i < len(value) && (value[i] >= '0' && value[i] <= '9' || value[i] == '.') {
+			i++
+		}
+		if i == digits {
+			out.WriteByte(c)
+			i = start + 1
+			continue
+		}
+		unitStart := i
+		if unitStart < len(value) {
+			for i < len(value) && ((value[i] >= 'a' && value[i] <= 'z') || (value[i] >= 'A' && value[i] <= 'Z')) {
+				i++
+			}
+		}
+		unit := strings.ToLower(value[unitStart:i])
+		factor, isContainerUnit := webContainerUnitFactor(unit, cw, ch)
+		if !isContainerUnit {
+			out.WriteString(value[start:i])
+			continue
+		}
+		n, err := strconv.ParseFloat(value[start:unitStart], 64)
+		if err != nil {
+			out.WriteString(value[start:i])
+			continue
+		}
+		out.WriteString(strconv.FormatFloat(n*factor, 'f', -1, 64))
+		out.WriteString("px")
+	}
+	return out.String()
+}
+
+func webContainerUnitIdentByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-'
+}
+
+func webContainerUnitFactor(unit string, cw, ch float64) (float64, bool) {
+	switch unit {
+	case "cqw", "cqi":
+		return cw / 100, true
+	case "cqh", "cqb":
+		return ch / 100, true
+	case "cqmin":
+		return min(cw, ch) / 100, true
+	case "cqmax":
+		return max(cw, ch) / 100, true
+	}
+	return 0, false
 }
 
 // webCalcValue is one operand of a calc() expression. A unitless number is
@@ -2579,6 +2864,9 @@ func (p *webCalcParser) factor() (webCalcValue, bool) {
 	if p.pos >= len(p.src) {
 		return webCalcValue{}, false
 	}
+	if value, ok, handled := p.functionFactor(); handled {
+		return value, ok
+	}
 	switch p.src[p.pos] {
 	case '(':
 		p.pos++
@@ -2663,6 +2951,75 @@ func (p *webCalcParser) factor() (webCalcValue, bool) {
 		}
 	}
 	return webCalcValue{}, false
+}
+
+// functionFactor parses calc(), min(), max() and clamp() where a value is
+// expected. CSS math functions nest freely, so each argument is handed back to
+// the same evaluator rather than being flattened into a string first.
+func (p *webCalcParser) functionFactor() (value webCalcValue, ok, handled bool) {
+	lower := strings.ToLower(p.src[p.pos:])
+	name := ""
+	for _, candidate := range []string{"calc", "clamp", "min", "max"} {
+		if strings.HasPrefix(lower, candidate+"(") {
+			name = candidate
+			break
+		}
+	}
+	if name == "" {
+		return webCalcValue{}, false, false
+	}
+	open := p.pos + len(name)
+	close := webCSSParenEnd(p.src, open)
+	if close < 0 {
+		return webCalcValue{}, false, true
+	}
+	inner := p.src[open+1 : close]
+	eval := func(expr string) (float64, bool) {
+		return webEvalCalcContainer(expr, p.em, p.vw, p.vh, p.cw, p.ch)
+	}
+	if name == "calc" {
+		px, valid := eval(inner)
+		if !valid {
+			return webCalcValue{}, false, true
+		}
+		p.pos = close + 1
+		return webCalcValue{px: px}, true, true
+	}
+	args := webSplitSelectorList(inner)
+	values := make([]float64, 0, len(args))
+	for _, arg := range args {
+		px, valid := eval(strings.TrimSpace(arg))
+		if !valid {
+			return webCalcValue{}, false, true
+		}
+		values = append(values, px)
+	}
+	var px float64
+	switch name {
+	case "min":
+		if len(values) == 0 {
+			return webCalcValue{}, false, true
+		}
+		px = values[0]
+		for _, value := range values[1:] {
+			px = min(px, value)
+		}
+	case "max":
+		if len(values) == 0 {
+			return webCalcValue{}, false, true
+		}
+		px = values[0]
+		for _, value := range values[1:] {
+			px = max(px, value)
+		}
+	case "clamp":
+		if len(values) != 3 {
+			return webCalcValue{}, false, true
+		}
+		px = max(values[0], min(values[1], values[2]))
+	}
+	p.pos = close + 1
+	return webCalcValue{px: px}, true, true
 }
 
 // --- CSS selectors --------------------------------------------------------
@@ -5580,21 +5937,23 @@ type webPictureFrame struct {
 }
 
 type webParser struct {
-	doc       *webDocument
-	rules     []webRule
-	css       strings.Builder
-	stack     []webFrame
-	blocks    []webBlock
-	current   *webBlock
-	lists     []webListState
-	inHead    bool
-	textLen   int
-	trunc     bool
-	space     bool
-	pendingB  string
-	mainDepth int
-	flexSeq   int
-	flexStack []webFlexFrame
+	doc               *webDocument
+	rules             []webRule
+	css               strings.Builder
+	stack             []webFrame
+	blocks            []webBlock
+	current           *webBlock
+	lists             []webListState
+	inHead            bool
+	textLen           int
+	trunc             bool
+	space             bool
+	pendingB          string
+	mainDepth         int
+	flexSeq           int
+	containerSeq      int
+	hasContainerUnits bool
+	flexStack         []webFlexFrame
 	// form is the <form> the parser is inside, so a control knows where its
 	// value goes. Nested forms are invalid HTML, so one is enough. formSeq
 	// numbers them, so a later <form> never inherits an earlier one's ID.
@@ -5642,9 +6001,10 @@ type webParser struct {
 // was quadratic.
 func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	doc := &webDocument{
-		URL:   baseURL,
-		Paper: sdl.Color{R: 250, G: 251, B: 253, A: 255},
-		Text:  sdl.Color{R: 28, G: 32, B: 38, A: 255},
+		URL:        baseURL,
+		Paper:      sdl.Color{R: 250, G: 251, B: 253, A: 255},
+		Text:       sdl.Color{R: 28, G: 32, B: 38, A: 255},
+		Containers: make(map[int]webContainerInfo),
 	}
 	p := &webParser{doc: doc}
 	p.css.WriteString(extraCSS)
@@ -5661,6 +6021,7 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	p.walk(source)
 	p.flush()
 	doc.FormHidden = p.formHidden
+	doc.HasContainerUnits = p.hasContainerUnits
 	doc.Blocks = filterWebMainContent(p.blocks)
 	if p.trunc {
 		// The note goes in after the <main> filter, and at the top. Tagging it
@@ -6366,6 +6727,37 @@ func (p *webParser) endTag(name string) {
 
 func (p *webParser) push(el webElement, style webStyle, kind string) {
 	depth := len(p.stack)
+	containerID := 0
+	if style.ContainerType != 0 {
+		p.containerSeq++
+		containerID = p.containerSeq
+		parent := 0
+		for i := len(p.stack) - 1; i >= 0; i-- {
+			if p.stack[i].containerID != 0 {
+				parent = p.stack[i].containerID
+				break
+			}
+		}
+		info := webContainerInfo{
+			parent: parent, width: style.Width, widthPct: style.WidthPct,
+			height: style.Height,
+		}
+		for _, frame := range p.stack {
+			if frame.style.WidthPct > 0 || frame.style.Width > 0 {
+				info.ancestors = append(info.ancestors, webContainerAncestor{
+					width: frame.style.Width, widthPct: frame.style.WidthPct,
+				})
+			}
+		}
+		if len(p.flexStack) > 0 {
+			top := p.flexStack[len(p.flexStack)-1]
+			info.flexGroup, info.flexItem = top.group, top.item
+		}
+		if p.doc.Containers == nil {
+			p.doc.Containers = make(map[int]webContainerInfo)
+		}
+		p.doc.Containers[containerID] = info
+	}
 	// A block element pushed directly under an open flex container is one of
 	// its items; nested elements belong to the same item. Text-only children
 	// are tagged by ensureBlock instead, which is why the counter starts at
@@ -6397,7 +6789,7 @@ func (p *webParser) push(el webElement, style webStyle, kind string) {
 			gridMin:  style.GridMin,
 		})
 	}
-	p.stack = append(p.stack, webFrame{el: el, style: style, kind: kind, flexGroup: group})
+	p.stack = append(p.stack, webFrame{el: el, style: style, kind: kind, flexGroup: group, containerID: containerID})
 }
 
 // beginFlexLeaf assigns a direct replaced/void child its own flex item.
@@ -6456,6 +6848,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st.Width, st.WidthPct, st.Height = 0, 0, 0
 	st.AspectRatio = 0
 	st.ContainerType, st.ContainerName = 0, ""
+	st.CQ = nil
 	st.ZIndex, st.Position = 0, webPositionStatic
 	st.Top, st.Right, st.Bottom, st.Left = 0, 0, 0, 0
 	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
@@ -6526,23 +6919,49 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// Custom properties are inherited, so this element's own definitions are
 	// resolved once here and carried down by the frames below it.
 	st.Vars = webVarScopeFor(p.topStyle().Vars, merged)
+	// Keep the cascade before cq* substitution. A declaration can hide a cq
+	// unit behind var(), so the custom properties are inspected too even though
+	// applyWebDecls will ignore them.
+	rawDecls := make(map[string]string, len(merged))
+	needsCQ := false
+	for name, value := range merged {
+		rawDecls[name] = value
+		if strings.Contains(strings.ToLower(value), "cq") {
+			needsCQ = true
+		}
+	}
+	if !needsCQ && st.Vars != nil {
+		for _, value := range st.Vars.props {
+			if strings.Contains(strings.ToLower(value), "cq") {
+				needsCQ = true
+				break
+			}
+		}
+	}
 	for name := range merged {
 		if strings.HasPrefix(name, "--") {
 			delete(merged, name)
 		}
 	}
+	base := st
+	base.CQ = nil
 	// `em` inside calc() is this element's font size, which font-size itself
 	// has to settle first.
 	em := st.FontPx
+	cw, ch := p.webOrdinaryContainerSize()
 	if raw, ok := merged["font-size"]; ok {
-		if px, valid := webFontSizePx(webResolveValue(raw, st.Vars, em), em); valid {
+		if px, valid := webFontSizePx(p.webResolveStyleValueIn(raw, st.Vars, em, cw, ch), em); valid {
 			em = px
 		}
 	}
 	for name, value := range merged {
-		merged[name] = webResolveValue(value, st.Vars, em)
+		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
 	}
 	applyWebDecls(&st, merged)
+	if needsCQ {
+		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars}
+		p.hasContainerUnits = true
+	}
 	// The anchor target is not a CSS property and is never inherited from a
 	// sibling: every <a> names its own, and its children inherit that.
 	if el.tag == "a" {
@@ -6589,6 +7008,7 @@ func (p *webParser) ensureBlock() *webBlock {
 	st := p.nearestBlockStyle()
 	block := &webBlock{
 		Style:          st,
+		ContainerIDs:   p.containerPath(),
 		Align:          st.Align,
 		Indent:         st.Indent,
 		TextIndent:     st.TextIndent,
@@ -6639,6 +7059,18 @@ func (p *webParser) ensureBlock() *webBlock {
 
 // tagFlexBlock keeps every enclosing flex/grid container. The outermost
 // membership is laid out first; a card's sub-layout then reveals the next one.
+// containerPath returns the open containment containers, outermost first.
+// The slice is only allocated on pages that actually declare one.
+func (p *webParser) containerPath() []int {
+	var ids []int
+	for i := range p.stack {
+		if id := p.stack[i].containerID; id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (p *webParser) tagFlexBlock(block *webBlock, st webStyle) {
 	for i := range p.flexStack {
 		f := &p.flexStack[i]
@@ -7170,29 +7602,63 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		return nil
 	}
 	padX := (width - contentW) / 2
-	l := &webLayouter{
-		doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt,
-		spaceWidths: map[*ttf.Font]int32{},
-		sanitized:   make(map[webSanitizeKey]string, 256),
-	}
-	// Absolutely positioned blocks are measured on their own and painted over
-	// the flow, so they take no room in it.
-	flow := make([]webBlock, 0, len(d.Blocks))
-	var floats []webBlock
-	for _, b := range d.Blocks {
-		if b.Hidden() {
-			continue
+	layoutOnce := func(blocks []webBlock) (*webLayout, map[int]webContainerSize) {
+		layout := &webLayout{RowH: rowH}
+		pageWidth := float64(contentW) * 16 / baseSize
+		sizes := webNewContainerSizes(d.Containers, pageWidth)
+		l := &webLayouter{
+			doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt,
+			spaceWidths:    map[*ttf.Font]int32{},
+			sanitized:      make(map[webSanitizeKey]string, 256),
+			containerSizes: sizes,
+			containerRows:  make(map[int]webContainerRowSpan),
 		}
-		if b.Float {
-			floats = append(floats, b)
-			continue
+		// Absolutely positioned blocks are measured on their own and painted
+		// over the flow, so they take no room in it.
+		flow := make([]webBlock, 0, len(blocks))
+		var floats []webBlock
+		for _, b := range blocks {
+			if b.Hidden() {
+				continue
+			}
+			if b.Float {
+				floats = append(floats, b)
+				continue
+			}
+			flow = append(flow, b)
 		}
-		flow = append(flow, b)
-	}
-	l.layoutBlocks(flow, padX, contentW)
+		l.layoutBlocks(flow, padX, contentW)
 
-	layout.Height = int32(len(layout.Rows)) * rowH
-	l.layoutFloats(floats, padX, contentW)
+		layout.Height = int32(len(layout.Rows)) * rowH
+		l.layoutFloats(floats, padX, contentW)
+		l.finishContainerSizes(layout)
+		return layout, sizes
+	}
+
+	blocks := d.Blocks
+	layout, sizes := layoutOnce(blocks)
+	if d.HasContainerUnits {
+		// The parser's container size is only a model. Replay cq* against the
+		// size layout just measured, then lay out again. A content-sized box
+		// can change height when its child's cq* margin changes, so iterate a
+		// few times until the measured facts stop moving.
+		for pass := 0; pass < 3; pass++ {
+			refined, changed := webRefineContainerBlocks(blocks, sizes)
+			if !changed {
+				break
+			}
+			blocks = refined
+			nextLayout, nextSizes := layoutOnce(blocks)
+			same := webContainerSizesEqual(sizes, nextSizes)
+			layout, sizes = nextLayout, nextSizes
+			if same {
+				break
+			}
+		}
+		// Keep the measured styles on the document so callers inspecting the
+		// laid-out page see the same lengths the renderer drew.
+		d.Blocks = blocks
+	}
 	sort.SliceStable(layout.Rects, func(i, j int) bool { return layout.Rects[i].Z < layout.Rects[j].Z })
 	layout.Links = collectWebLinks(layout)
 	// Play cards and form controls are cursor stops too: the same hit shape as
@@ -7209,6 +7675,167 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	return layout
 }
 
+// webNewContainerSizes seeds each container from the page's real content width.
+// A percentage width resolves against its nearest container ancestor (or the
+// page column when it has none); an auto width takes that parent's size. The
+// flex pass later replaces these with the item's measured track width.
+func webNewContainerSizes(containers map[int]webContainerInfo, pageWidth float64) map[int]webContainerSize {
+	sizes := make(map[int]webContainerSize, len(containers))
+	for id, info := range containers {
+		width := pageWidth
+		for _, ancestor := range info.ancestors {
+			switch {
+			case ancestor.widthPct > 0:
+				width = width * ancestor.widthPct / 100
+			case ancestor.width > 0:
+				width = ancestor.width
+			}
+		}
+		switch {
+		case info.widthPct > 0:
+			width = width * info.widthPct / 100
+		case info.width > 0:
+			width = info.width
+		}
+		sizes[id] = webContainerSize{Width: width, Height: info.height}
+	}
+	return sizes
+}
+
+// webNearestBlockContainer returns the measured size of the innermost container
+// surrounding a block. A block outside every container keeps the parser's
+// viewport fallback.
+func webNearestBlockContainer(ids []int, sizes map[int]webContainerSize) (webContainerSize, bool) {
+	for i := len(ids) - 1; i >= 0; i-- {
+		if size, ok := sizes[ids[i]]; ok && size.Width > 0 {
+			return size, true
+		}
+	}
+	return webContainerSize{}, false
+}
+
+// webRefineContainerBlocks replays every cq* style against the measured sizes.
+// It copies the slice first so the caller can compare and avoid relayout when
+// nothing actually changed.
+func webRefineContainerBlocks(blocks []webBlock, sizes map[int]webContainerSize) ([]webBlock, bool) {
+	out := append([]webBlock(nil), blocks...)
+	changed := false
+	for i := range out {
+		b := &out[i]
+		size, ok := webNearestBlockContainer(b.ContainerIDs, sizes)
+		if !ok {
+			continue
+		}
+		if b.Style.CQ != nil {
+			if st := b.Style.CQ.resolve(b.Style, size.Width, size.Height); st != b.Style {
+				b.Style = st
+				changed = true
+			}
+		}
+		for j := range b.Runs {
+			run := &b.Runs[j]
+			if run.Style.CQ == nil {
+				continue
+			}
+			if st := run.Style.CQ.resolve(run.Style, size.Width, size.Height); st != run.Style {
+				run.Style = st
+				changed = true
+			}
+		}
+	}
+	return out, changed
+}
+
+func webContainerSizesEqual(a, b map[int]webContainerSize) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id, size := range a {
+		if other, ok := b[id]; !ok || other != size {
+			return false
+		}
+	}
+	return true
+}
+
+// finishContainerSizes turns the row extents gathered during layout into the
+// used CSS-px heights container units resolve against. An authored height wins;
+// otherwise the span of the container's laid-out content is its used height.
+func (l *webLayouter) finishContainerSizes(layout *webLayout) {
+	if l.containerSizes == nil {
+		return
+	}
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	for id, span := range l.containerRows {
+		if !span.seen {
+			continue
+		}
+		size := l.containerSizes[id]
+		if size.Height > 0 {
+			continue
+		}
+		rows := span.last - span.first
+		if rows < 1 {
+			rows = 1
+		}
+		size.Height = float64(rows) * float64(l.rowH) / scale
+		l.containerSizes[id] = size
+	}
+	layout.ContainerSizes = l.containerSizes
+}
+
+// recordContainerRows folds one block's vertical extent into every container
+// that encloses it.
+func (l *webLayouter) recordContainerRows(block webBlock, first, last int32) {
+	if len(block.ContainerIDs) == 0 {
+		return
+	}
+	if l.containerRows == nil {
+		l.containerRows = make(map[int]webContainerRowSpan)
+	}
+	for _, id := range block.ContainerIDs {
+		span := l.containerRows[id]
+		if !span.seen {
+			span = webContainerRowSpan{first: first, last: last, seen: true}
+		} else {
+			if first < span.first {
+				span.first = first
+			}
+			if last > span.last {
+				span.last = last
+			}
+		}
+		l.containerRows[id] = span
+	}
+}
+
+// absorbContainerRows folds a flex item's local row extents into the shared
+// sizes after its sub-layout has been measured.
+func (l *webLayouter) absorbContainerRows(rows map[int]webContainerRowSpan) {
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	for id, span := range rows {
+		if !span.seen {
+			continue
+		}
+		size := l.containerSizes[id]
+		if size.Height > 0 {
+			continue
+		}
+		rowCount := span.last - span.first
+		if rowCount < 1 {
+			rowCount = 1
+		}
+		size.Height = float64(rowCount) * float64(l.rowH) / scale
+		l.containerSizes[id] = size
+	}
+}
+
 // webLayouter is the geometry shared by the page and every flex item inside it:
 // the row grid, the font mapper and the document whose colours the runs use. A
 // flex item is laid out by a second webLayouter into its own small webLayout,
@@ -7220,12 +7847,26 @@ type webLayouter struct {
 	baseSize float64
 	fontAt   func(float64) *ttf.Font
 
+	// containerSizes is shared with every flex-item sub-layout, so a measured
+	// column width is visible to the containing block after the merge.
+	containerSizes map[int]webContainerSize
+	// containerRows accumulates each container's vertical extent in layout
+	// rows. A sub-layout keeps its own local map; the caller folds the row count
+	// into the shared CSS-px size once the item's height is known.
+	containerRows map[int]webContainerRowSpan
+
 	// Measured facts reused within one layout. Wrapping asks for the width of
 	// a space once per word and for the same words over and over, and both
 	// TTF_SizeUTF8 and the missing-glyph scan cost real time on a 1-core
 	// handheld: the caches cut the work without changing the layout.
 	spaceWidths map[*ttf.Font]int32
 	sanitized   map[webSanitizeKey]string
+}
+
+// webContainerRowSpan is one container's vertical extent in layout-grid rows.
+type webContainerRowSpan struct {
+	first, last int32
+	seen        bool
 }
 
 // webSanitizeKey identifies one word for the sanitize cache.
@@ -7322,6 +7963,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if len(layout.Rows) >= webMaxRows {
 			break
 		}
+		blockStart := int32(len(layout.Rows))
 		// A run of blocks tagged with one flex group is that container's
 		// items. In a row they become side-by-side columns; in a column they
 		// are ordinary blocks separated by the container's gap.
@@ -7338,6 +7980,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				skipRows(marginRows(gap))
 			}
 			l.layoutFlexRow(blocks[i:j], padX, contentW)
+			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = 0
 			i = j - 1
 			continue
@@ -7370,6 +8013,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					l.layoutBlocksFlat(itemBlocks, padX, contentW)
 				}
 			}
+			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = blocks[j-1].MarginBot
 			i = j - 1
 			continue
@@ -7410,14 +8054,17 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				Color: webFadeColor(color, d.Paper, block.Style),
 			})
 			skipRows(1)
+			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			continue
 		}
 		if block.Image {
 			l.layoutImage(block, padX, contentW)
+			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			continue
 		}
 		if block.Video {
 			l.layoutVideo(block, padX, contentW)
+			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			continue
 		}
 		startGrid := int32(len(layout.Rows))
@@ -7680,6 +8327,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		flushLine()
 
 		endGrid := int32(len(layout.Rows))
+		l.recordContainerRows(block, blockStart, endGrid)
 		height := (endGrid - startGrid) * rowH
 		if block.HasBg && height > 0 {
 			rect := webRect{

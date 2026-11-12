@@ -150,6 +150,7 @@ func bkupSources() []bkupSource {
 		{bkupCatSettings, "app", "jukaconfig.json", true},
 		{bkupCatLibrary, "app", "jukaalarm.json", false},
 		{bkupCatLibrary, "app", "notes.json", false},
+		{bkupCatLibrary, "app", synthStoreFile, false},
 		{bkupCatLibrary, "data", "game-recents.json", false},
 		{bkupCatLibrary, "data", "game-options.json", false},
 		{bkupCatLibrary, "data", "game-launchers.json", true},

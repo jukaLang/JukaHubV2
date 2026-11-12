@@ -209,7 +209,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Wallpapers", where: "Device", icon: "image", keys: "wallpaper wallpapers background picture photo lock screen", open: func(*Config) { wpOpen = true; initWallpaperPicker() }},
 		{title: "Audio", where: "Device", icon: "music", keys: "audio sound output equalizer eq speaker headphones volume spatial surround virtual 3d hrtf", open: openMusicSettingsPanel},
 		{title: "Media", where: "Media", icon: "media", keys: "media video videos youtube watch movies search", scene: "Tube"},
-		{title: "Music", where: "Media", icon: "music", keys: "music songs audio mp3 flac player playlist albums", open: func(c *Config) { openAudioPlayerBrowser(c, musicDefaultDir(c)) }},
+		{title: "Music", where: "Media", icon: "music", keys: "music songs audio mp3 flac player playlist albums", open: func(c *Config) { musicShelfOpen(c) }},
 		{title: "Live TV", where: "Media", icon: "video", keys: "live tv television channels iptv", scene: "LiveTV"},
 		{title: "Streams", where: "Media", icon: "link", keys: "streams stream iptv m3u playlist ip", scene: "IPStream"},
 		{title: "Podcasts", where: "Media", icon: "mic", keys: "podcasts podcast episodes shows rss", scene: "Podcasts"},
@@ -340,6 +340,8 @@ func homeSearchSceneIcon(scene, title string) string {
 		return "edit"
 	case "Pomodoro":
 		return "clock"
+	case synthSceneName:
+		return "synth"
 	case "Dashboard":
 		return "grid"
 	case "PDFReader":
@@ -701,11 +703,12 @@ func homeSearchFileKind(name string, isDir bool) string {
 	if isDir {
 		return "folder"
 	}
+	if isAudioFile(name) {
+		return "music"
+	}
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts", ".m4v", ".3gp":
 		return "video"
-	case ".mp3", ".flac", ".ogg", ".opus", ".wav", ".m4a", ".aac", ".wma", ".aiff":
-		return "music"
 	case ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp":
 		return "image"
 	case ".pdf", ".epub":

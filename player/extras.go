@@ -1331,6 +1331,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			// The editor names the focused row's keys (alarmedit.go).
 			hints = alarmEditFooterHints()
 		}
+	case synthSceneName:
+		// The keys follow the Synth's page and its cursor (synth.go).
+		hints = synthFooterHints()
 	case "Pomodoro":
 		// A starts and pauses, X skips the phase, Y resets the cycle.
 		hints[1] = FooterHint{Button: "A", Label: "Start / Pause"}
@@ -1384,7 +1387,9 @@ func hintLine(hints ...FooterHint) string {
 		// The button in this frame's vocabulary: keyboard keys on a PC
 		// without a pad or with a keyboard on the handheld (inputhints.go).
 		button := strings.TrimSpace(hintKeyFor(hint.Button, hint.Label))
-		label := strings.TrimSpace(hint.Label)
+		// The label in the interface language (i18n.go); the joined line is
+		// no longer a catalogue key, so it is translated here.
+		label := strings.TrimSpace(uiT(hint.Label))
 		switch {
 		case button == "" && label == "":
 			continue
@@ -2003,6 +2008,8 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 		}
 	}
 	ensureThemeColors(config)
+	// The interface language the user chose (i18n.go).
+	uiLanguageApply(config)
 }
 
 // --- Persist design-only config to jukaconfig.json ---

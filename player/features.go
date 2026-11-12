@@ -188,6 +188,12 @@ func isMediaFile(name string) bool {
 	return false
 }
 
+// isAudioEntry accepts a file by its displayed name or its path. A podcast
+// row can have a title instead of a filename, and remote URLs can have a query.
+func isAudioEntry(entry FileEntry) bool {
+	return isAudioFile(entry.Name) || isAudioFile(entry.Path) || isAudioURL(entry.Path)
+}
+
 // feRoot is the root of the tree being browsed: the location picked from the
 // Files Locations list (files_locations.go), else the configured directory —
 // on TrimUI, an unset root starts at the SD card rather than the application's
@@ -447,17 +453,16 @@ func feEnterFocused(config *Config) {
 		openMusicPlaylistFile(config, entry.Path)
 		return
 	}
+	// The audio player's format list is wider than mediaExtensions (notably
+	// DSF/DFF). Check it first so those files do not fall through to the hex
+	// viewer, and so audio always gets a folder playlist.
+	if isAudioEntry(entry) {
+		recordPlayed(config, entry.Path)
+		openAudioPlayer(config, entry.Path)
+		return
+	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
 		recordPlayed(config, entry.Path)
-		// Audio files open the audio player instead of the video decoder: it
-		// builds a playlist from the folder and keeps the track list usable
-		// while the song plays.
-		// A podcast row's Name is the episode title, so the extension test has
-		// to look at the path too; those rows are audio URLs, not video links.
-		if isAudioFile(entry.Name) || isAudioURL(entry.Path) {
-			openAudioPlayer(config, entry.Path)
-			return
-		}
 		playSmartURL(config, entry.Path)
 	} else if !filesOpenROM(config, entry) {
 		// Everything without a viewer of its own opens in the built-in editor;

@@ -784,20 +784,25 @@ func pkgFooterHints() []FooterHint {
 		return pkgStoresFooterHints()
 	}
 	if st.chipFocus && st.view != pkgViewRows {
-		return []FooterHint{
+		hints := []FooterHint{
 			{Button: "D-Pad", Label: "Choose"},
 			{Button: "A", Label: "Select"},
 			{Button: "B", Label: "Back"},
-			{Button: "Y", Label: "View"},
 		}
+		if pkgHubEnabled() {
+			hints = append(hints, FooterHint{Button: "L2/R2", Label: "Stores"})
+		}
+		return append(hints, FooterHint{Button: "Y", Label: "View"})
 	}
-	return []FooterHint{
+	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Navigate"},
 		{Button: "A", Label: "Details"},
 		{Button: "B", Label: "Back"},
-		{Button: "X", Label: "Refresh"},
-		{Button: "Y", Label: "View"},
 	}
+	if pkgHubEnabled() {
+		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Stores"})
+	}
+	return append(hints, FooterHint{Button: "X", Label: "Refresh"}, FooterHint{Button: "Y", Label: "View"})
 }
 
 // ── Devices ──────────────────────────────────────────────────────────────
@@ -907,7 +912,8 @@ func packageListController(e *sdl.ControllerButtonEvent, config *Config) {
 }
 
 // pkgShoulder is the triggers' paging (shoulders.go): L2/R2 jump to the first
-// and last row, or scroll the sheet's text to its ends.
+// and last row on devices without the Smart Pro store loop, or scroll the
+// sheet's text to its ends.
 func pkgShoulder(s padShoulder) bool {
 	switch s {
 	case padL1:

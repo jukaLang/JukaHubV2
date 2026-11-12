@@ -135,6 +135,40 @@ func TestLibraryDurGameOptionsRecoverFromBackup(t *testing.T) {
 	}
 }
 
+// An options file from before CPU profiles and video filters reads exactly as
+// it did, the new fields round-trip, and a hand-edited value nobody knows
+// falls back to the default rather than keeping a game on a broken profile.
+func TestLibraryDurGameOptionsProfileFields(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "old.json")
+	legacy := `{"schemaVersion":1,"games":{"/roms/a.gba":{"max_freq_khz":1400000,"args":"--fast"},` +
+		`"/roms/b.gba":{"cpu_profile":"turbo","video_filter":"sepia"}}}`
+	if err := os.WriteFile(old, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := loadGameOptionsFile(old)
+	a := got[gameOptionsKey("/roms/a.gba")]
+	if a.MaxFreqKHz != 1400000 || a.Args != "--fast" || a.CPUProfile != "" || a.VideoFilter != "" {
+		t.Errorf("legacy entry read as %+v", a)
+	}
+	if b, ok := got[gameOptionsKey("/roms/b.gba")]; ok {
+		t.Errorf("unknown values read as %+v, want the defaults (no entry)", b)
+	}
+
+	path := filepath.Join(dir, "new.json")
+	want := gameOptions{CPUProfile: "battery", VideoFilter: "crt", MaxFreqKHz: 1600000}
+	if err := saveGameOptionsFile(path, map[string]gameOptions{"/roms/c.gba": want}); err != nil {
+		t.Fatal(err)
+	}
+	if c := loadGameOptionsFile(path)[gameOptionsKey("/roms/c.gba")]; c != want {
+		t.Errorf("round trip = %+v, want %+v", c, want)
+	}
+	// The per-game limit wins over Battery saver's own ceiling.
+	if cfg := gameLaunchPowerConfig(powerProfileConfig{Enabled: true}, want); !cfg.Balanced || cfg.MaxFreqKHz != 1600000 {
+		t.Errorf("battery + limit = %+v", cfg)
+	}
+}
+
 func TestLibraryDurRecentsRecoverFromBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "game-recents.json")
 	if err := saveGameRecentsFile(path, []recentGame{{Path: "/roms/first.gba", Title: "First"}}); err != nil {

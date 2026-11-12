@@ -197,7 +197,12 @@ func securityPostureRows(config *Config) []securityRow {
 	// 7. The Phone Companion listens whenever there is Wi-Fi.
 	companionValue := "Off"
 	if companion.srv != nil && companion.srv.Running() {
-		companionValue = fmt.Sprintf("On · port %d · PIN", companion.srv.Port())
+		port := companion.srv.Port()
+		ports := fmt.Sprintf("port %d", port)
+		if browserPort := companion.srv.BrowserPort(); browserPort != port {
+			ports = fmt.Sprintf("ports %d and %d", browserPort, port)
+		}
+		companionValue = "On · " + ports + " · PIN"
 	}
 	rows = append(rows, securityRow{
 		ID:     "companion",
@@ -236,7 +241,7 @@ func securityPostureRows(config *Config) []securityRow {
 		ID:     "telemetry",
 		Label:  "Telemetry",
 		Value:  telemetryStatusValue(),
-		Detail: "Off by default; a single boot/crash ping when enabled",
+		Detail: "Off by default; public Info issue every 10 launches when enabled",
 	})
 
 	// 11. Bug reports go out only when the user sends one.
@@ -612,8 +617,8 @@ func sectrustExplain(id string) (what, why, section string) {
 			"Anyone with the card can copy the file and the sessions in it. Forget clears it.",
 			"Browser data on the card"
 	case "telemetry":
-		return "When turned on, the app sends one tiny anonymous event at boot and after a crash: build, device model and platform. No identifier, no files, no names.",
-			"It is off unless you turn it on, and it needs a collector configured in the build.",
+		return "When turned on, every ten launches send an informational public GitHub issue with build, device model and coarse diagnostics. No identifier, logs, files or names.",
+			"It is off by default. A separately configured collector can receive a one-word panic event after a crash.",
 			"In-app posture view"
 	case "reports":
 		return "Report a bug sends only what you review: your text, and, if you leave it on, the redacted diagnostics report. Tokens, account names and paths are removed first.",
@@ -702,8 +707,7 @@ func sectrustOpenRowSheet(config *Config, r securityRow) {
 			}
 			sectrustScreen.model.builtAt = time.Time{}
 			if on {
-				TelemetryBoot(config)
-				ShowToast("Telemetry on — device model and crashes only", ToastKindSuccess)
+				ShowToast("Diagnostics on — public Info issue every 10 launches", ToastKindSuccess)
 			} else {
 				ShowToast("Telemetry off — nothing is sent", ToastKindInfo)
 			}

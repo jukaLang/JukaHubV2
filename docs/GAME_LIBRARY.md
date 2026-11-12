@@ -200,7 +200,7 @@ search).
 ### Per-game launch options
 
 **Start** (or **O** on a keyboard) opens the options sheet for the highlighted
-game. The first four rows are saved library view settings; the rest apply to
+game. The first five rows are saved library view settings; the rest apply to
 that launch only:
 
 - **Display title** — the name shown in the library. It is stored beside the
@@ -209,9 +209,12 @@ that launch only:
 - **Visibility** — hide this game, or make it visible again. Hidden games are
   left out of the console lists, Continue, search and tag filters until
   **Show hidden** is on.
-- **Library sort** — Title, Last played, Playtime, Rating or Year. The order is
+- **Library sort** — Title, Last played, Recently added, Playtime, Rating or Year. The order is
   saved and applies to every console. Games with no value for the chosen sort
   (never played, unrated, no year) come last.
+- **Library view** — List, Cover row or Cover column. Cover row uses left/right
+  to browse games and up to return to consoles; Cover column keeps the list's
+  up/down navigation. The choice is saved for the next visit.
 - **Show hidden** — reveal the games hidden from the library; turn it off to
   tuck them away again.
 - **CPU limit** — `Auto`, then 2.0, 1.8, 1.6, 1.4 and 1.2 GHz. `Auto` follows the
@@ -258,7 +261,7 @@ overrides" — the library still opens. The clock is applied through the same
 profile code as the global setting, so a firmware with a read-only
 `scaling_max_freq` logs one line and runs the game at its own clock instead.
 
-Display titles, hidden flags and the sort mode are a library view, not launch
+Display titles, hidden flags, sort and cover layout are a library view, not launch
 options. They live in `Apps/JukaHub/data/game-library.json`, keyed by a hash of
 the ROM's content (its size plus the first and last 256 KiB), so moving or
 renaming the file keeps its name and hidden state:
@@ -267,6 +270,7 @@ renaming the file keeps its name and hidden state:
 {
   "version": 1,
   "sort": "rating",
+  "layout": "covers_horizontal",
   "show_hidden": false,
   "games": {
     "9c1f...": { "display_title": "My Zelda", "hidden": true }
@@ -359,23 +363,35 @@ of doing nothing.
 Recents are capped and de-duplicated on every write, and the file is written
 through a temporary file so a power loss cannot leave half a document behind.
 
-## LAN play (link cable over Wi-Fi)
+## Netplay (LAN and online)
 
 Handhelds that support a link cable — Game Boy, Game Boy Color, Game Boy
 Advance, SNES, Mega Drive, NES, and the other consoles listed below — can play
-together without a cable, over the Wi-Fi both devices are already on. Highlight
-a game and press **X** to open **LAN Play**:
+together without a cable, over the Wi-Fi both devices are already on or across
+the internet. Highlight a game and press **X** to open **Netplay**:
 
 | Row | What happens |
 |-----|--------------|
-| **Host this game** | RetroArch starts the game as the host. The panel prints this device's address (`192.168.1.5:55435`) *before* launching, because the emulator takes the screen immediately. The other player types exactly that address. |
-| **Join a game** | Type the host's address on the on-screen keyboard (`192.168.1.5` or `192.168.1.5:55435`) and press Start. The panel remembers the last address, so a rematch is one press. |
+| **Host on this network** | RetroArch starts the game as the host. Other JukaHubs on the same Wi-Fi see the room in their Netplay panel; the panel also prints this device's address (`192.168.1.5:55435`) *before* launching, for anything that cannot discover it. |
+| **Host online · <relay>** | RetroArch hosts through one of libretro's public relay servers and announces the room in RetroArch's public lobby, so a friend on another network joins without port forwarding. **←/→** picks the relay (New York, Madrid, Montreal, Sao Paulo; saved as `netplay_relay`). The room is public: anyone with the same game and core can see it. |
+| *Rooms on your network* | Every JukaHub hosting on the Wi-Fi, live. **A** joins with *your* copy of the ROM (matched by file name and size) and the host's core, whatever game the panel was opened on. |
+| *Online rooms* | Rooms from `lobby.libretro.com` whose game is in your library (matched by name), this game's rooms first, up to 30. Fetched when the panel opens (at most once a minute); **Y** refreshes. Relayed rooms join through the relay. Password-protected rooms are listed but refused with a reason — join those from RetroArch's own Netplay menu. |
+| **Join by address** | Type the host's address on the on-screen keyboard (`192.168.1.5` or `192.168.1.5:55435`). The panel remembers the last address, so a rematch is one press; **X** edits it. |
+
+LAN discovery is a UDP query (`JUKANETPLAY?1`) on port 55437 that a hosting
+JukaHub answers with the game's file name, size, core and port while RetroArch
+runs (`JUKAHUB_NETPLAY_DISCOVERY_PORT` moves it). Plain RetroArch hosts are not
+discovered: join those by address.
 
 How it runs: JukaHub resolves RetroArch and a netplay-capable core for the
 console, then launches `retroarch -L <core> <rom> --host` (or `--connect <ip>`)
-with `--port` and `--nick`. The port is passed on the command line, so your
-`retroarch.cfg` is never edited and the session does not depend on what is saved
-there. Nothing is announced publicly: the host address is only shared by you.
+with `--port` and `--nick`; a relayed online room is joined with
+`--connect "<relay>|<port>|<session>"`. A host also gets
+`--appendconfig netplay-host.cfg` (in JukaHub's data folder) that sets
+`netplay_public_announce` and `netplay_use_mitm_server` — both **off** for a LAN
+game, so a `retroarch.cfg` with them on can never publish a living-room game,
+and both on for **Host online**. RetroArch may write those values back into
+`retroarch.cfg` when it saves its config on exit.
 
 **Both devices need the same core and the same ROM.** Netplay compares the core
 build and the content during the handshake; a different core, a different ROM
@@ -417,16 +433,21 @@ reconnect.
 | D-pad up/down | move inside the console column or the game list |
 | D-pad right | enter the game list from a console |
 | D-pad left | back to the console column |
-| **A** | open the highlighted console, or play the highlighted game |
-| **Start** / **O** | open the game options sheet: display title, visibility, library sort, launch options |
-| **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
+| **A** | open the highlighted console or game page; **Play** on that page launches the game |
+| **Start** / **O** | open the game options sheet: display title, visibility, library sort and view, launch options |
+| **X** | Netplay for the highlighted game (host or join, on the LAN or online) |
 | **E** | open the highlighted game in its tool: a covering Game Profile, its exact Compatibility row, or the Emulators page with the console's tile highlighted. Closing that tool (**B**) comes back to the library where you left it |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
 | **R** / **R3** | roll a random game from this console or the whole library |
 | **Y** | rescan the card (after copying new ROMs) |
 | **B** / Back | clear an active search, then close the panel |
-| Mouse | click a console to select it, a game to play it, outside to close |
+| Mouse | click a console to select it, a game to open its page, outside to close |
+
+On a game's page, **History** (or **H** / **Select**) shows launch count,
+completed sessions, longest session, the last 7 and 30 days, and a scrollable
+session list. A launch interrupted by a restart remains in the list with an
+unknown duration rather than being added to playtime.
 
 ## Handing a game to its tool
 

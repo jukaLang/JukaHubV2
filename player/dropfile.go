@@ -64,9 +64,12 @@ func handleFileDrop(config *Config, path string) {
 
 	ext := strings.ToLower(filepath.Ext(path))
 	switch {
+	case isAudioFile(path):
+		logDebug("drop", "playing %s", filepath.Base(path))
+		recordPlayed(config, path)
+		openAudioPlayer(config, path)
 	case hasMediaExtension(path):
-		// Video and audio play through the embedded player, the same path the
-		// Files scene uses for a media file.
+		// Video plays through the embedded player, as it does in Files.
 		logDebug("drop", "playing %s", filepath.Base(path))
 		playStream(config, path)
 	case imageExtensions[ext]:

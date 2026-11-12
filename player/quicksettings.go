@@ -1133,7 +1133,7 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 
 		if medFont != nil {
 			title := "Quick Settings"
-			tw, _, _ := medFont.SizeUTF8(title)
+			tw, _ := measureText(medFont, title)
 			renderText(renderer, config, medFont, title, ColorTextPrimary(),
 				panelX+(panelW-int32(tw))/2, panelY+16)
 		}
@@ -1181,7 +1181,7 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		if bat := getBatteryPercent(); bat >= 0 {
 			// The level, the cable and the time left (battery_eta.go), in the
 			// longest form that leaves the connectivity label its room.
-			netW, _, _ := font.SizeUTF8("! Offline")
+			netW, _ := measureText(font, "! Offline")
 			room := panelW - 2*qsPadX - int32(netW) - 16
 			line := batteryETALevelLine(bat, getBatteryCharging(), "Charging", "On cable", batteryETA(), func(s string) bool {
 				w, _, _ := font.SizeUTF8(s)
@@ -1194,13 +1194,13 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		if !IsOnline() {
 			netStr = "! Offline"
 		}
-		nw, _, _ := font.SizeUTF8(netStr)
+		nw, _ := measureText(font, netStr)
 		renderText(renderer, config, font, netStr,
 			WithAlpha(ColorTextSecondary(), 200),
 			panelX+panelW-int32(nw)-qsPadX, infoY)
 
 		hint := hintLine(FooterHint{"A", "Change"}, FooterHint{"Left/Right", "Adjust"}, FooterHint{"B", "Close"})
-		hw, _, _ := font.SizeUTF8(hint)
+		hw, _ := measureText(font, hint)
 		renderText(renderer, config, font, hint,
 			WithAlpha(ColorTextTertiary(), 190),
 			panelX+(panelW-int32(hw))/2, footerY)
@@ -1215,7 +1215,7 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 func qsLabelWidth(font *ttf.Font, rowW int32, detail string) int32 {
 	reserve := int32(0)
 	if detail != "" {
-		if dw, _, err := font.SizeUTF8(detail); err == nil {
+		if dw, _ := measureText(font, detail); dw > 0 {
 			reserve = int32(dw) + 24
 		}
 	}
@@ -1259,7 +1259,7 @@ func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	renderText(renderer, config, font, t.Icon, iconCol, x+8, y+10)
 	renderText(renderer, config, font, ellipsize(font, t.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+10)
 	if detail != "" {
-		dw, _, _ := font.SizeUTF8(detail)
+		dw, _ := measureText(font, detail)
 		renderText(renderer, config, font, detail,
 			WithAlpha(ColorTextTertiary(), 160), x+w-int32(dw)-12, y+10)
 		return
@@ -1303,7 +1303,7 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	renderText(renderer, config, font, ellipsize(font, s.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+6)
 
 	if detail != "" {
-		dw, _, _ := font.SizeUTF8(detail)
+		dw, _ := measureText(font, detail)
 		renderText(renderer, config, font, detail,
 			WithAlpha(ColorTextTertiary(), 160), x+w-int32(dw)-12, y+6)
 		return
@@ -1311,7 +1311,7 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 
 	pct := int(math.Round(s.Value * 100))
 	valStr := fmt.Sprintf("%d%%", pct)
-	vw, _, _ := font.SizeUTF8(valStr)
+	vw, _ := measureText(font, valStr)
 	renderText(renderer, config, font, valStr,
 		WithAlpha(ColorTextSecondary(), 200), x+w-int32(vw)-12, y+6)
 
@@ -1356,7 +1356,7 @@ func drawQSLinkRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y,
 	}
 	renderText(renderer, config, font, l.Icon, iconCol, x+8, y+10)
 	renderText(renderer, config, font, ellipsize(font, l.Label, qsLabelWidth(font, w, right)), labelCol, x+52, y+10)
-	rw, _, _ := font.SizeUTF8(right)
+	rw, _ := measureText(font, right)
 	renderText(renderer, config, font, right,
 		WithAlpha(ColorTextTertiary(), 190), x+w-int32(rw)-12, y+10)
 }
@@ -1398,7 +1398,7 @@ func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row 
 	renderText(renderer, config, font, labeled,
 		WithAlpha(ColorTextSecondary(), 220), x+52, y+10)
 
-	vw, _, _ := font.SizeUTF8(value)
+	vw, _ := measureText(font, value)
 	renderText(renderer, config, font, value, valCol, x+w-int32(vw)-12, y+10)
 }
 

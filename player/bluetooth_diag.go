@@ -29,7 +29,7 @@ import (
 // btDiagTools are the programs whose presence and place matter.
 var btDiagTools = []string{
 	"bluetoothctl", "bluetoothd", "hciattach", "rtk_hciattach", "hciconfig", "btmgmt",
-	"rfkill", "bluealsa", "trimui_btmanager", "dbus-daemon",
+	"rfkill", "rfkill.elf", "bluealsa", "trimui_btmanager", "dbus-daemon",
 }
 
 // btDiagProcesses are the processes whose running matters.
@@ -57,9 +57,6 @@ func btDiagnosticsText() string {
 	var tools []string
 	for _, name := range btDiagTools {
 		if p, ok := btToolPath(name); ok {
-			if p == name {
-				p = "PATH"
-			}
 			tools = append(tools, name+"="+p)
 		} else {
 			tools = append(tools, name+"=missing")
@@ -92,6 +89,11 @@ func btDiagnosticsText() string {
 	}
 
 	line("Radio switch", "%s", btDiagRfkill())
+	if v, err := os.ReadFile(btChipWritePath); err == nil {
+		line("Chip wake", "%s=%s", btChipWritePath, strings.TrimSpace(string(v)))
+	} else if !os.IsNotExist(err) {
+		line("Chip wake", "%s: %v", btChipWritePath, err)
+	}
 
 	board := btBoardModel()
 	if board != DetectDevice() {
@@ -101,6 +103,8 @@ func btDiagnosticsText() string {
 		_, err := os.Stat(filepath.Join("/dev", u.tty))
 		line("Chip port", "/dev/%s %s (%s)", u.tty, map[bool]string{true: "present", false: "missing"}[err == nil], u.proto)
 	}
+
+	line("Pad HID", "%s", btDiagPadHID("/"))
 
 	// One walk of /proc for every name (btDiagProcessTable).
 	table := btDiagProcessTable("/proc", btDiagProcesses)
@@ -128,6 +132,23 @@ func btDiagnosticsText() string {
 	line("system.json", "%s", btDiagMaskAddrs(btDiagSystemJSON(trimuiSystemJSONPath)))
 	line("PATH", "%s", os.Getenv("PATH"))
 	return sb.String()
+}
+
+// btDiagPadHID says whether the kernel can make a controller out of a paired
+// pad: a classic-Bluetooth pad (DualShock 4, DualSense) needs HIDP (a built-in
+// hidp may not be listed under /sys/module), a Bluetooth LE pad uhid; Sony's
+// drivers name the pad's buttons, while with hid-generic alone JukaHub and the
+// Remote Play helper map a DualShock 4 / DualSense themselves (gamepad_sony.go).
+func btDiagPadHID(root string) string {
+	has := func(p string) string {
+		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
+			return "yes"
+		}
+		return "no"
+	}
+	return fmt.Sprintf("hidp=%s uhid=%s sony=%s playstation=%s generic=%s",
+		has("sys/module/hidp"), has("dev/uhid"), has("sys/bus/hid/drivers/sony"),
+		has("sys/bus/hid/drivers/playstation"), has("sys/bus/hid/drivers/hid-generic"))
 }
 
 // btDiagRfkill lists the Bluetooth radio switches: name, soft and hard block.

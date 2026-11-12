@@ -38,6 +38,7 @@ const (
 	gmetaBtnRate
 	gmetaBtnAbout
 	gmetaBtnNotes
+	gmetaBtnHistory
 	gmetaBtnCount
 )
 
@@ -114,6 +115,9 @@ var gmetaPick struct {
 	rows   []gmetaPickRow
 	hits   []gameLibRowHit
 	card   sdl.Rect
+	// deleting is the custom tag whose Delete waits for a second answer: A
+	// removes it from every game, B keeps it.
+	deleting string
 }
 
 // gmetaFilter is the library's active tag filter and the set of paths it
@@ -453,6 +457,7 @@ func gmetaCloseDetails(sound bool) {
 	wasOpen := gmetaUI.open
 	gmetaUI = gmetaDetails{}
 	gmetaTagUI.open = false
+	gameHistoryUI.open = false
 	if sound && wasOpen {
 		PlayBackSound()
 	}
@@ -636,6 +641,8 @@ func gmetaActivateButton(i int) {
 		gmetaEditText(false)
 	case gmetaBtnNotes:
 		gmetaEditText(true)
+	case gmetaBtnHistory:
+		gameHistoryOpen()
 	}
 }
 
@@ -779,8 +786,111 @@ func gmetaOpenFilterPicker() bool {
 	gmetaPick.open = true
 	gmetaPick.rows = rows
 	gmetaPick.cursor = cursor
+	gmetaPick.deleting = ""
 	PlayActivateSound()
 	return true
+}
+
+// gmetaPickRebuild refreshes the chooser's rows after a rename or a delete,
+// keeping the highlight on name (or the nearest row when it is gone).
+func gmetaPickRebuild(name string) {
+	keep := gmetaPick.cursor
+	counts := gmetaTagCounts(gameLib.lib.Systems)
+	rows := []gmetaPickRow{{label: "All games", count: gameLib.lib.Total}}
+	for _, t := range gmetaAllTags() {
+		c := counts[t]
+		if c == 0 && !gmetaIsBuiltin(t) {
+			continue
+		}
+		if name != "" && t == name {
+			keep = len(rows)
+		}
+		rows = append(rows, gmetaPickRow{tag: t, label: t, count: c})
+	}
+	if keep >= len(rows) {
+		keep = len(rows) - 1
+	}
+	if keep < 0 {
+		keep = 0
+	}
+	gmetaPick.rows = rows
+	gmetaPick.cursor = keep
+}
+
+// gmetaPickCustomTag is the highlighted row's tag when it is one the user made
+// (the only kind Rename and Delete act on), "" otherwise.
+func gmetaPickCustomTag() string {
+	if gmetaPick.cursor < 0 || gmetaPick.cursor >= len(gmetaPick.rows) {
+		return ""
+	}
+	tag := gmetaPick.rows[gmetaPick.cursor].tag
+	if tag == "" || gmetaIsBuiltin(tag) {
+		return ""
+	}
+	return tag
+}
+
+// gmetaPickRename asks for a new name for the highlighted custom tag; every
+// game carrying it follows, in one save.
+func gmetaPickRename() {
+	tag := gmetaPickCustomTag()
+	if tag == "" {
+		ShowToast("Built-in tags keep their names; rename one you made", ToastKindInfo)
+		return
+	}
+	PlayActivateSound()
+	tbxOpenPrompt("Rename tag", tag, tag, func(text string) {
+		name, why := gmetaRenameTag(tag, text)
+		if name == "" {
+			if why != "" {
+				ShowToast(why, ToastKindWarning)
+			}
+			return
+		}
+		if gmetaFilter.tag == tag {
+			gmetaFilter.tag = name
+			gmetaFilter.paths = nil
+		}
+		if gmetaUI.open {
+			gmetaUI.rec, _ = gmetaGet(gmetaUI.game.System, gmetaUI.game.Title)
+		}
+		if gmetaPick.open {
+			gmetaPickRebuild(name)
+		}
+		if name != tag {
+			ShowToast("Tag renamed: "+tag+" → "+name, ToastKindSuccess)
+		}
+	})
+}
+
+// gmetaPickDelete is the second answer of Delete: the tag leaves the list and
+// every game. The games themselves are untouched.
+func gmetaPickDelete() {
+	tag := gmetaPick.deleting
+	gmetaPick.deleting = ""
+	if tag == "" {
+		return
+	}
+	games, ok := gmetaDeleteTag(tag)
+	if !ok {
+		ShowToast("That tag is gone", ToastKindInfo)
+		gmetaPickRebuild("")
+		return
+	}
+	if gmetaFilter.tag == tag {
+		gmetaSetFilter("")
+	}
+	if gmetaUI.open {
+		gmetaUI.rec, _ = gmetaGet(gmetaUI.game.System, gmetaUI.game.Title)
+	}
+	gmetaPickRebuild("")
+	msg := "Tag " + tag + " deleted"
+	if games == 1 {
+		msg += " · taken off 1 game"
+	} else if games > 1 {
+		msg += " · taken off " + strconv.Itoa(games) + " games"
+	}
+	ShowToast(msg, ToastKindSuccess)
 }
 
 // gmetaPickChoose applies the highlighted filter.
@@ -798,9 +908,31 @@ func gmetaPickChoose() {
 	PlayActivateSound()
 }
 
-// gmetaPickAction is the chooser's input.
+// gmetaPickAction is the chooser's input. X renames the highlighted custom
+// tag, Y asks to delete it; while that question is open only A (delete) and B
+// (keep) answer it.
 func gmetaPickAction(act tbxAction) {
+	if gmetaPick.deleting != "" {
+		switch act {
+		case tbxActConfirm:
+			gmetaPickDelete()
+		case tbxActBack:
+			gmetaPick.deleting = ""
+			PlayBackSound()
+		}
+		return
+	}
 	switch act {
+	case tbxActX:
+		gmetaPickRename()
+	case tbxActY:
+		tag := gmetaPickCustomTag()
+		if tag == "" {
+			ShowToast("Built-in tags stay; delete one you made", ToastKindInfo)
+			return
+		}
+		gmetaPick.deleting = tag
+		PlayActivateSound()
 	case tbxActUp:
 		if gmetaPick.cursor > 0 {
 			gmetaPick.cursor--
@@ -825,6 +957,9 @@ func gmetaPickAction(act tbxAction) {
 func gmetaHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
+	}
+	if gameHistoryHandleKey(e) {
+		return true
 	}
 	if gmetaPick.open {
 		gmetaPickAction(tbxKeyAction(e))
@@ -853,6 +988,9 @@ func gmetaHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_f:
 		gmetaToggleTag(gmetaTagFavorite)
 		return true
+	case sdl.K_h:
+		gameHistoryOpen()
+		return true
 	}
 	gmetaDetailsAction(tbxKeyAction(e))
 	return true
@@ -863,6 +1001,9 @@ func gmetaHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 func gmetaHandlePad(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return false
+	}
+	if gameHistoryHandlePad(e) {
+		return true
 	}
 	if gmetaPick.open {
 		gmetaPickAction(tbxPadAction(e))
@@ -879,6 +1020,10 @@ func gmetaHandlePad(e *sdl.ControllerButtonEvent, config *Config) bool {
 		openGameOptions()
 		return true
 	}
+	if e.Button == sdl.CONTROLLER_BUTTON_BACK {
+		gameHistoryOpen()
+		return true
+	}
 	gmetaDetailsAction(tbxPadAction(e))
 	return true
 }
@@ -886,7 +1031,16 @@ func gmetaHandlePad(e *sdl.ControllerButtonEvent, config *Config) bool {
 // gmetaHandleMouse routes a click or a tap: rows and buttons act, a click
 // outside a sheet closes it.
 func gmetaHandleMouse(mx, my int32, config *Config) bool {
+	if gameHistoryHandleMouse(mx, my) {
+		return true
+	}
 	if gmetaPick.open {
+		if gmetaPick.deleting != "" {
+			// A tap is no answer to "delete this tag?": it keeps the tag.
+			gmetaPick.deleting = ""
+			PlayBackSound()
+			return true
+		}
 		for _, hit := range gmetaPick.hits {
 			if pointInRect(mx, my, hit.rect) {
 				gmetaPick.cursor = hit.index
@@ -955,6 +1109,7 @@ func gmetaRender(renderer *sdl.Renderer, config *Config) {
 	if gmetaPick.open {
 		gmetaRenderPick(renderer, config)
 	}
+	gameHistoryRender(renderer, config)
 }
 
 // gmetaMetaLine is "Platformer · Nintendo · 1991 · 2 players".
@@ -989,6 +1144,8 @@ func gmetaButtonLabel(i int) string {
 		return "Description"
 	case gmetaBtnNotes:
 		return "Notes"
+	case gmetaBtnHistory:
+		return "History"
 	}
 	return ""
 }
@@ -1180,7 +1337,7 @@ func gmetaDrawInfo(renderer *sdl.Renderer, config *Config, fonts tbxFonts, r sdl
 	}
 
 	y = bottomY
-	secs := playtime.data.Games[gmetaUI.game.Title]
+	secs := playtimeGameSecondsFor(gmetaUI.game.System, gmetaUI.game.Title)
 	played := "Not played on this device yet"
 	if secs > 0 {
 		played = "Played " + formatPlaytime(secs)
@@ -1437,7 +1594,17 @@ func gmetaRenderPick(renderer *sdl.Renderer, config *Config) {
 		gmetaPick.hits = append(gmetaPick.hits, gameLibRowHit{index: i, rect: rect})
 	}
 	hint := hintLine(FooterHint{"A", "Show"}, FooterHint{"B", "Close"})
-	renderText(renderer, config, fonts.small, ellipsize(fonts.small, hint, card.W-2*OverlayPadX), ColorTextSecondary(),
+	ink := ColorTextSecondary()
+	switch {
+	case gmetaPick.deleting != "":
+		// The question replaces the footer: the row stays highlighted above it.
+		hint = "Delete tag " + gmetaPick.deleting + " from every game?   " +
+			hintLine(FooterHint{"A", "Delete"}, FooterHint{"B", "Keep"})
+		ink = ColorTextPrimary()
+	case gmetaPickCustomTag() != "":
+		hint = hintLine(FooterHint{"A", "Show"}, FooterHint{"X", "Rename"}, FooterHint{"Y", "Delete"}, FooterHint{"B", "Close"})
+	}
+	renderText(renderer, config, fonts.small, ellipsize(fonts.small, hint, card.W-2*OverlayPadX), ink,
 		card.X+OverlayPadX, card.Y+card.H-footerH+4)
 }
 
@@ -1456,6 +1623,11 @@ var gmetaTickState struct {
 // has an hour or more on it: then the hour milestones it crossed are recorded
 // and celebrated (gmetaCheckPlaytime).
 func gmetaTick(config *Config) {
+	// A Reset game that took the save states: the open page re-reads its
+	// strip so it does not offer states that are in the trash (gamereset.go).
+	if gameResetStatesDone.Swap(false) && gmetaUI.open {
+		gmetaReload()
+	}
 	if !playtime.loaded || playtime.rev == gmetaTickState.rev {
 		return
 	}
@@ -1470,7 +1642,7 @@ func gmetaTick(config *Config) {
 		return
 	}
 	last := recent[0]
-	secs := playtime.data.Games[last.Title]
+	secs := playtimeGameSecondsFor(last.System, last.Title)
 	if last.Path == gmetaTickState.path && secs == gmetaTickState.secs {
 		return
 	}

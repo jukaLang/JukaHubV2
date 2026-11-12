@@ -43,6 +43,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -79,10 +80,31 @@ type raScopeJournal struct {
 	Edits []raScopeEdit `json:"edits"`
 }
 
-// raScopeValue is one key and the value a launch wants it to have.
+// raScopeValue is one key and the value a launch wants it to have. A
+// RaiseOnly value is a floor, not a setting: it is written only where the
+// user's value is absent or zero, so a nonzero choice of theirs (a 60-second
+// SRAM autosave, say) is never lowered or replaced (raScopeSkips).
 type raScopeValue struct {
-	Key   string
-	Value string
+	Key       string
+	Value     string
+	RaiseOnly bool
+}
+
+// raScopeSkips reports whether v leaves cfg alone: a RaiseOnly value where the
+// file already holds a nonzero number (or any non-numeric value, which is
+// the user's business). An empty value (`key = ""`) is 0 to RetroArch, so it
+// is not a choice either. Pure.
+func raScopeSkips(cfg string, v raScopeValue) bool {
+	if !v.RaiseOnly {
+		return false
+	}
+	before, had := raConfigGet(cfg, v.Key)
+	before = strings.TrimSpace(before)
+	if !had || before == "" {
+		return false
+	}
+	n, err := strconv.ParseFloat(before, 64)
+	return err != nil || n != 0
 }
 
 // raScope serialises every journal and config change: the launch path runs on
@@ -249,7 +271,7 @@ func raScopePlan(cfg, path string, values []raScopeValue) []raScopeEdit {
 	var edits []raScopeEdit
 	for _, v := range values {
 		before, had := raConfigGet(cfg, v.Key)
-		if had && raValueEqual(before, v.Value) {
+		if (had && raValueEqual(before, v.Value)) || raScopeSkips(cfg, v) {
 			continue
 		}
 		edits = append(edits, raScopeEdit{Path: path, Key: v.Key, Had: had, Before: before, Wrote: v.Value})
@@ -261,6 +283,9 @@ func raScopePlan(cfg, path string, values []raScopeValue) []raScopeEdit {
 func raScopeApplyText(cfg string, values []raScopeValue) (string, bool) {
 	changed := false
 	for _, v := range values {
+		if raScopeSkips(cfg, v) {
+			continue
+		}
 		var step bool
 		cfg, step = raConfigSet(cfg, v.Key, v.Value)
 		changed = changed || step
@@ -679,12 +704,12 @@ func raScopeLegacyValues() []raScopeValue {
 		if root == "" {
 			root = exeDir()
 		}
-		values = append(values, raScopeValue{retroArchRecordingDirKey, filepath.ToSlash(filepath.Join(root, recordingsFolderName))})
+		values = append(values, raScopeValue{Key: retroArchRecordingDirKey, Value: filepath.ToSlash(filepath.Join(root, recordingsFolderName))})
 		if appConfig != nil {
 			if v, ok := customValue(appConfig.Variables.Custom, recordingsDirConfigKey); ok {
 				if s, ok := v.(string); ok {
 					if dir := absoluteRecordingDir(s); dir != "" {
-						values = append(values, raScopeValue{retroArchRecordingDirKey, filepath.ToSlash(dir)})
+						values = append(values, raScopeValue{Key: retroArchRecordingDirKey, Value: filepath.ToSlash(dir)})
 					}
 				}
 			}

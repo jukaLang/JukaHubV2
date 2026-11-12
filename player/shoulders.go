@@ -10,7 +10,7 @@ package main
 //	L2 / R2  bigger jump: previous / next results page (fetching when needed),
 //	         previous / next video while playing, first / last row in a list;
 //	         on Home L2 opens Edit Home (and is Done there) and R2 steps to
-//	         the next section
+//	         the next section; on Smart Pro Packages they switch stores
 //
 // Analog triggers report a stream of axis values, so they are latched into
 // discrete presses here instead of paging on every sample.
@@ -97,6 +97,12 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	if handleChromeShoulder(s, config) {
 		return true
 	}
+	// Packages, APK Store, PortMaster and Windows Apps form a trigger-switched
+	// group on the Smart Pro. Its panels must be checked before the generic
+	// modal-panel blocker swallows their triggers.
+	if pkgHubShoulder(s, config) {
+		return true
+	}
 	// The Emulators page gives R2 to the kept-builds list: its own grid is
 	// walked with the d-pad, so the trigger is free there, and a page that
 	// lists builds to restore should be able to list the rest of them.
@@ -113,6 +119,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	// pages (pdfreader.go).
 	if pdfvSceneActive(config) && !virtualKeyboardActive {
 		pdfvShoulder(s)
+		return true
+	}
+	// The Synth's triggers pick the pattern or the instrument (synth.go).
+	if synthSceneActive(config) && !virtualKeyboardActive {
+		synthShoulder(s)
 		return true
 	}
 	if handleListShoulder(s, config) {

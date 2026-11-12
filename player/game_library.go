@@ -42,6 +42,7 @@ type libraryGame struct {
 	ContentKey   string
 	Hidden       bool
 	LastPlayed   time.Time
+	AddedAt      time.Time
 	Playtime     int64
 	Rating       int
 	Year         int
@@ -140,14 +141,21 @@ func buildGameLibraryWith(report romScanReport, artRoot string, playtimeSeconds 
 			continue
 		}
 		art := romCoverPath(rom, artRoot)
+		var addedAt time.Time
+		if info, err := os.Stat(rom.Path); err == nil {
+			addedAt = info.ModTime()
+		}
 		grouped[rom.System] = append(grouped[rom.System], libraryGame{
-			Path:   rom.Path,
-			System: rom.System,
-			Title:  title,
-			Art:    art,
-			HasArt: artworkCoverPresent(art),
+			Path:    rom.Path,
+			System:  rom.System,
+			Title:   title,
+			Art:     art,
+			AddedAt: addedAt,
+			HasArt:  artworkCoverPresent(art),
 		})
 	}
+	// A bare-title playtime entry joins at most one console of this scan.
+	playtimeSeconds = libraryPlaytimeForTitles(playtimeSeconds, libraryScanTitleConsoles(report.Games))
 	for name, games := range grouped {
 		// Sort, display title, hidden flag and the rating/year/playtime the
 		// chosen sort reads all come from the existing stores (game_library_view.go).
@@ -502,12 +510,18 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// writes captures to, so the Recordings screen can list them. Standalone
 	// emulators are left alone.
 	prepareSavestateResume(launcher)
+	// The previous auto save, and the in-game menu's save slots (savestate_resume.go).
+	prepareGameMenuStates(launcher, game.Path)
 	// The in-game OSD is the emulator's, so its preset is written to the same
 	// config just before the launch, beside the save-state switches.
 	prepareOSDPreset(launcher)
 	prepareRecordings(launcher)
 	// Spatial audio in games: the DSP preset for this launch (spatial_games.go).
 	prepareSpatialAudio(launcher)
+	// The picture mode (sharp, smooth, scanlines…) for this launch (videofilter.go).
+	prepareVideoFilter(launcher, game.Path)
+	// RetroArch's log for this launch, read if the game quits at once (gamediag.go).
+	diag := prepareGameDiag(game, launcher)
 	// Per-game options are read here, at launch time, so an edit made in the
 	// options sheet applies to the very next start without a rescan.
 	options := gameOptionsFor(game.Path)
@@ -535,7 +549,7 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// Own process group: a stock launch.sh that starts RetroArch and returns
 	// must not hand the framebuffer back while the game is still drawing.
 	screenChildGroupConfigure(cmd)
-	restoreProfile := beginGamePowerProfileCap(appConfig, options.MaxFreqKHz)
+	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
 		return err
@@ -545,11 +559,24 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// does and is assembled when the game exits. A machine with no readable
 	// framebuffer returns nil here and the launch is unchanged.
 	recorder := startTimelapse(appConfig, game.Title)
+	if options.MaxFreqKHz > 0 {
+		logInfo("library", "%s starts under its own CPU limit: %s", game.Title, formatGameCeiling(options.MaxFreqKHz))
+	}
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
+		// A game that quit within seconds is diagnosed: what is missing, where
+		// it goes (gamediag.go).
+		diag.exited(waitErr)
+		// The game's own CPU limit, said where it can be read: the main loop
+		// presents nothing from the moment the child starts (gamesuspend.go),
+		// so a toast raised at launch expired unseen under the game. This one
+		// is raised once the screen is JukaHub's again.
+		if options.MaxFreqKHz > 0 {
+			ShowToast(gameCeilingToast(game, options.MaxFreqKHz), ToastKindInfo)
+		}
 	}()
 	// Two or more Local play seats make this a local multiplayer session.
 	if len(hotseat.players) >= 2 {
@@ -648,7 +675,11 @@ func recordGameLaunch(game libraryGame) []recentGame {
 	trophyEvent(tkGameLaunch)
 	trophyEventDistinct(tkGameTitles, game.Title)
 	trophyEventDistinct(tkGameSystems, game.System)
-	return recordGameRecent(game)
+	recent := recordGameRecent(game)
+	if appConfig != nil && playtime.loaded && len(recent) > 0 {
+		gameHistoryLaunch(game, recent[0].PlayedAt)
+	}
+	return recent
 }
 
 // recordGameRecent is recordGameLaunch without the trophy events: an Android
@@ -656,7 +687,6 @@ func recordGameLaunch(game libraryGame) []recentGame {
 // (startGameProfileCommand), so its library launch only joins the recents.
 func recordGameRecent(game libraryGame) []recentGame {
 	gameRecentsMu.Lock()
-	defer gameRecentsMu.Unlock()
 	if !gameRecentsLoaded {
 		gameRecents = loadGameRecentsFile(gameRecentsFile())
 		gameRecentsLoaded = true
@@ -682,5 +712,6 @@ func recordGameRecent(game libraryGame) []recentGame {
 	if err := saveGameRecentsFile(gameRecentsFile(), next); err != nil {
 		logWarn("library", "cannot save recents: %v", err)
 	}
+	gameRecentsMu.Unlock()
 	return append([]recentGame(nil), next...)
 }

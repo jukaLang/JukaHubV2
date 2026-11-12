@@ -265,6 +265,7 @@ no footer names may have no key.
 | Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
 | Calculator | X insert x · Y graph · L1 clear · R1 delete | X · Y or G · C · Backspace |
 | Pomodoro | A start / pause · X skip · Y reset | Enter · X · Y |
+| Synth | Start play / stop · L1 / R1 page · L2 / R2 pattern or instrument · Pattern: A step, Y / X note (accent / ratchet on drums) | Space · Tab / Shift+Tab · [ ] · Enter, Y or =, X or -; 1–7 play the pads |
 | Alarm | List: X toggle · Y new · L1 delete (press twice). Editor: Y save · X music / clear label · L1 / R1 ±10 min | X · Y or N · Del; editor Y or S · PgUp / PgDn |
 | Ambient | Y sleep timer · X screen off | Y or S · X; N next photo |
 | Patch | Hold A to confirm a risky step | Hold Enter |
@@ -313,6 +314,8 @@ had nothing to go back to.
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
 | Right stick | Move the virtual cursor (below); L2 / R2 scroll under it |
 | Select + L1 (hold) | Mouse mode on / off: the pointer stays up and the D-pad and sticks move it (below) |
+| Power (short press, handheld) | Sleep — on Home, any screen or mid-game; the game carries on at wake (Settings → Power & battery → Power button: Sleep, Exit card or Nothing) |
+| Power (hold 1.5 s) on a JukaHub screen | The power card below |
 
 ### Virtual cursor
 
@@ -404,7 +407,9 @@ stays on screen, dimmed, and a small menu opens over it:
 | Row | What it does |
 |-----|--------------|
 | Resume game | The game carries on where it was |
+| Save state / Load state | For a RetroArch game started from the library: choose one of six slots, shown three at a time with screenshots and dates |
 | Ask Juka | The game assistant listens (only with Game assistant on); B comes back to the menu |
+| Sleep | Put the handheld to sleep and resume the game on wake |
 | Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
 
 | Button | Action |
@@ -414,13 +419,15 @@ stays on screen, dimmed, and a small menu opens over it:
 | B, Menu, or Select + L2 again (a press, no hold) | Back to the game |
 | Select + R2 | Ask Juka straight away |
 
-Nothing is asked of the emulator, so the menu works the same over all of
-them. Like the assistant, the game sees Select and L2 go down before JukaHub
+The save and load rows send commands to RetroArch; the other rows work over
+any game. Like the assistant, the game sees Select and L2 go down before JukaHub
 takes the pad (an emulator hotkey on Select + L2 still fires), the game
 resumes by itself after three minutes, and a ringing alarm takes over. Save
 states are the emulator's own (RetroArch's menu on Menu); quitting keeps what
 the game itself saved. Holding Select + L2 over the assistant switches to the
-menu.
+menu. **Up/Down** moves through all six save slots, changing page after slot
+three. **A** saves or loads the highlighted slot; saving over an occupied slot
+asks for a second **A**.
 
 #### Ask Juka in a game (hold Select + R2)
 
@@ -443,7 +450,12 @@ ringing alarm takes over. See
 
 ### Stick calibration
 
-**Settings → Controls → Calibrate sticks** measures both sticks in about ten
+**Settings → Controls → Analog stick calibration** returns to the TrimUI menu.
+Open **Setting → System → Calibrate Joystick** there and calibrate both built-in
+sticks. The firmware applies this calibration before games and emulators read
+the sticks. This option appears on TrimUI devices with built-in sticks.
+
+**Settings → Controls → JukaHub stick calibration** measures both sticks in about ten
 seconds: let go of them, roll them slowly round their edges, let go again.
 JukaHub then knows where each stick really rests (a drifting stick no longer
 moves the focus or the pointer on its own), how much it jitters there (its
@@ -455,11 +467,11 @@ far off centre) says why under that stick and puts the focus on **Measure
 again** instead of Save. Each stick's dead zone can also be set by hand
 (**Left / Right stick dead zone**, 5–50 %); the next calibration replaces it.
 
-This tunes JukaHub's own stick handling: stick navigation, the virtual cursor,
-and what counts as the stick moving for the screensaver. Games and emulators
-read the sticks themselves: use the TrimUI firmware's calibration app for the
-hardware range every program sees, and PPSSPP's own calibration (Start menu →
-Tools → Stick Calibration) for PPSSPP. The Controller test (Power tools) draws
+The JukaHub option tunes stick navigation, the virtual cursor, and what counts
+as stick movement for the screensaver. Games and emulators read the sticks
+themselves, so use the device-wide option for their hardware range. PPSSPP's
+own calibration (Start menu → Tools → Stick Calibration) remains available for
+PPSSPP-specific dead zones. The Controller test (Power tools) draws
 each stick's dead zone ring around its calibrated resting spot.
 
 The TrimUI's **Select** button is the one the app sees as **Back**. Holding
@@ -617,6 +629,23 @@ info widget. Three rows fit on the screen and the grid scrolls past them.
 | L2 or X | Q or X | Edit Home | Edit Home |
 | Y | **/** (F2 anywhere) | Search | Search |
 | Mouse | — | Click a side card to bring it to the middle, the middle card to open it; the wheel turns one card | Click a tile to open it; the wheel scrolls a row, and a focused tile it scrolls away hands the focus to one still shown (pointing alone never scrolls) |
+
+#### The power card
+
+The power pill at the left end of Home's footer opens a small card with
+**Exit** focused. On a PC it holds **Cancel** and **Exit**. On the handheld a
+row of **Sleep**, **Restart** and **Power off** sits above them: Left and Right
+walk every button, Up and Down move between the rows, A chooses, B closes.
+Every button but Cancel ignores presses for the first 0.3 s, so a double press
+of the pill cannot act unseen. Restart and Power off quit JukaHub the normal way
+first (games stopped, settings, playtime and saves written, the card synced),
+then restart or switch off the device. Sleep suspends the handheld with the
+screen off; JukaHub carries on where it was when it wakes. Settings → Power →
+**Auto sleep** does the same after 3 to 30 minutes without input (off by
+default; never while charging, while a game, music, a video, a download or
+Screen Share runs, or while an alarm is set).
+
+When a game closes within seconds of starting, a card says what is missing and where to copy it; **Up/Down** scroll a long card and any other button dismisses it. The game options sheet has **Check why it won't start** to run the same check before playing.
 
 #### Edit Home
 
@@ -1297,7 +1326,8 @@ The Packages store shows the package list as shelves (the default), a grid or a
 list. **A** opens a package's sheet, **X** (or `r`, **F5**) refreshes the list,
 **Y** (or `v`, `1`–`3`) switches the view, **L1** / **R1** page (and step
 between packages while a sheet is open; `[` / `]` on a keyboard), **L2** /
-**R2** jump to the first and last row, and in the grid and the list `s` changes
+**R2** jump to the first and last row on other devices or in a package sheet,
+and in the grid and the list `s` changes
 the sort and **Tab** walks the filter chips; **B** closes the sheet, then leaves.
 
 Under the toolbar, in every view and even while the list is empty or offline,
@@ -1307,6 +1337,11 @@ from the grid's chips) moves onto the strip, **Left** / **Right** pick a store
 and **A** opens it; **Up** again reaches the top bar and **Down** goes back to
 the packages. Back from the APK Store returns to its pill. A click or tap on a
 pill opens it.
+
+On the **TrimUI Smart Pro**, **L2** / **R2** move backward / forward through
+**Packages → APK Store → PortMaster → Windows Apps**, wrapping at either end.
+The triggers work from each destination opened through Packages; a details
+sheet keeps its own controls until it is closed.
 
 ## APK Store
 
@@ -1324,6 +1359,7 @@ device and Waydroid). See [ANDROID.md](ANDROID.md#apk-store).
 | X | Everything the store read about the APK or the catalogue entry |
 | Y | Read the folders again |
 | L1 / R1 | Previous / next tab |
+| L2 / R2 | Previous / next Packages destination on a Smart Pro when opened through Packages |
 | B | Close a sheet, then go back |
 
 On a keyboard, **Enter** is A, **X** or **Del** shows the details, **Y**
@@ -1457,6 +1493,12 @@ your history when Wi-Fi is unavailable. A key entered in JukaHub is stored only
 in its data folder and is never displayed in full.
 
 ## Music player
+
+Opening **Music** shows Albums, Artists and Audiobooks. Use **L1/R1** or
+**Left/Right** to switch shelves, **Up/Down** to move, **A** to open or play,
+**X** to rescan, and **B** to step back. From playback, **B** returns to the
+shelves. Audiobooks are read from an `Audiobooks` folder and resume at the
+saved chapter.
 
 | Button | Action |
 |--------|--------|
@@ -1846,9 +1888,10 @@ by itself once on the first launch after an update.
 device (**Preview**, Y, shows all of it) and shows the public GitHub issue it
 became; without a connection it waits on the device and goes out by itself, and
 only a device that cannot send it falls back to a code for your phone
-([BUG_REPORTS.md](BUG_REPORTS.md)). **Anonymous diagnostics** is off by default; when on, it sends only
-the build, device model, platform, OS/architecture and panic counts — never
-designs, filenames, links or account details.
+([BUG_REPORTS.md](BUG_REPORTS.md)). **Anonymous diagnostics** is off by default;
+when on, every ten launches it files a public informational GitHub issue with
+build and coarse device facts — never designs, filenames, logs, links or account
+details.
 
 ## QR codes
 
@@ -1857,6 +1900,11 @@ pairing code, the **Screen Share** link, and **Community & support →
 Diagnostics export**. In their cards they are a few hundred pixels square over
 a dimmed screen, which is the shape a phone camera reads worst, so each one can
 also be enlarged on its own.
+
+The **Phone Companion** card also shows a browser address: `jukahub.local` when
+JukaHub can publish it, and the numeric IP address as a fallback. Type the
+address shown on the card, including any port, then enter its six-digit PIN.
+The code already contains the PIN.
 
 | Input | Action |
 |-------|--------|
@@ -2050,6 +2098,26 @@ screen like any other key.
 | X | Skip to the next phase |
 | Y | Reset the session |
 | B | Back |
+
+## Synth
+
+A pocket groovebox (Start menu → Synth, or Tools → Synth): seven lanes of a
+16-step sequencer — kick, snare, hat, clap, bass, lead and chords — eight
+patterns, and every sound synthesized on the device. Start plays and stops
+on every page; L1 / R1 switch between the four pages.
+
+| Page | Buttons |
+|------|---------|
+| Pattern | D-pad moves · A sets / clears a step · Y / X move a melodic step's note up / down the scale (on a drum lane: accent / ratchet) · A on a lane's name mutes it · L2 / R2 previous / next pattern |
+| Play | The D-pad and Y X A are seven pads in the song's key and scale (the drums: kick, snare, hat, clap and three accented hits) · L2 / R2 change the instrument. With Mix → Record from Play on, what you play while the pattern runs is written into it |
+| Sound | L2 / R2 instrument · Up / Down choose a setting · Left / Right adjust · X / Y big steps · A listens (on Surprise me: a random sound) |
+| Mix | Tempo (A taps it), swing, key, scale, steps, pattern chaining, echo, volume, Record from Play; actions: copy, clear (press twice), random beat, the demo (press twice), Export to WAV |
+
+Keyboard: Space plays, Tab / Shift+Tab change the page, `[` `]` are L2 / R2,
+Enter, Y (or `=`) and X (or `-`) are A, Y and X, and 1–7 play the pads.
+Exports land in Downloads/music as `Synth 001.wav`… where the Music player
+lists them. The project saves itself to `synth.json` beside JukaHub (and goes
+into backups). The Synth only sounds while its page is on screen.
 
 ## Alarm
 

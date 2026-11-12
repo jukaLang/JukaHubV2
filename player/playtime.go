@@ -26,8 +26,12 @@ type playtimeData struct {
 	Scenes   map[string]int64  `json:"scenes"`
 	Days     map[string]int64  `json:"days"`
 	Unlocked map[string]string `json:"unlocked"`
-	// Games is the time spent in games launched from JukaHub, by title. It is
-	// absent from saves written before it existed, which read back as empty.
+	// Games is the time spent in games launched from JukaHub, by console and
+	// title ("System|Title", playtimeGameKey), so the same title on two
+	// consoles keeps two figures. A bare title is an entry from before that,
+	// moved under its console once only one console is known for it
+	// (playtimeMigrateGameKeys). Absent from saves written before it existed,
+	// which read back as empty.
 	Games map[string]int64 `json:"games,omitempty"`
 	// GameDays is the same game time by day, for the optional daily limit.
 	// It is absent from older saves, which start with no measured game days.
@@ -143,6 +147,9 @@ func playtimeInit(config *Config) {
 			}
 		}
 	}
+	// Bare-title entries from older saves move under their console where only
+	// one console is known for the title; the rest stay as they are.
+	migrated := playtimeMigrateGameKeys(playtime.data.Games, recentGames(), gameLib.lib.Systems)
 	now := time.Now()
 	trophySeedFromHistory(&playtime.data, now)
 	retired := trophyRetire(&playtime.data)
@@ -156,7 +163,7 @@ func playtimeInit(config *Config) {
 	playtime.rev++
 	playtime.catchUpDue = true
 	// Saved within the interval, like a trophy event, even if no time accrues.
-	playtime.dirty = retired || caught > 0
+	playtime.dirty = retired || caught > 0 || migrated
 }
 
 // trophySeedFromHistory fills what the second trophy set reads from what a
@@ -180,8 +187,11 @@ func trophySeedFromHistory(d *playtimeData, now time.Time) {
 		}
 		d.Counts[string(tkGameSecs)] = sum
 	}
-	for title, secs := range d.Games {
+	// The distinct games are counted by title, as a launch counts them
+	// (recordGameLaunch), so a key moving under its console adds nothing.
+	for key, secs := range d.Games {
 		if secs > 0 {
+			_, title := playtimeGameKeyParts(key)
 			trophySetAddValue(d, tkGameTitles, title)
 		}
 	}
@@ -506,6 +516,7 @@ func playtimeTick(config *Config) {
 		// No frame for a while: a game owned the screen (the loop parks while a
 		// child runs) or the device was asleep. A game launched right before the
 		// gap gets the time; anything else is dropped as before.
+		gameHistoryFinishGap(recentGames(), gapStart, now)
 		playtimeCreditGameGap(gapStart, now)
 		return
 	}
@@ -586,7 +597,170 @@ func playtimeGameCredit(games []recentGame, gapStart, gapEnd time.Time) (string,
 	if title == "" {
 		return "", 0, false
 	}
-	return title, int64(length / time.Second), true
+	return playtimeGameKey(g.System, title), int64(length / time.Second), true
+}
+
+// playtimeGameKeySep joins the console and the title in a ledger key. It is
+// not a character a ROM's file name can hold on Windows, nor one No-Intro or
+// Redump names use, so a bare title from an older save never holds it.
+const playtimeGameKeySep = "|"
+
+// playtimeGameKey is the per-game ledger key: "System|Title", the shape
+// gmetaKey uses, but verbatim (the library looks the figure up by the same
+// System and Title the recents record). Without a console it is the bare
+// title, the older form.
+func playtimeGameKey(system, title string) string {
+	title = strings.TrimSpace(title)
+	system = playtimeKeySystem(system)
+	if system == "" || title == "" {
+		return title
+	}
+	return system + playtimeGameKeySep + title
+}
+
+// playtimeKeySystem is the console as it stands in a key: trimmed, and with no
+// separator in it, so a key splits at its first separator.
+func playtimeKeySystem(system string) string {
+	return strings.ReplaceAll(strings.TrimSpace(system), playtimeGameKeySep, "/")
+}
+
+// playtimeGameKeyParts splits a ledger key. A bare title (an entry from before
+// keys named the console) has no console.
+func playtimeGameKeyParts(key string) (system, title string) {
+	if i := strings.Index(key, playtimeGameKeySep); i > 0 {
+		return key[:i], key[i+len(playtimeGameKeySep):]
+	}
+	return "", key
+}
+
+// playtimeTitleConsoles maps each title to the consoles it is known on: the
+// ledger's own keyed entries, the recents and the scanned library.
+func playtimeTitleConsoles(games map[string]int64, recents []recentGame, lib []librarySystem) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	add := func(system, title string) {
+		system, title = playtimeGameKeyParts(playtimeGameKey(system, title))
+		if system == "" {
+			return
+		}
+		if out[title] == nil {
+			out[title] = map[string]bool{}
+		}
+		out[title][system] = true
+	}
+	for key := range games {
+		add(playtimeGameKeyParts(key))
+	}
+	for _, g := range recents {
+		add(g.System, g.Title)
+	}
+	for _, sys := range lib {
+		for _, g := range sys.Games {
+			add(g.System, g.Title)
+		}
+	}
+	return out
+}
+
+// playtimeOnlyConsole is the console of a title known on exactly one, or "".
+func playtimeOnlyConsole(consoles map[string]bool) string {
+	if len(consoles) != 1 {
+		return ""
+	}
+	for system := range consoles {
+		return system
+	}
+	return ""
+}
+
+// playtimeMigrateGameKeys moves each bare-title entry (a save from before keys
+// named the console) under "System|Title" when exactly one console is known
+// for the title, adding to an entry already there, so no second is lost or
+// counted twice. A title known on two consoles, or on none, stays bare: the
+// next load, or the next session of that title, tries again. It reports
+// whether anything moved.
+func playtimeMigrateGameKeys(games map[string]int64, recents []recentGame, lib []librarySystem) bool {
+	legacy := false
+	for key := range games {
+		if system, _ := playtimeGameKeyParts(key); system == "" {
+			legacy = true
+			break
+		}
+	}
+	if !legacy {
+		return false
+	}
+	consoles := playtimeTitleConsoles(games, recents, lib)
+	moved := false
+	for key, secs := range games {
+		system, title := playtimeGameKeyParts(key)
+		if system != "" {
+			continue
+		}
+		only := playtimeOnlyConsole(consoles[title])
+		if only == "" {
+			continue
+		}
+		// Deleting the entry being visited is safe; the key added has a
+		// console, so the loop skips it if it comes to it.
+		delete(games, key)
+		games[playtimeGameKey(only, title)] += secs
+		moved = true
+	}
+	return moved
+}
+
+// playtimeTitleOnOtherConsole reports whether title is known on a console other
+// than system: in the ledger's keyed entries, the recents or the library.
+func playtimeTitleOnOtherConsole(games map[string]int64, recents []recentGame, lib []librarySystem, system, title string) bool {
+	other := func(s, t string) bool {
+		s = playtimeKeySystem(s)
+		return s != "" && s != system && strings.TrimSpace(t) == title
+	}
+	for key := range games {
+		if other(playtimeGameKeyParts(key)) {
+			return true
+		}
+	}
+	for _, g := range recents {
+		if other(g.System, g.Title) {
+			return true
+		}
+	}
+	for _, sys := range lib {
+		for _, g := range sys.Games {
+			if other(g.System, g.Title) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// playtimeGameSecondsWith is one game's time: its own entry, plus a bare-title
+// entry still waiting for its console when no other console is known for the
+// title (a figure two consoles may share is shown for neither).
+func playtimeGameSecondsWith(games map[string]int64, recents []recentGame, lib []librarySystem, system, title string) int64 {
+	key := playtimeGameKey(system, title)
+	secs := games[key]
+	s, t := playtimeGameKeyParts(key)
+	if s == "" {
+		return secs
+	}
+	if legacy := games[t]; legacy > 0 && !playtimeTitleOnOtherConsole(games, recents, lib, s, t) {
+		secs += legacy
+	}
+	return secs
+}
+
+// playtimeGameSecondsFor is playtimeGameSecondsWith on the live ledger, for the
+// game page and its hour milestones (render thread). Only a title with a bare
+// entry left costs more than a map read.
+func playtimeGameSecondsFor(system, title string) int64 {
+	games := playtime.data.Games
+	if _, ok := games[strings.TrimSpace(title)]; !ok {
+		return games[playtimeGameKey(system, title)]
+	}
+	return playtimeGameSecondsWith(games, recentGames(), gameLib.lib.Systems, system, title)
 }
 
 // playtimeCreditGameGap records a game session for the gap that just ended.
@@ -594,13 +768,18 @@ func playtimeGameCredit(games []recentGame, gapStart, gapEnd time.Time) (string,
 // trophies say "in JukaHub", and a game started from JukaHub is time spent in it
 // — and its own per-title ledger, but not toward any screen.
 func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
-	title, secs, ok := playtimeGameCredit(recentGames(), gapStart, gapEnd)
+	recents := recentGames()
+	key, secs, ok := playtimeGameCredit(recents, gapStart, gapEnd)
 	if !ok {
 		return
 	}
+	_, title := playtimeGameKeyParts(key)
 	if playtime.data.Games == nil {
 		playtime.data.Games = map[string]int64{}
 	}
+	// A bare entry for this title from an older save joins this console's once
+	// the recents and the library know it on no other console.
+	playtimeMigrateGameKeys(playtime.data.Games, recents, gameLib.lib.Systems)
 	if playtime.data.Days == nil {
 		playtime.data.Days = map[string]int64{}
 	}
@@ -618,7 +797,7 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 	if sane {
 		trophyNoteSaneDay(d, day, gapEnd)
 	}
-	d.Games[title] += secs
+	d.Games[key] += secs
 	d.GameDays[day] += secs
 	d.Total += secs
 	d.Days[day] += secs
@@ -1308,9 +1487,9 @@ var playtimeHiddenTrophies = map[string]bool{
 }
 
 // playtimeAchievementCount is what the room's totals and the tests use: the 100
-// trophies of the original set, the 285 of the second (trophy_set2.go) and the
+// trophies of the original set, the 289 of the second (trophy_set2.go) and the
 // platinum.
-const playtimeAchievementCount = 386
+const playtimeAchievementCount = 390
 
 // trophyPlatinumID is the platinum: earned for every other trophy.
 const trophyPlatinumID = "platinum"
@@ -1870,14 +2049,27 @@ func sortedPlaytimeScenes(data playtimeData) []playtimeSceneTotal {
 	return out
 }
 
-// sortedPlaytimeGames returns the per-game ledger, longest first.
+// sortedPlaytimeGames returns the per-game ledger, longest first. A row shows
+// the title; the console is added only where two rows share a title.
 func sortedPlaytimeGames(data playtimeData) []playtimeSceneTotal {
 	out := make([]playtimeSceneTotal, 0, len(data.Games))
-	for title, seconds := range data.Games {
+	rows := map[string]int{}
+	for key, seconds := range data.Games {
+		if seconds > 0 {
+			_, title := playtimeGameKeyParts(key)
+			rows[title]++
+		}
+	}
+	for key, seconds := range data.Games {
 		if seconds <= 0 {
 			continue
 		}
-		out = append(out, playtimeSceneTotal{Name: title, Seconds: seconds})
+		system, title := playtimeGameKeyParts(key)
+		name := title
+		if system != "" && rows[title] > 1 {
+			name = title + " (" + system + ")"
+		}
+		out = append(out, playtimeSceneTotal{Name: name, Seconds: seconds})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Seconds == out[j].Seconds {

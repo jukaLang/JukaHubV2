@@ -135,8 +135,8 @@ func apkStoreBuildProfile(info apkStoreInfo, roots []string) (GameProfile, error
 		return GameProfile{}, fmt.Errorf("move the APK into %s first: game profiles only launch from there", strings.Join(roots, " or "))
 	}
 	title := apkStoreClipBytes(strings.TrimSpace(info.Label), apkStoreTitleMaxBytes)
-	notes := "Added by the APK Store from " + filepath.Base(info.Path) + ". Experimental: AndroidRT has not run a game " +
-		"on a handheld yet; if this one stops, its launch log names what is missing (docs/ANDROID.md)."
+	notes := "Added by the APK Store from " + filepath.Base(info.Path) + ". AndroidRT runs native Android games experimentally; " +
+		"if this one stops, its launch log names what is missing (docs/ANDROID.md)."
 	p := GameProfile{
 		SchemaVersion: gameProfileSchemaVersion,
 		ID:            apkStoreProfileIDFor(info),

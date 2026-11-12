@@ -115,14 +115,11 @@ func playSmartURL(config *Config, url string) {
 	if url == "" {
 		return
 	}
+	if isAudioFile(url) || isAudioURL(url) {
+		openAudioPlayer(config, url)
+		return
+	}
 	if hasMediaExtension(url) {
-		// Audio enclosures belong in the music player: it keeps a listening
-		// position and a speed, and it does not open the video scene for a
-		// podcast or a radio stream.
-		if isAudioURL(url) {
-			openAudioPlayer(config, url)
-			return
-		}
 		playStream(config, url)
 		return
 	}

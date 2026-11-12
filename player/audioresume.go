@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -46,6 +47,12 @@ type audioResumeEntry struct {
 type audioPrefsData struct {
 	Speed   float64                     `json:"speed,omitempty"`
 	Entries map[string]audioResumeEntry `json:"entries"`
+	Books   map[string]audioBookEntry   `json:"books,omitempty"`
+}
+
+type audioBookEntry struct {
+	Path     string `json:"path,omitempty"`
+	Finished bool   `json:"finished,omitempty"`
 }
 
 var audioPrefs struct {
@@ -53,7 +60,10 @@ var audioPrefs struct {
 	loaded  bool
 	speed   float64
 	entries map[string]audioResumeEntry
+	books   map[string]audioBookEntry
 }
+
+var audioBookRevision atomic.Uint64
 
 // audioResumeFilePath is a variable so tests can point the store at a temp
 // file instead of the app data folder.
@@ -84,6 +94,7 @@ func audioPrefsLoadLocked() {
 	audioPrefs.loaded = true
 	audioPrefs.speed = 1
 	audioPrefs.entries = make(map[string]audioResumeEntry)
+	audioPrefs.books = make(map[string]audioBookEntry)
 
 	// The atomic save leaves the previous version beside the live file, so a
 	// truncated store resumes from the saved positions instead of silently
@@ -101,6 +112,11 @@ func audioPrefsLoadLocked() {
 		}
 		audioPrefs.entries[path] = entry
 	}
+	for key, entry := range stored.Books {
+		if key != "" {
+			audioPrefs.books[key] = entry
+		}
+	}
 }
 
 // audioPrefsSaveLocked writes the store through the same temp+fsync+rename path
@@ -111,6 +127,7 @@ func audioPrefsSaveLocked() error {
 	data, err := json.MarshalIndent(audioPrefsData{
 		Speed:   audioPrefs.speed,
 		Entries: audioPrefs.entries,
+		Books:   audioPrefs.books,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -119,6 +136,31 @@ func audioPrefsSaveLocked() error {
 		return err
 	}
 	return nil
+}
+
+func audioBookProgress(key string) audioBookEntry {
+	key = audioResumeKey(key)
+	audioPrefs.mu.Lock()
+	defer audioPrefs.mu.Unlock()
+	audioPrefsLoadLocked()
+	return audioPrefs.books[key]
+}
+
+func audioBookRemember(key, path string, finished bool) {
+	if strings.TrimSpace(key) == "" {
+		return
+	}
+	key = audioResumeKey(key)
+	audioPrefs.mu.Lock()
+	defer audioPrefs.mu.Unlock()
+	audioPrefsLoadLocked()
+	next := audioBookEntry{Path: path, Finished: finished}
+	if audioPrefs.books[key] == next {
+		return
+	}
+	audioPrefs.books[key] = next
+	_ = audioPrefsSaveLocked()
+	audioBookRevision.Add(1)
 }
 
 // audioStartPosition decides where playback starts for a saved position.

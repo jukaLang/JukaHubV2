@@ -1,6 +1,6 @@
 package main
 
-// Tests for the second trophy set: its shape (386 trophies, unique ids and
+// Tests for the second trophy set: its shape (390 trophies, unique ids and
 // titles, every old id kept, no retired id back), the event counters and their
 // drain, the lifetime days and runs, a loaded save's quiet catch-up, the clock
 // and the calendar, availability gates, the burst announcement and the room's
@@ -73,8 +73,8 @@ func trophyTestDay(base time.Time, n int) string {
 }
 
 func TestTrophySetShape(t *testing.T) {
-	if len(playtimeAchievements) != playtimeAchievementCount || playtimeAchievementCount != 386 {
-		t.Fatalf("the set has %d trophies, declared %d, want 386", len(playtimeAchievements), playtimeAchievementCount)
+	if len(playtimeAchievements) != playtimeAchievementCount || playtimeAchievementCount != 390 {
+		t.Fatalf("the set has %d trophies, declared %d, want 390", len(playtimeAchievements), playtimeAchievementCount)
 	}
 	ids := map[string]int{}
 	titles := map[string]string{}
@@ -133,8 +133,8 @@ func TestTrophySetShape(t *testing.T) {
 	if len(trophyFirstSetIDs) != 101 {
 		t.Fatalf("the first set lists %d ids", len(trophyFirstSetIDs))
 	}
-	if n := len(trophySetTwo()); n != 274 {
-		t.Errorf("the second set's table has %d rows, want 274 (+11 collection rungs = 285)", n)
+	if n := len(trophySetTwo()); n != 278 {
+		t.Errorf("the second set's table has %d rows, want 278 (+11 collection rungs = 289)", n)
 	}
 	// A retired id coming back would read an old save's unlock as its own.
 	for _, id := range trophyRetiredIDs {
@@ -811,5 +811,128 @@ func TestTrophyRungsReachableWithoutBonus(t *testing.T) {
 		if a.Metric == trophyMetricTrophies && ok[i] && a.Goal > int64(others-1) {
 			t.Errorf("%s (goal %d) is on offer with only %d other non-bonus trophies", a.ID, a.Goal, others-1)
 		}
+	}
+}
+
+// A game session is credited to its console and title, so the same title on
+// two consoles keeps two figures; the title falls back to the file name, and a
+// game with no console keeps the older bare-title key.
+func TestPlaytimeGameCreditKeysByConsole(t *testing.T) {
+	base := time.Date(2026, 11, 11, 20, 0, 0, 0, time.UTC)
+	end := base.Add(10 * time.Minute)
+	cases := []struct {
+		game recentGame
+		key  string
+	}{
+		{recentGame{Path: "/roms/GB/Tetris.gb", System: "GB", Title: " Tetris ", PlayedAt: base}, "GB|Tetris"},
+		{recentGame{Path: `C:\roms\NES\Tetris.nes`, System: "NES", PlayedAt: base}, "NES|Tetris"},
+		{recentGame{Path: "/roms/Tetris.gb", Title: "Tetris", PlayedAt: base}, "Tetris"},
+		{recentGame{Path: "/roms/x.bin", System: "A|B", Title: "T", PlayedAt: base}, "A/B|T"},
+	}
+	for _, c := range cases {
+		key, secs, ok := playtimeGameCredit([]recentGame{c.game}, base, end)
+		if !ok || key != c.key || secs != 600 {
+			t.Errorf("%+v credited %q %d %v, want %q 600", c.game, key, secs, ok, c.key)
+		}
+	}
+	gb := recentGame{Path: "/roms/GB/Tetris.gb", System: "GB", Title: "Tetris", PlayedAt: base}
+	if _, _, ok := playtimeGameCredit([]recentGame{gb}, base, base.Add(10*time.Second)); ok {
+		t.Error("a launch that failed straight away was credited")
+	}
+	gb.PlayedAt = base.Add(-time.Minute)
+	if _, _, ok := playtimeGameCredit([]recentGame{gb}, base, end); ok {
+		t.Error("a gap that did not start with the launch was credited")
+	}
+	if s, title := playtimeGameKeyParts("GB|A|B"); s != "GB" || title != "A|B" {
+		t.Errorf("GB|A|B split into %q %q", s, title)
+	}
+	if s, title := playtimeGameKeyParts("Tetris"); s != "" || title != "Tetris" {
+		t.Errorf("a bare title split into %q %q", s, title)
+	}
+}
+
+// An older save's bare-title entries move under their console only where one
+// console is known for the title, adding to what is there: the total is the
+// same, and a figure two consoles may share is shown for neither.
+func TestPlaytimeMigrateGameKeys(t *testing.T) {
+	recents := []recentGame{
+		{Path: "/roms/GB/Tetris.gb", System: "GB", Title: "Tetris"},
+		{Path: "/roms/NES/Tetris.nes", System: "NES", Title: "Tetris"},
+		{Path: "/roms/GBA/Zelda.gba", System: "GBA", Title: "Zelda"},
+	}
+	lib := []librarySystem{{Name: "NES", Games: []libraryGame{{Path: "/roms/NES/Contra.nes", System: "NES", Title: "Contra"}}}}
+	games := map[string]int64{"Tetris": 1200, "Zelda": 3000, "GBA|Zelda": 60, "Contra": 500, "Pong": 40}
+	if !playtimeMigrateGameKeys(games, recents, lib) {
+		t.Fatal("nothing moved")
+	}
+	want := map[string]int64{"Tetris": 1200, "GBA|Zelda": 3060, "NES|Contra": 500, "Pong": 40}
+	if len(games) != len(want) {
+		t.Fatalf("migrated ledger %v, want %v", games, want)
+	}
+	for k, v := range want {
+		if games[k] != v {
+			t.Fatalf("migrated ledger %v, want %v", games, want)
+		}
+	}
+	if playtimeMigrateGameKeys(games, recents, lib) {
+		t.Error("a second pass moved something again")
+	}
+	for _, c := range []struct {
+		system, title string
+		secs          int64
+	}{{"GB", "Tetris", 0}, {"NES", "Tetris", 0}, {"GBA", "Zelda", 3060}, {"NES", "Contra", 500}, {"SNES", "Pong", 40}} {
+		if got := playtimeGameSecondsWith(games, recents, lib, c.system, c.title); got != c.secs {
+			t.Errorf("%s on %s shows %d, want %d", c.title, c.system, got, c.secs)
+		}
+	}
+	rows := sortedPlaytimeGames(playtimeData{Games: map[string]int64{"GB|Tetris": 600, "NES|Tetris": 300, "GBA|Zelda": 3060}})
+	names := []string{}
+	for _, r := range rows {
+		names = append(names, r.Name)
+	}
+	if strings.Join(names, ",") != "Zelda,Tetris (GB),Tetris (NES)" {
+		t.Errorf("most-played rows %v", names)
+	}
+}
+
+// Loading an older save migrates the ledger without changing the game time or
+// the distinct games the trophies count, and saves the result.
+func TestPlaytimeInitMigratesLegacyGames(t *testing.T) {
+	keepTrophyCupState(t)
+	keepTrophyEvents(t)
+	keepTrophyCelebrations(t)
+	resetGameRecentsState(t)
+	prevLib := gameLib.lib
+	t.Cleanup(func() { gameLib.lib = prevLib })
+	gameLib.lib = gameLibraryReport{}
+	gameRecentsMu.Lock()
+	gameRecents = []recentGame{
+		{Path: "/roms/GB/Tetris.gb", System: "GB", Title: "Tetris"},
+		{Path: "/roms/NES/Tetris.nes", System: "NES", Title: "Tetris"},
+		{Path: "/roms/GBA/Zelda.gba", System: "GBA", Title: "Zelda"},
+	}
+	gameRecentsLoaded = true
+	gameRecentsMu.Unlock()
+	old := map[string]interface{}{
+		"total": float64(4200),
+		"games": map[string]interface{}{"Zelda": float64(3000), "Tetris": float64(1200)},
+	}
+	config := &Config{}
+	config.Variables.Custom = map[string]interface{}{playtimeCustomKey: old, trophySeenKey: "0"}
+	playtimeInit(config)
+	d := playtime.data
+	if len(d.Games) != 2 || d.Games["GBA|Zelda"] != 3000 || d.Games["Tetris"] != 1200 {
+		t.Fatalf("loaded ledger %v", d.Games)
+	}
+	if !playtime.dirty {
+		t.Error("the migrated ledger is not saved at the next tick")
+	}
+	if trophyCountOf(d, tkGameSecs) != 4200 || trophySetLen(d, tkGameTitles) != 2 {
+		t.Fatalf("game time %d, titles %d; want 4200 and 2", trophyCountOf(d, tkGameSecs), trophySetLen(d, tkGameTitles))
+	}
+	config.Variables.Custom[playtimeCustomKey] = d
+	playtimeInit(config)
+	if trophyCountOf(playtime.data, tkGameSecs) != 4200 || trophySetLen(playtime.data, tkGameTitles) != 2 {
+		t.Fatalf("a second start made game time %d, titles %d", trophyCountOf(playtime.data, tkGameSecs), trophySetLen(playtime.data, tkGameTitles))
 	}
 }

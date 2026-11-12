@@ -1,8 +1,8 @@
 package main
 
-// trophy_set2.go — the second trophy set: 274 trophies here and 11 more
-// collection rungs in playtime.go, 285 in all, which take the room from 101 to
-// 386.
+// trophy_set2.go — the second trophy set: 278 trophies here and 11 more
+// collection rungs in playtime.go, 289 in all, which take the room from 101 to
+// 390.
 //
 // The first set reads only the clock. This one reads it more finely (the hour
 // of the day, the days of the year, the longest runs) and counts things done:
@@ -147,6 +147,7 @@ func trophySetTwo() []playtimeAchievement {
 		t2Screen("visit_trophies", playtimeSceneName, "Trophy Case", "Open Trophies", trophyVisitSeconds),
 		t2Screen("tube_25h", "Tube", "Season Finale", "Spend 25 hours in Media", 25*h),
 		t2Screen("music_5h", "MusicPlayer", "Mixtape", "Spend 5 hours in Music", 5*h),
+		t2Screen("synth_1h", synthSceneName, "Jam Session", "Spend 1 hour in the Synth", h),
 		t2Screen("browser_25h", browserSceneName, "Netizen", "Browse for 25 hours", 25*h),
 		t2Screen("jukaland_1h", "JukaLand", "Settler", "Spend 1 hour in JukaLand", h),
 
@@ -358,6 +359,9 @@ func trophySetTwo() []playtimeAchievement {
 		t2Count("pomodoro_1", "Tomato Timer", "Complete a Pomodoro", "Tools", trophyBronze, tkPomodoro, 1, "Pomodoros").needs("Pomodoro"),
 		t2Count("pomodoro_10", "In the Zone", "Complete 10 Pomodoros", "Tools", trophySilver, tkPomodoro, 10, "Pomodoros").needs("Pomodoro"),
 		t2Count("pomodoro_50", "Productivity Guru", "Complete 50 Pomodoros", "Tools", trophyGold, tkPomodoro, 50, "Pomodoros").needs("Pomodoro"),
+		t2Count("synth_play_1", "First Groove", "Play a pattern in the Synth", "Music", trophyBronze, tkSynthPlay, 1, "plays").needs(synthSceneName),
+		t2Count("synth_export_1", "Bounce!", "Export a song from the Synth", "Music", trophyBronze, tkSynthExport, 1, "songs").needs(synthSceneName),
+		t2Count("synth_export_10", "Bedroom Producer", "Export 10 songs from the Synth", "Music", trophySilver, tkSynthExport, 10, "songs").needs(synthSceneName),
 		t2Count("alarm_set_1", "Wake-Up Call", "Set an alarm", "Tools", trophyBronze, tkAlarmSet, 1, "alarms").needs("Alarm"),
 		t2Count("alarm_wake_1", "Rise and Shine", "Get up to an alarm", "Tools", trophyBronze, tkAlarmWake, 1, "alarms").needs("Alarm"),
 		t2Count("alarm_wake_30", "Morning Person", "Get up to 30 alarms", "Tools", trophySilver, tkAlarmWake, 30, "alarms").needs("Alarm"),

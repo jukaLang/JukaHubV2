@@ -34,8 +34,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// wifiJoining counts the joins waiting for association right now
+// (wifiWaitForAssociation). The header's Wi-Fi meter pulses while it is
+// above zero, the way Mosaik's icon does while Wi-Fi connects
+// (drawStatusWiFiChip). A counter rather than a bool: a join from the picker
+// and one from the companion may overlap.
+var wifiJoining atomic.Int32
+
+// wifiJoinInProgress reports whether any join is waiting for association.
+func wifiJoinInProgress() bool { return wifiJoining.Load() > 0 }
 
 const (
 	// wifiCompleteState is the wpa_supplicant state that means associated.
@@ -1604,6 +1615,8 @@ func wifiSetPassphrase(id int, pass string) (string, error) {
 // SSID that was requested. Checking the SSID matters: a failed join leaves the
 // previous network COMPLETED, which would otherwise read as success.
 func wifiWaitForAssociation(ssid string, timeout time.Duration) (wifiStatus, error) {
+	wifiJoining.Add(1)
+	defer wifiJoining.Add(-1)
 	deadline := time.Now().Add(timeout)
 	last := wifiStatus{}
 	lastErr := error(nil)

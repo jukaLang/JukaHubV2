@@ -26,7 +26,7 @@ var apkStoreTabIDs = [apkTabCount]string{"tab0", "tab1", "tab2"}
 
 // apkStoreHeader is the page bar.
 func apkStoreHeader() UIPageHeader {
-	return tbxHeader(apkStoreEntryName, "Android games for AndroidRT — experimental: none verified on a handheld yet",
+	return tbxHeader(apkStoreEntryName, "Install native Android games — Penguin Dash rendered on Smart Pro",
 		apkStoreGlyph, apkStoreUI.status, ColorTextTertiary())
 }
 
@@ -136,7 +136,7 @@ func apkStoreDrawMine(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fr
 		return
 	}
 	y = apkStoreDrawNote(renderer, config, fonts, frame, body, top, y,
-		"Experimental: AndroidRT runs native (NDK) games only, and none has been verified on a handheld yet.")
+		"Experimental: AndroidRT runs native (NDK) games only. Penguin Dash has rendered on a Smart Pro.")
 	rowH := tbxRowHeight(fonts)
 	for i, info := range apkStoreUI.apks {
 		id := apkStoreRowID("apk", i)
@@ -278,7 +278,11 @@ func apkStoreDrawStore(renderer *sdl.Renderer, config *Config, fonts tbxFonts, f
 			screen := rect
 			screen.Y += top
 			pill, tone := apkStoreCatalogStatusLabel(e.Status)
-			if e.downloadable() {
+			if _, installed := apkStoreCatalogInstalled(e); installed {
+				pill, tone = "In Games", tbxToneGood
+			} else if e.installable() && androidRTSupported() {
+				pill, tone = "Install", tbxToneAccent
+			} else if e.downloadable() {
 				pill, tone = "Download", tbxToneAccent
 			}
 			if busy := apkStoreUI.busy[e.ID]; busy != "" {

@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../stream_sys.h"
 
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -467,6 +468,123 @@ static void test_motor_crash_guard(void)
     CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
+static void test_sony_mapping(void)
+{
+    const char *guid = "050000004c050000cc09000000810000";
+    char out[512];
+    CHECK(ss_sony_model(0x054c, 0x05c4) == 4);
+    CHECK(ss_sony_model(0x054c, 0x09cc) == 4);
+    CHECK(ss_sony_model(0x054c, 0x0ce6) == 5);
+    CHECK(ss_sony_model(0x054c, 0x0df2) == 5);
+    CHECK(ss_sony_model(0x054c, 0x0268) == 0); /* a DualShock 3 is not one of them */
+    CHECK(ss_sony_model(0x045e, 0x05c4) == 0);
+    /* hid-sony on 4.9 / hid-generic: 14 buttons; the newer drivers: 13. */
+    CHECK(ss_sony_layout(14, 6, 1) == SS_SONY_HID_GENERIC);
+    CHECK(ss_sony_layout(15, 6, 1) == SS_SONY_HID_GENERIC); /* USB DualSense adds Mute */
+    CHECK(ss_sony_layout(13, 6, 1) == SS_SONY_EVDEV_GAMEPAD);
+    CHECK(ss_sony_layout(13, 6, 0) == SS_SONY_NONE); /* no hat: not a pad we know */
+    CHECK(ss_sony_layout(0, 6, 0) == SS_SONY_NONE);  /* the motion sensor node */
+    CHECK(ss_sony_layout(12, 6, 1) == SS_SONY_NONE);
+
+    CHECK(ss_sony_mapping(out, sizeof(out), guid, 4, SS_SONY_HID_GENERIC, true));
+    CHECK(strncmp(out, "050000004c050000cc09000000810000,PS4 Controller,", 48) == 0);
+    /* Positional: Cross (button 1 in the HID order) is SDL's A, Square (0) X. */
+    CHECK(strstr(out, ",a:b1,b:b2,x:b0,y:b3,") != NULL);
+    CHECK(strstr(out, "lefttrigger:a3,righttrigger:a4,") && strstr(out, "rightx:a2,righty:a5,"));
+    CHECK(strstr(out, "guide:b12,touchpad:b13,") != NULL);
+    CHECK(strstr(out, "dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,") != NULL);
+    CHECK(out[strlen(out) - 1] == ',');
+    CHECK(ss_sony_mapping(out, sizeof(out), guid, 4, SS_SONY_HID_GENERIC, false));
+    CHECK(strstr(out, "touchpad") == NULL);
+
+    CHECK(ss_sony_mapping(out, sizeof(out), guid, 5, SS_SONY_EVDEV_GAMEPAD, true));
+    CHECK(strstr(out, ",PS5 Controller,a:b0,b:b1,x:b3,y:b2,") != NULL);
+    CHECK(strstr(out, "lefttrigger:a2,righttrigger:a5,") && strstr(out, "rightx:a3,righty:a4,"));
+    CHECK(strstr(out, "guide:b10,leftstick:b11,rightstick:b12,") != NULL);
+    CHECK(strstr(out, "touchpad") == NULL); /* its touchpad is another device */
+
+    /* Every element names a distinct SDL element once. */
+    const char *names[] = {"a:", "b:", "x:", "y:", "back:", "start:", "guide:", "leftstick:", "rightstick:",
+                           "leftshoulder:", "rightshoulder:", "lefttrigger:", "righttrigger:", "leftx:", "lefty:",
+                           "rightx:", "righty:"};
+    for(int layout = SS_SONY_HID_GENERIC; layout <= SS_SONY_EVDEV_GAMEPAD; layout++) {
+        CHECK(ss_sony_mapping(out, sizeof(out), guid, 4, (SsSonyLayout)layout, true));
+        for(size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            char key[32];
+            snprintf(key, sizeof(key), ",%s", names[i]);
+            const char *first = strstr(out, key);
+            CHECK(first && !strstr(first + 1, key));
+        }
+    }
+
+    CHECK(!ss_sony_mapping(out, sizeof(out), guid, 4, SS_SONY_NONE, true) && out[0] == '\0');
+    CHECK(!ss_sony_mapping(out, sizeof(out), guid, 0, SS_SONY_HID_GENERIC, true));
+    CHECK(!ss_sony_mapping(out, sizeof(out), "050000004c05", 4, SS_SONY_HID_GENERIC, true));
+    CHECK(!ss_sony_mapping(out, sizeof(out), "050000004c050000cc0900000081000z", 4, SS_SONY_HID_GENERIC, true));
+    CHECK(!ss_sony_mapping(out, 40, guid, 4, SS_SONY_HID_GENERIC, true) && out[0] == '\0');
+}
+
+static bool near(float a, float b, float tolerance)
+{
+    return fabsf(a - b) <= tolerance;
+}
+
+static void test_motion(void)
+{
+    SsMotion m;
+    ss_motion_reset(&m);
+    CHECK(m.accel[1] == 1.0f && m.orient[3] == 1.0f && m.orient[0] == 0.0f);
+    CHECK(ss_motion_take(&m) && !ss_motion_take(&m));
+
+    /* Flat and still: stays the identity. */
+    ss_motion_accel(&m, 0.0f, 1.0f, 0.0f);
+    ss_motion_gyro(&m, 0.0f, 0.0f, 0.0f, 0.0f); /* the first sample only stores */
+    for(int i = 0; i < 1000; i++) ss_motion_gyro(&m, 0.0f, 0.0f, 0.0f, 0.004f);
+    CHECK(near(m.orient[3], 1.0f, 1e-4f) && near(m.orient[0], 0.0f, 1e-4f) && near(m.orient[1], 0.0f, 1e-4f) &&
+          near(m.orient[2], 0.0f, 1e-4f));
+    CHECK(ss_motion_take(&m));
+
+    /* Turning about the up axis (yaw) at 1 rad/s for 1 s: gravity cannot see
+     * yaw, so the gyro alone moves it — half an angle of 0.5 rad about y. */
+    ss_motion_reset(&m);
+    ss_motion_accel(&m, 0.0f, 1.0f, 0.0f);
+    for(int i = 0; i < 250; i++) ss_motion_gyro(&m, 0.0f, 1.0f, 0.0f, 0.004f);
+    CHECK(near(m.gyro[1], 1.0f, 0.0f));
+    CHECK(near(fabsf(m.orient[1]), sinf(0.5f), 0.01f) && near(m.orient[3], cosf(0.5f), 0.01f));
+    CHECK(near(m.orient[0], 0.0f, 0.01f) && near(m.orient[2], 0.0f, 0.01f));
+
+    /* Stood on its edge (gravity along x): the accelerometer pulls the tilt
+     * there — a quarter turn about z — and the quaternion stays a unit one. */
+    ss_motion_reset(&m);
+    ss_motion_accel(&m, 1.0f, 0.0f, 0.0f);
+    for(int i = 0; i < 2000; i++) ss_motion_gyro(&m, 0.0f, 0.0f, 0.0f, 0.004f);
+    float n = sqrtf(m.orient[0] * m.orient[0] + m.orient[1] * m.orient[1] + m.orient[2] * m.orient[2] +
+                    m.orient[3] * m.orient[3]);
+    CHECK(near(n, 1.0f, 1e-4f));
+    CHECK(near(fabsf(m.orient[2]), sinf(0.785398f), 0.02f) && near(fabsf(m.orient[3]), cosf(0.785398f), 0.02f));
+    /* Rotating the measured up (+y) by that orientation lands on gravity's
+     * reading: the filter's "up" agrees with SDL's frame. */
+    {
+        float x = m.orient[0], y = m.orient[1], z = m.orient[2], w = m.orient[3];
+        /* R^T * (0,1,0): the world's up seen from the pad. */
+        float ux = 2.0f * (x * y + w * z), uy = 1.0f - 2.0f * (x * x + z * z), uz = 2.0f * (y * z - w * x);
+        CHECK(near(ux, 1.0f, 0.03f) && near(uy, 0.0f, 0.03f) && near(uz, 0.0f, 0.03f));
+    }
+
+    /* A swing (3 g) does not correct; nonsense is ignored; a long gap is capped. */
+    ss_motion_reset(&m);
+    ss_motion_accel(&m, 3.0f, 0.0f, 0.0f);
+    for(int i = 0; i < 500; i++) ss_motion_gyro(&m, 0.0f, 0.0f, 0.0f, 0.004f);
+    CHECK(near(m.orient[3], 1.0f, 1e-4f));
+    ss_motion_accel(&m, NAN, 0.0f, 0.0f);
+    CHECK(m.accel[0] == 3.0f);
+    ss_motion_gyro(&m, INFINITY, 0.0f, 0.0f, 0.004f);
+    CHECK(m.gyro[0] == 0.0f && near(m.orient[3], 1.0f, 1e-4f));
+    ss_motion_reset(&m);
+    ss_motion_gyro(&m, 0.0f, 10.0f, 0.0f, 5.0f); /* 5 s gap -> 0.05 s: 0.5 rad, not 50 */
+    CHECK(near(fabsf(m.orient[1]), sinf(0.25f), 0.01f));
+}
+
 int main(int argc, char **argv)
 {
     const char *base = argc > 1 ? argv[1] : "/tmp";
@@ -484,6 +602,8 @@ int main(int argc, char **argv)
     test_builtin_pad();
     test_motor();
     test_motor_crash_guard();
+    test_sony_mapping();
+    test_motion();
     printf("stream_sys: %d checks, %d failures\n", checks, failures);
     char cmd[400];
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);

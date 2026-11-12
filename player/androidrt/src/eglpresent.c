@@ -46,10 +46,9 @@
  * is loaded first (ahead of anything LD_LIBRARY_PATH would find) and the
  * native window defaults to that struct; elsewhere it defaults to null.
  *
- * UNVERIFIED ON HARDWARE: AndroidRT itself has not drawn on the stock TrimUI
- * firmware yet. The sdl default there rests on other ports' reports from the
- * same firmware (onPowerVrTrimui); the hub parks its own drawing while a game
- * runs (gamesuspend.go). The smoke test drives the whole gbm path against mock
+ * Penguin Dash v0.5.0 rendered through the SDL path on a stock Smart Pro at
+ * 1280x720. The hub parks its own drawing while a game runs (gamesuspend.go).
+ * The smoke test drives the whole gbm path against mock
  * libEGL/libgbm/libdrm (tests/smoke/mock_gpu.c) and the sdl backend against
  * a fake libSDL2 (tests/smoke/fake_sdl.c); `ANDROIDPAK_SURFACE=1` prints
  * the device's real answer.
@@ -1070,11 +1069,29 @@ static const ApakSym kEglOverrides[] = {
     { NULL, NULL },
 };
 
+static pthread_once_t g_glesProcsOnce = PTHREAD_ONCE_INIT;
+static void *g_glesProcs;
+
+static void openGlesProcs(void) {
+    char path[320];
+    const char *lib = sdlGlesLib(path, sizeof path);
+    if (!lib) lib = "libGLESv2.so.2";
+    g_glesProcs = rt_dlopen(lib, 0);
+}
+
 static void *pr_eglGetProcAddress(const char *name) {
     size_t i;
+    void *p;
     for (i = 0; name && kEglOverrides[i].name; i++)
         if (strcmp(kEglOverrides[i].name, name) == 0) return kEglOverrides[i].addr;
-    return P.gpu.eglGetProcAddress ? P.gpu.eglGetProcAddress(name) : NULL;
+    if (!name) return NULL;
+    p = P.gpu.eglGetProcAddress ? P.gpu.eglGetProcAddress(name) : NULL;
+    if (p) return p;
+    /* EGL 1.4 need not return GLES core functions from eglGetProcAddress.
+     * Android NDK loaders commonly ask it for glGetString and friends anyway;
+     * the firmware's matching GLES library exports those by name. */
+    pthread_once(&g_glesProcsOnce, openGlesProcs);
+    return g_glesProcs ? rt_dlsym(g_glesProcs, name) : NULL;
 }
 
 /* ── lifecycle ───────────────────────────────────────────────────────── */

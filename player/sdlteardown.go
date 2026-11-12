@@ -97,6 +97,8 @@ func sdlTeardownLeave(reason string) {
 		logWarn("exit", "%s; leaving without it (the system frees the display when the process ends)", reason)
 		killScreenChildren()
 		runCleanupHooksBounded(sdlTeardownHooksGrace)
+		// main's deferred devPowerAfterShutdown never runs on this path.
+		devPowerAfterShutdown()
 		os.Exit(code)
 	})
 }

@@ -588,17 +588,17 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		for i := startIdx; i < endIdx; i++ {
 			ln := lines[i]
 			if strings.HasPrefix(ln, "===") || strings.HasPrefix(ln, "---") {
-				renderText(renderer, config, font, ln, accentColor, element.X+10, y)
+				renderTextRaw(renderer, config, font, ln, accentColor, element.X+10, y)
 			} else if source != textBrowserSourceWeb && strings.Contains(ln, ":") && !strings.HasPrefix(ln, " ") {
 				parts := strings.SplitN(ln, ":", 2)
 				if len(parts) == 2 {
 					renderText(renderer, config, font, parts[0]+":", ColorTextSecondary(), element.X+10, y)
 					renderText(renderer, config, font, parts[1], ColorTextPrimary(), element.X+10+int32(len(parts[0])*12)+20, y)
 				} else {
-					renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
+					renderTextRaw(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
 				}
 			} else {
-				renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
+				renderTextRaw(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
 			}
 			y += lineH
 		}

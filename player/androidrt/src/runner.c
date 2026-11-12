@@ -47,6 +47,8 @@
 #include "actbridge.h"
 #include "dlport.h"
 
+void apak_logInit(void);
+
 #if defined(__linux__)
 #define ANDROIDRT_BIONIC_LOADER 1
 #include "apkmeta.h"
@@ -213,6 +215,7 @@ int main(int argc, char **argv) {
 #if ANDROIDRT_BIONIC_LOADER
     if (argc >= 3 && strcmp(argv[1], "--scan") == 0) return scanMain(argc, argv);
 #endif
+    apak_logInit();
     if (!entry || !*entry) entry = "ANativeActivity_onCreate";
 
     memset(&runner, 0, sizeof(runner));

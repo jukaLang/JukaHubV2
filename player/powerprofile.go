@@ -20,6 +20,11 @@ package main
 // unsupported firmware gets one honest line instead of a switch that pretends.
 // Nothing here loops forever or fights the system: the profile is applied once
 // per launch and restored once per exit.
+//
+// A game can choose its own profile (gameoptions.go: Battery saver, Balanced,
+// Performance, plus a CPU limit). Every launch that starts a file — library,
+// ports, emulators, LAN play — goes through beginLaunchPowerProfile with that
+// file's path, so the choice holds wherever the game is started from.
 
 import (
 	"encoding/json"
@@ -38,11 +43,18 @@ type powerProfile int
 const (
 	powerProfileBattery powerProfile = iota
 	powerProfilePerformance
+	// powerProfileBalanced is a launch on a dynamic governor rather than
+	// performance: the per-game Balanced and Battery saver profiles
+	// (gameoptions.go gameLaunchPowerConfig).
+	powerProfileBalanced
 )
 
 func (p powerProfile) String() string {
-	if p == powerProfilePerformance {
+	switch p {
+	case powerProfilePerformance:
 		return "performance"
+	case powerProfileBalanced:
+		return "balanced"
 	}
 	return "battery"
 }
@@ -50,12 +62,15 @@ func (p powerProfile) String() string {
 // powerProfileConfig is the saved setting. Both governor names are optional
 // overrides for firmwares that use their own names. MaxFreqKHz caps the clock a
 // launch may use; zero means the highest frequency the CPU advertises (the 2 GHz
-// top OPP of the A133P).
+// top OPP of the A133P). Balanced makes a launch use a dynamic governor
+// (schedutil, interactive, ondemand…) instead of performance; only a per-game
+// CPU profile sets it, so every other launch is unchanged.
 type powerProfileConfig struct {
 	Enabled         bool
 	PerfGovernor    string
 	BatteryGovernor string
 	MaxFreqKHz      int64
+	Balanced        bool
 }
 
 // loadPowerProfileConfig reads the custom keys. The feature is on by default:
@@ -161,8 +176,14 @@ func chooseGovernor(profile powerProfile, available []string) string {
 		have[strings.TrimSpace(name)] = true
 	}
 	preferred := []string{"powersave", "schedutil", "ondemand"}
-	if profile == powerProfilePerformance {
+	switch profile {
+	case powerProfilePerformance:
 		preferred = []string{"performance"}
+	case powerProfileBalanced:
+		// A governor that follows the load, best first. A kernel offering none
+		// of them still runs the game: performance under the profile's ceiling
+		// is the closest thing it has.
+		preferred = []string{"schedutil", "interactive", "ondemand", "conservative", "performance"}
 	}
 	for _, name := range preferred {
 		if have[name] {
@@ -254,8 +275,14 @@ func formatFrequencyKHz(khz int64) string {
 func powerProfileTarget(profile powerProfile, govPath string, cfg powerProfileConfig) string {
 	available := availableGovernors(govPath)
 	override := cfg.BatteryGovernor
-	if profile == powerProfilePerformance {
+	switch profile {
+	case powerProfilePerformance:
 		override = cfg.PerfGovernor
+	case powerProfileBalanced:
+		// The battery override names the hub's idle governor (often
+		// powersave), which would starve a game: Balanced always picks from
+		// what the CPU offers.
+		override = ""
 	}
 	if override != "" {
 		for _, name := range available {
@@ -409,18 +436,23 @@ var launchPowerProfile struct {
 // that puts the battery profile back. It is safe to call without an emulator
 // ever starting: an unusable firmware only produces one log line.
 func beginGamePowerProfile(config *Config) func() {
-	return beginGamePowerProfileCap(config, 0)
+	return beginLaunchPowerProfile(config, "")
 }
 
-// beginGamePowerProfileCap is beginGamePowerProfile with a ceiling for this one
-// child. A per-game clock (gameoptions.go) wins over the global
-// powerProfileMaxFreq for the length of that launch, and the firmware value is
-// restored with the rest of the profile when the game exits. Zero keeps the
-// global setting.
-func beginGamePowerProfileCap(config *Config, maxFreqKHz int64) func() {
+// beginLaunchPowerProfile is the one entry for a launch tied to a file — a
+// library game, a port script, an emulator, a LAN-play session (the start of
+// MODERNIZATION PWR-6). target is the file launched; its per-game options
+// (gameoptions.go: CPU profile and CPU limit) are folded into the global
+// profile for the length of that launch, and the firmware values come back
+// with the rest of the profile when it exits. A target with no options — or
+// "" — launches exactly as beginGamePowerProfile does.
+//
+// (Not called launchPowerProfile: that name is the running launch's state
+// below.)
+func beginLaunchPowerProfile(config *Config, target string) func() {
 	cfg := loadPowerProfileConfig(config)
-	if maxFreqKHz > 0 {
-		cfg.MaxFreqKHz = maxFreqKHz
+	if strings.TrimSpace(target) != "" {
+		cfg = gameLaunchPowerConfig(cfg, gameOptionsFor(target))
 	}
 	return beginGamePowerProfileWith(cfg)
 }
@@ -496,7 +528,11 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	// below the top OPP would otherwise pin the game to that lower clock.
 	governors := readGovernorSaves(cpuGovernorPaths(cpufreqRoot))
 	ceiling, ceilingKHz, ceilingErr := applyFrequencyCeiling(cfg)
-	if _, err := applyPowerProfile(powerProfilePerformance, cfg); err != nil {
+	launchProfile := powerProfilePerformance
+	if cfg.Balanced {
+		launchProfile = powerProfileBalanced
+	}
+	if _, err := applyPowerProfile(launchProfile, cfg); err != nil {
 		// The governor was refused: leave the ceiling as it was too, so a
 		// partial profile does not outlive this launch — and put back any CPU
 		// that did switch before the refusal.
@@ -522,9 +558,9 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	if ceilingErr != nil {
 		logPatch("power profile: %v", ceilingErr)
 	} else if ceilingKHz > 0 {
-		logPatch("power profile: %s ceiling, performance for the running game", formatFrequencyKHz(ceilingKHz))
+		logPatch("power profile: %s ceiling, %s for the running game", formatFrequencyKHz(ceilingKHz), launchProfile)
 	} else {
-		logPatch("power profile: performance for the running game")
+		logPatch("power profile: %s for the running game", launchProfile)
 	}
 	return release
 }

@@ -221,6 +221,7 @@ void AInputQueue_attachLooper(AInputQueue *queue, ALooper *looper, int ident,
 void AInputQueue_detachLooper(AInputQueue *queue);
 
 /* ALooper (looper.c) — the NDK API. */
+#define ALOOPER_PREPARE_ALLOW_NON_CALLBACKS 1
 ALooper *ALooper_forThread(void);
 ALooper *ALooper_prepare(int opts);
 void ALooper_acquire(ALooper *looper);

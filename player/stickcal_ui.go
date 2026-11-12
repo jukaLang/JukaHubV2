@@ -1,7 +1,7 @@
 package main
 
-// stickcal_ui.go — the Stick calibration screen (Settings → Controls →
-// Calibrate sticks).
+// stickcal_ui.go — JukaHub's Stick calibration screen (Settings → Controls →
+// JukaHub stick calibration).
 //
 // Three short steps, about ten seconds in all, for both sticks at once:
 //
@@ -254,7 +254,7 @@ var stickCalHeaderGlyph = func(r *sdl.Renderer, box sdl.Rect, _ sdl.Color) {
 	DrawHomeIcon(r, "gamepad", box, false)
 }
 
-// stickCalOpen opens the screen (Settings → Controls → Calibrate sticks).
+// stickCalOpen opens the screen (Settings → Controls → JukaHub stick calibration).
 func stickCalOpen(config *Config) {
 	if config == nil {
 		return

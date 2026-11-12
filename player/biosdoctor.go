@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -37,10 +38,11 @@ const (
 )
 
 type biosSystemStatus struct {
-	Name    string
-	Ready   bool
-	Missing []string
-	Files   []biosFileFingerprint
+	Name     string
+	Ready    bool
+	Optional bool // no core strictly needs these files
+	Missing  []string
+	Files    []biosFileFingerprint
 }
 
 type biosDoctorReport struct {
@@ -52,19 +54,33 @@ type biosDoctorReport struct {
 	Xbox *emuXboxReport
 }
 
-var biosFilenameGroups = []struct {
+// biosDoctorGroup is one console line of the doctor's page: each accepted
+// group needs one of its names ("dc/dc_boot.bin" names a subfolder; the
+// match is by file name). optional marks firmware no core strictly needs.
+type biosDoctorGroup struct {
 	name     string
 	accepted [][]string
-}{
-	{name: "PS1", accepted: [][]string{{"scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin"}}},
-	{name: "Dreamcast", accepted: [][]string{{"dc_boot.bin"}, {"dc_flash.bin"}}},
-	{name: "Saturn", accepted: [][]string{{"sega_101.bin", "mpr-17933.bin", "saturn_bios.bin"}}},
+	optional bool
 }
 
+// biosFilenameGroups comes from the game diagnosis's firmware table
+// (gamediag_bios.go), so the page and a failed launch name the same files.
+// It used to be three hand-written lines (PS1, Dreamcast, Saturn) that called
+// a BIOS "missing" that PCSX ReARMed and Flycast never need.
+var biosFilenameGroups = biosDoctorGroupsFromTable()
+
 // biosDoctorRoots lists the common JukaHub, handheld, and RetroArch BIOS
-// locations. Files are never moved or modified by the doctor.
+// locations. Files are never moved or modified by the doctor. The folder the
+// device's RetroArch reads (system_directory in retroarch.cfg — CrossMix's
+// /mnt/SDCARD/BIOS, or whatever the config says) comes first.
 func biosDoctorRoots() []string {
-	roots := []string{resolvePath("BIOS")}
+	roots := []string{}
+	// A "default" system_directory means each game's own folder ("." here),
+	// which is no folder to scan.
+	if dir, _, ok := gameDiagConfiguredSystemDir("", ""); ok && dir != "." {
+		roots = append(roots, dir)
+	}
+	roots = append(roots, resolvePath("BIOS"))
 	if !IsWindows() {
 		roots = append(roots,
 			filepath.Join(filepath.Dir(deviceRomsRoot), "BIOS"),
@@ -146,11 +162,11 @@ func scanBIOSRoots(roots []string) biosDoctorReport {
 		return strings.ToLower(report.Files[i].Name) < strings.ToLower(report.Files[j].Name)
 	})
 	for _, group := range biosFilenameGroups {
-		system := biosSystemStatus{Name: group.name, Ready: true}
+		system := biosSystemStatus{Name: group.name, Ready: true, Optional: group.optional}
 		for _, requiredNames := range group.accepted {
 			matched := false
 			for _, name := range requiredNames {
-				if item, ok := found[strings.ToLower(name)]; ok {
+				if item, ok := found[strings.ToLower(path.Base(name))]; ok {
 					matched = true
 					system.Files = append(system.Files, item)
 				}
@@ -276,9 +292,12 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 	}
 	lines := []string{status, "SHA-256 fingerprints · filenames indicate presence, not authenticity", ""}
 	for _, system := range report.Systems {
-		if system.Ready {
+		switch {
+		case system.Ready:
 			lines = append(lines, system.Name+" · ready")
-		} else {
+		case system.Optional:
+			lines = append(lines, system.Name+" · not found (most games run without) "+strings.Join(system.Missing, ", "))
+		default:
 			lines = append(lines, system.Name+" · missing "+strings.Join(system.Missing, ", "))
 		}
 		for _, file := range system.Files {

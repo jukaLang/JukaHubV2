@@ -32,9 +32,11 @@ import (
 )
 
 const (
-	dispDevicePath       = "/dev/disp"
-	dispLCDSetBrightness = 0x102
-	dispLCDGetBrightness = 0x103
+	dispDevicePath          = "/dev/disp"
+	dispLCDSetBrightness    = 0x102
+	dispLCDGetBrightness    = 0x103
+	dispLCDBacklightEnable  = 0x104
+	dispLCDBacklightDisable = 0x105
 )
 
 // dispDevice is /dev/disp, opened on first use and kept open. mu also keeps
@@ -91,6 +93,41 @@ func dispSetBrightnessRaw(raw int) error {
 		raw = dispBrightnessMax
 	}
 	_, err := dispIoctl(dispLCDSetBrightness, uintptr(raw))
+	return err
+}
+
+// dispBacklightOff switches the backlight itself off for a dark screen
+// (devpower.go):
+//
+//	DISP_LCD_BACKLIGHT_DISABLE (0x105)  arg -> unsigned long[4]{screen, 0, 0, 0}
+//
+// A driver that refuses the command gets level 0 instead (which the setter
+// above never writes), and the level it had is returned for dispBacklightOn;
+// 0 means the driver's switch did it.
+func dispBacklightOff() (int, error) {
+	if _, err := dispIoctl(dispLCDBacklightDisable, 0); err == nil {
+		return 0, nil
+	}
+	raw, err := dispBrightnessRaw()
+	if err != nil {
+		return 0, err
+	}
+	if raw <= 0 {
+		return 0, fmt.Errorf("%s reports no backlight level to come back to", dispDevicePath)
+	}
+	if _, err := dispIoctl(dispLCDSetBrightness, 0); err != nil {
+		return 0, err
+	}
+	return raw, nil
+}
+
+// dispBacklightOn undoes dispBacklightOff: DISP_LCD_BACKLIGHT_ENABLE (0x104),
+// and the remembered level when the fallback took it to 0.
+func dispBacklightOn(raw int) error {
+	_, err := dispIoctl(dispLCDBacklightEnable, 0)
+	if raw > 0 {
+		return dispSetBrightnessRaw(raw)
+	}
 	return err
 }
 

@@ -307,12 +307,12 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 
 		// Title.
 		title := truncateRunesSuffix(n.Title, 45, "...")
-		renderText(renderer, config, medFont, title,
+		renderTextRaw(renderer, config, medFont, title,
 			WithAlpha(ColorTextPrimary(), 240), listX+16, ry+2)
 
 		// Preview.
 		preview := truncateRunesSuffix(strings.ReplaceAll(n.Content, "\n", " "), 60, "...")
-		renderText(renderer, config, subFont, preview,
+		renderTextRaw(renderer, config, subFont, preview,
 			WithAlpha(ColorTextTertiary(), 180), listX+16, ry+36)
 
 		// Metadata.
@@ -419,7 +419,7 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 			// Simple markdown rendering.
 			if strings.HasPrefix(line, "# ") {
 				if medFont != nil {
-					renderText(renderer, config, medFont, line[2:],
+					renderTextRaw(renderer, config, medFont, line[2:],
 						ColorTextPrimary(), contentX+16, ly)
 					continue
 				}
@@ -433,7 +433,7 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 			} else if strings.HasPrefix(line, "```") {
 				col = sdl.Color{R: 100, G: 200, B: 140, A: 200}
 			}
-			renderText(renderer, config, font, line, col, contentX+16, ly)
+			renderTextRaw(renderer, config, font, line, col, contentX+16, ly)
 		}
 	}
 

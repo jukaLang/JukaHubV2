@@ -1942,6 +1942,13 @@ func (p ftpPath) display() string { return strings.TrimPrefix(p.virtual, "/") }
 // symlink — that would leave it. An unknown top-level name answers
 // errFTPNotFound with only virtual set, so a write there can say where to go.
 func (s *ftpSession) resolve(name string) (ftpPath, error) {
+	return s.shares.resolvePath(s.cwd, name)
+}
+
+// resolvePath is resolve for any user of the shares — an FTP session, or the
+// Phone Companion's Files card (companion_files.go) — with cwd the folder a
+// relative name starts from.
+func (set *ftpShareSet) resolvePath(cwd, name string) (ftpPath, error) {
 	name = strings.TrimSpace(name)
 	// Some clients wrap paths in double quotes (MKD "My Folder").
 	if len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
@@ -1954,17 +1961,17 @@ func (s *ftpSession) resolve(name string) (ftpPath, error) {
 	}
 	virtual := name
 	if virtual == "" {
-		virtual = s.cwd
+		virtual = cwd
 	}
 	if !strings.HasPrefix(virtual, "/") {
-		virtual = path.Join(s.cwd, virtual)
+		virtual = path.Join(cwd, virtual)
 	}
 	virtual = path.Clean("/" + strings.TrimPrefix(virtual, "/"))
 	if virtual == "/" {
 		return ftpPath{virtual: "/"}, nil
 	}
 	top, rest, _ := strings.Cut(virtual[1:], "/")
-	share := s.shares.find(top)
+	share := set.find(top)
 	if share == nil {
 		return ftpPath{virtual: virtual}, errFTPNotFound
 	}
@@ -1983,7 +1990,7 @@ func (s *ftpSession) resolve(name string) (ftpPath, error) {
 	}
 	p.virtual += "/" + rest
 	p.rel = rel
-	p.protected = ftpProtected(share.name, rest) || s.shares.lockedPath(filepath.Join(share.dir, rel))
+	p.protected = ftpProtected(share.name, rest) || set.lockedPath(filepath.Join(share.dir, rel))
 	return p, nil
 }
 

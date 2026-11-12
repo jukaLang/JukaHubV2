@@ -360,10 +360,14 @@ func startGameLibraryScan() {
 	roots := append([]string(nil), romLibraryRoots()...)
 	artRoot := libraryArtworkRoot()
 	// Copy the playtime map on the render thread; the background build must not
-	// read it while the ticker is writing it.
+	// read it while the ticker is writing it. The snapshot is never nil, so the
+	// goroutine never falls back to reading the live ledger.
 	seconds := libraryPlaytimeSnapshot()
 	go func() {
 		report := scanROMLibrary(roots)
+		// Resolved once against the whole scan, so the Android row below gets
+		// no bare-title figure a ROM console already took.
+		seconds := libraryPlaytimeForTitles(seconds, libraryScanTitleConsoles(report.Games))
 		lib := buildGameLibraryWith(report, artRoot, seconds)
 		// The APK Store's Android games join as one more console (AND-16).
 		libraryAddAndroidGames(&lib, seconds)
@@ -501,6 +505,20 @@ func gameLibraryMove(dx, dy int) {
 			gameLib.scroll = 0
 			PlayNavSound()
 		}
+		return
+	}
+	if libraryLayoutMode() == libraryLayoutHorizontal {
+		if dy < 0 {
+			gameLib.focus = 0
+			PlayNavSound()
+			return
+		}
+		system, ok := selectedLibrarySystem()
+		if !ok || len(system.Games) == 0 || dx == 0 {
+			return
+		}
+		gameLib.cursor = (gameLib.cursor + dx + len(system.Games)) % len(system.Games)
+		PlayNavSound()
 		return
 	}
 	if dx < 0 {
@@ -1445,6 +1463,8 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		// in the games column like every other list's.
 		UIEmptyState(renderer, config, sdl.Rect{X: gameX, Y: bodyY, W: gameW, H: bodyH - 8},
 			"@gamepad", message, detail)
+	} else if layout := libraryLayoutMode(); layout != libraryLayoutList {
+		renderGameCoverBrowser(renderer, config, system, gameX, bodyY, gameW, bodyH, layout)
 	} else {
 		for i := 0; i < visibleGames; i++ {
 			idx := gameLib.scroll + i
@@ -1471,8 +1491,8 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			// A per-game clock is worth seeing in the list: it explains why
 			// this title runs cooler than the one above it.
-			if opts := gameOptionsFor(game.Path); opts.MaxFreqKHz > 0 {
-				detail += " · " + formatGameCeiling(opts.MaxFreqKHz)
+			if power := gameOptionsPowerSummary(gameOptionsFor(game.Path)); power != "" {
+				detail += " · " + power
 			}
 			renderText(renderer, config, detailFont, ellipsize(detailFont, detail, rect.W-24),
 				ColorTextTertiary(), rect.X+12, rect.Y+rows.detailY)

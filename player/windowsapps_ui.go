@@ -987,5 +987,8 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"Y", "Display"}, FooterHint{"X", "Setup"},
 			FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
 	}
-	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
+	if pkgHubEnabled() && tbxCurrentScene(config) == "Packages" && !winAppsPanel.returnEmu && !winAppsPanel.help {
+		hint = "L2/R2 Stores   " + hint
+	}
+	renderText(renderer, config, font, ellipsize(font, hint, panelW-2*padX), ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

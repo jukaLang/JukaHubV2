@@ -861,7 +861,8 @@ func vkFieldLayoutFor(font *ttf.Font, text string, maxW int32) *vkFieldLayout {
 		if b <= a {
 			return 0
 		}
-		w, _ := measureText(font, display[vkRuneOffset(display, a):vkRuneOffset(display, b)])
+		// Raw: typed text is never the interface language (i18n.go).
+		w, _ := measureTextRaw(font, display[vkRuneOffset(display, a):vkRuneOffset(display, b)])
 		return w
 	}
 	start, end := 0, n
@@ -898,7 +899,7 @@ func vkFieldLayoutFor(font *ttf.Font, text string, maxW int32) *vkFieldLayout {
 		display: display, startRune: start, endRune: end,
 	}
 	fc.visible = display[vkRuneOffset(display, start):vkRuneOffset(display, end)]
-	fc.visW, _ = measureText(font, fc.visible)
+	fc.visW, _ = measureTextRaw(font, fc.visible)
 	fc.caretX = width(start, caret)
 	fc.remaining = vkMaxTextLen - len(text)
 	if !masked && fc.remaining < 200 && fc.remaining >= 0 {
@@ -918,7 +919,7 @@ func vkFieldIndexAt(mx int32) int {
 	x := mx - (vkFieldRect.X + vkFieldPadX)
 	best, bestD := fc.startRune, int32(1<<30)
 	for i := fc.startRune; i <= fc.endRune; i++ {
-		w, _ := measureText(fc.font, fc.display[vkRuneOffset(fc.display, fc.startRune):vkRuneOffset(fc.display, i)])
+		w, _ := measureTextRaw(fc.font, fc.display[vkRuneOffset(fc.display, fc.startRune):vkRuneOffset(fc.display, i)])
 		d := w - x
 		if d < 0 {
 			d = -d
@@ -969,7 +970,7 @@ func vkDrawFieldLive(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, fie
 		// The whole value is selected: the first key typed replaces it.
 		fillRoundedRect(renderer, x0-3, textY-2, lay.visW+6, textH+4, 4, WithAlpha(pal.accent, 90))
 	}
-	drawText(renderer, font, lay.visible, x0, textY, pal.ink, textAlignLeft)
+	drawTextRaw(renderer, font, lay.visible, x0, textY, pal.ink, textAlignLeft)
 	if !vkTextSelected && (now/530)%2 == 0 {
 		fillRoundedRect(renderer, x0+lay.caretX, field.Y+field.H/2-textH/2+2, 2, textH-4, 1, pal.accent)
 	}

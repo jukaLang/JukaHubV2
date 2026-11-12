@@ -464,7 +464,7 @@ func launchPortScript(name, path string) {
 	// environment is replaced for the port only, so JukaHub's own audio and the
 	// next launch are untouched even if the port crashes.
 	cmd.Env = append(childEnvWithTZ(os.Environ(), gameChildZone()), portLaunchEnv(appConfig)...)
-	restoreProfile := beginGamePowerProfile(appConfig)
+	restoreProfile := beginLaunchPowerProfile(appConfig, path) // per-game profile, PWR-6
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
@@ -477,11 +477,13 @@ func launchPortScript(name, path string) {
 	}
 	noteGameChildStarted(cmd)
 	recorder := startTimelapse(appConfig, name)
+	diag := gameDiagPortStart(name, path) // a port that quits at once is diagnosed (gamediag.go)
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
+		diag.exited(waitErr)
 	}()
 	if name != portMasterAppName { // a port is a game; PortMaster's own menu is not
 		trophyEvent(tkGameLaunch)
@@ -779,6 +781,9 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 	if portsPanel.scroll > 0 || portsPanel.scroll+int(visible) < len(entries) {
 		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",
 			portsPanel.scroll+1, portsPanel.scroll+int(visible), len(entries))}}, hints...)
+	}
+	if pkgHubEnabled() && tbxCurrentScene(config) == "Packages" && !portsPanel.returnEmu {
+		hints = append([]FooterHint{{Button: "L2/R2", Label: "Stores"}}, hints...)
 	}
 	hint := ellipsize(font, hintLine(hints...), panelW-2*padX)
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)

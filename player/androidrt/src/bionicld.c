@@ -114,7 +114,9 @@ typedef struct {
  * the device's glibc userspace. */
 static const VirtualLib kVirtual[] = {
     { "libc.so", VK_BIONIC, NULL, NULL },
-    { "libm.so", VK_BIONIC, NULL, NULL },
+    /* -lm may be dropped by --as-needed when the runner itself has no math
+     * calls. Resolve an APK's libm imports from the firmware's libm explicitly. */
+    { "libm.so", VK_HOST, "libm.so.6", NULL },
     { "libdl.so", VK_BIONIC, NULL, NULL },
     { "libstdc++.so", VK_BIONIC, NULL, NULL },
     { "liblog.so", VK_RUNNER, NULL, NULL },

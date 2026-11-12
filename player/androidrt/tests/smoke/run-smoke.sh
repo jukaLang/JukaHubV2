@@ -171,6 +171,7 @@ $CC -O0 -g -std=gnu11 $WARN -I"$SRC" -shared -fPIC "$HERE/fake_game.c" -o "$LIBD
 run_to "$WORK/lifecycle.log" env ANDROIDPAK_MAINLIB=lib/arm64-v8a/libgame.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect_rc "lifecycle exits 0" 0
 expect "onCreate served" "$WORK/lifecycle.log" "onCreate served"
+expect "Java main looper exists before NativeActivity onCreate" "$WORK/lifecycle.log" "Java main looper present during onCreate"
 expect "Android callback order" "$WORK/lifecycle.log" "lifecycle: onPause"
 if [ -d "$WORK/data/files" ] && [ -d "$WORK/data/obb" ]; then pass "persistent data dirs created"; else fail "persistent data dirs created"; fi
 

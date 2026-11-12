@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -252,5 +253,36 @@ func TestPadFaceButtonIsAnInvolution(t *testing.T) {
 	}
 	if got := padFaceButton(nil, sdl.CONTROLLER_BUTTON_X); got != sdl.CONTROLLER_BUTTON_X {
 		t.Errorf("nil config must not swap, got %d", got)
+	}
+}
+
+// A DualShock 4 / DualSense without an SDL mapping (gamepad_sony.go; the same
+// table as player/native/stream_sys.c, tested there in C).
+func TestSonyPadMapping(t *testing.T) {
+	const guid = "050000004c050000cc09000000810000"
+	if sonyPadModel(0x054c, 0x09cc) != 4 || sonyPadModel(0x054c, 0x0ce6) != 5 || sonyPadModel(0x054c, 0x0268) != 0 ||
+		sonyPadModel(0x045e, 0x05c4) != 0 {
+		t.Fatal("sonyPadModel")
+	}
+	if sonyPadLayoutOf(14, 6, 1) != sonyLayoutHIDGeneric || sonyPadLayoutOf(13, 6, 1) != sonyLayoutEvdevGamepad ||
+		sonyPadLayoutOf(13, 6, 0) != sonyLayoutNone || sonyPadLayoutOf(0, 6, 0) != sonyLayoutNone {
+		t.Fatal("sonyPadLayoutOf")
+	}
+	ds4 := sonyPadMapping(guid, 4, sonyLayoutHIDGeneric, true)
+	if !strings.HasPrefix(ds4, guid+",PS4 Controller,a:b1,b:b2,x:b0,y:b3,") || !strings.Contains(ds4, "guide:b12,touchpad:b13,") ||
+		!strings.Contains(ds4, "rightx:a2,righty:a5,") || !strings.HasSuffix(ds4, "dpleft:h0.8,") {
+		t.Fatalf("DualShock 4 mapping: %s", ds4)
+	}
+	if strings.Contains(sonyPadMapping(guid, 4, sonyLayoutHIDGeneric, false), "touchpad") {
+		t.Fatal("touchpad named for an SDL older than 2.0.14")
+	}
+	ds := sonyPadMapping(guid, 5, sonyLayoutEvdevGamepad, true)
+	if !strings.Contains(ds, ",PS5 Controller,a:b0,b:b1,x:b3,y:b2,") || !strings.Contains(ds, "guide:b10,") ||
+		strings.Contains(ds, "touchpad") {
+		t.Fatalf("DualSense mapping: %s", ds)
+	}
+	if sonyPadMapping(guid[:30], 4, sonyLayoutHIDGeneric, true) != "" || sonyPadMapping(guid, 4, sonyLayoutNone, true) != "" ||
+		sonyPadMapping(guid[:31]+"z", 4, sonyLayoutHIDGeneric, true) != "" {
+		t.Fatal("a bad GUID or layout must give no mapping")
 	}
 }

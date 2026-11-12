@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -353,5 +354,37 @@ func TestHintKeyForFollowsRemapChanges(t *testing.T) {
 	hintKeyboardNow.Store(true)
 	if got := hintSentence("Press %s to type", "A", "Type"); got != "Press Enter to type" {
 		t.Errorf("keyboard: hintSentence = %q, want the Enter key", got)
+	}
+}
+
+// The power key's device (powerkey.go): the PMIC's own by name when there is
+// one, else any device with KEY_POWER that is not a pad. The firmware's
+// virtual pad is never picked, whatever it reports.
+func TestPowerKeyPickDevices(t *testing.T) {
+	const pek = `I: Bus=0019 Vendor=0001 Product=0001 Version=0100
+N: Name="axp2202-pek"
+P: Phys=m1kbd/input1
+S: Sysfs=/devices/platform/soc/7081400.s_twi/i2c-6/6-0034/axp2202-pek.0/input/input1
+U: Uniq=
+H: Handlers=kbd event1
+B: PROP=0
+B: EV=3
+B: KEY=10000000000000 0
+
+`
+	cases := []struct {
+		name string
+		data string
+		want string
+	}{
+		{"gpio keys only", hintTestHandheldDevices, "event0"},
+		{"PMIC power key wins", hintTestHandheldDevices + pek, "event1"},
+		{"no devices", "", ""},
+	}
+	for _, tc := range cases {
+		got := strings.Join(powerKeyPickDevices(evdevParseDevices(tc.data)), ",")
+		if got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

@@ -139,10 +139,23 @@ counts while such a device exists). When no pad is identified as built-in,
 every pad gets the handheld layout above. `psremote.log` lists each pad as
 `[native] controller added: <name> (game controller, built-in)`.
 
+A DualShock 4 or DualSense SDL has no mapping for (it came through the kernel's
+event device: hid-sony before Linux 4.10 and hid-generic use the HID report's
+order, hid-sony 4.10+ and hid-playstation the evdev gamepad codes) gets one for
+its GUID before it is opened (`stream_sys.c` `ss_sony_*`, the same table as
+`player/gamepad_sony.go`). Its touchpad counts only when SDL reports one
+(`SDL_GameControllerGetNumTouchpads`) or the mapping names the click; otherwise
+the pad keeps the Select layout. Motion: a pad with a gyroscope and an
+accelerometer (`SDL_GameControllerHasSensor`, SDL's own PS4/PS5 driver) has both
+switched on; the one used last feeds chiaki's `gyro_*` (rad/s), `accel_*` (g)
+and `orient_*`, a quaternion from Madgwick's IMU filter (`ss_motion_*`; identity
+while the pad lies flat, as chiaki's idle state). Sample spacing comes from
+SDL 2.26's `timestamp_us`, else from the sensor's rate. The SDL 2.0.14+ calls
+are weak references, so an older firmware SDL still loads the helper.
+
 Rumble follows the pad in use: the TrimUI motor (a GPIO, not an SDL device)
 while the built-in pad is played, the external pad's own motors when that one
-is, sent again every second while the console holds it. There is no motion
-sensor to forward. The motor is switched off when the helper opens it (a
+is, sent again every second while the console holds it. The motor is switched off when the helper opens it (a
 crashed run may have left it on), when the stream ends — before any error card —
 and, as a last resort, by a crash handler (SIGSEGV, SIGBUS, SIGABRT, SIGFPE,
 SIGILL) that only writes `0` to its GPIO before the process dies. SIGINT,

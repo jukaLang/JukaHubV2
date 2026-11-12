@@ -4,14 +4,13 @@ package main
 // kinds of APK, and where to get them legally.
 //
 // It is deliberately small and honest. JukaHub cannot hand out commercial
-// APKs, and AndroidRT has not run a game on a handheld yet, so most entries
+// APKs, and AndroidRT runs only a narrow native subset, so most entries
 // say "experimental" or "won't run" and point at the route that works (your
 // own APK, PortMaster, a full Android). An entry may carry a direct download
 // — for free software whose author publishes the APK — but only with a
 // SHA-256, and only from the HTTPS hosts JukaHub's downloader trusts
 // (validatePatchURL): a download without a hash is refused, never "probably
-// fine". The built-in list ships with no such entry, because none could be
-// verified when it was written.
+// fine". The built-in list pins the APK of a game tested on a Smart Pro.
 //
 // The list is embedded (apkstore_catalog.json). A newer copy may be published
 // at generate.jukalang.com/apk-catalog.json (the builder site is deployed from
@@ -84,6 +83,13 @@ type apkStoreCatalogEntry struct {
 // run.
 func (e apkStoreCatalogEntry) downloadable() bool {
 	return e.URL != "" && e.SHA256 != "" && e.Size > 0
+}
+
+// installable means a verified download has a package identity and is offered
+// for the native AndroidRT path. A catalogue entry without these facts can
+// still be downloaded for inspection, but it is not silently added to Games.
+func (e apkStoreCatalogEntry) installable() bool {
+	return e.downloadable() && e.Package != "" && e.Kind != "category" && e.Status != apkStatusWontRun
 }
 
 // apkStoreCatalogData is the file: a dated list.
@@ -194,6 +200,45 @@ func parseApkStoreCatalog(raw []byte) (apkStoreCatalogData, error) {
 	return data, nil
 }
 
+// apkStorePinDownloads keeps executable downloads anchored to the catalogue
+// compiled into JukaHub. A fetched JSON file is useful for updated wording,
+// but it is not signed as code: it must not point the handheld's root process
+// at a new APK or claim a pinned experimental APK has been proven to work.
+func apkStorePinDownloads(data, builtin apkStoreCatalogData) apkStoreCatalogData {
+	pinned := make(map[string]apkStoreCatalogEntry, len(builtin.Entries))
+	for _, e := range builtin.Entries {
+		if e.downloadable() {
+			pinned[e.ID] = e
+		}
+	}
+	seen := make(map[string]bool, len(data.Entries))
+	for i := range data.Entries {
+		e := &data.Entries[i]
+		seen[e.ID] = true
+		if b, ok := pinned[e.ID]; ok {
+			*e = b
+		} else if e.downloadable() {
+			e.URL, e.SHA256, e.Size = "", "", 0
+		}
+	}
+	for _, e := range builtin.Entries {
+		if !e.downloadable() || seen[e.ID] {
+			continue
+		}
+		if len(data.Entries) < apkStoreCatalogMax {
+			data.Entries = append(data.Entries, e)
+			continue
+		}
+		for i := len(data.Entries) - 1; i >= 0; i-- {
+			if _, keep := pinned[data.Entries[i].ID]; !keep {
+				data.Entries[i] = e
+				break
+			}
+		}
+	}
+	return data
+}
+
 // apkStoreCatalogText trims a field, drops control characters and bounds it.
 func apkStoreCatalogText(s, field string) string {
 	s = strings.Map(func(r rune) rune {
@@ -267,6 +312,7 @@ func apkStoreCatalog() (apkStoreCatalogData, string) {
 		if raw, err := os.ReadFile(apkStoreCatalogPath()); err == nil {
 			if saved, err := parseApkStoreCatalog(raw); err == nil && saved.Updated > builtin.Updated && saved.usable() &&
 				!apkStoreCatalogTooNew(saved.Updated, builtin.Updated) {
+				saved = apkStorePinDownloads(saved, builtin)
 				apkStoreCatalogState.data, apkStoreCatalogState.source = saved, "updated "+saved.Updated
 			}
 		}
@@ -339,6 +385,7 @@ func apkStoreRefreshCatalog(ctx context.Context, client *http.Client, rawURL str
 		apkStoreTouchCatalog()
 		return false, nil
 	}
+	fetched = apkStorePinDownloads(fetched, builtin)
 	if err := AtomicWrite(apkStoreCatalogPath(), raw, 0o644); err != nil {
 		return false, err
 	}

@@ -111,7 +111,7 @@ func filesHasDedicatedViewer(path string) bool {
 	switch {
 	case isMusicPlaylistFile(path):
 		return true
-	case isImageExtension(ext), isMediaFile(path), hasMediaExtension(path):
+	case isImageExtension(ext), isAudioFile(path), isMediaFile(path), hasMediaExtension(path):
 		return true
 	case ext == ".pdf" || ext == ".epub" || ext == ".sh" || ext == ".html" || ext == ".js":
 		return true

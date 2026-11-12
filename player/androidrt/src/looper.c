@@ -29,8 +29,6 @@
 
 #include "actbridge.h"
 
-#define ALOOPER_PREPARE_ALLOW_NON_CALLBACKS 1
-
 #define ALOOPER_POLL_WAKE     (-1)
 #define ALOOPER_POLL_CALLBACK (-2)
 #define ALOOPER_POLL_TIMEOUT  (-3)

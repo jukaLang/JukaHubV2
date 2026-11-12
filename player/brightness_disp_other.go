@@ -14,3 +14,7 @@ func dispBrightnessRaw() (int, error) { return 0, errDispUnsupported }
 func dispSetBrightnessRaw(int) error { return errDispUnsupported }
 
 func dispBrightnessAvailable() bool { return false }
+
+func dispBacklightOff() (int, error) { return 0, errDispUnsupported }
+
+func dispBacklightOn(int) error { return errDispUnsupported }

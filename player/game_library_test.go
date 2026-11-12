@@ -176,3 +176,25 @@ func TestGameLaunchCommandAppendsGameArgs(t *testing.T) {
 		t.Errorf("exe launch = %q %v", name, args)
 	}
 }
+
+// Reset game takes a ROM's states by its exact stem only: the screenshots and
+// JukaHub's ".jukahub-prev" copy go with them, another game's never do.
+func TestGameResetStateFile(t *testing.T) {
+	for name, want := range map[string]bool{
+		"Zelda.state":                   true,
+		"Zelda.state3":                  true,
+		"Zelda.state.auto":              true,
+		"Zelda.state3.png":              true,
+		"Zelda.state.auto.png":          true,
+		"Zelda.state.auto.jukahub-prev": true,
+		"Zelda.srm":                     false,
+		"Zelda II.state":                false,
+		"zelda.state":                   false,
+		"Zelda.state03":                 false,
+		"Zelda.statex":                  false,
+	} {
+		if got := gameResetStateFile(name, "Zelda"); got != want {
+			t.Errorf("gameResetStateFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

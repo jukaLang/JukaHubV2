@@ -162,7 +162,7 @@ func uiClamp01(v float64) float64 {
 // Carousel or Widgets Home that is still sliding counts too
 // (home_dynbody.go).
 func uiAnimating() bool {
-	return tb.enter.active || nc.enter.active || qs.enter.active || homeLayoutAnimating()
+	return tb.enter.active || nc.enter.active || qs.enter.active || homeLayoutAnimating() || synthAnimating()
 }
 
 // ── Layer compositing ─────────────────────────────────────────────────

@@ -1336,7 +1336,8 @@ func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int
 	}
 	var lines []string
 	for _, line := range strings.Split(text, "\n") {
-		lines = append(lines, wrapTextLines(font, line, w-32, 20)...)
+		// Subtitles are content: never the interface language (i18n.go).
+		lines = append(lines, wrapTextLinesRaw(font, line, w-32, 20)...)
 	}
 	lineH := int32(font.Height()) + lineGap
 	maxLines := int((h - 16) / lineH)
@@ -1362,7 +1363,7 @@ func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int
 		lineW, _, _ := font.SizeUTF8(line)
 		lx := x + (w-int32(lineW))/2
 		ly := top + int32(i)*lineH
-		renderText(renderer, config, font, line, sdl.Color{R: 255, G: 255, B: 255, A: 255}, lx, ly)
+		renderTextRaw(renderer, config, font, line, sdl.Color{R: 255, G: 255, B: 255, A: 255}, lx, ly)
 	}
 }
 

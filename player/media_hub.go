@@ -584,9 +584,11 @@ func mediaHubSearchRetryBlocked() bool {
 func mediaHubTick(config *Config) {
 	if !mediaHubIsCurrent(config) {
 		mediaHubTabShown.Store(-1)
-		// The Library's scan is Media's: it stops when Media is left and the
-		// next visit carries on from what it finished (mlib.go).
-		if mlibScanning.Load() {
+		// Music's shelves share the index and keep its scan alive while
+		// browsing. Other scenes stop it until the next library visit.
+		musicBrowsing := musicShelf.open && config != nil && currentSceneIndex >= 0 &&
+			currentSceneIndex < len(config.Scenes) && config.Scenes[currentSceneIndex].Name == "MusicPlayer"
+		if mlibScanning.Load() && !musicBrowsing {
 			mlibCancelScan()
 		}
 		return

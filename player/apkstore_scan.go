@@ -3,7 +3,7 @@ package main
 // apkstore_scan.go — finding the APKs on the card and reading each one.
 //
 // The store looks where APKs end up: a folder for them on the card (APKs, or
-// Android, or a Roms/ANDROID system folder), the card's Downloads, the Phone
+// Android, or common Roms/Android and Apps/Android folders), the card's Downloads, the Phone
 // Companion's drop folder (a phone sends an APK there in one tap), JukaHub's
 // own downloads, and on a computer the user's Downloads. The walk is bounded
 // — two levels deep, at most apkStoreScanMax files, a few seconds — because a
@@ -163,7 +163,10 @@ func apkStoreScanRoots() []string {
 			add(filepath.Join(home, "Downloads"))
 		}
 	} else {
-		for _, sub := range []string{"APKs", "Android", "Roms/ANDROID", "Roms/APK", "Downloads", companionDropDir} {
+		for _, sub := range []string{
+			"APKs", "Android", "Roms/ANDROID", "Roms/Android", "Roms/APK", "Roms/APKs", "Roms/Apks",
+			"Apps/Android", "Apps/APK", "Data/APKs", "Downloads", companionDropDir,
+		} {
 			add(filepath.Join(apkStoreCardRoot, filepath.FromSlash(sub)))
 		}
 		if !IsTrimuiDevice() {

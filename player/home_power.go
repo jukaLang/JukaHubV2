@@ -15,6 +15,13 @@ package main
 // Quitting runs the main loop's clean shutdown (requestAppExit), which draws
 // the glass teardown — on the TrimUI that hands the screen back to the stock
 // launcher.
+//
+// On the Linux handheld the card also offers Sleep, Restart and Power off
+// (2026-11-11, after Mosaik CFW 0.9.11's Restart button): a row of three
+// above Cancel / Exit. Restart and Power off are the same clean quit followed
+// by busybox's reboot or poweroff; Sleep suspends the device and JukaHub
+// carries on where it was (devpower.go). Exit stays the focused button, and
+// every button but Cancel waits out homePowerArmMS. A desktop keeps the two.
 
 import (
 	"strings"
@@ -22,19 +29,32 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// The card's two buttons, in the order the D-pad walks them.
+// The card's buttons. Cancel and Exit are on every platform; the other three
+// only on the handheld (homePowerConfirm.full).
 const (
-	homePowerCancel = 0
-	homePowerExit   = 1
+	homePowerCancel = iota
+	homePowerExit
+	homePowerSleep
+	homePowerRestart
+	homePowerOff
+	homePowerButtons
+)
+
+// homePowerOrderShort and homePowerOrderFull are the orders Left and Right
+// walk the buttons in: reading order, the handheld's top row first.
+var (
+	homePowerOrderShort = []int{homePowerCancel, homePowerExit}
+	homePowerOrderFull  = []int{homePowerSleep, homePowerRestart, homePowerOff, homePowerCancel, homePowerExit}
 )
 
 // homePowerEnterMS is the card's entrance: a short rise and fade, skipped
 // under reduced motion.
 const homePowerEnterMS = 140
 
-// homePowerArmMS is how long Exit ignores presses after the card opens, so a
-// double press — or a held key's auto-repeat — on the power button cannot quit
-// without the card ever being read.
+// homePowerArmMS is how long Exit (and Sleep, Restart and Power off) ignore
+// presses after the card opens, so a double press — or a held key's
+// auto-repeat — on the power button cannot act without the card ever being
+// read.
 const homePowerArmMS = 300
 
 // homePowerConfirm is the open confirmation card and the rects its last frame
@@ -43,9 +63,13 @@ var homePowerConfirm struct {
 	open     bool
 	focus    int
 	openedAt uint64
-	card     sdl.Rect
-	cancel   sdl.Rect
-	exit     sdl.Rect
+	// full is the handheld's card with Sleep, Restart and Power off, decided
+	// when the card opens.
+	full bool
+	card sdl.Rect
+	// btn holds each button's rect by its constant; a zero rect is a button
+	// this card does not have (or a frame not drawn yet).
+	btn [homePowerButtons]sdl.Rect
 	// mouseX/mouseY are where the pointer was last frame: hovering a button
 	// focuses it, but only when the pointer actually moved, so a pointer left
 	// resting over Cancel cannot fight the D-pad every frame.
@@ -59,34 +83,92 @@ func homePowerOpen() {
 	dismissVolumePopover()
 	dismissBrightnessPopover()
 	homePowerConfirm.open = true
+	homePowerConfirm.full = devPowerSupported()
 	homePowerConfirm.focus = homePowerExit
 	homePowerConfirm.openedAt = sdl.GetTicks64()
 	homePowerConfirm.card = sdl.Rect{}
-	homePowerConfirm.cancel = sdl.Rect{}
-	homePowerConfirm.exit = sdl.Rect{}
+	homePowerConfirm.btn = [homePowerButtons]sdl.Rect{}
 	homePowerConfirm.mouseX, homePowerConfirm.mouseY = mouseX, mouseY
+}
+
+// homePowerOpenFromKey opens the card for the hardware power key (a long
+// press, or a short one in the Exit-card mode: powerkey.go) from wherever
+// JukaHub is: the idle screen gives the panel back, the Start menu and the
+// notification list close (the card closes itself under them), and from
+// another screen JukaHub goes Home first. It reports whether the card is up;
+// powerKeyTick calls it again until it is, while the scene change runs.
+// Main thread.
+func homePowerOpenFromKey(config *Config) bool {
+	screensaverNotifyInput()
+	if homePowerConfirm.open {
+		return true
+	}
+	if tb.startOpen {
+		startMenuDismiss()
+	}
+	if nc.open {
+		notifDismiss()
+	}
+	if !homeLayoutActive || homeLayout == nil {
+		// switchScene ignores the call while a transition runs, so asking
+		// again each frame until Home is up is harmless.
+		if home := homeSceneIndex(config); home >= 0 && home != currentSceneIndex {
+			changeSceneTo(config, home)
+		}
+		return false
+	}
+	homePowerOpen()
+	return true
 }
 
 // homePowerClose dismisses the card without doing anything.
 func homePowerClose() {
 	homePowerConfirm.open = false
 	homePowerConfirm.card = sdl.Rect{}
-	homePowerConfirm.cancel = sdl.Rect{}
-	homePowerConfirm.exit = sdl.Rect{}
+	homePowerConfirm.btn = [homePowerButtons]sdl.Rect{}
 }
 
-// homePowerActivate runs the focused button. Exit is not armed until the card
-// has been up for homePowerArmMS.
+// homePowerOrder is the buttons this card has, in walking order.
+func homePowerOrder() []int {
+	if homePowerConfirm.full {
+		return homePowerOrderFull
+	}
+	return homePowerOrderShort
+}
+
+// homePowerActivate runs the focused button.
 func homePowerActivate() {
-	if homePowerConfirm.focus == homePowerExit {
-		if sdl.GetTicks64()-homePowerConfirm.openedAt < homePowerArmMS {
-			return
-		}
-		homePowerQuit()
+	homePowerPress(homePowerConfirm.focus)
+}
+
+// homePowerPress runs one button. Everything but Cancel is not armed until
+// the card has been up for homePowerArmMS.
+func homePowerPress(id int) {
+	if id != homePowerCancel && sdl.GetTicks64()-homePowerConfirm.openedAt < homePowerArmMS {
 		return
 	}
-	PlayBackSound()
-	homePowerClose()
+	switch id {
+	case homePowerExit:
+		homePowerQuit()
+	case homePowerSleep:
+		homePowerClose()
+		PlayActivateSound()
+		devSleepNow("power card")
+	case homePowerRestart, homePowerOff:
+		homePowerClose()
+		PlayActivateSound()
+		if snapshotVideoState().phase != "idle" {
+			StopEmbeddedPlayback()
+		}
+		if id == homePowerRestart {
+			devPowerRequest(devPowerReboot)
+		} else {
+			devPowerRequest(devPowerPoweroff)
+		}
+	default:
+		PlayBackSound()
+		homePowerClose()
+	}
 }
 
 // homePowerQuit leaves JukaHub the way the Exit pill always did: embedded
@@ -101,10 +183,45 @@ func homePowerQuit() {
 	requestAppExit()
 }
 
-// homePowerMove steps the card's focus; the two buttons do not wrap.
+// homePowerMove steps the card's focus along homePowerOrder; it does not
+// wrap.
 func homePowerMove(delta int) {
-	next := homePowerConfirm.focus + delta
-	if next < homePowerCancel || next > homePowerExit {
+	order := homePowerOrder()
+	at := 0
+	for i, id := range order {
+		if id == homePowerConfirm.focus {
+			at = i
+		}
+	}
+	next := at + delta
+	if next < 0 || next >= len(order) {
+		return
+	}
+	homePowerConfirm.focus = order[next]
+	PlayNavSound()
+}
+
+// homePowerMoveRow is Up and Down. The two-button card has one row, so they
+// step like Left and Right as they always did; the handheld's card moves
+// between its rows to the button below or above (Restart lands on Cancel,
+// the harmless one of the two under it).
+func homePowerMoveRow(delta int) {
+	if !homePowerConfirm.full {
+		homePowerMove(delta)
+		return
+	}
+	next := -1
+	switch f := homePowerConfirm.focus; {
+	case delta < 0 && f == homePowerCancel:
+		next = homePowerSleep
+	case delta < 0 && f == homePowerExit:
+		next = homePowerOff
+	case delta > 0 && (f == homePowerSleep || f == homePowerRestart):
+		next = homePowerCancel
+	case delta > 0 && f == homePowerOff:
+		next = homePowerExit
+	}
+	if next < 0 {
 		return
 	}
 	homePowerConfirm.focus = next
@@ -121,12 +238,24 @@ func homePowerKey(e *sdl.KeyboardEvent) bool {
 		return true
 	}
 	switch e.Keysym.Sym {
-	case sdl.K_LEFT, sdl.K_UP:
+	case sdl.K_LEFT:
 		homePowerMove(-1)
-	case sdl.K_RIGHT, sdl.K_DOWN:
+	case sdl.K_RIGHT:
 		homePowerMove(1)
+	case sdl.K_UP:
+		homePowerMoveRow(-1)
+	case sdl.K_DOWN:
+		homePowerMoveRow(1)
 	case sdl.K_TAB:
-		homePowerConfirm.focus = homePowerExit - homePowerConfirm.focus
+		// Tab walks every button and comes round again.
+		order := homePowerOrder()
+		next := order[0]
+		for i, id := range order {
+			if id == homePowerConfirm.focus && i+1 < len(order) {
+				next = order[i+1]
+			}
+		}
+		homePowerConfirm.focus = next
 		PlayNavSound()
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
 		homePowerActivate()
@@ -145,10 +274,14 @@ func homePowerPad(e *sdl.ControllerButtonEvent) bool {
 		return false
 	}
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_UP:
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		homePowerMove(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		homePowerMove(1)
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		homePowerMoveRow(-1)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		homePowerMoveRow(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		homePowerActivate()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
@@ -167,19 +300,26 @@ func homePowerPad(e *sdl.ControllerButtonEvent) bool {
 // itself swallows the tap, anywhere else closes it.
 func homePowerClick(mx, my int32) {
 	c := &homePowerConfirm
-	switch {
-	case c.exit.W > 0 && pointInRect(mx, my, growTouchTarget(c.exit)):
-		c.focus = homePowerExit
-		homePowerQuit()
-	case c.cancel.W > 0 && pointInRect(mx, my, growTouchTarget(c.cancel)):
-		c.focus = homePowerCancel
-		PlayBackSound()
-		homePowerClose()
-	case c.card.W > 0 && pointInRect(mx, my, c.card):
-	default:
-		PlayBackSound()
-		homePowerClose()
+	// Exact hits first: the grown touch targets of neighbouring buttons
+	// overlap in the gaps between them.
+	for _, grow := range []bool{false, true} {
+		for _, id := range homePowerOrder() {
+			r := c.btn[id]
+			if grow {
+				r = growTouchTarget(r)
+			}
+			if c.btn[id].W > 0 && pointInRect(mx, my, r) {
+				c.focus = id
+				homePowerPress(id)
+				return
+			}
+		}
 	}
+	if c.card.W > 0 && pointInRect(mx, my, c.card) {
+		return
+	}
+	PlayBackSound()
+	homePowerClose()
 }
 
 // homePowerIcon is the pill's glyph. Shipped configs name the Exit tile's
@@ -295,10 +435,17 @@ func (h *HomeLayout) drawPowerPill(renderer *sdl.Renderer, fonts HomeFonts, item
 }
 
 // homePowerCardLayout places the card above the pill, left-aligned with it
-// and kept inside the canvas, and its two buttons along its bottom edge.
-func homePowerCardLayout(pill sdl.Rect, w, h int32) (card, cancel, exit sdl.Rect) {
+// and kept inside the canvas, and its buttons along its bottom edge: Cancel
+// and Exit, and on the full card Sleep, Restart and Power off in a row above
+// them (the card is wider and one row taller; at 1280x720 it still ends
+// above the pill and the footer).
+func homePowerCardLayout(pill sdl.Rect, w, h int32, full bool) (card sdl.Rect, btn [homePowerButtons]sdl.Rect) {
 	cardW := min32(scaleY(380, h), w-2*scaleX(homeSideMargin, w))
 	cardH := scaleY(176, h)
+	if full {
+		cardW = min32(scaleY(500, h), w-2*scaleX(homeSideMargin, w))
+		cardH = scaleY(232, h)
+	}
 	x := pill.X
 	if x+cardW > w-scaleX(homeSideMargin, w) {
 		x = w - scaleX(homeSideMargin, w) - cardW
@@ -316,9 +463,32 @@ func homePowerCardLayout(pill sdl.Rect, w, h int32) (card, cancel, exit sdl.Rect
 	gap := scaleY(12, h)
 	btnW := (cardW - 2*pad - gap) / 2
 	btnY := y + cardH - pad - btnH
-	cancel = sdl.Rect{X: x + pad, Y: btnY, W: btnW, H: btnH}
-	exit = sdl.Rect{X: x + pad + btnW + gap, Y: btnY, W: btnW, H: btnH}
-	return card, cancel, exit
+	btn[homePowerCancel] = sdl.Rect{X: x + pad, Y: btnY, W: btnW, H: btnH}
+	btn[homePowerExit] = sdl.Rect{X: x + pad + btnW + gap, Y: btnY, W: btnW, H: btnH}
+	if full {
+		topY := btnY - gap - btnH
+		topW := (cardW - 2*pad - 2*gap) / 3
+		for i, id := range []int{homePowerSleep, homePowerRestart, homePowerOff} {
+			btn[id] = sdl.Rect{X: x + pad + int32(i)*(topW+gap), Y: topY, W: topW, H: btnH}
+		}
+	}
+	return card, btn
+}
+
+// homePowerButtonLook is a button's label, glyph and whether it is drawn in
+// the danger tint.
+func homePowerButtonLook(id int) (label, icon string, danger bool) {
+	switch id {
+	case homePowerExit:
+		return "Exit", "power", true
+	case homePowerSleep:
+		return "Sleep", "moon", false
+	case homePowerRestart:
+		return "Restart", "refresh", true
+	case homePowerOff:
+		return "Power off", "power", true
+	}
+	return "Cancel", "", false
 }
 
 // renderHomePowerConfirm draws the card over Home while it is open: a dim
@@ -340,7 +510,7 @@ func renderHomePowerConfirm(renderer *sdl.Renderer, config *Config) {
 	if pill.W <= 0 {
 		pill = sdl.Rect{X: scaleX(48, screenWidth), Y: scaleY(674, screenHeight), W: scaleX(116, screenWidth), H: scaleY(36, screenHeight)}
 	}
-	card, cancel, exit := homePowerCardLayout(pill, screenWidth, screenHeight)
+	card, btn := homePowerCardLayout(pill, screenWidth, screenHeight, c.full)
 
 	progress := 1.0
 	if uiMotionEnabled(config) {
@@ -348,18 +518,20 @@ func renderHomePowerConfirm(renderer *sdl.Renderer, config *Config) {
 	}
 	rise := int32((1 - progress) * float64(scaleY(10, screenHeight)))
 	card.Y += rise
-	cancel.Y += rise
-	exit.Y += rise
-	c.card, c.cancel, c.exit = card, cancel, exit
+	for i := range btn {
+		if btn[i].W > 0 {
+			btn[i].Y += rise
+		}
+	}
+	c.card, c.btn = card, btn
 
 	// Hover focuses, but only for a pointer that moved since the last frame.
 	if mouseX != c.mouseX || mouseY != c.mouseY {
 		c.mouseX, c.mouseY = mouseX, mouseY
-		switch {
-		case pointInRect(mouseX, mouseY, exit):
-			c.focus = homePowerExit
-		case pointInRect(mouseX, mouseY, cancel):
-			c.focus = homePowerCancel
+		for _, id := range homePowerOrder() {
+			if pointInRect(mouseX, mouseY, btn[id]) {
+				c.focus = id
+			}
 		}
 	}
 
@@ -398,14 +570,20 @@ func renderHomePowerConfirm(renderer *sdl.Renderer, config *Config) {
 			noteH = int32(note.Height())
 		}
 		ty := badge.Y + (badge.H-titleH-noteH)/2
-		drawText(renderer, title, ellipsize(title, "Exit JukaHub?", textW), textX, ty, ColorTextPrimary(), textAlignLeft)
+		heading := "Exit JukaHub?"
+		if c.full {
+			heading = "Sleep, restart or exit?"
+		}
+		drawText(renderer, title, ellipsize(title, heading, textW), textX, ty, ColorTextPrimary(), textAlignLeft)
 		if note != nil {
 			drawText(renderer, note, ellipsize(note, "Your settings and progress are saved.", textW), textX, ty+titleH, ColorTextMuted(), textAlignLeft)
 		}
 	}
 
-	homePowerDrawButton(renderer, fonts, cancel, "Cancel", "", c.focus == homePowerCancel, false)
-	homePowerDrawButton(renderer, fonts, exit, "Exit", "power", c.focus == homePowerExit, true)
+	for _, id := range homePowerOrder() {
+		label, icon, danger := homePowerButtonLook(id)
+		homePowerDrawButton(renderer, fonts, btn[id], label, icon, c.focus == id, danger)
+	}
 }
 
 // homePowerDrawButton is one of the card's buttons: glass, or the danger tint

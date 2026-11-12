@@ -453,7 +453,7 @@ func stickDeadzoneRow(stick int) setRow {
 			cal, measured, manual := stickCalEntry(c, stick)
 			switch {
 			case manual:
-				return "Set by hand · Calibrate sticks measures it"
+				return "Set by hand · JukaHub calibration measures it"
 			case measured:
 				return fmt.Sprintf("Calibrated · rests at %+.2f %+.2f · reaches %s", cal.CX, cal.CY, stickPercent(cal.Reach))
 			}
@@ -490,9 +490,68 @@ func stickCalStatusText(c *Config) string {
 	return "Not yet"
 }
 
-// stickCalSettingsRows are the stick rows of Settings → Controls. A device
-// without sticks (the Brick family) has none of them, but it does get the two
-// mouse rows (vcursor_mode.go), which follow the virtual cursor's.
+// trimuiFirmwareMenuAvailable finds the stock launcher that resumes after
+// JukaHub exits. Images put it in different places; without it the handoff
+// must not offer to leave the user at a blank screen.
+func trimuiFirmwareMenuAvailable() bool {
+	for _, path := range []string{
+		deviceMainUIPath,
+		"/usr/bin/MainUI",
+		"/usr/local/bin/MainUI",
+		"/mnt/SDCARD/System/usr/trimui/bin/MainUI",
+	} {
+		if regularFile(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// trimuiStickCalSettingsRow offers a handoff to the firmware menu. The
+// firmware reads the built-in sticks before JukaHub, games and emulators do, so
+// its calibration is the one that can affect all of them.
+func trimuiStickCalSettingsRow() setRow {
+	return setRow{
+		ID: "trimuiStickCalibrate", Label: "Analog stick calibration", Kind: setKindAction,
+		Detail: func(*Config) string {
+			if !trimuiFirmwareMenuAvailable() {
+				return "TrimUI's settings menu is unavailable on this system"
+			}
+			return "TrimUI System settings · affects games and emulators"
+		},
+		Visible:  func(*Config) bool { return IsTrimuiDevice() && stickHardware() },
+		Disabled: func(*Config) bool { return !trimuiFirmwareMenuAvailable() },
+		Value:    setStatic("Device-wide"),
+		Open: func(*Config) {
+			setSheetOpen(&setHub.sheet, "Calibrate the built-in sticks",
+				"In TrimUI, open Setting → System → Calibrate Joystick",
+				[]setOption{
+					{Value: "stay", Label: "Stay in JukaHub"},
+					{Value: "open", Label: "Open TrimUI menu", Note: "JukaHub closes; calibrate both sticks there"},
+				}, "stay", func(value string) {
+					if value == "open" {
+						requestAppExit()
+					}
+				})
+		},
+	}
+}
+
+// stickCalSettingsRow opens JukaHub's own calibration from Settings → Controls.
+func stickCalSettingsRow() setRow {
+	hasSticks := func(*Config) bool { return stickHardware() }
+	return setRow{
+		ID: "stickCalibrate", Label: "JukaHub stick calibration", Kind: setKindAction,
+		Detail:  setStatic("Tune JukaHub navigation and pointer only"),
+		Visible: hasSticks,
+		Value:   stickCalStatusText,
+		Open:    stickCalOpen,
+	}
+}
+
+// stickCalSettingsRows are the remaining stick rows of Settings → Controls.
+// A device without sticks (the Brick family) has none of them, but it does get
+// the two mouse rows (vcursor_mode.go), which follow the virtual cursor's.
 func stickCalSettingsRows() []setRow {
 	hasSticks := func(*Config) bool { return stickHardware() }
 	rows := []setRow{
@@ -508,17 +567,10 @@ func stickCalSettingsRows() []setRow {
 				setToast("Virtual cursor: " + setOnOff(on))
 			},
 		},
-		{
-			ID: "stickCalibrate", Label: "Calibrate sticks", Kind: setKindAction,
-			Detail:  setStatic("Measure where both sticks rest and how far they reach"),
-			Visible: hasSticks,
-			Value:   stickCalStatusText,
-			Open:    stickCalOpen,
-		},
 		stickDeadzoneRow(stickLeft),
 		stickDeadzoneRow(stickRight),
 	}
-	rows[2].Visible, rows[3].Visible = hasSticks, hasSticks
+	rows[1].Visible, rows[2].Visible = hasSticks, hasSticks
 	out := make([]setRow, 0, len(rows)+3)
 	out = append(out, rows[0])
 	out = append(out, vcursorModeSettingsRows()...)

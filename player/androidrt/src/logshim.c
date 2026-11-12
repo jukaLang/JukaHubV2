@@ -16,6 +16,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 #include "actbridge.h" /* ANDROIDRT_EXPORT */
 
@@ -34,6 +37,18 @@ enum {
 
 static int g_minPriority = -1;
 static const char *g_defaultTag = "game";
+#if !defined(_WIN32)
+static int g_originalStderr = -1;
+#endif
+
+/* Some native apps capture fd 2 and forward every line to liblog. Keep the
+ * launcher's original log destination before their onCreate can redirect it,
+ * or writing a liblog message back to fd 2 creates an endless feedback loop. */
+void apak_logInit(void) {
+#if !defined(_WIN32)
+    if (g_originalStderr < 0) g_originalStderr = dup(STDERR_FILENO);
+#endif
+}
 
 static const char *letterFor(int prio) {
     switch (prio) {
@@ -65,6 +80,13 @@ static int loggable(int prio) { return prio >= minPriority() || prio == ANDROID_
 static void emit(int prio, const char *tag, const char *text) {
     size_t len = text ? strlen(text) : 0;
     while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) len--;
+#if !defined(_WIN32)
+    if (g_originalStderr >= 0) {
+        dprintf(g_originalStderr, "[game][%s][%s] %.*s\n", tag ? tag : g_defaultTag,
+                letterFor(prio), (int)len, text ? text : "");
+        return;
+    }
+#endif
     fprintf(stderr, "[game][%s][%s] %.*s\n", tag ? tag : g_defaultTag, letterFor(prio), (int)len, text ? text : "");
     if (prio == ANDROID_LOG_FATAL) fflush(stderr);
 }

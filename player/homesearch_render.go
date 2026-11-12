@@ -328,7 +328,7 @@ func homeSearchDrawCompact(renderer *sdl.Renderer, fonts homeSearchFonts, list s
 // homeSearchDrawHeader paints a group title in the small caps style the
 // Start menu uses, with a hairline running to the right edge.
 func homeSearchDrawHeader(renderer *sdl.Renderer, fonts homeSearchFonts, rect sdl.Rect, title string) {
-	label := strings.ToUpper(title)
+	label := strings.ToUpper(uiT(title)) // translate before upper-casing (i18n.go)
 	y := rect.Y + rect.H - int32(fonts.header.Height()) - scaleY(4, screenHeight)
 	drawText(renderer, fonts.header, label, rect.X+scaleX(4, screenWidth), y, glassAccent(), textAlignLeft)
 	lw, lh := measureText(fonts.header, label)

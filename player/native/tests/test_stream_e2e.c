@@ -6,6 +6,7 @@
 #include "stream_input.h"
 
 #include <chiaki/controller.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -526,6 +527,84 @@ static void scenario_dualsense_layout(void)
     CHECK(fake_now >= 6000 + 1200 && fake_now < 7400);
 }
 
+/* PlayStation pads that reach SDL through the kernel's event device with no
+ * mapping in SDL's database: a DualShock 4 on the TrimUI's 4.9 kernel (the HID
+ * report's order, touchpad click included) and a DualSense through
+ * hid-playstation (evdev gamepad order, touchpad on a node of its own). The
+ * helper maps both by GUID, so they open as game controllers. */
+static void scenario_sony_raw_pads_get_mappings(void)
+{
+    scenario = "sony raw pads get mappings";
+    fake_reset(60000);
+    add_builtin_pad(0);
+    int ds4 = fake_add_device(false, "Wireless Controller", 5);
+    fake_device_ids(ds4, 0x054c, 0x09cc);
+    fake_device_type(ds4, 4);
+    fake_device_sony(ds4, 14, 6, 1);
+    int ds = fake_add_device(false, "DualSense Wireless Controller", 6);
+    fake_device_ids(ds, 0x054c, 0x0ce6);
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    fake_device_type(ds, 7);
+#endif
+    fake_device_no_touchpad(ds);
+    fake_device_sony(ds, 13, 6, 1);
+    int other = fake_add_device(false, "Generic USB Joystick", 7);
+    fake_device_sony(other, 14, 6, 1); /* the same counts, but not Sony's */
+    fake_chiaki(1300, CHIAKI_EVENT_CONNECTED, 0);
+    fake_frames(1500, 6000, 33);
+    tap(2000, 5, SDL_CONTROLLER_BUTTON_A, 100);    /* Cross, through the mapping */
+    tap(2300, 5, SDL_CONTROLLER_BUTTON_BACK, 100); /* DualShock 4 Share */
+    tap(2600, 6, SDL_CONTROLLER_BUTTON_BACK, 100); /* DualSense Create, no touchpad here */
+    tap(2900, 6, SDL_CONTROLLER_BUTTON_B, 100);    /* Circle */
+    int rc = run(BASE PS5);
+    CHECK(rc == 0);
+    CHECK(fake_device_is_gc(ds4) && fake_device_is_gc(ds) && !fake_device_is_gc(other));
+    CHECK(fake_record.mappings == 3); /* the TrimUI pad's + one per Sony pad */
+    CHECK(strncmp(fake_record.mapping, fake_device_guid(ds), 32) == 0);
+    CHECK(strstr(fake_record.mapping, ",PS5 Controller,a:b0,b:b1,x:b3,y:b2,") != NULL);
+    CHECK(fake_device_refs(ds4) == 0 && fake_device_refs(ds) == 0 && fake_device_refs(other) == 0);
+    CHECK(had_bit(CHIAKI_CONTROLLER_BUTTON_CROSS, 2000, 2099));
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    /* The DualShock 4's touchpad click is in its mapping: Share is Create. */
+    CHECK(had_bit(CHIAKI_CONTROLLER_BUTTON_SHARE, 2300, 2399) && !had_bit(CHIAKI_CONTROLLER_BUTTON_TOUCHPAD, 2300, 2399));
+#endif
+    /* The DualSense cannot click its touchpad here: its Create button does. */
+    CHECK(had_bit(CHIAKI_CONTROLLER_BUTTON_TOUCHPAD, 2600, 2699) && !had_bit(CHIAKI_CONTROLLER_BUTTON_SHARE, 2600, 2699));
+    CHECK(had_bit(CHIAKI_CONTROLLER_BUTTON_MOON, 2900, 2999));
+}
+
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+static const ChiakiControllerState *state_at(uint32_t t); /* below */
+
+/* A DualSense through SDL's own driver: its gyro and accelerometer reach the
+ * console, with an orientation; when it leaves, the console's pad lies still. */
+static void scenario_motion(void)
+{
+    scenario = "motion";
+    fake_reset(60000);
+    add_builtin_pad(0);
+    int ds = add_dualsense(5);
+    fake_device_sensors(ds);
+    fake_chiaki(1300, CHIAKI_EVENT_CONNECTED, 0);
+    fake_frames(1500, 6000, 33);
+    tap(1800, 5, SDL_CONTROLLER_BUTTON_A, 50);
+    for(int i = 0; i < 250; i++) { /* 1 s at 250 Hz: turning about "up" at 1 rad/s */
+        fake_sensor(2000 + (uint32_t)i * 4, 5, SDL_SENSOR_ACCEL, 0.0f, SDL_STANDARD_GRAVITY, 0.0f);
+        fake_sensor(2000 + (uint32_t)i * 4, 5, SDL_SENSOR_GYRO, 0.0f, 1.0f, 0.0f);
+    }
+    tap(2500, 0, SDL_CONTROLLER_BUTTON_A, 50); /* the handheld has no motion: still the DualSense's */
+    fake_device_removed(4000, 5);
+    int rc = run(BASE PS5);
+    CHECK(rc == 0);
+    CHECK(fake_device_sensors_on(ds) == 2);
+    const ChiakiControllerState *s = state_at(3500);
+    CHECK(s && fabsf(s->gyro_y - 1.0f) < 1e-6f && fabsf(s->accel_y - 1.0f) < 1e-4f);
+    CHECK(s && fabsf(fabsf(s->orient_y) - sinf(0.5f)) < 0.02f && fabsf(s->orient_w - cosf(0.5f)) < 0.02f);
+    s = state_at(4500);
+    CHECK(s && s->gyro_y == 0.0f && s->accel_y == 1.0f && s->orient_w == 1.0f && s->orient_y == 0.0f);
+}
+#endif
+
 static void scenario_split_quit_combo(void)
 {
     scenario = "split quit combo";
@@ -863,6 +942,10 @@ int main(int argc, char **argv)
     scenario_builtin_pad_by_its_id();
     scenario_usb_xbox_pad_is_external();
     scenario_dualsense_layout();
+    scenario_sony_raw_pads_get_mappings();
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    scenario_motion();
+#endif
     scenario_split_quit_combo();
 #if SDL_VERSION_ATLEAST(2, 0, 14)
     scenario_two_fingers();

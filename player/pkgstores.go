@@ -70,6 +70,124 @@ type pkgStoresState struct {
 
 var pkgStores pkgStoresState
 
+// On the Smart Pro the four package destinations form one trigger-navigable
+// loop. PortMaster and Windows Apps are panels over Packages; the APK Store is
+// a scene, so a trigger leaving it can request a panel for Packages' arrival.
+const (
+	pkgHubPackages = iota
+	pkgHubAPK
+	pkgHubPorts
+	pkgHubWindows
+	pkgHubCount
+)
+
+var pkgHubPending int // a panel to open after returning from the APK scene
+
+func pkgHubEnabled() bool { return DetectDevice() == DeviceTrimuiSmartPro }
+
+func pkgHubStep(current int, s padShoulder) int {
+	if current < 0 || current >= pkgHubCount {
+		return -1
+	}
+	switch s {
+	case padL2:
+		return (current + pkgHubCount - 1) % pkgHubCount
+	case padR2:
+		return (current + 1) % pkgHubCount
+	}
+	return -1
+}
+
+// pkgHubLocation accepts only the package journey. An APK Store opened from
+// Start or another scene keeps its normal input, as do panels over Emulators.
+func pkgHubLocation(config *Config) int {
+	if !pkgHubEnabled() || config == nil || transitionPhase != "none" {
+		return -1
+	}
+	switch tbxCurrentScene(config) {
+	case "Packages":
+		switch {
+		case winAppsPanel.open:
+			if !winAppsPanel.returnEmu && !winAppsPanel.help && modalPanelBlockReason() == "Windows apps panel" {
+				return pkgHubWindows
+			}
+			return -1
+		case portsPanel.open:
+			if !portsPanel.returnEmu && modalPanelBlockReason() == "ports panel" {
+				return pkgHubPorts
+			}
+			return -1
+		case pkgUI.sheet.open || tbxSheetVisible(config) || modalPanelBlocksShoulders():
+			return -1
+		default:
+			return pkgHubPackages
+		}
+	case apkStoreSceneName:
+		if pkgStores.leftFor && pkgStores.leftScene == "Packages" && !tbxSheetVisible(config) && !modalPanelBlocksShoulders() {
+			return pkgHubAPK
+		}
+	}
+	return -1
+}
+
+// pkgHubShoulder switches the visible destination on one L2/R2 press.
+// It runs before the generic modal-panel blocker in shoulders.go.
+func pkgHubShoulder(s padShoulder, config *Config) bool {
+	if s != padL2 && s != padR2 {
+		return false
+	}
+	current := pkgHubLocation(config)
+	next := pkgHubStep(current, s)
+	if next < 0 {
+		return false
+	}
+	if current == pkgHubPorts {
+		closePortsPanel()
+	} else if current == pkgHubWindows {
+		closeWindowsAppsPanel()
+	}
+	if current == pkgHubAPK {
+		idx := sceneIndexExact(config, "Packages")
+		if idx < 0 {
+			return false
+		}
+		pkgStores.focus = true
+		if next > pkgHubPackages {
+			pkgStores.cursor = next - 1
+		}
+		pkgStores.leftFor = true
+		pkgHubPending = next
+		switchScene(config, idx, false)
+		if transitionPhase != "fade-out" {
+			pkgHubPending = pkgHubPackages
+			return false
+		}
+		return true
+	}
+	if next == pkgHubPackages {
+		pkgStores.focus = true
+		PlayNavSound()
+		return true
+	}
+	pkgStores.focus = true
+	pkgStores.cursor = next - 1
+	pkgStoresOpen(config, next-1)
+	return true
+}
+
+// pkgHubOnPackagesEnter fulfils an APK-scene trigger switch after the scene
+// has actually changed, so the destination panel appears with Packages.
+func pkgHubOnPackagesEnter() {
+	next := pkgHubPending
+	pkgHubPending = pkgHubPackages
+	switch next {
+	case pkgHubPorts:
+		openPortsPanel(false)
+	case pkgHubWindows:
+		openWindowsAppsPanel(false)
+	}
+}
+
 // pkgStoreLinkCache is the pills, built on first use (the platform does not
 // change while JukaHub runs).
 var pkgStoreLinkCache []pkgStoreLink
@@ -90,7 +208,7 @@ func pkgBuildStoreLinks(windows bool) []pkgStoreLink {
 	links := make([]pkgStoreLink, 0, 3)
 	if !windows {
 		links = append(links,
-			pkgStoreLink{title: apkStoreEntryName, sub: "Android games", glyph: apkStoreGlyph, screen: true,
+			pkgStoreLink{title: apkStoreEntryName, sub: "Native Android APKs", glyph: apkStoreGlyph, screen: true,
 				open: apkStoreOpen},
 			pkgStoreLink{title: portMasterAppName, sub: "PC and indie ports", glyph: "packages",
 				open: func(*Config) { openPortsPanel(false) }},
@@ -256,13 +374,15 @@ func pkgStoresClick(config *Config, i int) {
 
 // pkgStoresFooterHints is the footer while the strip holds the focus.
 func pkgStoresFooterHints() []FooterHint {
-	return []FooterHint{
+	hints := []FooterHint{
 		{Button: "D-Pad", Label: "Choose"},
 		{Button: "A", Label: "Open"},
 		{Button: "B", Label: "Back"},
-		{Button: "X", Label: "Refresh"},
-		{Button: "Y", Label: "View"},
 	}
+	if pkgHubEnabled() {
+		hints = append(hints, FooterHint{Button: "L2/R2", Label: "Stores"})
+	}
+	return append(hints, FooterHint{Button: "X", Label: "Refresh"}, FooterHint{Button: "Y", Label: "View"})
 }
 
 // pkgDrawStores paints the strip in r: its label and the pills, left to

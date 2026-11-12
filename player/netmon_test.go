@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,5 +106,62 @@ func TestProbeConnectivityUnreachable(t *testing.T) {
 	result := probeConnectivity()
 	if result.online || result.portal != "" || result.reason == "" {
 		t.Fatalf("probe = %+v, want offline", result)
+	}
+}
+
+// Netplay rooms come from the network (netplay_rooms.go): the lobby list and
+// LAN beacon replies must parse in both lobby shapes and never let a path,
+// a "|" or a shell-ish host through to RetroArch's argv.
+func TestNetplayRoomParsers(t *testing.T) {
+	lobby := `[
+	 {"fields":{"username":"ann","country":"us","game_name":"Pokemon Red (USA)","core_name":"Gambatte",
+	  "ip":"203.0.113.5","port":55435,"mitm_ip":"","mitm_port":0,"mitm_session":"","has_password":false}},
+	 {"username":"bo","game_name":"Tetris","core_name":"mGBA","ip":"","port":0,
+	  "mitm_ip":"relay.example.org","mitm_port":55435,"mitm_session":"q83vEjRWeJASNFZ4"},
+	 {"username":"x","game_name":"Bad","core_name":"mGBA","ip":"1.2.3.4|9|s","port":55435},
+	 {"username":"y","game_name":"BadRelay","core_name":"mGBA","mitm_ip":"r.example","mitm_port":1,"mitm_session":"a|b"},
+	 {"username":"z","game_name":"Closed","core_name":"mGBA","ip":"1.2.3.4","port":55435,"connectable":false}
+	]`
+	rooms, err := parseNetplayLobby([]byte(lobby))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) != 2 {
+		t.Fatalf("got %d rooms, want 2: %+v", len(rooms), rooms)
+	}
+	if r := rooms[0]; r.Host != "203.0.113.5" || r.Port != 55435 || r.Relay != "" || r.Core != "Gambatte" {
+		t.Fatalf("direct room = %+v", r)
+	}
+	if r := rooms[1]; r.Host != "relay.example.org" || r.Relay != "q83vEjRWeJASNFZ4" {
+		t.Fatalf("relayed room = %+v", r)
+	}
+	plan := netplayPlan{RetroArch: "ra", Core: "c.so", Session: netplaySession{
+		Role: netplayJoin, Game: libraryGame{Path: "g.gb"}, Host: rooms[1].Host, Port: rooms[1].Port, Relay: rooms[1].Relay}}
+	if _, args := netplayCommand(plan); strings.Join(args, " ") != "-L c.so g.gb --connect relay.example.org|55435|q83vEjRWeJASNFZ4" {
+		t.Fatalf("relay argv = %q", args)
+	}
+
+	from := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 9), Port: 40000}
+	good := `{"v":1,"app":"JukaHub","nick":"ann","title":"Tetris","file":"Tetris (World).gb","size":32768,"core":"gambatte_libretro","port":55435}`
+	room, ok := parseNetplayBeacon([]byte(good), from)
+	if !ok || room.Host != "192.168.1.9" || room.File != "Tetris (World).gb" || room.Core != "gambatte_libretro" {
+		t.Fatalf("beacon = %+v ok=%v", room, ok)
+	}
+	for _, bad := range []string{
+		`{"v":1,"app":"JukaHub","file":"a.gb","core":"../../bin/sh","port":55435}`,
+		`{"v":1,"app":"JukaHub","file":"a.gb","core":"x/y","port":55435}`,
+		`{"v":1,"app":"JukaHub","file":"a.gb","core":"mgba_libretro","port":70000}`,
+		`{"v":2,"app":"JukaHub","file":"a.gb","core":"mgba_libretro","port":55435}`,
+	} {
+		if _, ok := parseNetplayBeacon([]byte(bad), from); ok {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+	if room, ok := parseNetplayBeacon([]byte(`{"v":1,"app":"JukaHub","file":"../../etc/x.gb","core":"mgba_libretro","port":1}`), from); !ok || room.File != "x.gb" {
+		t.Fatalf("file not reduced to a base name: %+v", room)
+	}
+	if netplayCoreNorm("Genesis Plus GX") != netplayCoreNorm("genesis_plus_gx_libretro.so") ||
+		netplayCoreNorm("Beetle PCE Fast") != netplayCoreNorm("mednafen_pce_fast_libretro.dll") {
+		t.Fatal("lobby core names do not fold onto core files")
 	}
 }

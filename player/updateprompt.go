@@ -109,6 +109,12 @@ func startHeaderUpdate() bool {
 		ShowToast("JukaHub is up to date", ToastKindInfo)
 		return false
 	}
+	// The battery gate first: a low battery is said at once, not after
+	// "Downloading…" and a progress bar have started (autoupdate.go).
+	if err := updateBatteryGate(); err != nil {
+		ShowToast(err.Error(), ToastKindWarning)
+		return false
+	}
 	if !tryBeginPatchOp() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return false

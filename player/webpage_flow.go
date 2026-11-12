@@ -12,6 +12,7 @@ package main
 import (
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -114,6 +115,110 @@ func (l *webLayouter) itemWidth(b webBlock, avail int32) int32 {
 		return int32(b.Width * scale)
 	}
 	return 0
+}
+
+// itemContainerID finds the containment container that is the flex item's own
+// box. A container nested inside that box shares the same FlexItem number, so
+// the search stops at the outermost one whose parent is not also in the item.
+func (l *webLayouter) itemContainerID(blocks []webBlock) int {
+	if l.doc == nil || len(blocks) == 0 {
+		return 0
+	}
+	b := blocks[0]
+	if b.FlexGroup == 0 || b.FlexItem == 0 {
+		return 0
+	}
+	for _, id := range b.ContainerIDs {
+		info, ok := l.doc.Containers[id]
+		if !ok || info.flexGroup != b.FlexGroup || info.flexItem != b.FlexItem {
+			continue
+		}
+		if parent, ok := l.doc.Containers[info.parent]; ok &&
+			parent.flexGroup == info.flexGroup && parent.flexItem == info.flexItem {
+			continue
+		}
+		return id
+	}
+	return 0
+}
+
+// intrinsicContainerWidth measures the text in a content-sized container. The
+// reader has no inline formatting context to ask, so the widest run plus a
+// small box padding is the closest thing to a shrink-to-fit inline size it can
+// know before laying the item out.
+func (l *webLayouter) intrinsicContainerWidth(blocks []webBlock) int32 {
+	if l.fontAt == nil || l.baseSize <= 0 {
+		return 0
+	}
+	scale := l.baseSize / 16
+	widest := int32(0)
+	for _, b := range blocks {
+		padding := int32((b.Indent + b.Style.IndentRight) * scale)
+		for _, run := range b.Runs {
+			text := strings.TrimSpace(run.Text)
+			if text == "" {
+				continue
+			}
+			font := l.fontAt(run.Style.FontPx)
+			if font == nil {
+				continue
+			}
+			w, _, err := font.SizeUTF8(text)
+			if err != nil {
+				continue
+			}
+			if width := int32(w) + padding; width > widest {
+				widest = width
+			}
+		}
+	}
+	if widest <= 0 {
+		return 0
+	}
+	// A little breathing room keeps the first word from touching the edge and
+	// gives cq* margins inside the box a real percentage to resolve against.
+	return widest + int32(24*scale)
+}
+
+// setContainerWidth overwrites one measured container width and resolves its
+// nested containers from it. This is how a flex track makes cqw/cqi agree with
+// the column the reader actually drew.
+func (l *webLayouter) setContainerWidth(id int, width int32) {
+	if id == 0 || l.doc == nil || l.containerSizes == nil || l.baseSize <= 0 {
+		return
+	}
+	cssWidth := float64(width) * 16 / l.baseSize
+	l.applyContainerWidth(id, cssWidth)
+}
+
+func (l *webLayouter) applyContainerWidth(id int, width float64) {
+	if _, ok := l.doc.Containers[id]; !ok {
+		return
+	}
+	size := l.containerSizes[id]
+	size.Width = width
+	l.containerSizes[id] = size
+	for childID, child := range l.doc.Containers {
+		if child.parent != id {
+			continue
+		}
+		childWidth := width
+		switch {
+		case child.widthPct > 0:
+			childWidth = width * child.widthPct / 100
+		case child.width > 0:
+			childWidth = child.width
+		}
+		l.applyContainerWidth(childID, childWidth)
+	}
+}
+
+// primeItemContainerWidths makes a sub-layout's own column width the used size
+// of the container at the top of that item before its blocks are measured.
+func (l *webLayouter) primeItemContainerWidths(blocks []webBlock, width int32) {
+	if id := l.itemContainerID(blocks); id != 0 {
+		l.setContainerWidth(id, width)
+	}
 }
 
 // layoutFlexRow lays one container's items out side by side: widths from
@@ -229,6 +334,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 
 	widths := make([]int32, n)
+	containerIDs := make([]int, n)
 	fixed := int32(0)
 	auto := make([]int, 0, n)
 	totalGrow := 0.0
@@ -239,7 +345,14 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 	for i, item := range grouped {
 		b := item.blocks[0]
+		containerIDs[i] = l.itemContainerID(item.blocks)
 		w := l.itemWidth(b, avail)
+		if w <= 0 && containerIDs[i] != 0 && b.FlexGrow <= 0 {
+			// A content-sized containment container is shrink-to-fit: its
+			// own text decides the column, and cqw/cqi inside it then use that
+			// measured width instead of the parser's viewport guess.
+			w = l.intrinsicContainerWidth(item.blocks)
+		}
 		if w <= 0 && totalGrow > 0 {
 			// An auto-sized label keeps a readable width while the item with
 			// flex-grow receives the rest. A growing zero-basis item needs a
@@ -352,8 +465,17 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		b := item.blocks[0]
 		sub := &webLayout{RowH: l.rowH}
 		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
-			spaceWidths: l.spaceWidths, sanitized: l.sanitized}
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
+			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
+		subLayouter.primeItemContainerWidths(item.blocks, widths[i])
 		subLayouter.layoutBlocksFlat(item.blocks, 0, widths[i])
+		l.absorbContainerRows(subLayouter.containerRows)
+		if id := containerIDs[i]; id != 0 && l.baseSize > 0 {
+			if size := l.containerSizes[id]; size.Height <= 0 {
+				size.Height = float64(len(sub.Rows)) * float64(l.rowH) * 16 / l.baseSize
+				l.containerSizes[id] = size
+			}
+		}
 		align := b.FlexAlign
 		if b.AlignSelf >= 0 {
 			align = b.AlignSelf
@@ -449,8 +571,10 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 
 		sub := &webLayout{RowH: l.rowH}
 		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
-			spaceWidths: l.spaceWidths, sanitized: l.sanitized}
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
+			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
 		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
+		l.absorbContainerRows(subLayouter.containerRows)
 		if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 {
 			continue
 		}

@@ -20,6 +20,7 @@ package main
 // screen and cannot drift apart.
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -96,12 +97,14 @@ var statusVolumeLevel = volumeCurrent
 var statusWiFiSignal = readWiFiSignalLevel
 
 // statusBatteryColor is the gauge colour: green with charge to spare, yellow
-// when the user should start thinking about a cable, red when it is nearly gone.
+// when the user should start thinking about a cable, red when it is nearly gone
+// (below 15%, the point Mosaik's gauge turns red too; below 5% the header's
+// chip also blinks, drawStatusBatteryChip).
 func statusBatteryColor(pct int) sdl.Color {
 	switch {
 	case pct >= 50:
 		return sdl.Color{R: 92, G: 200, B: 140, A: 255}
-	case pct >= 20:
+	case pct >= 15:
 		return sdl.Color{R: 236, G: 191, B: 82, A: 255}
 	default:
 		return sdl.Color{R: 232, G: 96, B: 88, A: 255}
@@ -456,6 +459,49 @@ func drawStatusSignalBars(renderer *sdl.Renderer, x, y, w, h int32, level int, n
 	}
 }
 
+// drawStatusSignalBarsJoining draws the meter while a join waits for
+// association: all four bars in the accent at alpha, no slash and no
+// strength, so "connecting" reads differently from both "no Wi-Fi" and a
+// measured link. The geometry matches drawStatusSignalBars.
+func drawStatusSignalBarsJoining(renderer *sdl.Renderer, x, y, w, h int32, alpha uint8) {
+	if renderer == nil || w <= 0 || h <= 0 {
+		return
+	}
+	gap := w / 10
+	if gap < 1 {
+		gap = 1
+	}
+	barW := (w - 3*gap) / 4
+	if barW < 2 {
+		barW = 2
+	}
+	baseY := y + h
+	for i := int32(0); i < 4; i++ {
+		bh := h * (i + 1) / 4
+		if bh < 2 {
+			bh = 2
+		}
+		fillRoundedRect(renderer, x+i*(barW+gap), baseY-bh, barW, bh, 1, WithAlpha(accentColor, alpha))
+	}
+}
+
+// statusWiFiJoinPulseMS is one breath of the joining meter.
+const statusWiFiJoinPulseMS = 1400
+
+// statusWiFiJoinAlpha is the joining meter's alpha at now (SDL ticks): a
+// breath between about 30% and 90%, or a steady dim 55% under reduced motion
+// and while an idle screen is up. It asks for the frames the breath needs.
+// Render thread only.
+func statusWiFiJoinAlpha(now uint64) uint8 {
+	if screensaverAsleep() || (appConfig != nil && effectiveReducedMotion(appConfig)) {
+		return 140
+	}
+	requestFrameEvery(statusBatterySweepFrameMS)
+	phase := float64(now%statusWiFiJoinPulseMS) / statusWiFiJoinPulseMS
+	breath := 0.5 - 0.5*math.Cos(2*math.Pi*phase)
+	return uint8(76 + breath*154)
+}
+
 // drawStatusBatteryGauge draws the cell and its charge, returning the width used.
 func drawStatusBatteryGauge(renderer *sdl.Renderer, x, y, iconH int32, pct int, col sdl.Color) int32 {
 	if renderer == nil || iconH <= 0 {
@@ -514,7 +560,13 @@ func drawStatusWiFiChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, 
 	if offline {
 		ink = WarningInk()
 	}
-	drawStatusSignalBars(renderer, x, iconY, iconW, iconH, level, ink)
+	if wifiJoinInProgress() {
+		// A join is waiting for association: the meter breathes in the
+		// accent until it lands or fails (Mosaik 0.9.13's pulsing icon).
+		drawStatusSignalBarsJoining(renderer, x, iconY, iconW, iconH, statusWiFiJoinAlpha(sdl.GetTicks64()))
+	} else {
+		drawStatusSignalBars(renderer, x, iconY, iconW, iconH, level, ink)
+	}
 	textX := x + iconW
 	// The VPN's lock sits right of the bars (vpn.go): the meter's ink while
 	// the tunnel is up, the warning ink while the VPN is on but not connected
@@ -566,8 +618,14 @@ func drawStatusBatteryChip(renderer *sdl.Renderer, font *ttf.Font, part string, 
 	if charging {
 		col = statusBatteryChargingColor
 	}
+	fill, visible := statusBatteryMotion(pct, charging, sdl.GetTicks64())
+	if !visible {
+		// The blink's dark half: the part keeps its width, so nothing
+		// beside it shifts while the gauge is off.
+		return statusClusterPartWidth(font, part)
+	}
 	cellY := textTop + (textH-iconH)/2
-	gaugeW := drawStatusBatteryGauge(renderer, x, cellY, iconH, pct, col)
+	gaugeW := drawStatusBatteryGauge(renderer, x, cellY, iconH, fill, col)
 	if charging {
 		drawStatusChargingBolt(renderer, sdl.Rect{X: x, Y: cellY, W: statusBatteryIconWidth(iconH), H: iconH})
 	}
@@ -575,6 +633,56 @@ func drawStatusBatteryChip(renderer *sdl.Renderer, font *ttf.Font, part string, 
 		draw(statusBatteryLabel(pct), col, x+gaugeW+statusChipTextGap, textTop)
 	}
 	return statusClusterPartWidth(font, part)
+}
+
+// The header gauge's two motions (Mosaik 0.9.13): on a charger the fill rises
+// from the real level to full and starts again, so "charging" reads at a glance
+// even at 98%; off the charger below statusBatteryBlinkBelow the gauge and its
+// percentage blink, a second on and a second off. Reduced motion (or Battery
+// Saver) keeps both steady, and nothing moves while an idle screen is up —
+// those draw their own gauge (saver_status.go) and must stay at their slow
+// cadence.
+const (
+	statusBatteryBlinkBelow   = 5
+	statusBatteryBlinkHalfMS  = 1000
+	statusBatterySweepMS      = 2000
+	statusBatterySweepFrameMS = 100
+)
+
+// statusBatteryMotion returns the fill level to draw and whether the chip is
+// in the visible half of its blink at now (SDL ticks), and asks the frame
+// governor for the frames the motion needs. Render thread only.
+func statusBatteryMotion(pct int, charging bool, now uint64) (fill int, visible bool) {
+	if screensaverAsleep() || (appConfig != nil && effectiveReducedMotion(appConfig)) {
+		return pct, true
+	}
+	switch {
+	case charging && pct < 100:
+		requestFrameEvery(statusBatterySweepFrameMS)
+		return statusBatterySweepLevel(pct, now), true
+	case !charging && pct < statusBatteryBlinkBelow:
+		requestFrameEvery(statusBatteryBlinkHalfMS / 4)
+		return pct, (now/statusBatteryBlinkHalfMS)%2 == 0
+	}
+	return pct, true
+}
+
+// statusBatterySweepLevel is the charging sweep's level at now: it eases from
+// pct to 100 over three quarters of the cycle and holds full for the rest, so
+// the loop has a beat instead of a sawtooth. Pure.
+func statusBatterySweepLevel(pct int, now uint64) int {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct >= 100 {
+		return 100
+	}
+	t := float64(now%statusBatterySweepMS) / float64(statusBatterySweepMS) / 0.75
+	if t > 1 {
+		t = 1
+	}
+	t = 1 - (1-t)*(1-t) // ease out
+	return pct + int(float64(100-pct)*t+0.5)
 }
 
 // statusBatteryChargingColor is the gauge's ink on a charger: the same green as

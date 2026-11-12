@@ -283,7 +283,8 @@ clock and the notification bell are in the bar itself.
   `data/game-snaps/` and the preview box plays it while the focus rests on that
   game. Every launch is recorded, so
   the **Continue** row at the top resumes the last game in one press. **X** on a
-  game opens **LAN Play**: host it, or join another device over Wi-Fi, so link
+  game opens **Netplay**: host it, join a room another JukaHub is hosting on
+  your Wi-Fi, or play online through RetroArch's lobby and relays, so link
   cable titles like Mario Kart and Four Swords play without a cable. **Tools →
   Disc helpers** fills in the cue sheets and multi-disc playlists that
   PlayStation and Sega CD rips need, without touching an existing file. See
@@ -419,6 +420,8 @@ the phone opens a small page with:
   playing on the handheld.
 * **Send a file** — uploads land in the `PhoneDrop` folder of the shared folder
   (the same one FTP publishes), ready for the file browser or player.
+* **Files** — browse the shared folders, upload and download files, and make or
+  rename folders from a phone or computer browser.
 * **Groq API key** — paste the key from console.groq.com instead of typing 56
   characters on the handheld. It is checked with Groq, saved for voice typing,
   voice commands and the Juka chat, and never shown again (the page only
@@ -432,8 +435,14 @@ the phone opens a small page with:
   handheld, with **Download now** when it is missing (the page only learns the
   Account-ID's first and last characters).
 
-The QR code carries a fresh six-digit PIN, so nothing has to be typed on the
-device. The server runs in the background for the whole session, and **Y**
+The pairing card shows `http://jukahub.local` when the short address is
+available, with the device's IP address underneath as a fallback. If port 80
+is unavailable, the shown addresses include the Companion's port (usually
+`:8317`). Type either address into a browser on the same Wi-Fi and enter the
+six-digit PIN shown on the device. The QR code opens the page with that PIN
+already filled in. Some networks block `.local` discovery; use the IP address
+shown on the card in that case. The server runs in the background for the
+whole session, and **Y**
 issues a new PIN on the spot (which also invalidates every companion link
 already shared; a Screen Share link has its own token and keeps working).
 `JUKAHUB_COMPANION_PORT` overrides the port (default `8317`).
@@ -567,11 +576,13 @@ archive over `Apps/JukaHub` by hand.
 
 Anonymous diagnostics are **off by default**. The switch is under **Tools →
 Community & support**, and the app never sends anything unless you turn it on.
-When enabled, the only data is the build/version, device model, platform and
-OS/architecture — plus a crash count when the app panics. There is no install
-ID, account, filename, config value or usage history. **Report a bug** sends a
-redacted report straight from the device after you review it; it becomes a
-public GitHub issue, not under your name ([docs/BUG_REPORTS.md](docs/BUG_REPORTS.md)).
+When enabled, about every ten launches the app files a public GitHub issue
+marked `[Info]` with the build/version, device model, platform,
+OS/architecture and coarse diagnostics. There is no install ID, account,
+filename, log, user-authored config content or usage history. **Report a bug**
+sends a redacted report straight from the device after you review it; it
+becomes a public GitHub issue, not under your name
+([docs/BUG_REPORTS.md](docs/BUG_REPORTS.md)).
 
 To uninstall, delete the `Apps/JukaHub` folder.
 
@@ -628,8 +639,9 @@ state on the device without a PC.
 - **The LAN servers are opt-in and visible.** FTP/SFTP start only when you press
   the row, SFTP generates its own password and prints a host-key fingerprint, and
   the posture view names whatever is listening.
-- **No telemetry unless you ask.** One boot/crash ping, off by default, and the
-  payload is limited to build and device facts.
+- **No telemetry unless you ask.** Off by default; every ten opted-in launches
+  file a public informational issue limited to build and device facts. A
+  separately configured collector can also receive a one-word crash event.
 
 ## Toolbox
 

@@ -103,6 +103,10 @@ cannot be written. The card works with the D-pad and A/B, the arrow keys and
 Enter/Esc, or a tap. The result appears in the log and in Diagnostics
 (`Safe boot : ...`).
 
+You can also choose **Settings → About → Restore all defaults** while JukaHub
+is running. It asks for confirmation, then uses the same settings reset and
+safety backup as the recovery card.
+
 Safe mode can also be requested without the chord:
 
 | Trigger | Use |

@@ -35,6 +35,10 @@ ANDROIDRT_EXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     g_activity = activity;
     g_framesCalled = 0;
     GAME_LOG("onCreate served — fake game is live");
+#ifndef _WIN32
+    GAME_LOG(ALooper_forThread() ? "Java main looper present during onCreate"
+                                 : "FAIL: Java main looper missing during onCreate");
+#endif
     GAME_LOG(g_activity->internalDataPath ? "paths handed over correctly"
                                           : "FAIL: internalDataPath is NULL");
     GAME_LOG(activity->assetManager ? "asset manager present" : "no asset manager");

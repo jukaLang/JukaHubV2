@@ -45,8 +45,8 @@ Three things people do not expect a "media hub" to do, all built in:
 
 * **PS Remote Play** — the PS4/PS5 panel pairs over your LAN in two minutes and
   streams through JukaHub without Python or a separate Chiaki install.
-* **LAN play** — **X** on a game hosts or joins RetroArch netplay, so link-cable
-  classics run over Wi-Fi.
+* **Netplay** — **X** on a game hosts or joins RetroArch netplay: rooms on your
+  Wi-Fi are listed live, and online rooms go through RetroArch's relays.
 * **Save that never dies** — **Start → Save Manager** snapshots every emulator
   save folder; restoring one snapshots your current saves first, so even a
   restore is undoable.

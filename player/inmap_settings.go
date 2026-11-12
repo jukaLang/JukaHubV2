@@ -27,6 +27,8 @@ func inmapSettingsRows() []setRow {
 				setToast("Button hints: " + hintModeOptions(c)[hintModeCurrent(c)].Label)
 			},
 		},
+		trimuiStickCalSettingsRow(),
+		stickCalSettingsRow(),
 		{
 			ID: "inputProfile", Label: "Control profile", Kind: setKindChoice, Quiet: true,
 			Detail:     inmapProfileDetail,
@@ -67,7 +69,7 @@ func inmapSettingsRows() []setRow {
 			Open:   inmapOpenProfiles,
 		},
 	}
-	// The virtual cursor, Calibrate sticks and each stick's dead zone
+	// The virtual cursor and each stick's dead zone
 	// (stickcal.go).
 	rows = append(rows, stickCalSettingsRows()...)
 	for a := navArea(0); a < navAreaCount; a++ {

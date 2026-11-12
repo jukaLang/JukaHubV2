@@ -198,11 +198,16 @@ func webSizesLengthIn(value string, vw, vh, cw, ch float64) (float64, bool) {
 	if value == "" || value == "auto" {
 		return 0, false
 	}
-	if strings.HasPrefix(value, "calc(") && strings.HasSuffix(value, ")") {
-		if px, ok := webEvalCalcContainer(value[len("calc("):len(value)-1], 16, vw, vh, cw, ch); ok && px >= 0 {
-			return px, true
+	// sizes accepts the full CSS math family. Evaluating it through the calc
+	// parser also covers min/max/clamp nested inside calc and nested functions
+	// inside their arguments, with viewport and container units available.
+	for _, name := range []string{"calc(", "min(", "max(", "clamp("} {
+		if strings.HasPrefix(value, name) && strings.HasSuffix(value, ")") {
+			if px, ok := webEvalCalcContainer(value, 16, vw, vh, cw, ch); ok && px >= 0 {
+				return px, true
+			}
+			return 0, false
 		}
-		return 0, false
 	}
 	unit := func(suffix string) (float64, bool) {
 		if !strings.HasSuffix(value, suffix) {

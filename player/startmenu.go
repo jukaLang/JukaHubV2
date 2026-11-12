@@ -96,7 +96,7 @@ func startMenuSceneEntries(config *Config) []startMenuEntry {
 		"Main", playtimeSceneName, "Tube", "LiveTV", "FileExplorer", "Chat", toolsHubSceneName, "Calculator",
 		"Pomodoro", "Alarm", "Dashboard", "Cron", "Settings",
 		"JukaLand", "CanvasSandbox", "Favorites", "Terminal",
-		"Dictionary", "PDFReader", "MusicPlayer", "Notes",
+		"Dictionary", "PDFReader", "MusicPlayer", synthSceneName, "Notes",
 		"Games", "Browser", "TextBrowser", "Apps", "Packages", "Shorts",
 	}
 	// The experience pack in force lists the screens it pins first (xpack.go).
@@ -279,7 +279,7 @@ var (
 		"Settings": "settings", "About": "info", "Tools": "tools", "Calculator": "calculator",
 		"Pomodoro": "timer", "Alarm": "alarm", "Dashboard": "grid", "PDFReader": "pdf",
 		"Notes": "edit", "Games": "games", "Browser": "browser", "Playtime": "trophy",
-		"RomManager": "rom", "NetworkTools": "network", "WiFi": "wifi",
+		"RomManager": "rom", "NetworkTools": "network", "WiFi": "wifi", "Synth": "synth",
 	}
 	startMenuActionGlyphs = map[string]string{
 		"Emulators": "emulator", "Games Library": "games", "Game Profiles": "controller",
@@ -856,7 +856,8 @@ func startMenuActivate(config *Config) {
 // took the press.
 func sceneClaimsStart(name string) bool {
 	switch name {
-	case "Games", "Ambient", "JukaLand", "Terminal":
+	case "Games", "Ambient", "JukaLand", "Terminal", synthSceneName:
+		// The Synth's Start plays and stops the pattern (synth.go).
 		return true
 	}
 	return false
@@ -876,7 +877,9 @@ func startMenuKeyOpen(e *sdl.KeyboardEvent, config *Config) bool {
 		return false
 	}
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && sceneClaimsStart(name) {
+		// The Terminal's and the Synth's own Start is a key of their own
+		// (Enter, Space), so F10 still opens the menu there.
+		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && sceneClaimsStart(name) {
 			return false
 		}
 	}

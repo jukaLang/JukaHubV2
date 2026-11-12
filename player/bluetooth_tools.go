@@ -10,8 +10,8 @@ package main
 //   - PATH is whatever the launcher handed launch.sh. The Wi-Fi code already
 //     learned that it can miss the sbin directories where firmware images keep
 //     rfkill (wifiToolDirs); BlueZ puts its daemon in libexec, TrimUI its own
-//     tools in /usr/trimui/bin and CrossMix its additions in System/bin on the
-//     card. A tool missing from PATH made the whole Bluetooth page, the top
+//     tools in /usr/trimui/bin, CrossMix in System/bin and NextUI in .system/bin
+//     on the card. A tool missing from PATH made the whole Bluetooth page, the top
 //     bar's button and Quick Settings' switch read "no bluetoothctl" on a
 //     handheld that has one.
 //   - JukaHub's library path puts its own folder and /usr/lib ahead of the
@@ -35,11 +35,11 @@ import (
 
 // btToolDirs are the fixed directories a Bluetooth tool is looked for in when
 // PATH does not have it, in order: the standard system ones, BlueZ's private
-// daemon directories, TrimUI's own tools, and CrossMix's additions on the card.
+// daemon directories, TrimUI's own tools, and CrossMix/NextUI additions on the card.
 var btToolDirs = []string{
 	"/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin", "/usr/local/sbin",
 	"/usr/libexec/bluetooth", "/usr/lib/bluetooth",
-	"/usr/trimui/bin", "/mnt/SDCARD/System/bin",
+	"/usr/trimui/bin", "/mnt/SDCARD/System/bin", "/mnt/SDCARD/.system/bin",
 }
 
 // btToolCache remembers where each tool was found (or that it was not), for
@@ -55,8 +55,9 @@ var btToolCache struct {
 const btToolCacheFor = 30 * time.Second
 
 // btToolPath is the program to run for name ("bluetoothctl", "rfkill",
-// "hciattach", …) and whether there is one: the name itself when PATH has it,
-// else an absolute path in btToolDirs. Only bare names are looked up.
+// "hciattach", …) and whether there is one. It keeps the resolved path: the
+// child's firmware PATH may differ from JukaHub's PATH, so a bare name found
+// by one can fail to start under the other. Only bare names are looked up.
 func btToolPath(name string) (string, bool) {
 	if name == "" || strings.ContainsAny(name, `/\`) {
 		return "", false
@@ -83,8 +84,11 @@ func btToolPath(name string) (string, bool) {
 // btToolLookup finds name now: PATH, then the fixed directories (a regular
 // file with an execute bit).
 func btToolLookup(name string) string {
-	if _, err := exec.LookPath(name); err == nil {
-		return name
+	if path, err := exec.LookPath(name); err == nil {
+		if absolute, err := filepath.Abs(path); err == nil {
+			return absolute
+		}
+		return path
 	}
 	for _, dir := range btToolDirs {
 		cand := filepath.Join(dir, name)

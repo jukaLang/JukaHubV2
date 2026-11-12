@@ -421,21 +421,21 @@ func recoveryConfirmSource(config *Config, src recoverySettingsSource, back func
 // recoveryConfirmReset asks before the reset.
 func recoveryConfirmReset(config *Config, back func(*Config)) {
 	recoveryCardShow(recoveryCardSpec{
-		title:    "Reset settings?",
+		title:    "Restore all defaults?",
 		subtitle: "Games and saves are kept",
 		icon:     "refresh",
 		body: "Settings and the home layout go back to how JukaHub ships. Games, saves, favourites, play history, " +
 			"themes and plugins stay.\n\nYour current settings are saved first as a safety backup " +
 			"(Tools → Your setup → Backup & restore), so this can be undone.",
 		options: []recoveryOption{
-			{icon: "refresh", title: "Reset settings", detail: "Backs up the current settings, then resets them",
+			{icon: "close", title: "Cancel", detail: "Nothing changes", run: back},
+			{icon: "refresh", title: "Restore all defaults", detail: "Backs up the current settings, then resets them",
 				run: func(c *Config) {
 					appDir, version := bkupAppDir(), versionString(c)
 					recoveryRunSettings(c, "Resetting your settings…", true, func(ctx context.Context) bkupRestoreResult {
 						return recoveryResetSettings(ctx, appDir, version)
 					})
 				}},
-			{icon: "close", title: "Cancel", detail: "Nothing changes", run: back},
 		},
 		back:     back,
 		backText: "Cancel",

@@ -34,6 +34,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -360,21 +361,21 @@ func btRunFirmwareInit(ctx context.Context, say func(string)) bool {
 	return false
 }
 
-// btFirmwareInitScriptList is btFirmwareInitScripts, then the variant named
-// for this board's chip that Allwinner's base images may carry next to it
-// ("bt_init.sh_xr829"). Only the known chip's: an image often ships one script
-// per chip it supports, and another chip's would attach with the wrong type
-// and speed (and kill whatever attach is running).
+// btFirmwareInitScriptList puts the board's chip-specific script first, then
+// the generic script. The stock XR829 image ships bt_init.sh_xr829, while a
+// generic Tina script may be configured for a different chip. Only the known
+// chip's variant is tried: another chip's script would use the wrong UART
+// protocol and could stop an attach already in progress.
 func btFirmwareInitScriptList() []string {
-	list := append([]string(nil), btFirmwareInitScripts...)
 	u, ok := btChipUART(btBoardModel())
 	if !ok || u.chip == "" {
-		return list
+		return append([]string(nil), btFirmwareInitScripts...)
 	}
+	list := make([]string, 0, len(btFirmwareInitScripts)*2)
 	for _, s := range btFirmwareInitScripts {
 		list = append(list, s+"_"+u.chip)
 	}
-	return list
+	return append(list, btFirmwareInitScripts...)
 }
 
 // btStartDaemon starts bluetoothd: through the first init script there is, else
@@ -606,8 +607,8 @@ func btProcStatLive(stat string) bool {
 }
 
 // btUnblockRfkill lifts a soft block from the Bluetooth radio switches: rfkill
-// when the firmware ships it, the switches' own sysfs files otherwise. A hard
-// block is a switch only a hand can move, and is reported as such.
+// (or TrimUI's rfkill.elf) when the firmware ships it, the switches' own sysfs
+// files otherwise. A hard block is a switch only a hand can move.
 func btUnblockRfkill() error {
 	soft, hard := btRfkillBlocked(btRfkillRoot)
 	if hard {
@@ -616,7 +617,7 @@ func btUnblockRfkill() error {
 	if len(soft) == 0 {
 		return nil
 	}
-	if btToolExists("rfkill") {
+	if btRfkillTool() != "" {
 		err := btRfkillSet(true)
 		if err == nil {
 			return nil
@@ -624,8 +625,13 @@ func btUnblockRfkill() error {
 		logDebug("bluetooth", "bring-up: %v", err)
 	}
 	for _, name := range soft {
-		if err := os.WriteFile(filepath.Join(btRfkillRoot, name, "soft"), []byte("0"), 0o644); err != nil {
-			logWarn("bluetooth", "bring-up: unblocking %s: %v", name, err)
+		dir := filepath.Join(btRfkillRoot, name)
+		path, value := filepath.Join(dir, "state"), "1"
+		if _, err := os.Stat(path); err != nil {
+			path, value = filepath.Join(dir, "soft"), "0"
+		}
+		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
+			return fmt.Errorf("cannot unblock Bluetooth through %s: %w", path, err)
 		}
 	}
 	return nil

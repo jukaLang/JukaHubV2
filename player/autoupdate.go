@@ -459,10 +459,44 @@ func pruneStaleUpdateAdvertisement() bool {
 // running build (a stale advertisement, or a build that already applied it).
 var errAlreadyUpToDate = errors.New("already up to date")
 
+// updateMinBatteryPercent is the charge below which an update installs only
+// on the charger (Mosaik 0.9.16): the swap rewrites the app's files and a
+// handheld that dies halfway relies on the journal's rollback at the next
+// boot — better not to need it.
+const updateMinBatteryPercent = 30
+
+// errUpdateLowBattery is what a refused install reports, word for word in the
+// Updates row and the update prompt's error line.
+var errUpdateLowBattery = errors.New("Battery below 30% — connect the charger to update")
+
+// updateBatteryPercent and updateBatteryCharging are the readings the gate
+// uses; variables so a test can pin them instead of the host's battery.
+var (
+	updateBatteryPercent  = getBatteryPercent
+	updateBatteryCharging = getBatteryCharging
+)
+
+// updateBatteryGate refuses an install on a known battery below
+// updateMinBatteryPercent that is not charging. An unknown level (-1: a
+// desktop, or a fuel gauge that did not answer) never blocks.
+func updateBatteryGate() error {
+	pct := updateBatteryPercent()
+	if pct < 0 || pct >= updateMinBatteryPercent || updateBatteryCharging() {
+		return nil
+	}
+	return errUpdateLowBattery
+}
+
 // InstallAvailableJukaHubUpdate downloads, stages and applies the newest release.
 // It runs only after the user confirms in the Patch scene; nothing in the
 // background path calls it.
 func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
+	// Refuse before any download: the swap at the end would refuse anyway
+	// (OpApplyStagedSwap), and a long download that ends in "connect the
+	// charger" is worse than hearing it first.
+	if err := updateBatteryGate(); err != nil {
+		return err
+	}
 	// A verified copy already in the update cache installs with no network at
 	// all (upch.go): always when the device is offline, and online when it is
 	// the release on offer. A release newer than the cached one is downloaded.

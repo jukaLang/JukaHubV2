@@ -292,7 +292,7 @@ func executeCanvasCode(code string) *sdl.Surface {
 					c = parseColor(strings.TrimSpace(parts[3]))
 				}
 				if textFont != nil && fontErr == nil {
-					if ts, terr := textFont.RenderUTF8Blended(sanitizeForFont(textFont, text), c); terr == nil {
+					if ts, terr := textFont.RenderUTF8Blended(sanitizeForFont(textFont, uiT(text)), c); terr == nil {
 						surface.Blit(&sdl.Rect{X: int32(tx), Y: int32(ty)}, ts, nil)
 						ts.Free()
 					}

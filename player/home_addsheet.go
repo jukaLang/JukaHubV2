@@ -74,7 +74,7 @@ func homeAddSheetOpen(config *Config, after HomeFocusID) {
 		if e.Section != section {
 			section = e.Section
 			// Upper-cased here, once, not on every frame the heading is drawn.
-			s.rows = append(s.rows, homeAddRow{header: strings.ToUpper(section), entry: -1})
+			s.rows = append(s.rows, homeAddRow{header: strings.ToUpper(uiT(section)), entry: -1})
 		}
 		s.rows = append(s.rows, homeAddRow{entry: i})
 	}

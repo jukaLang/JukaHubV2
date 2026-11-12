@@ -1183,7 +1183,7 @@ func UISectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, 
 	if renderer == nil || font == nil {
 		return
 	}
-	label := strings.ToUpper(strings.TrimSpace(title))
+	label := strings.ToUpper(strings.TrimSpace(uiT(title))) // translate before upper-casing (i18n.go)
 	_, th, _ := font.SizeUTF8(label)
 	textY := y + 6
 	textX := x

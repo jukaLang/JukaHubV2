@@ -29,11 +29,15 @@ const (
 	libraryViewVersion = 1
 	libraryViewMaxName = 80
 
-	librarySortTitle = "title"
-	librarySortLast  = "last_played"
-	librarySortTime  = "playtime"
-	librarySortRate  = "rating"
-	librarySortYear  = "year"
+	librarySortTitle        = "title"
+	librarySortLast         = "last_played"
+	librarySortAdded        = "recently_added"
+	librarySortTime         = "playtime"
+	librarySortRate         = "rating"
+	librarySortYear         = "year"
+	libraryLayoutList       = "list"
+	libraryLayoutHorizontal = "covers_horizontal"
+	libraryLayoutVertical   = "covers_vertical"
 )
 
 // librarySortChoices is the order the options sheet cycles through.
@@ -43,6 +47,7 @@ var librarySortChoices = []struct {
 }{
 	{librarySortTitle, "Title"},
 	{librarySortLast, "Last played"},
+	{librarySortAdded, "Recently added"},
 	{librarySortTime, "Playtime"},
 	{librarySortRate, "Rating"},
 	{librarySortYear, "Year"},
@@ -57,6 +62,7 @@ type libraryGameView struct {
 type libraryViewFile struct {
 	Version    int                        `json:"version"`
 	Sort       string                     `json:"sort,omitempty"`
+	Layout     string                     `json:"layout,omitempty"`
 	ShowHidden bool                       `json:"show_hidden,omitempty"`
 	Games      map[string]libraryGameView `json:"games,omitempty"`
 }
@@ -77,7 +83,7 @@ var libraryViewPath = func() string {
 }
 
 func libraryViewEmpty() libraryViewFile {
-	return libraryViewFile{Version: libraryViewVersion, Sort: librarySortTitle, Games: map[string]libraryGameView{}}
+	return libraryViewFile{Version: libraryViewVersion, Sort: librarySortTitle, Layout: libraryLayoutList, Games: map[string]libraryGameView{}}
 }
 
 func libraryViewNormalize(data *libraryViewFile) {
@@ -86,6 +92,7 @@ func libraryViewNormalize(data *libraryViewFile) {
 	}
 	data.Version = libraryViewVersion
 	data.Sort = librarySortValue(data.Sort)
+	data.Layout = libraryLayoutValue(data.Layout)
 	if data.Games == nil {
 		data.Games = map[string]libraryGameView{}
 	}
@@ -111,6 +118,51 @@ func librarySortValue(mode string) string {
 		}
 	}
 	return librarySortTitle
+}
+
+func libraryLayoutValue(layout string) string {
+	switch layout {
+	case libraryLayoutHorizontal, libraryLayoutVertical:
+		return layout
+	default:
+		return libraryLayoutList
+	}
+}
+
+func libraryLayoutMode() string {
+	libraryViewStore.mu.Lock()
+	defer libraryViewStore.mu.Unlock()
+	libraryViewEnsureLocked()
+	return libraryLayoutValue(libraryViewStore.data.Layout)
+}
+
+func libraryLayoutLabel() string {
+	switch libraryLayoutMode() {
+	case libraryLayoutHorizontal:
+		return "Cover row"
+	case libraryLayoutVertical:
+		return "Cover column"
+	default:
+		return "List"
+	}
+}
+
+func cycleLibraryLayout(delta int) string {
+	choices := []string{libraryLayoutList, libraryLayoutHorizontal, libraryLayoutVertical}
+	libraryViewStore.mu.Lock()
+	defer libraryViewStore.mu.Unlock()
+	libraryViewEnsureLocked()
+	idx := 0
+	for i, choice := range choices {
+		if choice == libraryViewStore.data.Layout {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + delta + len(choices)) % len(choices)
+	libraryViewStore.data.Layout = choices[idx]
+	libraryViewSaveLocked()
+	return choices[idx]
 }
 
 func libraryCleanDisplayTitle(title string) string {
@@ -350,13 +402,23 @@ func libraryDecorateGames(games []libraryGame, seconds map[string]int64) {
 		}
 	}
 	if seconds == nil {
+		// Render-thread callers only: a background build is always handed a
+		// snapshot (startGameLibraryScan), never reads the ledger itself.
 		seconds = libraryPlaytimeSnapshot()
 	}
 	for i := range games {
 		game := &games[i]
 		libraryDecorateGame(game)
 		game.LastPlayed = played[game.Path]
-		game.Playtime = seconds[game.Title]
+		// By console and title, plus a bare-title figure still left in the
+		// map: libraryPlaytimeForTitles has moved or dropped every bare title
+		// the decorated library holds on one console or more, so what is left
+		// reaches at most one console (libraryPlaytimeSnapshot).
+		key := playtimeGameKey(game.System, game.Title)
+		game.Playtime = seconds[key]
+		if _, title := playtimeGameKeyParts(key); title != key {
+			game.Playtime += seconds[title]
+		}
 		if rec, ok := gmetaGet(game.System, game.Title); ok {
 			game.Rating = rec.Rating
 			game.Year = libraryParseYear(rec.Year)
@@ -395,6 +457,16 @@ func sortLibraryGames(games []libraryGame, mode string) {
 				}
 				return a.LastPlayed.After(b.LastPlayed)
 			}
+		case librarySortAdded:
+			if !a.AddedAt.Equal(b.AddedAt) {
+				if a.AddedAt.IsZero() {
+					return false
+				}
+				if b.AddedAt.IsZero() {
+					return true
+				}
+				return a.AddedAt.After(b.AddedAt)
+			}
 		case librarySortTime:
 			if a.Playtime != b.Playtime {
 				return a.Playtime > b.Playtime
@@ -431,13 +503,88 @@ func libraryHiddenCount(lib gameLibraryReport) int {
 
 // libraryPlaytimeSnapshot copies the game playtime ledger on the render
 // thread, so a background scan can read it without racing the playtime ticker.
+// Keys are "System|Title" (playtimeGameKey). A bare-title entry from an older
+// save is resolved here for display: under its console when only one console
+// is known for the title, kept bare when none is, and left out when two are,
+// so a figure two consoles may share is shown for neither.
+// It is never nil, so a background build handed it never falls back to
+// reading the ledger off the render thread.
 func libraryPlaytimeSnapshot() map[string]int64 {
 	if !playtime.loaded || len(playtime.data.Games) == 0 {
-		return nil
+		return map[string]int64{}
 	}
-	out := make(map[string]int64, len(playtime.data.Games))
-	for title, secs := range playtime.data.Games {
-		out[title] = secs
+	games := playtime.data.Games
+	out := make(map[string]int64, len(games))
+	var consoles map[string]map[string]bool
+	for key, secs := range games {
+		system, title := playtimeGameKeyParts(key)
+		if system != "" {
+			out[key] += secs
+			continue
+		}
+		if consoles == nil {
+			consoles = playtimeTitleConsoles(games, recentGames(), gameLib.lib.Systems)
+		}
+		switch known := consoles[title]; len(known) {
+		case 0:
+			out[key] += secs
+		case 1:
+			out[playtimeGameKey(playtimeOnlyConsole(known), title)] += secs
+		}
+	}
+	return out
+}
+
+// libraryScanTitleConsoles maps each title of a scan to the consoles it is on,
+// with the titles the library build gives the games (gameDisplayTitle).
+func libraryScanTitleConsoles(games []scannedROM) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for _, rom := range games {
+		system, title := playtimeGameKeyParts(playtimeGameKey(rom.System, gameDisplayTitle(rom.Path)))
+		if system == "" || title == "" {
+			continue
+		}
+		if out[title] == nil {
+			out[title] = map[string]bool{}
+		}
+		out[title][system] = true
+	}
+	return out
+}
+
+// libraryPlaytimeForTitles resolves the bare-title entries a snapshot kept
+// against the consoles of the library about to be decorated: a title there on
+// exactly one console gets the figure under that console, a title on two or
+// more shows it on none (Tetris on Game Boy and NES must not both claim it),
+// and a title on none stays bare. Keyed entries pass through. The input is
+// not changed. nil means "no snapshot yet" and takes one: render thread only.
+func libraryPlaytimeForTitles(seconds map[string]int64, consoles map[string]map[string]bool) map[string]int64 {
+	if seconds == nil {
+		seconds = libraryPlaytimeSnapshot()
+	}
+	bare := false
+	for key := range seconds {
+		if system, _ := playtimeGameKeyParts(key); system == "" {
+			bare = true
+			break
+		}
+	}
+	if !bare {
+		return seconds
+	}
+	out := make(map[string]int64, len(seconds))
+	for key, secs := range seconds {
+		system, title := playtimeGameKeyParts(key)
+		if system != "" {
+			out[key] += secs
+			continue
+		}
+		switch known := consoles[title]; len(known) {
+		case 0:
+			out[key] += secs
+		case 1:
+			out[playtimeGameKey(playtimeOnlyConsole(known), title)] += secs
+		}
 	}
 	return out
 }
@@ -450,9 +597,12 @@ func refreshLibraryView() {
 	if len(gameLib.lib.Systems) == 0 {
 		return
 	}
+	// One snapshot for every console, resolved against the whole library.
+	seconds := libraryPlaytimeForTitles(libraryPlaytimeSnapshot(),
+		playtimeTitleConsoles(nil, nil, gameLib.lib.Systems))
 	for i := range gameLib.lib.Systems {
 		system := &gameLib.lib.Systems[i]
-		libraryDecorateGames(system.Games, libraryPlaytimeSnapshot())
+		libraryDecorateGames(system.Games, seconds)
 		system.WithArt = countCoveredGames(system.Games)
 	}
 	systems := currentGameSystems()

@@ -281,6 +281,12 @@ var iconDefs = [...]iconDef{
 		D: R2 5 20 14 2.5
 		s: M6 9 M10 9 M14 9 M18 9 M6 12.5 M10 12.5 M14 12.5 M18 12.5
 		s: M8 16 H16`},
+	{"synth", `
+		D: R2 4 20 16 2.5
+		s: M2 10 H22
+		s: M6 10 V20 M10 10 V20 M14 10 V20 M18 10 V20
+		f: R4.6 10 2.8 5.5 0.7 R8.6 10 2.8 5.5 0.7 R16.6 10 2.8 5.5 0.7
+		s: M6 7 M10 7 M14 7 M18 7`},
 	{"language", `
 		s: M2 5 H12 M7 2 V5
 		s: M10 5 Q9 11 3 15
@@ -682,6 +688,9 @@ var iconAliasPairs = [...][2]string{
 	{"song", "music"},
 	{"audio", "music"},
 	{"headphones", "music"},
+	{"synthesizer", "synth"},
+	{"piano", "synth"},
+	{"groovebox", "synth"},
 	{"podcast", "mic"},
 	{"podcasts", "mic"},
 	{"microphone", "mic"},

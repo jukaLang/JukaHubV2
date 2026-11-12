@@ -71,12 +71,14 @@ settings such as `search_query` or `stream_url`.
 | `tspUsername` | string | name used in the greeting |
 | `playbackResolution` | string | maximum video height, e.g. `"720"` |
 | `subtitleLanguage` | string | Subtitle language code for online video (Settings → General), e.g. `"en"`, `"es"`, or `"pt-BR"`; blank defaults to English. CC fetches a written track in that language, another region of it, the auto-generated track or a YouTube translation — from YouTube's caption list first, yt-dlp second — and caches it under the data folder's `subtitles/`; downloaded videos keep theirs beside the file as `<name>.<lang>.srt`. The code must start with a letter (`all` is refused). |
+| `uiLanguage` | string | Interface language (Settings → General → Language): `en` (default), `es`, `pt-BR`, `fr`, `de`, `it`, `ru`; unknown values mean English. Web pages, PDFs, chat, notes, subtitles, typed text, file names and game titles are never translated. |
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
 | `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `off`): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. Anything else reads as off. Reduce Motion keeps only the ripples you make. The water is drawn between its steps on a mesh twice as fine as its grid, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld falls back to the coarse mesh by itself if the water costs more than 5 ms a frame |
 | `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
+| `autoSleep` | minutes as text, `"0"`/`"3"`/`"5"`/`"10"`/`"15"`/`"30"` | Settings → Power → **Auto sleep** (handheld only; default `"0"`, Off): suspend the handheld after that many minutes without input — never while a game owns the screen, while charging, while music or a video plays (or is paused), while a download, install, extraction or Screen Share viewer is running, while a panel is open, or while any alarm is enabled (a sleeping device cannot ring). The wake counts as input. |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
 | `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself; there the row shows the system's own switch (read from the Windows Time service on Windows) and opens the system's date & time page. **Set date & time** sets the clock by hand on the handheld (and turns this switch off, so the next sync does not undo it); elsewhere it opens the system's page. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
 | `liveBuilder`, `liveBuilderLAN` | bool | Settings → Network → **Live Builder**: whether the web builder's receiver starts with JukaHub (default off on the handheld, on on a PC; either way it switches itself off after 30 minutes without use), and whether a PC listens on the network instead of that computer only. `JUKAHUB_LIVE_BUILDER` and `JUKAHUB_LIVE_LAN` win over both, and the older `liveBuilderDisabled: true` still keeps it off; see [SECURITY.md](../SECURITY.md#live-builder-the-web-builders-receiver) |
@@ -378,6 +380,8 @@ LAN Play is `netPlayEnabled` (default true in the shipped config) with a
 user-level override in the custom key `netplay_enabled`, written by the **LAN
 Play** switch in Quick Settings. The override only exists once the switch is
 used, so an older `jukauser.json` never turns the feature off by omission.
+The relay used by **Host online** is the custom key `netplay_relay` (`nyc`,
+`madrid`, `montreal` or `saopaulo`; default `nyc`), set with ←/→ on that row.
 
 ### Substitution
 
@@ -659,6 +663,7 @@ log.
 | `music-playlists.json` | named playlists saved from the audio player |
 | `theme-catalog.json` | cached copy of the community theme index, so the Theme library browses offline |
 | `audioresume.json` | audiobook/podcast positions and playback speed |
+| `game-history.json` | per-game launches, recent sessions and interrupted launches |
 | `ipstreams.json` | the IPTV library you added |
 | `tvfavorites.json` | starred channels |
 | `browser-cookies.json` | saved sessions (mode 0600). **A deliberate drop deletes the `.bak` too** — a whole Forget, one site's Forget, or a retention prune; a forgotten session must not survive on the card |
@@ -691,20 +696,24 @@ already did so.
 
 Anonymous diagnostics are controlled by `variables.Custom.telemetryOptIn` in
 `jukauser.json` and are **off** unless explicitly enabled in **Tools → Community
-& support**. When enabled, the payload contains only:
+& support**. When enabled, every tenth launch sends an informational public
+GitHub issue through the JukaHub report service. The issue is titled `[Info]`
+and requests the `non-issue` and `from-device` labels. It contains only:
 
 | Field | Example |
 |-------|---------|
-| `kind` | `device` on launch, `crash` on a panic |
+| `kind` | `anonymous_diagnostics` |
 | `version`, `release` | `v1.2.3`, `JukaHub-20261017…` |
 | `device`, `platform` | `TrimUI Smart Pro`, `Trimui` |
 | `os`, `arch` | `linux`, `arm64` |
-| `crash` | `panic` (crash events only) |
+| `diagnostics` | CPU core count, scene/element/schema counts, safe-mode state |
 
-No install ID, account, config value, filename, URL or usage history is sent.
-A collector must be configured by the build (`-X main.telemetryEndpoint=…`) or
-at runtime with `JUKAHUB_TELEMETRY_URL`; when neither is set the switch stores
-the preference but sends nothing.
+No install ID, account, user-authored config content, filename, URL, log or
+full diagnostics bundle is sent. The launch count and any pending report stay
+on the device; an offline report retries on a later launch. Turning the switch off clears
+both. A separately configured telemetry collector (`-X main.telemetryEndpoint=…`
+or `JUKAHUB_TELEMETRY_URL`) still receives a one-word `panic` event after a
+crash while the switch is on.
 
 **Report a bug** (same panel) sends a report built from `DiagnosticsText`: app
 and release version, build date, device, OS/architecture, config scene/element

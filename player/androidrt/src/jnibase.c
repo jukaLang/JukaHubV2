@@ -1263,6 +1263,16 @@ static ApakJObject *newDevice(int32_t id) {
     return o;
 }
 IMPL(dev_get) { RETO(c->args[0].i >= 0 ? newDevice(c->args[0].i) : NULL); }
+IMPL(dev_keyMap) { RETO(apak_jniNewInstance("android/view/KeyCharacterMap")); }
+/* Oboe asks Java for the minimum output buffer even when it streams through
+ * OpenSL ES. An output buffer of about 100 ms is safe for this handheld. */
+IMPL(audio_minOutputBuffer) {
+    int rate = c->args[0].i;
+    int channels = c->args[1].i == 4 ? 1 : 2; /* CHANNEL_OUT_MONO vs stereo */
+    int bytes = rate > 0 && rate <= 192000 ? rate * channels * 2 / 10 : 0;
+    RETI(bytes >= 4096 ? bytes : 4096);
+}
+IMPL(audio_noInputBuffer) { RETI(-1); /* no Android microphone service */ }
 IMPL(dev_ids) {
     int32_t ids[32];
     int n = android_inputDeviceIds(ids, 32), i;
@@ -1460,6 +1470,19 @@ static const ApakJMethodDef kContext[] = {
     M("checkCallingOrSelfPermission", "(Ljava/lang/String;)I", ctx_checkPermission),
     M("startActivity", "(Landroid/content/Intent;)V", ctx_startActivity), END,
 };
+static const ApakJFieldDef kContextFields[] = {
+    { "INPUT_METHOD_SERVICE", "Ljava/lang/String;", 1 }, FEND,
+};
+static const ApakJMethodDef kInputMethodManager[] = {
+    M("showSoftInput", "(Landroid/view/View;I)Z", act_false),
+    M("hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z", act_false), END,
+};
+static const ApakJMethodDef kAudioTrack[] = {
+    S("getMinBufferSize", "(III)I", audio_minOutputBuffer), END,
+};
+static const ApakJMethodDef kAudioRecord[] = {
+    S("getMinBufferSize", "(III)I", audio_noInputBuffer), END,
+};
 static const ApakJMethodDef kActivity[] = {
     M("getWindow", "()Landroid/view/Window;", act_window),
     M("getWindowManager", "()Landroid/view/WindowManager;", act_windowManager), M("finish", "()V", act_finish),
@@ -1604,10 +1627,15 @@ static const ApakJMethodDef kInputDevice[] = {
     M("supportsSource", "(I)Z", dev_supports), M("getVendorId", "()I", dev_zero), M("getProductId", "()I", dev_zero),
     M("isVirtual", "()Z", dev_false), M("isExternal", "()Z", dev_false), M("getKeyboardType", "()I", dev_kbdType),
     M("getControllerNumber", "()I", dev_controller),
+    M("getKeyCharacterMap", "()Landroid/view/KeyCharacterMap;", dev_keyMap),
     M("getMotionRange", "(I)Landroid/view/InputDevice$MotionRange;", dev_range),
     M("getMotionRange", "(II)Landroid/view/InputDevice$MotionRange;", dev_range), END,
 };
 static const ApakJFieldDef kInputDeviceFields[] = { F("mId", "I"), FEND };
+static const ApakJMethodDef kKeyCharacterMap[] = {
+    M("get", "(II)I", dev_zero), S("getDeadChar", "(II)I", dev_zero),
+    M("getKeyboardType", "()I", dev_kbdType), END,
+};
 static const ApakJMethodDef kMotionRange[] = {
     M("getAxis", "()I", range_axis), M("getMin", "()F", range_min), M("getMax", "()F", range_max),
     M("getFlat", "()F", range_flat), M("getFuzz", "()F", range_fuzz), M("getRange", "()F", range_range),
@@ -1683,7 +1711,7 @@ static const ApakJClassDef kBase[] = {
     { "java/nio/Buffer", "java/lang/Object", NULL, NULL },
     { "java/nio/ByteBuffer", "java/nio/Buffer", kBuffer, NULL },
     { "java/nio/DirectByteBuffer", "java/nio/ByteBuffer", NULL, NULL },
-    { "android/content/Context", "java/lang/Object", kContext, NULL },
+    { "android/content/Context", "java/lang/Object", kContext, kContextFields },
     { "android/content/ContextWrapper", "android/content/Context", NULL, NULL },
     { "android/view/ContextThemeWrapper", "android/content/ContextWrapper", NULL, NULL },
     { "android/app/Activity", "android/view/ContextThemeWrapper", kActivity, NULL },
@@ -1693,6 +1721,8 @@ static const ApakJClassDef kBase[] = {
     { "android/app/ActivityManager", "java/lang/Object", kActivityManager, NULL },
     { "android/app/ActivityManager$MemoryInfo", "java/lang/Object", NULL, kMemoryInfoFields },
     { "android/media/AudioManager", "java/lang/Object", kAudioManager, NULL },
+    { "android/media/AudioTrack", "java/lang/Object", kAudioTrack, NULL },
+    { "android/media/AudioRecord", "java/lang/Object", kAudioRecord, NULL },
     { "android/content/res/AssetManager", "java/lang/Object", kAssets, NULL },
     { "android/content/res/Resources", "java/lang/Object", kResources, NULL },
     { "android/content/res/Configuration", "java/lang/Object", kConfiguration, kConfigurationFields },
@@ -1703,6 +1733,8 @@ static const ApakJClassDef kBase[] = {
     { "android/graphics/Rect", "java/lang/Object", kRect, kRectFields },
     { "android/view/Window", "java/lang/Object", kWindow, NULL },
     { "android/view/View", "java/lang/Object", kView, NULL },
+    { "android/os/IBinder", "java/lang/Object", NULL, NULL },
+    { "android/view/inputmethod/InputMethodManager", "java/lang/Object", kInputMethodManager, NULL },
     { "android/content/Intent", "java/lang/Object", kIntent, NULL },
     { "android/net/Uri", "java/lang/Object", kUri, NULL },
     { "android/os/Process", "java/lang/Object", kProcess, NULL },
@@ -1712,6 +1744,7 @@ static const ApakJClassDef kBase[] = {
     { "android/view/KeyEvent", "android/view/InputEvent", kKeyEvent, NULL },
     { "android/view/MotionEvent", "android/view/InputEvent", kMotionEvent, NULL },
     { "android/view/InputDevice", "java/lang/Object", kInputDevice, kInputDeviceFields },
+    { "android/view/KeyCharacterMap", "java/lang/Object", kKeyCharacterMap, NULL },
     { "android/view/InputDevice$MotionRange", "java/lang/Object", kMotionRange, kMotionRangeFields },
     { "android/view/Surface", "java/lang/Object", kSurface, NULL },
     { "android/os/Build", "java/lang/Object", NULL, kBuildFields },
@@ -1779,4 +1812,5 @@ static void defineBuild(void) {
 void apak_jniDefineBase(void) {
     apak_jniDefineAll(kBase);
     defineBuild();
+    buildString("android/content/Context", "INPUT_METHOD_SERVICE", "input_method");
 }

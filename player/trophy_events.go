@@ -233,6 +233,10 @@ const (
 	tkNetTool trophyKey = "net_tool"
 	// tkPomodoro: a Pomodoro focus period completed.
 	tkPomodoro trophyKey = "pomodoro"
+	// tkSynthPlay: the Synth's sequencer started.
+	tkSynthPlay trophyKey = "synth_play"
+	// tkSynthExport: a Synth song exported to WAV.
+	tkSynthExport trophyKey = "synth_export"
 	// tkAlarmSet: an alarm created.
 	tkAlarmSet trophyKey = "alarm_set"
 	// tkAlarmWake: a ringing alarm dismissed.

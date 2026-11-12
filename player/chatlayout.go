@@ -96,7 +96,7 @@ func chatWrapText(font *ttf.Font, text string, maxW int32, maxLines int) chatTex
 	// so that is also what gets measured.
 	text = sanitizeForFont(font, text)
 	w := &chatWrapper{font: font, maxW: maxW, maxLines: maxLines}
-	w.spaceW, _ = measureText(font, " ")
+	w.spaceW, _ = measureTextRaw(font, " ")
 	if w.spaceW <= 0 {
 		w.spaceW = 1
 	}
@@ -125,7 +125,7 @@ func chatWrapText(font *ttf.Font, text string, maxW int32, maxLines int) chatTex
 			b.WriteString(s.text)
 		}
 		cut := ellipsizeLine(font, b.String(), maxW)
-		cw, _ := measureText(font, cut)
+		cw, _ := measureTextRaw(font, cut)
 		*last = chatLine{segs: []chatSeg{{text: cut, w: cw}}, w: cw}
 		if cw > w.width {
 			w.width = cw
@@ -162,7 +162,7 @@ func (w *chatWrapper) word(pieces []chatPiece) {
 	}
 	wordW := int32(0)
 	for i := range pieces {
-		pieces[i].w, _ = measureText(w.font, pieces[i].text)
+		pieces[i].w, _ = measureTextRaw(w.font, pieces[i].text)
 		wordW += pieces[i].w
 	}
 	if w.curW > 0 {
@@ -197,7 +197,7 @@ func (w *chatWrapper) split(p chatPiece) {
 	rest := p.text
 	for rest != "" && !w.full {
 		room := w.maxW - w.curW
-		restW, _ := measureText(w.font, rest)
+		restW, _ := measureTextRaw(w.font, rest)
 		if restW <= room {
 			w.add(rest, p.url, restW)
 			return
@@ -212,7 +212,7 @@ func (w *chatWrapper) split(p chatPiece) {
 			// the loop always moves forward.
 			cut = chatFirstBreak(rest)
 		}
-		partW, _ := measureText(w.font, rest[:cut])
+		partW, _ := measureTextRaw(w.font, rest[:cut])
 		w.add(rest[:cut], p.url, partW)
 		rest = rest[cut:]
 		w.endLine(false)
@@ -256,7 +256,7 @@ func (w *chatWrapper) endLine(keepEmpty bool) {
 		}
 		// Re-measured as one run: the sum of word widths drifts from what
 		// FreeType draws by a pixel or two per space.
-		s.w, _ = measureText(w.font, s.text)
+		s.w, _ = measureTextRaw(w.font, s.text)
 		s.x = x
 		x += s.w
 		segs = append(segs, s)
@@ -357,7 +357,7 @@ func chatFitPrefix(font *ttf.Font, s string, room int32) int {
 	lo, hi := 0, len(offs)-1
 	for lo <= hi {
 		mid := (lo + hi) / 2
-		w, _ := measureText(font, s[:offs[mid]])
+		w, _ := measureTextRaw(font, s[:offs[mid]])
 		if w <= room {
 			best = offs[mid]
 			lo = mid + 1

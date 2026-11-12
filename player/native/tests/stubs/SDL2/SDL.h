@@ -120,6 +120,10 @@ int SDL_JoystickNumAxes(SDL_Joystick *joystick);
 int SDL_JoystickRumble(SDL_Joystick *joystick, Uint16 low, Uint16 high, Uint32 duration_ms);
 Uint16 SDL_JoystickGetVendor(SDL_Joystick *joystick);  /* 2.0.6 */
 Uint16 SDL_JoystickGetProduct(SDL_Joystick *joystick); /* 2.0.6 */
+int SDL_JoystickNumHats(SDL_Joystick *joystick);
+typedef struct { Uint8 data[16]; } SDL_JoystickGUID;
+SDL_JoystickGUID SDL_JoystickGetGUID(SDL_Joystick *joystick);
+void SDL_JoystickGetGUIDString(SDL_JoystickGUID guid, char *pszGUID, int cbGUID);
 #if SDL_VERSION_ATLEAST(2, 0, 12)
 typedef enum {
     SDL_CONTROLLER_TYPE_UNKNOWN = 0, SDL_CONTROLLER_TYPE_XBOX360, SDL_CONTROLLER_TYPE_XBOXONE, SDL_CONTROLLER_TYPE_PS3,
@@ -153,6 +157,14 @@ typedef enum {
     SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY,
     SDL_CONTROLLER_AXIS_TRIGGERLEFT, SDL_CONTROLLER_AXIS_TRIGGERRIGHT, SDL_CONTROLLER_AXIS_MAX
 } SDL_GameControllerAxis;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+typedef enum { SDL_SENSOR_INVALID = -1, SDL_SENSOR_UNKNOWN, SDL_SENSOR_ACCEL, SDL_SENSOR_GYRO } SDL_SensorType;
+#define SDL_STANDARD_GRAVITY 9.80665f
+SDL_bool SDL_GameControllerHasButton(SDL_GameController *gamecontroller, SDL_GameControllerButton button);
+int SDL_GameControllerGetNumTouchpads(SDL_GameController *gamecontroller);
+SDL_bool SDL_GameControllerHasSensor(SDL_GameController *gamecontroller, SDL_SensorType type);
+int SDL_GameControllerSetSensorEnabled(SDL_GameController *gamecontroller, SDL_SensorType type, SDL_bool enabled);
+#endif
 
 /* keyboard */
 typedef Sint32 SDL_Keycode;
@@ -183,6 +195,7 @@ typedef struct { Uint32 type; Uint32 timestamp; SDL_JoystickID which; Uint8 butt
 typedef struct { Uint32 type; Uint32 timestamp; Sint32 which; } SDL_ControllerDeviceEvent;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
 typedef struct { Uint32 type; Uint32 timestamp; SDL_JoystickID which; Sint32 touchpad; Sint32 finger; float x; float y; float pressure; } SDL_ControllerTouchpadEvent;
+typedef struct { Uint32 type; Uint32 timestamp; SDL_JoystickID which; Sint32 sensor; float data[3]; } SDL_ControllerSensorEvent;
 #endif
 typedef union SDL_Event {
     Uint32 type;
@@ -196,6 +209,7 @@ typedef union SDL_Event {
     SDL_ControllerDeviceEvent cdevice;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
     SDL_ControllerTouchpadEvent ctouchpad;
+    SDL_ControllerSensorEvent csensor;
 #endif
     Uint8 padding[56];
 } SDL_Event;

@@ -19,12 +19,14 @@ import (
 )
 
 type companionOverlay struct {
-	open bool
-	pin  string
-	url  string
-	err  string
-	qr   [][]bool
-	srv  *companionServer
+	open        bool
+	pin         string
+	url         string // pairing link, including PIN, for QR codes
+	browserURL  string // address to type, without the PIN
+	fallbackURL string // numeric address when the local name is available
+	err         string
+	qr          [][]bool
+	srv         *companionServer
 }
 
 var companion companionOverlay
@@ -100,6 +102,8 @@ func stopCompanionServer() {
 	}
 	companion.pin = ""
 	companion.url = ""
+	companion.browserURL = ""
+	companion.fallbackURL = ""
 	companion.err = ""
 	companion.qr = nil
 	companionHeaderRect = sdl.Rect{}
@@ -124,6 +128,8 @@ func companionStart() {
 	}
 	companion.err = ""
 	companion.url = ""
+	companion.browserURL = ""
+	companion.fallbackURL = ""
 	companion.qr = nil
 	if localIPv4() == "" {
 		companion.err = "No Wi-Fi address - connect the handheld to a network"
@@ -182,11 +188,23 @@ func companionRefreshURL() {
 	if companion.srv == nil {
 		return
 	}
-	if localIPv4() == "" {
+	ip := localIPv4()
+	if ip == "" {
+		companion.srv.refreshMDNS("")
 		companion.err = "No Wi-Fi address - connect the handheld to a network"
 		companion.url = ""
+		companion.browserURL = ""
+		companion.fallbackURL = ""
 		companion.qr = nil
 		return
+	}
+	companion.srv.refreshMDNS(ip)
+	port := companion.srv.BrowserPort()
+	companion.browserURL = companionBaseURL(ip, port)
+	companion.fallbackURL = ""
+	if companion.srv.mdnsReady(ip) {
+		companion.browserURL = companionBaseURL(companionLocalHost, port)
+		companion.fallbackURL = companionBaseURL(ip, port)
 	}
 	url := companion.srv.URL()
 	if url == companion.url && len(companion.qr) > 0 {
@@ -513,6 +531,21 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 	if layout.right.W > 0 && layout.right.H > 0 {
 		renderWithClip(renderer, layout.right.X, layout.right.Y, layout.right.W, layout.right.H, func(r *sdl.Renderer) {
 			y := layout.right.Y
+			if companion.browserURL != "" {
+				drawText(r, smallFont, "OPEN IN A BROWSER", layout.right.X, y, dim, textAlignLeft)
+				y += line + 2
+				for _, addressLine := range companionWrapAddress(smallFont, companion.browserURL, layout.right.W) {
+					drawText(r, smallFont, addressLine, layout.right.X, y, accent, textAlignLeft)
+					y += line
+				}
+				if companion.fallbackURL != "" {
+					for _, addressLine := range companionWrapAddress(smallFont, "or "+companion.fallbackURL, layout.right.W) {
+						drawText(r, smallFont, addressLine, layout.right.X, y, dim, textAlignLeft)
+						y += line
+					}
+				}
+				y += 10
+			}
 			drawText(r, smallFont, "PAIRING PIN", layout.right.X, y, dim, textAlignLeft)
 			y += line + 2
 			pinText := companion.pin
@@ -527,16 +560,7 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 			}
 			drawText(r, bodyFont, status, layout.right.X, y, statusColor, textAlignLeft)
 			y += companionFontLine(bodyFont) + 4
-			if companion.srv != nil {
-				for _, addressLine := range companionWrapAddress(smallFont, companion.url, layout.right.W) {
-					if y+line > layout.contentBottom {
-						break
-					}
-					drawText(r, smallFont, addressLine, layout.right.X, y, ink, textAlignLeft)
-					y += line
-				}
-			}
-			y += 8
+			y += 12
 			if companion.err != "" {
 				y = drawCompanionParagraph(r, smallFont, companion.err, layout.right.X, y, layout.right.W, red, line, layout.contentBottom)
 				y += 4

@@ -16,9 +16,9 @@ package main
 //
 // btAttachChip does what that script does, for the models whose port and chip
 // are known, using only the attach programs the firmware ships, found at fixed
-// paths: a stuck attach is stopped, the chip's power is pulsed through its
-// rfkill switch (the XR829 must start from reset to take its patch), and each
-// attach program is tried until hci0 appears. Everything is bounded and logged.
+// paths: a stuck attach is stopped, the chip is woken through btwrite, its power
+// is pulsed through its rfkill switch, and each attach program is tried until
+// hci0 appears. Everything is bounded and logged.
 
 import (
 	"context"
@@ -33,6 +33,9 @@ const (
 	// btAttachWait is how long one attach program gets to make hci0 appear:
 	// the patch download over the UART takes a few seconds.
 	btAttachWait = 10 * time.Second
+	// The XR829's sleep controller must allow writes before the firmware is
+	// loaded. NextUI and NX Redux set this before resetting the radio.
+	btChipWritePath = "/proc/bluetooth/sleep/btwrite"
 )
 
 // btUART is where a model's Bluetooth chip is wired: the serial port under /dev,
@@ -72,12 +75,12 @@ type btAttachCommand struct {
 
 // btAttachCommands are the attach programs to try for a port, in order: BlueZ's
 // hciattach as Allwinner's Tina images run it for the XR829, then the Realtek
-// fork the TrimUI images also carry, as Knulli runs it on the same board. Both
-// stay in the foreground (-n), so their exit is seen.
+// fork Knulli uses on the same board. Knulli's startup script passes 115200
+// baud to that fork. Both stay in the foreground (-n), so their exit is seen.
 func btAttachCommands(u btUART) []btAttachCommand {
 	return []btAttachCommand{
 		{tool: "hciattach", args: []string{"-n", u.tty, u.proto}},
-		{tool: "rtk_hciattach", args: []string{"-n", "-s", "3000000", u.tty, u.proto}},
+		{tool: "rtk_hciattach", args: []string{"-n", "-s", "115200", u.tty, u.proto}},
 	}
 }
 
@@ -123,6 +126,17 @@ func btAttachChip(ctx context.Context, say func(string)) bool {
 			return false
 		}
 	}
+	// The stock XR829 script assumes the firmware's manager has already made
+	// this write. NX Redux does it explicitly before its rfkill reset. Restore
+	// the previous value if every attach fails, so a failed attempt does not
+	// leave the chip awake for no reason.
+	restoreWake := btWakeChip(btChipWritePath)
+	attached := false
+	defer func() {
+		if !attached && restoreWake != nil {
+			restoreWake()
+		}
+	}()
 	for _, c := range cmds {
 		if ctx.Err() != nil {
 			return false
@@ -139,6 +153,7 @@ func btAttachChip(ctx context.Context, say func(string)) bool {
 		logInfo("bluetooth", "bring-up: started %s %v", c.tool, c.args)
 		if btWaitAttach(ctx, exited) {
 			logInfo("bluetooth", "bring-up: %s attached the chip", c.tool)
+			attached = true
 			return true
 		}
 		if ctx.Err() != nil {
@@ -150,6 +165,38 @@ func btAttachChip(ctx context.Context, say func(string)) bool {
 		}
 	}
 	return false
+}
+
+// btWakeChip allows the XR829 sleep controller to accept the firmware upload.
+// A missing proc node is normal on other firmware. If the node was off, the
+// returned function restores it after a failed attach; a successful attach
+// leaves it on, as the firmware's own start script does.
+func btWakeChip(path string) func() {
+	old, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logWarn("bluetooth", "bring-up: reading %s: %v", path, err)
+		}
+		return nil
+	}
+	before := strings.TrimSpace(string(old))
+	if before == "1" {
+		return nil
+	}
+	if before != "0" {
+		logWarn("bluetooth", "bring-up: unexpected value in %s: %q", path, before)
+		return nil
+	}
+	if err := os.WriteFile(path, []byte("1"), 0o644); err != nil {
+		logWarn("bluetooth", "bring-up: waking the chip through %s: %v", path, err)
+		return nil
+	}
+	logInfo("bluetooth", "bring-up: enabled %s", path)
+	return func() {
+		if err := os.WriteFile(path, []byte("0"), 0o644); err != nil {
+			logWarn("bluetooth", "bring-up: restoring %s: %v", path, err)
+		}
+	}
 }
 
 // btWaitAttach waits for an adapter after an attach program started: true once
@@ -231,42 +278,56 @@ func btSignalAttach(ctx context.Context) {
 	btWaitFor(ctx, 500*time.Millisecond, func() bool { return !btAttachRunning() })
 }
 
-// btRfkillPulse switches the Bluetooth radio switches off and on again, a
-// second each way: on the XR829 that switch is the chip's power, and the chip
-// only takes its patch from a reset. A switch that cannot be written is left
-// as it is (the attach may still work). false means ctx ended.
+// btRfkillPulse resets the XR829's Bluetooth power, a second off and a second
+// on. The stock and NextUI scripts write rfkillN/state (0 then 1). Only images
+// without that legacy node use the inverse soft-block values. A switch that
+// cannot be written is left as it is; the attach may still work.
 func btRfkillPulse(ctx context.Context) bool {
-	entries, err := os.ReadDir(btRfkillRoot)
+	return btRfkillPulseAt(ctx, btRfkillRoot, btSleep)
+}
+
+func btRfkillPulseAt(ctx context.Context, root string, sleep func(context.Context, time.Duration) bool) bool {
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return true
 	}
-	var names []string
+	type radioSwitch struct{ path, off, on string }
+	var switches []radioSwitch
 	for _, e := range entries {
 		name := e.Name()
 		if num, ok := strings.CutPrefix(name, "rfkill"); !ok || !btAllDigits(num) {
 			continue
 		}
-		kind, err := os.ReadFile(filepath.Join(btRfkillRoot, name, "type"))
+		dir := filepath.Join(root, name)
+		kind, err := os.ReadFile(filepath.Join(dir, "type"))
 		if err != nil || strings.TrimSpace(string(kind)) != "bluetooth" {
 			continue
 		}
-		names = append(names, name)
+		if _, err := os.Stat(filepath.Join(dir, "state")); err == nil {
+			switches = append(switches, radioSwitch{filepath.Join(dir, "state"), "0", "1"})
+		} else {
+			switches = append(switches, radioSwitch{filepath.Join(dir, "soft"), "1", "0"})
+		}
 	}
-	if len(names) == 0 {
+	if len(switches) == 0 {
 		return true
 	}
-	write := func(v string) {
-		for _, name := range names {
-			if err := os.WriteFile(filepath.Join(btRfkillRoot, name, "soft"), []byte(v), 0o644); err != nil {
-				logDebug("bluetooth", "bring-up: rfkill %s soft=%s: %v", name, v, err)
+	write := func(on bool) {
+		for _, sw := range switches {
+			value := sw.off
+			if on {
+				value = sw.on
+			}
+			if err := os.WriteFile(sw.path, []byte(value), 0o644); err != nil {
+				logWarn("bluetooth", "bring-up: rfkill %s=%s: %v", sw.path, value, err)
 			}
 		}
 	}
-	write("1")
-	if !btSleep(ctx, time.Second) {
-		write("0")
+	write(false)
+	if !sleep(ctx, time.Second) {
+		write(true)
 		return false
 	}
-	write("0")
-	return btSleep(ctx, time.Second)
+	write(true)
+	return sleep(ctx, time.Second)
 }

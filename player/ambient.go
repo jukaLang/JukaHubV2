@@ -304,7 +304,8 @@ func ambientLeave() {
 	ambient.sleepUntil = time.Time{}
 	ambient.mu.Unlock()
 
-	// The CPU comes back before the first awake frame is drawn.
+	// The light and the CPU come back before the first awake frame is drawn.
+	backlightOn()
 	saverPowerWake()
 	ambientFreePhoto()
 	// The slideshow's renditions go with it; the lock picture's stays, so the
@@ -327,12 +328,14 @@ func ambientNotifyInput() {
 	}
 	ambient.mu.Unlock()
 	if woke {
+		backlightOn()
 		noteUserInputTime(time.Now())
 	}
 }
 
 // ambientDarken blanks the panel immediately. Audio is untouched: decoding runs
-// on its own goroutine and the main loop simply stops drawing.
+// on its own goroutine and the main loop simply stops drawing. On the TrimUI
+// the backlight goes off too (devpower.go), unless a wake got in first.
 func ambientDarken() {
 	ambient.mu.Lock()
 	if !ambient.active {
@@ -342,6 +345,7 @@ func ambientDarken() {
 	ambient.screenOff = true
 	ambient.blackFrame = true
 	ambient.mu.Unlock()
+	backlightOff(ambientIsScreenOff)
 }
 
 // ambientNeedsBlackFrame reports whether the main loop still has to paint the
@@ -409,6 +413,7 @@ func ambientArmSleep(d time.Duration) {
 		if !valid {
 			return
 		}
+		backlightOff(ambientIsScreenOff)
 		// No toast: the panel is about to be black, and the audio stopping is
 		// the feedback. This also keeps the audio/notification paths off this
 		// goroutine.

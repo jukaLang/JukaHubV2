@@ -126,6 +126,7 @@ var shortcutCategories = []struct {
 			{"Notes", "N or Y new, X delete, F folder, S search"},
 			{"Calculator", "G or Y graph, X insert x, C clear"},
 			{"Pomodoro", "Enter start / pause, X skip, Y reset"},
+			{"Synth", "Space play, Tab page, [ ] pattern, Enter / Y / X edit, 1-7 pads"},
 			{"Alarm", "Y new alarm, X on / off, Del delete, ↑ ↓ adjust"},
 			{"Watch Party", "Enter host / join / play, X remove"},
 		},

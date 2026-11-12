@@ -644,6 +644,18 @@ func setBuildSections() []setSection {
 						return setOr(strings.TrimSpace(c.Variables.TSPUsername), "Not set")
 					},
 				},
+				{
+					// The interface language (i18n.go); each stop is named in
+					// its own language so it can be found from any of them.
+					ID: "uiLanguage", Label: "Language", Kind: setKindChoice,
+					Detail:     setStatic("Menus, hints and messages · A lists them all"),
+					Options:    uiLanguageOptions,
+					Current:    uiLanguageCurrent,
+					Choose:     uiLanguageChoose,
+					Sheet:      uiLanguageOptions,
+					SheetValue: func(*Config) string { return uiLanguageCode() },
+					SheetTitle: "Language",
+				},
 				// The key Juka AI, voice typing and voice commands need, with
 				// a sheet that takes it from the phone or the keyboard
 				// (groqkey_sheet.go). The stored key is never shown.
@@ -1140,9 +1152,10 @@ func setBuildSections() []setSection {
 			Rows:     voiceAISettingsRows(),
 		},
 		{
-			// Control profiles, D-pad modes and Local play (inmap_settings.go).
+			// Stick calibration, control profiles, D-pad modes and Local play
+			// (inmap_settings.go).
 			ID: "controls", Title: "Controls", Glyph: "gamepad",
-			Subtitle: "Control profiles, D-pad modes and local play",
+			Subtitle: "Stick calibration, profiles and D-pad modes",
 			Rows:     inmapSettingsRows(),
 		},
 		{
@@ -1288,6 +1301,15 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// RetroArch's picture for JukaHub launches; a game can
+					// override it in its options sheet (videofilter.go).
+					ID: "videoFilter", Label: "Video filter", Kind: setKindChoice,
+					Detail:  videoFilterSettingDetail,
+					Options: videoFilterSettingOptions,
+					Current: videoFilterSettingIndex,
+					Choose:  func(c *Config, value string) { setToast(videoFilterSettingChoose(c, value)) },
+				},
+				{
 					ID: "coreUpdate", Label: "Emulator updates", Kind: setKindChoice,
 					Detail:  coreUpdateModeDetail,
 					Visible: coreUpdateModeVisible,
@@ -1425,6 +1447,10 @@ func setBuildSections() []setSection {
 						saveUserConfigDebounced(userConfigFromVariables(c))
 					},
 				},
+				// Off until chosen; handheld only (devpower.go).
+				autoSleepSettingsRow(),
+				// What the hardware power key does (powerkey.go).
+				powerButtonSettingsRow(),
 				{
 					ID: "batterySaver", Label: "Battery saver at 20%", Kind: setKindToggle,
 					Detail: setStatic("Low battery: slower cadence, no motion, OLED theme"),
@@ -1526,10 +1552,7 @@ func setBuildSections() []setSection {
 				{
 					ID: "diagnostics", Label: "Send anonymous diagnostics", Kind: setKindToggle,
 					Detail: func(*Config) string {
-						if telemetryEndpointURL() == "" {
-							return "This build has no report address, so nothing is sent"
-						}
-						return "Boot and crash reports with no personal data"
+						return "Public Info issue every 10 launches: anonymous device facts only"
 					},
 					Get: func(c *Config) bool { return telemetryOptedInFrom(c.Variables.Custom) },
 					Set: func(c *Config, on bool) {
@@ -1611,6 +1634,13 @@ func setBuildSections() []setSection {
 					ID: "backupRestore", Label: "Backup & restore", Kind: setKindAction,
 					Detail: setStatic("Your whole setup in one file you can copy to any device"),
 					Open:   bkupOpenScreen,
+				},
+				{
+					ID: "restoreDefaults", Label: "Restore all defaults", Kind: setKindAction,
+					Detail: setStatic("Reset settings and Home layout; keep games and saves"),
+					Open: func(c *Config) {
+						recoveryConfirmReset(c, func(*Config) { recoveryCardClose() })
+					},
 				},
 				{
 					ID: "bug", Label: "Report a bug", Kind: setKindAction,

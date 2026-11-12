@@ -199,6 +199,12 @@ func swapScriptPath(staging string) string {
 // using the detached swap helper. The journal guarantees automatic rollback on
 // interruption.
 func OpApplyStagedSwap(ctx context.Context, config *Config) error {
+	// Every install path ends here (the update prompt, the Updates row, the
+	// cache and a sideloaded zip), so the low-battery gate does too.
+	// Downloading and staging may go on; only the swap waits for a charger.
+	if err := updateBatteryGate(); err != nil {
+		return err
+	}
 	dir, err := PatchStateDir()
 	if err != nil {
 		return err

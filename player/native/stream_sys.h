@@ -102,6 +102,61 @@ bool ss_battery_read(const char *root, SsBattery *battery);
 #define SS_BUILTIN_PAD_PRODUCT 0x028eu
 bool ss_builtin_pad(const char *root, const char *name, unsigned vendor, unsigned product, const char *devnode);
 
+/* PlayStation pads SDL has no mapping for. A DualShock 4 or DualSense (over
+ * Bluetooth or USB) reaches SDL through the kernel's event device whenever SDL
+ * cannot drive the pad's HID node itself, and the kernel's button order depends
+ * on the driver:
+ *   SS_SONY_HID_GENERIC    hid-generic, or hid-sony before Linux 4.10 (the
+ *                          TrimUI kernels are 4.9): the HID report's order —
+ *                          Square Cross Circle Triangle L1 R1 L2 R2 Share
+ *                          Options L3 R3 PS Touchpad (14+ buttons); sticks on
+ *                          axes 0 1 2 5, L2 / R2 on axes 3 4
+ *   SS_SONY_EVDEV_GAMEPAD  hid-sony 4.10+ / hid-playstation: the evdev gamepad
+ *                          codes — Cross Circle Triangle Square L1 R1 L2 R2
+ *                          Share Options PS L3 R3 (13 buttons); L2 / R2 on axes
+ *                          2 5; the touchpad is an input device of its own
+ * The D-pad is hat 0 in both. ss_sony_mapping writes an SDL game controller
+ * mapping for the pad's GUID, so the pad opens as a game controller (positional
+ * faces: Cross = bottom) instead of a raw joystick read in the wrong order. */
+#define SS_SONY_VENDOR 0x054cu
+typedef enum {
+    SS_SONY_NONE = 0,
+    SS_SONY_HID_GENERIC,
+    SS_SONY_EVDEV_GAMEPAD
+} SsSonyLayout;
+/* 4 for a DualShock 4 (both models and Sony's USB wireless adaptor), 5 for a
+ * DualSense or DualSense Edge, 0 for anything else. */
+int ss_sony_model(unsigned vendor, unsigned product);
+SsSonyLayout ss_sony_layout(int buttons, int axes, int hats);
+const char *ss_sony_layout_name(SsSonyLayout layout);
+/* false (out = "") when the layout is NONE, the model 0, guid is not 32 hex
+ * digits or out is too small. touchpad: name the touchpad click (SDL 2.0.14+
+ * knows the "touchpad" element; older ones would refuse the whole mapping). */
+bool ss_sony_mapping(char *out, size_t size, const char *guid, int model, SsSonyLayout layout, bool touchpad);
+
+/* A pad's motion (gyro + accelerometer) as chiaki's controller state wants it:
+ * the gyro in rad/s and the accelerometer in g, both in SDL's sensor frame
+ * (x right, y up, z towards the player), and an orientation the helper works
+ * out itself (Madgwick's IMU filter): identity while the pad lies flat, as in
+ * chiaki's idle state, whose accelerometer reads (0, 1, 0). */
+typedef struct {
+    float gyro[3];
+    float accel[3];
+    float orient[4]; /* x y z w */
+    float q[4];      /* the filter's own quaternion (w x y z, gravity on +z) */
+    float settled;   /* seconds of gyro integrated; a higher gain before 0.5 s */
+    bool have_accel;
+    bool dirty;      /* changed since ss_motion_take */
+} SsMotion;
+#define SS_MOTION_MAX_DT 0.05f /* a longer gap between gyro samples counts as this */
+/* The idle state: no rotation, 1 g up, identity orientation. dirty = true. */
+void ss_motion_reset(SsMotion *motion);
+void ss_motion_accel(SsMotion *motion, float x, float y, float z);
+/* dt: seconds since the previous gyro sample (0 = the first one: only stored). */
+void ss_motion_gyro(SsMotion *motion, float x, float y, float z, float dt);
+/* true when something changed since the last call; clears dirty. */
+bool ss_motion_take(SsMotion *motion);
+
 typedef struct {
     bool available;
     char gpio[512];

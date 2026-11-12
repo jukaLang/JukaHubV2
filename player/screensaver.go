@@ -776,6 +776,9 @@ func startScreensaverMonitor() {
 	if !ss.inited {
 		initScreensaver()
 	}
+	// A backlight the last run switched off and never back on (a crash, a
+	// kill) comes back before anything is drawn (devpower.go).
+	backlightRecover()
 }
 
 // screensaverAutoCheckInterval throttles the idle check. One second keeps the
@@ -789,6 +792,11 @@ var screensaverLastCheck time.Time
 // idle screens' low-power state, which the dock needs as much as the saver.
 func screensaverAutoTick(config *Config, now time.Time) {
 	saverPowerTick(now)
+	// The awake UI is drawing, so the panel's light must be on; and Auto
+	// sleep has its own, much longer clock (devpower.go). Both run before the
+	// returns below: they apply whichever idle screen is chosen.
+	backlightGuard()
+	autoSleepTick(config, now)
 	if config == nil || ss.active {
 		return
 	}
@@ -829,7 +837,8 @@ func idleScreenHoldOff(config *Config) bool {
 		ambientEntryBlocked(config),
 		playing,
 		paused,
-		videoHoldsScreenAwake(),
+		// A Synth pattern playing counts as media playing (synth.go).
+		videoHoldsScreenAwake() || synthHoldsScreenAwake(),
 		installInProgress(),
 		patchInstallBusy(),
 	)

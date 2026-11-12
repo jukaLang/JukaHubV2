@@ -440,17 +440,26 @@ func pkgApplyEvent(ev pkgEvent) (rescan bool) {
 			st.lastOK = ev.at
 		}
 		st.dirty = true
-		// Pictures the registry names are fetched after the list, lazily.
-		if wanted := pkgArtWanted(ev.entries); len(wanted) > 0 {
+		// Drop artwork for entries whose icon URL changed or disappeared.
+		wanted := pkgArtWanted(ev.entries)
+		for key, path := range st.art {
+			if u, ok := wanted[key]; !ok || path != pkgArtPath(u) {
+				delete(st.art, key)
+			}
+		}
+		if len(wanted) > 0 {
 			runSceneTask(func(ctx context.Context) { pkgLoadArt(ctx, wanted) })
 		}
 	case pkgEvArt:
-		// Merged, not replaced: two passes of one visit (the cached list's and
-		// the fresh one's) may report in either order.
+		// A cached and a fresh catalog can finish in either order. Only artwork
+		// still named by the active catalog may change the visible cards.
+		wanted := pkgArtWanted(st.entries)
 		for k, v := range ev.icons {
-			st.art[k] = v
+			if u, ok := wanted[k]; ok && v == pkgArtPath(u) && st.art[k] != v {
+				st.art[k] = v
+				st.dirty = true
+			}
 		}
-		st.dirty = true
 	case pkgEvFetchDone:
 		if ev.gen != st.fetchGen {
 			return
@@ -519,6 +528,7 @@ func pkgOnSceneEnter(config *Config) {
 	// A visit starts on the content, unless it is the return from a screen
 	// the "More stores" strip opened (pkgstores.go).
 	pkgStoresOnEnter()
+	pkgHubOnPackagesEnter()
 	st.reveal = true
 	st.heroSince = sdl.GetTicks64()
 	// Whatever fetch the last visit started was cancelled with that visit.
@@ -528,6 +538,10 @@ func pkgOnSceneEnter(config *Config) {
 	runSceneTask(pkgLoadLocal)
 	if !st.haveCatalog {
 		runSceneTask(pkgLoadCache)
+	} else if wanted := pkgArtWanted(st.entries); len(wanted) > 0 {
+		// A previous visit may have ended while images were downloading. Read
+		// their cache and continue without waiting for another catalog fetch.
+		runSceneTask(func(ctx context.Context) { pkgLoadArt(ctx, wanted) })
 	}
 	st.online = IsOnline()
 	pkgMaybeRefresh(config, false)

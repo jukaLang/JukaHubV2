@@ -364,8 +364,7 @@ func TestApkStoreCatalogueValidation(t *testing.T) {
 	}
 }
 
-// The built-in catalogue parses, is not empty, and — honestly — carries no
-// download nobody could verify.
+// The built-in catalogue parses and carries only device-tested downloads.
 func TestApkStoreBuiltinCatalogue(t *testing.T) {
 	data, err := parseApkStoreCatalog(apkStoreCatalogJSON)
 	if err != nil {
@@ -377,14 +376,16 @@ func TestApkStoreBuiltinCatalogue(t *testing.T) {
 	ids := map[string]bool{}
 	for _, e := range data.Entries {
 		if e.downloadable() {
-			t.Errorf("%s ships a download; the built-in list must not carry unverified ones", e.ID)
+			if e.ID != "penguin-dash" || !e.installable() || !apkStoreCatalogDownloadValid(e) {
+				t.Errorf("%s ships an unexpected or invalid APK download", e.ID)
+			}
 		}
 		if e.Status == apkStatusWontRun && e.Route == "" {
 			t.Errorf("%s says it won't run but names no route that works", e.ID)
 		}
 		ids[e.ID] = true
 	}
-	for _, want := range []string{"minecraft-bedrock", "terraria-mobile", "unity-games", "java-apps"} {
+	for _, want := range []string{"penguin-dash", "minecraft-bedrock", "terraria-mobile", "unity-games", "java-apps"} {
 		if !ids[want] {
 			t.Errorf("missing entry %s", want)
 		}

@@ -394,6 +394,18 @@ func wifiBackend() string {
 	return ""
 }
 
+// btRfkillTool picks the system's rfkill command. The TrimUI images used by
+// NextUI and NX Redux name it rfkill.elf.
+func btRfkillTool() string {
+	if btToolExists("rfkill") {
+		return "rfkill"
+	}
+	if btToolExists("rfkill.elf") {
+		return "rfkill.elf"
+	}
+	return ""
+}
+
 // bluetoothBackend names how Bluetooth is switched on this device. The tools
 // are found beyond PATH as well and run with the firmware's environment
 // (bluetooth_tools.go): a launcher's PATH can miss where a handheld keeps them.
@@ -401,21 +413,22 @@ func bluetoothBackend() string {
 	if btToolExists("bluetoothctl") {
 		return "bluetoothctl"
 	}
-	if btToolExists("rfkill") {
-		return "rfkill"
-	}
-	return ""
+	return btRfkillTool()
 }
 
 // btRfkillSet switches the Bluetooth radio with rfkill (runRfkill's verbs:
 // on is "unblock").
 func btRfkillSet(on bool) error {
+	tool := btRfkillTool()
+	if tool == "" {
+		return errors.New("no rfkill command on this device")
+	}
 	verb := "block"
 	if on {
 		verb = "unblock"
 	}
-	if _, err := btToolRun("rfkill", verb, "bluetooth"); err != nil {
-		return fmt.Errorf("rfkill %s bluetooth: %w", verb, err)
+	if _, err := btToolRun(tool, verb, "bluetooth"); err != nil {
+		return fmt.Errorf("%s %s bluetooth: %w", tool, verb, err)
 	}
 	return nil
 }
@@ -502,7 +515,8 @@ func setWifiEnabled(on bool) error {
 
 // bluetoothEnabled reads the Bluetooth radio state.
 func bluetoothEnabled() (bool, bool) {
-	switch bluetoothBackend() {
+	backend := bluetoothBackend()
+	switch backend {
 	case "bluetoothctl":
 		out, err := btToolRun("bluetoothctl", "show")
 		if err != nil {
@@ -515,8 +529,8 @@ func bluetoothEnabled() (bool, bool) {
 			return false, true
 		}
 		return false, false
-	case "rfkill":
-		out, err := btToolRun("rfkill", "list", "bluetooth")
+	case "rfkill", "rfkill.elf":
+		out, err := btToolRun(backend, "list", "bluetooth")
 		if err != nil {
 			return false, false
 		}
@@ -536,11 +550,11 @@ func setBluetoothEnabled(on bool) error {
 		if _, err := btToolRun("bluetoothctl", "power", arg); err == nil {
 			return nil
 		}
-		if btToolExists("rfkill") {
+		if btRfkillTool() != "" {
 			return btRfkillSet(on)
 		}
 		return errors.New("bluetoothctl could not change the radio")
-	case "rfkill":
+	case "rfkill", "rfkill.elf":
 		return btRfkillSet(on)
 	}
 	return errors.New("no Bluetooth control (bluetoothctl/rfkill) on this device")

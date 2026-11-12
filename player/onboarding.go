@@ -24,6 +24,13 @@ type onboardingStep struct {
 
 var onboardingSteps = []onboardingStep{
 	{
+		// The first question, before any English: the list and its title are
+		// drawn by onboarding_lang.go, and the language switches as the
+		// highlight moves, so every later page already reads in it.
+		title: "Choose your language",
+		kind:  "language",
+	},
+	{
 		title: "Welcome to JukaHub",
 		body:  "Let’s get your handheld ready. This short setup checks the basics, then shows you where everything lives.",
 		hint:  "You can skip the setup or replay it later from Settings.",
@@ -154,14 +161,20 @@ func onboardingStart() {
 	onboarding.setupRows = nil
 	onboarding.setupHits = nil
 	onboarding.setupAt = 0
+	onboardingLangReset(appConfig)
 	toolsHubTourReset()
 }
 
 func onboardingFinish(config *Config, skipped bool) {
+	// Skipping from the language page keeps the language on screen.
+	langPage := onboardingLangStepIs()
 	onboarding.active = false
 	if config != nil {
 		if config.Variables.Custom == nil {
 			config.Variables.Custom = map[string]interface{}{}
+		}
+		if langPage {
+			onboardingLangStore(config)
 		}
 		config.Variables.Custom["onboarding_done"] = true
 		config.Variables.Custom["onboarding_skipped"] = skipped
@@ -184,6 +197,9 @@ func onboardingAdvance(config *Config) {
 	if onboarding.step >= len(onboardingSteps)-1 {
 		onboardingFinish(config, false)
 		return
+	}
+	if onboardingLangStepIs() {
+		onboardingLangCommit(config)
 	}
 	onboarding.step++
 	onboarding.action = sdl.Rect{}
@@ -519,6 +535,9 @@ func onboardingBack() {
 		if onboardingStepIsSetup() {
 			onboardingSetupRefresh(appConfig, true)
 		}
+		if onboardingLangStepIs() {
+			onboardingLangSync()
+		}
 		PlayNavSound()
 	}
 }
@@ -538,6 +557,18 @@ func handleOnboardingKey(e *sdl.KeyboardEvent) bool {
 			return true
 		case sdl.K_DOWN:
 			onboardingSetupMove(1)
+			return true
+		}
+	}
+	if onboardingLangStepIs() {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			onboardingLangMove(-1)
+			return true
+		case sdl.K_DOWN:
+			onboardingLangMove(1)
+			return true
+		case sdl.K_f:
 			return true
 		}
 	}
@@ -581,6 +612,18 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 			return true
 		}
 	}
+	if onboardingLangStepIs() {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			onboardingLangMove(-1)
+			return true
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			onboardingLangMove(1)
+			return true
+		case sdl.CONTROLLER_BUTTON_X:
+			return true
+		}
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
 		if setup {
@@ -617,6 +660,9 @@ func handleOnboardingMouse(mx, my int32, config *Config) bool {
 		return false
 	}
 	if onboardingStepIsSetup() && onboardingSetupClick(mx, my, config) {
+		return true
+	}
+	if onboardingLangStepIs() && onboardingLangClick(mx, my) {
 		return true
 	}
 	if pointInRect(mx, my, onboarding.action) {
@@ -672,8 +718,9 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		cardW = screenWidth - 32
 	}
 	cardH := int32(470)
-	if step.kind == "setup" {
-		// The checklist needs a row per setting; the plain steps do not.
+	if step.kind == "setup" || step.kind == "language" {
+		// The checklist and the language list need a row per entry; the plain
+		// steps do not.
 		cardH = 600
 	}
 	if cardH > screenHeight-100 {
@@ -728,8 +775,14 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if cardW >= 680 {
 		titleY = cy + 78
 	}
-	title := ellipsize(titleFont, step.title, textW)
-	renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
+	if step.kind == "language" {
+		// Its own table, in the highlighted language, drawn raw.
+		title := ellipsize(titleFont, onbLangTitle(), textW)
+		renderTextRaw(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
+	} else {
+		title := ellipsize(titleFont, step.title, textW)
+		renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
+	}
 
 	bodyY := titleY + int32(titleFont.Height()) + 18
 	// Two lines — the same budget the card has always had — but word-wrapped:
@@ -738,6 +791,14 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	onboarding.bodyLines = nil
 	if step.kind == "setup" {
 		onboardingRenderSetup(renderer, config, cy, cx, cardW, cardH, textX, textW, bodyY, bodyFont, smallFont, accent)
+	} else if step.kind == "language" {
+		// On a narrow card the text column starts under the coin, not beside
+		// it: the list begins below the coin.
+		listY := bodyY
+		if cardW < 680 && listY < coinY+coinR+14 {
+			listY = coinY + coinR + 14
+		}
+		onboardingRenderLanguage(renderer, config, cy, cardH, textX, textW, listY, bodyFont, smallFont, accent)
 	} else {
 		lines := wrapTextLines(bodyFont, step.body, textW, 2)
 		onboarding.bodyLines = lines
@@ -830,6 +891,10 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if step.kind == "setup" {
 		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Open"},
 			FooterHint{"B", "Done"})
+	}
+	if step.kind == "language" {
+		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Next"},
+			FooterHint{"B", "Skip"})
 	}
 	fw, fh, _ := smallFont.SizeUTF8(footer)
 	footerY := cy + cardH + 10

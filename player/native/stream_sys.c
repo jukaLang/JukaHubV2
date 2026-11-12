@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -544,6 +545,176 @@ bool ss_builtin_pad(const char *root, const char *name, unsigned vendor, unsigne
     }
     closedir(dir);
     return found;
+}
+
+/* ---- PlayStation pads without an SDL mapping ---- */
+
+int ss_sony_model(unsigned vendor, unsigned product)
+{
+    if(vendor != SS_SONY_VENDOR) return 0;
+    switch(product) {
+        case 0x05c4u: /* DualShock 4 (CUH-ZCT1) */
+        case 0x09ccu: /* DualShock 4 (CUH-ZCT2) */
+        case 0x0ba0u: /* the DualShock 4 USB wireless adaptor */
+            return 4;
+        case 0x0ce6u: /* DualSense */
+        case 0x0df2u: /* DualSense Edge */
+            return 5;
+        default:
+            return 0;
+    }
+}
+
+SsSonyLayout ss_sony_layout(int buttons, int axes, int hats)
+{
+    /* Both layouts have the D-pad as a hat and six stick / trigger axes; a
+     * motion sensor or touchpad node has neither. */
+    if(hats < 1 || axes < 6) return SS_SONY_NONE;
+    if(buttons >= 14) return SS_SONY_HID_GENERIC;
+    if(buttons == 13) return SS_SONY_EVDEV_GAMEPAD;
+    return SS_SONY_NONE;
+}
+
+const char *ss_sony_layout_name(SsSonyLayout layout)
+{
+    switch(layout) {
+        case SS_SONY_HID_GENERIC: return "HID report order";
+        case SS_SONY_EVDEV_GAMEPAD: return "evdev gamepad order";
+        default: return "unknown";
+    }
+}
+
+bool ss_sony_mapping(char *out, size_t size, const char *guid, int model, SsSonyLayout layout, bool touchpad)
+{
+    if(!out || !size) return false;
+    out[0] = '\0';
+    if(!guid || strlen(guid) != 32 || (model != 4 && model != 5)) return false;
+    for(int i = 0; i < 32; i++)
+        if(!isxdigit((unsigned char)guid[i])) return false;
+    const char *buttons;
+    switch(layout) {
+        case SS_SONY_HID_GENERIC:
+            buttons = touchpad
+                ? "a:b1,b:b2,x:b0,y:b3,leftshoulder:b4,rightshoulder:b5,lefttrigger:a3,righttrigger:a4,"
+                  "back:b8,start:b9,leftstick:b10,rightstick:b11,guide:b12,touchpad:b13,"
+                  "leftx:a0,lefty:a1,rightx:a2,righty:a5,"
+                : "a:b1,b:b2,x:b0,y:b3,leftshoulder:b4,rightshoulder:b5,lefttrigger:a3,righttrigger:a4,"
+                  "back:b8,start:b9,leftstick:b10,rightstick:b11,guide:b12,"
+                  "leftx:a0,lefty:a1,rightx:a2,righty:a5,";
+            break;
+        case SS_SONY_EVDEV_GAMEPAD:
+            buttons = "a:b0,b:b1,x:b3,y:b2,leftshoulder:b4,rightshoulder:b5,lefttrigger:a2,righttrigger:a5,"
+                      "back:b8,start:b9,guide:b10,leftstick:b11,rightstick:b12,"
+                      "leftx:a0,lefty:a1,rightx:a3,righty:a4,";
+            break;
+        default:
+            return false;
+    }
+    int n = snprintf(out, size, "%s,%s,%sdpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,", guid,
+                     model == 5 ? "PS5 Controller" : "PS4 Controller", buttons);
+    if(n < 0 || (size_t)n >= size) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+/* ---- motion ---- */
+
+void ss_motion_reset(SsMotion *motion)
+{
+    memset(motion, 0, sizeof(*motion));
+    motion->accel[1] = 1.0f;
+    motion->orient[3] = 1.0f;
+    motion->q[0] = 1.0f;
+    motion->dirty = true;
+}
+
+static bool finite3(float x, float y, float z)
+{
+    return isfinite(x) && isfinite(y) && isfinite(z);
+}
+
+void ss_motion_accel(SsMotion *motion, float x, float y, float z)
+{
+    if(!finite3(x, y, z)) return;
+    motion->accel[0] = x;
+    motion->accel[1] = y;
+    motion->accel[2] = z;
+    motion->have_accel = true;
+    motion->dirty = true;
+}
+
+/* The filter runs with gravity on +z (Madgwick's frame); SDL's sensors have it
+ * on +y. (x, y, z) -> (x, -z, y) is a proper rotation taking one to the other,
+ * and the same map moves the quaternion's vector part back and forth. */
+void ss_motion_gyro(SsMotion *motion, float x, float y, float z, float dt)
+{
+    if(!finite3(x, y, z)) return;
+    motion->gyro[0] = x;
+    motion->gyro[1] = y;
+    motion->gyro[2] = z;
+    motion->dirty = true;
+    if(!(dt > 0.0f)) return;
+    if(dt > SS_MOTION_MAX_DT) dt = SS_MOTION_MAX_DT;
+    float gx = x, gy = -z, gz = y;
+    float ax = motion->accel[0], ay = -motion->accel[2], az = motion->accel[1];
+    float q0 = motion->q[0], q1 = motion->q[1], q2 = motion->q[2], q3 = motion->q[3];
+    float qd0 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
+    float qd1 = 0.5f * (q0 * gx + q2 * gz - q3 * gy);
+    float qd2 = 0.5f * (q0 * gy - q1 * gz + q3 * gx);
+    float qd3 = 0.5f * (q0 * gz + q1 * gy - q2 * gx);
+    float a_norm = sqrtf(ax * ax + ay * ay + az * az);
+    /* The accelerometer corrects the tilt only while it reads about 1 g: a pad
+     * being swung measures its own push as well. */
+    if(motion->have_accel && a_norm > 0.5f && a_norm < 1.5f) {
+        ax /= a_norm;
+        ay /= a_norm;
+        az /= a_norm;
+        float _2q0 = 2.0f * q0, _2q1 = 2.0f * q1, _2q2 = 2.0f * q2, _2q3 = 2.0f * q3;
+        float _4q0 = 4.0f * q0, _4q1 = 4.0f * q1, _4q2 = 4.0f * q2;
+        float _8q1 = 8.0f * q1, _8q2 = 8.0f * q2;
+        float q0q0 = q0 * q0, q1q1 = q1 * q1, q2q2 = q2 * q2, q3q3 = q3 * q3;
+        float s0 = _4q0 * q2q2 + _2q2 * ax + _4q0 * q1q1 - _2q1 * ay;
+        float s1 = _4q1 * q3q3 - _2q3 * ax + 4.0f * q0q0 * q1 - _2q0 * ay - _4q1 + _8q1 * q1q1 + _8q1 * q2q2 + _4q1 * az;
+        float s2 = 4.0f * q0q0 * q2 + _2q0 * ax + _4q2 * q3q3 - _2q3 * ay - _4q2 + _8q2 * q1q1 + _8q2 * q2q2 + _4q2 * az;
+        float s3 = 4.0f * q1q1 * q3 - _2q1 * ax + 4.0f * q2q2 * q3 - _2q2 * ay;
+        float s_norm = sqrtf(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
+        if(s_norm > 1e-9f) {
+            float beta = motion->settled < 0.5f ? 2.5f : 0.1f;
+            qd0 -= beta * s0 / s_norm;
+            qd1 -= beta * s1 / s_norm;
+            qd2 -= beta * s2 / s_norm;
+            qd3 -= beta * s3 / s_norm;
+        }
+    }
+    q0 += qd0 * dt;
+    q1 += qd1 * dt;
+    q2 += qd2 * dt;
+    q3 += qd3 * dt;
+    float q_norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    if(!isfinite(q_norm) || q_norm < 1e-6f) {
+        q0 = 1.0f;
+        q1 = q2 = q3 = 0.0f;
+        q_norm = 1.0f;
+    }
+    motion->q[0] = q0 / q_norm;
+    motion->q[1] = q1 / q_norm;
+    motion->q[2] = q2 / q_norm;
+    motion->q[3] = q3 / q_norm;
+    motion->settled += dt;
+    /* Back to SDL's frame: (x', y', z') -> (x', z', -y'). */
+    motion->orient[0] = motion->q[1];
+    motion->orient[1] = motion->q[3];
+    motion->orient[2] = -motion->q[2];
+    motion->orient[3] = motion->q[0];
+}
+
+bool ss_motion_take(SsMotion *motion)
+{
+    bool dirty = motion->dirty;
+    motion->dirty = false;
+    return dirty;
 }
 
 /* Like `echo text > path`: sysfs attributes take O_TRUNC, and the node is never

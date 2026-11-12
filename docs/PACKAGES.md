@@ -384,6 +384,10 @@ The **Packages** screen installs apps from the JukaLang registry
 folder next to JukaHub. That registry is a plain, unsigned list, separate from
 the signed Patch repository above. An install there works like this:
 
+- **Icons.** An entry may include an `"icon"` HTTPS image URL. The Packages
+  screen fetches and caches the picture in the background, then shows it on
+  shelves, in the grid and list, and on the package page. An installed app's
+  own icon takes priority; a missing or unusable picture keeps the monogram.
 - **Checksums.** A registry entry may carry `"sha256"` (64 hex digits, a
   `sha256:` prefix is accepted) and, with it, an exact `"size"` in bytes. A
   download whose hash or size differs is refused before anything is unpacked,

@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -119,6 +120,79 @@ func savestateResumeValues() []raScopeValue {
 	}
 }
 
+// savestateSRAMFlushInterval is how often, in seconds, RetroArch writes a
+// changed battery save (SRAM) while the game runs. RetroArch's default is 0 —
+// SRAM only on exit — so a crash, a dead battery or a forced power-off lost
+// every in-game save since the game started. Mosaik 0.9.18 writes it every 10
+// seconds; JukaHub asks RetroArch for the same through autosave_interval,
+// which only writes when the save actually changed.
+const (
+	savestateSRAMFlushKey      = "autosave_interval"
+	savestateSRAMFlushInterval = "10"
+)
+
+// savestateSRAMFlushValue is the periodic SRAM flush as a scoped launch value:
+// a floor (RaiseOnly), so a user who set their own nonzero interval keeps it,
+// and like the resume switches it is put back when the game exits. It rides
+// on the same savestateResume switch: one opt-out for "JukaHub touches my
+// RetroArch saves".
+func savestateSRAMFlushValue() raScopeValue {
+	return raScopeValue{Key: savestateSRAMFlushKey, Value: savestateSRAMFlushInterval, RaiseOnly: true}
+}
+
+// savestateMenuValues are what the in-game menu's Save state and Load state
+// need for a launch (gamemenu_states.go): RetroArch's network command
+// interface on (its port is left as the user has it; RetroArch's default is
+// 55355), a screenshot beside every state for the slot picker, and a known
+// current slot for the older RetroArch builds whose only way to a slot is
+// stepping to it. Kept apart from savestateResumeValues: those are also what
+// the one-time repair of older versions' edits looks for (racfgscope.go), and
+// no older version ever wrote these.
+func savestateMenuValues() []raScopeValue {
+	return []raScopeValue{
+		{Key: "network_cmd_enable", Value: "true"},
+		{Key: "savestate_thumbnail_enable", Value: "true"},
+		{Key: "state_slot", Value: strconv.Itoa(gmStateSlotAtLaunch)},
+	}
+}
+
+// prepareGameMenuStates is the second launch-time hook for a library game
+// (game_library.go, right after prepareSavestateResume). For a RetroArch game
+// it keeps the previous auto save (gmetaRotateAutoStates: RetroArch is about
+// to replace the auto state when this game closes) and, where the in-game
+// menu can open, scopes savestateMenuValues to this launch and tells the menu
+// which game and port it is. Like prepareSavestateResume it never blocks or
+// fails a launch.
+//
+// The command interface listens on every network the handheld is on while
+// the game runs (RetroArch binds it that way); it is on only for JukaHub's
+// launch, as the low-battery guard (lowbattery.go) already relied on.
+func prepareGameMenuStates(launcher, romPath string) {
+	gmStatesForget()
+	if strings.TrimSpace(romPath) == "" || !retroArchLauncher(launcher) {
+		return
+	}
+	gmetaRotateAutoStates(romPath)
+	if !gameAssistSupported() || !gameMenuEnabled(appConfig) {
+		return
+	}
+	port := 0
+	for _, path := range raScopeTargets(raLaunchCandidates(launcher, savestateResumeCandidates())) {
+		if _, err := raScopeApply(path, savestateMenuValues()); err != nil {
+			logWarn("resume", "cannot enable the in-game save slots in %s: %v", path, err)
+			continue
+		}
+		if port == 0 {
+			if raw, err := os.ReadFile(path); err == nil {
+				port = networkCmdPort(string(raw))
+			}
+		}
+	}
+	if port > 0 {
+		gmStatesNoteLaunch(romPath, port)
+	}
+}
+
 // editRetroArchConfig applies a pure text edit to a RetroArch config and writes
 // it through a temporary file so a power loss cannot truncate retroarch.cfg. The
 // original is copied to the backup once, before the first edit.
@@ -185,7 +259,7 @@ func prepareSavestateResume(launcher string) bool {
 	}
 	configured := false
 	for _, path := range raScopeTargets(raLaunchCandidates(launcher, savestateResumeCandidates())) {
-		changed, err := raScopeApply(path, savestateResumeValues())
+		changed, err := raScopeApply(path, append(savestateResumeValues(), savestateSRAMFlushValue()))
 		if err != nil {
 			logWarn("resume", "cannot enable save-state resume in %s: %v", path, err)
 			continue

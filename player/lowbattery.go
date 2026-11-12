@@ -283,6 +283,34 @@ func sendRetroArchNetCmd(port int, commands ...string) error {
 	return nil
 }
 
+// askRetroArchNetCmd sends one command and waits up to wait for RetroArch's
+// answer, which comes back to the sending socket. Most commands never answer;
+// the few that do (GET_STATUS, LOAD_STATE_SLOT since 1.15, SAVE_STATE_SLOT in
+// newer builds) say so in their first word. A version that does not know the
+// command ignores it, which reads here as a timeout: the in-game menu's save
+// slots (gamemenu_states.go) fall back to the older commands then.
+func askRetroArchNetCmd(port int, command string, wait time.Duration) (string, error) {
+	if port <= 0 || port > 65535 {
+		return "", fmt.Errorf("invalid RetroArch command port %d", port)
+	}
+	conn, err := net.DialTimeout("udp", "127.0.0.1:"+strconv.Itoa(port), lowBatteryNetCmdTimeout)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(lowBatteryNetCmdTimeout))
+	if _, err := conn.Write([]byte(command + "\n")); err != nil {
+		return "", err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(wait))
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(buf[:n])), nil
+}
+
 // --- Device actions ----------------------------------------------------------
 
 // suspendStates lists the suspend states a Linux device may advertise, most

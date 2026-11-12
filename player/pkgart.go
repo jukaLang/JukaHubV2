@@ -5,7 +5,7 @@ package main
 // A registry entry may name a picture ("icon": "https://…/icon.png"). The
 // store fetches those lazily, in the background, after the list arrives:
 // HTTPS only, one megabyte at most, only bytes that sniff as an image, a
-// couple of dozen per visit and a bounded folder on the card. Once a picture
+// bounded number per pass and a bounded folder on the card. Once a picture
 // is cached the card draws it through the shared, bounded app-icon texture
 // cache (appicons.go); until then — and for every package that names no
 // picture — the card keeps its monogram tile. A package that is installed
@@ -30,7 +30,9 @@ const (
 	pkgArtDirName  = ".jukahub-art"
 	pkgArtMaxBytes = 1 << 20
 	pkgArtMaxFiles = 96
-	pkgArtPerVisit = 24
+	// The current registry has more than 24 icons. Leave room for new entries
+	// while keeping one catalog pass bounded on a slow connection.
+	pkgArtPerPass = 48
 )
 
 // pkgArtURL is the picture a registry entry names, when it is a plain HTTPS
@@ -112,13 +114,13 @@ func pkgFetchArt(ctx context.Context, rawURL, path string) error {
 var pkgArtMu sync.Mutex
 
 // pkgLoadArt finds the cached pictures for the packages that name one and,
-// online, fetches a few more, then hands the paths to the screen. It stops
+// online, fetches more, handing paths to the screen in small batches. It stops
 // with the visit: leaving the screen cancels ctx.
 func pkgLoadArt(ctx context.Context, wanted map[string]string) {
 	pkgArtMu.Lock()
 	defer pkgArtMu.Unlock()
-	found := make(map[string]string, len(wanted))
-	budget := pkgArtPerVisit
+	batch := make(map[string]string, 4)
+	budget := pkgArtPerPass
 	room := pkgArtMaxFiles - pkgArtCount()
 	for key, u := range wanted {
 		if ctx.Err() != nil {
@@ -126,20 +128,24 @@ func pkgLoadArt(ctx context.Context, wanted map[string]string) {
 		}
 		path := pkgArtPath(u)
 		if _, err := os.Stat(path); err == nil {
-			found[key] = path
-			continue
-		}
-		if budget <= 0 || room <= 0 || !IsOnline() {
-			continue
-		}
-		budget--
-		if err := pkgFetchArt(ctx, u, path); err == nil {
+			batch[key] = path
+		} else {
+			if budget <= 0 || room <= 0 || !IsOnline() {
+				continue
+			}
+			budget--
+			if err := pkgFetchArt(ctx, u, path); err != nil {
+				continue
+			}
 			room--
-			found[key] = path
+			batch[key] = path
+		}
+		if len(batch) == 4 {
+			pkgPost(pkgEvent{kind: pkgEvArt, icons: batch})
+			batch = make(map[string]string, 4)
 		}
 	}
-	if ctx.Err() != nil {
-		return
+	if ctx.Err() == nil && len(batch) > 0 {
+		pkgPost(pkgEvent{kind: pkgEvArt, icons: batch})
 	}
-	pkgPost(pkgEvent{kind: pkgEvArt, icons: found})
 }

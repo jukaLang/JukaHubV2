@@ -46,6 +46,14 @@ type netplaySession struct {
 	Game libraryGame
 	Host string
 	Port int
+
+	// Relay is the relay session of an online room (netplay_rooms.go): the
+	// joiner connects to the relay at Host:Port and names the session.
+	Relay string
+
+	// Online hosts publicly through RelayServer (a netplayRelays ID).
+	Online      bool
+	RelayServer string
 }
 
 // address is the "ip:port" string the other player types in.
@@ -67,6 +75,9 @@ type netplayPlan struct {
 	RetroArch string
 	Core      string
 	Nick      string
+
+	// AppendConfig is the --appendconfig overlay a host is started with.
+	AppendConfig string
 }
 
 // netplayCoreSet maps a console to the libretro cores that can carry its link
@@ -490,12 +501,19 @@ func netplayCommand(plan netplayPlan) (string, []string) {
 		port = netplayDefaultPort
 	}
 	args := []string{"-L", plan.Core, session.Game.Path}
-	if session.Role == netplayHost {
-		args = append(args, "--host")
-	} else {
-		args = append(args, "--connect", session.Host)
+	switch {
+	case session.Role == netplayHost:
+		args = append(args, "--host", "--port", strconv.Itoa(port))
+	case session.Relay != "":
+		// RetroArch's "address|port|session" form joins a relayed room; --port
+		// is only for --host/plain --connect.
+		args = append(args, "--connect", session.Host+"|"+strconv.Itoa(port)+"|"+session.Relay)
+	default:
+		args = append(args, "--connect", session.Host, "--port", strconv.Itoa(port))
 	}
-	args = append(args, "--port", strconv.Itoa(port))
+	if cfg := strings.TrimSpace(plan.AppendConfig); cfg != "" {
+		args = append(args, "--appendconfig", cfg)
+	}
 	if nick := strings.TrimSpace(plan.Nick); nick != "" {
 		args = append(args, "--nick", nick)
 	}
@@ -531,17 +549,28 @@ func netplayReachable(host string, port int, timeout time.Duration) error {
 // netplayLaunch starts RetroArch in netplay mode. Errors are returned rather
 // than toasted so the panel can keep the exact reason on screen.
 func netplayLaunch(plan netplayPlan, config *Config) error {
-	switch plan.Session.Role {
-	case netplayHost:
+	switch {
+	case plan.Session.Role == netplayHost && plan.Session.Online:
+		// The relay carries the game; nothing listens here.
+	case plan.Session.Role == netplayHost:
 		if err := netplayListenProbe(plan.Session.Port); err != nil {
 			return fmt.Errorf("port %d is already in use — close the other session (%w)", plan.Session.Port, err)
 		}
-	case netplayJoin:
+	case plan.Session.Relay != "":
+		// A relay answers for every room; RetroArch reports a closed session.
+	case plan.Session.Role == netplayJoin:
 		if err := netplayReachProbe(plan.Session.Host, plan.Session.Port, 1500*time.Millisecond); err != nil {
 			return fmt.Errorf("no host answered at %s — check the address and that the other device is hosting", plan.Session.address())
 		}
 	}
 
+	if plan.Session.Role == netplayHost {
+		cfg, err := netplayWriteAppendConfig(plan.Session.Online, plan.Session.RelayServer)
+		if err != nil {
+			return fmt.Errorf("could not prepare RetroArch's netplay settings: %w", err)
+		}
+		plan.AppendConfig = cfg
+	}
 	name, args := netplayCommand(plan)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(plan.RetroArch)
@@ -553,7 +582,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 		// library path must not decide which libraries RetroArch loads.
 		cmd.Env = append(screenChildEnv(os.Environ()), "HOME="+cmd.Dir)
 	}
-	restoreProfile := beginGamePowerProfile(config)
+	restoreProfile := beginLaunchPowerProfile(config, plan.Session.Game.Path) // per-game profile, PWR-6
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
@@ -564,8 +593,16 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	}
 	noteGameChildStarted(cmd)
 	recorder := startTimelapse(config, plan.Session.Game.Title)
+	// A LAN host answers the Netplay panels around it while RetroArch runs
+	// (netplay_rooms.go). A beacon that cannot bind only costs the listing:
+	// the address on screen still works.
+	var beacon *netplayBeacon
+	if plan.Session.Role == netplayHost && !plan.Session.Online {
+		beacon, _ = startNetplayBeacon(netplayBeaconFor(plan))
+	}
 	go func() {
 		_ = cmd.Wait()
+		beacon.Stop()
 		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()

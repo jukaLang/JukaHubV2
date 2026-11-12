@@ -18,6 +18,16 @@ package main
 // different folder drops its options rather than applying them to a different
 // title. Nothing is written for a game that only uses the defaults, and a
 // missing or broken file reads as "no overrides".
+//
+// Two more optional fields came later, both read as "the default" when absent,
+// so a file written by an older build means exactly what it meant then:
+//
+//   "cpu_profile":  "battery" | "balanced" | "performance" — the governor and
+//                   clock a launch runs with (gameCPUProfiles below). The
+//                   max_freq_khz ceiling stays its own field and, when set,
+//                   wins over the profile's own ceiling.
+//   "video_filter": a RetroArch picture mode (videofilter.go), or "unmanaged"
+//                   to keep RetroArch's own even when Settings picks one.
 
 import (
 	"encoding/json"
@@ -42,12 +52,119 @@ const (
 // clock means "use the global power profile", and empty arguments mean "launch
 // the way the emulator screen does".
 type gameOptions struct {
-	MaxFreqKHz int64  `json:"max_freq_khz,omitempty"`
-	Args       string `json:"args,omitempty"`
+	MaxFreqKHz  int64  `json:"max_freq_khz,omitempty"`
+	Args        string `json:"args,omitempty"`
+	CPUProfile  string `json:"cpu_profile,omitempty"`
+	VideoFilter string `json:"video_filter,omitempty"`
 }
 
 func (o gameOptions) empty() bool {
-	return o.MaxFreqKHz <= 0 && strings.TrimSpace(o.Args) == ""
+	return o.MaxFreqKHz <= 0 && strings.TrimSpace(o.Args) == "" &&
+		o.CPUProfile == "" && o.VideoFilter == ""
+}
+
+// ── CPU profile per game ─────────────────────────────────────────────────
+//
+// The profile is the coarse choice and the ceiling ladder above the fine one.
+// "" (Auto) is what every launch did before profiles existed: the performance
+// governor under the global powerProfileMaxFreq. The others map onto the same
+// machinery in powerprofile.go — a governor for the launch and a
+// scaling_max_freq ceiling, both put back when the game exits.
+
+// gameCPUProfiles is the order of the options-sheet ladder.
+var gameCPUProfiles = []string{"", "battery", "balanced", "performance"}
+
+// gameCPUBatteryCeilingKHz is Battery saver's clock cap: enough for the 8- and
+// 16-bit systems, well under the A133P's 2 GHz top.
+const gameCPUBatteryCeilingKHz = 1_200_000
+
+// normaliseGameCPUProfile maps a stored value onto a known profile; anything
+// else (a typo in a hand-edited file) is Auto.
+func normaliseGameCPUProfile(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	for _, p := range gameCPUProfiles {
+		if v == p {
+			return v
+		}
+	}
+	return ""
+}
+
+// gameCPUProfileLabel is the word on the row and in the library list.
+func gameCPUProfileLabel(v string) string {
+	switch normaliseGameCPUProfile(v) {
+	case "battery":
+		return "Battery saver"
+	case "balanced":
+		return "Balanced"
+	case "performance":
+		return "Performance"
+	}
+	return "Auto"
+}
+
+// cycleGameCPUProfile moves one step along the ladder without wrapping, like
+// the ceiling row.
+func cycleGameCPUProfile(v string, delta int) string {
+	cur := normaliseGameCPUProfile(v)
+	idx := 0
+	for i, p := range gameCPUProfiles {
+		if p == cur {
+			idx = i
+		}
+	}
+	idx += delta
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(gameCPUProfiles) {
+		idx = len(gameCPUProfiles) - 1
+	}
+	return gameCPUProfiles[idx]
+}
+
+// gameLaunchPowerConfig folds one game's options into the global profile:
+//
+//	Auto         performance governor, global ceiling (unchanged behaviour)
+//	Performance  performance governor, the chip's top clock even when the
+//	             global setting caps it
+//	Balanced     a dynamic governor (schedutil, interactive, ondemand…), the
+//	             global ceiling
+//	Battery      a dynamic governor under a 1.2 GHz ceiling
+//
+// A per-game CPU limit (max_freq_khz) is applied last and wins over all of
+// them, so a game that already had a cap keeps it.
+func gameLaunchPowerConfig(cfg powerProfileConfig, opts gameOptions) powerProfileConfig {
+	switch normaliseGameCPUProfile(opts.CPUProfile) {
+	case "performance":
+		cfg.Balanced = false
+		cfg.MaxFreqKHz = 0
+	case "balanced":
+		cfg.Balanced = true
+	case "battery":
+		cfg.Balanced = true
+		if cfg.MaxFreqKHz <= 0 || cfg.MaxFreqKHz > gameCPUBatteryCeilingKHz {
+			cfg.MaxFreqKHz = gameCPUBatteryCeilingKHz
+		}
+	}
+	if opts.MaxFreqKHz > 0 {
+		cfg.MaxFreqKHz = opts.MaxFreqKHz
+	}
+	return cfg
+}
+
+// gameOptionsPowerSummary is the short line the library shows beside a game
+// whose launch differs from the global profile: "Battery saver · 1.4 GHz",
+// "1.6 GHz", or "" for a game on the defaults.
+func gameOptionsPowerSummary(opts gameOptions) string {
+	var parts []string
+	if p := normaliseGameCPUProfile(opts.CPUProfile); p != "" {
+		parts = append(parts, gameCPUProfileLabel(p))
+	}
+	if opts.MaxFreqKHz > 0 {
+		parts = append(parts, formatGameCeiling(opts.MaxFreqKHz))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // gameOptionsFile is the on-disk shape. The schema version is written so a
@@ -140,6 +257,14 @@ func formatGameCeiling(khz int64) string {
 	return formatFrequencyKHz(khz)
 }
 
+// gameCeilingToast is the note shown when a game with its own CPU limit hands
+// the screen back: which limit it ran under, and that the global profile is
+// in charge again.
+func gameCeilingToast(game libraryGame, khz int64) string {
+	return game.Label() + " ran under its own CPU limit: " + formatGameCeiling(khz) +
+		" · power profile restored"
+}
+
 // parseGameArgs splits a field into arguments, honouring double quotes so
 // `--profile "My Game"` stays one argument. A lone backslash escapes the next
 // character; an unterminated quote keeps the rest as a single argument rather
@@ -218,6 +343,8 @@ func normaliseGameOptions(o gameOptions) gameOptions {
 	if o.MaxFreqKHz < 0 {
 		o.MaxFreqKHz = 0
 	}
+	o.CPUProfile = normaliseGameCPUProfile(o.CPUProfile)
+	o.VideoFilter = normaliseGameVideoFilter(o.VideoFilter)
 	return o
 }
 

@@ -30,6 +30,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/hashicorp/mdns"
 )
 
 const (
@@ -117,7 +119,14 @@ func companionURL(ip string, port int, pin string) string {
 	if shotModeOn() {
 		ip, pin = shotLANAddress, shotPairPIN
 	}
-	return fmt.Sprintf("http://%s/?p=%s", net.JoinHostPort(ip, strconv.Itoa(port)), pin)
+	return fmt.Sprintf("%s/?p=%s", companionBaseURL(ip, port), pin)
+}
+
+func companionBaseURL(host string, port int) string {
+	if port == 80 {
+		return "http://" + host
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func companionPort() int {
@@ -259,6 +268,14 @@ type companionServer struct {
 	ln   net.Listener
 	srv  *http.Server
 	port int
+	// Port 80 is an optional second listener so the browser can open
+	// http://jukahub.local without a port. The configured port stays live for
+	// existing companion and screen-share links.
+	browserPort int
+	webSrv      *http.Server
+	mdns        *mdns.Server
+	mdnsIP      string
+	mdnsRetry   time.Time
 	// throttles is the PIN failure budget and lockout escalation per remote
 	// address (SEC-28): a paired phone polling on one address must not keep
 	// clearing a guesser's count on another.
@@ -286,18 +303,34 @@ func (s *companionServer) Start() error {
 			return err
 		}
 	}
+	handler := s.handler()
 	srv := &http.Server{
-		Handler:           s.handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		// Keep-alive connections a client stopped using are dropped instead of
 		// being held for good: any phone on the network could otherwise pile
 		// them up until the handheld ran out of file descriptors.
 		IdleTimeout: 2 * time.Minute,
 	}
+	actualPort := ln.Addr().(*net.TCPAddr).Port
+	browserPort := actualPort
+	var webLn net.Listener
+	var webSrv *http.Server
+	if actualPort != 80 {
+		// A handheld running as root can offer the short address. If port 80
+		// is unavailable, the configured port remains the working address.
+		if extra, listenErr := net.Listen("tcp", ":80"); listenErr == nil {
+			webLn = extra
+			webSrv = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+			browserPort = 80
+		}
+	}
 	s.mu.Lock()
 	s.ln = ln
 	s.srv = srv
-	s.port = ln.Addr().(*net.TCPAddr).Port
+	s.port = actualPort
+	s.browserPort = browserPort
+	s.webSrv = webSrv
 	s.mu.Unlock()
 	go func() {
 		// A closed listener is the normal shutdown path; anything else is worth
@@ -307,18 +340,34 @@ func (s *companionServer) Start() error {
 			logWarn("companion", "server stopped: %v", err)
 		}
 	}()
+	if webSrv != nil {
+		go func() {
+			if err := webSrv.Serve(webLn); err != nil && err != http.ErrServerClosed {
+				logWarn("companion", "short-address listener stopped: %v", err)
+			}
+		}()
+	}
 	return nil
 }
 
 func (s *companionServer) Stop() {
 	s.mu.Lock()
 	srv := s.srv
+	webSrv := s.webSrv
+	mdnsSrv := s.mdns
 	s.srv = nil
+	s.webSrv = nil
 	s.ln = nil
+	s.mdns = nil
+	s.mdnsIP = ""
+	s.mdnsRetry = time.Time{}
 	s.diagnosticToken = ""
 	s.diagnosticText = ""
 	s.diagnosticUntil = time.Time{}
 	s.mu.Unlock()
+	if mdnsSrv != nil {
+		_ = mdnsSrv.Shutdown()
+	}
 	if srv == nil {
 		return
 	}
@@ -326,11 +375,21 @@ func (s *companionServer) Stop() {
 	// Shutdown alone never ends an open /stream viewer — it waits for it, so a
 	// new PIN froze the UI for the whole timeout and the old viewer, paired
 	// with the PIN just retired, kept watching.
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		_ = srv.Close()
+	shutdown := func(server *http.Server) {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
 	}
+	if webSrv != nil {
+		done := make(chan struct{})
+		go func() { shutdown(webSrv); close(done) }()
+		shutdown(srv)
+		<-done
+		return
+	}
+	shutdown(srv)
 }
 
 func (s *companionServer) Running() bool {
@@ -345,8 +404,19 @@ func (s *companionServer) Port() int {
 	return s.port
 }
 
+func (s *companionServer) BrowserPort() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.browserPort
+}
+
 func (s *companionServer) URL() string {
-	return companionURL(localIPv4(), s.Port(), s.pin)
+	ip := localIPv4()
+	host := ip
+	if s.mdnsReady(ip) {
+		host = companionLocalHost
+	}
+	return companionURL(host, s.BrowserPort(), s.pin)
 }
 
 // authorized compares the request PIN in constant time. The header is what
@@ -482,6 +552,9 @@ func (s *companionServer) handler() http.Handler {
 	// The VPN card: whether a WireGuard configuration is saved (its name,
 	// never its keys), and a new one pasted or picked on the phone (vpn.go).
 	mux.HandleFunc("/api/vpn", s.guard(s.handleVPN))
+	// The Files card: the FTP server's shares, browsed and changed from the
+	// page, every route behind the PIN (companion_files.go).
+	s.registerFileRoutes(mux)
 	return mux
 }
 
@@ -720,9 +793,12 @@ const companionLockedPage = `<!doctype html><meta charset="utf-8">
 <style>html{background:#0b0d12;color:#e6e8ef;font:16px system-ui,sans-serif}
 body{margin:0;display:grid;place-items:center;min-height:100vh;padding:24px}
 .card{max-width:360px;background:#151923;border:1px solid #232a38;border-radius:16px;padding:24px}
-h1{font-size:20px;margin:0 0 8px}p{color:#8b93a7;line-height:1.5;margin:0}</style>
-<div class=card><h1>Waiting for the PIN</h1>
-<p>Scan the QR code shown on the handheld. The link carries the pairing PIN; this page cannot be opened without it.</p></div>`
+h1{font-size:20px;margin:0 0 8px}p{color:#8b93a7;line-height:1.5;margin:0 0 16px}
+label{display:block;margin-bottom:6px}input{box-sizing:border-box;width:100%;padding:12px;font:20px system-ui;border:1px solid #6f86ff;border-radius:10px;background:#0b0d12;color:#e6e8ef}
+button{width:100%;margin-top:12px;padding:12px;border:0;border-radius:10px;background:#6f86ff;color:#fff;font:600 16px system-ui}</style>
+<div class=card><h1>Enter the pairing PIN</h1>
+<p>Use the six-digit PIN shown on JukaHub, or scan its QR code to open this page directly.</p>
+<form method=get action="/"><label for=pin>PIN</label><input id=pin name=p inputmode=numeric pattern="[0-9]{6}" maxlength=6 autocomplete=one-time-code required><button type=submit>Open JukaHub</button></form></div>`
 
 const companionPageHTML = `<!doctype html>
 <html lang="en"><meta charset="utf-8">
@@ -792,6 +868,22 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 .bar.idle{display:none}
 .bar.pulse>span{animation:pulse 1.2s ease-in-out infinite alternate}
 @keyframes pulse{from{opacity:.25}to{opacity:.8}}
+/* The Files card: a breadcrumb, then one row per file with its actions; on a
+   narrow phone the actions drop under the name. */
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin:0 0 8px;font-size:14px;color:var(--dim)}
+.crumbs button{background:none;border:0;color:#a8b5ff;padding:4px 4px;min-height:32px;font:600 14px system-ui,-apple-system,sans-serif;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.flist{border:1px solid var(--line);border-radius:10px;max-height:60vh;overflow-y:auto;background:#0f131b}
+.frow{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid var(--line)}
+.frow:first-child{border-top:0}
+.fname{flex:1 1 auto;min-width:0;background:none;border:0;border-radius:0;padding:6px 0;min-height:40px;text-align:left;color:var(--ink);font:15px/1.3 system-ui,-apple-system,sans-serif}
+.fname b,.fname span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fname b{font-weight:600}
+.fname span{color:var(--dim);font-size:12px}
+.fname.dir b{color:#a8b5ff}
+.facts{display:flex;gap:4px;flex:0 0 auto}
+.facts button{padding:6px 9px;min-height:36px;font-size:13px}
+.fempty{padding:14px;color:var(--dim);font-size:14px;text-align:center}
+@media (max-width:420px){.frow{flex-wrap:wrap}.facts{width:100%;justify-content:flex-end}}
 /* A phone on its side has little height: the screen moves to a column of its
    own on the left and the cards scroll on the right. */
 @media (orientation:landscape) and (max-height:540px){
@@ -857,6 +949,17 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <input type=file id=file>
   <div class=row><button id=sendFile>Upload</button></div>
   <small id=fileName>Files land in the PhoneDrop folder on the SD card.</small>
+</div>
+
+<div class=card id=filesCard>
+  <h2>Files</h2>
+  <div class=crumbs id=filesCrumbs></div>
+  <div class=row><button id=filesUpload>Upload here</button><button class=ghost id=filesMkdir>New folder</button></div>
+  <input type=file id=filesPick multiple hidden>
+  <div class="bar idle" id=filesBar><span id=filesBarFill></span></div>
+  <div class=msg id=filesMsg aria-live=polite></div>
+  <div class=flist id=filesList><div class=fempty>Loading...</div></div>
+  <small>The same folders the FTP server shares: games, saves, screenshots, music and the rest (on a computer, the shared folder next to JukaHub). Roms/Ports is read-only here. Delete removes a file or an empty folder only.</small>
 </div>
 
 <div class=card id=psCard>
@@ -1315,6 +1418,212 @@ document.getElementById('psStart').onclick = async () => {
     btn.disabled = false;
   }
 };
+// The Files card (companion_files.go). Paths are the handheld's share paths
+// ("/Roms/GBA"); "/" lists the shares. Uploads go one at a time through
+// XMLHttpRequest, whose upload events drive the bar.
+const filesMsgEl = document.getElementById('filesMsg');
+const filesListEl = document.getElementById('filesList');
+let filesPath = '/';
+let filesData = null;
+let filesBusy = false;
+function filesSay(text, bad) { filesMsgEl.textContent = text || ''; filesMsgEl.className = bad ? 'msg bad' : 'msg'; }
+function filesJoin(dir, name) { return dir === '/' ? '/' + name : dir + '/' + name; }
+function filesSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+function filesWhen(t) {
+  if (!t) return '';
+  try { return new Date(t * 1000).toLocaleString([], {year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}); } catch (e) { return ''; }
+}
+function filesBar(pct) {
+  const bar = document.getElementById('filesBar');
+  bar.classList.toggle('idle', pct < 0);
+  document.getElementById('filesBarFill').style.width = (pct < 0 ? 0 : pct) + '%';
+}
+async function filesLoad(p) {
+  const res = await fetch('/api/files?path=' + encodeURIComponent(p), {headers: hdr(), cache: 'no-store'});
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  filesData = await res.json();
+  filesPath = filesData.path || '/';
+  filesRender();
+}
+function filesOpen(p) {
+  filesSay('');
+  filesLoad(p).catch(e => filesSay(e.message, true));
+}
+function filesButton(label, cls, fn) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.onclick = fn;
+  return b;
+}
+function filesRender() {
+  filesSay('');
+  const d = filesData || {entries: []};
+  const crumbs = document.getElementById('filesCrumbs');
+  crumbs.replaceChildren(filesButton('Shared folders', '', () => filesOpen('/')));
+  let acc = '';
+  for (const part of filesPath.split('/').filter(Boolean)) {
+    acc += '/' + part;
+    const target = acc;
+    crumbs.append(document.createTextNode('/'), filesButton(part, '', () => filesOpen(target)));
+  }
+  for (const b of crumbs.querySelectorAll('button')) b.disabled = filesBusy;
+  const canWrite = filesPath !== '/' && !d.readOnly;
+  document.getElementById('filesUpload').disabled = !canWrite || filesBusy;
+  document.getElementById('filesMkdir').disabled = !canWrite || filesBusy;
+  if (filesPath === '/') filesSay('Open a folder to upload or make folders in it.');
+  else if (d.readOnly) filesSay('This folder is read-only from the phone.');
+  else if (d.truncated) filesSay('This folder holds more files than can be shown; the first ' + d.entries.length + ' are listed.');
+  filesListEl.replaceChildren();
+  if (!d.entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'fempty';
+    empty.textContent = filesPath === '/' ? 'Nothing is shared: no user folders were found.' : 'This folder is empty.';
+    filesListEl.append(empty);
+    return;
+  }
+  for (const e of d.entries) {
+    const full = filesJoin(filesPath, e.name);
+    const row = document.createElement('div');
+    row.className = 'frow';
+    const name = document.createElement(e.isDir ? 'button' : 'div');
+    name.className = e.isDir ? 'fname dir' : 'fname';
+    const title = document.createElement('b');
+    title.textContent = e.name;
+    const meta = document.createElement('span');
+    meta.textContent = [e.isDir ? 'Folder' : filesSize(e.size || 0), filesWhen(e.mtime), e.locked ? 'read-only' : ''].filter(Boolean).join(' · ');
+    name.append(title, meta);
+    if (e.isDir) { name.type = 'button'; name.disabled = filesBusy; name.onclick = () => filesOpen(full); }
+    row.append(name);
+    const acts = document.createElement('div');
+    acts.className = 'facts';
+    if (!e.isDir) acts.append(filesButton('Download', 'ghost', () => filesDownload(full, e.name)));
+    if (filesPath !== '/' && !d.readOnly && !e.locked && !filesBusy) {
+      acts.append(filesButton('Rename', 'ghost', () => filesRename(full, e.name)));
+      acts.append(filesButton('Delete', 'ghost', () => filesDelete(full, e)));
+    }
+    if (acts.childNodes.length) row.append(acts);
+    filesListEl.append(row);
+  }
+}
+function filesDownload(full, name) {
+  const a = document.createElement('a');
+  a.href = '/api/files/download?p=' + encodeURIComponent(pin) + '&path=' + encodeURIComponent(full);
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+async function filesRename(full, old) {
+  const next = prompt('New name for ' + old, old);
+  if (next === null || next.trim() === '' || next.trim() === old) return;
+  try {
+    await api('/api/files/rename', {path: full, name: next.trim()}, true);
+    toast('Renamed');
+    await filesLoad(filesPath);
+  } catch (e) { filesSay(e.message, true); }
+}
+async function filesDelete(full, e) {
+  const ask = e.isDir
+    ? 'Delete the folder "' + e.name + '"? Only an empty folder can be deleted.'
+    : 'Delete "' + e.name + '" from the handheld? This cannot be undone.';
+  if (!confirm(ask)) return;
+  try {
+    await api('/api/files/delete', {path: full}, true);
+    toast('Deleted');
+    await filesLoad(filesPath);
+  } catch (err) { filesSay(err.message, true); }
+}
+document.getElementById('filesMkdir').onclick = async () => {
+  const name = prompt('Name of the new folder');
+  if (name === null || !name.trim()) return;
+  try {
+    await api('/api/files/mkdir', {path: filesPath, name: name.trim()}, true);
+    toast('Folder created');
+    await filesLoad(filesPath);
+  } catch (e) { filesSay(e.message, true); }
+};
+function filesUploadOne(file, dir, replace, label) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/files/upload?path=' + encodeURIComponent(dir) + (replace ? '&replace=1' : ''));
+    xhr.setRequestHeader('X-Companion-Pin', pin);
+    xhr.upload.onprogress = ev => {
+      if (!ev.lengthComputable) return;
+      const pct = Math.floor(ev.loaded * 100 / ev.total);
+      filesBar(pct);
+      filesSay(label + ': ' + pct + '%');
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+      const err = new Error((xhr.responseText || '').trim() || ('Error ' + xhr.status));
+      err.status = xhr.status;
+      reject(err);
+    };
+    xhr.onerror = () => reject(new Error('The connection to the handheld was lost.'));
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.send(fd);
+  });
+}
+document.getElementById('filesUpload').onclick = () => document.getElementById('filesPick').click();
+document.getElementById('filesPick').onchange = async ev => {
+  const input = ev.target;
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  const dir = filesPath;
+  const max = (filesData && filesData.maxUpload) || 536870912;
+  const have = new Map(((filesData && filesData.entries) || []).map(x => [x.name.toLowerCase(), x]));
+  filesBusy = true;
+  filesRender();
+  let done = 0;
+  let failed = '';
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const label = 'Uploading ' + f.name + (files.length > 1 ? ' (' + (i + 1) + ' of ' + files.length + ')' : '');
+      // The multipart wrapping counts against the server's limit too.
+      if (f.size > max - 4096) { failed = f.name + ' is larger than ' + filesSize(max) + '.'; continue; }
+      const same = have.get(f.name.toLowerCase());
+      if (same && same.isDir) { failed = 'A folder named ' + f.name + ' is already here.'; continue; }
+      if (same && !confirm(f.name + ' is already here. Replace it?')) continue;
+      filesSay(label + '...');
+      filesBar(0);
+      try {
+        try {
+          await filesUploadOne(f, dir, !!same, label);
+        } catch (e) {
+          // The handheld may store the name differently (cleaned of
+          // characters the card cannot hold) and find that one already there.
+          const msg = e.message || '';
+          const tail = ' is already here.';
+          if (same || e.status !== 409 || !msg.endsWith(tail) || msg.startsWith('A folder named ')) throw e;
+          if (!confirm('Replace ' + msg.slice(0, -tail.length) + '?')) continue;
+          filesBar(0);
+          await filesUploadOne(f, dir, true, label);
+        }
+        done++;
+      } catch (e) { failed = f.name + ': ' + e.message; }
+    }
+  } finally {
+    filesBusy = false;
+    filesBar(-1);
+    input.value = '';
+  }
+  if (done) toast(done === 1 ? 'Uploaded' : 'Uploaded ' + done + ' files');
+  try { await filesLoad(filesPath); } catch (e) { failed = failed || e.message; }
+  if (failed) filesSay(failed, true);
+  else if (done) filesSay('Uploaded ' + done + (done === 1 ? ' file.' : ' files.'));
+};
+filesOpen('/');
+
 stateEl.textContent = pin ? 'paired' : 'no PIN';
 // A code on the handheld that asks for one card ("#groq", "#vpn") opens the
 // page there: the card moves to the top under the screen bar, ringed, with the

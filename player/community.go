@@ -74,13 +74,10 @@ var communityDiagnosticQR struct {
 	err  string
 }
 
-// communityRows builds the hub's landing list. The telemetry row is the only
-// place consent can be changed, so it states the default explicitly.
+// communityRows builds the hub's landing list. The diagnostics row states the
+// default and public destination explicitly.
 func communityRows(config *Config) []communityRow {
-	telemetryDetail := "Device model and crash counts only — off unless you opt in"
-	if telemetryOptedIn() && telemetryEndpointURL() == "" {
-		telemetryDetail = "No collector is configured in this build — nothing is sent"
-	}
+	telemetryDetail := "Every 10 launches: public Info issue with anonymous device facts — off by default"
 	return []communityRow{
 		{
 			label:  "What's new",
@@ -197,8 +194,7 @@ func communityPanelActivate(config *Config) {
 			return
 		}
 		if on {
-			ShowToast("Anonymous diagnostics on — device model and crashes only", ToastKindSuccess)
-			TelemetryBoot(config)
+			ShowToast("Anonymous diagnostics on — public Info issue every 10 launches", ToastKindSuccess)
 		} else {
 			ShowToast("Anonymous diagnostics off — nothing is sent", ToastKindInfo)
 		}

@@ -454,6 +454,112 @@ func gmetaAddTag(name string) string {
 	return name
 }
 
+// gmetaRenameTag renames a custom tag on the list and on every game carrying
+// it, in one save. It returns the stored new name and "" with a reason when
+// nothing changed: a built-in tag cannot be renamed, and a new name that is
+// another tag's merges into it only when that tag is a custom one, so a rename
+// never quietly turns games into Favorites.
+func gmetaRenameTag(oldName, newName string) (string, string) {
+	oldName = gmetaCleanTag(oldName)
+	newName = gmetaCleanTag(newName)
+	switch {
+	case oldName == "" || gmetaIsBuiltin(oldName):
+		return "", "Built-in tags keep their names"
+	case newName == "":
+		return "", ""
+	case gmetaIsBuiltin(newName):
+		return "", newName + " is a built-in tag"
+	}
+	gmetaStore.mu.Lock()
+	gmetaEnsureLocked()
+	idx := -1
+	merge := false
+	for i, t := range gmetaStore.tags {
+		if strings.EqualFold(t, oldName) {
+			idx = i
+		} else if strings.EqualFold(t, newName) {
+			merge = true
+			newName = t
+		}
+	}
+	if idx < 0 {
+		gmetaStore.mu.Unlock()
+		return "", "That tag is gone"
+	}
+	if gmetaStore.tags[idx] == newName {
+		gmetaStore.mu.Unlock()
+		return newName, ""
+	}
+	if merge {
+		gmetaStore.tags = append(gmetaStore.tags[:idx], gmetaStore.tags[idx+1:]...)
+	} else {
+		gmetaStore.tags[idx] = newName
+	}
+	for _, rec := range gmetaStore.games {
+		if !gmetaContains(rec.Tags, oldName) {
+			continue
+		}
+		kept := rec.Tags[:0]
+		for _, t := range rec.Tags {
+			if !strings.EqualFold(t, oldName) {
+				kept = append(kept, t)
+			}
+		}
+		rec.Tags = kept
+		if !gmetaContains(rec.Tags, newName) {
+			rec.Tags = append(rec.Tags, newName)
+		}
+	}
+	snapshot, seq := gmetaSnapshotLocked()
+	gmetaStore.mu.Unlock()
+	gmetaPersist(snapshot, seq)
+	return newName, ""
+}
+
+// gmetaDeleteTag removes a custom tag from the list and from every game, in
+// one save, and returns how many games carried it. Built-in tags stay.
+func gmetaDeleteTag(name string) (int, bool) {
+	name = gmetaCleanTag(name)
+	if name == "" || gmetaIsBuiltin(name) {
+		return 0, false
+	}
+	gmetaStore.mu.Lock()
+	gmetaEnsureLocked()
+	found := false
+	tags := gmetaStore.tags[:0]
+	for _, t := range gmetaStore.tags {
+		if strings.EqualFold(t, name) {
+			found = true
+			continue
+		}
+		tags = append(tags, t)
+	}
+	gmetaStore.tags = tags
+	games := 0
+	for _, rec := range gmetaStore.games {
+		if !gmetaContains(rec.Tags, name) {
+			continue
+		}
+		games++
+		found = true
+		kept := rec.Tags[:0]
+		for _, t := range rec.Tags {
+			if !strings.EqualFold(t, name) {
+				kept = append(kept, t)
+			}
+		}
+		rec.Tags = kept
+	}
+	if !found {
+		gmetaStore.mu.Unlock()
+		return 0, false
+	}
+	snapshot, seq := gmetaSnapshotLocked()
+	gmetaStore.mu.Unlock()
+	gmetaPersist(snapshot, seq)
+	return games, true
+}
+
 // gmetaSetTag adds or removes one tag on a game and returns the stored record.
 func gmetaSetTag(system, title, tag string, on bool) gmetaRecord {
 	tag = gmetaCleanTag(tag)
@@ -626,7 +732,7 @@ func gmetaNoteLaunch(game libraryGame) {
 			break
 		}
 	}
-	secs := playtime.data.Games[game.Title]
+	secs := playtimeGameSecondsFor(game.System, game.Title)
 	if secs > 0 {
 		played = true
 	}

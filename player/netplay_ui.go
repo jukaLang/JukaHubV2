@@ -1,30 +1,73 @@
 package main
 
-// netplay_ui.go — the LAN play panel shown over the game library.
+// netplay_ui.go — the Netplay panel shown over the game library.
 //
-// Opened with X on a highlighted game. Two rows: host it here, or join someone
-// else's session with the same game. The device's own address is printed in
-// full before anything launches, because once RetroArch takes the screen the
-// player can no longer read it.
+// Opened with X on a highlighted game. The rows, top to bottom:
+//
+//   - Host this game on the home network (LAN, the old link-cable-over-Wi-Fi).
+//   - Host it online: RetroArch announces the room in its public lobby and
+//     carries it through a relay, so a friend on another network can join
+//     without port forwarding. Left/Right picks the relay.
+//   - Rooms on this network: other JukaHubs hosting, heard live
+//     (netplay_rooms.go). A room joins with this device's copy of the ROM and
+//     the host's core, whatever game the panel was opened on.
+//   - Online rooms from RetroArch's lobby, only those whose game is in this
+//     library; Y refreshes the list.
+//   - Join by address, for a host that cannot be discovered (another
+//     RetroArch, a VPN, a different subnet).
+//
+// The device's own address is printed before anything launches, because once
+// RetroArch takes the screen the player can no longer read it.
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
+
+type netplayRowKind uint8
+
+const (
+	netplayRowHostLAN netplayRowKind = iota
+	netplayRowHostOnline
+	netplayRowRoom
+	netplayRowOnlineInfo
+	netplayRowAddress
+)
+
+// netplayRow is one line of the panel. Room rows carry their join plan (or
+// the reason they cannot be joined), resolved when the list is rebuilt rather
+// than on every frame.
+type netplayRow struct {
+	kind   netplayRowKind
+	key    string
+	label  string
+	detail string
+	room   netplayRoom
+	plan   netplayPlan
+	err    string
+}
 
 type netplayPanelState struct {
 	open    bool
 	game    libraryGame
 	cursor  int
+	scroll  int
 	address string // last address typed for a join
 	status  string
 	warn    bool
-	ready   string // "Ready · mgba_libretro" or why not
+	ready   string // "Ready · mgba" or why not
 	readyOK bool
 	panel   sdl.Rect
 	rowHits []gameLibRowHit
+
+	rows     []netplayRow
+	rowsSig  string
+	opened   time.Time
+	lastRows time.Time
 }
 
 var netplayPanel netplayPanelState
@@ -33,7 +76,9 @@ var netplayPanel netplayPanelState
 // one button press instead of retyping an IP on a D-pad.
 var netplayLastAddress string
 
-var netplayMenuRows = []string{"Host this game", "Join a game"}
+// netplayOnlineRowsMax bounds the online rooms listed; the lobby can hold
+// hundreds and a handheld list of more than a screenful is not browsable.
+const netplayOnlineRowsMax = 30
 
 // netplayEnabledKey is the custom-map copy of the LAN Play switch. The typed
 // field is what the config file documents; the custom key is what survives in
@@ -41,7 +86,7 @@ var netplayMenuRows = []string{"Host this game", "Join a game"}
 // shipped default instead of reading "missing" as off.
 const netplayEnabledKey = "netplay_enabled"
 
-// netplayEnabled reports whether the Game Library should offer the LAN Play
+// netplayEnabled reports whether the Game Library should offer the Netplay
 // panel. A nil config (early startup, tests) behaves as enabled.
 func netplayEnabled(config *Config) bool {
 	if config == nil {
@@ -69,9 +114,9 @@ func setNetplayEnabled(config *Config, on bool) {
 	config.Variables.Custom[netplayEnabledKey] = on
 }
 
-// netplayReadiness describes whether this console can be played over the LAN
-// right now: the emulator and the core are both resolved before the panel draws
-// a red row instead of failing at launch.
+// netplayReadiness describes whether this console can be hosted right now:
+// the emulator and the core are both resolved before the panel draws a red
+// line instead of failing at launch.
 func netplayReadiness(game libraryGame) (string, bool) {
 	if note := netplaySupportNote(game.System); note != "" {
 		return note, false
@@ -83,9 +128,13 @@ func netplayReadiness(game libraryGame) (string, bool) {
 	if core == "" {
 		return "The RetroArch core for this console is not installed", false
 	}
-	name := strings.TrimSuffix(filepath.Base(core), filepath.Ext(core))
-	name = strings.TrimSuffix(name, "_libretro")
-	return "Ready · " + name, true
+	return "Ready to host · " + netplayCoreLabel(core), true
+}
+
+// netplayCoreLabel is a core file's short name ("mgba").
+func netplayCoreLabel(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return strings.TrimSuffix(name, "_libretro")
 }
 
 // netplayLocalAddress is the string the other player types in.
@@ -108,7 +157,7 @@ func openNetplayForSelectedGame() bool {
 	// dialog, and a disabled feature that opens to an empty panel would look
 	// broken. Saying where to turn it on costs one toast.
 	if !netplayEnabled(appConfig) {
-		ShowToast("LAN play is off · turn it on in Quick Settings", ToastKindInfo)
+		ShowToast("Netplay is off · turn LAN play on in Quick Settings", ToastKindInfo)
 		return false
 	}
 	openNetplayPanel(game)
@@ -122,17 +171,37 @@ func openNetplayPanel(game libraryGame) {
 	netplayPanel.open = true
 	netplayPanel.game = game
 	netplayPanel.cursor = 0
+	netplayPanel.scroll = 0
 	netplayPanel.status = ""
 	netplayPanel.warn = false
 	netplayPanel.address = netplayLastAddress
 	netplayPanel.ready, netplayPanel.readyOK = netplayReadiness(game)
+	netplayPanel.rows = nil
+	netplayPanel.rowsSig = ""
+	netplayPanel.opened = time.Now()
+	netplayStartDiscovery()
+	// The online list is fetched once per minute at most: reopening the panel
+	// for another game reuses it, and Y refreshes on demand.
+	if _, busy, _, _ := netplayOnlineSnapshot(); !busy && netplayOnlineStale(time.Minute) {
+		netplayRefreshLobby()
+	}
+	netplayRebuildRows(true)
 	PlayNavSound()
+}
+
+// netplayOnlineStale reports whether the lobby list is older than age.
+func netplayOnlineStale(age time.Duration) bool {
+	netplayOnline.mu.Lock()
+	defer netplayOnline.mu.Unlock()
+	return netplayOnline.fetched.IsZero() || time.Since(netplayOnline.fetched) > age
 }
 
 func closeNetplayPanel() {
 	netplayPanel.open = false
 	netplayPanel.rowHits = netplayPanel.rowHits[:0]
 	netplayPanel.panel = sdl.Rect{}
+	netplayPanel.rows = nil
+	netplayStopDiscovery()
 	if virtualKeyboardActive && vkTarget == vkTargetNetplay {
 		vkCloseKeyboard()
 	}
@@ -141,6 +210,156 @@ func closeNetplayPanel() {
 func netplaySetStatus(message string, warn bool) {
 	netplayPanel.status = message
 	netplayPanel.warn = warn
+	if warn {
+		PlayErrorSound()
+	}
+}
+
+// netplayRebuildRows refreshes the row list when a scan or the lobby fetch
+// landed (or force). The highlighted row keeps its place by key.
+func netplayRebuildRows(force bool) {
+	lan, lanRev := netplayLANSnapshot()
+	online, busy, onlineErr, onlineRev := netplayOnlineSnapshot()
+	sig := strings.Join([]string{
+		strconv.FormatUint(lanRev, 10), strconv.FormatUint(onlineRev, 10), strconv.FormatUint(gameLib.scanGen, 10),
+		strconv.Itoa(gameLib.lib.Total),
+		netplayPanel.address, netplayRelayFor(appConfig).ID,
+	}, "|")
+	if !force && sig == netplayPanel.rowsSig {
+		return
+	}
+	netplayPanel.rowsSig = sig
+	selected := ""
+	if netplayPanel.cursor >= 0 && netplayPanel.cursor < len(netplayPanel.rows) {
+		selected = netplayPanel.rows[netplayPanel.cursor].key
+	}
+
+	game := netplayPanel.game
+	rows := []netplayRow{
+		{kind: netplayRowHostLAN, key: "host-lan", label: "Host on this network"},
+		{kind: netplayRowHostOnline, key: "host-online", label: "Host online"},
+	}
+	rows[0].detail = netplayHostLANDetail()
+	relay := netplayRelayFor(appConfig)
+	rows[1].detail = "Friends anywhere join through the " + relay.Label + " relay — no router setup"
+
+	index := netplayLibraryIndex()
+	// One RetroArch lookup and one core-folder listing per rebuild, shared by
+	// every room row (each lookup is a handful of stats, a PATH search on a
+	// desktop without RetroArch).
+	retroArch := netplayRetroArchPath()
+	installed := netplayInstalledCores(netplayCoreDirs())
+	for _, room := range lan {
+		rows = append(rows, netplayRoomRow(room, index, installed, retroArch))
+	}
+
+	// Online: only rooms whose game is here; the panel's own game first. The
+	// list is cut before rooms are resolved into rows.
+	wantName := netplayNormName(game.Path)
+	var mine, others []netplayRoom
+	for _, room := range online {
+		if _, ok := netplayMatchGame(room, index); !ok {
+			continue
+		}
+		if netplayNormName(room.File) == wantName {
+			mine = append(mine, room)
+		} else {
+			others = append(others, room)
+		}
+	}
+	total := len(mine) + len(others)
+	listed := append(mine, others...)
+	if len(listed) > netplayOnlineRowsMax {
+		listed = listed[:netplayOnlineRowsMax]
+	}
+
+	// The info row heads the online rooms (and is the refresh button).
+	info := netplayRow{kind: netplayRowOnlineInfo, key: "online-info", label: "Online rooms"}
+	switch {
+	case busy:
+		info.detail = "Looking for online rooms…"
+	case onlineErr != "" && len(online) > 0:
+		info.detail = onlineErr + " — showing the last list"
+		info.err = onlineErr
+	case onlineErr != "":
+		info.detail = onlineErr
+		info.err = onlineErr
+	case total == 0 && len(online) > 0:
+		info.detail = itoa(len(online)) + " rooms online, none for games you have"
+	case total == 0:
+		info.detail = "No online rooms right now"
+	default:
+		info.detail = itoa(total) + " rooms for games you have"
+	}
+	rows = append(rows, info)
+	for _, room := range listed {
+		rows = append(rows, netplayRoomRow(room, index, installed, retroArch))
+	}
+
+	addr := netplayRow{kind: netplayRowAddress, key: "address", label: "Join by address"}
+	if netplayPanel.address != "" {
+		addr.detail = "Connect to " + netplayPanel.address
+	} else {
+		addr.detail = "Type the host's address, e.g. 192.168.1.5"
+	}
+	rows = append(rows, addr)
+
+	// The highlighted row keeps its place by key; when it is gone (a room
+	// closed) the cursor stays at the same height instead of jumping to the top.
+	prev := netplayPanel.cursor
+	netplayPanel.rows = rows
+	netplayPanel.cursor = -1
+	for i, r := range rows {
+		if r.key == selected {
+			netplayPanel.cursor = i
+			break
+		}
+	}
+	if netplayPanel.cursor < 0 {
+		netplayPanel.cursor = prev
+		if netplayPanel.cursor >= len(rows) {
+			netplayPanel.cursor = len(rows) - 1
+		}
+		if netplayPanel.cursor < 0 {
+			netplayPanel.cursor = 0
+		}
+	}
+}
+
+func netplayHostLANDetail() string {
+	if address := netplayLocalAddress(); address != "" {
+		return "Others on your Wi-Fi see it here, or join at " + address
+	}
+	return "Connect to Wi-Fi first"
+}
+
+// netplayRoomRow resolves one room into a row.
+func netplayRoomRow(room netplayRoom, index map[string][]libraryGame, installed map[string]string, retroArch string) netplayRow {
+	row := netplayRow{kind: netplayRowRoom, key: "room:" + room.key(), room: room}
+	who := room.Nick
+	if who == "" {
+		who = "Someone"
+	}
+	row.label = who + " · " + room.Title
+	plan, err := netplayPlanForRoom(room, index, installed, retroArch)
+	where := "On your network"
+	if room.Source == netplayRoomOnline {
+		where = "Online"
+		if room.Country != "" {
+			where += " (" + strings.ToUpper(room.Country) + ")"
+		}
+		if room.Relay != "" {
+			where += " · relay"
+		}
+	}
+	if err != nil {
+		row.err = err.Error()
+		row.detail = where + " · " + row.err
+		return row
+	}
+	row.plan = plan
+	row.detail = where + " · " + netplayCoreLabel(plan.Core) + " · ready"
+	return row
 }
 
 // handleNetplayKey consumes every key while the panel is open, so the library
@@ -159,8 +378,16 @@ func handleNetplayKey(e *sdl.KeyboardEvent, config *Config) bool {
 		netplayMove(-1)
 	case sdl.K_DOWN:
 		netplayMove(1)
+	case sdl.K_LEFT:
+		netplaySide(config, -1)
+	case sdl.K_RIGHT:
+		netplaySide(config, 1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		netplayActivate(config)
+	case sdl.K_x, sdl.K_e:
+		netplayEditAddress()
+	case sdl.K_y, sdl.K_r:
+		netplayRefreshOnline()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		closeNetplayPanel()
 	}
@@ -176,8 +403,16 @@ func ctrlNetplay(e *sdl.ControllerButtonEvent, config *Config) bool {
 		netplayMove(-1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		netplayMove(1)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		netplaySide(config, -1)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		netplaySide(config, 1)
 	case sdl.CONTROLLER_BUTTON_A:
 		netplayActivate(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		netplayEditAddress()
+	case sdl.CONTROLLER_BUTTON_Y:
+		netplayRefreshOnline()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeNetplayPanel()
 	default:
@@ -192,7 +427,14 @@ func handleNetplayMouse(mx, my int32) bool {
 	}
 	for _, hit := range netplayPanel.rowHits {
 		if pointInRect(mx, my, hit.rect) {
+			// A click on the highlighted row runs it; on another row it
+			// highlights first, so a stray click never starts a game.
+			if hit.index == netplayPanel.cursor {
+				netplayActivate(appConfig)
+				return true
+			}
 			netplayPanel.cursor = hit.index
+			netplayPanel.status = ""
 			PlayNavSound()
 			return true
 		}
@@ -205,26 +447,63 @@ func handleNetplayMouse(mx, my int32) bool {
 }
 
 func netplayMove(delta int) {
-	if len(netplayMenuRows) == 0 {
+	n := len(netplayPanel.rows)
+	if n == 0 {
 		return
 	}
-	netplayPanel.cursor += delta
-	if netplayPanel.cursor < 0 {
-		netplayPanel.cursor = len(netplayMenuRows) - 1
-	}
-	if netplayPanel.cursor >= len(netplayMenuRows) {
-		netplayPanel.cursor = 0
-	}
+	netplayPanel.cursor = ((netplayPanel.cursor+delta)%n + n) % n
+	netplayPanel.status = ""
 	PlayNavSound()
 }
 
-// netplayActivate runs the highlighted row. Join asks for an address first when
-// one is not already remembered.
+// netplaySide is Left/Right: on the online-host row it picks the relay.
+func netplaySide(config *Config, delta int) {
+	row, ok := netplayCurrentRow()
+	if !ok || row.kind != netplayRowHostOnline {
+		return
+	}
+	relay := netplayCycleRelay(config, delta)
+	netplaySetStatus("Relay: "+relay.Label+" — pick the one nearest to both players", false)
+	netplayRebuildRows(true)
+	PlayNavSound()
+}
+
+func netplayCurrentRow() (netplayRow, bool) {
+	if netplayPanel.cursor < 0 || netplayPanel.cursor >= len(netplayPanel.rows) {
+		return netplayRow{}, false
+	}
+	return netplayPanel.rows[netplayPanel.cursor], true
+}
+
+func netplayEditAddress() {
+	if row, ok := netplayCurrentRow(); ok && row.kind == netplayRowAddress {
+		vkOpenNetplay()
+	}
+}
+
+func netplayRefreshOnline() {
+	netplayRefreshLobby()
+	netplayPanel.status = ""
+	netplayRebuildRows(true)
+	PlayNavSound()
+}
+
+// netplayActivate runs the highlighted row.
 func netplayActivate(config *Config) {
-	switch netplayPanel.cursor {
-	case 0:
-		netplayStartHost(config)
-	case 1:
+	row, ok := netplayCurrentRow()
+	if !ok {
+		return
+	}
+	switch row.kind {
+	case netplayRowHostLAN:
+		netplayStartHost(config, false)
+	case netplayRowHostOnline:
+		netplayStartHost(config, true)
+	case netplayRowRoom:
+		netplayStartRoom(row, config)
+	case netplayRowOnlineInfo:
+		netplayRefreshOnline()
+	case netplayRowAddress:
 		if strings.TrimSpace(netplayPanel.address) == "" {
 			vkOpenNetplay()
 			return
@@ -233,19 +512,64 @@ func netplayActivate(config *Config) {
 	}
 }
 
-func netplayStartHost(config *Config) {
-	plan, err := netplayPlanFor(netplayHost, netplayPanel.game, "")
+func netplayStartHost(config *Config, online bool) {
+	var plan netplayPlan
+	var err error
+	if online {
+		// The relay needs internet, not a LAN address to show.
+		plan, err = netplayPlanForOnlineHost(netplayPanel.game)
+	} else {
+		plan, err = netplayPlanFor(netplayHost, netplayPanel.game, "")
+	}
 	if err != nil {
 		netplaySetStatus(err.Error(), true)
 		return
 	}
+	relay := netplayRelayFor(config)
+	plan.Session.Online = online
+	plan.Session.RelayServer = relay.ID
 	address := plan.Session.address()
 	if err := netplayLaunch(plan, config); err != nil {
 		netplaySetStatus(err.Error(), true)
 		return
 	}
+	title := plan.Session.Game.Label()
 	closeNetplayPanel()
-	ShowToast("Hosting "+plan.Session.Game.Title+" — join at "+address, ToastKindInfo)
+	if online {
+		ShowToast("Hosting "+title+" online as "+plan.Nick+" — friends find it under Online rooms or in RetroArch's Netplay lobby", ToastKindInfo)
+		return
+	}
+	ShowToast("Hosting "+title+" — others on your Wi-Fi see it in Netplay, or join at "+address, ToastKindInfo)
+}
+
+// netplayPlanForOnlineHost is netplayPlanFor without the LAN address check.
+func netplayPlanForOnlineHost(game libraryGame) (netplayPlan, error) {
+	plan, err := netplayPlanFor(netplayJoin, game, "127.0.0.1")
+	if err != nil {
+		return netplayPlan{}, err
+	}
+	plan.Session.Role = netplayHost
+	plan.Session.Host = ""
+	plan.Session.Port = netplayPort()
+	return plan, nil
+}
+
+func netplayStartRoom(row netplayRow, config *Config) {
+	if row.err != "" {
+		netplaySetStatus(row.err, true)
+		return
+	}
+	plan := row.plan
+	if err := netplayLaunch(plan, config); err != nil {
+		netplaySetStatus(err.Error(), true)
+		return
+	}
+	closeNetplayPanel()
+	who := row.room.Nick
+	if who == "" {
+		who = "the host"
+	}
+	ShowToast("Joining "+who+" in "+plan.Session.Game.Label(), ToastKindInfo)
 }
 
 func netplayStartJoin(raw string, config *Config) {
@@ -261,7 +585,7 @@ func netplayStartJoin(raw string, config *Config) {
 		return
 	}
 	closeNetplayPanel()
-	ShowToast("Joining "+plan.Session.Game.Title+" at "+plan.Session.address(), ToastKindInfo)
+	ShowToast("Joining "+plan.Session.Game.Label()+" at "+plan.Session.address(), ToastKindInfo)
 }
 
 // netplayJoinSubmit is called by the on-screen keyboard when the address is
@@ -276,27 +600,16 @@ func netplayJoinSubmit(raw string) {
 	netplayStartJoin(text, appConfig)
 }
 
-// netplayRowDetail is the second line of each row.
-func netplayRowDetail(index int) string {
-	switch index {
-	case 0:
-		if address := netplayLocalAddress(); address != "" {
-			return "Start, then join from the other device at " + address
-		}
-		return "Share this console's Wi-Fi address with the other player"
-	case 1:
-		if netplayPanel.address != "" {
-			return "Connect to " + netplayPanel.address + "  ·  A to start"
-		}
-		return "Type the host's address, e.g. 192.168.1.5"
-	}
-	return ""
-}
-
 // renderNetplayPanel draws the panel over the blurred library behind it.
 func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	if !netplayPanel.open || renderer == nil {
 		return
+	}
+	// Scans land every few seconds; the row list follows at most twice a
+	// second so a busy LAN cannot make the panel rebuild every frame.
+	if now := time.Now(); now.Sub(netplayPanel.lastRows) > 500*time.Millisecond {
+		netplayPanel.lastRows = now
+		netplayRebuildRows(false)
 	}
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
@@ -313,30 +626,55 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	// The rows carry a title and a detail line; 76px leaves the detail clear of
 	// the rounded border at both the 34px and the scaled-up medium font.
 	rowH := int32(76)
+	if minH := medH + smallH + 22; rowH < minH {
+		rowH = minH
+	}
 	rowGap := int32(10)
-	// The title band is the shared page header, built before the card is sized so
-	// the panel and the bar drawn into it measure the same height.
-	subtitle := netplayPanel.game.Title
+	subtitle := netplayPanel.game.Label()
 	if system := strings.TrimSpace(netplayPanel.game.System); system != "" {
 		subtitle += " · " + system
 	}
-	header := UIPanelHeader("LAN Play", subtitle, "tools")
+	header := UIPanelHeader("Netplay", subtitle, "tools")
 	headerH := UIPanelHeaderBand(config, header, 14)
-	// Address line, readiness line and the same-core/ROM reminder.
-	infoH := int32(18) + medH + int32(8) + 2*smallH + int32(26)
+	// Address line and the readiness line.
+	infoH := int32(14) + medH + int32(6) + smallH + int32(14)
 	footerH := int32(14) + smallH
 
-	panelW := int32(820)
+	panelW := int32(860)
 	if panelW > screenWidth-48 {
 		panelW = screenWidth - 48
 	}
-	panelH := headerH + int32(len(netplayMenuRows))*(rowH+rowGap) + infoH + footerH + int32(24)
-	if panelH > screenHeight-24 {
-		panelH = screenHeight - 24
+	rows := netplayPanel.rows
+	fixedH := headerH + infoH + footerH + int32(24)
+	maxH := screenHeight - 24
+	visible := int((maxH - fixedH) / (rowH + rowGap))
+	if visible < 1 {
+		visible = 1
+	}
+	if visible > len(rows) {
+		visible = len(rows)
+	}
+	panelH := fixedH + int32(visible)*(rowH+rowGap)
+	if panelH > maxH {
+		panelH = maxH
 	}
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
 	netplayPanel.panel = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
+
+	// Keep the highlighted row inside the visible window.
+	if netplayPanel.cursor < netplayPanel.scroll {
+		netplayPanel.scroll = netplayPanel.cursor
+	}
+	if netplayPanel.cursor >= netplayPanel.scroll+visible {
+		netplayPanel.scroll = netplayPanel.cursor - visible + 1
+	}
+	if maxScroll := len(rows) - visible; netplayPanel.scroll > maxScroll {
+		netplayPanel.scroll = maxScroll
+	}
+	if netplayPanel.scroll < 0 {
+		netplayPanel.scroll = 0
+	}
 
 	drawOverlayScrim(renderer)
 	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
@@ -347,9 +685,15 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 
 	focusColor := installHighlight()
 	rowY := panelY + headerH
+	listW := panelW - 2*pad - 14
 	netplayPanel.rowHits = netplayPanel.rowHits[:0]
-	for i, label := range netplayMenuRows {
-		rect := sdl.Rect{X: panelX + pad, Y: rowY + int32(i)*(rowH+rowGap), W: panelW - 2*pad, H: rowH}
+	for vi := 0; vi < visible; vi++ {
+		i := netplayPanel.scroll + vi
+		if i >= len(rows) {
+			break
+		}
+		row := rows[i]
+		rect := sdl.Rect{X: panelX + pad, Y: rowY + int32(vi)*(rowH+rowGap), W: listW, H: rowH}
 		netplayPanel.rowHits = append(netplayPanel.rowHits, gameLibRowHit{index: i, rect: rect})
 		selected := i == netplayPanel.cursor
 		bg := WithAlpha(ColorSurfaceRow, 160)
@@ -360,12 +704,28 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 		if selected {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, 2, focusColor)
 		}
-		renderText(renderer, config, medium, label, ColorTextPrimary(), rect.X+16, rect.Y+8)
-		renderText(renderer, config, font, ellipsize(font, netplayRowDetail(i), rect.W-32),
-			ColorTextTertiary(), rect.X+16, rect.Y+8+medH+2)
+		labelColor := ColorTextPrimary()
+		detailColor := ColorTextTertiary()
+		if row.kind == netplayRowRoom && row.err != "" {
+			labelColor = ColorTextSecondary()
+			detailColor = WarningInk()
+		}
+		label := row.label
+		if row.kind == netplayRowHostOnline {
+			label += " · " + netplayRelayFor(config).Label
+		}
+		renderText(renderer, config, medium, ellipsize(medium, label, rect.W-32), labelColor, rect.X+16, rect.Y+8)
+		renderText(renderer, config, font, ellipsize(font, row.detail, rect.W-32),
+			detailColor, rect.X+16, rect.Y+8+medH+2)
+	}
+	if len(rows) > visible && visible > 0 {
+		trackH := int32(visible)*(rowH+rowGap) - rowGap
+		drawScrollbar(renderer, panelX+panelW-pad-8, rowY, 6, trackH,
+			float64(visible)/float64(len(rows)),
+			float64(netplayPanel.scroll)/float64(len(rows)-visible))
 	}
 
-	infoY := rowY + int32(len(netplayMenuRows))*(rowH+rowGap) + int32(8)
+	infoY := rowY + int32(visible)*(rowH+rowGap) + int32(4)
 	if address := netplayLocalAddress(); address != "" {
 		renderText(renderer, config, medium, "This device: "+address, ColorTextAccent(), panelX+pad, infoY)
 	} else {
@@ -373,16 +733,28 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 			WarningInk(), panelX+pad, infoY)
 	}
 	readyColor := ColorTextTertiary()
+	readyText := netplayPanel.ready + "  ·  both players need the same ROM"
 	if !netplayPanel.readyOK {
 		readyColor = WarningInk()
+		readyText = netplayPanel.ready
 	}
-	readyY := infoY + medH + 8
-	renderText(renderer, config, font, ellipsize(font, netplayPanel.ready, panelW-2*pad),
-		readyColor, panelX+pad, readyY)
-	renderText(renderer, config, font, "Both devices need the same core and the same ROM",
-		ColorTextTertiary(), panelX+pad, readyY+smallH+6)
+	renderText(renderer, config, font, ellipsize(font, readyText, panelW-2*pad),
+		readyColor, panelX+pad, infoY+medH+6)
 
-	hint := hintLine(FooterHint{"D-Pad", "Choose"}, FooterHint{"A", "Start"}, FooterHint{"B", "Close"})
+	hint := hintLine(FooterHint{"D-Pad", "Choose"}, FooterHint{"A", "Start"},
+		FooterHint{"Y", "Refresh online"}, FooterHint{"B", "Close"})
+	if row, ok := netplayCurrentRow(); ok {
+		switch row.kind {
+		case netplayRowHostOnline:
+			hint = hintLine(FooterHint{"←/→", "Relay"}, FooterHint{"A", "Host"}, FooterHint{"B", "Close"})
+		case netplayRowAddress:
+			hint = hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Edit address"}, FooterHint{"B", "Close"})
+		case netplayRowOnlineInfo:
+			hint = hintLine(FooterHint{"A", "Refresh"}, FooterHint{"B", "Close"})
+		case netplayRowRoom:
+			hint = hintLine(FooterHint{"A", "Join"}, FooterHint{"Y", "Refresh online"}, FooterHint{"B", "Close"})
+		}
+	}
 	hintColor := ColorTextSecondary()
 	if netplayPanel.status != "" {
 		hint = netplayPanel.status
