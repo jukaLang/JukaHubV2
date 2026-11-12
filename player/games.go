@@ -10,7 +10,7 @@ import (
 )
 
 // ──────────────────────────────────────────────────────────────────────
-// Games Collection — Snake, Tetris, 2048, Pong
+// Games Collection — JukaHub's built-in games
 // Accessible from Start Menu or the Games scene
 // ──────────────────────────────────────────────────────────────────────
 
@@ -39,22 +39,44 @@ var (
 // ──────────────────────────────────────────────────────────────────────
 
 type gameEntry struct {
-	name string
-	icon string
-	desc string
-	id   gameID
+	name  string
+	icon  string
+	desc  string
+	id    gameID
+	scene string // a standalone game scene, rather than an arcade minigame
 }
 
 var gameList = []gameEntry{
-	{"Snake", "🐍", "Classic snake — eat, grow, survive", gameSnake},
-	{"Tetris", "[T]", "Stack blocks, clear lines", gameTetris},
-	{"2048", "[2]", "Merge tiles, reach 2048", game2048},
-	{"Pong", "[P]", "Classic paddle ball", gamePong},
-	{"Minesweeper", "[M]", "Flag mines, clear the board", gameMinesweeper},
-	{"Flappy", "[F]", "Tap to fly through pipes", gameFlappy},
+	{name: "Snake", icon: "🐍", desc: "Classic snake — eat, grow, survive", id: gameSnake},
+	{name: "Tetris", icon: "[T]", desc: "Stack blocks, clear lines", id: gameTetris},
+	{name: "2048", icon: "[2]", desc: "Merge tiles, reach 2048", id: game2048},
+	{name: "Pong", icon: "[P]", desc: "Classic paddle ball", id: gamePong},
+	{name: "Minesweeper", icon: "[M]", desc: "Flag mines, clear the board", id: gameMinesweeper},
+	{name: "Flappy", icon: "[F]", desc: "Tap to fly through pipes", id: gameFlappy},
+	{name: "JukaLand", icon: "[J]", desc: "Build and explore a block world", scene: "JukaLand"},
 }
 
 var gameMenuCursor int
+
+const gameMenuCols = 4
+
+// A custom config can omit JukaLand. Keep the card only when it can open.
+func gameMenuEntries(config *Config) []gameEntry {
+	if config == nil || sceneIndexExact(config, "JukaLand") < 0 {
+		return gameList[:len(gameList)-1]
+	}
+	return gameList
+}
+
+func openGameMenuEntry(config *Config, entry gameEntry) {
+	if entry.scene != "" {
+		if idx := sceneIndexExact(config, entry.scene); idx >= 0 {
+			changeSceneTo(config, idx)
+		}
+		return
+	}
+	startGame(entry.id)
+}
 
 func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 	// Background: Home's backdrop, the one every screen stands on.
@@ -69,15 +91,22 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 	tw, _, _ := titleFont.SizeUTF8(title)
 	drawText(renderer, titleFont, title, (screenWidth-int32(tw))/2, 40, getAccentColor(config), textAlignLeft)
 
-	// Game cards — 3x2 grid so all six games fit on the 720p screen.
-	const gameCols = 3
-	cardW := int32(390)
+	// The built-in collection fits in two rows on the 720p screen.
+	games := gameMenuEntries(config)
+	if gameMenuCursor >= len(games) {
+		gameMenuCursor = len(games) - 1
+	}
+	const gameCols = gameMenuCols
+	cardW := (screenWidth - 52 - 20*(gameCols-1)) / gameCols
 	cardH := int32(190)
-	gap := int32(30)
+	gap := int32(20)
 	startX := (screenWidth - (cardW*gameCols + gap*(gameCols-1))) / 2
-	startY := int32(112)
+	startY := int32(142)
+	if smallFont != nil {
+		drawText(renderer, smallFont, "Built-in games", startX, 107, ColorTextSecondary(), textAlignLeft)
+	}
 
-	for i, g := range gameList {
+	for i, g := range games {
 		col := i % gameCols
 		row := i / gameCols
 		cx := startX + int32(col)*(cardW+gap)
@@ -132,33 +161,39 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 	}
 }
 
-func handleGamesMenuInput(event *sdl.KeyboardEvent) bool {
+func handleGamesMenuInput(event *sdl.KeyboardEvent, config *Config) bool {
 	if activeGame != gameNone || gameOver {
 		return false
 	}
+	games := gameMenuEntries(config)
+	if gameMenuCursor >= len(games) {
+		gameMenuCursor = len(games) - 1
+	}
 	switch event.Keysym.Sym {
 	case sdl.K_UP:
-		if gameMenuCursor >= 3 {
-			gameMenuCursor -= 3
+		if gameMenuCursor >= gameMenuCols {
+			gameMenuCursor -= gameMenuCols
 		}
 		PlayNavSound()
 	case sdl.K_DOWN:
-		if gameMenuCursor+3 < len(gameList) {
-			gameMenuCursor += 3
+		if gameMenuCursor+gameMenuCols < len(games) {
+			gameMenuCursor += gameMenuCols
+		} else if gameMenuCursor < gameMenuCols && len(games) > gameMenuCols {
+			gameMenuCursor = len(games) - 1
 		}
 		PlayNavSound()
 	case sdl.K_LEFT:
-		if gameMenuCursor%3 > 0 {
+		if gameMenuCursor%gameMenuCols > 0 {
 			gameMenuCursor--
 		}
 		PlayNavSound()
 	case sdl.K_RIGHT:
-		if gameMenuCursor%3 < 2 && gameMenuCursor+1 < len(gameList) {
+		if gameMenuCursor%gameMenuCols < gameMenuCols-1 && gameMenuCursor+1 < len(games) {
 			gameMenuCursor++
 		}
 		PlayNavSound()
 	case sdl.K_RETURN, sdl.K_a:
-		startGame(gameList[gameMenuCursor].id)
+		openGameMenuEntry(config, games[gameMenuCursor])
 		PlayActivateSound()
 	case sdl.K_ESCAPE, sdl.K_b:
 		// Go back to previous scene
@@ -1177,29 +1212,35 @@ func ctrlGames(e *sdl.ControllerButtonEvent, config *Config) bool {
 }
 
 func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
+	games := gameMenuEntries(config)
+	if gameMenuCursor >= len(games) {
+		gameMenuCursor = len(games) - 1
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if gameMenuCursor >= 3 {
-			gameMenuCursor -= 3
+		if gameMenuCursor >= gameMenuCols {
+			gameMenuCursor -= gameMenuCols
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if gameMenuCursor+3 < len(gameList) {
-			gameMenuCursor += 3
+		if gameMenuCursor+gameMenuCols < len(games) {
+			gameMenuCursor += gameMenuCols
+		} else if gameMenuCursor < gameMenuCols && len(games) > gameMenuCols {
+			gameMenuCursor = len(games) - 1
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		if gameMenuCursor%3 > 0 {
+		if gameMenuCursor%gameMenuCols > 0 {
 			gameMenuCursor--
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		if gameMenuCursor%3 < 2 && gameMenuCursor+1 < len(gameList) {
+		if gameMenuCursor%gameMenuCols < gameMenuCols-1 && gameMenuCursor+1 < len(games) {
 			gameMenuCursor++
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
-		startGame(gameList[gameMenuCursor].id)
+		openGameMenuEntry(config, games[gameMenuCursor])
 		PlayActivateSound()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		goBackScene(config) // plays the back sound itself
@@ -1842,7 +1883,7 @@ func (gamesScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 	if activeGame != gameNone {
 		handleActiveGameInput(e)
 	} else {
-		handleGamesMenuInput(e)
+		handleGamesMenuInput(e, c)
 	}
 	// Both handlers are void-ish; the old chain ignored their result and never
 	// fell through to element navigation.

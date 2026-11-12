@@ -209,6 +209,10 @@ func openGameLibraryHandoff(game libraryGame) {
 	if !gameLib.open {
 		return
 	}
+	if isJukaLandLibraryGame(game) {
+		ShowToast("JukaLand runs in JukaHub; no emulator is needed", ToastKindInfo)
+		return
+	}
 	// One snapshot drives both the decision and the cursor placement: the
 	// destination panels invalidate and rebuild their caches on open, so
 	// re-reading them after that could disagree with the decision.

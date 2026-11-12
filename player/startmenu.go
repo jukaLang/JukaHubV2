@@ -157,14 +157,25 @@ func startMenuSceneEntries(config *Config) []startMenuEntry {
 // old flat menu used, so opening a panel from here is unchanged; only where it
 // is listed moved.
 func startMenuGroups(config *Config) []startMenuGroup {
-	games := []startMenuEntry{
+	var games []startMenuEntry
+	// Put the games that ship with JukaHub together at the top of Games.
+	// The badge is drawn separately so the scene names stay stable for search
+	// and shortcuts. Custom configs may omit either scene.
+	for _, scene := range []string{"Games", "JukaLand"} {
+		if config != nil && sceneIndexExact(config, scene) >= 0 {
+			games = append(games, startMenuEntry{
+				name: sceneDisplayName(scene), icon: "G", scene: scene, badge: "Built-in",
+			})
+		}
+	}
+	games = append(games, []startMenuEntry{
 		{name: "Emulators", icon: "E", action: func(*Config) { openEmulatorPanel() }},
 		{name: gamesLibraryEntryName, icon: "L", action: func(*Config) { openGameLibraryPanel() }},
 		{name: gameProfilesEntryName, icon: "G", action: func(*Config) { openGameProfilePanel(false) }},
 		{name: "PS Remote Play", icon: "C", action: func(*Config) { openChiakiPanel() }},
 		{name: "RetroAchievements", icon: "R", action: func(*Config) { openRetroAchievementsPanel() }},
 		{name: "Save Manager", icon: "S", action: func(*Config) { openSaveManagerPanel() }},
-	}
+	}...)
 	// Windows Apps: Wine on the handheld, the programs themselves on Windows.
 	games = append(games, startMenuEntry{name: windowsAppsEntryName, icon: "W", action: func(*Config) { openWindowsAppsPanel(false) }})
 	if !IsWindows() {
@@ -200,6 +211,7 @@ func startMenuGroups(config *Config) []startMenuGroup {
 
 	device := []startMenuEntry{
 		{name: "Quick Settings", icon: "Q", action: func(*Config) { qsToggleOpen() }},
+		{name: "Liquid background", icon: "~", badge: setOnOff(liquidLevelOf(config) != liquidLevelOff), action: liquidToggle},
 		{name: "Wi-Fi Networks", icon: "W", action: func(c *Config) { wifiScrOpen(c) }},
 		{name: "Screenshot", icon: "S", action: func(*Config) { requestScreenshot() }},
 		{name: "Sleep Screen", icon: "Z", action: func(*Config) { activateScreensaver() }},
@@ -287,7 +299,7 @@ var (
 		"Windows Apps": "apps", "PortMaster Ports": "packages", "APK Store": "phone", "Smart Pro Compatibility": "check",
 		"Network tools": "network", "Downloads": "download", "Curation Hub": "sparkles",
 		"Audio": "music", "Synth": "synth", "Smart Home": "home", "Screen Share": "tv", "Accessibility": "user",
-		"Stick Calibration": "controller", "Quick Settings": "preferences", "Voice command": "mic",
+		"Stick Calibration": "controller", "Quick Settings": "preferences", "Liquid background": "sparkles", "Voice command": "mic",
 		"Wi-Fi Networks": "wifi", "Screenshot": "camera", "Sleep Screen": "moon",
 		"Ambient": "clock", "Wallpapers": "image", "Edit Home": "edit", "Quit JukaHub": "power",
 		bugrepEntryName: "bug",

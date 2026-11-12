@@ -478,6 +478,9 @@ What happens around the stream depends on the launcher that started JukaHub:
 
 ## Files
 
+These paths use `JukaHub` for the app folder name. If the folder was renamed,
+use its installed name instead (for example, `Apps/JukaHub-Trimui/psremote.log`).
+
 | Path | Contents |
 |---|---|
 | `Apps/JukaHub/data/psremote.json` | Paired consoles, quality, volume, Account-ID (0600) |
@@ -515,7 +518,7 @@ connected**, so remove it there too if you want a clean slate.
 | `That sign-in code has expired` | The *redirect* address works once and for a few minutes: sign in again |
 | `This device cannot check Sony's certificate` | The firmware has no certificate bundle JukaHub can use: type the Account-ID, or sign in on a PC |
 | `Sony's certificate does not fit this device's date` | The handheld's clock is far off: set the date and time, then sign in again |
-| Stream immediately returns | Read `Apps/JukaHub/psremote.log`; the helper prints the reason, and JukaHub shows it as a toast and as the panel's **Last stream** row |
+| Stream immediately returns | Read `psremote.log` in the installed JukaHub folder; the helper prints the reason, and JukaHub shows it as a toast and as the panel's **Last stream** row |
 | `Remote Play could not reach …` | The console is off (and not in rest mode with network wake on), Remote Play is off on it, or it is on another network; away from home, check the port forwarding or the VPN |
 | `… asks for its 4-digit login passcode` | Your PlayStation profile has a passcode: type it on the stream's screen, or save it under the console's options |
 | `Remote Play could not show the video …` | The decoder could not keep up: the toast names the other **Video codec** to try (H.264 after H.265, H.265 after H.264 on a PS5) or a lower **Quality**; a PS4 only sends H.264 |

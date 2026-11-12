@@ -36,8 +36,8 @@ var uiClockMS = func() uint64 { return sdl.GetTicks64() }
 // Entrance durations. They are short on purpose: on a handheld screen a panel
 // that takes longer than ~200ms to arrive reads as lag, not polish.
 const (
-	uiMenuEnterMS    = 170
-	uiPanelEnterMS   = 190
+	uiMenuEnterMS    = 210 // with the bounce's second, smaller swing
+	uiPanelEnterMS   = 230
 	uiFadeMS         = 120 // scrim fade, faster than the panel
 	uiFocusBounceMS  = 170
 	uiScrollBounceMS = 190
@@ -78,11 +78,13 @@ func (k uiKeyframe) at(t float64) float64 {
 // The shared motions. Menus drop down from under the Apps pill; centred panels
 // rise a little; the fade lags the slide slightly so the motion reads first.
 var (
-	// Keep the panel's size fixed: a dropdown travels down a little past its
-	// resting point, while a rising sheet travels up past it, then returns.
-	uiMenuDrop  = uiKeyframe{{At: 0, Value: -18}, {At: 0.72, Value: 4}, {At: 1, Value: 0}}
-	uiDropDown  = uiKeyframe{{At: 0, Value: -10}, {At: 0.72, Value: 3}, {At: 1, Value: 0}}
-	uiPanelRise = uiKeyframe{{At: 0, Value: 14}, {At: 0.72, Value: -3}, {At: 1, Value: 0}}
+	// Keep the panel's size fixed: a dropdown travels down past its resting
+	// point, while a rising sheet travels up past it, then each swings back a
+	// little beyond rest before settling — a real bounce, not just an ease
+	// (Juka asked for the overlays to bounce more).
+	uiMenuDrop  = uiKeyframe{{At: 0, Value: -22}, {At: 0.6, Value: 8}, {At: 0.84, Value: -2.5}, {At: 1, Value: 0}}
+	uiDropDown  = uiKeyframe{{At: 0, Value: -12}, {At: 0.6, Value: 6}, {At: 0.84, Value: -2}, {At: 1, Value: 0}}
+	uiPanelRise = uiKeyframe{{At: 0, Value: 16}, {At: 0.6, Value: -7}, {At: 0.84, Value: 2}, {At: 1, Value: 0}}
 	uiFadeIn    = uiKeyframe{{At: 0, Value: 0}, {At: 0.45, Value: 0.75}, {At: 1, Value: 1}}
 	// A focused card grows one extra pixel before resting. The grid scroll
 	// crosses its destination by at most three pixels (capped by its caller).

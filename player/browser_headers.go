@@ -59,6 +59,24 @@ func browserChromeNavigate(h http.Header) {
 	h.Set("Priority", "u=0, i")
 }
 
+// A form navigation comes from the page on screen, so its Referer and fetch
+// site describe that page. POST also sends its origin, which many sites use to
+// reject cross-site submissions. The body never appears in these headers.
+func browserChromeFormNavigate(h http.Header, source, target *url.URL, method string) {
+	if source == nil || target == nil || source.Host == "" {
+		return
+	}
+	if site := browserFetchSite(source, target); site != "" {
+		h.Set("Sec-Fetch-Site", site)
+	}
+	if ref := browserReferer(source, target); ref != "" {
+		h.Set("Referer", ref)
+	}
+	if method == http.MethodPost && (source.Scheme == "http" || source.Scheme == "https") {
+		h.Set("Origin", source.Scheme+"://"+source.Host)
+	}
+}
+
 // browserChromeResource sets a document subresource's headers. page is the
 // document that asked for it and target is the resource; the pair supplies the
 // Referer and Sec-Fetch-Site values a browser derives from the origin.
@@ -98,7 +116,7 @@ func browserFetchSite(page, target *url.URL) string {
 	if page == nil || target == nil || page.Host == "" || target.Host == "" {
 		return ""
 	}
-	if strings.EqualFold(page.Host, target.Host) {
+	if page.Scheme == target.Scheme && strings.EqualFold(page.Host, target.Host) {
 		return "same-origin"
 	}
 	return "cross-site"
@@ -114,7 +132,7 @@ func browserReferer(page, target *url.URL) string {
 	if page.Scheme == "https" && target.Scheme != "https" {
 		return ""
 	}
-	if strings.EqualFold(page.Host, target.Host) {
+	if page.Scheme == target.Scheme && strings.EqualFold(page.Host, target.Host) {
 		return page.String()
 	}
 	return page.Scheme + "://" + page.Host + "/"

@@ -346,7 +346,7 @@ func snapPreviewSync(now time.Time) {
 	}
 	game, ok := selectedLibraryGame()
 	key := ""
-	if ok {
+	if ok && !isJukaLandLibraryGame(game) {
 		key = game.Path
 	}
 

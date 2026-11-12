@@ -74,6 +74,16 @@ var textBrowserAutoRefreshTimers = make(map[string]*time.Timer)
 var textBrowserAutoRefreshMutex sync.Mutex
 var textBrowserRequestSequence = make(map[string]uint64)
 
+// browserNavigation is one top-level request. POST bodies live only for this
+// load; history, the address bar and the page cache retain just URL strings.
+type browserNavigation struct {
+	URL         string
+	Method      string
+	Body        []byte
+	ContentType string
+	Referrer    string
+}
+
 // browserPageFetcher loads one page. It is a variable so the browser's load
 // path (cache, stale-request guard, history) can be tested without a network.
 // The second argument is the load's script-pass generation, read on the main
@@ -97,7 +107,7 @@ var browserFetches sync.WaitGroup
 const browserFetchWait = 10 * time.Second
 
 // currentBrowserPageFetcher returns the fetch function a new load should use.
-func currentBrowserPageFetcher() func(string, uint64) browserPage {
+func currentBrowserPageFetcher() func(browserNavigation, uint64) browserPage {
 	browserPageFetcherMu.RLock()
 	defer browserPageFetcherMu.RUnlock()
 	return browserPageFetcher
@@ -1086,6 +1096,10 @@ func reloadTextBrowserURL(config *Config, element Element, rawURL string) {
 // page is shown immediately (no request, no "Loading" card); everything else is
 // fetched on a goroutine, so a slow page never stalls a frame.
 func browserLoadURL(config *Config, element Element, rawURL string, recordHistory, useCache bool) {
+	browserLoadNavigation(config, element, browserNavigation{URL: rawURL}, recordHistory, useCache)
+}
+
+func browserLoadNavigation(config *Config, element Element, nav browserNavigation, recordHistory, useCache bool) {
 	if config == nil {
 		return
 	}
@@ -1097,7 +1111,7 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	// monitor still says offline; the pass is good for this one load.
 	bypassOffline := brwRetryBypass
 	brwRetryBypass = false
-	address, err := normalizeTextBrowserURL(rawURL)
+	address, err := normalizeTextBrowserURL(nav.URL)
 	if err != nil {
 		config.Variables.Custom[outputVariable] = "Browser error: " + err.Error()
 		showToast("Enter a valid http:// or https:// address.", ToastError())
@@ -1106,14 +1120,29 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	// A search result's click-tracking link opens the page it names
 	// (browser_engines.go): Bing's is a script the reader cannot run, and the
 	// others cost a request that only reports the click.
-	if target, ok := brwSearchClickTarget(address); ok {
-		address = target
+	post := nav.Method == http.MethodPost
+	if !post {
+		if target, ok := brwSearchClickTarget(address); ok {
+			address = target
+		}
 	}
 	// A YouTube video is not a page the reader can show: it plays in Media
 	// (browser_youtube.go). The link handlers send their links there first;
 	// this catches a typed or pasted address, a bookmark and the history.
-	if brwOpenAddress(config, outputVariable, address) {
+	if !post && brwOpenAddress(config, outputVariable, address) {
 		return
+	}
+	nav.URL = address
+	if post {
+		useCache = false
+		// A previous GET at the action URL cannot stand in for a submission,
+		// including when Back or Forward visits that URL later.
+		browserForgetPage(address)
+	}
+	recordURL := func() {
+		if recordHistory {
+			browserRecordURLMode(address, post)
+		}
 	}
 	// The page on screen before this load — its document's URL, not the
 	// address variable, which holds whatever was typed: a load that only
@@ -1180,9 +1209,7 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 				trophyEvent(tkPageVisit)
 				trophyEventDistinct(tkSites, brwRegistrableDomain(browserAdBlockSiteKey(page.FinalURL)))
 			}
-			if recordHistory {
-				browserRecordURL(address)
-			}
+			recordURL()
 			return
 		}
 	}
@@ -1195,25 +1222,22 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		setBrowserLinks(outputVariable, nil)
 		setBrowserDocument(outputVariable, nil)
 		brwSetFailure(outputVariable, &fail)
-		if recordHistory {
-			browserRecordURL(address)
-		}
+		recordURL()
 		return
 	}
 
 	config.Variables.Custom[outputVariable] = "Loading " + address + " ..."
 	setBrowserLinks(outputVariable, nil)
 	setBrowserDocument(outputVariable, nil)
-	if recordHistory {
-		browserRecordURL(address)
-	}
+	recordURL()
 
 	// The seam is read once, here: a load keeps the fetcher it started with even
 	// if a test swaps it while the request is still running.
 	fetch := currentBrowserPageFetcher()
 	browserFetches.Add(1)
-	go func(variable, pageURL string, id uint64) {
+	go func(variable string, request browserNavigation, id uint64) {
 		defer browserFetches.Done()
+		pageURL := request.URL
 		// The fetch parses whatever the network sends — HTML, CSS, scripts —
 		// and a parser bug on one hostile or broken page must not take the
 		// whole hub down with it: a panic on this goroutine is not caught by
@@ -1232,7 +1256,7 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 				}
 			}
 		}()
-		page := fetch(pageURL, scriptGen)
+		page := fetch(request, scriptGen)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
@@ -1246,7 +1270,9 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		}
 		// Remember the page for Back/Forward before publishing it: the next
 		// visit to the same address is then a map lookup instead of a download.
-		browserCachePage(pageURL, page)
+		if !post {
+			browserCachePage(pageURL, page)
+		}
 		// A redirect (HTTP or the page's own meta refresh) landed somewhere
 		// else. The render pass moves the address bar and the history entry
 		// there; doing it from here would race with someone typing a new
@@ -1255,7 +1281,11 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 			browserRememberLandedURL(pageURL, page.FinalURL)
 			// Cache the landing URL too, so Back to the corrected entry is a map
 			// lookup instead of a second walk through the redirect.
-			browserCachePage(page.FinalURL, page)
+			if !post {
+				browserCachePage(page.FinalURL, page)
+			} else {
+				browserForgetPage(page.FinalURL)
+			}
 		}
 		setBrowserAdBlockView(variable, browserAdBlockView{
 			Site:    browserAdBlockSiteKey(page.FinalURL),
@@ -1272,7 +1302,7 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 			trophyEvent(tkPageVisit)
 			trophyEventDistinct(tkSites, brwRegistrableDomain(browserAdBlockSiteKey(page.FinalURL)))
 		}
-	}(outputVariable, address, requestID)
+	}(outputVariable, nav, requestID)
 }
 
 // showBrowserPage publishes a page the cache already holds, synchronously:
@@ -1357,7 +1387,7 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 // browseWebPageResult loads and prepares one page. gen is the script-pass
 // generation browserLoadURL read when this load began: a newer load moves it
 // on, which is how this load's script pass knows to stop (webdom_runtime.go).
-func browseWebPageResult(rawURL string, gen uint64) browserPage {
+func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 	// Every subresource this load requests is counted here, so the reader can
 	// say how much advertising it kept off the wire.
 	resetBrowserAdBlockCount()
@@ -1366,12 +1396,13 @@ func browseWebPageResult(rawURL string, gen uint64) browserPage {
 	if browserJavaScriptEnabled() {
 		go webDOMPreludeWarm()
 	}
-	address, err := normalizeTextBrowserURL(rawURL)
+	address, err := normalizeTextBrowserURL(nav.URL)
 	if err != nil {
-		f := brwNewFailure(brwFailOther, strings.TrimSpace(rawURL), "That address can't be opened: "+err.Error()+".")
+		f := brwNewFailure(brwFailOther, strings.TrimSpace(nav.URL), "That address can't be opened: "+err.Error()+".")
 		f.Title = "Can't open that address"
 		return browserPage{Text: "Browser error: " + err.Error(), Fail: &f}
 	}
+	nav.URL = address
 	ctx, cancel := context.WithTimeout(context.Background(), textBrowserFetchTimeout)
 	defer cancel()
 	// The jar travels with the client, so a cookie a redirect sets is already
@@ -1379,7 +1410,7 @@ func browseWebPageResult(rawURL string, gen uint64) browserPage {
 	// out.
 	client := browserHTTPClient(textBrowserFetchTimeout)
 	client.CheckRedirect = textBrowserRedirectPolicy
-	fetched, err := fetchTextBrowserDocument(ctx, client, address)
+	fetched, err := fetchTextBrowserDocumentRequest(ctx, client, nav)
 	if err != nil {
 		var fetchErr *brwFetchError
 		if errors.As(err, &fetchErr) {
@@ -1537,8 +1568,18 @@ func textBrowserRedirectPolicy(req *http.Request, via []*http.Request) error {
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 		return fmt.Errorf("redirected to %s, which this browser cannot open", req.URL.Scheme)
 	}
+	if len(via) > 0 && via[0].Method == http.MethodPost &&
+		via[0].URL.Scheme == "https" && req.URL.Scheme == "http" {
+		return fmt.Errorf("a form submission cannot redirect from HTTPS to an unencrypted address")
+	}
 	if len(via) >= textBrowserRedirectLimit {
 		return fmt.Errorf("more than %d redirects in a row", textBrowserRedirectLimit)
+	}
+	if len(via) > 0 && via[0].Method == http.MethodPost && req.Method == http.MethodGet {
+		// A 303 (or 302) turns POST into a fresh GET. Do not carry the form's
+		// Origin or Content-Type into that request.
+		req.Header.Del("Origin")
+		req.Header.Del("Content-Type")
 	}
 	return nil
 }
@@ -1560,9 +1601,13 @@ type textBrowserDocument struct {
 // stripped along with the page's scripts. The hops share the client, so the
 // cookie jar and the load's one time budget carry across them.
 func fetchTextBrowserDocument(ctx context.Context, client *http.Client, address string) (textBrowserDocument, error) {
-	current := address
+	return fetchTextBrowserDocumentRequest(ctx, client, browserNavigation{URL: address})
+}
+
+func fetchTextBrowserDocumentRequest(ctx context.Context, client *http.Client, nav browserNavigation) (textBrowserDocument, error) {
+	current := nav
 	for hop := 0; ; hop++ {
-		doc, err := fetchTextBrowserOnce(ctx, client, current)
+		doc, err := fetchTextBrowserOnceRequest(ctx, client, current)
 		if err != nil {
 			return doc, err
 		}
@@ -1573,17 +1618,28 @@ func fetchTextBrowserDocument(ctx context.Context, client *http.Client, address 
 		if target == "" || target == doc.URL.String() {
 			return doc, nil
 		}
-		current = target
+		current = browserNavigation{URL: target}
 	}
 }
 
 // fetchTextBrowserOnce is one request and body read, with the wording the error
 // card shows.
 func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address string) (textBrowserDocument, error) {
+	return fetchTextBrowserOnceRequest(ctx, client, browserNavigation{URL: address})
+}
+
+func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav browserNavigation) (textBrowserDocument, error) {
+	address := nav.URL
 	fail := func(kind brwFailKind, detail string) (textBrowserDocument, error) {
 		return textBrowserDocument{}, &brwFetchError{fail: brwNewFailure(kind, address, detail)}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	method := http.MethodGet
+	var requestBody io.Reader
+	if nav.Method == http.MethodPost {
+		method = http.MethodPost
+		requestBody = bytes.NewReader(nav.Body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, address, requestBody)
 	if err != nil {
 		return fail(brwFailOther, "That address can't be opened.")
 	}
@@ -1591,6 +1647,12 @@ func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address stri
 		return fail(brwFailOther, "That address can't be opened.")
 	}
 	browserChromeNavigate(req.Header)
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", nav.ContentType)
+	}
+	if nav.Referrer != "" {
+		browserChromeFormNavigate(req.Header, browserURL(nav.Referrer), req.URL, method)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		// Nothing below shows the transport error itself: a resolver failure

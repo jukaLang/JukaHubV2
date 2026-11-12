@@ -1,9 +1,25 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPSLogPathFollowsRenamedAppFolder(t *testing.T) {
+	sd := t.TempDir()
+	app := filepath.Join(sd, "Apps", "JukaHub-Trimui")
+	prev := psHelperInstallDirOverride
+	psHelperInstallDirOverride = filepath.Join(app, "bin")
+	t.Cleanup(func() { psHelperInstallDirOverride = prev })
+	t.Setenv("JUKAHUB_SD_ROOT", sd)
+	if got, want := psLogPath(), filepath.Join(app, "psremote.log"); got != want {
+		t.Fatalf("log path = %q, want %q", got, want)
+	}
+	if got, want := psBinDir(), filepath.Join(app, "bin"); got != want {
+		t.Fatalf("helper folder = %q, want %q", got, want)
+	}
+}
 
 // The stream's hand-off script must leave the firmware UI to a launch.sh that
 // waits for it, and must never start a MainUI next to the one the firmware
@@ -40,6 +56,27 @@ func TestPSHandoffScriptLeavesTheScreenToAWaitingLauncher(t *testing.T) {
 	guard := strings.Index(waits, `if [ "$LAUNCHER_WAITS" = "1" ]; then`)
 	if stop < 0 || guard < 0 || stop < guard {
 		t.Errorf("the supervisor is stopped outside the older-launcher branch")
+	}
+	// A log in a missing folder made the shell skip chiaki-stream: the log is
+	// probed (in a subshell — ":" is a special built-in) and falls back, and
+	// the helper's libraries stay out of the script's own commands.
+	for _, want := range []string{`if ! (: >> "$LOG") 2>/dev/null; then`, `LOG="$FALLBACK_LOG"`, "helper_env() {\n", "    helper_env\n", "export LD_PRELOAD\n"} {
+		if !strings.Contains(waits, want) {
+			t.Errorf("hand-off script lacks %q", want)
+		}
+	}
+	if strings.Contains(waits, "\nexport LD_LIBRARY_PATH=") || strings.Contains(waits, "OPENSSL_PRELOAD") {
+		t.Errorf("the helper's environment leaks into the script or uses OPENSSL_PRELOAD")
+	}
+	run, ok := psParseLastRun([]byte("result=started\nhandoff_step=a\nhandoff_step=b\nhandoff_log=" + psFallbackLogPath + "\n"))
+	if !ok || run.HandoffStep != "b" || run.HandoffLog != psFallbackLogPath {
+		t.Errorf("stream note steps = %+v", run)
+	}
+	if run, _ := psParseLastRun([]byte("result=started\nhandoff_log=/etc/shadow\n")); run.HandoffLog != "" {
+		t.Errorf("an arbitrary handoff_log was accepted: %q", run.HandoffLog)
+	}
+	if psLastRunResultForRC(127) != psLastRunNotStarted {
+		t.Errorf("exit 127 (helper could not be run) is not reported as not started")
 	}
 }
 

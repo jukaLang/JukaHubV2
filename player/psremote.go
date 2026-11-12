@@ -446,8 +446,8 @@ func psRemoteEngine() psEngine {
 // Brick Pro needs its bundled FFmpeg/OpenSSL; the Smart Pro uses the firmware's.
 func psEngineRuntimeDir(engine psEngine) string {
 	roots := []string{engine.Root, filepath.Dir(engine.Root)}
-	if sd := psRemoteSDRootDir(); sd != "" {
-		roots = append(roots, filepath.Join(sd, "Apps", "JukaHub"))
+	if app := psAppDir(); app != "" {
+		roots = append(roots, app)
 	}
 	for _, root := range roots {
 		candidates := []string{
@@ -503,6 +503,14 @@ func psRemoteStream(c psConsole, settings psRemoteSettings) error {
 	psEnsureExecutable(engine.Stream)
 	if problem := psStreamHelperProblem(engine); problem != "" {
 		return errors.New(problem)
+	}
+	// The handoff runs after JukaHub exits. A log that cannot be written is
+	// noted here, in JukaHub's own log; the stream still starts, because the
+	// hand-off script falls back to psFallbackLogPath and says so.
+	if f, err := os.OpenFile(psLogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err != nil {
+		logWarn("psremote", "cannot write %s (%v); the stream logs to %s", psLogPath(), err, psFallbackLogPath)
+	} else {
+		_ = f.Close()
 	}
 
 	quality := psQualityPresets[0]
@@ -631,13 +639,21 @@ func psStartHandoff(engine psEngine, sessionPath, label string) error {
 	return nil
 }
 
-// psLogPath is where the helper's diagnostics land.
+// psLogPath is where the helper's diagnostics land. The installed folder can
+// be renamed (for example Apps/JukaHub-Trimui), so use the running binary's
+// app folder when it is on the SD card.
 func psLogPath() string {
-	if sd := psRemoteSDRootDir(); sd != "" {
-		return filepath.Join(sd, "Apps", "JukaHub", "psremote.log")
+	if psRemoteSDRootDir() != "" {
+		if app := psAppDir(); app != "" {
+			return filepath.Join(app, "psremote.log")
+		}
 	}
 	return filepath.Join(os.TempDir(), "psremote.log")
 }
+
+// psFallbackLogPath is where the hand-off script writes when psLogPath cannot
+// be written; it names it in the stream note (handoff_log) for the next start.
+const psFallbackLogPath = "/tmp/psremote.log"
 
 // psHandoffScript hands the display to `chiaki-stream SESSION`: JukaHub exits,
 // the script runs the helper. With launcherWaits the launcher keeps the
@@ -661,26 +677,58 @@ func psHandoffScript(pid int, engine psEngine, sessionPath, label string, launch
 	} else {
 		b.WriteString("RUNTIME=\"\"\n")
 	}
+	fmt.Fprintf(&b, "STATUS=%s\n", psShellQuote(psLastRunPath()))
+	fmt.Fprintf(&b, "FALLBACK_LOG=%s\n", psShellQuote(psFallbackLogPath))
+	// The helper's environment is set in the subshell that runs it, never for
+	// this script: its libraries (and the OpenSSL preload) must not reach the
+	// firmware's sleep, pidof and date.
+	b.WriteString("helper_env() {\n")
 	for _, kv := range psHandoffEnv(engine.Root) {
 		i := strings.IndexByte(kv, '=')
 		if i <= 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "export %s=%s\n", kv[:i], psShellQuote(kv[i+1:]))
+		fmt.Fprintf(&b, "    export %s=%s\n", kv[:i], psShellQuote(kv[i+1:]))
 	}
+	b.WriteString("    :\n}\n")
 	if launcherWaits {
 		b.WriteString("LAUNCHER_WAITS=1\n")
 	} else {
 		b.WriteString("LAUNCHER_WAITS=0\n")
 	}
 	b.WriteString(`
-# Wait for JukaHub to release SDL and the framebuffer (60 s cap).
+# A log that can be written. A redirect into a missing folder makes the shell
+# skip the command, so a bad LOG used to mean chiaki-stream never ran at all.
+# The probes run in subshells: a failed redirect on ":" (a special built-in)
+# ends a POSIX shell outright.
+mkdir -p "$(dirname "$LOG")" 2>/dev/null
+if ! (: >> "$LOG") 2>/dev/null; then
+    LOG="$FALLBACK_LOG"
+    (: >> "$LOG") 2>/dev/null || LOG=/dev/null
+    echo "handoff_log=$LOG" >> "$STATUS" 2>/dev/null
+fi
+# Each step goes to the log and to the stream note, so a hand-off that stops
+# before the helper says where (psremote_lastrun.go reads handoff_step).
+step() {
+    echo "[hand-off] $*" >> "$LOG" 2>/dev/null
+    echo "handoff_step=$*" >> "$STATUS" 2>/dev/null
+}
+trap '' HUP
+trap 'step "stopped by a signal"; rm -f "$SESSION" "$0" 2>/dev/null; if [ "$LAUNCHER_WAITS" != "1" ] && command -v pkill >/dev/null 2>&1; then pkill -CONT runtrimui.sh 2>/dev/null; pkill -CONT trimui_launcher 2>/dev/null; fi; exit 143' TERM INT
+step "started; waiting for JukaHub (pid $JUKAHUB_PID) to close"
+
+# Wait for JukaHub to release SDL and the framebuffer (60 s cap). A busybox
+# without fractional sleep gets whole seconds.
+NAP=0.1
+LIMIT=600
+sleep 0.1 2>/dev/null || { NAP=1; LIMIT=60; }
 i=0
 while kill -0 "$JUKAHUB_PID" 2>/dev/null; do
     i=$((i+1))
-    [ "$i" -ge 600 ] && break
-    sleep 0.1
+    [ "$i" -ge "$LIMIT" ] && break
+    sleep "$NAP"
 done
+step "JukaHub closed; taking the screen"
 
 if [ "$LAUNCHER_WAITS" = "1" ]; then
     # launch.sh keeps the supervisors paused and MainUI stopped until this
@@ -705,25 +753,49 @@ if [ -n "$UI_PID" ]; then
 fi
 sleep 1
 
-if [ -n "$RUNTIME" ]; then
-    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH%:}:$RUNTIME"
-    else
-        LD_LIBRARY_PATH="$RUNTIME"
-    fi
-    export LD_LIBRARY_PATH
-    OPENSSL_PRELOAD="$RUNTIME/libcrypto.so.1.1:$RUNTIME/libssl.so.1.1"
-    export OPENSSL_PRELOAD
+chmod +x "$BIN" 2>/dev/null || true
+if [ ! -f "$BIN" ]; then
+    step "the streaming helper is missing: $BIN"
+elif [ ! -f "$SESSION" ]; then
+    step "the session file is gone: $SESSION"
+else
+    step "starting $BIN"
 fi
-
 {
     echo ""
     echo "=== JukaHub Remote Play $(date 2>/dev/null) ==="
 } >> "$LOG" 2>/dev/null
-chmod +x "$BIN" 2>/dev/null || true
-"$BIN" "$SESSION" >> "$LOG" 2>&1
+(
+    helper_env
+    if [ -n "$RUNTIME" ]; then
+        if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH%:}:$RUNTIME"
+        else
+            LD_LIBRARY_PATH="$RUNTIME"
+        fi
+        export LD_LIBRARY_PATH
+        # The same OpenSSL 1.1 preload pairing uses (psHelperEnv); the old
+        # OPENSSL_PRELOAD meant nothing to the loader.
+        PRELOAD=""
+        for LIB in "$RUNTIME/libcrypto.so.1.1" "$RUNTIME/libssl.so.1.1"; do
+            [ -f "$LIB" ] || continue
+            if [ -n "$PRELOAD" ]; then PRELOAD="$PRELOAD:$LIB"; else PRELOAD="$LIB"; fi
+        done
+        if [ -n "$PRELOAD" ]; then
+            LD_PRELOAD="$PRELOAD${LD_PRELOAD:+:$LD_PRELOAD}"
+            export LD_PRELOAD
+        fi
+    fi
+    exec "$BIN" "$SESSION"
+) >> "$LOG" 2>&1
 RC=$?
 echo "=== $LABEL exited with code $RC ===" >> "$LOG" 2>/dev/null
+# The helper rewrites the note as it ends: say again where its lines went, and
+# why it never ran when the shell could not start it.
+[ "$LOG" = "$FALLBACK_LOG" ] && echo "handoff_log=$LOG" >> "$STATUS" 2>/dev/null
+if [ -f "$BIN" ] && { [ "$RC" = "126" ] || [ "$RC" = "127" ]; }; then
+    step "chiaki-stream could not be run (code $RC)"
+fi
 rm -f "$SESSION" 2>/dev/null
 
 if [ "$LAUNCHER_WAITS" != "1" ]; then

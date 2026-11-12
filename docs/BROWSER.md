@@ -812,7 +812,7 @@ what its kind says when it is activated.
 | `<textarea>` | a field chip with the text between its tags | same, and the value it sends is the field's own text |
 | `<select>` | one chip showing the chosen option's label, with ▼ | steps to the next option in place (wrapping), so the list needs no keyboard and no dropdown |
 | `<input type=checkbox>` / `radio` | a drawn box, □ or ■ (○ or ●), beside the label the page already had | toggles in place; a radio clears the rest of its group |
-| `<input type=submit>` / `button` | its label, as a button chip | sends the form; on an empty form it opens the first field instead of sending an empty search |
+| `<input type=submit>` / `<button type=submit>` | its label, as a button chip | sends the form; on an empty form it opens the first field instead of sending an empty search |
 | `<input type=hidden>` | nothing — but it is still submitted | — |
 | `<input type=file>`, colour, range | nothing | — |
 
@@ -823,12 +823,19 @@ would replace each with an ellipsis — a tick box would have drawn "…".
 What a form sends is every named control in it — including its hidden inputs
 (the `ie=utf-8`, site-key and locale constants a search handler expects) — plus
 the button's own name when the button has one. Two forms on one page stay two
-forms even when they point at the same action. The reader cannot POST, so a
-submission is a **GET** to the form's action with those fields as the query —
-which is the shape a search box accepts (DuckDuckGo Lite, a site's own search, a
-wiki search) and what a handheld actually needs. A page that only answers a POST
-(a login form) still receives a GET and will usually reject it; that limit has
-not changed.
+forms even when they point at the same action. A GET form sends those fields in
+the address, as search pages expect. A form with `method=post` sends them in the
+request body as `application/x-www-form-urlencoded`, or as text parts when it
+declares `multipart/form-data`. The response replaces the page, and cookies set
+by a redirect are kept for the landing page. A POST body is never stored in the
+address bar, history or page cache. File inputs are still not available, so a
+form that requires an uploaded file cannot be completed here.
+
+On a POST form, filling a field leaves it on the page so another field can be
+filled; press its submit button to send. This is how a username and password can
+be entered together. A password field on a GET form is refused because its value
+would enter the address. A password form targeting plain HTTP is refused because
+it would send the value without encryption.
 
 A field opens holding whatever the page prefilled, **selected** the way the
 address bar is: the first character typed replaces it, so correcting a prefilled
@@ -876,13 +883,11 @@ against a small document model of its own (see [JavaScript](#javascript)),
 which brings most script-built content onto the page, but there is no layout
 for scripts to measure, no canvas, no workers or sockets, and the scripts get
 ten seconds; a heavy web app can still come out empty, and sites that test for
-a full browser stop at their test. It does not implement grid or float layouts, and while it
-can fill in and send a form it cannot **post** one: a submission is sent as a
-GET (see [Forms](#forms)), which a search box accepts and a login form usually
-does not.
-Cookies now survive a relaunch (see [Cookies](#cookies)), which is enough for a
-consent gate, an age gate or a session redirect — but not for a site whose login
-is a POST form. A session is only ever saved if the site handed one out itself. A `calc()` that mixes units the layout has not measured yet
+a full browser stop at their test. It can fill and POST ordinary text forms, but
+cannot upload a file or complete sign-ins that depend on browser features
+outside its page model (see
+[Forms](#forms)). Cookies survive a relaunch (see [Cookies](#cookies)); a session
+is only saved if the site handed one out itself. A `calc()` that mixes units the layout has not measured yet
 (`calc(100% - 20px)`) is left unresolved, and `vh`/`vw` say nothing about a
 reader with no window, so they are ignored rather than guessed. `float`,
 `grid` and `columns` still lay out as plain blocks: the reader stacks content

@@ -21,7 +21,11 @@ func drawGameCoverArt(renderer *sdl.Renderer, game libraryGame, rect sdl.Rect) {
 	if rect.H/3 < icon {
 		icon = rect.H / 3
 	}
-	DrawHomeIcon(renderer, "disc", sdl.Rect{X: rect.X + (rect.W-icon)/2, Y: rect.Y + (rect.H-icon)/2, W: icon, H: icon}, false)
+	glyph := "disc"
+	if isJukaLandLibraryGame(game) {
+		glyph = "jukaland"
+	}
+	DrawHomeIcon(renderer, glyph, sdl.Rect{X: rect.X + (rect.W-icon)/2, Y: rect.Y + (rect.H-icon)/2, W: icon, H: icon}, false)
 }
 
 func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system librarySystem, x, y, w, h int32, layout string) {

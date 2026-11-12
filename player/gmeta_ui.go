@@ -231,6 +231,9 @@ func gmetaOpenSelected() bool {
 		PlayNavSound()
 		return true
 	}
+	if openBuiltInLibraryGame(game, appConfig) {
+		return true
+	}
 	gmetaOpenDetails(game)
 	return true
 }

@@ -317,6 +317,10 @@ func openGameOptions() bool {
 		ShowToast("No game selected", ToastKindInfo)
 		return true
 	}
+	if isJukaLandLibraryGame(game) {
+		ShowToast("JukaLand has no emulator options", ToastKindInfo)
+		return true
+	}
 	// The sheet always edits the highlighted title, whichever column has the
 	// focus; its header names the game so opening it from the console list is
 	// unambiguous.

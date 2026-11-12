@@ -517,6 +517,10 @@ With **Settings → Display & theme → Liquid background** on (*Gentle* or
 *Lively*), the backdrop is a shallow pool and the controls you already use move
 it. It only watches: nothing is taken from the screen in front of it.
 
+**Start → Device → Liquid background** switches it off or back on in one press;
+the menu shows **On** or **Off**, and switching it back on restores *Gentle* or
+*Lively* as last chosen. A new setup starts with *Gentle* on.
+
 | Input | The water |
 |-------|-----------|
 | Moving the focus (D-pad, left stick, arrow keys) | A ripple under the tile it lands on |
@@ -555,7 +559,7 @@ footer names the scene the menu was opened over.
 | Screens | Home, then Trophies (with how many you have earned, e.g. "12/386"), then every other screen in `jukaconfig.json` — the quickest way to switch screen |
 | Games | Emulators, Games Library, Game Profiles, PS Remote Play, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, APK Store, Smart Pro Compatibility |
 | Tools | Downloads, Curation Hub, Audio settings, Smart Home, Screen Share, Voice command, Accessibility, Stick Calibration (when the install has one) |
-| Device | Quick Settings, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, Edit Home, About, Quit JukaHub |
+| Device | Quick Settings, Liquid background, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, Edit Home, About, Quit JukaHub |
 
 Settings sub-screens and the maintenance scenes (Patch, Exit) are not listed:
 **Settings** leads to them. Rows whose backend is missing on this device are

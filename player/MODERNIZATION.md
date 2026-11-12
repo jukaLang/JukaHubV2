@@ -3827,17 +3827,15 @@ every action goes through the existing pairing and queue.
 **Done when.** Notes sync between paired devices through `ssync` and render
 Markdown (headings, lists, checkboxes) in the reader view.
 
-### APP-8 — Forms that POST (P2, M)
-**Why.** The browser fills forms but sends every submission as a GET
-(`browser.go` near the form submit path, documented in `docs/BROWSER.md`), so a
-login or search form that requires POST fails even when cookies work.
-**Where.** `browser.go` (form fill and submit), `webpage.go` (`webForm`, field
-values), `browsercookies.go`.
-**Done when.** A form with `method=post` is sent as
-`application/x-www-form-urlencoded` (and `multipart/form-data` when it has a
-file field), the response replaces the page, cookies set by the response are
-kept, and redirects follow the GET rules; a local test server asserts the
-method, body and cookie round-trip.
+### APP-8 — File uploads in forms (P2, M)
+**Why.** Text fields now submit by GET or POST, including multipart text parts,
+and POST responses keep cookies through redirects. The reader still skips file
+inputs, so forms that require an upload cannot be completed.
+**Where.** `browser.go` (form submission), `webpage.go` (file control), Files
+picker, `docs/BROWSER.md`.
+**Done when.** A file input opens a bounded local-file picker and sends
+`multipart/form-data` with the selected file, while a local test server asserts
+the filename, bytes, other fields and cookie round-trip.
 
 ### APP-9 — A profile per Windows app (P3, M) [HW]
 **Why.** Every Wine app shares one prefix and one controller mapping; the docs

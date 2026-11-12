@@ -14,8 +14,13 @@ package main
 // release notes and documentation.
 
 import (
+	"bytes"
+	"fmt"
 	htmlstd "html"
+	"mime/multipart"
+	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -739,13 +744,19 @@ func browserEnsureHome(config *Config) {
 // ── History ──────────────────────────────────────────────────────────────
 
 func browserRecordURL(address string) {
+	browserRecordURLMode(address, false)
+}
+
+// A form submission is a new history entry even when it posts to the page's
+// own URL. Back should step to the earlier visit rather than skip it.
+func browserRecordURLMode(address string, force bool) {
 	address = strings.TrimSpace(address)
 	if address == "" {
 		return
 	}
 	browserState.mu.Lock()
 	defer browserState.mu.Unlock()
-	if browserState.index >= 0 && browserState.index < len(browserState.history) &&
+	if !force && browserState.index >= 0 && browserState.index < len(browserState.history) &&
 		browserState.history[browserState.index] == address {
 		return
 	}
@@ -1808,6 +1819,16 @@ func browserFillPageControl(renderer *sdl.Renderer, config *Config, elem Element
 // browserSubmitPageControl is the text path: the field that was just filled is
 // the one being submitted.
 func browserSubmitPageControl(config *Config, elem Element, ctrl *webControl, value string) {
+	// A POST form can need several fields. Keep each value on the page until
+	// its submit button is pressed, so typing a username does not send the form
+	// before the password can be entered.
+	if strings.EqualFold(ctrl.Form.Method, http.MethodPost) {
+		ctrl.Value = value
+		browserRefreshFormState(elem)
+		PlayActivateSound()
+		ShowToast("Field filled — press the form's button to send", ToastKindInfo)
+		return
+	}
 	if strings.TrimSpace(value) == "" {
 		showToast("Nothing typed", ToastInfo())
 		return
@@ -1815,12 +1836,9 @@ func browserSubmitPageControl(config *Config, elem Element, ctrl *webControl, va
 	browserSubmitFormValues(config, elem, ctrl, value, false)
 }
 
-// browserSubmitFormValues turns a form into a page load. The reader cannot
-// POST, so a form is submitted as a GET: the action plus every field the page
-// put in that form. That is the shape a search box accepts (DuckDuckGo Lite,
-// site search, wiki search), which is what a handheld actually needs from a
-// form, and collecting the whole form rather than one field is what makes a
-// page with a text box plus a <select> filter work off one press.
+// browserSubmitFormValues sends the form by its declared method. GET fields
+// go in the address; POST fields stay in the request body and never enter the
+// address bar, history or page-cache key.
 //
 // typed is the value the keyboard just produced for the focused control, when
 // there is one; it is written back onto the control so the field keeps showing
@@ -1830,21 +1848,21 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 	if config == nil || ctrl == nil {
 		return false
 	}
-	if typed = strings.TrimSpace(typed); typed != "" {
+	if typed != "" {
 		ctrl.Value = typed
 	}
 	form := ctrl.Form
-	// A form goes out as a GET, so every field lands in the address. A login
-	// form's password went into the address bar, history, cache keys, the
-	// server's logs and the Referer of each redirect hop; a form with a filled
-	// password field is refused instead.
-	hasSecret := ctrl.Secret && strings.TrimSpace(ctrl.Value) != ""
+	post := strings.EqualFold(form.Method, http.MethodPost)
+	// A GET would expose a password in the address, history and Referer. POST
+	// keeps it in the body, but an unencrypted HTTP destination still exposes
+	// it on the wire.
+	hasSecret := ctrl.Secret && ctrl.Value != ""
 	for _, other := range browserFormControls(elem) {
-		if other.Form.ID == form.ID && other.Secret && strings.TrimSpace(other.Value) != "" {
+		if other.Form.ID == form.ID && other.Secret && other.Value != "" {
 			hasSecret = true
 		}
 	}
-	if hasSecret {
+	if hasSecret && !post {
 		showToast("Sign-in forms can't be sent from the reader — passwords would end up in the address", ToastWarn())
 		return false
 	}
@@ -1873,7 +1891,9 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 		}
 		switch other.Kind {
 		case "text", "textarea":
-			if v := strings.TrimSpace(other.Value); v != "" {
+			if post {
+				values.Set(name, other.Value)
+			} else if v := strings.TrimSpace(other.Value); v != "" {
 				values.Set(name, v)
 			}
 		case "select":
@@ -1912,24 +1932,88 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 	if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
 		base = doc.URL
 	}
+	nav, err := browserFormNavigation(form, base, values)
+	if err != nil {
+		showToast("This form's address cannot be opened", ToastError())
+		return false
+	}
+	if hasSecret && strings.HasPrefix(strings.ToLower(nav.URL), "http://") {
+		showToast("This sign-in form needs an encrypted HTTPS address", ToastWarn())
+		return false
+	}
+	PlayActivateSound()
+	browserLoadNavigation(config, elem, nav, true, !post)
+	return true
+}
+
+// browserFormNavigation builds the request from a form's declared action,
+// method and encoding. Keeping it separate from the UI path also makes the
+// exact bytes sent by POST testable without a running SDL scene.
+func browserFormNavigation(form webForm, base string, values url.Values) (browserNavigation, error) {
 	address := base
 	if action := strings.TrimSpace(form.Action); action != "" {
-		if resolved, ok := browserResolveLink(base, action); ok {
+		if strings.HasPrefix(action, "#") {
+			// A fragment-only action submits back to this page.
+		} else if resolved, ok := browserResolveLink(base, action); ok {
 			address = resolved
-		} else if parsed, err := url.Parse(action); err == nil && parsed.IsAbs() {
-			address = action
+		} else {
+			return browserNavigation{}, fmt.Errorf("unsupported form action %q", action)
 		}
 	}
-	// The action may already carry a query (site search URLs often do), so the
-	// fields are appended rather than replacing it.
-	sep := "?"
-	if strings.Contains(address, "?") {
-		sep = "&"
+	nav := browserNavigation{URL: address, Referrer: base}
+	if strings.EqualFold(form.Method, http.MethodPost) {
+		nav.Method = http.MethodPost
+		if form.Enctype == "multipart/form-data" {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			keys := make([]string, 0, len(values))
+			for name := range values {
+				keys = append(keys, name)
+			}
+			sort.Strings(keys)
+			for _, name := range keys {
+				for _, value := range values[name] {
+					if err := writer.WriteField(name, value); err != nil {
+						return browserNavigation{}, err
+					}
+				}
+			}
+			if err := writer.Close(); err != nil {
+				return browserNavigation{}, err
+			}
+			nav.Body = body.Bytes()
+			nav.ContentType = writer.FormDataContentType()
+		} else if form.Enctype == "text/plain" {
+			keys := make([]string, 0, len(values))
+			for name := range values {
+				keys = append(keys, name)
+			}
+			sort.Strings(keys)
+			var body strings.Builder
+			for _, name := range keys {
+				for _, value := range values[name] {
+					body.WriteString(name)
+					body.WriteByte('=')
+					body.WriteString(value)
+					body.WriteString("\r\n")
+				}
+			}
+			nav.Body = []byte(body.String())
+			nav.ContentType = "text/plain"
+		} else {
+			nav.Body = []byte(values.Encode())
+			nav.ContentType = "application/x-www-form-urlencoded"
+		}
+	} else {
+		// The action may already carry a query (site search URLs often do),
+		// so append the fields rather than replacing it.
+		sep := "?"
+		if strings.Contains(address, "?") {
+			sep = "&"
+		}
+		nav.URL += sep + values.Encode()
 	}
-	address += sep + values.Encode()
-	PlayActivateSound()
-	loadTextBrowserURL(config, elem, address)
-	return true
+	return nav, nil
 }
 
 // submitValue is the value a select sends: the chosen option's own value when

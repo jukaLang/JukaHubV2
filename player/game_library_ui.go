@@ -271,9 +271,31 @@ func selectedLibraryGame() (libraryGame, bool) {
 	return system.Games[gameLib.cursor], true
 }
 
+// JukaLand opens its own scene directly; there is no emulator, ROM file or
+// save-state page to prepare first.
+func openBuiltInLibraryGame(game libraryGame, config *Config) bool {
+	if !isJukaLandLibraryGame(game) {
+		return false
+	}
+	idx := sceneIndexExact(config, "JukaLand")
+	if idx < 0 {
+		ShowToast("JukaLand is unavailable in this configuration", ToastKindWarning)
+		return true
+	}
+	if game.Path == gameRandomPick {
+		trophyEvent(tkGameRandom)
+	}
+	gameRandomPick = ""
+	closeGameLibraryPanel()
+	changeSceneTo(config, idx)
+	PlayActivateSound()
+	return true
+}
+
 func scanGameLibrary() gameLibraryReport {
 	lib := buildGameLibrary(scanROMLibrary(romLibraryRoots()), libraryArtworkRoot())
 	libraryAddHTML5Games(&lib, nil, html5LibraryRoots(), html5DataRoot())
+	libraryAddJukaLand(&lib, sceneIndexExact(appConfig, "JukaLand") >= 0)
 	return lib
 }
 
@@ -365,6 +387,7 @@ func startGameLibraryScan() {
 	html5Roots := append([]string(nil), html5LibraryRoots()...)
 	html5DemoRoot := html5DataRoot()
 	artRoot := libraryArtworkRoot()
+	showJukaLand := sceneIndexExact(appConfig, "JukaLand") >= 0
 	// Copy the playtime map on the render thread; the background build must not
 	// read it while the ticker is writing it. The snapshot is never nil, so the
 	// goroutine never falls back to reading the live ledger.
@@ -378,6 +401,7 @@ func startGameLibraryScan() {
 		// The APK Store's Android games join as one more console (AND-16).
 		libraryAddAndroidGames(&lib, seconds)
 		libraryAddHTML5Games(&lib, seconds, html5Roots, html5DemoRoot)
+		libraryAddJukaLand(&lib, showJukaLand)
 		tbxPost(func() {
 			if !applyGameLibraryScan(&gameLib, gen, lib, recentGames()) {
 				return
@@ -462,7 +486,9 @@ func gameLibraryStatus() string {
 		return pluralizeCount(hidden, "hidden game", "hidden games") + " — Game options → Show hidden reveals them"
 	}
 	status := pluralizeCount(gameLib.lib.Total, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "system", "systems")
-	status += " · " + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "% with covers"
+	if withArt, coverTotal := libraryCoverTotals(gameLib.lib); coverTotal > 0 {
+		status += " · " + itoa(coverPercent(withArt, coverTotal)) + "% with covers"
+	}
 	// The clip count, from the same census the Settings row reads — the figure
 	// that matters most on this screen, because this is where the previews
 	// play. It stays off the line until the first scan lands, the way the row
@@ -1318,7 +1344,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 
 	// Cover completeness at a glance: a ring that fills as the library gains
 	// art, with the percentage inside it.
-	if gameLib.lib.Total > 0 {
+	if withArt, coverTotal := libraryCoverTotals(gameLib.lib); coverTotal > 0 {
 		// The ring stays on the title line: at 26px it reached down into the
 		// status line under it, whose long form runs the width of the card.
 		ringR := int32(26)
@@ -1327,7 +1353,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		drawCoverCompletenessRing(renderer, config,
 			panelX+panelW-pad-ringR, header.Y+band.WellBox/2, ringR,
-			coverPercent(gameLib.lib.WithArt, gameLib.lib.Total))
+			coverPercent(withArt, coverTotal))
 	}
 
 	systems := currentGameSystems()
@@ -1401,7 +1427,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			rect.X+rect.W-12-int32(cw), rect.Y+(rect.H-smallH)/2)
 		// A thin meter under each console row: the share of that console's
 		// covers that are already on the card.
-		if games := len(systems[idx].Games); games > 0 {
+		if games := len(systems[idx].Games); games > 0 && systems[idx].Name != builtInLibrarySystem {
 			meterW := rect.W - 24
 			meterY := rect.Y + rect.H - 5
 			fillRoundedRect(renderer, rect.X+12, meterY, meterW, 3, 1, WithAlpha(ColorBorderDefault, 130))
@@ -1493,6 +1519,9 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-24),
 				ColorTextPrimary(), rect.X+12, rect.Y+rows.titleY)
 			detail := game.System + " · " + filepath.Base(game.Path)
+			if isJukaLandLibraryGame(game) {
+				detail = "Built-in JukaHub game"
+			}
 			if game.Hidden {
 				detail += " · Hidden"
 			}

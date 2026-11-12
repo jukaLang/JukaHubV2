@@ -41,10 +41,11 @@
 #  every script it runs "sh", and resumed nothing either.)
 # ---------------------------------------------------------------------------
 
-APP_DIR=/mnt/SDCARD/Apps/JukaHub
-
-# The app folder can be renamed; fall back to this script's own location.
-[ -d "$APP_DIR" ] || APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Use this script's installed folder even when an older Apps/JukaHub folder
+# exists. Remote Play once needed that folder for its log, and choosing it
+# merely because it exists can leave a renamed install without its binary.
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$APP_DIR/JukaHub" ] || APP_DIR=/mnt/SDCARD/Apps/JukaHub
 
 cd "$APP_DIR" || exit 1
 

@@ -13,6 +13,10 @@ For anything older, the git log and the
 
 ### Added
 
+- **Liquid background switch in the Start menu.** Start → Device → **Liquid background**
+  shows On or Off and switches the effect immediately. It starts on at Gentle,
+  remembers a chosen Lively level when turned off, and restores that level when
+  turned back on.
 - **Background music.** Settings → Sound & haptics has a **Background music** switch (off by
   default), a **Music** choice and a **Music level**. The music is one of three built-in songs —
   **Calm**, **Lo-fi** and **Chiptune**, written as Synth projects and rendered live, so nothing ships as
@@ -337,6 +341,23 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Sharper, ring-shaped ripples on the Smart Pro.** Under Low Power (the
+  handheld's default) the water ran on a 96-column grid with its light
+  stretched from a texel every 13 px, and each dip was lit as one bright half
+  and one dark half — blurry, big blobs. The grid is now 128 columns there
+  too, while the refracting mesh takes every second node (every fourth once
+  the budget steps in), so SDL expands a quarter of the vertices it did; the
+  light keeps a texel per node. Crests now catch a line of light and troughs
+  a line of shadow (curvature shading), with half the slope light and a
+  tighter glint, and ripples are about a third smaller
+  (`player/liquidbg.go`).
+- **Ripples spill the way the focus went, and overlays bounce.** A focus
+  arriving from the right now lands its wave on the move: stretched along the
+  path, its rim leaning ahead and the water shoved that way, so the spill
+  runs on to the left instead of dripping straight down (a step the focus
+  ring does not answer leans the same way). The Start menu, dropdowns and
+  sheets overshoot further and swing back once before settling, over 210 /
+  230 ms instead of 170 / 190 (`player/liquidbg.go`, `player/anim.go`).
 - **The liquid background moves like water, not stamped circles.** Ripples
   are now short wave trains (a dip with a raised rim, so two or three crests
   roll out) with a stretched, wobbly outline, and each lands a little off the
@@ -447,6 +468,15 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **PS Remote Play Play button now streams from a renamed JukaHub folder.** The release zip unpacks
+  as `Apps/JukaHub-Trimui`, but the stream's log, helper folder and Brick runtime were looked up in
+  a hard-coded `Apps/JukaHub`. The log redirect into that missing folder made the shell skip
+  `chiaki-stream` entirely, so JukaHub closed, came back with "Remote Play did not start", and no
+  `psremote.log` existed. Every Remote Play path now hangs off the folder JukaHub runs from; the
+  hand-off script probes its log and falls back to `/tmp/psremote.log`, records each step in the
+  stream note (shown in the toast when the stream never starts), keeps the helper's libraries and the
+  OpenSSL preload (now `LD_PRELOAD`, as pairing uses) out of its own commands, and copes with a
+  busybox `sleep` without fractions.
 - **APK Store appears in Packages on Windows.** It can inspect APKs from the
   PC's Downloads folder and download verified APKs there; Start → Games and
   Home search also show it. AndroidRT playback remains on the handheld.

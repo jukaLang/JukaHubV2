@@ -46,7 +46,7 @@ const (
 )
 
 // psLastRunLog is where the details are, as a user reads the path.
-const psLastRunLog = "Apps/JukaHub/psremote.log"
+const psLastRunLog = "psremote.log beside JukaHub"
 
 // A report the helper never wrote is finished from psremote.log: at most the
 // first psLastRunHeadMax bytes the stream added (the hand-off script's header)
@@ -78,6 +78,12 @@ type psLastRun struct {
 	// psremote.log was when the stream started, so a report the helper never
 	// wrote is read from that stream's lines only. -1 when the note has none.
 	LogOffset int64
+	// HandoffStep is the hand-off script's last step (handoff_step) and
+	// HandoffLog the log it wrote instead of psremote.log when that could not
+	// be written (handoff_log): both say where a stream that never started
+	// stopped.
+	HandoffStep string
+	HandoffLog  string
 	// Remote and PS5 are set by the reader, not the helper: the host was the
 	// console's internet address; the console is a PS5.
 	Remote bool
@@ -133,8 +139,14 @@ func psRemoteShowLastRun() {
 	if !ok {
 		return
 	}
+	logPath := psLastRunLogPath()
+	if run.HandoffLog != "" {
+		// The card's log could not be written: the script used its fallback,
+		// which has its own length, so it is read from its end.
+		logPath, run.LogOffset = run.HandoffLog, -1
+	}
 	if run.Result == psLastRunStarted {
-		run = psLastRunFromLog(run, psLastRunLogText(psLastRunLogPath(), run.LogOffset))
+		run = psLastRunFromLog(run, psLastRunLogText(logPath, run.LogOffset))
 	}
 	trophyEventN(tkRemotePlay, min(run.Frames, 1)) // the last stream showed video (n < 1 is ignored)
 	name, host := psLastRunConsole(&run)
@@ -142,6 +154,13 @@ func psRemoteShowLastRun() {
 	if !show {
 		return
 	}
+	if run.HandoffLog != "" {
+		msg = strings.ReplaceAll(msg, psLastRunLog, run.HandoffLog)
+	}
+	if run.Result == psLastRunNotStarted && run.HandoffStep != "" {
+		msg = strings.TrimSuffix(msg, ".") + " — the hand-off stopped at: " + run.HandoffStep + "."
+	}
+	logWarn("psremote", "last stream: result=%s rc=%d step=%q log=%s", run.Result, run.RC, run.HandoffStep, logPath)
 	psLastRunNoteSet(msg, kind, host)
 	ShowToast(msg, kind)
 }
@@ -182,6 +201,13 @@ func psParseLastRun(data []byte) (psLastRun, bool) {
 			run.Codec = strings.ToLower(value)
 		case "saved_pin_rejected":
 			run.PINRejected = value == "1" || strings.EqualFold(value, "true")
+		case "handoff_step":
+			run.HandoffStep = value
+		case "handoff_log":
+			// Only the script's own fallback, never an arbitrary file.
+			if value == psFallbackLogPath {
+				run.HandoffLog = value
+			}
 		case "log_offset":
 			if n, err := strconv.ParseInt(value, 10, 64); err == nil && n >= 0 {
 				run.LogOffset = n
@@ -218,6 +244,10 @@ func psLastRunResultForRC(rc int) string {
 		return psLastRunSessionError
 	case rc == 12:
 		return psLastRunPINCancelled
+	case rc == 126 || rc == 127:
+		// The shell could not run chiaki-stream (not executable, or its loader
+		// or a library is missing): it never started.
+		return psLastRunNotStarted
 	}
 	return psLastRunCrashed
 }

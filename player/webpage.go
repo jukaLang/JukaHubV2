@@ -766,9 +766,11 @@ type webLinkHit struct {
 // action (or none at all, which resolves to the page's own address), and
 // matching on the action alone sent both forms' fields on one press.
 type webForm struct {
-	ID     int
-	Action string
-	Field  string
+	ID      int
+	Action  string
+	Method  string
+	Enctype string
+	Field   string
 }
 
 // webHiddenField is a control the page submits but does not draw: a hidden
@@ -791,6 +793,7 @@ type webHiddenField struct {
 type webControl struct {
 	Kind        string // "text", "textarea", "select", "check", "radio" or "submit"
 	Name        string // the field's name, used in the submitted query
+	Label       string // <button> text; its submitted value is a separate attribute
 	Placeholder string
 	Value       string
 	// Options and Choice are a <select>'s items and the one showing. A select
@@ -881,7 +884,10 @@ func (c *webControl) Display() string {
 		}
 		return " [+] "
 	case "submit":
-		label := strings.TrimSpace(c.Value)
+		label := strings.TrimSpace(c.Label)
+		if label == "" {
+			label = strings.TrimSpace(c.Value)
+		}
 		if label == "" {
 			label = "Submit"
 		}
@@ -7380,12 +7386,13 @@ type webParser struct {
 	// submitted without being drawn, so they belong to the form rather than to
 	// any run.
 	formHidden map[int][]webHiddenField
-	// textarea collects a <textarea>'s shipped value between its tags, and the
-	// select_ fields collect a <select>'s options. Both defer their run until
-	// the closing tag, when the control's state is known; addText stays silent
-	// while either is open, or the field's own text would draw twice.
+	// Controls with content collect it until their closing tag, then emit one
+	// run. Their own text must not also appear as ordinary page text.
 	textarea             *webControl
 	textareaText         strings.Builder
+	buttonCtrl           *webControl
+	buttonText           strings.Builder
+	buttonStyle          webStyle
 	selectCtrl           *webControl
 	selectOption         string
 	selectOptionText     strings.Builder
@@ -7437,6 +7444,9 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 		p.target = u.Fragment
 	}
 	p.walk(source)
+	if p.buttonCtrl != nil {
+		p.endButton()
+	}
 	p.flush()
 	doc.FormHidden = p.formHidden
 	doc.HasContainerUnits = p.hasContainerUnits
@@ -7954,6 +7964,9 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if p.selectCtrl != nil && name != "option" && name != "select" && webControlBoundary(name) {
 		p.endSelect()
 	}
+	if p.buttonCtrl != nil && name != "button" && webControlBoundary(name) {
+		p.endButton()
+	}
 
 	if name == "form" {
 		// A form is where a filled control goes. A missing action means "this
@@ -7961,8 +7974,10 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		// forms with the same action from sharing a submit.
 		p.formSeq++
 		p.form = webForm{
-			ID:     p.formSeq,
-			Action: htmlAttrValue(htmlTagAttribute(attrs, "action")),
+			ID:      p.formSeq,
+			Action:  htmlAttrValue(htmlTagAttribute(attrs, "action")),
+			Method:  strings.ToLower(htmlAttrValue(htmlTagAttribute(attrs, "method"))),
+			Enctype: strings.ToLower(htmlAttrValue(htmlTagAttribute(attrs, "enctype"))),
 		}
 	}
 
@@ -8043,6 +8058,19 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 		p.addControlFromInput(attrs, style)
 		return
+	case "button":
+		if p.inHead {
+			return
+		}
+		kind := strings.ToLower(strings.TrimSpace(htmlTagAttribute(attrs, "type")))
+		if kind == "" || kind == "submit" {
+			p.beginFlexLeaf(style)
+			p.startButton(attrs, style)
+			if selfClose {
+				p.endButton()
+			}
+			return
+		}
 	case "textarea":
 		p.beginFlexLeaf(style)
 		p.startTextarea(attrs)
@@ -8120,6 +8148,11 @@ func (p *webParser) endTag(name string) {
 	// before the stack walk: they were never pushed, since their run only
 	// exists once the closing tag has arrived.
 	switch name {
+	case "button":
+		if p.buttonCtrl != nil {
+			p.endButton()
+			return
+		}
 	case "textarea":
 		if p.textarea != nil {
 			p.endTextarea()
@@ -9207,6 +9240,32 @@ func (p *webParser) startTextarea(attrs string) {
 	p.textareaText.Reset()
 }
 
+// startButton and endButton keep a submit button's visible label separate from
+// its value attribute. Most login forms use <button> rather than <input>, and
+// its label often differs from the value the server expects.
+func (p *webParser) startButton(attrs string, style webStyle) {
+	if p.buttonCtrl != nil {
+		p.endButton()
+	}
+	p.buttonCtrl = &webControl{
+		Kind: "submit", Name: htmlAttrValue(htmlTagAttribute(attrs, "name")),
+		Value: htmlAttrValue(htmlTagAttribute(attrs, "value")), Form: p.form,
+	}
+	p.buttonStyle = style
+	p.buttonText.Reset()
+}
+
+func (p *webParser) endButton() {
+	ctrl := p.buttonCtrl
+	if ctrl == nil {
+		return
+	}
+	ctrl.Label = strings.Join(strings.Fields(p.buttonText.String()), " ")
+	p.buttonCtrl = nil
+	p.buttonText.Reset()
+	p.emitControl(ctrl, p.buttonStyle, true)
+}
+
 // endTextarea draws the field the open <textarea> declared.
 func (p *webParser) endTextarea() {
 	ctrl := p.textarea
@@ -9321,6 +9380,12 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 	}
 	if p.selectCtrl != nil {
 		p.selectOptionText.WriteString(htmlstd.UnescapeString(raw))
+		return
+	}
+	if p.buttonCtrl != nil {
+		if p.buttonText.Len() < 512 {
+			p.buttonText.WriteString(htmlstd.UnescapeString(raw))
+		}
 		return
 	}
 	if style.Hidden {

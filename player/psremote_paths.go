@@ -36,14 +36,35 @@ func psRemoteSDRootDir() string {
 	if err != nil || exe == "" {
 		return psRemoteSDRoot
 	}
-	appDir := filepath.Dir(exe)
-	if strings.EqualFold(filepath.Base(appDir), "JukaHub") {
-		appsDir := filepath.Dir(appDir)
-		if strings.EqualFold(filepath.Base(appsDir), "Apps") {
-			return filepath.Dir(appsDir)
-		}
+	// <SD>/Apps/<any folder name>/JukaHub: the release zip unpacks as
+	// Apps/JukaHub-Trimui, so the app folder's own name is not checked.
+	appsDir := filepath.Dir(filepath.Dir(exe))
+	if strings.EqualFold(filepath.Base(appsDir), "Apps") {
+		return filepath.Dir(appsDir)
 	}
 	return psRemoteSDRoot
+}
+
+// psAppDir is the folder JukaHub itself runs from — its app folder on the
+// card, whatever it is called (Apps/JukaHub, Apps/JukaHub-Trimui, ...). Every
+// Remote Play path (helpers in bin/, the Brick runtime in libs/, psremote.log)
+// hangs off it. Hard-coding <SD>/Apps/JukaHub sent the stream's log into a
+// folder that did not exist on a renamed install; the shell then refused the
+// log redirect and never ran chiaki-stream ("Remote Play did not start").
+func psAppDir() string {
+	if dir := strings.TrimSpace(psHelperInstallDirOverride); dir != "" {
+		return filepath.Dir(filepath.Clean(dir))
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil && resolved != "" {
+			exe = resolved
+		}
+		return filepath.Dir(exe)
+	}
+	if sd := psRemoteSDRootDir(); sd != "" {
+		return filepath.Join(sd, "Apps", "JukaHub")
+	}
+	return ""
 }
 
 // psRemoteSupported reports whether the native helpers can run at all.
@@ -100,6 +121,11 @@ func psLaunchEnv(root string, base []string) []string {
 // psHandoffEnv keeps only the variables the helper needs. The whole process
 // environment is never written to disk: it can hold tokens.
 func psHandoffEnv(root string) []string {
+	// engine.Root is the helpers' bin/ folder; psLaunchEnv wants the app
+	// folder around it (its libs/, and the card root two levels up).
+	if strings.EqualFold(filepath.Base(filepath.Clean(root)), "bin") {
+		root = filepath.Dir(filepath.Clean(root))
+	}
 	allowed := map[string]bool{
 		"HOME": true, "SDCARD_PATH": true, "LD_LIBRARY_PATH": true,
 		"PATH": true, "OPENSSL_CONF": true,
@@ -117,13 +143,11 @@ func psHandoffEnv(root string) []string {
 	return out
 }
 
-// psBinDir is where the release puts chiaki-stream and chiaki-regist.
+// psBinDir is where the release puts chiaki-stream and chiaki-regist: bin/ in
+// JukaHub's own app folder (psAppDir), whatever that folder is called.
 func psBinDir() string {
-	if sd := psRemoteSDRootDir(); sd != "" {
-		return filepath.Join(sd, "Apps", "JukaHub", "bin")
-	}
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		return filepath.Join(filepath.Dir(exe), "bin")
+	if dir := psAppDir(); dir != "" {
+		return filepath.Join(dir, "bin")
 	}
 	return ""
 }
@@ -138,7 +162,7 @@ func psRuntimeInstallHint() string {
 	}
 	dir := psBinDir()
 	if dir == "" {
-		return "install the JukaHub-ng-chiaki build into Apps/JukaHub"
+		return "put chiaki-stream in bin/ inside JukaHub's folder"
 	}
 	return "missing " + filepath.Join(dir, "chiaki-stream")
 }

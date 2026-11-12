@@ -87,8 +87,9 @@ import (
 
 // Settings: Custom keys and the values the level is stored as.
 const (
-	liquidKey     = "liquidBg"
-	liquidTiltKey = "liquidTilt"
+	liquidKey       = "liquidBg"
+	liquidResumeKey = "liquidBgResume"
+	liquidTiltKey   = "liquidTilt"
 )
 
 // liquidLevel is how lively the water is.
@@ -108,13 +109,16 @@ var (
 )
 
 const (
-	liquidCellPx       = 10.0 // the grid's target cell size, canvas pixels
-	liquidMinCols      = 48
-	liquidMaxCols      = 160
-	liquidLowPowerCols = 96
+	liquidCellPx  = 10.0 // the grid's target cell size, canvas pixels
+	liquidMinCols = 48
+	liquidMaxCols = 160
+	// Low Power keeps the full grid since the refracting mesh became coarser
+	// than the grid (liquidMeshStep): its 96 columns, a light texel every
+	// 13 px stretched over the Smart Pro's screen, drew the ripples blurry.
+	liquidLowPowerCols = 128
 	// liquidDegradedCols is the grid once the budget has stepped the water
-	// down (noteCost).
-	liquidDegradedCols = 64
+	// down (noteCost), when the mesh also thins to every fourth node.
+	liquidDegradedCols = 96
 	liquidMinRows      = 8
 	// liquidSlopeRefCell is the cell size (px) the light and refraction gains
 	// are tuned at; a slope measured per node on another grid is scaled by
@@ -146,6 +150,7 @@ const (
 
 	// liquidWaveSpeed is how fast a ripple spreads, in canvas widths a
 	// second: 160 px/s on the 1280 px canvas, about 5 px a frame at 30 fps.
+	// (100 px/s was tried and read as worse, not calmer.)
 	// The sim's k = c²·dt²/dx² follows from it and the grid's cell size
 	// (liquidWaveKFor), up to the stability cap — reached at about 128
 	// columns, so a finer grid (a canvas past ~1290 px) runs a little slower.
@@ -166,10 +171,10 @@ const (
 	liquidMinRadiusNodes = 2.5
 	// liquidMinWaveRadiusNodes is the narrowest wave drop (liquidShape): its
 	// dip is half its radius and its rim finer still, so it needs more room.
-	liquidMinWaveRadiusNodes = 5.0
+	liquidMinWaveRadiusNodes = 4.0
 	// liquidWaveScale widens a wave drop over the plain dip it replaces, so
 	// its dip (half its radius) is about the plain dip's size.
-	liquidWaveScale = 1.4
+	liquidWaveScale = 1.2
 	// Every wave drop lands up to liquidJitter of its radius off the mark and
 	// up to liquidSizeSpread larger or smaller and deeper or shallower.
 	liquidJitter     = 0.12
@@ -181,6 +186,13 @@ const (
 	liquidSweepDrops = 3
 	liquidSweepSteps = 4.0
 	liquidSweepDepth = 1.0
+	// A drop that lands on the move (liquidDirectedShape) is stretched up to
+	// liquidSpillStretch along its way, its rim leans liquidSpillLean of its
+	// radius further ahead, and its older level is laid liquidSpillPush
+	// nodes behind, which sets the water moving that way.
+	liquidSpillStretch = 1.3
+	liquidSpillLean    = 0.2
+	liquidSpillPush    = 0.9
 	// liquidPressSteps is how many steps a drop is pressed in over, and
 	// liquidDropRest how much of it is applied to the older time level too,
 	// so it starts mostly at rest: a drop pressed into one level in one step
@@ -209,17 +221,28 @@ const (
 	liquidSlopeGain  = 5.5  // how steep a slope looks to the light
 	liquidUVInset    = 0.0005
 	// The light and shadow textures: what a fully lit slope adds (0–255,
-	// before the soft knee), the glint on top, and the shadow's gain and the
-	// darkest it gets (alpha share of black). The pale themes get more shadow
-	// and less light: white light hardly shows on them.
-	liquidDiffuse        = 230.0
-	liquidGlint          = 90.0
-	liquidShadow         = 2.0
+	// before the soft knee), the glint on top, the shadow's gain and the
+	// darkest it gets (alpha share of black), and what a crest (convex) adds
+	// to the light and a trough (concave) to the shadow per unit of
+	// curvature. The pale themes get more shadow and less light: white light
+	// hardly shows on them.
+	//
+	// The crest and trough terms are what draw a ripple as rings of light:
+	// lit by slope alone, a dip was one bright half and one dark half — the
+	// "blurry… big blobs" on the Smart Pro — so the slope light is half what
+	// it was and the curvature carries the shape.
+	liquidDiffuse        = 110.0
+	liquidGlint          = 110.0
+	liquidShadow         = 1.1
 	liquidShadowMax      = 0.6
-	liquidDiffuseLight   = 120.0
-	liquidGlintLight     = 50.0
-	liquidShadowLight    = 2.6
+	liquidCrest          = 900.0
+	liquidTrough         = 4.0
+	liquidDiffuseLight   = 60.0
+	liquidGlintLight     = 60.0
+	liquidShadowLight    = 1.6
 	liquidShadowMaxLight = 0.45
+	liquidCrestLight     = 500.0
+	liquidTroughLight    = 5.0
 
 	// liquidWakeMin is the speed (px/s) under which a stirrer leaves no wake:
 	// a stick settling near its rest, a cursor creeping.
@@ -275,6 +298,45 @@ func liquidLevelOf(config *Config) liquidLevel {
 		return liquidLevelDefault
 	}
 	return parseLiquidLevel(v)
+}
+
+// liquidSetLevel saves a level and remembers the active one when switching
+// off, so the Start menu's one-press switch can restore Gentle or Lively.
+func liquidSetLevel(config *Config, level liquidLevel) {
+	if config == nil {
+		return
+	}
+	if level == liquidLevelOff {
+		if previous := liquidLevelOf(config); previous != liquidLevelOff {
+			if config.Variables.Custom == nil {
+				config.Variables.Custom = map[string]interface{}{}
+			}
+			config.Variables.Custom[liquidResumeKey] = liquidLevelValues[previous]
+		}
+	}
+	setStoreString(config, liquidKey, liquidLevelValues[level])
+}
+
+// liquidToggle switches the backdrop from the Start menu without opening
+// Settings. An unset preference starts at Gentle, including after an old
+// config with the water off is enabled for the first time.
+func liquidToggle(config *Config) {
+	if config == nil {
+		return
+	}
+	next := liquidLevelOff
+	if liquidLevelOf(config) == liquidLevelOff {
+		next = parseLiquidLevel(config.Variables.Custom[liquidResumeKey])
+		if next == liquidLevelOff {
+			next = liquidLevelDefault
+		}
+	}
+	liquidSetLevel(config, next)
+	if next != liquidLevelOff && liquidUnsupportedSeen {
+		setToast("Liquid background is not supported by this renderer")
+		return
+	}
+	setToast("Liquid background: " + liquidLevelLabels[next])
 }
 
 // liquidTiltOn reports the tilt switch (on unless turned off). It reads the
@@ -363,10 +425,14 @@ func liquidGridSize(w, h int32, lowPower, degraded bool) (cols, rows int) {
 	if degraded && cols > liquidDegradedCols {
 		cols = liquidDegradedCols
 	}
+	// Even both ways, so the mesh can take every second node
+	// (liquidMeshStep).
+	cols -= cols % 2
 	rows = int(math.Round(float64(cols) * float64(h) / float64(w)))
 	if rows < liquidMinRows {
 		rows = liquidMinRows
 	}
+	rows += rows % 2
 	return cols, rows
 }
 
@@ -525,6 +591,11 @@ type liquidShape struct {
 	// (liquidRandomShape): liquidShapeWeight runs for every node a drop
 	// covers, every step it is pressed.
 	c2, s2, c3, s3, cr, sr float32
+	// A directed drop (liquidDirectedShape) lands moving: (c1, s1) is the
+	// way it travels, a1 how much further its rim reaches ahead than behind,
+	// and push how many nodes behind its older time level is laid, which
+	// gives the water a shove that way — a spill, not a drip from above.
+	a1, c1, s1, push float32
 }
 
 // liquidWaveReach is how far a wave drop reaches, in radii.
@@ -549,6 +620,27 @@ func liquidRandomShape() liquidShape {
 	}
 }
 
+// liquidDirectedShape is a wave drop landing on the move along (ux, uy), a
+// unit vector: stretched along the way it came, its rim reaching further
+// ahead, and laid with a shove that way (liquidShape.push), so a focus that
+// arrives from the right spills its wave on to the left. strength (0–1)
+// scales how far the spill leans; the wobble stays random.
+func liquidDirectedShape(ux, uy, strength float64) liquidShape {
+	sh := liquidRandomShape()
+	n := math.Hypot(ux, uy)
+	if n < 1e-6 || strength <= 0 {
+		return sh
+	}
+	ux, uy = ux/n, uy/n
+	strength = math.Min(1, strength)
+	sh.cr, sh.sr = float32(ux), float32(uy)
+	sh.elong = float32(1 + (liquidSpillStretch-1+0.15*rand.Float64())*strength)
+	sh.c1, sh.s1 = float32(ux), float32(uy)
+	sh.a1 = float32(liquidSpillLean * strength)
+	sh.push = float32(liquidSpillPush * strength)
+	return sh
+}
+
 // liquidShapeWeight is the drop's profile at offset (dx, dy) nodes from its
 // centre, for a drop radius nodes wide: 0 outside it.
 func liquidShapeWeight(dx, dy, radius float32, sh liquidShape) float32 {
@@ -565,7 +657,7 @@ func liquidShapeWeight(dx, dy, radius float32, sh liquidShape) float32 {
 		c, s := dx/rho, dy/rho
 		cos2, sin2 := c*c-s*s, 2*c*s
 		cos3, sin3 := 4*c*c*c-3*c, 3*s-4*s*s*s
-		wob += sh.a2*(cos2*sh.c2+sin2*sh.s2) + sh.a3*(cos3*sh.c3+sin3*sh.s3)
+		wob += sh.a1*(c*sh.c1+s*sh.s1) + sh.a2*(cos2*sh.c2+sin2*sh.s2) + sh.a3*(cos3*sh.c3+sin3*sh.s3)
 	}
 	u, v := dx*sh.cr+dy*sh.sr, -dx*sh.sr+dy*sh.cr
 	el := sh.elong
@@ -608,12 +700,16 @@ func (s *liquidSim) drop(x, y, radius, depth float32, shape liquidShape) {
 		if el <= 0 {
 			el = 1
 		}
-		reach = liquidWaveReach * (1 + float32(math.Abs(float64(shape.a2))+math.Abs(float64(shape.a3)))) * max(el, 1/el)
+		wobble := math.Abs(float64(shape.a1)) + math.Abs(float64(shape.a2)) + math.Abs(float64(shape.a3))
+		reach = liquidWaveReach * (1 + float32(wobble)) * max(el, 1/el)
 	}
 	if radius < minR {
 		radius = minR
 	}
-	ext := radius * reach
+	// The older level's copy sits push nodes behind: the box holds both.
+	push := float32(math.Abs(float64(shape.push)))
+	bx, by := shape.push*shape.c1, shape.push*shape.s1
+	ext := radius*reach + push
 	i0 := int(math.Floor(float64(x - ext)))
 	i1 := int(math.Ceil(float64(x + ext)))
 	j0 := int(math.Floor(float64(y - ext)))
@@ -639,12 +735,16 @@ func (s *liquidSim) drop(x, y, radius, depth float32, shape liquidShape) {
 				continue
 			}
 			w := liquidShapeWeight(dx, dy, radius, shape)
-			if w == 0 {
+			wb := w
+			if push != 0 {
+				wb = liquidShapeWeight(dx+bx, dy+by, radius, shape)
+			}
+			if w == 0 && wb == 0 {
 				continue
 			}
 			k := j*s.stride + i
 			s.cur[k] = liquidSoftHeight(s.cur[k] - depth*w)
-			s.prev[k] = liquidSoftHeight(s.prev[k] - depth*w*liquidDropRest)
+			s.prev[k] = liquidSoftHeight(s.prev[k] - depth*wb*liquidDropRest)
 		}
 	}
 }
@@ -764,7 +864,7 @@ func liquidFocusMoved(lastX, lastY float64, have bool, x, y, minSide float64) bo
 // liquidRippleRadius is the size of the ripple a control of that shorter side
 // drops: about the control itself, within limits.
 func liquidRippleRadius(minSide float64) float64 {
-	return math.Max(36, math.Min(80, minSide*0.4))
+	return math.Max(28, math.Min(58, minSide*0.3))
 }
 
 // liquidNoteFocus is the focus rings' hook (drawGlassFocusRing, Home's
@@ -808,6 +908,7 @@ const (
 type liquidMeshKey struct {
 	w, h           int32
 	cols, rows     int
+	step           int // liquidMeshStep
 	u0, v0, u1, v1 float32
 	lx, ly         float32 // the light's tilt shift
 	tint           sdl.Color
@@ -895,6 +996,8 @@ type liquidPoolState struct {
 	verts            []sdl.Vertex
 	idx              []int32
 	idxCols, idxRows int // the mesh idx was built for
+	gridCols         int // the grid the light textures were built for
+	gridRows         int
 	meshKey          liquidMeshKey
 	meshOK           bool
 
@@ -977,6 +1080,7 @@ func (p *liquidPoolState) release(renderer *sdl.Renderer) {
 	p.verts, p.idx = nil, nil
 	p.blend = nil
 	p.idxCols, p.idxRows = 0, 0
+	p.gridCols, p.gridRows = 0, 0
 	p.meshOK, p.dirty, p.calm = false, false, true
 	p.haveRipple = false
 }
@@ -1005,6 +1109,12 @@ func (p *liquidPoolState) dropAt(x, y, radiusPx float64, depth float32, now floa
 // rim, never quite round (liquidShape), its place, size and depth a little
 // different every time so no two look stamped from one mould.
 func (p *liquidPoolState) waveAt(x, y, radiusPx float64, depth float32, delay int, now float64) {
+	p.waveShaped(x, y, radiusPx, depth, delay, liquidRandomShape(), now)
+}
+
+// waveShaped is waveAt with the shape chosen by the caller (a directed one,
+// liquidDirectedShape).
+func (p *liquidPoolState) waveShaped(x, y, radiusPx float64, depth float32, delay int, shape liquidShape, now float64) {
 	s := p.sim
 	if s == nil || p.w <= 0 || p.h <= 0 || depth == 0 {
 		return
@@ -1017,14 +1127,16 @@ func (p *liquidPoolState) waveAt(x, y, radiusPx float64, depth float32, delay in
 	cell := float64(p.w) / float64(s.cols)
 	gx := float32(x / float64(p.w) * float64(s.cols))
 	gy := float32(y / float64(p.h) * float64(s.rows))
-	s.pressShaped(gx, gy, float32(radiusPx/cell), depth, liquidRandomShape(), delay)
+	s.pressShaped(gx, gy, float32(radiusPx/cell), depth, shape, delay)
 	p.disturb(now)
 }
 
 // sweepTo rolls a wave along the way the focus went, from (x0, y0) to (x1, y1):
 // a few wave drops along the path, each a little later, deeper and wider than
-// the one before, ending under the new focus. The water reads as a swell
-// pushed across rather than one drop and its ring.
+// the one before, ending under the new focus. Each lands on the move
+// (liquidDirectedShape), leaning and shoving the way the focus went, the last
+// the most, so a focus arriving from the right spills its wave on to the
+// left instead of dripping straight down.
 func (p *liquidPoolState) sweepTo(x0, y0, x1, y1, radiusPx float64, depth float32, now float64) {
 	weight := func(f float64) float64 { return 0.45 + 0.55*f }
 	total := 0.0
@@ -1037,7 +1149,8 @@ func (p *liquidPoolState) sweepTo(x0, y0, x1, y1, radiusPx float64, depth float3
 		y := y0 + (y1-y0)*f
 		delay := int(math.Round(f * liquidSweepSteps))
 		share := float32(weight(f) / total * liquidSweepDepth)
-		p.waveAt(x, y, radiusPx*(0.7+0.3*f), depth*share, delay, now)
+		shape := liquidDirectedShape(x1-x0, y1-y0, 0.5+0.5*f)
+		p.waveShaped(x, y, radiusPx*(0.7+0.3*f), depth*share, delay, shape, now)
 	}
 }
 
@@ -1187,7 +1300,7 @@ func (p *liquidPoolState) updateNav(now float64) {
 	r := liquidRippleRadius(side)
 	x = clampFloat(x+p.navDX*r, 0, float64(p.w-1))
 	y = clampFloat(y+p.navDY*r, 0, float64(p.h-1))
-	p.waveAt(x, y, r*0.8, p.tuning.drop*0.8, 0, now)
+	p.waveShaped(x, y, r*0.8, p.tuning.drop*0.8, 0, liquidDirectedShape(p.navDX, p.navDY, 0.8), now)
 	p.lastUser = now
 }
 
@@ -1473,7 +1586,7 @@ func (p *liquidPoolState) updateRain(now float64) {
 	y := rand.Float64() * float64(p.h)
 	// A small wave drop: a ring or two, wide enough for the grid to draw
 	// round, narrow enough to read as rain and not a swell.
-	r, depth := 30+rand.Float64()*16, float32(0.4+rand.Float64()*0.25)
+	r, depth := 22+rand.Float64()*12, float32(0.4+rand.Float64()*0.25)
 	if p.degraded {
 		// On the budget's coarse grid a wave drop's minimum size is wider
 		// than a raindrop should be: a plain dip reads as rain there.
@@ -1838,7 +1951,7 @@ func liquidBackdropLight(renderer *sdl.Renderer) {
 		renderer != p.renderer || p.glowTex == nil || p.darkTex == nil || p.sim == nil {
 		return
 	}
-	dst := liquidLitRect(p.w, p.h, p.idxCols, p.idxRows)
+	dst := liquidLitRect(p.w, p.h, p.gridCols, p.gridRows)
 	if dst.W <= 0 || dst.H <= 0 {
 		return
 	}
@@ -1858,7 +1971,7 @@ func liquidBackdropLight(renderer *sdl.Renderer) {
 // does not try again until the renderer or the grid changes.
 func (p *liquidPoolState) giveUpLit(what string, err error) {
 	p.dropLitTextures(true)
-	p.litW, p.litH = int32(p.idxCols+1), int32(p.idxRows+1)
+	p.litW, p.litH = int32(p.gridCols+1), int32(p.gridRows+1)
 	p.litFailed = true
 	p.lit = false
 	logWarn("liquidbg", "cannot %s the water's light (%v); refraction only", what, err)
@@ -1883,9 +1996,9 @@ func (p *liquidPoolState) dropLitTextures(mine bool) {
 // uploadLit hands the light and shadow built with the mesh to their
 // textures, (re)making them when the grid's size changed.
 func (p *liquidPoolState) uploadLit(renderer *sdl.Renderer) {
-	tw, th := int32(p.idxCols+1), int32(p.idxRows+1)
+	tw, th := int32(p.gridCols+1), int32(p.gridRows+1)
 	n := int(tw) * int(th) * 4
-	if renderer == nil || p.idxCols <= 0 || p.idxRows <= 0 || len(p.glowPix) != n || len(p.darkPix) != n {
+	if renderer == nil || p.gridCols <= 0 || p.gridRows <= 0 || len(p.glowPix) != n || len(p.darkPix) != n {
 		return
 	}
 	if p.glowTex == nil || p.darkTex == nil || p.litW != tw || p.litH != th {
@@ -1994,21 +2107,41 @@ func liquidSoftKnee(x, limit float64) float64 {
 	return limit * (1 - math.Exp(-x/limit))
 }
 
-// buildMesh lays the mesh's vertices for the current water — positions on the
-// grid's nodes, texture coordinates pushed along the slope — and the light and
-// shadow texels, one per node. It reports whether it rebuilt anything: nothing
-// is rebuilt when neither the water nor anything the mesh depends on changed
-// (the band repaint, a calm frame).
+// liquidMeshStep is how many grid cells one mesh cell spans each way: 2,
+// or 4 once the budget has stepped the water down, when the grid divides by
+// it (else 1). The refraction is a gentle bend that a vertex every 20 px
+// carries well, and SDL expanding the mesh is most of what the water costs
+// the handheld; the light and shadow, which make the ripples crisp, stay a
+// texel per node.
+func liquidMeshStep(cols, rows int, degraded bool) int {
+	for _, m := range []int{4, 2} {
+		if m == 4 && !degraded {
+			continue
+		}
+		if cols%m == 0 && rows%m == 0 && cols/m >= 2 && rows/m >= 2 {
+			return m
+		}
+	}
+	return 1
+}
+
+// buildMesh lays the mesh's vertices for the current water — on every
+// liquidMeshStep-th node, texture coordinates pushed along the slope — and
+// the light and shadow texels, one per grid node. It reports whether it
+// rebuilt anything: nothing is rebuilt when neither the water nor anything the
+// mesh depends on changed (the band repaint, a calm frame).
 func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) bool {
 	s := p.sim
 	if s == nil {
 		return false
 	}
 	cols, rows := s.cols, s.rows
+	m := liquidMeshStep(cols, rows, p.degraded)
+	mcols, mrows := cols/m, rows/m
 	light := glassLightTheme()
 	tint := glassMix(sdl.Color{R: 255, G: 255, B: 255, A: 255}, glassAccent(), 0.3)
 	key := liquidMeshKey{
-		w: w, h: h, cols: cols, rows: rows,
+		w: w, h: h, cols: cols, rows: rows, step: m,
 		u0: u0, v0: v0, u1: u1, v1: v1,
 		lx: float32(p.lightTX), ly: float32(p.lightTY),
 		tint: tint, light: light,
@@ -2018,25 +2151,33 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) bool {
 	}
 	start := time.Now()
 	nodes := (cols + 1) * (rows + 1)
-	if len(p.verts) != nodes {
-		p.verts = make([]sdl.Vertex, nodes)
+	if len(p.glowPix) != nodes*4 {
 		p.glowPix = make([]byte, nodes*4)
 		p.darkPix = make([]byte, nodes*4)
 	}
-	if p.idxCols != cols || p.idxRows != rows || len(p.idx) != cols*rows*6 {
-		p.idx = liquidGridIndices(cols, rows)
-		p.idxCols, p.idxRows = cols, rows
+	p.gridCols, p.gridRows = cols, rows
+	if mnodes := (mcols + 1) * (mrows + 1); len(p.verts) != mnodes {
+		p.verts = make([]sdl.Vertex, mnodes)
 	}
+	if p.idxCols != mcols || p.idxRows != mrows || len(p.idx) != mcols*mrows*6 {
+		p.idx = liquidGridIndices(mcols, mrows)
+		p.idxCols, p.idxRows = mcols, mrows
+	}
+	mstride := mcols + 1
 	height := p.surface()
 
 	lx, ly, lz, hx, hy, hz := liquidLight(p.lightTX, p.lightTY)
-	// A broad glint (a sixth power): the sixteenth power it once was lit a
-	// patch a node or two across, which flickered as the ripple moved.
-	h6 := hz * hz * hz
-	h6 *= h6
+	// A tenth-power glint: on the 10 px grid, its light a texture the GPU
+	// filters, it is small without flickering (the sixteenth power once lit
+	// a patch a node or two across of a 20 px grid, and flickered).
+	h2 := hz * hz
+	h10 := h2 * h2
+	h10 *= h10 * h2
 	diffuse, glint, shadow, shadowMax := liquidDiffuse, liquidGlint, liquidShadow, liquidShadowMax
+	crest, trough := liquidCrest, liquidTrough
 	if light {
 		diffuse, glint, shadow, shadowMax = liquidDiffuseLight, liquidGlintLight, liquidShadowLight, liquidShadowMaxLight
+		crest, trough = liquidCrestLight, liquidTroughLight
 	}
 	tr, tg, tb := float64(tint.R)/255, float64(tint.G)/255, float64(tint.B)/255
 	fw, fh := float32(w), float32(h)
@@ -2052,6 +2193,7 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) bool {
 		scale = float32(liquidSlopeRefCell * float64(cols) / float64(w))
 	}
 	edge, mid := scale, scale/2
+	curve := float64(scale * scale) // curvature per node², scaled like the slopes
 	seen := false
 	for j := 0; j <= rows; j++ {
 		fy := float32(j) / float32(rows)
@@ -2075,22 +2217,24 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) bool {
 			default:
 				sy = (height[k+stride] - height[k-stride]) * mid
 			}
-			u := u0 + (fx+sx*liquidRefraction)*du
-			v := v0 + (fy+sy*liquidRefraction)*dv
-			if u < umin {
-				u = umin
-			} else if u > umax {
-				u = umax
-			}
-			if v < vmin {
-				v = vmin
-			} else if v > vmax {
-				v = vmax
-			}
-			p.verts[k] = sdl.Vertex{
-				Position: sdl.FPoint{X: fx * fw, Y: fy * fh},
-				Color:    sdl.Color{R: 255, G: 255, B: 255, A: 255},
-				TexCoord: sdl.FPoint{X: u, Y: v},
+			if i%m == 0 && j%m == 0 {
+				u := u0 + (fx+sx*liquidRefraction)*du
+				v := v0 + (fy+sy*liquidRefraction)*dv
+				if u < umin {
+					u = umin
+				} else if u > umax {
+					u = umax
+				}
+				if v < vmin {
+					v = vmin
+				} else if v > vmax {
+					v = vmax
+				}
+				p.verts[(j/m)*mstride+i/m] = sdl.Vertex{
+					Position: sdl.FPoint{X: fx * fw, Y: fy * fh},
+					Color:    sdl.Color{R: 255, G: 255, B: 255, A: 255},
+					TexCoord: sdl.FPoint{X: u, Y: v},
+				}
 			}
 
 			// The light: slopes facing it are lit (and glint), slopes facing
@@ -2104,11 +2248,22 @@ func (p *liquidPoolState) buildMesh(w, h int32, u0, v0, u1, v1 float32) bool {
 			} else {
 				dark = -rel * shadow
 			}
-			if ndh := (nx*hx + ny*hy + hz) * inv; ndh > 0 && h6 < 1 {
-				n6 := ndh * ndh * ndh
-				n6 *= n6
-				if n6 > h6 {
-					glow += (n6 - h6) / (1 - h6) * glint
+			if ndh := (nx*hx + ny*hy + hz) * inv; ndh > 0 && h10 < 1 {
+				n2 := ndh * ndh
+				n10 := n2 * n2
+				n10 *= n10 * n2
+				if n10 > h10 {
+					glow += (n10 - h10) / (1 - h10) * glint
+				}
+			}
+			// Curvature: a crest catches a line of light, a trough a line of
+			// shadow — the rings. The border nodes, held flat, have none.
+			if i > 0 && i < cols && j > 0 && j < rows {
+				lap := float64(height[k-1]+height[k+1]+height[k-stride]+height[k+stride]-4*height[k]) * curve
+				if lap < 0 {
+					glow += -lap * crest
+				} else {
+					dark += liquidSoftKnee(lap*trough, shadowMax)
 				}
 			}
 			glow = liquidSoftKnee(glow, 255)
@@ -2289,7 +2444,7 @@ func liquidLevelRow() setRow {
 		Current: func(c *Config) int { return int(liquidLevelOf(c)) },
 		Choose: func(c *Config, value string) {
 			level := parseLiquidLevel(value)
-			setStoreString(c, liquidKey, liquidLevelValues[level])
+			liquidSetLevel(c, level)
 			if level != liquidLevelOff && liquidUnsupportedSeen {
 				setToast("Liquid background is not supported by this renderer")
 				return

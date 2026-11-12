@@ -26,6 +26,29 @@ import (
 // gamesLibraryEntryName is the pinned Emulators row that opens the library.
 const gamesLibraryEntryName = "Games Library"
 
+const (
+	builtInLibrarySystem = "Built-in games"
+	jukaLandLibraryPath  = "builtin:jukaland"
+)
+
+func isJukaLandLibraryGame(game libraryGame) bool {
+	return game.System == builtInLibrarySystem && game.Path == jukaLandLibraryPath
+}
+
+// JukaLand ships with JukaHub, so the Games library can list it even on a card
+// with no ROMs. The scene check is captured before the background scan starts.
+func libraryAddJukaLand(lib *gameLibraryReport, sceneAvailable bool) {
+	if lib == nil || !sceneAvailable {
+		return
+	}
+	lib.Systems = append(lib.Systems, librarySystem{
+		Name:  builtInLibrarySystem,
+		Games: []libraryGame{{Path: jukaLandLibraryPath, System: builtInLibrarySystem, Title: "JukaLand"}},
+	})
+	lib.Total++
+	sortLibrarySystems(lib.Systems)
+}
+
 // libraryGame is one playable file.
 type libraryGame struct {
 	Path   string
@@ -80,6 +103,7 @@ type gameLibraryReport struct {
 // consoleOrder keeps the list in the order people usually look for consoles
 // rather than alphabetical, which would put "Dreamcast" first.
 var consoleOrder = map[string]int{
+	builtInLibrarySystem:   -1,
 	"NES":                  0,
 	"SNES":                 1,
 	"Game Boy":             2,
@@ -196,6 +220,19 @@ func countCoveredGames(games []libraryGame) int {
 		}
 	}
 	return n
+}
+
+// The built-in JukaLand card uses a drawn placeholder, not downloadable box
+// art, so cover progress is measured only across games with cover files.
+func libraryCoverTotals(lib gameLibraryReport) (withArt, total int) {
+	for _, system := range lib.Systems {
+		if system.Name == builtInLibrarySystem {
+			continue
+		}
+		withArt += system.WithArt
+		total += len(system.Games)
+	}
+	return
 }
 
 // coverPercent is the share of a list that has box art, rounded to the nearest

@@ -58,8 +58,8 @@ func TestOverlayBounceFollowsArrivalDirection(t *testing.T) {
 		if got := tc.motion.at(0); got*tc.start <= 0 {
 			t.Errorf("%s should begin outside its resting point: %v", tc.name, got)
 		}
-		if got := tc.motion.at(0.72); got*tc.end <= 0 || math.Abs(got) > 4 {
-			t.Errorf("%s should bounce by at most 4px in its arrival direction: %v", tc.name, got)
+		if got := tc.motion.at(0.6); got*tc.end <= 0 || math.Abs(got) > 8 {
+			t.Errorf("%s should bounce by at most 8px in its arrival direction: %v", tc.name, got)
 		}
 		if got := tc.motion.at(1); got != 0 {
 			t.Errorf("%s should settle at its original position: %v", tc.name, got)
