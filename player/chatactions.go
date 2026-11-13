@@ -94,12 +94,14 @@ func ellipsizeRunes(text string, max int) string {
 // --- Selection -----------------------------------------------------------
 
 // clearChatSelection drops the highlight and closes the action bar. The pad
-// leaves the tray of waiting files too: it is back on the composer.
+// leaves the tray of waiting files and the paperclip too: it is back on the
+// composer's text field.
 func clearChatSelection() {
 	chatSelected = -1
 	chatSelectedID = ""
 	chatSelectionBar = chatSelection{}
 	chatTrayFocus = -1
+	chatAttachFocus = false
 }
 
 // selectChatMessage highlights one message of the tab on screen and opens its

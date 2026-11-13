@@ -237,7 +237,10 @@ func ledMicWanted() bool {
 		currentLEDLoopSettings().policy == ledPolicyMic &&
 		!backgroundPaused() &&
 		!powerSleepActive() &&
-		micVoiceUsers.Load() == 0
+		micVoiceUsers.Load() == 0 &&
+		// "Hey Juka" holds the microphone and hands the lights its level
+		// (wakeword.go): one capture on the codec, not two.
+		!hjHoldsMic()
 }
 
 // ledMicTick opens, reads or closes the lights' microphone. Main loop, once a

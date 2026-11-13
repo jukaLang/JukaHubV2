@@ -779,7 +779,7 @@ func brwDrawCardButton(r *sdl.Renderer, config *Config, font *ttf.Font, rect sdl
 		ink = contrastText(accent)
 		if focused {
 			ring := glassLifted(rect)
-			strokeRoundedRect(r, ring.X, ring.Y, ring.W, ring.H, radius+glassFocusLift, glassFocusRingWidth, glassA(235))
+			strokeRoundedRectAt(r, ring, homeFocusGlide.apply(ring), radius+glassFocusLift, glassFocusRingWidth, glassA(235))
 		}
 	} else {
 		drawGlassSurface(r, rect, radius, glassState{Focused: focused})

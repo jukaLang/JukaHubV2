@@ -351,6 +351,11 @@ func homeActivate(config *Config) {
 		homeShowPairingQR()
 		return
 	}
+	// The Switch Home's picture, recent games and round buttons
+	// (themeswitch.go) choose their own sounds.
+	if homeSwitchActivate(config, id) {
+		return
+	}
 	PlayActivateSound()
 	logDebug("home", "activate card %s", id)
 	homePressedID = id
@@ -360,6 +365,15 @@ func homeActivate(config *Config) {
 	// the Edit pill (home_edit.go). Built-in cards go on as below.
 	if homeActivateDynamic(config, id) {
 		return
+	}
+	// PS5 Style's welcome hub: a card that stands for a Home card opens it the
+	// usual way below; the others open their screen there (themeps5hub.go).
+	card, done := homeHubActivate(config, id)
+	if done {
+		return
+	}
+	if card != "" {
+		id = card
 	}
 
 	// The PS5 launcher is the one header tile that is also a launcher: A plays
@@ -371,6 +385,11 @@ func homeActivate(config *Config) {
 	}
 	if id == HomeFocusPS4 {
 		ps4TileActivate()
+		return
+	}
+	// X1: Xbox Remote Play through the best client here (xremote.go).
+	if id == HomeFocusX1 {
+		x1TileActivate()
 		return
 	}
 	// The update chip is the other one: A downloads and installs the release
@@ -532,6 +551,11 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		// A held Enter on the pairing code must not open the full-screen
 		// card again with every repeat (each open also drives the backlight).
 		if e.Repeat != 0 && homeLayout.Focus.Current() == HomeFocusQR {
+			break
+		}
+		// Nor may it flip a quick tile's radio back and forth
+		// (home_quicktiles.go).
+		if e.Repeat != 0 && hqIsQuick(homeTileWidgetName(string(homeLayout.Focus.Current()))) {
 			break
 		}
 		homeActivate(config)
@@ -703,6 +727,16 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 		ps5TileActivate()
 		return true
 	}
+	if x1TileRect.W > 0 && pointInRect(mx, my, x1TileRect) {
+		homeLayout.Focus.Set(HomeFocusX1)
+		homeLayout.Focus.Remember()
+		x1TileActivate()
+		return true
+	}
+	// PS5 Style's Media tab beside Games opens Media (themeps5hub.go).
+	if homeHubTabClick(mx, my, config) {
+		return true
+	}
 	// A carousel card: a side card turns the row to it, the middle one opens
 	// (home_carousel.go). The pointer's hover never moves the row.
 	if homeLayout.dynClick(mx, my, config) {
@@ -860,7 +894,8 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	// Reduced motion and focusMotion none both drop the eased lift; the
 	// colour/press feedback stays either way (motion.go).
 	homeLayout.Motion = uiMotionEnabled(config) && motionFocusEnabled(config)
-	homeLayout.Glide = (config == nil || !effectiveReducedMotion(config)) && motionFocusEnabled(config)
+	// The ring's bounce between controls has its own setting, Focus bounce,
+	// and runs on every screen (homefocusglide.go).
 	// The layout's backdrop draws the wallpaper of the config being rendered,
 	// the same one ensureBackgroundTexture above was refreshed for.
 	homeBackdropConfig = config

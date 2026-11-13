@@ -199,7 +199,10 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "General settings", where: "Settings", icon: "settings", keys: "general name username language sleep timeout power", scene: "SettingsGeneral"},
 		{title: "Date & time", where: "Settings", icon: "clock", keys: "date time clock 12 hour 24 hour am pm time zone timezone ntp network time sync auto sync automatic set time adjust time change time manual date format calendar", open: dateTimeSettingsOpen},
 		{title: "Appearance", where: "Settings", icon: "palette", keys: "appearance look design colors colours accent dark light mode wallpaper background motion animations", scene: "SettingsAppearance"},
-		{title: "Theme presets", where: "Settings", icon: "theme", keys: "theme themes presets skins colors colours dark mode light mode", scene: "ThemePresets"},
+		{title: "Theme presets", where: "Settings", icon: "theme", keys: "theme themes presets skins colors colours dark mode light mode total conversion consoles console retro playstation ps1 ps2 psp nintendo snes n64 gamecube sega mega drive dreamcast", scene: "ThemePresets"},
+		// The Settings row that used to carry this word is gone (setmodel.go):
+		// the packs are the Themes gallery's Experience tab now.
+		{title: "Experience packs", where: "Settings", icon: "sparkles", keys: "experience pack packs xpack setup bundle theme home layout sounds start screen undo", open: xpackOpenGallery},
 		{title: "Plugins", where: "Settings", icon: "plugin", keys: "plugins extensions addons add ons mods", scene: "Plugins"},
 		{title: "Update and repair", where: "Settings", icon: "update", keys: "update upgrade patch repair version release reinstall", scene: "Patch"},
 		{title: "About", where: "Settings", icon: "info", keys: "about version credits license build", scene: "About"},
@@ -263,6 +266,7 @@ func homeSearchStoreEntries() []homeSearchEntry {
 	entries := []homeSearchEntry{
 		{title: windowsAppsEntryName, where: "Games", icon: "apps", keys: "windows apps wine exe programs pc software box64 desktop", open: func(*Config) { openWindowsAppsPanel(false) }},
 		{title: apkStoreEntryName, where: "Games", icon: apkStoreGlyph, keys: "apk apks android android games play store google play sideload install apk minecraft aptoide f droid fdroid", open: apkStoreOpen},
+		{title: minecraftEntryName, where: "Games", icon: minecraftGlyph, keys: "minecraft mine craft java edition bedrock pocket edition mcpe classicube luanti minetest mineclonia voxel blocks", open: minecraftOpen},
 	}
 	if IsWindows() {
 		return entries

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -98,6 +99,9 @@ type downloadItem struct {
 	// still looked up from the config on the worker, as every helper run in
 	// the app does.)
 	ytExtra []string
+	// height is a video row's picture ceiling (the playback quality), read
+	// when it was queued for the same reason; 0 for a track.
+	height int
 }
 
 // displayTitle is what a row shows before metadata arrives.
@@ -145,6 +149,9 @@ type downloadJob struct {
 	// Extra is the row's yt-dlp extra arguments as read when it was queued;
 	// nil reads them from the config instead (a job made without a row).
 	Extra []string
+	// Height is a video's picture ceiling as read when it was queued; 0
+	// reads it from the config instead.
+	Height int
 }
 
 // downloadResult is what a finished job hands back.
@@ -373,9 +380,10 @@ func downloadEnqueueKind(raw string, kind downloadKind) (downloadItem, error) {
 	// the config (every caller is a press on the render thread); the worker
 	// only ever uses these copies. The arguments are kept as a non-nil slice,
 	// so "no extra arguments" is not mistaken for "not read yet".
-	subLang := ""
+	subLang, height := "", 0
 	if kind == downloadKindVideo {
 		subLang, _ = subtitleLanguage(appConfig)
+		height = effectivePlaybackMaxHeight(appConfig, clean)
 	}
 	extra := append([]string{}, ytDlpExtraArgsSlice(appConfig)...)
 	downloads.mu.Lock()
@@ -385,7 +393,7 @@ func downloadEnqueueKind(raw string, kind downloadKind) (downloadItem, error) {
 	}
 	downloads.nextID++
 	it := &downloadItem{ID: downloads.nextID, URL: clean, Kind: kind, Status: downloadQueued, added: time.Now(),
-		subLang: subLang, ytExtra: extra}
+		subLang: subLang, ytExtra: extra, height: height}
 	downloads.items = append(downloads.items, it)
 	downloads.trimLocked()
 	snapshot := *it
@@ -765,11 +773,12 @@ func downloadsWorker() {
 		item.Err = ""
 		item.Speed = 0
 		job := downloadJob{
-			ID:    item.ID,
-			URL:   item.URL,
-			Kind:  item.Kind,
-			Dir:   downloadsDirForKind(item.Kind),
-			Extra: item.ytExtra,
+			ID:     item.ID,
+			URL:    item.URL,
+			Kind:   item.Kind,
+			Dir:    downloadsDirForKind(item.Kind),
+			Extra:  item.ytExtra,
+			Height: item.height,
 		}
 		downloads.mu.Unlock()
 
@@ -987,24 +996,63 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 	// The watchdog cancels a transfer that stops producing output. yt-dlp can
 	// wait on a dead socket forever, and the row used to sit at "Downloading"
 	// with no progress until the app was restarted.
-	ctx, cancel := context.WithCancel(ctx)
+	//
+	// runCtx is the run's own context: the watchdog and the end of the run
+	// cancel it. Whether the queue stopped the job (Pause, Remove) is asked of
+	// ctx, the worker's. It used to be one shadowed ctx, cancelled on every
+	// way out before it was asked — so every finished download read as
+	// paused, went back into the queue and ran again, and never reached
+	// "Saved".
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var lastOutput atomic.Int64
 	lastOutput.Store(time.Now().UnixNano())
 	touch := func() { lastOutput.Store(time.Now().UnixNano()) }
 	var stalled atomic.Bool
+	// spoke is set by the first line yt-dlp prints. --print keeps it quiet
+	// until the title, so unpacking the one-file helper and the extraction
+	// (slower still with a JavaScript runtime) get the download-to-play's
+	// longer first-line allowance (ytdlQuietAfter).
+	var spoke atomic.Bool
 	watchdogDone := make(chan struct{})
 	go func() {
 		defer close(watchdogDone)
 		ticker := time.NewTicker(downloadStallCheck)
 		defer ticker.Stop()
+		prev := time.Now()
+		staged, stagedAt := downloadsStagingActivity(partDir)
 		for {
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				return
 			case <-ticker.C:
+				now := time.Now()
+				gap := now.Sub(prev)
+				prev = now
+				// --print makes yt-dlp quiet, so while ffmpeg joins the picture
+				// and the sound (or converts the track) it prints nothing for as
+				// long as that takes — minutes for a long video on the card.
+				// The staging folder growing is output too: those joins were
+				// killed as "no data for 60 s" at the very end.
+				// A join's last pass (moving the index to the front) rewrites
+				// the file in place at the same size, so a newer write counts
+				// as well.
+				if size, at := downloadsStagingActivity(partDir); size != staged || at != stagedAt {
+					staged, stagedAt = size, at
+					touch()
+				}
+				// A gap far longer than a tick means this app was paused (a
+				// game took the handheld) and nobody read the helper meanwhile:
+				// the silence is ours, not the source's.
+				if gap > ytdlPausedGap {
+					touch()
+				}
+				limit := downloadStallTimeout
+				if !spoke.Load() {
+					limit = ytdlQuietAfter
+				}
 				last := time.Unix(0, lastOutput.Load())
-				if time.Since(last) >= downloadStallTimeout {
+				if now.Sub(last) >= limit {
 					stalled.Store(true)
 					cancel()
 					return
@@ -1013,17 +1061,28 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 		}
 	}()
 
-	cmd := exec.CommandContext(ctx, ytDlp, args...)
+	// Options may go in any order; the page stays last.
+	args = append(downloadToolArgs(ytDlp, appConfig), args...)
+	cmd := exec.CommandContext(runCtx, ytDlp, args...)
 	cmd.Env = helperToolEnv(ytDlp)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		<-watchdogDone
-		return downloadResult{}, err
-	}
+	// The one-file yt-dlp runs the real one as its child. Killing only the
+	// first (what CommandContext does) left the child downloading — and
+	// holding stdout open, so the reader below never reached the end and the
+	// row sat at "Downloading" for good after a pause or a stall. The run
+	// leads its own process group and a cancel stops all of it, as the
+	// download-to-play attempts do (ytdownload.go ytdlRunAttempt).
+	processGroupConfigure(cmd)
+	cmd.Cancel = func() error { return screenChildKill(cmd) }
+	cmd.WaitDelay = 3 * time.Second
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
 	var stderr textTail
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
+		_ = pw.Close()
+		_ = pr.Close()
+		cancel()
+		<-watchdogDone
 		return downloadResult{}, err
 	}
 
@@ -1031,11 +1090,15 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 	scanned := make(chan struct{})
 	go func() {
 		defer close(scanned)
-		sc := bufio.NewScanner(stdout)
+		// Read to the end whatever happens, so the helper never blocks on a
+		// pipe nobody empties (a line past the scanner's limit stops Scan).
+		defer func() { _, _ = io.Copy(io.Discard, pr) }()
+		sc := bufio.NewScanner(pr)
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
 			line := sc.Text()
 			touch()
+			spoke.Store(true)
 			if strings.HasPrefix(strings.TrimSpace(line), "[") {
 				if p, ok := parseDownloadLine(line); ok {
 					onProgress(p)
@@ -1058,22 +1121,22 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 			}
 		}
 	}()
-	<-scanned
 	waitErr := cmd.Wait()
+	_ = pw.Close()
+	<-scanned
 	cancel()
 	<-watchdogDone
 
-	if stalled.Load() {
+	// A stall that raced a clean exit lost: the file is whole.
+	if stalled.Load() && waitErr != nil {
+		logWarn("downloads", "%s stopped: no output for %d s", sanitizeLogURL(job.URL), int(downloadStallTimeout.Seconds()))
 		return res, fmt.Errorf("no data for %d s — the source stopped responding; the partial file is kept for Resume", int(downloadStallTimeout.Seconds()))
 	}
 	if ctx.Err() != nil {
 		return res, ctx.Err()
 	}
 	if waitErr != nil {
-		if line := stderr.lastLine(); line != "" {
-			return res, errors.New(line)
-		}
-		return res, waitErr
+		return res, downloadHelperFailure(job, stderr.buf.String(), waitErr)
 	}
 
 	path, err := adoptDownloadedFile(partDir, job.Dir, res.Title)
@@ -1088,6 +1151,51 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 	downloadsCleanStaging(partDir, nil)
 	res.Path = path
 	return res, nil
+}
+
+// downloadsStagingActivity is the staging folder's total size and its newest
+// write (Unix nanoseconds): either changing means a transfer, a join or a
+// conversion is still at work there (runYTDLPDownload's watchdog).
+func downloadsStagingActivity(root string) (size, newest int64) {
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			size += info.Size()
+			if t := info.ModTime().UnixNano(); t > newest {
+				newest = t
+			}
+		}
+		return nil
+	})
+	return size, newest
+}
+
+// downloadHelperFailure is the error a failed yt-dlp run leaves on its row.
+// The whole stderr goes to the log (the row used to fail with nothing logged
+// at all), and a YouTube failure that a newer yt-dlp is the usual fix for —
+// a 403, no format, the bot check — starts the same update a failed play or
+// search does (ytdlp_update.go), and the row says so.
+func downloadHelperFailure(job downloadJob, stderr string, waitErr error) error {
+	text := strings.TrimSpace(ytdlErrorText(stderr))
+	logWarn("downloads", "%s %s failed: %v: %s", strings.ToLower(job.Kind.label()), sanitizeLogURL(job.URL), waitErr,
+		strings.ReplaceAll(text, "\n", " | "))
+	if youtubeVideoID(job.URL) != "" && text != "" {
+		kind := classifyYouTubeFailure(text)
+		if kind.wantsHelperUpdate() {
+			update := requestYtDlpUpdate(appConfig, ytdlpTriggerFailure, nil)
+			return errors.New(youTubeFailureMessage(kind, text, update))
+		}
+	}
+	// The ERROR lines when there are any (the row shows the first one that is
+	// not a WARNING: downloadFailureLine), else the last few lines. The bare
+	// last line used to be the "no JavaScript runtime" warning as often as
+	// not.
+	if text != "" {
+		return errors.New(text)
+	}
+	return waitErr
 }
 
 // downloadArgs is the yt-dlp command line for one saved track. It is a pure
@@ -1113,11 +1221,11 @@ func downloadArgs(partDir string, job downloadJob, config *Config) []string {
 		"--no-simulate",
 		"--print", "before_dl:%(title)s",
 		"--print", "before_dl:%(uploader)s",
-		"--user-agent", downloadUserAgent,
 		"--extractor-args", ytDlpQueueClients,
 		"-f", "bestaudio/best",
 		"--extract-audio", "--audio-format", "m4a", "--audio-quality", "0",
 	}
+	args = append(args, downloadUserAgentArgs(job.URL)...)
 	args = append(args, downloadJobExtra(job, config)...)
 	return append(args, job.URL)
 }
@@ -1129,6 +1237,41 @@ func downloadJobExtra(job downloadJob, config *Config) []string {
 		return job.Extra
 	}
 	return ytDlpExtraArgsSlice(config)
+}
+
+// downloadUserAgentArgs names a desktop browser for another site, whose CDN
+// may refuse yt-dlp's own name. Never for YouTube: each of its clients
+// announces the identity its media URLs are issued for, and overriding it is
+// one more way to be refused (HTTP 403) — the download-to-play stopped doing
+// it in the 11-11 rewrite (ytdlArgs), the queue had kept it.
+func downloadUserAgentArgs(page string) []string {
+	if youtubeVideoID(page) != "" {
+		return nil
+	}
+	return []string{"--user-agent", downloadUserAgent}
+}
+
+// downloadToolArgs are the flags that depend on what is installed beside
+// yt-dlp, added to either kind's command line when the run starts: the
+// QuickJS runtime YouTube's challenges and full format list need
+// (ytDlpJSRuntimeArgs), and JukaHub's own ffmpeg for the join or the m4a
+// conversion — yt-dlp only looks on PATH, where a firmware copy may be found
+// first or nothing at all.
+func downloadToolArgs(ytDlp string, config *Config) []string {
+	args := ytDlpJSRuntimeArgs(ytDlp)
+	if ffmpeg := getToolPath("ffmpeg", config); filepath.IsAbs(ffmpeg) && toolPathRunnable(ffmpeg) {
+		args = append(args, "--ffmpeg-location", ffmpeg)
+	}
+	return args
+}
+
+// downloadJobHeight is a video job's picture ceiling: the copy its row took
+// when it was queued, or the config's when there is none.
+func downloadJobHeight(job downloadJob, config *Config) int {
+	if job.Height > 0 {
+		return job.Height
+	}
+	return effectivePlaybackMaxHeight(config, job.URL)
 }
 
 // videoDownloadArgs is the yt-dlp command line for one saved video. It asks
@@ -1149,13 +1292,18 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 		"--no-simulate",
 		"--print", "before_dl:%(title)s",
 		"--print", "before_dl:%(uploader)s",
-		"--user-agent", downloadUserAgent,
 		"--extractor-args", ytDlpQueueClients,
 		// Video and audio arrive as separate streams on YouTube, so the two
-		// halves are merged rather than downloaded as video-only.
-		"-f", "bv*+ba/b",
+		// halves are merged rather than downloaded as video-only. H.264 and
+		// AAC at the playback ceiling first, as the download-to-play does
+		// (ytdlJoinedFormat): plain "bv*+ba/b" took the biggest picture there
+		// was — often a 4K AV1 stream that is slow to fetch and join on the
+		// handheld and that its player cannot decode at all. Anything else
+		// still beats no file.
+		"-f", ytdlJoinedFormat(downloadJobHeight(job, config), "") + "/bv*+ba/b",
 		"--merge-output-format", "mp4",
 	}
+	args = append(args, downloadUserAgentArgs(job.URL)...)
 	args = append(args, downloadJobExtra(job, config)...)
 	return append(args, job.URL)
 }
@@ -1236,7 +1384,10 @@ func adoptDownloadedFile(partDir, dir, title string) (string, error) {
 	var best string
 	var bestSize int64 = -1
 	for _, e := range entries {
-		if e.IsDir() || strings.HasSuffix(strings.ToLower(e.Name()), ".part") {
+		// yt-dlp's own bookkeeping (".ytdl" fragment state, the "x.temp.mp4"
+		// of a join cut short) is never the download.
+		if lower := strings.ToLower(e.Name()); e.IsDir() || strings.HasSuffix(lower, ".part") ||
+			strings.HasSuffix(lower, ".ytdl") || strings.Contains(lower, ".temp.") {
 			continue
 		}
 		info, err := e.Info()

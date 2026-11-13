@@ -41,10 +41,10 @@ package main
 // game starts as it would have. A RetroArch that cannot load the filter only
 // logs "[DSP]: Failed to initialize DSP filter" and plays normally.
 //
-// Standalone emulators keep their own sound. The library's LADSPA side is
-// there for an ALSA route (pcm.!default through the "ladspa" PCM, set per
-// child with ALSA_CONFIG_PATH), which waits for a device check of the
-// firmware's alsa-lib (player/MODERNIZATION.md).
+// On the handheld the library's LADSPA side carries everything else — the
+// standalone emulators, ports, apps, and RetroArch builds that cannot load a
+// filter — through ALSA (spatial_alsa.go). Where that route is proven, this
+// file only arms the filter for a RetroArch whose binary shows it can load it.
 
 import (
 	"bytes"
@@ -490,11 +490,42 @@ func spatialOwnFilterCached(path string) string {
 
 // ── Availability (the Audio panel's games row) ────────────────────────────
 
-// spatialGamesAvailability says whether RetroArch games can be spatialised
-// here, and if not, why, in one plain sentence for the Audio panel's row
-// (spatial_ui.go caches the answer for two seconds). Cheap: a few file
-// checks; the RetroArch probe runs in the background the first time.
+// spatialGamesRetroArchOnly starts the reason of an answer that is "yes, but
+// only RetroArch": the system route (spatial_alsa.go) said no on a device that
+// uses it. The Audio panel's row then reads "On · RetroArch only".
+const spatialGamesRetroArchOnly = "RetroArch games only: "
+
+// spatialGamesAvailability says whether games can be spatialised here, and if
+// not, why, in one plain sentence for the Audio panel's row (spatial_ui.go
+// caches the answer for two seconds). On the handheld either route will do:
+// the system route carries every game and app, RetroArch's filter its games.
 func spatialGamesAvailability() (ok bool, reason string) {
+	raOK, raWhy := spatialRetroArchAvailability()
+	if !spatialSystemRouteApplies() {
+		return raOK, raWhy
+	}
+	sysOK, sysWhy, known := spatialSystemRouteState()
+	switch {
+	case sysOK:
+		return true, ""
+	case !known:
+		// The probe starts with the switch and a mode (spatialBind); the row
+		// may be looked at before both are on.
+		spatialSystemRouteKick()
+		if raOK {
+			return true, ""
+		}
+		return false, "Checking whether games can play through the spatial plugin…"
+	case raOK:
+		return true, spatialGamesRetroArchOnly + sysWhy
+	}
+	return false, sysWhy
+}
+
+// spatialRetroArchAvailability says whether RetroArch games can be
+// spatialised through RetroArch's own filter, and if not, why. Cheap: a few
+// file checks; the RetroArch probe runs in the background the first time.
+func spatialRetroArchAvailability() (ok bool, reason string) {
 	switch runtime.GOOS {
 	case "linux", "windows":
 	default:
@@ -620,10 +651,19 @@ func spatialFileDigest(path string, limit int64) ([]byte, int64, error) {
 	return h.Sum(nil), n, nil
 }
 
-// spatialStage puts the library and a fresh preset into the data folder and
-// returns the preset's path. The library is copied only when the copy there
-// differs (an update shipped a new one).
-func spatialStage(plugin string, mode, room int, strength float64) (string, error) {
+// spatialStageMu serialises spatialStagePlugin.
+var spatialStageMu sync.Mutex
+
+// spatialStagePlugin copies the library into <data>/spatial-audio/ when the
+// copy there differs (an update shipped a new one) and returns that folder.
+// RetroArch's preset and ALSA's "ladspa" PCM (spatial_alsa.go) both load it
+// from there: a folder holding nothing but this library, because the ladspa
+// PCM opens every .so in the folder it is given.
+func spatialStagePlugin(plugin string) (string, error) {
+	// The probe's goroutine and a launch may stage at once; two writers of
+	// the same temporary file could leave a torn library.
+	spatialStageMu.Lock()
+	defer spatialStageMu.Unlock()
 	base, err := spatialDataDir()
 	if err != nil {
 		return "", fmt.Errorf("no data folder: %w", err)
@@ -648,6 +688,17 @@ func spatialStage(plugin string, mode, room int, strength float64) (string, erro
 		if err := spatialWriteFile(dst, raw); err != nil {
 			return "", fmt.Errorf("copy the plugin: %w", err)
 		}
+	}
+	return dir, nil
+}
+
+// spatialStage puts the library and a fresh preset into the data folder and
+// returns the preset's path. The library is copied only when the copy there
+// differs (an update shipped a new one).
+func spatialStage(plugin string, mode, room int, strength float64) (string, error) {
+	dir, err := spatialStagePlugin(plugin)
+	if err != nil {
+		return "", err
 	}
 	preset := filepath.Join(dir, spatialPresetName)
 	if err := spatialWriteFile(preset, []byte(spatialPresetText(mode, room, strength))); err != nil {
@@ -714,8 +765,20 @@ func spatialClearLeftoverFor(launcher string) {
 
 // prepareSpatialAudio is the launch-time entry point, beside prepareRecordings
 // (game_library.go). It reports whether a RetroArch config got the preset for
-// this launch.
+// this launch, and remembers that for the child's environment
+// (spatialChildEnv), which must not add the system route on top.
 func prepareSpatialAudio(launcher string) bool {
+	spatialDSPArm("")
+	if !prepareSpatialAudioDSP(launcher) {
+		return false
+	}
+	spatialDSPArm(launcher)
+	return true
+}
+
+// prepareSpatialAudioDSP sets RetroArch's filter for this launch when it is
+// the route to use (prepareSpatialAudio).
+func prepareSpatialAudioDSP(launcher string) bool {
 	// The settings first: they are a few map lookups, the launcher check reads
 	// the script.
 	s := spatialSettingsFor(appConfig)
@@ -740,16 +803,32 @@ func prepareSpatialAudio(launcher string) bool {
 		spatialClearLeftover(targets)
 		return false
 	}
+	// Where the system route (spatial_alsa.go) works, it carries every game,
+	// RetroArch included, so the filter is only used by a RetroArch proven to
+	// load it: an in-process filter beats an extra ALSA stage, and the two
+	// together would spatialise the game twice (spatialChildEnv skips a child
+	// whose launch armed the filter).
+	systemRoute := spatialSystemRouteReady()
+	confirmed := false
 	if bin := spatialRetroArchBinaryFor(launcher, targets[0]); bin != "" {
 		// Only a confident no skips: an unread binary, or one without either
 		// string, proves nothing.
 		if entry, known := spatialFilterSupport(bin, false); known {
 			if no, why := spatialProbeSaysNo(entry); no {
-				spatialLogOnce("unsupported:"+bin, "spatial audio in games skipped for %s: %s", bin, why)
+				if !systemRoute {
+					spatialLogOnce("unsupported:"+bin, "spatial audio in games skipped for %s: %s", bin, why)
+				}
 				spatialClearLeftover(targets)
 				return false
 			}
+			confirmed = entry.Err == "" && entry.Setting && entry.Dylib
 		}
+	}
+	// A 32-bit RetroArch is one the system route leaves alone
+	// (spatialLaunchLooks32): it keeps the filter.
+	if systemRoute && !confirmed && !spatialLaunchLooks32(&exec.Cmd{Path: launcher, Dir: filepath.Dir(launcher)}) {
+		spatialClearLeftover(targets)
+		return false
 	}
 	// The configs that take the preset: a filter the user chose in RetroArch
 	// is theirs, never replaced. Nothing is staged when none will use it.
@@ -760,7 +839,7 @@ func prepareSpatialAudio(launcher string) bool {
 			continue
 		}
 		if own := spatialOwnFilterIn(string(raw)); own != "" {
-			spatialLogOnce("own-filter:"+path, "RetroArch already uses the audio filter %s (%s); spatial audio leaves it", own, path)
+			spatialLogOnce("own-filter:"+path, "RetroArch already uses the audio filter %s (%s); JukaHub does not replace it", own, path)
 			continue
 		}
 		takers = append(takers, path)

@@ -33,14 +33,17 @@ package main
 // game's exit wakes the monitor, which takes the headset back. Windows never
 // leaves the speaker route: there SDL's default device already follows the
 // system's default output.
+//
+// audioroute_bluealsa.go gets BlueALSA and the headset's A2DP stream ready
+// first (the stock TrimUI firmware starts neither), hands the headset to games
+// through ALSA's "default", and keeps what the diagnostics block shows.
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -67,7 +70,8 @@ const (
 	outQuickRetries = 5
 	// outLostHold is how long a headset whose stream died is left alone.
 	outLostHold = 30 * time.Second
-	// outBluealsaRestartAfter spaces attempts to start a missing bluealsa.
+	// outBluealsaRestartAfter spaces attempts to start a missing bluealsa
+	// (audioroute_bluealsa.go).
 	outBluealsaRestartAfter = time.Minute
 )
 
@@ -417,6 +421,7 @@ func outMixLoop(stop chan struct{}) {
 			if still {
 				logInfo("audio", "headset output stopped; back to the speaker")
 				outToSpeaker()
+				audioDiagRoute("speaker", "headset stream stopped")
 			}
 			outRouteMu.Unlock()
 			return
@@ -628,6 +633,11 @@ func outSetRoute(pcm string, gain float64) bool {
 	if pcm == "" {
 		logInfo("audio", "output route: speaker")
 		outToSpeaker()
+		reason := "headset gone"
+		if gameScreenSuspended() {
+			reason = "handed to the game"
+		}
+		audioDiagRoute("speaker", reason)
 		return true
 	}
 	if held {
@@ -650,6 +660,12 @@ func outSetRoute(pcm string, gain float64) bool {
 		sdl.CloseAudioDevice(id)
 		return false
 	}
+	audioDiagSet(func() {
+		audioDiag.tried, audioDiag.openErr = pcm, ""
+		if err != nil {
+			audioDiag.openErr = err.Error()
+		}
+	})
 	if err != nil {
 		if pcm != outAudio.failedPCM {
 			logWarn("audio", "headset output %q would not open: %v", pcm, err)
@@ -662,12 +678,18 @@ func outSetRoute(pcm string, gain float64) bool {
 		if outAudio.failedTries < outQuickRetries {
 			outAudio.failedTries++
 			time.AfterFunc(outRetryAfter, audioRouteKick)
+		} else if outAudio.failedTries == outQuickRetries {
+			// The quick retries are spent: the whole picture goes to the log
+			// once (it takes outAudio.mu, hence its own goroutine).
+			outAudio.failedTries++
+			go btLogDiagnostics("the headset's audio would not open")
 		}
 		return false
 	}
 	outToHeadsetLocked(pcm, id, got.Freq)
 	outAudio.failedPCM, outAudio.failedTries = "", 0
 	logInfo("audio", "output route: headset (%s, %d Hz)", pcm, outAudio.mixRate)
+	audioDiagRoute(pcm, fmt.Sprintf("headset opened at %d Hz", outAudio.mixRate))
 	return true
 }
 
@@ -676,45 +698,6 @@ func outSetRoute(pcm string, gain float64) bool {
 // bluealsaPCM is the ALSA PCM of a headset's A2DP stream.
 func bluealsaPCM(addr string) string {
 	return "bluealsa:SRV=org.bluealsa,DEV=" + addr + ",PROFILE=a2dp"
-}
-
-// outBluealsa remembers the last attempt to start bluealsa.
-var outBluealsa struct {
-	mu      sync.Mutex
-	started time.Time
-}
-
-// bluealsaReady reports whether the BlueALSA daemon runs. When it does not and
-// the firmware has it, it is started (A2DP source, the role a handheld plays)
-// and the headset is asked to connect again so its audio profile attaches to
-// the new endpoint; the route follows on a later probe.
-func bluealsaReady(addr string) bool {
-	// BlueALSA 4.2 renamed its daemon bluealsad.
-	if len(btProcessPIDs("/proc", "bluealsa")) > 0 || len(btProcessPIDs("/proc", "bluealsad")) > 0 {
-		return true
-	}
-	path, ok := btToolPath("bluealsa")
-	if !ok {
-		return false
-	}
-	outBluealsa.mu.Lock()
-	if !outBluealsa.started.IsZero() && time.Since(outBluealsa.started) < outBluealsaRestartAfter {
-		outBluealsa.mu.Unlock()
-		return false
-	}
-	outBluealsa.started = time.Now()
-	outBluealsa.mu.Unlock()
-	if _, err := btStartDetached(path, "-p", "a2dp-source"); err != nil {
-		logWarn("audio", "bluealsa did not start: %v", err)
-		return false
-	}
-	logInfo("audio", "started bluealsa for the headset")
-	go func() {
-		time.Sleep(2 * time.Second)
-		_, _ = btToolRun("bluetoothctl", "connect", addr)
-		audioRouteKick()
-	}()
-	return false
 }
 
 // audioRouteKicks wakes the output monitor for an early probe.
@@ -744,10 +727,18 @@ func audioRouteUpdate(addr string) {
 		outAudio.mu.Lock()
 		outAudio.failedPCM, outAudio.failedTries = "", 0
 		outAudio.mu.Unlock()
+		audioDiagSet(func() { audioDiag.a2dpN, audioDiag.a2dpAt = 0, time.Time{} })
+		bluealsaPrestart()
 	}
 	pcm := ""
-	if addr != "" && !gameScreenSuspended() && bluealsaReady(addr) {
-		pcm = bluealsaPCM(addr)
+	if addr != "" && !gameScreenSuspended() {
+		// Already on this headset: nothing to check again (a stream that dies
+		// stops the mixer, which goes back to the speaker by itself).
+		if want := bluealsaPCM(addr); audioRouteChildPCM() == want {
+			pcm = want
+		} else if audioRouteSDLDriverOK() && bluealsaEnsure(addr) {
+			pcm = want
+		}
 	}
 	// The volume keys move the speaker codec, which the headset never hears:
 	// the header's level is applied in the mixer instead. Linear, not a curve:
@@ -789,41 +780,4 @@ func audioRouteReleaseForChild() {
 		return
 	}
 	outSetRoute("", 1)
-}
-
-// audioRouteDiagFiles are where BlueALSA's ALSA plugin and its "bluealsa" PCM
-// definition live on the firmwares seen so far; the headset PCM opens only
-// when both exist.
-var audioRouteDiagFiles = []string{
-	"/usr/lib/alsa-lib/libasound_module_pcm_bluealsa.so",
-	"/usr/share/alsa/alsa.conf.d/20-bluealsa.conf",
-	"/etc/alsa/conf.d/20-bluealsa.conf",
-}
-
-// audioRouteDiag is the "Audio route" line of the Bluetooth diagnostics block:
-// the route, the last headset PCM that would not open, the plugin files, and
-// whether the firmware's own HOME has an .asoundrc (some firmwares route
-// games to the headset that way).
-func audioRouteDiag() string {
-	outAudio.mu.Lock()
-	route, failed := outAudio.pcm, outAudio.failedPCM
-	outAudio.mu.Unlock()
-	if route == "" {
-		route = "speaker"
-	}
-	parts := []string{route}
-	if failed != "" {
-		parts = append(parts, "failed="+failed)
-	}
-	for _, p := range audioRouteDiagFiles {
-		if _, err := os.Stat(p); err == nil {
-			parts = append(parts, p)
-		}
-	}
-	if home := os.Getenv(childEnvOrigPrefix + "HOME"); home != "" {
-		if _, err := os.Stat(filepath.Join(home, ".asoundrc")); err == nil {
-			parts = append(parts, filepath.Join(home, ".asoundrc"))
-		}
-	}
-	return strings.Join(parts, " ")
 }

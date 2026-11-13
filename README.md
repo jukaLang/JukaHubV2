@@ -725,6 +725,11 @@ four the same way, with controller hints; see
 | [TrimUI packaging](player/trimui/README.md) | device package, install and troubleshooting notes |
 | [Security](SECURITY.md) | threat model, secret storage, signed updates, tool downloads, the in-app posture view |
 
+## Contributors
+
+- **NiNjaMAN1210** — for his extensive work in testing and helping develop new
+  features.
+
 ## License and thanks
 
 AGPL-3.0 — see [LICENSE](LICENSE).

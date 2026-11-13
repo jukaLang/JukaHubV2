@@ -396,7 +396,7 @@ func pkgDrawCard(renderer *sdl.Renderer, config *Config, ft *pkgType, it *pkgIte
 		fillRoundedRectAt(renderer, rest, r, pkgCardR, sdl.Color{R: 0, G: 0, B: 0, A: 90})
 	}
 	if focused {
-		strokeRoundedRectAt(renderer, rest, r, pkgCardR, glassFocusRingWidth, glassAccent())
+		strokeRoundedRectAt(renderer, rest, homeFocusGlide.apply(r), pkgCardR, glassFocusRingWidth, glassAccent())
 	} else {
 		strokeRoundedRectAt(renderer, rest, r, pkgCardR, 1, sdl.Color{R: 255, G: 255, B: 255, A: 28})
 	}

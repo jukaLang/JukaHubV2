@@ -1,6 +1,6 @@
 package main
 
-// pspills.go — the PS4 / PS5 Remote Play launchers in the home header.
+// pspills.go — the PS4 / PS5 / X1 Remote Play launchers in the home header.
 //
 // The design sheet puts them in one segmented pill group: a dot per console and
 // its name, the dot lit when that console is paired. It replaces the pair of
@@ -13,8 +13,10 @@ package main
 // "● PS4  ● PS5" on its own read as two status lights, and nothing on screen
 // said that pressing one streams the console to the handheld. The label is
 // part of the capsule, not a control; it is dropped first when the band is too
-// narrow for it. The group is not drawn at all where Remote Play cannot run
-// (psRemoteSupported): on the desktop each pill only answered with a warning.
+// narrow for it. The PS pills are not drawn where PlayStation Remote Play
+// cannot run (psRemoteSupported): on the desktop each only answered with a
+// warning. X1 (Xbox Remote Play, xremote.go) closes the group on the right and
+// is drawn wherever Home is, since a PC has the browser to fall back on.
 
 import (
 	"github.com/veandco/go-sdl2/sdl"
@@ -27,6 +29,7 @@ const psPillGroupLabel = "Remote Play"
 type psPillVisual struct {
 	PS4On   bool
 	PS5On   bool
+	X1On    bool
 	Focused HomeFocusID
 	Pressed HomeFocusID
 	// Label is the capsule's leading caption; empty draws the pills alone.
@@ -34,25 +37,34 @@ type psPillVisual struct {
 }
 
 // psPillRects lays the group out so its right edge is at `right` and its top at
-// y, with room for label at its left end when one is given. A zero group rect
-// means there is no font to measure with.
-func psPillRects(fonts HomeFonts, right, y, height int32, label string) (group, ps4, ps5 sdl.Rect) {
-	if fonts.Small == nil || right <= 0 || height <= 0 {
-		return sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+// y, with room for label at its left end when one is given. withPS draws the
+// PS4 and PS5 pills (else they come back empty and the group is X1 alone),
+// withX1 the X1 pill after them. A zero group rect means there is no font to
+// measure with, or no pill to draw.
+func psPillRects(fonts HomeFonts, right, y, height int32, label string, withPS, withX1 bool) (group, ps4, ps5, x1 sdl.Rect) {
+	if fonts.Small == nil || right <= 0 || height <= 0 || (!withPS && !withX1) {
+		return sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	}
 	const groupPad = int32(4)
 	const pillGap = int32(4)
 	inner := height - groupPad*2
 	if inner < 20 {
-		return sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+		return sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	}
 	dot := int32(8)
 	dotGap := int32(8)
 	labelPad := int32(14)
-	w4, _ := measureText(fonts.Small, "PS4")
-	w5, _ := measureText(fonts.Small, "PS5")
-	pill4W := labelPad*2 + dot + dotGap + w4
-	pill5W := labelPad*2 + dot + dotGap + w5
+	pillW := func(text string) int32 {
+		w, _ := measureText(fonts.Small, text)
+		return labelPad*2 + dot + dotGap + w
+	}
+	pill4W, pill5W, pillX1W := int32(0), int32(0), int32(0)
+	if withPS {
+		pill4W, pill5W = pillW("PS4"), pillW("PS5")
+	}
+	if withX1 {
+		pillX1W = pillW(x1PillLabel)
+	}
 	captionW := int32(0)
 	if label != "" {
 		lw, _ := measureText(fonts.Small, label)
@@ -62,17 +74,31 @@ func psPillRects(fonts HomeFonts, right, y, height int32, label string) (group, 
 			captionW = labelPad + lw + labelPad/2
 		}
 	}
-	groupW := groupPad*2 + captionW + pill4W + pillGap + pill5W
+	gaps := int32(0)
+	if withPS {
+		gaps += pillGap // PS4 | PS5
+		if withX1 {
+			gaps += pillGap // PS5 | X1
+		}
+	}
+	groupW := groupPad*2 + captionW + pill4W + pill5W + pillX1W + gaps
 	group = sdl.Rect{X: right - groupW, Y: y, W: groupW, H: height}
-	ps4 = sdl.Rect{X: group.X + groupPad + captionW, Y: y + groupPad, W: pill4W, H: inner}
-	ps5 = sdl.Rect{X: ps4.X + pill4W + pillGap, Y: y + groupPad, W: pill5W, H: inner}
-	return group, ps4, ps5
+	x := group.X + groupPad + captionW
+	if withPS {
+		ps4 = sdl.Rect{X: x, Y: y + groupPad, W: pill4W, H: inner}
+		ps5 = sdl.Rect{X: ps4.X + pill4W + pillGap, Y: y + groupPad, W: pill5W, H: inner}
+		x = ps5.X + pill5W + pillGap
+	}
+	if withX1 {
+		x1 = sdl.Rect{X: x, Y: y + groupPad, W: pillX1W, H: inner}
+	}
+	return group, ps4, ps5, x1
 }
 
-// renderPSPillGroup draws the group and records both pill rects for focus and
-// clicks. The container is the design's translucent capsule; a paired console
+// renderPSPillGroup draws the group. The container is the design's
+// translucent capsule; a paired console (or, for X1, an installed client)
 // lights its own pill, and the focused pill carries the home focus ring.
-func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 sdl.Rect, v psPillVisual) {
+func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5, x1 sdl.Rect, v psPillVisual) {
 	if renderer == nil || fonts.Small == nil || group.W <= 0 {
 		return
 	}
@@ -81,9 +107,13 @@ func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 
 	strokeRoundedRect(renderer, group.X, group.Y, group.W, group.H, group.H/2, 1, homeGlass(20))
 
 	// The caption fills the capsule left of the first pill, centred in it.
-	if v.Label != "" && ps4.X > group.X {
+	first := ps4
+	if first.W <= 0 {
+		first = x1
+	}
+	if v.Label != "" && first.X > group.X {
 		lw, _ := measureText(fonts.Small, v.Label)
-		slot := ps4.X - group.X
+		slot := first.X - group.X
 		if lw > 0 && lw <= slot {
 			drawText(renderer, fonts.Small, v.Label, group.X+(slot-lw)/2,
 				group.Y+(group.H-int32(fonts.Small.Height()))/2, ColorTextMuted(), textAlignLeft)
@@ -132,4 +162,5 @@ func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 
 	}
 	pill(ps4, "PS4", v.PS4On, HomeFocusPS4)
 	pill(ps5, "PS5", v.PS5On, HomeFocusPS5)
+	pill(x1, x1PillLabel, v.X1On, HomeFocusX1)
 }

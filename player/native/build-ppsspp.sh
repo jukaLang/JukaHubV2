@@ -2,12 +2,18 @@
 # Build JukaHub's own PPSSPP for the A133P TrimUI handhelds (Smart Pro, Brick,
 # Hammer: "tg5040", PowerVR GE8300) from an upstream PPSSPP release tag.
 #
+# SDL: built against SDL2 only. Upstream 1.21 moved to SDL3, which the TrimUI
+# firmware does not have and whose display back ends do not drive its screen;
+# the workflow builds the newest release that still uses SDL2 (1.20.x), and this
+# script refuses a tree that does not.
+#
 # Why: the PPSSPP JukaHub installs for PSP games comes from ben16w/minui-psp,
 # which packages spruceUI's builds, and those lag upstream (1.20.3 while
 # hrydgard/ppsspp is at 1.20.4; CrossMix noted in October 2026 that 1.20.4 has
 # no tg5040 binary at all). This script builds the newest upstream release
-# itself; .github/workflows/ppsspp-trimui.yml runs it weekly and publishes the
-# result as the rolling release "ppsspp-tg5040" of this repository, and
+# itself; .github/workflows/ppsspp-trimui.yml runs it when a new release appears
+# (it looks daily) and publishes the result as the rolling release
+# "ppsspp-tg5040" of this repository, and
 # ppsspp_managed.go installs whichever of the two sources names the newer
 # PPSSPP (same verification, same launcher, same fallback to the firmware's
 # PPSSPP when a build does not start).
@@ -180,6 +186,14 @@ if [ ! -d "$SRC/.git" ]; then
 fi
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
 say "PPSSPP $PPSSPP_TAG at $COMMIT"
+# Upstream moved the SDL front end to SDL3 for 1.21 (hrydgard/ppsspp#22956). The
+# handheld's display only works through the firmware's own SDL2, so a tree that
+# no longer builds against SDL2 is refused here with a clear message; the
+# workflow already picks the newest release that still does.
+if ! grep -v '^[[:space:]]*#' "$SRC/CMakeLists.txt" |
+    grep -Eq 'find_package[[:space:]]*\([[:space:]]*SDL2([^_[:alnum:]]|$)|SDL2::SDL2([^_[:alnum:]]|$)|SDL2_LIBRAR'; then
+    die "PPSSPP $PPSSPP_TAG builds its SDL front end with SDL3 only; the TrimUI firmware has SDL2 (build a 1.20.x tag)"
+fi
 
 BUILD="$WORK/build-$VERSION"
 rm -rf "$BUILD"
@@ -221,6 +235,19 @@ if [ -n "$glibc" ] && ! version_le "$glibc" "$GLIBC_MAX"; then
     die "PPSSPPSDL asks for glibc $glibc; the handheld has $GLIBC_MAX"
 fi
 say "NEEDED: $(echo $NEEDED); newest glibc symbol: ${glibc:-none}"
+
+# A load test in the root: the dynamic loader resolves every NEEDED library and
+# symbol (the SDL2 built above, Mesa's GLES/EGL, the root's libstdc++) and
+# PPSSPP prints its version without opening a window. A warning only — the
+# handheld's libraries are what count, and JukaHub checks those before it
+# switches — but a binary that cannot even load here is worth seeing early.
+if smoke=$(LD_LIBRARY_PATH="$SDL_PREFIX/lib" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+    timeout 30 "$BIN" --version 2>&1); then
+    say "load test: $(printf '%s\n' "$smoke" | tail -n 1)"
+else
+    printf '%s\n' "$smoke" | tail -n 20
+    echo "::warning title=PPSSPP::PPSSPPSDL --version did not run in the build root (see above); the package is published anyway and the handheld decides"
+fi
 
 # ── Package ──────────────────────────────────────────────────────────────────
 

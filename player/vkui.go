@@ -165,9 +165,12 @@ func vkMemoRefresh() {
 // inputhints.go). Hints are dropped from the end when the sheet is narrow, so
 // they are in order of importance.
 func vkHintList() []FooterHint {
-	action := vkActionLabel()
-	if vkTarget == vkTargetChat {
-		action = "Ask AI"
+	// Start and Enter send (vkSubmit without Ask AI); in chat Y is the second
+	// way out, to Juka AI, and elsewhere Y does what Start does.
+	send := vkActionLabel()
+	chat := vkTarget == vkTargetChat
+	if chat {
+		send = "Send"
 	}
 	layer := "123"
 	if vkLayer == vkLayerSymbols {
@@ -177,7 +180,7 @@ func vkHintList() []FooterHint {
 		// A real keyboard types straight into the field (handleTextInputEvent);
 		// Backspace deletes and Shift is the keyboard's own.
 		keys := []FooterHint{
-			{Button: "Enter", Label: action},
+			{Button: "Enter", Label: send},
 			{Button: "Esc", Label: "Close"},
 			{Button: "Backspace", Label: "Delete"},
 			{Button: "Ctrl+V", Label: "Paste"},
@@ -190,12 +193,17 @@ func vkHintList() []FooterHint {
 	}
 	hints := []FooterHint{
 		{Button: "A", Label: "Type"},
+		{Button: "Start", Label: send},
 		{Button: "B", Label: "Close"},
 		{Button: "X", Label: "Delete"},
-		{Button: "Y", Label: action},
-		{Button: "L1", Label: "Shift"},
-		{Button: "R1", Label: layer},
 	}
+	if chat {
+		hints = append(hints, FooterHint{Button: "Y", Label: "Ask AI"})
+	}
+	hints = append(hints,
+		FooterHint{Button: "L1", Label: "Shift"},
+		FooterHint{Button: "R1", Label: layer},
+	)
 	// R2 toggles voice typing (vkvoice_button.go).
 	if vkVoiceHintShown() {
 		hints = append(hints, vkVoiceHint())
@@ -218,7 +226,8 @@ func vkStripTip() string {
 // so its dim stays light enough to read them.
 func vkLiveFilterTarget() bool {
 	switch vkTarget {
-	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget,
+		setSearchVKTarget:
 		return true
 	}
 	return false
@@ -389,7 +398,8 @@ func vkDrawToolChip(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, t vk
 	}
 	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, fill)
 	if focused {
-		strokeRoundedRect(renderer, r.X-2, r.Y-2, r.W+4, r.H+4, radius+2, glassFocusRingWidth, pal.accent)
+		ring := sdl.Rect{X: r.X - 2, Y: r.Y - 2, W: r.W + 4, H: r.H + 4}
+		strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), radius+2, glassFocusRingWidth, pal.accent)
 	} else {
 		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, 1, pal.edge)
 	}
@@ -487,7 +497,7 @@ func vkDrawKeyCap(renderer *sdl.Renderer, config *Config, fonts vkFontSet, pal v
 		if look.accent {
 			ring = pal.ink
 		}
-		strokeRoundedRect(renderer, draw.X, draw.Y, draw.W, draw.H, radius, glassFocusRingWidth, ring)
+		strokeRoundedRectAt(renderer, draw, homeFocusGlide.apply(draw), radius, glassFocusRingWidth, ring)
 	} else {
 		strokeRoundedRect(renderer, draw.X, draw.Y, draw.W, draw.H, radius, 1, look.edge)
 	}
@@ -1025,7 +1035,7 @@ func vkDrawStrip(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, offset 
 		}
 		fillRoundedRect(renderer, cell.X, cell.Y, cell.W, cell.H, 10, fill)
 		if vkFocusZone == vkZoneStrip && vkZoneIndex == i {
-			strokeRoundedRect(renderer, cell.X, cell.Y, cell.W, cell.H, 10, glassFocusRingWidth, pal.accent)
+			strokeRoundedRectAt(renderer, cell, homeFocusGlide.apply(cell), 10, glassFocusRingWidth, pal.accent)
 		}
 		fitted := ellipsize(fonts.strip, text, cell.W-16)
 		w, h := measureText(fonts.strip, fitted)

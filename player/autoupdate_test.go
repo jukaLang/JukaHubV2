@@ -214,8 +214,8 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 	write(staged, releaseInfoFileName, `{"tag":"JukaHub-20261018120000"}`, 0o644)
 	write(staged, "required/yt-dlp", "archive-ytdlp", 0o755)
 	write(staged, "required/ffmpeg", "archive-ffmpeg", 0o755)
-	write(staged, "juka-whisper/whisper-cli", "offline-engine", 0o755)
-	write(staged, "juka-whisper/ggml-tiny.bin", "offline-model", 0o644)
+	write(staged, "androidrt/loader", "android-loader", 0o755)
+	write(staged, "androidrt/props.txt.example", "android-props", 0o644)
 
 	write(install, exe, "old-binary", 0o755)
 	write(install, "required/yt-dlp", "installed-ytdlp", 0o755)
@@ -227,7 +227,7 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 		t.Fatalf("stagedInstallFiles: %v", err)
 	}
 	if len(files) != 4 {
-		t.Fatalf("planned %d files, want the binary, offline speech and release stamp: %v", len(files), files)
+		t.Fatalf("planned %d files, want the binary, AndroidRT and release stamp: %v", len(files), files)
 	}
 	for _, f := range files {
 		if isPreservedInstallPath(f.Name) {
@@ -286,13 +286,13 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 	}
 
 	for rel, want := range map[string]string{
-		exe:                          "new-binary",
-		"juka-whisper/whisper-cli":   "offline-engine",
-		"juka-whisper/ggml-tiny.bin": "offline-model",
-		"required/yt-dlp":            "installed-ytdlp",
-		"required/ffmpeg":            "installed-ffmpeg",
-		"required/local-tool":        "installed-local",
-		releaseInfoFileName:          `{"tag":"JukaHub-20261018120000"}`,
+		exe:                           "new-binary",
+		"androidrt/loader":            "android-loader",
+		"androidrt/props.txt.example": "android-props",
+		"required/yt-dlp":             "installed-ytdlp",
+		"required/ffmpeg":             "installed-ffmpeg",
+		"required/local-tool":         "installed-local",
+		releaseInfoFileName:           `{"tag":"JukaHub-20261018120000"}`,
 	} {
 		got, err := os.ReadFile(filepath.Join(install, filepath.FromSlash(rel)))
 		if err != nil || string(got) != want {

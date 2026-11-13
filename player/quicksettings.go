@@ -732,6 +732,9 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 		}
 		qsNoteEdit()
 		qsStartProbe()
+		// Home's Wi-Fi tile and the idle screens read the radio again now,
+		// not at their next eight-second refresh (home_quicktiles.go).
+		saverWifiInvalidate()
 		return nil
 	case qsActionBluetooth:
 		if want {

@@ -36,6 +36,19 @@ type ThemePreset struct {
 	// shipped pair, the accent and Home's violet.
 	Bloom  string
 	Bloom2 string
+	// The console look (themeconsole.go), all optional: each zero value keeps
+	// Home exactly as it is drawn without it. CarouselStyle reshapes the
+	// Carousel layout's row ("shelf": small tiles along the top-left, the
+	// focused one big with its name beside it; "strip": one row of large
+	// equal squares the focus walks along; "hub": PS5 Style's welcome hub,
+	// themeps5hub.go). TileRadius is the tiles' corner
+	// radius in design px (2..32; 0 keeps 20). FocusRing colours the focused
+	// tile's ring (#rrggbb; empty is the accent), and FocusRing2 is the colour
+	// it pulses toward for a moment after each move.
+	CarouselStyle string
+	TileRadius    int32
+	FocusRing     string
+	FocusRing2    string
 
 	Background    string
 	ButtonColor   string
@@ -1141,6 +1154,182 @@ var themePresets = map[string]ThemePreset{
 		Info:          "#68d9cf",
 		Overlay:       "#050d08cc",
 	},
+	// The console palettes (themeconsole.go). As colours they only repaint;
+	// their "Style" conversions add the console's row, corners and ring.
+	// ps4: near-black navy under a deep-blue glow, white type, a clear blue
+	// (the first PS5 look, renamed when PS5 Style became the welcome hub).
+	"ps4": {
+		Name:          "PS4 Night",
+		Bloom:         "#1f4fd8",
+		Bloom2:        "#0b2a8c",
+		Background:    "#030716",
+		ButtonColor:   "#16213d",
+		LabelColor:    "#ffffff",
+		InputColor:    "#0a1124",
+		Surface:       "#0b1226",
+		SurfaceAlt:    "#111a33",
+		SurfaceRaised: "#18233f",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#c4cbe0",
+		TextTertiary:  "#8d97b5",
+		BorderSubtle:  "#ffffff10",
+		BorderDefault: "#ffffff24",
+		BorderFocus:   "#ffffff",
+		Success:       "#3ccf8e",
+		Warning:       "#f5c451",
+		Danger:        "#ff5a5f",
+		Info:          "#3d82ff",
+		Overlay:       "#020511cc",
+	},
+	// ps5: the welcome hub's near-black page, flat graphite cards, white type,
+	// a light PlayStation blue for bars and fills, the Plus yellow as the
+	// warning and a bright green for the battery and trophy progress.
+	"ps5": {
+		Name:          "PS5 Night",
+		Bloom:         "#1b3a6e",
+		Bloom2:        "#0c1a33",
+		Background:    "#05070b",
+		ButtonColor:   "#1a1d23",
+		LabelColor:    "#ffffff",
+		InputColor:    "#16181d",
+		Surface:       "#111419",
+		SurfaceAlt:    "#15181e",
+		SurfaceRaised: "#1e2229",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#c6c9ce",
+		TextTertiary:  "#9499a1",
+		BorderSubtle:  "#ffffff0e",
+		BorderDefault: "#ffffff1f",
+		BorderFocus:   "#ffffff",
+		Success:       "#2fd36b",
+		Warning:       "#f5c518",
+		Danger:        "#ff5a64",
+		Info:          "#5aa5ff",
+		Overlay:       "#030407cc",
+	},
+	// switch: the light system grey, white cards, dark grey type and the
+	// bright cyan-blue of the selection.
+	"switch": {
+		Name:          "Switch Light",
+		Bloom:         "#9fdcf2",
+		Bloom2:        "#d4d4d4",
+		Background:    "#ebebeb",
+		ButtonColor:   "#ffffff",
+		LabelColor:    "#2d2d2d",
+		InputColor:    "#e0e0e0",
+		Surface:       "#ffffff",
+		SurfaceAlt:    "#f4f4f4",
+		SurfaceRaised: "#ffffff",
+		TextPrimary:   "#2d2d2d",
+		TextSecondary: "#484848",
+		TextTertiary:  "#666666",
+		BorderSubtle:  "#00000012",
+		BorderDefault: "#00000024",
+		BorderFocus:   "#0084b8",
+		Success:       "#2b8a3e",
+		Warning:       "#8a5a00",
+		Danger:        "#d0101c",
+		Info:          "#0084b8",
+		Overlay:       "#ebebebcc",
+	},
+	// switch-dark: the dark system theme — charcoal, not black — with the
+	// same cyan selection.
+	"switch-dark": {
+		Name:          "Switch Dark",
+		Bloom:         "#00a6c8",
+		Bloom2:        "#3c3c3c",
+		Background:    "#2d2d2d",
+		ButtonColor:   "#464646",
+		LabelColor:    "#ffffff",
+		InputColor:    "#383838",
+		Surface:       "#383838",
+		SurfaceAlt:    "#404040",
+		SurfaceRaised: "#4a4a4a",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#d6d6d6",
+		TextTertiary:  "#a8a8a8",
+		BorderSubtle:  "#ffffff12",
+		BorderDefault: "#ffffff26",
+		BorderFocus:   "#00c3e3",
+		Success:       "#5ad66f",
+		Warning:       "#f2c14e",
+		Danger:        "#ff5a5a",
+		Info:          "#00c3e3",
+		Overlay:       "#1e1e1ecc",
+	},
+	// xbox: charcoal panels with the console's green for every highlight.
+	"xbox": {
+		Name:          "Xbox Green",
+		Bloom:         "#107c10",
+		Bloom2:        "#0b3d0b",
+		Background:    "#121212",
+		ButtonColor:   "#2a2a2a",
+		LabelColor:    "#ffffff",
+		InputColor:    "#1a1a1a",
+		Surface:       "#1b1b1b",
+		SurfaceAlt:    "#242424",
+		SurfaceRaised: "#2e2e2e",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#cfcfcf",
+		TextTertiary:  "#9a9a9a",
+		BorderSubtle:  "#ffffff10",
+		BorderDefault: "#ffffff22",
+		BorderFocus:   "#ffffff",
+		Success:       "#4ec24e",
+		Warning:       "#f2c14e",
+		Danger:        "#f04a4a",
+		Info:          "#2ea82e",
+		Overlay:       "#0a0a0acc",
+	},
+	// xboxone: the 2013 Metro dashboard — near-black backdrop, flat square
+	// tiles, Xbox One's brighter lime green for focus and highlights.
+	"xboxone": {
+		Name:          "Xbox One",
+		Bloom:         "#107c10",
+		Bloom2:        "#52b043",
+		Background:    "#0b0b0b",
+		ButtonColor:   "#107c10",
+		LabelColor:    "#ffffff",
+		InputColor:    "#161616",
+		Surface:       "#1a1a1a",
+		SurfaceAlt:    "#232323",
+		SurfaceRaised: "#2d2d2d",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#d2d2d2",
+		TextTertiary:  "#9b9b9b",
+		BorderSubtle:  "#ffffff0f",
+		BorderDefault: "#ffffff20",
+		BorderFocus:   "#ffffff",
+		Success:       "#52b043",
+		Warning:       "#ffb900",
+		Danger:        "#e81123",
+		Info:          "#52b043",
+		Overlay:       "#000000cc",
+	},
+	// minimal: black page, white words, one grey; no glows.
+	"minimal": {
+		Name:          "Minimal",
+		Bloom:         "#000000",
+		Bloom2:        "#000000",
+		Background:    "#000000",
+		ButtonColor:   "#141414",
+		LabelColor:    "#ffffff",
+		InputColor:    "#0d0d0d",
+		Surface:       "#0a0a0a",
+		SurfaceAlt:    "#111111",
+		SurfaceRaised: "#181818",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#a0a0a0",
+		TextTertiary:  "#6a6a6a",
+		BorderSubtle:  "#ffffff0d",
+		BorderDefault: "#ffffff1a",
+		BorderFocus:   "#ffffff",
+		Success:       "#d0d0d0",
+		Warning:       "#d0d0d0",
+		Danger:        "#ff5a5a",
+		Info:          "#ffffff",
+		Overlay:       "#000000e6",
+	},
 }
 
 // themeConversionSpecs are the total conversions: a palette the catalogue
@@ -1190,6 +1379,15 @@ var themeConversionSpecs = []struct {
 	{"convert-pixelrain", "Pixel Rain", "matrix", homeArrangementCarousel, "Carousel · phosphor rain", "#5bff7d", "#00c6a7"},
 	{"convert-velvetarcade", "Velvet Arcade", "gruvbox", homeArrangementGrid, "Hero tile · arcade walnut", "#fe8019", "#fabd2f"},
 	{"convert-neonraceway", "Neon Raceway", "cyberpunk", homeArrangementWidgets, "Widgets · electric circuit", "#ff3df2", "#00e5ff"},
+	// The console styles: their row, corners and ring come from
+	// themeConsoleSpecs (themeconsole.go).
+	{"convert-ps5", "PS5 Style", "ps5", homeArrangementCarousel, "Welcome hub · icon row and cards", "", ""},
+	{"convert-ps4", "PS4 Style", "ps4", homeArrangementCarousel, "Game shelf · deep-blue night", "", ""},
+	{"convert-switch", "Switch 2 Style", "switch", homeArrangementCarousel, "Console home · light grey and cyan", "", ""},
+	{"convert-switch-dark", "Switch 2 Style Dark", "switch-dark", homeArrangementCarousel, "Console home · charcoal and cyan", "", ""},
+	{"convert-xbox", "Xbox Style", "xbox", homeArrangementWidgets, "Tile grid · charcoal and green", "", ""},
+	{"convert-xboxone", "Xbox One Style", "xboxone", homeArrangementGrid, "Metro dashboard · square green tiles", "#107c10", "#52b043"},
+	{"convert-minimal", "Minimal UI", "minimal", homeArrangementCarousel, "Just text · no tiles, no art", "#000000", "#000000"},
 }
 
 func init() {
@@ -1205,8 +1403,13 @@ func init() {
 		if spec.bloom2 != "" {
 			preset.Bloom2 = spec.bloom2
 		}
+		if look, ok := themeConsoleSpecs[spec.key]; ok {
+			look.applyTo(&preset)
+		}
 		themePresets[spec.key] = preset
 	}
+	// The classic consoles' palettes and conversions (themes_retro.go).
+	registerRetroThemes()
 }
 
 // GetThemePreset returns a theme preset by name, or the dark preset if not found.
@@ -1495,10 +1698,14 @@ var themePresetOrder = []string{
 	"aurora", "segablue", "dmg", "synthwave", "solarized-light", "paper",
 	"forest", "amber", "oceanglass", "arcade", "eink", "ember", "moss",
 	"arctic", "ruby", "cobalt", "tangerine", "orchid", "terminal",
+	// The console palettes (their Style conversions lead that tab).
+	"ps5", "ps4", "switch", "switch-dark", "xbox", "xboxone", "minimal",
 	// Total conversions last: they are their own tab, and a list built from
 	// the whole catalogue (onboarding, a config referencing a preset) still
 	// reads colours first.
 	"convert-dashboard", "convert-grid",
+	"convert-ps5", "convert-ps4", "convert-switch", "convert-switch-dark", "convert-xbox",
+	"convert-xboxone", "convert-minimal",
 	"convert-aurora", "convert-segablue", "convert-dmg", "convert-synthwave",
 	"convert-nord", "convert-solarized", "convert-paper", "convert-forest",
 	"convert-amber", "convert-oceanglass", "convert-arcade", "convert-eink",
@@ -1513,13 +1720,19 @@ var themePresetOrder = []string{
 type themeTab struct {
 	Kind  ThemePresetKind
 	Label string
+	// Group narrows the tab past its Kind (themetabs.go): the console looks,
+	// or the Experience packs screen. Empty is the rest of the Kind.
+	Group string
 }
 
 // themeGalleryTabs are the gallery's tabs, in order. Colour first: it is what
 // most people come to change, and the conversions are a bigger decision.
+// Experience opens the Experience packs screen, which shows the same tabs.
 var themeGalleryTabs = []themeTab{
-	{themeKindColour, "Colour"},
-	{themeKindConversion, "Total conversion"},
+	{themeKindColour, "Colour", ""},
+	{themeKindConversion, "Total conversion", ""},
+	{themeKindConversion, "Consoles", themeTabConsole},
+	{themeKindConversion, "Experience", themeTabExperience},
 }
 
 // ListThemePresetsFor returns the presets of one tab, in the canonical order.

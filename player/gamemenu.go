@@ -198,6 +198,8 @@ func gmQuitGame() {
 	gmQuitting.Store(true)
 	cmds := liveScreenChildren()
 	for _, cmd := range cmds {
+		// The player left: not a game that failed to start (gamelaunch_watch.go).
+		gameLaunchNoteStop(cmd)
 		gmInterruptGame(cmd)
 	}
 	PlayActivateSound()

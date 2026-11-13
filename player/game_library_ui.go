@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -602,7 +603,13 @@ func fetchMissingLibraryArtwork() {
 		ShowToast("Every scanned game already has box art.", ToastKindSuccess)
 		return
 	}
-	if !startLibraryArtworkFetch(missing) {
+	// The console on screen first, then every console in turns, so the one
+	// being looked at fills in at once and none waits behind a big one.
+	first := ""
+	if system, ok := selectedLibrarySystem(); ok {
+		first = system.Name
+	}
+	if !startLibraryArtworkFetch(artworkFetchOrder(missing, first)) {
 		ShowToast("An artwork fetch is already running.", ToastKindInfo)
 		return
 	}
@@ -1131,21 +1138,40 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 	if font == nil {
 		return
 	}
-	label := strings.TrimSpace(game.Title)
-	if label == "" {
-		label = "?"
-	}
-	runes := []rune(label)
-	initials := strings.ToUpper(string(runes[0]))
-	if len(runes) > 1 {
-		if idx := strings.IndexRune(label, ' '); idx >= 0 && idx+1 < len(runes) {
-			initials += strings.ToUpper(string(runes[idx+1]))
-		}
-	}
+	initials := libraryArtInitials(game.Title)
 	tw, th, _ := font.SizeUTF8(initials)
 	renderText(renderer, config, font, initials,
 		WithAlpha(installHighlight(), 230),
 		rect.X+(rect.W-int32(tw))/2, rect.Y+(rect.H-int32(th))/2)
+}
+
+// libraryArtInitials is the placeholder's monogram: the first letter or digit
+// of the first two words, without a release-list number in front ("0381 - 007
+// - From Russia with Love" showed "0-": a digit and the dash).
+func libraryArtInitials(title string) string {
+	title = strings.TrimSpace(title)
+	if bare, ok := artworkStripReleaseNumber(title); ok {
+		title = bare
+	}
+	words := strings.FieldsFunc(title, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\'' && r != '’'
+	})
+	var out []rune
+	for _, w := range words {
+		for _, r := range w {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				out = append(out, unicode.ToUpper(r))
+				break
+			}
+		}
+		if len(out) == 2 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return "?"
+	}
+	return string(out)
 }
 
 // drawCoverCompletenessRing draws a ring filled clockwise to percent, with the
@@ -1514,7 +1540,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, bg)
 			if selected && gameLib.focus == 1 {
-				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, glassFocusRingWidth, focusColor)
+				strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), 10, glassFocusRingWidth, focusColor)
 			}
 			game := system.Games[idx]
 			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-24),

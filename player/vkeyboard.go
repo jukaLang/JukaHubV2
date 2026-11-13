@@ -309,6 +309,8 @@ func vkActionLabel() string {
 	switch vkTarget {
 	case vkTargetTerm:
 		return "Run"
+	case setSearchVKTarget:
+		return "Search"
 	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
 		return "Search"
 	case vkTargetWiFi, vkTargetNetplay:
@@ -871,6 +873,8 @@ func vkCurrentText() string {
 		return netPromptBuffer
 	case homeSearchVKTarget:
 		return homeSearchText()
+	case setSearchVKTarget:
+		return setSearch.query
 	case tzPickerVKTarget:
 		return tzPicker.query
 	case steamSearchVKTarget:
@@ -938,6 +942,9 @@ func vkSetText(text string, config *Config) {
 		// The Home search sheet re-runs its query on every key, so results
 		// fill in above the keyboard while the words are typed.
 		homeSearchSetQuery(text)
+	case setSearchVKTarget:
+		// Settings search re-ranks its results on every key (setsearch.go).
+		setSearchSetQuery(text)
 	case tzPickerVKTarget:
 		// The zone list behind the keyboard narrows on every key.
 		tzPickerSetQuery(text)
@@ -1129,6 +1136,8 @@ func vkTitle() string {
 		return "FIND STREAMS"
 	case homeSearchVKTarget:
 		return "SEARCH JUKAHUB"
+	case setSearchVKTarget:
+		return "SEARCH SETTINGS"
 	case tzPickerVKTarget:
 		return "SEARCH TIME ZONES"
 	case steamSearchVKTarget:
@@ -1255,6 +1264,8 @@ func vkPlaceholder() string {
 		return "Name, group or link: news"
 	case homeSearchVKTarget:
 		return "Apps, settings, files or the web"
+	case setSearchVKTarget:
+		return "Wi-Fi, brightness, sleep, language…"
 	case tzPickerVKTarget:
 		return "City or country: berlin"
 	case steamSearchVKTarget:
@@ -2035,7 +2046,7 @@ func vkHoverFromPointer() int {
 //	D-pad      move (in the field: move the caret)
 //	A          press; hold on a letter for its accents, on the globe for languages
 //	B / Back   close (an open popup or a recording first)
-//	Start      close
+//	Start      send / submit: Send in chat, the field's action key elsewhere
 //	X          delete (hold to repeat)
 //	Y          submit (Ask AI in chat)
 //	L1         Shift (twice quickly: caps lock)
@@ -2074,9 +2085,15 @@ func vkHandleControllerButton(button uint8, config *Config) bool {
 		vkMoveFocus(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		vkPadPress(config)
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		vkCloseKeyboard()
 		vkPlay(PlayBackSound)
+	case sdl.CONTROLLER_BUTTON_START:
+		// Start is the send button (Juka 2026-11-13): the message goes to the
+		// chat tab on screen, and every other field runs its action key
+		// (Search, Save, Join…), the same as Enter on a real keyboard.
+		vkPlay(PlayActivateSound)
+		vkSubmit(config, false)
 	case sdl.CONTROLLER_BUTTON_X:
 		vkBackspace(config)
 		vkKeySound()
@@ -2362,6 +2379,10 @@ func vkSubmit(config *Config, askAI bool) {
 		// and hands the highlight to the first result.
 		vkCloseKeyboard()
 		homeSearchKeyboardDone()
+	case setSearchVKTarget:
+		// Settings search is live too: Search moves onto the first result.
+		vkCloseKeyboard()
+		setSearchKeyboardDone()
 	case tzPickerVKTarget:
 		// The zone list already narrowed while typing; Search drops the
 		// keyboard with the cursor on the first match.

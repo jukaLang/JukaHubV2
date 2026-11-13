@@ -52,8 +52,10 @@ name: Remote Play helpers and AndroidRT
 # but the C library).
 #
 # Remote Play and AndroidRT remain optional. Offline speech is required for
-# the Smart Pro archive; a missing offline-stt artifact fails its packaging
-# job so a release cannot silently ship another Groq-only Menu button.
+# the release (as JukaHub-OfflineSpeech-linux-arm64.zip, which the Smart Pro
+# downloads after ffmpeg; it is not inside the app archive); a missing
+# offline-stt artifact fails the packaging job so a release cannot silently
+# ship another Groq-only Menu button.
 # The two other parts are independent after the shared build
 # root: the AndroidRT steps run whatever became of the helpers, so a failed
 # build costs the run that part and nothing else. An advisory step runs
@@ -214,18 +216,20 @@ jobs:
           set +e
           dest=player/native/bin/juka-llm
           model=SmolLM2-360M-Instruct-Q4_0.gguf
-          miss() { rm -f "$dest/llama-cli" "$dest/$model" "$dest/BUILDINFO.txt" "$dest/LLAMA_LICENSE.txt" "$dest/MODEL_LICENSE.txt"; exit 0; }
+          miss() { rm -f "$dest/llama-cli" "$dest/llama-server" "$dest/$model" "$dest/BUILDINFO.txt" "$dest/LLAMA_LICENSE.txt" "$dest/MODEL_LICENSE.txt"; exit 0; }
           if ! name=$(sh .github/scripts/build-root.sh key llm); then miss; fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           if ! timeout 360 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
-              llama-cli "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; then miss; fi
+              llama-cli llama-server "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; then miss; fi
           want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
-          [ -n "$want_model" ] && [ -n "$want_bin" ] || miss
+          want_server=$(awk '$1 == "server" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
+          [ -n "$want_model" ] && [ -n "$want_bin" ] && [ -n "$want_server" ] || miss
           [ "$(wc -c < "$dest/$model")" -eq 229733280 ] || miss
           [ "$(sha256sum "$dest/$model" | cut -d' ' -f1)" = "$want_model" ] || miss
           [ "$(sha256sum "$dest/llama-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
-          chmod 755 "$dest/llama-cli"
+          [ "$(sha256sum "$dest/llama-server" | cut -d' ' -f1)" = "$want_server" ] || miss
+          chmod 755 "$dest/llama-cli" "$dest/llama-server"
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
       - name: Create the Ubuntu 20.04 build root
@@ -515,7 +519,8 @@ jobs:
       - name: Build optional offline AI
         id: llm
         if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.llm_cache.outputs.hit != 'true' }}
-        timeout-minutes: 30
+        # llama-cli and llama-server, then a smoke test of each.
+        timeout-minutes: 40
         run: sh .github/scripts/build-root.sh build llm
 
       - name: Upload optional offline AI

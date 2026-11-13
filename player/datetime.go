@@ -335,6 +335,8 @@ func dateTimeOpenSettings(config *Config, pickZone bool) {
 	if config == nil {
 		return
 	}
+	// Date & time's rows live in General now (setessentials.go); the old id
+	// still finds them, and the focus lands on Time zone.
 	section := setSectionIndex("datetime")
 	if section < 0 {
 		return
@@ -342,7 +344,9 @@ func dateTimeOpenSettings(config *Config, pickZone bool) {
 	if setIsHubScene(setHubSceneName(config)) {
 		// Already in Settings: switch sections in place.
 		setHubSelectSection(config, section, false)
-		setHubEnterPane(false)
+		if !setHubFocusFirstOf("timezone", "netTime", "clockSource") {
+			setHubEnterPane(false)
+		}
 		if pickZone {
 			dateTimeOpenZone(config)
 		}
@@ -356,6 +360,7 @@ func dateTimeOpenSettings(config *Config, pickZone bool) {
 	}
 	setHub.lastSection = section
 	setHub.deepLink = true
+	setHub.pendingRow, setHub.pendingLabel = "timezone", ""
 	if pickZone && dateTimeZoneOwner() == tzOwnerJukaHub {
 		// The hub starts its visit on the next frame; the picker survives that
 		// first entry (tzPickerHubEnter).

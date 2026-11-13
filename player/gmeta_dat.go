@@ -459,6 +459,13 @@ func gmetaIndexFor(ctx context.Context, collection string, online bool) (*gmetaD
 
 	gmetaFetchMu.Lock()
 	defer gmetaFetchMu.Unlock()
+	// Another cover download may have read this console while we waited.
+	gmetaIndexCache.mu.Lock()
+	if idx, ok := gmetaIndexCache.byKey[collection]; ok {
+		gmetaIndexCache.mu.Unlock()
+		return idx, gmetaFetchOK
+	}
+	gmetaIndexCache.mu.Unlock()
 	dir := gmetaDatDir()
 	if dir == "" {
 		return nil, gmetaFetchFailed

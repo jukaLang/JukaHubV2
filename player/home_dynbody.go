@@ -101,6 +101,11 @@ type homeDynSig struct {
 	empty   bool
 	arr     string
 	w, h    int32
+	// style is the carousel's console style: the welcome hub adds its board
+	// (themeps5hub.go).
+	style string
+	// sw changes with the Switch Home's recent games (themeswitch.go).
+	sw uint64
 }
 
 // homeDyn is the dynamic body's state.
@@ -194,6 +199,7 @@ func (h *HomeLayout) dynSync(config *Config) {
 	sig := homeDynSig{
 		gen: gen, editing: homeEdit.open, empty: len(tiles) == 0,
 		arr: h.Arrangement, w: h.Width, h: h.Height,
+		style: homeConsoleLook.carousel, sw: h.switchRowSig(),
 	}
 	now := sdl.GetTicks64()
 	if !h.dyn.active || sig != h.dyn.sig {
@@ -292,6 +298,8 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 		}
 		out = append(out, add)
 	}
+	// The Switch Home's row leads with the games played last (themeswitch.go).
+	out = h.switchRowTiles(out)
 
 	// Labels: widgets from their catalogue entry, apps from the Start menu.
 	// The menu is read again only when the app tiles changed (or on the
@@ -366,8 +374,13 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 			dynamicIDs = append(dynamicIDs, t.ID)
 		}
 	}
-	h.Order = append(ids, h.dynChromeOrder()...)
-	h.Focus.SetDynamic(dynamicIDs, ids)
+	// The Switch Home adds its picture and round buttons (themeswitch.go).
+	dynamicIDs = append(dynamicIDs, h.switchDockIDs()...)
+	// PS5 Style's welcome hub adds its pills and cards after the tiles
+	// (themeps5hub.go); every other layout adds none.
+	hub := h.hubRebuild()
+	h.Order = append(append(ids[:len(ids):len(ids)], hub...), h.dynChromeOrder()...)
+	h.Focus.SetDynamic(append(dynamicIDs, hub...), ids)
 	for _, id := range homeBodyCards {
 		_, on := h.dyn.index[id]
 		h.Focus.SetEnabled(id, on)
@@ -397,6 +410,15 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 	} else {
 		h.dyn.carIdx = 0
 	}
+	// A welcome-hub card that just went (Edit Home opened, the theme changed)
+	// hands the focus to the row tile it hung under, not the row's first
+	// tile (themeps5hub.go).
+	if homeHubID(cur) && !h.Focus.IsEnabled(cur) && h.dyn.carIdx < len(h.dyn.tiles) && h.Focus.Set(h.dyn.tiles[h.dyn.carIdx].ID) {
+		h.Focus.Remember()
+	}
+	// The Switch Home starts on its first tile, and comes back to it after a
+	// game (themeswitch.go).
+	h.switchAfterRebuild()
 	if i := h.dynTileIndex(h.Focus.Current()); i >= 0 {
 		h.dyn.carIdx = i
 	}
@@ -446,6 +468,7 @@ func (h *HomeLayout) dynDeactivate() {
 	h.Focus.SetEnabled(HomeFocusEditPill, false)
 	base := h.dyn.baseOrder
 	h.dyn = homeDyn{baseOrder: base}
+	homeHub.items = false
 	h.rebuildItems()
 }
 
@@ -551,7 +574,7 @@ func (h *HomeLayout) dynStep(now uint64) {
 // so the frame rate stays at its interactive cadence until it settles.
 func homeLayoutAnimating() bool {
 	return homeLayoutActive && homeLayout != nil &&
-		(homeLayout.focusEnter.active || homeFocusGlide.animating() || (homeLayout.dyn.active && homeLayout.dyn.anim))
+		(homeLayout.focusEnter.active || homeFocusGlide.animating() || (homeLayout.dyn.active && homeLayout.dyn.anim) || homeConsoleAnimating())
 }
 
 // dynClampScroll keeps the first shown row inside the grid.
@@ -701,6 +724,15 @@ func (h *HomeLayout) dynFocusHover(id HomeFocusID, x, y int32) (handled, focused
 // dynMove is Move for the dynamic layouts.
 func (h *HomeLayout) dynMove(direction FocusDirection) HomeFocusID {
 	cur := h.Focus.Current()
+	// The welcome hub's pills and cards step by their own geometry
+	// (themeps5hub.go).
+	if h.hubIsItem(cur) {
+		return h.hubMove(direction)
+	}
+	// So do the Switch Home's round buttons and picture (themeswitch.go).
+	if next, ok := h.switchMove(cur, direction); ok {
+		return next
+	}
 	if h.dynIsTile(cur) {
 		if next, ok := h.dynStepFrom(cur, direction); ok {
 			if next != cur && h.Focus.Set(next) {
@@ -733,7 +765,7 @@ func (h *HomeLayout) dynMove(direction FocusDirection) HomeFocusID {
 	// the tile under them.
 	if direction == FocusDown {
 		switch cur {
-		case HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusQR:
+		case HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusQR:
 			if id := h.dynEntryBelow(h.Items[cur].Rect); id != "" && h.Focus.Set(id) {
 				h.Focus.Remember()
 				h.dynEnsureVisible(id)
@@ -769,6 +801,15 @@ func (h *HomeLayout) dynStepFrom(cur HomeFocusID, direction FocusDirection) (Hom
 		return "", false
 	}
 	if h.dynCarousel() {
+		if homeConsoleLook.carousel == homeCarouselHub {
+			// The welcome hub's row ends at both sides, and Down enters
+			// its board (themeps5hub.go).
+			return h.hubStepFrom(cur, i, direction)
+		}
+		if homeConsoleLook.carousel == homeCarouselText {
+			// Minimal Style's list walks Up and Down (thememinimal.go).
+			return h.textStepFrom(cur, i, direction)
+		}
 		n := len(h.dyn.tiles)
 		switch direction {
 		case FocusLeft:
@@ -889,6 +930,10 @@ func (h *HomeLayout) dynTileAbove(r sdl.Rect) HomeFocusID {
 	if !h.dynActive() || len(h.dyn.tiles) == 0 {
 		return ""
 	}
+	// Under the welcome hub's board, the card above (themeps5hub.go).
+	if id := h.hubItemAbove(r); id != "" {
+		return id
+	}
 	if h.dynCarousel() {
 		return h.dynEntryBelow(r)
 	}
@@ -934,7 +979,7 @@ func (h *HomeLayout) dynHeaderAbove(cur HomeFocusID) HomeFocusID {
 		}
 		return best
 	}
-	if id := pick([]HomeFocusID{HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusQR}); id != "" {
+	if id := pick([]HomeFocusID{HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusQR}); id != "" {
 		return id
 	}
 	return pick([]HomeFocusID{HomeFocusBrightness, HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusWeather,
@@ -991,6 +1036,12 @@ func (h *HomeLayout) dynWheel(dy int32) bool {
 			i = h.dyn.carIdx
 		}
 		next := (i + step + n) % n
+		if homeConsoleLook.carousel == homeCarouselHub {
+			// The welcome hub's row ends at both sides (themeps5hub.go).
+			if next = min(max(i+step, 0), n-1); next == i {
+				return true
+			}
+		}
 		if h.Focus.Set(h.dyn.tiles[next].ID) {
 			h.Focus.Remember()
 		}

@@ -3958,6 +3958,7 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 	// This loop never runs ledMicTick: the lights' microphone would fill its
 	// queue unread. It reopens on the main loop afterwards (ledmic.go).
 	ledMicClose()
+	hjRelease("the keyboard is up") // nor "Hey Juka" (wakeword.go)
 	exitInput := false
 	for !exitInput {
 		// An exit request from outside the loop (a stop signal, the power
@@ -4786,7 +4787,7 @@ func themeGalleryCurrentTab() themeTab {
 // themeGalleryPresets is the list the grid draws: the presets of the open tab,
 // in the canonical order.
 func themeGalleryPresets() []string {
-	return ListThemePresetsFor(themeGalleryCurrentTab().Kind)
+	return themeTabPresets(themeGalleryCurrentTab())
 }
 
 // themeGallerySwitchTab moves to another tab and resets the grid to its first
@@ -4799,13 +4800,8 @@ func themeGallerySwitchTab(delta int) bool {
 	if next < 0 {
 		next += len(themeGalleryTabs)
 	}
-	if next == themeGalleryTab {
-		return false
-	}
-	themeGalleryTab = next
-	themeGalleryIndex = 0
-	themeGalleryScroll = 0
-	return true
+	// The Experience tab opens its own screen (themetabs.go).
+	return themeGallerySelectTab(next)
 }
 
 // themeGalleryTabRect is the pill of tab i in screen space.
@@ -4926,16 +4922,17 @@ func themeGalleryCardAt(element Element, mx, my int32) int {
 	if len(presets) == 0 {
 		return -1
 	}
-	cols, cardW, _ := themeGalleryMetrics(element)
+	cols, cardW, visibleRows := themeGalleryMetrics(element)
 	scroll := themeGalleryScrollFor(element, themeGalleryIndex)
 	relX := mx - element.X
-	relY := my - element.Y
+	// The cards start under the tab strip (renderThemeGallery).
+	relY := my - element.Y - themeGalleryGridOffset()
 	if relX < 0 || relY < 0 {
 		return -1
 	}
 	col := int(relX / (cardW + themeGalleryGap))
 	row := int(relY / (themeGalleryH + themeGalleryGap))
-	if col < 0 || col >= cols || row < 0 {
+	if col < 0 || col >= cols || row < 0 || row >= visibleRows {
 		return -1
 	}
 	// Reject the gutter between two cards.
@@ -5011,7 +5008,7 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 			// A conversion is judged by its arrangement, so its preview is a
 			// sketch of one: a big card and small ones for the dashboard, equal
 			// tiles for the grid.
-			drawThemeArrangementSketch(renderer, p.Arrangement, prevX+10, prevY+8, prevW-20, prevH-24,
+			drawThemeSketchFor(renderer, p, prevX+10, prevY+8, prevW-20, prevH-24,
 				hexRGBA(p.TextSecondary), hexRGBA(p.Info))
 		} else {
 			drawText(renderer, small, "Aa", prevX+18, prevY+14, hexRGBA(p.TextPrimary), textAlignLeft)
@@ -5069,43 +5066,16 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 	}
 }
 
-// renderThemeGalleryTabs draws the gallery's tabs: a pill per kind, the open
-// one filled with the accent. Colour and "Total conversion" are different
-// promises, so they are different tabs rather than one long list.
+// renderThemeGalleryTabs draws the gallery's tabs: a pill per tab, the open
+// one filled with the accent. Colour, "Total conversion" and Consoles are
+// different promises, so they are different tabs rather than one long list;
+// the Experience packs screen draws the same strip (themetabs.go).
 func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Element) {
-	font := themeGalleryTabFont(config)
-	if font == nil {
-		return
-	}
-	active := themeGalleryCurrentTab()
-	for i, tab := range themeGalleryTabs {
-		rect := themeGalleryTabRect(element, i)
-		open := tab.Kind == active.Kind
-		fill := glassChipFill()
-		ink := ColorTextSecondary()
-		if open {
-			fill = glassAccent()
-			ink = contrastText(fill)
-		}
-		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, fill)
-		if !open {
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, glassChipEdge())
-		}
-		tw, th, _ := font.SizeUTF8(tab.Label)
-		drawText(renderer, font, tab.Label, rect.X+(rect.W-int32(tw))/2,
-			rect.Y+(rect.H-int32(th))/2, ink, textAlignLeft)
-	}
+	themeGalleryCurrentTab()
 	// The community library is the one thing on this screen that is not a
 	// preset, so its key is named on the band rather than left to the controls
 	// legend. It is dropped on a narrow element instead of crowding the tabs.
-	last := themeGalleryTabRect(element, len(themeGalleryTabs)-1)
-	hint := "C/Y · community themes"
-	hintW, hintH, _ := font.SizeUTF8(hint)
-	hintX := element.X + getElementWidth(element, 1160) - int32(hintW) - 4
-	if hintX > last.X+last.W+16 {
-		drawText(renderer, font, hint, hintX, last.Y+(last.H-int32(hintH))/2,
-			ColorTextSecondary(), textAlignLeft)
-	}
+	drawThemeTabStrip(renderer, config, element, themeGalleryTab, "C/Y · community themes")
 }
 
 // drawThemeArrangementSketch draws a miniature of an arrangement inside a

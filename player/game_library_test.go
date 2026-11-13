@@ -7,7 +7,9 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -230,6 +232,119 @@ func TestArtworkClosestCover(t *testing.T) {
 		got, ok := idx.closest(stem)
 		if got != want || ok != (want != "") {
 			t.Errorf("closest(%q) = %q, %v; want %q", stem, got, ok, want)
+		}
+	}
+
+	// Scene PSP/DS sets put a release number in front of the title.
+	for in, want := range map[string]string{
+		"0381 - 007 - From Russia with Love": "007 - From Russia with Love",
+		"1617_-_Ben 10 - Alien Force":        "Ben 10 - Alien Force",
+		"1942 (USA)":                         "",
+		"12 - Thing":                         "",
+	} {
+		got, ok := artworkStripReleaseNumber(in)
+		if ok != (want != "") || (ok && got != want) {
+			t.Errorf("artworkStripReleaseNumber(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	if got := libraryArtInitials("0381 - 007 - From Russia with Love"); got != "0F" {
+		t.Errorf("initials = %q, want 0F", got)
+	}
+
+	// A fetch takes the shown console first, then the others in turns.
+	var roms []scannedROM
+	for i := 0; i < 30; i++ {
+		roms = append(roms, scannedROM{System: "NES"})
+	}
+	roms = append(roms, scannedROM{System: "SNES"}, scannedROM{System: "PSP"})
+	order := artworkFetchOrder(roms, "PSP")
+	if len(order) != len(roms) || order[0].System != "PSP" || order[1].System != "NES" || order[artworkOrderChunk+1].System != "SNES" {
+		t.Errorf("artworkFetchOrder: %d games, head %q %q", len(order), order[0].System, order[1].System)
+	}
+}
+
+// A firmware script gets the game in MainUI's form (CrossMix's
+// common_launcher.sh reads its folders from it); anything else is untouched.
+// Its output names what it could not find, RetroArch first.
+func TestFirmwareROMArgAndLauncherOutput(t *testing.T) {
+	cases := []struct{ launcher, rom, want string }{
+		{"/mnt/SDCARD/Emus/GBA/launch.sh", "/mnt/SDCARD/Roms/GBA/a b.gba", "/mnt/SDCARD/Emus/GBA/../../Roms/GBA/a b.gba"},
+		{"/mnt/SDCARD/Emus/SFC/snes9x.sh", "/mnt/SDCARD/Roms/SFC/Sub/m.sfc", "/mnt/SDCARD/Emus/SFC/../../Roms/SFC/Sub/m.sfc"},
+		{"/mnt/SDCARD/Emus/GBA/launch.sh", "/mnt/sdcard2/Roms/GBA/a.gba", "/mnt/sdcard2/Roms/GBA/a.gba"},
+		{"/usr/trimui/emus/GBA/launch.sh", "/mnt/SDCARD/Roms/GBA/a.gba", "/mnt/SDCARD/Roms/GBA/a.gba"},
+		{"/mnt/SDCARD/Apps/X/launch.sh", "/mnt/SDCARD/Roms/GBA/a.gba", "/mnt/SDCARD/Roms/GBA/a.gba"},
+		{"/mnt/SDCARD/Emus/PSP/PPSSPPSDL.bin", "/mnt/SDCARD/Roms/PSP/a.iso", "/mnt/SDCARD/Roms/PSP/a.iso"},
+		{"/mnt/SDCARD/Emus/GBA/launch.sh", "/mnt/SDCARD/Roms", "/mnt/SDCARD/Roms"},
+	}
+	for _, c := range cases {
+		if got := firmwareROMArg(c.launcher, c.rom); got != c.want {
+			t.Errorf("firmwareROMArg(%q, %q) = %q, want %q", c.launcher, c.rom, got, c.want)
+		}
+	}
+	out := []string{
+		"/mnt/SDCARD/Emus/GBA/launch.sh /mnt/SDCARD/Emus/GBA/../../Roms/GBA/a.gba",
+		"/mnt/SDCARD/Emus/GBA/launch.sh: line 4: cpufreq.sh: not found",
+		"[ERROR] [Content] Failed to load content: No such file or directory",
+		"/mnt/SDCARD/Emus/GBA/launch.sh: line 9: /ra64.trimui: not found",
+	}
+	issues, excerpt := launcherOutputFindings(out, "/mnt/SDCARD/Emus/GBA/launch.sh")
+	if len(issues) != 1 || issues[0].Title != "The launch script could not find RetroArch" ||
+		len(issues[0].Files) != 1 || issues[0].Files[0] != "/ra64.trimui" {
+		t.Fatalf("issues = %+v", issues)
+	}
+	if len(excerpt) != len(out) {
+		t.Errorf("excerpt = %q", excerpt)
+	}
+	if issues, _ := launcherOutputFindings(out[:3], "/x/launch.sh"); len(issues) != 1 || issues[0].Files[0] != "cpufreq.sh" {
+		t.Errorf("without RetroArch: %+v", issues)
+	}
+
+	// A launcher's "#!" line, read the way the kernel reads it (MainUI runs
+	// the script itself): one interpreter, the rest of the line one argument.
+	for _, c := range []struct{ head, interp, arg string }{
+		{"#!/bin/bash\r\necho $0", "/bin/bash", ""},
+		{"#! /usr/bin/env  bash -e\n", "/usr/bin/env", "bash -e"},
+		{"#!/bin/sh", "/bin/sh", ""},
+		{"echo no line\n", "", ""},
+		{"#!\n", "", ""},
+	} {
+		interp, arg, ok := parseShebang([]byte(c.head))
+		if interp != c.interp || arg != c.arg || ok != (c.interp != "") {
+			t.Errorf("parseShebang(%q) = %q, %q, %v", c.head, interp, arg, ok)
+		}
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "launch.sh")
+	elf := filepath.Join(dir, "launch")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho $0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(elf, []byte("\x7fELF\x02\x01\x01"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if name, args := firmwareScriptCommand(script, "sh", []string{script, "/r.gba"}); name != "sh" || len(args) != 2 {
+		t.Errorf("sh script: %q %q", name, args)
+	}
+	if name, args := firmwareScriptCommand(elf, "sh", []string{elf, "/r.gba"}); name != elf || len(args) != 1 || args[0] != "/r.gba" {
+		t.Errorf("program launcher: %q %q", name, args)
+	}
+	if runtime.GOOS != "windows" {
+		bash := filepath.Join(dir, "bash")
+		if err := os.WriteFile(bash, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(script, []byte("#!"+bash+" -e\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if name, args := firmwareScriptCommand(script, "sh", []string{script, "/r.gba"}); name != bash ||
+			len(args) != 3 || args[0] != "-e" || args[1] != script {
+			t.Errorf("bash script: %q %q", name, args)
+		}
+		if err := os.WriteFile(script, []byte("#!"+filepath.Join(dir, "missing")+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if name, _ := firmwareScriptCommand(script, "sh", []string{script, "/r.gba"}); name != "sh" {
+			t.Errorf("missing interpreter: %q, want sh", name)
 		}
 	}
 }

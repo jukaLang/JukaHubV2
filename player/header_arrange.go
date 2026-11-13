@@ -435,7 +435,7 @@ func homeHeaderNeighbor(f *HomeFocusController, id HomeFocusID, dir FocusDirecti
 		for _, c := range [...]struct {
 			id HomeFocusID
 			r  sdl.Rect
-		}{{HomeFocusQR, companionHeaderRect}, {HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}} {
+		}{{HomeFocusQR, companionHeaderRect}, {HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}, {HomeFocusX1, x1TileRect}} {
 			if c.r.W <= 0 || !f.IsEnabled(c.id) {
 				continue
 			}

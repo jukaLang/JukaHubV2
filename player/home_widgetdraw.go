@@ -6,7 +6,8 @@ package main
 // the info widgets (Clock, Weather, Battery, Storage, Now playing, Calendar,
 // Playtime), the app tile a Start-menu entry — or a Home card away from its
 // own design — is drawn as, and the compact Continue card the carousel shows
-// off its centre.
+// off its centre. The quick controls (Wi-Fi, Bluetooth, Power) get the glass
+// card here and their face from home_quicktiles.go.
 //
 // Every painter takes two rects. item.Rect is the tile's settled rect: the
 // base the shape cache keys the card's texture by, so one texture serves a
@@ -53,6 +54,12 @@ func (h *HomeLayout) drawHomeWidget(renderer *sdl.Renderer, fonts HomeFonts, nam
 		drawHomeFocusGlow(renderer, draw)
 	}
 	drawGlassTile(renderer, item.Rect, draw, focused, pressed)
+	// Wi-Fi, Bluetooth and Power: a switch badge over the state
+	// (home_quicktiles.go).
+	if hqIsQuick(name) {
+		h.drawHomeQuickTile(renderer, fonts, name, item, draw, focused)
+		return
+	}
 	f, ok := hwpResolveFonts(fonts)
 	if !ok {
 		return
@@ -228,12 +235,16 @@ func (h *HomeLayout) drawHomeContinueCompact(renderer *sdl.Renderer, fonts HomeF
 }
 
 // homeWidgetActivate is A (or a click) on a widget: each opens the screen its
-// numbers come from. The caller has already played the activation sound.
+// numbers come from, and a quick control switches its radio or opens the
+// power card (home_quicktiles.go). The caller has already played the
+// activation sound.
 func homeWidgetActivate(config *Config, name string) {
 	if config == nil {
 		return
 	}
 	switch name {
+	case hqWifiName, hqBluetoothName, hqPowerName:
+		hqActivate(config, name)
 	case "clock":
 		openAlarmScene(config)
 	case "weather":
@@ -276,16 +287,20 @@ func homeWidgetAvailable(name string) bool {
 	if name == "battery" {
 		return getBatteryPercent() >= 0
 	}
+	if hqIsQuick(name) {
+		return hqAvailable(name)
+	}
 	return hwpKnown(name)
 }
 
-// hwpKnown reports whether name is a widget this file paints.
+// hwpKnown reports whether name is a widget this file paints (the quick
+// controls through home_quicktiles.go).
 func hwpKnown(name string) bool {
 	switch name {
 	case "clock", "weather", "battery", "storage", "nowplaying", "calendar", "playtime":
 		return true
 	}
-	return false
+	return hqIsQuick(name)
 }
 
 // hwpConfig is the config Home is drawn for this frame (renderHomeModern sets

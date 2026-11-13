@@ -241,6 +241,9 @@ var gaLink struct {
 	lost    atomic.Bool
 	release atomic.Bool
 	live    atomic.Bool
+	// wake: "Hey Juka" was heard during the game (wakeword.go); the watcher
+	// takes the pad as the chord would (gaWakeAsk).
+	wake    atomic.Bool
 	mu      sync.Mutex
 	presses []gaButton
 }
@@ -444,9 +447,17 @@ func gameAssistHeard(text string) bool {
 // screen and there is one, else as text. A vision request that fails is asked
 // again without the picture, so a question is never lost to it.
 func gaAsk(question string) {
+	// "Turn the volume down", "make it brighter", "turn on the stick lights":
+	// a command for the handheld runs at once, key or no key
+	// (voicesettings_ai.go).
+	if out, ok := voiceSettingsGameCommand(appConfig, question); ok {
+		gaCommandDone(question, out)
+		return
+	}
 	key := strings.TrimSpace(groqAPIKey())
 	models := groqCandidatesFor(groqModel())
-	base := jukaSystemPrompt() + " " + gaVoicePrompt
+	// The settings Juka may change, when the question asks for a change.
+	base := jukaSystemPrompt() + " " + gaVoicePrompt + voiceSettingsAIPrompt(appConfig, question)
 	textSystem := base
 	if gaOverlay.title == "" {
 		textSystem += " Which game it is is not known: if the answer depends on it, ask them to name the game."
@@ -485,6 +496,7 @@ func gaAsk(question string) {
 			}
 		}()
 		onDelta := func(partial string) {
+			partial = voiceSettingsHideMarks(partial) // never shown or spoken
 			orbAIText.mu.Lock()
 			if orbAIText.gen == gen {
 				orbAIText.text = partial
@@ -511,6 +523,24 @@ func gaAsk(question string) {
 		}
 		tbxPost(func() { gaAnswered(gen, question, reply, err) })
 	}()
+}
+
+// gaCommandDone shows and says what a command over the game did.
+func gaCommandDone(question string, out voiceOutcome) {
+	voiceOrbCancelRequest()
+	tone := out.Tone
+	if out.Done && tone == tbxToneNeutral {
+		tone = tbxToneGood
+	}
+	voiceOrbSay(out.Say, orbQuote(question), tone, orbOfferNone)
+	voiceOrb.hideAt = 0
+	if tone == tbxToneWarn || tone == tbxToneBad {
+		PlayErrorSound()
+	} else {
+		trophyEvent(tkVoiceCmd)
+		PlaySuccessSound()
+	}
+	ttsSpeakOutcome(ttsFromGame, out)
 }
 
 // gaAskWithPicture asks the vision model about the game's picture.
@@ -543,6 +573,8 @@ func gaAnswered(gen int, question, reply string, err error) {
 		PlayErrorSound()
 		return
 	}
+	// A setting change Juka asked for runs now, on the main thread.
+	reply, _ = voiceSettingsAIApply(appConfig, reply)
 	raw := reply
 	reply = orbPlain(chatStripThink(reply))
 	if reply == "" {
@@ -699,6 +731,9 @@ func gaClose(why string, handBack bool) {
 	gaTakePresses()
 	gmPickDrop() // the in-game menu's slot pictures (gamemenu_states.go)
 	jukaSpeakStop()
+	// The offline model (locked in memory) and Piper go before the game runs
+	// on, not at their in-game idle limit (voiceboost.go).
+	voiceReleaseForGame()
 	voiceOrbHideNow()
 	gaResume()
 	if !handBack {

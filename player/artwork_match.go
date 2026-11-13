@@ -70,9 +70,10 @@ const (
 	// back for a while, so a batch of 200 games offline fails fast instead of
 	// waiting out a timeout per game.
 	artworkIndexRetry = 10 * time.Minute
-	// artworkIndexMemory is how many consoles' lists stay in memory. A batch is
-	// sorted by path, so it works through one console at a time.
-	artworkIndexMemory = 3
+	// artworkIndexMemory is how many consoles' lists stay in memory. A batch
+	// takes the consoles in turns of artworkOrderChunk games (artworkFetchOrder)
+	// and several downloads run at once, so a few lists are in use together.
+	artworkIndexMemory = 6
 	// artworkIndexDirName is the cache folder beside the covers, so deleting
 	// data/game-art starts everything over.
 	artworkIndexDirName = ".server-index"
@@ -104,8 +105,8 @@ func artworkHTTPClient() *http.Client {
 			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 			TLSHandshakeTimeout:   15 * time.Second,
 			ResponseHeaderTimeout: 30 * time.Second,
-			MaxIdleConns:          2,
-			MaxIdleConnsPerHost:   2,
+			MaxIdleConns:          artworkFetchWorkers,
+			MaxIdleConnsPerHost:   artworkFetchWorkers,
 			IdleConnTimeout:       60 * time.Second,
 		}
 		if pool := bugrepRootCAs(); pool != nil {
@@ -213,6 +214,38 @@ func artworkServerName(name string) string {
 	}, name)
 }
 
+// artworkStripReleaseNumber drops the release-list number scene sets put in
+// front of a title ("0381 - 007 - From Russia with Love", "1617_-_Ben 10"):
+// three to five digits, then a dash or dot. It reports false, and returns name
+// unchanged, when there is no such number or nothing would be left after it.
+// Callers try the name as it is first: "1943 - The Battle of Midway" is a title.
+func artworkStripReleaseNumber(name string) (string, bool) {
+	s := strings.TrimSpace(name)
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits < 3 || digits > 5 {
+		return name, false
+	}
+	i := digits
+	for i < len(s) && (s[i] == ' ' || s[i] == '_') {
+		i++
+	}
+	if i >= len(s) || (s[i] != '-' && s[i] != '.') {
+		return name, false
+	}
+	i++
+	for i < len(s) && (s[i] == ' ' || s[i] == '_') {
+		i++
+	}
+	rest := strings.TrimSpace(s[i:])
+	if !strings.ContainsFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		return name, false
+	}
+	return rest, true
+}
+
 // artworkDownloadCover fetches one cover by its exact server name. A 404, or
 // something that is not a PNG of sane size, is os.ErrNotExist: a real "not
 // found". Anything else that went wrong is returned as is, so the caller does
@@ -271,17 +304,32 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 	if base == "" || strings.TrimSpace(rom.Collection) == "" || strings.TrimSpace(stem) == "" {
 		return nil, os.ErrNotExist
 	}
+	// "0381 - 007 - From Russia with Love": a release-list number in front of
+	// the title (PSP and DS ISO sets) is no part of any cover's name. The name
+	// as it is goes first, so "1943 - The Battle of Midway" stays a title.
+	bare, numbered := artworkStripReleaseNumber(stem)
 	idx, err := artworkIndexFor(ctx, client, base, rom.Collection)
 	if err != nil {
 		return nil, err
 	}
 	if idx == nil {
-		return fetchROMArtworkImage(ctx, client, base, rom.Collection, stem)
+		data, err := fetchROMArtworkImage(ctx, client, base, rom.Collection, stem)
+		if numbered && errors.Is(err, os.ErrNotExist) {
+			data, err = fetchROMArtworkImage(ctx, client, base, rom.Collection, bare)
+		}
+		return data, err
 	}
 	name, ok := idx.match(stem)
+	if !ok && numbered {
+		name, ok = idx.match(bare)
+	}
 	known := ""
 	if !ok {
-		if known = artworkDatabaseName(ctx, rom, stem); known != "" {
+		look := stem
+		if numbered {
+			look = bare
+		}
+		if known = artworkDatabaseName(ctx, rom, look); known != "" {
 			name, ok = idx.match(known)
 		}
 	}
@@ -290,6 +338,9 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 		// database's name first (it is the cleaner one), else the file's.
 		if known != "" {
 			name, ok = idx.closest(known)
+		}
+		if !ok && numbered {
+			name, ok = idx.closest(bare)
 		}
 		if !ok {
 			name, ok = idx.closest(stem)
@@ -713,6 +764,9 @@ var artworkIndexes struct {
 	byKey  map[string]*artworkIndex // nil value: the server gave no usable list
 	order  []string
 	failed map[string]artworkIndexFailure
+	// loading holds the lists being read right now; a second download for the
+	// same console waits on the channel instead of fetching the list again.
+	loading map[string]chan struct{}
 }
 
 type artworkIndexFailure struct {
@@ -744,24 +798,49 @@ func artworkIndexCachePath(collection string) string {
 // is a network failure, which the caller reports as no answer.
 func artworkIndexFor(ctx context.Context, client *http.Client, base, collection string) (*artworkIndex, error) {
 	key := base + "|" + collection
-	now := time.Now()
-	artworkIndexes.Lock()
-	if idx, ok := artworkIndexes.byKey[key]; ok {
-		artworkIndexes.Unlock()
-		return idx, nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if f, ok := artworkIndexes.failed[key]; ok {
-		if age := now.Sub(f.at); age >= 0 && age < artworkIndexRetry {
+	var done chan struct{}
+	for {
+		now := time.Now()
+		artworkIndexes.Lock()
+		if idx, ok := artworkIndexes.byKey[key]; ok {
 			artworkIndexes.Unlock()
-			return nil, f.err
+			return idx, nil
+		}
+		if f, ok := artworkIndexes.failed[key]; ok {
+			if age := now.Sub(f.at); age >= 0 && age < artworkIndexRetry {
+				artworkIndexes.Unlock()
+				return nil, f.err
+			}
+		}
+		wait, busy := artworkIndexes.loading[key]
+		if !busy {
+			if artworkIndexes.loading == nil {
+				artworkIndexes.loading = make(map[string]chan struct{})
+			}
+			done = make(chan struct{})
+			artworkIndexes.loading[key] = done
+			artworkIndexes.Unlock()
+			break
+		}
+		artworkIndexes.Unlock()
+		// Another download is reading this list: wait for it and look again
+		// (its result, or its failure, is then in the maps above).
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
-	artworkIndexes.Unlock()
 
 	idx, err := loadArtworkIndex(ctx, client, base, collection)
 
 	artworkIndexes.Lock()
 	defer artworkIndexes.Unlock()
+	delete(artworkIndexes.loading, key)
+	close(done)
 	if err != nil {
 		// A stop from the user is not a server problem worth remembering.
 		if ctx.Err() == nil {

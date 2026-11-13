@@ -29,12 +29,12 @@ import (
 // btDiagTools are the programs whose presence and place matter.
 var btDiagTools = []string{
 	"bluetoothctl", "bluetoothd", "hciattach", "rtk_hciattach", "hciconfig", "btmgmt",
-	"rfkill", "rfkill.elf", "bluealsa", "trimui_btmanager", "dbus-daemon",
+	"rfkill", "rfkill.elf", "bluealsa", "bluealsad", "trimui_btmanager", "dbus-daemon", "dbus-send",
 }
 
 // btDiagProcesses are the processes whose running matters.
 var btDiagProcesses = []string{
-	"bluetoothd", "hciattach", "rtk_hciattach", "trimui_btmanager", "bluealsa", "keymon", "dbus-daemon",
+	"bluetoothd", "hciattach", "rtk_hciattach", "trimui_btmanager", "bluealsa", "bluealsad", "keymon", "dbus-daemon",
 }
 
 // btDiagPairingRoots are where BlueZ keeps pairings: TrimUI's /etc/lib (stock
@@ -105,7 +105,9 @@ func btDiagnosticsText() string {
 	}
 
 	line("Pad HID", "%s", btDiagPadHID("/"))
-	line("Audio route", "%s", btDiagMaskAddrs(audioRouteDiag()))
+	for _, kv := range audioRouteDiagLines() {
+		line(kv[0], "%s", btDiagMaskAddrs(kv[1]))
+	}
 
 	// One walk of /proc for every name (btDiagProcessTable).
 	table := btDiagProcessTable("/proc", btDiagProcesses)
@@ -119,7 +121,7 @@ func btDiagnosticsText() string {
 		procs = append(procs, fmt.Sprintf("%s=%v", name, pids))
 	}
 	line("Processes", "%s", strings.Join(procs, " "))
-	for _, name := range append([]string{"bluetoothd"}, btAttachProcessNames...) {
+	for _, name := range append([]string{"bluetoothd", "bluealsa", "bluealsad"}, btAttachProcessNames...) {
 		if pids := table[name]; len(pids) > 0 {
 			if args := btDiagCmdline(pids[0]); args != "" {
 				line(name, "%s", btDiagMaskAddrs(args))

@@ -356,3 +356,32 @@ func TestHeaderTrophyInTheRoomStartsTheVisitOver(t *testing.T) {
 		t.Fatal("the cup thinks Home is the trophy room")
 	}
 }
+
+// X1 (Xbox Remote Play) closes the Remote Play group: Right walks PS4 → PS5 →
+// X1 → the pairing code, and with X1 hidden PS5 steps straight onto the code.
+func TestHomeFocusX1ClosesTheRemotePlayGroup(t *testing.T) {
+	f := NewHomeFocusController()
+	f.Set(HomeFocusPS5)
+	if got := f.Move(FocusRight); got != HomeFocusX1 {
+		t.Fatalf("Right from PS5 = %s, want X1", got)
+	}
+	if got := f.Move(FocusRight); got != HomeFocusQR {
+		t.Fatalf("Right from X1 = %s, want the pairing code", got)
+	}
+	if got := f.Move(FocusLeft); got != HomeFocusX1 {
+		t.Fatalf("Left from the pairing code = %s, want X1", got)
+	}
+	f.SetEnabled(HomeFocusX1, false)
+	f.Set(HomeFocusPS5)
+	if got := f.Move(FocusRight); got != HomeFocusQR {
+		t.Fatalf("with X1 hidden Right from PS5 = %s, want the pairing code", got)
+	}
+	if got := f.Move(FocusLeft); got != HomeFocusPS5 {
+		t.Fatalf("with X1 hidden Left from the pairing code = %s, want PS5", got)
+	}
+	for name, want := range map[string]bool{"GreenOvercast": true, "Green Overcast": true, "green-overcast.sh": true, "Greenlight": false} {
+		if got := x1PortName(name); got != want {
+			t.Errorf("x1PortName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

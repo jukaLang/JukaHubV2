@@ -35,6 +35,8 @@ func screenChildSignal(cmd *exec.Cmd, kind screenSignal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	// A game JukaHub stops did not fail to start (gamelaunch_watch.go).
+	gameLaunchNoteStop(cmd)
 	if kind == screenSignalKill {
 		return cmd.Process.Kill()
 	}

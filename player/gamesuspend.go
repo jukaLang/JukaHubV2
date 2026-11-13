@@ -58,6 +58,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	bgmHaltForGame()
 	// And JukaHub of a Bluetooth headset, which takes one client (audioroute.go).
 	audioRouteReleaseForChild()
+	// The voice assistant's model, voice and CPU boost go too (voiceboost.go).
+	voiceReleaseForGame()
 	if cmd == nil {
 		return
 	}

@@ -234,6 +234,8 @@ type gaPadSession struct {
 func gaPadRun(p mbridgeParams, stop <-chan struct{}, done chan<- struct{}) {
 	s := &gaPadSession{fd: -1, buf: make([]byte, mbridgeReadEvents*evdevEventSize)}
 	s.eng.p = p
+	// A "Hey Juka" from an earlier game is not this one's.
+	gaLink.wake.Store(false)
 	// Run last to first: the pad is given back, the watcher is marked stopped,
 	// and a fault anywhere is logged instead of taking JukaHub down with it.
 	defer func() {
@@ -394,10 +396,15 @@ func (s *gaPadSession) step(now time.Time) error {
 	switch {
 	case s.held:
 		s.heldTick(now)
+	case gaLink.wake.Swap(false):
+		// "Hey Juka" (wakeword.go): the assistant as if the chord were held.
+		if gaPad.wantAsk.Load() {
+			s.take(now, gaModeAsk, true)
+		}
 	case gaPad.wantMenu.Load() && s.menu.due(now, gaMenuHold):
-		s.take(now, gaModeMenu)
+		s.take(now, gaModeMenu, false)
 	case gaPad.wantAsk.Load() && s.ask.due(now, gaChordHold):
-		s.take(now, gaModeAsk)
+		s.take(now, gaModeAsk, false)
 	case !s.shotAt.IsZero() && !s.shotArmed && now.Sub(s.shotAt) >= menuShotHold:
 		s.shotArm()
 	}
@@ -726,9 +733,9 @@ func (s *gaPadSession) chordHeldNow(mode gaMode) bool {
 }
 
 // take holds the pad for the overlay — the assistant or the menu, by mode:
-// the steps in the file comment.
-func (s *gaPadSession) take(now time.Time, mode gaMode) {
-	if !s.chordHeldNow(mode) {
+// the steps in the file comment. byVoice: "Hey Juka" asked, no chord is held.
+func (s *gaPadSession) take(now time.Time, mode gaMode, byVoice bool) {
+	if !byVoice && !s.chordHeldNow(mode) {
 		// The events said both were down and the pad says not: a release went
 		// missing. It is read whole, and a real hold is waited for.
 		s.resync(now)
@@ -771,20 +778,38 @@ func (s *gaPadSession) take(now time.Time, mode gaMode) {
 		s.resync(now)
 	}
 	// The chord that opened it is held still: neither counts again until
-	// let go.
-	s.ask.reset(true)
-	s.menu.reset(true)
+	// let go. A voice opening held no chord, so the next one counts at once
+	// (with fired set, only an all-released event would clear it).
+	s.ask.reset(!byVoice)
+	s.menu.reset(!byVoice)
 	gaLink.release.Store(false)
 	gaLink.lost.Store(false)
 	gaLink.mode.Store(int32(mode))
 	gaLink.held.Store(true)
 	gaLink.request.Store(true)
 	playHaptic(hapticSuccessPulse)
-	if mode == gaModeMenu {
+	switch {
+	case mode == gaModeMenu:
 		logInfo("gameassist", "Select + L2 held: %q is JukaHub's while the in-game menu is up", s.name)
-	} else {
+	case byVoice:
+		logInfo("gameassist", "Hey Juka: %q is JukaHub's while Juka listens", s.name)
+	default:
 		logInfo("gameassist", "Select + R2 held: %q is JukaHub's while Juka listens", s.name)
 	}
+}
+
+// gaWakeAsk asks the pad watcher to take the pad for the assistant, as the
+// chord does, because "Hey Juka" was heard (wakeword.go). false: no watcher
+// is running for the assistant, or it holds the pad already. Main thread.
+func gaWakeAsk() bool {
+	gaPad.mu.Lock()
+	running := gaPad.running
+	gaPad.mu.Unlock()
+	if !running || !gaPad.wantAsk.Load() || gaLink.held.Load() || gaLink.live.Load() {
+		return false
+	}
+	gaLink.wake.Store(true)
+	return true
 }
 
 // heldTick is the held pad's upkeep: either chord again, the give-back the

@@ -241,8 +241,8 @@ no footer names may have no key.
 | Browser | Select menu · L1 / R1 scroll · L2 / R2 zoom · X links · Y search · L3 mode | M or the Menu key · PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info, Backspace or Alt+← / Alt+→ back / forward, F5 reload |
 | Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
 | Chat | L1 / R1 tabs · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, R renames you, Del drops a waiting file |
-| On-screen keyboard | A type · B close · X delete · Y submit · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
-| Settings | L1 / R1 sections · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · arrows (Left / Right page the sheet) |
+| On-screen keyboard | A type · Start send / submit · B close · X delete · Y submit (Ask AI in chat) · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
+| Settings | L1 / R1 sections · Y search settings · A on "More settings (N)" unfolds the rest · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · Ctrl+F or type a letter on the rail to search · arrows (Left / Right page the sheet) |
 | Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
 | Voice command | A or Menu speak / stop · X type · Y phone QR · B back (cancels while listening or during the pause) | Enter · X · Y · Esc; F4 speak / stop |
 | Wi-Fi | X details · Y scan · Select diagnostics · L1 / R1 page | X · Y or R · I · PgUp / PgDn; D disconnect, C reconnect, F forget |
@@ -332,9 +332,11 @@ again), and so do 30 seconds without touching the right stick; the right stick
 brings it back where it was. A stick that rests a little off centre never
 brings it up.
 
-Screens that use the right stick themselves keep it: Chat scrolls its history
-with it, JukaLand and browser games aim with it, and the stick calibration and
-the controller test measure it. The pointer also stays away in Quick Settings
+Screens that use the right stick themselves keep it: JukaLand and browser
+games aim with it, and the stick calibration and the controller test measure
+it. Chat shares it: up / down scrolls the history, and a sideways tilt brings
+the pointer up so the paperclip, links and chips can be clicked with **A**;
+once the D-pad puts the pointer away, up / down scrolls again. The pointer also stays away in Quick Settings
 and the wallpaper picker. Turn it off in **Settings → Controls → Virtual
 cursor**.
 
@@ -730,11 +732,19 @@ hide or show it. A crowded bar still gives way the usual way: the forecast and
 the Wi-Fi meter first, the clock and the battery last.
 
 **Adding a tile.** **A** on the **Add** tile opens **Add to Home**, a card
-over Home with three sections (Widgets, Home cards, Apps and tools) listing
-what is not on Home yet, each row with its default size. **Up** / **Down**
-move, **L1** / **R1** (PgUp / PgDn) jump between sections, **A** (Enter) adds
-the highlighted entry, closes the card and puts the focus on the new tile, and
-**B** (Esc) closes the card; the mouse and the wheel work too.
+over Home with four sections (Quick controls, Widgets, Home cards, Apps and
+tools) listing what is not on Home yet, each row with its default size.
+**Up** / **Down** move, **L1** / **R1** (PgUp / PgDn) jump between sections,
+**A** (Enter) adds the highlighted entry, closes the card and puts the focus on
+the new tile, and **B** (Esc) closes the card; the mouse and the wheel work too.
+
+**Quick controls** pin what NextUI's quick menu offers. **Wi-Fi** and
+**Bluetooth** switch the radio on or off with **A** (Enter): the round badge is
+lit while the radio is on, and the tile names the network, or how many devices
+are connected. **Power** opens the power card — Sleep, Restart and Power off on
+the handheld, with Power off focused; Exit on a desktop. Where JukaHub cannot
+switch the radio itself (Windows, macOS) the Wi-Fi and Bluetooth tiles open
+their pages instead.
 
 **With a mouse**: click a tile to focus it and its remove badge to remove it.
 On the focused tile, drag the handle on its bottom-right corner to any size (it
@@ -813,10 +823,14 @@ first result, so a search keeps going instead of stopping after the first batch.
 
 ### Theme gallery
 
-The gallery of theme presets (Settings → Appearance) has two tabs: **Colour**
-and **Total conversion**. A colour preset repaints the interface; a conversion
-repaints it *and* rearranges the home screen, which is why they are not one
-list.
+The gallery of theme presets (Settings → Display & theme → Theme presets) has
+four tabs: **Colour**, **Total conversion**, **Consoles** and **Experience**. A
+colour preset repaints the interface; a conversion repaints it *and* rearranges
+the home screen, which is why they are not one list. Consoles holds the
+console-inspired conversions (PS1 to PS5, Super Nintendo to Switch, Mega Drive,
+Dreamcast, Xbox…). Experience opens the Experience packs screen, which shows the
+same tabs; there L1 / R1 switch tabs too and the D-pad moves between packs, and
+B leaves to wherever the presets were opened from.
 
 | Button | Action |
 |--------|--------|
@@ -1007,9 +1021,9 @@ handle, roles and last message.
 | Button | Action |
 |--------|--------|
 | D-pad Up / Down | Walk the history one message at a time (a tall message scrolls first); Down past the newest message reaches the files waiting to be sent, then the composer |
-| D-pad Left / Right, L1 / R1 | Previous / next tab; on the waiting files, Left / Right picks one |
+| D-pad Left / Right, L1 / R1 | Previous / next tab; on the waiting files, Left / Right picks one; on the composer, Left selects the paperclip (Right goes back) |
 | L2 / R2 | Jump to the oldest / newest message |
-| Right stick | Scroll the history freely |
+| Right stick | Up / down scrolls the history freely; tilt it sideways for the pointer (A clicks, D-pad puts it away) |
 | A | Type a message; on a selected message, open its actions; on a waiting file, take it off the message |
 | Start | Send what is typed and attached (with nothing to send, Start opens the Start menu as everywhere) |
 | X | Attach files: Files opens to pick them |
@@ -1026,7 +1040,9 @@ you have written anything).
 ### Sending files
 
 **X** (or the paperclip at the start of the composer) opens Files in pick
-mode; its bar says which tab the files are for. **A** on a file attaches it and
+mode. The paperclip is selectable: **Left** on the composer steps onto it,
+**A** there opens the picker, and **Right** or **B** goes back to the text
+field. Files' bar says which tab the files are for; its bar says which tab the files are for. **A** on a file attaches it and
 brings the chat back; mark several with **X** first to attach them together.
 Folders open as usual and **Left** climbs one, while **B** calls the pick off
 and goes straight back to the chat. **Send to chat** in Files' **Y** sheet

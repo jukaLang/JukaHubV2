@@ -92,10 +92,10 @@ settings such as `search_query` or `stream_url`.
 | `castGames` | bool | Screen Share's **Games too** (handheld only, on by default): while a game owns the screen the picture comes from `/dev/fb0`, through the bundled ffmpeg when it is installed, else JukaHub's own reader at up to 8 fps and 640 px. Off shows viewers a pause card while you play |
 | `castRotate` | `0`/`90`/`180`/`270` | turns a shared game's picture clockwise; unset turns a portrait framebuffer under a landscape canvas a quarter anticlockwise (the guess for a panel mounted sideways) |
 | `castToken` | string | Screen Share's view-only link token (16 base32 characters), kept so a bookmarked link — a TV's, say — survives restarts; **Y** on the panel replaces it. A secret: exported configs redact it |
-| `spatialMode` | `"off"`/`"auto"`/`"headphones"`/`"speakers"` | Settings → Sound & haptics → **Spatial audio**, also Tools → Audio (default `off`): virtual surround for everything JukaHub plays — videos, music, podcasts, audiobooks, YouTube. `headphones` places four virtual loudspeakers and a small virtual room around you, `speakers` widens the stereo of a close pair of speakers, and `auto` picks between them by the output in use. Music's Bit-perfect bypasses it ([SPATIAL_AUDIO.md](SPATIAL_AUDIO.md)) |
+| `spatialMode` | `"off"`/`"auto"`/`"headphones"`/`"speakers"` | Settings → Sound & haptics → **Spatial audio**, also Tools → Audio (default `off`): virtual surround for everything JukaHub plays — videos, music, podcasts, audiobooks, YouTube, background music — and, with `spatialGames`, games and apps. `headphones` places four virtual loudspeakers and a small virtual room around you, `speakers` widens the stereo of a close pair of speakers, and `auto` picks between them by the output in use. Music's Bit-perfect bypasses it ([SPATIAL_AUDIO.md](SPATIAL_AUDIO.md)) |
 | `spatialStrength` | 0–100 | Tools → Audio → **Spatial strength** (default 75; the row steps 25/50/75/100): how much of the effect you get — the far-ear crossfeed, the rear loudspeakers and the room in Headphones mode, the extra width in Speakers mode |
 | `spatialRoom` | `"small"`/`"medium"`/`"large"` | Tools → Audio → **Virtual room** (default `medium`): the room the Headphones mode plays in, from close and dry to a hall |
-| `spatialGames` | bool | Tools → Audio → **Spatial audio in games** (default off): a RetroArch game started from the library plays through the same effect, as a DSP filter RetroArch loads for that launch only; the row says when the plugin, RetroArch or its filter support is missing |
+| `spatialGames` | bool | Tools → Audio → **Spatial audio in games & apps** (default on; matters only while `spatialMode` is not `off`): games and apps started from JukaHub play through the same effect — on the handheld every program, through ALSA's LADSPA support once a check has proven it, else (and on Windows) RetroArch games as a DSP filter RetroArch loads for that launch only; the row says when the plugin or a route is missing ([SPATIAL_AUDIO.md](SPATIAL_AUDIO.md)) |
 | `netPlayEnabled`, `videoPlayerEnabled`, `screensaverEnabled`, `launcherEnabled`, `externalAppEnabled`, `packageRepoEnabled`, `themeGalleryEnabled` | bool | feature toggles |
 | `deviceModel`, `targetPlatform`, `defaultOrientation`, `accentColor` | string | device hints; unknown values mean "no preference", never an error |
 
@@ -486,6 +486,17 @@ an arrangement:
  "background": "#f6f1e7", "buttonColor": "#e8dfcd", "...": "the rest of the colours"}
 ```
 
+The console-inspired looks (**PS5 Style**, **PS4 Style**, **Switch 2 Style**,
+**Switch 2 Style Dark**, **Xbox Style** and the classic consoles) have their own
+Consoles tab. They also set the tile corners and the focus ring; PS5 Style
+turns the Carousel into the console's welcome hub (a row of icon tiles over
+trophy pills and a board of info cards), PS4 Style reshapes the row as a
+top-left *shelf* and the Switch 2 looks as the console's home screen (an
+edge-scrolling *strip* of square tiles led by your recent games, over a line
+of round buttons).
+A theme file can use the same optional keys: `carouselStyle`, `tileRadius`,
+`focusRing` and `focusRing2`. See [THEMES.md](THEMES.md#console-styles).
+
 ### Home tiles (`homeTiles`)
 
 The Carousel and Widgets arrangements show one ordered list of tiles, the
@@ -508,6 +519,7 @@ Browser, Chat, Tools, Files, Settings and the Clock widget along the bottom.
 |---|---|
 | `continue`, `media`, `emulator`, `packages`, `apps`, `favorites`, `browser`, `chat`, `tools`, `files`, `settings` | a built-in Home card (`emulator` is the Games card) |
 | `w:clock`, `w:weather`, `w:battery`, `w:storage`, `w:nowplaying`, `w:calendar`, `w:playtime` | an info widget |
+| `w:wifi`, `w:bluetooth`, `w:power` | a quick control: **A** switches Wi-Fi or Bluetooth on or off (the tile shows the network, or how many devices are connected), or opens the power card — Sleep, Restart and Power off on the handheld, Exit on a desktop. Where the radio cannot be switched (Windows, macOS) the tile opens the Wi-Fi or Bluetooth page instead |
 | `app:scene:<Scene>` | a screen row of the Start menu, by the scene's `name` (`app:scene:Weather`) |
 | `app:do:<Start menu entry>` | an action row of the Start menu — a tool, a device action, a plugin's button — by its label (`app:do:Wi-Fi Networks`) |
 
@@ -613,6 +625,18 @@ unseen, still filed in the bell, and when the video pauses, stops or leaves full
 screen one line says how many came in. Errors always show. On, those toasts show
 over the video, and so do new chat messages (Discord, Juka's answers) as
 "Sender: message" toasts. Quiet Mode still holds every toast.
+
+### Glass, Settings lists and screen vision (`glassStyle`, `settingsShowAll`, `jukaSeesScreen`)
+
+- `glassStyle` (`"classic"` default, or `"realistic"`): Settings → Display &
+  theme → Glass. See [THEMES.md](THEMES.md#glass-style).
+- `settingsShowAll` (bool, default `false`): Settings normally opens each
+  section on its most-used rows, with "More settings (N)" for the rest; `true`
+  shows every row, the old full lists (Settings → About → Show all settings).
+  The Date & time rows are at the end of General and the Keyboard rows at the
+  end of Controls; the section ids `datetime` and `keyboard` still resolve.
+- `jukaSeesScreen` (`"off"`, `"ask"` default, or `"always"`): Settings → Voice & AI → Let
+  Juka see the screen. See [VOICE.md](VOICE.md#asking-about-whats-on-screen).
 
 ## `elements`
 

@@ -284,6 +284,11 @@ func peerHandler() http.Handler {
 	mux.HandleFunc(steamPeerRunPath, peerGuard(true, steamHandlePeerRun))
 	// ... and which Steam games it has installed or downloading (steam_remote.go).
 	mux.HandleFunc(steamPeerLibraryPath, peerGuard(true, steamHandlePeerLibrary))
+	// A handheld copies Minecraft: Java Edition versions from this PC
+	// (minecraft_peer.go): game files only, never the account.
+	mux.HandleFunc(mcPeerVersionsPath, peerGuard(true, mcHandlePeerVersions))
+	mux.HandleFunc(mcPeerPlanPath, peerGuard(true, mcHandlePeerPlan))
+	mux.HandleFunc(mcPeerFilePath, peerGuard(true, mcHandlePeerFile))
 	return mux
 }
 

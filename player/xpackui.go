@@ -12,8 +12,11 @@ package main
 // been read off the render thread.
 //
 // Pad: D-pad moves between cards (Right from the last column goes to the card's
-// buttons), A applies or presses, X exports, Y undoes, B goes back. Keys:
-// arrows, Enter/Space, X/E export, Y/U undo, I import, Esc/Backspace back.
+// buttons), A applies or presses, X exports, Y undoes, L1/R1 change Themes tab,
+// B goes back. Keys: arrows, Enter/Space, X/E export, Y/U undo, I import, Tab /
+// Shift+Tab the Themes tabs, Esc/Backspace back. The screen is the Themes
+// gallery's Experience tab and draws its tab strip under the header
+// (themetabs.go).
 // Mouse and touch: tap a card to focus it, tap it again or a button to act.
 
 import (
@@ -90,8 +93,8 @@ var xpackImports struct {
 // xpackBusy is set while an export or an import is writing files.
 var xpackBusy atomic.Bool
 
-// xpackOpenGallery opens the Experience packs screen (Settings, Quick Settings
-// and the Tools hub call it).
+// xpackOpenGallery opens the Experience packs screen (the Tools hub calls it;
+// the Themes gallery's Experience tab switches here sideways, themetabs.go).
 func xpackOpenGallery(config *Config) {
 	if config == nil {
 		return
@@ -650,6 +653,13 @@ func xpackKey(e *sdl.KeyboardEvent, c *Config) bool {
 		xpackUndoPress(c)
 	case sdl.K_i:
 		xpackOpenImports()
+	case sdl.K_TAB:
+		// The Themes tabs, as on the gallery: Tab forward, Shift+Tab back.
+		step := 1
+		if e.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
+			step = -1
+		}
+		xpackThemeTabStep(c, step)
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
 		xpackBack(c)
 	default:
@@ -700,17 +710,11 @@ func xpackPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		xpackBack(c)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		if !xpackUI.inPane && xpackUI.cursor > 0 {
-			xpackUI.cursor--
-			xpackUI.buttonsKey = xpackButtonsKey{}
-			PlayNavSound()
-		}
+		// L1/R1 are the Themes tabs here too (themetabs.go); the D-pad walks
+		// the cards.
+		xpackThemeTabStep(c, -1)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		if !xpackUI.inPane && xpackUI.cursor < len(xpackUI.cards)-1 {
-			xpackUI.cursor++
-			xpackUI.buttonsKey = xpackButtonsKey{}
-			PlayNavSound()
-		}
+		xpackThemeTabStep(c, 1)
 	}
 	return true
 }
@@ -739,6 +743,9 @@ func xpackMouse(mx, my int32, c *Config) bool {
 				PlayNavSound()
 			}
 		}
+		return true
+	}
+	if xpackThemeTabClick(c, mx, my) {
 		return true
 	}
 	if i := xpackKitButtonHit(xpackUI.buttonRects, mx, my); i >= 0 {
@@ -802,6 +809,7 @@ func xpackHints() []FooterHint {
 	if xpackUI.undoOK {
 		hints = append(hints, FooterHint{Button: "Y", Label: "Undo"})
 	}
+	hints = append(hints, FooterHint{Button: "L1/R1", Label: "Tabs"})
 	return append(hints, FooterHint{Button: "B", Label: "Back"})
 }
 
@@ -825,6 +833,9 @@ func xpackRender(renderer *sdl.Renderer, c *Config) {
 	header := UIPanelHeader("Experience packs", "Theme, Home, sounds and start screen, switched together — and undone in one press", "sparkles")
 	header.Status = xpackUI.status
 	contentY, bottom, margin := xpackKitFrame(renderer, c, xpackSceneName, header)
+	// The Themes tabs, Experience lit: this screen is that gallery's last tab
+	// (themetabs.go).
+	contentY = xpackDrawThemeTabs(renderer, c, margin, contentY, screenWidth-2*margin)
 	gridW := (screenWidth - 2*margin) * 58 / 100
 	grid := sdl.Rect{X: margin, Y: contentY, W: gridW, H: bottom - contentY}
 	paneX := margin + gridW + 18

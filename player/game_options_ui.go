@@ -11,6 +11,7 @@ package main
 // (game_library.go) applies it for that child only.
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -22,6 +23,7 @@ const (
 	gameOptionsRowSort
 	gameOptionsRowLayout
 	gameOptionsRowShowHidden
+	gameOptionsRowEmulator
 	gameOptionsRowCPUProfile
 	gameOptionsRowCeiling
 	gameOptionsRowVideo
@@ -64,6 +66,12 @@ var gameOptsUI struct {
 	coverFiles []artCleanupFile
 	coverBytes int64
 	coverWait  bool
+	// emulators are the ones that can play the game (findGameLaunchers), read
+	// when the sheet opens for the Emulator row.
+	emulators  []emuEntry
+
+	// systemLauncher is the console's game-launchers.json pin, if any.
+	systemLauncher string
 }
 
 // gameArgsBuffer is what the on-screen keyboard edits for the arguments row.
@@ -82,6 +90,8 @@ func gameOptionsRowName(row int) string {
 		return "Library view"
 	case gameOptionsRowShowHidden:
 		return "Show hidden"
+	case gameOptionsRowEmulator:
+		return "Emulator"
 	case gameOptionsRowCPUProfile:
 		return "CPU profile"
 	case gameOptionsRowCeiling:
@@ -116,6 +126,8 @@ func gameOptionsRowHint(row int) string {
 		return "List, a horizontal cover row, or a vertical cover column"
 	case gameOptionsRowShowHidden:
 		return "Reveal games hidden from the library"
+	case gameOptionsRowEmulator:
+		return "Which emulator plays it, or ask each time when several can"
 	case gameOptionsRowCPUProfile:
 		return "Battery saver, Balanced or Performance while this game runs"
 	case gameOptionsRowCeiling:
@@ -158,6 +170,12 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			return "Shown"
 		}
 		return "Only visible"
+	case gameOptionsRowEmulator:
+		if opts.Emulator == "" && gameOptsUI.systemLauncher != "" {
+			// game-launchers.json pins the console: no question is asked.
+			return filepath.Base(gameOptsUI.systemLauncher) + " (console setting)"
+		}
+		return gameEmulatorLabel(opts.Emulator, gameOptsUI.emulators)
 	case gameOptionsRowCPUProfile:
 		return gameCPUProfileLabel(opts.CPUProfile)
 	case gameOptionsRowCeiling:
@@ -337,6 +355,12 @@ func openGameOptions() bool {
 	gameOptsUI.choice = gameOptionsChoiceNone
 	gameOptsUI.coverFiles = nil
 	gameOptsUI.coverWait = false
+	gameOptsUI.emulators = nil
+	gameOptsUI.systemLauncher = ""
+	if game.System != androidLibrarySystem && game.System != html5LibrarySystem {
+		gameOptsUI.emulators = findGameLaunchers(game.System, emulatorEntries())
+		gameOptsUI.systemLauncher = configuredGameLauncher(game.System, loadGameLauncherOverrides(gameLauncherOverridesPath()))
+	}
 	PlayActivateSound()
 	return true
 }
@@ -396,6 +420,15 @@ func adjustGameOptions(delta int) {
 		return
 	}
 	switch gameOptsUI.cursor {
+	case gameOptionsRowEmulator:
+		next := cycleGameEmulator(gameOptsUI.opts.Emulator, gameOptsUI.emulators, delta)
+		if next == gameOptsUI.opts.Emulator {
+			return
+		}
+		gameOptsUI.opts = updateGameOptions(gameOptsUI.game.Path, func(o gameOptions) gameOptions {
+			o.Emulator = next
+			return o
+		})
 	case gameOptionsRowCeiling:
 		next := cycleGameCeiling(gameOptsUI.opts.MaxFreqKHz, delta)
 		if next == gameOptsUI.opts.MaxFreqKHz {
@@ -475,6 +508,19 @@ func activateGameOptionsRow() {
 			ShowToast("Hidden games concealed", ToastKindInfo)
 		}
 	case gameOptionsRowCeiling, gameOptionsRowCPUProfile, gameOptionsRowVideo:
+		adjustGameOptions(1)
+	case gameOptionsRowEmulator:
+		// A walks the list and wraps back to "Ask each time" at its end, so
+		// one button reaches every choice.
+		if gameOptsUI.opts.Emulator != "" &&
+			cycleGameEmulator(gameOptsUI.opts.Emulator, gameOptsUI.emulators, 1) == gameOptsUI.opts.Emulator {
+			gameOptsUI.opts = updateGameOptions(gameOptsUI.game.Path, func(o gameOptions) gameOptions {
+				o.Emulator = ""
+				return o
+			})
+			PlayNavSound()
+			return
+		}
 		adjustGameOptions(1)
 	case gameOptionsRowArgs:
 		vkOpenGameArgs()
@@ -742,7 +788,8 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 			valueColor = focusColor
 		}
 		if (idx == gameOptionsRowCPUProfile && gameOptsUI.opts.CPUProfile != "") ||
-			(idx == gameOptionsRowVideo && gameOptsUI.opts.VideoFilter != "") {
+			(idx == gameOptionsRowVideo && gameOptsUI.opts.VideoFilter != "") ||
+			(idx == gameOptionsRowEmulator && gameOptsUI.opts.Emulator != "") {
 			valueColor = focusColor
 		}
 		if idx == gameOptionsRowArgs && strings.TrimSpace(gameOptsUI.opts.Args) != "" {
@@ -752,7 +799,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		// leave Left/Right undiscoverable.
 		if selected && (idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
 			idx == gameOptionsRowVideo || idx == gameOptionsRowSort || idx == gameOptionsRowLayout ||
-			idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden) {
+			idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden || idx == gameOptionsRowEmulator) {
 			value = "‹  " + value + "  ›"
 		}
 		value = ellipsize(font, value, innerW/2)

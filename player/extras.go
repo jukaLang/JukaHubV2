@@ -977,7 +977,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	} {
 		if focusIdx == chip.index && chip.rect.W > 0 {
 			r := chip.rect
-			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, glassFocusRingWidth, glassAccent())
+			strokeRoundedRectAt(renderer, r, homeFocusGlide.apply(r), 10, glassFocusRingWidth, glassAccent())
 		}
 	}
 }

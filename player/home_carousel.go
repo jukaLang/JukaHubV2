@@ -13,6 +13,11 @@ package main
 // card shrinking out of the middle reuses one cached shape the whole way.
 // The full Continue and Media cards are drawn only for the settled centre
 // card; elsewhere the compact painters stand in (home_widgetdraw.go).
+//
+// A console-look theme reshapes the row (themeconsole.go): the PS4 shelf and
+// the Switch strip place, veil and label the cards their own way through
+// carStyleRect, carIsCentre, carVeil and carDrawConsoleLabels; PS5 Style's
+// welcome hub draws the whole body itself (themeps5hub.go).
 
 import (
 	"math"
@@ -87,32 +92,53 @@ func (h *HomeLayout) carRect(o float64) sdl.Rect {
 // painted from (the shape cache key), so scaling a card never makes a new
 // shape.
 func (h *HomeLayout) carBase(r sdl.Rect) sdl.Rect {
-	bw := int32(math.Round(homeCarW * float64(h.Width) / float64(HomeBaseWidth)))
-	bh := int32(math.Round(homeCarH * float64(h.Height) / float64(HomeBaseHeight)))
+	baseW, baseH := homeCarBaseSize()
+	bw := int32(math.Round(baseW * float64(h.Width) / float64(HomeBaseWidth)))
+	bh := int32(math.Round(baseH * float64(h.Height) / float64(HomeBaseHeight)))
 	return sdl.Rect{X: r.X + r.W/2 - bw/2, Y: r.Y + r.H/2 - bh/2, W: bw, H: bh}
 }
 
-// carOffset is tile i's offset from the focus right now.
+// carOffset is tile i's offset from the focus right now. The shelf
+// (themeconsole.go) keeps the other tiles to the right of the focus; the
+// welcome hub's row (themeps5hub.go) does not turn round.
 func (h *HomeLayout) carOffset(i int) float64 {
+	switch homeConsoleLook.carousel {
+	case homeCarouselShelf:
+		return homeShelfOffset(float64(i)-h.dyn.carPos, len(h.dyn.tiles))
+	case homeCarouselHub:
+		return float64(i) - homeHub.pos
+	case homeCarouselText:
+		return float64(i) - homeText.pos
+	}
 	return homeCarouselWrap(float64(i)-h.dyn.carPos, len(h.dyn.tiles))
 }
 
 // carSettled reports whether the row has stopped on the focused card.
 func (h *HomeLayout) carSettled() bool {
+	if homeConsoleLook.carousel == homeCarouselHub {
+		return math.Abs(float64(h.dyn.carIdx)-homeHub.pos) < 0.02
+	}
+	if homeConsoleLook.carousel == homeCarouselText {
+		return math.Abs(float64(homeText.first)-homeText.pos) < 0.02
+	}
 	return math.Abs(homeCarouselWrap(float64(h.dyn.carIdx)-h.dyn.carPos, len(h.dyn.tiles))) < 0.02
 }
 
 // carPlace writes the cards' drawn rects into their items; a card too far
 // out to be drawn gets none, so it cannot be hit.
 func (h *HomeLayout) carPlace() {
+	switch homeConsoleLook.carousel {
+	case homeCarouselStrip:
+		h.stripStep()
+	case homeCarouselHub:
+		h.hubStep()
+	case homeCarouselText:
+		h.textStep() // Minimal Style (thememinimal.go)
+	}
 	for i, t := range h.dyn.tiles {
 		item := h.Items[t.ID]
 		item.ID = t.ID
-		if o := h.carOffset(i); math.Abs(o) <= homeCarReach {
-			item.Rect = h.carRect(o)
-		} else {
-			item.Rect = sdl.Rect{}
-		}
+		item.Rect, _ = h.carStyleRect(i, h.carOffset(i))
 		h.Items[t.ID] = item
 	}
 }
@@ -163,6 +189,16 @@ func (h *HomeLayout) dynClick(mx, my int32, config *Config) bool {
 // carRender draws the row, the focused card's labels and the dots.
 func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData, focused HomeFocusID, lift float64) {
 	n := len(h.dyn.tiles)
+	if homeConsoleLook.carousel == homeCarouselHub {
+		// PS5 Style's welcome hub: the icon row and the board under it.
+		h.hubRender(renderer, fonts, data, focused, lift)
+		return
+	}
+	if homeConsoleLook.carousel == homeCarouselText {
+		// Minimal Style: names only (thememinimal.go).
+		h.textRender(renderer, fonts, data, focused)
+		return
+	}
 	if n == 0 {
 		return
 	}
@@ -173,7 +209,7 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 	m := 0
 	for i := range h.dyn.tiles {
 		o := h.carOffset(i)
-		if math.Abs(o) > homeCarReach || m >= len(order) {
+		if h.Items[h.dyn.tiles[i].ID].Rect.W <= 0 || m >= len(order) {
 			continue
 		}
 		order[m], offs[m] = i, o
@@ -193,7 +229,7 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 		if item.Rect.W <= 0 {
 			continue
 		}
-		centre := math.Abs(o) < 0.02
+		centre := h.carIsCentre(i, o)
 		isFocus := t.ID == focused && centre
 		held := homeEdit.open && homeEdit.holding && t.ID == h.Focus.Current() && centre
 		cardLift := 0.0
@@ -217,8 +253,11 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 		draw = scaleHomeCard(draw, cardLift)
 		// The full Continue and Media cards paint themselves from base and the
 		// lift, so a carried one is not grown again: its badge stays on its
-		// corner (dynPaintTile does the same).
-		ownShape := t.Kind == homeTileCard && (t.ID == HomeFocusContinue || t.ID == HomeFocusMedia) && centre && settled
+		// corner (dynPaintTile does the same). Only the centred carousel
+		// shows them: they are laid out for its wide card, and the console
+		// rows' tiles (themeconsole.go) are squares half its width.
+		full := centre && settled && homeConsoleLook.carousel == homeCarouselCentred
+		ownShape := t.Kind == homeTileCard && (t.ID == HomeFocusContinue || t.ID == HomeFocusMedia) && full
 		if held && !ownShape {
 			grow := scaleX(4, h.Width)
 			draw = sdl.Rect{X: draw.X - grow, Y: draw.Y - grow, W: draw.W + 2*grow, H: draw.H + 2*grow}
@@ -226,7 +265,10 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 		draw.Y += homePressOffset(pressDepth, h.Height)
 		paint := item
 		paint.Rect = base
-		full := centre && settled
+		// The Switch Home paints its own squares (themeswitch.go).
+		if h.switchPaintTile(renderer, fonts, data, t, item, isFocus, pressed, pressDepth) {
+			continue
+		}
 		switch t.Kind {
 		case homeTileCard:
 			switch {
@@ -250,15 +292,18 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 		case homeTileAdd:
 			h.drawEditAddTile(renderer, fonts, paint, draw, isFocus, pressed)
 		}
-		if !centre {
+		if a := carVeil(o); !centre && a > 0 {
 			// The row fades toward the edges: a veil of the backdrop's own
 			// colour, so a light theme fades to light and a dark one to dark.
-			veil := WithAlpha(ColorBackground, uint8(140*math.Min(math.Abs(o), 1)))
-			fillRoundedRectAt(renderer, base, draw, homeTileRadius, veil)
+			fillRoundedRectAt(renderer, base, draw, homeTileRadius, WithAlpha(ColorBackground, a))
 		}
 		if homeEdit.open && t.Kind != homeTileAdd && centre {
 			h.drawEditBadges(renderer, fonts, t, draw, false)
 		}
+	}
+	if h.carDrawConsoleLabels(renderer, fonts) {
+		// The consoles mark the focus with the tile itself, not dots.
+		return
 	}
 	h.carDrawLabels(renderer, fonts)
 	h.carDrawDots(renderer, fonts)

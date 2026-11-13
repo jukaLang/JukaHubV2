@@ -56,11 +56,18 @@ type gameOptions struct {
 	Args        string `json:"args,omitempty"`
 	CPUProfile  string `json:"cpu_profile,omitempty"`
 	VideoFilter string `json:"video_filter,omitempty"`
+
+	// Emulator is the launcher this game always starts with ("Always use" in
+	// the emulator picker, or the options sheet's Emulator row); "" asks each
+	// time when more than one emulator fits. LastEmulator is the one picked
+	// last, highlighted the next time the picker asks (emupicker.go).
+	Emulator     string `json:"emulator,omitempty"`
+	LastEmulator string `json:"last_emulator,omitempty"`
 }
 
 func (o gameOptions) empty() bool {
 	return o.MaxFreqKHz <= 0 && strings.TrimSpace(o.Args) == "" &&
-		o.CPUProfile == "" && o.VideoFilter == ""
+		o.CPUProfile == "" && o.VideoFilter == "" && o.Emulator == "" && o.LastEmulator == ""
 }
 
 // ── CPU profile per game ─────────────────────────────────────────────────
@@ -345,6 +352,8 @@ func normaliseGameOptions(o gameOptions) gameOptions {
 	}
 	o.CPUProfile = normaliseGameCPUProfile(o.CPUProfile)
 	o.VideoFilter = normaliseGameVideoFilter(o.VideoFilter)
+	o.Emulator = strings.TrimSpace(o.Emulator)
+	o.LastEmulator = strings.TrimSpace(o.LastEmulator)
 	return o
 }
 

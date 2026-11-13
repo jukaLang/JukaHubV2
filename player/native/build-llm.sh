@@ -1,6 +1,8 @@
 #!/bin/sh
 # Build the optional Smart Pro text model in build-root.sh's Ubuntu 20.04 arm64
 # root. The source, model and both licenses are pinned and verified.
+# llama-server keeps the model loaded between questions (offline_ai_server.go);
+# llama-cli stays in the package as the one-shot fallback.
 set -eu
 
 LLAMA_COMMIT=4762ad7316dcdec20016ab5985fb46a27902204d
@@ -25,24 +27,28 @@ cmake -S "$SRC" -B "$WORK/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_EXE_LINKER_FLAGS='-static-libstdc++ -static-libgcc' \
     -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_VULKAN=OFF \
-    -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=OFF \
+    -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON \
     -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON
 BUILD_JOBS=${JOBS:-4}
 if [ "$BUILD_JOBS" -gt 4 ]; then BUILD_JOBS=4; fi
-cmake --build "$WORK/build" --target llama-cli --parallel "$BUILD_JOBS"
+cmake --build "$WORK/build" --target llama-cli llama-server --parallel "$BUILD_JOBS"
 BIN="$WORK/build/bin/llama-cli"
-test -s "$BIN"
-file "$BIN" | grep -q 'ELF 64-bit.*ARM aarch64'
-if readelf --version-info "$BIN" | grep -Eo 'GLIBC_[0-9]+\.[0-9]+' | \
-    sed 's/GLIBC_//' | awk -F. '$1 > 2 || ($1 == 2 && $2 > 31) { bad = 1 } END { exit !bad }'; then
-    echo 'llama-cli requires a glibc newer than 2.31' >&2
-    exit 1
-fi
-if readelf -d "$BIN" | grep NEEDED | grep -Ev 'Shared library: \[(lib(c|m|pthread|dl|rt)\.so\.[^]]+|ld-linux-aarch64\.so\.1)\]$'; then
-    echo 'llama-cli has an unexpected shared dependency' >&2
-    exit 1
-fi
-"$BIN" --help > /dev/null 2>&1
+SERVER="$WORK/build/bin/llama-server"
+for exe in "$BIN" "$SERVER"; do
+    name=$(basename "$exe")
+    test -s "$exe"
+    file "$exe" | grep -q 'ELF 64-bit.*ARM aarch64'
+    if readelf --version-info "$exe" | grep -Eo 'GLIBC_[0-9]+\.[0-9]+' | \
+        sed 's/GLIBC_//' | awk -F. '$1 > 2 || ($1 == 2 && $2 > 31) { bad = 1 } END { exit !bad }'; then
+        echo "$name requires a glibc newer than 2.31" >&2
+        exit 1
+    fi
+    if readelf -d "$exe" | grep NEEDED | grep -Ev 'Shared library: \[(lib(c|m|pthread|dl|rt)\.so\.[^]]+|ld-linux-aarch64\.so\.1)\]$'; then
+        echo "$name has an unexpected shared dependency" >&2
+        exit 1
+    fi
+    "$exe" --help > /dev/null 2>&1
+done
 
 MODEL="$WORK/$MODEL_NAME"
 curl -fL --retry 3 --connect-timeout 15 --max-time 2400 \
@@ -59,6 +65,42 @@ timeout 180 "$BIN" -m "$MODEL" -p "$SMOKE_PROMPT" \
     > "$WORK/smoke.txt" 2> "$WORK/smoke.log"
 grep -Eiq '(^|[^0-9])(4|four)([^0-9]|$)' "$WORK/smoke.txt"
 
+# The server with exactly the options offlineAIServerArgs (offline_ai_server.go)
+# gives it: an option this llama.cpp does not know fails the build here, not
+# on the handheld. Keep the two lists the same.
+SMOKE_PORT=18631
+SMOKE_KEY=jukahub-smoke
+"$SERVER" -m "$MODEL" --host 127.0.0.1 --port "$SMOKE_PORT" --api-key "$SMOKE_KEY" \
+    -c 512 -np 1 -t 3 -tb 4 -b 64 -ub 64 -ngl 0 --mlock --no-warmup \
+    > "$WORK/server.log" 2>&1 &
+SERVER_PID=$!
+trap 'kill "$SERVER_PID" 2> /dev/null; rm -rf "$WORK"' EXIT HUP INT TERM
+up=0
+for _ in $(seq 1 180); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$SMOKE_PORT/health" > /dev/null 2>&1; then
+        up=1
+        break
+    fi
+    kill -0 "$SERVER_PID" 2> /dev/null || break
+    sleep 1
+done
+if [ "$up" != 1 ]; then
+    tail -n 40 "$WORK/server.log" >&2
+    echo 'llama-server did not become ready' >&2
+    exit 1
+fi
+# The same request shape the app streams (stream=false here, to grep it).
+curl -fsS --max-time 180 -H "Authorization: Bearer $SMOKE_KEY" \
+    -H 'Content-Type: application/json' \
+    -d '{"prompt":"<|im_start|>user\nWhat is two plus two?<|im_end|>\n<|im_start|>assistant\n","n_predict":32,"temperature":0.2,"cache_prompt":true,"stream":false,"stop":["<|im_end|>","<|im_start|>"]}' \
+    "http://127.0.0.1:$SMOKE_PORT/completion" > "$WORK/server-smoke.json"
+# Only the answer's text: the response's timings and settings hold digits too.
+grep -o '"content":"[^"]*"' "$WORK/server-smoke.json" | head -n 1 > "$WORK/server-smoke.txt"
+grep -Eiq '(^|[^0-9.])(4|four)([^0-9]|$)' "$WORK/server-smoke.txt"
+kill "$SERVER_PID" 2> /dev/null || true
+wait "$SERVER_PID" 2> /dev/null || true
+trap 'rm -rf "$WORK"' EXIT HUP INT TERM
+
 curl -fL --retry 3 --connect-timeout 15 --max-time 120 \
     'https://www.apache.org/licenses/LICENSE-2.0.txt' -o "$WORK/MODEL_LICENSE.txt"
 printf '%s  %s\n' "$APACHE_SHA" "$WORK/MODEL_LICENSE.txt" | sha256sum -c -
@@ -66,10 +108,12 @@ printf '%s  %s\n' "$APACHE_SHA" "$WORK/MODEL_LICENSE.txt" | sha256sum -c -
 OUT=/src/player/native/bin/juka-llm
 mkdir -p "$OUT"
 install -m 755 "$BIN" "$OUT/llama-cli"
+install -m 755 "$SERVER" "$OUT/llama-server"
 install -m 644 "$MODEL" "$OUT/$MODEL_NAME"
 install -m 644 "$SRC/LICENSE" "$OUT/LLAMA_LICENSE.txt"
 install -m 644 "$WORK/MODEL_LICENSE.txt" "$OUT/MODEL_LICENSE.txt"
 printf 'llama.cpp %s\nmodel %s\nmodel name %s\nsource sha256 %s\nmodel sha256 %s\n' \
     "$LLAMA_COMMIT" "$MODEL_REV" "$MODEL_NAME" "$SOURCE_SHA" "$MODEL_SHA" > "$OUT/BUILDINFO.txt"
 printf 'binary sha256 %s\n' "$(sha256sum "$OUT/llama-cli" | cut -d' ' -f1)" >> "$OUT/BUILDINFO.txt"
+printf 'server sha256 %s\n' "$(sha256sum "$OUT/llama-server" | cut -d' ' -f1)" >> "$OUT/BUILDINFO.txt"
 echo "Offline AI ready in $OUT"

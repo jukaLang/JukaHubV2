@@ -10,6 +10,11 @@ package main
 // from anywhere. Rows are the declarative ones in setmodel.go: switches,
 // carousels, links to other screens, text fields and read-outs.
 //
+// Each section opens on its most-used rows with "More settings (N)" under
+// them (setessentials.go), and Search sits above the sections: Y (Ctrl+F, or
+// a letter typed on the rail) opens the keyboard and the pane lists matching
+// rows from every section as you type (setsearch.go).
+//
 // The scene answers to "Settings" and to the pages it replaced
 // (SettingsGeneral, SettingsAppearance, SettingsSmart), which open it on their
 // section, so search results, achievements and old configs still land on the
@@ -82,6 +87,10 @@ type setHubState struct {
 	refreshedAt uint64
 	dirty       bool
 	kbWasOpen   bool
+	onSearch    bool     // the rail's Search entry is selected (setsearch.go)
+	viewSearch  bool     // the rows on screen are search results
+	folded      []bool   // rows hidden under More (setessentials.go)
+	searchRect  sdl.Rect // the Search entry, for the mouse
 	sheet       setSheetState
 	railRects   []sdl.Rect
 	rowRects    []sdl.Rect
@@ -165,6 +174,8 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	setHub.scroll, setHub.target = 0, 0
 	setHub.railScroll = 0
 	setHub.sheet.open = false
+	setHub.onSearch = false
+	setSearchReset()
 	// The time-zone picker closes too, unless a deep link opened it for this
 	// visit (tzpicker.go).
 	tzPickerHubEnter()
@@ -207,14 +218,21 @@ func setHubRefresh(c *Config) {
 	// the same way it did when that page was drawn, for anything that still
 	// substitutes it.
 	snapPreviewSyncRow(c)
-	rows := setSectionRows(c, sections[setHub.section])
-	setHub.rows = rows
-	if cap(setHub.views) < len(rows) {
-		setHub.views = make([]setRowView, len(rows))
-	}
-	setHub.views = setHub.views[:len(rows)]
-	for i := range rows {
-		setHub.views[i] = setHubReadRow(c, rows[i])
+	setHub.viewSearch = setHub.onSearch
+	if setHub.onSearch {
+		// The Search entry's pane: the results, read like any rows.
+		setHub.rows, setHub.views = setSearchRows(c)
+		setHub.folded = nil
+	} else {
+		sec := sections[setHub.section]
+		rows := setSectionRows(c, sec)
+		views := make([]setRowView, len(rows))
+		for i := range rows {
+			views[i] = setHubReadRow(c, rows[i])
+		}
+		// Essentials first, the rest under More (setessentials.go).
+		arranged := setEssentialsArrange(c, sec.ID, rows, views)
+		setHub.rows, setHub.views, setHub.folded = arranged.rows, arranged.views, arranged.folded
 	}
 	setHub.viewSection = setHub.section
 	setHub.refreshedAt = sdl.GetTicks64()
@@ -318,7 +336,11 @@ func setHubSelectSection(c *Config, i int, sound bool) {
 	if i >= n {
 		i = n - 1
 	}
-	if i == setHub.section {
+	// Leaving Search for a section, even the one it came from, re-reads the
+	// section's rows in place of the results.
+	wasSearch := setHub.onSearch
+	setHub.onSearch = false
+	if i == setHub.section && !wasSearch {
 		return
 	}
 	setHub.section = i
@@ -368,8 +390,30 @@ func setOpenSettingRow(c *Config, sectionID, rowID, label string) {
 
 // setHubFocusRow puts the focus on the row with this id, or — for a row that
 // predates ids — on the one with this label. It reports whether it found a
-// visible row; the caller leaves the first row focused when it did not.
+// visible row; the caller leaves the first row focused when it did not. A row
+// folded under More unfolds its section first (setessentials.go), so search,
+// voice and deep links reach every row.
 func setHubFocusRow(id, label string) bool {
+	if id == "" && label == "" {
+		// A deep link with no row (setHubEnter): nothing to find, and an
+		// unlabelled row must not unfold its section or take the focus.
+		return false
+	}
+	if !setHub.onSearch {
+		for i := range setHub.rows {
+			if i >= len(setHub.folded) || !setHub.folded[i] {
+				continue
+			}
+			row := setHub.rows[i]
+			if (id != "" && row.ID == id) || (id == "" && row.Label == label) {
+				if sections := setSections(); setHub.section >= 0 && setHub.section < len(sections) {
+					setMoreOpen[sections[setHub.section].ID] = true
+					setHubRefresh(setHub.cfg)
+				}
+				break
+			}
+		}
+	}
 	for i := range setHub.rows {
 		if i >= len(setHub.views) || !setHub.views[i].visible {
 			continue
@@ -439,26 +483,41 @@ const (
 	setActNextSection
 	setActFirst
 	setActLast
+	setActSearch
 )
 
 // setHubAct applies one intent.
 func setHubAct(c *Config, act setHubAction) {
 	switch act {
+	case setActSearch:
+		setSearchStart(c)
+		return
 	case setActPrevSection:
+		if setHub.onSearch {
+			return
+		}
 		setHubSelectSection(c, setHub.section-1, true)
 		return
 	case setActNextSection:
+		if setHub.onSearch {
+			setHubSelectSection(c, 0, true)
+			return
+		}
 		setHubSelectSection(c, setHub.section+1, true)
+		return
+	}
+	if !setHub.inPane && setHub.onSearch {
+		setHubActSearchEntry(c, act)
 		return
 	}
 	if !setHub.inPane {
 		switch act {
 		case setActUp:
 			if setHub.section == 0 {
-				// The top bar (Back pill, clock, bell) is above the first
-				// section, the way it is above every screen's first row.
-				focusEngine.ClearFocus()
-				focusChromeBar()
+				// Search sits above the first section; the top bar (Back
+				// pill, clock, bell) is above Search.
+				setSearchBegin(c)
+				PlayNavSound()
 				return
 			}
 			setHubSelectSection(c, setHub.section-1, true)
@@ -499,6 +558,11 @@ func setHubAct(c *Config, act setHubAction) {
 			setHubActivate(c, setHub.row, 1)
 		}
 	case setActOK:
+		if setHub.onSearch {
+			// A result goes to its row; the row itself is pressed there.
+			setSearchJump(c, setHub.row)
+			return
+		}
 		setHubActivate(c, setHub.row, 0)
 	case setActBack:
 		setHubLeavePane()
@@ -664,7 +728,8 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 		setHub.dirty = true
 	}
 	setHub.kbWasOpen = virtualKeyboardActive
-	if setHub.dirty || setHub.viewSection != setHub.section || sdl.GetTicks64()-setHub.refreshedAt > setHubRefreshMs {
+	if setHub.dirty || setHub.viewSection != setHub.section || setHub.viewSearch != setHub.onSearch ||
+		sdl.GetTicks64()-setHub.refreshedAt > setHubRefreshMs {
 		setHubRefresh(c)
 	}
 
@@ -710,6 +775,16 @@ func setHubDrawRail(renderer *sdl.Renderer, c *Config, f setHubFonts, rail sdl.R
 	if itemH < 44 {
 		itemH = 44
 	}
+	// Search sits above the sections and stays put while they scroll
+	// (setsearch.go).
+	setHub.searchRect = sdl.Rect{X: rail.X, Y: rail.Y, W: rail.W, H: itemH}
+	setHubDrawRailSearch(renderer, f, setHub.searchRect, chrome)
+	rail.Y += itemH + 10
+	rail.H -= itemH + 10
+	if rail.H <= 0 {
+		setHub.railRects = setHub.railRects[:0]
+		return
+	}
 	const gap = int32(4)
 	total := int32(len(sections))*(itemH+gap) - gap
 	selY := int32(setHub.section) * (itemH + gap)
@@ -749,7 +824,7 @@ func setHubDrawRail(renderer *sdl.Renderer, c *Config, f setHubFonts, rail sdl.R
 			continue
 		}
 		setHub.railRects[i] = r
-		selected := i == setHub.section
+		selected := i == setHub.section && !setHub.onSearch
 		focused := selected && !setHub.inPane && !chrome && !setHub.sheet.open
 		switch {
 		case selected:
@@ -783,9 +858,13 @@ func setHubDrawPane(renderer *sdl.Renderer, c *Config, f setHubFonts, pane sdl.R
 		return
 	}
 	sec := sections[setHub.section]
+	title, subtitle := sec.Title, sec.Subtitle
+	if setHub.onSearch {
+		title, subtitle = "Search", setSearchSubtitle()
+	}
 	th, sh := int32(f.title.Height()), int32(f.sub.Height())
-	drawText(renderer, f.title, ellipsize(f.title, sec.Title, pane.W-8), pane.X+4, pane.Y, ColorTextPrimary(), textAlignLeft)
-	drawText(renderer, f.sub, ellipsize(f.sub, sec.Subtitle, pane.W-8), pane.X+4, pane.Y+th+2, ColorTextMuted(), textAlignLeft)
+	drawText(renderer, f.title, ellipsize(f.title, title, pane.W-8), pane.X+4, pane.Y, ColorTextPrimary(), textAlignLeft)
+	drawText(renderer, f.sub, ellipsize(f.sub, subtitle, pane.W-8), pane.X+4, pane.Y+th+2, ColorTextMuted(), textAlignLeft)
 	listTop := pane.Y + th + 2 + sh + 14
 	list := sdl.Rect{X: pane.X, Y: listTop, W: pane.W, H: pane.Y + pane.H - listTop}
 	setHub.listRect = list
@@ -944,11 +1023,21 @@ func setHubDrawRow(renderer *sdl.Renderer, f setHubFonts, i int, r sdl.Rect, foc
 		if focused {
 			ink = glassAccent()
 		}
-		if row.Kind == setKindText {
+		switch {
+		case row.ID == setMoreRowID:
+			// More unfolds below itself: a plus to open, a minus to fold.
+			glyph := "plus"
+			if setHubSectionOpen() {
+				glyph = "minus"
+			}
+			icon := int32(20)
+			DrawHomeIcon(renderer, glyph, sdl.Rect{X: right - icon, Y: r.Y + (r.H-icon)/2, W: icon, H: icon}, focused)
+			ctrlW = icon
+		case row.Kind == setKindText:
 			icon := int32(20)
 			DrawHomeIcon(renderer, "edit", sdl.Rect{X: right - icon, Y: r.Y + (r.H-icon)/2, W: icon, H: icon}, focused)
 			ctrlW = icon
-		} else {
+		default:
 			setDrawChevron(renderer, right-6, r.Y+r.H/2, 7, 1, ink)
 			ctrlW = 12
 		}
@@ -1040,6 +1129,10 @@ func setHubKey(e *sdl.KeyboardEvent, c *Config) bool {
 		setSheetKey(&setHub.sheet, e.Keysym.Sym)
 		return true
 	}
+	if setHubKeyStartsSearch(e) {
+		setHubAct(c, setActSearch)
+		return true
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		setHubAct(c, setActUp)
@@ -1119,6 +1212,9 @@ func setHubPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 		setHubAct(c, setActPrevSection)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		setHubAct(c, setActNextSection)
+	case sdl.CONTROLLER_BUTTON_Y:
+		// Y searches, as it does on Home (setsearch.go).
+		setHubAct(c, setActSearch)
 	}
 	return true
 }
@@ -1140,11 +1236,15 @@ func setHubMouse(mx, my int32, c *Config) bool {
 		setSheetMouse(&setHub.sheet, mx, my)
 		return true
 	}
+	if setHub.searchRect.W > 0 && pointInRect(mx, my, setHub.searchRect) {
+		setSearchStart(c)
+		return true
+	}
 	for i, r := range setHub.railRects {
 		if r.W <= 0 || !pointInRect(mx, my, r) {
 			continue
 		}
-		if i == setHub.section {
+		if i == setHub.section && !setHub.onSearch {
 			if !setHub.inPane {
 				setHubEnterPane(true)
 			}
@@ -1168,6 +1268,11 @@ func setHubMouse(mx, my int32, c *Config) bool {
 			if part, hit := setCarouselHit(setHub.rowParts[i], mx, my); hit {
 				dir = part
 			}
+		}
+		if setHub.onSearch && dir == 0 {
+			// A result goes to its row; its carousel arrows still step it.
+			setSearchJump(c, i)
+			return true
 		}
 		setHubActivate(c, i, dir)
 		return true
@@ -1207,19 +1312,33 @@ func setHubHints() []FooterHint {
 	if setHub.sheet.open {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}
 	}
+	search := setSearchHint()
 	if !setHub.inPane {
+		if setHub.onSearch {
+			b := FooterHint{Button: "B", Label: "Back"}
+			if strings.TrimSpace(setSearch.query) != "" {
+				b.Label = "Clear"
+			}
+			return []FooterHint{{Button: "A", Label: "Type"}, {Button: "D-Pad", Label: "Sections"}, b}
+		}
 		return []FooterHint{{Button: "D-Pad", Label: "Sections"}, {Button: "A", Label: "Open"},
-			{Button: "L1/R1 / Tab", Label: "Jump"}, {Button: "B", Label: "Back"}}
+			{Button: "L1/R1 / Tab", Label: "Jump"}, search, {Button: "B", Label: "Back"}}
 	}
 	back := FooterHint{Button: "B", Label: "Sections"}
+	if setHub.onSearch {
+		back.Label = "Search"
+	}
 	i := setHub.row
 	if !setHubRowVisible(i) || i >= len(setHub.rows) {
-		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, back}
+		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, search, back}
 	}
 	row := setHub.rows[i]
+	if setHub.onSearch {
+		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Go to"}, search, back}
+	}
 	switch row.Kind {
 	case setKindToggle:
-		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Switch"}, back}
+		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Switch"}, search, back}
 	case setKindChoice:
 		a := "Next"
 		switch {
@@ -1228,13 +1347,20 @@ func setHubHints() []FooterHint {
 		case row.Field != "":
 			a = "Type"
 		}
-		return []FooterHint{{Button: "Left/Right", Label: "Change"}, {Button: "A", Label: a}, back}
+		return []FooterHint{{Button: "Left/Right", Label: "Change"}, {Button: "A", Label: a}, search, back}
 	case setKindAction:
-		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Open"}, back}
+		a := "Open"
+		if row.ID == setMoreRowID {
+			a = "Show more"
+			if setHubSectionOpen() {
+				a = "Show fewer"
+			}
+		}
+		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: a}, search, back}
 	case setKindText:
-		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Edit"}, back}
+		return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Edit"}, search, back}
 	}
-	return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, back}
+	return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, search, back}
 }
 
 // ── Routing hooks ─────────────────────────────────────────────────────────

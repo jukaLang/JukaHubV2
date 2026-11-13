@@ -15,7 +15,9 @@ package main
 // "Not connected" with a dimmed glyph when the radio is on but not associated,
 // and "Wi-Fi off" when the radio is off. The answer comes from a worker that
 // asks the supplicant every few seconds while an idle screen is up — never on
-// the render thread and never while nobody is looking.
+// the render thread and never while nobody is looking. Home's Wi-Fi quick tile
+// (home_quicktiles.go) reads the same answer while it is on screen, and asks
+// again for a few seconds after it switched the radio.
 
 import (
 	"fmt"
@@ -105,11 +107,16 @@ const (
 	saverWifiOffline                           // no Wi-Fi hardware, offline
 )
 
-// saverWifiState is one finished Wi-Fi reading.
+// saverWifiState is one finished Wi-Fi reading. radioOn and radioKnown are
+// rfkill's or nmcli's own answer, which the kind does not always carry: with
+// no supplicant and no link the chip says off whatever the radio says, and
+// Home's Wi-Fi tile must still know which way its switch goes.
 type saverWifiState struct {
-	kind  saverWifiKind
-	ssid  string
-	level int // drawStatusSignalBars level while connected
+	kind       saverWifiKind
+	ssid       string
+	level      int // drawStatusSignalBars level while connected
+	radioOn    bool
+	radioKnown bool
 }
 
 // saverWifiProbe is everything one reading asks the system, kept as a value so
@@ -230,7 +237,9 @@ func saverWifiRefreshNow() {
 			saverWifi.mu.Unlock()
 		}
 	}()
-	st := saverWifiDecide(saverWifiCollect())
+	p := saverWifiCollect()
+	st := saverWifiDecide(p)
+	st.radioOn, st.radioKnown = p.radioOn, p.radioKnown
 	saverWifi.mu.Lock()
 	saverWifi.state = st
 	saverWifi.running = false

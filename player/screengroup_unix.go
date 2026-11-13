@@ -34,15 +34,16 @@ func screenChildGroupConfigure(cmd *exec.Cmd) {
 	if cmd.Env == nil {
 		cmd.Env = screenChildEnv(os.Environ())
 	}
-	// While a Bluetooth headset is routed, an SDL child is pointed at it through
-	// AUDIODEV unless its environment already names a device. JukaHub lets go
-	// of the headset (one client at a time) once a screen-taking child has
-	// started: noteGameChildStarted, audioroute.go.
-	if pcm := audioRouteChildPCM(); pcm != "" {
-		if _, set := childEnvLookup(cmd.Env, "AUDIODEV"); !set {
-			cmd.Env = append(cmd.Env, "AUDIODEV="+pcm)
-		}
-	}
+	// While a Bluetooth headset is routed, the child is pointed at it: AUDIODEV
+	// for SDL, ALSA's "default" for everything else (RetroArch), unless its
+	// environment already names either. JukaHub lets go of the headset (one
+	// client at a time) once a screen-taking child has started:
+	// noteGameChildStarted, audioroute.go, audioroute_bluealsa.go.
+	// Spatial audio's system route goes first (spatial_alsa.go): it names the
+	// headset as the end of its own chain, and audioRouteChildEnv then leaves
+	// the two variables it set alone.
+	cmd.Env = spatialChildEnv(cmd, cmd.Env)
+	cmd.Env = audioRouteChildEnv(cmd.Env)
 }
 
 // processGroupConfigure only makes cmd the leader of a new process group, for
@@ -80,6 +81,8 @@ func screenChildSignal(cmd *exec.Cmd, kind screenSignal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	// A game JukaHub stops did not fail to start (gamelaunch_watch.go).
+	gameLaunchNoteStop(cmd)
 	sig := syscall.SIGINT
 	if kind == screenSignalKill {
 		sig = syscall.SIGKILL

@@ -483,7 +483,7 @@ func mediaHubDrawSearch(renderer *sdl.Renderer, config *Config, rect sdl.Rect, o
 	radius := rect.H / 2
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassA(12))
 	if focused || editing {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFocusRingWidth, glassAccent())
+		strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), radius, glassFocusRingWidth, glassAccent())
 	} else {
 		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, glassA(30))
 	}

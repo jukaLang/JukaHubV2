@@ -456,6 +456,7 @@ small.note{color:var(--dim);display:block;margin-top:10px;font-size:13px}
     <button class=chip data-say="volume 50">volume 50</button>
     <button class=chip data-say="take a screenshot">take a screenshot</button>
     <button class=chip data-say="next song">next song</button>
+    <button class=chip data-say="turn on dark mode">turn on dark mode</button>
     <button class=chip data-say="what time is it">what time is it</button>
   </div>
   <small class=note>Works with any keyboard that has dictation (Gboard, the iPhone keyboard, Samsung). Nothing you say leaves your phone except the words.</small>

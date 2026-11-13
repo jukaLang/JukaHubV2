@@ -1,12 +1,12 @@
 package main
 
 // The Smart Pro's offline voice: downloaded once by itself after the startup
-// tools (ffmpeg) are in place, or from Settings → Voice & AI. Piper's archive
-// and the voice model are pinned by size and SHA-256. The voice's small
-// settings file (en_US-kristin-medium.onnx.json) is not: it is plain data
-// that only tells Piper the sample rate and phoneme table, so it is checked
-// for exactly that shape instead (a pinned digest of it broke the install on
-// 2026-11-12). The archive is unpacked into a private staging directory; only
+// tools (ffmpeg) and offline speech (stt_install.go) are in place, or from
+// Settings → Voice & AI. Piper's archive and the voice model are pinned by
+// size and SHA-256. The voice's small settings file
+// (en_US-kristin-medium.onnx.json) is not: it is plain data that only tells
+// Piper the sample rate and phoneme table, so it is checked for exactly that
+// shape instead (a pinned digest of it broke the install on 2026-11-12). The archive is unpacked into a private staging directory; only
 // Piper's English speech dependencies are copied, and the ready directory
 // appears in one rename.
 
@@ -159,12 +159,13 @@ func ttsAutoOnline() bool {
 
 // ttsAutoVoiceWait waits until no install card and no startup tool download
 // has been busy for ten seconds (two looks five seconds apart), then starts
-// the voice on the main thread. It gives up for this run after an hour.
+// the voice on the main thread. Offline speech's startup download goes first
+// (sttAutoWaiting). It gives up for this run after an hour.
 func ttsAutoVoiceWait() {
 	quiet := 0
 	for i := 0; i < 720 && quiet < 2; i++ {
 		time.Sleep(5 * time.Second)
-		if installBarActive() || ttsToolsInstalling.Load() > 0 {
+		if installBarActive() || ttsToolsInstalling.Load() > 0 || sttAutoWaiting.Load() {
 			quiet = 0
 		} else {
 			quiet++
@@ -228,7 +229,7 @@ func ttsStartVoiceInstall(auto bool) bool {
 		}
 		return false
 	}
-	if installBarActive() || auto && ttsToolsInstalling.Load() > 0 {
+	if installBarActive() || auto && (ttsToolsInstalling.Load() > 0 || sttAutoWaiting.Load()) {
 		if !auto {
 			setToast("Finish the current download, then try the offline voice")
 		}
@@ -262,16 +263,14 @@ func ttsStartVoiceInstall(auto bool) bool {
 		if err := ttsRunVoiceInstall(ctx, target, ttsInstallProgress(run)); err != nil {
 			switch {
 			case errors.Is(err, context.Canceled):
+				taken := installBarGeneration() != run
 				installBarAbortRun(run)
-				if auto {
+				if auto && taken {
 					// Another install took the card (it cancels the run it
 					// replaces): wait for it and go on. A cancel the user
-					// pressed leaves the next try to a reconnect or Settings.
-					if installBarActive() {
-						go ttsAutoVoiceWait()
-					} else {
-						ttsVoiceAutoTried.Store(false)
-					}
+					// pressed leaves the next try to a reconnect or Settings
+					// (ttsVoiceAutoTried stays set until then).
+					go ttsAutoVoiceWait()
 				}
 			default:
 				logWarn("tts", "offline voice install (auto=%v): %v", auto, err)

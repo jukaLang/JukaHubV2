@@ -165,7 +165,9 @@ type micStream struct {
 func micOpen() (*micStream, error) {
 	// The stick lights may be listening (ledmic.go): a voice feature gets the
 	// codec to itself, and the lights wait until every voice stream closes.
+	// So does the "Hey Juka" listener (wakeword.go).
 	ledMicYield()
+	hjYield()
 	m, err := micOpenShared()
 	if err != nil {
 		return nil, err
@@ -178,6 +180,19 @@ func micOpen() (*micStream, error) {
 // micVoiceUsers counts the voice features' open streams (micOpen), not the
 // lights' own (ledmic.go opens with micOpenShared).
 var micVoiceUsers atomic.Int32
+
+// adoptVoice makes a stream opened with micOpenShared a voice feature's, as if
+// micOpen had opened it: "Hey Juka" hands its open microphone to the orb
+// (wakeword.go), so not a syllable is lost to closing and reopening the
+// codec. Main thread.
+func (m *micStream) adoptVoice() {
+	if m == nil || m.voice || m.closed {
+		return
+	}
+	ledMicYield()
+	m.voice = true
+	micVoiceUsers.Add(1)
+}
 
 // micOpenShared is micOpen without taking the microphone from the lights or
 // counting as a voice feature. Main thread.

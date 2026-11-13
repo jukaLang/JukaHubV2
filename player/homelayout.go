@@ -135,10 +135,6 @@ type HomeLayout struct {
 	Motion     bool
 	focusEnter uiEnter
 	focusID    HomeFocusID
-	// Glide lets the focus ring travel between controls with a small
-	// overshoot (homefocusglide.go). Unlike Motion it stays on in Low Power:
-	// it is one ring moving for 300 ms.
-	Glide bool
 
 	// Arrangement is the alternative layout in force (homeArrangementCustom
 	// when the scene's own geometry is authoritative).
@@ -519,6 +515,7 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 		HomeFocusQR:         false,
 		HomeFocusPS4:        false,
 		HomeFocusPS5:        false,
+		HomeFocusX1:         false,
 		// The search pill is a fixed control under the greeting.
 		HomeFocusSearch: false,
 		// The menu cards + the Exit chip are fully config-driven.
@@ -824,6 +821,10 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 	if h == nil || homePowerConfirm.open {
 		return false
 	}
+	// The Switch Home's picture and round buttons (themeswitch.go).
+	if id := h.switchHitAt(x, y); id != "" {
+		return h.Focus.Set(id)
+	}
 	// Keep the three corner chips' visible faces ahead of their overlapping
 	// finger-sized margins. A tap on the report icon must open its form.
 	for _, id := range []HomeFocusID{HomeFocusBell, HomeFocusBug, HomeFocusTrophy} {
@@ -922,10 +923,10 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	if h == nil || renderer == nil {
 		return fmt.Errorf("home layout requires a renderer")
 	}
-	// Every focus highlight drawn from here to the end of Render glides when
-	// the focus steps (homefocusglide.go); overlays drawn after it do not.
-	homeFocusGlide.beginFrame(uiClockMS(), h.Focus.Current(), h.Glide)
-	defer homeFocusGlide.endFrame()
+	// The focus bounce itself is opened per frame by the main loop for every
+	// screen (homefocusglide.go); Home only says which control is focused,
+	// for the console themes' ring pulse (themeconsole.go).
+	homeFocusGlide.focusID = h.Focus.Current()
 
 	// The caller (renderHomeModern) owns the background; the layout only adds
 	// its translucent backdrop blocks on top of it.
@@ -936,7 +937,8 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	editing := homeEditActive()
 	if editing {
 		h.drawEditStrip(renderer, fonts)
-	} else {
+	} else if !h.switchChrome() {
+		// The Switch Home has no greeting (themeswitch.go).
 		h.drawGreeting(renderer, fonts, data)
 	}
 
@@ -949,10 +951,15 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 		h.Focus.SetEnabled(HomeFocusExit, false)
 	}
 	h.sizeEditPill(fonts)
+	// The Switch Home's round buttons stand in for the search, power and
+	// Edit pills, and it draws its own footer (themeswitch.go).
+	h.switchChromeOff()
 
 	// The footer is plain chrome: corner chips draw after it on top of its
 	// band instead of disappearing behind it.
-	h.drawFooter(renderer, fonts, data.ShowBackHint)
+	if !h.switchDrawFooter(renderer, fonts) {
+		h.drawFooter(renderer, fonts, data.ShowBackHint)
+	}
 
 	focused := h.Focus.Current()
 	if h.focusID != focused {
@@ -969,13 +976,15 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	// the loop below then draws only the controls around them.
 	if h.dyn.active {
 		h.dynRender(renderer, fonts, data, focused, lift)
+		h.switchDrawDock(renderer, fonts, data)
 	} else if editing {
 		// Editing Standard or the Hero grid: the strip has the focus, so no
 		// card under the veil wears the ring.
 		focused = ""
 	}
 	for _, id := range h.Order {
-		if h.dyn.active && h.dynIsTile(id) {
+		// The welcome hub draws its own pills and cards (themeps5hub.go).
+		if h.dyn.active && (h.dynIsTile(id) || h.hubIsItem(id)) {
 			continue
 		}
 		item := h.Items[id]
@@ -997,14 +1006,15 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 				h.drawPowerPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 			}
 		case HomeFocusSearch:
-			if !editing {
+			// Off on the Switch Home, whose round button searches.
+			if !editing && h.Focus.IsEnabled(HomeFocusSearch) {
 				h.drawSearchPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift, data.Subtitle)
 			}
 		case HomeFocusEditPill:
 			if h.Focus.IsEnabled(HomeFocusEditPill) {
 				h.drawEditPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 			}
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusBug, HomeFocusWiFi,
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusNowPlaying, HomeFocusBell, HomeFocusBug, HomeFocusWiFi,
 			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
@@ -1046,6 +1056,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	statusMediaRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
+	x1TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
 	headerTrophyClear()
 	headerBugClear()
@@ -1072,7 +1083,8 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if data.BuildDate != "" {
 		caption = " · " + data.BuildDate
 	}
-	brandEnd := drawHeaderBrand(renderer, headerConfig, barH, caption)
+	// The Switch Home has the user's picture there (themeswitch.go).
+	brandEnd := h.homeBrandOrAvatar(renderer, headerConfig, fonts, barH, caption)
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
@@ -1214,7 +1226,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	bandY := scaleY(78, h.Height)
 	bandH := scaleY(44, h.Height)
 	companionHeaderRect = sdl.Rect{}
-	ps4TileRect, ps5TileRect = sdl.Rect{}, sdl.Rect{}
+	ps4TileRect, ps5TileRect, x1TileRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	bandRight := h.Width - scaleX(homeSideMargin, h.Width)
 	// The pairing code takes the band's right end at the largest size the band
 	// has room for: from just under the system corner to just above the first
@@ -1238,7 +1250,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		// bell above it. Disabling it first would throw the focus to the
 		// Continue card at the other end of the screen and forget where Home
 		// was.
-		if !h.Focus.Set(HomeFocusPS5) {
+		if !h.Focus.Set(HomeFocusX1) && !h.Focus.Set(HomeFocusPS5) {
 			h.Focus.Set(HomeFocusBell)
 		}
 	}
@@ -1260,34 +1272,66 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	if pill := h.Items[HomeFocusSearch].Rect; pill.W > 0 {
 		minGroupX = max32(minGroupX, pill.X+pill.W+scaleX(homeSearchPillGap, h.Width))
 	}
-	// Remote Play only runs on the handheld build (psRemoteSupported); elsewhere
-	// each pill could only answer with a warning, so the group is not drawn and
-	// the D-pad walks past it. The group says what it is ("Remote Play") when
-	// the band has room for the caption, and drops the caption before the pills.
-	// Edit Home's strip has the band while Home is being edited.
-	if psRemoteSupported() && !homeEditActive() {
+	// PlayStation Remote Play only runs on the handheld build
+	// (psRemoteSupported); elsewhere its pills could only answer with a
+	// warning, so they are not drawn and the D-pad walks past them. X1 (Xbox,
+	// xremote.go) has a client or the browser everywhere. The group says what
+	// it is ("Remote Play") when the band has room for the caption, and drops
+	// the caption before the pills. Edit Home's strip has the band while Home
+	// is being edited.
+	withPS, withX1 := psRemoteSupported(), x1PillSupported()
+	// The Switch Home's round buttons stand in for the pills (themeswitch.go).
+	if (withPS || withX1) && !homeEditActive() && !h.switchChrome() {
 		label := psPillGroupLabel
-		group, p4, p5 := psPillRects(fonts, groupRight, groupY, bandH, label)
+		group, p4, p5, px1 := psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
 		if group.W > 0 && group.X < minGroupX {
 			label = ""
-			group, p4, p5 = psPillRects(fonts, groupRight, groupY, bandH, label)
+			group, p4, p5, px1 = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
+		}
+		// X1 goes before the PS pills it joined: a band that held PS4 and
+		// PS5 keeps them.
+		if group.W > 0 && group.X < minGroupX && withPS && withX1 {
+			withX1 = false
+			group, p4, p5, px1 = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
 		}
 		if group.W > 0 && group.X >= minGroupX {
-			renderPSPillGroup(renderer, fonts, group, p4, p5, psPillVisual{
-				PS4On:   ps4TileCurrentState() == ps4TileLaunch,
-				PS5On:   ps5TileCurrentState() == ps5TileLaunch,
+			v := psPillVisual{
 				Focused: h.Focus.Current(),
 				Pressed: data.Pressed,
 				Label:   label,
-			})
-			ps4TileRect, ps5TileRect = p4, p5
+			}
+			if withPS {
+				v.PS4On = ps4TileCurrentState() == ps4TileLaunch
+				v.PS5On = ps5TileCurrentState() == ps5TileLaunch
+			}
+			if withX1 {
+				v.X1On = x1TileOn()
+			}
+			renderPSPillGroup(renderer, fonts, group, p4, p5, px1, v)
+			ps4TileRect, ps5TileRect, x1TileRect = p4, p5, px1
 		}
 	}
 	h.Focus.SetEnabled(HomeFocusPS4, ps4TileRect.W > 0)
 	h.Focus.SetEnabled(HomeFocusPS5, ps5TileRect.W > 0)
+	h.Focus.SetEnabled(HomeFocusX1, x1TileRect.W > 0)
+	// The pills are not cards, but the tile layouts step Down from them, and
+	// Up onto them, by their item rects (home_dynbody.go): give them this
+	// frame's.
+	for _, p := range [...]struct {
+		id HomeFocusID
+		r  sdl.Rect
+	}{{HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}, {HomeFocusX1, x1TileRect}} {
+		item := h.Items[p.id]
+		item.Rect = p.r
+		h.Items[p.id] = item
+	}
 	// Link the launcher with whichever card sits under it, so Up reaches it and
 	// Down comes back: the D-pad follows the layout instead of a guess.
-	h.Focus.SetTileLink(h.CardUnderTile(ps5TileRect))
+	if ps5TileRect.W > 0 {
+		h.Focus.SetTileLink(h.CardUnderTile(ps5TileRect))
+	} else {
+		h.Focus.SetTileLink(h.CardUnderTile(x1TileRect))
+	}
 
 	// The network slot and the battery are the two gauged parts — signal bars
 	// and a colour-coded cell — shared with every scene's status bar so the
@@ -1438,7 +1482,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	bestY := int32(0)
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusBug,
+		case HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusBug,
 			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate,
 			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			continue
@@ -1475,8 +1519,9 @@ const (
 // stands homeFocusRingOutset off it, and neither may cut into the tile.
 // Empty when that leaves less than the floor.
 func (h *HomeLayout) headerQRRect(bandRight, top int32) sdl.Rect {
-	// Edit Home's strip has the band while Home is being edited.
-	if homeEditActive() {
+	// Edit Home's strip has the band while Home is being edited; the Switch
+	// Home has a round Phone button for the code (themeswitch.go).
+	if homeEditActive() || h.switchChrome() {
 		return sdl.Rect{}
 	}
 	maxSide := scaleY(homeHeaderQRMax, h.Height)
@@ -1535,6 +1580,11 @@ func renderHomeBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y
 }
 
 func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
+	// PS5 Style's welcome hub heads Home with its Games and Media tabs
+	// instead (themeps5hub.go).
+	if h.hubDrawTabs(renderer, fonts) {
+		return
+	}
 	greeting := strings.TrimSpace(data.Greeting)
 	if greeting == "" {
 		greeting = defaultGreeting(time.Now())

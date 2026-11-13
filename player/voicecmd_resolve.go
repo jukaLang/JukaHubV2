@@ -66,6 +66,9 @@ type voiceTarget struct {
 	// Path is a game's or a file's path: what a voice shortcut keeps to find
 	// it again (voiceshortcuts.go).
 	Path string
+	// Say replaces "Opening <Title>" when Action does something else: a
+	// setting change offered in a "which one" list (voicesettings.go).
+	Say string
 }
 
 // voiceMatch is a ranked target.

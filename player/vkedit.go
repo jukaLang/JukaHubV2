@@ -825,7 +825,7 @@ func vkUndo(config *Config) bool {
 // one.
 func vkGlobePressed(config *Config) {
 	if len(vkEnabledLayouts()) < 2 {
-		ShowToast("Add keyboard languages in Settings → Keyboard (hold the globe)", ToastKindInfo)
+		ShowToast("Add keyboard languages in Settings → Controls → On-screen keyboard (hold the globe)", ToastKindInfo)
 		return
 	}
 	vkCycleLayout(config)

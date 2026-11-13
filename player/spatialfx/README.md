@@ -12,7 +12,8 @@ plugins at once:
   mechanism, which JukaHub turns on for one launch at a time
   (`player/spatial_games.go`);
 * a **LADSPA plugin** (label `jukahub_spatial`), for ALSA's `ladspa` PCM or
-  any LADSPA host. JukaHub does not wire this route up yet (see Limits).
+  any LADSPA host — JukaHub's route for every game and app on the handheld
+  (`player/spatial_alsa.go`, below).
 
 ## The DSP
 
@@ -150,6 +151,54 @@ be a normal build — `build.sh` refuses a sanitizer runtime in `NEEDED`):
 By hand: put the library and a preset like the one above in one folder and
 point `audio_dsp_plugin` (Settings → Audio → DSP Plugin) at the preset.
 
+### Through ALSA (every program, the handheld)
+
+`spatial_alsa.go` gives every screen-taking child JukaHub starts (games,
+standalone emulators, ports, apps) `ALSA_CONFIG_PATH=<system alsa.conf>:/tmp/jukahub-audio/asound-spatial.conf`
+and `AUDIODEV=jhspatial`, once a probe has proven the route on the device. The
+file (rewritten at every launch, mode/strength/room of the moment):
+
+```
+pcm.jhspatial_out { type plug; slave.pcm "sysdefault" }   # or the BlueALSA headset PCM
+pcm.jhspatial_fx {
+	type ladspa
+	slave.pcm "jhspatial_out"
+	path "<data>/spatial-audio"        # a folder holding only this library
+	channels 2
+	playback_plugins [ {             # recording passes straight through
+		label "jukahub_spatial"
+		policy none
+		input.bindings.0 "Left in"
+		input.bindings.1 "Right in"
+		output.bindings.0 "Left out"
+		output.bindings.1 "Right out"
+		input.controls [ 1 0.75 1 ]      # mode, strength, room (control-port order)
+	} ]
+}
+pcm.jhspatial { type plug; slave.pcm "jhspatial_fx" }
+@hooks.1 { func load; files [ "/tmp/jukahub-audio/asound-spatial-default.conf" ]; errors false }
+```
+
+The hook file makes `default` an `asym` PCM: playback through `jhspatial`,
+capture from `sysdefault` as before. alsa-lib reads every
+`ALSA_CONFIG_PATH` file before it runs `alsa.conf`'s hook 0 (`/etc/asound.conf`,
+`~/.asoundrc`), so a `default` written into the path file itself would lose to
+the firmware's; hook 1 runs after it. The hook is left out when a system file
+defines `default` (and no headset is routed): the chain then ends in that
+`default`, and only SDL programs (AUDIODEV) get it. Both orders were checked
+against the real alsa-lib with an `.asoundrc` redefining `default`.
+
+The plugs convert to and from the float samples LADSPA works in (a mono or
+non-48 kHz program included). The ladspa PCM opens every `.so` in `path`, so
+the library sits alone in `<data>/spatial-audio/` (the RetroArch preset there
+is not a `.so`). An unloadable plugin or a libasound without the ladspa PCM
+fails the program's open — no sound at all — so the probe
+(`JukaHub --spatial-alsa-probe`: SDL audio through the same chain into ALSA's
+`null` PCM) must pass first. Checked on a PC against the system's real alsa-lib
+(Ubuntu 22.04): the chain opens at 22.05/32/44.1/48 kHz, mono and stereo, and
+its output matches the plugin driven directly to one 16-bit step; a wrong label
+or folder fails the open, as the probe expects.
+
 ## ABI notes — verify before trusting a release
 
 Both ABIs are declared in `jukahub_spatial.c` from their public descriptions,
@@ -167,7 +216,9 @@ upstream headers. Before relying on a release, diff them against:
   values.
 
 The host test drives both ABIs through `dlopen`, so a layout mismatch with
-the test's own copy is caught; a mismatch of both with upstream is not.
+the test's own copy is caught; a mismatch of both with upstream is not. The
+LADSPA side has since been driven by a real host — alsa-lib's ladspa PCM, built
+against its own copy of `ladspa.h` — and processed audio correctly (above).
 
 Newer RetroArch master adds an optional int16 path: plugins that declare API
 version 2 may export a `process_i16`, and the host only reads that field from
@@ -189,10 +240,12 @@ accepts version 1 when the real header can be read; a version-2
   (32040.5 Hz for some cores); every coefficient is derived from that rate.
 * The mode is fixed for the game session: `auto` is resolved when the game
   starts (headphones in → headphones mode).
-* Standalone emulators (PPSSPP, DraStic, …) are not covered. The LADSPA
-  entry point is there for an ALSA route (`pcm.!default` through the
-  `ladspa` PCM, set per child with `ALSA_CONFIG_PATH`), which needs the
-  firmware's alsa-lib to carry the ladspa PCM and its games to use the
-  `default` device — both unverified, so it is not wired up.
+* The ALSA route needs the firmware's alsa-lib to carry the ladspa PCM, which
+  the probe checks on the device. The library is 64-bit only: a launch that
+  names a 32-bit ARM program (its binary, or one its script names; "ra32"
+  anywhere in the script) is left alone, since the program could not load the
+  plugin and its sound would not open; a program that bypasses alsa-lib (tinyalsa,
+  OSS) is not reached, and one started with its own `ALSA_CONFIG_PATH` or
+  `AUDIODEV` is left alone.
 * The LADSPA unique ID (7310) is not registered with ladspa.org; hosts select
   the plugin by label.

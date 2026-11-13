@@ -13,7 +13,8 @@ package main
 //     and the activation it has on the dashboard;
 //   - a widget: "w:clock", "w:weather", "w:battery", "w:storage",
 //     "w:nowplaying", "w:calendar", "w:playtime" (home_widgetdraw.go paints
-//     them);
+//     them), or a quick control — "w:wifi", "w:bluetooth", "w:power", a
+//     switch or the power card on one press (home_quicktiles.go);
 //   - a Start menu entry: "app:scene:<scene name>" for a screen, or
 //     "app:do:<entry name>" for one of the menu's actions (Downloads,
 //     Wallpapers, a plugin's button…);
@@ -102,13 +103,15 @@ var homeSizePresets = [...]homeTileSize{{1, 1}, {2, 1}, {2, 2}, {3, 2}, {4, 2}, 
 
 // homeWidgetSpec is one built-in widget: its name (the ref without "w:"),
 // what the add sheet and the carousel call it, the glyph it is listed with
-// and the size it is added at.
+// and the size it is added at. Quick marks a quick control (Wi-Fi, Bluetooth,
+// Power: home_quicktiles.go), which the add sheet lists in its own section.
 type homeWidgetSpec struct {
 	Name  string
 	Title string
 	Note  string
 	Glyph string
 	Size  homeTileSize
+	Quick bool
 }
 
 // homeWidgetSpecs is the widget catalogue, in the add sheet's order.
@@ -120,6 +123,10 @@ var homeWidgetSpecs = []homeWidgetSpec{
 	{Name: "battery", Title: "Battery", Note: "Charge level and whether it is charging", Glyph: "battery", Size: homeTileSize{1, 1}},
 	{Name: "storage", Title: "Storage", Note: "Free space where JukaHub is installed", Glyph: "disk", Size: homeTileSize{1, 1}},
 	{Name: "playtime", Title: "Playtime", Note: "Time played today and trophies earned", Glyph: "trophy", Size: homeTileSize{1, 1}},
+	// The quick controls: NextUI's quick-menu switches, pinned (2026-11-13).
+	{Name: "wifi", Title: "Wi-Fi", Note: "Switch Wi-Fi on or off", Glyph: "wifi", Size: homeTileSize{1, 1}, Quick: true},
+	{Name: "bluetooth", Title: "Bluetooth", Note: "Switch Bluetooth on or off", Glyph: "bluetooth", Size: homeTileSize{1, 1}, Quick: true},
+	{Name: "power", Title: "Power", Note: "Sleep, restart or power off", Glyph: "power", Size: homeTileSize{1, 1}, Quick: true},
 }
 
 // homeWidgetSpecFor finds a widget by name.
@@ -879,6 +886,7 @@ func homeActivateApp(config *Config, ref string) {
 
 // The add sheet's sections.
 const (
+	homeCatalogQuick   = "Quick controls"
 	homeCatalogWidgets = "Widgets"
 	homeCatalogCards   = "Home cards"
 	homeCatalogApps    = "Apps and tools"
@@ -907,20 +915,27 @@ func homeCardInfo(id HomeFocusID) (title, note, glyph string) {
 	return item.Title, item.Subtitle, item.Icon
 }
 
-// homeTileCatalog lists what the add sheet offers: every widget this device
-// can show, the built-in cards and the Start menu's screens, tools and
-// actions — minus what is already on Home (present).
+// homeTileCatalog lists what the add sheet offers: the quick controls and
+// every widget this device can show, the built-in cards and the Start menu's
+// screens, tools and actions — minus what is already on Home (present). The
+// quick controls come first: they are what a pinned Home is most often for.
 func homeTileCatalog(config *Config, present map[string]bool) []homeCatalogEntry {
 	var out []homeCatalogEntry
-	for _, spec := range homeWidgetSpecs {
-		ref := homeTileWidgetPrefix + spec.Name
-		if present[strings.ToLower(ref)] || !homeWidgetAvailable(spec.Name) {
-			continue
+	for _, quick := range [...]bool{true, false} {
+		for _, spec := range homeWidgetSpecs {
+			ref := homeTileWidgetPrefix + spec.Name
+			if spec.Quick != quick || present[strings.ToLower(ref)] || !homeWidgetAvailable(spec.Name) {
+				continue
+			}
+			section, note := homeCatalogWidgets, spec.Note
+			if quick {
+				section, note = homeCatalogQuick, hqCatalogNote(spec.Name, spec.Note)
+			}
+			out = append(out, homeCatalogEntry{
+				Ref: ref, Title: spec.Title, Note: note, Glyph: spec.Glyph,
+				Section: section, Size: homeTileDefaultSize(ref),
+			})
 		}
-		out = append(out, homeCatalogEntry{
-			Ref: ref, Title: spec.Title, Note: spec.Note, Glyph: spec.Glyph,
-			Section: homeCatalogWidgets, Size: homeTileDefaultSize(ref),
-		})
 	}
 	for _, id := range homeBodyCards {
 		ref := string(id)

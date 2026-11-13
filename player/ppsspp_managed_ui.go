@@ -59,7 +59,7 @@ func ppssppPSPTileIndex(entries []emuEntry) int {
 // games, and what else there is.
 func ppssppTileLine(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, platform string) string {
 	if b, ok := st.build(st.Active); ok {
-		line := b.label() + " (JukaHub)"
+		line := b.label() + " (" + ppssppSourceShort(b.Tag) + ")"
 		switch {
 		case fw.Version != "":
 			line += " · firmware " + fw.Version + " kept"
@@ -158,10 +158,13 @@ func ppssppCardBody(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, untested
 	default:
 		b.WriteString("PSP games run the PPSSPP on your card. ")
 	}
-	b.WriteString("JukaHub can keep a newer PPSSPP of its own — the TrimUI build packaged by minui-psp — and update it with the Emulator updates setting. ")
+	b.WriteString("JukaHub keeps a newer PPSSPP of its own — its own build of the newest upstream PPSSPP for this model, or the TrimUI build packaged by minui-psp, whichever is newer — and updates it with the Emulator updates setting. ")
 	b.WriteString("Both use the firmware's save folders, so saves and save states carry over either way, and if JukaHub's build does not start, the game opens in the firmware's PPSSPP instead.")
 	if untested {
 		b.WriteString(" This model is untested with that build: if its buttons do not work in PPSSPP, restart the device and choose the firmware's PPSSPP here.")
+	}
+	if line := ppssppCheckLine(st); line != "" {
+		b.WriteString(" " + line)
 	}
 	if usingOurs {
 		if reason := ppssppFallbackReason(ppssppLastStatusLine(active)); reason != "" {
@@ -175,6 +178,32 @@ func ppssppCardBody(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, untested
 		b.WriteString(" No firmware save folder was found yet — play a PSP game once with the firmware's PPSSPP so both can share it.")
 	}
 	return b.String()
+}
+
+// ppssppCheckLine says when the automatic check last read the release and what
+// it found, so "did it look?" has an answer on the card ("" before any check).
+func ppssppCheckLine(st ppssppState) string {
+	t, ok := parseReleaseTimestamp(st.CheckedAt)
+	if !ok || t.Before(minSaneClock) {
+		return ""
+	}
+	line := "Last checked " + timeAgo(t)
+	if st.LatestTag != "" {
+		found := ppssppSourceName(st.LatestTag)
+		if st.LatestVersion != "" {
+			found = "PPSSPP " + st.LatestVersion + " (" + found + ")"
+		}
+		line += ": newest for this model is " + found
+	}
+	return line + "."
+}
+
+// ppssppInstallDetail names where the install button's build comes from.
+func ppssppInstallDetail(latestTag string) string {
+	if ppssppIsOwnTag(latestTag) {
+		return "JukaHub's own build of upstream PPSSPP"
+	}
+	return "The TrimUI build from minui-psp"
 }
 
 // openPPSSPPCard opens the PPSSPP card for the PSP tile (main thread).
@@ -197,9 +226,10 @@ func openPPSSPPCard(e emuEntry) {
 			title += " " + st.LatestVersion
 		}
 		options = append(options, recoveryOption{icon: "download", title: title + " for PSP games",
-			detail: "The TrimUI build from minui-psp · uses your saves · the firmware's PPSSPP stays",
+			detail: ppssppInstallDetail(st.LatestTag) + " · uses your saves · the firmware's PPSSPP stays",
 			run:    func(*Config) { recoveryCardClose(); ppssppStartInstall(tile, true) }})
-	case st.LatestTag != "" && st.LatestTag != newest.Tag && st.Bad[st.LatestTag] == "":
+	case st.LatestTag != "" && st.LatestTag != newest.Tag && st.Bad[st.LatestTag] == "" &&
+		ppssppWorthOver(st.LatestTag, st.LatestVersion, newest):
 		title := "Update JukaHub's PPSSPP"
 		if st.LatestVersion != "" {
 			title = "Update to PPSSPP " + st.LatestVersion

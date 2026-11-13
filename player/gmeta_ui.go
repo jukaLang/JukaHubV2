@@ -292,7 +292,7 @@ func gmetaLoadLocal(ctx context.Context, gen int, game libraryGame, rec gmetaRec
 		})
 		return
 	}
-	launcher := resolveGameLauncher(game.System)
+	launcher := resolveGameLauncherFor(game)
 	isRA := launcher != "" && retroArchLauncher(launcher)
 	var states []gmetaState
 	if isRA {
@@ -524,13 +524,30 @@ func gmetaRefresh() {
 // from a numbered slot made the auto state first (gmeta_states.go).
 func gmetaPlay(st *gmetaState) {
 	game := gmetaUI.game
-	launcher := resolveGameLauncher(game.System)
+	if st != nil {
+		// A save state belongs to the emulator the page listed it for
+		// (gmetaLoadLocal): no question, that one starts.
+		gmetaPlayWith(game, st, resolveGameLauncherFor(game))
+		return
+	}
+	// Several emulators for this console: the picker asks which one first
+	// (emupicker.go); a single one starts at once.
+	chooseGameLauncher(game, func(launcher string) { gmetaPlayWith(game, nil, launcher) })
+}
+
+// gmetaPlayWith is gmetaPlay once the emulator is known.
+func gmetaPlayWith(game libraryGame, st *gmetaState, launcher string) {
 	if launcher == "" {
 		ShowToast("No emulator found for "+game.System+" — add one on the Emulators screen", ToastKindWarning)
 		return
 	}
 	suffix := ""
 	if st != nil {
+		// The page's states are RetroArch's: another emulator cannot load one.
+		if !retroArchLauncher(launcher) {
+			ShowToast("Save states here are RetroArch's — pick a RetroArch emulator to start from one", ToastKindWarning)
+			return
+		}
 		if !gmetaUI.resume {
 			ShowToast("Starting from a save needs save-state resume (savestateResume in the config)", ToastKindWarning)
 			return

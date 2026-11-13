@@ -16,9 +16,11 @@ package main
 // stick, which steps like it — puts the pointer away and moves the focus as
 // always, so A goes back to pressing the focused item; so does half a minute
 // without touching the right stick. Settings → Controls → Virtual cursor turns
-// it off. Screens that use the right stick themselves keep it: Chat scrolls
-// its history with it, JukaLand and browser games aim with it, and the stick
-// calibration and the controller test measure it.
+// it off. Screens that use the right stick themselves keep it: JukaLand and
+// browser games aim with it, and the stick calibration and the controller test
+// measure it. Chat shares it: up / down scrolls the history, a sideways tilt
+// brings the pointer up (so its paperclip, links and chips can be clicked on a
+// TrimUI), and once the pointer is put away up / down scrolls again.
 //
 // The pointer is a real mouse to the rest of the app: it queues SDL mouse
 // motion, button and wheel events at its position (in window pixels, the way
@@ -153,9 +155,29 @@ func vcursorScreenBlocks(config *Config) bool {
 
 // vcursorChatOwnsStick reports the Chat screen scrolling its history with the
 // right stick: not while its keyboard or an overlay is up (chatSceneStick),
-// where the pointer can press the keys.
+// where the pointer can press the keys, and — outside mouse mode — not while
+// the pointer is up (a sideways tilt brought it up: vcursorChatSummon), when
+// the stick moves the pointer until it is put away.
 func vcursorChatOwnsStick(config *Config) bool {
-	return chatSceneActive(config) && !virtualKeyboardActive && !chatOverlayOpen()
+	return chatSceneActive(config) && !virtualKeyboardActive && !chatOverlayOpen() &&
+		(!vcursor.active || vcursorModeLive(config))
+}
+
+// vcursorChatSummon brings the pointer up on the Chat screen from a sideways
+// right-stick tilt; an up / down tilt stays Chat's scroll. It reports true
+// when the event was taken.
+func vcursorChatSummon(config *Config) bool {
+	if vcursor.active || !vcursorChatOwnsStick(config) || vcursorModeLive(config) ||
+		!vcursorEnabled(config) || vcursorScreenBlocks(config) {
+		return false
+	}
+	x, y := stickShaped(config, stickRight)
+	if math.Abs(x) < vcursorShowTilt || math.Abs(x) <= math.Abs(y) {
+		return false
+	}
+	chatStickSpeed = 0 // a scroll that was running stops under the pointer
+	vcursorShow()
+	return true
 }
 
 // vcursorMouseState is sdl.GetMouseState with the virtual cursor folded in:
@@ -220,6 +242,10 @@ func vcursorAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	// nothing, not the pointer either.
 	if stickCalOwnsSticks(config) {
 		vcursorHide()
+		return true
+	}
+	// Chat: a sideways tilt brings the pointer up; up / down scrolls on.
+	if vcursorChatSummon(config) {
 		return true
 	}
 	if vcursorBlocked(config) {

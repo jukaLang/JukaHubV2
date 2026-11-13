@@ -564,7 +564,10 @@ func vkVoiceErrorText(err error) (string, vkVoiceAction) {
 		return "Close a game to free memory for offline speech", vkVoiceNoAction
 	}
 	if errors.Is(err, errSTTUnavailable) {
-		return "Offline speech is missing — install it in Settings → Voice & AI", vkVoiceNoAction
+		if relPackRunning(sttPackKey) {
+			return "Offline speech is still downloading — try again when it's ready", vkVoiceNoAction
+		}
+		return "Offline speech isn't installed yet — install it in Settings → Voice & AI", vkVoiceNoAction
 	}
 	if errors.Is(err, errSTTGroqKey) {
 		return "Groq speech needs an API key — add it in Settings", vkVoiceOpenKey
@@ -622,9 +625,12 @@ func vkVoiceHandleButton(button uint8, config *Config) bool {
 	switch vkVoice.phase {
 	case vkVoiceRecording:
 		switch button {
-		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_Y:
+		// Start is the keyboard's Send button (vkHandleControllerButton), so
+		// while dictating it keeps the words, like A and Y, rather than
+		// throwing them away.
+		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_Y, sdl.CONTROLLER_BUTTON_START:
 			vkVoiceStop(config)
-		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 			vkVoiceCancel()
 			vkPlay(PlayBackSound)
 		}

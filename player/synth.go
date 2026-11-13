@@ -1744,7 +1744,7 @@ func synthDrawStrip(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect
 			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, glassFill())
 		}
 		if i == p.Current {
-			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 3, glassAccent())
+			strokeRoundedRectAt(renderer, r, homeFocusGlide.apply(r), 10, 3, glassAccent())
 		}
 		if font != nil {
 			n := strconv.Itoa(i + 1)

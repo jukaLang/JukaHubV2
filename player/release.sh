@@ -11,7 +11,8 @@
 #   JukaHub-RemotePlay-linux-arm64.zip   (when the Remote Play helpers were built)
 #   JukaHub-AndroidRT-linux-arm64.zip    (when native/bin has a verified AndroidRT package;
 #                                         every TrimUI archive then carries its androidrt/)
-#   JukaHub-OfflineSpeech-linux-arm64.zip (when the Smart Pro recognizer was built)
+#   JukaHub-OfflineSpeech-linux-arm64.zip (required; never inside a TrimUI archive —
+#                                         the Smart Pro downloads it after ffmpeg)
 #   JukaHub-Wine-linux-arm64.zip         (when native/bin has a verified Box64 pack)
 #   manifest.json
 #   SHA256SUMS
@@ -148,9 +149,11 @@ fi
 # --- TrimUI Linux arm64 targets ---
 # These identifiers match DeviceModel values and the updater's strict target map.
 TRIMUI_DEVICES=(trimui-smart-pro trimui-smart-pro-s trimui-brick trimui-brick-pro trimui-hammer)
-STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' native/bin/juka-whisper/BUILDINFO.txt 2>/dev/null || true)
-if [ -z "$STT_BIN_SHA" ] || ! sh native/package-stt.sh native/bin/juka-whisper "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"; then
-    echo "ERROR: verified offline speech is required for the Smart Pro release" >&2
+# Offline speech (about 120 MB) ships only as its own release asset: the Smart
+# Pro downloads it by itself after ffmpeg (stt_install.go), so no TrimUI archive
+# carries juka-whisper/. package-stt.sh verifies every pinned file first.
+if ! sh native/package-stt.sh native/bin/juka-whisper "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"; then
+    echo "ERROR: verified offline speech is required for the release (JukaHub-OfflineSpeech-linux-arm64.zip)" >&2
     exit 1
 fi
 TARGETS_JSON=""
@@ -175,16 +178,6 @@ for device in "${TRIMUI_DEVICES[@]}"; do
         PKG_FILES+=(bin/chiaki-stream bin/chiaki-regist)
     else
         echo "WARNING: ${device} ships without Remote Play streaming (no helpers)" >&2
-    fi
-    if [ "$device" = trimui-smart-pro ]; then
-        mkdir -p "$TARGET_DIR/juka-whisper"
-        cp native/bin/juka-whisper/whisper-cli native/bin/juka-whisper/ggml-tiny.bin \
-            native/bin/juka-whisper/BUILDINFO.txt native/bin/juka-whisper/LICENSE.txt \
-            native/bin/juka-whisper/vosk-cli native/bin/juka-whisper/libvosk.so \
-            native/bin/juka-whisper/VOSK_LICENSE.txt "$TARGET_DIR/juka-whisper/"
-        unzip -q native/bin/juka-whisper/vosk-model-small-en-us-0.15.zip -d "$TARGET_DIR/juka-whisper"
-        chmod 755 "$TARGET_DIR/juka-whisper/whisper-cli" "$TARGET_DIR/juka-whisper/vosk-cli"
-        PKG_FILES+=(juka-whisper)
     fi
     # The game-audio plugin (see SPATIAL_SO above).
     if [ -n "$SPATIAL_SO" ]; then

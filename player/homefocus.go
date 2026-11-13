@@ -34,6 +34,10 @@ const (
 	// HomeFocusPS4 is the stable PS4 Remote Play tile, one slot left of the PS5
 	// tile. Disabled (and skipped by the D-pad) while it is not drawn.
 	HomeFocusPS4 HomeFocusID = "ps4"
+	// HomeFocusX1 is the Xbox Remote Play pill ("X1", xremote.go), the last
+	// pill of the group, right of PS5 and left of the pairing code. Disabled
+	// while it is not drawn.
+	HomeFocusX1 HomeFocusID = "x1"
 	// HomeFocusUpdate is the "new release available" download chip in the header's
 	// system corner, immediately left of the trophy room's cup beside the
 	// notification bell — the same place every scene header draws it. It is
@@ -140,7 +144,14 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	},
 	HomeFocusPS5: {
 		Up: HomeFocusClock, Down: HomeFocusMedia,
-		Left: HomeFocusPS4, Right: HomeFocusClock,
+		Left: HomeFocusPS4, Right: HomeFocusX1,
+	},
+	// X1 closes the group: Left is PS5 (or, with the PS pills hidden on a PC,
+	// the search pill through PS5's own chain), Right the clock — the pairing
+	// code when it is drawn (neighbor).
+	HomeFocusX1: {
+		Up: HomeFocusClock, Down: HomeFocusMedia,
+		Left: HomeFocusPS5, Right: HomeFocusClock,
 	},
 	HomeFocusPackages: {
 		// Left is the Games card beside it, never a jump over it to the hero.
@@ -240,7 +251,7 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	// they were: PS5 → clock, bell → PS5.
 	HomeFocusQR: {
 		Up: HomeFocusBell, Down: HomeFocusMedia,
-		Left: HomeFocusPS5, Right: HomeFocusQR,
+		Left: HomeFocusX1, Right: HomeFocusQR,
 	},
 	// The update download chip is a header button drawn immediately left of the
 	// trophy room's cup, right of the now-playing chip. Its neighbours are the
@@ -499,7 +510,8 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 	// code is not a stop on the way, so those presses keep the targets they
 	// had before the code was a control (the clock, the PS5 launcher).
 	if f.IsEnabled(HomeFocusQR) {
-		if direction == FocusRight && id == HomeFocusPS5 {
+		// The last drawn pill of the Remote Play group steps Right onto it.
+		if direction == FocusRight && (id == HomeFocusX1 || (id == HomeFocusPS5 && !f.IsEnabled(HomeFocusX1))) {
 			return HomeFocusQR
 		}
 		if direction == FocusDown && (id == HomeFocusBell || id == HomeFocusBug || id == HomeFocusTrophy) {
@@ -513,9 +525,12 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 		// The header launcher trades Up/Down with the card under it, so the
 		// D-pad never has to guess which column the tile ended up in.
 		if direction == FocusUp && id == f.tileUnder {
+			if !f.IsEnabled(HomeFocusPS5) && f.IsEnabled(HomeFocusX1) {
+				return HomeFocusX1
+			}
 			return HomeFocusPS5
 		}
-		if direction == FocusDown && (id == HomeFocusPS5 || id == HomeFocusPS4) {
+		if direction == FocusDown && (id == HomeFocusPS5 || id == HomeFocusPS4 || id == HomeFocusX1) {
 			return f.tileUnder
 		}
 	}
@@ -550,7 +565,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
 		HomeFocusChat, HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
 		HomeFocusSearch, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
-		HomeFocusUpdate, HomeFocusTrophy, HomeFocusBug, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
+		HomeFocusUpdate, HomeFocusTrophy, HomeFocusBug, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusExit,
 		HomeFocusBrightness, HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusQR,
 	}
 	for _, id := range order {

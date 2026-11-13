@@ -15,7 +15,9 @@ package main
 //	                     Down from the newest message reaches the files
 //	                     waiting to be sent, then the composer
 //	L1 / R1, Left/Right  previous / next tab (Tab / Shift+Tab on a keyboard);
-//	                     on the waiting files Left/Right picks one
+//	                     on the waiting files Left/Right picks one; on the
+//	                     composer Left steps onto the paperclip (A there
+//	                     attaches files) and Right steps back
 //	L2 / R2              oldest / newest message
 //	right stick, wheel   scroll freely
 //	A / Enter            type (on-screen keyboard; Enter types inline on a
@@ -91,11 +93,11 @@ func chatSceneController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		chatFocusDown()
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		if !chatTrayMove(-1) {
+		if !chatTrayMove(-1) && !chatAttachMove(-1) {
 			chatCycleTab(-1)
 		}
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		if !chatTrayMove(1) {
+		if !chatTrayMove(1) && !chatAttachMove(1) {
 			chatCycleTab(1)
 		}
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
@@ -103,9 +105,9 @@ func chatSceneController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		chatCycleTab(1)
 	case sdl.CONTROLLER_BUTTON_A:
-		chatActivate()
+		chatActivate(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		if chatTrayLeave() {
+		if chatTrayLeave() || chatAttachLeave() {
 			break
 		}
 		chatLeave(config)
@@ -199,11 +201,11 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		chatFocusDown()
 	case sdl.K_LEFT:
-		if !chatTrayMove(-1) {
+		if !chatTrayMove(-1) && !chatAttachMove(-1) {
 			chatCycleTab(-1)
 		}
 	case sdl.K_RIGHT:
-		if !chatTrayMove(1) {
+		if !chatTrayMove(1) && !chatAttachMove(1) {
 			chatCycleTab(1)
 		}
 	case sdl.K_DELETE:
@@ -228,8 +230,8 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		clearChatSelection()
 		chatJumpToLatest()
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
-		if chatSuggestFocus >= 0 || chatTrayFocus >= 0 {
-			chatActivate()
+		if chatSuggestFocus >= 0 || chatTrayFocus >= 0 || chatAttachFocused() {
+			chatActivate(config)
 			break
 		}
 		if _, _, ok := selectedChatMessage(); ok {
@@ -246,7 +248,7 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		chatSkipSpace = sym == sdl.K_SPACE
 		chatStartInlineTyping()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
-		if chatTrayLeave() {
+		if chatTrayLeave() || chatAttachLeave() {
 			break
 		}
 		chatLeave(config)
@@ -413,9 +415,15 @@ func chatHasDraft() bool {
 }
 
 // chatActivate is A on the Chat scene.
-func chatActivate() {
+func chatActivate(config *Config) {
 	if chatTrayFocus >= 0 {
 		chatTrayRemoveFocused()
+		return
+	}
+	if chatAttachFocused() {
+		// chatPickBegin plays the press and clears the focus: the chat comes
+		// back from Files with the pad on the text field, ready for a caption.
+		chatStartAttach(config)
 		return
 	}
 	if chatSuggestFocus >= 0 && chatSuggestFocus < chatSuggestionCount {
@@ -492,6 +500,58 @@ func chatStartAttach(config *Config) {
 	if chatPickBegin(config, chatActiveTabID()) {
 		showToast(hintSentence2("Pick a file to attach — %s marks several, %s cancels", "X", "Mark", "B", "Cancel"), ToastInfo())
 	}
+}
+
+// chatAttachFocus puts the pad on the composer's paperclip instead of its text
+// field. It only counts while the composer row has the focus at all
+// (chatAttachFocused): anything that moves the pad elsewhere wins over it.
+var chatAttachFocus bool
+
+// chatComposerRowFocused reports whether the pad is on the composer row: not
+// on a message, a starter question, the waiting files or the top bar, and not
+// typing.
+func chatComposerRowFocused() bool {
+	return chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() &&
+		!chatComposerInline && !(virtualKeyboardActive && vkTarget == vkTargetChat)
+}
+
+// chatAttachFocused reports whether the paperclip has the pad's focus.
+func chatAttachFocused() bool {
+	return chatAttachFocus && chatComposerRowFocused()
+}
+
+// chatAttachMove moves the pad between the paperclip and the text field on
+// the composer row: Left from the field reaches the paperclip, Right goes back.
+// It reports false when the press is not its own (the pad is elsewhere, or
+// Right on the field), so Left/Right switch tabs as before.
+func chatAttachMove(delta int) bool {
+	if !chatComposerRowFocused() {
+		chatAttachFocus = false
+		return false
+	}
+	switch {
+	case delta < 0 && !chatAttachFocus:
+		chatAttachFocus = true
+		PlayNavSound()
+		return true
+	case delta < 0:
+		return true // the left end of the row
+	case chatAttachFocus:
+		chatAttachFocus = false
+		PlayNavSound()
+		return true
+	}
+	return false
+}
+
+// chatAttachLeave takes the pad off the paperclip, back to the text field (B).
+func chatAttachLeave() bool {
+	if !chatAttachFocused() {
+		return false
+	}
+	chatAttachFocus = false
+	PlayBackSound()
+	return true
 }
 
 // chatOpenGroqKeySetting takes the user to Settings → General → Groq API key
@@ -574,6 +634,8 @@ func chatFocusUp() bool {
 	tab := chatActiveTabID()
 	msgs := chatTabMessages(tab)
 	view := &chatViews[tab]
+	// Up leaves the composer row from the paperclip as from the text field.
+	chatAttachFocus = false
 	if chatSuggestFocus >= 0 {
 		if chatSuggestFocus > 0 {
 			chatSuggestFocus--
@@ -890,6 +952,15 @@ func chatFooterHints() []FooterHint {
 			{Button: "B", Label: "Done"},
 			{Button: "X", Label: "Attach"},
 		}
+	case chatAttachFocused():
+		hints := []FooterHint{
+			{Button: "A", Label: "Attach"},
+			{Button: "D-Pad", Label: "Move"},
+		}
+		if chatHasDraft() {
+			hints = append(hints, FooterHint{Button: "Start / Ctrl+Enter", Label: "Send"})
+		}
+		return append(hints, FooterHint{Button: "B", Label: "Done"}, FooterHint{Button: "L1/R1", Label: "Tabs"})
 	case chatSuggestFocus >= 0:
 		return []FooterHint{
 			{Button: "D-Pad", Label: "Move"},

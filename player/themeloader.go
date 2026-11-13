@@ -65,6 +65,13 @@ type themeFile struct {
 	// optional; a file without them keeps the shipped glows.
 	Bloom  string `json:"bloom,omitempty"`
 	Bloom2 string `json:"bloom2,omitempty"`
+	// The console look (themeconsole.go), all optional: carouselStyle
+	// "shelf", "strip" or "hub" (unknown is ignored), tileRadius 0..32
+	// design px, focusRing and focusRing2 #rrggbb.
+	CarouselStyle string `json:"carouselStyle,omitempty"`
+	TileRadius    int32  `json:"tileRadius,omitempty"`
+	FocusRing     string `json:"focusRing,omitempty"`
+	FocusRing2    string `json:"focusRing2,omitempty"`
 }
 
 // toPreset validates every colour and converts the file into a ThemePreset.
@@ -90,13 +97,16 @@ func (f themeFile) toPreset() (ThemePreset, error) {
 	}
 	// The glows are optional, but one that is given must be a plain colour:
 	// the backdrop paints them opaque, so an alpha channel would be ignored.
-	for key, value := range map[string]string{"bloom": f.Bloom, "bloom2": f.Bloom2} {
+	for key, value := range map[string]string{"bloom": f.Bloom, "bloom2": f.Bloom2, "focusRing": f.FocusRing, "focusRing2": f.FocusRing2} {
 		if value == "" {
 			continue
 		}
 		if _, ok := parseHexColor(value); !ok || !strings.HasPrefix(value, "#") {
 			return ThemePreset{}, fmt.Errorf("%s: %q is not #rrggbb", key, value)
 		}
+	}
+	if f.TileRadius < 0 || f.TileRadius > homeTileRadiusMax {
+		return ThemePreset{}, fmt.Errorf("tileRadius: %d is not 0..%d", f.TileRadius, homeTileRadiusMax)
 	}
 	// Written out rather than converted: the preset carries the gallery's own
 	// fields (kind, arrangement) that a theme file does not set directly, and
@@ -106,6 +116,10 @@ func (f themeFile) toPreset() (ThemePreset, error) {
 		Summary:       strings.TrimSpace(f.Summary),
 		Bloom:         f.Bloom,
 		Bloom2:        f.Bloom2,
+		CarouselStyle: homeThemeFileCarouselStyle(f.CarouselStyle),
+		TileRadius:    f.TileRadius,
+		FocusRing:     f.FocusRing,
+		FocusRing2:    f.FocusRing2,
 		Background:    f.Background,
 		ButtonColor:   f.ButtonColor,
 		LabelColor:    f.LabelColor,

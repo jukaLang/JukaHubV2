@@ -622,7 +622,9 @@ func (s *boxArtScheduler) pass(why string) {
 	library := boxArtLibrarySignature(roots)
 	s.library, s.lookedAt = library, started
 	report := scanROMLibrary(roots)
-	todo := boxArtTitlesToTry(romsMissingArtwork(report.Games, dest), loadArtworkMisses(dest), started)
+	// Every console in turns (artworkFetchOrder): a pass cut short by a game
+	// must not have spent itself on the first console in path order.
+	todo := artworkFetchOrder(boxArtTitlesToTry(romsMissingArtwork(report.Games, dest), loadArtworkMisses(dest), started), "")
 	logInfo("art", "automatic box art (%s): %d game(s) on the card, %d to look up", why, len(report.Games), len(todo))
 	if len(todo) == 0 {
 		s.finish(library, len(report.Games), 0)

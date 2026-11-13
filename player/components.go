@@ -467,7 +467,7 @@ func UIListRow(renderer *sdl.Renderer, rect sdl.Rect, radius int32, selected, ho
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, WithAlpha(accent, 36))
 		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFillFocus())
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFocusRingWidth, accent)
+		strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), radius, glassFocusRingWidth, accent)
 		return
 	}
 	drawGlassSurface(renderer, rect, radius, glassState{Hovered: hovered, NoLift: true})

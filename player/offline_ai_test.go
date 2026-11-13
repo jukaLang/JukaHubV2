@@ -94,3 +94,25 @@ func TestOfflineSpeechCommandUsesShorterSearch(t *testing.T) {
 		t.Fatalf("quick=%q dictation=%q", quick, dictation)
 	}
 }
+
+func TestOfflineAIServerStreamAndArgs(t *testing.T) {
+	stream := "data: {\"content\":\"A comet\",\"stop\":false}\n\n" +
+		": keep-alive\n" +
+		"data: {\"content\":\" is icy.\",\"stop\":false}\n\n" +
+		"data: {\"content\":\"\",\"stop\":true}\n\n" +
+		"data: {\"content\":\" never read\"}\n\n"
+	var got strings.Builder
+	if err := offlineAIReadStream(strings.NewReader(stream), &got); err != nil || got.String() != "A comet is icy." {
+		t.Fatalf("stream = %q, %v", got.String(), err)
+	}
+	got.Reset()
+	if err := offlineAIReadStream(strings.NewReader("error: {\"code\":500}\n"), &got); err == nil {
+		t.Fatal("an error event was not reported")
+	}
+	args := strings.Join(offlineAIServerArgs("m.gguf", 4242, "k"), " ")
+	for _, want := range []string{"--host 127.0.0.1 --port 4242", "--api-key k", "-np 1", "--mlock"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("server args %q lack %q", args, want)
+		}
+	}
+}

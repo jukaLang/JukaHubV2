@@ -228,7 +228,7 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 func triggerOwnedByOverlay() bool {
 	switch {
 	case ambientIsActive(), launchFailure.open, videoPrepareActive(), voiceOrbModal(),
-		onboarding.active && !onboardingCoveredByOverlay(), recoveryCard.open:
+		onboarding.active && !onboardingCoveredByOverlay(), recoveryCard.open, emuPickOpen():
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
 		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, brwMenu.open, homeCalendarOpen,

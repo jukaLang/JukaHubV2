@@ -63,7 +63,7 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowSpatialMode, "Spatial audio", spatialModeHint},
 		{msRowSpatialStrength, "Spatial strength", spatialStrengthHint},
 		{msRowSpatialRoom, "Virtual room", spatialRoomHint},
-		{msRowSpatialGames, "Spatial audio in games", spatialGamesHint},
+		{msRowSpatialGames, "Spatial audio in games & apps", spatialGamesHint},
 		{msRowPlaylists, "Playlists", "Left/right picks a saved list, A plays it, X saves the current queue under a name."},
 		{msRowShortcuts, "Keyboard shortcuts", "Show every key and controller binding."},
 	}
@@ -428,7 +428,7 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 		rect := sdl.Rect{X: x + OverlayPadX, Y: ry, W: panelW - 2*OverlayPadX, H: rowH - 4}
 		if i == musicSettings.cursor {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(ColorCardFocus, 255))
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, accentColor)
+			strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), 10, 1, accentColor)
 		}
 		renderText(renderer, config, medium, row.label, ColorTextPrimary(),
 			rect.X+16, rect.Y+(rect.H-medH)/2)

@@ -33,6 +33,13 @@ package main
 // while the orb listens (the speaker is next to the microphone) and resume as
 // soon as the clip ends, and neither the audio nor the words are kept.
 //
+// Offline English is decoded while the user talks (stt_stream.go): the clip's
+// chunks go to the warm recognizer as they are read, its partial words show in
+// the bubble, and its own end-of-sentence call lets the clip end a little
+// sooner (orbEndQuietFastMs). "Hey Juka" (wakeword.go) opens the orb like a
+// tap of Menu, handing over its open microphone and the words said after the
+// name (voiceOrbWake).
+//
 // Main thread only, apart from the two request goroutines, which hand their
 // results back through tbxPost (and Juka's streaming text through orbAIText).
 
@@ -137,6 +144,10 @@ const (
 	// back-and-forth, and every millisecond here is waited before Juka can
 	// even start on the answer. A held button still keeps a clip open.
 	orbEndQuietMs = 800
+	// orbEndQuietFastMs is the pause that ends a clip once the streaming
+	// recognizer has also heard the sentence end (Vosk's endpoint: about half
+	// a second of trailing silence after a word, stt_stream.go).
+	orbEndQuietFastMs = 450
 )
 
 // voiceOrbMenuKey is the Custom setting behind Settings → Controls → "Menu
@@ -149,6 +160,11 @@ const orbJukaVoicePrompt = "This question was spoken to the handheld's voice ass
 
 const orbJukaUnmatchedPrompt = "JukaHub could not carry out this spoken command. Do not claim that it was done. " +
 	"Say that it was not done, then give a brief useful suggestion."
+
+// orbJukaUnmatchedSettingsPrompt follows it when the settings list was sent
+// (voicesettings_ai.go): a listed setting can still do what was asked.
+const orbJukaUnmatchedSettingsPrompt = "Exception: if a listed setting does what was asked, change it with a " +
+	"[[set ...]] line and say that it is done."
 
 // voiceOrb is the orb. Main thread only.
 var voiceOrb struct {
@@ -169,6 +185,12 @@ var voiceOrb struct {
 	vad        orbVAD
 	hushMusic  bool
 	hushVideo  bool
+	// stream decodes the clip offline while it is recorded (stt_stream.go;
+	// nil when Groq goes first or the package cannot stream). skipUntil ends
+	// the start chime's stretch, which is not kept (0: nothing skipped, after
+	// "Hey Juka" handed over words already said).
+	stream    *sttStream
+	skipUntil uint64
 
 	// The press of the voice button that opened the listen, for push-to-talk.
 	pressAt  uint64
@@ -866,12 +888,28 @@ func voiceOrbRelease(config *Config, src orbSource) {
 	}
 }
 
+// voiceOrbWake opens the orb for "Hey Juka" (wakeword.go) the way a tap of
+// Menu does; voiceOrbListen takes the wake word's open microphone and the
+// words said after the name. false: the orb cannot come up now.
+func voiceOrbWake(config *Config) bool {
+	if voiceOrbActive() || !voiceOrbCanOpen(config) {
+		return false
+	}
+	// Talking to the handheld is being there: the idle clock starts again.
+	screensaverNotifyInput()
+	voiceOrb.held = false
+	voiceOrb.pressSrc = orbFromPad
+	voiceOrb.pressAt = orbNow()
+	voiceOrbListen(config)
+	return voiceOrb.phase != orbHidden
+}
+
 // voiceOrbBlockingCard reports a card that owns the whole screen: the alarm, a
 // game, the first-run tour, recovery, a failed launch, an update offer, a
-// video being prepared, the controller test.
+// video being prepared, the controller test, the emulator picker.
 func voiceOrbBlockingCard() bool {
 	return alarmFiringActive() || gameScreenSuspended() || onboarding.active || recoveryCard.open ||
-		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open
+		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open || emuPickOpen()
 }
 
 // voiceOrbBlocked names what keeps the orb from coming up, or "": those cards,
@@ -921,7 +959,8 @@ func voiceOrbCanOpen(config *Config) bool {
 // voiceOrbListen opens the microphone and starts a clip, or says what is
 // missing with the fix one press away.
 func voiceOrbListen(config *Config) {
-	jukaSpeakStop() // the microphone must not hear Juka (tts_api.go)
+	voicePrewarm(config) // CPU, offline model and voice get ready while the user talks (voiceboost.go)
+	jukaSpeakStop()      // the microphone must not hear Juka (tts_api.go)
 	voiceOrbStopCapture()
 	voiceOrbCancelRequest()
 	voiceOrb.heard, voiceOrb.words = "", ""
@@ -934,6 +973,9 @@ func voiceOrbListen(config *Config) {
 		case voiceFixOfflineSpeech:
 			offer = orbOfferOfflineSpeech
 			sub = "Install offline speech once to use Menu without a Groq key"
+			if relPackRunning(sttPackKey) {
+				offer, sub = orbOfferNone, "Offline speech is downloading — Menu works once it's ready"
+			}
 		case voiceFixGroqKey:
 			offer = orbOfferGroqKey
 		}
@@ -947,7 +989,17 @@ func voiceOrbListen(config *Config) {
 	if vscPage.rec.on {
 		vscStopCapture()
 	}
-	mic, err := micOpen()
+	// After "Hey Juka" the wake word's microphone is still open, with what was
+	// said after the name (wakeword.go): the orb carries on from there.
+	hand := hjTakeHandoff()
+	var mic *micStream
+	var err error
+	if hand != nil {
+		mic = hand.mic
+		mic.adoptVoice()
+	} else {
+		mic, err = micOpen()
+	}
 	if err != nil {
 		title := "Couldn't open the microphone"
 		if errors.Is(err, errMicNone) {
@@ -968,9 +1020,23 @@ func voiceOrbListen(config *Config) {
 	}
 	voiceOrb.buf = voiceOrb.buf[:0]
 	voiceOrb.started = orbNow()
+	voiceOrb.skipUntil = voiceOrb.started + voiceChimeMs
 	voiceOrb.level, voiceOrb.peak = 0, 0
 	voiceOrb.vad = orbVAD{}
+	// Offline recognition decodes the clip while it is recorded, so its words
+	// are ready as soon as the speaker stops (stt_stream.go).
+	if sttStreamWanted(config) {
+		voiceOrb.stream = sttStreamStart(sttStreamOpts{partialEvery: sttStreamPartialEvery})
+	}
+	// Words said straight after "Hey Juka" are the start of the clip; the
+	// chime would land on them, so a short buzz says "heard you" instead.
+	chime := hand == nil || !hand.speech
+	if hand != nil && hand.speech {
+		voiceOrb.skipUntil = 0
+		voiceOrbTakeAudio(hand.pcm, voiceOrb.started)
+	}
 	voiceOrbSetPhase(orbListening)
+	voiceScreenRequest(config) // one picture of the screen, read next frame (voicescreen.go)
 	voiceOrb.title = "Listening…"
 	voiceOrb.sub = "Say “open YouTube” or “volume 50”"
 	if sttModeOf(config) != sttModeOffline && strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting()) {
@@ -979,7 +1045,11 @@ func voiceOrbListen(config *Config) {
 	voiceOrb.tone, voiceOrb.offer = tbxToneNeutral, orbOfferNone
 	// Music and video would be heard as speech: they wait while it listens.
 	voiceOrbHushMedia()
-	PlayActivateSound()
+	if chime {
+		PlayActivateSound()
+	} else {
+		playHaptic(hapticSuccessPulse)
+	}
 }
 
 // voiceOrbReadAudio moves what the microphone captured into the clip and
@@ -1005,23 +1075,49 @@ func voiceOrbReadAudio(now uint64) {
 		if n <= 0 {
 			return
 		}
-		if now-voiceOrb.started < voiceChimeMs {
+		if now < voiceOrb.skipUntil {
 			continue
 		}
-		data := chunk[:n]
-		voiceOrb.buf = append(voiceOrb.buf, data...)
-		level := vkPCMLevel(data)
-		if level > voiceOrb.peak {
-			voiceOrb.peak = level
-		}
-		// Fast attack, slow release: the orb jumps with a syllable and settles.
-		if level > voiceOrb.level {
-			voiceOrb.level = level
-		} else {
-			voiceOrb.level = voiceOrb.level*0.82 + level*0.18
-		}
-		voiceOrb.vad.feed(level, now)
+		voiceOrbTakeChunk(chunk[:n], now)
 	}
+}
+
+// voiceOrbTakeAudio adds audio recorded before the orb opened (the words said
+// right after "Hey Juka") to the clip, in the microphone's chunk size.
+func voiceOrbTakeAudio(pcm []byte, now uint64) {
+	for len(pcm) >= 2 {
+		room := (cap(voiceOrb.buf) - len(voiceOrb.buf)) &^ 1
+		if room <= 0 {
+			return
+		}
+		n := len(pcm) &^ 1
+		if n > orbChunkBytes {
+			n = orbChunkBytes
+		}
+		if n > room {
+			n = room
+		}
+		voiceOrbTakeChunk(pcm[:n], now)
+		pcm = pcm[n:]
+	}
+}
+
+// voiceOrbTakeChunk keeps one chunk of the clip, hands it to the streaming
+// recognizer and follows its level.
+func voiceOrbTakeChunk(data []byte, now uint64) {
+	voiceOrb.buf = append(voiceOrb.buf, data...)
+	voiceOrb.stream.Feed(data)
+	level := vkPCMLevel(data)
+	if level > voiceOrb.peak {
+		voiceOrb.peak = level
+	}
+	// Fast attack, slow release: the orb jumps with a syllable and settles.
+	if level > voiceOrb.level {
+		voiceOrb.level = level
+	} else {
+		voiceOrb.level = voiceOrb.level*0.82 + level*0.18
+	}
+	voiceOrb.vad.feed(level, now)
 }
 
 // voiceOrbListenTick records one frame's audio and ends the clip by itself:
@@ -1030,12 +1126,24 @@ func voiceOrbReadAudio(now uint64) {
 func voiceOrbListenTick(config *Config, now uint64) {
 	voiceOrbReadAudio(now)
 	ledMicFeedVoice(voiceOrb.level) // the stick lights brighten as the user talks (ledmic.go)
+	// The words so far, as the offline recognizer hears them.
+	if heard := orbQuote(voiceOrb.stream.Partial()); heard != "" {
+		voiceOrb.sub = heard
+	}
 	pushToTalk := voiceOrb.held && now-voiceOrb.pressAt >= orbHoldMs
+	quiet := uint64(0)
+	if voiceOrb.vad.speaking && voiceOrb.vad.quietSince != 0 {
+		quiet = now - voiceOrb.vad.quietSince
+	}
 	switch {
 	case len(voiceOrb.buf) >= cap(voiceOrb.buf):
 		voiceOrbFinish(config)
 	case pushToTalk:
-	case voiceOrb.vad.speaking && voiceOrb.vad.quietSince != 0 && now-voiceOrb.vad.quietSince >= orbEndQuietMs:
+	case quiet >= orbEndQuietMs:
+		voiceOrbFinish(config)
+	case quiet >= orbEndQuietFastMs && voiceOrb.stream.Endpoint():
+		// The recognizer heard the sentence end too (its own pause rule
+		// after the last word): no need to wait out the rest.
 		voiceOrbFinish(config)
 	case !voiceOrb.vad.speaking && now-voiceOrb.started >= voiceNoSpeechMs:
 		voiceOrbHeardNothing(voiceOrb.mic != nil && !voiceOrb.mic.Heard())
@@ -1063,18 +1171,24 @@ func voiceOrbFinish(config *Config) {
 	}
 	voiceOrbReadAudio(orbNow())
 	silent := voiceOrb.mic != nil && !voiceOrb.mic.Heard()
+	// The streamed words go with the clip (voiceOrbStopCapture would drop them).
+	st := voiceOrb.stream
+	voiceOrb.stream = nil
 	voiceOrbStopCapture()
 	ms := len(voiceOrb.buf) * 1000 / (vkVoiceRate * 2)
 	switch {
 	case ms < vkVoiceMinMs:
+		st.Cancel()
 		voiceOrb.buf = voiceOrb.buf[:0]
 		voiceOrbDismiss()
 		PlayBackSound()
 		return
 	case voiceOrb.peak < orbSilencePeak:
+		st.Cancel()
 		voiceOrbHeardNothing(silent)
 		return
 	}
+	st.Finish()
 	key := strings.TrimSpace(groqAPIKey())
 	if config == nil {
 		config = appConfig
@@ -1103,7 +1217,7 @@ func voiceOrbFinish(config *Config) {
 				tbxPost(func() { voiceOrbTranscribed(gen, "", errors.New("Speech failed — try again")) })
 			}
 		}()
-		text, err := sttCommandTranscribe(ctx, key, wav, prompt)
+		text, err := sttCommandTranscribeStream(ctx, key, wav, prompt, st)
 		tbxPost(func() { voiceOrbTranscribed(gen, text, err) })
 	}()
 }
@@ -1151,6 +1265,11 @@ func voiceOrbCommand(config *Config, text string) {
 	voiceOrb.heard = text
 	// Over a paused game every sentence is a question about it (gameassist.go).
 	if gameAssistHeard(text) {
+		return
+	}
+	// "What am I looking at?" is a question for Juka, not a name to search
+	// for (voicescreen.go).
+	if voiceScreenTakeQuestion(config, text) {
 		return
 	}
 	in := voiceParse(text)
@@ -1320,7 +1439,9 @@ func voiceOrbWantsJuka(in voiceIntent, out voiceOutcome) bool {
 	if voiceShortcutHandled(in.Heard) {
 		return false
 	}
-	if in.Kind != voiceIntentOpen || out.Act != nil || out.Done || out.Cancel {
+	// A settings sentence that named no setting went the "open" way
+	// (voicesettings.go): Juka may still know what was meant.
+	if (in.Kind != voiceIntentOpen && in.Kind != voiceIntentSetting) || out.Act != nil || out.Done || out.Cancel {
 		return false
 	}
 	if len(out.Choices) > 0 {
@@ -1367,7 +1488,9 @@ func orbLooksLikeQuestion(folded string) bool {
 }
 
 // voiceOrbAsk prefers Groq, then asks the installed local model if Groq is
-// missing or fails. The model only writes an answer; it never runs a command.
+// missing or fails. The model only writes an answer; it never runs a command
+// itself — a setting change it asks for is checked against the catalogue and
+// run by voiceOrbSettingsReply (voicesettings_ai.go).
 func voiceOrbAsk(question string, unmatchedAction bool) {
 	key := strings.TrimSpace(groqAPIKey())
 	local := offlineAIReady()
@@ -1382,15 +1505,29 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 	voiceOrb.title, voiceOrb.sub, voiceOrb.tone, voiceOrb.offer = "Thinking…", orbQuote(question), tbxToneNeutral, orbOfferNone
 	voiceOrb.groqNudge = key == ""
 	if !cloud {
-		voiceOrb.title = "Thinking offline…"
+		voiceOrb.title = offlineAIThinkingTitle()
+		voiceBoostHold(voiceBoostAnswer) // the answer is written on this CPU (voiceboost.go)
 	}
 	orbAIText.mu.Lock()
 	orbAIText.gen, orbAIText.text = gen, ""
 	orbAIText.mu.Unlock()
-	system := jukaSystemPrompt() + " " + orbJukaVoicePrompt
+	// The settings Juka may change, when the question asks for a change
+	// (voicesettings_ai.go). Groq only: the offline model never gets the list.
+	settings := ""
+	if cloud {
+		settings = voiceSettingsAIPrompt(appConfig, question)
+	}
+	system := jukaSystemPrompt() + " " + orbJukaVoicePrompt + settings
 	if unmatchedAction {
 		system += " " + orbJukaUnmatchedPrompt
+		if settings != "" {
+			system += " " + orbJukaUnmatchedSettingsPrompt
+		}
 	}
+	// Where the user is, and the picture of the screen when the question is
+	// about it (voicescreen.go).
+	shot := voiceScreenFor(appConfig, question, cloud)
+	system += shot.prompt()
 	messages := []map[string]string{
 		{"role": "system", "content": system},
 		{"role": "user", "content": question},
@@ -1411,7 +1548,8 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 		var reply string
 		var err error
 		if cloud {
-			reply, err = chatGroqAsk(key, models, messages, func(partial string) {
+			reply, err = voiceScreenGroqAsk(ctx, shot, key, models, messages, func(partial string) {
+				partial = voiceSettingsHideMarks(partial) // never shown or spoken
 				orbAIText.mu.Lock()
 				if orbAIText.gen == gen {
 					orbAIText.text = partial
@@ -1428,12 +1566,14 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 				orbAIText.text = ""
 			}
 			orbAIText.mu.Unlock()
+			voiceBoostHold(voiceBoostAnswer)
+			title := offlineAIThinkingTitle()
 			tbxPost(func() {
 				if voiceOrb.gen == gen && voiceOrb.phase == orbThinking {
-					voiceOrb.title = "Thinking offline…"
+					voiceOrb.title = title
 				}
 			})
-			reply, err = offlineAIAnswer(ctx, question, unmatchedAction, func(partial string) {
+			reply, err = offlineAIAnswer(ctx, shot.offlineQuestion(question), unmatchedAction, func(partial string) {
 				orbAIText.mu.Lock()
 				if orbAIText.gen == gen {
 					orbAIText.text = partial
@@ -1441,7 +1581,12 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 				orbAIText.mu.Unlock()
 			})
 		}
-		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err, usedLocal, unmatchedAction) })
+		tbxPost(func() {
+			// A setting change Juka asked for runs here, on the main thread,
+			// and only for the answer still waited for (voicesettings_ai.go).
+			shown, changed := voiceOrbSettingsReply(gen, reply, err, usedLocal)
+			voiceOrbAnswered(gen, question, shown, err, usedLocal, unmatchedAction && !changed)
+		})
 	}()
 }
 
@@ -1505,6 +1650,7 @@ func voiceOrbAnswered(gen int, question, reply string, err error, local, unmatch
 	if local {
 		live.Stop()
 		ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply)
+		offlineAIMaybeUpgrade() // a package without the fast server updates itself (offline_ai_install.go)
 	} else {
 		// Juka says it too, most of it already (tts_live.go).
 		voiceOrbFinishLive(live, ttsFromOrb, raw)
@@ -1610,6 +1756,10 @@ func voiceOrbAway() {
 // voiceOrbStopCapture closes the microphone and lets the music and the video
 // play again.
 func voiceOrbStopCapture() {
+	if voiceOrb.stream != nil {
+		voiceOrb.stream.Cancel()
+		voiceOrb.stream = nil
+	}
 	if voiceOrb.mic != nil {
 		voiceOrb.mic.Close()
 		voiceOrb.mic = nil
@@ -2067,6 +2217,9 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 // everything but the virtual cursor. main.go calls it once a frame, after the
 // screenshot capture, so a "take a screenshot" it ran shows the screen alone.
 func voiceOrbRender(renderer *sdl.Renderer, config *Config) {
+	// The picture of the screen a question may take, before the orb is on it
+	// (voicescreen.go).
+	voiceScreenCapture(renderer)
 	// A Menu press still down is followed even while the orb is hidden: a
 	// hold opens it.
 	voiceOrbMenuTick(config)

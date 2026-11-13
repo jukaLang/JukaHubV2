@@ -712,6 +712,8 @@ func voiceCommandPreview(command string, targets []voiceTarget) string {
 			return "Asks which one: " + strings.Join(names, ", ")
 		}
 		return "Finds nothing called “" + in.Target + "” yet"
+	case voiceIntentSetting:
+		return voiceSettingPreview(in)
 	case voiceIntentSearch:
 		return "Searches for “" + in.Query + "”"
 	case voiceIntentWebSearch:
@@ -802,6 +804,12 @@ func voiceShortcutClash(list []voiceShortcut, phrase string, skip int, targets [
 			return "“" + folded + "” already opens " + matches[0].Target.Title + " — your shortcut takes over"
 		}
 		return ""
+	case voiceIntentSetting:
+		// "Game on" reads like a setting but names none: no clash.
+		best, near := voiceSettingDecide(voiceSettingRank(appConfig, voiceSettingCatalog(), in.Setting, in.SetOp), in.SetOp)
+		if best == nil && len(near) < 2 {
+			return ""
+		}
 	}
 	what := voiceCommandPreview(phrase, nil)
 	if what != "" {

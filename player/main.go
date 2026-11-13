@@ -56,6 +56,11 @@ func main() {
 	if handled, code := handleVPNCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	// Spatial audio's check of the system audio route (spatial_alsa.go) is
+	// this binary started with its own flag.
+	if handled, code := handleSpatialCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 
 	InitLogging()
 	// What the last session's crash left is filed as a report, and this
@@ -219,6 +224,8 @@ func main() {
 	ensureRommScene(config)
 	// The APK Store (Start → Games) likewise (apkstore.go).
 	ensureApkStoreScene(config)
+	// Minecraft (Start → Games) likewise (minecraft_ui.go).
+	mcEnsureScene(config)
 	// Voice command and Bluetooth were only injected when first opened (or by a
 	// reload), so their trophies came and went from the room mid-run.
 	ensureVoiceScene(config)
@@ -826,6 +833,8 @@ func main() {
 			// The game assistant: another watches for Select + R2, and the
 			// overlay opens over the paused game (gameassist.go).
 			gameAssistParkedTick(config)
+			// "Hey Juka" in a game opens the same overlay (wakeword.go).
+			hjTick(config, true)
 			// The power key's main-loop half; no Exit card over a game.
 			powerKeyTick(config, true)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
@@ -999,6 +1008,9 @@ func main() {
 						wakeSwallowedText = true
 						continue
 					}
+					// An arrow or Tab step lets the focus ring bounce
+					// (homefocusglide.go).
+					focusGlideNoteKey(e.Keysym.Sym)
 					// The voice orb's keys (voiceorb.go): F4 anywhere, and Enter,
 					// Esc and the arrows while it listens or offers a choice. The
 					// text a taken key would type is dropped with it.
@@ -1049,6 +1061,10 @@ func main() {
 					}
 					if launchFailure.open {
 						handleLaunchFailureKey(e)
+						continue
+					}
+					// "Which emulator?" before a game starts (emupicker.go).
+					if handleEmuPickKey(e) {
 						continue
 					}
 					// The first-run tour is the topmost modal: while it is open it
@@ -1507,10 +1523,11 @@ func main() {
 							presets := themeGalleryPresets()
 							switch e.Keysym.Sym {
 							case sdl.K_TAB:
-								// Tab moves between Colour and Total conversion:
-								// the two are different promises about what a
-								// preset changes, and Left/Right already walk the
-								// cards of the open one.
+								// Tab moves between the tabs (Colour, Total
+								// conversion, Consoles, Experience): they are
+								// different promises about what a preset changes,
+								// and Left/Right already walk the cards of the
+								// open one.
 								step := 1
 								if e.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
 									step = -1
@@ -1734,7 +1751,7 @@ func main() {
 				mouseX, mouseY = physicalToLogical(int32(e.X), int32(e.Y))
 				// A ringing alarm is modal: the pointer moves, hovers and drags
 				// nothing behind its takeover. So is the recovery card.
-				if alarmFiringActive() || recoveryCard.open {
+				if alarmFiringActive() || recoveryCard.open || emuPickOpen() {
 					continue
 				}
 				// The wallpaper picker covers the screen: the pointer hovers its
@@ -1796,6 +1813,15 @@ func main() {
 				}
 				// Nor does anything behind the recovery card.
 				if recoveryCard.open {
+					continue
+				}
+				// The emulator picker's list takes the wheel (emupicker.go).
+				if emuPickOpen() {
+					if e.Y > 0 {
+						emuPickMove(-1)
+					} else if e.Y < 0 {
+						emuPickMove(1)
+					}
 					continue
 				}
 				// Nor behind the wallpaper picker, whose list it scrolls.
@@ -2011,6 +2037,11 @@ func main() {
 					}
 					continue
 				}
+				// The emulator picker takes the left button below; nothing else
+				// clicks behind it.
+				if emuPickOpen() && e.Button != sdl.BUTTON_LEFT {
+					continue
+				}
 				// A right click is the mouse's Select on the Browser: it opens the
 				// menu over the page and closes it again (brw_menu.go).
 				if e.Button == sdl.BUTTON_RIGHT && e.Type == sdl.MOUSEBUTTONDOWN && brwMenuRightClick(config) {
@@ -2042,12 +2073,20 @@ func main() {
 					if voiceOrbMouse(e.Type == sdl.MOUSEBUTTONDOWN, mx, my, config) {
 						continue
 					}
+					// The release of a click the emulator picker took is its
+					// too: the screen behind acts on releases (emupicker.go).
+					if e.Type == sdl.MOUSEBUTTONUP && emuPickEatRelease() {
+						continue
+					}
 					if e.Type == sdl.MOUSEBUTTONDOWN {
 						if recoveryCardHandleClick(mx, my, config) {
 							break
 						}
 						if launchFailure.open {
 							handleLaunchFailureMouse()
+							break
+						}
+						if handleEmuPickMouse(mx, my) {
 							break
 						}
 						if handleOnboardingMouse(mx, my, config) {
@@ -2482,6 +2521,10 @@ func main() {
 						if apkStoreSceneClick(mx, my, config) {
 							break
 						}
+						// Minecraft's rows and sheets (minecraft_ui.go).
+						if mcSceneClick(mx, my, config) {
+							break
+						}
 						// Voice command's microphone, buttons and choices.
 						if voiceSceneClick(mx, my, config) {
 							break
@@ -2617,10 +2660,8 @@ func main() {
 									if tab := themeGalleryTabAt(elem, mx, my); tab >= 0 {
 										selectedButtonIndex = i
 										focusEngine.SetByElementIndex(i)
-										if tab != themeGalleryTab {
-											themeGalleryTab = tab
-											themeGalleryIndex = 0
-											themeGalleryScroll = 0
+										// Experience opens its own screen (themetabs.go).
+										if themeGallerySelectTab(tab) {
 											PlayNavSound()
 										}
 										continue
@@ -2843,6 +2884,8 @@ func main() {
 					if wakeSwallowPress(wakeInputPad, int32(e.Button), false) {
 						continue
 					}
+					// A D-pad step lets the focus ring bounce (homefocusglide.go).
+					focusGlideNotePad(e.Button)
 				} else if wakeSwallowRelease(wakeInputPad, int32(e.Button)) {
 					continue
 				}
@@ -2925,6 +2968,9 @@ func main() {
 						continue
 					}
 					if handleLaunchFailureController(e) {
+						continue
+					}
+					if handleEmuPickController(e) {
 						continue
 					}
 					// The first-run tour is modal and above every other overlay.
@@ -3339,6 +3385,8 @@ func main() {
 		syncLEDLoopSettingsIfDue(config, time.Now())
 		// LED mode Microphone reads the mic here, on the main thread (ledmic.go).
 		ledMicTick(time.Now())
+		// So does "Hey Juka" (wakeword.go).
+		hjTick(config, false)
 
 		// Apply kinetic scroll for text browser panels
 		if textBrowserScrollCooldown > 0 {
@@ -3484,6 +3532,9 @@ func main() {
 		// Archive extractions report here the same way: the toast, the relisted
 		// folder and the cursor on the result (files_extract_ui.go).
 		feExtractDrain(config)
+		// Every focus ring drawn from here to Present bounces when a press moves
+		// it (homefocusglide.go, Settings → Focus bounce).
+		focusGlideFrame(config, currentSceneIndex)
 		// The dock/ambient screen takes the whole panel when it is up, then the
 		// screensaver, then the scene.
 		if ambientIsActive() {
@@ -3873,6 +3924,7 @@ func main() {
 		wineShowProfileFailure()
 		// A game that quit at once, and what it was missing (gamediag.go).
 		gameDiagShowPending()
+		renderEmuPick(renderer, config)
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
 		}
@@ -3939,6 +3991,7 @@ func main() {
 		// The power key's main-loop half: the setting, the next alarm for a
 		// sleep's RTC wake, and the Exit card a hold asked for (powerkey.go).
 		powerKeyTick(config, false)
+		homeFocusGlide.endFrame()
 
 		renderer.Present()
 		// Measured after Present, so the idle delay at the end of the loop is

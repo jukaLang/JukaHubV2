@@ -250,7 +250,8 @@ func drawUpdatePill(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect
 	if focused {
 		// The shared 3px ring (glassFocusRingWidth), standing just off the
 		// pill like every other focused control in the bar.
-		strokeRoundedRect(renderer, rect.X-3, rect.Y-3, rect.W+6, rect.H+6, (rect.H+6)/2, glassFocusRingWidth, accentColor)
+		ring := sdl.Rect{X: rect.X - 3, Y: rect.Y - 3, W: rect.W + 6, H: rect.H + 6}
+		strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), ring.H/2, glassFocusRingWidth, accentColor)
 	}
 
 	// Down-arrow drawn with lines: Inter may not contain U+2193 on the device.

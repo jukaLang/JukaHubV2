@@ -63,6 +63,41 @@ func TestBtSystemReadings(t *testing.T) {
 			t.Errorf("btProcStatLive(%q) = %v; want %v", stat, got, live)
 		}
 	}
+	// BlueALSA's PCM list as dbus-send prints it: only the A2DP source role's
+	// playback PCMs name a headset to play into.
+	reply := `   array [
+      dict entry(
+         object path "/org/bluealsa/hci0/dev_00_1b_66_AA_BB_CC/a2dpsrc/sink"
+      )
+      dict entry(
+         object path "/org/bluealsa/hci0/dev_11_22_33_44_55_66/hfpag/sink"
+      )
+      dict entry(
+         object path "/org/bluealsa/hci0/dev_00_1B_66_AA_BB_CC/a2dpsrc/sink"
+      )
+   ]`
+	if got := strings.Join(parseBluealsaA2DPSinks(reply), " "); got != "00:1B:66:AA:BB:CC" {
+		t.Errorf("parseBluealsaA2DPSinks = %q; want 00:1B:66:AA:BB:CC", got)
+	}
+	// A bluealsa command line plays into a headset only with a2dp-source, which
+	// bluez-alsa 3.x enables when no profile is named at all.
+	for _, c := range []struct {
+		cmdline string
+		source  bool
+	}{
+		{"bluealsa", true},
+		{"bluealsa -S --keep-alive=5", true},
+		{"bluealsa -p a2dp-sink", false},
+		{"bluealsa -p a2dp-sink -p a2dp-source", true},
+		{"bluealsa --profile=a2dp-sink", false},
+		{"bluealsa -pa2dp-source", true},
+		{"/usr/bin/bluealsa --profile hfp-ag", false},
+	} {
+		cmdline, source := c.cmdline, c.source
+		if got := bluealsaArgsHaveSource(strings.Fields(cmdline)); got != source {
+			t.Errorf("bluealsaArgsHaveSource(%q) = %v; want %v", cmdline, got, source)
+		}
+	}
 }
 
 // Nothing but a Bluetooth address is typed into a session after a command

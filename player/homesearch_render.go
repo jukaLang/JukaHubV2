@@ -133,7 +133,7 @@ func homeSearchDrawField(renderer *sdl.Renderer, fonts homeSearchFonts, field sd
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRect(renderer, field.X, field.Y, field.W, field.H, radius, glassA(22))
 	if focused {
-		strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, radius, glassFocusRingWidth, glassAccent())
+		strokeRoundedRectAt(renderer, field, homeFocusGlide.apply(field), radius, glassFocusRingWidth, glassAccent())
 	} else {
 		strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, radius, 1, glassEdgeHover())
 	}

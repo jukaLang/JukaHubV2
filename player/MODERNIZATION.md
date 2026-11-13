@@ -758,6 +758,58 @@ look square on the 1280 × 720 panel and on the Brick; no painter (Continue at
 7 × 3, a widget at 1 × 3) draws outside its tile.
 **Verify.** Record in the HW log; file a FIX task for anything that differs.
 
+### HW-5 — Voice speed, Hey Juka, voice settings, BT headset, PPSSPP (P0, M) [HW]
+**Why.** Juka asked (2026-11-13) for fast offline answers, a "Hey Juka" wake
+word, settings changed by voice, Bluetooth headphones that actually play, and
+PPSSPP kept current on the Smart Pro. Written without a device or a compiler:
+`stt_stream.go` + `vosk-cli --serve`, `wakeword.go`, `offline_ai_server.go`
+(llama-server), the warm Piper in `tts_local_other.go`, `voiceboost.go`,
+`voicesettings*.go`, `audioroute_bluealsa.go`, `ppsspp_managed.go` and the
+`ppsspp-trimui.yml` workflow (never run).
+**Where.** Smart Pro on stock firmware with the new speech and offline-AI
+packages, a Bluetooth headset, Wi-Fi on and off.
+**Done when.** (1) The speech and offline-AI packages update once by themselves;
+the log shows "offline speech server ready" and llama-server starting while you
+speak; an offline answer's first words appear within about 4 s of the end of
+the question, and the CPU boost ends after it. (2) Hey Juka opens the orb on
+Home and the game assistant in RetroArch and PPSSPP; the log line "Hey Juka
+listens for:" names a spelling of Juka; ten minutes of talk, TV and a loud game
+give no false wake; the mic still works for the orb, voice typing and the
+stick lights. (3) "turn on dark mode", "turn off background music", "set
+screen timeout to 5 minutes", "is Wi-Fi on?" (does not change it) and, with a
+Groq key, a change Juka makes all work. (4) A headset connected before and
+after start plays Home sounds, music, a video, a RetroArch and a PPSSPP game;
+disconnecting returns everything to the speaker; the Bluetooth diagnostics show
+BlueALSA, its streams and the route. (5) After pushing, the PPSSPP workflow
+publishes `ppsspp-tg5040`; the device switches to it within minutes of a start
+and PSP games start; a failed build falls back to the firmware's PPSSPP.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### HW-6 — Realistic glass, simpler Settings, Consoles/Experience tabs, screen vision (P0, M) [HW]
+**Why.** Juka asked (2026-11-13) for an Apple-like glass setting, console
+themes, Settings that are easier to find things in, Experience packs inside
+Theme presets and a voice assistant that can see the screen. Written without a
+device or a compiler: `glass_real.go` (RenderGeometry meshes + a 1/16-size
+blurred backdrop), `setessentials.go` + `setsearch.go` (vk target 91),
+`themetabs.go` + `themes_retro.go`, `voicescreen.go` (ReadPixels before the orb
+draws).
+**Where.** Smart Pro and Windows; a still wallpaper, a GIF wallpaper and none.
+**Done when.** (1) Glass → Realistic: Home cards, Settings rows and buttons show
+the blurred backdrop, sheen and rim; no square corners or seams; chips on
+thumbnails and the media, browser and viewer screens show no backdrop through
+pictures; Home stays at its usual frame rate; Classic looks exactly as before.
+(2) Settings opens each section on its essentials; More settings (N) unfolds
+without the focus jumping; Y opens Search, "wifi", "dark mode", "volume" find
+their rows and A lands on them; Date & time and Keyboard rows are in General and
+Controls; Home search, voice and the tour still open the right rows. (3) Theme
+presets shows Colour · Total conversion · Consoles · Experience; every new
+console theme applies and reads well; Experience opens the packs screen with the
+same tabs, L1/R1 go back, B never bounces between the two. (4) With a Groq key,
+"what's this?" on Settings and on a game list describes what is on screen; the
+orb is not in the picture; the pairing code is blanked; Off sends nothing; the
+screen read does not stall the orb noticeably.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
 ---
 
 ## P0/P1 — defects found by the 2026-11-09 inventory (FIX)
@@ -2003,6 +2055,31 @@ taken and the timelapse settings read on the render thread as the library does;
 a missing AndroidRT offers "Install and play"; and the row's status reads
 "Starting" while `gameProfileStartingNow(id)` holds.
 
+### AND-20 — Minecraft screen, first device run (P1, M) [HW] [NET]
+**Why.** Start → Games → Minecraft (2026-11-13, `minecraft.go`, `minecraft_ui.go`,
+`minecraft_peer.go`, `docs/MINECRAFT.md`) was written without a device or a Go
+toolchain. Three guesses need a real card: PortMaster's `ports.json` layout (the
+reader accepts the dict and list forms), the Java port's folder (`.minecraft`
+inside the port folder or `versions/` directly in it, found through the
+script's `GAMEDIR`), and that a zip in `Apps/PortMaster/PortMaster/autoinstall`
+is installed with its runtimes when JukaHub opens PortMaster on stock TrimUI.
+**Done when.** On a Smart Pro with PortMaster: Install on ClassiCube, Luanti and
+Java Edition each logs the catalogue entry, downloads and passes the MD5, and
+PortMaster installs it; back in JukaHub the row says Play within a second and
+Play starts the port. A paired Windows PC with 1.12.2 in `.minecraft` shows
+"Copy 1.12.2 from <PC>", the copy lands where the port's launcher looks
+(adjust `mcJavaGameDir` if not) and the port starts the version. The Bedrock row
+finds an owned arm64 APK and opens the APK Store on it (the game itself is
+AND-3). Results and timings go into `docs/MINECRAFT.md`.
+
+### AND-21 — Minecraft copy: pick only what the port lacks (P3, S)
+**Why.** The PC copy sends every library a version lists for Linux; the port
+ships its own LWJGL for aarch64, so some of those jars are dead weight on the
+card.
+**Done when.** After AND-20 shows which libraries the port's launcher really
+loads, the plan skips the ones the port provides (by the port's own file list),
+and the copy row shows the size before A.
+
 ---
 
 ## Media (MED)
@@ -2672,18 +2749,22 @@ job, `spatial_games.go` (where it looks).
 looks, and a RetroArch game started from the library on Windows plays through
 it.
 
-### SND-13 — Spatial audio for standalone emulators (P3, M) [HW]
-**Why.** Only RetroArch has a filter system JukaHub can use per launch. The same
-library is also a LADSPA plugin, which ALSA can put in front of the device
-(`pcm.!default` through a `ladspa` PCM, set per child with `ALSA_CONFIG_PATH`
-listing the stock `alsa.conf` first), but nothing shows that the firmware's
-alsa-lib has the `ladspa` PCM or that games open `default`.
-**Where.** `spatial_games.go`, the launch paths' child environment
-(`game_library.go`, `childenv.go`), `player/spatialfx`.
-**Done when.** A probe (a child that opens SDL audio with that environment)
-proves the route on the device; only then does an opt-in switch, off by
-default, send standalone emulators through the plugin; where the probe fails,
-the row says why.
+### SND-13 — Spatial audio for every game and app, on a device (P1, S) [HW]
+**Why.** Built 2026-11-13: `spatial_alsa.go` gives every screen-taking child
+`ALSA_CONFIG_PATH=<alsa.conf>:/tmp/jukahub-audio/asound-spatial.conf` and
+`AUDIODEV=jhspatial` (plug → ladspa `jukahub_spatial` → plug → `sysdefault` or
+the BlueALSA headset), after a probe (`JukaHub --spatial-alsa-probe`: libasound's
+`_snd_pcm_ladspa_open`, then SDL audio through the chain into `null`) passed;
+RetroArch keeps its filter only where its binary is proven to load it. The
+chain was checked against a PC's real alsa-lib, never on the firmware.
+**Where.** `spatial_alsa.go`, `spatial_games.go` (`prepareSpatialAudio`
+arbitration), `screengroup_unix.go`, the log's `spatial` lines.
+**Done when.** On a Smart Pro and a Brick: the probe's verdict is logged; with a
+mode on, PPSSPP standalone, DraStic and RetroArch (stock and CrossMix) are
+heard through the effect on the speakers and on a Bluetooth headset; the
+firmware's `asound.conf`/`.asoundrc` is recorded (a custom `default` falls back
+to SDL-only); a demanding game keeps full speed; Juka's in-game voice still
+plays while a game holds the output.
 
 ### SND-14 — Juka's voice, second round (P3, S)
 **Why.** Juka's voice (`tts_*.go`, 2026-11-11) fetches each sentence whole
@@ -4145,6 +4226,8 @@ From the Windows apps, Android, Xbox and emulator updates pass: APP-17, APP-18,
 APP-20, APP-21, GAME-18 (AND-1, AND-6, AND-17 and XBX-1 grew).
 From the 2026-11-11 tester pass: HW-3 (with GPU-5) and MED-33.
 From the Groq key, L2 Edit Home and square tiles pass: HW-4.
+From the voice speed, Hey Juka, voice settings, headset and PPSSPP pass: HW-5.
+From the glass, Settings, console themes and screen-vision pass: HW-6.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 
@@ -4176,6 +4259,10 @@ passes `Emus/<system>/../../Roms/...`); LAN play finds `ra64.trimui` and
 RetroArch comes up with its own config; Stick Calibration edits the ini of the
 PPSSPP build that is played; the save manager lists the PSP saves under
 `Emus/PSP/PPSSPP_<version>/`.
+From the Brick Pro report: on a Brick Pro with CrossMix a PSP game and a
+RetroArch game start from the Games library; one that does not opens the
+launch card within seconds (the script's last lines, the signal, the memory
+free), and `errors.txt` has its `starting …` and `… ended after` lines.
 From the JavaScript pass: on a Smart Pro and a Brick, a page whose content its
 scripts build (a framework app, a jQuery site, a news page with lazy images)
 draws that content; with **Settings → Browser → JavaScript** off, **Reload**

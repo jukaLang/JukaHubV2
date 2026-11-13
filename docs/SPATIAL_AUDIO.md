@@ -3,7 +3,8 @@
 **Spatial audio** is JukaHub's virtual surround. On headphones it places what
 you hear around you — in front, to the sides and a little behind — instead of
 inside your head. On the handheld's own speakers it widens the stereo picture.
-It is off until you turn it on.
+It covers JukaHub's own videos and music and, on the handheld, the sound of
+every game and app you start from JukaHub. It is off until you turn it on.
 
 ## Where to switch it
 
@@ -15,7 +16,8 @@ It is off until you turn it on.
     light touch; 100% gives the full room and the rear speakers.
   * **Virtual room** — Small, Medium (default) or Large: the room the
     headphone mode plays in, from close and dry to a hall.
-  * **Spatial audio in games** — RetroArch games too (below).
+  * **Spatial audio in games & apps** — on by default: games and apps follow
+    the mode too (below).
 
 Changes are heard within a second (the sound already queued for the speakers
 plays out first) without interrupting playback. The one exception: choosing a
@@ -38,38 +40,70 @@ Speakers mode there; pick **Headphones** by hand when you wear them.
 ## What it applies to
 
 Everything JukaHub itself plays: videos, the music player, podcasts,
-audiobooks and YouTube. Interface sounds and the alarm are left alone.
+audiobooks, YouTube and the background music. Interface sounds, Juka's voice
+and the alarm are left alone. With **Spatial audio in games & apps** on (the
+default), games and apps follow too (below).
 
 **Bit-perfect** (Tools → Audio) means nothing touches the decoded samples, so
 spatial audio stands aside for everything JukaHub plays while it is on — videos
 as well as music, because both reach the speakers through the same path — and
 the Spatial audio row then says *bypassed*. Choosing a spatial mode switches
 Bit-perfect off, the way turning on the equaliser does. Bit-perfect is a music
-player switch: RetroArch games (below) keep their filter whatever it says.
+player switch: games and apps (below) keep the effect whatever it says.
 
-### Games
+### Games and apps
 
 Games run in their own process with their own sound, so JukaHub's own media
 path cannot reach them. For them the same DSP ships as a small native library,
 `jukahub-spatial.so` ([player/spatialfx](../player/spatialfx/README.md)), which
-the handheld package carries in `Apps/JukaHub/lib/`. It is a RetroArch audio
-DSP filter: with **Spatial audio in games** on and a mode chosen, every
-RetroArch game started from JukaHub's library gets a preset,
+the handheld package carries in `Apps/JukaHub/lib/`. The library reaches a game
+two ways, and JukaHub picks one per launch.
+
+**Through ALSA — every game and app on the handheld.** The library is also a
+LADSPA plugin, and the handheld's sound library (ALSA) can run one in front of
+the real output. A game, emulator, port or app started from JukaHub while
+spatial audio is on gets two environment variables that only it sees —
+`ALSA_CONFIG_PATH` (the system's `alsa.conf`, then
+`/tmp/jukahub-audio/asound-spatial.conf`) and `AUDIODEV=jhspatial` — so its
+sound goes *plugin → speakers* (or *plugin → Bluetooth headset* while one is
+connected) whether it opens ALSA's default device (RetroArch, most native
+programs) or the one SDL is told about (PPSSPP, DraStic and most other
+standalone emulators). The mode, strength and room are those of the moment the
+program starts. No firmware file is changed.
+
+A broken route would leave a game silent, so before JukaHub uses it, it checks
+it once per start, about 20 seconds after JukaHub opens (and again when the
+Audio panel row is looked at): the system's ALSA library must have its LADSPA
+support, and a copy of JukaHub started as `JukaHub --spatial-alsa-probe` must
+open its sound through the whole chain by name, ending in ALSA's silent "null" device so
+the speaker is never touched. Until the check has passed, games play as they
+always did. When a system file redefines ALSA's default device itself (a
+firmware `asound.conf`), JukaHub does not wrap it: SDL programs still get the
+effect (through `AUDIODEV`), and RetroArch keeps the filter route below.
+
+**As RetroArch's audio filter.** The library is also a RetroArch audio DSP
+filter. When the ALSA route is not available, or the installed RetroArch is
+proven to load filter libraries, every RetroArch game started from JukaHub's
+library gets a preset,
 `<data>/spatial-audio/JukaHub-Spatial.dsp`, with the mode, strength and room
 of that moment (Auto is resolved when the game starts, and stays for the whole
 game), and RetroArch's `audio_dsp_plugin` points at it for that launch only.
 When the game exits, the launch journal puts your own value back, and an audio
 filter you picked in RetroArch yourself is never replaced.
 
-Switching **Spatial audio in games** on while the mode is Off keeps the switch
-but changes nothing until a mode is chosen; the toast says so. The row reads
-*Checking…* for a moment the first time, while JukaHub looks at the installed
-RetroArch, and *Not available* when it cannot work — no plugin (the Windows
-build has none yet), no RetroArch, or a RetroArch built without loadable audio
-filters (JukaHub checks the binary once and remembers the answer); pressing it
-then says which. A switch left on after the plugin went away reads *On · not
-available* and can still be turned off. Standalone emulators (PPSSPP,
-DraStic, …) keep their own sound. None of this has run on a handheld yet.
+A launch never uses both: a game whose RetroArch got the filter is not also
+sent through ALSA.
+
+The switch only matters while a mode is chosen: with the mode Off, games play
+as they always did. The row reads *Checking…* for a moment the first time,
+while JukaHub checks the routes, *On · RetroArch only* when the ALSA route is
+not available here but RetroArch's filter is, and *Not available* when neither
+can work — no plugin (the Windows build has none yet), or no route; pressing it
+then says why, and the log (`spatial`) has the check's own words. A switch left
+on after the plugin went away reads *On · not available* and can still be
+turned off. A program started with its own `ALSA_CONFIG_PATH` or `AUDIODEV` is
+left alone. None of this has run on a handheld yet: the ALSA chain itself was
+checked against a real alsa-lib on a PC, sample for sample.
 
 ## How it works
 
@@ -108,6 +142,10 @@ of one of the handheld's four cores, and nothing at all while it is off.
   so their rear channels arrive as ambience, not as discrete rear speakers.
 * On Windows only JukaHub's own media is spatialised: the game filter is not in
   the Windows build yet.
+* A game that talks to the sound chip directly (tinyalsa, OSS), bypassing
+  ALSA's library, is out of reach of the ALSA route, and so is a 32-bit program
+  (an early firmware's `ra32.trimui` RetroArch): the plugin is 64-bit, so
+  JukaHub leaves such a launch alone rather than risk its sound.
 
 ## Settings keys
 
@@ -116,7 +154,7 @@ of one of the handheld's four cores, and nothing at all while it is off.
 | `spatialMode` | `off`, `auto`, `headphones`, `speakers` | `off` |
 | `spatialStrength` | 0–100 (percent; the rows step 25/50/75/100) | `75` |
 | `spatialRoom` | `small`, `medium`, `large` | `medium` |
-| `spatialGames` | `true` / `false` — RetroArch games too | `false` |
+| `spatialGames` | `true` / `false` — games and apps too, while a mode is on | `true` |
 
 ## For developers
 
@@ -129,4 +167,6 @@ build for games is checked against them (`make test-spatialfx`). The
 media hook is one call in `QueueVideoAudio` ([player/sound.go](../player/sound.go)),
 which every JukaHub player feeds; the settings, the Auto rule and the live
 snapshot the decoders read are in [player/spatial.go](../player/spatial.go), the
-rows in [player/spatial_ui.go](../player/spatial_ui.go).
+rows in [player/spatial_ui.go](../player/spatial_ui.go), RetroArch's filter in
+[player/spatial_games.go](../player/spatial_games.go) and the ALSA route, its
+check and the file it writes in [player/spatial_alsa.go](../player/spatial_alsa.go).

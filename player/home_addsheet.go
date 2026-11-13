@@ -1,9 +1,10 @@
 package main
 
 // home_addsheet.go — the "Add to Home" sheet edit mode opens from its "+"
-// tile: everything that can go on Home and is not there yet, in three
-// sections — the widgets, the built-in Home cards and the Start menu's
-// screens, tools and actions (homeTileCatalog). A puts the highlighted entry
+// tile: everything that can go on Home and is not there yet, in four
+// sections — the quick controls (Wi-Fi, Bluetooth, Power), the widgets, the
+// built-in Home cards and the Start menu's screens, tools and actions
+// (homeTileCatalog). A puts the highlighted entry
 // on Home after the tile that had the focus; B closes the sheet.
 
 import (
@@ -357,7 +358,7 @@ func renderHomeAddSheet(renderer *sdl.Renderer, config *Config) {
 	if f := fonts.Card; f != nil {
 		drawText(renderer, f, "Add to Home", card.X+pad, card.Y+scaleY(20, h), ColorTextPrimary(), textAlignLeft)
 		if note := fonts.Helper; note != nil {
-			drawText(renderer, note, ellipsize(note, "A widget, a Home card or anything from the Start menu", textW),
+			drawText(renderer, note, ellipsize(note, "Quick controls, widgets, Home cards and Start menu apps", textW),
 				card.X+pad, card.Y+scaleY(20, h)+int32(f.Height())+scaleY(2, h), ColorTextMuted(), textAlignLeft)
 		}
 	}
@@ -420,7 +421,7 @@ func homeAddSheetDrawRow(renderer *sdl.Renderer, fonts HomeFonts, e homeCatalogE
 	radius := scaleY(14, h)
 	if focused {
 		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, homeGlass(24))
-		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, 2, ColorAccent)
+		strokeRoundedRectAt(renderer, r, homeFocusGlide.apply(r), radius, 2, ColorAccent)
 	}
 	badgeD := min32(scaleY(38, h), r.H-scaleY(10, h))
 	badge := sdl.Rect{X: r.X + scaleX(10, w), Y: r.Y + (r.H-badgeD)/2, W: badgeD, H: badgeD}

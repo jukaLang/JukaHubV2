@@ -13,6 +13,201 @@ For anything older, the git log and the
 
 ### Added
 
+- **Xbox One Style** and **Minimal UI** themes. Xbox One Style is the 2013 Metro dashboard (square flat tiles on near-black, lime green). Minimal UI turns Home into plain text: a list of names you walk with Up and Down, no tiles or art (`carouselStyle: "text"`, `player/thememinimal.go`).
+- **Switch 2 Style is now the console's home screen.** The Switch themes,
+  renamed **Switch 2 Style** and **Switch 2 Style Dark**, draw the Switch home
+  on a Carousel Home: your picture in the top-left corner (A opens Trophies),
+  the time, signal and battery in the top-right, and one row of square tiles —
+  the games you played last first, each its box art edge to edge, then your
+  Home tiles as colour squares — with the focused tile's name over it in cyan
+  and the cyan outline around it. Under the row is a centred line of round
+  buttons: Games, Chat (with its unread count), Store, Search, PlayStation
+  Remote Play (on the handheld), Xbox Remote Play, Phone Companion, Settings
+  and Power. A hairline, a controller glyph and **Start Menu · A Start** close
+  the screen. Down from the row reaches the round buttons and Up goes back; Up
+  from the row's left end, or Left from the status row, reaches the picture.
+  After a game, it is the first tile and the focus is back on it. The
+  greeting, search pill, Remote Play pills, pairing code and power pill give
+  way to the round buttons; Edit Home (L2) still arranges the tiles with its
+  usual strip. Theme files get the same Home with `"carouselStyle": "switch"`,
+  while `"strip"` keeps the plain row
+  ([player/themeswitch.go](player/themeswitch.go),
+  [docs/THEMES.md](docs/THEMES.md#console-styles)).
+
+- **PS5 Style is now the console's welcome hub; the old look is PS4 Style.**
+  Settings → Appearance → Themes → Consoles → **PS5 Style** lays Home out like
+  the PS5 home screen: "Games  Media" across the top (a tap on Media opens
+  it), your Home tiles as one row of small rounded icon tiles — the focused one
+  larger at the left with its name beside it, the row ending at both sides —
+  then two pills (trophy progress, the game library) and a board of flat
+  graphite cards on a near-black page: battery with a ring gauge, Continue
+  with its artwork, Chat with the unread count, Trophies by tier, the last
+  game played, Packages, Storage with a free-space bar, Now playing and
+  today's playtime. Down from the row enters the board, the D-pad walks it,
+  A opens what a card shows; Edit Home arranges the row and hides the board
+  while it is open. The previous PS5 look (the top-left shelf on deep-blue
+  navy) is kept as **PS4 Style**, with its palette as **PS4 Night**. Theme
+  files can ask for the hub with `"carouselStyle": "hub"` (docs/THEMES.md).
+
+- **Wi-Fi, Bluetooth and Power tiles you can pin to Home.** A tester coming
+  from NextUI missed its quick menu's Wi-Fi, Bluetooth and power-off shortcuts.
+  Edit Home's **Add to Home** card (L2, then **+**) now starts with a **Quick
+  controls** section: **Wi-Fi** and **Bluetooth** switch the radio with one
+  press — the round badge is lit while it is on, and the tile names the
+  network or how many devices are connected — and **Power** opens the power
+  card with Power off focused, beside Sleep and Restart (Exit on a desktop).
+  The switches run in the background with Quick Settings' own Wi-Fi and
+  Bluetooth code, so the panel, voice commands and the tile agree; turning
+  Wi-Fi on also starts the supplicant where the handheld needs it, so it
+  rejoins the saved network. Where the radio cannot be switched (Windows,
+  macOS) the tiles open the Wi-Fi or Bluetooth page. Pinning works from every
+  layout (Standard switches to Widgets, as any Edit Home change does); the
+  refs are `w:wifi`, `w:bluetooth` and `w:power` (CONFIGURATION.md).
+
+- **Focus bounce on every screen, on the Smart Pro too, with a setting.** The
+  highlight that slides to the next button, runs a little past it and swings
+  back used to play only on Home and only on the PC: it followed Reduce Motion,
+  which the handheld ships switched on. It now has its own row, **Settings →
+  Display & theme → Focus bounce** (Off / Subtle / Normal / Bouncy, Normal by
+  default), and plays wherever a press moves the focus ring — Settings, lists,
+  panels, sheets, Chat, Files, Media, the store, the on-screen keyboard. It
+  starts only on a direction step (D-pad, stick, arrow keys, Tab), and the
+  ring rides along with a list or carousel that is still moving, so nothing
+  wobbles on its own; it gets the full frame rate while it moves even in Low
+  Power (Battery Saver keeps its cap). Reduce Motion still turns off the card
+  lifts and the scene fades.
+
+- **Which emulator? when several can play a game.** Starting a game from the
+  Games library, Continue or Files used to take the first emulator that
+  matched its console silently. When two or more fit (CrossMix's GBA and mGBA
+  folders, RetroArch beside a standalone emulator on a PC), a small sheet now
+  asks: A plays with the highlighted one, which is highlighted again next time;
+  Y always uses it for that game; B cancels. Game options has a new
+  **Emulator** row to pin one or go back to *Ask each time*. A console pinned
+  in `game-launchers.json` and a console with one emulator start at once, as
+  before. Save-state list, diagnosis and Reset game follow the emulator the
+  game actually uses.
+
+- **X1: Xbox Remote Play next to PS4 and PS5.** The Remote Play pills in the
+  Home header now end with an X1 pill that streams your Xbox One or Series
+  console. On the handheld it starts GreenOvercast (the xHome build), a native
+  Xbox streaming client for ARM handhelds; the first press downloads it into
+  PortMaster's autoinstall folder and opens PortMaster to install it (and
+  installs PortMaster first when it is missing). Sign-in happens in
+  GreenOvercast with a code on your phone; the console needs Remote features
+  turned on. GreenOvercast needs glibc 2.38, so stock TrimUI firmware (2.33)
+  is warned before it tries. On a PC, X1 starts Greenlight or XStreaming when
+  installed, else opens xbox.com/play's console page. The dot lights when a
+  client is installed. X1 also shows on PCs, where the PS pills stay hidden.
+
+- **Realistic glass (Settings → Display & theme → Glass).** Classic stays the
+  default; Realistic is an Apple Liquid Glass-style look for every glass
+  surface: what is behind a card or button shows through blurred and slightly
+  magnified, a sheen lights the top of the pane, a bright rim catches the light
+  from the top left with a softer glint on the opposite corner, and Home cards
+  float on a soft shadow. Sheets, small chips and panes over pictures, videos or
+  games get the light and rim but not the blur. Off while Reduce Transparency or
+  High contrast is on; falls back to Classic where the renderer cannot draw it.
+
+- **Consoles and Experience tabs in Theme presets.** Themes now has four tabs:
+  Colour · Total conversion · Consoles · Experience. Consoles gathers the
+  console looks — PS5, Switch, Xbox, Sega Blue, Game Boy — and eight new
+  classic-console themes: PS1, PS2, PSP, Super Nintendo, Nintendo 64, GameCube,
+  Mega Drive and Dreamcast, each with its own Home layout, tile corners, focus
+  ring and glows, plus a plain palette in the Colour tab (colours and shapes
+  only, no logos or artwork). Experience opens the Experience packs screen, which
+  shows the same tabs; Tab, L1/R1 or a click moves between them and B leaves to
+  where you came from. The separate "Experience pack" row in Display & theme is
+  gone (packs are still in Tools, Quick Settings and Home search).
+
+- **Simpler Settings.** Each section opens on its most-used settings, with
+  **More settings (N)** under them to unfold the rest in place; **Settings →
+  About → Show all settings** brings back the full lists. **Search** sits at
+  the top of the rail: press **Y** (Ctrl+F, or just type on a PC) and matching
+  settings from every section appear as you type — everyday words like "wifi",
+  "dark mode", "sleep" or "volume" work — and A goes straight to the row.
+  Date & time moved into General and Keyboard into Controls, so the rail is two
+  entries shorter; old links still land on the right rows.
+
+- **Juka can see the screen.** Ask the voice orb about what you are looking at —
+  "what's this?", "read this", "which one should I pick?" — and a picture of
+  JukaHub's screen, taken as the orb starts listening and without the orb on
+  it, goes to Groq's vision model with the question. It is never saved and is
+  dropped once the answer is done; the Phone Companion pairing code is blanked
+  out. Every question also tells Juka which screen and item you are on.
+  Settings → Voice & AI → Let Juka see the screen: Off / When you ask about it
+  (default) / Every question. Offline answers get the screen's name only.
+
+- **Minecraft (Start → Games → Minecraft).** One screen with every way to play
+  it here. On the handheld: Java Edition through PortMaster's Minecraft port,
+  ClassiCube and Luanti · Mineclonia (free, no files needed) — A installs the
+  port straight from PortMaster's catalogue (MD5-checked, handed to PortMaster's
+  autoinstall) and then plays it — and Bedrock Edition with your own APK
+  through AndroidRT. Java Edition's game files come from your own copy: with
+  JukaHub on a paired PC, every version in its `.minecraft` shows as "Copy
+  1.12.2 from <PC>", and one press copies the version, its libraries and assets
+  with every checksum verified (never the account, worlds or settings). On a PC
+  the screen starts the Minecraft Launcher, Minecraft for Windows or Prism
+  Launcher. See [docs/MINECRAFT.md](docs/MINECRAFT.md).
+
+- **"Hey Juka" wake word (Smart Pro).** Settings → Voice & AI → Hey Juka (off
+  by default) opens the voice orb when you say "Hey Juka", or the game
+  assistant during a game ("Hey Juka in games", on once the wake word is on).
+  "Hey Juka, open YouTube" works in one breath. It listens with a tiny word
+  list at low priority, only decodes when there is sound, and pauses while
+  anything else uses the microphone, while Juka speaks, during video or music,
+  with the screen off and when memory is low. Runs on the handheld only.
+
+- **The voice assistant changes settings.** Say "turn on dark mode", "turn off
+  background music", "enable low power mode", "make the text bigger", "set
+  screen timeout to 5 minutes", or ask "is Wi-Fi on?" / "what is my
+  brightness?" — any switch or list in Settings, offline too, through the
+  row's own control so it saves like a press. Pages, text fields, keys and
+  resets only open, never press. With a Groq key Juka can also make a change
+  it was asked for (checked against Settings first; a few sensitive rows are
+  never offered to it). In a game, "turn the volume down" or "make it
+  brighter" works the same.
+
+- **Spatial audio for every game and app.** On the handheld, the virtual
+  surround now reaches the sound of everything JukaHub starts — RetroArch,
+  PPSSPP, DraStic and the other standalone emulators, ports and apps — not
+  only RetroArch games that could load the filter. JukaHub runs its plugin in
+  front of the speakers (or the Bluetooth headset) through the system's sound
+  library, for that program only, with nothing on the firmware changed; a
+  silent check at start-up proves the route on the device first, and until it
+  has, games sound as before. **Tools → Audio → Spatial audio in games &
+  apps** is now on by default, so choosing a Spatial audio mode is all it
+  takes; it reads *On · RetroArch only* where the route is not available. The
+  background music plays through the effect too
+  ([player/spatial_alsa.go](player/spatial_alsa.go),
+  [docs/SPATIAL_AUDIO.md](docs/SPATIAL_AUDIO.md)).
+
+- **The chat's paperclip is selectable.** On the composer, Left steps onto
+  the paperclip (it lights up with the focus ring), A opens Files to pick
+  what to attach, and Right or B goes back to the text field. Before, the
+  paperclip only answered a mouse click or tap; X still attaches from
+  anywhere in Chat. On the TrimUI Smart Pro the pointer now works in Chat
+  too: tilt the right stick sideways and it comes up (up / down still
+  scrolls the history), the paperclip rings under it, and A clicks it.
+  The D-pad puts the pointer away and the stick scrolls again.
+- **Start sends from the on-screen keyboard.** Start is now the keyboard's
+  send button: in chat it sends the message to the tab on screen, and every
+  other field runs its action key (Search, Save, Join, Go…), the same as Enter
+  on a real keyboard. Y still asks Juka AI in chat; B closes. While dictating,
+  Start keeps the words like A does. The footer shows **Start Send** (the
+  keyboard-mode Enter hint in chat said "Ask AI" though Enter sends; fixed).
+- **Console-style themes.** The theme gallery's Total conversion tab (Settings
+  → Appearance) opens with PS5 Style, Switch 2 Style, Switch 2 Style Dark and
+  Xbox Style — colour, tile shape, layout and focus only, no logos or artwork. PS4
+  Style (first shipped as PS5 Style) puts the Carousel on a top-left shelf of
+  small rounded tiles on a deep-blue night; the focused tile grows, takes a
+  white ring and shows its name beside it. Switch 2 Style (first shipped as
+  Switch Style) is the console's home screen, see above. Xbox Style is
+  the Widgets grid in charcoal rounded rectangles with green highlights and a
+  white ring. The palettes alone (PS5 Night, PS4 Night, Switch Light, Switch
+  Dark, Xbox Green) are in the Colour tab. Theme files can use the new optional
+  `carouselStyle`, `tileRadius`, `focusRing` and `focusRing2` keys
+  (docs/THEMES.md).
 - **Stick lights: Smooth effect.** Settings → Stick lights → Effect now has
   Smooth beside Solid, Pulse and Rainbow: a slow six-second glow between about
   half and full brightness, eased in perceived brightness so neither end looks
@@ -475,6 +670,41 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Offline speech answers right after you stop talking.** The Smart Pro now
+  recognises English while you speak (a warm Vosk recogniser fed as the
+  microphone records) instead of loading the model after the recording; the
+  orb shows your words as you say them and ends sooner when the sentence is
+  clearly over. Older speech packages update once by themselves on Wi-Fi.
+
+- **Offline answers start in seconds.** The offline model (llama-server) loads
+  while you are still talking, keeps Juka's instructions cached, streams words
+  into the bubble and stops after a minute idle, at once when a game starts or
+  memory runs low; it listens on the handheld only (random port and key).
+  llama-cli stays the fallback, now on 4 cores. Piper stays loaded between
+  lines, so replies like "Opening YouTube" are spoken sooner. The CPU runs at
+  full speed while the assistant listens, thinks and speaks, and returns to
+  normal right after (never during a game). Old offline-AI packages update
+  once on Wi-Fi, or from Settings → Offline answers → Update.
+
+- **JukaHub's own PPSSPP for TrimUI is built automatically.** The
+  `ppsspp-tg5040` workflow now runs daily and when its build script changes, building
+  the newest upstream PPSSPP that still uses SDL2 (1.21 moved to SDL3, which
+  the TrimUI firmware lacks, so 1.20.x is the newest that runs there for now).
+
+- **Offline speech is no longer inside JukaHub-Trimui.zip.** The Smart Pro's
+  speech recognizer (Vosk + Whisper) made the app download about 120 MB
+  bigger. It now ships only as JukaHub-OfflineSpeech-linux-arm64.zip: once
+  ffmpeg is installed, a Smart Pro on Wi-Fi downloads and verifies it by itself
+  (before the offline voice, which waits for it), quietly unless it fails;
+  Settings → Voice & AI → Install offline speech still starts it by hand.
+  Nothing is fetched while speech recognition is set to Groq only, when the
+  card has under ~490 MB free, or after the recognizer failed to start on that
+  firmware (until the row is pressed). Devices that already have the bundled
+  copy keep using it — updates never delete it. Voice pages say "downloading"
+  instead of "missing" while it is on its way. release.sh and the TrimUI
+  release job stop copying juka-whisper/ into the archives (the release job
+  still fails without a verified speech package).
+
 - **The liquid background is off by default.** A setup that never chose a
   level has no water until R2, Settings → Display & theme → Liquid background
   or Start → Device switches it on (the first switch-on picks Medium). R2 no
@@ -679,6 +909,76 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Box art reached only the first consoles; numbered PSP ISOs got none.** The
+  fetch walked the card in path order one cover at a time, so on a big card
+  (8,700 games) it spent hours on 32X and NES and Super Nintendo, PSP and the
+  rest never got a turn before a game or the batch limit cut it short. It now
+  takes the consoles in turns of 25 games (the one shown in Games first when
+  you press Fill gaps) and downloads four covers at once. Scene-set names such
+  as "0381 - 007 - From Russia with Love.iso" are matched without the
+  release number, the placeholder no longer reads "0-", and titles filed as
+  "not found" before are asked once more.
+- **Bluetooth headphones on the Smart Pro got no sound.** The firmware never
+  starts BlueALSA, so a headset connected without an audio link and every
+  sound fell back to the speaker. JukaHub now starts BlueALSA as soon as
+  Bluetooth is up, restarts one without the A2DP source role, asks a connected
+  headset for its audio profile, and sets LIBASOUND_THREAD_SAFE=0 on TrimUI
+  (BlueALSA stalls otherwise). Games started while the headset is in use play
+  through it too (a JukaHub-owned /tmp ALSA file for that launch only; no
+  system file changes). The Bluetooth diagnostics now show the headset's audio
+  services, the BlueALSA daemon and streams, the exact open error and the
+  route history.
+
+- **PPSSPP did not update itself on the Smart Pro.** JukaHub now also checks
+  at every start once the last check is two hours old (and at once after a
+  JukaHub update), switches PSP games to an installed newer build at the next
+  check, never goes back to an older PPSSPP, and the PSP card shows when it
+  last checked and what it found.
+
+- **Asking "is Wi-Fi on?" turned Wi-Fi on.** Questions about a setting now
+  read it out.
+
+- **CrossMix: RetroArch games start from JukaHub again.** Every system that
+  runs in RetroArch stopped with RetroArch "not found" on CrossMix, while PSP
+  (PPSSPP's own script) played. MainUI gives a system's launch script the
+  game as `Emus/<system>/../../Roms/<system>/<file>`, and CrossMix's RetroArch
+  launchers (its shared `common_launcher.sh`) work out their folders from that
+  argument; JukaHub passed the plain `/mnt/SDCARD/Roms/...` path. A script in
+  an `Emus/<system>` folder now gets a game on the same card in MainUI's form
+  (the same file, so the stock scripts and PPSSPP are unaffected). A launch
+  script's own output is also kept now (`gamediag/launcher.log`, emptied each
+  launch, capped at 1 MB): when a game closes within seconds the card says
+  what the script could not find ("The launch script could not find
+  RetroArch") and shows its last lines, where before the message went
+  nowhere.
+- **TrimUI Brick Pro on CrossMix: games that did not start said nothing.**
+  Every game answered with "Playing …" and the game page again: its launch
+  script was over within a second or two with exit status 0 (or 137, a
+  program the system killed), and JukaHub took both for the player quitting.
+  The launch card now also opens on the handheld for a library game that is
+  over within three seconds, or that a signal JukaHub did not send ended,
+  unless JukaHub stopped it itself (the in-game menu's Quit, quitting JukaHub,
+  the low-battery save). It says which signal ("the system stopped it (signal
+  9, SIGKILL)", "it crashed (signal 11)"), how much memory was free when that
+  may be why, and the script's own last lines. JukaHub's log (`errors.txt`)
+  now has a line for every library launch — the exact command, its folder,
+  the pid and the memory free — and one when it ends, with how long it ran
+  and its status. A launch script also runs under the interpreter its `#!`
+  line names, as MainUI runs it (bash for a bash script; a launcher that is a
+  program runs as itself), instead of always under sh. The likely cause, a
+  CrossMix launcher that reads its folders from MainUI's form of the game
+  path, is the fix above.
+- **Saved videos and tracks finish again.** A download in Media → Downloads
+  that completed was read as paused (the runner cancelled its own context and
+  then asked it whether the queue had stopped the job), so the row went back
+  to Queued and yt-dlp ran again, forever, and nothing reached "Saved". The
+  queue now also stops yt-dlp's whole process group (a paused or stalled row
+  no longer hangs), counts a growing staging file as progress so ffmpeg's
+  quiet join of a long video is not killed as a stall, stops sending YouTube a
+  desktop browser's name (a 403), passes the QuickJS runtime and JukaHub's
+  ffmpeg when they sit next to yt-dlp, saves H.264/AAC at the playback quality
+  instead of the biggest (often AV1) stream, logs why a download failed and
+  checks for a newer yt-dlp after a YouTube refusal (`player/downloads.go`).
 - **Stick rings blinking every two seconds.** The rings' drift check ran every
   2 s, and every repaint it made goes through effect 0 — a visible blink —
   whenever something (a firmware service, a node that reads back oddly) made a

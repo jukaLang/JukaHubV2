@@ -559,5 +559,6 @@ func drawEditBarLiveRing(renderer *sdl.Renderer) {
 	if homeEditBar.holding {
 		fillRoundedRect(renderer, r.X-out, r.Y-out, r.W+2*out, r.H+2*out, 10+out, WithAlpha(ColorAccent, 48))
 	}
-	strokeRoundedRect(renderer, r.X-out, r.Y-out, r.W+2*out, r.H+2*out, 10+out, homeFocusRingWidth, ColorAccent)
+	ring := sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}
+	strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), 10+out, homeFocusRingWidth, ColorAccent)
 }

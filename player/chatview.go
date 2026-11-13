@@ -516,10 +516,12 @@ func chatResetHits() {
 	chatView.focusValid = false
 }
 
-// chatHover reports whether the mouse is over r. Only a desktop has a pointer
-// worth following; on the handheld the emulated pointer parks on the last tap.
+// chatHover reports whether the mouse is over r. A desktop has a pointer worth
+// following, and so does the handheld while its virtual cursor is up (right
+// stick, virtualcursor.go); otherwise the emulated pointer parks on the last
+// tap there.
 func chatHover(r sdl.Rect) bool {
-	return IsWindows() && r.W > 0 && pointInRect(mouseX, mouseY, r)
+	return (IsWindows() || vcursor.active) && r.W > 0 && pointInRect(mouseX, mouseY, r)
 }
 
 // chatPadOnContent reports whether the pad's focus is in the chat rather than
@@ -1444,7 +1446,7 @@ func chatDrawMessage(renderer *sdl.Renderer, config *Config, fonts chatFonts, m 
 	focused := chatSelected == it.idx && chatPadOnContent()
 	if focused {
 		ring := chatInsetRect(bubble, glassFocusRingWidth)
-		strokeRoundedRect(renderer, ring.X, ring.Y, ring.W, ring.H, m.radius+glassFocusRingWidth, glassFocusRingWidth, glassAccent())
+		strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), m.radius+glassFocusRingWidth, glassFocusRingWidth, glassAccent())
 		chatView.focusTop, chatView.focusBottom, chatView.focusValid = it.top, it.top+it.h, true
 	}
 
@@ -1827,15 +1829,26 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	chatText(renderer, config, fonts.title, "↑", arrowCol, send.X+(send.W-aw)/2, send.Y+(send.H-ah)/2)
 
 	// The paperclip: every tab takes files (Juka AI reads text files and
-	// looks at pictures and videos).
+	// looks at pictures and videos). Left from the text field puts the pad on
+	// it and A attaches (chatAttachMove), so it is not a mouse-only button.
 	x := rect.X
 	attach := sdl.Rect{X: x, Y: rect.Y + (h-btn)/2, W: btn, H: btn}
 	chatAttachBtnRect = attach
+	// The pointer (a mouse, or the handheld's virtual cursor) over it rings it
+	// too, so on a TrimUI it is plain that A will click it.
+	attachFocused := chatAttachFocused() && chatWasVisible
+	attachHover := chatHover(attach)
 	fill := glassA(12)
-	if chatHover(attach) {
+	if attachFocused || attachHover {
 		fill = glassA(22)
 	}
+	if attachFocused {
+		drawGlassFocusGlow(renderer, attach)
+	}
 	chatFillDisc(renderer, attach.X, attach.Y, attach.W, fill)
+	if attachFocused || attachHover {
+		drawGlassFocusRing(renderer, attach, btn/2)
+	}
 	icon := btn / 2
 	DrawHomeIcon(renderer, "paperclip", sdl.Rect{X: attach.X + (btn-icon)/2, Y: attach.Y + (btn-icon)/2, W: icon, H: icon}, false)
 	x += btn + gap
@@ -1846,7 +1859,7 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	}
 	chatInputRect = input
 	typing := chatComposerInline || (virtualKeyboardActive && vkTarget == vkTargetChat)
-	focused := !typing && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() && chatWasVisible
+	focused := !typing && !attachFocused && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() && chatWasVisible
 	if focused {
 		drawGlassFocusGlow(renderer, input)
 	}

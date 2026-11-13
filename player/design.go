@@ -424,6 +424,9 @@ func ApplyThemeColors(p ThemePreset) {
 	// Derive soft sheen colors so cards and panels share one highlight look.
 	surfaceHighlightColor = sdl.Color{R: 255, G: 255, B: 255, A: 14}
 	topSheenColor = sdl.Color{R: 255, G: 255, B: 255, A: 12}
+	// The console look (tile radius, focus ring, carousel style) travels with
+	// the palette; a preset without one puts the shipped look back.
+	applyThemeConsoleLook(p)
 	// Invalidate cached background/gradient textures so the new theme colors
 	// are picked up on the very next frame.
 	gradientTexture = nil

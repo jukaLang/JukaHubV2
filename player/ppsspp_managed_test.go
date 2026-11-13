@@ -849,6 +849,14 @@ func TestPPSSPPAutoDecide(t *testing.T) {
 		{"bad tag", coreUpdateInstall, ppssppState{Bad: map[string]string{"6.2.0": "x"}}, rel, "1.18.1", false, ppssppAutoNothing},
 		{"untested model", coreUpdateInstall, ppssppState{}, rel, "1.18.1", true, ppssppAutoNotify},
 		{"chose firmware", coreUpdateInstall, ppssppState{Choice: ppssppChoiceFirmware}, rel, "1.18.1", false, ppssppAutoNotify},
+		// Against the newest build that starts: never down, never the same
+		// PPSSPP from the other source, a rebuild from the same source yes.
+		{"older than installed", coreUpdateInstall, ppssppState{Builds: []ppssppBuild{{Tag: "jukahub-1.20.4-aaaaaaaa", Version: "1.20.4"}}}, rel, "1.18.1", false, ppssppAutoNothing},
+		{"same version other source", coreUpdateInstall, ppssppState{Builds: []ppssppBuild{{Tag: "jukahub-1.20.3-aaaaaaaa", Version: "1.20.3"}}}, rel, "1.18.1", false, ppssppAutoNothing},
+		{"rebuild same source", coreUpdateInstall, ppssppState{Builds: []ppssppBuild{{Tag: "jukahub-1.20.4-aaaaaaaa", Version: "1.20.4"}}}, ppssppRelease{Tag: "jukahub-1.20.4-bbbbbbbb", Version: "1.20.4"}, "1.18.1", false, ppssppAutoInstall},
+		{"newer own over minui", coreUpdateInstall, ppssppState{Builds: []ppssppBuild{{Tag: "6.2.0", Version: "1.20.3"}}}, ppssppRelease{Tag: "jukahub-1.20.4-bbbbbbbb", Version: "1.20.4"}, "1.18.1", false, ppssppAutoInstall},
+		{"installed one did not start", coreUpdateInstall, ppssppState{Builds: []ppssppBuild{{Tag: "7.0.0", Version: "1.21.0"}}, Bad: map[string]string{"7.0.0": "x"}}, ppssppRelease{Tag: "jukahub-1.20.4-bbbbbbbb", Version: "1.20.4"}, "1.18.1", false, ppssppAutoInstall},
+		{"kept older build is this tag", coreUpdateInstall, ppssppState{Builds: []ppssppBuild{{Tag: "jukahub-1.20.4-aaaaaaaa", Version: "1.20.4"}, {Tag: "6.2.0", Version: "1.20.3"}}}, rel, "1.18.1", false, ppssppAutoNothing},
 	}
 	for _, c := range cases {
 		if got := ppssppAutoDecide(c.mode, c.st, c.rel, c.fw, c.untested); got != c.want {
@@ -884,13 +892,41 @@ func TestPPSSPPAutoDecide(t *testing.T) {
 	}
 }
 
+// TestPPSSPPCheckDue: daily, at once under an older rule, and once per run of
+// JukaHub when the last check is more than ppssppStartRecheck old.
+func TestPPSSPPCheckDue(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	stamp := func(ago time.Duration, rule int) ppssppState {
+		return ppssppState{CheckedAt: now.Add(-ago).Format(time.RFC3339), CheckedRule: rule}
+	}
+	cases := []struct {
+		name  string
+		st    ppssppState
+		first bool
+		want  bool
+	}{
+		{"never checked", ppssppState{}, false, true},
+		{"older rule", stamp(time.Hour, ppssppCheckRule-1), false, true},
+		{"a day old", stamp(25*time.Hour, ppssppCheckRule), false, true},
+		{"fresh, later in the run", stamp(3*time.Hour, ppssppCheckRule), false, false},
+		{"fresh, first in the run", stamp(3*time.Hour, ppssppCheckRule), true, true},
+		{"just checked, first in the run", stamp(time.Hour, ppssppCheckRule), true, false},
+		{"stamp from the future", stamp(-time.Hour, ppssppCheckRule), false, true},
+	}
+	for _, c := range cases {
+		if got := ppssppCheckDue(c.st, now, c.first); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestPPSSPPTileLine(t *testing.T) {
 	fw := ppssppFirmwareInfo{Launcher: "/mnt/SDCARD/Emus/PPSSPP/launch.sh", Version: "1.18.1"}
 	if got := ppssppTileLine(ppssppState{LatestVersion: "1.20.3", LatestTag: "6.2.0"}, fw, true, "tg5040"); got != "PPSSPP 1.18.1 (firmware) · 1.20.3 available" {
 		t.Errorf("firmware line = %q", got)
 	}
 	active := ppssppState{Active: "6.2.0", Builds: []ppssppBuild{{Tag: "6.2.0", Version: "1.20.3"}}}
-	if got := ppssppTileLine(active, fw, true, "tg5040"); got != "PPSSPP 1.20.3 (JukaHub) · firmware 1.18.1 kept" {
+	if got := ppssppTileLine(active, fw, true, "tg5040"); got != "PPSSPP 1.20.3 (minui-psp build) · firmware 1.18.1 kept" {
 		t.Errorf("JukaHub line = %q", got)
 	}
 	if got := ppssppTileLine(ppssppState{}, fw, true, ""); got != "PPSSPP 1.18.1 (firmware) · no JukaHub build for this model" {

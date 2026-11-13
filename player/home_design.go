@@ -17,13 +17,17 @@ import (
 )
 
 const (
-	homeSideMargin int32 = 32 // frame margin on both sides
-	homeTileRadius int32 = 20
-	homeIconRadius int32 = 12
-	homeTilePad    int32 = 20
-	homeIconSize   int32 = 48
-	homeGlyphSize  int32 = 24
+	homeSideMargin        int32 = 32 // frame margin on both sides
+	homeTileRadiusDefault int32 = 20
+	homeIconRadius        int32 = 12
+	homeTilePad           int32 = 20
+	homeIconSize          int32 = 48
+	homeGlyphSize         int32 = 24
 )
+
+// homeTileRadius is the tiles' corner radius: the design's 20px, or the one
+// a console-look theme asks for (TileRadius, themeconsole.go).
+var homeTileRadius = homeTileRadiusDefault
 
 // homeGlass is the glass ink at the given alpha: the cards are frosted panes
 // over the background, not opaque slabs, so the ambient glow reads through
@@ -179,7 +183,7 @@ func drawHomeFocusRing(renderer *sdl.Renderer, base, rect sdl.Rect, radius int32
 	grow := func(r sdl.Rect) sdl.Rect {
 		return sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}
 	}
-	strokeRoundedRectAt(renderer, grow(base), grow(rect), radius+out, homeFocusRingWidth, ColorAccent)
+	strokeRoundedRectAt(renderer, grow(base), grow(rect), radius+out, homeFocusRingWidth, homeFocusRingColor())
 }
 
 // drawGlassTile paints a card: the frosted fill, its hairline border, and the
@@ -187,6 +191,10 @@ func drawHomeFocusRing(renderer *sdl.Renderer, base, rect sdl.Rect, radius int32
 // focus lift animates.
 func drawGlassTile(renderer *sdl.Renderer, base, rect sdl.Rect, focused, pressed bool) {
 	if renderer == nil {
+		return
+	}
+	// Settings → Display & theme → Glass: Realistic (glass_real.go).
+	if glassRealTile(renderer, base, rect, focused, pressed) {
 		return
 	}
 	fill, edge := homeCardFill(), homeCardEdge()

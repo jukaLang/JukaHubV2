@@ -335,7 +335,7 @@ func clockText(device, server time.Time, offset, rtt time.Duration, stratum int)
 		fmt.Fprintf(&b, "Stratum: %d\n", stratum)
 	}
 	b.WriteString("\nRead-only: one SNTP request (pool.ntp.org, or the next server when it\n" +
-		"does not answer). Settings → Date & time keeps the clock right.")
+		"does not answer). Settings → General keeps the clock right.")
 	return b.String()
 }
 

@@ -27,6 +27,8 @@ printf '%s  %s\n' "$bin_sha" "$src/whisper-cli" | sha256sum -c - > /dev/null
 vosk_bin_sha=$(awk '$1 == "vosk" && $2 == "binary" && $3 == "sha256" { print $4 }' "$src/BUILDINFO.txt")
 test -n "$vosk_bin_sha"
 printf '%s  %s\n' "$vosk_bin_sha" "$src/vosk-cli" | sha256sum -c - > /dev/null
+# The streaming server (stt_stream.go); an older cached build has no --serve.
+grep -a -q -- '--serve' "$src/vosk-cli"
 printf '%s  %s\n' "$vosk_lib_sha" "$src/libvosk.so" | sha256sum -c - > /dev/null
 printf '%s  %s\n' "$vosk_model_sha" "$src/vosk-model-small-en-us-0.15.zip" | sha256sum -c - > /dev/null
 printf '%s  %s\n' "$vosk_license_sha" "$src/VOSK_LICENSE.txt" | sha256sum -c - > /dev/null

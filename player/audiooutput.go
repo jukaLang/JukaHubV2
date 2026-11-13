@@ -14,8 +14,10 @@ package main
 // error.
 
 import (
+	"fmt"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -149,7 +151,26 @@ func looksLikeBluetoothAddress(addr string) bool {
 // can receive audio (the A2DP sink service). Without this check a connected
 // game controller or phone would be advertised as the output.
 func bluetoothInfoIsAudioSink(info string) bool {
-	return strings.Contains(info, "Audio Sink")
+	return strings.Contains(info, "Audio Sink") || strings.Contains(strings.ToLower(info), "0000110b-")
+}
+
+// bluetoothInfoAudioServices names the audio services `bluetoothctl info`
+// lists (A2DP sink, HFP, HSP), for the diagnostics: a headset that offers
+// only hands-free cannot take A2DP.
+func bluetoothInfoAudioServices(info string) string {
+	lower := strings.ToLower(info)
+	var out []string
+	for _, s := range []struct{ id, name string }{
+		{"0000110b-", "A2DP sink"}, {"0000111e-", "HFP"}, {"00001108-", "HSP"}, {"0000110e-", "AVRCP"},
+	} {
+		if strings.Contains(lower, s.id) {
+			out = append(out, s.name)
+		}
+	}
+	if len(out) == 0 {
+		return "no audio service listed"
+	}
+	return strings.Join(out, ", ")
 }
 
 // bluetoothAudioDevice picks the first connected device that advertises an
@@ -183,21 +204,56 @@ func systemBluetoothAudioDevice() btDevice {
 	// No live link in the kernel's list (bluetooth_quick.go): nothing is
 	// connected, and no process needs to start to say so.
 	if btLinkCount() == 0 {
+		audioDiagSet(func() { audioDiag.headset = "no live Bluetooth link" })
 		return btDevice{}
 	}
 	out, err := btToolRun("bluetoothctl", "devices", "Connected")
+	how := "devices Connected"
 	if err != nil || len(parseBluetoothDevices(out)) == 0 {
+		how = "paired-devices"
 		if out, err = btToolRun("bluetoothctl", "paired-devices"); err != nil {
+			audioDiagSet(func() {
+				audioDiag.headset = "bluetoothctl paired-devices failed: " + firstLine(strings.TrimSpace(out+" "+err.Error()))
+			})
 			return btDevice{}
 		}
 	}
-	return bluetoothAudioDevice(out, func(addr string) string {
+	var seen []string
+	d := bluetoothAudioDevice(out, func(addr string) string {
 		info, err := btToolRun("bluetoothctl", "info", addr)
 		if err != nil || !strings.Contains(info, "Connected: yes") {
 			return ""
 		}
+		seen = append(seen, addr+" ("+bluetoothInfoAudioServices(info)+")")
 		return info
 	})
+	note := fmt.Sprintf("no connected audio sink via bluetoothctl %s (connected: %s)", how, strings.Join(seen, "; "))
+	if len(seen) == 0 {
+		note = fmt.Sprintf("nothing connected per bluetoothctl %s (%d listed)", how, len(parseBluetoothDevices(out)))
+	}
+	if d.addr != "" {
+		note = fmt.Sprintf("%s %q via bluetoothctl %s; connected: %s", d.addr, d.name, how, strings.Join(seen, "; "))
+	}
+	audioDiagSet(func() { audioDiag.headset = note })
+	return d
+}
+
+// bluealsaHeldHeadset is the headset BlueALSA holds an A2DP stream for while
+// bluetoothctl named none (spruce routes by that alone): only asked on the
+// handhelds, while a link is up and bluealsa runs.
+func bluealsaHeldHeadset() btDevice {
+	if runtime.GOOS != "linux" || !IsTrimuiDevice() || btLinkCount() <= 0 {
+		return btDevice{}
+	}
+	if pid, _ := bluealsaProcess(); pid == 0 {
+		return btDevice{}
+	}
+	sinks, _ := bluealsaA2DPSinks()
+	if len(sinks) == 0 {
+		return btDevice{}
+	}
+	audioDiagSet(func() { audioDiag.headset += "; bluealsa holds A2DP for " + sinks[0] + " (used)" })
+	return btDevice{addr: sinks[0], name: "Bluetooth audio"}
 }
 
 // ── Wired jack ─────────────────────────────────────────────────────────────
@@ -306,6 +362,9 @@ func startAudioOutputMonitor() {
 // on a device with a radio is usually the fallback.
 func probeAudioOutput() {
 	headset := systemBluetoothAudioDevice()
+	if headset.addr == "" {
+		headset = bluealsaHeldHeadset()
+	}
 	audioRouteUpdate(headset.addr)
 	if headset.name != "" {
 		rememberAudioOutput(headset.name)

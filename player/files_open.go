@@ -88,19 +88,21 @@ func filesOpenROM(config *Config, entry FileEntry) bool {
 		showToast("Cannot open "+entry.Name+": "+filesFriendlyError(err), ToastError())
 		return true
 	}
-	launcher := resolveGameLauncher(system)
-	if strings.TrimSpace(launcher) == "" {
-		showToast("No emulator for "+system+" yet — add one in Emulators", ToastWarn())
-		return true
-	}
 	game := libraryGame{Path: path, System: system, Title: gameDisplayTitle(path)}
-	if err := launchLibraryGame(game, launcher); err != nil {
-		showToast("Cannot start "+game.Title+": "+err.Error(), ToastError())
-		return true
-	}
-	recordPlayed(config, path)
-	PlayActivateSound()
-	showToast("Starting "+game.Title, ToastSuccess())
+	// Several emulators for this console: ask which (emupicker.go).
+	chooseGameLauncher(game, func(launcher string) {
+		if strings.TrimSpace(launcher) == "" {
+			showToast("No emulator for "+system+" yet — add one in Emulators", ToastWarn())
+			return
+		}
+		if err := launchLibraryGame(game, launcher); err != nil {
+			showToast("Cannot start "+game.Title+": "+err.Error(), ToastError())
+			return
+		}
+		recordPlayed(config, path)
+		PlayActivateSound()
+		showToast("Starting "+game.Title, ToastSuccess())
+	})
 	return true
 }
 

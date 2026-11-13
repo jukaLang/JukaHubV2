@@ -112,16 +112,19 @@ type setSection struct {
 // catalogue itself never changes.
 var setSectionsCache []setSection
 
-// setSections is the Settings catalogue in rail order.
+// setSections is the Settings catalogue in rail order, with the small
+// sections folded into their neighbours (setessentials.go).
 func setSections() []setSection {
 	if setSectionsCache == nil {
-		setSectionsCache = setBuildSections()
+		setSectionsCache = setArrangeSections(setBuildSections())
 	}
 	return setSectionsCache
 }
 
-// setSectionIndex finds a section by id (-1 when unknown).
+// setSectionIndex finds a section by id (-1 when unknown). A retired id
+// ("datetime", "keyboard") finds the section that took its rows.
 func setSectionIndex(id string) int {
+	id = setSectionAlias(id)
 	for i, s := range setSections() {
 		if s.ID == id {
 			return i
@@ -753,17 +756,13 @@ func setBuildSections() []setSection {
 			Rows: []setRow{
 				{
 					ID: "themes", Label: "Theme presets", Kind: setKindAction,
-					Detail: setStatic("Colour palettes and total conversions"),
+					// Its last tab is the Experience packs screen (themetabs.go),
+					// which also has a Quick Settings tile and a Tools entry; the
+					// separate "Experience pack" row it replaced was a second door
+					// to the same place.
+					Detail: setStatic("Colours, total conversions, consoles and experience packs"),
 					Value:  setThemeName,
 					Open:   setOpenScene("ThemePresets"),
-				},
-				{
-					// A whole setup in one switch: theme, Home, sounds, start
-					// screen and more, with Undo (xpack.go).
-					ID: "xpack", Label: "Experience pack", Kind: setKindAction,
-					Detail: setStatic("Theme, Home layout, sounds and start screen in one switch"),
-					Value:  func(*Config) string { return xpackQSLabel() },
-					Open:   xpackOpenGallery,
 				},
 				{
 					// Which Home: the shipped dashboard, the Hero grid, or one of
@@ -867,10 +866,15 @@ func setBuildSections() []setSection {
 						setToast("Living background: " + setOnOff(on))
 					},
 				},
+				// Classic or realistic, Liquid Glass-style panes (glass_real.go).
+				glassStyleRow(),
 				// The water under the glass, and tilt where the device can feel
 				// it (liquidbg.go).
 				liquidLevelRow(),
 				liquidTiltRow(),
+				// How the focus ring slides and swings to the next button, on
+				// every screen (homefocusglide.go).
+				focusBounceRow(),
 				// Light & dark by time of day: the switch, the two themes and the
 				// two times they start (themeschedule.go).
 				themeScheduleToggleRow(),

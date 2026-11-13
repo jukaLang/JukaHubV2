@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -465,7 +466,7 @@ const artworkMissFile = ".missing-art.json"
 // artworkMissVersion stamps the not-found cache. It is bumped whenever title
 // matching changes: a title that was "not found" under the old lookup deserves
 // one more try instead of waiting out the 30-day window.
-const artworkMissVersion = 4
+const artworkMissVersion = 5
 
 // artworkVariantLimit caps how many names one ROM asks the thumbnail server
 // for. A library fetch walks every ROM, so a title that generates ten lookups
@@ -605,6 +606,10 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		artSkipped
 		artMissing
 	)
+	// misses and claimed (the cover files a worker has taken) are shared by
+	// the download workers below.
+	var missesMu sync.Mutex
+	claimed := make(map[string]bool)
 	classify := func(rom scannedROM) int {
 		path := romArtworkPath(rom, dest)
 		if path == "" {
@@ -615,12 +620,24 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		if artworkCoverPresent(path) || romLocalCoverPath(rom) != "" {
 			return artSkipped
 		}
+		// Two ROMs can share one cover file (Game.sfc in USA/ and in Hacks/);
+		// the workers below must not write it at the same time.
+		missesMu.Lock()
+		taken := claimed[path]
+		claimed[path] = true
+		missesMu.Unlock()
+		if taken {
+			return artSkipped
+		}
 		stem := strings.TrimSuffix(filepath.Base(rom.Path), filepath.Ext(rom.Path))
 		if stem == "" {
 			return artMissing
 		}
 		key := artworkMissKey(rom.Collection, stem)
-		if misses != nil && artworkRecentlyMissing(misses, key, now, ttl) {
+		missesMu.Lock()
+		recent := misses != nil && artworkRecentlyMissing(misses, key, now, ttl)
+		missesMu.Unlock()
+		if recent {
 			return artMissing
 		}
 		image, err := fetchROMArtworkFor(ctx, client, baseURL, rom, stem)
@@ -628,7 +645,9 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 			// A 404 is a real answer worth remembering. A timeout or a dropped
 			// connection is not: retrying that next time is the whole point.
 			if misses != nil && errors.Is(err, os.ErrNotExist) {
+				missesMu.Lock()
 				misses[key] = now
+				missesMu.Unlock()
 			}
 			return artMissing
 		}
@@ -638,27 +657,106 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 			return artMissing
 		}
 		if misses != nil {
+			missesMu.Lock()
 			delete(misses, key)
+			missesMu.Unlock()
 		}
 		return artFetched
 	}
-	for i, rom := range roms {
-		if ctx != nil && ctx.Err() != nil {
-			return fetched, skipped, missing, true
+	// A few downloads at once: one at a time spent most of a big library's
+	// hours waiting on round trips (8,000 games took an evening and the
+	// consoles at the end of the list never got a turn).
+	var (
+		countMu sync.Mutex
+		done    int
+		next    atomic.Int64
+		wg      sync.WaitGroup
+	)
+	workers := artworkFetchWorkers
+	if workers > len(roms) {
+		workers = len(roms)
+	}
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				i := int(next.Add(1)) - 1
+				if i >= len(roms) {
+					return
+				}
+				kind := classify(roms[i])
+				countMu.Lock()
+				switch kind {
+				case artFetched:
+					fetched++
+				case artSkipped:
+					skipped++
+				default:
+					missing++
+				}
+				done++
+				if progress != nil {
+					progress(done)
+				}
+				countMu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	// Only stopArtworkFetch cancels ctx before this returns: a stop asked while
+	// the last few covers were in flight is still a stop.
+	return fetched, skipped, missing, ctx.Err() != nil
+}
+
+// artworkFetchWorkers is how many covers are downloaded at once.
+const artworkFetchWorkers = 4
+
+// artworkOrderChunk is how many games of one console a fetch takes before it
+// moves on to the next console (artworkFetchOrder).
+const artworkOrderChunk = 25
+
+// artworkFetchOrder puts the games to look up in the order a fetch should take
+// them: the console named first (the one the library shows) at the head, then
+// every console in turns of artworkOrderChunk games. A scan is sorted by path,
+// so a straight run worked through 32X, NES, Game Boy… and a big card's
+// Super Nintendo and PSP games waited hours behind 1,200 NES games — a fetch
+// cut short by a game, a stop or the batch limit never reached them at all.
+func artworkFetchOrder(roms []scannedROM, first string) []scannedROM {
+	if len(roms) < 2 {
+		return roms
+	}
+	var order []string
+	groups := make(map[string][]scannedROM)
+	for _, rom := range roms {
+		key := rom.System
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
 		}
-		switch classify(rom) {
-		case artFetched:
-			fetched++
-		case artSkipped:
-			skipped++
-		default:
-			missing++
-		}
-		if progress != nil {
-			progress(i + 1)
+		groups[key] = append(groups[key], rom)
+	}
+	out := make([]scannedROM, 0, len(roms))
+	if first != "" {
+		if g, ok := groups[first]; ok {
+			out = append(out, g...)
+			delete(groups, first)
 		}
 	}
-	return fetched, skipped, missing, false
+	for len(out) < len(roms) {
+		for _, key := range order {
+			g := groups[key]
+			if len(g) == 0 {
+				continue
+			}
+			n := min(artworkOrderChunk, len(g))
+			out = append(out, g[:n]...)
+			groups[key] = g[n:]
+		}
+	}
+	return out
 }
 
 // artworkTitleVariants lists the names to try for one ROM stem, best first.

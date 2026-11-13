@@ -411,6 +411,8 @@ func homeEditMoveHeld(config *Config, dir FocusDirection) {
 	if h.dynCarousel() {
 		// The carried card stays in the middle; its neighbours change places.
 		h.dyn.carPos = float64(h.dynTileIndex(HomeFocusID(ref)))
+		// So does the welcome hub's at its anchor (themeps5hub.go).
+		homeHub.pos = h.dyn.carPos
 	}
 	homeEditFocusRef(ref)
 	PlayNavSound()
@@ -1320,6 +1322,10 @@ func homeEditCarouselDrag(config *Config, mx int32) {
 		return
 	}
 	step := max32(8, scaleX(int32(homeCarStep1/2), h.Width))
+	if homeConsoleLook.carousel == homeCarouselHub {
+		// The welcome hub's small tiles stand closer (themeps5hub.go).
+		step = max32(8, scaleX(int32((homeHubSmall+homeHubGap)/2), h.Width))
+	}
 	for mx-homeEdit.press.x >= step || homeEdit.press.x-mx >= step {
 		dir := FocusRight
 		if mx < homeEdit.press.x {
@@ -1806,7 +1812,8 @@ func (h *HomeLayout) drawEditChip(renderer *sdl.Renderer, font *ttf.Font, r sdl.
 	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, fill)
 	if focused {
 		out := homeFocusRingOutset()
-		strokeRoundedRect(renderer, r.X-out, r.Y-out, r.W+2*out, r.H+2*out, radius+out, homeFocusRingWidth, ColorAccent)
+		ring := sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}
+		strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), radius+out, homeFocusRingWidth, ColorAccent)
 	} else {
 		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, 1, edge)
 	}

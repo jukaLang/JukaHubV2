@@ -498,6 +498,27 @@ Forgetting a console deletes its `regist_key`, `rp_key` and MAC from the file.
 The console itself still lists JukaHub under **Link Device → previously
 connected**, so remove it there too if you want a clean slate.
 
+## Xbox (X1)
+
+The X1 pill at the end of the Home header's Remote Play group streams an Xbox
+One or Series console. JukaHub does not speak the Xbox protocol itself; X1
+starts the best client on the machine:
+
+- **Handheld:** [GreenOvercast](https://github.com/doomL/GreenOvercast) (the
+  xHome build), a PortMaster port. The first press downloads `greenovercast.zip`
+  into PortMaster's `autoinstall` folder and opens PortMaster to install it
+  (PortMaster itself is installed first when missing); later presses launch it
+  from Ports. Sign in inside GreenOvercast with the code it shows, then pick
+  your console. It needs glibc 2.38 or newer: stock TrimUI firmware has 2.33,
+  so X1 warns before launching there. If the download fails, copy
+  `greenovercast.zip` from its releases page into PortMaster's `autoinstall`
+  folder yourself.
+- **PC:** Greenlight or XStreaming when installed, otherwise
+  <https://www.xbox.com/play/consoles> in the browser.
+
+On the console, turn on Settings → Devices & connections → Remote features.
+The pill's dot is lit while a client is installed.
+
 ## Troubleshooting
 
 | Symptom | Cause |

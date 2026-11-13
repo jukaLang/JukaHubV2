@@ -22,12 +22,12 @@ const (
 
 // The rows' explanations, shown under the list when the row is focused.
 const (
-	spatialModeHint = "Virtual surround for what JukaHub plays: Headphones places the sound around you, " +
-		"Speakers widens the built-in pair, Auto picks by the output in use. Bit-perfect bypasses it."
+	spatialModeHint = "Virtual surround for what you hear: Headphones places the sound around you, " +
+		"Speakers widens the built-in pair, Auto picks by the output in use. Games and apps follow it too (row below)."
 	spatialStrengthHint = "How far the effect goes: 25% is a light touch, 100% the full room and rear speakers."
 	spatialRoomHint     = "The virtual room the headphone mode plays in: Small is close and dry, Large is a hall."
-	spatialGamesHint    = "RetroArch games through JukaHub's audio plugin, from the next game you start, " +
-		"with the mode above. Other emulators keep their own sound."
+	spatialGamesHint    = "Games and apps through JukaHub's audio plugin, from the next one you start, with the mode above: " +
+		"on the handheld every emulator, port and app, elsewhere RetroArch."
 )
 
 // spatialOffNote is what a change while the mode is Off adds to its toast:
@@ -55,6 +55,9 @@ func spatialPanelValue(kind musicSettingsRowKind, config *Config) (string, bool)
 			return "On · not available", true
 		case !ok:
 			return "Not available", true
+		case on && strings.HasPrefix(why, spatialGamesRetroArchOnly):
+			// The system route said no here; RetroArch's filter still works.
+			return "On · RetroArch only", true
 		}
 		return onOff(on), true
 	}
@@ -102,13 +105,13 @@ func spatialRoomNote(s spatialSettings) string {
 }
 
 // spatialGamesAdjust is a press on the games row. Turning it on needs the
-// plugin and a RetroArch that can load it; turning it off always works, so a
+// plugin and a route for it (spatialGamesAvailability); turning it off always works, so a
 // setting left on after the plugin went away can still be cleared.
 func spatialGamesAdjust(config *Config) bool {
 	s := spatialSettingsFor(config)
 	if s.Games {
 		spatialStore(config, spatialGamesKey, boolString(false))
-		ShowToast("Spatial audio in RetroArch games: Off", ToastKindInfo)
+		ShowToast("Spatial audio in games: Off", ToastKindInfo)
 		PlayNavSound()
 		return true
 	}
@@ -116,7 +119,7 @@ func spatialGamesAdjust(config *Config) bool {
 	switch {
 	case !known || spatialGamesChecking(ok, why):
 		// Not an error: the answer is a moment away.
-		ShowToast("Checking whether RetroArch can load JukaHub's audio filter — try again in a moment", ToastKindInfo)
+		ShowToast("Checking whether games can play through JukaHub's audio plugin — try again in a moment", ToastKindInfo)
 		PlayNavSound()
 		return true
 	case !ok:
@@ -131,9 +134,9 @@ func spatialGamesAdjust(config *Config) bool {
 	if spatialEffectiveMode(spatialSettingsFor(config)) == spatialDSPOff {
 		// prepareSpatialAudio skips a launch while the mode is off, so the
 		// switch alone changes nothing yet.
-		ShowToast("Spatial audio in RetroArch games: On — choose a Spatial audio mode to hear it", ToastKindInfo)
+		ShowToast("Spatial audio in games: On — choose a Spatial audio mode to hear it", ToastKindInfo)
 	} else {
-		ShowToast("Spatial audio in RetroArch games: On — from the next game you start", ToastKindSuccess)
+		ShowToast("Spatial audio in games: On — from the next game you start", ToastKindSuccess)
 	}
 	PlayNavSound()
 	return true

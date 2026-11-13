@@ -89,7 +89,31 @@ printf '%s  %s\n' "$VOSK_LICENSE_SHA" "$WORK/VOSK_LICENSE.txt" | sha256sum -c -
 cc -O2 -Wall -Wextra -Werror -I "$VOSK" \
     /src/player/native/vosk-cli.c -o "$WORK/vosk-cli" -ldl
 file "$WORK/vosk-cli" | grep -q 'ELF 64-bit.*ARM aarch64'
-"$WORK/vosk-cli" --help > /dev/null
+# JukaHub reads "--serve" in the help to know this build streams.
+"$WORK/vosk-cli" --help | grep -q -- '--serve'
+
+# The warm server (stt_stream.go) must decode a clip sent as frames: begin,
+# the JFK samples, end, quit. Each frame is a type byte and a 32-bit
+# little-endian length. The WAV header is skipped; a few header bytes read as
+# samples do not change the words.
+unzip -q "$WORK/vosk-model-small-en-us-0.15.zip" -d "$WORK/vosk-model"
+# vosk-cli loads libvosk.so from its own folder (/proc/self/exe), as on the
+# handheld.
+cp "$VOSK/libvosk.so" "$WORK/libvosk.so"
+le32() {
+    printf "\\$(printf %03o $(($1 & 255)))\\$(printf %03o $((($1 >> 8) & 255)))\\$(printf %03o $((($1 >> 16) & 255)))\\$(printf %03o $((($1 >> 24) & 255)))"
+}
+tail -c +45 "$SRC/samples/jfk.wav" | head -c 1000000 > "$WORK/jfk.pcm"
+PCM_SIZE=$(wc -c < "$WORK/jfk.pcm")
+{
+    printf 'B'; le32 1; printf '\000'
+    printf 'A'; le32 "$PCM_SIZE"; cat "$WORK/jfk.pcm"
+    printf 'E'; le32 0
+    printf 'Q'; le32 0
+} | "$WORK/vosk-cli" --serve -m "$WORK/vosk-model/vosk-model-small-en-us-0.15" > "$WORK/serve.out"
+grep -a -q ready "$WORK/serve.out"
+grep -a -qi 'americans' "$WORK/serve.out"
+rm -rf "$WORK/vosk-model" "$WORK/jfk.pcm" "$WORK/serve.out" "$WORK/libvosk.so"
 
 OUT=/src/player/native/bin/juka-whisper
 mkdir -p "$OUT"

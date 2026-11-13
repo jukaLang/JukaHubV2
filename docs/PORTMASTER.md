@@ -58,6 +58,14 @@ Use the PortMaster app itself (**A** on the PortMaster row) to browse the port
 catalog, install, update and remove ports. JukaHub lists what PortMaster has
 installed; it does not maintain a second catalog or modify port files.
 
+## Minecraft
+
+**Start → Games → Minecraft** installs three PortMaster ports in one press each
+(the Minecraft Java Edition port, ClassiCube, Luanti · Mineclonia): JukaHub reads
+PortMaster's catalogue, checks the zip's MD5, puts it in PortMaster's
+`autoinstall` folder and opens PortMaster to install it. See
+[MINECRAFT.md](MINECRAFT.md).
+
 ## Limitations
 
 - PortMaster is an ARM Linux handheld application. The installer is hidden on

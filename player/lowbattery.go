@@ -503,6 +503,8 @@ func protectLowBattery() {
 			saved = true
 			Log().Info("low battery: save state requested", "port", port, "config", cfgPath)
 			time.Sleep(lowBatterySaveDelay)
+			// JukaHub ends the game here, not the game itself (gamelaunch_watch.go).
+			gameLaunchNoteStopAll()
 			_ = sendRetroArchNetCmd(port, "QUIT")
 			// A UDP write always succeeds, so the exit is the only proof the
 			// command reached RetroArch. Without it, say the save did not happen.

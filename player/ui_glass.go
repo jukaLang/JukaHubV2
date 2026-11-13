@@ -172,6 +172,9 @@ func glassHairline() sdl.Color { return glassA(16) }
 // screen's own text ghost through the card's; an opaque one in the same tone
 // reads as the same glass without the ghosting.
 func glassSheetFill() sdl.Color {
+	// An opaque card is going down: realistic glass drawn after it this
+	// frame must not frost the backdrop through it (glass_real.go).
+	glassRealCover()
 	return glassMix(glassMix(ColorBackground, glassInk(), 0.075), glassAccent(), 0.035)
 }
 
@@ -205,6 +208,7 @@ func glassFooterFill() sdl.Color {
 // at the shared alpha, so a dialog sits in Home's ambience instead of in a
 // black hole. progress scales it for a panel that fades its dim in.
 func glassScrimColor(progress float64) sdl.Color {
+	glassRealCover()
 	c := ColorBackground
 	c.A = uint8(math.Round(float64(OverlayScrimAlpha) * uiClamp01(progress)))
 	return c
@@ -256,6 +260,8 @@ func drawAppBackdrop(renderer *sdl.Renderer, config *Config, w, h int32) {
 	if renderer == nil || w <= 0 || h <= 0 {
 		return
 	}
+	// Realistic glass drawn next sits on this backdrop (glass_real.go).
+	glassRealNoteBackdrop(renderer)
 	// One config for every layer: the water (liquidbg.go) and the layers
 	// below must agree on the wallpaper and the living background, or one
 	// would paint an opaque base over what the other drew.
@@ -419,6 +425,10 @@ func drawGlassSurface(renderer *sdl.Renderer, rect sdl.Rect, radius int32, st gl
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
+	// Settings → Display & theme → Glass: Realistic (glass_real.go).
+	if glassRealSurface(renderer, rect, radius, st) {
+		return
+	}
 	fill, edge := glassFill(), glassEdge()
 	switch {
 	case st.Disabled:
@@ -516,6 +526,9 @@ func drawGlassSheet(renderer *sdl.Renderer, rect sdl.Rect, fill sdl.Color) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
+	if glassRealSheet(renderer, rect, fill) {
+		return
+	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, OverlayCardRadius, fill)
 	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, OverlayCardRadius, 1, glassSheetEdge())
@@ -534,8 +547,10 @@ func drawGlassBadge(renderer *sdl.Renderer, rect sdl.Rect) sdl.Rect {
 		radius = homeIconRadius
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassA(20))
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, glassA(16))
+	if !glassRealBadge(renderer, rect, radius) {
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassA(20))
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, glassA(16))
+	}
 	glyph := rect.W / 2
 	if glyph < 12 {
 		glyph = rect.W - 4

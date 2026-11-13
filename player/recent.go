@@ -51,12 +51,17 @@ func playRecentGame(g recentGame) {
 		ShowToast(label+" is missing: "+filepath.Base(g.Path), ToastKindError)
 		return
 	}
-	launcher := resolveGameLauncher(g.System)
+	game := libraryGame{Path: g.Path, System: g.System, Title: g.Title}
+	// Several emulators for this console: ask which (emupicker.go).
+	chooseGameLauncher(game, func(launcher string) { playRecentGameWith(g, game, launcher) })
+}
+
+// playRecentGameWith is playRecentGame once the emulator is known.
+func playRecentGameWith(g recentGame, game libraryGame, launcher string) {
 	if launcher == "" {
 		ShowToast("No emulator found for "+g.System+" — add one on the Emulators screen", ToastKindWarning)
 		return
 	}
-	game := libraryGame{Path: g.Path, System: g.System, Title: g.Title}
 	if err := launchLibraryGame(game, launcher); err != nil {
 		ShowToast("Cannot launch "+g.Title+": "+err.Error(), ToastKindError)
 		return

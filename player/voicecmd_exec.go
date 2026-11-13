@@ -89,6 +89,7 @@ func voiceExecute(config *Config, in voiceIntent, src voiceSource) voiceOutcome 
 	case voiceIntentHelp:
 		return voiceOutcome{Done: true, Say: "Say “open” and a name — a screen, an app or a game — or “play” a game or " +
 			"music, “volume 50”, “brighter”, “take a screenshot”, “turn off Wi-Fi”, “next song”, “what time is it”. " +
+			"Change any setting: “turn on dark mode”, “make the text bigger”, “is background music on?”. " +
 			"Teach your own words in Settings → Voice & AI → Voice shortcuts."}
 	case voiceIntentTime:
 		return voiceOutcome{Done: true, Say: "It is " + clockDigits(config, time.Now())}
@@ -136,6 +137,8 @@ func voiceExecute(config *Config, in voiceIntent, src voiceSource) voiceOutcome 
 		return voiceQuitOutcome(config)
 	case voiceIntentOpen:
 		return voiceOpenTarget(config, in)
+	case voiceIntentSetting:
+		return voiceSettingExecute(config, in)
 	}
 	return voiceOutcome{Say: "Didn't catch a command — say what to open, like “open YouTube”", Tone: tbxToneWarn}
 }
@@ -187,6 +190,10 @@ func voiceOutcomeFor(m voiceMatch) voiceOutcome {
 	}
 	if t.Quit {
 		return voiceOutcome{Say: "Quit JukaHub?", Act: startMenuPower}
+	}
+	if t.Say != "" {
+		// A setting picked from a "which one" list: it changes, not opens.
+		return voiceOutcome{Say: t.Say, Act: t.Action}
 	}
 	verb := "Opening "
 	switch t.Kind {

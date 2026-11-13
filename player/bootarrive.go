@@ -278,7 +278,7 @@ func bootArrivePlanFor(config *Config, w, h int32) bootArrivePlan {
 // those arrive with the header, not as cards.
 func bootArriveIsHeaderChip(id HomeFocusID) bool {
 	switch id {
-	case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying,
+	case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusNowPlaying,
 		HomeFocusBell, HomeFocusBug, HomeFocusWiFi, HomeFocusVolume, HomeFocusQR, HomeFocusTrophy,
 		HomeFocusBrightness, HomeFocusBluetooth:
 		return true

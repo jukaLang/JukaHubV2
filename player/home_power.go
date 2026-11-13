@@ -22,6 +22,9 @@ package main
 // by busybox's reboot or poweroff; Sleep suspends the device and JukaHub
 // carries on where it was (devpower.go). Exit stays the focused button, and
 // every button but Cancel waits out homePowerArmMS. A desktop keeps the two.
+// The Power quick tile (home_quicktiles.go) opens the same card on Power off:
+// a tile pinned to turn the handheld off is pressed for that, and the second
+// press still has to come after the arming delay.
 
 import (
 	"math"

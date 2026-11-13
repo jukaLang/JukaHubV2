@@ -46,7 +46,11 @@ package main
 //     daily check of its own with the core pass's rules (emulatorautoupdate.go):
 //     online, never over a game or another install, while charging or idle
 //     unless long overdue, and a stamp only after a check that read the
-//     release.
+//     release. Since 2026-11-13 every start also looks once its last check is
+//     two hours old (ppssppCheckDue), a check stamped by an older JukaHub is
+//     due at once, an update is never older than the build installed, and an
+//     installed build the rule says should play PSP games but does not yet is
+//     switched to at the next check (ppssppAutoAdopt).
 //
 // Windows is not involved: the Emulators page there installs the official
 // Windows PPSSPP (emuwininstall.go). The page side — the PSP tile's line and
@@ -83,8 +87,9 @@ const (
 	ppssppPakAsset = "PSP.pak.zip"
 	// ppssppOwnRepo, ppssppOwnTag and ppssppOwnAsset are JukaHub's own build of
 	// upstream PPSSPP for the tg5040 handhelds: the rolling release that
-	// .github/workflows/ppsspp-trimui.yml rebuilds weekly from hrydgard/ppsspp's
-	// newest release (player/native/build-ppsspp.sh), titled "PPSSPP <version>
+	// .github/workflows/ppsspp-trimui.yml rebuilds from hrydgard/ppsspp's newest
+	// SDL2 release when one appears (player/native/build-ppsspp.sh; 1.21 moved
+	// to SDL3, which the firmware lacks), titled "PPSSPP <version>
 	// for TrimUI (tg5040)". minui-psp lags upstream (1.20.3 while upstream had
 	// 1.20.4, which had no tg5040 build anywhere), so on a tg5040 both are asked
 	// and the newer PPSSPP wins (ppssppPickRelease).
@@ -145,6 +150,18 @@ const (
 	ppssppFirmwareTTL = 10 * time.Minute
 	// ppssppStatusMax is the size the launcher's status log is trimmed to.
 	ppssppStatusMax = 64 << 10
+	// ppssppStartRecheck: every start of JukaHub looks for a newer PPSSPP once
+	// its last check is this old, besides the daily check (Juka, 2026-11-13:
+	// "update to latest PPSSPP automatically" — a check stamped the evening
+	// before kept a fresh start from looking for a day). Two or three GitHub
+	// API reads per start, so a burst of restarts stays far below the
+	// unauthenticated limit.
+	ppssppStartRecheck = 2 * time.Hour
+	// ppssppCheckRule numbers the rules the check decides by. A stamp written
+	// under an older number is due at once, so a JukaHub update that changes
+	// what the check would do (a new source, a fixed decision) acts at the
+	// next start instead of after the day an old "nothing to do" stamped.
+	ppssppCheckRule = 2
 )
 
 // ppssppDigestPattern is the only digest an install accepts: GitHub's own
@@ -255,7 +272,9 @@ type ppssppBinaryScan struct {
 //     raw JSON of the PSP entries it replaced, by key; FileExisted: whether the
 //     file was there before JukaHub first wrote it.
 //   - CheckedAt, LatestTag, LatestVersion: the last check that read the
-//     release; Announced: the tag the notify toast already named.
+//     release; CheckedRule: the ppssppCheckRule it was stamped under (a check
+//     stamped by an older JukaHub is due at once); Announced: the tag the
+//     notify toast already named.
 //   - Bad: tags whose launcher reported that they do not start, with why.
 //   - FallbackSeen: the last "opened in the firmware's PPSSPP" reason toasted.
 //   - FirmwareScan: the cached firmware binary version.
@@ -268,6 +287,7 @@ type ppssppState struct {
 	Replaced      map[string]string `json:"replaced,omitempty"`
 	FileExisted   bool              `json:"file_existed,omitempty"`
 	CheckedAt     string            `json:"checked_at,omitempty"`
+	CheckedRule   int               `json:"checked_rule,omitempty"`
 	LatestTag     string            `json:"latest_tag,omitempty"`
 	LatestVersion string            `json:"latest_version,omitempty"`
 	Announced     string            `json:"announced,omitempty"`
@@ -538,6 +558,25 @@ func (s ppssppState) newest() (ppssppBuild, bool) {
 	return s.Builds[0], true
 }
 
+// newestGood is the installed build with the highest PPSSPP version whose
+// launcher has not reported it as not starting (the most recently installed
+// on a tie or an unknown version): what an update has to beat. By version, not
+// install order: an older JukaHub could install minui-psp's 1.20.3 after its
+// own 1.20.4.
+func (s ppssppState) newestGood() (ppssppBuild, bool) {
+	var best ppssppBuild
+	found := false
+	for _, b := range s.Builds {
+		if s.Bad[b.Tag] != "" {
+			continue
+		}
+		if !found || ppssppNewer(b.Version, best.Version) {
+			best, found = b, true
+		}
+	}
+	return best, found
+}
+
 // path resolves a layout path inside the build folder ("" stays "").
 func (b ppssppBuild) path(rel string) string {
 	if rel == "" {
@@ -578,10 +617,21 @@ func (b ppssppBuild) label() string {
 // own build" for ppssppOwnRepo's ("jukahub-<version>"), "minui-psp <tag>"
 // otherwise.
 func ppssppSourceName(tag string) string {
-	if strings.HasPrefix(tag, ppssppOwnTagPrefix) {
+	if ppssppIsOwnTag(tag) {
 		return "JukaHub's own build"
 	}
 	return "minui-psp " + tag
+}
+
+// ppssppIsOwnTag reports a tag of JukaHub's own build (ppssppOwnTagPrefix).
+func ppssppIsOwnTag(tag string) bool { return strings.HasPrefix(tag, ppssppOwnTagPrefix) }
+
+// ppssppSourceShort is the tile's short name for where a build came from.
+func ppssppSourceShort(tag string) string {
+	if ppssppIsOwnTag(tag) {
+		return "JukaHub build"
+	}
+	return "minui-psp build"
 }
 
 // usable reports whether the build's files are still there and its launcher
@@ -769,8 +819,12 @@ func ppssppReleaseFromAsset(data []byte, assetName, source string) (ppssppReleas
 // ppssppFetchRelease asks GitHub for the newest build for this handheld: the
 // minui-psp release, and on a tg5040 also JukaHub's own (ppssppOwnRepo), and
 // returns the one ppssppPickRelease prefers. Either source failing leaves the
-// other; both failing returns minui-psp's error. Every URL — the API and each
-// redirect — is held to the download allowlist by fetchUpdateBytes.
+// other; both failing returns minui-psp's error. A release this device already
+// marked unusable (it did not load or start here) gives way to the other
+// source until a new one arrives (a new tag), so a broken minui-psp release
+// does not hold back JukaHub's own build, or the other way round. Every URL —
+// the API and each redirect — is held to the download allowlist by
+// fetchUpdateBytes.
 func ppssppFetchRelease(ctx context.Context, client *http.Client) (ppssppRelease, error) {
 	pak, perr := ppssppFetchPakRelease(ctx, client)
 	if platform, _ := ppssppPlatform(); platform != ppssppOwnPlatform {
@@ -778,17 +832,22 @@ func ppssppFetchRelease(ctx context.Context, client *http.Client) (ppssppRelease
 	}
 	own, oerr := ppssppFetchOwnRelease(ctx, client)
 	if oerr != nil {
-		logDebug("ppsspp", "JukaHub's own PPSSPP release: %v", oerr)
+		// Logged at info: until ppsspp-trimui.yml has published once, this is
+		// why a device stays on minui-psp's (older) PPSSPP.
+		logInfo("ppsspp", "JukaHub's own PPSSPP release: %v", oerr)
 		return pak, perr
 	}
-	if why := ppssppSnapshot().Bad[own.Tag]; why != "" {
-		// This build did not load or start here; minui-psp's stays on offer
-		// until a new build of ours arrives (a new tag).
+	bad := ppssppSnapshot().Bad
+	if why := bad[own.Tag]; why != "" {
 		logDebug("ppsspp", "JukaHub's own %s is marked unusable here (%s)", own.Tag, why)
 		return pak, perr
 	}
 	if perr != nil {
 		logDebug("ppsspp", "minui-psp release: %v; taking JukaHub's own %s", perr, own.Version)
+		return own, nil
+	}
+	if why := bad[pak.Tag]; why != "" {
+		logDebug("ppsspp", "minui-psp %s is marked unusable here (%s); taking JukaHub's own %s", pak.Tag, why, own.Version)
 		return own, nil
 	}
 	installed := ""
@@ -2688,15 +2747,27 @@ const (
 // PPSSPP"): the launcher falls back to the firmware's when JukaHub's does not
 // start, so installing costs nothing if it turns out older. An untested model
 // or a user who chose the firmware's PPSSPP is told rather than installed for.
+//
+// With a build installed, a release is judged against the newest one that
+// starts (2026-11-13): a newer PPSSPP, or the same PPSSPP from the same source
+// under a new tag (a repackaged minui-psp, a rebuilt JukaHub build), is worth
+// it; an older one, or the same PPSSPP from the other source, is not — before,
+// any new tag was, so a moment when JukaHub's own release could not be read
+// would have "updated" its 1.20.4 to minui-psp's 1.20.3. A tag already
+// installed is never installed again.
 func ppssppAutoDecide(mode coreUpdateMode, st ppssppState, rel ppssppRelease, fwVersion string, untested bool) ppssppAutoAction {
 	if mode == coreUpdateOff || rel.Tag == "" || st.Bad[rel.Tag] != "" {
 		return ppssppAutoNothing
 	}
-	newest, installed := st.newest()
-	if installed && newest.Tag == rel.Tag {
+	if _, have := st.build(rel.Tag); have {
 		return ppssppAutoNothing
 	}
-	worth := installed || (rel.Version != "" && (fwVersion == "" || ppssppNewer(rel.Version, fwVersion)))
+	var worth bool
+	if cur, installed := st.newestGood(); installed {
+		worth = ppssppWorthOver(rel.Tag, rel.Version, cur)
+	} else {
+		worth = rel.Version != "" && (fwVersion == "" || ppssppNewer(rel.Version, fwVersion))
+	}
 	if !worth {
 		return ppssppAutoNothing
 	}
@@ -2704,6 +2775,17 @@ func ppssppAutoDecide(mode coreUpdateMode, st ppssppState, rel ppssppRelease, fw
 		return ppssppAutoNotify
 	}
 	return ppssppAutoInstall
+}
+
+// ppssppWorthOver reports whether the release tag (PPSSPP version) is worth
+// installing over the installed build cur: a newer PPSSPP, or the same one from
+// the same source under a new tag; anything when either version is unknown.
+func ppssppWorthOver(tag, version string, cur ppssppBuild) bool {
+	if version == "" || cur.Version == "" {
+		return true
+	}
+	return ppssppNewer(version, cur.Version) ||
+		(compareCoreVersions(version, cur.Version) == 0 && ppssppIsOwnTag(tag) == ppssppIsOwnTag(cur.Tag))
 }
 
 // ppssppShouldSwitch decides whether a build installed without the user asking
@@ -2740,15 +2822,73 @@ func ppssppRecordLatest(rel ppssppRelease) ppssppState {
 }
 
 // ppssppStampCheck records a daily check that is done with its release, so the
-// next one waits a day.
+// next one waits a day — or for the next start (ppssppCheckDue).
 func ppssppStampCheck(now time.Time) {
 	ppssppAutoMarkPass()
 	ppssppMgr.mu.Lock()
 	defer ppssppMgr.mu.Unlock()
-	ppssppLockedState().CheckedAt = now.UTC().Format(time.RFC3339)
+	st := ppssppLockedState()
+	st.CheckedAt = now.UTC().Format(time.RFC3339)
+	st.CheckedRule = ppssppCheckRule
 	if err := ppssppSaveLocked(); err != nil {
 		logDebug("ppsspp", "could not save the check stamp: %v", err)
 	}
+}
+
+// ppssppCheckDue reports whether the automatic check should read the release
+// now: the daily rule (coreAutoUpdateDue, which also counts a stamp the clock
+// cannot vouch for as due), a stamp written under an older ppssppCheckRule, or —
+// the first time in a run of JukaHub — a last check older than
+// ppssppStartRecheck, so a start after a new PPSSPP came out installs it then
+// and not up to a day later.
+func ppssppCheckDue(st ppssppState, now time.Time, firstThisRun bool) bool {
+	if st.CheckedRule != ppssppCheckRule || coreAutoUpdateDue(st.CheckedAt, now) {
+		return true
+	}
+	if !firstThisRun {
+		return false
+	}
+	t, ok := parseReleaseTimestamp(st.CheckedAt)
+	return !ok || now.Sub(t) >= ppssppStartRecheck
+}
+
+// ppssppAutoAdopt switches PSP games to the newest installed build that starts
+// when the automatic rule (ppssppShouldSwitch) says it should play them and it
+// does not yet: a build installed while the firmware's PPSSPP read as newer or
+// a launcher was pinned by hand that has since gone, or one an older JukaHub
+// installed without switching. A user who chose the firmware's PPSSPP keeps
+// it. Install mode only; the caller holds the patch slot.
+func ppssppAutoAdopt(fw ppssppFirmwareInfo) {
+	if gameScreenSuspended() {
+		return
+	}
+	ppssppMgr.mu.Lock()
+	st := ppssppLockedState()
+	b, ok := st.newestGood()
+	if !ok || st.Active == b.Tag || st.Choice == ppssppChoiceFirmware || !b.usable(*st) ||
+		!ppssppShouldSwitch(*st, b, fw.Version, ppssppUserPinnedLocked()) {
+		ppssppMgr.mu.Unlock()
+		return
+	}
+	// A JukaHub build already playing PSP games is left alone unless b is a
+	// newer PPSSPP: no sideways switch to the same version from the other
+	// source, never down.
+	if cur, active := st.build(st.Active); active && cur.usable(*st) && !ppssppNewer(b.Version, cur.Version) {
+		ppssppMgr.mu.Unlock()
+		return
+	}
+	err := ppssppUseBuildLocked(st, b, fw)
+	if serr := ppssppSaveLocked(); serr != nil && err == nil {
+		err = serr
+	}
+	ppssppMgr.mu.Unlock()
+	if err != nil {
+		logWarn("ppsspp", "could not switch PSP games to %s: %v", b.label(), err)
+		return
+	}
+	invalidateEmulatorCache()
+	logPatch("ppsspp auto-update: PSP games switched to the installed %s", b.label())
+	ShowToast("PSP games now use "+b.label()+" ("+ppssppSourceName(b.Tag)+") · the firmware's PPSSPP takes over if it does not start", ToastKindSuccess)
 }
 
 // ppssppMarkBad records why a release cannot be used, so the daily pass does
@@ -2978,6 +3118,13 @@ func ppssppAutoRanRecently() bool {
 	return !last.IsZero() && time.Since(last) < coreAutoUpdateInterval
 }
 
+// ppssppAutoPassedThisRun reports that a check read the release in this run.
+func ppssppAutoPassedThisRun() bool {
+	ppssppAutoSession.mu.Lock()
+	defer ppssppAutoSession.mu.Unlock()
+	return !ppssppAutoSession.lastPass.IsZero()
+}
+
 // ppssppAutoMarkPass records a check that read the release.
 func ppssppAutoMarkPass() {
 	ppssppAutoSession.mu.Lock()
@@ -3028,7 +3175,7 @@ func ppssppAutoUpdateTick(now time.Time) (ran, waiting bool) {
 		return false, false
 	}
 	st := ppssppSnapshot()
-	if !coreAutoUpdateDue(st.CheckedAt, now) || ppssppAutoRanRecently() {
+	if !ppssppCheckDue(st, now, !ppssppAutoPassedThisRun()) || ppssppAutoRanRecently() {
 		ppssppAutoStopWaiting()
 		return false, false
 	}
@@ -3090,7 +3237,11 @@ func ppssppAutoUpdateTick(now time.Time) (ran, waiting bool) {
 			return true, false
 		}
 		ppssppStampCheck(now)
-		logPatch("ppsspp update check: %s, nothing to do", ppssppSourceName(rel.Tag))
+		logPatch("ppsspp update check: %s (PPSSPP %s), nothing to install; firmware PPSSPP %s",
+			ppssppSourceName(rel.Tag), valueOr(rel.Version, "unknown"), valueOr(fw.Version, "unknown"))
+		if mode == coreUpdateInstall {
+			ppssppAutoAdopt(fw)
+		}
 		return true, false
 	}
 	switch ppssppRunAutoInstall(rel, platform, fw) {

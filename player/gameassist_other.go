@@ -20,6 +20,9 @@ func gaPadSync(*Config, bool, bool, bool) {}
 // gaPadStop would stop the pad watcher.
 func gaPadStop() {}
 
+// gaWakeAsk: no pad watcher here, so "Hey Juka" cannot open the assistant.
+func gaWakeAsk() bool { return false }
+
 // gaPausedNote would write down the processes about to be paused.
 func gaPausedNote([]*exec.Cmd) {}
 

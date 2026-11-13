@@ -124,7 +124,7 @@ func gameResetCores(game libraryGame) []string {
 		}
 		cores = append(cores, core)
 	}
-	if launcher := resolveGameLauncher(game.System); launcher != "" {
+	if launcher := resolveGameLauncherFor(game); launcher != "" {
 		add(gameCoreFromLauncher(launcher, game.System))
 	}
 	add(defaultCoreForSystem(game.System))
@@ -619,6 +619,10 @@ func runGameReset(game libraryGame, states bool) {
 		ShowToast("A reset or cleanup is still moving files", ToastKindInfo)
 		return
 	}
+	// The launcher is resolved here, on the render thread, the way a launch
+	// resolves it; only file work goes to the goroutine. Before the options are
+	// cleared: they name the emulator the game runs in (emupicker.go).
+	cores := gameResetCores(game)
 	hadOptions := !gameOptionsFor(game.Path).empty()
 	if hadOptions {
 		if err := setGameOptions(game.Path, gameOptions{}); err != nil {
@@ -631,9 +635,6 @@ func runGameReset(game libraryGame, states bool) {
 		gameOptsUI.opts = gameOptions{}
 	}
 	label := game.Label()
-	// The launcher is resolved here, on the render thread, the way a launch
-	// resolves it; only file work goes to the goroutine.
-	cores := gameResetCores(game)
 	go func() {
 		defer gameResetBusy.Store(false)
 		files := gameResetPlan(game, cores, states)

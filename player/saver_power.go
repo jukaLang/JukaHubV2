@@ -139,9 +139,10 @@ func saverPowerWant(idleUp bool, idleFor time.Duration, alarm, video, launch, mu
 	return saverPowerQuiet
 }
 
-// saverLaunchActive reports whether a game or an app owns the CPU profile.
+// saverLaunchActive reports whether a game or an app owns the CPU profile, or
+// the voice assistant holds its short boost (voiceboost.go).
 func saverLaunchActive() bool {
-	if gameScreenSuspended() {
+	if gameScreenSuspended() || voiceBoostActive() {
 		return true
 	}
 	launchPowerProfile.mu.Lock()

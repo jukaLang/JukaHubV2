@@ -137,6 +137,7 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	y = cardTitle(creditsRect, "Credits")
 	credits := []struct{ name, role string }{
 		{"JukaHub Team", "Core Development"},
+		{"NiNjaMAN1210", "Testing & New Features"},
 		{"Go + SDL2", "Runtime & Rendering"},
 		{"Inter Font", "Typography"},
 		{deviceCreditName(DetectDevice()), "Primary Target Device"},

@@ -925,7 +925,7 @@ func jlandDrawHUD(r *sdl.Renderer, config *Config, g *jlandGame, atlas *sdl.Text
 		if i == g.Slot {
 			lift := glassLifted(s)
 			fillRoundedRect(r, lift.X, lift.Y, lift.W, lift.H, 12, glassA(34))
-			strokeRoundedRect(r, lift.X, lift.Y, lift.W, lift.H, 12, glassFocusRingWidth, glassAccent())
+			strokeRoundedRectAt(r, lift, homeFocusGlide.apply(lift), 12, glassFocusRingWidth, glassAccent())
 		} else {
 			fillRoundedRect(r, s.X, s.Y, s.W, s.H, 10, glassA(14))
 		}

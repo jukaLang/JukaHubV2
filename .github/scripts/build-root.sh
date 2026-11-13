@@ -8,7 +8,7 @@
 #   wine-runtime.yml         the Box64 pack of the Windows-app runtime, a
 #                            release asset of its own
 #   ppsspp-trimui.yml        JukaHub's own PPSSPP for the tg5040 handhelds,
-#                            weekly, the rolling release "ppsspp-tg5040"
+#                            checked daily, the rolling release "ppsspp-tg5040"
 #
 # Why an arm64 runner, why a 20.04 root and why debootstrap rather than a
 # container image: see remote-play-helpers.yml.

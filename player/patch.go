@@ -527,7 +527,8 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 			bg := ColorCardFocus
 			if focused {
 				bg = ColorCardFocus
-				strokeRoundedRect(renderer, x+24, itemY, w-48, 38, RadiusMD, 2, ColorAccent)
+				ring := sdl.Rect{X: x + 24, Y: itemY, W: w - 48, H: 38}
+				strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), RadiusMD, 2, ColorAccent)
 			} else {
 				strokeRoundedRect(renderer, x+24, itemY, w-48, 38, RadiusMD, 1, ColorBorder)
 			}

@@ -184,6 +184,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	}
 	// PCs can inspect and download APKs even though AndroidRT runs on the handheld.
 	games = append(games, startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }})
+	// Every way to play Minecraft here: ports, Bedrock, a PC's launchers.
+	games = append(games, startMenuEntry{name: minecraftEntryName, icon: "M", glyph: minecraftGlyph, action: func(c *Config) { minecraftOpen(c) }})
 	// RetroAchievements is only meaningful where a card can hold credentials.
 	if !retroAchievementsSupported() {
 		games = withoutStartMenuEntry(games, "RetroAchievements")

@@ -7,16 +7,19 @@ package main
 // (sound.go): stereo S16 at the device's rate, under videoAudioMutex. That is
 // where the DSP (spatial_dsp.go) runs, through spatialQueueHook, and where
 // ClearVideoAudioQueue resets it on a seek or a stop (spatialResetLocked).
-// Games are a separate route: RetroArch runs its own audio, which the native
-// plugin in player/spatialfx reaches (spatial_games.go reads the same
-// settings through spatialSettingsFor).
+// Background music has a device of its own and its own instance
+// (spatialSideStream, bgmusic.go). Games and apps are separate processes: the
+// native plugin in player/spatialfx reaches them, as RetroArch's audio filter
+// (spatial_games.go) and, on the handheld, through ALSA for every program
+// (spatial_alsa.go); both read the same settings through spatialSettingsFor.
 //
 // The settings are four Custom variables:
 //
 //	spatialMode      "off" (default), "auto", "headphones", "speakers"
 //	spatialStrength  25..100 percent (default 75)
 //	spatialRoom      "small", "medium" (default), "large"
-//	spatialGames     true/false (default false): RetroArch games too
+//	spatialGames     true/false (default true): games and apps too, while a
+//	                 mode is on (spatial_games.go, spatial_alsa.go)
 //
 // "auto" follows the output the header names (audiooutput.go): a headset, the
 // 3.5 mm jack or Bluetooth headphones get the headphone model, and the built-in
@@ -64,7 +67,7 @@ type spatialSettings struct {
 	Mode     string  // "off", "auto", "headphones", "speakers"
 	Strength float64 // 0..1
 	Room     string  // "small", "medium", "large"
-	Games    bool    // also in RetroArch games (spatial_games.go)
+	Games    bool    // also in games and apps (spatial_games.go, spatial_alsa.go)
 }
 
 // spatialNormalizeMode maps a stored mode to one of the four names; anything
@@ -96,7 +99,7 @@ func spatialNormalizeRoom(v string) string {
 // spatialSettingsFor reads the four variables, with the defaults for missing
 // or malformed ones.
 func spatialSettingsFor(config *Config) spatialSettings {
-	s := spatialSettings{Mode: "off", Strength: spatialDefaultStrength / 100.0, Room: "medium"}
+	s := spatialSettings{Mode: "off", Strength: spatialDefaultStrength / 100.0, Room: "medium", Games: true}
 	if config == nil {
 		return s
 	}
@@ -113,7 +116,7 @@ func spatialSettingsFor(config *Config) spatialSettings {
 		s.Room = spatialNormalizeRoom(coerceString(v))
 	}
 	if v, ok := customValue(m, spatialGamesKey); ok {
-		s.Games = bootSfxParseBool(v, false)
+		s.Games = bootSfxParseBool(v, true)
 	}
 	return s
 }
@@ -190,6 +193,10 @@ type spatialLive struct {
 
 var spatialLiveState atomic.Pointer[spatialLive]
 
+// spatialSettingsLive is the settings as last bound, for readers off the UI
+// thread (spatialChildEnv).
+var spatialSettingsLive atomic.Pointer[spatialSettings]
+
 // spatialBind publishes the settings for the decoders. It runs on the UI
 // thread from bootSfxBind once a second, on hot reload and on restore, and at
 // once from the rows that change a setting: four map lookups (each a scan of
@@ -205,6 +212,19 @@ func spatialBind(config *Config) {
 		strength:   s.Strength,
 		room:       spatialRoomIndex(s.Room),
 		bitPerfect: spatialBitPerfectOn(config),
+	}
+	// The launches read the settings from this snapshot: they may run on a
+	// goroutine, where the config map must not be read (spatial_alsa.go).
+	if old := spatialSettingsLive.Load(); old == nil || *old != s {
+		p := new(spatialSettings)
+		*p = s
+		spatialSettingsLive.Store(p)
+	}
+	// Games and apps go through the plugin by ALSA once a probe has proven
+	// that route here (spatial_alsa.go); the kick is a lock and a compare
+	// once it has run.
+	if s.Games && live.mode != spatialDSPOff {
+		spatialSystemRouteKick()
 	}
 	if old := spatialLiveState.Load(); old != nil && *old == live {
 		return
@@ -279,6 +299,39 @@ func spatialQueueHook(pcm []byte, rate int32, volume float64) ([]byte, bool) {
 		d.setStrength(live.strength)
 	}
 	return d.processS16(pcm, volume), true
+}
+
+// spatialSideStream is a DSP instance for an output with a device of its own
+// (background music, bgmusic.go), owned by that output's goroutine. It follows
+// the same live snapshot as the media path.
+type spatialSideStream struct {
+	dsp  *spatialDSP
+	rate int
+}
+
+// ready brings the instance in line with the live settings and returns it, or
+// nil while spatial audio stands aside (the samples then go out untouched).
+func (st *spatialSideStream) ready(rate int) *spatialDSP {
+	live := spatialLiveState.Load()
+	if live == nil || live.bitPerfect || live.mode == spatialDSPOff || !(live.strength > 0) || rate <= 0 {
+		st.dsp = nil
+		return nil
+	}
+	d := st.dsp
+	if d == nil || st.rate != rate || d.mode != live.mode || (live.mode == spatialDSPHeadphones && d.room != live.room) {
+		d = newSpatialDSP(rate, live.mode, live.strength, live.room)
+		st.dsp, st.rate = d, rate
+	} else if d.strength != live.strength {
+		d.setStrength(live.strength)
+	}
+	return d
+}
+
+// frameGain runs one stereo frame with gain g applied before the limiter, as
+// the S16 path applies the player volume.
+func (d *spatialDSP) frameGain(l, r, g float64) (float64, float64) {
+	ol, or := d.processRaw(l, r)
+	return spatialLimit(ol * g), spatialLimit(or * g)
 }
 
 // spatialAlignedBypass hands pcm on unprocessed while the DSP stands aside,

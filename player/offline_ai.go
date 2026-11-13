@@ -1,8 +1,10 @@
 package main
 
-// Optional text answers on the original Smart Pro. The model runs as a short
-// lived CPU process after speech recognition has finished, so its memory is
-// returned before a game starts. It never receives a device action to execute.
+// Optional text answers on the original Smart Pro. The model is kept loaded by
+// llama-server while the voice orb is in use (offline_ai_server.go) and let go
+// when it idles or a game starts; a package without the server, or a server
+// that will not start, answers with a short-lived llama-cli run instead. It
+// never receives a device action to execute.
 
 import (
 	"bytes"
@@ -14,16 +16,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	offlineAIDirName    = "juka-llm"
-	offlineAIModelName  = "SmolLM2-360M-Instruct-Q4_0.gguf"
-	offlineAIModelSize  = 229733280
-	offlineAIMinFreeMB  = 500
+	offlineAIDirName   = "juka-llm"
+	offlineAIModelName = "SmolLM2-360M-Instruct-Q4_0.gguf"
+	offlineAIModelSize = 229733280
+	// offlineAIStartMB is the free memory a cold start needs (the model, its
+	// buffers and a little room). voicePrewarm asks for more while the user
+	// still talks (offlineAIPrewarmMB).
+	offlineAIStartMB    = 360
 	offlineAIReplyRunes = 420
 	offlineAITimeout    = 60 * time.Second
 	offlineAIOutputMax  = 8 << 10
@@ -65,11 +71,19 @@ func offlineAIFilesIn(dir string) (bin, model string, ok bool) {
 }
 
 func offlineAIFiles() (bin, model string) {
-	if bin, model, ok := offlineAIFilesIn(offlineAIBundledDir()); ok {
+	// The bundled copy first, unless it predates llama-server and a
+	// downloaded one (an update) has it: otherwise the update would never
+	// be used and Settings would offer it forever.
+	bundledBin, bundledModel, bundled := offlineAIFilesIn(offlineAIBundledDir())
+	if bundled && offlineAIServerIn(filepath.Dir(bundledBin)) != "" {
+		return bundledBin, bundledModel
+	}
+	if bin, model, ok := offlineAIFilesIn(offlineAIDownloadedDir()); ok &&
+		(!bundled || offlineAIServerIn(filepath.Dir(bin)) != "") {
 		return bin, model
 	}
-	if bin, model, ok := offlineAIFilesIn(offlineAIDownloadedDir()); ok {
-		return bin, model
+	if bundled {
+		return bundledBin, bundledModel
 	}
 	return "", ""
 }
@@ -85,7 +99,7 @@ func offlineAIReady() bool {
 // The model can fit beside the UI on a 1 GB device when games are closed.
 // /proc may be unavailable on unusual firmware; the process then decides.
 func offlineAICheckMemory() error {
-	if freeMemoryMB() < offlineAIMinFreeMB {
+	if freeMemoryMB() < offlineAIStartMB {
 		return errOfflineAIMemory
 	}
 	return nil
@@ -103,9 +117,11 @@ func offlineAIPrompt(question string, unmatchedAction bool) string {
 		"<|im_start|>user\n" + question + "<|im_end|>\n<|im_start|>assistant\n"
 }
 
+// offlineAIArgs is the one-shot runner's command line (no server in the
+// package, or it would not start): all four cores, nothing else runs then.
 func offlineAIArgs(model, prompt string) []string {
-	return []string{"-m", model, "-p", prompt, "-n", "32", "-c", "256", "-b", "64", "-ub", "64",
-		"-t", "2", "-ngl", "0", "--temp", "0.2", "--no-conversation", "--single-turn",
+	return []string{"-m", model, "-p", prompt, "-n", strconv.Itoa(offlineAIPredict), "-c", "256", "-b", "64", "-ub", "64",
+		"-t", "4", "-ngl", "0", "--temp", "0.2", "--no-conversation", "--single-turn",
 		"--no-display-prompt", "--no-warmup", "--simple-io"}
 }
 
@@ -122,8 +138,8 @@ func offlineAIClean(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-// A short first sentence is enough for a voice answer. The Smart Pro can take
-// several seconds per token, so stop generation as soon as one is complete.
+// A short first sentence is enough for a voice answer: generation stops as
+// soon as one is complete, and Juka starts saying it.
 func offlineAIFirstSentence(text string) string {
 	for i, r := range text {
 		if r != '.' && r != '!' && r != '?' {
@@ -182,18 +198,39 @@ func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool,
 	if !offlineAIReady() {
 		return "", errOfflineAIMissing
 	}
+	bin, model := offlineAIFiles()
+	prompt := offlineAIPrompt(question, unmatchedAction)
+	runCtx, cancel := context.WithTimeout(ctx, offlineAITimeout)
+	defer cancel()
+	output := &offlineAIStreamWriter{onPartial: onPartial}
+	if server, _ := offlineAIServerFiles(); server != "" {
+		fallback, err := offlineAIServerAnswer(runCtx, server, model, prompt, output)
+		if !fallback {
+			if err != nil && output.sentence == "" && (ctx.Err() != nil || output.raw.Len() == 0) {
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				return "", err
+			}
+			return offlineAIResult(output)
+		}
+		logWarn("voice", "offline AI server could not answer (%v); using the one-shot runner", err)
+		output = &offlineAIStreamWriter{onPartial: onPartial}
+	}
 	if err := offlineAICheckMemory(); err != nil {
 		return "", err
 	}
-	bin, model := offlineAIFiles()
-	runCtx, cancel := context.WithTimeout(ctx, offlineAITimeout)
-	defer cancel()
+	output.stop = cancel
 	started := time.Now()
-	cmd := exec.CommandContext(runCtx, bin, offlineAIArgs(model, offlineAIPrompt(question, unmatchedAction))...)
-	output := &offlineAIStreamWriter{onPartial: onPartial, stop: cancel}
+	cmd := exec.CommandContext(runCtx, bin, offlineAIArgs(model, prompt)...)
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard // model diagnostics do not belong in the voice bubble
-	if err := cmd.Run(); err != nil {
+	feToolProcAttr(cmd)
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("offline AI stopped: %w", err)
+	}
+	_ = os.WriteFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "oom_score_adj"), []byte("1000"), 0o644)
+	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
@@ -205,6 +242,12 @@ func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool,
 		}
 	}
 	logDebug("voice", "offline AI answered in %s", time.Since(started).Round(time.Millisecond))
+	return offlineAIResult(output)
+}
+
+// offlineAIResult is the answer an output holds: its first sentence, else all
+// of it cleaned.
+func offlineAIResult(output *offlineAIStreamWriter) (string, error) {
 	if output.overflow {
 		return "", errors.New("offline AI answer was too long")
 	}

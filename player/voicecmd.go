@@ -315,6 +315,9 @@ func voiceStartListening(config *Config) {
 		msg := "Set up speech recognition in Settings → Voice & AI"
 		if fix == voiceFixOfflineSpeech {
 			msg = "Install offline speech in Settings → Voice & AI"
+			if relPackRunning(sttPackKey) {
+				msg, fix = "Offline speech is downloading — try again when it's ready", voiceFixNone
+			}
 		}
 		voiceSay(msg, tbxToneWarn, fix)
 		PlayErrorSound()
@@ -532,7 +535,10 @@ func voiceErrorText(err error) (string, voiceFix) {
 		return "Close a game to free memory for offline speech, then try again", voiceFixNone
 	}
 	if errors.Is(err, errSTTUnavailable) {
-		return "Offline speech is missing — install it in Settings → Voice & AI", voiceFixOfflineSpeech
+		if relPackRunning(sttPackKey) {
+			return "Offline speech is still downloading — try again when it's ready", voiceFixNone
+		}
+		return "Offline speech isn't installed yet — install it in Settings → Voice & AI", voiceFixOfflineSpeech
 	}
 	if errors.Is(err, errSTTGroqKey) {
 		return "Groq speech needs an API key — add it in Settings", voiceFixGroqKey
@@ -1324,7 +1330,7 @@ func voiceRender(renderer *sdl.Renderer, config *Config) {
 	}
 	// What to say, while there is room for it.
 	if voicePage.phase == voicePhaseReady || (voicePage.phase == voicePhaseAnswer && voicePage.tone != tbxToneWarn) {
-		tip := "Try “open YouTube”, “play Mario Kart”, “volume 50”, “brighter”, “take a screenshot”, “turn off Wi-Fi”, “next song” or “what time is it”."
+		tip := "Try “open YouTube”, “play Mario Kart”, “volume 50”, “turn on dark mode”, “take a screenshot”, “turn off Wi-Fi”, “next song” or “what time is it”."
 		lines := voicePage.wrap.get(fonts.small, tip, body.W-120)
 		ty := off + buttonsY + buttonH + 26
 		for _, l := range lines {

@@ -318,9 +318,19 @@ func launcherNameTokens(name string) []string {
 // "psp", and "gameboy" inside "Game Boy Color" — so NES games went to the SNES
 // core and PlayStation games to PPSSPP whenever the exact name was missing.
 func findGameLauncher(system string, entries []emuEntry) string {
+	if all := findGameLaunchers(system, entries); len(all) > 0 {
+		return all[0].Launch
+	}
+	return ""
+}
+
+// findGameLaunchers is every usable catalog entry that plays system, best
+// match first (findGameLauncher's order), one entry per launcher file: the
+// emulator picker (emupicker.go) offers them when there is more than one.
+func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
 	candidates := gameLauncherCandidates(system)
 	if len(candidates) == 0 {
-		return ""
+		return nil
 	}
 	usable := func(e emuEntry) bool {
 		return e.Status == emuAvailable && strings.TrimSpace(e.Launch) != ""
@@ -338,16 +348,43 @@ func findGameLauncher(system string, entries []emuEntry) string {
 		func(e emuEntry, want string) bool { return contains(launcherNameGroups(e.Name), want) },
 		func(e emuEntry, want string) bool { return contains(launcherNameTokens(e.Name), want) },
 	}
-	for _, match := range passes {
+	// A row whose whole name is another console's ("PlayStation 2", "Xbox
+	// 360") is that console's emulator, even though a word of it ("playstation",
+	// "xbox") names this one: the looser passes leave it out.
+	otherConsole := func(e emuEntry) bool {
+		name := normaliseLauncherName(e.Name)
+		if contains(candidates, name) {
+			return false
+		}
+		for other := range systemLauncherAliases {
+			if other != system && contains(gameLauncherCandidates(other), name) {
+				return true
+			}
+		}
+		return false
+	}
+	var out []emuEntry
+	seen := map[string]bool{}
+	for pass, match := range passes {
 		for _, want := range candidates {
 			for _, e := range entries {
-				if usable(e) && match(e, want) {
-					return e.Launch
+				if !usable(e) || !match(e, want) {
+					continue
 				}
+				if pass > 0 && otherConsole(e) {
+					continue
+				}
+				// "GBA (mGBA)" and "mGBA" may be one executable: offered once.
+				key := strings.ToLower(filepath.Clean(strings.TrimSpace(e.Launch)))
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, e)
 			}
 		}
 	}
-	return ""
+	return out
 }
 
 // gameLauncherOverridesPath is where a user can pin a launcher per system when
@@ -559,7 +596,19 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		logWarn("library", "%s does not forward options; ignoring %q", filepath.Base(launcher), extra)
 		extra = nil
 	}
-	name, args := gameLaunchCommandArgs(launcher, game.Path, extra)
+	// A firmware script gets the game the way MainUI passes it,
+	// Emus/<system>/../../Roms/...: CrossMix's RetroArch launchers read their
+	// folders from it (gamelaunch_firmware.go).
+	romArg := game.Path
+	if !IsWindows() {
+		romArg = firmwareROMArg(launcher, game.Path)
+	}
+	name, args := gameLaunchCommandArgs(launcher, romArg, extra)
+	if !IsWindows() {
+		// And with the interpreter its "#!" line names, as MainUI's queued
+		// command runs it: bash for a bash script (gamelaunch_firmware.go).
+		name, args = firmwareScriptCommand(launcher, name, args)
+	}
 	cmd, err := gameLaunchExec(launcher, name, args)
 	if err != nil {
 		return err
@@ -572,12 +621,22 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// Own process group: a stock launch.sh that starts RetroArch and returns
 	// must not hand the framebuffer back while the game is still drawing.
 	screenChildGroupConfigure(cmd)
+	// The script's own output, for the card when the game stops at once.
+	output := diag.captureLauncherOutput(cmd)
 	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)
 	if err := cmd.Start(); err != nil {
+		output.started(false)
 		restoreProfile()
 		return err
 	}
+	output.started(true)
 	noteGameChildStarted(cmd)
+	// A line in JukaHub's log for the start and one for the end, and the stops
+	// JukaHub sends told apart from the game ending by itself
+	// (gamelaunch_watch.go).
+	launchedAt := time.Now()
+	gameLaunchWatchStart(cmd)
+	gameLaunchLogStart(game, cmd, diag.memFreeMB())
 	// The time-lapse covers exactly this child's life: it starts when the game
 	// does and is assembled when the game exits. A machine with no readable
 	// framebuffer returns nil here and the launch is unchanged.
@@ -588,6 +647,10 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	go func() {
 		waitErr := cmd.Wait()
 		screenChildReaped(cmd)
+		output.stopped()
+		stopped := gameLaunchWatchEnd(cmd)
+		diag.noteEnd(time.Now(), stopped)
+		gameLaunchLogEnd(game, waitErr, time.Since(launchedAt), stopped)
 		restoreProfile()
 		recorder.Stop()
 		// A game that quit within seconds is diagnosed: what is missing, where

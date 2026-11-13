@@ -335,7 +335,7 @@ func bugrepDrawField(renderer *sdl.Renderer, config *Config, fonts tbxFonts, r s
 	}
 	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, glassControlRadius, glassA(10))
 	if focused {
-		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, glassControlRadius, 2, glassAccent())
+		strokeRoundedRectAt(renderer, r, homeFocusGlide.apply(r), glassControlRadius, 2, glassAccent())
 	} else {
 		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, glassControlRadius, 1, glassA(26))
 	}

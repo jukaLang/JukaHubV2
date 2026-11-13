@@ -103,3 +103,8 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 func ttsPiperStream(context.Context, ttsLocalVoice, func(context.Context) (string, bool), func([]int16, int) bool) (int, error) {
 	return 0, errors.New("streaming is not used on Windows")
 }
+
+// Windows' voice keeps no process loaded between lines (voiceboost.go).
+func ttsPiperPrewarm() {}
+
+func ttsPiperWarmStop() {}

@@ -15,7 +15,9 @@ package main
 //
 // Each engine renders the text into a temporary WAV that is read and deleted;
 // Piper renders one WAV per chunk from a single process (ttsPiperStream), so
-// a long answer starts playing after its first sentence.
+// a long answer starts playing after its first sentence; that process stays
+// loaded between lines for a while (ttsPiperWarm), so the next line does not
+// load the voice again.
 // The text goes on the engine's standard input where it reads one (espeak,
 // piper) and as the last argument after the option that names it otherwise,
 // never through a shell.
@@ -30,7 +32,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -198,6 +202,13 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 			return 0, errors.New("nothing to say")
 		}
 		first = clean(c)
+	}
+	// A Piper already loaded (voicePrewarm, or the line before) speaks the
+	// first sentence without loading the voice again.
+	if p := ttsPiperWarmTake(v); p != nil {
+		n, healthy, err := ttsPiperStreamWarm(ctx, p, first, next, clean, emit)
+		ttsPiperWarmGive(p, healthy)
+		return n, err
 	}
 	dir, err := os.MkdirTemp("", "jukahub-voice-")
 	if err != nil {
@@ -377,4 +388,349 @@ func (w *ttsCappedWriter) Write(p []byte) (int, error) {
 		w.b.Write(p[:room])
 	}
 	return len(p), nil
+}
+
+// ── A Piper kept loaded ──────────────────────────────────────────────────
+//
+// Loading the voice took a second or more of every line on the Smart Pro.
+// One Piper process now stays loaded between lines: voicePrewarm starts it
+// while the user talks, ttsPiperStream borrows it (ttsPiperWarmTake) and
+// gives it back. Piper reads one line per utterance and prints one WAV path
+// per line, so a borrower that leaves with lines still owed (a stopped line)
+// ends the process rather than leave stale sound for the next one. It lets go
+// after ttsPiperWarmIdle unused (ttsPiperWarmInGame while a game is open),
+// when free memory runs low, when a game starts and with JukaHub.
+
+const (
+	ttsPiperWarmIdle   = 45 * time.Second
+	ttsPiperWarmInGame = 10 * time.Second
+	ttsPiperLowWaterMB = 60
+)
+
+// ttsPiperProc is one loaded Piper.
+type ttsPiperProc struct {
+	key    string
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	out    chan string   // the paths Piper prints; closed when it exits
+	exited chan struct{} // closed once it is gone and its folder removed
+	dir    string
+	stderr *strings.Builder
+}
+
+// why is the start of Piper's messages once it has exited (they are written
+// until then).
+func (p *ttsPiperProc) why() string {
+	select {
+	case <-p.exited:
+		return firstLine(strings.TrimSpace(p.stderr.String()))
+	case <-time.After(2 * time.Second):
+		return "no message"
+	}
+}
+
+// ttsPiperWarm is the loaded Piper. Any goroutine, under mu.
+var ttsPiperWarm struct {
+	mu       sync.Mutex
+	p        *ttsPiperProc
+	busy     bool
+	lastUse  time.Time
+	watching bool
+}
+
+func ttsPiperKey(v ttsLocalVoice) string { return v.path + "\x00" + v.model }
+
+// ttsPiperPrewarm loads the device's Piper voice, if that is its voice. Any
+// goroutine.
+func ttsPiperPrewarm() {
+	v, ok := ttsLocal()
+	if !ok || v.kind != "piper" || v.model == "" {
+		return
+	}
+	ttsPiperWarm.mu.Lock()
+	defer ttsPiperWarm.mu.Unlock()
+	if p := ttsPiperWarm.p; p != nil && p.key == ttsPiperKey(v) {
+		ttsPiperWarm.lastUse = time.Now()
+		return
+	}
+	if ttsPiperWarm.busy {
+		return
+	}
+	ttsPiperWarmStartLocked(v)
+}
+
+// ttsPiperWarmStartLocked starts a Piper for v in place of any other. mu held;
+// nil when it would not start.
+func ttsPiperWarmStartLocked(v ttsLocalVoice) *ttsPiperProc {
+	if old := ttsPiperWarm.p; old != nil {
+		ttsPiperWarm.p = nil
+		_ = old.cmd.Process.Kill()
+	}
+	dir, err := os.MkdirTemp("", "jukahub-voice-warm-")
+	if err != nil {
+		return nil
+	}
+	cmd := exec.Command(v.path, "--model", v.model, "--output_dir", dir)
+	cmd.Env = ttsLocalEnv(v)
+	feToolProcAttr(cmd) // it dies with JukaHub
+	p := &ttsPiperProc{key: ttsPiperKey(v), cmd: cmd, out: make(chan string, 64), exited: make(chan struct{}), dir: dir, stderr: &strings.Builder{}}
+	cmd.Stderr = &ttsCappedWriter{b: p.stderr, max: 4 << 10}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil
+	}
+	if err := cmd.Start(); err != nil {
+		_ = os.RemoveAll(dir)
+		logWarn("tts", "Piper did not start: %v", err)
+		return nil
+	}
+	p.stdin = stdin
+	_ = os.WriteFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "oom_score_adj"), []byte("800"), 0o644)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 4096), 64<<10)
+		for sc.Scan() {
+			if line := strings.TrimSpace(sc.Text()); line != "" {
+				p.out <- line
+			}
+		}
+		if sc.Err() != nil {
+			_ = cmd.Process.Kill()
+			_, _ = io.Copy(io.Discard, stdout)
+		}
+		close(p.out)
+		_ = cmd.Wait()
+		_ = os.RemoveAll(dir)
+		ttsPiperWarm.mu.Lock()
+		if ttsPiperWarm.p == p {
+			ttsPiperWarm.p = nil
+			ttsPiperWarm.busy = false
+		}
+		ttsPiperWarm.mu.Unlock()
+		close(p.exited)
+	}()
+	ttsPiperWarm.p = p
+	ttsPiperWarm.lastUse = time.Now()
+	if !ttsPiperWarm.watching {
+		ttsPiperWarm.watching = true
+		go ttsPiperWarmWatch()
+	}
+	logDebug("tts", "Piper loading for the next lines")
+	return p
+}
+
+// ttsPiperWarmTake lends the loaded Piper for one line, starting it when
+// there is room. nil: another line has it, or it cannot start; the caller
+// starts its own.
+func ttsPiperWarmTake(v ttsLocalVoice) *ttsPiperProc {
+	ttsPiperWarm.mu.Lock()
+	defer ttsPiperWarm.mu.Unlock()
+	if ttsPiperWarm.busy {
+		return nil
+	}
+	p := ttsPiperWarm.p
+	if p != nil {
+		select {
+		case <-p.exited:
+			p = nil
+		default:
+		}
+	}
+	if p == nil || p.key != ttsPiperKey(v) {
+		if freeMemoryMB() < voicePiperWarmMB+ttsPiperLowWaterMB {
+			return nil
+		}
+		if p = ttsPiperWarmStartLocked(v); p == nil {
+			return nil
+		}
+	}
+	// Nothing should be waiting; a leftover path is dropped with its file.
+	for drained := false; !drained; {
+		select {
+		case path, ok := <-p.out:
+			if !ok {
+				return nil
+			}
+			if wav := filepath.Clean(path); filepath.Dir(wav) == filepath.Clean(p.dir) {
+				_ = os.Remove(wav)
+			}
+		default:
+			drained = true
+		}
+	}
+	ttsPiperWarm.busy = true
+	return p
+}
+
+// ttsPiperWarmGive takes the Piper back after a line. One that still owes
+// lines (healthy false) is ended.
+func ttsPiperWarmGive(p *ttsPiperProc, healthy bool) {
+	ttsPiperWarm.mu.Lock()
+	if ttsPiperWarm.p == p {
+		ttsPiperWarm.busy = false
+		ttsPiperWarm.lastUse = time.Now()
+		if !healthy {
+			ttsPiperWarm.p = nil
+		}
+	}
+	ttsPiperWarm.mu.Unlock()
+	if !healthy {
+		_ = p.cmd.Process.Kill()
+	}
+}
+
+// ttsPiperWarmStop ends the loaded Piper. Any goroutine.
+func ttsPiperWarmStop() {
+	ttsPiperWarm.mu.Lock()
+	p := ttsPiperWarm.p
+	ttsPiperWarm.p = nil
+	ttsPiperWarm.busy = false
+	ttsPiperWarm.mu.Unlock()
+	if p != nil {
+		_ = p.cmd.Process.Kill()
+	}
+}
+
+// ttsPiperWarmWatch ends an idle Piper, and one whose memory is needed. One
+// goroutine while a Piper is loaded.
+func ttsPiperWarmWatch() {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for range tick.C {
+		ttsPiperWarm.mu.Lock()
+		p := ttsPiperWarm.p
+		if p == nil {
+			ttsPiperWarm.watching = false
+			ttsPiperWarm.mu.Unlock()
+			return
+		}
+		busy, idle := ttsPiperWarm.busy, time.Since(ttsPiperWarm.lastUse)
+		ttsPiperWarm.mu.Unlock()
+		limit := ttsPiperWarmIdle
+		if runningGameChildren.Load() > 0 {
+			limit = ttsPiperWarmInGame
+		}
+		if !busy && (idle > limit || freeMemoryMB() < ttsPiperLowWaterMB) {
+			ttsPiperWarm.mu.Lock()
+			if ttsPiperWarm.p == p && !ttsPiperWarm.busy {
+				ttsPiperWarm.p = nil
+			} else {
+				p = nil
+			}
+			ttsPiperWarm.mu.Unlock()
+			if p != nil {
+				_ = p.cmd.Process.Kill()
+				logDebug("tts", "Piper unloaded")
+			}
+		}
+	}
+}
+
+// ttsPiperStreamWarm speaks a line's chunks with the loaded Piper p: first,
+// then the rest as next gives them. healthy reports whether p owes no lines
+// afterwards (it may be lent again).
+func ttsPiperStreamWarm(ctx context.Context, p *ttsPiperProc, first string, next func(context.Context) (string, bool), clean func(string) string, emit func([]int16, int) bool) (emitted int, healthy bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ttsPiperTimeout+time.Duration(ttsSpokenMax/6)*time.Second)
+	defer cancel()
+	var sent atomic.Int32
+	var writeFailed atomic.Bool
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		line := first
+		for {
+			voiceBoostHold(voiceBoostSpeak)
+			sent.Add(1)
+			if _, err := io.WriteString(p.stdin, line+"\n"); err != nil {
+				writeFailed.Store(true)
+				return
+			}
+			line = ""
+			for line == "" {
+				c, ok := next(ctx)
+				if !ok {
+					return
+				}
+				line = clean(c)
+			}
+		}
+	}()
+	// finish waits for the writer, so nothing reaches Piper after the line
+	// is given back, and reports whether every line sent came back.
+	received := 0
+	finish := func() bool {
+		cancel()
+		<-writerDone
+		return !writeFailed.Load() && int(sent.Load()) == received
+	}
+	stall := time.NewTimer(ttsPiperTimeout)
+	defer stall.Stop()
+	cleanDir := filepath.Clean(p.dir)
+	writing := true
+	for {
+		if !writing && int(sent.Load()) == received {
+			return emitted, !writeFailed.Load(), nil
+		}
+		var wd <-chan struct{}
+		if writing {
+			wd = writerDone
+		}
+		select {
+		case <-wd:
+			writing = false
+			if writeFailed.Load() {
+				_ = p.cmd.Process.Kill()
+				return emitted, false, fmt.Errorf("piper stopped reading (%s)", p.why())
+			}
+		case path, ok := <-p.out:
+			if !ok {
+				finish()
+				return emitted, false, fmt.Errorf("piper exited (%s)", p.why())
+			}
+			wav := filepath.Clean(path)
+			if !filepath.IsAbs(wav) {
+				wav = filepath.Join(cleanDir, wav)
+			}
+			// Only files Piper made in its folder are read.
+			if filepath.Dir(wav) != cleanDir || !strings.EqualFold(filepath.Ext(wav), ".wav") {
+				continue
+			}
+			received++
+			if !stall.Stop() {
+				select {
+				case <-stall.C:
+				default:
+				}
+			}
+			stall.Reset(ttsPiperTimeout)
+			data, err := ttsReadFinishedWAV(ctx, wav)
+			_ = os.Remove(wav)
+			if err != nil {
+				continue
+			}
+			samples, rate, err := ttsDecodeWAV(data, false)
+			if err != nil {
+				continue
+			}
+			emitted++
+			if !emit(samples, rate) {
+				return emitted, finish(), nil
+			}
+		case <-stall.C:
+			if int(sent.Load()) > received {
+				finish()
+				return emitted, false, context.DeadlineExceeded
+			}
+			stall.Reset(ttsPiperTimeout)
+		case <-ctx.Done():
+			err := ctx.Err()
+			return emitted, finish(), err
+		}
+	}
 }

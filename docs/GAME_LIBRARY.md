@@ -191,15 +191,26 @@ write; manuals and screenshots are not fetched.
 
 ## Launching
 
-Pressing **A** on a game resolves the emulator in this order:
+Pressing **A** on a game (in the library, on Continue, or on a ROM in Files)
+resolves the emulator in this order:
 
-1. `data/game-launchers.json`, if it names a launcher for that console and the
+1. the game's own **Emulator** (Game options, or **Y · Always use** in the
+   picker below), if its file still exists;
+2. `data/game-launchers.json`, if it names a launcher for that console and the
    file still exists;
-2. the Emulators catalog: the first available row whose name matches the
-   console's aliases exactly (`GBA`, `mGBA` for Game Boy Advance), then the
-   first row whose name contains one (`RetroArch GBA`);
-3. nothing — the panel toasts which console has no emulator instead of starting
+3. the Emulators catalog: every available row whose name matches the console's
+   aliases exactly (`GBA`, `mGBA` for Game Boy Advance), then whose bracketed
+   part or a whole word does (`RetroArch GBA`). One match starts at once; two
+   or more open **Which emulator?**, listing each with its kind and folder:
+   **A** plays with the highlighted one (it is highlighted again next time),
+   **Y** always uses it for that game, **B** cancels. Game options →
+   **Emulator** sets a game back to *Ask each time*;
+4. nothing — the panel toasts which console has no emulator instead of starting
    something random.
+
+Starting from a save state on the game page does not ask: it uses the emulator
+the states were listed for (the game's pinned one, else the one picked last,
+else the console's first), and says so when that is not RetroArch.
 
 On the handheld, an `Emus/<system>/` folder's launcher is the script its
 `config.json` names in `"launch"`, which is what the firmware's own menu
@@ -212,10 +223,37 @@ folder. When the launcher is a declared script rather than `launch.sh` or
 starts.
 
 The launcher is started detached with the ROM path as its first argument,
-which is what stock TrimUI and CrossMix launcher scripts expect:
+in the form MainUI passes it — the emulator folder, then `../../Roms/...` —
+because CrossMix's RetroArch launchers (`common_launcher.sh`) work out their
+folders from that argument:
 
 ```sh
-sh /mnt/SDCARD/Emus/GBA/launch.sh "/mnt/SDCARD/Roms/GBA/Pokemon Emerald (USA).gba"
+sh /mnt/SDCARD/Emus/GBA/launch.sh "/mnt/SDCARD/Emus/GBA/../../Roms/GBA/Pokemon Emerald (USA).gba"
+```
+
+It names the same file, so the stock scripts and PPSSPP read it as before. A
+game on another card, or a launcher outside an `Emus/<system>` folder, gets the
+plain path. The script runs under the interpreter its `#!` line names, as
+MainUI runs it (a `#!/bin/bash` script under bash, a launcher that is a program
+as itself); a plain `sh` script, one with no `#!` line and an interpreter the
+device lacks keep `sh`. The script's output goes to `gamediag/launcher.log` in
+JukaHub's data folder (emptied each launch); when a game closes within seconds,
+the launch card names what the script could not find and shows its last lines.
+
+The launch card opens when a game closes within eight seconds with an error
+status, a finding or a log line that says loading failed, or after a signal
+JukaHub did not send ("the system stopped it (signal 9, SIGKILL)" — on a
+handheld, memory running out — with the memory that was free at the start);
+on the handheld it also opens for any library game over within three seconds,
+whatever its status. Stops JukaHub sends itself — the in-game menu's Quit,
+quitting JukaHub, the low-battery save — never open it. JukaHub's log
+(`errors.txt` beside it on the handheld) gets a line for every library launch,
+with the exact command, its folder, the pid and the memory free, and one when
+it ends, with how long it ran and its exit status or signal:
+
+```text
+library: starting "Manhunt 2" (PlayStation Portable): sh /mnt/SDCARD/Emus/PSP/launch.sh "/mnt/SDCARD/Emus/PSP/../../Roms/PSP/Manhunt 2 (USA).iso" in /mnt/SDCARD/Emus/PSP, pid 1812, 412 MB free
+library: "Manhunt 2" ended after 1.4s: exit status 0
 ```
 
 Windows `.bat`/`.cmd` launchers go through `cmd /c`, and an `.exe` (PPSSPP,

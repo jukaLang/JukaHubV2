@@ -1,5 +1,9 @@
 # Minecraft: Bedrock Edition on AndroidRT
 
+> Looking for every way to play Minecraft (Java Edition, ClassiCube, Luanti,
+> a PC's launchers)? See [MINECRAFT.md](MINECRAFT.md) — Start → Games →
+> Minecraft. This page is the Bedrock-on-AndroidRT detail.
+
 **Status: experimental, never run on hardware.** The pieces below are built and
 pass the host smoke suite with a fake JNI-heavy game; nobody has started a real
 Minecraft APK on a TrimUI handheld yet. This page says what exists, what the game

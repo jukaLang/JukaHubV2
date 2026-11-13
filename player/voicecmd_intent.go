@@ -58,6 +58,8 @@ const (
 	voiceIntentQuit
 	voiceIntentHelp
 	voiceIntentCancel
+	// voiceIntentSetting reads or changes a Settings row (voicesettings.go).
+	voiceIntentSetting
 )
 
 // voiceStepDefault is how far "louder" or "brighter" moves a level, in percent.
@@ -83,6 +85,13 @@ type voiceIntent struct {
 	On bool
 	// Heard is the folded command the intent was read from.
 	Heard string
+	// Setting, SetOp and SetTo are a settings sentence: the setting as said,
+	// what to do with it and the value said for "set X to Y". Target and Verb
+	// then hold what "open" would have made of the sentence, for when it names
+	// no setting.
+	Setting string
+	SetOp   voiceSettingOp
+	SetTo   string
 }
 
 // ── Folding ───────────────────────────────────────────────────────────────
@@ -446,12 +455,20 @@ func voiceParse(raw string) voiceIntent {
 	case voicePrevPhrases[s]:
 		return set(voiceIntentMusicPrev)
 	}
+	// A sentence about a setting (voicesettings.go): "turn off hold menu
+	// screenshot" is that switch, not a capture.
+	ask, isSetting := voiceSettingParse(s)
 	if voiceHasWord(words, "screenshot") || strings.Contains(s, "capture the screen") ||
 		strings.Contains(s, "screen capture") || strings.Contains(s, "print screen") {
 		// "open screenshots" is the folder, not a new capture.
-		if !(voiceHasWord(words, "screenshots") && voiceStartsWithVerb(s)) {
+		if !(voiceHasWord(words, "screenshots") && voiceStartsWithVerb(s)) && !(isSetting && ask.op != voiceSetOpValue) {
 			return set(voiceIntentScreenshot)
 		}
+	}
+	// A question about a setting ("is Wi-Fi on?") comes before the radios,
+	// which would read its "on" as a command.
+	if isSetting && ask.op.reads() {
+		return voiceSettingIntentFor(in, s, ask)
 	}
 	if k, ok := voiceRadioIntent(words, s); ok {
 		in.Kind = k.kind
@@ -470,6 +487,14 @@ func voiceParse(raw string) voiceIntent {
 		in.Kind, in.Query = voiceIntentSearch, q
 		return in
 	}
+	if isSetting {
+		if kind, step, ok := voiceSettingAsCommand(ask); ok {
+			// "turn the music down" is the volume, "music off" the player.
+			in.Kind, in.Value = kind, step
+			return in
+		}
+		return voiceSettingIntentFor(in, s, ask)
+	}
 	verb, rest := voiceSplitVerb(s)
 	target := voiceTrimTarget(rest)
 	if target == "" {
@@ -482,6 +507,16 @@ func voiceParse(raw string) voiceIntent {
 		return set(voiceIntentHome)
 	}
 	in.Kind, in.Verb, in.Target = voiceIntentOpen, verb, target
+	return in
+}
+
+// voiceSettingIntentFor is a settings intent, with what "open" would have made
+// of the same sentence kept for when it names no setting.
+func voiceSettingIntentFor(in voiceIntent, s string, ask voiceSettingAsk) voiceIntent {
+	in.Kind = voiceIntentSetting
+	in.Setting, in.SetOp, in.SetTo = ask.name, ask.op, ask.value
+	in.Verb, in.Target = voiceSplitVerb(s)
+	in.Target = voiceTrimTarget(in.Target)
 	return in
 }
 
@@ -593,8 +628,11 @@ func voiceLevelIntent(words []string, s string) (voiceLevel, bool) {
 	if !volume && !bright {
 		return voiceLevel{}, false
 	}
-	// A volume phrase that names a screen ("open volume settings") is a name.
-	if voiceHasWord(words, "settings") || voiceHasWord(words, "setting") {
+	// A volume phrase that names a screen ("open volume settings") is a name;
+	// one about the menus' music or clicks is that setting (voicesettings.go).
+	if voiceHasWord(words, "settings") || voiceHasWord(words, "setting") || voiceHasWord(words, "background") ||
+		voiceHasWord(words, "bgm") || voiceHasWord(words, "interface") || voiceHasWord(words, "click") ||
+		voiceHasWord(words, "clicks") || voiceHasWord(words, "vibration") || voiceHasWord(words, "lights") {
 		return voiceLevel{}, false
 	}
 	setKind, stepKind := voiceIntentVolumeSet, voiceIntentVolumeStep

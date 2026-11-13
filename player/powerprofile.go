@@ -460,6 +460,10 @@ func beginLaunchPowerProfile(config *Config, target string) func() {
 // beginGamePowerProfileWith applies an already-loaded profile. Keeping the
 // switch separate lets a launch override one field without re-reading config.
 func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
+	// The voice assistant's short boost gives the CPU back first, so what
+	// this launch records and later restores is the hub's own setting
+	// (voiceboost.go).
+	voiceBoostEnd()
 	if !cfg.Enabled {
 		return func() {}
 	}
@@ -474,6 +478,9 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	launchPowerProfile.depth++
 	first := launchPowerProfile.depth == 1
 	launchPowerProfile.mu.Unlock()
+	// Again now that the depth shows: a hold that slipped in since the first
+	// call (Juka saying "Opening …") is undone, and later ones refuse.
+	voiceBoostEnd()
 
 	// The restore always drops the depth it raised, whether or not the
 	// governor could be switched: otherwise one unsupported launch would leave

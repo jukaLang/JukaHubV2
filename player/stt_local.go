@@ -1,7 +1,8 @@
 package main
 
-// The TrimUI package carries fast English recognition with Vosk and a
-// multilingual Whisper fallback. WAV input and transcript output travel
+// Offline speech on the Smart Pro: fast English recognition with Vosk and a
+// multilingual Whisper fallback, downloaded once into <data>/juka-whisper
+// (stt_install.go; older packages bundled it beside the binary, still used). WAV input and transcript output travel
 // through process pipes, so recorded audio never needs a temporary file.
 
 import (
@@ -160,6 +161,15 @@ func sttPreviewChoice(mode, key string, online, local bool) (cloud, localFirst, 
 // uses the local model when the key, connection or request fails. A canceled
 // request never starts another recognizer.
 func sttWithFallback(ctx context.Context, key string, wav []byte, lang, prompt string, cloud func(context.Context, string, []byte) (string, error)) (string, error) {
+	return sttWithFallbackLocal(ctx, key, wav, cloud, func(ctx context.Context, wav []byte) (string, error) {
+		return sttLocalTranscribe(ctx, wav, lang, prompt)
+	})
+}
+
+// sttWithFallbackLocal is sttWithFallback with its own offline step (the
+// orb's streamed words, stt_stream.go).
+func sttWithFallbackLocal(ctx context.Context, key string, wav []byte, cloud func(context.Context, string, []byte) (string, error),
+	localTranscribe func(context.Context, []byte) (string, error)) (string, error) {
 	mode := sttModeOf(appConfig)
 	local := sttLocalReady()
 	if mode != sttModeOffline && (!local || mode == sttModeGroq) && netReconnecting() && strings.TrimSpace(key) != "" {
@@ -173,10 +183,7 @@ func sttWithFallback(ctx context.Context, key string, wav []byte, lang, prompt s
 			return upstream(cloudCtx, key, wav)
 		}
 	}
-	return sttTranscribeChoice(ctx, mode, key, wav, IsOnline(), local, cloud,
-		func(ctx context.Context, wav []byte) (string, error) {
-			return sttLocalTranscribe(ctx, wav, lang, prompt)
-		})
+	return sttTranscribeChoice(ctx, mode, key, wav, IsOnline(), local, cloud, localTranscribe)
 }
 
 func sttTranscribeChoice(ctx context.Context, mode, key string, wav []byte, online, local bool,
@@ -229,6 +236,33 @@ func sttVoiceTypingTranscribe(ctx context.Context, key string, wav []byte, lang 
 func sttCommandTranscribe(ctx context.Context, key string, wav []byte, prompt string) (string, error) {
 	return sttWithFallback(ctx, key, wav, "en", prompt, func(ctx context.Context, key string, wav []byte) (string, error) {
 		return voiceTranscribe(ctx, key, wav, prompt)
+	})
+}
+
+// sttCommandTranscribeStream is sttCommandTranscribe for a clip the warm
+// recognizer decoded while it was recorded (stt_stream.go): the offline step
+// takes the stream's words, and only a stream that failed or fell behind runs
+// the one-shot recognizer on the whole clip. st may be nil; Finish has run.
+func sttCommandTranscribeStream(ctx context.Context, key string, wav []byte, prompt string, st *sttStream) (string, error) {
+	if st == nil {
+		return sttCommandTranscribe(ctx, key, wav, prompt)
+	}
+	// Groq may answer first: the stream then stops decoding.
+	defer st.Abandon()
+	return sttWithFallbackLocal(ctx, key, wav, func(ctx context.Context, key string, wav []byte) (string, error) {
+		return voiceTranscribe(ctx, key, wav, prompt)
+	}, func(ctx context.Context, wav []byte) (string, error) {
+		started := time.Now()
+		text, err := st.Result(ctx)
+		if err == nil {
+			logDebug("voice", "streamed offline recognition finished %s after the clip", time.Since(started).Round(time.Millisecond))
+			return text, nil
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		logInfo("voice", "streamed offline recognition failed (%v); recognizing the whole clip", err)
+		return sttLocalTranscribe(ctx, wav, "en", prompt)
 	})
 }
 

@@ -95,9 +95,16 @@ type gameDiagLaunch struct {
 	game     libraryGame
 	launcher string
 	logPath  string // RetroArch's log for this launch, "" when not set up
+	outPath  string // the launch script's stdout/stderr (gamelaunch_firmware.go)
 	port     string // a PortMaster script, instead of a library game
 	portName string
 	started  time.Time
+	// ended, stopped and memMB are a library game's (gamelaunch_watch.go):
+	// when its process group was gone, whether JukaHub had asked it to stop,
+	// and the memory free (MB) when it started.
+	ended   time.Time
+	stopped bool
+	memMB   int
 }
 
 // gameDiagLogDir is JukaHub's own folder for emulator logs.
@@ -129,7 +136,7 @@ func gameDiagRetroArchLogValues(dir string) []raScopeValue {
 // points RetroArch at it for this launch. It never blocks a launch. The
 // returned watch goes to the reaper goroutine (exited).
 func prepareGameDiag(game libraryGame, launcher string) *gameDiagLaunch {
-	d := &gameDiagLaunch{game: game, launcher: launcher, started: time.Now()}
+	d := &gameDiagLaunch{game: game, launcher: launcher, started: time.Now(), memMB: gameLaunchMemFreeMB()}
 	if !retroArchLauncher(launcher) {
 		return d
 	}
@@ -202,16 +209,34 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		return
 	}
 	ran := time.Since(d.started)
+	if !d.ended.IsZero() {
+		// When the game's process group was gone, by the reaper's clock: the
+		// profile restore and the time-lapse that run before this are not the
+		// game's time.
+		ran = d.ended.Sub(d.started)
+	}
 	if ran > gameDiagQuickExit+screenSettleDelay {
 		return
 	}
 	code := gameDiagExitCode(waitErr)
+	// For a library game JukaHub did not ask to stop (gamelaunch_watch.go), a
+	// signal JukaHub did not send is not the player leaving, and a game over
+	// within gameDiagBriefRun never got going, whatever its status: a Brick
+	// Pro on CrossMix showed "Playing …" and nothing else because its launch
+	// scripts ended at once with status 0. A port is judged as before, and so
+	// is a Windows launcher, which may hand its game on and return at once.
+	_, sig := gameLaunchExitStatus(waitErr)
+	ownGame := d.port == "" && !d.stopped
+	killed := ownGame && sig > 0
+	brief := ownGame && !IsWindows() && ran <= gameDiagBriefRun+screenSettleDelay
 	var report gameDiagReport
 	var failed bool
 	if d.port != "" {
 		report, failed = diagnosePort(d.portName, d.port, d.started)
 	} else {
 		report, failed = diagnoseLibraryGame(d.game, d.launcher, d.logPath)
+		// What the launch script itself said: "ra64.trimui: not found".
+		d.addLauncherOutput(&report)
 	}
 	// Only a finding that stops a game counts on its own: a "may be needed"
 	// (Flycast's built-in BIOS, an unusual file type) is true of games that
@@ -229,7 +254,7 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		// after a normal quit, so a port's exit code proves nothing.
 		code = 0
 	}
-	if !strong && code == 0 && !failed {
+	if !strong && code == 0 && !failed && !killed && !brief {
 		// A clean exit with a quiet log: the player quit.
 		return
 	}
@@ -238,13 +263,22 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		secs = 1
 	}
 	when := "It closed after " + pluralizeCount(secs, "second", "seconds")
-	if code > 0 {
+	switch {
+	case killed:
+		when += ": " + gameDiagSignalNote(sig)
+	case code > 0:
 		when += " (exit code " + strconv.Itoa(code) + ")"
 	}
+	// The memory free at the start, when it may be the answer: the system
+	// killed the game, or there was little to begin with.
+	memory := ""
+	if d.memMB > 0 && ((killed && sig == 9) || d.memMB < gameDiagLowMemMB) {
+		memory = " Free memory when it started: " + strconv.Itoa(d.memMB) + " MB."
+	}
 	if len(report.Issues) > 0 {
-		report.Summary = when + ". This is what stops it:"
+		report.Summary = when + "." + memory + " This is what stops it:"
 	} else {
-		report.Summary = when + ". JukaHub found no missing BIOS, core or game file."
+		report.Summary = when + ". JukaHub found no missing BIOS, core or game file." + memory
 		if len(report.LogLines) > 0 {
 			report.Summary += " The emulator's own last words are below."
 		} else {
@@ -297,7 +331,7 @@ func gameDiagRunManual(game libraryGame) {
 		ShowToast("Android games start through their game profile; nothing to check here", ToastKindInfo)
 		return
 	}
-	launcher := resolveGameLauncher(game.System)
+	launcher := resolveGameLauncherFor(game)
 	ShowToast("Checking "+game.Label()+"…", ToastKindInfo)
 	go func() {
 		gameDiagState.mu.Lock()

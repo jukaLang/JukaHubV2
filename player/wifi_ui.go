@@ -427,6 +427,8 @@ func wifiEnableRadioAsync() {
 		if err := setWifiEnabled(true); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
+		// Home's Wi-Fi tile reads the radio again (home_quicktiles.go).
+		saverWifiInvalidate()
 		// Give the interface a moment to come up before scanning.
 		time.Sleep(600 * time.Millisecond)
 		return wifiBackendUpdate("Wi-Fi on")
@@ -444,6 +446,7 @@ func wifiDisableRadioAsync() {
 		if err := setWifiEnabled(false); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
+		saverWifiInvalidate()
 		snap := wifiSnapshot{RadioOn: false, RadioOK: true}
 		return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanned: true, msg: "Wi-Fi off"}
 	})

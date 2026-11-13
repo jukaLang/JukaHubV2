@@ -58,9 +58,9 @@ func vkVoiceSettingsRows() []setRow {
 			},
 			Detail: func(*Config) string {
 				if sttLocalReady() {
-					return "Included in the latest package · works without a key or Wi-Fi"
+					return "On the card · works without a key or Wi-Fi"
 				}
-				return "One-time download · about 78 MB · then works without Wi-Fi"
+				return "Downloads by itself after ffmpeg · about 120 MB once · then works without Wi-Fi"
 			},
 			Open: sttInstallOffline,
 		},

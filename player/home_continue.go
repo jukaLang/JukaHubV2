@@ -481,11 +481,15 @@ func homeArtPreviewJob(g recentGame) homePreviewJob {
 type homePreviewKey struct {
 	key  string
 	w, h int32
+	// r is the corner radius baked into the PNG: a console theme changes it
+	// (themeconsole.go), and a preview cut for the old corners would show
+	// them inside the new card. Read on the render thread, never the worker.
+	r int32
 }
 
 // diskKey is the shared cache key for the preview's PNG.
 func (k homePreviewKey) diskKey() string {
-	return fmt.Sprintf("%s%s|%dx%d", homePreviewDiskPrefix, k.key, k.w, k.h)
+	return fmt.Sprintf("%s%s|%dx%d|r%d", homePreviewDiskPrefix, k.key, k.w, k.h, k.r)
 }
 
 // homePreviewState holds the one preview the card shows: the PNG the worker
@@ -519,7 +523,7 @@ func homeRequestPreview(job homePreviewJob, w, h int32) {
 	if job.Key == "" || w <= 0 || h <= 0 {
 		return
 	}
-	key := homePreviewKey{key: job.Key, w: w, h: h}
+	key := homePreviewKey{key: job.Key, w: w, h: h, r: homeTileRadius}
 	homePreview.mu.Lock()
 	if homePreview.key == key || homePreview.pending[key] {
 		homePreview.mu.Unlock()
@@ -560,7 +564,7 @@ func homeBuildPreview(job homePreviewJob, key homePreviewKey, w, h int) {
 			}
 		}
 		if err == nil && src != nil {
-			data, err = homePreviewPNG(src, w, h, int(homeTileRadius))
+			data, err = homePreviewPNG(src, w, h, int(key.r))
 		}
 		if err != nil || len(data) == 0 {
 			homePreview.mu.Lock()
@@ -729,7 +733,7 @@ func homePreviewTexture(renderer *sdl.Renderer, job homePreviewJob, w, h int32) 
 	if renderer == nil || job.Key == "" {
 		return nil, 0, 0
 	}
-	key := homePreviewKey{key: job.Key, w: w, h: h}
+	key := homePreviewKey{key: job.Key, w: w, h: h, r: homeTileRadius}
 	if homePreview.owner != nil && homePreview.owner != renderer {
 		// Textures belong to the renderer that made them, and SDL frees them
 		// with it: destroying one now would touch freed memory, so the pointer

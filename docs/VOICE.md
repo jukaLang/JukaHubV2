@@ -122,8 +122,8 @@ game, a video or music silence the voice; the Interface sounds switch does
 not, and the system volume sets how loud it is. The voice model has been
 checked with Piper on a PC, but still needs its first Smart Pro playback test.
 
-Smart Pro packages carry a local recognizer for microphone commands and voice
-typing when Groq cannot transcribe. An optional on-device model can answer
+The Smart Pro downloads a local recognizer (once, after ffmpeg) for microphone
+commands and voice typing when Groq cannot transcribe. An optional on-device model can answer
 unmatched Menu requests without Groq after the **Offline answers** download;
 see [Offline AI](LOCAL_AI.md). Describing a picture still uses Groq. Piper is
 the separate offline voice that speaks the answer.
@@ -217,6 +217,18 @@ recognition writes for a breath or a near-silent clip ("you", "thank you",
 "bye"), answer "Didn't catch a command" instead of opening something.
 Commands are English for now.
 
+## Changing settings by voice
+
+Say what you want changed the way you would say it to a person: "turn on dark
+mode", "turn off background music", "make the text bigger", "set the theme to
+ocean", "set screen timeout to 5 minutes". Ask "is Wi-Fi on?" or "what is my
+brightness?" to hear a setting. Any switch or list in Settings works, by its
+name or a common one ("low power mode", "haptics", "Hey Juka"), offline too.
+Pages, text fields, keys and resets are never pressed for you; voice opens them
+instead. If a phrase isn't understood and you have a Groq key, Juka can still
+make the change, and JukaHub checks it against Settings first. In a game, "turn
+the volume down" or "make it brighter" works the same.
+
 ## Your own words
 
 **Settings → Voice & AI → Voice shortcuts** teaches the voice assistant words
@@ -295,6 +307,56 @@ only when you hold the chord. On a PC the orb (**F4**) and Chat know the game
 after you return to JukaHub; nothing is drawn over a game's own window. None
 of this has run on a handheld yet.
 
+## Asking about what's on screen
+
+Ask the orb about whatever you're looking at: "What's this?", "Read this to
+me", "What does it say?", "Which one should I pick?", "Explain this setting",
+"Translate that". When the orb starts listening it takes one picture of
+JukaHub's screen — without the orb on it — and, with a Groq key, sends it to
+Groq's vision model together with your question. The picture is kept in
+memory only and is gone once the answer is done; it is never saved. The
+Phone Companion's pairing code is blanked out of it, and no picture is taken
+while the pairing code is enlarged. Over a paused game the game assistant's
+own picture is used instead.
+
+Juka is also told which screen you're on and what is highlighted ("Settings,
+Display & theme; highlighted: Glass"). Offline answers can't look at
+pictures, so they only get that line.
+
+Settings → Voice & AI → **Let Juka see the screen**:
+
+- **Off** — no picture and no screen name.
+- **When you ask about it** (default) — the picture goes when the question
+  points at the screen: this, that, here, screen, highlighted, "looking at",
+  "which one", "what does it say", "where am I"…
+- **Every question** — the picture goes with every question to Groq.
+
+If the vision model can't answer, Juka answers the question as text instead.
+
+## Hey Juka
+
+On a Smart Pro with offline speech installed, **Settings → Voice & AI → Hey
+Juka** (off until you turn it on) lets you call Juka without a button: say
+"Hey Juka" on Home or any menu and the orb opens already listening. You can
+say it all in one breath — "Hey Juka, open YouTube" — the words after the name
+are kept. When you go straight on talking a short buzz replaces the start
+chime, which would land on your words. In a game, **Hey Juka in games** (on
+with it, needs **Game assistant**) opens the game assistant over the paused
+game, just like holding Select + R2.
+
+It listens on the handheld only: nothing is recorded, kept or sent. It stands
+aside while anything else uses the microphone (the orb, voice typing, the Voice
+command page, Chat's microphone), while Juka speaks, while a video or music
+plays, while the keyboard is up, and while the screen is off, dark or asleep.
+
+What it costs: the offline recognizer stays loaded while Hey Juka is on —
+roughly 100–150 MB of the Smart Pro's 1 GB (the log line "offline speech
+server ready" shows the real figure). In a quiet room it only measures the
+sound level, well under 1% of one core. Once something is heard it decodes
+with a tiny grammar ("hey" plus the name, everything else ignored) at low
+priority on one core; a loud game keeps it decoding, which is what **Hey Juka
+in games** turns off. It gives its memory back when free memory runs low.
+
 ## Pictures and videos
 
 In Chat's **Juka AI** tab, attach a picture, a video or a recording (the
@@ -322,10 +384,24 @@ keyboard L2 and R2 still scroll. **Settings → Voice & AI → Start voice typin
 when the keyboard opens** makes a Chat message's keyboard listen as soon as it
 opens, for people who text by voice; it stops on its own when nothing is said
 for a few seconds, and password, key, address and search fields never listen.
-**Settings → Voice & AI → Install offline speech** shows **Ready** when the
-bundled model is present. If it is missing, press the row once while connected
-to Wi-Fi to download and verify the roughly 120 MB speech package. New Smart Pro packages
-already contain it.
+Offline speech is not in the app download: once ffmpeg is installed, a Smart
+Pro connected to Wi-Fi downloads and verifies the roughly 120 MB speech package
+by itself (before the offline voice), and
+**Settings → Voice & AI → Install offline speech** then shows **Ready**.
+Press that row to start the download yourself at any time; with speech
+recognition set to Groq only, nothing is downloaded until you do. A Smart Pro
+that was installed from an older package keeps the copy that came with it.
+
+Offline English is decoded while you speak: the recognizer loads when the orb
+or the game assistant starts listening and turns each moment of audio into
+words as it arrives, and the orb shows them as you talk. When you stop, the
+answer is ready almost at once instead of after a fresh start of the
+recognizer (about six seconds for a short question before). It also hears
+the end of a sentence itself, so the orb can stop listening a little sooner.
+It stays loaded for about 45 seconds after use for a follow-up, and lets go at
+once when a game starts or memory runs low. A speech package from before this
+change is replaced once, in the background, by one that can do it; until
+then, and for other languages, the clip is recognized after it ends as before.
 
 While recording a Chat message, provisional words appear in the keyboard field
 and the Chat composer as you speak. Both recognizers work on clips rather than a
@@ -365,6 +441,10 @@ and process pipes without being saved to a file.
 * `player/vkvoice_button.go` — R2 on the keyboard, and voice typing that
   starts by itself.
 * `player/voiceai_settings.go` — Settings → Voice & AI.
+* `player/stt_stream.go`, `player/native/vosk-cli.c` — offline speech decoded
+  while it is spoken: the warm recognizer and its pipe protocol.
+* `player/wakeword.go` — "Hey Juka": the sound gate, the phrase, the hand-over
+  to the orb and the game assistant, its Settings rows.
 
 ## Not yet
 
@@ -374,8 +454,9 @@ and process pipes without being saved to a file.
   model targets the Smart Pro.
 * Juka's voice in languages other than English (Groq's Orpheus and the
   downloadable Kristin voice are English).
-* A wake word that is always listening: deliberately not — a handheld
-  microphone open all the time costs battery and privacy.
+* "Hey Juka" on Windows or other handhelds (it runs on the Smart Pro's
+  offline recognizer), and a name the small model does not know: it listens
+  for the spellings it does know ("juka", "yuka", "joker", …; the log says which).
 * Proof on the hardware: the microphone fallbacks and the codec switches come
   from the Allwinner driver's control names, not from a Smart Pro on a desk;
   the first report from a handheld will say which device answered.

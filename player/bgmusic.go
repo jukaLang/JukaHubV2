@@ -475,6 +475,9 @@ func bgmLoop() {
 	var silentSince time.Time
 	started := false
 	announce := "" // the music to name once it is heard (bgmAnnounce)
+	// Spatial audio (spatial.go) plays the music in the same space as the
+	// rest of what JukaHub plays.
+	var spatial spatialSideStream
 	for {
 		if bgmHalt.Swap(false) {
 			outClear(dev)
@@ -525,6 +528,7 @@ func bgmLoop() {
 		} else {
 			silentSince = time.Time{}
 		}
+		sd := spatial.ready(rate)
 		for !silent && stream != nil && outQueued(dev) < ahead {
 			if !stream.fill(fbuf, bgmBlock) {
 				// A library song ended: the next one opens straight away.
@@ -551,8 +555,11 @@ func bgmLoop() {
 				}
 				lvl += (lvlTarget - lvl) * lvlCoef
 				g := env * lvl
-				for ch := 0; ch < 2; ch++ {
-					v := float64(fbuf[2*i+ch]) * g
+				xl, xr := float64(fbuf[2*i])*g, float64(fbuf[2*i+1])*g
+				if sd != nil {
+					xl, xr = sd.frameGain(float64(fbuf[2*i]), float64(fbuf[2*i+1]), g)
+				}
+				for ch, v := range [2]float64{xl, xr} {
 					s := int16(math.Max(-1, math.Min(1, v)) * 32767)
 					binary.LittleEndian.PutUint16(bbuf[4*i+2*ch:], uint16(s))
 				}
