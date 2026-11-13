@@ -28,13 +28,15 @@ const (
 	ledRowCount
 )
 
-// ledEffectOrder is the cycle behind the Effect row. Everything but Solid is a
-// brightness curve the loop already computes; Rainbow is a colour rotation.
+// ledEffectOrder is the cycle behind the Effect row. Smooth and Pulse are
+// brightness curves the loop computes (Smooth a slow six-second glow, Pulse a
+// two-second breath); Rainbow is a colour rotation.
 var ledEffectOrder = []struct {
 	key   string
 	label string
 }{
 	{"solid", "Solid"},
+	{"smooth", "Smooth"},
 	{"pulse", "Pulse"},
 	{"rainbow", "Rainbow"},
 }

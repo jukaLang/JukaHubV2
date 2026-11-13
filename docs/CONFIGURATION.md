@@ -75,8 +75,8 @@ settings such as `search_query` or `stream_url`.
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
-| `liquidBg` | `"off"`/`"gentle"`/`"lively"` | Settings → Display & theme → **Liquid background** (default `gentle` when unset; `off` turns it off): the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile (a step where no focus ring moves still ripples near the highlight), choosing something splashes, going back swells the water up, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. An unrecognised value reads as off. Reduce Motion halves the rain and softens the ripples. The water is drawn between its steps, its light and shadow over the whole backdrop, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld steps down to a coarser one still by itself if the water costs more than 5 ms a frame |
-| `liquidBgResume` | `"gentle"`/`"lively"` | Last active liquid level, saved when **Liquid background** is switched off. Start → Device → **Liquid background** restores it when switched back on; if absent, the switch uses `gentle` |
+| `liquidBg` | `"off"`/`"slight"`/`"medium"`/`"lively"` | Settings → Display & theme → **Liquid background**, or **R2** on any screen whose footer gives R2 no other job (the footer then shows **R2 Water**; **W** on Home with a keyboard), which steps Off → Slight → Medium → Lively (default `off` when unset; the old `gentle` reads as `medium`). Once on, the water is behind every screen: the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile (a step where no focus ring moves still ripples near the highlight), choosing something splashes, going back swells the water up, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. An unrecognised value reads as off. Reduce Motion halves the rain and softens the ripples. The water is drawn between its steps, its light and shadow over the whole backdrop, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld steps down to a coarser one still by itself if the water costs more than 5 ms a frame |
+| `liquidBgResume` | `"slight"`/`"medium"`/`"lively"` | Last active liquid level, saved when **Liquid background** is switched off. Start → Device → **Liquid background** restores it when switched back on; if absent, the switch uses `medium` |
 | `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `autoSleep` | minutes as text, `"0"`/`"3"`/`"5"`/`"10"`/`"15"`/`"30"` | Settings → Power → **Auto sleep** (handheld only; default `"0"`, Off): suspend the handheld after that many minutes without input — never while a game owns the screen, while charging, while music or a video plays (or is paused), while a download, install, extraction or Screen Share viewer is running, while a panel is open, or while any alarm is enabled (a sleeping device cannot ring). The wake counts as input. |
@@ -384,8 +384,13 @@ over until it is done; nothing is recorded. Settings → Stick lights → **Ligh
 **Microphone** and **Mic sensitivity** write both keys. Battery runs red → green across 10–80%, charging breathes green
 and goes dark unplugged, and temperature runs green → red across 45–80 °C (read
 from the thermal zone, cached for two seconds). Custom uses `led_color`
-(`"#rrggbb"`) and an optional `led_effect` of `solid` (default), `pulse`
-(two-second breathing) or `rainbow` (a full hue turn every twelve seconds).
+(`"#rrggbb"`) and an optional `led_effect` of `solid` (default), `smooth` (a slow
+six-second glow between about half and full brightness, eased so it never looks
+like a blink; Charging breathes on the same curve), `pulse` (two-second
+breathing) or `rainbow` (a full hue turn every twelve seconds). On the TrimUI
+stick rings JukaHub checks every 10 s (every 60 s after something else has
+changed them twice) that the firmware has not taken them back; the log's `led`
+scene names the driver state when the rings are taken.
 
 `led_brightness` (int, 0–100, default 100) trims every policy's colour, so it
 dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It

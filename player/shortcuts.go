@@ -63,6 +63,7 @@ var shortcutCategories = []struct {
 			{"/", "Search"},
 			{"Q", "Edit Home (pad: L2); in it, X or R resizes a tile"},
 			{"E", "Next section"},
+			{"W", "Liquid background: Off, Slight, Medium, Lively (pad: R2)"},
 			{"Esc", "Close the calendar or the playing video"},
 			{"J U K A", "Fireworks"},
 		},

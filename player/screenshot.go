@@ -109,14 +109,22 @@ func captureScreenshot(renderer *sdl.Renderer) {
 		ShowToast("Screenshot failed: "+err.Error(), ToastKindError)
 		return
 	}
+	// The camera flash, drawn after this capture, and a preview card of the
+	// picture instead of a text toast (shotpreview.go).
+	shotFlashStart()
+	maxW, maxH := shotThumbLimits(screenWidth, screenHeight)
 	go func() {
+		var gen uint64
 		defer func() {
 			if r := recover(); r != nil {
+				shotPreviewFailed(gen)
 				menuShotNotice("Screenshot failed", ToastKindError)
 			}
 		}()
+		gen = shotPreviewPark(shotThumb(pix, stride, int(w), int(h), maxW, maxH))
 		data, err := castPNG(pix, stride, int(w), int(h))
 		if err != nil {
+			shotPreviewFailed(gen)
 			menuShotNotice("Screenshot failed: "+err.Error(), ToastKindError)
 			return
 		}
@@ -126,12 +134,18 @@ func captureScreenshot(renderer *sdl.Renderer) {
 		}
 		if err != nil {
 			logWarn("screenshot", "could not save the screenshot: %v", err)
+			shotPreviewFailed(gen)
 			menuShotNotice("Screenshot save failed", ToastKindError)
 			return
 		}
 		trophyEvent(tkScreenshot)
 		playHaptic(hapticSuccessPulse)
 		logInfo("screenshot", "saved %s", path)
-		menuShotNotice("[Screenshot] "+filepath.Base(path), ToastKindSuccess)
+		if gen == 0 {
+			// No preview could be made: say it in words.
+			menuShotNotice("[Screenshot] "+filepath.Base(path), ToastKindSuccess)
+			return
+		}
+		shotPreviewSaved(gen, path)
 	}()
 }

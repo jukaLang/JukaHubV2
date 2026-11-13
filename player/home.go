@@ -559,6 +559,17 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		if e.Repeat == 0 {
 			homeEditTrigger(config)
 		}
+	case sdl.K_w:
+		// W is R2's twin on Home: the next liquid background level
+		// (liquidbg.go liquidCycle). Ctrl/Alt chords are not it.
+		if e.Keysym.Mod&(sdl.KMOD_CTRL|sdl.KMOD_ALT) != 0 ||
+			(snapshotVideoState().phase != "idle" && !videoMiniVisible()) {
+			return false
+		}
+		if e.Repeat == 0 {
+			PlayActivateSound()
+			liquidCycle(config)
+		}
 	case sdl.K_ESCAPE:
 		// Escape dismisses the calendar popover first.
 		if homeCalendarOpen {

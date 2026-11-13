@@ -2086,7 +2086,15 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	set := h.homeFooterHintSet(showBack)
 	if !homeEditActive() {
 		if voice, ok := voiceOrbFooterHint(appConfig); ok {
-			set[6] = footerHint{button: voice.Button, label: voice.Label}
+			set[homeFooterVoiceSlot] = footerHint{button: voice.Button, label: voice.Label}
+		}
+	}
+	if liquidUnsupportedSeen {
+		// R2 cannot show water this renderer does not draw.
+		for i := range set {
+			if set[i].button == "R2" {
+				set[i] = footerHint{}
+			}
 		}
 	}
 	if label := homeFooterActionLabel(h.Focus.Current()); label != "" && !homeEditActive() {
@@ -2171,21 +2179,27 @@ var (
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
-		{button: "L2", label: "Edit"}, // Edit Home (home_edit.go homeEditTrigger)
+		{button: "L2", label: "Edit"},  // Edit Home (home_edit.go homeEditTrigger)
+		{button: "R2", label: "Water"}, // liquid background level (liquidbg.go liquidCycle)
 		{button: "Start", label: "Menu"},
 		{button: "Select+Start", label: "Quit"},
-		{}, // Menu/F4 Talk to Juka, when available
+		{}, // homeFooterVoiceSlot: Menu/F4 Talk to Juka, when available
 	}
 	homeFooterHintsBack = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
 		{button: "L2", label: "Edit"},
+		{button: "R2", label: "Water"},
 		{button: "B", label: "Back"},
 		{button: "Select+Start", label: "Quit"},
-		{}, // Menu/F4 Talk to Juka, when available
+		{}, // homeFooterVoiceSlot
 	}
 )
+
+// homeFooterVoiceSlot is the slot of Home's footer rows that "Talk to Juka"
+// fills (drawFooter).
+const homeFooterVoiceSlot = len(homeFooterHintsStart) - 1
 
 // defaultGreeting is the greeting for the hour. Morning starts at five: a
 // handheld picked up at half past midnight is still in the evening for the

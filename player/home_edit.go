@@ -1482,9 +1482,10 @@ var (
 		{button: "A", label: "Open"},
 		{button: "Y", label: "Search"},
 		{button: "L2", label: "Edit"},
+		{button: "R2", label: "Water"},
 		{button: "Start", label: "Menu"},
 		{button: "Select+Start", label: "Quit"},
-		{}, // Menu/F4 Talk to Juka, when available
+		{}, // homeFooterVoiceSlot: Menu/F4 Talk to Juka, when available
 	}
 	homeFooterHintsEdit = [len(homeFooterHintsStart)]footerHint{
 		{button: "D-Pad", label: "Navigate"},
@@ -1577,7 +1578,7 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 	case h.dynActive():
 		set := homeFooterHintsDynamic
 		if showBack {
-			set[5] = footerHint{button: "B", label: "Back"}
+			set[6] = footerHint{button: "B", label: "Back"}
 		}
 		return homeFooterL2(set)
 	case showBack:
@@ -1586,16 +1587,17 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 	return homeFooterL2(homeFooterHintsStart)
 }
 
-// homeFooterL2 drops "L2 Edit" from a row while a video plays: the pad's
-// shoulders are the player's then (shoulders.go handleVideoShoulder), and L2
-// is its previous video. Q, the keyboard's Edit, still works beside the mini
-// player, so a keyboard row keeps it.
+// homeFooterL2 drops "L2 Edit" and "R2 Water" from a row while a video plays:
+// the pad's shoulders are the player's then (shoulders.go
+// handleVideoShoulder), and L2/R2 are its previous/next video. Q and W, the
+// keyboard's twins, still work beside the mini player, so a keyboard row
+// keeps them.
 func homeFooterL2(set [len(homeFooterHintsStart)]footerHint) [len(homeFooterHintsStart)]footerHint {
 	if hintsUseKeyboard() || snapshotVideoState().phase == "idle" {
 		return set
 	}
 	for i := range set {
-		if set[i].button == "L2" {
+		if set[i].button == "L2" || set[i].button == "R2" {
 			set[i] = footerHint{}
 		}
 	}

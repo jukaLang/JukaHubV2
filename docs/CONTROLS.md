@@ -185,7 +185,7 @@ and why.
 | Search | F2 anywhere, **/** on Home |
 | Menu: the voice orb (hold it to talk) | F4 anywhere (hold it to talk) |
 | Menu held: screenshot (in a game too) | F12 |
-| L2 on Home (Edit Home) · R2 on Home (next section) | Q · E |
+| L2 on Home (Edit Home) · R2 (liquid background level) | Q · W (Home only) |
 | Select + L1 held (mouse mode) | F6 |
 
 A shoulder that does something else on a screen (seeks a video, clears the
@@ -228,7 +228,7 @@ no footer names may have no key.
 | Screen | Pad | Keyboard |
 |--------|-----|----------|
 | Everywhere | A · B · D-pad · Start · Menu (the voice orb) · Select + Start · Select + L1 held (mouse mode) | Enter (or Space) · Esc · arrows · F10 · F4 · Alt+F4 on a PC · F6 |
-| Home | L2 edit Home · R2 next section · Y search | Q · E · **/** (F2 anywhere) |
+| Home | L2 edit Home · R2 liquid background · Y search | Q · W · **/** (F2 anywhere) |
 | Home search sheet | X edit the search · Y voice command | type to edit |
 | Home (Carousel, Widgets) | X edit (L2 too) | X (Q too) |
 | Home edit mode | X resize · Y remove · L1 / R1 layout · B or L2 done | X or R · Del or Backspace · Shift+Tab / Tab · Esc or Q |
@@ -290,7 +290,7 @@ they used to do nothing in JukaHub. Now:
 | Start | The Start menu: every scene, game and tool |
 | Select + Start (hold both) | Quit JukaHub |
 | Select + L1 (hold) | Mouse mode: the D-pad moves a pointer and A clicks (see Virtual cursor) |
-| L2 / R2 (the small top buttons) | On Home: L2 edits Home, R2 the next section; bigger jumps in lists |
+| L2 / R2 (the small top buttons) | On Home L2 edits Home; R2 steps the liquid background (Off, Slight, Medium, Lively) on any screen that has no R2 job of its own; L2 jumps to the top of a list |
 
 The audio player keeps L3 / R3 for lyrics and the sleep timer, the web browser
 keeps L3 for switching between scrolling and walking links, and the game
@@ -310,7 +310,7 @@ had nothing to go back to.
 | X | Secondary action — delete, toggle, search, depending on the screen |
 | Y | Tertiary action — new/create, save, submit in the chat keyboard |
 | L1 / R1 | Previous / next page of the focused list, or a −10/+10 s skip in the player |
-| L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list; on Home L2 edits Home and R2 steps to the next section |
+| L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list; on Home L2 edits Home; on every screen whose footer names no R2 job (it shows **R2 Water** instead) R2 steps the liquid background Off → Slight → Medium → Lively, in place of the old jump to the last row |
 | Start | Open the Start menu (scenes, games, tools, device) |
 | Back / Select | Back one screen, falling back to Home |
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
@@ -511,7 +511,7 @@ behaves the same in a menu as it does in a media grid.
 | Notification centre, clipboard history, global search | One window of rows | First / last row |
 | Quick Settings | Five rows, or ±5 on a slider | First / last row |
 | Start menu | One window of the open group | First / last row of the open group |
-| Home | — | L2: Edit Home (L2 again is Done) · R2: the next section |
+| Home | — | L2: Edit Home (L2 again is Done) · R2: liquid background Off → Slight → Medium → Lively |
 
 ### Liquid background
 
@@ -595,7 +595,7 @@ their way, and no panel is covered by a menu drawn beneath it.
 | Left (from the bell) | Move onto the update offer while a release is advertised; **A** installs it |
 | Right (from the PS5 pill), Down (from the bell) | Move onto the pairing QR while it is shown; **A** (or a click or tap) shows it full screen at full brightness with the PIN and address under it, and **A** or **B** closes it |
 | L2 | Edit Home, in any layout; L2 again is Done ([Edit Home](#edit-home)) |
-| R2 | The next section |
+| R2 | The liquid background: Off → Slight → Medium → Lively (a toast names the level; the footer shows **R2 Water**, **W** on a keyboard). R2 does the same on every other screen whose footer shows **R2 Water** |
 
 ### Home layouts
 

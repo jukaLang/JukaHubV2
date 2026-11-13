@@ -200,7 +200,7 @@ func gameShotTell(path string, err error) {
 		menuShotNotice("Game screenshot not saved: "+err.Error(), ToastKindError)
 		return
 	}
-	menuShotNotice("[Screenshot] "+filepath.Base(path), ToastKindSuccess)
+	// Saved: the preview card shows the picture itself (shotpreview.go).
 }
 
 // ── A game's screenshot: the framebuffer ─────────────────────────────────
@@ -308,7 +308,9 @@ func gameShotImage(fr gameShotFrame, deg, canvasW, canvasH int) (*image.RGBA, er
 // gameShotSave writes a game's picture as a PNG and counts it for the toast
 // back in JukaHub. Its own goroutine: it owns fr.
 func gameShotSave(fr gameShotFrame, at time.Time) {
+	var gen uint64 // the preview card's number (shotpreview.go)
 	fail := func(err error) {
+		shotPreviewFailed(gen)
 		logWarn("screenshot", "game screenshot not saved: %v", err)
 		playHaptic(hapticErrorPulse)
 		gameShotTell("", err)
@@ -324,6 +326,10 @@ func gameShotSave(fr gameShotFrame, at time.Time) {
 		fail(err)
 		return
 	}
+	// The preview waits for JukaHub to have the screen again: nothing of
+	// JukaHub's is drawn while the game runs, so there is no flash either.
+	maxW, maxH := shotThumbLimits(gameShotLive.canvasW.Load(), gameShotLive.canvasH.Load())
+	gen = shotPreviewPark(shotThumb(img.Pix, img.Stride, img.Rect.Dx(), img.Rect.Dy(), maxW, maxH))
 	var buf bytes.Buffer
 	enc := png.Encoder{CompressionLevel: png.BestSpeed}
 	if err := enc.Encode(&buf, img); err != nil {
@@ -341,5 +347,6 @@ func gameShotSave(fr gameShotFrame, at time.Time) {
 	trophyEvent(tkScreenshot)
 	playHaptic(hapticSuccessPulse)
 	logInfo("screenshot", "saved the game's screen to %s", path)
+	shotPreviewSaved(gen, path)
 	gameShotTell(path, nil)
 }

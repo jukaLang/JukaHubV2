@@ -9,8 +9,9 @@ package main
 //	         while a video is playing
 //	L2 / R2  bigger jump: previous / next results page (fetching when needed),
 //	         previous / next video while playing, first / last row in a list;
-//	         on Home L2 opens Edit Home (and is Done there) and R2 steps to
-//	         the next section; on Smart Pro Packages they switch stores
+//	         on Home L2 opens Edit Home (and is Done there); R2 steps the
+//	         liquid background on every screen that has no R2 job of its
+//	         own; on Smart Pro Packages they switch stores
 //
 // Analog triggers report a stream of axis values, so they are latched into
 // discrete presses here instead of paging on every sample.
@@ -131,18 +132,27 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 		synthShoulder(s)
 		return true
 	}
+	// R2 steps the liquid background Off → Slight → Medium → Lively
+	// (liquidbg.go) on every screen whose footer gives R2 no job of its own
+	// (Media's "R2 More", the browser's and reader's zoom, the stores keep
+	// theirs; everything above has had its turn). The footer says "R2 Water"
+	// exactly there (liquidFooterHint; Home's own row names it too). This
+	// takes R2's old jump-to-the-last-row in plain lists; L2 still jumps to
+	// the first. (Only the pad reaches this: the keyboard's End is its own
+	// jump, keyShoulder in each screen's key handler.)
+	if s == padR2 && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		!liquidR2Taken(footerHints(config, config.Scenes[currentSceneIndex])) {
+		PlayActivateSound()
+		liquidCycle(config)
+		return true
+	}
 	if handleListShoulder(s, config) {
 		return true
 	}
 	// On Home L2 edits Home (home_edit.go), in every layout: Home is the
-	// first section, so its old "previous section" had nowhere to go. R2
-	// keeps stepping to the next section.
-	if homeLayoutActive && (s == padL2 || s == padR2) {
-		if s == padL2 {
-			homeEditTrigger(config)
-		} else {
-			changeScene(config, 1)
-		}
+	// first section, so its old "previous section" had nowhere to go.
+	if homeLayoutActive && s == padL2 {
+		homeEditTrigger(config)
 		return true
 	}
 	return false

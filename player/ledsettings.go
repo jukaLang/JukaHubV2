@@ -325,7 +325,7 @@ func ledSettingsRows() []setRow {
 		},
 		{
 			ID: "ledEffect", Label: "Effect", Kind: setKindChoice,
-			Detail:  setStatic("Steady, breathing, or slowly cycling every colour"),
+			Detail:  setStatic("Steady, a slow smooth glow, a quicker pulse, or every colour in turn"),
 			Visible: ledSettingsInMode(ledPolicyCustom),
 			Options: func(*Config) []setOption {
 				out := make([]setOption, 0, len(ledEffectOrder))

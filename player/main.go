@@ -2086,6 +2086,11 @@ func main() {
 						// A click dismisses the toast. One that was cut short opens
 						// the notification centre on its message, which the
 						// centre shows whole (notifToastOpensCentre says when).
+						// A click on a screenshot's preview card opens the
+						// picture (shotpreview.go).
+						if shotPreviewClick(config, mx, my) {
+							break
+						}
 						if toastRect.W > 0 && toastRect.H > 0 && pointInRect(mx, my, toastRect) {
 							currentToastMu.Lock()
 							toastMsg := currentToast.Message
@@ -3909,6 +3914,9 @@ func main() {
 		// A Screenshot picked from the Start menu lands on the frame the user
 		// was looking at, not on whatever is drawn next.
 		capturePendingScreenshot(renderer)
+		// The camera flash and the screenshot's preview card, after the
+		// capture so neither is in the picture (shotpreview.go).
+		shotFXRender(renderer, config)
 		// The voice orb, after both captures: the screenshot "take a
 		// screenshot" asked for shows the screen, not the orb (voiceorb.go).
 		voiceOrbRender(renderer, config)

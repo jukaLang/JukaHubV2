@@ -9,7 +9,9 @@ package main
 // stir the water (the right one through the virtual cursor when it is up), a
 // mouse on the desktop drags a wake, a device that can feel tilt sloshes it
 // (liquidbg_motion.go), and now and then a drop of rain keeps an untouched
-// screen alive.
+// screen alive. It is off until switched on; once on it is behind every
+// screen, and R2 — on any screen where R2 has no job of its own, W on Home's
+// keyboard — steps its level Off → Slight → Medium → Lively (liquidCycle).
 //
 // The water is a height field on a grid — a node every 10 px or so, 129×73
 // nodes on the Smart Pro (97×55 under Low Power) — stepped with the textbook
@@ -97,15 +99,17 @@ type liquidLevel int
 
 const (
 	liquidLevelOff liquidLevel = iota
-	liquidLevelGentle
+	liquidLevelSlight
+	liquidLevelMedium
 	liquidLevelLively
 )
 
 // liquidLevelValues and liquidLevelLabels are indexed by liquidLevel; the
-// Settings row's stops are in the same order.
+// Settings row's stops and R2's cycle (liquidCycle) are in the same order.
+// Medium is what was called Gentle ("gentle" still reads as Medium).
 var (
-	liquidLevelValues = [...]string{"off", "gentle", "lively"}
-	liquidLevelLabels = [...]string{"Off", "Gentle", "Lively"}
+	liquidLevelValues = [...]string{"off", "slight", "medium", "lively"}
+	liquidLevelLabels = [...]string{"Off", "Slight", "Medium", "Lively"}
 )
 
 const (
@@ -259,26 +263,49 @@ const (
 	liquidBudgetHold = 3.0
 )
 
-// parseLiquidLevel reads a stored level. Only the two names turn the water
-// on; anything else — empty, "on", a typo — is off.
+// parseLiquidLevel reads a stored level. Only the level names (and the old
+// "gentle", now Medium) turn the water on; anything else — empty, "on", a
+// typo — is off.
 func parseLiquidLevel(v interface{}) liquidLevel {
 	s, ok := v.(string)
 	if !ok {
 		return liquidLevelOff
 	}
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "gentle":
-		return liquidLevelGentle
+	case "slight", "slightly":
+		return liquidLevelSlight
+	case "medium", "gentle":
+		return liquidLevelMedium
 	case "lively":
 		return liquidLevelLively
 	}
 	return liquidLevelOff
 }
 
-// liquidLevelDefault is the level of a setup that never chose one: the water
-// is on. It was off, and its owner, on Home with the water "more pronounced",
-// could not see anything — it was simply not on.
-const liquidLevelDefault = liquidLevelGentle
+// liquidLevelDefault is the level of a setup that never chose one: off. The
+// water was on by default for a while; its owner asked for it off by default,
+// switched on and stepped with R2 (liquidCycle), on every screen once on.
+const liquidLevelDefault = liquidLevelOff
+
+// liquidLevelFirstOn is the level a switch-on picks when no earlier level was
+// saved (the Start menu's switch, liquidToggle).
+const liquidLevelFirstOn = liquidLevelMedium
+
+// liquidCycle is R2 on any screen where R2 has no job of its own
+// (shoulders.go), and W on Home's keyboard: the next level, Off → Slight →
+// Medium → Lively → Off, saved at once, with a toast naming it.
+func liquidCycle(config *Config) {
+	if config == nil {
+		return
+	}
+	next := (liquidLevelOf(config) + 1) % liquidLevel(len(liquidLevelValues))
+	liquidSetLevel(config, next)
+	if next != liquidLevelOff && liquidUnsupportedSeen {
+		setToast("Liquid background is not supported by this renderer")
+		return
+	}
+	setToast("Liquid background: " + liquidLevelLabels[next])
+}
 
 // liquidLevelOf is config's level (appConfig's when config is nil): the
 // stored one, or liquidLevelDefault when none is stored. An explicit "off"
@@ -301,7 +328,7 @@ func liquidLevelOf(config *Config) liquidLevel {
 }
 
 // liquidSetLevel saves a level and remembers the active one when switching
-// off, so the Start menu's one-press switch can restore Gentle or Lively.
+// off, so the Start menu's one-press switch can restore the level it had.
 func liquidSetLevel(config *Config, level liquidLevel) {
 	if config == nil {
 		return
@@ -318,7 +345,7 @@ func liquidSetLevel(config *Config, level liquidLevel) {
 }
 
 // liquidToggle switches the backdrop from the Start menu without opening
-// Settings. An unset preference starts at Gentle, including after an old
+// Settings. An unset preference starts at Medium, including after an old
 // config with the water off is enabled for the first time.
 func liquidToggle(config *Config) {
 	if config == nil {
@@ -328,7 +355,7 @@ func liquidToggle(config *Config) {
 	if liquidLevelOf(config) == liquidLevelOff {
 		next = parseLiquidLevel(config.Variables.Custom[liquidResumeKey])
 		if next == liquidLevelOff {
-			next = liquidLevelDefault
+			next = liquidLevelFirstOn
 		}
 	}
 	liquidSetLevel(config, next)
@@ -382,7 +409,13 @@ func liquidTuningFor(level liquidLevel, reduced, lowPower bool) liquidTuning {
 	// Drops start mostly at rest, which sends out about half the wave a kick
 	// did, so they are deeper than the 0.7 they once were.
 	t := liquidTuning{damp: 0.987, drop: 0.95, wake: 0.16, wakeRadius: 30, rainMin: 2.0, rainMax: 5.0, slosh: 2.4, swell: 1.0}
-	if level == liquidLevelLively {
+	switch level {
+	case liquidLevelSlight:
+		// Slight is Medium turned down, not slowed down (a slower water was
+		// tried and read as worse): shallower drops and wakes that settle a
+		// little sooner, rain about half as often, a softer swell and slosh.
+		t = liquidTuning{damp: 0.984, drop: 0.6, wake: 0.1, wakeRadius: 26, rainMin: 4.0, rainMax: 9.0, slosh: 1.4, swell: 0.55}
+	case liquidLevelLively:
 		// Lively is livelier in how long its waves last and how often it
 		// rains, more than in depth: a drop much deeper under a big tile,
 		// stepped onto again before it settles, rings into the height clamp
@@ -928,6 +961,9 @@ type liquidBakeKey struct {
 type liquidPoolState struct {
 	// on is the focus hook's one check: true while the water is in use.
 	on bool
+	// preview: the next update drops the splash a level just switched on or
+	// changed shows itself with.
+	preview bool
 
 	level  liquidLevel
 	tuning liquidTuning
@@ -1765,8 +1801,11 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 		if p.on || p.motionOn {
 			liquidPoolOff()
 		}
-		if level == liquidLevelOff && renderer != nil {
-			p.release(renderer)
+		if level == liquidLevelOff {
+			p.preview = false
+			if renderer != nil {
+				p.release(renderer)
+			}
 		}
 		p.lastDrew = liquidDrewNothing
 		return liquidDrewNothing
@@ -1788,14 +1827,18 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 		p.lastDrew = liquidDrewNothing
 		return liquidDrewNothing
 	}
-	justEnabled := !p.on
+	// A level just switched on, or changed (R2), shows itself with a splash.
+	if !p.on || p.level != level {
+		p.preview = true
+	}
 	p.on = true
 	p.level = level
 	if now := liquidClock(); liquidUpdateDue(p.framed, p.frame, frameCount, p.updatedAt, now) {
 		p.framed, p.frame, p.updatedAt = true, frameCount, now
 		p.epoch++
 		liquidUpdate(config, w, h, now)
-		if justEnabled && p.sim != nil {
+		if p.preview && p.sim != nil {
+			p.preview = false
 			// Give the setting an immediate, gentle preview instead of leaving
 			// the water looking static until focus moves or the first raindrop.
 			// liquidTuningFor already scales this down for Reduce Motion.
@@ -2403,7 +2446,8 @@ func liquidBloom(r, g, b, x, y, cx, cy, radius float64, c sdl.Color, alpha uint8
 // liquidOptions are the level row's stops, in liquidLevel order.
 var liquidOptions = []setOption{
 	{Value: "off", Label: "Off"},
-	{Value: "gentle", Label: "Gentle", Note: "Ripples and a drop of rain now and then"},
+	{Value: "slight", Label: "Slight", Note: "Soft ripples and the odd drop of rain"},
+	{Value: "medium", Label: "Medium", Note: "Ripples and a drop of rain now and then"},
 	{Value: "lively", Label: "Lively", Note: "Deeper, longer waves and more rain"},
 }
 
@@ -2415,7 +2459,54 @@ func liquidSettingDetail(c *Config) string {
 	case liquidLevelOf(c) != liquidLevelOff && effectiveReducedMotion(c):
 		return "Reduce Motion is on: less rain, softer ripples"
 	}
-	return "Ripples follow your moves; " + liquidStirWords(hintOnHandheld(), stickHardware(), hintsUseKeyboard())
+	return liquidCycleWords(hintsUseKeyboard()) + "; ripples follow your moves; " +
+		liquidStirWords(hintOnHandheld(), stickHardware(), hintsUseKeyboard())
+}
+
+// liquidCycleWords says how to step the level without Settings: R2 on a pad
+// (any screen whose R2 is free), W on Home with a keyboard.
+func liquidCycleWords(keyboard bool) string {
+	if keyboard {
+		return "W on Home changes it"
+	}
+	return "R2 changes it on any screen"
+}
+
+// liquidR2Taken reports whether a screen's footer row gives R2 a job of its
+// own ("R2 More", "L2/R2 Zoom", "L2/R2 Stores"…): R2 is then that screen's,
+// and only where it is not does R2 step the water (shoulders.go). The footer
+// is the screen's contract with the user, so the "R2 Water" hint and the
+// press always agree.
+func liquidR2Taken(hints []FooterHint) bool {
+	for _, h := range hints {
+		if hintContainsFold(h.Button, "R2") {
+			return true
+		}
+	}
+	return false
+}
+
+// liquidFooterHint adds "R2 Water" to a screen's shared footer row
+// (renderFooter) when R2 would step the water there: nothing drawn over the
+// screen and nothing in it owns R2. It goes right after the three navigation
+// hints, which a narrow canvas keeps, so the key stays on screen. A keyboard
+// has no R2 (W works on Home only), so a keyboard row has no water hint.
+func liquidFooterHint(config *Config, hints []FooterHint) []FooterHint {
+	if liquidUnsupportedSeen || hintsUseKeyboard() || liquidR2Taken(hints) ||
+		snapshotVideoState().phase != "idle" || fileEditor.open || steamPanel.open ||
+		emuPanel.open || modalPanelBlocksShoulders() || triggerOwnedByOverlay() ||
+		// handleChromeShoulder's overlays page with R2 themselves.
+		tb.startOpen || nc.open || clipSearchOpen || globalSearchOpen || wpOpen ||
+		imageViewerPath != "" || shortcutsOpen ||
+		pdfvSceneActive(config) || synthSceneActive(config) ||
+		pkgHubStep(pkgHubLocation(config), padR2) >= 0 {
+		return hints
+	}
+	at := min(3, len(hints))
+	out := make([]FooterHint, 0, len(hints)+1)
+	out = append(out, hints[:at]...)
+	out = append(out, FooterHint{Button: "R2", Label: "Water"})
+	return append(out, hints[at:]...)
 }
 
 // liquidStirWords names what stirs the water on this device, in the words its

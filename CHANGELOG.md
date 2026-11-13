@@ -13,6 +13,25 @@ For anything older, the git log and the
 
 ### Added
 
+- **Stick lights: Smooth effect.** Settings → Stick lights → Effect now has
+  Smooth beside Solid, Pulse and Rainbow: a slow six-second glow between about
+  half and full brightness, eased in perceived brightness so neither end looks
+  like a blink. Only the level moves, so the TrimUI rings are never re-armed
+  for it. Charging now breathes on the same slow curve instead of the
+  two-second pulse.
+- **R2 steps the liquid background, on any screen.** Off → Slight → Medium →
+  Lively, with a toast naming the level, wherever the screen's footer gives R2
+  no job of its own (Media's "R2 More", the browser's and reader's zoom and the
+  stores keep theirs); the footer then shows **R2 Water** right after the
+  navigation hints, and Home's footer always names it (**W** on Home with a
+  keyboard). Once on, the water is behind every screen. Slight is a new,
+  softer level; Medium is the old Gentle (a saved `gentle` still reads as
+  Medium).
+- **Voice orb: "Speed up by providing a Groq key".** While Juka is thinking (Menu, or F4 on a PC)
+  with no Groq key set, the bubble shows that line with an **A  Add Groq key** button (A, Enter or a
+  click) that stops the wait and opens Settings → General's Groq key sheet. Groq is much faster and
+  better than offline speech and answers; with a key the nudge never shows. It replaces the old
+  once-per-launch tip text.
 - **Home's focus highlight bounces between buttons.** Moving around Home no
   longer teleports the cyan ring: it slides to the next card or button, runs a
   little past it in the direction you moved and swings back onto it (glow
@@ -51,6 +70,15 @@ For anything older, the git log and the
   while Brightness Off keeps them dark. A device without writable lights says
   why. The rows moved out of Sound & haptics. (`ledsettings.go`, i18n.)
 
+- **Screenshots flash and show what they caught.** Taking a screenshot in
+  JukaHub (hold Menu, F12, the Start menu, a voice command) now fires a quick
+  white camera flash, and the picture itself shrinks from full screen into a
+  card in the bottom-right corner — "Screenshot saved" under it — instead of
+  a text-only toast. Clicking the card opens the picture in the image viewer.
+  A game's screenshot has no flash (the game owns the screen then); its
+  preview card appears when you are back in JukaHub. Reduced motion keeps the
+  flash soft and puts the card in place without the fly-in.
+  (`shotpreview.go`; `screenshot.go`, `menushot.go`, `main.go`.)
 - **Hold Menu for a screenshot, anywhere — in a game too.** On the handheld a
   tap of Menu still opens the voice orb; hold it for 0.7 s (a light tick) and
   let go, and the screen is saved (a buzz when the file is written). It works on every JukaHub screen —
@@ -447,6 +475,11 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The liquid background is off by default.** A setup that never chose a
+  level has no water until R2, Settings → Display & theme → Liquid background
+  or Start → Device switches it on (the first switch-on picks Medium). R2 no
+  longer steps Home to the next section (E still does on a keyboard) or jumps
+  to the last row of a plain list (L2 still jumps to the first).
 - **HTML5 games run at full speed on the handheld.** The built-in game view
   was drawing the Home screen under every game frame, ran at the menus' 24–30
   fps on the powersave clock, and replayed every canvas call onto the screen
@@ -646,6 +679,14 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Stick rings blinking every two seconds.** The rings' drift check ran every
+  2 s, and every repaint it made goes through effect 0 — a visible blink —
+  whenever something (a firmware service, a node that reads back oddly) made a
+  check see a change; a quiet check also reset the back-off, so a service
+  changing them every other check kept the blink going. The check now runs every
+  10 s, backs off to 60 s after two repaints in a take and never resets, and a
+  switch found off is turned back on by the repaint instead of in the check. The
+  driver's state is logged once per take (scene `led`).
 - **Games with no exact box-art match got no picture.** The cover scraper
   only took a cover whose title was the ROM's own title, so files named
   "Zelda Minish Cap", "Pokemon Saphire", "Sonic 2" or "SuperMarioWorld2"

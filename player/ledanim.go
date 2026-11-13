@@ -49,10 +49,20 @@ const (
 	// ledAnimReassertEvery is how often the writer checks that nothing else
 	// (TrimUI's hardwareservice rewrites max_scale and the effect on charge,
 	// wake and its own LED setting) took the rings back, and repaints them.
-	ledAnimReassertEvery = 2 * time.Second
-	// ledAnimFightEvery is the check interval once three checks in a row found
-	// the rings changed by someone else.
-	ledAnimFightEvery = 30 * time.Second
+	// It was 2 s, and the rings were reported blinking "every 2 seconds" even
+	// after the check stopped repainting what had not changed: a repaint goes
+	// through effect 0, so whatever made a check see a change — a firmware
+	// service on its own timer, a node that reads back oddly now and then —
+	// showed as a blink on the check's own beat.
+	ledAnimReassertEvery = 10 * time.Second
+	// ledAnimFightEvery is the check interval once ledAnimFightLimit checks in
+	// a take have found the rings changed by someone else.
+	ledAnimFightEvery = 60 * time.Second
+	// ledAnimFightLimit is how many repaints a take allows on the short
+	// interval. The count is never reset by a quiet check: something that
+	// takes the rings back every other check would otherwise keep JukaHub
+	// repainting (blinking) on the short interval for ever.
+	ledAnimFightLimit = 2
 )
 
 // ledAnimState is what the writer remembers about the rings. Only the LED
@@ -82,10 +92,15 @@ var ledAnimState struct {
 	noSwitchBack, noScaleBack bool
 	scaleChecked              bool
 
-	// fights counts checks in a row that found the rings changed by someone
-	// else; fightLogged keeps that log line to one per take.
+	// fights counts the checks in this take that found the rings changed by
+	// someone else; fightLogged keeps that log line to one per take.
 	fights      int
 	fightLogged bool
+
+	// switchOff lists the switches a check found off; the repaint turns
+	// it back on together with the effect, never in the check itself (a write
+	// to enable may restart the driver's effect: one more blink).
+	switchOff []string
 }
 
 // ledAnimSaved is the rings' state before the first write, switches included
@@ -244,18 +259,15 @@ func ledAnimRead(dir, name string) string {
 // Under lock.
 func ledAnimDrifted(dir string, hue [3]uint8, static int) (drifted bool, what string) {
 	st := &ledAnimState
+	st.switchOff = st.switchOff[:0]
 	if !st.noSwitchBack {
 		for _, sw := range []string{"enable", "effect_enable"} {
 			if ledAnimRead(dir, sw) != "0" {
 				continue
 			}
-			_ = writeLEDFile(filepath.Join(dir, sw), "1")
-			if ledAnimRead(dir, sw) == "0" {
-				// A write that does not stick (or a node that always reads
-				// 0) would re-arm the rings every check.
-				st.noSwitchBack = true
-				continue
-			}
+			// Turned back on by the repaint (applyLEDAnim), which also finds
+			// out whether the write sticks.
+			st.switchOff = append(st.switchOff, sw)
 			drifted, what = true, sw+"=0"
 		}
 	}
@@ -328,6 +340,7 @@ func ledAnimTake(dir string) {
 	st.lastScale = -1
 	st.checkedAt = time.Now()
 	st.fights, st.fightLogged = 0, false
+	st.switchOff = st.switchOff[:0]
 	st.static = ledAnimStaticIndex(ledAnimRead(dir, "effect_names"))
 	st.scaleFile = "max_scale"
 	if canWriteFile(filepath.Join(dir, "max_scale_lr")) {
@@ -355,6 +368,11 @@ func ledAnimTake(dir string) {
 	_ = writeLEDFile(filepath.Join(dir, "effect_cycles_lr"), "-1")
 	_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "1")
 	_ = writeLEDFile(filepath.Join(dir, "enable"), "1")
+	// What the driver showed, once per take: if the rings still blink, this
+	// line (with the "reads back" and "keeps changing" ones) says why.
+	LogScene("led").Info("stick rings taken", "effect", st.saved.effect, "static", st.static,
+		"cycles", st.saved.cycles, "duration", ledAnimRead(dir, "effect_duration_lr"),
+		"scale", st.saved.scale, "scaleFile", st.scaleFile)
 }
 
 // applyLEDAnim writes one colour to the rings.
@@ -376,9 +394,9 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 	now := time.Now()
 	drifted := false
 	every := ledAnimReassertEvery
-	if st.fights >= 3 {
+	if st.fights >= ledAnimFightLimit {
 		// Something keeps taking the rings back on its own timer: winning
-		// every 2 s would be a blink every 2 s, so check rarely instead.
+		// every time would be a blink on every check, so check rarely instead.
 		every = ledAnimFightEvery
 	}
 	if now.Sub(st.checkedAt) >= every && st.hueSet && level > 0 {
@@ -397,16 +415,23 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 		}
 		if what != "" {
 			st.fights++
-			if st.fights >= 3 && !st.fightLogged {
+			if st.fights >= ledAnimFightLimit && !st.fightLogged {
 				st.fightLogged = true
 				LogScene("led").Warn("stick rings: something else keeps changing them", "node", what)
 			}
-		} else {
-			st.fights = 0
 		}
 	}
 	changed := !st.hueSet || !ledAnimHueNear(hue, st.hue)
 	if level > 0 && (drifted || (changed && (!st.hueSet || now.Sub(st.rearmedAt) >= ledAnimRearmEvery))) {
+		for _, sw := range st.switchOff {
+			_ = writeLEDFile(filepath.Join(dev.Dir, sw), "1")
+			if ledAnimRead(dev.Dir, sw) == "0" {
+				// A write that does not stick (or a node that always reads
+				// 0) would repaint the rings at every check.
+				st.noSwitchBack = true
+			}
+		}
+		st.switchOff = st.switchOff[:0]
 		col := fmt.Sprintf("%02X%02X%02X ", hue[0], hue[1], hue[2])
 		if err := writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_lr"), col); err != nil {
 			return err

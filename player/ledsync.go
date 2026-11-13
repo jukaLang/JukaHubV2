@@ -343,11 +343,38 @@ func parseLEDHex(raw string) (r, g, b uint8, ok bool) {
 	return uint8(v >> 16), uint8(v >> 8), uint8(v), true
 }
 
-// ledPulse is the shared breathing curve for charging and custom effects: a
-// two-second cycle between about 35% and full brightness. Pure.
+// ledPulse is the Pulse effect's curve: a two-second cycle between about 35%
+// and full brightness. Pure.
 func ledPulse(now time.Time) float64 {
 	phase := math.Sin(float64(now.UnixMilli()) / 1000.0 * math.Pi)
 	return 0.35 + 0.65*(phase+1)/2
+}
+
+const (
+	// ledSmoothPeriodMs is one slow breath of the Smooth effect (and of the
+	// Charging lights): three times Pulse's, so it reads as a glow that
+	// swells and settles, not a blink.
+	ledSmoothPeriodMs = 6000
+	// ledSmoothFloor is the dimmest point of a Smooth breath in perceived
+	// brightness (0..1): the lights never go near dark.
+	ledSmoothFloor = 0.7
+	// ledSmoothGamma turns perceived brightness into LED level. An LED's
+	// output looks roughly like level^(1/2.2) to the eye, so a curve eased
+	// in perceived brightness has no fast-looking end.
+	ledSmoothGamma = 2.2
+)
+
+// ledSmooth is the Smooth effect's curve: a raised cosine over
+// ledSmoothPeriodMs, eased in perceived brightness from ledSmoothFloor to full
+// and back, with no corner anywhere for the eye to catch. Returns the LED
+// level, about 0.46..1. Pure.
+func ledSmooth(now time.Time) float64 {
+	phase := math.Mod(float64(now.UnixMilli()), ledSmoothPeriodMs) / ledSmoothPeriodMs
+	if phase < 0 {
+		phase++
+	}
+	ease := (1 - math.Cos(2*math.Pi*phase)) / 2
+	return math.Pow(ledSmoothFloor+(1-ledSmoothFloor)*ease, ledSmoothGamma)
 }
 
 // ledHueLerp maps a value in [lo, hi] onto a hue in [from, to]. Values outside
@@ -385,12 +412,19 @@ func ledPolicyColor(policy string, batteryPct int, charging bool, tempC float64,
 		if !charging {
 			return 0, 0, 0
 		}
-		return hsvToRGB(0.33, 1, 0.35+0.65*ledPulse(now))
+		// The slow Smooth breath: on the old two-second pulse the charging
+		// sticks looked like they were blinking.
+		return hsvToRGB(0.33, 1, ledSmooth(now))
 	case ledPolicyTemperature:
 		hue := ledHueLerp(tempC, 45, 80, 0.33, 0)
 		return hsvToRGB(hue, 1, 0.9)
 	case ledPolicyCustom:
 		switch strings.ToLower(strings.TrimSpace(effect)) {
+		case "smooth":
+			// Only the level moves, never the hue: the TrimUI rings re-arm
+			// (a visible blink) on a hue change, not on a level change.
+			level := ledSmooth(now)
+			return uint8(math.Round(float64(r) * level)), uint8(math.Round(float64(g) * level)), uint8(math.Round(float64(b) * level))
 		case "pulse":
 			level := ledPulse(now)
 			return uint8(float64(r) * level), uint8(float64(g) * level), uint8(float64(b) * level)

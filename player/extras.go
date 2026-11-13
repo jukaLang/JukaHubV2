@@ -1428,6 +1428,8 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	// both edges ("d Navigate" … "R2").
 	pad := scaleX(16, screenWidth)
 	hints := footerHints(config, scene)
+	// "R2 Water" wherever R2 steps the liquid background (liquidbg.go).
+	hints = liquidFooterHint(config, hints)
 	if scene.Name != voiceSceneName {
 		if voice, ok := voiceOrbFooterHint(config); ok {
 			hints = append([]FooterHint{voice}, hints...)
