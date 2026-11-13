@@ -1397,6 +1397,11 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 	}
 	// Juka starts speaking at the first full sentence, not after the last.
 	live := ttsNewLive(ttsFromOrb, ttsKindVoice)
+	localVoice, hasLocalVoice := ttsLocal()
+	primeOfflineVoice := !cloud && local && hasLocalVoice && localVoice.kind == "piper" && ttsModeAllows(appConfig, ttsKindVoice)
+	if primeOfflineVoice {
+		live.Prime()
+	}
 	voiceOrb.live = live
 	go func() {
 		defer cancel()
@@ -1404,7 +1409,7 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 			if r := recover(); r != nil {
 				logWarn("voice", "Juka's answer stopped: %v", r)
 				tbxPost(func() {
-					voiceOrbAnswered(gen, question, "", errors.New("Juka's answer stopped"), false, unmatchedAction)
+					voiceOrbAnswered(gen, question, "", errors.New("Juka's answer stopped"), false, false, unmatchedAction)
 				})
 			}
 		}()
@@ -1422,7 +1427,9 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 		}
 		usedLocal := !cloud || err != nil && local && ctx.Err() == nil
 		if usedLocal {
-			live.Stop()
+			if !primeOfflineVoice {
+				live.Stop()
+			}
 			orbAIText.mu.Lock()
 			if orbAIText.gen == gen {
 				orbAIText.text = ""
@@ -1441,7 +1448,7 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 				orbAIText.mu.Unlock()
 			})
 		}
-		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err, usedLocal, unmatchedAction) })
+		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err, usedLocal, primeOfflineVoice, unmatchedAction) })
 	}()
 }
 
@@ -1459,7 +1466,7 @@ func voiceOrbTakeAIText() {
 }
 
 // voiceOrbAnswered shows Juka's whole answer.
-func voiceOrbAnswered(gen int, question, reply string, err error, local, unmatchedAction bool) {
+func voiceOrbAnswered(gen int, question, reply string, err error, local, primed, unmatchedAction bool) {
 	live := voiceOrbTakeLive(gen)
 	if gen != voiceOrb.gen || voiceOrb.phase != orbThinking || !voiceOrb.ai || !voiceOrbActive() {
 		live.Stop()
@@ -1503,8 +1510,12 @@ func voiceOrbAnswered(gen int, question, reply string, err error, local, unmatch
 	voiceOrb.hideAt = voiceOrb.phaseAt + orbReadMs(reply, false, true)
 	PlayNavSound()
 	if local {
-		live.Stop()
-		ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply)
+		if primed {
+			voiceOrbFinishLive(live, ttsFromOrb, reply)
+		} else {
+			live.Stop()
+			ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply)
+		}
 	} else {
 		// Juka says it too, most of it already (tts_live.go).
 		voiceOrbFinishLive(live, ttsFromOrb, raw)

@@ -22,8 +22,8 @@ func offlineAIPackSpec() relPackSpec {
 		Key:         offlineAIPackKey,
 		Asset:       offlineAIPackAsset,
 		Title:       "offline AI",
-		MaxAsset:    150 << 20,
-		MaxUnpacked: 160 << 20,
+		MaxAsset:    290 << 20,
+		MaxUnpacked: 300 << 20,
 		Root:        offlineAIDirName,
 		Probe:       offlineAIPackProbe,
 		Supported:   offlineAISupported,
@@ -66,7 +66,7 @@ func offlineAISettingsRows() []setRow {
 			if offlineAIReady() {
 				return "Small on-device model answers when Groq is unavailable · no key needed"
 			}
-			return "Optional ~100 MB download · needs free space on the card · slower than Groq"
+			return "Optional ~240 MB download · needs free space on the card · slower than Groq"
 		},
 		Open: offlineAIInstall,
 	}}

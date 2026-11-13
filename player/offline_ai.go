@@ -21,9 +21,9 @@ import (
 
 const (
 	offlineAIDirName    = "juka-llm"
-	offlineAIModelName  = "SmolLM2-135M-Instruct-Q4_0.gguf"
-	offlineAIModelSize  = 91893088
-	offlineAIMinFreeMB  = 350
+	offlineAIModelName  = "SmolLM2-360M-Instruct-Q4_0.gguf"
+	offlineAIModelSize  = 229733280
+	offlineAIMinFreeMB  = 500
 	offlineAIReplyRunes = 420
 	offlineAITimeout    = 60 * time.Second
 	offlineAIOutputMax  = 8 << 10
@@ -95,7 +95,9 @@ func offlineAIPrompt(question string, unmatchedAction bool) string {
 	question = strings.NewReplacer("<|im_start|>", " ", "<|im_end|>", " ").Replace(question)
 	system := "You are Juka. Answer in one short factual sentence. Say if unsure. You cannot take actions."
 	if unmatchedAction {
-		system += " The request was not done; say so and suggest a next step."
+		system = "You are Juka. Reply in one short sentence. You were unable to perform the user's request. " +
+			"Name the failed action and give a manual step. Example: User: Open Dino Game. " +
+			"Juka: I couldn't open Dino Game; try looking in Apps."
 	}
 	return "<|im_start|>system\n" + system + "<|im_end|>\n" +
 		"<|im_start|>user\n" + question + "<|im_end|>\n<|im_start|>assistant\n"
