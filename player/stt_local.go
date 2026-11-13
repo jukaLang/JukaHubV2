@@ -239,15 +239,14 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	started := time.Now()
+	quick := prompt != "" // voice commands are short; dictation keeps the more careful search
 	if lang == "" {
 		lang = "auto"
 	} else if lang == "nb" {
 		lang = "no" // Whisper names Norwegian "no"; the keyboard layout uses "nb".
 	}
-	args := []string{"-m", model, "-f", "-", "-t", "2", "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
-	if prompt != "" {
-		args = append(args, "--prompt", prompt)
-	}
+	args := sttLocalArgs(model, lang, prompt, quick)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(wav)
 	var out bytes.Buffer
@@ -259,8 +258,26 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 		}
 		return "", fmt.Errorf("offline speech recognition failed: %w", err)
 	}
+	logDebug("voice", "offline recognition took %s (fast=%v, clip=%d bytes)", time.Since(started).Round(time.Millisecond), quick, len(wav))
 	if out.Len() > 16<<10 {
 		return "", errors.New("offline speech transcript is too long")
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+func sttLocalArgs(model, lang, prompt string, quick bool) []string {
+	threads := "2"
+	if quick {
+		// The Smart Pro has four A53 cores. Three workers leave one for the
+		// interface; a smaller search cuts the wait after a Menu command.
+		threads = "3"
+	}
+	args := []string{"-m", model, "-f", "-", "-t", threads, "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
+	if quick {
+		args = append(args, "-bs", "3", "-bo", "3")
+	}
+	if prompt != "" {
+		args = append(args, "--prompt", prompt)
+	}
+	return args
 }
