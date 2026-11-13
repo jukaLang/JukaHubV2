@@ -421,13 +421,13 @@ func vkVoicePreviewTick() {
 		var err error
 		wav := vkEncodeWAV(pcm, vkVoiceRate)
 		if localPreview {
-			text, err = sttLocalTranscribe(ctx, wav, lang, "")
+			text, err = sttLocalPreviewTranscribe(ctx, wav, lang)
 		} else if localFallback {
 			cloudCtx, cloudCancel := context.WithTimeout(ctx, 8*time.Second)
 			text, err = vkTranscribe(cloudCtx, key, wav, lang)
 			cloudCancel()
 			if err != nil && ctx.Err() == nil {
-				text, err = sttLocalTranscribe(ctx, wav, lang, "")
+				text, err = sttLocalPreviewTranscribe(ctx, wav, lang)
 			}
 		} else {
 			text, err = vkTranscribe(ctx, key, wav, lang)

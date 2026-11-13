@@ -22,6 +22,7 @@ func jukaSystemPrompt() string {
 func voiceAISettingsRows() []setRow {
 	var rows []setRow
 	rows = append(rows, ttsSettingsRows()...)
+	rows = append(rows, offlineAISettingsRows()...)
 	rows = append(rows, voiceShortcutSettingsRows()...)
 	rows = append(rows, gameAssistSettingsRows()...)
 	rows = append(rows, vkVoiceSettingsRows()...)

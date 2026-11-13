@@ -44,11 +44,12 @@ Then the orb says what it did, in a glass bubble beside it: "Volume 50%",
 ("Opening YouTube") and waits a moment, with a ring around the orb counting
 down, so **B** can still stop a misheard one (**A** opens it at once). When a
 name could mean several things the bubble lists up to four; the D-pad and
-**A** pick one. When nothing matches, **A** opens the Home search sheet with
-your words. A question — "what is the capital of France", "how far is the
-moon", anything of four words or more that names nothing here — goes to Juka,
-the same Groq model as the Chat tab's **Juka AI**, and the answer streams into
-the bubble in a sentence or two.
+**A** pick one. When a request matches nothing, Juka answers it with Groq if a
+key and connection are available, or with the optional on-device model from
+**Settings → Voice & AI → Offline answers**. Groq is preferred because it is
+faster and more capable; if it fails, the installed offline model takes over.
+The local answer is labelled **Offline answer**. An unknown action cannot run
+through the model; the bubble explicitly says **Command wasn't run**.
 
 An answer lingers for as long as it takes to read and does not hold the
 controls: any button puts it away and does its own job, **Menu** asks again.
@@ -121,11 +122,11 @@ game, a video or music silence the voice; the Interface sounds switch does
 not, and the system volume sets how loud it is. The voice model has been
 checked with Piper on a PC, but still needs its first Smart Pro playback test.
 
-Offline speech reads an answer that is already available. Smart Pro packages
-also carry a local recognizer for microphone commands and voice typing when
-Groq cannot transcribe. Asking a new open question and describing a picture
-still use Groq. An on-device language model would need a separate runtime and
-memory test; see [Offline AI options](LOCAL_AI.md).
+Smart Pro packages carry a local recognizer for microphone commands and voice
+typing when Groq cannot transcribe. An optional on-device model can answer
+unmatched Menu requests without Groq after the **Offline answers** download;
+see [Offline AI](LOCAL_AI.md). Describing a picture still uses Groq. Piper is
+the separate offline voice that speaks the answer.
 
 ## Three ways to say it
 
@@ -323,7 +324,7 @@ opens, for people who text by voice; it stops on its own when nothing is said
 for a few seconds, and password, key, address and search fields never listen.
 **Settings → Voice & AI → Install offline speech** shows **Ready** when the
 bundled model is present. If it is missing, press the row once while connected
-to Wi-Fi to download and verify the roughly 78 MB model. New Smart Pro packages
+to Wi-Fi to download and verify the roughly 120 MB speech package. New Smart Pro packages
 already contain it.
 
 While recording a Chat message, provisional words appear in the keyboard field
@@ -333,7 +334,7 @@ words. Stopping the recording gets one full transcript and puts it in the draft;
 **B** discards the preview and keeps the draft as it was. In Automatic or Groq
 mode with a working connection, live preview sends interim clips to Groq while
 the microphone is open, including when you later cancel. In Offline mode,
-preview runs locally; it may update more slowly,
+preview runs locally with the faster English recognizer; it may still update more slowly,
 depending on the device's workload. Local audio and text travel through memory
 and process pipes without being saved to a file.
 
