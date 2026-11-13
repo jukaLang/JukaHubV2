@@ -22,8 +22,8 @@ func sttPackSpec() relPackSpec {
 		Key:         sttPackKey,
 		Asset:       sttPackAsset,
 		Title:       "offline speech",
-		MaxAsset:    128 << 20,
-		MaxUnpacked: 160 << 20,
+		MaxAsset:    160 << 20,
+		MaxUnpacked: 220 << 20,
 		Root:        sttDirName,
 		Probe:       sttPackProbe,
 		Supported:   sttSupported,
@@ -37,6 +37,10 @@ func sttPackProbe(dir string) string {
 	if !ok {
 		return "the recognizer or its model is missing"
 	}
+	fastBin, _, fastOK := sttFastFilesIn(dir)
+	if !fastOK {
+		return "fast English recognition is missing"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "--help")
@@ -46,6 +50,11 @@ func sttPackProbe(dir string) string {
 			return "the recognizer did not start in time"
 		}
 		return "the recognizer cannot start on this device: " + err.Error()
+	}
+	cmd = exec.CommandContext(ctx, fastBin, "--help")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Run(); err != nil {
+		return "fast English recognition cannot start on this device: " + err.Error()
 	}
 	return ""
 }

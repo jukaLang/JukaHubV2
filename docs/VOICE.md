@@ -324,7 +324,7 @@ opens, for people who text by voice; it stops on its own when nothing is said
 for a few seconds, and password, key, address and search fields never listen.
 **Settings → Voice & AI → Install offline speech** shows **Ready** when the
 bundled model is present. If it is missing, press the row once while connected
-to Wi-Fi to download and verify the roughly 78 MB model. New Smart Pro packages
+to Wi-Fi to download and verify the roughly 120 MB speech package. New Smart Pro packages
 already contain it.
 
 While recording a Chat message, provisional words appear in the keyboard field
@@ -334,7 +334,7 @@ words. Stopping the recording gets one full transcript and puts it in the draft;
 **B** discards the preview and keeps the draft as it was. In Automatic or Groq
 mode with a working connection, live preview sends interim clips to Groq while
 the microphone is open, including when you later cancel. In Offline mode,
-preview runs locally; it may update more slowly,
+preview runs locally with the faster English recognizer; it may still update more slowly,
 depending on the device's workload. Local audio and text travel through memory
 and process pipes without being saved to a file.
 

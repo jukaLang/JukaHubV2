@@ -189,6 +189,16 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	clean := func(c string) string {
 		return strings.Join(strings.Fields(strings.ReplaceAll(c, "\x00", "")), " ")
 	}
+	// The first line is there before Piper starts: a line with nothing to
+	// say costs no process.
+	first := ""
+	for first == "" {
+		c, ok := next(ctx)
+		if !ok {
+			return 0, errors.New("nothing to say")
+		}
+		first = clean(c)
+	}
 	dir, err := os.MkdirTemp("", "jukahub-voice-")
 	if err != nil {
 		return 0, err
@@ -213,18 +223,6 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	}
 	if err := cmd.Start(); err != nil {
 		return 0, err
-	}
-	// A primed line has no text yet. Piper loads its voice while the answer
-	// arrives; the first sentence is handed over when it is ready.
-	first := ""
-	for first == "" {
-		c, ok := next(ctx)
-		if !ok {
-			cancel()
-			_ = cmd.Wait()
-			return 0, nil
-		}
-		first = clean(c)
 	}
 	// A Piper that stops answering is ended after ttsPiperTimeout without
 	// progress while it owes a line (the model load counts against the first):

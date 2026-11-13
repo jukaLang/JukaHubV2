@@ -1,17 +1,18 @@
 # Offline AI on the TrimUI Smart Pro
 
 The original Smart Pro can hear voice commands without a Groq key. Its four
-Cortex-A53 CPU cores run the bundled multilingual Whisper tiny recognizer.
+Cortex-A53 CPU cores run a compact Vosk recognizer for English. A bundled
+multilingual Whisper model handles other languages and a Vosk startup failure.
 **Settings → Voice & AI → Speech recognition → Automatic** uses Groq when a
 key and connection are available, then falls back to the local recognizer.
-**Offline on device** keeps recognition local all the time. Short commands use
-a smaller Whisper search and three CPU threads. Provisional Chat words use
-that quick pass too; the final voice typing result keeps the more careful
-search. The app logs recognition time, without logging speech,
-to help measure the change on a handheld.
+**Offline on device** keeps recognition local all the time. On a Smart Pro,
+Vosk recognized a three-second English question in about six seconds; Whisper
+needed about 30 seconds on the same clip. Provisional Chat words and final
+voice typing use the fast English path. The app logs recognition time without
+logging speech.
 
 The original Smart Pro's PowerVR GE8300 graphics chip has no usable OpenCL or
-Vulkan compute runtime on the supported firmware. Whisper and the optional
+Vulkan compute runtime on the supported firmware. Speech and the optional
 text model therefore run on the CPU. The model is unloaded when each answer
 ends, leaving memory available for games.
 
@@ -30,9 +31,8 @@ unknown action is spoken, the bubble says that the command was not run and
 offers an answer or suggestion. The model cannot open apps or change settings.
 Offline answers appear word by word in the bubble and are spoken with Juka's selected
 voice. **Download offline voice** installs the separate Piper voice when
-spoken playback is needed without Groq.
-JukaHub loads that voice while the offline answer is being made, so it can
-start speaking sooner once the sentence appears.
+spoken playback is needed without Groq. On this hardware, Piper may take
+several seconds to prepare speech after the answer appears.
 
 The package contains
 [SmolLM2-360M-Instruct Q4_0](https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF),

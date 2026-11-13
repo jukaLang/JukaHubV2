@@ -76,7 +76,6 @@ type ttsSession struct {
 	gender   string // that voice's, for a local voice that has both
 	local    ttsLocalVoice
 	hasLocal bool
-	prewarm  bool // the local voice may load before a live answer has words
 }
 
 // ttsReport is what a session found out, for the one-time notices and the
@@ -143,32 +142,6 @@ func ttsRun(ctx context.Context, s *ttsSession, pre ttsFail) {
 func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *ttsProduced) {
 	defer close(out)
 	groq := s.key != ""
-	if s.prewarm && !groq && s.hasLocal && s.local.kind == "piper" {
-		// This source is still empty while the local text model works. Start
-		// Piper now so loading its voice overlaps answer generation.
-		index := 0
-		pull := func(ctx context.Context) (string, bool) {
-			chunk, ok := s.src.at(ctx, index)
-			if ok {
-				index++
-			}
-			return chunk, ok
-		}
-		emitted := false
-		err := ttsLocalSpeakChunks(ctx, s.local, pull, s.gender, func(samples []int16, rate int) bool {
-			res.local = true
-			clip := ttsClipFor(samples, rate, s.rate)
-			if clip == nil {
-				return ctx.Err() == nil
-			}
-			emitted = true
-			return ttsSend(ctx, out, clip)
-		})
-		if err != nil && !emitted {
-			res.localFailed = ctx.Err() == nil
-		}
-		return
-	}
 	for i := 0; ctx.Err() == nil; i++ {
 		chunk, ok := s.src.at(ctx, i)
 		if !ok {

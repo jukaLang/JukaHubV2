@@ -9,6 +9,12 @@ SOURCE_SHA=645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4
 MODEL_REV=5359861c739e955e79d9a303bcbc70fb988958b1
 MODEL_SHA=be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21
 MODEL_SIZE=77691713
+
+VOSK_ARCHIVE_SHA=45e95d37755deb07568e79497d7feba8c03aee5a9e071df29961aa023fd94541
+VOSK_LIB_SHA=0e9df29f060a93cf3df3263a4d3635e1b75688a5fd84e86ade1599372e3c9597
+VOSK_MODEL_SHA=30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498
+VOSK_MODEL_SIZE=41205931
+VOSK_LICENSE_SHA=bb618af833c817ab01c1564bd3ec75ba4b4f9cf30910a4a2168e30a674ee8cc6
 WORK=$(mktemp -d /tmp/jukahub-stt.XXXXXXXX)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
@@ -58,12 +64,44 @@ printf '%s  %s\n' "$MODEL_SHA" "$WORK/ggml-tiny.bin" | sha256sum -c -
 test -s "$WORK/smoke.txt"
 grep -qi 'fellow Americans' "$WORK/smoke.txt"
 
+# Vosk's compact recognizer handles English voice commands substantially
+# faster on the Smart Pro. Whisper stays in the package for other languages
+# and for a Vosk startup failure.
+curl -fL --retry 3 --connect-timeout 15 --max-time 900 \
+    https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-linux-aarch64-0.3.45.zip \
+    -o "$WORK/vosk-linux-aarch64.zip"
+printf '%s  %s\n' "$VOSK_ARCHIVE_SHA" "$WORK/vosk-linux-aarch64.zip" | sha256sum -c -
+unzip -q "$WORK/vosk-linux-aarch64.zip" -d "$WORK/vosk"
+VOSK="$WORK/vosk/vosk-linux-aarch64-0.3.45"
+printf '%s  %s\n' "$VOSK_LIB_SHA" "$VOSK/libvosk.so" | sha256sum -c -
+
+curl -fL --retry 3 --connect-timeout 15 --max-time 1200 \
+    https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip \
+    -o "$WORK/vosk-model-small-en-us-0.15.zip"
+test "$(wc -c < "$WORK/vosk-model-small-en-us-0.15.zip")" -eq "$VOSK_MODEL_SIZE"
+printf '%s  %s\n' "$VOSK_MODEL_SHA" "$WORK/vosk-model-small-en-us-0.15.zip" | sha256sum -c -
+
+curl -fL --retry 3 --connect-timeout 15 --max-time 120 \
+    https://raw.githubusercontent.com/alphacep/vosk-api/v0.3.45/COPYING \
+    -o "$WORK/VOSK_LICENSE.txt"
+printf '%s  %s\n' "$VOSK_LICENSE_SHA" "$WORK/VOSK_LICENSE.txt" | sha256sum -c -
+
+cc -O2 -Wall -Wextra -Werror -I "$VOSK" \
+    /src/player/native/vosk-cli.c -o "$WORK/vosk-cli" -ldl
+file "$WORK/vosk-cli" | grep -q 'ELF 64-bit.*ARM aarch64'
+"$WORK/vosk-cli" --help > /dev/null
+
 OUT=/src/player/native/bin/juka-whisper
 mkdir -p "$OUT"
 install -m 755 "$BIN" "$OUT/whisper-cli"
 install -m 644 "$WORK/ggml-tiny.bin" "$OUT/ggml-tiny.bin"
 install -m 644 "$SRC/LICENSE" "$OUT/LICENSE.txt"
+install -m 755 "$WORK/vosk-cli" "$VOSK/libvosk.so" "$OUT/"
+install -m 644 "$WORK/vosk-model-small-en-us-0.15.zip" "$WORK/VOSK_LICENSE.txt" "$OUT/"
 printf 'whisper.cpp %s\nmodel %s\nsource sha256 %s\nmodel sha256 %s\n' \
     "$WHISPER_COMMIT" "$MODEL_REV" "$SOURCE_SHA" "$MODEL_SHA" > "$OUT/BUILDINFO.txt"
 printf 'binary sha256 %s\n' "$(sha256sum "$OUT/whisper-cli" | cut -d' ' -f1)" >> "$OUT/BUILDINFO.txt"
+printf 'vosk archive sha256 %s\nvosk library sha256 %s\nvosk model-archive sha256 %s\nvosk binary sha256 %s\n' \
+    "$VOSK_ARCHIVE_SHA" "$VOSK_LIB_SHA" "$VOSK_MODEL_SHA" \
+    "$(sha256sum "$OUT/vosk-cli" | cut -d' ' -f1)" >> "$OUT/BUILDINFO.txt"
 echo "Offline speech ready in $OUT"

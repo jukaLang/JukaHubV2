@@ -186,17 +186,23 @@ jobs:
         run: |
           set +e
           dest=player/native/bin/juka-whisper
-          miss() { rm -f "$dest/whisper-cli" "$dest/ggml-tiny.bin" "$dest/BUILDINFO.txt" "$dest/LICENSE.txt"; exit 0; }
+          miss() { rm -f "$dest/whisper-cli" "$dest/ggml-tiny.bin" "$dest/BUILDINFO.txt" "$dest/LICENSE.txt" "$dest/vosk-cli" "$dest/libvosk.so" "$dest/vosk-model-small-en-us-0.15.zip" "$dest/VOSK_LICENSE.txt"; exit 0; }
           if ! name=$(sh .github/scripts/build-root.sh key stt); then miss; fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           if ! timeout 240 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
-              whisper-cli ggml-tiny.bin BUILDINFO.txt LICENSE.txt; then miss; fi
+              whisper-cli ggml-tiny.bin BUILDINFO.txt LICENSE.txt \
+              vosk-cli libvosk.so vosk-model-small-en-us-0.15.zip VOSK_LICENSE.txt; then miss; fi
           want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
-          [ -n "$want_model" ] && [ -n "$want_bin" ] || miss
+          want_vosk_bin=$(awk '$1 == "vosk" && $2 == "binary" && $3 == "sha256" { print $4 }' "$dest/BUILDINFO.txt")
+          [ -n "$want_model" ] && [ -n "$want_bin" ] && [ -n "$want_vosk_bin" ] || miss
           [ "$(sha256sum "$dest/ggml-tiny.bin" | cut -d' ' -f1)" = "$want_model" ] || miss
           [ "$(sha256sum "$dest/whisper-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
-          chmod 755 "$dest/whisper-cli"
+          [ "$(sha256sum "$dest/vosk-cli" | cut -d' ' -f1)" = "$want_vosk_bin" ] || miss
+          [ "$(sha256sum "$dest/libvosk.so" | cut -d' ' -f1)" = 0e9df29f060a93cf3df3263a4d3635e1b75688a5fd84e86ade1599372e3c9597 ] || miss
+          [ "$(sha256sum "$dest/vosk-model-small-en-us-0.15.zip" | cut -d' ' -f1)" = 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498 ] || miss
+          [ "$(sha256sum "$dest/VOSK_LICENSE.txt" | cut -d' ' -f1)" = bb618af833c817ab01c1564bd3ec75ba4b4f9cf30910a4a2168e30a674ee8cc6 ] || miss
+          chmod 755 "$dest/whisper-cli" "$dest/vosk-cli"
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
       - name: Look for offline AI built from these sources

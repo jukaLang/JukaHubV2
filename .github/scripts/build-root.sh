@@ -253,7 +253,7 @@ part_sources() {
                 .github/scripts/build-root.sh .gitattributes
             ;;
         stt)
-            git -C "$REPO" ls-files -s -- player/native/build-stt.sh \
+            git -C "$REPO" ls-files -s -- player/native/build-stt.sh player/native/vosk-cli.c \
                 player/native/helper-build-requirements.txt \
                 .github/scripts/build-root.sh .gitattributes
             ;;
