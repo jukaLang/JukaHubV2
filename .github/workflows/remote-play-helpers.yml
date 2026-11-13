@@ -86,7 +86,7 @@ jobs:
     # Room for the worst case: the build root and both parts from scratch.
     # Reused parts take seconds. The TrimUI archive waits for this job, so a
     # hang must not hold it up for long.
-    timeout-minutes: 55
+    timeout-minutes: 90
     continue-on-error: true
     permissions:
       contents: read
@@ -199,10 +199,33 @@ jobs:
           chmod 755 "$dest/whisper-cli"
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
+      - name: Look for offline AI built from these sources
+        id: llm_cache
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          dest=player/native/bin/juka-llm
+          model=SmolLM2-360M-Instruct-Q4_0.gguf
+          miss() { rm -f "$dest/llama-cli" "$dest/$model" "$dest/BUILDINFO.txt" "$dest/LLAMA_LICENSE.txt" "$dest/MODEL_LICENSE.txt"; exit 0; }
+          if ! name=$(sh .github/scripts/build-root.sh key llm); then miss; fi
+          echo "artifact=$name" >> "$GITHUB_OUTPUT"
+          if ! timeout 360 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
+              llama-cli "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; then miss; fi
+          want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
+          want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
+          [ -n "$want_model" ] && [ -n "$want_bin" ] || miss
+          [ "$(wc -c < "$dest/$model")" -eq 229733280 ] || miss
+          [ "$(sha256sum "$dest/$model" | cut -d' ' -f1)" = "$want_model" ] || miss
+          [ "$(sha256sum "$dest/llama-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
+          chmod 755 "$dest/llama-cli"
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
       - name: Create the Ubuntu 20.04 build root
         id: root
         # Needed by whichever part an earlier run did not leave behind.
-        if: steps.cache.outputs.hit != 'true' || steps.androidrt_cache.outputs.hit != 'true' || steps.stt_cache.outputs.hit != 'true'
+        if: steps.cache.outputs.hit != 'true' || steps.androidrt_cache.outputs.hit != 'true' || steps.stt_cache.outputs.hit != 'true' || steps.llm_cache.outputs.hit != 'true'
         run: sh .github/scripts/build-root.sh create
 
       - name: Build the helpers
@@ -478,6 +501,37 @@ jobs:
         with:
           name: ${{ steps.stt_cache.outputs.artifact }}
           path: player/native/bin/juka-whisper/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+
+      - name: Build optional offline AI
+        id: llm
+        if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.llm_cache.outputs.hit != 'true' }}
+        timeout-minutes: 30
+        run: sh .github/scripts/build-root.sh build llm
+
+      - name: Upload optional offline AI
+        if: ${{ !cancelled() && (steps.llm.outcome == 'success' || steps.llm_cache.outputs.hit == 'true') }}
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-llm
+          path: player/native/bin/juka-llm/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+
+      - name: Keep offline AI for later runs
+        if: ${{ !cancelled() && steps.llm.outcome == 'success' && steps.llm_cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.llm_cache.outputs.artifact }}
+          path: player/native/bin/juka-llm/
           if-no-files-found: error
           compression-level: 0
           retention-days: 90

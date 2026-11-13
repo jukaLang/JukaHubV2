@@ -203,6 +203,16 @@ func sttCommandTranscribe(ctx context.Context, key string, wav []byte, prompt st
 }
 
 func sttLocalTranscribe(ctx context.Context, wav []byte, lang, prompt string) (string, error) {
+	return sttLocalTranscribeSearch(ctx, wav, lang, prompt, prompt != "")
+}
+
+// A provisional Chat preview favors speed. The final transcript still runs
+// through sttLocalTranscribe with the normal search.
+func sttLocalPreviewTranscribe(ctx context.Context, wav []byte, lang string) (string, error) {
+	return sttLocalTranscribeSearch(ctx, wav, lang, "", true)
+}
+
+func sttLocalTranscribeSearch(ctx context.Context, wav []byte, lang, prompt string, quick bool) (string, error) {
 	if !sttLocalReady() {
 		return "", errSTTUnavailable
 	}
@@ -210,7 +220,7 @@ func sttLocalTranscribe(ctx context.Context, wav []byte, lang, prompt string) (s
 		return "", err
 	}
 	bin, model := sttLocalFiles()
-	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt)
+	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt, quick)
 	if err != nil && ctx.Err() == nil {
 		logWarn("voice", "offline speech recognition failed: %v", err)
 	}
@@ -235,19 +245,17 @@ func sttCheckMemory() error {
 	return nil
 }
 
-func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, prompt string) (string, error) {
+func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, prompt string, quick bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	started := time.Now()
 	if lang == "" {
 		lang = "auto"
 	} else if lang == "nb" {
 		lang = "no" // Whisper names Norwegian "no"; the keyboard layout uses "nb".
 	}
-	args := []string{"-m", model, "-f", "-", "-t", "2", "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
-	if prompt != "" {
-		args = append(args, "--prompt", prompt)
-	}
+	args := sttLocalArgs(model, lang, prompt, quick)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(wav)
 	var out bytes.Buffer
@@ -259,8 +267,26 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 		}
 		return "", fmt.Errorf("offline speech recognition failed: %w", err)
 	}
+	logDebug("voice", "offline recognition took %s (fast=%v, clip=%d bytes)", time.Since(started).Round(time.Millisecond), quick, len(wav))
 	if out.Len() > 16<<10 {
 		return "", errors.New("offline speech transcript is too long")
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+func sttLocalArgs(model, lang, prompt string, quick bool) []string {
+	threads := "2"
+	if quick {
+		// The Smart Pro has four A53 cores. Three workers leave one for the
+		// interface; a smaller search cuts the wait after a Menu command.
+		threads = "3"
+	}
+	args := []string{"-m", model, "-f", "-", "-t", threads, "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
+	if quick {
+		args = append(args, "-bs", "3", "-bo", "3")
+	}
+	if prompt != "" {
+		args = append(args, "--prompt", prompt)
+	}
+	return args
 }

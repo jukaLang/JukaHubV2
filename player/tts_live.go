@@ -31,11 +31,15 @@ import (
 // for ever.
 const ttsLiveIdleMax = 20 * time.Second
 
+// A primed offline line may wait for the local text model's full timeout.
+const ttsPrimedIdleMax = 70 * time.Second
+
 // ttsSource is the text of one line, chunk by chunk. Any goroutine.
 type ttsSource struct {
 	mu      sync.Mutex
 	chunks  []string // handed to the producer, in order
 	pending []string // sentences (each ≤ ttsChunkMax bytes) not packed yet
+	prewarm bool     // start the local voice before the first sentence arrives
 	done    bool     // nothing more will come
 	wake    chan struct{}
 }
@@ -70,7 +74,11 @@ func (s *ttsSource) push(sentences []string, done bool) {
 // at is chunk i (asked for in order from 0), waiting while the line is still
 // being written. false: the line has no chunk i, or ctx ended.
 func (s *ttsSource) at(ctx context.Context, i int) (string, bool) {
-	idle := time.NewTimer(ttsLiveIdleMax)
+	idleMax := ttsLiveIdleMax
+	if s.prewarm {
+		idleMax = ttsPrimedIdleMax
+	}
+	idle := time.NewTimer(idleMax)
 	defer idle.Stop()
 	for {
 		s.mu.Lock()
@@ -141,6 +149,23 @@ type ttsLive struct {
 // complete.
 func ttsNewLive(origin ttsOrigin, kind ttsKind) *ttsLive {
 	return &ttsLive{origin: origin, kind: kind}
+}
+
+// Prime starts a live line with no words yet. The offline answer can load
+// Piper while the text model is thinking, then hand the finished sentence to
+// the already running voice. Stop still cancels the line immediately.
+func (l *ttsLive) Prime() {
+	if l == nil || l.stopped.Load() {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed || l.src != nil {
+		return
+	}
+	l.src = ttsOpenSource()
+	l.src.prewarm = true
+	l.line = ttsSpeakSource(l.origin, l.kind, l.src)
 }
 
 // Update takes the whole answer so far.

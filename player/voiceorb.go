@@ -68,6 +68,7 @@ const (
 	orbOfferNone          orbOffer = iota
 	orbOfferGroqKey                // Settings → General, where the Groq key goes
 	orbOfferOfflineSpeech          // one-time offline recognizer install
+	orbOfferOfflineAI              // optional on-device text model
 	orbOfferPhone                  // the Voice command page's phone QR code
 	orbOfferSearch                 // the Home search sheet with the words typed in
 )
@@ -146,6 +147,9 @@ const voiceOrbMenuKey = "voiceMenuButton"
 const orbJukaVoicePrompt = "This question was spoken to the handheld's voice assistant and the answer is shown " +
 	"in a small bubble: answer in one or two short sentences of plain text, with no lists and no markdown."
 
+const orbJukaUnmatchedPrompt = "JukaHub could not carry out this spoken command. Do not claim that it was done. " +
+	"Say that it was not done, then give a brief useful suggestion."
+
 // voiceOrb is the orb. Main thread only.
 var voiceOrb struct {
 	phase   orbPhase
@@ -195,6 +199,9 @@ var voiceOrb struct {
 	tone  tbxTone
 	offer orbOffer
 	words string // what a search offer searches for
+	// groqNudge: this wait has no Groq key behind it, so the bubble offers
+	// "Speed up by providing a Groq key" with a button to Settings.
+	groqNudge bool
 
 	// The command waiting out the confirm pause, and the choices.
 	act       func(*Config)
@@ -216,12 +223,31 @@ var voiceOrb struct {
 	offerRect  sdl.Rect
 
 	// Wrapped text, kept while the text and the width stay the same.
-	wrapTitle, wrapSub orbWrap
+	wrapTitle, wrapSub, wrapNudge orbWrap
 }
 
-// A key is optional: mention Groq's faster recognition once per launch while
-// an offline clip is being understood, rather than prompting on every press.
-var voiceOrbGroqTipShown bool
+// orbGroqNudgeText is the line over the "Add Groq key" button while the orb
+// thinks without a key: Groq is much faster (and better) than the offline
+// recognizer and the on-device model.
+const orbGroqNudgeText = "Speed up by providing a Groq key"
+
+// voiceOrbGroqNudgeShown reports whether the thinking bubble shows the Groq
+// nudge and its button: no key, the orb thinking, not over a paused game
+// (there A is the voice button and the bubble stays the game's).
+func voiceOrbGroqNudgeShown() bool {
+	return voiceOrb.groqNudge && voiceOrb.phase == orbThinking && voiceOrbActive() && !gameAssistOverlayActive()
+}
+
+// voiceOrbRunGroqNudge is the nudge's button: drop the wait and open
+// Settings → General's Groq key sheet.
+func voiceOrbRunGroqNudge(config *Config) {
+	voiceOrbHideNow()
+	if config == nil {
+		config = appConfig
+	}
+	PlayActivateSound()
+	vkVoiceOpenKeySettings(config)
+}
 
 // orbAIText is Juka's answer as it streams in: the request goroutine writes
 // it, the frame reads it.
@@ -734,9 +760,15 @@ func voiceOrbMouse(down bool, mx, my int32, config *Config) bool {
 			}
 		}
 	}
-	if voiceOrb.offer != orbOfferNone && voiceOrb.offerRect.W > 0 && pointInRect(mx, my, voiceOrb.offerRect) {
-		voiceOrbRunOffer(config)
-		return true
+	if voiceOrb.offerRect.W > 0 && pointInRect(mx, my, voiceOrb.offerRect) {
+		if voiceOrbGroqNudgeShown() {
+			voiceOrbRunGroqNudge(config)
+			return true
+		}
+		if voiceOrb.offer != orbOfferNone {
+			voiceOrbRunOffer(config)
+			return true
+		}
 	}
 	if voiceOrb.bubbleRect.W > 0 && pointInRect(mx, my, voiceOrb.bubbleRect) {
 		if voiceOrb.phase == orbConfirm {
@@ -760,6 +792,10 @@ func voiceOrbConfirmButton(config *Config) {
 	switch voiceOrb.phase {
 	case orbListening:
 		voiceOrbFinish(config)
+	case orbThinking:
+		if voiceOrbGroqNudgeShown() {
+			voiceOrbRunGroqNudge(config)
+		}
 	case orbConfirm:
 		voiceOrbRunPending(config)
 	case orbChoices:
@@ -1057,13 +1093,7 @@ func voiceOrbFinish(config *Config) {
 	voiceOrb.ai = false
 	voiceOrbSetPhase(orbThinking)
 	voiceOrb.title, voiceOrb.sub, voiceOrb.tone, voiceOrb.offer = "Thinking…", "", tbxToneNeutral, orbOfferNone
-	if key == "" && !voiceOrbGroqTipShown {
-		voiceOrb.sub = "For faster speech, add a Groq API key in Settings → General (optional)"
-		if sttModeOf(config) == sttModeOffline {
-			voiceOrb.sub = "Groq is faster: add an API key, then choose Automatic (optional)"
-		}
-		voiceOrbGroqTipShown = true
-	}
+	voiceOrb.groqNudge = key == ""
 	PlayActivateSound()
 	go func() {
 		defer cancel()
@@ -1127,7 +1157,15 @@ func voiceOrbCommand(config *Config, text string) {
 	logDebug("voice", "orb: command understood as intent %d", int(in.Kind))
 	out := voiceExecute(config, in, voiceFromMic)
 	if voiceOrbWantsJuka(in, out) {
-		voiceOrbAsk(text)
+		if orbAnswerChoice(groqAPIKey(), IsOnline() || netReconnecting(), offlineAIReady()) != "" {
+			voiceOrbAsk(text, in.Verb != "" || !orbLooksLikeQuestion(in.Heard))
+		} else if offlineAISupported() {
+			voiceOrbSay("I couldn't answer that yet", "Install offline answers, or add a Groq key", tbxToneWarn, orbOfferOfflineAI)
+			PlayErrorSound()
+		} else {
+			voiceOrbShowOutcome(out)
+			ttsSpeakOutcome(ttsFromOrb, out)
+		}
 		return
 	}
 	out = ttsSpeakAfterAction(out, voiceFromMic)
@@ -1235,6 +1273,9 @@ func voiceOrbRunOffer(config *Config) {
 	case orbOfferOfflineSpeech:
 		PlayActivateSound()
 		sttInstallOffline(config)
+	case orbOfferOfflineAI:
+		PlayActivateSound()
+		offlineAIInstall(config)
 	case orbOfferPhone:
 		PlayActivateSound()
 		voiceOrbOpenPhone(config)
@@ -1270,26 +1311,34 @@ var orbQuestionWords = voiceSet("what", "who", "whom", "whose", "why", "how", "w
 	"is", "are", "was", "were", "do", "does", "did", "can", "could", "should", "would", "will",
 	"tell", "explain", "define", "describe", "recommend", "suggest", "translate", "calculate", "give")
 
-// voiceOrbWantsJuka reports whether what was heard is a question for Juka: a
-// sentence the grammar read as a bare name ("what is the capital of France")
-// that matched nothing — or, when it opens with a question word ("how far is
-// the moon"), only near-misses spelt like a title ("Moonbase") — while Juka
-// can be reached.
+// voiceOrbWantsJuka keeps recognized actions and confident matches with the
+// command parser. A phrase with no match, including "open <unknown app>", can
+// receive an answer; the model is never allowed to execute it.
 func voiceOrbWantsJuka(in voiceIntent, out voiceOutcome) bool {
 	// A taught word already did what it was taught to, even when it is a long
 	// sentence (voiceshortcuts.go).
 	if voiceShortcutHandled(in.Heard) {
 		return false
 	}
-	if in.Kind != voiceIntentOpen || in.Verb != "" || out.Act != nil || !orbLooksLikeQuestion(in.Heard) {
+	if in.Kind != voiceIntentOpen || out.Act != nil || out.Done || out.Cancel {
 		return false
 	}
-	if len(out.Choices) > 0 && !(orbOpensWithQuestionWord(in.Heard) && orbOnlyNearMisses(out.Choices)) {
-		return false
+	if len(out.Choices) > 0 {
+		return in.Verb == "" && orbOpensWithQuestionWord(in.Heard) && orbOnlyNearMisses(out.Choices)
 	}
-	// Still reconnecting after a wake (the words just came back over the
-	// network, so it is nearly there): Juka gets the question all the same.
-	return strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting())
+	return out.Search != ""
+}
+
+// Groq is preferred, and a local model is the fallback. This choice is pure
+// so a missing key can never accidentally initiate a cloud request.
+func orbAnswerChoice(key string, online, local bool) string {
+	if strings.TrimSpace(key) != "" && online {
+		return "groq"
+	}
+	if local {
+		return "offline"
+	}
+	return ""
 }
 
 // orbOpensWithQuestionWord reports whether a folded sentence starts with a
@@ -1317,41 +1366,89 @@ func orbLooksLikeQuestion(folded string) bool {
 	return orbOpensWithQuestionWord(folded) || len(strings.Fields(folded)) >= 4
 }
 
-// voiceOrbAsk puts a question to Juka and streams the answer into the bubble.
-func voiceOrbAsk(question string) {
+// voiceOrbAsk prefers Groq, then asks the installed local model if Groq is
+// missing or fails. The model only writes an answer; it never runs a command.
+func voiceOrbAsk(question string, unmatchedAction bool) {
 	key := strings.TrimSpace(groqAPIKey())
+	local := offlineAIReady()
+	cloud := orbAnswerChoice(key, IsOnline() || netReconnecting(), local) == "groq"
 	models := groqCandidatesFor(groqModel())
 	voiceOrbCancelRequest()
 	gen := voiceOrb.gen
+	ctx, cancel := context.WithCancel(context.Background())
+	voiceOrb.cancel = cancel
 	voiceOrb.ai = true
 	voiceOrbSetPhase(orbThinking)
 	voiceOrb.title, voiceOrb.sub, voiceOrb.tone, voiceOrb.offer = "Thinking…", orbQuote(question), tbxToneNeutral, orbOfferNone
+	voiceOrb.groqNudge = key == ""
+	if !cloud {
+		voiceOrb.title = "Thinking offline…"
+	}
 	orbAIText.mu.Lock()
 	orbAIText.gen, orbAIText.text = gen, ""
 	orbAIText.mu.Unlock()
+	system := jukaSystemPrompt() + " " + orbJukaVoicePrompt
+	if unmatchedAction {
+		system += " " + orbJukaUnmatchedPrompt
+	}
 	messages := []map[string]string{
-		{"role": "system", "content": jukaSystemPrompt() + " " + orbJukaVoicePrompt},
+		{"role": "system", "content": system},
 		{"role": "user", "content": question},
 	}
 	// Juka starts speaking at the first full sentence, not after the last.
 	live := ttsNewLive(ttsFromOrb, ttsKindVoice)
+	localVoice, hasLocalVoice := ttsLocal()
+	primeOfflineVoice := !cloud && local && hasLocalVoice && localVoice.kind == "piper" && ttsModeAllows(appConfig, ttsKindVoice)
+	if primeOfflineVoice {
+		live.Prime()
+	}
 	voiceOrb.live = live
 	go func() {
+		defer cancel()
 		defer func() {
 			if r := recover(); r != nil {
 				logWarn("voice", "Juka's answer stopped: %v", r)
-				tbxPost(func() { voiceOrbAnswered(gen, question, "", errors.New("Juka's answer stopped")) })
+				tbxPost(func() {
+					voiceOrbAnswered(gen, question, "", errors.New("Juka's answer stopped"), false, false, unmatchedAction)
+				})
 			}
 		}()
-		reply, err := chatGroqAsk(key, models, messages, func(partial string) {
+		var reply string
+		var err error
+		if cloud {
+			reply, err = chatGroqAsk(key, models, messages, func(partial string) {
+				orbAIText.mu.Lock()
+				if orbAIText.gen == gen {
+					orbAIText.text = partial
+				}
+				orbAIText.mu.Unlock()
+				live.Update(partial)
+			})
+		}
+		usedLocal := !cloud || err != nil && local && ctx.Err() == nil
+		if usedLocal {
+			if !primeOfflineVoice {
+				live.Stop()
+			}
 			orbAIText.mu.Lock()
 			if orbAIText.gen == gen {
-				orbAIText.text = partial
+				orbAIText.text = ""
 			}
 			orbAIText.mu.Unlock()
-			live.Update(partial)
-		})
-		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err) })
+			tbxPost(func() {
+				if voiceOrb.gen == gen && voiceOrb.phase == orbThinking {
+					voiceOrb.title = "Thinking offline…"
+				}
+			})
+			reply, err = offlineAIAnswer(ctx, question, unmatchedAction, func(partial string) {
+				orbAIText.mu.Lock()
+				if orbAIText.gen == gen {
+					orbAIText.text = partial
+				}
+				orbAIText.mu.Unlock()
+			})
+		}
+		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err, usedLocal, primeOfflineVoice, unmatchedAction) })
 	}()
 }
 
@@ -1369,7 +1466,7 @@ func voiceOrbTakeAIText() {
 }
 
 // voiceOrbAnswered shows Juka's whole answer.
-func voiceOrbAnswered(gen int, question, reply string, err error) {
+func voiceOrbAnswered(gen int, question, reply string, err error, local, primed, unmatchedAction bool) {
 	live := voiceOrbTakeLive(gen)
 	if gen != voiceOrb.gen || voiceOrb.phase != orbThinking || !voiceOrb.ai || !voiceOrbActive() {
 		live.Stop()
@@ -1379,7 +1476,17 @@ func voiceOrbAnswered(gen int, question, reply string, err error) {
 	if err != nil {
 		live.Stop()
 		logWarn("voice", "Juka could not answer: %v", err)
-		voiceOrbSay(chatFriendlyAIError(err), orbQuote(question), tbxToneWarn, orbOfferNone)
+		msg := chatFriendlyAIError(err)
+		offer := orbOfferNone
+		if local {
+			msg = "Offline AI could not answer — try again"
+			if errors.Is(err, errOfflineAIMemory) {
+				msg = "Close a game or app to free memory for offline AI"
+			}
+		} else if offlineAISupported() && !offlineAIReady() {
+			offer = orbOfferOfflineAI
+		}
+		voiceOrbSay(msg, orbQuote(question), tbxToneWarn, offer)
 		PlayErrorSound()
 		return
 	}
@@ -1391,12 +1498,28 @@ func voiceOrbAnswered(gen int, question, reply string, err error) {
 		PlayErrorSound()
 		return
 	}
-	voiceOrbSay(reply, orbQuote(question), tbxToneNeutral, orbOfferNone)
+	sub := orbQuote(question)
+	if local {
+		sub = "Offline answer · " + sub
+	}
+	if unmatchedAction {
+		sub = "Command wasn't run · " + sub
+	}
+	voiceOrbSay(reply, sub, tbxToneNeutral, orbOfferNone)
 	trophyEvent(tkAIAsk)
 	voiceOrb.hideAt = voiceOrb.phaseAt + orbReadMs(reply, false, true)
 	PlayNavSound()
-	// Juka says it too, most of it already (tts_live.go).
-	voiceOrbFinishLive(live, ttsFromOrb, raw)
+	if local {
+		if primed {
+			voiceOrbFinishLive(live, ttsFromOrb, reply)
+		} else {
+			live.Stop()
+			ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply)
+		}
+	} else {
+		// Juka says it too, most of it already (tts_live.go).
+		voiceOrbFinishLive(live, ttsFromOrb, raw)
+	}
 }
 
 // voiceOrbFinishLive speaks the rest of an answer on its live line, or the
@@ -1444,6 +1567,7 @@ func voiceOrbSetPhase(p orbPhase) {
 	voiceOrb.phase = p
 	voiceOrb.phaseAt = now
 	voiceOrb.fadeAt, voiceOrb.hideAt = 0, 0
+	voiceOrb.groqNudge = false // each thinking phase sets its own
 }
 
 // voiceOrbCancel is B: stop listening or waiting, drop the command or the
@@ -1695,6 +1819,8 @@ func orbOfferLabel(o orbOffer) string {
 		return "Add Groq key"
 	case orbOfferOfflineSpeech:
 		return "Install offline speech"
+	case orbOfferOfflineAI:
+		return "Install offline answers"
 	case orbOfferPhone:
 		return "Use my phone"
 	case orbOfferSearch:
@@ -1829,6 +1955,8 @@ type orbGeom struct {
 	rows       [orbMaxChoiceRows]sdl.Rect
 	nRows      int
 	offer      sdl.Rect
+	offerLabel string // the button's words, its key in front
+	nudgeLines []string
 	hint       string
 	hintY      int32
 }
@@ -1891,6 +2019,16 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 	btnH := fonts.smallH + 18
 	offer := voiceOrb.phase == orbAnswer && voiceOrb.offer != orbOfferNone
 	if offer {
+		g.offerLabel = orbKeyName("A") + "  " + orbOfferLabel(voiceOrb.offer)
+	}
+	// Thinking without a Groq key: the nudge line and its button.
+	if voiceOrbGroqNudgeShown() {
+		offer = true
+		g.offerLabel = orbKeyName("A") + "  " + orbOfferLabel(orbOfferGroqKey)
+		g.nudgeLines = voiceOrb.wrapNudge.get(fonts.small, orbGroqNudgeText, textW, 2)
+		h += 10 + int32(len(g.nudgeLines))*fonts.smallH
+	}
+	if offer {
 		h += 12 + btnH
 	}
 	h += 10 + fonts.tinyH + orbPad
@@ -1920,9 +2058,12 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 		}
 		y -= 6
 	}
+	if len(g.nudgeLines) > 0 {
+		y += 10 + int32(len(g.nudgeLines))*fonts.smallH
+	}
 	if offer {
 		y += 12
-		w := tbxButtonWidth(fonts.small, orbKeyName("A")+"  "+orbOfferLabel(voiceOrb.offer), 150)
+		w := tbxButtonWidth(fonts.small, g.offerLabel, 150)
 		if w > b.W-2*orbPad {
 			w = b.W - 2*orbPad
 		}
@@ -2055,10 +2196,17 @@ func voiceOrbDrawBubble(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 				WithAlpha(ColorTextTertiary(), ta), textAlignLeft)
 		}
 	}
+	if len(g.nudgeLines) > 0 {
+		y += 10
+		for _, line := range g.nudgeLines {
+			drawText(renderer, fonts.small, line, x, y, WithAlpha(glassAccent(), ta), textAlignLeft)
+			y += fonts.smallH
+		}
+	}
 	if g.offer.W > 0 {
 		r := g.offer
 		r.X += slide
-		tbxDrawButton(renderer, config, fonts.small, r, orbKeyName("A")+"  "+orbOfferLabel(voiceOrb.offer), true, true, false)
+		tbxDrawButton(renderer, config, fonts.small, r, g.offerLabel, true, true, false)
 	}
 	if g.hint != "" {
 		hint := ellipsize(fonts.tiny, g.hint, b.W-2*orbPad)

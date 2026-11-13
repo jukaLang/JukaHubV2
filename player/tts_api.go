@@ -249,7 +249,7 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, src *ttsS
 		}
 		src = ttsFixedSource(chunks)
 	}
-	s := &ttsSession{gen: gen, kind: kind, origin: origin, src: src, rate: int(audioSampleRate)}
+	s := &ttsSession{gen: gen, kind: kind, origin: origin, src: src, rate: int(audioSampleRate), prewarm: src.prewarm}
 	s.local, s.hasLocal = ttsLocal()
 	pre := ttsFailNone
 	if voice := ttsVoiceOf(cfg); voice != ttsVoiceDevice {
