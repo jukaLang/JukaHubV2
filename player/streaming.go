@@ -881,6 +881,21 @@ func cancelVideoPrepare() bool {
 	return true
 }
 
+// cancelVideoPrepareSeq is cancelVideoPrepare for one prepare only: a newer
+// load that began meanwhile is left alone (ytdownload_bg.go).
+func cancelVideoPrepareSeq(seq uint64) bool {
+	videoPrepareMu.Lock()
+	defer videoPrepareMu.Unlock()
+	if !videoPrepare.active || videoPrepare.seq != seq {
+		return false
+	}
+	if videoPrepare.cancel != nil {
+		videoPrepare.cancel()
+	}
+	videoPrepare = videoPrepareState{seq: seq}
+	return true
+}
+
 // resolvePlaybackTools resolves the helper tools one load needs: yt-dlp to
 // extract the stream, ffmpeg to decode it, and ffprobe for the duration/fps it
 // can supply. Missing tools are downloaded here, which on a cold card is the

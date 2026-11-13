@@ -954,6 +954,11 @@ func retroArchCoreDirs() []string {
 	// so a core install lands where the RetroArch tile will load it.
 	if IsWindows() {
 		candidates = append(emuWinRetroArchCoreDirs(), candidates...)
+	} else {
+		// The RetroArch the Emulators page shows (deviceRetroArchCoresDir:
+		// the card JukaHub runs from, Apps/RetroArch…) comes first, so a core
+		// install lands where that RetroArch loads it.
+		candidates = append([]string{deviceRetroArchCoresDir()}, candidates...)
 	}
 	seen := map[string]bool{}
 	var out []string
@@ -1478,6 +1483,16 @@ func retroArchConfigDirs() []string {
 			filepath.Join(dir, "RetroArch", ".retroarch", "config"),
 			filepath.Join(dir, "retroarch", "config"),
 		)
+	}
+	if IsWindows() {
+		// A Windows RetroArch keeps config\ beside retroarch.exe.
+		if exe := emuWinExe("RetroArch"); exe != "" {
+			candidates = append(candidates, filepath.Join(filepath.Dir(exe), "config"))
+		}
+	} else {
+		// The handheld RetroArch the Emulators page found, wherever it is.
+		raDir := filepath.Dir(filepath.Dir(deviceRetroArchCoresDir()))
+		candidates = append(candidates, filepath.Join(raDir, ".retroarch", "config"))
 	}
 	seen := map[string]bool{}
 	var out []string

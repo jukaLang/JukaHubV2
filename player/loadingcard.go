@@ -10,6 +10,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -126,7 +127,9 @@ func loadingCancelLayout(font *ttf.Font, cardX, cardW, y int32) (pill sdl.Rect, 
 		x + pillW + gap, textY
 }
 
-// loadingCancelButton is the one button the card accepts while it is up.
+// loadingCancelButton is the card's way out. While a download is on the card
+// it accepts a second button, Y (ytdlBgButton), which sends the download to
+// the background.
 const loadingCancelButton = "B"
 
 // loadingCancelLabel is the word next to that badge.
@@ -143,10 +146,89 @@ func renderLoadingCancelButton(renderer *sdl.Renderer, config *Config, cardX, ca
 	if font == nil {
 		return
 	}
+	if ytdlBgOffered() {
+		renderLoadingTwoButtons(renderer, config, font, cardX, cardW, y)
+		return
+	}
 	pill, labelX, labelY := loadingCancelLayout(font, cardX, cardW, y)
 	// Home's footer hint exactly: the button's name centred in a glass pill,
 	// its action in the muted ink beside it.
 	drawGlassHintBadge(renderer, config, font, pill, loadingCancelButton, loadingCancelLabel, labelX, labelY)
+	lw, _, _ := font.SizeUTF8(loadingCancelLabel)
+	loadingCardHitsSet(sdl.Rect{X: pill.X, Y: pill.Y, W: labelX + int32(lw) - pill.X, H: pill.H}, sdl.Rect{})
+}
+
+// loadingCardHits are the card's buttons as the last frame drew them, so a tap
+// on one does what its button does (the card swallows every other tap).
+var loadingCardHits struct {
+	mu                 sync.Mutex
+	cancel, background sdl.Rect
+}
+
+func loadingCardHitsSet(cancel, background sdl.Rect) {
+	loadingCardHits.mu.Lock()
+	loadingCardHits.cancel, loadingCardHits.background = cancel, background
+	loadingCardHits.mu.Unlock()
+}
+
+// loadingCardClick routes a tap while a video is being prepared: Cancel, or
+// sending its download to the background (ytdownload_bg.go). Main thread.
+func loadingCardClick(mx, my int32) {
+	loadingCardHits.mu.Lock()
+	cancel, background := loadingCardHits.cancel, loadingCardHits.background
+	loadingCardHits.mu.Unlock()
+	in := func(r sdl.Rect) bool {
+		return r.W > 0 && mx >= r.X && mx < r.X+r.W && my >= r.Y && my < r.Y+r.H
+	}
+	switch {
+	case in(background):
+		ytdlSendToBackground()
+	case in(cancel):
+		cancelVideoPrepare()
+	}
+}
+
+// renderLoadingTwoButtons draws "B Cancel" and "Y Download in background" side
+// by side while a download is on the card; the long label shortens to
+// "Background" on a narrow card.
+func renderLoadingTwoButtons(renderer *sdl.Renderer, config *Config, font *ttf.Font, cardX, cardW, y int32) {
+	const (
+		gap    = int32(10) // pill to its label
+		padX   = int32(10) // inside a pill
+		spread = int32(28) // between the two hints
+	)
+	type hint struct {
+		button, label string
+		pillW, labelW int32
+	}
+	measure := func(button, label string) hint {
+		bw, _, _ := font.SizeUTF8(hintKeyFor(button, label))
+		lw, _, _ := font.SizeUTF8(label)
+		return hint{button: button, label: label, pillW: int32(bw) + padX*2, labelW: int32(lw)}
+	}
+	width := func(hs ...hint) int32 {
+		w := spread * int32(len(hs)-1)
+		for _, h := range hs {
+			w += h.pillW + gap + h.labelW
+		}
+		return w
+	}
+	cancel := measure(loadingCancelButton, loadingCancelLabel)
+	bg := measure(ytdlBgButton, ytdlBgLabel)
+	if width(cancel, bg) > cardW-2*loadingCardPad {
+		bg = measure(ytdlBgButton, ytdlBgLabelShort)
+	}
+	_, bh, _ := font.SizeUTF8(hintKeyFor(loadingCancelButton, loadingCancelLabel))
+	textY := y + (loadingCancelPillH-int32(bh))/2
+	x := cardX + (cardW-width(cancel, bg))/2
+	var rects [2]sdl.Rect
+	for i, h := range [...]hint{cancel, bg} {
+		pill := sdl.Rect{X: x, Y: y, W: h.pillW, H: loadingCancelPillH}
+		drawGlassHintBadge(renderer, config, font, pill, h.button, h.label, x+h.pillW+gap, textY)
+		rects[i] = sdl.Rect{X: x, Y: y, W: h.pillW + gap + h.labelW, H: loadingCancelPillH}
+		x += h.pillW + gap + h.labelW + spread
+	}
+	loadingCardHitsSet(rects[0], rects[1])
 }
 
 // loadingSloganInk is the slogan's tone: between the secondary and primary

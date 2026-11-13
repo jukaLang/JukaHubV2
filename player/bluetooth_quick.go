@@ -118,6 +118,8 @@ func btQuickKick() {
 	c.kicks++
 	c.at = time.Time{}
 	c.mu.Unlock()
+	// A headset that just connected gets JukaHub's sound now (audioroute.go).
+	audioRouteKick()
 }
 
 // btQuickReadHost reads the adapter, its links and its power from the kernel.

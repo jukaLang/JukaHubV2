@@ -60,7 +60,9 @@ package main
 //   - while charging, or after a couple of idle minutes, so a download never
 //     competes with someone navigating; a pass more than three days overdue,
 //     or the first one on a card that has never had one once it has waited a
-//     poll's worth, runs at the next quiet moment regardless.
+//     poll's worth, runs at the next quiet moment regardless — and so does a
+//     pass that is due when JukaHub starts (emuStartWindow): the emulators are
+//     brought to their latest build on start, a day apart at most.
 //
 // It is the same work the page's action does — download, verify the CRC32 the
 // index states, check that the build can load here, activate, keep the replaced
@@ -282,6 +284,37 @@ func coreAutoUpdateOverdueFor(last string, now time.Time, waited time.Duration) 
 		return waited >= coreAutoUpdatePoll
 	}
 	return now.Sub(t) >= coreAutoUpdateOverdue
+}
+
+// emuStartWindow is how long after JukaHub starts an update that is due counts
+// as an update "on start". Juka asked (2026-11-12) for the emulators — the
+// cores, JukaHub's PPSSPP and the other managed builds — to be brought to their
+// latest version when JukaHub starts, not at some idle minute later: a first
+// start used to wait for the user to leave the device alone for two minutes, or
+// for twenty minutes of use, before its first update. A due pass whose wait
+// began inside this window skips the charging-or-idle rule; it still never runs
+// over a game, another install or a playing video, and still runs at most once
+// a day (coreAutoUpdateDue), so a start does not download the same nightly
+// again. The window is wide enough for a pass that waits behind a first boot's
+// helper download or the core pass's own hold on the patch slot.
+const emuStartWindow = 15 * time.Minute
+
+// emuProcessStart is when this run of JukaHub began, by the monotonic clock
+// (the handheld's wall clock can jump when it reaches the network).
+var emuProcessStart = time.Now()
+
+// emuWaitBeganOnStart reports that a due pass which has been waiting for waited
+// began waiting inside emuStartWindow of this run's start (waited zero: it
+// starts now). The wait clock runs from the first look, offline or under a
+// game too, so "on start" also ends at twice the window: a device that boots
+// offline and reaches Wi-Fi an hour later, or comes back from a long game,
+// waits for its quiet moment as before.
+func emuWaitBeganOnStart(waited time.Duration) bool {
+	if waited < 0 {
+		waited = 0
+	}
+	since := time.Since(emuProcessStart)
+	return since < 2*emuStartWindow && since-waited < emuStartWindow
 }
 
 // coreAutoUpdateAllowed is the policy for this device, with the opt-outs kept
@@ -604,7 +637,7 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	// installed core once to checksum it, which is card work a game, a video
 	// or a scrolling list should not compete with.
 	busy := installBarActive() || videoHoldsScreenAwake()
-	overdue := (coresDue && coreAutoUpdateOverdueFor(last, now, waited)) || emuRuntimesOverdue(extras, now, waited)
+	overdue := emuWaitBeganOnStart(waited) || (coresDue && coreAutoUpdateOverdueFor(last, now, waited)) || emuRuntimesOverdue(extras, now, waited)
 	if !coreAutoUpdateMoment(gameScreenSuspended(), busy, getBatteryCharging(), userInputAge(now), overdue) {
 		return false, true
 	}

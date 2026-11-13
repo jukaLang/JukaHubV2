@@ -72,6 +72,13 @@ func ttsSettingsRows() []setRow {
 			},
 		},
 		{
+			ID: "jukaOfflineVoice", Label: "Download offline voice", Kind: setKindAction,
+			Visible: func(*Config) bool { return ttsOfflineVoiceSupported() },
+			Detail:  ttsOfflineVoiceDetail,
+			Value:   ttsOfflineVoiceValue,
+			Open:    ttsInstallOfflineVoice,
+		},
+		{
 			ID: "jukaVoiceTest", Label: "Hear Juka", Kind: setKindAction,
 			Detail: setStatic("Says a short line in the chosen voice — or what keeps it quiet"),
 			Value:  ttsTestValue,

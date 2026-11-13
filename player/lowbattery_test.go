@@ -3,7 +3,10 @@ package main
 // Tests for the low-battery guard. The decisions are pure, so the risky part —
 // when to auto-save and suspend — is verified without a handheld.
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBatteryGuardActionFor(t *testing.T) {
 	tests := []struct {
@@ -112,5 +115,31 @@ func TestLowBatteryGuardEnabledByDefault(t *testing.T) {
 	}
 	if lowBatteryGuardEnabled(nil) {
 		t.Fatal("nil config must not enable the guard")
+	}
+}
+
+// The in-game overlay's RetroArch pause (gamepause_ra.go) reads GET_STATUS
+// answers and picks the audio driver's failures out of RetroArch's log.
+func TestRetroArchPauseParsing(t *testing.T) {
+	for reply, want := range map[string]string{
+		"GET_STATUS PLAYING nes,Super Mario Bros,crc32=3337ec46": "PLAYING",
+		"GET_STATUS PAUSED snes,Zelda,crc32=1":                   "PAUSED",
+		"get_status contentless":                                 "CONTENTLESS",
+		"LOAD_STATE_SLOT 1":                                      "",
+		"GET_STATUS":                                             "",
+		"":                                                       "",
+	} {
+		if got := raStatusWord(reply); got != want {
+			t.Errorf("raStatusWord(%q) = %q, want %q", reply, got, want)
+		}
+	}
+	log := "[INFO] [Core]: Paused.\n[ERROR] [ALSA]: (#2) Failed to recover from error (Broken pipe)\r\n" +
+		"[INFO] [Video]: Found display server.\n[ERROR] [Audio]: Audio backend failed to write. Will continue without sound.\n"
+	got := raAudioTrouble(log)
+	if len(got) != 2 || !strings.Contains(got[0], "ALSA") || !strings.Contains(got[1], "without sound") {
+		t.Fatalf("raAudioTrouble = %q", got)
+	}
+	if got := raAudioTrouble("[INFO] [Core]: Unpaused.\n"); len(got) != 0 {
+		t.Fatalf("a quiet log reported %q", got)
 	}
 }

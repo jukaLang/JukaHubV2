@@ -51,6 +51,7 @@ nav:
       - Video and music: MUSIC_PLAYER.md
       - Spatial audio: SPATIAL_AUDIO.md
       - Voice command: VOICE.md
+      - Offline AI options: LOCAL_AI.md
       - Recordings: RECORDINGS.md
       - Wi-Fi network picker: WIFI.md
       - Browser: BROWSER.md

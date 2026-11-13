@@ -5,9 +5,9 @@ package main
 // tts_local_other.go — the handheld's (or a Linux PC's) own voice, when it has
 // one.
 //
-// The TrimUI firmwares ship no speech engine, so on the handheld Juka's voice
-// is Groq's alone, and nothing is ever downloaded for it. A Linux PC often
-// has one, and a handheld user may drop one into JukaHub's required/ folder:
+// The TrimUI firmwares ship no speech engine. JukaHub can install Piper and a
+// voice on the card on demand, or a user may add an engine to required/.
+// A Linux PC often has one already:
 // the first of espeak-ng, espeak, flite, pico2wave and piper found there or on
 // PATH speaks when Groq's voice cannot, or always when Settings → Voice & AI
 // → Voice is "This device". Piper also needs a voice model (*.onnx) next to
@@ -30,9 +30,12 @@ import (
 	"time"
 )
 
-// ttsLocalTimeout bounds one synthesis (an engine renders far faster than it
-// speaks; this only catches one that hangs).
-const ttsLocalTimeout = 25 * time.Second
+// A neural voice can take longer on four Cortex-A53 cores than a rule-based
+// engine. Both bounds still obey the session's cancellation immediately.
+const (
+	ttsLocalTimeout = 25 * time.Second
+	ttsPiperTimeout = 75 * time.Second
+)
 
 // ttsLocalEngines are the engines looked for, best first among those that need
 // nothing else installed.
@@ -40,6 +43,9 @@ var ttsLocalEngines = []string{"espeak-ng", "espeak", "flite", "pico2wave", "pip
 
 // ttsLocalFind is the first engine present.
 func ttsLocalFind() (ttsLocalVoice, bool) {
+	if v, ok := ttsManagedVoice(); ok {
+		return v, true
+	}
 	for _, name := range ttsLocalEngines {
 		path, ok := checkToolPresence(name)
 		if !ok {
@@ -97,7 +103,11 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 	_ = out.Close()
 	defer os.Remove(wav)
 
-	ctx, cancel := context.WithTimeout(ctx, ttsLocalTimeout)
+	timeout := ttsLocalTimeout
+	if v.kind == "piper" {
+		timeout = ttsPiperTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var cmd *exec.Cmd
 	stdin := false

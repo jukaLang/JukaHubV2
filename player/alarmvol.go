@@ -221,6 +221,7 @@ var alarmHeld struct {
 	music    bool
 	video    bool
 	children []*exec.Cmd
+	ra       raCoopState // RetroArch's own pause around the ring (gamepause_ra.go)
 }
 
 // alarmHoldMedia pauses what is playing and the game owning the screen.
@@ -242,6 +243,12 @@ func alarmHoldMedia() {
 		alarmHeld.video = true
 	}
 	if alarmCanPauseChildren() {
+		// A library RetroArch pauses itself before the freeze, so its sound
+		// comes back after the ring (gamepause_ra.go). Not over the in-game
+		// overlay: that pause is the overlay's to undo.
+		if len(liveScreenChildren()) > 0 && !gaOverlay.active {
+			alarmHeld.ra = raCoopPause("the alarm")
+		}
 		for _, cmd := range liveScreenChildren() {
 			if err := alarmSignalChild(cmd, true); err != nil {
 				logWarn("alarm", "could not pause the running game: %v", err)
@@ -262,6 +269,8 @@ func alarmReleaseMedia() {
 		}
 	}
 	alarmHeld.children = nil
+	raCoopResume(alarmHeld.ra, "the alarm")
+	alarmHeld.ra = raCoopState{}
 	if alarmHeld.video {
 		alarmHeld.video = false
 		if playerPhase() == "paused" {

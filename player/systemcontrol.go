@@ -267,6 +267,8 @@ func setSystemVolume(pct int) error {
 	if pct > 100 {
 		pct = 100
 	}
+	// A routed Bluetooth headset follows the level at once (audioroute.go).
+	audioRouteSetVolume(pct)
 	level := strconv.Itoa(pct) + "%"
 	switch volumeBackend() {
 	case "winmm":
@@ -297,6 +299,7 @@ func setSystemVolume(pct int) error {
 // the handheld coming back at 100%; everywhere else it is setSystemVolume.
 func setSystemVolumeTransient(pct int) error {
 	if volumeBackend() == "trimui" {
+		audioRouteSetVolume(volumeClamp(pct))
 		return trimuiSetVolumeTransient(volumeClamp(pct))
 	}
 	return setSystemVolume(pct)

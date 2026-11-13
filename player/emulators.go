@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -131,7 +132,112 @@ func winSearchDirs() []string {
 	if v := strings.TrimSpace(os.Getenv("ProgramFiles(x86)")); v != "" {
 		dirs = append(dirs, filepath.Join(v, "Steam", "steamapps", "common"))
 	}
-	return dirs
+	dirs = append(dirs, winExtraSearchDirs()...)
+	// One folder listed twice (Steam's default library is both a fixed root
+	// and a library) would be probed twice for every emulator.
+	seen := map[string]bool{}
+	out := dirs[:0]
+	for _, dir := range dirs {
+		key := strings.ToLower(filepath.Clean(dir))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, dir)
+	}
+	return out
+}
+
+// winExtraDirsCache holds winExtraSearchDirs: it reads the registry and
+// Steam's library list, and the netplay panel and the Cores tab ask for
+// RetroArch every frame. The first call fills it; after that a stale list is
+// served while a background refresh runs, so no frame waits on the registry.
+var winExtraDirsCache struct {
+	mu         sync.Mutex
+	at         time.Time
+	dirs       []string
+	refreshing bool
+}
+
+// winExtraDirsTTL is how long winExtraSearchDirs trusts its list before a
+// background refresh; invalidateEmulatorCache (an install) expires it at once.
+const winExtraDirsTTL = 5 * time.Minute
+
+// winExtraSearchDirs adds the Windows installs the fixed folders above miss:
+// the folders installers recorded in the registry (RetroArch installed to
+// D:\Games\RetroArch), every Steam library (Steam's RetroArch on a second
+// drive), a Scoop install, and portable copies unzipped to the Desktop,
+// Downloads or Documents. Only folders that exist are returned. Nothing on
+// other platforms: a TrimUI never runs the Windows catalog.
+func winExtraSearchDirs() []string {
+	if !IsWindows() {
+		return nil
+	}
+	winExtraDirsCache.mu.Lock()
+	if !winExtraDirsCache.at.IsZero() {
+		dirs := append([]string(nil), winExtraDirsCache.dirs...)
+		if time.Since(winExtraDirsCache.at) >= winExtraDirsTTL && !winExtraDirsCache.refreshing {
+			winExtraDirsCache.refreshing = true
+			go func() {
+				fresh := winExtraSearchDirsScan()
+				winExtraDirsCache.mu.Lock()
+				winExtraDirsCache.dirs = fresh
+				winExtraDirsCache.at = time.Now()
+				winExtraDirsCache.refreshing = false
+				winExtraDirsCache.mu.Unlock()
+			}()
+		}
+		winExtraDirsCache.mu.Unlock()
+		return dirs
+	}
+	winExtraDirsCache.mu.Unlock()
+	fresh := winExtraSearchDirsScan()
+	winExtraDirsCache.mu.Lock()
+	winExtraDirsCache.dirs = fresh
+	winExtraDirsCache.at = time.Now()
+	winExtraDirsCache.mu.Unlock()
+	return append([]string(nil), fresh...)
+}
+
+// winExtraSearchDirsScan is winExtraSearchDirs without the cache.
+func winExtraSearchDirsScan() []string {
+	names := make([]string, 0, len(winEmuCatalog))
+	for _, spec := range winEmuCatalog {
+		names = append(names, spec.name)
+	}
+	cands := emuWinRegistryDirs(names)
+	if root := steamRoot(); root != "" {
+		for _, lib := range steamLibraryFolders(root) {
+			cands = append(cands, filepath.Join(lib, "common"))
+		}
+	}
+	if drive := strings.TrimSpace(os.Getenv("SystemDrive")); drive != "" {
+		cands = append(cands,
+			filepath.Join(drive+string(filepath.Separator), "RetroArch"),
+			filepath.Join(drive+string(filepath.Separator), "Emulators"),
+			filepath.Join(drive+string(filepath.Separator), "Games"),
+		)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		cands = append(cands, filepath.Join(home, "scoop", "apps", "retroarch", "current"))
+		for _, sub := range []string{"Desktop", "Downloads", "Documents", "Emulators", "Games"} {
+			cands = append(cands, filepath.Join(home, sub))
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("APPDATA")); v != "" {
+		cands = append(cands, filepath.Join(v, "RetroArch"))
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, dir := range cands {
+		key := strings.ToLower(filepath.Clean(dir))
+		if seen[key] || !dirExists(dir) {
+			continue
+		}
+		seen[key] = true
+		out = append(out, filepath.Clean(dir))
+	}
+	return out
 }
 
 // windowsEmulatorEntries detects the cataloged Windows emulators inside dirs.
@@ -205,6 +311,9 @@ func emuWinDetect(spec winEmuSpec, dirs []string, lookPath func(string) (string,
 			for _, cand := range []string{
 				filepath.Join(dir, file),
 				filepath.Join(dir, spec.name, file),
+				// RetroArch's installer and its zip both name the folder
+				// RetroArch-Win64, so one unzipped to Downloads is found.
+				filepath.Join(dir, spec.name+"-Win64", file),
 			} {
 				if regularFile(cand) {
 					return cand, "", emuWinManifest{}
@@ -228,14 +337,46 @@ func emuEntriesHave(entries []emuEntry, name string) bool {
 // emuWinExe finds a cataloged Windows emulator's launcher the way the catalog
 // does, or "" when it is not installed. Only that one emulator is probed.
 func emuWinExe(name string) string {
+	key := strings.ToLower(name)
+	emuWinExeCache.mu.Lock()
+	if hit, ok := emuWinExeCache.m[key]; ok && time.Since(hit.at) < emuWinExeTTL {
+		emuWinExeCache.mu.Unlock()
+		return hit.path
+	}
+	emuWinExeCache.mu.Unlock()
+	found := ""
 	for _, spec := range winEmuCatalog {
 		if strings.EqualFold(spec.name, name) {
-			found, _, _ := emuWinDetect(spec, winSearchDirs(), exec.LookPath)
-			return found
+			found, _, _ = emuWinDetect(spec, winSearchDirs(), exec.LookPath)
+			break
 		}
 	}
-	return ""
+	emuWinExeCache.mu.Lock()
+	if emuWinExeCache.m == nil {
+		emuWinExeCache.m = map[string]emuWinExeHit{}
+	}
+	emuWinExeCache.m[key] = emuWinExeHit{path: found, at: time.Now()}
+	emuWinExeCache.mu.Unlock()
+	return found
 }
+
+// emuWinExeCache remembers emuWinExe for a few seconds: the Cores tab and the
+// netplay panel ask for RetroArch every frame, and each answer is a PATH search
+// plus a few stats per search folder. invalidateEmulatorCache (an install or
+// uninstall) clears it.
+var emuWinExeCache struct {
+	mu sync.Mutex
+	m  map[string]emuWinExeHit
+}
+
+// emuWinExeHit is one cached emuWinExe answer ("" = not installed).
+type emuWinExeHit struct {
+	path string
+	at   time.Time
+}
+
+// emuWinExeTTL bounds how stale a cached emuWinExe answer may be.
+const emuWinExeTTL = 3 * time.Second
 
 // emuRetroArchForCore is the RetroArch that loads a Windows core: the
 // retroarch.exe in the folder above the core's cores folder, else the one the
@@ -277,6 +418,15 @@ func emuWinRetroArchCoreDirs() []string {
 				continue
 			}
 			seen[key] = true
+			out = append(out, cores)
+		}
+	}
+	// The RetroArch the catalog actually picks may sit where the two probes
+	// above do not look (a registry or Steam-library install, a
+	// RetroArch-Win64 folder): its cores folder counts too.
+	if exe := emuWinExe("RetroArch"); exe != "" {
+		cores := filepath.Join(filepath.Dir(exe), "cores")
+		if key := strings.ToLower(filepath.Clean(cores)); !seen[key] {
 			out = append(out, cores)
 		}
 	}
@@ -383,6 +533,36 @@ var (
 	deviceRomsRoot = "/mnt/SDCARD/Roms"
 	deviceRACores  = "/mnt/SDCARD/RetroArch/.retroarch/cores"
 )
+
+// deviceRetroArchCoresDir is the cores folder of the handheld's RetroArch:
+// deviceRACores when that RetroArch is there, else the first other layout
+// that holds a RetroArch binary — the card JukaHub runs from (a second card
+// slot), an Apps/RetroArch app, or the firmware's internal copy. Only
+// /mnt/SDCARD was ever looked at, so a RetroArch anywhere else had no tile.
+func deviceRetroArchCoresDir() string {
+	var roots []string
+	if root := strings.TrimSpace(trimuiSDRootFn()); root != "" {
+		roots = append(roots, root)
+	}
+	roots = append(roots, "/mnt/SDCARD", "/mnt/sdcard")
+	cands := []string{deviceRACores}
+	for _, root := range roots {
+		cands = append(cands,
+			filepath.Join(root, "RetroArch", ".retroarch", "cores"),
+			filepath.Join(root, "Apps", "RetroArch", ".retroarch", "cores"),
+		)
+	}
+	cands = append(cands, "/usr/trimui/RetroArch/.retroarch/cores")
+	for _, cores := range cands {
+		ra := filepath.Dir(filepath.Dir(cores))
+		for _, name := range netplayRetroArchNames {
+			if regularFile(filepath.Join(ra, name)) {
+				return cores
+			}
+		}
+	}
+	return deviceRACores
+}
 
 // emuFolderConfigMax bounds how much of an emulator folder's config.json a
 // catalog build reads. The firmware's files are a few kilobytes even with a
@@ -755,7 +935,7 @@ func emulatorEntries() []emuEntry {
 		entries = windowsEmulatorEntries(winSearchDirs(), exec.LookPath)
 		entries = append(entries, windowsSystemEntries(romLibraryRoots(), emuWinRetroArchCoreDirs(), entries)...)
 	} else {
-		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRACores)
+		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRetroArchCoresDir())
 		// The PSP tile says which PPSSPP plays PSP games (ppsspp_managed_ui.go).
 		entries = ppssppDecorateCatalog(entries)
 	}
@@ -803,6 +983,15 @@ func emulatorEntries() []emuEntry {
 
 func invalidateEmulatorCache() {
 	invalidateEmuCorePresence()
+	winExtraDirsCache.mu.Lock()
+	if !winExtraDirsCache.at.IsZero() {
+		// Stale now: the next look refreshes in the background.
+		winExtraDirsCache.at = time.Now().Add(-winExtraDirsTTL)
+	}
+	winExtraDirsCache.mu.Unlock()
+	emuWinExeCache.mu.Lock()
+	emuWinExeCache.m = nil
+	emuWinExeCache.mu.Unlock()
 	emuCache.mu.Lock()
 	emuCache.built = false
 	emuCache.entries = nil

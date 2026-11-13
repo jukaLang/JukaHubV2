@@ -6,7 +6,58 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+// The Home tile's unread badge: community + AI count, Saved never does, and
+// opening Chat (dividers first, then chatMarkAllSeen) zeroes it while each
+// tab keeps its "New messages" divider.
+func TestChatUnreadBadgeResetsOnOpen(t *testing.T) {
+	chatMutex.Lock()
+	oldMsgs, oldAI, oldSaved, oldTabs := chatMessages, chatAIMessages, chatSavedMessages, chatTabs
+	base := time.Now().Add(-time.Hour)
+	chatMessages = []ChatMessage{
+		{ID: "c1", Sender: "Alice", Text: "old", Timestamp: base},
+		{ID: "c2", Sender: "Alice", Text: "new", Timestamp: base.Add(time.Minute)},
+	}
+	chatAIMessages = []ChatMessage{{ID: "a1", Sender: chatAISender, Text: "hi", Timestamp: base.Add(2 * time.Minute)}}
+	chatSavedMessages = []ChatMessage{}
+	seen := base.UnixMilli()
+	chatTabs[chatTabCommunity] = chatTabData{seenAt: seen, unread: 1}
+	chatTabs[chatTabAI] = chatTabData{seenAt: seen, unread: 1}
+	chatTabs[chatTabSaved] = chatTabData{unread: 5}
+	chatMutex.Unlock()
+	oldViews := chatViews
+	t.Cleanup(func() {
+		chatMutex.Lock()
+		chatMessages, chatAIMessages, chatSavedMessages, chatTabs = oldMsgs, oldAI, oldSaved, oldTabs
+		chatMutex.Unlock()
+		chatViews = oldViews
+		chatDirty.Store(false)
+	})
+
+	if got := chatUnreadTotal(); got != 2 {
+		t.Fatalf("chatUnreadTotal = %d, want 2 (Saved never counts)", got)
+	}
+	if got := chatBadgeLabel(120); got != "99+" {
+		t.Fatalf("chatBadgeLabel(120) = %q", got)
+	}
+	for tab := chatTabCommunity; tab < chatTabCount; tab++ {
+		chatMarkDivider(tab)
+	}
+	chatMarkAllSeen()
+	if got := chatUnreadTotal(); got != 0 {
+		t.Fatalf("after open chatUnreadTotal = %d, want 0", got)
+	}
+	if chatViews[chatTabCommunity].dividerID != "c2" {
+		t.Fatalf("community divider = %q, want c2", chatViews[chatTabCommunity].dividerID)
+	}
+	// Switching to the tab later must not wipe the divider placed on open.
+	chatMarkDivider(chatTabCommunity)
+	if chatViews[chatTabCommunity].dividerID != "c2" {
+		t.Fatalf("divider lost on tab switch: %q", chatViews[chatTabCommunity].dividerID)
+	}
+}
 
 // Upload names keep letters (any script), digits, dots and dashes, turn runs
 // of anything else into one underscore, and never carry a path or a line

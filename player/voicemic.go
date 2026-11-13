@@ -238,6 +238,9 @@ func (m *micStream) openOne(c micCandidate) error {
 func micOpenSDL(name, alsa string) (sdl.AudioDeviceID, error) {
 	desired := sdl.AudioSpec{Freq: micRate, Format: sdl.AUDIO_S16LSB, Channels: micChannels, Samples: 1024}
 	var obtained sdl.AudioSpec
+	// Outputs set AUDIODEV for a Bluetooth headset too (audioroute.go).
+	audioDevEnvMu.Lock()
+	defer audioDevEnvMu.Unlock()
 	if alsa != "" {
 		prev, had := os.LookupEnv("AUDIODEV")
 		_ = os.Setenv("AUDIODEV", alsa)

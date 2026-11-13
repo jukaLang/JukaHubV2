@@ -39,8 +39,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 const (
@@ -241,7 +239,7 @@ func ttsFeed(ctx context.Context, s *ttsSession, clips <-chan []int16) bool {
 			continue
 		}
 		audioMutex.Lock()
-		queued := sdl.GetQueuedAudioSize(audioDev)
+		queued := outQueued(audioDev)
 		audioMutex.Unlock()
 		if queued >= ahead {
 			if time.Since(moved) > ttsStallMax {
@@ -269,7 +267,7 @@ func ttsFeed(ctx context.Context, s *ttsSession, clips <-chan []int16) bool {
 		audioMutex.Lock()
 		live := ttsGenNow.Load() == s.gen
 		if live {
-			_ = sdl.QueueAudio(audioDev, buf[:n*2])
+			_ = outQueue(audioDev, buf[:n*2])
 			ttsFed.Store(true)
 		}
 		audioMutex.Unlock()
@@ -289,7 +287,7 @@ func ttsDrain(ctx context.Context, gen uint64) {
 	deadline := time.Now().Add(ttsDrainMax)
 	for time.Now().Before(deadline) && ctx.Err() == nil && ttsGenNow.Load() == gen {
 		audioMutex.Lock()
-		left := sdl.GetQueuedAudioSize(audioDev)
+		left := outQueued(audioDev)
 		audioMutex.Unlock()
 		if left == 0 {
 			break
@@ -316,7 +314,7 @@ func ttsSilence() {
 	audioMutex.Lock()
 	defer audioMutex.Unlock()
 	if ttsFed.Swap(false) && audioAvailable {
-		sdl.ClearQueuedAudio(audioDev)
+		outClear(audioDev)
 	}
 	ttsMixCloseLocked(0)
 }
@@ -393,7 +391,7 @@ func ttsMixFlush(gen uint64) {
 	pcm := ttsMixDrainLocked()
 	ttsMix.mu.Unlock()
 	if audioAvailable && len(pcm) > 0 {
-		_ = sdl.QueueAudio(audioDev, pcm)
+		_ = outQueue(audioDev, pcm)
 	}
 }
 
@@ -417,7 +415,7 @@ func ttsMixCloseLocked(gen uint64) {
 	pcm := ttsMixDrainLocked()
 	ttsMix.mu.Unlock()
 	if audioAvailable && len(pcm) > 0 {
-		_ = sdl.QueueAudio(audioDev, pcm)
+		_ = outQueue(audioDev, pcm)
 	}
 }
 

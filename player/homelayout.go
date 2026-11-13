@@ -1645,6 +1645,12 @@ func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, ite
 		drawHomeFocusGlow(renderer, draw)
 	}
 	drawGlassTile(renderer, item.Rect, draw, focused, pressed)
+	// The Chat tile's unread count (chatbadge.go), painted last so it sits
+	// over the tile.
+	item, unread := homeChatTileUnread(item)
+	if unread > 0 {
+		defer h.drawHomeChatBadge(renderer, fonts, draw, unread)
+	}
 
 	// One composition for every tile: the icon badge in the top-left corner and
 	// the label stacked in the bottom-left. A card that centred its label read as

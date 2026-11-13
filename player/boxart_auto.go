@@ -9,8 +9,13 @@ package main
 //
 // So the library's own fetcher (romsetup.go) now also runs by itself:
 //
-//   - a first pass about a minute and a half after the interface is up, on a
-//     card that has never had one;
+//   - a first pass as soon as the device is online after the interface is up
+//     (about twenty seconds in), on a card that has never had one — the first
+//     start fills the library with covers by itself (Juka, 2026-11-12: "auto
+//     scrape artwork on first start"). That pass does not wait for the user
+//     to step away, for an install to finish or for the clock to be set;
+//   - a pass that is due when JukaHub starts (the daily one, or new games)
+//     does not wait for the user to step away either (emuStartWindow);
 //   - then at most once a day, which is also what asks again about a title the
 //     thumbnail set did not have a month ago (the not-found cache's window);
 //   - and early when the ROM folders gained games: every half hour a cheap look
@@ -64,6 +69,13 @@ const (
 	// network monitor has probed, the helper download a first start often
 	// begins has had its head start, and the home screen has its covers drawn.
 	boxArtStartupDelay = 100 * time.Second
+	// boxArtFirstStartDelay replaces it on a card that has never had a pass:
+	// the first start wants its covers now, and the pass itself waits for the
+	// network monitor to say online.
+	boxArtFirstStartDelay = 20 * time.Second
+	// boxArtFirstPoll is how often the scheduler looks while that first pass
+	// has not run yet, so it starts within seconds of the device going online.
+	boxArtFirstPoll = 15 * time.Second
 	// boxArtInterval is how often a pass may run with no other reason.
 	boxArtInterval = 24 * time.Hour
 	// boxArtCheckEvery is how often the ROM folders are looked at for new games.
@@ -101,6 +113,11 @@ const (
 // boxArtAutoOff mirrors the Settings switch for the scheduler goroutine: the
 // Custom map belongs to the main thread. The zero value is "on", the default.
 var boxArtAutoOff atomic.Bool
+
+// boxArtNoStamp is true while this card has never finished a pass: the first
+// pass skips the waits a routine one keeps (boxArtMomentOK). The scheduler
+// sets it; boxArtConditionsAt reads it from any goroutine.
+var boxArtNoStamp atomic.Bool
 
 // boxArtStarted makes the scheduler a single goroutine however often the start
 // hook runs, so two passes can never stack.
@@ -225,6 +242,8 @@ type boxArtConditions struct {
 	Battery    int           // percent, -1 when unknown
 	Charging   bool          // on external power
 	Idle       time.Duration // since the last button, key or touch
+	FirstPass  bool          // the card has never finished a pass
+	OnStart    bool          // JukaHub started a few minutes ago (emuStartWindow)
 }
 
 // boxArtConditionsAt reads the live conditions. Every source is safe to read
@@ -242,6 +261,8 @@ func boxArtConditionsAt(now time.Time) boxArtConditions {
 		Battery:    getBatteryPercent(),
 		Charging:   getBatteryCharging(),
 		Idle:       userInputAge(now),
+		FirstPass:  boxArtNoStamp.Load(),
+		OnStart:    emuWaitBeganOnStart(0),
 	}
 }
 
@@ -249,6 +270,11 @@ func boxArtConditionsAt(now time.Time) boxArtConditions {
 // pass begins; between the batches of a running pass only the hard stops
 // count (switched off, offline, a game, a battery running low), because the
 // pass already waited for its moment and the fetch slot is its own.
+//
+// A card's first pass does not wait for a set clock (the not-found cache dates
+// its entries; one dated 1970 only means that title is asked again once), for
+// an install (a first boot's helper download can take minutes), or for the user
+// to step away; a pass due on start does not wait for the user either.
 func boxArtMomentOK(c boxArtConditions, starting bool) (bool, string) {
 	switch {
 	case !c.Enabled:
@@ -257,13 +283,13 @@ func boxArtMomentOK(c boxArtConditions, starting bool) (bool, string) {
 		return false, "safe mode"
 	case !c.Online:
 		return false, "offline"
-	case !c.ClockSet:
+	case !c.ClockSet && !c.FirstPass:
 		return false, "the clock is not set yet"
 	case c.InGame:
 		return false, "a game has the screen"
 	case starting && c.Fetching:
 		return false, "another artwork fetch is running"
-	case starting && c.Installing:
+	case starting && c.Installing && !c.FirstPass:
 		return false, "an install is running"
 	}
 	// A desktop reads no battery at all: it is on mains. A handheld that cannot
@@ -274,7 +300,7 @@ func boxArtMomentOK(c boxArtConditions, starting bool) (bool, string) {
 	if c.Battery >= 0 && c.Battery < boxArtMinBattery {
 		return false, "battery under " + strconv.Itoa(boxArtMinBattery) + "%"
 	}
-	if starting && c.Idle < boxArtIdle {
+	if starting && c.Idle < boxArtIdle && !c.FirstPass && !c.OnStart {
 		return false, "waiting for the user to step away"
 	}
 	return true, ""
@@ -466,6 +492,13 @@ type boxArtScheduler struct {
 	lastWait string
 	// gameSeenAt is the last poll that found a game on the screen (noteGame).
 	gameSeenAt time.Time
+	// passedAt is when a pass last finished in this run, by the monotonic
+	// clock: a stamp written before the clock was set reads as undated, and
+	// without this the next poll would scan the card again.
+	passedAt time.Time
+	// toldFirst records that the first pass's "finding box art" toast was
+	// shown in this run, so a first pass a game interrupted does not repeat it.
+	toldFirst bool
 }
 
 // startBoxArtAuto starts the scheduler once. It runs from the deferred startup
@@ -481,12 +514,22 @@ func startBoxArtAuto(config *Config) {
 		return
 	}
 	go func() {
-		time.Sleep(boxArtStartupDelay)
 		s := &boxArtScheduler{}
 		s.stamp, s.haveStamp = loadBoxArtStamp(boxArtStampPath())
+		first := !s.haveStamp || s.stamp.LastPass.IsZero()
+		boxArtNoStamp.Store(first)
+		if first {
+			time.Sleep(boxArtFirstStartDelay)
+		} else {
+			time.Sleep(boxArtStartupDelay)
+		}
 		for {
 			s.tick(time.Now())
-			time.Sleep(boxArtPoll)
+			if boxArtNoStamp.Load() {
+				time.Sleep(boxArtFirstPoll)
+			} else {
+				time.Sleep(boxArtPoll)
+			}
 		}
 	}()
 }
@@ -542,13 +585,19 @@ func (s *boxArtScheduler) tick(now time.Time) {
 	// The folders are looked at here, at a good moment, rather than on a timer
 	// of their own: even a listing is card work a game should not compete with.
 	// A pass that is due anyway takes its own look, so this one is skipped.
-	if s.lookedAt.IsZero() || now.Sub(s.lookedAt) >= boxArtCheckEvery {
-		if dueAnyway, _ := boxArtPassDue(s.stamp, s.haveStamp, "", now); !dueAnyway {
-			s.library = boxArtLibrarySignature(romLibraryRoots())
-			s.lookedAt = now
-		}
+	due, why := boxArtPassDue(s.stamp, s.haveStamp, "", now)
+	if due && why == "the last pass has no usable date" && !s.passedAt.IsZero() && time.Since(s.passedAt) < boxArtInterval {
+		// A pass finished in this run less than a day ago; its stamp only
+		// looks due because the clock was not set when it was written.
+		due, why = false, ""
 	}
-	due, why := boxArtPassDue(s.stamp, s.haveStamp, s.library, now)
+	if !due && (s.lookedAt.IsZero() || now.Sub(s.lookedAt) >= boxArtCheckEvery) {
+		s.library = boxArtLibrarySignature(romLibraryRoots())
+		s.lookedAt = now
+	}
+	if !due && s.library != "" && s.library != s.stamp.Library {
+		due, why = true, "the ROM folders changed"
+	}
 	if !due {
 		s.wait("not due")
 		return
@@ -578,6 +627,12 @@ func (s *boxArtScheduler) pass(why string) {
 	if len(todo) == 0 {
 		s.finish(library, len(report.Games), 0)
 		return
+	}
+	if (!s.haveStamp || s.stamp.LastPass.IsZero()) && !s.toldFirst {
+		s.toldFirst = true
+		// The first pass says it has started: on a first start the covers
+		// appearing one by one would otherwise look like nothing happening.
+		ShowToast("Finding box art for "+pluralizeCount(len(todo), "game", "games")+" in the background", ToastKindInfo)
 	}
 
 	run := boxArtRunBatches(todo, dest)
@@ -616,6 +671,8 @@ func (s *boxArtScheduler) finish(library string, games, found int) {
 		Found:    found,
 	}
 	s.haveStamp = true
+	s.passedAt = time.Now()
+	boxArtNoStamp.Store(false)
 	s.failures, s.retryAt = 0, time.Time{}
 	if err := saveBoxArtStamp(boxArtStampPath(), s.stamp); err != nil {
 		logWarn("art", "automatic box art: cannot save the pass stamp: %v", err)

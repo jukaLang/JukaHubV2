@@ -292,6 +292,8 @@ func autoSleepBlocker(config *Config) string {
 		return "the screen is being shared"
 	case autoSleepDownloading():
 		return "a download is running"
+	case ytdlBgActive():
+		return "a video is downloading in the background"
 	case idleScreenHoldOff(config):
 		return "something is playing or open"
 	}

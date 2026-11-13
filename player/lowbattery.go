@@ -170,6 +170,16 @@ func retroArchConfigCandidates() []string {
 			filepath.Join(base, "Emus", "RetroArch", "retroarch.cfg"),
 		)
 	}
+	if IsWindows() {
+		// A Windows RetroArch keeps retroarch.cfg beside retroarch.exe.
+		if exe := emuWinExe("RetroArch"); exe != "" {
+			out = append(out, filepath.Join(filepath.Dir(exe), "retroarch.cfg"))
+		}
+	} else {
+		// The handheld RetroArch the Emulators page found when it is not in
+		// /mnt/SDCARD/RetroArch (another card, Apps/RetroArch).
+		out = append(out, raConfigsIn(filepath.Dir(filepath.Dir(deviceRetroArchCoresDir())))...)
+	}
 	if home != "" {
 		out = append(out,
 			filepath.Join(home, ".config", "retroarch", "retroarch.cfg"),

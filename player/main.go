@@ -747,6 +747,9 @@ func main() {
 	// below, and given a moment to delete its staging folder
 	// (files_extract.go).
 	defer feExtractShutdown()
+	// A video downloading in the background is stopped on the way out too, so
+	// its yt-dlp does not outlive the app (ytdownload_bg.go).
+	defer ytdlBgShutdown()
 	// Cancel the active scene's background work on the way out, before the
 	// Cleanup hooks and the display teardown run. Registered last so it is the
 	// first deferred call to execute.
@@ -1020,10 +1023,15 @@ func main() {
 						}
 					}
 					// A video being prepared is modal: only Esc (cancel) is accepted,
-					// so the results grid cannot scroll behind the spinner.
+					// so the results grid cannot scroll behind the spinner — and Y,
+					// which sends a download on the card to the background
+					// (ytdownload_bg.go).
 					if videoPrepareActive() {
-						if e.Keysym.Sym == sdl.K_ESCAPE {
+						switch e.Keysym.Sym {
+						case sdl.K_ESCAPE:
 							cancelVideoPrepare()
+						case sdl.K_y:
+							ytdlSendToBackground()
 						}
 						continue
 					}
@@ -2012,8 +2020,12 @@ func main() {
 				if e.Button == sdl.BUTTON_LEFT {
 					// Taps are swallowed while a video is being prepared: the
 					// spinner is modal, and a stray tap must not press the grid
-					// behind it.
+					// behind it. Its own buttons take a tap (loadingCardClick).
 					if videoPrepareActive() {
+						if e.Type == sdl.MOUSEBUTTONDOWN {
+							cx, cy := physicalToLogical(int32(e.X), int32(e.Y))
+							loadingCardClick(cx, cy)
+						}
 						continue
 					}
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
@@ -2883,10 +2895,14 @@ func main() {
 				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
 					// A video being prepared owns the pad: the spinner says so, and
-					// B is the one way out of it.
+					// B is the one way out of it. Y sends a download on the card to
+					// the background (ytdownload_bg.go).
 					if videoPrepareActive() {
-						if e.Button == sdl.CONTROLLER_BUTTON_B {
+						switch e.Button {
+						case sdl.CONTROLLER_BUTTON_B:
 							cancelVideoPrepare()
+						case sdl.CONTROLLER_BUTTON_Y:
+							ytdlSendToBackground()
 						}
 						continue
 					}
@@ -3932,7 +3948,7 @@ func main() {
 		// Adaptive frame rate: faster while interacting/animating, slower when
 		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
 		animating := html5GameActive() || transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
-			trophyOverlayActive()
+			trophyOverlayActive() || chatBadgeAnimating()
 		frameRateCtrl.SetAnimationActive(animating)
 		// A moving backdrop — the liquid background's water, an animated
 		// wallpaper — asked for its cadence while it was drawn; this hands it

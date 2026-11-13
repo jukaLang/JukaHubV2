@@ -34,6 +34,15 @@ func screenChildGroupConfigure(cmd *exec.Cmd) {
 	if cmd.Env == nil {
 		cmd.Env = screenChildEnv(os.Environ())
 	}
+	// While a Bluetooth headset is routed, an SDL child is pointed at it through
+	// AUDIODEV unless its environment already names a device. JukaHub lets go
+	// of the headset (one client at a time) once a screen-taking child has
+	// started: noteGameChildStarted, audioroute.go.
+	if pcm := audioRouteChildPCM(); pcm != "" {
+		if _, set := childEnvLookup(cmd.Env, "AUDIODEV"); !set {
+			cmd.Env = append(cmd.Env, "AUDIODEV="+pcm)
+		}
+	}
 }
 
 // processGroupConfigure only makes cmd the leader of a new process group, for

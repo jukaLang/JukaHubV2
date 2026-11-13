@@ -544,12 +544,12 @@ func chimeRun(score []chimeNote, seconds, gain float64, deadline time.Time) {
 		Samples:  1024,
 	}
 	var obtained sdl.AudioSpec
-	dev, err := sdl.OpenAudioDevice("", false, &desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
+	dev, err := outOpen(&desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || dev == 0 {
 		logDebug("chime", "no audio device: %v", err)
 		return
 	}
-	defer sdl.CloseAudioDevice(dev)
+	defer outClose(dev)
 	rate := int(obtained.Freq)
 	if rate <= 0 {
 		rate = int(desired.Freq)
@@ -560,13 +560,13 @@ func chimeRun(score []chimeNote, seconds, gain float64, deadline time.Time) {
 	started := false
 	for time.Now().Before(deadline) {
 		finished := false
-		for sdl.GetQueuedAudioSize(dev) < ahead {
+		for outQueued(dev) < ahead {
 			buf = synth.render(buf[:0])
 			if len(buf) == 0 {
 				finished = true
 				break
 			}
-			if err := sdl.QueueAudio(dev, buf); err != nil {
+			if err := outQueue(dev, buf); err != nil {
 				logDebug("chime", "queue: %v", err)
 				return
 			}
@@ -574,7 +574,7 @@ func chimeRun(score []chimeNote, seconds, gain float64, deadline time.Time) {
 			publishAudioLevel(buf, rate, 2)
 		}
 		if !started {
-			sdl.PauseAudioDevice(dev, false)
+			outPause(dev, false)
 			started = true
 		}
 		if finished {
@@ -582,7 +582,7 @@ func chimeRun(score []chimeNote, seconds, gain float64, deadline time.Time) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	for sdl.GetQueuedAudioSize(dev) > 0 && time.Now().Before(deadline) {
+	for outQueued(dev) > 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	// The device's own buffer is still playing when the queue reads empty.

@@ -105,6 +105,7 @@ func btDiagnosticsText() string {
 	}
 
 	line("Pad HID", "%s", btDiagPadHID("/"))
+	line("Audio route", "%s", btDiagMaskAddrs(audioRouteDiag()))
 
 	// One walk of /proc for every name (btDiagProcessTable).
 	table := btDiagProcessTable("/proc", btDiagProcesses)

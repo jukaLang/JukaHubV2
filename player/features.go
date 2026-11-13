@@ -320,7 +320,10 @@ func feBack(config *Config) {
 	if feExtractJustClosed() {
 		return
 	}
-	// Picking files for the chat, B calls the pick off (chatfiles.go).
+	// Picking background music or chat attachments, B cancels the pick.
+	if bgmPickBack(config) {
+		return
+	}
 	if chatPickBack(config) {
 		return
 	}
@@ -386,6 +389,10 @@ func feEnterFocused(config *Config) {
 		// Only a directory that really lives below the active location's root
 		// is entered; one that cannot be read opens with the reason shown.
 		filesEnterDir(config, entry)
+		return
+	}
+	// Picking background music: A chooses an audio file; folders still open.
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" && bgmPickFromFiles(config, entry) {
 		return
 	}
 	// Picking files for the chat: A attaches the file (or the rows X marked)

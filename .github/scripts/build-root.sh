@@ -7,6 +7,8 @@
 #                            every TrimUI archive carries
 #   wine-runtime.yml         the Box64 pack of the Windows-app runtime, a
 #                            release asset of its own
+#   ppsspp-trimui.yml        JukaHub's own PPSSPP for the tg5040 handhelds,
+#                            weekly, the rolling release "ppsspp-tg5040"
 #
 # Why an arm64 runner, why a 20.04 root and why debootstrap rather than a
 # container image: see remote-play-helpers.yml.
@@ -17,6 +19,9 @@
 #   build-root.sh build androidrt   player/native/build-runtimes.sh androidrt
 #   build-root.sh build box64       gcc 10, then player/native/build-runtimes.sh
 #                                   wine
+#   build-root.sh build ppsspp      player/native/build-ppsspp.sh for the tag in
+#                                   PPSSPP_TAG (GL_DIR: the TrimUI SDK's GLES
+#                                   libraries, inside the checkout)
 #   build-root.sh check androidrt   advisory: AndroidRT's host smoke suite
 #   build-root.sh check box64       advisory: the pinned Wine under the new Box64
 #   build-root.sh key PART          the name of the artifact an earlier run kept
@@ -50,7 +55,7 @@ if [ -z "${JOBS:-}" ]; then
 fi
 
 usage() {
-    echo "usage: $0 create | build helpers|androidrt|box64 | check androidrt|box64 | key helpers|androidrt|box64 | release" >&2
+    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp | check androidrt|box64 | key helpers|androidrt|box64 | release" >&2
     exit 2
 }
 
@@ -192,6 +197,17 @@ build() {
                 SOURCE_KEY="$(part_key box64 2> /dev/null || true)" \
                 OUT_DIR=/src/player/native/bin LOG_DIR=/tmp/jukahub-runtime-logs/wine \
                 /bin/sh /src/player/native/build-runtimes.sh wine
+            ;;
+        ppsspp)
+            # GL_DIR is a path on the runner inside the checkout; the root sees
+            # the checkout at /src.
+            bd_gl=""
+            if [ -n "${GL_DIR:-}" ] && [ -d "$GL_DIR" ]; then
+                bd_gl="/src/${GL_DIR#"$WORKSPACE"/}"
+            fi
+            in_root JOBS="$JOBS" PPSSPP_TAG="${PPSSPP_TAG:?set PPSSPP_TAG}" GL_DIR="$bd_gl" \
+                SOURCE_COMMIT="$(source_commit)" OUT_DIR=/src/player/native/bin \
+                LOG_DIR=/tmp/jukahub-ppsspp-logs /bin/sh /src/player/native/build-ppsspp.sh
             ;;
         *) usage ;;
     esac

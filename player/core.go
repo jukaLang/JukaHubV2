@@ -3867,6 +3867,13 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		logDebug("core", "playVideoInfo: empty URL, nothing to play")
 		return
 	}
+	// A video already downloading in the background (ytdownload_bg.go) plays
+	// from Media → Downloads once it is done; streaming it now would most
+	// likely fail the way it did and race the download for the Wi-Fi.
+	if frac, running := ytdlBgRunningFor(url); running {
+		ytdlBgStillDownloadingToast(frac)
+		return
+	}
 	// Starting any video leaves the Shorts feed unless the caller re-arms it
 	// (startShortAt does), so a normal video does not auto-advance a feed.
 	shortsAutoplay = false

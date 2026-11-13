@@ -1,0 +1,167 @@
+name: PPSSPP for TrimUI (tg5040)
+
+# JukaHub's own PPSSPP for the A133P TrimUI handhelds (Smart Pro, Brick,
+# Hammer), built from the newest upstream PPSSPP release and published as the
+# rolling release "ppsspp-tg5040" of this repository: one asset,
+# PPSSPP-tg5040.zip, titled "PPSSPP <version> for TrimUI (tg5040)".
+#
+# Why: JukaHub's PSP emulator came only from ben16w/minui-psp (spruceUI's
+# builds), which lags upstream; 1.20.4 had no tg5040 build anywhere. On a
+# tg5040, ppsspp_managed.go now asks both sources and installs whichever names
+# the newer PPSSPP, with the checks it always ran (GitHub's SHA-256 digest of
+# the asset, the libraries the firmware has, the launcher that falls back to
+# the firmware's PPSSPP when a build does not start).
+#
+# Weekly, and on a press (Actions → this workflow → Run). A run whose release
+# already carries the newest upstream version stops after one API call unless
+# "force" is set. Never per push (the CI rule: two jobs per push).
+#
+# The release is created with --latest=false, so GitHub's "latest release" —
+# which JukaHub's own updater, the README and the website download from —
+# stays the newest JukaHub build. The asset is replaced before the title
+# changes, so a device that looks in between installs nothing new rather than
+# an old build under a new version.
+#
+# The build runs in the Ubuntu 20.04 arm64 build root the Remote Play helpers
+# use (.github/scripts/build-root.sh build ppsspp → player/native/build-ppsspp.sh),
+# linked against the TrimUI SDK's own GLES/EGL libraries when the pinned
+# toolchain image carries them (copied out of it, never run), else Mesa's.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build and publish even when the release already has the newest PPSSPP"
+        type: boolean
+        default: false
+      tag:
+        description: "Upstream tag to build instead of the newest release (e.g. v1.20.4)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ppsspp-trimui
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: PPSSPP (tg5040, glibc 2.31)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: write   # create or update the ppsspp-tg5040 release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ppsspp-tg5040
+      # The image docker-image.yml builds the handheld binary in; only its SDK
+      # sysroot's GLES/EGL libraries are copied out. Same digest as there.
+      TOOLCHAIN_IMAGE: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Find the newest PPSSPP
+        id: want
+        env:
+          FORCE: ${{ inputs.force }}
+          WANT_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          tag="${WANT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag=$(gh api repos/hrydgard/ppsspp/releases/latest --jq .tag_name)
+          fi
+          case "$tag" in
+            v[0-9]*.[0-9]*) ;;
+            *) echo "::error::unexpected PPSSPP tag '$tag'"; exit 1 ;;
+          esac
+          version="${tag#v}"
+          current=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json name --jq .name 2> /dev/null || true)
+          echo "upstream: $tag; our release: ${current:-none}"
+          build=true
+          if [ "${FORCE:-false}" != "true" ] && [ "$current" = "PPSSPP $version for TrimUI (tg5040)" ]; then
+            build=false
+            echo "The release already carries PPSSPP $version; nothing to do."
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Copy the TrimUI SDK's GLES/EGL libraries out of the toolchain image
+        if: steps.want.outputs.build == 'true'
+        # Optional: without them the build links against Mesa's and says so.
+        continue-on-error: true
+        run: |
+          set -eu
+          out="$GITHUB_WORKSPACE/tmp/trimui-gl"
+          rm -rf "$out" "$RUNNER_TEMP/gl-x"
+          mkdir -p "$out/lib" "$RUNNER_TEMP/gl-x"
+          docker pull -q --platform linux/amd64 "$TOOLCHAIN_IMAGE" > /dev/null
+          cid=$(docker create --platform linux/amd64 "$TOOLCHAIN_IMAGE" /bin/true)
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+          for dir in /usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot/usr/lib \
+                     /usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot/lib \
+                     /usr/aarch64-linux-gnu/lib; do
+            docker cp "$cid:$dir" - 2> /dev/null | tar -xf - -C "$RUNNER_TEMP/gl-x" --wildcards \
+              '*libGLESv2.so*' '*libEGL.so*' '*libsrv_um*' '*libIMG*' '*libglslcompiler*' \
+              '*libusc*' '*libpvr*' '*libgbm*' '*libdrm.so*' 2> /dev/null || true
+          done
+          find "$RUNNER_TEMP/gl-x" \( -type f -o -type l \) -name 'lib*.so*' -exec cp -L {} "$out/lib/" \; 2> /dev/null || true
+          ls -l "$out/lib"
+          if ! ls "$out/lib"/libGLESv2.so* > /dev/null 2>&1; then
+            echo "::warning title=PPSSPP::the toolchain image carries no libGLESv2 at the paths tried; the build links against Mesa's sonames, which the handheld may not have (JukaHub then refuses the build and keeps minui-psp's)"
+          fi
+
+      - name: Create the build root
+        if: steps.want.outputs.build == 'true'
+        run: sh .github/scripts/build-root.sh create
+
+      - name: Build PPSSPP ${{ steps.want.outputs.version }}
+        if: steps.want.outputs.build == 'true'
+        env:
+          PPSSPP_TAG: ${{ steps.want.outputs.tag }}
+          GL_DIR: ${{ github.workspace }}/tmp/trimui-gl
+        run: sh .github/scripts/build-root.sh build ppsspp
+
+      - name: Publish the ppsspp-tg5040 release
+        if: steps.want.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.want.outputs.version }}
+        run: |
+          set -eu
+          zip=player/native/bin/PPSSPP-tg5040.zip
+          [ -f "$zip" ] || { echo "::error::no $zip"; exit 1; }
+          title="PPSSPP $VERSION for TrimUI (tg5040)"
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "JukaHub's own build of upstream PPSSPP for the TrimUI Smart Pro, Brick and Hammer (tg5040)."
+            echo "JukaHub installs it by itself (Settings → Games & emulators → Emulator updates)."
+            echo "This release is replaced in place whenever upstream publishes a new version."
+            echo
+            echo '```'
+            unzip -p "$zip" PPSSPP/BUILDINFO.txt
+            echo '```'
+          } > "$notes"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # Asset first, title second (see the top of this file).
+            gh release upload "$RELEASE_TAG" "$zip" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --notes-file "$notes" --latest=false --draft=false --prerelease=false
+          else
+            gh release create "$RELEASE_TAG" "$zip" --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --notes-file "$notes" --latest=false --target "$GITHUB_SHA"
+          fi
+          echo "Published $title"
+
+      - name: Unmount the build root
+        if: always() && steps.want.outputs.build == 'true'
+        run: sh .github/scripts/build-root.sh release

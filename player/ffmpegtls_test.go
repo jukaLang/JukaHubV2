@@ -208,6 +208,19 @@ func TestFFmpegReadableInput(t *testing.T) {
 	if got := ffmpegReadableInput(withTLS, src); got != src {
 		t.Fatalf("ffmpeg with TLS got %q, want the https URL itself", got)
 	}
+
+	// ...until it fails a certificate check (a static OpenSSL with no CA bundle
+	// where it looks): then https goes through the relay, whose TLS is Go's.
+	t.Cleanup(func() { ffmpegTLSUntrusted.Store(false) })
+	if ffmpegNoteTLSFailure("[https @ 0x1] Server returned 403 Forbidden") {
+		t.Fatal("a 403 was taken for a certificate failure")
+	}
+	if !ffmpegNoteTLSFailure("[tls @ 0x55b3cd5bc0] error:0A000086:SSL routines::certificate verify failed\n") {
+		t.Fatal("OpenSSL's certificate verify failure was not recognised")
+	}
+	if got := ffmpegReadableInput(withTLS, src); !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("after a certificate failure ffmpeg with TLS got %q, want the relay", got)
+	}
 }
 
 // mediaRelayTestServer starts a private relay whose upstream client trusts

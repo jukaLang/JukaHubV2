@@ -39,9 +39,11 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -98,6 +100,143 @@ func ffmpegTLSReset() {
 	ffmpegTLSMu.Lock()
 	ffmpegTLSCache = map[string]ffmpegTLSEntry{}
 	ffmpegTLSMu.Unlock()
+	ffmpegTLSUntrusted.Store(false)
+}
+
+// ── Certificates for an ffmpeg that does speak https ───────────────────────
+//
+// JukaHub's own ffmpeg/ffprobe (the static linuxarm64 build the tool installer
+// fetches) has OpenSSL, so it opens https itself and the relay stays out of the
+// way. Current ffmpeg checks the server's certificate by default, and a static
+// OpenSSL looks for the CA bundle under the folder it was BUILT in — a path
+// that does not exist on the handheld. Every googlevideo URL then failed with
+// "certificate verify failed": ffprobe could not describe it and the decoder
+// stopped before its first frame, so YouTube only played after a full download
+// (report JH-AUBDUA, 2026-11-13). It hit exactly the people whose ffmpeg the
+// installer had replaced; the firmware's TLS-less copy went through the relay
+// and was fine.
+//
+// Two fixes. The bundle Go itself trusts on this device is exported as
+// SSL_CERT_FILE (or SSL_CERT_DIR), which OpenSSL reads before its built-in
+// default, so every child — ffmpeg, ffprobe, curl — finds it. And when a tool
+// still fails a certificate check, https inputs go through the relay (Go's TLS,
+// which verifies with the same store the CDN check uses) for the rest of the run.
+
+var (
+	ffmpegCAOnce sync.Once
+	// ffmpegTLSUntrusted is set once an ffmpeg-family tool failed to verify a
+	// server certificate: from then on https inputs go through the relay.
+	ffmpegTLSUntrusted atomic.Bool
+)
+
+// ffmpegCABundlePaths are the PEM bundles worth handing to the tools: the
+// firmware's own first (where Go's crypto/x509 looks on Linux), then the ones
+// bug reports already fall back to (a cacert.pem next to the app).
+func ffmpegCABundlePaths() []string {
+	out := []string{
+		"/etc/ssl/certs/ca-certificates.crt",
+		"/etc/pki/tls/certs/ca-bundle.crt",
+		"/etc/ssl/ca-bundle.pem",
+		"/etc/pki/tls/cacert.pem",
+		"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+		"/etc/ssl/cert.pem",
+	}
+	seen := map[string]bool{}
+	for _, p := range out {
+		seen[p] = true
+	}
+	for _, p := range bugrepCAPaths() {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ffmpegCAFileUsable reports whether path is a readable file holding at least
+// one PEM certificate.
+func ffmpegCAFileUsable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || info.Size() == 0 || info.Size() > 16<<20 {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	return err == nil && bytes.Contains(data, []byte("-----BEGIN CERTIFICATE-----"))
+}
+
+// ffmpegCADirHashRe matches OpenSSL's hashed certificate names ("5ad8a5d6.0"):
+// a directory is only useful as SSL_CERT_DIR when it has them.
+var ffmpegCADirHashRe = regexp.MustCompile(`^[0-9a-f]{8}\.[0-9]+$`)
+
+// ffmpegCADirUsable reports whether dir holds OpenSSL-hashed certificates.
+func ffmpegCADirUsable(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if ffmpegCADirHashRe.MatchString(e.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+// ffmpegExportCABundle points the tools JukaHub starts at a CA bundle, once per
+// run. A value the environment already set and that works is left alone.
+// Windows builds of ffmpeg use the system store (schannel), so it is a no-op
+// there.
+func ffmpegExportCABundle() {
+	ffmpegCAOnce.Do(func() {
+		if runtime.GOOS == "windows" {
+			return
+		}
+		if v := strings.TrimSpace(os.Getenv("SSL_CERT_FILE")); v != "" && ffmpegCAFileUsable(v) {
+			return
+		}
+		for _, p := range ffmpegCABundlePaths() {
+			if ffmpegCAFileUsable(p) {
+				if err := os.Setenv("SSL_CERT_FILE", p); err == nil {
+					logInfo("stream", "ffmpeg and other tools check https certificates against %s", p)
+				}
+				return
+			}
+		}
+		if v := strings.TrimSpace(os.Getenv("SSL_CERT_DIR")); v != "" {
+			return
+		}
+		for _, d := range []string{"/etc/ssl/certs", "/etc/pki/tls/certs"} {
+			if ffmpegCADirUsable(d) {
+				if err := os.Setenv("SSL_CERT_DIR", d); err == nil {
+					logInfo("stream", "ffmpeg and other tools check https certificates against %s/", d)
+				}
+				return
+			}
+		}
+		logWarn("stream", "no CA bundle found on this firmware; ffmpeg may not open https by itself (put cacert.pem next to JukaHub)")
+	})
+}
+
+// ffmpegTLSVerifyFailed reports whether a tool's stderr shows it rejecting a
+// server certificate it had no CA to check against (OpenSSL and GnuTLS
+// wording).
+func ffmpegTLSVerifyFailed(stderr string) bool {
+	return ytContainsAny(strings.ToLower(stderr),
+		"certificate verify failed", "unable to get local issuer certificate",
+		"the certificate is not trusted", "the certificate issuer is unknown")
+}
+
+// ffmpegNoteTLSFailure reads a failed tool's stderr; a certificate failure
+// sends every later https input through the relay. It reports whether it did.
+func ffmpegNoteTLSFailure(stderr string) bool {
+	if !ffmpegTLSVerifyFailed(stderr) {
+		return false
+	}
+	if ffmpegTLSUntrusted.CompareAndSwap(false, true) {
+		logWarn("stream", "ffmpeg could not check a server certificate on this device; https streams go through JukaHub's own TLS (local relay) from now on")
+	}
+	return true
 }
 
 // ffmpegToolSupportsHTTPS reports whether the ffmpeg-family tool at path can
@@ -145,7 +284,9 @@ func ffmpegReadableInput(toolPath, src string) string {
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(src)), "https://") {
 		return src
 	}
-	if ffmpegToolSupportsHTTPS(toolPath) {
+	// The tools inherit the CA bundle from this process's environment.
+	ffmpegExportCABundle()
+	if !ffmpegTLSUntrusted.Load() && ffmpegToolSupportsHTTPS(toolPath) {
 		return src
 	}
 	relay, err := mediaRelay()

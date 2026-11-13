@@ -81,6 +81,24 @@ const (
 	ppssppPakRepo = "ben16w/minui-psp"
 	// ppssppPakAsset is the one release asset it publishes.
 	ppssppPakAsset = "PSP.pak.zip"
+	// ppssppOwnRepo, ppssppOwnTag and ppssppOwnAsset are JukaHub's own build of
+	// upstream PPSSPP for the tg5040 handhelds: the rolling release that
+	// .github/workflows/ppsspp-trimui.yml rebuilds weekly from hrydgard/ppsspp's
+	// newest release (player/native/build-ppsspp.sh), titled "PPSSPP <version>
+	// for TrimUI (tg5040)". minui-psp lags upstream (1.20.3 while upstream had
+	// 1.20.4, which had no tg5040 build anywhere), so on a tg5040 both are asked
+	// and the newer PPSSPP wins (ppssppPickRelease).
+	ppssppOwnRepo     = "jukaLang/JukaHubV2"
+	ppssppOwnTag      = "ppsspp-tg5040"
+	ppssppOwnAsset    = "PPSSPP-tg5040.zip"
+	ppssppOwnPlatform = "tg5040"
+	// ppssppOwnTagPrefix names an installed build of JukaHub's own PPSSPP:
+	// the release tag is rolling, so the build folder and the state use
+	// "jukahub-<version>-<first 8 hex of the asset's SHA-256>": a rebuild of
+	// the same version (a fixed link) is a new tag and reaches devices, and a
+	// device that reads the release between the asset upload and the title
+	// edit does not file the new binary under the old version for good.
+	ppssppOwnTagPrefix = "jukahub-"
 	// ppssppLibrarySystem is the library's name for the PSP: romSystemAliases
 	// files Roms/PSP, Roms/PPSSPP and the long names under it, and
 	// game-launchers.json is keyed by that name, case-insensitively.
@@ -553,7 +571,17 @@ func (b ppssppBuild) label() string {
 	if b.Version != "" {
 		return "PPSSPP " + b.Version
 	}
-	return "PPSSPP (minui-psp " + b.Tag + ")"
+	return "PPSSPP (" + ppssppSourceName(b.Tag) + ")"
+}
+
+// ppssppSourceName names where a build or release tag comes from: "JukaHub's
+// own build" for ppssppOwnRepo's ("jukahub-<version>"), "minui-psp <tag>"
+// otherwise.
+func ppssppSourceName(tag string) string {
+	if strings.HasPrefix(tag, ppssppOwnTagPrefix) {
+		return "JukaHub's own build"
+	}
+	return "minui-psp " + tag
 }
 
 // usable reports whether the build's files are still there and its launcher
@@ -702,25 +730,31 @@ func ppssppIsELF(path string) bool {
 // with a SHA-256 digest and fit the size limit, and the PPSSPP version its
 // title or notes name.
 func ppssppReleaseFrom(data []byte) (ppssppRelease, error) {
+	return ppssppReleaseFromAsset(data, ppssppPakAsset, "minui-psp")
+}
+
+// ppssppReleaseFromAsset is ppssppReleaseFrom for a named asset; source names
+// the project in errors.
+func ppssppReleaseFromAsset(data []byte, assetName, source string) (ppssppRelease, error) {
 	var rel ppssppGitHubRelease
 	if err := json.Unmarshal(data, &rel); err != nil {
-		return ppssppRelease{}, errors.New("unreadable minui-psp release metadata")
+		return ppssppRelease{}, fmt.Errorf("unreadable %s release metadata", source)
 	}
 	tag := strings.TrimSpace(rel.TagName)
 	if rel.Draft || tag == "" {
-		return ppssppRelease{}, errors.New("the minui-psp release has no tag")
+		return ppssppRelease{}, fmt.Errorf("the %s release has no tag", source)
 	}
 	out := ppssppRelease{Tag: tag, Name: strings.TrimSpace(rel.Name), Version: ppssppVersionFromNotes(rel.Name, rel.Body)}
 	for _, a := range rel.Assets {
-		if !strings.EqualFold(strings.TrimSpace(a.Name), ppssppPakAsset) || strings.TrimSpace(a.BrowserDownloadURL) == "" {
+		if !strings.EqualFold(strings.TrimSpace(a.Name), assetName) || strings.TrimSpace(a.BrowserDownloadURL) == "" {
 			continue
 		}
 		digest := strings.TrimSpace(a.Digest)
 		if !ppssppDigestPattern().MatchString(digest) {
-			return ppssppRelease{}, fmt.Errorf("minui-psp %s publishes no SHA-256 digest for %s — an unverifiable build is not installed", tag, ppssppPakAsset)
+			return ppssppRelease{}, fmt.Errorf("%s %s publishes no SHA-256 digest for %s — an unverifiable build is not installed", source, tag, assetName)
 		}
 		if a.Size > ppssppMaxDownload {
-			return ppssppRelease{}, fmt.Errorf("%s is %s, more than the %s limit", ppssppPakAsset, formatInstallBytes(a.Size), formatInstallBytes(ppssppMaxDownload))
+			return ppssppRelease{}, fmt.Errorf("%s is %s, more than the %s limit", assetName, formatInstallBytes(a.Size), formatInstallBytes(ppssppMaxDownload))
 		}
 		out.Asset = strings.TrimSpace(a.Name)
 		out.URL = strings.TrimSpace(a.BrowserDownloadURL)
@@ -729,18 +763,142 @@ func ppssppReleaseFrom(data []byte) (ppssppRelease, error) {
 		out.Date = strings.TrimSpace(a.UpdatedAt)
 		return out, nil
 	}
-	return ppssppRelease{}, fmt.Errorf("minui-psp %s has no %s", tag, ppssppPakAsset)
+	return ppssppRelease{}, fmt.Errorf("%s %s has no %s", source, tag, assetName)
 }
 
-// ppssppFetchRelease asks GitHub for the newest release. Every URL — the API
-// and each redirect — is held to the download allowlist by fetchUpdateBytes.
+// ppssppFetchRelease asks GitHub for the newest build for this handheld: the
+// minui-psp release, and on a tg5040 also JukaHub's own (ppssppOwnRepo), and
+// returns the one ppssppPickRelease prefers. Either source failing leaves the
+// other; both failing returns minui-psp's error. Every URL — the API and each
+// redirect — is held to the download allowlist by fetchUpdateBytes.
 func ppssppFetchRelease(ctx context.Context, client *http.Client) (ppssppRelease, error) {
+	pak, perr := ppssppFetchPakRelease(ctx, client)
+	if platform, _ := ppssppPlatform(); platform != ppssppOwnPlatform {
+		return pak, perr
+	}
+	own, oerr := ppssppFetchOwnRelease(ctx, client)
+	if oerr != nil {
+		logDebug("ppsspp", "JukaHub's own PPSSPP release: %v", oerr)
+		return pak, perr
+	}
+	if why := ppssppSnapshot().Bad[own.Tag]; why != "" {
+		// This build did not load or start here; minui-psp's stays on offer
+		// until a new build of ours arrives (a new tag).
+		logDebug("ppsspp", "JukaHub's own %s is marked unusable here (%s)", own.Tag, why)
+		return pak, perr
+	}
+	if perr != nil {
+		logDebug("ppsspp", "minui-psp release: %v; taking JukaHub's own %s", perr, own.Version)
+		return own, nil
+	}
+	installed := ""
+	if b, ok := ppssppSnapshot().newest(); ok {
+		installed = b.Tag
+	}
+	return ppssppPickRelease(pak, own, installed), nil
+}
+
+// ppssppPickRelease chooses between the minui-psp release and JukaHub's own
+// build: the newer PPSSPP; JukaHub's when minui-psp's version is unknown (its
+// notes and history name none, so it cannot be judged newer); on a tie, the one
+// installed already (no reinstall of the same PPSSPP from the other source),
+// else minui-psp's, whose spruceUI build carries device patches.
+func ppssppPickRelease(pak, own ppssppRelease, installedTag string) ppssppRelease {
+	switch {
+	case own.Version == "":
+		return pak
+	case pak.Version == "", ppssppNewer(own.Version, pak.Version):
+		return own
+	case ppssppNewer(pak.Version, own.Version):
+		return pak
+	case installedTag == own.Tag:
+		return own
+	}
+	return pak
+}
+
+// ppssppFetchOwnRelease reads JukaHub's own PPSSPP release. Its version comes
+// from the title alone ("PPSSPP 1.20.4 for TrimUI (tg5040)"), and a release
+// whose title names none is not used; its tag becomes "jukahub-<version>".
+func ppssppFetchOwnRelease(ctx context.Context, client *http.Client) (ppssppRelease, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", standaloneAPIBase, ppssppOwnRepo, ppssppOwnTag)
+	data, err := fetchUpdateBytes(ctx, client, url, patchMaxMetadata)
+	if err != nil {
+		return ppssppRelease{}, err
+	}
+	return ppssppOwnReleaseFrom(data)
+}
+
+// ppssppOwnReleaseFrom is ppssppFetchOwnRelease's reading of the release JSON.
+func ppssppOwnReleaseFrom(data []byte) (ppssppRelease, error) {
+	rel, err := ppssppReleaseFromAsset(data, ppssppOwnAsset, "JukaHub's PPSSPP")
+	if err != nil {
+		return ppssppRelease{}, err
+	}
+	var meta ppssppGitHubRelease
+	if json.Unmarshal(data, &meta) == nil && meta.Prerelease {
+		return ppssppRelease{}, errors.New("JukaHub's PPSSPP release is marked pre-release")
+	}
+	rel.Version = ppssppVersionFromNotes(rel.Name)
+	if rel.Version == "" {
+		return ppssppRelease{}, fmt.Errorf("JukaHub's PPSSPP release title %q names no version", rel.Name)
+	}
+	rel.Tag = ppssppOwnTagPrefix + rel.Version + "-" + strings.TrimPrefix(rel.Digest, "sha256:")[:8]
+	return rel, nil
+}
+
+// ppssppFetchPakRelease asks GitHub for minui-psp's newest release.
+func ppssppFetchPakRelease(ctx context.Context, client *http.Client) (ppssppRelease, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", standaloneAPIBase, ppssppPakRepo)
 	data, err := fetchUpdateBytes(ctx, client, url, patchMaxMetadata)
 	if err != nil {
 		return ppssppRelease{}, err
 	}
-	return ppssppReleaseFrom(data)
+	rel, err := ppssppReleaseFrom(data)
+	if err != nil || rel.Version != "" {
+		return rel, err
+	}
+	// A release whose notes name no PPSSPP version (a fix or a dependency bump,
+	// like minui-psp 6.1.0) still carries the PPSSPP of the last one that did.
+	// Without a version a card with no JukaHub build yet could not tell it from
+	// the firmware's and would never get it, so the recent releases are asked.
+	// A failure here leaves the version unknown, as before.
+	listURL := fmt.Sprintf("%s/repos/%s/releases?per_page=20", standaloneAPIBase, ppssppPakRepo)
+	if list, lerr := fetchUpdateBytes(ctx, client, listURL, patchMaxMetadata); lerr == nil {
+		rel.Version = ppssppVersionFromHistory(list, rel.Tag)
+	} else {
+		logDebug("ppsspp", "release history for minui-psp %s: %v", rel.Tag, lerr)
+	}
+	return rel, nil
+}
+
+// ppssppVersionFromHistory reads GitHub's release list (newest first) and
+// returns the PPSSPP version named by tag's notes or, failing that, by the
+// newest published release before it that names one. Drafts and pre-releases
+// are skipped, and so is everything above tag (a release published after the
+// latest one was read). "" when tag is not in the list or nothing names a
+// version.
+func ppssppVersionFromHistory(data []byte, tag string) string {
+	var list []ppssppGitHubRelease
+	if err := json.Unmarshal(data, &list); err != nil {
+		return ""
+	}
+	seen := false
+	for _, r := range list {
+		if !seen {
+			seen = strings.TrimSpace(r.TagName) == tag
+			if !seen {
+				continue
+			}
+		}
+		if r.Draft || r.Prerelease {
+			continue
+		}
+		if v := ppssppVersionFromNotes(r.Name, r.Body); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ── Package layout ───────────────────────────────────────────────────────────
@@ -2128,7 +2286,7 @@ func ppssppInstall(ctx context.Context, client *http.Client, rel ppssppRelease, 
 
 	layout, err := ppssppDiscoverLayout(staging, platform)
 	if err != nil {
-		return ppssppBuild{}, fmt.Errorf("minui-psp %s is %w: %v", rel.Tag, errPPSSPPUnusable, err)
+		return ppssppBuild{}, fmt.Errorf("%s is %w: %v", ppssppSourceName(rel.Tag), errPPSSPPUnusable, err)
 	}
 	build := ppssppBuild{
 		Tag:         rel.Tag,
@@ -2148,7 +2306,7 @@ func ppssppInstall(ctx context.Context, client *http.Client, rel ppssppRelease, 
 		libDirs = append(libDirs, build.path(l))
 	}
 	if problem := nativeLoadProblemWith(build.binary(), libDirs); problem != "" {
-		return ppssppBuild{}, fmt.Errorf("minui-psp %s is %w: its PPSSPP %s", rel.Tag, errPPSSPPUnusable, problem)
+		return ppssppBuild{}, fmt.Errorf("%s is %w: its PPSSPP %s", ppssppSourceName(rel.Tag), errPPSSPPUnusable, problem)
 	}
 	build.Version = ppssppBinaryVersion(build.binary())
 	if build.Version == "" {
@@ -2196,7 +2354,7 @@ func ppssppInstall(ctx context.Context, client *http.Client, rel ppssppRelease, 
 	if err != nil {
 		logWarn("ppsspp", "could not save the PPSSPP state: %v", err)
 	}
-	logInfo("ppsspp", "installed %s (minui-psp %s, %s) in %s", build.label(), build.Tag, platform, build.Dir)
+	logInfo("ppsspp", "installed %s (%s, %s) in %s", build.label(), ppssppSourceName(build.Tag), platform, build.Dir)
 	return build, nil
 }
 
@@ -2523,9 +2681,13 @@ const (
 // ppssppAutoDecide decides for one release. A release is worth having when a
 // JukaHub build is installed and this is a new tag, or when it names a PPSSPP
 // newer than the firmware's (or the firmware's version is unknown). Install
-// mode installs only what it can judge: with nothing installed yet it needs
-// both versions, and an untested model or a user who chose the firmware's
-// PPSSPP is told rather than installed for.
+// mode installs what it can judge: with nothing installed yet it needs the
+// release's version (ppssppFetchRelease reads it from the release history when
+// the latest notes name none). A firmware PPSSPP of unknown version — or none —
+// no longer holds the install back (2026-11-12, "make sure you have the latest
+// PPSSPP"): the launcher falls back to the firmware's when JukaHub's does not
+// start, so installing costs nothing if it turns out older. An untested model
+// or a user who chose the firmware's PPSSPP is told rather than installed for.
 func ppssppAutoDecide(mode coreUpdateMode, st ppssppState, rel ppssppRelease, fwVersion string, untested bool) ppssppAutoAction {
 	if mode == coreUpdateOff || rel.Tag == "" || st.Bad[rel.Tag] != "" {
 		return ppssppAutoNothing
@@ -2541,23 +2703,25 @@ func ppssppAutoDecide(mode coreUpdateMode, st ppssppState, rel ppssppRelease, fw
 	if mode == coreUpdateNotify || untested || st.Choice == ppssppChoiceFirmware {
 		return ppssppAutoNotify
 	}
-	if !installed && (rel.Version == "" || fwVersion == "") {
-		return ppssppAutoNotify
-	}
 	return ppssppAutoInstall
 }
 
 // ppssppShouldSwitch decides whether a build installed without the user asking
 // for it plays PSP games from now on: never over a launcher pinned by hand or
 // when the user chose the firmware's PPSSPP; always when they chose JukaHub's or
-// already play a JukaHub build; otherwise only when it is newer than the
-// firmware's.
+// already play a JukaHub build; otherwise when it is newer than the firmware's,
+// or when the firmware's version could not be read (its binary and folder name
+// say none, or there is no firmware PPSSPP) and the build's is known: the
+// launcher falls back to the firmware's PPSSPP if JukaHub's does not start.
 func ppssppShouldSwitch(st ppssppState, b ppssppBuild, fwVersion string, userPinned bool) bool {
 	if userPinned || st.Choice == ppssppChoiceFirmware {
 		return false
 	}
 	if st.Choice == ppssppChoiceJukaHub || st.Active != "" {
 		return true
+	}
+	if fwVersion == "" {
+		return b.Version != ""
 	}
 	return ppssppNewer(b.Version, fwVersion)
 }
@@ -2707,7 +2871,7 @@ func ppssppReleaseLabel(rel ppssppRelease) string {
 	if rel.Version != "" {
 		return "PPSSPP " + rel.Version
 	}
-	return "a new PPSSPP build (minui-psp " + rel.Tag + ")"
+	return "a new PPSSPP build (" + ppssppSourceName(rel.Tag) + ")"
 }
 
 // ppssppNotifyMessage is the notify mode's toast for a new release.
@@ -2874,7 +3038,7 @@ func ppssppAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	}
 	busy := installBarActive() || videoHoldsScreenAwake()
 	if !coreAutoUpdateMoment(gameScreenSuspended(), busy, getBatteryCharging(),
-		userInputAge(now), coreAutoUpdateOverdueFor(st.CheckedAt, now, waited)) {
+		userInputAge(now), emuWaitBeganOnStart(waited) || coreAutoUpdateOverdueFor(st.CheckedAt, now, waited)) {
 		return false, true
 	}
 	// Install mode takes the patch slot before the check, so a busy slot is a
@@ -2918,8 +3082,15 @@ func ppssppAutoUpdateTick(now time.Time) (ran, waiting bool) {
 		}
 		return true, false
 	case ppssppAutoNothing:
+		if rel.Version == "" && len(st.Builds) == 0 && st.Bad[rel.Tag] == "" {
+			// No version in the release or its history (the history request
+			// may have failed): a card without JukaHub's PPSSPP asks again at
+			// the next poll rather than in a day.
+			logPatch("ppsspp update check: minui-psp %s names no PPSSPP version; asking again later", rel.Tag)
+			return true, false
+		}
 		ppssppStampCheck(now)
-		logPatch("ppsspp update check: minui-psp %s, nothing to do", rel.Tag)
+		logPatch("ppsspp update check: %s, nothing to do", ppssppSourceName(rel.Tag))
 		return true, false
 	}
 	switch ppssppRunAutoInstall(rel, platform, fw) {
@@ -2945,7 +3116,7 @@ func ppssppRunAutoInstall(rel ppssppRelease, platform string, fw ppssppFirmwareI
 	if gameScreenSuspended() || installBarActive() {
 		return ppssppAutoInterrupted
 	}
-	logPatch("ppsspp auto-update: installing minui-psp %s", rel.Tag)
+	logPatch("ppsspp auto-update: installing %s", ppssppSourceName(rel.Tag))
 	installBarBeginLabelled("PPSSPP", "Updating PPSSPP for PSP games")
 	ctx, cancel := context.WithTimeout(installBarRunContext(), 30*time.Minute)
 	defer cancel()

@@ -150,7 +150,7 @@ func ppssppCardBody(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, untested
 	active, usingOurs := st.build(st.Active)
 	switch {
 	case usingOurs:
-		b.WriteString("PSP games run JukaHub's " + active.label() + " (minui-psp " + active.Tag + ") from JukaHub's data folder. ")
+		b.WriteString("PSP games run JukaHub's " + active.label() + " (" + ppssppSourceName(active.Tag) + ") from JukaHub's data folder. ")
 	case fw.Launcher != "":
 		b.WriteString("PSP games run " + ppssppFirmwareLabel(fw) + ", the build on your card (" + filepath.Base(fw.Launcher) + "). ")
 	case haveFw:
@@ -190,7 +190,7 @@ func openPPSSPPCard(e emuEntry) {
 	switch {
 	case platform == "":
 		options = append(options, recoveryOption{icon: "info", title: "No JukaHub build for this model",
-			detail: "minui-psp publishes PPSSPP for the Smart Pro, the Brick and the Smart Pro S", disabled: true})
+			detail: "minui-psp publishes PPSSPP for the Smart Pro, the Brick and the Smart Pro S; JukaHub builds its own for the Smart Pro and the Brick", disabled: true})
 	case !installed:
 		title := "Install PPSSPP"
 		if st.LatestVersion != "" {
@@ -205,11 +205,11 @@ func openPPSSPPCard(e emuEntry) {
 			title = "Update to PPSSPP " + st.LatestVersion
 		}
 		options = append(options, recoveryOption{icon: "update", title: title,
-			detail: "minui-psp " + st.LatestTag + " · " + newest.label() + " is kept as the way back",
+			detail: ppssppSourceName(st.LatestTag) + " · " + newest.label() + " is kept as the way back",
 			run:    func(*Config) { recoveryCardClose(); ppssppStartInstall(tile, false) }})
 	default:
 		options = append(options, recoveryOption{icon: "refresh", title: "Check for a newer PPSSPP",
-			detail: "Installed: " + newest.label() + " (minui-psp " + newest.Tag + ")",
+			detail: "Installed: " + newest.label() + " (" + ppssppSourceName(newest.Tag) + ")",
 			run:    func(*Config) { recoveryCardClose(); ppssppStartInstall(tile, false) }})
 	}
 

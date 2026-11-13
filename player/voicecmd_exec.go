@@ -437,6 +437,11 @@ func voiceMusic(config *Config, kind voiceIntentKind) voiceOutcome {
 			return voiceOutcome{Done: true, Say: "Music paused"}
 		case st.playing:
 			return voiceOutcome{Done: true, Say: "The music is already paused"}
+		case config != nil && bgmEnabledIn(config):
+			// What is heard is the menus' background music (bgmusic.go):
+			// "stop the music" means that switch.
+			bgmSetPrefs(config, false, bgmSourceIn(config), bgmVolumeIn(config))
+			return voiceOutcome{Done: true, Say: "Background music off"}
 		}
 		return voiceOutcome{Say: "Nothing is playing", Tone: tbxToneWarn}
 	case voiceIntentMusicResume, voiceIntentMusicPlay:

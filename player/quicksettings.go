@@ -37,6 +37,11 @@ const (
 	qsActionMagnifier
 	// The WireGuard VPN (vpn.go), offered once a configuration is set.
 	qsActionVPN
+	// Background music (bgmusic.go): the same switch as Settings → Sound &
+	// haptics. A tester heard library songs start under the menus after an
+	// Extract audio (which installed ffmpeg, so "My music" could finally
+	// play) and could not find what was playing or how to stop it.
+	qsActionBgMusic
 )
 
 type qsToggle struct {
@@ -142,6 +147,8 @@ func qsInit() {
 				OnColor: sdl.Color{R: 200, G: 160, B: 80, A: 255}, OffColor: qsToggleOff},
 			{Label: "Quiet Mode", Icon: "[Q]", Action: qsActionQuiet,
 				OnColor: sdl.Color{R: 150, G: 120, B: 230, A: 255}, OffColor: qsToggleOff},
+			{Label: "Background music", Icon: "[~]", Action: qsActionBgMusic,
+				OnColor: sdl.Color{R: 230, G: 130, B: 200, A: 255}, OffColor: qsToggleOff},
 			{Label: "Fullscreen", Icon: "[F]", Action: qsActionFullscreen,
 				OnColor: sdl.Color{R: 180, G: 100, B: 255, A: 255}, OffColor: qsToggleOff},
 			// LAN play is a hub feature, not a radio: the toggle only decides
@@ -232,6 +239,7 @@ func qsRefreshAvailability() {
 		qsActionFullscreen:    true,
 		qsActionNetplay:       true,
 		qsActionMagnifier:     true,
+		qsActionBgMusic:       true,
 		qsActionVPN:           vpnQSAvailable() || vpnEnabledIn(appConfig), // on can always go off
 	}
 	detail := map[qsAction]string{
@@ -425,6 +433,8 @@ func qsSyncFromConfig(config *Config) {
 				qs.toggles[i].Value = a11y.magnifier
 			case qsActionVPN:
 				qs.toggles[i].Value = vpnSettingOn(config)
+			case qsActionBgMusic:
+				qs.toggles[i].Value = bgmEnabledIn(config)
 			}
 		}
 		if config.Variables.ScreensaverTimeout > 0 {
@@ -825,6 +835,13 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 		return nil
 	case qsActionQuiet:
 		quietModeSet(appConfig, want)
+		return nil
+	case qsActionBgMusic:
+		// bgmSetPrefs stores, saves and applies: off fades the music out
+		// within the loop's next block.
+		if appConfig != nil {
+			bgmSetPrefs(appConfig, want, bgmSourceIn(appConfig), bgmVolumeIn(appConfig))
+		}
 		return nil
 	case qsActionNetplay:
 		if appConfig != nil {

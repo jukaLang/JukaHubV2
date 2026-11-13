@@ -56,6 +56,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	jukaSpeakStop()
 	// Background music lets go of the speaker at once (bgmusic.go).
 	bgmHaltForGame()
+	// And JukaHub of a Bluetooth headset, which takes one client (audioroute.go).
+	audioRouteReleaseForChild()
 	if cmd == nil {
 		return
 	}

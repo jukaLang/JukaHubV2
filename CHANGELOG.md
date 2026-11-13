@@ -13,6 +13,42 @@ For anything older, the git log and the
 
 ### Added
 
+- **Videos that have to be downloaded first can download in the background.**
+  When a stream will not play and JukaHub downloads the file instead, the
+  loading card now offers **Y Download in background** next to **B Cancel**
+  (keyboard Y, or a tap). The card closes and the handheld is free; the download
+  keeps going with a progress chip in the activity strip (its ✕ stops it). A
+  finished file is saved to Media → Downloads, a toast/notification says it is
+  ready, and the chip becomes *Ready* — clicking it plays the video from where
+  Play was pressed. Nothing auto-plays over what you are doing. At most two run
+  at once, Play on a video still downloading says how far it is instead of
+  starting a second copy, auto-sleep waits for them, and quitting stops them.
+  The download watchdog also
+  no longer counts time the app spent paused as a stalled connection.
+  (`ytdownload_bg.go`; hooks in `ytdownload.go`, `loadingcard.go`,
+  `activity.go`, `main.go`, `core.go`.)
+
+- **JukaHub builds its own PPSSPP for the Smart Pro and Brick.** A new weekly
+  workflow (`.github/workflows/ppsspp-trimui.yml`, also runnable by hand) builds
+  the newest upstream PPSSPP release (hrydgard/ppsspp; 1.20.4 today) for tg5040
+  in the Ubuntu 20.04 arm64 build root (`player/native/build-ppsspp.sh`,
+  `build-root.sh build ppsspp`): the handheld's own SDL2, GLES and glibc at run
+  time, linked against the TrimUI SDK's GLES libraries when the toolchain image
+  has them, gcc 9's libstdc++ bundled, NEEDED and glibc checked. It publishes the
+  rolling release `ppsspp-tg5040` (never GitHub's "latest", so JukaHub's own
+  updater is unaffected) and skips weeks with no new upstream version. On a
+  tg5040 JukaHub's PPSSPP manager now asks both minui-psp and this release and
+  installs whichever names the newer PPSSPP (a tie keeps what is installed,
+  else minui-psp), with the same digest check, firmware-library check and
+  fallback to the firmware's PPSSPP. The Smart Pro S (tg5050) still uses
+  minui-psp only. Not yet run on GitHub or tried on a device.
+
+- **Unread chat badge on Home.** The Chat tile shows a red count of unread messages (community
+  channel + Juka AI; Saved never counts) in its top-right corner and "*N* new messages" under its
+  name, in every Home layout. A count that goes up pops with a fading ring. The community channel now
+  connects in the background ~15 s after start when a Discord token is set, so live messages count
+  without opening Chat first. Opening Chat marks every tab read and clears the badge; the "New
+  messages" divider still shows where each tab's new messages begin (`chatbadge.go`).
 - **Liquid background switch in the Start menu.** Start → Device → **Liquid background**
   shows On or Off and switches the effect immediately. It starts on at Gentle,
   remembers a chosen Lively level when turned off, and restores that level when
@@ -95,7 +131,8 @@ For anything older, the git log and the
   (machine-translated, awaiting native review); anything untranslated stays English. Web pages, PDFs, chat,
   notes, subtitles, typed text, file names and game titles are never translated.
 
-- **Synth: a pocket groovebox** (Start menu → Synth, Tools → Synth), in
+- **Synth: a pocket groovebox** (Start → Games → Synth, right under JukaLand; a card on the
+  Games screen; Tools → Synth), in
   the spirit of HUM on the TrimUI Brick. Seven lanes — kick, snare, hat,
   clap, bass, lead, chords — in a 16-step sequencer with eight patterns,
   accents, ratchets, swing, mutes and pattern chaining; a Play page whose
@@ -341,6 +378,22 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Box art, emulator updates and PPSSPP on start.** A card's first start now
+  looks for box art as soon as the device is online (about twenty seconds in)
+  instead of waiting a minute and a half and then for the user to put the
+  handheld down; that first pass also no longer waits for the clock to be set
+  or for a first boot's helper download, and says "Finding box art for N games
+  in the background". The emulator pass (cores, JukaHub's PPSSPP, hakuX, the
+  other managed builds, and a PC's managed emulators) and the daily box-art
+  pass, when due, now run right after JukaHub starts rather than at the next
+  idle minute — still never over a game, an install or a video, and still at
+  most once a day (`emuStartWindow`, 15 minutes). JukaHub's PPSSPP now reaches
+  the newest minui-psp build on more cards: a release whose notes name no
+  PPSSPP version takes the version from the release history, and a firmware
+  PPSSPP whose version cannot be read (or none) no longer turns the install
+  into a notification; such a build is also switched to, with the firmware's
+  PPSSPP as the fallback if it does not start.
+
 - **Sharper, ring-shaped ripples on the Smart Pro.** Under Low Power (the
   handheld's default) the water ran on a 96-column grid with its light
   stretched from a texel every 13 px, and each dip was lit as one bright half
@@ -467,6 +520,74 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Background music that started by itself can be found and stopped.** With
+  Background music set to **My music**, the menus played Calm until ffmpeg was
+  installed; the first **Extract audio** (or video) installed it, and from then
+  on your own tracks — including the extracted ones — played under the menus
+  with nothing on screen saying what they were. Now a toast names the music the
+  first time your own songs play, or when the music changes by itself, and says
+  where to stop it; **Start → Quick Settings** has a **Background music**
+  switch; and saying "stop the music" turns it off when the music player is
+  idle.
+
+- **A RetroArch game keeps its sound after the in-game menu (Brick report).**
+  Opening the in-game menu, the game assistant or an alarm over a game froze it
+  with SIGSTOP in the middle of playing; its ALSA stream ran dry while stopped,
+  and RetroArch drops its sound for the rest of the session the first time its
+  audio driver fails a write, so the game played on silent after Resume. A
+  RetroArch game the library started now pauses itself first over its command
+  port (PAUSE_TOGGLE, confirmed with GET_STATUS), the same audio stop/start its
+  own menu does, and is unpaused once it runs again — only while it says PAUSED,
+  with one owner for overlapping freezes, so a toggle never pauses a running
+  game. After the hand-back the new part of RetroArch's log is checked and any
+  audio-driver errors go to JukaHub's log (`gamepause` category).
+  `player/gamepause_ra.go`; hooks in `gameassist.go` and `alarmvol.go`. Other
+  emulators (PPSSPP, ports) are frozen as before. Not yet tried on a device.
+
+- **YouTube streams again once JukaHub's own ffmpeg is installed (TrimUI).**
+  The static ffmpeg/ffprobe the tool installer fetches has OpenSSL and, like
+  current ffmpeg, checks certificates — but it looks for the CA bundle under
+  the folder it was built in, which does not exist on the handheld. Every
+  googlevideo URL failed with "certificate verify failed", so videos only
+  played after a full download (report JH-AUBDUA). JukaHub now exports the
+  bundle the firmware has (or a `cacert.pem` next to the app) as
+  `SSL_CERT_FILE`/`SSL_CERT_DIR` for the tools it starts, and if a tool still
+  fails a certificate check, https streams go through the local relay (Go's
+  TLS) for the rest of the run — ffprobe retries that way at once, so the
+  video that hit it streams too.
+- **RetroArch is found wherever it is installed.** On Windows, Netplay never
+  looked at the Emulators catalog: it searched only for a `retroarch` with no
+  `.exe` beside JukaHub and on PATH, so it said "RetroArch not found" even when
+  JukaHub had installed RetroArch itself. It now uses the catalog's RetroArch.
+  The catalog also finds more installs: folders installers recorded in the
+  Windows registry (any drive, any folder name), every Steam library (not only
+  the one in Program Files), a Scoop install, `RetroArch-Win64` folders (for
+  example one unzipped to Downloads), and portable copies in Desktop, Downloads,
+  Documents, `C:\RetroArch`, `C:\Emulators` or `C:\Games`. That RetroArch's
+  `cores`, `config` and `retroarch.cfg` are used for cores, overrides and
+  RetroAchievements. On the handheld, the RetroArch tile and its cores also come
+  from the card JukaHub runs from, `Apps/RetroArch` or `/usr/trimui/RetroArch`
+  when `/mnt/SDCARD/RetroArch` has none, and core installs, overrides and
+  config readers follow that same RetroArch; a `retroarch64` binary counts too
+  (`emuwinregistry_windows.go`, `winExtraSearchDirs`, `deviceRetroArchCoresDir`).
+  The registry and Steam-library scan is cached and refreshed in the
+  background, and the RetroArch lookup for a few seconds, so per-frame callers
+  (Cores tab, Netplay panel) stay cheap.
+
+- **Bluetooth headphones get JukaHub's sound.** A connected headset stayed silent: every
+  output (UI sounds, Juka's voice, video and music, background music, the synth) was opened once
+  on ALSA's default, the speaker, and nothing ever moved it. Pointing each at the headset would not
+  have worked either, because BlueALSA takes only one client per headset. Outputs now go through
+  `audioroute.go`: on the speaker they behave as before, and when an A2DP headset is connected
+  they all feed one small mixer that owns the single headset stream
+  (`bluealsa:SRV=org.bluealsa,DEV=<addr>,PROFILE=a2dp`), resampling and summing them. The output
+  monitor reads the kernel's link list every 2 s and switches within seconds of a connect, a drop
+  or a Bluetooth-page action. It retries while the headset's stream appears and starts a missing
+  `bluealsa` once (then reconnects the headset). Games and apps get the headset: JukaHub lets go of
+  it when a screen-taking child starts, gives SDL children `AUDIODEV`, and takes it back when the
+  game exits. JukaHub's volume control scales the headset too. The Bluetooth diagnostics block has
+  an "Audio route" line. Not yet tried on a device; Windows and desktop Linux are unchanged.
 
 - **PS Remote Play Play button now streams from a renamed JukaHub folder.** The release zip unpacks
   as `Apps/JukaHub-Trimui`, but the stream's log, helper folder and Brick runtime were looked up in

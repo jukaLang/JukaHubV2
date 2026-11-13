@@ -54,18 +54,25 @@ var gameList = []gameEntry{
 	{name: "Minesweeper", icon: "[M]", desc: "Flag mines, clear the board", id: gameMinesweeper},
 	{name: "Flappy", icon: "[F]", desc: "Tap to fly through pipes", id: gameFlappy},
 	{name: "JukaLand", icon: "[J]", desc: "Build and explore a block world", scene: "JukaLand"},
+	// The pocket groovebox (synth.go), also a tile in the Tools hub.
+	{name: "Synth", icon: "[S]", desc: "Make beats on the groovebox", scene: synthSceneName},
 }
 
 var gameMenuCursor int
 
 const gameMenuCols = 4
 
-// A custom config can omit JukaLand. Keep the card only when it can open.
+// A custom config can omit a scene game (JukaLand, Synth). Keep a card only
+// when it can open.
 func gameMenuEntries(config *Config) []gameEntry {
-	if config == nil || sceneIndexExact(config, "JukaLand") < 0 {
-		return gameList[:len(gameList)-1]
+	out := make([]gameEntry, 0, len(gameList))
+	for _, g := range gameList {
+		if g.scene != "" && (config == nil || sceneIndexExact(config, g.scene) < 0) {
+			continue
+		}
+		out = append(out, g)
 	}
-	return gameList
+	return out
 }
 
 func openGameMenuEntry(config *Config, entry gameEntry) {

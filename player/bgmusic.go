@@ -44,18 +44,20 @@ import (
 )
 
 const (
-	// The Custom settings: on/off (missing = off), the music and the level.
-	bgmEnabledKey = "bgMusic"
-	bgmSourceKey  = "bgMusicSource"
-	bgmVolumeKey  = "bgMusicVolume"
+	// The Custom settings: on/off, source, level and optional chosen path.
+	bgmEnabledKey  = "bgMusic"
+	bgmSourceKey   = "bgMusicSource"
+	bgmVolumeKey   = "bgMusicVolume"
+	bgmSelectedKey = "bgMusicSelectedPath"
 
 	bgmDefaultVolume = 40
 
-	bgmSrcCalm    = "calm"
-	bgmSrcLofi    = "lofi"
-	bgmSrcChip    = "chip"
-	bgmSrcSynth   = "synth"
-	bgmSrcLibrary = "library"
+	bgmSrcCalm     = "calm"
+	bgmSrcLofi     = "lofi"
+	bgmSrcChip     = "chip"
+	bgmSrcSynth    = "synth"
+	bgmSrcLibrary  = "library"
+	bgmSrcSelected = "selected"
 
 	// bgmFade is how long a fade in or out takes.
 	bgmFade = 700 * time.Millisecond
@@ -77,6 +79,7 @@ func bgmSourceOptions(*Config) []setOption {
 		{Value: bgmSrcChip, Label: "Chiptune", Note: "Bright 8-bit arpeggios"},
 		{Value: bgmSrcSynth, Label: "My Synth song", Note: "What you made in Tools → Synth"},
 		{Value: bgmSrcLibrary, Label: "My music", Note: "Your music library, shuffled"},
+		{Value: bgmSrcSelected, Label: "Selected music", Note: "A file or folder you choose in Files"},
 	}
 }
 
@@ -103,10 +106,15 @@ func bgmSourceLabel(id string) string {
 
 // ── Settings ─────────────────────────────────────────────────────────────
 
+type bgmChoice struct {
+	source string
+	path   string
+}
+
 var (
-	bgmOn     atomic.Bool
-	bgmLevel  atomic.Int32
-	bgmSource atomic.Value // string
+	bgmOn          atomic.Bool
+	bgmLevel       atomic.Int32
+	bgmChoiceState atomic.Value // bgmChoice: source and chosen path change together
 
 	// bgmGen moves when the music changes, so the loop switches songs.
 	bgmGen atomic.Uint64
@@ -118,13 +126,13 @@ var (
 	// bgmHalt asks the loop to close its device now, without a fade.
 	bgmHalt atomic.Bool
 
-	// bgmSkipReq asks the loop for the next library song.
+	// bgmSkipReq asks the loop for the next library or selected-folder song.
 	bgmSkipReq atomic.Bool
 )
 
 func init() {
 	bgmLevel.Store(bgmDefaultVolume)
-	bgmSource.Store(bgmSrcCalm)
+	bgmChoiceState.Store(bgmChoice{source: bgmSrcCalm})
 }
 
 // bgmEnabledIn is the switch as stored (off unless turned on).
@@ -166,7 +174,20 @@ func bgmVolumeIn(c *Config) int {
 	return bgmDefaultVolume
 }
 
-// bgmBind reads the three settings into the live state. Cheap; the once-a-
+// bgmSelectedPathIn is the user's saved file or folder. It is kept separate
+// from the source choice so switching to a built-in song does not forget it.
+func bgmSelectedPathIn(c *Config) string {
+	if c != nil {
+		if v, ok := customValue(c.Variables.Custom, bgmSelectedKey); ok {
+			if path, ok := v.(string); ok {
+				return strings.TrimSpace(path)
+			}
+		}
+	}
+	return ""
+}
+
+// bgmBind reads the settings into the live state. Cheap; the once-a-
 // second tick calls it, so a change from any path applies within a second.
 func bgmBind(c *Config) {
 	if c == nil {
@@ -174,14 +195,45 @@ func bgmBind(c *Config) {
 	}
 	bgmOn.Store(bgmEnabledIn(c))
 	bgmLevel.Store(int32(bgmVolumeIn(c)))
-	src := bgmSourceIn(c)
-	if old, _ := bgmSource.Load().(string); old != src {
-		bgmSource.Store(src)
+	choice := bgmChoice{source: bgmSourceIn(c), path: bgmSelectedPathIn(c)}
+	if old, _ := bgmChoiceState.Load().(bgmChoice); old != choice {
+		bgmChoiceState.Store(choice)
 		bgmGen.Add(1)
 		bgm.mu.Lock()
 		bgm.libFails = 0
+		bgm.lib, bgm.libIdx, bgm.libPos = nil, 0, 0
 		bgm.mu.Unlock()
 	}
+}
+
+// bgmSetSelectedPath saves a file or folder chosen in Files and makes it the
+// active background music source. The picker validates containment first;
+// this checks the path again before it is persisted.
+func bgmSetSelectedPath(c *Config, path string) error {
+	if c == nil {
+		return os.ErrInvalid
+	}
+	clean, err := cleanUserPath(path)
+	if err != nil {
+		return err
+	}
+	clean, err = filepath.Abs(clean)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() && (!info.Mode().IsRegular() || !isAudioFile(clean)) {
+		return os.ErrInvalid
+	}
+	if c.Variables.Custom == nil {
+		c.Variables.Custom = map[string]interface{}{}
+	}
+	c.Variables.Custom[bgmSelectedKey] = clean
+	bgmSetPrefs(c, true, bgmSrcSelected, bgmVolumeIn(c))
+	return nil
 }
 
 // bgmSetPrefs is what the Settings rows call: store, apply, save.
@@ -193,9 +245,22 @@ func bgmSetPrefs(c *Config, on bool, source string, pct int) {
 		c.Variables.Custom = map[string]interface{}{}
 	}
 	pct = synthClampInt(pct, 0, 100)
+	switched := on && (!bgmEnabledIn(c) || bgmSourceIn(c) != source)
 	c.Variables.Custom[bgmEnabledKey] = strconv.FormatBool(on)
 	c.Variables.Custom[bgmSourceKey] = source
 	c.Variables.Custom[bgmVolumeKey] = strconv.Itoa(pct)
+	// The user is choosing right now: the music that results needs no toast
+	// naming it (bgmAnnounce). A level step opens no new music, so it leaves
+	// the flag alone. Off forgets what was named.
+	bgm.mu.Lock()
+	if switched {
+		bgm.quietNext = true
+	}
+	if !on {
+		bgm.quietNext = false
+		bgm.announced = ""
+	}
+	bgm.mu.Unlock()
 	bgmBind(c)
 	saveUserConfigDebounced(userConfigFromVariables(c))
 	bgmTick(c)
@@ -207,6 +272,7 @@ func bgmSetPrefs(c *Config, on bool, source string, pct int) {
 // the settings and the main-thread-only reasons to be quiet, and starts the
 // loop when there is something to play.
 func bgmTick(c *Config) {
+	bgmPickTick(c)
 	bgmBind(c)
 	bgmMainHold.Store(screensaverAsleep() || powerSleepActive() || voiceOrbActive() ||
 		vkVoiceActive() || alarmFiringActive())
@@ -312,6 +378,41 @@ var bgm struct {
 	// libFails counts songs in a row that decoded nothing; enough of them and
 	// the library is given up for Calm instead of relaunching ffmpeg forever.
 	libFails int
+
+	// announced is the music last named in a toast (bgmAnnounce); quietNext
+	// skips the next toast, because the user just chose that music.
+	announced string
+	quietNext bool
+}
+
+// bgmAnnounce names the music in a toast when it first becomes audible in
+// this run, and again when it changes without the user asking — "My music"
+// falls back to Calm until ffmpeg is installed, and the first Extract audio
+// or video player run installs it, so the user's own tracks suddenly started
+// playing under the menus with nothing on screen saying what they were or
+// how to stop them. key is "library" for library songs (one toast for the
+// whole shuffle, not one per song) or the built-in song's name. Safe off the
+// main thread (ShowToast queues).
+func bgmAnnounce(key string) {
+	bgm.mu.Lock()
+	if key == "" || key == bgm.announced {
+		bgm.mu.Unlock()
+		return
+	}
+	// A built-in song at the start of a run is what the user turned on and
+	// knows; only their own files, or music that changed by itself, are said.
+	quiet := bgm.quietNext || (bgm.announced == "" && key != "library")
+	bgm.announced = key
+	bgm.quietNext = false
+	name := bgm.nowPlaying
+	bgm.mu.Unlock()
+	if quiet {
+		return
+	}
+	if name == "" {
+		name = key
+	}
+	ShowToast("Background music: "+dlShortTitle(name, 32)+" — turn it off in Start → Quick Settings", ToastKindInfo)
 }
 
 // bgmStream is one source of stereo samples.
@@ -351,7 +452,7 @@ func bgmLoop() {
 	bgmSkipReq.Store(false)
 	desired := sdl.AudioSpec{Freq: 48000, Format: sdl.AUDIO_S16LSB, Channels: 2, Samples: 1024}
 	var obtained sdl.AudioSpec
-	dev, err := sdl.OpenAudioDevice("", false, &desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
+	dev, err := outOpen(&desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || dev == 0 {
 		logWarn("bgmusic", "no audio device: %v", err)
 		bgm.mu.Lock()
@@ -359,7 +460,7 @@ func bgmLoop() {
 		bgm.mu.Unlock()
 		return
 	}
-	defer sdl.CloseAudioDevice(dev)
+	defer outClose(dev)
 	rate := int(obtained.Freq)
 	if rate <= 0 {
 		rate = int(desired.Freq)
@@ -373,14 +474,15 @@ func bgmLoop() {
 	gen := bgmGen.Load() - 1 // opens the first stream below
 	var silentSince time.Time
 	started := false
+	announce := "" // the music to name once it is heard (bgmAnnounce)
 	for {
 		if bgmHalt.Swap(false) {
-			sdl.ClearQueuedAudio(dev)
+			outClear(dev)
 			return
 		}
 		// A game must find the speaker free: the device goes now, unfaded.
 		if gameScreenSuspended() {
-			sdl.ClearQueuedAudio(dev)
+			outClear(dev)
 			return
 		}
 		quiet := !bgmOn.Load() || bgmLevel.Load() <= 0 || bgmQuietReason() != ""
@@ -391,6 +493,7 @@ func bgmLoop() {
 			}
 			gen = bgmGen.Load()
 			stream = bgmOpenStream(rate)
+			announce = bgmStreamKey(stream)
 			env = 0
 			continue
 		}
@@ -422,17 +525,23 @@ func bgmLoop() {
 		} else {
 			silentSince = time.Time{}
 		}
-		for !silent && stream != nil && sdl.GetQueuedAudioSize(dev) < ahead {
+		for !silent && stream != nil && outQueued(dev) < ahead {
 			if !stream.fill(fbuf, bgmBlock) {
 				// A library song ended: the next one opens straight away.
 				stream.close()
 				stream = bgmOpenStream(rate)
+				announce = bgmStreamKey(stream)
 			}
 			// A library song fades in from its first decoded sample, not from
 			// the silence while ffmpeg starts.
 			ready := true
 			if ls, ok := stream.(*bgmLibStream); ok && !ls.got {
 				ready = false
+			}
+			// Named once it is really heard, not while a game holds it quiet.
+			if ready && envTarget > 0 && announce != "" {
+				bgmAnnounce(announce)
+				announce = ""
 			}
 			for i := 0; i < bgmBlock; i++ {
 				if env < envTarget && ready {
@@ -448,7 +557,7 @@ func bgmLoop() {
 					binary.LittleEndian.PutUint16(bbuf[4*i+2*ch:], uint16(s))
 				}
 			}
-			if err := sdl.QueueAudio(dev, bbuf); err != nil {
+			if err := outQueue(dev, bbuf); err != nil {
 				logWarn("bgmusic", "queue: %v", err)
 				bgm.mu.Lock()
 				bgm.failAt = time.Now()
@@ -458,7 +567,7 @@ func bgmLoop() {
 			publishAudioLevel(bbuf, rate, 2)
 		}
 		if !started {
-			sdl.PauseAudioDevice(dev, false)
+			outPause(dev, false)
 			started = true
 		}
 		time.Sleep(15 * time.Millisecond)
@@ -468,11 +577,12 @@ func bgmLoop() {
 // bgmOpenStream opens the chosen music. A library with nothing playable, or
 // no ffmpeg, falls back to Calm and says so in Settings.
 func bgmOpenStream(rate int) bgmStream {
-	src, _ := bgmSource.Load().(string)
+	choice, _ := bgmChoiceState.Load().(bgmChoice)
+	src := choice.source
 	note := ""
 	var s bgmStream
 	switch src {
-	case bgmSrcLibrary:
+	case bgmSrcLibrary, bgmSrcSelected:
 		ls, why := bgmOpenLibrary(rate)
 		if ls != nil {
 			s = ls
@@ -497,6 +607,17 @@ func bgmOpenStream(rate int) bgmStream {
 	}
 	bgm.mu.Unlock()
 	return s
+}
+
+// bgmStreamKey is what bgmAnnounce compares: "library" for any library or
+// chosen-file song, else the built-in song's name.
+func bgmStreamKey(s bgmStream) string {
+	if _, ok := s.(*bgmLibStream); ok {
+		return "library"
+	}
+	bgm.mu.Lock()
+	defer bgm.mu.Unlock()
+	return bgm.nowPlaying
 }
 
 // ── Song streams (built-in songs and the Synth song) ─────────────────────
@@ -713,12 +834,59 @@ func bgmLibraryTracks() []string {
 	return out
 }
 
-// bgmOpenLibrary starts the current library song where it was left, or
+// bgmSelectedTracks reads the chosen file or walks the chosen folder. It does
+// not need a Media library scan, and a folder can live anywhere Files browses.
+func bgmSelectedTracks(path string) ([]string, string) {
+	if path == "" {
+		return nil, "Choose a music file or folder"
+	}
+	clean, err := cleanUserPath(path)
+	if err != nil || !filepath.IsAbs(clean) {
+		return nil, "The selected music path is invalid"
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		return nil, "The selected music is no longer available"
+	}
+	if !info.IsDir() {
+		if info.Mode().IsRegular() && isAudioFile(clean) {
+			return []string{clean}, ""
+		}
+		return nil, "The selected file is not playable music"
+	}
+	var tracks []string
+	visited := 0
+	_ = filepath.WalkDir(clean, func(p string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // one unreadable subfolder must not hide the rest
+		}
+		visited++
+		if visited > mlibMaxFiles {
+			return io.EOF // bound a mistaken whole-drive selection
+		}
+		if entry.IsDir() {
+			if p != clean && strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type().IsRegular() && isAudioFile(p) {
+			tracks = append(tracks, p)
+		}
+		return nil
+	})
+	if len(tracks) == 0 {
+		return nil, "No songs in the selected folder"
+	}
+	return tracks, ""
+}
+
+// bgmOpenLibrary starts the current library or selected song where it was left, or
 // returns why it cannot.
 func bgmOpenLibrary(rate int) (*bgmLibStream, string) {
 	ffmpeg := getToolPath("ffmpeg", appConfig)
 	if st, err := os.Stat(ffmpeg); ffmpeg == "" || err != nil || st.Size() == 0 {
-		return nil, "My music needs ffmpeg (open the music player once to install it)"
+		return nil, "Your music needs ffmpeg (open the music player once to install it)"
 	}
 	bgm.mu.Lock()
 	if bgm.libFails >= 5 {
@@ -727,9 +895,24 @@ func bgmOpenLibrary(rate int) (*bgmLibStream, string) {
 	}
 	if len(bgm.lib) == 0 || bgm.libIdx >= len(bgm.lib) {
 		bgm.mu.Unlock()
-		tracks := bgmLibraryTracks()
+		generation := bgmGen.Load()
+		choice, _ := bgmChoiceState.Load().(bgmChoice)
+		var tracks []string
+		why := "No songs in your music library"
+		if choice.source == bgmSrcSelected {
+			tracks, why = bgmSelectedTracks(choice.path)
+		} else {
+			tracks = bgmLibraryTracks()
+		}
+		if len(tracks) == 0 {
+			return nil, why
+		}
 		rand.Shuffle(len(tracks), func(i, j int) { tracks[i], tracks[j] = tracks[j], tracks[i] })
 		bgm.mu.Lock()
+		if generation != bgmGen.Load() {
+			bgm.mu.Unlock()
+			return nil, "Music changed"
+		}
 		bgm.lib, bgm.libIdx, bgm.libPos = tracks, 0, 0
 	}
 	if len(bgm.lib) == 0 {

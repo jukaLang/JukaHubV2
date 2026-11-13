@@ -158,6 +158,22 @@ func installBarPhase(phase string) {
 func installBarProgress(done, total int64) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
+	installBarProgressLocked(done, total)
+}
+
+// installBarUpdateRun changes one run's phase and progress together, without a
+// retired download writing on the card that replaced it.
+func installBarUpdateRun(gen uint64, phase string, done, total int64) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.gen != gen || !installBar.visible {
+		return
+	}
+	installBar.phase = phase
+	installBarProgressLocked(done, total)
+}
+
+func installBarProgressLocked(done, total int64) {
 	if !installBar.visible {
 		return
 	}

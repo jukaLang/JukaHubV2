@@ -218,6 +218,8 @@ func mediaReasonForPeople(reason string) string {
 		return "it is not there any more (HTTP 404)"
 	case strings.Contains(lower, "protocol not found"):
 		return "this ffmpeg cannot open that kind of link"
+	case ffmpegTLSVerifyFailed(lower):
+		return "ffmpeg could not check the site's certificate"
 	case ytContainsAny(lower, "connection refused", "network is unreachable", "no route to host",
 		"failed to resolve hostname", "name or service not known", "temporary failure in name resolution"):
 		return "the network did not answer"

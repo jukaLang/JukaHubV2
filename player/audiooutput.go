@@ -152,47 +152,46 @@ func bluetoothInfoIsAudioSink(info string) bool {
 	return strings.Contains(info, "Audio Sink")
 }
 
-// bluetoothAudioName picks the first connected device that advertises an audio
-// sink. infoFor is injected so the selection is testable without bluetoothctl.
-func bluetoothAudioName(devicesOut string, infoFor func(string) string) string {
+// bluetoothAudioDevice picks the first connected device that advertises an
+// audio sink. infoFor is injected so the selection is testable without
+// bluetoothctl.
+func bluetoothAudioDevice(devicesOut string, infoFor func(string) string) btDevice {
 	if infoFor == nil {
-		return ""
+		return btDevice{}
 	}
 	for _, d := range parseBluetoothDevices(devicesOut) {
 		if bluetoothInfoIsAudioSink(infoFor(d.addr)) {
-			return d.name
+			return d
 		}
 	}
-	return ""
+	return btDevice{}
 }
 
-// systemBluetoothAudioName asks BlueZ for the connected device and checks that
-// it is an audio sink. A missing bluetoothctl, a radio that is off, or a daemon
-// that does not answer all mean "no wireless output" rather than an error worth
-// surfacing.
+// systemBluetoothAudioDevice asks BlueZ for the connected device and checks
+// that it is an audio sink. A missing bluetoothctl, a radio that is off, or a
+// daemon that does not answer all mean "no wireless output" rather than an
+// error worth surfacing.
 //
 // `devices Connected` only exists from BlueZ 5.65 on. The handhelds' 5.54
 // refuses the argument ("Too many arguments") and an in-between build may
 // ignore it and list every device, so without it the paired devices are asked
 // instead, and only one whose info says "Connected: yes" counts either way.
-func systemBluetoothAudioName() string {
+func systemBluetoothAudioDevice() btDevice {
 	if !btToolExists("bluetoothctl") {
-		return ""
+		return btDevice{}
 	}
 	// No live link in the kernel's list (bluetooth_quick.go): nothing is
 	// connected, and no process needs to start to say so.
-	if names := btSysfsNames(btSysfsRoot); names != nil {
-		if _, links := btSysfsCount(names); links == 0 {
-			return ""
-		}
+	if btLinkCount() == 0 {
+		return btDevice{}
 	}
 	out, err := btToolRun("bluetoothctl", "devices", "Connected")
 	if err != nil || len(parseBluetoothDevices(out)) == 0 {
 		if out, err = btToolRun("bluetoothctl", "paired-devices"); err != nil {
-			return ""
+			return btDevice{}
 		}
 	}
-	return bluetoothAudioName(out, func(addr string) string {
+	return bluetoothAudioDevice(out, func(addr string) string {
 		info, err := btToolRun("bluetoothctl", "info", addr)
 		if err != nil || !strings.Contains(info, "Connected: yes") {
 			return ""
@@ -232,35 +231,71 @@ func headphoneJackPlugged(readFile func(string) ([]byte, error)) bool {
 
 // ── Monitor ────────────────────────────────────────────────────────────────
 
-// startAudioOutputMonitor probes the output once after startup and then every
-// audioOutputPollInterval. The ticker lives on its own goroutine: bluetoothctl
-// is a known slow daemon and must never block a frame.
+// audioOutputLinkPoll is how often the kernel's Bluetooth link list is read
+// (a directory listing, no process). A change there — a headset connecting or
+// dropping — triggers the full probe at once, so sound moves to the headset
+// within a couple of seconds instead of up to audioOutputPollInterval.
+const audioOutputLinkPoll = 2 * time.Second
+
+// btLinkCount is the number of live Bluetooth links the kernel lists, or -1
+// when it lists no adapters directory at all (no Bluetooth, not Linux).
+func btLinkCount() int {
+	names := btSysfsNames(btSysfsRoot)
+	if names == nil {
+		return -1
+	}
+	_, links := btSysfsCount(names)
+	return links
+}
+
+// startAudioOutputMonitor probes the output once after startup, then whenever
+// the link count changes, the route is kicked (audioRouteKick) or
+// audioOutputPollInterval has passed. The loop lives on its own goroutine:
+// bluetoothctl is a known slow daemon and must never block a frame.
 func startAudioOutputMonitor() {
 	go func() {
 		// Let the first frame and the deferred startup work finish first.
 		time.Sleep(2 * time.Second)
 		probeAudioOutput()
-		ticker := time.NewTicker(audioOutputPollInterval)
+		lastLinks, lastProbe := btLinkCount(), time.Now()
+		ticker := time.NewTicker(audioOutputLinkPoll)
 		defer ticker.Stop()
 		wake := subscribeForegroundWake()
 		for {
+			force := false
+			select {
+			case <-ticker.C:
+			case <-wake:
+				// Back from a game: take the headset back now.
+				force = true
+			case <-audioRouteKicks:
+				force = true
+			}
 			// bluetoothctl is a daemon call; skipping it while a game owns the
-			// screen also stops JukaHub from holding the Bluetooth stack the game
-			// may want for a headset. See backgroundwork.go.
-			if !waitForPoll(ticker.C, wake) {
+			// screen also stops JukaHub from holding the Bluetooth stack (and
+			// the headset, audioroute.go) the game wants. See backgroundwork.go.
+			if backgroundPaused() {
+				continue
+			}
+			links := btLinkCount()
+			if !force && links == lastLinks && time.Since(lastProbe) < audioOutputPollInterval {
 				continue
 			}
 			probeAudioOutput()
+			lastLinks, lastProbe = links, time.Now()
 		}
 	}()
 }
 
-// probeAudioOutput refreshes the cached output name from the host. Bluetooth
-// wins: a headset that is connected is what the user is listening through, and
-// a jack on a device with a radio is usually the fallback.
+// probeAudioOutput refreshes the cached output name from the host and moves
+// JukaHub's sound to a connected headset (audioroute.go). Bluetooth wins: a
+// headset that is connected is what the user is listening through, and a jack
+// on a device with a radio is usually the fallback.
 func probeAudioOutput() {
-	if name := systemBluetoothAudioName(); name != "" {
-		rememberAudioOutput(name)
+	headset := systemBluetoothAudioDevice()
+	audioRouteUpdate(headset.addr)
+	if headset.name != "" {
+		rememberAudioOutput(headset.name)
 		return
 	}
 	if headphoneJackPlugged(os.ReadFile) {

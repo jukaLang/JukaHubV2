@@ -107,6 +107,14 @@ func (h *HomeLayout) drawHomeAppTile(renderer *sdl.Renderer, fonts HomeFonts, it
 		drawHomeFocusGlow(renderer, draw)
 	}
 	drawGlassTile(renderer, item.Rect, draw, focused, pressed)
+	// A tile that opens Chat carries its unread count (chatbadge.go).
+	if !dim {
+		var unread int
+		item, unread = homeChatTileUnread(item)
+		if unread > 0 {
+			defer h.drawHomeChatBadge(renderer, fonts, draw, unread)
+		}
+	}
 
 	titleInk, subInk := ColorTextPrimary(), ColorTextMuted()
 	subtitle := item.Subtitle

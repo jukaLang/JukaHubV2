@@ -133,24 +133,49 @@ var ytdlNow = struct {
 	mu sync.Mutex
 	on bool
 	st ytdlState
+	// What sending the download to the background needs (ytdownload_bg.go):
+	// the page, where Play was pressed, and the download's own cancel.
+	page     string
+	startSec float64
+	cancel   context.CancelFunc
 }{}
 
 // ytdlBegin starts the card's download state for the prepare seq.
-func ytdlBegin(seq uint64, youTube bool, attempts int) {
+func ytdlBegin(seq uint64, youTube bool, attempts int, page string, startSec float64, cancel context.CancelFunc) {
 	ytdlNow.mu.Lock()
 	ytdlNow.on = true
 	ytdlNow.st = ytdlState{seq: seq, youTube: youTube, attempt: 1, attempts: attempts, fraction: -1}
+	ytdlNow.page, ytdlNow.startSec, ytdlNow.cancel = page, startSec, cancel
 	ytdlNow.mu.Unlock()
 }
 
 // ytdlUpdate changes the state of the prepare seq; a later prepare's state is
-// left alone.
+// left alone. A download sent to the background moves its updates to its
+// chip (ytdownload_bg.go).
 func ytdlUpdate(seq uint64, change func(*ytdlState)) {
 	ytdlNow.mu.Lock()
 	if ytdlNow.on && ytdlNow.st.seq == seq {
 		change(&ytdlNow.st)
+		ytdlNow.mu.Unlock()
+		return
 	}
 	ytdlNow.mu.Unlock()
+	ytdlBgUpdate(seq, change)
+}
+
+// ytdlClaim ends Y's chance to move the download of prepare seq to the
+// background, and reports whether it was moved already. ytdlSendToBackground
+// refuses a download whose cancel is gone, and both run under ytdlNow.mu, so
+// the answer cannot change after this returns.
+func ytdlClaim(seq uint64) bool {
+	ytdlNow.mu.Lock()
+	if ytdlNow.on && ytdlNow.st.seq == seq {
+		ytdlNow.cancel = nil
+		ytdlNow.mu.Unlock()
+		return false
+	}
+	ytdlNow.mu.Unlock()
+	return ytdlBgHas(seq)
 }
 
 // ytdlEnd clears the state of the prepare seq.
@@ -158,6 +183,7 @@ func ytdlEnd(seq uint64) {
 	ytdlNow.mu.Lock()
 	if ytdlNow.st.seq == seq {
 		ytdlNow.on = false
+		ytdlNow.cancel = nil
 	}
 	ytdlNow.mu.Unlock()
 }
@@ -194,16 +220,49 @@ type ytdlFailure struct {
 // work behind playWithTempFile: the loading card stays up for all of it (the
 // caller began the prepare), B cancels it, and every way out clears the card.
 // It reports whether playback started.
+//
+// Y on the card sends the download to the background (ytdownload_bg.go): the
+// card closes, the download runs on under its own context with a chip in the
+// activity strip, and a finished file is filed in Media → Downloads instead of
+// taking over the screen. That is why the work below runs under ctx, which the
+// prepare's cancel ends only while the download is still on the card.
 func ytDownloadAndPlay(parent context.Context, config *Config, ytDlpPath, page string, startSec float64, prepareSeq uint64) bool {
 	defer finishVideoPrepare(prepareSeq)
 	if parent == nil {
 		parent = context.Background()
 	}
 	page = strings.TrimSpace(page)
+	if frac, running := ytdlBgRunningFor(page); running {
+		// The same video is already downloading behind the user: a second copy
+		// would only race it for the Wi-Fi.
+		ytdlBgStillDownloadingToast(frac)
+		return false
+	}
 	youTube := youtubeVideoID(page) != ""
 	// Read now: anything that stops a session while this runs may clear them,
 	// and the video that finally plays is still this page's.
 	origin := mediaPlayOriginName()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-parent.Done():
+			// B or a newer load ends the download — unless it was sent to the
+			// background first, where only its chip's X ends it.
+			if !ytdlBgHas(prepareSeq) {
+				cancel()
+			}
+		case <-ctx.Done():
+		}
+	}()
+	// The player's phase belongs to whatever is on screen; a background
+	// download must not paint it.
+	phase := func(p string, progress float64, errText string) {
+		if !ytdlBgHas(prepareSeq) {
+			ytdlSetPlaybackPhase(p, progress, errText)
+		}
+	}
 
 	ffmpegPath := getToolPath("ffmpeg", config)
 	var attempts []ytdlAttempt
@@ -215,81 +274,97 @@ func ytDownloadAndPlay(parent context.Context, config *Config, ytDlpPath, page s
 	if native {
 		total++
 	}
-	ytdlBegin(prepareSeq, youTube, total)
-	defer ytdlEnd(prepareSeq)
-	ytdlSetPlaybackPhase("downloading", 0, "")
-	logInfo("youtube", "downloading %s to play it (resume %.0f s, %d way(s) to try)", sanitizeLogURL(page), startSec, total)
-
-	tempDir := videoTempDir()
-	if err := downloadsRequireSpace(tempDir, freeBytes); err != nil {
+	// Checked before the card offers the background: nothing has started
+	// yet that Y could move.
+	if err := downloadsRequireSpace(videoTempDir(), freeBytes); err != nil {
 		logError("youtube", "download failed: %s: %v", sanitizeLogURL(page), err)
 		showToast("Not enough space on the SD card to download this video", ToastError())
 		ytdlSetPlaybackPhase("error", 0, err.Error())
 		return false
 	}
+	ytdlBegin(prepareSeq, youTube, total, page, startSec, cancel)
+	defer ytdlEnd(prepareSeq)
+	phase("downloading", 0, "")
+	logInfo("youtube", "downloading %s to play it (resume %.0f s, %d way(s) to try)", sanitizeLogURL(page), startSec, total)
 
 	var fails []ytdlFailure
 	path := ""
 	helperBroken := false
 	fatal := false
 	for i, a := range attempts {
-		if parent.Err() != nil || helperBroken || fatal {
+		if ctx.Err() != nil || helperBroken || fatal {
 			break
 		}
 		ytdlUpdate(prepareSeq, func(s *ytdlState) {
 			*s = ytdlState{seq: s.seq, youTube: s.youTube, attempt: i + 1, attempts: s.attempts, fraction: -1}
 		})
 		tempPath := tempVideoPath()
-		f := ytdlRunAttempt(parent, config, ytDlpPath, page, tempPath, a, prepareSeq)
+		f := ytdlRunAttempt(ctx, config, ytDlpPath, page, tempPath, a, prepareSeq)
 		if f == nil {
 			path = tempPath
 			break
 		}
 		removeTempVideoArtifacts(tempPath)
-		if parent.Err() != nil {
+		if ctx.Err() != nil {
 			break
 		}
 		logWarn("youtube", "download failed: %s (%s, way %d of %d): %s", sanitizeLogURL(page), a.name, i+1, total, f.reason)
 		fails = append(fails, *f)
 		helperBroken, fatal = f.broken, f.fatal
 	}
-	if path == "" && native && !fatal && parent.Err() == nil {
+	if path == "" && native && !fatal && ctx.Err() == nil {
 		ytdlUpdate(prepareSeq, func(s *ytdlState) {
 			*s = ytdlState{seq: s.seq, youTube: s.youTube, attempt: s.attempts, attempts: s.attempts, fraction: -1}
 		})
 		tempPath := tempVideoPath()
-		f := ytdlNativeAttempt(parent, config, page, tempPath, prepareSeq)
+		f := ytdlNativeAttempt(ctx, config, page, tempPath, prepareSeq)
 		if f == nil {
 			path = tempPath
 		} else {
 			removeTempVideoArtifacts(tempPath)
-			if parent.Err() == nil {
+			if ctx.Err() == nil {
 				logWarn("youtube", "download failed: %s (%s, way %d of %d): %s", sanitizeLogURL(page), f.method, total, total, f.reason)
 				fails = append(fails, *f)
 			}
 		}
 	}
 
-	if parent.Err() != nil {
-		// B, or another video started: not the link's fault, so no toast, and
-		// nothing half-fetched is left on the card.
+	// From here Y can no longer move the download (ytdlClaim), so bg is the
+	// answer for every way out below, whatever is pressed meanwhile.
+	bg := ytdlClaim(prepareSeq)
+	if ctx.Err() != nil {
+		// B, another video started, or the background chip's X: not the
+		// link's fault, so no toast, and nothing half-fetched is left on the
+		// card.
 		if path != "" {
 			removeTempVideoArtifacts(path)
 		}
 		logDebug("youtube", "download of %s cancelled", sanitizeLogURL(page))
+		if bg {
+			ytdlBgSettle(prepareSeq, "", "", true)
+		}
 		return false
 	}
 	if path == "" {
 		msg := ytdlFailureMessage(config, page, fails, ytDlpPath)
-		ytdlSetPlaybackPhase("error", 0, msg)
-		showToast(msg, ToastError())
 		// The stream did not play and neither did this: streaming is no worse
 		// than the download here, so the next play tries it first again.
 		mediaNoteDownloadFailed(page)
+		if bg {
+			ytdlBgSettle(prepareSeq, "", msg, false)
+			return false
+		}
+		ytdlSetPlaybackPhase("error", 0, msg)
+		showToast(msg, ToastError())
 		return false
 	}
 
 	ytdlUpdate(prepareSeq, func(s *ytdlState) { s.stage = ytdlStageOpening })
+	if bg {
+		logInfo("youtube", "downloaded %s in the background (%s)", sanitizeLogURL(page), formatBytes(uint64(fileSize(path))))
+		ytdlBgSettle(prepareSeq, path, "", false)
+		return false
+	}
 	ytdlSetPlaybackPhase("playing", 1, "")
 	// Anything that closed a session during the download may have cleared the
 	// page and the screen it was opened from; the file is this page's video.
@@ -891,6 +966,27 @@ func (w *ytdlWatch) bytes(now time.Time, done, total int64, speed float64) {
 	w.mu.Unlock()
 }
 
+// ytdlPausedGap is a gap between two of the watchdog's one-second ticks that
+// only a paused process explains.
+const ytdlPausedGap = 10 * time.Second
+
+// shift moves every clock of the watch forward by d, so a pause is not counted
+// as time without data — never past now, because the reader may already have
+// noted output that arrived after the pause. Callers hold w.mu.
+func (w *ytdlWatch) shift(d time.Duration, now time.Time) {
+	move := func(t time.Time) time.Time {
+		if t.IsZero() {
+			return t
+		}
+		if t = t.Add(d); t.After(now) {
+			return now
+		}
+		return t
+	}
+	w.started, w.lastOutput, w.lastGrowth = move(w.started), move(w.lastOutput), move(w.lastGrowth)
+	w.firstBytes, w.joinFrom = move(w.firstBytes), move(w.joinFrom)
+}
+
 // verdict is why the watchdog stopped the attempt ("" when it did not), and
 // whether that was the speed.
 func (w *ytdlWatch) verdict() (string, bool) {
@@ -904,12 +1000,25 @@ func (w *ytdlWatch) verdict() (string, bool) {
 func (w *ytdlWatch) run(ctx context.Context, cancel context.CancelFunc) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
+	prev := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-tick.C:
+		case <-tick.C:
+			// The wall clock, not the tick's own time: after a pause the
+			// first tick carries the time it was due, before the pause.
+			now := time.Now()
+			gap := now.Sub(prev)
+			prev = now
 			w.mu.Lock()
+			if gap > ytdlPausedGap {
+				// The app was paused (a game took the handheld, launch.sh
+				// stopped it) and nobody could read the helper's output
+				// meanwhile: the silence is ours, not the connection's. A
+				// background download lives through that now.
+				w.shift(gap-time.Second, now)
+			}
 			why, slow := ytdlVerdict(now, w.started, w.lastOutput, w.lastGrowth, w.firstBytes, w.joinFrom, w.done, w.total, w.speed)
 			if why != "" {
 				w.stopped, w.slow = why, slow

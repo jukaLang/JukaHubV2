@@ -158,7 +158,8 @@ none; `false` reads as off. `jukaVoiceName` (**Voice**): `"hannah"` (the
 default), `"autumn"`, `"diana"`, `"austin"`, `"daniel"` or `"troy"` — Groq's
 Orpheus voices — or `"device"` for the device's own voice where it has one
 (Windows' speech on a PC; espeak-ng, espeak, flite, pico2wave or piper on
-Linux); anything else is the default. Groq's voice uses the same Groq key as
+Linux, including the optional Piper voice downloaded from Voice & AI on a
+TrimUI); anything else is the default. Groq's voice uses the same Groq key as
 Chat ([Voice](VOICE.md#jukas-voice)).
 
 `voiceShortcuts` (Settings → Voice & AI → **Voice shortcuts**; none by
@@ -563,18 +564,21 @@ shipped order. A control is still only drawn while it has something to show
 (no forecast, nothing playing, no release offered), and a crowded bar drops
 parts the usual way.
 
-### Background music (`bgMusic`, `bgMusicSource`, `bgMusicVolume`)
+### Background music (`bgMusic`, `bgMusicSource`, `bgMusicVolume`, `bgMusicSelectedPath`)
 
-Settings → Sound & haptics writes three custom variables. `bgMusic` is the
-switch (`"true"` / `"false"`; missing is off). `bgMusicSource` is the music:
+Settings → Sound & haptics writes the background-music custom variables.
+`bgMusic` is the switch (`"true"` / `"false"`; missing is off). `bgMusicSource` is the music:
 `calm`, `lofi` and `chip` are the built-in songs, `synth` plays the Synth's
 saved `synth.json` (its demo when there is none) and `library` shuffles the
 music library's songs (not videos or audiobooks), falling back to the downloads
-music folder; an unknown value is `calm`. `bgMusicVolume` is 0–100 (missing is
-40). The music pauses while a game, the music player, a video, the Synth, Quiet
+music folder. `selected` plays the file or shuffles the folder stored in
+`bgMusicSelectedPath`; users choose either through the Files picker in Sound &
+haptics, and a folder includes supported audio in its subfolders. An unknown
+source is `calm`. `bgMusicVolume` is 0–100 (missing is 40). The music pauses
+while a game, the music player, a video, the Synth, Quiet
 Mode, the voice orb, dictation or an alarm has the speaker, and while the
-screen sleeps. `library` needs ffmpeg already installed (it is never downloaded
-for this) and otherwise plays `calm`.
+screen sleeps. `library` and `selected` need ffmpeg already installed (it is
+never downloaded for this) and otherwise play `calm`.
 
 ## `elements`
 

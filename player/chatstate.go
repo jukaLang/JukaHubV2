@@ -467,6 +467,9 @@ func chatTick(config *Config) {
 	chatRefreshCreds(config, time.Now(), false)
 	// The signing name, for callers off the main thread (chat.go).
 	chatRefreshName(config)
+	// New community messages reach the Home tile's badge without Chat being
+	// opened first (chatbadge.go).
+	chatBackgroundConnect(time.Now())
 	chatSyncVisibility(config)
 	// Picking in Files, and files saved from the chat that should open now.
 	chatFilesTick(config)
@@ -503,8 +506,14 @@ func chatSceneEnter() {
 	chatComposerInline = false
 	clearChatSelection()
 	chatSuggestFocus = -1
-	tab := chatActiveTabID()
-	chatMarkDivider(tab)
+	// Opening Chat reads it: every tab's "New messages" divider is placed
+	// first, then the counts go to zero, so the Home tile's badge
+	// (chatbadge.go) clears the moment the screen opens and a tab switched to
+	// later still shows where its new messages begin.
+	for t := chatTabCommunity; t < chatTabCount; t++ {
+		chatMarkDivider(t)
+	}
+	chatMarkAllSeen()
 	chatDiscordWanted.Store(true)
 	chatEnsureSync()
 	chatWakeSync()
@@ -529,11 +538,13 @@ func chatSceneLeave() {
 func chatMarkDivider(tab chatTab) {
 	chatMutex.Lock()
 	defer chatMutex.Unlock()
-	chatViews[tab].dividerID = ""
 	data := chatTabs[tab]
 	if data.unread <= 0 || data.seenAt <= 0 {
+		// Nothing new since the last look: the divider placed when Chat
+		// opened (chatSceneEnter) stays; chatSceneLeave clears it.
 		return
 	}
+	chatViews[tab].dividerID = ""
 	for _, msg := range *chatTabSliceLocked(tab) {
 		if !chatIsOwn(msg) && !chatIsSystem(msg) && msg.Timestamp.UnixMilli() > data.seenAt {
 			chatViews[tab].dividerID = msg.ID
@@ -553,6 +564,15 @@ func chatMarkSeenLocked(tab chatTab) {
 		}
 	}
 	chatTabs[tab].unread = 0
+}
+
+// chatMarkAllSeen marks every tab read up to its newest message.
+func chatMarkAllSeen() {
+	chatMutex.Lock()
+	defer chatMutex.Unlock()
+	for t := chatTabCommunity; t < chatTabCount; t++ {
+		chatMarkSeenLocked(t)
+	}
 }
 
 // chatTabUnread returns one tab's unread count.

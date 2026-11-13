@@ -160,8 +160,9 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	var games []startMenuEntry
 	// Put the games that ship with JukaHub together at the top of Games.
 	// The badge is drawn separately so the scene names stay stable for search
-	// and shortcuts. Custom configs may omit either scene.
-	for _, scene := range []string{"Games", "JukaLand"} {
+	// and shortcuts. Custom configs may omit any of these scenes. The Synth
+	// (synth.go) sits under JukaLand; its Tools hub tile stays.
+	for _, scene := range []string{"Games", "JukaLand", synthSceneName} {
 		if config != nil && sceneIndexExact(config, scene) >= 0 {
 			games = append(games, startMenuEntry{
 				name: sceneDisplayName(scene), icon: "G", scene: scene, badge: "Built-in",
@@ -196,8 +197,6 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "Downloads", icon: "D", action: func(*Config) { openDownloadsPanel() }},
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
-		// The pocket groovebox (synth.go); listing it here moves it out of Screens.
-		{name: "Synth", icon: "S", action: func(c *Config) { toolsHubOpenScene(c, synthSceneName) }},
 		{name: "Smart Home", icon: "M", action: func(c *Config) { openSmartHomePanel(c) }},
 		{name: "Screen Share", icon: "V", action: func(c *Config) { openCastPanel(c) }},
 		// Say what to open (voicecmd.go); the phone's keyboard microphone works

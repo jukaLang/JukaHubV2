@@ -370,3 +370,20 @@ func TestEmuDigestMatches(t *testing.T) {
 		t.Fatal("an unsupported digest passed")
 	}
 }
+
+// RetroArch unzipped (or installed) as RetroArch-Win64 inside a searched
+// folder — Downloads, a Steam library — is the catalog's RetroArch.
+func TestEmuWinDetectFindsRetroArchWin64Folder(t *testing.T) {
+	root := t.TempDir()
+	exe := filepath.Join(root, "RetroArch-Win64", "retroarch.exe")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("ra"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found, _, _ := emuWinDetect(winEmuSpec{"RetroArch", []string{"retroarch.exe"}}, []string{root}, noLookPath)
+	if found != exe {
+		t.Fatalf("found %q, want %q", found, exe)
+	}
+}

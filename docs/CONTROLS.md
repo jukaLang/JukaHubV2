@@ -965,6 +965,16 @@ like starting a video: the loading card names the source, the scene underneath
 stops taking input, and **B** aborts it — the video that was already playing
 keeps playing, because nothing is torn down until the new stream is ready.
 
+When a video will not stream and has to be downloaded first, the loading card
+shows the download's progress and a second button: **Y** (the Y key, or a tap
+on the pill) *Download in background*. The card closes, everything works again,
+and the download carries on with a chip at the top right showing its progress
+(its ✕ stops it). When it is done it is saved to **Media → Downloads**, a
+notification says it is ready, and the chip turns into *Ready* — click it (or
+use the virtual cursor) to play it from where you pressed Play. It never starts
+playing by itself. Two downloads can run in the background at once; pressing
+Play on a video that is still downloading says how far along it is.
+
 On a keyboard **N** and **P** move to the next and previous video of the list
 that launched the current one — in the Shorts feed that is the next short. In
 the feed the four videos after the one playing are resolved in the background,

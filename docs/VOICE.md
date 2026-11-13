@@ -92,14 +92,30 @@ Hear Juka — on a PC it opens Groq's page in your browser, on the handheld it
 shows a QR code for your phone. Accept, then press **Hear Juka**.
 
 When Groq's voice can't speak (no key, no internet, the allowance, the terms),
-a PC speaks with Windows' own voice, offline, and a Linux device with
-espeak-ng, espeak, flite, pico2wave or piper (with a voice) in JukaHub's
-`required/` folder or on its PATH uses that; the TrimUI firmwares have none,
-so there the answer stays on screen. Music and a video play softer while Juka
-talks. Quiet Mode, a ringing alarm and starting a game, a video or music
-silence the voice; the Interface sounds switch does not, and the system volume
-sets how loud it is. Nobody has heard it on a Smart Pro yet: the first device
-run will say how soon the first word comes.
+a PC speaks with Windows' own voice, offline. On a TrimUI, **Download offline
+voice** in **Settings → Voice & AI** installs Piper's Kristin voice to the SD
+card; the row then selects **This device** as Juka's voice. It reads text
+without Wi-Fi, a Groq key or a daily speech limit. The download is about 90 MB
+and uses about 105 MB on the card. **Hear Juka** checks that it can speak.
+Piper is also used as a fallback if you later choose a Groq voice and Groq
+cannot speak. The download is optional, checksum verified and can resume after
+a dropped connection. The voice files live in `Apps/JukaHub/required/juka-piper/`.
+The [Piper engine](https://github.com/rhasspy/piper) is MIT licensed; the
+[Kristin voice card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/kristin/medium/MODEL_CARD)
+identifies public-domain LibriVox recordings as its training data.
+
+Other Linux devices may also use espeak-ng, espeak, flite, pico2wave or Piper
+(with a voice) in JukaHub's `required/` folder or on its PATH. Music and a
+video play softer while Juka talks. Quiet Mode, a ringing alarm and starting a
+game, a video or music silence the voice; the Interface sounds switch does
+not, and the system volume sets how loud it is. The new download has been
+checked with Piper on a PC, but needs its first Smart Pro playback test.
+
+Offline speech reads an answer that is already available. Asking a new open
+question, describing a picture, transcribing the handheld microphone and
+voice typing still use Groq. The built-in commands and typed commands work
+without Groq. An on-device language model would need a separate runtime and
+memory test; see [Offline AI options](LOCAL_AI.md).
 
 ## Three ways to say it
 
@@ -328,9 +344,8 @@ for a few seconds, and password, key, address and search fields never listen.
   asked for English).
 * Offline speech recognition on the handheld: there is no small offline model
   in JukaHub, and Windows' built-in recogniser (System.Speech) is not used.
-* Juka's voice in languages other than English (Groq's Orpheus is English),
-  and an offline voice for the handheld (no speech engine ships with the
-  firmware, and JukaHub downloads none).
+* Juka's voice in languages other than English (Groq's Orpheus and the
+  downloadable Kristin voice are English).
 * A wake word that is always listening: deliberately not — a handheld
   microphone open all the time costs battery and privacy.
 * Proof on the hardware: the microphone fallbacks and the codec switches come

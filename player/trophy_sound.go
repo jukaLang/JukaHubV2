@@ -16,8 +16,6 @@ package main
 import (
 	"math"
 	"sync"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 // trophyNote is one bell strike of the chime.
@@ -177,11 +175,11 @@ func trophyPlayChime(tier trophyTier) {
 	}
 	audioMutex.Lock()
 	defer audioMutex.Unlock()
-	if sdl.GetQueuedAudioSize(audioDev) > uint32(rate)*4 {
+	if outQueued(audioDev) > uint32(rate)*4 {
 		return
 	}
 	publishAudioLevel(pcm, int(rate), 1)
-	_ = sdl.QueueAudio(audioDev, pcm)
+	_ = outQueue(audioDev, pcm)
 }
 
 // trophyChimeScaled applies the UI sound volume (percent) to a chime, on the

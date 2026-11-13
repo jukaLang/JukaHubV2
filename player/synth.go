@@ -311,7 +311,7 @@ func synthAudioLoop() {
 	}()
 	desired := sdl.AudioSpec{Freq: 48000, Format: sdl.AUDIO_S16LSB, Channels: 2, Samples: 512}
 	var obtained sdl.AudioSpec
-	dev, err := sdl.OpenAudioDevice("", false, &desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
+	dev, err := outOpen(&desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || dev == 0 {
 		logWarn("synth", "no audio device: %v", err)
 		synth.mu.Lock()
@@ -319,7 +319,7 @@ func synthAudioLoop() {
 		synth.mu.Unlock()
 		return
 	}
-	defer sdl.CloseAudioDevice(dev)
+	defer outClose(dev)
 	rate := int(obtained.Freq)
 	if rate <= 0 {
 		rate = int(desired.Freq)
@@ -338,26 +338,26 @@ func synthAudioLoop() {
 	ahead := uint32(max(6*synthBlock, 2*int(obtained.Samples)) * 4)
 	started := false
 	for time.Since(time.Unix(0, synthLastSeen.Load())) < synthIdleStop {
-		for sdl.GetQueuedAudioSize(dev) < ahead {
+		for outQueued(dev) < ahead {
 			synthLocked(func() { eng.render(fbuf, synthBlock) })
 			for i, v := range fbuf {
 				s := int16(math.Max(-1, math.Min(1, float64(v))) * 32767)
 				binary.LittleEndian.PutUint16(bbuf[2*i:], uint16(s))
 			}
-			if err := sdl.QueueAudio(dev, bbuf); err != nil {
+			if err := outQueue(dev, bbuf); err != nil {
 				logWarn("synth", "queue: %v", err)
 				return
 			}
 			publishAudioLevel(bbuf, rate, 2)
 		}
 		if !started {
-			sdl.PauseAudioDevice(dev, false)
+			outPause(dev, false)
 			started = true
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	synthLocked(eng.silence)
-	sdl.ClearQueuedAudio(dev)
+	outClear(dev)
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────

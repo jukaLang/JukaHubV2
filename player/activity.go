@@ -136,6 +136,9 @@ func activityRows() []activityItem {
 			open: func() { openDownloadsPanel() },
 		})
 	}
+	// A video download sent to the background from the loading card, and
+	// the "Ready" chip that plays it once it is done (ytdownload_bg.go).
+	rows = append(rows, ytdlBgActivityItems()...)
 	// An archive unpacking in Files, on every other screen
 	// (files_extract_ui.go).
 	if item, ok := feExtractActivityItem(); ok {

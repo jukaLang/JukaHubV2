@@ -145,7 +145,14 @@ func emuDesktopTick(now time.Time) (ran, waiting bool) {
 	for _, u := range extras {
 		overdue = overdue || emuDesktopOverdueFor(emuRuntimeRecordFor(u.Key).CheckedAt, now, waited)
 	}
-	if !emuDesktopMoment(gameScreenSuspended(), busy, emuDesktopOnBattery(), emuDesktopIdleFor(now), overdue) {
+	// A pass due when JukaHub starts runs then (emuWaitBeganOnStart), not at
+	// the PC's next idle minutes; a laptop on battery still waits for the
+	// charger unless the pass is long overdue.
+	idle := emuDesktopIdleFor(now)
+	if emuWaitBeganOnStart(waited) && idle < emuDesktopIdle {
+		idle = emuDesktopIdle
+	}
+	if !emuDesktopMoment(gameScreenSuspended(), busy, emuDesktopOnBattery(), idle, overdue) {
 		return false, true
 	}
 	coreAutoUpdateStopWaiting()

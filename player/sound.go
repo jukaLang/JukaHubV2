@@ -34,6 +34,9 @@ import (
 // the trophy chime and the alarm queue too. Every function here is
 // non-blocking and silent when no audio device is available, so the app never
 // hangs or crashes on mute hardware.
+//
+// Every output here goes through outOpen/outQueue/... (audioroute.go) rather
+// than SDL directly, so it can move to a Bluetooth headset and back.
 
 var (
 	audioInitOnce   sync.Once
@@ -61,12 +64,12 @@ func initAudioDevice() {
 		Samples:  512,
 	}
 	var obtained sdl.AudioSpec
-	id, err := sdl.OpenAudioDevice("", false, &desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
+	id, err := outOpen(&desired, &obtained, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || id == 0 {
 		logWarn("audio", "no UI sound device: %v", err)
 		return
 	}
-	sdl.PauseAudioDevice(id, false)
+	outPause(id, false)
 	audioDev = id
 	if obtained.Freq > 0 {
 		audioSampleRate = obtained.Freq
@@ -418,7 +421,7 @@ func bootSfxPlay(kind bootSfxKind) {
 	rate := bootSfxBank.rate
 	audioMutex.Lock()
 	defer audioMutex.Unlock()
-	if limit := uint32(float64(rate) * 2 * bootSfxMaxQueued.Seconds()); sdl.GetQueuedAudioSize(audioDev) > limit {
+	if limit := uint32(float64(rate) * 2 * bootSfxMaxQueued.Seconds()); outQueued(audioDev) > limit {
 		return
 	}
 	data := pcm
@@ -442,7 +445,7 @@ func bootSfxPlay(kind bootSfxKind) {
 	}
 	// Feed the LED sync with the same samples the speaker is about to play.
 	publishAudioLevel(data, int(rate), 1)
-	_ = sdl.QueueAudio(audioDev, data)
+	_ = outQueue(audioDev, data)
 }
 
 // Each Play* helper also fires the matching vibration pulse from haptics.go.
@@ -524,11 +527,11 @@ func initVideoAudioDevice() {
 			Samples:  4096, // ~85 ms at 48 kHz — smooth on low-end ARM64
 		}
 		var obtained sdl.AudioSpec
-		id, err := sdl.OpenAudioDevice("", false, &desired, &obtained, 0)
+		id, err := outOpen(&desired, &obtained, 0)
 		if err != nil || id == 0 {
 			continue
 		}
-		sdl.PauseAudioDevice(id, false)
+		outPause(id, false)
 		videoAudioDev = id
 		videoAudioOK = true
 		videoAudioRate = obtained.Freq
@@ -543,13 +546,13 @@ func initVideoAudioDevice() {
 		Samples:  4096,
 	}
 	var obtained sdl.AudioSpec
-	id, err := sdl.OpenAudioDevice("", false, &desired, &obtained,
+	id, err := outOpen(&desired, &obtained,
 		sdl.AUDIO_ALLOW_FREQUENCY_CHANGE)
 	if err != nil || id == 0 {
 		logWarn("audio", "failed to open any video audio device")
 		return
 	}
-	sdl.PauseAudioDevice(id, false)
+	outPause(id, false)
 	videoAudioDev = id
 	videoAudioOK = true
 	videoAudioRate = obtained.Freq
@@ -593,7 +596,7 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		videoAudioMutex.Lock()
-		if int(sdl.GetQueuedAudioSize(videoAudioDev)) <= maxQ {
+		if int(outQueued(videoAudioDev)) <= maxQ {
 			break // keep the lock for the queueing below
 		}
 		videoAudioMutex.Unlock()
@@ -644,7 +647,7 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	// Video and music share this path, so one publish covers both. The buffer is
 	// stereo S16 at the device's rate; the analyser reads at most 2048 frames.
 	publishAudioLevel(pcm, int(videoAudioRate), 2)
-	_ = sdl.QueueAudio(videoAudioDev, pcm)
+	_ = outQueue(videoAudioDev, pcm)
 }
 
 // a11yProcessAudio applies the Accessibility audio settings in place: a mono
@@ -686,7 +689,7 @@ func PauseVideoAudio(paused bool) {
 	}
 	videoAudioMutex.Lock()
 	defer videoAudioMutex.Unlock()
-	sdl.PauseAudioDevice(videoAudioDev, paused)
+	outPause(videoAudioDev, paused)
 }
 
 // ClearVideoAudioQueue discards any still-queued video PCM (used on stop and
@@ -698,7 +701,7 @@ func ClearVideoAudioQueue() {
 	}
 	videoAudioMutex.Lock()
 	defer videoAudioMutex.Unlock()
-	sdl.ClearQueuedAudio(videoAudioDev)
+	outClear(videoAudioDev)
 	// A new stream starts: no reverb tail or held byte from the old one.
 	spatialResetLocked()
 }

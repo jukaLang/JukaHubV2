@@ -287,7 +287,7 @@ func parseNetplayAddress(raw string, defPort int) (string, int, error) {
 // hold: the upstream name, then TrimUI's own builds. The stock and CrossMix
 // images ship only ra64.trimui (ra32.trimui on the oldest firmware), so looking
 // for "retroarch" alone reported the handheld's RetroArch as missing.
-var netplayRetroArchNames = []string{"retroarch", "ra64.trimui", "ra32.trimui"}
+var netplayRetroArchNames = []string{"retroarch", "ra64.trimui", "ra32.trimui", "retroarch64"}
 
 // netplayCardRetroArch finds RetroArch on the SD cards in roots: the card's
 // RetroArch folder first, then a RetroArch app folder.
@@ -330,6 +330,12 @@ func netplayRetroArchPath() string {
 		if p := netplayCardRetroArch([]string{trimuiSDRootFn(), "/mnt/SDCARD", "/mnt/sdcard"}); p != "" {
 			return p
 		}
+	} else if p := emuWinExe("RetroArch"); p != "" {
+		// The RetroArch the Emulators page lists — the one it installed,
+		// C:\RetroArch-Win64, Steam's, a registry install. Netplay looked
+		// only for a "retroarch" with no .exe beside JukaHub and on PATH, so
+		// it said "RetroArch not found" next to a RetroArch tile.
+		return p
 	}
 	candidates := []string{
 		"/usr/trimui/RetroArch/retroarch",
@@ -341,12 +347,14 @@ func netplayRetroArchPath() string {
 		candidates = append(candidates,
 			filepath.Join(dir, "RetroArch", "retroarch"),
 			filepath.Join(dir, "retroarch", "retroarch"),
+			filepath.Join(dir, "RetroArch", "retroarch.exe"),
 		)
 	}
 	if exe, err := os.Executable(); err == nil {
 		candidates = append(candidates,
 			filepath.Join(filepath.Dir(exe), "RetroArch", "retroarch"),
 			filepath.Join(filepath.Dir(exe), "retroarch", "retroarch"),
+			filepath.Join(filepath.Dir(exe), "RetroArch", "retroarch.exe"),
 		)
 	}
 	for _, candidate := range candidates {

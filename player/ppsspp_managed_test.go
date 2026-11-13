@@ -152,6 +152,40 @@ func TestPPSSPPReleaseRequiresDigest(t *testing.T) {
 	if _, err := ppssppReleaseFrom([]byte(`{"tag_name":"6.2.0","draft":true,"assets":[` + good + `]}`)); err == nil {
 		t.Error("draft release accepted")
 	}
+
+	// JukaHub's own rolling release: version from the title only, tag per version.
+	ownAsset := `{"name":"PPSSPP-tg5040.zip","browser_download_url":"https://github.com/jukaLang/JukaHubV2/releases/download/ppsspp-tg5040/PPSSPP-tg5040.zip","size":30000000,"digest":"` + digest + `"}`
+	own, err := ppssppOwnReleaseFrom([]byte(`{"tag_name":"ppsspp-tg5040","name":"PPSSPP 1.20.4 for TrimUI (tg5040)","body":"SDL2 2.26.1; GPL-2.0","assets":[` + ownAsset + `]}`))
+	if err != nil || own.Tag != "jukahub-1.20.4-"+digest[7:15] || own.Version != "1.20.4" || own.Asset != "PPSSPP-tg5040.zip" {
+		t.Fatalf("own release = %+v, %v", own, err)
+	}
+	for _, bad := range []string{
+		`{"tag_name":"ppsspp-tg5040","name":"PPSSPP for TrimUI","assets":[` + ownAsset + `]}`,
+		`{"tag_name":"ppsspp-tg5040","name":"PPSSPP 1.20.4 for TrimUI (tg5040)","prerelease":true,"assets":[` + ownAsset + `]}`,
+		`{"tag_name":"ppsspp-tg5040","name":"PPSSPP 1.20.4 for TrimUI (tg5040)","assets":[` + good + `]}`,
+	} {
+		if _, err := ppssppOwnReleaseFrom([]byte(bad)); err == nil {
+			t.Errorf("own release accepted: %s", bad)
+		}
+	}
+	pak := ppssppRelease{Tag: "6.2.0", Version: "1.20.3"}
+	for _, c := range []struct {
+		name      string
+		pak, own  ppssppRelease
+		installed string
+		want      string
+	}{
+		{"own newer", pak, own, "", own.Tag},
+		{"pak newer", ppssppRelease{Tag: "6.3.0", Version: "1.20.5"}, own, "", "6.3.0"},
+		{"pak unknown", ppssppRelease{Tag: "6.3.0"}, own, "", own.Tag},
+		{"tie, nothing installed", ppssppRelease{Tag: "6.3.0", Version: "1.20.4"}, own, "", "6.3.0"},
+		{"tie, own installed", ppssppRelease{Tag: "6.3.0", Version: "1.20.4"}, own, own.Tag, own.Tag},
+		{"own unknown", pak, ppssppRelease{}, "", "6.2.0"},
+	} {
+		if got := ppssppPickRelease(c.pak, c.own, c.installed); got.Tag != c.want {
+			t.Errorf("pick %s: %s, want %s", c.name, got.Tag, c.want)
+		}
+	}
 }
 
 func TestPPSSPPVersions(t *testing.T) {
@@ -165,6 +199,24 @@ func TestPPSSPPVersions(t *testing.T) {
 		if got := ppssppVersionFromNotes(c.text); got != c.want {
 			t.Errorf("notes %q: version %q, want %q", c.text, got, c.want)
 		}
+	}
+	history := []byte(`[{"tag_name":"6.3.0","body":"update ppsspp 1.20.5"},` +
+		`{"tag_name":"6.2.0","body":"chore(deps): bump actions/checkout"},` +
+		`{"tag_name":"6.1.1-rc","prerelease":true,"body":"try ppsspp 1.20.9"},` +
+		`{"tag_name":"6.1.0","body":"fix: bundle libstdc++.so.6 for PPSSPP"},` +
+		`{"tag_name":"6.0.0","body":"feat: update ppsspp 1.20.3 by @ben16w in #67"},` +
+		`{"tag_name":"5.0.0","body":"ppsspp 1.19.3"}]`)
+	for _, c := range []struct{ tag, want string }{
+		{"6.2.0", "1.20.3"}, // carried from 6.0.0, past a pre-release and a fix
+		{"6.3.0", "1.20.5"}, // its own notes
+		{"7.0.0", ""},       // not listed
+	} {
+		if got := ppssppVersionFromHistory(history, c.tag); got != c.want {
+			t.Errorf("history for %s: %q, want %q", c.tag, got, c.want)
+		}
+	}
+	if got := ppssppVersionFromHistory([]byte(`{"message":"rate limited"}`), "6.2.0"); got != "" {
+		t.Errorf("history from an error body: %q", got)
 	}
 	names := []struct{ name, want string }{
 		{"ppsspp_1.17.1_gl.sh", "1.17.1"},
@@ -790,7 +842,7 @@ func TestPPSSPPAutoDecide(t *testing.T) {
 		{"notify newer", coreUpdateNotify, ppssppState{}, rel, "1.18.1", false, ppssppAutoNotify},
 		{"install newer", coreUpdateInstall, ppssppState{}, rel, "1.18.1", false, ppssppAutoInstall},
 		{"install unknown release version", coreUpdateInstall, ppssppState{}, ppssppRelease{Tag: "6.2.0"}, "1.18.1", false, ppssppAutoNothing},
-		{"install unknown firmware", coreUpdateInstall, ppssppState{}, rel, "", false, ppssppAutoNotify},
+		{"install unknown firmware", coreUpdateInstall, ppssppState{}, rel, "", false, ppssppAutoInstall},
 		{"firmware newer", coreUpdateInstall, ppssppState{}, ppssppRelease{Tag: "6.2.0", Version: "1.17.0"}, "1.18.1", false, ppssppAutoNothing},
 		{"update installed", coreUpdateInstall, installed, ppssppRelease{Tag: "6.2.0"}, "1.18.1", false, ppssppAutoInstall},
 		{"already installed", coreUpdateInstall, installed, ppssppRelease{Tag: "6.1.0"}, "1.18.1", false, ppssppAutoNothing},
@@ -819,13 +871,16 @@ func TestPPSSPPAutoDecide(t *testing.T) {
 		{"on JukaHub, then pinned by hand", ppssppState{Active: "6.1.0"}, "1.18.1", true, false},
 		{"hand pin", ppssppState{}, "1.18.1", true, false},
 		{"newer than firmware", ppssppState{}, "1.18.1", false, true},
-		{"firmware unknown", ppssppState{}, "", false, false},
+		{"firmware unknown", ppssppState{}, "", false, true},
 		{"firmware newer", ppssppState{}, "1.21.0", false, false},
 	}
 	for _, c := range switches {
 		if got := ppssppShouldSwitch(c.st, b, c.fw, c.pinned); got != c.want {
 			t.Errorf("switch %s: %v, want %v", c.name, got, c.want)
 		}
+	}
+	if ppssppShouldSwitch(ppssppState{}, ppssppBuild{Tag: "6.2.0"}, "", false) {
+		t.Error("switched to a build of unknown version over a firmware of unknown version")
 	}
 }
 

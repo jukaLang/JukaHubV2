@@ -277,6 +277,8 @@ var gaOverlay struct {
 	openedAt time.Time
 	nudgedAt time.Time // the idle screens were last told someone is here
 	paused   []*exec.Cmd
+	// ra is RetroArch's own pause around the freeze (gamepause_ra.go).
+	ra raCoopState
 	// The game, as known when the overlay opened ("" when unknown).
 	title, system string
 	// shot: "Juka can see the game screen" was on when it opened.
@@ -337,6 +339,13 @@ func gaOpen(config *Config, mode gaMode) bool {
 	if len(cmds) == 0 {
 		return false
 	}
+	// A library RetroArch pauses itself first, so its sound stops cleanly
+	// instead of running dry under the freeze (gamepause_ra.go).
+	why := "the game assistant"
+	if mode == gaModeMenu {
+		why = "the in-game menu"
+	}
+	ra := raCoopPause(why)
 	// Written down before the stop: a JukaHub killed while the game is paused
 	// leaves the next start the way to let it go (gaRecoverPaused).
 	gaPausedNote(cmds)
@@ -350,8 +359,10 @@ func gaOpen(config *Config, mode gaMode) bool {
 	}
 	if len(paused) == 0 {
 		gaPausedClear()
+		raCoopResume(ra, why)
 		return false
 	}
+	gaOverlay.ra = ra
 	if gaTrack.game.running && gaTrack.game.title == "" && gaIdentify() {
 		gaSessionSet(gaTrack.game)
 	}
@@ -697,6 +708,10 @@ func gaResume() {
 	}
 	gaOverlay.paused = nil
 	gaPausedClear()
+	// RetroArch's own pause goes after the continue (a stopped one reads no
+	// commands); a ring still holding the game is waited out there.
+	raCoopResume(gaOverlay.ra, "the in-game overlay")
+	gaOverlay.ra = raCoopState{}
 }
 
 // gaCmdIn reports whether cmd is in list.

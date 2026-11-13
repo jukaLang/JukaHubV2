@@ -78,7 +78,7 @@ type setRow struct {
 	// Clamp makes a choice stop at its ends instead of wrapping: a level
 	// (volume, brightness, a delay) must not jump from 100% to 0% on one more
 	// Right, or from the dimmest backlight to full on one more Left.
-	Clamp      bool
+	Clamp bool
 
 	// Quiet rows give their own feedback (the Quick Settings paths play their
 	// sound), so the hub does not play a second one.
@@ -979,7 +979,7 @@ func setBuildSections() []setSection {
 					},
 				},
 				// Music under the menus (bgmusic.go): the switch, which music,
-				// how loud, and a skip for the shuffled library.
+				// a chosen file or folder, how loud, and a skip for the library.
 				{
 					ID: "bgMusic", Label: "Background music", Kind: setKindToggle,
 					Detail: bgmStatus,
@@ -994,15 +994,37 @@ func setBuildSections() []setSection {
 						if !bgmEnabledIn(c) {
 							return "Turn Background music on to use it"
 						}
-						return "Built-in songs, your Synth song or your own music"
+						return "Built-in songs, your Synth song or music you choose"
 					},
-					Disabled:   func(c *Config) bool { return !bgmEnabledIn(c) },
-					Options:    bgmSourceOptions,
-					Current:    bgmSourceIndex,
-					Choose:     func(c *Config, value string) { bgmSetPrefs(c, true, value, bgmVolumeIn(c)) },
+					Disabled: func(c *Config) bool { return !bgmEnabledIn(c) },
+					Options:  bgmSourceOptions,
+					Current:  bgmSourceIndex,
+					Choose: func(c *Config, value string) {
+						if value == bgmSrcSelected && bgmSelectedPathIn(c) == "" {
+							bgmPickBegin(c)
+							return
+						}
+						bgmSetPrefs(c, true, value, bgmVolumeIn(c))
+					},
 					Sheet:      bgmSourceOptions,
 					SheetValue: bgmSourceIn,
 					SheetTitle: "Background music",
+				},
+				{
+					ID: "bgMusicPick", Label: "Choose music file or folder", Kind: setKindAction,
+					Detail: func(c *Config) string {
+						if path := bgmSelectedPathIn(c); path != "" {
+							return path
+						}
+						return "Use a song or shuffle a folder, including its subfolders"
+					},
+					Value: func(c *Config) string {
+						if path := bgmSelectedPathIn(c); path != "" {
+							return filepath.Base(path)
+						}
+						return "Choose"
+					},
+					Open: func(c *Config) { bgmPickBegin(c) },
 				},
 				{
 					ID: "bgMusicVolume", Label: "Music level", Kind: setKindChoice, Clamp: true,
@@ -1023,8 +1045,16 @@ func setBuildSections() []setSection {
 				},
 				{
 					ID: "bgMusicSkip", Label: "Next song", Kind: setKindAction,
-					Detail:  setStatic("Skip to another song from your library"),
-					Visible: func(c *Config) bool { return bgmEnabledIn(c) && bgmSourceIn(c) == bgmSrcLibrary },
+					Detail: func(c *Config) string {
+						if bgmSourceIn(c) == bgmSrcSelected {
+							return "Next folder song, or restart the selected file"
+						}
+						return "Skip to another song from your library"
+					},
+					Visible: func(c *Config) bool {
+						src := bgmSourceIn(c)
+						return bgmEnabledIn(c) && (src == bgmSrcLibrary || src == bgmSrcSelected)
+					},
 					Open: func(*Config) {
 						bgmSkip()
 						setToast("Next song")

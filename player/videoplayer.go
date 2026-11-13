@@ -933,11 +933,23 @@ func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, 
 	args = append(args,
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration",
-		"-of", "default=noprint_wrappers=1", ffmpegReadableInput(ffprobePath, path))
-	cmd := exec.CommandContext(ctx, ffprobePath, args...)
+		"-of", "default=noprint_wrappers=1")
+	input := ffmpegReadableInput(ffprobePath, path)
+	cmd := exec.CommandContext(ctx, ffprobePath, append(args, input)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	// A certificate it could not check (no CA bundle where its OpenSSL looks)
+	// sends https through the relay from now on; ask once more that way, so
+	// this very video streams instead of downloading.
+	if err != nil && ctx.Err() == nil && ffmpegNoteTLSFailure(stderr.String()) {
+		if retry := ffmpegReadableInput(ffprobePath, path); retry != input {
+			stderr.Reset()
+			cmd = exec.CommandContext(ctx, ffprobePath, append(args, retry)...)
+			cmd.Stderr = &stderr
+			out, err = cmd.Output()
+		}
+	}
 	if err != nil {
 		// "exit status 1" alone says nothing about why a stream was
 		// rejected; ffprobe's first stderr line is the reason.
@@ -1221,6 +1233,8 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	position := startSec + float64(frameCount)/fps
 	stderr := stderrTail.String()
 	if mediaDecoderFailed(startSec, position, duration, frameCount, pageStream, stderr) {
+		// A certificate failure routes the next attempt through the relay.
+		ffmpegNoteTLSFailure(stderr)
 		return failure(frameCount, position, ffmpegFailureReason(stderr))
 	}
 	// Only a decoder that ran to the end raises the flag.

@@ -46,4 +46,24 @@ func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 	if got := gameMenuEntries(withoutJukaLand); len(got) != len(menuGames)-1 {
 		t.Errorf("config without JukaLand still shows %d game cards", len(got))
 	}
+
+	// The Synth sits right under JukaLand, on the Games screen and in Start → Games.
+	withSynth := &Config{Scenes: append(append([]SceneConfig(nil), config.Scenes...), SceneConfig{Name: synthSceneName, Icon: "S"})}
+	if got := gameMenuEntries(withSynth); got[len(got)-1].scene != synthSceneName || got[len(got)-2].scene != "JukaLand" {
+		t.Errorf("Games screen does not end JukaLand, Synth: %+v", got[len(got)-2:])
+	}
+	var gamesRows []string
+	for _, group := range startMenuGroups(withSynth) {
+		for _, row := range group.items {
+			if row.scene == synthSceneName && group.name != "Games" {
+				t.Errorf("Synth listed under %q", group.name)
+			}
+			if group.name == "Games" {
+				gamesRows = append(gamesRows, row.scene)
+			}
+		}
+	}
+	if len(gamesRows) < 3 || gamesRows[1] != "JukaLand" || gamesRows[2] != synthSceneName {
+		t.Errorf("Start → Games begins %v, want Games, JukaLand, Synth", gamesRows)
+	}
 }

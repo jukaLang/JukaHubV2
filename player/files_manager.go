@@ -837,6 +837,9 @@ func handleFilesChromeMouse(mx, my int32, config *Config) bool {
 		}
 	}
 	if feSortChipRect.W > 0 && pointInRect(mx, my, feSortChipRect) {
+		if bgmPickActive() && !filesNav.atLocations {
+			return bgmPickChoose(config, feCurrentPath(config))
+		}
 		feCycleSort(config)
 		showToast("Sorted by "+strings.ToLower(feSortLabel(feSortModeOf(config))), ToastInfo())
 		return true
@@ -898,13 +901,22 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	// ("Sort: Name") because a lone "Name" in the corner does not say what it
 	// would do if pressed.
 	sortText := "Sort: " + feSortLabel(feSortModeOf(config))
+	if bgmPickActive() && !filesNav.atLocations {
+		sortText = "Use this folder"
+	}
 	sortW, _, _ := font.SizeUTF8(sortText)
 	sortTextW := int32(sortW)
 	chip := sdl.Rect{X: bar.X + bar.W - sortTextW - 28, Y: bar.Y + 9, W: sortTextW + 22, H: bar.H - 18}
 	feSortChipRect = chip
-	fillRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, glassChipFill())
-	strokeRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, 1, glassA(26))
-	renderText(renderer, config, font, sortText, ColorTextSecondary(), chip.X+11, chip.Y+(chip.H-lineH)/2)
+	chipFill, chipEdge, chipInk := glassChipFill(), glassA(26), ColorTextSecondary()
+	if bgmPickActive() && !filesNav.atLocations {
+		chipFill = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 52}
+		chipEdge = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 150}
+		chipInk = ColorTextPrimary()
+	}
+	fillRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, chipFill)
+	strokeRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, 7, 1, chipEdge)
+	renderText(renderer, config, font, sortText, chipInk, chip.X+11, chip.Y+(chip.H-lineH)/2)
 	// The listing's cursor is remembered per folder from here, once per frame,
 	// so coming back to Files (or up from a sub-folder) finds the same row.
 	filesNoteFocus(config)
@@ -916,7 +928,7 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 	totalsW, _, _ := font.SizeUTF8(totals)
 	totalsW32 := int32(totalsW)
 	totalsInk := ColorTextTertiary()
-	if feSelectionCount() > 0 || chatPickActive() || feExtractActive() {
+	if feSelectionCount() > 0 || chatPickActive() || bgmPickActive() || feExtractActive() {
 		totalsInk = ColorTextAccent()
 	}
 	totalsX := chip.X - totalsW32 - 20
@@ -1028,6 +1040,9 @@ func filesDrawListNotice(renderer *sdl.Renderer, config *Config, element Element
 // feFolderTotalsLabel is the bar's middle reading: what this folder holds, how
 // many rows are marked, and how much room is left on the card beneath it.
 func feFolderTotalsLabel(config *Config) string {
+	if bgmPickActive() {
+		return "Choose a song or folder for background music"
+	}
 	// Picking files for the chat: the bar says so, and for which tab.
 	if pick := chatPickLabel(); pick != "" {
 		return pick
@@ -1723,6 +1738,9 @@ func feFilesKey(key sdl.Keycode, config *Config) bool {
 		openFeSheet(config)
 		return true
 	case sdl.K_x:
+		if bgmPickActive() {
+			return bgmPickFocused(config)
+		}
 		return feToggleSelectionOnFocused(config)
 	case sdl.K_h, sdl.K_PERIOD:
 		// Ctrl+H / "." are how desktop file managers show dotfiles; plain H
@@ -1750,6 +1768,9 @@ func handleFilesController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		openFeSheet(config)
 		return true
 	case sdl.CONTROLLER_BUTTON_X:
+		if bgmPickActive() {
+			return bgmPickFocused(config)
+		}
 		return feToggleSelectionOnFocused(config)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		return filesPageList(config, -filesListPageRows(config))

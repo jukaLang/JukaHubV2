@@ -33,8 +33,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 const (
@@ -300,7 +298,7 @@ func alarmPlayStop() {
 		return
 	}
 	audioMutex.Lock()
-	sdl.ClearQueuedAudio(audioDev)
+	outClear(audioDev)
 	audioMutex.Unlock()
 }
 
@@ -367,7 +365,7 @@ func alarmPlayLoop(gen int64, soundID string, preview bool) {
 			continue
 		}
 		audioMutex.Lock()
-		queued := sdl.GetQueuedAudioSize(audioDev)
+		queued := outQueued(audioDev)
 		audioMutex.Unlock()
 		if queued >= ahead || len(samples) == 0 {
 			time.Sleep(10 * time.Millisecond)
@@ -400,7 +398,7 @@ func alarmPlayLoop(gen int64, soundID string, preview bool) {
 		}
 		audioMutex.Lock()
 		if alarmPlaying(gen) {
-			_ = sdl.QueueAudio(audioDev, buf[:n*2])
+			_ = outQueue(audioDev, buf[:n*2])
 		}
 		audioMutex.Unlock()
 		publishAudioLevel(buf[:n*2], int(rate), 1)
