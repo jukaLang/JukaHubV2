@@ -671,10 +671,11 @@ func voiceCommand(config *Config, text string, src voiceSource) {
 	}
 	in := voiceParse(text)
 	out := voiceExecute(config, in, src)
+	out = ttsSpeakAfterAction(out, src)
 	voicePage.heard = text
 	logDebug("voice", "command understood as intent %d", int(in.Kind))
 	voiceShow(config, out, src)
-	ttsSpeakPageOutcome(in.Kind, out, src) // the time, the date… out loud (tts_api.go)
+	ttsSpeakPageOutcome(out, src)
 }
 
 // voiceShow puts an outcome on the page: the answer, the choices, or the
@@ -789,10 +790,11 @@ func voiceRunChoice(config *Config, i int) {
 	if i < 0 || i >= len(voicePage.choices) {
 		return
 	}
-	out := voiceOutcomeFor(voicePage.choices[i])
+	out := ttsSpeakAfterAction(voiceOutcomeFor(voicePage.choices[i]), voiceFromMic)
 	voicePage.choices = nil
 	if out.Act == nil {
 		voiceSay(out.Say, out.Tone, voiceFixNone)
+		ttsSpeakOutcome(ttsFromPage, out)
 		PlayErrorSound()
 		return
 	}

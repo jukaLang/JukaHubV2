@@ -70,13 +70,11 @@ phone QR code and **B** goes back. While it listens, **A** stops early and
 
 ## Juka's voice
 
-Juka says its answers out loud: a question asked on the orb, and the
-questions about the handheld itself — the time, the date, the battery, "help" —
-on the orb and on the Voice command page (a command sent from your phone is
-answered on the phone). A command that does something (the volume, Wi-Fi, the
-music) is not read back; its chime and the bubble say it. The bubble stays up
-while Juka talks; any button, **B**, or **Menu** to ask again stops the voice
-at once.
+Juka reads voice assistant replies aloud, including the time, volume changes,
+warnings and "which one?" prompts. It confirms actions such as opening a
+screen after they run, so the orb closing does not cut off the reply. A command
+sent from your phone is answered on the phone. The bubble stays up while Juka
+talks; any button, **B**, or **Menu** to ask again stops the voice at once.
 
 **Settings → Voice & AI → Juka's voice** is *Voice assistant* by default;
 *Voice assistant and Chat* also reads a reply that arrives in Chat's **Juka
@@ -102,7 +100,11 @@ or right away from **Download offline voice** in **Settings → Voice & AI**
 without Wi-Fi, a Groq key or a daily speech limit. The download is about 90 MB
 and uses about 105 MB on the card. **Hear Juka** checks that it can speak.
 With no Groq key and no voice chosen, the offline voice is Juka's voice by
-default, and Juka says once per run that a Groq key brings Groq's voices.
+default. Groq is the faster choice when you have a key; **Speech recognition →
+Automatic** tries it first and uses offline recognition when it cannot. A key
+is optional. The orb mentions this once per launch while it is understanding
+an offline recording. On the Smart Pro, Piper can take several seconds before
+the first spoken word; **Hear Juka** lets you check its output.
 With a key, Piper takes over whenever Groq cannot speak. Piper and the voice
 model are checksum verified and resume after a dropped connection; the
 voice's small settings file is checked for the shape Piper reads. Long

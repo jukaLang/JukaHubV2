@@ -423,38 +423,42 @@ func ttsOrbHold(hideAt, now uint64) uint64 {
 	return hideAt
 }
 
-// ttsSpeakOutcome speaks a command's answer on the orb or the Voice command
-// page when it answers a question (ttsOutcomeSpoken). Main thread: a taught
-// word that ran "what time is it" is read out like the command itself.
-func ttsSpeakOutcome(origin ttsOrigin, kind voiceIntentKind, out voiceOutcome) {
-	kind = voiceShortcutSpokenKind(kind)
-	if ttsOutcomeSpoken(kind, out) {
+// ttsSpeakOutcome reads the result of a voice command aloud. Actions are
+// spoken after they run, so hiding the orb or leaving the page cannot cut off
+// the first word.
+func ttsSpeakOutcome(origin ttsOrigin, out voiceOutcome) {
+	if ttsOutcomeSpoken(out) {
 		ttsSpeakFrom(origin, ttsKindVoice, out.Say)
 	}
 }
 
 // ttsSpeakPageOutcome is the Voice command page's hook: a command said on the
 // phone is answered on the phone, so only the handheld's own are spoken.
-func ttsSpeakPageOutcome(kind voiceIntentKind, out voiceOutcome, src voiceSource) {
+func ttsSpeakPageOutcome(out voiceOutcome, src voiceSource) {
 	if src != voiceFromPhone {
-		ttsSpeakOutcome(ttsFromPage, kind, out)
+		ttsSpeakOutcome(ttsFromPage, out)
 	}
 }
 
-// ttsOutcomeSpoken reports whether a command's answer is worth saying out
-// loud: the ones that answer a question — the time, the date, the battery,
-// what can be said. A command that did something (a level, a switch, the
-// music) already shows it, and a voice repeating "Volume 50%" over every
-// change is noise. Pure.
-func ttsOutcomeSpoken(kind voiceIntentKind, out voiceOutcome) bool {
-	if !out.Done || out.Act != nil || out.Cancel || len(out.Choices) > 0 || strings.TrimSpace(out.Say) == "" {
-		return false
+// ttsOutcomeSpoken includes answers, completed commands, warnings and choice
+// prompts. Pending actions speak after execution; cancellation stays silent.
+func ttsOutcomeSpoken(out voiceOutcome) bool {
+	return out.Act == nil && !out.Cancel && strings.TrimSpace(out.Say) != ""
+}
+
+// ttsSpeakAfterAction makes navigation and other pending commands talk back
+// only once they have run. The orb and Voice page may already be gone then, so
+// the line uses the scene-independent origin. The phone has its own answer.
+func ttsSpeakAfterAction(out voiceOutcome, src voiceSource) voiceOutcome {
+	if out.Act == nil || src == voiceFromPhone || strings.TrimSpace(out.Say) == "" {
+		return out
 	}
-	switch kind {
-	case voiceIntentTime, voiceIntentDate, voiceIntentBattery, voiceIntentHelp:
-		return true
+	act, say := out.Act, out.Say
+	out.Act = func(c *Config) {
+		act(c)
+		ttsSpeakFrom(ttsFromOther, ttsKindVoice, say)
 	}
-	return false
+	return out
 }
 
 // ttsSpeakChatReply is chatRunAI's hook, on its request goroutine: Juka's

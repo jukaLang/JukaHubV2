@@ -219,6 +219,10 @@ var voiceOrb struct {
 	wrapTitle, wrapSub orbWrap
 }
 
+// A key is optional: mention Groq's faster recognition once per launch while
+// an offline clip is being understood, rather than prompting on every press.
+var voiceOrbGroqTipShown bool
+
 // orbAIText is Juka's answer as it streams in: the request goroutine writes
 // it, the frame reads it.
 var orbAIText struct {
@@ -1053,6 +1057,13 @@ func voiceOrbFinish(config *Config) {
 	voiceOrb.ai = false
 	voiceOrbSetPhase(orbThinking)
 	voiceOrb.title, voiceOrb.sub, voiceOrb.tone, voiceOrb.offer = "Thinking…", "", tbxToneNeutral, orbOfferNone
+	if key == "" && !voiceOrbGroqTipShown {
+		voiceOrb.sub = "For faster speech, add a Groq API key in Settings → General (optional)"
+		if sttModeOf(config) == sttModeOffline {
+			voiceOrb.sub = "Groq is faster: add an API key, then choose Automatic (optional)"
+		}
+		voiceOrbGroqTipShown = true
+	}
 	PlayActivateSound()
 	go func() {
 		defer cancel()
@@ -1119,8 +1130,9 @@ func voiceOrbCommand(config *Config, text string) {
 		voiceOrbAsk(text)
 		return
 	}
+	out = ttsSpeakAfterAction(out, voiceFromMic)
 	voiceOrbShowOutcome(out)
-	ttsSpeakOutcome(ttsFromOrb, in.Kind, out) // the time, the date… out loud (tts_api.go)
+	ttsSpeakOutcome(ttsFromOrb, out)
 }
 
 // voiceOrbShowOutcome puts an outcome on the orb: the pause before its action
@@ -1181,9 +1193,10 @@ func voiceOrbPick(config *Config, i int) {
 	if voiceOrb.phase != orbChoices || i < 0 || i >= len(voiceOrb.choices) {
 		return
 	}
-	out := voiceOutcomeFor(voiceOrb.choices[i])
+	out := ttsSpeakAfterAction(voiceOutcomeFor(voiceOrb.choices[i]), voiceFromMic)
 	if out.Act == nil {
 		voiceOrbSay(out.Say, orbQuote(voiceOrb.heard), out.Tone, orbOfferNone)
+		ttsSpeakOutcome(ttsFromOrb, out)
 		PlayErrorSound()
 		return
 	}

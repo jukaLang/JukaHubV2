@@ -34,9 +34,9 @@ const (
 	// ttsChunkMax is the longest chunk sent to Groq, in bytes. Its limit is
 	// 200 characters; counting bytes stays under it however the server counts.
 	ttsChunkMax = 195
-	// ttsFirstChunk is roughly how long the first chunk is: the first
-	// sentence, joined by the next ones while it is shorter than this.
-	ttsFirstChunk = 60
+	// ttsFirstChunk caps the first chunk after its first sentence. A short
+	// first sound is especially useful while Piper is rendering on a handheld.
+	ttsFirstChunk = 30
 	// ttsInlineCodeMax is the longest inline code that is still read out.
 	ttsInlineCodeMax = 40
 	// ttsRestOnScreen is said when an answer was cut short.
@@ -225,7 +225,7 @@ func ttsChunks(sentences []string, max int) []string {
 			switch {
 			case cur == "":
 				cur = piece
-			case len(cur)+1+len(piece) <= max && (len(out) > 0 || len(cur) < ttsFirstChunk):
+			case len(cur)+1+len(piece) <= max && (len(out) > 0 || len(cur)+1+len(piece) <= ttsFirstChunk):
 				cur += " " + piece
 			default:
 				out = append(out, cur)

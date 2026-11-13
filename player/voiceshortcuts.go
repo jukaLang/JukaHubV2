@@ -468,9 +468,6 @@ func voiceShortcutMatch(list []voiceShortcut, heard string, nearMiss bool) int {
 var (
 	voiceShortcutRan   string
 	voiceShortcutDepth int
-	// voiceShortcutInner is the intent a command shortcut's own command was
-	// read as (voiceIntentNone for any other shortcut).
-	voiceShortcutInner voiceIntentKind
 )
 
 // voiceShortcutHandled reports whether the command just executed was a taught
@@ -479,24 +476,13 @@ func voiceShortcutHandled(heard string) bool {
 	return heard != "" && heard == voiceShortcutRan
 }
 
-// voiceShortcutSpokenKind is the intent whose answer the last command showed:
-// a command shortcut's own command ("what time is it" taught as "clock") when
-// the last command was one, else kind. The spoken answers (tts_api.go) choose
-// by it: the time is read out, a volume change is not.
-func voiceShortcutSpokenKind(kind voiceIntentKind) voiceIntentKind {
-	if voiceShortcutRan != "" && voiceShortcutInner != voiceIntentNone {
-		return voiceShortcutInner
-	}
-	return kind
-}
-
 // voiceShortcutExecute is voiceExecute's first step: the outcome of the
 // shortcut the command names, and true; or false when it names none.
 func voiceShortcutExecute(config *Config, in voiceIntent, src voiceSource) (voiceOutcome, bool) {
 	if voiceShortcutDepth > 0 {
 		return voiceOutcome{}, false
 	}
-	voiceShortcutRan, voiceShortcutInner = "", voiceIntentNone
+	voiceShortcutRan = ""
 	switch in.Kind {
 	case voiceIntentCancel, voiceIntentHelp:
 		// Always what they say, whatever was taught.
@@ -529,7 +515,6 @@ func voiceShortcutRunCommand(config *Config, command string, src voiceSource) vo
 	voiceShortcutDepth++
 	defer func() { voiceShortcutDepth-- }()
 	in := voiceParse(command)
-	voiceShortcutInner = in.Kind
 	return voiceExecute(config, in, src)
 }
 
