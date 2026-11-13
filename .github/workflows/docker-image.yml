@@ -284,7 +284,7 @@ jobs:
   # at once.
   build-and-publish-ubuntu:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: [create-tag, build-remote-play-helpers, build-trimui]
     # Runs whatever became of the helpers: an archive without them still ships
     # (it only lacks Remote Play streaming, like every release before them), so
@@ -355,6 +355,13 @@ jobs:
           name: offline-stt
           path: offline-stt
 
+      - name: Download optional offline AI
+        timeout-minutes: 10
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-llm
+          path: offline-llm
+
       - name: Package Artifacts
         id: package
         run: |
@@ -412,23 +419,37 @@ jobs:
             echo "::warning title=AndroidRT::not built for this run; JukaHub-Trimui.zip ships without androidrt/ (see the Remote Play helpers and AndroidRT job)"
           fi
           stt_bin_sha=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' offline-stt/BUILDINFO.txt 2>/dev/null || true)
+          stt_vosk_bin_sha=$(awk '$1 == "vosk" && $2 == "binary" && $3 == "sha256" { print $4 }' offline-stt/BUILDINFO.txt 2>/dev/null || true)
           if [ -f offline-stt/whisper-cli ] && [ -f offline-stt/ggml-tiny.bin ] && \
-             [ -f offline-stt/LICENSE.txt ] && [ -n "$stt_bin_sha" ] && \
+             [ -f offline-stt/LICENSE.txt ] && [ -f offline-stt/vosk-cli ] && \
+             [ -f offline-stt/libvosk.so ] && [ -f offline-stt/vosk-model-small-en-us-0.15.zip ] && \
+             [ -f offline-stt/VOSK_LICENSE.txt ] && [ -n "$stt_bin_sha" ] && [ -n "$stt_vosk_bin_sha" ] && \
              [ "$(sha256sum offline-stt/whisper-cli | cut -d' ' -f1)" = "$stt_bin_sha" ] && \
+             [ "$(sha256sum offline-stt/vosk-cli | cut -d' ' -f1)" = "$stt_vosk_bin_sha" ] && \
+             printf '%s  %s\n' 0e9df29f060a93cf3df3263a4d3635e1b75688a5fd84e86ade1599372e3c9597 offline-stt/libvosk.so | sha256sum -c - > /dev/null && \
+             printf '%s  %s\n' 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498 offline-stt/vosk-model-small-en-us-0.15.zip | sha256sum -c - > /dev/null && \
              printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 offline-stt/ggml-tiny.bin | sha256sum -c - > /dev/null; then
-            mkdir -p JukaHub-Trimui/juka-whisper
-            cp offline-stt/whisper-cli offline-stt/ggml-tiny.bin offline-stt/BUILDINFO.txt \
-              offline-stt/LICENSE.txt JukaHub-Trimui/juka-whisper/
-            chmod 755 JukaHub-Trimui/juka-whisper/whisper-cli
-            if sh player/native/package-stt.sh JukaHub-Trimui/juka-whisper JukaHub-OfflineSpeech-linux-arm64.zip; then
+            if sh player/native/package-stt.sh offline-stt JukaHub-OfflineSpeech-linux-arm64.zip; then
               echo "stt_package=true" >> "$GITHUB_OUTPUT"
             else
               rm -f JukaHub-OfflineSpeech-linux-arm64.zip
               echo "::error title=Offline speech::the standalone repair package could not be built"
               exit 1
             fi
+            mkdir -p JukaHub-Trimui/juka-whisper
+            cp offline-stt/whisper-cli offline-stt/ggml-tiny.bin offline-stt/BUILDINFO.txt \
+              offline-stt/LICENSE.txt offline-stt/vosk-cli offline-stt/libvosk.so \
+              offline-stt/VOSK_LICENSE.txt JukaHub-Trimui/juka-whisper/
+            unzip -q offline-stt/vosk-model-small-en-us-0.15.zip -d JukaHub-Trimui/juka-whisper
+            chmod 755 JukaHub-Trimui/juka-whisper/whisper-cli JukaHub-Trimui/juka-whisper/vosk-cli
           else
             echo "::error title=Offline speech::the verified recognizer is missing; refusing to publish a TrimUI archive without offline speech"
+            exit 1
+          fi
+          if sh player/native/package-llm.sh offline-llm JukaHub-OfflineAI-linux-arm64.zip; then
+            echo "llm_package=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error title=Offline AI::the verified on-device model is missing"
             exit 1
           fi
           cp player/jukaconfig.json JukaHub-Trimui/
@@ -496,6 +517,18 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-OfflineSpeech-linux-arm64.zip
           asset_name: JukaHub-OfflineSpeech-linux-arm64.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the offline AI package
+        if: steps.package.outputs.llm_package == 'true'
+        timeout-minutes: 15
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-OfflineAI-linux-arm64.zip
+          asset_name: JukaHub-OfflineAI-linux-arm64.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -861,7 +894,7 @@ jobs:
         with:
           script: |
             const tag = process.env.TAG_NAME;
-            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip'];
+            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip', 'JukaHub-OfflineAI-linux-arm64.zip'];
             const {data: releases} = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,

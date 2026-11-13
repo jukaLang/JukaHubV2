@@ -85,16 +85,25 @@ if [ -n "$HELPERS_DIR" ]; then
 else
     echo "    (no Remote Play helpers in native/bin: the package ships without Remote Play streaming)"
 fi
-# Offline speech for Smart Pro. CI builds whisper.cpp on arm64 and puts the
-# verified binary and model in native/bin.
+# Offline speech for Smart Pro: quick English recognition plus Whisper for
+# other languages and a fallback. CI verifies every download before packaging.
 STT_DIR=native/bin/juka-whisper
 STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
+STT_VOSK_BIN_SHA=$(awk '$1 == "vosk" && $2 == "binary" && $3 == "sha256" { print $4 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
 if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny.bin" ] && [ -f "$STT_DIR/LICENSE.txt" ] && \
-    [ -n "$STT_BIN_SHA" ] && [ "$(sha256sum "$STT_DIR/whisper-cli" | cut -d' ' -f1)" = "$STT_BIN_SHA" ] && \
+    [ -f "$STT_DIR/vosk-cli" ] && [ -f "$STT_DIR/libvosk.so" ] && [ -f "$STT_DIR/vosk-model-small-en-us-0.15.zip" ] && [ -f "$STT_DIR/VOSK_LICENSE.txt" ] && \
+    [ -n "$STT_BIN_SHA" ] && [ -n "$STT_VOSK_BIN_SHA" ] && \
+    [ "$(sha256sum "$STT_DIR/whisper-cli" | cut -d' ' -f1)" = "$STT_BIN_SHA" ] && \
+    [ "$(sha256sum "$STT_DIR/vosk-cli" | cut -d' ' -f1)" = "$STT_VOSK_BIN_SHA" ] && \
+    printf '%s  %s\n' 0e9df29f060a93cf3df3263a4d3635e1b75688a5fd84e86ade1599372e3c9597 "$STT_DIR/libvosk.so" | sha256sum -c - > /dev/null && \
+    printf '%s  %s\n' 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498 "$STT_DIR/vosk-model-small-en-us-0.15.zip" | sha256sum -c - > /dev/null && \
     printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 "$STT_DIR/ggml-tiny.bin" | sha256sum -c - > /dev/null; then
     mkdir -p "$PKG/juka-whisper"
-    cp "$STT_DIR/whisper-cli" "$STT_DIR/ggml-tiny.bin" "$STT_DIR/BUILDINFO.txt" "$STT_DIR/LICENSE.txt" "$PKG/juka-whisper/"
-    chmod 755 "$PKG/juka-whisper/whisper-cli"
+    cp "$STT_DIR/whisper-cli" "$STT_DIR/ggml-tiny.bin" "$STT_DIR/BUILDINFO.txt" "$STT_DIR/LICENSE.txt" \
+        "$STT_DIR/vosk-cli" "$STT_DIR/libvosk.so" "$STT_DIR/VOSK_LICENSE.txt" "$PKG/juka-whisper/"
+    unzip -q "$STT_DIR/vosk-model-small-en-us-0.15.zip" -d "$PKG/juka-whisper"
+    test -s "$PKG/juka-whisper/vosk-model-small-en-us-0.15/am/final.mdl"
+    chmod 755 "$PKG/juka-whisper/whisper-cli" "$PKG/juka-whisper/vosk-cli"
     echo "    Offline speech: $PKG/juka-whisper"
 else
     echo "ERROR: verified offline speech is required for the Smart Pro SD-card package" >&2

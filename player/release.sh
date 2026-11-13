@@ -179,8 +179,11 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     if [ "$device" = trimui-smart-pro ]; then
         mkdir -p "$TARGET_DIR/juka-whisper"
         cp native/bin/juka-whisper/whisper-cli native/bin/juka-whisper/ggml-tiny.bin \
-            native/bin/juka-whisper/BUILDINFO.txt native/bin/juka-whisper/LICENSE.txt "$TARGET_DIR/juka-whisper/"
-        chmod 755 "$TARGET_DIR/juka-whisper/whisper-cli"
+            native/bin/juka-whisper/BUILDINFO.txt native/bin/juka-whisper/LICENSE.txt \
+            native/bin/juka-whisper/vosk-cli native/bin/juka-whisper/libvosk.so \
+            native/bin/juka-whisper/VOSK_LICENSE.txt "$TARGET_DIR/juka-whisper/"
+        unzip -q native/bin/juka-whisper/vosk-model-small-en-us-0.15.zip -d "$TARGET_DIR/juka-whisper"
+        chmod 755 "$TARGET_DIR/juka-whisper/whisper-cli" "$TARGET_DIR/juka-whisper/vosk-cli"
         PKG_FILES+=(juka-whisper)
     fi
     # The game-audio plugin (see SPATIAL_SO above).

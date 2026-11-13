@@ -1,14 +1,16 @@
 package main
 
-// The TrimUI package carries whisper.cpp's CPU-only CLI and its multilingual
-// tiny model. WAV input and transcript output travel through process pipes, so
-// recognized speech and recorded audio never need a temporary file.
+// The TrimUI package carries fast English recognition with Vosk and a
+// multilingual Whisper fallback. WAV input and transcript output travel
+// through process pipes, so recorded audio never needs a temporary file.
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,7 @@ const (
 	sttDirName      = "juka-whisper"
 	sttModelName    = "ggml-tiny.bin"
 	sttModelSize    = 77691713
+	sttFastModel    = "vosk-model-small-en-us-0.15"
 	sttTimeout      = 120 * time.Second
 	sttGroqWait     = 15 * time.Second // leave time for local recognition if Groq stalls
 	sttMinAvailable = 384 << 20        // model and working memory, with room for JukaHub
@@ -84,6 +87,33 @@ func sttLocalFiles() (string, string) {
 		return bin, model
 	}
 	if bin, model, ok := sttFilesIn(sttDownloadedDir()); ok {
+		return bin, model
+	}
+	return "", ""
+}
+
+func sttFastFilesIn(dir string) (string, string, bool) {
+	if dir == "" {
+		return "", "", false
+	}
+	bin, model := filepath.Join(dir, "vosk-cli"), filepath.Join(dir, sttFastModel)
+	for _, name := range []string{bin, filepath.Join(dir, "libvosk.so"),
+		filepath.Join(model, "am", "final.mdl"), filepath.Join(model, "conf", "model.conf"),
+		filepath.Join(model, "graph", "HCLr.fst")} {
+		info, err := os.Stat(name)
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return "", "", false
+		}
+	}
+	info, err := os.Stat(bin)
+	return bin, model, err == nil && info.Mode().Perm()&0o111 != 0
+}
+
+func sttFastFiles() (string, string) {
+	if bin, model, ok := sttFastFilesIn(sttBundledDir()); ok {
+		return bin, model
+	}
+	if bin, model, ok := sttFastFilesIn(sttDownloadedDir()); ok {
 		return bin, model
 	}
 	return "", ""
@@ -203,18 +233,62 @@ func sttCommandTranscribe(ctx context.Context, key string, wav []byte, prompt st
 }
 
 func sttLocalTranscribe(ctx context.Context, wav []byte, lang, prompt string) (string, error) {
+	return sttLocalTranscribeSearch(ctx, wav, lang, prompt, prompt != "")
+}
+
+// A provisional Chat preview favors speed. The final transcript still runs
+// through sttLocalTranscribe with the normal search.
+func sttLocalPreviewTranscribe(ctx context.Context, wav []byte, lang string) (string, error) {
+	return sttLocalTranscribeSearch(ctx, wav, lang, "", true)
+}
+
+func sttLocalTranscribeSearch(ctx context.Context, wav []byte, lang, prompt string, quick bool) (string, error) {
 	if !sttLocalReady() {
 		return "", errSTTUnavailable
 	}
 	if err := sttCheckMemory(); err != nil {
 		return "", err
 	}
+	if lang == "en" {
+		if bin, model := sttFastFiles(); bin != "" {
+			text, err := sttRunFast(ctx, bin, model, wav)
+			if err == nil || ctx.Err() != nil {
+				return text, err
+			}
+			logWarn("voice", "fast offline recognition failed; trying Whisper: %v", err)
+		}
+	}
 	bin, model := sttLocalFiles()
-	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt)
+	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt, quick)
 	if err != nil && ctx.Err() == nil {
 		logWarn("voice", "offline speech recognition failed: %v", err)
 	}
 	return text, err
+}
+
+func sttRunFast(ctx context.Context, bin, model string, wav []byte) (string, error) {
+	started := time.Now()
+	cmd := exec.CommandContext(ctx, bin, "-m", model, "-f", "-")
+	cmd.Stdin = bytes.NewReader(wav)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, io.Discard
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("fast offline recognition failed: %w", err)
+	}
+	if out.Len() > 16<<10 {
+		return "", errors.New("offline speech transcript is too long")
+	}
+	var result struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		return "", fmt.Errorf("fast offline transcript: %w", err)
+	}
+	logDebug("voice", "fast offline recognition took %s (clip=%d bytes)", time.Since(started).Round(time.Millisecond), len(wav))
+	return strings.TrimSpace(result.Text), nil
 }
 
 func sttCheckMemory() error {
@@ -235,19 +309,17 @@ func sttCheckMemory() error {
 	return nil
 }
 
-func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, prompt string) (string, error) {
+func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, prompt string, quick bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	started := time.Now()
 	if lang == "" {
 		lang = "auto"
 	} else if lang == "nb" {
 		lang = "no" // Whisper names Norwegian "no"; the keyboard layout uses "nb".
 	}
-	args := []string{"-m", model, "-f", "-", "-t", "2", "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
-	if prompt != "" {
-		args = append(args, "--prompt", prompt)
-	}
+	args := sttLocalArgs(model, lang, prompt, quick)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(wav)
 	var out bytes.Buffer
@@ -259,8 +331,26 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 		}
 		return "", fmt.Errorf("offline speech recognition failed: %w", err)
 	}
+	logDebug("voice", "offline recognition took %s (fast=%v, clip=%d bytes)", time.Since(started).Round(time.Millisecond), quick, len(wav))
 	if out.Len() > 16<<10 {
 		return "", errors.New("offline speech transcript is too long")
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+func sttLocalArgs(model, lang, prompt string, quick bool) []string {
+	threads := "2"
+	if quick {
+		// The Smart Pro has four A53 cores. Three workers leave one for the
+		// interface; a smaller search cuts the wait after a Menu command.
+		threads = "3"
+	}
+	args := []string{"-m", model, "-f", "-", "-t", threads, "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
+	if quick {
+		args = append(args, "-bs", "3", "-bo", "3")
+	}
+	if prompt != "" {
+		args = append(args, "--prompt", prompt)
+	}
+	return args
 }
