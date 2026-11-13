@@ -348,6 +348,14 @@ jobs:
           name: androidrt-package
           path: runtime-packages
 
+      - name: Download offline speech recognition
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-stt
+          path: offline-stt
+
       - name: Package Artifacts
         id: package
         run: |
@@ -403,6 +411,14 @@ jobs:
             fi
           else
             echo "::warning title=AndroidRT::not built for this run; JukaHub-Trimui.zip ships without androidrt/ (see the Remote Play helpers and AndroidRT job)"
+          fi
+          if [ -f offline-stt/whisper-cli ] && [ -f offline-stt/ggml-tiny.bin ] && \
+             printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 offline-stt/ggml-tiny.bin | sha256sum -c - > /dev/null; then
+            mkdir -p JukaHub-Trimui/required/juka-whisper
+            cp offline-stt/whisper-cli offline-stt/ggml-tiny.bin JukaHub-Trimui/required/juka-whisper/
+            chmod 755 JukaHub-Trimui/required/juka-whisper/whisper-cli
+          else
+            echo "::warning title=Offline speech::the verified recognizer was not built; local speech is unavailable in this archive"
           fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/

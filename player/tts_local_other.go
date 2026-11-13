@@ -13,15 +13,19 @@ package main
 // → Voice is "This device". Piper also needs a voice model (*.onnx) next to
 // it, in a piper/ or piper-voices/ folder beside it, or in required/piper/.
 //
-// Each engine renders the text into a temporary WAV that is read and deleted.
+// Each engine renders the text into a temporary WAV that is read and deleted;
+// Piper renders one WAV per chunk from a single process (ttsPiperStream), so
+// a long answer starts playing after its first sentence.
 // The text goes on the engine's standard input where it reads one (espeak,
 // piper) and as the last argument after the option that names it otherwise,
 // never through a shell.
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,16 +129,7 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 	default:
 		return nil, 0, errors.New("unknown voice engine " + v.kind)
 	}
-	var extra []string
-	// An espeak copied into required/ brings its data folder along; tell it
-	// where that is.
-	for _, data := range []string{"espeak-ng-data", "espeak-data"} {
-		if info, err := os.Stat(filepath.Join(filepath.Dir(v.path), data)); err == nil && info.IsDir() {
-			extra = append(extra, "ESPEAK_DATA_PATH="+filepath.Dir(v.path))
-			break
-		}
-	}
-	cmd.Env = helperToolEnv(v.path, extra...)
+	cmd.Env = ttsLocalEnv(v)
 	if stdin {
 		cmd.Stdin = strings.NewReader(text + "\n")
 	}
@@ -149,4 +144,167 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 		return nil, 0, err
 	}
 	return ttsDecodeWAV(data, false)
+}
+
+// ttsLocalEnv is the engine's environment. An espeak or Piper copied into
+// required/ brings its data folder along; tell it where that is. Piper's own
+// libraries sit beside it (the Smart Pro install), so the loader looks there
+// first rather than relying on the binary's RPATH.
+func ttsLocalEnv(v ttsLocalVoice) []string {
+	dir := filepath.Dir(v.path)
+	var extra []string
+	for _, data := range []string{"espeak-ng-data", "espeak-data"} {
+		if info, err := os.Stat(filepath.Join(dir, data)); err == nil && info.IsDir() {
+			extra = append(extra, "ESPEAK_DATA_PATH="+dir)
+			break
+		}
+	}
+	if v.kind == "piper" {
+		if _, err := os.Stat(filepath.Join(dir, "libpiper_phonemize.so.1")); err == nil {
+			lib := dir
+			if old := os.Getenv("LD_LIBRARY_PATH"); old != "" {
+				lib += string(os.PathListSeparator) + old
+			}
+			extra = append(extra, "LD_LIBRARY_PATH="+lib)
+		}
+	}
+	return helperToolEnv(v.path, extra...)
+}
+
+// ttsPiperStream speaks chunks with one Piper process, so the first sentence
+// plays while the rest are still being made (a neural voice on the Smart
+// Pro's four A53 cores is about as slow as speech itself; rendering a long
+// answer whole kept the user waiting in silence). Each chunk is one input
+// line; with --output_dir Piper writes one WAV per line into a private folder
+// and prints its path when the file is complete. emit gets each chunk's sound
+// in order and returns false to stop. It returns how many chunks were emitted.
+func ttsPiperStream(ctx context.Context, v ttsLocalVoice, chunks []string, emit func([]int16, int) bool) (int, error) {
+	if v.kind != "piper" || v.path == "" || v.model == "" {
+		return 0, errors.New("not a Piper voice")
+	}
+	var lines strings.Builder
+	total := 0
+	for _, c := range chunks {
+		c = strings.Join(strings.Fields(strings.ReplaceAll(c, "\x00", "")), " ")
+		if c == "" {
+			continue
+		}
+		lines.WriteString(c)
+		lines.WriteByte('\n')
+		total++
+	}
+	if total == 0 {
+		return 0, errors.New("nothing to say")
+	}
+	dir, err := os.MkdirTemp("", "jukahub-voice-")
+	if err != nil {
+		return 0, err
+	}
+	defer os.RemoveAll(dir)
+	// Model load plus each sentence; generous, and a stop still ends it at once.
+	timeout := ttsPiperTimeout + time.Duration(lines.Len()/6)*time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, v.path, "--model", v.model, "--output_dir", dir)
+	cmd.Env = ttsLocalEnv(v)
+	cmd.Stdin = strings.NewReader(lines.String())
+	var stderr strings.Builder
+	cmd.Stderr = &ttsCappedWriter{b: &stderr, max: 4 << 10}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, err
+	}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	emitted := 0
+	stopped := false
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 4096), 64<<10)
+	cleanDir := filepath.Clean(dir)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || stopped {
+			continue
+		}
+		wav := filepath.Clean(line)
+		if !filepath.IsAbs(wav) {
+			wav = filepath.Join(cleanDir, wav)
+		}
+		// Only files Piper made in our folder are read.
+		if filepath.Dir(wav) != cleanDir || !strings.EqualFold(filepath.Ext(wav), ".wav") {
+			continue
+		}
+		data, err := ttsReadFinishedWAV(ctx, wav)
+		_ = os.Remove(wav)
+		if err != nil {
+			continue
+		}
+		samples, rate, err := ttsDecodeWAV(data, false)
+		if err != nil {
+			continue
+		}
+		emitted++
+		if !emit(samples, rate) {
+			// Stopped: end Piper, but keep reading so it is not blocked on a
+			// full pipe while it exits.
+			stopped = true
+			cancel()
+		}
+	}
+	if sc.Err() != nil {
+		// A runaway line stopped the reading: end Piper rather than wait for
+		// the timeout with nobody draining its output.
+		cancel()
+		_, _ = io.Copy(io.Discard, stdout)
+	}
+	waitErr := cmd.Wait()
+	if stopped || emitted >= total {
+		return emitted, nil
+	}
+	if ctx.Err() != nil {
+		return emitted, ctx.Err()
+	}
+	if waitErr != nil {
+		return emitted, fmt.Errorf("piper: %w (%s)", waitErr, firstLine(strings.TrimSpace(stderr.String())))
+	}
+	if emitted == 0 {
+		return 0, fmt.Errorf("piper made no sound (%s)", firstLine(strings.TrimSpace(stderr.String())))
+	}
+	return emitted, nil
+}
+
+// ttsReadFinishedWAV reads a WAV Piper has just announced. Piper prints the
+// path before its file stream is closed, so the last buffered bytes may land
+// a moment later: the header already holds the final data size (the sound is
+// made before the file is written), and the read waits briefly until it is
+// all there.
+func ttsReadFinishedWAV(ctx context.Context, path string) ([]byte, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if ttsWAVComplete(data) || time.Now().After(deadline) || ctx.Err() != nil {
+			return data, nil
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+}
+
+// ttsCappedWriter keeps the first max bytes of an engine's messages.
+type ttsCappedWriter struct {
+	b   *strings.Builder
+	max int
+}
+
+func (w *ttsCappedWriter) Write(p []byte) (int, error) {
+	if room := w.max - w.b.Len(); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		w.b.Write(p[:room])
+	}
+	return len(p), nil
 }

@@ -154,12 +154,34 @@ type micStream struct {
 	// swapAt is set while the next candidate waits for the one just dropped
 	// to finish closing in the background (it may hold the same codec).
 	swapAt uint64
+	// voice is set on a voice feature's stream (micOpen); Close takes it off
+	// micVoiceUsers.
+	voice bool
 }
 
 // micOpen opens the first capture device that works and starts it. errMicNone
 // and errMicOpen say which way it failed (the log has the details). Main
 // thread.
 func micOpen() (*micStream, error) {
+	// The stick lights may be listening (ledmic.go): a voice feature gets the
+	// codec to itself, and the lights wait until every voice stream closes.
+	ledMicYield()
+	m, err := micOpenShared()
+	if err != nil {
+		return nil, err
+	}
+	m.voice = true
+	micVoiceUsers.Add(1)
+	return m, nil
+}
+
+// micVoiceUsers counts the voice features' open streams (micOpen), not the
+// lights' own (ledmic.go opens with micOpenShared).
+var micVoiceUsers atomic.Int32
+
+// micOpenShared is micOpen without taking the microphone from the lights or
+// counting as a voice feature. Main thread.
+func micOpenShared() (*micStream, error) {
 	micPrepareMixer()
 	cands := micCandidates()
 	m := &micStream{}
@@ -495,6 +517,10 @@ func (m *micStream) Close() {
 	m.closed = true
 	m.closeDevice()
 	m.cands = nil
+	if m.voice {
+		m.voice = false
+		micVoiceUsers.Add(-1)
+	}
 }
 
 // closeDevice closes the open device, whichever kind it is. An SDL device that

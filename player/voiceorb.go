@@ -87,6 +87,7 @@ const (
 	orbRouteOrb      orbMenuRoute = iota
 	orbRouteKeyboard              // voice typing into the open keyboard's field
 	orbRoutePage                  // the Voice command page's own microphone
+	orbRouteBack                  // Back, sent on a tap: a hold is a screenshot (menushot.go)
 )
 
 // orbVolumeKeys counts the hardware volume-key presses volumebuttons.go reads
@@ -178,6 +179,7 @@ var voiceOrb struct {
 	menuRoute    orbMenuRoute
 	menuCombo    bool
 	menuHeldOpen bool
+	menuShot     bool // the hold armed a screenshot, taken on the release (menushot.go)
 	menuVolume   int64
 
 	// What was heard and what the orb says.
@@ -262,7 +264,12 @@ func voiceOrbMenuEnabled(config *Config) bool {
 func voiceOrbSettingsRows() []setRow {
 	return []setRow{{
 		ID: voiceOrbMenuKey, Label: "Menu button: voice", Kind: setKindToggle,
-		Detail:  setStatic("Menu opens the voice orb (hold it to talk); off, Menu goes back like B"),
+		Detail: func(c *Config) string {
+			if menuShotEnabled(c) {
+				return "A tap of Menu opens the voice orb; off, Menu goes back like B"
+			}
+			return "Menu opens the voice orb (hold it to talk); off, Menu goes back like B"
+		},
 		Visible: func(*Config) bool { return P().IsHandheld() },
 		Get:     voiceOrbMenuEnabled,
 		Set: func(c *Config, on bool) {
@@ -291,6 +298,9 @@ func voiceOrbLegendRow(keyboard bool) (FooterHint, bool) {
 	}
 	if !P().IsHandheld() || !voiceOrbMenuEnabled(appConfig) {
 		return FooterHint{}, false
+	}
+	if menuShotEnabled(appConfig) {
+		return FooterHint{Button: "Menu", Label: "Voice (tap)"}, true
 	}
 	return FooterHint{Button: "Menu", Label: "Voice (hold to talk)"}, true
 }
@@ -326,7 +336,7 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 			return voiceOrbMenuUp(e, config)
 		}
 		voiceOrb.menuTaken, voiceOrb.menuDown = false, false
-		if voiceOrbMenuOwnsGuide(config, e.Which) {
+		if voiceOrbMenuOwnsGuide(config, e.Which) || menuShotOwnsGuide(config, e.Which) {
 			return voiceOrbMenuDown(e, config)
 		}
 		// Not the voice button here (Back, or a pad's Guide on a PC): it falls
@@ -460,12 +470,21 @@ func voiceOrbMenuDown(e *sdl.ControllerButtonEvent, config *Config) bool {
 		voiceOrb.menuTaken = true
 		return true
 	}
-	route, ok := voiceOrbRouteFor(config)
+	route, ok := orbRouteBack, false
+	if voiceOrbMenuOwnsGuide(config, e.Which) {
+		route, ok = voiceOrbRouteFor(config)
+	}
 	if !ok {
-		return false
+		// Menu is Back here (voice off, or something the orb cannot open
+		// over). With Hold Menu: screenshot on, the Back waits for the
+		// release, so a hold can be a screenshot instead (menushot.go).
+		if !menuShotOwnsGuide(config, e.Which) {
+			return false
+		}
+		route = orbRouteBack
 	}
 	voiceOrb.menuDown, voiceOrb.menuDownAt, voiceOrb.menuRoute = true, orbNow(), route
-	voiceOrb.menuCombo, voiceOrb.menuHeldOpen = false, false
+	voiceOrb.menuCombo, voiceOrb.menuHeldOpen, voiceOrb.menuShot = false, false, false
 	voiceOrb.menuVolume = orbVolumeKeys.Load()
 	if exitChordPressed(e) {
 		voiceOrb.menuDown = false
@@ -493,6 +512,13 @@ func voiceOrbMenuUp(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	switch {
 	case voiceOrb.menuCombo:
+		// A chord: nothing more.
+	case voiceOrb.menuShot:
+		// A hold: the screenshot (menushot.go).
+		menuShotTake()
+	case voiceOrb.menuRoute == orbRouteBack:
+		// A tap where Menu means Back: Back now (menushot.go).
+		menuShotSendBack()
 	case voiceOrb.menuHeldOpen:
 		if voiceOrb.phase == orbListening && orbNow()-voiceOrb.started < voiceChimeMs+vkVoiceMinMs {
 			// Let go before there was a clip to send: it listens on like a tap.
@@ -533,8 +559,23 @@ func voiceOrbMenuTick(config *Config) {
 		voiceOrbMenuChord()
 		return
 	}
-	if voiceOrb.menuCombo || voiceOrb.menuHeldOpen || voiceOrb.menuRoute != orbRouteOrb ||
-		orbNow()-voiceOrb.menuDownAt < orbHoldMs {
+	if voiceOrb.menuCombo || voiceOrb.menuHeldOpen || voiceOrb.menuShot {
+		return
+	}
+	// Hold Menu: screenshot (menushot.go) takes the hold wherever Menu is
+	// read, before push-to-talk could: with it on, a tap opens the orb and a
+	// hold saves the screen. The hold arms it (a tick of the motor says it
+	// may be let go); the release takes it, unless a volume key or another
+	// button joined first — the firmware's Menu + volume brightness may come
+	// after a long hold.
+	if menuShotEnabled(config) {
+		if orbNow()-voiceOrb.menuDownAt >= menuShotHoldMs {
+			voiceOrb.menuShot = true
+			playHaptic(hapticTogglePulse)
+		}
+		return
+	}
+	if voiceOrb.menuRoute != orbRouteOrb || orbNow()-voiceOrb.menuDownAt < orbHoldMs {
 		return
 	}
 	voiceOrb.menuHeldOpen = true
@@ -552,7 +593,7 @@ func voiceOrbForgetMenu() {
 	if voiceOrb.menuDown {
 		exitChord.update(sdl.CONTROLLER_BUTTON_BACK, false, exitChordClock())
 	}
-	voiceOrb.menuDown, voiceOrb.menuTaken, voiceOrb.menuHeldOpen = false, false, false
+	voiceOrb.menuDown, voiceOrb.menuTaken, voiceOrb.menuHeldOpen, voiceOrb.menuShot = false, false, false, false
 }
 
 // voiceOrbMenuChord marks the Menu press in progress as a chord. If a hold had
@@ -838,12 +879,8 @@ func voiceOrbListen(config *Config) {
 	voiceOrb.heard, voiceOrb.words = "", ""
 	voiceOrb.choices, voiceOrb.act = nil, nil
 	switch {
-	case strings.TrimSpace(groqAPIKey()) == "":
-		voiceOrbSay("Voice needs a Groq API key", "Add it in Settings → General — or say it on your phone", tbxToneWarn, orbOfferGroqKey)
-		PlayErrorSound()
-		return
-	case !IsOnline() && !netReconnecting(): // just after a wake the clip waits for the Wi-Fi (wake_resume.go)
-		voiceOrbSay("Voice needs internet", "Your phone's keyboard microphone works over the same Wi-Fi", tbxToneWarn, orbOfferPhone)
+	case !sttCanListen():
+		voiceOrbSay("Voice needs speech recognition", "Add a Groq key and Wi-Fi, or install offline speech", tbxToneWarn, orbOfferGroqKey)
 		PlayErrorSound()
 		return
 	}
@@ -875,7 +912,10 @@ func voiceOrbListen(config *Config) {
 	voiceOrb.vad = orbVAD{}
 	voiceOrbSetPhase(orbListening)
 	voiceOrb.title = "Listening…"
-	voiceOrb.sub = "Say “open YouTube”, “volume 50” — or ask a question"
+	voiceOrb.sub = "Say “open YouTube” or “volume 50”"
+	if strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting()) {
+		voiceOrb.sub += " — or ask a question"
+	}
 	voiceOrb.tone, voiceOrb.offer = tbxToneNeutral, orbOfferNone
 	// Music and video would be heard as speech: they wait while it listens.
 	voiceOrbHushMedia()
@@ -975,12 +1015,6 @@ func voiceOrbFinish(config *Config) {
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
-	if key == "" {
-		voiceOrb.buf = voiceOrb.buf[:0]
-		voiceOrbSay("Voice needs a Groq API key", "Add it in Settings → General", tbxToneWarn, orbOfferGroqKey)
-		PlayErrorSound()
-		return
-	}
 	if config == nil {
 		config = appConfig
 	}
@@ -993,7 +1027,7 @@ func voiceOrbFinish(config *Config) {
 	prompt := voiceWhisperPrompt(targets)
 	voiceOrbCancelRequest()
 	gen := voiceOrb.gen
-	ctx, cancel := context.WithTimeout(context.Background(), vkVoiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), sttTimeout)
 	voiceOrb.cancel = cancel
 	voiceOrb.ai = false
 	voiceOrbSetPhase(orbThinking)
@@ -1007,8 +1041,7 @@ func voiceOrbFinish(config *Config) {
 				tbxPost(func() { voiceOrbTranscribed(gen, "", errors.New("Speech failed — try again")) })
 			}
 		}()
-		netWaitOnline(ctx, netWakeWaitMax) // after a wake: up to 15 s for the Wi-Fi, not a failure
-		text, err := voiceTranscribe(ctx, key, wav, prompt)
+		text, err := sttCommandTranscribe(ctx, key, wav, prompt)
 		tbxPost(func() { voiceOrbTranscribed(gen, text, err) })
 	}()
 }

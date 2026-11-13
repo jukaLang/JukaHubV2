@@ -245,6 +245,10 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, posted ti
 				s.key, s.keyID, s.voice = key, keyID, voice
 			}
 		}
+	} else if ttsVoiceImplied(cfg) {
+		// The offline voice speaks because there is no Groq key: still say
+		// once that a key brings Groq's voices (ttsReported).
+		pre = ttsFailNoKey
 	}
 	if s.key == "" && !s.hasLocal {
 		ttsAbandon(gen)

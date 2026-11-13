@@ -236,3 +236,23 @@ func ttsClipFor(samples []int16, rate, deviceRate int) []int16 {
 	ttsFade(out, deviceRate)
 	return out
 }
+
+// ttsWAVComplete reports whether a WAV's data chunk is all present. Pure.
+func ttsWAVComplete(data []byte) bool {
+	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return false
+	}
+	off := 12
+	for off+8 <= len(data) {
+		size := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
+		body := off + 8
+		if string(data[off:off+4]) == "data" {
+			return size >= 0 && body+size <= len(data)
+		}
+		if size < 0 || body+size+size%2 > len(data) {
+			return false
+		}
+		off = body + size + size%2
+	}
+	return false
+}

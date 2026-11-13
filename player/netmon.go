@@ -597,6 +597,7 @@ func installMissingToolsAfterReconnect() {
 		delete(toolsAutoAttempted, t)
 	}
 	toolHealthState.mu.Unlock()
+	ttsVoiceAutoRetry()
 	refreshToolHealth()
 }
 
@@ -658,6 +659,7 @@ func refreshToolHealth() {
 	}
 
 	if len(toFetch) > 0 {
+		ttsToolsInstalling.Add(1)
 		go func(list []string) {
 			var installed []string
 			bundleFailed := false
@@ -695,8 +697,13 @@ func refreshToolHealth() {
 					noteAwayToolInstalled(t)
 				}
 			}
+			ttsToolsInstalling.Add(-1)
 			refreshToolHealth()
 		}(toFetch)
+	} else {
+		// Nothing of the tools' own left to fetch (ffmpeg is in, or failed
+		// and waits for A): the Smart Pro's offline voice follows, once.
+		ttsAutoInstallOfflineVoice()
 	}
 }
 

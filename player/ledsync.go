@@ -9,7 +9,8 @@ package main
 // estimate) into audioBus; the publish is a bounded loop over at most 2048
 // frames, so the decoder never waits on the lights.
 //
-// Light side: /sys/class/leds is the only tree touched. Each LED is classified
+// Light side: /sys/class/leds, plus the TrimUI stick rings' own driver
+// /sys/class/led_anim (ledanim.go), are the only trees touched. Each LED is classified
 // once by the files it exposes — multi_intensity (the kernel multicolor class),
 // color (per-driver hex), or brightness (single channel). Only colour-capable
 // LEDs and LEDs whose names look like stick/ring lights are used, so a power or
@@ -31,7 +32,8 @@ import (
 )
 
 const (
-	// ledRootDir is the only directory the LED writer may touch.
+	// ledRootDir is the LED class the writer scans (ledAnimDir is the other
+	// directory it may touch).
 	ledRootDir = "/sys/class/leds"
 	// ledFrameInterval is the animation step. 25 fps is smooth for a glow and
 	// keeps sysfs traffic low.
@@ -243,6 +245,7 @@ func ledColorFor(level, hz float64) (uint8, uint8, uint8) {
 
 const (
 	ledPolicyAudio       = "audio"
+	ledPolicyMic         = "mic" // the microphone (ledmic.go)
 	ledPolicyBattery     = "battery"
 	ledPolicyCharging    = "charging"
 	ledPolicyTemperature = "temperature"
@@ -265,6 +268,7 @@ var ledPolicyOrder = []struct {
 	label string
 }{
 	{ledPolicyAudio, "Audio"},
+	{ledPolicyMic, "Microphone"},
 	{ledPolicyBattery, "Battery"},
 	{ledPolicyCharging, "Charging"},
 	{ledPolicyTemperature, "Temperature"},
@@ -411,6 +415,7 @@ const (
 	ledModeMultiIntensity ledMode = iota // /sys/class/leds/<dev>/multi_intensity
 	ledModeColor                         // /sys/class/leds/<dev>/color
 	ledModeBrightness                    // /sys/class/leds/<dev>/brightness only
+	ledModeAnim                          // /sys/class/led_anim, the TrimUI stick rings (ledanim.go)
 )
 
 type ledDevice struct {
@@ -439,12 +444,21 @@ func addressableLEDName(name string) bool {
 // plain files are not devices), and every candidate must be writable by this
 // process.
 func discoverLEDs(root string) []ledDevice {
+	var devs []ledDevice
+	if root == ledRootDir {
+		// The TrimUI rings live outside the LED class (ledanim.go).
+		if dev, ok := classifyLEDAnim(ledAnimDir); ok {
+			devs = append(devs, dev)
+		}
+	}
 	names, err := sysfsClassChildren(root)
 	if err != nil {
-		return nil
+		return devs
 	}
 
-	devs := make([]ledDevice, 0, len(names))
+	if devs == nil {
+		devs = make([]ledDevice, 0, len(names))
+	}
 	for _, name := range names {
 		dir := filepath.Join(root, name)
 		dev, ok := classifyLED(dir, name)
@@ -497,6 +511,8 @@ func readLEDInt(path string) (int, bool) {
 func applyLED(dev ledDevice, r, g, b uint8) error {
 	off := r == 0 && g == 0 && b == 0
 	switch dev.Mode {
+	case ledModeAnim:
+		return applyLEDAnim(dev, r, g, b)
 	case ledModeMultiIntensity:
 		if err := writeLEDFile(filepath.Join(dev.Dir, "multi_intensity"),
 			fmt.Sprintf("%d %d %d", r, g, b)); err != nil {
@@ -557,6 +573,9 @@ var (
 	ledSyncMu      sync.Mutex
 	ledSyncStop    chan struct{}
 	ledSyncDevices []ledDevice
+	// ledSyncDone is closed when the newest loop has finished handing the
+	// lights back; a loop started right after a stop waits for the old one.
+	ledSyncDone chan struct{}
 )
 
 // LEDSyncRunning reports whether the animation loop is active.
@@ -576,6 +595,13 @@ func SetLEDSync(on bool) error {
 			close(ledSyncStop)
 			ledSyncStop = nil
 			ledSyncDevices = nil
+			// Wait (briefly) for the loop to hand the lights back: the exit
+			// paths call this and the process is often gone a moment later,
+			// which left the TrimUI rings on JukaHub's last colour.
+			select {
+			case <-ledSyncDone:
+			case <-time.After(ledStopWait):
+			}
 		}
 		return nil
 	}
@@ -590,11 +616,17 @@ func SetLEDSync(on bool) error {
 	// ledLoopSettings); publish it before the first frame.
 	syncLEDLoopSettings(appConfig)
 	stop := make(chan struct{})
+	done := make(chan struct{})
+	prev := ledSyncDone
 	ledSyncStop = stop
+	ledSyncDone = done
 	ledSyncDevices = devs
-	go runLEDLoop(stop, devs)
+	go runLEDLoop(stop, done, prev, devs)
 	return nil
 }
+
+// ledStopWait bounds how long stopping waits for the loop's hand-back.
+const ledStopWait = 250 * time.Millisecond
 
 // StartLEDSyncIfEnabled restores the saved setting at launch.
 func StartLEDSyncIfEnabled(config *Config) {
@@ -640,6 +672,9 @@ type ledLoopSettings struct {
 	effect     string
 	r, g, b    uint8
 	brightness int
+	// micSensitivity is read by ledMicTick on the main thread, kept here so
+	// the mode and its sensitivity come from one published copy.
+	micSensitivity string
 }
 
 // ledLoopSettingsRefresh is how often the main loop republishes the settings
@@ -657,9 +692,10 @@ var ledLoopState struct {
 // test that owns the config) only.
 func ledLoopSettingsFrom(config *Config) ledLoopSettings {
 	s := ledLoopSettings{
-		policy:     ledPolicyFromConfig(config),
-		effect:     "solid",
-		brightness: ledBrightnessFromConfig(config),
+		policy:         ledPolicyFromConfig(config),
+		effect:         "solid",
+		brightness:     ledBrightnessFromConfig(config),
+		micSensitivity: ledMicSensitivityFromConfig(config),
 	}
 	if config != nil {
 		s.effect, _ = customString(config.Variables.Custom, ledKeyEffect)
@@ -721,6 +757,15 @@ func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 		}
 		return ledColorFor(level, sample.Freq)
 	}
+	if s.policy == ledPolicyMic {
+		// Already gated, scaled and smoothed on the main thread (ledmic.go).
+		sample := currentLEDMicSample()
+		level := 0.0
+		if time.Since(sample.At) <= ledMicStaleAfter {
+			level = sample.Level
+		}
+		return ledColorFor(level, sample.Freq)
+	}
 	temp := 0.0
 	if s.policy == ledPolicyTemperature {
 		temp = ledTemperatureC()
@@ -728,17 +773,36 @@ func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 	return ledPolicyColor(s.policy, getBatteryPercent(), getBatteryCharging(), temp, s.effect, s.r, s.g, s.b, now)
 }
 
-// runLEDLoop animates the lights until stop is closed, then blanks them so the
-// device does not sit frozen on the last colour.
-func runLEDLoop(stop <-chan struct{}, devs []ledDevice) {
+// runLEDLoop animates the lights until stop is closed, then blanks them (the
+// TrimUI rings get the firmware's colour back) so the device does not sit
+// frozen on the last colour.
+// done is closed once that is finished; prev, the previous loop's done, is
+// waited for (briefly) before the first frame, so its hand-back cannot land on
+// top of this loop's first colour.
+func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}, devs []ledDevice) {
+	defer close(done)
+	if prev != nil {
+		select {
+		case <-prev:
+		case <-time.After(time.Second):
+		}
+	}
 	ticker := time.NewTicker(ledFrameInterval)
 	defer ticker.Stop()
 
 	lastKey := make(map[string]string, len(devs))
+	// failing marks the devices whose last write failed, so a broken LED logs
+	// once, not 25 times a second.
+	failing := make(map[string]bool, len(devs))
 	for {
 		select {
 		case <-stop:
 			for _, dev := range devs {
+				if dev.Mode == ledModeAnim {
+					// The rings go back to the firmware's colour, not dark.
+					releaseLEDAnim(dev)
+					continue
+				}
 				_ = applyLED(dev, 0, 0, 0)
 			}
 			return
@@ -747,25 +811,53 @@ func runLEDLoop(stop <-chan struct{}, devs []ledDevice) {
 			// the frame clock but stop writing sysfs thirty times a second. See
 			// backgroundwork.go.
 			if backgroundPaused() {
+				// Hand the lights back once instead of leaving them frozen on
+				// the last frame: the rings get the firmware's colour, the
+				// others go dark. The first frame back repaints everything.
+				if len(lastKey) > 0 {
+					for _, dev := range devs {
+						if dev.Mode == ledModeAnim {
+							releaseLEDAnim(dev)
+						} else {
+							_ = applyLED(dev, 0, 0, 0)
+						}
+					}
+					clear(lastKey)
+				}
 				continue
 			}
-			r, g, b := ledFrameColor(currentLEDLoopSettings(), time.Now())
+			rawR, rawG, rawB := ledFrameColor(currentLEDLoopSettings(), time.Now())
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.
-			r, g, b = quantiseLEDChannel(r), quantiseLEDChannel(g), quantiseLEDChannel(b)
+			r, g, b := quantiseLEDChannel(rawR), quantiseLEDChannel(rawG), quantiseLEDChannel(rawB)
 			key := fmt.Sprintf("%d,%d,%d", r, g, b)
 			for _, dev := range devs {
-				if lastKey[dev.Dir] == key {
-					continue
-				}
-				if err := applyLED(dev, r, g, b); err != nil {
-					// One unwritable LED must not stop the others; log once per
-					// transition and keep the last good key so we do not spin.
-					LogScene("led").Warn("LED write failed", "device", dev.Name, "err", err)
+				var err error
+				if dev.Mode == ledModeAnim {
+					// The rings' writer splits hue from level and skips what
+					// did not change itself; it gets the colour before
+					// quantising (a quantised dim colour has a different hue)
+					// and every frame, so a hue change it held back for the
+					// re-arm limit still lands once the colour holds.
+					err = applyLED(dev, rawR, rawG, rawB)
+					lastKey[dev.Dir] = "anim"
+				} else {
+					if lastKey[dev.Dir] == key {
+						continue
+					}
+					// One unwritable LED must not stop the others; keep the key
+					// even on a failure so we do not spin.
+					err = applyLED(dev, r, g, b)
 					lastKey[dev.Dir] = key
+				}
+				if err != nil {
+					if !failing[dev.Dir] {
+						failing[dev.Dir] = true
+						LogScene("led").Warn("LED write failed", "device", dev.Name, "err", err)
+					}
 					continue
 				}
-				lastKey[dev.Dir] = key
+				failing[dev.Dir] = false
 			}
 		}
 	}

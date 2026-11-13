@@ -511,6 +511,18 @@ var (
 	videoAudioDev      sdl.AudioDeviceID
 	videoAudioOK       bool
 	videoAudioMutex    sync.Mutex
+	// videoAudioFed counts every byte the device took, and videoAudioSkipped
+	// every byte QueueVideoAudio could not hand it (a stalled or dead device),
+	// which the listener skips just the same. Neither ever resets: less what
+	// is still queued, they are the clock the video's picture follows
+	// (avsync.go), each session counting from its own mark. A clear leaves
+	// the discarded bytes in videoAudioFed, so they count as played — they
+	// are behind the listener for good. Guarded by videoAudioMutex.
+	videoAudioFed     int64
+	videoAudioSkipped int64
+	// videoAudioChunk is the device's own buffer (SDL's Samples), which plays
+	// after the queue has let go of it.
+	videoAudioChunk time.Duration
 )
 
 // initVideoAudioDevice lazily opens a stereo S16 output device for decoded
@@ -535,6 +547,7 @@ func initVideoAudioDevice() {
 		videoAudioDev = id
 		videoAudioOK = true
 		videoAudioRate = obtained.Freq
+		videoAudioChunk = audioChunkDuration(obtained)
 		logDebug("audio", "video device opened: %d Hz stereo S16 (wanted %d)", obtained.Freq, rate)
 		return
 	}
@@ -556,6 +569,7 @@ func initVideoAudioDevice() {
 	videoAudioDev = id
 	videoAudioOK = true
 	videoAudioRate = obtained.Freq
+	videoAudioChunk = audioChunkDuration(obtained)
 	logDebug("audio", "video device (fallback): %d Hz stereo S16 (wanted %d) — resampling active", obtained.Freq, desired.Freq)
 }
 
@@ -607,6 +621,11 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 		// dropped instead; the decoders check their session and pause state
 		// between buffers.
 		if time.Now().After(deadline) {
+			// Skipped, so the clock counts it as played: the picture
+			// keeps its place in the video rather than the sound's.
+			videoAudioMutex.Lock()
+			videoAudioSkipped += int64(len(pcm))
+			videoAudioMutex.Unlock()
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -647,7 +666,39 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	// Video and music share this path, so one publish covers both. The buffer is
 	// stereo S16 at the device's rate; the analyser reads at most 2048 frames.
 	publishAudioLevel(pcm, int(videoAudioRate), 2)
-	_ = outQueue(videoAudioDev, pcm)
+	if err := outQueue(videoAudioDev, pcm); err != nil {
+		videoAudioSkipped += int64(len(pcm))
+	} else {
+		videoAudioFed += int64(len(pcm))
+	}
+}
+
+// videoAudioClock reports the video PCM the device has consumed (taken and
+// played, or cleared) and the bytes skipped, both counted since the device
+// opened, with what is still queued, the bytes per second and the device's own
+// buffer. ok is false when there is no device. The picture keeps to this clock
+// (avsync.go).
+func videoAudioClock() (consumed, skipped, queued int64, bytesPerSec float64, chunk time.Duration, ok bool) {
+	videoAudioInitOnce.Do(initVideoAudioDevice)
+	if !videoAudioOK || videoAudioRate <= 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	videoAudioMutex.Lock()
+	queued = int64(outQueued(videoAudioDev))
+	consumed, skipped = videoAudioFed-queued, videoAudioSkipped
+	videoAudioMutex.Unlock()
+	if consumed < 0 {
+		consumed = 0
+	}
+	return consumed, skipped, queued, float64(videoAudioRate) * 4, videoAudioChunk, true
+}
+
+// audioChunkDuration is how long one buffer of an opened device plays.
+func audioChunkDuration(spec sdl.AudioSpec) time.Duration {
+	if spec.Freq <= 0 || spec.Samples == 0 {
+		return 0
+	}
+	return time.Duration(spec.Samples) * time.Second / time.Duration(spec.Freq)
 }
 
 // a11yProcessAudio applies the Accessibility audio settings in place: a mono
@@ -704,4 +755,19 @@ func ClearVideoAudioQueue() {
 	outClear(videoAudioDev)
 	// A new stream starts: no reverb tail or held byte from the old one.
 	spatialResetLocked()
+}
+
+// ClearVideoAudioQueueMark clears the queue like ClearVideoAudioQueue and
+// returns the clock's count at that moment: a video session's sound starts
+// there (avsync.go).
+func ClearVideoAudioQueueMark() int64 {
+	videoAudioInitOnce.Do(initVideoAudioDevice)
+	if !videoAudioOK {
+		return 0
+	}
+	videoAudioMutex.Lock()
+	defer videoAudioMutex.Unlock()
+	outClear(videoAudioDev)
+	spatialResetLocked()
+	return videoAudioFed + videoAudioSkipped
 }

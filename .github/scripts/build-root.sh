@@ -55,7 +55,7 @@ if [ -z "${JOBS:-}" ]; then
 fi
 
 usage() {
-    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp | check androidrt|box64 | key helpers|androidrt|box64 | release" >&2
+    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|stt | check androidrt|box64 | key helpers|androidrt|box64|stt | release" >&2
     exit 2
 }
 
@@ -209,6 +209,9 @@ build() {
                 SOURCE_COMMIT="$(source_commit)" OUT_DIR=/src/player/native/bin \
                 LOG_DIR=/tmp/jukahub-ppsspp-logs /bin/sh /src/player/native/build-ppsspp.sh
             ;;
+        stt)
+            in_root JOBS="$JOBS" /bin/sh /src/player/native/build-stt.sh
+            ;;
         *) usage ;;
     esac
 }
@@ -242,6 +245,12 @@ part_sources() {
             # runtime packages).
             git -C "$REPO" ls-files -s -- player/native ':(exclude)player/native/tests' \
                 ':(exclude)player/native/*.md' ':(exclude)player/native/build-runtimes.sh' \
+                ':(exclude)player/native/build-stt.sh' \
+                .github/scripts/build-root.sh .gitattributes
+            ;;
+        stt)
+            git -C "$REPO" ls-files -s -- player/native/build-stt.sh \
+                player/native/helper-build-requirements.txt \
                 .github/scripts/build-root.sh .gitattributes
             ;;
         androidrt)
@@ -269,6 +278,7 @@ part_key() {
         helpers) pk_prefix=remote-play-helpers pk_anchor=player/native/build-helpers.sh ;;
         androidrt) pk_prefix=androidrt-pack pk_anchor=player/androidrt/build-tsp.sh ;;
         box64) pk_prefix=wine-runtime-pack pk_anchor=player/native/build-runtimes.sh ;;
+        stt) pk_prefix=offline-stt pk_anchor=player/native/build-stt.sh ;;
         *) usage ;;
     esac
     pk_sources="$(part_sources "$1")" || return 1

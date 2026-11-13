@@ -147,9 +147,17 @@ draw their own pointer show one.
 
 `voiceMenuButton` (Settings → Controls → **Menu button: voice**, on by default;
 the row is shown on handhelds only) makes the TrimUI's Menu button open the
-voice orb, and hold-to-talk with it ([Voice](VOICE.md#the-voice-orb)). Off,
-Menu goes back like B, as it did before. On a keyboard F4 opens the orb either
-way.
+voice orb, and hold-to-talk with it when `menuHoldScreenshot` is off
+([Voice](VOICE.md#the-voice-orb)). Off, Menu goes back like B, as it did
+before. On a keyboard F4 opens the orb either way.
+
+`menuHoldScreenshot` (Settings → Controls → **Hold Menu: screenshot**, on by
+default; handhelds only): holding Menu for 0.7 s and letting go saves the
+screen as a PNG, in JukaHub's menus and in a game it launched. A tap still
+opens the voice orb (or goes back, where Menu means Back). Shots go to `/mnt/SDCARD/Screenshots` on a
+TrimUI (`screenshot_<time>.png` for JukaHub, `game_<time>.png` for a game),
+`Pictures\JukaHub` elsewhere. In a game the picture is the one on screen when
+Menu went down; a button, trigger or volume key pressed with Menu cancels it.
 
 `jukaVoice` (Settings → Voice & AI → **Juka's voice**): `"voice"` (the
 default) speaks the voice assistant's answers — the orb, the Voice command
@@ -353,16 +361,27 @@ clamped to 3–300).
 `ledSync` is opt-in and writes only inside `/sys/class/leds`: LEDs exposing
 `multi_intensity` or `color`, plus brightness-only LEDs whose names look like
 stick or ring lights. The colour comes from the RMS level and zero-crossing
-frequency of the PCM the video and music path is already handing to SDL — no
-microphone is captured, and the audio thread is never blocked by the lights.
+frequency of the PCM the video and music path is already handing to SDL (the
+`mic` mode below is the only one that listens), and the audio thread is never
+blocked by the lights. The TrimUI stick rings are not in the LED class: they
+are driven through `/sys/class/led_anim` (`effect_rgb_hex_lr` for the colour,
+re-armed as effect `static` at most every 300 ms, and `max_scale_lr` or
+`max_scale` for the level), and what the rings showed before is put back when
+the sync stops or a game takes the screen.
 Frames are quantised to 32 steps and unchanged frames are skipped, so the loop
 runs at 25 fps without hammering sysfs. Stopping the sync, or quitting the app,
 blanks the LEDs instead of leaving the last frame lit. With no addressable LED
 the row is dimmed and the toggle refuses with the reason.
 
-The LED policy is the custom key `led_policy` — `audio` (the default),
+The LED policy is the custom key `led_policy` — `audio` (the default), `mic`,
 `battery`, `charging`, `temperature` or `custom` — cycled by **LED Mode** in
-Quick Settings. Battery runs red → green across 10–80%, charging breathes green
+Quick Settings. `mic` lights the sticks from the microphone: the level is the
+RMS above a noise floor that follows the room, times `led_mic_sensitivity`
+(`low`, `normal` (default) or `high`), coloured by pitch like `audio`. The
+microphone is open only while the lights are on in this mode and JukaHub is on
+screen, and a voice feature (voice orb, Voice command, voice typing) takes it
+over until it is done; nothing is recorded. Settings → Stick lights → **Lights follow
+your voice** and **Mic sensitivity** write both keys. Battery runs red → green across 10–80%, charging breathes green
 and goes dark unplugged, and temperature runs green → red across 45–80 °C (read
 from the thermal zone, cached for two seconds). Custom uses `led_color`
 (`"#rrggbb"`) and an optional `led_effect` of `solid` (default), `pulse`
@@ -579,6 +598,16 @@ while a game, the music player, a video, the Synth, Quiet
 Mode, the voice orb, dictation or an alarm has the speaker, and while the
 screen sleeps. `library` and `selected` need ffmpeg already installed (it is
 never downloaded for this) and otherwise play `calm`.
+
+### Notifications during videos (`notifyDuringVideo`)
+
+Settings → Media writes `notifyDuringVideo` (`"true"` / `"false"`; missing is
+off). Off, a full-screen video that is playing is not interrupted: toasts that
+do not answer a button press (pressed at most 1.5 s before) wait out their time
+unseen, still filed in the bell, and when the video pauses, stops or leaves full
+screen one line says how many came in. Errors always show. On, those toasts show
+over the video, and so do new chat messages (Discord, Juka's answers) as
+"Sender: message" toasts. Quiet Mode still holds every toast.
 
 ## `elements`
 

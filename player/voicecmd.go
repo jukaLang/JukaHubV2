@@ -16,10 +16,9 @@ package main
 //
 //   - the handheld's microphone (the Smart Pro has a mono one; a PC uses its
 //     default input), recorded through the shared microphone (voicemic.go) at
-//     16 kHz mono and sent to Groq's Whisper with the Groq key from Settings →
-//     General — the same request voice typing makes (vkvoice.go), plus a short
-//     list of the names on this handheld so "JukaLand" and a game's title come
-//     back spelled right;
+//     16 kHz mono, recognized by Groq's Whisper when available or by the
+//     bundled Smart Pro model when it is not. A short list of names on this
+//     handheld helps spell "JukaLand" and game titles;
 //   - the phone: Y shows a QR code for the companion's /voice page, where the
 //     microphone on the phone's own keyboard dictates the command
 //     (voicecmd_phone.go) — no key, and it works where the handheld's mic
@@ -117,9 +116,7 @@ type voicePageState struct {
 	// gen invalidates a transcription that belongs to an earlier request.
 	gen    int
 	cancel context.CancelFunc
-	// hasKey is whether a Groq key is set, read once per visit and on each
-	// press: the header asked every frame, which decrypted the key 30 times a
-	// second (and logged each failure).
+	// hasKey caches whether speech recognition is available for the header.
 	hasKey bool
 	// micRect is the disc as drawn and clipped to the body, for a click.
 	micRect sdl.Rect
@@ -248,7 +245,7 @@ func voiceEnter() {
 		voicePage.nav.focus = "phone"
 	}
 	// Coming back from Settings with a key is a new visit, so this is fresh.
-	voicePage.hasKey = strings.TrimSpace(groqAPIKey()) != ""
+	voicePage.hasKey = sttCanListen()
 	vkMicProbeStart()
 	homeSearchRefreshIndex(appConfig)
 }
@@ -307,18 +304,14 @@ func voiceStartListening(config *Config) {
 	if voicePage.mic != nil {
 		voiceStopCapture()
 	}
-	voicePage.hasKey = strings.TrimSpace(groqAPIKey()) != ""
+	voicePage.hasKey = sttCanListen()
 	switch {
 	case vkMic.Load() == vkMicAbsent:
 		voiceSay("No microphone found — say it on your phone, or type it", tbxToneWarn, voiceFixPhone)
 		PlayErrorSound()
 		return
-	case !voicePage.hasKey:
-		voiceSay("The microphone needs your Groq key for speech — add it, or say it on your phone", tbxToneWarn, voiceFixGroqKey)
-		PlayErrorSound()
-		return
-	case !IsOnline():
-		voiceSay("Speech needs internet — type it, or use your phone's keyboard microphone", tbxToneWarn, voiceFixType)
+	case !sttCanListen():
+		voiceSay("Speech needs a Groq key and Wi-Fi, or offline speech installed", tbxToneWarn, voiceFixGroqKey)
 		PlayErrorSound()
 		return
 	}
@@ -478,10 +471,6 @@ func voiceFinishClip(config *Config) {
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
-	if key == "" {
-		voiceSay("The microphone needs your Groq key for speech — add it, or say it on your phone", tbxToneWarn, voiceFixGroqKey)
-		return
-	}
 	wav := vkEncodeWAV(voicePage.buf, vkVoiceRate)
 	voicePage.buf = voicePage.buf[:0]
 	// The catalog built for Whisper's vocabulary hint resolves the answer too,
@@ -496,11 +485,11 @@ func voiceFinishClip(config *Config) {
 	PlayActivateSound()
 	// The request belongs to this visit (leaving the page cancels it) and to
 	// this press (Cancel stops it through voicePage.cancel).
-	reqCtx, cancel := context.WithTimeout(sceneWorkContext(), vkVoiceTimeout)
+	reqCtx, cancel := context.WithTimeout(sceneWorkContext(), sttTimeout)
 	voicePage.cancel = cancel
 	started := runSceneTask(func(context.Context) {
 		defer cancel()
-		text, err := voiceTranscribe(reqCtx, key, wav, prompt)
+		text, err := sttCommandTranscribe(reqCtx, key, wav, prompt)
 		tbxPost(func() { voiceTranscribed(gen, text, err) })
 	})
 	if !started {
@@ -534,6 +523,12 @@ func voiceTranscribed(gen int, text string, err error) {
 
 // voiceErrorText turns a failed request into a sentence and its fix.
 func voiceErrorText(err error) (string, voiceFix) {
+	if errors.Is(err, errSTTMemory) {
+		return "Close a game to free memory for offline speech, then try again", voiceFixNone
+	}
+	if errors.Is(err, errSTTUnavailable) {
+		return "Offline speech is missing — install the latest TrimUI package", voiceFixNone
+	}
 	var gerr *groqError
 	if errors.As(err, &gerr) {
 		if gerr.status == http.StatusUnauthorized || gerr.status == http.StatusForbidden {
@@ -1080,7 +1075,7 @@ func voiceHeaderStatus() (string, sdl.Color) {
 	switch vkMic.Load() {
 	case vkMicPresent:
 		if !voicePage.hasKey {
-			return "Mic needs a Groq key", tbxToneColor(tbxToneWarn)
+			return "Speech recognition unavailable", tbxToneColor(tbxToneWarn)
 		}
 		return "Microphone ready", tbxToneColor(tbxToneGood)
 	case vkMicAbsent:

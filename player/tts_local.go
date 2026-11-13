@@ -11,6 +11,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 )
 
@@ -73,4 +75,43 @@ func ttsLocalSpeak(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 		logWarn("tts", "the device's voice (%s) failed: %v", v.kind, err)
 	}
 	return samples, rate, err
+}
+
+// ttsLocalSpeakChunks speaks chunks with the device's voice, handing each
+// piece of sound to emit in order (emit returns false to stop). Piper makes
+// them one chunk at a time from one process; when that cannot start or makes
+// nothing — an older Piper without --output_dir, say — and for every other
+// engine, the chunks are rendered as one line.
+func ttsLocalSpeakChunks(ctx context.Context, v ttsLocalVoice, chunks []string, gender string, emit func([]int16, int) bool) error {
+	if v.kind == "piper" {
+		n, err := ttsPiperStream(ctx, v, chunks, emit)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if n > 0 || err == nil {
+			ttsLocalState.mu.Lock()
+			ttsLocalState.fails = 0
+			ttsLocalState.mu.Unlock()
+			if err != nil {
+				logWarn("tts", "Piper stopped part-way: %v", err)
+			}
+			return nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			// It ran out of time: rendering the whole line would only make
+			// the user wait as long again.
+			ttsLocalState.mu.Lock()
+			ttsLocalState.fails++
+			ttsLocalState.mu.Unlock()
+			logWarn("tts", "Piper timed out: %v", err)
+			return err
+		}
+		logWarn("tts", "Piper chunk by chunk failed, rendering the whole line: %v", err)
+	}
+	samples, rate, err := ttsLocalSpeak(ctx, v, strings.Join(chunks, " "), gender)
+	if err != nil {
+		return err
+	}
+	emit(samples, rate)
+	return nil
 }

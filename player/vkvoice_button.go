@@ -22,11 +22,7 @@ package main
 // that hears nothing for a few seconds stops by itself, so a keyboard opened
 // to type does not keep the microphone on.
 
-import (
-	"strings"
-
-	"github.com/veandco/go-sdl2/sdl"
-)
+import "github.com/veandco/go-sdl2/sdl"
 
 const (
 	// vkVoiceAutoQuietMs is how long an automatic start listens for a first
@@ -130,7 +126,7 @@ func vkVoiceAutoTarget() bool {
 // here, so a keyboard opened offline or without a key just opens.
 func vkVoiceAutoWanted(config *Config) bool {
 	return vkVoiceAutoOn(config) && vkVoiceAutoTarget() && vkVoice.phase == vkVoiceIdle &&
-		vkVoiceAvailable() && !voiceOrbActive() && strings.TrimSpace(groqAPIKey()) != "" && IsOnline()
+		vkVoiceAvailable() && !voiceOrbActive() && sttCanListen()
 }
 
 // vkVoiceAutoTick runs with the keyboard's frame tick (vkVoiceTick): the

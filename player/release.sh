@@ -170,6 +170,14 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     else
         echo "WARNING: ${device} ships without Remote Play streaming (no helpers)" >&2
     fi
+    if [ "$device" = trimui-smart-pro ] && \
+        [ -f native/bin/juka-whisper/whisper-cli ] && [ -f native/bin/juka-whisper/ggml-tiny.bin ] && \
+        printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 native/bin/juka-whisper/ggml-tiny.bin | sha256sum -c - > /dev/null; then
+        mkdir -p "$TARGET_DIR/required/juka-whisper"
+        cp native/bin/juka-whisper/whisper-cli native/bin/juka-whisper/ggml-tiny.bin "$TARGET_DIR/required/juka-whisper/"
+        chmod 755 "$TARGET_DIR/required/juka-whisper/whisper-cli"
+        PKG_FILES+=(required/juka-whisper)
+    fi
     # The game-audio plugin (see SPATIAL_SO above).
     if [ -n "$SPATIAL_SO" ]; then
         mkdir -p "$TARGET_DIR/lib"

@@ -578,5 +578,7 @@ func stickCalSettingsRows() []setRow {
 	out = append(out, gameMenuSettingsRow())
 	// "Menu button: voice" (voiceorb.go), a handheld's row.
 	out = append(out, voiceOrbSettingsRows()...)
+	// "Hold Menu: screenshot" (menushot.go), a handheld's row.
+	out = append(out, menuShotSettingsRow())
 	return append(out, rows[1:]...)
 }

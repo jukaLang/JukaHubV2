@@ -1,9 +1,14 @@
 package main
 
-// The optional Smart Pro voice is downloaded only when the user asks for it.
-// Both upstream files are pinned by size and SHA-256. The archive is unpacked
-// into a private staging directory; only Piper's English speech dependencies
-// are copied, and the ready directory appears in one rename.
+// The Smart Pro's offline voice: downloaded once by itself after the startup
+// tools (ffmpeg) are in place, or from Settings → Voice & AI. Piper's archive
+// and the voice model are pinned by size and SHA-256. The voice's small
+// settings file (en_US-kristin-medium.onnx.json) is not: it is plain data
+// that only tells Piper the sample rate and phoneme table, so it is checked
+// for exactly that shape instead (a pinned digest of it broke the install on
+// 2026-11-12). The archive is unpacked into a private staging directory; only
+// Piper's English speech dependencies are copied, and the ready directory
+// appears in one rename.
 
 import (
 	"archive/tar"
@@ -11,16 +16,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,15 +44,33 @@ const (
 	ttsVoiceModelSHA            = "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4"
 	ttsVoiceModelSize     int64 = 63531379
 	ttsVoiceConfigURL           = "https://huggingface.co/rhasspy/piper-voices/resolve/2f358b6a560e3a913ebf509b2f3344f20b367f94/en/en_US/kristin/medium/en_US-kristin-medium.onnx.json"
-	ttsVoiceConfigSHA           = "5681426d4aead22195de70531eeeddb46493cfaffc5764b2ea3db73428b651c"
-	ttsVoiceConfigSize    int64 = 4968
+	ttsVoiceConfigMax     int64 = 256 << 10 // the real file is about 5 KB
 	ttsVoiceDownloadSpace int64 = 160 << 20 // cache, unpacked engine, model, and a margin
+	// ttsVoiceUnsupportedMark, beside the voice folder, records that Piper
+	// cannot load on this firmware, so startup stops downloading it again.
+	ttsVoiceUnsupportedMark = ".juka-piper-unsupported"
 )
 
 var ttsVoiceInstall struct {
 	sync.Mutex
 	running bool
 }
+
+// ttsVoiceAutoTried is the one startup download per run (a reconnect after an
+// offline start clears it, as it does for ffmpeg). ttsVoiceAutoHard is set
+// when an automatic try failed for a reason a reconnect does not change (no
+// space, a refused file), so waking from sleep does not show the same failure
+// card again; the Settings row still tries. ttsToolsInstalling is the startup
+// tools goroutines at work (netmon.go): the voice never starts in the gap
+// between ffmpeg's card and the next tool's.
+var (
+	ttsVoiceAutoTried  atomic.Bool
+	ttsVoiceAutoHard   atomic.Bool
+	ttsToolsInstalling atomic.Int32
+)
+
+// errTTSVoiceUnsupported is Piper failing the loader check on this firmware.
+var errTTSVoiceUnsupported = errors.New("Piper cannot run on this firmware")
 
 func ttsOfflineVoiceSupported() bool {
 	return runtime.GOOS == "linux" && runtime.GOARCH == "arm64" && DetectDevice().IsTrimui()
@@ -87,31 +114,141 @@ func ttsOfflineVoiceDetail(*Config) string {
 	return "Downloads Piper and Kristin (~90 MB); uses about 105 MB on the card"
 }
 
+// ttsVoiceInstalling reports whether the voice is downloading now.
+func ttsVoiceInstalling() bool {
+	ttsVoiceInstall.Lock()
+	defer ttsVoiceInstall.Unlock()
+	return ttsVoiceInstall.running
+}
+
+// ttsInstallOfflineVoice is the Settings row: install (or re-select) the voice
+// and make it Juka's voice.
 func ttsInstallOfflineVoice(*Config) {
-	if !ttsOfflineVoiceSupported() {
+	ttsStartVoiceInstall(false)
+}
+
+// ttsAutoInstallOfflineVoice is the startup download, called by the tools
+// check once it has nothing of its own left to fetch (ffmpeg goes first). Any
+// goroutine. It waits for another install card to finish, never toasts about
+// itself unless it succeeds, and does not change the chosen voice: with no
+// Groq key the offline voice is Juka's voice anyway (ttsVoiceOf), and with a
+// key it takes over when Groq's voice cannot speak.
+func ttsAutoInstallOfflineVoice() {
+	if !ttsOfflineVoiceSupported() || ttsVoiceAutoHard.Load() || !ttsAutoOnline() {
 		return
 	}
 	if _, ok := ttsManagedVoice(); ok {
+		return
+	}
+	if req := P().RequiredDir(); req != "" {
+		if _, err := os.Stat(filepath.Join(req, ttsVoiceUnsupportedMark)); err == nil {
+			return
+		}
+	}
+	if !ttsVoiceAutoTried.CompareAndSwap(false, true) {
+		return
+	}
+	go ttsAutoVoiceWait()
+}
+
+// ttsAutoOnline is IsOnline with an address, as the boot tools check asks: a
+// network monitor that has not probed yet reports online.
+func ttsAutoOnline() bool {
+	return IsOnline() && localIPv4() != ""
+}
+
+// ttsAutoVoiceWait waits until no install card and no startup tool download
+// has been busy for ten seconds (two looks five seconds apart), then starts
+// the voice on the main thread. It gives up for this run after an hour.
+func ttsAutoVoiceWait() {
+	quiet := 0
+	for i := 0; i < 720 && quiet < 2; i++ {
+		time.Sleep(5 * time.Second)
+		if installBarActive() || ttsToolsInstalling.Load() > 0 {
+			quiet = 0
+		} else {
+			quiet++
+		}
+	}
+	if quiet < 2 {
+		ttsVoiceAutoTried.Store(false)
+		return
+	}
+	tbxPost(func() {
+		if !ttsStartVoiceInstall(true) {
+			// Something got in first (a card, Wi-Fi gone): look again later.
+			if ttsAutoOnline() {
+				go ttsAutoVoiceWait()
+			} else {
+				ttsVoiceAutoTried.Store(false)
+			}
+		}
+	})
+}
+
+// ttsVoiceAutoRetry lets a reconnect after an offline start try again.
+func ttsVoiceAutoRetry() {
+	if !ttsVoiceAutoHard.Load() {
+		ttsVoiceAutoTried.Store(false)
+	}
+}
+
+// ttsVoiceSoftFailure reports whether an install error is the network's (a
+// reconnect may fix it) rather than the card's or the files'.
+func ttsVoiceSoftFailure(err error) bool {
+	var ue *url.Error
+	var ne net.Error
+	if errors.As(err, &ue) || errors.As(err, &ne) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "download ended at") || strings.Contains(msg, "HTTP 5") || strings.Contains(msg, "HTTP 429") ||
+		strings.Contains(msg, "connection") || strings.Contains(msg, "resumed at the wrong byte")
+}
+
+// ttsStartVoiceInstall starts the download. Main thread. It reports whether
+// the voice is installed, installing or now starting (false: Wi-Fi or another
+// card kept it from starting).
+func ttsStartVoiceInstall(auto bool) bool {
+	if !ttsOfflineVoiceSupported() {
+		return true
+	}
+	if _, ok := ttsManagedVoice(); ok {
+		if auto {
+			return true
+		}
 		ttsLocalRecheck()
 		ttsStore(appConfig, ttsVoiceKey, ttsVoiceDevice)
 		setToast("Offline voice selected — press Hear Juka to try it")
-		return
+		return true
 	}
 	if !IsOnline() {
-		setToast("Connect to Wi-Fi to download the offline voice")
-		return
+		if !auto {
+			setToast("Connect to Wi-Fi to download the offline voice")
+		}
+		return false
 	}
-	if installBarActive() {
-		setToast("Finish the current download, then try the offline voice")
-		return
+	if installBarActive() || auto && ttsToolsInstalling.Load() > 0 {
+		if !auto {
+			setToast("Finish the current download, then try the offline voice")
+		}
+		return false
 	}
 	ttsVoiceInstall.Lock()
 	if ttsVoiceInstall.running {
 		ttsVoiceInstall.Unlock()
-		return
+		return true
 	}
 	ttsVoiceInstall.running = true
 	ttsVoiceInstall.Unlock()
+	if !auto {
+		// The user asked: a firmware that refused Piper before is checked
+		// again, and so is a failure that stopped the startup download.
+		ttsVoiceAutoHard.Store(false)
+		if req := P().RequiredDir(); req != "" {
+			_ = os.Remove(filepath.Join(req, ttsVoiceUnsupportedMark))
+		}
+	}
 	run, ctx := installBarBeginRun("offline voice")
 	go func() {
 		defer func() {
@@ -121,11 +258,29 @@ func ttsInstallOfflineVoice(*Config) {
 		}()
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
-		if err := ttsRunVoiceInstall(ctx, ttsManagedPath(), ttsInstallProgress(run)); err != nil {
-			if errors.Is(err, context.Canceled) {
+		target := ttsManagedPath()
+		if err := ttsRunVoiceInstall(ctx, target, ttsInstallProgress(run)); err != nil {
+			switch {
+			case errors.Is(err, context.Canceled):
 				installBarAbortRun(run)
-			} else {
-				logWarn("tts", "offline voice install: %v", err)
+				if auto {
+					// Another install took the card (it cancels the run it
+					// replaces): wait for it and go on. A cancel the user
+					// pressed leaves the next try to a reconnect or Settings.
+					if installBarActive() {
+						go ttsAutoVoiceWait()
+					} else {
+						ttsVoiceAutoTried.Store(false)
+					}
+				}
+			default:
+				logWarn("tts", "offline voice install (auto=%v): %v", auto, err)
+				if errors.Is(err, errTTSVoiceUnsupported) {
+					_ = os.WriteFile(filepath.Join(filepath.Dir(target), ttsVoiceUnsupportedMark), []byte(err.Error()+"\n"), 0o644)
+				}
+				if auto && !ttsVoiceSoftFailure(err) {
+					ttsVoiceAutoHard.Store(true)
+				}
 				installBarFailRun(run, installCardDetail(err.Error()))
 			}
 			return
@@ -133,12 +288,17 @@ func ttsInstallOfflineVoice(*Config) {
 		ttsLocalRecheck()
 		installBarDoneRun(run)
 		tbxPost(func() {
+			if auto {
+				setToast("Offline voice ready — Juka can talk without Wi-Fi")
+				return
+			}
 			if appConfig != nil {
 				ttsStore(appConfig, ttsVoiceKey, ttsVoiceDevice)
 			}
 			setToast("Offline voice ready — press Hear Juka to try it")
 		})
 	}()
+	return true
 }
 
 // An old install must not update a newer install card's phase or byte count.
@@ -182,7 +342,7 @@ func ttsRunVoiceInstall(ctx context.Context, target string, progress func(string
 		return fmt.Errorf("Piper package: %w", err)
 	}
 	if problem := nativeLoadProblemWith(filepath.Join(engine, "piper"), []string{engine}); problem != "" {
-		return fmt.Errorf("Piper cannot run on this firmware: %s", problem)
+		return fmt.Errorf("%w: %s", errTTSVoiceUnsupported, problem)
 	}
 	model := filepath.Join(cache, ttsVoiceModelName)
 	progress(installPhaseDownload+" voice", 0, ttsVoiceModelSize)
@@ -192,7 +352,7 @@ func ttsRunVoiceInstall(ctx context.Context, target string, progress func(string
 		return fmt.Errorf("voice model download: %w", err)
 	}
 	config := filepath.Join(cache, ttsVoiceModelName+".json")
-	if err := ttsFetchPinned(ctx, client, ttsVoiceConfigURL, config, ttsVoiceConfigSHA, ttsVoiceConfigSize, nil); err != nil {
+	if err := ttsFetchVoiceConfig(ctx, client, ttsVoiceConfigURL, config); err != nil {
 		return fmt.Errorf("voice settings download: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -392,6 +552,72 @@ func ttsFileMatches(file string, size int64, sha string) bool {
 	return err == nil && strings.EqualFold(got, sha)
 }
 
+// ttsFetchVoiceConfig downloads the voice's settings file and keeps it only
+// when it has the shape Piper reads (ttsCheckVoiceConfig). A good copy from an
+// earlier try is reused.
+func ttsFetchVoiceConfig(ctx context.Context, client *http.Client, raw, dest string) error {
+	if data, err := os.ReadFile(dest); err == nil && ttsCheckVoiceConfig(data) == nil {
+		return nil
+	}
+	_ = os.Remove(dest)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "JukaHub-Voice/"+versionString(nil))
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, ttsVoiceConfigMax+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > ttsVoiceConfigMax {
+		return errors.New("the voice's settings file is too large")
+	}
+	if err := ttsCheckVoiceConfig(data); err != nil {
+		return err
+	}
+	part := dest + ".part"
+	if err := os.WriteFile(part, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(part, dest)
+}
+
+// ttsCheckVoiceConfig accepts a Piper voice settings file for an English
+// voice: a sample rate, an espeak voice, a symbol count and a phoneme table.
+// Pure.
+func ttsCheckVoiceConfig(data []byte) error {
+	var cfg struct {
+		Audio struct {
+			SampleRate int `json:"sample_rate"`
+		} `json:"audio"`
+		Espeak struct {
+			Voice string `json:"voice"`
+		} `json:"espeak"`
+		NumSymbols   int                        `json:"num_symbols"`
+		PhonemeIDMap map[string]json.RawMessage `json:"phoneme_id_map"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return errors.New("the voice's settings file is not valid JSON")
+	}
+	switch {
+	case cfg.Audio.SampleRate < 8000 || cfg.Audio.SampleRate > 48000:
+		return errors.New("the voice's settings file has no usable sample rate")
+	case !strings.HasPrefix(strings.ToLower(cfg.Espeak.Voice), "en"):
+		return errors.New("the voice's settings file is not for an English voice")
+	case cfg.NumSymbols <= 0 || len(cfg.PhonemeIDMap) == 0:
+		return errors.New("the voice's settings file has no phoneme table")
+	}
+	return nil
+}
+
 // Piper's tarball contains links and many helpers we do not need. Materialize
 // only regular files under espeak-ng-data and four exact ARM64 binaries, with
 // the soname filenames that the dynamic loader expects on an exFAT SD card.
@@ -476,7 +702,10 @@ func ttsExtractPiper(ctx context.Context, archive, dest string) error {
 			return errors.New("Piper package has an incomplete file")
 		}
 	}
-	for _, name := range []string{"piper", "libespeak-ng.so.1", "libpiper_phonemize.so.1", "libonnxruntime.so.1.14.1", "espeak-ng-data/en_dict"} {
+	// espeak-ng needs its phoneme tables as well as the English dictionary; a
+	// package whose tables were links would fail here, not on the first answer.
+	for _, name := range []string{"piper", "libespeak-ng.so.1", "libpiper_phonemize.so.1", "libonnxruntime.so.1.14.1",
+		"espeak-ng-data/en_dict", "espeak-ng-data/phontab", "espeak-ng-data/phondata", "espeak-ng-data/phonindex", "espeak-ng-data/intonations"} {
 		info, err := os.Stat(filepath.Join(dest, name))
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 			return fmt.Errorf("Piper package is missing %s", name)

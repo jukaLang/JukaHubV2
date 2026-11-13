@@ -13,6 +13,56 @@ For anything older, the git log and the
 
 ### Added
 
+- **Stick lights that react to your voice.** Settings → Stick lights → **Lights
+  follow your voice** turns the stick lights on and makes them follow the
+  microphone: talk, sing or clap and the rings glow with the loudness, coloured
+  by pitch. **Mic sensitivity** (Low / Normal / High) sets how loud a sound has
+  to be; a noise floor that follows the room keeps a fan or hum dark. It is
+  also LED mode **Microphone** in Quick Settings and the Light style panel.
+  The microphone is only open while JukaHub is on screen, a voice feature takes
+  it over while it listens, and nothing is recorded. The TrimUI stick rings
+  are now driven at all — they sit under `/sys/class/led_anim`, which the LED
+  sync never looked at — and get the firmware's own colour back when the
+  lights stop or a game starts. (`ledmic.go`, `ledanim.go`; `ledsync.go`,
+  `voicemic.go` hand-over, Settings rows, i18n.)
+
+- **Stick lights have their own page in Settings.** Settings → **Stick
+  lights** (below Controls) sets the LEDs around the analog sticks without the
+  overlay: the on/off switch, what the lights show (**Colour**, Music,
+  Microphone, Battery, Charging, Temperature), a **Colour** row of 15 swatches
+  (the theme's accent first; A opens the full list), **Effect** (Solid / Pulse /
+  Rainbow), **Brightness** from Off to 100% and a **Colour wheel** row for any
+  hue in between. Picking a colour, effect or mode turns the lights on, so the
+  change shows at once instead of being dropped when the old style overlay
+  closed; switching them off hands the sticks back to the firmware's colour,
+  while Brightness Off keeps them dark. A device without writable lights says
+  why. The rows moved out of Sound & haptics. (`ledsettings.go`, i18n.)
+
+- **Hold Menu for a screenshot, anywhere — in a game too.** On the handheld a
+  tap of Menu still opens the voice orb; hold it for 0.7 s (a light tick) and
+  let go, and the screen is saved (a buzz when the file is written). It works on every JukaHub screen —
+  including panels where Menu means Back, where Back now comes on the release
+  so a hold can be a screenshot — and inside games and emulators JukaHub
+  launched: the pad watcher reads the framebuffer the moment Menu goes down,
+  before RetroArch or PPSSPP draws its own menu, and keeps the picture if Menu
+  was held alone (a hotkey, a trigger or Menu + volume brightness cancels it).
+  Game shots are counted in the "While you were playing" summary. With voice
+  off, Menu no longer stands in for Select in chords such as Menu + L1. Shots are PNGs now (not BMPs) in
+  `/mnt/SDCARD/Screenshots` on a TrimUI, `Pictures\JukaHub` on a PC. Settings
+  → Controls → **Hold Menu: screenshot** turns it off, which brings back
+  hold-to-talk. (`menushot.go`; `voiceorb.go` Menu reader, `screenshot.go`,
+  `gameassist_linux.go` watcher, Controls row and controller card.)
+
+- **Notifications during videos (Settings → Media), off by default.** A
+  full-screen video that is playing is no longer covered by toasts nobody asked
+  for (a finished download, an update, a sent bug report): they still go into
+  the bell, and when the video pauses, stops or leaves full screen one line says
+  how many came in. Feedback for what you just pressed ("Subtitles on",
+  "Quality: 720p") and errors still show. Turn the switch on to see alerts over
+  the video as before, plus new chat messages as "Sender: message" toasts.
+  (`videonotif.go`; hooks in `core.go` renderToast, `setmodel.go`,
+  `adaptive.go` LastInput; i18n for 6 languages.)
+
 - **Videos that have to be downloaded first can download in the background.**
   When a stream will not play and JukaHub downloads the file instead, the
   loading card now offers **Y Download in background** next to **B Cancel**
@@ -378,6 +428,23 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The Smart Pro's offline voice downloads by itself and is the default
+  without a Groq key.** Once the startup tools check has nothing left to fetch
+  (ffmpeg first), JukaHub downloads Piper + Kristin once per run when it is
+  missing, once no install card or tool download has been busy for 10 s (an
+  install that takes the card over makes it wait and continue; a network
+  failure retries on the next reconnect, other failures only from Settings).
+  With no Groq key and no voice chosen,
+  Juka speaks in the offline voice; a one-time toast per run says a Groq key
+  (Settings → General) brings Groq's voices. A firmware that cannot load Piper
+  is remembered (`required/.juka-piper-unsupported`) so startup stops trying;
+  pressing **Download offline voice** checks again. Piper now renders one WAV
+  per chunk from a single process (`--output_dir`), so long answers start
+  after the first sentence; an engine without that falls back to rendering the
+  whole line. (`tts_install.go` ttsAutoInstallOfflineVoice, `netmon.go`
+  refreshToolHealth, `tts_settings.go` ttsVoiceImplied, `tts_api.go`,
+  `tts_play.go`, `tts_local*.go`.)
+
 - **Box art, emulator updates and PPSSPP on start.** A card's first start now
   looks for box art as soon as the device is online (about twenty seconds in)
   instead of waiting a minute and a half and then for the user to put the
@@ -521,6 +588,29 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Offline voice: "voice settings download: checksum did not match".** The
+  pinned digest for Kristin's small settings file (`en_US-kristin-medium.onnx.json`)
+  was wrong, so every install failed after the 63 MB model had downloaded. That
+  file is now checked for the shape Piper reads (sample rate, English espeak
+  voice, phoneme table, at most 256 KB) instead of a digest; Piper's archive and
+  the model stay pinned by size and SHA-256. A retry reuses the already verified
+  archive and model from `required/.juka-voice-download/`. The unpacked engine
+  must now also contain espeak-ng's phoneme tables, and Piper runs with its own
+  folder on `LD_LIBRARY_PATH`. (`tts_install.go`, `tts_local_other.go`.)
+
+- **Video and sound stay together.** Some videos — downloads especially —
+  played with the sound ahead of or behind the picture, sometimes drifting
+  further as they went. The player's picture and sound decoders were never tied
+  to each other: the picture was timed by a frame rate ffmpeg did not actually
+  use (off on variable-rate files), streams that start at slightly different
+  times kept that offset, every hiccup over a quarter second left the picture
+  behind for good, and a seek played up to a second of the old position's
+  sound first. Now the picture follows the sound: the decoder is pinned to the
+  rate the frames are timed by, both decoders start exactly at the seek point
+  (silence or a held first frame fills any gap), the first frame waits for the
+  sound, a late picture catches up, and a seek clears the old sound. A
+  Bluetooth headset's extra delay is allowed for. Without sound the picture
+  runs on its own clock as before (`player/avsync.go`).
 - **Background music that started by itself can be found and stopped.** With
   Background music set to **My music**, the menus played Calm until ffmpeg was
   installed; the first **Extract audio** (or video) installed it, and from then

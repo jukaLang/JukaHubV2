@@ -129,6 +129,16 @@ func (fc *FrameRateController) NotifyInput() {
 	fc.mu.Unlock()
 }
 
+// LastInput is the SDL tick of the last NotifyInput (0 on a nil controller).
+func (fc *FrameRateController) LastInput() uint64 {
+	if fc == nil {
+		return 0
+	}
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	return fc.lastInputTime
+}
+
 // SetAnimationActive selects the fastest cadence while transitions or
 // animations are running.
 func (fc *FrameRateController) SetAnimationActive(active bool) {

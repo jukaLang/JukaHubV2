@@ -7,18 +7,17 @@ package main
 // through the shared microphone (voicemic.go: SDL's default capture device,
 // then the kernel's capture PCMs and SDL's own list): 16 kHz mono 16-bit, at
 // most vkVoiceMaxSeconds, with a live level meter in the strip. A second press (A, Enter, a tap on the bar) stops it and
-// sends the clip, as an in-memory WAV, to Groq's Whisper through the
-// OpenAI-compatible transcription endpoint, with the Groq API key from
-// Settings → General. The words land at the caret.
+// sends the clip to Groq's Whisper or the Smart Pro's bundled local recognizer.
+// In Chat, provisional words appear while recording;
+// the full-clip result replaces them at the caret when recording stops.
 //
-// The states say what is wrong instead of failing silently: no key ("Add your
-// Groq key in Settings", with a jump there), offline ("Voice typing needs
-// internet"), no microphone (the chip dims and says so: neither SDL nor the
+// The states say what is wrong instead of failing silently: no recognizer,
+// no microphone (the chip dims and says so: neither SDL nor the
 // kernel lists a capture device — the Smart Pro has a built-in mono mic, which
 // voicemic.go reaches through ALSA when SDL's default device cannot record),
 // silence (Whisper invents text for
 // silence, so a quiet clip is never
-// sent). Nothing touches the disk, and neither the key nor the audio is ever
+// sent). Local clips use process pipes, and neither the key nor the audio is ever
 // logged.
 
 import (
@@ -74,6 +73,12 @@ const (
 	vkVoiceMessageMs = 4500
 	vkVoiceTimeout   = 45 * time.Second
 	vkVoiceMeterBars = 24
+	// Whisper accepts clips, not a live audio stream. Chat asks for a short
+	// interim transcript as recording continues and replaces it with the
+	// whole-clip transcript when recording stops.
+	vkVoicePreviewFirstMs = 1800
+	vkVoicePreviewGapMs   = 2200
+	vkVoicePreviewTimeout = 12 * time.Second
 )
 
 // vkVoiceEndpoint is Groq's transcription endpoint; a variable so tests can
@@ -83,21 +88,26 @@ var vkVoiceEndpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
 var vkVoiceHTTP = &http.Client{Timeout: vkVoiceTimeout}
 
 var vkVoice struct {
-	phase    vkVoicePhase
-	mic      *micStream
-	buf      []byte
-	started  uint64
-	level    float64
-	peak     float64
-	meter    [vkVoiceMeterBars]float64
-	meterAt  uint64
-	msg      string
-	msgUntil uint64
-	action   vkVoiceAction
-	cancel   context.CancelFunc
-	gen      int
-	secs     int
-	clock    string
+	phase           vkVoicePhase
+	mic             *micStream
+	buf             []byte
+	started         uint64
+	level           float64
+	peak            float64
+	meter           [vkVoiceMeterBars]float64
+	meterAt         uint64
+	msg             string
+	msgUntil        uint64
+	action          vkVoiceAction
+	cancel          context.CancelFunc
+	gen             int
+	secs            int
+	clock           string
+	previewText     string
+	previewAt       uint64
+	previewBusy     bool
+	previewDisabled bool
+	previewCancel   context.CancelFunc
 }
 
 // vkVoiceResult carries the transcription back from its goroutine; the frame
@@ -108,6 +118,19 @@ var vkVoiceResult struct {
 	gen   int
 	text  string
 	err   error
+}
+
+// Interim transcripts have their own mailbox: a slow preview must never
+// replace the final whole-clip answer or revive text after cancellation.
+type vkVoicePreviewReply struct {
+	gen  int
+	text string
+	err  error
+}
+
+var vkVoicePreviewResult struct {
+	mu      sync.Mutex
+	replies []vkVoicePreviewReply
 }
 
 // vkMic is what is known about a microphone: 0 unknown, 1 present, 2 absent.
@@ -182,11 +205,8 @@ func vkVoiceToggle(config *Config) {
 	case vkMic.Load() == vkMicAbsent:
 		vkVoiceSay("No microphone — plug one in to use voice typing", vkVoiceNoAction)
 		return
-	case strings.TrimSpace(groqAPIKey()) == "":
-		vkVoiceSay("Add your Groq API key in Settings to use voice typing", vkVoiceOpenKey)
-		return
-	case !IsOnline() && !netReconnecting(): // just after a wake the clip waits for the Wi-Fi (wake_resume.go)
-		vkVoiceSay("Voice typing needs internet", vkVoiceNoAction)
+	case !sttCanListen():
+		vkVoiceSay("Voice typing needs a Groq key and Wi-Fi, or offline speech installed", vkVoiceOpenKey)
 		return
 	}
 	// The shared microphone (voicemic.go) tries SDL's default device, then
@@ -210,6 +230,8 @@ func vkVoiceToggle(config *Config) {
 	vkVoice.buf = vkVoice.buf[:0]
 	vkVoice.mic = mic
 	vkVoice.phase = vkVoiceRecording
+	vkVoice.gen++
+	vkVoicePreviewReset()
 	vkVoice.started = sdl.GetTicks64()
 	vkVoice.level, vkVoice.peak = 0, 0
 	vkVoice.meter = [vkVoiceMeterBars]float64{}
@@ -261,21 +283,20 @@ func vkVoiceStop(config *Config) {
 	}
 	vkVoiceDrain()
 	vkVoiceCloseDevice()
+	vkVoicePreviewCancelRequest()
 	ms := len(vkVoice.buf) * 1000 / (vkVoiceRate * 2)
 	switch {
 	case ms < vkVoiceMinMs:
+		vkVoicePreviewReset()
 		vkVoice.phase = vkVoiceIdle
 		vkPlay(PlayBackSound)
 		return
 	case vkVoice.peak < vkVoiceSilence:
+		vkVoicePreviewReset()
 		vkVoiceSay("Didn't hear anything — is the microphone on?", vkVoiceNoAction)
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
-	if key == "" {
-		vkVoiceSay("Add your Groq API key in Settings to use voice typing", vkVoiceOpenKey)
-		return
-	}
 	lang := ""
 	if vkVoiceFollowsLayout() {
 		lang = vkCurrentLayout().Lang
@@ -283,14 +304,13 @@ func vkVoiceStop(config *Config) {
 	wav := vkEncodeWAV(vkVoice.buf, vkVoiceRate)
 	vkVoice.gen++
 	gen := vkVoice.gen
-	ctx, cancel := context.WithTimeout(context.Background(), vkVoiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), sttTimeout)
 	vkVoice.cancel = cancel
 	vkVoice.phase = vkVoiceSending
 	vkPlay(PlayActivateSound)
 	go func() {
 		defer cancel()
-		netWaitOnline(ctx, netWakeWaitMax) // after a wake: up to 15 s for the Wi-Fi, not a failure
-		text, err := vkTranscribe(ctx, key, wav, lang)
+		text, err := sttVoiceTypingTranscribe(ctx, key, wav, lang)
 		vkVoiceResult.mu.Lock()
 		vkVoiceResult.ready, vkVoiceResult.gen, vkVoiceResult.text, vkVoiceResult.err = true, gen, text, err
 		vkVoiceResult.mu.Unlock()
@@ -301,6 +321,7 @@ func vkVoiceStop(config *Config) {
 // keyboard calls it, so the mic never stays open behind a closed keyboard.
 func vkVoiceCancel() {
 	vkVoiceCloseDevice()
+	vkVoicePreviewReset()
 	if vkVoice.cancel != nil {
 		vkVoice.cancel()
 		vkVoice.cancel = nil
@@ -311,6 +332,114 @@ func vkVoiceCancel() {
 	vkVoice.buf = vkVoice.buf[:0]
 }
 
+// vkVoicePreviewReset removes only interim text. The message draft is never
+// changed until the final whole-clip transcription succeeds.
+func vkVoicePreviewReset() {
+	vkVoicePreviewCancelRequest()
+	vkVoice.previewText = ""
+	vkVoice.previewAt = 0
+	vkVoice.previewDisabled = false
+}
+
+func vkVoicePreviewCancelRequest() {
+	if vkVoice.previewCancel != nil {
+		vkVoice.previewCancel()
+		vkVoice.previewCancel = nil
+	}
+	vkVoice.previewBusy = false
+}
+
+// vkVoicePreviewTick asks for a partial transcript while Chat is recording.
+// Only one request runs at a time. A later request includes the whole clip so
+// Whisper can revise earlier words instead of joining guesses at cut points.
+func vkVoicePreviewTick() {
+	if vkVoice.phase != vkVoiceRecording || vkTarget != vkTargetChat || !virtualKeyboardActive {
+		return
+	}
+	vkVoicePreviewResult.mu.Lock()
+	replies := vkVoicePreviewResult.replies
+	vkVoicePreviewResult.replies = nil
+	vkVoicePreviewResult.mu.Unlock()
+	for _, reply := range replies {
+		if reply.gen != vkVoice.gen {
+			continue
+		}
+		vkVoice.previewBusy = false
+		vkVoice.previewCancel = nil
+		if reply.err == nil {
+			if partial := strings.TrimSpace(reply.text); partial != "" {
+				vkVoice.previewText = partial
+			}
+			continue
+		}
+		// The full-clip request still runs when recording stops. One failed
+		// preview is enough; keep the partial already shown and avoid a train
+		// of failing requests while the person is still speaking.
+		vkVoice.previewDisabled = true
+	}
+	if vkVoice.previewBusy || vkVoice.previewDisabled || vkVoice.peak < vkVoiceSilence {
+		return
+	}
+	now := sdl.GetTicks64()
+	if now-vkVoice.started < vkVoicePreviewFirstMs ||
+		(vkVoice.previewAt != 0 && now-vkVoice.previewAt < vkVoicePreviewGapMs) {
+		return
+	}
+	// Ignore the start chime and a silent microphone. A quiet clip should not
+	// be sent to Whisper, which can invent words for silence.
+	settleBytes := vkVoiceRate * 2 * vkVoiceAutoSettleMs / 1000
+	if len(vkVoice.buf) <= settleBytes || vkPCMLevel(vkVoice.buf[settleBytes:]) < vkVoiceSilence/2 {
+		return
+	}
+	key := strings.TrimSpace(groqAPIKey())
+	localReady := sttLocalReady()
+	localPreview := (key == "" || !IsOnline()) && localReady
+	if (key == "" || !IsOnline()) && !localReady {
+		return
+	}
+	if localPreview && vkVoice.previewAt != 0 && now-vkVoice.previewAt < 5000 {
+		return
+	}
+	lang := ""
+	if vkVoiceFollowsLayout() {
+		lang = vkCurrentLayout().Lang
+	}
+	pcm := append([]byte(nil), vkVoice.buf...)
+	gen := vkVoice.gen
+	previewTimeout := vkVoicePreviewTimeout
+	if localReady {
+		previewTimeout = 35 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), previewTimeout)
+	vkVoice.previewCancel = cancel
+	vkVoice.previewBusy = true
+	vkVoice.previewAt = now
+	go func() {
+		defer cancel()
+		var text string
+		var err error
+		wav := vkEncodeWAV(pcm, vkVoiceRate)
+		if localPreview {
+			text, err = sttLocalTranscribe(ctx, wav, lang, "")
+		} else if localReady {
+			cloudCtx, cloudCancel := context.WithTimeout(ctx, 8*time.Second)
+			text, err = vkTranscribe(cloudCtx, key, wav, lang)
+			cloudCancel()
+			if err != nil && ctx.Err() == nil {
+				text, err = sttLocalTranscribe(ctx, wav, lang, "")
+			}
+		} else {
+			text, err = vkTranscribe(ctx, key, wav, lang)
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
+		vkVoicePreviewResult.mu.Lock()
+		vkVoicePreviewResult.replies = append(vkVoicePreviewResult.replies, vkVoicePreviewReply{gen: gen, text: text, err: err})
+		vkVoicePreviewResult.mu.Unlock()
+	}()
+}
+
 // vkVoiceTick runs once per frame while the keyboard is open: it records,
 // stops at the time limit and applies a finished transcription. A message
 // field may start listening by itself first (vkvoice_button.go).
@@ -319,14 +448,16 @@ func vkVoiceTick(config *Config) {
 	switch vkVoice.phase {
 	case vkVoiceRecording:
 		vkVoiceDrain()
+		if len(vkVoice.buf) >= cap(vkVoice.buf) {
+			vkVoiceStop(config)
+			return
+		}
+		vkVoicePreviewTick()
 		now := sdl.GetTicks64()
 		if now-vkVoice.meterAt >= 50 {
 			vkVoice.meterAt = now
 			copy(vkVoice.meter[:], vkVoice.meter[1:])
 			vkVoice.meter[len(vkVoice.meter)-1] = vkVoice.level
-		}
-		if len(vkVoice.buf) >= cap(vkVoice.buf) {
-			vkVoiceStop(config)
 		}
 	case vkVoiceSending:
 		vkVoiceResult.mu.Lock()
@@ -340,6 +471,7 @@ func vkVoiceTick(config *Config) {
 		}
 		vkVoice.cancel = nil
 		vkVoice.phase = vkVoiceIdle
+		vkVoicePreviewReset()
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -353,25 +485,72 @@ func vkVoiceTick(config *Config) {
 	}
 }
 
-// vkVoiceInsert puts a transcript at the caret with a space before it when it
-// follows a word, and without Whisper's closing period in a search field.
-func vkVoiceInsert(text string, config *Config) {
+// vkVoicePrepareText makes a transcript fit the field at its caret. Interim
+// text and the final insert use the same spacing so the preview does not jump.
+func vkVoicePrepareText(current string, caret int, text string, sentence bool) string {
 	text = strings.TrimSpace(text)
-	if text == "" {
-		vkVoiceSay("Didn't catch that — try again", vkVoiceNoAction)
-		return
-	}
-	if !vkSentenceTarget() {
+	if !sentence {
 		text = strings.TrimRight(text, ".。")
 	}
-	current := vkCurrentText()
-	before := current[:vkRuneOffset(current, vkCaretIndex(current))]
+	if text == "" {
+		return ""
+	}
+	before := current[:vkRuneOffset(current, caret)]
 	if r, _ := utf8.DecodeLastRuneInString(before); before != "" && !unicode.IsSpace(r) {
 		if first, _ := utf8.DecodeRuneInString(text); !unicode.IsPunct(first) {
 			text = " " + text
 		}
 	}
-	vkTextSelected = false
+	return text
+}
+
+// vkVoicePreviewDraft returns a provisional Chat draft and its display caret.
+// It never writes the real draft: cancel and transcription errors leave the
+// user's original text intact.
+func vkVoicePreviewDraft(current, partial string, caret int, selected bool) (string, int) {
+	if selected {
+		current, caret = "", 0
+	}
+	if caret < 0 {
+		caret = 0
+	}
+	n := utf8.RuneCountInString(current)
+	if caret > n {
+		caret = n
+	}
+	insert := vkVoicePrepareText(current, caret, partial, true)
+	insert = vkTruncateUTF8(insert, vkMaxTextLen-len(current))
+	if insert == "" {
+		return current, caret
+	}
+	off := vkRuneOffset(current, caret)
+	return current[:off] + insert + current[off:], caret + utf8.RuneCountInString(insert)
+}
+
+// vkVoiceDisplayText is the on-screen Chat field while a preview is available.
+// The committed draft remains in vkCurrentText until the full clip succeeds.
+func vkVoiceDisplayText() (string, int, bool) {
+	if vkTarget != vkTargetChat || (vkVoice.phase != vkVoiceRecording && vkVoice.phase != vkVoiceSending) || vkVoice.previewText == "" {
+		return "", 0, false
+	}
+	current := vkCurrentText()
+	text, caret := vkVoicePreviewDraft(current, vkVoice.previewText, vkCaretIndex(current), vkTextSelected)
+	return text, caret, true
+}
+
+// vkVoiceInsert puts the final transcript at the caret, with a space when it
+// follows a word and without Whisper's closing period in a search field.
+func vkVoiceInsert(text string, config *Config) {
+	current := vkCurrentText()
+	caret := vkCaretIndex(current)
+	if vkTextSelected {
+		current, caret = "", 0
+	}
+	text = vkVoicePrepareText(current, caret, text, vkSentenceTarget())
+	if text == "" {
+		vkVoiceSay("Didn't catch that — try again", vkVoiceNoAction)
+		return
+	}
 	vkInsertText(text, config)
 	vkPlay(PlaySuccessSound)
 }
@@ -380,6 +559,12 @@ func vkVoiceInsert(text string, config *Config) {
 // the jump to fix it. Network failures read as "needs internet" rather than a
 // dial error.
 func vkVoiceErrorText(err error) (string, vkVoiceAction) {
+	if errors.Is(err, errSTTMemory) {
+		return "Close a game to free memory for offline speech", vkVoiceNoAction
+	}
+	if errors.Is(err, errSTTUnavailable) {
+		return "Offline speech is missing — install the latest TrimUI package", vkVoiceNoAction
+	}
 	var gerr *groqError
 	if errors.As(err, &gerr) {
 		if gerr.status == http.StatusUnauthorized || gerr.status == http.StatusForbidden {

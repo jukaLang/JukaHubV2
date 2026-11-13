@@ -4,8 +4,7 @@ package main
 // on-screen keyboard (voiceai_settings.go): the switch that starts it as a
 // message field's keyboard opens (vkvoice_button.go), which button it is on,
 // and the way to the keyboard's own voice settings (the speech language, the
-// microphone). Voice typing itself has no on/off switch: the keyboard offers
-// it wherever a Groq key is set.
+// microphone). Voice typing itself has no on/off switch.
 
 // vkVoiceAutoKey is Custom's key for "Start voice typing when the keyboard
 // opens".
@@ -25,8 +24,8 @@ func vkVoiceSettingsRows() []setRow {
 		{
 			ID: vkVoiceAutoKey, Label: "Start voice typing when the keyboard opens", Kind: setKindToggle,
 			Detail: func(*Config) string {
-				if !chatHasGroqKey() {
-					return "Needs a Groq API key (Settings → General)"
+				if !sttCanListen() {
+					return "Needs a Groq key and Wi-Fi, or offline speech on the card"
 				}
 				return "Chat messages start listening at once; " + vkVoiceButtonName() + " stops and sends"
 			},

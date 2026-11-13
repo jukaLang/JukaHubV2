@@ -107,6 +107,10 @@ func TestTTSExtractPiperKeepsOnlyRequiredFiles(t *testing.T) {
 		"piper/libpiper_phonemize.so.1.2.0": []byte("library"),
 		"piper/libonnxruntime.so.1.14.1":    []byte("library"),
 		"piper/espeak-ng-data/en_dict":      []byte("dictionary"),
+		"piper/espeak-ng-data/phontab":      []byte("table"),
+		"piper/espeak-ng-data/phondata":     []byte("table"),
+		"piper/espeak-ng-data/phonindex":    []byte("table"),
+		"piper/espeak-ng-data/intonations":  []byte("table"),
 		"piper/unrelated":                   []byte("no"),
 	})
 	dest := t.TempDir()
@@ -125,6 +129,44 @@ func TestTTSExtractPiperRejectsPathTraversal(t *testing.T) {
 	archive := makeTTSPiperArchive(t, map[string][]byte{"piper/espeak-ng-data/../../escape": []byte("x")})
 	if err := ttsExtractPiper(context.Background(), archive, t.TempDir()); err == nil {
 		t.Fatal("archive traversal was accepted")
+	}
+}
+
+// The voice's settings file is checked by shape, not a pinned digest (a wrong
+// digest broke every install): a real-looking file is kept, anything else is
+// refused and leaves nothing behind.
+func TestTTSFetchVoiceConfigChecksShape(t *testing.T) {
+	good := `{"audio":{"sample_rate":22050,"quality":"medium"},"espeak":{"voice":"en-us"},` +
+		`"num_symbols":256,"phoneme_id_map":{"_":[0],"^":[1]}}`
+	body := good
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+	dest := filepath.Join(t.TempDir(), "voice.onnx.json")
+	if err := ttsFetchVoiceConfig(context.Background(), server.Client(), server.URL, dest); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{`<html>rate limited</html>`, `{"audio":{"sample_rate":22050},"espeak":{"voice":"de"},"num_symbols":2,"phoneme_id_map":{"a":[1]}}`, `{"espeak":{"voice":"en-us"}}`} {
+		if err := ttsCheckVoiceConfig([]byte(bad)); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	body = `{}`
+	other := filepath.Join(t.TempDir(), "voice.onnx.json")
+	if err := ttsFetchVoiceConfig(context.Background(), server.Client(), server.URL, other); err == nil {
+		t.Fatal("an empty settings file was accepted")
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Fatalf("a refused settings file was kept: %v", err)
+	}
+	// The good copy from the first try is reused without asking again.
+	if err := ttsFetchVoiceConfig(context.Background(), server.Client(), server.URL, dest); err != nil {
+		t.Fatal(err)
+	}
+	wav := []byte("RIFF\x00\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x22\x56\x00\x00\x44\xac\x00\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x01\x00\x02\x00")
+	if !ttsWAVComplete(wav) || ttsWAVComplete(wav[:len(wav)-1]) {
+		t.Fatal("ttsWAVComplete misjudged the data chunk")
 	}
 }
 

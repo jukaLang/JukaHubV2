@@ -73,6 +73,10 @@ func systemLegendRows() []FooterHint {
 	if menuIsVoice {
 		rows = append(rows, voiceRow)
 	}
+	// Hold Menu: a screenshot, in JukaHub and in a game (menushot.go).
+	if row, ok := menuShotLegendRow(); ok {
+		rows = append(rows, row)
+	}
 	// Hold Select, press R1: the next control profile (inmap_runtime.go).
 	if inmapHotkeyEnabled() {
 		rows = append(rows, FooterHint{Button: "Select + R1", Label: "Next control profile"})

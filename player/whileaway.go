@@ -39,6 +39,10 @@ const (
 	awayKindDownload    = "download" // a saved track or video
 	awayKindTool        = "tool"     // a helper tool or PortMaster finished installing
 	awayKindAchievement = "achievement"
+
+	// A game's screenshot (Hold Menu, menushot.go), and one that failed.
+	awayKindScreenshot       = "screenshot"
+	awayKindScreenshotFailed = "screenshot-failed"
 )
 
 // awayEventCap bounds the ledger. A hundred-track queue finishing under one
@@ -120,6 +124,16 @@ func awayLabelFor(kind string, n int) (string, bool) {
 			return "1 achievement unlocked", true
 		}
 		return strconv.Itoa(n) + " achievements unlocked", true
+	case awayKindScreenshot:
+		if n == 1 {
+			return "1 screenshot saved", true
+		}
+		return strconv.Itoa(n) + " screenshots saved", true
+	case awayKindScreenshotFailed:
+		if n == 1 {
+			return "1 screenshot not saved", true
+		}
+		return strconv.Itoa(n) + " screenshots not saved", true
 	}
 	return "", false
 }
@@ -135,7 +149,7 @@ func awaySummaryText(events []awayEvent) string {
 	parts := make([]string, 0, 3)
 	// Fixed order so two runs over the same work produce the same sentence;
 	// map iteration would shuffle the clauses between returns.
-	for _, kind := range []string{awayKindDownload, awayKindTool, awayKindAchievement} {
+	for _, kind := range []string{awayKindDownload, awayKindTool, awayKindAchievement, awayKindScreenshot, awayKindScreenshotFailed} {
 		if n := counts[kind]; n > 0 {
 			if label, ok := awayLabelFor(kind, n); ok {
 				parts = append(parts, label)

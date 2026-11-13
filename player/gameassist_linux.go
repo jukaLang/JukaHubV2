@@ -40,6 +40,10 @@ package main
 // D-pad's up and down go to the main loop too, and either chord pressed again
 // (no hold) is passed on: the overlay decides what it means there.
 //
+// It also reads Menu held alone, without taking the pad, for Hold Menu:
+// screenshot (menushot.go): the game keeps Menu (its menu still opens), and
+// the screen read at the press is saved when the hold lands.
+//
 // Before the overlay is up the feedback is the motor: a firm pulse when the
 // pad is taken, a long one when it could not be.
 //
@@ -112,6 +116,8 @@ var gaPad struct {
 	want     atomic.Bool
 	wantAsk  atomic.Bool
 	wantMenu atomic.Bool
+	// wantShot: Menu held alone saves the game's screen (menushot.go).
+	wantShot atomic.Bool
 }
 
 // gameAssistSupported reports whether the assistant can come up over a game
@@ -119,11 +125,16 @@ var gaPad struct {
 func gameAssistSupported() bool { return IsTrimuiDevice() }
 
 // gaPadSync runs on the main thread, from the parked loop: it mirrors which
-// chords are wanted and starts one watcher per game while either is.
-func gaPadSync(config *Config, ask, menu bool) {
-	want := ask || menu
+// chords are wanted — and the Menu hold for a screenshot — and starts one
+// watcher per game while any is.
+func gaPadSync(config *Config, ask, menu, shot bool) {
+	want := ask || menu || shot
+	if shot {
+		gameShotSync(config)
+	}
 	gaPad.wantAsk.Store(ask)
 	gaPad.wantMenu.Store(menu)
+	gaPad.wantShot.Store(shot)
 	gaPad.want.Store(want)
 	if !want {
 		return
@@ -202,6 +213,19 @@ type gaPadSession struct {
 	// Menu acts when it comes up, unless a volume key joined it.
 	menuDown   bool
 	menuVolume int64
+
+	// Menu held alone while the game plays: a screenshot (menushot.go).
+	// shotAt is when Menu went down (zero: not down, or the hold was spoiled
+	// by another button or a volume key), shotArmed that the hold lasted (the
+	// release saves it), shotVolume the volume-key count then, shotFrame the
+	// screen read at the press — before the game's own menu, which most
+	// emulators open on Menu, was drawn — and shotBuf the buffer it is read
+	// into, reused from press to press.
+	shotAt     time.Time
+	shotArmed  bool
+	shotVolume int64
+	shotFrame  gameShotFrame
+	shotBuf    []byte
 }
 
 // gaPadRun is the goroutine: it watches for the chord while the game runs and
@@ -306,6 +330,10 @@ func (s *gaPadSession) resync(now time.Time) {
 	if mbridgeIoctlBuf(s.fd, evdevGetKey(evdevKeyBitmapSize), bitmap) == nil {
 		s.eng.setKeys(bitmap)
 	}
+	if !s.eng.key(evdevBtnMode) {
+		// Menu's release was among the dropped events.
+		s.shotCancel()
+	}
 	info := make([]byte, evdevAbsInfoSize)
 	for _, axis := range [...]uint16{evdevAbsX, evdevAbsY, evdevAbsZ, evdevAbsRX, evdevAbsRY, evdevAbsRZ, evdevAbsHat0X, evdevAbsHat0Y} {
 		if mbridgeIoctlBuf(s.fd, evdevGetAbs(axis), info) != nil {
@@ -370,6 +398,8 @@ func (s *gaPadSession) step(now time.Time) error {
 		s.take(now, gaModeMenu)
 	case gaPad.wantAsk.Load() && s.ask.due(now, gaChordHold):
 		s.take(now, gaModeAsk)
+	case !s.shotAt.IsZero() && !s.shotArmed && now.Sub(s.shotAt) >= menuShotHold:
+		s.shotArm()
 	}
 	return nil
 }
@@ -389,6 +419,10 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 					gaPush(gaBtnDown)
 				}
 			}
+			if ev.Value == 1 {
+				// Menu + the D-pad is a hotkey, no screenshot.
+				s.shotCancel()
+			}
 			return
 		}
 		i := int(ev.Code) - mbridgeKeyBase
@@ -406,6 +440,9 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 			s.setL2(now)
 		case evdevBtnSelect:
 			s.chord(now)
+		}
+		if !s.held && down != was {
+			s.shotKey(ev.Code, down)
 		}
 		if !s.held || down == was {
 			return
@@ -434,7 +471,14 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 			s.setR2(now)
 		case evdevAbsZ:
 			s.setL2(now)
+		case evdevAbsHat0X:
+			if ev.Value != 0 {
+				s.shotCancel() // Menu + the D-pad: a hotkey
+			}
 		case evdevAbsHat0Y:
+			if ev.Value != 0 {
+				s.shotCancel()
+			}
 			// The D-pad leaving the middle, up or down, while the pad is held:
 			// the menu's highlight moves once per press.
 			if d := evdevHatDir(ev.Value); s.held && d != 0 && d != evdevHatDir(prev) && !now.Before(s.quiet) {
@@ -477,6 +521,9 @@ func (s *gaPadSession) setR2(now time.Time) {
 	down := s.r2Axis || s.eng.key(gaEvdevBtnTR2)
 	was := s.r2
 	s.r2 = down
+	if down && !was {
+		s.shotCancel() // Menu + R2: a hotkey
+	}
 	if !down {
 		s.r2Latched = false
 	}
@@ -504,7 +551,102 @@ func (s *gaPadSession) setL2(now time.Time) {
 		return
 	}
 	s.l2 = down
+	if down {
+		s.shotCancel() // Menu + L2: a hotkey
+	}
 	s.chord(now)
+}
+
+// shotKey follows the pad's buttons for Hold Menu: screenshot while the game
+// has the pad. Menu going down alone starts the hold and reads the screen at
+// once; any other button going down ends it; Menu coming up after the hold
+// armed it (shotArm) saves the picture.
+func (s *gaPadSession) shotKey(code uint16, down bool) {
+	if code != evdevBtnMode {
+		if down {
+			s.shotCancel()
+		}
+		return
+	}
+	if !down {
+		if s.shotArmed {
+			s.shotSave()
+		}
+		s.shotCancel()
+		return
+	}
+	s.shotCancel()
+	if !gaPad.wantShot.Load() || s.shotOtherHeld() {
+		// Switched off, or Menu joining a held button (a hotkey).
+		return
+	}
+	s.shotAt, s.shotVolume = time.Now(), orbVolumeKeys.Load()
+	fr, err := gameShotGrab(s.shotBuf)
+	if err != nil {
+		// Read again when it is saved (shotSave); the game's menu may be in
+		// that picture, but it is better than none.
+		s.note("screenshot: could not read the screen: " + err.Error())
+		s.shotFrame = gameShotFrame{}
+		return
+	}
+	s.shotBuf, s.shotFrame = fr.raw, fr
+}
+
+// shotCancel ends a hold: nothing is saved. The buffer is kept for the next.
+func (s *gaPadSession) shotCancel() {
+	s.shotAt, s.shotArmed = time.Time{}, false
+}
+
+// shotOtherHeld reports a button other than Menu held, a trigger past half,
+// or the D-pad away from the middle.
+func (s *gaPadSession) shotOtherHeld() bool {
+	for i, k := range s.eng.keys {
+		if k && i != int(evdevBtnMode)-mbridgeKeyBase {
+			return true
+		}
+	}
+	return s.r2 || s.l2 || s.eng.abs[evdevAbsHat0X] != 0 || s.eng.abs[evdevAbsHat0Y] != 0
+}
+
+// shotStillAlone reports Menu still down alone, with no volume key pressed
+// since it went down (the firmware's Menu + volume brightness).
+func (s *gaPadSession) shotStillAlone() bool {
+	return gaPad.wantShot.Load() && s.eng.key(evdevBtnMode) && !s.shotOtherHeld() &&
+		orbVolumeKeys.Load() == s.shotVolume
+}
+
+// shotArm is the hold reaching menuShotHold: a tick of the motor says Menu
+// may be let go. The picture is saved on the release, so a volume key
+// pressed late in a long hold (brightness) still cancels it.
+func (s *gaPadSession) shotArm() {
+	if !s.shotStillAlone() {
+		s.shotCancel()
+		return
+	}
+	s.shotArmed = true
+	playHaptic(hapticTogglePulse)
+}
+
+// shotSave is Menu let go after an armed hold: the picture read at the press
+// goes to a goroutine to be written (gameShotSave buzzes when it is).
+func (s *gaPadSession) shotSave() {
+	if !gaPad.wantShot.Load() || s.shotOtherHeld() || orbVolumeKeys.Load() != s.shotVolume {
+		return
+	}
+	fr := s.shotFrame
+	// The goroutine owns the picture's buffer now; the next press reads into
+	// a new one.
+	s.shotFrame, s.shotBuf = gameShotFrame{}, nil
+	if fr.raw == nil {
+		var err error
+		if fr, err = gameShotGrab(nil); err != nil {
+			s.note("screenshot: could not read the screen: " + err.Error())
+			playHaptic(hapticErrorPulse)
+			return
+		}
+	}
+	logInfo("gameassist", "Menu held in %q: saving the game's screen", s.name)
+	go gameShotSave(fr, time.Now())
 }
 
 // gaChord is one chord's hold: since when Select and its trigger have both
@@ -618,6 +760,7 @@ func (s *gaPadSession) take(now time.Time, mode gaMode) {
 	s.drain()
 	s.held, s.heldAt, s.quiet, s.giveBackAt = true, now, now.Add(mbridgeQuiet), time.Time{}
 	s.menuDown = false
+	s.shotCancel()
 	// R2 still held from the Select + R2 hold must come up before it sends;
 	// after Select + L2 it was never down, so its first press counts.
 	s.r2Latched = s.r2
@@ -733,6 +876,8 @@ func (s *gaPadSession) close() {
 	s.r2Axis, s.r2, s.r2Latched = false, false, false
 	s.l2Axis, s.l2 = false, false
 	s.menuDown = false
+	s.shotCancel()
+	s.shotFrame, s.shotBuf = gameShotFrame{}, nil
 }
 
 // write writes events in one write(), the way the kernel reads them.

@@ -428,3 +428,37 @@ func TestNotifHighlightFollowsItsRow(t *testing.T) {
 		t.Errorf("a padded message was not filed trimmed: notifRowIndex(c) = %d", got)
 	}
 }
+
+// TestVideoNotifHold covers Notifications during videos (videonotif.go): a
+// playing full-screen video holds toasts nobody asked for unless the switch is
+// on; answers to a press, errors and scene switches always show.
+func TestVideoNotifHold(t *testing.T) {
+	cases := []struct {
+		name              string
+		watching, enabled bool
+		kind              ToastKind
+		started, input    uint64
+		hold              bool
+	}{
+		{"not watching", false, false, ToastKindInfo, 10000, 0, false},
+		{"switch on", true, true, ToastKindWarning, 10000, 0, false},
+		{"background info", true, false, ToastKindSuccess, 10000, 2000, true},
+		{"background warning", true, false, ToastKindWarning, 10000, 0, true},
+		{"answers a press", true, false, ToastKindInfo, 10000, 9200, false},
+		{"press after the toast", true, false, ToastKindInfo, 10000, 10400, true},
+		{"error", true, false, ToastKindError, 10000, 0, false},
+		{"scene switch", true, false, ToastKindSwitch, 10000, 0, false},
+	}
+	for _, c := range cases {
+		if got := videoNotifShouldHold(c.watching, c.enabled, c.kind, c.started, c.input); got != c.hold {
+			t.Errorf("%s: hold = %v, want %v", c.name, got, c.hold)
+		}
+	}
+	if got := videoNotifChatLine(" Ann ", "hi\n  there", 2); got != "Ann: hi there (+2 more)" {
+		t.Errorf("chat line = %q", got)
+	}
+	long := videoNotifChatLine("", strings.Repeat("a", 500), 0)
+	if utf8.RuneCountInString(long) != videoNotifChatMaxRunes || !strings.HasSuffix(long, "…") {
+		t.Errorf("long chat line not capped: %d runes", utf8.RuneCountInString(long))
+	}
+}

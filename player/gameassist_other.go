@@ -15,7 +15,7 @@ import "os/exec"
 func gameAssistSupported() bool { return false }
 
 // gaPadSync would start the pad watcher: there is none here.
-func gaPadSync(*Config, bool, bool) {}
+func gaPadSync(*Config, bool, bool, bool) {}
 
 // gaPadStop would stop the pad watcher.
 func gaPadStop() {}

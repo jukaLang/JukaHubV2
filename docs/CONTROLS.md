@@ -184,6 +184,7 @@ and why.
 | Quick Settings | Ctrl+Q, which also closes it |
 | Search | F2 anywhere, **/** on Home |
 | Menu: the voice orb (hold it to talk) | F4 anywhere (hold it to talk) |
+| Menu held: screenshot (in a game too) | F12 |
 | L2 on Home (Edit Home) · R2 on Home (next section) | Q · E |
 | Select + L1 held (mouse mode) | F6 |
 
@@ -284,7 +285,8 @@ they used to do nothing in JukaHub. Now:
 |--------|--------|
 | F1 | The **Controller** card for the screen you are on: what every button does here. F1 or B closes it |
 | F2 | **Quick Settings** (Wi-Fi, volume, brightness). F2 or B closes it |
-| Menu | The voice orb: press it and speak, or hold it while you talk (with **Menu button: voice** off in Settings → Controls, Back like B) |
+| Menu | The voice orb: press it and speak (with **Menu button: voice** off in Settings → Controls, Back like B) |
+| Menu (hold 0.7 s, let go) | Screenshot of the screen, in a game too (Settings → Controls → **Hold Menu: screenshot**; off, holding Menu is push-to-talk) |
 | Start | The Start menu: every scene, game and tool |
 | Select + Start (hold both) | Quit JukaHub |
 | Select + L1 (hold) | Mouse mode: the D-pad moves a pointer and A clicks (see Virtual cursor) |
@@ -937,7 +939,7 @@ a tap anywhere else on the scene still belongs to the scene.
 | Y (keyboard **Y** or **S**) | Video settings sheet |
 | L1 / R1 | Skip −10 / +10 seconds |
 | L2 / R2 | Previous / next video in the list that launched this one (search results or the Shorts feed) |
-| B | Step back from the settings sheet's Save offline page, close the sheet, then step down: leave full screen, then float the video and go back |
+| B | Step back from the settings sheet's Save offline page, close the sheet, then step down: leave full screen, float the video and go back; press again to close the floating video |
 
 The rewind and fast-forward buttons skip 10 seconds per press. With the settings
 sheet open, **Up / Down** move between its rows and **A** applies the row, so
@@ -980,14 +982,15 @@ that launched the current one — in the Shorts feed that is the next short. In
 the feed the four videos after the one playing are resolved in the background,
 so skipping does not wait for yt-dlp.
 
-**Back never stops the video.** It steps down one size: in full screen it
+**Back steps down the video.** In full screen it
 returns to the scene's player, and in the scene's player it shrinks the picture
 into a small window in the bottom-right corner and opens the previous screen.
 The session keeps playing — position, subtitles and audio are untouched — so
-the Media grid, Home or any other screen is usable while the video runs. Tap
-the window to return to the player; its **×** ends the session, as do the
-player's Stop button and `q`. The dock and the screensaver cover the window
-because they take the whole panel.
+the Media grid, Home or any other screen is usable while the video runs. Press
+**B** again (or **Esc** on a keyboard) to close the floating video without
+moving focus. Tap the window to return to the player; its **×** also ends the
+session, as do the player's Stop button and `q`. The dock and the screensaver
+cover the window because they take the whole panel.
 
 Progress, resume position and subtitles are handled automatically; the control
 bar hides itself while playback continues and reappears on any input. When a

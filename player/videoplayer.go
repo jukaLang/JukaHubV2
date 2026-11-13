@@ -456,6 +456,8 @@ type playbackSession struct {
 	// (videoSyncPlaybackEnd), which hands off to the next Short, Up Next or
 	// the screen that opened the file; finish() must not close it first.
 	ended atomic.Bool
+	// av keeps the picture on the sound (avsync.go).
+	av avSync
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -1014,7 +1016,7 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 // decoding 4K frames and letting the GPU shrink them); otherwise it asks for
 // the native size directly. inputOpts go in front of -i (the identity a
 // resolved stream is asked for with, ffmpegStreamInputArgs).
-func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, scaling bool, startSec float64) []string {
+func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, scaling bool, startSec, fps float64, live bool) []string {
 	// The decoder's stderr goes to errors.txt: without these, every start
 	// (and every retry) wrote ffmpeg's banner and configure line there,
 	// burying the one line that said why the stream failed.
@@ -1024,9 +1026,19 @@ func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, sca
 	}
 	args = append(args, inputOpts...)
 	args = append(args, "-i", path)
+	// The rate is pinned to the one the frames are timed by, from the seek
+	// point on (avsync.go): left to itself ffmpeg picked its own.
+	scale := ""
 	if scaling {
-		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=bilinear", width, height))
-	} else {
+		scale = fmt.Sprintf("scale=%d:%d:flags=bilinear", width, height)
+	}
+	if vf := avVideoFilters(fps, scale, live); vf != "" {
+		args = append(args, "-vf", vf)
+	}
+	if avFiltersOff.Load() {
+		args = append(args, "-r", avRateArg(fps))
+	}
+	if !scaling {
 		args = append(args, "-s", fmt.Sprintf("%dx%d", width, height))
 	}
 	// Planar IYUV (yuv420p) instead of RGBA: width is even and the stride is
@@ -1051,6 +1063,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	embeddedPlayer.mu.Lock()
 	srcW, srcH := embeddedPlayer.sourceWidth, embeddedPlayer.sourceHeight
 	duration := embeddedPlayer.duration
+	fps := avClampFPS(embeddedPlayer.frameRate)
 	embeddedPlayer.mu.Unlock()
 	scaling := srcW > 0 && srcH > 0 && (srcW != width || srcH != height)
 	pageStream := !sess.tempFile && !sess.local && mediaPageStream(path, sess.pageURL)
@@ -1071,8 +1084,9 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		}
 	}
 
+	filtered := !avFiltersOff.Load()
 	args := ffmpegDecoderArgs(ffmpegReadableInput(ffmpegPath, path), ffmpegStreamInputArgs(path, sess.pageURL),
-		width, height, scaling, startSec)
+		width, height, scaling, startSec, fps, duration <= 0)
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1132,44 +1146,62 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	frameSize := int(frameBytes)
 	buf := make([]byte, frameSize)
 	frameCount := 0
-
-	embeddedPlayer.mu.Lock()
-	fps := embeddedPlayer.frameRate
-	embeddedPlayer.mu.Unlock()
-	if fps <= 0 {
-		fps = 30
+	clock := &sess.av
+	isPaused := func() bool {
+		embeddedPlayer.mu.Lock()
+		defer embeddedPlayer.mu.Unlock()
+		return embeddedPlayer.phase == "paused"
 	}
-	frameDuration := time.Duration(float64(time.Second) / fps)
-	frameDeadline := time.Now()
-	wasPaused := false
 
 	// NOTE: playback speed is intentionally kept at 1x here. Applying
 	// embeddedPlayer.speed to the frame pacing without also re-timing the
 	// audio decoder causes progressive A/V drift, so real speed support
 	// requires restarting both pipelines (a seek). The speed field remains
 	// cosmetic until that is implemented.
+	//
+	// Each frame is read, held until the clock reaches it (the sound's, when
+	// there is sound: avsync.go), then shown. A late frame is shown at once
+	// and the next read straight away, so a picture that fell behind catches
+	// up instead of staying behind.
 	for {
-		select {
-		case <-sess.ctx.Done():
+		if sess.ctx.Err() != nil {
 			return nil
-		default:
 		}
-		embeddedPlayer.mu.Lock()
-		paused := embeddedPlayer.phase == "paused"
-		embeddedPlayer.mu.Unlock()
-		if paused {
-			wasPaused = true
-			time.Sleep(15 * time.Millisecond)
+		if isPaused() {
+			from := time.Now()
+			for isPaused() && sess.ctx.Err() == nil {
+				time.Sleep(15 * time.Millisecond)
+			}
+			if frameCount > 0 {
+				clock.paused(time.Since(from))
+			}
 			continue
-		}
-		if wasPaused {
-			frameDeadline = time.Now().Add(frameDuration)
-			wasPaused = false
 		}
 		if _, err := io.ReadFull(pipe, buf); err != nil {
 			break
 		}
 		frameCount++
+		if frameCount == 1 {
+			// The first frame waits for the sound's first buffer, so both
+			// start together, then starts the clock.
+			clock.awaitAudio(sess.ctx)
+			if sess.ctx.Err() != nil {
+				return nil // stopped or replaced while it waited
+			}
+			clock.start(time.Now())
+			// The progress bar and the subtitles count from the first
+			// frame too, not from before ffmpeg opened the file.
+			if playbackCurrentSession() == sess {
+				embeddedPlayer.mu.Lock()
+				if embeddedPlayer.phase == "playing" {
+					embeddedPlayer.decoderStartTime = time.Now()
+					embeddedPlayer.totalPausedDuration = 0
+				}
+				embeddedPlayer.mu.Unlock()
+			}
+		} else if !clock.wait(sess.ctx, float64(frameCount-1)/fps, isPaused) {
+			return nil
+		}
 
 		// Publish the decoded frame by handing the buffer to the renderer and
 		// taking the previous one back, instead of copying every frame. A
@@ -1194,17 +1226,8 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			buf = make([]byte, frameSize)
 		}
 
-		if frameCount > 1 {
-			frameDeadline = frameDeadline.Add(frameDuration)
-			wait := time.Until(frameDeadline)
-			if wait > 0 {
-				time.Sleep(wait)
-			} else if -wait > 250*time.Millisecond {
-				frameDeadline = time.Now()
-			}
-		} else {
-			frameDeadline = time.Now().Add(frameDuration)
-			logDebug("video", "First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
+		if frameCount == 1 {
+			logDebug("video", "First frame received: %dx%d, %d bytes, fps=%.3f, sound=%v", width, height, frameSize, fps, clock.audioStarted.Load())
 			if pageStream {
 				// Streaming works here: the run of streams that would not
 				// open starts again (videorecover.go).
@@ -1232,6 +1255,10 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	}
 	position := startSec + float64(frameCount)/fps
 	stderr := stderrTail.String()
+	if frameCount == 0 && avNoteFilterMissing(stderr, filtered) {
+		// This ffmpeg has no fps filter: once more without it.
+		return startFFmpegDecoder(sess, ffmpegPath, path, width, height, startSec)
+	}
 	if mediaDecoderFailed(startSec, position, duration, frameCount, pageStream, stderr) {
 		// A certificate failure routes the next attempt through the relay.
 		ffmpegNoteTLSFailure(stderr)
@@ -1247,6 +1274,20 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 }
 
 func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) {
+	// The picture stops waiting for, and following, a sound that is over.
+	defer sess.av.audioDone.Store(true)
+	filtered := !avFiltersOff.Load()
+	stderr, got := runFFmpegAudio(sess, ffmpegPath, path, startSec)
+	if !got && sess.ctx.Err() == nil && avNoteFilterMissing(stderr, filtered) {
+		// This ffmpeg has no aresample options: once more without them.
+		_, _ = runFFmpegAudio(sess, ffmpegPath, path, startSec)
+	}
+}
+
+// runFFmpegAudio decodes the sound of one session into the video device until
+// the end or a stop. It returns the end of ffmpeg's stderr and whether any
+// sound was queued.
+func runFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) (string, bool) {
 	rate := GetVideoAudioRate()
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error"}
 	if startSec > 0 {
@@ -1254,7 +1295,16 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 	}
 	// The same identity as the picture decoder (ffmpegStreamInputArgs).
 	args = append(args, ffmpegStreamInputArgs(path, sess.pageURL)...)
-	args = append(args, "-i", ffmpegReadableInput(ffmpegPath, path),
+	args = append(args, "-i", ffmpegReadableInput(ffmpegPath, path))
+	// Sample 0 is the seek point, with silence over any gap, so the samples
+	// line up with the picture's frames (avsync.go).
+	embeddedPlayer.mu.Lock()
+	live := embeddedPlayer.duration <= 0
+	embeddedPlayer.mu.Unlock()
+	if af := avAudioFilter(live); af != "" {
+		args = append(args, "-af", af)
+	}
+	args = append(args,
 		"-f", "s16le",
 		"-ac", "2",
 		"-ar", fmt.Sprintf("%d", rate),
@@ -1264,29 +1314,29 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		logWarn("audio", "ffmpeg audio pipe failed: %v", err)
-		return
+		return "", false
 	}
-	cmd.Stderr = os.Stderr
+	stderrTail := &lockedTailBuffer{max: 4 << 10}
+	cmd.Stderr = ffmpegStderrSink{tail: stderrTail}
+	cmd.WaitDelay = 2 * time.Second
 
 	if err := cmd.Start(); err != nil {
 		logWarn("audio", "ffmpeg audio failed to start: %v", err)
-		return
+		return "", false
 	}
 	if !sess.registerAudioCmd(cmd) {
 		cmd.Wait()
-		return
+		return "", false
 	}
 	defer sess.clearAudioCmd(cmd)
-	defer cmd.Wait()
 
 	const audioBufferSize = 8192
 	buf := make([]byte, audioBufferSize)
+	queued := false
 
 	for {
-		select {
-		case <-sess.ctx.Done():
-			return
-		default:
+		if sess.ctx.Err() != nil {
+			break
 		}
 		embeddedPlayer.mu.Lock()
 		vol := embeddedPlayer.volume
@@ -1297,13 +1347,25 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 			continue
 		}
 		n, err := io.ReadFull(pipe, buf)
-		if n > 0 {
+		if n > 0 && sess.ctx.Err() == nil {
+			if !queued {
+				// A seek replaced a session whose sound is still queued (up
+				// to a second of it): played first, it put this sound that
+				// far behind the picture. The clock counts from here.
+				sess.av.mark.Store(ClearVideoAudioQueueMark())
+			}
 			QueueVideoAudio(buf[:n], vol)
+			if !queued {
+				queued = true
+				sess.av.audioStarted.Store(true)
+			}
 		}
 		if err != nil {
 			break
 		}
 	}
+	_ = cmd.Wait()
+	return stderrTail.String(), queued
 }
 
 // UpdateCurrentTexture uploads the current raw RGBA frame to an SDL2 texture.
@@ -2340,8 +2402,8 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		return false
 	}
 
-	// While the video floats in its mini window the scene keeps the keyboard:
-	// Escape and B navigate back, arrows scroll the list under the window.
+	// While the video floats, its Back shortcut runs before scene dispatch
+	// (videomini.go); the scene keeps every other key.
 	if videoMiniVisible() {
 		return false
 	}
@@ -2474,7 +2536,8 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 		return false
 	}
 
-	// The scene owns the pad while the video floats in its mini window.
+	// The scene owns the pad while the video floats, except for Back handled
+	// earlier by screenPadPress (videomini.go).
 	if videoMiniVisible() {
 		return false
 	}

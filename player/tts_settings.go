@@ -7,10 +7,13 @@ package main
 // accept them.
 //
 // The voice is one of Groq's six, or the device's own when it has one (always
-// on a Windows PC; on the handheld only when a speech engine was added). A
-// Groq voice that cannot speak — no key, no internet, the terms, the day's
-// allowance — hands over to the device's voice when there is one; with none
-// the answer stays on screen only, and Juka says why once.
+// on a Windows PC; on the Smart Pro once the offline voice has downloaded,
+// which it does by itself after ffmpeg). With no Groq key and no voice chosen
+// the device's voice is the default (ttsVoiceImplied), and Juka says once per
+// run that a key brings Groq's voices. A Groq voice that cannot speak — no
+// key, no internet, the terms, the day's allowance — hands over to the
+// device's voice when there is one; with none the answer stays on screen
+// only, and Juka says why once.
 
 import (
 	"runtime"
@@ -151,7 +154,27 @@ func ttsVoiceOf(c *Config) string {
 			return v
 		}
 	}
+	if ttsVoiceImplied(c) {
+		return ttsVoiceDevice
+	}
 	return ttsGroqVoices[0]
+}
+
+// ttsVoiceImplied reports whether the device's own voice is Juka's voice only
+// because no voice was ever chosen and there is no Groq key: without a key
+// Groq's voice cannot speak, so the offline voice (the Smart Pro's download,
+// Windows' synthesiser) is the default. Adding a key brings Groq's voice back.
+func ttsVoiceImplied(c *Config) bool {
+	if c == nil || strings.TrimSpace(chatRawGroqKey(c)) != "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(customStringValue(c.Variables.Custom, ttsVoiceKey))) {
+	case "", "default":
+	default:
+		return false
+	}
+	_, ok := ttsLocal()
+	return ok
 }
 
 // ttsVoiceGender is a Groq voice's, so Windows can pick a like voice when it
@@ -181,7 +204,7 @@ func ttsVoiceOptions(*Config) []setOption {
 	for i, v := range ttsGroqVoices {
 		note := "Groq · natural · needs internet"
 		if i == 0 {
-			note += " · the default"
+			note += " · the default with a Groq key"
 		}
 		out = append(out, setOption{Value: v, Label: ttsVoiceLabel(v), Note: note})
 	}
@@ -200,6 +223,9 @@ func ttsModeDetail(c *Config) string {
 	}
 	device := ttsDeviceWord()
 	if ttsVoiceOf(c) == ttsVoiceDevice {
+		if ttsVoiceImplied(c) {
+			return "Reads answers aloud in " + device + "'s offline voice — add a Groq key (Settings → General) for Groq's voices"
+		}
 		return "Reads answers aloud in " + device + "'s own voice — offline, no daily limit"
 	}
 	_, hasLocal := ttsLocal()
@@ -262,7 +288,16 @@ func ttsTestOutcome(rep ttsReport) {
 	case ttsFailNoSound:
 		msg = "No sound device — Juka can't speak here"
 	case ttsFailNoKey:
-		msg = "Groq's voice needs your Groq key — add it in Settings → General"
+		switch {
+		case rep.localFailed:
+			msg = ttsUpperFirst(device) + "'s voice failed — try again"
+		case rep.spoke && rep.local:
+			// The offline voice is the default without a key: no "instead".
+			ShowToast("That was "+device+"'s offline voice — add a Groq key in Settings → General for Groq's voices", ToastKindInfo)
+			return
+		default:
+			msg = "Groq's voice needs your Groq key — add it in Settings → General"
+		}
 	case ttsFailOffline:
 		msg = "Groq's voice needs internet"
 	case ttsFailKey:

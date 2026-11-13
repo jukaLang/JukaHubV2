@@ -1862,7 +1862,12 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	tx := input.X + chatPx(20)
 	maxW := input.W - chatPx(40)
 	ty := input.Y + (h-int32(fonts.composer.Height()))/2
-	if chatInputText == "" {
+	draft := chatInputText
+	preview := false
+	if live, _, ok := vkVoiceDisplayText(); ok {
+		draft, preview = live, true
+	}
+	if draft == "" {
 		chatText(renderer, config, fonts.composer, ellipsize(fonts.composer, chatPlaceholder(tab), maxW), ColorTextTertiary(), tx, ty)
 		if typing && (now/530)%2 == 0 {
 			setDrawColor(renderer, accent)
@@ -1871,9 +1876,13 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 		}
 		return
 	}
-	shown, sw := chatComposerText(fonts.composer, chatInputText, maxW-chatPx(4))
-	drawTextRun(renderer, config, fonts.composer, shown, ColorTextPrimary(), tx, ty)
-	if typing && (now/530)%2 == 0 {
+	shown, sw := chatComposerText(fonts.composer, draft, maxW-chatPx(4))
+	ink := ColorTextPrimary()
+	if preview {
+		ink = ColorTextSecondary()
+	}
+	drawTextRun(renderer, config, fonts.composer, shown, ink, tx, ty)
+	if typing && !preview && (now/530)%2 == 0 {
 		setDrawColor(renderer, accent)
 		chatDstRect = sdl.Rect{X: tx + sw + chatPx(2), Y: ty, W: 2, H: int32(fonts.composer.Height())}
 		_ = renderer.FillRect(&chatDstRect)

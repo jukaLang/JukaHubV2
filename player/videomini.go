@@ -10,8 +10,8 @@ package main
 // continue seamlessly.
 //
 // The window floats in the bottom-right corner above the footer. Tapping the
-// picture returns to the player; its close button (and the player's Stop
-// control) still end the session.
+// picture returns to the player; its close button, Back while floating, and
+// the player's Stop control end the session.
 
 import (
 	"sync"
@@ -392,7 +392,8 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Keep touch and pad instructions on the window itself rather than stealing
-	// the underlying scene's footer. A/X apply only while Now Playing is focused.
+	// the underlying scene's footer. B closes it directly; A/X apply only while
+	// Now Playing is focused.
 	if hintFont := FontForRole(config, TypeLabel); hintFont != nil {
 		for i, hint := range videoMiniHints() {
 			hint = ellipsize(hintFont, hint, r.W-16)
@@ -422,22 +423,51 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 func videoMiniHints() []string {
 	return []string{
 		"Tap video: open",
-		"Tap X icon: close",
+		hintLine(FooterHint{"B", "Close"}),
 		"Focus Now Playing",
 		hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Close"}),
 	}
 }
 
-// closeFocusedMiniVideo lets the now-playing focus target close only the
-// floating video, without taking X away from the scene's other controls.
-func closeFocusedMiniVideo() bool {
-	if !videoMiniVisible() {
+// closeMiniVideo ends a floating session without changing the scene below it.
+func closeMiniVideo() bool {
+	// The scene transition that follows the first Back can briefly hide the
+	// window. A quick second press still means close, even before it is drawn.
+	if !videoMiniActive() || videoFullscreen || playerPhase() == "idle" {
 		return false
 	}
 	PlayBackSound()
 	StopEmbeddedPlayback()
 	return true
 }
+
+// videoMiniBackKey lets Back or the video's q stop key close the floating
+// session. The normal scene shortcuts resume as soon as the video is gone.
+func videoMiniBackKey(e *sdl.KeyboardEvent) bool {
+	if e == nil || e.Type != sdl.KEYDOWN {
+		return false
+	}
+	switch e.Keysym.Sym {
+	case sdl.K_ESCAPE, sdl.K_b, sdl.K_q:
+		return closeMiniVideo()
+	}
+	return false
+}
+
+func videoMiniBackController(e *sdl.ControllerButtonEvent) bool {
+	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		return closeMiniVideo()
+	}
+	return false
+}
+
+// closeFocusedMiniVideo lets the now-playing focus target close only the
+// floating video, without taking X away from the scene's other controls.
+func closeFocusedMiniVideo() bool { return closeMiniVideo() }
 
 // handleVideoMiniClick consumes a tap on the floating window: the picture goes
 // back to the player, the close button ends the session. It reports whether the

@@ -72,6 +72,14 @@ jobs:
           name: androidrt-package
           path: player/native/bin
 
+      - name: Download offline speech recognition
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-stt
+          path: player/native/bin/juka-whisper
+
       - name: Download the Box64 pack
         # JukaHub-Wine-linux-arm64.zip from the Box64 job, which release.sh
         # attaches when it verifies. Absent when its build failed.

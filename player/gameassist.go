@@ -310,7 +310,9 @@ func gameAssistParkedTick(config *Config) {
 	// A game quitting from the in-game menu is left alone: pausing it now
 	// would stop it mid-save, and the quit watch would kill it stopped.
 	can := gameAssistSupported() && !wineInputActive() && !alarmFiringActive() && !gmQuitting.Load()
-	gaPadSync(config, can && gameAssistLive.on.Load(), can && gameMenuEnabled(config))
+	// Hold Menu: screenshot reads the same pad (menushot.go).
+	gaPadSync(config, can && gameAssistLive.on.Load(), can && gameMenuEnabled(config),
+		can && P().IsHandheld() && menuShotEnabled(config))
 	if gaLink.request.Swap(false) && !gaOpen(config, gaMode(gaLink.mode.Load())) {
 		gaLink.release.Store(true)
 	}

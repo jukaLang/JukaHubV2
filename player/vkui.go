@@ -841,8 +841,7 @@ var vkFieldCache vkFieldLayout
 // vkFieldLayoutFor lays text out for a maxW-wide field. A long value scrolls
 // so the caret stays in view; only the visible slice is ever rendered, which
 // keeps the text texture under the GPU's size limit.
-func vkFieldLayoutFor(font *ttf.Font, text string, maxW int32) *vkFieldLayout {
-	caret := vkCaretIndex(text)
+func vkFieldLayoutFor(font *ttf.Font, text string, caret int, maxW int32) *vkFieldLayout {
 	masked := vkSecretTarget()
 	fc := &vkFieldCache
 	if fc.valid && fc.text == text && fc.caret == caret && fc.masked == masked && fc.font == font && fc.maxW == maxW {
@@ -913,6 +912,9 @@ func vkFieldLayoutFor(font *ttf.Font, text string, maxW int32) *vkFieldLayout {
 func vkFieldIndexAt(mx int32) int {
 	fc := &vkFieldCache
 	text := vkCurrentText()
+	if _, _, preview := vkVoiceDisplayText(); preview {
+		return vkCaretIndex(text)
+	}
 	if !fc.valid || fc.font == nil || fc.text != text {
 		return utf8.RuneCountInString(text)
 	}
@@ -951,6 +953,11 @@ func vkDrawFieldLive(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, fie
 	textY := field.Y + (field.H-textH)/2
 	x0 := field.X + vkFieldPadX
 	text := vkCurrentText()
+	caret := vkCaretIndex(text)
+	preview := false
+	if live, liveCaret, ok := vkVoiceDisplayText(); ok {
+		text, caret, preview = live, liveCaret, true
+	}
 	if text == "" {
 		// A steady caret marks the field before the first character; the
 		// placeholder moves aside so the two never overlap.
@@ -965,13 +972,17 @@ func vkDrawFieldLive(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, fie
 		cw, _ := measureText(fonts.small, fc.counter)
 		counterW = cw + 10
 	}
-	lay := vkFieldLayoutFor(font, text, field.W-2*vkFieldPadX-counterW)
-	if vkTextSelected {
+	lay := vkFieldLayoutFor(font, text, caret, field.W-2*vkFieldPadX-counterW)
+	if vkTextSelected && !preview {
 		// The whole value is selected: the first key typed replaces it.
 		fillRoundedRect(renderer, x0-3, textY-2, lay.visW+6, textH+4, 4, WithAlpha(pal.accent, 90))
 	}
-	drawTextRaw(renderer, font, lay.visible, x0, textY, pal.ink, textAlignLeft)
-	if !vkTextSelected && (now/530)%2 == 0 {
+	ink := pal.ink
+	if preview {
+		ink = pal.ink2
+	}
+	drawTextRaw(renderer, font, lay.visible, x0, textY, ink, textAlignLeft)
+	if !vkTextSelected && !preview && (now/530)%2 == 0 {
 		fillRoundedRect(renderer, x0+lay.caretX, field.Y+field.H/2-textH/2+2, 2, textH-4, 1, pal.accent)
 	}
 	if lay.counter != "" && fonts.small != nil {

@@ -97,3 +97,9 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 	}
 	return ttsDecodeWAV(data, false)
 }
+
+// ttsPiperStream is the handheld's chunk-by-chunk Piper; Windows' voice
+// renders a line whole (ttsLocalSpeakChunks falls back to ttsLocalSynth).
+func ttsPiperStream(context.Context, ttsLocalVoice, []string, func([]int16, int) bool) (int, error) {
+	return 0, errors.New("streaming is not used on Windows")
+}

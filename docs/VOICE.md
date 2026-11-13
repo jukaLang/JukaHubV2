@@ -26,11 +26,14 @@ lights follow your voice. Say a command or a question:
 * it stops listening by itself about a second after you stop talking (at most
   8 seconds), or press **Menu** again to send at once;
 * **hold** Menu (or F4) and it listens for as long as you hold it (up to 8
-  seconds) — let go to send, like a walkie-talkie;
+  seconds) — let go to send, like a walkie-talkie. On a handheld this is
+  only with **Hold Menu: screenshot** off (Settings → Controls): while it is
+  on, as it is by default, holding Menu saves a screenshot instead (F4 on a
+  keyboard still listens while held);
 * **B** (Esc) cancels at any point, before or after it understood you.
 
 Menu is read the way the TrimUI's own launchers read it: a tap acts when the
-button comes up, a hold opens the orb after about half a second, and a press
+button comes up, a hold takes a screenshot (or opens the orb to talk), and a press
 that another button joins is a chord, not a voice press — so the firmware's
 **Menu + volume** (brightness) never opens the orb, and **Menu + Start** still
 quits like **Select + Start**. A Bluetooth pad's PS or Xbox button is the
@@ -92,14 +95,19 @@ Hear Juka — on a PC it opens Groq's page in your browser, on the handheld it
 shows a QR code for your phone. Accept, then press **Hear Juka**.
 
 When Groq's voice can't speak (no key, no internet, the allowance, the terms),
-a PC speaks with Windows' own voice, offline. On a TrimUI, **Download offline
-voice** in **Settings → Voice & AI** installs Piper's Kristin voice to the SD
-card; the row then selects **This device** as Juka's voice. It reads text
+a PC speaks with Windows' own voice, offline. On a TrimUI, JukaHub downloads
+Piper's Kristin voice by itself once the startup tools (ffmpeg) are in place,
+or right away from **Download offline voice** in **Settings → Voice & AI**
+(that row also selects **This device** as Juka's voice). It reads text
 without Wi-Fi, a Groq key or a daily speech limit. The download is about 90 MB
 and uses about 105 MB on the card. **Hear Juka** checks that it can speak.
-Piper is also used as a fallback if you later choose a Groq voice and Groq
-cannot speak. The download is optional, checksum verified and can resume after
-a dropped connection. The voice files live in `Apps/JukaHub/required/juka-piper/`.
+With no Groq key and no voice chosen, the offline voice is Juka's voice by
+default, and Juka says once per run that a Groq key brings Groq's voices.
+With a key, Piper takes over whenever Groq cannot speak. Piper and the voice
+model are checksum verified and resume after a dropped connection; the
+voice's small settings file is checked for the shape Piper reads. Long
+answers start playing after the first sentence while the rest is made.
+The voice files live in `Apps/JukaHub/required/juka-piper/`.
 The [Piper engine](https://github.com/rhasspy/piper) is MIT licensed; the
 [Kristin voice card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/kristin/medium/MODEL_CARD)
 identifies public-domain LibriVox recordings as its training data.
@@ -108,13 +116,13 @@ Other Linux devices may also use espeak-ng, espeak, flite, pico2wave or Piper
 (with a voice) in JukaHub's `required/` folder or on its PATH. Music and a
 video play softer while Juka talks. Quiet Mode, a ringing alarm and starting a
 game, a video or music silence the voice; the Interface sounds switch does
-not, and the system volume sets how loud it is. The new download has been
-checked with Piper on a PC, but needs its first Smart Pro playback test.
+not, and the system volume sets how loud it is. The voice model has been
+checked with Piper on a PC, but still needs its first Smart Pro playback test.
 
-Offline speech reads an answer that is already available. Asking a new open
-question, describing a picture, transcribing the handheld microphone and
-voice typing still use Groq. The built-in commands and typed commands work
-without Groq. An on-device language model would need a separate runtime and
+Offline speech reads an answer that is already available. Smart Pro packages
+also carry a local recognizer for microphone commands and voice typing when
+Groq cannot transcribe. Asking a new open question and describing a picture
+still use Groq. An on-device language model would need a separate runtime and
 memory test; see [Offline AI options](LOCAL_AI.md).
 
 ## Three ways to say it
@@ -122,14 +130,13 @@ memory test; see [Offline AI options](LOCAL_AI.md).
 **The handheld's microphone.** Press **A** (or **Menu** for the orb) and
 speak. The first 0.3 seconds after the start chime are ignored, so the chime
 itself never counts as speech. Listening stops by itself about a second after
-you stop talking (at most 8 seconds); the clip is turned into words by Groq's
-Whisper — the same service voice typing on the keyboard uses — and the command
-runs. It needs the Groq API key from **Settings → General → Groq API key**
-(its **Paste it from your phone** shows a code that opens the companion page
-at its **Groq API key** card) and an internet
-connection. Along with the clip, Groq receives a short list of the names on
-this handheld (screen, app and game titles) so that "JukaLand" or a game's
-title comes back spelled right. Nothing is recorded until you ask, the
+you stop talking (at most 8 seconds); Groq's Whisper turns the clip into words
+when available, and the command runs. On a Smart Pro, the bundled local model
+takes over when Groq is unavailable, including with no key or Wi-Fi. With
+Groq, the clip and a short list of names on this handheld (screen, app and
+game titles) are sent to its service so that "JukaLand" or a game's title
+comes back spelled right. With the local model both stay on the handheld.
+Nothing is recorded until you ask, the
 microphone closes as soon as the clip ends or the page is left (or something
 else covers it — the Start menu, Quick Settings, a panel), and neither the
 audio nor the words are saved or logged.
@@ -300,8 +307,9 @@ itself like the player's.
 
 ## Voice typing
 
-Voice typing writes what you say into the on-screen keyboard's field (Groq's
-Whisper, with the key from **Settings → General**). Press **R2** while the
+Voice typing writes what you say into the on-screen keyboard's field. It uses
+Groq's Whisper when available and the bundled local model on Smart Pro when
+Groq cannot transcribe. Press **R2** while the
 keyboard is up — or the mic chip in its top row, **Menu** on a handheld,
 **F4** on a keyboard — and press again to send; **B** cancels. R2 works in the
 browser's address bar too, and with the pointer up over the page above the
@@ -309,6 +317,16 @@ keyboard L2 and R2 still scroll. **Settings → Voice & AI → Start voice typin
 when the keyboard opens** makes a Chat message's keyboard listen as soon as it
 opens, for people who text by voice; it stops on its own when nothing is said
 for a few seconds, and password, key, address and search fields never listen.
+
+While recording a Chat message, provisional words appear in the keyboard field
+and the Chat composer as you speak. Both recognizers work on clips rather than a
+continuous stream, so the text updates in short bursts and may correct earlier
+words. Stopping the recording gets one full transcript and puts it in the draft;
+**B** discards the preview and keeps the draft as it was. Live preview sends
+interim clips to Groq while the microphone is open, including when you later
+cancel. With no key or Wi-Fi, Smart Pro preview runs locally instead; it may
+update more slowly, depending on the device's workload. Local audio and text
+travel through memory and process pipes without being saved to a file.
 
 ## Files
 
@@ -342,8 +360,8 @@ for a few seconds, and password, key, address and search fields never listen.
 
 * Languages other than English (the parser's phrases are English; Whisper is
   asked for English).
-* Offline speech recognition on the handheld: there is no small offline model
-  in JukaHub, and Windows' built-in recogniser (System.Speech) is not used.
+* Offline recognition on Windows and other TrimUI models; the first bundled
+  model targets the Smart Pro.
 * Juka's voice in languages other than English (Groq's Orpheus and the
   downloadable Kristin voice are English).
 * A wake word that is always listening: deliberately not — a handheld

@@ -3955,6 +3955,9 @@ func handleInputSelection(renderer *sdl.Renderer, config *Config, sceneIdx, elem
 func runInputModal(renderer *sdl.Renderer, config *Config) {
 	defer func() { virtualKeyboardActive = false }()
 	vkEnsureLayout()
+	// This loop never runs ledMicTick: the lights' microphone would fill its
+	// queue unread. It reopens on the main loop afterwards (ledmic.go).
+	ledMicClose()
 	exitInput := false
 	for !exitInput {
 		// An exit request from outside the loop (a stop signal, the power
@@ -5742,6 +5745,9 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	// toast cleared with an empty message used to leave its rect behind).
 	toastRect = sdl.Rect{}
 	toastCutMsg = ""
+	// Notifications during videos (videonotif.go): the "came in during the
+	// video" line and chat toasts are raised here, before the toast is read.
+	videoNotifTick(config)
 	currentToastMu.Lock()
 	t := currentToast
 	currentToastMu.Unlock()
@@ -5765,6 +5771,11 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	// whose row is scrolled off the card, and every toast while the centre is
 	// covered (the full-screen player, a chat sheet) still show.
 	if notifCentreShowsRow(t.Message) {
+		return
+	}
+	// A full-screen video that is playing keeps toasts nobody asked for off
+	// the picture unless Settings → Media says otherwise (videonotif.go).
+	if videoNotifHoldsToast(config, t) {
 		return
 	}
 
@@ -7359,13 +7370,15 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 // order is the accessibility contract, and it is one function so the main loop
 // and the audits cannot disagree about it:
 //
-//  1. The top bar, when it holds the focus. A bar button that draws its focus
+//  1. Home, including any Home overlay that owns the press.
+//  2. Back for a floating video, before the scene navigates away.
+//  3. The top bar, when it holds the focus. A bar button that draws its focus
 //     ring has to answer to A: the screen underneath binds the same buttons
 //     (the music player's A plays a track, the terminal's arrows scroll), and
 //     running the scene first left the ring on a button the pad could not
 //     press.
-//  2. The home layout, the Patch list and the screen's own module.
-//  3. The top bar again, for an Up the screen did not take. A screen with no
+//  4. The Patch list and the screen's own module.
+//  5. The top bar again, for an Up the screen did not take. A screen with no
 //     controls of its own (Playtime, MusicPlayer, Terminal) has no grid to step
 //     up from, so Up on an unfocused screen is how the header is reached on a
 //     handheld with no touchscreen.
@@ -7375,10 +7388,16 @@ func screenPadPress(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return false
 	}
-	if handleChromeController(e, config) {
+	if homeLayoutActive && handleHomeController(e, config) {
 		return true
 	}
-	if homeLayoutActive && handleHomeController(e, config) {
+	// Back closes a floating video before the focused chrome button or scene
+	// navigates away. Modal panels, Home overlays and the on-screen keyboard
+	// have already had their turn.
+	if videoMiniBackController(e) {
+		return true
+	}
+	if handleChromeController(e, config) {
 		return true
 	}
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&

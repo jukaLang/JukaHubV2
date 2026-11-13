@@ -1074,19 +1074,8 @@ func setBuildSections() []setSection {
 					},
 				},
 				setVibrationLevelRow(),
-				{
-					ID: "ledsync", Label: "Lights follow the music", Kind: setKindToggle, Quiet: true,
-					Detail:  setStatic("The stick lights pulse with what is playing"),
-					Visible: setQSAvailable(qsActionLedSync),
-					Get:     func(c *Config) bool { return c.Variables.LEDSync },
-					Set:     setQSWrite(qsActionLedSync),
-				},
-				{
-					ID: "lights", Label: "Light style", Kind: setKindAction,
-					Detail:  setStatic("Colour, effect and brightness of the lights"),
-					Visible: func(*Config) bool { return ledSyncAvailable() },
-					Open:    func(*Config) { openLEDPanel() },
-				},
+				// The stick lights (and their mic mode) have their own section
+				// now: Stick lights, below Controls (ledsettings.go).
 				{
 					ID: "audio", Label: "Audio output & equalizer", Kind: setKindAction,
 					Detail: setStatic("Output device, EQ presets and loudness"),
@@ -1269,6 +1258,13 @@ func setBuildSections() []setSection {
 			Rows:     inmapSettingsRows(),
 		},
 		{
+			// The LEDs around the analog sticks: on/off, what they show, colour,
+			// effect and brightness (ledsettings.go).
+			ID: ledSettingsSection, Title: "Stick lights", Glyph: "sparkles",
+			Subtitle: "Colour, effect and brightness of the stick LEDs",
+			Rows:     ledSettingsRows(),
+		},
+		{
 			ID: "media", Title: "Media & playback", Glyph: "video",
 			Subtitle: "Video quality, subtitles and downloads",
 			Rows: []setRow{
@@ -1313,6 +1309,22 @@ func setBuildSections() []setSection {
 					Set: func(c *Config, on bool) {
 						mediaSetKeepWatched(c, on)
 						setToast("Keep fully watched videos: " + setOnOff(on))
+					},
+				},
+				{
+					// Off by default: a playing full-screen video is not
+					// interrupted (videonotif.go).
+					ID: "notifyDuringVideo", Label: "Notifications during videos", Kind: setKindToggle,
+					Detail: func(c *Config) string {
+						if videoNotifEnabled(c) {
+							return "Alerts and chat messages appear over a full-screen video"
+						}
+						return "Off: alerts wait in the bell until the video stops"
+					},
+					Get: videoNotifEnabled,
+					Set: func(c *Config, on bool) {
+						setStoreBool(c, videoNotifKey, on)
+						setToast("Notifications during videos: " + setOnOff(on))
 					},
 				},
 				{

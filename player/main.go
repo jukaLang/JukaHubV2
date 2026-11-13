@@ -818,6 +818,8 @@ func main() {
 			widgetsTick(config)
 			// Nothing listens behind a game: the voice orb goes (voiceorb.go).
 			voiceOrbAway()
+			// Nor do the stick lights: the game gets the microphone (ledmic.go).
+			ledMicClose()
 			// Mouse in games and apps: a goroutine watches the pad for the
 			// Select + L1 chord while the child runs (vcursor_bridge_linux.go).
 			vcursorBridgeTick(config)
@@ -1322,6 +1324,11 @@ func main() {
 						}
 						// Home scene uses the dedicated focus graph + activation.
 						if homeLayoutActive && handleHomeKey(e, config) {
+							continue
+						}
+						// The next Back press closes a floating video without moving
+						// focus to the top bar. Home's own overlays go first.
+						if videoMiniBackKey(e) {
 							continue
 						}
 						// Patch scene owns its list + modals (no config elements).
@@ -2846,7 +2853,9 @@ func main() {
 				// Select + Start is the handheld's system quit chord and is read
 				// from the physical buttons, before remapping or any overlay: it
 				// has to leave the app from a panel, a video or the keyboard too.
-				if exitChordPressed(e) {
+				// The Back a Menu tap sends (menuBackWhich, menushot.go) was
+				// counted as Select already, from the physical press.
+				if e.Which != menuBackWhich && exitChordPressed(e) {
 					requestAppExit()
 					continue
 				}
@@ -2864,7 +2873,7 @@ func main() {
 				// from the physical buttons like the quit chord, before the remap;
 				// L1's press is taken while Select is held, so the shoulder does
 				// not also turn a page. vcursorTick times the hold.
-				if e.Which != padRepeatWhich && e.Which != inmapSynthWhich && vcursorChordButton(e, config) {
+				if e.Which != padRepeatWhich && e.Which != inmapSynthWhich && e.Which != menuBackWhich && vcursorChordButton(e, config) {
 					continue
 				}
 				// Accessibility remapping rewrites the physical button once, here,
@@ -2948,8 +2957,8 @@ func main() {
 						}
 						// Video control shortcuts (always active when video is playing).
 						// The player owns B while it is on screen, so the scene's generic
-						// back must not fire on the same press. Once the video floats in
-						// its mini window the scene owns the pad again.
+						// back must not fire on the same press. Once the video floats,
+						// the scene owns the pad except Back, which closes the window.
 						videoWasPlaying := snapshotVideoState().phase != "idle" && !videoMiniVisible()
 						if HandleVideoControllerInput(e) {
 							continue
@@ -3264,6 +3273,8 @@ func main() {
 				// stick navigation, the virtual cursor and the calibration
 				// screen read them (stickcal.go).
 				stickNoteAxis(e)
+				// L2 / R2 with Menu held: a chord, no tap or hold (menushot.go).
+				voiceOrbMenuNoteAxis(e)
 				// A ringing alarm is modal: the stick must not move the focus of
 				// the screen behind it (its two buttons answer the D-pad). So is
 				// the game assistant over a paused game (a Bluetooth pad's stick).
@@ -3321,6 +3332,8 @@ func main() {
 			config = applyConfigReload(config, next)
 		}
 		syncLEDLoopSettingsIfDue(config, time.Now())
+		// LED mode Microphone reads the mic here, on the main thread (ledmic.go).
+		ledMicTick(time.Now())
 
 		// Apply kinetic scroll for text browser panels
 		if textBrowserScrollCooldown > 0 {

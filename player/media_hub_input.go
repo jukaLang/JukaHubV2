@@ -7,8 +7,8 @@ package main
 // Focus lives in three zones — the search bar, the tab strip and the content —
 // plus the details sheet and the confirmation, which own every press while
 // they are up. B / Escape leaves the screen from anywhere (after closing an
-// open sheet, or a list opened in the Library), exactly like every other
-// screen.
+// open sheet, or a list opened in the Library), except when it closes a
+// floating video first.
 
 import (
 	"github.com/veandco/go-sdl2/sdl"

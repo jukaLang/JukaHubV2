@@ -36,7 +36,6 @@ package main
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 )
@@ -138,7 +137,8 @@ func ttsRun(ctx context.Context, s *ttsSession, pre ttsFail) {
 
 // ttsProduce makes the chunks' sound in order and hands it to the feeder:
 // Groq's voice while it answers, and once it cannot, the device's voice for
-// everything left in one go — or nothing more, when there is none.
+// everything left (Piper chunk by chunk from one process, other engines in one
+// go) — or nothing more, when there is none.
 func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *ttsProduced) {
 	defer close(out)
 	groq := s.key != ""
@@ -162,14 +162,18 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 		if !s.hasLocal {
 			return
 		}
-		samples, rate, err := ttsLocalSpeak(ctx, s.local, strings.Join(s.chunks[i:], " "), s.gender)
-		if err != nil {
+		emitted := false
+		err := ttsLocalSpeakChunks(ctx, s.local, s.chunks[i:], s.gender, func(samples []int16, rate int) bool {
+			res.local = true
+			clip := ttsClipFor(samples, rate, s.rate)
+			if clip == nil {
+				return ctx.Err() == nil
+			}
+			emitted = true
+			return ttsSend(ctx, out, clip)
+		})
+		if err != nil && !emitted {
 			res.localFailed = ctx.Err() == nil
-			return
-		}
-		res.local = true
-		if clip := ttsClipFor(samples, rate, s.rate); clip != nil {
-			ttsSend(ctx, out, clip)
 		}
 		return
 	}
@@ -502,11 +506,26 @@ func ttsWatch(gen uint64, origin ttsOrigin) {
 	}
 }
 
+// ttsNoKeyTold is set once the no-Groq-key notice was shown this run. Main
+// thread.
+var ttsNoKeyTold bool
+
 // ttsReported takes a finished session's report on the main thread: the
 // one-time notices, and the Hear Juka row's answer.
 func ttsReported(rep ttsReport) {
 	if rep.origin != ttsFromTest {
 		switch {
+		case rep.fail == ttsFailNoKey && !ttsNoKeyTold && !rep.localFailed && !ttsVoiceInstalling():
+			// Once per run: the offline voice spoke (or there is none), and a
+			// Groq key is what brings Groq's voices. Not while the offline
+			// voice is still downloading, and not over a device voice that
+			// failed (that is logged; the key is not the problem).
+			ttsNoKeyTold = true
+			if rep.local {
+				ShowToast("Juka is using the offline voice — add a Groq key in Settings → General for Groq's voices", ToastKindInfo)
+			} else {
+				ShowToast("Juka's voice needs a Groq key (Settings → General) or the offline voice (Settings → Voice & AI)", ToastKindWarning)
+			}
 		case rep.fail == ttsFailTerms && ttsGateTellOnce(rep.keyID, ttsFailTerms):
 			ShowToast("Juka's voice needs a one-time OK on Groq — see Settings → Voice & AI", ToastKindWarning)
 		case rep.fail == ttsFailLimit && rep.daily && ttsGateTellOnce(rep.keyID, ttsFailLimit):

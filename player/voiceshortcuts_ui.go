@@ -705,12 +705,8 @@ func vscListen(config *Config) {
 		vscSay("No microphone found — type it instead", tbxToneWarn)
 		PlayErrorSound()
 		return
-	case strings.TrimSpace(groqAPIKey()) == "":
-		vscSay("Saying it needs your Groq key (Settings → General) — or type it", tbxToneWarn)
-		PlayErrorSound()
-		return
-	case !IsOnline():
-		vscSay("Saying it needs internet — type it instead", tbxToneWarn)
+	case !sttCanListen():
+		vscSay("Speech needs a Groq key and Wi-Fi, or offline speech installed", tbxToneWarn)
 		PlayErrorSound()
 		return
 	}
@@ -881,10 +877,6 @@ func vscFinishClip(config *Config) {
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
-	if key == "" {
-		vscSay("Saying it needs your Groq key (Settings → General) — or type it", tbxToneWarn)
-		return
-	}
 	wav := vkEncodeWAV(r.buf, vkVoiceRate)
 	r.buf = r.buf[:0]
 	// A command gets the names on this handheld as the vocabulary hint, as a
@@ -900,11 +892,11 @@ func vscFinishClip(config *Config) {
 	r.waiting = true
 	vscPage.nav.focus = "cancel"
 	PlayActivateSound()
-	reqCtx, cancel := context.WithTimeout(sceneWorkContext(), vkVoiceTimeout)
+	reqCtx, cancel := context.WithTimeout(sceneWorkContext(), sttTimeout)
 	r.cancel = cancel
 	started := runSceneTask(func(context.Context) {
 		defer cancel()
-		text, err := voiceTranscribe(reqCtx, key, wav, prompt)
+		text, err := sttCommandTranscribe(reqCtx, key, wav, prompt)
 		tbxPost(func() { vscTranscribed(gen, step, text, err) })
 	})
 	if !started {
