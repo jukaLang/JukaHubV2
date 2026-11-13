@@ -86,7 +86,7 @@ else
     echo "    (no Remote Play helpers in native/bin: the package ships without Remote Play streaming)"
 fi
 # Offline speech for Smart Pro. CI builds whisper.cpp on arm64 and puts the
-# verified binary and model in native/bin; local packages may omit the folder.
+# verified binary and model in native/bin.
 STT_DIR=native/bin/juka-whisper
 STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
 if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny.bin" ] && [ -f "$STT_DIR/LICENSE.txt" ] && \
@@ -97,7 +97,8 @@ if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny.bin" ] && [ -f "$ST
     chmod 755 "$PKG/juka-whisper/whisper-cli"
     echo "    Offline speech: $PKG/juka-whisper"
 else
-    echo "    (no verified offline speech package in native/bin)"
+    echo "ERROR: verified offline speech is required for the Smart Pro SD-card package" >&2
+    exit 1
 fi
 if [ -d native/libs/brick-stock ]; then
     mkdir -p "$PKG/libs/brick-stock"

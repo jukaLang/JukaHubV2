@@ -65,10 +65,11 @@ const (
 type orbOffer int
 
 const (
-	orbOfferNone    orbOffer = iota
-	orbOfferGroqKey          // Settings → General, where the Groq key goes
-	orbOfferPhone            // the Voice command page's phone QR code
-	orbOfferSearch           // the Home search sheet with the words typed in
+	orbOfferNone          orbOffer = iota
+	orbOfferGroqKey                // Settings → General, where the Groq key goes
+	orbOfferOfflineSpeech          // one-time offline recognizer install
+	orbOfferPhone                  // the Voice command page's phone QR code
+	orbOfferSearch                 // the Home search sheet with the words typed in
 )
 
 // orbSource is where a press of the voice button came from.
@@ -886,12 +887,17 @@ func voiceOrbListen(config *Config) {
 	voiceOrb.heard, voiceOrb.words = "", ""
 	voiceOrb.choices, voiceOrb.act = nil, nil
 	switch {
-	case !sttCanListen():
+	case !sttCanListenFor(config):
 		offer := orbOfferNone
-		if sttModeOf(config) != sttModeOffline && strings.TrimSpace(groqAPIKey()) == "" {
+		sub := "Set it up in Settings → Voice & AI"
+		switch voiceSTTSetupFix(sttModeOf(config), sttSupported(), sttLocalReady(), groqAPIKey()) {
+		case voiceFixOfflineSpeech:
+			offer = orbOfferOfflineSpeech
+			sub = "Install offline speech once to use Menu without a Groq key"
+		case voiceFixGroqKey:
 			offer = orbOfferGroqKey
 		}
-		voiceOrbSay("Voice needs speech recognition", "Set it up in Settings → Voice & AI", tbxToneWarn, offer)
+		voiceOrbSay("Voice needs speech recognition", sub, tbxToneWarn, offer)
 		PlayErrorSound()
 		return
 	}
@@ -914,7 +920,9 @@ func voiceOrbListen(config *Config) {
 	}
 	vkMic.Store(vkMicPresent)
 	voiceOrb.mic = mic
-	voiceWarmGroq() // the handshake happens while the user talks (voicewarm.go)
+	if sttModeOf(config) != sttModeOffline {
+		voiceWarmGroq() // the handshake happens while the user talks (voicewarm.go)
+	}
 	if cap(voiceOrb.buf) < voiceMaxBytes {
 		voiceOrb.buf = make([]byte, 0, voiceMaxBytes)
 	}
@@ -925,7 +933,7 @@ func voiceOrbListen(config *Config) {
 	voiceOrbSetPhase(orbListening)
 	voiceOrb.title = "Listening…"
 	voiceOrb.sub = "Say “open YouTube” or “volume 50”"
-	if strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting()) {
+	if sttModeOf(config) != sttModeOffline && strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting()) {
 		voiceOrb.sub += " — or ask a question"
 	}
 	voiceOrb.tone, voiceOrb.offer = tbxToneNeutral, orbOfferNone
@@ -1075,6 +1083,8 @@ func voiceOrbTranscribed(gen int, text string, err error) {
 		switch fix {
 		case voiceFixGroqKey:
 			offer = orbOfferGroqKey
+		case voiceFixOfflineSpeech:
+			offer = orbOfferOfflineSpeech
 		case voiceFixPhone, voiceFixType:
 			offer = orbOfferPhone
 		}
@@ -1147,6 +1157,8 @@ func voiceOrbShowOutcome(out voiceOutcome) {
 		switch {
 		case out.Fix == voiceFixGroqKey:
 			offer = orbOfferGroqKey
+		case out.Fix == voiceFixOfflineSpeech:
+			offer = orbOfferOfflineSpeech
 		case out.Fix == voiceFixPhone || out.Fix == voiceFixType:
 			offer = orbOfferPhone
 		case out.Search != "":
@@ -1207,6 +1219,9 @@ func voiceOrbRunOffer(config *Config) {
 	case orbOfferGroqKey:
 		PlayActivateSound()
 		vkVoiceOpenKeySettings(config)
+	case orbOfferOfflineSpeech:
+		PlayActivateSound()
+		sttInstallOffline(config)
 	case orbOfferPhone:
 		PlayActivateSound()
 		voiceOrbOpenPhone(config)
@@ -1665,6 +1680,8 @@ func orbOfferLabel(o orbOffer) string {
 	switch o {
 	case orbOfferGroqKey:
 		return "Add Groq key"
+	case orbOfferOfflineSpeech:
+		return "Install offline speech"
 	case orbOfferPhone:
 		return "Use my phone"
 	case orbOfferSearch:

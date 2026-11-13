@@ -270,7 +270,7 @@ func voiceSay(msg string, tone tbxTone, fix voiceFix) {
 	voicePage.choices = nil
 	voicePage.act, voicePage.leave = nil, false
 	switch fix {
-	case voiceFixGroqKey, voiceFixPhone, voiceFixType:
+	case voiceFixGroqKey, voiceFixOfflineSpeech, voiceFixPhone, voiceFixType:
 		voicePage.nav.focus = "fix"
 	default:
 		voicePage.nav.focus = "speak"
@@ -304,18 +304,19 @@ func voiceStartListening(config *Config) {
 	if voicePage.mic != nil {
 		voiceStopCapture()
 	}
-	voicePage.hasKey = sttCanListen()
+	voicePage.hasKey = sttCanListenFor(config)
 	switch {
 	case vkMic.Load() == vkMicAbsent:
 		voiceSay("No microphone found — say it on your phone, or type it", tbxToneWarn, voiceFixPhone)
 		PlayErrorSound()
 		return
-	case !sttCanListen():
-		fix := voiceFixNone
-		if sttModeOf(config) != sttModeOffline && strings.TrimSpace(groqAPIKey()) == "" {
-			fix = voiceFixGroqKey
+	case !sttCanListenFor(config):
+		fix := voiceSTTSetupFix(sttModeOf(config), sttSupported(), sttLocalReady(), groqAPIKey())
+		msg := "Set up speech recognition in Settings → Voice & AI"
+		if fix == voiceFixOfflineSpeech {
+			msg = "Install offline speech in Settings → Voice & AI"
 		}
-		voiceSay("Set up speech recognition in Settings → Voice & AI", tbxToneWarn, fix)
+		voiceSay(msg, tbxToneWarn, fix)
 		PlayErrorSound()
 		return
 	}
@@ -531,7 +532,7 @@ func voiceErrorText(err error) (string, voiceFix) {
 		return "Close a game to free memory for offline speech, then try again", voiceFixNone
 	}
 	if errors.Is(err, errSTTUnavailable) {
-		return "Offline speech is missing — install it in Settings → Voice & AI", voiceFixNone
+		return "Offline speech is missing — install it in Settings → Voice & AI", voiceFixOfflineSpeech
 	}
 	if errors.Is(err, errSTTGroqKey) {
 		return "Groq speech needs an API key — add it in Settings", voiceFixGroqKey
@@ -553,6 +554,21 @@ func voiceErrorText(err error) (string, voiceFix) {
 		return "Speech needs internet — type it, or use your phone", voiceFixType
 	}
 	return "Speech failed — try again", voiceFixNone
+}
+
+// When Automatic is selected on a Smart Pro, missing local speech takes
+// priority over a missing Groq key. The next Menu press can then repair it.
+func voiceSTTSetupFix(mode string, supported, local bool, key string) voiceFix {
+	if supported && mode != sttModeGroq {
+		if local {
+			return voiceFixNone
+		}
+		return voiceFixOfflineSpeech
+	}
+	if strings.TrimSpace(key) == "" {
+		return voiceFixGroqKey
+	}
+	return voiceFixNone
 }
 
 // voiceTranscribe sends a clip to Groq's Whisper, the way voice typing does
@@ -807,6 +823,8 @@ func voiceRunFix(config *Config) {
 	case voiceFixGroqKey:
 		voiceReset()
 		vkVoiceOpenKeySettings(config)
+	case voiceFixOfflineSpeech:
+		sttInstallOffline(config)
 	case voiceFixPhone:
 		voiceOpenPhoneSheet(config)
 	case voiceFixType:
@@ -819,6 +837,8 @@ func voiceFixLabel(fix voiceFix) string {
 	switch fix {
 	case voiceFixGroqKey:
 		return "Add Groq key"
+	case voiceFixOfflineSpeech:
+		return "Install offline speech"
 	case voiceFixPhone:
 		return "Use my phone"
 	case voiceFixType:

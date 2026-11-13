@@ -149,11 +149,9 @@ fi
 # These identifiers match DeviceModel values and the updater's strict target map.
 TRIMUI_DEVICES=(trimui-smart-pro trimui-smart-pro-s trimui-brick trimui-brick-pro trimui-hammer)
 STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' native/bin/juka-whisper/BUILDINFO.txt 2>/dev/null || true)
-if [ -n "$STT_BIN_SHA" ]; then
-    if ! sh native/package-stt.sh native/bin/juka-whisper "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"; then
-        rm -f "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"
-        echo "WARNING: the standalone offline speech package could not be built" >&2
-    fi
+if [ -z "$STT_BIN_SHA" ] || ! sh native/package-stt.sh native/bin/juka-whisper "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"; then
+    echo "ERROR: verified offline speech is required for the Smart Pro release" >&2
+    exit 1
 fi
 TARGETS_JSON=""
 for device in "${TRIMUI_DEVICES[@]}"; do
@@ -178,11 +176,7 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     else
         echo "WARNING: ${device} ships without Remote Play streaming (no helpers)" >&2
     fi
-    if [ "$device" = trimui-smart-pro ] && \
-        [ -f native/bin/juka-whisper/whisper-cli ] && [ -f native/bin/juka-whisper/ggml-tiny.bin ] && \
-        [ -f native/bin/juka-whisper/LICENSE.txt ] && [ -n "$STT_BIN_SHA" ] && \
-        [ "$(sha256sum native/bin/juka-whisper/whisper-cli | cut -d' ' -f1)" = "$STT_BIN_SHA" ] && \
-        printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 native/bin/juka-whisper/ggml-tiny.bin | sha256sum -c - > /dev/null; then
+    if [ "$device" = trimui-smart-pro ]; then
         mkdir -p "$TARGET_DIR/juka-whisper"
         cp native/bin/juka-whisper/whisper-cli native/bin/juka-whisper/ggml-tiny.bin \
             native/bin/juka-whisper/BUILDINFO.txt native/bin/juka-whisper/LICENSE.txt "$TARGET_DIR/juka-whisper/"

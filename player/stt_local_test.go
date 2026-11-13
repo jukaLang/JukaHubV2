@@ -87,3 +87,20 @@ func TestSTTPreviewChoiceKeepsOfflineAudioLocal(t *testing.T) {
 		t.Fatalf("automatic preview chose cloud=%t local=%t fallback=%t", cloud, localFirst, fallback)
 	}
 }
+
+func TestSTTMenuWorksWithoutGroq(t *testing.T) {
+	for _, mode := range []string{sttModeAuto, sttModeOffline} {
+		if !sttListenAvailable(mode, true, "", false) {
+			t.Errorf("%s should accept a ready offline recognizer without a key or Wi-Fi", mode)
+		}
+		if fix := voiceSTTSetupFix(mode, true, true, ""); fix != voiceFixNone {
+			t.Errorf("%s asked for setup with local speech ready: %v", mode, fix)
+		}
+		if fix := voiceSTTSetupFix(mode, true, false, ""); fix != voiceFixOfflineSpeech {
+			t.Errorf("%s offered %v instead of offline installation", mode, fix)
+		}
+	}
+	if fix := voiceSTTSetupFix(sttModeGroq, true, false, ""); fix != voiceFixGroqKey {
+		t.Errorf("Groq-only mode should ask for its key: %v", fix)
+	}
+}
