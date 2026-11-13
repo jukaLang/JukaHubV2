@@ -207,7 +207,7 @@ jobs:
         run: |
           set +e
           dest=player/native/bin/juka-llm
-          model=SmolLM2-360M-Instruct-Q4_K_M.gguf
+          model=SmolLM2-135M-Instruct-Q4_0.gguf
           miss() { rm -f "$dest/llama-cli" "$dest/$model" "$dest/BUILDINFO.txt" "$dest/LLAMA_LICENSE.txt" "$dest/MODEL_LICENSE.txt"; exit 0; }
           if ! name=$(sh .github/scripts/build-root.sh key llm); then miss; fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
@@ -216,7 +216,7 @@ jobs:
           want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           [ -n "$want_model" ] && [ -n "$want_bin" ] || miss
-          [ "$(wc -c < "$dest/$model")" -eq 270590880 ] || miss
+          [ "$(wc -c < "$dest/$model")" -eq 91893088 ] || miss
           [ "$(sha256sum "$dest/$model" | cut -d' ' -f1)" = "$want_model" ] || miss
           [ "$(sha256sum "$dest/llama-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
           chmod 755 "$dest/llama-cli"

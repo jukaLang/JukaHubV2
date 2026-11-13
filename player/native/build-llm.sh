@@ -5,10 +5,10 @@ set -eu
 
 LLAMA_COMMIT=4762ad7316dcdec20016ab5985fb46a27902204d
 SOURCE_SHA=06b6a3a1c2d12becc05d02c701274ab1f6d033399b4a20a166b919289e19233c
-MODEL_REV=7be6f65f1db715fe5dc5a4634c0d459b4eed42ec
-MODEL_NAME=SmolLM2-360M-Instruct-Q4_K_M.gguf
-MODEL_SHA=2fa3f013dcdd7b99f9b237717fa0b12d75bbb89984cc1274be1471a465bac9c2
-MODEL_SIZE=270590880
+MODEL_REV=09816acd5d99df7be770d85ea30822623dab342c
+MODEL_NAME=SmolLM2-135M-Instruct-Q4_0.gguf
+MODEL_SHA=bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03
+MODEL_SIZE=91893088
 APACHE_SHA=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 
 WORK=$(mktemp -d /tmp/jukahub-llm.XXXXXXXX)
@@ -46,7 +46,7 @@ fi
 
 MODEL="$WORK/$MODEL_NAME"
 curl -fL --retry 3 --connect-timeout 15 --max-time 2400 \
-    "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/$MODEL_REV/$MODEL_NAME?download=true" \
+    "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/$MODEL_REV/$MODEL_NAME?download=true" \
     -o "$MODEL"
 test "$(wc -c < "$MODEL")" -eq "$MODEL_SIZE"
 printf '%s  %s\n' "$MODEL_SHA" "$MODEL" | sha256sum -c -
@@ -54,7 +54,7 @@ printf '%s  %s\n' "$MODEL_SHA" "$MODEL" | sha256sum -c -
 # This small known answer also checks that the runner understands the GGUF.
 SMOKE_PROMPT=$(printf '<|im_start|>user\nWhat is two plus two?<|im_end|>\n<|im_start|>assistant\n')
 timeout 180 "$BIN" -m "$MODEL" -p "$SMOKE_PROMPT" \
-    -n 32 -c 256 -b 128 -ub 128 -t 3 -ngl 0 --temp 0.2 \
+    -n 32 -c 256 -b 64 -ub 64 -t 2 -ngl 0 --temp 0.2 \
     --no-conversation --single-turn --no-display-prompt --no-warmup --simple-io \
     > "$WORK/smoke.txt" 2> "$WORK/smoke.log"
 grep -Eiq '(^|[^0-9])(4|four)([^0-9]|$)' "$WORK/smoke.txt"

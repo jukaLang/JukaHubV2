@@ -14,7 +14,7 @@ import (
 const (
 	offlineAIPackKey        = "offline-ai"
 	offlineAIPackAsset      = "JukaHub-OfflineAI-linux-arm64.zip"
-	offlineAIInstallTimeout = 50 * time.Minute // the larger model can need resumed 15-minute transfers
+	offlineAIInstallTimeout = 50 * time.Minute // SD-card downloads can need resumed transfers
 )
 
 func offlineAIPackSpec() relPackSpec {
@@ -22,8 +22,8 @@ func offlineAIPackSpec() relPackSpec {
 		Key:         offlineAIPackKey,
 		Asset:       offlineAIPackAsset,
 		Title:       "offline AI",
-		MaxAsset:    320 << 20,
-		MaxUnpacked: 340 << 20,
+		MaxAsset:    150 << 20,
+		MaxUnpacked: 160 << 20,
 		Root:        offlineAIDirName,
 		Probe:       offlineAIPackProbe,
 		Supported:   offlineAISupported,
@@ -66,7 +66,7 @@ func offlineAISettingsRows() []setRow {
 			if offlineAIReady() {
 				return "Small on-device model answers when Groq is unavailable · no key needed"
 			}
-			return "Optional ~280 MB download · needs free space on the card · slower than Groq"
+			return "Optional ~100 MB download · needs free space on the card · slower than Groq"
 		},
 		Open: offlineAIInstall,
 	}}

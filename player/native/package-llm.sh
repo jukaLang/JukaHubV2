@@ -5,9 +5,9 @@ set -eu
 
 src=${1:?source directory required}
 out=${2:?output zip required}
-model=SmolLM2-360M-Instruct-Q4_K_M.gguf
-model_sha=2fa3f013dcdd7b99f9b237717fa0b12d75bbb89984cc1274be1471a465bac9c2
-model_size=270590880
+model=SmolLM2-135M-Instruct-Q4_0.gguf
+model_sha=bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03
+model_size=91893088
 
 for name in llama-cli "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; do
     test -s "$src/$name"

@@ -21,11 +21,12 @@ import (
 
 const (
 	offlineAIDirName    = "juka-llm"
-	offlineAIModelName  = "SmolLM2-360M-Instruct-Q4_K_M.gguf"
-	offlineAIModelSize  = 270590880
-	offlineAIMinFreeMB  = 500
+	offlineAIModelName  = "SmolLM2-135M-Instruct-Q4_0.gguf"
+	offlineAIModelSize  = 91893088
+	offlineAIMinFreeMB  = 350
 	offlineAIReplyRunes = 420
-	offlineAITimeout    = 120 * time.Second
+	offlineAITimeout    = 60 * time.Second
+	offlineAIOutputMax  = 8 << 10
 )
 
 var errOfflineAIMissing = errors.New("offline AI is not installed")
@@ -92,24 +93,22 @@ func offlineAICheckMemory() error {
 
 func offlineAIPrompt(question string, unmatchedAction bool) string {
 	question = strings.NewReplacer("<|im_start|>", " ", "<|im_end|>", " ").Replace(question)
-	system := "You are Juka, a voice assistant on a handheld with no internet. " +
-		"Answer in one or two short plain sentences. Be honest when you do not know a current fact. " +
-		"You cannot open apps, change settings, or take other actions."
+	system := "You are Juka. Answer in one short factual sentence. Say if unsure. You cannot take actions."
 	if unmatchedAction {
-		system += " The app could not carry out this request. Say that it was not done, then give a useful suggestion."
+		system += " The request was not done; say so and suggest a next step."
 	}
 	return "<|im_start|>system\n" + system + "<|im_end|>\n" +
 		"<|im_start|>user\n" + question + "<|im_end|>\n<|im_start|>assistant\n"
 }
 
 func offlineAIArgs(model, prompt string) []string {
-	return []string{"-m", model, "-p", prompt, "-n", "80", "-c", "512", "-b", "128", "-ub", "128",
-		"-t", "3", "-ngl", "0", "--temp", "0.2", "--no-conversation", "--single-turn",
+	return []string{"-m", model, "-p", prompt, "-n", "32", "-c", "256", "-b", "64", "-ub", "64",
+		"-t", "2", "-ngl", "0", "--temp", "0.2", "--no-conversation", "--single-turn",
 		"--no-display-prompt", "--no-warmup", "--simple-io"}
 }
 
 func offlineAIClean(raw string) string {
-	for _, token := range []string{"<|im_end|>", "<|im_start|>", "</s>", "[end of text]"} {
+	for _, token := range []string{"<|", "</s>", "[end of text]"} {
 		if i := strings.Index(raw, token); i >= 0 {
 			raw = raw[:i]
 		}
@@ -121,7 +120,63 @@ func offlineAIClean(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool) (string, error) {
+// A short first sentence is enough for a voice answer. The Smart Pro can take
+// several seconds per token, so stop generation as soon as one is complete.
+func offlineAIFirstSentence(text string) string {
+	for i, r := range text {
+		if r != '.' && r != '!' && r != '?' {
+			continue
+		}
+		end := i + len(string(r))
+		if end < len(text) && text[end] != ' ' && text[end] != '\n' {
+			continue
+		}
+		first := strings.TrimSpace(text[:end])
+		if utf8.RuneCountInString(first) >= 12 && len(strings.Fields(first)) >= 2 {
+			return first
+		}
+	}
+	return ""
+}
+
+// cmd.Stdout writes here as tokens arrive. Showing them immediately means the
+// handheld never sits at "Thinking offline" until every word has been made.
+type offlineAIStreamWriter struct {
+	raw       bytes.Buffer
+	last      string
+	sentence  string
+	overflow  bool
+	onPartial func(string)
+	stop      func()
+}
+
+func (w *offlineAIStreamWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := offlineAIOutputMax - w.raw.Len()
+	if len(p) > remaining {
+		w.overflow = true
+		p = p[:max(0, remaining)]
+	}
+	_, _ = w.raw.Write(p)
+	if w.sentence == "" && utf8.Valid(w.raw.Bytes()) {
+		partial := offlineAIClean(w.raw.String())
+		if partial != "" && partial != w.last {
+			w.last = partial
+			if w.onPartial != nil {
+				w.onPartial(partial)
+			}
+		}
+		if first := offlineAIFirstSentence(partial); first != "" {
+			w.sentence = first
+			if w.stop != nil {
+				w.stop()
+			}
+		}
+	}
+	return n, nil
+}
+
+func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool, onPartial func(string)) (string, error) {
 	if !offlineAIReady() {
 		return "", errOfflineAIMissing
 	}
@@ -129,24 +184,32 @@ func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool)
 		return "", err
 	}
 	bin, model := offlineAIFiles()
-	ctx, cancel := context.WithTimeout(ctx, offlineAITimeout)
+	runCtx, cancel := context.WithTimeout(ctx, offlineAITimeout)
 	defer cancel()
 	started := time.Now()
-	cmd := exec.CommandContext(ctx, bin, offlineAIArgs(model, offlineAIPrompt(question, unmatchedAction))...)
-	var output bytes.Buffer
-	cmd.Stdout = &output
+	cmd := exec.CommandContext(runCtx, bin, offlineAIArgs(model, offlineAIPrompt(question, unmatchedAction))...)
+	output := &offlineAIStreamWriter{onPartial: onPartial, stop: cancel}
+	cmd.Stdout = output
 	cmd.Stderr = io.Discard // model diagnostics do not belong in the voice bubble
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", fmt.Errorf("offline AI stopped: %w", err)
+		if output.sentence == "" {
+			if runCtx.Err() != nil {
+				return "", runCtx.Err()
+			}
+			return "", fmt.Errorf("offline AI stopped: %w", err)
+		}
 	}
 	logDebug("voice", "offline AI answered in %s", time.Since(started).Round(time.Millisecond))
-	if output.Len() > 8<<10 {
+	if output.overflow {
 		return "", errors.New("offline AI answer was too long")
 	}
-	answer := offlineAIClean(output.String())
+	answer := output.sentence
+	if answer == "" {
+		answer = offlineAIClean(output.raw.String())
+	}
 	if answer == "" {
 		return "", errors.New("offline AI had no answer")
 	}

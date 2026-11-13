@@ -1433,7 +1433,13 @@ func voiceOrbAsk(question string, unmatchedAction bool) {
 					voiceOrb.title = "Thinking offline…"
 				}
 			})
-			reply, err = offlineAIAnswer(ctx, question, unmatchedAction)
+			reply, err = offlineAIAnswer(ctx, question, unmatchedAction, func(partial string) {
+				orbAIText.mu.Lock()
+				if orbAIText.gen == gen {
+					orbAIText.text = partial
+				}
+				orbAIText.mu.Unlock()
+			})
 		}
 		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err, usedLocal, unmatchedAction) })
 	}()
