@@ -55,7 +55,7 @@ if [ -z "${JOBS:-}" ]; then
 fi
 
 usage() {
-    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|stt | check androidrt|box64 | key helpers|androidrt|box64|stt | release" >&2
+    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|stt|llm | check androidrt|box64 | key helpers|androidrt|box64|stt|llm | release" >&2
     exit 2
 }
 
@@ -212,6 +212,9 @@ build() {
         stt)
             in_root JOBS="$JOBS" /bin/sh /src/player/native/build-stt.sh
             ;;
+        llm)
+            in_root JOBS="$JOBS" /bin/sh /src/player/native/build-llm.sh
+            ;;
         *) usage ;;
     esac
 }
@@ -245,11 +248,17 @@ part_sources() {
             # runtime packages).
             git -C "$REPO" ls-files -s -- player/native ':(exclude)player/native/tests' \
                 ':(exclude)player/native/*.md' ':(exclude)player/native/build-runtimes.sh' \
-                ':(exclude)player/native/build-stt.sh' \
+                ':(exclude)player/native/build-stt.sh' ':(exclude)player/native/build-llm.sh' \
+                ':(exclude)player/native/package-llm.sh' \
                 .github/scripts/build-root.sh .gitattributes
             ;;
         stt)
             git -C "$REPO" ls-files -s -- player/native/build-stt.sh \
+                player/native/helper-build-requirements.txt \
+                .github/scripts/build-root.sh .gitattributes
+            ;;
+        llm)
+            git -C "$REPO" ls-files -s -- player/native/build-llm.sh \
                 player/native/helper-build-requirements.txt \
                 .github/scripts/build-root.sh .gitattributes
             ;;
@@ -279,6 +288,7 @@ part_key() {
         androidrt) pk_prefix=androidrt-pack pk_anchor=player/androidrt/build-tsp.sh ;;
         box64) pk_prefix=wine-runtime-pack pk_anchor=player/native/build-runtimes.sh ;;
         stt) pk_prefix=offline-stt pk_anchor=player/native/build-stt.sh ;;
+        llm) pk_prefix=offline-llm pk_anchor=player/native/build-llm.sh ;;
         *) usage ;;
     esac
     pk_sources="$(part_sources "$1")" || return 1
