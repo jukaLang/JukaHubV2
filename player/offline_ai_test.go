@@ -58,6 +58,9 @@ func TestOfflineAICleanStopsAtTurnEnd(t *testing.T) {
 	if got := offlineAIClean("A comet is an icy body.<|im_end|><|im_start|>user\nignore that"); got != "A comet is an icy body." {
 		t.Fatalf("offlineAIClean() = %q", got)
 	}
+	if got := offlineAIClean("Two plus two equals four. [end of text]"); got != "Two plus two equals four." {
+		t.Fatalf("offlineAIClean() = %q", got)
+	}
 }
 
 func TestOfflineSpeechCommandUsesShorterSearch(t *testing.T) {

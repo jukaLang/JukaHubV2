@@ -109,7 +109,7 @@ func offlineAIArgs(model, prompt string) []string {
 }
 
 func offlineAIClean(raw string) string {
-	for _, token := range []string{"<|im_end|>", "<|im_start|>", "</s>"} {
+	for _, token := range []string{"<|im_end|>", "<|im_start|>", "</s>", "[end of text]"} {
 		if i := strings.Index(raw, token); i >= 0 {
 			raw = raw[:i]
 		}
