@@ -284,7 +284,7 @@ jobs:
   # at once.
   build-and-publish-ubuntu:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: [create-tag, build-remote-play-helpers, build-trimui]
     # Runs whatever became of the helpers: an archive without them still ships
     # (it only lacks Remote Play streaming, like every release before them), so
@@ -354,6 +354,13 @@ jobs:
         with:
           name: offline-stt
           path: offline-stt
+
+      - name: Download optional offline AI
+        timeout-minutes: 10
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-llm
+          path: offline-llm
 
       - name: Package Artifacts
         id: package
@@ -431,6 +438,12 @@ jobs:
             echo "::error title=Offline speech::the verified recognizer is missing; refusing to publish a TrimUI archive without offline speech"
             exit 1
           fi
+          if sh player/native/package-llm.sh offline-llm JukaHub-OfflineAI-linux-arm64.zip; then
+            echo "llm_package=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error title=Offline AI::the verified on-device model is missing"
+            exit 1
+          fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
           cp player/launch.sh JukaHub-Trimui/
@@ -496,6 +509,18 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-OfflineSpeech-linux-arm64.zip
           asset_name: JukaHub-OfflineSpeech-linux-arm64.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the offline AI package
+        if: steps.package.outputs.llm_package == 'true'
+        timeout-minutes: 15
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-OfflineAI-linux-arm64.zip
+          asset_name: JukaHub-OfflineAI-linux-arm64.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -861,7 +886,7 @@ jobs:
         with:
           script: |
             const tag = process.env.TAG_NAME;
-            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip'];
+            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip', 'JukaHub-OfflineAI-linux-arm64.zip'];
             const {data: releases} = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,
