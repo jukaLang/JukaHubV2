@@ -349,7 +349,6 @@ jobs:
           path: runtime-packages
 
       - name: Download offline speech recognition
-        continue-on-error: true
         timeout-minutes: 8
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -425,10 +424,12 @@ jobs:
               echo "stt_package=true" >> "$GITHUB_OUTPUT"
             else
               rm -f JukaHub-OfflineSpeech-linux-arm64.zip
-              echo "::warning title=Offline speech::the standalone repair package could not be built"
+              echo "::error title=Offline speech::the standalone repair package could not be built"
+              exit 1
             fi
           else
-            echo "::warning title=Offline speech::the verified recognizer was not built; local speech is unavailable in this archive"
+            echo "::error title=Offline speech::the verified recognizer is missing; refusing to publish a TrimUI archive without offline speech"
+            exit 1
           fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
@@ -489,7 +490,6 @@ jobs:
 
       - name: Upload the offline speech package
         if: steps.package.outputs.stt_package == 'true'
-        continue-on-error: true
         timeout-minutes: 8
         uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
         with:
@@ -696,7 +696,8 @@ jobs:
           # Fail here, naming the file, instead of at a cgo compile further down
           # with three "No such file" errors that do not say what fetched them.
           for need in include/SDL2/SDL.h include/SDL2/SDL_image.h include/SDL2/SDL_ttf.h \
-                      lib/libSDL2.dll.a lib/libSDL2_image.dll.a lib/libSDL2_ttf.dll.a; do
+                      lib/libSDL2.dll.a lib/libSDL2_image.dll.a lib/libSDL2_ttf.dll.a \
+                      bin/SDL2.dll bin/SDL2_image.dll bin/SDL2_ttf.dll; do
             if [ ! -e "$prefix/$need" ]; then
               echo "::error::the SDL2 MinGW packages did not install $need"
               exit 1
@@ -744,10 +745,15 @@ jobs:
       - name: Package Artifacts
         run: |
           cd player
-          cp jukaconfig.json Inter-Regular.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
+          cp jukaconfig.json Inter-Regular.ttf background.jpg ../JukaHub-Trimui-Windows/
+          # The SDL DLLs are the ones the exe was just compiled against: the
+          # checksum-verified SDL MinGW packages (install-sdl-mingw.sh). They
+          # are not kept in git (OpenSSF Scorecard Binary-Artifacts), and
+          # build.bat stages the same packages' DLLs for local builds.
+          cp "$SDL2_PREFIX/bin/SDL2.dll" "$SDL2_PREFIX/bin/SDL2_image.dll" "$SDL2_PREFIX/bin/SDL2_ttf.dll" ../JukaHub-Trimui-Windows/
           cd ..
           # Every DLL the exe imports must be part of Windows or ship next to
-          # it. The SDL DLLs come from player/ above; a MinGW runtime DLL (only
+          # it. The SDL DLLs come from the SDL prefix above; a MinGW runtime DLL (only
           # imported if the toolchain linked one dynamically) is copied from
           # the toolchain; anything else fails the release here instead of as
           # "The code execution cannot proceed" on someone's PC.
@@ -855,7 +861,7 @@ jobs:
         with:
           script: |
             const tag = process.env.TAG_NAME;
-            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip'];
+            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip'];
             const {data: releases} = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,

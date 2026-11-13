@@ -98,9 +98,15 @@ func sttLocalReady() bool {
 }
 
 func sttCanListen() bool {
-	mode := sttModeOf(appConfig)
-	local := sttLocalReady()
-	cloud := strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting())
+	return sttCanListenFor(appConfig)
+}
+
+func sttCanListenFor(config *Config) bool {
+	return sttListenAvailable(sttModeOf(config), sttLocalReady(), groqAPIKey(), IsOnline() || netReconnecting())
+}
+
+func sttListenAvailable(mode string, local bool, key string, online bool) bool {
+	cloud := strings.TrimSpace(key) != "" && online
 	switch mode {
 	case sttModeOffline:
 		return local

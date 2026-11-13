@@ -22,8 +22,8 @@ func drawGameCoverArt(renderer *sdl.Renderer, game libraryGame, rect sdl.Rect) {
 		icon = rect.H / 3
 	}
 	glyph := "disc"
-	if isJukaLandLibraryGame(game) {
-		glyph = "jukaland"
+	if builtIn, ok := builtInLibraryGameFor(game); ok {
+		glyph = builtIn.glyph
 	}
 	DrawHomeIcon(renderer, glyph, sdl.Rect{X: rect.X + (rect.W-icon)/2, Y: rect.Y + (rect.H-icon)/2, W: icon, H: icon}, false)
 }

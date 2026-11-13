@@ -402,7 +402,7 @@ func (h *HomeLayout) drawPowerPill(renderer *sdl.Renderer, fonts HomeFonts, item
 	// way the search pill and the cards animate (fillRoundedRectAt).
 	fillRoundedRectAt(renderer, base, draw, radius, fill)
 	if focused {
-		strokeRoundedRectAt(renderer, base, draw, radius, 3, ColorAccent)
+		strokeRoundedRectAt(renderer, base, homeFocusGlide.apply(draw), radius, 3, ColorAccent)
 	} else {
 		strokeRoundedRectAt(renderer, base, draw, radius, 1, edge)
 	}
@@ -618,8 +618,10 @@ func homePowerDrawButton(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, fill)
 	if focused {
+		// The ring follows the glow when the focus glides (homefocusglide.go).
 		out := homeFocusRingOutset()
-		strokeRoundedRect(renderer, rect.X-out, rect.Y-out, rect.W+2*out, rect.H+2*out, radius+out, homeFocusRingWidth, ColorAccent)
+		ring := sdl.Rect{X: rect.X - out, Y: rect.Y - out, W: rect.W + 2*out, H: rect.H + 2*out}
+		strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), radius+out, homeFocusRingWidth, ColorAccent)
 	} else {
 		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, edge)
 	}

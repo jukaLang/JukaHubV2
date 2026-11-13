@@ -344,13 +344,15 @@ func ledMicClose() {
 	publishLEDMicSample(ledMicSample{})
 }
 
-// ledMicFeedVoice lets the rings follow the user while a voice feature has
-// the microphone (the orb, voice typing): the lights' own stream is closed
-// then, and talking to Juka is exactly when they should react. rms is the
-// newest captured level. Main thread, once a frame.
+// ledMicFeedVoice lets the rings follow the user while the voice orb has the
+// microphone: the lights' own stream is closed then, and talking to Juka is
+// exactly when they should react. rms is the orb's newest captured level.
+// Main thread, once a frame.
 func ledMicFeedVoice(rms float64) {
 	st := &ledMicState
-	if st.stream != nil || !LEDSyncRunning() || currentLEDLoopSettings().policy != ledPolicyMic {
+	// 0 is the orb's start chime, skipped, not a reading: as the first one
+	// it would set the noise floor to the first word.
+	if rms <= 0 || st.stream != nil || !LEDSyncRunning() || currentLEDLoopSettings().policy != ledPolicyMic {
 		return
 	}
 	now := time.Now()

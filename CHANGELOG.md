@@ -13,6 +13,19 @@ For anything older, the git log and the
 
 ### Added
 
+- **Home's focus highlight bounces between buttons.** Moving around Home no
+  longer teleports the cyan ring: it slides to the next card or button, runs a
+  little past it in the direction you moved and swings back onto it (glow
+  included). The overshoot is capped at a few pixels so long jumps stay tidy;
+  Reduced motion, Battery saver and Focus motion "None" turn it off.
+- **The Synth in the Games library, and covers for the built-in games.** Games
+  → **Built-in games** now lists the **Synth** beside JukaLand, so you can
+  open the groovebox and make music straight from your game list (A opens it,
+  like JukaLand). Both now have real covers instead of a plain icon: a voxel
+  island for JukaLand and a glowing step grid for the Synth, drawn by
+  `branding/mkcovers.py` and built into JukaHub, so they show offline. The
+  Games screen's JukaLand and Synth cards show the same covers.
+
 - **Stick lights that react to your voice.** Settings → Stick lights → **Lights
   show** → **Microphone** turns the stick lights on and makes them follow the
   microphone: talk, sing or clap and the rings glow with the loudness, coloured
@@ -426,7 +439,52 @@ For anything older, the git log and the
   handshakes, and a failure stays listed until the panel closes
   (`player/psremote_ui.go`).
 
+- **Fuzz tests for the updater's decoders.** Go native fuzz targets cover delta
+  patches, delta bundles, bundle file names and the signed `release.json`
+  (`player/internal/jdelta`, `player/internal/releasesign`). Plain `go test`
+  runs their seeds; the weekly workflow fuzzes each for 20 s and uploads any
+  crashing input. (OpenSSF Scorecard `Fuzzing`.)
+
 ### Changed
+
+- **HTML5 games run at full speed on the handheld.** The built-in game view
+  was drawing the Home screen under every game frame, ran at the menus' 24–30
+  fps on the powersave clock, and replayed every canvas call onto the screen
+  each frame, so games that move by the frame or cap their time step crawled.
+  Now an open game gets the same CPU performance profile an emulator launch
+  gets (put back when you press B), a 60 fps frame budget, and the panel to
+  itself; the canvas is kept in a texture that only the new drawing goes into,
+  shapes are filled as triangles on the GPU and lines are batched; and the
+  gamepad, timers, input events and score line no longer go through JSON
+  every frame. Along the way: `cancelAnimationFrame` and `clearInterval`
+  inside a callback work, `arc` honours anticlockwise, `moveTo` starts a new
+  shape, `clearRect` leaves the canvas transparent, a see-through overlay no
+  longer erases the picture under it, and key events carry `code`/`keyCode`.
+  (`html5_inapp.go`, `html5_inapp_render.go`, `main.go`.)
+
+- **The SDL DLLs are no longer kept in git.** The Windows release now ships the
+  `SDL2.dll`, `SDL2_image.dll` and `SDL2_ttf.dll` from the checksum-verified SDL
+  MinGW packages it compiles against (it used to ship 2024 copies from
+  `player/`, a different SDL version from its headers, and a 68 MB
+  `SDL2_ttf.dll`). `build.bat` already staged the downloaded DLLs for local
+  builds. CI installs staticcheck by module version (`@v0.8.2`). (Scorecard
+  `Binary-Artifacts`, `Pinned-Dependencies`.)
+
+- **Juka answers out loud sooner.** When you ask the voice orb (or the game
+  assistant) a question, Juka starts speaking as soon as the first sentence of
+  the answer is written instead of waiting for the whole answer; the rest
+  joins the same line as it streams in (`tts_live.go`; Piper on the handheld
+  gets each sentence as it comes too). The orb also stops listening after
+  0.8 s of quiet instead of 1.2 s, and opens the connection to Groq while you
+  are still talking, so the clip goes out without a fresh TLS handshake
+  (`voicewarm.go`).
+
+- **Microphone stick lights stay on and move smoothly.** In Lights show →
+  Microphone the rings now keep a soft, steady glow in your colour (soft blue
+  when none was picked) and brighten smoothly when you talk — including while
+  you talk to Juka, whose own capture now feeds them — and a little while
+  Juka answers. The colour no longer jumps with pitch, which on the TrimUI
+  rings blinked on every syllable. (`ledmic.go` `ledMicColor`.)
 
 - **The Smart Pro's offline voice downloads by itself and is the default
   without a Groq key.** Once the startup tools check has nothing left to fetch
@@ -587,6 +645,16 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Games with no exact box-art match got no picture.** The cover scraper
+  only took a cover whose title was the ROM's own title, so files named
+  "Zelda Minish Cap", "Pokemon Saphire", "Sonic 2" or "SuperMarioWorld2"
+  stayed blank. When no exact match exists it now takes the closest title on
+  the server's list (the one sharing the most words, near-misses and
+  joined-up names included; a sequel's number counts), as long as it is
+  plausibly the same game or series; a title that shares almost nothing still
+  gets no cover rather than a random one. Games skipped before are tried again
+  on the next fetch.
 
 - **Stick lights stayed dark on the TrimUI.** The firmware leaves
   `/sys/class/led_anim` read-only (0444), and sysfs refuses a write open on such

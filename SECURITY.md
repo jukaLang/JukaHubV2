@@ -781,3 +781,26 @@ silently carried as an open alert:
 
 The badge is a claim about the process, not a substitute for any of the controls
 above; keep both current when either changes.
+
+### Other Scorecard checks that read repository settings
+
+`Branch-Protection` and `Code-Review` are scored from GitHub settings and merge
+history, not from files, so they are also maintainer actions:
+
+- **Branch-Protection:** Settings → Rules → Rulesets → New branch ruleset for
+  `main`: restrict deletions, block force pushes, require a pull request before
+  merging (0 approvals is enough for a solo maintainer; 1 scores higher), and
+  require the `CI` status checks, with an empty bypass list. Use a ruleset
+  rather than classic branch protection: the workflow's default token can read
+  rulesets but not classic protection settings.
+- **Code-Review:** counts the share of recent commits that reached `main`
+  through a reviewed pull request. Direct pushes score 0. It rises only as new
+  work lands through PRs (an approving review from a second account, or at
+  least merged PRs); it cannot be fixed retroactively.
+
+`Fuzzing` is met by Go native fuzz targets on the self-updater's decoders
+(delta patches and bundles in `player/internal/jdelta`, the signed
+`release.json` in `player/internal/releasesign`): every `go test` runs their
+seeds, and `weekly.yml` mutates each for 20 s. `Binary-Artifacts` stays clean
+because the release job ships the SDL DLLs from the checksum-verified SDL
+MinGW packages instead of copies in git.

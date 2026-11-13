@@ -32,6 +32,18 @@ on a press: **L1** (or **F**) downloads covers for every scanned game that does
 not have one. A game without art shows its initials on an accent tile instead, so
 the layout stays the same while the download is missing.
 
+A cover is matched to the ROM's title by the server's list: the exact name
+first, then the title without tags, articles and spacing. When none of those
+finds one, the closest title on the list is taken (the most shared words,
+near-misses like "Saphire" and joined-up names like `SuperMarioWorld2`
+included), so "Zelda Minish Cap" gets *The Legend of Zelda - The Minish Cap*
+and "Street Fighter Alpha 3" at worst another Street Fighter Alpha box. A title
+that shares too little with everything on the list gets no cover.
+
+The **Built-in games** console lists JukaLand and the Synth (A opens them).
+Their covers ship inside JukaHub (`player/builtin_covers/`, drawn by
+`branding/mkcovers.py`) and are copied to `data/builtin-covers/`.
+
 The fetch runs on a worker; covers appear when it finishes, without reopening
 the panel. While it runs the footer shows **Stop** instead of **Fill Gaps**, and
 the status line counts the covers already handled (`fetching 42/120`). Pressing
@@ -149,6 +161,9 @@ supports Canvas 2D drawing, JavaScript animation, local scripts, keys, pointer
 input and local storage. WebGL, image and audio loading, and JavaScript modules
 are not yet supported in this game view. Games that need those features may not
 run on the stock handheld; JukaHub shows a launch error when it can detect one.
+While a game is open it gets up to 60 frames a second and the same CPU
+performance profile as an emulator launch; the normal profile comes back when
+you press **B**.
 
 On a PC, **Play** uses your system browser with a private local address. That
 browser can handle games with more web features, relative assets and its own

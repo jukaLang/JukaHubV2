@@ -205,7 +205,7 @@ func vkVoiceToggle(config *Config) {
 	case vkMic.Load() == vkMicAbsent:
 		vkVoiceSay("No microphone — plug one in to use voice typing", vkVoiceNoAction)
 		return
-	case !sttCanListen():
+	case !sttCanListenFor(config):
 		vkVoiceSay("Set up speech recognition in Settings → Voice & AI", vkVoiceNoAction)
 		return
 	}

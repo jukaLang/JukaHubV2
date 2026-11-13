@@ -271,15 +271,16 @@ func selectedLibraryGame() (libraryGame, bool) {
 	return system.Games[gameLib.cursor], true
 }
 
-// JukaLand opens its own scene directly; there is no emulator, ROM file or
-// save-state page to prepare first.
+// A built-in game (JukaLand, the Synth) opens its own scene directly; there
+// is no emulator, ROM file or save-state page to prepare first.
 func openBuiltInLibraryGame(game libraryGame, config *Config) bool {
-	if !isJukaLandLibraryGame(game) {
+	builtIn, ok := builtInLibraryGameFor(game)
+	if !ok {
 		return false
 	}
-	idx := sceneIndexExact(config, "JukaLand")
+	idx := sceneIndexExact(config, builtIn.scene)
 	if idx < 0 {
-		ShowToast("JukaLand is unavailable in this configuration", ToastKindWarning)
+		ShowToast(builtIn.title+" is unavailable in this configuration", ToastKindWarning)
 		return true
 	}
 	if game.Path == gameRandomPick {
@@ -295,7 +296,7 @@ func openBuiltInLibraryGame(game libraryGame, config *Config) bool {
 func scanGameLibrary() gameLibraryReport {
 	lib := buildGameLibrary(scanROMLibrary(romLibraryRoots()), libraryArtworkRoot())
 	libraryAddHTML5Games(&lib, nil, html5LibraryRoots(), html5DataRoot())
-	libraryAddJukaLand(&lib, sceneIndexExact(appConfig, "JukaLand") >= 0)
+	libraryAddBuiltInGames(&lib, builtInScenesPresent(appConfig), builtInCoverRoot())
 	return lib
 }
 
@@ -387,7 +388,7 @@ func startGameLibraryScan() {
 	html5Roots := append([]string(nil), html5LibraryRoots()...)
 	html5DemoRoot := html5DataRoot()
 	artRoot := libraryArtworkRoot()
-	showJukaLand := sceneIndexExact(appConfig, "JukaLand") >= 0
+	builtInScenes := builtInScenesPresent(appConfig)
 	// Copy the playtime map on the render thread; the background build must not
 	// read it while the ticker is writing it. The snapshot is never nil, so the
 	// goroutine never falls back to reading the live ledger.
@@ -401,7 +402,7 @@ func startGameLibraryScan() {
 		// The APK Store's Android games join as one more console (AND-16).
 		libraryAddAndroidGames(&lib, seconds)
 		libraryAddHTML5Games(&lib, seconds, html5Roots, html5DemoRoot)
-		libraryAddJukaLand(&lib, showJukaLand)
+		libraryAddBuiltInGames(&lib, builtInScenes, builtInCoverRoot())
 		tbxPost(func() {
 			if !applyGameLibraryScan(&gameLib, gen, lib, recentGames()) {
 				return
@@ -1519,8 +1520,8 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-24),
 				ColorTextPrimary(), rect.X+12, rect.Y+rows.titleY)
 			detail := game.System + " · " + filepath.Base(game.Path)
-			if isJukaLandLibraryGame(game) {
-				detail = "Built-in JukaHub game"
+			if builtIn, ok := builtInLibraryGameFor(game); ok {
+				detail = builtIn.detail
 			}
 			if game.Hidden {
 				detail += " · Hidden"

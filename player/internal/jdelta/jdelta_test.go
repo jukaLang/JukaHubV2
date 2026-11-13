@@ -16,6 +16,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -537,4 +538,142 @@ func TestAssetNames(t *testing.T) {
 			t.Errorf("AssetName(%q, %q) = %q, want %q", tc.platform, tc.tag, got, tc.want)
 		}
 	}
+}
+
+// ── Fuzzing ──────────────────────────────────────────────────────────────────
+//
+// Patches and bundles arrive from the network, so the decoders are fuzzed as
+// well as unit-tested. `go test` runs each target over its seeds only; the
+// weekly workflow mutates them for a short while (go test -fuzz). Sizes are
+// capped so one input stays well under a millisecond.
+
+const fuzzMaxInput = 32 << 10
+
+// FuzzDiffApply checks that every pair of files round-trips through a patch.
+func FuzzDiffApply(f *testing.F) {
+	f.Add([]byte(""), []byte(""))
+	f.Add([]byte("0123456789"), []byte("01234abcde"))
+	f.Add(randomBytes(40, 3000), joinBytes(randomBytes(40, 3000)[:1000], []byte("inserted"), randomBytes(40, 3000)[1000:]))
+	f.Fuzz(func(t *testing.T, oldData, newData []byte) {
+		if len(oldData) > fuzzMaxInput || len(newData) > fuzzMaxInput {
+			t.Skip()
+		}
+		roundTrip(t, oldData, newData)
+	})
+}
+
+// FuzzApplyOps feeds arbitrary operations behind a header that matches the
+// base, so the fuzzer reaches the COPY/ADD decoder instead of stopping at the
+// base checksum. Whatever the operations say, Apply must never write more than
+// the header promises, and a run that decoded to the end (ErrResult or
+// success) must have written exactly that many bytes.
+func FuzzApplyOps(f *testing.F) {
+	end := []byte{opEnd}
+	f.Add([]byte("0123456789"), uint16(10), joinBytes(rawCopy(0, 5), rawAdd([]byte("abcde")), end))
+	f.Add([]byte("0123456789"), uint16(10), joinBytes(rawCopy(8, 5), end))
+	f.Add([]byte(""), uint16(3), joinBytes(rawAdd([]byte("abc")), end))
+	f.Add([]byte("abc"), uint16(0), end)
+	f.Fuzz(func(t *testing.T, oldData []byte, newSize uint16, ops []byte) {
+		if len(oldData) > fuzzMaxInput || len(ops) > fuzzMaxInput {
+			t.Skip()
+		}
+		h := Header{
+			OldSize: int64(len(oldData)),
+			OldSHA:  sha256.Sum256(oldData),
+			NewSize: int64(newSize),
+		}
+		patch := craft(t, h, ops)
+		var out bytes.Buffer
+		_, err := Apply(bytes.NewReader(oldData), int64(len(oldData)), bytes.NewReader(patch), &out)
+		if int64(out.Len()) > h.NewSize {
+			t.Fatalf("wrote %d bytes, the header allows %d", out.Len(), h.NewSize)
+		}
+		if err == nil || errors.Is(err, ErrResult) {
+			if int64(out.Len()) != h.NewSize {
+				t.Fatalf("decoded to the end after %d bytes, want %d (err %v)", out.Len(), h.NewSize, err)
+			}
+			if err == nil && sha256.Sum256(out.Bytes()) != h.NewSHA {
+				t.Fatal("Apply accepted a result that does not match its checksum")
+			}
+			return
+		}
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("err = %v, want ErrCorrupt or ErrResult", err)
+		}
+	})
+}
+
+// FuzzApplyRaw hands Apply a whole patch, header included: anything that is not
+// a patch for this base must be refused without a panic.
+func FuzzApplyRaw(f *testing.F) {
+	oldData := []byte("0123456789")
+	if patch, err := Diff(oldData, []byte("01234abcde")); err == nil {
+		f.Add(oldData, patch)
+	}
+	f.Add(oldData, []byte(PatchMagic))
+	f.Fuzz(func(t *testing.T, oldData, patch []byte) {
+		if len(oldData) > fuzzMaxInput || len(patch) > fuzzMaxInput {
+			t.Skip()
+		}
+		var out bytes.Buffer
+		h, err := Apply(bytes.NewReader(oldData), int64(len(oldData)), bytes.NewReader(patch), &out)
+		if err == nil && (int64(out.Len()) != h.NewSize || sha256.Sum256(out.Bytes()) != h.NewSHA) {
+			t.Fatal("Apply accepted a result the header does not describe")
+		}
+	})
+}
+
+// FuzzReadBundleIndex checks that an index which reads back only ever names
+// safe paths and patches inside the bundle.
+func FuzzReadBundleIndex(f *testing.F) {
+	var buf bytes.Buffer
+	inputs := []BundleInput{
+		{Name: "JukaHub", Mode: 0o755, Old: []byte("old binary"), New: []byte("new binary"), Delta: true},
+		{Name: "lib/extra.so", Mode: 0o644, New: []byte("whole file")},
+	}
+	if _, err := WriteBundle(&buf, Bundle{Platform: "Trimui", FromTag: "JukaHub-1", ToTag: "JukaHub-2"}, inputs); err == nil {
+		f.Add(buf.Bytes())
+	}
+	f.Add([]byte(BundleMagic))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > fuzzMaxInput {
+			t.Skip()
+		}
+		b, payloadAt, err := ReadBundleIndex(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("err = %v, want ErrCorrupt", err)
+			}
+			return
+		}
+		if payloadAt < bundleHeaderSize || payloadAt > int64(len(data)) {
+			t.Fatalf("payload offset %d is outside the %d-byte bundle", payloadAt, len(data))
+		}
+		payload := int64(len(data)) - payloadAt
+		for _, file := range b.Files {
+			if !ValidName(file.Name) {
+				t.Fatalf("accepted unsafe name %q", file.Name)
+			}
+			if file.Offset < 0 || file.Length < 0 || file.Offset+file.Length > payload {
+				t.Fatalf("%s points outside the bundle: %d+%d of %d", file.Name, file.Offset, file.Length, payload)
+			}
+		}
+	})
+}
+
+// FuzzValidName checks ValidName against its contract: a name it accepts can
+// never escape the directory it is joined to.
+func FuzzValidName(f *testing.F) {
+	for _, s := range []string{"JukaHub", "lib/a.so", "../x", "a/../b", "/etc/passwd", `a\b`, "C:x", "a//b", "."} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		if !ValidName(name) {
+			return
+		}
+		joined := filepath.Join("base", filepath.FromSlash(name))
+		if rel, err := filepath.Rel("base", joined); err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			t.Fatalf("accepted %q, which resolves to %q (%v)", name, rel, err)
+		}
+	})
 }

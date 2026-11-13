@@ -705,7 +705,7 @@ func vscListen(config *Config) {
 		vscSay("No microphone found — type it instead", tbxToneWarn)
 		PlayErrorSound()
 		return
-	case !sttCanListen():
+	case !sttCanListenFor(config):
 		vscSay("Set up speech recognition in Settings → Voice & AI", tbxToneWarn)
 		PlayErrorSound()
 		return

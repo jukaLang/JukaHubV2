@@ -849,6 +849,7 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	// Reduced motion and focusMotion none both drop the eased lift; the
 	// colour/press feedback stays either way (motion.go).
 	homeLayout.Motion = uiMotionEnabled(config) && motionFocusEnabled(config)
+	homeLayout.Glide = (config == nil || !effectiveReducedMotion(config)) && motionFocusEnabled(config)
 	// The layout's backdrop draws the wallpaper of the config being rendered,
 	// the same one ensureBackgroundTexture above was refreshed for.
 	homeBackdropConfig = config

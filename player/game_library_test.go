@@ -198,3 +198,38 @@ func TestGameResetStateFile(t *testing.T) {
 		}
 	}
 }
+
+// A ROM whose name matches no cover exactly still gets the closest one: the
+// same game under its full title, or at least the same series, never an
+// unrelated title.
+func TestArtworkClosestCover(t *testing.T) {
+	idx := newArtworkIndex([]string{
+		"Legend of Zelda, The - The Minish Cap (USA)",
+		"Pokemon - Sapphire Version (USA)",
+		"Super Mario World 2 - Yoshi's Island (USA)",
+		"Super Metroid (Japan, USA)",
+		"Sonic The Hedgehog 2 (World)",
+		"Sonic The Hedgehog (USA)",
+		"Street Fighter Alpha 2 (USA)",
+		"Game Boy Gallery (Europe)",
+		"Castlevania - Aria of Sorrow (USA)",
+	})
+	for stem, want := range map[string]string{
+		"Zelda Minish Cap":       "Legend of Zelda, The - The Minish Cap (USA)",
+		"Pokemon Saphire (U)":    "Pokemon - Sapphire Version (USA)",
+		"SuperMarioWorld2":       "Super Mario World 2 - Yoshi's Island (USA)",
+		"Sonic 2":                "Sonic The Hedgehog 2 (World)",
+		"Street Fighter Alpha 3": "Street Fighter Alpha 2 (USA)",
+		"Aria of Sorrow":         "Castlevania - Aria of Sorrow (USA)",
+		"My Homebrew Game":       "",
+		"Zelda 3":                "",
+	} {
+		if _, exact := idx.match(stem); exact {
+			t.Errorf("%q matched exactly; pick a stem only the closest step finds", stem)
+		}
+		got, ok := idx.closest(stem)
+		if got != want || ok != (want != "") {
+			t.Errorf("closest(%q) = %q, %v; want %q", stem, got, ok, want)
+		}
+	}
+}

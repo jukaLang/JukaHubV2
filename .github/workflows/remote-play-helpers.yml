@@ -51,10 +51,10 @@ name: Remote Play helpers and AndroidRT
 # start. build-runtimes.sh holds AndroidRT to the same rules (it needs nothing
 # but the C library).
 #
-# A failure here never stops a JukaHub release: this job is continue-on-error,
-# the callers run whatever its result, and an archive without the helpers ships
-# without Remote Play streaming (exactly what every release did before), with a
-# warning on the run. The two parts are independent after the shared build
+# Remote Play and AndroidRT remain optional. Offline speech is required for
+# the Smart Pro archive; a missing offline-stt artifact fails its packaging
+# job so a release cannot silently ship another Groq-only Menu button.
+# The two other parts are independent after the shared build
 # root: the AndroidRT steps run whatever became of the helpers, so a failed
 # build costs the run that part and nothing else. An advisory step runs
 # AndroidRT's host smoke suite natively on arm64 (written on x86_64) and only
@@ -454,7 +454,6 @@ jobs:
       - name: Build offline speech recognition
         id: stt
         if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.stt_cache.outputs.hit != 'true' }}
-        continue-on-error: true
         timeout-minutes: 20
         run: sh .github/scripts/build-root.sh build stt
 

@@ -1654,7 +1654,7 @@ func (h *HomeLayout) drawEditPill(renderer *sdl.Renderer, fonts HomeFonts, item 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRectAt(renderer, base, draw, radius, fill)
 	if focused {
-		strokeRoundedRectAt(renderer, base, draw, radius, 3, ColorAccent)
+		strokeRoundedRectAt(renderer, base, homeFocusGlide.apply(draw), radius, 3, ColorAccent)
 	} else {
 		strokeRoundedRectAt(renderer, base, draw, radius, 1, edge)
 	}

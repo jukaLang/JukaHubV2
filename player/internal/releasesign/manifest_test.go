@@ -1,8 +1,11 @@
 package releasesign
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -181,4 +184,64 @@ func TestSignSetsVerifiableSignature(t *testing.T) {
 	if err := Verify(m, pub, "test-key", now); err != nil {
 		t.Fatalf("Verify after Sign: %v", err)
 	}
+}
+
+// FuzzVerifyRawManifest decodes arbitrary release.json bytes the way the
+// updater does and checks that Verify only ever accepts the one manifest the
+// test key signed: no edit to the JSON (re-ordered or duplicate keys, other
+// spellings, extra fields, a re-encoded signature) may change what an accepted
+// manifest says. `go test` runs the seeds; the weekly workflow mutates them.
+func FuzzVerifyRawManifest(f *testing.F) {
+	priv := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	pub := priv.Public().(ed25519.PublicKey)
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	want := Manifest{
+		Format:    Format,
+		KeyID:     "test-key",
+		Tag:       "JukaHub-20261020154603",
+		IssuedAt:  now.Add(-time.Hour).Format(time.RFC3339),
+		ExpiresAt: now.Add(24 * time.Hour).Format(time.RFC3339),
+		Targets:   []Target{{Asset: "JukaHub-Windows.zip", SHA256: testSHA, Size: 29289140}},
+	}
+	if err := Sign(&want, priv); err != nil {
+		f.Fatal(err)
+	}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(raw)
+	f.Add([]byte(`{"format":1,"key_id":"test-key","targets":[],"signature":""}`))
+	wantSig, _ := hex.DecodeString(want.Signature)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var m Manifest
+		if json.Unmarshal(data, &m) != nil {
+			return
+		}
+		if Verify(&m, pub, "test-key", now) != nil {
+			return
+		}
+		// The hex may differ in case; the signature bytes may not.
+		if sig, _ := hex.DecodeString(m.Signature); !bytes.Equal(sig, wantSig) {
+			t.Fatalf("accepted another signature: %s", m.Signature)
+		}
+		m.Signature = want.Signature
+		if !reflect.DeepEqual(m, want) {
+			t.Fatalf("accepted a manifest that differs from the signed one: %+v", m)
+		}
+	})
+}
+
+// FuzzIsSHA256Hex pins IsSHA256Hex to its definition: 64 characters that
+// decode as hex.
+func FuzzIsSHA256Hex(f *testing.F) {
+	f.Add(testSHA)
+	f.Add(strings.ToUpper(testSHA))
+	f.Add("sha256:" + testSHA)
+	f.Fuzz(func(t *testing.T, s string) {
+		_, err := hex.DecodeString(s)
+		if want := len(s) == 64 && err == nil; IsSHA256Hex(s) != want {
+			t.Fatalf("IsSHA256Hex(%q) = %v, want %v", s, !want, want)
+		}
+	})
 }

@@ -174,8 +174,13 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 				first = false
 				return chunk, true
 			}
-			next++
-			return s.src.at(ctx, next)
+			// Only a chunk handed over moves on: a pull cut short (Piper
+			// gone mid-wait) is asked again by the whole-line fallback.
+			c, ok := s.src.at(ctx, next+1)
+			if ok {
+				next++
+			}
+			return c, ok
 		}
 		emitted := false
 		err := ttsLocalSpeakChunks(ctx, s.local, pull, s.gender, func(samples []int16, rate int) bool {

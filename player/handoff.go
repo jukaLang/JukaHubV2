@@ -209,8 +209,8 @@ func openGameLibraryHandoff(game libraryGame) {
 	if !gameLib.open {
 		return
 	}
-	if isJukaLandLibraryGame(game) {
-		ShowToast("JukaLand runs in JukaHub; no emulator is needed", ToastKindInfo)
+	if isBuiltInLibraryGame(game) {
+		ShowToast(game.Title+" runs in JukaHub; no emulator is needed", ToastKindInfo)
 		return
 	}
 	// One snapshot drives both the decision and the cursor placement: the

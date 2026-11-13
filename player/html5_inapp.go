@@ -150,30 +150,63 @@ func loadHTML5Package(entry string) (html5Package, error) {
 	return pkg, nil
 }
 
+// html5Point is a canvas-space point. A NaN X separates two subpaths
+// (moveTo after other points), so one path can hold several shapes.
 type html5Point struct{ X, Y float64 }
+
+// html5Draw is one canvas call waiting to be drawn. Its colour is parsed once,
+// when the game makes the call, and a path's points live in the view's points
+// arena (P0..P1), so a frame of drawing allocates almost nothing.
 type html5Draw struct {
 	Kind, Color, Text, Font, Align string
 	X, Y, W, H, LineWidth          float64
-	Points                         []html5Point
+	RGBA                           sdl.Color
+	P0, P1                         int
 }
 
 type html5GameView struct {
-	game       libraryGame
-	pkg        html5Package
-	rt         *goja.Runtime
-	step       goja.Callable
-	dispatch   goja.Callable
-	commands   []html5Draw
-	path       []html5Point
-	closed     bool
-	errorText  string
-	buttons    [17]bool
-	axes       [2]float64
-	store      map[string]string
-	storeFile  string
-	lastFrame  time.Time
-	board      sdl.Rect
-	pressedKey string
+	game      libraryGame
+	pkg       html5Package
+	rt        *goja.Runtime
+	step      goja.Callable
+	dispatch  goja.Callable
+	padSet    goja.Callable
+	axisSet   goja.Callable
+	commands  []html5Draw
+	points    []html5Point
+	path      []html5Point
+	subStart  int
+	colors    map[string]sdl.Color
+	closed    bool
+	errorText string
+	axes      [2]float64
+	axesDirty bool
+	store     map[string]string
+	storeFile string
+	start     time.Time
+	lastFrame time.Time
+	board     sdl.Rect
+	// canvas is the game's retained drawing surface: each frame only the
+	// calls made since the last frame are drawn into it, the way a browser
+	// canvas keeps its pixels, instead of replaying every call scaled onto
+	// the screen. canvasFailed falls back to that replay where the renderer
+	// has no target textures.
+	canvas       *sdl.Texture
+	canvasFailed bool
+	noGeometry   bool
+	hud          string
+	hudAt        time.Time
+	pressedKey   string
+	// restoreCPU puts the hub's CPU profile back when the game closes: the
+	// game runs inside JukaHub, so it gets the launch profile an emulator
+	// would (powerprofile.go) instead of the menu's powersave clock.
+	restoreCPU func()
+	// Scratch buffers reused by the renderer every frame.
+	verts   []sdl.Vertex
+	indices []int32
+	fpts    []sdl.FPoint
+	rects   []sdl.Rect
+	crosses []float64
 }
 
 var html5View *html5GameView
@@ -192,7 +225,8 @@ func newHTML5GameView(game libraryGame) (*html5GameView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &html5GameView{game: game, pkg: pkg, rt: goja.New(), store: map[string]string{}, storeFile: html5SavePath(game.Path)}
+	v := &html5GameView{game: game, pkg: pkg, rt: goja.New(), store: map[string]string{}, storeFile: html5SavePath(game.Path),
+		colors: map[string]sdl.Color{}, start: time.Now()}
 	if data, err := os.ReadFile(v.storeFile); err == nil {
 		_ = json.Unmarshal(data, &v.store)
 	}
@@ -200,7 +234,9 @@ func newHTML5GameView(game libraryGame) (*html5GameView, error) {
 		v.store = map[string]string{}
 	}
 	_ = v.rt.Set("__jhDraw", v.drawCall)
-	_ = v.rt.Set("__jhPadState", v.padState)
+	_ = v.rt.Set("__jhNow", func(goja.FunctionCall) goja.Value {
+		return v.rt.ToValue(float64(time.Since(v.start)) / float64(time.Millisecond))
+	})
 	_ = v.rt.Set("__jhStoreGet", func(key string) goja.Value {
 		if value, ok := v.store[key]; ok {
 			return v.rt.ToValue(value)
@@ -231,7 +267,9 @@ func newHTML5GameView(game libraryGame) (*html5GameView, error) {
 	}
 	v.step, _ = goja.AssertFunction(v.rt.Get("__jhStep"))
 	v.dispatch, _ = goja.AssertFunction(v.rt.Get("__jhDispatch"))
-	if v.step == nil || v.dispatch == nil {
+	v.padSet, _ = goja.AssertFunction(v.rt.Get("__jhPadSet"))
+	v.axisSet, _ = goja.AssertFunction(v.rt.Get("__jhAxisSet"))
+	if v.step == nil || v.dispatch == nil || v.padSet == nil || v.axisSet == nil {
 		return nil, errors.New("game browser did not start")
 	}
 	return v, nil
@@ -256,13 +294,66 @@ func (v *html5GameView) call(fn goja.Callable, args ...goja.Value) error {
 	return err
 }
 
-func (v *html5GameView) padState() string {
-	buttons := make([]map[string]bool, len(v.buttons))
-	for i, pressed := range v.buttons {
-		buttons[i] = map[string]bool{"pressed": pressed}
+// fail stops the game with err's message; later frames and input are ignored.
+func (v *html5GameView) fail(err error) {
+	if err != nil && v.errorText == "" {
+		v.errorText = err.Error()
+		// A stopped game no longer needs the performance clock while its
+		// "Game stopped" card waits for B.
+		if v.restoreCPU != nil {
+			restore := v.restoreCPU
+			v.restoreCPU = nil
+			restore()
+		}
 	}
-	data, _ := json.Marshal([]any{map[string]any{"axes": v.axes[:], "buttons": buttons}})
-	return string(data)
+}
+
+// html5ArcSweep is the signed angle an arc covers, as the Canvas spec reads
+// arc(): a full turn when the angles are at least 2π apart the drawn way,
+// otherwise the angles taken modulo 2π and walked in the asked direction.
+func html5ArcSweep(start, end float64, ccw bool) float64 {
+	const turn = 2 * math.Pi
+	if !ccw && end-start >= turn {
+		return turn
+	}
+	if ccw && start-end >= turn {
+		return -turn
+	}
+	s, e := math.Mod(start, turn), math.Mod(end, turn)
+	if s < 0 {
+		s += turn
+	}
+	if e < 0 {
+		e += turn
+	}
+	sweep := e - s
+	if !ccw && sweep < 0 {
+		sweep += turn
+	} else if ccw && sweep > 0 {
+		sweep -= turn
+	}
+	return sweep
+}
+
+// color parses a canvas colour once per distinct string: a game sets the same
+// few fill styles hundreds of times a frame.
+func (v *html5GameView) color(value string) sdl.Color {
+	if c, ok := v.colors[value]; ok {
+		return c
+	}
+	c := html5CanvasColor(value)
+	if len(v.colors) >= 512 {
+		clear(v.colors)
+	}
+	v.colors[value] = c
+	return c
+}
+
+// resetCommands drops every queued call: the canvas was just covered whole,
+// or the queue was drawn into the retained canvas.
+func (v *html5GameView) resetCommands() {
+	v.commands = v.commands[:0]
+	v.points = v.points[:0]
 }
 
 func (v *html5GameView) appendDraw(cmd html5Draw) {
@@ -271,42 +362,84 @@ func (v *html5GameView) appendDraw(cmd html5Draw) {
 	}
 }
 
+// pathPoint adds a point to the current path. A moveTo after other points
+// starts a new subpath behind a NaN separator.
+func (v *html5GameView) pathPoint(x, y float64, move bool) {
+	if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) || len(v.path) >= 8192 {
+		return
+	}
+	if move && len(v.path) > 0 {
+		v.path = append(v.path, html5Point{math.NaN(), 0})
+	}
+	if move || len(v.path) == 0 {
+		v.subStart = len(v.path)
+	}
+	v.path = append(v.path, html5Point{x, y})
+}
+
 func (v *html5GameView) drawCall(call goja.FunctionCall) goja.Value {
 	name := call.Argument(0).String()
 	f := func(i int) float64 { return call.Argument(i).ToFloat() }
 	s := func(i int) string { return call.Argument(i).String() }
 	switch name {
 	case "beginPath":
-		v.path = nil
+		v.path = v.path[:0]
+		v.subStart = 0
 	case "moveTo":
-		v.path = append(v.path, html5Point{f(1), f(2)})
+		v.pathPoint(f(1), f(2), true)
 	case "lineTo":
-		v.path = append(v.path, html5Point{f(1), f(2)})
+		v.pathPoint(f(1), f(2), false)
 	case "closePath":
-		if len(v.path) > 1 {
-			v.path = append(v.path, v.path[0])
+		if n := len(v.path); n-v.subStart > 1 {
+			v.path = append(v.path, v.path[v.subStart])
 		}
+	case "rect":
+		x, y, w, h := f(1), f(2), f(3), f(4)
+		v.pathPoint(x, y, true)
+		v.pathPoint(x+w, y, false)
+		v.pathPoint(x+w, y+h, false)
+		v.pathPoint(x, y+h, false)
+		v.path = append(v.path, html5Point{x, y})
 	case "arc":
 		x, y, radius, start, end := f(1), f(2), f(3), f(4), f(5)
-		if radius > 0 && radius < 4096 && end > start {
-			steps := min(96, max(12, int((end-start)*radius/4)))
-			for i := 0; i <= steps; i++ {
-				a := start + (end-start)*float64(i)/float64(steps)
-				v.path = append(v.path, html5Point{x + math.Cos(a)*radius, y + math.Sin(a)*radius})
-			}
+		ccw := call.Argument(6).ToBoolean()
+		if !(radius > 0 && radius < 4096) || math.IsNaN(start+end+x+y) || math.IsInf(start+end, 0) {
+			break
+		}
+		sweep := html5ArcSweep(start, end, ccw)
+		if sweep == 0 {
+			v.pathPoint(x+math.Cos(start)*radius, y+math.Sin(start)*radius, false)
+			break
+		}
+		steps := min(96, max(12, int(math.Abs(sweep)*radius/4)))
+		for i := 0; i <= steps; i++ {
+			a := start + sweep*float64(i)/float64(steps)
+			v.pathPoint(x+math.Cos(a)*radius, y+math.Sin(a)*radius, false)
 		}
 	case "fillRect", "clearRect", "strokeRect":
 		cmd := html5Draw{Kind: name, X: f(1), Y: f(2), W: f(3), H: f(4), Color: s(5), LineWidth: f(6)}
-		if cmd.X <= 0 && cmd.Y <= 0 && cmd.W >= float64(v.pkg.Width) && cmd.H >= float64(v.pkg.Height) {
-			v.commands = nil
+		cmd.RGBA = v.color(cmd.Color)
+		// A call that covers the whole board with solid paint hides every
+		// earlier one, so they are dropped instead of drawn. A translucent
+		// fill (a pause overlay) keeps what is under it.
+		if name != "strokeRect" && cmd.X <= 0 && cmd.Y <= 0 &&
+			cmd.X+cmd.W >= float64(v.pkg.Width) && cmd.Y+cmd.H >= float64(v.pkg.Height) &&
+			(name == "clearRect" || cmd.RGBA.A == 255) {
+			v.resetCommands()
 		}
 		v.appendDraw(cmd)
 	case "fill", "stroke":
-		if len(v.path) > 1 {
-			v.appendDraw(html5Draw{Kind: name, Points: append([]html5Point(nil), v.path...), Color: s(1), LineWidth: f(2)})
+		if len(v.path) > 1 && len(v.commands) < html5CommandLimit && len(v.points)+len(v.path) <= 1<<18 {
+			cmd := html5Draw{Kind: name, Color: s(1), LineWidth: f(2), P0: len(v.points)}
+			cmd.RGBA = v.color(cmd.Color)
+			v.points = append(v.points, v.path...)
+			cmd.P1 = len(v.points)
+			v.appendDraw(cmd)
 		}
 	case "fillText":
-		v.appendDraw(html5Draw{Kind: name, Text: s(1), X: f(2), Y: f(3), Color: s(4), Font: s(5), Align: s(6)})
+		cmd := html5Draw{Kind: name, Text: s(1), X: f(2), Y: f(3), Color: s(4), Font: s(5), Align: s(6)}
+		cmd.RGBA = v.color(cmd.Color)
+		v.appendDraw(cmd)
 	}
 	return goja.Undefined()
 }
@@ -315,10 +448,15 @@ func (v *html5GameView) event(kind, key string, x, y float64, buttons int) {
 	if v == nil || v.closed || v.errorText != "" {
 		return
 	}
-	data, _ := json.Marshal(map[string]any{"key": key, "clientX": x, "clientY": y, "buttons": buttons, "pointerType": "touch"})
-	if err := v.call(v.dispatch, v.rt.ToValue(kind), v.rt.ToValue(string(data))); err != nil {
-		v.errorText = err.Error()
+	v.fail(v.call(v.dispatch, v.rt.ToValue(kind), v.rt.ToValue(key), v.rt.ToValue(x), v.rt.ToValue(y), v.rt.ToValue(buttons)))
+}
+
+// padButton updates the standard-mapping gamepad the game polls.
+func (v *html5GameView) padButton(index int, pressed bool) {
+	if v == nil || v.closed || v.errorText != "" {
+		return
 	}
+	v.fail(v.call(v.padSet, v.rt.ToValue(index), v.rt.ToValue(pressed)))
 }
 
 func (v *html5GameView) frame(now time.Time) {
@@ -329,9 +467,22 @@ func (v *html5GameView) frame(now time.Time) {
 		return
 	}
 	v.lastFrame = now
-	if err := v.call(v.step, v.rt.ToValue(float64(now.UnixNano())/1e6)); err != nil {
-		v.errorText = err.Error()
+	// Stick motion arrives as a stream of events; the game only sees the
+	// latest position, handed over once per frame.
+	if v.axesDirty {
+		v.axesDirty = false
+		if err := v.call(v.axisSet, v.rt.ToValue(v.axes[0]), v.rt.ToValue(v.axes[1])); err != nil {
+			v.fail(err)
+			return
+		}
 	}
+	// Without a canvas texture every queued call is replayed each frame, so
+	// the queue holds one frame: games redraw their board every frame, and
+	// one that never covers it whole would otherwise fill the queue and freeze.
+	if v.canvasFailed {
+		v.resetCommands()
+	}
+	v.fail(v.call(v.step, v.rt.ToValue(float64(now.Sub(v.start))/float64(time.Millisecond))))
 }
 
 func openHTML5GameInApp(game libraryGame) error {
@@ -339,6 +490,8 @@ func openHTML5GameInApp(game libraryGame) error {
 	if err != nil {
 		return err
 	}
+	closeHTML5GameInApp()
+	v.restoreCPU = beginLaunchPowerProfile(appConfig, game.Path)
 	html5View = v
 	gmetaNoteLaunch(game)
 	recordGameLaunch(game)
@@ -346,13 +499,36 @@ func openHTML5GameInApp(game libraryGame) error {
 }
 
 func closeHTML5GameInApp() {
-	if html5View != nil {
-		html5View.closed = true
-		html5View = nil
+	v := html5View
+	if v == nil {
+		return
+	}
+	v.closed = true
+	html5View = nil
+	if v.canvas != nil {
+		_ = v.canvas.Destroy()
+		v.canvas = nil
+	}
+	if v.restoreCPU != nil {
+		restore := v.restoreCPU
+		v.restoreCPU = nil
+		restore()
 	}
 }
 
 func html5GameActive() bool { return html5View != nil }
+
+// html5FramePace is the main loop's sleep while a game is open: a 60 fps
+// budget the frame's own cost comes out of, like a browser's animation frame.
+// The menus' 24–30 fps cadence made games that move by the frame run at half
+// speed, and ones that cap their time step (most do) crawl.
+func html5FramePace(spent time.Duration) uint32 {
+	const budget = 16 * time.Millisecond
+	if spent >= budget {
+		return 1
+	}
+	return uint32((budget - spent) / time.Millisecond)
+}
 
 func html5GameKey(e *sdl.KeyboardEvent) bool {
 	if html5View == nil || e == nil {
@@ -404,7 +580,7 @@ func html5GamePad(e *sdl.ControllerButtonEvent) bool {
 		return true
 	}
 	if index := html5WebGamepadButton(e.Button); index >= 0 {
-		html5View.buttons[index] = pressed
+		html5View.padButton(index, pressed)
 	}
 	key := ""
 	switch e.Button {
@@ -472,33 +648,48 @@ func html5GameAxis(e *sdl.ControllerAxisEvent) bool {
 		return false
 	}
 	if e.Axis == sdl.CONTROLLER_AXIS_LEFTX || e.Axis == sdl.CONTROLLER_AXIS_LEFTY {
-		html5View.axes[e.Axis] = float64(e.Value) / 32767
+		value := max(-1, float64(e.Value)/32767)
+		if html5View.axes[e.Axis] != value {
+			html5View.axes[e.Axis] = value
+			html5View.axesDirty = true
+		}
 	}
 	return true
 }
 
+// html5BrowserPrelude is the small browser the games see. Everything a game
+// calls every frame (getGamepads, performance.now, timers, animation frames)
+// stays in JavaScript or makes one plain native call: the first version
+// rebuilt the gamepad from JSON on every getGamepads and parsed each input
+// event from JSON, which on the handheld cost more than the game's own logic.
 const html5BrowserPrelude = `
 const __nodes = __jhNodeData.map(n => {
   const obj = {tagName:n.tag.toUpperCase(), id:n.id||'', dataset:n.dataset||{}, width:n.width||0, height:n.height||0,
-    textContent:'', _listeners:{}, addEventListener(t,f){(this._listeners[t] ||= []).push(f)},
-    setPointerCapture(){}, getBoundingClientRect(){return {left:0,top:0,width:this.width,height:this.height}}};
+    textContent:'', style:{}, _listeners:{}, addEventListener(t,f){(this._listeners[t] ||= []).push(f)},
+    removeEventListener(t,f){const l=this._listeners[t];if(l){const i=l.indexOf(f);if(i>=0)l.splice(i,1)}},
+    setPointerCapture(){}, releasePointerCapture(){}, focus(){}, blur(){},
+    getBoundingClientRect(){return {left:0,top:0,x:0,y:0,width:this.width,height:this.height,right:this.width,bottom:this.height}}};
   if(n.tag==='canvas') obj.getContext = kind => kind==='2d' ? __ctx : null;
   return obj;
 });
 const __ctx = {fillStyle:'#000000', strokeStyle:'#ffffff', lineWidth:1, font:'16px sans-serif', textAlign:'left',
-  shadowColor:'transparent', shadowBlur:0,
+  textBaseline:'alphabetic', globalAlpha:1, shadowColor:'transparent', shadowBlur:0, lineCap:'butt', lineJoin:'miter',
   fillRect(x,y,w,h){__jhDraw('fillRect',x,y,w,h,this.fillStyle,this.lineWidth)},
-  clearRect(x,y,w,h){__jhDraw('clearRect',x,y,w,h,'#000000',this.lineWidth)},
+  clearRect(x,y,w,h){__jhDraw('clearRect',x,y,w,h,'#00000000',this.lineWidth)},
   strokeRect(x,y,w,h){__jhDraw('strokeRect',x,y,w,h,this.strokeStyle,this.lineWidth)},
   beginPath(){__jhDraw('beginPath')}, moveTo(x,y){__jhDraw('moveTo',x,y)}, lineTo(x,y){__jhDraw('lineTo',x,y)},
-  arc(x,y,r,a,b){__jhDraw('arc',x,y,r,a,b)}, closePath(){__jhDraw('closePath')},
+  rect(x,y,w,h){__jhDraw('rect',x,y,w,h)},
+  arc(x,y,r,a,b,ccw){__jhDraw('arc',x,y,r,a,b,!!ccw)}, closePath(){__jhDraw('closePath')},
   fill(){__jhDraw('fill',this.fillStyle,this.lineWidth)}, stroke(){__jhDraw('stroke',this.strokeStyle,this.lineWidth)},
   fillText(t,x,y){__jhDraw('fillText',String(t),x,y,this.fillStyle,this.font,this.textAlign)},
   measureText(t){return {width:String(t).length*12}},
+  save(){}, restore(){}, setLineDash(){},
 };
+__nodes.forEach(n => { if(n.tagName==='CANVAS') __ctx.canvas = __ctx.canvas || n; });
 const __windowEvents = {};
 globalThis.window = globalThis;
 globalThis.addEventListener = (t,f) => (__windowEvents[t] ||= []).push(f);
+globalThis.removeEventListener = (t,f) => {const l=__windowEvents[t];if(l){const i=l.indexOf(f);if(i>=0)l.splice(i,1)}};
 globalThis.document = {
   getElementById(id){return __nodes.find(n=>n.id===id)||null},
   querySelector(q){if(q[0]==='#') return __nodes.find(n=>n.id===q.slice(1))||null;
@@ -506,29 +697,59 @@ globalThis.document = {
   querySelectorAll(q){if(q.startsWith('[data-')) {const key=q.slice(6,-1);return __nodes.filter(n=>Object.prototype.hasOwnProperty.call(n.dataset,key))}
     return __nodes.filter(n=>n.tagName.toLowerCase()===q.toLowerCase())},
   addEventListener(t,f){(__windowEvents[t] ||= []).push(f)},
+  removeEventListener(t,f){globalThis.removeEventListener(t,f)},
+  hidden:false, visibilityState:'visible',
 };
-globalThis.navigator = {getGamepads(){return JSON.parse(__jhPadState())}};
-globalThis.localStorage = {getItem(k){return __jhStoreGet(String(k))},setItem(k,v){__jhStoreSet(String(k),String(v))}};
-globalThis.performance = {now(){return Date.now()}};
+const __pad = {id:'JukaHub controller (STANDARD GAMEPAD)', index:0, connected:true, mapping:'standard', timestamp:0, axes:[0,0,0,0], buttons:[]};
+for (let i = 0; i < 17; i++) __pad.buttons.push({pressed:false, touched:false, value:0});
+const __pads = [__pad];
+globalThis.navigator = {getGamepads(){return __pads}, userAgent:'JukaHub', maxTouchPoints:1};
+globalThis.__jhPadSet = (i,p) => {const b=__pad.buttons[i];if(b){b.pressed=b.touched=p;b.value=p?1:0;__pad.timestamp=performance.now()}};
+globalThis.__jhAxisSet = (x,y) => {__pad.axes[0]=x;__pad.axes[1]=y;__pad.timestamp=performance.now()};
+globalThis.localStorage = {getItem(k){return __jhStoreGet(String(k))},setItem(k,v){__jhStoreSet(String(k),String(v))},removeItem(){}};
+globalThis.performance = {now:__jhNow};
+globalThis.devicePixelRatio = 1;
 globalThis.innerWidth = __nodes.find(n=>n.tagName==='CANVAS')?.width||960;
 globalThis.innerHeight = __nodes.find(n=>n.tagName==='CANVAS')?.height||540;
-let __raf = [];
-let __timers = [], __nextTimer = 1;
-globalThis.setTimeout = (f,ms=0) => {const id=__nextTimer++;__timers.push({id,f,due:Date.now()+Math.max(0,+ms||0),repeat:0});return id};
-globalThis.setInterval = (f,ms=0) => {const id=__nextTimer++;const repeat=Math.max(16,+ms||16);__timers.push({id,f,due:Date.now()+repeat,repeat});return id};
-globalThis.clearTimeout = globalThis.clearInterval = id => {__timers=__timers.filter(t=>t.id!==id)};
-globalThis.requestAnimationFrame = f => {__raf.push(f);return __raf.length};
-globalThis.cancelAnimationFrame = () => {};
+let __raf = new Map(), __rafId = 0;
+const __timers = new Map();
+let __nextTimer = 1;
+globalThis.setTimeout = (f,ms=0,...a) => {const id=__nextTimer++;__timers.set(id,{f,a,due:__jhNow()+Math.max(0,+ms||0),repeat:0});return id};
+globalThis.setInterval = (f,ms=0,...a) => {const id=__nextTimer++;const repeat=Math.max(16,+ms||16);__timers.set(id,{f,a,due:__jhNow()+repeat,repeat});return id};
+globalThis.clearTimeout = globalThis.clearInterval = id => {__timers.delete(id)};
+globalThis.requestAnimationFrame = f => {const id=++__rafId;__raf.set(id,f);return id};
+globalThis.cancelAnimationFrame = id => {__raf.delete(id)};
 globalThis.__jhStep = now => {
-  const due=__timers.filter(t=>t.due<=now).slice(0,32);
-  __timers=__timers.filter(t=>!due.includes(t));
-  for(const t of due){t.f();if(t.repeat){t.due=now+t.repeat;__timers.push(t)}}
-  const batch=__raf;__raf=[];for(const f of batch.slice(0,16))f(now);
+  if (__timers.size) {
+    let n = 0;
+    for (const [id,t] of __timers) {
+      if (t.due > now) continue;
+      if (++n > 32) break;
+      if (t.repeat) t.due = now + t.repeat; else __timers.delete(id);
+      if (typeof t.f === 'function') t.f(...t.a);
+    }
+  }
+  if (__raf.size) {
+    const batch = __raf; __raf = new Map();
+    let n = 0;
+    for (const [id,f] of batch) {
+      // Past 16 callbacks a frame the rest wait for the next one.
+      if (++n > 16) { __raf.set(id, f); continue; }
+      f(now);
+    }
+  }
 };
-globalThis.__jhDispatch = (kind, json) => {
-  const e=JSON.parse(json);e.preventDefault=()=>{};e.stopPropagation=()=>{};
-  for(const f of __windowEvents[kind]||[])f(e);
-  if(kind.startsWith('pointer')) for(const n of __nodes.filter(n=>n.tagName==='CANVAS')) for(const f of n._listeners[kind]||[])f(e);
+const __keyCodes = {ArrowLeft:37, ArrowUp:38, ArrowRight:39, ArrowDown:40, Enter:13, ' ':32};
+const __keyNames = {ArrowLeft:'ArrowLeft', ArrowUp:'ArrowUp', ArrowRight:'ArrowRight', ArrowDown:'ArrowDown', Enter:'Enter', ' ':'Space'};
+const __noop = () => {};
+globalThis.__jhDispatch = (kind, key, x, y, buttons) => {
+  const code = __keyNames[key] || (key.length === 1 ? 'Key' + key.toUpperCase() : '');
+  const keyCode = __keyCodes[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+  const e = {type:kind, key, code, keyCode, which:keyCode, repeat:false, clientX:x, clientY:y, offsetX:x, offsetY:y, pageX:x, pageY:y,
+    buttons, button:0, pointerId:1, pointerType:'touch', isPrimary:true, preventDefault:__noop, stopPropagation:__noop};
+  const w = __windowEvents[kind];
+  if (w) for (const f of w.slice()) f(e);
+  if (kind.startsWith('pointer')) for (const n of __nodes) { if (n.tagName !== 'CANVAS') continue; const l = n._listeners[kind]; if (l) for (const f of l.slice()) f(e); }
 };
 globalThis.__jhHud = () => JSON.stringify(__nodes.filter(n=>['score','lives','best'].includes(n.id)).map(n=>[n.id,String(n.textContent)]));
 `

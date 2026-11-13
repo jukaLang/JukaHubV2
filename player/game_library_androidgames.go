@@ -204,8 +204,8 @@ func libraryAddAndroidGames(lib *gameLibraryReport, seconds map[string]int64) {
 // Android game has no LAN play here, so it says so instead of opening a
 // host/join panel that could only fail.
 func libraryOpenNetplay() {
-	if game, ok := selectedLibraryGame(); ok && isJukaLandLibraryGame(game) {
-		ShowToast("LAN play is for emulator games — JukaLand has none here", ToastKindInfo)
+	if game, ok := selectedLibraryGame(); ok && isBuiltInLibraryGame(game) {
+		ShowToast("LAN play is for emulator games — "+game.Title+" has none here", ToastKindInfo)
 		return
 	}
 	if game, ok := selectedLibraryGame(); ok && game.System == androidLibrarySystem {

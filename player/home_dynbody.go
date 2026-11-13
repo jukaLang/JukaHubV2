@@ -551,7 +551,7 @@ func (h *HomeLayout) dynStep(now uint64) {
 // so the frame rate stays at its interactive cadence until it settles.
 func homeLayoutAnimating() bool {
 	return homeLayoutActive && homeLayout != nil &&
-		(homeLayout.focusEnter.active || (homeLayout.dyn.active && homeLayout.dyn.anim))
+		(homeLayout.focusEnter.active || homeFocusGlide.animating() || (homeLayout.dyn.active && homeLayout.dyn.anim))
 }
 
 // dynClampScroll keeps the first shown row inside the grid.

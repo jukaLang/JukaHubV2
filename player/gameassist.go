@@ -505,6 +505,8 @@ func gaAsk(question string) {
 			}
 		}
 		if asText {
+			// The text answer starts again from nothing: so does its voice.
+			live.Reset()
 			reply, err = chatGroqAsk(key, models, messages, onDelta)
 		}
 		tbxPost(func() { gaAnswered(gen, question, reply, err) })

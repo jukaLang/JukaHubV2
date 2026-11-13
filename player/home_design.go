@@ -151,6 +151,8 @@ func drawHomeFocusGlow(renderer *sdl.Renderer, rect sdl.Rect) {
 		return
 	}
 	const glowPad = 26
+	// The glow travels with the ring when the focus steps (homefocusglide.go).
+	rect = homeFocusGlide.apply(rect)
 	homeGlowBlob(renderer, sdl.Rect{
 		X: rect.X - glowPad, Y: rect.Y - glowPad,
 		W: rect.W + glowPad*2, H: rect.H + glowPad*2,
@@ -170,6 +172,9 @@ func drawHomeFocusRing(renderer *sdl.Renderer, base, rect sdl.Rect, radius int32
 	}
 	// The settled rect, so the lift animation is not a move (liquidbg.go).
 	liquidNoteFocus(base)
+	// A step glides the ring over, past the card and back (homefocusglide.go);
+	// the cached shape still comes from base, so the move costs one Copy.
+	rect = homeFocusGlide.apply(rect)
 	out := homeFocusRingOutset()
 	grow := func(r sdl.Rect) sdl.Rect {
 		return sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}

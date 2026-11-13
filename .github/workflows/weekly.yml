@@ -3,7 +3,8 @@
 # ci.yml stays at two jobs per push (builder checks; player vet, staticcheck
 # and tests). What costs more than it catches per push runs here, Mondays and
 # by hand (Actions -> Weekly checks -> Run workflow): the race detector over
-# the tests that run real goroutines, the Go vulnerability scan, the
+# the tests that run real goroutines, the Go vulnerability scan, fuzzing of
+# the self-updater's decoders, the
 # cold-boot budget, the builder's Chromium smoke test, the CI helper scripts',
 # the game-audio plugin's and AndroidRT's host tests, and the player built and
 # tested on native Windows (the release pipeline only cross-compiles it).
@@ -100,6 +101,59 @@ jobs:
         # without any change here; the fix for that is a toolchain bump.
         continue-on-error: true
         run: govulncheck ./...
+
+  fuzz:
+    name: Fuzz the update decoders
+    # Delta patches, delta bundles and release.json arrive from the network and
+    # feed the self-updater. Every push runs these fuzz targets over their seeds
+    # (they are ordinary tests to `go test`); here the fuzzer mutates each one
+    # for a while. Pure Go, so no SDL2. A failure leaves the crashing input
+    # under testdata/fuzz/, uploaded below: commit it as a regression seed with
+    # the fix.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: go test -fuzz
+        # -fuzz accepts one target per run, hence the loop. CGO is off: the
+        # two packages are pure Go and must stay that way.
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          status=0
+          for target in \
+            ./internal/jdelta:FuzzDiffApply \
+            ./internal/jdelta:FuzzApplyOps \
+            ./internal/jdelta:FuzzApplyRaw \
+            ./internal/jdelta:FuzzReadBundleIndex \
+            ./internal/jdelta:FuzzValidName \
+            ./internal/releasesign:FuzzVerifyRawManifest \
+            ./internal/releasesign:FuzzIsSHA256Hex; do
+            pkg=${target%%:*} name=${target##*:}
+            echo "::group::$name"
+            if ! go test "$pkg" -run '^$' -fuzz "^${name}\$" -fuzztime 20s; then
+              echo "::error title=Fuzzing found a failure::$name in $pkg"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+      - name: Keep the crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers
+          path: player/internal/*/testdata/fuzz/
+          if-no-files-found: ignore
 
   player-boot:
     name: Player cold-boot budget

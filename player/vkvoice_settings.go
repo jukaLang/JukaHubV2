@@ -11,7 +11,7 @@ package main
 const vkVoiceAutoKey = "vkVoiceAuto"
 
 var sttModeOptions = []setOption{
-	{Value: sttModeAuto, Label: "Automatic", Note: "Use Groq when available; switch to offline speech if it fails"},
+	{Value: sttModeAuto, Label: "Automatic", Note: "Works without a key; uses Groq when available and offline speech otherwise"},
 	{Value: sttModeOffline, Label: "Offline on device", Note: "Keep microphone recordings on this Smart Pro"},
 	{Value: sttModeGroq, Label: "Groq", Note: "Use Groq only; needs a key and Wi-Fi"},
 }
@@ -66,8 +66,8 @@ func vkVoiceSettingsRows() []setRow {
 		},
 		{
 			ID: vkVoiceAutoKey, Label: "Start voice typing when the keyboard opens", Kind: setKindToggle,
-			Detail: func(*Config) string {
-				if !sttCanListen() {
+			Detail: func(c *Config) string {
+				if !sttCanListenFor(c) {
 					return "Set up speech recognition above first"
 				}
 				return "Chat messages start listening at once; " + vkVoiceButtonName() + " stops and sends"

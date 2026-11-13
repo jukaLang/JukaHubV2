@@ -465,7 +465,7 @@ const artworkMissFile = ".missing-art.json"
 // artworkMissVersion stamps the not-found cache. It is bumped whenever title
 // matching changes: a title that was "not found" under the old lookup deserves
 // one more try instead of waiting out the 30-day window.
-const artworkMissVersion = 3
+const artworkMissVersion = 4
 
 // artworkVariantLimit caps how many names one ROM asks the thumbnail server
 // for. A library fetch walks every ROM, so a title that generates ten lookups

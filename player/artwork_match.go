@@ -279,9 +279,23 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 		return fetchROMArtworkImage(ctx, client, base, rom.Collection, stem)
 	}
 	name, ok := idx.match(stem)
+	known := ""
 	if !ok {
-		if known := artworkDatabaseName(ctx, rom, stem); known != "" {
+		if known = artworkDatabaseName(ctx, rom, stem); known != "" {
 			name, ok = idx.match(known)
+		}
+	}
+	if !ok {
+		// Some picture beats none: the closest title on the list, by the
+		// database's name first (it is the cleaner one), else the file's.
+		if known != "" {
+			name, ok = idx.closest(known)
+		}
+		if !ok {
+			name, ok = idx.closest(stem)
+		}
+		if ok {
+			logDebug("art", "%s: no exact cover, closest is %q", stem, name)
 		}
 	}
 	if !ok {
@@ -332,6 +346,11 @@ type artworkIndex struct {
 	strict map[string][]int
 	loose  map[string][]int
 	head   map[string][]int
+
+	// byWord finds the titles sharing a word with a ROM, for the closest
+	// title (artwork_closest.go); built on first use.
+	closeOnce sync.Once
+	byWord    map[string][]int
 }
 
 func newArtworkIndex(names []string) *artworkIndex {

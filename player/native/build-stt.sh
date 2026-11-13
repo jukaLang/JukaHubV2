@@ -37,7 +37,9 @@ if readelf --version-info "$BIN" | grep -Eo 'GLIBC_[0-9]+\.[0-9]+' | \
     echo 'whisper-cli requires a glibc newer than 2.31' >&2
     exit 1
 fi
-if readelf -d "$BIN" | grep NEEDED | grep -Ev 'lib(c|m|pthread|dl|rt)\.so\.'; then
+# The GNU ARM loader is named in DT_NEEDED by this toolchain. It is part of
+# glibc on the handheld, alongside the C and math libraries allowed below.
+if readelf -d "$BIN" | grep NEEDED | grep -Ev 'Shared library: \[(lib(c|m|pthread|dl|rt)\.so\.[^]]+|ld-linux-aarch64\.so\.1)\]$'; then
     echo 'whisper-cli has an unexpected shared dependency' >&2
     exit 1
 fi

@@ -127,12 +127,25 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 		}
 		fillRoundedRect(renderer, cx, cy, cardW, cardH, 12, bgColor)
 
+		// A built-in scene game (JukaLand, the Synth) shows its cover across
+		// the card, under a dark band for the name; the cover's own title
+		// band takes the place of the "Press A" hint.
+		covered := false
+		if g.scene != "" {
+			if tex := builtInCoverTexture(renderer, g.scene); tex != nil {
+				covered = drawCoverFill(renderer, tex, sdl.Rect{X: cx + 4, Y: cy + 4, W: cardW - 8, H: cardH - 8})
+			}
+			if covered {
+				fillRoundedRect(renderer, cx+4, cy+4, cardW-8, 82, 0, WithAlpha(sdl.Color{R: 8, G: 12, B: 22, A: 255}, 190))
+			}
+		}
+
 		if focused {
 			strokeRoundedRect(renderer, cx, cy, cardW, cardH, 12, 2, getAccentColor(config))
 		}
 
 		// Icon
-		if titleFont != nil {
+		if titleFont != nil && !covered {
 			iconFont, _ := getCachedFont(config, "large")
 			drawText(renderer, iconFont, g.icon, cx+20, cy+20, ColorTextPrimary(), textAlignLeft)
 		}
@@ -140,20 +153,29 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 		// Name
 		if bodyFont != nil {
 			nameCol := ColorTextPrimary()
+			nameX := cx + 80
+			if covered {
+				// White on the dark band, light theme or not.
+				nameCol, nameX = sdl.Color{R: 245, G: 248, B: 255, A: 255}, cx+20
+			}
 			if focused {
 				nameCol = getAccentColor(config)
 			}
-			drawText(renderer, bodyFont, g.name, cx+80, cy+24, nameCol, textAlignLeft)
+			drawText(renderer, bodyFont, g.name, nameX, cy+24, nameCol, textAlignLeft)
 		}
 
 		// Description
 		if smallFont != nil {
-			desc := ellipsize(smallFont, g.desc, cardW-100)
-			drawText(renderer, smallFont, desc, cx+80, cy+56, ColorTextSecondary(), textAlignLeft)
+			descX, descCol := cx+80, ColorTextSecondary()
+			if covered {
+				descX, descCol = cx+20, sdl.Color{R: 214, G: 222, B: 236, A: 255}
+			}
+			desc := ellipsize(smallFont, g.desc, cardW-(descX-cx)-20)
+			drawText(renderer, smallFont, desc, descX, cy+56, descCol, textAlignLeft)
 		}
 
 		// "Press A to play" hint
-		if focused && smallFont != nil {
+		if focused && smallFont != nil && !covered {
 			hint := hintSentence("Press %s to play", "A", "Play")
 			hw, _, _ := smallFont.SizeUTF8(hint)
 			drawText(renderer, smallFont, hint, cx+cardW-int32(hw)-20, cy+cardH-32, getAccentColor(config), textAlignLeft)

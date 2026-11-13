@@ -87,7 +87,10 @@ jobs:
         # when vet failed, so one push reports both.
         if: ${{ !cancelled() }}
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+          # The module version (v0.8.2 = release 2026.2.2), not the release
+          # name: Scorecard counts only a full semver or commit as pinned, and
+          # go.sum's checksum database makes a semver immutable.
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           "$(go env GOPATH)/bin/staticcheck" ./...
 
       - name: go test

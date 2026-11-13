@@ -130,8 +130,9 @@ type ttsLive struct {
 
 	mu      sync.Mutex
 	src     *ttsSource
-	used    int // sentences of the answer already pushed
-	total   int // characters pushed (for ttsSpokenMax)
+	line    uint64 // the line src speaks on (ttsStopLine)
+	used    int    // sentences of the answer already pushed
+	total   int    // characters pushed (for ttsSpokenMax)
 	closed  bool
 	stopped atomic.Bool
 }
@@ -149,9 +150,10 @@ func (l *ttsLive) Update(text string) { l.feed(text, false) }
 // that never started starts now, as jukaSpeak would.
 func (l *ttsLive) Finish(text string) { l.feed(text, true) }
 
-// Stop drops the answer: nothing more is pushed and a line not begun never
-// starts. What is already speaking is the caller's to silence
-// (jukaSpeakStop), and a newer line has replaced it anyway.
+// Stop drops the answer: nothing more is pushed, a line not begun never
+// starts, and the line it started is silenced if it is still the current one
+// (a newer line is left alone). Once Stop returns, this answer says nothing
+// more — even when the request goroutine was inside Update at that moment.
 func (l *ttsLive) Stop() {
 	if l == nil {
 		return
@@ -162,7 +164,29 @@ func (l *ttsLive) Stop() {
 		l.src.push(nil, true)
 	}
 	l.closed = true
+	line := l.line
 	l.mu.Unlock()
+	if line != 0 {
+		ttsStopLine(line)
+	}
+}
+
+// Reset starts the answer over (a request asked again another way, whose
+// text begins again from nothing): the next complete sentence starts a new
+// line, which replaces what this one was saying.
+func (l *ttsLive) Reset() {
+	if l == nil || l.stopped.Load() {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+	if l.src != nil {
+		l.src.push(nil, true)
+	}
+	l.src, l.used, l.total = nil, 0, 0
 }
 
 func (l *ttsLive) feed(text string, final bool) {
@@ -195,7 +219,7 @@ func (l *ttsLive) feed(text string, final bool) {
 		}
 		l.src = ttsOpenSource()
 		l.src.push(add, done)
-		ttsSpeakSource(l.origin, l.kind, l.src)
+		l.line = ttsSpeakSource(l.origin, l.kind, l.src)
 		return
 	}
 	if len(add) > 0 || done {

@@ -26,28 +26,8 @@ import (
 // gamesLibraryEntryName is the pinned Emulators row that opens the library.
 const gamesLibraryEntryName = "Games Library"
 
-const (
-	builtInLibrarySystem = "Built-in games"
-	jukaLandLibraryPath  = "builtin:jukaland"
-)
-
-func isJukaLandLibraryGame(game libraryGame) bool {
-	return game.System == builtInLibrarySystem && game.Path == jukaLandLibraryPath
-}
-
-// JukaLand ships with JukaHub, so the Games library can list it even on a card
-// with no ROMs. The scene check is captured before the background scan starts.
-func libraryAddJukaLand(lib *gameLibraryReport, sceneAvailable bool) {
-	if lib == nil || !sceneAvailable {
-		return
-	}
-	lib.Systems = append(lib.Systems, librarySystem{
-		Name:  builtInLibrarySystem,
-		Games: []libraryGame{{Path: jukaLandLibraryPath, System: builtInLibrarySystem, Title: "JukaLand"}},
-	})
-	lib.Total++
-	sortLibrarySystems(lib.Systems)
-}
+// The built-in games (JukaLand, the Synth) and their covers live in
+// builtin_games.go.
 
 // libraryGame is one playable file.
 type libraryGame struct {
@@ -222,8 +202,8 @@ func countCoveredGames(games []libraryGame) int {
 	return n
 }
 
-// The built-in JukaLand card uses a drawn placeholder, not downloadable box
-// art, so cover progress is measured only across games with cover files.
+// The built-in games carry their own covers, not downloadable box art, so
+// cover progress is measured only across the consoles' games.
 func libraryCoverTotals(lib gameLibraryReport) (withArt, total int) {
 	for _, system := range lib.Systems {
 		if system.Name == builtInLibrarySystem {

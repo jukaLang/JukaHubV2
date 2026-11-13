@@ -135,6 +135,10 @@ type HomeLayout struct {
 	Motion     bool
 	focusEnter uiEnter
 	focusID    HomeFocusID
+	// Glide lets the focus ring travel between controls with a small
+	// overshoot (homefocusglide.go). Unlike Motion it stays on in Low Power:
+	// it is one ring moving for 300 ms.
+	Glide bool
 
 	// Arrangement is the alternative layout in force (homeArrangementCustom
 	// when the scene's own geometry is authoritative).
@@ -918,6 +922,10 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	if h == nil || renderer == nil {
 		return fmt.Errorf("home layout requires a renderer")
 	}
+	// Every focus highlight drawn from here to the end of Render glides when
+	// the focus steps (homefocusglide.go); overlays drawn after it do not.
+	homeFocusGlide.beginFrame(uiClockMS(), h.Focus.Current(), h.Glide)
+	defer homeFocusGlide.endFrame()
 
 	// The caller (renderHomeModern) owns the background; the layout only adds
 	// its translucent backdrop blocks on top of it.
@@ -1405,7 +1413,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			continue
 		}
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, homeFocusRingWidth, ColorAccent)
+		strokeRoundedRectAt(renderer, r, homeFocusGlide.apply(r), 10, homeFocusRingWidth, ColorAccent)
 	}
 	// Edit Home's Top bar row rings the control its focus is on, here in the
 	// live bar (home_edit_header.go).
@@ -1510,7 +1518,8 @@ func (h *HomeLayout) drawHeaderQRRing(renderer *sdl.Renderer, tile sdl.Rect) {
 	out := homeFocusRingWidth + 2
 	radius := max32(6, min32(tile.W, tile.H)/10) + out
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	strokeRoundedRect(renderer, tile.X-out, tile.Y-out, tile.W+2*out, tile.H+2*out, radius, homeFocusRingWidth, ColorAccent)
+	ring := sdl.Rect{X: tile.X - out, Y: tile.Y - out, W: tile.W + 2*out, H: tile.H + 2*out}
+	strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), radius, homeFocusRingWidth, ColorAccent)
 }
 
 // renderHomeBell draws the notification bell in the home header's top-right
@@ -1595,7 +1604,7 @@ func (h *HomeLayout) drawSearchPill(renderer *sdl.Renderer, fonts HomeFonts, ite
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRectAt(renderer, item.Rect, draw, radius, fill)
 	if focused {
-		strokeRoundedRectAt(renderer, item.Rect, draw, radius, 3, ColorAccent)
+		strokeRoundedRectAt(renderer, item.Rect, homeFocusGlide.apply(draw), radius, 3, ColorAccent)
 	} else {
 		strokeRoundedRectAt(renderer, item.Rect, draw, radius, 1, edge)
 	}

@@ -3485,7 +3485,10 @@ func main() {
 			renderAmbient(renderer, config)
 		} else if ss.active {
 			renderScreensaver(renderer, config, sdl.GetTicks64())
-		} else {
+		} else if !html5GameActive() {
+			// An open HTML5 game paints the whole panel (html5_inapp_render.go),
+			// so the scene under it is not drawn: on the handheld that was
+			// most of each game frame's cost.
 			renderScene(renderer, config, config.Scenes[currentSceneIndex])
 		} // Full screen video covers the scene and its chrome entirely.
 		if videoFullscreen && playerPhase() != "idle" {
@@ -3975,7 +3978,13 @@ func main() {
 		// cadence, but ends it the moment a press is queued (saver_power.go).
 		// While someone is using the screen the cadence is a budget the frame's
 		// own cost comes out of (adaptive.go Pace).
-		saverFrameSleep(frameRateCtrl.Pace(time.Since(frameStart)))
+		// An open HTML5 game gets a 60 fps frame budget, whatever the menus'
+		// cadence (html5FramePace).
+		if html5GameActive() {
+			saverFrameSleep(html5FramePace(time.Since(frameStart)))
+		} else {
+			saverFrameSleep(frameRateCtrl.Pace(time.Since(frameStart)))
+		}
 
 		frameCount++
 		// Periodic memory pressure check (every ~10 frames on TSP). The

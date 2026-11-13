@@ -99,7 +99,7 @@ func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5 
 			// bloom, the same weight the header chips and the bell wear.
 			drawHomeFocusGlow(renderer, rect)
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, homeGlass(26))
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, homeFocusRingWidth, ColorAccent)
+			strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), rect.H/2, homeFocusRingWidth, ColorAccent)
 		}
 		if on {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, WithAlpha(ColorAccent, 38))

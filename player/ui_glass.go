@@ -389,6 +389,7 @@ func drawGlassFocusGlow(renderer *sdl.Renderer, rect sdl.Rect) {
 	if pad > 26 {
 		pad = 26
 	}
+	rect = homeFocusGlide.apply(rect)
 	homeGlowBlob(renderer, sdl.Rect{
 		X: rect.X - pad, Y: rect.Y - pad,
 		W: rect.W + 2*pad, H: rect.H + 2*pad,
@@ -403,7 +404,10 @@ func drawGlassFocusRing(renderer *sdl.Renderer, rect sdl.Rect, radius int32) {
 	}
 	// A focus that moved drops a ripple in the liquid background (liquidbg.go).
 	liquidNoteFocus(rect)
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFocusRingWidth, glassAccent())
+	// On Home the ring glides between controls (homefocusglide.go); elsewhere
+	// apply returns rect. The shape stays keyed to rect's size, so the cache
+	// gains no entry per frame of the move.
+	strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), radius, glassFocusRingWidth, glassAccent())
 }
 
 // drawGlassSurface paints one glass control: the translucent fill, the hairline

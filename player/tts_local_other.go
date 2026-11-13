@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -223,6 +224,30 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
+	// A Piper that stops answering is ended after ttsPiperTimeout without
+	// progress while it owes a line (the model load counts against the first):
+	// a short line no longer waits out the whole-answer cap above. Waiting for
+	// the answer's next sentence owes nothing.
+	var owed atomic.Int32
+	var progress atomic.Int64
+	var stalled atomic.Bool
+	progress.Store(time.Now().UnixNano())
+	go func() {
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if owed.Load() > 0 && time.Since(time.Unix(0, progress.Load())) > ttsPiperTimeout {
+					stalled.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 	// The writer hands Piper one line per chunk as the chunks come and closes
 	// its input after the last; total is read only once it is done.
 	total := 0
@@ -232,6 +257,8 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 		defer stdin.Close()
 		line := first
 		for {
+			owed.Add(1)
+			progress.Store(time.Now().UnixNano())
 			if _, err := io.WriteString(stdin, line+"\n"); err != nil {
 				return
 			}
@@ -257,6 +284,7 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	cleanDir := filepath.Clean(dir)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
+		progress.Store(time.Now().UnixNano())
 		if line == "" || stopped {
 			continue
 		}
@@ -268,6 +296,7 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 		if filepath.Dir(wav) != cleanDir || !strings.EqualFold(filepath.Ext(wav), ".wav") {
 			continue
 		}
+		owed.Add(-1)
 		data, err := ttsReadFinishedWAV(ctx, wav)
 		_ = os.Remove(wav)
 		if err != nil {
@@ -295,6 +324,9 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	// Piper is gone: the writer stops too, and only then is total final. A
 	// deadline or a stop is read before that cancel hides it.
 	ctxErr := ctx.Err()
+	if stalled.Load() {
+		ctxErr = context.DeadlineExceeded
+	}
 	cancel()
 	<-wrote
 	if stopped || emitted >= total {

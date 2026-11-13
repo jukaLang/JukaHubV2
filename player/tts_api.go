@@ -93,8 +93,14 @@ func jukaSpeak(kind ttsKind, text string) {
 // jukaSpeakStop silences Juka at once (a new question, the orb going away, a
 // video starting). Any goroutine; nothing happens when Juka is quiet.
 func jukaSpeakStop() {
+	ttsStopLine(0)
+}
+
+// ttsStopLine silences line gen if it is still the current one (0: whatever
+// is current). Any goroutine.
+func ttsStopLine(gen uint64) {
 	ttsCtl.mu.Lock()
-	if !ttsCtl.pending && ttsCtl.running == 0 {
+	if (!ttsCtl.pending && ttsCtl.running == 0) || (gen != 0 && ttsCtl.gen != gen) {
 		ttsCtl.mu.Unlock()
 		return
 	}
@@ -122,13 +128,14 @@ func ttsSpeakFrom(origin ttsOrigin, kind ttsKind, text string) {
 }
 
 // ttsSpeakSource starts a line whose chunks arrive while it speaks
-// (tts_live.go). Any goroutine.
-func ttsSpeakSource(origin ttsOrigin, kind ttsKind, src *ttsSource) {
-	ttsStartLine(origin, kind, "", src)
+// (tts_live.go) and returns its number, for ttsStopLine. Any goroutine.
+func ttsSpeakSource(origin ttsOrigin, kind ttsKind, src *ttsSource) uint64 {
+	return ttsStartLine(origin, kind, "", src)
 }
 
-// ttsStartLine makes text — or src, when it is not nil — the current line.
-func ttsStartLine(origin ttsOrigin, kind ttsKind, text string, src *ttsSource) {
+// ttsStartLine makes text — or src, when it is not nil — the current line,
+// and returns its number.
+func ttsStartLine(origin ttsOrigin, kind ttsKind, text string, src *ttsSource) uint64 {
 	ttsCtl.mu.Lock()
 	ttsCtl.gen++
 	gen := ttsCtl.gen
@@ -145,6 +152,7 @@ func ttsStartLine(origin ttsOrigin, kind ttsKind, text string, src *ttsSource) {
 	ttsSilence()
 	posted := time.Now()
 	tbxPost(func() { ttsBegin(gen, kind, origin, text, src, posted) })
+	return gen
 }
 
 // ttsSyncFlagsLocked mirrors ttsCtl into the atomics. ttsCtl.mu is held.

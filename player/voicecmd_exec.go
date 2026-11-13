@@ -39,6 +39,7 @@ type voiceFix int
 const (
 	voiceFixNone voiceFix = iota
 	voiceFixGroqKey
+	voiceFixOfflineSpeech
 	voiceFixPhone
 	voiceFixType
 )
