@@ -203,6 +203,16 @@ func sttCommandTranscribe(ctx context.Context, key string, wav []byte, prompt st
 }
 
 func sttLocalTranscribe(ctx context.Context, wav []byte, lang, prompt string) (string, error) {
+	return sttLocalTranscribeSearch(ctx, wav, lang, prompt, prompt != "")
+}
+
+// A provisional Chat preview favors speed. The final transcript still runs
+// through sttLocalTranscribe with the normal search.
+func sttLocalPreviewTranscribe(ctx context.Context, wav []byte, lang string) (string, error) {
+	return sttLocalTranscribeSearch(ctx, wav, lang, "", true)
+}
+
+func sttLocalTranscribeSearch(ctx context.Context, wav []byte, lang, prompt string, quick bool) (string, error) {
 	if !sttLocalReady() {
 		return "", errSTTUnavailable
 	}
@@ -210,7 +220,7 @@ func sttLocalTranscribe(ctx context.Context, wav []byte, lang, prompt string) (s
 		return "", err
 	}
 	bin, model := sttLocalFiles()
-	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt)
+	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt, quick)
 	if err != nil && ctx.Err() == nil {
 		logWarn("voice", "offline speech recognition failed: %v", err)
 	}
@@ -235,12 +245,11 @@ func sttCheckMemory() error {
 	return nil
 }
 
-func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, prompt string) (string, error) {
+func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, prompt string, quick bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	started := time.Now()
-	quick := prompt != "" // voice commands are short; dictation keeps the more careful search
 	if lang == "" {
 		lang = "auto"
 	} else if lang == "nb" {

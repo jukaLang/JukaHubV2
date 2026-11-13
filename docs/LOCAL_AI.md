@@ -5,8 +5,9 @@ Cortex-A53 CPU cores run the bundled multilingual Whisper tiny recognizer.
 **Settings → Voice & AI → Speech recognition → Automatic** uses Groq when a
 key and connection are available, then falls back to the local recognizer.
 **Offline on device** keeps recognition local all the time. Short commands use
-a smaller Whisper search and three CPU threads; longer voice typing keeps the
-more careful search. The app logs recognition time, without logging speech,
+a smaller Whisper search and three CPU threads. Provisional Chat words use
+that quick pass too; the final voice typing result keeps the more careful
+search. The app logs recognition time, without logging speech,
 to help measure the change on a handheld.
 
 The original Smart Pro's PowerVR GE8300 graphics chip has no usable OpenCL or
