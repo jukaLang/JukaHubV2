@@ -130,9 +130,9 @@ memory test; see [Offline AI options](LOCAL_AI.md).
 **The handheld's microphone.** Press **A** (or **Menu** for the orb) and
 speak. The first 0.3 seconds after the start chime are ignored, so the chime
 itself never counts as speech. Listening stops by itself about a second after
-you stop talking (at most 8 seconds); Groq's Whisper turns the clip into words
-when available, and the command runs. On a Smart Pro, the bundled local model
-takes over when Groq is unavailable, including with no key or Wi-Fi. With
+you stop talking (at most 8 seconds); the chosen recognizer turns the clip into
+words and the command runs. In Automatic mode on a Smart Pro, the bundled local
+model takes over when Groq is unavailable, including with no key or Wi-Fi. With
 Groq, the clip and a short list of names on this handheld (screen, app and
 game titles) are sent to its service so that "JukaLand" or a game's title
 comes back spelled right. With the local model both stay on the handheld.
@@ -307,9 +307,11 @@ itself like the player's.
 
 ## Voice typing
 
-Voice typing writes what you say into the on-screen keyboard's field. It uses
-Groq's Whisper when available and the bundled local model on Smart Pro when
-Groq cannot transcribe. Press **R2** while the
+Voice typing writes what you say into the on-screen keyboard's field. On Smart
+Pro, **Settings → Voice & AI → Speech recognition** offers **Automatic** (the
+default: Groq first, then offline if Groq fails), **Offline on device**, and
+**Groq**. The offline option needs no API key or Wi-Fi after installation.
+Press **R2** while the
 keyboard is up — or the mic chip in its top row, **Menu** on a handheld,
 **F4** on a keyboard — and press again to send; **B** cancels. R2 works in the
 browser's address bar too, and with the pointer up over the page above the
@@ -317,16 +319,21 @@ keyboard L2 and R2 still scroll. **Settings → Voice & AI → Start voice typin
 when the keyboard opens** makes a Chat message's keyboard listen as soon as it
 opens, for people who text by voice; it stops on its own when nothing is said
 for a few seconds, and password, key, address and search fields never listen.
+**Settings → Voice & AI → Install offline speech** shows **Ready** when the
+bundled model is present. If it is missing, press the row once while connected
+to Wi-Fi to download and verify the roughly 78 MB model. New Smart Pro packages
+already contain it.
 
 While recording a Chat message, provisional words appear in the keyboard field
 and the Chat composer as you speak. Both recognizers work on clips rather than a
 continuous stream, so the text updates in short bursts and may correct earlier
 words. Stopping the recording gets one full transcript and puts it in the draft;
-**B** discards the preview and keeps the draft as it was. Live preview sends
-interim clips to Groq while the microphone is open, including when you later
-cancel. With no key or Wi-Fi, Smart Pro preview runs locally instead; it may
-update more slowly, depending on the device's workload. Local audio and text
-travel through memory and process pipes without being saved to a file.
+**B** discards the preview and keeps the draft as it was. In Automatic or Groq
+mode with a working connection, live preview sends interim clips to Groq while
+the microphone is open, including when you later cancel. In Offline mode,
+preview runs locally; it may update more slowly,
+depending on the device's workload. Local audio and text travel through memory
+and process pipes without being saved to a file.
 
 ## Files
 

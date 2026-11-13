@@ -184,3 +184,39 @@ func TestTTSExtractPinnedPiperArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A live answer is spoken in order, each sentence once, with the first chunk
+// short and the cap applied, and a stopped wait ends the line.
+func TestTTSLiveSourceOrderAndCap(t *testing.T) {
+	src := ttsOpenSource()
+	ctx := context.Background()
+	src.push([]string{"Hi there.", "This is the second sentence."}, false)
+	first, ok := src.at(ctx, 0)
+	if !ok || first != "Hi there. This is the second sentence." {
+		t.Fatalf("first chunk = %q, %v", first, ok)
+	}
+	got := make(chan string, 1)
+	go func() {
+		c, _ := src.at(ctx, 1)
+		got <- c
+	}()
+	src.push([]string{"Third.", "Fourth."}, true)
+	if c := <-got; c != "Third. Fourth." {
+		t.Fatalf("second chunk = %q", c)
+	}
+	if _, ok := src.at(ctx, 2); ok {
+		t.Fatal("a finished line gave a third chunk")
+	}
+	open := ttsOpenSource()
+	stop, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, ok := open.at(stop, 0); ok {
+		t.Fatal("a cancelled wait gave a chunk")
+	}
+	total := 0
+	long := strings.Repeat("word ", 100) + "end."
+	out, capped := ttsLiveCap([]string{"Short one.", long, long}, &total)
+	if !capped || out[len(out)-1] != ttsRestOnScreen || total > ttsSpokenMax+1 {
+		t.Fatalf("cap: %v %v total %d", out, capped, total)
+	}
+}

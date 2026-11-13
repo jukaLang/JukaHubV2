@@ -68,9 +68,9 @@ type ttsSession struct {
 	gen      uint64
 	kind     ttsKind
 	origin   ttsOrigin
-	chunks   []string
-	rate     int    // the UI device's
-	key      string // the Groq key ("": Groq's voice is not asked)
+	src      *ttsSource // the chunks (a live line's still arriving, tts_live.go)
+	rate     int        // the UI device's
+	key      string     // the Groq key ("": Groq's voice is not asked)
 	keyID    uint64
 	voice    string // Groq's voice
 	gender   string // that voice's, for a local voice that has both
@@ -142,9 +142,13 @@ func ttsRun(ctx context.Context, s *ttsSession, pre ttsFail) {
 func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *ttsProduced) {
 	defer close(out)
 	groq := s.key != ""
-	for i := 0; i < len(s.chunks) && ctx.Err() == nil; i++ {
+	for i := 0; ctx.Err() == nil; i++ {
+		chunk, ok := s.src.at(ctx, i)
+		if !ok {
+			return
+		}
 		if groq {
-			samples, rate, err := ttsGroqSpeak(ctx, s.key, s.voice, s.chunks[i])
+			samples, rate, err := ttsGroqSpeak(ctx, s.key, s.voice, chunk)
 			if err == nil {
 				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !ttsSend(ctx, out, clip) {
 					return
@@ -162,8 +166,19 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 		if !s.hasLocal {
 			return
 		}
+		// This chunk first, then the rest as the line gives them (one puller
+		// at a time: ttsLocalSpeakChunks never calls next concurrently).
+		next, first := i, true
+		pull := func(ctx context.Context) (string, bool) {
+			if first {
+				first = false
+				return chunk, true
+			}
+			next++
+			return s.src.at(ctx, next)
+		}
 		emitted := false
-		err := ttsLocalSpeakChunks(ctx, s.local, s.chunks[i:], s.gender, func(samples []int16, rate int) bool {
+		err := ttsLocalSpeakChunks(ctx, s.local, pull, s.gender, func(samples []int16, rate int) bool {
 			res.local = true
 			clip := ttsClipFor(samples, rate, s.rate)
 			if clip == nil {

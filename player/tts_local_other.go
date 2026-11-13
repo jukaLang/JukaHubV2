@@ -177,37 +177,43 @@ func ttsLocalEnv(v ttsLocalVoice) []string {
 // answer whole kept the user waiting in silence). Each chunk is one input
 // line; with --output_dir Piper writes one WAV per line into a private folder
 // and prints its path when the file is complete. emit gets each chunk's sound
-// in order and returns false to stop. It returns how many chunks were emitted.
-func ttsPiperStream(ctx context.Context, v ttsLocalVoice, chunks []string, emit func([]int16, int) bool) (int, error) {
+// in order and returns false to stop. next gives the chunks — a live answer's
+// as they are written (tts_live.go) — and each goes to Piper as soon as it
+// comes, so the model is loaded and the first sentence playing while the rest
+// of the answer is still on its way. It returns how many chunks were emitted.
+func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Context) (string, bool), emit func([]int16, int) bool) (int, error) {
 	if v.kind != "piper" || v.path == "" || v.model == "" {
 		return 0, errors.New("not a Piper voice")
 	}
-	var lines strings.Builder
-	total := 0
-	for _, c := range chunks {
-		c = strings.Join(strings.Fields(strings.ReplaceAll(c, "\x00", "")), " ")
-		if c == "" {
-			continue
-		}
-		lines.WriteString(c)
-		lines.WriteByte('\n')
-		total++
+	clean := func(c string) string {
+		return strings.Join(strings.Fields(strings.ReplaceAll(c, "\x00", "")), " ")
 	}
-	if total == 0 {
-		return 0, errors.New("nothing to say")
+	// The first line is there before Piper starts: a line with nothing to
+	// say costs no process.
+	first := ""
+	for first == "" {
+		c, ok := next(ctx)
+		if !ok {
+			return 0, errors.New("nothing to say")
+		}
+		first = clean(c)
 	}
 	dir, err := os.MkdirTemp("", "jukahub-voice-")
 	if err != nil {
 		return 0, err
 	}
 	defer os.RemoveAll(dir)
-	// Model load plus each sentence; generous, and a stop still ends it at once.
-	timeout := ttsPiperTimeout + time.Duration(lines.Len()/6)*time.Second
+	// Model load plus the longest answer spoken; generous, and a stop still
+	// ends it at once.
+	timeout := ttsPiperTimeout + time.Duration(ttsSpokenMax/6)*time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, v.path, "--model", v.model, "--output_dir", dir)
 	cmd.Env = ttsLocalEnv(v)
-	cmd.Stdin = strings.NewReader(lines.String())
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return 0, err
+	}
 	var stderr strings.Builder
 	cmd.Stderr = &ttsCappedWriter{b: &stderr, max: 4 << 10}
 	stdout, err := cmd.StdoutPipe()
@@ -217,6 +223,33 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, chunks []string, emit 
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
+	// The writer hands Piper one line per chunk as the chunks come and closes
+	// its input after the last; total is read only once it is done.
+	total := 0
+	wrote := make(chan struct{})
+	go func() {
+		defer close(wrote)
+		defer stdin.Close()
+		line := first
+		for {
+			if _, err := io.WriteString(stdin, line+"\n"); err != nil {
+				return
+			}
+			total++
+			line = ""
+			for line == "" {
+				c, ok := next(ctx)
+				if !ok {
+					return
+				}
+				line = clean(c)
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-wrote
+	}()
 	emitted := 0
 	stopped := false
 	sc := bufio.NewScanner(stdout)
@@ -259,11 +292,16 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, chunks []string, emit 
 		_, _ = io.Copy(io.Discard, stdout)
 	}
 	waitErr := cmd.Wait()
+	// Piper is gone: the writer stops too, and only then is total final. A
+	// deadline or a stop is read before that cancel hides it.
+	ctxErr := ctx.Err()
+	cancel()
+	<-wrote
 	if stopped || emitted >= total {
 		return emitted, nil
 	}
-	if ctx.Err() != nil {
-		return emitted, ctx.Err()
+	if ctxErr != nil {
+		return emitted, ctxErr
 	}
 	if waitErr != nil {
 		return emitted, fmt.Errorf("piper: %w (%s)", waitErr, firstLine(strings.TrimSpace(stderr.String())))

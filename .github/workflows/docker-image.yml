@@ -412,11 +412,21 @@ jobs:
           else
             echo "::warning title=AndroidRT::not built for this run; JukaHub-Trimui.zip ships without androidrt/ (see the Remote Play helpers and AndroidRT job)"
           fi
+          stt_bin_sha=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' offline-stt/BUILDINFO.txt 2>/dev/null || true)
           if [ -f offline-stt/whisper-cli ] && [ -f offline-stt/ggml-tiny.bin ] && \
+             [ -f offline-stt/LICENSE.txt ] && [ -n "$stt_bin_sha" ] && \
+             [ "$(sha256sum offline-stt/whisper-cli | cut -d' ' -f1)" = "$stt_bin_sha" ] && \
              printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 offline-stt/ggml-tiny.bin | sha256sum -c - > /dev/null; then
-            mkdir -p JukaHub-Trimui/required/juka-whisper
-            cp offline-stt/whisper-cli offline-stt/ggml-tiny.bin JukaHub-Trimui/required/juka-whisper/
-            chmod 755 JukaHub-Trimui/required/juka-whisper/whisper-cli
+            mkdir -p JukaHub-Trimui/juka-whisper
+            cp offline-stt/whisper-cli offline-stt/ggml-tiny.bin offline-stt/BUILDINFO.txt \
+              offline-stt/LICENSE.txt JukaHub-Trimui/juka-whisper/
+            chmod 755 JukaHub-Trimui/juka-whisper/whisper-cli
+            if sh player/native/package-stt.sh JukaHub-Trimui/juka-whisper JukaHub-OfflineSpeech-linux-arm64.zip; then
+              echo "stt_package=true" >> "$GITHUB_OUTPUT"
+            else
+              rm -f JukaHub-OfflineSpeech-linux-arm64.zip
+              echo "::warning title=Offline speech::the standalone repair package could not be built"
+            fi
           else
             echo "::warning title=Offline speech::the verified recognizer was not built; local speech is unavailable in this archive"
           fi
@@ -473,6 +483,19 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-AndroidRT-linux-arm64.zip
           asset_name: JukaHub-AndroidRT-linux-arm64.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the offline speech package
+        if: steps.package.outputs.stt_package == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-OfflineSpeech-linux-arm64.zip
+          asset_name: JukaHub-OfflineSpeech-linux-arm64.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

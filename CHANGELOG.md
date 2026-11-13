@@ -14,7 +14,7 @@ For anything older, the git log and the
 ### Added
 
 - **Stick lights that react to your voice.** Settings → Stick lights → **Lights
-  follow your voice** turns the stick lights on and makes them follow the
+  show** → **Microphone** turns the stick lights on and makes them follow the
   microphone: talk, sing or clap and the rings glow with the loudness, coloured
   by pitch. **Mic sensitivity** (Low / Normal / High) sets how loud a sound has
   to be; a noise floor that follows the room keeps a fan or hum dark. It is
@@ -587,6 +587,52 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Stick lights stayed dark on the TrimUI.** The firmware leaves
+  `/sys/class/led_anim` read-only (0444), and sysfs refuses a write open on such
+  a node even for root, so JukaHub never found the rings: Settings → Stick
+  lights only said the driver could not be written, and the switch failed.
+  JukaHub now makes the nodes writable first (what every CFW does with
+  `chmod -R 777`). It also checks every 2 s that TrimUI's hardwareservice has
+  not taken the rings back (master switch off, brightness, effect or colour
+  rewritten on charge or wake) and repaints them, so a steady colour stays put.
+  The rings no longer blink every couple of seconds: a colour change re-arms
+  the driver through effect 0, which shows as a blink, and Pulse and Charging
+  flipped the computed hue at a rounding step once per 2 s breath. Small hue
+  wobbles are now ignored, nothing is rewritten unless it reads back changed,
+  and a node whose read-back never matches what was written stops being
+  watched. If something keeps taking the rings back, JukaHub checks only every
+  30 s instead of fighting it, and the log names the node it keeps changing.
+  (`ledanim.go`.)
+
+- **Settings → Stick lights is tidier.** With the switch off only the switch
+  is left; when on, it says what the lights are showing. **Lights show** lists
+  Colour / Music / Microphone / Battery / Charging / Temperature and its value
+  uses the same names (it read "Custom" and "Audio" before). Colour, Effect and
+  Colour wheel appear only in Colour mode, Mic sensitivity only in Microphone
+  mode, and Brightness for every mode, last. The **Lights follow your voice**
+  switch is gone because it repeated Lights show → Microphone. A swatch colour
+  shows its name instead of "Custom · #FF0000". (`ledsettings.go`, `ledmic.go`.)
+
+- **Bluetooth pass (switch, pairing page, headphones, controllers).** Switching
+  Bluetooth off in Quick Settings no longer freezes the panel: it runs in the
+  background, a later On press wins over it, and the switch follows the radio
+  afterwards. With no adapter or no Bluetooth service running, switching off or
+  reading the radio asks the kernel instead of waiting out bluetoothctl's
+  timeout, and the bring-up re-checks rfkill through sysfs when TrimUI's rfkill
+  tool reports success without unblocking. On the Bluetooth page every
+  bluetoothctl session waits (up to 2 s) until it has the adapter before typing,
+  so actions no longer fail with "no Bluetooth adapter answered" right after the
+  service starts; prompts of devices with brackets in their name ("[TV]
+  Soundbar") are recognised; when the focused row disappears the focus stays in
+  place instead of jumping to the Bluetooth switch (where the next A turned
+  Bluetooth off); no search or re-read starts after the page was left; a
+  successful search clears the old "Could not read the paired devices" card.
+  Headphones no longer lose up to ~0.1 s at the start of each sound (the mixer
+  padded short top-ups with silence), a headset that connects or drops while the
+  screen saver runs moves the sound, and PS Remote Play's sound follows a
+  connected headset. On the handheld a controller paired while JukaHub runs is
+  now opened alongside the built-in buttons; before, its presses went nowhere.
 
 - **Offline voice: "voice settings download: checksum did not match".** The
   pinned digest for Kristin's small settings file (`en_US-kristin-medium.onnx.json`)

@@ -11,6 +11,7 @@
 #   JukaHub-RemotePlay-linux-arm64.zip   (when the Remote Play helpers were built)
 #   JukaHub-AndroidRT-linux-arm64.zip    (when native/bin has a verified AndroidRT package;
 #                                         every TrimUI archive then carries its androidrt/)
+#   JukaHub-OfflineSpeech-linux-arm64.zip (when the Smart Pro recognizer was built)
 #   JukaHub-Wine-linux-arm64.zip         (when native/bin has a verified Box64 pack)
 #   manifest.json
 #   SHA256SUMS
@@ -147,6 +148,13 @@ fi
 # --- TrimUI Linux arm64 targets ---
 # These identifiers match DeviceModel values and the updater's strict target map.
 TRIMUI_DEVICES=(trimui-smart-pro trimui-smart-pro-s trimui-brick trimui-brick-pro trimui-hammer)
+STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' native/bin/juka-whisper/BUILDINFO.txt 2>/dev/null || true)
+if [ -n "$STT_BIN_SHA" ]; then
+    if ! sh native/package-stt.sh native/bin/juka-whisper "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"; then
+        rm -f "$OUT/JukaHub-OfflineSpeech-linux-arm64.zip"
+        echo "WARNING: the standalone offline speech package could not be built" >&2
+    fi
+fi
 TARGETS_JSON=""
 for device in "${TRIMUI_DEVICES[@]}"; do
     echo "Building TrimUI target ${device} (Linux arm64, CGO + SDL2)..."
@@ -172,11 +180,14 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     fi
     if [ "$device" = trimui-smart-pro ] && \
         [ -f native/bin/juka-whisper/whisper-cli ] && [ -f native/bin/juka-whisper/ggml-tiny.bin ] && \
+        [ -f native/bin/juka-whisper/LICENSE.txt ] && [ -n "$STT_BIN_SHA" ] && \
+        [ "$(sha256sum native/bin/juka-whisper/whisper-cli | cut -d' ' -f1)" = "$STT_BIN_SHA" ] && \
         printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 native/bin/juka-whisper/ggml-tiny.bin | sha256sum -c - > /dev/null; then
-        mkdir -p "$TARGET_DIR/required/juka-whisper"
-        cp native/bin/juka-whisper/whisper-cli native/bin/juka-whisper/ggml-tiny.bin "$TARGET_DIR/required/juka-whisper/"
-        chmod 755 "$TARGET_DIR/required/juka-whisper/whisper-cli"
-        PKG_FILES+=(required/juka-whisper)
+        mkdir -p "$TARGET_DIR/juka-whisper"
+        cp native/bin/juka-whisper/whisper-cli native/bin/juka-whisper/ggml-tiny.bin \
+            native/bin/juka-whisper/BUILDINFO.txt native/bin/juka-whisper/LICENSE.txt "$TARGET_DIR/juka-whisper/"
+        chmod 755 "$TARGET_DIR/juka-whisper/whisper-cli"
+        PKG_FILES+=(juka-whisper)
     fi
     # The game-audio plugin (see SPATIAL_SO above).
     if [ -n "$SPATIAL_SO" ]; then
@@ -231,7 +242,7 @@ ${TARGETS_JSON},
 }
 EOF
 (cd "$OUT" && sha256sum manifest.json JukaHub-*-linux-arm64.tar.gz JukaHub-win-x64.zip > SHA256SUMS)
-for pkg in JukaHub-RemotePlay-linux-arm64.zip JukaHub-AndroidRT-linux-arm64.zip JukaHub-Wine-linux-arm64.zip; do
+for pkg in JukaHub-RemotePlay-linux-arm64.zip JukaHub-AndroidRT-linux-arm64.zip JukaHub-OfflineSpeech-linux-arm64.zip JukaHub-Wine-linux-arm64.zip; do
     if [ -f "$OUT/$pkg" ]; then
         (cd "$OUT" && sha256sum "$pkg" >> SHA256SUMS)
     fi

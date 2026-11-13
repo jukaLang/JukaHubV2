@@ -311,7 +311,11 @@ func voiceStartListening(config *Config) {
 		PlayErrorSound()
 		return
 	case !sttCanListen():
-		voiceSay("Speech needs a Groq key and Wi-Fi, or offline speech installed", tbxToneWarn, voiceFixGroqKey)
+		fix := voiceFixNone
+		if sttModeOf(config) != sttModeOffline && strings.TrimSpace(groqAPIKey()) == "" {
+			fix = voiceFixGroqKey
+		}
+		voiceSay("Set up speech recognition in Settings → Voice & AI", tbxToneWarn, fix)
 		PlayErrorSound()
 		return
 	}
@@ -527,7 +531,13 @@ func voiceErrorText(err error) (string, voiceFix) {
 		return "Close a game to free memory for offline speech, then try again", voiceFixNone
 	}
 	if errors.Is(err, errSTTUnavailable) {
-		return "Offline speech is missing — install the latest TrimUI package", voiceFixNone
+		return "Offline speech is missing — install it in Settings → Voice & AI", voiceFixNone
+	}
+	if errors.Is(err, errSTTGroqKey) {
+		return "Groq speech needs an API key — add it in Settings", voiceFixGroqKey
+	}
+	if errors.Is(err, errSTTGroqOffline) {
+		return "Groq speech needs Wi-Fi", voiceFixNone
 	}
 	var gerr *groqError
 	if errors.As(err, &gerr) {

@@ -88,12 +88,14 @@ fi
 # Offline speech for Smart Pro. CI builds whisper.cpp on arm64 and puts the
 # verified binary and model in native/bin; local packages may omit the folder.
 STT_DIR=native/bin/juka-whisper
-if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny.bin" ] && \
+STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
+if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny.bin" ] && [ -f "$STT_DIR/LICENSE.txt" ] && \
+    [ -n "$STT_BIN_SHA" ] && [ "$(sha256sum "$STT_DIR/whisper-cli" | cut -d' ' -f1)" = "$STT_BIN_SHA" ] && \
     printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 "$STT_DIR/ggml-tiny.bin" | sha256sum -c - > /dev/null; then
-    mkdir -p "$REQ/juka-whisper"
-    cp "$STT_DIR/whisper-cli" "$STT_DIR/ggml-tiny.bin" "$REQ/juka-whisper/"
-    chmod 755 "$REQ/juka-whisper/whisper-cli"
-    echo "    Offline speech: $REQ/juka-whisper"
+    mkdir -p "$PKG/juka-whisper"
+    cp "$STT_DIR/whisper-cli" "$STT_DIR/ggml-tiny.bin" "$STT_DIR/BUILDINFO.txt" "$STT_DIR/LICENSE.txt" "$PKG/juka-whisper/"
+    chmod 755 "$PKG/juka-whisper/whisper-cli"
+    echo "    Offline speech: $PKG/juka-whisper"
 else
     echo "    (no verified offline speech package in native/bin)"
 fi

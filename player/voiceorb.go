@@ -130,6 +130,11 @@ const (
 	// voice typing's: a handheld's microphone gain is unknown, and a quiet
 	// clip that is sent costs one "didn't catch that".
 	orbSilencePeak = 0.006
+	// orbEndQuietMs is the pause after speech that ends a clip. Shorter than
+	// the Voice command page's voiceEndQuietMs: the orb is for quick
+	// back-and-forth, and every millisecond here is waited before Juka can
+	// even start on the answer. A held button still keeps a clip open.
+	orbEndQuietMs = 800
 )
 
 // voiceOrbMenuKey is the Custom setting behind Settings → Controls → "Menu
@@ -196,10 +201,12 @@ var voiceOrb struct {
 	choices   []voiceMatch
 	cursor    int
 
-	// The request in flight: gen invalidates late answers, ai marks Juka's.
+	// The request in flight: gen invalidates late answers, ai marks Juka's,
+	// live speaks Juka's answer while it streams in (tts_live.go).
 	gen    int
 	cancel context.CancelFunc
 	ai     bool
+	live   *ttsLive
 
 	// Hit areas from the last frame.
 	orbRect    sdl.Rect
@@ -880,7 +887,11 @@ func voiceOrbListen(config *Config) {
 	voiceOrb.choices, voiceOrb.act = nil, nil
 	switch {
 	case !sttCanListen():
-		voiceOrbSay("Voice needs speech recognition", "Add a Groq key and Wi-Fi, or install offline speech", tbxToneWarn, orbOfferGroqKey)
+		offer := orbOfferNone
+		if sttModeOf(config) != sttModeOffline && strings.TrimSpace(groqAPIKey()) == "" {
+			offer = orbOfferGroqKey
+		}
+		voiceOrbSay("Voice needs speech recognition", "Set it up in Settings → Voice & AI", tbxToneWarn, offer)
 		PlayErrorSound()
 		return
 	}
@@ -903,6 +914,7 @@ func voiceOrbListen(config *Config) {
 	}
 	vkMic.Store(vkMicPresent)
 	voiceOrb.mic = mic
+	voiceWarmGroq() // the handshake happens while the user talks (voicewarm.go)
 	if cap(voiceOrb.buf) < voiceMaxBytes {
 		voiceOrb.buf = make([]byte, 0, voiceMaxBytes)
 	}
@@ -969,12 +981,13 @@ func voiceOrbReadAudio(now uint64) {
 // at all. A held button keeps it open until it comes up.
 func voiceOrbListenTick(config *Config, now uint64) {
 	voiceOrbReadAudio(now)
+	ledMicFeedVoice(voiceOrb.level) // the stick lights brighten as the user talks (ledmic.go)
 	pushToTalk := voiceOrb.held && now-voiceOrb.pressAt >= orbHoldMs
 	switch {
 	case len(voiceOrb.buf) >= cap(voiceOrb.buf):
 		voiceOrbFinish(config)
 	case pushToTalk:
-	case voiceOrb.vad.speaking && voiceOrb.vad.quietSince != 0 && now-voiceOrb.vad.quietSince >= voiceEndQuietMs:
+	case voiceOrb.vad.speaking && voiceOrb.vad.quietSince != 0 && now-voiceOrb.vad.quietSince >= orbEndQuietMs:
 		voiceOrbFinish(config)
 	case !voiceOrb.vad.speaking && now-voiceOrb.started >= voiceNoSpeechMs:
 		voiceOrbHeardNothing(voiceOrb.mic != nil && !voiceOrb.mic.Heard())
@@ -1292,6 +1305,9 @@ func voiceOrbAsk(question string) {
 		{"role": "system", "content": jukaSystemPrompt() + " " + orbJukaVoicePrompt},
 		{"role": "user", "content": question},
 	}
+	// Juka starts speaking at the first full sentence, not after the last.
+	live := ttsNewLive(ttsFromOrb, ttsKindVoice)
+	voiceOrb.live = live
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -1305,6 +1321,7 @@ func voiceOrbAsk(question string) {
 				orbAIText.text = partial
 			}
 			orbAIText.mu.Unlock()
+			live.Update(partial)
 		})
 		tbxPost(func() { voiceOrbAnswered(gen, question, reply, err) })
 	}()
@@ -1325,18 +1342,23 @@ func voiceOrbTakeAIText() {
 
 // voiceOrbAnswered shows Juka's whole answer.
 func voiceOrbAnswered(gen int, question, reply string, err error) {
+	live := voiceOrbTakeLive(gen)
 	if gen != voiceOrb.gen || voiceOrb.phase != orbThinking || !voiceOrb.ai || !voiceOrbActive() {
+		live.Stop()
 		return
 	}
 	voiceOrb.ai = false
 	if err != nil {
+		live.Stop()
 		logWarn("voice", "Juka could not answer: %v", err)
 		voiceOrbSay(chatFriendlyAIError(err), orbQuote(question), tbxToneWarn, orbOfferNone)
 		PlayErrorSound()
 		return
 	}
+	raw := reply
 	reply = orbPlain(chatStripThink(reply))
 	if reply == "" {
+		live.Stop()
 		voiceOrbSay("Juka had no answer — try again", orbQuote(question), tbxToneWarn, orbOfferNone)
 		PlayErrorSound()
 		return
@@ -1345,7 +1367,17 @@ func voiceOrbAnswered(gen int, question, reply string, err error) {
 	trophyEvent(tkAIAsk)
 	voiceOrb.hideAt = voiceOrb.phaseAt + orbReadMs(reply, false, true)
 	PlayNavSound()
-	ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply) // Juka says it too (tts_api.go)
+	// Juka says it too, most of it already (tts_live.go).
+	voiceOrbFinishLive(live, ttsFromOrb, raw)
+}
+
+// voiceOrbFinishLive speaks the rest of an answer on its live line, or the
+// whole answer when there was none (the request was not the orb's own).
+func voiceOrbFinishLive(live *ttsLive, origin ttsOrigin, raw string) {
+	if live == nil {
+		live = ttsNewLive(origin, ttsKindVoice)
+	}
+	live.Finish(raw)
 }
 
 // orbPlainReplacer drops the markdown a model may still use.
@@ -1451,7 +1483,22 @@ func voiceOrbCancelRequest() {
 		voiceOrb.cancel()
 		voiceOrb.cancel = nil
 	}
+	if voiceOrb.live != nil {
+		voiceOrb.live.Stop()
+		voiceOrb.live = nil
+	}
 	voiceOrb.gen++
+}
+
+// voiceOrbTakeLive is the live answer of request gen, taken off the orb (nil
+// when gen is stale or none was started).
+func voiceOrbTakeLive(gen int) *ttsLive {
+	if gen != voiceOrb.gen {
+		return nil
+	}
+	live := voiceOrb.live
+	voiceOrb.live = nil
+	return live
 }
 
 // voiceOrbHushMedia pauses the music and a playing video while the orb

@@ -53,12 +53,14 @@ printf '%s  %s\n' "$MODEL_SHA" "$WORK/ggml-tiny.bin" | sha256sum -c -
 "$BIN" -m "$WORK/ggml-tiny.bin" -f - \
     -t 2 -l en -ng -np -nt -otxt -of - \
     < "$SRC/samples/jfk.wav" > "$WORK/smoke.txt" 2> /dev/null
+test -s "$WORK/smoke.txt"
 grep -qi 'fellow Americans' "$WORK/smoke.txt"
 
 OUT=/src/player/native/bin/juka-whisper
 mkdir -p "$OUT"
 install -m 755 "$BIN" "$OUT/whisper-cli"
 install -m 644 "$WORK/ggml-tiny.bin" "$OUT/ggml-tiny.bin"
+install -m 644 "$SRC/LICENSE" "$OUT/LICENSE.txt"
 printf 'whisper.cpp %s\nmodel %s\nsource sha256 %s\nmodel sha256 %s\n' \
     "$WHISPER_COMMIT" "$MODEL_REV" "$SOURCE_SHA" "$MODEL_SHA" > "$OUT/BUILDINFO.txt"
 printf 'binary sha256 %s\n' "$(sha256sum "$OUT/whisper-cli" | cut -d' ' -f1)" >> "$OUT/BUILDINFO.txt"

@@ -330,16 +330,16 @@ func (d *outDev) compact() {
 }
 
 // mixInto adds up to frames output frames of d's backlog to acc (stereo
-// int32), resampling linearly from d.freq to rate. It returns whether anything
-// was added. The last buffered frame is played on its own rather than held
-// back for interpolation, so a backlog always drains to zero — callers wait
-// for that (the boot chime, Juka's voice).
-func (d *outDev) mixInto(acc []int32, frames int, rate int32) bool {
+// int32), resampling linearly from d.freq to rate. It returns how many output
+// frames were added (from the start of acc). The last buffered frame is played
+// on its own rather than held back for interpolation, so a backlog always
+// drains to zero — callers wait for that (the boot chime, Juka's voice).
+func (d *outDev) mixInto(acc []int32, frames int, rate int32) int {
 	fsz := 2 * d.channels
 	data := d.fifo[d.head:]
 	n := len(data) / fsz
 	if n == 0 || rate <= 0 {
-		return false
+		return 0
 	}
 	step := float64(d.freq) / float64(rate)
 	pos := d.phase
@@ -376,7 +376,7 @@ func (d *outDev) mixInto(acc []int32, frames int, rate int32) bool {
 		d.phase = pos - float64(used)
 	}
 	d.compact()
-	return i > 0
+	return i
 }
 
 // outMixLoop tops up the headset's queue until the route leaves it. It takes
@@ -456,21 +456,26 @@ func outMixStepLocked() (lost bool, drained []sdl.AudioDeviceID) {
 	for i := range acc {
 		acc[i] = 0
 	}
-	mixed := false
+	// Only as many frames as the longest backlog filled are queued: padding the
+	// rest of the top-up with silence put a gap into a stream whose next block
+	// had not been queued yet (every start of music, a video or Juka's voice
+	// after a quiet moment, when the whole lead is asked for at once).
+	mixed := 0
 	for _, d := range outAudio.devs {
 		if d.paused || d.draining != 0 || d.real != 0 {
 			continue
 		}
-		if d.mixInto(acc, frames, rate) {
-			mixed = true
+		if n := d.mixInto(acc, frames, rate); n > mixed {
+			mixed = n
 		}
 	}
-	if !mixed {
+	if mixed == 0 {
 		// Nothing to play: SDL plays silence by itself, no need to queue it.
 		return false, drained
 	}
+	acc = acc[:mixed*2]
 	gain := outAudio.gain
-	out := outAudio.out[:frames*4]
+	out := outAudio.out[:mixed*4]
 	for i, v := range acc {
 		f := float64(v) * gain
 		if f > 32767 {

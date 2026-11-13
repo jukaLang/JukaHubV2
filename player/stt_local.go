@@ -22,53 +22,149 @@ const (
 	sttModelName    = "ggml-tiny.bin"
 	sttModelSize    = 77691713
 	sttTimeout      = 120 * time.Second
-	sttMinAvailable = 384 << 20 // model and working memory, with room for JukaHub
+	sttGroqWait     = 15 * time.Second // leave time for local recognition if Groq stalls
+	sttMinAvailable = 384 << 20        // model and working memory, with room for JukaHub
+	sttModeKey      = "speechRecognition"
+	sttModeAuto     = "auto"
+	sttModeOffline  = "offline"
+	sttModeGroq     = "groq"
 )
 
 var errSTTUnavailable = errors.New("offline speech recognition is not installed")
 var errSTTMemory = errors.New("not enough free memory for offline speech recognition")
+var errSTTGroqKey = errors.New("Groq speech recognition needs an API key")
+var errSTTGroqOffline = errors.New("Groq speech recognition needs Wi-Fi")
 
-func sttLocalFiles() (string, string) {
-	dir := filepath.Join(P().RequiredDir(), sttDirName)
-	return filepath.Join(dir, "whisper-cli"), filepath.Join(dir, sttModelName)
+// Auto is the default, including for configs saved before this setting existed.
+func sttModeOf(config *Config) string {
+	if config != nil {
+		switch customStringValue(config.Variables.Custom, sttModeKey) {
+		case sttModeOffline:
+			return sttModeOffline
+		case sttModeGroq:
+			return sttModeGroq
+		}
+	}
+	return sttModeAuto
 }
 
-func sttLocalReady() bool {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "arm64" || DetectDevice() != DeviceTrimuiSmartPro {
-		return false
+func sttSupported() bool {
+	return runtime.GOOS == "linux" && runtime.GOARCH == "arm64" && DetectDevice() == DeviceTrimuiSmartPro
+}
+
+func sttBundledDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
 	}
-	bin, model := sttLocalFiles()
+	return filepath.Join(filepath.Dir(exe), sttDirName)
+}
+
+func sttDownloadedDir() string {
+	data, err := P().DataDir()
+	if err != nil || data == "" {
+		return ""
+	}
+	return filepath.Join(data, sttDirName)
+}
+
+func sttFilesIn(dir string) (string, string, bool) {
+	if dir == "" {
+		return "", "", false
+	}
+	bin, model := filepath.Join(dir, "whisper-cli"), filepath.Join(dir, sttModelName)
 	b, bErr := os.Stat(bin)
 	m, mErr := os.Stat(model)
-	return bErr == nil && b.Mode().IsRegular() && b.Mode().Perm()&0o111 != 0 &&
+	return bin, model, bErr == nil && b.Mode().IsRegular() && b.Mode().Perm()&0o111 != 0 &&
 		mErr == nil && m.Mode().IsRegular() && m.Size() == sttModelSize
 }
 
-func sttCanListen() bool {
-	return sttLocalReady() || strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting())
+func sttLocalFiles() (string, string) {
+	if bin, model, ok := sttFilesIn(sttBundledDir()); ok {
+		return bin, model
+	}
+	if bin, model, ok := sttFilesIn(sttDownloadedDir()); ok {
+		return bin, model
+	}
+	return "", ""
 }
 
-// sttWithFallback sends to Groq first when reachable. Missing keys, offline
-// Wi-Fi and failed Groq requests use the local model when it is installed.
-// A canceled request never starts another recognizer.
-func sttWithFallback(ctx context.Context, key string, wav []byte, lang, prompt string, cloud func(context.Context, string, []byte) (string, error)) (string, error) {
+func sttLocalReady() bool {
+	if !sttSupported() {
+		return false
+	}
+	bin, _ := sttLocalFiles()
+	return bin != ""
+}
+
+func sttCanListen() bool {
+	mode := sttModeOf(appConfig)
 	local := sttLocalReady()
-	if !local && netReconnecting() && strings.TrimSpace(key) != "" {
+	cloud := strings.TrimSpace(groqAPIKey()) != "" && (IsOnline() || netReconnecting())
+	switch mode {
+	case sttModeOffline:
+		return local
+	case sttModeGroq:
+		return cloud
+	default:
+		return local || cloud
+	}
+}
+
+// Preview requests run while a Chat microphone is open. Keep the choice here
+// so Offline mode cannot accidentally send an interim clip to Groq.
+func sttPreviewChoice(mode, key string, online, local bool) (cloud, localFirst, localFallback bool) {
+	cloud = mode != sttModeOffline && strings.TrimSpace(key) != "" && online
+	localFirst = mode != sttModeGroq && local && !cloud
+	localFallback = mode == sttModeAuto && local && cloud
+	return
+}
+
+// sttWithFallback follows the chosen provider. Automatic tries Groq first and
+// uses the local model when the key, connection or request fails. A canceled
+// request never starts another recognizer.
+func sttWithFallback(ctx context.Context, key string, wav []byte, lang, prompt string, cloud func(context.Context, string, []byte) (string, error)) (string, error) {
+	mode := sttModeOf(appConfig)
+	local := sttLocalReady()
+	if mode != sttModeOffline && (!local || mode == sttModeGroq) && netReconnecting() && strings.TrimSpace(key) != "" {
 		netWaitOnline(ctx, netWakeWaitMax)
 	}
-	return sttTranscribeChoice(ctx, key, wav, IsOnline(), local, cloud,
+	if mode == sttModeAuto && local {
+		upstream := cloud
+		cloud = func(ctx context.Context, key string, wav []byte) (string, error) {
+			cloudCtx, cancel := context.WithTimeout(ctx, sttGroqWait)
+			defer cancel()
+			return upstream(cloudCtx, key, wav)
+		}
+	}
+	return sttTranscribeChoice(ctx, mode, key, wav, IsOnline(), local, cloud,
 		func(ctx context.Context, wav []byte) (string, error) {
 			return sttLocalTranscribe(ctx, wav, lang, prompt)
 		})
 }
 
-func sttTranscribeChoice(ctx context.Context, key string, wav []byte, online, local bool,
+func sttTranscribeChoice(ctx context.Context, mode, key string, wav []byte, online, local bool,
 	cloud func(context.Context, string, []byte) (string, error),
 	localTranscribe func(context.Context, []byte) (string, error)) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	key = strings.TrimSpace(key)
+	if mode == sttModeOffline {
+		if local {
+			return localTranscribe(ctx, wav)
+		}
+		return "", errSTTUnavailable
+	}
+	if mode == sttModeGroq {
+		if key == "" {
+			return "", errSTTGroqKey
+		}
+		if !online {
+			return "", errSTTGroqOffline
+		}
+		return cloud(ctx, key, wav)
+	}
 	if key != "" && (online || !local) {
 		text, err := cloud(ctx, key, wav)
 		if err == nil {

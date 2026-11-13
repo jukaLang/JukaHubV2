@@ -337,6 +337,94 @@ func btCancelBringUpAsync() {
 	a.mu.Unlock()
 }
 
+// btPowerOffAsync switches the radio off off the caller's thread, for Quick
+// Settings' switch: `bluetoothctl power off` disconnects every device first
+// and can take seconds, which on the render thread froze the panel. A bring-up
+// the switch started earlier is called off first, and the switch-off waits
+// (briefly) for it to let go of the stack, so a cancelled bring-up still
+// finishing a rung cannot power the radio on after this. done runs on the main
+// loop with the result (a toast already said what failed) and may be nil.
+func btPowerOffAsync(done func(error)) {
+	btCancelBringUpAsync()
+	// A later On press (btBringUpAsync bumps seq) outranks this Off: one that
+	// takes the gate first must not be switched off behind the user's back.
+	a := &btAsyncBringUp
+	a.mu.Lock()
+	a.seq++
+	seq := a.seq
+	a.mu.Unlock()
+	go func() {
+		// Off-thread, so a long wait costs nothing: a page search's bring-up
+		// (not cancellable from here) may hold the gate for a while.
+		wait := time.NewTimer(btBringUpAsyncLimit)
+		held := false
+		select {
+		case btBringUpGate <- struct{}{}:
+			held = true
+		case <-wait.C:
+		}
+		wait.Stop()
+		a.mu.Lock()
+		stale := a.seq != seq
+		a.mu.Unlock()
+		var err error
+		if !stale {
+			err = setBluetoothEnabled(false)
+		}
+		if held {
+			<-btBringUpGate
+		}
+		tbxPost(func() {
+			btQuickKick()
+			if err != nil {
+				ShowToast("Could not switch Bluetooth off: "+firstLine(err.Error()), ToastKindError)
+			}
+			if done != nil {
+				done(err)
+			}
+		})
+	}()
+}
+
+// btKernelRadio reads the radio from the kernel alone, without a program
+// started: no adapter registered is off, on the handhelds no bluetoothd is off
+// too (nothing pairs or connects, btProbeRadio), and otherwise the adapters'
+// HCI_UP flag. known is false where the kernel cannot be asked (not Linux, no
+// Bluetooth socket), and only then is bluetoothctl worth its timeout.
+func btKernelRadio() (on, known bool) {
+	if runtime.GOOS != "linux" {
+		return false, false
+	}
+	if !btAdapterPresent() {
+		return false, true
+	}
+	if IsTrimuiDevice() && !btDaemonRunningCached() {
+		return false, true
+	}
+	return btHCIUp()
+}
+
+// btSwitchOffWithoutDaemon switches the radio off where bluetoothctl has
+// nobody to ask: with no adapter nothing transmits, and on the handhelds with
+// no bluetoothd `bluetoothctl power off` only waited out its whole timeout
+// ("Waiting to connect to bluetoothd") before the rfkill fallback ran. handled
+// is false where bluetoothctl should decide.
+func btSwitchOffWithoutDaemon() (handled bool, err error) {
+	if runtime.GOOS != "linux" {
+		return false, nil
+	}
+	if !btAdapterPresent() {
+		return true, nil
+	}
+	if IsTrimuiDevice() && !btDaemonRunning() {
+		if btRfkillTool() != "" {
+			return true, btRfkillSet(false)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // btBringUpFailed reports a bring-up that ended without Bluetooth on: an error
 // other than being called off (a later press, or a newer bring-up taking over,
 // says what the switch shows then).
@@ -620,9 +708,15 @@ func btUnblockRfkill() error {
 	if btRfkillTool() != "" {
 		err := btRfkillSet(true)
 		if err == nil {
-			return nil
+			// A tool that exits 0 is not proof (TrimUI's rfkill.elf is not
+			// the util-linux one): only switches still blocked go on to sysfs.
+			if soft, _ = btRfkillBlocked(btRfkillRoot); len(soft) == 0 {
+				return nil
+			}
+			logDebug("bluetooth", "bring-up: %s unblock left %v blocked", btRfkillTool(), soft)
+		} else {
+			logDebug("bluetooth", "bring-up: %v", err)
 		}
-		logDebug("bluetooth", "bring-up: %v", err)
 	}
 	for _, name := range soft {
 		dir := filepath.Join(btRfkillRoot, name)

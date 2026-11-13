@@ -91,6 +91,9 @@ var (
 	bzFindWait = 8 * time.Second
 	// bzInputWait is how long a connected pad gets to show up as a controller.
 	bzInputWait = 4 * time.Second
+	// bzSettleWait is how long a new session gets to learn the daemon's
+	// adapters before the first command is typed (bzFlow.settle).
+	bzSettleWait = 2 * time.Second
 )
 
 // ── Errors ────────────────────────────────────────────────────────────────
@@ -413,8 +416,11 @@ var (
 	// bzPromptPattern matches the prompt left at the start of a line
 	// ("[bluetooth]# ", "[DualSense Wireless Controller]> "). Events ("[NEW]
 	// Device …") are followed by a space, never by # or >, so they are kept.
+	// A connected device's name can hold brackets of its own ("[TV] Soundbar"
+	// makes "[[TV] Soundbar]# "), one level of which is allowed: left on the
+	// line, that prompt would hide every answer behind a leading "[".
 	bzPromptPattern = sync.OnceValue(func() *regexp.Regexp {
-		return regexp.MustCompile(`^\[[^\[\]]*\][#>]\s*`)
+		return regexp.MustCompile(`^\[(?:[^\[\]]|\[[^\[\]]*\])*\][#>]\s*`)
 	})
 )
 
@@ -1110,6 +1116,26 @@ func (f *bzFlow) observe(line string) {
 	f.info.feed(line)
 }
 
+// settle waits, before anything is typed, until bluetoothctl has the daemon's
+// adapters. It starts reading its input as soon as it reaches bluetoothd but
+// learns the adapters a moment later, and a command typed in between is
+// answered "No default controller available" — which ends a flow as if there
+// were no adapter at all. The adapter's own line ("[NEW] Controller …"), a
+// change to it, or the automatic agent's "Agent registered" (asked for once
+// the objects are in) says it is ready; when none comes the flow goes on
+// after bzSettleWait, and its first step decides. Only a session that died
+// or a cancelled context fail here.
+func (f *bzFlow) settle() error {
+	_, err := f.await(bzSettleWait, func(line string) (bool, error) {
+		return strings.HasPrefix(line, "[NEW] Controller ") || strings.HasPrefix(line, "[CHG] Controller ") ||
+			bzAnswerHas(line, "Agent registered"), nil
+	})
+	if err != nil && !errors.Is(err, errBzNoDaemon) {
+		return err
+	}
+	return nil
+}
+
 // run sends cmd and waits for its answer.
 func (f *bzFlow) run(cmd string, wait time.Duration, match func(string) (bool, error)) (bool, error) {
 	if err := f.send(cmd); err != nil {
@@ -1290,12 +1316,15 @@ func (f *bzFlow) collectKnown(devs map[string]*bzDevice) error {
 // bzList returns every device the daemon knows (paired ones, and any a
 // search found recently), with details.
 func bzList(ctx context.Context) ([]bzDevice, error) {
-	s, err := bzStartSession(ctx, bzListingLimit()+bzQuitGrace)
+	s, err := bzStartSession(ctx, bzSettleWait+bzListingLimit()+bzQuitGrace)
 	if err != nil {
 		return nil, err
 	}
 	defer s.close()
 	f := &bzFlow{ctx: ctx, s: s}
+	if err := f.settle(); err != nil {
+		return nil, err
+	}
 	devs := map[string]*bzDevice{}
 	err = f.collectKnown(devs)
 	return bzSortedDevices(devs), err
@@ -1305,7 +1334,7 @@ func bzList(ctx context.Context) ([]bzDevice, error) {
 // afterwards, with details. Events found on the way go to onEvent as they
 // arrive, so the page fills while the search runs.
 func bzScan(ctx context.Context, dur time.Duration, onEvent func(bzEvent)) ([]bzDevice, error) {
-	s, err := bzStartSession(ctx, dur+2*bzQuickWait+bzListingLimit()+bzQuitGrace)
+	s, err := bzStartSession(ctx, bzSettleWait+dur+2*bzQuickWait+bzListingLimit()+bzQuitGrace)
 	if err != nil {
 		return nil, err
 	}
@@ -1317,6 +1346,9 @@ func bzScan(ctx context.Context, dur time.Duration, onEvent func(bzEvent)) ([]bz
 			onEvent(ev)
 		}
 	}}
+	if err := f.settle(); err != nil {
+		return nil, err
+	}
 	if _, err := f.run("scan on", bzQuickWait, bzScanStarted); err != nil {
 		return nil, err
 	}
@@ -1404,7 +1436,7 @@ var bzPairAgentArgs = []string{"--agent=NoInputNoOutput"}
 // bzPairLimit bounds one pairing session: the agent and search steps, the
 // pairing, trust and connection, and the details read at the end.
 func bzPairLimit() time.Duration {
-	return 6*bzQuickWait + bzFindWait + bzPairWait + bzTrustWait + bzConnectWait + bzQuitGrace
+	return bzSettleWait + 6*bzQuickWait + bzFindWait + bzPairWait + bzTrustWait + bzConnectWait + bzQuitGrace
 }
 
 // bzStartPairFlow opens a pairing session with its agent in place. A
@@ -1420,7 +1452,11 @@ func bzStartPairFlow(ctx context.Context) (*bzFlow, error) {
 		return nil, err
 	}
 	f := &bzFlow{ctx: ctx, s: s}
-	err = f.runSteps(steps)
+	// A bluetoothctl that refused the option has already exited: the settle
+	// step then fails with errBzEnded, like the steps would.
+	if err = f.settle(); err == nil {
+		err = f.runSteps(steps)
+	}
 	if err == nil {
 		return f, nil
 	}
@@ -1433,6 +1469,10 @@ func bzStartPairFlow(ctx context.Context) (*bzFlow, error) {
 		return nil, err
 	}
 	f = &bzFlow{ctx: ctx, s: s}
+	if err := f.settle(); err != nil {
+		s.close()
+		return nil, err
+	}
 	if err := f.runSteps(append([]bzStep{{"agent off", bzAgentOffAnswer}}, steps...)); err != nil {
 		s.close()
 		return nil, err
@@ -1553,11 +1593,15 @@ func bzConnect(ctx context.Context, d bzDevice, stage func(string)) (bzPairOutco
 		return out, errBzNotFound
 	}
 	before := bzReadInputDevices()
-	s, err := bzStartSession(ctx, bzConnectWait+2*bzQuickWait+bzQuitGrace)
+	s, err := bzStartSession(ctx, bzSettleWait+bzConnectWait+2*bzQuickWait+bzQuitGrace)
 	if err != nil {
 		return out, err
 	}
 	f := &bzFlow{ctx: ctx, s: s}
+	if err := f.settle(); err != nil {
+		s.close()
+		return out, err
+	}
 	connected, stepErr, err := f.connectStep(d.MAC)
 	if err != nil {
 		s.close()
@@ -1590,12 +1634,15 @@ func bzSimple(ctx context.Context, step, verb, mac string, ok, fail, okCodes []s
 	if !valid {
 		return errBzNotFound
 	}
-	s, err := bzStartSession(ctx, 3*bzQuickWait+bzQuitGrace)
+	s, err := bzStartSession(ctx, bzSettleWait+3*bzQuickWait+bzQuitGrace)
 	if err != nil {
 		return err
 	}
 	defer s.close()
 	f := &bzFlow{ctx: ctx, s: s}
+	if err := f.settle(); err != nil {
+		return err
+	}
 	var stepErr error
 	done, err := f.run(verb+" "+mac, 2*bzQuickWait, func(line string) (bool, error) {
 		switch {

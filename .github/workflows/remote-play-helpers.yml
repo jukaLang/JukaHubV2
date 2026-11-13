@@ -186,11 +186,11 @@ jobs:
         run: |
           set +e
           dest=player/native/bin/juka-whisper
-          miss() { rm -f "$dest/whisper-cli" "$dest/ggml-tiny.bin" "$dest/BUILDINFO.txt"; exit 0; }
+          miss() { rm -f "$dest/whisper-cli" "$dest/ggml-tiny.bin" "$dest/BUILDINFO.txt" "$dest/LICENSE.txt"; exit 0; }
           if ! name=$(sh .github/scripts/build-root.sh key stt); then miss; fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           if ! timeout 240 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
-              whisper-cli ggml-tiny.bin BUILDINFO.txt; then miss; fi
+              whisper-cli ggml-tiny.bin BUILDINFO.txt LICENSE.txt; then miss; fi
           want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           [ -n "$want_model" ] && [ -n "$want_bin" ] || miss

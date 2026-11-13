@@ -14,6 +14,10 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+// extraGameControllers holds the pads opened besides gameController, by
+// instance id, so their buttons reach the UI too. Main thread only.
+var extraGameControllers map[sdl.JoystickID]*sdl.GameController
+
 // handleControllerDevice opens a newly attached controller when none is
 // usable, and lets go of the open one when it is unplugged — falling back to
 // any other controller that is still attached. Main thread only.
@@ -30,6 +34,28 @@ func handleControllerDevice(e *sdl.ControllerDeviceEvent) {
 	case sdl.CONTROLLERDEVICEADDED:
 		trophyEventDistinct(tkPads, sdl.GameControllerNameForIndex(int(e.Which)))
 		if gameController != nil && gameController.Attached() {
+			// A second pad (a Bluetooth controller next to the handheld's own
+			// buttons) is kept open too: SDL sends no events for a controller
+			// nobody opened, so it did nothing at all. Handhelds only: a
+			// desktop often sees one pad twice (a DS4 and the Xbox pad a
+			// remapper makes of it), and every press would count twice.
+			if !IsTrimuiDevice() {
+				return
+			}
+			id := sdl.JoystickGetDeviceInstanceID(int(e.Which))
+			if id < 0 || (gameController.Joystick() != nil && gameController.Joystick().InstanceID() == id) {
+				return
+			}
+			if _, open := extraGameControllers[id]; open {
+				return
+			}
+			if c := sdl.GameControllerOpen(int(e.Which)); c != nil {
+				if extraGameControllers == nil {
+					extraGameControllers = make(map[sdl.JoystickID]*sdl.GameController, 2)
+				}
+				extraGameControllers[id] = c
+				logDebug("gamepad", "Opened another controller: %s", c.Name())
+			}
 			return
 		}
 		// For an "added" event Which is the device index.
@@ -41,6 +67,10 @@ func handleControllerDevice(e *sdl.ControllerDeviceEvent) {
 		logDebug("gamepad", "Opened controller: %s", c.Name())
 	case sdl.CONTROLLERDEVICEREMOVED:
 		// For a "removed" event Which is the instance id.
+		if c, open := extraGameControllers[e.Which]; open {
+			delete(extraGameControllers, e.Which)
+			c.Close()
+		}
 		if gameController == nil || gameController.Joystick() == nil ||
 			gameController.Joystick().InstanceID() != e.Which {
 			return

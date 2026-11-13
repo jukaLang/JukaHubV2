@@ -118,6 +118,17 @@ func ttsSpeakFrom(origin ttsOrigin, kind ttsKind, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
+	ttsStartLine(origin, kind, text, nil)
+}
+
+// ttsSpeakSource starts a line whose chunks arrive while it speaks
+// (tts_live.go). Any goroutine.
+func ttsSpeakSource(origin ttsOrigin, kind ttsKind, src *ttsSource) {
+	ttsStartLine(origin, kind, "", src)
+}
+
+// ttsStartLine makes text — or src, when it is not nil — the current line.
+func ttsStartLine(origin ttsOrigin, kind ttsKind, text string, src *ttsSource) {
 	ttsCtl.mu.Lock()
 	ttsCtl.gen++
 	gen := ttsCtl.gen
@@ -133,7 +144,7 @@ func ttsSpeakFrom(origin ttsOrigin, kind ttsKind, text string) {
 	// What the line before still had queued goes now.
 	ttsSilence()
 	posted := time.Now()
-	tbxPost(func() { ttsBegin(gen, kind, origin, text, posted) })
+	tbxPost(func() { ttsBegin(gen, kind, origin, text, src, posted) })
 }
 
 // ttsSyncFlagsLocked mirrors ttsCtl into the atomics. ttsCtl.mu is held.
@@ -180,8 +191,9 @@ func ttsCurrentOrigin() (ttsOrigin, bool) {
 // ttsBegin starts the posted line gen, on the main thread: it reads the
 // settings, the key and the voice, cuts the text into chunks and starts the
 // session — or drops the line when the voice is off for it, Quiet Mode is on,
-// an alarm rings, there is no speaker, or no voice can speak.
-func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, posted time.Time) {
+// an alarm rings, there is no speaker, or no voice can speak. A live line
+// (src not nil) brings its own chunks, still arriving.
+func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, src *ttsSource, posted time.Time) {
 	ttsCtl.mu.Lock()
 	current := ttsCtl.gen == gen && ttsCtl.pending
 	ttsCtl.mu.Unlock()
@@ -221,12 +233,15 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, posted ti
 		refuse(ttsFailNoSound)
 		return
 	}
-	chunks := ttsPrepare(text)
-	if len(chunks) == 0 {
-		refuse(ttsFailNone)
-		return
+	if src == nil {
+		chunks := ttsPrepare(text)
+		if len(chunks) == 0 {
+			refuse(ttsFailNone)
+			return
+		}
+		src = ttsFixedSource(chunks)
 	}
-	s := &ttsSession{gen: gen, kind: kind, origin: origin, chunks: chunks, rate: int(audioSampleRate)}
+	s := &ttsSession{gen: gen, kind: kind, origin: origin, src: src, rate: int(audioSampleRate)}
 	s.local, s.hasLocal = ttsLocal()
 	pre := ttsFailNone
 	if voice := ttsVoiceOf(cfg); voice != ttsVoiceDevice {

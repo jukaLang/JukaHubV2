@@ -10,6 +10,7 @@ func TestSTTTranscribeChoice(t *testing.T) {
 	cloudFailed := errors.New("Groq unavailable")
 	tests := []struct {
 		name          string
+		mode          string
 		key           string
 		online, local bool
 		cloudErr      error
@@ -18,20 +19,29 @@ func TestSTTTranscribeChoice(t *testing.T) {
 		cloudCalls    int
 		localCalls    int
 	}{
-		{"cloud first", "key", true, true, nil, "cloud", nil, 1, 0},
-		{"cloud failure falls back", "key", true, true, cloudFailed, "local", nil, 1, 1},
-		{"offline goes local", "key", false, true, nil, "local", nil, 0, 1},
-		{"no key goes local", "", true, true, nil, "local", nil, 0, 1},
-		{"cloud remains usable without local", "key", true, false, nil, "cloud", nil, 1, 0},
-		{"cloud error without local", "key", true, false, cloudFailed, "", cloudFailed, 1, 0},
-		{"neither available", "", false, false, nil, "", errSTTUnavailable, 0, 0},
+		{"cloud first", sttModeAuto, "key", true, true, nil, "cloud", nil, 1, 0},
+		{"cloud failure falls back", sttModeAuto, "key", true, true, cloudFailed, "local", nil, 1, 1},
+		{"offline goes local", sttModeAuto, "key", false, true, nil, "local", nil, 0, 1},
+		{"no key goes local", sttModeAuto, "", true, true, nil, "local", nil, 0, 1},
+		{"cloud remains usable without local", sttModeAuto, "key", true, false, nil, "cloud", nil, 1, 0},
+		{"cloud error without local", sttModeAuto, "key", true, false, cloudFailed, "", cloudFailed, 1, 0},
+		{"neither available", sttModeAuto, "", false, false, nil, "", errSTTUnavailable, 0, 0},
+		{"offline selected with cloud ready", sttModeOffline, "key", true, true, nil, "local", nil, 0, 1},
+		{"offline selected but missing", sttModeOffline, "key", true, false, nil, "", errSTTUnavailable, 0, 0},
+		{"Groq selected with local ready", sttModeGroq, "key", true, true, nil, "cloud", nil, 1, 0},
+		{"Groq selected and fails", sttModeGroq, "key", true, true, cloudFailed, "", cloudFailed, 1, 0},
+		{"Groq selected but no key", sttModeGroq, "", true, true, nil, "", errSTTGroqKey, 0, 0},
+		{"Groq selected but offline", sttModeGroq, "key", false, true, nil, "", errSTTGroqOffline, 0, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cloudCalls, localCalls := 0, 0
-			got, err := sttTranscribeChoice(context.Background(), tt.key, []byte("wav"), tt.online, tt.local,
+			got, err := sttTranscribeChoice(context.Background(), tt.mode, tt.key, []byte("wav"), tt.online, tt.local,
 				func(context.Context, string, []byte) (string, error) {
 					cloudCalls++
+					if tt.cloudErr != nil {
+						return "", tt.cloudErr
+					}
 					return "cloud", tt.cloudErr
 				},
 				func(context.Context, []byte) (string, error) {
@@ -49,7 +59,7 @@ func TestSTTTranscribeChoice(t *testing.T) {
 func TestSTTCancellationDoesNotStartLocal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	localCalled := false
-	_, err := sttTranscribeChoice(ctx, "key", nil, true, true,
+	_, err := sttTranscribeChoice(ctx, sttModeAuto, "key", nil, true, true,
 		func(context.Context, string, []byte) (string, error) {
 			cancel()
 			return "", context.Canceled
@@ -60,5 +70,20 @@ func TestSTTCancellationDoesNotStartLocal(t *testing.T) {
 		})
 	if !errors.Is(err, context.Canceled) || localCalled {
 		t.Fatalf("canceled request started local recognition: %v, %t", err, localCalled)
+	}
+}
+
+func TestSTTPreviewChoiceKeepsOfflineAudioLocal(t *testing.T) {
+	cloud, localFirst, fallback := sttPreviewChoice(sttModeOffline, "key", true, true)
+	if cloud || !localFirst || fallback {
+		t.Fatalf("offline preview chose cloud=%t local=%t fallback=%t", cloud, localFirst, fallback)
+	}
+	cloud, localFirst, fallback = sttPreviewChoice(sttModeGroq, "key", true, true)
+	if !cloud || localFirst || fallback {
+		t.Fatalf("Groq preview chose cloud=%t local=%t fallback=%t", cloud, localFirst, fallback)
+	}
+	cloud, localFirst, fallback = sttPreviewChoice(sttModeAuto, "key", true, true)
+	if !cloud || localFirst || !fallback {
+		t.Fatalf("automatic preview chose cloud=%t local=%t fallback=%t", cloud, localFirst, fallback)
 	}
 }

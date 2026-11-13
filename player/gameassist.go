@@ -469,6 +469,9 @@ func gaAsk(question string) {
 	orbAIText.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), gaAskTimeout)
 	voiceOrb.cancel = cancel
+	// Juka starts speaking at the first full sentence (tts_live.go).
+	live := ttsNewLive(ttsFromGame, ttsKindVoice)
+	voiceOrb.live = live
 	messages := []map[string]string{
 		{"role": "system", "content": textSystem},
 		{"role": "user", "content": question},
@@ -487,6 +490,7 @@ func gaAsk(question string) {
 				orbAIText.text = partial
 			}
 			orbAIText.mu.Unlock()
+			live.Update(partial)
 		}
 		var reply string
 		var err error
@@ -519,12 +523,15 @@ func gaAskWithPicture(ctx context.Context, key, system, question string, frame *
 // gaAnswered shows Juka's whole answer, if it is still the one waited for,
 // and speaks it. Over a game an answer stays until the player leaves.
 func gaAnswered(gen int, question, reply string, err error) {
+	live := voiceOrbTakeLive(gen)
 	if !gaOverlay.active || gen != voiceOrb.gen || voiceOrb.phase != orbThinking || !voiceOrb.ai || !voiceOrbActive() {
+		live.Stop()
 		return
 	}
 	voiceOrb.ai = false
 	voiceOrb.cancel = nil
 	if err != nil {
+		live.Stop()
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -534,8 +541,10 @@ func gaAnswered(gen int, question, reply string, err error) {
 		PlayErrorSound()
 		return
 	}
+	raw := reply
 	reply = orbPlain(chatStripThink(reply))
 	if reply == "" {
+		live.Stop()
 		voiceOrbSay("Juka had no answer — try again", orbQuote(question), tbxToneWarn, orbOfferNone)
 		voiceOrb.hideAt = 0
 		PlayErrorSound()
@@ -546,8 +555,9 @@ func gaAnswered(gen int, question, reply string, err error) {
 	trophyEvent(tkAIAsk)
 	PlayNavSound()
 	// Shown and read aloud: Read answers aloud in games, on by default,
-	// decides here instead of "Juka's voice" (tts_api.go ttsBegin).
-	ttsSpeakFrom(ttsFromGame, ttsKindVoice, reply)
+	// decides here instead of "Juka's voice" (tts_api.go ttsBegin). Most of
+	// it is already being said (tts_live.go).
+	voiceOrbFinishLive(live, ttsFromGame, raw)
 }
 
 // gaPress acts on one press while the overlay is up.

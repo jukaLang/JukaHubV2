@@ -2,10 +2,11 @@ package main
 
 // ledmic.go — the stick lights follow the microphone.
 //
-// LED mode "Microphone" (led_policy "mic") lights the rings from what the
-// handheld hears: talk, sing, clap or play a guitar next to it and the rings
-// glow with the loudness, coloured by pitch the same way the music mode is
-// (ledColorFor: low sounds red/orange, voices green/cyan, whistles violet).
+// LED mode "Microphone" (led_policy "mic") keeps the rings on with a soft,
+// steady glow in the chosen colour and brightens them smoothly with what the
+// handheld hears — the user talking (to Juka too: the orb's own capture feeds
+// them, ledMicFeedVoice) and, a little, Juka answering. The colour stays put
+// (ledMicColor): on the TrimUI rings a colour change is a visible blink.
 //
 // The microphone is the shared one (voicemic.go). micStream is main-thread
 // only, so ledMicTick runs from the main loop each frame, reads what was
@@ -17,7 +18,8 @@ package main
 // follows the room (it drops at once to anything quieter and creeps up over
 // several seconds, so a fan or hum fades out while speech does not), times the
 // sensitivity the user picked, through the same log curve as the music mode;
-// it rises at once and falls over about half a second, so the rings breathe
+// it rises within a frame or two and eases back over about half a second (and
+// the LED loop eases again between samples), so the rings breathe
 // with a voice instead of flickering on every syllable.
 //
 // Nothing is recorded or kept: each read is analysed and dropped. The device
@@ -54,8 +56,20 @@ const (
 	// ledMicWindow is how much of the newest audio one tick analyses: 50 ms,
 	// so the rings follow what is heard now, not the backlog of a slow frame.
 	ledMicWindow = micRate / 20
-	// ledMicReleasePerSec is how fast the level falls (full scale per second).
-	ledMicReleasePerSec = 2.2
+	// ledMicAttackSec and ledMicReleaseSec are how fast the level follows a
+	// louder and a quieter sound (time constants).
+	ledMicAttackSec  = 0.06
+	ledMicReleaseSec = 0.4
+	// ledMicRestLevel is the rings' glow in silence: the lights stay on in
+	// Microphone mode and a voice brightens them from here to full.
+	ledMicRestLevel = 0.4
+	// ledMicGlowRiseSec and ledMicGlowFallSec ease the LED loop's 25 fps
+	// frames between the main loop's samples (which can come at 5 fps).
+	ledMicGlowRiseSec = 0.1
+	ledMicGlowFallSec = 0.45
+	// ledMicJukaShare is how much Juka's own voice brightens the rings while
+	// it answers: a little less than the user's.
+	ledMicJukaShare = 0.7
 	// ledMicFloorRiseSec is the noise floor's time constant upwards through
 	// room noise, ledMicFloorSlowSec under a sound well above it.
 	ledMicFloorRiseSec = 6.0
@@ -184,13 +198,16 @@ func (f *ledMicFollower) step(rms, gain, dt float64) float64 {
 		signal = 0
 	}
 	target := levelFromRMS(signal)
+	// Eased both ways: quick to rise (a syllable shows within a frame or
+	// two) and slow to fall, so the glow swells with a sentence instead of
+	// snapping to every syllable.
+	tau := ledMicReleaseSec
 	if target >= f.level {
-		f.level = target
-	} else {
-		f.level -= ledMicReleasePerSec * dt
-		if f.level < target {
-			f.level = target
-		}
+		tau = ledMicAttackSec
+	}
+	f.level += (target - f.level) * (1 - math.Exp(-dt/tau))
+	if f.level < 0.002 {
+		f.level = 0
 	}
 	return f.level
 }
@@ -327,6 +344,66 @@ func ledMicClose() {
 	publishLEDMicSample(ledMicSample{})
 }
 
+// ledMicFeedVoice lets the rings follow the user while a voice feature has
+// the microphone (the orb, voice typing): the lights' own stream is closed
+// then, and talking to Juka is exactly when they should react. rms is the
+// newest captured level. Main thread, once a frame.
+func ledMicFeedVoice(rms float64) {
+	st := &ledMicState
+	if st.stream != nil || !LEDSyncRunning() || currentLEDLoopSettings().policy != ledPolicyMic {
+		return
+	}
+	now := time.Now()
+	dt := now.Sub(st.lastTick).Seconds()
+	st.lastTick = now
+	level := st.follow.step(rms, ledMicGain(currentLEDLoopSettings().micSensitivity), dt)
+	publishLEDMicSample(ledMicSample{Level: level, Freq: st.follow.freq, At: now})
+}
+
+// ledMicGlow is the LED loop's eased level for Microphone mode. LED loop.
+var ledMicGlow struct {
+	mu    sync.Mutex
+	shown float64
+	at    time.Time
+}
+
+// ledMicColor is one frame of Microphone mode: a steady glow in the chosen
+// colour (a soft blue when none was picked) that brightens with the voice —
+// the user's, and a little with Juka's answer. The hue never changes: on the
+// TrimUI rings a new hue means re-arming the effect, which shows as a blink,
+// while brightness goes through the scale node smoothly. LED loop.
+func ledMicColor(s ledLoopSettings, level float64, now time.Time) (uint8, uint8, uint8) {
+	if jukaSpeaking() {
+		if a := currentAudioSample(); time.Since(a.At) <= ledSilenceAfter {
+			if j := levelFromRMS(a.RMS) * ledMicJukaShare; j > level {
+				level = j
+			}
+		}
+	}
+	g := &ledMicGlow
+	g.mu.Lock()
+	dt := now.Sub(g.at).Seconds()
+	g.at = now
+	if dt < 0 || dt > 1 {
+		dt = 1 // first frame, or after a pause: no slow fade from stale state
+	}
+	tau := ledMicGlowFallSec
+	if level > g.shown {
+		tau = ledMicGlowRiseSec
+	}
+	g.shown += (level - g.shown) * (1 - math.Exp(-dt/tau))
+	shown := g.shown
+	g.mu.Unlock()
+	r, gr, b := s.r, s.g, s.b
+	if r == 0 && gr == 0 && b == 0 {
+		r, gr, b = 0x38, 0x9C, 0xFF
+	}
+	hue, _ := ledAnimSplit(r, gr, b)
+	v := ledMicRestLevel + (1-ledMicRestLevel)*shown
+	ch := func(c uint8) uint8 { return uint8(math.Round(float64(c) * v)) }
+	return ch(hue[0]), ch(hue[1]), ch(hue[2])
+}
+
 // ledMicYield is micOpen's first step: a voice feature takes the microphone
 // from the lights. Main thread.
 func ledMicYield() {
@@ -409,27 +486,6 @@ func ledMicSetMode(c *Config, on bool) {
 	ledMicState.failed = false
 	ledPanelPersist(c)
 	setToast("Lights follow the microphone")
-}
-
-// ledSyncRowDetail is the Stick lights switch's line: what the lights follow.
-func ledSyncRowDetail(c *Config) string {
-	switch ledPolicyFromConfig(c) {
-	case ledPolicyAudio:
-		return "The stick lights pulse with what is playing"
-	case ledPolicyMic:
-		return "The stick lights react to the microphone"
-	}
-	return "The stick lights show: " + ledPolicyLabel(ledPolicyFromConfig(c))
-}
-
-func ledMicToggleRow() setRow {
-	return setRow{
-		ID: "ledmic", Label: "Lights follow your voice", Kind: setKindToggle,
-		Detail:  setStatic("The stick lights react to the microphone; nothing is recorded"),
-		Visible: ledMicRowsVisible,
-		Get:     ledMicModeOn,
-		Set:     ledMicSetMode,
-	}
 }
 
 func ledMicSensitivityOptions(*Config) []setOption {

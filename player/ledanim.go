@@ -46,6 +46,13 @@ const (
 	ledAnimStaticDefault = 4
 	// ledAnimRearmEvery bounds how often a hue change re-arms the effect.
 	ledAnimRearmEvery = 300 * time.Millisecond
+	// ledAnimReassertEvery is how often the writer checks that nothing else
+	// (TrimUI's hardwareservice rewrites max_scale and the effect on charge,
+	// wake and its own LED setting) took the rings back, and repaints them.
+	ledAnimReassertEvery = 2 * time.Second
+	// ledAnimFightEvery is the check interval once three checks in a row found
+	// the rings changed by someone else.
+	ledAnimFightEvery = 30 * time.Second
 )
 
 // ledAnimState is what the writer remembers about the rings. Only the LED
@@ -62,6 +69,23 @@ var ledAnimState struct {
 	hueSet    bool
 	rearmedAt time.Time
 	lastScale int
+	checkedAt time.Time
+
+	// noColorBack / noEffectBack are set once a node read back something
+	// other than what was just written to it (a different format, or a
+	// driver that reports another value): that node is then never used to
+	// decide the rings drifted, or every check would re-arm them — a blink
+	// every ReassertEvery.
+	// noSwitchBack and noScaleBack do the same for the enable switches and
+	// the scale node.
+	noColorBack, noEffectBack bool
+	noSwitchBack, noScaleBack bool
+	scaleChecked              bool
+
+	// fights counts checks in a row that found the rings changed by someone
+	// else; fightLogged keeps that log line to one per take.
+	fights      int
+	fightLogged bool
 }
 
 // ledAnimSaved is the rings' state before the first write, switches included
@@ -71,9 +95,35 @@ type ledAnimSaved struct {
 	cycles, enable, effEn string
 }
 
+// ledAnimFiles are the driver nodes JukaHub writes.
+var ledAnimFiles = []string{
+	"effect_rgb_hex_lr", "effect_lr", "effect_cycles_lr", "max_scale",
+	"max_scale_lr", "enable", "effect_enable",
+}
+
+// ledAnimUnlock makes the driver's nodes writable. The firmware leaves them
+// read-only (0444), and sysfs refuses a write open on a node without any write
+// bit even for root — which is why every CFW starts with
+// `chmod -R 777 /sys/class/led_anim`. Without this the rings were never found
+// ("the driver is there, but JukaHub can't write to it").
+func ledAnimUnlock(dir string) {
+	for _, name := range ledAnimFiles {
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm()&0o200 != 0 {
+			continue
+		}
+		_ = os.Chmod(path, info.Mode().Perm()|0o600)
+	}
+}
+
 // classifyLEDAnim reports the TrimUI rings as one device when the driver is
 // there and writable.
 func classifyLEDAnim(dir string) (ledDevice, bool) {
+	if _, err := os.Stat(filepath.Join(dir, "effect_lr")); err != nil {
+		return ledDevice{}, false
+	}
+	ledAnimUnlock(dir)
 	if !canWriteFile(filepath.Join(dir, "effect_rgb_hex_lr")) || !canWriteFile(filepath.Join(dir, "effect_lr")) {
 		return ledDevice{}, false
 	}
@@ -104,14 +154,28 @@ func ledAnimSplit(r, g, b uint8) (hue [3]uint8, level float64) {
 		if out > 255 {
 			out = 255
 		}
-		// Snap to 16 steps so a hue that only wobbles by rounding never re-arms.
-		q := int(out+8) / 16 * 16
-		if q > 255 {
-			q = 255
-		}
-		return uint8(q)
+		return uint8(out)
 	}
 	return [3]uint8{scale(r), scale(g), scale(b)}, float64(peak) / 255
+}
+
+// ledAnimHueTolerance is how far (per channel, at full value) a hue may move
+// before the rings are re-armed. A dimmed colour's hue wobbles with rounding —
+// Pulse and Charging run a 2 s brightness cycle, and the old 16-step snap
+// flipped at a step edge once per cycle — and every re-arm goes through effect
+// 0, which the user sees as a blink.
+const ledAnimHueTolerance = 40
+
+// ledAnimHueNear reports whether two hues are the same colour for the rings.
+// Pure.
+func ledAnimHueNear(a, b [3]uint8) bool {
+	for i := range a {
+		d := int(a[i]) - int(b[i])
+		if d < -ledAnimHueTolerance || d > ledAnimHueTolerance {
+			return false
+		}
+	}
+	return true
 }
 
 // ledAnimStaticIndex finds "static" in the driver's effect_names, whatever its
@@ -173,12 +237,97 @@ func ledAnimRead(dir, name string) string {
 	return strings.TrimSpace(string(data))
 }
 
+// ledAnimDrifted reports whether the driver no longer shows JukaHub's look:
+// the master switch went off, the effect is not static, or the colour is not
+// hue. A node that cannot be read or parsed counts as unchanged, so an odd
+// read-back format never makes the rings re-arm (and flicker) every check.
+// Under lock.
+func ledAnimDrifted(dir string, hue [3]uint8, static int) (drifted bool, what string) {
+	st := &ledAnimState
+	if !st.noSwitchBack {
+		for _, sw := range []string{"enable", "effect_enable"} {
+			if ledAnimRead(dir, sw) != "0" {
+				continue
+			}
+			_ = writeLEDFile(filepath.Join(dir, sw), "1")
+			if ledAnimRead(dir, sw) == "0" {
+				// A write that does not stick (or a node that always reads
+				// 0) would re-arm the rings every check.
+				st.noSwitchBack = true
+				continue
+			}
+			drifted, what = true, sw+"=0"
+		}
+	}
+	if !st.noEffectBack {
+		raw := ledAnimRead(dir, "effect_lr")
+		if n, err := strconv.Atoi(raw); err == nil && n != static {
+			drifted, what = true, "effect_lr="+raw
+		}
+	}
+	if !st.noColorBack {
+		raw := ledAnimRead(dir, "effect_rgb_hex_lr")
+		if r, g, b, ok := ledAnimParseHex(raw); ok && !ledAnimHueNear([3]uint8{r, g, b}, hue) {
+			drifted, what = true, "effect_rgb_hex_lr="+raw
+		}
+	}
+	return drifted, what
+}
+
+// ledAnimVerify reads the colour and effect back right after a re-arm. A node
+// that does not report what was just written is unusable as a drift signal
+// (see noColorBack). Under lock.
+func ledAnimVerify(dir string, hue [3]uint8, static int) {
+	st := &ledAnimState
+	if !st.noEffectBack {
+		raw := ledAnimRead(dir, "effect_lr")
+		if n, err := strconv.Atoi(raw); err == nil && n != static {
+			st.noEffectBack = true
+			LogScene("led").Info("stick rings: effect_lr reads back differently, not watching it", "wrote", static, "read", raw)
+		}
+	}
+	if !st.noColorBack {
+		raw := ledAnimRead(dir, "effect_rgb_hex_lr")
+		if r, g, b, ok := ledAnimParseHex(raw); ok && !ledAnimHueNear([3]uint8{r, g, b}, hue) {
+			st.noColorBack = true
+			LogScene("led").Info("stick rings: colour reads back differently, not watching it", "wrote", fmt.Sprintf("%02X%02X%02X", hue[0], hue[1], hue[2]), "read", raw)
+		}
+	}
+}
+
+// ledAnimScaleDrifted reports whether the scale node no longer holds what
+// JukaHub wrote. Unreadable counts as unchanged: a blind rewrite every check
+// could restart the driver's effect, which shows as a blink. Under lock.
+func ledAnimScaleDrifted(dir string) bool {
+	st := &ledAnimState
+	if st.lastScale < 0 || st.noScaleBack {
+		return false
+	}
+	n, err := strconv.Atoi(ledAnimRead(dir, st.scaleFile))
+	return err == nil && n != st.lastScale
+}
+
+// ledAnimParseHex reads the first colour of a read-back like "FF0000 " or
+// "0xff0000". Pure.
+func ledAnimParseHex(raw string) (r, g, b uint8, ok bool) {
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		return 0, 0, 0, false
+	}
+	s := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(fields[0]), "0x"), "#")
+	return parseLEDHex(s)
+}
+
 // ledAnimTake reads what the rings show and prepares the driver. Under lock.
 func ledAnimTake(dir string) {
 	st := &ledAnimState
+	// The modes can be reset by a suspend or a firmware service.
+	ledAnimUnlock(dir)
 	st.taken = true
 	st.hueSet = false
 	st.lastScale = -1
+	st.checkedAt = time.Now()
+	st.fights, st.fightLogged = 0, false
 	st.static = ledAnimStaticIndex(ledAnimRead(dir, "effect_names"))
 	st.scaleFile = "max_scale"
 	if canWriteFile(filepath.Join(dir, "max_scale_lr")) {
@@ -225,7 +374,39 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 		}
 	}
 	now := time.Now()
-	if level > 0 && (!st.hueSet || hue != st.hue) && (!st.hueSet || now.Sub(st.rearmedAt) >= ledAnimRearmEvery) {
+	drifted := false
+	every := ledAnimReassertEvery
+	if st.fights >= 3 {
+		// Something keeps taking the rings back on its own timer: winning
+		// every 2 s would be a blink every 2 s, so check rarely instead.
+		every = ledAnimFightEvery
+	}
+	if now.Sub(st.checkedAt) >= every && st.hueSet && level > 0 {
+		// A steady colour never changes level or hue, so without this a
+		// hardwareservice write would stick until the user changed something.
+		// Only what reads back changed is repainted: nothing is rewritten
+		// blindly.
+		st.checkedAt = now
+		var what string
+		drifted, what = ledAnimDrifted(dev.Dir, st.hue, st.static)
+		if ledAnimScaleDrifted(dev.Dir) {
+			st.lastScale = -1
+			if what == "" {
+				what = st.scaleFile
+			}
+		}
+		if what != "" {
+			st.fights++
+			if st.fights >= 3 && !st.fightLogged {
+				st.fightLogged = true
+				LogScene("led").Warn("stick rings: something else keeps changing them", "node", what)
+			}
+		} else {
+			st.fights = 0
+		}
+	}
+	changed := !st.hueSet || !ledAnimHueNear(hue, st.hue)
+	if level > 0 && (drifted || (changed && (!st.hueSet || now.Sub(st.rearmedAt) >= ledAnimRearmEvery))) {
 		col := fmt.Sprintf("%02X%02X%02X ", hue[0], hue[1], hue[2])
 		if err := writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_lr"), col); err != nil {
 			return err
@@ -235,6 +416,7 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 			return err
 		}
 		st.hue, st.hueSet, st.rearmedAt = hue, true, now
+		ledAnimVerify(dev.Dir, hue, st.static)
 		// A driver may reset the scale with the effect: write it again.
 		st.lastScale = -1
 	}
@@ -245,6 +427,16 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 		return err
 	}
 	st.lastScale = scale
+	if !st.scaleChecked && !st.noScaleBack {
+		// Once: a driver that clamps or rescales the value would otherwise
+		// look changed at every check and get rewritten every 2 s.
+		st.scaleChecked = true
+		raw := ledAnimRead(dev.Dir, st.scaleFile)
+		if n, err := strconv.Atoi(raw); err == nil && n != scale {
+			st.noScaleBack = true
+			LogScene("led").Info("stick rings: scale reads back differently, not watching it", "wrote", scale, "read", raw)
+		}
+	}
 	return nil
 }
 

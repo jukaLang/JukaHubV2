@@ -380,8 +380,8 @@ RMS above a noise floor that follows the room, times `led_mic_sensitivity`
 (`low`, `normal` (default) or `high`), coloured by pitch like `audio`. The
 microphone is open only while the lights are on in this mode and JukaHub is on
 screen, and a voice feature (voice orb, Voice command, voice typing) takes it
-over until it is done; nothing is recorded. Settings → Stick lights → **Lights follow
-your voice** and **Mic sensitivity** write both keys. Battery runs red → green across 10–80%, charging breathes green
+over until it is done; nothing is recorded. Settings → Stick lights → **Lights show** →
+**Microphone** and **Mic sensitivity** write both keys. Battery runs red → green across 10–80%, charging breathes green
 and goes dark unplugged, and temperature runs green → red across 45–80 °C (read
 from the thermal zone, cached for two seconds). Custom uses `led_color`
 (`"#rrggbb"`) and an optional `led_effect` of `solid` (default), `pulse`

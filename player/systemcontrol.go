@@ -517,7 +517,13 @@ func setWifiEnabled(on bool) error {
 }
 
 // bluetoothEnabled reads the Bluetooth radio state.
+// The kernel answers first (btKernelRadio): `bluetoothctl show` with no
+// adapter or no bluetoothd only waits out its timeout, and the airplane switch
+// and voice commands ask on the render thread.
 func bluetoothEnabled() (bool, bool) {
+	if on, known := btKernelRadio(); known {
+		return on, true
+	}
 	backend := bluetoothBackend()
 	switch backend {
 	case "bluetoothctl":
@@ -544,6 +550,11 @@ func bluetoothEnabled() (bool, bool) {
 
 // setBluetoothEnabled switches the Bluetooth radio.
 func setBluetoothEnabled(on bool) error {
+	if !on {
+		if handled, err := btSwitchOffWithoutDaemon(); handled {
+			return err
+		}
+	}
 	switch bluetoothBackend() {
 	case "bluetoothctl":
 		arg := "off"

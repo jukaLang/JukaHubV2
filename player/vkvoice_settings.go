@@ -10,6 +10,12 @@ package main
 // opens".
 const vkVoiceAutoKey = "vkVoiceAuto"
 
+var sttModeOptions = []setOption{
+	{Value: sttModeAuto, Label: "Automatic", Note: "Use Groq when available; switch to offline speech if it fails"},
+	{Value: sttModeOffline, Label: "Offline on device", Note: "Keep microphone recordings on this Smart Pro"},
+	{Value: sttModeGroq, Label: "Groq", Note: "Use Groq only; needs a key and Wi-Fi"},
+}
+
 // vkVoiceAutoOn reports that switch; off unless it was turned on.
 func vkVoiceAutoOn(config *Config) bool {
 	if config == nil {
@@ -22,10 +28,47 @@ func vkVoiceAutoOn(config *Config) bool {
 func vkVoiceSettingsRows() []setRow {
 	return []setRow{
 		{
+			ID: sttModeKey, Label: "Speech recognition", Kind: setKindChoice,
+			Visible: func(*Config) bool { return sttSupported() },
+			Detail: func(*Config) string {
+				return "Choose how voice typing, commands and shortcuts hear you"
+			},
+			Options:    func(*Config) []setOption { return sttModeOptions },
+			Current:    func(c *Config) int { return ttsOptionIndex(sttModeOptions, sttModeOf(c)) },
+			Sheet:      func(*Config) []setOption { return sttModeOptions },
+			SheetValue: sttModeOf,
+			SheetTitle: "Speech recognition",
+			Choose: func(c *Config, value string) {
+				ttsStore(c, sttModeKey, value)
+				setToast("Speech recognition: " + ttsOptionLabel(sttModeOptions, value))
+			},
+		},
+		{
+			ID: "offlineSpeech", Label: "Install offline speech", Kind: setKindAction,
+			Visible: func(*Config) bool { return sttSupported() },
+			Value: func(*Config) string {
+				switch {
+				case sttLocalReady():
+					return "Ready"
+				case relPackRunning(sttPackKey):
+					return "Installing"
+				default:
+					return "Install"
+				}
+			},
+			Detail: func(*Config) string {
+				if sttLocalReady() {
+					return "Included in the latest package · works without a key or Wi-Fi"
+				}
+				return "One-time download · about 78 MB · then works without Wi-Fi"
+			},
+			Open: sttInstallOffline,
+		},
+		{
 			ID: vkVoiceAutoKey, Label: "Start voice typing when the keyboard opens", Kind: setKindToggle,
 			Detail: func(*Config) string {
 				if !sttCanListen() {
-					return "Needs a Groq key and Wi-Fi, or offline speech on the card"
+					return "Set up speech recognition above first"
 				}
 				return "Chat messages start listening at once; " + vkVoiceButtonName() + " stops and sends"
 			},

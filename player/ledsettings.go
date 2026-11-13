@@ -175,14 +175,43 @@ func ledSettingsModeOptions(c *Config) []setOption {
 	return out
 }
 
+// ledSettingsMode is the page's entry for a policy: its own label and note
+// ("Colour", not the overlay's "Custom"), so the row's value is always one of
+// the choices its sheet lists.
+func ledSettingsMode(key string) (label, note string) {
+	key = ledPolicyKey(key)
+	for _, m := range ledSettingsModes {
+		if m.key == key {
+			return m.label, m.note
+		}
+	}
+	return ledPolicyLabel(key), ""
+}
+
+// ledSettingsOn reports whether the page's look rows apply: the lights exist
+// and are on. With the switch off the sticks show the firmware's colour, so
+// rows that change JukaHub's look would only seem broken.
+func ledSettingsOn(c *Config) bool {
+	return c != nil && c.Variables.LEDSync && ledSettingsAvailable(c)
+}
+
+// ledSettingsInMode is ledSettingsOn for one mode's own rows.
+func ledSettingsInMode(policy string) func(*Config) bool {
+	return func(c *Config) bool {
+		return ledSettingsOn(c) && ledPolicyFromConfig(c) == policy
+	}
+}
+
 func ledSettingsBrightnessOptions(*Config) []setOption {
 	out := []setOption{{Value: "0", Label: "Off"}}
 	return append(out, setLevelOptions(ledBrightnessMin)...)
 }
 
-// ledSettingsRows is the Stick lights page.
+// ledSettingsRows is the Stick lights page: the switch, then what the lights
+// show, then only the rows that mode uses (Colour: colour, effect, wheel;
+// Microphone: sensitivity), then the brightness every mode shares. With the
+// switch off only the switch is left.
 func ledSettingsRows() []setRow {
-	visible := ledSettingsAvailable
 	return []setRow{
 		{
 			ID: "lightsMissing", Label: "Stick lights", Kind: setKindInfo,
@@ -195,9 +224,10 @@ func ledSettingsRows() []setRow {
 				if c == nil || !c.Variables.LEDSync {
 					return "Off: the sticks keep the firmware's own colour"
 				}
-				return ledSyncRowDetail(c)
+				_, note := ledSettingsMode(ledPolicyFromConfig(c))
+				return note
 			},
-			Visible: visible,
+			Visible: ledSettingsAvailable,
 			Get:     func(c *Config) bool { return c.Variables.LEDSync },
 			Set: func(c *Config, on bool) {
 				if c == nil {
@@ -220,7 +250,7 @@ func ledSettingsRows() []setRow {
 		{
 			ID: "ledMode", Label: "Lights show", Kind: setKindChoice,
 			Detail:     setStatic("A colour of your own, or something the lights follow"),
-			Visible:    visible,
+			Visible:    ledSettingsOn,
 			Options:    ledSettingsModeOptions,
 			Sheet:      ledSettingsModeOptions,
 			SheetValue: ledPolicyFromConfig,
@@ -228,7 +258,10 @@ func ledSettingsRows() []setRow {
 			Current: func(c *Config) int {
 				return ledOptionIndex(ledSettingsModeOptions(c), ledPolicyFromConfig(c))
 			},
-			Value: func(c *Config) string { return ledPolicyLabel(ledPolicyFromConfig(c)) },
+			Value: func(c *Config) string {
+				label, _ := ledSettingsMode(ledPolicyFromConfig(c))
+				return label
+			},
 			Choose: func(c *Config, value string) {
 				if c == nil {
 					return
@@ -251,8 +284,8 @@ func ledSettingsRows() []setRow {
 		},
 		{
 			ID: "ledColor", Label: "Colour", Kind: setKindChoice,
-			Detail:     setStatic("Picking a colour switches the lights to Colour"),
-			Visible:    visible,
+			Detail:     setStatic("The colour of both stick rings"),
+			Visible:    ledSettingsInMode(ledPolicyCustom),
 			Options:    ledSettingsColorOptions,
 			Sheet:      ledSettingsColorOptions,
 			SheetValue: ledSettingsColorHex,
@@ -265,10 +298,16 @@ func ledSettingsRows() []setRow {
 				return ledOptionIndex(ledSettingsColorOptions(c), hex)
 			},
 			Value: func(c *Config) string {
-				if hex := ledSettingsColorHex(c); hex != "" {
-					return "Custom · " + strings.ToUpper(hex)
+				hex := ledSettingsColorHex(c)
+				if hex == "" {
+					return "Not set"
 				}
-				return "Not set"
+				// A swatch shows its name; a wheel colour its hex.
+				opts := ledSettingsColorOptions(c)
+				if i := ledOptionIndex(opts, hex); i >= 0 {
+					return opts[i].Label
+				}
+				return strings.ToUpper(hex)
 			},
 			Choose: func(c *Config, value string) {
 				if c == nil {
@@ -286,10 +325,8 @@ func ledSettingsRows() []setRow {
 		},
 		{
 			ID: "ledEffect", Label: "Effect", Kind: setKindChoice,
-			Detail: setStatic("Steady, breathing, or slowly cycling every colour"),
-			Visible: func(c *Config) bool {
-				return ledSettingsAvailable(c) && ledPolicyFromConfig(c) == ledPolicyCustom
-			},
+			Detail:  setStatic("Steady, breathing, or slowly cycling every colour"),
+			Visible: ledSettingsInMode(ledPolicyCustom),
 			Options: func(*Config) []setOption {
 				out := make([]setOption, 0, len(ledEffectOrder))
 				for _, e := range ledEffectOrder {
@@ -309,9 +346,17 @@ func ledSettingsRows() []setRow {
 			},
 		},
 		{
+			ID: "ledWheel", Label: "Colour wheel", Kind: setKindAction,
+			Detail:  setStatic("Any hue in between, with a live preview"),
+			Visible: ledSettingsInMode(ledPolicyCustom),
+			Open:    func(*Config) { openLEDPanel() },
+		},
+		// The microphone mode's own row (ledmic.go); it shows in that mode only.
+		ledMicSensitivityRow(),
+		{
 			ID: "ledBrightness", Label: "Brightness", Kind: setKindChoice, Clamp: true,
 			Detail:  setStatic("Off keeps the sticks dark while JukaHub runs"),
-			Visible: visible,
+			Visible: ledSettingsOn,
 			Options: ledSettingsBrightnessOptions,
 			Current: func(c *Config) int {
 				return setNearestStop(ledSettingsBrightnessOptions(c), ledBrightnessFromConfig(c))
@@ -331,15 +376,6 @@ func ledSettingsRows() []setRow {
 				c.Variables.Custom[ledKeyBrightness] = pct
 				ledSettingsApply(c)
 			},
-		},
-		// The microphone mode's own rows (ledmic.go).
-		ledMicToggleRow(),
-		ledMicSensitivityRow(),
-		{
-			ID: "ledWheel", Label: "Colour wheel", Kind: setKindAction,
-			Detail:  setStatic("Any hue in between, with a live preview"),
-			Visible: visible,
-			Open:    func(*Config) { openLEDPanel() },
 		},
 	}
 }

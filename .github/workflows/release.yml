@@ -132,6 +132,7 @@ jobs:
             player/dist/JukaHub-trimui-smart-pro-linux-arm64.tar.gz
             player/dist/JukaHub-RemotePlay-linux-arm64.zip
             player/dist/JukaHub-AndroidRT-linux-arm64.zip
+            player/dist/JukaHub-OfflineSpeech-linux-arm64.zip
             player/dist/JukaHub-Wine-linux-arm64.zip
             player/dist/JukaHub-win-x64.zip
             player/dist/manifest.json

@@ -100,6 +100,10 @@ type btScreenState struct {
 	// showUnnamed lists devices that only announced their address.
 	showUnnamed bool
 	noteWrap    tbxWrapCache
+	// focusAt is the focused row's place in the list on the last frame, so a
+	// row that goes away (forgotten, paired, out of range) hands the focus to
+	// the row that takes its place rather than to the switch at the top.
+	focusAt int
 }
 
 var btScreen btScreenState
@@ -176,6 +180,7 @@ func btScreenEnter() {
 	btScreen.gen++
 	btScreen.nav.scroll = 0
 	btScreen.nav.focus = ""
+	btScreen.focusAt = 0
 	btScreen.devices = map[string]*bzDevice{}
 	btScreen.listed = false
 	btScreen.listErr = ""
@@ -297,7 +302,7 @@ func btRelist(scanIfEmpty bool) {
 	if scanIfEmpty {
 		btScreen.relistScan = true
 	}
-	if btScreen.relisting || btScreen.busyMAC != "" || btScreen.scanning || btScreen.radioBusy || !btDevicesAvailable() {
+	if btScreen.relisting || btScreen.busyMAC != "" || btScreen.scanning || btScreen.radioBusy || !btDevicesAvailable() || !btOnPage() {
 		return
 	}
 	btScreen.relisting = true
@@ -577,10 +582,19 @@ func btNoteConnection(ev bzEvent) {
 	delete(btScreen.padOK, ev.mac)
 }
 
+// btOnPage reports whether the scene work running now belongs to this visit of
+// the page. A reading's result is applied by a closure the main loop runs on
+// whatever screen is up (tbxPost), and the one frame between the result and
+// the user leaving would otherwise let it start a search or a reading — a
+// bluetoothctl session and Wi-Fi airtime — behind another screen.
+func btOnPage() bool {
+	return btScreen.visit.ctx != nil && btScreen.visit.ctx == sceneWorkContext()
+}
+
 // btStartScan starts one search, bringing Bluetooth up first when it is off
 // or not started at all (btBringUp; nothing to do when it is on).
 func btStartScan() {
-	if !btDevicesAvailable() {
+	if !btDevicesAvailable() || !btOnPage() {
 		return
 	}
 	switch {
@@ -614,7 +628,11 @@ func btStartScan() {
 				btScreen.scanUntil = time.Now().Add(bzScanDuration + 2*time.Second)
 			}
 		})
-		if err == nil && ctx.Err() == nil {
+		if err == nil && ctx.Err() != nil {
+			// Stopped (a pairing took the radio) before the search began.
+			err = ctx.Err()
+		}
+		if err == nil {
 			devs, err = bzScan(ctx, bzScanDuration, func(ev bzEvent) {
 				if !btEventWorthPosting(ev) {
 					return
@@ -640,10 +658,18 @@ func btStartScan() {
 			btScreen.scans++
 			btScreen.opSeq++
 			switch {
-			case err == nil && len(devs) > 0:
-				// A finished search's listing is the daemon's word on everything.
-				btReplaceList(devs)
+			case err == nil:
+				// A finished search's listing is the daemon's word on everything,
+				// including that the list could be read: an error card from a
+				// reading before the search (Bluetooth was off, the service not
+				// started yet) no longer holds.
+				if len(devs) > 0 {
+					btReplaceList(devs)
+				}
 				btScreen.links = links
+				btScreen.listed = true
+				btScreen.listErr = ""
+				btScreen.noAdapter = false
 			case len(devs) > 0:
 				btMergeList(devs)
 			}
@@ -1272,9 +1298,35 @@ func btRenderScreen(renderer *sdl.Renderer, config *Config) {
 	tbxClip(renderer, body)
 	btRenderBody(renderer, config, fonts, frame)
 	tbxUnclip(renderer)
+	btKeepFocusPlace(nav)
 	nav.end()
 	tbxDrawScrollbar(renderer, frame.x+frame.w+10, body.Y, body.H, nav.contentH, nav.scroll)
 	peerEndFrame(renderer, config, btScreenHints())
+}
+
+// btKeepFocusPlace runs after the rows are laid out. When the focused row is
+// gone — a device forgotten, paired (its Nearby row moves up to Paired), out of
+// range, or a reading that replaced the list — the focus goes to the row now
+// in its place. Left to the list's own rule it would jump to the first row,
+// the Bluetooth switch, where the next A, meant for a device, switches
+// Bluetooth off.
+func btKeepFocusPlace(nav *tbxNav) {
+	if i := nav.index(); i >= 0 {
+		btScreen.focusAt = i
+		return
+	}
+	if btScreen.focusAt <= 0 || len(nav.items) == 0 {
+		return
+	}
+	i := btScreen.focusAt
+	if i > len(nav.items)-1 {
+		i = len(nav.items) - 1
+	}
+	for i > 0 && nav.items[i].disabled {
+		i--
+	}
+	btScreen.focusAt = i
+	nav.setFocus(nav.items[i].id)
 }
 
 func btRenderBody(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame tbxFrame) {

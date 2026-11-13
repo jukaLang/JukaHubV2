@@ -618,6 +618,12 @@ func psStartHandoff(engine psEngine, sessionPath, label string) error {
 	}
 	cmd := exec.Command("sh", path)
 	cmd.Dir = filepath.Dir(engine.Stream)
+	// With a Bluetooth headset routed, the stream's sound goes there too: the
+	// helper's SDL reads AUDIODEV, and JukaHub (the PCM's one client) exits
+	// before the helper opens it.
+	if pcm := audioRouteChildPCM(); pcm != "" && os.Getenv("AUDIODEV") == "" {
+		cmd.Env = append(os.Environ(), "AUDIODEV="+pcm)
+	}
 	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(path)

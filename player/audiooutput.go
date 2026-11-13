@@ -258,6 +258,7 @@ func startAudioOutputMonitor() {
 		time.Sleep(2 * time.Second)
 		probeAudioOutput()
 		lastLinks, lastProbe := btLinkCount(), time.Now()
+		var linkChangedAt time.Time
 		ticker := time.NewTicker(audioOutputLinkPoll)
 		defer ticker.Stop()
 		wake := subscribeForegroundWake()
@@ -274,10 +275,22 @@ func startAudioOutputMonitor() {
 			// bluetoothctl is a daemon call; skipping it while a game owns the
 			// screen also stops JukaHub from holding the Bluetooth stack (and
 			// the headset, audioroute.go) the game wants. See backgroundwork.go.
-			if backgroundPaused() {
+			// The screen saver's low-power mode pauses the slow 10 s probe only:
+			// a headset that connects or drops then (music plays on under the
+			// saver) still moves the sound, the link list being a cheap read.
+			if gameScreenSuspended() || windowMinimised() {
 				continue
 			}
 			links := btLinkCount()
+			if links != lastLinks {
+				linkChangedAt = time.Now()
+			}
+			// A headset's audio is often not ready the instant its link
+			// appears, so under the saver keep probing for a short while after
+			// a change rather than once.
+			if backgroundPaused() && links == lastLinks && time.Since(linkChangedAt) > 3*audioOutputPollInterval {
+				continue
+			}
 			if !force && links == lastLinks && time.Since(lastProbe) < audioOutputPollInterval {
 				continue
 			}

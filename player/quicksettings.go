@@ -755,12 +755,14 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 			qsNoteEdit()
 			return nil
 		}
-		btCancelBringUpAsync()
-		if err := setBluetoothEnabled(false); err != nil {
-			return err
-		}
+		// Off runs off the render thread too (`power off` disconnects every
+		// device first); a failure is a toast, and the probe it ends with
+		// puts the switch back where the radio really is.
+		btPowerOffAsync(func(error) {
+			qsNoteEdit()
+			qsStartProbe()
+		})
 		qsNoteEdit()
-		qsStartProbe()
 		return nil
 	case qsActionAirplane:
 		if want {

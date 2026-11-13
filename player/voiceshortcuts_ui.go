@@ -706,7 +706,7 @@ func vscListen(config *Config) {
 		PlayErrorSound()
 		return
 	case !sttCanListen():
-		vscSay("Speech needs a Groq key and Wi-Fi, or offline speech installed", tbxToneWarn)
+		vscSay("Set up speech recognition in Settings → Voice & AI", tbxToneWarn)
 		PlayErrorSound()
 		return
 	}

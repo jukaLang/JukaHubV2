@@ -206,7 +206,7 @@ func vkVoiceToggle(config *Config) {
 		vkVoiceSay("No microphone — plug one in to use voice typing", vkVoiceNoAction)
 		return
 	case !sttCanListen():
-		vkVoiceSay("Voice typing needs a Groq key and Wi-Fi, or offline speech installed", vkVoiceOpenKey)
+		vkVoiceSay("Set up speech recognition in Settings → Voice & AI", vkVoiceNoAction)
 		return
 	}
 	// The shared microphone (voicemic.go) tries SDL's default device, then
@@ -392,9 +392,10 @@ func vkVoicePreviewTick() {
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
+	mode := sttModeOf(appConfig)
 	localReady := sttLocalReady()
-	localPreview := (key == "" || !IsOnline()) && localReady
-	if (key == "" || !IsOnline()) && !localReady {
+	cloudPreview, localPreview, localFallback := sttPreviewChoice(mode, key, IsOnline(), localReady)
+	if !cloudPreview && !localPreview {
 		return
 	}
 	if localPreview && vkVoice.previewAt != 0 && now-vkVoice.previewAt < 5000 {
@@ -407,7 +408,7 @@ func vkVoicePreviewTick() {
 	pcm := append([]byte(nil), vkVoice.buf...)
 	gen := vkVoice.gen
 	previewTimeout := vkVoicePreviewTimeout
-	if localReady {
+	if localPreview || localFallback {
 		previewTimeout = 35 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), previewTimeout)
@@ -421,7 +422,7 @@ func vkVoicePreviewTick() {
 		wav := vkEncodeWAV(pcm, vkVoiceRate)
 		if localPreview {
 			text, err = sttLocalTranscribe(ctx, wav, lang, "")
-		} else if localReady {
+		} else if localFallback {
 			cloudCtx, cloudCancel := context.WithTimeout(ctx, 8*time.Second)
 			text, err = vkTranscribe(cloudCtx, key, wav, lang)
 			cloudCancel()
@@ -563,7 +564,13 @@ func vkVoiceErrorText(err error) (string, vkVoiceAction) {
 		return "Close a game to free memory for offline speech", vkVoiceNoAction
 	}
 	if errors.Is(err, errSTTUnavailable) {
-		return "Offline speech is missing — install the latest TrimUI package", vkVoiceNoAction
+		return "Offline speech is missing — install it in Settings → Voice & AI", vkVoiceNoAction
+	}
+	if errors.Is(err, errSTTGroqKey) {
+		return "Groq speech needs an API key — add it in Settings", vkVoiceOpenKey
+	}
+	if errors.Is(err, errSTTGroqOffline) {
+		return "Groq speech needs Wi-Fi", vkVoiceNoAction
 	}
 	var gerr *groqError
 	if errors.As(err, &gerr) {

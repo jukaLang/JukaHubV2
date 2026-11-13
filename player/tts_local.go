@@ -78,13 +78,24 @@ func ttsLocalSpeak(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 }
 
 // ttsLocalSpeakChunks speaks chunks with the device's voice, handing each
-// piece of sound to emit in order (emit returns false to stop). Piper makes
-// them one chunk at a time from one process; when that cannot start or makes
-// nothing — an older Piper without --output_dir, say — and for every other
-// engine, the chunks are rendered as one line.
-func ttsLocalSpeakChunks(ctx context.Context, v ttsLocalVoice, chunks []string, gender string, emit func([]int16, int) bool) error {
+// piece of sound to emit in order (emit returns false to stop). next gives
+// the chunks in order, waiting while a live answer is still being written
+// (tts_live.go); false ends them. Piper makes them one chunk at a time from
+// one process, each as it arrives; when that cannot start or makes nothing —
+// an older Piper without --output_dir, say — and for every other engine, the
+// chunks are rendered as one line.
+func ttsLocalSpeakChunks(ctx context.Context, v ttsLocalVoice, next func(context.Context) (string, bool), gender string, emit func([]int16, int) bool) error {
+	// What Piper was given is kept, for the whole-line fallback.
+	var given []string
+	record := func(ctx context.Context) (string, bool) {
+		c, ok := next(ctx)
+		if ok {
+			given = append(given, c)
+		}
+		return c, ok
+	}
 	if v.kind == "piper" {
-		n, err := ttsPiperStream(ctx, v, chunks, emit)
+		n, err := ttsPiperStream(ctx, v, record, emit)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -108,7 +119,20 @@ func ttsLocalSpeakChunks(ctx context.Context, v ttsLocalVoice, chunks []string, 
 		}
 		logWarn("tts", "Piper chunk by chunk failed, rendering the whole line: %v", err)
 	}
-	samples, rate, err := ttsLocalSpeak(ctx, v, strings.Join(chunks, " "), gender)
+	// The whole line: what Piper already had, and the rest once it has all
+	// arrived.
+	for ctx.Err() == nil {
+		if _, ok := record(ctx); !ok {
+			break
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(strings.Join(given, "")) == "" {
+		return nil
+	}
+	samples, rate, err := ttsLocalSpeak(ctx, v, strings.Join(given, " "), gender)
 	if err != nil {
 		return err
 	}

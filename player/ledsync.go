@@ -764,7 +764,8 @@ func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 		if time.Since(sample.At) <= ledMicStaleAfter {
 			level = sample.Level
 		}
-		return ledColorFor(level, sample.Freq)
+		// Always on, brighter with a voice (ledmic.go).
+		return ledMicColor(s, level, now)
 	}
 	temp := 0.0
 	if s.policy == ledPolicyTemperature {

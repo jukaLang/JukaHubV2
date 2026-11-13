@@ -100,6 +100,6 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 
 // ttsPiperStream is the handheld's chunk-by-chunk Piper; Windows' voice
 // renders a line whole (ttsLocalSpeakChunks falls back to ttsLocalSynth).
-func ttsPiperStream(context.Context, ttsLocalVoice, []string, func([]int16, int) bool) (int, error) {
+func ttsPiperStream(context.Context, ttsLocalVoice, func(context.Context) (string, bool), func([]int16, int) bool) (int, error) {
 	return 0, errors.New("streaming is not used on Windows")
 }
