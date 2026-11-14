@@ -672,6 +672,7 @@ func finalizeConfig(config *Config) {
 	if config == nil {
 		return
 	}
+	removeRetiredVaultElements(config)
 	normalizeMotionConfig(config)
 	if config.SchemaVersion == 0 {
 		config.SchemaVersion = ConfigSchemaVersion
@@ -5955,9 +5956,6 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		logWarn("core", "change_scene: scene not found: %s", target)
 	case "yt_search", "youtube_search", "youtube_smart":
-		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
-	case "vault_search":
-		// Vault tab search: search RedGifs with the typed query
 		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
 	case "youtube_trending":
 		fetchTrendingVideos(config, "search_results", snapshotVars(config))

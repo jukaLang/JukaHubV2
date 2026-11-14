@@ -183,15 +183,21 @@ func flushPendingUserConfig() {
 	}
 }
 
-// reloadUserConfigFromDisk refreshes the cached settings from jukauser.json
-// and returns the cache. Its typed fields are filled once at boot and no save
-// updates them, so a hot reload that merged the cache restored the boot value
-// of every setting changed since. The favorites, chat and JukaLand sections
-// stay as they are in memory: those are always the newest copy.
+// reloadUserConfigFromDisk refreshes cached settings from jukauser.json.
+// The cache's typed fields are the boot values; a hot reload must use the
+// latest ones instead. Favorites, chat and JukaLand stay in memory. When a
+// transient read fails, use the newest full save rather than the boot copy.
 func reloadUserConfigFromDisk() *UserConfig {
 	uc, err := readUserConfigFile("jukauser.json")
 	if err != nil || uc == nil {
-		return loadUserConfig()
+		latest := userConfigLatestVars()
+		cached := loadUserConfig()
+		if latest != nil {
+			current := *cached
+			current.Variables = *latest
+			return detachUserConfig(&current)
+		}
+		return cached
 	}
 	if uc.Variables.Custom == nil {
 		uc.Variables.Custom = make(map[string]interface{})
@@ -1792,6 +1798,9 @@ func loadUserConfig() *UserConfig {
 	if migrateHandheldButtonMapping(userConfigCache, P().IsHandheld()) {
 		saveUserConfig(userConfigCache)
 	}
+	if dropRetiredVaultVars(userConfigCache) {
+		saveUserConfig(userConfigCache)
+	}
 	return userConfigCache
 }
 
@@ -1816,6 +1825,23 @@ func migrateHandheldButtonMapping(user *UserConfig, handheld bool) bool {
 	user.Variables.Custom["swapABButtons"] = true
 	user.Variables.Custom[abSwapMigrationKey] = true
 	return true
+}
+
+// dropRetiredVaultVars removes the cached state of the retired Vault feed from
+// older user configs. The feed no longer reads these keys; dropping them keeps
+// stale results and errors from being carried forward forever.
+func dropRetiredVaultVars(user *UserConfig) bool {
+	if user == nil || user.Variables.Custom == nil {
+		return false
+	}
+	changed := false
+	for key := range user.Variables.Custom {
+		if retiredVaultVar(key) {
+			delete(user.Variables.Custom, key)
+			changed = true
+		}
+	}
+	return changed
 }
 
 // migrateLegacyUserFiles folds any still-present legacy JSON files
@@ -2046,7 +2072,9 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	// "5 minutes". Move it to the new 25 s default once and remember that the
 	// value is the user's own choice from then on.
 	if config.Variables.ScreensaverTimeout == 300 {
-		if _, migrated := customValue(config.Variables.Custom, "screensaverTimeoutMigrated"); !migrated {
+		_, savedChoice := customValue(user.Variables.Custom, "screensaverTimeoutMigrated")
+		_, designChoice := customValue(config.Variables.Custom, "screensaverTimeoutMigrated")
+		if !savedChoice && !designChoice {
 			config.Variables.ScreensaverTimeout = 25
 			if config.Variables.Custom == nil {
 				config.Variables.Custom = map[string]interface{}{}

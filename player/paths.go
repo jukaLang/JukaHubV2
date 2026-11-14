@@ -26,21 +26,32 @@ func cleanUserPath(p string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
-// safeAbsolutePath is the final guard for a path that must already be absolute
-// and must not contain a traversal component. It rejects rather than silently
-// resolving to somewhere else.
+// safeAbsolutePath is the final guard for a path used by the state/reset
+// helpers. It accepts both absolute paths and ordinary relative paths (the ROM
+// scan can return a relative Roms root), but rejects a parent component rather
+// than silently resolving to somewhere else.
 func safeAbsolutePath(p string) (string, error) {
-	if strings.Contains(p, "..") {
+	if pathHasParentComponent(p) {
 		return "", fmt.Errorf("path %q contains a traversal component", p)
 	}
 	clean, err := cleanUserPath(p)
 	if err != nil {
 		return "", err
 	}
-	if !filepath.IsAbs(clean) {
-		return "", fmt.Errorf("path %q is not absolute", p)
-	}
 	return clean, nil
+}
+
+// pathHasParentComponent reports whether any path segment is exactly "..".
+// A filename such as "save..state" is legal and must not be refused.
+func pathHasParentComponent(p string) bool {
+	for _, part := range strings.FieldsFunc(strings.TrimSpace(p), func(r rune) bool {
+		return r == '/' || r == filepath.Separator
+	}) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // isPathWithin reports whether path is base itself or a descendant of base.
@@ -106,6 +117,94 @@ func regularFileWithin(root, path string) (string, error) {
 		return "", fmt.Errorf("%q is not a regular file", resolved)
 	}
 	return resolved, nil
+}
+
+// confinedRegularFile is regularFileWithin with the symbolic-link boundary
+// enforced too. A link inside root that points outside is refused, so archive
+// and pack code cannot be redirected through a link that only looks contained.
+func confinedRegularFile(root, path string) (string, error) {
+	resolved, err := resolveWithinRoot(root, path)
+	if err != nil {
+		return "", err
+	}
+	realRoot := root
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		realRoot = real
+	}
+	real, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !isPathWithin(real, realRoot) {
+		return "", fmt.Errorf("path %q links outside %q", path, root)
+	}
+	dir, err := os.OpenRoot(filepath.Dir(real))
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	info, err := dir.Stat(filepath.Base(real))
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%q is not a regular file", real)
+	}
+	return real, nil
+}
+
+// statUserFile opens a local file path through an os.Root on its parent. The
+// path is normalized and the final component is detached from directory
+// traversal, while the root API keeps a replace-race from turning the final
+// component into a link out of that directory. It is for paths the user picked
+// anywhere on this device (chat attachments, editor files, recent media), not
+// for paths that must stay under one configured tree; those use
+// resolveWithinRoot or confinedRegularFile.
+func statUserFile(path string) (os.FileInfo, error) {
+	clean, err := cleanUserPath(path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(filepath.Dir(clean))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Stat(filepath.Base(clean))
+}
+
+// openUserFile is statUserFile's open counterpart, for the same local paths.
+func openUserFile(path string) (*os.File, error) {
+	clean, err := cleanUserPath(path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(filepath.Dir(clean))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Open(filepath.Base(clean))
+}
+
+// removeWithinRoot removes a path only when it resolves inside root. The
+// removal itself goes through os.Root, so a final component replaced by a
+// link between the check and the call cannot redirect it.
+func removeWithinRoot(root, path string) error {
+	resolved, err := resolveWithinRoot(root, path)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q is outside %q", path, root)
+	}
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Remove(filepath.FromSlash(rel))
 }
 
 // existingDirWithin resolves path under root and requires an existing

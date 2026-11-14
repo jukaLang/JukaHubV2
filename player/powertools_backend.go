@@ -757,15 +757,58 @@ func powerListSnapshots(configPath string) ([]powerSnapshot, error) {
 	return out, nil
 }
 
-func powerRestoreSnapshot(configPath, snapshotPath string) error {
+func powerRestoreSnapshot(configPath, snapshotPath string) ([]byte, error) {
 	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(filepath.Ext(configPath), ".json") {
+		var raw map[string]json.RawMessage
+		var user UserConfig
+		if json.Unmarshal(data, &raw) != nil || raw == nil || json.Unmarshal(data, &user) != nil {
+			return nil, errors.New("snapshot is not a valid settings file")
+		}
+	}
+	if err := AtomicWrite(configPath, data, 0644); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// powerRestoreUserSnapshot installs a config-history snapshot in memory as
+// well as on disk. Otherwise the next playtime or favorites save can overwrite
+// the restored file with settings still held by the running session.
+func powerRestoreUserSnapshot(config *Config, snapshotPath string) error {
+	if config == nil {
+		return errors.New("no configuration is loaded")
+	}
+	next, _, err := LoadXMLConfigWithFallback("jukaconfig.json")
+	if err != nil {
+		return fmt.Errorf("load layout before settings restore: %w", err)
+	}
+	if err := NewConfigValidator().Validate(next); err != nil {
+		return fmt.Errorf("validate layout before settings restore: %w", err)
+	}
+	flushPendingUserConfig()
+	data, err := powerRestoreSnapshot("jukauser.json", snapshotPath)
 	if err != nil {
 		return err
 	}
-	if strings.EqualFold(filepath.Ext(configPath), ".json") && !json.Valid(data) {
-		return errors.New("snapshot is not valid JSON")
+	var restored UserConfig
+	if err := json.Unmarshal(data, &restored); err != nil {
+		return fmt.Errorf("parse settings snapshot: %w", err)
 	}
-	return AtomicWrite(configPath, data, 0644)
+	if restored.Variables.Custom == nil {
+		restored.Variables.Custom = map[string]interface{}{}
+	}
+	userConfigCache = &restored
+	userConfigNoteLatest(data)
+	if fresh := applyConfigReload(config, next); fresh != nil && fresh != config {
+		*config = *fresh
+		appConfig = config
+	}
+	bkupReloadStores(config)
+	return nil
 }
 
 // powerDiffLines returns a compact line diff. Only changed lines are shown;

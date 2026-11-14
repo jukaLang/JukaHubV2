@@ -517,11 +517,14 @@ func xpackResolveAsset(dir, rel string, exts []string, maxBytes int64) (string, 
 	if dir == "" {
 		return "", errors.New("a built-in pack carries no files")
 	}
-	path, err := resolveWithinRoot(dir, rel)
+	path, err := confinedRegularFile(dir, rel)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", errors.New("file not found")
+		}
 		return "", errors.New("is outside the pack")
 	}
-	info, err := os.Stat(path)
+	info, err := statUserFile(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", errors.New("file not found")
 	}
@@ -553,7 +556,12 @@ func xpackLoadThemeFile(dir, rel string) (ThemePreset, error) {
 	if err != nil {
 		return ThemePreset{}, err
 	}
-	data, err := os.ReadFile(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return ThemePreset{}, errors.New("cannot be read")
+	}
+	defer root.Close()
+	data, err := root.ReadFile(filepath.Base(path))
 	if err != nil {
 		return ThemePreset{}, errors.New("cannot be read")
 	}

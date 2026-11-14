@@ -40,6 +40,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"math/bits"
 	"os"
 	"os/exec"
@@ -647,7 +648,14 @@ func bzParseRSSI(value string) int {
 	}
 	if hex, ok := strings.CutPrefix(value, "0x"); ok {
 		if u, err := strconv.ParseUint(hex, 16, 32); err == nil {
-			return int(int32(uint32(u)))
+			n := int64(u)
+			if u >= 1<<31 {
+				n -= 1 << 32
+			}
+			if n < math.MinInt32 || n > math.MaxInt32 {
+				return 0
+			}
+			return int(n)
 		}
 	}
 	return 0

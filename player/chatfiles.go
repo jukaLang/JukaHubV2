@@ -407,7 +407,7 @@ func chatPathOnDevice(path string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
-	info, err := os.Stat(path)
+	info, err := statUserFile(path)
 	return err == nil && info.Mode().IsRegular()
 }
 
@@ -483,7 +483,7 @@ func chatStageFile(tab chatTab, path string) error {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
-	info, err := os.Stat(path)
+	info, err := statUserFile(path)
 	if err != nil {
 		return fmt.Errorf("%s can't be read", filepath.Base(path))
 	}
@@ -1558,7 +1558,7 @@ var errChatNotText = errors.New("not a text file")
 // (a Windows log with a stray "é"): Juka is shown that with the odd bytes
 // replaced, where the editor must not rewrite them.
 func chatLooksBinary(path string) (bool, error) {
-	f, err := os.Open(path)
+	f, err := openUserFile(path)
 	if err != nil {
 		return false, err
 	}
@@ -1587,7 +1587,7 @@ func chatAIFileExcerpt(path string, budget int) (string, error) {
 	if budget <= 0 {
 		budget = chatAIExcerptBudget
 	}
-	f, err := os.Open(path)
+	f, err := openUserFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -1689,6 +1689,12 @@ func chatAIFileContext(prompt ChatMessage, history []ChatMessage) (string, error
 	for _, f := range files {
 		if f.Path == "" || visionKindOf(f) != visionNone {
 			continue // pictures, videos and recordings are seen and heard (vision_chat.go)
+		}
+		if !chatPathTrusted(f.Path) {
+			if earlier {
+				continue
+			}
+			return "", fmt.Errorf("can't read %s: the file is not one from this device", f.Name)
 		}
 		text, err := chatAIFileExcerpt(f.Path, budget)
 		if err != nil {

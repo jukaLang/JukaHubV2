@@ -202,7 +202,10 @@ func AtomicWrite(filename string, data []byte, perm os.FileMode) error {
 	// change the user just made.
 	if previous, err := os.ReadFile(filename); err == nil {
 		if err := writeFileSynced(filename+".bak", previous, perm); err != nil {
-			Log().Warn("config backup could not be written", "path", filename+".bak", "err", err)
+			// AtomicWrite can carry document paths whose names are themselves
+			// user data. The backup is best-effort, so report only the failure,
+			// not the path or an error string that may quote it.
+			Log().Warn("config backup could not be written")
 		}
 	}
 

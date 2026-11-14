@@ -986,8 +986,12 @@ func termList(args []string) {
 		dir := e.IsDir()
 		if !dir && e.Type()&os.ModeSymlink != 0 {
 			// A link to a folder is listed as a folder, like ls -p does.
-			if info, statErr := os.Stat(filepath.Join(target, e.Name())); statErr == nil && info.IsDir() {
-				dir = true
+			if root, rootErr := os.OpenRoot(target); rootErr == nil {
+				info, statErr := root.Stat(e.Name())
+				root.Close()
+				if statErr == nil && info.IsDir() {
+					dir = true
+				}
 			}
 		}
 		items = append(items, item{name: e.Name(), dir: dir})

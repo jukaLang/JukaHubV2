@@ -34,15 +34,47 @@ const partyMaxBody = 16 << 10
 // partyRequestURLRE is deliberately narrow: the party transport only ever
 // speaks http to a host and an /api/party/ endpoint. Keeping the shape here
 // makes a malformed invite fail before it can reach the HTTP client.
-var partyRequestURLRE = regexp.MustCompile(`^http://(?:[A-Za-z0-9][A-Za-z0-9.-]{0,252}|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?/api/party/[A-Za-z0-9._~/?=&%+-]*$`)
+var partyRequestURLRE = regexp.MustCompile(`^http://(?:[A-Za-z0-9][A-Za-z0-9.-]{0,252}|\[[0-9A-Fa-f:.]*(?:%25[A-Za-z0-9._-]+)?\])(?::[0-9]{1,5})?/api/party/[A-Za-z0-9._~/?=&%+-]*$`)
 var partyHostnameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,252}$`)
+
+// partyMetadataIPs are the cloud metadata services, which are deliberately
+// not treated as LAN even when they use a link-local or private address.
+var partyMetadataIPs = []net.IP{
+	net.ParseIP("169.254.169.254"), // AWS, GCP, Azure, OpenStack
+	net.ParseIP("169.254.170.2"),   // ECS task metadata
+	net.ParseIP("100.100.100.200"), // Alibaba Cloud
+	net.ParseIP("fd00:ec2::254"),   // AWS IPv6 metadata
+}
+
+func partyHostIP(host string) net.IP {
+	if cut := strings.LastIndex(host, "%"); cut > 0 && cut < len(host)-1 {
+		if ip := net.ParseIP(host[:cut]); ip != nil {
+			return ip
+		}
+	}
+	return net.ParseIP(host)
+}
+
+func partyMetadataIP(ip net.IP) bool {
+	for _, metadata := range partyMetadataIPs {
+		if ip.Equal(metadata) {
+			return true
+		}
+	}
+	return false
+}
 
 func partyHostAllowed(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "" {
 		return false
 	}
-	if ip := net.ParseIP(host); ip != nil {
+	if ip := partyHostIP(host); ip != nil {
+		// Link-local is legitimate for direct/ad-hoc play (169.254/16 and
+		// fe80::/10), but cloud metadata services are exact hostile targets.
+		if partyMetadataIP(ip) {
+			return false
+		}
 		return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
 	}
 	if !partyHostnameRE.MatchString(host) {
@@ -56,7 +88,10 @@ func partySafeRequestURL(raw string) (string, error) {
 		return "", errors.New("the party address is not a safe local HTTP endpoint")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || !partyHostAllowed(u.Hostname()) {
+	if err != nil || u.User != nil || !partyHostAllowed(u.Hostname()) {
+		return "", errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	if strings.Contains(u.Path, "..") || strings.Contains(u.RawPath, "..") {
 		return "", errors.New("the party address is not a safe local HTTP endpoint")
 	}
 	return raw, nil
@@ -422,12 +457,16 @@ func newPartyHTTP() *http.Client {
 	return &http.Client{Timeout: 2500 * time.Millisecond}
 }
 
+// partyHTTPFactory is a seam for the loopback integration test. Production
+// callers always get newPartyHTTP.
+var partyHTTPFactory = newPartyHTTP
+
 func newPartyClient(baseURL, code, memberID string) *partyClient {
 	return &partyClient{
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		code:     strings.ToUpper(strings.TrimSpace(code)),
 		memberID: memberID,
-		http:     newPartyHTTP(),
+		http:     partyHTTPFactory(),
 	}
 }
 
@@ -442,7 +481,7 @@ func partyNormalizeBase(raw string) (string, error) {
 		raw = "http://" + raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.User != nil {
 		return "", errors.New("that does not look like an address")
 	}
 	if u.Scheme != "http" {
@@ -459,7 +498,10 @@ func partyNormalizeBase(raw string) (string, error) {
 	if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
 		return "", errors.New("bad port in the address")
 	}
-	return "http://" + net.JoinHostPort(host, port), nil
+	if strings.Contains(u.Path, "..") || strings.Contains(u.RawPath, "..") {
+		return "", errors.New("the party address must not contain a path traversal")
+	}
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}).String(), nil
 }
 
 // partyParseInvite reads what the host shows: "192.168.1.5:8318 ABCD1".

@@ -841,26 +841,6 @@ the builds the updater installs.
 **Done when.** One release workflow (see REL-8); PRs build artifacts but never
 tag.
 
-### FIX-15 — Restores and reloads still start from the boot copy of the settings (P1, S) [WIN]
-**Why.** `userConfigCache.Variables` is the copy read at boot and no save
-updates it; since 2026-11-11 a favourites/chat save writes the newest full
-save's settings (`userConfigLatest`, `extras.go`) instead of it, but three paths
-still build on it. A backup restore (`bkup.go` `bkupCommit`: `current :=
-loadUserConfig()`, then `bkupMergeUser` keeps the categories not restored from
-it) and Recovery's "Reset settings" / last-good restore (`recoverysettings.go`
-`recoveryResetUser`, Fullscreen and the device keys) lose what changed in the
-session, playtime and trophies included. `reloadUserConfigFromDisk` falls back
-to the cache when the read fails (a Windows scanner holding the file), and the
-hot reload merges that. Power tools' config-history restore sets
-`userConfigCache = nil` and asks for a restart, but the exit's `playtimeFlush`
-writes the live config over the restored file first.
-**Done when.** A restore merges against the live config
-(`userConfigFromVariables(config)`, detached, with `playtime.data` written into
-it first); a failed reload read uses a JSON clone of `userConfigLatestVars()`;
-the history restore applies live (`mergeUserConfig(appConfig,
-reloadUserConfigFromDisk())` and a full save) or skips the exit's saves; a case
-in `config_persist_test.go` covers the restore merge.
-
 ---
 
 ## Performance (PERF)

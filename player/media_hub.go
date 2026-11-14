@@ -32,7 +32,6 @@ package main
 // that player itself.
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
@@ -78,13 +77,6 @@ const (
 	// mediaSearchWait bounds the "Searching…" state when a search never
 	// reports back (the search itself is bounded by mediaSearchTimeout).
 	mediaSearchWait = 90 * time.Second
-	// mediaHubPHQuery is the search command for the "vault" tab's default list.
-	// The name is intentionally vague ("vault") in the UI and code to keep the
-	// feature's purpose unclear on a quick scan of the binary or config.
-	// yt-dlp's built-in extractor handles the site by domain, so the search
-	// prefix here is just ytsearch like any other: the extractor is what knows
-	// the destination.
-	mediaPHQuery = "vault_top"
 )
 
 // mediaTab is one chip of the strip.
@@ -101,7 +93,6 @@ const (
 	mediaTabLibrary
 	mediaTabLiveTV
 	mediaTabPodcasts
-	mediaTabPH
 	mediaTabCount
 )
 
@@ -127,8 +118,6 @@ func mediaTabLabel(t mediaTab) string {
 		return "Live TV"
 	case mediaTabPodcasts:
 		return "Podcasts"
-	case mediaTabPH:
-		return "Vault"
 	}
 	return "For you"
 }
@@ -153,8 +142,6 @@ func mediaTabIcon(t mediaTab) string {
 		return "globe"
 	case mediaTabPodcasts:
 		return "mic"
-	case mediaTabPH:
-		return "filmstrip"
 	}
 	return "home"
 }
@@ -165,7 +152,7 @@ func mediaTabShortcut(t mediaTab) bool { return t == mediaTabLiveTV || t == medi
 // mediaTabNeedsNetwork reports a tab whose list only exists online.
 func mediaTabNeedsNetwork(t mediaTab) bool {
 	switch t {
-	case mediaTabTrending, mediaTabShorts, mediaTabLiveTV, mediaTabPodcasts, mediaTabPH:
+	case mediaTabTrending, mediaTabShorts, mediaTabLiveTV, mediaTabPodcasts:
 		return true
 	}
 	return false
@@ -555,9 +542,6 @@ func mediaHubEnter(config *Config) {
 	if mediaHub.tab == mediaTabShorts {
 		mediaHubLoadShorts(config)
 	}
-	if mediaHub.tab == mediaTabPH {
-		mediaHubLoadFeed(config, false)
-	}
 	// An old yt-dlp is the usual reason YouTube stops loading videos. Opening
 	// Media is when to look, in the background and at most twice a day
 	// (ytdlp_update.go); the native search above needs no helper meanwhile.
@@ -672,7 +656,7 @@ func mediaHubTick(config *Config) {
 // mediaTabOrder is the strip after the Results chip, a fixed array so building
 // the strip every frame allocates nothing.
 var mediaTabOrder = [...]mediaTab{mediaTabForYou, mediaTabTrending, mediaTabShorts, mediaTabDownloads,
-	mediaTabHistory, mediaTabFavorites, mediaTabLibrary, mediaTabLiveTV, mediaTabPodcasts, mediaTabPH}
+	mediaTabHistory, mediaTabFavorites, mediaTabLibrary, mediaTabLiveTV, mediaTabPodcasts}
 
 // mediaHubTabs returns the chips in strip order. Results joins the strip once a
 // search has run.
@@ -724,11 +708,6 @@ func mediaHubSelectTab(config *Config, t mediaTab, sound bool) {
 	if t == mediaTabShorts && config != nil {
 		if vids, _ := config.Variables.Custom[mediaShortsVar].([]VideoInfo); len(vids) == 0 {
 			mediaHubLoadShorts(config)
-		}
-	}
-	if t == mediaTabPH && config != nil {
-		if vids, _ := config.Variables.Custom[mediaPHQuery].([]VideoInfo); len(vids) == 0 {
-			mediaHubLoadFeed(config, false)
 		}
 	}
 	if t == mediaTabDownloads {
@@ -803,56 +782,6 @@ func mediaHubCommand(config *Config, query string) string {
 	return base
 }
 
-// encodedSiteURL is the base64-encoded URL for the Vault tab.
-// Decoding it at runtime avoids the plaintext URL appearing in strings
-// dumps, greps, or binary scans. The decoded value is the site yt-dlp
-// will query; swap the encoded value below to retarget the tab.
-//
-// Current URL: RedGifs search (tags=Test)
-//
-// RedGifs extractor (RedGifsSearchIE) supports search/listings via
-// --flat-playlist. URL format: /browse?tags=QUERY
-//
-// The Vault tab supports search: when on the Vault tab and the user searches
-// (via the search bar or keyboard), the query is sent to RedGifs as a tags=
-// parameter instead of YouTube search. The search query is stored in the
-// vault_search_query config variable.
-//
-// RedGifs URL examples (encode these to replace encodedSiteURL):
-//   - Search (test):       aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9VGVzdA==
-//   - Search (Lesbian):    aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9TGVzYmlhbg==
-//   - Search (Girl):       aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9R2lybA==
-//   - Search (Hot):        aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9SG90
-//   - Search (Cute):       aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9Q3V0ZQ==
-//   - Search (Anime):      aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9QW5pbWU=
-//   - Browse (no filter):  aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3Nl  (may need tags param)
-//
-// PornHub URL examples (also works but may show SFW/censored):
-//   - Search (maiko):     aHR0cHM6Ly93d3cucG9ybmh1Yi5jb20vdmlkZW8vc2VhcmNoP3NlYXJjaD1tYWlrbyZvPW12
-//
-// Other sites - extractors exist but do NOT support search/listings:
-//   - xvideos.com:        aHR0cHM6Ly93d3cueHZpZGVvcy5jb20= (video pages only)
-//   - xnxx.com:           aHR0cHM6Ly93d3cueG54eC5jb20= (video pages only)
-//   - xhamster.com:       aHR0cHM6Ly93d3cueGhhbXN0ZXIuY29t (video pages only)
-//
-// Other site URL examples:
-//   - PornHub front page: aHR0cHM6Ly93d3cucG9ybmh1Yi5jb20=
-//   - PornHub search:     aHR0cHM6Ly93d3cucG9ybmh1Yi5jb20vdmlkZW8vc2VhcmNoP3NlYXJjaD1tYWlrbyZvPW12
-//   - PornHub model:      https://www.pornhub.com/model/USERNAME/videos
-
-const encodedSiteURL = "aHR0cHM6Ly93d3cucmVkZ2lmcy5jb20vYnJvd3NlP3RhZ3M9QXNpYW4=" // https://www.redgifs.com/browse?tags=Asian
-
-// decodeSiteURL decodes the base64-encoded site URL at runtime, so the plaintext
-// URL never appears in strings dumps, greps, or binary scans.
-func decodeSiteURL() string {
-	dec, err := base64.StdEncoding.DecodeString(encodedSiteURL)
-	if err != nil || len(dec) == 0 {
-		logError("vault", "bad site URL encoding: %v", err)
-		return ""
-	}
-	return string(dec)
-}
-
 // mediaTrendingLoadedAt is when the Trending list was last requested.
 var mediaTrendingLoadedAt time.Time
 
@@ -881,38 +810,6 @@ func mediaHubLoadShorts(config *Config) {
 	fetchYouTubeShorts(config, mediaShortsVar, snapshotVars(config))
 }
 
-// mediaHubVaultSearchQuery is the Vault tab's search field variable.
-var mediaHubVaultSearchQuery = "vault_search_query"
-
-// mediaHubLoadedAt is when the Vault feed was last requested.
-var mediaHubLoadedAt time.Time
-
-// mediaHubLoadFeed fetches the first page of the Vault tab into mediaPHQuery.
-// This is the refresh path when the user opens the tab or pulls to refresh.
-// The site's JSON API is asked directly (vault_redgifs.go): its tags=
-// parameter filters for real, where yt-dlp's browse extractor dropped it and
-// answered with the same unfiltered page for every query.
-func mediaHubLoadFeed(config *Config, force bool) {
-	if config == nil || !IsOnline() {
-		return
-	}
-	// Check if there's a Vault search query - if so, always reload since the URL changes
-	vaultQuery, hasVaultQuery := config.Variables.Custom[mediaHubVaultSearchQuery].(string)
-	if hasVaultQuery && strings.TrimSpace(vaultQuery) != "" {
-		// If we have a vault query, clear cached results and always reload
-		delete(config.Variables.Custom, mediaPHQuery)
-		force = true
-	}
-	if vids, _ := config.Variables.Custom[mediaPHQuery].([]VideoInfo); len(vids) > 0 && !force &&
-		time.Since(mediaHubLoadedAt) < mediaTrendingStale {
-		return
-	}
-	mediaHubLoadedAt = time.Now()
-	// The site's own JSON API answers faster than the extractor and filters by
-	// the tag for real (vault_redgifs.go); yt-dlp is left to playback.
-	mediaHubLoadVaultFeed(config, vaultFeedQuery(config))
-}
-
 // mediaHubTabVar is the results variable behind a paged tab.
 func mediaHubTabVar(t mediaTab) string {
 	switch t {
@@ -920,8 +817,6 @@ func mediaHubTabVar(t mediaTab) string {
 		return mediaResultsVar
 	case mediaTabTrending:
 		return mediaTrendingVar
-	case mediaTabPH:
-		return mediaPHQuery
 	}
 	return ""
 }
@@ -956,13 +851,6 @@ func mediaHubLoadMore(config *Config, quiet bool) bool {
 		return true
 	}
 	next := state.page + 1
-	// A Vault list pages through the site's API, not through a rewritten
-	// yt-dlp search: the remembered command names the tag it was built for.
-	if tag, ok := vaultQueryFromPagingCommand(state.command); ok {
-		markMediaPageRequested(resultVar, next)
-		mediaHubLoadVaultPage(config, tag, next+1, true)
-		return true
-	}
 	command := buildMediaPageCommand(state.command, state.pageSize, next)
 	markMediaPageRequested(resultVar, next)
 	mediaExecutePage(config, command, resultVar, snapshotVars(config), true)
@@ -1014,10 +902,6 @@ func mediaHubInterceptSearch(config *Config, trigger string) bool {
 	if !mediaHubIsCurrent(config) {
 		return false
 	}
-	// Handle vault_search trigger: switch to Vault tab and search
-	if trigger == "vault_search" {
-		return mediaHubVaultSearchIntercept(config, trigger)
-	}
 	switch trigger {
 	case "youtube_smart", "youtube_search":
 		// Get the query first
@@ -1028,48 +912,11 @@ func mediaHubInterceptSearch(config *Config, trigger string) bool {
 		if query == "" {
 			return true
 		}
-		// If on Vault tab, redirect search to Vault instead of YouTube
-		if mediaHub.tab == mediaTabPH {
-			// Set the Vault search query and clear previous results
-			config.Variables.Custom[mediaHubVaultSearchQuery] = query
-			delete(config.Variables.Custom, mediaPHQuery)
-			// Stay on Vault tab and load the search results
-			config.Variables.LoadingSpinner = true
-			config.Variables.SpinnerText = "Loading videos..."
-			mediaHubLoadFeed(config, false)
-			return true
-		}
-		// Otherwise do normal YouTube search
 		mediaHubRunSearch(config, query)
 		return true
 	default:
 		return false
 	}
-}
-
-// mediaHubVaultSearchIntercept handles the vault_search button trigger.
-// When the Vault button is pressed, it switches to the Vault tab and searches.
-func mediaHubVaultSearchIntercept(config *Config, trigger string) bool {
-	if !mediaHubIsCurrent(config) {
-		return false
-	}
-	if trigger != "vault_search" {
-		return false
-	}
-	query := ""
-	if v, ok := config.Variables.Custom["search_query"].(string); ok {
-		query = strings.TrimSpace(v)
-	}
-	// Set the Vault search query BEFORE switching tabs so mediaHubSelectTab
-	// picks it up when it calls mediaHubLoadFeed.
-	if query != "" {
-		config.Variables.Custom[mediaHubVaultSearchQuery] = query
-		// Clear previous results so the feed reloads with the new query
-		delete(config.Variables.Custom, mediaPHQuery)
-	}
-	// Switch to Vault tab - this will call mediaHubLoadFeed with the query set
-	mediaHubSelectTab(config, mediaTabPH, true)
-	return true
 }
 
 // mediaHubRunSearch runs one query from the search bar or a recent chip.
@@ -1111,21 +958,6 @@ func mediaHubRunSearch(config *Config, query string) {
 	executeYouTubeSearchFresh(config, mediaHubCommand(config, "$search_query"), mediaResultsVar, snapshotVars(config))
 	mediaHubSelectTab(config, mediaTabSearch, false)
 	mediaHub.zone = mediaZoneContent
-}
-
-// mediaHubVaultSearch runs a search on the Vault tab's site (RedGifs).
-// It stores the query in the vault_search_query variable and reloads the feed.
-func mediaHubVaultSearch(config *Config, query string) {
-	query = strings.TrimSpace(query)
-	if query == "" || config == nil {
-		return
-	}
-	config.Variables.Custom[mediaHubVaultSearchQuery] = query
-	// Clear previous results and error
-	delete(config.Variables.Custom, mediaPHQuery)
-	delete(config.Variables.Custom, "vault_error")
-	mediaHub.searchPending = true
-	mediaHubLoadFeed(config, false)
 }
 
 // mediaHubLocalSearch filters the downloads by title and channel.
@@ -1678,12 +1510,6 @@ func mediaHubBuildGrid(config *Config, ctx mediaCardContext, t mediaTab) []media
 			if v, ok := it.Data.(VideoInfo); ok {
 				cards = append(cards, mediaCardFromVideo(v, ctx))
 			}
-		}
-	case mediaTabPH:
-		vids, _ := config.Variables.Custom[mediaPHQuery].([]VideoInfo)
-		cards = make([]mediaCard, 0, len(vids))
-		for _, v := range vids {
-			cards = append(cards, mediaCardFromVideo(v, ctx))
 		}
 	}
 	return cards

@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -141,15 +142,13 @@ func musicParseM3U8(data []byte, baseDir string) ([]musicPlaylistEntry, int) {
 		}
 		p := line
 		if !isHTTPMediaURL(p) && !strings.Contains(p, "://") {
-			if !filepath.IsAbs(p) {
-				p = filepath.Join(baseDir, filepath.FromSlash(p))
-			}
-			p = filepath.Clean(p)
-			if _, err := os.Stat(p); err != nil {
+			resolved, err := confinedRegularFile(baseDir, filepath.FromSlash(p))
+			if err != nil {
 				missing++
 				title, duration = "", 0
 				continue
 			}
+			p = resolved
 		}
 		name := strings.TrimSpace(title)
 		if name == "" {
@@ -189,7 +188,12 @@ func musicPlaylistExport(name, dir string) (string, error) {
 // musicPlaylistImport reads an M3U8 into the saved store, replacing a playlist
 // of the same name. name overrides the file's base name when it is not empty.
 func musicPlaylistImport(path, name string) (musicPlaylist, int, error) {
-	data, err := os.ReadFile(path)
+	f, err := openUserFile(path)
+	if err != nil {
+		return musicPlaylist{}, 0, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return musicPlaylist{}, 0, err
 	}

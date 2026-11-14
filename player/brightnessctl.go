@@ -43,6 +43,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -169,6 +170,20 @@ var brightnessFirmwareCurve [trimuiBrightnessSteps + 1]atomic.Int32
 // learning its own guess, and a driver that reports a level one past the one
 // it was given would walk the curve up a little with every write.
 var brightnessLastRaw atomic.Int32
+
+// brightnessRawAtomic keeps an untrusted backlight reading representable by
+// the cache. sysfs accepts any integer, while the cache and its consumers are
+// int32; clamping here prevents a malformed max_brightness from wrapping a
+// value negative when it is stored.
+func brightnessRawAtomic(raw int) int32 {
+	if raw < 0 {
+		raw = 0
+	}
+	if raw > math.MaxInt32 {
+		raw = math.MaxInt32
+	}
+	return int32(raw)
+}
 
 // statusBrightnessAvailable decides whether the status cluster shows the sun.
 // A variable so a render test can pin it on any host.
@@ -419,7 +434,7 @@ func setScreenBrightnessVia(b string, pct int) error {
 	switch b {
 	case brightnessBackendDisp:
 		raw := brightnessRawForLevel(b, pct, dispBrightnessMax)
-		brightnessLastRaw.Store(int32(raw))
+		brightnessLastRaw.Store(brightnessRawAtomic(raw))
 		return dispSetBrightnessRaw(raw)
 	case brightnessBackendSysfs:
 		// Only the scale is needed: a backlight whose level cannot be read can
@@ -429,7 +444,7 @@ func setScreenBrightnessVia(b string, pct int) error {
 			return err
 		}
 		raw := brightnessRawForLevel(b, pct, max)
-		brightnessLastRaw.Store(int32(raw))
+		brightnessLastRaw.Store(brightnessRawAtomic(raw))
 		return sysfsSetBacklightRaw(raw)
 	case brightnessBackendWMI:
 		return wmiSetBrightness(pct)
@@ -482,7 +497,7 @@ func brightnessLearnFirmwareStep(step, raw int) {
 	if step < 0 || step > trimuiBrightnessSteps || raw <= 0 {
 		return
 	}
-	brightnessFirmwareCurve[step].Store(int32(raw))
+	brightnessFirmwareCurve[step].Store(brightnessRawAtomic(raw))
 }
 
 // ── The cache ──────────────────────────────────────────────────────────────

@@ -347,6 +347,11 @@ func gameResetStateSubdirs(romPath string, cores []string) []string {
 // folder, and inside a states folder only in this game's core and content
 // sub-folders (gameResetStateSubdirs).
 func gameResetStateFiles(romPath string, cores []string) []gameResetFile {
+	safe, err := safeAbsolutePath(romPath)
+	if err != nil {
+		return nil
+	}
+	romPath = safe
 	stem := gameResetStem(romPath)
 	if stem == "" {
 		return nil
@@ -482,7 +487,7 @@ func resetTrashMove(src, dst string) error {
 	if dst, err = safeAbsolutePath(dst); err != nil {
 		return err
 	}
-	if strings.Contains(src, "..") || strings.Contains(dst, "..") {
+	if pathHasParentComponent(src) || pathHasParentComponent(dst) {
 		return os.ErrInvalid
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -667,7 +672,7 @@ func runGameReset(game libraryGame, states bool) {
 					continue
 				}
 				statePath, pathErr := safeAbsolutePath(f.Path)
-				if pathErr == nil && !strings.Contains(statePath, "..") {
+				if pathErr == nil && !pathHasParentComponent(statePath) {
 					if _, err := os.Lstat(statePath); os.IsNotExist(err) {
 						movedStates = true
 						break

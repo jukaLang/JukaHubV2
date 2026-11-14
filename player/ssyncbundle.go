@@ -815,6 +815,9 @@ func ssyncImportApply(ctx context.Context, prev ssyncImportPreview, passphrase s
 			return ssyncResult{}, ssyncBundleErr(err)
 		}
 		key := strings.TrimPrefix(h.Name, "files/")
+		if !ssyncValidBaseKey(key) {
+			return ssyncResult{}, errors.New("the file names an unsafe save path")
+		}
 		want, ok := need[key]
 		if !ok || key == h.Name {
 			continue

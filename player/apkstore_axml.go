@@ -142,6 +142,30 @@ type apkManifest struct {
 	SplitsRequired bool
 }
 
+const (
+	apkxMaxSDK  = int64(1 << 20)
+	apkxMaxGLES = int64(1<<32 - 1)
+)
+
+// apkxSDKValue bounds a manifest SDK attribute before it is narrowed to int.
+// Android API levels are small, so anything outside this range is malformed
+// input rather than a value worth retaining.
+func apkxSDKValue(n int64) (int, bool) {
+	if n < 0 || n > apkxMaxSDK {
+		return 0, false
+	}
+	return int(n), true
+}
+
+// apkxGLESValue bounds glEsVersion before it is narrowed to uint32. The field
+// stores a 32-bit version word (0x00030000 for OpenGL ES 3.0).
+func apkxGLESValue(n int64) (uint32, bool) {
+	if n <= 0 || n > apkxMaxGLES {
+		return 0, false
+	}
+	return uint32(n), true
+}
+
 // apkxValue is one typed attribute value. Its strings stay pool indices until
 // text() asks for them, so an attribute nobody reads costs no decoding.
 type apkxValue struct {
@@ -597,18 +621,24 @@ func parseApkManifest(data []byte) (m apkManifest, err error) {
 		case "uses-sdk":
 			if v, ok := apkxAttrValue(attrs, "minSdkVersion"); ok {
 				if n, ok := v.integer(); ok {
-					m.MinSDK = int(n)
+					if sdk, ok := apkxSDKValue(n); ok {
+						m.MinSDK = sdk
+					}
 				}
 			}
 			if v, ok := apkxAttrValue(attrs, "targetSdkVersion"); ok {
 				if n, ok := v.integer(); ok {
-					m.TargetSDK = int(n)
+					if sdk, ok := apkxSDKValue(n); ok {
+						m.TargetSDK = sdk
+					}
 				}
 			}
 		case "uses-feature":
 			if v, ok := apkxAttrValue(attrs, "glEsVersion"); ok {
-				if n, ok := v.integer(); ok && n > 0 && uint32(n) > m.GLES {
-					m.GLES = uint32(n)
+				if n, ok := v.integer(); ok {
+					if gles, ok := apkxGLESValue(n); ok && gles > m.GLES {
+						m.GLES = gles
+					}
 				}
 			}
 		case "application":

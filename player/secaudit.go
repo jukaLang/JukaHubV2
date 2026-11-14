@@ -992,6 +992,11 @@ func auditExtractTree(ctx context.Context, archive, dest string) error {
 	prefix := auditCommonTopDir(zr.File)
 	const maxTotal = int64(2 << 30)
 	var total int64
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, f := range zr.File {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1004,12 +1009,9 @@ func auditExtractTree(ctx context.Context, archive, dest string) error {
 		if rel == "" {
 			continue
 		}
-		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if !isPathWithin(target, dest) {
-			return fmt.Errorf("%w (%s escapes the install folder)", errBadToolArchive, f.Name)
-		}
+		relPath := filepath.FromSlash(rel)
 		if f.FileInfo().IsDir() || strings.HasSuffix(name, "/") {
-			if err := os.MkdirAll(target, PermDir); err != nil {
+			if err := root.MkdirAll(relPath, PermDir); err != nil {
 				return err
 			}
 			continue
@@ -1022,10 +1024,12 @@ func auditExtractTree(ctx context.Context, archive, dest string) error {
 		if size < 0 || total > maxTotal {
 			return fmt.Errorf("%w (the archive unpacks to more than %d MB)", errBadToolArchive, maxTotal>>20)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), PermDir); err != nil {
-			return err
+		if parent := filepath.Dir(relPath); parent != "." {
+			if err := root.MkdirAll(parent, PermDir); err != nil {
+				return err
+			}
 		}
-		if err := auditWriteZipEntry(ctx, f, target, size); err != nil {
+		if err := auditWriteZipEntry(ctx, f, root, relPath, size); err != nil {
 			return err
 		}
 	}
@@ -1034,7 +1038,7 @@ func auditExtractTree(ctx context.Context, archive, dest string) error {
 
 // auditWriteZipEntry writes one member; empty files are fine here (a Python
 // package's __init__.py usually is).
-func auditWriteZipEntry(ctx context.Context, f *zip.File, target string, size int64) error {
+func auditWriteZipEntry(ctx context.Context, f *zip.File, root *os.Root, rel string, size int64) error {
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("%w (%s: %v)", errBadToolArchive, f.Name, err)
@@ -1044,7 +1048,7 @@ func auditWriteZipEntry(ctx context.Context, f *zip.File, target string, size in
 	if f.Mode()&0o111 != 0 {
 		perm = PermExec
 	}
-	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	out, err := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}
@@ -1056,7 +1060,7 @@ func auditWriteZipEntry(ctx context.Context, f *zip.File, target string, size in
 		err = fmt.Errorf("%w (%s ended after %d of %d bytes)", errBadToolArchive, f.Name, n, size)
 	}
 	if err != nil {
-		_ = os.Remove(target)
+		_ = root.Remove(rel)
 	}
 	return err
 }

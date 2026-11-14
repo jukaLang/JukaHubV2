@@ -1355,6 +1355,39 @@ func bkupDropPendingUserSave() {
 	pendingUserConfigDir = ""
 }
 
+// bkupCurrentUserConfig captures the settings and library sections that are
+// actually in use. The cached Variables are the boot copy; settings changed
+// since then live in config, and playtime can be newer still between saves.
+func bkupCurrentUserConfig(config *Config) *UserConfig {
+	cached := loadUserConfig()
+	current := userConfigFromVariables(config)
+	if current == nil {
+		return cached
+	}
+	current.Variables.Custom = bkupCopyMap(current.Variables.Custom)
+	if playtime.loaded {
+		current.Variables.Custom[playtimeCustomKey] = playtime.data
+	}
+	if cached != nil {
+		current.Favorites, current.Chat, current.JukaLand = cached.Favorites, cached.Chat, cached.JukaLand
+	}
+	return detachUserConfig(current)
+}
+
+// bkupMergeUserIntoLive replaces saved Custom keys when there is no design
+// config to reload. mergeUserConfig normally overlays them, which would leave
+// keys absent from the restored settings in memory for the next save to revive.
+func bkupMergeUserIntoLive(config *Config, user *UserConfig) {
+	custom := make(map[string]interface{})
+	for k, v := range config.Variables.Custom {
+		if volatileCustomVars[k] {
+			custom[k] = v
+		}
+	}
+	config.Variables.Custom = custom
+	mergeUserConfig(config, user)
+}
+
 // bkupCommit is the main-thread half of a restore: the user config is merged
 // and saved, the config reloaded the way a hot reload installs one (in place,
 // so every holder of the config sees it), and every store that keeps a copy
@@ -1376,7 +1409,7 @@ func bkupCommit(config *Config, res bkupRestoreResult) error {
 			backup.Variables.Custom = map[string]interface{}{}
 		}
 		bkupDropPendingUserSave()
-		current := loadUserConfig()
+		current := bkupCurrentUserConfig(config)
 		merged := bkupMergeUser(current, &backup, res.Cats, res.Manifest, bkupHereRoots())
 		// The cache takes the merged sections first: a save fills any section
 		// it is not given from the cache.
@@ -1390,7 +1423,7 @@ func bkupCommit(config *Config, res bkupRestoreResult) error {
 			appConfig = config
 		}
 	} else if res.HasUser {
-		mergeUserConfig(config, userConfigCache)
+		bkupMergeUserIntoLive(config, userConfigCache)
 		xpackRepaint(config)
 	}
 	bkupReloadStores(config)

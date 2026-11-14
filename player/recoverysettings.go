@@ -298,13 +298,13 @@ func recoveryResetSettings(ctx context.Context, appDir, appVersion string) bkupR
 // fullscreen switch and the device keys (button swap, screen size, model).
 // The library sections and the volume and brightness levels are kept by the
 // merge itself (bkupMergeUser). Main thread.
-func recoveryResetUser(shipped *Config) ([]byte, error) {
+func recoveryResetUser(shipped, live *Config) ([]byte, error) {
 	reset := userConfigFromVariables(shipped)
 	if reset == nil {
 		return nil, errors.New("no shipped settings")
 	}
 	reset.Variables.Custom = bkupCopyMap(reset.Variables.Custom)
-	if current := loadUserConfig(); current != nil {
+	if current := userConfigFromVariables(live); current != nil {
 		reset.Variables.Fullscreen = current.Variables.Fullscreen
 		for k, v := range current.Variables.Custom {
 			if bkupDeviceKey(k) {

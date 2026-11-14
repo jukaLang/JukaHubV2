@@ -376,8 +376,8 @@ func sttStartInstall(auto bool) bool {
 				installBarDoneRun(gen)
 				sttServeUpdateDue.Store(false)
 				// The next listen starts the new recognizer. Off the main thread:
-			// the server lock may be held by a start running vosk-cli --help.
-			go sttServeForget()
+				// the server lock may be held by a start running vosk-cli --help.
+				go sttServeForget()
 				if update {
 					ShowToast("Offline speech updated — Juka hears you faster now", ToastKindInfo)
 				} else if auto {

@@ -470,7 +470,7 @@ func recoveryFinishSettings(config *Config, res bkupRestoreResult, reset bool, g
 	if res.Err == nil && reset {
 		if res.Next == nil {
 			res.Err = fmt.Errorf("the shipped settings could not be read")
-		} else if data, err := recoveryResetUser(res.Next); err != nil {
+		} else if data, err := recoveryResetUser(res.Next, config); err != nil {
 			res.Err = err
 		} else {
 			res.UserData, res.HasUser = data, true

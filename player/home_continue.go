@@ -278,7 +278,7 @@ func homePlayRecent(config *Config, it FavoriteItem) {
 			return
 		}
 		if !isHTTPMediaURL(fe.Path) {
-			if _, err := os.Stat(fe.Path); err != nil {
+			if _, err := statUserFile(fe.Path); err != nil {
 				showToast("That song is no longer on this device: "+fe.Name, ToastWarn())
 				return
 			}

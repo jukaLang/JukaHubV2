@@ -909,6 +909,11 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Restores and reloads keep current settings.** Backup and Recovery now
+  merge against the live settings and playtime, a temporary read failure
+  keeps the latest saved values, and restoring a config-history snapshot
+  updates the running app before its next save. An explicit five-minute
+  screen timeout also survives a reload.
 - **Box art reached only the first consoles; numbered PSP ISOs got none.** The
   fetch walked the card in path order one cover at a time, so on a big card
   (8,700 games) it spent hours on 32X and NES and Super Nintendo, PSP and the

@@ -481,7 +481,7 @@ func launchPortScript(name, path string) {
 		shell = bash
 	}
 	logDebug("portmaster", "launching %s (%s via %s)", name, path, shell)
-	cmd := exec.Command(shell, path)
+	cmd := exec.Command(shell, "--", path)
 	cmd.Dir = filepath.Dir(path)
 	// The ALSA workaround and the CPU profile are scoped to this child: the
 	// environment is replaced for the port only, so JukaHub's own audio and the

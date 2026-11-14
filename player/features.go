@@ -479,26 +479,37 @@ func feEnterFocused(config *Config) {
 	}
 }
 
+// feScriptFile validates an explicitly selected shell script below the
+// explorer root. It resolves symlinks before the containment check, so a link
+// cannot turn a listed file into a script elsewhere on the card.
+func feScriptFile(config *Config, path string) (string, error) {
+	file, err := resolveExplorerEntry(config, path)
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.EvalSymlinks(feRoot(config))
+	if err != nil {
+		return "", err
+	}
+	file, err = filepath.EvalSymlinks(file)
+	if err != nil {
+		return "", err
+	}
+	if !isPathWithin(file, root) || !strings.EqualFold(filepath.Ext(file), ".sh") {
+		return "", fmt.Errorf("script is outside the Files root or has an unsupported type")
+	}
+	return file, nil
+}
+
 // feScriptCommand only accepts an explicitly selected shell script inside the
 // explorer root, resolving symlinks before starting it.
 func feScriptCommand(config *Config, path string) (*exec.Cmd, error) {
 	if runtime.GOOS == "windows" {
 		return nil, fmt.Errorf("shell scripts require Linux")
 	}
-	file, err := resolveExplorerEntry(config, path)
+	file, err := feScriptFile(config, path)
 	if err != nil {
 		return nil, err
-	}
-	root, err := filepath.EvalSymlinks(feRoot(config))
-	if err != nil {
-		return nil, err
-	}
-	file, err = filepath.EvalSymlinks(file)
-	if err != nil {
-		return nil, err
-	}
-	if !isPathWithin(file, root) || !strings.EqualFold(filepath.Ext(file), ".sh") {
-		return nil, fmt.Errorf("script is outside the Files root or has an unsupported type")
 	}
 	cmd := exec.Command("sh", "--", file)
 	cmd.Dir = filepath.Dir(file)

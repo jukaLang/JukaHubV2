@@ -1237,7 +1237,7 @@ func launchEmulatorEntry(e emuEntry) {
 		dir = filepath.Dir(retroArch)
 	case ext == ".sh" || ext == "":
 		// sh reads the launch script; the absolute path is an operand, not code.
-		cmd = exec.Command("sh", path)
+		cmd = exec.Command("sh", "--", path)
 	default:
 		cmd = exec.Command(path)
 	}

@@ -315,7 +315,9 @@ func bluealsaEnsure(addr string) bool {
 		}
 		outBluealsa.mu.Unlock()
 		if recent {
-			audioDiagSet(func() { audioDiag.bluealsa = "not running (JukaHub started it under a minute ago; it exited — see the log)" })
+			audioDiagSet(func() {
+				audioDiag.bluealsa = "not running (JukaHub started it under a minute ago; it exited — see the log)"
+			})
 			return false
 		}
 		bluealsaStart(path, []string{"-p", "a2dp-source"}, addr, "started")
@@ -409,7 +411,9 @@ func bluealsaPrestart() {
 func bluealsaStart(path string, args []string, addr, what string) {
 	if _, err := btStartDetached(path, args...); err != nil {
 		logWarn("audio", "bluealsa did not start: %v", err)
-		audioDiagSet(func() { audioDiag.bluealsa = fmt.Sprintf("not running; %s %s failed: %v", path, strings.Join(args, " "), err) })
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("not running; %s %s failed: %v", path, strings.Join(args, " "), err)
+		})
 		return
 	}
 	logInfo("audio", "bluealsa %s for the headset: %s %s", what, path, strings.Join(args, " "))

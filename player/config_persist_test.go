@@ -169,6 +169,193 @@ func TestSaveUserConfigPreservesSections(t *testing.T) {
 	}
 }
 
+func TestBackupMergeUsesLiveSettingsAndPlaytime(t *testing.T) {
+	keepUserConfigLatest(t)
+	prevCache, prevPlaytime := userConfigCache, playtime
+	t.Cleanup(func() { userConfigCache, playtime = prevCache, prevPlaytime })
+	userConfigCache = &UserConfig{
+		Variables: UserVariables{Volume: 42, VolumeSet: true, Custom: map[string]interface{}{
+			"theme_preset": "Boot", playtimeCustomKey: map[string]interface{}{"total": float64(10)},
+		}},
+		Favorites: &FavoritesStore{Videos: []FavoriteItem{{Type: "video"}}},
+	}
+	playtime = playtimeState{loaded: true, data: newPlaytimeData()}
+	playtime.data.Total = 77
+	live := &Config{}
+	live.Variables.Custom = map[string]interface{}{
+		"theme_preset": "Live", "recently_played": []interface{}{"Game"},
+	}
+	current := bkupCurrentUserConfig(live)
+	if current.Variables.Custom["theme_preset"] != "Live" || current.Variables.Volume != 42 || current.Favorites == nil {
+		t.Fatalf("current settings came from the boot cache: %+v", current)
+	}
+	backup := &UserConfig{Variables: UserVariables{Custom: map[string]interface{}{
+		"theme_preset": "Restored", playtimeCustomKey: map[string]interface{}{"total": float64(1)},
+	}}}
+	merged := bkupMergeUser(current, backup, map[string]bool{bkupCatSettings: true},
+		bkupManifest{Platform: P().Name()}, nil)
+	if merged.Variables.Custom["theme_preset"] != "Restored" {
+		t.Fatalf("restored theme = %v", merged.Variables.Custom["theme_preset"])
+	}
+	if got := merged.Variables.Custom[playtimeCustomKey].(map[string]interface{})["total"]; got != float64(77) {
+		t.Fatalf("live playtime was lost: %v", got)
+	}
+	if _, ok := merged.Variables.Custom["recently_played"]; !ok || merged.Favorites == nil {
+		t.Fatal("the current library was lost during a settings-only restore")
+	}
+	playtime.data.Total = 88
+	if got := merged.Variables.Custom[playtimeCustomKey].(map[string]interface{})["total"]; got != float64(77) {
+		t.Fatalf("the restore snapshot still shares live playtime: %v", got)
+	}
+}
+
+func TestBackupRestoreDoesNotReviveRemovedCustomSettings(t *testing.T) {
+	live := &Config{}
+	live.Variables.Custom = map[string]interface{}{
+		"old_setting": "should go", "search_results": "runtime only",
+	}
+	restored := &UserConfig{Variables: UserVariables{Custom: map[string]interface{}{
+		"theme_preset": "Restored",
+	}}}
+	bkupMergeUserIntoLive(live, restored)
+	if _, exists := live.Variables.Custom["old_setting"]; exists {
+		t.Fatal("the next save would revive a setting removed by the restore")
+	}
+	if live.Variables.Custom["search_results"] != "runtime only" ||
+		live.Variables.Custom["theme_preset"] != "Restored" {
+		t.Fatalf("restored or runtime values were lost: %+v", live.Variables.Custom)
+	}
+}
+
+func TestChosenFiveMinuteScreensaverSurvivesReload(t *testing.T) {
+	chosen := &Config{}
+	mergeUserConfig(chosen, &UserConfig{Variables: UserVariables{
+		ScreensaverTimeout: 300,
+		Custom:             map[string]interface{}{"screensaverTimeoutMigrated": true},
+	}})
+	if chosen.Variables.ScreensaverTimeout != 300 {
+		t.Fatalf("explicit five-minute choice became %d seconds", chosen.Variables.ScreensaverTimeout)
+	}
+	legacy := &Config{}
+	mergeUserConfig(legacy, &UserConfig{Variables: UserVariables{ScreensaverTimeout: 300}})
+	if legacy.Variables.ScreensaverTimeout != 25 || legacy.Variables.Custom["screensaverTimeoutMigrated"] != true {
+		t.Fatalf("legacy default was not migrated once: %+v", legacy.Variables)
+	}
+}
+
+func TestFailedUserConfigReloadKeepsLatestSave(t *testing.T) {
+	t.Chdir(t.TempDir())
+	keepUserConfigLatest(t)
+	prevCache := userConfigCache
+	t.Cleanup(func() { userConfigCache = prevCache })
+	userConfigCache = &UserConfig{
+		Variables: UserVariables{Custom: map[string]interface{}{"theme_preset": "Boot"}},
+		Favorites: &FavoritesStore{Videos: []FavoriteItem{{Type: "video"}}},
+	}
+	latest := UserConfig{Variables: UserVariables{ReducedMotion: true, Custom: map[string]interface{}{
+		"theme_preset": "Current", "nested": map[string]interface{}{"count": float64(2)},
+	}}}
+	data, err := json.Marshal(latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userConfigNoteLatest(data)
+	got := reloadUserConfigFromDisk() // jukauser.json does not exist here.
+	if !got.Variables.ReducedMotion || got.Variables.Custom["theme_preset"] != "Current" || got.Favorites == nil {
+		t.Fatalf("failed reload used stale settings or dropped sections: %+v", got)
+	}
+	got.Variables.Custom["nested"].(map[string]interface{})["count"] = float64(9)
+	if current := userConfigLatestVars().Custom["nested"].(map[string]interface{})["count"]; current != float64(2) {
+		t.Fatalf("reload changed the stored latest settings: %v", current)
+	}
+}
+
+func TestRecoveryResetKeepsLiveDeviceChoices(t *testing.T) {
+	shipped := &Config{}
+	shipped.Variables.Custom = map[string]interface{}{"theme_preset": "Shipped"}
+	live := &Config{}
+	live.Variables.Fullscreen = true
+	live.Variables.Custom = map[string]interface{}{
+		"theme_preset": "Live", "swapABButtons": true,
+	}
+	data, err := recoveryResetUser(shipped, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reset UserConfig
+	if err := json.Unmarshal(data, &reset); err != nil {
+		t.Fatal(err)
+	}
+	if !reset.Variables.Fullscreen || reset.Variables.Custom["swapABButtons"] != true ||
+		reset.Variables.Custom["theme_preset"] != "Shipped" {
+		t.Fatalf("reset kept the wrong settings: %+v", reset.Variables)
+	}
+}
+
+func TestConfigHistoryRestoreSurvivesExitSaves(t *testing.T) {
+	design, err := os.ReadFile("jukaconfig.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("jukaconfig.json", design, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	keepUserConfigLatest(t)
+	prevCache, prevPlaytime, prevConfig := userConfigCache, playtime, appConfig
+	prevWrites := userConfigWritesEnabled
+	userConfigWritesEnabled = true
+	t.Cleanup(func() {
+		userConfigCache, playtime, appConfig = prevCache, prevPlaytime, prevConfig
+		userConfigWritesEnabled = prevWrites
+	})
+	userConfigCache = &UserConfig{Variables: UserVariables{Custom: map[string]interface{}{"theme_preset": "Boot"}}}
+	live, _, err := LoadXMLConfigWithFallback("jukaconfig.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Variables.Custom["theme_preset"] = "Live"
+	playtime = playtimeState{loaded: true, data: newPlaytimeData(), lastTick: time.Now()}
+	playtime.data.Total = 99
+	snapshot := UserConfig{Variables: UserVariables{ReducedMotion: true, Custom: map[string]interface{}{
+		"theme_preset": "Snapshot", playtimeCustomKey: map[string]interface{}{"total": float64(7)},
+	}}}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("snapshot.json", data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := powerRestoreUserSnapshot(live, "snapshot.json"); err != nil {
+		t.Fatal(err)
+	}
+	if !live.Variables.ReducedMotion || live.Variables.Custom["theme_preset"] != "Snapshot" {
+		t.Fatalf("running settings did not receive the snapshot: %+v", live.Variables)
+	}
+	if playtime.data.Total != 7 {
+		t.Fatalf("playtime still holds the old session: %d", playtime.data.Total)
+	}
+	// The two writes at exit used to put the old session back over a restore.
+	playtimeFlush(live)
+	saveUserConfig(userConfigCache)
+	saved, err := os.ReadFile("jukauser.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got UserConfig
+	if err := json.Unmarshal(saved, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Variables.ReducedMotion || got.Variables.Custom["theme_preset"] != "Snapshot" {
+		t.Fatalf("exit save overwrote the restored settings: %+v", got.Variables)
+	}
+	pt := got.Variables.Custom[playtimeCustomKey].(map[string]interface{})
+	if pt["total"].(float64) < 7 || pt["total"].(float64) >= 99 {
+		t.Fatalf("exit save overwrote restored playtime: %v", pt["total"])
+	}
+}
+
 // A section save (favourites, chat) hands over the cached user config, whose
 // settings are the ones read at boot. It writes the newest full save's
 // settings instead: it used to put the boot copy back over every setting and

@@ -883,7 +883,7 @@ func dlDeleteEntryFiles(e dlLibraryEntry) {
 	if e.Path != "" && isPathWithin(e.Path, root) {
 		var err error
 		for attempt := 0; attempt < dlMoveAttempts; attempt++ {
-			if err = os.Remove(e.Path); err == nil || os.IsNotExist(err) {
+			if err = removeWithinRoot(root, e.Path); err == nil || os.IsNotExist(err) {
 				err = nil
 				break
 			}
@@ -897,7 +897,7 @@ func dlDeleteEntryFiles(e dlLibraryEntry) {
 		}
 	}
 	if e.ThumbFile != "" && isPathWithin(e.ThumbFile, root) {
-		_ = os.Remove(e.ThumbFile)
+		_ = removeWithinRoot(root, e.ThumbFile)
 	}
 	mediaNoteFreed()
 }
@@ -1019,11 +1019,11 @@ func dlLibraryNoteSaved(it downloadItem) {
 // dlTempLooksComplete reports whether a temp download is a whole file: present,
 // larger than an error page, and with no yt-dlp partial beside it.
 func dlTempLooksComplete(path string) bool {
-	info, err := os.Stat(path)
+	info, err := statUserFile(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() < downloadMinimumBytes(downloadKindVideo) {
 		return false
 	}
-	if _, err := os.Stat(path + ".part"); err == nil {
+	if _, err := statUserFile(path + ".part"); err == nil {
 		return false
 	}
 	return true

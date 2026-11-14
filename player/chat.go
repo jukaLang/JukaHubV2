@@ -181,14 +181,14 @@ func chatLocalAttachment(path string) (string, bool) {
 	}
 	resolved := filepath.Clean(path)
 	if !chatPathTrusted(path) {
-		within, err := regularFileWithin(chatAttachmentRoot, path)
+		within, err := confinedRegularFile(chatAttachmentRoot, path)
 		if err != nil {
 			logWarn("chat", "security: refusing local attachment %q: %v", path, err)
 			return "", false
 		}
 		resolved = within
 	}
-	if info, err := os.Stat(resolved); err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
+	if info, err := statUserFile(resolved); err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
 		return "", false
 	}
 	return resolved, true
@@ -1458,7 +1458,14 @@ func chatMergeCommunity(fresh []ChatMessage, echoes []bool) {
 			have[m.ID] = i
 		}
 	}
-	merged := make([]ChatMessage, 0, len(cur)+len(fresh))
+	// fresh is a single Discord page, but cur comes from saved history. Cap the
+	// preallocation so a corrupted or very large history cannot overflow the
+	// capacity computation; append still grows it as needed.
+	capacity := len(cur)
+	if capacity > 1024 {
+		capacity = 1024
+	}
+	merged := make([]ChatMessage, 0, capacity)
 	merged = append(merged, cur...)
 	added, unseen := 0, 0
 	relinked := false

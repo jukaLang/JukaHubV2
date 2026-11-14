@@ -225,7 +225,7 @@ func gmetaCopyFile(src, dst string) error {
 	if dst, err = safeAbsolutePath(dst); err != nil {
 		return err
 	}
-	if strings.Contains(src, "..") || strings.Contains(dst, "..") {
+	if pathHasParentComponent(src) || pathHasParentComponent(dst) {
 		return os.ErrInvalid
 	}
 	in, err := os.Open(src)
@@ -335,7 +335,7 @@ func gmetaSwapFiles(a, b string) error {
 	if b, err = safeAbsolutePath(b); err != nil {
 		return err
 	}
-	if strings.Contains(a, "..") || strings.Contains(b, "..") {
+	if pathHasParentComponent(a) || pathHasParentComponent(b) {
 		return os.ErrInvalid
 	}
 	aOK, bOK := regularFile(a), regularFile(b)
@@ -377,7 +377,7 @@ func gmetaKeepPrevAuto(auto string) error {
 	if auto, err = safeAbsolutePath(auto); err != nil {
 		return err
 	}
-	if strings.Contains(auto, "..") {
+	if pathHasParentComponent(auto) {
 		return os.ErrInvalid
 	}
 	info, err := os.Stat(auto)
@@ -444,7 +444,7 @@ func gmetaLoadThumb(ctx context.Context, path string) (*image.NRGBA, error) {
 	if path, err = safeAbsolutePath(path); err != nil {
 		return nil, err
 	}
-	if strings.Contains(path, "..") {
+	if pathHasParentComponent(path) {
 		return nil, os.ErrInvalid
 	}
 	if !imageDecodeSem.Acquire(ctx, 1) {

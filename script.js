@@ -726,7 +726,11 @@ let previewScale = 1;
 // divided by this scale before it becomes a canvas coordinate.
 let canvasScale = 1;
 let zoomIsManual = false;
-const CANVAS_MIN_SCALE = 0.25;
+// Fit must be able to go below the old 25% floor: a 320 px phone has about
+// 294 px of canvas pane, and an 844×390 landscape window only about 166 px
+// high. At 25% the 1280×720 device is still 320×180, so it clipped and forced
+// scrollbars instead of fitting. Keep a usable manual zoom-out floor too.
+const CANVAS_MIN_SCALE = 0.1;
 const CANVAS_MAX_SCALE = 2;
 
 // Mirrors Variables.Get in player/config.go: custom variables first, then the

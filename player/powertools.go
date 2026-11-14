@@ -715,15 +715,13 @@ func powerActivate(config *Config) {
 			return
 		}
 		snap := powerTools.snapshots[idx]
-		path := resolvePath("jukauser.json")
-		if err := powerRestoreSnapshot(path, snap.Path); err != nil {
+		if err := powerRestoreUserSnapshot(config, snap.Path); err != nil {
 			ShowToast("Restore failed: "+err.Error(), ToastKindError)
 			return
 		}
-		userConfigCache = nil
 		powerRefreshCaches()
 		PlaySuccessSound()
-		ShowToast("Restored. Restart JukaHub to apply it.", ToastKindSuccess)
+		ShowToast("Settings restored", ToastKindSuccess)
 	case powerActionRunBenchmark:
 		version := ""
 		if config != nil {
@@ -928,14 +926,13 @@ func powerActivateExtra(config *Config, second bool) {
 			return
 		}
 		snap := powerTools.snapshots[idx]
-		if err := powerRestoreSnapshot(resolvePath("jukauser.json"), snap.Path); err != nil {
+		if err := powerRestoreUserSnapshot(config, snap.Path); err != nil {
 			ShowToast("Restore failed: "+err.Error(), ToastKindError)
 			return
 		}
-		userConfigCache = nil
 		powerRefreshCaches()
 		PlaySuccessSound()
-		ShowToast("Restored. Restart JukaHub to apply it.", ToastKindSuccess)
+		ShowToast("Settings restored", ToastKindSuccess)
 	}
 }
 

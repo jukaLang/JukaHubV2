@@ -368,7 +368,7 @@ func netplayBeaconFor(plan netplayPlan) netplayBeaconInfo {
 		Core:   strings.TrimSuffix(filepath.Base(plan.Core), filepath.Ext(plan.Core)),
 		Port:   plan.Session.Port,
 	}
-	if gamePath, err := safeAbsolutePath(game.Path); err == nil && !strings.Contains(gamePath, "..") {
+	if gamePath, err := safeAbsolutePath(game.Path); err == nil && !pathHasParentComponent(gamePath) {
 		if st, statErr := os.Stat(gamePath); statErr == nil {
 			info.Size = st.Size()
 		}

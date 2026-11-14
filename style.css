@@ -1194,6 +1194,15 @@ textarea {
   border: 0;
 }
 
+/* On a phone the footer can wrap to several lines. The shell already measures
+   it into --footer-height, so lift the floating Preview button clear of it
+   instead of leaving the button sitting over the help links. */
+@media (max-width: 992px) {
+  .preview-toggle {
+    bottom: calc(var(--footer-height) + var(--space-md));
+  }
+}
+
 /* On desktop the eye button would otherwise sit dead-centre of the Variables
    panel's footer; anchor it to the canvas corner instead. Sidebar can collapse
    to a 52px rail, so track the body collapse class too. */

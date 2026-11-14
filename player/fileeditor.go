@@ -675,7 +675,7 @@ func fileEditorSave() error {
 		return err
 	}
 	mode := os.FileMode(0o644)
-	if info, err := os.Stat(fileEditor.path); err == nil {
+	if info, err := statUserFile(fileEditor.path); err == nil {
 		mode = info.Mode().Perm()
 	}
 	dir := filepath.Dir(fileEditor.path)
@@ -704,7 +704,14 @@ func fileEditorSave() error {
 		os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, fileEditor.path); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	err = root.Rename(filepath.Base(tmpName), filepath.Base(fileEditor.path))
+	root.Close()
+	if err != nil {
 		os.Remove(tmpName)
 		return err
 	}

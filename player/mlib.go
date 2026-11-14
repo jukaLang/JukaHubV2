@@ -32,6 +32,7 @@ import (
 	"image"
 	"image/jpeg"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -477,6 +478,12 @@ func mlibWalkRoot(ctx context.Context, root string, known map[string]mlibDirStat
 		depth int
 	}
 	var out []mlibFile
+	dirRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return out, true
+	}
+	defer dirRoot.Close()
+	rootFS := dirRoot.FS()
 	stack := []visit{{dir: root}}
 	for len(stack) > 0 {
 		if ctx.Err() != nil {
@@ -484,7 +491,12 @@ func mlibWalkRoot(ctx context.Context, root string, known map[string]mlibDirStat
 		}
 		v := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		info, err := os.Stat(v.dir)
+		rel, relErr := filepath.Rel(root, v.dir)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		info, err := fs.Stat(rootFS, rel)
 		if err != nil || !info.IsDir() {
 			continue
 		}
@@ -494,7 +506,7 @@ func mlibWalkRoot(ctx context.Context, root string, known map[string]mlibDirStat
 		var subdirs []string
 		listed := false
 		if !seen || prev.Mod != mod {
-			if entries, rerr := os.ReadDir(v.dir); rerr == nil {
+			if entries, rerr := fs.ReadDir(rootFS, rel); rerr == nil {
 				listed = true
 				for _, e := range entries {
 					name := e.Name()

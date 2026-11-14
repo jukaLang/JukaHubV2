@@ -78,10 +78,11 @@ var builtinApplets = []struct {
 // list with thousands of rows.
 const maxAppEntries = 300
 
-// appLaunchPathRE rejects the control characters and cmd.exe metacharacters
-// that cannot be made literal in every launcher branch below. The path was
-// already confined to an app folder; this is the final argument-shape check.
-var appLaunchPathRE = regexp.MustCompile(`^[^\x00\r\n"%]+$`)
+// appLaunchPathRE rejects line/argument separators that no launcher can carry
+// as part of a filename. The path was already confined to an app folder; a
+// batch file's stricter `%`/quote check lives in winBatchCommand, so a portable
+// executable named "100%.exe" is not refused by this shared guard.
+var appLaunchPathRE = regexp.MustCompile(`^[^\x00\r\n]+$`)
 
 // deadAppPaths remembers programs that failed to start in this session, so the
 // Refresh button cannot bring a row back that the user already saw fail.

@@ -39,7 +39,7 @@ var emuPickUI struct {
 	panel   sdl.Rect
 	rowHits []gameLibRowHit
 	// eatUp swallows the release of a click the sheet took (emuPickEatRelease).
-	eatUp   bool
+	eatUp bool
 }
 
 // gameLauncherPinned is the launcher a game was set to always use, or "" when

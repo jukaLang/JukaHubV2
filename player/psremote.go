@@ -616,7 +616,7 @@ func psStartHandoff(engine psEngine, sessionPath, label string) error {
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		return fmt.Errorf("write handoff script: %w", err)
 	}
-	cmd := exec.Command("sh", path)
+	cmd := exec.Command("sh", "--", path)
 	cmd.Dir = filepath.Dir(engine.Stream)
 	// With a Bluetooth headset routed, the stream's sound goes there too: the
 	// helper's SDL reads AUDIODEV, and JukaHub (the PCM's one client) exits
