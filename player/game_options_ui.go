@@ -27,6 +27,7 @@ const (
 	gameOptionsRowCPUProfile
 	gameOptionsRowCeiling
 	gameOptionsRowVideo
+	gameOptionsRowSpeed
 	gameOptionsRowArgs
 	gameOptionsRowOpenIn
 	gameOptionsRowDiagnose
@@ -68,7 +69,7 @@ var gameOptsUI struct {
 	coverWait  bool
 	// emulators are the ones that can play the game (findGameLaunchers), read
 	// when the sheet opens for the Emulator row.
-	emulators  []emuEntry
+	emulators []emuEntry
 
 	// systemLauncher is the console's game-launchers.json pin, if any.
 	systemLauncher string
@@ -98,6 +99,8 @@ func gameOptionsRowName(row int) string {
 		return "CPU limit"
 	case gameOptionsRowVideo:
 		return "Video filter"
+	case gameOptionsRowSpeed:
+		return "Shader speed"
 	case gameOptionsRowArgs:
 		return "Extra arguments"
 	case gameOptionsRowOpenIn:
@@ -123,7 +126,7 @@ func gameOptionsRowHint(row int) string {
 	case gameOptionsRowSort:
 		return "Order of every console's games"
 	case gameOptionsRowLayout:
-		return "List, a horizontal cover row, or a vertical cover column"
+		return "List, a 3D shelf, or a vertical cover column"
 	case gameOptionsRowShowHidden:
 		return "Reveal games hidden from the library"
 	case gameOptionsRowEmulator:
@@ -134,6 +137,9 @@ func gameOptionsRowHint(row int) string {
 		return "Clock ceiling for this game, over the profile's; restored on exit"
 	case gameOptionsRowVideo:
 		return "RetroArch's picture for this game; looks need shaders on the card"
+	case gameOptionsRowSpeed:
+		_, detail := shaderSpeedLabel(gameOptsUI.game.Path, videoFilterForGame(gameOptsUI.game.Path))
+		return detail
 	case gameOptionsRowArgs:
 		return "Added after the ROM path, for launchers that read options"
 	case gameOptionsRowOpenIn:
@@ -182,6 +188,9 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return formatGameCeiling(opts.MaxFreqKHz)
 	case gameOptionsRowVideo:
 		return gameVideoFilterValue(opts.VideoFilter)
+	case gameOptionsRowSpeed:
+		label, _ := shaderSpeedLabel(gameOptsUI.game.Path, videoFilterForGame(gameOptsUI.game.Path))
+		return label
 	case gameOptionsRowArgs:
 		if strings.TrimSpace(opts.Args) == "" {
 			return "None"
@@ -524,6 +533,9 @@ func activateGameOptionsRow() {
 		adjustGameOptions(1)
 	case gameOptionsRowArgs:
 		vkOpenGameArgs()
+	case gameOptionsRowSpeed:
+		label, detail := shaderSpeedLabel(gameOptsUI.game.Path, videoFilterForGame(gameOptsUI.game.Path))
+		ShowToast("Shader speed: "+label+" · "+detail, ToastKindInfo)
 	case gameOptionsRowOpenIn:
 		openGameLibraryHandoffFromSheet()
 	case gameOptionsRowDiagnose:

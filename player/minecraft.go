@@ -425,12 +425,18 @@ func mcReadme(dataDir string) string {
 
 // mcCatalogEntry is one port in PortMaster's catalogue.
 type mcCatalogEntry struct {
-	Zip   string // "classicube.zip"
-	Title string
-	URL   string
-	MD5   string
-	Size  int64
-	Arch  []string // attr.arch; empty for runtime ports (Java, Godot…)
+	Zip          string // "classicube.zip"
+	Title        string
+	URL          string
+	MD5          string
+	Size         int64
+	Arch         []string // attr.arch; empty for runtime ports (Java, Godot…)
+	Description  string
+	Instructions string
+	Runtime      []string
+	Requirements []string
+	MinGlibc     string
+	Items        []string // launcher scripts installed by the port
 }
 
 // mcParsePortsCatalog reads PortMaster's ports.json. Its layout has changed
@@ -494,6 +500,20 @@ func mcJSONInt(m map[string]interface{}, keys ...string) int64 {
 	return 0
 }
 
+func mcJSONStrings(v interface{}) []string {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
+}
+
 // mcCatalogFromObject reads one catalogue object (key is its map key, which
 // the dict layout uses for the zip name).
 func mcCatalogFromObject(m map[string]interface{}, key string) (mcCatalogEntry, bool) {
@@ -507,9 +527,15 @@ func mcCatalogFromObject(m map[string]interface{}, key string) (mcCatalogEntry, 
 	if e.Zip == "" || strings.ContainsAny(e.Zip, `/\`) || strings.HasPrefix(e.Zip, ".") {
 		return mcCatalogEntry{}, false
 	}
+	e.Items = mcJSONStrings(m["items"])
 	attr, _ := m["attr"].(map[string]interface{})
 	if attr != nil {
 		e.Title = mcJSONString(attr, "title")
+		e.Description = mcJSONString(attr, "desc")
+		e.Instructions = mcJSONString(attr, "inst")
+		e.Runtime = mcJSONStrings(attr["runtime"])
+		e.Requirements = mcJSONStrings(attr["reqs"])
+		e.MinGlibc = mcJSONString(attr, "min_glibc")
 		if list, ok := attr["arch"].([]interface{}); ok {
 			for _, a := range list {
 				if s, ok := a.(string); ok && strings.TrimSpace(s) != "" {

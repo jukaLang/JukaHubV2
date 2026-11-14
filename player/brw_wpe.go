@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -45,6 +46,8 @@ const (
 	brwWpeStatusTTL   = 5 * time.Second
 	brwWpeMaxURL      = 4096
 )
+
+var brwWpeURLRE = regexp.MustCompile(`^https?://[^\x00-\x20\x7f]+$`)
 
 // brwWpeUnsupportedNote is what a handheld WPE's releases do not name hears.
 const brwWpeUnsupportedNote = "WPE Browser runs on the Smart Pro, Brick and Brick Pro"
@@ -365,11 +368,15 @@ func brwWpeLaunch(config *Config, address string) bool {
 		return false
 	}
 	target := brwWpeTarget(address)
-	args := []string{filepath.Join(s.Dir, brwWpeLaunchFile)}
+	if target != "" && !brwWpeURLRE.MatchString(target) {
+		return false
+	}
+	args := []string{"--", filepath.Join(s.Dir, brwWpeLaunchFile)}
 	if target != "" {
 		args = append(args, target)
 	}
-	// sh reads the launch script; the address is an operand, never code.
+	// sh reads the launch script; -- ends options and the address is an
+	// operand after it, never code.
 	cmd := exec.Command("sh", args...)
 	cmd.Dir = s.Dir
 	// Own process group, the emulators' rule: launch.sh may start WebKit's
@@ -386,7 +393,7 @@ func brwWpeLaunch(config *Config, address string) bool {
 	}
 	brwWpeFreeMemory()
 	restoreProfile := beginGamePowerProfile(config)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		brwWpeGate.Unlock()
 		restoreProfile()
 		logWarn("browser", "WPE Browser did not start: %v", err)

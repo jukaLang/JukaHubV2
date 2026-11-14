@@ -595,7 +595,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
 		return fmt.Errorf("could not start RetroArch: %w", err)
 	}

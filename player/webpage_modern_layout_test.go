@@ -594,3 +594,219 @@ func TestWebInsetShorthandSetsEveryEdge(t *testing.T) {
 		t.Fatal("inset: 0 must pin every edge, even though each value is zero")
 	}
 }
+
+func TestWebAutoMarginsCentreConstrainedBlocks(t *testing.T) {
+	legibleTestInitFonts(t)
+	parse := func(css string) *webLayout {
+		source := `<style>` + css + `</style><p class="column">Centred text</p>`
+		return parseWebPage(source, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 1000)
+	}
+	_, baseX := webTestTextPosition(t, parse(`.column{max-width:400px}`), "Centred")
+	_, centredX := webTestTextPosition(t, parse(`.column{max-width:400px;margin:0 auto}`), "Centred")
+	_, rightX := webTestTextPosition(t, parse(`.column{max-width:400px;margin-left:auto}`), "Centred")
+	_, inlineX := webTestTextPosition(t, parse(`.column{max-width:400px;margin-inline:auto}`), "Centred")
+	free := rightX - baseX
+	center := centredX - baseX
+	inline := inlineX - baseX
+	if free < 100 {
+		t.Fatalf("the 400px block should have free space beside it, got %dpx", free)
+	}
+	if math.Abs(float64(center)-float64(free)/2) > 20 {
+		t.Fatalf("margin:0 auto moved the block %dpx, want half of the %dpx free space", center, free)
+	}
+	if math.Abs(float64(inline)-float64(center)) > 20 {
+		t.Fatalf("margin-inline:auto moved the block %dpx, margin:0 auto moved it %dpx", inline, center)
+	}
+}
+
+func TestWebLogicalFloatClearAndInsets(t *testing.T) {
+	legibleTestInitFonts(t)
+	style := webBaseStyle()
+	applyWebDecls(&style, map[string]string{
+		"position":           "absolute",
+		"float":              "inline-end",
+		"clear":              "inline-start",
+		"inset-inline-start": "12px",
+		"inset-block-end":    "0px",
+	})
+	if style.FloatSide != 2 || style.Clear != 1 {
+		t.Fatalf("logical float/clear = %d/%d, want right/left", style.FloatSide, style.Clear)
+	}
+	if !style.HasLeft || style.Left != 12 {
+		t.Fatalf("inset-inline-start = %t/%g, want a set 12px edge", style.HasLeft, style.Left)
+	}
+	if !style.HasBottom || style.Bottom != 0 {
+		t.Fatalf("inset-block-end: 0 must pin the bottom edge, got set=%t value=%g", style.HasBottom, style.Bottom)
+	}
+
+	base := parseWebPage(`<div class="f">Float</div><p>Following</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	logical := parseWebPage(`<style>.f{float:inline-start;width:120px}</style><div class="f">Float</div><p>Following</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	_, baseX := webTestTextPosition(t, base, "Following")
+	_, logicalX := webTestTextPosition(t, logical, "Following")
+	if logicalX <= baseX+60 {
+		t.Fatalf("logical float did not displace the following sibling: base x=%d, logical x=%d", baseX, logicalX)
+	}
+
+	zero := parseWebPage(`<style>.x{position:absolute;inset-inline-start:0}</style><div class="x">Box</div>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	shifted := parseWebPage(`<style>.x{position:absolute;inset-inline-start:80px}</style><div class="x">Box</div>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if len(zero.Floats) != 1 || len(shifted.Floats) != 1 || shifted.Floats[0].X <= zero.Floats[0].X {
+		t.Fatalf("logical inset did not move the absolute box: zero=%+v shifted=%+v", zero.Floats, shifted.Floats)
+	}
+}
+
+func TestWebFlexAutoMarginsPositionItems(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := func(source string) *webLayout {
+		return parseWebPage(source, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	}
+
+	left := layout(`<style>.row{display:flex}.last{width:120px;margin-left:auto;background:#eee}</style>` +
+		`<div class="row"><div class="last">Last</div></div>`)
+	_, lastX := webTestTextPosition(t, left, "Last")
+	if lastX < 500 {
+		t.Fatalf("margin-left:auto did not push the flex item to the end: Last x=%d", lastX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, left, lastX); !webTestNearX(paintedX, lastX) {
+		t.Fatalf("painted flex item did not follow its auto-margin position: run x=%d painted x=%d", lastX, paintedX)
+	}
+
+	right := layout(`<style>.row{display:flex;justify-content:flex-end}.item{width:120px;margin-right:auto;background:#eee}</style>` +
+		`<div class="row"><div class="item">Right</div></div>`)
+	_, rightX := webTestTextPosition(t, right, "Right")
+	if rightX > 60 {
+		t.Fatalf("margin-right:auto did not override justify-content and move to the start: x=%d", rightX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, right, rightX); !webTestNearX(paintedX, rightX) {
+		t.Fatalf("painted flex item did not follow margin-right:auto: run x=%d painted x=%d", rightX, paintedX)
+	}
+
+	rowReverse := layout(`<style>.row{display:flex;flex-direction:row-reverse}.last{width:120px;margin-left:auto;background:#eee}</style>` +
+		`<div class="row"><div class="last">Last</div></div>`)
+	_, reverseLastX := webTestTextPosition(t, rowReverse, "Last")
+	if reverseLastX < 500 {
+		t.Fatalf("row-reverse margin-left:auto did not mirror the row: Last x=%d", reverseLastX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, rowReverse, reverseLastX); !webTestNearX(paintedX, reverseLastX) {
+		t.Fatalf("painted row-reverse item did not follow its run: run x=%d painted x=%d", reverseLastX, paintedX)
+	}
+
+	center := layout(`<style>.row{display:flex}.center{width:120px;margin:0 auto;background:#eee}</style>` +
+		`<div class="row"><div class="center">Center</div></div>`)
+	_, centerX := webTestTextPosition(t, center, "Center")
+	if centerX < 100 || centerX > 500 {
+		t.Fatalf("margin:0 auto did not centre the flex item: x=%d", centerX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, center, centerX); !webTestNearX(paintedX, centerX) {
+		t.Fatalf("painted centred flex item did not follow its run: run x=%d painted x=%d", centerX, paintedX)
+	}
+
+	logical := layout(`<style>.row{display:flex}.last{width:120px;margin-inline-start:auto;background:#eee}</style>` +
+		`<div class="row"><div class="last">End</div></div>`)
+	_, logicalEndX := webTestTextPosition(t, logical, "End")
+	if logicalEndX < 500 {
+		t.Fatalf("margin-inline-start:auto did not push the flex item: end x=%d", logicalEndX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, logical, logicalEndX); !webTestNearX(paintedX, logicalEndX) {
+		t.Fatalf("painted logical auto-margin item did not follow its run: run x=%d painted x=%d", logicalEndX, paintedX)
+	}
+
+	cross := layout(`<style>.row{display:flex;gap:10px}.tall{background:#ddd}.short{margin-top:auto;background:#eee}</style>` +
+		`<div class="row"><div class="tall">Tall<br>line<br>line</div><div class="short">Short</div></div>`)
+	tallRow, tallX := webTestTextPosition(t, cross, "Tall")
+	shortRow, shortX := webTestTextPosition(t, cross, "Short")
+	if shortRow <= tallRow+1 {
+		t.Fatalf("margin-top:auto did not move the cross-axis item: tall row=%d short row=%d", tallRow, shortRow)
+	}
+	_, tallPaintedY := webTestPaintedAt(t, cross, tallX)
+	_, shortPaintedY := webTestPaintedAt(t, cross, shortX)
+	if shortPaintedY <= tallPaintedY {
+		t.Fatalf("cross-axis auto margin did not move the painted box: tall y=%d short y=%d", tallPaintedY, shortPaintedY)
+	}
+
+	grid := layout(`<style>.grid{display:grid;grid-template-columns:1fr 1fr;gap:0}.cell{width:120px;margin:auto;background:#eee}</style>` +
+		`<div class="grid"><div class="cell">One</div><div class="cell">Two</div></div>`)
+	_, oneX := webTestTextPosition(t, grid, "One")
+	_, twoX := webTestTextPosition(t, grid, "Two")
+	if oneX < 50 || twoX-oneX < 150 || twoX < 400 {
+		t.Fatalf("grid auto margins did not centre items in their tracks: One=%d Two=%d", oneX, twoX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, grid, oneX); !webTestNearX(paintedX, oneX) {
+		t.Fatalf("painted grid item One did not follow its track position: run x=%d painted x=%d", oneX, paintedX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, grid, twoX); !webTestNearX(paintedX, twoX) {
+		t.Fatalf("painted grid item Two did not follow its track position: run x=%d painted x=%d", twoX, paintedX)
+	}
+
+	column := layout(`<style>.col{display:flex;flex-direction:column}.cell{width:120px;margin-inline:auto;background:#eee}</style>` +
+		`<div class="col"><div class="cell">Column</div></div>`)
+	_, columnX := webTestTextPosition(t, column, "Column")
+	if columnX < 100 || columnX > 500 {
+		t.Fatalf("column auto margins did not centre the cross-axis item: x=%d", columnX)
+	}
+	if paintedX, _ := webTestPaintedAt(t, column, columnX); !webTestNearX(paintedX, columnX) {
+		t.Fatalf("painted column item did not follow its cross-axis position: run x=%d painted x=%d", columnX, paintedX)
+	}
+
+	columnBottom := layout(`<style>.col{display:flex;flex-direction:column;height:240px}.item{margin-top:auto;background:#eee}</style>` +
+		`<div class="col"><div class="item">Bottom</div></div>`)
+	bottomRow, bottomX := webTestTextPosition(t, columnBottom, "Bottom")
+	_, bottomY := webTestPaintedAt(t, columnBottom, bottomX)
+	if bottomRow < 6 || bottomY < 100 {
+		t.Fatalf("column margin-top:auto did not reach the end: row=%d painted y=%d", bottomRow, bottomY)
+	}
+
+	logicalColumn := layout(`<style>.col{display:flex;flex-direction:column;height:240px}.item{margin-block-start:auto;border:1px solid #000}</style>` +
+		`<div class="col"><div class="item">Logical bottom</div></div>`)
+	logicalRow, logicalX := webTestTextPosition(t, logicalColumn, "Logical")
+	_, logicalY := webTestPaintedAt(t, logicalColumn, logicalX)
+	if logicalRow < 6 || logicalY < 100 {
+		t.Fatalf("column margin-block-start:auto did not reach the end: row=%d painted y=%d", logicalRow, logicalY)
+	}
+
+	columnTop := layout(`<style>.col{display:flex;flex-direction:column;height:240px;justify-content:flex-end}.item{margin-bottom:auto;background:#eee}</style>` +
+		`<div class="col"><div class="item">Top</div></div>`)
+	topRow, topX := webTestTextPosition(t, columnTop, "Top")
+	_, topY := webTestPaintedAt(t, columnTop, topX)
+	if topRow > 2 || topY > 50 {
+		t.Fatalf("column margin-bottom:auto did not reach the start: row=%d painted y=%d", topRow, topY)
+	}
+
+	columnCenter := layout(`<style>.col{display:flex;flex-direction:column;height:240px}.item{margin:auto;background:#eee}</style>` +
+		`<div class="col"><div class="item">Middle</div></div>`)
+	middleRow, middleX := webTestTextPosition(t, columnCenter, "Middle")
+	_, middleY := webTestPaintedAt(t, columnCenter, middleX)
+	if middleRow < 3 || middleRow > 7 || middleY < 50 || middleY > 200 {
+		t.Fatalf("column margin:auto did not centre: row=%d painted y=%d", middleRow, middleY)
+	}
+
+	columnReverse := layout(`<style>.col{display:flex;flex-direction:column-reverse;height:240px}.item{margin-top:auto;background:#eee}</style>` +
+		`<div class="col"><div class="item">Reverse</div></div>`)
+	reverseRow, reverseX := webTestTextPosition(t, columnReverse, "Reverse")
+	_, reverseY := webTestPaintedAt(t, columnReverse, reverseX)
+	if reverseRow < 6 || reverseY < 100 {
+		t.Fatalf("column-reverse margin-top:auto did not mirror to the end: row=%d painted y=%d", reverseRow, reverseY)
+	}
+}
+
+func webTestPaintedAt(t *testing.T, layout *webLayout, x int32) (int32, int32) {
+	t.Helper()
+	for _, rect := range layout.Rects {
+		dx := rect.Rect.X - x
+		if dx < 0 {
+			dx = -dx
+		}
+		if rect.Rect.W > 0 && rect.Rect.H > 0 && dx <= 8 {
+			return rect.Rect.X, rect.Rect.Y
+		}
+	}
+	t.Fatalf("no painted box at run x=%d", x)
+	return 0, 0
+}
+
+func webTestNearX(a, b int32) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d <= 8
+}

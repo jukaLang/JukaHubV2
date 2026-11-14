@@ -475,6 +475,16 @@ func resetTrashNewDir(suffix string) (string, error) {
 // resetTrashMove moves src to dst: a rename on the same card, otherwise a
 // copy (through a temporary file) and then the original's removal.
 func resetTrashMove(src, dst string) error {
+	var err error
+	if src, err = safeAbsolutePath(src); err != nil {
+		return err
+	}
+	if dst, err = safeAbsolutePath(dst); err != nil {
+		return err
+	}
+	if strings.Contains(src, "..") || strings.Contains(dst, "..") {
+		return os.ErrInvalid
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -656,9 +666,12 @@ func runGameReset(game libraryGame, states bool) {
 				if f.Kind != "states" {
 					continue
 				}
-				if _, err := os.Lstat(f.Path); os.IsNotExist(err) {
-					movedStates = true
-					break
+				statePath, pathErr := safeAbsolutePath(f.Path)
+				if pathErr == nil && !strings.Contains(statePath, "..") {
+					if _, err := os.Lstat(statePath); os.IsNotExist(err) {
+						movedStates = true
+						break
+					}
 				}
 			}
 			pruneResetTrash(dir)

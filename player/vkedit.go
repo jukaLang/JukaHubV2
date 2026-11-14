@@ -434,6 +434,8 @@ func vkSecretTarget() bool {
 	switch vkTarget {
 	case vkTargetWiFi, vkTargetGroqKey:
 		return true
+	case vkTargetRommServer:
+		return rommCloud.editToken
 	case vkTargetRA:
 		return raPanel.edit == raEditAPIKey
 	case vkTargetFiles:
@@ -453,6 +455,11 @@ func vkStripModeNow() vkStripMode {
 	case vkTargetWiFi, vkTargetPSRemote, vkTargetMemory, vkTargetUnit, vkTargetTerm,
 		vkTargetRA, vkTargetMusic, vkTargetGameArgs, vkTargetToolArgs, vkTargetGroqKey:
 		return vkStripHidden
+	case vkTargetRommServer:
+		if rommCloud.editToken {
+			return vkStripHidden
+		}
+		return vkStripQuickURL
 	case vkTargetDownloads, vkTargetPodcast, vkTargetToolsURL, vkTargetParty, vkTargetBrowserURL:
 		return vkStripQuickURL
 	case vkTargetDNS, vkTargetNetwork, vkTargetNetplay:

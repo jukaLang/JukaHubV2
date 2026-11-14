@@ -42,11 +42,13 @@ const (
 
 	textBrowserURLVariable = "textbrowser_url"
 	textBrowserDefaultURL  = "https://example.com"
-	// 8 MiB of HTML: modern news, docs and social pages routinely pass the
-	// old 2 MiB mark, and refusing to open them was worse than the cost of
-	// holding one page in RAM. Anything past this is not an error: the first
-	// 8 MiB are parsed and drawn, with a note where the page was cut.
-	textBrowserMaxPageBytes = 8 << 20
+	// A page is allowed no more than this much HTML. The actual limit is
+	// chosen per download from MemAvailable: the floor keeps small pages
+	// working on a tight device, and the ceiling stops one runaway page from
+	// eating the 1 GB handheld's whole heap. Anything past the chosen limit is
+	// parsed and drawn as far as it goes, with a note where it was cut.
+	textBrowserMinPageBytes = 8 << 20
+	textBrowserMaxPageBytes = 64 << 20
 	textBrowserMaxTextBytes = 512 << 10
 	textBrowserURLBarHeight = int32(36)
 
@@ -56,6 +58,18 @@ const (
 	// on pages that were about to arrive. Reload still refetches from scratch.
 	textBrowserFetchTimeout = 20 * time.Second
 )
+
+// textBrowserFetchTimeoutFor gives a larger page more time to arrive without
+// letting every small request sit for a minute. The base timeout covers the
+// old 8 MiB budget; each MiB above it adds a second, so the 64 MiB ceiling gets
+// 76 seconds while a tight device's 8 MiB page keeps the 20-second bound.
+func textBrowserFetchTimeoutFor(limit int) time.Duration {
+	mib := limit >> 20
+	if mib <= 8 {
+		return textBrowserFetchTimeout
+	}
+	return textBrowserFetchTimeout + time.Duration(mib-8)*time.Second
+}
 
 // textBrowserMode constants
 const (
@@ -1403,12 +1417,13 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 		return browserPage{Text: "Browser error: " + err.Error(), Fail: &f}
 	}
 	nav.URL = address
-	ctx, cancel := context.WithTimeout(context.Background(), textBrowserFetchTimeout)
+	timeout := textBrowserFetchTimeoutFor(textBrowserPageLimitBytes())
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	// The jar travels with the client, so a cookie a redirect sets is already
 	// in hand when the next hop — and the page's stylesheets and images — go
 	// out.
-	client := browserHTTPClient(textBrowserFetchTimeout)
+	client := browserHTTPClient(timeout)
 	client.CheckRedirect = textBrowserRedirectPolicy
 	fetched, err := fetchTextBrowserDocumentRequest(ctx, client, nav)
 	if err != nil {
@@ -1426,7 +1441,7 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 		f := brwNewFailure(brwFailOther, address, brwFriendlyNetError(err))
 		return browserPage{Text: f.text(), Fail: &f}
 	}
-	body, truncated, pageURL := fetched.Body, fetched.Truncated, fetched.URL
+	body, truncated, pageURL, pageLimit := fetched.Body, fetched.Truncated, fetched.URL, fetched.Limit
 	// A redirect that ended on a YouTube watch page goes to the player
 	// (brwQueueLanding); running its scripts and fetching its stylesheets and
 	// images would only delay that.
@@ -1495,7 +1510,7 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 		if f, ok := brwSearchWall(address, next.URL, next.Body); ok {
 			return browserPage{Text: f.text(), Fail: &f}
 		}
-		body, truncated, pageURL = next.Body, next.Truncated, next.URL
+		body, truncated, pageURL, pageLimit = next.Body, next.Truncated, next.URL, next.Limit
 		seen[landed] = true
 		html = stripBlockedWebScripts(string(body), pageURL)
 		scripted = webJSRunPageFor(html, pageURL, gen, deadline)
@@ -1518,7 +1533,7 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 		// Say so on the drawn page itself: the reader shows the styled document
 		// rather than the plain text, so a note only in the text would be
 		// invisible, and a page that simply stops mid-sentence looks broken.
-		source = withTextBrowserTruncationNote(source)
+		source = withTextBrowserTruncationNote(source, pageLimit)
 	}
 	doc := parseWebPage(source, pageCSS, pageURL.String())
 	doc.Favicon = browserFaviconURL(source, pageURL)
@@ -1534,7 +1549,7 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 	// The reader text is assembled last: the blocked count and truncation state
 	// are only final once the stylesheet and image passes have run.
 	text := browserReaderText(title, pageURL.String(), len(links), pageText,
-		browserBlockedRequests(), browserAdBlockOff(pageURL.String()), truncated)
+		browserBlockedRequests(), browserAdBlockOff(pageURL.String()), truncated, pageLimit)
 	return browserPage{
 		Text:     text,
 		Links:    links,
@@ -1591,6 +1606,28 @@ type textBrowserDocument struct {
 	Body      []byte
 	URL       *url.URL
 	Truncated bool
+	Limit     int
+}
+
+// textBrowserPageLimitBytes picks the HTML budget for one download from the
+// memory the kernel says is available. One eighth of MemAvailable is reserved
+// for the body and the strings/selector tree built from it, with an 8 MiB floor
+// so a tight device still opens ordinary pages and a 64 MiB ceiling so no one
+// page can consume the handheld's heap. An unavailable host reports the maximum
+// sentinel from freeMemoryMB and gets the ceiling.
+func textBrowserPageLimitBytes() int {
+	return textBrowserPageLimitFor(freeMemoryMB())
+}
+
+func textBrowserPageLimitFor(availableMB uint64) int {
+	mb := availableMB / 8
+	if mb < uint64(textBrowserMinPageBytes>>20) {
+		return textBrowserMinPageBytes
+	}
+	if mb > uint64(textBrowserMaxPageBytes>>20) {
+		return textBrowserMaxPageBytes
+	}
+	return int(mb) << 20
 }
 
 // fetchTextBrowserDocument performs one page load and follows the redirect the
@@ -1685,15 +1722,16 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 		kind := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
 		return fail(brwFailContent, "This address is a "+kind+" file, not a web page.")
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, textBrowserMaxPageBytes+1))
+	limit := textBrowserPageLimitBytes()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		if ctx.Err() != nil {
 			return fail(brwFailTimeout, "")
 		}
 		return fail(brwFailConnect, "The page stopped arriving halfway. Try again.")
 	}
-	body, truncated := truncateTextBrowserBody(body, textBrowserMaxPageBytes)
-	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated}, nil
+	body, truncated := truncateTextBrowserBody(body, limit)
+	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated, Limit: limit}, nil
 }
 
 // browserMetaRefreshTarget reads the redirect a page asks for in its markup:
@@ -1800,7 +1838,7 @@ func parseBrowserMetaRefresh(content string) (time.Duration, string) {
 // browserReaderText builds the plain-text view a page without a drawable
 // document falls back to. It states what was skipped, so a reader can tell a
 // trimmed page from a complete one.
-func browserReaderText(title, address string, linkCount int, pageText string, blocked int, filterOff bool, truncated bool) string {
+func browserReaderText(title, address string, linkCount int, pageText string, blocked int, filterOff bool, truncated bool, pageLimit int) string {
 	var text strings.Builder
 	fmt.Fprintf(&text, "Title: %s\nURL: %s\n", title, address)
 	if filterOff {
@@ -1809,7 +1847,7 @@ func browserReaderText(title, address string, linkCount int, pageText string, bl
 		fmt.Fprintf(&text, "Blocked: %s\n", pluralizeCount(blocked, "ad/tracker request", "ad/tracker requests"))
 	}
 	if truncated {
-		text.WriteString(strings.TrimSpace(textBrowserTruncationNote()))
+		text.WriteString(strings.TrimSpace(textBrowserTruncationNote(pageLimit)))
 		text.WriteByte('\n')
 	}
 	if linkCount > 0 {
@@ -1836,15 +1874,18 @@ func truncateTextBrowserBody(body []byte, limit int) ([]byte, bool) {
 }
 
 // textBrowserTruncationNote is the sentence shown where a page was cut off.
-func textBrowserTruncationNote() string {
-	return fmt.Sprintf("\n[Page truncated: only the first %d MiB were downloaded. Follow a link to keep reading.]", textBrowserMaxPageBytes>>20)
+func textBrowserTruncationNote(limit int) string {
+	if limit <= 0 {
+		limit = textBrowserMaxPageBytes
+	}
+	return fmt.Sprintf("\n[Page truncated: only the first %d MiB were downloaded. Follow a link to keep reading.]", limit>>20)
 }
 
 // withTextBrowserTruncationNote puts that sentence at the top of the page,
 // inside the body. A truncated page is far past the parser's text budget, so a
 // note at the end would be dropped along with the rest of the unread tail.
-func withTextBrowserTruncationNote(source string) string {
-	note := "<p>" + textBrowserTruncationNote() + "</p>"
+func withTextBrowserTruncationNote(source string, limit int) string {
+	note := "<p>" + textBrowserTruncationNote(limit) + "</p>"
 	lower := asciiLower(source)
 	for from := 0; from < len(lower); {
 		at := strings.Index(lower[from:], "<body")

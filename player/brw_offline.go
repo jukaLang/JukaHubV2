@@ -103,7 +103,7 @@ func brwNewFailure(kind brwFailKind, address, detail string) brwFailure {
 		f.Detail = "Couldn't find " + f.Host + ". Check the address for typos, or search for it."
 	case brwFailTimeout:
 		f.Title = "This site is taking too long"
-		f.Detail = "Timed out after " + textBrowserFetchTimeout.String() + ": " + f.Host + " didn't answer. Try again in a moment."
+		f.Detail = "Timed out while downloading: " + f.Host + " didn't answer. Try again in a moment."
 	case brwFailConnect:
 		f.Title = "Can't reach " + f.Host
 		f.Detail = detail

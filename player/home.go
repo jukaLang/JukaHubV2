@@ -670,6 +670,11 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		if snapshotVideoState().phase != "idle" {
 			StopEmbeddedPlayback()
 		}
+	case sdl.CONTROLLER_BUTTON_BACK:
+		// Select opens the device controls directly from Home. The physical
+		// quit and mouse-mode chords are handled before this scene dispatch.
+		qsToggleOpen()
+		PlayActivateSound()
 	default:
 		return false
 	}

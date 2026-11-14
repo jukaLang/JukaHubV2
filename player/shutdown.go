@@ -85,7 +85,7 @@ func shutdownSteps(config *Config) []shutdownStep {
 	steps := []shutdownStep{
 		{label: "Stopping games and helpers", group: 0, timeout: exitChildGrace + 500*time.Millisecond, fn: shutdownStopChildren},
 		{label: "Stopping audio and video", group: 0, inline: true, fn: shutdownStopPlayback},
-		{label: "Pausing downloads", group: 0, timeout: time.Second, fn: shutdownPauseDownloads},
+		{label: "Stopping downloads", group: 0, timeout: time.Second, fn: shutdownPauseDownloads},
 		{label: "Disconnecting services", group: 0, timeout: 1500 * time.Millisecond, fn: shutdownStopServices},
 		// On the render thread: the playtime flush writes the config's Custom
 		// map, which every frame of the card reads (text substitution, the
@@ -154,19 +154,31 @@ func shutdownStopPlayback() (string, error) {
 	return "stopped", nil
 }
 
-// shutdownPauseDownloads cancels the running yt-dlp: left alone it is
-// orphaned and keeps downloading after the hub is gone. The queue is not
-// persisted, so this only stops the transfer and its partial file stays.
+// shutdownPauseDownloads stops background transfers before the card is synced.
+// yt-dlp keeps its partial file; installers and artwork fetches observe their
+// cancelled contexts and stop writing to the SD card.
 func shutdownPauseDownloads() (string, error) {
 	active, queued, _, _ := downloadCounts(downloadsSnapshot())
 	downloadSetPaused(true)
-	switch {
-	case active+queued == 0:
+	installing := installBarCancelActive()
+	artwork := stopArtworkFetch()
+	if active+queued == 0 && !installing && !artwork {
 		return "none running", nil
-	case active > 0:
-		return fmt.Sprintf("%d stopped", active+queued), nil
 	}
-	return fmt.Sprintf("%d left queued", queued), nil
+	var stopped []string
+	if active > 0 {
+		stopped = append(stopped, fmt.Sprintf("%d download", active))
+	}
+	if queued > 0 {
+		stopped = append(stopped, fmt.Sprintf("%d queued", queued))
+	}
+	if installing {
+		stopped = append(stopped, "installer")
+	}
+	if artwork {
+		stopped = append(stopped, "artwork")
+	}
+	return strings.Join(stopped, ", ") + " stopped", nil
 }
 
 // shutdownStopServices closes every listener and session the hub opened: the

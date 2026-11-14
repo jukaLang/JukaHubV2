@@ -722,7 +722,7 @@ func TestTrophyGroupOptions(t *testing.T) {
 	if len(opts) < 2 || opts[0].Value != "" || opts[0].Label != "All categories" {
 		t.Fatalf("options start %+v", opts[:1])
 	}
-	if opts[0].Note != "1 of 386 earned" {
+	if opts[0].Note != "1 of 390 earned" {
 		t.Errorf("all categories note = %q", opts[0].Note)
 	}
 	if opts[1].Value != "Lifetime" || !strings.HasPrefix(opts[1].Note, "1 of ") {

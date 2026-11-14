@@ -9,11 +9,13 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 )
 
-// termShellCommand runs line through sh -c, so pipes, quotes, wildcards and
-// redirects behave as they do in any shell. It returns nil when the system has
-// no shell; the caller then runs the first word as a program directly.
+// termShellCommand feeds line to sh on stdin, so pipes, quotes, wildcards and
+// redirects behave as they do in any shell without splicing the user's text
+// into an argv command. It returns nil when the system has no shell; the caller
+// then runs the first word as a program directly.
 //
 // Trust boundary (SEC-12): line is what the user typed at the Terminal prompt
 // on the device (or picked from their own history). Running it in a shell is
@@ -26,7 +28,9 @@ func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 		}
 		sh = "/bin/sh"
 	}
-	return exec.CommandContext(ctx, sh, "-c", line)
+	cmd := exec.CommandContext(ctx, sh, "-s")
+	cmd.Stdin = strings.NewReader(line + "\n")
+	return cmd
 }
 
 // termKillTree stops the command and everything it started: the job leads its

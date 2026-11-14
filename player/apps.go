@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -76,6 +77,11 @@ var builtinApplets = []struct {
 // maxAppEntries caps a single source so a huge Start Menu cannot flood the
 // list with thousands of rows.
 const maxAppEntries = 300
+
+// appLaunchPathRE rejects the control characters and cmd.exe metacharacters
+// that cannot be made literal in every launcher branch below. The path was
+// already confined to an app folder; this is the final argument-shape check.
+var appLaunchPathRE = regexp.MustCompile(`^[^\x00\r\n"%]+$`)
 
 // deadAppPaths remembers programs that failed to start in this session, so the
 // Refresh button cannot bring a row back that the user already saw fail.
@@ -570,6 +576,11 @@ func launchInstalledApp(path string) bool {
 		showToast("Refusing to launch an app outside the app folders", ToastError())
 		return false
 	}
+	if !appLaunchPathRE.MatchString(clean) {
+		logWarn("apps", "security: refusing to launch a path with unsafe characters")
+		showToast("Refusing to launch "+filepath.Base(path)+" — its name contains an unsafe character", ToastError())
+		return false
+	}
 	info, err := os.Stat(clean)
 	if err != nil || !info.Mode().IsRegular() {
 		showToast("Could not launch "+filepath.Base(path), ToastError())
@@ -605,7 +616,7 @@ func launchInstalledApp(path string) bool {
 		cmd = bat
 	case ext == ".sh":
 		// sh reads the script file; the absolute path is an operand, not code.
-		cmd = exec.Command("sh", clean)
+		cmd = exec.Command("sh", "--", clean)
 	default:
 		cmd = exec.Command(clean)
 	}
@@ -614,7 +625,7 @@ func launchInstalledApp(path string) bool {
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		logWarn("apps", "launch failed for %s: %v", clean, err)
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
 		return false

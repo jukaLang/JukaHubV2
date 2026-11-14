@@ -202,6 +202,9 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	// PortMaster Ports is modal too.
 	if portsPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
 		return ctrlPortsPanel(e)
 	}
 	// Apps → Steam is modal too; its search keyboard takes the pad while up.

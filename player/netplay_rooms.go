@@ -368,8 +368,10 @@ func netplayBeaconFor(plan netplayPlan) netplayBeaconInfo {
 		Core:   strings.TrimSuffix(filepath.Base(plan.Core), filepath.Ext(plan.Core)),
 		Port:   plan.Session.Port,
 	}
-	if st, err := os.Stat(game.Path); err == nil {
-		info.Size = st.Size()
+	if gamePath, err := safeAbsolutePath(game.Path); err == nil && !strings.Contains(gamePath, "..") {
+		if st, statErr := os.Stat(gamePath); statErr == nil {
+			info.Size = st.Size()
+		}
 	}
 	return info
 }

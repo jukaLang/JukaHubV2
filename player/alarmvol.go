@@ -218,10 +218,11 @@ func alarmVolumeRecover(note func(string)) error {
 // thread only (alarmTrigger and the stop paths run there, the exit path after
 // the loop).
 var alarmHeld struct {
-	music    bool
-	video    bool
-	children []*exec.Cmd
-	ra       raCoopState // RetroArch's own pause around the ring (gamepause_ra.go)
+	music         bool
+	video         bool
+	children      []*exec.Cmd
+	audioBorrowed bool
+	ra            raCoopState // RetroArch's own pause around the ring (gamepause_ra.go)
 }
 
 // alarmHoldMedia pauses what is playing and the game owning the screen.
@@ -256,6 +257,9 @@ func alarmHoldMedia() {
 			}
 			alarmHeld.children = append(alarmHeld.children, cmd)
 		}
+		if len(alarmHeld.children) > 0 {
+			alarmHeld.audioBorrowed = screenChildAudioOverlayBegin()
+		}
 	}
 }
 
@@ -263,6 +267,10 @@ func alarmHoldMedia() {
 // game must never be left stopped, least of all on the way out of the app,
 // where a stopped child would also ignore the quit request.
 func alarmReleaseMedia() {
+	if alarmHeld.audioBorrowed {
+		screenChildAudioOverlayEnd()
+		alarmHeld.audioBorrowed = false
+	}
 	for _, cmd := range alarmHeld.children {
 		if err := alarmSignalChild(cmd, false); err != nil {
 			logWarn("alarm", "could not resume the game: %v", err)

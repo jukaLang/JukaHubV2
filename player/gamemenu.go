@@ -62,6 +62,8 @@ const (
 	gmSave
 	gmLoad
 	gmSleep
+	gmRewind
+	gmFast
 )
 
 // gameMenuEnabled reports Settings → Controls → In-game menu.
@@ -94,6 +96,10 @@ func gmItems(config *Config) []gmItem {
 	items := []gmItem{gmResume}
 	if gmStatesAvailable() {
 		items = append(items, gmSave, gmLoad)
+		if rewind, _ := retroTransportAvailable(); rewind {
+			items = append(items, gmRewind)
+		}
+		items = append(items, gmFast)
 	}
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
@@ -114,6 +120,14 @@ func gmLabel(it gmItem) (string, string) {
 		return "Load state", "Go back to a moment you saved"
 	case gmSleep:
 		return "Sleep", "The game carries on when the handheld wakes"
+	case gmRewind:
+		return "Rewind", "Step back through recent gameplay"
+	case gmFast:
+		_, fast := retroTransportAvailable()
+		if fast {
+			return "Normal speed", "Turn fast forward off and keep playing"
+		}
+		return "Fast forward", "Run the game faster until you switch it off"
 	}
 	return "Resume game", ""
 }
@@ -170,6 +184,12 @@ func gmPress(config *Config, b gaButton) {
 			gmPickOpen(items[gaOverlay.sel] == gmSave)
 		case gmSleep:
 			gmSleepNow()
+		case gmRewind:
+			PlayActivateSound()
+			retroTransportCommand(true)
+		case gmFast:
+			PlayActivateSound()
+			retroTransportCommand(false)
 		}
 	}
 }
@@ -279,6 +299,10 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 	}
 	pad := orbPad
 	rowGap := int32(6)
+	if len(items) > 6 {
+		pad = max32(9, orbPad/2)
+		rowGap = 4
+	}
 	kicker := "GAME PAUSED"
 	title := gaOverlay.title
 	if title == "" {

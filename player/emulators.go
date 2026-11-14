@@ -1249,7 +1249,7 @@ func launchEmulatorEntry(e emuEntry) {
 	// exits. beginGamePowerProfile never fails a launch: an unsupported
 	// firmware only logs.
 	restoreProfile := beginLaunchPowerProfile(appConfig, path) // per-game profile, PWR-6
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
 		logWarn("emulators", "launch failed for %s: %v", path, err)
 		showLaunchFailureDialog(e.Name, err, "")

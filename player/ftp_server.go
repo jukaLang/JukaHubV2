@@ -959,6 +959,38 @@ func localIPv4() string {
 	return best
 }
 
+// localUSBIPv4 is the optional USB-network address for browser transfers.
+// The companion listener already binds every interface; this only gives a
+// computer on a USB cable the address to type when Wi-Fi is active too.
+func localUSBIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		name := strings.ToLower(iface.Name)
+		if iface.Flags&net.FlagUp == 0 ||
+			!(strings.HasPrefix(name, "usb") || strings.HasPrefix(name, "rndis")) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP.To4()
+			if ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+				return ip.String()
+			}
+		}
+	}
+	return ""
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Session
 // ──────────────────────────────────────────────────────────────────────

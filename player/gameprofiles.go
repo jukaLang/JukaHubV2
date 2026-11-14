@@ -1031,7 +1031,7 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		if logFile != nil {
 			fmt.Fprintf(logFile, "start failed: %v\n", err)
 			logFile.Close()

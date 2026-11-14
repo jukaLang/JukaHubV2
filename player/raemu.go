@@ -102,7 +102,7 @@ func launchRetroArchMenu(e emuEntry) {
 	cmd.Env = append(screenChildEnv(os.Environ()), "HOME="+dir)
 	screenChildGroupConfigure(cmd)
 	restoreProfile := beginGamePowerProfile(appConfig)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
 		logWarn("emulators", "launch failed for %s: %v", bin, err)
 		showLaunchFailureDialog(e.Name, err, "")

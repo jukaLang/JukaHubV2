@@ -48,36 +48,40 @@ const (
 	vkTargetScene vkTargetKind = iota
 	vkTargetChat
 	vkTargetUnit
-	vkTargetTerm       // terminal command line
-	vkTargetName       // chat display name
-	vkTargetTV         // Live TV channel search
-	vkTargetParty      // Watch Party invite / shared link
-	vkTargetRA         // RetroAchievements username / Web API key
-	vkTargetMusic      // audio player initialism search
-	vkTargetNetplay    // LAN play host address
-	vkTargetPSRemote   // PS Remote Play pairing / account / address entry
-	vkTargetWiFi       // Wi-Fi passphrase for the network picker
-	vkTargetMemory     // Memory panel value field (scan / write value)
-	vkTargetGameSearch // game library search
-	vkTargetDownloads  // Downloads panel: a link to save for offline use
-	vkTargetGameArgs   // game library: extra launch arguments for one game
-	vkTargetGameTitle  // game library: display title for one game
-	vkTargetToolArgs   // toolbox: arguments for the highlighted tool
-	vkTargetPodcast    // podcasts panel: an RSS feed URL to subscribe to
-	vkTargetFiles      // Files screen: address, password, new folder, rename
-	vkTargetDNS        // Tools: host name or IP for the DNS lookup
-	vkTargetFileLine   // text file editor: the line under the cursor
-	vkTargetToolsURL   // Tools: URL or host for the HTTP check
-	vkTargetNetwork    // Tools: host:port or domain for the port/whois rows
-	vkTargetIPStream   // stream menu: the Find row's filter
-	vkTargetPlaylist   // audio player: name for a saved queue
-	vkTargetGroqKey    // Keyboard settings: the Groq API key voice typing uses
-	vkTargetBrowserURL // Settings → Browser: the home page or a custom search address
+	vkTargetTerm        // terminal command line
+	vkTargetName        // chat display name
+	vkTargetTV          // Live TV channel search
+	vkTargetParty       // Watch Party invite / shared link
+	vkTargetRA          // RetroAchievements username / Web API key
+	vkTargetMusic       // audio player initialism search
+	vkTargetNetplay     // LAN play host address
+	vkTargetPSRemote    // PS Remote Play pairing / account / address entry
+	vkTargetWiFi        // Wi-Fi passphrase for the network picker
+	vkTargetMemory      // Memory panel value field (scan / write value)
+	vkTargetGameSearch  // game library search
+	vkTargetPortsSearch // PortMaster catalogue search
+	vkTargetRommServer  // RomM server address or client API token
+	vkTargetDownloads   // Downloads panel: a link to save for offline use
+	vkTargetGameArgs    // game library: extra launch arguments for one game
+	vkTargetGameTitle   // game library: display title for one game
+	vkTargetToolArgs    // toolbox: arguments for the highlighted tool
+	vkTargetPodcast     // podcasts panel: an RSS feed URL to subscribe to
+	vkTargetFiles       // Files screen: address, password, new folder, rename
+	vkTargetDNS         // Tools: host name or IP for the DNS lookup
+	vkTargetFileLine    // text file editor: the line under the cursor
+	vkTargetToolsURL    // Tools: URL or host for the HTTP check
+	vkTargetNetwork     // Tools: host:port or domain for the port/whois rows
+	vkTargetIPStream    // stream menu: the Find row's filter
+	vkTargetPlaylist    // audio player: name for a saved queue
+	vkTargetGroqKey     // Keyboard settings: the Groq API key voice typing uses
+	vkTargetBrowserURL  // Settings → Browser: the home page or a custom search address
 )
 
 // podcastFeedInput holds the feed URL while it is being typed. It is only read
 // on submit, so a half-typed URL never reaches the subscription list.
 var podcastFeedInput string
+
+var vkRommServerBuffer string
 
 // fileEditorLineBuffer holds one line of a text file while it is being edited.
 // Like the other buffers nothing is committed until submit.
@@ -311,7 +315,7 @@ func vkActionLabel() string {
 		return "Run"
 	case setSearchVKTarget:
 		return "Search"
-	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetPortsSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
 		return "Search"
 	case vkTargetWiFi, vkTargetNetplay:
 		return "Join"
@@ -329,7 +333,7 @@ func vkActionLabel() string {
 			return "Next"
 		}
 		return "Save"
-	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
+	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL:
 		return "Save"
 	case vkTargetScene:
@@ -849,6 +853,10 @@ func vkCurrentText() string {
 		return memValueBuffer
 	case vkTargetGameSearch:
 		return vkLiveQuery(vkGameSearchRaw, gameLibraryQuery())
+	case vkTargetPortsSearch:
+		return portsPanel.query
+	case vkTargetRommServer:
+		return vkRommServerBuffer
 	case vkTargetIPStream:
 		return ipPanelQuery
 	case vkTargetDownloads:
@@ -931,6 +939,10 @@ func vkSetText(text string, config *Config) {
 		// the query is typed instead of after submitting.
 		vkGameSearchRaw = text
 		setGameLibraryQuery(text)
+	case vkTargetPortsSearch:
+		portsPanelSetQuery(text)
+	case vkTargetRommServer:
+		vkRommServerBuffer = text
 	case vkTargetIPStream:
 		// The stream menu stays open behind the keyboard and narrows on every
 		// keystroke, so matches appear while the query is typed. A new query
@@ -1132,6 +1144,13 @@ func vkTitle() string {
 		return "SEARCH SONGS"
 	case vkTargetGameSearch:
 		return "SEARCH GAMES"
+	case vkTargetPortsSearch:
+		return "SEARCH PORTS"
+	case vkTargetRommServer:
+		if rommCloud.editToken {
+			return "ROMM CLIENT API TOKEN"
+		}
+		return "ROMM SERVER ADDRESS"
 	case vkTargetIPStream:
 		return "FIND STREAMS"
 	case homeSearchVKTarget:
@@ -1260,6 +1279,13 @@ func vkPlaceholder() string {
 		return "Type initials: iwyn = I Want You Now"
 	case vkTargetGameSearch:
 		return "Title, console or file: zelda"
+	case vkTargetPortsSearch:
+		return "Port name or description"
+	case vkTargetRommServer:
+		if rommCloud.editToken {
+			return "Paste the rmm_ client API token"
+		}
+		return "https://your-romm-server.example"
 	case vkTargetIPStream:
 		return "Name, group or link: news"
 	case homeSearchVKTarget:
@@ -1592,6 +1618,33 @@ func vkOpenGameSearch() {
 	vkEnsureLayout()
 }
 
+func vkOpenPortsSearch() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetPortsSearch
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+func vkOpenRommServer(seed string) {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetRommServer
+	vkRommServerBuffer = seed
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
 // vkOpenFilesInput opens the keyboard for one of the Files screen's fields.
 // The kind decides the title and what submitting does; the seed fills the line,
 // so a rename starts from the current name instead of an empty field.
@@ -1858,6 +1911,9 @@ func vkCloseKeyboard() {
 	}
 	if vkTarget == vkTargetBrowserURL {
 		brwPref.buffer = ""
+	}
+	if vkTarget == vkTargetRommServer {
+		vkRommServerBuffer = ""
 	}
 	if vkTarget == alarmLabelVKTarget {
 		alarmLabelBuffer = ""
@@ -2362,9 +2418,12 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetTV:
 		// The filter already applied while typing; submitting just dismisses.
 		vkCloseKeyboard()
-	case vkTargetGameSearch:
+	case vkTargetGameSearch, vkTargetPortsSearch:
 		// Same here: the library narrowed as the query was typed.
 		vkCloseKeyboard()
+	case vkTargetRommServer:
+		vkCloseKeyboard()
+		rommCloudApplyEdit(text)
 	case vkTargetGroqKey:
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()

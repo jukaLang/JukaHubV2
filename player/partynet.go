@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,45 @@ import (
 )
 
 const partyMaxBody = 16 << 10
+
+// partyRequestURLRE is deliberately narrow: the party transport only ever
+// speaks http to a host and an /api/party/ endpoint. Keeping the shape here
+// makes a malformed invite fail before it can reach the HTTP client.
+var partyRequestURLRE = regexp.MustCompile(`^http://(?:[A-Za-z0-9][A-Za-z0-9.-]{0,252}|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?/api/party/[A-Za-z0-9._~/?=&%+-]*$`)
+var partyHostnameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,252}$`)
+
+func partyHostAllowed(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
+	}
+	if !partyHostnameRE.MatchString(host) {
+		return false
+	}
+	return host == "localhost" || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".lan") || !strings.Contains(host, ".")
+}
+
+func partySafeRequestURL(raw string) (string, error) {
+	if !partyRequestURLRE.MatchString(raw) {
+		return "", errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !partyHostAllowed(u.Hostname()) {
+		return "", errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	return raw, nil
+}
+
+func partyNewRequest(method, raw string, body io.Reader) (*http.Request, error) {
+	safe, err := partySafeRequestURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	return http.NewRequest(method, safe, body)
+}
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
@@ -409,8 +449,8 @@ func partyNormalizeBase(raw string) (string, error) {
 		return "", errors.New("the party address must be http")
 	}
 	host := u.Hostname()
-	if host == "" {
-		return "", errors.New("that does not look like an address")
+	if !partyHostAllowed(host) {
+		return "", errors.New("the party host must be a local or LAN address")
 	}
 	port := u.Port()
 	if port == "" {
@@ -455,7 +495,15 @@ func (c *partyClient) post(path string, payload interface{}) (partySnapshot, err
 	if err != nil {
 		return partySnapshot{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	target := c.baseURL + path
+	if !partyRequestURLRE.MatchString(target) {
+		return partySnapshot{}, errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	u, err := url.Parse(target)
+	if err != nil || !partyHostAllowed(u.Hostname()) {
+		return partySnapshot{}, errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	req, err := partyNewRequest(http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return partySnapshot{}, err
 	}
@@ -535,7 +583,17 @@ func (c *partyClient) Poll(watch float64) bool {
 	if watch > 0 {
 		q.Set("w", strconv.FormatFloat(watch, 'f', 2, 64))
 	}
-	req, err := http.NewRequest(http.MethodGet, base+"/api/party/state?"+q.Encode(), nil)
+	target := base + "/api/party/state?" + q.Encode()
+	if !partyRequestURLRE.MatchString(target) {
+		c.fail(errors.New("the party address is not a safe local HTTP endpoint"))
+		return true
+	}
+	u, parseErr := url.Parse(target)
+	if parseErr != nil || !partyHostAllowed(u.Hostname()) {
+		c.fail(errors.New("the party address is not a safe local HTTP endpoint"))
+		return true
+	}
+	req, err := partyNewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		c.fail(err)
 		return true
@@ -724,7 +782,20 @@ func partyJoin(invite, name string) error {
 	}
 	client := newPartyClient(baseURL, code, "")
 	body, _ := json.Marshal(map[string]string{"code": code, "name": name})
-	resp, err := client.http.Post(baseURL+"/api/party/join", "application/json", bytes.NewReader(body))
+	target := baseURL + "/api/party/join"
+	if !partyRequestURLRE.MatchString(target) {
+		return errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	u, parseErr := url.Parse(target)
+	if parseErr != nil || !partyHostAllowed(u.Hostname()) {
+		return errors.New("the party address is not a safe local HTTP endpoint")
+	}
+	req, err := partyNewRequest(http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("could not reach the host: %w", err)
 	}

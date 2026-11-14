@@ -63,16 +63,35 @@ func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system libra
 			start = len(system.Games) - visible
 		}
 		gameLib.scroll = start
-		cardH := min(int32(210), h-46)
+		cardH := min(int32(210), h-62)
 		if cardH < 100 {
 			cardH = 100
 		}
-		rowY := y + (h-cardH)/2
+		rowY := y + (h-cardH-18)/2
+		shelfY := rowY + cardH + 7
+		// A shaded top, deep front and cast shadow make the covers sit on a
+		// shelf instead of floating as a flat row. The selected case lifts off it.
+		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		_ = renderer.SetDrawColor(0, 0, 0, 85)
+		_ = renderer.FillRect(&sdl.Rect{X: x + 7, Y: shelfY + 18, W: w - 7, H: 7})
+		fillRoundedRect(renderer, x, shelfY, w-8, 8, 2, WithAlpha(ColorPanelRaised, 245))
+		fillRoundedRect(renderer, x+4, shelfY+8, w-8, 13, 2, WithAlpha(ColorSurfaceRow, 235))
+		_ = renderer.SetDrawColor(255, 255, 255, 38)
+		_ = renderer.DrawLine(x+3, shelfY+1, x+w-12, shelfY+1)
 		for i := 0; i < visible; i++ {
 			idx := start + i
-			rect := sdl.Rect{X: x + int32(i)*(cardW+gap), Y: rowY, W: cardW, H: cardH}
-			gameLib.gameHits = append(gameLib.gameHits, gameLibRowHit{index: idx, rect: rect})
 			selected := idx == gameLib.cursor
+			lift := int32(0)
+			if selected {
+				lift = 10
+			}
+			rect := sdl.Rect{X: x + int32(i)*(cardW+gap), Y: rowY - lift, W: cardW, H: cardH}
+			gameLib.gameHits = append(gameLib.gameHits, gameLibRowHit{index: idx, rect: rect})
+			_ = renderer.SetDrawColor(0, 0, 0, 95)
+			_ = renderer.FillRect(&sdl.Rect{X: rect.X + 7, Y: rect.Y + 8, W: rect.W, H: rect.H})
+			_ = renderer.SetDrawColor(0, 0, 0, 115)
+			_ = renderer.FillRect(&sdl.Rect{X: rect.X + 4, Y: shelfY - 2, W: rect.W - 4, H: 5})
+			fillRoundedRect(renderer, rect.X+rect.W-2, rect.Y+5, 7, rect.H-2, 2, WithAlpha(ColorBorderDefault, 225))
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(ColorSurfaceRow, 180))
 			if selected {
 				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, accent)

@@ -811,10 +811,11 @@ func runTerminal(config *Config, cmdStr string) {
 	go func() {
 		var c *exec.Cmd
 		if runtime.GOOS == "windows" {
-			c = exec.Command("cmd", "/c", cmdStr)
+			c = exec.Command("cmd", "/d", "/q")
 		} else {
-			c = exec.Command("sh", "-c", cmdStr)
+			c = exec.Command("sh")
 		}
+		c.Stdin = strings.NewReader(cmdStr + "\n")
 		out, err := c.CombinedOutput()
 		if err != nil {
 			out = append(out, []byte("\n"+err.Error())...)

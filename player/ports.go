@@ -94,10 +94,11 @@ type portEntry struct {
 	Detail  string
 	Status  emuStatus
 	Launch  string
-	Compat  portCompat // whether the port's own manifest can run on this chip
-	Install bool       // the PortMaster install action
-	Master  bool       // the PortMaster app itself
-	Info    bool       // a hint row with no status label
+	Compat  portCompat     // whether the port's own manifest can run on this chip
+	Install bool           // the PortMaster install action
+	Master  bool           // the PortMaster app itself
+	Info    bool           // a hint row with no status label
+	Catalog mcCatalogEntry // a downloadable entry from PortMaster's live catalogue
 }
 
 // scanPortLaunchers lists top-level .sh scripts in roots, excluding
@@ -335,10 +336,18 @@ func installPortMasterFromStage(unpacked, sdRoot string) error {
 // ── Ports panel ──────────────────────────────────────────────────────────
 
 type portsPanelState struct {
-	open      bool
-	cursor    int
-	scroll    int
-	returnEmu bool
+	open              bool
+	cursor            int
+	scroll            int
+	returnEmu         bool
+	catalog           bool
+	mayRun            bool
+	query             string
+	catalogEntries    []mcCatalogEntry
+	catalogRows       []portEntry
+	catalogLoading    bool
+	catalogErr        string
+	catalogGeneration uint64
 }
 
 var portsPanel portsPanelState
@@ -358,7 +367,7 @@ func openPortsPanel(returnEmu bool) {
 	gpPanel.open = false
 	raPanel.open = false
 	winAppsPanel = windowsAppsPanelState{}
-	portsPanel = portsPanelState{open: true, returnEmu: returnEmu}
+	portsPanel = portsPanelState{open: true, returnEmu: returnEmu, mayRun: true}
 	portsPanelRect = sdl.Rect{}
 	portRowHits = nil
 	invalidatePortsCache()
@@ -382,7 +391,7 @@ func closePortsPanel() {
 }
 
 func portsPanelMove(delta int) {
-	entries := portEntries()
+	entries := portsPanelRows()
 	if len(entries) == 0 {
 		return
 	}
@@ -397,11 +406,25 @@ func portsPanelMove(delta int) {
 }
 
 func portsPanelActivate() {
-	entries := portEntries()
+	entries := portsPanelRows()
 	if portsPanel.cursor < 0 || portsPanel.cursor >= len(entries) {
 		return
 	}
 	e := entries[portsPanel.cursor]
+	if portsPanel.catalog {
+		if e.Catalog.Zip != "" {
+			if e.Status == emuAvailable {
+				ShowToast(e.Name+" is already installed — switch to Installed to launch it", ToastKindInfo)
+				return
+			}
+			if err := portCatalogInstallStart(e.Catalog); err != nil {
+				ShowToast(err.Error(), ToastKindWarning)
+			}
+		} else if portsPanel.catalogErr != "" {
+			portsPanelLoadCatalog()
+		}
+		return
+	}
 	if e.Install {
 		if portMasterInstalling() {
 			ShowToast("The PortMaster installer is already running", ToastKindInfo)
@@ -469,7 +492,7 @@ func launchPortScript(name, path string) {
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
 		logWarn("portmaster", "launch failed for %s: %v", path, err)
 		ShowToast("Could not launch "+name, ToastKindError)
@@ -559,6 +582,9 @@ func portAudioEnvFor(goos string, custom map[string]interface{}) []string {
 }
 
 func ctrlPortsPanel(e *sdl.ControllerButtonEvent) bool {
+	if virtualKeyboardActive {
+		return false
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		portsPanelMove(-1)
@@ -566,6 +592,14 @@ func ctrlPortsPanel(e *sdl.ControllerButtonEvent) bool {
 		portsPanelMove(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		portsPanelActivate()
+	case sdl.CONTROLLER_BUTTON_X:
+		portsPanelToggleCatalog()
+	case sdl.CONTROLLER_BUTTON_Y:
+		portsPanelToggleMayRun()
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		if portsPanel.catalog {
+			vkOpenPortsSearch()
+		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closePortsPanel()
 	}
@@ -573,7 +607,7 @@ func ctrlPortsPanel(e *sdl.ControllerButtonEvent) bool {
 }
 
 func handlePortsKey(e *sdl.KeyboardEvent) bool {
-	if e == nil || e.Type != sdl.KEYDOWN || !portsPanel.open {
+	if e == nil || e.Type != sdl.KEYDOWN || !portsPanel.open || virtualKeyboardActive {
 		return false
 	}
 	switch e.Keysym.Sym {
@@ -583,6 +617,14 @@ func handlePortsKey(e *sdl.KeyboardEvent) bool {
 		portsPanelMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		portsPanelActivate()
+	case sdl.K_TAB, sdl.K_x:
+		portsPanelToggleCatalog()
+	case sdl.K_f, sdl.K_y:
+		portsPanelToggleMayRun()
+	case sdl.K_s, sdl.K_SLASH:
+		if portsPanel.catalog {
+			vkOpenPortsSearch()
+		}
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		closePortsPanel()
 	}
@@ -641,7 +683,7 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 	if !portsPanel.open || renderer == nil {
 		return
 	}
-	entries := portEntries()
+	entries := portsPanelRows()
 	if len(entries) == 0 {
 		entries = []portEntry{{Name: "No ports yet", Detail: "Install PortMaster to add ports", Status: emuMissing}}
 	}
@@ -668,7 +710,11 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar that fills it measure the same height.
-	header := UIPanelHeader("PortMaster Ports", portsSummary(entries), "packages")
+	title, subtitle := "PortMaster Ports", portsSummary(entries)
+	if portsPanel.catalog {
+		title, subtitle = "PortMaster Catalogue", portCatalogSummary()
+	}
+	header := UIPanelHeader(title, subtitle, "packages")
 	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 
@@ -743,6 +789,9 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 			if e.Install {
 				label, labelColor = "Install", installHighlight()
 			}
+			if e.Catalog.Zip != "" && e.Status != emuAvailable {
+				label, labelColor = "Install", installHighlight()
+			}
 			if e.Compat.State == portCompat32BitOnly {
 				label, labelColor = "32-bit only", ColorToastWarn
 			}
@@ -774,9 +823,12 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hints := []FooterHint{{"A", "Open"}, {"B", "Close"}}
+	hints := []FooterHint{{"A", "Open"}, {"X", "Catalogue"}, {"B", "Close"}}
 	if len(entries) > 0 && entries[0].Install {
-		hints = []FooterHint{{"A", "Install PortMaster"}, {"B", "Close"}}
+		hints = []FooterHint{{"A", "Install PortMaster"}, {"X", "Catalogue"}, {"B", "Close"}}
+	}
+	if portsPanel.catalog {
+		hints = []FooterHint{{"A", "Install"}, {"X", "Installed"}, {"Y", "May run"}, {"R1", "Search"}, {"B", "Close"}}
 	}
 	if portsPanel.scroll > 0 || portsPanel.scroll+int(visible) < len(entries) {
 		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",

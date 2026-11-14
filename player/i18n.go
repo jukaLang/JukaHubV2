@@ -51,10 +51,11 @@ package main
 // a small bounded cache, so a steady frame pays one locked map read per such
 // string.
 //
-// A translated value is never re-translated into something else: the catalogue
-// test (TestUICataloguesParse in core_substitute_test.go) checks that a
-// value which is also a key maps to itself, so applying uiT twice — fit, then
-// draw — is harmless.
+// A translated value is never re-translated by the fit/draw path: fitTextCached
+// marks the fitted translation as already translated, and uiT/the raw draw
+// helpers strip that mark instead of looking the value up again. The catalogue
+// test (TestUICataloguesParse in core_substitute_test.go) checks that path,
+// including a value which is also another key.
 
 import (
 	"embed"
@@ -118,10 +119,6 @@ type uiCatalog struct {
 	code     string
 	exact    map[string]string
 	patterns []uiPattern
-	// values holds every exact translation, so a string that is already
-	// one (translated by ellipsize, drawn by renderText) passes straight
-	// through. Built once in uiLoadCatalog; read-only afterwards.
-	values map[string]struct{}
 
 	// slow remembers what the pattern rules made of strings that are not
 	// keys, including "nothing" (the string itself). Bounded: cleared when
@@ -143,16 +140,76 @@ const uiSlowMaxLen = 240
 // uiT is the string to draw for the English UI string s.
 func uiT(s string) string {
 	c := uiActive.Load()
-	if c == nil || s == "" {
+	if c == nil {
+		return uiUnmarkTranslated(s)
+	}
+	if s == "" {
 		return s
+	}
+	if strings.Contains(s, uiTranslatedStart) {
+		return c.translateMarked(s)
 	}
 	if t, ok := c.exact[s]; ok {
 		return t
 	}
-	// Already a translation (ellipsize translated it, now renderText draws
-	// it): drawn as is, without the lock or the pattern rules.
-	if _, ok := c.values[s]; ok {
+	return c.translateSlow(s)
+}
+
+// uiTranslatedMark wraps text that fitTextCached has already translated and
+// fitted. The marks are internal to the text path: uiT strips them instead of
+// translating again, and the raw draw helpers strip them before rendering. It
+// carries provenance that a plain string cannot, which is why a translated
+// value that is also another key (Spanish Network -> Red) can safely reach a
+// draw call without being sent through the catalogue a second time.
+const (
+	// Zero-width markers: direct font.SizeUTF8 measurements ignore them,
+	// while a C string does not terminate on them like it does on NUL.
+	uiTranslatedStart = "\u200b"
+	uiTranslatedEnd   = "\u2060"
+)
+
+func uiMarkTranslated(s string) string {
+	return uiTranslatedStart + s + uiTranslatedEnd
+}
+
+func uiUnmarkTranslated(s string) string {
+	if !strings.Contains(s, uiTranslatedStart) && !strings.Contains(s, uiTranslatedEnd) {
 		return s
+	}
+	return strings.NewReplacer(uiTranslatedStart, "", uiTranslatedEnd, "").Replace(s)
+}
+
+// translateMarked translates the unmarked parts of a composed label and keeps
+// the marked parts as they are. A fitted label can be concatenated with other
+// UI text ("Loading " + fitted), so the marks must survive composition until
+// the draw boundary; otherwise the fitted part would be translated again.
+func (c *uiCatalog) translateMarked(s string) string {
+	var out strings.Builder
+	for len(s) > 0 {
+		start := strings.Index(s, uiTranslatedStart)
+		if start < 0 {
+			out.WriteString(c.translatePlain(s))
+			break
+		}
+		out.WriteString(c.translatePlain(s[:start]))
+		s = s[start+len(uiTranslatedStart):]
+		end := strings.Index(s, uiTranslatedEnd)
+		if end < 0 {
+			out.WriteString(s)
+			break
+		}
+		out.WriteString(s[:end])
+		s = s[end+len(uiTranslatedEnd):]
+	}
+	return out.String()
+}
+
+func (c *uiCatalog) translatePlain(s string) string {
+	if s == "" {
+		return s
+	}
+	if t, ok := c.exact[s]; ok {
+		return t
 	}
 	return c.translateSlow(s)
 }
@@ -497,10 +554,6 @@ func uiLoadCatalog(code string) (*uiCatalog, error) {
 		return nil, err
 	}
 	uiMergeCatalogParts(c)
-	c.values = make(map[string]struct{}, len(c.exact))
-	for _, v := range c.exact {
-		c.values[v] = struct{}{}
-	}
 	return c, nil
 }
 

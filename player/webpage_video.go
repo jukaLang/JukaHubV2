@@ -188,6 +188,9 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	}
 	resolved := p.webImageURL(src) // http(s) relative-to-document resolution
 	if resolved == "" {
+		if name == "video" {
+			p.addPlaceholderBlock(name, attrs)
+		}
 		return
 	}
 	title := htmlAttrValue(htmlTagAttribute(attrs, "title"))

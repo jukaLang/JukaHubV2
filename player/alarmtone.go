@@ -397,10 +397,15 @@ func alarmPlayLoop(gen int64, soundID string, preview bool) {
 			continue
 		}
 		audioMutex.Lock()
+		var queueErr error
 		if alarmPlaying(gen) {
-			_ = outQueue(audioDev, buf[:n*2])
+			queueErr = outQueue(audioDev, buf[:n*2])
 		}
 		audioMutex.Unlock()
+		if queueErr != nil {
+			logWarn("alarm", "ringtone output stopped: %v", queueErr)
+			return
+		}
 		publishAudioLevel(buf[:n*2], int(rate), 1)
 	}
 }

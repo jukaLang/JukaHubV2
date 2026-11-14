@@ -23,6 +23,7 @@ type companionOverlay struct {
 	pin        string
 	url        string // pairing link, including PIN, for QR codes
 	browserURL string // http://<IP>[:port] to type, without the PIN
+	usbURL     string // optional USB-network address when Wi-Fi is preferred
 	err        string
 	qr         [][]bool
 	srv        *companionServer
@@ -102,6 +103,7 @@ func stopCompanionServer() {
 	companion.pin = ""
 	companion.url = ""
 	companion.browserURL = ""
+	companion.usbURL = ""
 	companion.err = ""
 	companion.qr = nil
 	companionHeaderRect = sdl.Rect{}
@@ -127,9 +129,10 @@ func companionStart() {
 	companion.err = ""
 	companion.url = ""
 	companion.browserURL = ""
+	companion.usbURL = ""
 	companion.qr = nil
 	if localIPv4() == "" {
-		companion.err = "No Wi-Fi address - connect the handheld to a network"
+		companion.err = "No network address — connect Wi-Fi or USB networking"
 		return
 	}
 	pin := companion.pin
@@ -187,15 +190,20 @@ func companionRefreshURL() {
 	}
 	ip := localIPv4()
 	if ip == "" {
-		companion.err = "No Wi-Fi address - connect the handheld to a network"
+		companion.err = "No network address — connect Wi-Fi or USB networking"
 		companion.url = ""
 		companion.browserURL = ""
+		companion.usbURL = ""
 		companion.qr = nil
 		return
 	}
 	// Always the numeric address: a .local name fails with NXDOMAIN on many
 	// routers and phones, the IP works everywhere.
 	companion.browserURL = companionBaseURL(ip, companion.srv.BrowserPort())
+	companion.usbURL = ""
+	if usb := localUSBIPv4(); usb != "" && usb != ip {
+		companion.usbURL = companionBaseURL(usb, companion.srv.BrowserPort())
+	}
 	url := companion.srv.URL()
 	if url == companion.url && len(companion.qr) > 0 {
 		companion.err = ""
@@ -502,9 +510,9 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 	}
 	// Short, individually fitted lines cannot spill into the details column.
 	captionY := qr.Y + qr.H + 6
-	captions := []string{"Scan with phone", "A Enlarge QR", "Use same Wi-Fi"}
+	captions := []string{"Scan with phone", "A Enlarge QR", "Wi-Fi or USB network"}
 	if companion.err != "" {
-		captions = []string{"Companion offline", "", "Use same Wi-Fi"}
+		captions = []string{"Companion offline", "", "Wi-Fi or USB network"}
 	} else if len(companion.qr) == 0 {
 		captions[1] = ""
 	}
@@ -530,6 +538,15 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 				}
 				y += 10
 			}
+			if companion.usbURL != "" {
+				drawText(r, smallFont, "USB NETWORK", layout.right.X, y, dim, textAlignLeft)
+				y += line + 2
+				for _, addressLine := range companionWrapAddress(smallFont, companion.usbURL, layout.right.W) {
+					drawText(r, smallFont, addressLine, layout.right.X, y, accent, textAlignLeft)
+					y += line
+				}
+				y += 8
+			}
 			drawText(r, smallFont, "PAIRING PIN", layout.right.X, y, dim, textAlignLeft)
 			y += line + 2
 			pinText := companion.pin
@@ -549,7 +566,7 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 				y = drawCompanionParagraph(r, smallFont, companion.err, layout.right.X, y, layout.right.W, red, line, layout.contentBottom)
 				y += 4
 			}
-			help := "Your phone gets a keyboard, remote, link sender and file drop. Files land in PhoneDrop."
+			help := "Open this address in any browser to drag games, covers and music into shared folders."
 			drawCompanionParagraph(r, smallFont, help, layout.right.X, y, layout.right.W, dim, line, layout.contentBottom)
 		})
 	}

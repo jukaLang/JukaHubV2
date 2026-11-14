@@ -121,6 +121,27 @@ func TestWebStructuralPseudoClassMatching(t *testing.T) {
 		{"nth child negative range", `<style>.item:nth-child(-n+2){color:#cc0000}</style><div><i>One</i><i class="item">Hit</i><i>Three</i></div>`, "Hit", true},
 		{"nth child negative range miss", `<style>.item:nth-child(-n+2){color:#cc0000}</style><div><i>One</i><i>Two</i><i class="item">Miss</i></div>`, "Miss", false},
 		{"nth child inside has", `<style>.card:has(> .item:nth-child(2)){color:#cc0000}</style><div class="card"><span>Hit</span><i class="item"></i></div>`, "Hit", true},
+		{"nth last child hit", `<style>.item:nth-last-child(2){color:#cc0000}</style><div><i>One</i><i class="item">Hit</i><i>Three</i></div>`, "Hit", true},
+		{"nth last child miss", `<style>.item:nth-last-child(1){color:#cc0000}</style><div><i class="item">Miss</i><i>Two</i></div>`, "Miss", false},
+		{"nth last child odd", `<style>.item:nth-last-child(odd){color:#cc0000}</style><div><i class="item">Hit</i><i>Two</i><i>Three</i></div>`, "Hit", true},
+		{"nth of type ignores other tags", `<style>.item:nth-of-type(2){color:#cc0000}</style><div><span>Heading</span><i>One</i><i class="item">Hit</i></div>`, "Hit", true},
+		{"nth of type miss", `<style>.item:nth-of-type(2){color:#cc0000}</style><div><i class="item">Miss</i><i>Two</i></div>`, "Miss", false},
+		{"nth of type formula", `<style>.item:nth-of-type(2n+1){color:#cc0000}</style><div><i class="item">Hit</i><i>Two</i><i>Three</i></div>`, "Hit", true},
+		{"nth last of type hit", `<style>.item:nth-last-of-type(2){color:#cc0000}</style><div><span>Heading</span><i class="item">Hit</i><i>Second</i></div>`, "Hit", true},
+		{"nth last of type miss", `<style>.item:nth-last-of-type(2){color:#cc0000}</style><div><i>One</i><i class="item">Miss</i></div>`, "Miss", false},
+		{"nth child of class", `<style>.item:nth-child(2 of .active){color:#cc0000}</style><div><i class="active">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"nth child of class miss", `<style>.item:nth-child(2 of .active){color:#cc0000}</style><div><i class="active">One</i><i class="item">Miss</i><i>Three</i></div>`, "Miss", false},
+		{"nth last child of class", `<style>.item:nth-last-child(1 of .active){color:#cc0000}</style><div><i class="active">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"nth of type of class", `<style>.item:nth-of-type(2 of .active){color:#cc0000}</style><div><i class="active">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"nth last of type of class", `<style>.item:nth-last-of-type(1 of .active){color:#cc0000}</style><div><i class="active">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"nth child of tag", `<style>.item:nth-child(2 of i){color:#cc0000}</style><div><span>Heading</span><i>One</i><i class="item">Hit</i></div>`, "Hit", true},
+		{"nth last child of tag", `<style>.item:nth-last-child(1 of i){color:#cc0000}</style><div><span>Heading</span><i>One</i><i class="item">Hit</i></div>`, "Hit", true},
+		{"nth of type of tag", `<style>.item:nth-of-type(2 of i){color:#cc0000}</style><div><span>Heading</span><i>One</i><i class="item">Hit</i></div>`, "Hit", true},
+		{"nth last of type of tag", `<style>.item:nth-last-of-type(2 of i){color:#cc0000}</style><div><span>Heading</span><i>One</i><i class="item">Hit</i><i>Three</i></div>`, "Hit", true},
+		{"nth child of nested list", `<style>.item:nth-child(2 of :is(.active, .other)){color:#cc0000}</style><div><i class="active">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"nth child of selector list", `<style>.item:nth-child(2 of .active, .other){color:#cc0000}</style><div><i class="other">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"nth child of class formula", `<style>.item:nth-child(2n of .active){color:#cc0000}</style><div><i class="active">One</i><i>Skip</i><i class="active item">Hit</i></div>`, "Hit", true},
+		{"li nth child of class formula", `<style>li:nth-child(2n of .active){color:#cc0000}</style><ul><li class="active">One</li><li>Skip</li><li class="active item">Hit</li></ul>`, "Hit", true},
 		{"first child with explicit head", `<html><head><style>.item:first-child{color:#cc0000}</style></head><body><div><span class="item">Hit</span><span>Second</span></div></body></html>`, "Hit", true},
 	}
 	for _, tc := range cases {
@@ -135,6 +156,28 @@ func TestWebStructuralPseudoClassMatching(t *testing.T) {
 				t.Fatalf("colour %+v / has=%v, want red=%v", style.Color, style.HasColor, tc.red)
 			}
 		})
+	}
+}
+
+func TestWebNthChildOfClassFiltersSiblings(t *testing.T) {
+	doc := parseWebPage(`<style>li:nth-child(2n of .active){color:#cc0000}</style>`+
+		`<ul><li class="active">One</li><li>Skip</li><li class="active">Hit</li></ul>`, "", "https://example.com/")
+	one, ok := webTestStyleForText(doc, "One")
+	if !ok {
+		t.Fatal("One was not drawn")
+	}
+	hit, ok := webTestStyleForText(doc, "Hit")
+	if !ok {
+		t.Fatal("Hit was not drawn")
+	}
+	red := func(style webStyle) bool {
+		return style.HasColor && style.Color.R == 0xcc && style.Color.G == 0 && style.Color.B == 0
+	}
+	if red(one) {
+		t.Fatal("the first active li matched 2n despite being filtered position 1")
+	}
+	if !red(hit) {
+		t.Fatal("the second active li did not match 2n of .active")
 	}
 }
 
@@ -427,15 +470,14 @@ func TestWebCSSUnsupportedConstructsAreDocumented(t *testing.T) {
 	}
 	doc := string(data)
 	for _, construct := range []string{
-		"font-family", "Percentage heights", "float: inline-start",
+		"font-family", "Percentage heights",
 		"aspect-ratio on an ordinary block",
-		"display: table", "block/inline conversion", "Width/min-width/max-width on a flex/grid container",
-		"margin: auto",
+		"block/inline conversion", "Width/min-width/max-width on a flex/grid container",
 		"position: sticky",
 		"text-overflow", "transform",
 		"transition", "animation", "filter", "clip-path", "grid-template-rows",
 		"grid-row", "grid-column", "grid-area", "white-space",
-		"table-layout", "border-collapse", "list-style-image", "list-style-position",
+		"list-style-image", "list-style-position",
 		"::first-line", "::first-letter", "::selection", "::placeholder", "::backdrop",
 		"content: url", "@font-face", "@keyframes", "@page", "@layer", "@import",
 		"text-align: justify",
@@ -464,10 +506,12 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 		"border-left-width", "border-radius", "border-right", "border-right-width",
 		"border-style", "border-top", "border-top-left-radius", "border-top-right-radius", "border-top-width",
 		"border-width", "bottom", "box-shadow", "box-sizing", "clear", "color", "column-gap",
+		"table-layout", "border-collapse", "border-spacing",
 		"container", "container-name", "container-type", "content", "counter-increment",
 		"counter-reset", "counter-set", "display", "flex",
 		"flex-basis", "flex-direction", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-size",
 		"font-style", "font-weight", "gap", "grid-template-columns", "height", "inset",
+		"inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
 		"justify-content", "left", "letter-spacing", "line-height", "list-style", "list-style-type", "margin", "margin-block",
 		"margin-block-end", "margin-block-start", "margin-bottom", "margin-inline",
 		"margin-inline-end", "margin-inline-start", "margin-left", "margin-right", "margin-top",

@@ -336,6 +336,7 @@ const omittedMark = "…"
 // sensible substitute collapse to a single ellipsis. Supported text (Latin,
 // Greek, Cyrillic) is returned untouched.
 func sanitizeForFont(font *ttf.Font, text string) string {
+	text = uiUnmarkTranslated(text)
 	if font == nil || text == "" {
 		return text
 	}
@@ -519,7 +520,12 @@ func truncateRunesSuffix(s string, maxRunes int, suffix string) string {
 
 // fitTextToWidth clips text so it fits maxW pixels, measuring the substituted
 // text (what will actually be drawn) so trimming matches rendering.
-func fitTextToWidth(font *ttf.Font, text string, maxW int32) string {
+func fitTextToWidth(font *ttf.Font, text string, maxW int32) (out string) {
+	marked := strings.Contains(text, uiTranslatedStart) || strings.Contains(text, uiTranslatedEnd)
+	if marked {
+		text = uiUnmarkTranslated(text)
+		defer func() { out = uiMarkTranslated(out) }()
+	}
 	if font == nil || maxW <= 0 {
 		return text
 	}

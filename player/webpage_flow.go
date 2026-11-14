@@ -30,6 +30,252 @@ type webFlexItem struct {
 	blocks []webBlock
 }
 
+// flexAutoMain reports the auto margins on a flex item's main axis, in
+// main-start/main-end order. Physical margins are mirrored for reverse
+// directions, which is how `margin-left: auto` becomes an end margin in a
+// row-reverse container.
+func flexAutoMain(b webBlock) (start, end bool) {
+	if b.FlexDir == webFlexColumn {
+		if b.FlexReverse {
+			return b.Style.MarginBotAuto, b.Style.MarginTopAuto
+		}
+		return b.Style.MarginTopAuto, b.Style.MarginBotAuto
+	}
+	if b.FlexReverse {
+		return b.Style.MarginRightAuto, b.Style.MarginLeftAuto
+	}
+	return b.Style.MarginLeftAuto, b.Style.MarginRightAuto
+}
+
+// flexAutoCross reports auto margins on the cross axis. Rows use the block
+// axis, columns the inline axis; reverse directions do not swap the cross
+// edges of a row.
+func flexAutoCross(b webBlock) (start, end bool) {
+	if b.FlexDir == webFlexColumn {
+		return b.Style.MarginLeftAuto, b.Style.MarginRightAuto
+	}
+	return b.Style.MarginTopAuto, b.Style.MarginBotAuto
+}
+
+// webFlexContainerHeight returns the definite block size a flex column can
+// distribute. A percentage height has no resolved parent height in this
+// reader, so it stays content-sized; a min-height is a definite floor and can
+// be used as the container's block size.
+func webFlexContainerHeight(st webStyle) float64 {
+	if st.Height > 0 {
+		return st.Height
+	}
+	return st.MinHeight
+}
+
+func flexAutoCount(items []webFlexItem) int {
+	count := 0
+	for _, item := range items {
+		start, end := flexAutoMain(item.blocks[0])
+		if start {
+			count++
+		}
+		if end {
+			count++
+		}
+	}
+	return count
+}
+
+// flexAutoSpaces splits free main-axis space over the auto edges. The row and
+// column paths share this so a column margin-top:auto behaves exactly like a
+// row margin-left:auto, including the both-auto centre case.
+func flexAutoSpaces(items []webFlexItem, free int32) (startSpace, endSpace []int32) {
+	startSpace = make([]int32, len(items))
+	endSpace = make([]int32, len(items))
+	if free <= 0 {
+		return startSpace, endSpace
+	}
+	count := flexAutoCount(items)
+	if count == 0 {
+		return startSpace, endSpace
+	}
+	remaining := free
+	remainingSlots := int32(count)
+	for i, item := range items {
+		start, end := flexAutoMain(item.blocks[0])
+		if start {
+			startSpace[i] = remaining / remainingSlots
+			remaining -= startSpace[i]
+			remainingSlots--
+		}
+		if end {
+			endSpace[i] = remaining / remainingSlots
+			remaining -= endSpace[i]
+			remainingSlots--
+		}
+	}
+	return startSpace, endSpace
+}
+
+// flexCrossOffset resolves a column flex item's horizontal auto margins
+// against the column's content width. It uses the same constrained-width
+// calculation as block flow, so a fixed-width card centres and a full-width
+// one keeps the whole line.
+func (l *webLayouter) flexCrossOffset(blocks []webBlock, contentW int32) int32 {
+	if len(blocks) == 0 || contentW <= 0 || l.baseSize <= 0 {
+		return 0
+	}
+	b := blocks[0]
+	start, end := flexAutoCross(b)
+	if !start && !end {
+		return 0
+	}
+	scale := l.baseSize / 16
+	width := webBlockContentWidth(b, contentW, l.baseSize)
+	free := contentW - width - int32((b.Indent+b.Style.IndentRight)*scale)
+	if free <= 0 {
+		return 0
+	}
+	if start && end {
+		return free / 2
+	}
+	if start {
+		return free
+	}
+	return 0
+}
+
+func (l *webLayouter) flexColumnHeightRows(height float64) int32 {
+	if height <= 0 || l.baseSize <= 0 || l.rowH <= 0 {
+		return 0
+	}
+	rows := int32(math.Ceil(height * l.baseSize / 16 / float64(l.rowH)))
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// mergeFlexSubLayout moves one measured item into the page row grid. The item
+// is measured at x=0, so its painted boxes and runs move together here.
+func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
+	if sub == nil {
+		return
+	}
+	ensureRows := func(last int32) {
+		for int32(len(l.layout.Rows)) <= last && len(l.layout.Rows) < webMaxRows {
+			idx := int32(len(l.layout.Rows))
+			l.layout.Rows = append(l.layout.Rows, webRow{Y: idx * l.rowH})
+		}
+	}
+	for ri, row := range sub.Rows {
+		target := rowOffset + int32(ri)
+		ensureRows(target)
+		if target < 0 || target >= int32(len(l.layout.Rows)) {
+			continue
+		}
+		for _, run := range row.Runs {
+			run.X += x
+			l.layout.Rows[target].Runs = append(l.layout.Rows[target].Runs, run)
+		}
+	}
+	dy := rowOffset * l.rowH
+	for _, rect := range sub.Rects {
+		rect.Rect.X += x
+		rect.Rect.Y += dy
+		l.layout.Rects = append(l.layout.Rects, rect)
+	}
+	for _, bg := range sub.Backgrounds {
+		bg.Rect.X += x
+		bg.Rect.Y += dy
+		l.layout.Backgrounds = append(l.layout.Backgrounds, bg)
+	}
+	for _, im := range sub.Images {
+		im.Rect.X += x
+		im.Rect.Y += dy
+		l.layout.Images = append(l.layout.Images, im)
+	}
+	for _, video := range sub.Videos {
+		video.Rect.X += x
+		video.Rect.Y += dy
+		l.layout.Videos = append(l.layout.Videos, video)
+	}
+	for _, float := range sub.Floats {
+		float.X += x
+		float.Y += dy
+		l.layout.Floats = append(l.layout.Floats, float)
+	}
+}
+
+// layoutFlexColumnAuto is the column counterpart of the row main-axis path.
+// It measures each item, hands the container's spare block rows to the same
+// flexAutoSpaces allocator the row uses, and then merges the items at those
+// offsets. It is only used when the container has a definite block height.
+func (l *webLayouter) layoutFlexColumnAuto(grouped []webFlexItem, block webBlock, padX, contentW, containerRows int32) {
+	type measuredItem struct {
+		item     webFlexItem
+		sub      *webLayout
+		rows     int32
+		before   int32
+		after    int32
+		gapAbove int32
+	}
+	gap := webMarginRows(block.FlexGapY, l.baseSize, l.rowH)
+	measured := make([]measuredItem, 0, len(grouped))
+	total := int32(0)
+	for i, item := range grouped {
+		gapAbove := int32(0)
+		if i > 0 {
+			gapAbove = gap + webMarginRows(item.blocks[0].MarginTop, l.baseSize, l.rowH)
+		}
+		blocks := item.blocks
+		if i == 0 {
+			// The group's leading margin belongs to the container, not to the
+			// first item; the caller has already collapsed it with the flow.
+			blocks = append([]webBlock(nil), item.blocks...)
+			blocks[0].MarginTop = 0
+		}
+		sub := &webLayout{RowH: l.rowH}
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
+			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
+		subLayouter.primeItemContainerWidths(blocks, contentW)
+		subLayouter.layoutBlocksFlat(blocks, 0, contentW)
+		l.absorbContainerRows(subLayouter.containerRows)
+		rows := int32(len(sub.Rows))
+		if rows < 1 && webItemVisible(blocks[0]) {
+			rows = 1
+		}
+		total += gapAbove + rows
+		measured = append(measured, measuredItem{item: item, sub: sub, rows: rows, gapAbove: gapAbove})
+	}
+	free := containerRows - total
+	if free < 0 {
+		free = 0
+	}
+	startSpace, endSpace := flexAutoSpaces(grouped, free)
+	baseRow := int32(len(l.layout.Rows))
+	cursor := baseRow
+	for i := range measured {
+		m := &measured[i]
+		cursor += m.gapAbove
+		before, after := startSpace[i], endSpace[i]
+		if block.FlexReverse {
+			// flexAutoMain reports main-start/main-end. In a column-reverse
+			// container the visual top is the main-end edge, so the gaps swap.
+			before, after = after, before
+		}
+		cursor += before
+		x := padX + l.flexCrossOffset(m.item.blocks, contentW)
+		l.mergeFlexSubLayout(m.sub, x, cursor)
+		cursor += m.rows + after
+	}
+	targetRows := containerRows
+	if used := cursor - baseRow; used > targetRows {
+		targetRows = used
+	}
+	for int32(len(l.layout.Rows)) < baseRow+targetRows && len(l.layout.Rows) < webMaxRows {
+		idx := int32(len(l.layout.Rows))
+		l.layout.Rows = append(l.layout.Rows, webRow{Y: idx * l.rowH})
+	}
+}
+
 // A direct flex or grid child can contain several paragraphs. They share one
 // FlexItem number and must occupy one cell, rather than becoming separate
 // columns just because the child had an h2 followed by a p.
@@ -73,7 +319,10 @@ func webFlattenFlexItems(items []webFlexItem) []webBlock {
 // wrapper element with no text of its own would otherwise claim a whole empty
 // column and squeeze the content next to it.
 func webItemVisible(b webBlock) bool {
-	if len(b.Runs) > 0 || b.Rule || b.Image || b.Video {
+	if b.Style.TableRole == webTableRoleCell {
+		return true
+	}
+	if len(b.Runs) > 0 || b.Rule || b.Image || b.Video || b.Placeholder {
 		return true
 	}
 	return b.HasBg || b.BoxBorder || b.BorderLeft || b.BorderTop || b.BorderBottom
@@ -85,6 +334,13 @@ func webItemVisible(b webBlock) bool {
 func (l *webLayouter) layoutBlocksFlat(blocks []webBlock, padX, contentW int32) {
 	flat := make([]webBlock, len(blocks))
 	copy(flat, blocks)
+	if len(flat) > 0 {
+		// The flex/grid parent already resolved the item root's auto margins
+		// against the row or track. Leaving them set would make the ordinary
+		// block pass centre the same item a second time.
+		flat[0].Style.MarginLeftAuto, flat[0].Style.MarginRightAuto = false, false
+		flat[0].Style.MarginTopAuto, flat[0].Style.MarginBotAuto = false, false
+	}
 	for i := range flat {
 		if len(flat[i].FlexTrail) > 0 {
 			flat[i].setFlexMembership(flat[i].FlexTrail[0])
@@ -343,7 +599,9 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 	first := grouped[0].blocks[0]
 	n := int32(len(grouped))
-	if n == 1 {
+	gridMode := first.GridCols > 0 || first.GridMin > 0
+	autoCount := flexAutoCount(grouped)
+	if n == 1 && autoCount == 0 {
 		l.layoutBlocksFlat(grouped[0].blocks, padX, contentW)
 		return
 	}
@@ -360,6 +618,11 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	minCol := int32(72)
 	if first.FlexWrap {
 		minCol = 110
+	}
+	tableRow := first.Style.TableRole == webTableRoleCell
+	if tableRow {
+		// A table cell is not a card: a 40px column is a legitimate width.
+		minCol = 1
 	}
 	var rowEnds []int
 	gridCols := first.GridCols
@@ -437,7 +700,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		return
 	}
 	avail := contentW - gap*(n-1)
-	if avail < n*minCol {
+	if !tableRow && avail < n*minCol {
 		l.layoutBlocksFlat(webFlattenFlexItems(grouped), padX, contentW)
 		return
 	}
@@ -461,6 +724,17 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 			// own text decides the column, and cqw/cqi inside it then use that
 			// measured width instead of the parser's viewport guess.
 			w = l.intrinsicContainerWidth(item.blocks)
+		}
+		if w <= 0 && totalGrow == 0 {
+			if a, z := flexAutoMain(b); a || z {
+				// An auto-margin item that also has an auto main size is
+				// shrink-to-fit, not a share of the row: the free space belongs
+				// to its margins.
+				w = l.intrinsicContainerWidth(item.blocks)
+				if w < minCol {
+					w = minCol
+				}
+			}
 		}
 		if w <= 0 && totalGrow > 0 {
 			// An auto-sized label keeps a readable width while the item with
@@ -551,16 +825,18 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 			}
 		}
 	}
-	for i := range widths {
-		if widths[i] < 24 {
-			widths[i] = 24
+	if !tableRow {
+		for i := range widths {
+			if widths[i] < 24 {
+				widths[i] = 24
+			}
 		}
 	}
 	totalW := gap * (n - 1)
 	for _, w := range widths {
 		totalW += w
 	}
-	if totalW > contentW {
+	if !tableRow && totalW > contentW {
 		// The minimum column widths overflow the page: stack instead of
 		// painting text past the right edge.
 		l.layoutBlocksFlat(webFlattenFlexItems(grouped), padX, contentW)
@@ -578,25 +854,72 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 	start := int32(0)
 	gapExtra := int32(0)
-	switch first.FlexJustify {
-	case webJustifyCenter:
-		start = free / 2
-	case webJustifyEnd:
-		start = free
-	case webJustifyBetween:
-		if n > 1 {
-			gapExtra = free / (n - 1)
+	autoStartSpace := make([]int32, n)
+	autoEndSpace := make([]int32, n)
+	if autoCount > 0 && !gridMode {
+		// Auto margins consume the free main-axis space before justify-content.
+		autoStartSpace, autoEndSpace = flexAutoSpaces(grouped, free)
+	} else if autoCount == 0 && !gridMode {
+		switch first.FlexJustify {
+		case webJustifyCenter:
+			start = free / 2
+		case webJustifyEnd:
+			start = free
+		case webJustifyBetween:
+			if n > 1 {
+				gapExtra = free / (n - 1)
+			}
+		case webJustifyAround:
+			start = free / (n * 2)
+			if n > 0 {
+				gapExtra = free / n
+			}
 		}
-	case webJustifyAround:
-		start = free / (n * 2)
-		if n > 0 {
-			gapExtra = free / n
+	}
+
+	cellX := make([]int32, n)
+	if gridMode && autoCount > 0 {
+		// A grid item's auto margins consume the free space inside its track,
+		// not the free space of the whole row. Keep the tracks equal and place
+		// each item inside its own area.
+		trackW := (contentW - gap*int32(n-1)) / n
+		if trackW < 1 {
+			trackW = 1
+		}
+		for i, item := range grouped {
+			base := padX + int32(i)*(trackW+gap)
+			freeTrack := trackW - widths[i]
+			a, z := flexAutoMain(item.blocks[0])
+			switch {
+			case freeTrack > 0 && a && z:
+				base += freeTrack / 2
+			case freeTrack > 0 && a:
+				base += freeTrack
+			}
+			cellX[i] = base
+		}
+	} else if first.FlexReverse {
+		cursor := padX + contentW - start
+		for i := range grouped {
+			cursor -= autoStartSpace[i]
+			cursor -= widths[i]
+			cellX[i] = cursor
+			cursor -= autoEndSpace[i]
+			if i < len(grouped)-1 {
+				cursor -= gap + gapExtra
+			}
+		}
+	} else {
+		cursor := padX + start
+		for i := range grouped {
+			cursor += autoStartSpace[i]
+			cellX[i] = cursor
+			cursor += widths[i] + autoEndSpace[i] + gap + gapExtra
 		}
 	}
 
 	cells := make([]flexCell, 0, n)
 	maxRows := int32(0)
-	x := padX + start
 	for i, item := range grouped {
 		b := item.blocks[0]
 		sub := &webLayout{RowH: l.rowH}
@@ -620,7 +943,6 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		if rows := int32(len(sub.Rows)); rows > maxRows {
 			maxRows = rows
 		}
-		x += widths[i] + gap + gapExtra
 	}
 
 	baseRow := int32(len(l.layout.Rows))
@@ -630,37 +952,46 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		l.layout.Rows = append(l.layout.Rows, webRow{Y: idx * l.rowH})
 	}
 
-	x = padX + start
-	for _, cell := range cells {
+	for i, cell := range cells {
 		rows := int32(len(cell.sub.Rows))
 		drop := int32(0)
-		switch cell.align {
-		case webItemCenter:
-			drop = (maxRows - rows) / 2
-		case webItemEnd:
-			drop = maxRows - rows
+		crossStart, crossEnd := flexAutoCross(grouped[i].blocks[0])
+		freeRows := maxRows - rows
+		switch {
+		case crossStart && crossEnd:
+			drop = freeRows / 2
+		case crossStart:
+			drop = freeRows
+		case crossEnd:
+			drop = 0
+		default:
+			switch cell.align {
+			case webItemCenter:
+				drop = freeRows / 2
+			case webItemEnd:
+				drop = freeRows
+			}
 		}
-		for i, row := range cell.sub.Rows {
-			target := baseRow + drop + int32(i)
+		for ri, row := range cell.sub.Rows {
+			target := baseRow + drop + int32(ri)
 			if target < 0 || target >= int32(len(l.layout.Rows)) {
 				continue
 			}
 			for _, run := range row.Runs {
-				run.X += x
+				run.X += cellX[i]
 				l.layout.Rows[target].Runs = append(l.layout.Rows[target].Runs, run)
 			}
 		}
 		for _, r := range cell.sub.Rects {
-			r.Rect.X += x
+			r.Rect.X += cellX[i]
 			r.Rect.Y += (baseRow + drop) * l.rowH
 			l.layout.Rects = append(l.layout.Rects, r)
 		}
 		for _, im := range cell.sub.Images {
-			im.Rect.X += x
+			im.Rect.X += cellX[i]
 			im.Rect.Y += (baseRow + drop) * l.rowH
 			l.layout.Images = append(l.layout.Images, im)
 		}
-		x += cell.w + gap + gapExtra
 	}
 }
 

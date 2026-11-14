@@ -139,7 +139,7 @@ func libraryLayoutMode() string {
 func libraryLayoutLabel() string {
 	switch libraryLayoutMode() {
 	case libraryLayoutHorizontal:
-		return "Cover row"
+		return "3D shelf"
 	case libraryLayoutVertical:
 		return "Cover column"
 	default:

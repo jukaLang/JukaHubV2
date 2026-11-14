@@ -569,9 +569,11 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// continue from the auto state, plus the folder its own record toggle
 	// writes captures to, so the Recordings screen can list them. Standalone
 	// emulators are left alone.
+	shaderSpeedCancel()
 	prepareSavestateResume(launcher)
 	// The previous auto save, and the in-game menu's save slots (savestate_resume.go).
 	prepareGameMenuStates(launcher, game.Path)
+	prepareRetroTransport(launcher, game.Path, game.System)
 	// The in-game OSD is the emulator's, so its preset is written to the same
 	// config just before the launch, beside the save-state switches.
 	prepareOSDPreset(launcher)
@@ -579,7 +581,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// Spatial audio in games: the DSP preset for this launch (spatial_games.go).
 	prepareSpatialAudio(launcher)
 	// The picture mode (sharp, smooth, scanlines…) for this launch (videofilter.go).
-	prepareVideoFilter(launcher, game.Path)
+	if prepareVideoFilter(launcher, game.Path) {
+		prepareShaderSpeedCheck(launcher, game.Path)
+	}
 	// RetroArch's log for this launch, read if the game quits at once (gamediag.go).
 	diag := prepareGameDiag(game, launcher)
 	// Per-game options are read here, at launch time, so an edit made in the
@@ -624,13 +628,13 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// The script's own output, for the card when the game stops at once.
 	output := diag.captureLauncherOutput(cmd)
 	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)
-	if err := cmd.Start(); err != nil {
+	if err := screenChildStart(cmd); err != nil {
 		output.started(false)
 		restoreProfile()
 		return err
 	}
-	output.started(true)
 	noteGameChildStarted(cmd)
+	output.started(true)
 	// A line in JukaHub's log for the start and one for the end, and the stops
 	// JukaHub sends told apart from the game ending by itself
 	// (gamelaunch_watch.go).

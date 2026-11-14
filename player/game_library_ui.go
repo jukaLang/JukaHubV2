@@ -45,13 +45,15 @@ type gameLibrarySystemsKey struct {
 }
 
 type gameLibraryPanel struct {
-	open    bool
-	lib     gameLibraryReport
-	recents []recentGame
-	system  int
-	cursor  int
-	scroll  int
-	focus   int // 0 = console column, 1 = games column
+	open       bool
+	lib        gameLibraryReport
+	recents    []recentGame
+	system     int
+	cursor     int
+	scroll     int
+	focus      int    // 0 = console column, 1 = games column
+	logoSystem string // console whose bitmap title last assembled
+	logoAt     uint64
 	// query narrows the whole library to the games whose title, console or
 	// file name matches. Empty is the normal console-by-console browser.
 	query    string
@@ -313,6 +315,8 @@ func openGameLibraryPanel() {
 	gameLib.cursor = 0
 	gameLib.scroll = 0
 	gameLib.query = ""
+	gameLib.logoSystem = ""
+	gameLib.logoAt = 0
 	resetGameRandomPicker()
 	// A fresh visit shows every game, and the per-game data loads in the
 	// background so a game's page opens without a read.
@@ -1448,8 +1452,20 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		name := systems[idx].Name
 		count := itoa(len(systems[idx].Games))
 		cw, _, _ := font.SizeUTF8(count)
-		renderText(renderer, config, medium, ellipsize(medium, name, rect.W-24-int32(cw)-12),
-			ColorTextPrimary(), rect.X+12, rect.Y+(rect.H-medH)/2)
+		if selected && gameLib.logoSystem != name {
+			gameLib.logoSystem = name
+			gameLib.logoAt = sdl.GetTicks64()
+		}
+		logoElapsed := uint64(470)
+		if selected && !effectiveReducedMotion(config) {
+			logoElapsed = sdl.GetTicks64() - gameLib.logoAt
+		}
+		logoColor := ColorTextPrimary()
+		if selected {
+			logoColor = focusColor
+		}
+		drawConsolePixelLogo(renderer, name, rect, rect.W-24-int32(cw)-12,
+			logoColor, logoElapsed, selected && !effectiveReducedMotion(config))
 		renderText(renderer, config, font, count, ColorTextTertiary(),
 			rect.X+rect.W-12-int32(cw), rect.Y+(rect.H-smallH)/2)
 		// A thin meter under each console row: the share of that console's

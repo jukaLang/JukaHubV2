@@ -2396,6 +2396,7 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 // user is typing in the virtual keyboard's field — with no interface-language
 // translation (a typed "On" must not appear as "Activado").
 func drawTextRaw(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, color sdl.Color, alignment textAlignment) {
+	text = uiUnmarkTranslated(text)
 	if renderer == nil || font == nil || strings.TrimSpace(text) == "" {
 		return
 	}

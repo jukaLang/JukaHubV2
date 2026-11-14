@@ -1007,6 +1007,7 @@ func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text str
 
 // drawTextRun renders one font/text pair through the shared texture cache.
 func drawTextRun(renderer *sdl.Renderer, config *Config, font *ttf.Font, processed string, color sdl.Color, x, y int32) (int32, int32) {
+	processed = uiUnmarkTranslated(processed)
 	if processed == "" || font == nil {
 		return 0, 0
 	}

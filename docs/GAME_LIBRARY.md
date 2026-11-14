@@ -298,9 +298,13 @@ that launch only:
 - **Library sort** — Title, Last played, Recently added, Playtime, Rating or Year. The order is
   saved and applies to every console. Games with no value for the chosen sort
   (never played, unrated, no year) come last.
-- **Library view** — List, Cover row or Cover column. Cover row uses left/right
+- **Library view** — List, 3D shelf or Cover column. The shelf uses left/right
   to browse games and up to return to consoles; Cover column keeps the list's
   up/down navigation. The choice is saved for the next visit.
+- **Shader speed** — after playing with a shader look, shows the rendered frames
+  RetroArch reported during that game and whether they met the 50 or 60 FPS
+  target. Builds that cannot report a frame counter say **Unavailable** instead
+  of guessing. The check ignores paused and fast-forwarded intervals.
 - **Show hidden** — reveal the games hidden from the library; turn it off to
   tuck them away again.
 - **CPU limit** — `Auto`, then 2.0, 1.8, 1.6, 1.4 and 1.2 GHz. `Auto` follows the

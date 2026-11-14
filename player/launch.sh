@@ -531,7 +531,7 @@ while :; do
     fi
     # The status tells the next start's boot guard a crash or a kill (2, 134,
     # 137, 139, ...) from a quit; the pid tells it the line is about the run it
-    # recorded. The sync below puts it on the card.
+    # recorded. A failed run needs this line flushed for recovery.
     { echo "$RC $APP_PID" >"$LAST_EXIT"; } 2>/dev/null
     APP_PID=""
     say "=== JukaHub exited with code $RC ==="
@@ -553,9 +553,12 @@ while :; do
             fi
             ;;
     esac
-    # Before anything else runs: the menu, or the next build in an update.
+    # A clean quit already synced in JukaHub's teardown. Syncing every dirty
+    # card buffer a second time here delayed the Brick's hand-back most when
+    # a download had just been active. Failed runs still flush the exit code
+    # before the menu or next build starts, for boot-guard recovery.
     cpu_restore
-    sync
+    [ "$RC" -eq 0 ] || sync
 
     # A helper took the display over (PS Remote Play): JukaHub quit so the
     # helper could have the screen to itself, and wrote the helper's pid. Wait

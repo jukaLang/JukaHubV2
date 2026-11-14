@@ -27,12 +27,12 @@ package main
 // sums them. Callers keep their own format and rate and see the queue sizes
 // they always saw, so pacing loops do not change.
 //
-// The output monitor (audiooutput.go) picks the route. A game launch drops back
-// to the speaker route before the child starts (screenChildGroupConfigure) so
-// the game can open the headset itself, and gets AUDIODEV pointing at it; the
-// game's exit wakes the monitor, which takes the headset back. Windows never
-// leaves the speaker route: there SDL's default device already follows the
-// system's default output.
+// The output monitor (audiooutput.go) picks the route. Before a game starts,
+// JukaHub closes every real output so the game can open the speaker or headset
+// itself; the child gets AUDIODEV pointing at a connected headset. When the
+// game exits, the speaker outputs reopen and the monitor can take the headset
+// back. Windows never leaves the speaker route: there SDL's default device
+// already follows the system's default output.
 //
 // audioroute_bluealsa.go gets BlueALSA and the headset's A2DP stream ready
 // first (the stock TrimUI firmware starts neither), hands the headset to games
@@ -106,9 +106,12 @@ var outAudio struct {
 	mixDev  sdl.AudioDeviceID // the one SDL device on the headset
 	mixRate int32
 	mixStop chan struct{}
-	gain    float64 // headset volume, 0..1 (the header's volume, see audioRouteUpdate)
-	acc     []int32
-	out     []byte
+	// suspended means a screen-taking child owns the sound hardware. Virtual
+	// outputs remain valid, but none may keep or open a real SDL device.
+	suspended bool
+	gain      float64 // headset volume, 0..1 (the header's volume, see audioRouteUpdate)
+	acc       []int32
+	out       []byte
 	// failedPCM is held off until holdUntil: it would not open, or its
 	// stream died; failedTries counts the quick retries spent on it.
 	failedPCM   string
@@ -166,9 +169,10 @@ func outOpen(desired, obtained *sdl.AudioSpec, allowed int) (sdl.AudioDeviceID, 
 	for {
 		outAudio.mu.Lock()
 		mixed := outAudio.mixDev != 0
+		suspended := outAudio.suspended
 		outAudio.mu.Unlock()
-		if mixed {
-			// Mixed: the caller's own format is kept and converted by the mixer.
+		if mixed || suspended {
+			// Mixed or handed to a game: keep the caller's own format.
 			*obtained = *desired
 			if obtained.Freq <= 0 {
 				obtained.Freq = 48000
@@ -184,9 +188,16 @@ func outOpen(desired, obtained *sdl.AudioSpec, allowed int) (sdl.AudioDeviceID, 
 			d.real = id
 		}
 		outAudio.mu.Lock()
-		if d.real == 0 && outAudio.mixDev == 0 {
-			// The headset route ended meanwhile, before this device was in the
-			// table for outToSpeaker to reopen: open its speaker now.
+		if outAudio.suspended && d.real != 0 {
+			// The game claimed audio while SDL was opening this device.
+			id := d.real
+			d.real = 0
+			outAudio.mu.Unlock()
+			sdl.CloseAudioDevice(id)
+			continue
+		}
+		if !outAudio.suspended && d.real == 0 && outAudio.mixDev == 0 {
+			// The game ended, or the headset route ended, during the open.
 			outAudio.mu.Unlock()
 			continue
 		}
@@ -220,6 +231,9 @@ func outQueue(id sdl.AudioDeviceID, data []byte) error {
 	if d == nil {
 		return sdl.QueueAudio(id, data)
 	}
+	if outAudio.suspended {
+		return errors.New("audio output is in use by a game")
+	}
 	if d.real != 0 {
 		return sdl.QueueAudio(d.real, data)
 	}
@@ -249,6 +263,9 @@ func outQueued(id sdl.AudioDeviceID) uint32 {
 	d := outAudio.devs[id]
 	if d == nil {
 		return sdl.GetQueuedAudioSize(id)
+	}
+	if outAudio.suspended {
+		return 0
 	}
 	if d.real != 0 {
 		return sdl.GetQueuedAudioSize(d.real)
@@ -514,6 +531,10 @@ func outHandBackLocked(d *outDev) {
 // under it), and anything queued meanwhile waits in the backlog.
 func outToSpeaker() {
 	outAudio.mu.Lock()
+	if outAudio.suspended {
+		outAudio.mu.Unlock()
+		return
+	}
 	if outAudio.mixStop != nil {
 		close(outAudio.mixStop)
 		outAudio.mixStop = nil
@@ -616,6 +637,10 @@ func outSetRoute(pcm string, gain float64) bool {
 	defer outRouteMu.Unlock()
 	outAudio.mu.Lock()
 	outAudio.gain = gain
+	if outAudio.suspended {
+		outAudio.mu.Unlock()
+		return false
+	}
 	current := outAudio.pcm
 	held := pcm != "" && pcm == outAudio.failedPCM && time.Now().Before(outAudio.holdUntil)
 	dead := false
@@ -770,14 +795,65 @@ func audioRouteChildPCM() string {
 	return outAudio.pcm
 }
 
-// audioRouteReleaseForChild hands the headset over the moment a screen-taking
-// child has started (noteGameChildStarted): JukaHub's outputs go back to the
-// speaker, since BlueALSA would refuse the game a second client. An emulator
-// takes far longer than this close to open its audio. The monitor takes the
-// headset back when the child exits (its foreground wake).
+// audioRouteReleaseForChild closes every real output before a screen-taking
+// child starts. The virtual ids stay valid, so callers can finish and close
+// normally while the emulator owns ALSA. This includes the always-open UI
+// sound device, which otherwise keeps the Brick's speaker busy.
 func audioRouteReleaseForChild() {
-	if audioRouteChildPCM() == "" {
+	outRouteMu.Lock()
+	outAudio.mu.Lock()
+	ids := outDetachForChildLocked()
+	outAudio.mu.Unlock()
+	for _, id := range ids {
+		sdl.CloseAudioDevice(id)
+	}
+	outRouteMu.Unlock()
+}
+
+// outDetachForChildLocked removes all real devices from the route and returns
+// them for closing outside outAudio.mu. It also drops queued JukaHub sound,
+// which must not play when the game hands the hardware back.
+func outDetachForChildLocked() []sdl.AudioDeviceID {
+	if outAudio.suspended {
+		return nil
+	}
+	outAudio.suspended = true
+	if outAudio.mixStop != nil {
+		close(outAudio.mixStop)
+		outAudio.mixStop = nil
+	}
+	ids := make([]sdl.AudioDeviceID, 0, len(outAudio.devs)*2+1)
+	if outAudio.mixDev != 0 {
+		ids = append(ids, outAudio.mixDev)
+	}
+	outAudio.mixDev, outAudio.pcm = 0, ""
+	for _, d := range outAudio.devs {
+		if d.real != 0 {
+			ids = append(ids, d.real)
+		}
+		if d.draining != 0 {
+			ids = append(ids, d.draining)
+		}
+		d.real, d.draining, d.dead = 0, 0, false
+		d.fifo, d.head, d.phase = d.fifo[:0], 0, 0
+	}
+	return ids
+}
+
+// audioRouteResumeAfterChild gives JukaHub fresh speaker devices after the
+// last child exits (or a launch fails). The monitor can then take a connected
+// headset back without competing with the child during its startup.
+func audioRouteResumeAfterChild() {
+	outRouteMu.Lock()
+	outAudio.mu.Lock()
+	if !outAudio.suspended {
+		outAudio.mu.Unlock()
+		outRouteMu.Unlock()
 		return
 	}
-	outSetRoute("", 1)
+	outAudio.suspended = false
+	outAudio.mu.Unlock()
+	outToSpeaker()
+	outRouteMu.Unlock()
+	audioRouteKick()
 }

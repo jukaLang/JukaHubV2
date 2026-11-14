@@ -35,10 +35,11 @@ func runExplicitExternalApp(path string) error {
 	// Nothing typed or received at run time is appended to it.
 	var cmd *exec.Cmd
 	if IsWindows() {
-		cmd = exec.Command("cmd", "/c", command)
+		cmd = exec.Command("cmd", "/d", "/q")
 	} else {
-		cmd = exec.Command("sh", "-c", command)
+		cmd = exec.Command("sh")
 	}
+	cmd.Stdin = strings.NewReader(command + "\n")
 	cmd.Env = append(os.Environ(), "JUKAHUB_EXTERNAL_APP=1")
 
 	logDebug("external", "running: %s (%s)", command, runtime.GOOS)

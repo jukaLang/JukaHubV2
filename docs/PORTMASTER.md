@@ -9,8 +9,11 @@ installed.
 
 | Button | Action |
 |--------|--------|
-| D-pad Up / Down | Move through PortMaster and installed ports |
-| A | Install PortMaster, open it, or launch the selected port |
+| D-pad Up / Down | Move through the rows |
+| A | Install PortMaster, open it, launch an installed port, or install a catalogue port |
+| X / Tab | Switch between installed ports and the catalogue |
+| Y / F | Toggle **May Run on ChaOS**, a filter using the port's architecture, hardware requirements and minimum glibc |
+| R1 / S | Search the catalogue by name or description |
 | B / Esc | Back (to Emulators when opened there) |
 
 Tapping a row does the same thing as **A**; tapping outside closes the panel.
@@ -54,9 +57,18 @@ Every top-level `.sh` script becomes a row, except PortMaster's own launcher.
 Duplicate names are listed once. Ports are started with `sh` from their own
 folder, which is the same way the firmware's Ports tab runs them.
 
-Use the PortMaster app itself (**A** on the PortMaster row) to browse the port
-catalog, install, update and remove ports. JukaHub lists what PortMaster has
-installed; it does not maintain a second catalog or modify port files.
+The catalogue tab reads PortMaster's live `ports.json`; its number of ports
+changes as that catalogue changes. **May Run on ChaOS** removes ports whose own
+metadata rules out this handheld, including ARM32-only builds and ports that
+require sticks the Brick lacks. It is a compatibility hint, not a guarantee
+that every game file or dependency is present.
+
+Pressing **A** on a catalogue port downloads its zip, verifies PortMaster's MD5
+when one is published, and puts the complete archive in PortMaster's
+`autoinstall` folder. JukaHub then opens PortMaster, which installs the port and
+fetches the runtimes it declares. PortMaster remains the place to update and
+remove ports. Some ports also require game files you own; their catalogue
+description and installation note explain that requirement.
 
 ## Minecraft
 

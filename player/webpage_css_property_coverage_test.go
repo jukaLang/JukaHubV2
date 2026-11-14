@@ -110,6 +110,12 @@ func TestWebCSSEveryAcceptedPropertyChangesRenderedState(t *testing.T) {
 		{"content", `<p class="x">Body</p>`, ``, `.x::before{content:"Generated "}`},
 		{"display", flex, ``, `.x{display:flex}`},
 		{"display-grid", grid, ``, `.x{display:grid;grid-template-columns:1fr 1fr 1fr}`},
+		{"display-table", `<div class="x"><div class="r"><div class="c">A</div><div class="c">B</div></div></div>`, `.x{display:block;width:300px}`, `.x{display:table;width:300px}.r{display:table-row}.c{display:table-cell}`},
+		{"border-collapse", `<table class="x"><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>`, `.x{width:300px;border-collapse:separate}td{border:2px solid #000}`, `.x{width:300px;border-collapse:collapse}td{border:2px solid #000}`},
+		{"border-spacing", `<table class="x"><tr><td>A</td><td>B</td></tr></table>`, `.x{width:300px;border-spacing:0}`, `.x{width:300px;border-spacing:12px}`},
+		{"table-layout", `<table class="x"><tr><td>A</td><td>B</td></tr></table>`, `.x{width:400px;table-layout:auto}`, `.x{width:400px;table-layout:fixed}.x td:first-child{width:80px}`},
+		{"col-width", `<table class="x"><colgroup><col class="c"><col></colgroup><tr><td>A</td><td>B</td></tr></table>`, `.x{width:300px;table-layout:fixed}`, `.x{width:300px;table-layout:fixed}.c{width:120px}`},
+		{"colgroup-width", `<table class="x"><colgroup class="g" span="2"></colgroup><tr><td>A</td><td>B</td><td>C</td><td>D</td></tr></table>`, `.x{width:300px;table-layout:fixed}`, `.x{width:300px;table-layout:fixed}.g{width:80px}`},
 		{"flex", `<div class="x"><div>A</div><div>B</div></div>`, `.x{display:flex}`, `.x{display:flex}.x div:first-child{flex:0 0 60px}`},
 		{"flex-basis", `<div class="x"><div>A</div><div>B</div></div>`, `.x{display:flex}`, `.x{display:flex}.x div{flex-basis:140px}`},
 		{"flex-direction", flex, `.x{display:flex}`, `.x{display:flex;flex-direction:column}`},
@@ -697,5 +703,288 @@ func TestWebCSSVideoOpacityScalesCardPaint(t *testing.T) {
 	}
 	if got := webScaleColorAlpha(sdl.Color{R: 250, A: 200}, 0.5); got.A != 100 {
 		t.Fatalf("video alpha multiply = %d, want 100", got.A)
+	}
+}
+
+func TestWebHTMLTableRendersCellsInColumns(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<table><caption>Totals</caption><tr><td>Alpha</td><td>Beta</td></tr><tr><td>Gamma</td><td>Delta</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	alphaRow, alphaX := webTestTextPosition(t, layout, "Alpha")
+	betaRow, betaX := webTestTextPosition(t, layout, "Beta")
+	gammaRow, _ := webTestTextPosition(t, layout, "Gamma")
+	if alphaRow != betaRow {
+		t.Fatalf("table cells landed on different rows: Alpha row %d, Beta row %d", alphaRow, betaRow)
+	}
+	if betaX <= alphaX {
+		t.Fatalf("table cells did not occupy columns: Alpha x=%d, Beta x=%d", alphaX, betaX)
+	}
+	if gammaRow <= alphaRow {
+		t.Fatalf("table rows did not advance: first row %d, second row %d", alphaRow, gammaRow)
+	}
+	webTestTextPosition(t, layout, "Totals")
+}
+
+func TestWebHTMLTableColspanAndRowspanOccupyGrid(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<style>table{width:400px;table-layout:fixed;border-spacing:0}td{border:1px solid #000}</style>`+
+		`<table><tr><td colspan="2">AB</td><td>C</td></tr>`+
+		`<tr><td rowspan="2">D</td><td>E</td><td>F</td></tr>`+
+		`<tr><td>G</td><td>H</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	abRow, abX := webTestTextPosition(t, layout, "AB")
+	cRow, cX := webTestTextPosition(t, layout, "C")
+	dRow, dX := webTestTextPosition(t, layout, "D")
+	eRow, eX := webTestTextPosition(t, layout, "E")
+	fRow, fX := webTestTextPosition(t, layout, "F")
+	gRow, gX := webTestTextPosition(t, layout, "G")
+	hRow, hX := webTestTextPosition(t, layout, "H")
+	if abRow != cRow {
+		t.Fatalf("colspan cells left the row: AB row %d, C row %d", abRow, cRow)
+	}
+	if cX <= abX {
+		t.Fatalf("colspan cell overlapped the following cell: AB x=%d, C x=%d", abX, cX)
+	}
+	if dRow != eRow || eRow != fRow {
+		t.Fatalf("rowspan row split: D=%d E=%d F=%d", dRow, eRow, fRow)
+	}
+	if gRow != hRow || gRow <= dRow {
+		t.Fatalf("rowspan did not advance the next row: D=%d G=%d H=%d", dRow, gRow, hRow)
+	}
+	if abs32(gX-eX) > 8 || abs32(hX-fX) > 8 {
+		t.Fatalf("rowspan did not keep its column slots: E=%d G=%d F=%d H=%d", eX, gX, fX, hX)
+	}
+	if gap := cX - abX; gap < (eX-dX)*2-2 || gap > (eX-dX)*2+2 {
+		t.Fatalf("colspan width is not two columns: AB-C=%d, column=%d", gap, eX-dX)
+	}
+}
+
+func abs32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func TestWebHTMLTableFixedAndAutoTracksDiffer(t *testing.T) {
+	legibleTestInitFonts(t)
+	makeLayout := func(css string) *webLayout {
+		return parseWebPage(`<style>`+css+`</style><table><tr><td class="x">A</td><td>B</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	}
+	fixed := makeLayout(`table{width:400px;table-layout:fixed;border-spacing:0}.x{width:80px}`)
+	auto := makeLayout(`table{width:400px;table-layout:auto;border-spacing:0}`)
+	autoWidth := makeLayout(`table{width:400px;table-layout:auto;border-spacing:0}.x{width:120px}`)
+	fixedARow, fixedAX := webTestTextPosition(t, fixed, "A")
+	_, fixedBX := webTestTextPosition(t, fixed, "B")
+	autoARow, autoAX := webTestTextPosition(t, auto, "A")
+	_, autoBX := webTestTextPosition(t, auto, "B")
+	if fixedARow != autoARow {
+		t.Fatalf("fixed and auto rows differ: %d vs %d", fixedARow, autoARow)
+	}
+	if fixedBX-fixedAX >= autoBX-autoAX {
+		t.Fatalf("fixed did not honor the first-row width: fixed column=%d auto column=%d", fixedBX-fixedAX, autoBX-autoAX)
+	}
+	if autoBX <= autoAX {
+		t.Fatalf("auto table lost its column: A x=%d B x=%d", autoAX, autoBX)
+	}
+	_, autoWidthAX := webTestTextPosition(t, autoWidth, "A")
+	_, autoWidthBX := webTestTextPosition(t, autoWidth, "B")
+	if autoWidthBX-autoWidthAX == autoBX-autoAX {
+		t.Fatalf("auto table ignored the direct cell width: sized=%d unsized=%d", autoWidthBX-autoWidthAX, autoBX-autoAX)
+	}
+}
+
+func TestWebHTMLTableCollapseSharesInteriorBorders(t *testing.T) {
+	legibleTestInitFonts(t)
+	makeLayout := func(collapse string) *webLayout {
+		return parseWebPage(`<style>table{width:300px;border-collapse:`+collapse+`;border-spacing:8px}td{border:2px solid #000}</style>`+
+			`<table><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	}
+	collapsed := makeLayout("collapse")
+	separate := makeLayout("separate")
+	strikes := func(layout *webLayout) int {
+		n := 0
+		for _, rect := range layout.Rects {
+			if rect.Stroke && !rect.BackgroundFill {
+				n++
+			}
+		}
+		return n
+	}
+	if strikes(collapsed) != 0 {
+		t.Fatalf("collapsed table still paints %d doubled cell outlines", strikes(collapsed))
+	}
+	if strikes(separate) == 0 {
+		t.Fatal("separate table lost its per-cell borders")
+	}
+	// Interior verticals are one line per boundary, not one per adjacent cell.
+	xs := map[int32]bool{}
+	for _, rect := range collapsed.Rects {
+		if rect.Rect.H > rect.Rect.W*2 {
+			xs[rect.Rect.X] = true
+		}
+	}
+	if len(xs) > 3 {
+		t.Fatalf("collapsed table painted %d vertical boundary positions, want at most 3: %v", len(xs), xs)
+	}
+	_, ax := webTestTextPosition(t, collapsed, "A")
+	_, bx := webTestTextPosition(t, collapsed, "B")
+	_, sax := webTestTextPosition(t, separate, "A")
+	_, sbx := webTestTextPosition(t, separate, "B")
+	if bx-ax <= 0 || sbx-sax <= 0 {
+		t.Fatalf("cell columns collapsed: collapsed A/B=%d/%d separate A/B=%d/%d", ax, bx, sax, sbx)
+	}
+	if sbx-sax <= bx-ax {
+		t.Fatalf("border-spacing did not separate cells: collapsed column=%d separate column=%d", bx-ax, sbx-sax)
+	}
+}
+
+func TestWebHTMLTableClampsInvalidSpans(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<table><tr><td colspan="0">A</td><td colspan="999">B</td></tr>`+
+		`<tr><td rowspan="-3">C</td><td rowspan="999">D</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	aRow, aX := webTestTextPosition(t, layout, "A")
+	bRow, bX := webTestTextPosition(t, layout, "B")
+	cRow, _ := webTestTextPosition(t, layout, "C")
+	dRow, _ := webTestTextPosition(t, layout, "D")
+	if aRow != bRow || cRow != dRow || bX <= aX {
+		t.Fatalf("invalid spans broke the grid: A=%d B=%d C=%d D=%d", aRow, bRow, cRow, dRow)
+	}
+}
+
+func TestWebHTMLDisplayTableModesOutsideTable(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<div style="display:table;width:400px;border-spacing:0">`+
+		`<div style="display:table-caption">Cap</div>`+
+		`<div style="display:table-header-group"><div style="display:table-row"><div style="display:table-cell">A</div><div style="display:table-cell">B</div></div></div>`+
+		`<div style="display:table-row-group"><div style="display:table-row"><div style="display:table-cell">C</div><div style="display:table-cell">D</div></div></div>`+
+		`<div style="display:table-footer-group"><div style="display:table-row"><div style="display:table-cell">E</div><div style="display:table-cell">F</div></div></div>`+
+		`</div>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	aRow, aX := webTestTextPosition(t, layout, "A")
+	bRow, bX := webTestTextPosition(t, layout, "B")
+	cRow, _ := webTestTextPosition(t, layout, "C")
+	dRow, _ := webTestTextPosition(t, layout, "D")
+	if aRow != bRow || cRow != dRow || cRow <= aRow {
+		t.Fatalf("display:table flow did not form rows: A=%d B=%d C=%d D=%d", aRow, bRow, cRow, dRow)
+	}
+	if bX <= aX {
+		t.Fatalf("display:table cells did not form columns: A x=%d B x=%d", aX, bX)
+	}
+	webTestTextPosition(t, layout, "Cap")
+	if eRow, _ := webTestTextPosition(t, layout, "E"); eRow <= cRow {
+		t.Fatalf("display:table footer group did not add a row: C=%d E=%d", cRow, eRow)
+	}
+}
+
+func TestWebReplacedElementsKeepPlaceholderBoxes(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<style>svg,canvas,object,embed,audio,video{background:#eee;border:2px solid #000}</style>`+
+		`<svg width="120" height="80"></svg><canvas width="200" height="100"></canvas>`+
+		`<object width="90" height="60"></object><embed width="70" height="50">`+
+		`<audio width="100" height="30"></audio><video width="160" height="90"></video>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	widths := make([]int32, 0, 6)
+	for _, rect := range layout.Rects {
+		if !rect.Stroke && rect.Rect.H > 12 && rect.Rect.W > 12 {
+			widths = append(widths, rect.Rect.W)
+		}
+	}
+	if len(widths) != 6 {
+		t.Fatalf("replaced placeholders painted %d background boxes, want 6: %+v", len(widths), widths)
+	}
+	if len(layout.Rows) < 6 {
+		t.Fatalf("placeholder boxes did not occupy rows: %d", len(layout.Rows))
+	}
+	if widths[0] >= widths[1] || widths[1] <= widths[3] {
+		t.Fatalf("placeholder widths did not follow their attributes: %+v", widths)
+	}
+}
+
+func TestWebHTMLTableColumnWidthsFromColAndColgroup(t *testing.T) {
+	legibleTestInitFonts(t)
+	makeLayout := func(layout, cols string) *webLayout {
+		return parseWebPage(`<style>table{width:600px;table-layout:`+layout+`;border-spacing:0}td{padding:0;border:0}`+cols+`</style>`+
+			`<table><colgroup><col width="80"><col width="120"></colgroup>`+
+			`<tr><td>A</td><td>B</td><td>C</td></tr><tr><td>D</td><td>E</td><td>F</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	}
+	for _, mode := range []string{"fixed", "auto"} {
+		layout := makeLayout(mode, "")
+		_, ax := webTestTextPosition(t, layout, "A")
+		_, bx := webTestTextPosition(t, layout, "B")
+		_, cx := webTestTextPosition(t, layout, "C")
+		if bx <= ax || cx <= bx {
+			t.Fatalf("%s col widths collapsed: A=%d B=%d C=%d", mode, ax, bx, cx)
+		}
+		if bx-ax >= cx-bx {
+			t.Fatalf("%s did not apply <col> widths left-to-right: AB=%d BC=%d", mode, bx-ax, cx-bx)
+		}
+	}
+	for _, mode := range []string{"fixed", "auto"} {
+		group := parseWebPage(`<style>table{width:600px;table-layout:`+mode+`;border-spacing:0}td{padding:0;border:0}</style>`+
+			`<table><colgroup span="2" width="100"></colgroup><col width="50">`+
+			`<tr><td>A</td><td>B</td><td>C</td><td>D</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+		_, gax := webTestTextPosition(t, group, "A")
+		_, gbx := webTestTextPosition(t, group, "B")
+		_, gcx := webTestTextPosition(t, group, "C")
+		_, gdx := webTestTextPosition(t, group, "D")
+		if gbx-gax != gcx-gbx {
+			t.Fatalf("%s <colgroup span=2> did not cover two equal columns: AB=%d BC=%d", mode, gbx-gax, gcx-gbx)
+		}
+		if gdx-gcx >= gcx-gbx {
+			t.Fatalf("%s <col width> did not size its column: BC=%d CD=%d", mode, gcx-gbx, gdx-gcx)
+		}
+		precedence := parseWebPage(`<style>table{width:600px;table-layout:`+mode+`;border-spacing:0}td{padding:0;border:0}</style>`+
+			`<table><colgroup><col width="50"><col width="50"></colgroup>`+
+			`<tr><td style="width:200px">A</td><td>B</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+		_, pax := webTestTextPosition(t, precedence, "A")
+		_, pbx := webTestTextPosition(t, precedence, "B")
+		if pbx-pax <= 50*3 { // 50 CSS px scaled to this reader's base size
+			t.Fatalf("%s cell width did not take precedence over <col>: AB=%d", mode, pbx-pax)
+		}
+	}
+	invalid := parseWebPage(`<table><colgroup><col span="0" width="-5"><col span="999" width="999999"></colgroup>`+
+		`<tr><td>A</td><td>B</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	_, iax := webTestTextPosition(t, invalid, "A")
+	_, ibx := webTestTextPosition(t, invalid, "B")
+	if ibx <= iax {
+		t.Fatalf("invalid <col> spans broke the table: A=%d B=%d", iax, ibx)
+	}
+}
+
+func TestWebHTMLTableEmptyRowspanRowKeepsHeight(t *testing.T) {
+	legibleTestInitFonts(t)
+	layout := parseWebPage(`<style>table{width:400px;border-spacing:0}td{padding:0;border:0}</style>`+
+		`<table><tr><td rowspan="3">Tall</td></tr><tr></tr><tr><td>Next</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	tallRow, tallX := webTestTextPosition(t, layout, "Tall")
+	nextRow, nextX := webTestTextPosition(t, layout, "Next")
+	if nextRow < tallRow+2 {
+		t.Fatalf("empty rowspan row did not reserve a row: Tall=%d Next=%d", tallRow, nextRow)
+	}
+	if nextX <= tallX {
+		t.Fatalf("empty rowspan row shifted later cells into its column: Tall x=%d Next x=%d", tallX, nextX)
+	}
+}
+
+func TestWebHTMLTableCollapseBorderConflictWinners(t *testing.T) {
+	legibleTestInitFonts(t)
+	widthWin := parseWebPage(`<style>table{width:400px;border-collapse:collapse}td{border:1px solid #000}`+
+		`.wide{border-right:8px solid #c00}.thin{border-left:4px dashed #00c}</style>`+
+		`<table><tr><td class="wide">A</td><td class="thin">B</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	styleWin := parseWebPage(`<style>table{width:400px;border-collapse:collapse}td{border:1px solid #000}`+
+		`.dash{border-right:4px dashed #0a0}.solid{border-left:4px solid #c00}</style>`+
+		`<table><tr><td class="dash">A</td><td class="solid">B</td></tr></table>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	vertical := func(layout *webLayout, width int32) []webRect {
+		var out []webRect
+		for _, rect := range layout.Rects {
+			if rect.Rect.W == width && rect.Rect.H > rect.Rect.W*2 {
+				out = append(out, rect)
+			}
+		}
+		return out
+	}
+	edge := vertical(widthWin, 8)
+	if len(edge) != 1 || edge[0].Color.R != 0xcc || edge[0].BorderStyle != webBorderSolid {
+		t.Fatalf("wider cell border did not win exactly once: %+v", edge)
+	}
+	styleEdge := vertical(styleWin, 4)
+	if len(styleEdge) != 1 || styleEdge[0].Color.R != 0xcc || styleEdge[0].BorderStyle != webBorderSolid {
+		t.Fatalf("solid border did not beat dashed on an equal-width edge: %+v", styleEdge)
 	}
 }

@@ -27,19 +27,31 @@ gap, not a silent promise.
 ### Box and layout
 
 - `display: block`, `flex`, `grid` (including explicit columns and
-  `repeat(auto-fit/auto-fill, minmax(...))`).
+  `repeat(auto-fit/auto-fill, minmax(...))`), and the table display modes
+  `table`, `table-row`, `table-cell`, `table-header-group`, `table-row-group`,
+  `table-footer-group`, `table-caption`.
 - Flex direction, wrap, justify, align, gap, grow, shrink, basis, order.
 - Width (lengths and percentages), pixel `height`, `min-width`/`max-width`,
   `min-height`/`max-height`, `box-sizing: content-box/border-box` (horizontal
   width; vertical padding is not folded into height), aspect ratio on
-  replaced media, margins, paddings, logical margin/padding variants, text
-  indent, border radius.
-- `float: left/right` (a following block is narrowed beside it; `clear:
-  left/right/both` moves a block below the float). Floats shrink to their
+  replaced media, margins, paddings, logical margin/padding variants, auto
+  margins on width-constrained blocks and on flex/grid items (main and cross
+  axes), text indent, border radius.
+- `float: left/right` and the logical `inline-start`/`inline-end` spellings (a
+  following block is narrowed beside it; `clear: left/right/both` and the
+  logical spellings move a block below the float). Floats shrink to their
   widest run when no width is given.
-- `position: relative/absolute/fixed`, inset properties, z-index.
+- `position: relative/absolute/fixed`, physical and logical inset properties,
+  z-index.
 - Container queries and container-relative units.
 - Images, video, forms and details/summary layout.
+- Tables: row/cell flow, `colspan`/`rowspan` (clamped to 32 tracks and the
+  remaining rows), `<colgroup>`/`<col>` widths and `span` values matched
+  left-to-right, `table-layout: auto/fixed`, direct cell widths, empty rows
+  retained for rowspan gaps, and `border-collapse: separate/collapse` with
+  `border-spacing`. Collapsed borders resolve conflicts by width, style
+  priority (hidden > double > solid > dashed > dotted > none), then cell over
+  row over table, and each interior edge paints once.
 
 ### Typography and paint
 
@@ -90,19 +102,25 @@ gap, not a silent promise.
 - Block flow: `body`, `p`, `div`, `section`, `article`, `main`, `header`,
   `footer`, `aside`, `nav`, `form`, `fieldset`, `figure`, `figcaption`,
   `address`, `dl`, `dt`, `dd`, `li`, `tr`, `details`, `summary`, `blockquote`,
-  `pre`, `h1`–`h6`.
+  `pre`, `h1`–`h6`, `dialog`, `hgroup`, `menu`, `search`.
 - Lists: `ul`, `ol`, `li`, including nested lists and custom counters.
 - Inline and text: `a`, `span`, `strong`, `b`, `em`, `i`, `u`, `ins`, `s`,
   `del`, `strike`, `small`, `mark`, `code`, `kbd`, `samp`, `var`, `q`, `cite`,
   `abbr`, `time`, `sub`, `sup`, `br`, `wbr`, and unknown/custom tags (inline).
 - Replaced/media: `img`, `picture`/`source`, `hr`, `video`, `audio`, `iframe`
-  embeds. `svg`, `canvas`, `object`, `embed` and `template` are accepted but
-  their content is not painted.
+  embeds. `svg`, `canvas`, `object`, `embed`, and media without a playable
+  source keep a real placeholder box with their resolved width, height,
+  background and border. Their fallback content is not interpreted.
 - Forms: `input` (text/password/checkbox/radio/submit/range/etc.), `textarea`,
   `select`/`option`, `button`, `label`, `legend`, `output`, `progress`, `meter`.
 - Table structure: `table`, `thead`, `tbody`, `tfoot`, `tr`, `td`, `th`,
-  `caption`, `colgroup`/`col` are accepted and flow as text/boxes; there is no
-  column algorithm or collapsed border model.
+  `caption` render rows and cells through the table grid; `caption` is a
+  centred block above the rows. `colspan`/`rowspan` claim grid slots, direct
+  `width` on cells sizes columns, fixed layout reads the first row, and
+  `border-collapse: collapse` leaves one shared edge between neighbours.
+  `colgroup`/`col` widths (including `span`) define column tracks in fixed and
+  auto layout, with a cell's own width winning where CSS gives it precedence.
+  A `<tr>` with no cells still reserves a row when rowspans occupy it.
 - `head` metadata and `script`/`style`/`noscript`/`title` content are not
   painted. Raw-text containers (`svg`, `canvas`, `template`, `object`) are not
   interpreted as HTML.
@@ -115,11 +133,9 @@ mistaken for working CSS.
 | Construct | Current behaviour |
 | --- | --- |
 | `font-family` | Accepted; the reader uses its one bundled face. |
-| `display: table`, `display: table-*`, `display: contents`, and block/inline conversion | Accepted; the reader’s block flow is chosen by the HTML tag, so only `flex`/`grid` on block tags change container behaviour. |
+| `display: contents` and block/inline conversion | Accepted; the reader’s block flow is chosen by the HTML tag, so only `flex`/`grid`/table display modes on block tags change container behaviour. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
-| `margin: auto` horizontal centring | Accepted; auto margins resolve to zero because the reader has no shrink-to-fit centring pass. |
 | Percentage heights (`height: 50%`, `min-height`, `max-height`) | Accepted; percentage heights are ignored because the parent height is not known while the flow is measured. Use a pixel height. |
-| `float: inline-start`, `float: inline-end`, `clear: inline-start`, `clear: inline-end` | Not recognised; use `left`, `right` or `both`. |
 | aspect-ratio on an ordinary block | Accepted; only replaced media uses it, because the reader has no implicit content box ratio for text flow. |
 | `position: sticky` | Accepted; treated as fixed/absolute, because the reader has no scrolling sticky state. |
 | `box-shadow` blur, spread, inset; `text-shadow` blur | Accepted; only the first offset/colour is painted. |
@@ -127,7 +143,7 @@ mistaken for working CSS.
 | `transform`, `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. |
 | `grid-template-rows`, `grid-row`, `grid-column`, `grid-area` | Accepted; only explicit columns and auto-fit rows are modelled. |
 | `white-space: nowrap/pre-wrap` details | Accepted; `pre*` keeps code lines, other wrapping modes are approximated. |
-| `table-layout`, `border-collapse`, table column sizing | Accepted; tables render as text/box flow. |
+| Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |

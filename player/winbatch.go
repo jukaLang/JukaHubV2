@@ -30,6 +30,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -38,6 +39,8 @@ var errWinBatchUnsafe = errors.New("contains a character cmd.exe would read as a
 
 // winBatchUnsafeChars cannot be made literal on a cmd.exe command line.
 const winBatchUnsafeChars = "\"%\r\n\x00"
+
+var winBatchSafeTextRE = regexp.MustCompile(`^[^"%\r\n\x00]*$`)
 
 // winBatchComspec is the cmd.exe to start: comspec (%ComSpec%) when it is a
 // drive-rooted path quoting can hold, else cmd.exe in systemRoot's System32
@@ -75,14 +78,14 @@ func winBatchCommandLine(comspec, script string, args []string) (string, error) 
 	if strings.TrimSpace(script) == "" {
 		return "", errors.New("no batch file to run")
 	}
-	if strings.ContainsAny(script, winBatchUnsafeChars) {
+	if strings.ContainsAny(script, winBatchUnsafeChars) || !winBatchSafeTextRE.MatchString(script) {
 		return "", fmt.Errorf("the batch file's path %w", errWinBatchUnsafe)
 	}
 	var b strings.Builder
 	b.WriteString(`"` + comspec + `" /d /v:off /s /c "`)
 	b.WriteString(`"` + script + `"`)
 	for i, arg := range args {
-		if strings.ContainsAny(arg, winBatchUnsafeChars) {
+		if strings.ContainsAny(arg, winBatchUnsafeChars) || !winBatchSafeTextRE.MatchString(arg) {
 			return "", fmt.Errorf("argument %d %w", i+1, errWinBatchUnsafe)
 		}
 		b.WriteString(` "` + arg + `"`)

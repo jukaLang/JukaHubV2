@@ -117,6 +117,11 @@ func gmetaStateDirs(romPath string) []string {
 // levels deep (RetroArch's per-core and per-content-folder sorting); the ROM's
 // own folder only at its top, since it holds the library itself.
 func gmetaListStates(romPath string, dirs []string) []gmetaState {
+	safeRom, err := safeAbsolutePath(romPath)
+	if err != nil {
+		return nil
+	}
+	romPath = safeRom
 	stem := strings.TrimSuffix(filepath.Base(romPath), filepath.Ext(romPath))
 	if stem == "" {
 		return nil
@@ -213,6 +218,16 @@ func gmetaWhen(t, now time.Time) string {
 // gmetaCopyFile copies src over dst through a temporary file, so a reader
 // never sees half a state.
 func gmetaCopyFile(src, dst string) error {
+	var err error
+	if src, err = safeAbsolutePath(src); err != nil {
+		return err
+	}
+	if dst, err = safeAbsolutePath(dst); err != nil {
+		return err
+	}
+	if strings.Contains(src, "..") || strings.Contains(dst, "..") {
+		return os.ErrInvalid
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -244,6 +259,11 @@ func gmetaCopyFile(src, dst string) error {
 // the previous auto save first (gmetaKeepPrevAuto); the previous auto save
 // trades places with the auto state; the auto state itself needs nothing.
 func gmetaStageState(st gmetaState) error {
+	path, err := safeAbsolutePath(st.Path)
+	if err != nil {
+		return err
+	}
+	st.Path = path
 	switch {
 	case st.Slot == gmetaPrevAutoSlot:
 		return gmetaSwapPrevAuto(st.Path)
@@ -288,6 +308,10 @@ func gmetaStageState(st gmetaState) error {
 // gmetaSwapPrevAuto trades the previous auto save and the auto state (and
 // their pictures) by renaming them, which keeps both dates and costs no copy.
 func gmetaSwapPrevAuto(prev string) error {
+	var err error
+	if prev, err = safeAbsolutePath(prev); err != nil {
+		return err
+	}
 	if !strings.HasSuffix(prev, gmetaPrevSuffix) {
 		return os.ErrInvalid
 	}
@@ -304,6 +328,16 @@ func gmetaSwapPrevAuto(prev string) error {
 // name. Renames in one folder, so a power cut leaves at worst the temporary
 // name, which no listing reads.
 func gmetaSwapFiles(a, b string) error {
+	var err error
+	if a, err = safeAbsolutePath(a); err != nil {
+		return err
+	}
+	if b, err = safeAbsolutePath(b); err != nil {
+		return err
+	}
+	if strings.Contains(a, "..") || strings.Contains(b, "..") {
+		return os.ErrInvalid
+	}
 	aOK, bOK := regularFile(a), regularFile(b)
 	switch {
 	case aOK && bOK:
@@ -326,8 +360,12 @@ func gmetaSwapFiles(a, b string) error {
 
 // gmetaMarkStaged notes the auto state a stage just wrote (gmetaStaged).
 func gmetaMarkStaged(auto string) {
+	safe, err := safeAbsolutePath(auto)
+	if err != nil {
+		return
+	}
 	gmetaStaged.mu.Lock()
-	gmetaStaged.path = filepath.Clean(auto)
+	gmetaStaged.path = safe
 	gmetaStaged.mu.Unlock()
 }
 
@@ -335,6 +373,13 @@ func gmetaMarkStaged(auto string) {
 // its own date, unless there is no auto state or the previous copy already
 // holds it (same size, same date: RetroArch has not written it since).
 func gmetaKeepPrevAuto(auto string) error {
+	var err error
+	if auto, err = safeAbsolutePath(auto); err != nil {
+		return err
+	}
+	if strings.Contains(auto, "..") {
+		return os.ErrInvalid
+	}
 	info, err := os.Stat(auto)
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return nil
@@ -395,6 +440,13 @@ const (
 // gmetaLoadThumb decodes and shrinks a state screenshot off the render thread,
 // under the shared decode permit.
 func gmetaLoadThumb(ctx context.Context, path string) (*image.NRGBA, error) {
+	var err error
+	if path, err = safeAbsolutePath(path); err != nil {
+		return nil, err
+	}
+	if strings.Contains(path, "..") {
+		return nil, os.ErrInvalid
+	}
 	if !imageDecodeSem.Acquire(ctx, 1) {
 		return nil, ctx.Err()
 	}

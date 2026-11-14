@@ -42,11 +42,93 @@ var screenChildren struct {
 	cmds map[*exec.Cmd]struct{}
 }
 
+// screenChildAudio counts launches that have claimed the TrimUI sound device.
+// Claiming it before cmd.Start matters: RetroArch can open ALSA as soon as it
+// starts, before noteGameChildStarted runs. A failed start gives it back.
+var screenChildAudio struct {
+	mu       sync.Mutex
+	count    int
+	overlays int // alarms and Juka's in-game overlay borrowing paused-game audio
+}
+
+var screenChildAudioNeeded = IsTrimuiDevice
+
+func screenChildStart(cmd *exec.Cmd) error {
+	if screenChildAudioNeeded() {
+		screenChildAudio.mu.Lock()
+		screenChildAudio.count++
+		if screenChildAudio.count == 1 {
+			audioRouteReleaseForChild()
+		}
+		screenChildAudio.mu.Unlock()
+	}
+	if err := cmd.Start(); err != nil {
+		screenChildAudioDone()
+		return err
+	}
+	return nil
+}
+
+func screenChildAudioDone() {
+	if !screenChildAudioNeeded() {
+		return
+	}
+	screenChildAudio.mu.Lock()
+	defer screenChildAudio.mu.Unlock()
+	if screenChildAudio.count == 0 {
+		return
+	}
+	screenChildAudio.count--
+	if screenChildAudio.count == 0 {
+		audioRouteResumeAfterChild()
+	}
+}
+
+// An alarm or in-game overlay can borrow JukaHub's audio while the game is
+// paused. They may overlap, so only the first borrow reopens the output and
+// only the last return closes it before the game continues.
+func screenChildAudioOverlayBegin() bool {
+	if !screenChildAudioNeeded() {
+		return false
+	}
+	screenChildAudio.mu.Lock()
+	defer screenChildAudio.mu.Unlock()
+	if screenChildAudio.count == 0 {
+		return false
+	}
+	screenChildAudio.overlays++
+	if screenChildAudio.overlays == 1 {
+		audioRouteResumeAfterChild()
+	}
+	return true
+}
+
+func screenChildAudioOverlayEnd() {
+	if !screenChildAudioNeeded() {
+		return
+	}
+	screenChildAudio.mu.Lock()
+	defer screenChildAudio.mu.Unlock()
+	if screenChildAudio.overlays == 0 {
+		return
+	}
+	screenChildAudio.overlays--
+	if screenChildAudio.overlays == 0 && screenChildAudio.count > 0 {
+		audioRouteReleaseForChild()
+	}
+}
+
 // noteGameChildStarted records that a screen-taking child has started. Call
 // the moment cmd.Start succeeded, so the main loop parks before the child's
 // first frame.
 func noteGameChildStarted(cmd *exec.Cmd) {
 	runningGameChildren.Add(1)
+	// A manual core/tool install can still be downloading when the user starts a
+	// game. Stop its transfer before it competes with the game's reads and GPU
+	// work on the handheld; the install can be started again after play.
+	if IsTrimuiDevice() && installBarCancelActive() {
+		logInfo("handover", "paused an install because a game took the screen")
+	}
 	// The library's video snap would otherwise keep decoding under the game:
 	// the parked main loop no longer runs the code that stops it.
 	snapPreviewHalt()
@@ -56,8 +138,6 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	jukaSpeakStop()
 	// Background music lets go of the speaker at once (bgmusic.go).
 	bgmHaltForGame()
-	// And JukaHub of a Bluetooth headset, which takes one client (audioroute.go).
-	audioRouteReleaseForChild()
 	// The voice assistant's model, voice and CPU boost go too (voiceboost.go).
 	voiceReleaseForGame()
 	if cmd == nil {
@@ -137,6 +217,7 @@ func screenChildReaped(cmd *exec.Cmd) {
 	}
 	time.Sleep(screenSettleDelay)
 	noteGameChildExited(cmd)
+	screenChildAudioDone()
 }
 
 // gameScreenSuspended reports whether a screen-taking child is live and the

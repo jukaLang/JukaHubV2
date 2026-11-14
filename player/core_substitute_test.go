@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 // SEC-20: a label can be captured in a screenshot or shared by the companion,
@@ -59,6 +61,12 @@ func TestSubstituteVarsAllowsPlainLabels(t *testing.T) {
 // value that is itself a key onto something else (renderText may translate a
 // string fitTextCached already translated).
 func TestUICataloguesParse(t *testing.T) {
+	legibleTestInitFonts(t)
+	font := loadCachedFont(homeUIFontFile, 20)
+	if font == nil {
+		t.Fatal("load the UI font")
+	}
+	const fitW = int32(1 << 20)
 	for _, l := range uiLanguages {
 		if l.Code == uiLanguageDefault {
 			continue
@@ -74,6 +82,10 @@ func TestUICataloguesParse(t *testing.T) {
 		if f.Language != l.Code || len(f.Strings) < 300 {
 			t.Fatalf("%s: language %q with %d strings", l.Code, f.Language, len(f.Strings))
 		}
+		uiSetLanguage(l.Code)
+		if uiLanguageCode() != l.Code {
+			t.Fatalf("%s: catalogue did not load", l.Code)
+		}
 		for k, v := range f.Strings {
 			if v == "" || k == "" {
 				t.Errorf("%s: empty entry %q -> %q", l.Code, k, v)
@@ -82,7 +94,12 @@ func TestUICataloguesParse(t *testing.T) {
 				t.Errorf("%s: placeholders differ: %q -> %q", l.Code, k, v)
 			}
 			if again, ok := f.Strings[v]; ok && again != v {
-				t.Errorf("%s: %q -> %q, which translates again to %q", l.Code, k, v, again)
+				// A value may legitimately be another key (Network -> Red,
+				// Red -> Rojo). fitTextCached marks the fitted translation,
+				// so the draw lookup must leave it alone.
+				if got := uiT(fitTextCached(font, k, fitW)); got != v {
+					t.Errorf("%s: %q -> %q, which fit/draw retranslates to %q", l.Code, k, v, got)
+				}
 			}
 			for _, r := range v {
 				if r > 0x7f && !fontCoversRune(homeUIFontFile, r) {
@@ -97,6 +114,15 @@ func TestUICataloguesParse(t *testing.T) {
 	if uiLanguageCode() != "es" || uiT("Settings") == "Settings" {
 		t.Fatalf("Spanish not in force: %q", uiT("Settings"))
 	}
+	if got := uiT(fitTextCached(font, "Network", fitW)); got != "Red" {
+		t.Errorf("Spanish Network = %q, want Red", got)
+	}
+	if got := uiT(fitTextCached(font, "Red", fitW)); got != "Rojo" {
+		t.Errorf("Spanish Red = %q, want Rojo", got)
+	}
+	if got := uiT(fitTextCached(font, "Network: Wi-Fi", fitW)); got != "Red: Wi-Fi" {
+		t.Errorf("Spanish Network: value = %q, want Red: Wi-Fi", got)
+	}
 	if got := uiT("Weather: On"); got == "Weather: On" {
 		t.Errorf("label: value join not translated: %q", got)
 	}
@@ -109,5 +135,64 @@ func TestUICataloguesParse(t *testing.T) {
 	uiSetLanguage(uiLanguageDefault)
 	if got := uiT("Settings"); got != "Settings" {
 		t.Errorf("English is not the identity: %q", got)
+	}
+}
+
+func TestSpanishFittedLabelsRenderTranslatedAtTheirFitWidth(t *testing.T) {
+	legibleTestInitFonts(t)
+	if err := sdl.Init(sdl.INIT_VIDEO); err != nil {
+		t.Fatalf("initialize SDL video: %v", err)
+	}
+	surface, err := sdl.CreateRGBSurface(0, 320, 80, 32, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create test surface: %v", err)
+	}
+	renderer, err := sdl.CreateSoftwareRenderer(surface)
+	if err != nil {
+		surface.Free()
+		t.Fatalf("create software renderer: %v", err)
+	}
+	defer func() {
+		renderer.Destroy()
+		surface.Free()
+	}()
+	font := loadCachedFont(homeUIFontFile, 20)
+	if font == nil {
+		t.Fatal("load the UI font")
+	}
+	uiSetLanguage("es")
+	defer uiSetLanguage(uiLanguageDefault)
+
+	for _, tc := range []struct{ source, want string }{
+		{"Network", "Red"},
+		{"Red", "Rojo"},
+		{"Network: Wi-Fi", "Red: Wi-Fi"},
+		{"Settings", "Ajustes"},
+	} {
+		fitted := fitTextCached(font, tc.source, 300)
+		if !strings.Contains(fitted, uiTranslatedStart) || !strings.Contains(fitted, uiTranslatedEnd) {
+			t.Fatalf("fitTextCached(%q) = %q, want a translate-once marked result", tc.source, fitted)
+		}
+		w, h := renderText(renderer, &Config{}, font, fitted, sdl.Color{R: 255, G: 255, B: 255, A: 255}, 0, 0)
+		wantW, wantH := measureTextRaw(font, tc.want)
+		if w != wantW || h != wantH {
+			t.Errorf("renderText(%q -> %q) = %dx%d, want %dx%d", tc.source, tc.want, w, h, wantW, wantH)
+		}
+		if markedW, _, _ := font.SizeUTF8(fitted); int32(markedW) != wantW {
+			t.Errorf("font.SizeUTF8(fitted %q) = %d, want %d (marker must be zero width)", tc.source, markedW, wantW)
+		}
+	}
+
+	// A clipped translation must stay inside the width that was fitted, even
+	// though its source is shorter (Settings -> Ajustes).
+	fitted := fitTextCached(font, "Settings", 24)
+	w, _ := renderText(renderer, &Config{}, font, fitted, sdl.Color{R: 255, G: 255, B: 255, A: 255}, 0, 0)
+	if w > 24 {
+		t.Errorf("clipped Spanish Settings rendered %dpx wide, want <= 24px", w)
+	}
+	plain := uiUnmarkTranslated(fitted)
+	wantW, _ := measureTextRaw(font, plain)
+	if w != wantW {
+		t.Errorf("clipped Spanish Settings rendered %dpx, fitted text measures %dpx", w, wantW)
 	}
 }

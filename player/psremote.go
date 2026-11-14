@@ -781,7 +781,7 @@ fi
         fi
         export LD_LIBRARY_PATH
         # The same OpenSSL 1.1 preload pairing uses (psHelperEnv); the old
-        # OPENSSL_PRELOAD meant nothing to the loader.
+        # environment variable meant nothing to the loader.
         PRELOAD=""
         for LIB in "$RUNTIME/libcrypto.so.1.1" "$RUNTIME/libssl.so.1.1"; do
             [ -f "$LIB" ] || continue

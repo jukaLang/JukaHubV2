@@ -891,6 +891,14 @@ func main() {
 		// sends with it in the same batch is dropped too.
 		wakeSwallowedText := false
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+			// Once an input starts a game, stop routing later events to menus.
+			// Keep a quit that was already polled; the parked loop handles the rest.
+			if gameScreenSuspended() && !alarmFiringActive() && !gameAssistOverlayActive() {
+				if _, quit := event.(*sdl.QuitEvent); quit {
+					running = false
+				}
+				break
+			}
 			applyButtonSwap(config, event)
 			// Asleep, and a moment after the wake: presses are dropped, so
 			// neither a pocket nor the wake press acts (powersleep.go).
@@ -1201,7 +1209,7 @@ func main() {
 						continue
 					}
 					// PortMaster Ports is modal too.
-					if portsPanel.open && handlePortsKey(e) {
+					if portsPanel.open && !virtualKeyboardActive && handlePortsKey(e) {
 						continue
 					}
 					// Apps → Steam is modal too (steam_ui.go).
@@ -3373,7 +3381,16 @@ func main() {
 			}
 		}
 
+		if gameScreenSuspended() && !alarmFiringActive() && !gameAssistOverlayActive() {
+			continue
+		}
 		drainCustom(config)
+		// An input handler may have started a full-screen child during this
+		// iteration. Do not draw the rest of the old UI frame over its first
+		// picture; the next iteration enters the parked game loop above.
+		if gameScreenSuspended() && !alarmFiringActive() && !gameAssistOverlayActive() {
+			continue
+		}
 		// A held right stick moves the virtual cursor every frame, and a held
 		// L2/R2 keeps scrolling under it.
 		vcursorTick(config)
@@ -3993,6 +4010,11 @@ func main() {
 		powerKeyTick(config, false)
 		homeFocusGlide.endFrame()
 
+		// A screen child may also have started from a queued/background action
+		// while this frame was being assembled. Never present it over the game.
+		if gameScreenSuspended() && !alarmFiringActive() && !gameAssistOverlayActive() {
+			continue
+		}
 		renderer.Present()
 		// Measured after Present, so the idle delay at the end of the loop is
 		// not counted as frame cost.

@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName}
+var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -73,6 +73,9 @@ func tbxEnsureScenes(config *Config) {
 
 // tbxIsToolScene reports whether name is one of the five screens.
 func tbxIsToolScene(name string) bool {
+	if name == rommCloudSceneName {
+		return true
+	}
 	for _, n := range tbxSceneNames {
 		if n == name {
 			return true
@@ -128,6 +131,8 @@ func tbxDisplayName(name string) string {
 		return "Security & trust"
 	case bugrepSceneName:
 		return "Report a bug"
+	case rommCloudSceneName:
+		return "RomM"
 	}
 	return ""
 }
@@ -1411,6 +1416,8 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return sectrustSceneClick(mx, my, config)
 	case bugrepSceneName:
 		return bugrepSceneClick(mx, my, config)
+	case rommCloudSceneName:
+		return rommCloudClick(mx, my, config)
 	}
 	return false
 }
@@ -1449,6 +1456,8 @@ func tbxSceneNav(name string) *tbxNav {
 		return sectrustActiveNav()
 	case bugrepSceneName:
 		return &bugrepScreen.nav
+	case rommCloudSceneName:
+		return &rommCloud.nav
 	}
 	return nil
 }
@@ -1473,6 +1482,8 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return sectrustSceneHints(), true
 	case bugrepSceneName:
 		return bugrepSceneHints(), true
+	case rommCloudSceneName:
+		return rommCloudHints(), true
 	}
 	return nil, false
 }

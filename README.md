@@ -293,10 +293,13 @@ clock and the notification bell are in the bar itself.
   Disc helpers** fills in the cue sheets and multi-disc playlists that
   PlayStation and Sega CD rips need, without touching an existing file. See
   [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md).
-* **PortMaster Ports** — install PortMaster from the Emulators screen and launch
-  the ports it manages without leaving JukaHub. Installed launchers are read
-  from `Ports/` and the older `Roms/Ports` locations; see
+* **PortMaster Ports** — browse PortMaster's live catalogue, filter for ports
+  that may run on this handheld, and press A to install one through PortMaster
+  with its declared runtimes. Installed launchers are also available here; see
   [docs/PORTMASTER.md](docs/PORTMASTER.md).
+* **RomM server** — connect to your own server under Tools, browse and download
+  games with their covers, fetch BIOS files, and sync RetroArch saves for an
+  installed game. See [docs/ROMM_SERVER.md](docs/ROMM_SERVER.md).
 * **Save Manager** — snapshot every emulator save folder into a versioned copy,
   restore one with a safety snapshot first, prepare the folders for Syncthing
   and export a phone resume bundle. Snapshots are plain files on the card, so
@@ -424,8 +427,9 @@ the phone opens a small page with:
   playing on the handheld.
 * **Send a file** — uploads land in the `PhoneDrop` folder of the shared folder
   (the same one FTP publishes), ready for the file browser or player.
-* **Files** — browse the shared folders, upload and download files, and make or
-  rename folders from a phone or computer browser.
+* **Files** — browse the shared folders, drag games, covers or music into the
+  open folder, upload and download files, and make or rename folders from a
+  phone or computer browser.
 * **Groq API key** — paste the key from console.groq.com instead of typing 56
   characters on the handheld. It is checked with Groq, saved for voice typing,
   voice commands and the Juka chat, and never shown again (the page only
@@ -441,13 +445,16 @@ the phone opens a small page with:
 
 The pairing card shows the device's IP address (for example
 `http://192.168.1.42`). If port 80 is unavailable, the address includes the
-Companion's port (usually `:8317`). Type it into a browser on the same Wi-Fi
+Companion's port (usually `:8317`). Type it into a browser on the same network
 and enter the six-digit PIN shown on the device. The QR code opens the page
 with that PIN already filled in. The server runs in the background for the
 whole session, and **Y**
 issues a new PIN on the spot (which also invalidates every companion link
 already shared; a Screen Share link has its own token and keeps working).
 `JUKAHUB_COMPANION_PORT` overrides the port (default `8317`).
+If the handheld exposes a USB network connection, the pairing card also shows
+its USB address. Open that address on the connected computer to use the same
+Files page over the cable.
 
 ## Share the screen on a TV (Screen Share)
 
@@ -705,6 +712,7 @@ four the same way, with controller hints; see
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [VPN](docs/VPN.md) | WireGuard: importing a configuration (card, Files or phone), what goes through the tunnel, how it works on the handheld and on Windows |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
+| [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
 | [Recordings](docs/RECORDINGS.md) | captures the emulator writes: one folder for both sides, listed and playable, and what an in-game overlay cannot do |
 | [Memory scanner](docs/MEMORY.md) | RAM search and edit for a running game: scan, narrow, write, and what it cannot do |

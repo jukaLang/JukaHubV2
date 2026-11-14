@@ -799,7 +799,7 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		// The program leads its own process group, so whatever the wrapper
 		// starts in the background keeps the screen parked until it is gone.
 		screenChildGroupConfigure(cmd)
-		err = cmd.Start()
+		err = screenChildStart(cmd)
 	}
 	if err != nil {
 		stopInput()

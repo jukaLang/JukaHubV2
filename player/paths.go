@@ -26,6 +26,23 @@ func cleanUserPath(p string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
+// safeAbsolutePath is the final guard for a path that must already be absolute
+// and must not contain a traversal component. It rejects rather than silently
+// resolving to somewhere else.
+func safeAbsolutePath(p string) (string, error) {
+	if strings.Contains(p, "..") {
+		return "", fmt.Errorf("path %q contains a traversal component", p)
+	}
+	clean, err := cleanUserPath(p)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(clean) {
+		return "", fmt.Errorf("path %q is not absolute", p)
+	}
+	return clean, nil
+}
+
 // isPathWithin reports whether path is base itself or a descendant of base.
 // Both sides are made absolute first so relative working-directory tricks
 // cannot pass the check.

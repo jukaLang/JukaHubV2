@@ -76,6 +76,39 @@ const (
 	webDisplayBlock = iota
 	webDisplayFlex
 	webDisplayGrid
+	webDisplayTable
+	webDisplayTableRow
+	webDisplayTableCell
+	webDisplayTableHeaderGroup
+	webDisplayTableRowGroup
+	webDisplayTableFooterGroup
+	webDisplayTableCaption
+)
+
+// Table roles survive CSS display modes: a div with display:table-row is the
+// same row block as a <tr>, because layout consumes the role rather than the
+// tag name.
+const (
+	webTableRoleNone = iota
+	webTableRoleTable
+	webTableRoleRow
+	webTableRoleCell
+	webTableRoleHeaderGroup
+	webTableRoleRowGroup
+	webTableRoleFooterGroup
+	webTableRoleCaption
+	webTableRoleColumnGroup
+	webTableRoleColumn
+)
+
+const (
+	webTableLayoutAuto = iota
+	webTableLayoutFixed
+)
+
+const (
+	webBorderCollapseSeparate = iota
+	webBorderCollapseCollapse
 )
 
 const (
@@ -208,6 +241,11 @@ type webStyle struct {
 	TextIndent float64
 	MarginTop  float64
 	MarginBot  float64
+	// MarginTopAuto/MarginBotAuto remember `margin: auto` on the block axis.
+	// Block flow ignores them; flex cross-axis and grid rows use them after
+	// the item's own height is known.
+	MarginTopAuto bool
+	MarginBotAuto bool
 	// Transform is the author's text-transform (0 none, 1 uppercase,
 	// 2 lowercase, 3 capitalise). It is applied when a word is measured so
 	// the wrapped width matches the glyphs that get drawn.
@@ -258,7 +296,15 @@ type webStyle struct {
 	// A card written as `border: 3px` used to draw 2px, which reads as a
 	// different design rather than as a smaller border.
 	BorderWidth float64
-	ListNone    bool
+	// BorderSideWidth keeps each edge's own CSS width; border-collapse
+	// resolves conflicts per edge, while BorderWidth stays the max for
+	// ordinary painting.
+	BorderSideWidth    [4]float64
+	BorderSideStyle    [4]int
+	BorderSideStyleSet [4]bool
+	BorderSideColor    [4]sdl.Color
+	BorderSideHasColor [4]bool
+	ListNone           bool
 	// ListStyle is the marker the author asked for (0 = the reader default).
 	// It inherits like a real browser's, so `ul { list-style: none }` reaches
 	// the items, which is how nav menus hide their bullets.
@@ -283,18 +329,25 @@ type webStyle struct {
 	// IndentRight is padding-right + margin-right in CSS px: it narrows the
 	// measure so an inset card wraps where the author intended.
 	IndentRight float64
+	// MarginLeftAuto/MarginRightAuto remember `margin: auto` on the inline
+	// sides. The numeric margin is zero until layout knows the used width; a
+	// constrained block can then take the free space on that side (or split it
+	// when both sides are auto), which is how a `max-width` page centres.
+	MarginLeftAuto  bool
+	MarginRightAuto bool
 	// --- Flex and stacking -------------------------------------------------
 	// Display is block or flex. A flex container lays its direct children out
 	// side by side (row) or one under the other (column); the reader has no
 	// DOM, so the parser marks each direct child as one flex item and the
 	// layout stacks those items into columns.
-	Display    int
-	FlexDir    int
-	Justify    int
-	AlignItems int
-	GapX, GapY float64
-	FlexWrap   bool
-	GridCols   int
+	Display     int
+	FlexDir     int
+	FlexReverse bool
+	Justify     int
+	AlignItems  int
+	GapX, GapY  float64
+	FlexWrap    bool
+	GridCols    int
 	// GridMin is the minimum track width from a responsive
 	// repeat(auto-fit|auto-fill, minmax(Npx, 1fr)); 0 means the track count
 	// is explicit (or not a grid).
@@ -324,6 +377,26 @@ type webStyle struct {
 	// BoxSizing is 1 for border-box: an explicit width includes the
 	// horizontal padding the parser folded into Indent/IndentRight.
 	BoxSizing int
+	// --- Table geometry ----------------------------------------------------
+	// TableID groups a table's rows and cells; TableRole says what each block
+	// is in that model. TableRow is the source row index, TableCol the resolved
+	// column (assigned by layout after rowspans have claimed slots), and
+	// ColSpan/RowSpan are already clamped by the parser.
+	TableID          int
+	TableRole        int
+	TableRow         int
+	TableCol         int
+	ColSpan          int
+	RowSpan          int
+	TableLayout      int
+	BorderCollapse   int
+	TableSpacingX    float64
+	TableSpacingY    float64
+	TableWidthPx     float64
+	TableWidthPct    float64
+	TableColumnCount int
+	TablePrepared    bool
+	TableCols        *webTableColumns
 	// FloatSide is 0 none, 1 left, 2 right. Clear is 0 none, 1 left,
 	// 2 right, 3 both. These are per element and do not inherit.
 	FloatSide int
@@ -439,25 +512,30 @@ type webBlock struct {
 	// MarkerStyle is the resolved ::marker style for this list item. Its
 	// colour and font size paint the bullet; HasMarkerStyle separates an
 	// author marker from the reader's default bullet.
-	MarkerStyle    webStyle
-	HasMarkerStyle bool
-	Pre            bool
-	HasBg          bool
-	Background     sdl.Color
-	Gradient       webGradient
-	HasGradient    bool
-	BorderLeft     bool
-	BorderRight    bool
-	BoxBorder      bool
-	BorderTop      bool
-	BorderBottom   bool
-	BorderColor    sdl.Color
-	HasBorderColor bool
-	BorderWidth    float64
-	BorderStyle    int
-	Outline        bool
-	OutlineOffset  float64
-	Rule           bool
+	MarkerStyle        webStyle
+	HasMarkerStyle     bool
+	Pre                bool
+	HasBg              bool
+	Background         sdl.Color
+	Gradient           webGradient
+	HasGradient        bool
+	BorderLeft         bool
+	BorderRight        bool
+	BoxBorder          bool
+	BorderTop          bool
+	BorderBottom       bool
+	BorderColor        sdl.Color
+	HasBorderColor     bool
+	BorderWidth        float64
+	BorderSideWidth    [4]float64
+	BorderSideStyle    [4]int
+	BorderSideStyleSet [4]bool
+	BorderSideColor    [4]sdl.Color
+	BorderSideHasColor [4]bool
+	BorderStyle        int
+	Outline            bool
+	OutlineOffset      float64
+	Rule               bool
 	// FlexGroup/FlexItem tie a block to its flex container and direct child.
 	// Zero means "not in a flex container". The container's own row settings
 	// are copied onto every item so a sub-layout can be built without the
@@ -465,13 +543,18 @@ type webBlock struct {
 	FlexGroup   int
 	FlexItem    int
 	FlexDir     int
+	FlexReverse bool
 	FlexJustify int
 	FlexAlign   int
 	FlexGapX    float64
 	FlexGapY    float64
-	FlexWrap    bool
-	GridCols    int
-	GridMin     float64
+	// FlexHeight is the flex container's definite block size in CSS px, when
+	// the author supplied one (height, or a min-height floor). Zero means the
+	// column is content-sized and has no free block space to hand out.
+	FlexHeight float64
+	FlexWrap   bool
+	GridCols   int
+	GridMin    float64
 	// FlexTrail holds nested container memberships after the outermost one.
 	// Each sub-layout consumes one entry, so an inner row stays inside its
 	// parent card instead of being measured across the full page width.
@@ -515,6 +598,19 @@ type webBlock struct {
 	ImageSrc string
 	ImageW   float64
 	ImageH   float64
+	// Placeholder marks a replaced element the reader cannot rasterize (svg,
+	// canvas, object, embed, a media element with no playable source). It keeps
+	// the element's box, background and border in the flow instead of dropping
+	// its content into the surrounding text.
+	Placeholder bool
+	// TableEmptyRow marks a <tr> that emitted no cell blocks. Layout still
+	// reserves its row height, so a pure rowspan gap does not collapse.
+	TableEmptyRow bool
+	// CollapseEdges is the resolved border-collapse result for this cell: at
+	// most one winning edge per side, painted by layout instead of the ordinary
+	// per-side border flags.
+	HasCollapseEdges bool
+	CollapseEdges    [4]webTableBorderEdge
 	// Video marks a <video> element or a video-bearing <iframe> embed.
 	// VideoSrc is the resolved http(s) URL the playback path streams through
 	// yt-dlp; the layout reserves a 16:9 play card for it like an image and
@@ -534,7 +630,9 @@ type webBlock struct {
 type webFlexMembership struct {
 	group, item, dir, justify, align int
 	gapX, gapY                       float64
+	height                           float64
 	wrap                             bool
+	reverse                          bool
 	gridCols                         int
 	gridMin                          float64
 	grow, shrink, basis, basisPct    float64
@@ -547,15 +645,18 @@ func webFlexMembershipFromFrame(f *webFlexFrame) webFlexMembership {
 	return webFlexMembership{
 		group: f.group, item: f.item, dir: f.dir, justify: f.justify, align: f.align,
 		gapX: f.gapX, gapY: f.gapY, wrap: f.wrap, gridCols: f.gridCols, gridMin: f.gridMin,
-		grow: f.itemStyle.FlexGrow, shrink: f.itemStyle.FlexShrink, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
+		height:  f.height,
+		reverse: f.reverse,
+		grow:    f.itemStyle.FlexGrow, shrink: f.itemStyle.FlexShrink, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
 		order: f.itemStyle.Order, width: f.itemStyle.Width, widthPct: f.itemStyle.WidthPct, alignSelf: f.itemStyle.AlignSelf,
 	}
 }
 
 func (b *webBlock) setFlexMembership(m webFlexMembership) {
 	b.FlexGroup, b.FlexItem = m.group, m.item
-	b.FlexDir, b.FlexJustify, b.FlexAlign = m.dir, m.justify, m.align
+	b.FlexDir, b.FlexReverse, b.FlexJustify, b.FlexAlign = m.dir, m.reverse, m.justify, m.align
 	b.FlexGapX, b.FlexGapY, b.FlexWrap, b.GridCols, b.GridMin = m.gapX, m.gapY, m.wrap, m.gridCols, m.gridMin
+	b.FlexHeight = m.height
 	b.FlexGrow, b.FlexShrink, b.FlexBasis, b.BasisPct = m.grow, m.shrink, m.basis, m.basisPct
 	b.Order = m.order
 	b.Width, b.WidthPct, b.AlignSelf = m.width, m.widthPct, m.alignSelf
@@ -669,6 +770,10 @@ type webRect struct {
 	Color     sdl.Color
 	Stroke    bool
 	Thickness int32
+	// BackgroundFill marks the block colour entry. It remains in Rects for
+	// geometry consumers, but the painter draws it through layout.Backgrounds
+	// so background layers can stack above it in CSS order.
+	BackgroundFill bool
 	// BorderStyle selects solid, dashed, dotted or double geometry for a
 	// border/outline rect. The zero value is solid.
 	BorderStyle int
@@ -991,7 +1096,9 @@ type webFlexFrame struct {
 	align     int
 	gapX      float64
 	gapY      float64
+	height    float64
 	wrap      bool
+	reverse   bool
 	gridCols  int
 	gridMin   float64
 }
@@ -2007,9 +2114,12 @@ var webSupportedProperties = map[string]bool{
 	"border-top": true, "border-width": true, "color": true,
 	"column-gap": true, "container": true, "container-name": true, "container-type": true,
 	"display": true, "flex": true, "flex-basis": true, "flex-direction": true,
+	"float": true, "clear": true,
 	"flex-grow": true, "flex-wrap": true, "font": true, "font-size": true,
 	"font-style": true, "font-weight": true, "gap": true,
 	"grid-template-columns": true, "height": true, "inset": true,
+	"inset-block-start": true, "inset-block-end": true,
+	"inset-inline-start": true, "inset-inline-end": true,
 	"justify-content": true, "line-height": true, "margin": true,
 	"margin-block": true, "margin-bottom": true, "margin-left": true,
 	"margin-right": true, "margin-top": true, "opacity": true,
@@ -2018,7 +2128,8 @@ var webSupportedProperties = map[string]bool{
 	"padding-top": true, "place-items": true, "position": true,
 	"row-gap": true, "text-align": true, "text-indent": true,
 	"text-transform": true, "visibility": true, "white-space": true,
-	"width": true, "z-index": true,
+	"width": true, "z-index": true, "table-layout": true,
+	"border-collapse": true, "border-spacing": true,
 }
 
 // webSupportsApplies evaluates an @supports condition. It understands
@@ -2312,9 +2423,14 @@ func webSupportsParsedValue(name, value string) (supported, handled bool) {
 	lower := strings.ToLower(strings.TrimSpace(value))
 	switch name {
 	case "display":
-		return webSupportsEnum(lower, "block", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "flow-root", "none"), true
+		return webSupportsEnum(lower, "block", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "flow-root", "none",
+			"table", "table-row", "table-cell", "table-header-group", "table-row-group", "table-footer-group", "table-caption"), true
 	case "position":
 		return webSupportsEnum(lower, "static", "relative", "absolute", "fixed", "sticky"), true
+	case "float":
+		return webSupportsEnum(lower, "none", "left", "right", "inline-start", "inline-end"), true
+	case "clear":
+		return webSupportsEnum(lower, "none", "left", "right", "both", "inline-start", "inline-end"), true
 	case "visibility":
 		return webSupportsEnum(lower, "visible", "hidden", "collapse"), true
 	case "font-style":
@@ -3544,7 +3660,8 @@ func (p *webCalcParser) functionFactor() (value webCalcValue, ok, handled bool) 
 // Selectors are compiled once, when a sheet is parsed, and matched against the
 // chain of open elements: outermost first, the element being styled last. The
 // streaming parser keeps no DOM, but rules that need sibling structure
-// (:first-child, :last-child, :nth-child and :has()) get a small selector tree
+// (:first-child, :last-child, :nth-child, :nth-last-child, :nth-of-type and
+// :has()) get a small selector tree
 // built ahead of the walk. Selectors that still depend on content the parser
 // has not reached (:empty) or on the previous sibling (+, ~) answer "maybe".
 //
@@ -3629,13 +3746,16 @@ type webSelSimple struct {
 	fold  bool
 	name  string // id, class, attribute name, or the direction of :dir()
 	value string
-	// nthA and nthB are the An+B coefficients of :nth-child().
+	// nthA and nthB are the An+B coefficients of an :nth-*() pseudo-class.
 	nthA, nthB int
 	// words are the language ranges of :lang(); args are the selectors of
 	// :not(), :is() and :where(); hasArgs are the relative selectors of :has().
 	words   []string
 	args    []*webSelector
 	hasArgs []webHasArg
+	// nthOf filters the sibling list of an :nth-*() selector when it carries
+	// an `of S` clause.
+	nthOf []*webSelector
 }
 
 // webHasArg is one relative selector argument of :has(), with the relationship
@@ -3667,7 +3787,7 @@ const (
 )
 
 // The pseudo-classes the matcher tells apart. webPseudoMaybe is every one it
-// cannot decide from a start tag or the selector tree (:nth-of-type(), :valid…);
+// cannot decide from a start tag or the selector tree (:valid…);
 // webPseudoNever is a state that is false on a page nobody is playing, and
 // webPseudoUser a pointer or focus state (:hover, :focus…), false too except
 // for a rule that reveals (webSelReveal). webPseudoTarget is :target, decided
@@ -3698,6 +3818,9 @@ const (
 	webPseudoFirstChild
 	webPseudoLastChild
 	webPseudoNthChild
+	webPseudoNthLastChild
+	webPseudoNthOfType
+	webPseudoNthLastOfType
 )
 
 // webSelMaxDepth bounds nested :not()/:is() arguments, so a hostile sheet
@@ -4222,12 +4345,34 @@ func (p *webSelParser) pseudo(c *webSelCompound) bool {
 		if !hasArgs {
 			return false
 		}
-		a, b, ok := webSelParseNth(args)
-		if !ok {
+		if !p.parseNthArgs(&s, args) {
 			return false
 		}
 		s.op = webPseudoNthChild
-		s.nthA, s.nthB = a, b
+	case "nth-last-child":
+		if !hasArgs {
+			return false
+		}
+		if !p.parseNthArgs(&s, args) {
+			return false
+		}
+		s.op = webPseudoNthLastChild
+	case "nth-of-type":
+		if !hasArgs {
+			return false
+		}
+		if !p.parseNthArgs(&s, args) {
+			return false
+		}
+		s.op = webPseudoNthOfType
+	case "nth-last-of-type":
+		if !hasArgs {
+			return false
+		}
+		if !p.parseNthArgs(&s, args) {
+			return false
+		}
+		s.op = webPseudoNthLastOfType
 	case "not", "is", "matches", "where", "has", "-webkit-any", "-moz-any":
 		if !hasArgs {
 			return false
@@ -4425,7 +4570,7 @@ func webSelectorUsesTree(sel *webSelector) bool {
 			s := &sel.compounds[i].simples[j]
 			if s.kind == webSelPseudo {
 				switch s.op {
-				case webPseudoHas, webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild:
+				case webPseudoHas, webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild, webPseudoNthLastChild, webPseudoNthOfType, webPseudoNthLastOfType:
 					return true
 				}
 			}
@@ -4861,19 +5006,48 @@ func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) 
 			return webSelNo
 		}
 		return webSelBool(s.hasMatches(el.node, mode))
-	case webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild:
-		position, siblings, ok := webSelChildPosition(el.node)
+	case webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild, webPseudoNthLastChild:
+		var position, siblings int
+		var ok bool
+		if len(s.nthOf) > 0 {
+			position, siblings, ok = webSelFilteredPosition(el.node, chain, s.nthOf, false, mode)
+		} else {
+			position, siblings, ok = webSelChildPosition(el.node)
+		}
 		if !ok {
 			return webSelMaybe
+		}
+		if position == 0 {
+			return webSelNo
 		}
 		switch s.op {
 		case webPseudoFirstChild:
 			return webSelBool(position == 1)
 		case webPseudoLastChild:
 			return webSelBool(position == siblings)
+		case webPseudoNthLastChild:
+			return webSelBool(webSelNthMatches(s.nthA, s.nthB, siblings-position+1))
 		default:
 			return webSelBool(webSelNthMatches(s.nthA, s.nthB, position))
 		}
+	case webPseudoNthOfType, webPseudoNthLastOfType:
+		var position, siblings int
+		var ok bool
+		if len(s.nthOf) > 0 {
+			position, siblings, ok = webSelFilteredPosition(el.node, chain, s.nthOf, true, mode)
+		} else {
+			position, siblings, ok = webSelTypePosition(el.node)
+		}
+		if !ok {
+			return webSelMaybe
+		}
+		if position == 0 {
+			return webSelNo
+		}
+		if s.op == webPseudoNthLastOfType {
+			position = siblings - position + 1
+		}
+		return webSelBool(webSelNthMatches(s.nthA, s.nthB, position))
 	}
 	return webSelMaybe
 }
@@ -4974,8 +5148,117 @@ func webSelHasSubtree(root *webElement, arg webHasArg, rootBound bool, mode webS
 	return false
 }
 
-// webSelParseNth reads the An+B argument of :nth-child(). Whitespace around
-// the sign is allowed as it is in CSS; an `of S` clause is not supported.
+// parseNthArgs reads the An+B argument of an :nth-*() pseudo-class and
+// compiles its optional `of S` selector list. The selector list contributes
+// the specificity of its most specific complex selector, like :is().
+func (p *webSelParser) parseNthArgs(s *webSelSimple, args string) bool {
+	nth, of, hasOf := webSelSplitNthOf(args)
+	a, b, ok := webSelParseNth(nth)
+	if !ok {
+		return false
+	}
+	s.nthA, s.nthB = a, b
+	if !hasOf {
+		return true
+	}
+	if p.depth >= webSelMaxDepth {
+		p.sel.never = true
+		return false
+	}
+	var best webSelSpec
+	for _, part := range webSplitSelectorList(of) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		arg, spec := webCompileSelectorAt(part, p.depth+1)
+		if arg.never {
+			p.sel.never = true
+			return false
+		}
+		s.nthOf = append(s.nthOf, arg)
+		if best.less(spec) {
+			best = spec
+		}
+	}
+	if len(s.nthOf) == 0 {
+		p.sel.never = true
+		return false
+	}
+	p.spec.a += best.a
+	p.spec.b += best.b
+	p.spec.c += best.c
+	return true
+}
+
+// webSelSplitNthOf splits `An+B of S` at the top-level `of` token. Parentheses,
+// brackets, quoted strings and escapes are skipped, so `of` inside :is() or an
+// attribute value does not split the argument.
+func webSelSplitNthOf(arg string) (nth, of string, hasOf bool) {
+	for i := 0; i < len(arg); {
+		c := arg[i]
+		if c == '\\' {
+			i += 2
+			continue
+		}
+		if c == '"' || c == '\'' {
+			quote := c
+			i++
+			for i < len(arg) && arg[i] != quote {
+				if arg[i] == '\\' {
+					i++
+				}
+				i++
+			}
+			i++
+			continue
+		}
+		if c == '(' || c == '[' {
+			depth := 1
+			i++
+			for i < len(arg) && depth > 0 {
+				switch arg[i] {
+				case '\\':
+					i++
+				case '"', '\'':
+					quote := arg[i]
+					i++
+					for i < len(arg) && arg[i] != quote {
+						if arg[i] == '\\' {
+							i++
+						}
+						i++
+					}
+				case '(', '[':
+					depth++
+				case ')', ']':
+					depth--
+				}
+				i++
+			}
+			continue
+		}
+		if webAttrSpaceByte(c) {
+			start := i
+			for i < len(arg) && webAttrSpaceByte(arg[i]) {
+				i++
+			}
+			token := i
+			for token < len(arg) && !webAttrSpaceByte(arg[token]) && arg[token] != '(' && arg[token] != '[' {
+				token++
+			}
+			if asciiLower(arg[i:token]) == "of" {
+				return strings.TrimSpace(arg[:start]), strings.TrimSpace(arg[token:]), true
+			}
+			continue
+		}
+		i++
+	}
+	return strings.TrimSpace(arg), "", false
+}
+
+// webSelParseNth reads the An+B part of an :nth-*() argument. Whitespace
+// around the sign is allowed as it is in CSS.
 func webSelParseNth(arg string) (a, b int, ok bool) {
 	text := asciiLower(arg)
 	text = strings.Map(func(r rune) rune {
@@ -5052,6 +5335,65 @@ func webSelChildPosition(el *webElement) (position, siblings int, ok bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// webSelTypePosition returns an element's one-based position among sibling
+// elements with the same tag. CSS counts types, not all children: in
+// <p>, <span>, <span> the second span is type position 2, not child position 3.
+func webSelTypePosition(el *webElement) (position, siblings int, ok bool) {
+	if el == nil || el.parent == nil {
+		return 0, 0, false
+	}
+	for _, sibling := range el.parent.children {
+		if sibling.tag != el.tag {
+			continue
+		}
+		siblings++
+		if sibling == el {
+			position = siblings
+		}
+	}
+	return position, siblings, true
+}
+
+// webSelFilteredPosition counts the siblings that match an `of S` list. When
+// typeOnly is set, siblings of another tag are skipped first, which is how
+// :nth-of-type(An+B of S) combines type and selector filtering.
+func webSelFilteredPosition(el *webElement, chain []webElement, filter []*webSelector, typeOnly bool, mode webSelMode) (position, siblings int, ok bool) {
+	if el == nil || el.parent == nil {
+		return 0, 0, false
+	}
+	for _, sibling := range el.parent.children {
+		if typeOnly && sibling.tag != el.tag {
+			continue
+		}
+		if !webSelNthFilterMatches(filter, chain, sibling, mode) {
+			continue
+		}
+		siblings++
+		if sibling == el {
+			position = siblings
+		}
+	}
+	return position, siblings, true
+}
+
+// webSelNthFilterMatches tests one sibling against the `of S` selector list.
+// The sibling replaces the subject at the end of the ancestor chain, so class,
+// tag, attribute and nested pseudo-class filters all see the right element.
+func webSelNthFilterMatches(filter []*webSelector, chain []webElement, sibling *webElement, mode webSelMode) bool {
+	if len(chain) == 0 || sibling == nil {
+		return false
+	}
+	path := make([]webElement, len(chain))
+	copy(path, chain)
+	path[len(path)-1] = *sibling
+	for _, arg := range filter {
+		if arg != nil && !arg.never && arg.matchesIn(path, mode) {
+			return true
+		}
+	}
+	return false
 }
 
 // webSelNextElement returns the next element sibling in the selector tree.
@@ -5628,6 +5970,82 @@ func webBoxShorthand(value string, fontPx float64) (top, right, bottom, left flo
 		left = webLength(fields[3], fontPx)
 	}
 	return top, right, bottom, left, true
+}
+
+// webCSSAuto recognises the one margin keyword that needs layout, not a
+// numeric value. The spacing helpers still resolve it to zero; the style keeps
+// a separate flag so a constrained block can centre once layout knows its used
+// width.
+func webCSSAuto(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "auto")
+}
+
+// webAutoMarginSides reports the physical left/right auto margins of a
+// one-to-four value margin shorthand. The two-value form repeats its second
+// value on both inline sides, as CSS does.
+func webAutoMarginSides(value string) (left, right bool) {
+	fields := webCSSSpaceFields(value)
+	switch len(fields) {
+	case 0:
+		return false, false
+	case 1:
+		left = webCSSAuto(fields[0])
+		return left, left
+	case 2, 3:
+		right = webCSSAuto(fields[1])
+		return right, right
+	default:
+		return webCSSAuto(fields[3]), webCSSAuto(fields[1])
+	}
+}
+
+// webAutoInlineMarginSides is webAutoMarginSides for the two-value
+// margin-inline form, whose first value is inline-start and second inline-end.
+func webAutoInlineMarginSides(value string) (left, right bool) {
+	fields := webCSSSpaceFields(value)
+	if len(fields) == 0 {
+		return false, false
+	}
+	if len(fields) == 1 {
+		left = webCSSAuto(fields[0])
+		return left, left
+	}
+	return webCSSAuto(fields[0]), webCSSAuto(fields[1])
+}
+
+// webAutoBlockSides reports the physical top/bottom auto margins of a
+// one-to-four value margin shorthand. The two-value form repeats its first
+// value on both block sides.
+func webAutoBlockSides(value string) (top, bottom bool) {
+	fields := webCSSSpaceFields(value)
+	switch len(fields) {
+	case 0:
+		return false, false
+	case 1:
+		top = webCSSAuto(fields[0])
+		return top, top
+	case 2:
+		top = webCSSAuto(fields[0])
+		return top, top
+	case 3:
+		return webCSSAuto(fields[0]), webCSSAuto(fields[2])
+	default:
+		return webCSSAuto(fields[0]), webCSSAuto(fields[2])
+	}
+}
+
+// webAutoBlockLogicalSides is webAutoBlockSides for margin-block, whose
+// two-value form is block-start then block-end.
+func webAutoBlockLogicalSides(value string) (top, bottom bool) {
+	fields := webCSSSpaceFields(value)
+	if len(fields) == 0 {
+		return false, false
+	}
+	if len(fields) == 1 {
+		top = webCSSAuto(fields[0])
+		return top, top
+	}
+	return webCSSAuto(fields[0]), webCSSAuto(fields[1])
 }
 
 func webTextAlign(value string) int {
@@ -6392,6 +6810,16 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		if tag == "th" {
 			st.Bold = true
 		}
+	case "tr":
+		// A table row is a real row: its direct cell blocks are flex items, so
+		// cells occupy columns instead of being folded into one text run.
+		st.Display, st.FlexDir = webDisplayFlex, webFlexRow
+		st.AlignItems = webItemStretch
+	case "table":
+		st.MarginTop, st.MarginBot = 8, 8
+	case "caption":
+		st.Align = 1
+		st.MarginBot = 4
 	}
 }
 
@@ -6436,6 +6864,12 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	// Resolve the comma-separated background layer list. Each layer keeps its
 	// own image/gradient, size, position and repeat; the longhand lists repeat
 	// their last value when they are shorter than the image list, as CSS does.
+	_, hasBGImage := decls["background-image"]
+	_, hasBGShorthand := decls["background"]
+	_, hasBGSize := decls["background-size"]
+	_, hasBGPosition := decls["background-position"]
+	_, hasBGRepeat := decls["background-repeat"]
+	backgroundDeclared := hasBGImage || hasBGShorthand || hasBGSize || hasBGPosition || hasBGRepeat
 	var backgroundLayers []webBackgroundLayerStyle
 	if value, ok := decls["background-image"]; ok {
 		for _, part := range webSplitSelectorList(value) {
@@ -6478,19 +6912,21 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if len(backgroundLayers) > webMaxBackgroundLayers {
 		backgroundLayers = backgroundLayers[:webMaxBackgroundLayers]
 	}
-	st.BackgroundLayerCount = len(backgroundLayers)
-	for i, layer := range backgroundLayers {
-		st.BackgroundLayers[i] = layer
-	}
-	if len(backgroundLayers) > 0 {
-		first := backgroundLayers[0]
-		st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = first.Image, first.Size, first.Position, first.Repeat
-		if first.HasGradient && first.Gradient != nil {
-			st.Gradient, st.HasGradient = first.Gradient, true
-			st.Background, st.HasBg = webGradientAverage(*first.Gradient), true
+	if backgroundDeclared {
+		st.BackgroundLayerCount = len(backgroundLayers)
+		for i, layer := range backgroundLayers {
+			st.BackgroundLayers[i] = layer
 		}
-	} else {
-		st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = "", "", "", ""
+		if len(backgroundLayers) > 0 {
+			first := backgroundLayers[0]
+			st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = first.Image, first.Size, first.Position, first.Repeat
+			if first.HasGradient && first.Gradient != nil {
+				st.Gradient, st.HasGradient = first.Gradient, true
+				st.Background, st.HasBg = webGradientAverage(*first.Gradient), true
+			}
+		} else {
+			st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = "", "", "", ""
+		}
 	}
 	if v, ok := decls["font-weight"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
@@ -6611,6 +7047,8 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			st.MarginTop, st.MarginBot = top, bottom
 			st.Indent += left
 			st.IndentRight += right
+			st.MarginLeftAuto, st.MarginRightAuto = webAutoMarginSides(v)
+			st.MarginTopAuto, st.MarginBotAuto = webAutoBlockSides(v)
 		} else {
 			top, bottom := webMarginPair(v, st.FontPx)
 			st.MarginTop, st.MarginBot = top, bottom
@@ -6618,9 +7056,11 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	if v, ok := decls["margin-top"]; ok {
 		st.MarginTop = webLength(v, st.FontPx)
+		st.MarginTopAuto = webCSSAuto(v)
 	}
 	if v, ok := decls["margin-bottom"]; ok {
 		st.MarginBot = webLength(v, st.FontPx)
+		st.MarginBotAuto = webCSSAuto(v)
 	}
 	if v, ok := decls["padding-left"]; ok {
 		st.Indent += webLength(v, st.FontPx)
@@ -6641,6 +7081,7 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		if top, _, bottom, _, valid := webBoxShorthand(v, st.FontPx); valid {
 			st.MarginTop += top
 			st.MarginBot += bottom
+			st.MarginTopAuto, st.MarginBotAuto = webAutoBlockLogicalSides(v)
 		}
 	}
 	if v, ok := decls["padding-block"]; ok {
@@ -6654,6 +7095,9 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			if _, right, _, left, valid := webBoxShorthand(v, st.FontPx); valid {
 				st.Indent += left
 				st.IndentRight += right
+				if key == "margin-inline" {
+					st.MarginLeftAuto, st.MarginRightAuto = webAutoInlineMarginSides(v)
+				}
 			}
 		}
 	}
@@ -6671,6 +7115,18 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			*target += webLength(v, st.FontPx)
 		}
 	}
+	if v, ok := decls["margin-inline-start"]; ok {
+		st.MarginLeftAuto = webCSSAuto(v)
+	}
+	if v, ok := decls["margin-inline-end"]; ok {
+		st.MarginRightAuto = webCSSAuto(v)
+	}
+	if v, ok := decls["margin-block-start"]; ok {
+		st.MarginTopAuto = webCSSAuto(v)
+	}
+	if v, ok := decls["margin-block-end"]; ok {
+		st.MarginBotAuto = webCSSAuto(v)
+	}
 	if v, ok := decls["padding"]; ok {
 		if top, right, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
 			st.Indent += left
@@ -6683,13 +7139,15 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		st.IndentRight += webLength(v, st.FontPx)
 	}
 	// margin-left/margin-right are the box the paragraph sits in: a 24px
-	// gutter narrows the line on that side. `auto` reads as 0, which is the
-	// honest result for a box the reader cannot measure.
+	// gutter narrows the line on that side. `auto` is kept as a flag for the
+	// layout pass, which resolves it once the used width is known.
 	if v, ok := decls["margin-left"]; ok {
 		st.Indent += webLength(v, st.FontPx)
+		st.MarginLeftAuto = webCSSAuto(v)
 	}
 	if v, ok := decls["margin-right"]; ok {
 		st.IndentRight += webLength(v, st.FontPx)
+		st.MarginRightAuto = webCSSAuto(v)
 	}
 	if v, ok := decls["line-height"]; ok {
 		if px, valid := webLineHeightPx(v, st.FontPx); valid {
@@ -6731,11 +7189,30 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	// which is the only place most sheets set one.
 	for _, key := range []string{"border", "border-left", "border-right", "border-top", "border-bottom", "outline"} {
 		if v, ok := decls[key]; ok {
+			sides := []int{0, 1, 2, 3}
+			switch key {
+			case "border-left":
+				sides = []int{0}
+			case "border-right":
+				sides = []int{1}
+			case "border-top":
+				sides = []int{2}
+			case "border-bottom":
+				sides = []int{3}
+			case "outline":
+				sides = nil
+			}
 			if c, valid := webColorInValue(v); valid {
 				st.BorderColor, st.HasBorderColor = c, true
+				for _, side := range sides {
+					st.BorderSideColor[side], st.BorderSideHasColor[side] = c, true
+				}
 			}
 			if style := webBorderStyleInValue(v); style >= 0 {
 				st.BorderStyle = style
+				for _, side := range sides {
+					st.BorderSideStyle[side], st.BorderSideStyleSet[side] = style, true
+				}
 			}
 		}
 	}
@@ -6749,18 +7226,22 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["border-left"]; ok && webBorderVisible(v) {
 		st.BorderLeft = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
+		st.BorderSideWidth[0] = webMaxAbs(st.BorderSideWidth[0], webBorderWidthInValue(v, st.FontPx))
 	}
 	if v, ok := decls["border-right"]; ok && webBorderVisible(v) {
 		st.BorderRight = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
+		st.BorderSideWidth[1] = webMaxAbs(st.BorderSideWidth[1], webBorderWidthInValue(v, st.FontPx))
 	}
 	if v, ok := decls["border-top"]; ok && webBorderVisible(v) {
 		st.BorderTop = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
+		st.BorderSideWidth[2] = webMaxAbs(st.BorderSideWidth[2], webBorderWidthInValue(v, st.FontPx))
 	}
 	if v, ok := decls["border-bottom"]; ok && webBorderVisible(v) {
 		st.BorderBottom = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
+		st.BorderSideWidth[3] = webMaxAbs(st.BorderSideWidth[3], webBorderWidthInValue(v, st.FontPx))
 	}
 	for key, target := range map[string]*bool{
 		"border-left-width":   &st.BorderLeft,
@@ -6772,17 +7253,34 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			if px := webLength(v, st.FontPx); px > 0 {
 				*target = true
 				st.BorderWidth = webMaxAbs(st.BorderWidth, px)
+				side := 0
+				switch key {
+				case "border-right-width":
+					side = 1
+				case "border-top-width":
+					side = 2
+				case "border-bottom-width":
+					side = 3
+				}
+				st.BorderSideWidth[side] = webMaxAbs(st.BorderSideWidth[side], px)
 			}
 		}
 	}
 	if v, ok := decls["border"]; ok && webBorderVisible(v) {
 		st.BoxBorder = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
+		w := webBorderWidthInValue(v, st.FontPx)
+		for i := range st.BorderSideWidth {
+			st.BorderSideWidth[i] = webMaxAbs(st.BorderSideWidth[i], w)
+		}
 	}
 	if v, ok := decls["border-width"]; ok {
 		if px := webLength(v, st.FontPx); px > 0 {
 			st.BoxBorder = true
 			st.BorderWidth = webMaxAbs(st.BorderWidth, px)
+			for i := range st.BorderSideWidth {
+				st.BorderSideWidth[i] = webMaxAbs(st.BorderSideWidth[i], px)
+			}
 		}
 	}
 	if v, ok := decls["border-style"]; ok {
@@ -6909,8 +7407,46 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		case "grid", "inline-grid":
 			st.Display = webDisplayGrid
 			st.FlexDir, st.FlexWrap = webFlexRow, true
+		case "table":
+			st.Display = webDisplayTable
+		case "table-row":
+			st.Display, st.FlexDir = webDisplayTableRow, webFlexRow
+		case "table-cell":
+			st.Display = webDisplayTableCell
+		case "table-header-group":
+			st.Display = webDisplayTableHeaderGroup
+		case "table-row-group":
+			st.Display = webDisplayTableRowGroup
+		case "table-footer-group":
+			st.Display = webDisplayTableFooterGroup
+		case "table-caption":
+			st.Display = webDisplayTableCaption
 		case "block", "flow-root", "inline-block":
 			st.Display = webDisplayBlock
+		}
+	}
+	if v, ok := decls["table-layout"]; ok {
+		if strings.EqualFold(strings.TrimSpace(v), "fixed") {
+			st.TableLayout = webTableLayoutFixed
+		} else if strings.EqualFold(strings.TrimSpace(v), "auto") {
+			st.TableLayout = webTableLayoutAuto
+		}
+	}
+	if v, ok := decls["border-collapse"]; ok {
+		if strings.EqualFold(strings.TrimSpace(v), "collapse") {
+			st.BorderCollapse = webBorderCollapseCollapse
+		} else if strings.EqualFold(strings.TrimSpace(v), "separate") {
+			st.BorderCollapse = webBorderCollapseSeparate
+		}
+	}
+	if v, ok := decls["border-spacing"]; ok {
+		fields := webCSSSpaceFields(v)
+		if len(fields) > 0 {
+			st.TableSpacingX = webLength(fields[0], 16)
+			st.TableSpacingY = st.TableSpacingX
+			if len(fields) > 1 {
+				st.TableSpacingY = webLength(fields[1], 16)
+			}
 		}
 	}
 	if v, ok := decls["grid-template-columns"]; ok && st.Display == webDisplayGrid {
@@ -6922,6 +7458,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		if strings.HasPrefix(lower, "column") {
 			st.FlexDir = webFlexColumn
 		}
+		st.FlexReverse = strings.HasSuffix(lower, "-reverse")
 	}
 	if v, ok := decls["flex-wrap"]; ok {
 		lower := strings.ToLower(strings.TrimSpace(v))
@@ -7029,17 +7566,17 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 	}
 	if v, ok := decls["float"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "left":
+		case "left", "inline-start":
 			st.FloatSide = 1
-		case "right":
+		case "right", "inline-end":
 			st.FloatSide = 2
 		}
 	}
 	if v, ok := decls["clear"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "left":
+		case "left", "inline-start":
 			st.Clear = 1
-		case "right":
+		case "right", "inline-end":
 			st.Clear = 2
 		case "both":
 			st.Clear = 3
@@ -7097,15 +7634,21 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		{"right", &st.Right, &st.HasRight},
 		{"bottom", &st.Bottom, &st.HasBottom},
 		{"left", &st.Left, &st.HasLeft},
+		{"inset-block-start", &st.Top, &st.HasTop},
+		{"inset-block-end", &st.Bottom, &st.HasBottom},
+		{"inset-inline-start", &st.Left, &st.HasLeft},
+		{"inset-inline-end", &st.Right, &st.HasRight},
 	} {
 		v, ok := decls[edge.key]
 		if !ok {
 			continue
 		}
-		if px := webLength(v, st.FontPx); px != 0 {
-			*edge.val = px
-			*edge.flag = true
+		if webCSSAuto(v) {
+			*edge.flag = false
+			continue
 		}
+		*edge.val = webLength(v, st.FontPx)
+		*edge.flag = true
 	}
 }
 
@@ -7377,6 +7920,11 @@ type webParser struct {
 	containerSeq         int
 	hasContainerUnits    bool
 	flexStack            []webFlexFrame
+	// tables is the stack of open table formatting contexts. A real <table>
+	// or any element with a table display role opens one; rows and cells get
+	// its ID, row counter and inherited table settings.
+	tables   []webTableParse
+	tableSeq int
 	// form is the <form> the parser is inside, so a control knows where its
 	// value goes. Nested forms are invalid HTML, so one is enough. formSeq
 	// numbers them, so a later <form> never inherits an earlier one's ID.
@@ -7412,6 +7960,23 @@ type webParser struct {
 	// target is the page address's fragment: the element whose id it names is
 	// the one :target matches.
 	target string
+}
+
+type webTableParse struct {
+	id            int
+	depth         int
+	row           int
+	layout        int
+	collapse      int
+	spacingX      float64
+	spacingY      float64
+	width         float64
+	widthPct      float64
+	cols          *webTableColumns
+	colGroupStart int
+	colGroupWidth float64
+	colGroupPct   float64
+	colGroupSpan  int
 }
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document.
@@ -7669,12 +8234,64 @@ func webRawTextElement(tag string) bool {
 	return false
 }
 
+// webPlaceholderElement lists replaced content this reader cannot rasterize.
+// Their fallback text is not laid out; the element itself keeps a box.
+func webPlaceholderElement(tag string) bool {
+	switch tag {
+	case "svg", "canvas", "object", "embed", "audio":
+		return true
+	}
+	return false
+}
+
+func (p *webParser) addPlaceholderBlock(name, attrs string) {
+	if p.inHead {
+		return
+	}
+	style := p.computeStyle(webNewElement(name, attrs), attrs)
+	w := htmlTagAttributeFloat(attrs, "width")
+	h := htmlTagAttributeFloat(attrs, "height")
+	if style.Width <= 0 && style.WidthPct <= 0 && w > 0 {
+		style.Width = w
+	}
+	if style.Height <= 0 && h > 0 {
+		style.Height = h
+	}
+	if style.Width <= 0 && style.WidthPct <= 0 && style.MaxWidth <= 0 && style.MaxWidthPct <= 0 {
+		style.Width = 300
+	}
+	if style.Height <= 0 && style.MinHeight <= 0 && style.MaxHeight <= 0 {
+		style.Height = 150
+		if name == "audio" {
+			style.Height = 40
+		}
+	}
+	p.flush()
+	p.beginFlexLeaf(style)
+	block := p.ensureBlock()
+	block.Style = style
+	block.Align = style.Align
+	block.Indent = style.Indent
+	block.Placeholder = true
+	block.HasBg, block.Background = style.HasBg, style.Background
+	block.BoxBorder = style.BoxBorder
+	block.BorderLeft, block.BorderRight = style.BorderLeft, style.BorderRight
+	block.BorderTop, block.BorderBottom = style.BorderTop, style.BorderBottom
+	block.BorderWidth, block.BorderStyle = style.BorderWidth, style.BorderStyle
+	block.BorderSideWidth = style.BorderSideWidth
+	block.BorderSideStyle, block.BorderSideStyleSet = style.BorderSideStyle, style.BorderSideStyleSet
+	block.BorderSideColor, block.BorderSideHasColor = style.BorderSideColor, style.BorderSideHasColor
+	block.BorderColor, block.HasBorderColor = style.BorderColor, style.HasBorderColor
+	p.flush()
+}
+
 func webBlockElement(tag string) bool {
 	switch tag {
 	case "body", "p", "div", "section", "article", "main", "header", "footer",
 		"aside", "nav", "form", "fieldset", "figure", "figcaption", "address",
 		"dl", "dt", "dd", "li", "tr", "details", "summary", "blockquote", "pre",
-		"h1", "h2", "h3", "h4", "h5", "h6":
+		"h1", "h2", "h3", "h4", "h5", "h6", "table", "caption", "thead",
+		"tbody", "tfoot", "td", "th", "menu", "hgroup", "dialog", "search":
 		return true
 	}
 	return false
@@ -7838,6 +8455,14 @@ func (p *webParser) walk(source string) {
 			p.endTag(name)
 			continue
 		}
+		if webPlaceholderElement(name) {
+			p.addPlaceholderBlock(name, attrs)
+			if !selfClose && !webVoidElement(name) {
+				_, next, _ := webRawElement(source, i, name)
+				i = next
+			}
+			continue
+		}
 		if name == "title" || name == "style" || webRawTextElement(name) {
 			inner, next, _ := webRawElement(source, i, name)
 			i = next
@@ -7891,6 +8516,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	}
 	el.target = p.target != "" && el.id == p.target
 	style := p.computeStyle(el, attrs)
+	p.prepareTableStyle(name, &style, attrs)
 	// Counter operations belong to the element that declares them and must be
 	// in force before its ::before/::marker content is resolved. Increments
 	// stay in the enclosing scope for following siblings; resets are recorded
@@ -8043,10 +8669,6 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		block.ImageH = htmlTagAttributeFloat(attrs, "height")
 		p.flush()
 		return
-	case "td", "th":
-		if p.current != nil && len(p.current.Runs) > 0 {
-			p.addText("   ")
-		}
 	case "input":
 		// A form field is content, not a void tag to skip: the reader used to
 		// drop it entirely, which left a search page with no search box at all.
@@ -8109,7 +8731,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		p.push(el, style, "block", attrs)
 		return
 	}
-	if webBlockElement(name) {
+	if webBlockElement(name) || style.Display >= webDisplayTable {
 		p.flush()
 		p.push(el, style, "block", attrs)
 		if selfClose {
@@ -8123,7 +8745,174 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	}
 }
 
+// webTableRoleFor maps both real table elements and CSS table display modes
+// onto one role model, so a div with display:table-cell is laid out by the same
+// code as a <td>.
+func webTableRoleFor(name string, display int) int {
+	switch name {
+	case "table":
+		return webTableRoleTable
+	case "tr":
+		return webTableRoleRow
+	case "td", "th":
+		return webTableRoleCell
+	case "thead":
+		return webTableRoleHeaderGroup
+	case "tbody":
+		return webTableRoleRowGroup
+	case "tfoot":
+		return webTableRoleFooterGroup
+	case "caption":
+		return webTableRoleCaption
+	case "colgroup":
+		return webTableRoleColumnGroup
+	case "col":
+		return webTableRoleColumn
+	}
+	switch display {
+	case webDisplayTable:
+		return webTableRoleTable
+	case webDisplayTableRow:
+		return webTableRoleRow
+	case webDisplayTableCell:
+		return webTableRoleCell
+	case webDisplayTableHeaderGroup:
+		return webTableRoleHeaderGroup
+	case webDisplayTableRowGroup:
+		return webTableRoleRowGroup
+	case webDisplayTableFooterGroup:
+		return webTableRoleFooterGroup
+	case webDisplayTableCaption:
+		return webTableRoleCaption
+	}
+	return webTableRoleNone
+}
+
+func webTableSpanAttr(attrs, name string, def, max int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(htmlTagAttribute(attrs, name)))
+	if err != nil {
+		return def
+	}
+	if n < 1 {
+		if name == "rowspan" && n == 0 {
+			return max
+		}
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+// prepareTableStyle attaches the open table context to a real table element
+// or to any element using a CSS table display role. Spans are clamped here so
+// no later arithmetic can overflow or loop on a hostile attribute.
+func (p *webParser) prepareTableStyle(name string, style *webStyle, attrs string) {
+	role := webTableRoleFor(name, style.Display)
+	if role == webTableRoleNone {
+		return
+	}
+	switch role {
+	case webTableRoleTable:
+		p.tableSeq++
+		ctx := webTableParse{
+			id: p.tableSeq, depth: len(p.stack), layout: style.TableLayout,
+			collapse: style.BorderCollapse, spacingX: style.TableSpacingX,
+			spacingY: style.TableSpacingY, width: style.Width, widthPct: style.WidthPct,
+		}
+		ctx.cols = &webTableColumns{rows: make(map[int]webTableBorderSpec)}
+		ctx.cols.table = webTableBorderSpecFromStyle(*style, 0)
+		if style.TableSpacingX == 0 && style.TableSpacingY == 0 {
+			ctx.spacingX, ctx.spacingY = 2, 2
+		}
+		if ctx.collapse == webBorderCollapseCollapse {
+			ctx.spacingX, ctx.spacingY = 0, 0
+		}
+		style.TableID, style.TableRole = ctx.id, webTableRoleTable
+		style.TableLayout, style.BorderCollapse = ctx.layout, ctx.collapse
+		style.TableSpacingX, style.TableSpacingY = ctx.spacingX, ctx.spacingY
+		style.TableWidthPx, style.TableWidthPct = ctx.width, ctx.widthPct
+		style.TableCols = ctx.cols
+		p.tables = append(p.tables, ctx)
+		return
+	}
+	if len(p.tables) == 0 {
+		return
+	}
+	ctx := &p.tables[len(p.tables)-1]
+	style.TableID, style.TableRole = ctx.id, role
+	style.TableLayout, style.BorderCollapse = ctx.layout, ctx.collapse
+	style.TableSpacingX, style.TableSpacingY = ctx.spacingX, ctx.spacingY
+	style.TableWidthPx, style.TableWidthPct = ctx.width, ctx.widthPct
+	style.TableCols = ctx.cols
+	switch role {
+	case webTableRoleColumnGroup:
+		ctx.colGroupStart = len(ctx.cols.defs)
+		ctx.colGroupWidth, ctx.colGroupPct = webTableColumnWidth(*style, attrs)
+		ctx.colGroupSpan = webTableSpanAttr(attrs, "span", 1, webTableMaxColumns)
+	case webTableRoleColumn:
+		w, pct := webTableColumnWidth(*style, attrs)
+		if w <= 0 && pct <= 0 && ctx.colGroupStart >= 0 {
+			w, pct = ctx.colGroupWidth, ctx.colGroupPct
+		}
+		ctx.cols.defs = append(ctx.cols.defs, webTableColumn{
+			width: w, widthPct: pct, span: webTableSpanAttr(attrs, "span", 1, webTableMaxColumns),
+		})
+	case webTableRoleRow:
+		style.TableRow = ctx.row
+		ctx.cols.rows[style.TableRow] = webTableBorderSpecFromStyle(*style, 1)
+		ctx.row++
+		style.Display, style.FlexDir = webDisplayTableRow, webFlexRow
+		p.flush()
+		p.blocks = append(p.blocks, webBlock{Style: *style, TableEmptyRow: true})
+	case webTableRoleCell:
+		style.TableRow = ctx.row - 1
+		if style.TableRow < 0 {
+			style.TableRow = 0
+		}
+		style.ColSpan = webTableSpanAttr(attrs, "colspan", 1, 32)
+		style.RowSpan = webTableSpanAttr(attrs, "rowspan", 1, 32)
+	}
+}
+
+func webTableColumnWidth(style webStyle, attrs string) (float64, float64) {
+	if style.WidthPct > 0 {
+		return 0, style.WidthPct
+	}
+	if style.Width > 0 {
+		return style.Width, 0
+	}
+	if width := htmlTagAttributeFloat(attrs, "width"); width > 0 {
+		return width, 0
+	}
+	return 0, 0
+}
+
+// endTableColGroup commits a span-only <colgroup> once its closing tag proves
+// it had no <col> children. A group with children contributes each child's
+// width instead, so it does not create a phantom column.
+func (p *webParser) endTableColGroup() {
+	if len(p.tables) == 0 {
+		return
+	}
+	ctx := &p.tables[len(p.tables)-1]
+	if len(ctx.cols.defs) > ctx.colGroupStart {
+		ctx.colGroupStart = len(ctx.cols.defs)
+		return
+	}
+	if ctx.colGroupWidth > 0 || ctx.colGroupPct > 0 || ctx.colGroupSpan > 1 {
+		ctx.cols.defs = append(ctx.cols.defs, webTableColumn{
+			width: ctx.colGroupWidth, widthPct: ctx.colGroupPct, span: ctx.colGroupSpan,
+		})
+	}
+	ctx.colGroupStart = len(ctx.cols.defs)
+}
+
 func (p *webParser) endTag(name string) {
+	if name == "colgroup" {
+		p.endTableColGroup()
+	}
 	if name == "picture" {
 		if n := len(p.pictures); n > 0 {
 			p.pictures = p.pictures[:n-1]
@@ -8206,6 +8995,9 @@ func (p *webParser) endTag(name string) {
 		for len(p.flexStack) > 0 && p.flexStack[len(p.flexStack)-1].depth >= i {
 			p.flexStack = p.flexStack[:len(p.flexStack)-1]
 		}
+		for len(p.tables) > 0 && p.tables[len(p.tables)-1].depth >= i {
+			p.tables = p.tables[:len(p.tables)-1]
+		}
 		p.popCounterResets(p.stack[i].counterResets)
 		p.stack = p.stack[:i]
 		return
@@ -8260,7 +9052,7 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		}
 	}
 	group := 0
-	if (kind == "block" || kind == "list") && (style.Display == webDisplayFlex || style.Display == webDisplayGrid) {
+	if (kind == "block" || kind == "list") && (style.Display == webDisplayFlex || style.Display == webDisplayGrid || style.Display == webDisplayTableRow) {
 		p.flexSeq++
 		group = p.flexSeq
 		p.flexStack = append(p.flexStack, webFlexFrame{
@@ -8271,7 +9063,9 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 			align:    style.AlignItems,
 			gapX:     style.GapX,
 			gapY:     style.GapY,
+			height:   webFlexContainerHeight(style),
 			wrap:     style.FlexWrap,
+			reverse:  style.FlexReverse,
 			gridCols: style.GridCols,
 			gridMin:  style.GridMin,
 		})
@@ -8335,8 +9129,15 @@ func webResetElementStyle(st *webStyle) {
 	st.BackgroundLayerCount = 0
 	st.HasGradient, st.Gradient = false, nil
 	st.Indent, st.TextIndent, st.MarginTop, st.MarginBot = 0, 0, 0, 0
+	st.MarginLeftAuto, st.MarginRightAuto = false, false
+	st.MarginTopAuto, st.MarginBotAuto = false, false
 	st.BorderLeft, st.BorderRight, st.ListNone = false, false, false
 	st.BorderWidth = 0
+	st.BorderSideWidth = [4]float64{}
+	st.BorderSideStyle = [4]int{}
+	st.BorderSideStyleSet = [4]bool{}
+	st.BorderSideColor = [4]sdl.Color{}
+	st.BorderSideHasColor = [4]bool{}
 	// A radius and a right gutter belong to the element that declared them;
 	// line-height, the list marker and the opacity group are inherited above.
 	st.Radius, st.IndentRight = 0, 0
@@ -8346,6 +9147,7 @@ func webResetElementStyle(st *webStyle) {
 	// Layout properties are per element too: a child of a flex container is
 	// not itself a container, and an item's grow factor belongs to it alone.
 	st.Display, st.FlexDir = webDisplayBlock, webFlexRow
+	st.FlexReverse = false
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
 	st.GapX, st.GapY, st.FlexWrap, st.GridCols, st.GridMin = 0, 0, false, 0, 0
 	st.FlexGrow, st.FlexShrink, st.FlexBasis, st.BasisPct = 0, 1, -1, 0
@@ -8961,48 +9763,53 @@ func (p *webParser) ensureBlock() *webBlock {
 	}
 	st := p.nearestBlockStyle()
 	block := &webBlock{
-		Style:          st,
-		ContainerIDs:   p.containerPath(),
-		Align:          st.Align,
-		Indent:         st.Indent,
-		TextIndent:     st.TextIndent,
-		MarginTop:      st.MarginTop,
-		MarginBot:      st.MarginBot,
-		Pre:            st.Pre,
-		HasBg:          st.HasBg,
-		Background:     st.Background,
-		BorderLeft:     st.BorderLeft,
-		BorderRight:    st.BorderRight,
-		BoxBorder:      st.BoxBorder,
-		BorderTop:      st.BorderTop,
-		BorderBottom:   st.BorderBottom,
-		BorderWidth:    st.BorderWidth,
-		BorderStyle:    st.BorderStyle,
-		Outline:        st.Outline,
-		OutlineOffset:  st.OutlineOffset,
-		BorderColor:    st.BorderColor,
-		HasBorderColor: st.HasBorderColor,
-		Bullet:         p.pendingB,
-		MarkerStyle:    p.pendingBStyle,
-		HasMarkerStyle: p.hasPendingBStyle,
-		InMain:         p.mainDepth > 0,
-		FlexGrow:       st.FlexGrow,
-		FlexShrink:     st.FlexShrink,
-		FlexBasis:      st.FlexBasis,
-		BasisPct:       st.BasisPct,
-		Width:          st.Width,
-		WidthPct:       st.WidthPct,
-		AlignSelf:      st.AlignSelf,
-		ZIndex:         st.ZIndex,
-		Float:          st.Position == webPositionAbsolute,
-		PosTop:         st.Top,
-		PosRight:       st.Right,
-		PosBottom:      st.Bottom,
-		PosLeft:        st.Left,
-		HasTop:         st.HasTop,
-		HasRight:       st.HasRight,
-		HasBottom:      st.HasBottom,
-		HasLeft:        st.HasLeft,
+		Style:              st,
+		ContainerIDs:       p.containerPath(),
+		Align:              st.Align,
+		Indent:             st.Indent,
+		TextIndent:         st.TextIndent,
+		MarginTop:          st.MarginTop,
+		MarginBot:          st.MarginBot,
+		Pre:                st.Pre,
+		HasBg:              st.HasBg,
+		Background:         st.Background,
+		BorderLeft:         st.BorderLeft,
+		BorderRight:        st.BorderRight,
+		BoxBorder:          st.BoxBorder,
+		BorderTop:          st.BorderTop,
+		BorderBottom:       st.BorderBottom,
+		BorderWidth:        st.BorderWidth,
+		BorderSideWidth:    st.BorderSideWidth,
+		BorderSideStyle:    st.BorderSideStyle,
+		BorderSideStyleSet: st.BorderSideStyleSet,
+		BorderSideColor:    st.BorderSideColor,
+		BorderSideHasColor: st.BorderSideHasColor,
+		BorderStyle:        st.BorderStyle,
+		Outline:            st.Outline,
+		OutlineOffset:      st.OutlineOffset,
+		BorderColor:        st.BorderColor,
+		HasBorderColor:     st.HasBorderColor,
+		Bullet:             p.pendingB,
+		MarkerStyle:        p.pendingBStyle,
+		HasMarkerStyle:     p.hasPendingBStyle,
+		InMain:             p.mainDepth > 0,
+		FlexGrow:           st.FlexGrow,
+		FlexShrink:         st.FlexShrink,
+		FlexBasis:          st.FlexBasis,
+		BasisPct:           st.BasisPct,
+		Width:              st.Width,
+		WidthPct:           st.WidthPct,
+		AlignSelf:          st.AlignSelf,
+		ZIndex:             st.ZIndex,
+		Float:              st.Position == webPositionAbsolute,
+		PosTop:             st.Top,
+		PosRight:           st.Right,
+		PosBottom:          st.Bottom,
+		PosLeft:            st.Left,
+		HasTop:             st.HasTop,
+		HasRight:           st.HasRight,
+		HasBottom:          st.HasBottom,
+		HasLeft:            st.HasLeft,
 	}
 	// The ramp is copied by value onto the block: a background belongs to the
 	// element that declared it, unlike the shared pointer the style carries for
@@ -9476,7 +10283,7 @@ func (p *webParser) flush() {
 			break
 		}
 	}
-	if !hasText && block.Bullet == "" && !block.Rule && !block.Image && !block.Video {
+	if !hasText && block.Bullet == "" && !block.Rule && !block.Image && !block.Video && !block.Placeholder {
 		return
 	}
 	for i := range block.Runs {
@@ -9678,6 +10485,7 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		d.Blocks = blocks
 	}
 	sort.SliceStable(layout.Rects, func(i, j int) bool { return layout.Rects[i].Z < layout.Rects[j].Z })
+	sort.SliceStable(layout.Backgrounds, func(i, j int) bool { return layout.Backgrounds[i].Z < layout.Backgrounds[j].Z })
 	layout.Links = collectWebLinks(layout)
 	// Play cards and form controls are cursor stops too: the same hit shape as
 	// a link, with the video or the control attached instead of a destination.
@@ -10070,10 +10878,28 @@ func webRelativeOffset(st webStyle, baseSize float64) (int32, int32) {
 	return dx, dy
 }
 
+// webMarginRows converts a CSS vertical margin to the reader's row grid. The
+// cap keeps a stray large margin from opening a hole bigger than three lines.
+func webMarginRows(cssPx, baseSize float64, rowH int32) int32 {
+	if cssPx <= 0 || baseSize <= 0 || rowH <= 0 {
+		return 0
+	}
+	design := cssPx * baseSize / 16
+	rows := int32(math.Round(design / float64(rowH)))
+	if rows < 1 && design >= float64(rowH)*0.45 {
+		rows = 1
+	}
+	if rows > 3 {
+		rows = 3
+	}
+	return rows
+}
+
 // layoutBlocks lays out a column of blocks into l.layout. Positions are
 // relative to the column's own width, with padX as its left edge, so a flex
 // item can be laid out at 0 and moved later.
 func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
+	blocks = l.prepareWebTables(blocks, contentW)
 	layout := l.layout
 	rowH := l.rowH
 	baseSize := l.baseSize
@@ -10107,20 +10933,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			layout.Rows = append(layout.Rows, webRow{Y: (idx + i) * rowH})
 		}
 	}
-	marginRows := func(cssPx float64) int32 {
-		if cssPx <= 0 {
-			return 0
-		}
-		design := cssPx * baseSize / 16
-		rows := int32(math.Round(design / float64(rowH)))
-		if rows < 1 && design >= float64(rowH)*0.45 {
-			rows = 1
-		}
-		if rows > 3 {
-			rows = 3
-		}
-		return rows
-	}
+	marginRows := func(cssPx float64) int32 { return webMarginRows(cssPx, baseSize, rowH) }
 
 	// Adjacent vertical margins collapse to the larger of the two, the way CSS
 	// does it. Summing them stacked a heading's own spacing on top of the
@@ -10167,6 +10980,14 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				layout.Floats[i].Y += dy
 			}
 		}
+		if block.TableEmptyRow {
+			// A row made only of rowspan holes never produced a cell block. Its
+			// marker still reserves the row so the table does not collapse it.
+			skipRows(1)
+			previousMarginBot = 0
+			shiftRelative()
+			continue
+		}
 		// A run of blocks tagged with one flex group is that container's
 		// items. In a row they become side-by-side columns; in a column they
 		// are ordinary blocks separated by the container's gap.
@@ -10182,7 +11003,21 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if len(layout.Rows) > 0 {
 				skipRows(marginRows(gap))
 			}
-			l.layoutFlexRow(blocks[i:j], padX, contentW)
+			rowW := contentW
+			if block.Style.TableRole == webTableRoleCell {
+				if block.Style.TableWidthPct > 0 {
+					rowW = int32(float64(contentW) * block.Style.TableWidthPct / 100)
+				} else if block.Style.TableWidthPx > 0 {
+					rowW = int32(block.Style.TableWidthPx * baseSize / 16)
+				}
+				if rowW > contentW {
+					rowW = contentW
+				}
+				if rowW < 32 {
+					rowW = 32
+				}
+			}
+			l.layoutFlexRow(blocks[i:j], padX, rowW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = 0
 			shiftRelative()
@@ -10195,6 +11030,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				j++
 			}
 			grouped := webGroupFlexItems(blocks[i:j])
+			if block.FlexReverse {
+				for a, z := 0, len(grouped)-1; a < z; a, z = a+1, z-1 {
+					grouped[a], grouped[z] = grouped[z], grouped[a]
+				}
+			}
 			if len(grouped) > 0 {
 				lead := grouped[0].blocks[0].MarginTop
 				if previousMarginBot > lead {
@@ -10203,18 +11043,23 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if len(layout.Rows) > 0 {
 					skipRows(marginRows(lead))
 				}
-				for k, item := range grouped {
-					if k > 0 {
-						skipRows(marginRows(block.FlexGapY))
+				if heightRows := l.flexColumnHeightRows(block.FlexHeight); heightRows > 0 && flexAutoCount(grouped) > 0 {
+					l.layoutFlexColumnAuto(grouped, block, padX, contentW, heightRows)
+				} else {
+					for k, item := range grouped {
+						if k > 0 {
+							skipRows(marginRows(block.FlexGapY))
+						}
+						itemBlocks := item.blocks
+						if k == 0 {
+							// The group's leading margin was already collapsed with
+							// the preceding block, so the first child must not add it.
+							itemBlocks = append([]webBlock(nil), item.blocks...)
+							itemBlocks[0].MarginTop = 0
+						}
+						shift := l.flexCrossOffset(itemBlocks, contentW)
+						l.layoutBlocksFlat(itemBlocks, padX+shift, contentW)
 					}
-					itemBlocks := item.blocks
-					if k == 0 {
-						// The group's leading margin was already collapsed with
-						// the preceding block, so the first child must not add it.
-						itemBlocks = append([]webBlock(nil), item.blocks...)
-						itemBlocks[0].MarginTop = 0
-					}
-					l.layoutBlocksFlat(itemBlocks, padX, contentW)
 				}
 			}
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
@@ -10294,6 +11139,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			shiftRelative()
 			continue
 		}
+		if block.Placeholder {
+			l.layoutPlaceholder(block, padX, contentW)
+			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
+			shiftRelative()
+			continue
+		}
 		if block.Image {
 			l.layoutImage(block, padX, contentW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
@@ -10335,6 +11186,22 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 		if paintW < 0 {
 			paintW = 0
+		}
+		// Auto inline margins take the free space around a constrained box.
+		// `max-width: 560px; margin: 0 auto` is the common page column, and
+		// `width: 60%; margin-inline: auto` is the common centred card; both
+		// used to sit against the left edge because auto resolved to zero.
+		if (block.Style.MarginLeftAuto || block.Style.MarginRightAuto) &&
+			!block.Float && block.Style.FloatSide == 0 && block.Style.TableRole == webTableRoleNone &&
+			block.FlexGroup == 0 {
+			if free := contentW - paintW; free > 0 {
+				switch {
+				case block.Style.MarginLeftAuto && block.Style.MarginRightAuto:
+					padX += free / 2
+				case block.Style.MarginLeftAuto:
+					padX += free
+				}
+			}
 		}
 		// One radius per box, in design pixels; the draw clamps it to half the
 		// box so `border-radius: 999px` is a pill rather than an error.
@@ -10684,6 +11551,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			})
 		}
 		if block.HasBg && !block.Style.Invisible && height > 0 {
+			layout.Rects = append(layout.Rects, webRect{
+				Rect:           sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: paintW + 8, H: height},
+				Color:          webFadeColor(block.Background, d.Paper, block.Style),
+				Z:              block.ZIndex,
+				Radius:         radius,
+				BackgroundFill: true,
+			})
 			layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
 				Rect:   sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: paintW + 8, H: height},
 				Color:  webFadeColor(block.Background, d.Paper, block.Style),
@@ -10743,7 +11617,42 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				}
 			}
 		}
-		borderPaint := block.BorderStyle != webBorderNone && block.BorderStyle != webBorderHidden
+		borderPaint := block.BorderStyle != webBorderNone && block.BorderStyle != webBorderHidden && !block.HasCollapseEdges
+		if block.HasCollapseEdges && !block.Style.Invisible && height > 0 {
+			x0, y0 := padX+indent, startGrid*rowH
+			for side, edge := range block.CollapseEdges {
+				if !edge.valid || edge.width <= 0 || edge.style == webBorderNone || edge.style == webBorderHidden {
+					continue
+				}
+				thickness := int32(math.Round(edge.width))
+				if thickness < 1 {
+					thickness = 1
+				}
+				if thickness > 32 {
+					thickness = 32
+				}
+				color := sdl.Color{R: 170, G: 178, B: 192, A: 255}
+				if edge.hasColor {
+					color = edge.color
+				}
+				color = webFadeColor(color, d.Paper, block.Style)
+				var edgeRect sdl.Rect
+				switch side {
+				case 0: // left
+					edgeRect = sdl.Rect{X: x0, Y: y0, W: thickness, H: height}
+				case 1: // right
+					edgeRect = sdl.Rect{X: x0 + blockW - thickness, Y: y0, W: thickness, H: height}
+				case 2: // top
+					edgeRect = sdl.Rect{X: x0, Y: y0, W: blockW, H: thickness}
+				case 3: // bottom
+					edgeRect = sdl.Rect{X: x0, Y: y0 + height - thickness, W: blockW, H: thickness}
+				}
+				layout.Rects = append(layout.Rects, webRect{
+					Rect: edgeRect, Color: color, Z: block.ZIndex,
+					Thickness: thickness, BorderStyle: edge.style,
+				})
+			}
+		}
 		if height > 0 && !block.Style.Invisible && ((borderPaint && (block.BorderLeft || block.BorderRight || block.BoxBorder || block.BorderTop || block.BorderBottom)) || block.Outline) {
 			// One colour for every edge the block draws: an uncoloured border is
 			// the reader's light hairline, a coloured one is what the sheet
@@ -11373,6 +12282,9 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
 		}
 		for _, bg := range layout.Rects {
+			if bg.BackgroundFill {
+				continue
+			}
 			y := rect.Y + bg.Rect.Y - offset
 			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
 				continue

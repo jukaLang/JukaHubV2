@@ -275,11 +275,12 @@ func gameAssistOverlayActive() bool { return gaLink.live.Load() }
 
 // gaOverlay is the assistant over a paused game. Main thread only.
 var gaOverlay struct {
-	active   bool
-	closing  bool // the hand-back frame is still to be drawn
-	openedAt time.Time
-	nudgedAt time.Time // the idle screens were last told someone is here
-	paused   []*exec.Cmd
+	active        bool
+	closing       bool // the hand-back frame is still to be drawn
+	openedAt      time.Time
+	nudgedAt      time.Time // the idle screens were last told someone is here
+	paused        []*exec.Cmd
+	audioBorrowed bool
 	// ra is RetroArch's own pause around the freeze (gamepause_ra.go).
 	ra raCoopState
 	// The game, as known when the overlay opened ("" when unknown).
@@ -367,6 +368,7 @@ func gaOpen(config *Config, mode gaMode) bool {
 		raCoopResume(ra, why)
 		return false
 	}
+	gaOverlay.audioBorrowed = screenChildAudioOverlayBegin()
 	gaOverlay.ra = ra
 	if gaTrack.game.running && gaTrack.game.title == "" && gaIdentify() {
 		gaSessionSet(gaTrack.game)
@@ -747,6 +749,10 @@ func gaClose(why string, handBack bool) {
 // now would draw the game under the ring.
 func gaResume() {
 	ringing := alarmFiringActive()
+	if gaOverlay.audioBorrowed {
+		screenChildAudioOverlayEnd()
+		gaOverlay.audioBorrowed = false
+	}
 	for _, cmd := range gaOverlay.paused {
 		if ringing && gaCmdIn(alarmHeld.children, cmd) {
 			continue
@@ -789,6 +795,10 @@ func gaDropFrame() {
 // out), and the pad watcher gives the pad back.
 func gameAssistShutdown() {
 	if len(gaOverlay.paused) > 0 {
+		if gaOverlay.audioBorrowed {
+			screenChildAudioOverlayEnd()
+			gaOverlay.audioBorrowed = false
+		}
 		for _, cmd := range gaOverlay.paused {
 			_ = alarmSignalChild(cmd, false)
 		}

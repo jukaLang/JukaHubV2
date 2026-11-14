@@ -287,26 +287,34 @@ const maxTextFitLen = 240
 
 // fitTextCached returns fitTextToWidth's result from the cache when the same
 // measurement has already been made. The text is translated into the interface
-// language first, so the cache key is the drawn string and a language switch
-// needs no flush for correctness (uiSetLanguage still clears it to free the
-// old language's entries).
+// language first, so the cache key is the translated string and a language
+// switch needs no flush for correctness (uiSetLanguage still clears it to free
+// the old language's entries). The result is marked as already translated: the
+// rendered width is the fitted translation, while uiT and the raw draw helpers
+// strip the mark instead of translating the value a second time.
 func fitTextCached(font *ttf.Font, text string, maxW int32) string {
+	translated := uiT(text)
+	if translated == "" {
+		return ""
+	}
+	if font == nil || maxW <= 0 {
+		return uiMarkTranslated(translated)
+	}
 	// Translate before clipping (i18n.go): a clipped English label is no
 	// longer a catalogue key, so translating after would draw it in English.
-	text = uiT(text)
-	if font == nil || maxW <= 0 || len(text) > maxTextFitLen {
-		return fitTextToWidth(font, text, maxW)
+	if len(translated) > maxTextFitLen {
+		return uiMarkTranslated(fitTextToWidth(font, translated, maxW))
 	}
-	key := textFitKey{font: font, text: text, maxW: maxW}
+	key := textFitKey{font: font, text: translated, maxW: maxW}
 	textFitMu.Lock()
 	if got, ok := textFitEntries[key]; ok {
 		textFitHits++
 		textFitMu.Unlock()
-		return got
+		return uiMarkTranslated(got)
 	}
 	textFitMu.Unlock()
 
-	fitted := fitTextToWidth(font, text, maxW)
+	fitted := fitTextToWidth(font, translated, maxW)
 
 	textFitMu.Lock()
 	textFitMisses++
@@ -324,7 +332,7 @@ func fitTextCached(font *ttf.Font, text string, maxW int32) string {
 		textFitOrder = append(textFitOrder, key)
 	}
 	textFitMu.Unlock()
-	return fitted
+	return uiMarkTranslated(fitted)
 }
 
 // clearTextFitCache forgets every fitted label. It runs with the text textures
@@ -387,6 +395,7 @@ func measureText(font *ttf.Font, text string) (int32, int32) {
 // the composer): no interface-language translation, so a message word that
 // happens to be a catalogue key is measured at the width it is drawn at.
 func measureTextRaw(font *ttf.Font, text string) (int32, int32) {
+	text = uiUnmarkTranslated(text)
 	if font == nil || text == "" {
 		return 0, 0
 	}
@@ -444,6 +453,7 @@ const maxSanitizeEntries = 512
 // a fifth of the home frame's time on the desktop proxy and far more on the
 // handheld. The result depends only on the face and the string.
 func sanitizeCached(font *ttf.Font, text string) string {
+	text = uiUnmarkTranslated(text)
 	if font == nil || text == "" || len(text) > maxTextFitLen {
 		return sanitizeForFont(font, text)
 	}

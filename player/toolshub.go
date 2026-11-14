@@ -488,6 +488,7 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	}
 	system = append(system, disc)
 	system = append(system, toolsHubTile{id: "rommgr", label: "ROM manager", icon: "rom", value: "File loose games, BIOS and duplicates"})
+	system = append(system, toolsHubTile{id: "rommcloud", label: "RomM server", icon: "rom", value: "Your server's games, covers, saves and BIOS"})
 	if has("Calculator") {
 		system = append(system, toolsHubTile{id: "calculator", label: "Calculator", icon: "calculator", value: "Quick math with history"})
 	}
@@ -656,6 +657,8 @@ func toolsHubActivate(config *Config, idx int) {
 		toolsHubRunDiscHelpers()
 	case "rommgr":
 		rommOpen(config)
+	case "rommcloud":
+		rommCloudOpen(config)
 	case "calculator":
 		toolsHubOpenScene(config, "Calculator")
 	case "synth":

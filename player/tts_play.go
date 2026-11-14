@@ -290,12 +290,15 @@ func ttsFeed(ctx context.Context, s *ttsSession, clips <-chan []int16) bool {
 		}
 		audioMutex.Lock()
 		live := ttsGenNow.Load() == s.gen
+		var queueErr error
 		if live {
-			_ = outQueue(audioDev, buf[:n*2])
-			ttsFed.Store(true)
+			queueErr = outQueue(audioDev, buf[:n*2])
+			if queueErr == nil {
+				ttsFed.Store(true)
+			}
 		}
 		audioMutex.Unlock()
-		if !live {
+		if !live || queueErr != nil {
 			return spoke
 		}
 		publishAudioLevel(buf[:n*2], s.rate, 1)

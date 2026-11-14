@@ -412,6 +412,8 @@ stays on screen, dimmed, and a small menu opens over it:
 |-----|--------------|
 | Resume game | The game carries on where it was |
 | Save state / Load state | For a RetroArch game started from the library: choose one of six slots, shown three at a time with screenshots and dates |
+| Rewind | On lighter RetroArch systems, step back through recent gameplay; the launch enables RetroArch's rewind only for that game |
+| Fast forward / Normal speed | Toggle RetroArch's faster play, then return to normal speed from the same row |
 | Ask Juka | The game assistant listens (only with Game assistant on); B comes back to the menu |
 | Sleep | Put the handheld to sleep and resume the game on wake |
 | Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
@@ -423,8 +425,8 @@ stays on screen, dimmed, and a small menu opens over it:
 | B, Menu, or Select + L2 again (a press, no hold) | Back to the game |
 | Select + R2 | Ask Juka straight away |
 
-The save and load rows send commands to RetroArch; the other rows work over
-any game. Like the assistant, the game sees Select and L2 go down before JukaHub
+The save, load, rewind and fast-forward rows send commands to RetroArch; the
+other rows work over any game. Like the assistant, the game sees Select and L2 go down before JukaHub
 takes the pad (an emulator hotkey on Select + L2 still fires), the game
 resumes by itself after three minutes, and a ringing alarm takes over. Save
 states are the emulator's own (RetroArch's menu on Menu); quitting keeps what
@@ -588,6 +590,7 @@ their way, and no panel is covered by a menu drawn beneath it.
 |--------|--------|
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
+| Select | Open Quick Settings; press Select or B to close it |
 | D-pad | Move between tiles, the header chips (brightness button, volume button, Bluetooth button, Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5, pairing QR) and the footer row |
 | Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
 | Left (from the Wi-Fi meter) | Move onto the Bluetooth button; **A** opens the Bluetooth page |
@@ -1379,11 +1382,30 @@ then every port launcher in `Ports/`, `Roms/Ports`, `Roms/PORTS` and
 
 | Button | Action |
 |--------|--------|
-| D-pad Up / Down | Move through PortMaster and installed ports |
-| A | Install PortMaster, open it, or launch the selected port |
+| D-pad Up / Down | Move through the rows |
+| A | Install PortMaster, launch an installed port, or download the selected catalogue port and hand it to PortMaster to install with its runtimes |
+| X / Tab | Switch between installed ports and PortMaster's catalogue |
+| Y / F | Toggle the **May Run on ChaOS** device filter in the catalogue |
+| R1 / S | Search the catalogue |
 | B | Back (to Emulators when opened there) |
 
 Tapping a row activates it; tapping outside closes the panel.
+
+## RomM server
+
+Open **Tools → RomM server**. Under **Connection**, enter your server address
+and Client API Token, then choose **Connect and load games**. The **Games** tab
+downloads a single-file game and cover; an installed game also offers **Sync
+saves**. The **BIOS files** tab downloads firmware to the card. See
+[ROMM_SERVER.md](ROMM_SERVER.md) for save conflict handling and multi-file games.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through tabs and files |
+| A | Open a tab, game actions, or a BIOS download |
+| X | Go to the next tab |
+| Y | Refresh the active list |
+| B | Back to Tools |
 
 ## Packages
 
@@ -1969,7 +1991,8 @@ a dimmed screen, which is the shape a phone camera reads worst, so each one can
 also be enlarged on its own.
 
 The **Phone Companion** card also shows a browser address: the handheld's IP
-address. Type it as shown on the card, including any port, then enter its
+address, plus a USB-network address when one is active. Type either as shown
+on the card, including any port, then enter its
 six-digit PIN.
 The code already contains the PIN.
 

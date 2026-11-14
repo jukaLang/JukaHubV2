@@ -500,7 +500,7 @@ func feScriptCommand(config *Config, path string) (*exec.Cmd, error) {
 	if !isPathWithin(file, root) || !strings.EqualFold(filepath.Ext(file), ".sh") {
 		return nil, fmt.Errorf("script is outside the Files root or has an unsupported type")
 	}
-	cmd := exec.Command("sh", file)
+	cmd := exec.Command("sh", "--", file)
 	cmd.Dir = filepath.Dir(file)
 	return cmd, nil
 }
@@ -514,7 +514,7 @@ func feLaunchScript(config *Config, path string) error {
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
-	if err = cmd.Start(); err != nil {
+	if err = screenChildStart(cmd); err != nil {
 		return err
 	}
 	noteGameChildStarted(cmd)

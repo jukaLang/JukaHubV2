@@ -34,9 +34,9 @@ import (
 
 const (
 	companionDefaultPort = 8317
-	// companionMaxUpload bounds a single phone upload. The SD card is small;
-	// half a gigabyte is already a feature film.
-	companionMaxUpload = 512 << 20
+	// companionMaxUpload bounds a streamed browser transfer while allowing
+	// disc images and other games larger than half a gigabyte.
+	companionMaxUpload = 4 << 30
 	// companionTextLimit bounds one "send text" request, not the phone's
 	// whole textarea: the page batches long text into several requests.
 	companionTextLimit = 4000
@@ -874,6 +874,8 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 .facts{display:flex;gap:4px;flex:0 0 auto}
 .facts button{padding:6px 9px;min-height:36px;font-size:13px}
 .fempty{padding:14px;color:var(--dim);font-size:14px;text-align:center}
+.filedrop{border:2px dashed var(--line);border-radius:10px;padding:12px;margin:8px 0;color:var(--dim);text-align:center;font-size:14px}
+.filedrop.active{border-color:var(--accent);background:rgba(111,134,255,.12);color:var(--ink)}
 @media (max-width:420px){.frow{flex-wrap:wrap}.facts{width:100%;justify-content:flex-end}}
 /* A phone on its side has little height: the screen moves to a column of its
    own on the left and the cards scroll on the right. */
@@ -945,12 +947,13 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 <div class=card id=filesCard>
   <h2>Files</h2>
   <div class=crumbs id=filesCrumbs></div>
+  <div class=filedrop id=filesDrop>Drop games, covers or music here, or choose Upload here</div>
   <div class=row><button id=filesUpload>Upload here</button><button class=ghost id=filesMkdir>New folder</button></div>
   <input type=file id=filesPick multiple hidden>
   <div class="bar idle" id=filesBar><span id=filesBarFill></span></div>
   <div class=msg id=filesMsg aria-live=polite></div>
   <div class=flist id=filesList><div class=fempty>Loading...</div></div>
-  <small>The same folders the FTP server shares: games, saves, screenshots, music and the rest (on a computer, the shared folder next to JukaHub). Roms/Ports is read-only here. Delete removes a file or an empty folder only.</small>
+  <small>Open a destination folder first. Use this page over Wi-Fi or an active USB network connection. Roms/Ports is read-only here. Delete removes a file or an empty folder only.</small>
 </div>
 
 <div class=card id=psCard>
@@ -1626,10 +1629,13 @@ function filesUploadOne(file, dir, replace, label) {
   });
 }
 document.getElementById('filesUpload').onclick = () => document.getElementById('filesPick').click();
-document.getElementById('filesPick').onchange = async ev => {
-  const input = ev.target;
-  const files = Array.from(input.files || []);
+async function filesUploadSelection(selection) {
+  const files = Array.from(selection || []);
   if (!files.length) return;
+  if (filesPath === '/' || !filesData || filesData.readOnly) {
+    filesSay('Open a writable folder before dropping files.', true);
+    return;
+  }
   const dir = filesPath;
   const max = (filesData && filesData.maxUpload) || 536870912;
   const have = new Map(((filesData && filesData.entries) || []).map(x => [x.name.toLowerCase(), x]));
@@ -1667,13 +1673,30 @@ document.getElementById('filesPick').onchange = async ev => {
   } finally {
     filesBusy = false;
     filesBar(-1);
-    input.value = '';
   }
   if (done) toast(done === 1 ? 'Uploaded' : 'Uploaded ' + done + ' files');
   try { await filesLoad(filesPath); } catch (e) { failed = failed || e.message; }
   if (failed) filesSay(failed, true);
   else if (done) filesSay('Uploaded ' + done + (done === 1 ? ' file.' : ' files.'));
+}
+document.getElementById('filesPick').onchange = async ev => {
+  await filesUploadSelection(ev.target.files);
+  ev.target.value = '';
 };
+const filesDropEl = document.getElementById('filesDrop');
+for (const eventName of ['dragenter', 'dragover']) {
+  filesDropEl.addEventListener(eventName, ev => {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    filesDropEl.classList.add('active');
+  });
+}
+filesDropEl.addEventListener('dragleave', () => filesDropEl.classList.remove('active'));
+filesDropEl.addEventListener('drop', ev => {
+  ev.preventDefault();
+  filesDropEl.classList.remove('active');
+  filesUploadSelection(ev.dataTransfer.files);
+});
 filesOpen('/');
 
 stateEl.textContent = pin ? 'paired' : 'no PIN';
