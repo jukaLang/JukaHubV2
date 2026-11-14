@@ -20,7 +20,8 @@ package main
 //     floor that follows the room (the orb's own rule); 60 ms of sound starts
 //     a segment, which includes the 300 ms before it (the "h" of "hey"), and
 //     600 ms of quiet or 4 s end it. In silence nothing is decoded at all;
-//   - the decoder runs at background priority (nice 10), one core at most;
+//   - the decoder runs on one core only while sound is present. It keeps its
+//     normal priority so the same warm process can recognize the command fast;
 //   - a match needs "hey" and the name, both with enough confidence, and is
 //     followed by a 2 s rest.
 //
@@ -36,7 +37,7 @@ package main
 // Cost on the Smart Pro (estimates, see docs/VOICE.md): the recognizer stays
 // loaded while the wake word is on (about 100-150 MB of the 1 GB); in a quiet
 // room the CPU cost is the gate's arithmetic, well under 1% of a core; while
-// people talk or a game is loud it decodes on one core at low priority.
+// people talk or a game is loud it decodes on one core.
 //
 // Main thread only (hjTick runs from the main loop and from the parked loop
 // while a game has the screen); the recognizer's goroutines hand back through
@@ -123,6 +124,7 @@ var hj struct {
 	pending []byte
 	quiet   int
 	ending  bool
+	cutPCM  int // interim wake match's audio end, when final word times are missing
 
 	hand      *hjHandoff
 	cooldown  time.Time
@@ -330,6 +332,7 @@ func hjEndSegment() {
 		hj.seg = nil
 	}
 	hj.ending = false
+	hj.cutPCM = 0
 	hj.segPCM, hj.pending = hj.segPCM[:0], hj.pending[:0]
 	hj.quiet = 0
 }
@@ -448,11 +451,15 @@ func hjBeginSegment(now time.Time) {
 	if len(g) == 0 {
 		g = hjGrammarFor(hjNames)
 	}
-	hj.seg = sttStreamStart(sttStreamOpts{grammar: g, words: true, background: true, partialEvery: 150 * time.Millisecond})
+	// The old server changed its *process* nice level for background turns.
+	// Linux may refuse the next turn's attempt to restore it without elevated
+	// privileges, making the orb's transcription slow for the rest of the run.
+	// Leave that flag clear, including with an older installed speech package.
+	hj.seg = sttStreamStart(sttStreamOpts{grammar: g, words: true, partialEvery: 150 * time.Millisecond})
 	hj.segPCM = append(hj.segPCM[:0], hj.preroll...)
 	hj.pending = append(hj.pending[:0], hj.preroll...)
 	hj.preroll = hj.preroll[:0]
-	hj.segAt, hj.quiet, hj.ending, hj.loud = now, 0, false, 0
+	hj.segAt, hj.quiet, hj.ending, hj.loud, hj.cutPCM = now, 0, false, 0, 0
 }
 
 // hjCheck ends a segment on a heard wake phrase, a pause or its cap, and
@@ -463,9 +470,13 @@ func hjCheck(config *Config, now time.Time) {
 		return
 	}
 	if !hj.ending {
-		heard := hjFindText(s.Partial())
+		partial, cut := s.PartialResult()
+		heard := hjFindText(partial)
 		if !heard && hj.quiet < hjQuietFrames && now.Sub(hj.segAt) < hjMaxSegment {
 			return
+		}
+		if heard && hj.cutPCM == 0 {
+			hj.cutPCM = cut
 		}
 		if len(hj.pending) > 0 {
 			s.Feed(hj.pending)
@@ -491,7 +502,7 @@ func hjCheck(config *Config, now time.Time) {
 		hj.segPCM = hj.segPCM[:0]
 		return
 	}
-	end, ok := hjMatch(words)
+	end, ok := hjMatchHandoff(words, s.Text(), hj.cutPCM)
 	if !ok {
 		// The tail of what was said may be the start of the next phrase.
 		if len(pcm) > hjPreRollBytes {
@@ -697,6 +708,49 @@ func hjMatch(words []sttWord) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// hjMatchResult accepts a recognized phrase either through its word metadata
+// or, when those confidences are missing, through the plain transcript. Some
+// recognizer builds answer a grammar with text but no usable word confidences;
+// rejecting that made the wake word appear completely deaf. The transcript
+// carries no word end, so hjCheck uses the interim audio boundary when it has
+// one; zero leaves the whole segment as a conservative fallback.
+func hjMatchResult(words []sttWord, text string) (float64, bool) {
+	if end, ok := hjMatch(words); ok {
+		return end, true
+	}
+	if hjFindText(text) {
+		// A few Vosk builds supply word times but leave confidence at zero.
+		// The matching transcript validates the phrase; reuse its timing so
+		// the orb receives only what followed the name.
+		f := make([]string, len(words))
+		for i, w := range words {
+			f[i] = strings.ToLower(w.Word)
+		}
+		for i := range words {
+			if f[i] != "hey" {
+				continue
+			}
+			if k := hjNameAt(f[i+1:]); k > 0 && words[i+k].End > 0 {
+				return words[i+k].End, true
+			}
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
+// hjMatchHandoff chooses the word end if Vosk supplied one, otherwise the
+// audio boundary of the first interim wake match. The boundary excludes the
+// wake phrase from the orb's command clip without losing speech captured
+// while the final result was being prepared.
+func hjMatchHandoff(words []sttWord, text string, cutPCM int) (float64, bool) {
+	end, ok := hjMatchResult(words, text)
+	if ok && end == 0 && cutPCM > 0 {
+		end = float64(cutPCM) / float64(micRate*2)
+	}
+	return end, ok
 }
 
 // ── Settings → Voice & AI ────────────────────────────────────────────────

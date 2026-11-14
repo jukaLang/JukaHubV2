@@ -59,12 +59,19 @@ type downloadKind int
 const (
 	downloadKindAudio downloadKind = iota
 	downloadKindVideo
+	// downloadKindFile is a browser save. It uses the same row shape in the
+	// Downloads panel, but its transfer is the browser's own HTTP save
+	// (browser_download.go), not a yt-dlp job in this queue.
+	downloadKindFile
 )
 
 // label is what the panel and the toasts call the row.
 func (k downloadKind) label() string {
-	if k == downloadKindVideo {
+	switch k {
+	case downloadKindVideo:
 		return "Video"
+	case downloadKindFile:
+		return "File"
 	}
 	return "Audio"
 }
@@ -108,6 +115,12 @@ type downloadItem struct {
 func (it downloadItem) displayTitle() string {
 	if title := strings.TrimSpace(it.Title); title != "" {
 		return title
+	}
+	if it.Kind == downloadKindFile {
+		if u, err := url.Parse(it.URL); err == nil && u.Host != "" {
+			return u.Host
+		}
+		return "File"
 	}
 	if it.Status == downloadActive || it.Status == downloadQueued {
 		return "Resolving link…"

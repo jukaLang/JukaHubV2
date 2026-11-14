@@ -1075,6 +1075,21 @@ func browserLinkPanelActivate(config *Config) {
 	loadTextBrowserURL(config, elem, link.URL)
 }
 
+// browserLinkPanelDownload saves the file behind the selected link without
+// opening it. A page link would be saved as its HTML, which is what a browser
+// does when the user asks to download a page rather than view it.
+func browserLinkPanelDownload() {
+	links := browserLinksFor(browserLinkPanel.variable)
+	if browserLinkPanel.cursor < 0 || browserLinkPanel.cursor >= len(links) {
+		return
+	}
+	link := links[browserLinkPanel.cursor]
+	if !browserStartDownload(link.URL, link.Text) {
+		return
+	}
+	closeBrowserLinkPanel()
+}
+
 func ctrlBrowserLinks(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -1083,6 +1098,8 @@ func ctrlBrowserLinks(e *sdl.ControllerButtonEvent, config *Config) bool {
 		browserLinkPanelMove(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		browserLinkPanelActivate(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		browserLinkPanelDownload()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeBrowserLinkPanel()
 	}
@@ -1103,6 +1120,10 @@ func handleBrowserLinksKey(e *sdl.KeyboardEvent, config *Config) bool {
 		// panel (Enter on the Select menu's Links row) must not follow a link.
 		if e.Repeat == 0 {
 			browserLinkPanelActivate(config)
+		}
+	case sdl.K_x:
+		if e.Repeat == 0 {
+			browserLinkPanelDownload()
 		}
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE:
 		closeBrowserLinkPanel()
@@ -1205,7 +1226,7 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 		y += rowH
 	}
 
-	hint := hintLine(FooterHint{"D-Pad / Mouse", "Choose"}, FooterHint{"A / Enter", "Open"})
+	hint := hintLine(FooterHint{"D-Pad / Mouse", "Choose"}, FooterHint{"A / Enter", "Open"}, FooterHint{"X", "Download"})
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+22, panelY+panelH-footerH+8)
 }
 

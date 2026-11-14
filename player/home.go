@@ -375,6 +375,9 @@ func homeActivate(config *Config) {
 	if card != "" {
 		id = card
 	}
+	if id != HomeFocusContinue && homeTileIsCard(string(id)) {
+		homeConsoleRecordApp(string(id))
+	}
 
 	// The PS5 launcher is the one header tile that is also a launcher: A plays
 	// the PS5 build, or downloads it first. It gets its own sound, so return

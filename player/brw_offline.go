@@ -295,6 +295,8 @@ const (
 	brwActRetry
 	brwActWiFi
 	brwActSearch
+	// A file the browser cannot draw can still be saved (browser_download.go).
+	brwActDownload
 	// The verification card's (brwWallButtons): Brave Search, Settings →
 	// Browser, and a full browser when available.
 	brwActWallSearch
@@ -326,6 +328,10 @@ var (
 	brwErrorButtons = []brwCardButton{
 		{action: brwActRetry, label: "Try again", icon: "refresh"},
 	}
+	brwContentButtons = []brwCardButton{
+		{action: brwActDownload, label: "Download file", icon: "download"},
+		{action: brwActRetry, label: "Try again", icon: "refresh"},
+	}
 )
 
 func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
@@ -334,6 +340,8 @@ func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
 		return brwOfflineButtons
 	case f.Kind == brwFailNotFound:
 		return brwNotFoundButtons
+	case f.Kind == brwFailContent:
+		return brwContentButtons
 	case f.Kind == brwFailWall:
 		// On the handheld WPE Browser goes first when it is installed, or
 		// is offered when it is not (brw_wpe.go).
@@ -420,6 +428,8 @@ func brwCardActivate(config *Config, elem Element, f brwFailure, i int) {
 	case brwActSearch:
 		PlayActivateSound()
 		loadTextBrowserURL(config, elem, textBrowserSearchURL(f.Host))
+	case brwActDownload:
+		browserStartDownload(f.URL, "")
 	case brwActWallSearch, brwActWallAlways, brwActWallEngines, brwActWallBrowser:
 		brwWallActivate(config, elem, f, buttons[i].action)
 	case brwActWpeOpen, brwActWpeGet:
@@ -645,6 +655,8 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 		title, detail, icon = brwOfflineTitle, brwOfflineDetail, "wifi-off"
 	case f.Kind == brwFailNotFound:
 		icon = "search"
+	case f.Kind == brwFailContent:
+		icon = "download"
 	case f.Kind == brwFailTLS:
 		icon = "unlock"
 	case f.Kind == brwFailTimeout:

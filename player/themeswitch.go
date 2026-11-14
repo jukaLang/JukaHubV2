@@ -312,7 +312,7 @@ func (h *HomeLayout) switchRowTiles(out []homeDynTile) []homeDynTile {
 // (dynRebuild's last step): the look just came up (start-up, the theme or the
 // arrangement picked) starts on the row's first tile, as the console does;
 // and a game just played — the recent games' order changed — takes the focus
-// back to the front if it was on a recent game. Edit Home is not leaving.
+// back to the front. Edit Home is not leaving.
 func (h *HomeLayout) switchAfterRebuild() {
 	s := &homeSwitch
 	if h == nil || !homeConsoleLook.switchHome || h.Arrangement != homeArrangementCarousel {
@@ -323,11 +323,7 @@ func (h *HomeLayout) switchAfterRebuild() {
 		return
 	}
 	first := h.dyn.tiles[0].ID
-	toFirst := !s.entered
-	if s.toFirst {
-		i := h.dynTileIndex(h.Focus.Current())
-		toFirst = toFirst || (i > 0 && h.dyn.tiles[i].Kind == homeTileRecent)
-	}
+	toFirst := !s.entered || s.toFirst
 	s.entered, s.toFirst = true, false
 	if toFirst && h.Focus.Set(first) {
 		h.Focus.Remember()
@@ -1069,6 +1065,7 @@ func homeSwDockActivate(config *Config, name string) {
 	PlayActivateSound()
 	switch name {
 	case "games":
+		homeConsoleRecordApp(string(HomeFocusEmulator))
 		openGameLibraryPanel()
 	case "chat":
 		homeSwOpenCard(config, HomeFocusChat)
@@ -1098,6 +1095,7 @@ func homeSwOpenCard(config *Config, card HomeFocusID) {
 		ShowToast(sceneDisplayName(target)+" is not part of this setup", ToastKindInfo)
 		return
 	}
+	homeConsoleRecordApp(string(card))
 	changeSceneTo(config, idx)
 }
 

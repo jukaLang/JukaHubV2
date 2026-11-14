@@ -863,8 +863,10 @@ func homeActivateApp(config *Config, ref string) {
 	startMenuCloseOverlays()
 	switch {
 	case entry.action != nil:
+		homeConsoleRecordApp(ref)
 		entry.action(config)
 	case entry.scene == toolsHubSceneName:
+		homeConsoleRecordApp(ref)
 		toolsHubOpen(config)
 	case entry.scene != "":
 		idx := sceneIndexExact(config, entry.scene)
@@ -876,6 +878,7 @@ func homeActivateApp(config *Config, ref string) {
 			showToast(reason, ToastWarn())
 			return
 		}
+		homeConsoleRecordApp(ref)
 		if idx != currentSceneIndex {
 			changeSceneTo(config, idx)
 		}

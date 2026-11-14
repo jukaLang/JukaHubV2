@@ -457,6 +457,9 @@ func gaAsk(question string) {
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
+	cloud := key != "" && (IsOnline() || netReconnecting())
+	local := offlineAIReady()
+	game, platform := gaOverlay.title, gaOverlay.system
 	models := groqCandidatesFor(groqModel())
 	// The settings Juka may change, when the question asks for a change.
 	base := jukaSystemPrompt() + " " + gaVoicePrompt + voiceSettingsAIPrompt(appConfig, question)
@@ -494,7 +497,7 @@ func gaAsk(question string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logWarn("gameassist", "Juka's answer stopped: %v", r)
-				tbxPost(func() { gaAnswered(gen, question, "", errors.New("Juka's answer stopped")) })
+				tbxPost(func() { gaAnswered(gen, question, "", errors.New("Juka's answer stopped"), false) })
 			}
 		}()
 		onDelta := func(partial string) {
@@ -508,8 +511,9 @@ func gaAsk(question string) {
 		}
 		var reply string
 		var err error
-		asText := frame == nil
-		if !asText {
+		usedLocal := false
+		asText := cloud && frame == nil
+		if cloud && frame != nil {
 			reply, err = gaAskWithPicture(ctx, key, shotSystem, question, frame, onDelta)
 			// Any failure but the player giving up (or the wait running out)
 			// is asked again without the picture.
@@ -523,7 +527,17 @@ func gaAsk(question string) {
 			live.Reset()
 			reply, err = chatGroqAsk(key, models, messages, onDelta)
 		}
-		tbxPost(func() { gaAnswered(gen, question, reply, err) })
+		if (!cloud || err != nil) && local && ctx.Err() == nil {
+			// Groq remains first when available. The small local model gives
+			// a text hint from the game title; it cannot inspect the frame.
+			live.Reset()
+			usedLocal = true
+			voiceBoostHold(voiceBoostAnswer)
+			reply, err = offlineAIGameAnswer(ctx, game, platform, question, onDelta)
+		} else if !cloud {
+			err = errOfflineAIMissing
+		}
+		tbxPost(func() { gaAnswered(gen, question, reply, err, usedLocal) })
 	}()
 }
 
@@ -556,7 +570,7 @@ func gaAskWithPicture(ctx context.Context, key, system, question string, frame *
 
 // gaAnswered shows Juka's whole answer, if it is still the one waited for,
 // and speaks it. Over a game an answer stays until the player leaves.
-func gaAnswered(gen int, question, reply string, err error) {
+func gaAnswered(gen int, question, reply string, err error, local bool) {
 	live := voiceOrbTakeLive(gen)
 	if !gaOverlay.active || gen != voiceOrb.gen || voiceOrb.phase != orbThinking || !voiceOrb.ai || !voiceOrbActive() {
 		live.Stop()
@@ -570,13 +584,22 @@ func gaAnswered(gen int, question, reply string, err error) {
 			return
 		}
 		logWarn("gameassist", "Juka could not answer: %v", err)
-		voiceOrbSay(chatFriendlyAIError(err), orbQuote(question), tbxToneWarn, orbOfferNone)
+		msg := chatFriendlyAIError(err)
+		if errors.Is(err, errOfflineAIMissing) {
+			msg = "Game hints need a Groq key or offline answers"
+		} else if local && errors.Is(err, errOfflineAIMemory) {
+			msg = "Close another app to free memory for offline hints"
+		}
+		voiceOrbSay(msg, orbQuote(question), tbxToneWarn, orbOfferNone)
 		voiceOrb.hideAt = 0
 		PlayErrorSound()
 		return
 	}
-	// A setting change Juka asked for runs now, on the main thread.
-	reply, _ = voiceSettingsAIApply(appConfig, reply)
+	// Only Groq received the settings catalogue; the offline model never
+	// changes settings or runs a command.
+	if !local {
+		reply, _ = voiceSettingsAIApply(appConfig, reply)
+	}
 	raw := reply
 	reply = orbPlain(chatStripThink(reply))
 	if reply == "" {
@@ -586,7 +609,11 @@ func gaAnswered(gen int, question, reply string, err error) {
 		PlayErrorSound()
 		return
 	}
-	voiceOrbSay(reply, orbQuote(question), tbxToneNeutral, orbOfferNone)
+	sub := orbQuote(question)
+	if local {
+		sub = "Offline hint · " + sub
+	}
+	voiceOrbSay(reply, sub, tbxToneNeutral, orbOfferNone)
 	voiceOrb.hideAt = 0
 	trophyEvent(tkAIAsk)
 	PlayNavSound()

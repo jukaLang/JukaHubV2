@@ -79,7 +79,9 @@ func loadHTML5Package(entry string) (html5Package, error) {
 				if n.FirstChild != nil {
 					pkg.Title = strings.TrimSpace(n.FirstChild.Data)
 				}
-			case "canvas", "button", "div", "span", "input":
+			// output is the semantic score/value element the bundled demos use;
+			// without it the in-app browser hid the element from their scripts.
+			case "canvas", "button", "div", "span", "input", "output":
 				item := html5DOMNode{Tag: tag, ID: attrs["id"], Dataset: map[string]string{}}
 				for k, v := range attrs {
 					if name, ok := strings.CutPrefix(k, "data-"); ok {

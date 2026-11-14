@@ -4,14 +4,15 @@ package main
 //
 // One screen for everything JukaHub keeps on the card: the card's own storage
 // bar at the top, then the queue grouped into downloading / queued / failed /
-// saved rows. Rows carry the media they save — an m4a track or an mp4 video —
-// and a row is actionable: A plays a saved track or video, or retries a failed
-// one, X forgets it, Y pauses the whole queue. The screen is a transfer manager
+// saved rows. Rows carry the media they save — an m4a track, an mp4 video or a
+// file the browser saved — and a row is actionable: A plays or opens a saved
+// item, or retries a failed one, X cancels a running browser save or forgets a
+// finished row, Y pauses the media queue. The screen is a transfer manager
 // rather than a log.
 //
-// The panel is a pure view over downloads.go: it never starts a transfer
-// itself, only queues links and reads snapshots, which keeps the queue legal
-// while the panel is closed.
+// The panel is a pure view over downloads.go and browser_download.go: it never
+// starts a transfer itself, only queues links and reads snapshots, which keeps
+// both registries legal while the panel is closed.
 
 import (
 	"fmt"
@@ -48,6 +49,7 @@ func downloadTabLabel(t downloadTab) string {
 type downloadRow struct {
 	add     bool
 	item    downloadItem
+	browser bool   // item is from the browser download registry
 	section string // section heading drawn above this row, when non-empty
 }
 
@@ -123,13 +125,13 @@ func closeDownloadsPanel() {
 // non-empty section. The "Add a link" row always comes first so a fresh install
 // has an obvious next step.
 func downloadRowsFor(tab downloadTab) []downloadRow {
-	items := downloadsSnapshot()
+	items := downloadPanelItems()
 	rows := []downloadRow{{
 		add:     true,
 		section: "",
 	}}
 	add := func(section string, it downloadItem, first bool) {
-		row := downloadRow{item: it, section: ""}
+		row := downloadRow{item: it, browser: it.Kind == downloadKindFile, section: ""}
 		if first {
 			row.section = section
 		}
@@ -173,6 +175,13 @@ func downloadRowsFor(tab downloadTab) []downloadRow {
 		}
 	}
 	return rows
+}
+
+// downloadPanelItems is the media queue plus browser saves. The panel is the
+// one place both kinds share; Media and the activity strip stay media-only.
+func downloadPanelItems() []downloadItem {
+	items := downloadsSnapshot()
+	return append(items, browserDownloadsSnapshot()...)
 }
 
 // downloadRowCountFor counts only real tracks, for the empty-state checks.
@@ -255,6 +264,26 @@ func downloadPanelActivate(config *Config) {
 		vkOpenDownloadLink()
 		return
 	}
+	if row.browser {
+		switch row.item.Status {
+		case downloadFailed:
+			if browserDownloadRetry(row.item.ID) {
+				ShowToast("Retrying "+row.item.displayTitle(), ToastKindInfo)
+			} else {
+				ShowToast("That download can't be retried", ToastKindInfo)
+			}
+		case downloadDone:
+			if info, err := os.Stat(row.item.Path); err != nil || info.Size() == 0 {
+				ShowToast("That file is no longer in Downloads", ToastKindWarning)
+				return
+			}
+			closeDownloadsPanel()
+			chatOpenLocalFile(config, row.item.Path)
+		default:
+			ShowToast("Still downloading — X cancels", ToastKindInfo)
+		}
+		return
+	}
 	it, ok := downloadFocused(row.item.ID)
 	if !ok {
 		return
@@ -292,7 +321,9 @@ func downloadPanelActivate(config *Config) {
 	}
 }
 
-// downloadPanelRemove forgets the focused row (and deletes its file).
+// downloadPanelRemove forgets the focused media row (and deletes its file). A
+// running browser save is canceled instead; a finished browser row is only
+// forgotten, because its file belongs to the user's Downloads folder.
 func downloadPanelRemove() {
 	rows := downloadCursorRows()
 	if dlPanel.cursor < 0 || dlPanel.cursor >= len(rows) {
@@ -300,6 +331,24 @@ func downloadPanelRemove() {
 	}
 	row := rows[dlPanel.cursor]
 	if row.add {
+		return
+	}
+	if row.browser {
+		if browserDownloadCancel(row.item.ID) {
+			PlayBackSound()
+			ShowToast("Download canceled", ToastKindInfo)
+			downloadCursorRows()
+			return
+		}
+		if browserDownloadForget(row.item.ID) {
+			PlayBackSound()
+			if row.item.Status == downloadDone {
+				ShowToast("Removed from the list — file kept in Downloads", ToastKindInfo)
+			} else {
+				ShowToast("Removed from downloads", ToastKindInfo)
+			}
+			downloadCursorRows()
+		}
 		return
 	}
 	if downloadRemove(row.item.ID) {
@@ -323,8 +372,9 @@ func downloadPanelTogglePause() {
 
 // downloadPanelStatus summarises the queue for the header.
 func downloadPanelStatus() string {
-	items := downloadsSnapshot()
+	items := downloadPanelItems()
 	active, queued, failed, done := downloadCounts(items)
+	mediaActive, mediaQueued, _, _ := downloadCounts(downloadsSnapshot())
 	var parts []string
 	if active > 0 {
 		parts = append(parts, fmt.Sprintf("%d downloading", active))
@@ -339,10 +389,10 @@ func downloadPanelStatus() string {
 		parts = append(parts, fmt.Sprintf("%d saved", done))
 	}
 	if len(parts) == 0 {
-		return hintSentence("Nothing queued — press %s on “Add a link” to save a track", "A", "Add")
+		return hintSentence("Nothing queued — press %s on “Add a link” to save a track or file", "A", "Add")
 	}
 	status := strings.Join(parts, " · ")
-	if downloadsPaused() {
+	if downloadsPaused() && (mediaActive > 0 || mediaQueued > 0) {
 		status = "Paused · " + status
 	}
 	return status
@@ -492,7 +542,7 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	header := UIPanelHeader("Downloads", downloadPanelStatus(), "media")
 	header.SubtitleColor = ColorTextSecondary()
 	if !compact {
-		header.Status = "Saved audio and video play offline"
+		header.Status = "Saved audio, video and files stay in Downloads"
 		header.StatusColor = ColorTextTertiary()
 	}
 	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
@@ -586,11 +636,18 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 			panelX+(panelW-int32(mw))/2, listTop+rowH+gap+12)
 	}
 
-	pauseLabel := "Pause all"
+	pauseLabel := "Pause media"
 	if downloadsPaused() {
 		pauseLabel = "Resume"
 	}
-	footer := hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Remove"},
+	removeLabel := "Remove"
+	if dlPanel.cursor >= 0 && dlPanel.cursor < len(rows) {
+		row := rows[dlPanel.cursor]
+		if row.browser && (row.item.Status == downloadActive || row.item.Status == downloadQueued) {
+			removeLabel = "Cancel"
+		}
+	}
+	footer := hintLine(FooterHint{"A", "Open"}, FooterHint{"X", removeLabel},
 		FooterHint{"Y", pauseLabel}, FooterHint{"L1/R1", "Tabs"}, FooterHint{"B", "Close"})
 	// The five hints do not fit a narrow window at a large text scale; the
 	// footer ellipsizes rather than running off both edges of the panel.
@@ -661,7 +718,7 @@ func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x,
 	if font == nil {
 		return
 	}
-	items := downloadsSnapshot()
+	items := downloadPanelItems()
 	active, queued, failed, done := downloadCounts(items)
 	tabs := []struct {
 		tab   downloadTab
@@ -1041,6 +1098,13 @@ func downloadRowDetail(it downloadItem) string {
 		size := humanBytes(it.Done)
 		if it.Done <= 0 {
 			size = ""
+		}
+		if it.Kind == downloadKindFile {
+			detail := "File · Saved in Downloads"
+			if size != "" {
+				detail += " · " + size
+			}
+			return detail + " · A opens it"
 		}
 		detail := it.Kind.label() + " · Ready offline"
 		if size != "" {

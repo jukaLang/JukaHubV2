@@ -23,7 +23,8 @@ Press **Menu** — or **F4** on a keyboard — and a glowing orb rises in the
 bottom-right corner of whatever screen is up and says **Listening…**. Its
 lights follow your voice. Say a command or a question:
 
-* it stops listening by itself about a second after you stop talking (at most
+* it stops listening by itself about 0.6 seconds after you stop talking, or
+  sooner when the offline recognizer hears the end of the sentence (at most
   8 seconds), or press **Menu** again to send at once;
 * **hold** Menu (or F4) and it listens for as long as you hold it (up to 8
   seconds) — let go to send, like a walkie-talkie. On a handheld this is
@@ -132,7 +133,7 @@ the separate offline voice that speaks the answer.
 
 **The handheld's microphone.** Press **A** (or **Menu** for the orb) and
 speak. The first 0.3 seconds after the start chime are ignored, so the chime
-itself never counts as speech. Listening stops by itself about a second after
+itself never counts as speech. Listening stops by itself shortly after
 you stop talking (at most 8 seconds); the chosen recognizer turns the clip into
 words and the command runs. In Automatic mode on a Smart Pro, the bundled local
 model takes over when Groq is unavailable, including with no key or Wi-Fi. With
@@ -290,10 +291,13 @@ it does under a ringing alarm), its last picture stays on screen, dimmed, with
 the game's name in the corner, and the orb listens: "Ask about *Title*". Stop
 talking and Juka answers in a wide bubble and out loud — **Read answers aloud
 in games** (on by default) speaks it even when Juka's voice is off, and
-turning it off leaves the text alone. **A** (or R2) sends early or asks again;
-**B**, **Menu** or pressing Select + R2 again (no hold needed this time) goes
-back to the game. Over a game every sentence is a question — a command
-such as "open YouTube" is not run, because it would leave the game paused
+turning it off leaves the text alone. With a Groq key and connection, Groq
+answers first. When Groq is unavailable, **Offline answers** can give a short
+hint from the game's title and your words; it cannot see the paused picture
+offline. **A** (or R2) sends early or asks again; **B**, **Menu** or pressing
+Select + R2 again (no hold needed this time) goes back to the game. Over a game
+every sentence is a question — a command such as "open YouTube" is not run,
+because it would leave the game paused
 behind another screen. The game resumes by itself after three minutes, and an
 alarm that rings meanwhile takes over.
 
@@ -348,13 +352,16 @@ It listens on the handheld only: nothing is recorded, kept or sent. It stands
 aside while anything else uses the microphone (the orb, voice typing, the Voice
 command page, Chat's microphone), while Juka speaks, while a video or music
 plays, while the keyboard is up, and while the screen is off, dark or asleep.
+When a Groq key and Wi-Fi are available, Groq still transcribes the command
+first. The already loaded offline recognizer prepares a backup during a wake
+handoff so a Groq failure does not need to load it after you finish speaking.
 
 What it costs: the offline recognizer stays loaded while Hey Juka is on —
 roughly 100–150 MB of the Smart Pro's 1 GB (the log line "offline speech
 server ready" shows the real figure). In a quiet room it only measures the
 sound level, well under 1% of one core. Once something is heard it decodes
-with a tiny grammar ("hey" plus the name, everything else ignored) at low
-priority on one core; a loud game keeps it decoding, which is what **Hey Juka
+with a tiny grammar ("hey" plus the name, everything else ignored) on one
+core; a loud game keeps it decoding, which is what **Hey Juka
 in games** turns off. It gives its memory back when free memory runs low.
 
 ## Pictures and videos

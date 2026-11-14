@@ -352,6 +352,7 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 		Binary:       "/mnt/SDCARD/Apps/JukaHub/data/emulators/ppsspp/6.2.0/PSP.pak/PPSSPP/PPSSPPSDL_tg5040",
 		Work:         "/mnt/SDCARD/Apps/JukaHub/data/emulators/ppsspp/6.2.0/PSP.pak/PPSSPP",
 		Home:         "/mnt/SDCARD/Apps/JukaHub/data/emulators/ppsspp/6.2.0/PSP.pak/PPSSPP",
+		Platform:     "tg5040",
 		Libs:         []string{"/mnt/SDCARD/Apps/JukaHub/data/emulators/ppsspp/6.2.0/PSP.pak/lib"},
 		ControllerDB: "/mnt/SDCARD/Apps/JukaHub/data/emulators/ppsspp/6.2.0/PSP.pak/PPSSPP/assets/gamecontrollerdb.txt",
 		Stick:        "/mnt/SDCARD/Emus/PSP/PPSSPP_1.17.1/.config/ppsspp/PSP",
@@ -370,6 +371,8 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 		`bind "$FIRMWARE_STICK/PPSSPP_STATE" "$STICK/PPSSPP_STATE" || firmware`,
 		"trap 'unbind; exit 130' INT",
 		`"$PPSSPP_BIN" --pause-menu-exit "$@"`,
+		`SDL_VIDEODRIVER=mali HOME="$PPSSPP_HOME"`,
+		`"$@" --fullscreen`,
 		`[ "$ELAPSED" -lt 10 ]`,
 		`HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS"`,
 		`exec /bin/sh "$FALLBACK" "$@"`,
@@ -402,6 +405,13 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 		}
 	}
 	sh, err := exec.LookPath("sh")
+	if err == nil {
+		parse := exec.Command(sh, "-n")
+		parse.Stdin = strings.NewReader(text)
+		if out, parseErr := parse.CombinedOutput(); parseErr != nil {
+			t.Fatalf("sh -n: %v\n%s", parseErr, out)
+		}
+	}
 	if runtime.GOOS == "windows" || err != nil {
 		t.Skip("no POSIX sh to parse the script")
 	}
@@ -1005,8 +1015,8 @@ func TestPPSSPPInstallFromRelease(t *testing.T) {
 	if b.memstick() != filepath.Join(root, "home", ".config", "ppsspp", "PSP") || isPathWithin(b.memstick(), b.Dir) {
 		t.Fatalf("memstick %q is not the shared one", b.memstick())
 	}
-	if data, _ := os.ReadFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")); string(data) != "[General]\n" {
-		t.Errorf("the package's own ppsspp.ini was not the first install's settings: %q", data)
+	if data, _ := os.ReadFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")); !strings.Contains(string(data), "[General]") || !strings.Contains(string(data), "GraphicsBackend = 0 (OPENGL)") {
+		t.Errorf("the package's settings and the TrimUI graphics backend were not kept: %q", data)
 	}
 	script, err := os.ReadFile(b.script())
 	if err != nil {

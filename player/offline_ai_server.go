@@ -2,7 +2,7 @@ package main
 
 // offline_ai_server.go — the offline model kept loaded while it may be asked.
 //
-// One llama-cli run per question loaded the 230 MB model from the SD card,
+// One llama-cli run per question loaded the older 230 MB model from the card,
 // evaluated the whole prompt on two cores and only then wrote a word: on the
 // Smart Pro that was most of the wait. llama-server (in packages built since
 // this file) loads the model once, while the user is still talking
@@ -40,16 +40,13 @@ import (
 
 const (
 	offlineAIServerName = "llama-server"
-	// offlineAIServerNeedMB is what a loaded server takes: the model (locked
-	// in memory), a 512-token context and llama.cpp's buffers.
-	offlineAIServerNeedMB = 330
-	// offlineAIPrewarmMB is the free memory needed to load the model while
-	// the user is still talking: the server plus room for the speech
-	// recognizer, which may still be starting (voiceSTTReserveMB).
-	offlineAIPrewarmMB = offlineAIServerNeedMB + voiceSTTReserveMB
+	// The 135M model needs much less than the older 360M package. Both
+	// estimates include the context and llama.cpp's buffers.
+	offlineAIServerNeedMB       = 190
+	offlineAILegacyServerNeedMB = 330
 	// offlineAILowWaterMB: below this an idle server lets its memory go.
 	offlineAILowWaterMB  = 60
-	offlineAIIdleStop    = 60 * time.Second
+	offlineAIIdleStop    = 30 * time.Second
 	offlineAIIdleInGame  = 10 * time.Second
 	offlineAILoadTimeout = 45 * time.Second
 	// offlineAIServerFailMax start failures in a row leave llama-cli to
@@ -125,8 +122,19 @@ func offlineAIServerFiles() (server, model string) {
 // the interface and the voice; all four read the prompt.
 func offlineAIServerArgs(model string, port int, key string) []string {
 	return []string{"-m", model, "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--api-key", key,
-		"-c", "512", "-np", "1", "-t", "3", "-tb", "4", "-b", "64", "-ub", "64", "-ngl", "0",
-		"--mlock", "--no-warmup"}
+		"-c", "384", "-np", "1", "-t", "3", "-tb", "4", "-b", "64", "-ub", "64", "-ngl", "0",
+		"--no-warmup"}
+}
+
+func offlineAIServerNeedFor(model string) uint64 {
+	if filepath.Base(model) == offlineAILegacyModelName {
+		return offlineAILegacyServerNeedMB
+	}
+	return offlineAIServerNeedMB
+}
+
+func offlineAIPrewarmNeedMB(model string) uint64 {
+	return offlineAIServerNeedFor(model) + voiceSTTReserveMB
 }
 
 // offlineAIServerReady reports whether a loaded server is waiting.
@@ -149,13 +157,17 @@ func offlineAIThinkingTitle() string {
 // it beside the speech recognizer (avail is MemAvailable in MB). It reports
 // whether a server is running or starting. A package without a server gets
 // its model file read ahead instead, so llama-cli finds it in the page cache.
-func offlineAIPrewarm(avail uint64) bool {
+func offlineAIPrewarm(avail uint64, pausedGame bool) bool {
 	if !offlineAIReady() {
 		return false
 	}
 	server, model := offlineAIServerFiles()
+	if model == "" {
+		_, model = offlineAIFiles()
+	}
+	need := offlineAIPrewarmNeedMB(model)
 	if server == "" {
-		if avail >= offlineAIPrewarmMB {
+		if avail >= need {
 			offlineAIReadAhead()
 		}
 		return false
@@ -173,15 +185,15 @@ func offlineAIPrewarm(avail uint64) bool {
 	if retired {
 		return false
 	}
-	if avail < offlineAIPrewarmMB {
-		logDebug("voice", "offline AI not preloaded: %d MB free, %d MB wanted", avail, offlineAIPrewarmMB)
+	if avail < need {
+		logDebug("voice", "offline AI not preloaded: %d MB free, %d MB wanted", avail, need)
 		return false
 	}
 	// Speech recognition loads first: the card reads one file at a time
 	// best, and its answer is needed first.
 	go func() {
 		time.Sleep(offlineAIPrewarmDelay)
-		if runningGameChildren.Load() == 0 {
+		if runningGameChildren.Load() == 0 || pausedGame && gameAssistOverlayActive() {
 			offlineAIServerStart(server, model, "preload")
 		}
 	}()
@@ -205,7 +217,9 @@ func offlineAIReadAhead() {
 			return
 		}
 		defer f.Close()
-		_, _ = io.Copy(io.Discard, io.LimitReader(f, offlineAIModelSize))
+		if info, err := f.Stat(); err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(f, info.Size()))
+		}
 	}()
 }
 
@@ -457,7 +471,7 @@ func offlineAIServerAnswer(ctx context.Context, server, model, prompt string, ou
 	p := offlineAIServer.p
 	offlineAIServer.mu.Unlock()
 	if p == nil {
-		if freeMemoryMB() < offlineAIStartMB {
+		if freeMemoryMB() < offlineAIStartNeedMB(model) {
 			return false, errOfflineAIMemory
 		}
 		if p = offlineAIServerStart(server, model, "question"); p == nil {

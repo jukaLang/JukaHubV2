@@ -7,10 +7,10 @@ set -eu
 
 LLAMA_COMMIT=4762ad7316dcdec20016ab5985fb46a27902204d
 SOURCE_SHA=06b6a3a1c2d12becc05d02c701274ab1f6d033399b4a20a166b919289e19233c
-MODEL_REV=7be6f65f1db715fe5dc5a4634c0d459b4eed42ec
-MODEL_NAME=SmolLM2-360M-Instruct-Q4_0.gguf
-MODEL_SHA=c3608933eb6e5763b87f769bda40c204dc158333668c7af214644fe39da58627
-MODEL_SIZE=229733280
+MODEL_REV=09816acd5d99df7be770d85ea30822623dab342c
+MODEL_NAME=SmolLM2-135M-Instruct-Q4_0.gguf
+MODEL_SHA=bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03
+MODEL_SIZE=91893088
 APACHE_SHA=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 
 WORK=$(mktemp -d /tmp/jukahub-llm.XXXXXXXX)
@@ -52,7 +52,7 @@ done
 
 MODEL="$WORK/$MODEL_NAME"
 curl -fL --retry 3 --connect-timeout 15 --max-time 2400 \
-    "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/$MODEL_REV/$MODEL_NAME?download=true" \
+    "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/$MODEL_REV/$MODEL_NAME?download=true" \
     -o "$MODEL"
 test "$(wc -c < "$MODEL")" -eq "$MODEL_SIZE"
 printf '%s  %s\n' "$MODEL_SHA" "$MODEL" | sha256sum -c -
@@ -71,7 +71,7 @@ grep -Eiq '(^|[^0-9])(4|four)([^0-9]|$)' "$WORK/smoke.txt"
 SMOKE_PORT=18631
 SMOKE_KEY=jukahub-smoke
 "$SERVER" -m "$MODEL" --host 127.0.0.1 --port "$SMOKE_PORT" --api-key "$SMOKE_KEY" \
-    -c 512 -np 1 -t 3 -tb 4 -b 64 -ub 64 -ngl 0 --mlock --no-warmup \
+    -c 384 -np 1 -t 3 -tb 4 -b 64 -ub 64 -ngl 0 --no-warmup \
     > "$WORK/server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2> /dev/null; rm -rf "$WORK"' EXIT HUP INT TERM

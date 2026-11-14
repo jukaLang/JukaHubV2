@@ -799,6 +799,7 @@ func main() {
 		// costs up to Present, not just the draw calls. Iterations that park
 		// (a game owns the screen) present nothing and record nothing.
 		frameStart := time.Now()
+		foreignScreenTick(frameStart)
 		// A game, emulator, port or Wine app owns the screen. JukaHub and the
 		// child share one framebuffer on handheld firmwares (see
 		// launch_handover_test.go for the same fight after a self-update), so

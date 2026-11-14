@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>JukaHub Generator: GUI builder for handhelds</title>
+    <meta name="application-name" content="JukaHub Generator">
+    <meta name="format-detection" content="telephone=no">
     <link rel="canonical" href="https://generate.jukalang.com/">
     <meta name="description" content="Design a controller-first GUI for your TrimUI handheld in the browser, then run it with the JukaHub player. No recompiling: export jukaconfig.json and go.">
     <meta name="theme-color" content="#090E19">
@@ -13,10 +15,15 @@
     <meta property="og:title" content="JukaHub Generator: drag-and-drop GUI builder for handhelds">
     <meta property="og:description" content="Design your handheld interface visually, push it to the device over Wi-Fi, and share it as a link.">
     <meta property="og:image" content="https://generate.jukalang.com/background.jpg">
+    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:width" content="2560">
+    <meta property="og:image:height" content="1440">
+    <meta property="og:image:alt" content="JukaHub Generator: a controller-first interface builder for TrimUI handhelds">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="JukaHub Generator: drag-and-drop GUI builder for handhelds">
     <meta name="twitter:description" content="Design your handheld interface visually, push it to the device over Wi-Fi, and share it as a link.">
     <meta name="twitter:image" content="https://generate.jukalang.com/background.jpg">
+    <meta name="twitter:image:alt" content="JukaHub Generator: a controller-first interface builder for TrimUI handhelds">
     <!-- The logo comes from branding/mklogo.py: the SVG mark for browsers that
          take one, a 48 px PNG for those that do not, and an opaque 180 px
          tile for a home-screen shortcut. -->
@@ -26,6 +33,7 @@
     <!-- Inter is the only font and it ships in fonts/; the icons are drawn as
          inline SVG by builder-icons.js. Nothing is fetched from a third party,
          so the builder also works on a handheld's own hotspot. -->
+    <link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="fonts/inter.css">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -311,7 +319,7 @@
             </aside>
 
             <!-- Main Canvas Area -->
-            <main id="workspace" class="canvas-area">
+            <main id="workspace" class="canvas-area" tabindex="-1" aria-label="Canvas">
                 <div class="canvas-header">
                     <div class="canvas-controls">
                         <div class="scene-controls">

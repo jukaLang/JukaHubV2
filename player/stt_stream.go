@@ -130,7 +130,7 @@ func sttServeCapable(bin string) bool {
 // that streams, or "" — an old bundled copy beside the binary does not hide a
 // newer download. Not on the main thread.
 func sttServeFiles() (string, string) {
-	for _, dir := range []string{sttBundledDir(), sttDownloadedDir()} {
+	for _, dir := range []string{sttDownloadedDir(), sttBundledDir()} {
 		if bin, model, ok := sttFastFilesIn(dir); ok && sttServeCapable(bin) {
 			return bin, model
 		}
@@ -535,7 +535,6 @@ func sttServeReap() {
 type sttStreamOpts struct {
 	grammar      []string      // phrases the recognizer may hear (nil: free speech)
 	words        bool          // word times and confidences in the result
-	background   bool          // decode at low priority (the wake word)
 	partialEvery time.Duration // 0: no partial words
 }
 
@@ -548,6 +547,14 @@ type sttWord struct {
 	End   float64 `json:"end"`
 }
 
+// sttPartial pairs interim words with the amount of audio the recognizer had
+// consumed when it produced them. The wake-word handoff uses that boundary
+// when a Vosk build provides text without word timestamps.
+type sttPartial struct {
+	text       string
+	audioBytes int
+}
+
 // sttStream is one utterance being recognized. Feed, Finish and Cancel belong
 // to the main thread; Result, Abandon and the read-outs are safe anywhere.
 type sttStream struct {
@@ -557,7 +564,7 @@ type sttStream struct {
 	cancel   atomic.Bool
 	broken   atomic.Bool
 	endpoint atomic.Bool
-	partial  atomic.Value // string
+	partial  atomic.Value // sttPartial
 	done     chan struct{}
 	text     string
 	words    []sttWord
@@ -568,7 +575,7 @@ type sttStream struct {
 // the stream's own goroutine, and audio fed meanwhile waits in the queue.
 func sttStreamStart(opts sttStreamOpts) *sttStream {
 	s := &sttStream{opts: opts, audio: make(chan []byte, sttStreamQueue), done: make(chan struct{})}
-	s.partial.Store("")
+	s.partial.Store(sttPartial{})
 	go s.run()
 	return s
 }
@@ -616,11 +623,17 @@ func (s *sttStream) Done() <-chan struct{} { return s.done }
 
 // Partial is the words heard so far ("" before any).
 func (s *sttStream) Partial() string {
+	text, _ := s.PartialResult()
+	return text
+}
+
+// PartialResult returns interim text and the PCM boundary it came from.
+func (s *sttStream) PartialResult() (string, int) {
 	if s == nil {
-		return ""
+		return "", 0
 	}
-	p, _ := s.partial.Load().(string)
-	return p
+	p, _ := s.partial.Load().(sttPartial)
+	return p.text, p.audioBytes
 }
 
 // Endpoint reports that the recognizer heard an utterance end and nothing
@@ -650,6 +663,14 @@ func (s *sttStream) Words() ([]sttWord, error) {
 		return nil, s.err
 	}
 	return s.words, nil
+}
+
+// Text is the final transcript. After Done.
+func (s *sttStream) Text() string {
+	if s == nil {
+		return ""
+	}
+	return s.text
 }
 
 func (s *sttStream) run() {
@@ -682,9 +703,6 @@ func (s *sttStream) run() {
 	if s.opts.words {
 		flags |= 1
 	}
-	if s.opts.background {
-		flags |= 2
-	}
 	begin := []byte{flags}
 	if len(s.opts.grammar) > 0 {
 		g, _ := json.Marshal(s.opts.grammar)
@@ -696,6 +714,7 @@ func (s *sttStream) run() {
 	}
 	var segs []string
 	var lastPartial time.Time
+	audioBytes := 0
 	stall := time.NewTimer(sttStreamStall)
 	defer stall.Stop()
 	for open := true; open; {
@@ -720,6 +739,7 @@ func (s *sttStream) run() {
 		if s.cancel.Load() {
 			continue
 		}
+		audioBytes += len(chunk)
 		typ := byte('A')
 		if s.opts.partialEvery > 0 && time.Since(lastPartial) >= s.opts.partialEvery {
 			typ, lastPartial = 'P', time.Now()
@@ -737,7 +757,7 @@ func (s *sttStream) run() {
 			}
 			s.words = append(s.words, words...)
 			s.endpoint.Store(true)
-			s.partial.Store(strings.Join(segs, " "))
+			s.partial.Store(sttPartial{text: strings.Join(segs, " "), audioBytes: audioBytes})
 		case 'P':
 			var p struct {
 				Partial string `json:"partial"`
@@ -747,7 +767,10 @@ func (s *sttStream) run() {
 				if p.Partial != "" {
 					s.endpoint.Store(false)
 				}
-				s.partial.Store(strings.TrimSpace(strings.Join(append(segs[:len(segs):len(segs)], p.Partial), " ")))
+				s.partial.Store(sttPartial{
+					text:       strings.TrimSpace(strings.Join(append(segs[:len(segs):len(segs)], p.Partial), " ")),
+					audioBytes: audioBytes,
+				})
 			}
 		}
 	}
@@ -785,13 +808,22 @@ func sttParseResult(body []byte) (string, []sttWord) {
 	return strings.TrimSpace(r.Text), r.Result
 }
 
-// sttStreamWanted reports whether the orb should stream its clip: the
-// offline recognizer will be the one asked first (Offline, or Automatic
-// without a Groq key or Wi-Fi), it is installed and it can stream.
-func sttStreamWanted(config *Config) bool {
+// sttStreamChoice keeps the local transcript ready when it will be used first.
+// After a wake-word handoff the model is already warm, so Automatic can also
+// decode a backup while Groq remains the preferred transcriber.
+func sttStreamChoice(mode, key string, online, local, wake bool) bool {
+	if !local {
+		return false
+	}
+	_, localFirst, localFallback := sttPreviewChoice(mode, key, online, local)
+	return localFirst || wake && localFallback
+}
+
+// sttStreamWanted reports whether the orb should stream its clip. A wake
+// handoff can keep a ready offline fallback without delaying Groq.
+func sttStreamWanted(config *Config, wake bool) bool {
 	if !sttSupported() || !sttLocalReady() || sttServeProbe.state.Load() == sttServeNo {
 		return false
 	}
-	_, localFirst, _ := sttPreviewChoice(sttModeOf(config), groqAPIKey(), IsOnline(), true)
-	return localFirst
+	return sttStreamChoice(sttModeOf(config), groqAPIKey(), IsOnline(), true, wake)
 }

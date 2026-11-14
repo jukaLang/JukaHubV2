@@ -497,6 +497,7 @@ func chatResetHits() {
 	chatNameRect = sdl.Rect{}
 	chatSendBtnRect = sdl.Rect{}
 	chatAttachBtnRect = sdl.Rect{}
+	chatVoiceMicRect = sdl.Rect{}
 	chatInputRect = sdl.Rect{}
 	chatLinkRects = chatLinkRects[:0]
 	chatTextLinkRects = chatTextLinkRects[:0]
@@ -506,6 +507,7 @@ func chatResetHits() {
 	chatTrayMore = sdl.Rect{}
 	chatMessageHits = chatMessageHits[:0]
 	chatHeaderMembersRect = sdl.Rect{}
+	chatHeaderVoiceRect = sdl.Rect{}
 	chatJumpRect = sdl.Rect{}
 	chatReplyCancelRect = sdl.Rect{}
 	chatReplyStrip = sdl.Rect{}
@@ -758,6 +760,24 @@ func chatDrawTabChips(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 				chatTextCentered(renderer, config, fonts.meta, label, ColorTextSecondary(), c.X+pad+icon+chatPx(6), c)
 				right = c.X - gap
 			}
+		}
+	}
+
+	if tab == chatTabCommunity || chatVoiceInCall() {
+		label := "Voice Channel"
+		if chatVoiceInCall() {
+			label = "In voice"
+		}
+		lw, _ := measureText(fonts.meta, label)
+		icon := chatPx(16)
+		cw := pad + icon + chatPx(6) + lw + pad
+		if right-cw >= minX {
+			c := sdl.Rect{X: right - cw, Y: y, W: cw, H: h}
+			chatHeaderVoiceRect = c
+			chatDrawChip(renderer, c, chatHover(c))
+			DrawHomeIcon(renderer, "mic", sdl.Rect{X: c.X + pad, Y: c.Y + (h-icon)/2, W: icon, H: icon}, false)
+			chatTextCentered(renderer, config, fonts.meta, label, ColorTextSecondary(), c.X+pad+icon+chatPx(6), c)
+			right = c.X - gap
 		}
 	}
 
@@ -1853,13 +1873,36 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	DrawHomeIcon(renderer, "paperclip", sdl.Rect{X: attach.X + (btn-icon)/2, Y: attach.Y + (btn-icon)/2, W: icon, H: icon}, false)
 	x += btn + gap
 
+	// Recording a clip is separate from the keyboard's voice typing. A clip
+	// waits in the attachment tray, so it can be sent with a caption.
+	mic := sdl.Rect{X: x, Y: rect.Y + (h-btn)/2, W: btn, H: btn}
+	chatVoiceMicRect = mic
+	micFocused := chatVoiceFocused() && chatWasVisible
+	micHover := chatHover(mic)
+	micFill := glassA(12)
+	if micFocused || micHover || chatVoiceRecording() {
+		micFill = glassA(22)
+	}
+	if chatVoiceRecording() {
+		micFill = WithAlpha(accent, 95)
+	}
+	if micFocused {
+		drawGlassFocusGlow(renderer, mic)
+	}
+	chatFillDisc(renderer, mic.X, mic.Y, mic.W, micFill)
+	if micFocused || micHover || chatVoiceRecording() {
+		drawGlassFocusRing(renderer, mic, btn/2)
+	}
+	DrawHomeIcon(renderer, "mic", sdl.Rect{X: mic.X + (btn-icon)/2, Y: mic.Y + (btn-icon)/2, W: icon, H: icon}, false)
+	x += btn + gap
+
 	input := sdl.Rect{X: x, Y: rect.Y, W: send.X - gap - x, H: h}
 	if input.W <= 0 {
 		return
 	}
 	chatInputRect = input
 	typing := chatComposerInline || (virtualKeyboardActive && vkTarget == vkTargetChat)
-	focused := !typing && !attachFocused && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() && chatWasVisible
+	focused := !typing && !attachFocused && !micFocused && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() && chatWasVisible
 	if focused {
 		drawGlassFocusGlow(renderer, input)
 	}
@@ -1876,6 +1919,9 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	maxW := input.W - chatPx(40)
 	ty := input.Y + (h-int32(fonts.composer.Height()))/2
 	draft := chatInputText
+	if chatVoiceRecording() {
+		draft = chatVoiceClock()
+	}
 	preview := false
 	if live, _, ok := vkVoiceDisplayText(); ok {
 		draft, preview = live, true

@@ -192,20 +192,24 @@ func TestTTSLiveSourceOrderAndCap(t *testing.T) {
 	ctx := context.Background()
 	src.push([]string{"Hi there.", "This is the second sentence."}, false)
 	first, ok := src.at(ctx, 0)
-	if !ok || first != "Hi there. This is the second sentence." {
+	if !ok || first != "Hi there." {
 		t.Fatalf("first chunk = %q, %v", first, ok)
+	}
+	second, ok := src.at(ctx, 1)
+	if !ok || second != "This is the second sentence." {
+		t.Fatalf("second chunk = %q, %v", second, ok)
 	}
 	got := make(chan string, 1)
 	go func() {
-		c, _ := src.at(ctx, 1)
+		c, _ := src.at(ctx, 2)
 		got <- c
 	}()
 	src.push([]string{"Third.", "Fourth."}, true)
 	if c := <-got; c != "Third. Fourth." {
-		t.Fatalf("second chunk = %q", c)
+		t.Fatalf("third chunk = %q", c)
 	}
-	if _, ok := src.at(ctx, 2); ok {
-		t.Fatal("a finished line gave a third chunk")
+	if _, ok := src.at(ctx, 3); ok {
+		t.Fatal("a finished line gave a fourth chunk")
 	}
 	open := ttsOpenSource()
 	stop, cancel := context.WithCancel(ctx)

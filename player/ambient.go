@@ -1519,6 +1519,13 @@ func ambientAutoTick(config *Config, now time.Time) {
 	if ambientEntryBlocked(config) {
 		return
 	}
+	// The dock is the idle screen too. An AI answer that is still being
+	// written or spoken must stay in front of the user; restart the idle clock
+	// so the dock waits its full timeout after the answer finishes.
+	if aiHoldsScreenAwake() {
+		noteUserInputTime(now)
+		return
+	}
 	// A download or a patch install is visible progress: the dock must not
 	// cover it. Music is allowed, since the dock shows what is playing.
 	if installInProgress() || patchInstallBusy() {

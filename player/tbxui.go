@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName}
+var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -123,6 +123,8 @@ func tbxDisplayName(name string) string {
 	switch name {
 	case partySceneName:
 		return "Watch Party"
+	case chatVoiceSceneName:
+		return "Voice Channel"
 	case tbxSceneName:
 		return "Toolbox"
 	case auditSceneName:
@@ -1408,6 +1410,8 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 	switch name {
 	case partySceneName:
 		return partySceneClick(mx, my, config)
+	case chatVoiceSceneName:
+		return chatVoiceSceneClick(mx, my, config)
 	case tbxSceneName:
 		return tbxToolboxClick(mx, my, config)
 	case auditSceneName:
@@ -1448,6 +1452,8 @@ func tbxSceneNav(name string) *tbxNav {
 	switch name {
 	case partySceneName:
 		return &partyScreen.nav
+	case chatVoiceSceneName:
+		return &chatVoiceScreen.nav
 	case tbxSceneName:
 		return &tbxScreen.nav
 	case auditSceneName:
@@ -1474,6 +1480,8 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 	switch name {
 	case partySceneName:
 		return partySceneHints(), true
+	case chatVoiceSceneName:
+		return chatVoiceSceneHints(), true
 	case tbxSceneName:
 		return tbxToolboxHints(), true
 	case auditSceneName:

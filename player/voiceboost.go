@@ -21,9 +21,8 @@ package main
 // Memory on a 1 GB handheld is shared by these rules (MemAvailable, MB):
 //   - speech recognition comes first: voiceSTTReserveMB stays free for it
 //     while the user talks;
-//   - the model preloads only with offlineAIPrewarmMB free (its own need plus
-//     that reserve); otherwise it loads after the words are recognised, with
-//     offlineAIStartMB free;
+//   - the model preloads only with its own need plus that reserve free;
+//     otherwise it loads after the words are recognised;
 //   - Piper preloads with voicePiperWarmMB beyond those;
 //   - anything idle lets go when free memory falls below the low-water marks,
 //     and all of it when a game starts (voiceReleaseForGame).
@@ -95,16 +94,18 @@ func voicePrewarm(config *Config) {
 	avail := freeMemoryMB()
 	key := strings.TrimSpace(groqAPIKey())
 	online := IsOnline() || netReconnecting()
-	// A paused game keeps its memory, and its questions go to Groq
-	// (gameassist.go): no model then.
+	// A paused game's text-only question can use the smaller offline model.
+	// The memory check includes the game's resident process and speech model.
 	llm := false
-	if !gaOverlay.active && runningGameChildren.Load() == 0 && orbAnswerChoice(key, online, offlineAIReady()) == "offline" {
-		llm = offlineAIPrewarm(avail)
+	pausedGame := gaOverlay.active && gaOverlay.mode == gaModeAsk
+	if (runningGameChildren.Load() == 0 || pausedGame) && orbAnswerChoice(key, online, offlineAIReady()) == "offline" {
+		llm = offlineAIPrewarm(avail, pausedGame)
 	}
 	if voiceDeviceVoiceLikely(config, key, online) {
 		need := uint64(voiceSTTReserveMB + voicePiperWarmMB)
 		if llm {
-			need += offlineAIServerNeedMB
+			_, model := offlineAIFiles()
+			need += offlineAIServerNeedFor(model)
 		}
 		if avail >= need {
 			go ttsPiperPrewarm()
@@ -116,7 +117,7 @@ func voicePrewarm(config *Config) {
 // from the device's own voice: voice answers are on and Groq's voice is not
 // chosen or cannot be reached.
 func voiceDeviceVoiceLikely(config *Config, key string, online bool) bool {
-	if quietModeOn() || !ttsModeAllows(config, ttsKindVoice) {
+	if quietModeOn() || !ttsModeAllows(config, ttsKindVoice) && !(gaOverlay.active && gameAssistSpeakEnabled(config)) {
 		return false
 	}
 	return ttsVoiceOf(config) == ttsVoiceDevice || key == "" || !online

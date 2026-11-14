@@ -163,6 +163,7 @@ type micStream struct {
 // and errMicOpen say which way it failed (the log has the details). Main
 // thread.
 func micOpen() (*micStream, error) {
+	chatVoicePauseCapture()
 	// The stick lights may be listening (ledmic.go): a voice feature gets the
 	// codec to itself, and the lights wait until every voice stream closes.
 	// So does the "Hey Juka" listener (wakeword.go).

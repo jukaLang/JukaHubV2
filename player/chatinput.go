@@ -107,6 +107,10 @@ func chatSceneController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		chatActivate(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		if chatVoiceRecording() {
+			chatVoiceCancel()
+			break
+		}
 		if chatTrayLeave() || chatAttachLeave() {
 			break
 		}
@@ -230,7 +234,7 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		clearChatSelection()
 		chatJumpToLatest()
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
-		if chatSuggestFocus >= 0 || chatTrayFocus >= 0 || chatAttachFocused() {
+		if chatSuggestFocus >= 0 || chatTrayFocus >= 0 || chatAttachFocused() || chatVoiceFocused() {
 			chatActivate(config)
 			break
 		}
@@ -248,6 +252,10 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		chatSkipSpace = sym == sdl.K_SPACE
 		chatStartInlineTyping()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
+		if chatVoiceRecording() {
+			chatVoiceCancel()
+			break
+		}
 		if chatTrayLeave() || chatAttachLeave() {
 			break
 		}
@@ -256,6 +264,8 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		chatTabAction(config)
 	case sdl.K_x:
 		chatStartAttach(config)
+	case sdl.K_v:
+		chatVoiceToggle()
 	case sdl.K_r:
 		PlayActivateSound()
 		vkOpenName()
@@ -340,6 +350,9 @@ func chatStartInlineTyping() {
 	if virtualKeyboardActive {
 		return
 	}
+	if chatVoiceRecording() {
+		chatVoiceFinish()
+	}
 	clearChatSelection()
 	chatSuggestFocus = -1
 	chatComposerInline = true
@@ -392,6 +405,10 @@ func chatComposerInsert(text string) {
 
 // chatLeave goes back from the Chat scene.
 func chatLeave(config *Config) {
+	if chatVoiceRecording() {
+		chatVoiceCancel()
+		return
+	}
 	chatStopInlineTyping()
 	goBackScene(config)
 }
@@ -399,6 +416,10 @@ func chatLeave(config *Config) {
 // chatSendDraft sends what the composer holds: the typed text and the files
 // waiting in the tray. It reports false when there is nothing to send.
 func chatSendDraft() bool {
+	if chatVoiceRecording() {
+		chatVoiceFinish()
+		return true
+	}
 	text := strings.TrimSpace(chatInputText)
 	if text == "" && chatStagedCount(chatActiveTabID()) == 0 {
 		return false
@@ -420,6 +441,10 @@ func chatActivate(config *Config) {
 		chatTrayRemoveFocused()
 		return
 	}
+	if chatVoiceFocused() {
+		chatVoiceToggle()
+		return
+	}
 	if chatAttachFocused() {
 		// chatPickBegin plays the press and clears the focus: the chat comes
 		// back from Files with the pad on the text field, ready for a caption.
@@ -438,11 +463,18 @@ func chatActivate(config *Config) {
 		PlayActivateSound()
 		return
 	}
+	if chatVoiceRecording() {
+		chatVoiceFinish()
+		return
+	}
 	chatOpenKeyboard()
 }
 
 // chatOpenKeyboard opens the on-screen keyboard on the composer.
 func chatOpenKeyboard() {
+	if chatVoiceRecording() {
+		chatVoiceFinish()
+	}
 	chatStopInlineTyping()
 	clearChatSelection()
 	chatSuggestFocus = -1
@@ -506,6 +538,7 @@ func chatStartAttach(config *Config) {
 // field. It only counts while the composer row has the focus at all
 // (chatAttachFocused): anything that moves the pad elsewhere wins over it.
 var chatAttachFocus bool
+var chatVoiceFocus bool
 
 // chatComposerRowFocused reports whether the pad is on the composer row: not
 // on a message, a starter question, the waiting files or the top bar, and not
@@ -520,6 +553,10 @@ func chatAttachFocused() bool {
 	return chatAttachFocus && chatComposerRowFocused()
 }
 
+func chatVoiceFocused() bool {
+	return chatVoiceFocus && chatComposerRowFocused()
+}
+
 // chatAttachMove moves the pad between the paperclip and the text field on
 // the composer row: Left from the field reaches the paperclip, Right goes back.
 // It reports false when the press is not its own (the pad is elsewhere, or
@@ -527,10 +564,16 @@ func chatAttachFocused() bool {
 func chatAttachMove(delta int) bool {
 	if !chatComposerRowFocused() {
 		chatAttachFocus = false
+		chatVoiceFocus = false
 		return false
 	}
 	switch {
-	case delta < 0 && !chatAttachFocus:
+	case delta < 0 && !chatAttachFocus && !chatVoiceFocus:
+		chatVoiceFocus = true
+		PlayNavSound()
+		return true
+	case delta < 0 && chatVoiceFocus:
+		chatVoiceFocus = false
 		chatAttachFocus = true
 		PlayNavSound()
 		return true
@@ -538,6 +581,11 @@ func chatAttachMove(delta int) bool {
 		return true // the left end of the row
 	case chatAttachFocus:
 		chatAttachFocus = false
+		chatVoiceFocus = true
+		PlayNavSound()
+		return true
+	case chatVoiceFocus:
+		chatVoiceFocus = false
 		PlayNavSound()
 		return true
 	}
@@ -546,10 +594,11 @@ func chatAttachMove(delta int) bool {
 
 // chatAttachLeave takes the pad off the paperclip, back to the text field (B).
 func chatAttachLeave() bool {
-	if !chatAttachFocused() {
+	if !chatAttachFocused() && !chatVoiceFocused() {
 		return false
 	}
 	chatAttachFocus = false
+	chatVoiceFocus = false
 	PlayBackSound()
 	return true
 }
@@ -898,6 +947,10 @@ func handleChatComposerMouse(mx, my int32, config *Config) bool {
 		openChatMembers()
 		return true
 	}
+	if chatHeaderVoiceRect.W > 0 && pointInRect(mx, my, chatHeaderVoiceRect) {
+		chatVoiceOpenScene(config)
+		return true
+	}
 	if handleChatTrayClick(mx, my) {
 		return true
 	}
@@ -913,6 +966,10 @@ func handleChatComposerMouse(mx, my int32, config *Config) bool {
 	}
 	if chatAttachBtnRect.W > 0 && pointInRect(mx, my, chatAttachBtnRect) {
 		chatStartAttach(config)
+		return true
+	}
+	if chatVoiceMicRect.W > 0 && pointInRect(mx, my, chatVoiceMicRect) {
+		chatVoiceToggle()
 		return true
 	}
 	return false
@@ -938,6 +995,8 @@ func chatFooterHints() []FooterHint {
 			{Button: "A", Label: "Select"},
 			{Button: "B", Label: "Close"},
 		}
+	case chatVoiceRecording():
+		return []FooterHint{{Button: "V / A", Label: "Attach clip"}, {Button: "B", Label: "Discard"}}
 	case chatComposerInline:
 		return []FooterHint{
 			{Button: "Enter", Label: "Send"},
@@ -961,6 +1020,8 @@ func chatFooterHints() []FooterHint {
 			hints = append(hints, FooterHint{Button: "Start / Ctrl+Enter", Label: "Send"})
 		}
 		return append(hints, FooterHint{Button: "B", Label: "Done"}, FooterHint{Button: "L1/R1", Label: "Tabs"})
+	case chatVoiceFocused():
+		return []FooterHint{{Button: "A", Label: "Record clip"}, {Button: "B", Label: "Done"}, {Button: "L1/R1", Label: "Tabs"}}
 	case chatSuggestFocus >= 0:
 		return []FooterHint{
 			{Button: "D-Pad", Label: "Move"},
@@ -987,6 +1048,7 @@ func chatFooterHints() []FooterHint {
 	}
 	hints = append(hints, back,
 		FooterHint{Button: "X", Label: "Attach"},
+		FooterHint{Button: "V", Label: "Voice clip"},
 		FooterHint{Button: "L1/R1", Label: "Tabs"},
 	)
 	switch chatActiveTabID() {

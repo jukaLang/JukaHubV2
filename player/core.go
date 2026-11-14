@@ -6424,6 +6424,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		// Save puts the page on screen on the saved list, so a link sent in a
 		// chat message can be reached again without retyping it.
 		browserBookmarkSaveAction(config)
+	case "browser_download":
+		// Save the page or the file the browser is showing into Downloads.
+		browserDownloadCurrentPage(config)
 	case "browser_bookmarks":
 		// The saved-page picker: one row per page, A opens it and X removes it.
 		openBrowserBookmarkPanel(config)

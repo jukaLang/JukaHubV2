@@ -55,6 +55,7 @@ var (
 
 	// Hit targets owned by the chat screen.
 	chatHeaderMembersRect sdl.Rect
+	chatHeaderVoiceRect   sdl.Rect
 	chatJumpRect          sdl.Rect
 	chatReplyCancelRect   sdl.Rect
 	chatReplyStrip        sdl.Rect
@@ -102,6 +103,7 @@ func clearChatSelection() {
 	chatSelectionBar = chatSelection{}
 	chatTrayFocus = -1
 	chatAttachFocus = false
+	chatVoiceFocus = false
 }
 
 // selectChatMessage highlights one message of the tab on screen and opens its
@@ -164,6 +166,9 @@ func chatSelectionActions(index int) []chatProfileAction {
 	}
 	if own && msg.Pending && len(msg.Files) > 0 && tab == chatTabCommunity {
 		actions = append(actions, chatProfileAction{label: "Cancel", kind: "cancel_upload"})
+	}
+	if _, ok := chatVoiceInviteFromMessage(msg.Text); ok {
+		actions = append(actions, chatProfileAction{label: "Join Voice", kind: "join_voice"})
 	}
 	if link, plays := chatFirstLink(msg); link != "" {
 		if plays {
@@ -381,6 +386,12 @@ func activateChatSelectionAction(kind string, config *Config) {
 	}
 	tab := chatActiveTabID()
 	switch kind {
+	case "join_voice":
+		invite, ok := chatVoiceInviteFromMessage(msg.Text)
+		clearChatSelection()
+		if ok && chatVoiceJoin(invite) {
+			chatVoiceOpenScene(config)
+		}
 	case "image":
 		// The viewer owns the screen once it opens, so the bar is dropped
 		// first: a bar left behind would reappear over the page when the

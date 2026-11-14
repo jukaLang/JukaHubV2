@@ -160,8 +160,11 @@ func ppssppCardBody(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, untested
 	}
 	b.WriteString("JukaHub keeps a newer PPSSPP of its own — its own build of the newest upstream PPSSPP for this model, or the TrimUI build packaged by minui-psp, whichever is newer — and updates it with the Emulator updates setting. ")
 	b.WriteString("Both use the firmware's save folders, so saves and save states carry over either way, and if JukaHub's build does not start, the game opens in the firmware's PPSSPP instead.")
+	if IsTrimuiDevice() {
+		b.WriteString(" If PPSSPP ever stays on a black screen, hold Select + L2 to open the in-game menu and choose Quit to JukaHub.")
+	}
 	if untested {
-		b.WriteString(" This model is untested with that build: if its buttons do not work in PPSSPP, restart the device and choose the firmware's PPSSPP here.")
+		b.WriteString(" This model is untested with that build: if its buttons do not work in PPSSPP, use the in-game menu to quit and choose the firmware's PPSSPP here.")
 	}
 	if line := ppssppCheckLine(st); line != "" {
 		b.WriteString(" " + line)

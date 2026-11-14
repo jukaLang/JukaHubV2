@@ -13,7 +13,7 @@
 // K "ready" (X and a message, then exit, when it cannot load). Requests:
 //
 //   B  begin an utterance. Payload: one flag byte (1: word times and
-//      confidences in results, 2: run at background priority), then an
+//      confidences in results, 2: reserved for older wake-word clients), then an
 //      optional JSON grammar (["hey juka", "[unk]"]). Reply K.
 //   A  16 kHz mono S16LE audio. Reply R + result JSON when an utterance just
 //      ended (Vosk's endpoint), else K.
@@ -33,12 +33,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
 #include <unistd.h>
 
 #define USAGE "usage: vosk-cli -m MODEL -f WAV|-\n       vosk-cli --serve -m MODEL\n"
 #define SERVE_MAX_PAYLOAD (1u << 20)
-#define SERVE_BACKGROUND_NICE 10
 
 static uint32_t le32(const unsigned char *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
@@ -302,7 +300,11 @@ static int serve(const char *model_path) {
             }
             unsigned flags = len > 0 ? (unsigned char)buf[0] : 0;
             const char *grammar = len > 1 ? buf + 1 : NULL;
-            setpriority(PRIO_PROCESS, 0, (flags & 2) ? SERVE_BACKGROUND_NICE : 0);
+            // The wake word used to set nice(10) here and the following orb
+            // turn tried to restore nice(0). Without CAP_SYS_NICE, Linux
+            // refuses that restoration, slowing every later transcription.
+            // The wake grammar is small and is only decoded above the sound
+            // gate, so keep one normal priority for the life of the server.
             if (grammar && grammar[0] && v.recognizer_new_grm)
                 rec = v.recognizer_new_grm(model, 16000.0f, grammar);
             else

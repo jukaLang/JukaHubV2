@@ -34,9 +34,11 @@ const (
 	// ttsChunkMax is the longest chunk sent to Groq, in bytes. Its limit is
 	// 200 characters; counting bytes stays under it however the server counts.
 	ttsChunkMax = 195
-	// ttsFirstChunk caps the first chunk after its first sentence. A short
-	// first sound is especially useful while Piper is rendering on a handheld.
+	// ttsFirstChunk avoids joining short sentences into a long first request.
 	ttsFirstChunk = 30
+	// Even a single long sentence starts with a small piece, so Piper can
+	// play it while the rest of the line is being rendered.
+	ttsFirstChunkMax = 64
 	// ttsInlineCodeMax is the longest inline code that is still read out.
 	ttsInlineCodeMax = 40
 	// ttsRestOnScreen is said when an answer was cut short.
@@ -214,14 +216,17 @@ func ttsCap(sentences []string, limit int) []string {
 	return out
 }
 
-// ttsChunks packs sentences into chunks of at most max bytes: the first chunk
-// short (ttsFirstChunk), the others as full as they go, so a reply costs as
-// few requests as it can.
+// ttsChunks packs sentences into chunks of at most max bytes. The opening
+// chunk is short, then later chunks use the full limit to save requests.
 func ttsChunks(sentences []string, max int) []string {
 	var out []string
 	cur := ""
 	for _, s := range sentences {
-		for _, piece := range ttsSplitLong(s, max) {
+		pieces := ttsSplitLong(s, max)
+		if len(out) == 0 && cur == "" {
+			pieces = ttsSplitFirst(s, max)
+		}
+		for _, piece := range pieces {
 			switch {
 			case cur == "":
 				cur = piece
@@ -237,6 +242,21 @@ func ttsChunks(sentences []string, max int) []string {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// ttsSplitFirst caps only the first piece of a long opening sentence.
+// Later pieces retain the normal size to avoid unnecessary voice requests.
+func ttsSplitFirst(s string, max int) []string {
+	if len(s) <= ttsFirstChunkMax || max <= ttsFirstChunkMax {
+		return ttsSplitLong(s, max)
+	}
+	firstPieces := ttsSplitLong(s, ttsFirstChunkMax)
+	if len(firstPieces) == 0 {
+		return nil
+	}
+	first := firstPieces[0]
+	rest := strings.TrimSpace(s[len(first):])
+	return append([]string{first}, ttsSplitLong(rest, max)...)
 }
 
 // ttsSplitLong cuts a sentence longer than max bytes into pieces that fit:

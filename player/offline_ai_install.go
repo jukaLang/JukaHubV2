@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -56,15 +57,18 @@ func offlineAIPackProbe(dir string) string {
 	return ""
 }
 
-// offlineAIOutdated reports whether the installed package predates the
-// server that keeps the model loaded: it still answers, more slowly, and
-// updates itself (offlineAIMaybeUpgrade) or from Settings.
+// offlineAIOutdated reports whether the installed package has the older,
+// larger model or lacks a warm server. It still answers while an update is
+// available from Settings or after an offline answer on Wi-Fi.
 func offlineAIOutdated() bool {
 	if !offlineAIReady() {
 		return false
 	}
-	server, _ := offlineAIServerFiles()
-	return server == ""
+	server, model := offlineAIServerFiles()
+	if model == "" {
+		_, model = offlineAIFiles()
+	}
+	return server == "" || filepath.Base(model) == offlineAILegacyModelName
 }
 
 // offlineAIUpgradeTried keeps the automatic update to one try per run.
@@ -96,7 +100,7 @@ func offlineAIMaybeUpgrade() {
 			if !offlineAIOutdated() || relPackRunning(offlineAIPackKey) || installBarActive() {
 				return
 			}
-			logInfo("voice", "offline AI package has no server; updating it to %s", latest.Rel.TagName)
+			logInfo("voice", "updating offline AI to %s", latest.Rel.TagName)
 			ShowToast("Updating offline AI for faster answers", ToastKindInfo)
 			offlineAIStartInstall()
 		})
@@ -121,12 +125,12 @@ func offlineAISettingsRows() []setRow {
 		},
 		Detail: func(*Config) string {
 			if offlineAIOutdated() {
-				return "A faster version is out · ~240 MB download · answers keep working until then"
+				return "A faster, smaller version is available · ~100 MB download"
 			}
 			if offlineAIReady() {
 				return "Small on-device model answers when Groq is unavailable · no key needed"
 			}
-			return "Optional ~240 MB download · needs free space on the card · slower than Groq"
+			return "Optional ~100 MB download · needs free space on the card · slower than Groq"
 		},
 		Open: offlineAIInstall,
 	}}

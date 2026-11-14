@@ -44,6 +44,7 @@ const (
 	brwMenuZoom
 	brwMenuMode
 	brwMenuSave
+	brwMenuDownload
 	brwMenuSaved
 	brwMenuWPE
 	brwMenuInfo
@@ -148,6 +149,13 @@ func brwMenuItems(config *Config) []brwMenuItem {
 		save.Icon, save.Value, save.Tone = "favorites", "Saved", brwToneGood
 	}
 	items[brwMenuSave] = save
+	download := brwMenuItem{Label: "Download this page", Icon: "download"}
+	if haveElem {
+		download.Disabled = browserDownloadPageURL(elem) == ""
+	} else {
+		download.Disabled = true
+	}
+	items[brwMenuDownload] = download
 	marks := browserBookmarksCount()
 	items[brwMenuSaved] = brwMenuItem{Label: "Saved pages", Icon: "list", Disabled: marks == 0}
 	if marks > 0 {
@@ -485,6 +493,8 @@ func brwMenuActivate(renderer *sdl.Renderer, config *Config, i int) {
 		browserToggleNavMode()
 	case brwMenuSave:
 		browserBookmarkSaveAction(config)
+	case brwMenuDownload:
+		browserDownloadCurrentPage(config)
 	case brwMenuSaved:
 		openBrowserBookmarkPanel(config)
 	case brwMenuWPE:

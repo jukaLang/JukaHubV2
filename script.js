@@ -1719,12 +1719,30 @@ function setupEventListeners() {
   const leftDrawer = document.getElementById('leftSidebar');
   const rightDrawer = document.getElementById('rightSidebar');
   function syncMobileTabs() {
+    if (!leftDrawer || !rightDrawer) return;
     const open = leftDrawer.classList.contains('open') ? 'left'
       : rightDrawer.classList.contains('open') ? 'right' : 'canvas';
     mobileTabs.forEach(t => {
       const on = t.getAttribute('data-target') === open;
       t.classList.toggle('active', on);
       t.setAttribute('aria-selected', String(on));
+    });
+    // A closed off-canvas drawer is only translated outside the viewport, so
+    // its controls would otherwise stay in the tab order and the accessibility
+    // tree on phones. inert keeps both out until the drawer is opened; desktop
+    // sidebars are always visible and must stay interactive.
+    const mobile = window.innerWidth <= 992;
+    [[leftDrawer, 'left'], [rightDrawer, 'right']].forEach(([drawer, side]) => {
+      const closed = mobile && !drawer.classList.contains('open');
+      drawer.toggleAttribute('inert', closed);
+      if (closed) {
+        drawer.setAttribute('aria-hidden', 'true');
+        if (drawer.contains(document.activeElement)) {
+          mobileTabs.find(t => t.getAttribute('data-target') === side)?.focus();
+        }
+      } else {
+        drawer.removeAttribute('aria-hidden');
+      }
     });
     // On phones the drawer chevrons say whether their drawer is open (on
     // desktop they describe the collapsed rail and are left alone).
@@ -1741,6 +1759,8 @@ function setupEventListeners() {
       syncMobileTabs();
     });
   });
+  syncMobileTabs();
+  window.addEventListener('resize', syncMobileTabs);
 
   // Component filter
   const componentSearch = document.getElementById('componentSearch');

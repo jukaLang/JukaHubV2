@@ -464,6 +464,8 @@ func chatSceneActive(config *Config) bool {
 // when something is queued, and persists what background goroutines changed.
 func chatTick(config *Config) {
 	chatEnsureLoaded()
+	chatVoiceTick(config)
+	chatVoiceChannelTick()
 	chatRefreshCreds(config, time.Now(), false)
 	// The signing name, for callers off the main thread (chat.go).
 	chatRefreshName(config)
@@ -522,6 +524,7 @@ func chatSceneEnter() {
 // chatSceneLeave resets what belongs to one visit.
 func chatSceneLeave() {
 	chatWasVisible = false
+	chatVoiceCancel()
 	chatStopInlineTyping()
 	chatStickSpeed = 0
 	chatLiveTab.Store(-1)
@@ -590,6 +593,10 @@ func chatSelectTab(tab chatTab) bool {
 	}
 	cur := chatActiveTabID()
 	if tab == cur {
+		return false
+	}
+	if chatVoiceRecording() {
+		showToast("Attach or discard the voice clip before switching chats", ToastInfo())
 		return false
 	}
 	chatViews[cur].draft = chatInputText

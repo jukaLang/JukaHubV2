@@ -84,10 +84,10 @@ func sttFilesIn(dir string) (string, string, bool) {
 }
 
 func sttLocalFiles() (string, string) {
-	if bin, model, ok := sttFilesIn(sttBundledDir()); ok {
+	if bin, model, ok := sttFilesIn(sttDownloadedDir()); ok {
 		return bin, model
 	}
-	if bin, model, ok := sttFilesIn(sttDownloadedDir()); ok {
+	if bin, model, ok := sttFilesIn(sttBundledDir()); ok {
 		return bin, model
 	}
 	return "", ""
@@ -111,10 +111,10 @@ func sttFastFilesIn(dir string) (string, string, bool) {
 }
 
 func sttFastFiles() (string, string) {
-	if bin, model, ok := sttFastFilesIn(sttBundledDir()); ok {
+	if bin, model, ok := sttFastFilesIn(sttDownloadedDir()); ok {
 		return bin, model
 	}
-	if bin, model, ok := sttFastFilesIn(sttDownloadedDir()); ok {
+	if bin, model, ok := sttFastFilesIn(sttBundledDir()); ok {
 		return bin, model
 	}
 	return "", ""

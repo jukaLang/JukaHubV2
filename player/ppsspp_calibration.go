@@ -205,7 +205,8 @@ func newestPPSSPPConfig(candidates []string) string {
 // section is "" outside a section, key is "" for a comment, blank line or
 // section header.
 func iniSectionKey(line string) (section, key, value string, isHeader bool) {
-	trimmed := strings.TrimSpace(line)
+	// The TrimUI PPSSPP package writes a UTF-8 BOM before its first section.
+	trimmed := strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
 	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 		return strings.TrimSpace(trimmed[1 : len(trimmed)-1]), "", "", true
 	}

@@ -23,16 +23,19 @@ import (
 )
 
 const (
-	offlineAIDirName   = "juka-llm"
-	offlineAIModelName = "SmolLM2-360M-Instruct-Q4_0.gguf"
-	offlineAIModelSize = 229733280
+	offlineAIDirName               = "juka-llm"
+	offlineAIModelName             = "SmolLM2-135M-Instruct-Q4_0.gguf"
+	offlineAIModelSize       int64 = 91893088
+	offlineAILegacyModelName       = "SmolLM2-360M-Instruct-Q4_0.gguf"
+	offlineAILegacyModelSize int64 = 229733280
 	// offlineAIStartMB is the free memory a cold start needs (the model, its
 	// buffers and a little room). voicePrewarm asks for more while the user
-	// still talks (offlineAIPrewarmMB).
-	offlineAIStartMB    = 360
-	offlineAIReplyRunes = 420
-	offlineAITimeout    = 60 * time.Second
-	offlineAIOutputMax  = 8 << 10
+	// still talks (offlineAIPrewarmNeedMB).
+	offlineAIStartMB       = 220
+	offlineAILegacyStartMB = 360
+	offlineAIReplyRunes    = 420
+	offlineAITimeout       = 60 * time.Second
+	offlineAIOutputMax     = 8 << 10
 )
 
 var errOfflineAIMissing = errors.New("offline AI is not installed")
@@ -62,30 +65,44 @@ func offlineAIFilesIn(dir string) (bin, model string, ok bool) {
 	if dir == "" {
 		return "", "", false
 	}
-	bin, model = filepath.Join(dir, "llama-cli"), filepath.Join(dir, offlineAIModelName)
+	bin = filepath.Join(dir, "llama-cli")
 	b, bErr := os.Stat(bin)
-	m, mErr := os.Stat(model)
-	ok = bErr == nil && b.Mode().IsRegular() && b.Mode().Perm()&0o111 != 0 &&
-		mErr == nil && m.Mode().IsRegular() && m.Size() == offlineAIModelSize
+	if bErr != nil || !b.Mode().IsRegular() || b.Mode().Perm()&0o111 == 0 {
+		return "", "", false
+	}
+	for _, spec := range []struct {
+		name string
+		size int64
+	}{{offlineAIModelName, offlineAIModelSize}, {offlineAILegacyModelName, offlineAILegacyModelSize}} {
+		path := filepath.Join(dir, spec.name)
+		if m, err := os.Stat(path); err == nil && m.Mode().IsRegular() && m.Size() == spec.size {
+			return bin, path, true
+		}
+	}
 	return
 }
 
 func offlineAIFiles() (bin, model string) {
-	// The bundled copy first, unless it predates llama-server and a
-	// downloaded one (an update) has it: otherwise the update would never
-	// be used and Settings would offer it forever.
-	bundledBin, bundledModel, bundled := offlineAIFilesIn(offlineAIBundledDir())
-	if bundled && offlineAIServerIn(filepath.Dir(bundledBin)) != "" {
-		return bundledBin, bundledModel
+	// A verified download overrides a bundled copy of the same generation.
+	// A warm server matters most; among server packages the smaller model wins.
+	best := -1
+	for _, dir := range []string{offlineAIDownloadedDir(), offlineAIBundledDir()} {
+		b, m, ok := offlineAIFilesIn(dir)
+		if !ok {
+			continue
+		}
+		score := 0
+		if offlineAIServerIn(dir) != "" {
+			score += 2
+		}
+		if filepath.Base(m) == offlineAIModelName {
+			score++
+		}
+		if score > best {
+			bin, model, best = b, m, score
+		}
 	}
-	if bin, model, ok := offlineAIFilesIn(offlineAIDownloadedDir()); ok &&
-		(!bundled || offlineAIServerIn(filepath.Dir(bin)) != "") {
-		return bin, model
-	}
-	if bundled {
-		return bundledBin, bundledModel
-	}
-	return "", ""
+	return bin, model
 }
 
 func offlineAIReady() bool {
@@ -98,23 +115,50 @@ func offlineAIReady() bool {
 
 // The model can fit beside the UI on a 1 GB device when games are closed.
 // /proc may be unavailable on unusual firmware; the process then decides.
-func offlineAICheckMemory() error {
-	if freeMemoryMB() < offlineAIStartMB {
+func offlineAIStartNeedMB(model string) uint64 {
+	if filepath.Base(model) == offlineAILegacyModelName {
+		return offlineAILegacyStartMB
+	}
+	return offlineAIStartMB
+}
+
+func offlineAICheckMemory(model string) error {
+	if freeMemoryMB() < offlineAIStartNeedMB(model) {
 		return errOfflineAIMemory
 	}
 	return nil
 }
 
 func offlineAIPrompt(question string, unmatchedAction bool) string {
-	question = strings.NewReplacer("<|im_start|>", " ", "<|im_end|>", " ").Replace(question)
 	system := "You are Juka. Answer in one short factual sentence. Say if unsure. You cannot take actions."
 	if unmatchedAction {
 		system = "You are Juka. Reply in one short sentence. You were unable to perform the user's request. " +
 			"Name the failed action and give a manual step. Example: User: Open Dino Game. " +
 			"Juka: I couldn't open Dino Game; try looking in Apps."
 	}
-	return "<|im_start|>system\n" + system + "<|im_end|>\n" +
-		"<|im_start|>user\n" + question + "<|im_end|>\n<|im_start|>assistant\n"
+	return offlineAIChatPrompt(system, question)
+}
+
+func offlineAIChatPrompt(system, question string) string {
+	clean := strings.NewReplacer("<|im_start|>", " ", "<|im_end|>", " ")
+	return "<|im_start|>system\n" + clean.Replace(system) + "<|im_end|>\n" +
+		"<|im_start|>user\n" + clean.Replace(question) + "<|im_end|>\n<|im_start|>assistant\n"
+}
+
+// The small offline model cannot see a paused game's picture. Give a useful
+// general hint from its name, or ask for detail instead of inventing a move.
+func offlineAIGamePrompt(game, platform, question string) string {
+	system := "You are Juka, a game helper. Give one short practical hint. You cannot see the game screen offline. " +
+		"Do not invent exact buttons, levels or locations. If unsure, ask for one detail."
+	game = strings.TrimSpace(game)
+	if game == "" {
+		game = "Unknown game"
+	}
+	context := "Game: " + game
+	if platform = strings.TrimSpace(platform); platform != "" {
+		context += " (" + platform + ")"
+	}
+	return offlineAIChatPrompt(system, context+"\nQuestion: "+question)
 }
 
 // offlineAIArgs is the one-shot runner's command line (no server in the
@@ -195,11 +239,18 @@ func (w *offlineAIStreamWriter) Write(p []byte) (int, error) {
 }
 
 func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool, onPartial func(string)) (string, error) {
+	return offlineAIAnswerPrompt(ctx, offlineAIPrompt(question, unmatchedAction), onPartial)
+}
+
+func offlineAIGameAnswer(ctx context.Context, game, platform, question string, onPartial func(string)) (string, error) {
+	return offlineAIAnswerPrompt(ctx, offlineAIGamePrompt(game, platform, question), onPartial)
+}
+
+func offlineAIAnswerPrompt(ctx context.Context, prompt string, onPartial func(string)) (string, error) {
 	if !offlineAIReady() {
 		return "", errOfflineAIMissing
 	}
 	bin, model := offlineAIFiles()
-	prompt := offlineAIPrompt(question, unmatchedAction)
 	runCtx, cancel := context.WithTimeout(ctx, offlineAITimeout)
 	defer cancel()
 	output := &offlineAIStreamWriter{onPartial: onPartial}
@@ -217,7 +268,7 @@ func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool,
 		logWarn("voice", "offline AI server could not answer (%v); using the one-shot runner", err)
 		output = &offlineAIStreamWriter{onPartial: onPartial}
 	}
-	if err := offlineAICheckMemory(); err != nil {
+	if err := offlineAICheckMemory(model); err != nil {
 		return "", err
 	}
 	output.stop = cancel

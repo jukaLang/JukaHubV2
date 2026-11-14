@@ -106,6 +106,8 @@ type homeDynSig struct {
 	style string
 	// sw changes with the Switch Home's recent games (themeswitch.go).
 	sw uint64
+	// recent changes when a console app was opened.
+	recent uint64
 }
 
 // homeDyn is the dynamic body's state.
@@ -201,12 +203,27 @@ func (h *HomeLayout) dynSync(config *Config) {
 		arr: h.Arrangement, w: h.Width, h: h.Height,
 		style: homeConsoleLook.carousel, sw: h.switchRowSig(),
 	}
+	if homeConsoleLook.carousel == homeCarouselHub || homeConsoleLook.switchHome {
+		sig.recent = homeConsoleRecentGen()
+	}
 	now := sdl.GetTicks64()
 	if !h.dyn.active || sig != h.dyn.sig {
+		wasActive, previousRecent, previousStyle := h.dyn.active, h.dyn.sig.recent, h.dyn.sig.style
 		h.dynRebuild(config, tiles)
+		// Console menus return to the app that was just opened. Its new place
+		// is the front, including when it was opened from another screen.
+		if !homeEdit.open && len(h.dyn.tiles) > 0 &&
+			(sig.recent != previousRecent || ((!wasActive || sig.style != previousStyle) && homeConsoleLook.carousel == homeCarouselHub)) &&
+			(homeConsoleLook.carousel == homeCarouselHub || homeConsoleLook.switchHome) {
+			first := h.dyn.tiles[0].ID
+			if h.Focus.Set(first) {
+				h.Focus.Remember()
+			}
+			h.dyn.carIdx = 0
+		}
 		h.dyn.sig = sig
 	} else if now-h.dyn.appsAt >= homeDynAppsRefreshMS {
-		h.dynRefreshApps(config, tiles)
+		h.dynRefreshApps(config)
 	}
 	h.dynKeepFocusShown()
 	h.dynStep(now)
@@ -276,7 +293,7 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 		prev[t.ID] = t
 	}
 
-	list := tiles
+	list := homeConsoleVisibleTiles(config, tiles)
 	withAdd := homeEdit.open || len(tiles) == 0
 	n := len(list)
 	if withAdd {
@@ -293,20 +310,21 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 	if withAdd {
 		add := homeDynTile{ID: HomeFocusID(homeTileAddRef), Ref: homeTileAddRef, Kind: homeTileAdd, Size: homeTileSize{W: 1, H: 1},
 			Title: "Add", Subtitle: "Widgets and apps", Icon: "plus"}
-		if len(tiles) == 0 && !homeEdit.open {
+		if len(list) == 0 && !homeEdit.open {
 			add.Title, add.Subtitle = "Add tiles", "Home is empty"
 		}
 		out = append(out, add)
 	}
 	// The Switch Home's row leads with the games played last (themeswitch.go).
 	out = h.switchRowTiles(out)
+	out = homeConsoleOrderTiles(out)
 
 	// Labels: widgets from their catalogue entry, apps from the Start menu.
 	// The menu is read again only when the app tiles changed (or on the
 	// refresh tick): carrying a tile is a rebuild per step, and reading the
 	// menu each time was a whole Start menu build per press.
-	if sig := homeAppRefsSig(tiles); sig != h.dyn.appsSig || h.dyn.apps == nil {
-		h.dyn.apps = homeResolveApps(config, tiles)
+	if sig := homeAppRefsSig(list); sig != h.dyn.appsSig || h.dyn.apps == nil {
+		h.dyn.apps = homeResolveApps(config, list)
 		h.dyn.appsSig = sig
 		h.dyn.appsAt = sdl.GetTicks64()
 	}
@@ -426,13 +444,19 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 }
 
 // dynRefreshApps re-reads the app tiles' names from the Start menu.
-func (h *HomeLayout) dynRefreshApps(config *Config, tiles []homeTile) {
+func (h *HomeLayout) dynRefreshApps(config *Config) {
 	h.dyn.appsAt = sdl.GetTicks64()
 	if h.dyn.appsSig == "" {
 		// No app tiles: nothing to read.
 		return
 	}
-	h.dyn.apps = homeResolveApps(config, tiles)
+	visible := make([]homeTile, 0, len(h.dyn.tiles))
+	for _, tile := range h.dyn.tiles {
+		if tile.Kind == homeTileApp {
+			visible = append(visible, homeTile{Ref: tile.Ref})
+		}
+	}
+	h.dyn.apps = homeResolveApps(config, visible)
 	for i := range h.dyn.tiles {
 		t := &h.dyn.tiles[i]
 		if t.Kind != homeTileApp {

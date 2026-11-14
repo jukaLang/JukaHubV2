@@ -223,7 +223,7 @@ func screenChildReaped(cmd *exec.Cmd) {
 // gameScreenSuspended reports whether a screen-taking child is live and the
 // main loop must therefore stop presenting frames.
 func gameScreenSuspended() bool {
-	return runningGameChildren.Load() > 0
+	return runningGameChildren.Load() > 0 || foreignScreenSuspended()
 }
 
 // liveScreenChildren snapshots the children that have not been reaped yet.

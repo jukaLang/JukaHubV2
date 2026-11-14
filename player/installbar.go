@@ -642,8 +642,6 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 			title = "Could not install " + tool
 		}
 	}
-	renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, y+padY)
-
 	status := phase
 	if speed > 0 && phase == installPhaseDownload {
 		status = formatInstallSpeed(speed)
@@ -651,10 +649,24 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 	if phase == installPhaseError && installBar.retryable {
 		status = hintLine(FooterHint{"A", "Retry"})
 	}
+	rowRight := x + cardW - padX
+	statusW := int32(0)
 	if status != "" {
+		// Keep a long phase or transfer speed from covering the operation name.
+		status = ellipsize(font, status, (rowRight-textX)/3)
 		pw, _, _ := font.SizeUTF8(status)
+		statusW = int32(pw)
+	}
+	titleW := rowRight - textX
+	if statusW > 0 {
+		titleW -= statusW + 12
+	}
+	if titleW > 0 {
+		renderText(renderer, config, titleFont, ellipsize(titleFont, title, titleW), ColorTextPrimary(), textX, y+padY)
+	}
+	if statusW > 0 {
 		renderText(renderer, config, font, status, installPhaseTint(phase),
-			x+cardW-padX-int32(pw), y+padY+(titleH-smallH)/2+1)
+			rowRight-statusW, y+padY+(titleH-smallH)/2+1)
 	}
 
 	// Progress pill with a bright travelling tip.
@@ -716,12 +728,15 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 		detail = "Ready — restart JukaHub to use it"
 		detailColor = ColorTextSecondary()
 	}
-	if d, _, _ := font.SizeUTF8(detail); d > 0 {
-		renderText(renderer, config, font, detail, detailColor, textX, y+detailY)
-	}
+	detailW := rowRight - textX
 	if phase == installPhaseDownload && total > 0 {
 		pct := fmt.Sprintf("%d%%", int(frac*100+0.5))
 		pw, _, _ := titleFont.SizeUTF8(pct)
-		renderText(renderer, config, titleFont, pct, highlight, x+cardW-padX-int32(pw), y+detailY-4)
+		pctW := int32(pw)
+		detailW -= pctW + 12
+		renderText(renderer, config, titleFont, pct, highlight, rowRight-pctW, y+detailY-4)
+	}
+	if detailW > 0 {
+		renderText(renderer, config, font, ellipsize(font, detail, detailW), detailColor, textX, y+detailY)
 	}
 }

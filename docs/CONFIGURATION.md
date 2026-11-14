@@ -47,6 +47,7 @@ would otherwise overwrite it on the next save).
 | `title`, `author`, `description` | string | project metadata |
 | `variables` | object | design tokens and settings, see below |
 | `channel_profile` | object | `channel_id` and optional `token` for the JukaLand chat channel |
+| `variables.Custom.voiceRelayURL` | string | Secure WebSocket base URL for live Chat Voice Channels, for example `wss://voice.example.com/voice`; set from Chat → Voice Channel → Voice relay. `JUKAHUB_VOICE_RELAY` overrides it. See [Voice Channels](VOICE_CHANNEL.md). |
 | `scenes` | array | the screens, see below |
 
 ## `variables`

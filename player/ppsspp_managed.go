@@ -1347,6 +1347,7 @@ type ppssppScriptSpec struct {
 	Binary       string
 	Work         string
 	Home         string
+	Platform     string
 	Libs         []string
 	ControllerDB string
 	Stick        string
@@ -1547,13 +1548,19 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line(`LIBS="$PPSSPP_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`)
 	line(`cd "$PPSSPP_WORK" || firmware "cannot enter the PPSSPP folder" "$@"`)
 	line()
+	// The A133P firmware exposes its framebuffer through SDL's mali driver.
+	// Keep this on PPSSPP's process only, so a fallback retains its own setup.
+	video := ""
+	if s.Platform == ppssppOwnPlatform {
+		video = `SDL_VIDEODRIVER=mali `
+	}
 	line(`note "start PPSSPP $VERSION: $ROM"`)
 	line("START=$(date +%s 2>/dev/null)")
 	line(`case "$START" in ''|*[!0-9]*) START=0 ;; esac`)
 	line(`if [ "$#" -gt 0 ]; then`)
-	line(`	HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" "$PPSSPP_BIN" --pause-menu-exit "$@"`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen`)
 	line("else")
-	line(`	HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" "$PPSSPP_BIN"`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" "$PPSSPP_BIN" --fullscreen`)
 	line("fi")
 	line("RC=$?")
 	line("END=$(date +%s 2>/dev/null)")
@@ -1583,6 +1590,7 @@ func ppssppScriptSpecFor(b ppssppBuild, fw ppssppFirmwareInfo) ppssppScriptSpec 
 		Binary:       b.binary(),
 		Work:         b.path(b.Layout.Work),
 		Home:         b.home(),
+		Platform:     b.Platform,
 		Libs:         libs,
 		ControllerDB: b.path(b.Layout.ControllerDB),
 		Stick:        fw.Stick,
@@ -2209,17 +2217,10 @@ func ppssppCopyFile(src, dst string, limit int64) error {
 	return os.WriteFile(dst, data, 0o644)
 }
 
-// ppssppSeedHome prepares the shared HOME for a build: the memstick's SAVEDATA
-// and PPSSPP_STATE (the mount points the launcher binds over) and, while the
-// memstick has no ppsspp.ini yet (a first install; PPSSPP writes one when it
-// exits), its settings: the config the package ships (minui-psp tunes it for
-// these handhelds), then from the firmware's PPSSPP what cannot break this
-// build, where the package brings none — its controls.ini (the TrimUI-tuned
-// button mapping lives there) and its per-game files (<GAMEID>_ppsspp.ini,
-// <GAMEID>_controls.ini; CrossMix ships tuned ones for many games). Never the
-// firmware's ppsspp.ini: it may choose a GPU backend this build does not have,
-// which is why JukaHub's builds have a HOME of their own at all. After that the
-// user's settings stay as they are, because every later build reads this HOME.
+// ppssppSeedHome prepares the shared HOME and its save mount points. On first
+// install it copies the package's settings and the firmware's per-game files.
+// On every call it also fills a missing controls.ini and repairs the Smart Pro
+// video backend and a keyboard-only controller map. Other user settings stay.
 func ppssppSeedHome(b ppssppBuild, fwStick string) {
 	stick := b.memstick()
 	if stick == "" {
@@ -2231,9 +2232,7 @@ func ppssppSeedHome(b ppssppBuild, fwStick string) {
 			logWarn("ppsspp", "could not create %s: %v", d, err)
 		}
 	}
-	if regularFile(filepath.Join(sys, "ppsspp.ini")) {
-		return
-	}
+	firstInstall := !regularFile(filepath.Join(sys, "ppsspp.ini"))
 	copyFrom := func(from string, wanted func(lower string) bool) {
 		entries, err := os.ReadDir(from)
 		if err != nil {
@@ -2250,13 +2249,16 @@ func ppssppSeedHome(b ppssppBuild, fwStick string) {
 		}
 	}
 	if shipped := b.shippedSystem(); shipped != "" {
-		copyFrom(shipped, func(lower string) bool { return strings.HasSuffix(lower, ".ini") })
+		copyFrom(shipped, func(lower string) bool {
+			return lower == "controls.ini" || (firstInstall && strings.HasSuffix(lower, ".ini"))
+		})
 	}
 	if fwStick != "" {
 		copyFrom(filepath.Join(fwStick, "SYSTEM"), func(lower string) bool {
-			return lower == "controls.ini" || strings.HasSuffix(lower, "_ppsspp.ini") || strings.HasSuffix(lower, "_controls.ini")
+			return lower == "controls.ini" || (firstInstall && (strings.HasSuffix(lower, "_ppsspp.ini") || strings.HasSuffix(lower, "_controls.ini")))
 		})
 	}
+	ppssppPrepareTrimuiHome(sys, b.Platform)
 }
 
 // ppssppWriteManifest records where a build came from, beside it.
@@ -2935,7 +2937,9 @@ func ppssppRefreshActiveScript() {
 	if !ok || !regularFile(b.binary()) {
 		return
 	}
-	want := ppssppLauncherScript(ppssppScriptSpecFor(b, ppssppSanitizeFirmware(fw)))
+	fw = ppssppSanitizeFirmware(fw)
+	ppssppSeedHome(b, fw.Stick)
+	want := ppssppLauncherScript(ppssppScriptSpecFor(b, fw))
 	if current, err := os.ReadFile(b.script()); err == nil && string(current) == want {
 		return
 	}
@@ -2944,6 +2948,26 @@ func ppssppRefreshActiveScript() {
 		return
 	}
 	logInfo("ppsspp", "rewrote the launcher of %s for the firmware's PPSSPP as it is now", b.label())
+}
+
+// ppssppPrepareManagedLaunch repairs an installed build even when the first
+// PSP game is started before the background firmware scan refreshes its script.
+// The video driver is also passed to an older generated script for that one
+// launch. Other emulator launches are untouched.
+func ppssppPrepareManagedLaunch(launcher string, cmd *exec.Cmd) {
+	if cmd == nil || !ppssppIsManagedLauncher(launcher) {
+		return
+	}
+	ppssppMgr.mu.Lock()
+	defer ppssppMgr.mu.Unlock()
+	st := ppssppLockedState()
+	b, ok := st.build(st.Active)
+	if !ok || !strings.EqualFold(filepath.Clean(b.script()), filepath.Clean(launcher)) || b.Platform != ppssppOwnPlatform {
+		return
+	}
+	fw, _ := ppssppFirmwareCached()
+	ppssppSeedHome(b, ppssppSanitizeFirmware(fw).Stick)
+	cmd.Env = append(os.Environ(), "SDL_VIDEODRIVER=mali")
 }
 
 // ppssppCheckPlatform handles a card moved to another TrimUI model: a build

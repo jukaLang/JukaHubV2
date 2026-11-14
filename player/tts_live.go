@@ -14,7 +14,7 @@ package main
 // A ttsSource is a line's chunks. A fixed line (every jukaSpeak) has them all
 // up front; a live one gets sentences pushed while the producer pulls, and
 // packs whatever sentences are waiting into one chunk when the producer asks
-// for the next — the first chunk short (ttsFirstChunk) so it is quick to make,
+// for the next — the first chunk short so it is quick to make,
 // later ones as full as ttsChunkMax allows, so a reply costs few requests.
 // The same ttsSpokenMax cap as a fixed line applies.
 
@@ -58,7 +58,11 @@ func (s *ttsSource) push(sentences []string, done bool) {
 		return
 	}
 	for _, t := range sentences {
-		s.pending = append(s.pending, ttsSplitLong(t, ttsChunkMax)...)
+		if len(s.chunks) == 0 && len(s.pending) == 0 {
+			s.pending = append(s.pending, ttsSplitFirst(t, ttsChunkMax)...)
+		} else {
+			s.pending = append(s.pending, ttsSplitLong(t, ttsChunkMax)...)
+		}
 	}
 	if done {
 		s.done = true
@@ -112,7 +116,7 @@ func (s *ttsSource) packLocked() string {
 	n := 1
 	for n < len(s.pending) {
 		next := s.pending[n]
-		if len(cur)+1+len(next) > ttsChunkMax || (len(s.chunks) == 0 && len(cur) >= ttsFirstChunk) {
+		if len(cur)+1+len(next) > ttsChunkMax || (len(s.chunks) == 0 && len(cur)+1+len(next) > ttsFirstChunk) {
 			break
 		}
 		cur += " " + next

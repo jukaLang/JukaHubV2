@@ -704,6 +704,7 @@ four the same way, with controller hints; see
 | [PS Remote Play](docs/REMOTE_PLAY.md) | the built-in PS4/PS5 client, pairing, quality profiles and troubleshooting |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Voice command](docs/VOICE.md) | the voice orb (Menu, or F4) and saying what to open — through the handheld's microphone or your phone's keyboard — what it understands, and how it finds the microphone |
+| [Chat voice](docs/VOICE_CHANNEL.md) | record and send voice clips, start a Voice Channel with people from Chat, and host the Internet voice relay |
 | [Spatial audio](docs/SPATIAL_AUDIO.md) | virtual surround on headphones, wider stereo on the speakers, and RetroArch games through a filter JukaHub ships |
 | [Theme files](docs/THEMES.md) | the complete theme JSON schema and the shared glass rules |
 | [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |

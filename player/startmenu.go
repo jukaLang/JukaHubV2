@@ -839,13 +839,20 @@ func startMenuActivate(config *Config) {
 		return
 	}
 	app := group.items[tb.cursor]
+	recentRef := homeConsoleMenuRef(app)
 	tb.startOpen = false
 	startMenuCloseOverlays()
 	if app.action != nil {
+		if recentRef != "" {
+			homeConsoleRecordApp(recentRef)
+		}
 		app.action(config)
 	} else if app.scene == toolsHubSceneName {
 		// The hub opens at its top through its own entry point, like the Home
 		// card does.
+		if recentRef != "" {
+			homeConsoleRecordApp(recentRef)
+		}
 		toolsHubOpen(config)
 	} else if app.scene != "" {
 		// The exact name: findSceneIndex falls back to Home for a scene the
@@ -856,6 +863,9 @@ func startMenuActivate(config *Config) {
 			if reason, blocked := offlineSceneBlock(app.scene); blocked {
 				showToast(reason, ToastWarn())
 				return
+			}
+			if recentRef != "" {
+				homeConsoleRecordApp(recentRef)
 			}
 			changeSceneTo(config, idx)
 		}

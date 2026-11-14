@@ -61,12 +61,14 @@ var chatProfile chatProfileCard
 
 // chatMembersPanel is the member list overlay.
 type chatMembersPanel struct {
-	open   bool
-	focus  int
-	scroll int
-	rows   []chatMemberProfile
-	rect   sdl.Rect
-	layout chatMembersLayout
+	open        bool
+	focus       int
+	scroll      int
+	rows        []chatMemberProfile
+	selected    map[string]chatMemberProfile
+	rect        sdl.Rect
+	voiceButton sdl.Rect
+	layout      chatMembersLayout
 }
 
 var chatMembers chatMembersPanel
@@ -404,6 +406,9 @@ func chatProfileActions(p chatMemberProfile) []chatProfileAction {
 	if !p.System {
 		actions = append(actions, chatProfileAction{label: "Mention", kind: "mention"})
 	}
+	if chatVoiceSelectable(p) {
+		actions = append(actions, chatProfileAction{label: "Voice Channel", kind: "voice"})
+	}
 	if p.Messages > 0 {
 		actions = append(actions, chatProfileAction{label: "Latest", kind: "jump"})
 	}
@@ -483,6 +488,10 @@ func handleChatOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 			row := chatMembers.rows[chatMembers.focus]
 			openChatProfile(row.Name, row.UserID)
 		}
+	case sdl.K_x:
+		chatVoiceSelectFocused()
+	case sdl.K_y:
+		chatVoiceStartMembers(config)
 	}
 	return true
 }
@@ -535,6 +544,10 @@ func ctrlChatOverlay(e *sdl.ControllerButtonEvent, config *Config) bool {
 			row := chatMembers.rows[chatMembers.focus]
 			openChatProfile(row.Name, row.UserID)
 		}
+	case sdl.CONTROLLER_BUTTON_X:
+		chatVoiceSelectFocused()
+	case sdl.CONTROLLER_BUTTON_Y:
+		chatVoiceStartMembers(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeChatMembers()
 		PlayBackSound()
@@ -584,10 +597,19 @@ func chatOverlayClick(mx, my int32, config *Config) bool {
 		}
 		return true
 	}
+	if chatMembers.voiceButton.W > 0 && pointInRect(mx, my, chatMembers.voiceButton) {
+		chatVoiceStartMembers(config)
+		return true
+	}
 	for i := 0; i < chatMembers.layout.visible && chatMembers.scroll+i < len(chatMembers.rows); i++ {
-		if pointInRect(mx, my, chatMembers.layout.rowRect(i)) {
+		rowRect := chatMembers.layout.rowRect(i)
+		if pointInRect(mx, my, rowRect) {
 			chatMembers.focus = chatMembers.scroll + i
 			row := chatMembers.rows[chatMembers.focus]
+			if mx >= rowRect.X+rowRect.W-48 && chatVoiceSelectable(row) {
+				chatVoiceSelectFocused()
+				return true
+			}
 			openChatProfile(row.Name, row.UserID)
 			return true
 		}
@@ -628,6 +650,10 @@ func activateChatProfileAction(kind string, config *Config) {
 			chatInputText += token
 			chatOpenKeyboard()
 		}
+	case "voice":
+		closeChatProfile()
+		closeChatMembers()
+		chatVoiceStartFor(config, []string{profile.Name})
 	case "jump":
 		jumpToMemberLatest(profile)
 	case "avatar":
@@ -707,7 +733,7 @@ func chatMembersLayoutFor(width, height, lineH int32, count int) chatMembersLayo
 	w := min32(chatMembersCardW, max32(1, width-32))
 	lineH = max32(1, lineH)
 	headerH := max32(52, lineH+24)
-	footerH := lineH + 20
+	footerH := max32(76, lineH+54)
 	rowH := max32(chatMemberRowMinH, 2*lineH+14+SpaceXS)
 	available := max32(1, height-32)
 	visible := int(max32(0, (available-headerH-footerH)/rowH))
@@ -971,19 +997,77 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 				chatFillRound(renderer, sdl.Rect{X: chipX, Y: chipY, W: chipW, H: chipH}, chipH/2, WithAlpha(glassAccent(), 45))
 				chatText(renderer, config, font, tag, InfoInk(), chipX+6, chipY+2)
 			}
+			if _, selected := chatMembers.selected[row.Key]; selected {
+				chatFillDisc(renderer, rowRect.X+rowRect.W-25, rowRect.Y+(rowRect.H-18)/2, 18, glassAccent())
+				chatText(renderer, config, font, "✓", ColorTextPrimary(), rowRect.X+rowRect.W-29, rowRect.Y+(rowRect.H-int32(font.Height()))/2)
+			} else if chatVoiceSelectable(row) {
+				chatFillDisc(renderer, rowRect.X+rowRect.W-25, rowRect.Y+(rowRect.H-18)/2, 18, glassA(20))
+			}
 		})
 	}
+	voiceLabel := "Voice Channel"
+	if n := len(chatMembers.selected); n > 0 {
+		voiceLabel = fmt.Sprintf("Voice Channel (%d)", n)
+	}
+	buttonW := int32(210)
+	chatMembers.voiceButton = UIButton(renderer, config,
+		sdl.Rect{X: r.X + (r.W-buttonW)/2, Y: r.Y + r.H - layout.footerH + 8, W: buttonW, H: 34},
+		voiceLabel, UIButtonStyle{Variant: UIButtonPrimary, Font: font}, UIButtonState{})
 
 	// Keep the action hints visible when a larger font leaves no room for the
 	// optional scroll hint.
-	hint := hintLine(FooterHint{"A", "Open"}, FooterHint{"B", "Close"})
+	hint := hintLine(FooterHint{"A", "Profile"}, FooterHint{"X", "Select"}, FooterHint{"Y", "Voice"}, FooterHint{"B", "Close"})
 	if len(chatMembers.rows) > layout.visible {
-		withScroll := hintLine(FooterHint{"Up/Down", "Move"}, FooterHint{"A", "Open"}, FooterHint{"B", "Close"})
+		withScroll := hintLine(FooterHint{"Up/Down", "Move"}, FooterHint{"X", "Select"}, FooterHint{"Y", "Voice"}, FooterHint{"B", "Close"})
 		if w, _, _ := font.SizeUTF8(withScroll); int32(w) <= r.W-2*pad {
 			hint = withScroll
 		}
 	}
 	hint = ellipsize(font, hint, max32(1, r.W-2*pad))
 	hintW, _, _ := font.SizeUTF8(hint)
-	renderText(renderer, config, font, hint, ColorTextTertiary(), r.X+(r.W-int32(hintW))/2, r.Y+r.H-layout.footerH+10)
+	renderText(renderer, config, font, hint, ColorTextTertiary(), r.X+(r.W-int32(hintW))/2, r.Y+r.H-23)
+}
+
+func chatVoiceSelectable(p chatMemberProfile) bool {
+	return !p.Local && !p.Bot && !p.AI && !p.System && p.Name != ""
+}
+
+func chatVoiceSelectFocused() {
+	if chatMembers.focus < 0 || chatMembers.focus >= len(chatMembers.rows) {
+		return
+	}
+	p := chatMembers.rows[chatMembers.focus]
+	if !chatVoiceSelectable(p) {
+		showToast("Select someone else to invite", ToastInfo())
+		return
+	}
+	if chatMembers.selected == nil {
+		chatMembers.selected = make(map[string]chatMemberProfile)
+	}
+	if _, ok := chatMembers.selected[p.Key]; ok {
+		delete(chatMembers.selected, p.Key)
+	} else {
+		if len(chatMembers.selected) >= chatVoiceMaxMembers-1 {
+			showToast("A Voice Channel holds up to 8 people", ToastInfo())
+			return
+		}
+		chatMembers.selected[p.Key] = p
+	}
+	PlayNavSound()
+}
+
+func chatVoiceStartMembers(config *Config) {
+	names := make([]string, 0, len(chatMembers.selected))
+	for _, p := range chatMembers.rows {
+		if _, ok := chatMembers.selected[p.Key]; ok {
+			names = append(names, p.Name)
+		}
+	}
+	if len(names) == 0 && chatMembers.focus >= 0 && chatMembers.focus < len(chatMembers.rows) {
+		if p := chatMembers.rows[chatMembers.focus]; chatVoiceSelectable(p) {
+			names = append(names, p.Name)
+		}
+	}
+	closeChatMembers()
+	chatVoiceStartFor(config, names)
 }

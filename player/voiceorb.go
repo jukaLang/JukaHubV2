@@ -50,6 +50,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -143,11 +144,11 @@ const (
 	// the Voice command page's voiceEndQuietMs: the orb is for quick
 	// back-and-forth, and every millisecond here is waited before Juka can
 	// even start on the answer. A held button still keeps a clip open.
-	orbEndQuietMs = 800
+	orbEndQuietMs = 600
 	// orbEndQuietFastMs is the pause that ends a clip once the streaming
 	// recognizer has also heard the sentence end (Vosk's endpoint: about half
 	// a second of trailing silence after a word, stt_stream.go).
-	orbEndQuietFastMs = 450
+	orbEndQuietFastMs = 350
 )
 
 // voiceOrbMenuKey is the Custom setting behind Settings → Controls → "Menu
@@ -191,6 +192,7 @@ var voiceOrb struct {
 	// "Hey Juka" handed over words already said).
 	stream    *sttStream
 	skipUntil uint64
+	clipEnded time.Time // for measuring recognition latency on the handheld
 
 	// The press of the voice button that opened the listen, for push-to-talk.
 	pressAt  uint64
@@ -1020,12 +1022,13 @@ func voiceOrbListen(config *Config) {
 	}
 	voiceOrb.buf = voiceOrb.buf[:0]
 	voiceOrb.started = orbNow()
+	voiceOrb.clipEnded = time.Time{}
 	voiceOrb.skipUntil = voiceOrb.started + voiceChimeMs
 	voiceOrb.level, voiceOrb.peak = 0, 0
 	voiceOrb.vad = orbVAD{}
 	// Offline recognition decodes the clip while it is recorded, so its words
 	// are ready as soon as the speaker stops (stt_stream.go).
-	if sttStreamWanted(config) {
+	if sttStreamWanted(config, hand != nil) {
 		voiceOrb.stream = sttStreamStart(sttStreamOpts{partialEvery: sttStreamPartialEvery})
 	}
 	// Words said straight after "Hey Juka" are the start of the clip; the
@@ -1189,6 +1192,7 @@ func voiceOrbFinish(config *Config) {
 		return
 	}
 	st.Finish()
+	voiceOrb.clipEnded = time.Now()
 	key := strings.TrimSpace(groqAPIKey())
 	if config == nil {
 		config = appConfig
@@ -1227,6 +1231,9 @@ func voiceOrbFinish(config *Config) {
 func voiceOrbTranscribed(gen int, text string, err error) {
 	if gen != voiceOrb.gen || voiceOrb.phase != orbThinking || voiceOrb.ai || !voiceOrbActive() {
 		return
+	}
+	if !voiceOrb.clipEnded.IsZero() {
+		logDebug("voice", "speech transcript ready %s after the clip", time.Since(voiceOrb.clipEnded).Round(time.Millisecond))
 	}
 	voiceOrb.cancel = nil
 	if err != nil {
@@ -1650,7 +1657,7 @@ func voiceOrbAnswered(gen int, question, reply string, err error, local, unmatch
 	if local {
 		live.Stop()
 		ttsSpeakFrom(ttsFromOrb, ttsKindVoice, reply)
-		offlineAIMaybeUpgrade() // a package without the fast server updates itself (offline_ai_install.go)
+		offlineAIMaybeUpgrade() // older model and server packages can update (offline_ai_install.go)
 	} else {
 		// Juka says it too, most of it already (tts_live.go).
 		voiceOrbFinishLive(live, ttsFromOrb, raw)

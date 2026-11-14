@@ -1242,6 +1242,7 @@ func launchEmulatorEntry(e emuEntry) {
 		cmd = exec.Command(path)
 	}
 	cmd.Dir = dir
+	ppssppPrepareManagedLaunch(path, cmd)
 	// Own process group, same rule as the game launcher: a wrapper script that
 	// backgrounds the emulator would otherwise return the screen early.
 	screenChildGroupConfigure(cmd)

@@ -1,0 +1,80 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestPPSSPPTrimuiHomeRepairsKeyboardAndGraphics(t *testing.T) {
+	sys := t.TempDir()
+	graphics := filepath.Join(sys, "ppsspp.ini")
+	controls := filepath.Join(sys, "controls.ini")
+	if err := os.WriteFile(graphics, []byte("[General]\nLanguage = en_US\n[Graphics]\nGraphicsBackend = 3 (VULKAN)\nDisplayAspectRatio = 0.848000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(controls, []byte("[ControlMapping]\nCross = 1-44\nCircle = 1-27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ppssppPrepareTrimuiHome(sys, "tg5040")
+	gotGraphics, _ := os.ReadFile(graphics)
+	if !strings.Contains(string(gotGraphics), "GraphicsBackend = 0 (OPENGL)") || !strings.Contains(string(gotGraphics), "DisplayAspectRatio = 0.848000") || !strings.Contains(string(gotGraphics), "Language = en_US") {
+		t.Fatalf("graphics were not repaired without losing settings: %s", gotGraphics)
+	}
+	gotControls, _ := os.ReadFile(controls)
+	if !strings.Contains(string(gotControls), "Cross = 1-44,10-189") || !strings.Contains(string(gotControls), "An.Up = 10-4003") {
+		t.Fatalf("keyboard and pad were not both mapped: %s", gotControls)
+	}
+	ppssppPrepareTrimuiHome(sys, "tg5040")
+	again, _ := os.ReadFile(controls)
+	if string(again) != string(gotControls) {
+		t.Fatal("the mapping was appended a second time")
+	}
+	if !regularFile(controls+".bak") || !regularFile(graphics+".bak") {
+		t.Fatal("the previous settings were not backed up")
+	}
+}
+
+func TestPPSSPPFirstManagedLaunchRepairsExistingHome(t *testing.T) {
+	root, _ := ppssppTestEnv(t)
+	b := ppssppTestBuild(t, root, "6.2.0", "1.20.3")
+	ppssppMgr.mu.Lock()
+	st := ppssppLockedState()
+	st.Builds, st.Active = []ppssppBuild{b}, b.Tag
+	ppssppMgr.mu.Unlock()
+	cmd := exec.Command("sh", b.script())
+	ppssppPrepareManagedLaunch(b.script(), cmd)
+	foundVideo := false
+	for _, item := range cmd.Env {
+		foundVideo = foundVideo || item == "SDL_VIDEODRIVER=mali"
+	}
+	if !foundVideo || !regularFile(filepath.Join(b.memstick(), "SYSTEM", "controls.ini")) ||
+		!regularFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")) {
+		t.Fatal("the first game did not prepare the managed PPSSPP before launch")
+	}
+	other := exec.Command("sh", "other.sh")
+	ppssppPrepareManagedLaunch("/outside/jukahub-ppsspp.sh", other)
+	if other.Env != nil {
+		t.Fatal("another emulator inherited PPSSPP's video driver")
+	}
+}
+
+func TestPPSSPPTrimuiHomeKeepsPackagedControllerMap(t *testing.T) {
+	sys := t.TempDir()
+	controls := filepath.Join(sys, "controls.ini")
+	packaged := "\ufeff[ControlMapping]\nUp = 10-19\nCross = 10-189\n"
+	if err := os.WriteFile(controls, []byte(packaged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ppssppPrepareTrimuiHome(sys, "tg5040")
+	got, _ := os.ReadFile(controls)
+	if !strings.Contains(string(got), "Up = 10-19") || !strings.Contains(string(got), "Cross = 10-189") || !strings.Contains(string(got), "Down = 10-20") || strings.Count(string(got), "[ControlMapping]") != 1 {
+		t.Fatalf("the packaged mapping was not preserved and completed: %q", got)
+	}
+	graphics, _ := os.ReadFile(filepath.Join(sys, "ppsspp.ini"))
+	if !strings.Contains(string(graphics), "GraphicsBackend = 0 (OPENGL)") {
+		t.Fatal("a build without an ini got no safe graphics backend")
+	}
+}

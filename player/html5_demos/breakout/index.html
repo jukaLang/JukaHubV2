@@ -1,7 +1,9 @@
 <!doctype html>
 <html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#100d25">
 <title>Brick Bounce</title>
 <style>
   :root { color-scheme: dark; font: 600 16px system-ui, sans-serif; background: #100d25; color: #fff2ef; }
@@ -11,6 +13,7 @@
   header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
   h1 { margin: 0; font-size: clamp(26px, 5vw, 42px); color: #ffb87e; }
   .score { color: #d5bee9; font-variant-numeric: tabular-nums; }
+  .score output { font: inherit; }
   canvas { display: block; width: 100%; aspect-ratio: 16/9; border: 2px solid #7a528d; border-radius: 16px; background: #130e2a; box-shadow: 0 15px 60px #0008; touch-action: none; }
   .controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 16px 0; }
   button { min-width: 70px; min-height: 50px; border: 1px solid #a272b0; border-radius: 12px; background: #432953; color: #fff2ef; font: inherit; cursor: pointer; touch-action: none; }
@@ -19,11 +22,13 @@
   .move { display: flex; gap: 6px; }
   p { color: #d5bee9; font-size: 14px; margin: 8px 0 0; }
 </style>
+</head>
+<body>
 <main>
-  <header><h1>Brick Bounce</h1><div class="score">Score <span id="score">0</span> · Lives <span id="lives">3</span></div></header>
-  <canvas id="game" width="960" height="540" aria-label="Brick breaker game board"></canvas>
-  <div class="controls"><button id="start">Start / Restart</button><div class="move"><button data-move="-1" aria-label="Move left">◀</button><button data-move="1" aria-label="Move right">▶</button></div></div>
-  <p>Arrow keys or A/D · Stick or D-pad · Drag on the board · Clear every brick</p>
+  <header><h1>Brick Bounce</h1><p class="score" aria-live="polite" aria-atomic="true">Score <output id="score">0</output> · Lives <output id="lives">3</output></p></header>
+  <canvas id="game" width="960" height="540" role="img" aria-label="Brick breaker game board" aria-describedby="gameHint">Brick Bounce game board.</canvas>
+  <div class="controls"><button id="start" type="button">Start / Restart</button><div class="move" role="group" aria-label="Paddle controls"><button type="button" data-move="-1" aria-label="Move left">◀</button><button type="button" data-move="1" aria-label="Move right">▶</button></div></div>
+  <p id="gameHint">Arrow keys or A/D · Stick or D-pad · Drag on the board · Clear every brick</p>
 </main>
 <script>
 (() => {
@@ -84,4 +89,5 @@
   draw();requestAnimationFrame(frame);
 })();
 </script>
+</body>
 </html>

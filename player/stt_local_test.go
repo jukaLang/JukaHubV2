@@ -88,6 +88,25 @@ func TestSTTPreviewChoiceKeepsOfflineAudioLocal(t *testing.T) {
 	}
 }
 
+func TestSTTWakeHandoffKeepsFastFallbackWithoutChangingGroqPreference(t *testing.T) {
+	cloud, first, fallback := sttPreviewChoice(sttModeAuto, "key", true, true)
+	if !cloud || first || !fallback {
+		t.Fatalf("automatic mode no longer prefers Groq: cloud=%t first=%t fallback=%t", cloud, first, fallback)
+	}
+	if !sttStreamChoice(sttModeAuto, "key", true, true, true) {
+		t.Fatal("a warm wake-word recognizer should prepare Groq's offline fallback")
+	}
+	if sttStreamChoice(sttModeAuto, "key", true, true, false) {
+		t.Fatal("ordinary Groq capture should not start an unnecessary local stream")
+	}
+	if sttStreamChoice(sttModeGroq, "key", true, true, true) {
+		t.Fatal("Groq-only mode should not start a local stream")
+	}
+	if !sttStreamChoice(sttModeAuto, "", false, true, false) {
+		t.Fatal("offline automatic mode should stream its first-choice recognizer")
+	}
+}
+
 func TestSTTMenuWorksWithoutGroq(t *testing.T) {
 	for _, mode := range []string{sttModeAuto, sttModeOffline} {
 		if !sttListenAvailable(mode, true, "", false) {

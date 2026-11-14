@@ -823,10 +823,24 @@ func screensaverAutoTick(config *Config, now time.Time) {
 }
 
 // idleScreenHoldOffFrom is the pure decision at the heart of the gate: the
-// screen stays awake while a modal owns the UI, while audio or video plays, and
-// while a download or install is running.
-func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, videoBusy, downloadActive, patchBusy bool) bool {
-	return uiBlocked || musicPlaying || musicPaused || videoBusy || downloadActive || patchBusy
+// screen stays awake while a modal owns the UI, while audio or video plays,
+// while an AI answer is being thought out or spoken, and while a download or
+// install is running.
+func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, videoBusy, downloadActive, patchBusy, aiBusy bool) bool {
+	return uiBlocked || musicPlaying || musicPaused || videoBusy || downloadActive || patchBusy || aiBusy
+}
+
+// aiHoldsScreenAwake reports whether Juka is thinking or responding. An answer
+// is use without input: the idle screen must not cover it while the user waits,
+// and the same rule keeps Auto sleep from interrupting a long answer.
+func aiHoldsScreenAwake() bool {
+	if chatAIBusy.Load() || jukaSpeaking() {
+		return true
+	}
+	// The voice orb's own answer does not use the chat queue. It is thinking
+	// when it has an AI request in flight; once the answer starts, the TTS check
+	// above keeps the panel awake.
+	return voiceOrbActive() && voiceOrb.phase == orbThinking && voiceOrb.ai
 }
 
 // idleScreenHoldOff reports whether something is using the device right now, so
@@ -841,6 +855,7 @@ func idleScreenHoldOff(config *Config) bool {
 		videoHoldsScreenAwake() || synthHoldsScreenAwake(),
 		installInProgress(),
 		patchInstallBusy(),
+		aiHoldsScreenAwake(),
 	)
 }
 

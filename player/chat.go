@@ -643,6 +643,9 @@ var chatSendBtnRect sdl.Rect
 // of the composer.
 var chatAttachBtnRect sdl.Rect
 
+// chatVoiceMicRect is the record/stop button beside the paperclip.
+var chatVoiceMicRect sdl.Rect
+
 // chatInputRect is the composer's text field (a click starts typing).
 var chatInputRect sdl.Rect
 

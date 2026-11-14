@@ -617,6 +617,7 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if err != nil {
 		return err
 	}
+	ppssppPrepareManagedLaunch(launcher, cmd)
 	cmd.Dir = filepath.Dir(launcher)
 	if strings.EqualFold(filepath.Ext(launcher), ".dll") && name != "" {
 		// A Windows core starts the RetroArch beside it: run from its folder.
@@ -803,5 +804,6 @@ func recordGameRecent(game libraryGame) []recentGame {
 		logWarn("library", "cannot save recents: %v", err)
 	}
 	gameRecentsMu.Unlock()
+	homeConsoleRecordGame(game.Path)
 	return append([]recentGame(nil), next...)
 }

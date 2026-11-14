@@ -1030,6 +1030,7 @@ handle, roles and last message.
 | A | Type a message; on a selected message, open its actions; on a waiting file, take it off the message |
 | Start | Send what is typed and attached (with nothing to send, Start opens the Start menu as everywhere) |
 | X | Attach files: Files opens to pick them |
+| Microphone beside the paperclip / V | Start or finish a voice clip; the finished clip waits in the attachment tray until Send |
 | Y | The tab's own action: **People** in the community tab, **New chat** (or **Add key**) in Juka AI |
 | B / Back | Leave the chat; an open card, list or action bar closes first, and on the waiting files B goes back to the composer |
 
@@ -1039,6 +1040,13 @@ Ctrl+Enter sends, **X** attaches files, Del takes the waiting file under the
 cursor off the message, and **R** renames you (so do a click on your name at
 the top right and **Rename** on your own card in People, which is there before
 you have written anything).
+
+For live voice, open **People**, mark one or more names with **X** or click the
+circle beside a name, then press
+**Y** or **Voice Channel**. A Voice Channel invite appears in the community
+conversation; select it and choose **Join Voice** to join from another JukaHub.
+The call stays active when you return to Chat. See [Voice clips and Voice
+Channels](VOICE_CHANNEL.md) for call controls and Internet relay setup.
 
 ### Sending files
 
