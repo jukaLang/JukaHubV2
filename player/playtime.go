@@ -19,6 +19,13 @@ const (
 	playtimeSceneName     = "Playtime"
 	playtimeSaveInterval  = 30 * time.Second
 	playtimeMaxFrameDelta = 5 * time.Second
+	// playtimeTimeSaveInterval spaces the saves made only because time
+	// accrued. Every save rewrites the whole jukauser.json (and its .bak) on
+	// a FAT32 card with no journal; at 30 s a handheld sitting on Home wrote
+	// it 120 times an hour (report JH-SQRMFB). A trophy event still saves
+	// within playtimeSaveInterval, and exit flushes (playtimeFlush), so at
+	// most two minutes of screen time are lost to a power cut.
+	playtimeTimeSaveInterval = 2 * time.Minute
 )
 
 type playtimeData struct {
@@ -536,7 +543,7 @@ func playtimeTick(config *Config) {
 	playtimeRecord(whole, scene)
 	playtimeLimitsTick(config)
 
-	if now.Sub(playtime.lastSave) >= playtimeSaveInterval {
+	if now.Sub(playtime.lastSave) >= playtimeTimeSaveInterval {
 		playtimePersist(config)
 	}
 }

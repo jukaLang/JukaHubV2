@@ -279,7 +279,7 @@ func shortDuration(d time.Duration) string {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
 	mins := int(d / time.Minute)
-	secs := int(d % time.Minute)
+	secs := int((d % time.Minute) / time.Second) // not nanoseconds ("31m8000000000s")
 	if secs == 0 {
 		return fmt.Sprintf("%dm", mins)
 	}

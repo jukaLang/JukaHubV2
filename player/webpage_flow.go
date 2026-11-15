@@ -427,10 +427,6 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 	} else {
 		width = webBlockContentWidth(block, contentW, l.baseSize)
 	}
-	if style.BoxSizing == 1 && !autoWidth {
-		// webBlockContentWidth already removed the padding from an explicit
-		// border-box width; nothing further to do here.
-	}
 	maxWidth := contentW - leftActive - rightActive
 	if maxWidth < 16 {
 		maxWidth = contentW

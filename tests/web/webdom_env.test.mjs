@@ -64,6 +64,8 @@ function mockTransform(src) {
   });
   body = body.replace(/\bimport\.meta\b/g, '__jh.meta').replace(/\bimport\s*\(/g, '__jh.dyn(');
   const prologue = (exps.length ? `__jh.exp({ ${exps.join(', ')} });` : '') + pre.join('') + binds.join('');
+  // This harness intentionally executes JavaScript supplied by in-repo test fixtures.
+  // codeql[js/bad-code-sanitization]
   return { code: `(function (__jh) { return (async function () { "use strict"; ${prologue}\n${body}\n})(); })`, imports, error: null };
 }
 
@@ -463,6 +465,16 @@ test('window.open(_self) and anchor-style navigation; reload is ignored', async 
   const r = await runPage('<body><script>location.reload(); location.replace(location.href + "#x"); window.open("/self", "_self"); var w = window.open("/popup"); document.body.dataset.w = String(w);</script></body>');
   assert.deepEqual(r.state.navigations, [['https://example.test/self', false]]);
   assert.match(r.out, /data-w="null"/);
+});
+
+test('navigation ignores non-web URL schemes', async () => {
+  const r = await runPage(`<body><script>
+    location.href = 'javascript:alert(1)';
+    location.href = 'data:text/html,hi';
+    location.href = 'file:///etc/passwd';
+    location.href = '/safe';
+  </script></body>`);
+  assert.deepEqual(r.state.navigations, [['https://example.test/safe', false]]);
 });
 
 // ---------------------------------------------------------------- storage

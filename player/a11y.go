@@ -311,13 +311,16 @@ func a11yStore(config *Config) {
 }
 
 // a11ySave writes the settings back through the same user-config writer the
-// Settings scenes use, so nothing else in the snapshot is lost.
+// Settings scenes use, so nothing else in the snapshot is lost. That writer is
+// the debounced one: a held Left/Right on a size or speed row calls this every
+// repeat, and the direct writer rewrote jukauser.json up to ten times a second
+// (tester report JH-RT2AJY). Exit and every reader flush it.
 func a11ySave(config *Config) {
 	a11yStore(config)
 	if config == nil {
 		return
 	}
-	saveUserConfig(userConfigFromVariables(config))
+	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
 // a11yApplyVision makes the live token state match the saved toggles. The

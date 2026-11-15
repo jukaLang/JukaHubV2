@@ -1,0 +1,5 @@
+{
+  "label": "Save board for JukaHub OS",
+  "launch": "launch.sh",
+  "description": "Copies this Smart Pro's boot files to the SD card (read-only, takes a few minutes)"
+}

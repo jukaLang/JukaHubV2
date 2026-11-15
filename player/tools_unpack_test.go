@@ -298,6 +298,26 @@ func TestExtractToolFilesZipSkipsSymlink(t *testing.T) {
 	}
 }
 
+func TestExtractToolFilesZipRejectsTraversal(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "bundle.zip")
+	writeUnzipTestArchive(t, archive, func(zw *zip.Writer) {
+		w, err := zw.Create("../../ffmpeg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("binary")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	root := t.TempDir()
+	if _, err := extractToolFiles(archive, root, []string{"ffmpeg"}); !errors.Is(err, errBadToolArchive) {
+		t.Fatalf("traversal archive was accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ffmpeg")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("traversal archive installed a file: %v", err)
+	}
+}
+
 func TestUnsafeArchiveName(t *testing.T) {
 	for _, name := range []string{"../evil", "pkg/../../evil", `..\evil`, `pkg\..\..\evil`, "/etc/passwd", `C:\Windows\System32\evil.dll`, "C:ffmpeg", "/..", "pkg/.."} {
 		if !unsafeArchiveName(name) {

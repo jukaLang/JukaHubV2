@@ -100,7 +100,11 @@ func launchRetroArchMenu(e emuEntry) {
 		return
 	}
 	dir := filepath.Dir(bin)
-	cmd := exec.Command(bin)
+	args := []string{}
+	if jukaosNativeActive() && filepath.Clean(dir) == "/mnt/SDCARD/RetroArch" {
+		args = append(args, "--config", filepath.Join(dir, "retroarch.cfg"))
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
 	// HOME is where TrimUI's build finds retroarch.cfg and .retroarch/; the rest
 	// is the environment the firmware's menu would give it.

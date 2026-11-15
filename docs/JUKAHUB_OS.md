@@ -44,7 +44,7 @@ JukaHub OS — no need to open the app once and switch anything on.
 
 **The Speed layer.** The package ships one layer, switched on:
 `os/layers/speed` (source: `player/trimui/os-layers/speed/layer.json`). It is
-the tuning the fast handheld systems (TortOS, ChaOS) are known for, done with
+the tuning fast handheld systems such as TortOS are known for, done with
 values the stock kernel already has: the SD card and internal storage
 (`mmcblk0`, `mmcblk1`) get the `noop` scheduler (flash has no seek to schedule
 around), 512 KB read-ahead and no entropy or I/O accounting work;
@@ -185,18 +185,17 @@ layers). The next power-on is JukaHub OS again.
   folder over the path an emulator expects; a generated layer per firmware is a
   follow-up.
 - Installing a layer from a `.zip` in Files.
-- **A JukaHub OS image on TortOS's own Linux.** TortOS 2 and ChaOS (built on
-  TortOS, Brick only) are fast mostly because the card *is* the system: they
-  run on [plastron](https://github.com/tarikbc/plastron) (now ZyperOS) — U-Boot
-  and TF-A built from source and Allwinner's Linux 4.9.191 for the A133 (from
-  Creality's Sonic Pad SDK, with mainline's exFAT driver and a charger driver)
-  — and reach their menu about 1.9 s after power-on. Their drivers cannot be a
-  layer on the stock system: a kernel module loads only into the kernel it was
-  built with (JukaHub's loader checks vermagic and refuses the rest). A JukaHub
-  image would build plastron's Brick bootloader and kernel and put JukaHub where
-  TortOS's shelf runs. Open: plastron leaves out the PowerVR GE8300 GPU
-  libraries and the Wi-Fi firmware (closed; its PROPRIETARY.txt names them;
-  TortOS's emulator draws to the raw framebuffer), and JukaHub's SDL2 needs a
-  video path; the Smart Pro (A133 Plus) needs its own board files (device
-  tree, 1280×720 panel, sticks, LEDs); plastron's and TortOS's licences must
-  allow it. MODERNIZATION SYS-24.
+- A released standalone image for both devices. Both image builders below
+  still need a hardware boot and timing test.
+
+## Standalone image development
+
+The separate, plastron-based Brick image build lives in
+[`os/plastron/README.md`](../os/plastron/README.md). It boots from an SD card
+with JukaHub as its own shell. The Smart Pro image build lives in
+[`os/smartpro/README.md`](../os/smartpro/README.md): plastron has no Smart Pro
+board, so that card boots the Smart Pro's own bootloader, kernel and drivers,
+saved from the device by `dump-board.sh`, with JukaHub's own process 1 in
+place of the stock startup and menu; the internal storage is never written.
+The package described above is still the stock-firmware session edition; it
+is a different install.

@@ -137,13 +137,13 @@ func audioFilesIn(dir string) []FileEntry {
 	if strings.TrimSpace(dir) == "" {
 		dir = "."
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := readUserDir(dir)
 	if err != nil {
 		return nil
 	}
 	var out []FileEntry
 	for _, e := range entries {
-		if e.IsDir() || !isAudioFile(e.Name()) {
+		if !e.Type().IsRegular() || !isAudioFile(e.Name()) {
 			continue
 		}
 		out = append(out, FileEntry{Name: e.Name(), Path: filepath.Join(dir, e.Name())})
@@ -404,7 +404,6 @@ func musicSceneEnter() {
 	}
 	musicShelf.open = true
 	mlibStartScan(appConfig, false)
-	return
 }
 
 // ──────────────────────────────────────────────────────────────────────

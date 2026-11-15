@@ -98,6 +98,33 @@ func TestBtSystemReadings(t *testing.T) {
 			t.Errorf("bluealsaArgsHaveSource(%q) = %v; want %v", cmdline, got, source)
 		}
 	}
+	// The D-Bus name a command line takes, and the BlueALSA names a
+	// ListNames reply holds.
+	for _, c := range [][2]string{
+		{"bluealsa -p a2dp-source", "org.bluealsa"},
+		{"bluealsa -B trimui -p a2dp-source", "org.bluealsa.trimui"},
+		{"bluealsa --dbus=sink", "org.bluealsa.sink"},
+		{"bluealsa -Bx", "org.bluealsa.x"},
+	} {
+		if got := bluealsaArgsService(strings.Fields(c[0])); got != c[1] {
+			t.Errorf("bluealsaArgsService(%q) = %q; want %q", c[0], got, c[1])
+		}
+	}
+	names := `method return time=1 sender=org.freedesktop.DBus -> destination=:1.9 serial=3 reply_serial=2
+   array [
+      string "org.freedesktop.DBus"
+      string "org.bluez"
+      string "org.bluealsa.trimui"
+      string "org.bluealsatool"
+      string "org.bluealsa.trimui"
+   ]`
+	if got := strings.Join(parseBluealsaBusNames(names), " "); got != "org.bluealsa.trimui" {
+		t.Errorf("parseBluealsaBusNames = %q; want org.bluealsa.trimui", got)
+	}
+	if !bluealsaOffBus("Error org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluealsa was not provided by any .service files") ||
+		bluealsaOffBus("Error org.freedesktop.DBus.Error.NoReply: Did not receive a reply") {
+		t.Error("bluealsaOffBus mistook a missing name for a wedged daemon or back")
+	}
 }
 
 // Nothing but a Bluetooth address is typed into a session after a command

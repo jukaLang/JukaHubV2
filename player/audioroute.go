@@ -676,6 +676,18 @@ func outSetRoute(pcm string, gain float64) bool {
 	want := sdl.AudioSpec{Freq: 48000, Format: sdl.AUDIO_S16SYS, Channels: 2, Samples: 1024}
 	var got sdl.AudioSpec
 	id, err := outOpenReal(&want, &got, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE, pcm)
+	if err != nil {
+		if own, ok := bluealsaPCMDefine(pcm, err); ok {
+			// ALSA did not know the "bluealsa" PCM; JukaHub's own definition
+			// is tried once per run, and undone when it does not reach
+			// BlueALSA either.
+			pcm = own
+			id, err = outOpenReal(&want, &got, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE, pcm)
+			if err != nil && !bluealsaPCMResolved(err) {
+				bluealsaPCMUndefine(err.Error())
+			}
+		}
+	}
 	outAudio.mu.Lock()
 	defer outAudio.mu.Unlock()
 	if err == nil && gameScreenSuspended() {
@@ -722,7 +734,11 @@ func outSetRoute(pcm string, gain float64) bool {
 
 // bluealsaPCM is the ALSA PCM of a headset's A2DP stream.
 func bluealsaPCM(addr string) string {
-	return "bluealsa:SRV=org.bluealsa,DEV=" + addr + ",PROFILE=a2dp"
+	name := "bluealsa"
+	if bluealsaOwnALSAPath() != "" {
+		name = bluealsaOwnPCMName // the firmware does not define "bluealsa"
+	}
+	return name + ":SRV=" + bluealsaService() + ",DEV=" + addr + ",PROFILE=a2dp"
 }
 
 // audioRouteKicks wakes the output monitor for an early probe.

@@ -12,7 +12,7 @@ installed.
 | D-pad Up / Down | Move through the rows |
 | A | Install PortMaster, open it, launch an installed port, or install a catalogue port |
 | X / Tab | Switch between installed ports and the catalogue |
-| Y / F | Toggle **May Run on ChaOS**, a filter using the port's architecture, hardware requirements and minimum glibc |
+| Y / F | Toggle **May Run Here**, a filter using the port's architecture, hardware requirements and minimum glibc |
 | R1 / S | Search the catalogue by name or description |
 | B / Esc | Back (to Emulators when opened there) |
 
@@ -58,7 +58,7 @@ Duplicate names are listed once. Ports are started with `sh` from their own
 folder, which is the same way the firmware's Ports tab runs them.
 
 The catalogue tab reads PortMaster's live `ports.json`; its number of ports
-changes as that catalogue changes. **May Run on ChaOS** removes ports whose own
+changes as that catalogue changes. **May Run Here** removes ports whose own
 metadata rules out this handheld, including ARM32-only builds and ports that
 require sticks the Brick lacks. It is a compatibility hint, not a guarantee
 that every game file or dependency is present.

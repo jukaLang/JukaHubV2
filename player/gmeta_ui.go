@@ -181,11 +181,9 @@ func gmetaSetFilter(tag string) {
 	gmetaFilter.tag = tag
 	gmetaFilter.paths = nil
 	gameLib.system, gameLib.cursor, gameLib.scroll = 0, 0, 0
-	if tag != "" {
-		gameLib.focus = 1
-	} else {
-		gameLib.focus = 0
-	}
+	// The consoles with tagged games, or that one console's games straight
+	// away (game_library_ui.go).
+	gameLibraryFocusFiltered()
 }
 
 // gmetaClearFilter drops the filter; it reports whether there was one, so Back

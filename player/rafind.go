@@ -134,6 +134,14 @@ func raLocateDevice() raLocation {
 	return loc
 }
 
+// raLocateCached is the last answer without searching (Diagnostics must not
+// walk a card on the thread that draws); ok is false before any search.
+func raLocateCached() (raLocation, bool) {
+	raLocateCache.mu.Lock()
+	defer raLocateCache.mu.Unlock()
+	return raLocateCache.loc, raLocateCache.ok
+}
+
 // raLocateForget drops the cached answer, so the next ask searches again (a
 // RetroArch just installed, a card swapped).
 func raLocateForget() {

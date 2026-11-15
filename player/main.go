@@ -794,6 +794,7 @@ func main() {
 
 	running := true
 	startupReported := false
+	startupGreetingPending := false
 	// The tasks deferStartupTask queued run a few per frame once the first
 	// frame is up (startup.go runDeferredStartupFor).
 	deferredStartupPending := false
@@ -813,6 +814,9 @@ func main() {
 		// costs up to Present, not just the draw calls. Iterations that park
 		// (a game owns the screen) present nothing and record nothing.
 		frameStart := time.Now()
+		if startupGreetingPending && (gameScreenSuspended() || voiceOrbActive()) {
+			startupGreetingPending = false
+		}
 		foreignScreenTick(frameStart)
 		// A game, emulator, port or Wine app owns the screen. JukaHub and the
 		// child share one framebuffer on handheld firmwares (see
@@ -4062,9 +4066,16 @@ func main() {
 				running = false
 				continue
 			}
+			startupGreetingPending = bootVoiceGreetingReady(config)
 			// Only now do the network/background tasks get the CPU — a frame's
 			// worth at a time, so the screen just shown stays responsive.
 			deferredStartupPending = true
+		}
+		if startupGreetingPending && !startupLocked() && !bootChimePlaying() {
+			startupGreetingPending = false
+			if !gameScreenSuspended() && !voiceOrbActive() && !exitRequested.Load() && !jukaSpeaking() {
+				bootSpeakGreeting(config)
+			}
 		}
 		if deferredStartupPending {
 			deferredStartupPending = runDeferredStartupFor(deferredStartupFrameBudget)

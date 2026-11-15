@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2000,6 +2001,15 @@ func saveUserConfigFile(dir string, user *UserConfig, sections bool) {
 		logWarn("extras", "saveUserConfig: marshal error: %v", err)
 		return
 	}
+	// The same bytes this run last wrote, still on disk untouched: nothing to
+	// do. The periodic saves (playtime, header state) mostly carry no change,
+	// and a FAT32 card has no journal to spare the rewrites.
+	if userConfigUnchanged(path, data) {
+		if !sections {
+			userConfigNoteLatest(data)
+		}
+		return
+	}
 	// Keep a short rollback history next to the config. The helper skips an
 	// identical newest snapshot, so debounced saves do not grow the folder.
 	if powerConfigHistoryEnabled {
@@ -2011,10 +2021,56 @@ func saveUserConfigFile(dir string, user *UserConfig, sections bool) {
 		logWarn("extras", "saveUserConfig: write error: %v", err)
 		return
 	}
+	userConfigNoteWritten(path, data)
 	if !sections {
 		userConfigNoteLatest(data)
 	}
 	LogScene("config").Info("user config saved", "path", path)
+}
+
+// userConfigWritten remembers the last jukauser.json this run wrote: where,
+// a hash of its bytes, and the file's size and time right after, so a save of
+// the same bytes over a file nobody else touched since can be skipped.
+var userConfigWritten struct {
+	mu   sync.Mutex
+	path string
+	sum  [32]byte
+	info os.FileInfo
+}
+
+// userConfigNoteWritten records a write saveUserConfigFile just made.
+func userConfigNoteWritten(path string, data []byte) {
+	abs, err := filepath.Abs(path)
+	st, statErr := os.Stat(path)
+	userConfigWritten.mu.Lock()
+	defer userConfigWritten.mu.Unlock()
+	if err != nil || statErr != nil {
+		userConfigWritten.path = ""
+		return
+	}
+	userConfigWritten.path = abs
+	userConfigWritten.sum = sha256.Sum256(data)
+	userConfigWritten.info = st
+}
+
+// userConfigUnchanged reports whether path already holds exactly data as this
+// run wrote it: same bytes, and the very file written then (an atomic write by
+// anyone else is a new file) with its size and time unchanged — a restore, a
+// sync from the companion or a hand edit changes those, and then the save goes
+// through.
+func userConfigUnchanged(path string, data []byte) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	userConfigWritten.mu.Lock()
+	known, sum, info := userConfigWritten.path, userConfigWritten.sum, userConfigWritten.info
+	userConfigWritten.mu.Unlock()
+	if known == "" || known != abs || info == nil || sum != sha256.Sum256(data) {
+		return false
+	}
+	st, err := os.Stat(path)
+	return err == nil && os.SameFile(st, info) && st.Size() == info.Size() && st.ModTime().Equal(info.ModTime())
 }
 
 // userConfigNoteLatest keeps the Variables of a full save just written as the

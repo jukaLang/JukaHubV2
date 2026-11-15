@@ -75,6 +75,9 @@ const (
 	// micNoSoundMs is how long an open device may stay silent before the next
 	// one is tried.
 	micNoSoundMs = 1200
+	// micNoSoundKnownMs is that wait for a device that gave sound earlier in
+	// the run (a quiet room).
+	micNoSoundKnownMs = 6000
 	// micHeardPeak is the sample size (in least significant bits) that counts
 	// as sound: a dead input reads exact zeros or a bit of dither, a live
 	// microphone's own noise is far above it.
@@ -498,7 +501,15 @@ func (m *micStream) Read(dst []byte) int {
 	// that only gave silence is replaced on Linux, where that is a codec input
 	// left off; on a PC silence is a muted microphone or noise suppression,
 	// and the next device in SDL's list could be a webcam or "Stereo Mix".
-	quiet := !m.heard && sdl.GetTicks64()-m.openedAt >= micNoSoundMs && (!m.gotBytes || runtime.GOOS == "linux")
+	// A device that already gave sound this run is in a quiet room, not off,
+	// far more often: Hey Juka swapped the TrimUI codec's two names back and
+	// forth all evening on 1.2 s of quiet (JH-RT2AJY), and each swap closes a
+	// device on this thread. It gets a longer wait instead.
+	noSound := uint64(micNoSoundMs)
+	if micLastGood.set && micLastGood.c == m.cur {
+		noSound = micNoSoundKnownMs
+	}
+	quiet := !m.heard && sdl.GetTicks64()-m.openedAt >= noSound && (!m.gotBytes || runtime.GOOS == "linux")
 	if (dead || quiet) && len(m.cands) > 0 {
 		why := "only silence"
 		switch {

@@ -1,0 +1,232 @@
+#!/bin/sh
+# JukaHub OS on the TrimUI Smart Pro: process 1.
+#
+# The kernel booted the system copy on the SD card read-only with
+# init=/jukahub/init. The bootloader, kernel, drivers and libraries are the
+# device's own (dump-board.sh copied them); this replaces only the stock
+# startup and menu. The internal eMMC is never mounted or written: only
+# partitions on the SD card ("SD" in sysfs) are used.
+#
+# board.env (written by build_image.py) says what the stock system loaded and
+# ran: kernel modules, GPIO lines, hardware daemons, the card's file system.
+J=${JUKAHUB_ROOT:-/jukahub}
+SYS=${JUKAHUB_SYS:-/sys}
+CARD=/mnt/SDCARD
+DATA_NAME=JUKAHUB
+DATA_FSTYPE=vfat
+MODULES=""
+RADIO_MODULES=""
+WIFI=0
+RW=/tmp/.jukahub-rw
+PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/trimui/bin
+export PATH
+CR=$(printf '\r')
+[ -f "$J/board.env" ] && . "$J/board.env"
+
+log() {
+	echo "jukahub-os: $*" > /dev/kmsg 2> /dev/null
+	[ -n "${BOOTLOG:-}" ] && echo "$*" >> "$BOOTLOG" 2> /dev/null
+}
+
+uptime_s() {
+	read -r UP REST < /proc/uptime
+	echo "${UP%%.*}"
+}
+
+# rw_copy DIR: a writable copy of a read-only directory, in memory.
+rw_copy() {
+	[ -d "$1" ] && [ ! -L "$1" ] || return 0
+	mkdir -p "$RW$1" && cp -a "$1/." "$RW$1/" && mount -o bind "$RW$1" "$1"
+}
+
+# card_part NAME: the /dev node of the SD card partition with that GPT name.
+card_part() {
+	for u in "$SYS"/class/block/*/uevent; do
+		grep -qx "PARTNAME=$1" "$u" 2> /dev/null || continue
+		dev=${u%/uevent}
+		dev=${dev##*/}
+		# The link leads into the disk's folder; ".." is its disk.
+		[ "$(cat "$SYS/class/block/$dev/../device/type" 2> /dev/null)" = SD ] || continue
+		echo "/dev/$dev"
+		return 0
+	done
+	return 1
+}
+
+load_modules() {
+	for m in $1; do
+		insmod "$m" 2> /dev/null
+	done
+}
+
+replay_gpio() {
+	[ -f "$J/gpio.list" ] || return 0
+	while read -r num dir value; do
+		case "$num:$dir:$value" in
+			*[!0-9a-z:]*|:*) continue ;;
+		esac
+		g=$SYS/class/gpio/gpio$num
+		[ -d "$g" ] || echo "$num" > "$SYS/class/gpio/export" 2> /dev/null
+		[ -d "$g" ] || continue
+		if [ "$dir" = out ]; then
+			[ "$value" = 1 ] && echo high > "$g/direction" || echo low > "$g/direction"
+		else
+			echo in > "$g/direction"
+		fi
+	done < "$J/gpio.list"
+}
+
+# start_daemons GROUP: the stock daemons of that group, as they were running.
+start_daemons() {
+	[ -f "$J/daemons.list" ] || return 0
+	while IFS='|' read -r group cwd ld cmd; do
+		[ "$group" = "$1" ] || continue
+		(
+			cd "$cwd" 2> /dev/null || cd /
+			if [ -n "$ld" ]; then LD_LIBRARY_PATH=$ld; export LD_LIBRARY_PATH; fi
+			eval "exec $cmd"
+		) < /dev/null > /dev/null 2>&1 &
+	done < "$J/daemons.list"
+}
+
+wifi_conf_in() {
+	[ -f "$CARD/.userdata/smartpro/wpa_supplicant.conf" ] && [ -d /etc/wifi ] &&
+		cp "$CARD/.userdata/smartpro/wpa_supplicant.conf" /etc/wifi/wpa_supplicant.conf
+}
+wifi_conf_out() {
+	[ -f /etc/wifi/wpa_supplicant.conf ] && grep -q " $CARD " /proc/mounts &&
+		cp /etc/wifi/wpa_supplicant.conf "$CARD/.userdata/smartpro/wpa_supplicant.conf.new" &&
+		mv -f "$CARD/.userdata/smartpro/wpa_supplicant.conf.new" "$CARD/.userdata/smartpro/wpa_supplicant.conf"
+}
+
+nap() { sleep 0.2 2> /dev/null || sleep 1; }
+
+# users_left: is any program still running besides process 1? Kernel threads
+# have no executable; finished children (zombies) neither.
+users_left() {
+	for p in /proc/[0-9]*; do
+		[ "${p#/proc/}" = 1 ] && continue
+		[ -e "$p/exe" ] && return 0
+	done
+	return 1
+}
+
+radios() {
+	load_modules "$RADIO_MODULES"
+	[ "$WIFI" = 1 ] || return 0
+	wifi_conf_in
+	# The driver names its interface a moment after it loads.
+	i=0
+	while [ "$i" -lt 25 ] && ! ls -d "$SYS"/class/net/wlan* > /dev/null 2>&1; do
+		nap
+		i=$((i + 1))
+	done
+	start_daemons radio
+}
+
+shutdown() {
+	trap '' USR1 USR2 TERM INT
+	log "$1"
+	kill -TERM -1 2> /dev/null
+	# Up to three seconds for a game or app to save and quit.
+	i=0
+	while [ "$i" -lt 15 ] && users_left; do
+		nap
+		i=$((i + 1))
+	done
+	wifi_conf_out
+	sync
+	kill -KILL -1 2> /dev/null
+	sleep 1
+	umount /mnt/UDISK 2> /dev/null
+	umount "$CARD" 2> /dev/null || mount -o remount,ro "$CARD" 2> /dev/null
+	sync
+	if [ "$1" = reboot ]; then reboot -f; else poweroff -f; fi
+	# Only reached if the kernel refused: never let process 1 end.
+	while :; do sleep 3600; done
+}
+
+fatal() {
+	log "cannot start: $*"
+	echo "JukaHub OS cannot start: $*" > /dev/tty0 2> /dev/null
+	echo "Remove the SD card and hold Power to start the stock system." > /dev/tty0 2> /dev/null
+	sleep 30
+	shutdown poweroff
+}
+
+main() {
+	mount -t proc proc /proc
+	mount -t sysfs sysfs /sys
+	# No hotplug helper from the stock system: its rules could mount the
+	# internal storage when a disk or module appears.
+	echo > /proc/sys/kernel/hotplug 2> /dev/null
+	echo > /sys/kernel/uevent_helper 2> /dev/null
+	grep -q ' /dev ' /proc/mounts || mount -t devtmpfs devtmpfs /dev
+	# Valid standard descriptors whatever the kernel could open at exec.
+	# (A failed redirection on exec would end the shell, so only with the node.)
+	[ -c /dev/null ] && exec < /dev/null > /dev/null 2>&1
+	mkdir -p /dev/pts /dev/shm
+	mount -t devpts devpts /dev/pts
+	mount -t tmpfs tmpfs /dev/shm
+	mount -t tmpfs -o mode=1777 tmpfs /tmp
+	START=$(uptime_s)
+	log "process 1 at ${START}s"
+	# busybox halt/poweroff/reboot signal process 1 with these.
+	trap 'shutdown halt' USR1
+	trap 'shutdown poweroff' USR2
+	trap 'shutdown reboot' TERM
+	trap '' INT HUP
+
+	# The root is read-only; these get a writable copy in memory.
+	for d in /etc /var /root; do rw_copy "$d"; done
+	[ -d /run ] && [ ! -L /run ] && mount -t tmpfs tmpfs /run
+	mkdir -p /var/run /var/log /var/lock 2> /dev/null
+	[ -f /etc/hostname ] && hostname -F /etc/hostname 2> /dev/null
+
+	load_modules "$MODULES"
+	replay_gpio
+	[ -f "$J/asound.state" ] && command -v alsactl > /dev/null 2>&1 &&
+		alsactl -f "$J/asound.state" restore 2> /dev/null
+
+	i=0
+	DEV=""
+	while [ "$i" -lt 50 ]; do
+		DEV=$(card_part "$DATA_NAME") && break
+		nap
+		i=$((i + 1))
+	done
+	[ -n "$DEV" ] || fatal "the $DATA_NAME partition is not on the SD card"
+	mount -t "$DATA_FSTYPE" -o rw,noatime "$DEV" "$CARD" || fatal "cannot mount $DEV ($DATA_FSTYPE)"
+	mkdir -p "$CARD/.userdata/jukahub" "$CARD/.userdata/smartpro/udisk"
+	BOOTLOG=$CARD/.userdata/jukahub/os.log
+	[ -f "$BOOTLOG" ] && mv -f "$BOOTLOG" "$BOOTLOG.1"
+	: > "$BOOTLOG"
+	log "process 1 at ${START}s, card mounted at $(uptime_s)s"
+	# The stock input daemon reads its stick calibration from /mnt/UDISK.
+	mount -o bind "$CARD/.userdata/smartpro/udisk" /mnt/UDISK
+
+	if [ -f "$CARD/.userdata/jukahub/boot.env" ]; then
+		while IFS='=' read -r KEY VALUE; do
+			# The file may have been edited on Windows.
+			KEY=${KEY%"$CR"}
+			VALUE=${VALUE%"$CR"}
+			case "$KEY:$VALUE" in
+				WIFI:0|WIFI:1) WIFI=$VALUE ;;
+			esac
+		done < "$CARD/.userdata/jukahub/boot.env"
+	fi
+
+	start_daemons hardware
+	sh "$J/launch.sh" < /dev/null > /dev/null 2>&1 &
+	LAUNCHER=$!
+	radios &
+
+	# Process 1 reaps every orphan while it waits for the launcher.
+	while kill -0 "$LAUNCHER" 2> /dev/null; do
+		wait "$LAUNCHER"
+	done
+	wifi_conf_out
+	if [ -f /tmp/jukahub-native-reboot ]; then shutdown reboot; else shutdown poweroff; fi
+}
+
+[ "${JUKAHUB_INIT_TEST:-}" = 1 ] || main "$@"

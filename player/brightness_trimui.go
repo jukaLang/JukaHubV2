@@ -36,7 +36,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -247,26 +246,48 @@ func trimuiSystemJSONIntFrom(data []byte, key string, max int) (v int, ok, inRan
 // set to v, changing nothing else: not the key order, not the spacing, not
 // another number's spelling. Re-encoding the whole document would have
 // rewritten the firmware's file in Go's style. It reports false (and returns
-// data as it was) when the document is not an object with exactly one numeric
-// key, or when v is already the value. Pure.
+// data as it was) when the document does not have exactly one numeric top-level
+// key of that name, or when v is already the value. Nested keys and text that
+// resembles a key are not settings. Pure.
 func trimuiSystemJSONWithInt(data []byte, key string, v, max int) ([]byte, bool) {
 	current, ok, _ := trimuiSystemJSONIntFrom(data, key, max)
 	if !ok {
 		return data, false
 	}
-	member := regexp.MustCompile(`("` + regexp.QuoteMeta(key) + `"\s*:\s*)(-?[0-9]+(?:\.[0-9]+)?)`)
-	matches := member.FindAllSubmatchIndex(data, -1)
-	if len(matches) != 1 {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return data, false
 	}
-	m := matches[0]
-	if current == v && string(data[m[4]:m[5]]) == strconv.Itoa(v) {
+	start, end, matches := 0, 0, 0
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return data, false
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return data, false
+		}
+		if tok != key {
+			continue
+		}
+		matches++
+		end = int(dec.InputOffset())
+		start = end - len(value)
+		if start < 0 || end > len(data) || !bytes.Equal(data[start:end], value) {
+			return data, false
+		}
+	}
+	if matches != 1 {
+		return data, false
+	}
+	if current == v && string(data[start:end]) == strconv.Itoa(v) {
 		return data, false
 	}
 	out := make([]byte, 0, len(data)+2)
-	out = append(out, data[:m[4]]...)
+	out = append(out, data[:start]...)
 	out = append(out, strconv.Itoa(v)...)
-	out = append(out, data[m[5]:]...)
+	out = append(out, data[end:]...)
 	return out, true
 }
 

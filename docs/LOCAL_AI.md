@@ -43,6 +43,13 @@ and stays loaded between lines, so Juka starts talking as soon as the first
 sentence exists. Short command replies, such as "Opening YouTube", use it
 too.
 
+When offline answers and an offline voice are installed, Juka also speaks the
+time-of-day greeting on launch, followed by **Your name** if one is set in
+Settings → General. It waits for the startup chime and follows the **Juka's
+voice** and Quiet Mode settings.
+If the offline voice is missing but Groq's voice is available, Juka uses that
+for the greeting.
+
 ## How it stays fast
 
 On a Smart Pro without Groq, pressing **Menu** starts three things while

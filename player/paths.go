@@ -109,14 +109,51 @@ func regularFileWithin(root, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(resolved)
+	f, err := openRegularFileWithin(root, path)
 	if err != nil {
 		return "", err
 	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", resolved)
-	}
+	f.Close()
 	return resolved, nil
+}
+
+// openRegularFileWithin returns an already-open file anchored to root. Checking
+// the pathname and then opening it separately would allow a symlink swap.
+func openRegularFileWithin(root, path string) (*os.File, error) {
+	resolved, err := resolveWithinRoot(root, path)
+	if err != nil {
+		return nil, err
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	absPath, err := filepath.Abs(resolved)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	f, err := dir.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%q is not a regular file", resolved)
+	}
+	return f, nil
 }
 
 // confinedRegularFile is regularFileWithin with the symbolic-link boundary
@@ -187,6 +224,26 @@ func openUserFile(path string) (*os.File, error) {
 	return root.Open(filepath.Base(clean))
 }
 
+// readUserDir pins a user-selected directory while its entries are listed.
+// A rename of the path cannot redirect the read after the root is opened.
+func readUserDir(path string) ([]os.DirEntry, error) {
+	clean, err := cleanUserPath(path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(clean)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.ReadDir(-1)
+}
+
 // removeWithinRoot removes a path only when it resolves inside root. The
 // removal itself goes through os.Root, so a final component replaced by a
 // link between the check and the call cannot redirect it.
@@ -215,13 +272,28 @@ func existingDirWithin(root, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(resolved)
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("%q is not a directory", resolved)
+	absPath, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", err
 	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	child, err := dir.OpenRoot(rel)
+	if err != nil {
+		return "", err
+	}
+	child.Close()
 	return resolved, nil
 }
 
@@ -233,7 +305,12 @@ func existingRegularFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(clean)
+	f, err := openUserFile(clean)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil {
 		return "", err
 	}

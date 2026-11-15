@@ -779,7 +779,7 @@ if [ "$PROTOC" = "$BUILD_DIR/protoc-wrapper.py" ]; then
     tr -d '\r' < "$NATIVE_DIR/protoc-wrapper.py" > "$PROTOC"
     chmod +x "$PROTOC"
 fi
-# Generated code from an older nanopb still loads with protobuf 4 in its
+# Generated code from an older nanopb still loads with protobuf 5 in its
 # pure-Python implementation.
 PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION:-python}"
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION

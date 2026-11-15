@@ -274,7 +274,7 @@ jobs:
         # single edit.
         shell: bash
         run: |
-          choco install mingw -y --no-progress
+          choco install mingw --version=16.2.0 --requirechecksums -y --no-progress
           bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" /c/sdl2
 
       - name: Point cgo at the SDL2 headers

@@ -7,6 +7,13 @@ gap, not a silent promise.
 
 ## Rendered
 
+### Stylesheet loading
+
+- Linked stylesheets and `@import` inside them, and `@import` inside inline
+  `<style>` blocks. Imports resolve relative to the page or the imported
+  sheet, are bounded and cycle-safe, and keep media-qualified wrappers. Their
+  `url(...)` references resolve against the imported stylesheet.
+
 ### Selectors and generated content
 
 - Type, class, id, attribute, descendant/child/sibling selectors.
@@ -153,7 +160,7 @@ mistaken for working CSS.
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
-| `@import`, `@charset`, `@namespace` | Not fetched or applied. |
+| `@charset`, `@namespace` | Not applied. |
 | `@font-face`, `@keyframes`, `@page`, `@layer` ordering | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated. |
 
 ## Draw-path fixture coverage

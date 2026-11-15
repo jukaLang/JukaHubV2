@@ -143,8 +143,20 @@ func TestTrimuiSystemJSONWithInt(t *testing.T) {
 	if _, changed := trimuiSystemJSONWithInt(out, "brightness", 4, trimuiBrightnessSteps); changed {
 		t.Fatal("the same level must not rewrite the file")
 	}
-	if _, changed := trimuiSystemJSONWithInt([]byte(`{"brightness": 3, "x": {"brightness": 4}}`), "brightness", 5, 10); changed {
-		t.Fatal("two \"brightness\" members are ambiguous and must be left alone")
+	withNested := []byte(`{"brightness": 3, "x": {"brightness": 4}}`)
+	if out, changed := trimuiSystemJSONWithInt(withNested, "brightness", 5, 10); !changed || string(out) != `{"brightness": 5, "x": {"brightness": 4}}` {
+		t.Fatalf("nested brightness must not block the firmware setting: %s, %v", out, changed)
+	}
+	withText := []byte(`{"note": "a quoted \"brightness\": 8", "brightness": 3}`)
+	if out, changed := trimuiSystemJSONWithInt(withText, "brightness", 5, 10); !changed || string(out) != `{"note": "a quoted \"brightness\": 8", "brightness": 5}` {
+		t.Fatalf("text resembling a key must be left alone: %s, %v", out, changed)
+	}
+	withEscapedKey := []byte(`{"brigh\u0074ness": 3, "note": "brightness"}`)
+	if out, changed := trimuiSystemJSONWithInt(withEscapedKey, "brightness", 5, 10); !changed || string(out) != `{"brigh\u0074ness": 5, "note": "brightness"}` {
+		t.Fatalf("escaped top-level key must be updated: %s, %v", out, changed)
+	}
+	if _, changed := trimuiSystemJSONWithInt([]byte(`{"brightness": 3, "brightness": 4}`), "brightness", 5, 10); changed {
+		t.Fatal("duplicate top-level keys are ambiguous and must be left alone")
 	}
 	if _, changed := trimuiSystemJSONWithInt([]byte(`{"vol": 3}`), "brightness", 5, 10); changed {
 		t.Fatal("a file without the key gets no key added")

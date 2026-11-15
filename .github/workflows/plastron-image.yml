@@ -1,0 +1,44 @@
+name: JukaHub OS image checks
+
+on:
+  push:
+    paths:
+      - 'os/**'
+      - 'branding/bootlogo/**'
+      - 'player/trimui/native-os-capability.txt'
+      - '.github/workflows/plastron-image.yml'
+  pull_request:
+    paths:
+      - 'os/**'
+      - 'branding/bootlogo/**'
+      - 'player/trimui/native-os-capability.txt'
+      - '.github/workflows/plastron-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  image-layout:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check Brick image transformation and splash format
+        run: python3 -m unittest discover -s os/plastron -p test_build_image.py -v
+      - name: Check Smart Pro boot area, GPT, U-Boot env and process 1
+        run: python3 -m unittest discover -s os/smartpro -p test_build_image.py -v
+      - name: Check boot scripts (dash and busybox ash)
+        run: |
+          command -v busybox > /dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends busybox > /dev/null
+          }
+          for f in os/plastron/init.sh os/plastron/launch.sh os/plastron/build_retroarch.sh \
+                   os/smartpro/init os/smartpro/launch.sh os/smartpro/dump-board.sh \
+                   os/smartpro/app/launch.sh; do
+            sh -n "$f"
+            busybox sh -n "$f"
+          done
+      - name: The TrimUI package advertises both standalone images
+        run: |
+          grep -qx plastron-brick-v1 player/trimui/native-os-capability.txt
+          grep -qx smartpro-stock-kernel-v1 player/trimui/native-os-capability.txt

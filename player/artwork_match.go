@@ -360,10 +360,22 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 	logDebug("art", "%s: cover %q", stem, name)
 	data, err := artworkDownloadCover(ctx, client, base, rom.Collection, name)
 	if errors.Is(err, os.ErrNotExist) {
+		if idx.recent(time.Now()) {
+			// A list this new still names it: the server lists a cover it does
+			// not give. The names guessed from the file are the last try, and
+			// then it is a real "not found" — fetching the list again would
+			// only name the same file (artworkIndexTrustFor).
+			logDebug("art", "%s: listed cover %q is not served; guessing names", stem, name)
+			data, err = fetchROMArtworkImage(ctx, client, base, rom.Collection, stem)
+			if numbered && errors.Is(err, os.ErrNotExist) {
+				data, err = fetchROMArtworkImage(ctx, client, base, rom.Collection, bare)
+			}
+			return data, err
+		}
 		// The list named a cover the server no longer has: the list is out of
 		// date. Not a "not found" to remember for a month; the next fetch reads
 		// a fresh list.
-		artworkForgetIndex(base, rom.Collection)
+		artworkForgetIndex(base, rom.Collection, idx)
 		return nil, fmt.Errorf("cover %q is listed but missing; the list is refreshed", name)
 	}
 	return data, err
@@ -402,6 +414,28 @@ type artworkIndex struct {
 	// title (artwork_closest.go); built on first use.
 	closeOnce sync.Once
 	byWord    map[string][]int
+
+	// fetched is when this list came from the server (the card copy's date
+	// for a fresh copy); zero for a stale copy kept because a fetch failed.
+	fetched time.Time
+}
+
+// artworkIndexTrustFor is how long a list read from the server is believed
+// when it names a cover the server then does not give (a link to a file that
+// is gone, a file that is no PNG). Before, each such game threw the list away
+// and fetched it again, and the next game did the same: a tester's Atari Lynx
+// batch read its 434-cover list over and over and left 23 games unanswered
+// for every later pass (report JH-SQRMFB, 2026-11-15).
+const artworkIndexTrustFor = 24 * time.Hour
+
+// recent reports whether the list came from the server within
+// artworkIndexTrustFor of now.
+func (idx *artworkIndex) recent(now time.Time) bool {
+	if idx == nil || idx.fetched.IsZero() {
+		return false
+	}
+	age := now.Sub(idx.fetched)
+	return age >= 0 && age < artworkIndexTrustFor
 }
 
 func newArtworkIndex(names []string) *artworkIndex {
@@ -867,9 +901,30 @@ func artworkIndexFor(ctx context.Context, client *http.Client, base, collection 
 }
 
 // artworkForgetIndex drops a console's list from memory and from the card.
-func artworkForgetIndex(base, collection string) {
+// stale is the list the caller found out of date: when another download has
+// already put a newer one in its place (several run at once), that one is
+// kept, in memory and on the card.
+func artworkForgetIndex(base, collection string, stale *artworkIndex) {
 	key := base + "|" + collection
+	cache := artworkIndexCachePath(collection)
 	artworkIndexes.Lock()
+	if cur, ok := artworkIndexes.byKey[key]; ok && cur != stale {
+		artworkIndexes.Unlock()
+		return
+	}
+	if _, busy := artworkIndexes.loading[key]; busy {
+		// A fresh list is being read right now.
+		artworkIndexes.Unlock()
+		return
+	}
+	if _, inMemory := artworkIndexes.byKey[key]; !inMemory && stale != nil && cache != "" {
+		// Gone from memory already (only a few lists stay there): a card copy
+		// written after this list was read is a newer one.
+		if info, err := os.Stat(cache); err == nil && info.ModTime().After(stale.fetched) {
+			artworkIndexes.Unlock()
+			return
+		}
+	}
 	delete(artworkIndexes.byKey, key)
 	kept := artworkIndexes.order[:0]
 	for _, k := range artworkIndexes.order {
@@ -879,7 +934,7 @@ func artworkForgetIndex(base, collection string) {
 	}
 	artworkIndexes.order = kept
 	artworkIndexes.Unlock()
-	if cache := artworkIndexCachePath(collection); cache != "" {
+	if cache != "" {
 		_ = os.Remove(cache)
 	}
 }
@@ -897,7 +952,9 @@ func loadArtworkIndex(ctx context.Context, client *http.Client, base, collection
 				// has no usable age and is refreshed.
 				age := time.Since(info.ModTime())
 				if len(names) > 0 && age >= 0 && age < artworkIndexRefresh {
-					return newArtworkIndex(names), nil
+					idx := newArtworkIndex(names)
+					idx.fetched = info.ModTime()
+					return idx, nil
 				}
 				if len(names) > 0 {
 					stale = names
@@ -915,7 +972,9 @@ func loadArtworkIndex(ctx context.Context, client *http.Client, base, collection
 				}
 			}
 			logInfo("art", "cover list for %s: %d covers", collection, len(names))
-			return newArtworkIndex(names), nil
+			idx := newArtworkIndex(names)
+			idx.fetched = time.Now()
+			return idx, nil
 		}
 	}
 	if stale != nil {

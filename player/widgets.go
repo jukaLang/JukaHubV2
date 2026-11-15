@@ -829,6 +829,9 @@ func ensureSmartSettingsScene(config *Config) {
 		{"Save & suspend at 3%", "lowBatteryGuard",
 			"While a game runs: save state, sync, then suspend."},
 	}
+	if jukaosNativeActive() {
+		rows = rows[1:] // startup belongs to plastron's init, not a login hook
+	}
 	elems := []Element{{
 		Type: "label",
 		Text: "Smart widgets react to the device, not to you.",

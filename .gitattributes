@@ -1,6 +1,9 @@
 # Shell scripts and CI definitions must keep LF endings: they run inside the
 # TrimUI Smart Pro (Linux) and inside the Linux build container.
 *.sh text eol=lf
+# The Smart Pro image's process 1 has no extension: a CR after #!/bin/sh would
+# make the kernel panic at boot.
+os/smartpro/init text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 *.json text eol=lf

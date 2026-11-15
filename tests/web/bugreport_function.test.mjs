@@ -305,13 +305,36 @@ test('a configured Discord webhook hears about the issue, and its failure is ign
   assert.equal(c.calls[2].url, hook);
   const notice = JSON.parse(c.calls[2].init.body);
   assert.deepEqual(notice.allowed_mentions, { parse: [] });
-  assert.ok(notice.content.includes(ISSUE_URL));
+  assert.equal(notice.content.split('\n').at(-1), ISSUE_URL);
 
   const d = collector({ JUKAHUB_DISCORD_WEBHOOK: hook }, [NOT_FOUND, CREATED, new Error('discord down')]);
   assert.equal((await d.handle(post(report()), at('203.0.113.9'))).status, 201);
   const e = collector({ JUKAHUB_DISCORD_WEBHOOK: 'https://evil.example/hook' }, [NOT_FOUND, CREATED]);
   assert.equal((await e.handle(post(report()), at('203.0.113.9'))).status, 201);
   assert.equal(e.calls.length, 2, 'only a Discord webhook address is called');
+  for (const unsafe of [
+    'https://discord.com@evil.example/api/webhooks/1/abc',
+    'https://discord.com/api/webhooks/',
+  ]) {
+    const rejected = collector({ JUKAHUB_DISCORD_WEBHOOK: unsafe }, [NOT_FOUND, CREATED]);
+    assert.equal((await rejected.handle(post(report()), at('203.0.113.9'))).status, 201);
+    assert.equal(rejected.calls.length, 2, `unsafe webhook was called: ${unsafe}`);
+  }
+});
+
+test('issue links are built from the confirmed repository and issue number', async () => {
+  const hook = 'https://discord.com/api/webhooks/1/abc';
+  const forged = 'https://github.com.evil.example/jukaLang/JukaHubV2/issues/42';
+  const c = collector({ JUKAHUB_DISCORD_WEBHOOK: hook }, [
+    NOT_FOUND,
+    { status: 201, body: { number: 42, html_url: forged } },
+    { status: 204 },
+  ]);
+  const resp = await c.handle(post(report()), at('203.0.113.9'));
+  assert.equal((await resp.json()).url, ISSUE_URL);
+  const notice = JSON.parse(c.calls[2].init.body);
+  assert.equal(notice.content.split('\n').at(-1), ISSUE_URL);
+  assert.ok(!notice.content.includes(forged));
 });
 
 test('the Discord notice waits for the answer and cannot carry a masked link', async () => {

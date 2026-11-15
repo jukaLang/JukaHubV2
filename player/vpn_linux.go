@@ -131,7 +131,7 @@ func vpnPlatformProbe() vpnProbe {
 		Tx:        st.Tx,
 	}
 	for _, e := range st.Events {
-		p.Events = append(p.Events, vpnEvent{Seq: e.Seq, Text: e.Text, Warn: e.Warn})
+		p.Events = append(p.Events, vpnEvent(e))
 	}
 	if st.HandshakeAgo >= 0 {
 		p.Handshake, p.HasHandshake = time.Duration(st.HandshakeAgo)*time.Second, true

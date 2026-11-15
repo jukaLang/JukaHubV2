@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 //go:embed fdroid-repo-key.asc
@@ -323,7 +323,7 @@ func fdroidVerifyEntry(raw, signature []byte) (fdroidEntry, error) {
 	if err != nil || len(keys) != 1 || hex.EncodeToString(keys[0].PrimaryKey.Fingerprint[:]) != fdroidRepoKeyFP {
 		return entry, errors.New("F-Droid repository key does not match its pinned fingerprint")
 	}
-	if _, err := openpgp.CheckArmoredDetachedSignature(keys, bytes.NewReader(raw), bytes.NewReader(signature)); err != nil {
+	if _, err := openpgp.CheckArmoredDetachedSignature(keys, bytes.NewReader(raw), bytes.NewReader(signature), nil); err != nil {
 		return entry, fmt.Errorf("F-Droid repository signature failed: %w", err)
 	}
 	if err := json.Unmarshal(raw, &entry); err != nil {

@@ -44,6 +44,9 @@ func screenChildGroupConfigure(cmd *exec.Cmd) {
 	// Spatial audio's system route goes first (spatial_alsa.go): it names the
 	// headset as the end of its own chain, and audioRouteChildEnv then leaves
 	// the two variables it set alone.
+	// JukaHub's own ALSA_CONFIG_PATH (bluealsaPCMDefine) is not a game's: it
+	// goes first, or spatial audio would take it for the game's own.
+	cmd.Env = audioOwnALSAEnvStrip(cmd.Env)
 	cmd.Env = spatialChildEnv(cmd, cmd.Env)
 	cmd.Env = audioRouteChildEnv(cmd.Env)
 }

@@ -444,6 +444,8 @@ export function createHandler(options = {}) {
   // facts table (the same reference on someone else's report is not a match).
   // Any failure means "not found": the search only spares a duplicate and must
   // never stand between a report and the tracker.
+  const issueURL = (repo, number) => `https://github.com/${repo}/issues/${number}`;
+
   const findFiled = async (repo, token, report, deadline) => {
     try {
       const q = encodeURIComponent(`"${report.id}" in:title is:issue repo:${repo}`);
@@ -461,7 +463,7 @@ export function createHandler(options = {}) {
         typeof item.repository_url === 'string' && item.repository_url.toLowerCase().endsWith(repoTail) &&
         typeof item.body === 'string' && item.body.includes(createdRow));
       return hit && Number.isInteger(hit.number) && hit.number > 0
-        ? { issue: hit.number, url: String(hit.html_url || '') }
+        ? { issue: hit.number, url: issueURL(repo, hit.number) }
         : null;
     } catch {
       return null;
@@ -476,9 +478,18 @@ export function createHandler(options = {}) {
   });
 
   const notifyDiscord = async (webhook, id, title, url) => {
-    if (!/^https:\/\/(?:discord|discordapp)\.com\/api\/webhooks\//.test(webhook || '')) return;
+    let endpoint;
     try {
-      await fetchImpl(webhook, {
+      endpoint = new URL(String(webhook || ''));
+    } catch {
+      return;
+    }
+    if (endpoint.protocol !== 'https:' ||
+        !['discord.com', 'discordapp.com'].includes(endpoint.hostname) ||
+        endpoint.username || endpoint.password ||
+        !/^\/api\/webhooks\/[0-9]+\/[A-Za-z0-9._-]+\/?$/.test(endpoint.pathname)) return;
+    try {
+      await fetchImpl(endpoint.href, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -584,7 +595,7 @@ export function createHandler(options = {}) {
       // is told was filed, so anything less is a failure to retry.
       const number = data && Number.isInteger(data.number) && data.number > 0 ? data.number : 0;
       if (number > 0) {
-        const url = typeof data.html_url === 'string' ? data.html_url : '';
+        const url = issueURL(repo, number);
         remember(report, number, url);
         console.log(`bug-report: ${id}: filed as #${number}`);
         const notice = report.kind === 'anonymous_diagnostics'

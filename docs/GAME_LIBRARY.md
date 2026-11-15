@@ -4,6 +4,15 @@ The Games Library lists ROMs, Android games and local HTML5 games in one place,
 with covers and a Continue row. It opens from **Emulators → Games Library** (the
 pinned row above Game Profiles).
 
+It is a full-screen page in Home's glass style, under the top bar, in two
+levels. The first is a grid of buttons, one per console (Continue first): each
+shows the system's icon, its name, how many games it has, a cover meter and the
+first cover it has (the console's name in pixel letters until one is on the
+card). **A** — or a click — opens a console's page: its games (as a list, 3D
+shelf or cover column) beside a large preview of the highlighted game's box art
+or video snap. **B** goes back to the consoles, and **B** on the consoles
+closes the library.
+
 ## What it reads
 
 The same scan that onboarding and the compatibility reports already use:
@@ -299,8 +308,8 @@ that launch only:
   saved and applies to every console. Games with no value for the chosen sort
   (never played, unrated, no year) come last.
 - **Library view** — List, 3D shelf or Cover column. The shelf uses left/right
-  to browse games and up to return to consoles; Cover column keeps the list's
-  up/down navigation. The choice is saved for the next visit.
+  to browse games and up to return to the console buttons; Cover column keeps
+  the list's up/down navigation. The choice is saved for the next visit.
 - **Shader speed** — after playing with a shader look, shows the rendered frames
   RetroArch reported during that game and whether they met the 50 or 60 FPS
   target. Builds that cannot report a frame counter say **Unavailable** instead
@@ -520,19 +529,22 @@ reconnect.
 
 | Input | Action |
 |-------|--------|
-| D-pad up/down | move inside the console column or the game list |
-| D-pad right | enter the game list from a console |
-| D-pad left | back to the console column |
-| **A** | open the highlighted console or game page; **Play** on that page launches the game |
-| **Start** / **O** | open the game options sheet: display title, visibility, library sort and view, launch options |
+| D-pad | move between the console buttons; on a console's page, up/down move in its games |
+| D-pad left (list, cover column) / up (3D shelf) | from a console's games back to the console buttons |
+| **A** | open the highlighted console's page, or a game's page; **Play** on that page launches the game |
+| **Start** / **O** | on a console's page, open the game options sheet: display title, visibility, library sort and view, launch options |
 | **X** | Netplay for the highlighted game (host or join, on the LAN or online) |
 | **E** | open the highlighted game in its tool: a covering Game Profile, its exact Compatibility row, or the Emulators page with the console's tile highlighted. Closing that tool (**B**) comes back to the library where you left it |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
 | **R** / **R3** | roll a random game from this console or the whole library |
 | **Y** | rescan the card (after copying new ROMs) |
-| **B** / Back | clear an active search, then close the panel |
-| Mouse | click a console to select it, a game to open its page, outside to close |
+| **B** / Back | one level back: a console's page → the console buttons → clear an active search or tag filter → close the library |
+| Mouse | click a console button to open it, a game to open its page, the page title to go one level back, the top bar to close |
+
+A search or tag filter shows only the consoles with hits, each button counting
+its matches; when every hit is on one console, that console's page opens
+straight away.
 
 On a game's page, **History** (or **H** / **Select**) shows launch count,
 completed sessions, longest session, the last 7 and 30 days, and a scrollable

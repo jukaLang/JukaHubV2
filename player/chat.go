@@ -175,23 +175,29 @@ var chatAttachmentRoot = "."
 // the user attached or saved on this device is read where it is; any other
 // must lie inside chatAttachmentRoot. Either way it has to be an existing
 // image file small enough to decode.
-func chatLocalAttachment(path string) (string, bool) {
+func chatLocalAttachment(path string) (*os.File, bool) {
 	if !isImageExtension(strings.ToLower(filepath.Ext(path))) {
-		return "", false
+		return nil, false
 	}
-	resolved := filepath.Clean(path)
+	var f *os.File
+	var err error
 	if !chatPathTrusted(path) {
-		within, err := confinedRegularFile(chatAttachmentRoot, path)
+		f, err = openRegularFileWithin(chatAttachmentRoot, path)
 		if err != nil {
 			logWarn("chat", "security: refusing local attachment %q: %v", path, err)
-			return "", false
+			return nil, false
 		}
-		resolved = within
+	} else {
+		f, err = openUserFile(path)
+		if err != nil {
+			return nil, false
+		}
 	}
-	if info, err := statUserFile(resolved); err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
-		return "", false
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
+		f.Close()
+		return nil, false
 	}
-	return resolved, true
+	return f, true
 }
 
 func fetchChatImage(url string) {
@@ -213,10 +219,14 @@ func fetchChatImage(url string) {
 				data, _ = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 			}
 		}
-	} else if path, ok := chatLocalAttachment(url); ok {
+	} else if f, ok := chatLocalAttachment(url); ok {
 		// Chat attachments store a local file path; read it directly instead
 		// of sending it through http.Get.
-		data, _ = os.ReadFile(path)
+		data, _ = io.ReadAll(io.LimitReader(f, 32<<20+1))
+		f.Close()
+		if len(data) > 32<<20 {
+			data = nil
+		}
 	}
 
 	chatImageDLMutex.Lock()

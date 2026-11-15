@@ -320,7 +320,8 @@ func hoffCapture(config *Config, now time.Time) (hoffActivity, bool) {
 	if act, ok := hoffWebActivity(config, now); ok {
 		return act, true
 	}
-	if gameLib.open {
+	// Only a console's page highlights a game; the consoles grid does not.
+	if gameLib.open && gameLib.focus == 1 {
 		if g, ok := selectedLibraryGame(); ok && strings.TrimSpace(g.Title) != "" {
 			return hoffActivity{Kind: "library", Title: g.Title, System: g.System, Path: g.Path, At: now.Unix()}, true
 		}

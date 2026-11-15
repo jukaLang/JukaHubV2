@@ -10,7 +10,7 @@ package main
 // Parsing and lookup are SDL-free so they can be tested headless.
 
 import (
-	"os"
+	"io"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -177,7 +177,7 @@ func lyricsPathFor(audioPath string) string {
 	base := strings.TrimSuffix(audioPath, filepath.Ext(audioPath))
 	for _, ext := range []string{".lrc", ".LRC", ".Lrc"} {
 		p := base + ext
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+		if info, err := statUserFile(p); err == nil && info.Mode().IsRegular() {
 			return p
 		}
 	}
@@ -191,8 +191,14 @@ func loadLyricsFor(audioPath string) []lyricLine {
 	if lrcPath == "" {
 		return nil
 	}
-	info, err := os.Stat(lrcPath)
+	f, err := openUserFile(lrcPath)
 	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	const maxLyricsBytes = 2 << 20
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxLyricsBytes {
 		return nil
 	}
 
@@ -205,8 +211,8 @@ func loadLyricsFor(audioPath string) []lyricLine {
 	}
 	lyricCache.mu.Unlock()
 
-	data, err := os.ReadFile(lrcPath)
-	if err != nil {
+	data, err := io.ReadAll(io.LimitReader(f, maxLyricsBytes+1))
+	if err != nil || len(data) > maxLyricsBytes {
 		return nil
 	}
 	lines := parseLRC(string(data))

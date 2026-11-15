@@ -280,14 +280,15 @@ arm64 root as the helpers (AndroidRT in the helpers' job; the Box64 pack in
 own, so that on a push to `main` neither the TrimUI archive nor the release's
 publication waits for it; a `v*` tag's release waits for whichever of the two
 jobs finishes last) and refuses a binary that is not AArch64, asks for another
-loader, needs anything but the C library, or needs a glibc symbol newer than
-2.31 (or a private one). The AndroidRT loader must also keep its TLS slot at
-offset 0 and answer `loader --version`; Box64 must start (`box64 --version`)
-and name its pinned version. Box64 is fetched by the full id of its pinned
-release commit (v0.4.4) and built as a generic ARM64 build (`-DARM_DYNAREC=ON
--DCMAKE_BUILD_TYPE=RelWithDebInfo`; no BOX32, because Wine's WoW64 build runs
-32-bit Windows programs under Box64 alone), with gcc 10 from Ubuntu 20.04's
-universe, its DWARF stripped. `wine.json` names Kron4ek's Wine 10.0 amd64 WoW64
+loader, needs anything beyond the allowed glibc components and libgcc_s, or
+needs a glibc symbol newer than 2.31 (or a private one). The AndroidRT loader
+must also keep its TLS slot at offset 0 and answer `loader --version`; Box64
+must start (`box64 --version`) and name its pinned version. Box64 is fetched
+by the full id of its pinned release commit (v0.4.4) and built as a generic
+ARM64 build (`-DARM_DYNAREC=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo`; no BOX32,
+because Wine's WoW64 build runs 32-bit Windows programs under Box64 alone),
+with gcc 10 from Ubuntu 20.04's universe, its DWARF stripped. `wine.json`
+names Kron4ek's Wine 10.0 amd64 WoW64
 build with its pinned SHA-256 and the size of the verified download; Wine 10.0
 is pinned on purpose, because Wine 11.x aborts on the handheld's 4.9 kernel.
 Two more checks only inform the run's summary: AndroidRT's host smoke suite run

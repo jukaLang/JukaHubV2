@@ -1259,13 +1259,7 @@ func ensureIPStreamEntries(config *Config) {
 			// this runs while the config loads, before the window size is known,
 			// so screenWidth was still 0 and pushed the button off the left edge
 			// (very visible on the Brick, where it should follow Shorts).
-			canvasW := int32(config.Width)
-			if canvasW <= 0 {
-				canvasW = int32(config.Variables.ScreenWidth)
-			}
-			if canvasW <= 0 {
-				canvasW = 1280
-			}
+			canvasW := configCanvasWidth(config)
 			if x+116 > canvasW-16 {
 				x = canvasW - 16 - 116
 			}

@@ -1193,7 +1193,7 @@ func bootLogoSnapshot() (started bool, busy string, have bool, p bootLogoProbe) 
 }
 
 // bootLogoRowVisible shows the row only where a boot logo can be changed.
-func bootLogoRowVisible(*Config) bool { return bootLogoSupportedFn() }
+func bootLogoRowVisible(*Config) bool { return !jukaosNativeActive() && bootLogoSupportedFn() }
 
 // bootLogoRowValue is the row's read-out. It is called every frame, so it only
 // reads the cached state; the first call starts the probe.

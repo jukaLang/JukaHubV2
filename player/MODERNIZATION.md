@@ -2659,8 +2659,8 @@ with `layer.json`; driver and value changes apply live where possible instead of
 and skipped; the power card can restart JukaHub OS.
 
 ### SYS-24 — JukaHub OS image on plastron, TortOS's Linux (P3, L) [HW]
-**Why.** Juka (2026-11-15): "base drivers on TortOS (or ChaOS) so we can have
-speed up for the OS". TortOS 2 and ChaOS boot the Brick to their menu in about
+**Why.** Juka (2026-11-15): base the drivers on TortOS so the OS gets its
+speed. TortOS 2 boots the Brick to its menu in about
 1.9 s because the card is the whole system: plastron (github.com/tarikbc/plastron,
 now ZyperOS) builds U-Boot + TF-A and Allwinner's 4.9.191 A133 kernel (Creality
 Sonic Pad SDK + patches: mainline exFAT, charger) from source. Their modules
@@ -2677,8 +2677,13 @@ with a working video path for SDL2 — the PowerVR GE8300 userspace copied from
 the owner's own stock firmware at install (as TortOS's PROPRIETARY.txt does),
 or SDL2 KMSDRM/fbdev with software rendering if no GPU is reachable — plus
 Wi-Fi firmware, audio, sticks, LEDs and battery; taking the card out still
-boots the stock system; then a Smart Pro board (device tree, 1280×720 panel,
-inputs) is scoped.
+boots the stock system. Builders exist (2026-11-15): `os/plastron/` (Brick) and
+`os/smartpro/` (Smart Pro: plastron has no board for it, so the card boots the
+device's own boot0/U-Boot/kernel/rootfs saved by `dump-board.sh`, with
+`/jukahub/init` as process 1; see its README). Neither is boot-tested: the
+Smart Pro's open questions are whether boot0 copied from the eMMC loads U-Boot
+from the card, whether U-Boot honours the rewritten env `root=PARTUUID=…`, and
+which stock daemons beyond `trimui_inputd` the hardware needs.
 
 ---
 

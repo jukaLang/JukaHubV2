@@ -120,7 +120,8 @@ func procMemOffset(addr uint64) (int64, error) {
 	if addr > limit {
 		return 0, fmt.Errorf("address %s is above the readable range", ramFormatAddr(addr))
 	}
-	return int64(addr), nil
+	// Masking the sign bit also makes the conversion safe by construction.
+	return int64(addr & uint64(math.MaxInt64)), nil
 }
 
 // ReadAt reads from the process at addr. A short read is returned with the

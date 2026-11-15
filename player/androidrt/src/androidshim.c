@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -429,6 +430,21 @@ static const char *assetName(const char *name) {
     return name;
 }
 
+/* Staged assets must stay below the extracted assets directory. APK entries
+ * use the ZIP reader instead, so only the host filesystem path needs this. */
+static int stagedAssetNameSafe(const char *name) {
+    const char *part = name;
+    if (!part || !*part) return 0;
+    while (*part) {
+        const char *end = strchr(part, '/');
+        size_t len = end ? (size_t)(end - part) : strlen(part);
+        if ((len == 2 && part[0] == '.' && part[1] == '.') || memchr(part, '\\', len)) return 0;
+        if (!end) break;
+        part = end + 1;
+    }
+    return 1;
+}
+
 static AssetFile *openFromApk(const char *name) {
     char entryName[2048];
     const ApakZipEntry *e;
@@ -475,12 +491,37 @@ ANDROIDRT_EXPORT AssetFile *AAssetManager_open(AAssetManager *mgr, const char *f
     FILE *fp;
     struct stat st;
     char path[2048];
+    const char *name = assetName(fileName);
+    int pathLen;
+    int fd;
+    int flags = O_RDONLY | O_CLOEXEC;
     (void)mode;
     if (!m) return NULL;
-    snprintf(path, sizeof(path), "%s/%s", m->root, assetName(fileName));
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return openFromApk(assetName(fileName));
-    fp = fopen(path, "rb");
-    if (!fp) return NULL;
+    if (!stagedAssetNameSafe(name)) return openFromApk(name);
+    pathLen = snprintf(path, sizeof(path), "%s/%s", m->root, name);
+    if (pathLen < 0 || (size_t)pathLen >= sizeof(path)) return openFromApk(name);
+#ifdef O_NONBLOCK
+    flags |= O_NONBLOCK; /* a swapped-in FIFO must not stall the runner */
+#endif
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+#ifdef O_BINARY
+    flags |= O_BINARY;
+#endif
+    fd = open(path, flags);
+    if (fd < 0) return openFromApk(name);
+    /* Inspect the descriptor that will actually be read. A filename can be
+     * replaced between a stat and open, including with a special file. */
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 || st.st_size > LONG_MAX) {
+        close(fd);
+        return openFromApk(name);
+    }
+    fp = fdopen(fd, "rb");
+    if (!fp) {
+        close(fd);
+        return NULL;
+    }
     asset = (AssetFile *)calloc(1, sizeof(*asset));
     if (!asset) {
         fclose(fp);

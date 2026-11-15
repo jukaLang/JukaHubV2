@@ -2930,6 +2930,25 @@ func DiagnosticsText(config *Config) string {
 	if listed > 0 {
 		sb.WriteString(fmt.Sprintf("Emulators    : %d usable, %d unusable, %d listed\n", usable, unusable, listed))
 	}
+	// Where the handheld's RetroArch is, as the last search found it — the
+	// first question about "could not find RetroArch" (JH-RT2AJY had none of
+	// this). The program's name only: its folder is a private path.
+	if runtime.GOOS == "linux" && P().IsHandheld() {
+		line := "not searched yet"
+		if loc, ok := raLocateCached(); ok && loc.Bin != "" {
+			via := loc.Via
+			switch {
+			case strings.HasPrefix(via, "the launch script "):
+				via = "a launch script"
+			case strings.HasPrefix(via, "searching "):
+				via = "walking the card"
+			}
+			line = filepath.Base(loc.Bin) + " found by " + via
+		} else if ok {
+			line = fmt.Sprintf("not found (%d places searched, then the card)", len(loc.Looked))
+		}
+		sb.WriteString("RetroArch    : " + line + "\n")
+	}
 	if snap := configHealth.Snapshot(); snap != nil {
 		loadErrs, _ := snap["load_errors"].(int)
 		saveErrs, _ := snap["save_errors"].(int)

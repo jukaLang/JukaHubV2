@@ -58,7 +58,7 @@ function envNavigate(url, replace) {
   var target = resolveURL(mainDoc, str(url));
   if (!target) throw domErr('SyntaxError', "Failed to set the 'href' property on 'Location': '" + str(url) + "' is not a valid URL.");
   var p = envParseURL(target);
-  if (!p || p.protocol === 'javascript:') return;
+  if (!p || (p.protocol !== 'http:' && p.protocol !== 'https:')) return;
   if (envLoc && envNoFragment(p.href) === envNoFragment(envLoc.href)) {
     if (p.hash !== envLoc.hash) {
       var oldURL = envLoc.href;

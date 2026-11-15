@@ -224,7 +224,7 @@ func portCatalogSummary() string {
 	}
 	filter := "All ports"
 	if portsPanel.mayRun {
-		filter = "May Run on ChaOS"
+		filter = "May Run Here"
 	}
 	if portsPanel.query != "" {
 		filter += " · " + strings.TrimSpace(portsPanel.query)

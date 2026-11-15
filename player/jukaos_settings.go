@@ -71,6 +71,9 @@ func jukaosFilterSections(sections []setSection) []setSection {
 // jukaosExitLabel is the power card's Exit button: in an OS session leaving
 // JukaHub is going back to the firmware's menu, and says so.
 func jukaosExitLabel(fallback string) string {
+	if jukaosNativeActive() {
+		return "Power off"
+	}
 	if jukaosSessionActive() {
 		return "Return to " + jukaosFirmwareName()
 	}
@@ -125,6 +128,9 @@ func jukaosEscapeCheck() {
 // bootGuardHealthyAfter clears the count), a start the guard ran without
 // layers says so once, and the page cache is freed for the games.
 func jukaosFirstFrame() {
+	if jukaosNativeActive() {
+		logInfo("jukaos", "standalone first frame at %s seconds since boot", jukaosNativeBootSeconds())
+	}
 	jukaosLive.mu.Lock()
 	session, guarded := jukaosLive.session, jukaosLive.guarded
 	if session && len(jukaosLive.layers) > 0 && !guarded && jukaosLive.healthy == nil {
@@ -201,6 +207,13 @@ func jukaosShutdownStep() (string, error) {
 // the section opens): status, the mode, booting into it, starting it now,
 // one switch per layer, where layers go, and the way back.
 func jukaosSettingsRows(*Config) []setRow {
+	if jukaosNativeActive() {
+		return []setRow{{
+			ID: "jukaosStatus", Label: "Status", Kind: setKindInfo,
+			Value:  setStatic("Standalone OS"),
+			Detail: setStatic(jukaosNativeBaseLabel() + " · kernel " + setOr(jukaosKernel(), "unknown")),
+		}}
+	}
 	appDir := jukaosAppDir()
 	jukaosUI.state = jukaosLoadState(appDir)
 	jukaosUI.layers = append(jukaosLoadLayers(jukaosHostFor(appDir), jukaosLayersDir(appDir)), jukaosBuiltinLayer(appDir))

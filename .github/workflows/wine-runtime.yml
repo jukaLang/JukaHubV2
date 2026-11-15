@@ -9,11 +9,11 @@ name: Windows-app runtime (Box64)
 # release; JukaHub installs it from the newest release that carries it.
 #
 # player/native/build-runtimes.sh builds, checks and zips it: Box64 fetched by
-# the full id of its pinned release commit, nothing NEEDED beyond the C
-# library, no symbol newer than GLIBC 2.31, `box64 --version` starts and names
-# the pinned version, and the Wine build wine.json names is checked against its
-# pinned SHA-256. The pack holds BUILDINFO.txt and a SHA256SUMS listing every
-# other file, which JukaHub checks before installing it.
+# the full id of its pinned release commit, only the allowed glibc components
+# and libgcc_s in NEEDED, no symbol newer than GLIBC 2.31, `box64 --version`
+# starts and names the pinned version, and the Wine build wine.json names is
+# checked against its pinned SHA-256. The pack holds BUILDINFO.txt and a
+# SHA256SUMS listing every other file, which JukaHub checks before installing it.
 #
 # The build runs in the same Ubuntu 20.04 arm64 root as the Remote Play helpers
 # (.github/scripts/build-root.sh; why that root: remote-play-helpers.yml), on

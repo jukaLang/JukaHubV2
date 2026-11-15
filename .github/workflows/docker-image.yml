@@ -444,6 +444,7 @@ jobs:
           cp player/config.json JukaHub-Trimui/
           cp player/background.jpg JukaHub-Trimui/
           cp player/JukaPlayer.png JukaHub-Trimui/
+          cp player/trimui/native-os-capability.txt JukaHub-Trimui/
           # Tools -> Security & trust opens SECURITY.md from next to the binary.
           if [ -f SECURITY.md ]; then
             cp SECURITY.md JukaHub-Trimui/

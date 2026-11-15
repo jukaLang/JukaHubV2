@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -725,13 +726,23 @@ func isHTTPMediaURL(raw string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
+// localPlayableFile only treats a real media file path as local. A page URL or
+// an arbitrary filename from remote metadata must not become a filesystem read.
+func localPlayableFile(source string) bool {
+	if !filepath.IsAbs(source) || (!isMediaFile(source) && !isAudioFile(source)) {
+		return false
+	}
+	info, err := statUserFile(source)
+	return err == nil && info.Mode().IsRegular()
+}
+
 // tryStreamPlayback starts the embedded player on a direct stream. started is
 // false when the caller should fall back to downloading the file with yt-dlp;
 // cancelled is true when the user backed out while the stream was resolving, in
 // which case falling back would start a download they just declined.
 func tryStreamPlayback(ctx context.Context, config *Config, ytDlpPath, url string, startSec float64) (started, cancelled bool) {
 	// A file on the SD card never needs a download round-trip.
-	if st, err := os.Stat(url); err == nil && !st.IsDir() {
+	if localPlayableFile(url) {
 		startEmbeddedPlayback(config, url, startSec, false)
 		return true, false
 	}
@@ -1178,7 +1189,7 @@ func prefetchVideos(config *Config, videos []VideoInfo, focus int) {
 	if room := prefetchWindowSize(); room < end-focus {
 		end = focus + room
 	}
-	urls := make([]string, 0, end-focus)
+	var urls []string
 	for _, v := range videos[focus:end] {
 		if u := strings.TrimSpace(v.GetURL()); u != "" {
 			urls = append(urls, u)
@@ -1200,7 +1211,7 @@ func prefetchTargets(urls []string) []string {
 			continue
 		}
 		seen[u] = true
-		if st, err := os.Stat(u); err == nil && !st.IsDir() {
+		if localPlayableFile(u) {
 			continue // a file on the card needs no resolution
 		}
 		if isDirectStreamURL(u) {

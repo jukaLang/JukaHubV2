@@ -1037,11 +1037,11 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 			continue
 		}
 		show := shows[idx]
-					titleCol := ColorTextSecondary()
-			if selected {
-				titleCol = ColorTextPrimary()
-			}
-			title := ellipsize(font, show.Title, rect.W-28)
+		titleCol := ColorTextSecondary()
+		if selected {
+			titleCol = ColorTextPrimary()
+		}
+		title := ellipsize(font, show.Title, rect.W-28)
 		renderText(renderer, config, font, title, titleCol, rect.X+14, rect.Y+8)
 		meta := fmt.Sprintf("%d episodes", len(show.Episodes))
 		if show.Err != "" && len(show.Episodes) == 0 {
@@ -1238,13 +1238,7 @@ func ensurePodcastEntries(config *Config) {
 				}
 			}
 		}
-		canvasW := int32(config.Width)
-		if canvasW <= 0 {
-			canvasW = int32(config.Variables.ScreenWidth)
-		}
-		if canvasW <= 0 {
-			canvasW = 1280
-		}
+		canvasW := configCanvasWidth(config)
 		if x+150 > canvasW-16 {
 			continue
 		}

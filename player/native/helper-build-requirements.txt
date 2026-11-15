@@ -17,8 +17,8 @@ cmake==3.31.6
 
 # The protoc nanopb runs (player/native/protoc-wrapper.py) and the protobuf
 # runtime its generator imports; grpcio is grpcio-tools' own dependency.
-# grpcio-tools 1.62 needs protobuf >= 4.21.6, < 5; 4.25.8 is the last 4.25.x
-# with security fixes and also ships a pure-Python wheel.
-grpcio-tools==1.62.3
-grpcio==1.62.3
-protobuf==4.25.8
+# grpcio-tools 1.70 is the last release with Python 3.8/aarch64 wheels and
+# accepts protobuf 5.29.6, which fixes PYSEC-2026-1805.
+grpcio-tools==1.70.0
+grpcio==1.70.0
+protobuf==5.29.6

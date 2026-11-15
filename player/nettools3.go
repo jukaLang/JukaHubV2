@@ -6,9 +6,9 @@ package main
 // certSummary and headerAuditSummary for the page it shows), and the codec the
 // Network tools page offers for the strings those checks turn up.
 //
-// All three are read-only. The certificate check makes two handshakes (one to
-// read an untrusted certificate, one to see whether the device would trust
-// it); the headers check makes one GET and keeps none of the body; the codec
+// All three are read-only. The certificate check makes one verified handshake;
+// Go also exposes the presented chain when verification fails. The headers
+// check makes one GET and keeps none of the body; the codec
 // touches nothing but its own argument.
 
 import (
@@ -81,11 +81,9 @@ func netTargetHostPort(raw string, defaultPort int) (string, int, error) {
 
 // certSummary describes the certificate a TLS port presents.
 //
-// The handshake runs twice on purpose. The first skips verification, so an
-// expired or mismatched certificate still produces a report instead of an
-// error — that certificate is exactly what the row is for. The second verifies,
-// because "would a browser accept this" is the question that decides whether the
-// stream on the card will play.
+// A failed verification still carries the presented certificate chain in
+// CertificateVerificationError, so an expired or mismatched certificate can be
+// reported without accepting it or making an unverified connection.
 func certSummary(raw string) (string, error) {
 	host, port, err := netTargetHostPort(raw, 443)
 	if err != nil {
@@ -93,38 +91,42 @@ func certSummary(raw string) (string, error) {
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dialer := &net.Dialer{Timeout: 6 * time.Second}
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: true,
-	})
-	if err != nil {
-		return "", fmt.Errorf("no TLS answer from %s: %w", addr, err)
-	}
-	state := conn.ConnectionState()
-	remote := ""
-	if a := conn.RemoteAddr(); a != nil {
-		remote = a.String()
-	}
-	conn.Close()
-
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{ServerName: host})
 	trust := "verified against this device's trusted roots"
-	if vc, verr := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{ServerName: host}); verr == nil {
-		vc.Close()
+	var certs []*x509.Certificate
+	var version, cipherSuite uint16
+	remote := ""
+	if err != nil {
+		var verificationErr *tls.CertificateVerificationError
+		if !errors.As(err, &verificationErr) || len(verificationErr.UnverifiedCertificates) == 0 {
+			return "", fmt.Errorf("no TLS answer from %s: %w", addr, err)
+		}
+		certs = verificationErr.UnverifiedCertificates
+		trust = "not trusted: " + firstLine(verificationErr.Err.Error())
 	} else {
-		trust = "not trusted: " + firstLine(verr.Error())
+		state := conn.ConnectionState()
+		certs = state.PeerCertificates
+		version, cipherSuite = state.Version, state.CipherSuite
+		if a := conn.RemoteAddr(); a != nil {
+			remote = a.String()
+		}
+		conn.Close()
 	}
-
-	if len(state.PeerCertificates) == 0 {
+	if len(certs) == 0 {
 		return "", errors.New("the server completed a handshake without sending a certificate")
 	}
-	cert := state.PeerCertificates[0]
+	cert := certs[0]
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Target:  %s:%d\n", host, port)
 	if remote != "" && remote != addr {
 		fmt.Fprintf(&b, "Address: %s\n", remote)
 	}
-	fmt.Fprintf(&b, "TLS:     %s · %s\n", tlsVersionName(state.Version), tls.CipherSuiteName(state.CipherSuite))
+	if version != 0 {
+		fmt.Fprintf(&b, "TLS:     %s · %s\n", tlsVersionName(version), tls.CipherSuiteName(cipherSuite))
+	} else {
+		b.WriteString("TLS:     handshake stopped at certificate verification\n")
+	}
 	fmt.Fprintf(&b, "Subject: %s\n", pkixName(cert.Subject))
 	fmt.Fprintf(&b, "Issuer:  %s\n", pkixName(cert.Issuer))
 	fmt.Fprintf(&b, "Valid:   %s → %s UTC\n",
@@ -134,11 +136,11 @@ func certSummary(raw string) (string, error) {
 	fmt.Fprintf(&b, "Key:     %s\n", certKeyText(cert))
 	fmt.Fprintf(&b, "Signing: %s\n", cert.SignatureAlgorithm.String())
 	b.WriteString("Names:   " + certNamesText(cert) + "\n")
-	if len(state.PeerCertificates) > 1 {
-		fmt.Fprintf(&b, "Chain:   %d certificates sent\n", len(state.PeerCertificates))
+	if len(certs) > 1 {
+		fmt.Fprintf(&b, "Chain:   %d certificates sent\n", len(certs))
 	}
 	fmt.Fprintf(&b, "Trust:   %s\n", trust)
-	b.WriteString("\nRead-only: two handshakes, no request; nothing is sent after the greeting.\n")
+	b.WriteString("\nRead-only: one handshake, no request; nothing is sent after the greeting.\n")
 	return b.String(), nil
 }
 

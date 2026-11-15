@@ -199,6 +199,11 @@ instead and extract it to the **root** of the card (merge the `Apps` and
 **Select** while the logo boots gives the stock menu once, and Settings →
 JukaHub OS → **Boot into JukaHub OS** off makes it an app again.
 
+Separate standalone SD card images, with JukaHub as the whole shell, are under
+development: a [plastron-based one for the Brick](os/plastron/README.md) and
+[one for the Smart Pro](os/smartpro/README.md) that boots the device's own
+kernel, copied from it. Neither has been boot-tested on hardware yet.
+
 > **Here to build it, not just use it?** Clone to a running build in about five
 > minutes with [docs/QUICK_START.md](docs/QUICK_START.md), pick up work labelled
 > [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue),

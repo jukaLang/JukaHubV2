@@ -1,14 +1,18 @@
 package main
 
-// game_library_ui.go — the modal library browser.
+// game_library_ui.go — the Games library.
 //
-// Three columns: consoles (with a leading Continue row built from the recents
-// file), the games of the selected console, and a box-art preview. A launches,
+// A full-screen page in Home's language, on Home's backdrop under the top bar,
+// in two levels. The first is a grid of glass buttons, one per console (with a
+// leading Continue button built from the recents file): each carries the
+// system's glyph, its name, a game count, a cover meter and the first cover it
+// has. A (or a click) opens a console's page: its games (list, 3D shelf or
+// cover column) beside a large box-art preview. On that page A opens a game,
 // X opens LAN play (netplay_ui.go), E hands the selected game to its tool
-// (handoff.go: profiles, compatibility or the emulator page), L1 fetches
-// missing covers, Y rescans after copying new files onto the card, B closes.
-// It is a modal overlay like the Emulators panel, so it works on every
-// config, including the desktop one with no Roms folder.
+// (handoff.go: profiles, compatibility or the emulator page); B goes back to
+// the consoles. L1 fetches missing covers and Y rescans on both levels; B on
+// the grid closes. It is a modal overlay like the Emulators panel, so it
+// works on every config, including the desktop one with no Roms folder.
 
 import (
 	"context"
@@ -51,9 +55,16 @@ type gameLibraryPanel struct {
 	system     int
 	cursor     int
 	scroll     int
-	focus      int    // 0 = console column, 1 = games column
+	focus      int    // 0 = the consoles grid, 1 = the selected console's games
 	logoSystem string // console whose bitmap title last assembled
 	logoAt     uint64
+	// gridCols is the consoles grid's column count as last drawn, which is what
+	// Up and Down step by; sysScroll is the first grid row on screen.
+	gridCols  int
+	sysScroll int
+	// backRect is the page header (glyph and title): a click there goes one
+	// level back, the way B does.
+	backRect sdl.Rect
 	// query narrows the whole library to the games whose title, console or
 	// file name matches. Empty is the normal console-by-console browser.
 	query    string
@@ -78,7 +89,6 @@ type gameLibraryPanel struct {
 	systemsCache []librarySystem
 	systemsKey   gameLibrarySystemsKey
 	systemsValid bool
-	panel        sdl.Rect
 
 	systemHits []gameLibRowHit
 	gameHits   []gameLibRowHit
@@ -240,15 +250,41 @@ func setGameLibraryQuery(query string) {
 	gameLib.query = query
 	invalidateGameLibrarySystemsCache()
 	gameLib.system, gameLib.cursor, gameLib.scroll = 0, 0, 0
-	if query == "" {
-		gameLib.focus = 0
+	gameLibraryFocusFiltered()
+}
+
+// gameLibraryFocusFiltered picks the level a new search or tag filter shows:
+// the grid of the consoles that have hits, so the counts on their buttons say
+// where the matches are, or — when they are all on one console — that
+// console's games straight away.
+func gameLibraryFocusFiltered() {
+	gameLib.focus = 0
+	if gameLib.query == "" && gmetaFilterTag() == "" {
 		return
 	}
-	// Typing a search is a request to look at the results, so the games column
-	// takes the focus when there is anything in it.
-	if system, ok := selectedLibrarySystem(); ok && len(system.Games) > 0 {
+	if systems := currentGameSystems(); len(systems) == 1 && len(systems[0].Games) > 0 {
 		gameLib.focus = 1
 	}
+}
+
+// gameLibraryBack is B (and Esc): one level at a time. A console's page goes
+// back to the grid; on the grid a search, then a tag filter, is dropped
+// before the library closes, since a filtered grid looks like a broken one.
+func gameLibraryBack() {
+	if gameLib.focus == 1 {
+		gameLib.focus = 0
+		PlayBackSound()
+		return
+	}
+	if gameLib.query != "" {
+		setGameLibraryQuery("")
+		PlayBackSound()
+		return
+	}
+	if gmetaClearFilter() {
+		return
+	}
+	closeGameLibraryPanel()
 }
 
 func selectedLibrarySystem() (librarySystem, bool) {
@@ -314,6 +350,7 @@ func openGameLibraryPanel() {
 	gameLib.system = 0
 	gameLib.cursor = 0
 	gameLib.scroll = 0
+	gameLib.sysScroll = 0
 	gameLib.query = ""
 	gameLib.logoSystem = ""
 	gameLib.logoAt = 0
@@ -413,6 +450,12 @@ func startGameLibraryScan() {
 				return
 			}
 			clampGameLibrarySelection()
+			// A search or tag set while the first scan ran (a phone hand-off, a
+			// Nearby share) was judged against an empty library; with the games
+			// in, its only console opens the way it would have.
+			if gameLib.focus == 0 && gameLib.system == 0 && (gameLib.query != "" || gmetaFilterTag() != "") {
+				gameLibraryFocusFiltered()
+			}
 		})
 	}()
 }
@@ -520,30 +563,45 @@ func gameLibraryStatus() string {
 	return status
 }
 
-// gameLibraryMove handles D-pad navigation between the columns.
+// gameLibraryGridStep is where one D-pad step lands in the consoles grid of n
+// buttons in cols columns, or -1 when the step leads off the grid. Left and
+// Right run through the buttons in reading order, so Right at the end of a
+// row continues on the next one. Down from the row above a short last row
+// lands on that row's last button rather than nowhere.
+func gameLibraryGridStep(index, n, cols, dx, dy int) int {
+	if n <= 0 {
+		return -1
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	next := index + dx + dy*cols
+	if dy > 0 && next >= n && index/cols < (n-1)/cols {
+		next = n - 1
+	}
+	if next < 0 || next >= n || next == index {
+		return -1
+	}
+	return next
+}
+
+// gameLibraryMove handles D-pad navigation: across the consoles grid, or in
+// the selected console's games (where Left — Up on the 3D shelf — goes back
+// to the grid).
 func gameLibraryMove(dx, dy int) {
 	systems := currentGameSystems()
 	if len(systems) == 0 {
 		return
 	}
 	if gameLib.focus == 0 {
-		if dx > 0 {
-			gameLib.focus = 1
-			PlayNavSound()
+		next := gameLibraryGridStep(gameLib.system, len(systems), gameLib.gridCols, dx, dy)
+		if next < 0 {
 			return
 		}
-		if dy != 0 {
-			gameLib.system += dy
-			if gameLib.system < 0 {
-				gameLib.system = len(systems) - 1
-			}
-			if gameLib.system >= len(systems) {
-				gameLib.system = 0
-			}
-			gameLib.cursor = 0
-			gameLib.scroll = 0
-			PlayNavSound()
-		}
+		gameLib.system = next
+		gameLib.cursor = 0
+		gameLib.scroll = 0
+		PlayNavSound()
 		return
 	}
 	if libraryLayoutMode() == libraryLayoutHorizontal {
@@ -672,7 +730,9 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_t:
 		gmetaOpenFilterPicker()
 	case sdl.K_e:
-		if game, ok := selectedLibraryGame(); ok {
+		// A game's actions belong to a console's page; on the grid no game is
+		// highlighted, only the console.
+		if game, ok := selectedLibraryGame(); ok && gameLib.focus == 1 {
 			openGameLibraryHandoff(game)
 		}
 	case sdl.K_o:
@@ -680,7 +740,9 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_r:
 		openGameRandomPicker()
 	case sdl.K_x:
-		libraryOpenNetplay()
+		if gameLib.focus == 1 {
+			libraryOpenNetplay()
+		}
 	case sdl.K_f:
 		fetchMissingLibraryArtwork()
 	case sdl.K_y:
@@ -689,17 +751,7 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_s, sdl.K_SLASH:
 		vkOpenGameSearch()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		if gameLib.query != "" {
-			// The first Back clears the search instead of leaving the library:
-			// a filtered list looks like a broken library otherwise.
-			setGameLibraryQuery("")
-			return true
-		}
-		// The same for a tag filter.
-		if gmetaClearFilter() {
-			return true
-		}
-		closeGameLibraryPanel()
+		gameLibraryBack()
 	}
 	return true
 }
@@ -740,7 +792,9 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// free here, like R3 for the random pick.
 		gmetaOpenFilterPicker()
 	case sdl.CONTROLLER_BUTTON_X:
-		libraryOpenNetplay()
+		if gameLib.focus == 1 {
+			libraryOpenNetplay()
+		}
 	case sdl.CONTROLLER_BUTTON_START:
 		openGameOptions()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
@@ -758,22 +812,17 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// the picker.
 		openGameRandomPicker()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		if gameLib.query != "" {
-			setGameLibraryQuery("")
-			return true
-		}
-		if gmetaClearFilter() {
-			return true
-		}
-		closeGameLibraryPanel()
+		gameLibraryBack()
 	default:
 		return false
 	}
 	return true
 }
 
-// handleGameLibraryMouse selects a console, launches a game, or closes the
-// panel when the click lands outside it.
+// handleGameLibraryMouse opens a console's page from its button, opens a game,
+// goes one level back from the page header (B's path), or closes the library
+// from the top bar. The page fills the screen, so a click anywhere else is
+// simply taken.
 func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	if !gameLib.open {
 		return false
@@ -787,27 +836,37 @@ func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	if gmetaSheetOpen() {
 		return gmetaHandleMouse(mx, my, config)
 	}
+	// The hit lists belong to the level on screen: the grid's buttons and a
+	// page's games are never both drawn, so neither list is stale here.
 	for _, hit := range gameLib.systemHits {
-		if pointInRect(mx, my, hit.rect) {
-			gameLib.focus = 0
-			gameLib.system = hit.index
-			gameLib.cursor = 0
-			gameLib.scroll = 0
+		if gameLib.focus == 0 && pointInRect(mx, my, hit.rect) {
+			if hit.index != gameLib.system {
+				gameLib.system = hit.index
+				gameLib.cursor = 0
+				gameLib.scroll = 0
+			}
+			// A console button is pushed, not just highlighted.
+			gmetaOpenSelected()
 			return true
 		}
 	}
 	for _, hit := range gameLib.gameHits {
-		if pointInRect(mx, my, hit.rect) {
-			gameLib.focus = 1
+		if gameLib.focus == 1 && pointInRect(mx, my, hit.rect) {
 			gameLib.cursor = hit.index
 			gmetaOpenSelected()
 			return true
 		}
 	}
-	if gameLib.panel.W > 0 && pointInRect(mx, my, gameLib.panel) {
+	if gameLib.backRect.W > 0 && pointInRect(mx, my, gameLib.backRect) {
+		gameLibraryBack()
 		return true
 	}
-	closeGameLibraryPanel()
+	// The top bar is drawn but its buttons sit under the library; a click on
+	// it leaves the library (the old "click outside the card"), so a mouse
+	// alone is never stuck here.
+	if my < headerBarHeight() {
+		closeGameLibraryPanel()
+	}
 	return true
 }
 
@@ -1293,17 +1352,359 @@ func gameLibraryRowLayout(bodyH, titleH, detailH, rangeH int32, total int) gameL
 	return l
 }
 
-// gameLibrarySystemRowHeight is a console row's pitch for its name's line
-// height: the name centred above the cover meter along the row's bottom edge,
-// never under the 46px design height.
-func gameLibrarySystemRowHeight(nameH int32) int32 {
-	if h := nameH + 16; h > 46 {
-		return h
+// librarySystemGlyph is the icon a console's button and page header carry:
+// the system's own glyph (iconemu.go), and the library's extra rows' glyphs.
+func librarySystemGlyph(name string) string {
+	switch name {
+	case continueSystemName:
+		return "continue"
+	case builtInLibrarySystem:
+		return "gamepad"
+	case androidLibrarySystem:
+		return "phone"
+	case html5LibrarySystem:
+		return "globe"
 	}
-	return 46
+	return iconEmuGlyphFor(name)
 }
 
-// renderGameLibraryPanel draws the three-column browser.
+// librarySystemCoverScan bounds the search for a console button's cover, so a
+// big console without covers costs a few comparisons per frame, not a walk.
+const librarySystemCoverScan = 64
+
+// librarySystemCover is the cover a console's button shows: its first game
+// with box art on the card, "" while none has any.
+func librarySystemCover(system librarySystem) string {
+	if system.WithArt == 0 {
+		return ""
+	}
+	for i, game := range system.Games {
+		if i >= librarySystemCoverScan {
+			break
+		}
+		if game.HasArt && strings.TrimSpace(game.Art) != "" {
+			return game.Art
+		}
+	}
+	return ""
+}
+
+// gameLibraryTileMeta is the line under a console button's name.
+func gameLibraryTileMeta(system librarySystem) string {
+	n := len(system.Games)
+	switch {
+	case gameLib.query != "":
+		return pluralizeCount(n, "match", "matches")
+	case system.Name == continueSystemName:
+		return pluralizeCount(n, "recent game", "recent games")
+	}
+	return pluralizeCount(n, "game", "games")
+}
+
+// gameLibrarySystemStatus is a console page's subtitle: its count and cover
+// share, or the library's status line while a scan, search or tag filter is
+// what the page is showing.
+func gameLibrarySystemStatus(system librarySystem) string {
+	if gameLib.scanning || gameLib.query != "" || gmetaFilterTag() != "" {
+		return gameLibraryStatus()
+	}
+	status := gameLibraryTileMeta(system)
+	if n := len(system.Games); n > 0 && system.Name != builtInLibrarySystem {
+		status += " · " + itoa(coverPercent(system.WithArt, n)) + "% with covers"
+	}
+	status += " · sorted by " + strings.ToLower(librarySortLabel())
+	if artworkFetchRunning() {
+		done, total, _ := artworkFetchProgress()
+		status += " · fetching " + itoa(done) + "/" + itoa(total)
+	}
+	return status
+}
+
+// gameLibraryGrid is the consoles grid's geometry for one body rectangle.
+type gameLibraryGrid struct {
+	cols, rows   int // rows is how many fit on screen at once
+	tileW, tileH int32
+	gap          int32
+}
+
+// gameLibraryGridLayout fits the console buttons to the page: two to five
+// columns by width (four on the 1280-wide handhelds), and as many rows as fit
+// at roughly Home's tile proportions, stretched so the rows on screen end
+// exactly at the footer — the grid fills the page instead of floating in it.
+func gameLibraryGridLayout(area sdl.Rect) gameLibraryGrid {
+	g := gameLibraryGrid{gap: 16}
+	if area.W < 800 {
+		g.gap = 12
+	}
+	g.cols = int(area.W / 280)
+	if g.cols < 2 {
+		g.cols = 2
+	}
+	if g.cols > 5 {
+		g.cols = 5
+	}
+	g.tileW = (area.W - int32(g.cols-1)*g.gap) / int32(g.cols)
+	target := g.tileW * 55 / 100
+	if target < 104 {
+		target = 104
+	}
+	if target > 190 {
+		target = 190
+	}
+	g.rows = int((area.H + g.gap + (target+g.gap)/2) / (target + g.gap))
+	if g.rows < 1 {
+		g.rows = 1
+	}
+	for {
+		g.tileH = (area.H - int32(g.rows-1)*g.gap) / int32(g.rows)
+		if g.rows == 1 || g.tileH >= 96 {
+			break
+		}
+		g.rows--
+	}
+	return g
+}
+
+// renderGameLibraryGrid draws the first level: one glass button per console.
+func renderGameLibraryGrid(renderer *sdl.Renderer, config *Config, systems []librarySystem, area sdl.Rect) {
+	gameLib.systemHits = gameLib.systemHits[:0]
+	grid := gameLibraryGridLayout(area)
+	gameLib.gridCols = grid.cols
+	if len(systems) == 0 {
+		message := "No games yet"
+		detail := "Put ROMs in Roms/<system> or HTML5 games in Games/HTML5/<game>, then press Y to rescan."
+		if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 {
+			message = "All games are hidden"
+			detail = "Game options → Show hidden reveals them again."
+		}
+		if gameLib.scanning {
+			message = "Scanning the card…"
+			detail = "The library opens as soon as the scan finishes."
+		}
+		if query := gameLib.query; query != "" {
+			message = "No match for \"" + query + "\""
+			detail = "Press S to change the search, or B to clear it and browse."
+		} else if tag := gmetaFilterTag(); tag != "" {
+			message = "No game is tagged " + tag
+			detail = "Open a game (A) and choose Tags · B shows every game again."
+		}
+		UIEmptyState(renderer, config, area, "@gamepad", message, detail)
+		return
+	}
+
+	totalRows := (len(systems) + grid.cols - 1) / grid.cols
+	row := gameLib.system / grid.cols
+	if row < gameLib.sysScroll {
+		gameLib.sysScroll = row
+	}
+	if row >= gameLib.sysScroll+grid.rows {
+		gameLib.sysScroll = row - grid.rows + 1
+	}
+	if gameLib.sysScroll > totalRows-grid.rows {
+		gameLib.sysScroll = totalRows - grid.rows
+	}
+	if gameLib.sysScroll < 0 {
+		gameLib.sysScroll = 0
+	}
+	first := gameLib.sysScroll * grid.cols
+	last := first + grid.rows*grid.cols
+	if last > len(systems) {
+		last = len(systems)
+	}
+
+	// The buttons' covers load one at a time on the library's background
+	// decoder, the focused button's first, then the rest on screen in order;
+	// a button whose cover is not in the cache yet shows its bitmap name. No
+	// frame waits on the card.
+	wanted := ""
+	if cover := librarySystemCover(systems[gameLib.system]); cover != "" {
+		if _, cached := gameLib.artCache[cover]; !cached {
+			wanted = cover
+		}
+	}
+	for i := first; i < last && wanted == ""; i++ {
+		if cover := librarySystemCover(systems[i]); cover != "" {
+			if _, cached := gameLib.artCache[cover]; !cached {
+				wanted = cover
+			}
+		}
+	}
+	if wanted != "" {
+		libraryArtTexture(renderer, wanted)
+	}
+
+	for i := first; i < last; i++ {
+		col, line := (i-first)%grid.cols, (i-first)/grid.cols
+		rect := sdl.Rect{
+			X: area.X + int32(col)*(grid.tileW+grid.gap),
+			Y: area.Y + int32(line)*(grid.tileH+grid.gap),
+			W: grid.tileW, H: grid.tileH,
+		}
+		gameLib.systemHits = append(gameLib.systemHits, gameLibRowHit{index: i, rect: rect})
+		drawGameLibrarySystemTile(renderer, config, systems[i], rect, i == gameLib.system)
+	}
+
+	// More rows than the page holds: a slim bar in the right margin says
+	// where this screenful sits.
+	if totalRows > grid.rows {
+		trackX := area.X + area.W + (screenWidth-area.X-area.W)/2 - 2
+		trackH := area.H
+		fillRoundedRect(renderer, trackX, area.Y, 4, trackH, 2, homeGlass(24))
+		thumbH := trackH * int32(grid.rows) / int32(totalRows)
+		if thumbH < 24 {
+			thumbH = 24
+		}
+		thumbY := area.Y + (trackH-thumbH)*int32(gameLib.sysScroll)/int32(totalRows-grid.rows)
+		fillRoundedRect(renderer, trackX, thumbY, 4, thumbH, 2, WithAlpha(glassAccent(), 220))
+	}
+}
+
+// drawGameLibrarySystemTile paints one console button in Home's tile language:
+// the glass card with Home's glow and ring when focused, the system's glyph
+// in an icon badge top-left, the name anchored bottom-left over its game count
+// and cover meter, and a cover slot along the right edge.
+func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system librarySystem, rect sdl.Rect, focused bool) {
+	if focused {
+		drawHomeFocusGlow(renderer, rect)
+	}
+	drawGlassTile(renderer, rect, rect, focused, false)
+	pad := rect.H / 9
+	if pad < 10 {
+		pad = 10
+	}
+	if pad > 18 {
+		pad = 18
+	}
+	accent := glassAccent()
+
+	textX := rect.X + pad
+	textRight := rect.X + rect.W - pad
+	slotH := rect.H - 2*pad
+	if slotW := slotH * 3 / 4; rect.W-slotW-3*pad >= 120 {
+		slot := sdl.Rect{X: rect.X + rect.W - pad - slotW, Y: rect.Y + pad, W: slotW, H: slotH}
+		drawGameLibraryTileCover(renderer, config, system, slot, focused)
+		textRight = slot.X - pad
+	}
+	textW := textRight - textX
+
+	// A step under Home's 48px badge on a 160px button, so a long console
+	// name keeps room for two lines under it.
+	badge := rect.H * 26 / 100
+	if badge < 28 {
+		badge = 28
+	}
+	if badge > homeIconSize {
+		badge = homeIconSize
+	}
+	glyphBox := drawIconBadge(renderer, sdl.Rect{X: textX, Y: rect.Y + pad, W: badge, H: badge}, false)
+	ink := ColorTextPrimary()
+	if focused {
+		ink = accent
+	}
+	drawHomeGlyphTinted(renderer, librarySystemGlyph(system.Name), glyphBox, ink)
+
+	// Bottom up: the cover meter, the count, then the name over them.
+	bottom := rect.Y + rect.H - pad
+	if n := len(system.Games); n > 0 && system.Name != continueSystemName && system.Name != builtInLibrarySystem {
+		fillRoundedRect(renderer, textX, bottom-3, textW, 3, 1, homeGlass(40))
+		if filled := textW * int32(coverPercent(system.WithArt, n)) / 100; filled > 0 {
+			fillRoundedRect(renderer, textX, bottom-3, filled, 3, 1, WithAlpha(accent, 220))
+		}
+		bottom -= 3 + 8
+	}
+	if metaFont := getFontSized(config, "small", 15); metaFont != nil {
+		bottom -= int32(metaFont.Height())
+		drawGlassText(renderer, config, metaFont, ellipsize(metaFont, gameLibraryTileMeta(system), textW),
+			ColorTextMuted(), textX, bottom)
+		bottom -= 2
+	}
+	nameTop := rect.Y + pad + badge + 4
+	font, lineH, lines := glassTileLabel(config, system.Name, textW, bottom-nameTop, 20)
+	if font == nil || len(lines) == 0 {
+		// Too little room under the badge for a line (large text, a small
+		// canvas): the name still shows, on one line over the badge's corner,
+		// rather than leaving a button nobody can read.
+		font = getFontSized(config, "small", 14)
+		if font == nil {
+			return
+		}
+		lineH, lines = int32(font.Height()), []string{ellipsize(font, system.Name, textW)}
+	}
+	y := bottom - int32(len(lines))*lineH
+	for _, line := range lines {
+		drawGlassText(renderer, config, font, line, ColorTextPrimary(), textX, y)
+		y += lineH
+	}
+}
+
+// drawGameLibraryTileCover fills a console button's cover slot: the first
+// cover the console has, once the decoder has it in the cache, else the
+// console's name in the library's bitmap lettering — assembling square by
+// square on the focused button.
+func drawGameLibraryTileCover(renderer *sdl.Renderer, config *Config, system librarySystem, slot sdl.Rect, focused bool) {
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, slot.X, slot.Y, slot.W, slot.H, homeIconRadius, homeGlass(12))
+	strokeRoundedRect(renderer, slot.X, slot.Y, slot.W, slot.H, homeIconRadius, 1, homeGlass(18))
+	if cover := librarySystemCover(system); cover != "" {
+		if tex := gameLib.artCache[cover]; tex != nil {
+			if _, _, tw, th, err := tex.Query(); err == nil && tw > 0 && th > 0 {
+				dst := gaFit(tw, th, slot.W-8, slot.H-8)
+				dst.X += slot.X + 4
+				dst.Y += slot.Y + 4
+				_ = renderer.Copy(tex, nil, &dst)
+				return
+			}
+		}
+	}
+	if focused && gameLib.logoSystem != system.Name {
+		gameLib.logoSystem = system.Name
+		gameLib.logoAt = sdl.GetTicks64()
+	}
+	animate := focused && !effectiveReducedMotion(config)
+	elapsed := uint64(470)
+	if animate {
+		elapsed = sdl.GetTicks64() - gameLib.logoAt
+	}
+	color := WithAlpha(ColorTextPrimary(), 150)
+	if focused {
+		color = glassAccent()
+	}
+	drawConsolePixelLogo(renderer, system.Name, slot, 4, color, elapsed, animate)
+}
+
+// gameLibraryFooterHints is the footer for the level on screen.
+func gameLibraryFooterHints(config *Config) []FooterHint {
+	if gameLib.lib.Total == 0 && len(gameLib.recents) == 0 {
+		return []FooterHint{{"Y", "Rescan"}, {"B", "Close"}}
+	}
+	artHint := FooterHint{"L1 / F", "Fill Gaps"}
+	if artworkFetchRunning() {
+		artHint = FooterHint{"L1 / F", "Stop"}
+	}
+	if gameLib.focus == 1 {
+		// B second: the planner drops hints from the end on a narrow
+		// footer, and the way back must be the last to go.
+		hints := []FooterHint{{"A", "Open"}, {"B", "Consoles"}}
+		// X is only advertised while LAN Play is on: a footer that offers a
+		// switched-off feature teaches a button that answers with a toast.
+		if netplayEnabled(config) {
+			hints = append(hints, FooterHint{"X", "LAN Play"})
+		}
+		return append(hints, FooterHint{"Start / O", "Options"}, FooterHint{"R / R3", "Random"},
+			FooterHint{"S / R1", "Search"}, FooterHint{"L3 / T", "Tags"}, artHint,
+			FooterHint{"Y", "Rescan"})
+	}
+	back := FooterHint{"B", "Close"}
+	if gameLib.query != "" || gmetaFilterTag() != "" {
+		back = FooterHint{"B", "Show All"}
+	}
+	return []FooterHint{{"A", "Open"}, back, {"S / R1", "Search"}, {"L3 / T", "Tags"},
+		{"R / R3", "Random"}, artHint, {"Y", "Rescan"}}
+}
+
+// renderGameLibraryPanel draws the library page: Home's backdrop under the top
+// bar, the page header, the level on screen (the consoles grid or one
+// console's games) and the footer band.
 func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if !gameLib.open || renderer == nil {
 		return
@@ -1324,6 +1725,97 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	}
 
 	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	smallH := int32(font.Height())
+
+	// The library is a page, not a card over a dimmed scene: everything under
+	// the top bar is repainted with Home's backdrop, so the bar (clock,
+	// battery, bell) stays and the library fills the rest of the screen.
+	top := headerBarHeight()
+	drawAppBackdropBand(renderer, config, sdl.Rect{X: 0, Y: top, W: screenWidth, H: screenHeight - top})
+
+	systems := currentGameSystems()
+	if gameLib.system >= len(systems) {
+		gameLib.system = len(systems) - 1
+	}
+	if gameLib.system < 0 {
+		gameLib.system = 0
+	}
+	system, hasSystem := selectedLibrarySystem()
+	if !hasSystem {
+		gameLib.focus = 0
+	}
+
+	margin := scaleX(homeSideMargin, screenWidth)
+	innerW := screenWidth - 2*margin
+	header := UIPanelHeader("Games", gameLibraryStatus(), "gamepad")
+	if gameLib.focus == 1 {
+		header = UIPanelHeader(system.Name, gameLibrarySystemStatus(system), librarySystemGlyph(system.Name))
+	}
+	header.X, header.Y, header.W = margin, top+6, innerW
+	band := uiPageHeaderMetricsFor(config, header)
+	UIPageHeaderDraw(renderer, config, header)
+	// The header's glyph and title are a back button for the mouse: a
+	// console's page goes to the grid, the grid closes (or drops a filter).
+	gameLib.backRect = sdl.Rect{X: header.X, Y: header.Y, W: innerW / 2, H: band.Height}
+
+	// The active search sits on the title line so it is visible at a glance
+	// instead of being hidden in the subdued status line underneath.
+	const ringReserve = int32(96)
+	if query := gameLib.query; query != "" {
+		label := ellipsize(font, "Search: "+query, innerW/2-ringReserve)
+		w, _, _ := font.SizeUTF8(label)
+		renderText(renderer, config, font, label, accentColor,
+			margin+innerW-ringReserve-int32(w), header.Y+(band.WellBox-smallH)/2)
+	}
+	// Cover completeness at a glance: a ring that fills as the library (or, on
+	// a console's page, that console) gains art.
+	withArt, coverTotal := libraryCoverTotals(gameLib.lib)
+	if gameLib.focus == 1 {
+		withArt, coverTotal = system.WithArt, len(system.Games)
+		if system.Name == builtInLibrarySystem {
+			coverTotal = 0
+		}
+	}
+	if coverTotal > 0 {
+		ringR := int32(26)
+		if half := band.WellBox / 2; half > 8 && half < ringR {
+			ringR = half
+		}
+		drawCoverCompletenessRing(renderer, config,
+			margin+innerW-ringR, header.Y+band.WellBox/2, ringR, coverPercent(withArt, coverTotal))
+	}
+
+	footer := sceneFooterBand()
+	bodyY := header.Y + band.Height + 16
+	body := sdl.Rect{X: margin, Y: bodyY, W: innerW, H: footer.Y - 14 - bodyY}
+	if gameLib.focus == 0 {
+		// No game is in view on the grid, so no snap plays and no preview is
+		// a click target.
+		snapPreviewStop()
+		gameLib.gameHits = gameLib.gameHits[:0]
+		gameLib.artRect = sdl.Rect{}
+		renderGameLibraryGrid(renderer, config, systems, body)
+	} else {
+		gameLib.systemHits = gameLib.systemHits[:0]
+		renderGameLibraryGames(renderer, config, system, body)
+	}
+
+	peerDrawFooter(renderer, config, gameLibraryFooterHints(config))
+	// A game's page, its tag sheet and the tag filter's chooser sit on the
+	// library, under the random and options sheets they can open.
+	gmetaRender(renderer, config)
+	renderGameRandomPicker(renderer, config)
+	renderGameOptionsPanel(renderer, config)
+}
+
+// renderGameLibraryGames draws a console's page: its games in the chosen
+// layout on the left and the focused game's box art (or video snap) large on
+// the right.
+func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system librarySystem, body sdl.Rect) {
+	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
 	if font == nil {
 		return
@@ -1334,154 +1826,24 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const pad = OverlayPadX
-	// Same header as every other panel: the shared page header, measured before
-	// the columns are placed so the list starts under the bar rather than under
-	// an assumption about it.
-	header := UIPanelHeader("Games", gameLibraryStatus(), "gamepad")
-	headerH := UIPanelHeaderBand(config, header, 14)
-	footerH := int32(16) + smallH
-	panelW := int32(1120)
-	if panelW > screenWidth-48 {
-		panelW = screenWidth - 48
+	// The preview takes about a third of the page, square, and is dropped on a
+	// narrow canvas rather than squeezing the list.
+	const gap = int32(24)
+	artW := body.W * 34 / 100
+	if artW > body.H-70 {
+		artW = body.H - 70
 	}
-	panelH := screenHeight - 56
-	if panelH < 360 {
-		panelH = screenHeight - 16
-	}
-	panelX := (screenWidth - panelW) / 2
-	panelY := (screenHeight - panelH) / 2
-	gameLib.panel = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-
-	drawOverlayScrim(renderer)
-	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
-
-	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-	band := uiPageHeaderMetricsFor(config, header)
-	UIPageHeaderDraw(renderer, config, header)
-
-	// The active search sits on the title line so it is visible at a glance
-	// instead of being hidden in the subdued status line underneath. The line is
-	// measured from the band, so the label stays centred on the title at any
-	// accessibility size.
-	if query := gameLib.query; query != "" {
-		label := ellipsize(font, "Search: "+query, panelW/2)
-		w, _, _ := font.SizeUTF8(label)
-		const ringReserve = int32(96)
-		renderText(renderer, config, font, label, accentColor,
-			panelX+panelW-pad-ringReserve-int32(w), header.Y+(band.WellBox-smallH)/2)
-	}
-
-	// Cover completeness at a glance: a ring that fills as the library gains
-	// art, with the percentage inside it.
-	if withArt, coverTotal := libraryCoverTotals(gameLib.lib); coverTotal > 0 {
-		// The ring stays on the title line: at 26px it reached down into the
-		// status line under it, whose long form runs the width of the card.
-		ringR := int32(26)
-		if half := band.WellBox / 2; half > 8 && half < ringR {
-			ringR = half
-		}
-		drawCoverCompletenessRing(renderer, config,
-			panelX+panelW-pad-ringR, header.Y+band.WellBox/2, ringR,
-			coverPercent(withArt, coverTotal))
-	}
-
-	systems := currentGameSystems()
-	if gameLib.system >= len(systems) {
-		gameLib.system = len(systems) - 1
-	}
-	if gameLib.system < 0 {
-		gameLib.system = 0
-	}
-
-	bodyY := panelY + headerH
-	bodyH := panelH - headerH - footerH
-	innerW := panelW - 2*pad
-
-	artW := int32(250)
-	if innerW < 760 {
-		artW = 0 // narrow screens drop the preview instead of squeezing the list
-	}
-	sysW := innerW / 4
-	if sysW < 190 {
-		sysW = 190
-	}
-	if sysW > 300 {
-		sysW = 300
-	}
-	gap := int32(16)
-	gameW := innerW - sysW - artW - 2*gap
-	if gameW < 200 {
-		gameW = innerW - sysW - gap
+	if body.W < 760 || artW < 120 {
 		artW = 0
 	}
-	sysX := panelX + pad
-	gameX := sysX + sysW + gap
+	gameW := body.W - artW - gap
+	if artW == 0 || gameW < 280 {
+		gameW, artW = body.W, 0
+	}
+	gameX := body.X
 	artX := gameX + gameW + gap
+	bodyY, bodyH := body.Y, body.H
 
-	focusColor := installHighlight()
-
-	// ── Consoles ────────────────────────────────────────────────────────
-	sysRowH := gameLibrarySystemRowHeight(medH)
-	visibleSys := int(bodyH / sysRowH)
-	if visibleSys < 1 {
-		visibleSys = 1
-	}
-	gameLib.systemHits = gameLib.systemHits[:0]
-	startSys := 0
-	if gameLib.system >= visibleSys {
-		startSys = gameLib.system - visibleSys + 1
-	}
-	for i := 0; i < visibleSys; i++ {
-		idx := startSys + i
-		if idx >= len(systems) {
-			break
-		}
-		rect := sdl.Rect{X: sysX, Y: bodyY + int32(i)*sysRowH, W: sysW, H: sysRowH - 6}
-		gameLib.systemHits = append(gameLib.systemHits, gameLibRowHit{index: idx, rect: rect})
-		selected := idx == gameLib.system
-		bg := WithAlpha(ColorSurfaceRow, 170)
-		if selected {
-			bg = WithAlpha(focusColor, 52)
-		}
-		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, bg)
-		if selected && gameLib.focus == 0 {
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
-		}
-		name := systems[idx].Name
-		count := itoa(len(systems[idx].Games))
-		cw, _, _ := font.SizeUTF8(count)
-		if selected && gameLib.logoSystem != name {
-			gameLib.logoSystem = name
-			gameLib.logoAt = sdl.GetTicks64()
-		}
-		logoElapsed := uint64(470)
-		if selected && !effectiveReducedMotion(config) {
-			logoElapsed = sdl.GetTicks64() - gameLib.logoAt
-		}
-		logoColor := ColorTextPrimary()
-		if selected {
-			logoColor = focusColor
-		}
-		drawConsolePixelLogo(renderer, name, rect, rect.W-24-int32(cw)-12,
-			logoColor, logoElapsed, selected && !effectiveReducedMotion(config))
-		renderText(renderer, config, font, count, ColorTextTertiary(),
-			rect.X+rect.W-12-int32(cw), rect.Y+(rect.H-smallH)/2)
-		// A thin meter under each console row: the share of that console's
-		// covers that are already on the card.
-		if games := len(systems[idx].Games); games > 0 && systems[idx].Name != builtInLibrarySystem {
-			meterW := rect.W - 24
-			meterY := rect.Y + rect.H - 5
-			fillRoundedRect(renderer, rect.X+12, meterY, meterW, 3, 1, WithAlpha(ColorBorderDefault, 130))
-			if filled := meterW * int32(coverPercent(systems[idx].WithArt, games)) / 100; filled > 0 {
-				fillRoundedRect(renderer, rect.X+12, meterY, filled, 3, 1, WithAlpha(focusColor, 200))
-			}
-		}
-	}
-
-	// ── Games ───────────────────────────────────────────────────────────
-	system, hasSystem := selectedLibrarySystem()
 	// The "System · file" line under each title is secondary, so it is set a
 	// step smaller than the title; the row is measured from both fonts.
 	detailFont := getFontSized(config, "small", gameLibraryDetailSize)
@@ -1514,29 +1876,16 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		gameLib.scroll = 0
 	}
 	gameLib.gameHits = gameLib.gameHits[:0]
-	if !hasSystem || len(system.Games) == 0 {
+	if len(system.Games) == 0 {
 		message := "No games yet"
 		detail := "Put ROMs in Roms/<system> or HTML5 games in Games/HTML5/<game>, then press Y to rescan."
 		if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 {
 			message = "All games are hidden"
 			detail = "Game options → Show hidden reveals them again."
 		}
-		if gameLib.scanning && !hasSystem {
-			message = "Scanning the card…"
-			detail = "The library opens as soon as the scan finishes."
-		}
-		if strings.HasPrefix(system.Name, continueSystemName) {
+		if system.Name == continueSystemName {
 			detail = "Launch a game and it appears here for one-press resume."
 		}
-		if query := gameLib.query; query != "" {
-			message = "No match for \"" + query + "\""
-			detail = "Press S to change the search, or B to clear it and browse."
-		} else if tag := gmetaFilterTag(); tag != "" {
-			message = "No game is tagged " + tag
-			detail = "Open a game (A) and choose Tags · B shows every game again."
-		}
-		// The shared empty state (glyph, title, wrapped explanation), centred
-		// in the games column like every other list's.
 		UIEmptyState(renderer, config, sdl.Rect{X: gameX, Y: bodyY, W: gameW, H: bodyH - 8},
 			"@gamepad", message, detail)
 	} else if layout := libraryLayoutMode(); layout != libraryLayoutList {
@@ -1549,18 +1898,12 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			rect := sdl.Rect{X: gameX, Y: bodyY + int32(i)*gameRowH, W: gameW, H: gameRowH - gameLibraryRowGap}
 			gameLib.gameHits = append(gameLib.gameHits, gameLibRowHit{index: idx, rect: rect})
-			selected := idx == gameLib.cursor
-			bg := WithAlpha(ColorSurfaceRow, 150)
-			if selected {
-				bg = WithAlpha(focusColor, 46)
-			}
-			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, bg)
-			if selected && gameLib.focus == 1 {
-				strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), 10, glassFocusRingWidth, focusColor)
-			}
+			// Glass rows, Home's ring on the focused one; NoLift keeps the
+			// ring inside the gap between rows.
+			drawGlassSurface(renderer, rect, 12, glassState{Focused: idx == gameLib.cursor, NoLift: true})
 			game := system.Games[idx]
-			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-24),
-				ColorTextPrimary(), rect.X+12, rect.Y+rows.titleY)
+			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-28),
+				ColorTextPrimary(), rect.X+14, rect.Y+rows.titleY)
 			detail := game.System + " · " + filepath.Base(game.Path)
 			if builtIn, ok := builtInLibraryGameFor(game); ok {
 				detail = builtIn.detail
@@ -1573,8 +1916,8 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			if power := gameOptionsPowerSummary(gameOptionsFor(game.Path)); power != "" {
 				detail += " · " + power
 			}
-			renderText(renderer, config, detailFont, ellipsize(detailFont, detail, rect.W-24),
-				ColorTextTertiary(), rect.X+12, rect.Y+rows.detailY)
+			renderText(renderer, config, detailFont, ellipsize(detailFont, detail, rect.W-28),
+				ColorTextTertiary(), rect.X+14, rect.Y+rows.detailY)
 		}
 		if gameLib.scroll > 0 || gameLib.scroll+visibleGames < len(system.Games) {
 			rng := itoa(gameLib.scroll+1) + "-" + itoa(gameLib.scroll+visibleGames) + " of " + itoa(len(system.Games))
@@ -1588,61 +1931,23 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	// so every way the focus can move (pad, mouse, search, rescan) is covered by
 	// the same rule instead of each path remembering to arm it.
 	snapPreviewSync(time.Now())
-	if artW > 0 {
-		preview := libraryGame{}
-		if hasSystem && len(system.Games) > 0 {
-			preview = system.Games[gameLib.cursor]
-		}
-		artSize := artW
-		if bodyH-70 < artSize {
-			artSize = bodyH - 70
-		}
-		rect := sdl.Rect{X: artX, Y: bodyY, W: artSize, H: artSize}
-		gameLib.artRect = rect
-		drawLibraryArt(renderer, config, rect, preview)
-		if preview.Label() != "" {
-			label := ellipsize(font, preview.Label(), artW)
-			renderText(renderer, config, font, label, ColorTextSecondary(), artX, bodyY+artSize+10)
-			// Fitted like the title: at 24px "PlayStation Portable" alone is
-			// wider than the 250px column, and ran past the card's edge.
-			renderText(renderer, config, detailFont, ellipsize(detailFont, preview.System, artW), ColorTextTertiary(),
-				artX, bodyY+artSize+10+smallH+2)
-		}
-	} else {
+	if artW <= 0 {
 		gameLib.artRect = sdl.Rect{}
+		return
 	}
-
-	artHint := FooterHint{"L1 / F", "Fill Gaps"}
-	if artworkFetchRunning() {
-		artHint = FooterHint{"L1 / F", "Stop"}
+	preview := libraryGame{}
+	if len(system.Games) > 0 {
+		preview = system.Games[gameLib.cursor]
 	}
-	// X is only advertised while LAN Play is on: a footer that offers a
-	// switched-off feature teaches a button that answers with a toast.
-	hints := []FooterHint{{"A", "Open"}, {"L3 / T", "Tags"}, {"R / R3", "Random"},
-		{"Start / O", "Options"}, {"S / R1", "Search"}}
-	if netplayEnabled(config) {
-		hints = append(hints, FooterHint{"X", "LAN Play"})
+	rect := sdl.Rect{X: artX, Y: bodyY, W: artW, H: artW}
+	gameLib.artRect = rect
+	drawLibraryArt(renderer, config, rect, preview)
+	if preview.Label() != "" {
+		label := ellipsize(medium, preview.Label(), artW)
+		renderText(renderer, config, medium, label, ColorTextPrimary(), artX, bodyY+artW+12)
+		// Fitted like the title: "PlayStation Portable" alone is wider than a
+		// narrow preview column.
+		renderText(renderer, config, detailFont, ellipsize(detailFont, preview.System, artW), ColorTextTertiary(),
+			artX, bodyY+artW+12+medH+2)
 	}
-	hints = append(hints, artHint, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
-	hint := hintLine(hints...)
-	if gameLib.lib.Total == 0 {
-		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
-	}
-	// The hints and the library folder share the footer line: the folder
-	// takes what the hints leave, right-aligned, instead of being drawn
-	// across them.
-	footerY := panelY + panelH - footerH + 4
-	hint = ellipsize(font, hint, panelW-2*pad)
-	hintW, _ := measureText(font, hint)
-	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+pad, footerY)
-	if avail := panelW - 2*pad - hintW - 24; artW > 0 && len(gameLib.lib.Roots) > 0 && avail > 120 {
-		root := ellipsize(font, gameLib.lib.Roots[0], avail)
-		rootW, _ := measureText(font, root)
-		renderText(renderer, config, font, root, ColorTextTertiary(), panelX+panelW-pad-rootW, footerY)
-	}
-	// A game's page, its tag sheet and the tag filter's chooser sit on the
-	// library, under the random and options sheets they can open.
-	gmetaRender(renderer, config)
-	renderGameRandomPicker(renderer, config)
-	renderGameOptionsPanel(renderer, config)
 }

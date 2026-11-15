@@ -104,10 +104,11 @@ WINE_TARBALL="${WINE_TARBALL:-wine-10.0-amd64-wow64.tar.xz}"
 WINE_URL="${WINE_URL:-https://github.com/Kron4ek/Wine-Builds/releases/download/10.0/wine-10.0-amd64-wow64.tar.xz}"
 WINE_SHA256="${WINE_SHA256:-aeebbbf239e548f0136f1cd72a2e109dd9a572a8f703da3c09fa40d74d5c255f}"
 
-# Libraries a binary in either package may need: the C library and its parts,
-# the loader and libgcc_s, which every handheld has. Anything else would mean a
-# dependency was linked dynamically.
-ALLOWED_NEEDED="libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libgcc_s.so.1 ld-linux-aarch64.so.1"
+# Libraries a binary in either package may need: the C library and its parts
+# (including glibc's DNS resolver, which Box64 uses), the loader and libgcc_s,
+# which every handheld has. Anything else would mean a dependency was linked
+# dynamically.
+ALLOWED_NEEDED="libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libgcc_s.so.1 ld-linux-aarch64.so.1"
 
 usage() {
     echo "usage: $0 androidrt | wine | wine-check [ZIP] | smoke | verify ZIP | unpack ZIP DEST" >&2

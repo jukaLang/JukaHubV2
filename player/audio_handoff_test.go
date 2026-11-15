@@ -143,7 +143,10 @@ func TestScreenChildAudioBorrowedByPausedOverlay(t *testing.T) {
 	}()
 
 	audioRouteReleaseForChild()
-	if !screenChildAudioOverlayBegin() || !screenChildAudioOverlayBegin() {
+	if !screenChildAudioOverlayBegin() {
+		t.Fatal("paused overlays could not borrow audio")
+	}
+	if !screenChildAudioOverlayBegin() {
 		t.Fatal("paused overlays could not borrow audio")
 	}
 	outAudio.mu.Lock()

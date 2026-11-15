@@ -61,6 +61,9 @@ func screenChildEnv(environ []string) []string {
 	// In a JukaHub OS session the layers meant for games go first on the
 	// library path; JukaHub OS's own variables never reach a child (jukaos.go).
 	env = jukaosChildEnv(env)
+	// JukaHub's own ALSA_CONFIG_PATH (a BlueALSA definition only it needs,
+	// audioroute_bluealsa.go) stays with JukaHub.
+	env = audioOwnALSAEnvStrip(env)
 	return childEnvWithTZ(env, gameChildZone())
 }
 

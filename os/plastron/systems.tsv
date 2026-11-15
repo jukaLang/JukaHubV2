@@ -1,0 +1,13 @@
+# ROM folder | libretro core from the plastron image
+NES|fceumm
+Master System|genesis_plus_gx
+Game Boy|mgba
+Genesis|genesis_plus_gx
+TurboGrafx-16|mednafen_pce_fast
+Game Gear|genesis_plus_gx
+SNES|snes9x2010
+PlayStation|pcsx_rearmed
+Neo Geo Pocket|mednafen_ngp
+Game Boy Color|mgba
+Neo Geo Pocket Color|mednafen_ngp
+Game Boy Advance|mgba

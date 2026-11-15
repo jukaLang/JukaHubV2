@@ -1535,6 +1535,10 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 		// invisible, and a page that simply stops mid-sentence looks broken.
 		source = withTextBrowserTruncationNote(source, pageLimit)
 	}
+	// Inline <style> blocks can import their base sheet just like a linked
+	// stylesheet. Expand them against the page URL before the parser collects
+	// inline CSS, so each block keeps its own cascade position.
+	source = webExpandInlineCSSImports(source, pageURL)
 	doc := parseWebPage(source, pageCSS, pageURL.String())
 	doc.Favicon = browserFaviconURL(source, pageURL)
 	// Images load with the page: one bounded concurrent pass stores the bytes

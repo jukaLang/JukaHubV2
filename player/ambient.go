@@ -474,13 +474,13 @@ func ambientPhotoFiles(dir string) []string {
 	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := readUserDir(dir)
 	if err != nil {
 		return nil
 	}
 	files := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || skipScanEntryName(entry.Name()) {
+		if !entry.Type().IsRegular() || skipScanEntryName(entry.Name()) {
 			continue
 		}
 		if !isImageExtension(filepath.Ext(entry.Name())) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -38,6 +39,19 @@ type Config struct {
 	Variables      Variables            `json:"variables"`
 	ChannelProfile ChannelProfileConfig `json:"channel_profile"`
 	Scenes         []SceneConfig        `json:"scenes"`
+}
+
+// configCanvasWidth chooses a configured width only if it fits the int32
+// coordinates used by scene elements. A malformed width must not wrap negative.
+func configCanvasWidth(config *Config) int32 {
+	if config != nil {
+		for _, width := range []int{config.Width, config.Variables.ScreenWidth} {
+			if width > 0 && width <= math.MaxInt32 {
+				return int32(width)
+			}
+		}
+	}
+	return 1280
 }
 
 // RGB is a color that can be loaded from either a hex string ("#rrggbb") or

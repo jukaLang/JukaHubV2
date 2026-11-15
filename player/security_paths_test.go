@@ -8,8 +8,11 @@ package main
 import (
 	"archive/zip"
 	"context"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -105,6 +108,94 @@ func TestConfinedRegularFileKeepsLinksInsideRoot(t *testing.T) {
 	}
 	if _, err := confinedRegularFile(root, "escape.txt"); err == nil {
 		t.Fatal("confinedRegularFile followed a link out of the root")
+	}
+}
+
+func TestOpenRegularFileWithinKeepsTheOpenedFileInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "inside.txt")
+	if err := os.WriteFile(inside, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := openRegularFileWithin(root, "inside.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(f)
+	f.Close()
+	if err != nil || string(data) != "inside" {
+		t.Fatalf("opened %q: %v", data, err)
+	}
+	for _, path := range []string{"../outside.txt", outside} {
+		if f, err := openRegularFileWithin(root, path); err == nil {
+			f.Close()
+			t.Errorf("opened an outside path %q", path)
+		}
+	}
+	link := filepath.Join(root, "link.txt")
+	if err := os.Symlink(outside, link); err == nil {
+		if f, err := openRegularFileWithin(root, link); err == nil {
+			f.Close()
+			t.Fatal("followed a symlink outside the root")
+		}
+	}
+}
+
+func TestLocalPlayableFileRequiresAnAbsoluteMediaFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(path, []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("not media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !localPlayableFile(path) {
+		t.Fatal("regular local media file was not recognized")
+	}
+	for _, source := range []string{"clip.mp4", "https://example.test/clip.mp4", secret} {
+		if localPlayableFile(source) {
+			t.Errorf("non-local or non-media source %q was treated as a local file", source)
+		}
+	}
+}
+
+func TestAmbientPhotoFilesSkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	photo := filepath.Join(dir, "photo.jpg")
+	if err := os.WriteFile(photo, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.jpg")
+	if err := os.WriteFile(outside, []byte("private"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link.jpg")); err != nil {
+		t.Skipf("symlinks are unavailable here: %v", err)
+	}
+	files := ambientPhotoFiles(dir)
+	if len(files) != 1 || files[0] != photo {
+		t.Fatalf("listed photos = %v, want only %q", files, photo)
+	}
+}
+
+func TestConfigCanvasWidthRejectsOverflow(t *testing.T) {
+	config := &Config{Width: -1}
+	config.Variables.ScreenWidth = 1024
+	if got := configCanvasWidth(config); got != 1024 {
+		t.Fatalf("fallback width = %d, want 1024", got)
+	}
+	if strconv.IntSize == 64 {
+		tooWide := int64(math.MaxInt32) + 1
+		config.Width = int(tooWide)
+		if got := configCanvasWidth(config); got != 1024 {
+			t.Fatalf("overflowed width = %d, want 1024", got)
+		}
 	}
 }
 

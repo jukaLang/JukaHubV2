@@ -700,12 +700,18 @@ func setBuildSections() []setSection {
 				{
 					ID: "autostart", Label: "Start JukaHub at login", Kind: setKindToggle,
 					Detail: func(*Config) string {
+						if jukaosNativeActive() {
+							return "JukaHub OS always starts when this device powers on"
+						}
 						if setHandheld() {
 							return "Open JukaHub when the device starts"
 						}
 						return "Adds JukaHub to your startup folder"
 					},
-					Get: autoStartEnabled,
+					Disabled: func(*Config) bool { return jukaosNativeActive() },
+					Get: func(c *Config) bool {
+						return jukaosNativeActive() || autoStartEnabled(c)
+					},
 					Set: func(c *Config, on bool) {
 						setStoreBool(c, "autoStart", on)
 						widgetToggleSideEffect(c, "autoStart", on)

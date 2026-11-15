@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -22,12 +22,17 @@ func openFileInCanvasSandbox(path string) {
 		showToast("Only .html and .js files can open in Canvas Sandbox", ToastError())
 		return
 	}
-	path, pathErr := resolveExplorerEntry(appConfig, path)
-	if pathErr != nil {
-		showToast("Cannot open file: "+pathErr.Error(), ToastError())
+	root := "."
+	if appConfig != nil {
+		root = feRoot(appConfig)
+	}
+	f, err := openRegularFileWithin(root, path)
+	if err != nil {
+		showToast("Cannot open file: "+err.Error(), ToastError())
 		return
 	}
-	data, err := os.ReadFile(path)
+	defer f.Close()
+	data, err := io.ReadAll(f)
 	if err != nil {
 		showToast("Failed to read file: "+err.Error(), ToastError())
 		return

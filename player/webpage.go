@@ -47,6 +47,10 @@ const (
 	webMaxStylesheets = 3
 	webSheetByteCap   = 256 << 10
 	webMaxCSSBytes    = 1 << 20
+	// A linked sheet may @import its base sheet. Keep the chain short and
+	// shared with webMaxStylesheets' budget: imports are real requests too.
+	webMaxStyleImports     = 4
+	webMaxStyleImportDepth = 3
 	// webMaxRows bounds the laid-out row count (each row is one text line).
 	webMaxRows = 12000
 )
@@ -7121,9 +7125,7 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	if backgroundDeclared {
 		st.BackgroundLayerCount = len(backgroundLayers)
-		for i, layer := range backgroundLayers {
-			st.BackgroundLayers[i] = layer
-		}
+		copy(st.BackgroundLayers[:], backgroundLayers)
 		if len(backgroundLayers) > 0 {
 			first := backgroundLayers[0]
 			st.BackgroundImage, st.BackgroundSize, st.BackgroundPosition, st.BackgroundRepeat = first.Image, first.Size, first.Position, first.Repeat
@@ -8485,12 +8487,26 @@ func fetchWebStylesheets(source string, base *url.URL) string {
 }
 
 func fetchWebStylesheet(pageURL, address string) string {
+	return fetchWebStylesheetDepth(pageURL, address, map[string]bool{}, 0)
+}
+
+// fetchWebStylesheetDepth fetches one sheet and folds in the sheets it imports.
+// CSS @import is how a site splits its base, theme and page rules; ignoring it
+// left those pages with only their last sheet. Imports go before the importing
+// sheet's own rules, as the cascade requires, and a media-qualified import is
+// wrapped in @media so the reader's existing media evaluation applies.
+func fetchWebStylesheetDepth(pageURL, address string, seen map[string]bool, depth int) string {
+	address = strings.TrimSpace(address)
+	if address == "" || seen[address] || depth > webMaxStyleImportDepth || len(seen) >= webMaxStyleImports {
+		return ""
+	}
 	// A stylesheet from an ad or analytics host is never part of what the
 	// reader draws; skipping it saves the request, not just the bytes. A page
 	// the user excepted fetches everything.
 	if browserRequestBlocked(pageURL, address) {
 		return ""
 	}
+	seen[address] = true
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
@@ -8516,7 +8532,162 @@ func fetchWebStylesheet(pageURL, address string) string {
 	if err != nil || len(body) > webSheetByteCap {
 		return ""
 	}
-	return webRebaseCSSURLs(string(body), resp.Request.URL)
+	css := webRebaseCSSURLs(string(body), resp.Request.URL)
+	return webExpandCSSImports(css, resp.Request.URL, pageURL, seen, depth)
+}
+
+// webExpandCSSImports prepends the sheets imported by css. It is shared by
+// linked stylesheets and inline <style> blocks so both follow the same ad
+// blocking, redirects, cookies, depth and cycle rules.
+func webExpandCSSImports(css string, base *url.URL, pageURL string, seen map[string]bool, depth int) string {
+	if base == nil || depth >= webMaxStyleImportDepth || len(seen) >= webMaxStyleImports {
+		return css
+	}
+	var imported strings.Builder
+	for _, imp := range webCSSImports(css) {
+		if len(seen) >= webMaxStyleImports {
+			break
+		}
+		ref, err := url.Parse(imp.url)
+		if err != nil {
+			continue
+		}
+		abs := base.ResolveReference(ref)
+		if abs.Scheme != "http" && abs.Scheme != "https" {
+			continue
+		}
+		child := fetchWebStylesheetDepth(pageURL, abs.String(), seen, depth+1)
+		if child == "" {
+			continue
+		}
+		if imp.media != "" {
+			imported.WriteString("@media ")
+			imported.WriteString(imp.media)
+			imported.WriteString(" {\n")
+			imported.WriteString(child)
+			imported.WriteString("\n}\n")
+		} else {
+			imported.WriteString(child)
+			imported.WriteString("\n")
+		}
+	}
+	if imported.Len() == 0 {
+		return css
+	}
+	return imported.String() + css
+}
+
+// webCSSImport is one @import target plus its optional media query. The import
+// statement itself stays in the CSS (the parser ignores it), but the fetched
+// body is inserted before the sheet that asked for it.
+type webCSSImport struct {
+	url   string
+	media string
+}
+
+// webCSSImports reads the @import rules in a stylesheet. Comments are removed
+// before scanning, so a commented-out import cannot trigger a request. Only
+// url(...) and quoted string forms are accepted; layer()/supports() modifiers
+// are deliberately left to the normal parser fallback rather than guessed at.
+func webCSSImports(css string) []webCSSImport {
+	stripped := stripWebCSSComments(css)
+	lower := strings.ToLower(stripped)
+	var out []webCSSImport
+	for pos := 0; pos < len(stripped) && len(out) < webMaxStyleImports; {
+		rel := strings.Index(lower[pos:], "@import")
+		if rel < 0 {
+			break
+		}
+		start := pos + rel
+		after := start + len("@import")
+		if after < len(stripped) && (isWebIdentByte(stripped[after]) || stripped[after] == '-') {
+			pos = after
+			continue
+		}
+		end := webCSSImportEnd(stripped, after)
+		if end < 0 {
+			break
+		}
+		rest := strings.TrimSpace(stripped[after:end])
+		pos = end + 1
+		if rest == "" {
+			continue
+		}
+		var target, media string
+		if strings.HasPrefix(strings.ToLower(rest), "url(") {
+			close := webCSSParenEnd(rest, 3)
+			if close < 0 {
+				continue
+			}
+			target = strings.TrimSpace(rest[4:close])
+			media = strings.TrimSpace(rest[close+1:])
+		} else if rest[0] == '\'' || rest[0] == '"' {
+			quote := rest[0]
+			i := 1
+			for i < len(rest) && rest[i] != quote {
+				if rest[i] == '\\' && i+1 < len(rest) {
+					i++
+				}
+				i++
+			}
+			if i >= len(rest) {
+				continue
+			}
+			target = rest[1:i]
+			media = strings.TrimSpace(rest[i+1:])
+		} else {
+			continue
+		}
+		target = strings.TrimSpace(strings.Trim(target, "\"'"))
+		if target == "" {
+			continue
+		}
+		lowerMedia := strings.ToLower(media)
+		if strings.Contains(lowerMedia, "layer(") || strings.Contains(lowerMedia, "supports(") {
+			continue
+		}
+		out = append(out, webCSSImport{url: target, media: media})
+	}
+	return out
+}
+
+// webCSSImportEnd finds the semicolon ending an @import, skipping quoted values
+// and parentheses so a URL query string cannot cut it short.
+func webCSSImportEnd(css string, start int) int {
+	var quote byte
+	depth := 0
+	for i := start; i < len(css); i++ {
+		c := css[i]
+		if quote != 0 {
+			if c == '\\' {
+				i++
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ';':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func isWebIdentByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // webRebaseCSSURLs resolves url(...) references against the stylesheet that
@@ -8724,16 +8895,45 @@ func webBlockElement(tag string) bool {
 // <style> inside <noscript>, <template> or an <svg> stays out, as it always
 // has. Each block is preceded by a newline, the separator walk used.
 func webCollectInlineCSS(source string, b *strings.Builder) {
+	for _, block := range webInlineCSSBlocks(source) {
+		if b.Len()+1 >= webMaxCSSBytes {
+			continue
+		}
+		// A large site can ship megabytes of component CSS in one block.
+		// Skipping that block entirely left its visible cards unstyled; keep
+		// complete rules from its prefix up to the handheld's budget.
+		remaining := webMaxCSSBytes - b.Len() - 1
+		inner := webCSSBudgetPrefix(block.css, remaining)
+		if inner != "" {
+			b.WriteString("\n")
+			b.WriteString(inner)
+		}
+	}
+}
+
+// webInlineCSSBlock is one inline <style> body and the byte range of that body
+// in the page source. Keeping the range lets import expansion rewrite only the
+// CSS while leaving the markup exactly as the parser saw it.
+type webInlineCSSBlock struct {
+	start, end int
+	css        string
+}
+
+// webInlineCSSBlocks finds the page's own <style> bodies in document order,
+// using the same skip rules as the collector and walk: comments, declarations
+// and raw-text elements (noscript, template, svg, ...) do not contribute CSS.
+func webInlineCSSBlocks(source string) []webInlineCSSBlock {
+	var blocks []webInlineCSSBlock
 	for i := 0; i < len(source); {
 		lt := strings.IndexByte(source[i:], '<')
 		if lt < 0 {
-			return
+			break
 		}
 		i += lt
 		if strings.HasPrefix(source[i:], "<!--") {
 			end := strings.Index(source[i+4:], "-->")
 			if end < 0 {
-				return
+				break
 			}
 			i += 4 + end + 3
 			continue
@@ -8741,14 +8941,14 @@ func webCollectInlineCSS(source string, b *strings.Builder) {
 		if strings.HasPrefix(source[i:], "<!") || strings.HasPrefix(source[i:], "<?") {
 			end := strings.IndexByte(source[i:], '>')
 			if end < 0 {
-				return
+				break
 			}
 			i += end + 1
 			continue
 		}
 		end := findTextBrowserTagEnd(source, i+1)
 		if end < 0 {
-			return
+			break
 		}
 		name, closing, _, _ := parseWebTag(source[i+1 : end])
 		i = end + 1
@@ -8757,21 +8957,41 @@ func webCollectInlineCSS(source string, b *strings.Builder) {
 		}
 		if name == "title" || name == "style" || webRawTextElement(name) {
 			inner, next, _ := webRawElement(source, i, name)
-			i = next
-			if name == "style" && b.Len()+1 < webMaxCSSBytes {
-				// A large site can ship megabytes of component CSS in one
-				// block. Skipping that block entirely left its visible cards
-				// unstyled; keep complete rules from its prefix up to the
-				// handheld's bounded stylesheet budget.
-				remaining := webMaxCSSBytes - b.Len() - 1
-				inner = webCSSBudgetPrefix(inner, remaining)
-				if inner != "" {
-					b.WriteString("\n")
-					b.WriteString(inner)
-				}
+			if name == "style" {
+				blocks = append(blocks, webInlineCSSBlock{start: i, end: i + len(inner), css: inner})
 			}
+			i = next
 		}
 	}
+	return blocks
+}
+
+// webExpandInlineCSSImports rewrites each inline <style> body with its imported
+// sheets in front. Every block is expanded independently, so an import in a
+// later block cannot move ahead of an earlier block's rules. The imported
+// sheets themselves go through the linked-sheet fetcher.
+func webExpandInlineCSSImports(source string, pageURL *url.URL) string {
+	if pageURL == nil || webIndexFold(source, "<style") < 0 {
+		return source
+	}
+	blocks := webInlineCSSBlocks(source)
+	if len(blocks) == 0 {
+		return source
+	}
+	var out strings.Builder
+	out.Grow(len(source))
+	last := 0
+	for _, block := range blocks {
+		// Each block gets the same fresh budget a linked sheet gets, so one
+		// block's imports cannot starve another's.
+		seen := make(map[string]bool)
+		expanded := webExpandCSSImports(block.css, pageURL, pageURL.String(), seen, 0)
+		out.WriteString(source[last:block.start])
+		out.WriteString(expanded)
+		last = block.end
+	}
+	out.WriteString(source[last:])
+	return out.String()
 }
 
 // webCSSBudgetPrefix keeps whole rules when one inline sheet exceeds the

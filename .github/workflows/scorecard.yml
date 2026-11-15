@@ -6,7 +6,9 @@
 name: OpenSSF Scorecard
 
 on:
-  # Weekly, plus a run whenever protection rules change so a weakening shows up
+  workflow_dispatch:
+  # Weekly, by hand after a security fix, and whenever protection rules change
+  # so a weakening shows up
   # immediately instead of up to seven days later. Not on every push as well:
   # the badge shows the latest result, and a week is soon enough for the
   # workflow changes it scores.

@@ -1,0 +1,2 @@
+plastron-brick-v1
+smartpro-stock-kernel-v1

@@ -3584,7 +3584,7 @@ func resultMetaLine(vid VideoInfo) string {
 // frame through the shared disk-backed cache and decode budget instead of a
 // generic tile.
 func realThumbnailCandidates(vid VideoInfo) []string {
-	urls := make([]string, 0, 2+len(vid.Thumbnails))
+	var urls []string
 	if vid.Thumbnail != "" {
 		urls = append(urls, vid.Thumbnail)
 	}

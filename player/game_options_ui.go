@@ -339,6 +339,12 @@ func openGameOptions() bool {
 	if !gameLib.open || gameOptsUI.open {
 		return false
 	}
+	// The sheet edits one game, and the consoles grid highlights a console,
+	// not a game: the options open from a console's page.
+	if gameLib.focus == 0 {
+		ShowToast("Open a console first — Options are for one of its games", ToastKindInfo)
+		return true
+	}
 	game, ok := selectedLibraryGame()
 	if !ok {
 		ShowToast("No game selected", ToastKindInfo)
@@ -348,9 +354,7 @@ func openGameOptions() bool {
 		ShowToast(game.Title+" has no emulator options", ToastKindInfo)
 		return true
 	}
-	// The sheet always edits the highlighted title, whichever column has the
-	// focus; its header names the game so opening it from the console list is
-	// unambiguous.
+	// The sheet edits the highlighted title, and its header names the game.
 	if game.ContentKey == "" {
 		libraryDecorateGame(&game)
 	}

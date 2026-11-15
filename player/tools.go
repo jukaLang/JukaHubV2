@@ -505,6 +505,11 @@ func (a *archiveReader) Read(p []byte) (int, error) {
 // tree, and no external tar, xz or busybox is involved. The stream is still
 // read to its end: the xz and gzip checksums are only verified there.
 func extractTarMembers(ctx context.Context, archivePath, stage string, want map[string]bool, progress func(done, total int64)) (map[string]string, error) {
+	stageRoot, err := os.OpenRoot(stage)
+	if err != nil {
+		return nil, err
+	}
+	defer stageRoot.Close()
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return nil, err
@@ -577,7 +582,7 @@ func extractTarMembers(ctx context.Context, archivePath, stage string, want map[
 		if filepath.Dir(dest) != filepath.Clean(stage) {
 			return nil, fmt.Errorf("%w (%s escapes the staging folder)", errBadToolArchive, hdr.Name)
 		}
-		if err := writeArchiveEntry(ctx, tr, dest, hdr.Size); err != nil {
+		if err := writeArchiveEntry(ctx, tr, stageRoot, base, hdr.Size); err != nil {
 			return nil, err
 		}
 		staged[base] = dest
@@ -596,6 +601,11 @@ func extractTarMembers(ctx context.Context, archivePath, stage string, want map[
 
 // extractZipMembers writes the wanted entries of a zip archive into stage.
 func extractZipMembers(ctx context.Context, archivePath, stage string, want map[string]bool) (map[string]string, error) {
+	stageRoot, err := os.OpenRoot(stage)
+	if err != nil {
+		return nil, err
+	}
+	defer stageRoot.Close()
 	zr, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("%w (open %s: %v)", errBadToolArchive, filepath.Base(archivePath), err)
@@ -629,7 +639,7 @@ func extractZipMembers(ctx context.Context, archivePath, stage string, want map[
 		if filepath.Dir(dest) != filepath.Clean(stage) {
 			return nil, fmt.Errorf("%w (%s escapes the staging folder)", errBadToolArchive, f.Name)
 		}
-		if err := extractZipEntryTo(ctx, f, dest); err != nil {
+		if err := extractZipEntryTo(ctx, f, stageRoot, base); err != nil {
 			return nil, err
 		}
 		staged[base] = dest
@@ -640,23 +650,26 @@ func extractZipMembers(ctx context.Context, archivePath, stage string, want map[
 // extractZipEntryTo writes a single zip entry to dest. The zip reader checks
 // the entry's CRC when it reaches the end, so a corrupt download surfaces as
 // errBadToolArchive rather than as a broken binary.
-func extractZipEntryTo(ctx context.Context, f *zip.File, dest string) error {
+func extractZipEntryTo(ctx context.Context, f *zip.File, stageRoot *os.Root, base string) error {
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("%w (%s: %v)", errBadToolArchive, f.Name, err)
 	}
 	defer rc.Close()
-	return writeArchiveEntry(ctx, rc, dest, declaredEntryBytes(f.UncompressedSize64))
+	return writeArchiveEntry(ctx, rc, stageRoot, base, declaredEntryBytes(f.UncompressedSize64))
 }
 
-// writeArchiveEntry copies one archive member to dest and never leaves a
+// writeArchiveEntry copies one archive member below stageRoot and never leaves a
 // partial file behind. size is the length the archive declares (0 if unknown);
 // a member that ends early is a damaged archive.
-func writeArchiveEntry(ctx context.Context, src io.Reader, dest string, size int64) error {
-	if size > maxToolEntryBytes {
-		return fmt.Errorf("%w (%s declares %d bytes)", errBadToolArchive, filepath.Base(dest), size)
+func writeArchiveEntry(ctx context.Context, src io.Reader, stageRoot *os.Root, base string, size int64) error {
+	if base == "" || base == "." || base == ".." || strings.ContainsAny(base, `/\:`) || strings.ContainsRune(base, '\x00') {
+		return fmt.Errorf("%w (invalid tool name %q)", errBadToolArchive, base)
 	}
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, PermExec)
+	if size > maxToolEntryBytes {
+		return fmt.Errorf("%w (%s declares %d bytes)", errBadToolArchive, base, size)
+	}
+	out, err := stageRoot.OpenFile(base, os.O_CREATE|os.O_WRONLY|os.O_EXCL, PermExec)
 	if err != nil {
 		return err
 	}
@@ -667,15 +680,15 @@ func writeArchiveEntry(ctx context.Context, src io.Reader, dest string, size int
 	if err == nil {
 		switch {
 		case n > maxToolEntryBytes:
-			err = fmt.Errorf("%w (%s is larger than %d bytes)", errBadToolArchive, filepath.Base(dest), maxToolEntryBytes)
+			err = fmt.Errorf("%w (%s is larger than %d bytes)", errBadToolArchive, base, maxToolEntryBytes)
 		case n == 0:
-			err = fmt.Errorf("%w (%s is empty)", errBadToolArchive, filepath.Base(dest))
+			err = fmt.Errorf("%w (%s is empty)", errBadToolArchive, base)
 		case size > 0 && n != size:
-			err = fmt.Errorf("%w (%s ended after %d of %d bytes)", errBadToolArchive, filepath.Base(dest), n, size)
+			err = fmt.Errorf("%w (%s ended after %d of %d bytes)", errBadToolArchive, base, n, size)
 		}
 	}
 	if err != nil {
-		_ = os.Remove(dest)
+		_ = stageRoot.Remove(base)
 		return err
 	}
 	return nil

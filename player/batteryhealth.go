@@ -93,9 +93,39 @@ func parseBatteryHealth(read func(name string) (string, bool)) batteryHealth {
 		h.Findings = append(h.Findings, fmt.Sprintf(
 			"Battery has %d charge cycles (packs are usually rated for 300–500).", h.Cycles))
 	}
+	// The power_supply "temp" file is in tenths of a degree Celsius.
+	tempC, tempOK := 0.0, false
+	if raw, ok := read("temp"); ok {
+		if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && v > -400 && v < 1000 {
+			tempC, tempOK = float64(v)/10, true
+		}
+	}
 	switch strings.ToLower(h.Status) {
-	case "overheat", "dead", "failure", "cold":
+	case "dead", "failure", "unspecified failure":
 		h.Findings = append(h.Findings, "Battery reports health \""+h.Status+"\" — stop charging it and have the pack checked.")
+	case "overheat", "hot":
+		if tempOK && tempC < 45 {
+			// The gauge's flag without a hot cell behind it.
+			h.Status += fmt.Sprintf(" (flag only: the cell reads %.0f °C)", tempC)
+		} else {
+			h.Findings = append(h.Findings, "Battery reports health \""+h.Status+"\" — unplug the charger, let it cool, and have the pack checked if it stays hot.")
+		}
+	case "cold":
+		// A TrimUI Smart Pro in normal indoor use reported "Cold" (tester
+		// report JH-RT2AJY, 2026-11-15); the old text told the owner to stop
+		// charging. Such PMIC flags follow the charger's temperature-sense
+		// pin, not necessarily the cell, so it is a finding only when the
+		// cell reads cold — and then the charger just waits for it to warm
+		// up: nothing to repair.
+		switch {
+		case tempOK && tempC < 5:
+			h.Findings = append(h.Findings, fmt.Sprintf(
+				"Battery is cold (%.0f °C): charging pauses until it is back at room temperature.", tempC))
+		case tempOK:
+			h.Status += fmt.Sprintf(" (flag only: the cell reads %.0f °C)", tempC)
+		default:
+			h.Status += " (flag only: no temperature reading; harmless while it charges)"
+		}
 	}
 	return h
 }

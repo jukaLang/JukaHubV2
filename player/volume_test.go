@@ -202,8 +202,8 @@ func TestTrimuiSystemJSONVolume(t *testing.T) {
 	if _, changed := trimuiSystemJSONWithVolume([]byte(`["vol", 3]`), 5); changed {
 		t.Fatal("a document that is not an object must be left alone")
 	}
-	if _, changed := trimuiSystemJSONWithVolume([]byte(`{"vol": 3, "x": {"vol": 4}}`), 5); changed {
-		t.Fatal("two \"vol\" members are ambiguous and must be left alone")
+	if out, changed := trimuiSystemJSONWithVolume([]byte(`{"vol": 3, "x": {"vol": 4}}`), 5); !changed || string(out) != `{"vol": 5, "x": {"vol": 4}}` {
+		t.Fatalf("nested volume must not block the firmware setting: %s, %v", out, changed)
 	}
 	if _, ok := trimuiSystemVolumeFrom([]byte(`{"brightness": 3}`)); ok {
 		t.Fatal("a document without vol has no level")

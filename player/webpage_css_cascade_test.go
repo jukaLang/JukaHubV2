@@ -479,7 +479,7 @@ func TestWebCSSUnsupportedConstructsAreDocumented(t *testing.T) {
 		"grid-row", "grid-column", "grid-area",
 		"list-style-image", "list-style-position",
 		"::first-line", "::first-letter", "::selection", "::placeholder", "::backdrop",
-		"content: url", "@font-face", "@keyframes", "@page", "@layer", "@import",
+		"content: url", "@font-face", "@keyframes", "@page", "@layer",
 	} {
 		if !strings.Contains(doc, construct) {
 			t.Fatalf("unsupported CSS %q is not documented in CSS_SUPPORT.md", construct)

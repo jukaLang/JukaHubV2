@@ -1,6 +1,6 @@
 package main
 
-// bootgreet.go — the boot and the shutdown greet the user by name.
+// bootgreet.go — the boot, launch voice and shutdown greet the user by name.
 //
 // When Settings → Your name is set (userName, chat.go), the boot shows
 // "Welcome back, <name>" under the wordmark as it comes into focus, and the
@@ -51,6 +51,31 @@ func bootWelcomeText(name string) string {
 		return ""
 	}
 	return uiT("Welcome back") + ", " + name
+}
+
+// bootVoiceGreetingReady checks once, after the first frame, whether this
+// launch can speak a greeting. Offline answers and the offline voice are
+// separate installs on the handheld; a configured Groq voice can fill in while
+// the local voice is absent.
+func bootVoiceGreetingReady(c *Config) bool {
+	if c == nil || shotModeOn() || !offlineAIReady() || !ttsModeAllows(c, ttsKindVoice) {
+		return false
+	}
+	_, ok := ttsLocal()
+	return ok || groqAPIKey() != "" && IsOnline()
+}
+
+// bootChimePlaying keeps the greeting from talking over the startup chime.
+func bootChimePlaying() bool {
+	chimeState.mu.Lock()
+	defer chimeState.mu.Unlock()
+	return len(chimeState.playing) > 0
+}
+
+// bootSpeakGreeting says the same time-of-day line as Home, including the
+// saved name when there is one. The startup origin prefers the local voice.
+func bootSpeakGreeting(c *Config) {
+	ttsSpeakFrom(ttsFromStartup, ttsKindVoice, homeGreeting(bootGreetName(c))+".")
 }
 
 // shutdownFarewellText is the shutdown card's last line for name ("" without

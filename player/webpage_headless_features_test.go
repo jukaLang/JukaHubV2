@@ -13,7 +13,8 @@ package main
 //     the viewport-sized page content box, because the reader has no live
 //     scroll viewport.
 //   - list-style-image and list-style-position are text markers only.
-//   - @font-face, @keyframes, @page and @import do not add rendered features.
+//   - @font-face, @keyframes and @page do not add rendered features; @import is
+//     fetched from linked and inline stylesheets (webpage_css_import_test.go).
 
 import (
 	"fmt"

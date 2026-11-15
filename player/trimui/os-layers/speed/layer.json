@@ -1,6 +1,6 @@
 {
   "name": "Speed",
-  "description": "Faster loading, tuned like TortOS and ChaOS: the SD card reads ahead further and skips the disk scheduler, and folder listings stay in memory longer. Undone when JukaHub OS ends.",
+  "description": "Faster loading, tuned like TortOS: the SD card reads ahead further and skips the disk scheduler, and folder listings stay in memory longer. Undone when JukaHub OS ends.",
   "version": "1",
   "arch": "any",
   "sysfs": {

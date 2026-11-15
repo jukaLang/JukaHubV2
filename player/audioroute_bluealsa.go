@@ -26,6 +26,12 @@ package main
 //     hook, run after the firmware's asound.conf, redefines "default" as the
 //     headset (audioChildALSAConfig) — no firmware file is touched, and a
 //     game started later on the speaker route never sees it.
+//   - A bluealsa can run without its name on the system bus (2026-11-15,
+//     JH-RT2AJY: "org.bluealsa was not provided by any .service files", then
+//     ALSA's "No such file or directory"). It is followed to a suffixed name,
+//     continued when stopped, or restarted after a grace; what a bluealsa
+//     JukaHub started prints is kept for the diagnostics. An ALSA that does
+//     not know the "bluealsa" PCM gets JukaHub's own definition.
 //
 // Every probe here runs on the output monitor's goroutine (audiooutput.go);
 // the diagnostics block only reads what the probes recorded.
@@ -33,7 +39,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -212,7 +220,12 @@ func audioRouteDiagLines() [][2]string {
 		}
 		return s
 	}
-	return [][2]string{
+	if strings.Contains(strings.ToLower(d.openErr), "no such file or directory") {
+		// alsa-lib's ENOENT is an unknown PCM or a plugin it could not load;
+		// BlueALSA's own "no such stream" is ENODEV.
+		open += " (ALSA does not know the \"bluealsa\" PCM, or could not load its plugin)"
+	}
+	lines := [][2]string{
 		{"Headset", or(d.headset, "none detected")},
 		{"BlueALSA", or(d.bluealsa, "not checked (no headset yet)")},
 		{"A2DP streams", or(d.streams, "not asked")},
@@ -222,6 +235,19 @@ func audioRouteDiagLines() [][2]string {
 		{"RetroArch", ra},
 		{"ALSA", alsa},
 	}
+	if svc := bluealsaService(); svc != bluealsaDefaultService {
+		lines = append(lines, [2]string{"BlueALSA bus", "on D-Bus as " + svc})
+	}
+	bluealsaDefs.mu.Lock()
+	defsNote := bluealsaDefs.note
+	bluealsaDefs.mu.Unlock()
+	if defsNote != "" {
+		lines = append(lines, [2]string{"ALSA PCM", defsNote})
+	}
+	if tail := bluealsaLogTail(3); len(tail) > 0 {
+		lines = append(lines, [2]string{"BlueALSA log", strings.Join(tail, " | ")})
+	}
+	return lines
 }
 
 // ── The daemon ───────────────────────────────────────────────────────────────
@@ -232,6 +258,14 @@ var outBluealsa struct {
 	started   time.Time
 	restarted time.Time
 	prestarts int // bluealsaPrestart's starts this run
+	// offBusPID is the daemon last found without its D-Bus name, and
+	// offBusSince when that was first seen (bluealsaNotOnBus).
+	offBusPID   int
+	offBusSince time.Time
+	// contPID is the stopped daemon last sent SIGCONT; offBusRestarts
+	// counts the restarts for a missing name this run.
+	contPID        int
+	offBusRestarts int
 }
 
 // bluealsaProcess is the running BlueALSA daemon (bluealsa, or bluealsad from
@@ -356,6 +390,8 @@ func bluealsaEnsure(addr string) bool {
 		return false
 	}
 	audioDiagSet(func() { audioDiag.bluealsa = fmt.Sprintf("pid %d: %s", pid, cmdline) })
+	// The D-Bus name it owns: "org.bluealsa", or a -B/--dbus suffix on it.
+	bluealsaNoteDaemon(pid, args)
 
 	// The streams bluealsa holds, when dbus-send can ask: a headset without
 	// one is connected without its audio profile.
@@ -363,6 +399,21 @@ func bluealsaEnsure(addr string) bool {
 	audioDiagSet(func() { audioDiag.streams = answer })
 	if sinks != nil && !bluealsaHas(sinks, addr) {
 		a2dpConnect(addr, "bluealsa holds no A2DP stream for the headset")
+	}
+	if sinks != nil || !bluealsaOffBus(answer) {
+		// On the bus (or not known to be off it): a later blip starts its
+		// grace afresh instead of counting from a spell long past.
+		outBluealsa.mu.Lock()
+		outBluealsa.offBusPID, outBluealsa.offBusSince = 0, time.Time{}
+		outBluealsa.mu.Unlock()
+	}
+	if sinks == nil && bluealsaOffBus(answer) {
+		// A bluealsa process with no name on the system bus serves nothing:
+		// its ALSA plugin cannot find it, so opening the headset only fails
+		// (tester report JH-RT2AJY: "The name org.bluealsa was not provided
+		// by any .service files", then ALSA's "No such file or directory").
+		bluealsaNotOnBus(pid, args, addr)
+		return false
 	}
 	if sinks == nil && bluealsaNoReply(answer) {
 		// A bluealsa that does not answer D-Bus would hold the ALSA open (and
@@ -409,7 +460,7 @@ func bluealsaPrestart() {
 // bluealsaStart starts the daemon and, once it had the time to register its
 // endpoint, asks the headset for its audio profile and wakes the monitor.
 func bluealsaStart(path string, args []string, addr, what string) {
-	if _, err := btStartDetached(path, args...); err != nil {
+	if err := bluealsaSpawn(path, args); err != nil {
 		logWarn("audio", "bluealsa did not start: %v", err)
 		audioDiagSet(func() {
 			audioDiag.bluealsa = fmt.Sprintf("not running; %s %s failed: %v", path, strings.Join(args, " "), err)
@@ -429,6 +480,522 @@ func bluealsaStart(path string, args []string, addr, what string) {
 		a2dpConnect(addr, "bluealsa "+what)
 		audioRouteKick()
 	}()
+}
+
+// bluealsaLogPath keeps what a bluealsa JukaHub started printed (bluez-alsa
+// logs to stderr unless told --syslog): why it could not take its D-Bus name,
+// say. It is rewritten at each start; the diagnostics show its last lines.
+const bluealsaLogPath = audioChildConfDir + "/bluealsa.log"
+
+// bluealsaLogCap trims the log when a daemon keeps complaining.
+const bluealsaLogCap = 256 << 10
+
+// bluealsaSpawn starts the daemon detached, like btStartDetached, with its
+// output in bluealsaLogPath (or nowhere when that cannot be made).
+func bluealsaSpawn(path string, args []string) error {
+	var f *os.File
+	if os.MkdirAll(audioChildConfDir, 0o755) == nil {
+		// O_APPEND: after the size watch truncates it, the daemon's next
+		// write lands at the new end, not at its old offset in a sparse file.
+		f, _ = os.OpenFile(bluealsaLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|os.O_APPEND, 0o644)
+	}
+	if f == nil {
+		_, err := btStartDetached(path, args...)
+		return err
+	}
+	cmd := exec.Command(path, args...)
+	cmd.Env = screenChildEnv(os.Environ())
+	cmd.Dir = "/"
+	cmd.Stdout, cmd.Stderr = f, f
+	cmd.SysProcAttr = btDetachedAttr()
+	if err := cmd.Start(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if st, err := f.Stat(); err == nil && st.Size() > bluealsaLogCap {
+					_ = f.Truncate(0)
+				}
+			}
+		}
+	}()
+	go func() {
+		err := cmd.Wait()
+		close(done)
+		_ = f.Close()
+		logInfo("audio", "bluealsa exited: %v%s", err, bluealsaLogWords())
+	}()
+	return nil
+}
+
+// bluealsaLogTail is the last n non-empty lines of bluealsaLogPath,
+// addresses masked.
+func bluealsaLogTail(n int) []string {
+	f, err := os.Open(bluealsaLogPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	// The end only: a daemon left running after JukaHub exits keeps writing
+	// with no watch on the size.
+	const tailBytes = 16 << 10
+	if st, err := f.Stat(); err == nil && st.Size() > tailBytes {
+		_, _ = f.Seek(st.Size()-tailBytes, io.SeekStart)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, tailBytes))
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			if r := []rune(l); len(r) > 200 {
+				l = string(r[:200]) + "…"
+			}
+			lines = append(lines, btDiagMaskAddrs(l))
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+// bluealsaLogWords is "; it said: <last lines>" for a log line, or "".
+func bluealsaLogWords() string {
+	if tail := bluealsaLogTail(3); len(tail) > 0 {
+		return "; it said: " + strings.Join(tail, " | ")
+	}
+	return ""
+}
+
+// bluealsaSvc is the D-Bus name the running BlueALSA owns ("" = the default),
+// and that daemon's pid.
+var bluealsaSvc struct {
+	mu   sync.Mutex
+	name string
+	pid  int
+}
+
+// bluealsaNoteDaemon takes the name a newly seen daemon owns from its command
+// line; for the same daemon the name found on the bus (bluealsaNotOnBus)
+// stays.
+func bluealsaNoteDaemon(pid int, args []string) {
+	name := bluealsaArgsService(args)
+	bluealsaSvc.mu.Lock()
+	defer bluealsaSvc.mu.Unlock()
+	if bluealsaSvc.pid != pid {
+		bluealsaSvc.pid, bluealsaSvc.name = pid, name
+	}
+}
+
+// bluealsaDefaultService is BlueALSA's own D-Bus name.
+const bluealsaDefaultService = "org.bluealsa"
+
+// bluealsaService is the D-Bus name to ask BlueALSA at and to name in the PCM.
+func bluealsaService() string {
+	bluealsaSvc.mu.Lock()
+	defer bluealsaSvc.mu.Unlock()
+	if bluealsaSvc.name == "" {
+		return bluealsaDefaultService
+	}
+	return bluealsaSvc.name
+}
+
+// bluealsaSetService records the name the daemon owns.
+func bluealsaSetService(name string) {
+	if !strings.HasPrefix(name, bluealsaDefaultService) || strings.ContainsAny(name, ",\"' \n\\") {
+		return
+	}
+	bluealsaSvc.mu.Lock()
+	bluealsaSvc.name = name
+	bluealsaSvc.mu.Unlock()
+}
+
+// bluealsaArgsService is the D-Bus name a bluealsa command line (argv[0]
+// first) takes: "org.bluealsa", or "org.bluealsa.<suffix>" for -B/--dbus.
+func bluealsaArgsService(args []string) string {
+	for i := 1; i < len(args); i++ {
+		a, v := args[i], ""
+		switch {
+		case a == "-B" || a == "--dbus":
+			if i+1 < len(args) {
+				v = args[i+1]
+			}
+		case strings.HasPrefix(a, "--dbus="):
+			v = strings.TrimPrefix(a, "--dbus=")
+		case strings.HasPrefix(a, "-B") && len(a) > 2:
+			v = a[2:]
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			return bluealsaDefaultService + "." + v
+		}
+	}
+	return bluealsaDefaultService
+}
+
+// bluealsaOffBus reports whether a dbus-send answer says no one owns the name
+// asked for on the system bus.
+func bluealsaOffBus(answer string) bool {
+	for _, w := range []string{"ServiceUnknown", "NameHasNoOwner", "was not provided by any"} {
+		if strings.Contains(answer, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// bluealsaBusNames lists the org.bluealsa names on the system bus.
+func bluealsaBusNames() []string {
+	if !btToolExists("dbus-send") {
+		return nil
+	}
+	out, err := btToolRun("dbus-send", "--system", "--print-reply", "--reply-timeout=2000",
+		"--dest=org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.ListNames")
+	if err != nil {
+		return nil
+	}
+	return parseBluealsaBusNames(out)
+}
+
+// parseBluealsaBusNames reads the org.bluealsa names out of a ListNames reply
+// (`string "org.bluealsa"` lines), each once, in order.
+func parseBluealsaBusNames(out string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "string \"") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(line, "string \""), "\"")
+		if name != bluealsaDefaultService && !strings.HasPrefix(name, bluealsaDefaultService+".") {
+			continue
+		}
+		dup := false
+		for _, n := range names {
+			dup = dup || n == name
+		}
+		if !dup {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// bluealsaProcState is the state letter of /proc/<pid>/stat ("S", "T"…), ""
+// when it cannot be read.
+func bluealsaProcState(pid int) string {
+	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return ""
+	}
+	s := string(stat)
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 || i+2 >= len(s) {
+		return ""
+	}
+	return s[i+2 : i+3]
+}
+
+// bluealsaOffBusGrace is how long a bluealsa may run without its D-Bus name
+// before JukaHub restarts it: it takes the name as it starts, so 20 s
+// without one is a daemon that never will.
+const bluealsaOffBusGrace = 20 * time.Second
+
+// bluealsaOffBusRestartMax caps those restarts per run: a daemon that can
+// never take its name (no D-Bus policy for it) is not restarted every five
+// minutes all evening.
+const bluealsaOffBusRestartMax = 3
+
+// bluealsaNotOnBus handles a bluealsa that runs but owns no name on the
+// system bus: it follows a name it does own, wakes a stopped one, and
+// restarts one that had its grace (paced like the no-source restart), with
+// its output kept so the diagnostics can say why it would not take the name.
+func bluealsaNotOnBus(pid int, args []string, addr string) {
+	cmdline := strings.Join(args, " ")
+	svc := bluealsaService()
+	// The family's name under a suffix its command line does not show (a
+	// wrapper started it with -B): use that one.
+	for _, name := range bluealsaBusNames() {
+		if name != svc {
+			logInfo("audio", "bluealsa is on D-Bus as %s, not %s; the headset is opened through that", name, svc)
+			bluealsaSetService(name)
+			time.AfterFunc(time.Second, audioRouteKick)
+			return
+		}
+	}
+	state := bluealsaProcState(pid)
+	outBluealsa.mu.Lock()
+	firstCont := outBluealsa.contPID != pid
+	if (state == "T" || state == "t") && firstCont {
+		outBluealsa.contPID = pid
+	}
+	outBluealsa.mu.Unlock()
+	if (state == "T" || state == "t") && firstCont && runtime.GOOS == "linux" {
+		// Stopped (a job-control stop or a debugger): nothing answers until
+		// it runs again. Once per daemon; one still stopped next time goes
+		// the grace-and-restart way. 18 is SIGCONT on Linux; Windows' syscall
+		// package has no such name, and none of this runs there.
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Signal(syscall.Signal(18))
+		}
+		logWarn("audio", "bluealsa (pid %d) was stopped, so it could not answer on D-Bus; continued it", pid)
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("pid %d: %s — was stopped (state %s); JukaHub continued it", pid, cmdline, state)
+		})
+		time.AfterFunc(2*time.Second, audioRouteKick)
+		return
+	}
+	outBluealsa.mu.Lock()
+	if outBluealsa.offBusPID != pid {
+		outBluealsa.offBusPID, outBluealsa.offBusSince = pid, time.Now()
+		time.AfterFunc(bluealsaOffBusGrace+time.Second, audioRouteKick)
+	}
+	waited := time.Since(outBluealsa.offBusSince)
+	recent := (!outBluealsa.restarted.IsZero() && time.Since(outBluealsa.restarted) < bluealsaRestartAfter) ||
+		outBluealsa.offBusRestarts >= bluealsaOffBusRestartMax
+	restart := waited >= bluealsaOffBusGrace && !recent
+	if restart {
+		outBluealsa.restarted = time.Now()
+		outBluealsa.offBusRestarts++
+	}
+	outBluealsa.mu.Unlock()
+	switch {
+	case waited < bluealsaOffBusGrace:
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("pid %d: %s — not on D-Bus as %s yet (state %s, %s)", pid, cmdline, svc, state, waited.Round(time.Second))
+		})
+	case !restart:
+		words := bluealsaLogWords()
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("pid %d: %s — not on D-Bus as %s (state %s); JukaHub's restarts are spent or too recent%s", pid, cmdline, svc, state, words)
+		})
+	default:
+		path := bluealsaExePath(pid, args)
+		rest := append([]string{}, args[1:]...)
+		if !bluealsaArgsHaveSource(args) {
+			rest = append(rest, "-p", "a2dp-source")
+		}
+		logWarn("audio", "bluealsa (pid %d, %s) ran %s without its D-Bus name %s; restarting it", pid, cmdline, waited.Round(time.Second), svc)
+		bluealsaStop(pid, args)
+		bluealsaStart(path, rest, addr, "restarted: it was not on D-Bus")
+	}
+}
+
+// bluealsaExePath is the program a running bluealsa was started from.
+func bluealsaExePath(pid int, args []string) string {
+	path := ""
+	if len(args) > 0 {
+		path = args[0]
+	}
+	if exe, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe")); err == nil && filepath.IsAbs(exe) {
+		return exe
+	}
+	if !filepath.IsAbs(path) {
+		if p, ok := bluealsaBinary(); ok {
+			return p
+		}
+	}
+	return path
+}
+
+// bluealsaStop ends a running bluealsa: SIGTERM, two seconds, then SIGKILL.
+func bluealsaStop(pid int, args []string) {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	_ = p.Signal(syscall.SIGTERM)
+	name := "bluealsa"
+	if len(args) > 0 {
+		name = filepath.Base(args[0])
+	}
+	for i := 0; i < 20 && btProcessRunning("/proc", name); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if btProcessRunning("/proc", name) {
+		_ = p.Kill()
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// ── ALSA's "bluealsa" PCM ────────────────────────────────────────────────────
+
+// bluealsaDefs is the BlueALSA PCM definition JukaHub gave its own ALSA
+// configuration (bluealsaPCMDefine): tried once per run; env is the
+// ALSA_CONFIG_PATH it set ("" while none in force), file the definition file.
+var bluealsaDefs struct {
+	mu    sync.Mutex
+	tried bool
+	env   string
+	file  string
+	note  string
+}
+
+// bluealsaPCMFile is where that definition is written.
+const bluealsaPCMFile = audioChildConfDir + "/bluealsa-pcm.conf"
+
+// bluealsaOwnPCMName is the PCM that definition adds. A name of its own: a
+// firmware "bluealsa" definition that alsa.conf's hooks load after it could
+// not merge into it (bluez-alsa's argument defaults are compounds).
+const bluealsaOwnPCMName = "jukahub_bluealsa"
+
+// bluealsaPCMDefine answers an open of a "bluealsa:" PCM that failed with
+// ENOENT — alsa-lib's "Unknown PCM" or "Cannot open shared library": a
+// firmware with BlueALSA's ALSA plugin whose alsa.conf never loads the
+// definition (no alsa.conf.d hook), or loads the plugin from a folder it is
+// not in. JukaHub then defines bluealsaOwnPCMName itself, with the plugin by
+// its path, in a file only its own process and the games it starts on the
+// headset read (ALSA_CONFIG_PATH = the system's alsa.conf plus that file;
+// alsa-lib re-reads the path at the next open), and returns the PCM name to
+// try again. Once per run; never over an ALSA_CONFIG_PATH someone else set.
+// A retry that still fails short of BlueALSA itself undoes it
+// (bluealsaPCMUndefine).
+func bluealsaPCMDefine(pcm string, openErr error) (string, bool) {
+	if runtime.GOOS != "linux" || !strings.HasPrefix(pcm, "bluealsa:") || openErr == nil ||
+		!strings.Contains(strings.ToLower(openErr.Error()), "no such file or directory") {
+		return "", false
+	}
+	bluealsaDefs.mu.Lock()
+	if bluealsaDefs.tried {
+		bluealsaDefs.mu.Unlock()
+		return "", false
+	}
+	bluealsaDefs.tried = true
+	bluealsaDefs.mu.Unlock()
+	// The work runs without bluealsaDefs.mu: a game launch and the
+	// diagnostics read it, and audioDevEnvMu below can be held for a whole
+	// slow open.
+	env, note, ok := bluealsaPCMWrite()
+	bluealsaDefs.mu.Lock()
+	bluealsaDefs.note = note
+	if ok {
+		bluealsaDefs.env, bluealsaDefs.file = env, bluealsaPCMFile
+	}
+	bluealsaDefs.mu.Unlock()
+	logInfo("audio", "ALSA does not know the \"bluealsa\" PCM: %s", note)
+	if !ok {
+		return "", false
+	}
+	return bluealsaOwnPCMName + strings.TrimPrefix(pcm, "bluealsa"), true
+}
+
+// bluealsaPCMWrite writes the definition and points this process's
+// ALSA_CONFIG_PATH at it: the value set, what happened in words, and whether
+// it is in force.
+func bluealsaPCMWrite() (string, string, bool) {
+	plugin := ""
+	for _, p := range audioRouteALSAFiles {
+		if strings.HasSuffix(p, ".so") && regularFile(p) {
+			plugin = p
+			break
+		}
+	}
+	if plugin == "" {
+		return "", "this firmware has no BlueALSA ALSA plugin (libasound_module_pcm_bluealsa.so), so nothing can open the headset", false
+	}
+	base := ""
+	for _, p := range audioSystemALSAConf {
+		if regularFile(p) {
+			base = p
+			break
+		}
+	}
+	if base == "" {
+		return "", "no system alsa.conf to add a definition to", false
+	}
+	if _, set := os.LookupEnv("ALSA_CONFIG_PATH"); set {
+		return "", "ALSA_CONFIG_PATH is set by the firmware; JukaHub leaves it alone", false
+	}
+	if err := os.MkdirAll(audioChildConfDir, 0o755); err != nil {
+		return "", "cannot write a definition: " + err.Error(), false
+	}
+	// bluez-alsa 3.x's own 20-bluealsa.conf, cut to the arguments JukaHub
+	// passes, under JukaHub's name and with the plugin named by its path.
+	body := "# Written by JukaHub: BlueALSA's PCM, which this firmware's ALSA setup did\n" +
+		"# not define. Only JukaHub (and games it starts on the headset) read it.\n" +
+		"# Safe to delete.\n" +
+		"pcm_type.bluealsa {\n\tlib \"" + plugin + "\"\n}\n" +
+		"pcm." + bluealsaOwnPCMName + " {\n" +
+		"\t@args [ SRV DEV PROFILE ]\n" +
+		"\t@args.SRV {\n\t\ttype string\n\t\tdefault \"" + bluealsaDefaultService + "\"\n\t}\n" +
+		"\t@args.DEV {\n\t\ttype string\n\t\tdefault \"00:00:00:00:00:00\"\n\t}\n" +
+		"\t@args.PROFILE {\n\t\ttype string\n\t\tdefault \"a2dp\"\n\t}\n" +
+		"\ttype plug\n" +
+		"\tslave.pcm {\n\t\ttype bluealsa\n\t\tservice $SRV\n\t\tdevice $DEV\n\t\tprofile $PROFILE\n\t}\n" +
+		"}\n"
+	if err := audioWriteFileAtomic(bluealsaPCMFile, body); err != nil {
+		return "", "cannot write a definition: " + err.Error(), false
+	}
+	env := base + ":" + bluealsaPCMFile
+	audioDevEnvMu.Lock()
+	err := os.Setenv("ALSA_CONFIG_PATH", env)
+	audioDevEnvMu.Unlock()
+	if err != nil {
+		return "", "cannot set ALSA_CONFIG_PATH: " + err.Error(), false
+	}
+	return env, fmt.Sprintf("JukaHub defined %s itself (%s, plugin %s) and opens the headset through it", bluealsaOwnPCMName, bluealsaPCMFile, plugin), true
+}
+
+// bluealsaPCMResolved reports whether an open error came from BlueALSA
+// itself — no such stream yet (ENODEV), or busy — so ALSA did find the PCM
+// and load its plugin.
+func bluealsaPCMResolved(err error) bool {
+	if err == nil {
+		return true
+	}
+	e := strings.ToLower(err.Error())
+	return strings.Contains(e, "no such device") || strings.Contains(e, "busy")
+}
+
+// bluealsaPCMUndefine takes JukaHub's definition out of force again: the
+// retry through it failed before reaching BlueALSA, so it only risks every
+// other ALSA open in the process.
+func bluealsaPCMUndefine(why string) {
+	bluealsaDefs.mu.Lock()
+	env := bluealsaDefs.env
+	bluealsaDefs.env = ""
+	if env != "" {
+		bluealsaDefs.note += "; undone, the open through it failed too: " + why
+	}
+	bluealsaDefs.mu.Unlock()
+	if env == "" {
+		return
+	}
+	audioDevEnvMu.Lock()
+	if os.Getenv("ALSA_CONFIG_PATH") == env {
+		_ = os.Unsetenv("ALSA_CONFIG_PATH")
+	}
+	audioDevEnvMu.Unlock()
+	logInfo("audio", "JukaHub's %s definition undone: the open through it failed too: %s", bluealsaOwnPCMName, why)
+}
+
+// bluealsaOwnALSAPath is the ALSA_CONFIG_PATH bluealsaPCMDefine set for
+// JukaHub, "" when none is in force.
+func bluealsaOwnALSAPath() string {
+	bluealsaDefs.mu.Lock()
+	defer bluealsaDefs.mu.Unlock()
+	return bluealsaDefs.env
+}
+
+// audioOwnALSAEnvStrip drops JukaHub's own ALSA_CONFIG_PATH from a child's
+// environment: it is JukaHub's setting, not the child's, and spatial audio
+// and the headset route skip a child whose environment names one.
+func audioOwnALSAEnvStrip(env []string) []string {
+	if own := bluealsaOwnALSAPath(); own != "" {
+		if v, set := childEnvLookup(env, "ALSA_CONFIG_PATH"); set && v == own {
+			return childEnvWithout(env, "ALSA_CONFIG_PATH")
+		}
+	}
+	return env
 }
 
 // ── The headset's stream ─────────────────────────────────────────────────────
@@ -467,7 +1034,7 @@ func bluealsaA2DPSinks() ([]string, string) {
 		{"/org/bluealsa", "org.freedesktop.DBus.ObjectManager.GetManagedObjects"},
 	} {
 		out, err := btToolRun("dbus-send", "--system", "--print-reply", "--reply-timeout=2000",
-			"--dest=org.bluealsa", call[0], call[1])
+			"--dest="+bluealsaService(), call[0], call[1])
 		if err != nil {
 			lastErr = firstLine(strings.TrimSpace(out))
 			if lastErr == "" {
@@ -593,6 +1160,9 @@ func audioRouteSDLDriverOK() bool {
 // LIBASOUND_THREAD_SAFE that JukaHub set for itself is taken out again, so the
 // child runs as the firmware's menu would have started it.
 func audioRouteChildEnv(env []string) []string {
+	// JukaHub's own ALSA_CONFIG_PATH (bluealsaPCMDefine) is not the child's
+	// setting: it goes, and a headset child gets it back inside its own path.
+	env = audioOwnALSAEnvStrip(env)
 	pcm := audioRouteChildPCM()
 	if pcm == "" {
 		if audioThreadSafeSetByUs {
@@ -676,6 +1246,11 @@ func audioChildALSAConfig(pcm string) (string, error) {
 		"# .asoundrc), so the headset \"default\" is loaded last. Safe to delete.\n"+
 		"@hooks.1 {\n\tfunc load\n\tfiles [ \""+def+"\" ]\n\terrors false\n}\n"); err != nil {
 		return "", err
+	}
+	if bluealsaOwnALSAPath() != "" && regularFile(bluealsaPCMFile) {
+		// The firmware does not define "bluealsa"; JukaHub's definition goes
+		// along (bluealsaPCMDefine).
+		return base + ":" + bluealsaPCMFile + ":" + path, nil
 	}
 	return base + ":" + path, nil
 }

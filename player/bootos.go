@@ -399,7 +399,9 @@ func bootOSLiveInputs(config *Config, now time.Time) bootOSInputs {
 		Now:     now,
 	}
 	in.Uptime, in.UptimeOK = bootOSUptimeFn()
-	in.AutoStart = autoStartEnabled(config)
+	// The native plastron image starts JukaHub itself. Its first screen uses
+	// the short greeting so the OS does not spend its boot budget on animation.
+	in.AutoStart = autoStartEnabled(config) && !jukaosNativeActive()
 	if state, ok := loadStartupState(startupStatePath()); ok {
 		in.LastLaunch = state.LastLaunch
 		in.LastBootID = state.BootID

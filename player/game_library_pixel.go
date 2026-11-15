@@ -38,24 +38,29 @@ func consoleLogoText(name string) string {
 	return strings.ToUpper(strings.TrimSpace(name))
 }
 
-func consoleLogoFit(name string, maxW int32) (string, int32) {
+// consoleLogoFit picks the largest scale, from maxScale down to 1, at which
+// the name word-wraps into maxW×maxH, and returns it with its lines joined by
+// "\n". When even scale 1 cannot hold a word, it is one line at scale 1 cut
+// with a dot.
+func consoleLogoFit(name string, maxW, maxH, maxScale int32) (string, int32) {
 	name = consoleLogoText(name)
-	letters := []rune(name)
-	scale := int32(2)
-	if int32(len(letters))*6*scale > maxW {
-		words := strings.Fields(name)
-		for split := 1; split < len(words); split++ {
-			first, second := strings.Join(words[:split], " "), strings.Join(words[split:], " ")
-			if int32(len([]rune(first)))*12 <= maxW && int32(len([]rune(second)))*12 <= maxW {
-				return first + "\n" + second, scale
-			}
+	words := strings.Fields(name)
+	if len(words) == 0 || maxW <= 0 {
+		return "", 1
+	}
+	for scale := max32(maxScale, 1); scale >= 1; scale-- {
+		// n letters are n*6*scale-scale wide: the last one has no gap after it.
+		perLine := int((maxW + scale) / (6 * scale))
+		lines := consoleLogoWrap(words, perLine)
+		if lines != nil && int32(len(lines))*8*scale-scale <= maxH {
+			return strings.Join(lines, "\n"), scale
 		}
-		scale = 1
 	}
-	if maxW < 6*scale {
-		return "", scale
+	letters := []rune(strings.Join(words, " "))
+	maxLetters := int((maxW + 1) / 6)
+	if maxLetters < 1 {
+		return "", 1
 	}
-	maxLetters := int(maxW / (6 * scale))
 	if len(letters) > maxLetters {
 		if maxLetters > 1 {
 			letters = append(letters[:maxLetters-1], '.')
@@ -63,7 +68,32 @@ func consoleLogoFit(name string, maxW int32) (string, int32) {
 			letters = letters[:1]
 		}
 	}
-	return string(letters), scale
+	return string(letters), 1
+}
+
+// consoleLogoWrap fills lines of at most perLine letters word by word. It
+// returns nil when a single word is longer than a line.
+func consoleLogoWrap(words []string, perLine int) []string {
+	if perLine < 1 {
+		return nil
+	}
+	var lines []string
+	cur := ""
+	for _, word := range words {
+		n := len([]rune(word))
+		switch {
+		case n > perLine:
+			return nil
+		case cur == "":
+			cur = word
+		case len([]rune(cur))+1+n <= perLine:
+			cur += " " + word
+		default:
+			lines = append(lines, cur)
+			cur = word
+		}
+	}
+	return append(lines, cur)
 }
 
 func consolePixelEase(elapsed uint64, pixel int) float64 {
@@ -81,27 +111,35 @@ func consolePixelEase(elapsed uint64, pixel int) float64 {
 	return p * p * (3 - 2*p)
 }
 
-func drawConsolePixelLogo(renderer *sdl.Renderer, name string, rect sdl.Rect, maxW int32, color sdl.Color, elapsed uint64, animate bool) {
-	if renderer == nil || maxW <= 0 {
+// drawConsolePixelLogo letters a console's name in the bitmap face, each line
+// centred in rect, at up to maxScale (a tile's cover slot asks for 4, so a
+// short name reads as a cartridge label). Animate assembles the letters one
+// square at a time over the first 470 ms of elapsed.
+func drawConsolePixelLogo(renderer *sdl.Renderer, name string, rect sdl.Rect, maxScale int32, color sdl.Color, elapsed uint64, animate bool) {
+	maxW, maxH := rect.W-8, rect.H-8
+	if renderer == nil || maxW <= 0 || maxH <= 0 {
 		return
 	}
-	name, scale := consoleLogoFit(name, maxW)
+	name, scale := consoleLogoFit(name, maxW, maxH, maxScale)
 	if name == "" {
 		return
 	}
-	height := 7 * scale
-	if strings.Contains(name, "\n") {
-		height = 15 * scale
+	lines := strings.Split(name, "\n")
+	height := int32(len(lines))*8*scale - scale
+	lineX := func(line string) int32 {
+		w := int32(len([]rune(line)))*6*scale - scale
+		return rect.X + (rect.W-w)/2
 	}
-	y := rect.Y + (rect.H-height-3)/2
-	x0 := rect.X + 12
-	x := x0
+	y := rect.Y + (rect.H-height)/2
+	x := lineX(lines[0])
+	line := 0
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	_ = renderer.SetDrawColor(color.R, color.G, color.B, color.A)
 	pixel := 0
 	for _, r := range name {
 		if r == '\n' {
-			x = x0
+			line++
+			x = lineX(lines[line])
 			y += 8 * scale
 			continue
 		}
@@ -121,7 +159,7 @@ func drawConsolePixelLogo(renderer *sdl.Renderer, name string, rect sdl.Rect, ma
 					py += int32(float64((pixel*29)%23-11) * (1 - p))
 				}
 				pixel++
-				if px < rect.X || py < rect.Y || px+scale > rect.X+rect.W || py+scale > rect.Y+rect.H-3 {
+				if px < rect.X || py < rect.Y || px+scale > rect.X+rect.W || py+scale > rect.Y+rect.H {
 					continue
 				}
 				_ = renderer.FillRect(&sdl.Rect{X: px, Y: py, W: scale, H: scale})

@@ -185,7 +185,7 @@ func shortsAheadURLs(videos []VideoInfo, index, ahead int) []string {
 	if ahead < end-start {
 		end = start + ahead
 	}
-	urls := make([]string, 0, end-start)
+	var urls []string
 	for _, v := range videos[start:end] {
 		if u := strings.TrimSpace(v.GetURL()); u != "" {
 			urls = append(urls, u)

@@ -74,11 +74,12 @@ folder as `Apps/JukaHub/androidrt/`. `wine` builds Box64 from its pinned commit
 its SHA-256 and size, which JukaHub downloads itself. Each package holds
 `BUILDINFO.txt` and a `SHA256SUMS` listing every other file, the form JukaHub's
 installer (`../relpack.go`) accepts. Both binaries are held to the helpers'
-rules (AArch64, the standard loader, only the C library, no glibc symbol newer
-than 2.31) and must start once on the build machine. `wine-check` and `smoke`
-are advisory steps in CI: `box64 wine --version` with the pinned Wine in the
-Box64 job (`wine-runtime.yml`), and AndroidRT's host smoke suite in the helper
-job. [docs/BUILDING.md](../../docs/BUILDING.md#androidrt-and-the-box64-pack)
+rules (AArch64, the standard loader, only allowed glibc components and
+libgcc_s, no glibc symbol newer than 2.31) and must start once on the build
+machine. `wine-check` and `smoke` are advisory steps in CI:
+`box64 wine --version` with the pinned Wine in the Box64 job
+(`wine-runtime.yml`), and AndroidRT's host smoke suite in the helper job.
+[docs/BUILDING.md](../../docs/BUILDING.md#androidrt-and-the-box64-pack)
 lists the variables.
 
 ## Controls during a stream

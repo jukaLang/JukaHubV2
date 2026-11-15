@@ -80,6 +80,11 @@ func devPowerSupported() bool {
 // devPowerRequest quits through the normal clean exit, then restarts or powers
 // off the device.
 func devPowerRequest(a devPowerAction) {
+	if jukaosNativeActive() && a == devPowerReboot {
+		if err := os.WriteFile(jukaosNativeRebootMarker, []byte("1\n"), 0600); err != nil {
+			logWarn("power", "could not mark native OS reboot: %v", err)
+		}
+	}
 	devPowerPending.Store(int32(a))
 	logInfo("power", "%s requested from the power card", devPowerVerb(a))
 	requestAppExit()

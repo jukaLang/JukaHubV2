@@ -23,6 +23,19 @@ For anything older, the git log and the
   when a launcher ends but something it started keeps the screen, the log now
   names what is still running.
 
+- **JukaHub OS SD-card image for the Smart Pro (experimental, not yet
+  boot-tested).** plastron has no Smart Pro board and TrimUI never published
+  the Smart Pro's bootloader or kernel, so `os/smartpro/` boots the device's
+  own: `dump-board.sh` copies the boot area, the boot partitions and the
+  system files from a Smart Pro (reading only), and `build_image.py` lays
+  them out on a card at the stock sectors and partition numbers, points
+  U-Boot's environment at the card's read-only system copy by PARTUUID (only
+  after proving the stock environment made the stock command line) and starts
+  JukaHub from its own process 1, which replays the stock modules, GPIO lines
+  and hardware daemons and never mounts the internal storage. Settings →
+  JukaHub OS names the base it booted on. The PortMaster catalogue filter is
+  now called **May Run Here**.
+
 - **JukaHub OS** (Settings → JukaHub OS, TrimUI). JukaHub can now run as the
   handheld's OS instead of an app, and still installs like an app. Layers in
   `Apps/JukaHub/os/layers/<id>/layer.json` bring newer libraries (for JukaHub
@@ -50,7 +63,7 @@ For anything older, the git log and the
   handheld on. Built by `player/trimui/make-os-package.sh` from any TrimUI
   build (`make os-package`, and `package-sdcard.sh` writes
   `JukaHub-OS-SDCARD.zip`); optional in CI, so the app packages ship anyway.
-  It ships the **Speed** layer, switched on: TortOS/ChaOS-style tuning with the
+  It ships the **Speed** layer, switched on: TortOS-style tuning with the
   stock kernel's own values — `noop` scheduler, 512 KB read-ahead and no
   entropy/I-O accounting on the SD card and storage, folder listings cached
   longer, fewer background wake-ups — journaled and undone when the session
@@ -745,6 +758,23 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The Games library fills the screen, with a button for every console.**
+  The old card of three narrow columns (a console list, a game list and a
+  preview) is now a full-screen page in Home's glass style under the top bar.
+  It opens on a grid of console buttons, Continue first: each carries the
+  system's icon, its name, its game count, a cover meter and the first cover
+  it has (its name in the library's pixel letters until there is one; covers
+  load one at a time in the background). A or a click opens a console's page
+  — its games as a list, 3D shelf or cover column next to a large box-art or
+  video-snap preview, with that console's cover ring in the header — and B
+  goes back to the buttons, then clears a search or tag, then closes. A search
+  or tag shows the consoles with hits, counting matches on each button, or
+  opens the only console that has any (Juka, 2026-11-15: "the list doesn't
+  fit the whole look of JukaHub"). A game's actions (Options, LAN Play, E)
+  live on a console's page; with a mouse, the page title goes back and the
+  top bar closes. `player/game_library_ui.go`, `player/game_library_pixel.go`,
+  docs/GAME_LIBRARY.md.
+
 - **RetroArch is searched for, not just looked up.** When RetroArch is not in
   RetroArch/ or Apps/RetroArch/, JukaHub now also looks in more folders on
   every card (Emus/RetroArch, Emus/RA, System/RetroArch, RetroArch64…) and
@@ -1009,6 +1039,60 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Bluetooth headphones: a BlueALSA that is running but not on D-Bus is
+  dealt with.** A Smart Pro report (JH-RT2AJY) showed bluealsa running with
+  `-p a2dp-source` while D-Bus said `org.bluealsa` was owned by no one, so the
+  headset never opened ("No such file or directory"). JukaHub now follows the
+  daemon to a `-B`-suffixed name (command line or the bus's own list), wakes a
+  stopped one once, and restarts one that stays off the bus for 20 s (5 min
+  apart, at most 3 times a run), instead of opening the headset into an
+  error. What a bluealsa JukaHub starts prints is kept in
+  `/tmp/jukahub-audio/bluealsa.log` and its last lines go into the Bluetooth
+  diagnostics. When ALSA does not know the `bluealsa` PCM at all (ENOENT: an
+  `alsa.conf` that never loads `alsa.conf.d`, or a plugin outside ALSA's
+  folder), JukaHub defines bluez-alsa's PCM under its own name
+  (`jukahub_bluealsa`, plugin by path) for its process and the games it starts
+  on the headset — once per run, never over an `ALSA_CONFIG_PATH` the firmware
+  set, kept away from other children, and undone at once if the retry still
+  does not reach BlueALSA.
+- **Battery "Cold" no longer tells you to stop charging.** The Smart Pro's
+  gauge reported health "Cold" in normal indoor use and Diagnostics said
+  "stop charging it and have the pack checked". "Cold"/"Overheat" are now
+  findings only when the cell's temperature agrees; otherwise the line says
+  "flag only" with the temperature. "Dead"/"Failure" keep the warning.
+- **jukauser.json is no longer rewritten when nothing changed, nor ten times a
+  second from Accessibility rows.** A save whose bytes match the file this run
+  last wrote (same file, untouched since) is skipped, history snapshot
+  included; Accessibility settings go through the debounced writer like
+  every other Settings row.
+- **Diagnostics' frame-time length read "31m8000000000s".** The seconds were
+  printed in nanoseconds; now "31m8s".
+- **Hey Juka stopped swapping microphones in a quiet room.** A device that gave
+  sound earlier in the run now gets 6 s of quiet instead of 1.2 s before the
+  next one is tried; the report showed the codec's two names traded back and
+  forth all evening, each swap closing a device on the drawing thread.
+- **Diagnostics name where RetroArch was found** ("RetroArch : ra64.trimui
+  found by its folder", or "not found"), from the last search only — the
+  first question behind "The launch script could not find RetroArch".
+- **Automatic box art no longer re-reads a console's cover list for every
+  game it cannot get.** When the thumbnail server's list named a cover the
+  server then did not give (a link to a file that is gone, a file that is not
+  a PNG), the list was thrown away and fetched again — for each such game, on
+  every pass — and those games stayed "unanswered" forever (report JH-SQRMFB,
+  2026-11-15: an Atari Lynx list read a dozen times, 23 games left over). A
+  list read from the server within the last day is now believed: the cover is
+  tried by the names guessed from the file, then filed as not found. When
+  several downloads find the same old list, the first refresh is kept
+  (`player/artwork_match.go`).
+- **Diagnostics wrote "30m3000000000s" for a frame-time window** of 30
+  minutes 3 seconds, and the log "last 1m1000000000s" (reports JH-SQRMFB
+  and JH-RT2AJY; `shortDuration` in `player/framestats.go`).
+- **Screen time is written to the card every two minutes instead of every 30
+  seconds.** Each save rewrites the whole `jukauser.json` on a FAT32 card with
+  no journal; a handheld sitting on Home did it 120 times an hour. Trophy
+  unlocks still save within 30 seconds, and quitting saves everything
+  (`player/playtime.go`).
 
 - **PSP games: the pad works and Menu gets you out.** JukaHub's PPSSPP
   mapped Pause to a code PPSSPP's SDL front end never sends, so nothing on the

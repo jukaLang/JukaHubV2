@@ -44,12 +44,13 @@ const (
 type ttsOrigin int
 
 const (
-	ttsFromOther ttsOrigin = iota // a jukaSpeak caller
-	ttsFromOrb                    // the voice orb
-	ttsFromPage                   // the Voice command page
-	ttsFromChat                   // Chat's AI tab
-	ttsFromTest                   // Settings → Voice & AI → Hear Juka
-	ttsFromGame                   // the game assistant's answer over a paused game
+	ttsFromOther   ttsOrigin = iota // a jukaSpeak caller
+	ttsFromOrb                      // the voice orb
+	ttsFromPage                     // the Voice command page
+	ttsFromChat                     // Chat's AI tab
+	ttsFromTest                     // Settings → Voice & AI → Hear Juka
+	ttsFromGame                     // the game assistant's answer over a paused game
+	ttsFromStartup                  // the launch greeting, local voice first
 )
 
 const (
@@ -252,7 +253,11 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, src *ttsS
 	s := &ttsSession{gen: gen, kind: kind, origin: origin, src: src, rate: int(audioSampleRate)}
 	s.local, s.hasLocal = ttsLocal()
 	pre := ttsFailNone
-	if voice := ttsVoiceOf(cfg); voice != ttsVoiceDevice {
+	voice := ttsVoiceOf(cfg)
+	if origin == ttsFromStartup && s.hasLocal {
+		voice = ttsVoiceDevice
+	}
+	if voice != ttsVoiceDevice {
 		s.gender = ttsVoiceGender(voice)
 		key := strings.TrimSpace(groqAPIKey())
 		switch {
@@ -268,7 +273,7 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, src *ttsS
 				s.key, s.keyID, s.voice = key, keyID, voice
 			}
 		}
-	} else if ttsVoiceImplied(cfg) {
+	} else if origin != ttsFromStartup && ttsVoiceImplied(cfg) {
 		// The offline voice speaks because there is no Groq key: still say
 		// once that a key brings Groq's voices (ttsReported).
 		pre = ttsFailNoKey

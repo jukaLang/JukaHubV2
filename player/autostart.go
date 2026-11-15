@@ -760,6 +760,9 @@ func defaultAutostartDir() (string, error) {
 // if the card cannot be located the setting honestly reports itself unusable
 // rather than writing somewhere arbitrary.
 func autostartSupported() bool {
+	if jukaosNativeActive() {
+		return false // plastron's init already starts JukaHub on every boot
+	}
 	if autostartIsTrimui() {
 		return strings.TrimSpace(trimuiSDRootFn()) != ""
 	}

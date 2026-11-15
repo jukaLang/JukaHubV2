@@ -152,8 +152,7 @@ func html5GameTitle(entry string) string {
 func scanHTML5Games(roots []string) []libraryGame {
 	games := make([]libraryGame, 0)
 	seen := map[string]bool{}
-	var add func(string)
-	add = func(entry string) {
+	add := func(entry string) {
 		if len(games) >= html5MaxGames {
 			return
 		}

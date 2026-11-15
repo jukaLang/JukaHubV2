@@ -1409,7 +1409,7 @@ then every port launcher in `Ports/`, `Roms/Ports`, `Roms/PORTS` and
 | D-pad Up / Down | Move through the rows |
 | A | Install PortMaster, launch an installed port, or download the selected catalogue port and hand it to PortMaster to install with its runtimes |
 | X / Tab | Switch between installed ports and PortMaster's catalogue |
-| Y / F | Toggle the **May Run on ChaOS** device filter in the catalogue |
+| Y / F | Toggle the **May Run Here** device filter in the catalogue |
 | R1 / S | Search the catalogue |
 | B | Back (to Emulators when opened there) |
 
